@@ -1980,6 +1980,10 @@ def _render_mesh_kwargs(mesh_config: dict[str, object], *, source_root: Path) ->
     if isinstance(sweep_face_meshing_value, str) and sweep_face_meshing_value.strip():
         kwargs.append(f"sweep_face_meshing={_py_repr(sweep_face_meshing_value)}")
 
+    periodic_pair_ids = mesh_config.get("periodic_pair_ids")
+    if isinstance(periodic_pair_ids, list) and periodic_pair_ids:
+        kwargs.append(f"periodic_pair_ids={_py_literal(periodic_pair_ids)}")
+
     return kwargs
 
 

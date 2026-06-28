@@ -46,6 +46,7 @@ function scalarColorbarPart(
     label?: string;
     palette?: string;
     paletteInherited?: boolean;
+    projectionMode?: "raw_nodal" | "surface_faces" | "thickness_average_z";
     source?: "component_x" | "component_y" | "component_z" | "magnitude";
     visible?: boolean;
   } = {},
@@ -60,6 +61,7 @@ function scalarColorbarPart(
         : (patch.palette ?? "viridis"),
       shaderVisible: true,
       surfaceColorSource: patch.source ?? "component_x",
+      surfaceProjectionMode: patch.projectionMode ?? "raw_nodal",
       viewportColorbarVisible: patch.visible ?? false,
       visible: true,
     },
@@ -84,6 +86,7 @@ function visualizationSettings(
     shaderMonoColor: patch.shaderMonoColor ?? "#ffffff",
     shaderVisible: patch.shaderVisible ?? true,
     surfaceColorSource: patch.surfaceColorSource ?? "component_x",
+    surfaceProjectionMode: patch.surfaceProjectionMode ?? "raw_nodal",
     vectorAlphaPercent: patch.vectorAlphaPercent ?? 100,
     vectorBudget: patch.vectorBudget ?? 0,
     vectorCenteringEnabled: patch.vectorCenteringEnabled ?? true,
@@ -103,6 +106,16 @@ function visualizationSettings(
 }
 
 describe("resolveViewport3DMeshQualityLegend", () => {
+  it("preserves mesh-part boundary face identity in viewport selection refs", () => {
+    const source = readFileSync(
+      "src/modules/viewport-3d/Viewport3DModule.tsx",
+      "utf8",
+    );
+
+    expect(source).toContain('type: "mesh-part"');
+    expect(source).toContain("boundaryFaceIndex: partSelection.boundaryFaceIndex");
+  });
+
   it("describes the active mesh quality metric and range", () => {
     expect(
       resolveViewport3DMeshQualityLegend(true, "sicn", {
@@ -509,6 +522,21 @@ describe("resolveViewport3DColorbarLegend", () => {
         fdmColorbarRequested: true,
       }),
     ).toEqual(new Set(["fdm"]));
+  });
+
+  it("includes surface projection mode when retaining viewport colorbar groups", () => {
+    expect(
+      resolveViewport3DRequestedColorbarGroupKeys(
+        [
+          scalarColorbarPart("part-a", {
+            projectionMode: "surface_faces",
+            source: "component_x",
+            visible: true,
+          }),
+        ],
+        "viridis",
+      ),
+    ).toEqual(new Set(["part-a:m:x:viridis:projection=surface_faces"]));
   });
 
   it("does not clear retained viewport colorbars while the render surface is unavailable", () => {

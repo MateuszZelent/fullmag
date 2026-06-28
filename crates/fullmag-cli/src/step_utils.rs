@@ -1274,6 +1274,7 @@ fn materialize_pipeline_frequency_response(
         damping_policy: payload_eigen_damping_policy(&frequency_payload)?
             .unwrap_or(default_damping_policy),
         spin_wave_bc: payload_spin_wave_bc(&frequency_payload)?.unwrap_or(default_spin_wave_bc),
+        magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         excitation: fullmag_ir::FrequencyExcitationIR {
             field_au_per_m: payload_vec3(
                 payload,
@@ -3432,6 +3433,7 @@ mod tests {
             normalization: fullmag_ir::FrequencyResponseNormalizationIR::UnitL2,
             damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
             spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+            magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
             excitation: fullmag_ir::FrequencyExcitationIR {
                 field_au_per_m: [0.0, 0.0, 1.0],
                 phase_rad: 0.0,

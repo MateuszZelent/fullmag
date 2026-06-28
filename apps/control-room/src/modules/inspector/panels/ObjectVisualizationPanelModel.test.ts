@@ -30,7 +30,9 @@ import {
   shouldShowPrimitiveDisplayToggle,
   shouldLoadObjectVisualizationFieldCatalog,
   shouldShowSurfaceFieldColorbar,
+  surfaceFieldProjectionModePatch,
   SURFACE_COLOR_SOURCE_ITEMS,
+  SURFACE_FIELD_PROJECTION_ITEMS,
   surfaceColorSourceFieldMetaComponent,
   surfaceDisplayPassPatch,
   surfaceSolidColorPatch,
@@ -52,6 +54,20 @@ describe("ObjectVisualizationPanelModel", () => {
       "magnitude",
       "colormap",
     ]);
+  });
+
+  it("exposes the surface field projection options used by Surface Coloring", () => {
+    expect(SURFACE_FIELD_PROJECTION_ITEMS.map((item) => item.value)).toEqual([
+      "raw_nodal",
+      "surface_faces",
+      "thickness_average_z",
+    ]);
+    expect(surfaceFieldProjectionModePatch("surface_faces")).toEqual({
+      surfaceProjectionMode: "surface_faces",
+    });
+    expect(surfaceFieldProjectionModePatch("unknown")).toEqual({
+      surfaceProjectionMode: "raw_nodal",
+    });
   });
 
   it("exposes the production color mode options used by Global Display", () => {

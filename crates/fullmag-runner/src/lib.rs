@@ -277,9 +277,48 @@ fn capability(status: &str, reason: &str) -> FrequencyDomainCapabilityEntry {
     }
 }
 
+fn frequency_domain_gpu_response_availability_v1() -> crate::native_fem::FrequencyDomainAvailability
+{
+    native_frequency_domain_availability(FrequencyDomainAvailabilityRequest {
+        study_kind: FrequencyDomainStudyKind::FrequencyResponse,
+        requires_driven_solver: true,
+        requires_modal_solver: false,
+        requires_static_periodic_boundary: false,
+        requires_floquet_boundary: false,
+        requires_nonzero_k_dynamic_demag: false,
+        requires_gpu: true,
+        strict_device: true,
+        floquet_k_vector_rad_per_m: None,
+        phase_convention: FrequencyDomainPhaseConvention::ExpIOmegaT,
+    })
+}
+
+fn magnetic_gpu_capability_from_availability(
+    availability: &crate::native_fem::FrequencyDomainAvailability,
+) -> FrequencyDomainCapabilityEntry {
+    if availability.status == "ok"
+        && availability.driven_response_available
+        && availability.gpu_available
+    {
+        return capability(
+            "partial_production_executable",
+            "native_fem_mfem_frequency_domain_gpu executes the gamma/free magnetic no-demag driven-response slice; static-periodic projection, dynamic demag, DMI, and nonzero-k Floquet remain gated",
+        );
+    }
+    capability(
+        "unsupported",
+        if availability.reason.is_empty() {
+            "not implemented in the current production frequency-domain backend"
+        } else {
+            availability.reason.as_str()
+        },
+    )
+}
+
 fn frequency_domain_capability_snapshot_v1() -> FrequencyDomainCapabilitySnapshot {
     let unsupported = "not implemented in the current production frequency-domain backend";
     let dynamic_demag_k = "nonzero-k Floquet demag requires a phase-aware dynamic demag-k operator";
+    let gpu_response = frequency_domain_gpu_response_availability_v1();
     FrequencyDomainCapabilitySnapshot {
         schema_version: "frequency_domain_capabilities.v1".to_string(),
         modal: FrequencyDomainModalCapabilities {
@@ -353,7 +392,7 @@ fn frequency_domain_capability_snapshot_v1() -> FrequencyDomainCapabilitySnapsho
                 "partial_production_executable",
                 "native FEM production CPU response executes the gamma/free-boundary and k=0 static-periodic exchange/Zeeman/uniaxial-anisotropy/interfacial-DMI/bulk-DMI/damping slice; demag, nonzero-k Floquet/Bloch, and missing periodic mesh-pair metadata are rejected before dense validation fallback",
             ),
-            magnetic_gpu: capability("unsupported", unsupported),
+            magnetic_gpu: magnetic_gpu_capability_from_availability(&gpu_response),
             frequency_sweep: capability(
                 "partial_production_executable",
                 "production CPU and dense validation lanes emit per-frequency artifacts and progress for supported response slices",
@@ -411,7 +450,11 @@ impl From<crate::native_fem::FrequencyDomainAvailability> for FrequencyDomainAva
 
 #[cfg(test)]
 mod frequency_domain_manifest_tests {
-    use super::{frequency_domain_manifest_v1, native_fem::FrequencyDomainSweepProgress};
+    use super::{
+        frequency_domain_manifest_v1, magnetic_gpu_capability_from_availability,
+        native_fem::FrequencyDomainSweepProgress,
+    };
+    use crate::native_fem::FrequencyDomainAvailability;
 
     #[test]
     fn frequency_domain_manifest_preserves_response_and_eigen_namespaces() {
@@ -440,9 +483,12 @@ mod frequency_domain_manifest_tests {
             .magnetic_cpu
             .reason
             .contains("bulk-DMI"));
-        assert_eq!(
-            manifest.capabilities.response.magnetic_gpu.status,
-            "unsupported"
+        assert!(
+            matches!(
+                manifest.capabilities.response.magnetic_gpu.status.as_str(),
+                "unsupported" | "partial_production_executable"
+            ),
+            "magnetic GPU capability must be derived from native frequency-domain availability"
         );
         assert_eq!(
             manifest.capabilities.demag.floquet_dynamic_k.status,
@@ -452,6 +498,46 @@ mod frequency_domain_manifest_tests {
             manifest.capabilities.visualization.mode_3d_overlay.status,
             "reference_executable"
         );
+    }
+
+    #[test]
+    fn magnetic_gpu_capability_reflects_strict_gpu_no_demag_availability() {
+        let capability = magnetic_gpu_capability_from_availability(&FrequencyDomainAvailability {
+            status: "ok".to_string(),
+            study_kind: "frequency_response".to_string(),
+            driven_response_available: true,
+            modal_solver_available: false,
+            static_periodic_response_available: false,
+            floquet_modal_available: false,
+            floquet_response_available: false,
+            dynamic_demag_k_available: false,
+            gpu_available: true,
+            reason: String::new(),
+            diagnostics_json: "{\"execution_lane\":\"native_fem_mfem_frequency_domain_gpu\"}"
+                .to_string(),
+        });
+
+        assert_eq!(capability.status, "partial_production_executable");
+        assert!(capability
+            .reason
+            .contains("native_fem_mfem_frequency_domain_gpu"));
+
+        let unavailable = magnetic_gpu_capability_from_availability(&FrequencyDomainAvailability {
+            status: "unavailable".to_string(),
+            study_kind: "frequency_response".to_string(),
+            driven_response_available: false,
+            modal_solver_available: false,
+            static_periodic_response_available: false,
+            floquet_modal_available: false,
+            floquet_response_available: false,
+            dynamic_demag_k_available: false,
+            gpu_available: false,
+            reason: "built without fem-gpu".to_string(),
+            diagnostics_json: "{}".to_string(),
+        });
+
+        assert_eq!(unavailable.status, "unsupported");
+        assert!(unavailable.reason.contains("built without fem-gpu"));
     }
 
     #[test]
@@ -2495,6 +2581,7 @@ mod tests {
             normalization: fullmag_ir::FrequencyResponseNormalizationIR::UnitL2,
             damping_policy: fullmag_ir::EigenDampingPolicyIR::Include,
             spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+            magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
             excitation: fullmag_ir::FrequencyExcitationIR {
                 field_au_per_m: [0.0, 0.0, 1.0],
                 phase_rad: 0.0,
@@ -4288,6 +4375,7 @@ mod tests {
             normalization: fullmag_ir::FrequencyResponseNormalizationIR::UnitL2,
             damping_policy: fullmag_ir::EigenDampingPolicyIR::Include,
             spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+            magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
             excitation: fullmag_ir::FrequencyExcitationIR {
                 field_au_per_m: [0.0, 0.0, 1.0],
                 phase_rad: 0.0,

@@ -59,6 +59,15 @@ pub(crate) enum FrequencyDomainPhaseConvention {
     ExpMinusIOmegaT,
 }
 
+const FLOQUET_ZERO_K_TOLERANCE_RAD_PER_M: f64 = 1.0e-12;
+
+#[allow(dead_code)]
+fn floquet_k_vector_is_nonzero_or_invalid(k_vector: [f64; 3]) -> bool {
+    k_vector.iter().any(|component| {
+        !component.is_finite() || component.abs() > FLOQUET_ZERO_K_TOLERANCE_RAD_PER_M
+    })
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) struct FrequencyDomainAvailability {
@@ -409,7 +418,10 @@ pub(crate) fn native_frequency_domain_availability(
     if matches!(
         request.study_kind,
         FrequencyDomainStudyKind::FrequencyResponse
-    ) && (request.requires_floquet_boundary || request.floquet_k_vector_rad_per_m.is_some())
+    ) && (request.requires_floquet_boundary
+        || request
+            .floquet_k_vector_rad_per_m
+            .is_some_and(floquet_k_vector_is_nonzero_or_invalid))
     {
         return frequency_domain_response_floquet_unavailable();
     }
@@ -624,6 +636,30 @@ mod tests {
             .diagnostics_json
             .contains("\"schema_version\":\"frequency_domain_availability.v1\""));
         assert!(availability
+            .diagnostics_json
+            .contains("\"unsupported_reason\":\"floquet_bloch_nonzero_k\""));
+    }
+
+    #[test]
+    fn frequency_domain_availability_fallback_keeps_gamma_floquet_as_static_periodic() {
+        let availability =
+            native_frequency_domain_availability(FrequencyDomainAvailabilityRequest {
+                study_kind: FrequencyDomainStudyKind::FrequencyResponse,
+                requires_driven_solver: true,
+                requires_modal_solver: false,
+                requires_static_periodic_boundary: false,
+                requires_floquet_boundary: false,
+                requires_nonzero_k_dynamic_demag: false,
+                requires_gpu: false,
+                strict_device: false,
+                floquet_k_vector_rad_per_m: Some([0.0, 0.0, 0.0]),
+                phase_convention: FrequencyDomainPhaseConvention::ExpIOmegaT,
+            });
+
+        assert_eq!(availability.status, "unavailable");
+        assert_eq!(availability.study_kind, "frequency_response");
+        assert!(!availability.reason.contains("nonzero-k"));
+        assert!(!availability
             .diagnostics_json
             .contains("\"unsupported_reason\":\"floquet_bloch_nonzero_k\""));
     }

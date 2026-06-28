@@ -778,6 +778,8 @@ pub struct FemFrequencyResponsePlanIR {
     pub damping_policy: EigenDampingPolicyIR,
     #[serde(default)]
     pub spin_wave_bc: SpinWaveBoundaryConditionIR,
+    #[serde(default)]
+    pub magnetostatic_bc: crate::MagnetostaticBoundaryConditionIR,
     pub excitation: FrequencyExcitationIR,
     pub frequencies_hz: FrequencySweepIR,
     pub enable_exchange: bool,
@@ -792,9 +794,56 @@ pub struct FemFrequencyResponsePlanIR {
     pub external_field: Option<[f64; 3]>,
     pub gyromagnetic_ratio: f64,
     pub precision: ExecutionPrecision,
+    #[serde(default)]
+    pub requested_device: crate::ExecutionDevice,
     pub exchange_bc: ExchangeBoundaryCondition,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub demag_realization: Option<ResolvedFemDemagIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub periodic_constraint_sets: Vec<PeriodicConstraintSetIR>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PeriodicUnknownFamilyIR {
+    MagnetizationStatic,
+    MagnetizationDynamic,
+    MagnetostaticPotentialStatic,
+    MagnetostaticPotentialDynamic,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PeriodicDomainScopeIR {
+    MagneticDomain,
+    MagnetostaticDomainWithAir,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum PeriodicPhasePolicyIR {
+    ZeroPhase,
+    BlochPhase {
+        phase_convention: crate::PhaseConventionIR,
+        k_vector_rad_per_m: [f64; 3],
+        real_imag_mixing: bool,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PeriodicPhaseLoopDiagnosticsIR {
+    pub checked_loop_count: u64,
+    pub max_phase_loop_residual_rad: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PeriodicConstraintSetIR {
+    pub unknown_family: PeriodicUnknownFamilyIR,
+    pub domain_scope: PeriodicDomainScopeIR,
+    pub pair_ids: Vec<String>,
+    pub phase_policy: PeriodicPhasePolicyIR,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase_loop_diagnostics: Option<PeriodicPhaseLoopDiagnosticsIR>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -60,9 +60,31 @@ void snapshot_stats_are_owned_by_runtime_module() {
         "snapshot header must document scalar snapshot ownership");
 }
 
+void demag_phi_snapshot_contract_is_declared() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string header =
+        read_text_file(root.parent_path().parent_path() / "native" / "include" / "fullmag_fem.h");
+    const std::string api = read_text_file(root / "src" / "api.cpp");
+    const std::string state_io =
+        read_text_file(root / "cpu" / "mfem" / "runtime" / "state_io.cpp");
+
+    check(
+        header.find("FULLMAG_FEM_OBSERVABLE_DEMAG_PHI") != std::string::npos,
+        "C ABI must declare a demag scalar-potential observable");
+    check(
+        api.find("FULLMAG_FEM_OBSERVABLE_DEMAG_PHI") != std::string::npos &&
+            api.find("component_count = 1") != std::string::npos,
+        "native snapshot API must expose demag phi as a scalar component payload");
+    check(
+        state_io.find("copy_demag_phi_observable_f64") != std::string::npos &&
+            state_io.find("gf_potential") != std::string::npos,
+        "state I/O must copy demag phi from the MFEM scalar-potential grid function");
+}
+
 } // namespace
 
 int main() {
     snapshot_stats_are_owned_by_runtime_module();
+    demag_phi_snapshot_contract_is_declared();
     return 0;
 }

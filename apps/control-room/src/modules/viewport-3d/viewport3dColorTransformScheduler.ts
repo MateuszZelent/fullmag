@@ -223,6 +223,28 @@ function cloneFieldColorBuildTargetForWorker(
         transferables: [pointIndices.buffer],
       };
     }
+    case "surface-faces": {
+      const surfaceIndices = new Uint32Array(target.surfaceIndices);
+      return {
+        target: {
+          ...target,
+          surfaceIndices,
+        },
+        transferables: [surfaceIndices.buffer],
+      };
+    }
+    case "thickness-average-z": {
+      const positions = new Float32Array(target.positions);
+      const surfaceIndices = new Uint32Array(target.surfaceIndices);
+      return {
+        target: {
+          ...target,
+          positions,
+          surfaceIndices,
+        },
+        transferables: [positions.buffer, surfaceIndices.buffer],
+      };
+    }
     case "full-domain":
       return { target, transferables: [] };
   }

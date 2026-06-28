@@ -616,6 +616,44 @@ void demag_periodic_reduction_is_owned_by_poisson_periodic_module() {
         periodic.find("return ctx.demag.enabled && !ctx.mesh.periodic_node_pairs.empty();") !=
             std::string::npos,
         "Poisson periodic module must define the periodic-demag predicate semantics");
+    check(
+        periodic.find("periodic_workspace->solver.GetNumIterations()") != std::string::npos,
+        "Poisson periodic reduced solve must publish actual CG iteration telemetry");
+    check(
+        periodic.find("periodic_workspace->solver.GetFinalNorm()") != std::string::npos,
+        "Poisson periodic reduced solve must publish actual CG residual telemetry");
+    check(
+        periodic.find("ctx.poisson_demag.last_iterations = 0;") == std::string::npos,
+        "Poisson periodic reduced solve must not report hard-coded zero iterations");
+    check(
+        periodic.find("ctx.poisson_demag.last_residual = 0.0;") == std::string::npos,
+        "Poisson periodic reduced solve must not report a hard-coded zero residual");
+}
+
+void demag_robin_boundary_mass_excludes_periodic_seam_markers() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string boundary_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_boundary.hpp");
+    const std::string boundary =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_boundary.cpp");
+
+    check(
+        boundary_header.find("excluding periodic seam markers") != std::string::npos,
+        "Poisson boundary header must document Robin periodic-seam exclusion");
+    check(
+        boundary.find("bdr_marker[ctx.poisson_demag.boundary_marker - 1] = 1;") !=
+            std::string::npos,
+        "Robin boundary mass must first select the configured open boundary marker");
+    check(
+        boundary.find("for (uint32_t pm : ctx.mesh.periodic_boundary_marker_set)") !=
+            std::string::npos,
+        "Robin boundary mass must inspect periodic boundary seam markers");
+    check(
+        boundary.find("bdr_marker[static_cast<int>(pm) - 1] = 0;") != std::string::npos,
+        "Robin boundary mass must exclude periodic seam markers from the boundary marker array");
+    check(
+        boundary.find("new mfem::MassIntegrator(), bdr_marker") != std::string::npos,
+        "Robin boundary mass must assemble using the seam-filtered boundary marker array");
 }
 
 void demag_hypre_solve_is_owned_by_poisson_hypre_module() {
@@ -797,6 +835,7 @@ void demag_recovery_is_owned_by_poisson_recovery_module() {
         "bool recover_demag_poisson_field(",
         "fe->CalcPhysDShape",
         "ctx.demag.h_visual_xyz = h_demag_xyz;",
+        "finalize_demag_poisson_recovered_field(ctx, h_demag_xyz);",
         "ctx.demag.cached_robin_boundary_energy =",
         "bdr_mass->SpMat().Mult(gf_u",
     };
@@ -822,6 +861,28 @@ void demag_recovery_parallel_path_avoids_full_per_thread_node_buffers() {
     check(
         recovery.find("#pragma omp atomic update") != std::string::npos,
         "Poisson demag recovery parallel path must accumulate directly into shared nodal buffers");
+}
+
+void demag_recovery_finalizes_periodic_field_before_energy() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string recovery =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_recovery.cpp");
+
+    const size_t visual_pos =
+        recovery.find("ctx.demag.h_visual_xyz = h_demag_xyz;");
+    const size_t zero_pos =
+        recovery.find("zero_non_magnetic_nodes_aos(h_demag_xyz, ctx.mesh.magnetic_node_mask);");
+    const size_t finalize_pos =
+        recovery.find("finalize_demag_poisson_recovered_field(ctx, h_demag_xyz);");
+    const size_t energy_pos =
+        recovery.find("demag_energy = demag_poisson_energy_from_field(");
+    check(visual_pos != std::string::npos, "recovery must preserve visual demag before zeroing");
+    check(zero_pos != std::string::npos, "recovery must zero nonmagnetic LLG demag field");
+    check(finalize_pos != std::string::npos, "recovery must finalize periodic demag field");
+    check(energy_pos != std::string::npos, "recovery must compute demag energy");
+    check(
+        visual_pos < zero_pos && zero_pos < finalize_pos && finalize_pos < energy_pos,
+        "periodic demag projection must happen after visual preservation/zeroing and before energy");
 }
 
 void demag_solver_stats_are_filled_by_poisson_module() {
@@ -1038,7 +1099,11 @@ void demag_recovered_field_finalize_projects_periodic_and_syncs_visual() {
     ctx.mesh.n_nodes = 3;
     ctx.mesh.periodic_reduced_node = {0u, 1u, 0u};
     ctx.mesh.periodic_representative_nodes = {2u, 1u};
-    ctx.demag.h_visual_xyz = {1.0};
+    ctx.demag.h_visual_xyz = {
+        100.0, 101.0, 102.0,
+        200.0, 201.0, 202.0,
+        300.0, 301.0, 302.0,
+    };
 
     std::vector<double> h_demag = {
         10.0, 11.0, 12.0,
@@ -1052,8 +1117,17 @@ void demag_recovered_field_finalize_projects_periodic_and_syncs_visual() {
         20.0, 21.0, 22.0,
         30.0, 31.0, 32.0,
     };
+    const std::vector<double> expected_visual = {
+        300.0, 301.0, 302.0,
+        200.0, 201.0, 202.0,
+        300.0, 301.0, 302.0,
+    };
     check(h_demag == expected, "demag recovered field periodic projection");
-    check(ctx.demag.h_visual_xyz == expected, "demag visual field follows projected field");
+    check(ctx.demag.h_visual_xyz == expected_visual, "demag visual field projects independently");
+
+    ctx.demag.h_visual_xyz = {1.0};
+    fullmag::fem::finalize_demag_poisson_recovered_field(ctx, h_demag);
+    check(ctx.demag.h_visual_xyz.empty(), "mismatched visual demag cache clears visual field");
 
     ctx.mesh.periodic_reduced_node.clear();
     ctx.demag.h_visual_xyz.clear();
@@ -1083,11 +1157,13 @@ int main() {
     demag_rhs_assembly_is_owned_by_poisson_rhs_module();
     demag_boundary_operator_is_owned_by_poisson_boundary_module();
     demag_periodic_reduction_is_owned_by_poisson_periodic_module();
+    demag_robin_boundary_mass_excludes_periodic_seam_markers();
     demag_hypre_solve_is_owned_by_poisson_hypre_module();
     demag_hypre_solve_returns_workspace_solution_without_final_host_copy();
     demag_poisson_solver_runtime_state_is_owned_by_poisson_module();
     demag_recovery_is_owned_by_poisson_recovery_module();
     demag_recovery_parallel_path_avoids_full_per_thread_node_buffers();
+    demag_recovery_finalizes_periodic_field_before_energy();
     demag_solver_stats_are_filled_by_poisson_module();
     demag_poisson_ready_contract_is_owned_by_poisson_module();
     demag_solver_telemetry_names_are_owned_by_poisson_module();

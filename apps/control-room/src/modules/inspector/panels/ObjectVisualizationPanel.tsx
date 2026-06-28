@@ -91,6 +91,8 @@ import {
   shouldShowPrimitiveDisplayToggle,
   shouldLoadObjectVisualizationFieldCatalog,
   shouldShowSurfaceFieldColorbar,
+  SURFACE_FIELD_PROJECTION_ITEMS,
+  surfaceFieldProjectionModePatch,
   surfaceColorSourceFieldMetaComponent,
   geometryScopeDisplayPatch,
   quantitySourcePatch,
@@ -518,6 +520,25 @@ function VisualizationSurfaceColoringSection({
         {resolveSurfaceColorSourceItems(settings.activeQuantityId).map((source) => (
           <option key={source.value} value={source.value}>
             {source.label}
+          </option>
+        ))}
+      </FormField>
+      <FormField
+        disabled={
+          pending ||
+          sectionDisabled("surface-coloring") ||
+          settings.surfaceColorSource === "solid"
+        }
+        label="Projection"
+        type="select"
+        value={settings.surfaceProjectionMode}
+        onChange={(event) =>
+          void patch(surfaceFieldProjectionModePatch(event.target.value))
+        }
+      >
+        {SURFACE_FIELD_PROJECTION_ITEMS.map((item) => (
+          <option key={item.value} value={item.value}>
+            {item.label}
           </option>
         ))}
       </FormField>

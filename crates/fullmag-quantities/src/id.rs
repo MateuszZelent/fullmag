@@ -44,6 +44,8 @@ pub enum QuantityId {
     EdenEx,
     /// Spatial demagnetization energy density (J/m³).
     EdenDemag,
+    /// Magnetostatic scalar potential from the Poisson demag solve.
+    DemagPhi,
     /// Spatial Zeeman energy density (J/m³).
     EdenExt,
     /// Spatial anisotropy energy density (J/m³).
@@ -106,6 +108,7 @@ impl QuantityId {
             // Second wave (QB-17)
             Self::EdenEx => "eden_ex",
             Self::EdenDemag => "eden_demag",
+            Self::DemagPhi => "demag_phi",
             Self::EdenExt => "eden_ext",
             Self::EdenAni => "eden_ani",
             Self::EdenDmi => "eden_dmi",
@@ -156,6 +159,7 @@ impl QuantityId {
         // Second wave (QB-17)
         Self::EdenEx,
         Self::EdenDemag,
+        Self::DemagPhi,
         Self::EdenExt,
         Self::EdenAni,
         Self::EdenDmi,
@@ -230,6 +234,7 @@ pub fn normalize_quantity_id(requested: &str) -> Result<QuantityId, QuantityIdEr
         // Second wave (QB-17)
         "eden_ex" => Ok(QuantityId::EdenEx),
         "eden_demag" => Ok(QuantityId::EdenDemag),
+        "demag_phi" | "phi" | "magnetostatic_potential" => Ok(QuantityId::DemagPhi),
         "eden_ext" => Ok(QuantityId::EdenExt),
         "eden_ani" => Ok(QuantityId::EdenAni),
         "eden_dmi" => Ok(QuantityId::EdenDmi),

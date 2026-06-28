@@ -452,7 +452,15 @@ pub(crate) fn validate_executable_outputs(
     errors: &mut Vec<String>,
 ) {
     let allowed_fields = [
-        "m", "H_ex", "H_demag", "H_ext", "H_eff", "H_ani", "H_dmi", "H_mel",
+        "m",
+        "H_ex",
+        "H_demag",
+        "demag_phi",
+        "H_ext",
+        "H_eff",
+        "H_ani",
+        "H_dmi",
+        "H_mel",
     ];
     let allowed_scalars = [
         "E_ex",
@@ -491,13 +499,15 @@ pub(crate) fn validate_executable_outputs(
                     && !(allow_h_dmi_bulk && name == "H_dmi_bulk")
                 {
                     errors.push(format!(
-                        "field output '{}' is not executable in the current executable path; allowed fields are m, H_ex, H_demag, H_ext, H_OE, H_dmi, H_dmi_bulk, H_mel, and H_eff",
+                        "field output '{}' is not executable in the current executable path; allowed fields are m, H_ex, H_demag, demag_phi, H_ext, H_OE, H_dmi, H_dmi_bulk, H_mel, and H_eff",
                         name
                     ));
                 } else if name == "H_ex" && !enable_exchange {
                     errors.push("field output 'H_ex' requires Exchange()".to_string());
                 } else if name == "H_demag" && !enable_demag {
                     errors.push("field output 'H_demag' requires Demag()".to_string());
+                } else if name == "demag_phi" && !enable_demag {
+                    errors.push("field output 'demag_phi' requires Demag()".to_string());
                 } else if name == "H_ext" && !enable_zeeman {
                     errors.push("field output 'H_ext' requires Zeeman(...)".to_string());
                 } else if name == "H_dmi" && !enable_h_dmi {
@@ -566,13 +576,15 @@ pub(crate) fn validate_executable_outputs(
                     && !(allow_h_dmi_bulk && field == "H_dmi_bulk")
                 {
                     errors.push(format!(
-                        "snapshot field '{}' is not executable in the current path; allowed fields are m, H_ex, H_demag, H_ext, H_OE, H_dmi, H_dmi_bulk, and H_eff",
+                        "snapshot field '{}' is not executable in the current path; allowed fields are m, H_ex, H_demag, demag_phi, H_ext, H_OE, H_dmi, H_dmi_bulk, and H_eff",
                         field
                     ));
                 } else if field == "H_ex" && !enable_exchange {
                     errors.push("snapshot field 'H_ex' requires Exchange()".to_string());
                 } else if field == "H_demag" && !enable_demag {
                     errors.push("snapshot field 'H_demag' requires Demag()".to_string());
+                } else if field == "demag_phi" && !enable_demag {
+                    errors.push("snapshot field 'demag_phi' requires Demag()".to_string());
                 } else if field == "H_ext" && !enable_zeeman {
                     errors.push("snapshot field 'H_ext' requires Zeeman(...)".to_string());
                 } else if field == "H_dmi" && !enable_h_dmi {

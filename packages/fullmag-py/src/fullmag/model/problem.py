@@ -49,7 +49,7 @@ IR_VERSION = "0.2.0"
 API_VERSION = "0.2.0"
 SERIALIZER_VERSION = "0.2.0"
 
-_FEM_MESH_CACHE_VERSION = "v3"
+_FEM_MESH_CACHE_VERSION = "v5"
 
 
 @dataclass(frozen=True, slots=True)
@@ -468,6 +468,7 @@ def build_geometry_assets_for_request(
             realize_fem_mesh_asset,
         )
         from fullmag.meshing.asset_pipeline import (
+            _drop_degenerate_tetrahedra,
             realize_fem_domain_mesh_asset_from_components_with_report,
         )
         from fullmag.meshing.gmsh_bridge import MeshData
@@ -534,6 +535,11 @@ def build_geometry_assets_for_request(
                             discretization.fem,
                             study_universe=study_universe,
                             mesh_workflow=mesh_workflow,
+                        )
+                        mesh = _drop_degenerate_tetrahedra(
+                            mesh,
+                            context=f"Generated FEM mesh for '{geometry.geometry_name}'",
+                            fallbacks_triggered=[],
                         )
                         if cache_path is not None and not imported_surface_only:
                             mesh.save(cache_path)

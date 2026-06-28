@@ -17,6 +17,10 @@ NUMERIC_COLUMNS = {
     "demag_solve_wall_time_ns",
     "demag_recover_wall_time_ns",
     "demag_energy_wall_time_ns",
+    "e_demag_J",
+    "h_demag_pair_max_abs_Apm",
+    "robin_periodic_seam_face_count",
+    "phi_pair_max_abs",
 }
 
 

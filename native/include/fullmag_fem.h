@@ -53,6 +53,7 @@ typedef enum {
     FULLMAG_FEM_OBSERVABLE_H_OE = 11,
     FULLMAG_FEM_OBSERVABLE_H_THERM = 12,
     FULLMAG_FEM_OBSERVABLE_TORQUE = 13,
+    FULLMAG_FEM_OBSERVABLE_DEMAG_PHI = 14,
 } fullmag_fem_observable;
 
 typedef enum {
@@ -104,8 +105,10 @@ typedef struct {
     const uint32_t *boundary_markers;
 
     /* Static periodic node pairs as [node_a0,node_b0,node_a1,node_b1,...].
-       Native time-domain FEM currently validates and rejects these before
-       MFEM context creation until periodic constraint assembly is implemented. */
+       Supported native CPU/MFEM static-reduction paths consume these to build
+       periodic node classes for k=0 local operators, demag Poisson reduction,
+       and static-periodic driven-response projection.  Unsupported lanes must
+       reject them explicitly rather than silently treating seams as open. */
     const uint32_t *periodic_node_pairs;
     uint32_t n_periodic_node_pairs;
 
@@ -545,6 +548,19 @@ typedef struct {
     fullmag_fem_frequency_domain_phase_convention phase_convention;
     const fullmag_fem_frequency_domain_floquet_periodic_pair *mfem_floquet_periodic_pairs;
     uint64_t mfem_floquet_periodic_pair_count;
+    int requires_periodic_airbox_dynamic_demag;
+    uint64_t magnetic_periodic_constraint_set_count;
+    uint64_t magnetostatic_periodic_constraint_set_count;
+    uint64_t periodic_airbox_delta_m_tangent_dof_count;
+    uint64_t periodic_airbox_delta_phi_dof_count;
+    int periodic_airbox_coupled_block_enabled;
+    uint64_t periodic_airbox_coupled_block_delta_m_tangent_dof_count;
+    uint64_t periodic_airbox_coupled_block_delta_phi_dof_count;
+    const double *periodic_airbox_coupled_block_stiffness_matrix_row_major;
+    const double *periodic_airbox_coupled_block_mass_matrix_row_major;
+    const double *periodic_airbox_coupled_block_drive_real;
+    const double *periodic_airbox_coupled_block_drive_imag;
+    const double *mfem_demag_tangent_matrix_row_major;
 } fullmag_fem_frequency_domain_driven_response_request;
 
 typedef struct {
@@ -558,7 +574,7 @@ typedef struct {
     char *artifact_manifest_path;
 } fullmag_fem_frequency_domain_solve_result;
 
-#define FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION 1u
+#define FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION 4u
 
 typedef enum {
     FULLMAG_FEM_FD_OK = 0,
@@ -688,6 +704,8 @@ typedef struct {
     uint64_t driven_response_request_tiny_validation_drive_imag_offset;
     uint64_t driven_response_request_phase_convention_offset;
     uint64_t driven_response_request_mfem_floquet_periodic_pair_count_offset;
+    uint64_t driven_response_request_periodic_airbox_coupled_block_enabled_offset;
+    uint64_t driven_response_request_mfem_demag_tangent_matrix_row_major_offset;
     uint64_t solve_result_size;
     uint64_t solve_result_artifact_manifest_path_offset;
 } fullmag_fem_frequency_domain_abi_layout;

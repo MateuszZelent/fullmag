@@ -7,6 +7,7 @@
 
 #include "cpu/mfem/interactions/demag_poisson_recovery.hpp"
 
+#include "cpu/mfem/interactions/demag_poisson_field.hpp"
 #include "context.hpp"
 #include "cpu/mfem/interactions/demag_poisson_energy.hpp"
 #include "fem_common.hpp"
@@ -355,6 +356,7 @@ bool recover_demag_poisson_field(
     ctx.demag.h_visual_xyz = h_demag_xyz;
 
     zero_non_magnetic_nodes_aos(h_demag_xyz, ctx.mesh.magnetic_node_mask);
+    finalize_demag_poisson_recovered_field(ctx, h_demag_xyz);
 
     if (ctx.integration_weights.mfem_lumped_mass.empty()) {
         error = "MFEM lumped mass is unavailable for Poisson demag energy evaluation";

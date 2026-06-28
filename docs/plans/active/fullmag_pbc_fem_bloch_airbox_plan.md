@@ -82,7 +82,7 @@ Tego nie nalezy narzucac jako osobnego free-Neumann na seamie. Preferowany kontr
 | Sciezka | Status | Warunki uzycia |
 |---|---|---|
 | FEM static/time-domain, `k=0`, exchange + uniform Zeeman + local anisotropy + DMI | czesciowo wykonawcza | `mesh.periodic_node_pairs`, zgodne klasy materialowe, native FEM CPU/MFEM. |
-| FEM static/time-domain, `k=0`, demag Poisson airbox | czesciowo zaimplementowana, wymaga kwalifikacji | `mesh.periodic_node_pairs`, `periodic_boundary_pairs`, shared-domain mesh with air, open non-periodic axis, CPU/MFEM path. |
+| FEM static/time-domain, `k=0`, demag Poisson airbox | partial production executable for the qualified CPU/MFEM slice | `mesh.periodic_node_pairs`, `periodic_boundary_pairs`, shared-domain mesh with air, at least one open axis, CPU/MFEM path. |
 | FEM eigen, Periodic/Floquet, no dynamic demag | czesciowo wykonawcza | `spin_wave_bc=periodic/floquet`, `periodic_node_pairs`, `k_sampling=Single` dla Floquet. |
 | FEM eigen, Floquet + dynamic demag | unsupported | planner/runner musi odrzucac. |
 | FEM frequency response, gamma/free, no demag | partial production CPU executable | P1 magnetic mesh, no shared-domain airbox, no demag. |
@@ -184,19 +184,19 @@ Gauge fixing:
 - Test: `packages/fullmag-py/tests/test_meshing.py`
 - Test: `packages/fullmag-py/tests/test_api.py`
 
-- [ ] Update `0710` so it no longer says static/time-domain FEM always rejects periodic meshes. It must say: native FEM has `k=0` static reductions for a limited CPU/MFEM slice; frequency-response demag and nonzero-k response remain unsupported.
-- [ ] Update `0600` so the "only working implementation is fem_eigen.rs" sentence is replaced by the matrix from section 3.
-- [ ] Update `0800` so native MFEM periodic Poisson reduction is current implementation, not future PR-4, while validation/promotion remains incomplete.
-- [ ] Update `native/include/fullmag_fem.h` comment for `periodic_node_pairs`: they are not unconditionally rejected anymore; they feed static reduction and seam marker handling in supported paths.
-- [ ] Add a failing Python meshing test proving axis-aligned inferred `periodic_boundary_pairs` include `translation` and `tolerance_m`:
+- [x] Update `0710` so it no longer says static/time-domain FEM always rejects periodic meshes. It must say: native FEM has `k=0` static reductions for a limited CPU/MFEM slice; frequency-response demag and nonzero-k response remain unsupported.
+- [x] Update `0600` so the "only working implementation is fem_eigen.rs" sentence is replaced by the matrix from section 3.
+- [x] Update `0800` so native MFEM periodic Poisson reduction is current implementation, not future PR-4, while validation/promotion remains incomplete.
+- [x] Update `native/include/fullmag_fem.h` comment for `periodic_node_pairs`: they are not unconditionally rejected anymore; they feed static reduction and seam marker handling in supported paths.
+- [x] Add a failing Python meshing test proving axis-aligned inferred `periodic_boundary_pairs` include `translation` and `tolerance_m`:
 
 ```python
 assert mesh_ir["periodic_boundary_pairs"][0]["translation"] == [Lx, 0.0, 0.0]
 assert mesh_ir["periodic_boundary_pairs"][0]["tolerance_m"] > 0.0
 ```
 
-- [ ] Implement the minimal `_infer_axis_aligned_periodic_pairs(...)` change: for `x_faces`, emit `[span_x, 0, 0]`; for `y_faces`, emit `[0, span_y, 0]`; for `z_faces`, emit `[0, 0, span_z]`; reuse the existing inferred tolerance.
-- [ ] Re-run:
+- [x] Implement the minimal `_infer_axis_aligned_periodic_pairs(...)` change: for `x_faces`, emit `[span_x, 0, 0]`; for `y_faces`, emit `[0, span_y, 0]`; for `z_faces`, emit `[0, 0, span_z]`; reuse the existing inferred tolerance.
+- [x] Re-run:
 
 ```bash
 python -m pytest packages/fullmag-py/tests/test_periodic_meshing.py packages/fullmag-py/tests/test_meshing.py packages/fullmag-py/tests/test_api.py -q
@@ -215,10 +215,10 @@ cargo test -p fullmag-runner fem_frequency_response_periodic_floquet_rejects_den
 - Test: `crates/fullmag-runner/src/frequency_response.rs`
 - Test: `backends/fem/tests/frequency_domain/frequency_domain_contract.cpp`
 
-- [ ] Keep `examples/fem_frequency_response_smoke.py` with `include_demag=False` until P3/P4 exists. Do not turn demag on to make the example look more physical.
-- [ ] Ensure the example description says "periodic spin-wave boundary, demag disabled" and not "full periodic antidot demag".
-- [ ] Ensure production rejection messages mention all three excluded cases: `include_demag=true`, shared-domain airbox, nonzero-k/Floquet.
-- [ ] Run the native/container-backed gates:
+- [x] Keep `examples/fem_frequency_response_smoke.py` with `include_demag=False` until P3/P4 exists. Do not turn demag on to make the example look more physical.
+- [x] Ensure the example description says "periodic spin-wave boundary, demag disabled" and not "full periodic antidot demag".
+- [x] Ensure production rejection messages mention all three excluded cases: `include_demag=true`, shared-domain airbox, nonzero-k/Floquet.
+- [x] Run the native/container-backed gates:
 
 ```bash
 just verify-fem-frequency-domain-native-contract
@@ -230,6 +230,18 @@ Acceptance:
 - `response/diagnostics/solver.v1.json` reports static-periodic projection for the static-periodic smoke.
 - `mesh/periodic_pairs.v1.json` is present and validation status is `ok`.
 - Dense validation fallback is not used for the production CPU static-periodic lane.
+  Progress: frequency-domain availability is now aligned with the currently
+  implemented native GPU response slice: strict GPU requests for gamma/free,
+  no-demag driven response report the `native_fem_mfem_frequency_domain_gpu`
+  lane when built with CUDA runtime, while GPU static-periodic projection still
+  reports explicit `unavailable`. This does not promote GPU PBC or GPU dynamic
+  demag.
+  Progress: the public frequency-domain capability manifest now derives
+  `response.magnetic_gpu` from that strict-GPU availability probe, so CUDA
+  builds can advertise the narrow gamma/free no-demag GPU response slice while
+  non-CUDA or non-`fem-gpu` builds continue to report it as unsupported. The
+  manifest still does not advertise GPU static-periodic projection, GPU PBC, or
+  GPU dynamic demag.
 
 ### P2: Kwalifikacja static/time-domain k=0 demag PBC z airboxem
 
@@ -243,8 +255,8 @@ Acceptance:
 - Modify: `docs/specs/capability-matrix-v0.md`
 - Add or modify: `tests/fem_demag_validation/periodic_airbox_validation.py`
 
-- [ ] Add native contract coverage that `periodic_boundary_pair_markers` are excluded from Robin boundary mass while nonperiodic top/bottom markers remain active.
-- [ ] Add planner tests for:
+- [x] Add native contract coverage that `periodic_boundary_pair_markers` are excluded from Robin boundary mass while nonperiodic top/bottom markers remain active.
+- [x] Add planner tests for:
 
 ```text
 periodic_node_pairs + Demag + shared-domain airbox + periodic_boundary_pairs => plans
@@ -253,15 +265,25 @@ periodic_node_pairs + Demag + no air elements => rejects
 3D fully periodic demag => rejects until gauge/model exists
 ```
 
-- [ ] Add validation fixture comparing a 1x static-periodic airbox solve with an explicitly repeated supercell central-cell extraction. Keep Robin/open-boundary policy fixed across the comparison.
-- [ ] Add field continuity checks:
+- [x] Add validation fixture comparing a 1x static-periodic airbox solve with an explicitly repeated supercell central-cell extraction. Keep Robin/open-boundary policy fixed across the comparison.
+  - [x] CSV artifact acceptance harness for primitive/supercell energy comparison.
+  - [x] Active primitive/supercell runtime producer reaches managed MFEM solves and writes CSV/Zarr-derived seam metrics.
+  - [x] Producer now compares primitive periodic energy against a central-cell field-energy extraction from the explicit supercell artifact, not against whole-supercell `E_demag / repetitions^2`.
+  - [x] Periodic reduced Poisson solve publishes actual MFEM CG iterations/residual telemetry instead of hard-coded zeroes.
+  - [x] Periodic airbox meshing now assigns non-Robin physical boundary markers to every periodic seam surface fragment, preserves all marker pairs in `periodic_boundary_pairs`, and excludes those surfaces from `Gamma_out`; current producer records `robin_periodic_seam_face_count=0`.
+  - [x] Diagnostic supercell sweep summary is reproducible via `python3 tests/fem_demag_validation/periodic_airbox_validation.py --summarize-sweep ...` and is written at `.fullmag/reports/fem-demag-periodic-airbox-validation-sweep.csv`.
+  - [x] Native runtime now emits scalar-potential `demag_phi` Zarr snapshots with `component_order=["scalar"]`; the fresh managed 3x3 producer writes `phi_pair_status=emitted_by_runtime` and `phi_pair_max_abs=0.0`.
+  - [x] Periodic-airbox producer now uses the same thin-film magnetic mesh policy expected for the antidot/FMR examples: `hmin=3 nm`, magnetic `hmax=8 nm`, interface `hmax=5 nm`, edge/corner `hmax=4 nm`, two through-thickness layers, and repeated hole-refinement regions instead of one unsupported region union. Unit coverage lives in `tests/fem_demag_validation/test_acceptance.py::test_periodic_airbox_mesh_policy_uses_thin_film_and_repeated_hole_refinement`.
+  - [x] Runtime producer CSV now carries energy-diagnostic columns: `runtime_total_e_demag_J`, `runtime_total_to_field_scope_ratio`, `magnetic_volume_m3`, `magnetic_element_count`, `magnetic_node_count`, and `energy_scope`, so future artifacts show whether a row is all-magnet energy or a central-cell extraction.
+  - [x] Supercell reference now uses lateral PBC on the outer supercell faces instead of a finite-array lateral open boundary. The managed 3x3 producer writes `.fullmag/reports/fem-demag-periodic-airbox-validation-supercell-pbc/periodic_airbox_validation.csv` and passes: primitive `e_demag_J=1.8678852700529174e-19`, supercell central-cell `e_demag_J=1.8633818564459878e-19`, relative error `2.4167958871934916e-3` against the `2.0e-2` tolerance, `h_demag_pair_max_abs_Apm=0.0`, `phi_pair_max_abs=0.0`, `robin_periodic_seam_face_count=0`, primitive CG telemetry `38` iterations / `8.035072644447357e-18` residual, and supercell CG telemetry `65` iterations / `3.735510701495055e-17` residual.
+- [x] Add field continuity checks:
 
 ```text
 max_pair |H_demag(dst) - H_demag(src)| < tolerance
 max_pair |phi(dst) - phi(src)| < tolerance
 ```
 
-- [ ] Run authoritative gates through the repo recipes, not hand-written host builds:
+- [x] Run authoritative gates through the repo recipes, not hand-written host builds:
 
 ```bash
 just verify-fem-relaxation-runtime
@@ -289,13 +311,15 @@ Acceptance:
 - Modify: `backends/fem/cpu/frequency_domain/*`
 - Test: `backends/fem/tests/frequency_domain/frequency_domain_contract.cpp`
 
-- [ ] Add IR for `magnetostatic_bc = periodic_airbox_k0` and reject it unless `spin_wave_bc=periodic` or `k=0`.
-- [ ] Add separate constraint sets for:
+- [x] Add IR/Python API/planner contract for `magnetostatic_bc = periodic_airbox_k0` and reject it unless `spin_wave_bc=periodic` and `k=0`. This is a semantic gate only; the coupled frequency-domain demag solver remains in the next unchecked P3 tasks.
+- [x] Add separate plan-level periodic constraint sets for:
 
 ```text
 delta_m: magnetic-domain periodic pairs
 delta_phi: full magnetostatic-domain-with-air lateral pairs
 ```
+
+  The contract is now represented in `FemFrequencyResponsePlanIR.periodic_constraint_sets` for `magnetostatic_bc=periodic_airbox_k0`; native coupled-solver consumption remains in the next P3 tasks.
 
 - [ ] Extend production CPU frequency response from magnetic-only block to coupled block:
 
@@ -304,8 +328,84 @@ delta_phi: full magnetostatic-domain-with-air lateral pairs
 [A_phim       A_phiphi] [delta_phi] = [drive_phi]
 ```
 
+  Progress: native driven-response request and C ABI now carry an explicit `periodic_airbox_k0` dynamic-demag request with magnetic/magnetostatic periodic constraint counts, and return structured `unavailable` diagnostics instead of falling through to the magnetic-only block. The actual coupled block assembly/solve remains unchecked.
+  Progress: the frequency-domain C ABI and Rust native wrapper now also carry
+  the intended coupled-vector layout for `periodic_airbox_k0`:
+  `delta_m_tangent_dof_count`, `delta_phi_dof_count`, and the derived
+  coupled complex DOF count. Native unavailable artifacts report these values,
+  so the next implementation can assemble against an explicit `[delta_m,
+  delta_phi]` layout rather than inferring it from status text.
+  Progress: the Rust runner no longer rejects the qualified `k=0` `periodic_airbox_k0`
+  slice as a generic shared-domain airbox before native dispatch. In builds
+  without the native FEM frequency-domain solver, the same request now fails
+  explicitly instead of using the dense validation fallback.
+  Progress: native C++ now has an explicit `periodic_airbox_coupled_block_problem`
+  hook for a supplied dense coupled operator over `[delta_m, delta_phi]`. The
+  production CPU lane solves this block, returns `ok`, and writes solved
+  manifest/diagnostics/frequency-point metadata with
+  `demag_contribution.status="solved"` and `delta_phi_complex`. This is a real
+  coupled-block solve for supplied operators, but it is not yet the MFEM
+  assembly of `A_mphi/A_phim/A_phiphi`.
+  Progress: the same explicit coupled-block payload was exposed through the
+  C ABI in ABI v3 and remains available in the current
+  `FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION=4` Rust FFI/native wrapper. A C ABI
+  contract verifies a supplied `[delta_m, delta_phi]` dense operator reaches the
+  native solver and writes solved periodic-airbox demag frequency-point
+  metadata. The production runner still passes `None` here until the real MFEM
+  assembly produces this operator.
+  Progress: the managed FEM runtime bundle was refreshed after the ABI v3
+  change with `just ensure-managed-fem-runtime`. The default
+  `fullmag-fem-sys` frequency-domain layout test now loads
+  `.fullmag/runtimes/fem-gpu-host/lib/libfullmag_fem.so.0` and passes without
+  overriding `LD_LIBRARY_PATH`, so the exported runtime is no longer stale
+  relative to the Rust bindings.
+  Progress: the internal native modal/frequency-domain request ABI constant was
+  also advanced to `3`, matching the public C ABI. The full
+  `just verify-fem-frequency-domain-native-contract` gate caught the mismatch
+  through `fem_modal_eigen_contract` after the public ABI bump.
+
 - [ ] Reuse the static Poisson PBC operator only where valid. Do not pretend the static operator is enough for dynamic `delta_phi` unless the linearized equation and RHS are explicitly assembled and tested.
+  Progress: the lower-level MFEM linearized frequency-domain operator now
+  rejects any enabled demag term with `unavailable` and the explicit message
+  `MFEM linearized demag assembly is not implemented`. This prevents the
+  existing exchange/Zeeman/anisotropy/DMI operator from silently ignoring demag
+  if a caller bypasses the higher-level periodic-airbox gate.
+  Progress: the same linearized operator now also has a tested explicit
+  `demag_tangent` input. When a caller supplies a demag tangent field, it is
+  summed into the effective-field tangent before precession/mass assembly and
+  reported via `max_abs_demag_field`. This is only the operator hook for a
+  future dynamic-demag provider; it does not claim that the MFEM periodic
+  Poisson RHS/operator or the coupled `delta_phi` block has been assembled.
+  Progress: the production CPU matrix-free driven-response path can now accept
+  an explicit row-major demag tangent matrix in its MFEM validation/problem
+  payload. The adapter applies this matrix to the current `delta_m` tangent
+  vector and passes the resulting `demag_tangent` field into the linearized
+  LLG operator. This is the first matrix-free dynamic-demag operator hook; the
+  source of that matrix is still explicit test payload data, not yet the MFEM
+  periodic-airbox Poisson assembly.
+  Progress: the explicit demag tangent matrix hook is now exposed through the
+  public frequency-domain C ABI (`FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION=4`)
+  and the Rust FFI/native wrapper as `mfem_demag_tangent_matrix_row_major`.
+  A C ABI contract verifies a supplied matrix reaches the production CPU
+  matrix-free MFEM response path and solves without falling back to dense
+  validation. The default production runner still passes `None` until a real
+  MFEM periodic-airbox demag assembler produces this matrix.
+  Progress: the Rust native wrapper now has focused ignored coverage that
+  explicitly supplies `NativeDrivenFrequencyResponseMfemOperatorProblem::
+  demag_tangent_matrix_row_major` and verifies the native production CPU
+  matrix-free response path returns `ok` with `validation_fallback_used=false`.
 - [ ] Add gauge/nullspace handling only for nullspace cases. Do not add a mean-zero pin to Robin/Dirichlet cases where it is unnecessary.
+  Progress: the native explicit `periodic_airbox_coupled_block_problem` path
+  now detects the constant `delta_phi` nullspace by checking row/column sums
+  over the phi DOFs in the supplied stiffness and mass operators. For that
+  nullspace case only, it replaces one phi equation with a mean-zero gauge row
+  before the dense driven-response solve. Solver diagnostics,
+  `frequency_domain/manifest.v1.json`, and
+  `response/frequency_points/frequency_*.json` report
+  `phi_nullspace_detected`, `phi_gauge_policy`, and
+  `phi_gauge_constraint_applied`. This is still coverage of the explicit dense
+  coupled-block hook; real MFEM assembly of `A_mphi/A_phim/A_phiphi` remains
+  unchecked.
 - [ ] Add response artifact fields for demag contribution:
 
 ```text
@@ -315,12 +415,41 @@ mesh/periodic_pairs.v1.json
 response/frequency_points/frequency_*.json
 ```
 
-- [ ] Run:
+  Progress: the explicit `periodic_airbox_k0` unavailable path now writes
+  `frequency_domain/manifest.v1.json` and
+  `response/diagnostics/solver.v1.json` when partial artifacts are requested.
+  These artifacts record `requested_magnetic_bc`, `resolved_magnetic_bc`,
+  `requested_magnetostatic_bc`, `resolved_magnetostatic_bc`, and the
+  magnetic/magnetostatic periodic constraint-set counts. Frequency-point demag
+  artifacts remain unchecked until the coupled block exists.
+  Progress: runner artifact writing now emits `mesh/periodic_pairs.v1.json` for
+  FEM frequency-response plans with periodic mesh metadata instead of skipping
+  that backend class. The artifact now carries top-level `artifact_path`,
+  `validation_status`, pair count, paired-node count, and max residual metadata.
+  This covers the generic periodic-pair artifact; frequency point demag
+  contribution artifacts still require the coupled block.
+  Progress: native `periodic_airbox_k0` unavailable runs with partial artifacts
+  now also write `response/frequency_points/frequency_*.json` metadata. Each
+  point records requested/resolved magnetic and magnetostatic BCs and an
+  explicit unavailable `demag_contribution` with
+  `periodic_airbox_dynamic_demag_coupled_block_unimplemented`, so the absence of
+  `delta_phi` is provenance, not silence. The manifest also links
+  `mesh/periodic_pairs.v1.json` and records requested/resolved spin-wave BC
+  provenance. Real demag values still require the coupled block.
+
+- [x] Run:
 
 ```bash
 just verify-fem-frequency-domain-native-contract
 just verify-fem-frequency-domain-runtime
 ```
+
+  Progress: `just verify-fem-frequency-domain-native-contract` passed after a
+  managed FEM runtime rebuild and ran the native frequency-domain/operator/modal
+  contract suite. `just verify-fem-frequency-domain-runtime` also passed after
+  the smoke example was corrected back to the supported magnetic-domain PBC
+  no-demag slice. This verifies the current P2/P3 bridge artifacts; it does not
+  complete the real `periodic_airbox_k0` coupled dynamic-demag assembly.
 
 Acceptance:
 
@@ -342,14 +471,48 @@ Acceptance:
 - Test: `backends/fem/tests/frequency_domain/frequency_domain_contract.cpp`
 
 - [ ] Implement phase-aware constraint graph for frequency-response production CPU. Existing `fem_eigen.rs` phase reduction is reference material, not a drop-in replacement.
+  Progress: `PeriodicPhasePolicyIR` now has a `BlochPhase` policy carrying
+  `phase_convention`, `k_vector_rad_per_m`, and `real_imag_mixing`. The
+  frequency-response planner emits a `MagnetizationDynamic/MagneticDomain`
+  periodic constraint set with this policy for `spin_wave_bc=floquet` and
+  `k_sampling=Single`. This is IR/planner contract progress only; production
+  CPU still rejects nonzero-k Floquet before native solve.
 - [ ] Support real/imag mixing for `u_dst = exp(-i k dot delta_r) u_src`.
+  Progress: the new `BlochPhase` policy explicitly records
+  `real_imag_mixing=true` for Floquet frequency-response constraints. The
+  reduced operator/application path still does not consume it.
+  Progress: the frequency-response runner now has a tested metadata builder
+  that converts selected Floquet periodic node pairs into `pair_id`,
+  `node_a/node_b`, boundary translation, and `phase_rad=-k dot translation`.
+  The native MFEM request payload is wired to carry these pairs and the
+  single-k vector. The production solver still rejects nonzero-k Floquet before
+  operator assembly, so this is request metadata plumbing, not phase-reduced
+  solve support.
 - [ ] Validate phase loops at corners:
 
 ```text
 phase(x then y) == phase(y then x)
 ```
 
+  Progress: `PeriodicConstraintSetIR` now carries optional
+  `phase_loop_diagnostics`; the Floquet frequency-response planner computes a
+  checked loop count and maximum canonical phase residual for selected periodic
+  pair translations. This is planner diagnostics only; native constraint graph
+  and operator consumption remain open.
+  Progress: the native frequency-domain wrapper now validates supplied Floquet
+  pair metadata before the current unsupported return: every pair with
+  translation and `phase_rad` must be consistent with `phase_rad=-k dot
+  translation` modulo `2pi`. Inconsistent request metadata is rejected instead
+  of being hidden behind the generic `floquet_bloch_nonzero_k` unavailable
+  status. Full corner-loop constraint graph consumption remains open.
+
 - [ ] Apply phase constraints to drive vectors and tangent frames. Reject non-Floquet-periodic excitation.
+  Progress: the planner now gives a specific rejection for nonzero-k Floquet
+  driven response with the current `FrequencyExcitationIR` field drive: the
+  model is uniform/global-phase only and is not yet a Floquet-periodic
+  excitation. This prevents that missing drive/tangent-frame phase treatment
+  from being hidden behind the generic nonzero-k unsupported message; applying
+  phase constraints to the actual drive vector and tangent frames remains open.
 - [ ] Keep `include_demag=true` gated until P5 dynamic magnetostatic Floquet exists.
 - [ ] Run:
 
@@ -363,6 +526,29 @@ Acceptance:
 - Exchange-only reciprocal check: `f(+k) == f(-k)` within tolerance.
 - Bulk/interfacial DMI nonreciprocity check: `f(+k) != f(-k)` in the expected direction.
 - `k=0 Floquet` matches `Periodic` within tolerance.
+  Progress: the frequency-response planner now normalizes gamma Floquet
+  (`spin_wave_bc=floquet`, `k_sampling=Single([0,0,0])` or implicit gamma) to
+  the existing zero-phase `Periodic` plan, preserving the selected pair ids and
+  emitting zero-phase magnetic periodic constraints. This covers the planning
+  alias needed for the acceptance item; numerical spectrum equivalence still
+  needs the production/runtime acceptance gate.
+  Progress: the runner-side production CPU gate and native payload builder now
+  apply the same gamma-Floquet alias for direct `FemFrequencyResponsePlanIR`
+  inputs: `k=0` Floquet uses static-periodic node pairs and does not send
+  Floquet k-vector/pair metadata to the native unsupported path. Nonzero-k
+  Floquet remains gated.
+  Progress: the native C ABI/driven-response boundary now also treats gamma
+  Floquet metadata (`has_floquet_k_vector=true`, `k=[0,0,0]`, zero phase pairs)
+  as zero-phase periodic metadata instead of reporting
+  `Floquet/Bloch nonzero-k`. Nonzero-k vectors or nonzero pair phases still
+  hit the explicit `floquet_bloch_nonzero_k` unavailable path. The full native
+  contract gate passes after this change.
+  Progress: frequency-domain availability now follows the same rule in native
+  C++/C ABI and the Rust native-FEM wrapper: gamma-Floquet k-vector metadata is
+  allowed to report the existing static-periodic driven-response capability,
+  while nonzero or nonfinite k-vectors still return the explicit
+  `floquet_bloch_nonzero_k` unavailable reason. This is availability/aliasing
+  only; it does not implement the nonzero-k phase-reduced operator.
 
 ### P5: Floquet dynamic demag with airbox
 
@@ -374,7 +560,13 @@ Acceptance:
 - Test: native frequency-domain contract tests
 - Test: runtime artifact validators
 
-- [ ] Create/update a publication-style physics note before code. Static demag PBC note is not enough for dynamic `delta_phi(k, omega)`.
+- [x] Create/update a publication-style physics note before code. Static demag PBC note is not enough for dynamic `delta_phi(k, omega)`.
+  Progress: added `docs/physics/0828-fem-frequency-domain-floquet-demag.md`
+  as the dynamic frequency-domain magnetostatic contract. It defines the
+  coupled `[delta_m, delta_phi]` system, Bloch phase convention for
+  `delta_phi`, lateral flux anti-periodicity, gauge policy, GPU unsupported
+  policy, required artifacts, and validation gates. This is documentation and
+  design contract progress only; it does not implement the coupled operator.
 - [ ] Add `delta_phi_dst = exp(-i k dot delta_r) delta_phi_src` constraints on full lateral airbox side faces.
 - [ ] Add flux validation:
 
@@ -391,6 +583,15 @@ max_pair |partial_n(dst) delta_phi(dst) + phase * partial_n(src) delta_phi(src)|
 ```
 
 - [ ] Keep GPU unsupported until strict GPU Poisson/libCEED/hypre periodic operators are implemented and verified.
+  Progress: native driven-response dispatch now rejects
+  `production_gpu + periodic_airbox_k0` before entering the explicit CPU
+  coupled-block hook, even when a caller supplies
+  `periodic_airbox_coupled_block_problem`. A native contract covers this and
+  requires `periodic_airbox_dynamic_demag_gpu_unsupported` with no CPU
+  coupled-block provenance in the GPU diagnostics and frequency-point
+  demag-contribution metadata. This keeps the GPU lane from falsely claiming
+  periodic-airbox dynamic-demag support; strict GPU periodic Poisson/libCEED/hypre
+  operators remain unchecked.
 
 Acceptance:
 
@@ -461,6 +662,18 @@ unsupported_or_debug_downgrade = null
 - represents a 200 x 200 x 10 nm periodic magnetic cell with a hole;
 - currently uses `include_demag=False`;
 - should be described as static-periodic magnetic response, not full demag PBC.
+- current mesh contract intentionally remains a magnetic-domain PBC mesh while
+  `include_demag=False`; it does not call `study.build_domain_mesh()` and does
+  not add shared-domain air elements until the `periodic_airbox_k0` coupled
+  demag path is production-ready. It explicitly disables demag for the relax
+  stage as well, keeps `5 nm` film hmax, `2.5 nm` hole-edge hmax, and two
+  hole-refinement bands, and now relies on magnetic-only CSG meshing to emit
+  x/y `periodic_boundary_pairs` and `periodic_node_pairs`.
+- the same smoke now sets explicit Gmsh mesh controls (`algorithm_2d=6`,
+  `algorithm_3d=1`, `smoothing_steps=4`, `optimize_iterations=3`,
+  `size_from_curvature=24`, `narrow_regions=3`) so the periodic antidot mesh
+  quality policy is visible in the example contract instead of being implicit
+  defaults.
 
 `examples/fem_frequency_response_static_periodic_smoke.py`:
 

@@ -218,6 +218,7 @@ class MeshOptions:
     sweep_face_meshing: str | None = None  # "triangular" → prisms, "quadrilateral" → hexes
     sweep_source: str | None = None  # "auto" | face selector hint
     sweep_destination: str | None = None  # "auto" | face selector hint
+    periodic_pair_ids: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         calibration = _normalize_mesh_size_calibration(self.calibrate_for)
@@ -235,6 +236,12 @@ class MeshOptions:
                 or self.narrow_region_resolution <= 0.0
             ):
                 raise ValueError("narrow_region_resolution must be a positive finite float")
+        normalized_pair_ids: list[str] = []
+        for pair_id in self.periodic_pair_ids:
+            if not isinstance(pair_id, str) or not pair_id.strip():
+                raise ValueError("periodic_pair_ids entries must be non-empty strings")
+            normalized_pair_ids.append(pair_id.strip())
+        object.__setattr__(self, "periodic_pair_ids", normalized_pair_ids)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1316,11 +1323,15 @@ def _infer_axis_aligned_periodic_pairs(
         marker_b = min(max_marker_values) if max_marker_values else int(mesh.boundary_markers.max())
 
         pair_id = f"{axis_label}_faces"
+        translation = [0.0, 0.0, 0.0]
+        translation[axis] = float(span[axis])
         periodic_boundary_pairs.append(
             {
                 "pair_id": pair_id,
                 "marker_a": marker_a,
                 "marker_b": marker_b,
+                "translation": translation,
+                "tolerance_m": tol,
             }
         )
         for key in shared_keys:

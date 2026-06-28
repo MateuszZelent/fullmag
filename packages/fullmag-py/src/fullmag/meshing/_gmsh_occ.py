@@ -172,6 +172,232 @@ def _dimtags_bounding_box(
     )
 
 
+def _axis_from_periodic_pair_id(pair_id: str) -> int | None:
+    normalized = pair_id.strip().lower().replace("-", "_")
+    if normalized in {"x", "x_face", "x_faces", "x_periodic"}:
+        return 0
+    if normalized in {"y", "y_face", "y_faces", "y_periodic"}:
+        return 1
+    if normalized in {"z", "z_face", "z_faces", "z_periodic"}:
+        return 2
+    return None
+
+
+def _surface_center_key(
+    bbox: tuple[float, float, float, float, float, float],
+    axis: int,
+) -> tuple[float, float, float, float]:
+    other_axes = [candidate for candidate in range(3) if candidate != axis]
+    return (
+        0.5 * (bbox[other_axes[0]] + bbox[other_axes[0] + 3]),
+        0.5 * (bbox[other_axes[1]] + bbox[other_axes[1] + 3]),
+        bbox[other_axes[0] + 3] - bbox[other_axes[0]],
+        bbox[other_axes[1] + 3] - bbox[other_axes[1]],
+    )
+
+
+def _configure_axis_periodic_surfaces(
+    gmsh: object,
+    *,
+    surface_tags: list[int],
+    pair_ids: list[str],
+) -> list[dict[str, object]]:
+    if not pair_ids:
+        return []
+    if not surface_tags:
+        raise ValueError("periodic mesh generation requires outer boundary surfaces")
+
+    surface_bounds = {
+        int(tag): tuple(float(value) for value in gmsh.model.getBoundingBox(2, int(tag)))  # type: ignore[attr-defined]
+        for tag in surface_tags
+    }
+    bounds_min, bounds_max = _entity_bounds(
+        gmsh,
+        [(2, int(tag)) for tag in surface_tags],
+    ) or ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+    span = tuple(bounds_max[index] - bounds_min[index] for index in range(3))
+    tol = max(max(abs(value) for value in span) * 1.0e-6, 1.0e-6)
+
+    specs: list[dict[str, object]] = []
+    for pair_id in pair_ids:
+        axis = _axis_from_periodic_pair_id(pair_id)
+        if axis is None:
+            raise ValueError(
+                f"unsupported periodic_pair_ids entry {pair_id!r}; expected x_faces, y_faces, or z_faces"
+            )
+        if span[axis] <= tol:
+            raise ValueError(f"periodic pair '{pair_id}' has zero domain span")
+        min_surfaces = [
+            tag
+            for tag, bbox in surface_bounds.items()
+            if abs(bbox[axis] - bounds_min[axis]) <= tol
+            and abs(bbox[axis + 3] - bounds_min[axis]) <= tol
+        ]
+        max_surfaces = [
+            tag
+            for tag, bbox in surface_bounds.items()
+            if abs(bbox[axis] - bounds_max[axis]) <= tol
+            and abs(bbox[axis + 3] - bounds_max[axis]) <= tol
+        ]
+        if not min_surfaces or not max_surfaces or len(min_surfaces) != len(max_surfaces):
+            samples = sorted(
+                (
+                    (
+                        tag,
+                        surface_bounds[tag][axis],
+                        surface_bounds[tag][axis + 3],
+                    )
+                    for tag in surface_bounds
+                ),
+                key=lambda item: min(
+                    abs(item[1] - bounds_min[axis]),
+                    abs(item[2] - bounds_min[axis]),
+                    abs(item[1] - bounds_max[axis]),
+                    abs(item[2] - bounds_max[axis]),
+                ),
+            )[:8]
+            raise ValueError(
+                f"periodic pair '{pair_id}' requires matching min/max outer surfaces; "
+                f"found {len(min_surfaces)} and {len(max_surfaces)} "
+                f"(axis_bounds=({bounds_min[axis]:.9g},{bounds_max[axis]:.9g}), "
+                f"tol={tol:.3g}, sample_axis_bboxes={samples})"
+            )
+        min_ordered = sorted(
+            min_surfaces,
+            key=lambda tag: _surface_center_key(surface_bounds[tag], axis),
+        )
+        max_ordered = sorted(
+            max_surfaces,
+            key=lambda tag: _surface_center_key(surface_bounds[tag], axis),
+        )
+        axis_translation = 0.5 * (
+            surface_bounds[max_ordered[0]][axis]
+            + surface_bounds[max_ordered[0]][axis + 3]
+            - surface_bounds[min_ordered[0]][axis]
+            - surface_bounds[min_ordered[0]][axis + 3]
+        )
+        translation = [0.0, 0.0, 0.0]
+        translation[axis] = float(axis_translation)
+        affine = [
+            1.0,
+            0.0,
+            0.0,
+            translation[0],
+            0.0,
+            1.0,
+            0.0,
+            translation[1],
+            0.0,
+            0.0,
+            1.0,
+            translation[2],
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+        ]
+        gmsh.model.mesh.setPeriodic(2, max_ordered, min_ordered, affine)  # type: ignore[attr-defined]
+        for master_tag, slave_tag in zip(min_ordered, max_ordered, strict=True):
+            specs.append(
+                {
+                    "pair_id": pair_id,
+                    "master_tag": int(master_tag),
+                    "slave_tag": int(slave_tag),
+                    "marker_a": int(master_tag),
+                    "marker_b": int(slave_tag),
+                    "translation": list(translation),
+                    "tolerance_m": tol,
+                }
+            )
+
+    return specs
+
+
+def _periodic_candidate_surface_tags(
+    *,
+    gamma_out: list[int],
+    component_surface_tags: dict[str, list[int]],
+    has_airbox: bool,
+    all_surface_tags: list[int] | None = None,
+) -> list[int]:
+    """Return boundary surfaces that may carry axis-periodic constraints."""
+    if all_surface_tags:
+        return sorted({int(tag) for tag in all_surface_tags})
+    if has_airbox:
+        return sorted(int(tag) for tag in gamma_out)
+    return sorted(
+        {
+            int(tag)
+            for tags in component_surface_tags.values()
+            for tag in tags
+        }
+    )
+
+
+def _add_periodic_boundary_physical_groups(
+    gmsh: object,
+    specs: list[dict[str, object]],
+    *,
+    reserved_markers: set[int],
+) -> set[int]:
+    """Assign physical boundary markers to periodic surfaces and update specs."""
+    periodic_surface_tags: set[int] = set()
+    if not specs:
+        return periodic_surface_tags
+
+    next_marker = max(reserved_markers | {0}) + 1
+    surface_markers: dict[int, int] = {}
+
+    def marker_for_surface(surface_tag: int) -> int:
+        nonlocal next_marker
+        existing = surface_markers.get(surface_tag)
+        if existing is not None:
+            return existing
+        while next_marker in reserved_markers or next_marker in surface_markers.values():
+            next_marker += 1
+        marker = next_marker
+        surface_markers[surface_tag] = marker
+        reserved_markers.add(marker)
+        next_marker += 1
+        return marker
+
+    for spec in specs:
+        master_tag = int(spec["master_tag"])
+        slave_tag = int(spec["slave_tag"])
+        marker_a = marker_for_surface(master_tag)
+        marker_b = marker_for_surface(slave_tag)
+        spec["marker_a"] = marker_a
+        spec["marker_b"] = marker_b
+        periodic_surface_tags.update((master_tag, slave_tag))
+
+    for surface_tag, marker in sorted(surface_markers.items(), key=lambda item: item[1]):
+        gmsh.model.addPhysicalGroup(2, [surface_tag], tag=marker)  # type: ignore[attr-defined]
+        gmsh.model.setPhysicalName(  # type: ignore[attr-defined]
+            2,
+            marker,
+            f"periodic_boundary_{surface_tag}",
+        )
+
+    return periodic_surface_tags
+
+
+def _scale_periodic_boundary_pairs(
+    pairs: list[dict[str, object]],
+    *,
+    scale: float,
+) -> list[dict[str, object]]:
+    scaled: list[dict[str, object]] = []
+    for pair in pairs:
+        item = dict(pair)
+        translation = item.get("translation")
+        if isinstance(translation, list):
+            item["translation"] = [float(value) / scale for value in translation]
+        if "tolerance_m" in item:
+            item["tolerance_m"] = float(item["tolerance_m"]) / scale
+        scaled.append(item)
+    return scaled
+
+
 def _bounding_box_contains(
     outer: tuple[float, float, float, float, float, float],
     inner: tuple[float, float, float, float, float, float],
@@ -563,13 +789,6 @@ def generate_shared_domain_mesh_via_occ(
             if bounds is not None:
                 component_bounds[geom.geometry_name] = bounds
 
-        if gamma_out:
-            gmsh.model.addPhysicalGroup(2, gamma_out, tag=airbox_scaled.boundary_marker)
-            gmsh.model.setPhysicalName(2, airbox_scaled.boundary_marker, "Gamma_out")
-        if interface_list:
-            gmsh.model.addPhysicalGroup(2, interface_list, tag=10)
-            gmsh.model.setPhysicalName(2, 10, "mag_air_interface")
-
         # 6 - Graded size field on the airbox
         airbox_field_ids: list[int] = []
         if airbox_scaled.grading_ratio > 1.0 and interface_list:
@@ -710,6 +929,35 @@ def generate_shared_domain_mesh_via_occ(
                 else None
             ),
         )
+        periodic_surface_tags = _periodic_candidate_surface_tags(
+            gamma_out=gamma_out,
+            component_surface_tags=component_surface_tags,
+            has_airbox=has_airbox,
+            all_surface_tags=[
+                int(tag)
+                for dim, tag in gmsh.model.getEntities(2)  # type: ignore[attr-defined]
+                if int(dim) == 2
+            ],
+        )
+        periodic_pair_specs = _configure_axis_periodic_surfaces(
+            gmsh,
+            surface_tags=periodic_surface_tags,
+            pair_ids=list(opts.periodic_pair_ids),
+        )
+        periodic_physical_surfaces = _add_periodic_boundary_physical_groups(
+            gmsh,
+            periodic_pair_specs,
+            reserved_markers={10, int(airbox_scaled.boundary_marker)},
+        )
+        gamma_out_robin = [
+            int(tag) for tag in gamma_out if int(tag) not in periodic_physical_surfaces
+        ]
+        if gamma_out_robin:
+            gmsh.model.addPhysicalGroup(2, gamma_out_robin, tag=airbox_scaled.boundary_marker)
+            gmsh.model.setPhysicalName(2, airbox_scaled.boundary_marker, "Gamma_out")
+        if interface_list:
+            gmsh.model.addPhysicalGroup(2, interface_list, tag=10)
+            gmsh.model.setPhysicalName(2, 10, "mag_air_interface")
 
         from ._gmsh_generators import collect_orphan_entity_diagnostics
         orphan_entities = collect_orphan_entity_diagnostics(gmsh)
@@ -731,6 +979,7 @@ def generate_shared_domain_mesh_via_occ(
             quality=quality,
             has_physical_groups=True,
             per_domain_quality=_pdq,
+            periodic_pair_specs=periodic_pair_specs,
         )
 
         scaled_mesh = MeshData(
@@ -739,6 +988,11 @@ def generate_shared_domain_mesh_via_occ(
             element_markers=mesh.element_markers,
             boundary_faces=mesh.boundary_faces,
             boundary_markers=mesh.boundary_markers,
+            periodic_boundary_pairs=_scale_periodic_boundary_pairs(
+                mesh.periodic_boundary_pairs,
+                scale=SCALE,
+            ),
+            periodic_node_pairs=mesh.periodic_node_pairs,
             quality=quality,
             per_domain_quality=_pdq,
         )

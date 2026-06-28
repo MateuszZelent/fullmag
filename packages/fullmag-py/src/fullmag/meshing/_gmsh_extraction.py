@@ -147,6 +147,7 @@ def _extract_mesh_data(
     quality: MeshQualityReport | None = None,
     has_physical_groups: bool = False,
     per_domain_quality: dict[int, MeshQualityReport] | None = None,
+    periodic_pair_specs: list[dict[str, object]] | None = None,
 ) -> MeshData:
     emit_progress("Gmsh: extracting mesh data")
     node_tags, coords, _ = gmsh.model.mesh.getNodes()
@@ -260,6 +261,11 @@ def _extract_mesh_data(
         if aligned_quality is not None
         else per_domain_quality
     )
+    periodic_boundary_pairs, periodic_node_pairs = _extract_periodic_pairs(
+        gmsh,
+        node_index,
+        periodic_pair_specs or [],
+    )
 
     return MeshData(
         nodes=nodes,
@@ -267,9 +273,82 @@ def _extract_mesh_data(
         element_markers=element_markers,
         boundary_faces=boundary_faces,
         boundary_markers=boundary_markers,
+        periodic_boundary_pairs=periodic_boundary_pairs,
+        periodic_node_pairs=periodic_node_pairs,
         quality=aligned_quality,
         per_domain_quality=aligned_per_domain_quality,
     )
+
+
+def _extract_periodic_pairs(
+    gmsh: Any,
+    node_index: dict[int, int],
+    periodic_pair_specs: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    if not periodic_pair_specs:
+        return [], []
+
+    boundary_pairs: list[dict[str, object]] = []
+    seen_boundary_pairs: set[tuple[str, int, int]] = set()
+    node_pairs: list[dict[str, object]] = []
+    seen_nodes: set[tuple[str, int, int]] = set()
+
+    for spec in periodic_pair_specs:
+        pair_id = str(spec.get("pair_id", "")).strip()
+        if not pair_id:
+            continue
+        slave_tag = int(spec["slave_tag"])
+        master_tag = int(spec["master_tag"])
+        try:
+            tag_master, node_tags, node_tags_master, _affine = gmsh.model.mesh.getPeriodicNodes(  # type: ignore[attr-defined]
+                2,
+                slave_tag,
+            )
+        except Exception as exc:  # pragma: no cover - depends on gmsh diagnostics
+            raise ValueError(
+                f"gmsh did not provide periodic node pairs for '{pair_id}' surface {slave_tag}"
+            ) from exc
+        if int(tag_master) != master_tag:
+            raise ValueError(
+                f"gmsh periodic pair '{pair_id}' mapped surface {slave_tag} to master "
+                f"{int(tag_master)}, expected {master_tag}"
+            )
+        if len(node_tags) != len(node_tags_master) or len(node_tags) == 0:
+            raise ValueError(
+                f"gmsh periodic pair '{pair_id}' has no node correspondence"
+            )
+        marker_a = int(spec.get("marker_a", master_tag))
+        marker_b = int(spec.get("marker_b", slave_tag))
+        boundary_key = (pair_id, marker_a, marker_b)
+        if boundary_key not in seen_boundary_pairs:
+            seen_boundary_pairs.add(boundary_key)
+            boundary_pairs.append(
+                {
+                    "pair_id": pair_id,
+                    "marker_a": marker_a,
+                    "marker_b": marker_b,
+                    "translation": list(spec.get("translation", [0.0, 0.0, 0.0])),
+                    "tolerance_m": float(spec.get("tolerance_m", 0.0)),
+                }
+            )
+        for slave_node_tag, master_node_tag in zip(node_tags, node_tags_master, strict=False):
+            node_a = node_index.get(int(master_node_tag))
+            node_b = node_index.get(int(slave_node_tag))
+            if node_a is None or node_b is None or node_a == node_b:
+                continue
+            key = (pair_id, node_a, node_b)
+            if key in seen_nodes:
+                continue
+            seen_nodes.add(key)
+            node_pairs.append(
+                {
+                    "pair_id": pair_id,
+                    "node_a": node_a,
+                    "node_b": node_b,
+                }
+            )
+
+    return boundary_pairs, node_pairs
 
 
 def _align_quality_report_to_element_tags(

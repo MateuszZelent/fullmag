@@ -92,11 +92,20 @@ FrequencyDomainStatus apply_mfem_linearized_cpu_operator(
     if (!descriptor.exchange_enabled &&
         !descriptor.zeeman_enabled &&
         !descriptor.uniaxial_anisotropy_enabled &&
-        !descriptor.dmi_enabled) {
+        !descriptor.dmi_enabled &&
+        !descriptor.demag_enabled) {
         if (out_diagnostics != nullptr) {
             copy_error(out_diagnostics->error_message, "MFEM linearized operator requires at least one field term");
         }
         return FrequencyDomainStatus::validation_error;
+    }
+    if (descriptor.demag_enabled &&
+        descriptor.demag_kind != FrequencyDomainDemagKind::none &&
+        workspace.demag_tangent == nullptr) {
+        if (out_diagnostics != nullptr) {
+            copy_error(out_diagnostics->error_message, "MFEM linearized demag assembly is not implemented");
+        }
+        return FrequencyDomainStatus::unavailable;
     }
     if (descriptor.exchange_enabled &&
         (workspace.exchange_tangent == nullptr ||
@@ -290,7 +299,12 @@ FrequencyDomainStatus apply_mfem_linearized_cpu_operator(
             workspace.uniaxial_anisotropy_tangent[dof] :
             0.0;
         const double dmi_value = descriptor.dmi_enabled ? workspace.dmi_tangent[dof] : 0.0;
-        workspace.effective_field_tangent[dof] = exchange_value + zeeman_value + anisotropy_value + dmi_value;
+        const double demag_value =
+            descriptor.demag_enabled && workspace.demag_tangent != nullptr ?
+            workspace.demag_tangent[dof] :
+            0.0;
+        workspace.effective_field_tangent[dof] =
+            exchange_value + zeeman_value + anisotropy_value + dmi_value + demag_value;
     }
 
     TangentPrecessionDiagnostics precession_diagnostics{};
@@ -334,6 +348,10 @@ FrequencyDomainStatus apply_mfem_linearized_cpu_operator(
 
     if (out_diagnostics != nullptr) {
         out_diagnostics->max_abs_effective_field = max_abs_buffer(workspace.effective_field_tangent, tangent_dof_count);
+        out_diagnostics->max_abs_demag_field =
+            descriptor.demag_enabled && workspace.demag_tangent != nullptr ?
+            max_abs_buffer(workspace.demag_tangent, tangent_dof_count) :
+            0.0;
         out_diagnostics->max_abs_stiffness_rhs = precession_diagnostics.max_abs_rhs;
         out_diagnostics->max_abs_mass_rhs = mass_diagnostics.max_abs_output;
     }

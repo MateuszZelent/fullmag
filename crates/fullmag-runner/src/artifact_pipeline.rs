@@ -485,13 +485,18 @@ impl ZarrFieldSeriesWriter {
         })?;
 
         let zattrs_path = root_dir.join(".zattrs");
+        let component_order = if info.component_count == 1 {
+            serde_json::json!(["scalar"])
+        } else {
+            serde_json::json!(["x", "y", "z"])
+        };
         fs::write(
             &zattrs_path,
             serde_json::to_vec_pretty(&serde_json::json!({
                 "observable": observable,
                 "unit": field_unit(observable),
                 "axes": ["sample", "component", "cell"],
-                "component_order": ["x", "y", "z"],
+                "component_order": component_order,
                 "storage_layout": "soa_component_major",
                 "sample_index_file": "samples.csv",
                 "layout": context.layout.clone(),

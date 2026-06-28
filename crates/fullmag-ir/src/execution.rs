@@ -36,6 +36,15 @@ pub enum ExecutionPrecision {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+pub enum ExecutionDevice {
+    #[default]
+    Auto,
+    Cpu,
+    Gpu,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
 pub enum IntegratorChoice {
     #[default]
     Heun,
@@ -231,6 +240,16 @@ impl SpinWaveBoundaryConditionIR {
             Self::Config(config) => config.surface_anisotropy_axis,
         }
     }
+}
+
+// ── Magnetostatic boundary conditions for frequency-domain demag ─────────────
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MagnetostaticBoundaryConditionIR {
+    #[default]
+    Open,
+    PeriodicAirboxK0,
 }
 
 // ── Geometry scale ────────────────────────────────────────────────────────────

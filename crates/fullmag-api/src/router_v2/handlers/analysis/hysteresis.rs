@@ -7,14 +7,13 @@ use std::sync::Arc;
 
 use crate::schemas::hysteresis::{
     HysteresisAdaptiveRefinementResource, HysteresisAdaptiveRefinementSchema,
-    HysteresisAngularFamilyResource,
-    HysteresisAngularFamilySeriesSchema, HysteresisBookmarkPointRequest, HysteresisBookmarkSchema,
-    HysteresisBookmarksResource, HysteresisBranchesResource, HysteresisBranchSchema,
-    HysteresisMetricsResource, HysteresisMetricsSchema, HysteresisMinorLoopsResource,
-    HysteresisMinorLoopSchema, HysteresisPointSchema, HysteresisPointsResource,
-    HysteresisReversalFieldsResource, HysteresisSaturationResource,
-    HysteresisSaturationResultSchema, HysteresisSettleTraceEntrySchema,
-    HysteresisSettleTraceResource,
+    HysteresisAngularFamilyResource, HysteresisAngularFamilySeriesSchema,
+    HysteresisBookmarkPointRequest, HysteresisBookmarkSchema, HysteresisBookmarksResource,
+    HysteresisBranchSchema, HysteresisBranchesResource, HysteresisMetricsResource,
+    HysteresisMetricsSchema, HysteresisMinorLoopSchema, HysteresisMinorLoopsResource,
+    HysteresisPointSchema, HysteresisPointsResource, HysteresisReversalFieldsResource,
+    HysteresisSaturationResource, HysteresisSaturationResultSchema,
+    HysteresisSettleTraceEntrySchema, HysteresisSettleTraceResource,
 };
 use axum::extract::{Path, State};
 use axum::Json;
@@ -1151,11 +1150,9 @@ pub async fn get_minor_loops(
     State(state): State<Arc<AppState>>,
     Path(stage_id): Path<String>,
 ) -> Result<Json<HysteresisMinorLoopsResource>, ApiError> {
-    let minor_loops = match read_optional_typed_stage_artifact_with_path::<Vec<HysteresisMinorLoopSchema>>(
-        &state,
-        &stage_id,
-        "hysteresis_minor_loops.json",
-    )
+    let minor_loops = match read_optional_typed_stage_artifact_with_path::<
+        Vec<HysteresisMinorLoopSchema>,
+    >(&state, &stage_id, "hysteresis_minor_loops.json")
     .await
     {
         Ok(Some((path, minor_loops))) => {

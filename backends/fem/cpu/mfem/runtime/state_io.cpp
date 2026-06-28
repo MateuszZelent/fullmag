@@ -11,8 +11,13 @@
 #include "core/fem_field_buffers.hpp"
 #include "cpu/mfem/interactions/effective_field.hpp"
 #include "cpu/mfem/runtime/aos_field.hpp"
+#include "cpu/mfem/runtime/mfem_host_access.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
+
+#if FULLMAG_HAS_MFEM_STACK
+#include <mfem.hpp>
+#endif
 
 #include <algorithm>
 #include <cstring>
@@ -101,6 +106,40 @@ int copy_torque_observable_f64(
     return FULLMAG_FEM_OK;
 }
 
+#if FULLMAG_HAS_MFEM_STACK
+int copy_demag_phi_observable_f64(
+    const Context &ctx,
+    double *out,
+    uint64_t out_len,
+    std::string &error)
+{
+    if (!ctx.demag.enabled) {
+        error = "demag scalar potential requested but demag is disabled";
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    auto *potential = static_cast<mfem::GridFunction *>(ctx.poisson_demag.gf_potential);
+    if (potential == nullptr) {
+        error = "demag scalar potential has not been initialized";
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    const uint64_t expected_len = static_cast<uint64_t>(ctx.mesh.n_nodes);
+    if (out_len != expected_len) {
+        error = "demag scalar-potential output length mismatch";
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (potential->Size() != static_cast<int>(expected_len)) {
+        error = "demag scalar-potential size mismatch: expected " +
+                std::to_string(expected_len) + " but field has " +
+                std::to_string(potential->Size()) + " values";
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    const double *source = audited_host_read(*potential);
+    std::memcpy(out, source, static_cast<size_t>(sizeof(double) * out_len));
+    record_device_to_host(ctx.transfer_audit.audit, sizeof(double) * out_len);
+    return FULLMAG_FEM_OK;
+}
+#endif
+
 } // namespace
 
 bool context_sync_gpu_magnetization_to_host(Context &ctx, std::string &error)
@@ -131,6 +170,15 @@ int context_copy_field_f64(
     if (out_xyz == nullptr) {
         error = "output field buffer pointer is null";
         return FULLMAG_FEM_ERR_INVALID;
+    }
+
+    if (observable == FULLMAG_FEM_OBSERVABLE_DEMAG_PHI) {
+#if FULLMAG_HAS_MFEM_STACK
+        return copy_demag_phi_observable_f64(ctx, out_xyz, out_len, error);
+#else
+        error = "demag scalar potential requires the MFEM stack";
+        return FULLMAG_FEM_ERR_UNAVAILABLE;
+#endif
     }
 
     const uint64_t expected_len = static_cast<uint64_t>(ctx.mesh.n_nodes) * 3ull;

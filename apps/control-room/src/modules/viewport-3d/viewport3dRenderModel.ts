@@ -11,9 +11,12 @@ import {
   memoryBudgetRegistry,
   type MemoryBudgetEntry,
 } from "@/kernel/performance/MemoryBudgetRegistry";
+import type { SurfaceFieldProjectionMode } from "@/kernel/visualization/ObjectVisualizationController";
 
 import {
   buildMappedVertexScalarColors,
+  buildSurfaceFaceScalarColors,
+  buildThicknessAverageZScalarColors,
   buildVertexScalarColors,
   fieldVectorUsesDirectNodeOrder,
   type ScalarColorBuffer,
@@ -180,6 +183,7 @@ export interface Viewport3DTargetRenderPassModel {
   surface: {
     degradation: Viewport3DTargetPassDegradation | null;
     passId: string;
+    projectionMode?: SurfaceFieldProjectionMode;
     scalarColorMode: string | null;
     scalarColors: ScalarColorBuffer | null;
   };
@@ -847,6 +851,24 @@ export function buildViewport3DFieldRenderModel(
               partQuantityId,
             )
             ? null
+            : targetRenderPlan?.shader.projectionMode === "surface_faces"
+            ? buildCachedSurfaceFaceScalarColors(
+                partModel,
+                topology,
+                partFieldVector,
+                colorMode,
+                partScalarColorPalette,
+                partScalarRangesByMode?.get(colorMode),
+              )
+            : targetRenderPlan?.shader.projectionMode === "thickness_average_z"
+            ? buildCachedThicknessAverageZScalarColors(
+                partModel,
+                topology,
+                partFieldVector,
+                colorMode,
+                partScalarColorPalette,
+                partScalarRangesByMode?.get(colorMode),
+              )
             : buildCachedPartVertexScalarColors(
                 partModel,
                 topology,
@@ -940,6 +962,8 @@ export function buildViewport3DFieldRenderModel(
           scalarColors: activePartScalarColors,
         }),
         passId: `${partId}:surface`,
+        projectionMode:
+          targetRenderPlan?.shader.projectionMode ?? "raw_nodal",
         scalarColorMode: partScalarColorMode ?? null,
         scalarColors: activePartScalarColors,
       },
@@ -1028,6 +1052,7 @@ export function buildViewport3DFieldRenderModel(
           scalarColors: fullScalarColors,
         }),
         passId: `${FULL_VIEWPORT_3D_TARGET_ID}:surface`,
+        projectionMode: "raw_nodal",
         scalarColorMode: fullScalarColorMode,
         scalarColors: fullScalarColors,
       },
@@ -1425,6 +1450,84 @@ function isFullTopologyFieldVector(
   return Boolean(fieldVector) &&
     fieldVectorMatchesTopology(fieldVector, topology) &&
     fieldVectorUsesDirectNodeOrder(fieldVector, topology.nodeCount);
+}
+
+function buildCachedSurfaceFaceScalarColors(
+  partModel: Viewport3DTopologyPartRenderModel<Viewport3DRenderablePart>,
+  topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
+  fieldVector: DecodedFieldVector | null | undefined,
+  colorMode: string | undefined,
+  colorPalette: string | undefined,
+  scalarRange?: ScalarRange | null,
+): ScalarColorBuffer | null {
+  if (!fieldVector || !partModel.surfaceIndices) return null;
+
+  return getCachedNestedFieldValue(
+    mappedScalarColorCache,
+    topology,
+    fieldVector,
+    [
+      "surface-faces",
+      partModel.part.id,
+      partModel.surfaceIndices.length,
+      partModel.surfaceIndices[0] ?? "none",
+      partModel.surfaceIndices[partModel.surfaceIndices.length - 1] ?? "none",
+      topology.nodeCount,
+      colorMode ?? "magnitude",
+      colorPalette ?? "viridis",
+      scalarRangeCacheKey(scalarRange),
+    ].join(":"),
+    () =>
+      buildSurfaceFaceScalarColors(
+        fieldVector,
+        partModel.surfaceIndices,
+        topology.nodeCount,
+        colorMode,
+        colorPalette,
+        scalarRange,
+      ),
+    "viewport3d.render.surfaceFaceScalarColorCache",
+  );
+}
+
+function buildCachedThicknessAverageZScalarColors(
+  partModel: Viewport3DTopologyPartRenderModel<Viewport3DRenderablePart>,
+  topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
+  fieldVector: DecodedFieldVector | null | undefined,
+  colorMode: string | undefined,
+  colorPalette: string | undefined,
+  scalarRange?: ScalarRange | null,
+): ScalarColorBuffer | null {
+  if (!fieldVector || !partModel.surfaceIndices) return null;
+
+  return getCachedNestedFieldValue(
+    mappedScalarColorCache,
+    topology,
+    fieldVector,
+    [
+      "thickness-average-z",
+      partModel.part.id,
+      partModel.surfaceIndices.length,
+      partModel.surfaceIndices[0] ?? "none",
+      partModel.surfaceIndices[partModel.surfaceIndices.length - 1] ?? "none",
+      topology.nodeCount,
+      topology.positions.length,
+      colorMode ?? "magnitude",
+      colorPalette ?? "viridis",
+      scalarRangeCacheKey(scalarRange),
+    ].join(":"),
+    () =>
+      buildThicknessAverageZScalarColors(
+        fieldVector,
+        topology.positions,
+        partModel.surfaceIndices,
+        topology.nodeCount,
+        colorMode,
+        colorPalette,
+        scalarRange,
+      ),
+    "viewport3d.render.thicknessAverageZScalarColorCache",
+  );
 }
 
 function buildCachedMappedVertexScalarColors(

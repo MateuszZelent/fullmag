@@ -2354,6 +2354,7 @@ fn frequency_response_round_trips_as_first_class_study() {
         normalization: FrequencyResponseNormalizationIR::UnitL2,
         damping_policy: EigenDampingPolicyIR::Include,
         spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
+        magnetostatic_bc: MagnetostaticBoundaryConditionIR::default(),
         excitation: FrequencyExcitationIR {
             field_au_per_m: [0.0, 0.0, 1.0],
             phase_rad: 0.0,
@@ -2407,6 +2408,7 @@ fn frequency_response_does_not_validate_time_integrator_alias() {
         normalization: FrequencyResponseNormalizationIR::UnitL2,
         damping_policy: EigenDampingPolicyIR::Include,
         spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
+        magnetostatic_bc: MagnetostaticBoundaryConditionIR::default(),
         excitation: FrequencyExcitationIR {
             field_au_per_m: [0.0, 0.0, 1.0],
             phase_rad: 0.0,
@@ -2444,6 +2446,7 @@ fn frequency_response_rejects_non_finite_excitation_phase() {
         normalization: FrequencyResponseNormalizationIR::UnitL2,
         damping_policy: EigenDampingPolicyIR::Include,
         spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
+        magnetostatic_bc: MagnetostaticBoundaryConditionIR::default(),
         excitation: FrequencyExcitationIR {
             field_au_per_m: [0.0, 0.0, 1.0],
             phase_rad: f64::NAN,
@@ -2484,6 +2487,7 @@ fn frequency_response_output_is_first_class_sampling_request() {
         normalization: FrequencyResponseNormalizationIR::UnitL2,
         damping_policy: EigenDampingPolicyIR::Include,
         spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
+        magnetostatic_bc: MagnetostaticBoundaryConditionIR::default(),
         excitation: FrequencyExcitationIR {
             field_au_per_m: [0.0, 0.0, 1.0],
             phase_rad: 0.0,
@@ -2605,6 +2609,42 @@ fn spin_wave_boundary_condition_accepts_legacy_and_structured_forms() {
 }
 
 #[test]
+fn periodic_constraint_set_accepts_bloch_phase_policy() {
+    let constraint: PeriodicConstraintSetIR = serde_json::from_str(
+        r#"{
+            "unknown_family": "magnetization_dynamic",
+            "domain_scope": "magnetic_domain",
+            "pair_ids": ["x_faces"],
+            "phase_policy": {
+                "bloch_phase": {
+                    "phase_convention": "exp_minus_i_k_dot_delta_r",
+                    "k_vector_rad_per_m": [1000000.0, 0.0, 0.0],
+                    "real_imag_mixing": true
+                }
+            }
+        }"#,
+    )
+    .expect("Bloch phase constraint set should deserialize");
+
+    assert_eq!(
+        constraint.unknown_family,
+        PeriodicUnknownFamilyIR::MagnetizationDynamic
+    );
+    match constraint.phase_policy {
+        PeriodicPhasePolicyIR::BlochPhase {
+            phase_convention,
+            k_vector_rad_per_m,
+            real_imag_mixing,
+        } => {
+            assert_eq!(phase_convention, PhaseConventionIR::ExpMinusIKDotDeltaR);
+            assert_eq!(k_vector_rad_per_m, [1.0e6, 0.0, 0.0]);
+            assert!(real_imag_mixing);
+        }
+        other => panic!("expected BlochPhase policy, got {other:?}"),
+    }
+}
+
+#[test]
 fn mesh_periodic_pair_validation_allows_shared_boundary_marker_pairs() {
     let mesh = MeshIR {
         mesh_name: "box".to_string(),
@@ -2635,6 +2675,78 @@ fn mesh_periodic_pair_validation_allows_shared_boundary_marker_pairs() {
             node_a: 0,
             node_b: 1,
         }],
+        per_domain_quality: HashMap::new(),
+    };
+
+    assert!(mesh.validate().is_ok());
+}
+
+#[test]
+fn mesh_periodic_pair_validation_allows_fragmented_boundary_pairs_with_same_pair_id() {
+    let mesh = MeshIR {
+        mesh_name: "fragmented_periodic_box".to_string(),
+        nodes: vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 1.0],
+            [0.0, 1.0, 1.0],
+            [1.0, 1.0, 1.0],
+        ],
+        elements: vec![[0, 1, 2, 4], [3, 5, 6, 7]],
+        element_markers: vec![1, 1],
+        boundary_faces: vec![[0, 2, 4], [1, 3, 5], [2, 4, 6], [3, 5, 7]],
+        boundary_markers: vec![10, 11, 12, 13],
+        periodic_boundary_pairs: vec![
+            MeshPeriodicBoundaryPairIR {
+                pair_id: "x_faces".to_string(),
+                source_marker: None,
+                destination_marker: None,
+                marker_a: 10,
+                marker_b: 11,
+                translation: Some([1.0, 0.0, 0.0]),
+                tolerance: Some(1e-12),
+                axis_hint: Some("x".to_string()),
+                orientation: None,
+                pairing_policy: None,
+            },
+            MeshPeriodicBoundaryPairIR {
+                pair_id: "x_faces".to_string(),
+                source_marker: None,
+                destination_marker: None,
+                marker_a: 12,
+                marker_b: 13,
+                translation: Some([1.0, 0.0, 0.0]),
+                tolerance: Some(1e-12),
+                axis_hint: Some("x".to_string()),
+                orientation: None,
+                pairing_policy: None,
+            },
+        ],
+        periodic_node_pairs: vec![
+            MeshPeriodicNodePairIR {
+                pair_id: "x_faces".to_string(),
+                node_a: 0,
+                node_b: 1,
+            },
+            MeshPeriodicNodePairIR {
+                pair_id: "x_faces".to_string(),
+                node_a: 2,
+                node_b: 3,
+            },
+            MeshPeriodicNodePairIR {
+                pair_id: "x_faces".to_string(),
+                node_a: 4,
+                node_b: 5,
+            },
+            MeshPeriodicNodePairIR {
+                pair_id: "x_faces".to_string(),
+                node_a: 6,
+                node_b: 7,
+            },
+        ],
         per_domain_quality: HashMap::new(),
     };
 

@@ -6,6 +6,7 @@ import {
 } from "@/kernel/api/quantityIds";
 import {
   surfaceColorSourceToColorMode,
+  type SurfaceFieldProjectionMode,
   type SurfaceColorSource,
   type VisualizationGeometryScope,
   type VisualizationTargetKind,
@@ -58,6 +59,7 @@ export interface Viewport3DTargetRenderPlan {
     scalarColorMode: string | null;
     scalarRangePolicy: Viewport3DScalarRangePolicy;
     surfaceColorSource: SurfaceColorSource;
+    projectionMode: SurfaceFieldProjectionMode;
     visible: boolean;
   };
   targetId: string;
@@ -125,6 +127,7 @@ export interface Viewport3DScopedPartFieldSettingsForPlanning {
   activeQuantityId: string;
   shaderVisible: boolean;
   surfaceColorSource: SurfaceColorSource;
+  surfaceProjectionMode: SurfaceFieldProjectionMode;
   vectorBudget: number;
   vectorsVisible: boolean;
   visible: boolean;
@@ -209,6 +212,7 @@ export function buildViewport3DTargetRenderPlan({
     shaderMonoColor: string;
     shaderVisible: boolean;
     surfaceColorSource: SurfaceColorSource;
+    surfaceProjectionMode: SurfaceFieldProjectionMode;
     vectorCenteringEnabled: boolean;
     vectorColorMode: string;
     vectorLengthScale: number;
@@ -242,6 +246,7 @@ export function buildViewport3DTargetRenderPlan({
       scalarColorMode,
       scalarRangePolicy: DEFAULT_VIEWPORT_3D_SCALAR_RANGE_POLICY,
       surfaceColorSource: settings.surfaceColorSource,
+      projectionMode: settings.surfaceProjectionMode,
       visible: visible && settings.shaderVisible,
     },
     targetId,
@@ -550,6 +555,7 @@ export function resolveViewport3DAirboxFieldVectorDemandPlan({
         shaderMonoColor: "#ffffff",
         shaderVisible,
         surfaceColorSource,
+        surfaceProjectionMode: "raw_nodal",
         vectorBudget,
         vectorCenteringEnabled: true,
         vectorColorMode: "orientation",
@@ -1184,6 +1190,7 @@ function resolveViewport3DScopedPartFieldRequest({
       shaderMonoColor: "#ffffff",
       shaderVisible: settings.shaderVisible,
       surfaceColorSource: settings.surfaceColorSource,
+      surfaceProjectionMode: settings.surfaceProjectionMode,
       vectorBudget: settings.vectorBudget,
       vectorCenteringEnabled: true,
       vectorColorMode: "orientation",

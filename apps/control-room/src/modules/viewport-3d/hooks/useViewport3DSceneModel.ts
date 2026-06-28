@@ -66,6 +66,7 @@ import {
   surfaceColorSourceToColorMode,
   visualizationTargetKey,
   type ObjectVisualizationSnapshot,
+  type SurfaceFieldProjectionMode,
   type SurfaceColorSource,
   type VisualizationStoredTargetPatch,
   type VisualizationTargetKind,
@@ -1479,6 +1480,7 @@ export function resolveViewport3DPrimaryFieldRenderOptions({
     shaderMonoColor?: string;
     shaderVisible: boolean;
     surfaceColorSource: SurfaceColorSource;
+    surfaceProjectionMode?: SurfaceFieldProjectionMode;
     vectorBudget: number;
     vectorCenteringEnabled?: boolean;
     vectorColorMode?: "orientation" | "x" | "y" | "z" | "magnitude" | "monochrome";
@@ -1534,6 +1536,7 @@ export function resolveViewport3DPrimaryFieldRenderOptions({
           shaderVisible:
             analysisOverlayAppearance?.shaderVisible ?? settings.shaderVisible,
           surfaceColorSource: effectiveSurfaceColorSource,
+          surfaceProjectionMode: settings.surfaceProjectionMode ?? "raw_nodal",
           vectorBudget: effectiveVectorBudget,
           vectorCenteringEnabled: settings.vectorCenteringEnabled ?? true,
           vectorColorMode: settings.vectorColorMode ?? "magnitude",
@@ -1797,6 +1800,7 @@ export function resolveViewport3DScopedPartVectorFieldRequests({
     activeQuantityId: string;
     shaderVisible: boolean;
     surfaceColorSource: SurfaceColorSource;
+    surfaceProjectionMode?: SurfaceFieldProjectionMode;
     vectorBudget: number;
     vectorsVisible: boolean;
     visible: boolean;
@@ -1808,7 +1812,13 @@ export function resolveViewport3DScopedPartVectorFieldRequests({
 }): Map<string, Viewport3DFieldResourceRequest> {
   return new Map(
     resolveViewport3DScopedPartVectorFieldDemandPlan({
-      getPartSettings: (part) => getPartSettings(part as Viewport3DMeshPart),
+      getPartSettings: (part) => {
+        const settings = getPartSettings(part as Viewport3DMeshPart);
+        return {
+          ...settings,
+          surfaceProjectionMode: settings.surfaceProjectionMode ?? "raw_nodal",
+        };
+      },
       maxVectorGlyphs,
       magneticParts,
       selectedSnapshotQuery,
@@ -3331,6 +3341,8 @@ export function useViewport3DSceneModel({
       fieldRenderOptionsWithPrimaryTargetBuffers.partScalarColorPalettes,
     partScalarRangesByMode:
       fieldRenderOptionsWithPrimaryTargetBuffers.partScalarRangesByMode,
+    targetRenderPlans:
+      fieldRenderOptionsWithPrimaryTargetBuffers.targetRenderPlans,
     targetVisualizationRevision: renderingState?.revision ?? null,
     topology: currentTopologyRenderModel,
     topologyRevision: topology.revision,

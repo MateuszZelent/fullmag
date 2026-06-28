@@ -16,9 +16,9 @@ use crate::schemas::visualization_state::{
     ClipVisualizationState, DomainVisualizationState, FdmVisualizationState, FemTopologyMode,
     FemVisualizationState, FerromagnetVisibilityMode, SamplingProfile, SamplingVisualizationState,
     SliceAirboxRenderMode, SliceRenderMode, SliceVisualizationMode, SliceVisualizationState,
-    SurfaceColorSource, TrimAxisVisualizationAxes, TrimAxisVisualizationAxesPatch,
-    TrimAxisVisualizationPatch, TrimAxisVisualizationState, TrimVisualizationState,
-    VectorColorMode, VectorLayerDomain, VectorLayerPatch, VectorLayerState,
+    SurfaceColorSource, SurfaceFieldProjectionMode, TrimAxisVisualizationAxes,
+    TrimAxisVisualizationAxesPatch, TrimAxisVisualizationPatch, TrimAxisVisualizationState,
+    TrimVisualizationState, VectorColorMode, VectorLayerDomain, VectorLayerPatch, VectorLayerState,
     VectorStyleVisualizationState, VisualizationCameraPatch, VisualizationCameraProjection,
     VisualizationCameraState, VisualizationClientAckEntry, VisualizationClientAckRequest,
     VisualizationClientAckResource, VisualizationDiagnostics, VisualizationLayerPatch,
@@ -1784,6 +1784,7 @@ fn object_target_settings(
         scalar_color_palette: scalar_color_palette.to_string(),
         surface_color_source: surface_color_source_from_vector_color_mode(vector_style.color_mode),
         surface_mono_color: vector_style.mono_color.clone(),
+        surface_projection_mode: SurfaceFieldProjectionMode::RawNodal,
         surface_visible: layers.surface.visible,
         viewport_colorbar_visible: false,
         vector_alpha: vector_style.alpha,
@@ -1819,6 +1820,7 @@ fn airbox_target_settings(
         scalar_color_palette: scalar_color_palette.to_string(),
         surface_color_source: SurfaceColorSource::Solid,
         surface_mono_color: "var(--fm-airbox-fill)".to_string(),
+        surface_projection_mode: SurfaceFieldProjectionMode::RawNodal,
         surface_visible: layers.airbox.surface.visible,
         viewport_colorbar_visible: false,
         vector_alpha: 1.0,
@@ -1891,6 +1893,9 @@ fn apply_visualization_target_override(
         }
         if let Some(surface_color_source) = style.surface_color_source {
             settings.surface_color_source = surface_color_source;
+        }
+        if let Some(surface_projection_mode) = style.surface_projection_mode {
+            settings.surface_projection_mode = surface_projection_mode;
         }
         if let Some(surface_mono_color) = &style.surface_mono_color {
             settings.surface_mono_color = surface_mono_color.clone();

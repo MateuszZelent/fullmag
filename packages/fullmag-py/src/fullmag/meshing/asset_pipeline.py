@@ -226,6 +226,12 @@ def realize_fem_mesh_asset(
         mesh_workflow=mesh_workflow,
         per_object_recipes=per_object_recipes,
     )
+    mesh_options = _mesh_options_from_runtime_metadata(
+        mesh_workflow,
+        geometries=[geometry],
+        default_hmax=target.hmax,
+        per_object_recipes=per_object_recipes,
+    )
 
     preview = build_surface_preview_payload(geometry)
     if preview is not None:
@@ -268,7 +274,12 @@ def realize_fem_mesh_asset(
             f"Generating FEM mesh from geometry '{geometry.geometry_name}' "
             f"with maximum_element_size={target.hmax:.4e} (source={target.source})"
         )
-        mesh = generate_mesh(geometry, hmax=target.hmax, order=target.order)
+        mesh = generate_mesh(
+            geometry,
+            hmax=target.hmax,
+            order=target.order,
+            options=mesh_options,
+        )
 
     if mesh.n_elements == 0:
         raise ValueError(
@@ -1658,6 +1669,8 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
         element_markers=assigned_markers,
         boundary_faces=mesh.boundary_faces,
         boundary_markers=mesh.boundary_markers,
+        periodic_boundary_pairs=mesh.periodic_boundary_pairs,
+        periodic_node_pairs=mesh.periodic_node_pairs,
         quality=mesh.quality,
         per_domain_quality=build_per_domain_quality_from_mesh_arrays(
             mesh.nodes,

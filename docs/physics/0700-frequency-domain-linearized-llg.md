@@ -170,6 +170,14 @@ For a nonzero-k Floquet FEM study, every selected periodic pair must be enforced
 inside the active operator. Backends that do not enforce the selected pair set
 must reject the study.
 
+The native FEM production GPU driven-response lane currently enforces only the
+gamma-point, free-boundary, no-demag magnetic slice. It supports exchange,
+Zeeman, uniform uniaxial anisotropy, and uniform or nodal Gilbert damping
+through a CUDA tangent operator. Static-periodic projection, nonzero-k
+Floquet/Bloch response, dynamic demag, DMI, and magnetoelastic coupling must
+fail with explicit capability diagnostics on the GPU lane; they must not be
+rerouted through dense validation or CPU response.
+
 ## Demagnetization policy
 
 Static demagnetization at `k = 0` can be included by the current FEM reference

@@ -84,6 +84,43 @@ describe("ResourceRuntimeStore", () => {
     expect(load).toHaveBeenCalledTimes(1);
   });
 
+  it("deduplicates repeated forced loads while the same revision is already in flight", async () => {
+    const store = new ResourceRuntimeStore<string>();
+    const first = deferred<string>();
+    const signals: AbortSignal[] = [];
+    const load = vi.fn(({ signal }: { signal: AbortSignal }) => {
+      signals.push(signal);
+      return first.promise;
+    });
+
+    const firstResult = store.ensureLoad({
+      externalRevision: 1,
+      force: true,
+      load,
+      resourceKey: "analysis/topological-charge",
+      resolveRevision: () => 1,
+    });
+    const secondResult = store.ensureLoad({
+      externalRevision: 1,
+      force: true,
+      load,
+      resourceKey: "analysis/topological-charge",
+      resolveRevision: () => 1,
+    });
+
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(signals[0]?.aborted).toBe(false);
+
+    first.resolve("ready");
+    await Promise.all([firstResult, secondResult]);
+
+    expect(store.getSnapshot("analysis/topological-charge")).toMatchObject({
+      data: "ready",
+      revision: 1,
+      status: "ready",
+    });
+  });
+
   it("keeps warm quantity resources without refetching when switching back", async () => {
     const store = new ResourceRuntimeStore<string>();
     const loadM = vi.fn(async () => "m-data");

@@ -227,6 +227,7 @@ pub fn register_standard_providers(registry: &mut QuantityRegistry) {
         // Second wave (QB-17): energy densities
         EdenEx,
         EdenDemag,
+        DemagPhi,
         EdenExt,
         EdenAni,
         EdenDmi,
@@ -264,11 +265,11 @@ mod tests {
     use crate::GlobalQuantityRow;
 
     #[test]
-    fn standard_providers_register_all_44() {
+    fn standard_providers_register_all_45() {
         let mut reg = QuantityRegistry::new();
         register_standard_providers(&mut reg);
-        // 22 vector + 13 spatial-scalar + 9 global scalar providers = 44.
-        assert_eq!(reg.len(), 44);
+        // 22 vector + 14 spatial-scalar + 9 global scalar providers = 45.
+        assert_eq!(reg.len(), 45);
     }
 
     #[test]

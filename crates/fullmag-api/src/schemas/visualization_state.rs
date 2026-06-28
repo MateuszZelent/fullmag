@@ -747,6 +747,7 @@ fn default_visualization_target_registry_state() -> VisualizationTargetRegistryS
                 scalar_color_palette: "viridis".to_string(),
                 surface_color_source: SurfaceColorSource::Solid,
                 surface_mono_color: "var(--fm-airbox-fill)".to_string(),
+                surface_projection_mode: SurfaceFieldProjectionMode::RawNodal,
                 surface_visible: false,
                 viewport_colorbar_visible: false,
                 vector_alpha: 1.0,
@@ -799,6 +800,7 @@ pub struct VisualizationResolvedTargetSettings {
     pub scalar_color_palette: String,
     pub surface_color_source: SurfaceColorSource,
     pub surface_mono_color: String,
+    pub surface_projection_mode: SurfaceFieldProjectionMode,
     pub surface_visible: bool,
     pub viewport_colorbar_visible: bool,
     pub vector_alpha: f64,
@@ -850,6 +852,8 @@ pub struct VisualizationTargetStyleOverride {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub surface_color_source: Option<SurfaceColorSource>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub surface_projection_mode: Option<SurfaceFieldProjectionMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub surface_mono_color: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub point_color: Option<String>,
@@ -888,6 +892,14 @@ pub enum SurfaceColorSource {
     ComponentZ,
     Magnitude,
     Colormap,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SurfaceFieldProjectionMode {
+    RawNodal,
+    SurfaceFaces,
+    ThicknessAverageZ,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]

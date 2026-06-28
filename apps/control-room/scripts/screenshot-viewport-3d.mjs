@@ -117,6 +117,9 @@ try {
       );
     }
   }
+  const projectionFixtureDelta = useMainPageFdmFixture
+    ? await verifyTopBottomProjectionFixture(browser)
+    : null;
 
   const dimensionFrameDelta = await enableDimensionFrameCage(page);
   const captures = [];
@@ -141,6 +144,9 @@ try {
     `profiles=${requiredProfiles.join(",")}`,
     `scenes=${[...detectedScenes].join(",")}`,
     `profileChangedPixels=${delta.changedPixels}/${delta.sampledPixels}`,
+    projectionFixtureDelta
+      ? `projectionFixtureChangedPixels=${projectionFixtureDelta.changedPixels}/${projectionFixtureDelta.sampledPixels}`
+      : "projectionFixture=live",
     `dimensionFrameChangedPixels=${dimensionFrameDelta.changedPixels}/${dimensionFrameDelta.sampledPixels}`,
     fdmFixtureDelta
       ? `fdmFixtureChangedPixels=${fdmFixtureDelta.changedPixels}/${fdmFixtureDelta.sampledPixels}`
@@ -227,6 +233,371 @@ async function verifyFdmFixtureScene(browser) {
   } finally {
     await page.close();
   }
+}
+
+async function verifyTopBottomProjectionFixture(browser) {
+  const captures = [];
+  for (const projectionMode of [
+    "raw_nodal",
+    "surface_faces",
+    "thickness_average_z",
+  ]) {
+    captures.push(
+      await captureTopBottomProjectionFixtureMode(browser, projectionMode),
+    );
+  }
+
+  const rawToSurface = canvasCompositeDifference(
+    captures[0].sample,
+    captures[1].sample,
+  );
+  const surfaceToThickness = canvasCompositeDifference(
+    captures[1].sample,
+    captures[2].sample,
+  );
+  const rawToThickness = canvasCompositeDifference(
+    captures[0].sample,
+    captures[2].sample,
+  );
+  if (!rawToSurface.changed || !surfaceToThickness.changed || !rawToThickness.changed) {
+    throw new Error(
+      [
+        "Top/bottom projection fixture did not visually distinguish all projection modes.",
+        `raw_nodal->surface_faces=${rawToSurface.changedPixels}/${rawToSurface.sampledPixels}`,
+        `surface_faces->thickness_average_z=${surfaceToThickness.changedPixels}/${surfaceToThickness.sampledPixels}`,
+        `raw_nodal->thickness_average_z=${rawToThickness.changedPixels}/${rawToThickness.sampledPixels}`,
+      ].join(" "),
+    );
+  }
+  const switchProof = await verifyProjectionSwitchKeepsTopologyStable(browser);
+
+  console.log(
+    "Viewport 3D top/bottom projection fixture passed",
+    `(raw_nodal->surface_faces=${rawToSurface.changedPixels}/${rawToSurface.sampledPixels}`,
+    `surface_faces->thickness_average_z=${surfaceToThickness.changedPixels}/${surfaceToThickness.sampledPixels}`,
+    `raw_nodal->thickness_average_z=${rawToThickness.changedPixels}/${rawToThickness.sampledPixels}`,
+    `topologyRequestsAfterSwitch=${switchProof.topologyRequestsAfterSwitch}).`,
+  );
+  return {
+    changedPixels: Math.min(
+      rawToSurface.changedPixels,
+      surfaceToThickness.changedPixels,
+      rawToThickness.changedPixels,
+    ),
+    sampledPixels: Math.min(
+      rawToSurface.sampledPixels,
+      surfaceToThickness.sampledPixels,
+      rawToThickness.sampledPixels,
+    ),
+  };
+}
+
+async function verifyProjectionSwitchKeepsTopologyStable(browser) {
+  const page = await browser.newPage({
+    viewport: { height: 900, width: 1440 },
+  });
+  const errors = [];
+  const fixtureRequests = [];
+  const fixtureState = { projectionMode: "raw_nodal", revision: 1 };
+
+  await installTopBottomProjectionFixtureApi(
+    page,
+    fixtureState,
+    fixtureRequests,
+  );
+  page.on("console", (message) => {
+    if (message.type() === "error") {
+      const text = message.text();
+      if (!isIgnorableConsoleError(text)) errors.push(text);
+    }
+  });
+  page.on("pageerror", (error) => {
+    errors.push(error.message);
+  });
+  page.on("response", (response) => {
+    const status = response.status();
+    if (status >= 400) errors.push(`${status} ${response.url()}`);
+  });
+
+  try {
+    await page.goto(url, { waitUntil: "domcontentloaded" });
+    const canvas = page.locator(VIEWPORT_3D_CANVAS_SELECTOR);
+    await canvas.waitFor({ state: "visible", timeout: 15_000 });
+    await waitForCanvasClipBox(page);
+    await page.waitForFunction(
+      () => {
+        const summary = document
+          .querySelector(".fm-viewport-3d__hud span:nth-child(3)")
+          ?.textContent?.trim();
+        return /^\d+\+\d+$/.test(summary ?? "");
+      },
+      null,
+      { timeout: 10_000 },
+    );
+    await clickCanvasUntilProjectionControlVisible(page);
+    const projectionSelect = page
+      .locator(".fm-inspector-panel")
+      .getByLabel("Projection");
+    await projectionSelect.waitFor({ state: "visible", timeout: 15_000 });
+
+    const topologyRequestsBeforeSwitch =
+      countFixtureRequests(fixtureRequests, "GET", "/v2/sessions/current/data/domain/topology");
+    const baseline = await sampleCanvasComposite(page);
+    await projectionSelect.selectOption("surface_faces");
+    await waitForProjectionFixtureMode(page, "surface_faces");
+    await waitForCanvasCompositeChange(
+      page,
+      baseline,
+      "surface projection switch renders surface_faces",
+      "Viewport canvas did not visually change after switching to surface_faces",
+    );
+    await projectionSelect.selectOption("thickness_average_z");
+    await waitForProjectionFixtureMode(page, "thickness_average_z");
+    const topologyRequestsAfterSwitch =
+      countFixtureRequests(fixtureRequests, "GET", "/v2/sessions/current/data/domain/topology") -
+      topologyRequestsBeforeSwitch;
+    if (topologyRequestsAfterSwitch !== 0) {
+      throw new Error(
+        `Projection switch refetched topology ${topologyRequestsAfterSwitch} time(s).`,
+      );
+    }
+    if (errors.length > 0) {
+      throw new Error(
+        `Projection switch browser console/network errors:\n${errors.join("\n")}`,
+      );
+    }
+    return { topologyRequestsAfterSwitch };
+  } catch (error) {
+    const { hudText, summary } = await readViewportHudDebug(page);
+    throw new Error(
+      `Projection switch topology-stability proof failed. hud=${hudText}; summary=${summary}; requests=${[
+        ...new Set(fixtureRequests),
+      ].join(", ") || "none"}; cause=${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  } finally {
+    await page.close();
+  }
+}
+
+async function clickCanvasUntilProjectionControlVisible(page) {
+  const canvasBox = await readCanvasClipBox(page);
+  const center = {
+    x: canvasBox.x + canvasBox.width / 2,
+    y: canvasBox.y + canvasBox.height / 2,
+  };
+  const step = Math.max(16, Math.min(canvasBox.width, canvasBox.height) * 0.08);
+  const offsets = [
+    [0, 0],
+    [-step, 0],
+    [step, 0],
+    [0, -step],
+    [0, step],
+    [-step, -step],
+    [step, -step],
+    [-step, step],
+    [step, step],
+  ];
+  const projectionSelect = page
+    .locator(".fm-inspector-panel")
+    .getByLabel("Projection");
+
+  for (const [offsetX, offsetY] of offsets) {
+    await page.mouse.click(center.x + offsetX, center.y + offsetY);
+    await page.waitForTimeout(120);
+    if (await projectionSelect.isVisible()) return;
+  }
+
+  const selectedNodes = await page
+    .locator('[data-node-id][aria-selected="true"]')
+    .evaluateAll((nodes) =>
+      nodes
+        .map((node) => node.getAttribute("data-node-id"))
+        .filter(Boolean),
+    );
+  const inspectorText = await page
+    .locator(".fm-inspector-panel")
+    .evaluate((node) => node.textContent ?? "")
+    .catch(() => "missing");
+  throw new Error(
+    `Canvas clicks did not reveal the Projection control. Selected nodes: ${
+      selectedNodes.join(", ") || "none"
+    }. Inspector: ${inspectorText.slice(0, 240)}`,
+  );
+}
+
+async function captureTopBottomProjectionFixtureMode(browser, projectionMode) {
+  const page = await browser.newPage({
+    viewport: { height: 900, width: 1440 },
+  });
+  const errors = [];
+  const fixtureRequests = [];
+
+  await installTopBottomProjectionFixtureApi(
+    page,
+    { projectionMode, revision: 1 },
+    fixtureRequests,
+  );
+  page.on("console", (message) => {
+    if (message.type() === "error") {
+      const text = message.text();
+      if (!isIgnorableConsoleError(text)) errors.push(text);
+    }
+  });
+  page.on("pageerror", (error) => {
+    errors.push(error.message);
+  });
+  page.on("response", (response) => {
+    const status = response.status();
+    if (status >= 400) errors.push(`${status} ${response.url()}`);
+  });
+
+  try {
+    await page.goto(url, { waitUntil: "domcontentloaded" });
+    const canvas = page.locator(VIEWPORT_3D_CANVAS_SELECTOR);
+    await canvas.waitFor({ state: "visible", timeout: 15_000 });
+    await waitForCanvasClipBox(page);
+    await page.waitForFunction(
+      () => {
+        const summary = document
+          .querySelector(".fm-viewport-3d__hud span:nth-child(3)")
+          ?.textContent?.trim();
+        return /^\d+\+\d+$/.test(summary ?? "");
+      },
+      null,
+      { timeout: 10_000 },
+    );
+    await page.waitForTimeout(400);
+    const sample = await sampleCanvasComposite(page);
+    if (!sample.nonBlank) {
+      throw new Error(
+        `Top/bottom projection fixture ${projectionMode} screenshot is blank: ${sample.variedPixels}/${sample.sampledPixels} sampled pixels differ from background.`,
+      );
+    }
+    if (errors.length > 0) {
+      throw new Error(
+        `Top/bottom projection fixture ${projectionMode} browser console/network errors:\n${errors.join("\n")}`,
+      );
+    }
+    return { projectionMode, sample };
+  } catch (error) {
+    const { hudText, summary } = await readViewportHudDebug(page);
+    throw new Error(
+      `Top/bottom projection fixture ${projectionMode} failed. hud=${hudText}; summary=${summary}; requests=${[
+        ...new Set(fixtureRequests),
+      ].join(", ") || "none"}; cause=${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  } finally {
+    await page.close();
+  }
+}
+
+async function waitForProjectionFixtureMode(page, projectionMode) {
+  await page.waitForFunction(
+    (expected) => {
+      return Array.from(
+        document.querySelectorAll(".fm-inspector-panel select"),
+      ).some(
+        (node) => node instanceof HTMLSelectElement && node.value === expected,
+      );
+    },
+    projectionMode,
+    { timeout: 10_000 },
+  );
+  await page.waitForTimeout(120);
+}
+
+function countFixtureRequests(requests, method, pathname) {
+  return requests.filter((entry) => entry === `${method} ${pathname}`).length;
+}
+
+async function installTopBottomProjectionFixtureApi(
+  page,
+  fixtureState,
+  fixtureRequests,
+) {
+  const fixtureBase = apiBase ?? "http://localhost:8081";
+  await page.addInitScript((baseUrl) => {
+    window.__FULLMAG_CONFIG__ = {
+      ...(window.__FULLMAG_CONFIG__ ?? {}),
+      allowMissingSessionSmoke: true,
+      controlRoomApiBase: baseUrl,
+    };
+  }, fixtureBase);
+
+  await page.route("**/v2/sessions/current/**", async (route) => {
+    const request = route.request();
+    const requestUrl = new URL(request.url());
+    fixtureRequests.push(`${request.method()} ${requestUrl.pathname}`);
+    if (request.method() === "OPTIONS") {
+      await fulfillEmpty(route, 204);
+      return;
+    }
+
+    const path = requestUrl.pathname;
+    if (request.method() === "PATCH" && path === "/v2/sessions/current/visualization/state") {
+      const patch = request.postDataJSON();
+      const override = Array.isArray(patch?.overrides)
+        ? patch.overrides.find((entry) => entry?.scope_id === "part-film")
+        : null;
+      const nextProjectionMode = override?.style?.surface_projection_mode;
+      if (typeof nextProjectionMode === "string") {
+        fixtureState.projectionMode = nextProjectionMode;
+        fixtureState.revision += 1;
+      }
+      await fulfillJson(
+        route,
+        topBottomProjectionVisualizationStateFixture(
+          fixtureState.projectionMode,
+          fixtureState.revision,
+        ),
+      );
+      return;
+    }
+    if (path === "/v2/sessions/current/status") {
+      await fulfillJson(route, topBottomProjectionStatusFixture(fixtureState.revision));
+      return;
+    }
+    if (path === "/v2/sessions/current/visualization/state") {
+      await fulfillJson(
+        route,
+        topBottomProjectionVisualizationStateFixture(
+          fixtureState.projectionMode,
+          fixtureState.revision,
+        ),
+      );
+      return;
+    }
+    if (path === "/v2/sessions/current/data/domain/meta") {
+      await fulfillJson(route, topBottomProjectionDomainMetaFixture());
+      return;
+    }
+    if (path === "/v2/sessions/current/data/domain/topology") {
+      await fulfillBinary(route, makeTopBottomProjectionTopologyBuffer());
+      return;
+    }
+    if (path === "/v2/sessions/current/data/fields/m/samples/vector") {
+      await fulfillBinary(route, makeTopBottomProjectionFieldVectorBuffer());
+      return;
+    }
+    if (path === "/v2/sessions/current/model/scene") {
+      await fulfillJson(route, topBottomProjectionSceneFixture());
+      return;
+    }
+    if (path === "/v2/sessions/current/model/universe") {
+      await fulfillJson(route, topBottomProjectionUniverseFixture());
+      return;
+    }
+    if (path === "/v2/sessions/current/meshing/meshes/shared-domain/manifest") {
+      await fulfillJson(route, topBottomProjectionSharedDomainManifestFixture());
+      return;
+    }
+
+    await fulfillEmpty(route, 204);
+  });
 }
 
 async function installFdmFixtureApi(page, fixtureRequests) {
@@ -939,6 +1310,393 @@ function fdmVisualizationStateFixture() {
     x_chosen_size: 1,
     y_chosen_size: 1,
   };
+}
+
+function topBottomProjectionStatusFixture(revision = 1) {
+  return {
+    api_contract_version: "1.0.0",
+    capabilities: {
+      algorithms_available: [],
+      binary_fields: true,
+      cell_fields: false,
+      eigen_modes: false,
+      explicit_topology: true,
+      gpu_telemetry: false,
+      node_fields: true,
+      preview_2d: false,
+      preview_3d: true,
+      scalar_history: false,
+      structured_grid: false,
+    },
+    display: {
+      active_quantity_id: "m",
+      auto_contrast: true,
+      colormap: "viridis",
+      contrast_max: null,
+      contrast_min: null,
+      field_component: "magnitude",
+      max_points: 120000,
+      slice_layer: 0,
+      slice_mode: "xy",
+      vector_density: 0,
+      vector_glyphs: false,
+      view_mode: "3d",
+      x_chosen_size: 1,
+      y_chosen_size: 1,
+    },
+    domain: {
+      cell_count: 0,
+      discretization: "fem",
+      generation_id: 1,
+    },
+    energies: {},
+    metrics: {
+      steps_per_second: null,
+      total_steps: 0,
+      uptime_seconds: 0,
+    },
+    resources: {
+      artifact_revision: 0,
+      artifacts_revision: 0,
+      command_completion_revision: 0,
+      commands_revision: 0,
+      display_revision: 1,
+      domain_generation_id: 1,
+      engine_log_revision: 0,
+      field_catalog_revision: 1,
+      field_revision: 1,
+      fields_revision: 1,
+      mesh_build_revision: 1,
+      mesh_revision: 1,
+      scalars_revision: 0,
+      scene_revision: 1,
+      slice_revision: 0,
+      stages_revision: 0,
+      topology_revision: 1,
+      visualization_state_revision: revision,
+      workspace_revision: 0,
+    },
+    run: null,
+    runtime_bundle_version: "projection-fixture",
+    session: {
+      created_at: "0",
+      name: "projection-top-bottom-fixture",
+      session_id: "projection-top-bottom-fixture",
+      workspace_root: "/tmp/fullmag-projection-fixture",
+    },
+    solver: {
+      state: "idle",
+    },
+  };
+}
+
+function topBottomProjectionDomainMetaFixture() {
+  return {
+    bounds: {
+      max: [7.5e-7, 7.5e-7, 1.0e-7],
+      min: [-7.5e-7, -7.5e-7, -1.0e-7],
+    },
+    coordinate_system: "cartesian",
+    counts: { cells: 0 },
+    dimension: 3,
+    discretization: "fem",
+    domain_id: "projection-top-bottom-domain",
+    generation_id: 1,
+    grid: null,
+    units: { length: "m" },
+  };
+}
+
+function topBottomProjectionVisualizationStateFixture(projectionMode, revision = 1) {
+  return {
+    active_quantity_id: "m",
+    auto_contrast: true,
+    camera: {
+      position: [1.6e-6, -1.7e-6, 1.1e-6],
+      projection: "perspective",
+      target: [0, 0, 0],
+      up: [0, 0, 1],
+    },
+    clip: {
+      enabled: false,
+      normal_axis: "z",
+      offset: 0,
+    },
+    colormap: "viridis",
+    contrast_max: null,
+    contrast_min: null,
+    diagnostics: { warnings: [] },
+    domains: {
+      active_scope_id: null,
+      active_scope_kind: "domain",
+    },
+    fdm: {
+      x_chosen_size: 1,
+      y_chosen_size: 1,
+    },
+    fem: {
+      topology_mode: "surface",
+      volume_edges_budget: 0,
+    },
+    field_component: "magnitude",
+    layers: {
+      airbox: {
+        bounds: { opacity: 1, visible: false },
+        opacity: 0,
+        points: { opacity: 1, visible: false },
+        surface: { opacity: 0, visible: false },
+        vectors: { density: 0, domain: "full_domain", visible: false },
+        visible: false,
+        wireframe: { opacity: 1, visible: false },
+      },
+      bounds: { opacity: 1, visible: false },
+      points: { opacity: 1, visible: false },
+      primitives: { opacity: 1, visible: false },
+      quantity_overlay: { opacity: 1, visible: true },
+      surface: { opacity: 1, visible: true },
+      vectors: { density: 0, domain: "full_domain", visible: false },
+      volume_mesh: { opacity: 1, visible: false },
+      wireframe: { opacity: 1, visible: false },
+    },
+    max_points: 120000,
+    overrides: [
+      {
+        display: {
+          surface: { visible: true },
+          vectors: { visible: false },
+          visible: true,
+          wireframe: { visible: false },
+        },
+        scope: "part",
+        scope_id: "part-film",
+        style: {
+          scalar_color_palette: "viridis",
+          surface_color_source: "orientation",
+          surface_projection_mode: projectionMode,
+          viewport_colorbar_visible: true,
+          vector_budget: 0,
+        },
+      },
+    ],
+    quantity: {
+      active_quantity_id: "m",
+      auto_contrast: true,
+      colormap: "viridis",
+      contrast_max: null,
+      contrast_min: null,
+      field_component: "magnitude",
+    },
+    revision,
+    sampling: {
+      max_bytes: null,
+      max_glyphs: 0,
+      max_points: 120000,
+      profile: "interactive",
+      progressive: true,
+    },
+    schema_version: 1,
+    slice: {
+      layer: 0,
+      mode: "xy",
+    },
+    slice_layer: 0,
+    slice_mode: "xy",
+    targets: {
+      airbox: {
+        id: "airbox",
+        label: "Airbox",
+        parts: [],
+        source: "airbox",
+      },
+      objects: [],
+      parts: [
+        {
+          id: "part-film",
+          label: "Top/bottom film",
+          settings: {
+            surface_color_source: "orientation",
+            surface_projection_mode: projectionMode,
+            surface_visible: true,
+            vector_budget: 0,
+            vectors_visible: false,
+            visible: true,
+            wireframe_visible: false,
+          },
+        },
+      ],
+    },
+    trim: {
+      enabled: false,
+      max: [1, 1, 1],
+      min: [0, 0, 0],
+    },
+    vector_density: 0,
+    vector_glyphs: false,
+    vector_style: {
+      alpha: 1,
+      color_mode: "orientation",
+      ferromagnet_visibility: "ghost",
+      length_scale: 1,
+      mono_color: "#89b4fa",
+      thickness: 1.4,
+    },
+    view_mode: "3d",
+    x_chosen_size: 1,
+    y_chosen_size: 1,
+  };
+}
+
+function topBottomProjectionSceneFixture() {
+  return {
+    objects: [],
+    revision: 1,
+    schema_version: 2,
+  };
+}
+
+function topBottomProjectionUniverseFixture() {
+  return {
+    mesh_dirty: false,
+    object_bounds_max: [7.5e-7, 7.5e-7, 1.0e-7],
+    object_bounds_min: [-7.5e-7, -7.5e-7, -1.0e-7],
+    scene_revision: 1,
+    study_universe_mesh: null,
+    universe: {
+      bounds_max: [7.5e-7, 7.5e-7, 1.0e-7],
+      bounds_min: [-7.5e-7, -7.5e-7, -1.0e-7],
+    },
+  };
+}
+
+function topBottomProjectionSharedDomainManifestFixture() {
+  const surfaceFaces = topBottomProjectionSurfaceFaces();
+  return {
+    domain_mesh_mode: "shared_domain",
+    generation_id: "projection-top-bottom-fixture",
+    mesh_id: "shared-domain",
+    mesh_name: "Top/bottom projection FEM fixture",
+    mesh_parts: [
+      {
+        boundary_face_count: surfaceFaces.length,
+        boundary_face_indices: surfaceFaces.map((_, index) => index),
+        boundary_face_start: 0,
+        bounds_max: [7.5e-7, 7.5e-7, 1.0e-7],
+        bounds_min: [-7.5e-7, -7.5e-7, -1.0e-7],
+        element_count: 0,
+        element_start: 0,
+        geometry_id: "projection-film",
+        id: "part-film",
+        label: "Top/bottom film",
+        material_id: "material-film",
+        node_count: 8,
+        node_indices: [0, 1, 2, 3, 4, 5, 6, 7],
+        node_start: 0,
+        role: "magnetic",
+        surface_faces: surfaceFaces,
+      },
+    ],
+    object_segments: [],
+    regions: [],
+    revision: 1,
+    source_scene_revision: 1,
+  };
+}
+
+function topBottomProjectionSurfaceFaces() {
+  return [
+    [0, 1, 2],
+    [0, 2, 3],
+    [4, 6, 5],
+    [4, 7, 6],
+    [0, 4, 5],
+    [0, 5, 1],
+    [1, 5, 6],
+    [1, 6, 2],
+    [2, 6, 7],
+    [2, 7, 3],
+    [3, 7, 4],
+    [3, 4, 0],
+  ];
+}
+
+function makeTopBottomProjectionTopologyBuffer() {
+  const nodeCount = 8;
+  const elementCount = 0;
+  const surfaceFaces = topBottomProjectionSurfaceFaces();
+  const boundaryFaceCount = surfaceFaces.length;
+  const markerCount = boundaryFaceCount;
+  const byteLength =
+    32 +
+    nodeCount * 3 * Float64Array.BYTES_PER_ELEMENT +
+    elementCount * 4 * Uint32Array.BYTES_PER_ELEMENT +
+    boundaryFaceCount * 3 * Uint32Array.BYTES_PER_ELEMENT +
+    markerCount * Uint32Array.BYTES_PER_ELEMENT +
+    markerCount * Uint32Array.BYTES_PER_ELEMENT;
+  const buffer = new ArrayBuffer(byteLength);
+  const view = new DataView(buffer);
+  for (const [index, code] of [..."FMMT"].entries()) {
+    view.setUint8(index, code.charCodeAt(0));
+  }
+  view.setUint8(4, 1);
+  view.setUint8(5, 1);
+  view.setUint32(8, nodeCount, true);
+  view.setUint32(12, elementCount, true);
+  view.setUint32(16, boundaryFaceCount, true);
+  view.setUint32(20, markerCount, true);
+  view.setUint32(24, markerCount, true);
+
+  let offset = 32;
+  new Float64Array(buffer, offset, nodeCount * 3).set([
+    -7.5e-7, -7.5e-7, 1.0e-7,
+    7.5e-7, -7.5e-7, 1.0e-7,
+    7.5e-7, 7.5e-7, 1.0e-7,
+    -7.5e-7, 7.5e-7, 1.0e-7,
+    -7.5e-7, -7.5e-7, -1.0e-7,
+    7.5e-7, -7.5e-7, -1.0e-7,
+    7.5e-7, 7.5e-7, -1.0e-7,
+    -7.5e-7, 7.5e-7, -1.0e-7,
+  ]);
+  offset += nodeCount * 3 * Float64Array.BYTES_PER_ELEMENT;
+  offset += elementCount * 4 * Uint32Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, boundaryFaceCount * 3).set(
+    surfaceFaces.flat(),
+  );
+  offset += boundaryFaceCount * 3 * Uint32Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, markerCount).fill(1);
+  offset += markerCount * Uint32Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, markerCount).fill(1);
+  return buffer;
+}
+
+function makeTopBottomProjectionFieldVectorBuffer() {
+  const grid = [8, 1, 1];
+  const pointCount = grid[0] * grid[1] * grid[2];
+  const valueCount = pointCount * 3;
+  const buffer = new ArrayBuffer(48 + valueCount * Float64Array.BYTES_PER_ELEMENT);
+  const view = new DataView(buffer);
+  for (const [index, code] of [..."FMVP"].entries()) {
+    view.setUint8(index, code.charCodeAt(0));
+  }
+  view.setUint8(4, 2);
+  view.setUint8(5, 1);
+  view.setUint8(6, 3);
+  view.setUint32(12, valueCount, true);
+  view.setUint32(16, grid[0], true);
+  view.setUint32(20, grid[1], true);
+  view.setUint32(24, grid[2], true);
+  new TextEncoder().encodeInto("m", new Uint8Array(buffer, 28, 16));
+
+  new Float64Array(buffer, 48).set([
+    0, 0, 1,
+    0, 0, 1,
+    0, 0, 1,
+    0, 0, 1,
+    0, 0, -1,
+    0, 0, -1,
+    0, 0, -1,
+    0, 0, -1,
+  ]);
+  return buffer;
 }
 
 function makeFdmFieldVectorBuffer() {

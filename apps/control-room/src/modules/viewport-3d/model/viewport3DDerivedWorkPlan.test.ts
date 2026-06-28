@@ -101,7 +101,7 @@ describe("viewport3DDerivedWorkPlan", () => {
     expect(items.find((item) => item.lane === "field-color")).toMatchObject({
       blockedReason: null,
       inputBufferId: "buffer:part-a",
-      outputKind: "scalar-colors",
+      outputKind: "surface-vertex-colors",
       passId: "part-a:surface",
       status: "ready",
       targetId: "part-a",
@@ -139,6 +139,78 @@ describe("viewport3DDerivedWorkPlan", () => {
       targetId: "part-a",
       workId: "vector-glyph:part-a:field-1:mesh-1",
     });
+  });
+
+  it("includes surface projection identity in scalar color derived work keys", () => {
+    const items = planViewport3DDerivedWorkItems({
+      targetPasses: new Map([
+        [
+          "part-a",
+          targetPass({
+            surface: {
+              degradation: null,
+              passId: "part-a:surface",
+              projectionMode: "surface_faces",
+              scalarColorMode: "x",
+              scalarColors: {
+                colors: new Float32Array(9),
+                colorMode: "x",
+                colorPalette: "viridis",
+                faceCount: 1,
+                geometryRole: "face_expanded_surface",
+                projectionMode: "surface_faces",
+                quantityId: "m",
+                range: { max: 1, min: -1 },
+                rangeSource: "face_values",
+                scalarValues: new Float32Array([0, 0, 0]),
+                targetRevision: "field=field-1",
+                topologyRevision: "mesh-1",
+              },
+            },
+          }),
+        ],
+      ]),
+    });
+
+    const fieldColor = items.find((item) => item.lane === "field-color");
+    expect(fieldColor?.outputKind).toBe("surface-face-colors");
+    expect(fieldColor?.staleCompatibilityKey).toContain("projection=surface_faces");
+    expect(fieldColor?.workId).toContain("projection=surface_faces");
+  });
+
+  it("classifies thickness-average-z color work as thickness projection output", () => {
+    const items = planViewport3DDerivedWorkItems({
+      targetPasses: new Map([
+        [
+          "part-a",
+          targetPass({
+            surface: {
+              degradation: null,
+              passId: "part-a:surface",
+              projectionMode: "thickness_average_z",
+              scalarColorMode: "orientation",
+              scalarColors: {
+                colors: new Float32Array(9),
+                colorMode: "orientation",
+                colorPalette: "viridis",
+                faceCount: 1,
+                geometryRole: "face_expanded_surface",
+                lowNormFaceCount: 1,
+                projectionMode: "thickness_average_z",
+                quantityId: "m",
+                range: { max: 0, min: 0 },
+                rangeSource: "projected_values",
+                vectorValues: new Float32Array(9),
+              },
+            },
+          }),
+        ],
+      ]),
+    });
+
+    expect(items.find((item) => item.lane === "field-color")?.outputKind).toBe(
+      "surface-thickness-projection",
+    );
   });
 
   it("plans missing vector segments as worker work before glyph transforms can run", () => {

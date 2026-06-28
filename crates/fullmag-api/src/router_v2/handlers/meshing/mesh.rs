@@ -4,25 +4,25 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::sync::Arc;
 
-use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::IntoResponse;
+use axum::Json;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::error::ApiError;
 use crate::fem_cross_section::{
-    CrossSectionQualityMetric, cross_section_quality_from_fmmq,
-    cross_section_quality_from_parent_tets, per_element_quality_metric_from_fmmq,
-    serialize_cross_section_fmcs, serialize_cross_section_quality_fmqs,
+    cross_section_quality_from_fmmq, cross_section_quality_from_parent_tets,
+    per_element_quality_metric_from_fmmq, serialize_cross_section_fmcs,
+    serialize_cross_section_quality_fmqs, CrossSectionQualityMetric,
 };
 use crate::fem_cross_section_image::{
-    CrossSectionImageColorScale, CrossSectionImageRenderOptions, render_cross_section_png,
-    validate_cross_section_image_query,
+    render_cross_section_png, validate_cross_section_image_query, CrossSectionImageColorScale,
+    CrossSectionImageRenderOptions,
 };
-use crate::fem_slice_overlay::{FemSliceOverlayInput, collect_fem_slice_overlay};
-use crate::field_slice::{FieldSliceQuery, SlicePlane, resolve_slice_query};
+use crate::fem_slice_overlay::{collect_fem_slice_overlay, FemSliceOverlayInput};
+use crate::field_slice::{resolve_slice_query, FieldSliceQuery, SlicePlane};
 use crate::field_store::serialize_fem_mesh_topology_binary_v1;
 use crate::schemas::mesh::{
     MeshActiveBuildResource, MeshBuildDiagnosticsResource, MeshBuildHistoryResource,

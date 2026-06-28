@@ -33,6 +33,13 @@ class StepStats:
     max_torque_T: float = 0.0
     exchange_wall_time_ns: int = 0
     demag_wall_time_ns: int = 0
+    demag_assemble_wall_time_ns: int = 0
+    demag_solve_wall_time_ns: int = 0
+    demag_solver_setup_wall_time_ns: int = 0
+    demag_solver_apply_wall_time_ns: int = 0
+    demag_solver_setup_reused: bool = False
+    demag_recover_wall_time_ns: int = 0
+    demag_energy_wall_time_ns: int = 0
     rhs_wall_time_ns: int = 0
     extra_energy_wall_time_ns: int = 0
     snapshot_wall_time_ns: int = 0
@@ -44,6 +51,7 @@ class StepStats:
     fsal_reused: bool = False
     poisson_iterations: int = 0
     poisson_final_residual: float = 0.0
+    demag_solver: str | None = None
     demag_refreshed: bool = False
     per_object_scalars: dict[str, dict[str, float]] = field(default_factory=dict)
 
@@ -225,6 +233,13 @@ def result_from_run_payload(
                 max_torque_T=s.get("max_torque_T", 0.0),
                 exchange_wall_time_ns=s.get("exchange_wall_time_ns", 0),
                 demag_wall_time_ns=s.get("demag_wall_time_ns", 0),
+                demag_assemble_wall_time_ns=s.get("demag_assemble_wall_time_ns", 0),
+                demag_solve_wall_time_ns=s.get("demag_solve_wall_time_ns", 0),
+                demag_solver_setup_wall_time_ns=s.get("demag_solver_setup_wall_time_ns", 0),
+                demag_solver_apply_wall_time_ns=s.get("demag_solver_apply_wall_time_ns", 0),
+                demag_solver_setup_reused=s.get("demag_solver_setup_reused", False),
+                demag_recover_wall_time_ns=s.get("demag_recover_wall_time_ns", 0),
+                demag_energy_wall_time_ns=s.get("demag_energy_wall_time_ns", 0),
                 rhs_wall_time_ns=s.get("rhs_wall_time_ns", 0),
                 extra_energy_wall_time_ns=s.get("extra_energy_wall_time_ns", 0),
                 snapshot_wall_time_ns=s.get("snapshot_wall_time_ns", 0),
@@ -236,6 +251,7 @@ def result_from_run_payload(
                 fsal_reused=s.get("fsal_reused", False),
                 poisson_iterations=s.get("poisson_iterations", 0),
                 poisson_final_residual=s.get("poisson_final_residual", 0.0),
+                demag_solver=s.get("demag_solver"),
                 demag_refreshed=s.get("demag_refreshed", False),
                 per_object_scalars=_coerce_per_object_scalars(per_object_raw),
             )

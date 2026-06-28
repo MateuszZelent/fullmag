@@ -104,6 +104,7 @@ function targetRenderPlanFixture(
       | "magnitude"
       | "orientation"
       | "solid";
+    surfaceProjectionMode: "raw_nodal" | "surface_faces" | "thickness_average_z";
     targetId: string;
     vectorBudget: number;
     vectorsVisible: boolean;
@@ -119,6 +120,7 @@ function targetRenderPlanFixture(
       shaderMonoColor: "#ffffff",
       shaderVisible: overrides.shaderVisible ?? true,
       surfaceColorSource: overrides.surfaceColorSource ?? "component_x",
+      surfaceProjectionMode: overrides.surfaceProjectionMode ?? "raw_nodal",
       vectorBudget: overrides.vectorBudget ?? 4,
       vectorCenteringEnabled: true,
       vectorColorMode: "magnitude",
@@ -1709,7 +1711,7 @@ describe("viewport3dRenderModel", () => {
       ],
       demand: "surface:x vector-glyph",
       derivedWork: [
-        "field-color:scalar-colors:blocked:blocked:part-a:surface items=0 input=0B output=0B",
+        "field-color:surface-vertex-colors:blocked:blocked:part-a:surface items=0 input=0B output=0B",
         "vector-glyph:vector-glyphs:ready:runtime-worker:part-a:vector-glyph items=4 input=112B output=112B",
         "vector-glyph:vector-segments:ready:runtime-worker:part-a:vector-glyph items=4 input=96B output=112B",
       ],
@@ -1758,7 +1760,13 @@ describe("viewport3dRenderModel", () => {
         scalarColorsVisible: true,
         targetVisualizationRevision: "viz-1",
         targetRenderPlans: new Map([
-          ["part-a", targetRenderPlanFixture({ surfaceColorSource: "component_x" })],
+          [
+            "part-a",
+            targetRenderPlanFixture({
+              surfaceColorSource: "component_x",
+              surfaceProjectionMode: "surface_faces",
+            }),
+          ],
         ]),
         topologyRevision: "topology-1",
       },
@@ -1766,7 +1774,12 @@ describe("viewport3dRenderModel", () => {
 
     const targetPass = model?.targetPasses.get("part-a");
     expect(targetPass?.surface.scalarColorMode).toBe("x");
-    expect(targetPass?.surface.scalarColors?.colors.length).toBe(12);
+    expect(targetPass?.surface.projectionMode).toBe("surface_faces");
+    expect(targetPass?.surface.scalarColors).toMatchObject({
+      colors: expect.objectContaining({ length: 9 }),
+      geometryRole: "face_expanded_surface",
+      projectionMode: "surface_faces",
+    });
     expect(targetPass?.vectors.segments?.length).toBeGreaterThan(0);
     expect(targetPass?.vectors.buildReference).toMatchObject({
       revisionSummary: expect.stringContaining("scope=full:part-a"),
@@ -1777,6 +1790,154 @@ describe("viewport3dRenderModel", () => {
         targetId: "part-a",
       }),
     );
+  });
+
+  it("builds face-expanded scalar colors for surface face projection plans", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "part-a",
+          label: "Part A",
+          nodeCount: 4,
+          nodeStart: 0,
+        },
+      ],
+      [],
+      undefined,
+      {
+        meshTopologyHash: "hash-1",
+      },
+    );
+
+    const model = buildViewport3DFieldRenderModel(
+      topologyModel,
+      {
+        ...fieldVectorFixture(),
+        values: new Float64Array([
+          0, 0, 0,
+          3, 0, 0,
+          6, 0, 0,
+          100, 0, 0,
+        ]),
+      },
+      0.5,
+      {
+        fieldRevision: "field-1",
+        scalarColorsVisible: true,
+        targetRenderPlans: new Map([
+          [
+            "part-a",
+            targetRenderPlanFixture({
+              surfaceColorSource: "component_x",
+              surfaceProjectionMode: "surface_faces",
+            }),
+          ],
+        ]),
+        topologyRevision: "topology-1",
+      },
+    );
+
+    const surface = model?.targetPasses.get("part-a")?.surface;
+    expect(surface?.projectionMode).toBe("surface_faces");
+    expect(surface?.scalarColors).toMatchObject({
+      faceCount: 1,
+      geometryRole: "face_expanded_surface",
+      projectionMode: "surface_faces",
+      rangeSource: "face_values",
+    });
+    expect(Array.from(surface?.scalarColors?.scalarValues ?? [])).toEqual([
+      3, 3, 3,
+    ]);
+  });
+
+  it("builds projected scalar colors for thickness-average-z projection plans", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      {
+        boundaryFaceCount: 1,
+        boundaryFaces: new Uint32Array([0, 1, 2]),
+        boundaryMarkers: new Uint32Array(),
+        elementCount: 0,
+        elementMarkers: new Uint32Array(),
+        indices: new Uint32Array(),
+        nodeCount: 6,
+        positions: new Float64Array([
+          0, 0, 1,
+          1, 0, 1,
+          0, 1, 1,
+          0, 0, -1,
+          1, 0, -1,
+          0, 1, -1,
+        ]),
+      },
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "part-a",
+          label: "Part A",
+          nodeCount: 6,
+          nodeStart: 0,
+        },
+      ],
+      [],
+      undefined,
+      {
+        meshTopologyHash: "hash-1",
+      },
+    );
+
+    const model = buildViewport3DFieldRenderModel(
+      topologyModel,
+      {
+        dtype: "float64",
+        grid: [6, 1, 1],
+        nComp: 3,
+        pointCount: 6,
+        quantityId: "m",
+        valueCount: 18,
+        values: new Float64Array([
+          0, 0, 1,
+          0, 0, 1,
+          0, 0, 1,
+          0, 0, -1,
+          0, 0, -1,
+          0, 0, -1,
+        ]),
+      },
+      0.5,
+      {
+        fieldRevision: "field-1",
+        scalarColorsVisible: true,
+        targetRenderPlans: new Map([
+          [
+            "part-a",
+            targetRenderPlanFixture({
+              surfaceColorSource: "orientation",
+              surfaceProjectionMode: "thickness_average_z",
+            }),
+          ],
+        ]),
+        topologyRevision: "topology-1",
+      },
+    );
+
+    const surface = model?.targetPasses.get("part-a")?.surface;
+    expect(surface?.projectionMode).toBe("thickness_average_z");
+    expect(surface?.scalarColors).toMatchObject({
+      faceCount: 1,
+      geometryRole: "face_expanded_surface",
+      lowNormFaceCount: 1,
+      projectionMode: "thickness_average_z",
+      rangeSource: "projected_values",
+    });
+    expect(Array.from(surface?.scalarColors?.vectorValues ?? [])).toEqual([
+      0, 0, 0,
+      0, 0, 0,
+      0, 0, 0,
+    ]);
   });
 
   it("does not resurrect disabled target passes from legacy option maps", () => {
@@ -1957,7 +2118,7 @@ describe("viewport3dRenderModel", () => {
       ],
       demand: "surface:x vector-glyph",
       derivedWork: [
-        "field-color:scalar-colors:ready:render-model-sync:part-a:surface items=4 input=16B output=48B",
+        "field-color:surface-vertex-colors:ready:render-model-sync:part-a:surface items=4 input=16B output=48B",
         "vector-glyph:vector-glyphs:blocked:blocked:part-a:vector-glyph items=0 input=0B output=0B",
         "vector-glyph:vector-segments:blocked:blocked:part-a:vector-glyph items=0 input=32B output=0B",
       ],
@@ -2087,7 +2248,7 @@ describe("viewport3dRenderModel", () => {
       ],
       demand: "surface:x vector-glyph",
       derivedWork: [
-        "field-color:scalar-colors:blocked:blocked:part-a:surface items=0 input=0B output=0B",
+        "field-color:surface-vertex-colors:blocked:blocked:part-a:surface items=0 input=0B output=0B",
         "vector-glyph:vector-glyphs:blocked:blocked:part-a:vector-glyph items=0 input=0B output=0B",
         "vector-glyph:vector-segments:blocked:blocked:part-a:vector-glyph items=0 input=32B output=0B",
       ],
@@ -2335,7 +2496,7 @@ describe("viewport3dRenderModel", () => {
     ).toMatchObject({
       blockedReason: null,
       lane: "field-color",
-      outputKind: "scalar-colors",
+      outputKind: "surface-vertex-colors",
       status: "ready",
       targetId: "part-a",
     });
@@ -2344,7 +2505,7 @@ describe("viewport3dRenderModel", () => {
       degradation: [],
       demand: "surface:x vector-glyph",
       derivedWork: [
-        "field-color:scalar-colors:ready:render-model-sync:part-a:surface items=4 input=16B output=48B",
+        "field-color:surface-vertex-colors:ready:render-model-sync:part-a:surface items=4 input=16B output=48B",
         "vector-glyph:vector-glyphs:ready:runtime-worker:part-a:vector-glyph items=2 input=56B output=56B",
         "vector-glyph:vector-segments:ready:runtime-worker:part-a:vector-glyph items=2 input=0B output=56B",
       ],

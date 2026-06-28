@@ -55,6 +55,7 @@ from ._gmsh_selectors import collect_orphan_entity_diagnostics
 from ._gmsh_airbox import _add_airbox_and_fragment, _add_airbox_geo
 from ._gmsh_swept import should_use_swept, generate_swept_mesh, classify_sweepability
 from ._gmsh_waveguides import add_arch_waveguide_to_occ
+from ._gmsh_occ import _configure_axis_periodic_surfaces, _scale_periodic_boundary_pairs
 
 _NO_OP_FIELD_SIZE = 1.0e22
 
@@ -478,13 +479,27 @@ def generate_difference_mesh(
         tool_tags = _add_geometry_to_occ(gmsh, geometry.tool, scale=SCALE)
         gmsh.model.occ.cut(base_tags, tool_tags)
         gmsh.model.occ.synchronize()
+        periodic_pair_specs = _configure_axis_periodic_surfaces(
+            gmsh,
+            surface_tags=[
+                int(tag)
+                for dim, tag in gmsh.model.getEntities(2)
+                if int(dim) == 2
+            ],
+            pair_ids=list(opts.periodic_pair_ids),
+        )
         emit_progress("Gmsh: generating 3D tetrahedral mesh")
         _apply_mesh_options(gmsh, hmax * SCALE, order, opts, hscale=SCALE)
         with _GmshProgressLogger(gmsh):
             gmsh.model.mesh.generate(3)
         _apply_post_mesh_options(gmsh, opts)
         quality, _pdq = _extract_quality_metrics(gmsh, opts) if opts.compute_quality else (None, None)
-        mesh = _extract_mesh_data(gmsh, quality=quality, per_domain_quality=_pdq)
+        mesh = _extract_mesh_data(
+            gmsh,
+            quality=quality,
+            per_domain_quality=_pdq,
+            periodic_pair_specs=periodic_pair_specs,
+        )
         emit_progress(
             f"Gmsh: mesh ready — {mesh.n_nodes} nodes, {mesh.n_elements} elements, {mesh.n_boundary_faces} boundary faces"
         )
@@ -495,6 +510,11 @@ def generate_difference_mesh(
             element_markers=mesh.element_markers,
             boundary_faces=mesh.boundary_faces,
             boundary_markers=mesh.boundary_markers,
+            periodic_boundary_pairs=_scale_periodic_boundary_pairs(
+                mesh.periodic_boundary_pairs,
+                scale=SCALE,
+            ),
+            periodic_node_pairs=mesh.periodic_node_pairs,
             quality=quality,
             per_domain_quality=_pdq,
         )
@@ -552,6 +572,15 @@ def _generate_csg_mesh(
                 component_volume_tags = {geometry.geometry_name: [int(tag) for tag in magnetic_volumes]}
             if interface_surfaces:
                 component_surface_tags = {geometry.geometry_name: [int(tag) for tag in interface_surfaces]}
+        periodic_pair_specs = _configure_axis_periodic_surfaces(
+            gmsh,
+            surface_tags=[
+                int(tag)
+                for dim, tag in gmsh.model.getEntities(2)
+                if int(dim) == 2
+            ],
+            pair_ids=list(opts.periodic_pair_ids),
+        )
         emit_progress("Gmsh: generating 3D tetrahedral mesh")
         _apply_mesh_options(
             gmsh,
@@ -568,7 +597,13 @@ def _generate_csg_mesh(
             gmsh.model.mesh.generate(3)
         _apply_post_mesh_options(gmsh, opts)
         quality, _pdq = _extract_quality_metrics(gmsh, opts) if opts.compute_quality else (None, None)
-        mesh = _extract_mesh_data(gmsh, quality=quality, has_physical_groups=has_airbox, per_domain_quality=_pdq)
+        mesh = _extract_mesh_data(
+            gmsh,
+            quality=quality,
+            has_physical_groups=has_airbox,
+            per_domain_quality=_pdq,
+            periodic_pair_specs=periodic_pair_specs,
+        )
         emit_progress(
             f"Gmsh: mesh ready — {mesh.n_nodes} nodes, {mesh.n_elements} elements, {mesh.n_boundary_faces} boundary faces"
         )
@@ -578,6 +613,11 @@ def _generate_csg_mesh(
             element_markers=mesh.element_markers,
             boundary_faces=mesh.boundary_faces,
             boundary_markers=mesh.boundary_markers,
+            periodic_boundary_pairs=_scale_periodic_boundary_pairs(
+                mesh.periodic_boundary_pairs,
+                scale=SCALE,
+            ),
+            periodic_node_pairs=mesh.periodic_node_pairs,
             quality=quality,
             per_domain_quality=_pdq,
         )

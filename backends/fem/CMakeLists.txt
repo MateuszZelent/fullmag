@@ -188,6 +188,7 @@ if(FULLMAG_USE_MFEM_STACK)
         list(APPEND FEM_SOURCES
             gpu/cuda/exchange/exchange_kernels.cu
             gpu/cuda/fields/vector_field_kernels.cu
+            gpu/cuda/frequency_domain/driven_response_gpu.cu
             gpu/cuda/integrators/llg/llg_rhs_kernels.cu
             gpu/cuda/integrators/rk/adaptive_error_kernels.cu
             gpu/cuda/integrators/rk/heun_stage_sequence.cu

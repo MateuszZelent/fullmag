@@ -2,9 +2,10 @@
 #[allow(unused_imports)]
 use crate::{
     BackendTarget, DiscretizationHintsIR, ExecutionPrecision, FrequencyExcitationIR,
-    FrequencyResponseOutputIR, FrequencySweepIR, IntegratorChoice, KPointIR, MechanicsIR,
-    ModeTrackingIR, RelaxationAlgorithmIR, RelaxationControlIR, RequestedFemDemagIR,
-    ResolvedFemDemagIR, SpinWaveBoundaryConditionIR, TimeDependenceIR,
+    FrequencyResponseOutputIR, FrequencySweepIR, IntegratorChoice, KPointIR,
+    MagnetostaticBoundaryConditionIR, MechanicsIR, ModeTrackingIR, RelaxationAlgorithmIR,
+    RelaxationControlIR, RequestedFemDemagIR, ResolvedFemDemagIR, SpinWaveBoundaryConditionIR,
+    TimeDependenceIR,
 };
 use serde::{Deserialize, Serialize};
 
@@ -764,6 +765,8 @@ pub enum StudyIR {
         damping_policy: EigenDampingPolicyIR,
         #[serde(default)]
         spin_wave_bc: SpinWaveBoundaryConditionIR,
+        #[serde(default)]
+        magnetostatic_bc: MagnetostaticBoundaryConditionIR,
         excitation: FrequencyExcitationIR,
         frequencies_hz: FrequencySweepIR,
         sampling: SamplingIR,

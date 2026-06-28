@@ -13,6 +13,7 @@ import {
 import {
   renderModePatch,
   surfaceColorSourceToColorMode,
+  type SurfaceFieldProjectionMode,
   type SurfaceColorSource,
   type VisualizationGeometryScope,
   type VisualizationColorMode,
@@ -53,6 +54,15 @@ export const SCALAR_COLOR_PALETTE_ITEMS: Array<{
   { value: "jet", label: "Jet" },
 ];
 
+export const SURFACE_FIELD_PROJECTION_ITEMS: Array<{
+  label: string;
+  value: SurfaceFieldProjectionMode;
+}> = [
+  { value: "raw_nodal", label: "Raw nodal" },
+  { value: "surface_faces", label: "Surface faces" },
+  { value: "thickness_average_z", label: "Thickness average Z" },
+];
+
 export function resolveSurfaceColorSourceItems(
   activeQuantityId: string,
 ): Array<{ label: string; value: SurfaceColorSource }> {
@@ -75,6 +85,17 @@ export function scalarColorPalettePatch(
 ): VisualizationTargetPatch {
   return {
     scalarColorPalette: normalizeScalarColorPalette(value),
+  };
+}
+
+export function surfaceFieldProjectionModePatch(
+  value: string,
+): VisualizationTargetPatch {
+  const mode = SURFACE_FIELD_PROJECTION_ITEMS.some((item) => item.value === value)
+    ? (value as SurfaceFieldProjectionMode)
+    : "raw_nodal";
+  return {
+    surfaceProjectionMode: mode,
   };
 }
 

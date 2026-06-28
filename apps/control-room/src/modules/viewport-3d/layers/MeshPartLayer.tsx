@@ -92,7 +92,8 @@ export function resolveMeshPartScalarColors({
   settings: Pick<
     VisualizationTargetSettings,
     "activeQuantityId" | "scalarColorPalette"
-  >;
+  > &
+    Partial<Pick<VisualizationTargetSettings, "surfaceProjectionMode">>;
 }): ScalarColorBuffer | null {
   if (!fieldModel || !scalarColorMode) return null;
   const { scalarColors } = resolveViewport3DTargetSurfaceLayerInput({
@@ -116,6 +117,68 @@ export function resolveMeshPartVectorLayerInput({
   return resolveViewport3DTargetVectorLayerInput({ fieldModel, partId });
 }
 
+export function createMeshPartSurfaceGeometry({
+  expandSurfaceFaces,
+  positions,
+  surfaceIndices,
+}: {
+  expandSurfaceFaces: boolean;
+  positions: Float32Array;
+  surfaceIndices: Uint32Array | null;
+}): BufferGeometry | null {
+  if (!surfaceIndices?.length) return null;
+  const next = new BufferGeometry();
+  if (!expandSurfaceFaces) {
+    next.setAttribute("position", new BufferAttribute(positions, 3));
+    next.setIndex(new BufferAttribute(surfaceIndices, 1));
+    return next;
+  }
+
+  const expandedPositions = new Float32Array(surfaceIndices.length * 3);
+  for (let index = 0; index < surfaceIndices.length; index += 1) {
+    const sourceNode = surfaceIndices[index] ?? -1;
+    const sourceOffset = sourceNode * 3;
+    const targetOffset = index * 3;
+    if (sourceNode < 0 || sourceOffset + 2 >= positions.length) {
+      return null;
+    }
+    expandedPositions[targetOffset] = positions[sourceOffset] ?? 0;
+    expandedPositions[targetOffset + 1] = positions[sourceOffset + 1] ?? 0;
+    expandedPositions[targetOffset + 2] = positions[sourceOffset + 2] ?? 0;
+  }
+  next.setAttribute("position", new BufferAttribute(expandedPositions, 3));
+  return next;
+}
+
+export function resolveMeshPartBoundaryFaceIndexForPick({
+  expandedSurfaceFaces,
+  faceIndex,
+  part,
+}: {
+  expandedSurfaceFaces: boolean;
+  faceIndex: number | null | undefined;
+  part: Pick<
+    Viewport3DMeshPart,
+    "boundary_face_count" | "boundary_face_indices" | "boundary_face_start"
+  >;
+}): number | null {
+  if (faceIndex === null || faceIndex === undefined || faceIndex < 0) {
+    return null;
+  }
+  if (
+    !expandedSurfaceFaces &&
+    part.boundary_face_count <= 0 &&
+    !part.boundary_face_indices?.length
+  ) {
+    return null;
+  }
+  const localFaceIndex = Math.floor(faceIndex);
+  const explicitFaceIndex = part.boundary_face_indices?.[localFaceIndex];
+  if (explicitFaceIndex !== undefined) return explicitFaceIndex;
+  if (localFaceIndex >= part.boundary_face_count) return null;
+  return part.boundary_face_start + localFaceIndex;
+}
+
 export function resolveRetainedMeshPartScalarColors({
   current,
   previous,
@@ -130,7 +193,8 @@ export function resolveRetainedMeshPartScalarColors({
   settings: Pick<
     VisualizationTargetSettings,
     "activeQuantityId" | "scalarColorPalette"
-  >;
+  > &
+    Partial<Pick<VisualizationTargetSettings, "surfaceProjectionMode">>;
   topologyRevision?: number | string | null;
   vertexCount: number;
 }): ScalarColorBuffer | null {
@@ -153,7 +217,8 @@ function scalarColorBufferMatchesSettings(
   settings: Pick<
     VisualizationTargetSettings,
     "activeQuantityId" | "scalarColorPalette"
-  >,
+  > &
+    Partial<Pick<VisualizationTargetSettings, "surfaceProjectionMode">>,
 ): buffer is ScalarColorBuffer {
   if (!buffer) return false;
   if (buffer.colorMode && buffer.colorMode !== scalarColorMode) return false;
@@ -171,6 +236,13 @@ function scalarColorBufferMatchesSettings(
   ) {
     return false;
   }
+  if (
+    buffer.projectionMode &&
+    settings.surfaceProjectionMode &&
+    buffer.projectionMode !== settings.surfaceProjectionMode
+  ) {
+    return false;
+  }
   return true;
 }
 
@@ -180,7 +252,8 @@ function scalarColorBufferMatchesRetainedSettings(
   settings: Pick<
     VisualizationTargetSettings,
     "activeQuantityId" | "scalarColorPalette"
-  >,
+  > &
+    Partial<Pick<VisualizationTargetSettings, "surfaceProjectionMode">>,
   topologyRevision: number | string | null | undefined,
   vertexCount: number,
 ): buffer is ScalarColorBuffer {
@@ -204,6 +277,13 @@ function scalarColorBufferMatchesRetainedSettings(
     buffer.quantityId &&
     resolveCanonicalQuantityId(buffer.quantityId) !==
       resolveCanonicalQuantityId(settings.activeQuantityId)
+  ) {
+    return false;
+  }
+  if (
+    buffer.projectionMode &&
+    settings.surfaceProjectionMode &&
+    buffer.projectionMode !== settings.surfaceProjectionMode
   ) {
     return false;
   }
@@ -256,18 +336,24 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   const part = partModel.part;
   const topologyRevision = topologyModel?.meshRevision ?? null;
   const surfaceIndices = partModel.surfaceIndices;
+  const expandSurfaceFaces =
+    renderSettings.surfaceProjectionMode !== "raw_nodal" &&
+    renderSettings.surfaceColorSource !== "solid";
+  const surfaceGeometryProjection = expandSurfaceFaces
+    ? renderSettings.surfaceProjectionMode
+    : "indexed";
+  const surfaceVertexCount = expandSurfaceFaces
+    ? surfaceIndices?.length ?? 0
+    : topologyModel?.nodeCount ?? 0;
+  const topologyNodeCount = topologyModel?.nodeCount ?? 0;
   const createSurfaceGeometry = useCallback(() => {
     if (!topologyModel) return null;
-    if (!surfaceIndices?.length) return null;
-
-    const next = new BufferGeometry();
-    next.setAttribute(
-      "position",
-      new BufferAttribute(topologyModel.positions, 3),
-    );
-    next.setIndex(new BufferAttribute(surfaceIndices, 1));
-    return next;
-  }, [surfaceIndices, topologyModel]);
+    return createMeshPartSurfaceGeometry({
+      expandSurfaceFaces,
+      positions: topologyModel.positions,
+      surfaceIndices,
+    });
+  }, [expandSurfaceFaces, surfaceIndices, topologyModel]);
   const geometry = useViewport3DGeometryUpload({
     createGeometry: createSurfaceGeometry,
     dirtyReason: "mesh-part-surface",
@@ -277,7 +363,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       (surfaceIndices?.byteLength ?? 0),
     invalidate,
     itemCount: surfaceIndices?.length ?? 0,
-    key: `mesh-part-surface:${part.id}:topology=${topologyRevision ?? "none"}:positions=${topologyModel?.positions.byteLength ?? 0}:indices=${surfaceIndices?.byteLength ?? 0}`,
+    key: `mesh-part-surface:${part.id}:projection=${surfaceGeometryProjection}:topology=${topologyRevision ?? "none"}:positions=${topologyModel?.positions.byteLength ?? 0}:indices=${surfaceIndices?.byteLength ?? 0}`,
     lane: "topology-index",
     targetRevision: topologyRevision === null ? null : String(topologyRevision),
     tracker,
@@ -356,7 +442,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
         "mesh-quality",
         `part=${part.id}`,
         `topology=${topologyRevision ?? "none"}`,
-        `vertices=${topologyModel?.nodeCount ?? 0}`,
+        `vertices=${topologyNodeCount}`,
       ].join("|");
     }
     if (!fieldColorLayersEnabled || !scalarColorMode) return null;
@@ -366,8 +452,9 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       `mode=${scalarColorMode}`,
       `quantity=${resolveCanonicalQuantityId(renderSettings.activeQuantityId)}`,
       `palette=${renderSettings.scalarColorPalette ?? "default"}`,
+      `projection=${surfaceGeometryProjection}`,
       `topology=${topologyRevision ?? "none"}`,
-      `vertices=${topologyModel?.nodeCount ?? 0}`,
+      `vertices=${surfaceVertexCount}`,
     ].join("|");
   }, [
     fieldColorLayersEnabled,
@@ -377,7 +464,9 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     renderSettings.scalarColorPalette,
     renderSettings.shaderVisible,
     scalarColorMode,
-    topologyModel?.nodeCount,
+    surfaceGeometryProjection,
+    surfaceVertexCount,
+    topologyNodeCount,
     topologyRevision,
   ]);
   const scalarColorsCandidate = resolveMeshPartScalarColors({
@@ -393,10 +482,9 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     scalarColorMode,
     settings: renderSettings,
     topologyRevision,
-    vertexCount: topologyModel?.nodeCount ?? 0,
+    vertexCount: surfaceVertexCount,
   });
   useEffect(() => {
-    const vertexCount = topologyModel?.nodeCount ?? 0;
     if (
       scalarColorMode &&
       scalarColorBufferMatchesRetainedSettings(
@@ -404,7 +492,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
         scalarColorMode,
         renderSettings,
         topologyRevision,
-        vertexCount,
+        surfaceVertexCount,
       )
     ) {
       retainedScalarColorsRef.current = scalarColorsCandidate;
@@ -423,7 +511,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     renderSettings,
     scalarColorMode,
     scalarColorsCandidate,
-    topologyModel?.nodeCount,
+    surfaceVertexCount,
     topologyRevision,
   ]);
   const effectiveScalarColors = meshQualityColors ?? scalarColors;
@@ -432,14 +520,14 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     (fieldColorLayersEnabled && shaderUsesVertexColors(renderSettings));
   const canUseVertexScalarColors = canApplyVertexScalarColorBuffer(
     effectiveScalarColors,
-    topologyModel?.nodeCount ?? 0,
+    surfaceVertexCount,
   );
   const shaderScalarColorsEnabled =
     !meshQualityColors &&
     vertexColorsEnabled &&
     canApplyScalarShaderColorBuffer(
       effectiveScalarColors,
-      topologyModel?.nodeCount ?? 0,
+      surfaceVertexCount,
     ) &&
     !canUseVertexScalarColors;
   const visibleShaderScalarColors = useViewport3DScalarShaderColorUpload({
@@ -458,8 +546,8 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     tracker,
     uploadKey:
       effectiveScalarColors?.buildKey ??
-      `mesh-part-shader-values:${part.id}:${topologyModel?.nodeCount ?? 0}`,
-    vertexCount: topologyModel?.nodeCount ?? 0,
+      `mesh-part-shader-values:${part.id}:${surfaceVertexCount}`,
+    vertexCount: surfaceVertexCount,
   });
   const visibleScalarColors = useViewport3DScalarColorUpload({
     colorBuffer: effectiveScalarColors,
@@ -478,9 +566,9 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     tracker,
     uploadKey:
       effectiveScalarColors?.buildKey ??
-      `mesh-part-colors:${part.id}:${topologyModel?.nodeCount ?? 0}`,
+      `mesh-part-colors:${part.id}:${surfaceVertexCount}`,
     vertexColorsEnabled,
-    vertexCount: topologyModel?.nodeCount ?? 0,
+    vertexCount: surfaceVertexCount,
   });
 
   const materialRef = useRef<MeshBasicMaterial>(null);
@@ -555,7 +643,16 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
     if (eventIntersectsRegionOverlay(event)) return;
     event.stopPropagation();
-    onSelectPart(selectionForMeshPart(part));
+    onSelectPart(
+      selectionForMeshPart(
+        part,
+        resolveMeshPartBoundaryFaceIndexForPick({
+          expandedSurfaceFaces: expandSurfaceFaces,
+          faceIndex: event.faceIndex,
+          part,
+        }),
+      ),
+    );
   };
 
   return (

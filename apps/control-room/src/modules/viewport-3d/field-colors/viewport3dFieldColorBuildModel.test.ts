@@ -5,6 +5,8 @@ import type { DecodedFieldVector } from "@/kernel/api/codecs";
 import {
   buildMappedVertexScalarColors,
   buildSampledScalarColors,
+  buildSurfaceFaceScalarColors,
+  buildThicknessAverageZScalarColors,
   buildVertexScalarColorsChunked,
   type ScalarColorBuffer,
 } from "../viewport3dFieldMapping";
@@ -193,6 +195,96 @@ describe("viewport3dFieldColorBuildModel", () => {
     expectColorBufferToMatch(result!, expected!);
   });
 
+  it("builds surface-face projection buffers for worker targets", async () => {
+    const fieldVector = fieldVectorFixture();
+    const surfaceIndices = Uint32Array.from([0, 1, 2]);
+    const expected = buildSurfaceFaceScalarColors(
+      fieldVector,
+      surfaceIndices,
+      4,
+      "x",
+      "viridis",
+    );
+
+    const result = await buildViewport3DFieldColorBuffer({
+      colorMode: "x",
+      colorPalette: "viridis",
+      fieldVector,
+      target: {
+        kind: "surface-faces",
+        surfaceIndices,
+        vertexCount: 4,
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(expected).not.toBeNull();
+    expect(result).toMatchObject({
+      geometryRole: "face_expanded_surface",
+      projectionMode: "surface_faces",
+      rangeSource: "face_values",
+    });
+    expectColorBufferToMatch(result!, expected!);
+  });
+
+  it("builds thickness-average-z projection buffers for worker targets", async () => {
+    const fieldVector: DecodedFieldVector = {
+      dtype: "float64",
+      grid: [6, 1, 1],
+      nComp: 3,
+      pointCount: 6,
+      quantityId: "m",
+      valueCount: 18,
+      values: new Float64Array([
+        0, 0, 1,
+        0, 0, 1,
+        0, 0, 1,
+        0, 0, -1,
+        0, 0, -1,
+        0, 0, -1,
+      ]),
+    };
+    const positions = Float32Array.from([
+      0, 0, 1,
+      1, 0, 1,
+      0, 1, 1,
+      0, 0, -1,
+      1, 0, -1,
+      0, 1, -1,
+    ]);
+    const surfaceIndices = Uint32Array.from([0, 1, 2]);
+    const expected = buildThicknessAverageZScalarColors(
+      fieldVector,
+      positions,
+      surfaceIndices,
+      6,
+      "orientation",
+      "viridis",
+    );
+
+    const result = await buildViewport3DFieldColorBuffer({
+      colorMode: "orientation",
+      colorPalette: "viridis",
+      fieldVector,
+      target: {
+        kind: "thickness-average-z",
+        positions,
+        surfaceIndices,
+        vertexCount: 6,
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(expected).not.toBeNull();
+    expect(result).toMatchObject({
+      geometryRole: "face_expanded_surface",
+      lowNormFaceCount: 1,
+      projectionMode: "thickness_average_z",
+      rangeSource: "projected_values",
+    });
+    expectColorBufferToMatch(result!, expected!);
+  });
+
   it("uses provided scalar ranges instead of scanning the field for stats", async () => {
     const fieldVector = fieldVectorFixture();
     let yieldCount = 0;
@@ -242,5 +334,20 @@ describe("viewport3dFieldColorBuildModel", () => {
         },
       }),
     ).toBe(fieldVector.pointCount * 3 * Float32Array.BYTES_PER_ELEMENT);
+    expect(
+      estimateViewport3DFieldColorBuildInputBytes({
+        fieldVector,
+        target: {
+          kind: "thickness-average-z",
+          positions: new Float32Array(12),
+          surfaceIndices: pointIndices,
+          vertexCount: 4,
+        },
+      }),
+    ).toBe(
+      fieldVector.values.byteLength +
+        12 * Float32Array.BYTES_PER_ELEMENT +
+        pointIndices.byteLength,
+    );
   });
 });

@@ -126,6 +126,31 @@ function summarizeTargetDegradation(
       );
     }
   }
+  if (
+    pass.surface.projectionMode &&
+    pass.surface.projectionMode !== "raw_nodal" &&
+    !surfaceProjectionSatisfied(pass)
+  ) {
+    degradation.add(
+      `surface:projection-fallback mode=${pass.surface.projectionMode} fallback=raw_nodal`,
+    );
+  }
+  const projectionSummary = summarizeSurfaceProjection(pass);
+  if (projectionSummary) {
+    degradation.add(projectionSummary);
+  }
+  const lowNormSummary = summarizeSurfaceLowNormOrientation(pass);
+  if (lowNormSummary) {
+    degradation.add(lowNormSummary);
+  }
+  const missingProjectionSummary = summarizeSurfaceMissingProjectedBins(pass);
+  if (missingProjectionSummary) {
+    degradation.add(missingProjectionSummary);
+  }
+  const projectionSuitabilitySummary = summarizeSurfaceProjectionSuitability(pass);
+  if (projectionSuitabilitySummary) {
+    degradation.add(projectionSuitabilitySummary);
+  }
   if (pass.surface.scalarColors?.rangeDiagnostics?.outlierDominated) {
     const diagnostics = pass.surface.scalarColors.rangeDiagnostics;
     degradation.add(
@@ -160,6 +185,90 @@ function summarizeTargetDegradation(
     }
   }
   return Array.from(degradation);
+}
+
+function summarizeSurfaceProjection(
+  pass: Viewport3DTargetRenderPassModel,
+): string | null {
+  const buffer = pass.surface.scalarColors;
+  if (!buffer?.projectionMode || buffer.projectionMode === "raw_nodal") {
+    return null;
+  }
+  return [
+    "surface:projection",
+    `mode=${buffer.projectionMode}`,
+    `geometry=${buffer.geometryRole ?? "unknown"}`,
+    `rangeSource=${buffer.rangeSource ?? "unknown"}`,
+    `faces=${buffer.faceCount ?? "unknown"}`,
+    `degraded=${buffer.degradedFaceCount ?? "unknown"}`,
+    `missingNodes=${buffer.missingNodeCount ?? "unknown"}`,
+    `lowNorm=${buffer.lowNormFaceCount ?? 0}`,
+    ...(buffer.projectionAxis ? [`axis=${buffer.projectionAxis}`] : []),
+    ...(buffer.projectionTolerance !== undefined
+      ? [`tolerance=${buffer.projectionTolerance}`]
+      : []),
+    ...(buffer.projectedBinCount !== undefined
+      ? [`bins=${buffer.projectedBinCount}`]
+      : []),
+    ...(buffer.projectedSamplesPerBinMin !== undefined &&
+    buffer.projectedSamplesPerBinMean !== undefined &&
+    buffer.projectedSamplesPerBinMax !== undefined
+      ? [
+          `samplesPerBin=${buffer.projectedSamplesPerBinMin}/${buffer.projectedSamplesPerBinMean}/${buffer.projectedSamplesPerBinMax}`,
+        ]
+      : []),
+  ].join(" ");
+}
+
+function summarizeSurfaceLowNormOrientation(
+  pass: Viewport3DTargetRenderPassModel,
+): string | null {
+  const buffer = pass.surface.scalarColors;
+  if (
+    !buffer ||
+    pass.surface.scalarColorMode !== "orientation" ||
+    (buffer.lowNormFaceCount ?? 0) <= 0
+  ) {
+    return null;
+  }
+  return `surface:low-norm-orientation faces=${buffer.lowNormFaceCount}/${buffer.faceCount ?? "unknown"}`;
+}
+
+function summarizeSurfaceMissingProjectedBins(
+  pass: Viewport3DTargetRenderPassModel,
+): string | null {
+  const buffer = pass.surface.scalarColors;
+  if (
+    !buffer ||
+    buffer.projectionMode !== "thickness_average_z" ||
+    (buffer.degradedFaceCount ?? 0) <= 0 ||
+    (buffer.missingNodeCount ?? 0) <= 0
+  ) {
+    return null;
+  }
+  return `surface:missing-projected-bins faces=${buffer.degradedFaceCount}/${buffer.faceCount ?? "unknown"} missingNodes=${buffer.missingNodeCount}`;
+}
+
+function summarizeSurfaceProjectionSuitability(
+  pass: Viewport3DTargetRenderPassModel,
+): string | null {
+  const suitability = pass.surface.scalarColors?.projectionSuitability;
+  if (!suitability || suitability === "world_z_thin_film") {
+    return null;
+  }
+  return `surface:projection-suitability state=${suitability}`;
+}
+
+function surfaceProjectionSatisfied(
+  pass: Viewport3DTargetRenderPassModel,
+): boolean {
+  const scalarColors = pass.surface.scalarColors;
+  if (!scalarColors) return false;
+  return (
+    pass.surface.projectionMode !== "raw_nodal" &&
+    scalarColors.projectionMode === pass.surface.projectionMode &&
+    scalarColors.geometryRole === "face_expanded_surface"
+  );
 }
 
 function summarizeTargetRetainedOutputs(

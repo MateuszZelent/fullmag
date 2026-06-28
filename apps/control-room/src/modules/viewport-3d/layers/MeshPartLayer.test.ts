@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import {
+  createMeshPartSurfaceGeometry,
+  resolveMeshPartBoundaryFaceIndexForPick,
   resolveRetainedMeshPartScalarColors,
   resolveMeshPartScalarColors,
   resolveMeshPartVectorLayerInput,
@@ -99,6 +101,59 @@ describe("MeshPartLayer", () => {
     expect(componentSource).not.toContain("const geometry = useMemo");
     expect(componentSource).not.toContain("const edgeGeometry = useMemo");
     expect(componentSource).not.toContain("const pointGeometry = useMemo");
+  });
+
+  it("builds unindexed face-expanded geometry for surface face projection", () => {
+    const geometry = createMeshPartSurfaceGeometry({
+      expandSurfaceFaces: true,
+      positions: new Float32Array([
+        0, 0, 0,
+        1, 0, 0,
+        0, 1, 0,
+      ]),
+      surfaceIndices: Uint32Array.from([0, 1, 2]),
+    });
+
+    expect(geometry?.index).toBeNull();
+    expect(geometry?.getAttribute("position").count).toBe(3);
+    expect(Array.from(geometry?.getAttribute("position").array ?? [])).toEqual([
+      0, 0, 0,
+      1, 0, 0,
+      0, 1, 0,
+    ]);
+  });
+
+  it("expands surface geometry for every projected surface mode", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("./MeshPartLayer.tsx", import.meta.url)),
+      "utf8",
+    );
+
+    expect(source).toContain('renderSettings.surfaceProjectionMode !== "raw_nodal"');
+  });
+
+  it("maps face-expanded picks back to canonical boundary face indices", () => {
+    expect(
+      resolveMeshPartBoundaryFaceIndexForPick({
+        expandedSurfaceFaces: true,
+        faceIndex: 1,
+        part: {
+          boundary_face_count: 2,
+          boundary_face_start: 7,
+        },
+      }),
+    ).toBe(8);
+    expect(
+      resolveMeshPartBoundaryFaceIndexForPick({
+        expandedSurfaceFaces: true,
+        faceIndex: 1,
+        part: {
+          boundary_face_count: 2,
+          boundary_face_indices: [11, 13],
+          boundary_face_start: 7,
+        },
+      }),
+    ).toBe(13);
   });
 
   it("keeps previous uploaded geometry visible while replacement topology uploads", () => {
@@ -614,6 +669,33 @@ buildReference: null,
         },
         topologyRevision: "mesh-b",
         vertexCount: 2,
+      }),
+    ).toBeNull();
+  });
+
+  it("does not retain face-expanded scalar textures after switching projection mode", () => {
+    const previousSurfaceFaces = {
+      colors: new Float32Array(9),
+      colorMode: "x",
+      colorPalette: "viridis",
+      geometryRole: "face_expanded_surface" as const,
+      projectionMode: "surface_faces" as const,
+      quantityId: "m",
+      range: { max: 1, min: -1 },
+      scalarValues: new Float32Array(3),
+    };
+
+    expect(
+      resolveRetainedMeshPartScalarColors({
+        current: null,
+        previous: previousSurfaceFaces,
+        scalarColorMode: "x",
+        settings: {
+          activeQuantityId: "m",
+          scalarColorPalette: "viridis",
+          surfaceProjectionMode: "raw_nodal",
+        },
+        vertexCount: 3,
       }),
     ).toBeNull();
   });

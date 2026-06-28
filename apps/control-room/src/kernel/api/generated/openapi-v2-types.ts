@@ -6829,6 +6829,8 @@ export interface components {
         };
         /** @enum {string} */
         SurfaceColorSource: "solid" | "orientation" | "component_x" | "component_y" | "component_z" | "magnitude" | "colormap";
+        /** @enum {string} */
+        SurfaceFieldProjectionMode: "raw_nodal" | "surface_faces" | "thickness_average_z";
         TableColumnMeta: {
             column_id: string;
             component?: string | null;
@@ -7150,6 +7152,7 @@ export interface components {
             scalar_color_palette: string;
             surface_color_source: components["schemas"]["SurfaceColorSource"];
             surface_mono_color: string;
+            surface_projection_mode: components["schemas"]["SurfaceFieldProjectionMode"];
             surface_visible: boolean;
             /** Format: double */
             vector_alpha: number;
@@ -7329,6 +7332,7 @@ export interface components {
             scalar_color_palette?: string | null;
             surface_color_source?: null | components["schemas"]["SurfaceColorSource"];
             surface_mono_color?: string | null;
+            surface_projection_mode?: null | components["schemas"]["SurfaceFieldProjectionMode"];
             /** Format: double */
             vector_alpha?: number | null;
             /** Format: int32 */

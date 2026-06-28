@@ -420,6 +420,7 @@ fn fem_preview_observable(quantity: &str) -> Result<ffi::fullmag_fem_observable,
     Ok(match normalize_quantity_id(quantity)? {
         QuantityId::HEx => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_EX,
         QuantityId::HDemag => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_DEMAG,
+        QuantityId::DemagPhi => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_DEMAG_PHI,
         QuantityId::HExt => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_EXT,
         QuantityId::HEff => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_EFF,
         QuantityId::Torque => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_TORQUE,
@@ -2488,7 +2489,9 @@ impl NativeFemFieldSnapshot {
                 ),
             });
         }
-        if desc.component_count != 3 || desc.scalar_bytes as usize != std::mem::size_of::<f64>() {
+        if !matches!(desc.component_count, 1 | 3)
+            || desc.scalar_bytes as usize != std::mem::size_of::<f64>()
+        {
             return Err(RunError {
                 message: format!(
                     "native FEM field snapshot '{}' returned unsupported layout",
@@ -2523,15 +2526,49 @@ impl NativeFemFieldSnapshot {
         writer: &mut impl Write,
     ) -> Result<NativeFemFieldSnapshotInfo, RunError> {
         let (data, len_bytes, info) = self.wait_payload()?;
-        // SAFETY: `data` is owned by the native snapshot handle and remains
-        // valid until this Rust snapshot is dropped after the write.
-        let payload = unsafe { std::slice::from_raw_parts(data.cast::<u8>(), len_bytes as usize) };
-        writer.write_all(payload).map_err(|error| RunError {
-            message: format!(
-                "failed to write native FEM field snapshot payload for '{}': {}",
-                self.name, error
-            ),
-        })?;
+        let scalar_count = info.node_count.saturating_mul(info.component_count);
+        if !matches!(info.component_count, 1 | 3) || info.scalar_bytes != std::mem::size_of::<f64>()
+        {
+            return Err(RunError {
+                message: format!(
+                    "native FEM field snapshot '{}' returned unsupported payload layout",
+                    self.name
+                ),
+            });
+        }
+        if len_bytes as usize != scalar_count.saturating_mul(std::mem::size_of::<f64>()) {
+            return Err(RunError {
+                message: format!(
+                    "native FEM field snapshot '{}' returned mismatched payload length",
+                    self.name
+                ),
+            });
+        }
+        let values = unsafe { std::slice::from_raw_parts(data.cast::<f64>(), scalar_count) };
+        if info.component_count == 3 {
+            // Native FEM vector snapshots are AoS triples, while the shared
+            // Zarr field series is declared as [sample, component, cell].
+            // Transpose at the writer boundary so the bytes match metadata.
+            write_fem_aos_f64_as_component_major(values, info.node_count, writer).map_err(
+                |error| RunError {
+                    message: format!(
+                        "failed to write native FEM field snapshot payload for '{}': {}",
+                        self.name, error
+                    ),
+                },
+            )?;
+        } else {
+            for value in values {
+                writer
+                    .write_all(&value.to_le_bytes())
+                    .map_err(|error| RunError {
+                        message: format!(
+                            "failed to write native FEM scalar snapshot payload for '{}': {}",
+                            self.name, error
+                        ),
+                    })?;
+            }
+        }
         Ok(info)
     }
 
@@ -2545,6 +2582,20 @@ impl NativeFemFieldSnapshot {
                 .collect(),
         )
     }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn write_fem_aos_f64_as_component_major(
+    values: &[f64],
+    node_count: usize,
+    writer: &mut impl Write,
+) -> std::io::Result<()> {
+    for component in 0..3usize {
+        for node in 0..node_count {
+            writer.write_all(&values[node * 3usize + component].to_le_bytes())?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -2613,6 +2664,20 @@ mod tests {
         MeshPeriodicBoundaryPairIR, MeshPeriodicNodePairIR, RelaxStopIR, RelaxationAlgorithmIR,
         RelaxationControlIR, ResolvedFemDemagIR,
     };
+
+    #[test]
+    fn fem_snapshot_writer_transposes_aos_payload_to_component_major() {
+        let values = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let mut bytes = Vec::new();
+
+        write_fem_aos_f64_as_component_major(&values, 2, &mut bytes).expect("transpose payload");
+
+        let decoded = bytes
+            .chunks_exact(std::mem::size_of::<f64>())
+            .map(|chunk| f64::from_le_bytes(chunk.try_into().expect("f64 chunk")))
+            .collect::<Vec<_>>();
+        assert_eq!(decoded, vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+    }
 
     struct EnvVarGuard {
         key: &'static str,

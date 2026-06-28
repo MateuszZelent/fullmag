@@ -41,6 +41,7 @@ SUPPORTED_EQUILIBRIUM_SOURCES = {"provided", "relax", "artifact"}
 SUPPORTED_EIGEN_NORMALIZATIONS = {"unit_l2", "unit_max_amplitude"}
 SUPPORTED_EIGEN_DAMPING_POLICIES = {"ignore", "include"}
 SUPPORTED_SPIN_WAVE_BCS = {"free", "pinned", "periodic", "floquet", "surface_anisotropy"}
+SUPPORTED_MAGNETOSTATIC_BCS = {"open", "periodic_airbox_k0"}
 SUPPORTED_FIELD_SEGMENT_ENDPOINT_POLICIES = {"include_stop", "skip_start", "include_both"}
 SUPPORTED_SETTLE_NON_CONVERGENCE_POLICIES = {
     "continue_with_warning",
@@ -735,6 +736,7 @@ class FrequencyResponse:
     normalization: str = "unit_l2"
     damping_policy: str = "ignore"
     spin_wave_bc: SpinWaveBoundarySpec = "free"
+    magnetostatic_bc: str = "open"
     dynamics: LLG = field(default_factory=LLG)
 
     def __post_init__(self) -> None:
@@ -771,6 +773,11 @@ class FrequencyResponse:
         )
         coerce_k_sampling(k_sampling=self.k_sampling, legacy_k_vector=self.k_vector)
         _serialize_spin_wave_bc(self.spin_wave_bc)
+        magnetostatic_bc = require_non_empty(self.magnetostatic_bc, "magnetostatic_bc")
+        if magnetostatic_bc not in SUPPORTED_MAGNETOSTATIC_BCS:
+            supported = ", ".join(sorted(SUPPORTED_MAGNETOSTATIC_BCS))
+            raise ValueError(f"magnetostatic_bc must be one of: {supported}")
+        object.__setattr__(self, "magnetostatic_bc", magnetostatic_bc)
 
     def to_ir(self) -> dict[str, object]:
         equilibrium: dict[str, object]
@@ -795,6 +802,7 @@ class FrequencyResponse:
             "normalization": self.normalization,
             "damping_policy": self.damping_policy,
             "spin_wave_bc": _serialize_spin_wave_bc(self.spin_wave_bc),
+            "magnetostatic_bc": self.magnetostatic_bc,
             "excitation": {
                 "field_au_per_m": list(self.excitation_field_au_per_m),
                 "phase_rad": self.excitation_phase_rad,

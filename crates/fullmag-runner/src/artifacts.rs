@@ -728,10 +728,7 @@ pub(crate) fn write_artifacts(
         fs::write(artifact_path, &artifact.bytes)?;
     }
 
-    if !matches!(
-        plan.backend_plan,
-        BackendPlanIR::FemFrequencyResponse(_) | BackendPlanIR::FemEigen(_)
-    ) {
+    if !matches!(plan.backend_plan, BackendPlanIR::FemEigen(_)) {
         write_periodic_pairs_artifact(output_dir, plan)?;
     }
 
@@ -990,9 +987,39 @@ fn write_periodic_pairs_artifact(
             })
         })
         .collect::<Vec<_>>();
+    let pair_count = pairs.len();
+    let paired_node_count = pairs
+        .iter()
+        .filter_map(|pair| {
+            pair.get("paired_node_count")
+                .and_then(serde_json::Value::as_u64)
+        })
+        .sum::<u64>();
+    let max_translation_residual_m = pairs
+        .iter()
+        .filter_map(|pair| {
+            pair.get("max_residual_m")
+                .and_then(serde_json::Value::as_f64)
+        })
+        .fold(None, |acc: Option<f64>, value| {
+            Some(acc.map_or(value, |current| current.max(value)))
+        });
+    let validation_status = if pairs
+        .iter()
+        .all(|pair| pair.get("status").and_then(serde_json::Value::as_str) == Some("valid"))
+    {
+        "ok"
+    } else {
+        "failed"
+    };
 
     let payload = serde_json::json!({
         "schema_version": "periodic_pairs.v1",
+        "artifact_path": "mesh/periodic_pairs.v1.json",
+        "validation_status": validation_status,
+        "pair_count": pair_count,
+        "paired_node_count": paired_node_count,
+        "max_translation_residual_m": max_translation_residual_m,
         "pairs": pairs,
     });
     let artifact_path = output_dir.join("mesh").join("periodic_pairs.v1.json");
@@ -1772,6 +1799,7 @@ pub(crate) fn field_unit(observable: &str) -> &'static str {
     match base_observable {
         "m" => "dimensionless",
         "H_ex" | "H_demag" | "H_ext" | "H_OE" | "H_eff" | "H_ani" | "H_dmi" | "H_dmi_bulk" => "A/m",
+        "demag_phi" => "A",
         "torque" => "T",
         other => panic!("unsupported observable '{}'", other),
     }
@@ -3351,6 +3379,10 @@ mod tests {
         )
         .expect("periodic pairs artifact should parse");
         assert_eq!(artifact["schema_version"], "periodic_pairs.v1");
+        assert_eq!(artifact["artifact_path"], "mesh/periodic_pairs.v1.json");
+        assert_eq!(artifact["validation_status"], "ok");
+        assert_eq!(artifact["pair_count"], 1);
+        assert_eq!(artifact["paired_node_count"], 3);
         assert_eq!(artifact["pairs"][0]["pair_id"], "x_periodic");
         assert_eq!(artifact["pairs"][0]["paired_node_count"], 3);
         assert_eq!(artifact["pairs"][0]["unpaired_source_node_count"], 0);
@@ -3453,6 +3485,7 @@ mod tests {
                             surface_anisotropy_axis: None,
                         },
                     ),
+                    magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
                     excitation: fullmag_ir::FrequencyExcitationIR {
                         field_au_per_m: [0.0, 0.0, 1.0],
                         phase_rad: 0.0,
@@ -3468,8 +3501,10 @@ mod tests {
                     external_field: fem.external_field,
                     gyromagnetic_ratio: fem.gyromagnetic_ratio,
                     precision: fem.precision,
+                    requested_device: fullmag_ir::ExecutionDevice::Cpu,
                     exchange_bc: fem.exchange_bc,
                     demag_realization: fem.demag_realization,
+                    periodic_constraint_sets: Vec::new(),
                 },
             ),
             output_plan,
@@ -3488,6 +3523,171 @@ mod tests {
 
         write_periodic_pairs_artifact(&output_dir, &plan)
             .expect("frequency-response periodic pairs artifact should be written");
+
+        let artifact: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("mesh/periodic_pairs.v1.json"))
+                .expect("periodic pairs artifact should exist"),
+        )
+        .expect("periodic pairs artifact should parse");
+        assert_eq!(artifact["schema_version"], "periodic_pairs.v1");
+        assert_eq!(artifact["artifact_path"], "mesh/periodic_pairs.v1.json");
+        assert_eq!(artifact["validation_status"], "ok");
+        assert_eq!(artifact["pair_count"], 1);
+        assert_eq!(artifact["paired_node_count"], 4);
+        assert_eq!(artifact["pairs"][0]["pair_id"], "x_faces");
+        assert_eq!(artifact["pairs"][0]["paired_node_count"], 4);
+        assert_eq!(artifact["pairs"][0]["status"], "valid");
+
+        fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[test]
+    fn write_artifacts_persists_frequency_response_periodic_pairs() {
+        let mut base_plan = test_fem_execution_plan();
+        let BackendPlanIR::Fem(fem) = &mut base_plan.backend_plan else {
+            panic!("test plan must be FEM");
+        };
+        fem.mesh.nodes = vec![
+            [0.0, 0.0, 0.0],
+            [40.0e-9, 0.0, 0.0],
+            [40.0e-9, 20.0e-9, 0.0],
+            [0.0, 20.0e-9, 0.0],
+            [0.0, 0.0, 10.0e-9],
+            [40.0e-9, 0.0, 10.0e-9],
+            [40.0e-9, 20.0e-9, 10.0e-9],
+            [0.0, 20.0e-9, 10.0e-9],
+        ];
+        fem.mesh.boundary_faces = vec![[0, 3, 7], [1, 5, 6]];
+        fem.mesh.boundary_markers = vec![10, 11];
+        fem.mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
+            pair_id: "x_faces".to_string(),
+            source_marker: Some("x_min".to_string()),
+            destination_marker: Some("x_max".to_string()),
+            marker_a: 10,
+            marker_b: 11,
+            translation: Some([40.0e-9, 0.0, 0.0]),
+            tolerance: Some(1.0e-12),
+            axis_hint: Some("x".to_string()),
+            orientation: Some("same".to_string()),
+            pairing_policy: Some("explicit_node_pairs".to_string()),
+        }];
+        fem.mesh.periodic_node_pairs = vec![
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "x_faces".to_string(),
+                node_a: 0,
+                node_b: 1,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "x_faces".to_string(),
+                node_a: 3,
+                node_b: 2,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "x_faces".to_string(),
+                node_a: 4,
+                node_b: 5,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "x_faces".to_string(),
+                node_a: 7,
+                node_b: 6,
+            },
+        ];
+
+        let common = base_plan.common;
+        let output_plan = base_plan.output_plan;
+        let provenance = base_plan.provenance;
+        let BackendPlanIR::Fem(fem) = base_plan.backend_plan else {
+            panic!("test plan must be FEM");
+        };
+        let plan = ExecutionPlanIR {
+            common,
+            backend_plan: BackendPlanIR::FemFrequencyResponse(
+                fullmag_ir::FemFrequencyResponsePlanIR {
+                    mesh_name: fem.mesh_name,
+                    mesh_source: fem.mesh_source,
+                    mesh: fem.mesh,
+                    object_segments: fem.object_segments,
+                    mesh_parts: fem.mesh_parts,
+                    domain_mesh_mode: fem.domain_mesh_mode,
+                    domain_frame: fem.domain_frame,
+                    fe_order: fem.fe_order,
+                    hmax: fem.hmax,
+                    equilibrium_magnetization: fem.initial_magnetization,
+                    material: fem.material,
+                    operator: fullmag_ir::EigenOperatorConfigIR {
+                        kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+                        include_demag: false,
+                    },
+                    equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+                    k_sampling: None,
+                    normalization: fullmag_ir::FrequencyResponseNormalizationIR::UnitMaxAmplitude,
+                    damping_policy: fullmag_ir::EigenDampingPolicyIR::Include,
+                    spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::Config(
+                        fullmag_ir::SpinWaveBoundaryConfigIR {
+                            kind: fullmag_ir::SpinWaveBoundaryKindIR::Periodic,
+                            boundary_pair_id: Some("x_faces".to_string()),
+                            pair_ids: Vec::new(),
+                            phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                            surface_anisotropy_ks: None,
+                            surface_anisotropy_axis: None,
+                        },
+                    ),
+                    magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
+                    excitation: fullmag_ir::FrequencyExcitationIR {
+                        field_au_per_m: [0.0, 0.0, 1.0],
+                        phase_rad: 0.0,
+                    },
+                    frequencies_hz: fullmag_ir::FrequencySweepIR {
+                        values_hz: vec![1.0e9],
+                    },
+                    enable_exchange: fem.enable_exchange,
+                    enable_demag: false,
+                    interfacial_dmi: fem.interfacial_dmi,
+                    dmi_interface_normal: fem.dmi_interface_normal,
+                    bulk_dmi: fem.bulk_dmi,
+                    external_field: fem.external_field,
+                    gyromagnetic_ratio: fem.gyromagnetic_ratio,
+                    precision: fem.precision,
+                    requested_device: fullmag_ir::ExecutionDevice::Cpu,
+                    exchange_bc: fem.exchange_bc,
+                    demag_realization: None,
+                    periodic_constraint_sets: Vec::new(),
+                },
+            ),
+            output_plan,
+            provenance,
+        };
+        let problem = fullmag_ir::ProblemIR::bootstrap_example();
+        let executed = ExecutedRun {
+            result: RunResult {
+                status: RunStatus::Completed,
+                steps: Vec::new(),
+                final_magnetization: vec![[1.0, 0.0, 0.0]; 8],
+                completion: None,
+            },
+            initial_magnetization: vec![[1.0, 0.0, 0.0]; 8],
+            field_snapshots: Vec::new(),
+            field_snapshot_count: 0,
+            auxiliary_artifacts: Vec::new(),
+            provenance: ExecutionProvenance {
+                execution_engine: "runner.frequency_response_test".to_string(),
+                precision: "double".to_string(),
+                ..ExecutionProvenance::default()
+            },
+        };
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-artifacts-frequency-response-write-periodic-pairs-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+
+        write_artifacts(&output_dir, &problem, &plan, &executed, None)
+            .expect("frequency-response artifact write should succeed");
 
         let artifact: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(output_dir.join("mesh/periodic_pairs.v1.json"))

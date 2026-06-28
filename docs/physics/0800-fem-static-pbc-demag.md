@@ -1,7 +1,10 @@
 # FEM static/time-domain demag PBC
 
-**Status**: PR-3 implementation (Rust reference path); CPU reduced-CG
-warm-start added for time-domain reuse; PR-4 native MFEM/hypre path planned.
+**Status**: k=0 static/time-domain PBC demag is partial production executable
+for the qualified CPU/MFEM shared-domain-airbox slice. The Rust reference path
+and native MFEM reduced solve both have reduced-potential warm-start support;
+GPU support, fully periodic 3D demag, and frequency-domain dynamic demag remain
+unqualified.
 
 ---
 
@@ -203,19 +206,23 @@ The planner validates that both are present when `enable_demag && !periodic_node
 
 ## 11. Planner/capability impact
 
-PR-3 unlocks demag PBC via the Rust reference solver for:
+The current qualified scope unlocks demag PBC via the Rust reference and native
+MFEM CPU serial reduced-solve paths for:
 - up to two periodic axes
 - `periodic_boundary_pairs.len() > 0`
 
-PR-4 will unlock native MFEM/hypre CPU/GPU path.
+Native hypre/AMG promotion and all GPU periodic-demag paths remain separate
+qualification work.
 
 ---
 
 ## 12. Runtime/session impact
 
-The dispatcher returns `FemStaticPbcLane::ReferenceReduction` for demag PBC,
-which routes to `fem_baseline::execute_reference_fem`.  The provenance record
-carries `effective_lane = "rust_reference"` and `unsupported_interactions = []`.
+The dispatcher must route demag PBC only to lanes that actually enforce the
+static periodic reduction.  Current evidence covers the Rust reference
+reduction and the native MFEM CPU serial reduced-solve path.  Provenance must
+record the effective lane and must not silently downgrade requested periodic
+demag to a finite isolated airbox.
 
 ---
 
@@ -239,23 +246,26 @@ Every run with demag PBC records:
 
 ## 14. Validation plan
 
-### Golden test: repeated supercell
+### Golden test: periodic repeated supercell
 
-1. Build a structured box mesh with periodic pairs in x.
+1. Build a periodic primitive-cell mesh with periodic pairs in the lateral axes
+   and open/Robin boundary only in the non-periodic axis.
 2. Run once with PBC demag.
-3. Build a 15x repeated supercell (no PBC) with the same local
-   discretization.
-4. Extract the central unit-cell demag field.
-5. Assert relative L2 error `≤ 5e-3`.
+3. Build an explicitly repeated supercell with the same local discretization
+   and lateral PBC on the outer supercell faces.
+4. Extract the central unit-cell demag field/energy.
+5. Assert relative central-cell energy error `<= 2e-2` and zero primitive-cell
+   `H_demag`/`phi` seam mismatch within the documented tolerances.
 
-The repository fixture keeps the Robin beta approximation fixed to the
-primitive-cell value when building the repeated supercell. This is required
-because the Robin coefficient is a finite-airbox approximation derived from
-the computational volume; letting it change with the supercell length would
-compare two different open-boundary models instead of testing only the x-PBC
-reduction. The deterministic magnetization has zero mean in the periodic
-x-component so the finite non-PBC comparison does not introduce a macroscopic
-linear-potential mode absent from the reduced periodic solve.
+A finite repeated supercell with lateral open/Robin outer faces is a diagnostic
+for finite-array convergence, not an equivalence reference for the PBC gate.
+The 2026-06-27 finite-array diagnostic converged too slowly (`6.894685e-01`
+relative error at 3x3 and `4.201782e-01` at 5x5). The passing managed
+qualification artifact uses outer-supercell lateral PBC and is written at
+`.fullmag/reports/fem-demag-periodic-airbox-validation-supercell-pbc/periodic_airbox_validation.csv`.
+It reports primitive `e_demag_J=1.8678852700529174e-19`, supercell central-cell
+`e_demag_J=1.8633818564459878e-19`, and relative error
+`2.4167958871934916e-3`.
 
 ### Class consistency test
 
@@ -291,8 +301,13 @@ the tested state, so the stored demag energy is non-negative.
 - [x] Rust CPU reference benchmark fixture with x-periodic/open-yz mesh
 - [x] Golden repeated-supercell test passing for the Rust CPU reference path
 - [x] Native MFEM CPU reduced solve reuses `x_p` as warm-start and keeps serial solver workspace in the context
-- [ ] Planner accepts demag + PBC when `periodic_boundary_pairs.len() > 0`
-- [ ] Native MFEM/hypre/AMG path (PR-4)
+- [x] Planner accepts demag + PBC when `periodic_boundary_pairs.len() > 0`
+- [x] CSV artifact acceptance gate for periodic-airbox primitive/supercell comparison
+- [x] Managed CPU/MFEM primitive-vs-periodic-supercell artifact passes the
+      `2e-2` energy tolerance and primitive seam checks
+- [x] Native MFEM CPU serial reduced solve path
+- [x] Native MFEM/hypre/AMG periodic solve telemetry is emitted by the managed
+      artifact
 
 ---
 
@@ -300,8 +315,9 @@ the tested state, so the stored demag energy is non-negative.
 
 - **Fully periodic 3D demag**: requires k=0 gauge convention (out of scope v1).
 - **DMI PBC**: separate physics note `0810-fem-static-pbc-dmi.md` (PR-5).
-- **Native MFEM/hypre demag PBC**: PR-4 — reduced sparse Poisson + hypre/AMG solve.
-  The current native MFEM CPU path is only a serial reduced CG/GSSmoother path
-  with warm-start and context-owned workspace.
+- **Native MFEM/hypre demag PBC**: reduced sparse Poisson exists in the native
+  CPU path, but hypre/AMG promotion remains unqualified.  The current native
+  MFEM CPU path is a serial reduced CG/GSSmoother path with warm-start and
+  context-owned workspace.
 - **Floquet + dynamic demag**: not supported in static/time-domain path;
   frequency-domain Floquet demag is a separate problem.

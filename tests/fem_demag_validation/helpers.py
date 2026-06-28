@@ -207,6 +207,79 @@ def require_solver_telemetry(
                 raise ValidationFailure(f"{label}: {key} must be nonnegative")
 
 
+def require_periodic_pair_continuity(
+    rows: Sequence[dict],
+    *,
+    label_key: str | None = None,
+    h_key: str = "h_demag_pair_max_abs_Apm",
+    phi_key: str = "phi_pair_max_abs",
+    h_tolerance: float,
+    phi_tolerance: float | None,
+) -> None:
+    """Fail validation when periodic seam continuity metrics exceed tolerances."""
+    if not rows:
+        raise ValidationFailure("validation produced no periodic continuity rows")
+    for index, row in enumerate(rows):
+        label = _row_label(row, label_key, index)
+        h_value = row.get(h_key)
+        if not isinstance(h_value, (int, float)) or not math.isfinite(float(h_value)):
+            raise ValidationFailure(f"{label}: {h_key} is not finite")
+        if abs(float(h_value)) > h_tolerance:
+            raise ValidationFailure(
+                f"{label}: {h_key}={float(h_value):.6e} exceeds {h_tolerance:.6e}"
+            )
+        if phi_tolerance is not None:
+            phi_value = row.get(phi_key)
+            if not isinstance(phi_value, (int, float)) or not math.isfinite(float(phi_value)):
+                raise ValidationFailure(f"{label}: {phi_key} is not finite")
+            if abs(float(phi_value)) > phi_tolerance:
+                raise ValidationFailure(
+                    f"{label}: {phi_key}={float(phi_value):.6e} exceeds {phi_tolerance:.6e}"
+                )
+
+
+def require_supercell_reference_close(
+    rows: Sequence[dict],
+    *,
+    group_key: str = "comparison_group",
+    model_key: str = "model",
+    metric_key: str = "e_demag_J",
+    required_models: Sequence[str] = ("primitive_periodic", "supercell_reference"),
+    relative_tolerance: float,
+) -> None:
+    """Fail validation when periodic-cell metrics do not match a supercell reference."""
+    grouped: dict[str, dict[str, dict]] = {}
+    for row in rows:
+        group = str(row.get(group_key, "unknown"))
+        model = str(row.get(model_key, "unknown"))
+        grouped.setdefault(group, {})[model] = row
+
+    if not grouped:
+        raise ValidationFailure("validation produced no supercell comparison groups")
+
+    for group, by_model in grouped.items():
+        missing = [model for model in required_models if model not in by_model]
+        if missing:
+            raise ValidationFailure(
+                f"{group}: missing required models {tuple(missing)}"
+            )
+        reference = by_model[required_models[-1]].get(metric_key)
+        if not isinstance(reference, (int, float)) or not math.isfinite(float(reference)):
+            raise ValidationFailure(f"{group}: reference {metric_key} is not finite")
+        reference_value = float(reference)
+        scale = max(abs(reference_value), 1.0e-300)
+        for model in required_models[:-1]:
+            value = by_model[model].get(metric_key)
+            if not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+                raise ValidationFailure(f"{group}/{model}: {metric_key} is not finite")
+            rel_error = abs(float(value) - reference_value) / scale
+            if rel_error > relative_tolerance:
+                raise ValidationFailure(
+                    f"{group}/{model}: {metric_key} relative error {rel_error:.6e} "
+                    f"exceeds {relative_tolerance:.6e}"
+                )
+
+
 # ── Analytical references ───────────────────────────────────────────────
 
 

@@ -1,21 +1,21 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use axum::Json;
 use axum::extract::{Path, Query, State};
+use axum::Json;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
 use crate::analysis::topological_charge::{
-    TopologicalChargeInput, TopologicalChargeTriangleInput, TopologicalChargeWarningCode,
-    compute_topological_charge_grid, compute_topological_charge_triangles,
+    compute_topological_charge_grid, compute_topological_charge_triangles, TopologicalChargeInput,
+    TopologicalChargeTriangleInput, TopologicalChargeWarningCode,
 };
 use crate::error::ApiError;
 use crate::fem_slice::fem_tetra_linear_slice;
 use crate::fem_slice_overlay::{
-    FemSliceOverlayInput, SliceOverlayPoint, collect_fem_slice_overlay,
+    collect_fem_slice_overlay, FemSliceOverlayInput, SliceOverlayPoint,
 };
-use crate::field_slice::{FemField, FieldSliceQuery, SlicePlane, resolve_slice_query};
+use crate::field_slice::{resolve_slice_query, FemField, FieldSliceQuery, SlicePlane};
 use crate::router_v2::handlers::data::field_resolution::{
     flatten_json_field_values, json_field_grid, live_magnetization_values,
 };

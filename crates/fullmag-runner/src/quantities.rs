@@ -162,6 +162,7 @@ fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
         QuantityId::MatMs | QuantityId::MatAex | QuantityId::MatAlpha => true,
         QuantityId::HAnt => !plan.antenna_zeeman_masks.is_empty(),
         QuantityId::U
+        | QuantityId::DemagPhi
         | QuantityId::Eps
         | QuantityId::Sigma
         | QuantityId::EEx
@@ -192,6 +193,7 @@ fn fem_quantity_is_active(engine: FemEngine, plan: &FemPlanIR, id: QuantityId) -
             QuantityId::M
                 | QuantityId::HEx
                 | QuantityId::HDemag
+                | QuantityId::DemagPhi
                 | QuantityId::HExt
                 | QuantityId::HAnt
                 | QuantityId::Torque
@@ -237,6 +239,7 @@ fn fem_plan_enables_quantity(plan: &FemPlanIR, id: QuantityId) -> bool {
         QuantityId::M | QuantityId::HEff | QuantityId::Torque => true,
         QuantityId::HEx => plan.enable_exchange,
         QuantityId::HDemag => plan.enable_demag,
+        QuantityId::DemagPhi => plan.enable_demag,
         QuantityId::HExt => plan.external_field.is_some(),
         QuantityId::HAnt => !plan.current_modules.is_empty(),
         QuantityId::HAni => material_has_uniaxial_anisotropy(&plan.material),

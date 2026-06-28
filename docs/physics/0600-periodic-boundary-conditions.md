@@ -16,11 +16,13 @@ effectively infinite repetitions of a finite unit cell.  PBC removes edge
 artefacts from local operators (exchange, DMI) and introduces long-range
 periodic dipolar coupling via image summation in the demagnetization kernel.
 
-Fullmag currently has **no** unified PBC system.  The only working
-implementation is the Floquet/periodic phase reduction in the FEM eigen runner
-(`fem_eigen.rs`).  FDM CPU and CUDA solvers use clamped-neighbor Neumann
-boundaries on all axes, and open-boundary zero-padded FFT convolution for
-demag.
+Fullmag currently has **no** unified PBC system.  Several limited lanes are
+implemented, but they must not be collapsed into a blanket "PBC works" claim:
+FDM has axis-wise periodic local operators and truncated-image demag support;
+native FEM has k=0 static reductions for selected CPU/MFEM static/time-domain
+paths; FEM eigen has periodic/Floquet phase reduction for magnetic operators
+without dynamic demag; driven FEM frequency response has only the gamma/free and
+k=0 static-periodic magnetic slice without demag.
 
 This note covers the physics, numerics, and IR design for two functional lines:
 
@@ -188,8 +190,11 @@ kernel precomputed on host and uploaded.
 
 #### 3.2.1 Static / time-domain (Line A — zero-phase)
 
-The FEM CPU reference solver (`fem.rs`) currently warns that periodic results
-are invalid.  To implement zero-phase PBC:
+The native FEM CPU/MFEM static/time-domain lane has a limited k=0 periodic
+reduction for supported operators.  The contract is still explicit and gated:
+the mesh must provide `periodic_node_pairs`, material classes across merged
+nodes must be compatible, and unsupported GPU or demag variants must reject
+instead of silently falling back to isolated geometry.  The reduction is:
 
 1. Build a DOF reduction map from `periodic_node_pairs`: for each pair
    $(a, b)$, merge DOF $b$ into DOF $a$.
@@ -202,21 +207,28 @@ reduction already implemented in `fem_eigen.rs`.
 
 #### 3.2.2 Eigenmode / frequency-domain (Line B — Bloch/Floquet)
 
-Already implemented in `fem_eigen.rs` via `phase_reduction()`.  Remaining
-work:
-- `KSampling::Path` orchestrator for dispersion-relation sweeps.
+FEM eigen has periodic/Floquet magnetic-operator reduction in `fem_eigen.rs`.
+Driven frequency response has a separate production CPU lane: gamma/free and
+k=0 static-periodic magnetic response are executable when complete periodic
+node-pair metadata is present, but nonzero-k Floquet response and dynamic demag
+remain gated.  Remaining work includes:
+- `KSampling::Path` orchestration for production dispersion sweeps.
 - Mode tracking across $k$-points.
 - Artifact output enrichment (band diagrams, spatial mode profiles).
+- Phase-aware driven response and dynamic magnetostatic constraints.
 
 #### 3.2.3 FEM demag
 
-The MFEM-native Poisson solver uses Robin/Dirichlet open-boundary conditions.
-Fully periodic FEM demag requires either:
-- Periodic FE space (MFEM `PeriodicMesh`), or
-- Supercell approach with truncated-image sources.
+The MFEM-native Poisson solver uses Robin/Dirichlet open-boundary conditions on
+open airbox faces.  Static/time-domain k=0 demag PBC has a limited
+shared-domain-airbox implementation using periodic node classes and
+`P^T A P` scalar-potential reduction.  Periodic seam faces must be excluded
+from Robin mass assembly through `periodic_boundary_pairs`.
 
-This is deferred to a later stage; for now periodic FEM demag is flagged as
-unsupported and the planner blocks the combination.
+This does **not** imply full frequency-domain or Floquet demag.  Driven
+frequency-response demag, nonzero-k Floquet magnetostatics, fully periodic 3D
+demag, and strict FEM GPU periodic demag remain unsupported until separately
+qualified.
 
 ### 3.3 Hybrid
 
@@ -300,7 +312,8 @@ pub tolerance: Option<f64>,
 | FDM + periodic + Floquet | — | Error: Floquet not valid for FDM time-domain |
 | FEM static + periodic | requires `periodic_node_pairs` | Error if pairs missing |
 | FEM eigen + periodic | existing validation | Already implemented |
-| FEM + periodic demag | — | Error: unsupported (deferred) |
+| FEM static/time-domain + periodic demag | CPU/MFEM k=0 shared-domain-airbox slice | Requires `periodic_node_pairs`, `periodic_boundary_pairs`, and at least one open axis |
+| FEM frequency response + periodic demag | — | Error: unsupported until dynamic magnetostatic response exists |
 | Hybrid + periodic | — | Error: unsupported |
 
 **Capability matrix additions:**
@@ -358,8 +371,8 @@ pub tolerance: Option<f64>,
 - [x] FDM backend — bulk DMI (periodic neighbors)
 - [x] FDM backend — demag (truncated-images kernel, mixed padding)
 - [x] FDM backend — Zhang-Li STT (periodic upwind neighbors)
-- [ ] FEM backend — static/time-domain zero-phase reduction (deferred)
-- [ ] FEM backend — eigenmode Floquet (existing, enhance k-path)
+- [x] FEM backend — static/time-domain zero-phase reduction (limited CPU/MFEM slice)
+- [x] FEM backend — eigenmode Floquet (limited magnetic operators; dynamic demag gated)
 - [ ] Hybrid backend (not applicable this stage)
 - [ ] Outputs / observables (energy must account for periodic images)
 - [ ] Tests / benchmarks
@@ -367,10 +380,13 @@ pub tolerance: Option<f64>,
 
 ## 7. Known limits and deferred work
 
-1. **FEM static/time-domain PBC** is deferred: the reference solver explicitly
-   warns results are invalid for periodic geometries.  Implementing zero-phase
-   DOF reduction in `fem.rs` is a separate stage.
-2. **FEM periodic demag** (MFEM Poisson with periodic FE space) is deferred.
+1. **FEM static/time-domain PBC** is limited to the qualified CPU/MFEM k=0
+   static-reduction slice.  Missing pair metadata, incompatible periodic
+   classes, and unsupported GPU paths must reject.
+2. **FEM periodic demag** is limited to static/time-domain k=0
+   shared-domain-airbox reduction.  Frequency-domain demag, nonzero-k Floquet
+   magnetostatics, fully periodic 3D demag, and GPU periodic demag remain
+   deferred.
 3. **Infinite-series demag** (`Infinite1D`, `Infinite2D`, `Infinite3D` via Ewald
    summation) is not implemented; only truncated images are provided.
 4. **CUDA PBC** mirrors Rust reference semantics but requires separate kernel

@@ -25,8 +25,10 @@ export interface Viewport3DColorbarPlan {
   groupKey: string;
   legendId: string;
   palette: string;
+  projectionMode: Viewport3DTargetRenderPlan["shader"]["projectionMode"];
   quantityId: string;
   range: ScalarRange | null;
+  rangeSource: NonNullable<ScalarColorBuffer["rangeSource"]>;
   rangeState: Viewport3DColorbarRangeStateKind;
   renderKey: string;
   scopeId: string | null;
@@ -54,14 +56,18 @@ export interface Viewport3DColorbarRangeFieldModel {
 export function buildViewport3DColorbarGroupKey({
   colorMode,
   palette,
+  projectionMode,
   quantityId,
+  rangeSource,
   scalarRangePolicy = DEFAULT_VIEWPORT_3D_SCALAR_RANGE_POLICY,
   scopeId,
   scopeKind,
 }: {
   colorMode: string;
   palette: string;
+  projectionMode?: Viewport3DTargetRenderPlan["shader"]["projectionMode"];
   quantityId: string;
+  rangeSource?: NonNullable<ScalarColorBuffer["rangeSource"]>;
   scalarRangePolicy?: Viewport3DScalarRangePolicy;
   scopeId: string | null;
   scopeKind: Viewport3DFieldScopeKind;
@@ -73,18 +79,24 @@ export function buildViewport3DColorbarGroupKey({
     scopeKind,
     scopeId ?? "none",
     scalarRangePolicyKey(scalarRangePolicy),
+    `projection=${projectionMode ?? "raw_nodal"}`,
+    `rangeSource=${rangeSource ?? "raw_nodal"}`,
   ].join(":");
 }
 
 export function buildViewport3DColorbarRenderKey({
   palette,
+  projectionMode,
   quantityId,
+  rangeSource,
   scalarRangePolicy = DEFAULT_VIEWPORT_3D_SCALAR_RANGE_POLICY,
   scopeId,
   scopeKind,
 }: {
   palette: string;
+  projectionMode?: Viewport3DTargetRenderPlan["shader"]["projectionMode"];
   quantityId: string;
+  rangeSource?: NonNullable<ScalarColorBuffer["rangeSource"]>;
   scalarRangePolicy?: Viewport3DScalarRangePolicy;
   scopeId: string | null;
   scopeKind: Viewport3DFieldScopeKind;
@@ -95,6 +107,8 @@ export function buildViewport3DColorbarRenderKey({
     scopeKind,
     scopeId ?? "none",
     scalarRangePolicyKey(scalarRangePolicy),
+    `projection=${projectionMode ?? "raw_nodal"}`,
+    `rangeSource=${rangeSource ?? "raw_nodal"}`,
   ].join(":");
 }
 
@@ -112,7 +126,9 @@ export function planViewport3DColorbars({
   const groups = new Map<string, {
     colorMode: string;
     palette: string;
+    projectionMode: Viewport3DTargetRenderPlan["shader"]["projectionMode"];
     quantityId: string;
+    rangeSource: NonNullable<ScalarColorBuffer["rangeSource"]>;
     renderKey: string;
     scopeId: string | null;
     scopeKind: Viewport3DFieldScopeKind;
@@ -127,10 +143,16 @@ export function planViewport3DColorbars({
       continue;
     }
     const scope = resolveViewport3DColorbarScope(target);
+    const rangeSource = viewport3DProjectionDefaultRangeSource({
+      projectionMode: target.shader.projectionMode,
+      scalarRangePolicy: target.shader.scalarRangePolicy,
+    });
     const groupKey = buildViewport3DColorbarGroupKey({
       colorMode,
       palette: target.shader.palette,
+      projectionMode: target.shader.projectionMode,
       quantityId: target.quantityId,
+      rangeSource,
       scalarRangePolicy: target.shader.scalarRangePolicy,
       scopeId: scope.scopeId,
       scopeKind: scope.scopeKind,
@@ -142,10 +164,14 @@ export function planViewport3DColorbars({
       groups.set(groupKey, {
         colorMode,
         palette: target.shader.palette,
+        projectionMode: target.shader.projectionMode,
         quantityId: resolveCanonicalQuantityId(target.quantityId),
+        rangeSource,
         renderKey: buildViewport3DColorbarRenderKey({
           palette: target.shader.palette,
+          projectionMode: target.shader.projectionMode,
           quantityId: target.quantityId,
+          rangeSource,
           scalarRangePolicy: target.shader.scalarRangePolicy,
           scopeId: scope.scopeId,
           scopeKind: scope.scopeKind,
@@ -169,8 +195,10 @@ export function planViewport3DColorbars({
       groupKey,
       legendId: `viewport-3d-colorbar:${groupKey}`,
       palette: group.palette,
+      projectionMode: group.projectionMode,
       quantityId: group.quantityId,
       range: rangeState.range,
+      rangeSource: group.rangeSource,
       rangeState: rangeState.state,
       renderKey: `viewport-3d-colorbar:${group.renderKey}`,
       scopeId: group.scopeId,
@@ -293,6 +321,19 @@ function scalarRangePolicyKey(policy: Viewport3DScalarRangePolicy): string {
     policy.min ?? "min:auto",
     policy.max ?? "max:auto",
   ].join("=");
+}
+
+function viewport3DProjectionDefaultRangeSource({
+  projectionMode,
+  scalarRangePolicy,
+}: {
+  projectionMode: Viewport3DTargetRenderPlan["shader"]["projectionMode"];
+  scalarRangePolicy: Viewport3DScalarRangePolicy;
+}): NonNullable<ScalarColorBuffer["rangeSource"]> {
+  if (scalarRangePolicy.mode !== "auto") return "manual";
+  if (projectionMode === "surface_faces") return "face_values";
+  if (projectionMode === "thickness_average_z") return "projected_values";
+  return "raw_nodal";
 }
 
 function viewport3DColorModeHasNumericColorbar(colorMode: string): boolean {

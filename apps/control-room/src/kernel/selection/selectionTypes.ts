@@ -56,6 +56,14 @@ export type SelectionRef =
       visualizationTargetId: "airbox";
     }
   | {
+      boundaryFaceIndex?: number | null;
+      kind: "mesh-part" | "mesh-part-airbox";
+      nodeId: string;
+      objectId: string | null;
+      type: "mesh-part";
+      visualizationTargetId: `mesh-part:${string}`;
+    }
+  | {
       centroid: [number, number, number] | null;
       elementIndex: number;
       kind: "mesh.quality.element";
@@ -265,6 +273,16 @@ export function selectionRefEquals(
         right.type === "airbox" &&
         left.kind === right.kind &&
         left.nodeId === right.nodeId &&
+        left.visualizationTargetId === right.visualizationTargetId
+      );
+    case "mesh-part":
+      return (
+        right.type === "mesh-part" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        nullableStringEquals(left.objectId, right.objectId) &&
+        (left.boundaryFaceIndex ?? null) ===
+          (right.boundaryFaceIndex ?? null) &&
         left.visualizationTargetId === right.visualizationTargetId
       );
     case "mesh-quality-element":

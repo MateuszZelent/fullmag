@@ -185,8 +185,10 @@ bool solve_demag_periodic_poisson_reduced(
     periodic_workspace->solver.Mult(*rhs_p, *x_p);
     ctx.poisson_demag.last_solver_apply_wall_time_ns =
         elapsed_ns(solver_apply_wall_start);
-    ctx.poisson_demag.last_iterations = 0;
-    ctx.poisson_demag.last_residual = 0.0;
+    ctx.poisson_demag.last_iterations =
+        periodic_workspace->solver.GetNumIterations();
+    ctx.poisson_demag.last_residual =
+        static_cast<double>(periodic_workspace->solver.GetFinalNorm());
 
     mfem::Vector &lifted_solution = periodic_workspace->full_solution;
     lift_vector_by_periodic_classes(ctx, *x_p, lifted_solution);

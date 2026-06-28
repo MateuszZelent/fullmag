@@ -119,6 +119,20 @@ class ProblemApiTests(unittest.TestCase):
             ),
         )
 
+    def test_demag_phi_can_be_requested_as_field_output(self) -> None:
+        self.assertEqual(
+            fm.SaveField("demag_phi", every=1e-12).to_ir(),
+            {"kind": "field", "name": "demag_phi", "every_seconds": 1e-12},
+        )
+        self.assertEqual(
+            fm.SaveQuantity("demag_phi", every=1e-12).to_ir(),
+            {
+                "kind": "save_quantity",
+                "quantity_id": "demag_phi",
+                "every_seconds": 1e-12,
+            },
+        )
+
     def test_problem_to_ir_contains_canonical_sections(self) -> None:
         problem = self._build_problem()
         ir = problem.to_ir()
@@ -975,6 +989,7 @@ class ProblemApiTests(unittest.TestCase):
                 excitation_field_au_per_m=(0.0, 0.0, 2.5),
                 excitation_phase_rad=0.125,
                 include_demag=False,
+                magnetostatic_bc="periodic_airbox_k0",
                 k_sampling=fm.KPoint("Gamma", (0.0, 0.0, 0.0)),
                 damping_policy="include",
             ),
@@ -987,6 +1002,7 @@ class ProblemApiTests(unittest.TestCase):
             "include_demag": False,
         })
         self.assertEqual(ir["study"]["equilibrium"], {"kind": "provided"})
+        self.assertEqual(ir["study"]["magnetostatic_bc"], "periodic_airbox_k0")
         self.assertEqual(
             ir["study"]["k_sampling"],
             {
@@ -1081,7 +1097,26 @@ class ProblemApiTests(unittest.TestCase):
                 ],
             },
         )
-        problem_ir = problem.to_ir()
+        problem_ir = problem.to_ir(requested_backend=fm.BackendTarget.FEM)
+        runtime_metadata = problem_ir["problem_meta"]["runtime_metadata"]
+        self.assertNotIn("study_universe", runtime_metadata)
+
+        mesh_workflow = runtime_metadata["mesh_workflow"]
+        default_mesh = mesh_workflow["default_mesh"]
+        self.assertEqual(default_mesh["algorithm_2d"], 6)
+        self.assertEqual(default_mesh["algorithm_3d"], 1)
+        self.assertEqual(default_mesh["smoothing_steps"], 4)
+        self.assertEqual(default_mesh["optimize_iterations"], 3)
+        self.assertEqual(default_mesh["size_from_curvature"], 24)
+        self.assertEqual(default_mesh["narrow_regions"], 3)
+        film_mesh = mesh_workflow["per_geometry"][0]
+        self.assertEqual(film_mesh["mesh_strategy"], "thin_film_tetrahedral")
+        self.assertEqual(film_mesh["through_thickness_elements"], 4)
+        self.assertLessEqual(film_mesh["maximum_element_size"], 5e-9 + 1e-18)
+        self.assertLessEqual(film_mesh["minimum_element_size"], 2.5e-9 + 1e-18)
+        self.assertLessEqual(film_mesh["interface_hmax"], 3.5e-9 + 1e-18)
+        self.assertLessEqual(film_mesh["edge_hmax"], 2.8e-9 + 1e-18)
+        self.assertLessEqual(film_mesh["corner_hmax"], 2.8e-9 + 1e-18)
         zeeman_terms = [
             term for term in problem_ir["energy_terms"] if term["kind"] == "zeeman"
         ]
@@ -1094,9 +1129,63 @@ class ProblemApiTests(unittest.TestCase):
             [200e-9, 200e-9, 10e-9],
             strict=True,
         ):
+            self.assertAlmostEqual(actual, expected, delta=1e-18)
+        self.assertAlmostEqual(geometry["tool"]["radius"], 25e-9, delta=1e-18)
+        self.assertAlmostEqual(geometry["tool"]["height"], 10e-9, delta=1e-18)
+        object_regions = problem_ir.get("object_regions", [])
+        self.assertEqual(len(object_regions), 2)
+        object_regions_by_name = {region["name"]: region for region in object_regions}
+        self.assertEqual(
+            set(object_regions_by_name),
+            {"hole_edge_refinement", "hole_transition_refinement"},
+        )
+        self.assertLessEqual(
+            object_regions_by_name["hole_edge_refinement"]["mesh_policy"][
+                "maximum_element_size"
+            ],
+            2.5e-9 + 1e-18,
+        )
+        self.assertLessEqual(
+            object_regions_by_name["hole_transition_refinement"]["mesh_policy"][
+                "maximum_element_size"
+            ],
+            4e-9 + 1e-18,
+        )
+        assets = problem_ir["geometry_assets"]
+        domain_asset = assets.get("fem_domain_mesh_asset")
+        if isinstance(domain_asset, dict) and isinstance(domain_asset.get("mesh"), dict):
+            mesh_payload = domain_asset["mesh"]
+        else:
+            mesh_assets = assets.get("fem_mesh_assets")
+            self.assertIsInstance(mesh_assets, list)
+            self.assertGreater(len(mesh_assets), 0)
+            if isinstance(mesh_assets[0].get("mesh"), dict):
+                mesh_payload = mesh_assets[0]["mesh"]
+            else:
+                mesh_source = mesh_assets[0]["mesh_source"]
+                mesh_payload = json.loads(Path(mesh_source).read_text(encoding="utf-8"))
+        boundary_pairs = {
+            pair["pair_id"]: pair
+            for pair in mesh_payload.get("periodic_boundary_pairs", [])
+        }
+        self.assertEqual(set(boundary_pairs), {"x_faces", "y_faces"})
+        for actual, expected in zip(
+            boundary_pairs["x_faces"]["translation"],
+            [200e-9, 0.0, 0.0],
+            strict=True,
+        ):
             self.assertAlmostEqual(actual, expected)
-        self.assertAlmostEqual(geometry["tool"]["radius"], 25e-9)
-        self.assertAlmostEqual(geometry["tool"]["height"], 10e-9)
+        for actual, expected in zip(
+            boundary_pairs["y_faces"]["translation"],
+            [0.0, 200e-9, 0.0],
+            strict=True,
+        ):
+            self.assertAlmostEqual(actual, expected)
+        node_pair_ids = {
+            pair["pair_id"]
+            for pair in mesh_payload.get("periodic_node_pairs", [])
+        }
+        self.assertEqual(node_pair_ids, {"x_faces", "y_faces"})
 
     def test_free_demag_airbox_fmr_eigenmodes_smoke_example_loads_contract(self) -> None:
         example_path = (
@@ -3074,7 +3163,13 @@ class ProblemApiTests(unittest.TestCase):
 
         self.assertEqual(
             geometry.to_ir(),
-            {"kind": "cylinder", "name": "pillar", "radius": 50e-9, "height": 10e-9},
+            {
+                "kind": "cylinder",
+                "name": "pillar",
+                "radius": 50e-9,
+                "height": 10e-9,
+                "axis": [0.0, 0.0, 1.0],
+            },
         )
 
     def test_translated_geometries_derive_distinct_names(self) -> None:
@@ -5268,7 +5363,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertIn('fm.KPoint("\\u0393", (0, 0, 0))', rewritten)
         self.assertIn('fm.KPoint("X", (31400000, 0, 0))', rewritten)
         self.assertIn("samples_per_segment=[41]", rewritten)
-        self.assertIn('"pair_ids": ["x_periodic"]', rewritten)
+        self.assertIn('bc=fm.FloquetBC(["x_periodic"])', rewritten)
 
     def test_relaxation_stop_and_field_refresh_serialize_to_ir(self) -> None:
         geometry = fm.Box(size=(100e-9, 20e-9, 5e-9), name="track")

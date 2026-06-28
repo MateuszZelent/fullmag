@@ -164,12 +164,61 @@ Current gate:
   energy. `tests/fem_demag_validation/test_acceptance.py` unit-tests that
   artifact shape. Active solve evidence is still required before production
   qualification.
+- `tests/fem_demag_validation/periodic_airbox_validation.py` validates
+  periodic-airbox demag CSV artifacts: finite demag energy and telemetry,
+  bounded primitive-cell periodic seam continuity, and agreement between the
+  primitive periodic cell and a supercell reference. The script also has a
+  `--produce` mode that runs the primitive periodic cell and explicit
+  supercell through the managed MFEM runtime, reads `H_demag` field artifacts
+  from JSON or Zarr output, and writes
+  `.fullmag/reports/fem-demag-periodic-airbox-validation/periodic_airbox_validation.csv`.
+  The produced `e_demag_J` values are integrated from saved `m_final` and
+  `H_demag` fields; for the supercell reference this integration is restricted
+  to magnetic elements whose centroids lie in the central primitive cell.
+  As of the 2026-06-27 managed run, this producer is an active passing
+  CPU/MFEM qualification gate for the k=0 periodic-airbox slice. Native
+  periodic demag field finalization now
+  projects recovered representative values before energy evaluation, and the
+  native FEM Zarr snapshot writer transposes AoS triples into the advertised
+  component-major layout. The periodic airbox mesher also assigns non-Robin
+  physical boundary markers to every lateral periodic seam surface fragment,
+  preserves all such marker pairs in `periodic_boundary_pairs`, and excludes
+  those surfaces from `Gamma_out`, so the producer records
+  `robin_periodic_seam_face_count=0`. With those fixes the primitive
+  `H_demag` seam metric passes with `h_demag_pair_max_abs_Apm=0.0`. The native
+  runtime now also emits scalar-potential `demag_phi` Zarr snapshots with
+  `component_order=["scalar"]`; the fresh managed 3x3 producer at
+  `.fullmag/reports/fem-demag-periodic-airbox-validation-phi/periodic_airbox_validation.csv`
+  records `phi_pair_status=emitted_by_runtime` and `phi_pair_max_abs=0.0`.
+  The periodic reduced Poisson solve also reports actual MFEM CG
+  iterations/residual telemetry rather than hard-coded zeroes. The validation
+  mesh now uses a thin-film magnetic policy (`hmin=3 nm`, magnetic `hmax=8 nm`,
+  interface `hmax=5 nm`, edge/corner `hmax=4 nm`, two through-thickness layers)
+  plus one translated hole-refinement region per explicit supercell hole.
+  Runtime producer CSVs now include energy-diagnostic columns:
+  `runtime_total_e_demag_J`, `runtime_total_to_field_scope_ratio`,
+  `magnetic_volume_m3`, `magnetic_element_count`, `magnetic_node_count`, and
+  `energy_scope`. A finite-array diagnostic with lateral open boundaries showed
+  slow supercell convergence (`6.894685e-01` at 3x3 and `4.201782e-01` at 5x5
+  relative error), proving that lateral open boundaries are not a valid
+  equivalence reference for this PBC gate. The managed passing 3x3 artifact now
+  uses lateral PBC on the outer supercell faces and is written at
+  `.fullmag/reports/fem-demag-periodic-airbox-validation-supercell-pbc/periodic_airbox_validation.csv`.
+  It reports primitive `e_demag_J=1.8678852700529174e-19`, supercell
+  central-cell `e_demag_J=1.8633818564459878e-19`, relative error
+  `2.4167958871934916e-3` against the `2.0e-2` tolerance, zero primitive
+  `H_demag` and `phi` seam mismatch, `robin_periodic_seam_face_count=0`,
+  primitive CG telemetry `38` iterations / `8.035072644447357e-18` residual,
+  and supercell CG telemetry `65` iterations / `3.735510701495055e-17`
+  residual.
 
 Required before production qualification:
 
 - Robin vs Dirichlet comparison;
 - RHS assembly fixture for magnetic/nonmagnetic element masks;
 - boundary marker fixture for Dirichlet/Robin/seam exclusion;
-- periodic reduced-system fixture for matrix/RHS reduction and lifted solution;
+- periodic reduced-system fixture for matrix/RHS reduction, lifted solution,
+  active primitive/supercell periodic-airbox CSV generation, and passing
+  `H_demag`/`phi` seam plus supercell-reference metrics;
 - active residual/iteration telemetry regression on an MFEM-stack solve;
 - performance regression for RHS, solve, recover, and energy phases.

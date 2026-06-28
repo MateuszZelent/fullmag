@@ -18,6 +18,7 @@ import {
   resolveVisualizationTargetFromSelection,
   visualizationStatePatchFromDefaultTargetPatch,
   visualizationTargetKey,
+  type VisualizationTargetPatch,
 } from "./ObjectVisualizationController";
 
 describe("ObjectVisualizationController", () => {
@@ -677,6 +678,7 @@ describe("ObjectVisualizationController", () => {
               style: {
                 scalar_color_palette: "inferno",
                 surface_color_source: "solid",
+                surface_projection_mode: "surface_faces",
                 surface_mono_color: "#00ffaa",
                 vector_alpha: 0.4,
                 vector_budget: 384,
@@ -705,6 +707,7 @@ describe("ObjectVisualizationController", () => {
         shaderMonoColor: "#00ffaa",
         shaderVisible: false,
         surfaceColorSource: "solid",
+        surfaceProjectionMode: "surface_faces",
         vectorAlphaPercent: 40,
         vectorBudget: 384,
         vectorColorMode: "x",
@@ -722,29 +725,32 @@ describe("ObjectVisualizationController", () => {
   });
 
   it("serializes target patches into backend-owned display and style overrides", () => {
+    const patchWithProjection = {
+      geometryScope: "surface",
+      opacityPercent: 35,
+      scalarColorPalette: "inferno",
+      shaderMonoColor: "#00ffaa",
+      surfaceColorSource: "solid",
+      surfaceProjectionMode: "surface_faces",
+      vectorAlphaPercent: 40,
+      vectorBudget: 384,
+      vectorColorMode: "x",
+      vectorLengthScale: 1.75,
+      vectorMonoColor: "#ff00aa",
+      vectorThickness: 2,
+      pointColor: "#66eeff",
+      vectorsVisible: false,
+      visible: true,
+      wireframeColor: "#111111",
+      wireframeOpacityPercent: 45,
+      wireframeVisible: true,
+      activeQuantityId: "h_eff",
+    } satisfies VisualizationTargetPatch & { surfaceProjectionMode: "surface_faces" };
+
     expect(
       visualizationStateOverrideFromTargetPatch(
         { id: "free-layer", kind: "object" },
-        {
-          geometryScope: "surface",
-          opacityPercent: 35,
-          scalarColorPalette: "inferno",
-          shaderMonoColor: "#00ffaa",
-          surfaceColorSource: "solid",
-          vectorAlphaPercent: 40,
-          vectorBudget: 384,
-          vectorColorMode: "x",
-          vectorLengthScale: 1.75,
-          vectorMonoColor: "#ff00aa",
-          vectorThickness: 2,
-          pointColor: "#66eeff",
-          vectorsVisible: false,
-          visible: true,
-          wireframeColor: "#111111",
-          wireframeOpacityPercent: 45,
-          wireframeVisible: true,
-          activeQuantityId: "h_eff",
-        },
+        patchWithProjection,
       ),
     ).toMatchObject({
       display: {
@@ -762,6 +768,7 @@ describe("ObjectVisualizationController", () => {
       style: {
         scalar_color_palette: "inferno",
         surface_color_source: "solid",
+        surface_projection_mode: "surface_faces",
         surface_mono_color: "#00ffaa",
         point_color: "#66eeff",
         vector_alpha: 0.4,
@@ -773,6 +780,15 @@ describe("ObjectVisualizationController", () => {
         wireframe_color: "#111111",
       },
       visible: true,
+    });
+  });
+
+  it("defaults target surface projection to raw nodal", () => {
+    expect(DEFAULT_OBJECT_VISUALIZATION).toMatchObject({
+      surfaceProjectionMode: "raw_nodal",
+    });
+    expect(DEFAULT_AIRBOX_VISUALIZATION).toMatchObject({
+      surfaceProjectionMode: "raw_nodal",
     });
   });
 
@@ -917,6 +933,7 @@ describe("ObjectVisualizationController", () => {
               render_mode: "surface",
               scalar_color_palette: "viridis",
               surface_color_source: "solid",
+              surface_projection_mode: "raw_nodal",
               surface_mono_color: "var(--fm-airbox-fill)",
               surface_visible: false,
               viewport_colorbar_visible: false,
@@ -974,6 +991,7 @@ describe("ObjectVisualizationController", () => {
               render_mode: "wireframe",
               scalar_color_palette: "inferno",
               surface_color_source: "solid",
+              surface_projection_mode: "raw_nodal",
               surface_mono_color: "#112233",
               surface_visible: false,
               viewport_colorbar_visible: false,
@@ -1078,6 +1096,7 @@ describe("ObjectVisualizationController", () => {
               render_mode: "surface",
               scalar_color_palette: "viridis",
               surface_color_source: "solid",
+              surface_projection_mode: "raw_nodal",
               surface_mono_color: "var(--fm-airbox-fill)",
               surface_visible: true,
               viewport_colorbar_visible: false,

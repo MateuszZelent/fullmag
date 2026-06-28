@@ -5,7 +5,7 @@ use fullmag_ir::{
     FemPlanIR, GeometryEntryIR, MagnetostrictionLawIR, MechanicalLoadIR, OutputPlanIR, ProblemIR,
     ProvenancePlanIR, TimeDependenceIR, IR_VERSION,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::antenna_zeeman::{has_prescribed_zeeman_mask_source, resolve_prescribed_zeeman_masks};
 use crate::current_transport::{
@@ -53,6 +53,51 @@ fn fem_single_precision_rejection(requested_cuda: bool, context: &str) -> String
             "execution_precision='single' is not executable in the {context} CPU path; current FEM CPU execution supports only 'double'"
         )
     }
+}
+
+fn periodic_axis_from_label(value: &str) -> Option<usize> {
+    let normalized = value.trim().to_ascii_lowercase().replace('-', "_");
+    if normalized.starts_with("x") {
+        Some(0)
+    } else if normalized.starts_with("y") {
+        Some(1)
+    } else if normalized.starts_with("z") {
+        Some(2)
+    } else {
+        None
+    }
+}
+
+fn periodic_boundary_axes(mesh: &fullmag_ir::MeshIR) -> BTreeSet<usize> {
+    let mut axes = BTreeSet::new();
+    for pair in &mesh.periodic_boundary_pairs {
+        if let Some(axis) = pair
+            .axis_hint
+            .as_deref()
+            .and_then(periodic_axis_from_label)
+            .or_else(|| periodic_axis_from_label(&pair.pair_id))
+        {
+            axes.insert(axis);
+            continue;
+        }
+        if let Some(translation) = pair.translation {
+            let mut dominant_axis = None;
+            let mut dominant_abs = 0.0;
+            for (axis, value) in translation.iter().enumerate() {
+                let abs_value = value.abs();
+                if abs_value > dominant_abs {
+                    dominant_abs = abs_value;
+                    dominant_axis = Some(axis);
+                }
+            }
+            if dominant_abs > 0.0 {
+                if let Some(axis) = dominant_axis {
+                    axes.insert(axis);
+                }
+            }
+        }
+    }
+    axes
 }
 
 fn study_mechanics(problem: &ProblemIR) -> Option<&fullmag_ir::MechanicsIR> {
@@ -1577,6 +1622,16 @@ pub(crate) fn plan_fem(
                 )],
             });
         }
+        if periodic_boundary_axes(&mesh).len() >= 3 {
+            return Err(PlanError {
+                reasons: vec![
+                    "fully periodic 3D FEM demag is not supported in the static/time-domain \
+                     airbox slice; use at least one open axis with an explicit airbox boundary \
+                     policy or disable periodic demag"
+                        .to_string(),
+                ],
+            });
+        }
         // Demag PBC with open boundary: allowed (P^T A P reduction via Rust reference path).
         // Fully 3D periodic demag is not supported in v1.
     }
@@ -2607,6 +2662,7 @@ pub(crate) fn plan_fem_frequency_response(
         normalization,
         damping_policy,
         spin_wave_bc,
+        magnetostatic_bc,
         excitation,
         frequencies_hz,
         sampling,
@@ -2617,17 +2673,30 @@ pub(crate) fn plan_fem_frequency_response(
 
     let mut errors = Vec::new();
     validate_frequency_response_outputs(&sampling.outputs, &mut errors);
-    if runtime_requests_cuda(problem) {
-        errors.push(
-            "FEM frequency response GPU execution is not implemented yet; request device='cpu' or device='auto' resolved to CPU"
-                .to_string(),
-        );
-    }
+    let requested_device = if runtime_requests_cuda(problem) {
+        fullmag_ir::ExecutionDevice::Gpu
+    } else {
+        fullmag_ir::ExecutionDevice::Cpu
+    };
     if problem.backend_policy.execution_precision != ExecutionPrecision::Double {
         errors.push(fem_single_precision_rejection(
             runtime_requests_cuda(problem),
             "FEM frequency response",
         ));
+    }
+    if *magnetostatic_bc == fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0 {
+        if spin_wave_bc.kind() != fullmag_ir::SpinWaveBoundaryKindIR::Periodic {
+            errors.push(
+                "magnetostatic_bc=periodic_airbox_k0 requires spin_wave_bc=periodic for the dynamic magnetization"
+                    .to_string(),
+            );
+        }
+        if !k_sampling
+            .as_ref()
+            .is_none_or(fullmag_ir::KSamplingIR::is_single_gamma)
+        {
+            errors.push("magnetostatic_bc=periodic_airbox_k0 requires k=0".to_string());
+        }
     }
     if !errors.is_empty() {
         return Err(PlanError { reasons: errors });
@@ -2658,7 +2727,9 @@ pub(crate) fn plan_fem_frequency_response(
         unreachable!("FEM eigen proxy must produce BackendPlanIR::FemEigen");
     };
 
-    let response_plan = FemFrequencyResponsePlanIR {
+    let response_spin_wave_bc =
+        normalize_frequency_response_gamma_floquet_spin_wave_bc(spin_wave_bc, k_sampling.as_ref());
+    let mut response_plan = FemFrequencyResponsePlanIR {
         mesh_name: eigen.mesh_name,
         mesh_source: eigen.mesh_source,
         mesh: eigen.mesh,
@@ -2675,7 +2746,8 @@ pub(crate) fn plan_fem_frequency_response(
         k_sampling: k_sampling.clone(),
         normalization: *normalization,
         damping_policy: *damping_policy,
-        spin_wave_bc: spin_wave_bc.clone(),
+        spin_wave_bc: response_spin_wave_bc,
+        magnetostatic_bc: *magnetostatic_bc,
         excitation: excitation.clone(),
         frequencies_hz: frequencies_hz.clone(),
         enable_exchange: eigen.enable_exchange,
@@ -2686,9 +2758,13 @@ pub(crate) fn plan_fem_frequency_response(
         external_field: eigen.external_field,
         gyromagnetic_ratio: eigen.gyromagnetic_ratio,
         precision: eigen.precision,
+        requested_device,
         exchange_bc: eigen.exchange_bc,
         demag_realization: eigen.demag_realization,
+        periodic_constraint_sets: Vec::new(),
     };
+    response_plan.periodic_constraint_sets =
+        frequency_response_periodic_constraint_sets(&response_plan);
 
     if let Some(reason) = fem_frequency_response_production_slice_rejection_reason(&response_plan) {
         return Err(PlanError {
@@ -2732,11 +2808,57 @@ pub(crate) fn plan_fem_frequency_response(
 fn fem_frequency_response_production_slice_rejection_reason(
     plan: &FemFrequencyResponsePlanIR,
 ) -> Option<&'static str> {
+    if plan.magnetostatic_bc == fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0 {
+        if plan.domain_mesh_mode != fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir {
+            return Some(
+                "magnetostatic_bc=periodic_airbox_k0 requires a shared-domain airbox mesh",
+            );
+        }
+        if !plan.enable_demag || plan.demag_realization.is_none() {
+            return Some(
+                "magnetostatic_bc=periodic_airbox_k0 requires include_demag=true and a Demag energy term",
+            );
+        }
+        if plan.spin_wave_bc.kind() != fullmag_ir::SpinWaveBoundaryKindIR::Periodic {
+            return Some(
+                "magnetostatic_bc=periodic_airbox_k0 requires spin_wave_bc=periodic for the dynamic magnetization",
+            );
+        }
+        if !plan
+            .k_sampling
+            .as_ref()
+            .is_none_or(fullmag_ir::KSamplingIR::is_single_gamma)
+        {
+            return Some("magnetostatic_bc=periodic_airbox_k0 requires k=0");
+        }
+        if !plan.periodic_constraint_sets.iter().any(|constraint| {
+            constraint.unknown_family == fullmag_ir::PeriodicUnknownFamilyIR::MagnetizationDynamic
+                && constraint.domain_scope == fullmag_ir::PeriodicDomainScopeIR::MagneticDomain
+        }) {
+            return Some(
+                "magnetostatic_bc=periodic_airbox_k0 requires a delta_m periodic constraint set",
+            );
+        }
+        if !plan.periodic_constraint_sets.iter().any(|constraint| {
+            constraint.unknown_family
+                == fullmag_ir::PeriodicUnknownFamilyIR::MagnetostaticPotentialDynamic
+                && constraint.domain_scope
+                    == fullmag_ir::PeriodicDomainScopeIR::MagnetostaticDomainWithAir
+        }) {
+            return Some(
+                "magnetostatic_bc=periodic_airbox_k0 requires a delta_phi periodic constraint set",
+            );
+        }
+        return None;
+    }
     if plan.domain_mesh_mode != fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh {
         return Some("shared-domain airbox meshes are not supported by the driven frequency-response operator");
     }
     if plan.enable_demag || plan.demag_realization.is_some() {
         return Some("dynamic demag is not implemented for driven frequency response");
+    }
+    if let Some(reason) = frequency_response_floquet_excitation_rejection_reason(plan) {
+        return Some(reason);
     }
     if !plan
         .k_sampling
@@ -2762,4 +2884,181 @@ fn fem_frequency_response_production_slice_rejection_reason(
         }
     }
     None
+}
+
+fn normalize_frequency_response_gamma_floquet_spin_wave_bc(
+    spin_wave_bc: &fullmag_ir::SpinWaveBoundaryConditionIR,
+    k_sampling: Option<&fullmag_ir::KSamplingIR>,
+) -> fullmag_ir::SpinWaveBoundaryConditionIR {
+    if spin_wave_bc.kind() != fullmag_ir::SpinWaveBoundaryKindIR::Floquet
+        || !k_sampling.is_none_or(fullmag_ir::KSamplingIR::is_single_gamma)
+    {
+        return spin_wave_bc.clone();
+    }
+    match spin_wave_bc {
+        fullmag_ir::SpinWaveBoundaryConditionIR::Legacy(_) => {
+            fullmag_ir::SpinWaveBoundaryConditionIR::Legacy(
+                fullmag_ir::SpinWaveBoundaryKindIR::Periodic,
+            )
+        }
+        fullmag_ir::SpinWaveBoundaryConditionIR::Config(config) => {
+            let mut normalized = config.clone();
+            normalized.kind = fullmag_ir::SpinWaveBoundaryKindIR::Periodic;
+            fullmag_ir::SpinWaveBoundaryConditionIR::Config(normalized)
+        }
+    }
+}
+
+fn frequency_response_floquet_excitation_rejection_reason(
+    plan: &FemFrequencyResponsePlanIR,
+) -> Option<&'static str> {
+    if plan.spin_wave_bc.kind() != fullmag_ir::SpinWaveBoundaryKindIR::Floquet {
+        return None;
+    }
+    let has_nonzero_k = plan
+        .k_sampling
+        .as_ref()
+        .is_some_and(|k_sampling| !k_sampling.is_single_gamma());
+    if has_nonzero_k {
+        return Some(
+            "nonzero-k Floquet/Bloch driven response requires a Floquet-periodic excitation; current FrequencyExcitationIR field drive is uniform/global-phase only and is not phase-compatible yet",
+        );
+    }
+    None
+}
+
+pub(crate) fn frequency_response_periodic_constraint_sets(
+    plan: &FemFrequencyResponsePlanIR,
+) -> Vec<fullmag_ir::PeriodicConstraintSetIR> {
+    let mut constraint_sets = Vec::new();
+    if plan.spin_wave_bc.kind() == fullmag_ir::SpinWaveBoundaryKindIR::Periodic {
+        let pair_ids = selected_frequency_response_periodic_pair_ids(plan);
+        if !pair_ids.is_empty() {
+            constraint_sets.push(fullmag_ir::PeriodicConstraintSetIR {
+                unknown_family: fullmag_ir::PeriodicUnknownFamilyIR::MagnetizationDynamic,
+                domain_scope: fullmag_ir::PeriodicDomainScopeIR::MagneticDomain,
+                pair_ids,
+                phase_policy: fullmag_ir::PeriodicPhasePolicyIR::ZeroPhase,
+                phase_loop_diagnostics: None,
+            });
+        }
+    }
+    if plan.spin_wave_bc.kind() == fullmag_ir::SpinWaveBoundaryKindIR::Floquet {
+        let pair_ids = selected_frequency_response_periodic_pair_ids(plan);
+        if !pair_ids.is_empty() {
+            if let Some(k_vector_rad_per_m) =
+                frequency_response_single_k_vector_rad_per_m(plan.k_sampling.as_ref())
+            {
+                constraint_sets.push(fullmag_ir::PeriodicConstraintSetIR {
+                    unknown_family: fullmag_ir::PeriodicUnknownFamilyIR::MagnetizationDynamic,
+                    domain_scope: fullmag_ir::PeriodicDomainScopeIR::MagneticDomain,
+                    phase_loop_diagnostics: frequency_response_phase_loop_diagnostics(
+                        plan,
+                        &pair_ids,
+                        k_vector_rad_per_m,
+                    ),
+                    pair_ids,
+                    phase_policy: fullmag_ir::PeriodicPhasePolicyIR::BlochPhase {
+                        phase_convention: plan.spin_wave_bc.phase_convention(),
+                        k_vector_rad_per_m,
+                        real_imag_mixing: true,
+                    },
+                });
+            }
+        }
+    }
+    if plan.magnetostatic_bc == fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0 {
+        let pair_ids = selected_frequency_response_periodic_pair_ids(plan);
+        if !pair_ids.is_empty() {
+            constraint_sets.push(fullmag_ir::PeriodicConstraintSetIR {
+                unknown_family: fullmag_ir::PeriodicUnknownFamilyIR::MagnetostaticPotentialDynamic,
+                domain_scope: fullmag_ir::PeriodicDomainScopeIR::MagnetostaticDomainWithAir,
+                pair_ids,
+                phase_policy: fullmag_ir::PeriodicPhasePolicyIR::ZeroPhase,
+                phase_loop_diagnostics: None,
+            });
+        }
+    }
+    constraint_sets
+}
+
+fn frequency_response_phase_loop_diagnostics(
+    plan: &FemFrequencyResponsePlanIR,
+    pair_ids: &[String],
+    k_vector_rad_per_m: [f64; 3],
+) -> Option<fullmag_ir::PeriodicPhaseLoopDiagnosticsIR> {
+    let translations = pair_ids
+        .iter()
+        .filter_map(|pair_id| {
+            plan.mesh
+                .periodic_boundary_pairs
+                .iter()
+                .find(|pair| pair.pair_id == *pair_id)
+                .and_then(|pair| pair.translation)
+        })
+        .filter(|translation| translation.iter().all(|value| value.is_finite()))
+        .collect::<Vec<_>>();
+    if translations.len() < 2 {
+        return None;
+    }
+
+    let mut checked_loop_count = 0_u64;
+    let mut max_phase_loop_residual_rad = 0.0_f64;
+    for first in 0..translations.len() {
+        for second in (first + 1)..translations.len() {
+            let phase_first_then_second =
+                bloch_phase_angle_rad(k_vector_rad_per_m, translations[first])
+                    + bloch_phase_angle_rad(k_vector_rad_per_m, translations[second]);
+            let phase_second_then_first =
+                bloch_phase_angle_rad(k_vector_rad_per_m, translations[second])
+                    + bloch_phase_angle_rad(k_vector_rad_per_m, translations[first]);
+            let residual =
+                canonical_phase_residual_rad(phase_first_then_second - phase_second_then_first);
+            max_phase_loop_residual_rad = max_phase_loop_residual_rad.max(residual.abs());
+            checked_loop_count += 1;
+        }
+    }
+
+    Some(fullmag_ir::PeriodicPhaseLoopDiagnosticsIR {
+        checked_loop_count,
+        max_phase_loop_residual_rad,
+    })
+}
+
+fn bloch_phase_angle_rad(k_vector_rad_per_m: [f64; 3], translation_m: [f64; 3]) -> f64 {
+    -k_vector_rad_per_m[0] * translation_m[0]
+        - k_vector_rad_per_m[1] * translation_m[1]
+        - k_vector_rad_per_m[2] * translation_m[2]
+}
+
+fn canonical_phase_residual_rad(phase_rad: f64) -> f64 {
+    let two_pi = 2.0 * std::f64::consts::PI;
+    let mut value = (phase_rad + std::f64::consts::PI).rem_euclid(two_pi) - std::f64::consts::PI;
+    if value <= -std::f64::consts::PI {
+        value += two_pi;
+    }
+    value
+}
+
+fn frequency_response_single_k_vector_rad_per_m(
+    k_sampling: Option<&fullmag_ir::KSamplingIR>,
+) -> Option<[f64; 3]> {
+    match k_sampling {
+        None => Some([0.0, 0.0, 0.0]),
+        Some(fullmag_ir::KSamplingIR::Single { k_vector }) => Some(*k_vector),
+        Some(fullmag_ir::KSamplingIR::Path { .. }) => None,
+    }
+}
+
+fn selected_frequency_response_periodic_pair_ids(plan: &FemFrequencyResponsePlanIR) -> Vec<String> {
+    let requested_pair_ids = plan.spin_wave_bc.boundary_pair_ids();
+    if requested_pair_ids.is_empty() {
+        plan.mesh
+            .periodic_boundary_pairs
+            .iter()
+            .map(|pair| pair.pair_id.clone())
+            .collect()
+    } else {
+        requested_pair_ids.into_iter().map(str::to_string).collect()
+    }
 }

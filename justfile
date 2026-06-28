@@ -113,6 +113,11 @@ verify-fem-frequency-domain-contract:
 verify-fem-frequency-domain-gpu:
     just verify-fem-frequency-domain-native-contract
 
+verify-fem-demag-poisson-contract:
+    just ensure-managed-fem-runtime
+    docker compose --profile fem-gpu run --rm \
+      fem-gpu bash -lc 'cd /workspace && cmake --build native/build --target fem_demag_poisson_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_demag_poisson_contract'
+
 verify-fem-frequency-domain-runtime-suite:
     just verify-fem-frequency-domain-runtime
     just verify-fem-frequency-domain-static-periodic-runtime

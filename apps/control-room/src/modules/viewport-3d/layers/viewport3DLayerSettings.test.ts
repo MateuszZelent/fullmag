@@ -42,6 +42,7 @@ function settings(
     wireframeVisible: false,
     ...patch,
     scalarColorPalette: patch.scalarColorPalette ?? "viridis",
+    surfaceProjectionMode: patch.surfaceProjectionMode ?? "raw_nodal",
   };
 }
 

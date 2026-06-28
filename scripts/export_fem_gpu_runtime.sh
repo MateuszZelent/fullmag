@@ -74,13 +74,13 @@ copy_native_library_group() {
   for src in "$source_dir"/"${stem}".so*; do
     if [ -e "$src" ] && [ ! -L "$src" ]; then
       rm -rf "$dest_dir/$(basename "$src")"
-      cp -aT "$src" "$dest_dir/$(basename "$src")"
+      cp -aT --remove-destination "$src" "$dest_dir/$(basename "$src")"
     fi
   done
   for src in "$source_dir"/"${stem}".so*; do
     if [ -L "$src" ]; then
       rm -rf "$dest_dir/$(basename "$src")"
-      cp -aT "$src" "$dest_dir/$(basename "$src")"
+      cp -aT --remove-destination "$src" "$dest_dir/$(basename "$src")"
     fi
   done
 }
@@ -143,10 +143,10 @@ copy_shared_library_dependency_closure() {
     case "$resolved" in
       /lib/*|/lib64/*|/usr/lib/*|/usr/lib64/*)
         if [ -e "$lib" ] && [ ! -e "$dest_dir/$requested_name" ]; then
-          cp -a "$lib" "$dest_dir/"
+          cp -a --remove-destination "$lib" "$dest_dir/"
         fi
         if [ ! -e "$dest_dir/$lib_name" ]; then
-          cp -a "$resolved" "$dest_dir/"
+          cp -a --remove-destination "$resolved" "$dest_dir/"
         fi
         ;;
     esac
@@ -204,7 +204,7 @@ for dep_entry in /opt/fullmag-deps/lib/*; do
     mkdir -p "$dep_dest"
     cp -a "$dep_entry"/. "$dep_dest"/
   else
-    cp -a "$dep_entry" .fullmag/runtimes/fem-gpu-host/lib/
+    cp -a --remove-destination "$dep_entry" .fullmag/runtimes/fem-gpu-host/lib/
   fi
 done
 echo "[export_fem_gpu_runtime] bundling MFEM/libCEED/Hypre host headers"

@@ -40,6 +40,19 @@ struct DrivenFrequencyResponseMfemValidationProblem {
     const double *drive_imag = nullptr;
     const std::uint64_t *static_periodic_node_pairs = nullptr;
     std::uint64_t static_periodic_node_pair_count = 0;
+    ProductionCpuFrequencyDomainApply apply_demag_tangent = nullptr;
+    void *demag_tangent_user_data = nullptr;
+    const double *demag_tangent_matrix_row_major = nullptr;
+};
+
+struct DrivenFrequencyResponsePeriodicAirboxCoupledBlockProblem {
+    bool enabled = false;
+    std::uint64_t delta_m_tangent_dof_count = 0;
+    std::uint64_t delta_phi_dof_count = 0;
+    const double *stiffness_matrix_row_major = nullptr;
+    const double *mass_matrix_row_major = nullptr;
+    const double *drive_real = nullptr;
+    const double *drive_imag = nullptr;
 };
 
 enum class DrivenFrequencyResponseExecutionLane {
@@ -64,6 +77,12 @@ struct DrivenFrequencyResponseSolveRequest {
         FrequencyDomainPhaseConvention::exp_i_omega_t;
     const FrequencyDomainFloquetPeriodicPair *floquet_periodic_pairs = nullptr;
     std::uint64_t floquet_periodic_pair_count = 0;
+    bool requires_periodic_airbox_dynamic_demag = false;
+    std::uint64_t magnetic_periodic_constraint_set_count = 0;
+    std::uint64_t magnetostatic_periodic_constraint_set_count = 0;
+    std::uint64_t periodic_airbox_delta_m_tangent_dof_count = 0;
+    std::uint64_t periodic_airbox_delta_phi_dof_count = 0;
+    DrivenFrequencyResponsePeriodicAirboxCoupledBlockProblem periodic_airbox_coupled_block_problem{};
     DrivenFrequencyResponseTinyValidationProblem tiny_validation_problem{};
     DrivenFrequencyResponseMfemValidationProblem mfem_validation_problem{};
 };

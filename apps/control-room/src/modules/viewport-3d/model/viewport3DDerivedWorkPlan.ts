@@ -14,6 +14,9 @@ export type Viewport3DDerivedWorkOutputKind =
   | "buffer-attribute"
   | "complex-phase-projection"
   | "scalar-colors"
+  | "surface-face-colors"
+  | "surface-thickness-projection"
+  | "surface-vertex-colors"
   | "vector-glyphs"
   | "vector-segments";
 
@@ -133,10 +136,12 @@ function buildSurfaceColorWorkItem(
   const inputBufferId = resolveTargetPassInputBufferId(targetId, pass);
   const blockedReason = surfaceColorBlockedReason(pass.surface.degradation);
   const status: Viewport3DDerivedWorkStatus = blockedReason ? "blocked" : "ready";
+  const projectionRevision = `projection=${pass.surface.projectionMode ?? "raw_nodal"}`;
   const staleCompatibilityKey = [
     "surface",
     targetId,
     colorMode,
+    projectionRevision,
     inputBufferId,
     pass.surface.scalarColors?.colorPalette ?? "palette:pending",
     pass.surface.scalarColors?.range.min ?? "range:min:pending",
@@ -158,7 +163,7 @@ function buildSurfaceColorWorkItem(
     itemCount: scalarColorItemCount(pass),
     lane: "field-color",
     latestWins: true,
-    outputKind: "scalar-colors",
+    outputKind: surfaceColorOutputKind(pass),
     outputBytesEstimate: scalarColorOutputBytesEstimate(pass),
     passId: pass.surface.passId,
     staleCompatibilityKey,
@@ -168,9 +173,22 @@ function buildSurfaceColorWorkItem(
       "field-color",
       pass.surface.passId,
       colorMode,
+      projectionRevision,
       inputBufferId,
     ].join(":"),
   };
+}
+
+function surfaceColorOutputKind(
+  pass: Viewport3DTargetRenderPassModel,
+): Viewport3DDerivedWorkOutputKind {
+  if (pass.surface.projectionMode === "surface_faces") {
+    return "surface-face-colors";
+  }
+  if (pass.surface.projectionMode === "thickness_average_z") {
+    return "surface-thickness-projection";
+  }
+  return "surface-vertex-colors";
 }
 
 function buildVectorSegmentWorkItem(

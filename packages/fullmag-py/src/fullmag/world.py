@@ -927,6 +927,7 @@ class _MeshSpecState:
     through_thickness_element_ratio: float | None = None
     through_thickness_symmetric: bool = False
     sweep_face_meshing: str | None = None
+    periodic_pair_ids: list[str] = field(default_factory=list)
 
     def is_configured(self) -> bool:
         return (
@@ -976,6 +977,7 @@ class _MeshSpecState:
             or self.through_thickness_element_ratio is not None
             or self.through_thickness_symmetric
             or self.sweep_face_meshing is not None
+            or bool(self.periodic_pair_ids)
         )
 
 
@@ -1930,6 +1932,7 @@ class FrequencyResponseStageSpec:
     k_vector: tuple[float, float, float] | None = None
     k_sampling: object | None = None
     bc: str | dict[str, object] = "free"
+    magnetostatic_bc: str = "open"
 
 
 @dataclass(frozen=True, slots=True)
@@ -2290,6 +2293,7 @@ def frequency_response_stage(
     k_vector: tuple[float, float, float] | None = None,
     k_sampling: object | None = None,
     bc: str | dict[str, object] = "free",
+    magnetostatic_bc: str = "open",
 ) -> FrequencyResponseStageSpec:
     return FrequencyResponseStageSpec(
         frequencies_hz=frequencies_hz,
@@ -2304,6 +2308,7 @@ def frequency_response_stage(
         k_vector=k_vector,
         k_sampling=k_sampling,
         bc=bc,
+        magnetostatic_bc=magnetostatic_bc,
     )
 
 
@@ -2417,6 +2422,7 @@ def _capture_stage(stage_spec: object) -> CapturedStage:
                 frequency_k_vector=stage_spec.k_vector,
                 frequency_k_sampling=stage_spec.k_sampling,
                 frequency_spin_wave_bc=stage_spec.bc,
+                frequency_magnetostatic_bc=stage_spec.magnetostatic_bc,
             ),
             entrypoint_kind="flat_frequency_response",
             default_until_seconds=None,
@@ -2952,6 +2958,7 @@ class StudyStagesBuilder:
         k_vector: tuple[float, float, float] | None = None,
         k_sampling: object | None = None,
         bc: str | dict[str, object] = "free",
+        magnetostatic_bc: str = "open",
     ) -> "StudyStagesBuilder":
         return self.add_stage(
             frequency_response_stage(
@@ -2967,6 +2974,7 @@ class StudyStagesBuilder:
                 k_vector=k_vector,
                 k_sampling=k_sampling,
                 bc=bc,
+                magnetostatic_bc=magnetostatic_bc,
             )
         )
 
@@ -3972,6 +3980,7 @@ class StudyBuilder:
         k_vector: tuple[float, float, float] | None = None,
         k_sampling: object | None = None,
         bc: str | dict[str, object] = "free",
+        magnetostatic_bc: str = "open",
     ) -> Any:
         return frequency_response(
             frequencies_hz=frequencies_hz,
@@ -3986,6 +3995,7 @@ class StudyBuilder:
             k_vector=k_vector,
             k_sampling=k_sampling,
             bc=bc,
+            magnetostatic_bc=magnetostatic_bc,
         )
 
 
@@ -4003,6 +4013,7 @@ def frequency_response(
     k_vector: tuple[float, float, float] | None = None,
     k_sampling: object | None = None,
     bc: str | dict[str, object] = "free",
+    magnetostatic_bc: str = "open",
 ) -> Any:
     """Build the problem and queue/run a driven frequency-response analysis."""
     from fullmag.runtime import Simulation
@@ -4021,6 +4032,7 @@ def frequency_response(
         frequency_k_vector=k_vector,
         frequency_k_sampling=k_sampling,
         frequency_spin_wave_bc=bc,
+        frequency_magnetostatic_bc=magnetostatic_bc,
     )
 
     if _capture_enabled:
@@ -4236,6 +4248,7 @@ def _configure_object_mesh_defaults(
     boundary_layer_target_curve_selectors: Sequence[Mapping[str, object]] | None = None,
     compute_quality: bool | None = None,
     per_element_quality: bool | None = None,
+    periodic_pair_ids: Sequence[str] | None = None,
 ) -> None:
     """Configure shared default mesher settings for magnetic objects in the flat API."""
     resolved_hmax, resolved_hmin, resolved_growth_rate = _coalesce_mesh_size_controls(
@@ -4356,6 +4369,14 @@ def _configure_object_mesh_defaults(
         _state._default_mesh_spec.compute_quality = compute_quality
     if per_element_quality is not None:
         _state._default_mesh_spec.per_element_quality = per_element_quality
+    if periodic_pair_ids is not None:
+        normalized_pair_ids = [
+            require_non_empty(str(pair_id), "study.objects.mesh.defaults.periodic_pair_ids")
+            for pair_id in periodic_pair_ids
+        ]
+        if not normalized_pair_ids:
+            raise ValueError("study.objects.mesh.defaults.periodic_pair_ids must not be empty")
+        _state._default_mesh_spec.periodic_pair_ids = normalized_pair_ids
 
 
 def object_mesh_defaults(*args: object, **kwargs: object) -> None:
@@ -5000,6 +5021,8 @@ def _mesh_spec_to_metadata(spec: _MeshSpecState) -> dict[str, object]:
         payload["through_thickness_symmetric"] = True
     if spec.sweep_face_meshing is not None:
         payload["sweep_face_meshing"] = spec.sweep_face_meshing
+    if spec.periodic_pair_ids:
+        payload["periodic_pair_ids"] = list(spec.periodic_pair_ids)
     if spec.operations:
         payload["operations"] = [
             {"kind": operation.kind, "params": dict(operation.params)}
@@ -5810,6 +5833,7 @@ def _build_problem(
     frequency_k_vector: tuple[float, float, float] | None = None,
     frequency_k_sampling: object | None = None,
     frequency_spin_wave_bc: str | dict[str, object] = "free",
+    frequency_magnetostatic_bc: str = "open",
     hysteresis_spec: Any = None,
 ) -> Problem:
     """Construct a Problem from the current world state."""
@@ -5981,6 +6005,7 @@ def _build_problem(
             normalization=frequency_normalization,
             damping_policy=frequency_damping_policy,
             spin_wave_bc=frequency_spin_wave_bc,
+            magnetostatic_bc=frequency_magnetostatic_bc,
             k_sampling=frequency_k_sampling,
             k_vector=frequency_k_vector,
             dynamics=dynamics,

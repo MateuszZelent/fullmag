@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import fullmag as fm
 import fullmag.world as flat_world
-from fullmag.runtime.simulation import Result, StepStats
+from fullmag.runtime.simulation import Result, StepStats, result_from_run_payload
 
 
 def _step(
@@ -109,6 +109,57 @@ class QuantityApiTests(unittest.TestCase):
 
         self.assertAlmostEqual(float(fm.E_total.region("free")), 1.0)
         self.assertAlmostEqual(float(fm.mx.region("free")), 0.25)
+
+    def test_result_payload_preserves_demag_phase_telemetry(self) -> None:
+        result = result_from_run_payload(
+            {
+                "status": "completed",
+                "steps": [
+                    {
+                        "step": 1,
+                        "time": 1.0e-12,
+                        "dt": 1.0e-12,
+                        "e_ex": 0.1,
+                        "e_demag": 0.2,
+                        "e_ext": 0.3,
+                        "e_total": 0.6,
+                        "max_dm_dt": 1.0,
+                        "max_h_eff": 2.0,
+                        "wall_time_ns": 100,
+                        "demag_wall_time_ns": 70,
+                        "demag_assemble_wall_time_ns": 11,
+                        "demag_solve_wall_time_ns": 22,
+                        "demag_solver_setup_wall_time_ns": 7,
+                        "demag_solver_apply_wall_time_ns": 15,
+                        "demag_solver_setup_reused": True,
+                        "demag_recover_wall_time_ns": 33,
+                        "demag_energy_wall_time_ns": 4,
+                        "demag_solves": 1,
+                        "poisson_iterations": 9,
+                        "poisson_final_residual": 1.0e-8,
+                        "demag_solver": "CG",
+                    }
+                ],
+            },
+            backend=fm.BackendTarget.FDM,
+            mode=fm.ExecutionMode.STRICT,
+            precision=fm.ExecutionPrecision.DOUBLE,
+            output_dir="run_output",
+        )
+
+        step = result.steps[0]
+        self.assertEqual(step.demag_wall_time_ns, 70)
+        self.assertEqual(step.demag_assemble_wall_time_ns, 11)
+        self.assertEqual(step.demag_solve_wall_time_ns, 22)
+        self.assertEqual(step.demag_solver_setup_wall_time_ns, 7)
+        self.assertEqual(step.demag_solver_apply_wall_time_ns, 15)
+        self.assertTrue(step.demag_solver_setup_reused)
+        self.assertEqual(step.demag_recover_wall_time_ns, 33)
+        self.assertEqual(step.demag_energy_wall_time_ns, 4)
+        self.assertEqual(step.demag_solves, 1)
+        self.assertEqual(step.poisson_iterations, 9)
+        self.assertAlmostEqual(step.poisson_final_residual, 1.0e-8)
+        self.assertEqual(step.demag_solver, "CG")
 
     def test_run_while_requires_explicit_guard(self) -> None:
         with self.assertRaisesRegex(ValueError, "max_time or max_steps"):

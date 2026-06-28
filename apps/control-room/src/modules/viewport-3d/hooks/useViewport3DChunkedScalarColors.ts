@@ -24,6 +24,7 @@ import {
   viewport3DTargetFieldBufferCanServeSurface,
   type Viewport3DTargetFieldBuffer,
 } from "../model/viewport3DTargetFieldBuffer";
+import type { Viewport3DTargetRenderPlan } from "../model/viewport3DFieldDataPlan";
 import { summarizeViewport3DTargetDiagnostics } from "../model/viewport3DTargetDiagnostics";
 import type {
   Viewport3DFieldRenderModel,
@@ -69,6 +70,9 @@ export interface Viewport3DChunkedScalarColorResult {
   colorsByPartAndMode: ReadonlyMap<string, ReadonlyMap<string, ScalarColorBuffer>>;
   status: Viewport3DChunkedScalarColorStatus;
 }
+
+type Viewport3DChunkedProjectionMode =
+  Viewport3DTargetRenderPlan["shader"]["projectionMode"];
 
 export interface Viewport3DFieldColorBuildReference {
   buildKey: string;
@@ -428,11 +432,13 @@ export function resolveViewport3DChunkedPartDisplayModesKey({
   colorPalette,
   partScalarColorModes,
   partScalarColorPalettes,
+  targetRenderPlans,
   topology,
 }: {
   colorPalette: string;
   partScalarColorModes?: ReadonlyMap<string, string>;
   partScalarColorPalettes?: ReadonlyMap<string, string>;
+  targetRenderPlans?: ReadonlyMap<string, Viewport3DTargetRenderPlan>;
   topology:
     | Viewport3DTopologyRenderModel<Viewport3DRenderablePart>
     | null
@@ -444,11 +450,17 @@ export function resolveViewport3DChunkedPartDisplayModesKey({
       const partId = partModel.part.id;
       const mode = partScalarColorModes.get(partId);
       if (!mode || mode === "monochrome") return null;
-      return [
+      const projectionMode =
+        targetRenderPlans?.get(partId)?.shader.projectionMode ?? "raw_nodal";
+      const entry = [
         partId,
         mode,
         partScalarColorPalettes?.get(partId) ?? colorPalette,
-      ].join(":");
+      ];
+      if (projectionMode !== "raw_nodal") {
+        entry.push(`projection=${projectionMode}`);
+      }
+      return entry.join(":");
     })
     .filter((entry): entry is string => Boolean(entry))
     .join("|");
@@ -468,6 +480,7 @@ export function useViewport3DChunkedScalarColors({
   partScalarColorModes,
   partScalarColorPalettes,
   partScalarRangesByMode,
+  targetRenderPlans,
   targetVisualizationRevision,
   topology,
   topologyRevision,
@@ -485,6 +498,7 @@ export function useViewport3DChunkedScalarColors({
   partScalarColorModes?: ReadonlyMap<string, string>;
   partScalarColorPalettes?: ReadonlyMap<string, string>;
   partScalarRangesByMode?: ReadonlyMap<string, ReadonlyMap<string, ScalarRange>>;
+  targetRenderPlans?: ReadonlyMap<string, Viewport3DTargetRenderPlan>;
   targetVisualizationRevision?: string | number | null;
   topology:
     | Viewport3DTopologyRenderModel<Viewport3DRenderablePart>
@@ -519,6 +533,7 @@ export function useViewport3DChunkedScalarColors({
       palette: string;
       scalarRange: ScalarRange | null | undefined;
       target: Viewport3DFieldColorBuildTarget;
+      targetProjectionMode: Viewport3DChunkedProjectionMode;
     }> = [];
     for (const partModel of [...topology.magneticParts, ...topology.airboxParts]) {
       const partId = partModel.part.id;
@@ -572,13 +587,22 @@ export function useViewport3DChunkedScalarColors({
       ) {
         continue;
       }
-      const target = explicitPartFieldVector
-        ? resolveViewport3DChunkedPartFieldColorTarget(
-            topology,
-            partModel,
-            partFieldVector,
-          )
-        : resolveViewport3DChunkedFieldColorTarget(topology, partFieldVector);
+      const targetProjectionMode =
+        targetRenderPlans?.get(partId)?.shader.projectionMode ?? "raw_nodal";
+      const target =
+        targetProjectionMode === "raw_nodal"
+          ? explicitPartFieldVector
+            ? resolveViewport3DChunkedPartFieldColorTarget(
+                topology,
+                partModel,
+                partFieldVector,
+              )
+            : resolveViewport3DChunkedFieldColorTarget(topology, partFieldVector)
+          : resolveViewport3DChunkedPartProjectionTarget(
+              topology,
+              partModel,
+              targetProjectionMode,
+            );
       if (!target) continue;
       specs.push({
         fieldVector: partFieldVector,
@@ -587,6 +611,7 @@ export function useViewport3DChunkedScalarColors({
         palette,
         scalarRange,
         target,
+        targetProjectionMode,
       });
     }
     return specs;
@@ -598,6 +623,7 @@ export function useViewport3DChunkedScalarColors({
     partScalarColorModes,
     partScalarColorPalettes,
     partScalarRangesByMode,
+    targetRenderPlans,
     fieldScalarRangesByMode,
     fieldVector,
     topology,
@@ -606,8 +632,16 @@ export function useViewport3DChunkedScalarColors({
     () =>
       partBuildSpecs
         .map(
-          ({ fieldVector, mode, palette, partId, scalarRange }) =>
-            `${partId}:${fieldVector.quantityId ?? "unknown"}:${chunkedFieldVectorObjectId(fieldVector)}:${fieldVector.pointCount}:${mode}:${palette}:${scalarRangeRevisionKey(scalarRange)}`,
+          ({
+            fieldVector,
+            mode,
+            palette,
+            partId,
+            scalarRange,
+            target,
+            targetProjectionMode,
+          }) =>
+            `${partId}:${fieldVector.quantityId ?? "unknown"}:${chunkedFieldVectorObjectId(fieldVector)}:${fieldVector.pointCount}:${mode}:${palette}:${scalarRangeRevisionKey(scalarRange)}:${target.kind}:${targetProjectionMode}`,
         )
         .join("|"),
     [partBuildSpecs],
@@ -618,9 +652,16 @@ export function useViewport3DChunkedScalarColors({
         colorPalette,
         partScalarColorModes,
         partScalarColorPalettes,
+        targetRenderPlans,
         topology,
       }),
-    [colorPalette, partScalarColorModes, partScalarColorPalettes, topology],
+    [
+      colorPalette,
+      partScalarColorModes,
+      partScalarColorPalettes,
+      targetRenderPlans,
+      topology,
+    ],
   );
   const combinedModesKey = partModesKey ? `${modesKey}||${partModesKey}` : modesKey;
   const combinedDisplayModesKey = requestedPartDisplayModesKey
@@ -844,7 +885,14 @@ export function useViewport3DChunkedScalarColors({
             })
           : [];
       const partJobs = partBuildSpecs.map(
-        async ({ fieldVector, mode, palette, partId, scalarRange, target }) => {
+        async ({
+          fieldVector,
+          mode,
+          palette,
+          partId,
+          scalarRange,
+          target,
+        }) => {
           const fieldColorBuildReference =
             createViewport3DFieldColorBuildReference({
               colorMode: mode,
@@ -856,9 +904,10 @@ export function useViewport3DChunkedScalarColors({
                 "viewport-3d",
               fieldRevision:
                 chunkedFieldVectorObjectId(fieldVector),
+              samplingRevision: `target=${target.kind}`,
               quantityId: fieldVector.quantityId,
               sessionId: buildSessionId ?? "current",
-              targetId: `surface/${partId}`,
+              targetId: `surface/${partId}/${target.kind}`,
               targetScopeId: partId,
               targetScopeKind: "part",
               targetVisualizationRevision:
@@ -1122,6 +1171,38 @@ export function resolveViewport3DChunkedPartFieldColorTarget(
     targetNodeIndices,
     vertexCount: topology.nodeCount,
   };
+}
+
+export function resolveViewport3DChunkedPartProjectionTarget(
+  topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
+  partModel: Viewport3DTopologyPartRenderModel<Viewport3DRenderablePart>,
+  projectionMode: Viewport3DChunkedProjectionMode,
+): Viewport3DFieldColorBuildTarget | null {
+  if (projectionMode === "raw_nodal") return null;
+  const surfaceIndices = partModel.surfaceIndices;
+  if (!surfaceIndices || surfaceIndices.length === 0) return null;
+
+  if (projectionMode === "surface_faces") {
+    return {
+      kind: "surface-faces",
+      surfaceIndices,
+      vertexCount: topology.nodeCount,
+    };
+  }
+
+  if (
+    projectionMode === "thickness_average_z" &&
+    topology.positions.length >= topology.nodeCount * 3
+  ) {
+    return {
+      kind: "thickness-average-z",
+      positions: topology.positions,
+      surfaceIndices,
+      vertexCount: topology.nodeCount,
+    };
+  }
+
+  return null;
 }
 
 function chunkedFieldVectorMatchesTopology(

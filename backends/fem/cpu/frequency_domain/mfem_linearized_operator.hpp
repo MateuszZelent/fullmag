@@ -29,6 +29,7 @@ struct MfemLinearizedOperatorWorkspace {
     double *dmi_delta_xyz = nullptr;
     double *dmi_residual_xyz = nullptr;
     double *dmi_field_xyz = nullptr;
+    const double *demag_tangent = nullptr;
 };
 
 struct MfemLinearizedOperatorDiagnostics {
@@ -41,6 +42,7 @@ struct MfemLinearizedOperatorDiagnostics {
     double max_abs_zeeman_field = 0.0;
     double max_abs_uniaxial_anisotropy_field = 0.0;
     double max_abs_dmi_field = 0.0;
+    double max_abs_demag_field = 0.0;
     double max_abs_effective_field = 0.0;
     double max_abs_stiffness_rhs = 0.0;
     double max_abs_mass_rhs = 0.0;

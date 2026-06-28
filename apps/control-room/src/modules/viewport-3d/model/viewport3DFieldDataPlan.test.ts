@@ -53,6 +53,16 @@ describe("viewport3DFieldDataPlan", () => {
       .toEqual([]);
   });
 
+  it("keeps the surface field projection mode in the shader plan", () => {
+    const plan = objectPlan("object:surface-faces", {
+      surfaceColorSource: "component_x",
+      surfaceProjectionMode: "surface_faces",
+      vectorsVisible: false,
+    });
+
+    expect(plan.shader.projectionMode).toBe("surface_faces");
+  });
+
   it("reports request id mismatches for scoped data-plane diagnostics", () => {
     expect(
       validateViewport3DFieldResourceRequestIdentities([

@@ -34,6 +34,10 @@ export type SurfaceColorSource =
   | "component_z"
   | "magnitude"
   | "colormap";
+export type SurfaceFieldProjectionMode =
+  | "raw_nodal"
+  | "surface_faces"
+  | "thickness_average_z";
 
 export interface VisualizationTargetRef {
   id: string;
@@ -56,6 +60,7 @@ export interface VisualizationTargetSettings {
   shaderMonoColor: string;
   shaderVisible: boolean;
   surfaceColorSource: SurfaceColorSource;
+  surfaceProjectionMode: SurfaceFieldProjectionMode;
   viewportColorbarVisible: boolean;
   vectorAlphaPercent: number;
   vectorBudget: number;
@@ -133,6 +138,7 @@ export const DEFAULT_OBJECT_VISUALIZATION: VisualizationTargetSettings = {
   shaderMonoColor: "var(--fm-surface-magnetic)",
   shaderVisible: true,
   surfaceColorSource: "orientation",
+  surfaceProjectionMode: "raw_nodal",
   viewportColorbarVisible: false,
   vectorAlphaPercent: 100,
   vectorBudget: 1200,
@@ -165,6 +171,7 @@ export const DEFAULT_AIRBOX_VISUALIZATION: VisualizationTargetSettings = {
   shaderMonoColor: "var(--fm-airbox-fill)",
   shaderVisible: true,
   surfaceColorSource: "solid",
+  surfaceProjectionMode: "raw_nodal",
   viewportColorbarVisible: false,
   vectorAlphaPercent: 100,
   vectorBudget: 1200,
@@ -485,6 +492,10 @@ function resolveVisualizationStateTargetOverride(
     style.surface_color_source === null
       ? {}
       : { surfaceColorSource: style.surface_color_source }),
+    ...(style?.surface_projection_mode === undefined ||
+    style.surface_projection_mode === null
+      ? {}
+      : { surfaceProjectionMode: style.surface_projection_mode }),
     ...(style?.surface_mono_color === undefined ||
     style.surface_mono_color === null
       ? {}
@@ -579,6 +590,9 @@ export function visualizationStateOverrideFromTargetPatch(
     ...(normalized.surfaceColorSource === undefined
       ? {}
       : { surface_color_source: normalized.surfaceColorSource }),
+    ...(normalized.surfaceProjectionMode === undefined
+      ? {}
+      : { surface_projection_mode: normalized.surfaceProjectionMode }),
     ...(normalized.pointColor === undefined
       ? {}
       : { point_color: normalized.pointColor }),
@@ -979,6 +993,7 @@ function visualizationSettingsFromResolvedTarget(
       settings.scalar_color_palette ??
       DEFAULT_AIRBOX_VISUALIZATION.scalarColorPalette,
     surfaceColorSource: settings.surface_color_source,
+    surfaceProjectionMode: settings.surface_projection_mode ?? "raw_nodal",
     vectorAlphaPercent: layerOpacityToPercent(settings.vector_alpha),
     vectorBudget: Math.max(
       0,
@@ -1287,6 +1302,11 @@ function normalizePatch(
       normalized.surfaceColorSource,
     ) ?? "monochrome";
   }
+  if (normalized.surfaceProjectionMode !== undefined) {
+    normalized.surfaceProjectionMode =
+      normalizeSurfaceProjectionMode(normalized.surfaceProjectionMode) ??
+      "raw_nodal";
+  }
   if (normalized.vectorColorMode !== undefined) {
     normalized.vectorColorMode =
       normalizeColorMode(normalized.vectorColorMode) ?? "orientation";
@@ -1341,6 +1361,9 @@ function normalizeVisualizationSettings(
     shaderColorMode:
       surfaceColorSourceToColorMode(surfaceColorSource) ?? "monochrome",
     surfaceColorSource,
+    surfaceProjectionMode:
+      normalizeSurfaceProjectionMode(settings.surfaceProjectionMode) ??
+      "raw_nodal",
   };
 }
 
@@ -1373,6 +1396,16 @@ function normalizeSurfaceColorSource(
     value === "component_z" ||
     value === "magnitude" ||
     value === "colormap"
+    ? value
+    : undefined;
+}
+
+function normalizeSurfaceProjectionMode(
+  value: unknown,
+): SurfaceFieldProjectionMode | undefined {
+  return value === "raw_nodal" ||
+    value === "surface_faces" ||
+    value === "thickness_average_z"
     ? value
     : undefined;
 }

@@ -741,6 +741,33 @@ pub(crate) fn pack_mesh_by_analysis(
         reordered_boundary_markers.push(mesh.boundary_markers[face_index]);
     }
 
+    let mut reordered_periodic_node_pairs = Vec::with_capacity(mesh.periodic_node_pairs.len());
+    for (pair_index, pair) in mesh.periodic_node_pairs.iter().enumerate() {
+        let owner_a = *analysis
+            .node_owner
+            .get(pair.node_a as usize)
+            .ok_or_else(|| {
+                format!(
+                    "shared-domain FEM mesh '{}' periodic node pair {} references node {} outside node_owner bounds",
+                    mesh.mesh_name, pair_index, pair.node_a
+                )
+            })?;
+        let owner_b = *analysis
+            .node_owner
+            .get(pair.node_b as usize)
+            .ok_or_else(|| {
+                format!(
+                    "shared-domain FEM mesh '{}' periodic node pair {} references node {} outside node_owner bounds",
+                    mesh.mesh_name, pair_index, pair.node_b
+                )
+            })?;
+        reordered_periodic_node_pairs.push(fullmag_ir::MeshPeriodicNodePairIR {
+            pair_id: pair.pair_id.clone(),
+            node_a: remap_node(pair.node_a, owner_a)?,
+            node_b: remap_node(pair.node_b, owner_b)?,
+        });
+    }
+
     let mut object_segments = ordered_regions
         .iter()
         .map(|entry| FemObjectSegmentIR {
@@ -805,7 +832,7 @@ pub(crate) fn pack_mesh_by_analysis(
         boundary_faces: reordered_boundary_faces,
         boundary_markers: reordered_boundary_markers,
         periodic_boundary_pairs: mesh.periodic_boundary_pairs.clone(),
-        periodic_node_pairs: mesh.periodic_node_pairs.clone(),
+        periodic_node_pairs: reordered_periodic_node_pairs,
         // Marker values are preserved during reorder — carry the quality map through.
         per_domain_quality: mesh.per_domain_quality.clone(),
     };

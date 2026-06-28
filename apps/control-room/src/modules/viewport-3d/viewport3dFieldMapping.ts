@@ -1,4 +1,5 @@
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
+import type { SurfaceFieldProjectionMode } from "@/kernel/visualization/ObjectVisualizationController";
 
 import {
   normalizeViewport3DVectorColorMode,
@@ -34,6 +35,23 @@ export interface ScalarColorBuffer {
   quantityId?: string;
   range: ScalarRange;
   rangeDiagnostics?: ScalarRangeDiagnostics;
+  degradedFaceCount?: number;
+  faceCount?: number;
+  geometryRole?: "face_expanded_surface" | "indexed_topology";
+  lowNormFaceCount?: number;
+  missingNodeCount?: number;
+  projectedBinCount?: number;
+  projectedSamplesPerBinMax?: number;
+  projectedSamplesPerBinMean?: number;
+  projectedSamplesPerBinMin?: number;
+  projectionSuitability?:
+    | "degraded_insufficient_depth_samples"
+    | "degraded_non_world_z_thin_film"
+    | "world_z_thin_film";
+  projectionAxis?: "z";
+  projectionMode?: SurfaceFieldProjectionMode;
+  projectionTolerance?: number;
+  rangeSource?: "face_values" | "field_meta" | "manual" | "projected_values" | "raw_nodal";
   scalarValues?: Float32Array;
   targetRevision?: string;
   topologyRevision?: string;
@@ -51,6 +69,9 @@ export interface ChunkedFieldTransformOptions {
 }
 
 export const VIEWPORT_3D_SYNC_COLOR_POINT_LIMIT = 50_000;
+const LOW_CONFIDENCE_ORIENTATION_RGB = [0.6, 0.6, 0.6] as const;
+const MISSING_PROJECTED_DATA_RGB = [0.5, 0.5, 0.5] as const;
+const REDUCED_MAGNETIZATION_LOW_NORM_EPSILON = 1e-3;
 
 export function fieldTransformNeedsChunking(
   pointCount: number,
@@ -222,6 +243,295 @@ export function buildMappedVertexScalarColors(
       resolvedColorMode,
     ),
     scalarValues,
+  };
+}
+
+export function buildSurfaceFaceScalarColors(
+  fieldVector: DecodedFieldVector | null | undefined,
+  surfaceIndices: Uint32Array | null | undefined,
+  vertexCount: number,
+  colorMode = "magnitude",
+  colorPalette = "viridis",
+  scalarRange?: ScalarRange | null,
+  maxSynchronousPoints = VIEWPORT_3D_SYNC_COLOR_POINT_LIMIT,
+): ScalarColorBuffer | null {
+  const resolvedColorMode = normalizeViewport3DVectorColorMode(
+    colorMode,
+    "magnitude",
+  );
+  if (
+    !fieldVector ||
+    !surfaceIndices ||
+    surfaceIndices.length === 0 ||
+    surfaceIndices.length % 3 !== 0 ||
+    fieldVector.pointCount === 0 ||
+    fieldVector.indexing === "sampled_node_indices" ||
+    !fieldVectorSupportsScalarColorMode(fieldVector, resolvedColorMode) ||
+    resolvedColorMode === "monochrome" ||
+    fieldTransformNeedsChunking(
+      Math.max(fieldVector.pointCount, surfaceIndices.length),
+      maxSynchronousPoints,
+    )
+  ) {
+    return null;
+  }
+
+  const nodeToFieldIndex = buildNodeToFieldIndexMap(fieldVector, vertexCount);
+  if (!nodeToFieldIndex) return null;
+
+  const faceCount = surfaceIndices.length / 3;
+  const faceVectors = new Float64Array(faceCount * 3);
+  const faceScalars = new Float64Array(faceCount);
+  let lowNormFaceCount = 0;
+  for (let faceIndex = 0; faceIndex < faceCount; faceIndex += 1) {
+    const surfaceOffset = faceIndex * 3;
+    const nodeA = surfaceIndices[surfaceOffset] ?? -1;
+    const nodeB = surfaceIndices[surfaceOffset + 1] ?? -1;
+    const nodeC = surfaceIndices[surfaceOffset + 2] ?? -1;
+    const fieldA = nodeToFieldIndex.get(nodeA);
+    const fieldB = nodeToFieldIndex.get(nodeB);
+    const fieldC = nodeToFieldIndex.get(nodeC);
+    if (fieldA === undefined || fieldB === undefined || fieldC === undefined) {
+      return null;
+    }
+    const [x, y, z] = averageFieldVectorComponents(
+      fieldVector,
+      fieldA,
+      fieldB,
+      fieldC,
+    );
+    const vectorOffset = faceIndex * 3;
+    faceVectors[vectorOffset] = x;
+    faceVectors[vectorOffset + 1] = y;
+    faceVectors[vectorOffset + 2] = z;
+    if (isLowConfidenceOrientationVector(resolvedColorMode, x, y, z)) {
+      lowNormFaceCount += 1;
+    }
+    faceScalars[faceIndex] = scalarFromComponents(
+      resolvedColorMode,
+      x,
+      y,
+      z,
+      fieldVector.nComp,
+    );
+  }
+
+  const range =
+    resolveProvidedScalarRange(scalarRange) ??
+    scalarRangeFromValues(faceScalars);
+  const colors = new Float32Array(surfaceIndices.length * 3);
+  const scalarValues = shaderScalarModeSupports(resolvedColorMode)
+    ? new Float32Array(surfaceIndices.length)
+    : undefined;
+  const vectorValues = shaderVectorModeSupports(resolvedColorMode, fieldVector)
+    ? new Float32Array(surfaceIndices.length * 3)
+    : undefined;
+
+  for (let faceIndex = 0; faceIndex < faceCount; faceIndex += 1) {
+    const vectorOffset = faceIndex * 3;
+    const x = faceVectors[vectorOffset] ?? 0;
+    const y = faceVectors[vectorOffset + 1] ?? 0;
+    const z = faceVectors[vectorOffset + 2] ?? 0;
+    const scalar = faceScalars[faceIndex] ?? 0;
+    const rgb = colorProjectedVector(
+      resolvedColorMode,
+      x,
+      y,
+      z,
+      range,
+      scalar,
+      colorPalette,
+    );
+    for (let corner = 0; corner < 3; corner += 1) {
+      const targetIndex = faceIndex * 3 + corner;
+      const colorOffset = targetIndex * 3;
+      colors[colorOffset] = rgb[0];
+      colors[colorOffset + 1] = rgb[1];
+      colors[colorOffset + 2] = rgb[2];
+      if (scalarValues) {
+        scalarValues[targetIndex] = scalar;
+      }
+      if (vectorValues) {
+        vectorValues[colorOffset] = x;
+        vectorValues[colorOffset + 1] = y;
+        vectorValues[colorOffset + 2] = z;
+      }
+    }
+  }
+
+  return {
+    colors,
+    colorMode: resolvedColorMode,
+    colorPalette,
+    degradedFaceCount: 0,
+    faceCount,
+    geometryRole: "face_expanded_surface",
+    lowNormFaceCount,
+    missingNodeCount: 0,
+    projectionMode: "surface_faces",
+    quantityId: fieldVector.quantityId,
+    range,
+    rangeDiagnostics: scalarRangeDiagnosticsFromValues(faceScalars),
+    rangeSource: "face_values",
+    scalarValues,
+    vectorValues,
+  };
+}
+
+export function buildThicknessAverageZScalarColors(
+  fieldVector: DecodedFieldVector | null | undefined,
+  positions: ArrayLike<number> | null | undefined,
+  surfaceIndices: Uint32Array | null | undefined,
+  vertexCount: number,
+  colorMode = "magnitude",
+  colorPalette = "viridis",
+  scalarRange?: ScalarRange | null,
+  maxSynchronousPoints = VIEWPORT_3D_SYNC_COLOR_POINT_LIMIT,
+): ScalarColorBuffer | null {
+  const resolvedColorMode = normalizeViewport3DVectorColorMode(
+    colorMode,
+    "magnitude",
+  );
+  if (
+    !fieldVector ||
+    !positions ||
+    positions.length < vertexCount * 3 ||
+    !surfaceIndices ||
+    surfaceIndices.length === 0 ||
+    surfaceIndices.length % 3 !== 0 ||
+    fieldVector.pointCount === 0 ||
+    fieldVector.indexing === "sampled_node_indices" ||
+    !fieldVectorSupportsScalarColorMode(fieldVector, resolvedColorMode) ||
+    resolvedColorMode === "monochrome" ||
+    fieldTransformNeedsChunking(
+      Math.max(fieldVector.pointCount, surfaceIndices.length),
+      maxSynchronousPoints,
+    )
+  ) {
+    return null;
+  }
+
+  const nodeToFieldIndex = buildNodeToFieldIndexMap(fieldVector, vertexCount);
+  if (!nodeToFieldIndex) return null;
+  const projection = buildWorldZProjectedVectors({
+    fieldVector,
+    nodeToFieldIndex,
+    positions,
+    vertexCount,
+  });
+  if (!projection) return null;
+  const projectedVectors = projection.vectors;
+
+  const faceCount = surfaceIndices.length / 3;
+  const faceVectors = new Float64Array(faceCount * 3);
+  const faceScalars = new Float64Array(faceCount);
+  let lowNormFaceCount = 0;
+  let degradedFaceCount = 0;
+  let missingNodeCount = 0;
+  const degradedFaces = new Uint8Array(faceCount);
+  for (let faceIndex = 0; faceIndex < faceCount; faceIndex += 1) {
+    const surfaceOffset = faceIndex * 3;
+    const nodeA = surfaceIndices[surfaceOffset] ?? -1;
+    const nodeB = surfaceIndices[surfaceOffset + 1] ?? -1;
+    const nodeC = surfaceIndices[surfaceOffset + 2] ?? -1;
+    const vectorA = projectedVectors.get(nodeA);
+    const vectorB = projectedVectors.get(nodeB);
+    const vectorC = projectedVectors.get(nodeC);
+    if (!vectorA || !vectorB || !vectorC) {
+      degradedFaces[faceIndex] = 1;
+      degradedFaceCount += 1;
+      if (!vectorA) missingNodeCount += 1;
+      if (!vectorB) missingNodeCount += 1;
+      if (!vectorC) missingNodeCount += 1;
+      continue;
+    }
+    const x = (vectorA[0] + vectorB[0] + vectorC[0]) / 3;
+    const y = (vectorA[1] + vectorB[1] + vectorC[1]) / 3;
+    const z = (vectorA[2] + vectorB[2] + vectorC[2]) / 3;
+    const vectorOffset = faceIndex * 3;
+    faceVectors[vectorOffset] = x;
+    faceVectors[vectorOffset + 1] = y;
+    faceVectors[vectorOffset + 2] = z;
+    if (isLowConfidenceOrientationVector(resolvedColorMode, x, y, z)) {
+      lowNormFaceCount += 1;
+    }
+    faceScalars[faceIndex] = scalarFromComponents(
+      resolvedColorMode,
+      x,
+      y,
+      z,
+      fieldVector.nComp,
+    );
+  }
+
+  const range =
+    resolveProvidedScalarRange(scalarRange) ??
+    scalarRangeFromValues(faceScalars);
+  const colors = new Float32Array(surfaceIndices.length * 3);
+  const scalarValues = shaderScalarModeSupports(resolvedColorMode)
+    ? new Float32Array(surfaceIndices.length)
+    : undefined;
+  const vectorValues = shaderVectorModeSupports(resolvedColorMode, fieldVector)
+    ? new Float32Array(surfaceIndices.length * 3)
+    : undefined;
+
+  for (let faceIndex = 0; faceIndex < faceCount; faceIndex += 1) {
+    const vectorOffset = faceIndex * 3;
+    const x = faceVectors[vectorOffset] ?? 0;
+    const y = faceVectors[vectorOffset + 1] ?? 0;
+    const z = faceVectors[vectorOffset + 2] ?? 0;
+    const scalar = faceScalars[faceIndex] ?? 0;
+    const rgb = degradedFaces[faceIndex]
+      ? MISSING_PROJECTED_DATA_RGB
+      : colorProjectedVector(
+          resolvedColorMode,
+          x,
+          y,
+          z,
+          range,
+          scalar,
+          colorPalette,
+        );
+    for (let corner = 0; corner < 3; corner += 1) {
+      const targetIndex = faceIndex * 3 + corner;
+      const colorOffset = targetIndex * 3;
+      colors[colorOffset] = rgb[0];
+      colors[colorOffset + 1] = rgb[1];
+      colors[colorOffset + 2] = rgb[2];
+      if (scalarValues) {
+        scalarValues[targetIndex] = scalar;
+      }
+      if (vectorValues) {
+        vectorValues[colorOffset] = x;
+        vectorValues[colorOffset + 1] = y;
+        vectorValues[colorOffset + 2] = z;
+      }
+    }
+  }
+
+  return {
+    colors,
+    colorMode: resolvedColorMode,
+    colorPalette,
+    degradedFaceCount,
+    faceCount,
+    geometryRole: "face_expanded_surface",
+    lowNormFaceCount,
+    missingNodeCount,
+    projectedBinCount: projection.binCount,
+    projectedSamplesPerBinMax: projection.samplesPerBinMax,
+    projectedSamplesPerBinMean: projection.samplesPerBinMean,
+    projectedSamplesPerBinMin: projection.samplesPerBinMin,
+    projectionAxis: "z",
+    projectionMode: "thickness_average_z",
+    projectionSuitability: projection.suitability,
+    projectionTolerance: projection.tolerance,
+    quantityId: fieldVector.quantityId,
+    range,
+    rangeDiagnostics: scalarRangeDiagnosticsFromValues(faceScalars),
+    rangeSource: "projected_values",
+    scalarValues,
+    vectorValues,
   };
 }
 
@@ -457,6 +767,363 @@ export function resolveScalarRangeDiagnostics(
   const centralAbs = Math.max(Math.abs(p01), Math.abs(p99), 1e-12);
   const maxAbs = Math.max(Math.abs(min), Math.abs(max));
 
+  return {
+    finiteCount,
+    max,
+    mean: sum / finiteCount,
+    min,
+    nonFiniteCount,
+    outlierDominated: finiteCount >= 3 && maxAbs > 50 * centralAbs,
+    p01,
+    p99,
+    zeroCount,
+  };
+}
+
+function buildNodeToFieldIndexMap(
+  fieldVector: DecodedFieldVector,
+  vertexCount: number,
+): Map<number, number> | null {
+  if (fieldVector.indexing === "sampled_node_indices") return null;
+  const map = new Map<number, number>();
+  if (fieldVector.nodeIndices) {
+    if (
+      fieldVector.indexing === "explicit_node_indices" &&
+      fieldVector.nodeIndices.length !== fieldVector.pointCount
+    ) {
+      return null;
+    }
+    for (let fieldIndex = 0; fieldIndex < fieldVector.pointCount; fieldIndex += 1) {
+      const nodeIndex = fieldVector.nodeIndices[fieldIndex];
+      if (
+        nodeIndex === undefined ||
+        nodeIndex < 0 ||
+        nodeIndex >= vertexCount
+      ) {
+        return null;
+      }
+      map.set(nodeIndex, fieldIndex);
+    }
+    return map;
+  }
+
+  if (fieldVector.indexing === "explicit_node_indices") return null;
+  for (let fieldIndex = 0; fieldIndex < fieldVector.pointCount; fieldIndex += 1) {
+    map.set(fieldIndex, fieldIndex);
+  }
+  return map;
+}
+
+function buildWorldZProjectedVectors({
+  fieldVector,
+  nodeToFieldIndex,
+  positions,
+  vertexCount,
+}: {
+  fieldVector: DecodedFieldVector;
+  nodeToFieldIndex: ReadonlyMap<number, number>;
+  positions: ArrayLike<number>;
+  vertexCount: number;
+}): {
+  binCount: number;
+  samplesPerBinMax: number;
+  samplesPerBinMean: number;
+  samplesPerBinMin: number;
+  suitability: NonNullable<ScalarColorBuffer["projectionSuitability"]>;
+  tolerance: number;
+  vectors: Map<number, readonly [number, number, number]>;
+} | null {
+  const bounds = worldZProjectionBounds(positions, vertexCount);
+  if (!bounds) return null;
+  const tolerance = worldZProjectionTolerance(bounds);
+  if (!Number.isFinite(tolerance) || tolerance <= 0) return null;
+  const columns = new Map<
+    string,
+    { count: number; x: number; y: number; z: number }
+  >();
+  const nodeColumnKeys = new Map<number, string>();
+
+  for (const [nodeIndex, fieldIndex] of nodeToFieldIndex) {
+    if (nodeIndex < 0 || nodeIndex >= vertexCount) return null;
+    const positionOffset = nodeIndex * 3;
+    const x = positions[positionOffset] ?? Number.NaN;
+    const y = positions[positionOffset + 1] ?? Number.NaN;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    const key = `${Math.round(x / tolerance)}:${Math.round(y / tolerance)}`;
+    const column = columns.get(key) ?? { count: 0, x: 0, y: 0, z: 0 };
+    column.count += 1;
+    column.x += fieldComponent(fieldVector, fieldIndex, 0);
+    column.y += fieldComponent(fieldVector, fieldIndex, 1);
+    column.z += fieldComponent(fieldVector, fieldIndex, 2);
+    columns.set(key, column);
+    nodeColumnKeys.set(nodeIndex, key);
+  }
+
+  const columnVectors = new Map<string, readonly [number, number, number]>();
+  let samplesPerBinMax = 0;
+  let samplesPerBinMin = Infinity;
+  let samplesPerBinSum = 0;
+  for (const [key, column] of Array.from(columns).sort(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    if (column.count <= 0) return null;
+    samplesPerBinMax = Math.max(samplesPerBinMax, column.count);
+    samplesPerBinMin = Math.min(samplesPerBinMin, column.count);
+    samplesPerBinSum += column.count;
+    columnVectors.set(key, [
+      column.x / column.count,
+      column.y / column.count,
+      column.z / column.count,
+    ]);
+  }
+
+  const projected = new Map<number, readonly [number, number, number]>();
+  for (const [nodeIndex, key] of nodeColumnKeys) {
+    const vector = columnVectors.get(key);
+    if (!vector) return null;
+    projected.set(nodeIndex, vector);
+  }
+  const binCount = columnVectors.size;
+  return {
+    binCount,
+    samplesPerBinMax,
+    samplesPerBinMean: binCount > 0 ? samplesPerBinSum / binCount : 0,
+    samplesPerBinMin: Number.isFinite(samplesPerBinMin)
+      ? samplesPerBinMin
+      : 0,
+    suitability: resolveWorldZProjectionSuitability({
+      samplesPerBinMin: Number.isFinite(samplesPerBinMin)
+        ? samplesPerBinMin
+        : 0,
+      tolerance,
+      xExtent: bounds.maxX - bounds.minX,
+      yExtent: bounds.maxY - bounds.minY,
+      zExtent: bounds.maxZ - bounds.minZ,
+    }),
+    tolerance,
+    vectors: projected,
+  };
+}
+
+function worldZProjectionBounds(
+  positions: ArrayLike<number>,
+  vertexCount: number,
+): {
+  maxX: number;
+  maxY: number;
+  maxZ: number;
+  minX: number;
+  minY: number;
+  minZ: number;
+} | null {
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  for (let nodeIndex = 0; nodeIndex < vertexCount; nodeIndex += 1) {
+    const offset = nodeIndex * 3;
+    const x = positions[offset] ?? Number.NaN;
+    const y = positions[offset + 1] ?? Number.NaN;
+    const z = positions[offset + 2] ?? Number.NaN;
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+      continue;
+    }
+    minX = Math.min(minX, x);
+    maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y);
+    maxY = Math.max(maxY, y);
+    minZ = Math.min(minZ, z);
+    maxZ = Math.max(maxZ, z);
+  }
+  if (
+    !Number.isFinite(minX) ||
+    !Number.isFinite(maxX) ||
+    !Number.isFinite(minY) ||
+    !Number.isFinite(maxY) ||
+    !Number.isFinite(minZ) ||
+    !Number.isFinite(maxZ)
+  ) {
+    return null;
+  }
+  return { maxX, maxY, maxZ, minX, minY, minZ };
+}
+
+function worldZProjectionTolerance(
+  bounds: NonNullable<ReturnType<typeof worldZProjectionBounds>>,
+): number {
+  const diagonal = Math.hypot(
+    bounds.maxX - bounds.minX,
+    bounds.maxY - bounds.minY,
+    bounds.maxZ - bounds.minZ,
+  );
+  return Math.max(diagonal * 1e-9, 1e-12);
+}
+
+function resolveWorldZProjectionSuitability({
+  samplesPerBinMin,
+  tolerance,
+  xExtent,
+  yExtent,
+  zExtent,
+}: {
+  samplesPerBinMin: number;
+  tolerance: number;
+  xExtent: number;
+  yExtent: number;
+  zExtent: number;
+}): NonNullable<ScalarColorBuffer["projectionSuitability"]> {
+  if (zExtent > Math.min(xExtent, yExtent) + tolerance) {
+    return "degraded_non_world_z_thin_film";
+  }
+  if (samplesPerBinMin < 2) {
+    return "degraded_insufficient_depth_samples";
+  }
+  return "world_z_thin_film";
+}
+
+function averageFieldVectorComponents(
+  fieldVector: DecodedFieldVector,
+  fieldA: number,
+  fieldB: number,
+  fieldC: number,
+): [number, number, number] {
+  return [
+    averageFieldComponent(fieldVector, fieldA, fieldB, fieldC, 0),
+    averageFieldComponent(fieldVector, fieldA, fieldB, fieldC, 1),
+    averageFieldComponent(fieldVector, fieldA, fieldB, fieldC, 2),
+  ];
+}
+
+function averageFieldComponent(
+  fieldVector: DecodedFieldVector,
+  fieldA: number,
+  fieldB: number,
+  fieldC: number,
+  component: number,
+): number {
+  if (component >= fieldVector.nComp) return 0;
+  return (
+    ((fieldVector.values[fieldA * fieldVector.nComp + component] ?? 0) +
+      (fieldVector.values[fieldB * fieldVector.nComp + component] ?? 0) +
+      (fieldVector.values[fieldC * fieldVector.nComp + component] ?? 0)) /
+    3
+  );
+}
+
+function fieldComponent(
+  fieldVector: DecodedFieldVector,
+  fieldIndex: number,
+  component: number,
+): number {
+  if (component >= fieldVector.nComp) return 0;
+  return fieldVector.values[fieldIndex * fieldVector.nComp + component] ?? 0;
+}
+
+function scalarFromComponents(
+  colorMode: Viewport3DVectorColorMode,
+  x: number,
+  y: number,
+  z: number,
+  componentCount: number,
+): number {
+  if (componentCount === 1) return x;
+  return resolveViewport3DVectorColorScalar(colorMode, x, y, z);
+}
+
+function colorProjectedVector(
+  colorMode: Viewport3DVectorColorMode,
+  x: number,
+  y: number,
+  z: number,
+  range: Viewport3DScalarColorRange,
+  scalar: number,
+  colorPalette: string,
+): readonly [number, number, number] {
+  if (isLowConfidenceOrientationVector(colorMode, x, y, z)) {
+    return LOW_CONFIDENCE_ORIENTATION_RGB;
+  }
+  return (
+    resolveViewport3DVectorColorRgb(
+      colorMode,
+      x,
+      y,
+      z,
+      range,
+      normalizeScalarValue(scalar, range),
+      colorPalette,
+    ) ?? [1, 1, 1]
+  );
+}
+
+function isLowConfidenceOrientationVector(
+  colorMode: Viewport3DVectorColorMode,
+  x: number,
+  y: number,
+  z: number,
+): boolean {
+  return (
+    colorMode === "orientation" &&
+    Math.hypot(x, y, z) < REDUCED_MAGNETIZATION_LOW_NORM_EPSILON
+  );
+}
+
+function scalarRangeFromValues(values: ArrayLike<number>): ScalarRange {
+  let min = Infinity;
+  let max = -Infinity;
+  for (let index = 0; index < values.length; index += 1) {
+    const value = values[index] ?? Number.NaN;
+    if (!Number.isFinite(value)) continue;
+    min = Math.min(min, value);
+    max = Math.max(max, value);
+  }
+  if (!Number.isFinite(min) || !Number.isFinite(max)) {
+    return { max: 0, min: 0 };
+  }
+  return { max, min };
+}
+
+function scalarRangeDiagnosticsFromValues(
+  values: ArrayLike<number>,
+): ScalarRangeDiagnostics {
+  const finiteValues: number[] = [];
+  let max = -Infinity;
+  let min = Infinity;
+  let nonFiniteCount = 0;
+  let sum = 0;
+  let zeroCount = 0;
+  for (let index = 0; index < values.length; index += 1) {
+    const value = values[index] ?? Number.NaN;
+    if (!Number.isFinite(value)) {
+      nonFiniteCount += 1;
+      continue;
+    }
+    finiteValues.push(value);
+    if (value === 0) zeroCount += 1;
+    min = Math.min(min, value);
+    max = Math.max(max, value);
+    sum += value;
+  }
+  const finiteCount = finiteValues.length;
+  if (finiteCount === 0) {
+    return {
+      finiteCount: 0,
+      max: 0,
+      mean: 0,
+      min: 0,
+      nonFiniteCount,
+      outlierDominated: false,
+      p01: 0,
+      p99: 0,
+      zeroCount,
+    };
+  }
+  finiteValues.sort((left, right) => left - right);
+  const p01 = finiteValues[percentileIndex(finiteCount, 0.01)] ?? min;
+  const p99 = finiteValues[percentileIndex(finiteCount, 0.99)] ?? max;
+  const centralAbs = Math.max(Math.abs(p01), Math.abs(p99), 1e-12);
+  const maxAbs = Math.max(Math.abs(min), Math.abs(max));
   return {
     finiteCount,
     max,

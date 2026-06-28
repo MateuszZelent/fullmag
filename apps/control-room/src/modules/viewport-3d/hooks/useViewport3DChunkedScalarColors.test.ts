@@ -17,6 +17,7 @@ import {
   resolveViewport3DChunkedFieldColorTarget,
   resolveViewport3DChunkedPartFieldInput,
   resolveViewport3DChunkedPartFieldColorTarget,
+  resolveViewport3DChunkedPartProjectionTarget,
   resolveViewport3DChunkedPartDisplayModesKey,
   shouldBuildViewport3DPartChunkedScalarColor,
   shouldStartChunkedScalarColorBuild,
@@ -700,6 +701,48 @@ describe("useViewport3DChunkedScalarColors", () => {
       kind: "mapped-vertices",
       targetNodeIndices: new Uint32Array([3, 2, 1, 0]),
       vertexCount: 4,
+    });
+  });
+
+  it("routes large surface-face projection builds through surface projection worker targets", () => {
+    const surfaceIndices = Uint32Array.from([0, 1, 2]);
+    const target = resolveViewport3DChunkedPartProjectionTarget(
+      {
+        nodeCount: 75_001,
+        positions: new Float32Array(75_001 * 3),
+      } as never,
+      {
+        surfaceIndices,
+      } as never,
+      "surface_faces",
+    );
+
+    expect(target).toEqual({
+      kind: "surface-faces",
+      surfaceIndices,
+      vertexCount: 75_001,
+    });
+  });
+
+  it("routes large thickness-average-z projection builds through projection worker targets", () => {
+    const positions = new Float32Array(75_001 * 3);
+    const surfaceIndices = Uint32Array.from([0, 1, 2]);
+    const target = resolveViewport3DChunkedPartProjectionTarget(
+      {
+        nodeCount: 75_001,
+        positions,
+      } as never,
+      {
+        surfaceIndices,
+      } as never,
+      "thickness_average_z",
+    );
+
+    expect(target).toEqual({
+      kind: "thickness-average-z",
+      positions,
+      surfaceIndices,
+      vertexCount: 75_001,
     });
   });
 

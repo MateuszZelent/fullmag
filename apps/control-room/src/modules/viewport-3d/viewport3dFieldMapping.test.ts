@@ -4,6 +4,8 @@ import type { DecodedFieldVector } from "@/kernel/api/codecs";
 
 import {
   buildSampledScalarColors,
+  buildSurfaceFaceScalarColors,
+  buildThicknessAverageZScalarColors,
   buildVertexScalarColors,
   buildVertexScalarColorsChunked,
   fieldTransformNeedsChunking,
@@ -253,6 +255,302 @@ describe("viewport3dFieldMapping", () => {
         ]),
       ),
     );
+  });
+
+  it("colors each surface face from the average of its boundary node values", () => {
+    const result = buildSurfaceFaceScalarColors(
+      vectorField([
+        0, 0, 0,
+        3, 0, 0,
+        6, 0, 0,
+      ]),
+      Uint32Array.from([0, 1, 2]),
+      3,
+      "x",
+    );
+
+    expect(result?.geometryRole).toBe("face_expanded_surface");
+    expect(result?.projectionMode).toBe("surface_faces");
+    expect(result?.rangeSource).toBe("face_values");
+    expect(Array.from(result?.scalarValues ?? [])).toEqual([3, 3, 3]);
+    expect(result?.faceCount).toBe(1);
+    expect(result?.degradedFaceCount).toBe(0);
+  });
+
+  it("maps explicit node-index payloads before surface-face projection", () => {
+    const result = buildSurfaceFaceScalarColors(
+      {
+        ...vectorField([
+          9, 0, 0,
+          6, 0, 0,
+          3, 0, 0,
+        ]),
+        indexing: "explicit_node_indices",
+        nodeIndices: Uint32Array.from([2, 1, 0]),
+      },
+      Uint32Array.from([0, 1, 2]),
+      3,
+      "x",
+    );
+
+    expect(Array.from(result?.scalarValues ?? [])).toEqual([6, 6, 6]);
+  });
+
+  it("rejects surface-face projection when a face node is missing from the field map", () => {
+    const result = buildSurfaceFaceScalarColors(
+      {
+        ...vectorField([
+          9, 0, 0,
+          6, 0, 0,
+        ]),
+        indexing: "explicit_node_indices",
+        nodeIndices: Uint32Array.from([2, 1]),
+      },
+      Uint32Array.from([0, 1, 2]),
+      3,
+      "x",
+    );
+
+    expect(result).toBeNull();
+  });
+
+  it("rejects sampled node-index payloads for surface-face projection", () => {
+    const result = buildSurfaceFaceScalarColors(
+      {
+        ...vectorField([
+          0, 0, 0,
+          3, 0, 0,
+          6, 0, 0,
+        ]),
+        indexing: "sampled_node_indices",
+        nodeIndices: Uint32Array.from([0, 1, 2]),
+      },
+      Uint32Array.from([0, 1, 2]),
+      3,
+      "x",
+    );
+
+    expect(result).toBeNull();
+  });
+
+  it("does not build large surface-face projection synchronously", () => {
+    const nodeCount = 50_001;
+    const values = new Float64Array(nodeCount * 3);
+    const surfaceIndices = Uint32Array.from([0, 1, 2]);
+
+    expect(
+      buildSurfaceFaceScalarColors(
+        {
+          ...vectorField([]),
+          grid: [nodeCount, 1, 1],
+          pointCount: nodeCount,
+          valueCount: values.length,
+          values,
+        },
+        surfaceIndices,
+        nodeCount,
+        "orientation",
+      ),
+    ).toBeNull();
+  });
+
+  it("renders low-confidence orientation for near-zero surface-face vectors", () => {
+    const result = buildSurfaceFaceScalarColors(
+      vectorField([
+        0, 0, 0.0005,
+        0, 0, 0.0005,
+        0, 0, 0.0005,
+      ]),
+      Uint32Array.from([0, 1, 2]),
+      3,
+      "orientation",
+    );
+
+    expect(result?.lowNormFaceCount).toBe(1);
+    expect(Array.from(result?.colors ?? [])).toEqual(
+      Array.from(Float32Array.from([
+        0.6, 0.6, 0.6,
+        0.6, 0.6, 0.6,
+        0.6, 0.6, 0.6,
+      ])),
+    );
+  });
+
+  it("projects thickness-average-z face colors from complete world-z columns", () => {
+    const result = buildThicknessAverageZScalarColors(
+      vectorField([
+        0, 0, 1,
+        0, 0, 1,
+        0, 0, 1,
+        0, 0, -1,
+        0, 0, -1,
+        0, 0, -1,
+      ]),
+      Float32Array.from([
+        0, 0, 1,
+        1, 0, 1,
+        0, 1, 1,
+        0, 0, -1,
+        1, 0, -1,
+        0, 1, -1,
+      ]),
+      Uint32Array.from([0, 1, 2]),
+      6,
+      "orientation",
+    );
+
+    expect(result?.geometryRole).toBe("face_expanded_surface");
+    expect(result?.projectionMode).toBe("thickness_average_z");
+    expect(result?.projectedBinCount).toBe(3);
+    expect(result?.projectedSamplesPerBinMin).toBe(2);
+    expect(result?.projectedSamplesPerBinMax).toBe(2);
+    expect(result?.projectedSamplesPerBinMean).toBe(2);
+    expect(result?.projectionAxis).toBe("z");
+    expect(result?.projectionTolerance).toBeGreaterThan(0);
+    expect(result?.rangeSource).toBe("projected_values");
+    expect(result?.lowNormFaceCount).toBe(1);
+    expect(result?.degradedFaceCount).toBe(0);
+    expect(Array.from(result?.vectorValues ?? [])).toEqual([
+      0, 0, 0,
+      0, 0, 0,
+      0, 0, 0,
+    ]);
+    expect(Array.from(result?.colors ?? [])).toEqual(
+      Array.from(Float32Array.from([
+        0.6, 0.6, 0.6,
+        0.6, 0.6, 0.6,
+        0.6, 0.6, 0.6,
+      ])),
+    );
+  });
+
+  it("renders low-confidence orientation for near-zero thickness-average-z vectors", () => {
+    const result = buildThicknessAverageZScalarColors(
+      vectorField([
+        0, 0, 0.0005,
+        0, 0, 0.0005,
+        0, 0, 0.0005,
+      ]),
+      Float32Array.from([
+        0, 0, 0,
+        1, 0, 0,
+        0, 1, 0,
+      ]),
+      Uint32Array.from([0, 1, 2]),
+      3,
+      "orientation",
+    );
+
+    expect(result?.lowNormFaceCount).toBe(1);
+    expect(Array.from(result?.colors ?? [])).toEqual(
+      Array.from(Float32Array.from([
+        0.6, 0.6, 0.6,
+        0.6, 0.6, 0.6,
+        0.6, 0.6, 0.6,
+      ])),
+    );
+  });
+
+  it("degrades thickness-average-z faces with missing projected bins instead of falling back", () => {
+    const result = buildThicknessAverageZScalarColors(
+      {
+        ...vectorField([
+          1, 0, 0,
+          0, 1, 0,
+        ]),
+        indexing: "explicit_node_indices",
+        nodeIndices: Uint32Array.from([0, 1]),
+      },
+      Float32Array.from([
+        0, 0, 0,
+        1, 0, 0,
+        0, 1, 0,
+      ]),
+      Uint32Array.from([0, 1, 2]),
+      3,
+      "orientation",
+    );
+
+    expect(result).not.toBeNull();
+    expect(result?.degradedFaceCount).toBe(1);
+    expect(result?.missingNodeCount).toBe(1);
+    expect(Array.from(result?.colors ?? [])).toEqual([
+      0.5, 0.5, 0.5,
+      0.5, 0.5, 0.5,
+      0.5, 0.5, 0.5,
+    ]);
+  });
+
+  it("reports degraded thickness-average-z suitability for non-world-z thin-film bounds", () => {
+    const result = buildThicknessAverageZScalarColors(
+      vectorField([
+        0, 0, 1,
+        0, 0, 1,
+        0, 0, 1,
+        0, 0, 1,
+        0, 0, 1,
+        0, 0, 1,
+      ]),
+      Float32Array.from([
+        0, 0, 1,
+        0.1, 2, 1,
+        0, 4, 1,
+        0, 0, -1,
+        0.1, 2, -1,
+        0, 4, -1,
+      ]),
+      Uint32Array.from([0, 1, 2]),
+      6,
+      "orientation",
+    );
+
+    expect(result?.projectionSuitability).toBe(
+      "degraded_non_world_z_thin_film",
+    );
+  });
+
+  it("reports degraded thickness-average-z suitability when columns lack depth samples", () => {
+    const result = buildThicknessAverageZScalarColors(
+      vectorField([
+        0, 0, 1,
+        0, 0, 1,
+        0, 0, 1,
+      ]),
+      Float32Array.from([
+        0, 0, 0,
+        1, 0, 0,
+        0, 1, 0,
+      ]),
+      Uint32Array.from([0, 1, 2]),
+      3,
+      "orientation",
+    );
+
+    expect(result?.projectionSuitability).toBe(
+      "degraded_insufficient_depth_samples",
+    );
+  });
+
+  it("does not build large thickness-average-z projection synchronously", () => {
+    const nodeCount = 50_001;
+    const values = new Float64Array(nodeCount * 3);
+    const positions = new Float32Array(nodeCount * 3);
+
+    expect(
+      buildThicknessAverageZScalarColors(
+        {
+          ...vectorField([]),
+          grid: [nodeCount, 1, 1],
+          pointCount: nodeCount,
+          valueCount: values.length,
+          values,
+        },
+        positions,
+        Uint32Array.from([0, 1, 2]),
+        nodeCount,
+        "orientation",
+      ),
+    ).toBeNull();
   });
 
   it("handles sampled indices outside field coverage by falling back to neutral color", () => {

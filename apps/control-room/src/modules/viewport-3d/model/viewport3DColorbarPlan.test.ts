@@ -16,6 +16,7 @@ function objectPlan(
   targetId: string,
   overrides: Partial<{
     palette: string;
+    projectionMode: "raw_nodal" | "surface_faces" | "thickness_average_z";
     quantityId: string;
     surfaceColorSource: "component_x" | "component_y" | "component_z" | "magnitude" | "orientation";
     viewportColorbarVisible: boolean;
@@ -29,6 +30,7 @@ function objectPlan(
       shaderMonoColor: "#ffffff",
       shaderVisible: true,
       surfaceColorSource: overrides.surfaceColorSource ?? "component_x",
+      surfaceProjectionMode: overrides.projectionMode ?? "raw_nodal",
       vectorBudget: 0,
       vectorCenteringEnabled: true,
       vectorColorMode: "magnitude",
@@ -114,6 +116,25 @@ describe("viewport3DColorbarPlan", () => {
     expect(xPlan?.renderKey).toBe(yPlan?.renderKey);
   });
 
+  it("splits colorbar groups by surface projection mode and range source", () => {
+    const [rawPlan] = planViewport3DColorbars({
+      targets: [objectPlan("object:film", { projectionMode: "raw_nodal" })],
+    });
+    const [facePlan] = planViewport3DColorbars({
+      targets: [objectPlan("object:film", { projectionMode: "surface_faces" })],
+    });
+
+    expect(rawPlan?.groupKey).not.toBe(facePlan?.groupKey);
+    expect(rawPlan).toMatchObject({
+      projectionMode: "raw_nodal",
+      rangeSource: "raw_nodal",
+    });
+    expect(facePlan).toMatchObject({
+      projectionMode: "surface_faces",
+      rangeSource: "face_values",
+    });
+  });
+
   it("retains a previous compatible range while the fresh range is pending", () => {
     const target = objectPlan("object:film");
     const groupKey = buildViewport3DColorbarGroupKey({
@@ -131,8 +152,10 @@ describe("viewport3DColorbarPlan", () => {
           groupKey,
           legendId: `viewport-3d-colorbar:${groupKey}`,
           palette: "viridis",
+          projectionMode: "raw_nodal",
           quantityId: "m",
           range: { max: 1, min: -1 },
+          rangeSource: "raw_nodal",
           rangeState: "current",
           renderKey: `viewport-3d-colorbar:${groupKey}`,
           scopeId: "object:film",

@@ -205,8 +205,8 @@ fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
 #[cfg(test)]
 mod tests {
     use super::{
-        TopologicalChargeInput, TopologicalChargeTriangleInput, TopologicalChargeWarningCode,
         compute_topological_charge_grid, compute_topological_charge_triangles,
+        TopologicalChargeInput, TopologicalChargeTriangleInput, TopologicalChargeWarningCode,
     };
 
     fn uniform_grid(nx: usize, ny: usize) -> Vec<[f64; 3]> {

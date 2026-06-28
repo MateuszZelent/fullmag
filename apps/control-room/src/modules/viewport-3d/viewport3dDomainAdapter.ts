@@ -35,6 +35,7 @@ export interface FemManifestRenderDomain {
 }
 
 export interface Viewport3DPartSelection {
+  boundaryFaceIndex?: number | null;
   kind: "mesh-part" | "mesh-part-airbox";
   label: string;
   nodeId: string;
@@ -266,15 +267,19 @@ export function resolveFemPartSelectionByBoundaryFace(
 
   for (const part of domain.partsById.values()) {
     if (partIncludesBoundaryFace(part, faceIndex)) {
-      return selectionForMeshPart(part);
+      return selectionForMeshPart(part, faceIndex);
     }
   }
 
   return null;
 }
 
-export function selectionForMeshPart(part: MeshPart): Viewport3DPartSelection {
+export function selectionForMeshPart(
+  part: MeshPart,
+  boundaryFaceIndex: number | null = null,
+): Viewport3DPartSelection {
   return {
+    boundaryFaceIndex,
     kind: part.role === "air" ? "mesh-part-airbox" : "mesh-part",
     label: part.label,
     nodeId: part.id,

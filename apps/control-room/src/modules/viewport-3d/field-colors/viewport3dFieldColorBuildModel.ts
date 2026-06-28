@@ -1,6 +1,8 @@
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 
 import {
+  buildSurfaceFaceScalarColors,
+  buildThicknessAverageZScalarColors,
   buildVertexScalarColorsChunked,
   fieldVectorSupportsScalarColorMode,
   type ChunkedFieldTransformOptions,
@@ -27,6 +29,17 @@ export type Viewport3DFieldColorBuildTarget =
   | {
       kind: "sampled";
       pointIndices: Uint32Array;
+    }
+  | {
+      kind: "surface-faces";
+      surfaceIndices: Uint32Array;
+      vertexCount: number;
+    }
+  | {
+      kind: "thickness-average-z";
+      positions: Float32Array;
+      surfaceIndices: Uint32Array;
+      vertexCount: number;
     };
 
 export interface Viewport3DFieldColorBuildModelInput
@@ -57,6 +70,27 @@ export async function buildViewport3DFieldColorBuffer({
       return buildMappedFieldColorBuffer(fieldVector, target, options);
     case "sampled":
       return buildSampledFieldColorBuffer(fieldVector, target, options);
+    case "surface-faces":
+      return buildSurfaceFaceScalarColors(
+        fieldVector,
+        target.surfaceIndices,
+        target.vertexCount,
+        options.colorMode,
+        options.colorPalette,
+        options.scalarRange,
+        Number.POSITIVE_INFINITY,
+      );
+    case "thickness-average-z":
+      return buildThicknessAverageZScalarColors(
+        fieldVector,
+        target.positions,
+        target.surfaceIndices,
+        target.vertexCount,
+        options.colorMode,
+        options.colorPalette,
+        options.scalarRange,
+        Number.POSITIVE_INFINITY,
+      );
   }
 }
 
@@ -74,6 +108,14 @@ export function estimateViewport3DFieldColorBuildInputBytes({
       return fieldVector.values.byteLength + target.targetNodeIndices.byteLength;
     case "sampled":
       return fieldVector.values.byteLength + target.pointIndices.byteLength;
+    case "surface-faces":
+      return fieldVector.values.byteLength + target.surfaceIndices.byteLength;
+    case "thickness-average-z":
+      return (
+        fieldVector.values.byteLength +
+        target.positions.byteLength +
+        target.surfaceIndices.byteLength
+      );
   }
 }
 
@@ -286,6 +328,9 @@ function resolveTargetVertexCount(
       return target.vertexCount;
     case "sampled":
       return target.pointIndices.length;
+    case "surface-faces":
+    case "thickness-average-z":
+      return target.surfaceIndices.length;
   }
 }
 

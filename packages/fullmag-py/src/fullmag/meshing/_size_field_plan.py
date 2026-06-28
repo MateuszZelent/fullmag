@@ -1479,6 +1479,13 @@ def _mesh_options_from_runtime_metadata(
         else []
     )
     assert isinstance(raw_per_geometry, list)
+    raw_default_mesh = (
+        mesh_workflow.get("default_mesh")
+        if isinstance(mesh_workflow, Mapping)
+        and isinstance(mesh_workflow.get("default_mesh"), Mapping)
+        else {}
+    )
+    assert isinstance(raw_default_mesh, Mapping)
 
     def _single_geometry_value(key: str) -> object | None:
         entries = [entry for entry in raw_per_geometry if isinstance(entry, Mapping)]
@@ -1656,6 +1663,15 @@ def _mesh_options_from_runtime_metadata(
             return None
         return [dict(item) for item in value if isinstance(item, Mapping)]
 
+    def _str_list(value: object) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return [
+            str(item).strip()
+            for item in value
+            if isinstance(item, str) and item.strip()
+        ]
+
     raw_optimize_iters = _mesh_option_value("optimize_iterations", "optimize_iters")
 
     return MeshOptions(
@@ -1735,5 +1751,9 @@ def _mesh_options_from_runtime_metadata(
         ),
         boundary_layer_target_curve_selectors=_selector_list(
             raw_boundary_layer_curve_selectors
+        ),
+        periodic_pair_ids=_str_list(
+            _mesh_option_value("periodic_pair_ids")
+            or raw_default_mesh.get("periodic_pair_ids")
         ),
     )

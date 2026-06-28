@@ -16039,6 +16039,14 @@
         ],
         "type": "string"
       },
+      "SurfaceFieldProjectionMode": {
+        "enum": [
+          "raw_nodal",
+          "surface_faces",
+          "thickness_average_z"
+        ],
+        "type": "string"
+      },
       "TableColumnMeta": {
         "properties": {
           "column_id": {
@@ -17452,6 +17460,9 @@
           "surface_mono_color": {
             "type": "string"
           },
+          "surface_projection_mode": {
+            "$ref": "#/components/schemas/SurfaceFieldProjectionMode"
+          },
           "surface_visible": {
             "type": "boolean"
           },
@@ -17510,6 +17521,7 @@
           "scalar_color_palette",
           "surface_color_source",
           "surface_mono_color",
+          "surface_projection_mode",
           "surface_visible",
           "viewport_colorbar_visible",
           "vector_alpha",
@@ -18143,6 +18155,16 @@
             "type": [
               "string",
               "null"
+            ]
+          },
+          "surface_projection_mode": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SurfaceFieldProjectionMode"
+              }
             ]
           },
           "vector_alpha": {

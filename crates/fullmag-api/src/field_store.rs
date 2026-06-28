@@ -283,8 +283,8 @@ pub(crate) fn serialize_fem_mesh_topology_binary_v1(
 #[cfg(test)]
 mod tests {
     use super::{
-        FieldVectorBinaryMetadata, FieldVectorIndexing, serialize_field_vector_binary_v2,
-        serialize_field_vector_binary_v3,
+        serialize_field_vector_binary_v2, serialize_field_vector_binary_v3,
+        FieldVectorBinaryMetadata, FieldVectorIndexing,
     };
 
     #[test]

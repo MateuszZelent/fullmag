@@ -4,7 +4,7 @@ use crate::descriptor::{NormalizationHint, QuantityDomain, QuantityLocation, Qua
 use crate::id::{normalize_quantity_id, QuantityId};
 use crate::{QuantityComponent, QuantityShape};
 
-const CATALOG: [QuantitySpec; 44] = [
+const CATALOG: [QuantitySpec; 45] = [
     QuantitySpec {
         id: QuantityId::M,
         label: "Magnetization",
@@ -65,6 +65,27 @@ const CATALOG: [QuantitySpec; 44] = [
         default_component: QuantityComponent::Vector3,
         supports_preview_2d: true,
         supports_preview_3d: true,
+        supports_history: false,
+        supports_export: true,
+    },
+    QuantitySpec {
+        id: QuantityId::DemagPhi,
+        label: "Demag Potential",
+        description: "Magnetostatic scalar potential from the Poisson demag solve",
+        shape: QuantityShape::SpatialScalar,
+        unit: "A",
+        interactive_preview: false,
+        cached_preview: false,
+        quick_access_label: Some("phi"),
+        scalar_metric_key: None,
+        ui_exposed: false,
+        n_comp: 1,
+        location: QuantityLocation::Node,
+        domain: QuantityDomain::FullDomain,
+        normalization_hint: NormalizationHint::MaxAbs,
+        default_component: QuantityComponent::Magnitude,
+        supports_preview_2d: false,
+        supports_preview_3d: false,
         supports_history: false,
         supports_export: true,
     },

@@ -5,7 +5,7 @@ use crate::{
     RelaxationControlIR,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DiscretizationHintsIR {
@@ -257,17 +257,23 @@ impl MeshIR {
         }
 
         let mut periodic_pair_ids = BTreeSet::new();
+        let mut periodic_pair_translations = BTreeMap::new();
         for (index, pair) in self.periodic_boundary_pairs.iter().enumerate() {
             if pair.pair_id.trim().is_empty() {
                 errors.push(format!(
                     "mesh periodic boundary pair {index} must have a non-empty pair_id"
                 ));
             }
-            if !periodic_pair_ids.insert(pair.pair_id.clone()) {
-                errors.push(format!(
-                    "mesh periodic boundary pair id '{}' is duplicated",
-                    pair.pair_id
-                ));
+            periodic_pair_ids.insert(pair.pair_id.clone());
+            if let Some(previous) =
+                periodic_pair_translations.insert(pair.pair_id.clone(), pair.translation)
+            {
+                if previous != pair.translation {
+                    errors.push(format!(
+                        "mesh periodic boundary pair id '{}' has inconsistent translations",
+                        pair.pair_id
+                    ));
+                }
             }
         }
 

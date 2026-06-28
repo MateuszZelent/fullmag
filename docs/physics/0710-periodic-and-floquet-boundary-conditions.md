@@ -31,10 +31,17 @@ enforce them in the active operator, the planner or runtime must reject the
 study. A warning is not sufficient because it would produce physically invalid
 results.
 
-FEM static and time-domain paths currently reject periodic meshes unless a
-future solver path explicitly enforces the static reduction map. FEM eigen
-supports periodic and Floquet phase reduction for exchange, anisotropy,
-external field, and DMI terms.
+FEM static and time-domain paths support only the limited k=0 static-reduction
+slice where the active native CPU/MFEM operator enforces `periodic_node_pairs`.
+Requests outside that slice, including unsupported GPU periodic reductions,
+must reject. FEM eigen supports periodic and Floquet phase reduction for
+exchange, anisotropy, external field, and DMI terms.
+
+FEM driven frequency response is narrower still: the native production CPU lane
+supports gamma/free response and k=0 static-periodic magnetic response without
+dynamic demag. It requires complete periodic pair metadata for requested
+`pair_ids`; nonzero-k Floquet response, shared-domain airbox response, and
+frequency-response demag remain gated.
 
 Dynamic demagnetization for nonzero-k Floquet FEM is not implemented. Requests
 with `include_demag=true` and `spin_wave_bc.kind='floquet'` must fail with a

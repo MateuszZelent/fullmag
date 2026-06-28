@@ -10,15 +10,15 @@
 //! - unknown-route fallback.
 
 use axum::body::Body;
-use axum::http::{Method, Request, StatusCode, header};
+use axum::http::{header, Method, Request, StatusCode};
 use tower::ServiceExt; // for `oneshot`
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
-use tokio::sync::{Mutex, RwLock, watch};
+use std::sync::Arc;
+use tokio::sync::{watch, Mutex, RwLock};
 
 use crate::feature_flags::FeatureFlags;
 use crate::schemas::realtime::{
@@ -33,13 +33,13 @@ use crate::types::{
     StepUpdateView, TrackedCommandRecord,
 };
 use crate::uuid_v4_hex;
-use fullmag_runner::LivePreviewField;
 use fullmag_runner::eigen::{
+    write_response_sweep_bundle, write_response_sweep_bundle_with_progress,
     BlockRealSweepReuseProvenance, FieldDrivenResponseSweepArtifact,
     FieldDrivenResponseSweepPointArtifact, ResponseExcitationProvenanceArtifact,
-    TangentLeakageDiagnosticArtifact, write_response_sweep_bundle,
-    write_response_sweep_bundle_with_progress,
+    TangentLeakageDiagnosticArtifact,
 };
+use fullmag_runner::LivePreviewField;
 use fullmag_runner::{FemMeshObjectSegment, FemMeshPartPayload, FemMeshPayload, RuntimeStatus};
 
 use super::build_v2_router;
@@ -4998,8 +4998,8 @@ async fn mesh_active_build_returns_projection_from_mesh_workspace() {
     assert_eq!(json["effective_per_object_targets"]["body"]["hmax"], "2e-9");
     assert_eq!(json["last_build_summary"]["elements"], 42);
     assert_eq!(
-        json["last_build_summary"]["shared_domain_build_report"]["effective_per_object_targets"]["body"]
-            ["edge_hmax"],
+        json["last_build_summary"]["shared_domain_build_report"]["effective_per_object_targets"]
+            ["body"]["edge_hmax"],
         1.8e-9
     );
     assert_eq!(
@@ -5011,7 +5011,8 @@ async fn mesh_active_build_returns_projection_from_mesh_workspace() {
         "component_aware"
     );
     assert_eq!(
-        json["shared_domain_build_report"]["effective_per_object_targets"]["body"]["edge_maximum_element_size"],
+        json["shared_domain_build_report"]["effective_per_object_targets"]["body"]
+            ["edge_maximum_element_size"],
         1.8e-9
     );
     assert_eq!(
@@ -6757,15 +6758,16 @@ async fn frequency_domain_manifest_reports_solver_family_availability() {
         json["capabilities"]["response"]["magnetic_cpu"]["status"],
         "partial_production_executable"
     );
+    assert!(json["capabilities"]["response"]["magnetic_cpu"]["reason"]
+        .as_str()
+        .expect("magnetic_cpu reason should be a string")
+        .contains("bulk-DMI"));
     assert!(
-        json["capabilities"]["response"]["magnetic_cpu"]["reason"]
-            .as_str()
-            .expect("magnetic_cpu reason should be a string")
-            .contains("bulk-DMI")
-    );
-    assert_eq!(
-        json["capabilities"]["response"]["magnetic_gpu"]["status"],
-        "unsupported"
+        matches!(
+            json["capabilities"]["response"]["magnetic_gpu"]["status"].as_str(),
+            Some("unsupported" | "partial_production_executable")
+        ),
+        "magnetic GPU capability must reflect the native frequency-domain availability probe"
     );
     assert_eq!(
         json["capabilities"]["demag"]["floquet_dynamic_k"]["status"],
@@ -7408,8 +7410,8 @@ async fn mesh_shared_domain_manifest_reports_clean_scene_provenance_without_buil
 }
 
 #[tokio::test]
-async fn mesh_shared_domain_manifest_keeps_provenance_unknown_for_dirty_scene_without_build_summary()
- {
+async fn mesh_shared_domain_manifest_keeps_provenance_unknown_for_dirty_scene_without_build_summary(
+) {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();
     scene.revision = 94;
@@ -7963,12 +7965,10 @@ async fn authoring_script_source_returns_current_python_source() {
     let json = body_json(response).await;
     assert_eq!(json["script_path"], script_path.display().to_string());
     assert_eq!(json["bytes"], 22);
-    assert!(
-        json["source"]
-            .as_str()
-            .expect("source string")
-            .contains("from fullmag import *")
-    );
+    assert!(json["source"]
+        .as_str()
+        .expect("source string")
+        .contains("from fullmag import *"));
 }
 
 #[tokio::test]
@@ -8336,27 +8336,21 @@ async fn authoring_geometry_capabilities_returns_backend_matrix() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
-    assert!(
-        json["primitive_capabilities"]
-            .as_array()
-            .expect("primitive capabilities")
-            .iter()
-            .any(|entry| entry["id"] == "box" && entry["fem"] == true)
-    );
-    assert!(
-        json["primitive_capabilities"]
-            .as_array()
-            .expect("primitive capabilities")
-            .iter()
-            .any(|entry| entry["id"] == "arch_waveguide" && entry["status"] == "production")
-    );
-    assert!(
-        json["csg_capabilities"]
-            .as_array()
-            .expect("csg capabilities")
-            .iter()
-            .any(|entry| entry["op"] == "subtract" && entry["status"] == "production")
-    );
+    assert!(json["primitive_capabilities"]
+        .as_array()
+        .expect("primitive capabilities")
+        .iter()
+        .any(|entry| entry["id"] == "box" && entry["fem"] == true));
+    assert!(json["primitive_capabilities"]
+        .as_array()
+        .expect("primitive capabilities")
+        .iter()
+        .any(|entry| entry["id"] == "arch_waveguide" && entry["status"] == "production"));
+    assert!(json["csg_capabilities"]
+        .as_array()
+        .expect("csg capabilities")
+        .iter()
+        .any(|entry| entry["op"] == "subtract" && entry["status"] == "production"));
 }
 
 #[tokio::test]
@@ -8472,11 +8466,9 @@ async fn authoring_transactions_create_transform_and_delete_objects() {
         .find(|object| object["id"] == "box_001")
         .expect("created object present");
     assert_eq!(created_object["geometry"]["geometry_kind"], "Box");
-    assert!(
-        created_object["tags"]
-            .as_array()
-            .is_some_and(|tags| tags.iter().any(|tag| tag == "mesh:dirty"))
-    );
+    assert!(created_object["tags"]
+        .as_array()
+        .is_some_and(|tags| tags.iter().any(|tag| tag == "mesh:dirty")));
     assert_eq!(
         create_json["committed_scene"]["universe"]["size"][0],
         300e-9
@@ -8540,13 +8532,11 @@ async fn authoring_transactions_create_transform_and_delete_objects() {
     assert_eq!(delete_response.status(), StatusCode::OK);
     let delete_json = body_json(delete_response).await;
     assert_eq!(delete_json["transaction_kind"], "delete_object");
-    assert!(
-        !delete_json["committed_scene"]["objects"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|object| object["id"] == "box_001")
-    );
+    assert!(!delete_json["committed_scene"]["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|object| object["id"] == "box_001"));
 }
 
 #[tokio::test]
@@ -8606,11 +8596,9 @@ async fn authoring_transactions_mutate_object_regions_and_couplings() {
     let core_region_id = format!("{object_id}:r1");
     assert_eq!(created_object["regions"][0]["region_id"], core_region_id);
     assert_eq!(created_object["allocated_region_ids"][0], core_region_id);
-    assert!(
-        !created_object["tags"]
-            .as_array()
-            .is_some_and(|tags| tags.iter().any(|tag| tag == "mesh:dirty"))
-    );
+    assert!(!created_object["tags"]
+        .as_array()
+        .is_some_and(|tags| tags.iter().any(|tag| tag == "mesh:dirty")));
 
     let patch_region_response = app
         .clone()
@@ -8838,11 +8826,9 @@ async fn authoring_coupling_resource_routes_mutate_couplings() {
     let delete_json = body_json(delete_response).await;
     assert_eq!(delete_status, StatusCode::OK, "{delete_json:#}");
     assert_eq!(delete_json["transaction_kind"], "delete_coupling");
-    assert!(
-        delete_json["committed_scene"]["couplings"]
-            .as_array()
-            .is_none_or(|couplings| couplings.is_empty())
-    );
+    assert!(delete_json["committed_scene"]["couplings"]
+        .as_array()
+        .is_none_or(|couplings| couplings.is_empty()));
 }
 
 #[tokio::test]
@@ -8901,16 +8887,12 @@ async fn authoring_delete_object_removes_object_and_surface_couplings() {
     let json = body_json(response).await;
 
     assert_eq!(status, StatusCode::OK, "{json:#}");
-    assert!(
-        json["committed_scene"]["objects"]
-            .as_array()
-            .is_none_or(|objects| objects.iter().all(|object| object["id"] != object_id))
-    );
-    assert!(
-        json["committed_scene"]["couplings"]
-            .as_array()
-            .is_none_or(|couplings| couplings.is_empty())
-    );
+    assert!(json["committed_scene"]["objects"]
+        .as_array()
+        .is_none_or(|objects| objects.iter().all(|object| object["id"] != object_id)));
+    assert!(json["committed_scene"]["couplings"]
+        .as_array()
+        .is_none_or(|couplings| couplings.is_empty()));
 }
 
 #[tokio::test]
@@ -9055,11 +9037,9 @@ async fn authoring_coupling_transactions_reject_active_disabled_region_endpoint(
 #[tokio::test]
 async fn authoring_object_region_resource_crud_allocates_stable_region_id() {
     fn assert_object_region_authoring_keeps_mesh_current(object: &serde_json::Value) {
-        assert!(
-            !object["tags"]
-                .as_array()
-                .is_some_and(|tags| tags.iter().any(|tag| tag == "mesh:dirty"))
-        );
+        assert!(!object["tags"]
+            .as_array()
+            .is_some_and(|tags| tags.iter().any(|tag| tag == "mesh:dirty")));
     }
 
     let state = test_app_state_with_live_session().await;
@@ -9518,13 +9498,11 @@ async fn authoring_geometry_realization_reports_blocked_csg() {
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
     assert_eq!(json["status"], "blocked");
-    assert!(
-        json["diagnostics"]
-            .as_array()
-            .expect("diagnostics")
-            .iter()
-            .any(|entry| entry["code"] == "GEOMETRY_CSG_OP_UNSUPPORTED")
-    );
+    assert!(json["diagnostics"]
+        .as_array()
+        .expect("diagnostics")
+        .iter()
+        .any(|entry| entry["code"] == "GEOMETRY_CSG_OP_UNSUPPORTED"));
 }
 
 #[tokio::test]
@@ -9619,12 +9597,10 @@ async fn authoring_geometry_realization_returns_object_derived_region_candidates
     assert_eq!(json["realization_revision"], 21);
     assert_eq!(json["region_candidates"][0]["object_id"], "body");
     assert_eq!(json["region_candidates"][0]["material_ref"], "mat:body");
-    assert!(
-        json["region_candidates"][0]["source_body_ids"][0]
-            .as_str()
-            .unwrap()
-            .starts_with("body:body:")
-    );
+    assert!(json["region_candidates"][0]["source_body_ids"][0]
+        .as_str()
+        .unwrap()
+        .starts_with("body:body:"));
 }
 
 #[tokio::test]
@@ -9710,13 +9686,11 @@ async fn authoring_region_owned_resources_expose_authored_payloads() {
     let regions = body_json(regions_response).await;
     assert_eq!(status, StatusCode::OK, "{regions:#}");
     assert_eq!(regions["regions"].as_array().unwrap().len(), 1);
-    assert!(
-        regions["regions"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|region| region["source"] == "authored_object_region")
-    );
+    assert!(regions["regions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|region| region["source"] == "authored_object_region"));
     let authored_region = regions["regions"]
         .as_array()
         .unwrap()
@@ -9771,12 +9745,10 @@ async fn authoring_region_owned_resources_expose_authored_payloads() {
     assert_eq!(realized_region["owner_object_id"], "body");
     assert_eq!(realized_region["region_id"], "region:body");
     assert_eq!(realized_region["source_object_ids"][0], "body");
-    assert!(
-        realized_region["source_body_ids"][0]
-            .as_str()
-            .unwrap()
-            .starts_with("body:body:")
-    );
+    assert!(realized_region["source_body_ids"][0]
+        .as_str()
+        .unwrap()
+        .starts_with("body:body:"));
     assert_eq!(realized_region["material_ref"], "mat:body");
     assert_eq!(realized_region["realization_status"], "realized");
     assert!(realized_region["shape"].is_null());
@@ -9807,14 +9779,12 @@ async fn authoring_region_owned_resources_expose_authored_payloads() {
     assert!(!diagnostic_codes.contains("region_material_realization_pending"));
     assert!(diagnostic_codes.contains("region_material_realization_required"));
     assert!(diagnostic_codes.contains("region_realization_policy_capability_gated"));
-    assert!(
-        diagnostics["diagnostics"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|diagnostic| diagnostic["region_id"] == "body:core"
-                && diagnostic["owner_object_id"] == "body")
-    );
+    assert!(diagnostics["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|diagnostic| diagnostic["region_id"] == "body:core"
+            && diagnostic["owner_object_id"] == "body"));
 
     let fields_response = app
         .clone()
@@ -9880,11 +9850,9 @@ async fn authoring_region_owned_resources_expose_authored_payloads() {
         couplings["couplings"][0]["target_resolution"]["status"],
         "pending_mesh_resolution"
     );
-    assert!(
-        couplings["couplings"][0]["blocker_reason"]
-            .as_str()
-            .is_some_and(|reason| reason.contains("RKKY runtime operator"))
-    );
+    assert!(couplings["couplings"][0]["blocker_reason"]
+        .as_str()
+        .is_some_and(|reason| reason.contains("RKKY runtime operator")));
 
     // REDO ETAP 4 Test: Add execution plan metadata and apply it to verify realized field status/statistics
     let plan_json = serde_json::json!({
@@ -10339,11 +10307,9 @@ async fn authoring_coupling_resource_resolves_bbox_surface_from_current_fem_mesh
         serde_json::json!([3])
     );
     assert_eq!(json["couplings"][0]["source_resolution"]["area"], 0.5);
-    assert!(
-        json["couplings"][0]["source_resolution"]["tolerance"]
-            .as_f64()
-            .is_some_and(|value| value > 0.0)
-    );
+    assert!(json["couplings"][0]["source_resolution"]["tolerance"]
+        .as_f64()
+        .is_some_and(|value| value > 0.0));
     assert_eq!(
         json["couplings"][0]["target_resolution"]["status"],
         "resolved"
@@ -10423,11 +10389,9 @@ async fn authoring_coupling_resource_blocks_surface_without_boundary_markers() {
         json["couplings"][0]["source_resolution"]["boundary_marker_ids"],
         serde_json::json!([])
     );
-    assert!(
-        json["couplings"][0]["source_resolution"]["reason"]
-            .as_str()
-            .is_some_and(|reason| reason.contains("boundary marker"))
-    );
+    assert!(json["couplings"][0]["source_resolution"]["reason"]
+        .as_str()
+        .is_some_and(|reason| reason.contains("boundary marker")));
 }
 
 #[tokio::test]
@@ -10477,11 +10441,9 @@ async fn authoring_coupling_resource_does_not_treat_unknown_mesh_part_as_magneti
         json["couplings"][0]["source_resolution"]["status"],
         "unresolved"
     );
-    assert!(
-        json["couplings"][0]["blocker_reason"]
-            .as_str()
-            .is_some_and(|reason| reason.contains("unresolved surface endpoint"))
-    );
+    assert!(json["couplings"][0]["blocker_reason"]
+        .as_str()
+        .is_some_and(|reason| reason.contains("unresolved surface endpoint")));
 }
 
 #[tokio::test]
@@ -10522,12 +10484,10 @@ async fn authoring_scene_commit_rejects_invalid_region_owned_payloads() {
     let status = response.status();
     let json = body_json(response).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{json:#}");
-    assert!(
-        json["error"]
-            .as_str()
-            .unwrap_or("")
-            .contains("Ms must be > 0")
-    );
+    assert!(json["error"]
+        .as_str()
+        .unwrap_or("")
+        .contains("Ms must be > 0"));
 }
 
 #[tokio::test]
@@ -10642,11 +10602,9 @@ async fn authoring_region_patch_commits_name_without_mesh_dirty() {
     let object = &json["objects"][0];
     assert_eq!(object["region_name"], "renamed_region");
     assert_eq!(object["visible"], false);
-    assert!(
-        !object["tags"]
-            .as_array()
-            .is_some_and(|tags| tags.iter().any(|tag| tag == "mesh:dirty"))
-    );
+    assert!(!object["tags"]
+        .as_array()
+        .is_some_and(|tags| tags.iter().any(|tag| tag == "mesh:dirty")));
 }
 
 #[tokio::test]
@@ -10992,13 +10950,11 @@ async fn authoring_object_resource_crud_commits_scene() {
     assert_eq!(create_response.status(), StatusCode::OK);
     let create_json = body_json(create_response).await;
     let create_revision = create_json["revision"].as_u64().unwrap();
-    assert!(
-        create_json["objects"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|object| object["id"] == "object_crud")
-    );
+    assert!(create_json["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|object| object["id"] == "object_crud"));
 
     let patch_response = app
         .clone()
@@ -11029,13 +10985,11 @@ async fn authoring_object_resource_crud_commits_scene() {
         .expect("patched object present");
     assert_eq!(patched_object["name"], "Object CRUD Renamed");
     assert_eq!(patched_object["region_name"], "crud_region");
-    assert!(
-        patched_object["tags"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|tag| tag == "mesh:dirty")
-    );
+    assert!(patched_object["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|tag| tag == "mesh:dirty"));
 
     let delete_response = app
         .oneshot(
@@ -11049,13 +11003,11 @@ async fn authoring_object_resource_crud_commits_scene() {
         .unwrap();
     assert_eq!(delete_response.status(), StatusCode::OK);
     let delete_json = body_json(delete_response).await;
-    assert!(
-        !delete_json["objects"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|object| object["id"] == "object_crud")
-    );
+    assert!(!delete_json["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|object| object["id"] == "object_crud"));
 }
 
 #[tokio::test]
@@ -12905,12 +12857,10 @@ async fn hysteresis_stage_requested_resources_return_authoring_payload() {
     assert_eq!(plan["storage_estimate"]["bytes_per_component"], 8);
     assert_eq!(plan["storage_estimate"]["estimated_bytes"], 480);
     assert_eq!(plan["storage_estimate"]["status"], "estimated");
-    assert!(
-        plan["storage_estimate"]["warnings"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
+    assert!(plan["storage_estimate"]["warnings"]
+        .as_array()
+        .unwrap()
+        .is_empty());
 
     let protocol = body_json(
         app.clone()
@@ -14615,13 +14565,11 @@ async fn solver_status_endpoint_returns_detailed_read_model() {
     assert_eq!(json["max_torque_Apm"], 13.0);
     assert_eq!(json["max_torque"], 14.0);
     assert_eq!(json["last_error"], "latest runtime error");
-    assert!(
-        json["warnings"]
-            .as_array()
-            .is_some_and(|warnings| warnings.iter().any(|warning| {
-                warning == "sharp Aex in region 'film:core' uses projected approximation"
-            }))
-    );
+    assert!(json["warnings"]
+        .as_array()
+        .is_some_and(|warnings| warnings.iter().any(|warning| {
+            warning == "sharp Aex in region 'film:core' uses projected approximation"
+        })));
 }
 
 #[tokio::test]
@@ -14980,11 +14928,9 @@ async fn session_export_returns_fms_payload_with_session() {
     let json = body_json(response).await;
     assert_eq!(json["session_id"], "test-session");
     assert_eq!(json["profile"], "compact");
-    assert!(
-        json["fms_base64"]
-            .as_str()
-            .is_some_and(|value| !value.is_empty())
-    );
+    assert!(json["fms_base64"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
     assert!(json["size_bytes"].as_u64().unwrap_or(0) > 0);
 
     let _ = fs::remove_dir_all(&repo_root);
@@ -15136,11 +15082,9 @@ async fn session_checkpoint_create_captures_live_magnetization() {
         .as_str()
         .expect("checkpoint artifact_ref should be present")
         .to_string();
-    assert!(
-        json["checkpoint"]["checksum"]
-            .as_str()
-            .is_some_and(|value| !value.is_empty())
-    );
+    assert!(json["checkpoint"]["checksum"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
 
     let stage_after_create_response = app
         .clone()
@@ -15163,13 +15107,11 @@ async fn session_checkpoint_create_captures_live_magnetization() {
         stage_after_create["stages"][1]["state_transition"],
         "preserved"
     );
-    assert!(
-        stage_after_create["stages"][1]["artifact_refs"]
-            .as_array()
-            .expect("stage artifact_refs should be an array")
-            .iter()
-            .any(|value| value.as_str() == Some(checkpoint_artifact_ref.as_str()))
-    );
+    assert!(stage_after_create["stages"][1]["artifact_refs"]
+        .as_array()
+        .expect("stage artifact_refs should be an array")
+        .iter()
+        .any(|value| value.as_str() == Some(checkpoint_artifact_ref.as_str())));
 
     let detail_response = app
         .clone()
@@ -15307,11 +15249,9 @@ async fn field_state_export_inspect_and_apply_round_trips_live_magnetization() {
     assert_eq!(exported["target"]["id"], "body");
     assert_eq!(exported["format"], "h5");
     assert_eq!(exported["point_count"], 2);
-    assert!(
-        exported["artifact_ref"]
-            .as_str()
-            .is_some_and(|value| value.ends_with("body-final.h5"))
-    );
+    assert!(exported["artifact_ref"]
+        .as_str()
+        .is_some_and(|value| value.ends_with("body-final.h5")));
     let artifact_ref = exported["artifact_ref"]
         .as_str()
         .expect("field-state export should include artifact_ref")
@@ -16282,13 +16222,13 @@ async fn asyncapi_document_matches_realtime_rust_schema_names() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let json = body_json(response).await;
-    let async_revision_properties =
-        json["components"]["schemas"]["RealtimeResourceRevisionMap"]["properties"]
-            .as_object()
-            .expect("revision map properties should be an object")
-            .keys()
-            .cloned()
-            .collect::<BTreeSet<_>>();
+    let async_revision_properties = json["components"]["schemas"]["RealtimeResourceRevisionMap"]
+        ["properties"]
+        .as_object()
+        .expect("revision map properties should be an object")
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
     let rust_revision_properties = serde_json::to_value(RealtimeResourceRevisionMap {
         topology_revision: 1,
         field_catalog_revision: 1,
@@ -16320,18 +16260,18 @@ async fn asyncapi_document_matches_realtime_rust_schema_names() {
     .collect::<BTreeSet<_>>();
     assert_eq!(async_revision_properties, rust_revision_properties);
 
-    let async_resource_names =
-        json["components"]["schemas"]["RealtimeResourceChange"]["properties"]["resource"]["enum"]
-            .as_array()
-            .expect("resource enum should be an array")
-            .iter()
-            .map(|value| {
-                value
-                    .as_str()
-                    .expect("resource enum values should be strings")
-                    .to_string()
-            })
-            .collect::<BTreeSet<_>>();
+    let async_resource_names = json["components"]["schemas"]["RealtimeResourceChange"]
+        ["properties"]["resource"]["enum"]
+        .as_array()
+        .expect("resource enum should be an array")
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .expect("resource enum values should be strings")
+                .to_string()
+        })
+        .collect::<BTreeSet<_>>();
     let rust_resource_names = [
         RealtimeResourceName::Display,
         RealtimeResourceName::Workspace,
@@ -17261,16 +17201,12 @@ async fn hysteresis_analysis_endpoints_read_typed_artifacts() {
     );
     assert_eq!(points[2]["branch_id"], "descending");
     assert_eq!(points[2]["branch_ids"].as_array().map(Vec::len), Some(2));
-    assert!(
-        points[2]["branch_ids"]
-            .as_array()
-            .is_some_and(|values| values.contains(&serde_json::Value::String("ascending".into())))
-    );
-    assert!(
-        points[2]["branch_ids"]
-            .as_array()
-            .is_some_and(|values| values.contains(&serde_json::Value::String("descending".into())))
-    );
+    assert!(points[2]["branch_ids"]
+        .as_array()
+        .is_some_and(|values| values.contains(&serde_json::Value::String("ascending".into()))));
+    assert!(points[2]["branch_ids"]
+        .as_array()
+        .is_some_and(|values| values.contains(&serde_json::Value::String("descending".into()))));
 
     let metrics_resource = body_json(
         app.clone()
@@ -18361,8 +18297,8 @@ async fn hysteresis_analysis_reads_flat_live_artifact_with_active_stage_executio
 }
 
 #[tokio::test]
-async fn hysteresis_analysis_points_conflicts_when_progress_reports_completed_points_without_artifact()
- {
+async fn hysteresis_analysis_points_conflicts_when_progress_reports_completed_points_without_artifact(
+) {
     let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
 
     {
@@ -18420,11 +18356,9 @@ async fn hysteresis_analysis_points_conflicts_when_progress_reports_completed_po
 
     assert_eq!(response.status(), StatusCode::CONFLICT);
     let error = body_json(response).await;
-    assert!(
-        error["error"]
-            .as_str()
-            .is_some_and(|message| message.contains("completed hysteresis points"))
-    );
+    assert!(error["error"]
+        .as_str()
+        .is_some_and(|message| message.contains("completed hysteresis points")));
 
     let _ = fs::remove_dir_all(artifact_dir);
 }
@@ -20381,8 +20315,8 @@ async fn v2_field_vector_prefers_fresh_m_preview_cache_over_stale_latest_field()
 }
 
 #[tokio::test]
-async fn topological_charge_reports_empty_support_when_m_field_exists_without_usable_fdm_plane_or_object_mesh()
- {
+async fn topological_charge_reports_empty_support_when_m_field_exists_without_usable_fdm_plane_or_object_mesh(
+) {
     let state = test_app_state_with_live_session().await;
     let scene = sample_scene_document();
     let object_id = scene.objects[0].id.clone();
@@ -20760,13 +20694,11 @@ async fn topological_charge_computes_uniform_fem_object_from_native_layer_faces(
     );
     assert_eq!(json["domain_generation_id"], "42");
     assert!(json["charge"].as_f64().unwrap().abs() < 1.0e-6);
-    assert!(
-        json["warnings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|warning| warning["code"] != "degenerate_support")
-    );
+    assert!(json["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|warning| warning["code"] != "degenerate_support"));
 }
 
 #[tokio::test]
@@ -21410,12 +21342,10 @@ async fn v2_field_vector_object_scope_prefers_mesh_part_node_indices() {
             .and_then(|value| value.to_str().ok()),
         Some("2")
     );
-    assert!(
-        response
-            .headers()
-            .get("x-fullmag-mesh-topology-hash")
-            .is_some()
-    );
+    assert!(response
+        .headers()
+        .get("x-fullmag-mesh-topology-hash")
+        .is_some());
     let bytes = body_bytes(response).await;
     assert_eq!(&bytes[..4], b"FMVP");
     assert_eq!(bytes[4], 3);
@@ -22244,11 +22174,9 @@ async fn field_slice_matrix_json_uses_exact_fem_tetra_path() {
         .filter_map(|value| value.as_f64())
         .collect();
     assert!(!finite_values.is_empty());
-    assert!(
-        finite_values
-            .iter()
-            .all(|value| (*value - 2.0).abs() < 1.0e-12)
-    );
+    assert!(finite_values
+        .iter()
+        .all(|value| (*value - 2.0).abs() < 1.0e-12));
     assert!(json["matrix_hash"].as_str().unwrap_or("").starts_with('"'));
 }
 
@@ -22279,11 +22207,9 @@ async fn field_slice_matrix_json_supports_fem_slab_mean() {
         .filter_map(|value| value.as_f64())
         .collect();
     assert!(!finite_values.is_empty());
-    assert!(
-        finite_values
-            .iter()
-            .all(|value| (*value - 2.0).abs() < 1.0e-12)
-    );
+    assert!(finite_values
+        .iter()
+        .all(|value| (*value - 2.0).abs() < 1.0e-12));
 }
 
 #[tokio::test]
@@ -23114,6 +23040,7 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
         "render_mode",
         "scalar_color_palette",
         "surface_color_source",
+        "surface_projection_mode",
         "viewport_colorbar_visible",
         "vector_budget",
         "vector_color_mode",
@@ -23150,6 +23077,7 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
     }
     for required in [
         "surface_color_source",
+        "surface_projection_mode",
         "surface_mono_color",
         "vector_color_mode",
         "vector_mono_color",
@@ -23504,12 +23432,10 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
     assert_eq!(payload["written_frequency_point_artifacts"], 2);
     assert_eq!(payload["current_frequency_hz"], 2.0e9);
     assert_eq!(payload["partial_artifacts_available"], true);
-    assert!(
-        payload["progress_json"]
-            .as_str()
-            .expect("progress_json should be present")
-            .contains("\"state\":\"completed\"")
-    );
+    assert!(payload["progress_json"]
+        .as_str()
+        .expect("progress_json should be present")
+        .contains("\"state\":\"completed\""));
 
     let response = app
         .clone()
@@ -23534,12 +23460,10 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
         2
     );
     assert_eq!(payload["response_progress"]["state"], "completed");
-    assert!(
-        payload["response_progress"]["progress_json"]
-            .as_str()
-            .expect("manifest response_progress should include progress_json")
-            .contains("\"state\":\"completed\"")
-    );
+    assert!(payload["response_progress"]["progress_json"]
+        .as_str()
+        .expect("manifest response_progress should include progress_json")
+        .contains("\"state\":\"completed\""));
     assert_eq!(
         payload["result_manifest"]["payload"]["resources"]["eigen_diagnostics_resource_key"],
         "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2"
@@ -23589,7 +23513,8 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
         serde_json::Value::Null
     );
     assert_eq!(
-        payload["result_manifest"]["payload"]["resources"]["response_cancel_requested_resource_key"],
+        payload["result_manifest"]["payload"]["resources"]
+            ["response_cancel_requested_resource_key"],
         serde_json::Value::Null
     );
     assert_eq!(
@@ -23654,12 +23579,10 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
     assert_eq!(payload["status"], "ready");
     assert_eq!(payload["artifact_path"], "eigen/dispersion.csv");
     assert_eq!(payload["content_type"], "text/csv; charset=utf-8");
-    assert!(
-        payload["text"]
-            .as_str()
-            .expect("dispersion text should be present")
-            .contains("frequency_hz")
-    );
+    assert!(payload["text"]
+        .as_str()
+        .expect("dispersion text should be present")
+        .contains("frequency_hz"));
 
     let response = app
         .clone()
@@ -23716,20 +23639,16 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
         payload["resource_key"],
         "/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0003/samples/vector?view=phase_rotated_real&phase_rad=0"
     );
-    assert!(
-        payload["available_views"]
-            .as_array()
-            .expect("available views should be an array")
-            .iter()
-            .any(|view| view == "complex")
-    );
-    assert!(
-        payload["available_views"]
-            .as_array()
-            .expect("available views should be an array")
-            .iter()
-            .any(|view| view == "abs")
-    );
+    assert!(payload["available_views"]
+        .as_array()
+        .expect("available views should be an array")
+        .iter()
+        .any(|view| view == "complex"));
+    assert!(payload["available_views"]
+        .as_array()
+        .expect("available views should be an array")
+        .iter()
+        .any(|view| view == "abs"));
 
     let mode_field_dir = artifact_dir
         .join("eigen")
@@ -23859,12 +23778,10 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = body_bytes(response).await;
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert!(
-        payload["error"]
-            .as_str()
-            .expect("error should be present")
-            .contains("payload")
-    );
+    assert!(payload["error"]
+        .as_str()
+        .expect("error should be present")
+        .contains("payload"));
 
     let response = app
         .clone()
@@ -24129,12 +24046,10 @@ async fn frequency_domain_progress_reports_interrupted_partial_response_bundle()
     assert_eq!(payload["completed_frequency_points"], 1);
     assert_eq!(payload["written_frequency_point_artifacts"], 1);
     assert_eq!(payload["partial_artifacts_available"], true);
-    assert!(
-        payload["progress_json"]
-            .as_str()
-            .expect("cancel-requested progress_json should be present")
-            .contains("\"state\":\"cancel_requested\"")
-    );
+    assert!(payload["progress_json"]
+        .as_str()
+        .expect("cancel-requested progress_json should be present")
+        .contains("\"state\":\"cancel_requested\""));
 }
 
 #[tokio::test]
@@ -24194,12 +24109,10 @@ async fn frequency_domain_eigen_mode_field_rejects_payload_without_metadata() {
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = body_bytes(response).await;
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert!(
-        payload["error"]
-            .as_str()
-            .expect("error should be present")
-            .contains("metadata")
-    );
+    assert!(payload["error"]
+        .as_str()
+        .expect("error should be present")
+        .contains("metadata"));
 
     let response = app
         .oneshot(
@@ -24214,12 +24127,10 @@ async fn frequency_domain_eigen_mode_field_rejects_payload_without_metadata() {
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = body_bytes(response).await;
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert!(
-        payload["error"]
-            .as_str()
-            .expect("error should be present")
-            .contains("metadata")
-    );
+    assert!(payload["error"]
+        .as_str()
+        .expect("error should be present")
+        .contains("metadata"));
 }
 
 #[tokio::test]
@@ -24394,12 +24305,10 @@ async fn frequency_domain_progress_reports_pre_first_point_cancel_bundle() {
     assert_eq!(payload["completed_frequency_points"], 0);
     assert_eq!(payload["written_frequency_point_artifacts"], 0);
     assert_eq!(payload["partial_artifacts_available"], false);
-    assert!(
-        payload["progress_json"]
-            .as_str()
-            .expect("progress_json should be present")
-            .contains("\"partial_artifacts_available\":false")
-    );
+    assert!(payload["progress_json"]
+        .as_str()
+        .expect("progress_json should be present")
+        .contains("\"partial_artifacts_available\":false"));
 
     let response = app
         .oneshot(
@@ -24421,12 +24330,10 @@ async fn frequency_domain_progress_reports_pre_first_point_cancel_bundle() {
     assert_eq!(payload["completed_frequency_points"], 0);
     assert_eq!(payload["written_frequency_point_artifacts"], 0);
     assert_eq!(payload["partial_artifacts_available"], false);
-    assert!(
-        payload["progress_json"]
-            .as_str()
-            .expect("cancel-requested progress_json should be present")
-            .contains("\"partial_artifacts_available\":false")
-    );
+    assert!(payload["progress_json"]
+        .as_str()
+        .expect("cancel-requested progress_json should be present")
+        .contains("\"partial_artifacts_available\":false"));
 }
 
 #[tokio::test]
@@ -24656,13 +24563,11 @@ async fn frequency_domain_response_field_meta_uses_v2_linked_payload_path() {
     assert_eq!(payload["tangent_components"][1], "tangent_e2");
     assert_eq!(payload["tangent_complex_pair_count"], 4);
     assert_eq!(payload["tangent_payload_value_count"], 8);
-    assert!(
-        payload["available_views"]
-            .as_array()
-            .expect("available views should be an array")
-            .iter()
-            .any(|view| view == "phase_rotated_real")
-    );
+    assert!(payload["available_views"]
+        .as_array()
+        .expect("available views should be an array")
+        .iter()
+        .any(|view| view == "phase_rotated_real"));
     assert_eq!(payload["default_view"], "abs");
     assert_eq!(payload["default_phase_rad"], 1.25);
     assert_eq!(

@@ -8,7 +8,7 @@ use crate::router_v2::handlers::data::field_resolution::{
 };
 use crate::types::*;
 use fullmag_runner::{LivePreviewField, RuntimeStatus};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 
@@ -2596,12 +2596,10 @@ mod tests {
             Some("cp-000041")
         );
         assert_eq!(record.state_transition.as_deref(), Some("restored"));
-        assert!(
-            record
-                .artifact_refs
-                .iter()
-                .any(|artifact_ref| artifact_ref == "cp-common-state")
-        );
+        assert!(record
+            .artifact_refs
+            .iter()
+            .any(|artifact_ref| artifact_ref == "cp-common-state"));
     }
 
     fn session_command(command_id: &str, kind: &str) -> SessionCommand {

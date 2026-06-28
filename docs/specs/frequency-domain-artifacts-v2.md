@@ -438,7 +438,7 @@ must be carried by `component_response_phase[]` and the complex field payloads.
 
 This artifact records driven-response solver diagnostics. Native FEM production
 writers must include the matrix-free/GMRES diagnostics used to distinguish the
-production CPU slice from dense validation artifacts.
+production CPU/GPU slices from dense validation artifacts.
 
 `response/diagnostics.v1.json` is a compatibility export only. New manifests
 must reference `response/diagnostics/solver.v1.json` through
@@ -450,14 +450,31 @@ Required fields for native FEM production response diagnostics:
 - `schema_version = "frequency_domain_response_diagnostics.v1"`,
 - `status`,
 - `complete`,
+- `requested_execution_lane`,
+- `resolved_execution_lane`,
+- `validation_fallback_used = false`,
 - `assembled_mfem_operator_solver = false`,
 - `dense_block_real_solver = false`,
 - `matrix_free_solver = true`,
 - `krylov_solver = "gmres"`,
+- `operator_terms_included[]`,
 - `completed_frequency_point_count`,
 - `max_abs_response`,
 - `residual_l2_norm`,
 - `relative_residual_l2_norm`.
+
+For native FEM production GPU response, `requested_execution_lane` and
+`resolved_execution_lane` must both be `"production_gpu"` when the GPU solve
+runs. The initial GPU production slice may report only exchange, Zeeman, and
+uniform uniaxial anisotropy in `operator_terms_included[]`; demag, DMI,
+static-periodic projection, and nonzero-k Floquet/Bloch response must not be
+reported as included until those GPU operators are implemented and qualified.
+
+Unavailable production GPU responses must still write diagnostics when an
+artifact directory is available. They must preserve
+`requested_execution_lane = "production_gpu"`, set
+`resolved_execution_lane = "unavailable"`, include an `unsupported_reason`, and
+keep `validation_fallback_used = false` and `dense_block_real_solver = false`.
 
 When the response uses k = 0 static-periodic boundary conditions, diagnostics
 must also include:

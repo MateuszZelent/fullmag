@@ -43,6 +43,7 @@ fn main() {
     println!("cargo:rerun-if-changed=../../backends/fem/CMakeLists.txt");
     rerun_if_changed_tree("../../backends/fem/core");
     rerun_if_changed_tree("../../backends/fem/cpu");
+    println!("cargo:rerun-if-changed=../../backends/fem/gpu");
     rerun_if_changed_tree("../../backends/fem/gpu");
     rerun_if_changed_tree("../../backends/fem/src");
     rerun_if_changed_tree("../../backends/fem/include");

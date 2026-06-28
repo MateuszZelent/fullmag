@@ -69,7 +69,7 @@ function workItem(
     itemCount: 4,
     lane: "field-color",
     latestWins: true,
-    outputKind: "scalar-colors",
+    outputKind: "surface-vertex-colors",
     outputBytesEstimate: 48,
     passId: "part-a:surface",
     staleCompatibilityKey: "surface:part-a:x:buffer:part-a:viridis:-1:1:m",
@@ -111,7 +111,7 @@ describe("viewport3DTargetDiagnostics", () => {
         degradation: [],
         demand: "surface:x vector-glyph",
         derivedWork: [
-          "field-color:scalar-colors:ready:render-model-sync:part-a:surface items=4 input=0B output=48B",
+          "field-color:surface-vertex-colors:ready:render-model-sync:part-a:surface items=4 input=0B output=48B",
           "vector-glyph:vector-glyphs:ready:runtime-worker:part-a:vector-glyph items=4 input=0B output=48B",
           "vector-glyph:vector-segments:ready:runtime-worker:part-a:vector-glyph items=4 input=0B output=48B",
         ],
@@ -201,10 +201,211 @@ describe("viewport3DTargetDiagnostics", () => {
       "field-color:sampled-buffer-not-surface-capable",
     ]);
     expect(summaries[0]?.derivedWork).toEqual([
-      "field-color:scalar-colors:blocked:blocked:part-a:surface items=4 input=0B output=48B",
+      "field-color:surface-vertex-colors:blocked:blocked:part-a:surface items=4 input=0B output=48B",
       "vector-glyph:vector-glyphs:blocked:blocked:part-a:vector-glyph items=4 input=0B output=48B",
       "vector-glyph:vector-segments:blocked:blocked:part-a:vector-glyph items=4 input=0B output=48B",
     ]);
+  });
+
+  it("reports non-raw surface projection modes as raw-nodal fallbacks", () => {
+    const summaries = summarizeViewport3DTargetDiagnostics({
+      derivedWorkItems: [],
+      targetPasses: new Map([
+        [
+          "part-a",
+          targetPass({
+            surface: {
+              degradation: null,
+              passId: "part-a:surface",
+              projectionMode: "surface_faces",
+              scalarColorMode: "x",
+              scalarColors: null,
+            },
+          }),
+        ],
+      ]),
+    });
+
+    expect(summaries[0]?.degradation).toContain(
+      "surface:projection-fallback mode=surface_faces fallback=raw_nodal",
+    );
+  });
+
+  it("does not report a surface-faces fallback when the displayed buffer is face-expanded", () => {
+    const summaries = summarizeViewport3DTargetDiagnostics({
+      derivedWorkItems: [],
+      targetPasses: new Map([
+        [
+          "part-a",
+          targetPass({
+            surface: {
+              degradation: null,
+              passId: "part-a:surface",
+              projectionMode: "surface_faces",
+              scalarColorMode: "x",
+              scalarColors: {
+                colors: new Float32Array(9),
+                colorMode: "x",
+                colorPalette: "viridis",
+                faceCount: 1,
+                geometryRole: "face_expanded_surface",
+                projectionMode: "surface_faces",
+                quantityId: "m",
+                range: { max: 1, min: -1 },
+                rangeSource: "face_values",
+                scalarValues: new Float32Array([0, 0, 0]),
+              },
+            },
+          }),
+        ],
+      ]),
+    });
+
+    expect(summaries[0]?.degradation).not.toContain(
+      "surface:projection-fallback mode=surface_faces fallback=raw_nodal",
+    );
+  });
+
+  it("does not report a thickness-average-z fallback when the displayed buffer is projected", () => {
+    const summaries = summarizeViewport3DTargetDiagnostics({
+      derivedWorkItems: [],
+      targetPasses: new Map([
+        [
+          "part-a",
+          targetPass({
+            surface: {
+              degradation: null,
+              passId: "part-a:surface",
+              projectionMode: "thickness_average_z",
+              scalarColorMode: "orientation",
+              scalarColors: {
+                colors: new Float32Array(9),
+                colorMode: "orientation",
+                colorPalette: "viridis",
+                degradedFaceCount: 0,
+                faceCount: 1,
+                geometryRole: "face_expanded_surface",
+                lowNormFaceCount: 1,
+                missingNodeCount: 0,
+                projectedBinCount: 3,
+                projectedSamplesPerBinMax: 2,
+                projectedSamplesPerBinMean: 2,
+                projectedSamplesPerBinMin: 2,
+                projectionAxis: "z",
+                projectionMode: "thickness_average_z",
+                projectionTolerance: 1e-9,
+                quantityId: "m",
+                range: { max: 0, min: 0 },
+                rangeSource: "projected_values",
+                vectorValues: new Float32Array(9),
+              },
+            },
+          }),
+        ],
+      ]),
+    });
+
+    expect(summaries[0]?.degradation).not.toContain(
+      "surface:projection-fallback mode=thickness_average_z fallback=raw_nodal",
+    );
+    expect(summaries[0]?.degradation).toContain(
+      "surface:low-norm-orientation faces=1/1",
+    );
+    expect(summaries[0]?.degradation).toContain(
+      "surface:projection mode=thickness_average_z geometry=face_expanded_surface rangeSource=projected_values faces=1 degraded=0 missingNodes=0 lowNorm=1 axis=z tolerance=1e-9 bins=3 samplesPerBin=2/2/2",
+    );
+  });
+
+  it("distinguishes missing projected bins from low-norm projection diagnostics", () => {
+    const summaries = summarizeViewport3DTargetDiagnostics({
+      derivedWorkItems: [],
+      targetPasses: new Map([
+        [
+          "part-a",
+          targetPass({
+            surface: {
+              degradation: null,
+              passId: "part-a:surface",
+              projectionMode: "thickness_average_z",
+              scalarColorMode: "orientation",
+              scalarColors: {
+                colors: new Float32Array(9),
+                colorMode: "orientation",
+                colorPalette: "viridis",
+                degradedFaceCount: 1,
+                faceCount: 1,
+                geometryRole: "face_expanded_surface",
+                lowNormFaceCount: 0,
+                missingNodeCount: 1,
+                projectedBinCount: 2,
+                projectedSamplesPerBinMax: 1,
+                projectedSamplesPerBinMean: 1,
+                projectedSamplesPerBinMin: 1,
+                projectionAxis: "z",
+                projectionMode: "thickness_average_z",
+                projectionTolerance: 1e-9,
+                quantityId: "m",
+                range: { max: 0, min: 0 },
+                rangeSource: "projected_values",
+                vectorValues: new Float32Array(9),
+              },
+            },
+          }),
+        ],
+      ]),
+    });
+
+    expect(summaries[0]?.degradation).toContain(
+      "surface:missing-projected-bins faces=1/1 missingNodes=1",
+    );
+    expect(summaries[0]?.degradation).not.toContain(
+      "surface:low-norm-orientation faces=1/1",
+    );
+  });
+
+  it("reports degraded thickness-average-z suitability diagnostics", () => {
+    const summaries = summarizeViewport3DTargetDiagnostics({
+      derivedWorkItems: [],
+      targetPasses: new Map([
+        [
+          "part-a",
+          targetPass({
+            surface: {
+              degradation: null,
+              passId: "part-a:surface",
+              projectionMode: "thickness_average_z",
+              scalarColorMode: "orientation",
+              scalarColors: {
+                colors: new Float32Array(9),
+                colorMode: "orientation",
+                colorPalette: "viridis",
+                degradedFaceCount: 0,
+                faceCount: 1,
+                geometryRole: "face_expanded_surface",
+                lowNormFaceCount: 0,
+                missingNodeCount: 0,
+                projectedBinCount: 3,
+                projectedSamplesPerBinMax: 1,
+                projectedSamplesPerBinMean: 1,
+                projectedSamplesPerBinMin: 1,
+                projectionAxis: "z",
+                projectionMode: "thickness_average_z",
+                projectionSuitability: "degraded_insufficient_depth_samples",
+                projectionTolerance: 1e-9,
+                quantityId: "m",
+                range: { max: 1, min: 1 },
+                rangeSource: "projected_values",
+                vectorValues: new Float32Array(9),
+              },
+            },
+          }),
+        ],
+      ]),
+    });
+
+    expect(summaries[0]?.degradation).toContain(
+      "surface:projection-suitability state=degraded_insufficient_depth_samples",
+    );
   });
 
   it("reports outlier-dominated scalar ranges without hiding surface colors", () => {

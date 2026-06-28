@@ -57,6 +57,7 @@ from fullmag.meshing._mesh_targets import (
     resolve_object_preview_target,
     resolve_shared_domain_targets,
 )
+from fullmag.meshing._gmsh_types import _infer_axis_aligned_periodic_pairs
 from fullmag.model.discretization import PerObjectMeshRecipe, SharedMeshAssemblyPolicy
 from fullmag.meshing.gmsh_bridge import (
     ALGO_3D_DELAUNAY,
@@ -86,11 +87,15 @@ from fullmag.meshing._gmsh_generators import (
     _build_stl_volume_model_for_component,
     _sanitize_csg_mesh_options_for_geometries,
 )
+from fullmag.meshing._gmsh_extraction import _extract_periodic_pairs
 from fullmag.meshing._gmsh_airbox import (
     _component_interface_size_targets as _geo_component_interface_size_targets,
 )
 from fullmag.meshing._gmsh_occ import (
+    _add_periodic_boundary_physical_groups,
     _component_interface_size_targets as _occ_component_interface_size_targets,
+    _configure_axis_periodic_surfaces,
+    _periodic_candidate_surface_tags,
 )
 from fullmag.meshing._airbox_grading import (
     _add_airbox_grading_field,
@@ -1057,6 +1062,195 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(
             boundary_scopes["boundary:mag_air_interface"]["boundary_face_count"],
             1,
+        )
+
+    def test_periodic_shared_domain_uses_airbox_outer_surfaces(self) -> None:
+        self.assertEqual(
+            _periodic_candidate_surface_tags(
+                gamma_out=[42, 7],
+                component_surface_tags={"film": [1, 2, 3]},
+                has_airbox=True,
+            ),
+            [7, 42],
+        )
+        self.assertEqual(
+            _periodic_candidate_surface_tags(
+                gamma_out=[42, 7],
+                component_surface_tags={"film": [1, 2, 3]},
+                has_airbox=True,
+                all_surface_tags=[9, 2, 9],
+            ),
+            [2, 9],
+        )
+        self.assertEqual(
+            _periodic_candidate_surface_tags(
+                gamma_out=[],
+                component_surface_tags={"left": [3, 1], "right": [2, 3]},
+                has_airbox=False,
+            ),
+            [1, 2, 3],
+        )
+
+    def test_periodic_surface_matching_tolerates_occ_bbox_fuzz(self) -> None:
+        class _FakeMesh:
+            def __init__(self) -> None:
+                self.calls: list[tuple[list[int], list[int], list[float]]] = []
+
+            def setPeriodic(
+                self,
+                dim: int,
+                slave_tags: list[int],
+                master_tags: list[int],
+                affine: list[float],
+            ) -> None:
+                self.calls.append((slave_tags, master_tags, affine))
+
+        class _FakeModel:
+            def __init__(self) -> None:
+                self.mesh = _FakeMesh()
+                self.bounds = {
+                    1: (-0.04000004, -0.04000000, -0.005, -0.03999996, 0.04000000, 0.005),
+                    2: (0.03999996, -0.04000000, -0.005, 0.04000004, 0.04000000, 0.005),
+                    3: (-0.04000000, -0.04000004, -0.005, 0.04000000, -0.03999996, 0.005),
+                    4: (-0.04000000, 0.03999996, -0.005, 0.04000000, 0.04000004, 0.005),
+            }
+
+            def getBoundingBox(self, dim: int, tag: int) -> tuple[float, ...]:
+                assert dim == 2
+                return self.bounds[tag]
+
+        class _FakeGmsh:
+            def __init__(self) -> None:
+                self.model = _FakeModel()
+
+        gmsh = _FakeGmsh()
+
+        specs = _configure_axis_periodic_surfaces(
+            gmsh,
+            surface_tags=[1, 2, 3, 4],
+            pair_ids=["x_faces"],
+        )
+
+        self.assertEqual(len(specs), 1)
+        self.assertEqual(specs[0]["pair_id"], "x_faces")
+        self.assertEqual(specs[0]["master_tag"], 1)
+        self.assertEqual(specs[0]["slave_tag"], 2)
+        self.assertEqual(gmsh.model.mesh.calls[0][0], [2])
+        self.assertEqual(gmsh.model.mesh.calls[0][1], [1])
+
+    def test_periodic_boundary_surfaces_get_non_robin_physical_markers(self) -> None:
+        class _FakeModel:
+            def __init__(self) -> None:
+                self.physical_groups: list[tuple[int, list[int], int]] = []
+                self.names: list[tuple[int, int, str]] = []
+
+            def addPhysicalGroup(self, dim: int, tags: list[int], tag: int) -> None:
+                self.physical_groups.append((dim, list(tags), tag))
+
+            def setPhysicalName(self, dim: int, tag: int, name: str) -> None:
+                self.names.append((dim, tag, name))
+
+        class _FakeGmsh:
+            def __init__(self) -> None:
+                self.model = _FakeModel()
+
+        specs = [
+            {
+                "pair_id": "x_faces",
+                "master_tag": 14,
+                "slave_tag": 18,
+                "marker_a": 14,
+                "marker_b": 18,
+            },
+            {
+                "pair_id": "y_faces",
+                "master_tag": 15,
+                "slave_tag": 16,
+                "marker_a": 15,
+                "marker_b": 16,
+            },
+        ]
+        gmsh = _FakeGmsh()
+
+        surfaces = _add_periodic_boundary_physical_groups(
+            gmsh,
+            specs,
+            reserved_markers={10, 99},
+        )
+
+        self.assertEqual(surfaces, {14, 15, 16, 18})
+        markers = [group[2] for group in gmsh.model.physical_groups]
+        self.assertEqual(markers, [100, 101, 102, 103])
+        self.assertNotIn(99, markers)
+        self.assertNotIn(10, markers)
+        self.assertEqual(specs[0]["marker_a"], 100)
+        self.assertEqual(specs[0]["marker_b"], 101)
+        self.assertEqual(specs[1]["marker_a"], 102)
+        self.assertEqual(specs[1]["marker_b"], 103)
+
+    def test_extract_periodic_pairs_preserves_multiple_marker_pairs_per_axis(self) -> None:
+        class _FakeMesh:
+            def getPeriodicNodes(self, dim: int, slave_tag: int):
+                assert dim == 2
+                data = {
+                    18: (14, [180, 181], [140, 141], []),
+                    20: (16, [200, 201], [160, 161], []),
+                }
+                return data[slave_tag]
+
+        class _FakeModel:
+            def __init__(self) -> None:
+                self.mesh = _FakeMesh()
+
+        class _FakeGmsh:
+            def __init__(self) -> None:
+                self.model = _FakeModel()
+
+        node_index = {
+            140: 0,
+            141: 1,
+            160: 2,
+            161: 3,
+            180: 4,
+            181: 5,
+            200: 6,
+            201: 7,
+        }
+        specs = [
+            {
+                "pair_id": "x_faces",
+                "master_tag": 14,
+                "slave_tag": 18,
+                "marker_a": 100,
+                "marker_b": 101,
+                "translation": [200e-9, 0.0, 0.0],
+                "tolerance_m": 1.0e-12,
+            },
+            {
+                "pair_id": "x_faces",
+                "master_tag": 16,
+                "slave_tag": 20,
+                "marker_a": 102,
+                "marker_b": 103,
+                "translation": [200e-9, 0.0, 0.0],
+                "tolerance_m": 1.0e-12,
+            },
+        ]
+
+        boundary_pairs, node_pairs = _extract_periodic_pairs(_FakeGmsh(), node_index, specs)
+
+        self.assertEqual(
+            [(pair["pair_id"], pair["marker_a"], pair["marker_b"]) for pair in boundary_pairs],
+            [("x_faces", 100, 101), ("x_faces", 102, 103)],
+        )
+        self.assertEqual(
+            [(pair["pair_id"], pair["node_a"], pair["node_b"]) for pair in node_pairs],
+            [
+                ("x_faces", 0, 4),
+                ("x_faces", 1, 5),
+                ("x_faces", 2, 6),
+                ("x_faces", 3, 7),
+            ],
         )
 
     def test_quality_arrays_reorder_to_mesh_element_tags(self) -> None:
@@ -3824,6 +4018,90 @@ class MeshScaffoldTests(unittest.TestCase):
 
         self.assertEqual(mesh_ir["periodic_boundary_pairs"], explicit_mesh.periodic_boundary_pairs)
         self.assertEqual(mesh_ir["periodic_node_pairs"], explicit_mesh.periodic_node_pairs)
+
+    def test_axis_aligned_periodic_pair_inference_includes_translation_and_tolerance(self) -> None:
+        mesh = MeshData(
+            nodes=np.asarray(
+                [
+                    [0.0, 0.0, 0.0],
+                    [2.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [2.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [2.0, 0.0, 1.0],
+                    [0.0, 1.0, 1.0],
+                    [2.0, 1.0, 1.0],
+                ],
+                dtype=np.float64,
+            ),
+            elements=np.asarray(
+                [
+                    [0, 1, 2, 4],
+                    [1, 3, 2, 7],
+                    [1, 2, 4, 7],
+                    [1, 4, 5, 7],
+                    [2, 4, 6, 7],
+                ],
+                dtype=np.int32,
+            ),
+            element_markers=np.ones((5,), dtype=np.int32),
+            boundary_faces=np.asarray(
+                [
+                    [0, 2, 6],
+                    [0, 4, 6],
+                    [1, 3, 7],
+                    [1, 5, 7],
+                ],
+                dtype=np.int32,
+            ),
+            boundary_markers=np.asarray([10, 10, 11, 11], dtype=np.int32),
+        )
+
+        boundary_pairs, node_pairs = _infer_axis_aligned_periodic_pairs(mesh)
+
+        self.assertEqual(
+            {pair["pair_id"]: pair for pair in boundary_pairs},
+            {
+                "x_faces": {
+                    "pair_id": "x_faces",
+                    "marker_a": 10,
+                    "marker_b": 11,
+                    "translation": [2.0, 0.0, 0.0],
+                    "tolerance_m": 2.0e-6,
+                },
+                "y_faces": {
+                    "pair_id": "y_faces",
+                    "marker_a": 10,
+                    "marker_b": 11,
+                    "translation": [0.0, 1.0, 0.0],
+                    "tolerance_m": 2.0e-6,
+                },
+                "z_faces": {
+                    "pair_id": "z_faces",
+                    "marker_a": 10,
+                    "marker_b": 11,
+                    "translation": [0.0, 0.0, 1.0],
+                    "tolerance_m": 2.0e-6,
+                },
+            },
+        )
+        self.assertEqual(
+            {(pair["pair_id"], pair["node_a"], pair["node_b"]) for pair in node_pairs},
+            {
+                ("x_faces", 0, 1),
+                ("x_faces", 2, 3),
+                ("x_faces", 4, 5),
+                ("x_faces", 6, 7),
+                ("y_faces", 0, 2),
+                ("y_faces", 1, 3),
+                ("y_faces", 4, 6),
+                ("y_faces", 5, 7),
+                ("z_faces", 0, 4),
+                ("z_faces", 1, 5),
+                ("z_faces", 2, 6),
+                ("z_faces", 3, 7),
+            },
+        )
 
     def test_add_air_box_is_deprecated(self) -> None:
         with self.assertWarns(DeprecationWarning):

@@ -100,6 +100,15 @@ phase `phi` enters the tangent-space right-hand side as
 materialize real block systems must preserve both real and imaginary right-hand
 side components rather than dropping the drive phase.
 
+The native FEM production GPU driven-response lane is a limited magnetic-only
+realization of this contract. It may execute the gamma-point, free-boundary,
+no-demag slice with exchange, Zeeman, uniform uniaxial anisotropy, uniform or
+nodal Gilbert damping, and matrix-free GMRES through a CUDA tangent operator.
+It must report requested and resolved GPU lane provenance and
+`validation_fallback_used=false`. DMI, dynamic demag, static-periodic
+projection, nonzero-k Floquet/Bloch response, and magnetoelastic response must
+reject explicitly instead of falling back to dense validation or CPU response.
+
 ## Quasistatic Bidirectional Magnetoelasticity
 
 Quasistatic bidirectional magnetoelasticity solves mechanical equilibrium and

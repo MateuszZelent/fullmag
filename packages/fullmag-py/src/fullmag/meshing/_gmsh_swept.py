@@ -36,6 +36,7 @@ from ._gmsh_types import (
     MeshData,
     MeshOptions,
     MeshQualityReport,
+    _infer_axis_aligned_periodic_pairs,
 )
 from ._gmsh_infra import (
     _import_gmsh,
@@ -409,12 +410,36 @@ def generate_swept_cylinder_mesh(
             f"{boundary_faces.shape[0]} boundary faces"
         )
 
+        periodic_boundary_pairs: list[dict[str, object]] = []
+        periodic_node_pairs: list[dict[str, object]] = []
+        if opts.periodic_pair_ids:
+            inferred_mesh = MeshData(
+                nodes=nodes,
+                elements=elements,
+                element_markers=element_markers,
+                boundary_faces=boundary_faces,
+                boundary_markers=boundary_markers,
+                quality=quality,
+            )
+            all_boundary_pairs, all_node_pairs = _infer_axis_aligned_periodic_pairs(
+                inferred_mesh
+            )
+            requested_pair_ids = set(opts.periodic_pair_ids)
+            periodic_boundary_pairs = [
+                pair for pair in all_boundary_pairs if pair.get("pair_id") in requested_pair_ids
+            ]
+            periodic_node_pairs = [
+                pair for pair in all_node_pairs if pair.get("pair_id") in requested_pair_ids
+            ]
+
         return MeshData(
             nodes=nodes,
             elements=elements,
             element_markers=element_markers,
             boundary_faces=boundary_faces,
             boundary_markers=boundary_markers,
+            periodic_boundary_pairs=periodic_boundary_pairs,
+            periodic_node_pairs=periodic_node_pairs,
             quality=quality,
         )
     finally:
@@ -639,12 +664,36 @@ def _extract_swept_mesh_data(
         f"{elements.shape[0]} elements, {boundary_faces.shape[0]} boundary faces"
     )
 
+    periodic_boundary_pairs: list[dict[str, object]] = []
+    periodic_node_pairs: list[dict[str, object]] = []
+    if opts.periodic_pair_ids:
+        inferred_mesh = MeshData(
+            nodes=nodes,
+            elements=elements,
+            element_markers=element_markers,
+            boundary_faces=boundary_faces,
+            boundary_markers=boundary_markers,
+            quality=quality,
+        )
+        all_boundary_pairs, all_node_pairs = _infer_axis_aligned_periodic_pairs(
+            inferred_mesh
+        )
+        requested_pair_ids = set(opts.periodic_pair_ids)
+        periodic_boundary_pairs = [
+            pair for pair in all_boundary_pairs if pair.get("pair_id") in requested_pair_ids
+        ]
+        periodic_node_pairs = [
+            pair for pair in all_node_pairs if pair.get("pair_id") in requested_pair_ids
+        ]
+
     return MeshData(
         nodes=nodes,
         elements=elements,
         element_markers=element_markers,
         boundary_faces=boundary_faces,
         boundary_markers=boundary_markers,
+        periodic_boundary_pairs=periodic_boundary_pairs,
+        periodic_node_pairs=periodic_node_pairs,
         quality=quality,
     )
 

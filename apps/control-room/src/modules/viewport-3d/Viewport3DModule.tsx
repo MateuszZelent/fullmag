@@ -273,9 +273,14 @@ function resolveViewport3DColorbarLegendFromPlan({
     quantityId: plan.quantityId,
     unit,
   });
-  const targetLabels = plan.targetIds
-    .map((targetId) => labelByTargetId.get(targetId) ?? targetId)
-    .filter((label, index, labels) => labels.indexOf(label) === index);
+  const targetLabels: string[] = [];
+  const seenTargetLabels = new Set<string>();
+  for (const targetId of plan.targetIds) {
+    const label = labelByTargetId.get(targetId) ?? targetId;
+    if (seenTargetLabels.has(label)) continue;
+    seenTargetLabels.add(label);
+    targetLabels.push(label);
+  }
   const labelPrefix =
     targetLabels.length === 1
       ? `${targetLabels[0]}: `
@@ -314,6 +319,7 @@ interface Viewport3DScalarColorbarLegendInput {
       | "activeQuantityId"
       | "shaderVisible"
       | "surfaceColorSource"
+      | "surfaceProjectionMode"
       | "viewportColorbarVisible"
       | "visible"
     > & {
@@ -442,9 +448,10 @@ export function buildViewport3DColorbarTargetPlans({
   fdmSettings?: VisualizationTargetSettings | null;
   parts: readonly Viewport3DColorbarTargetPart[];
 }): Viewport3DTargetRenderPlan[] {
-  const targets = parts
-    .filter((part) => isViewport3DColorbarTargetPartEligible(part))
-    .map((part) =>
+  const targets: Viewport3DTargetRenderPlan[] = [];
+  for (const part of parts) {
+    if (!isViewport3DColorbarTargetPartEligible(part)) continue;
+    targets.push(
       buildViewport3DTargetRenderPlan({
         label: part.label,
         quantityId: part.settings.activeQuantityId,
@@ -453,6 +460,7 @@ export function buildViewport3DColorbarTargetPlans({
         targetKind: part.targetKind,
       }),
     );
+  }
   if (fdmSettings) {
     targets.push(
       buildViewport3DTargetRenderPlan({
@@ -544,12 +552,13 @@ export function resolveViewport3DScalarColorbarLegends({
       ...legend,
       label: `${part.label}: ${legend.label}`,
     };
-    const key = [
-      part.id,
-      resolveCanonicalQuantityId(settings.activeQuantityId),
+    const key = viewport3DScalarColorbarLegendKey({
       colorMode,
       palette,
-    ].join(":");
+      projectionMode: settings.surfaceProjectionMode,
+      quantityId: settings.activeQuantityId,
+      targetId: part.id,
+    });
     if (emitted.has(key)) continue;
     emitted.add(key);
     legends.push({ key, legend: scopedLegend });
@@ -618,12 +627,13 @@ export function resolveViewport3DRequestedColorbarGroupKeys(
     if (!colorMode) continue;
     keys.add(
       viewport3DColorbarRetentionGroupKey(
-        [
-          part.id,
-          resolveCanonicalQuantityId(settings.activeQuantityId),
+        viewport3DScalarColorbarLegendKey({
           colorMode,
-          settings.scalarColorPalette ?? colorPalette,
-        ].join(":"),
+          palette: settings.scalarColorPalette ?? colorPalette,
+          projectionMode: settings.surfaceProjectionMode,
+          quantityId: settings.activeQuantityId,
+          targetId: part.id,
+        }),
       ),
     );
   }
@@ -704,6 +714,31 @@ function viewport3DColorbarRetentionGroupKey(key: string): string {
   return key;
 }
 
+function viewport3DScalarColorbarLegendKey({
+  colorMode,
+  palette,
+  projectionMode,
+  quantityId,
+  targetId,
+}: {
+  colorMode: string;
+  palette: string;
+  projectionMode?: VisualizationTargetSettings["surfaceProjectionMode"];
+  quantityId: string;
+  targetId: string;
+}): string {
+  const key = [
+    targetId,
+    resolveCanonicalQuantityId(quantityId),
+    colorMode,
+    palette,
+  ];
+  if (projectionMode && projectionMode !== "raw_nodal") {
+    key.push(`projection=${projectionMode}`);
+  }
+  return key.join(":");
+}
+
 const retainedViewport3DColorbarPlansBySlot = new Map<
   string,
   readonly Viewport3DColorbarPlan[]
@@ -717,20 +752,26 @@ function sameViewport3DColorbarPlans(
 ): boolean {
   if (left === right) return true;
   if (left.length !== right.length) return false;
-  return left.every((plan, index) => {
+  for (let index = 0; index < left.length; index += 1) {
+    const plan = left[index];
     const other = right[index];
-    return (
-      other !== undefined &&
-      plan.groupKey === other.groupKey &&
-      plan.range?.min === other.range?.min &&
-      plan.range?.max === other.range?.max &&
-      plan.rangeState === other.rangeState &&
-      plan.targetIds.length === other.targetIds.length &&
-      plan.targetIds.every((targetId, targetIndex) =>
-        targetId === other.targetIds[targetIndex],
-      )
-    );
-  });
+    if (!plan || !other) return false;
+    if (
+      plan.groupKey !== other.groupKey ||
+      plan.range?.min !== other.range?.min ||
+      plan.range?.max !== other.range?.max ||
+      plan.rangeState !== other.rangeState ||
+      plan.targetIds.length !== other.targetIds.length
+    ) {
+      return false;
+    }
+    for (let targetIndex = 0; targetIndex < plan.targetIds.length; targetIndex += 1) {
+      if (plan.targetIds[targetIndex] !== other.targetIds[targetIndex]) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 function subscribeRetainedViewport3DColorbarPlans(
@@ -1015,6 +1056,14 @@ function useViewport3DSelectionHandlers({
         label: partSelection.label,
         nodeId: partSelection.nodeId,
         objectId: partSelection.objectId,
+        ref: {
+          boundaryFaceIndex: partSelection.boundaryFaceIndex,
+          kind: partSelection.kind,
+          nodeId: partSelection.nodeId,
+          objectId: partSelection.objectId,
+          type: "mesh-part",
+          visualizationTargetId: `mesh-part:${partSelection.nodeId}`,
+        },
       });
     },
     [select],

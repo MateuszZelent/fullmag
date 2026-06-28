@@ -1,5 +1,7 @@
 #include "frequency_domain/frequency_domain_contract.hpp"
 
+#include <cmath>
+
 namespace fullmag::fem::frequency_domain {
 
 namespace {
@@ -25,6 +27,18 @@ constexpr const char *kCpuDrivenResponseDiagnosticsJson =
     "\"gpu_available\":false,"
     "\"execution_lane\":\"native_fem_mfem_frequency_domain_cpu\","
     "\"scope\":\"gamma_free_or_static_periodic_magnetic_response\"}";
+
+constexpr const char *kGpuDrivenResponseDiagnosticsJson =
+    "{\"schema_version\":\"frequency_domain_availability.v1\","
+    "\"driven_response_available\":true,"
+    "\"modal_solver_available\":false,"
+    "\"static_periodic_response_available\":false,"
+    "\"floquet_modal_available\":false,"
+    "\"floquet_response_available\":false,"
+    "\"dynamic_demag_k_available\":false,"
+    "\"gpu_available\":true,"
+    "\"execution_lane\":\"native_fem_mfem_frequency_domain_gpu\","
+    "\"scope\":\"gamma_free_magnetic_response_no_demag\"}";
 
 constexpr const char *kInitialProgressJson =
     "{\"schema_version\":\"frequency_domain_sweep_progress.v1\","
@@ -55,6 +69,17 @@ constexpr const char *kCompletedProgressJson =
     "{\"schema_version\":\"frequency_domain_sweep_progress.v1\","
     "\"state\":\"completed\","
     "\"partial_artifacts_available\":true}";
+
+bool floquet_k_vector_is_nonzero_or_invalid(const double (&k_vector)[3]) noexcept
+{
+    constexpr double tolerance = 1.0e-12;
+    for (double component : k_vector) {
+        if (!std::isfinite(component) || std::abs(component) > tolerance) {
+            return true;
+        }
+    }
+    return false;
+}
 
 } // namespace
 
@@ -181,14 +206,10 @@ FrequencyDomainAvailabilityResult frequency_domain_availability(
         return result;
     }
 
-    if (request.has_floquet_k_vector) {
+    if (request.has_floquet_k_vector &&
+        floquet_k_vector_is_nonzero_or_invalid(request.floquet_k_vector_rad_per_m)) {
         result.error_message =
             "native FEM frequency-domain Floquet/Bloch nonzero-k metadata is ABI-visible but not implemented for driven response";
-        return result;
-    }
-
-    if (request.requires_gpu && request.strict_device) {
-        result.error_message = "native FEM frequency-domain GPU lane is not implemented";
         return result;
     }
 
@@ -202,6 +223,26 @@ FrequencyDomainAvailabilityResult frequency_domain_availability(
         result.error_message =
             "native FEM frequency-domain Floquet/PBC enforcement is not implemented for driven response";
         return result;
+    }
+
+    if (request.requires_gpu && request.strict_device) {
+        if (request.requires_static_periodic_boundary) {
+            result.error_message =
+                "native FEM frequency-domain production GPU does not implement static-periodic projection";
+            return result;
+        }
+#if FULLMAG_HAS_CUDA_RUNTIME
+        result.status = FrequencyDomainStatus::ok;
+        result.driven_response_available = true;
+        result.gpu_available = true;
+        result.error_message = "";
+        result.diagnostics_json = kGpuDrivenResponseDiagnosticsJson;
+        return result;
+#else
+        result.error_message =
+            "native FEM frequency-domain production GPU requires FULLMAG_HAS_CUDA_RUNTIME=1";
+        return result;
+#endif
     }
 
     result.status = FrequencyDomainStatus::ok;
