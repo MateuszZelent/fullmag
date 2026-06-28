@@ -40,6 +40,18 @@ constexpr const char *kGpuDrivenResponseDiagnosticsJson =
     "\"execution_lane\":\"native_fem_mfem_frequency_domain_gpu\","
     "\"scope\":\"gamma_free_magnetic_response_no_demag\"}";
 
+constexpr const char *kGpuStaticPeriodicDrivenResponseDiagnosticsJson =
+    "{\"schema_version\":\"frequency_domain_availability.v1\","
+    "\"driven_response_available\":true,"
+    "\"modal_solver_available\":false,"
+    "\"static_periodic_response_available\":true,"
+    "\"floquet_modal_available\":false,"
+    "\"floquet_response_available\":false,"
+    "\"dynamic_demag_k_available\":false,"
+    "\"gpu_available\":true,"
+    "\"execution_lane\":\"native_fem_mfem_frequency_domain_gpu\","
+    "\"scope\":\"gamma_free_or_static_periodic_magnetic_response_no_demag\"}";
+
 constexpr const char *kInitialProgressJson =
     "{\"schema_version\":\"frequency_domain_sweep_progress.v1\","
     "\"state\":\"not_started\","
@@ -227,9 +239,19 @@ FrequencyDomainAvailabilityResult frequency_domain_availability(
 
     if (request.requires_gpu && request.strict_device) {
         if (request.requires_static_periodic_boundary) {
-            result.error_message =
-                "native FEM frequency-domain production GPU does not implement static-periodic projection";
+#if FULLMAG_HAS_CUDA_RUNTIME
+            result.status = FrequencyDomainStatus::ok;
+            result.driven_response_available = true;
+            result.static_periodic_response_available = true;
+            result.gpu_available = true;
+            result.error_message = "";
+            result.diagnostics_json = kGpuStaticPeriodicDrivenResponseDiagnosticsJson;
             return result;
+#else
+            result.error_message =
+                "native FEM frequency-domain production GPU static-periodic projection requires FULLMAG_HAS_CUDA_RUNTIME=1";
+            return result;
+#endif
         }
 #if FULLMAG_HAS_CUDA_RUNTIME
         result.status = FrequencyDomainStatus::ok;

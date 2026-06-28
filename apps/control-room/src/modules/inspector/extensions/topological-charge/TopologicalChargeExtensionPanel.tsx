@@ -14,11 +14,11 @@ import {
   type TopologicalChargeMethodInfo,
 } from "./topologicalChargeModel";
 
-const CONTINUUM_MATHML = `<math display="block" aria-label="Q equals one over four pi times the integral of m hat dot partial u m hat cross partial v m hat">
+const CONTINUUM_MATHML = `<math display="block" aria-label="Q Sigma equals one over four pi times the integral over Sigma of m hat dot partial u m hat cross partial v m hat">
   <mrow>
-    <mi>Q</mi><mo>=</mo>
+    <msub><mi>Q</mi><mi>&Sigma;</mi></msub><mo>=</mo>
     <mfrac><mn>1</mn><mrow><mn>4</mn><mi>&pi;</mi></mrow></mfrac>
-    <msub><mo>&Integral;</mo><mi>&Omega;</mi></msub>
+    <msub><mo>&Integral;</mo><mi>&Sigma;</mi></msub>
     <mover accent="true"><mi>m</mi><mo>^</mo></mover>
     <mo>&middot;</mo>
     <mrow>
@@ -35,9 +35,10 @@ const CONTINUUM_MATHML = `<math display="block" aria-label="Q equals one over fo
   </mrow>
 </math>`;
 
-const DISCRETE_MATHML = `<math display="block" aria-label="Q h equals one over four pi times sum of triangle solid angles">
+const DISCRETE_MATHML = `<math display="block" aria-label="Q h of s i equals one over four pi times sum of oriented triangle solid angles">
   <mrow>
-    <msub><mi>Q</mi><mi>h</mi></msub><mo>=</mo>
+    <msub><mi>Q</mi><mi>h</mi></msub>
+    <mo>(</mo><msub><mi>s</mi><mi>i</mi></msub><mo>)</mo><mo>=</mo>
     <mfrac><mn>1</mn><mrow><mn>4</mn><mi>&pi;</mi></mrow></mfrac>
     <munder><mo>&sum;</mo><mi>&triangle;</mi></munder>
     <mn>2</mn><mi>atan2</mi><mo>(</mo>

@@ -32,12 +32,16 @@ export interface TopologicalChargePanelModel {
 }
 
 const CONTINUUM_EQUATION_LATEX =
-  "Q = \\frac{1}{4\\pi}\\int_{\\Omega}\\hat{\\mathbf m}\\cdot\\left(\\partial_u\\hat{\\mathbf m}\\times\\partial_v\\hat{\\mathbf m}\\right)\\,du\\,dv";
+  "Q_\\Sigma = \\frac{1}{4\\pi}\\int_{\\Sigma}\\hat{\\mathbf m}\\cdot\\left(\\partial_u\\hat{\\mathbf m}\\times\\partial_v\\hat{\\mathbf m}\\right)\\,du\\,dv";
 
 const DISCRETE_EQUATION_LATEX =
-  "Q_h = \\frac{1}{4\\pi}\\sum_{\\triangle}2\\operatorname{atan2}\\left(a\\cdot(b\\times c),1+a\\cdot b+b\\cdot c+c\\cdot a\\right)";
+  "Q_h(s_i) = \\frac{1}{4\\pi}\\sum_{\\triangle\\in\\mathcal T_h(s_i)}2\\operatorname{atan2}\\left(a\\cdot(b\\times c),1+a\\cdot b+b\\cdot c+c\\cdot a\\right)";
 
 const METHOD_TERMS: TopologicalChargeMethodTerm[] = [
+  {
+    symbol: "\\Sigma",
+    meaning: "selected oriented 2D support: grid layer, FEM layer, surface, or plane cut",
+  },
   {
     symbol: "\\hat{\\mathbf m}",
     meaning: "unit magnetization direction sampled from quantity m",
@@ -47,12 +51,12 @@ const METHOD_TERMS: TopologicalChargeMethodTerm[] = [
     meaning: "oriented in-plane coordinates of the selected analysis plane",
   },
   {
-    symbol: "z_i",
-    meaning: "FEM layer coordinate along the selected plane normal",
+    symbol: "s_i",
+    meaning: "layer or cut coordinate along the selected support normal",
   },
   {
     symbol: "a, b, c",
-    meaning: "normalized magnetization vectors on one oriented grid or FEM layer triangle",
+    meaning: "normalized magnetization vectors on one oriented support triangle",
   },
   {
     symbol: "\\Omega_\\triangle",
@@ -102,11 +106,11 @@ function formatLayerProfile(resource: TopologicalChargeResource | null): string 
   if (charges.length === 0) return `${layers.length} layers, no valid layer charge`;
   if (layers.length === 1) {
     const layer = layers[0];
-    return `1 support, Q ${charges[0].toFixed(6)} at s=${layer.coordinate.toExponential(3)}`;
+    return `1 support, Q=${charges[0].toFixed(6)} at s=${layer.coordinate.toExponential(3)}`;
   }
   const min = Math.min(...charges);
   const max = Math.max(...charges);
-  return `${layers.length} supports, Q(s) ${min.toFixed(6)} .. ${max.toFixed(6)}`;
+  return `${layers.length} supports, Q(s)=${min.toFixed(6)}..${max.toFixed(6)}`;
 }
 
 function formatStatusForSentence(status: string): string {
@@ -136,7 +140,7 @@ function resolveMethodInfo(
   return {
     title: "Berg-Luescher topological charge",
     description:
-      "Computes an object-scoped skyrmion charge from normalized magnetization directions. FDM uses the selected native grid plane. FEM uses mesh-native surface, layer, or exact tetra-plane-cut triangles.",
+      "Computes skyrmion charge on an oriented 2D support from the current magnetization. 3D FDM and FEM films report a native layer profile Q(s); the scalar Q is the valid-layer average.",
     continuumEquationLatex: CONTINUUM_EQUATION_LATEX,
     discreteEquationLatex: DISCRETE_EQUATION_LATEX,
     sampleQuality: formatSampleQuality(resource),
@@ -144,7 +148,7 @@ function resolveMethodInfo(
     notes: [
       "Q is dimensionless; integer-like values are meaningful only when the full texture and boundary state are resolved.",
       "Q is computed on an oriented 2D support; unordered 3D nodes are not summed into a skyrmion number.",
-      "For FEM films, inspect the layer profile when the texture varies through thickness.",
+      "For 3D FDM/FEM films, inspect Q(s) when the texture varies through thickness.",
       "Zero, missing, or non-finite vectors are rejected before the solid-angle sum.",
     ],
   };
@@ -187,6 +191,7 @@ export function resolveTopologicalChargePanelModel(
       { label: "Nearest integer", value: formatMaybeInteger(data?.nearest_integer) },
       { label: "Integer error", value: formatMaybeNumber(data?.integer_error) },
       { label: "Polarity", value: formatMaybeText(data?.polarity) },
+      { label: "Plane", value: formatMaybeText(data?.plane) },
       { label: "Sampling", value: formatSampling(data) },
       { label: "Support profile", value: formatLayerProfile(data) },
       { label: "Method", value: formatMaybeText(data?.method) },

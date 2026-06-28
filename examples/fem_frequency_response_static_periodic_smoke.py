@@ -1,9 +1,10 @@
 """Small FEM k=0 static-periodic frequency-response smoke.
 
-This exercises the native FEM/MFEM production CPU static-periodic slice for
+This exercises the native FEM/MFEM production static-periodic slice for
 ``StudyIR::FrequencyResponse``. It intentionally keeps demag disabled and uses
 zero-phase periodic boundary conditions; nonzero-k Floquet/Bloch response
-remains a separate gated feature.
+remains a separate gated feature. By default this script requests CPU; the
+GPU-specific wrapper uses the same problem with explicit GPU runtime intent.
 """
 
 from pathlib import Path
@@ -13,7 +14,11 @@ import fullmag as fm
 MESH_PATH = Path(__file__).with_name("assets").joinpath("box_40x20x10_xperiodic.mesh.json")
 
 
-def build() -> fm.Problem:
+def build(*, device: str = "cpu") -> fm.Problem:
+    device_target = device.strip().lower()
+    if device_target not in {"cpu", "gpu"}:
+        raise ValueError("device must be 'cpu' or 'gpu'")
+
     body = fm.Box(size=(40e-9, 20e-9, 10e-9), name="body")
     material = fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.02)
     magnet = fm.Ferromagnet(
@@ -38,6 +43,12 @@ def build() -> fm.Problem:
         ),
         discretization=fm.DiscretizationHints(
             fem=fm.FEM(order=1, maximum_element_size=20e-9, mesh=str(MESH_PATH)),
+        ),
+        runtime=fm.RuntimeSelection(
+            backend_target="fem",
+            device_target=device_target,
+            gpu_count=1 if device_target == "gpu" else 0,
+            execution_precision="double",
         ),
     )
 

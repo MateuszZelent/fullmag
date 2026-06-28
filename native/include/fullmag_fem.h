@@ -384,6 +384,13 @@ typedef enum {
     FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_INTERRUPTED = 6,
 } fullmag_fem_frequency_domain_status;
 
+typedef fullmag_fem_frequency_domain_status (*fullmag_fem_frequency_domain_apply_callback)(
+    void *user_data,
+    const double *in,
+    double *out,
+    char error_message[128]
+);
+
 typedef enum {
     FULLMAG_FEM_FREQUENCY_DOMAIN_STUDY_RESPONSE = 1,
     FULLMAG_FEM_FREQUENCY_DOMAIN_STUDY_EIGENMODES = 2,
@@ -553,13 +560,20 @@ typedef struct {
     uint64_t magnetostatic_periodic_constraint_set_count;
     uint64_t periodic_airbox_delta_m_tangent_dof_count;
     uint64_t periodic_airbox_delta_phi_dof_count;
+    const fullmag_fem_frequency_domain_periodic_node_pair *periodic_airbox_magnetostatic_periodic_node_pairs;
+    uint64_t periodic_airbox_magnetostatic_periodic_node_pair_count;
     int periodic_airbox_coupled_block_enabled;
     uint64_t periodic_airbox_coupled_block_delta_m_tangent_dof_count;
     uint64_t periodic_airbox_coupled_block_delta_phi_dof_count;
     const double *periodic_airbox_coupled_block_stiffness_matrix_row_major;
     const double *periodic_airbox_coupled_block_mass_matrix_row_major;
+    fullmag_fem_frequency_domain_apply_callback periodic_airbox_coupled_block_apply_stiffness;
+    fullmag_fem_frequency_domain_apply_callback periodic_airbox_coupled_block_apply_mass;
+    void *periodic_airbox_coupled_block_operator_user_data;
     const double *periodic_airbox_coupled_block_drive_real;
     const double *periodic_airbox_coupled_block_drive_imag;
+    fullmag_fem_frequency_domain_apply_callback mfem_apply_demag_tangent;
+    void *mfem_demag_tangent_user_data;
     const double *mfem_demag_tangent_matrix_row_major;
 } fullmag_fem_frequency_domain_driven_response_request;
 
@@ -574,7 +588,7 @@ typedef struct {
     char *artifact_manifest_path;
 } fullmag_fem_frequency_domain_solve_result;
 
-#define FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION 4u
+#define FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION 7u
 
 typedef enum {
     FULLMAG_FEM_FD_OK = 0,
@@ -704,7 +718,12 @@ typedef struct {
     uint64_t driven_response_request_tiny_validation_drive_imag_offset;
     uint64_t driven_response_request_phase_convention_offset;
     uint64_t driven_response_request_mfem_floquet_periodic_pair_count_offset;
+    uint64_t driven_response_request_periodic_airbox_magnetostatic_periodic_node_pairs_offset;
     uint64_t driven_response_request_periodic_airbox_coupled_block_enabled_offset;
+    uint64_t driven_response_request_periodic_airbox_coupled_block_apply_stiffness_offset;
+    uint64_t driven_response_request_periodic_airbox_coupled_block_operator_user_data_offset;
+    uint64_t driven_response_request_mfem_apply_demag_tangent_offset;
+    uint64_t driven_response_request_mfem_demag_tangent_user_data_offset;
     uint64_t driven_response_request_mfem_demag_tangent_matrix_row_major_offset;
     uint64_t solve_result_size;
     uint64_t solve_result_artifact_manifest_path_offset;

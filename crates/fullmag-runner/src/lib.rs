@@ -4553,7 +4553,7 @@ mod tests {
     }
 
     #[test]
-    fn fem_frequency_response_periodic_floquet_rejects_dense_validation_fallback() {
+    fn fem_frequency_response_nonzero_k_floquet_rejects_dense_validation_fallback() {
         let mut problem = fem_frequency_response_validation_problem(vec![1.0e9]);
         let mesh = problem
             .geometry_assets
@@ -4582,7 +4582,15 @@ mod tests {
             node_a: 0,
             node_b: 1,
         }];
-        if let fullmag_ir::StudyIR::FrequencyResponse { spin_wave_bc, .. } = &mut problem.study {
+        if let fullmag_ir::StudyIR::FrequencyResponse {
+            k_sampling,
+            spin_wave_bc,
+            ..
+        } = &mut problem.study
+        {
+            *k_sampling = Some(fullmag_ir::KSamplingIR::Single {
+                k_vector: [1.0e6, 0.0, 0.0],
+            });
             *spin_wave_bc = fullmag_ir::SpinWaveBoundaryConditionIR::Config(
                 fullmag_ir::SpinWaveBoundaryConfigIR {
                     kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,

@@ -19,6 +19,7 @@ docker compose --profile fem-gpu run --rm -T \
 set -euo pipefail
 echo "[export_fem_gpu_runtime] preparing runtime bundle directories"
 mkdir -p .fullmag/runtimes/fem-gpu-host/bin .fullmag/runtimes/fem-gpu-host/lib .fullmag/runtimes/fem-gpu-host/include
+source scripts/lib/runtime_bundle_copy.sh
 clear_runtime_bundle_contents() {
   local runtime_root=".fullmag/runtimes/fem-gpu-host"
   mkdir -p "$runtime_root/bin" "$runtime_root/lib" "$runtime_root/include"
@@ -143,10 +144,10 @@ copy_shared_library_dependency_closure() {
     case "$resolved" in
       /lib/*|/lib64/*|/usr/lib/*|/usr/lib64/*)
         if [ -e "$lib" ] && [ ! -e "$dest_dir/$requested_name" ]; then
-          cp -a --remove-destination "$lib" "$dest_dir/"
+          copy_runtime_entry_replace "$lib" "$dest_dir"
         fi
         if [ ! -e "$dest_dir/$lib_name" ]; then
-          cp -a --remove-destination "$resolved" "$dest_dir/"
+          copy_runtime_entry_replace "$resolved" "$dest_dir"
         fi
         ;;
     esac
@@ -204,7 +205,7 @@ for dep_entry in /opt/fullmag-deps/lib/*; do
     mkdir -p "$dep_dest"
     cp -a "$dep_entry"/. "$dep_dest"/
   else
-    cp -a --remove-destination "$dep_entry" .fullmag/runtimes/fem-gpu-host/lib/
+    copy_runtime_entry_replace "$dep_entry" .fullmag/runtimes/fem-gpu-host/lib
   fi
 done
 echo "[export_fem_gpu_runtime] bundling MFEM/libCEED/Hypre host headers"
@@ -226,7 +227,7 @@ for cuda_lib in \
   /usr/local/cuda-12.4/targets/x86_64-linux/lib/libcublas.so* \
   /usr/local/cuda-12.4/targets/x86_64-linux/lib/libcusparse.so*; do
   if [ -e "$cuda_lib" ]; then
-    cp -a "$cuda_lib" .fullmag/runtimes/fem-gpu-host/lib/
+    copy_runtime_entry_replace "$cuda_lib" .fullmag/runtimes/fem-gpu-host/lib
   fi
 done
 echo "[export_fem_gpu_runtime] relocating MFEM CMake package metadata"
@@ -255,13 +256,13 @@ for lib_glob in \
   /usr/lib/x86_64-linux-gnu/libevent*.so* \
   /usr/lib/x86_64-linux-gnu/openmpi/lib/*.so*; do
   for lib in $lib_glob; do
-    cp -a "$lib" .fullmag/runtimes/fem-gpu-host/lib/
+    copy_runtime_entry_replace "$lib" .fullmag/runtimes/fem-gpu-host/lib
   done
 done
 shopt -u nullglob
 echo "[export_fem_gpu_runtime] bundling OpenMPI/PMIx runtime components"
 if [ -x /usr/bin/orted ]; then
-  cp -a /usr/bin/orted .fullmag/runtimes/fem-gpu-host/openmpi/bin/
+  copy_runtime_entry_replace /usr/bin/orted .fullmag/runtimes/fem-gpu-host/openmpi/bin
 fi
 if [ -d /usr/lib/x86_64-linux-gnu/pmix2/lib ]; then
   mkdir -p .fullmag/runtimes/fem-gpu-host/lib/pmix2

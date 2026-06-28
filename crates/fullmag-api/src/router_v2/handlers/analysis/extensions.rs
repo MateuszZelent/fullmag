@@ -393,25 +393,68 @@ fn compute_regular_fdm_topological_charge(
     summary: &FieldSampleSummary,
     requested_plane: &str,
 ) -> Option<ComputedTopologicalCharge> {
-    let (samples, nx, ny, plane) =
-        regular_fdm_plane_samples(&summary.values, summary.grid?, requested_plane)?;
-    let result = compute_topological_charge_grid(TopologicalChargeInput {
-        samples: &samples,
-        nx,
-        ny,
-    })
-    .ok()?;
+    let grid = summary.grid?;
+    let profile = regular_fdm_layer_profile(&summary.values, grid, requested_plane)?;
+    let mut layer_samples = Vec::with_capacity(profile.layers.len());
+    let mut valid_layers = Vec::new();
+    let mut sample_count = 0usize;
+    let mut valid_sample_count = 0usize;
+    let mut warnings = Vec::new();
+
+    for (index, layer) in profile.layers.iter().enumerate() {
+        let layer_result = compute_topological_charge_grid(TopologicalChargeInput {
+            samples: &layer.samples,
+            nx: profile.nx,
+            ny: profile.ny,
+        })
+        .ok()?;
+        sample_count += layer_result.sample_count;
+        valid_sample_count += layer_result.valid_sample_count;
+        warnings.extend(layer_result.warnings);
+        let charge = (layer_result.valid_sample_count > 0).then_some(layer_result.charge);
+        if let Some(charge) = charge {
+            valid_layers.push((layer.coordinate, charge));
+        }
+        layer_samples.push(TopologicalChargeLayerSample {
+            index,
+            coordinate: layer.coordinate,
+            charge,
+            sample_count: layer_result.sample_count,
+            valid_sample_count: layer_result.valid_sample_count,
+            triangle_count: 2 * profile.nx.saturating_sub(1) * profile.ny.saturating_sub(1),
+        });
+    }
+
+    let result = crate::analysis::topological_charge::TopologicalChargeResult {
+        charge: thickness_average_charge(&valid_layers).unwrap_or(0.0),
+        sample_count,
+        valid_sample_count,
+        warnings: collapse_topological_charge_warnings(warnings),
+    };
+    let triangle_count = layer_samples
+        .iter()
+        .map(|layer| layer.triangle_count)
+        .sum::<usize>();
+    let layer_count = layer_samples.len();
     Some(ComputedTopologicalCharge {
         result,
-        method: "berg_luescher_grid".to_string(),
-        plane: plane.clone(),
+        method: if layer_count > 1 {
+            "berg_luescher_fdm_layer_profile".to_string()
+        } else {
+            "berg_luescher_grid".to_string()
+        },
+        plane: profile.plane.clone(),
         sample_grid: Some(TopologicalChargeSampleGrid {
-            nx: nx as u32,
-            ny: ny as u32,
-            plane,
+            nx: profile.nx as u32,
+            ny: profile.ny as u32,
+            plane: profile.plane,
         }),
-        sample_topology: None,
-        layer_samples: Vec::new(),
+        sample_topology: (layer_count > 1).then_some(TopologicalChargeSampleTopology {
+            kind: "fdm_layer_profile".to_string(),
+            point_count: sample_count,
+            triangle_count,
+        }),
+        layer_samples,
     })
 }
 
@@ -498,6 +541,28 @@ fn allows_fem_slice_grid_method(requested_method: &str) -> bool {
         requested_method,
         "berg_luescher_fem_slice_grid" | "fem_slice_grid" | "slice_grid"
     )
+}
+
+fn collapse_topological_charge_warnings(
+    warnings: Vec<crate::analysis::topological_charge::TopologicalChargeWarning>,
+) -> Vec<crate::analysis::topological_charge::TopologicalChargeWarning> {
+    let mut collapsed = Vec::new();
+    let mut saw_non_unit = false;
+    let mut saw_insufficient = false;
+    for warning in warnings {
+        match warning.code {
+            TopologicalChargeWarningCode::NonUnitMagnetization if !saw_non_unit => {
+                saw_non_unit = true;
+                collapsed.push(warning);
+            }
+            TopologicalChargeWarningCode::InsufficientSamples if !saw_insufficient => {
+                saw_insufficient = true;
+                collapsed.push(warning);
+            }
+            _ => {}
+        }
+    }
+    collapsed
 }
 
 fn compute_fem_plane_cut_topological_charge(
@@ -1288,36 +1353,55 @@ fn resolve_topological_charge_resolution(requested_resolution: &str) -> Option<u
         .map(|value| value.clamp(2, 256))
 }
 
-fn regular_fdm_plane_samples(
+struct FdmLayerProfile {
+    plane: String,
+    nx: usize,
+    ny: usize,
+    layers: Vec<FdmLayerSamples>,
+}
+
+struct FdmLayerSamples {
+    coordinate: f64,
+    samples: Vec<[f64; 3]>,
+}
+
+fn regular_fdm_layer_profile(
     values: &[f64],
     grid: [u32; 3],
     requested_plane: &str,
-) -> Option<(Vec<[f64; 3]>, usize, usize, String)> {
+) -> Option<FdmLayerProfile> {
     let [gx, gy, gz] = grid;
     let point_count = gx as usize * gy as usize * gz as usize;
     if gx == 0 || gy == 0 || gz == 0 || values.len() != point_count * 3 {
         return None;
     }
     let resolved_plane = resolve_fdm_plane(grid, requested_plane)?;
-    let (nx, ny, fixed_layer) = match resolved_plane {
-        "xy" if gx >= 2 && gy >= 2 => (gx as usize, gy as usize, (gz / 2) as usize),
-        "xz" if gx >= 2 && gz >= 2 => (gx as usize, gz as usize, (gy / 2) as usize),
-        "yz" if gy >= 2 && gz >= 2 => (gy as usize, gz as usize, (gx / 2) as usize),
+    let (nx, ny, layer_count) = match resolved_plane {
+        "xy" if gx >= 2 && gy >= 2 => (gx as usize, gy as usize, gz as usize),
+        "xz" if gx >= 2 && gz >= 2 => (gx as usize, gz as usize, gy as usize),
+        "yz" if gy >= 2 && gz >= 2 => (gy as usize, gz as usize, gx as usize),
         _ => return None,
     };
-    Some((
-        plane_samples(
-            values,
-            gx as usize,
-            gy as usize,
-            gz as usize,
-            fixed_layer,
-            resolved_plane,
-        )?,
+    let mut layers = Vec::with_capacity(layer_count);
+    for fixed_layer in 0..layer_count {
+        layers.push(FdmLayerSamples {
+            coordinate: fixed_layer as f64,
+            samples: plane_samples(
+                values,
+                gx as usize,
+                gy as usize,
+                gz as usize,
+                fixed_layer,
+                resolved_plane,
+            )?,
+        });
+    }
+    Some(FdmLayerProfile {
+        plane: resolved_plane.to_string(),
         nx,
         ny,
-        resolved_plane.to_string(),
-    ))
+        layers,
+    })
 }
 
 fn resolve_fdm_plane(grid: [u32; 3], requested_plane: &str) -> Option<&'static str> {
@@ -1443,10 +1527,46 @@ fn fdm_result_warnings(
                     "non_unit_magnetization".to_string()
                 }
                 TopologicalChargeWarningCode::InsufficientSamples => {
-                    "insufficient_samples".to_string()
+                    "degenerate_support".to_string()
                 }
             },
             message: warning.message.clone(),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::analysis::topological_charge::{
+        TopologicalChargeResult, TopologicalChargeWarning as CoreTopologicalChargeWarning,
+        TopologicalChargeWarningCode,
+    };
+
+    use super::{fdm_result_warnings, ComputedTopologicalCharge};
+
+    #[test]
+    fn public_topological_charge_warnings_do_not_expose_insufficient_samples() {
+        let result = ComputedTopologicalCharge {
+            result: TopologicalChargeResult {
+                charge: 0.0,
+                sample_count: 3,
+                valid_sample_count: 3,
+                warnings: vec![CoreTopologicalChargeWarning {
+                    code: TopologicalChargeWarningCode::InsufficientSamples,
+                    message: "A degenerate support was skipped.".to_string(),
+                }],
+            },
+            method: "fem_plane_cut_solid_angle".to_string(),
+            plane: "xy".to_string(),
+            sample_grid: None,
+            sample_topology: None,
+            layer_samples: Vec::new(),
+        };
+
+        let warnings = fdm_result_warnings(Some(&result));
+
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].code, "degenerate_support");
+        assert_ne!(warnings[0].code, "insufficient_samples");
+    }
 }

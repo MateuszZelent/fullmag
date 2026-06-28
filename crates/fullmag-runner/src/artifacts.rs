@@ -728,7 +728,7 @@ pub(crate) fn write_artifacts(
         fs::write(artifact_path, &artifact.bytes)?;
     }
 
-    if !matches!(plan.backend_plan, BackendPlanIR::FemEigen(_)) {
+    if should_write_plan_periodic_pairs_artifact(plan, executed) {
         write_periodic_pairs_artifact(output_dir, plan)?;
     }
 
@@ -898,6 +898,24 @@ fn material_field_parameter_id(parameter: fullmag_ir::MaterialParameterNameIR) -
         fullmag_ir::MaterialParameterNameIR::Dind => "dind",
         fullmag_ir::MaterialParameterNameIR::Dbulk => "dbulk",
     }
+}
+
+fn should_write_plan_periodic_pairs_artifact(
+    plan: &fullmag_ir::ExecutionPlanIR,
+    executed: &ExecutedRun,
+) -> bool {
+    if matches!(plan.backend_plan, BackendPlanIR::FemEigen(_)) {
+        return false;
+    }
+    if matches!(plan.backend_plan, BackendPlanIR::FemFrequencyResponse(_))
+        && executed
+            .provenance
+            .execution_engine
+            .starts_with("native_fem.frequency_domain.production_")
+    {
+        return false;
+    }
+    true
 }
 
 fn material_field_location_id(location: fullmag_ir::MaterialFieldLocationIR) -> &'static str {
@@ -3699,6 +3717,70 @@ mod tests {
         assert_eq!(artifact["pairs"][0]["paired_node_count"], 4);
         assert_eq!(artifact["pairs"][0]["status"], "valid");
 
+        let native_output_dir = std::env::temp_dir().join(format!(
+            "fullmag-artifacts-frequency-response-native-periodic-pairs-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+        let native_mesh_dir = native_output_dir.join("mesh");
+        fs::create_dir_all(&native_mesh_dir).expect("native mesh artifact dir should exist");
+        fs::write(
+            native_mesh_dir.join("periodic_pairs.v1.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema_version": "periodic_pairs.v1",
+                "source": "native_fem_frequency_domain_static_periodic",
+                "validation_status": "ok",
+                "pair_count": 4,
+                "paired_node_count": 8,
+                "unpaired_source_count": 0,
+                "unpaired_destination_count": 0,
+                "max_translation_residual_m": 0.0,
+                "residual_diagnostics": {
+                    "static_periodic_frame_max_mismatch": 0.0,
+                    "static_periodic_drive_max_mismatch": 0.0
+                },
+                "pairs": [
+                    {
+                        "pair_id": "static-periodic-0000",
+                        "source_marker": "node:0",
+                        "destination_marker": "node:1",
+                        "translation_residual_m": 0.0,
+                        "validation_status": "ok"
+                    }
+                ]
+            }))
+            .expect("native periodic pairs fixture should serialize"),
+        )
+        .expect("native periodic pairs fixture should be written");
+        let native_executed = ExecutedRun {
+            provenance: ExecutionProvenance {
+                execution_engine: "native_fem.frequency_domain.production_cpu".to_string(),
+                precision: "double".to_string(),
+                ..ExecutionProvenance::default()
+            },
+            ..executed.clone()
+        };
+
+        write_artifacts(&native_output_dir, &problem, &plan, &native_executed, None)
+            .expect("native frequency-response artifact write should preserve backend artifact");
+
+        let native_artifact: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(native_output_dir.join("mesh/periodic_pairs.v1.json"))
+                .expect("native periodic pairs artifact should still exist"),
+        )
+        .expect("native periodic pairs artifact should parse");
+        assert_eq!(
+            native_artifact["source"],
+            "native_fem_frequency_domain_static_periodic"
+        );
+        assert_eq!(native_artifact["pair_count"], 4);
+        assert_eq!(
+            native_artifact["pairs"][0]["pair_id"],
+            "static-periodic-0000"
+        );
+
+        fs::remove_dir_all(native_output_dir)
+            .expect("native temporary artifact directory should be removable");
         fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
     }
 

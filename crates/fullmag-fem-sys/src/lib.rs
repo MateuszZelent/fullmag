@@ -418,6 +418,15 @@ pub enum fullmag_fem_frequency_domain_status {
     FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_INTERRUPTED = 6,
 }
 
+pub type fullmag_fem_frequency_domain_apply_callback = Option<
+    unsafe extern "C" fn(
+        user_data: *mut c_void,
+        in_: *const f64,
+        out: *mut f64,
+        error_message: *mut c_char,
+    ) -> fullmag_fem_frequency_domain_status,
+>;
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum fullmag_fem_frequency_domain_study_kind {
@@ -620,13 +629,21 @@ pub struct fullmag_fem_frequency_domain_driven_response_request {
     pub magnetostatic_periodic_constraint_set_count: u64,
     pub periodic_airbox_delta_m_tangent_dof_count: u64,
     pub periodic_airbox_delta_phi_dof_count: u64,
+    pub periodic_airbox_magnetostatic_periodic_node_pairs:
+        *const fullmag_fem_frequency_domain_periodic_node_pair,
+    pub periodic_airbox_magnetostatic_periodic_node_pair_count: u64,
     pub periodic_airbox_coupled_block_enabled: i32,
     pub periodic_airbox_coupled_block_delta_m_tangent_dof_count: u64,
     pub periodic_airbox_coupled_block_delta_phi_dof_count: u64,
     pub periodic_airbox_coupled_block_stiffness_matrix_row_major: *const f64,
     pub periodic_airbox_coupled_block_mass_matrix_row_major: *const f64,
+    pub periodic_airbox_coupled_block_apply_stiffness: fullmag_fem_frequency_domain_apply_callback,
+    pub periodic_airbox_coupled_block_apply_mass: fullmag_fem_frequency_domain_apply_callback,
+    pub periodic_airbox_coupled_block_operator_user_data: *mut c_void,
     pub periodic_airbox_coupled_block_drive_real: *const f64,
     pub periodic_airbox_coupled_block_drive_imag: *const f64,
+    pub mfem_apply_demag_tangent: fullmag_fem_frequency_domain_apply_callback,
+    pub mfem_demag_tangent_user_data: *mut c_void,
     pub mfem_demag_tangent_matrix_row_major: *const f64,
 }
 
@@ -643,7 +660,7 @@ pub struct fullmag_fem_frequency_domain_solve_result {
     pub artifact_manifest_path: *mut c_char,
 }
 
-pub const FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION: u32 = 4;
+pub const FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION: u32 = 7;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -789,7 +806,12 @@ pub struct fullmag_fem_frequency_domain_abi_layout {
     pub driven_response_request_tiny_validation_drive_imag_offset: u64,
     pub driven_response_request_phase_convention_offset: u64,
     pub driven_response_request_mfem_floquet_periodic_pair_count_offset: u64,
+    pub driven_response_request_periodic_airbox_magnetostatic_periodic_node_pairs_offset: u64,
     pub driven_response_request_periodic_airbox_coupled_block_enabled_offset: u64,
+    pub driven_response_request_periodic_airbox_coupled_block_apply_stiffness_offset: u64,
+    pub driven_response_request_periodic_airbox_coupled_block_operator_user_data_offset: u64,
+    pub driven_response_request_mfem_apply_demag_tangent_offset: u64,
+    pub driven_response_request_mfem_demag_tangent_user_data_offset: u64,
     pub driven_response_request_mfem_demag_tangent_matrix_row_major_offset: u64,
     pub solve_result_size: u64,
     pub solve_result_artifact_manifest_path_offset: u64,
@@ -1451,8 +1473,35 @@ mod tests {
             std::mem::offset_of!(DrivenRequest, mfem_floquet_periodic_pair_count) as u64
         );
         assert_eq!(
+            layout.driven_response_request_periodic_airbox_magnetostatic_periodic_node_pairs_offset,
+            std::mem::offset_of!(
+                DrivenRequest,
+                periodic_airbox_magnetostatic_periodic_node_pairs
+            ) as u64
+        );
+        assert_eq!(
             layout.driven_response_request_periodic_airbox_coupled_block_enabled_offset,
             std::mem::offset_of!(DrivenRequest, periodic_airbox_coupled_block_enabled) as u64
+        );
+        assert_eq!(
+            layout.driven_response_request_periodic_airbox_coupled_block_apply_stiffness_offset,
+            std::mem::offset_of!(DrivenRequest, periodic_airbox_coupled_block_apply_stiffness)
+                as u64
+        );
+        assert_eq!(
+            layout.driven_response_request_periodic_airbox_coupled_block_operator_user_data_offset,
+            std::mem::offset_of!(
+                DrivenRequest,
+                periodic_airbox_coupled_block_operator_user_data
+            ) as u64
+        );
+        assert_eq!(
+            layout.driven_response_request_mfem_apply_demag_tangent_offset,
+            std::mem::offset_of!(DrivenRequest, mfem_apply_demag_tangent) as u64
+        );
+        assert_eq!(
+            layout.driven_response_request_mfem_demag_tangent_user_data_offset,
+            std::mem::offset_of!(DrivenRequest, mfem_demag_tangent_user_data) as u64
         );
         assert_eq!(
             layout.driven_response_request_mfem_demag_tangent_matrix_row_major_offset,
@@ -1579,6 +1628,13 @@ mod tests {
         assert_eq!(request.magnetostatic_periodic_constraint_set_count, 0);
         assert_eq!(request.periodic_airbox_delta_m_tangent_dof_count, 0);
         assert_eq!(request.periodic_airbox_delta_phi_dof_count, 0);
+        assert!(request
+            .periodic_airbox_magnetostatic_periodic_node_pairs
+            .is_null());
+        assert_eq!(
+            request.periodic_airbox_magnetostatic_periodic_node_pair_count,
+            0
+        );
         assert_eq!(request.periodic_airbox_coupled_block_enabled, 0);
         assert_eq!(
             request.periodic_airbox_coupled_block_delta_m_tangent_dof_count,
@@ -1591,8 +1647,17 @@ mod tests {
         assert!(request
             .periodic_airbox_coupled_block_mass_matrix_row_major
             .is_null());
+        assert!(request
+            .periodic_airbox_coupled_block_apply_stiffness
+            .is_none());
+        assert!(request.periodic_airbox_coupled_block_apply_mass.is_none());
+        assert!(request
+            .periodic_airbox_coupled_block_operator_user_data
+            .is_null());
         assert!(request.periodic_airbox_coupled_block_drive_real.is_null());
         assert!(request.periodic_airbox_coupled_block_drive_imag.is_null());
+        assert!(request.mfem_apply_demag_tangent.is_none());
+        assert!(request.mfem_demag_tangent_user_data.is_null());
         assert!(request.mfem_demag_tangent_matrix_row_major.is_null());
 
         let result = std::mem::MaybeUninit::<fullmag_fem_frequency_domain_solve_result>::zeroed();
@@ -1621,6 +1686,12 @@ mod tests {
         let phase_convention = std::mem::offset_of!(Request, phase_convention);
         let floquet_pair_ptr = std::mem::offset_of!(Request, mfem_floquet_periodic_pairs);
         let floquet_pair_count = std::mem::offset_of!(Request, mfem_floquet_periodic_pair_count);
+        let airbox_phi_pair_ptr =
+            std::mem::offset_of!(Request, periodic_airbox_magnetostatic_periodic_node_pairs);
+        let airbox_phi_pair_count = std::mem::offset_of!(
+            Request,
+            periodic_airbox_magnetostatic_periodic_node_pair_count
+        );
 
         assert!(static_pair_ptr < static_pair_count);
         assert!(static_pair_count < has_floquet_k_vector);
@@ -1628,6 +1699,8 @@ mod tests {
         assert!(floquet_k_vector < phase_convention);
         assert!(phase_convention < floquet_pair_ptr);
         assert!(floquet_pair_ptr < floquet_pair_count);
+        assert!(floquet_pair_count < airbox_phi_pair_ptr);
+        assert!(airbox_phi_pair_ptr < airbox_phi_pair_count);
         assert!(
             std::mem::size_of::<fullmag_fem_frequency_domain_floquet_periodic_pair>()
                 <= std::mem::size_of::<Request>()

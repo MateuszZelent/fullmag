@@ -1,8 +1,9 @@
 #[cfg(feature = "fem-gpu")]
 use fullmag_fem_sys as ffi;
 
+use std::ffi::c_void;
 #[cfg(feature = "fem-gpu")]
-use std::ffi::{c_char, c_void, CStr, CString};
+use std::ffi::{c_char, CStr, CString};
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
@@ -45,6 +46,14 @@ pub(crate) type NativeFrequencyDomainProgressCallback<'a> =
     dyn Fn(NativeFrequencyDomainProgress) + 'a;
 pub(crate) type NativeFrequencyDomainCancelCallback<'a> = dyn Fn() -> bool + 'a;
 pub(crate) type NativeModalEigenProgressCallback<'a> = dyn Fn(&str) + 'a;
+#[cfg(feature = "fem-gpu")]
+pub(crate) type NativeFrequencyDomainApplyCallback =
+    unsafe extern "C" fn(
+        user_data: *mut c_void,
+        in_: *const f64,
+        out: *mut f64,
+        error_message: *mut c_char,
+    ) -> ffi::fullmag_fem_frequency_domain_status;
 
 #[derive(Clone)]
 #[allow(dead_code)]
@@ -66,6 +75,8 @@ pub(crate) struct NativeDrivenFrequencyResponseRequest<'a> {
     pub magnetostatic_periodic_constraint_set_count: u64,
     pub periodic_airbox_delta_m_tangent_dof_count: u64,
     pub periodic_airbox_delta_phi_dof_count: u64,
+    pub periodic_airbox_magnetostatic_periodic_node_pairs:
+        &'a [NativeDrivenFrequencyResponsePeriodicNodePair],
     pub periodic_airbox_coupled_block_problem:
         Option<NativeDrivenFrequencyResponsePeriodicAirboxCoupledBlockProblem<'a>>,
     pub tiny_validation_problem: Option<NativeDrivenFrequencyResponseTinyValidationProblem<'a>>,
@@ -79,6 +90,12 @@ pub(crate) struct NativeDrivenFrequencyResponsePeriodicAirboxCoupledBlockProblem
     pub delta_phi_dof_count: u64,
     pub stiffness_matrix_row_major: &'a [f64],
     pub mass_matrix_row_major: &'a [f64],
+    #[cfg(feature = "fem-gpu")]
+    pub apply_stiffness: Option<NativeFrequencyDomainApplyCallback>,
+    #[cfg(feature = "fem-gpu")]
+    pub apply_mass: Option<NativeFrequencyDomainApplyCallback>,
+    #[cfg(feature = "fem-gpu")]
+    pub operator_user_data: *mut c_void,
     pub drive_real: &'a [f64],
     pub drive_imag: Option<&'a [f64]>,
 }
@@ -115,6 +132,9 @@ pub(crate) struct NativeDrivenFrequencyResponseMfemOperatorProblem<'a> {
     pub floquet_k_vector_rad_per_m: Option<[f64; 3]>,
     pub phase_convention: FrequencyDomainPhaseConvention,
     pub floquet_periodic_pairs: &'a [NativeDrivenFrequencyResponseFloquetPeriodicPair<'a>],
+    #[cfg(feature = "fem-gpu")]
+    pub apply_demag_tangent: Option<NativeFrequencyDomainApplyCallback>,
+    pub demag_tangent_user_data: *mut c_void,
     pub demag_tangent_matrix_row_major: Option<&'a [f64]>,
 }
 
@@ -396,6 +416,16 @@ fn solve_native_driven_frequency_response_impl(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    let periodic_airbox_magnetostatic_periodic_node_pairs = request
+        .periodic_airbox_magnetostatic_periodic_node_pairs
+        .iter()
+        .map(
+            |pair| ffi::fullmag_fem_frequency_domain_periodic_node_pair {
+                node_a: pair.node_a,
+                node_b: pair.node_b,
+            },
+        )
+        .collect::<Vec<_>>();
     let floquet_pair_ids = mfem_operator
         .map(|problem| {
             problem
@@ -566,6 +596,14 @@ fn solve_native_driven_frequency_response_impl(
         periodic_airbox_delta_m_tangent_dof_count: request
             .periodic_airbox_delta_m_tangent_dof_count,
         periodic_airbox_delta_phi_dof_count: request.periodic_airbox_delta_phi_dof_count,
+        periodic_airbox_magnetostatic_periodic_node_pairs:
+            if periodic_airbox_magnetostatic_periodic_node_pairs.is_empty() {
+                std::ptr::null()
+            } else {
+                periodic_airbox_magnetostatic_periodic_node_pairs.as_ptr()
+            },
+        periodic_airbox_magnetostatic_periodic_node_pair_count:
+            periodic_airbox_magnetostatic_periodic_node_pairs.len() as u64,
         periodic_airbox_coupled_block_enabled: periodic_airbox_coupled_block.is_some() as i32,
         periodic_airbox_coupled_block_delta_m_tangent_dof_count: periodic_airbox_coupled_block
             .map(|problem| problem.delta_m_tangent_dof_count)
@@ -581,6 +619,12 @@ fn solve_native_driven_frequency_response_impl(
             .map_or(std::ptr::null(), |problem| {
                 slice_ptr_or_null(problem.mass_matrix_row_major)
             }),
+        periodic_airbox_coupled_block_apply_stiffness: periodic_airbox_coupled_block
+            .and_then(|problem| problem.apply_stiffness),
+        periodic_airbox_coupled_block_apply_mass: periodic_airbox_coupled_block
+            .and_then(|problem| problem.apply_mass),
+        periodic_airbox_coupled_block_operator_user_data: periodic_airbox_coupled_block
+            .map_or(std::ptr::null_mut(), |problem| problem.operator_user_data),
         periodic_airbox_coupled_block_drive_real: periodic_airbox_coupled_block
             .map_or(std::ptr::null(), |problem| {
                 slice_ptr_or_null(problem.drive_real)
@@ -588,6 +632,10 @@ fn solve_native_driven_frequency_response_impl(
         periodic_airbox_coupled_block_drive_imag: periodic_airbox_coupled_block
             .and_then(|problem| problem.drive_imag)
             .map_or(std::ptr::null(), slice_ptr_or_null),
+        mfem_apply_demag_tangent: mfem_operator.and_then(|problem| problem.apply_demag_tangent),
+        mfem_demag_tangent_user_data: mfem_operator.map_or(std::ptr::null_mut(), |problem| {
+            problem.demag_tangent_user_data
+        }),
         mfem_demag_tangent_matrix_row_major: mfem_operator
             .and_then(|problem| problem.demag_tangent_matrix_row_major)
             .map_or(std::ptr::null(), slice_ptr_or_null),
@@ -1287,6 +1335,7 @@ mod tests {
                     magnetostatic_periodic_constraint_set_count: 0,
                     periodic_airbox_delta_m_tangent_dof_count: 0,
                     periodic_airbox_delta_phi_dof_count: 0,
+                    periodic_airbox_magnetostatic_periodic_node_pairs: &[],
                     periodic_airbox_coupled_block_problem: None,
                     tiny_validation_problem: None,
                     mfem_operator_problem: None,
@@ -1954,6 +2003,7 @@ mod tests {
             magnetostatic_periodic_constraint_set_count: 0,
             periodic_airbox_delta_m_tangent_dof_count: 0,
             periodic_airbox_delta_phi_dof_count: 0,
+            periodic_airbox_magnetostatic_periodic_node_pairs: &[],
             periodic_airbox_coupled_block_problem: None,
             tiny_validation_problem: None,
             mfem_operator_problem: Some(NativeDrivenFrequencyResponseMfemOperatorProblem {
@@ -1974,6 +2024,9 @@ mod tests {
                 floquet_k_vector_rad_per_m: Some([1.0e7, 0.0, 0.0]),
                 phase_convention: FrequencyDomainPhaseConvention::ExpMinusIOmegaT,
                 floquet_periodic_pairs: &floquet_pairs,
+                #[cfg(feature = "fem-gpu")]
+                apply_demag_tangent: None,
+                demag_tangent_user_data: std::ptr::null_mut(),
                 demag_tangent_matrix_row_major: None,
             }),
         })
@@ -1994,7 +2047,7 @@ mod tests {
             node_a: 0,
             node_b: 1,
             translation_m: Some([1.0e-9, 0.0, 0.0]),
-            phase_rad: Some(0.25),
+            phase_rad: Some(-0.01),
         }];
 
         let result = solve_native_driven_frequency_response(NativeDrivenFrequencyResponseRequest {
@@ -2015,6 +2068,7 @@ mod tests {
             magnetostatic_periodic_constraint_set_count: 0,
             periodic_airbox_delta_m_tangent_dof_count: 0,
             periodic_airbox_delta_phi_dof_count: 0,
+            periodic_airbox_magnetostatic_periodic_node_pairs: &[],
             periodic_airbox_coupled_block_problem: None,
             tiny_validation_problem: None,
             mfem_operator_problem: Some(NativeDrivenFrequencyResponseMfemOperatorProblem {
@@ -2035,6 +2089,9 @@ mod tests {
                 floquet_k_vector_rad_per_m: Some([1.0e7, 0.0, 0.0]),
                 phase_convention: FrequencyDomainPhaseConvention::ExpMinusIOmegaT,
                 floquet_periodic_pairs: &floquet_pairs,
+                #[cfg(feature = "fem-gpu")]
+                apply_demag_tangent: None,
+                demag_tangent_user_data: std::ptr::null_mut(),
                 demag_tangent_matrix_row_major: None,
             }),
         })
@@ -2091,6 +2148,7 @@ mod tests {
             magnetostatic_periodic_constraint_set_count: 0,
             periodic_airbox_delta_m_tangent_dof_count: 0,
             periodic_airbox_delta_phi_dof_count: 0,
+            periodic_airbox_magnetostatic_periodic_node_pairs: &[],
             periodic_airbox_coupled_block_problem: None,
             mfem_operator_problem: None,
             tiny_validation_problem: Some(NativeDrivenFrequencyResponseTinyValidationProblem {
@@ -2149,6 +2207,7 @@ mod tests {
             magnetostatic_periodic_constraint_set_count: 0,
             periodic_airbox_delta_m_tangent_dof_count: 0,
             periodic_airbox_delta_phi_dof_count: 0,
+            periodic_airbox_magnetostatic_periodic_node_pairs: &[],
             periodic_airbox_coupled_block_problem: None,
             mfem_operator_problem: None,
             tiny_validation_problem: Some(NativeDrivenFrequencyResponseTinyValidationProblem {
@@ -2207,6 +2266,7 @@ mod tests {
             magnetostatic_periodic_constraint_set_count: 0,
             periodic_airbox_delta_m_tangent_dof_count: 0,
             periodic_airbox_delta_phi_dof_count: 0,
+            periodic_airbox_magnetostatic_periodic_node_pairs: &[],
             periodic_airbox_coupled_block_problem: None,
             mfem_operator_problem: None,
             tiny_validation_problem: Some(NativeDrivenFrequencyResponseTinyValidationProblem {
@@ -2253,6 +2313,7 @@ mod tests {
                 magnetostatic_periodic_constraint_set_count: 0,
                 periodic_airbox_delta_m_tangent_dof_count: 0,
                 periodic_airbox_delta_phi_dof_count: 0,
+                periodic_airbox_magnetostatic_periodic_node_pairs: &[],
                 periodic_airbox_coupled_block_problem: None,
                 mfem_operator_problem: None,
                 tiny_validation_problem: Some(NativeDrivenFrequencyResponseTinyValidationProblem {
@@ -2426,6 +2487,7 @@ mod tests {
             magnetostatic_periodic_constraint_set_count: 0,
             periodic_airbox_delta_m_tangent_dof_count: 0,
             periodic_airbox_delta_phi_dof_count: 0,
+            periodic_airbox_magnetostatic_periodic_node_pairs: &[],
             periodic_airbox_coupled_block_problem: None,
             tiny_validation_problem: None,
             mfem_operator_problem: Some(NativeDrivenFrequencyResponseMfemOperatorProblem {
@@ -2446,6 +2508,9 @@ mod tests {
                 floquet_k_vector_rad_per_m: None,
                 phase_convention: FrequencyDomainPhaseConvention::ExpIOmegaT,
                 floquet_periodic_pairs: &[],
+                #[cfg(feature = "fem-gpu")]
+                apply_demag_tangent: None,
+                demag_tangent_user_data: std::ptr::null_mut(),
                 demag_tangent_matrix_row_major: None,
             }),
         })
@@ -2516,6 +2581,7 @@ mod tests {
             magnetostatic_periodic_constraint_set_count: 0,
             periodic_airbox_delta_m_tangent_dof_count: 0,
             periodic_airbox_delta_phi_dof_count: 0,
+            periodic_airbox_magnetostatic_periodic_node_pairs: &[],
             periodic_airbox_coupled_block_problem: None,
             tiny_validation_problem: None,
             mfem_operator_problem: Some(NativeDrivenFrequencyResponseMfemOperatorProblem {
@@ -2536,6 +2602,9 @@ mod tests {
                 floquet_k_vector_rad_per_m: None,
                 phase_convention: FrequencyDomainPhaseConvention::ExpIOmegaT,
                 floquet_periodic_pairs: &[],
+                #[cfg(feature = "fem-gpu")]
+                apply_demag_tangent: None,
+                demag_tangent_user_data: std::ptr::null_mut(),
                 demag_tangent_matrix_row_major: Some(&demag_tangent_matrix),
             }),
         })
@@ -2607,6 +2676,7 @@ mod tests {
             magnetostatic_periodic_constraint_set_count: 0,
             periodic_airbox_delta_m_tangent_dof_count: 0,
             periodic_airbox_delta_phi_dof_count: 0,
+            periodic_airbox_magnetostatic_periodic_node_pairs: &[],
             periodic_airbox_coupled_block_problem: None,
             tiny_validation_problem: None,
             mfem_operator_problem: Some(NativeDrivenFrequencyResponseMfemOperatorProblem {
@@ -2627,6 +2697,9 @@ mod tests {
                 floquet_k_vector_rad_per_m: None,
                 phase_convention: FrequencyDomainPhaseConvention::ExpIOmegaT,
                 floquet_periodic_pairs: &[],
+                #[cfg(feature = "fem-gpu")]
+                apply_demag_tangent: None,
+                demag_tangent_user_data: std::ptr::null_mut(),
                 demag_tangent_matrix_row_major: None,
             }),
         })

@@ -2,7 +2,7 @@
 
 - Status: draft
 - Owners: Fullmag core physics/runtime
-- Last updated: 2026-06-27
+- Last updated: 2026-06-28
 - Related ADRs: `docs/adr/0011-resource-first-api.md`
 - Related specs: `docs/specs/resource-first-control-room-api-v2.md`, `docs/specs/frontend-v2/03-api-integration-layer.md`
 
@@ -88,12 +88,24 @@ Q_h = \frac{1}{4\pi}\sum_{\triangle\in\mathcal T_h}\Omega_\triangle .
 
 ### 3.1 FDM
 
-For FDM fields, Fullmag takes the selected native structured-grid plane (`xy`,
-`xz`, or `yz`; `auto` chooses the thinnest axis), extracts all vector samples
-on that native layer, normalizes valid samples, and applies the two-triangle
-Berg-Luescher sum per grid cell. For thick 3D FDM textures, the correct
-extension is a profile `Q(s_i)` over native layers or an explicitly selected
-cross-section, not a global volume sum.
+For FDM fields, Fullmag resolves the selected native structured-grid plane
+(`xy`, `xz`, or `yz`; `auto` chooses the thinnest axis). If only one native
+layer exists along the plane normal, the observable is the Berg-Luescher sum on
+that layer. If multiple layers exist, Fullmag computes the full native layer
+profile
+
+```math
+Q(s_i) =
+\frac{1}{4\pi}
+\sum_{\triangle\in\mathcal T_h(s_i)}
+\Omega_\triangle ,
+```
+
+where `s_i` is the native layer coordinate along the selected normal. The
+reported scalar `Q` is the arithmetic thickness average over valid native
+layers. The resource must also return every per-layer `Q(s_i)` sample, because
+the profile is the physically meaningful 3D thin-film diagnostic. No FDM path
+forms a global skyrmion number by summing unordered 3D nodes.
 
 ### 3.2 FEM
 
@@ -196,7 +208,7 @@ quality, support selection, and sign convention.
 - [x] ProblemIR: no new lowered representation
 - [x] Planner: no execution-selection change
 - [x] Capability matrix: no new capability vocabulary
-- [x] FDM backend: native structured plane sampling into Berg-Luescher triangles
+- [x] FDM backend: native structured layer/profile sampling into Berg-Luescher triangles
 - [x] FEM backend: object-scoped layer triangulation profile into Berg-Luescher sums
 - [x] FEM backend: object-scoped exact tetra-plane-cut fallback
 - [ ] Hybrid backend
@@ -209,8 +221,9 @@ quality, support selection, and sign convention.
 - Full 3D topological flux, Hopf index, and density maps are separate
   observables/resources and are not implemented by this scalar inspector
   resource.
-- Strongly curved surfaces or bobber-like textures require inspecting a full
-  `Q(s_i)` profile or topological flux rather than trusting one scalar cut.
+- Strongly curved surfaces, bobber-like textures, or thick FDM/FEM films require
+  inspecting the full `Q(s_i)` profile or topological flux rather than trusting
+  one scalar summary.
 - A separate charge over arbitrary curved object surfaces needs an explicit
   orientation and boundary contract. It is not the default skyrmion-number
   interpretation for a film.

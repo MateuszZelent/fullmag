@@ -1096,6 +1096,18 @@ fn object_ids_match(a: &str, b: &str) -> bool {
     clean_a == clean_b
 }
 
+fn object_segment_ids_match(
+    segment: &fullmag_runner::FemMeshObjectSegment,
+    object_id: &str,
+) -> bool {
+    object_ids_match(&segment.object_id, object_id)
+        || segment
+            .geometry_id
+            .as_deref()
+            .map(|id| object_ids_match(id, object_id))
+            .unwrap_or(false)
+}
+
 fn resolve_object_scope(
     mesh: &FemMeshPayload,
     object_id: &str,
@@ -1125,7 +1137,7 @@ fn resolve_object_scope(
     let segment = mesh
         .object_segments
         .iter()
-        .find(|segment| object_ids_match(&segment.object_id, object_id))
+        .find(|segment| object_segment_ids_match(segment, object_id))
         .ok_or_else(|| ApiError::not_found(format!("object mesh not found: {object_id}")))?;
     Ok(ResolvedFieldScope {
         domain: if segment.object_id == "__air__" {
@@ -1261,7 +1273,7 @@ fn resolve_selection_scope(
         if mesh
             .object_segments
             .iter()
-            .any(|segment| object_ids_match(&segment.object_id, entity_id))
+            .any(|segment| object_segment_ids_match(segment, entity_id))
         {
             let mut scope = resolve_object_scope(mesh, entity_id)?;
             scope.kind = "selection".to_string();
@@ -1284,7 +1296,7 @@ fn resolve_selection_scope(
         if mesh
             .object_segments
             .iter()
-            .any(|segment| object_ids_match(&segment.object_id, node_id))
+            .any(|segment| object_segment_ids_match(segment, node_id))
         {
             let mut scope = resolve_object_scope(mesh, node_id)?;
             scope.kind = "selection".to_string();

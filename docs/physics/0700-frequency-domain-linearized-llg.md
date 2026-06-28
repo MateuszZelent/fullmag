@@ -169,14 +169,20 @@ Periodic and Floquet studies use the convention in
 For a nonzero-k Floquet FEM study, every selected periodic pair must be enforced
 inside the active operator. Backends that do not enforce the selected pair set
 must reject the study.
+If explicit Floquet pair metadata contains both translation and phase, the
+runtime validates `phase_rad = -k dot translation (mod 2*pi)` before the current
+unsupported solve path. A mismatch is a metadata validation error.
 
-The native FEM production GPU driven-response lane currently enforces only the
-gamma-point, free-boundary, no-demag magnetic slice. It supports exchange,
-Zeeman, uniform uniaxial anisotropy, and uniform or nodal Gilbert damping
-through a CUDA tangent operator. Static-periodic projection, nonzero-k
-Floquet/Bloch response, dynamic demag, DMI, and magnetoelastic coupling must
-fail with explicit capability diagnostics on the GPU lane; they must not be
-rerouted through dense validation or CPU response.
+The native FEM production GPU driven-response lane currently enforces the
+gamma-point, free-boundary, no-demag magnetic slice and the k=0
+static-periodic, no-demag magnetic slice. It supports exchange, Zeeman, uniform
+uniaxial anisotropy, and uniform or nodal Gilbert damping through a CUDA
+tangent operator. Static-periodic response requires complete
+`mesh.periodic_node_pairs` and boundary-pair translation/tolerance metadata and
+publishes static-periodic diagnostics. Nonzero-k Floquet/Bloch response,
+dynamic demag, DMI, and magnetoelastic coupling must fail with explicit
+capability diagnostics on the GPU lane; they must not be rerouted through dense
+validation or CPU response.
 
 ## Demagnetization policy
 
@@ -195,6 +201,7 @@ The minimal validation set for this contract is:
 
 - phase convention roundtrip in IR,
 - periodic pair validation and duplicate-node rejection,
+- explicit Floquet phase consistency validation against `-k dot translation`,
 - periodic/Floquet rejection when pair constraints are not enforced,
 - `Floquet(k=0) == Periodic`,
 - exchange-only reciprocal dispersion `f(k) = f(-k)` when DMI and other

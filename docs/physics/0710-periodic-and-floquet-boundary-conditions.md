@@ -24,6 +24,16 @@ The canonical phase convention identifier is:
 exp_minus_i_k_dot_delta_r
 ```
 
+When an explicit Floquet pair carries both `translation` and `phase_rad`, the
+runtime must validate the metadata before it reaches an operator:
+
+```text
+phase_rad ~= -k dot translation  (mod 2*pi)
+```
+
+Inconsistent phase metadata is a validation error, not a valid unsupported
+Floquet solve request.
+
 ## Capability Policy
 
 If a mesh declares `periodic_node_pairs` and the selected backend does not
@@ -32,16 +42,18 @@ study. A warning is not sufficient because it would produce physically invalid
 results.
 
 FEM static and time-domain paths support only the limited k=0 static-reduction
-slice where the active native CPU/MFEM operator enforces `periodic_node_pairs`.
-Requests outside that slice, including unsupported GPU periodic reductions,
-must reject. FEM eigen supports periodic and Floquet phase reduction for
-exchange, anisotropy, external field, and DMI terms.
+slice where the active native operator enforces `periodic_node_pairs`. Requests
+outside that slice, including unsupported GPU periodic demag reductions, must
+reject. FEM eigen supports periodic and Floquet phase reduction for exchange,
+anisotropy, external field, and DMI terms.
 
 FEM driven frequency response is narrower still: the native production CPU lane
 supports gamma/free response and k=0 static-periodic magnetic response without
-dynamic demag. It requires complete periodic pair metadata for requested
-`pair_ids`; nonzero-k Floquet response, shared-domain airbox response, and
-frequency-response demag remain gated.
+dynamic demag. The native production GPU lane supports gamma/free response and
+the k=0 static-periodic no-demag magnetic slice through its CUDA tangent
+operator. Both static-periodic lanes require complete periodic pair metadata for
+requested `pair_ids`; nonzero-k Floquet response, shared-domain airbox response,
+frequency-response demag, DMI on GPU, and GPU periodic demag remain gated.
 
 Dynamic demagnetization for nonzero-k Floquet FEM is not implemented. Requests
 with `include_demag=true` and `spin_wave_bc.kind='floquet'` must fail with a

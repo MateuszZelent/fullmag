@@ -85,6 +85,8 @@ def write_frequency_domain_fixture(
     sweep_v2_phase_rad: float = 0.0,
     sweep_v1_backend_engine_id: str = "native_fem_mfem",
     sweep_v1_lane_classification: str = "fem_cpu_production",
+    execution_lane: str = "production_cpu",
+    manifest_engine: str = "native_fem_mfem_frequency_domain_cpu",
     manifest_reference_or_production: str = "production",
     manifest_production_native_solver_available: bool = True,
     manifest_validation_artifact: bool = False,
@@ -440,6 +442,9 @@ def write_frequency_domain_fixture(
         "schema_version": "frequency_domain_response_diagnostics.v1",
         "status": diagnostics_status,
         "complete": diagnostics_complete,
+        "requested_execution_lane": execution_lane,
+        "resolved_execution_lane": execution_lane,
+        "validation_fallback_used": False,
         "assembled_mfem_operator_solver": False,
         "dense_block_real_solver": False,
         "matrix_free_solver": diagnostics_matrix_free_solver,
@@ -534,8 +539,11 @@ def write_frequency_domain_fixture(
             "write_response_fields": write_response_fields,
         },
         "resolved_execution": {
-            "engine": "native_fem_mfem_frequency_domain_cpu",
+            "engine": manifest_engine,
             "native_backend": "native_mfem_matrix_free",
+            "requested_execution_lane": execution_lane,
+            "resolved_execution_lane": execution_lane,
+            "lane_classification": sweep_v1_lane_classification,
             "reference_or_production": manifest_reference_or_production,
             "solver_library": "native_gmres",
             "solver_model": "matrix_free_gmres",
@@ -574,6 +582,9 @@ def write_frequency_domain_fixture(
         "diagnostics": {
             "completed_frequency_point_count": manifest_completed_frequency_count,
             "written_frequency_point_artifacts": manifest_written_frequency_point_artifacts,
+            "requested_execution_lane": execution_lane,
+            "resolved_execution_lane": execution_lane,
+            "validation_fallback_used": False,
         },
         "resources": {
             "response_sweep_resource_key": (
@@ -643,12 +654,18 @@ def run_validator(
     root: Path,
     *,
     require_static_periodic: bool = False,
+    require_production_gpu: bool = False,
+    parity_reference: Path | None = None,
     allow_interrupted: bool = False,
     allow_unavailable: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     command = [sys.executable, str(VALIDATOR)]
     if require_static_periodic:
         command.append("--require-static-periodic")
+    if require_production_gpu:
+        command.append("--require-production-gpu")
+    if parity_reference is not None:
+        command.extend(["--compare-reference", str(parity_reference)])
     if allow_interrupted:
         command.append("--allow-interrupted")
     if allow_unavailable:
@@ -1179,6 +1196,63 @@ def test_validator_accepts_required_static_periodic_diagnostics(tmp_path: Path) 
     result = run_validator(tmp_path, require_static_periodic=True)
 
     assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_accepts_static_periodic_gpu_cpu_parity_reference(tmp_path: Path) -> None:
+    cpu_root = tmp_path / "cpu"
+    gpu_root = tmp_path / "gpu"
+    write_frequency_domain_fixture(cpu_root, include_static_periodic_diagnostics=True)
+    write_frequency_domain_fixture(
+        gpu_root,
+        include_static_periodic_diagnostics=True,
+        execution_lane="production_gpu",
+        manifest_engine="native_fem_mfem_frequency_domain_gpu",
+        sweep_v1_lane_classification="fem_gpu_production",
+    )
+
+    result = run_validator(
+        gpu_root,
+        require_static_periodic=True,
+        require_production_gpu=True,
+        parity_reference=cpu_root,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_rejects_static_periodic_gpu_cpu_parity_mismatch(tmp_path: Path) -> None:
+    cpu_root = tmp_path / "cpu"
+    gpu_root = tmp_path / "gpu"
+    write_frequency_domain_fixture(cpu_root, include_static_periodic_diagnostics=True)
+    write_frequency_domain_fixture(
+        gpu_root,
+        include_static_periodic_diagnostics=True,
+        execution_lane="production_gpu",
+        manifest_engine="native_fem_mfem_frequency_domain_gpu",
+        sweep_v1_lane_classification="fem_gpu_production",
+    )
+    point_path = gpu_root / "response" / "frequency_points" / "frequency_0000.json"
+    point = json.loads(point_path.read_text())
+    point["m_complex"] = [[1.5, 0.0], [0.0, 0.0]]
+    point["response_amplitude"] = 1.5
+    point["component_response_amplitude"] = [1.5, 0.0]
+    point_path.write_text(json.dumps(point))
+    sweep_path = gpu_root / "response" / "magnetic_response_sweep.v2.json"
+    sweep = json.loads(sweep_path.read_text())
+    sweep["points"][0]["m_complex"] = point["m_complex"]
+    sweep["points"][0]["response_amplitude"] = 1.5
+    sweep["points"][0]["component_response_amplitude"] = [1.5, 0.0]
+    sweep_path.write_text(json.dumps(sweep))
+
+    result = run_validator(
+        gpu_root,
+        require_static_periodic=True,
+        require_production_gpu=True,
+        parity_reference=cpu_root,
+    )
+
+    assert result.returncode != 0
+    assert "CPU/GPU parity" in (result.stderr + result.stdout)
 
 
 def test_validator_rejects_missing_static_periodic_mesh_artifact(

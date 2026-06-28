@@ -455,6 +455,29 @@ fullmag_fem_frequency_domain_status to_abi_status(
     return FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_VALIDATION_ERROR;
 }
 
+fullmag::fem::frequency_domain::FrequencyDomainStatus from_abi_status(
+    fullmag_fem_frequency_domain_status status)
+{
+    namespace fd = fullmag::fem::frequency_domain;
+    switch (status) {
+    case FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OK:
+        return fd::FrequencyDomainStatus::ok;
+    case FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_UNAVAILABLE:
+        return fd::FrequencyDomainStatus::unavailable;
+    case FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_VALIDATION_ERROR:
+        return fd::FrequencyDomainStatus::validation_error;
+    case FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OPERATOR_ERROR:
+        return fd::FrequencyDomainStatus::operator_error;
+    case FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_SOLVE_ERROR:
+        return fd::FrequencyDomainStatus::solve_error;
+    case FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_ARTIFACT_ERROR:
+        return fd::FrequencyDomainStatus::artifact_error;
+    case FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_INTERRUPTED:
+        return fd::FrequencyDomainStatus::interrupted;
+    }
+    return fd::FrequencyDomainStatus::validation_error;
+}
+
 FullmagFemFrequencyDomainStatus to_frequency_domain_contract_status(
     fullmag::fem::frequency_domain::FrequencyDomainStatus status)
 {
@@ -697,6 +720,63 @@ void frequency_domain_progress_from_c_abi(
         progress.converged ? 1 : 0,
     };
     request->progress_callback(request->progress_user_data, &abi_progress);
+}
+
+fullmag::fem::frequency_domain::FrequencyDomainStatus
+frequency_domain_periodic_airbox_apply_stiffness_from_c_abi(
+    void *user_data,
+    const double *in,
+    double *out,
+    char error_message[128]) noexcept
+{
+    auto *request = static_cast<const fullmag_fem_frequency_domain_driven_response_request *>(user_data);
+    if (request == nullptr || request->periodic_airbox_coupled_block_apply_stiffness == nullptr) {
+        std::snprintf(error_message, 128, "missing periodic-airbox coupled-block stiffness callback");
+        return fullmag::fem::frequency_domain::FrequencyDomainStatus::validation_error;
+    }
+    return from_abi_status(request->periodic_airbox_coupled_block_apply_stiffness(
+        request->periodic_airbox_coupled_block_operator_user_data,
+        in,
+        out,
+        error_message));
+}
+
+fullmag::fem::frequency_domain::FrequencyDomainStatus
+frequency_domain_periodic_airbox_apply_mass_from_c_abi(
+    void *user_data,
+    const double *in,
+    double *out,
+    char error_message[128]) noexcept
+{
+    auto *request = static_cast<const fullmag_fem_frequency_domain_driven_response_request *>(user_data);
+    if (request == nullptr || request->periodic_airbox_coupled_block_apply_mass == nullptr) {
+        std::snprintf(error_message, 128, "missing periodic-airbox coupled-block mass callback");
+        return fullmag::fem::frequency_domain::FrequencyDomainStatus::validation_error;
+    }
+    return from_abi_status(request->periodic_airbox_coupled_block_apply_mass(
+        request->periodic_airbox_coupled_block_operator_user_data,
+        in,
+        out,
+        error_message));
+}
+
+fullmag::fem::frequency_domain::FrequencyDomainStatus
+frequency_domain_mfem_apply_demag_tangent_from_c_abi(
+    void *user_data,
+    const double *in,
+    double *out,
+    char error_message[128]) noexcept
+{
+    auto *request = static_cast<const fullmag_fem_frequency_domain_driven_response_request *>(user_data);
+    if (request == nullptr || request->mfem_apply_demag_tangent == nullptr) {
+        std::snprintf(error_message, 128, "missing MFEM demag tangent callback");
+        return fullmag::fem::frequency_domain::FrequencyDomainStatus::validation_error;
+    }
+    return from_abi_status(request->mfem_apply_demag_tangent(
+        request->mfem_demag_tangent_user_data,
+        in,
+        out,
+        error_message));
 }
 
 } // namespace
@@ -962,8 +1042,18 @@ int fullmag_fem_get_frequency_domain_abi_layout(
         offsetof(fullmag_fem_frequency_domain_driven_response_request, phase_convention);
     out_layout->driven_response_request_mfem_floquet_periodic_pair_count_offset =
         offsetof(fullmag_fem_frequency_domain_driven_response_request, mfem_floquet_periodic_pair_count);
+    out_layout->driven_response_request_periodic_airbox_magnetostatic_periodic_node_pairs_offset =
+        offsetof(fullmag_fem_frequency_domain_driven_response_request, periodic_airbox_magnetostatic_periodic_node_pairs);
     out_layout->driven_response_request_periodic_airbox_coupled_block_enabled_offset =
         offsetof(fullmag_fem_frequency_domain_driven_response_request, periodic_airbox_coupled_block_enabled);
+    out_layout->driven_response_request_periodic_airbox_coupled_block_apply_stiffness_offset =
+        offsetof(fullmag_fem_frequency_domain_driven_response_request, periodic_airbox_coupled_block_apply_stiffness);
+    out_layout->driven_response_request_periodic_airbox_coupled_block_operator_user_data_offset =
+        offsetof(fullmag_fem_frequency_domain_driven_response_request, periodic_airbox_coupled_block_operator_user_data);
+    out_layout->driven_response_request_mfem_apply_demag_tangent_offset =
+        offsetof(fullmag_fem_frequency_domain_driven_response_request, mfem_apply_demag_tangent);
+    out_layout->driven_response_request_mfem_demag_tangent_user_data_offset =
+        offsetof(fullmag_fem_frequency_domain_driven_response_request, mfem_demag_tangent_user_data);
     out_layout->driven_response_request_mfem_demag_tangent_matrix_row_major_offset =
         offsetof(fullmag_fem_frequency_domain_driven_response_request, mfem_demag_tangent_matrix_row_major);
     out_layout->solve_result_size =
@@ -1084,6 +1174,7 @@ int fullmag_fem_frequency_domain_solve_driven_response(
     std::vector<fd::TangentOperatorEdgeBlock> frequency_domain_exchange_edges;
     std::vector<fd::MfemDmiElementTangentData> frequency_domain_dmi_elements;
     std::vector<std::uint64_t> frequency_domain_static_periodic_node_pairs;
+    std::vector<std::uint64_t> frequency_domain_periodic_airbox_magnetostatic_periodic_node_pairs;
     std::vector<fd::FrequencyDomainFloquetPeriodicPair> frequency_domain_floquet_periodic_pairs;
     native_request.solve_request.operator_request.node_count = request->node_count;
     native_request.solve_request.operator_request.tangent_dof_count =
@@ -1167,6 +1258,24 @@ int fullmag_fem_frequency_domain_solve_driven_response(
         request->periodic_airbox_delta_m_tangent_dof_count;
     native_request.periodic_airbox_delta_phi_dof_count =
         request->periodic_airbox_delta_phi_dof_count;
+    native_request.periodic_airbox_magnetostatic_periodic_node_pair_count =
+        request->periodic_airbox_magnetostatic_periodic_node_pair_count;
+    if (request->periodic_airbox_magnetostatic_periodic_node_pair_count > 0 &&
+        request->periodic_airbox_magnetostatic_periodic_node_pairs != nullptr) {
+        frequency_domain_periodic_airbox_magnetostatic_periodic_node_pairs.reserve(
+            static_cast<std::size_t>(
+                request->periodic_airbox_magnetostatic_periodic_node_pair_count * 2));
+        for (std::uint64_t pair_index = 0;
+             pair_index < request->periodic_airbox_magnetostatic_periodic_node_pair_count;
+             ++pair_index) {
+            const fullmag_fem_frequency_domain_periodic_node_pair &source =
+                request->periodic_airbox_magnetostatic_periodic_node_pairs[pair_index];
+            frequency_domain_periodic_airbox_magnetostatic_periodic_node_pairs.push_back(source.node_a);
+            frequency_domain_periodic_airbox_magnetostatic_periodic_node_pairs.push_back(source.node_b);
+        }
+        native_request.periodic_airbox_magnetostatic_periodic_node_pairs =
+            frequency_domain_periodic_airbox_magnetostatic_periodic_node_pairs.data();
+    }
     native_request.periodic_airbox_coupled_block_problem.enabled =
         request->periodic_airbox_coupled_block_enabled != 0;
     native_request.periodic_airbox_coupled_block_problem.delta_m_tangent_dof_count =
@@ -1177,10 +1286,25 @@ int fullmag_fem_frequency_domain_solve_driven_response(
         request->periodic_airbox_coupled_block_stiffness_matrix_row_major;
     native_request.periodic_airbox_coupled_block_problem.mass_matrix_row_major =
         request->periodic_airbox_coupled_block_mass_matrix_row_major;
+    if (request->periodic_airbox_coupled_block_apply_stiffness != nullptr ||
+        request->periodic_airbox_coupled_block_apply_mass != nullptr) {
+        native_request.periodic_airbox_coupled_block_problem.apply_stiffness =
+            frequency_domain_periodic_airbox_apply_stiffness_from_c_abi;
+        native_request.periodic_airbox_coupled_block_problem.apply_mass =
+            frequency_domain_periodic_airbox_apply_mass_from_c_abi;
+        native_request.periodic_airbox_coupled_block_problem.operator_user_data =
+            const_cast<fullmag_fem_frequency_domain_driven_response_request *>(request);
+    }
     native_request.periodic_airbox_coupled_block_problem.drive_real =
         request->periodic_airbox_coupled_block_drive_real;
     native_request.periodic_airbox_coupled_block_problem.drive_imag =
         request->periodic_airbox_coupled_block_drive_imag;
+    if (request->mfem_apply_demag_tangent != nullptr) {
+        native_request.mfem_validation_problem.apply_demag_tangent =
+            frequency_domain_mfem_apply_demag_tangent_from_c_abi;
+        native_request.mfem_validation_problem.demag_tangent_user_data =
+            const_cast<fullmag_fem_frequency_domain_driven_response_request *>(request);
+    }
     native_request.mfem_validation_problem.demag_tangent_matrix_row_major =
         request->mfem_demag_tangent_matrix_row_major;
     if (request->cancel_requested != nullptr) {
@@ -1225,10 +1349,13 @@ int fullmag_fem_frequency_domain_solve_driven_response(
         native_request.mfem_validation_problem.descriptor.dmi_enabled =
             request->mfem_dmi_element_count > 0 &&
             request->mfem_dmi_elements != nullptr;
-        native_request.mfem_validation_problem.descriptor.demag_enabled =
+        const bool has_mfem_demag_tangent =
+            request->mfem_apply_demag_tangent != nullptr ||
             request->mfem_demag_tangent_matrix_row_major != nullptr;
+        native_request.mfem_validation_problem.descriptor.demag_enabled =
+            has_mfem_demag_tangent;
         native_request.mfem_validation_problem.descriptor.demag_kind =
-            request->mfem_demag_tangent_matrix_row_major != nullptr ?
+            has_mfem_demag_tangent ?
                 fd::FrequencyDomainDemagKind::static_k0 :
                 fd::FrequencyDomainDemagKind::none;
         native_request.mfem_validation_problem.descriptor.uniaxial_anisotropy_enabled =

@@ -19641,6 +19641,46 @@ async fn field_meta_energy_density_accepts_geom_suffixed_part_ids() {
 }
 
 #[tokio::test]
+async fn field_meta_energy_density_accepts_geom_suffixed_object_segment_geometry_ids() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_scoped_fem_mesh_payload();
+        mesh.mesh_parts.clear();
+        mesh.object_segments[0].object_id = "native-segment-0".to_string();
+        mesh.object_segments[0].geometry_id = Some("permalloy_layer_geom".to_string());
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "eden_total": {
+                "values": [10.0, 11.0, 12.0, 13.0, 0.0, 1.0, 2.0, 3.0],
+                "layout": {
+                    "grid_cells": [8, 1, 1]
+                }
+            }
+        }))
+        .expect("scoped eden_total latest_fields should deserialize");
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/eden_total/meta?component=full&scope_kind=object&scope_id=permalloy_layer")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let meta = body_json(response).await;
+    assert_eq!(meta["quantity_id"], "eden_total");
+    assert_eq!(meta["components"], 1);
+    assert_eq!(meta["stats"]["min"], serde_json::json!(10.0));
+    assert_eq!(meta["stats"]["max"], serde_json::json!(13.0));
+    assert_eq!(meta["stats"]["mean"], serde_json::json!(11.5));
+}
+
+#[tokio::test]
 async fn field_vector_etag_stays_stable_when_only_snapshot_state_version_changes() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -20560,7 +20600,7 @@ async fn topological_charge_cache_key_tracks_field_revision() {
 }
 
 #[tokio::test]
-async fn topological_charge_auto_plane_uses_midplane_of_thinnest_fdm_axis() {
+async fn topological_charge_auto_plane_uses_native_profile_of_thinnest_fdm_axis() {
     let state = test_app_state_with_live_session().await;
     let scene = sample_scene_document();
     let object_id = scene.objects[0].id.clone();
@@ -20621,8 +20661,17 @@ async fn topological_charge_auto_plane_uses_midplane_of_thinnest_fdm_axis() {
     assert_eq!(json["sample_grid"]["nx"], 5);
     assert_eq!(json["sample_grid"]["ny"], 5);
     assert_eq!(json["sample_grid"]["plane"], "xy");
-    assert_eq!(json["sample_count"], 25);
-    assert_eq!(json["valid_sample_count"], 25);
+    assert_eq!(json["sample_topology"]["kind"], "fdm_layer_profile");
+    assert_eq!(json["sample_topology"]["point_count"], 75);
+    assert_eq!(json["sample_topology"]["triangle_count"], 96);
+    assert_eq!(json["sample_count"], 75);
+    assert_eq!(json["valid_sample_count"], 75);
+    assert_eq!(json["layer_samples"].as_array().unwrap().len(), 3);
+    for layer in json["layer_samples"].as_array().unwrap() {
+        assert_eq!(layer["sample_count"], 25);
+        assert_eq!(layer["valid_sample_count"], 25);
+        assert_eq!(layer["triangle_count"], 32);
+    }
     assert!(json["charge"].as_f64().unwrap().abs() < 1.0e-6);
 }
 

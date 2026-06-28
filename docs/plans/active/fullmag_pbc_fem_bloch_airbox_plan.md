@@ -14,6 +14,130 @@
 
 Ten dokument koryguje poprzednie zalozenie, ze Fullmag ma tylko waski `fem_eigen.rs` Floquet/PBC. Aktualny kod ma wiecej elementow, ale sa one na roznych poziomach gotowosci. Nie wolno ich laczyc w jedna deklaracje "PBC dziala".
 
+### Aktualizacja 2026-06-28 po focused frequency-domain pass
+
+Attachment z 2026-06-28 wymaga docelowo produkcyjnego GPU-backed
+frequency-domain path dla PBC/Floquet/dynamic demag. Aktualny audyt repo
+potwierdza, ze ten cel nadal wykracza poza obecny wykonawczy zakres solvera:
+
+- GPU driven response jest produkcyjnie wykonywalny dla gamma/free,
+  magnetic-only, no-demag slice oraz k=0 static-periodic magnetic-only,
+  no-demag slice, gdy mesh publikuje kompletne periodic pairs.
+- GPU periodic airbox demag, nonzero-k Floquet response i Floquet dynamic
+  demag nadal sa gated i musza pozostac jawnie `unsupported`, dopoki realne
+  CUDA/libCEED/hypre operatory nie istnieja.
+- Gamma-Floquet (`k=0`) jest aliasem zero-phase Periodic dla response i nie
+  powinien wpadac w sciezke `floquet_bloch_nonzero_k`.
+- Nonzero-k Floquet ma pozostac structured unavailable/rejected, z walidacja
+  `phase_rad = -k dot translation` przed obecnym unsupported solve path.
+
+Zamkniety mikroetap:
+
+- Native C ABI driven-response path waliduje teraz spojnosc jawnych metadanych
+  Floquet przed obecna sciezka unsupported: para z `k=[1e6,0,0]`,
+  `translation=[1e-6,0,0]` i niespojnym `phase_rad=0.25` zwraca
+  `validation_error` z powodem `phase_rad = -k dot translation`; para ze
+  spojnym `phase_rad=-1.0` nadal dochodzi do structured
+  `unsupported_reason="floquet_bloch_nonzero_k"`. Focused native contract
+  przeszedl po RED/GREEN:
+  `docker compose --profile fem-gpu run --rm fem-gpu ... fem_frequency_domain_contract`.
+  To poprawia P4 metadata contract, ale nie implementuje phase-aware operatora.
+- Native C ABI driven-response path waliduje teraz takze nonzero-k Floquet
+  tangent frames i zespolony drive przed obecna sciezka unsupported. Request z
+  niezgodnymi ramkami tangent zwraca structured
+  `validation_error="floquet_tangent_frame_mismatch"`, a request z
+  nie-Floquet-periodic drive zwraca
+  `validation_error="floquet_drive_phase_mismatch"`. Focused native contract
+  najpierw potwierdzil RED na statusie `UNAVAILABLE`, a po implementacji
+  przeszedl; nastepnie `just verify-fem-frequency-domain-native-contract`
+  odbudowal missing managed runtime bundle i zakonczyl pelna native suite
+  kodem `0`. To nadal jest walidacja boundary, nie phase-aware operator.
+- Nonzero-k Floquet tangent-drive validation path zachowuje teraz partial
+  artifacts, gdy request podaje `output_directory` i
+  `write_partial_artifacts=true`: `frequency_domain/manifest.v1.json`,
+  `response/diagnostics/solver.v1.json` i `response/progress.v1.json` niosa
+  `status="validation_error"` oraz
+  `validation_error="floquet_drive_phase_mismatch"`, nie zapisujac
+  `response/magnetic_response_sweep.v1.json` i nie maskujac bledu jako
+  `unsupported_reason="floquet_bloch_nonzero_k"`. RED/GREEN dowod:
+  `backends/fem/tests/frequency_domain/frequency_domain_contract.cpp` najpierw
+  padl na braku `artifact_manifest_path`, potem focused container contract
+  przeszedl. Managed dowod:
+  `just verify-fem-frequency-domain-native-contract` odbudowal
+  `.fullmag/runtimes/fem-gpu-host` po wykryciu nowszego
+  `backends/fem/src/frequency_domain/driven_response_solver.cpp`, zakonczyl
+  release build po `6m 19s`, wyeksportowal runtime i uruchomil pelna native
+  suite z kodem `0`.
+- Rust runner tests zostaly zsynchronizowane z `Floquet(k=0) == Periodic`:
+  gamma-Floquet payload test uzywa kompletnego minimalnego payloadu bez
+  przypadkowego wymagania exchange elements, a nonzero-k Floquet test nadal
+  wymaga planning rejection.
+- Native wrapper test `native_frequency_response_rejects_floquet_metadata_before_native_call`
+  uzywa teraz spojnej fazy `phase_rad=-0.01` dla `k=[1e7,0,0]` i
+  `translation=[1e-9,0,0]`, dzieki czemu test sprawdza structured
+  `floquet_bloch_nonzero_k`, a nie wczesniejszy metadata validation error.
+- Static-periodic runtime artifact contract zostal domkniety dla CPU
+  frequency response: plan-level `mesh/periodic_pairs.v1.json` nie nadpisuje
+  juz natywnego artefaktu `native_fem_frequency_domain_static_periodic`.
+  Managed gate `just verify-fem-frequency-domain-static-periodic-runtime`
+  przeszedl po rebuildzie runtime i verifierze `--require-static-periodic`.
+  Artefakt po runie zawiera `source=native_fem_frequency_domain_static_periodic`,
+  `pair_count=4`, `paired_node_count=8`, `validation_status=ok` oraz zerowe
+  `static_periodic_frame_max_mismatch` i
+  `static_periodic_drive_max_mismatch`.
+- Managed native contract gate `just verify-fem-frequency-domain-native-contract`
+  przeszedl po ustabilizowaniu eksportu FEM GPU runtime bundle. Blokerem byl
+  niedeterministyczny overwrite istniejacych SONAME/symlinkow w
+  `.fullmag/runtimes/fem-gpu-host/lib`; `scripts/export_fem_gpu_runtime.sh`
+  uzywa teraz `copy_runtime_entry_replace` z
+  `scripts/lib/runtime_bundle_copy.sh`. Test
+  `python3 -m pytest scripts/test_export_fem_gpu_runtime_copy_helpers.py -q`
+  chroni dwa przypadki: zastapienie istniejacego symlinka regularnym plikiem
+  oraz idempotentny overwrite regularnego pliku. Gate natywny buduje i odpala
+  `fem_frequency_domain_contract`, `fem_operator_contract`,
+  `fem_modal_eigen_contract`, `fem_driven_response_contract`,
+  `fem_window_partition_contract`, `fem_mode_deduplication_contract` i
+  `fem_contour_interval_solver_contract`.
+- GPU static-periodic no-demag response zostal podniesiony z samego
+  unavailable artifact contract do executable runtime slice. Managed gate
+  `just verify-fem-frequency-domain-gpu-static-periodic-runtime` uruchamia
+  `examples/fem_frequency_response_gpu_static_periodic_smoke.py` i verifier
+  `--require-production-gpu --require-static-periodic`; artefakty zachowuja
+  `requested_execution_lane=production_gpu`,
+  `resolved_execution_lane=production_gpu`,
+  `validation_fallback_used=false`,
+  `source=native_fem_frequency_domain_static_periodic`, `pair_count=4`,
+  `paired_node_count=8`, `validation_status=ok` oraz zerowe seam mismatch
+  diagnostics. Ten gate nie jest jeszcze CPU/GPU parity validation i nie
+  promuje dynamic demag ani nonzero-k Floquet.
+- Biezacy rerun focused native contract oraz managed native contract zostal
+  domkniety. Focused diagnostyczny gate:
+  `docker compose --profile fem-gpu run --rm fem-gpu ... fem_frequency_domain_contract`
+  przeszedl bez `FAIL`. Nastepnie
+  `just verify-fem-frequency-domain-native-contract` wykryl brak kompletnego
+  managed runtime bundle, odbudowal `.fullmag/runtimes/fem-gpu-host`, zakonczyl
+  release build po okolo `6m 53s`, wyeksportowal runtime i uruchomil pelna
+  natywna suite z targetu: `fem_frequency_domain_contract`,
+  `fem_operator_contract`, `fem_modal_eigen_contract`,
+  `fem_driven_response_contract`, `fem_window_partition_contract`,
+  `fem_mode_deduplication_contract` i
+  `fem_contour_interval_solver_contract`. Target zakonczyl sie kodem `0`.
+  To odswieza managed proof kontraktow P1/P3/P4 po poprzednim przerwanym
+  Cargo-lock runie, ale nie implementuje jeszcze phase-aware nonzero-k
+  Floquet operatora ani dynamic demag.
+
+Procent realizacji wzgledem pelnego celu PBC/Floquet/GPU:
+
+| Etap | Ocena | Uzasadnienie |
+|---|---:|---|
+| P0 docs/metadane | 100% | Zakonczone w planie; mesh translations i capability truth sa opisane. |
+| P1 k=0 magnetic-only response | 99% | CPU static-periodic/no-demag ma aktualny managed gate i artifact-backed verifier; GPU gamma/free i GPU static-periodic/no-demag maja runtime verifiers z `--require-production-gpu`, `--require-static-periodic` oraz bez fallbacku. Brakuje jeszcze CPU/GPU parity validation na wspolnym mesh assetcie, wiec status nie jest `validated`. |
+| P2 static/time-domain demag PBC | 100% dla CPU slice | Static/time-domain periodic airbox CPU/MFEM ma artifacted validation; GPU pozostaje gated. |
+| P3 k=0 frequency-response demag periodic airbox | 47% | Sa IR/ABI/artifact gates, explicit dense coupled-block hook, public C ABI/Rust FFI matrix-free coupled-block provider seams dla coupled block i demag tangent, delta_phi layout, magnetostatic delta_phi periodic-node-pair plumbing i validation errors; brak realnego MFEM assembly `[delta_m, delta_phi]`. |
+| P4 nonzero-k Floquet response | 35% | Sa IR/planner metadata, phase diagnostics, gamma alias, structured unsupported, C ABI validation dla niespojnego `phase_rad != -k dot translation`, C ABI validation dla nie-Floquet-periodic tangent frames/drive oraz durable partial artifacts dla Floquet drive validation errors; brak phase-aware production operator. |
+| P5 Floquet dynamic demag | 10% | Jest physics note i gating; brak `delta_phi` Bloch constraints, flux validation i solver. |
+| GPU PBC/Floquet/dynamic demag | 20% | GPU no-demag/free i k=0 static-periodic/no-demag dzialaja jako baza artefaktowa z runtime verifierem i stabilnym managed runtime exportem; nadal brak nonzero-k Floquet operatora, periodic Poisson/dynamic demag i CPU/GPU parity validation dla docelowego antidot lattice. |
+
 | Obszar | Aktualny stan | Dowod w repo | Konsekwencja |
 |---|---|---|---|
 | Python DSL | `PeriodicBC` i `FloquetBC` istnieja dla `Eigenmodes` i `FrequencyResponse`; stage builder przyjmuje `bc=...`. | `packages/fullmag-py/src/fullmag/model/study.py`, `packages/fullmag-py/src/fullmag/world.py` | Publiczna skladnia istnieje, ale nie gwarantuje jeszcze pelnej fizyki demag/Floquet. |
@@ -86,10 +210,10 @@ Tego nie nalezy narzucac jako osobnego free-Neumann na seamie. Preferowany kontr
 | FEM eigen, Periodic/Floquet, no dynamic demag | czesciowo wykonawcza | `spin_wave_bc=periodic/floquet`, `periodic_node_pairs`, `k_sampling=Single` dla Floquet. |
 | FEM eigen, Floquet + dynamic demag | unsupported | planner/runner musi odrzucac. |
 | FEM frequency response, gamma/free, no demag | partial production CPU executable | P1 magnetic mesh, no shared-domain airbox, no demag. |
-| FEM frequency response, `k=0` static-periodic, no demag | partial production CPU executable | `MergedMagneticMesh`, `PeriodicBC`, complete node pairs, translations, periodic drive/tangent frames. |
+| FEM frequency response, `k=0` static-periodic, no demag | partial production CPU and GPU executable | `MergedMagneticMesh`, `PeriodicBC`, complete node pairs, translations, periodic drive/tangent frames; GPU status is executable, not validated, and requires `validation_fallback_used=false`. |
 | FEM frequency response, demag + airbox | unsupported w production response | wymaga nowego dynamicznego `delta_phi` / coupled block. |
 | FEM frequency response, nonzero-k Floquet | unsupported | C ABI ma pola, production lane odrzuca. |
-| FEM GPU PBC / periodic demag | unsupported | strict GPU demag i exchange odrzucaja periodic reduced-node paths. |
+| FEM GPU PBC / periodic demag | partial for magnetic static-periodic response; periodic demag unsupported | GPU k=0 static-periodic no-demag response executes through the frequency-domain CUDA tangent path with periodic pair diagnostics. Strict GPU periodic demag, nonzero-k Floquet, and dynamic demag remain gated. |
 
 ## 4. Docelowy kontrakt IR
 
@@ -223,6 +347,7 @@ cargo test -p fullmag-runner fem_frequency_response_periodic_floquet_rejects_den
 ```bash
 just verify-fem-frequency-domain-native-contract
 just verify-fem-frequency-domain-static-periodic-runtime
+just verify-fem-frequency-domain-gpu-static-periodic-runtime
 ```
 
 Acceptance:
@@ -230,18 +355,35 @@ Acceptance:
 - `response/diagnostics/solver.v1.json` reports static-periodic projection for the static-periodic smoke.
 - `mesh/periodic_pairs.v1.json` is present and validation status is `ok`.
 - Dense validation fallback is not used for the production CPU static-periodic lane.
-  Progress: frequency-domain availability is now aligned with the currently
-  implemented native GPU response slice: strict GPU requests for gamma/free,
-  no-demag driven response report the `native_fem_mfem_frequency_domain_gpu`
-  lane when built with CUDA runtime, while GPU static-periodic projection still
-  reports explicit `unavailable`. This does not promote GPU PBC or GPU dynamic
-  demag.
-  Progress: the public frequency-domain capability manifest now derives
-  `response.magnetic_gpu` from that strict-GPU availability probe, so CUDA
-  builds can advertise the narrow gamma/free no-demag GPU response slice while
-  non-CUDA or non-`fem-gpu` builds continue to report it as unsupported. The
-  manifest still does not advertise GPU static-periodic projection, GPU PBC, or
-  GPU dynamic demag.
+- Production GPU static-periodic smoke reports requested/resolved
+  `production_gpu`, `validation_fallback_used=false`, static-periodic
+  diagnostics and complete manifest/progress/solver artifacts.
+- Runtime bundle export is idempotent when `.fullmag/runtimes/fem-gpu-host/lib`
+  already contains copied SONAME files or symlinks.
+
+Progress notes:
+
+- `just verify-fem-frequency-domain-native-contract` currently covers the
+  focused native contract suite after managed runtime export. This is a native
+  contract/build gate, not by itself a CPU/GPU parity validation for the
+  antidot FMR workload.
+- Frequency-domain availability is now aligned with the currently implemented
+  native GPU response slices: strict GPU requests for gamma/free no-demag and
+  k=0 static-periodic no-demag driven response report the
+  `native_fem_mfem_frequency_domain_gpu` lane when built with CUDA runtime and
+  must keep `validation_fallback_used=false`. This does not promote GPU
+  periodic demag, nonzero-k Floquet, or GPU dynamic demag.
+- The public frequency-domain capability manifest now derives
+  `response.magnetic_gpu` from strict-GPU availability probes, so CUDA builds
+  can advertise the narrow gamma/free and k=0 static-periodic no-demag GPU
+  response slices while non-CUDA or non-`fem-gpu` builds continue to report
+  unsupported status. The manifest still must not advertise GPU periodic demag
+  or nonzero-k Floquet.
+- GPU static-periodic runtime artifacts now preserve the requested and resolved
+  GPU lane, `validation_fallback_used=false`, static-periodic diagnostics, and
+  `mesh/periodic_pairs.v1.json` with `validation_status=ok`. Verified by the
+  managed target `just verify-fem-frequency-domain-gpu-static-periodic-runtime`;
+  CPU/GPU parity on a shared mesh asset remains pending.
 
 ### P2: Kwalifikacja static/time-domain k=0 demag PBC z airboxem
 
@@ -346,21 +488,90 @@ delta_phi: full magnetostatic-domain-with-air lateral pairs
   `demag_contribution.status="solved"` and `delta_phi_complex`. This is a real
   coupled-block solve for supplied operators, but it is not yet the MFEM
   assembly of `A_mphi/A_phim/A_phiphi`.
-  Progress: the same explicit coupled-block payload was exposed through the
-  C ABI in ABI v3 and remains available in the current
-  `FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION=4` Rust FFI/native wrapper. A C ABI
+  Progress: the same explicit coupled-block payload was initially exposed
+  through the C ABI in ABI v3 and remains available in the current
+  `FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION=7` Rust FFI/native wrapper. A C ABI
   contract verifies a supplied `[delta_m, delta_phi]` dense operator reaches the
   native solver and writes solved periodic-airbox demag frequency-point
   metadata. The production runner still passes `None` here until the real MFEM
   assembly produces this operator.
-  Progress: the managed FEM runtime bundle was refreshed after the ABI v3
-  change with `just ensure-managed-fem-runtime`. The default
-  `fullmag-fem-sys` frequency-domain layout test now loads
-  `.fullmag/runtimes/fem-gpu-host/lib/libfullmag_fem.so.0` and passes without
-  overriding `LD_LIBRARY_PATH`, so the exported runtime is no longer stale
-  relative to the Rust bindings.
+  Progress: the native solver now rejects `periodic_airbox_k0` dynamic demag
+  before entering even the explicit coupled-block hook when either the magnetic
+  `delta_m` periodic constraint set or the magnetostatic `delta_phi` periodic
+  constraint set is missing. A native contract requires machine-readable
+  `periodic_airbox_missing_periodic_constraint_sets` diagnostics and proves the
+  explicit test hook cannot bypass the real P3 constraint-family contract.
+  Progress: the same missing-constraint-set validation path now writes partial
+  artifacts when requested: `frequency_domain/manifest.v1.json`,
+  `response/diagnostics/solver.v1.json`, and `response/progress.v1.json` carry
+  `status="validation_error"`, requested/resolved magnetic and magnetostatic
+  BCs, and the failing constraint-set counts. This makes missing `delta_m` or
+  `delta_phi` pair metadata inspectable from artifacts instead of only from the
+  transient result JSON.
+  Progress: native dispatch now also rejects `periodic_airbox_k0` dynamic demag
+  when the request carries periodic constraint sets but no `delta_phi` scalar
+  potential DOFs. The validation error is machine-readable as
+  `periodic_airbox_missing_delta_phi_dofs`, writes the same partial artifact
+  set when requested, and prevents a magnetic-only explicit block from being
+  mistaken for the coupled `[delta_m, delta_phi]` solve.
+  Progress: the explicit coupled-block hook now also rejects a supplied dense
+  block whose `delta_m`/`delta_phi` layout does not match the request-level
+  periodic-airbox layout before solving. The validation error is
+  `periodic_airbox_coupled_block_layout_mismatch`, writes the standard partial
+  validation artifacts, and keeps the explicit hook aligned with the future
+  MFEM `[delta_m, delta_phi]` assembler contract.
+  Progress: the same explicit hook now rejects a request whose magnetic
+  operator tangent DOF count does not match the request-level `delta_m`
+  tangent DOF count. The validation error is
+  `periodic_airbox_delta_m_tangent_dof_mismatch`, writes the standard partial
+  validation artifacts, and prevents a future assembler from mixing a magnetic
+  tangent layout with a different coupled-block `delta_m` layout.
+  Progress: explicit coupled-block solved artifacts and diagnostics now carry
+  `dynamic_demag_operator_source="explicit_coupled_block_payload"` /
+  `operator_source="explicit_coupled_block_payload"` and keep
+  `dynamic_demag_k_available=false` while `mfem_coupled_block_assembly=false`.
+  This prevents the supplied dense test hook from being promoted as a real MFEM
+  dynamic-demag-k assembly.
+  Progress: the native coupled-block hook now also accepts a matrix-free
+  provider for the entire `[delta_m, delta_phi]` vector via internal
+  `apply_stiffness` / `apply_mass` callbacks. The production CPU GMRES path
+  solves that coupled vector, writes `delta_phi_complex` artifacts, and records
+  `dynamic_demag_operator_source="matrix_free_coupled_block_provider"`. This is
+  the solver/assembler seam required by a future MFEM periodic-airbox dynamic
+  demag assembler; `mfem_coupled_block_assembly` remains `false`.
+  Progress: the matrix-free coupled-block provider seam is now exposed through
+  the public C ABI and Rust FFI as
+  `periodic_airbox_coupled_block_apply_stiffness`,
+  `periodic_airbox_coupled_block_apply_mass`, and
+  `periodic_airbox_coupled_block_operator_user_data` since ABI v5 and remains
+  available in ABI v7. A C ABI contract verifies the callbacks are invoked,
+  solve the coupled vector, and preserve
+  `dynamic_demag_operator_source="matrix_free_coupled_block_provider"`. This
+  only exposes the provider boundary; it still does not assemble the
+  periodic-airbox MFEM `[delta_m, delta_phi]` operator.
+  Progress: ABI v6 introduced, and the current ABI v7 still carries,
+  `periodic_airbox_magnetostatic_periodic_node_pairs` /
+  `periodic_airbox_magnetostatic_periodic_node_pair_count` through the public C
+  ABI, Rust FFI/native wrapper, and runner payload. The runner builds these
+  pairs from the `MagnetostaticPotentialDynamic/MagnetostaticDomainWithAir`
+  constraint set, native diagnostics/artifacts report
+  `magnetostatic_periodic_node_pair_count`, and the solver rejects
+  `periodic_airbox_k0` before even the explicit or matrix-free coupled-block
+  hooks when the magnetostatic `delta_phi` periodic node pairs are missing.
+  This closes the topological plumbing for `delta_phi` PBC; it is still not the
+  MFEM assembly of `A_mphi/A_phim/A_phiphi`.
+  Progress: after the ABI v6 bump, `just verify-fem-frequency-domain-native-contract`
+  rebuilt the managed FEM runtime bundle and passed the native contract suite
+  (`fem_frequency_domain_contract`, operator/modal/driven response, window,
+  deduplication, and contour interval contracts). A transient earlier rebuild
+  was interrupted by SIGTERM after container-side export and left the launcher
+  missing; the clean rerun regenerated the managed runtime bundle and passed.
+  Progress: the managed FEM runtime bundle was refreshed after the ABI v6
+  change. The `fullmag-fem-sys` frequency-domain layout tests pass against the
+  rebuilt native library, so the exported runtime is no longer stale relative
+  to the Rust bindings.
   Progress: the internal native modal/frequency-domain request ABI constant was
-  also advanced to `3`, matching the public C ABI. The full
+  also advanced through `6` and now `7`, matching the public C ABI. The full
   `just verify-fem-frequency-domain-native-contract` gate caught the mismatch
   through `fem_modal_eigen_contract` after the public ABI bump.
 
@@ -384,7 +595,7 @@ delta_phi: full magnetostatic-domain-with-air lateral pairs
   source of that matrix is still explicit test payload data, not yet the MFEM
   periodic-airbox Poisson assembly.
   Progress: the explicit demag tangent matrix hook is now exposed through the
-  public frequency-domain C ABI (`FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION=4`)
+  public frequency-domain C ABI (`FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION=7`)
   and the Rust FFI/native wrapper as `mfem_demag_tangent_matrix_row_major`.
   A C ABI contract verifies a supplied matrix reaches the production CPU
   matrix-free MFEM response path and solves without falling back to dense
@@ -394,6 +605,27 @@ delta_phi: full magnetostatic-domain-with-air lateral pairs
   explicitly supplies `NativeDrivenFrequencyResponseMfemOperatorProblem::
   demag_tangent_matrix_row_major` and verifies the native production CPU
   matrix-free response path returns `ok` with `validation_fallback_used=false`.
+  Progress: the native MFEM production CPU response path now also accepts a
+  matrix-free `apply_demag_tangent` provider callback on the internal
+  `DrivenFrequencyResponseMfemValidationProblem`, with a native contract
+  proving the callback is invoked and the dense validation fallback stays off.
+  This is the operator-provider seam needed by a future periodic-airbox Poisson
+  assembler; it is not yet the real MFEM assembly of the dynamic demag
+  operator.
+  Progress: ABI v7 exposes that demag-tangent provider seam publicly as
+  `mfem_apply_demag_tangent` plus `mfem_demag_tangent_user_data`, with Rust FFI
+  and native-wrapper layout coverage. A C ABI contract now verifies the
+  callback is invoked through the public request, solves through the production
+  CPU matrix-free MFEM path without dense fallback, and reports
+  `demag_tangent_operator_source="matrix_free_demag_tangent_provider"` in
+  result diagnostics. This still only exposes the provider boundary; the
+  provider is not yet produced by the real MFEM periodic-airbox demag assembly.
+  Progress: after the ABI v7 bump, `just verify-fem-frequency-domain-native-contract`
+  rebuilt the managed FEM runtime bundle and passed the native
+  frequency-domain/operator/modal/driven-response/window/deduplication/contour
+  interval contract suite. Focused `fullmag-fem-sys` ABI layout tests and
+  `fullmag-runner --features fem-gpu frequency_response` tests also pass
+  against the rebuilt native library.
 - [ ] Add gauge/nullspace handling only for nullspace cases. Do not add a mean-zero pin to Robin/Dirichlet cases where it is unnecessary.
   Progress: the native explicit `periodic_airbox_coupled_block_problem` path
   now detects the constant `delta_phi` nullspace by checking row/column sums
@@ -505,6 +737,11 @@ phase(x then y) == phase(y then x)
   translation` modulo `2pi`. Inconsistent request metadata is rejected instead
   of being hidden behind the generic `floquet_bloch_nonzero_k` unavailable
   status. Full corner-loop constraint graph consumption remains open.
+  Progress: the native C ABI/driven-response solve boundary now also records
+  `unsupported_reason="floquet_bloch_nonzero_k"` in both diagnostics and result
+  JSON when nonzero-k Floquet metadata reaches the current unsupported solve
+  path. This improves provenance for the gate; it is not phase-reduced
+  nonzero-k operator support.
 
 - [ ] Apply phase constraints to drive vectors and tangent frames. Reject non-Floquet-periodic excitation.
   Progress: the planner now gives a specific rejection for nonzero-k Floquet
@@ -513,6 +750,26 @@ phase(x then y) == phase(y then x)
   excitation. This prevents that missing drive/tangent-frame phase treatment
   from being hidden behind the generic nonzero-k unsupported message; applying
   phase constraints to the actual drive vector and tangent frames remains open.
+  Progress: the native C ABI/driven-response solve boundary now validates
+  actual MFEM tangent frames and complex tangent drive for nonzero-k Floquet
+  pairs before the current unsupported solve path. It checks
+  `u_dst = exp(i phase_rad) u_src` for the drive components and requires
+  matching equilibrium tangent frames on paired nodes. Mismatches return
+  structured validation diagnostics
+  `floquet_drive_phase_mismatch` or `floquet_tangent_frame_mismatch` instead of
+  `unsupported_reason="floquet_bloch_nonzero_k"`. This is a boundary
+  validation step; phase-aware operator assembly/reduction remains open.
+  Progress: the nonzero-k Floquet drive-validation error path now writes the
+  standard partial artifact set when requested:
+  `frequency_domain/manifest.v1.json`,
+  `response/diagnostics/solver.v1.json`, and
+  `response/progress.v1.json`. A C ABI contract verifies the manifest/progress
+  point to a validation error, preserve
+  `validation_error="floquet_drive_phase_mismatch"`, do not write a response
+  sweep, and do not report
+  `unsupported_reason="floquet_bloch_nonzero_k"`. This improves artifact
+  provenance for rejected Floquet inputs; it still does not implement the
+  phase-aware production operator.
 - [ ] Keep `include_demag=true` gated until P5 dynamic magnetostatic Floquet exists.
 - [ ] Run:
 

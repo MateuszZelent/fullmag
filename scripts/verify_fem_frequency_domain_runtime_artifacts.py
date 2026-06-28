@@ -9,6 +9,8 @@ import sys
 from pathlib import Path
 
 MAX_U64 = (1 << 64) - 1
+CPU_GPU_PARITY_ABS_TOL = 1.0e-8
+CPU_GPU_PARITY_REL_TOL = 1.0e-7
 
 
 def load_json(path: Path) -> dict:
@@ -537,20 +539,178 @@ def require_tangent_payload_metadata(point: dict, point_name: str) -> tuple[str 
     return tangent_path, tangent_payload_value_count
 
 
+def parity_fail(message: str) -> None:
+    raise SystemExit(
+        "invalid frequency-domain runtime artifacts:\n"
+        f"CPU/GPU parity {message}"
+    )
+
+
+def compare_numeric_value(
+    target: object,
+    reference: object,
+    name: str,
+    *,
+    abs_tol: float = CPU_GPU_PARITY_ABS_TOL,
+    rel_tol: float = CPU_GPU_PARITY_REL_TOL,
+) -> None:
+    if isinstance(target, (int, float)) and isinstance(reference, (int, float)):
+        target_value = float(target)
+        reference_value = float(reference)
+        if not math.isfinite(target_value) or not math.isfinite(reference_value):
+            parity_fail(f"{name} contains a non-finite value")
+        tolerance = abs_tol + rel_tol * max(abs(target_value), abs(reference_value))
+        difference = abs(target_value - reference_value)
+        if difference > tolerance:
+            parity_fail(
+                f"mismatch at {name}: GPU={target_value:.17g}, "
+                f"CPU={reference_value:.17g}, diff={difference:.17g}, "
+                f"tol={tolerance:.17g}"
+            )
+        return
+    if isinstance(target, list) and isinstance(reference, list):
+        if len(target) != len(reference):
+            parity_fail(
+                f"length mismatch at {name}: GPU={len(target)}, CPU={len(reference)}"
+            )
+        for index, (target_item, reference_item) in enumerate(zip(target, reference)):
+            compare_numeric_value(
+                target_item,
+                reference_item,
+                f"{name}[{index}]",
+                abs_tol=abs_tol,
+                rel_tol=rel_tol,
+            )
+        return
+    parity_fail(
+        f"type mismatch at {name}: GPU={type(target).__name__}, "
+        f"CPU={type(reference).__name__}"
+    )
+
+
+def require_cpu_gpu_parity_reference(
+    target_root: Path,
+    reference_root: Path,
+    *,
+    target_manifest: dict,
+    target_diagnostics: dict,
+    target_sweep: dict,
+) -> None:
+    required = [
+        reference_root / "response/progress.v1.json",
+        reference_root / "response/diagnostics/solver.v1.json",
+        reference_root / "response/magnetic_response_sweep.v2.json",
+        reference_root / "frequency_domain/manifest.v1.json",
+    ]
+    missing = [str(path) for path in required if not path.is_file()]
+    if missing:
+        parity_fail("reference bundle is missing required artifacts:\n" + "\n".join(missing))
+
+    reference_progress = load_json(reference_root / "response/progress.v1.json")
+    reference_diagnostics = load_json(reference_root / "response/diagnostics/solver.v1.json")
+    reference_manifest = load_json(reference_root / "frequency_domain/manifest.v1.json")
+    reference_sweep = load_json(reference_root / "response/magnetic_response_sweep.v2.json")
+
+    if reference_manifest.get("status") != "ready" or reference_manifest.get("complete") is not True:
+        parity_fail("reference CPU bundle must be a completed ready solve")
+    if reference_progress.get("complete") is not True:
+        parity_fail("reference CPU progress must be complete")
+    reference_resolved = reference_manifest.get("resolved_execution", {})
+    if not isinstance(reference_resolved, dict):
+        parity_fail("reference manifest.resolved_execution must be an object")
+    if reference_resolved.get("requested_execution_lane") != "production_cpu":
+        parity_fail("reference bundle must use production_cpu execution lane")
+    if reference_diagnostics.get("validation_fallback_used") is not False:
+        parity_fail("reference CPU bundle must not use validation fallback")
+    if target_diagnostics.get("validation_fallback_used") is not False:
+        parity_fail("GPU target bundle must not use validation fallback")
+    if target_manifest.get("resolved_execution", {}).get("requested_execution_lane") != "production_gpu":
+        parity_fail("target bundle must use production_gpu execution lane")
+
+    target_count = target_sweep.get("completed_frequency_point_count")
+    reference_count = reference_sweep.get("completed_frequency_point_count")
+    if target_count != reference_count:
+        parity_fail(
+            f"frequency point count mismatch: GPU={target_count!r}, CPU={reference_count!r}"
+        )
+    if target_diagnostics.get("static_periodic_node_pair_count") != reference_diagnostics.get(
+        "static_periodic_node_pair_count"
+    ):
+        parity_fail(
+            "static_periodic_node_pair_count mismatch: "
+            f"GPU={target_diagnostics.get('static_periodic_node_pair_count')!r}, "
+            f"CPU={reference_diagnostics.get('static_periodic_node_pair_count')!r}"
+        )
+
+    target_paths = require_string_list(
+        target_sweep.get("frequency_point_artifact_paths"),
+        "target sweep.frequency_point_artifact_paths",
+    )
+    reference_paths = require_string_list(
+        reference_sweep.get("frequency_point_artifact_paths"),
+        "reference sweep.frequency_point_artifact_paths",
+    )
+    if len(target_paths) != len(reference_paths):
+        parity_fail(
+            f"frequency point path count mismatch: GPU={len(target_paths)}, CPU={len(reference_paths)}"
+        )
+
+    compare_keys = [
+        "frequency_hz",
+        "angular_frequency_rad_per_s",
+        "m_complex",
+        "component_response_amplitude",
+        "component_response_phase",
+        "response_amplitude",
+        "response_phase",
+        "phase_rad",
+        "susceptibility_tensor",
+        "absorbed_power_density",
+    ]
+    for index, (target_path, reference_path) in enumerate(zip(target_paths, reference_paths)):
+        target_point = load_json(target_root / target_path)
+        reference_point = load_json(reference_root / reference_path)
+        for key in compare_keys:
+            compare_numeric_value(
+                target_point.get(key),
+                reference_point.get(key),
+                f"frequency[{index}].{key}",
+            )
+
+
 def main() -> int:
     args = sys.argv[1:]
     require_static_periodic = False
+    require_production_gpu = False
     allow_interrupted = False
     allow_unavailable = False
+    parity_reference: Path | None = None
     if "--require-static-periodic" in args:
         require_static_periodic = True
         args.remove("--require-static-periodic")
+    if "--require-production-gpu" in args:
+        require_production_gpu = True
+        args.remove("--require-production-gpu")
+    if "--compare-reference" in args:
+        index = args.index("--compare-reference")
+        if index + 1 >= len(args):
+            raise SystemExit(
+                "usage: scripts/verify_fem_frequency_domain_runtime_artifacts.py "
+                "[--compare-reference <cpu-artifacts-dir>] <artifacts-dir>"
+            )
+        parity_reference = Path(args[index + 1])
+        del args[index : index + 2]
     if "--allow-interrupted" in args:
         allow_interrupted = True
         args.remove("--allow-interrupted")
     if "--allow-unavailable" in args:
         allow_unavailable = True
         args.remove("--allow-unavailable")
+    if parity_reference is not None and not require_production_gpu:
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "CPU/GPU parity comparison requires --require-production-gpu for the target bundle"
+        )
     root = (
         Path(args[0])
         if args
@@ -979,6 +1139,15 @@ def main() -> int:
         if interrupted
         else None
     )
+    expected_execution_lane = "production_gpu" if require_production_gpu else "production_cpu"
+    expected_lane_classification = (
+        "fem_gpu_production" if require_production_gpu else "fem_cpu_production"
+    )
+    expected_engine = (
+        "native_fem_mfem_frequency_domain_gpu"
+        if require_production_gpu
+        else "native_fem_mfem_frequency_domain_cpu"
+    )
     expected = {
         "sweep_v1.schema_version": (
             sweep_v1.get("schema_version"),
@@ -998,7 +1167,7 @@ def main() -> int:
         ),
         "sweep_v1.lane_classification": (
             sweep_v1.get("lane_classification"),
-            "fem_cpu_production",
+            expected_lane_classification,
         ),
         "sweep_v1.matrix_layout": (
             sweep_v1.get("matrix_layout"),
@@ -1067,6 +1236,18 @@ def main() -> int:
         ),
         "diagnostics.status": (diagnostics.get("status"), expected_status),
         "diagnostics.complete": (diagnostics.get("complete"), expected_complete),
+        "diagnostics.requested_execution_lane": (
+            diagnostics.get("requested_execution_lane"),
+            expected_execution_lane,
+        ),
+        "diagnostics.resolved_execution_lane": (
+            diagnostics.get("resolved_execution_lane"),
+            expected_execution_lane,
+        ),
+        "diagnostics.validation_fallback_used": (
+            diagnostics.get("validation_fallback_used"),
+            False,
+        ),
         "diagnostics.assembled_mfem_operator_solver": (
             diagnostics.get("assembled_mfem_operator_solver"),
             False,
@@ -1105,7 +1286,15 @@ def main() -> int:
         ),
         "manifest.resolved_execution.engine": (
             manifest.get("resolved_execution", {}).get("engine"),
-            "native_fem_mfem_frequency_domain_cpu",
+            expected_engine,
+        ),
+        "manifest.resolved_execution.requested_execution_lane": (
+            manifest.get("resolved_execution", {}).get("requested_execution_lane"),
+            expected_execution_lane,
+        ),
+        "manifest.resolved_execution.resolved_execution_lane": (
+            manifest.get("resolved_execution", {}).get("resolved_execution_lane"),
+            expected_execution_lane,
         ),
         "manifest.resolved_execution.native_backend": (
             manifest.get("resolved_execution", {}).get("native_backend"),
@@ -1178,6 +1367,18 @@ def main() -> int:
         "manifest.diagnostics.completed_frequency_point_count": (
             manifest_completed_frequency_point_count(manifest),
             expected_completed_frequency_points,
+        ),
+        "manifest.diagnostics.requested_execution_lane": (
+            manifest.get("diagnostics", {}).get("requested_execution_lane"),
+            expected_execution_lane,
+        ),
+        "manifest.diagnostics.resolved_execution_lane": (
+            manifest.get("diagnostics", {}).get("resolved_execution_lane"),
+            expected_execution_lane,
+        ),
+        "manifest.diagnostics.validation_fallback_used": (
+            manifest.get("diagnostics", {}).get("validation_fallback_used"),
+            False,
         ),
         "manifest.diagnostics.written_frequency_point_artifacts": (
             manifest.get("diagnostics", {}).get("written_frequency_point_artifacts"),
@@ -1644,6 +1845,15 @@ def main() -> int:
                     f"tangent payload {tangent_payload_path} size: got {actual_tangent_size}, "
                     f"expected {expected_tangent_size}"
                 )
+
+    if parity_reference is not None:
+        require_cpu_gpu_parity_reference(
+            root,
+            parity_reference,
+            target_manifest=manifest,
+            target_diagnostics=diagnostics,
+            target_sweep=sweep,
+        )
 
     return 0
 

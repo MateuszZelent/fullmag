@@ -74,11 +74,12 @@ describe("topologicalChargeModel", () => {
         { label: "Nearest integer", value: "-1" },
         { label: "Integer error", value: "0.017659" },
         { label: "Polarity", value: "negative" },
+        { label: "Plane", value: "auto" },
         {
           label: "Sampling",
           value: "fem layer faces, 1250 nodes, 2304 triangles, 1250/1250 valid",
         },
-        { label: "Support profile", value: "2 supports, Q(s) -0.982341 .. -0.981892" },
+        { label: "Support profile", value: "2 supports, Q(s)=-0.982341..-0.981892" },
         { label: "Method", value: "berg_luescher_fem_layers" },
         { label: "Field revision", value: "42" },
         { label: "Mesh revision", value: "17" },
@@ -104,6 +105,7 @@ describe("topologicalChargeModel", () => {
         { label: "Nearest integer", value: "unavailable" },
         { label: "Integer error", value: "unavailable" },
         { label: "Polarity", value: "unavailable" },
+        { label: "Plane", value: "unavailable" },
         { label: "Sampling", value: "unavailable" },
         { label: "Support profile", value: "unavailable" },
         { label: "Method", value: "unavailable" },
@@ -141,9 +143,11 @@ describe("topologicalChargeModel", () => {
     expect(model.method.continuumEquationLatex).toContain(
       "\\hat{\\mathbf m}\\cdot",
     );
+    expect(model.method.continuumEquationLatex).toContain("Q_\\Sigma");
     expect(model.method.discreteEquationLatex).toContain(
       "\\operatorname{atan2}",
     );
+    expect(model.method.discreteEquationLatex).toContain("Q_h(s_i)");
     expect(model.method.sampleQuality).toBe(
       "1250/1250 valid samples (100.00%)",
     );

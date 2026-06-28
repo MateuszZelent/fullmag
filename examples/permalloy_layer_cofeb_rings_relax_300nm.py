@@ -18,10 +18,10 @@ import fullmag as fm
 
 
 NM = 1e-9
-MINIMIZE_MAX_STEPS = int(os.environ.get("FULLMAG_COFEB_RINGS_MINIMIZE_MAX_STEPS", "4000"))
-RELAX_MAX_STEPS = int(os.environ.get("FULLMAG_COFEB_RINGS_RELAX_MAX_STEPS", "7500"))
+MINIMIZE_MAX_STEPS = int(os.environ.get("FULLMAG_COFEB_RINGS_MINIMIZE_MAX_STEPS", "6000"))
+RELAX_MAX_STEPS = int(os.environ.get("FULLMAG_COFEB_RINGS_RELAX_MAX_STEPS", "10000"))
 
-LAYER_SIZE = (2000 * NM, 600 * NM, 16 * NM)
+LAYER_SIZE = (2000 * NM, 600 * NM, 1.6 * NM)
 RING_OUTER_RADIUS = 150 * NM
 RING_INNER_RADIUS = 50 * NM
 RING_WIDTH = RING_OUTER_RADIUS - RING_INNER_RADIUS
@@ -74,7 +74,7 @@ layer.Aex = 15e-12
 layer.alpha = 0.001
 layer.Ku1 = 1e5
 layer.anisU = (0,0,1)
-layer.m = fm.texture.uniform(1.0, 0.0, 0.0)
+layer.m = fm.texture.uniform(-1.0, 0.0, 0.0)
 layer.mesh(maximum_element_size=8 * NM, minimum_element_size=2 * NM, order=1)
 
 top_ring = study.geometry(

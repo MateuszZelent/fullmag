@@ -51,6 +51,9 @@ struct DrivenFrequencyResponsePeriodicAirboxCoupledBlockProblem {
     std::uint64_t delta_phi_dof_count = 0;
     const double *stiffness_matrix_row_major = nullptr;
     const double *mass_matrix_row_major = nullptr;
+    ProductionCpuFrequencyDomainApply apply_stiffness = nullptr;
+    ProductionCpuFrequencyDomainApply apply_mass = nullptr;
+    void *operator_user_data = nullptr;
     const double *drive_real = nullptr;
     const double *drive_imag = nullptr;
 };
@@ -82,6 +85,8 @@ struct DrivenFrequencyResponseSolveRequest {
     std::uint64_t magnetostatic_periodic_constraint_set_count = 0;
     std::uint64_t periodic_airbox_delta_m_tangent_dof_count = 0;
     std::uint64_t periodic_airbox_delta_phi_dof_count = 0;
+    const std::uint64_t *periodic_airbox_magnetostatic_periodic_node_pairs = nullptr;
+    std::uint64_t periodic_airbox_magnetostatic_periodic_node_pair_count = 0;
     DrivenFrequencyResponsePeriodicAirboxCoupledBlockProblem periodic_airbox_coupled_block_problem{};
     DrivenFrequencyResponseTinyValidationProblem tiny_validation_problem{};
     DrivenFrequencyResponseMfemValidationProblem mfem_validation_problem{};
