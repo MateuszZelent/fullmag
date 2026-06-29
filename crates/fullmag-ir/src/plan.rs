@@ -765,6 +765,8 @@ pub struct FemFrequencyResponsePlanIR {
     #[serde(default)]
     pub domain_mesh_mode: FemDomainMeshModeIR,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain_mesh_workflow_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub domain_frame: Option<DomainFrameIR>,
     pub fe_order: u32,
     pub hmax: f64,
@@ -799,6 +801,8 @@ pub struct FemFrequencyResponsePlanIR {
     pub exchange_bc: ExchangeBoundaryCondition,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub demag_realization: Option<ResolvedFemDemagIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demag_solver_policy: Option<FemLinearSolverPolicy>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub periodic_constraint_sets: Vec<PeriodicConstraintSetIR>,
 }

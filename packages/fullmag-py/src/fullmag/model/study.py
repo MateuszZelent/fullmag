@@ -41,7 +41,7 @@ SUPPORTED_EQUILIBRIUM_SOURCES = {"provided", "relax", "artifact"}
 SUPPORTED_EIGEN_NORMALIZATIONS = {"unit_l2", "unit_max_amplitude"}
 SUPPORTED_EIGEN_DAMPING_POLICIES = {"ignore", "include"}
 SUPPORTED_SPIN_WAVE_BCS = {"free", "pinned", "periodic", "floquet", "surface_anisotropy"}
-SUPPORTED_MAGNETOSTATIC_BCS = {"open", "periodic_airbox_k0"}
+SUPPORTED_MAGNETOSTATIC_BCS = {"open", "periodic_airbox_k0", "floquet_airbox"}
 SUPPORTED_FIELD_SEGMENT_ENDPOINT_POLICIES = {"include_stop", "skip_start", "include_both"}
 SUPPORTED_SETTLE_NON_CONVERGENCE_POLICIES = {
     "continue_with_warning",

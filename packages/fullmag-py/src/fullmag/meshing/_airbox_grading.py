@@ -276,6 +276,7 @@ def _add_airbox_grading_field(
     airbox_center: Sequence[float] | None = None,
     object_radius: float | None = None,
     airbox_radius: float | None = None,
+    air_volume_tags: Sequence[int] | None = None,
 ) -> int | None:
     """Add a background size field grading from body interface to airbox target."""
     surfaces = [int(tag) for tag in surface_tags]
@@ -335,7 +336,11 @@ def _add_airbox_grading_field(
     )
 
     if envelope_field is None:
-        return local_field
+        return _restrict_field_to_volumes(
+            gmsh,
+            local_field,
+            volume_tags=air_volume_tags,
+        )
 
     combined = gmsh.model.mesh.field.add("Max")
     gmsh.model.mesh.field.setNumbers(
@@ -343,4 +348,24 @@ def _add_airbox_grading_field(
         "FieldsList",
         [local_field, envelope_field],
     )
-    return combined
+    return _restrict_field_to_volumes(
+        gmsh,
+        combined,
+        volume_tags=air_volume_tags,
+    )
+
+
+def _restrict_field_to_volumes(
+    gmsh: Any,
+    field_id: int,
+    *,
+    volume_tags: Sequence[int] | None,
+) -> int:
+    volumes = sorted({int(tag) for tag in volume_tags or []})
+    if not volumes:
+        return int(field_id)
+
+    restricted = gmsh.model.mesh.field.add("Restrict")
+    gmsh.model.mesh.field.setNumber(restricted, "InField", int(field_id))
+    gmsh.model.mesh.field.setNumbers(restricted, "VolumesList", volumes)
+    return int(restricted)

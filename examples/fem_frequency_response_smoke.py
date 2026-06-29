@@ -9,44 +9,144 @@ spin-wave boundary conditions, a centered 50 nm diameter hole, and a 10 mT
 in-plane bias along +x. The response is sampled over a compact GHz sweep around
 the expected low-field Py FMR band.
 
-The frequency-response stage intentionally keeps demag disabled until the
-dynamic periodic-airbox coupled block is implemented. The runtime smoke is
-therefore authored as a magnetic-domain mesh, not a shared-domain airbox mesh:
-200 x 200 nm lateral cell, periodic x/y pairs, four through-thickness layers,
-and explicit sub-exchange-length refinement around the hole edge.
+The frequency-response stage requests the CPU ``periodic_airbox_k0`` dynamic
+demag path. The lateral magnetic and airbox cuts are zero-phase periodic x/y
+boundaries for one cell of the infinite antidot lattice; only the top/bottom
+airbox faces approximate open space through the Poisson-Robin realization.
 """
+
+import os
 
 import fullmag as fm
 
 NM = 1e-9
 
+
+def env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    return default if raw is None or raw.strip() == "" else int(raw)
+
+
+def env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    return default if raw is None or raw.strip() == "" else float(raw)
+
+
+def env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def env_str(name: str, default: str) -> str:
+    raw = os.environ.get(name)
+    return default if raw is None or raw.strip() == "" else raw.strip()
+
+
+FAST_RUNTIME_MESH = env_bool("FULLMAG_FMR_FAST_RUNTIME_MESH")
+FMR_DEVICE = env_str("FULLMAG_FMR_DEVICE", "cpu")
+FMR_EQUILIBRIUM_SOURCE = env_str("FULLMAG_FMR_EQUILIBRIUM_SOURCE", "relax")
+if FMR_EQUILIBRIUM_SOURCE not in {"relax", "provided"}:
+    raise ValueError("FULLMAG_FMR_EQUILIBRIUM_SOURCE must be 'relax' or 'provided'")
+FROZEN_MAGNETIC_SUBMESH_SOURCE = env_str("FULLMAG_FMR_FROZEN_MAGNETIC_SUBMESH_SOURCE", "")
+FROZEN_MAGNETIC_AIR_MESH_SOURCE = env_str("FULLMAG_FMR_FROZEN_MAGNETIC_AIR_MESH_SOURCE", "")
+
 FILM_SIZE = (200 * NM, 200 * NM, 10 * NM)
+AIRBOX_THICKNESS = env_float("FULLMAG_FMR_AIRBOX_THICKNESS_NM", 90.0) * NM
+if AIRBOX_THICKNESS <= FILM_SIZE[2]:
+    raise ValueError("FULLMAG_FMR_AIRBOX_THICKNESS_NM must exceed the 10 nm film thickness")
+AIRBOX_SIZE = (FILM_SIZE[0], FILM_SIZE[1], AIRBOX_THICKNESS)
+AIRBOX_MAX_ELEMENT_SIZE = env_float(
+    "FULLMAG_FMR_AIRBOX_MAX_ELEMENT_SIZE_NM",
+    120.0 if FAST_RUNTIME_MESH else 60.0,
+) * NM
+AIRBOX_MIN_ELEMENT_SIZE = env_float(
+    "FULLMAG_FMR_AIRBOX_MIN_ELEMENT_SIZE_NM",
+    16.0 if FAST_RUNTIME_MESH else 8.0,
+) * NM
+AIRBOX_GROWTH_RATE = 1.5
 MESH_ALGORITHM_2D = 6
-MESH_ALGORITHM_3D = 1
-MESH_SMOOTHING_STEPS = 4
-MESH_OPTIMIZE_ITERATIONS = 3
-MESH_SIZE_FROM_CURVATURE = 24
-MESH_NARROW_REGIONS = 3
+MESH_ALGORITHM_3D = env_int("FULLMAG_FMR_MESH_ALGORITHM_3D", 1)
+MESH_SMOOTHING_STEPS = env_int("FULLMAG_FMR_MESH_SMOOTHING_STEPS", 1 if FAST_RUNTIME_MESH else 4)
+MESH_OPTIMIZE_ITERATIONS = env_int("FULLMAG_FMR_MESH_OPTIMIZE_ITERATIONS", 1 if FAST_RUNTIME_MESH else 3)
+MESH_SIZE_FROM_CURVATURE = env_int("FULLMAG_FMR_MESH_SIZE_FROM_CURVATURE", 8 if FAST_RUNTIME_MESH else 24)
+MESH_NARROW_REGIONS = env_int("FULLMAG_FMR_MESH_NARROW_REGIONS", 1 if FAST_RUNTIME_MESH else 3)
 
 HOLE_RADIUS = 25 * NM
 HOLE_EDGE_REFINEMENT_RADIUS = HOLE_RADIUS + 5 * NM
 HOLE_TRANSITION_REFINEMENT_RADIUS = HOLE_RADIUS + 18 * NM
 
-FILM_THROUGH_THICKNESS_LAYERS = 4
-FILM_MIN_ELEMENT_SIZE = 2.5 * NM
-FILM_MAX_ELEMENT_SIZE = 5 * NM
-FILM_INTERFACE_MAX_ELEMENT_SIZE = 3.5 * NM
-FILM_EDGE_MAX_ELEMENT_SIZE = 2.8 * NM
-HOLE_TRANSITION_MAX_ELEMENT_SIZE = 4 * NM
-HOLE_EDGE_MIN_ELEMENT_SIZE = 2 * NM
-HOLE_EDGE_MAX_ELEMENT_SIZE = 2.5 * NM
+FILM_THROUGH_THICKNESS_LAYERS = env_int(
+    "FULLMAG_FMR_FILM_THROUGH_THICKNESS_LAYERS",
+    1 if FAST_RUNTIME_MESH else 2,
+)
+FILM_MIN_ELEMENT_SIZE = env_float(
+    "FULLMAG_FMR_FILM_MIN_ELEMENT_SIZE_NM",
+    8.0 if FAST_RUNTIME_MESH else 3.0,
+) * NM
+FILM_MAX_ELEMENT_SIZE = env_float(
+    "FULLMAG_FMR_FILM_MAX_ELEMENT_SIZE_NM",
+    20.0 if FAST_RUNTIME_MESH else 8.0,
+) * NM
+FILM_INTERFACE_MAX_ELEMENT_SIZE = env_float(
+    "FULLMAG_FMR_FILM_INTERFACE_MAX_ELEMENT_SIZE_NM",
+    14.0 if FAST_RUNTIME_MESH else 5.0,
+) * NM
+FILM_EDGE_MAX_ELEMENT_SIZE = env_float(
+    "FULLMAG_FMR_FILM_EDGE_MAX_ELEMENT_SIZE_NM",
+    12.0 if FAST_RUNTIME_MESH else 4.0,
+) * NM
+HOLE_TRANSITION_MAX_ELEMENT_SIZE = env_float(
+    "FULLMAG_FMR_HOLE_TRANSITION_MAX_ELEMENT_SIZE_NM",
+    14.0 if FAST_RUNTIME_MESH else 6.0,
+) * NM
+HOLE_EDGE_MIN_ELEMENT_SIZE = env_float(
+    "FULLMAG_FMR_HOLE_EDGE_MIN_ELEMENT_SIZE_NM",
+    8.0 if FAST_RUNTIME_MESH else 3.0,
+) * NM
+HOLE_EDGE_MAX_ELEMENT_SIZE = env_float(
+    "FULLMAG_FMR_HOLE_EDGE_MAX_ELEMENT_SIZE_NM",
+    12.0 if FAST_RUNTIME_MESH else 4.0,
+) * NM
 
 APPLIED_B_T = (10e-3, 0.0, 0.0)
-PROBE_FREQUENCIES_HZ = [
-    freq_ghz * 1e9
-    for freq_ghz in (1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0)
-]
-PERIODIC_BC = fm.PeriodicBC(["x_faces", "y_faces"]).to_ir()
+DEFAULT_PROBE_FREQUENCIES_GHZ = (1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0)
+PERIODIC_PAIR_IDS = ["x_faces", "y_faces"]
+PERIODIC_BC = fm.PeriodicBC(PERIODIC_PAIR_IDS)
+
+
+def probe_frequencies_hz() -> list[float]:
+    raw = os.environ.get("FULLMAG_FMR_FREQUENCIES_GHZ")
+    if raw is None or raw.strip() == "":
+        values_ghz = DEFAULT_PROBE_FREQUENCIES_GHZ
+    else:
+        values_ghz = tuple(
+            float(token.strip())
+            for token in raw.replace(";", ",").split(",")
+            if token.strip()
+        )
+        if not values_ghz:
+            raise ValueError("FULLMAG_FMR_FREQUENCIES_GHZ must contain at least one value")
+    return [freq_ghz * 1e9 for freq_ghz in values_ghz]
+
+
+RELAX_MAX_STEPS = env_int("FULLMAG_FMR_RELAX_MAX_STEPS", 200)
+RELAX_TOL = env_float("FULLMAG_FMR_RELAX_TOL", 3e-3)
+DEMAG_SOLVER_RTOL = env_float("FULLMAG_FMR_DEMAG_RTOL", 1e-4)
+DEMAG_SOLVER_MAX_ITERATIONS = env_int("FULLMAG_FMR_DEMAG_MAX_ITERATIONS", 500)
+RESPONSE_SOLVER_RTOL = env_float("FULLMAG_FMR_RESPONSE_RTOL", 1e-3)
+RESPONSE_SOLVER_MAX_ITERATIONS = env_int("FULLMAG_FMR_RESPONSE_MAX_ITERATIONS", 2048)
+RESPONSE_SOLVER_RESTART_ITERATIONS = env_int("FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS", 2048)
+PROBE_FREQUENCIES_HZ = probe_frequencies_hz()
+
+os.environ["FULLMAG_FEM_FREQUENCY_RESPONSE_RTOL"] = str(RESPONSE_SOLVER_RTOL)
+os.environ["FULLMAG_FEM_FREQUENCY_RESPONSE_MAX_ITERATIONS"] = str(
+    RESPONSE_SOLVER_MAX_ITERATIONS
+)
+os.environ["FULLMAG_FEM_FREQUENCY_RESPONSE_RESTART_ITERATIONS"] = str(
+    RESPONSE_SOLVER_RESTART_ITERATIONS
+)
 
 
 def apply_periodic_airbox_mesh_policy(body) -> None:
@@ -93,9 +193,21 @@ def apply_periodic_airbox_mesh_policy(body) -> None:
 
 study = fm.study("fem_frequency_response_smoke")
 study.engine("fem")
-study.device("cpu", precision="double")
+study.device(FMR_DEVICE, precision="double")
+study.universe(
+    mode="manual",
+    size=AIRBOX_SIZE,
+    center=(0.0, 0.0, 0.0),
+    padding=(0.0, 0.0, 0.0),
+)
+study.universe.mesh(
+    minimum_element_size=AIRBOX_MIN_ELEMENT_SIZE,
+    maximum_element_size=AIRBOX_MAX_ELEMENT_SIZE,
+    growth_rate=AIRBOX_GROWTH_RATE,
+    grading="linear",
+)
 study.objects.mesh.defaults(
-    periodic_pair_ids=PERIODIC_BC["pair_ids"],
+    periodic_pair_ids=PERIODIC_PAIR_IDS,
     algorithm_2d=MESH_ALGORITHM_2D,
     algorithm_3d=MESH_ALGORITHM_3D,
     smoothing_steps=MESH_SMOOTHING_STEPS,
@@ -116,23 +228,39 @@ body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 apply_periodic_airbox_mesh_policy(body)
 
 study.b_ext(*APPLIED_B_T)
-study.demag(enabled=False)
+study.exchange()
+study.demag(realization="poisson_robin")
+study.fem_demag_solver(
+    solver="CG",
+    preconditioner="AMG",
+    rtol=DEMAG_SOLVER_RTOL,
+    max_iterations=DEMAG_SOLVER_MAX_ITERATIONS,
+)
+if FROZEN_MAGNETIC_SUBMESH_SOURCE:
+    study.frozen_magnetic_submesh(
+        source=FROZEN_MAGNETIC_SUBMESH_SOURCE,
+        region_markers={"periodic_film": 1},
+        air_mesh_source=FROZEN_MAGNETIC_AIR_MESH_SOURCE or None,
+    )
+study.build_domain_mesh()
 study.solver(dt=1e-13, g=2.115)
 study.tableautosave(1e-12, quantities=["time", "step", "mx", "my", "mz", "E_total"])
 
 study.save("m", every=10e-12)
 study.save_response("susceptibility_tensor")
 
-study.stages.add_relax(
-    algorithm="projected_gradient_bb",
-    max_steps=2000,
-    tol=1e-5,
-)
+if FMR_EQUILIBRIUM_SOURCE == "relax":
+    study.stages.add_relax(
+        algorithm="projected_gradient_bb",
+        max_steps=RELAX_MAX_STEPS,
+        tol=RELAX_TOL,
+    )
 study.stages.add_frequency_response(
     frequencies_hz=PROBE_FREQUENCIES_HZ,
     excitation_field_au_per_m=(0.0, 0.0, 1.0),
-    include_demag=False,
-    equilibrium_source="relax",
+    include_demag=True,
+    equilibrium_source=FMR_EQUILIBRIUM_SOURCE,
     damping_policy="include",
     bc=PERIODIC_BC,
+    magnetostatic_bc="periodic_airbox_k0",
 )

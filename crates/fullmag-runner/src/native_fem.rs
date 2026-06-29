@@ -1987,6 +1987,31 @@ impl NativeFemBackend {
         Ok(())
     }
 
+    #[allow(dead_code)]
+    pub fn apply_demag_tangent(&mut self, delta_m: &[[f64; 3]]) -> Result<Vec<[f64; 3]>, RunError> {
+        let delta_m_flat = delta_m
+            .iter()
+            .flat_map(|value| value.iter().copied())
+            .collect::<Vec<_>>();
+        let mut out_delta_h_demag = vec![0.0f64; delta_m_flat.len()];
+        let rc = unsafe {
+            ffi::fullmag_fem_backend_apply_demag_tangent_f64(
+                self.handle,
+                delta_m_flat.as_ptr(),
+                delta_m_flat.len() as u64,
+                out_delta_h_demag.as_mut_ptr(),
+                out_delta_h_demag.len() as u64,
+            )
+        };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM GPU apply demag tangent failed"));
+        }
+        Ok(out_delta_h_demag
+            .chunks_exact(3)
+            .map(|chunk| [chunk[0], chunk[1], chunk[2]])
+            .collect())
+    }
+
     pub fn snapshot_step_stats(&mut self, _node_count: usize) -> Result<StepStats, RunError> {
         let mut stats = ffi::fullmag_fem_step_stats {
             step: 0,
@@ -5802,6 +5827,34 @@ mod tests {
         assert!(
             source.contains("ffi::fullmag_fem_backend_average_m_for_nodes_f64("),
             "Rust wrapper must call the native per-object average_m ABI"
+        );
+    }
+
+    #[test]
+    fn native_fem_backend_exposes_demag_tangent_provider_bridge() {
+        let source = include_str!("native_fem.rs");
+        let header = include_str!("../../../native/include/fullmag_fem.h");
+        let api = include_str!("../../../backends/fem/src/api.cpp");
+
+        assert!(
+            header.contains("fullmag_fem_backend_apply_demag_tangent_f64"),
+            "native FEM C ABI must expose backend demag tangent application"
+        );
+        assert!(
+            api.contains("int fullmag_fem_backend_apply_demag_tangent_f64(")
+                && api.contains("compute_fresh_demag_field_for_magnetization(")
+                && api.contains("perturbed_demag[index] - baseline_demag[index]"),
+            "native FEM C ABI implementation must apply the fresh demag tangent operator"
+        );
+        let backend_state_io = source_block(
+            source,
+            "pub fn upload_magnetization(",
+            "\n    pub fn snapshot_step_stats(",
+        );
+        assert!(
+            backend_state_io.contains("pub fn apply_demag_tangent(")
+                && backend_state_io.contains("ffi::fullmag_fem_backend_apply_demag_tangent_f64("),
+            "Rust native FEM backend wrapper must expose the demag tangent provider bridge"
         );
     }
 

@@ -19,7 +19,7 @@ study = fm.study("nanoflower_fem")
 study.engine("fem")
 study.device("cpu", precision="double")
 study.universe(mode="auto", size=(0.8e-06, 0.8e-06, 3e-07), center=(0, 0, 0), padding=(0, 0, 0))
-study.universe.mesh(maximum_element_size=0.9e-07)
+study.universe.mesh(minimum_element_size=20e-09, maximum_element_size=0.9e-07)
 study.interactive(True)
 
 # Geometry & Material — 2×2 kwadratowa siatka nanoflowerów

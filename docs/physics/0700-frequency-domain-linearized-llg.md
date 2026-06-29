@@ -179,10 +179,22 @@ static-periodic, no-demag magnetic slice. It supports exchange, Zeeman, uniform
 uniaxial anisotropy, and uniform or nodal Gilbert damping through a CUDA
 tangent operator. Static-periodic response requires complete
 `mesh.periodic_node_pairs` and boundary-pair translation/tolerance metadata and
-publishes static-periodic diagnostics. Nonzero-k Floquet/Bloch response,
-dynamic demag, DMI, and magnetoelastic coupling must fail with explicit
-capability diagnostics on the GPU lane; they must not be rerouted through dense
-validation or CPU response.
+publishes static-periodic diagnostics. A development GPU slice also accepts
+nonzero-k Floquet metadata only for a no-demag projected response with local
+terms and a supplied exchange-edge tangent operator; DMI, dynamic demag,
+magnetostatic periodic constraints, and full periodic exchange-graph assembly
+remain outside this slice. The high-level planner may reach this slice only for
+explicit GPU, magnetic-body, no-demag/no-DMI requests with complete periodic
+pair metadata. The runner treats `FrequencyExcitationIR.field_au_per_m` as the
+reference-cell drive amplitude and applies `phase_rad=-k dot translation` to
+paired tangent-drive DOFs before the native solve. The implementation projects
+the complex real/imaginary response block onto the supplied Floquet pair phase
+relations and reports `floquet_phase_projection=true`. This is not a full
+Bloch-reduced production operator. Nonzero-k Floquet/Bloch response with
+dynamic demag, DMI, periodic Poisson, full mesh-periodic exchange reduction, or
+magnetoelastic
+coupling must fail with explicit capability diagnostics on the GPU lane; it
+must not be rerouted through dense validation or CPU response.
 
 ## Demagnetization policy
 
@@ -190,6 +202,22 @@ Static demagnetization at `k = 0` can be included by the current FEM reference
 operator. Nonzero-k dynamic demagnetization for Floquet FEM is not implemented.
 Requests with nonzero-k Floquet and demag enabled must fail with a capability
 error until a mathematically valid dynamic demag-k operator exists.
+
+The public `magnetostatic_bc` value for the future nonzero-k FEM path is
+`floquet_airbox`. It is distinct from `periodic_airbox_k0`:
+
+- `periodic_airbox_k0` means zero-phase periodic magnetization and zero-phase
+  scalar-potential constraints for the shared-domain airbox;
+- `floquet_airbox` means Bloch/Floquet phase constraints for the dynamic
+  magnetic perturbation `delta_m` and the dynamic magnetostatic scalar
+  potential `delta_phi` on the selected in-plane periodic cuts.
+
+`floquet_airbox` is therefore a physics model request, not a backend hint. Until
+the coupled demag-k operator is implemented and validated, a request with
+`magnetostatic_bc="floquet_airbox"` must preserve the requested intent in IR and
+provenance, then fail explicitly with a capability error. It must not be
+rewritten to `periodic_airbox_k0`, `open`, dense validation fallback, or a CPU
+Poisson solve.
 
 FDM time-domain periodicity is axis-wise. CPU reference and CUDA FDM support
 periodic exchange wrapping, and truncated-image periodic demagnetization where
@@ -206,5 +234,7 @@ The minimal validation set for this contract is:
 - `Floquet(k=0) == Periodic`,
 - exchange-only reciprocal dispersion `f(k) = f(-k)` when DMI and other
   nonreciprocal terms are disabled,
-- explicit capability error for nonzero-k Floquet demag,
+- explicit capability error for nonzero-k Floquet demag that distinguishes
+  "missing `magnetostatic_bc=floquet_airbox`" from "`floquet_airbox` requested
+  but demag-k operator not implemented",
 - V2 artifacts containing `path_s`, `k`, `branch_id`, and residual diagnostics.

@@ -20,7 +20,10 @@ use crate::mesh::{
 };
 use crate::oersted::{resolve_fem_oersted_term, ResolvedOerstedTerm};
 use crate::spin_torque::{resolve_legacy_spin_torque, SpinTorqueExecutableLane};
-use crate::util::{problem_domain_frame, runtime_requests_cuda, shared_domain_mesh_requested, MU0};
+use crate::util::{
+    mesh_workflow_metadata, problem_domain_frame, runtime_requests_cuda,
+    shared_domain_mesh_requested, MU0,
+};
 use crate::validate::{
     planned_study_controls, validate_eigen_outputs, validate_executable_outputs,
     validate_frequency_response_outputs,
@@ -31,6 +34,15 @@ const CUBIC_AXIS_ORTHOGONALITY_DOT_TOL: f64 = 1e-3;
 const CUBIC_AXIS_ORTHOGONALITY_CROSS_MIN_NORM: f64 = 1e-6;
 const CUBIC_AXIS_VALIDATION_ERROR: &str =
     "cubic anisotropy axes must be finite, normalized and mutually orthogonal";
+
+fn domain_mesh_workflow_mode(problem: &ProblemIR) -> Option<String> {
+    mesh_workflow_metadata(problem)
+        .and_then(|workflow| workflow.get("domain_mesh_mode"))
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
 
 fn requested_fem_demag_realization(problem: &ProblemIR) -> fullmag_ir::RequestedFemDemagIR {
     problem
@@ -2684,6 +2696,40 @@ pub(crate) fn plan_fem_frequency_response(
             "FEM frequency response",
         ));
     }
+    let has_nonzero_k = !k_sampling
+        .as_ref()
+        .is_none_or(fullmag_ir::KSamplingIR::is_single_gamma);
+    let has_floquet_dynamic_demag = operator.include_demag
+        && spin_wave_bc.kind() == fullmag_ir::SpinWaveBoundaryKindIR::Floquet
+        && has_nonzero_k;
+    if *magnetostatic_bc == fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox {
+        if !operator.include_demag {
+            errors.push(
+                "magnetostatic_bc=floquet_airbox requires include_demag=true and a Demag energy term"
+                    .to_string(),
+            );
+        }
+        if spin_wave_bc.kind() != fullmag_ir::SpinWaveBoundaryKindIR::Floquet {
+            errors.push(
+                "magnetostatic_bc=floquet_airbox requires spin_wave_bc=floquet for the dynamic magnetization"
+                    .to_string(),
+            );
+        }
+        if !has_nonzero_k {
+            errors.push("magnetostatic_bc=floquet_airbox requires nonzero k".to_string());
+        }
+        if has_floquet_dynamic_demag && requested_device != fullmag_ir::ExecutionDevice::Gpu {
+            errors.push(
+                "magnetostatic_bc=floquet_airbox demag-k operator is not implemented for FEM frequency response; keep demag disabled for the narrow GPU Floquet slice until the coupled delta_m/delta_phi Bloch airbox operator is validated"
+                    .to_string(),
+            );
+        }
+    } else if has_floquet_dynamic_demag {
+        errors.push(
+            "Floquet/Bloch dynamic demag for FEM frequency response requires magnetostatic_bc=floquet_airbox and a validated demag-k operator"
+                .to_string(),
+        );
+    }
     if *magnetostatic_bc == fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0 {
         if spin_wave_bc.kind() != fullmag_ir::SpinWaveBoundaryKindIR::Periodic {
             errors.push(
@@ -2691,16 +2737,41 @@ pub(crate) fn plan_fem_frequency_response(
                     .to_string(),
             );
         }
-        if !k_sampling
-            .as_ref()
-            .is_none_or(fullmag_ir::KSamplingIR::is_single_gamma)
-        {
+        if has_nonzero_k {
             errors.push("magnetostatic_bc=periodic_airbox_k0 requires k=0".to_string());
         }
     }
     if !errors.is_empty() {
         return Err(PlanError { reasons: errors });
     }
+
+    let use_floquet_airbox_gpu_unavailable_boundary = *magnetostatic_bc
+        == fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox
+        && has_floquet_dynamic_demag
+        && requested_device == fullmag_ir::ExecutionDevice::Gpu;
+    let eigen_proxy_k_sampling = if use_floquet_airbox_gpu_unavailable_boundary {
+        Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [0.0, 0.0, 0.0],
+        })
+    } else {
+        k_sampling.clone()
+    };
+    let eigen_proxy_spin_wave_bc = if use_floquet_airbox_gpu_unavailable_boundary {
+        fullmag_ir::SpinWaveBoundaryConditionIR::Config(fullmag_ir::SpinWaveBoundaryConfigIR {
+            kind: fullmag_ir::SpinWaveBoundaryKindIR::Periodic,
+            boundary_pair_id: None,
+            pair_ids: spin_wave_bc
+                .boundary_pair_ids()
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            phase_convention: fullmag_ir::PhaseConventionIR::default(),
+            surface_anisotropy_ks: None,
+            surface_anisotropy_axis: None,
+        })
+    } else {
+        spin_wave_bc.clone()
+    };
 
     let mut eigen_proxy = problem.clone();
     eigen_proxy.study = fullmag_ir::StudyIR::Eigenmodes {
@@ -2709,10 +2780,10 @@ pub(crate) fn plan_fem_frequency_response(
         count: 1,
         target: fullmag_ir::EigenTargetIR::Lowest,
         equilibrium: equilibrium.clone(),
-        k_sampling: k_sampling.clone(),
+        k_sampling: eigen_proxy_k_sampling,
         normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
         damping_policy: *damping_policy,
-        spin_wave_bc: spin_wave_bc.clone(),
+        spin_wave_bc: eigen_proxy_spin_wave_bc,
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
@@ -2736,6 +2807,7 @@ pub(crate) fn plan_fem_frequency_response(
         object_segments: eigen.object_segments,
         mesh_parts: eigen.mesh_parts,
         domain_mesh_mode: eigen.domain_mesh_mode,
+        domain_mesh_workflow_mode: domain_mesh_workflow_mode(problem),
         domain_frame: eigen.domain_frame,
         fe_order: eigen.fe_order,
         hmax: eigen.hmax,
@@ -2761,6 +2833,12 @@ pub(crate) fn plan_fem_frequency_response(
         requested_device,
         exchange_bc: eigen.exchange_bc,
         demag_realization: eigen.demag_realization,
+        demag_solver_policy: problem
+            .backend_policy
+            .discretization_hints
+            .as_ref()
+            .and_then(|hints| hints.fem.as_ref())
+            .and_then(|fem| fem.demag_solver_policy.clone()),
         periodic_constraint_sets: Vec::new(),
     };
     response_plan.periodic_constraint_sets =
@@ -2808,6 +2886,58 @@ pub(crate) fn plan_fem_frequency_response(
 fn fem_frequency_response_production_slice_rejection_reason(
     plan: &FemFrequencyResponsePlanIR,
 ) -> Option<&'static str> {
+    if plan.magnetostatic_bc == fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox {
+        if plan.requested_device != fullmag_ir::ExecutionDevice::Gpu {
+            return Some(
+                "magnetostatic_bc=floquet_airbox demag-k is currently allowed only for explicit production GPU requests that publish native unavailable artifacts",
+            );
+        }
+        if plan.domain_mesh_mode != fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir {
+            return Some("magnetostatic_bc=floquet_airbox requires a shared-domain airbox mesh");
+        }
+        if !plan.enable_demag || plan.demag_realization.is_none() {
+            return Some(
+                "magnetostatic_bc=floquet_airbox requires include_demag=true and a Demag energy term",
+            );
+        }
+        if plan.spin_wave_bc.kind() != fullmag_ir::SpinWaveBoundaryKindIR::Floquet {
+            return Some(
+                "magnetostatic_bc=floquet_airbox requires spin_wave_bc=floquet for the dynamic magnetization",
+            );
+        }
+        if plan
+            .k_sampling
+            .as_ref()
+            .is_none_or(fullmag_ir::KSamplingIR::is_single_gamma)
+        {
+            return Some("magnetostatic_bc=floquet_airbox requires nonzero k");
+        }
+        if !plan.periodic_constraint_sets.iter().any(|constraint| {
+            constraint.unknown_family == fullmag_ir::PeriodicUnknownFamilyIR::MagnetizationDynamic
+                && constraint.domain_scope == fullmag_ir::PeriodicDomainScopeIR::MagneticDomain
+                && matches!(
+                    constraint.phase_policy,
+                    fullmag_ir::PeriodicPhasePolicyIR::BlochPhase { .. }
+                )
+        }) {
+            return Some("magnetostatic_bc=floquet_airbox requires a delta_m Bloch constraint set");
+        }
+        if !plan.periodic_constraint_sets.iter().any(|constraint| {
+            constraint.unknown_family
+                == fullmag_ir::PeriodicUnknownFamilyIR::MagnetostaticPotentialDynamic
+                && constraint.domain_scope
+                    == fullmag_ir::PeriodicDomainScopeIR::MagnetostaticDomainWithAir
+                && matches!(
+                    constraint.phase_policy,
+                    fullmag_ir::PeriodicPhasePolicyIR::BlochPhase { .. }
+                )
+        }) {
+            return Some(
+                "magnetostatic_bc=floquet_airbox requires a delta_phi Bloch constraint set",
+            );
+        }
+        return None;
+    }
     if plan.magnetostatic_bc == fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0 {
         if plan.domain_mesh_mode != fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir {
             return Some(
@@ -2857,19 +2987,24 @@ fn fem_frequency_response_production_slice_rejection_reason(
     if plan.enable_demag || plan.demag_realization.is_some() {
         return Some("dynamic demag is not implemented for driven frequency response");
     }
-    if let Some(reason) = frequency_response_floquet_excitation_rejection_reason(plan) {
-        return Some(reason);
-    }
-    if !plan
-        .k_sampling
-        .as_ref()
-        .is_none_or(fullmag_ir::KSamplingIR::is_single_gamma)
-    {
-        return Some("nonzero-k Floquet/Bloch driven response is not implemented");
-    }
     match plan.spin_wave_bc.kind() {
-        fullmag_ir::SpinWaveBoundaryKindIR::Free => {}
+        fullmag_ir::SpinWaveBoundaryKindIR::Free => {
+            if !plan
+                .k_sampling
+                .as_ref()
+                .is_none_or(fullmag_ir::KSamplingIR::is_single_gamma)
+            {
+                return Some("nonzero-k driven response requires spin_wave_bc=floquet");
+            }
+        }
         fullmag_ir::SpinWaveBoundaryKindIR::Periodic => {
+            if !plan
+                .k_sampling
+                .as_ref()
+                .is_none_or(fullmag_ir::KSamplingIR::is_single_gamma)
+            {
+                return Some("nonzero-k driven response requires spin_wave_bc=floquet");
+            }
             if plan.mesh.periodic_node_pairs.is_empty() {
                 return Some(
                     "static periodic driven response requires mesh.periodic_node_pairs metadata",
@@ -2877,7 +3012,29 @@ fn fem_frequency_response_production_slice_rejection_reason(
             }
         }
         fullmag_ir::SpinWaveBoundaryKindIR::Floquet => {
-            return Some("nonzero-k Floquet/Bloch driven response is not implemented");
+            if plan.requested_device != fullmag_ir::ExecutionDevice::Gpu {
+                return Some(
+                    "nonzero-k Floquet/Bloch driven response currently requires production GPU execution",
+                );
+            }
+            if plan.mesh.periodic_boundary_pairs.is_empty() {
+                return Some(
+                    "nonzero-k Floquet/Bloch driven response requires mesh.periodic_boundary_pairs metadata with translations",
+                );
+            }
+            if plan.mesh.periodic_node_pairs.is_empty() {
+                return Some(
+                    "nonzero-k Floquet/Bloch driven response requires mesh.periodic_node_pairs metadata",
+                );
+            }
+            if plan.mesh.periodic_boundary_pairs.iter().any(|pair| {
+                pair.translation
+                    .is_none_or(|translation| !translation.iter().all(|value| value.is_finite()))
+            }) {
+                return Some(
+                    "nonzero-k Floquet/Bloch driven response requires finite periodic boundary pair translations",
+                );
+            }
         }
         _ => {
             return Some("the requested spin-wave boundary condition is not enforced by the driven response operator");
@@ -2909,24 +3066,6 @@ fn normalize_frequency_response_gamma_floquet_spin_wave_bc(
     }
 }
 
-fn frequency_response_floquet_excitation_rejection_reason(
-    plan: &FemFrequencyResponsePlanIR,
-) -> Option<&'static str> {
-    if plan.spin_wave_bc.kind() != fullmag_ir::SpinWaveBoundaryKindIR::Floquet {
-        return None;
-    }
-    let has_nonzero_k = plan
-        .k_sampling
-        .as_ref()
-        .is_some_and(|k_sampling| !k_sampling.is_single_gamma());
-    if has_nonzero_k {
-        return Some(
-            "nonzero-k Floquet/Bloch driven response requires a Floquet-periodic excitation; current FrequencyExcitationIR field drive is uniform/global-phase only and is not phase-compatible yet",
-        );
-    }
-    None
-}
-
 pub(crate) fn frequency_response_periodic_constraint_sets(
     plan: &FemFrequencyResponsePlanIR,
 ) -> Vec<fullmag_ir::PeriodicConstraintSetIR> {
@@ -2949,21 +3088,32 @@ pub(crate) fn frequency_response_periodic_constraint_sets(
             if let Some(k_vector_rad_per_m) =
                 frequency_response_single_k_vector_rad_per_m(plan.k_sampling.as_ref())
             {
+                let phase_loop_diagnostics =
+                    frequency_response_phase_loop_diagnostics(plan, &pair_ids, k_vector_rad_per_m);
+                let phase_policy = fullmag_ir::PeriodicPhasePolicyIR::BlochPhase {
+                    phase_convention: plan.spin_wave_bc.phase_convention(),
+                    k_vector_rad_per_m,
+                    real_imag_mixing: true,
+                };
                 constraint_sets.push(fullmag_ir::PeriodicConstraintSetIR {
                     unknown_family: fullmag_ir::PeriodicUnknownFamilyIR::MagnetizationDynamic,
                     domain_scope: fullmag_ir::PeriodicDomainScopeIR::MagneticDomain,
-                    phase_loop_diagnostics: frequency_response_phase_loop_diagnostics(
-                        plan,
-                        &pair_ids,
-                        k_vector_rad_per_m,
-                    ),
-                    pair_ids,
-                    phase_policy: fullmag_ir::PeriodicPhasePolicyIR::BlochPhase {
-                        phase_convention: plan.spin_wave_bc.phase_convention(),
-                        k_vector_rad_per_m,
-                        real_imag_mixing: true,
-                    },
+                    pair_ids: pair_ids.clone(),
+                    phase_policy: phase_policy.clone(),
+                    phase_loop_diagnostics: phase_loop_diagnostics.clone(),
                 });
+                if plan.magnetostatic_bc
+                    == fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox
+                {
+                    constraint_sets.push(fullmag_ir::PeriodicConstraintSetIR {
+                        unknown_family:
+                            fullmag_ir::PeriodicUnknownFamilyIR::MagnetostaticPotentialDynamic,
+                        domain_scope: fullmag_ir::PeriodicDomainScopeIR::MagnetostaticDomainWithAir,
+                        pair_ids,
+                        phase_policy,
+                        phase_loop_diagnostics,
+                    });
+                }
             }
         }
     }

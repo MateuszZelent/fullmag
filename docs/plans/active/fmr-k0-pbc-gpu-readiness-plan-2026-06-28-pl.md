@@ -61,8 +61,12 @@ Po Release 1 i Release 2 trzeba zamknac osobny static-periodic GPU gate:
 - capability matrix moze pokazac GPU static-periodic jako executable dopiero
   dla k=0 no-demag static-periodic magnetic slice.
 
-CPU/GPU parity dla k=0 PBC pozostaje osobnym validation gate. Dopoki go nie
-ma, status moze byc `partial_production_executable`, ale nie `validated`.
+CPU/GPU parity dla k=0 PBC pozostaje osobnym validation gate. Dla minimalnego
+`x_faces` static-periodic no-demag smoke ten gate istnieje jako
+`just verify-fem-frequency-domain-gpu-static-periodic-parity-runtime` i
+porownuje GPU artifacts z CPU reference przez verifier
+`--compare-reference`. Szerszy status `validated` dla docelowego antidot
+lattice nadal wymaga osobnej walidacji tej geometrii i nie obejmuje demag.
 
 ## Zrodla prawdy
 
@@ -2098,7 +2102,8 @@ Zmiany:
 
 Walidacja:
 
-- CPU/GPU parity dla identycznego mesh assetu i `x_faces`,
+- CPU/GPU parity dla identycznego mesh assetu i `x_faces` przez
+  `just verify-fem-frequency-domain-gpu-static-periodic-parity-runtime`,
 - primitive periodic cell vs supercell,
 - zero/finiteness seam mismatch,
 - `validation_fallback_used=false`,
@@ -2107,6 +2112,7 @@ Walidacja:
 Exit gate:
 
 ```bash
+just verify-fem-frequency-domain-gpu-static-periodic-parity-runtime
 just verify-fem-frequency-domain-gpu-static-periodic-runtime
 cargo +nightly test -p fullmag-runner --features fem-gpu --no-default-features \
   static_periodic_gpu_frequency_response_matches_cpu_reference \
@@ -2145,6 +2151,228 @@ Jesli pelny frontend suite ma pre-existing failures, closure wymaga:
 - focused tests dla zmienionych warstw,
 - osobny follow-up issue/plan dla pozostalych failures.
 
+## Aktualizacja 2026-06-28: GPU Floquet no-demag artifact gate
+
+Zamkniety etap:
+
+- `just verify-fem-frequency-domain-gpu-floquet-runtime` przechodzi przez
+  managed/container runtime dla waskiego nonzero-k GPU Floquet no-demag
+  phase-projection smoke.
+- Runtime artifacts dla tego smoke maja teraz w obu miejscach:
+  - `response/diagnostics/solver.v1.json`:
+    `floquet_phase_projection=true`,
+    `floquet_periodic_pair_count=4`,
+    `floquet_k_vector_rad_per_m=[1000000,0,0]`,
+  - `frequency_domain/manifest.v1.json.diagnostics` z tym samym pair count i
+    k-vector.
+- `scripts/verify_fem_frequency_domain_runtime_artifacts.py
+  --require-floquet-phase-projection` nie akceptuje juz Floquet projection bez
+  pair count i k-vector provenance.
+- `scripts/export_fem_gpu_runtime.sh` wymusza teraz targeted
+  `cargo clean -p fullmag-fem-sys` przed release buildem runtime bundle, zeby
+  nie kopiowac przestarzalego natywnego `libfullmag_fem.so` po zmianach C++.
+
+Swieze dowody z tego etapu:
+
+```bash
+python3 -m pytest scripts/test_export_fem_gpu_runtime_copy_helpers.py \
+  scripts/test_verify_fem_frequency_domain_runtime_artifacts.py -q
+# 102 passed
+
+just rebuild-fem-runtime
+# exit 0; runtime bundle wyeksportowany
+
+just verify-fem-frequency-domain-gpu-floquet-runtime
+# exit 0
+
+just verify-fem-frequency-domain-native-contract
+# exit 0
+
+python3 -m py_compile scripts/verify_fem_frequency_domain_runtime_artifacts.py \
+  scripts/test_verify_fem_frequency_domain_runtime_artifacts.py \
+  scripts/test_export_fem_gpu_runtime_copy_helpers.py
+cargo +nightly fmt --check
+git diff --check
+# exit 0
+```
+
+Status po tym etapie:
+
+| Obszar | Ocena | Status |
+|---|---:|---|
+| P4 nonzero-k Floquet response | 52% | Waski GPU no-demag phase-projection smoke ma artifact-backed managed proof i pelna provenance pair/k. Brak pelnego phase-aware periodic exchange graph, DMI, demag i k-path validation. |
+| GPU PBC/Floquet/dynamic demag | 35% | GPU free, GPU k=0 static-periodic no-demag oraz waski GPU nonzero-k Floquet no-demag smoke sa runtime-gated. Brak GPU periodic demag, dynamic demag Floquet i docelowego antidot lattice validation. |
+| Pelny cel produkcyjny FMR krysztalu magnonicznego | 35% | Zakonczony etap usuwa luke artefaktow i swiezosci runtime, ale nie konczy P3/P5 ani UI/browser proof. |
+
+## Aktualizacja 2026-06-28: GPU Floquet periodic exchange payload
+
+Zamkniety etap:
+
+- `crates/fullmag-runner/src/frequency_response.rs` doklada teraz wybrane
+  `mesh.periodic_node_pairs` jako exchange edges dla `Periodic` i `Floquet`
+  payloadow, z deduplikacja wzgledem lokalnych tetrahedralnych krawedzi.
+- To przesuwa waski GPU Floquet no-demag slice z samego "lokalne exchange
+  edges + phase projection" do "lokalne + periodyczne exchange edges +
+  phase projection". Nadal nie jest to pelny Bloch-reduced operator i nadal
+  nie obejmuje DMI ani dynamic demag-k.
+- `scripts/export_fem_gpu_runtime.sh` odtwarza teraz unversioned linker
+  symlinks `libfullmag_fem.so` i `libfullmag_fdm.so` w managed runtime bundle.
+  Bez tego focused Rust tests z managed `FULLMAG_FEM_LIB_DIR` nie mogly
+  linkowac `-lfullmag_fem`, mimo ze bundle zawieral `libfullmag_fem.so.0`.
+
+Swieze dowody:
+
+```bash
+python3 -m pytest scripts/test_export_fem_gpu_runtime_copy_helpers.py -q
+# 7 passed
+
+CARGO_TARGET_DIR=.fullmag/cargo-test-target cargo +nightly test \
+  -p fullmag-runner \
+  production_gpu_frequency_response_is_narrower_than_cpu_and_never_falls_back \
+  --features fem-gpu
+# 1 passed
+
+just verify-fem-frequency-domain-native-contract
+# exit 0
+
+just verify-fem-frequency-domain-gpu-floquet-runtime
+# exit 0
+```
+
+Runtime artifact check dla ostatniego GPU Floquet smoke:
+
+| Artefakt | Wartosci |
+|---|---|
+| `response/diagnostics/solver.v1.json` | `requested_execution_lane=production_gpu`, `resolved_execution_lane=production_gpu`, `floquet_phase_projection=true`, `floquet_periodic_pair_count=4`, `floquet_k_vector_rad_per_m=[1000000,0,0]`, `validation_fallback_used=false` |
+| `frequency_domain/manifest.v1.json` | `diagnostics.floquet_phase_projection=true`, `diagnostics.floquet_periodic_pair_count=4`, `capabilities.dynamic_demag_k_available=false` |
+
+Status po tym etapie:
+
+| Obszar | Ocena | Status |
+|---|---:|---|
+| P4 nonzero-k Floquet response | 54% | Waski GPU no-demag phase-projection smoke zawiera teraz periodyczne exchange edges w runner payload i ma managed runtime proof. Brak pelnego Bloch-reduced operatora, DMI, demag-k i k-path validation. |
+| GPU PBC/Floquet/dynamic demag | 36% | GPU Floquet no-demag przesunal sie o exchange graph payload i runtime/linker readiness. GPU periodic demag oraz Floquet dynamic demag nadal nie sa zaimplementowane. |
+| Pelny cel produkcyjny FMR krysztalu magnonicznego | 37% | Lepszy P4 GPU no-demag path i swiezszy managed runtime proof, ale definicja sukcesu nadal wymaga GPU-backed PBC/Floquet/dynamic demag, docelowego antidot lattice example i UI/browser proof. |
+
+## Aktualizacja 2026-06-28: CPU PeriodicAirboxK0 demag-tangent provider wiring
+
+Runner `FrequencyResponse` buduje teraz natywny
+`NativeBackendDemagTangentProvider` dla CPU `PeriodicAirboxK0`, przekazuje
+callback `apply_demag_tangent` i user-data do natywnego MFEM operator payloadu,
+a provider uzywa `NativeFemBackend::apply_demag_tangent(...)` jako
+`H_demag(m + delta_m) - H_demag(m)`. To domyka automatyczne provider plumbing
+dla CPU k=0 periodic-airbox dynamic demag path, ale nie jest jeszcze pelnym
+MFEM coupled-block assembly `[delta_m, delta_phi]` i nie zmienia statusu GPU
+periodic demag.
+
+Dowody:
+
+```bash
+env CARGO_TARGET_DIR=/tmp/fullmag-cargo-target cargo +nightly test -p fullmag-runner --features fem-gpu --no-default-features periodic_airbox_response_wires_native_backend_demag_tangent_provider_source_contract -- --nocapture
+env CARGO_TARGET_DIR=/tmp/fullmag-cargo-target cargo +nightly test -p fullmag-runner --features fem-gpu --no-default-features production_cpu_frequency_response_rejects_unimplemented_physics_without_dense_fallback -- --nocapture
+env CARGO_TARGET_DIR=/tmp/fullmag-cargo-target cargo +nightly test -p fullmag-runner --features fem-gpu --no-default-features production_gpu_frequency_response_is_narrower_than_cpu_and_never_falls_back -- --nocapture
+just verify-fem-frequency-domain-native-contract
+```
+
+Status po tym etapie:
+
+| Obszar | Ocena | Status |
+|---|---:|---|
+| P3 k=0 frequency-response demag periodic airbox | 68% | Automatyczny CPU runner provider wiring jest zamkniety i native contract przechodzi. Nadal brakuje pelnego MFEM `[delta_m, delta_phi]` assembly oraz walidacji docelowego skryptu z dziura. |
+| GPU PBC/Floquet/dynamic demag | 35% | Bez zmiany: GPU periodic demag, dynamic demag Floquet i docelowy antidot lattice validation nadal nie sa zaimplementowane. |
+| Pelny cel produkcyjny FMR krysztalu magnonicznego | 36% | P3 CPU periodic-airbox przesunal sie do przodu, ale definicja sukcesu nadal wymaga GPU-backed PBC/Floquet/dynamic demag i UI/browser proof. |
+
+## Aktualizacja 2026-06-28: solved CPU PeriodicAirboxK0 artifact verifier
+
+Verifier `scripts/verify_fem_frequency_domain_runtime_artifacts.py` ma teraz
+flage `--require-periodic-airbox-cpu-demag-solved`. Gate wymaga:
+
+- `requested_execution_lane="production_cpu"` i
+  `resolved_execution_lane="production_cpu"`,
+- `requested_magnetostatic_bc="periodic_airbox_k0"` oraz
+  `resolved_magnetostatic_bc="periodic_airbox_k0"`,
+- `validation_fallback_used=false`,
+- `demag_tangent_operator_source="matrix_free_demag_tangent_provider"`,
+- dodatnich licznikow `delta_m`, `delta_phi` i magnetostatic periodic pairs,
+- per-frequency `demag_contribution.status="solved"` z `h_demag_complex`,
+  bez `unsupported_reason`.
+
+Korekta semantyczna: dla provider-based sciezki `apply_demag_tangent`
+`delta_phi_complex` pozostaje `null`, bo ta sciezka eksportuje odpowiedz pola
+demagnetyzujacego `H_demag[delta_m]`, a nie pelny sprzezony solve
+`[delta_m, delta_phi]`. `delta_phi_complex` jest wymaganiem przyszlego MFEM
+coupled-block assembly.
+
+Native C++ contract obejmuje teraz ten solved-provider artifact boundary:
+generic MFEM response writer publikuje `requested_magnetostatic_bc`,
+`resolved_magnetostatic_bc`, constraint counts, `mesh/periodic_pairs.v1.json`,
+`periodic_airbox_coupled_block_solver=false`,
+`mfem_coupled_block_assembly=false` oraz per-frequency `h_demag_complex`.
+
+Dowody:
+
+```bash
+python3 -m pytest scripts/test_verify_fem_frequency_domain_runtime_artifacts.py -q -k periodic_airbox_cpu_demag_solved
+python3 -m pytest scripts/test_verify_fem_frequency_domain_runtime_artifacts.py -q
+python3 -m py_compile scripts/verify_fem_frequency_domain_runtime_artifacts.py scripts/test_verify_fem_frequency_domain_runtime_artifacts.py
+just verify-fem-frequency-domain-native-contract
+```
+
+Status po tym etapie:
+
+| Obszar | Ocena | Status |
+|---|---:|---|
+| P3 k=0 frequency-response demag periodic airbox | 70% | Artifact verifier i managed native contract potrafia teraz odroznic solved CPU periodic-airbox demag-tangent provider artifacts od GPU/CPU unsupported boundary, bez udawania pelnego `delta_phi` solve. Brakuje managed runtime example/gate z rzeczywistym shared-domain periodic-airbox meshem. |
+| GPU PBC/Floquet/dynamic demag | 35% | Bez zmiany: ta aktualizacja nie implementuje GPU periodic demag ani Floquet dynamic demag. |
+| Pelny cel produkcyjny FMR krysztalu magnonicznego | 36% | Lepsza bramka artefaktowa dla P3, ale pelny cel nadal wymaga GPU-backed PBC/Floquet/dynamic demag, docelowego przykladu i UI proof. |
+
+## Aktualizacja 2026-06-28: exchange-backed GPU Floquet artifact gate
+
+High-level GPU Floquet no-demag gate nie akceptuje juz samego
+`floquet_phase_projection=true` jako wystarczajacego dowodu. Verifier
+`scripts/verify_fem_frequency_domain_runtime_artifacts.py
+--require-floquet-phase-projection` wymaga teraz:
+
+- `operator_terms_included` zawierajacego `exchange`,
+- dodatniego `diagnostics.exchange_edge_count`,
+- identycznego `manifest.diagnostics.exchange_edge_count`,
+- dotychczasowych `floquet_periodic_pair_count`, `floquet_k_vector_rad_per_m`,
+  `dynamic_demag_k_available=false` i `validation_fallback_used=false`.
+
+Native GPU success diagnostics oraz generic artifact writer publikuja teraz te
+pola w `response/diagnostics/solver.v1.json` i
+`frequency_domain/manifest.v1.json`. Aktualny managed proof:
+
+```bash
+python3 -m pytest scripts/test_verify_fem_frequency_domain_runtime_artifacts.py scripts/test_export_fem_gpu_runtime_copy_helpers.py -q
+python3 -m py_compile scripts/verify_fem_frequency_domain_runtime_artifacts.py scripts/test_verify_fem_frequency_domain_runtime_artifacts.py scripts/test_export_fem_gpu_runtime_copy_helpers.py
+just verify-fem-frequency-domain-native-contract
+just verify-fem-frequency-domain-gpu-floquet-runtime
+cargo +nightly fmt --check
+git diff --check
+```
+
+Ostatni runtime artifact check dla GPU Floquet smoke:
+
+| Artefakt | Istotny dowod |
+|---|---|
+| `response/diagnostics/solver.v1.json` | `requested_execution_lane=production_gpu`, `resolved_execution_lane=production_gpu`, `operator_terms_included=["exchange","zeeman"]`, `exchange_edge_count=19`, `floquet_phase_projection=true`, `floquet_periodic_pair_count=4`, `floquet_k_vector_rad_per_m=[1000000,0,0]`, `validation_fallback_used=false` |
+| `frequency_domain/manifest.v1.json` | te same lane/projection/exchange diagnostics oraz `capabilities.dynamic_demag_k_available=false` |
+
+Przy okazji export managed FEM runtime zostal utwardzony: skrypt przekazuje
+host UID/GID do kontenera, oddaje hostowi `.fullmag`, `.fullmag/runtimes` i
+runtime bundle po eksporcie oraz przygotowuje runtime root jako writeable przed
+kontenerowym kopiowaniem. To usuwa blokery `Permission denied` i
+`install ... No such file` przy odswiezaniu bundle.
+
+Status po tym etapie:
+
+| Obszar | Ocena | Status |
+|---|---:|---|
+| P4 nonzero-k Floquet response | 55% | Waski GPU no-demag phase-projection smoke ma teraz artifact-backed proof exchange term + exchange-edge count, nie tylko pair/k provenance. Brak pelnego Bloch-reduced operatora, DMI, demag-k i k-path validation. |
+| GPU PBC/Floquet/dynamic demag | 37% | GPU Floquet no-demag gate potwierdza produkcyjny GPU lane, exchange graph metadata i brak fallbacku. GPU periodic demag oraz Floquet dynamic demag nadal nie sa zaimplementowane. |
+| Pelny cel produkcyjny FMR krysztalu magnonicznego | 38% | Produkcyjna bramka artefaktowa dla waskiego GPU Floquet no-demag slice jest mocniejsza i runtime export jest stabilniejszy, ale definicja sukcesu nadal wymaga GPU-backed PBC/Floquet/dynamic demag, docelowego antidot lattice example i UI/browser proof. |
+
 ## Kryteria 100% dla celu uzytkownika
 
 Minimum produkcyjne dla FMR k=0 PBC:
@@ -2178,21 +2406,36 @@ Minimum produkcyjne dla GPU frequency response:
 - PBC forced GPU jest dozwolone tylko dla k=0 static-periodic no-demag
   magnetic response z kompletnymi periodic pairs. Demag/DMI/nonzero-k forced
   GPU odrzucaja z czytelnym reason i bez fallbacku.
+- Nonzero-k GPU Floquet no-demag moze byc pokazywany tylko jako waski
+  phase-projection/development slice, gdy manifest i diagnostics potwierdzaja
+  `floquet_phase_projection=true`, dodatni `floquet_periodic_pair_count`,
+  `floquet_k_vector_rad_per_m`, `operator_terms_included` z `exchange`,
+  dodatni `exchange_edge_count` i brak fallbacku. To nie jest pelny production
+  Bloch operator.
 
 Pelny produkcyjny GPU k=0 PBC:
 
-- M5 exit gate przechodzi.
+- M5 artifact parity gate przechodzi dla minimalnego `x_faces`
+  static-periodic smoke; pelne M5 nadal wymaga pozostalych walidacji z sekcji
+  M5, w tym primitive-cell vs supercell i docelowego antidot lattice.
 - Capability matrix promuje GPU static-periodic z jasnym statusem.
 - Control Room pokazuje GPU static-periodic jako available tylko na podstawie
   manifest/capability payloadu z runtime, nie na podstawie hardcoded UI.
 
 ## Najblizszy konkretny krok
 
-Zaczac od M0 i M1:
+Po zamknieciu exchange-backed GPU Floquet no-demag artifact gate nastepny krok
+to nie dalsze rozszerzanie smoke'ow, tylko domkniecie brakow produkcyjnych:
 
-1. naprawic `justfile` recipes i ownership traps,
-2. dodac prawdziwy `verify-fem-frequency-domain-gpu-free-runtime`,
-3. sprawic, ze GPU/free `completed` publikuje pelne `response/*` i
-   `frequency_domain/manifest.v1.json`,
-4. dopiero potem domknac CPU k=0 PBC jako pierwszy uzywalny workflow dla
-   krysztalu magnonicznego.
+1. P3: zaimplementowac realne MFEM assembly coupled block `[delta_m, delta_phi]`
+   dla k=0 periodic-airbox frequency-response demag albo utrzymac jawne
+   unavailable artifacts dla kazdej brakujacej skladowej.
+2. P4: zastapic phase-projection smoke pelnym phase-aware periodic exchange
+   graph/operator path albo utrzymac go jako osobny, jasno nazwany development
+   slice w capability/UI.
+3. P5: zaprojektowac i zwalidowac nonzero-k Floquet dynamic demag z Bloch
+   constraints dla `delta_phi`; do tego czasu `include_demag=true` + Floquet
+   pozostaje gated.
+4. UI: podlaczyc capability-driven inspector/charts/3D mode selection do
+   artefaktow runtime i uruchomic browser smoke dla select point/mode -> plot
+   3D -> phase/animation -> cleanup.

@@ -521,6 +521,7 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
             "frequency_k_vector": ",".join(str(component) for component in study.k_vector) if study.k_vector is not None else "",
             "frequency_spin_wave_bc": _spin_wave_bc_kind(study.spin_wave_bc),
             "frequency_spin_wave_bc_config": _spin_wave_bc_config(study.spin_wave_bc),
+            "frequency_magnetostatic_bc": study.magnetostatic_bc,
         }
     return {
         "kind": "run",
@@ -2242,6 +2243,10 @@ def _study_global_mesh_config(problem: Problem, overrides: dict[str, object]) ->
             config["domain_mesh_mode"] = mesh_workflow.get("domain_mesh_mode")
         if mesh_workflow.get("domain_mesh_source") is not None:
             config["domain_mesh_source"] = mesh_workflow.get("domain_mesh_source")
+        if mesh_workflow.get("frozen_magnetic_submesh_source") is not None:
+            config["frozen_magnetic_submesh_source"] = mesh_workflow.get(
+                "frozen_magnetic_submesh_source"
+            )
         if mesh_workflow.get("domain_region_markers") is not None:
             config["domain_region_markers"] = mesh_workflow.get("domain_region_markers")
         if mesh_workflow.get("domain_object_region_markers") is not None:
@@ -2274,6 +2279,10 @@ def _study_global_mesh_config(problem: Problem, overrides: dict[str, object]) ->
                 config["domain_mesh_mode"] = mesh_workflow.get("domain_mesh_mode")
             if mesh_workflow.get("domain_mesh_source") is not None:
                 config["domain_mesh_source"] = mesh_workflow.get("domain_mesh_source")
+            if mesh_workflow.get("frozen_magnetic_submesh_source") is not None:
+                config["frozen_magnetic_submesh_source"] = mesh_workflow.get(
+                    "frozen_magnetic_submesh_source"
+                )
             if mesh_workflow.get("domain_region_markers") is not None:
                 config["domain_region_markers"] = mesh_workflow.get("domain_region_markers")
             if mesh_workflow.get("domain_object_region_markers") is not None:
@@ -2351,6 +2360,13 @@ def _render_study_mesh_workflow(
         if _mesh_entry_requests_build(mesh_config):
             lines.append(f"{target_var}.mesh.build()")
 
+    frozen_submesh_call = _render_frozen_magnetic_submesh_call(
+        "study",
+        global_mesh,
+        source_root=source_root,
+    )
+    if frozen_submesh_call:
+        lines.append(frozen_submesh_call)
     explicit_domain_mesh_call = _render_domain_mesh_call("study", global_mesh, source_root=source_root)
     if explicit_domain_mesh_call:
         lines.append(explicit_domain_mesh_call)
@@ -2413,6 +2429,13 @@ def _render_mesh_workflow(
                 lines.append(f"{target_var}.mesh.build()")
 
         global_mesh = _study_global_mesh_config(problem, overrides)
+        frozen_submesh_call = _render_frozen_magnetic_submesh_call(
+            surface,
+            global_mesh,
+            source_root=source_root,
+        )
+        if frozen_submesh_call:
+            lines.append(frozen_submesh_call)
         explicit_domain_mesh_call = _render_domain_mesh_call(surface, global_mesh, source_root=source_root)
         if explicit_domain_mesh_call and not geometry_build_requested:
             lines.append(explicit_domain_mesh_call)
@@ -2428,6 +2451,13 @@ def _render_mesh_workflow(
                 f"{_surface_call(surface, 'mesh')}(maximum_element_size={_py_number(fem.hmax)}, order={fem.order})"
             )
 
+        frozen_submesh_call = _render_frozen_magnetic_submesh_call(
+            surface,
+            global_mesh,
+            source_root=source_root,
+        )
+        if frozen_submesh_call:
+            lines.append(frozen_submesh_call)
         explicit_domain_mesh_call = _render_domain_mesh_call(surface, global_mesh, source_root=source_root)
         if explicit_domain_mesh_call:
             lines.append(explicit_domain_mesh_call)
@@ -2443,6 +2473,43 @@ def _mesh_build_call(surface: str, mesh_config: dict[str, object]) -> str:
     build_target = mesh_config.get("build_target")
     build_fn = "build_domain_mesh" if build_target == "domain" else "build_mesh"
     return f"{_surface_call(surface, build_fn)}()"
+
+
+def _render_frozen_magnetic_submesh_call(
+    surface: str,
+    mesh_config: dict[str, object],
+    *,
+    source_root: Path,
+) -> str | None:
+    raw_source = _normalize_mapping(mesh_config.get("frozen_magnetic_submesh_source"))
+    source_value = raw_source.get("mesh_source")
+    if not isinstance(source_value, str) or not source_value.strip():
+        return None
+    raw_markers = raw_source.get("region_markers")
+    if not isinstance(raw_markers, list) or not raw_markers:
+        return None
+    rendered_markers = {}
+    for raw_entry in raw_markers:
+        entry = _normalize_mapping(raw_entry)
+        geometry_name = entry.get("geometry_name")
+        marker = entry.get("marker")
+        if not isinstance(geometry_name, str) or not geometry_name.strip():
+            continue
+        if not isinstance(marker, (int, float)):
+            continue
+        rendered_markers[geometry_name] = int(marker)
+    if not rendered_markers:
+        return None
+    kwargs = [
+        f"source={_py_repr(_relativize_path(source_value, source_root))}",
+        f"region_markers={_py_literal(rendered_markers)}",
+    ]
+    air_mesh_source = raw_source.get("air_mesh_source")
+    if isinstance(air_mesh_source, str) and air_mesh_source.strip():
+        kwargs.append(
+            f"air_mesh_source={_py_repr(_relativize_path(air_mesh_source, source_root))}"
+        )
+    return f"{_surface_call(surface, 'frozen_magnetic_submesh')}({', '.join(kwargs)})"
 
 
 def _render_domain_mesh_call(
@@ -2739,6 +2806,8 @@ def _render_stages(
                 call_parts.append(f"damping_policy={_py_repr(study.damping_policy)}")
             if study.spin_wave_bc != "free":
                 call_parts.append(f"bc={_render_spin_wave_bc_expr(study.spin_wave_bc)}")
+            if study.magnetostatic_bc != "open":
+                call_parts.append(f"magnetostatic_bc={_py_repr(study.magnetostatic_bc)}")
             if study.k_vector is not None:
                 call_parts.append(f"k_vector={study.k_vector!r}")
             if is_study_surface:

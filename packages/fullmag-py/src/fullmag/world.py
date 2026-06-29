@@ -1804,6 +1804,7 @@ class _WorldState:
     _domain_mesh_source: str | None = None
     _domain_region_markers: list[dict[str, object]] | None = None
     _domain_object_region_markers: list[dict[str, object]] | None = None
+    _frozen_magnetic_submesh_source: dict[str, object] | None = None
     _exchange_enabled: bool = True
     _demag_enabled: bool = True
     _demag_realization: str | None = None
@@ -3706,6 +3707,20 @@ class StudyBuilder:
         )
         return self
 
+    def frozen_magnetic_submesh(
+        self,
+        source: str | Path,
+        *,
+        region_markers: Any,
+        air_mesh_source: str | Path | None = None,
+    ) -> "StudyBuilder":
+        frozen_magnetic_submesh(
+            source,
+            region_markers=region_markers,
+            air_mesh_source=air_mesh_source,
+        )
+        return self
+
     def geometry(self, shape: object, name: str = "body") -> MagnetHandle:
         return geometry(shape, name=name)
 
@@ -4489,6 +4504,28 @@ def domain_mesh(
     _state._domain_object_region_markers = normalized_object_region_markers
 
 
+def frozen_magnetic_submesh(
+    source: str | Path,
+    *,
+    region_markers: Any,
+    air_mesh_source: str | Path | None = None,
+) -> None:
+    """Use a frozen magnetic submesh source when building the FEM airbox domain."""
+    rendered_source = str(Path(source))
+    if not rendered_source.strip():
+        raise ValueError("frozen_magnetic_submesh source must not be empty")
+    payload: dict[str, object] = {
+        "mesh_source": rendered_source,
+        "region_markers": _normalize_domain_region_markers(region_markers),
+    }
+    if air_mesh_source is not None:
+        rendered_air_source = str(Path(air_mesh_source))
+        if not rendered_air_source.strip():
+            raise ValueError("frozen_magnetic_submesh air_mesh_source must not be empty")
+        payload["air_mesh_source"] = rendered_air_source
+    _state._frozen_magnetic_submesh_source = payload
+
+
 def interactive(enabled: bool = True) -> None:
     """Request that the launcher keep the session open after the run.
 
@@ -4729,6 +4766,8 @@ def _resolve_flat_fem_hint() -> FEM | None:
     def _mesh_api_explicitly_declared() -> bool:
         if s._domain_mesh_source is not None:
             return True
+        if s._frozen_magnetic_submesh_source is not None:
+            return True
         if s._default_mesh_spec.is_configured() or s._default_mesh_spec.build_requested:
             return True
         if s._default_mesh_spec.operations or s._default_mesh_spec.size_fields:
@@ -4764,6 +4803,7 @@ def _resolve_flat_fem_hint() -> FEM | None:
     build_requested = build_requested or default_spec.build_requested
     study_surface = s._api_surface == "study"
     explicit_domain_mesh = s._domain_mesh_source is not None
+    frozen_magnetic_submesh = s._frozen_magnetic_submesh_source is not None
     default_mesh_declared = (
         default_spec.is_configured()
         or bool(default_spec.operations)
@@ -4889,7 +4929,9 @@ def _resolve_flat_fem_hint() -> FEM | None:
             elif len(set(explicit_hmaxs)) == 1 and explicit_hmaxs[0] == "auto":
                 resolved_hmax = "auto"
 
-    if resolved_hmax is None and (shared_source is not None or explicit_domain_mesh):
+    if resolved_hmax is None and (
+        shared_source is not None or explicit_domain_mesh or frozen_magnetic_submesh
+    ):
         # A prebuilt mesh source does not need a generator-side maximum_element_size, but the
         # current FEM hint contract still requires one numeric placeholder.
         resolved_hmax = 5e-9
@@ -5034,6 +5076,7 @@ def _mesh_spec_to_metadata(spec: _MeshSpecState) -> dict[str, object]:
 def _collect_mesh_workflow_metadata() -> dict[str, object] | None:
     configured_handles = [handle for handle in _state._magnets if handle._mesh_spec.is_configured()]
     explicit_domain_mesh = _state._domain_mesh_source is not None
+    frozen_magnetic_submesh = _state._frozen_magnetic_submesh_source is not None
     operations = []
     for handle in _state._magnets:
         for operation in handle._mesh_spec.operations:
@@ -5062,6 +5105,7 @@ def _collect_mesh_workflow_metadata() -> dict[str, object] | None:
         or build_requested
         or operations
         or explicit_domain_mesh
+        or frozen_magnetic_submesh
     )
     if not explicit_mesh_api:
         return None
@@ -5167,7 +5211,11 @@ def _collect_mesh_workflow_metadata() -> dict[str, object] | None:
     mesh_workflow = {
         "explicit_mesh_api": True,
         "build_requested": build_requested,
-        "build_target": "domain" if (_state._study_universe is not None or explicit_domain_mesh) else "mesh",
+        "build_target": (
+            "domain"
+            if (_state._study_universe is not None or explicit_domain_mesh or frozen_magnetic_submesh)
+            else "mesh"
+        ),
         "fem": fem_hint.to_ir() if fem_hint is not None else None,
         "operations": operations,
         "mesh_options": mesh_options if mesh_options else None,
@@ -5182,6 +5230,11 @@ def _collect_mesh_workflow_metadata() -> dict[str, object] | None:
             mesh_workflow["domain_object_region_markers"] = list(
                 _state._domain_object_region_markers
             )
+    elif frozen_magnetic_submesh:
+        mesh_workflow["domain_mesh_mode"] = "generated_frozen_magnetic_submesh"
+        mesh_workflow["frozen_magnetic_submesh_source"] = dict(
+            _state._frozen_magnetic_submesh_source or {}
+        )
     elif _state._study_universe is not None:
         mesh_workflow["domain_mesh_mode"] = "generated_shared_domain_mesh"
     return mesh_workflow

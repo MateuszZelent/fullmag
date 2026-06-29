@@ -456,6 +456,7 @@ class SharedDomainBuildReport:
     size_fields_realized: list[dict[str, object]] = field(default_factory=list)
     operation_statuses: list["MeshOperationStatus"] = field(default_factory=list)
     thin_film_diagnostics: list["ThinFilmDiagnostic"] = field(default_factory=list)
+    magnetic_submesh_signatures: list[dict[str, object]] = field(default_factory=list)
     selector_resolution: list[dict[str, object]] = field(default_factory=list)
     orphan_entities: list[dict[str, object]] = field(default_factory=list)
     degraded: bool = False
@@ -502,6 +503,9 @@ class SharedDomainBuildReport:
             "operation_statuses": [status.to_dict() for status in self.operation_statuses],
             "thin_film_diagnostics": [
                 diagnostic.to_dict() for diagnostic in self.thin_film_diagnostics
+            ],
+            "magnetic_submesh_signatures": [
+                dict(signature) for signature in self.magnetic_submesh_signatures
             ],
             "selector_resolution": [
                 dict(resolution) for resolution in self.selector_resolution

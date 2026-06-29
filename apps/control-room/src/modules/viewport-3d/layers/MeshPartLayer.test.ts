@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   createMeshPartSurfaceGeometry,
   resolveMeshPartBoundaryFaceIndexForPick,
+  resolveMeshPartVisibleScalarColorState,
   resolveRetainedMeshPartScalarColors,
   resolveMeshPartScalarColors,
   resolveMeshPartVectorLayerInput,
@@ -352,6 +353,35 @@ buildReference: null,
         },
       }),
     ).toBe(targetEffectiveFieldY);
+  });
+
+  it("keeps uploaded vertex colors visible while the next projection buffer uploads", () => {
+    const previousProjectionColors = {
+      colors: new Float32Array(9),
+      colorMode: "x",
+      colorPalette: "viridis",
+      projectionMode: "surface_faces" as const,
+      quantityId: "m",
+      range: { max: 1, min: -1 },
+    };
+    const nextProjectionColors = {
+      ...previousProjectionColors,
+      colors: new Float32Array(9).fill(0.25),
+      targetRevision: "field=next",
+    };
+
+    expect(
+      resolveMeshPartVisibleScalarColorState({
+        effectiveScalarColors: nextProjectionColors,
+        meshQualityColors: null,
+        surfaceVertexCount: 3,
+        vertexColorsEnabled: true,
+        visibleScalarColors: previousProjectionColors,
+      }),
+    ).toEqual({
+      canUseVertexScalarColors: true,
+      hasScalarColors: true,
+    });
   });
 
   it("does not fall back to global colors when target-pass surface rejects the mode", () => {

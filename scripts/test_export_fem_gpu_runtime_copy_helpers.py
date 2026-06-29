@@ -9,6 +9,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HELPER = REPO_ROOT / "scripts" / "lib" / "runtime_bundle_copy.sh"
+EXPORT_SCRIPT = REPO_ROOT / "scripts" / "export_fem_gpu_runtime.sh"
 
 
 def run_bash(script: str) -> subprocess.CompletedProcess[str]:
@@ -64,3 +65,157 @@ def test_runtime_copy_is_idempotent_for_existing_regular_file(tmp_path: Path) ->
     )
 
     assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_runtime_copy_replaces_existing_symlink_with_source_symlink(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source"
+    dest_dir = tmp_path / "dest"
+    source_dir.mkdir()
+    dest_dir.mkdir()
+    (source_dir / "libsuitesparseconfig.so.5.10.1").write_text(
+        "versioned shared object\n",
+        encoding="utf-8",
+    )
+    (source_dir / "libsuitesparseconfig.so.5").symlink_to(
+        "libsuitesparseconfig.so.5.10.1"
+    )
+    (dest_dir / "old-target.so").write_text("old shared object\n", encoding="utf-8")
+    (dest_dir / "libsuitesparseconfig.so.5").symlink_to("old-target.so")
+
+    result = run_bash(
+        f"""
+        source {HELPER}
+        copy_runtime_entry_replace {source_dir / "libsuitesparseconfig.so.5"} {dest_dir}
+        test -L {dest_dir / "libsuitesparseconfig.so.5"}
+        test "$(readlink {dest_dir / "libsuitesparseconfig.so.5"})" = "libsuitesparseconfig.so.5.10.1"
+        """
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_runtime_soname_link_is_noop_when_resolved_name_is_unversioned(
+    tmp_path: Path,
+) -> None:
+    dest_dir = tmp_path / "dest"
+    dest_dir.mkdir()
+    soname = dest_dir / "libslepc_real.so"
+    soname.write_text("unversioned shared object\n", encoding="utf-8")
+
+    result = run_bash(
+        f"""
+        source {HELPER}
+        ensure_runtime_soname_link {dest_dir} libslepc_real libslepc_real.so
+        test ! -L {soname}
+        test "$(cat {soname})" = "unversioned shared object"
+        """
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_runtime_soname_link_replaces_existing_entry_with_versioned_symlink(
+    tmp_path: Path,
+) -> None:
+    dest_dir = tmp_path / "dest"
+    dest_dir.mkdir()
+    (dest_dir / "libpetsc_real.so").write_text("stale entry\n", encoding="utf-8")
+    (dest_dir / "libpetsc_real.so.3.15").write_text("versioned shared object\n", encoding="utf-8")
+
+    result = run_bash(
+        f"""
+        source {HELPER}
+        ensure_runtime_soname_link {dest_dir} libpetsc_real libpetsc_real.so.3.15
+        test -L {dest_dir / "libpetsc_real.so"}
+        test "$(readlink {dest_dir / "libpetsc_real.so"})" = "libpetsc_real.so.3.15"
+        """
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_runtime_soname_link_uses_force_no_dereference_symlink_creation() -> None:
+    helper = HELPER.read_text(encoding="utf-8")
+
+    assert 'ln -sfn "$resolved_name" "$soname"' in helper
+
+
+def test_export_script_recreates_unversioned_fullmag_native_library_links() -> None:
+    script = EXPORT_SCRIPT.read_text(encoding="utf-8")
+    function_start = script.find("copy_native_library_group() {")
+    function_end = script.find("resolve_pkg_library_path()", function_start)
+    native_copy_function = script[function_start:function_end]
+
+    assert function_start != -1
+    assert function_end != -1
+    assert 'ensure_runtime_soname_link "$dest_dir" "$stem" "$resolved_name"' in native_copy_function
+    assert 'copy_native_library_group "$FEM_LIB" libfullmag_fem' in script
+    assert 'copy_native_library_group "$FDM_LIB" libfullmag_fdm' in script
+
+
+def test_export_script_forces_fem_sys_native_rebuild_before_copying_libraries() -> None:
+    script = EXPORT_SCRIPT.read_text(encoding="utf-8")
+    clean_index = script.find("cargo clean -p fullmag-fem-sys")
+    build_index = script.find("cargo +nightly build")
+    copy_index = script.find('FEM_LIB="$(latest_native_lib_dir')
+
+    assert clean_index != -1
+    assert build_index != -1
+    assert copy_index != -1
+    assert clean_index < build_index < copy_index
+
+
+def test_export_script_restores_runtime_bundle_to_host_owner() -> None:
+    script = EXPORT_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'FULLMAG_HOST_UID="$(id -u)"' in script
+    assert 'FULLMAG_HOST_GID="$(id -g)"' in script
+    assert 'chmod -R u+rwX,go+rwX "${RUNTIME_ROOT}"' in script
+    assert 'chown "${FULLMAG_HOST_UID}:${FULLMAG_HOST_GID}" .fullmag .fullmag/runtimes' in script
+    assert 'chown -R "${FULLMAG_HOST_UID}:${FULLMAG_HOST_GID}"' in script
+    assert 'chmod u+rwx,go+rx,go-w .fullmag .fullmag/runtimes' in script
+    assert 'chmod -R u+rwX,go+rX,go-w .fullmag/runtimes/fem-gpu-host' in script
+    assert 'stat -c "%u:%g" .fullmag/runtimes/fem-gpu-host' not in script
+
+
+def test_export_script_serializes_runtime_bundle_mutation_with_flock() -> None:
+    script = EXPORT_SCRIPT.read_text(encoding="utf-8")
+    lock_index = script.find('RUNTIME_LOCK="${RUNTIME_ROOT}/.export.lock"')
+    flock_index = script.find('flock 9')
+    compose_index = script.find("docker compose --profile fem-gpu build fem-gpu")
+
+    assert lock_index != -1
+    assert flock_index != -1
+    assert compose_index != -1
+    assert lock_index < flock_index < compose_index
+
+
+def test_export_script_replaces_existing_runtime_binaries_before_copying() -> None:
+    script = EXPORT_SCRIPT.read_text(encoding="utf-8")
+    function_start = script.find("copy_runtime_binary() {")
+    function_end = script.find("copy_runtime_binary target/release/fullmag", function_start)
+    copy_binary_function = script[function_start:function_end]
+
+    assert function_start != -1
+    assert function_end != -1
+    assert 'rm -rf -- "$dest"' in copy_binary_function
+    assert 'cp --remove-destination "$src" "$dest"' in copy_binary_function
+    assert 'chmod 755 "$dest"' in copy_binary_function
+
+
+def test_export_script_skips_unversioned_soname_symlink_before_recreating_it() -> None:
+    script = EXPORT_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'if [ "$(basename "$src")" = "${stem}.so" ]; then' in script
+    assert 'ensure_runtime_soname_link "$dest_dir" "$stem" "$resolved_name"' in script
+
+
+def test_export_script_replaces_existing_versioned_native_symlinks() -> None:
+    script = EXPORT_SCRIPT.read_text(encoding="utf-8")
+    function_start = script.find("copy_library_group_entry_replace() {")
+    function_end = script.find("copy_native_library_group() {", function_start)
+    copy_entry_function = script[function_start:function_end]
+
+    assert function_start != -1
+    assert function_end != -1
+    assert 'ln -sfn "$(readlink "$src")" "$dest"' in copy_entry_function

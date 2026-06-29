@@ -68,6 +68,7 @@ struct DrivenFrequencyResponseSolveRequest {
     DrivenFrequencyResponseRequest solve_request{};
     const char *output_directory = nullptr;
     bool write_partial_artifacts = false;
+    const char *operator_diagnostics_json = nullptr;
     bool (*cancel_requested)(void *user_data) = nullptr;
     void *cancel_user_data = nullptr;
     ProductionCpuFrequencyDomainProgress progress_callback = nullptr;
@@ -81,6 +82,7 @@ struct DrivenFrequencyResponseSolveRequest {
     const FrequencyDomainFloquetPeriodicPair *floquet_periodic_pairs = nullptr;
     std::uint64_t floquet_periodic_pair_count = 0;
     bool requires_periodic_airbox_dynamic_demag = false;
+    bool requires_floquet_airbox_dynamic_demag = false;
     std::uint64_t magnetic_periodic_constraint_set_count = 0;
     std::uint64_t magnetostatic_periodic_constraint_set_count = 0;
     std::uint64_t periodic_airbox_delta_m_tangent_dof_count = 0;

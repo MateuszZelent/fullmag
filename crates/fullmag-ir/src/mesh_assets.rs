@@ -293,6 +293,19 @@ pub struct FemThinFilmDiagnosticIR {
     pub warnings: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FemMagneticSubmeshSignatureIR {
+    pub geometry_name: String,
+    pub marker: u32,
+    pub node_count: u64,
+    pub tetra_count: u64,
+    pub edge_count: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coordinate_quantization_m: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
+}
+
 /// Build report for a shared-domain FEM mesh, propagated from the Python
 /// meshing pipeline so the planner / runner can inspect how the mesh was built.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -320,6 +333,8 @@ pub struct FemSharedDomainBuildReportIR {
     pub operation_statuses: Vec<FemMeshOperationStatusIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub thin_film_diagnostics: Vec<FemThinFilmDiagnosticIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub magnetic_submesh_signatures: Vec<FemMagneticSubmeshSignatureIR>,
     /// ``true`` when the mesh was built via a degraded path (fallback, simplified
     /// size fields, or lost component identity).
     #[serde(default)]

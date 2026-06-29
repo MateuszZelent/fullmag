@@ -46,8 +46,23 @@ struct MfemDrivenResponseValidationResult {
     double max_abs_response = 0.0;
     double max_abs_stiffness_matrix = 0.0;
     double max_abs_mass_matrix = 0.0;
+    std::uint64_t total_iteration_count = 0;
+    std::uint64_t max_iterations_for_frequency = 0;
+    std::uint64_t restart_iterations_for_frequency = 0;
+    double solver_relative_tolerance = 0.0;
+    double rhs_l2_norm = 0.0;
+    double initial_residual_l2_norm = 0.0;
+    double initial_relative_residual_l2_norm = 0.0;
     double residual_l2_norm = 0.0;
     double relative_residual_l2_norm = 0.0;
+    double minimum_tracked_relative_residual_l2_norm = 0.0;
+    std::uint64_t minimum_tracked_relative_residual_iteration = 0;
+    double last_tracked_relative_residual_l2_norm = 0.0;
+    double last_recomputed_relative_residual_l2_norm = 0.0;
+    bool demag_tangent_linearity_check = false;
+    double demag_tangent_additivity_max_abs_error = 0.0;
+    double demag_tangent_homogeneity_max_abs_error = 0.0;
+    double residual_growth_factor = 0.0;
     char error_message[128] = "";
 };
 

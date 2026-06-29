@@ -181,6 +181,7 @@ bool solve_demag_periodic_poisson_reduced(
     periodic_workspace->configure(rel_tol, max_iter);
     ctx.poisson_demag.last_setup_wall_time_ns = 0;
     ctx.poisson_demag.last_solver_setup_reused = true;
+    *x_p = 0.0;
     const auto solver_apply_wall_start = FemSteadyClock::now();
     periodic_workspace->solver.Mult(*rhs_p, *x_p);
     ctx.poisson_demag.last_solver_apply_wall_time_ns =

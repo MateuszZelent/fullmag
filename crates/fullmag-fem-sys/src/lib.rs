@@ -584,6 +584,7 @@ pub struct fullmag_fem_frequency_domain_driven_response_request {
     pub output_directory: *const c_char,
     pub write_response_fields: i32,
     pub write_partial_artifacts: i32,
+    pub operator_diagnostics_json: *const c_char,
     pub cancel_requested: Option<unsafe extern "C" fn(user_data: *mut c_void) -> i32>,
     pub cancel_user_data: *mut c_void,
     pub progress_callback: Option<
@@ -625,6 +626,7 @@ pub struct fullmag_fem_frequency_domain_driven_response_request {
     pub mfem_floquet_periodic_pairs: *const fullmag_fem_frequency_domain_floquet_periodic_pair,
     pub mfem_floquet_periodic_pair_count: u64,
     pub requires_periodic_airbox_dynamic_demag: i32,
+    pub requires_floquet_airbox_dynamic_demag: i32,
     pub magnetic_periodic_constraint_set_count: u64,
     pub magnetostatic_periodic_constraint_set_count: u64,
     pub periodic_airbox_delta_m_tangent_dof_count: u64,
@@ -660,7 +662,7 @@ pub struct fullmag_fem_frequency_domain_solve_result {
     pub artifact_manifest_path: *mut c_char,
 }
 
-pub const FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION: u32 = 7;
+pub const FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION: u32 = 8;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1051,6 +1053,14 @@ extern "C" {
         handle: *mut fullmag_fem_backend,
         m_xyz: *const f64,
         len: u64,
+    ) -> i32;
+
+    pub fn fullmag_fem_backend_apply_demag_tangent_f64(
+        handle: *mut fullmag_fem_backend,
+        delta_m_xyz: *const f64,
+        delta_m_len: u64,
+        out_delta_h_demag_xyz: *mut f64,
+        out_len: u64,
     ) -> i32;
 
     pub fn fullmag_fem_backend_snapshot_stats(
@@ -1585,6 +1595,7 @@ mod tests {
         assert!(request.output_directory.is_null());
         assert_eq!(request.write_response_fields, 0);
         assert_eq!(request.write_partial_artifacts, 0);
+        assert!(request.operator_diagnostics_json.is_null());
         assert!(request.cancel_requested.is_none());
         assert!(request.cancel_user_data.is_null());
         assert!(request.progress_callback.is_none());
@@ -1624,6 +1635,7 @@ mod tests {
         assert_eq!(request.mfem_floquet_periodic_pair_count, 0);
         assert_eq!(request.mfem_dmi_uniform_ms, 0.0);
         assert_eq!(request.requires_periodic_airbox_dynamic_demag, 0);
+        assert_eq!(request.requires_floquet_airbox_dynamic_demag, 0);
         assert_eq!(request.magnetic_periodic_constraint_set_count, 0);
         assert_eq!(request.magnetostatic_periodic_constraint_set_count, 0);
         assert_eq!(request.periodic_airbox_delta_m_tangent_dof_count, 0);

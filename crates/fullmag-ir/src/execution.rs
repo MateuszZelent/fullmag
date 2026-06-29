@@ -250,6 +250,7 @@ pub enum MagnetostaticBoundaryConditionIR {
     #[default]
     Open,
     PeriodicAirboxK0,
+    FloquetAirbox,
 }
 
 // ── Geometry scale ────────────────────────────────────────────────────────────

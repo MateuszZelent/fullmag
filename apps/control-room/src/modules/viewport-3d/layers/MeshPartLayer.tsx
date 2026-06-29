@@ -211,6 +211,36 @@ export function resolveRetainedMeshPartScalarColors({
     : null;
 }
 
+export function resolveMeshPartVisibleScalarColorState({
+  effectiveScalarColors,
+  meshQualityColors,
+  surfaceVertexCount,
+  vertexColorsEnabled,
+  visibleScalarColors,
+}: {
+  effectiveScalarColors: ScalarColorBuffer | null;
+  meshQualityColors: ScalarColorBuffer | null;
+  surfaceVertexCount: number;
+  vertexColorsEnabled: boolean;
+  visibleScalarColors: ScalarColorBuffer | null;
+}): {
+  canUseVertexScalarColors: boolean;
+  hasScalarColors: boolean;
+} {
+  const visibleOrPendingColors = visibleScalarColors ?? effectiveScalarColors;
+  const canUseVertexScalarColors =
+    Boolean(meshQualityColors) ||
+    (vertexColorsEnabled &&
+      canApplyVertexScalarColorBuffer(
+        visibleOrPendingColors,
+        surfaceVertexCount,
+      ));
+  return {
+    canUseVertexScalarColors,
+    hasScalarColors: Boolean(canUseVertexScalarColors && visibleScalarColors),
+  };
+}
+
 function scalarColorBufferMatchesSettings(
   buffer: ScalarColorBuffer | null,
   scalarColorMode: string,
@@ -518,7 +548,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   const vertexColorsEnabled =
     Boolean(meshQualityColors) ||
     (fieldColorLayersEnabled && shaderUsesVertexColors(renderSettings));
-  const canUseVertexScalarColors = canApplyVertexScalarColorBuffer(
+  const effectiveCanUseVertexScalarColors = canApplyVertexScalarColorBuffer(
     effectiveScalarColors,
     surfaceVertexCount,
   );
@@ -529,7 +559,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       effectiveScalarColors,
       surfaceVertexCount,
     ) &&
-    !canUseVertexScalarColors;
+    !effectiveCanUseVertexScalarColors;
   const visibleShaderScalarColors = useViewport3DScalarShaderColorUpload({
     colorBuffer: shaderScalarColorsEnabled ? effectiveScalarColors : null,
     dirtyReason: "field-scalar-shader",
@@ -572,10 +602,13 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   });
 
   const materialRef = useRef<MeshBasicMaterial>(null);
-  const hasScalarColors =
-    vertexColorsEnabled &&
-    canUseVertexScalarColors &&
-    visibleScalarColors === effectiveScalarColors;
+  const { hasScalarColors } = resolveMeshPartVisibleScalarColorState({
+    effectiveScalarColors,
+    meshQualityColors,
+    surfaceVertexCount,
+    vertexColorsEnabled,
+    visibleScalarColors,
+  });
   const surfaceOpacity = opacityFromSettings(renderSettings);
   const surfacePolicy = useMemo(
     () => surfaceMaterialPolicyProps(surfaceOpacity),

@@ -51,13 +51,41 @@ FEM driven frequency response is narrower still: the native production CPU lane
 supports gamma/free response and k=0 static-periodic magnetic response without
 dynamic demag. The native production GPU lane supports gamma/free response and
 the k=0 static-periodic no-demag magnetic slice through its CUDA tangent
-operator. Both static-periodic lanes require complete periodic pair metadata for
-requested `pair_ids`; nonzero-k Floquet response, shared-domain airbox response,
-frequency-response demag, DMI on GPU, and GPU periodic demag remain gated.
+operator. It also has a narrowly gated no-demag Floquet development slice that
+phase-projects the complex response block for supplied pair metadata with local
+terms and a supplied exchange-edge tangent operator. The high-level driven
+response planner may reach this slice only for explicitly requested GPU,
+magnetic-body, no-demag/no-DMI requests with complete periodic boundary and node
+pair metadata; the runner then treats `FrequencyExcitationIR.field_au_per_m` as
+the reference-cell drive amplitude and applies the Bloch phase to paired
+tangent-drive DOFs. Full periodic exchange graph assembly, DMI, dynamic demag,
+and magnetostatic periodic constraints are still absent from that slice. Both
+static-periodic lanes require complete periodic pair metadata for requested
+`pair_ids`; full nonzero-k Floquet production response, shared-domain airbox
+response, frequency-response demag, DMI on GPU, and GPU periodic demag remain
+gated.
 
 Dynamic demagnetization for nonzero-k Floquet FEM is not implemented. Requests
 with `include_demag=true` and `spin_wave_bc.kind='floquet'` must fail with a
 capability error.
+
+The canonical magnetostatic boundary request for that future path is
+`magnetostatic_bc="floquet_airbox"`. This value means the shared-domain airbox
+uses the same Bloch phase convention for the dynamic scalar potential
+`delta_phi` that the magnetic domain uses for `delta_m`:
+
+```text
+delta_phi_dst = delta_phi_src * exp(-i k dot delta_r)
+```
+
+It is not equivalent to `periodic_airbox_k0`, which is restricted to
+zero-phase `k=0` constraints. A nonzero-k Floquet frequency-response request
+with demag enabled but without `floquet_airbox` must be rejected as an
+incomplete physical model request. A request that does use `floquet_airbox`
+must still be rejected until the real demag-k coupled operator exists; the
+rejection must preserve the requested boundary model in IR/provenance rather
+than silently falling back to `open`, `periodic_airbox_k0`, CPU Poisson, or
+dense validation.
 
 FDM uses axis-wise periodicity. The CPU reference path supports periodic
 exchange/DMI stencils and truncated-image periodic demagnetization. The CUDA FDM

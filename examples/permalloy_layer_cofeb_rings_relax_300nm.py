@@ -100,7 +100,7 @@ for ring in (top_ring,):
     ring.alpha = 0.1
     ring.Ku1 = 1.0e6
     ring.anisU = RING_AXIS
-    ring.m = fm.texture.uniform(-1,0,0)
+    ring.m = fm.texture.uniform(1,0,0)
     ring.mesh(maximum_element_size=25 * NM, minimum_element_size=2.5 * NM, order=1)
 
 # Interactions, mesh, and solver
@@ -127,7 +127,7 @@ study.tableautosave(1e-16, quantities=["t", "step", "mx", "my", "mz", "E_total"]
 
 study.stages.add_minimize(
     method="bb",
-    max_steps=MINIMIZE_MAX_STEPS,
+    max_steps=2000,
     tol=1e-4,
 )
 
@@ -137,6 +137,6 @@ study.stages.add_relax(
     max_error=1e-6,
     dt_min=1e-17,
     dt_max=1e-13,
-    max_steps=RELAX_MAX_STEPS,
+    max_steps=100,
     tol=1e-4,
 )

@@ -33,6 +33,113 @@ from fullmag.meshing.gmsh_bridge import MeshData
 
 
 class ProblemApiTests(unittest.TestCase):
+    def test_script_builder_preserves_frozen_magnetic_submesh_source_in_global_mesh_config(self) -> None:
+        from fullmag.runtime.script_builder import _study_global_mesh_config
+
+        source = {
+            "mesh_source": "mesh/frozen_film.npz",
+            "region_markers": [{"geometry_name": "film", "marker": 1}],
+        }
+        problem = types.SimpleNamespace(
+            runtime_metadata={
+                "mesh_workflow": {
+                    "build_requested": True,
+                    "build_target": "domain",
+                    "domain_mesh_mode": "generated_frozen_magnetic_submesh",
+                    "frozen_magnetic_submesh_source": source,
+                    "fem": {"order": 1, "hmax": 20e-9},
+                }
+            },
+            discretization=types.SimpleNamespace(fem=fm.FEM(order=1, hmax=20e-9)),
+        )
+
+        config = _study_global_mesh_config(problem, {})
+
+        self.assertEqual(config["domain_mesh_mode"], "generated_frozen_magnetic_submesh")
+        self.assertEqual(config["frozen_magnetic_submesh_source"], source)
+
+    def test_study_frozen_magnetic_submesh_source_sets_domain_mesh_workflow(self) -> None:
+        script = textwrap.dedent(
+            """
+            import fullmag as fm
+
+            study = fm.study("frozen_domain_mesh")
+            study.engine("fem")
+            study.universe(mode="manual", size=(4e-7, 4e-7, 9e-8), center=(0.0, 0.0, 0.0))
+            study.universe.mesh(maximum_element_size=1.2e-7, minimum_element_size=1.6e-8)
+            film = study.geometry(fm.Box(size=(2e-7, 2e-7, 1e-8), name="film"), name="film")
+            film.Ms = 800e3
+            film.Aex = 13e-12
+            film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+            film.mesh(maximum_element_size=2e-8, minimum_element_size=8e-9)
+            study.frozen_magnetic_submesh(
+                source="mesh/frozen_film.npz",
+                region_markers={"film": 1},
+            )
+            study.build_domain_mesh()
+            study.stages.add_frequency_response(
+                frequencies_hz=[2.75e9],
+                excitation_field_au_per_m=(0.0, 0.0, 1.0),
+                include_demag=True,
+                bc=fm.PeriodicBC(["x_faces", "y_faces"]),
+                magnetostatic_bc="periodic_airbox_k0",
+            )
+            """
+        )
+
+        with TemporaryDirectory() as tmp_dir:
+            script_path = Path(tmp_dir) / "frozen_domain_mesh.py"
+            script_path.write_text(script, encoding="utf-8")
+            loaded = fm.load_problem_from_script(script_path, lightweight_assets=True)
+
+        problem = loaded.stages[0].problem
+        mesh_workflow = problem.runtime_metadata["mesh_workflow"]
+        self.assertEqual(mesh_workflow["domain_mesh_mode"], "generated_frozen_magnetic_submesh")
+        self.assertEqual(
+            mesh_workflow["frozen_magnetic_submesh_source"],
+            {
+                "mesh_source": "mesh/frozen_film.npz",
+                "region_markers": [{"geometry_name": "film", "marker": 1}],
+            },
+        )
+
+    def test_study_frozen_magnetic_submesh_source_rewrite_preserves_declaration(self) -> None:
+        script = textwrap.dedent(
+            """
+            import fullmag as fm
+
+            study = fm.study("frozen_domain_mesh")
+            study.engine("fem")
+            study.universe(mode="manual", size=(4e-7, 4e-7, 9e-8), center=(0.0, 0.0, 0.0))
+            study.universe.mesh(maximum_element_size=1.2e-7, minimum_element_size=1.6e-8)
+            film = study.geometry(fm.Box(size=(2e-7, 2e-7, 1e-8), name="film"), name="film")
+            film.Ms = 800e3
+            film.Aex = 13e-12
+            film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+            film.mesh(maximum_element_size=2e-8, minimum_element_size=8e-9)
+            study.frozen_magnetic_submesh(
+                source="mesh/frozen_film.npz",
+                region_markers={"film": 1},
+                air_mesh_source="mesh/airbox.npz",
+            )
+            study.build_domain_mesh()
+            study.run(1e-12)
+            """
+        )
+
+        with TemporaryDirectory() as tmp_dir:
+            script_path = Path(tmp_dir) / "frozen_domain_mesh.py"
+            script_path.write_text(script, encoding="utf-8")
+            loaded = fm.load_problem_from_script(script_path, lightweight_assets=True)
+
+        rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+
+        self.assertIn(
+            'study.frozen_magnetic_submesh(source="mesh/frozen_film.npz", region_markers={"film": 1}, air_mesh_source="mesh/airbox.npz")',
+            rewritten,
+        )
+        self.assertIn("study.build_domain_mesh()", rewritten)
+
     def test_dmi_lowercase_properties_redirect_to_uppercase(self) -> None:
         fm.reset()
         geom = fm.Box(size=(10e-9, 10e-9, 10e-9), name="box")
@@ -1029,6 +1136,31 @@ class ProblemApiTests(unittest.TestCase):
         )
         self.assertEqual(runtime_cli._resolve_until_seconds(problem.study, None), 0.0)
 
+    def test_frequency_response_accepts_floquet_airbox_magnetostatic_bc(self) -> None:
+        problem = replace(
+            self._build_problem(),
+            energy=[fm.Exchange(), fm.Demag(realization="poisson_robin")],
+            study=fm.FrequencyResponse(
+                outputs=[fm.SaveResponse("susceptibility_tensor")],
+                frequencies_hz=[2.0e9],
+                include_demag=True,
+                spin_wave_bc=fm.FloquetBC(["x_faces"]),
+                k_sampling=fm.KPoint("kx", (1.0e6, 0.0, 0.0)),
+                magnetostatic_bc="floquet_airbox",
+            ),
+        )
+        ir = problem.to_ir()
+
+        self.assertEqual(
+            ir["study"]["spin_wave_bc"],
+            {
+                "kind": "floquet",
+                "pair_ids": ["x_faces"],
+                "phase_convention": "exp_minus_i_k_dot_delta_r",
+            },
+        )
+        self.assertEqual(ir["study"]["magnetostatic_bc"], "floquet_airbox")
+
     def test_static_periodic_frequency_response_smoke_example_loads_contract(self) -> None:
         example_path = (
             Path(__file__).resolve().parents[3]
@@ -1068,11 +1200,14 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(len(loaded.stages), 2)
         relax = loaded.stages[0].problem.study.to_ir()
         self.assertEqual(relax["kind"], "relaxation")
+        self.assertEqual(relax["stop"]["max_steps"], 200)
+        self.assertEqual(relax["stop"]["torque_tolerance_apm"], 3e-3)
 
         problem = loaded.stages[1].problem
         study = problem.study.to_ir()
         self.assertEqual(study["kind"], "frequency_response")
-        self.assertEqual(study["operator"]["include_demag"], False)
+        self.assertEqual(study["operator"]["include_demag"], True)
+        self.assertEqual(study["magnetostatic_bc"], "periodic_airbox_k0")
         self.assertEqual(study["equilibrium"], {"kind": "relaxed_initial_state"})
         self.assertEqual(study["damping_policy"], "include")
         self.assertEqual(
@@ -1099,7 +1234,36 @@ class ProblemApiTests(unittest.TestCase):
         )
         problem_ir = problem.to_ir(requested_backend=fm.BackendTarget.FEM)
         runtime_metadata = problem_ir["problem_meta"]["runtime_metadata"]
-        self.assertNotIn("study_universe", runtime_metadata)
+        self.assertEqual(runtime_metadata["study_universe"]["mode"], "manual")
+        self.assertEqual(
+            problem_ir["backend_policy"]["discretization_hints"]["fem"]["demag_solver_policy"],
+            {
+                "solver": "CG",
+                "preconditioner": "AMG",
+                "rtol": 0.0001,
+                "max_iterations": 500,
+                "print_level": 0,
+            },
+        )
+        for actual, expected in zip(
+            runtime_metadata["study_universe"]["size"],
+            [200e-9, 200e-9, 90e-9],
+            strict=True,
+        ):
+            self.assertAlmostEqual(actual, expected, delta=1e-18)
+        self.assertEqual(runtime_metadata["mesh_workflow"]["build_target"], "domain")
+        self.assertEqual(
+            runtime_metadata["mesh_workflow"]["domain_mesh_mode"],
+            "generated_shared_domain_mesh",
+        )
+        self.assertIn(
+            {"kind": "demag", "realization": "poisson_robin"},
+            problem_ir["energy_terms"],
+        )
+        self.assertIn(
+            {"kind": "exchange"},
+            problem_ir["energy_terms"],
+        )
 
         mesh_workflow = runtime_metadata["mesh_workflow"]
         default_mesh = mesh_workflow["default_mesh"]
@@ -1111,12 +1275,12 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(default_mesh["narrow_regions"], 3)
         film_mesh = mesh_workflow["per_geometry"][0]
         self.assertEqual(film_mesh["mesh_strategy"], "thin_film_tetrahedral")
-        self.assertEqual(film_mesh["through_thickness_elements"], 4)
-        self.assertLessEqual(film_mesh["maximum_element_size"], 5e-9 + 1e-18)
-        self.assertLessEqual(film_mesh["minimum_element_size"], 2.5e-9 + 1e-18)
-        self.assertLessEqual(film_mesh["interface_hmax"], 3.5e-9 + 1e-18)
-        self.assertLessEqual(film_mesh["edge_hmax"], 2.8e-9 + 1e-18)
-        self.assertLessEqual(film_mesh["corner_hmax"], 2.8e-9 + 1e-18)
+        self.assertEqual(film_mesh["through_thickness_elements"], 2)
+        self.assertLessEqual(film_mesh["maximum_element_size"], 8e-9 + 1e-18)
+        self.assertLessEqual(film_mesh["minimum_element_size"], 3e-9 + 1e-18)
+        self.assertLessEqual(film_mesh["interface_hmax"], 5e-9 + 1e-18)
+        self.assertLessEqual(film_mesh["edge_hmax"], 4e-9 + 1e-18)
+        self.assertLessEqual(film_mesh["corner_hmax"], 4e-9 + 1e-18)
         zeeman_terms = [
             term for term in problem_ir["energy_terms"] if term["kind"] == "zeeman"
         ]
@@ -1143,27 +1307,22 @@ class ProblemApiTests(unittest.TestCase):
             object_regions_by_name["hole_edge_refinement"]["mesh_policy"][
                 "maximum_element_size"
             ],
-            2.5e-9 + 1e-18,
+            4e-9 + 1e-18,
         )
         self.assertLessEqual(
             object_regions_by_name["hole_transition_refinement"]["mesh_policy"][
                 "maximum_element_size"
             ],
-            4e-9 + 1e-18,
+            6e-9 + 1e-18,
         )
         assets = problem_ir["geometry_assets"]
         domain_asset = assets.get("fem_domain_mesh_asset")
-        if isinstance(domain_asset, dict) and isinstance(domain_asset.get("mesh"), dict):
+        self.assertIsInstance(domain_asset, dict)
+        if isinstance(domain_asset.get("mesh"), dict):
             mesh_payload = domain_asset["mesh"]
         else:
-            mesh_assets = assets.get("fem_mesh_assets")
-            self.assertIsInstance(mesh_assets, list)
-            self.assertGreater(len(mesh_assets), 0)
-            if isinstance(mesh_assets[0].get("mesh"), dict):
-                mesh_payload = mesh_assets[0]["mesh"]
-            else:
-                mesh_source = mesh_assets[0]["mesh_source"]
-                mesh_payload = json.loads(Path(mesh_source).read_text(encoding="utf-8"))
+            mesh_source = domain_asset["mesh_source"]
+            mesh_payload = json.loads(Path(mesh_source).read_text(encoding="utf-8"))
         boundary_pairs = {
             pair["pair_id"]: pair
             for pair in mesh_payload.get("periodic_boundary_pairs", [])
@@ -1186,6 +1345,92 @@ class ProblemApiTests(unittest.TestCase):
             for pair in mesh_payload.get("periodic_node_pairs", [])
         }
         self.assertEqual(node_pair_ids, {"x_faces", "y_faces"})
+
+    def test_in_plane_10mt_hole_fmr_frequency_response_smoke_example_env_overrides(self) -> None:
+        example_path = (
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "fem_frequency_response_smoke.py"
+        )
+
+        with patch.dict(
+            os.environ,
+            {
+                "FULLMAG_FMR_RELAX_MAX_STEPS": "12",
+                "FULLMAG_FMR_RELAX_TOL": "0.004",
+                "FULLMAG_FMR_FREQUENCIES_GHZ": "2.75",
+                "FULLMAG_FMR_RESPONSE_RTOL": "0.02",
+                "FULLMAG_FMR_RESPONSE_MAX_ITERATIONS": "7",
+                "FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS": "3",
+            },
+        ):
+            loaded = fm.load_problem_from_script(example_path, lightweight_assets=True)
+            self.assertEqual(os.environ["FULLMAG_FEM_FREQUENCY_RESPONSE_RTOL"], "0.02")
+            self.assertEqual(os.environ["FULLMAG_FEM_FREQUENCY_RESPONSE_MAX_ITERATIONS"], "7")
+            self.assertEqual(os.environ["FULLMAG_FEM_FREQUENCY_RESPONSE_RESTART_ITERATIONS"], "3")
+
+        relax = loaded.stages[0].problem.study.to_ir()
+        self.assertEqual(relax["stop"]["max_steps"], 12)
+        self.assertEqual(relax["stop"]["torque_tolerance_apm"], 0.004)
+
+        study = loaded.stages[1].problem.study.to_ir()
+        self.assertEqual(study["frequencies_hz"], {"values_hz": [2.75e9]})
+
+    def test_in_plane_10mt_hole_fmr_frequency_response_smoke_example_can_use_frozen_submesh(
+        self,
+    ) -> None:
+        example_path = (
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "fem_frequency_response_smoke.py"
+        )
+
+        with patch.dict(
+            os.environ,
+            {
+                "FULLMAG_FMR_FROZEN_MAGNETIC_SUBMESH_SOURCE": (
+                    "mesh/periodic_antidot_frozen_magnetic_submesh.npz"
+                ),
+            },
+        ):
+            loaded = fm.load_problem_from_script(example_path, lightweight_assets=True)
+
+        problem = loaded.stages[1].problem
+        runtime_metadata = problem.runtime_metadata
+        mesh_workflow = runtime_metadata["mesh_workflow"]
+        self.assertEqual(mesh_workflow["domain_mesh_mode"], "generated_frozen_magnetic_submesh")
+        self.assertEqual(
+            mesh_workflow["frozen_magnetic_submesh_source"],
+            {
+                "mesh_source": "mesh/periodic_antidot_frozen_magnetic_submesh.npz",
+                "region_markers": [{"geometry_name": "periodic_film", "marker": 1}],
+            },
+        )
+
+    def test_in_plane_10mt_hole_fmr_frequency_response_smoke_example_fast_mesh_preset(
+        self,
+    ) -> None:
+        example_path = (
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "fem_frequency_response_smoke.py"
+        )
+
+        with patch.dict(os.environ, {"FULLMAG_FMR_FAST_RUNTIME_MESH": "1"}):
+            loaded = fm.load_problem_from_script(example_path, lightweight_assets=True)
+
+        problem = loaded.stages[1].problem
+        problem_ir = problem.to_ir(requested_backend=fm.BackendTarget.FEM)
+        runtime_metadata = problem_ir["problem_meta"]["runtime_metadata"]
+        mesh_workflow = runtime_metadata["mesh_workflow"]
+        default_mesh = mesh_workflow["default_mesh"]
+        film_mesh = mesh_workflow["per_geometry"][0]
+
+        self.assertEqual(default_mesh["size_from_curvature"], 8)
+        self.assertEqual(default_mesh["narrow_regions"], 1)
+        self.assertEqual(film_mesh["through_thickness_elements"], 1)
+        self.assertLessEqual(film_mesh["maximum_element_size"], 20e-9 + 1e-18)
+        self.assertLessEqual(film_mesh["minimum_element_size"], 8e-9 + 1e-18)
 
     def test_free_demag_airbox_fmr_eigenmodes_smoke_example_loads_contract(self) -> None:
         example_path = (
@@ -4013,6 +4258,7 @@ class ProblemApiTests(unittest.TestCase):
                 excitation_field_au_per_m=(0.0, 0.0, 2.5),
                 excitation_phase_rad=0.25,
                 include_demag=False,
+                magnetostatic_bc="periodic_airbox_k0",
                 k_vector=(0.0, 0.0, 0.0),
                 damping_policy="include",
                 spin_wave_bc=fm.PeriodicBC(["x_faces"]),
@@ -4036,11 +4282,20 @@ class ProblemApiTests(unittest.TestCase):
             reloaded = fm.load_problem_from_script(rewrite_path, lightweight_assets=True)
 
         self.assertEqual(draft["stages"][0]["kind"], "frequency_response")
+        self.assertEqual(
+            draft["stages"][0]["frequency_magnetostatic_bc"],
+            "periodic_airbox_k0",
+        )
+        self.assertEqual(
+            draft["study_pipeline"]["nodes"][0]["payload"]["frequency_magnetostatic_bc"],
+            "periodic_airbox_k0",
+        )
         self.assertEqual(draft["study_pipeline"]["nodes"][0]["stage_kind"], "frequency_response")
         self.assertIn('fm.save_response("susceptibility_tensor")', rewritten)
         self.assertIn("fm.frequency_response(", rewritten)
         self.assertIn("excitation_phase_rad=0.25", rewritten)
         self.assertIn('bc=fm.PeriodicBC(["x_faces"])', rewritten)
+        self.assertIn('magnetostatic_bc="periodic_airbox_k0"', rewritten)
         self.assertEqual(reloaded.stages[0].problem.study.to_ir()["kind"], "frequency_response")
         self.assertEqual(
             reloaded.stages[0].problem.study.to_ir()["frequencies_hz"],
@@ -4053,6 +4308,10 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(
             reloaded.stages[0].problem.study.to_ir()["spin_wave_bc"],
             {"kind": "periodic", "pair_ids": ["x_faces"]},
+        )
+        self.assertEqual(
+            reloaded.stages[0].problem.study.to_ir()["magnetostatic_bc"],
+            "periodic_airbox_k0",
         )
 
     def test_study_builder_stage_authoring_captures_without_execution(self) -> None:

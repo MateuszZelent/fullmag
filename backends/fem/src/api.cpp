@@ -11,6 +11,7 @@
 
 #include "backend_handle.hpp"
 #include "context.hpp"
+#include "cpu/mfem/interactions/demag.hpp"
 #include "cpu/mfem/interactions/magnetoelastic.hpp"
 #include "cpu/mfem/runtime/availability.hpp"
 #include "cpu/mfem/runtime/backend_lifecycle.hpp"
@@ -1201,6 +1202,7 @@ int fullmag_fem_frequency_domain_solve_driven_response(
         request->write_response_fields != 0;
     native_request.output_directory = request->output_directory;
     native_request.write_partial_artifacts = request->write_partial_artifacts != 0;
+    native_request.operator_diagnostics_json = request->operator_diagnostics_json;
     native_request.has_floquet_k_vector = request->has_floquet_k_vector != 0;
     native_request.floquet_k_vector_rad_per_m[0] =
         request->floquet_k_vector_rad_per_m[0];
@@ -1250,6 +1252,8 @@ int fullmag_fem_frequency_domain_solve_driven_response(
     }
     native_request.requires_periodic_airbox_dynamic_demag =
         request->requires_periodic_airbox_dynamic_demag != 0;
+    native_request.requires_floquet_airbox_dynamic_demag =
+        request->requires_floquet_airbox_dynamic_demag != 0;
     native_request.magnetic_periodic_constraint_set_count =
         request->magnetic_periodic_constraint_set_count;
     native_request.magnetostatic_periodic_constraint_set_count =
@@ -2008,6 +2012,81 @@ int fullmag_fem_backend_upload_magnetization_f64(
         m_xyz,
         len,
         handle->last_error);
+}
+
+int fullmag_fem_backend_apply_demag_tangent_f64(
+    fullmag_fem_backend *handle,
+    const double *delta_m_xyz,
+    uint64_t delta_m_len,
+    double *out_delta_h_demag_xyz,
+    uint64_t out_len
+) {
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_apply_demag_tangent_f64 received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    handle->last_error.clear();
+    if (delta_m_xyz == nullptr || out_delta_h_demag_xyz == nullptr) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_apply_demag_tangent_f64 requires non-null input and output buffers");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (!handle->context.demag.enabled) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_apply_demag_tangent_f64 requires enabled native FEM demag");
+        return FULLMAG_FEM_ERR_UNAVAILABLE;
+    }
+    if (!fullmag::fem::context_sync_gpu_magnetization_to_host(
+            handle->context,
+            handle->last_error)) {
+        fullmag_fem_set_handle_error(handle, handle->last_error);
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
+
+    const uint64_t expected_len = static_cast<uint64_t>(handle->context.state.m_xyz.size());
+    if (expected_len == 0 ||
+        delta_m_len != expected_len ||
+        out_len < expected_len) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_apply_demag_tangent_f64 buffer lengths must match the backend magnetization field");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+
+#if FULLMAG_HAS_MFEM_STACK
+    std::vector<double> delta_m(
+        delta_m_xyz,
+        delta_m_xyz + static_cast<std::size_t>(delta_m_len));
+    std::vector<double> delta_h_demag;
+    double delta_demag_energy = 0.0;
+    if (!fullmag::fem::compute_fresh_demag_field_for_magnetization(
+            handle->context,
+            delta_m,
+            delta_h_demag,
+            delta_demag_energy,
+            true,
+            nullptr,
+            handle->last_error)) {
+        fullmag_fem_set_handle_error(handle, handle->last_error);
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
+    if (delta_h_demag.size() != static_cast<std::size_t>(expected_len)) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_apply_demag_tangent_f64 received inconsistent demag field sizes from native solver");
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
+    for (std::size_t index = 0; index < delta_h_demag.size(); ++index) {
+        out_delta_h_demag_xyz[index] = delta_h_demag[index];
+    }
+    return FULLMAG_FEM_OK;
+#else
+    fullmag_fem_set_handle_error(handle, kUnavailableMessage);
+    return FULLMAG_FEM_ERR_UNAVAILABLE;
+#endif
 }
 
 int fullmag_fem_backend_snapshot_stats(

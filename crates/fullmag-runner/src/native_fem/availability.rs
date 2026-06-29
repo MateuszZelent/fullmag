@@ -656,8 +656,9 @@ mod tests {
                 phase_convention: FrequencyDomainPhaseConvention::ExpIOmegaT,
             });
 
-        assert_eq!(availability.status, "unavailable");
+        assert_eq!(availability.status, "ok");
         assert_eq!(availability.study_kind, "frequency_response");
+        assert!(availability.driven_response_available);
         assert!(!availability.reason.contains("nonzero-k"));
         assert!(!availability
             .diagnostics_json

@@ -674,6 +674,11 @@ def main() -> None:
                     if shared_domain_report_payload is not None
                     else []
                 ),
+                "magnetic_submesh_signatures": (
+                    shared_domain_report_payload["magnetic_submesh_signatures"]
+                    if shared_domain_report_payload is not None
+                    else []
+                ),
                 "shared_domain_build_report": shared_domain_report_payload,
             },
             size_field_stats=size_field_stats,

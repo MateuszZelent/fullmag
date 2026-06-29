@@ -623,11 +623,53 @@ void demag_periodic_reduction_is_owned_by_poisson_periodic_module() {
         periodic.find("periodic_workspace->solver.GetFinalNorm()") != std::string::npos,
         "Poisson periodic reduced solve must publish actual CG residual telemetry");
     check(
+        periodic.find("*x_p = 0.0;\n    const auto solver_apply_wall_start") !=
+            std::string::npos,
+        "Poisson periodic reduced solve must reset the reduced solution before each fresh tangent solve");
+    check(
         periodic.find("ctx.poisson_demag.last_iterations = 0;") == std::string::npos,
         "Poisson periodic reduced solve must not report hard-coded zero iterations");
     check(
         periodic.find("ctx.poisson_demag.last_residual = 0.0;") == std::string::npos,
         "Poisson periodic reduced solve must not report a hard-coded zero residual");
+}
+
+void backend_demag_tangent_abi_uses_fresh_poisson_dispatch() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string public_header =
+        read_text_file(root.parent_path() / ".." / "native" / "include" / "fullmag_fem.h");
+    const std::string api = read_text_file(root / "src" / "api.cpp");
+    const std::string tangent_plane =
+        read_text_file(root / "cpu" / "mfem" / "relaxation" / "tangent_plane_implicit.cpp");
+
+    check(
+        public_header.find("int fullmag_fem_backend_apply_demag_tangent_f64(") !=
+            std::string::npos,
+        "public FEM ABI must expose backend demag tangent application");
+    check(
+        api.find("int fullmag_fem_backend_apply_demag_tangent_f64(") != std::string::npos,
+        "FEM API facade must implement backend demag tangent application");
+    check(
+        api.find("compute_fresh_demag_field_for_magnetization(") != std::string::npos,
+        "backend demag tangent application must use the fresh Poisson/FEM-BEM demag dispatcher");
+    check(
+        tangent_plane.find("compute_fresh_demag_field_for_magnetization(\n"
+                           "                    ctx_,\n"
+                           "                    delta_m_xyz_,") != std::string::npos,
+        "tangent-plane implicit demag tangent must document the direct linear-response pattern");
+    check(
+        api.find("baseline_demag") == std::string::npos &&
+            api.find("perturbed_demag") == std::string::npos &&
+            api.find("perturbed_m") == std::string::npos,
+        "backend demag tangent application must not finite-difference H(m + delta_m) - H(m)");
+    check(
+        api.find("std::vector<double> delta_m(") != std::string::npos &&
+            api.find("delta_m_xyz,\n"
+                     "        delta_m_xyz + static_cast<std::size_t>(delta_m_len)") !=
+                std::string::npos &&
+            api.find("            delta_m,\n"
+                     "            delta_h_demag,") != std::string::npos,
+        "backend demag tangent application must pass delta_m directly to the fresh solve");
 }
 
 void demag_robin_boundary_mass_excludes_periodic_seam_markers() {
@@ -1157,6 +1199,7 @@ int main() {
     demag_rhs_assembly_is_owned_by_poisson_rhs_module();
     demag_boundary_operator_is_owned_by_poisson_boundary_module();
     demag_periodic_reduction_is_owned_by_poisson_periodic_module();
+    backend_demag_tangent_abi_uses_fresh_poisson_dispatch();
     demag_robin_boundary_mass_excludes_periodic_seam_markers();
     demag_hypre_solve_is_owned_by_poisson_hypre_module();
     demag_hypre_solve_returns_workspace_solution_without_final_host_copy();

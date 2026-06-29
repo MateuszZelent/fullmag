@@ -38,6 +38,7 @@ def _build_shared_domain_build_report(
     selector_resolution: list[dict[str, object]] | None = None,
     boundary_layer_result: Mapping[str, object] | None = None,
     orphan_entities: list[dict[str, object]] | None = None,
+    magnetic_submesh_signatures: list[dict[str, object]] | None = None,
 ) -> SharedDomainBuildReport:
     resolved = resolve_shared_domain_targets(
         geometries, hints,
@@ -134,6 +135,9 @@ def _build_shared_domain_build_report(
         size_fields_realized=size_fields_realized,
         operation_statuses=operation_statuses,
         thin_film_diagnostics=thin_film_diagnostics,
+        magnetic_submesh_signatures=[
+            dict(signature) for signature in magnetic_submesh_signatures or []
+        ],
         selector_resolution=[dict(item) for item in selector_resolution or []],
         orphan_entities=[dict(item) for item in orphan_entities or []],
         degraded=degraded,

@@ -8,7 +8,7 @@ use crate::native_fem::{
     NativeDrivenFrequencyResponseFloquetPeriodicPair,
     NativeDrivenFrequencyResponseMfemOperatorProblem,
     NativeDrivenFrequencyResponsePeriodicNodePair, NativeDrivenFrequencyResponseRequest,
-    NativeFrequencyDomainExecutionLane, NativeFrequencyDomainStatus,
+    NativeFemBackend, NativeFrequencyDomainExecutionLane, NativeFrequencyDomainStatus,
 };
 #[cfg(feature = "fem-gpu")]
 use crate::native_fem::{
@@ -18,13 +18,31 @@ use crate::types::{
     ExecutedRun, ExecutionProvenance, RunError, RunResult, RunStatus, StepAction, StepStats,
     StepUpdate,
 };
+#[cfg(feature = "fem-gpu")]
+use fullmag_fem_sys as ffi;
 use nalgebra::{DMatrix, DVector};
 use num_complex::Complex64;
 #[cfg(feature = "fem-gpu")]
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+#[cfg(feature = "fem-gpu")]
+use std::ffi::{c_char, c_void};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "fem-gpu")]
+use std::time::Instant;
+
+#[cfg(feature = "fem-gpu")]
+fn frequency_response_trace_enabled() -> bool {
+    std::env::var("FULLMAG_FEM_FREQUENCY_RESPONSE_TRACE")
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
 
 pub(crate) fn execute_fem_frequency_response_validation(
     plan: &fullmag_ir::FemFrequencyResponsePlanIR,
@@ -239,6 +257,35 @@ fn native_frequency_response_progress_update(
     }
 }
 
+#[cfg(any(feature = "fem-gpu", test))]
+fn write_initial_frequency_response_progress_artifact(
+    output_dir: &Path,
+    total_frequency_points: usize,
+) -> std::io::Result<()> {
+    let response_dir = output_dir.join("response");
+    std::fs::create_dir_all(&response_dir)?;
+    let progress =
+        crate::native_fem::FrequencyDomainSweepProgress::not_started(total_frequency_points as u64);
+    let progress_artifact = serde_json::json!({
+        "schema_version": "frequency_domain_sweep_progress.v1",
+        "status": "running",
+        "state": "not_started",
+        "complete": false,
+        "total_frequency_points": progress.total_frequency_points,
+        "completed_frequency_points": progress.completed_frequency_points,
+        "written_frequency_point_artifacts": progress.written_frequency_point_artifacts,
+        "current_frequency_hz": null,
+        "partial_artifacts_available": progress.partial_artifacts_available,
+        "latest_artifact_manifest_path": null,
+        "missing_reason": null,
+        "progress_json": progress.progress_json,
+    });
+    std::fs::write(
+        response_dir.join("progress.v1.json"),
+        serde_json::to_vec_pretty(&progress_artifact).expect("progress JSON should serialize"),
+    )
+}
+
 #[cfg(feature = "fem-gpu")]
 fn try_execute_fem_frequency_response_native_production_cpu(
     plan: &fullmag_ir::FemFrequencyResponsePlanIR,
@@ -256,6 +303,18 @@ fn try_execute_fem_frequency_response_native_production_cpu(
             });
         }
     }
+    let trace_enabled = frequency_response_trace_enabled();
+    let payload_start = Instant::now();
+    if trace_enabled {
+        eprintln!(
+            "[fullmag-runner] frequency-response payload: building requested_gpu={} nodes={} elements={} magnetic_bc={:?} magnetostatic_bc={:?}",
+            requested_gpu,
+            plan.mesh.nodes.len(),
+            plan.mesh.elements.len(),
+            frequency_response_effective_spin_wave_bc_kind(plan),
+            plan.magnetostatic_bc
+        );
+    }
     let Some(payload) = (if requested_gpu {
         build_native_production_gpu_payload(plan)
     } else {
@@ -268,12 +327,24 @@ fn try_execute_fem_frequency_response_native_production_cpu(
         }
         return Ok(None);
     };
+    if trace_enabled {
+        eprintln!(
+            "[fullmag-runner] frequency-response payload: built in {:.3}s compact_nodes={} exchange_edges={} static_pairs={} airbox_phi_pairs={} floquet_pairs={} demag_provider={}",
+            payload_start.elapsed().as_secs_f64(),
+            payload.equilibrium_magnetization.len(),
+            payload.exchange_edges.len(),
+            payload.static_periodic_node_pairs.len(),
+            payload.periodic_airbox_magnetostatic_periodic_node_pairs.len(),
+            payload.floquet_periodic_pairs.len(),
+            payload.requires_native_backend_demag_tangent_provider
+        );
+    }
     let execution_lane = if requested_gpu {
         NativeFrequencyDomainExecutionLane::ProductionGpu
     } else {
         NativeFrequencyDomainExecutionLane::ProductionCpu
     };
-    let node_count = plan.equilibrium_magnetization.len() as u64;
+    let node_count = payload.equilibrium_magnetization.len() as u64;
     let tangent_dof_count = node_count * 2;
     let stop_requested = AtomicBool::new(false);
     let cancel_callback = || {
@@ -311,6 +382,35 @@ fn try_execute_fem_frequency_response_native_production_cpu(
             phase_rad: Some(pair.phase_rad),
         })
         .collect::<Vec<_>>();
+    let mut demag_tangent_provider = if payload.requires_native_backend_demag_tangent_provider {
+        Some(NativeBackendDemagTangentProvider::create(plan, &payload)?)
+    } else {
+        None
+    };
+    let demag_tangent_provider_user_data = demag_tangent_provider
+        .as_mut()
+        .map_or(std::ptr::null_mut(), |provider| {
+            provider as *mut NativeBackendDemagTangentProvider as *mut c_void
+        });
+    let demag_tangent_provider_callback = demag_tangent_provider
+        .as_ref()
+        .map(|_| apply_native_backend_demag_tangent as _);
+    let operator_diagnostics_json = plan.domain_mesh_workflow_mode.as_ref().map(|mode| {
+        serde_json::json!({
+            "schema_version": "frequency_domain_operator_diagnostics.v1",
+            "domain_mesh_mode": mode,
+        })
+        .to_string()
+    });
+    write_initial_frequency_response_progress_artifact(
+        output_dir,
+        plan.frequencies_hz.values_hz.len(),
+    )
+    .map_err(|err| RunError {
+        message: format!(
+            "failed to write initial FEM frequency-response progress artifact: {err}"
+        ),
+    })?;
     let native_result =
         solve_native_driven_frequency_response(NativeDrivenFrequencyResponseRequest {
             node_count,
@@ -322,10 +422,12 @@ fn try_execute_fem_frequency_response_native_production_cpu(
             output_directory: output_dir,
             write_response_fields: true,
             write_partial_artifacts: true,
+            operator_diagnostics_json: operator_diagnostics_json.as_deref(),
             interrupt_requested: None,
             cancel_requested: cancel_callback_ref,
             progress_callback: progress_callback_ref,
             requires_periodic_airbox_dynamic_demag: payload.requires_periodic_airbox_dynamic_demag,
+            requires_floquet_airbox_dynamic_demag: payload.requires_floquet_airbox_dynamic_demag,
             magnetic_periodic_constraint_set_count: payload.magnetic_periodic_constraint_set_count,
             magnetostatic_periodic_constraint_set_count: payload
                 .magnetostatic_periodic_constraint_set_count,
@@ -337,7 +439,7 @@ fn try_execute_fem_frequency_response_native_production_cpu(
             periodic_airbox_coupled_block_problem: None,
             tiny_validation_problem: None,
             mfem_operator_problem: Some(NativeDrivenFrequencyResponseMfemOperatorProblem {
-                equilibrium_m: &plan.equilibrium_magnetization,
+                equilibrium_m: &payload.equilibrium_magnetization,
                 h_ext_a_per_m: &payload.h_ext_a_per_m,
                 uniaxial_anisotropy_axis: payload.uniaxial_anisotropy_axis.as_ref(),
                 uniaxial_anisotropy_field_a_per_m: payload.uniaxial_anisotropy_field_a_per_m,
@@ -355,8 +457,8 @@ fn try_execute_fem_frequency_response_native_production_cpu(
                 phase_convention: crate::native_fem::FrequencyDomainPhaseConvention::ExpIOmegaT,
                 floquet_periodic_pairs: &floquet_periodic_pairs,
                 #[cfg(feature = "fem-gpu")]
-                apply_demag_tangent: None,
-                demag_tangent_user_data: std::ptr::null_mut(),
+                apply_demag_tangent: demag_tangent_provider_callback,
+                demag_tangent_user_data: demag_tangent_provider_user_data,
                 demag_tangent_matrix_row_major: None,
             }),
         });
@@ -414,6 +516,8 @@ fn try_execute_fem_frequency_response_native_production_cpu(
             message: native_frequency_response_failure_message(
                 if requested_gpu {
                     "native FEM production GPU frequency response is unavailable for a supported production slice"
+                } else if payload.requires_native_backend_demag_tangent_provider {
+                    "native FEM production CPU periodic-airbox frequency response is unavailable until the native backend demag tangent provider is wired into the runner"
                 } else {
                     "native FEM production CPU frequency response is unavailable for a supported production slice"
                 },
@@ -462,6 +566,24 @@ fn native_frequency_response_failure_message(
         details.push_str(", result_status=");
         details.push_str(status);
     }
+    if let Some(total_iteration_count) =
+        frequency_domain_json_u64(diagnostics_json, "total_iteration_count")
+    {
+        details.push_str(", total_iteration_count=");
+        details.push_str(&total_iteration_count.to_string());
+    }
+    if let Some(max_iterations_for_frequency) =
+        frequency_domain_json_u64(diagnostics_json, "max_iterations_for_frequency")
+    {
+        details.push_str(", max_iterations_for_frequency=");
+        details.push_str(&max_iterations_for_frequency.to_string());
+    }
+    if let Some(relative_residual_l2_norm) =
+        frequency_domain_json_f64(diagnostics_json, "relative_residual_l2_norm")
+    {
+        details.push_str(", relative_residual_l2_norm=");
+        details.push_str(&relative_residual_l2_norm.to_string());
+    }
     if !error_message.is_empty() {
         details.push_str(": ");
         details.push_str(error_message);
@@ -495,7 +617,23 @@ fn frequency_domain_json_status(json: &str) -> Option<String> {
 }
 
 #[cfg(feature = "fem-gpu")]
+fn frequency_domain_json_u64(json: &str, key: &str) -> Option<u64> {
+    serde_json::from_str::<serde_json::Value>(json)
+        .ok()
+        .and_then(|value| value.get(key).and_then(|number| number.as_u64()))
+}
+
+#[cfg(feature = "fem-gpu")]
+fn frequency_domain_json_f64(json: &str, key: &str) -> Option<f64> {
+    serde_json::from_str::<serde_json::Value>(json)
+        .ok()
+        .and_then(|value| value.get(key).and_then(|number| number.as_f64()))
+}
+
+#[cfg(feature = "fem-gpu")]
 struct NativeProductionCpuPayload {
+    equilibrium_magnetization: Vec<[f64; 3]>,
+    magnetic_node_indices: Vec<usize>,
     h_ext_a_per_m: [f64; 3],
     uniaxial_anisotropy_axis: Option<[f64; 3]>,
     uniaxial_anisotropy_field_a_per_m: f64,
@@ -515,6 +653,8 @@ struct NativeProductionCpuPayload {
     periodic_airbox_magnetostatic_periodic_node_pairs:
         Vec<NativeDrivenFrequencyResponsePeriodicNodePair>,
     requires_periodic_airbox_dynamic_demag: bool,
+    requires_floquet_airbox_dynamic_demag: bool,
+    requires_native_backend_demag_tangent_provider: bool,
     magnetic_periodic_constraint_set_count: u64,
     magnetostatic_periodic_constraint_set_count: u64,
     periodic_airbox_delta_m_tangent_dof_count: u64,
@@ -532,12 +672,287 @@ struct FloquetPeriodicPairMetadata {
 }
 
 #[cfg(feature = "fem-gpu")]
+struct NativeBackendDemagTangentProvider {
+    backend: NativeFemBackend,
+    tangent_basis: Vec<([f64; 3], [f64; 3])>,
+    magnetic_node_indices: Vec<usize>,
+    full_node_count: usize,
+    trace_enabled: bool,
+}
+
+#[cfg(feature = "fem-gpu")]
+impl NativeBackendDemagTangentProvider {
+    fn create(
+        plan: &fullmag_ir::FemFrequencyResponsePlanIR,
+        payload: &NativeProductionCpuPayload,
+    ) -> Result<Self, RunError> {
+        let backend_plan = frequency_response_demag_backend_plan(plan);
+        let trace_enabled = frequency_response_trace_enabled();
+        let create_start = Instant::now();
+        if trace_enabled {
+            eprintln!(
+                "[fullmag-runner] frequency-response demag tangent provider: creating backend nodes={} elements={} demag={} exchange={} periodic_node_pairs={} source_exchange={} source_periodic_node_pairs={}",
+                plan.mesh.nodes.len(),
+                plan.mesh.elements.len(),
+                plan.enable_demag,
+                backend_plan.enable_exchange,
+                backend_plan.mesh.periodic_node_pairs.len(),
+                plan.enable_exchange,
+                plan.mesh.periodic_node_pairs.len()
+            );
+        }
+        let mut backend =
+            NativeFemBackend::create_with_initial_effective_field(&backend_plan, false)?;
+        if trace_enabled {
+            eprintln!(
+                "[fullmag-runner] frequency-response demag tangent provider: backend created in {:.3}s",
+                create_start.elapsed().as_secs_f64()
+            );
+        }
+        let upload_start = Instant::now();
+        backend.upload_magnetization(&plan.equilibrium_magnetization)?;
+        if trace_enabled {
+            eprintln!(
+                "[fullmag-runner] frequency-response demag tangent provider: equilibrium uploaded in {:.3}s",
+                upload_start.elapsed().as_secs_f64()
+            );
+        }
+        let basis_start = Instant::now();
+        let tangent_basis = payload
+            .equilibrium_magnetization
+            .iter()
+            .map(|m| {
+                tangent_basis(*m).ok_or_else(|| RunError {
+                    message:
+                        "FEM frequency response equilibrium magnetization must define tangent bases"
+                            .to_string(),
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if trace_enabled {
+            eprintln!(
+                "[fullmag-runner] frequency-response demag tangent provider: tangent basis built in {:.3}s",
+                basis_start.elapsed().as_secs_f64()
+            );
+        }
+        Ok(Self {
+            backend,
+            tangent_basis,
+            magnetic_node_indices: payload.magnetic_node_indices.clone(),
+            full_node_count: plan.equilibrium_magnetization.len(),
+            trace_enabled,
+        })
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn frequency_response_demag_backend_plan(
+    plan: &fullmag_ir::FemFrequencyResponsePlanIR,
+) -> fullmag_ir::FemPlanIR {
+    fullmag_ir::FemPlanIR {
+        mesh_name: plan.mesh_name.clone(),
+        mesh_source: plan.mesh_source.clone(),
+        mesh: plan.mesh.clone(),
+        object_segments: plan.object_segments.clone(),
+        mesh_parts: plan.mesh_parts.clone(),
+        domain_mesh_mode: plan.domain_mesh_mode,
+        domain_frame: plan.domain_frame.clone(),
+        fe_order: plan.fe_order,
+        hmax: plan.hmax,
+        initial_magnetization: plan.equilibrium_magnetization.clone(),
+        material: plan.material.clone(),
+        anisotropy_axis_field: None,
+        ms_element_field: None,
+        a_element_field: None,
+        region_materials: Vec::new(),
+        enable_exchange: plan.enable_exchange || !plan.mesh.periodic_node_pairs.is_empty(),
+        enable_demag: plan.enable_demag,
+        external_field: plan.external_field,
+        antenna_zeeman_masks: Vec::new(),
+        current_modules: Vec::new(),
+        gyromagnetic_ratio: plan.gyromagnetic_ratio,
+        precision: plan.precision,
+        exchange_bc: plan.exchange_bc,
+        integrator: fullmag_ir::IntegratorChoice::Heun,
+        fixed_timestep: Some(1.0e-13),
+        adaptive_timestep: None,
+        field_refresh: None,
+        relaxation: None,
+        demag_realization: plan.demag_realization,
+        air_box_config: None,
+        interfacial_dmi: None,
+        dmi_interface_normal: None,
+        bulk_dmi: None,
+        dind_field: None,
+        dbulk_field: None,
+        temperature: None,
+        current_density: None,
+        stt_degree: None,
+        stt_beta: None,
+        stt_spin_polarization: None,
+        stt_lambda: None,
+        stt_epsilon_prime: None,
+        stt_thickness: None,
+        stt_fixed_layer_position: None,
+        has_oersted_cylinder: false,
+        oersted_current: None,
+        oersted_radius: None,
+        oersted_center: None,
+        oersted_axis: None,
+        oersted_field_xyz: None,
+        oersted_time_dep_kind: 0,
+        oersted_time_dep_freq: 0.0,
+        oersted_time_dep_phase: 0.0,
+        oersted_time_dep_offset: 0.0,
+        oersted_time_dep_t_on: 0.0,
+        oersted_time_dep_t_off: 0.0,
+        magnetoelastic: None,
+        mechanics: None,
+        demag_solver_policy: plan.demag_solver_policy.clone(),
+        thermal_seed_config: None,
+        oersted_realization: None,
+        gpu_device_index: None,
+        mfem_device_string: Some("cpu".to_string()),
+        use_consistent_mass: None,
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+unsafe fn write_native_callback_error(error_message: *mut c_char, message: &str) {
+    if error_message.is_null() {
+        return;
+    }
+    let bytes = message.as_bytes();
+    let len = bytes.len().min(127);
+    for (index, byte) in bytes.iter().take(len).enumerate() {
+        unsafe {
+            *error_message.add(index) = *byte as c_char;
+        }
+    }
+    unsafe {
+        *error_message.add(len) = 0;
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+unsafe extern "C" fn apply_native_backend_demag_tangent(
+    user_data: *mut c_void,
+    in_: *const f64,
+    out: *mut f64,
+    error_message: *mut c_char,
+) -> ffi::fullmag_fem_frequency_domain_status {
+    if user_data.is_null() || in_.is_null() || out.is_null() {
+        unsafe {
+            write_native_callback_error(
+                error_message,
+                "native demag tangent callback received null buffer",
+            );
+        }
+        return ffi::fullmag_fem_frequency_domain_status::FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OPERATOR_ERROR;
+    }
+    let provider = unsafe { &mut *user_data.cast::<NativeBackendDemagTangentProvider>() };
+    let node_count = provider.tangent_basis.len();
+    let tangent_dof_count = node_count * 2;
+    if provider.magnetic_node_indices.len() != node_count {
+        unsafe {
+            write_native_callback_error(
+                error_message,
+                "native demag tangent callback has inconsistent magnetic node mapping",
+            );
+        }
+        return ffi::fullmag_fem_frequency_domain_status::FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OPERATOR_ERROR;
+    }
+    let tangent_in = unsafe { std::slice::from_raw_parts(in_, tangent_dof_count) };
+    let tangent_out = unsafe { std::slice::from_raw_parts_mut(out, tangent_dof_count) };
+    if tangent_in.iter().all(|value| *value == 0.0) {
+        tangent_out.fill(0.0);
+        return ffi::fullmag_fem_frequency_domain_status::FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OK;
+    }
+    let mut delta_m = vec![[0.0; 3]; provider.full_node_count];
+    for (node_index, (e1, e2)) in provider.tangent_basis.iter().enumerate() {
+        let c1 = tangent_in[node_index * 2];
+        let c2 = tangent_in[node_index * 2 + 1];
+        let full_node_index = provider.magnetic_node_indices[node_index];
+        if full_node_index >= provider.full_node_count {
+            unsafe {
+                write_native_callback_error(
+                    error_message,
+                    "native demag tangent callback magnetic node index is out of range",
+                );
+            }
+            return ffi::fullmag_fem_frequency_domain_status::FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OPERATOR_ERROR;
+        }
+        delta_m[full_node_index] = [
+            c1 * e1[0] + c2 * e2[0],
+            c1 * e1[1] + c2 * e2[1],
+            c1 * e1[2] + c2 * e2[2],
+        ];
+    }
+    let apply_start = Instant::now();
+    if provider.trace_enabled {
+        eprintln!(
+            "[fullmag-runner] frequency-response demag tangent provider: applying demag tangent nodes={}",
+            node_count
+        );
+    }
+    let delta_h = match provider.backend.apply_demag_tangent(&delta_m) {
+        Ok(delta_h) => delta_h,
+        Err(err) => {
+            unsafe {
+                write_native_callback_error(error_message, &err.message);
+            }
+            return ffi::fullmag_fem_frequency_domain_status::FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OPERATOR_ERROR;
+        }
+    };
+    if provider.trace_enabled {
+        eprintln!(
+            "[fullmag-runner] frequency-response demag tangent provider: demag tangent applied in {:.3}s",
+            apply_start.elapsed().as_secs_f64()
+        );
+    }
+    if delta_h.len() != provider.full_node_count {
+        unsafe {
+            write_native_callback_error(
+                error_message,
+                "native demag tangent callback returned inconsistent node count",
+            );
+        }
+        return ffi::fullmag_fem_frequency_domain_status::FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OPERATOR_ERROR;
+    }
+    for (node_index, (e1, e2)) in provider.tangent_basis.iter().enumerate() {
+        let full_node_index = provider.magnetic_node_indices[node_index];
+        tangent_out[node_index * 2] = dot3(delta_h[full_node_index], *e1);
+        tangent_out[node_index * 2 + 1] = dot3(delta_h[full_node_index], *e2);
+    }
+    ffi::fullmag_fem_frequency_domain_status::FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OK
+}
+
+#[cfg(feature = "fem-gpu")]
 fn build_native_production_cpu_payload(
     plan: &fullmag_ir::FemFrequencyResponsePlanIR,
 ) -> Option<NativeProductionCpuPayload> {
     if production_cpu_frequency_response_rejection_reason(plan).is_some() {
         return None;
     }
+    build_native_production_payload(plan)
+}
+
+#[cfg(feature = "fem-gpu")]
+fn build_native_production_gpu_payload(
+    plan: &fullmag_ir::FemFrequencyResponsePlanIR,
+) -> Option<NativeProductionCpuPayload> {
+    if production_gpu_frequency_response_rejection_reason(plan).is_some() {
+        return None;
+    }
+    build_native_production_payload(plan)
+}
+
+#[cfg(feature = "fem-gpu")]
+fn build_native_production_payload(
+    plan: &fullmag_ir::FemFrequencyResponsePlanIR,
+) -> Option<NativeProductionCpuPayload> {
+    let trace_enabled = frequency_response_trace_enabled();
+    let build_start = Instant::now();
     let h_ext_a_per_m = plan.external_field.unwrap_or([0.0, 0.0, 0.0]);
     if !h_ext_a_per_m.iter().all(|value| value.is_finite()) {
         return None;
@@ -548,12 +963,16 @@ fn build_native_production_cpu_payload(
     let (uniaxial_anisotropy_axis, uniaxial_anisotropy_field_a_per_m) =
         build_uniaxial_anisotropy_payload(plan)?;
     let (alpha_uniform, alpha_per_node) = build_damping_payload(plan)?;
+    if trace_enabled {
+        eprintln!(
+            "[fullmag-runner] frequency-response payload: material terms built in {:.3}s",
+            build_start.elapsed().as_secs_f64()
+        );
+    }
     let excitation = plan.excitation.field_au_per_m;
     if !plan.excitation.phase_rad.is_finite() {
         return None;
     }
-    let phase_cos = plan.excitation.phase_rad.cos();
-    let phase_sin = plan.excitation.phase_rad.sin();
     let drive_norm = excitation
         .iter()
         .map(|component| component * component)
@@ -565,15 +984,55 @@ fn build_native_production_cpu_payload(
     if plan.equilibrium_magnetization.is_empty() {
         return None;
     }
+    let compact_start = Instant::now();
+    let magnetic_node_indices = frequency_response_magnetic_node_indices(plan)?;
+    let node_index_map =
+        compact_node_index_map(plan.equilibrium_magnetization.len(), &magnetic_node_indices)?;
+    let equilibrium_magnetization = magnetic_node_indices
+        .iter()
+        .map(|node_index| plan.equilibrium_magnetization[*node_index])
+        .collect::<Vec<_>>();
+    let alpha_per_node = alpha_per_node.map(|values| {
+        magnetic_node_indices
+            .iter()
+            .map(|node_index| values[*node_index])
+            .collect::<Vec<_>>()
+    });
+    if trace_enabled {
+        eprintln!(
+            "[fullmag-runner] frequency-response payload: compacted magnetic nodes in {:.3}s compact_nodes={} full_nodes={}",
+            compact_start.elapsed().as_secs_f64(),
+            equilibrium_magnetization.len(),
+            plan.equilibrium_magnetization.len()
+        );
+    }
+    let exchange_start = Instant::now();
     let exchange_edges = if plan.enable_exchange {
-        build_exchange_edges(plan)?
+        build_exchange_edges(plan, &node_index_map)?
     } else {
         Vec::new()
     };
-    let static_periodic_node_pairs = build_static_periodic_node_pairs(plan)?;
-    let floquet_periodic_pairs = build_floquet_periodic_pairs(plan)?;
+    if trace_enabled {
+        eprintln!(
+            "[fullmag-runner] frequency-response payload: exchange edges built in {:.3}s count={}",
+            exchange_start.elapsed().as_secs_f64(),
+            exchange_edges.len()
+        );
+    }
+    let periodic_start = Instant::now();
+    let static_periodic_node_pairs = build_static_periodic_node_pairs(plan, &node_index_map)?;
+    let floquet_periodic_pairs = build_floquet_periodic_pairs(plan, &node_index_map)?;
     let periodic_airbox_magnetostatic_periodic_node_pairs =
         build_periodic_airbox_magnetostatic_periodic_node_pairs(plan)?;
+    if trace_enabled {
+        eprintln!(
+            "[fullmag-runner] frequency-response payload: periodic metadata built in {:.3}s static_pairs={} floquet_pairs={} airbox_phi_pairs={}",
+            periodic_start.elapsed().as_secs_f64(),
+            static_periodic_node_pairs.len(),
+            floquet_periodic_pairs.len(),
+            periodic_airbox_magnetostatic_periodic_node_pairs.len()
+        );
+    }
     let floquet_k_vector_rad_per_m = if frequency_response_effective_spin_wave_bc_kind(plan)
         == fullmag_ir::SpinWaveBoundaryKindIR::Floquet
     {
@@ -585,18 +1044,52 @@ fn build_native_production_cpu_payload(
         None
     };
     let dmi_payload = build_dmi_payload(plan)?;
-    let mut drive_tangent_real = Vec::with_capacity(plan.equilibrium_magnetization.len() * 2);
-    let mut drive_tangent_imag = Vec::with_capacity(plan.equilibrium_magnetization.len() * 2);
-    for m in &plan.equilibrium_magnetization {
+    if trace_enabled {
+        eprintln!(
+            "[fullmag-runner] frequency-response payload: dmi payload built in {:.3}s elements={}",
+            build_start.elapsed().as_secs_f64(),
+            dmi_payload.elements.len()
+        );
+    }
+    let floquet_node_phases = if frequency_response_effective_spin_wave_bc_kind(plan)
+        == fullmag_ir::SpinWaveBoundaryKindIR::Floquet
+    {
+        Some(build_floquet_node_phases(
+            equilibrium_magnetization.len(),
+            &floquet_periodic_pairs,
+        )?)
+    } else {
+        None
+    };
+    let mut drive_tangent_real = Vec::with_capacity(equilibrium_magnetization.len() * 2);
+    let mut drive_tangent_imag = Vec::with_capacity(equilibrium_magnetization.len() * 2);
+    for (node_index, m) in equilibrium_magnetization.iter().enumerate() {
         let (e1, e2) = tangent_basis(*m)?;
         let tangent_e1 = dot3(excitation, e1);
         let tangent_e2 = dot3(excitation, e2);
-        drive_tangent_real.push(tangent_e1 * phase_cos);
-        drive_tangent_real.push(tangent_e2 * phase_cos);
-        drive_tangent_imag.push(tangent_e1 * phase_sin);
-        drive_tangent_imag.push(tangent_e2 * phase_sin);
+        let node_phase = plan.excitation.phase_rad
+            + floquet_node_phases
+                .as_ref()
+                .map(|phases| phases[node_index])
+                .unwrap_or(0.0);
+        let node_phase_cos = node_phase.cos();
+        let node_phase_sin = node_phase.sin();
+        drive_tangent_real.push(tangent_e1 * node_phase_cos);
+        drive_tangent_real.push(tangent_e2 * node_phase_cos);
+        drive_tangent_imag.push(tangent_e1 * node_phase_sin);
+        drive_tangent_imag.push(tangent_e2 * node_phase_sin);
     }
+    if trace_enabled {
+        eprintln!(
+            "[fullmag-runner] frequency-response payload: tangent drive built in {:.3}s dofs={}",
+            build_start.elapsed().as_secs_f64(),
+            drive_tangent_real.len()
+        );
+    }
+    let periodic_airbox_delta_m_tangent_dof_count = drive_tangent_real.len() as u64;
     Some(NativeProductionCpuPayload {
+        equilibrium_magnetization,
+        magnetic_node_indices,
         h_ext_a_per_m,
         uniaxial_anisotropy_axis,
         uniaxial_anisotropy_field_a_per_m,
@@ -616,11 +1109,17 @@ fn build_native_production_cpu_payload(
         periodic_airbox_magnetostatic_periodic_node_pairs,
         requires_periodic_airbox_dynamic_demag: plan.magnetostatic_bc
             == fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0,
-        periodic_airbox_delta_m_tangent_dof_count: (plan.equilibrium_magnetization.len() * 2)
-            as u64,
-        periodic_airbox_delta_phi_dof_count: if plan.magnetostatic_bc
+        requires_floquet_airbox_dynamic_demag: plan.magnetostatic_bc
+            == fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox,
+        requires_native_backend_demag_tangent_provider: plan.magnetostatic_bc
             == fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0
-        {
+            && plan.requested_device != fullmag_ir::ExecutionDevice::Gpu,
+        periodic_airbox_delta_m_tangent_dof_count,
+        periodic_airbox_delta_phi_dof_count: if matches!(
+            plan.magnetostatic_bc,
+            fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0
+                | fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox
+        ) {
             plan.mesh.nodes.len() as u64
         } else {
             0
@@ -642,16 +1141,6 @@ fn build_native_production_cpu_payload(
             })
             .count() as u64,
     })
-}
-
-#[cfg(feature = "fem-gpu")]
-fn build_native_production_gpu_payload(
-    plan: &fullmag_ir::FemFrequencyResponsePlanIR,
-) -> Option<NativeProductionCpuPayload> {
-    if production_gpu_frequency_response_rejection_reason(plan).is_some() {
-        return None;
-    }
-    build_native_production_cpu_payload(plan)
 }
 
 fn production_cpu_frequency_response_rejection_reason(
@@ -746,6 +1235,97 @@ fn production_gpu_frequency_response_rejection_reason(
             "production GPU frequency response currently supports only first-order P1 tetrahedral FEM meshes",
         );
     }
+    let has_nonzero_k = plan
+        .k_sampling
+        .as_ref()
+        .is_some_and(|k_sampling| !k_sampling.is_single_gamma());
+    if plan.magnetostatic_bc == fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox {
+        if plan.domain_mesh_mode != fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir {
+            return Some("magnetostatic_bc=floquet_airbox requires a shared-domain airbox mesh");
+        }
+        if !plan.enable_demag || plan.demag_realization.is_none() {
+            return Some(
+                "magnetostatic_bc=floquet_airbox requires include_demag=true and a Demag energy term",
+            );
+        }
+        if has_requested_dmi(plan) {
+            return Some("DMI is not implemented for production GPU frequency response");
+        }
+        if !has_nonzero_k {
+            return Some("magnetostatic_bc=floquet_airbox requires nonzero k");
+        }
+        if frequency_response_effective_spin_wave_bc_kind(plan)
+            != fullmag_ir::SpinWaveBoundaryKindIR::Floquet
+        {
+            return Some(
+                "magnetostatic_bc=floquet_airbox requires spin_wave_bc=floquet for the dynamic magnetization",
+            );
+        }
+        if !plan.periodic_constraint_sets.iter().any(|constraint| {
+            constraint.unknown_family == fullmag_ir::PeriodicUnknownFamilyIR::MagnetizationDynamic
+                && constraint.domain_scope == fullmag_ir::PeriodicDomainScopeIR::MagneticDomain
+                && matches!(
+                    constraint.phase_policy,
+                    fullmag_ir::PeriodicPhasePolicyIR::BlochPhase { .. }
+                )
+        }) {
+            return Some("magnetostatic_bc=floquet_airbox requires a delta_m Bloch constraint set");
+        }
+        if !plan.periodic_constraint_sets.iter().any(|constraint| {
+            constraint.unknown_family
+                == fullmag_ir::PeriodicUnknownFamilyIR::MagnetostaticPotentialDynamic
+                && constraint.domain_scope
+                    == fullmag_ir::PeriodicDomainScopeIR::MagnetostaticDomainWithAir
+                && matches!(
+                    constraint.phase_policy,
+                    fullmag_ir::PeriodicPhasePolicyIR::BlochPhase { .. }
+                )
+        }) {
+            return Some(
+                "magnetostatic_bc=floquet_airbox requires a delta_phi Bloch constraint set",
+            );
+        }
+        return None;
+    }
+    if plan.magnetostatic_bc == fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0 {
+        if plan.domain_mesh_mode != fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir {
+            return Some(
+                "magnetostatic_bc=periodic_airbox_k0 requires a shared-domain airbox mesh",
+            );
+        }
+        if !plan.enable_demag || plan.demag_realization.is_none() {
+            return Some(
+                "magnetostatic_bc=periodic_airbox_k0 requires include_demag=true and a Demag energy term",
+            );
+        }
+        if has_requested_dmi(plan) {
+            return Some("DMI is not implemented for production GPU frequency response");
+        }
+        if has_nonzero_k {
+            return Some(
+                "nonzero-k Floquet/Bloch periodic-airbox dynamic demag is not implemented for production GPU frequency response",
+            );
+        }
+        if !plan.periodic_constraint_sets.iter().any(|constraint| {
+            constraint.unknown_family == fullmag_ir::PeriodicUnknownFamilyIR::MagnetizationDynamic
+                && constraint.domain_scope == fullmag_ir::PeriodicDomainScopeIR::MagneticDomain
+        }) {
+            return Some(
+                "magnetostatic_bc=periodic_airbox_k0 requires a delta_m periodic constraint set",
+            );
+        }
+        if !plan.periodic_constraint_sets.iter().any(|constraint| {
+            constraint.unknown_family
+                == fullmag_ir::PeriodicUnknownFamilyIR::MagnetostaticPotentialDynamic
+                && constraint.domain_scope
+                    == fullmag_ir::PeriodicDomainScopeIR::MagnetostaticDomainWithAir
+        }) {
+            return Some(
+                "magnetostatic_bc=periodic_airbox_k0 requires a delta_phi periodic constraint set",
+            );
+        }
+        return None;
+    }
     if plan.domain_mesh_mode != fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh {
         return Some(
             "production GPU frequency response currently supports only magnetic-body meshes without shared-domain airbox elements",
@@ -757,11 +1337,7 @@ fn production_gpu_frequency_response_rejection_reason(
     if has_requested_dmi(plan) {
         return Some("DMI is not implemented for production GPU frequency response");
     }
-    if !plan
-        .k_sampling
-        .as_ref()
-        .is_none_or(fullmag_ir::KSamplingIR::is_single_gamma)
-    {
+    if has_nonzero_k && plan.spin_wave_bc.kind() != fullmag_ir::SpinWaveBoundaryKindIR::Floquet {
         return Some(
             "nonzero-k Floquet/Bloch response is not implemented for production GPU frequency response",
         );
@@ -774,9 +1350,9 @@ fn production_gpu_frequency_response_rejection_reason(
             }
         }
         fullmag_ir::SpinWaveBoundaryKindIR::Floquet => {
-            return Some(
-                "nonzero-k Floquet/Bloch response is not implemented for production GPU frequency response",
-            );
+            if let Some(reason) = static_periodic_frequency_response_rejection_reason(plan) {
+                return Some(reason);
+            }
         }
         _ => {
             return Some(
@@ -814,35 +1390,14 @@ fn static_periodic_frequency_response_rejection_reason(
         return Some("static periodic frequency response did not select any boundary pairs");
     }
 
-    let boundary_pair_ids = plan
-        .mesh
-        .periodic_boundary_pairs
-        .iter()
-        .map(|pair| pair.pair_id.as_str())
-        .collect::<BTreeSet<_>>();
-    if boundary_pair_ids.len() != plan.mesh.periodic_boundary_pairs.len()
-        || boundary_pair_ids.contains("")
-    {
-        return Some(
-            "static periodic frequency response requires unique non-empty periodic boundary pair ids",
-        );
-    }
-    for pair_id in &selected_boundary_pair_ids {
-        if !boundary_pair_ids.contains(pair_id) {
+    let mut boundary_pair_metadata = BTreeMap::<&str, ([f64; 3], f64)>::new();
+    for boundary_pair in &plan.mesh.periodic_boundary_pairs {
+        let pair_id = boundary_pair.pair_id.as_str();
+        if pair_id.is_empty() {
             return Some(
-                "static periodic frequency response requested an unknown periodic boundary pair",
+                "static periodic frequency response requires non-empty periodic boundary pair ids",
             );
         }
-        let Some(boundary_pair) = plan
-            .mesh
-            .periodic_boundary_pairs
-            .iter()
-            .find(|pair| pair.pair_id == *pair_id)
-        else {
-            return Some(
-                "static periodic frequency response requested an unknown periodic boundary pair",
-            );
-        };
         let Some(translation) = boundary_pair.translation else {
             return Some(
                 "static periodic frequency response requires periodic boundary pair translations",
@@ -851,6 +1406,34 @@ fn static_periodic_frequency_response_rejection_reason(
         if !translation.iter().all(|value| value.is_finite()) {
             return Some(
                 "static periodic frequency response requires finite periodic boundary pair translations",
+            );
+        }
+        let tolerance = boundary_pair.tolerance.unwrap_or(1.0e-9).max(0.0);
+        if let Some((reference_translation, reference_tolerance)) =
+            boundary_pair_metadata.get_mut(pair_id)
+        {
+            let delta = [
+                translation[0] - reference_translation[0],
+                translation[1] - reference_translation[1],
+                translation[2] - reference_translation[2],
+            ];
+            let delta_norm =
+                (delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]).sqrt();
+            let allowed = tolerance.max(*reference_tolerance);
+            if !delta_norm.is_finite() || delta_norm > allowed {
+                return Some(
+                    "static periodic frequency response requires consistent periodic boundary pair translations per pair id",
+                );
+            }
+            *reference_tolerance = reference_tolerance.max(tolerance);
+        } else {
+            boundary_pair_metadata.insert(pair_id, (translation, tolerance));
+        }
+    }
+    for pair_id in &selected_boundary_pair_ids {
+        if !boundary_pair_metadata.contains_key(pair_id) {
+            return Some(
+                "static periodic frequency response requested an unknown periodic boundary pair",
             );
         }
     }
@@ -875,19 +1458,11 @@ fn static_periodic_frequency_response_rejection_reason(
                 "static periodic frequency response requires valid periodic node pair indices",
             );
         }
-        let Some(boundary_pair) = plan
-            .mesh
-            .periodic_boundary_pairs
-            .iter()
-            .find(|boundary_pair| boundary_pair.pair_id == pair.pair_id)
+        let Some((translation, tolerance)) =
+            boundary_pair_metadata.get(pair.pair_id.as_str()).copied()
         else {
             return Some(
                 "static periodic frequency response requires periodic node pairs to reference known boundary pair ids",
-            );
-        };
-        let Some(translation) = boundary_pair.translation else {
-            return Some(
-                "static periodic frequency response requires periodic boundary pair translations",
             );
         };
         let src = plan.mesh.nodes[pair.node_a as usize];
@@ -900,7 +1475,6 @@ fn static_periodic_frequency_response_rejection_reason(
         let residual_norm =
             (residual[0] * residual[0] + residual[1] * residual[1] + residual[2] * residual[2])
                 .sqrt();
-        let tolerance = boundary_pair.tolerance.unwrap_or(1.0e-9).max(0.0);
         if !residual_norm.is_finite() || residual_norm > tolerance {
             return Some(
                 "static periodic frequency response requires node-pair translations within tolerance",
@@ -940,32 +1514,77 @@ fn frequency_response_effective_spin_wave_bc_kind(
     }
 }
 
+#[cfg(any(feature = "fem-gpu", test))]
+fn frequency_response_magnetic_node_indices(
+    plan: &fullmag_ir::FemFrequencyResponsePlanIR,
+) -> Option<Vec<usize>> {
+    if plan.mesh.nodes.len() != plan.equilibrium_magnetization.len() {
+        return None;
+    }
+    let indices = if plan.domain_mesh_mode
+        == fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir
+        && matches!(
+            plan.magnetostatic_bc,
+            fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0
+                | fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox
+        ) {
+        plan.equilibrium_magnetization
+            .iter()
+            .enumerate()
+            .filter_map(|(node_index, m)| {
+                let norm = dot3(*m, *m).sqrt();
+                (norm > 1.0e-12).then_some(node_index)
+            })
+            .collect::<Vec<_>>()
+    } else {
+        (0..plan.equilibrium_magnetization.len()).collect::<Vec<_>>()
+    };
+    if indices.is_empty() {
+        return None;
+    }
+    Some(indices)
+}
+
+#[cfg(any(feature = "fem-gpu", test))]
+fn compact_node_index_map(
+    full_node_count: usize,
+    magnetic_node_indices: &[usize],
+) -> Option<Vec<Option<u64>>> {
+    let mut map = vec![None; full_node_count];
+    for (compact_index, full_index) in magnetic_node_indices.iter().copied().enumerate() {
+        if full_index >= full_node_count || map[full_index].is_some() {
+            return None;
+        }
+        map[full_index] = Some(compact_index as u64);
+    }
+    Some(map)
+}
+
 #[cfg(feature = "fem-gpu")]
 fn build_static_periodic_node_pairs(
     plan: &fullmag_ir::FemFrequencyResponsePlanIR,
+    node_index_map: &[Option<u64>],
 ) -> Option<Vec<NativeDrivenFrequencyResponsePeriodicNodePair>> {
     if frequency_response_effective_spin_wave_bc_kind(plan)
         != fullmag_ir::SpinWaveBoundaryKindIR::Periodic
     {
         return Some(Vec::new());
     }
-    let node_count = plan.equilibrium_magnetization.len();
     let requested_pair_ids = plan.spin_wave_bc.boundary_pair_ids();
     let mut pairs = Vec::new();
     for pair in &plan.mesh.periodic_node_pairs {
         if !requested_pair_ids.is_empty() && !requested_pair_ids.contains(&pair.pair_id.as_str()) {
             continue;
         }
-        if pair.node_a as usize >= node_count
-            || pair.node_b as usize >= node_count
-            || pair.node_a == pair.node_b
-        {
+        let node_a = node_index_map.get(pair.node_a as usize).copied().flatten();
+        let node_b = node_index_map.get(pair.node_b as usize).copied().flatten();
+        let (Some(node_a), Some(node_b)) = (node_a, node_b) else {
+            continue;
+        };
+        if node_a == node_b {
             return None;
         }
-        pairs.push(NativeDrivenFrequencyResponsePeriodicNodePair {
-            node_a: pair.node_a as u64,
-            node_b: pair.node_b as u64,
-        });
+        pairs.push(NativeDrivenFrequencyResponsePeriodicNodePair { node_a, node_b });
     }
     if pairs.is_empty() {
         return None;
@@ -977,7 +1596,11 @@ fn build_static_periodic_node_pairs(
 fn build_periodic_airbox_magnetostatic_periodic_node_pairs(
     plan: &fullmag_ir::FemFrequencyResponsePlanIR,
 ) -> Option<Vec<NativeDrivenFrequencyResponsePeriodicNodePair>> {
-    if plan.magnetostatic_bc != fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0 {
+    if !matches!(
+        plan.magnetostatic_bc,
+        fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0
+            | fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox
+    ) {
         return Some(Vec::new());
     }
     let constraint_set = plan.periodic_constraint_sets.iter().find(|constraint| {
@@ -1012,6 +1635,7 @@ fn build_periodic_airbox_magnetostatic_periodic_node_pairs(
 #[cfg(any(feature = "fem-gpu", test))]
 fn build_floquet_periodic_pairs(
     plan: &fullmag_ir::FemFrequencyResponsePlanIR,
+    node_index_map: &[Option<u64>],
 ) -> Option<Vec<FloquetPeriodicPairMetadata>> {
     if frequency_response_effective_spin_wave_bc_kind(plan)
         != fullmag_ir::SpinWaveBoundaryKindIR::Floquet
@@ -1026,17 +1650,18 @@ fn build_floquet_periodic_pairs(
         return None;
     }
 
-    let node_count = plan.equilibrium_magnetization.len();
     let requested_pair_ids = plan.spin_wave_bc.boundary_pair_ids();
     let mut pairs = Vec::new();
     for pair in &plan.mesh.periodic_node_pairs {
         if !requested_pair_ids.is_empty() && !requested_pair_ids.contains(&pair.pair_id.as_str()) {
             continue;
         }
-        if pair.node_a as usize >= node_count
-            || pair.node_b as usize >= node_count
-            || pair.node_a == pair.node_b
-        {
+        let node_a = node_index_map.get(pair.node_a as usize).copied().flatten();
+        let node_b = node_index_map.get(pair.node_b as usize).copied().flatten();
+        let (Some(node_a), Some(node_b)) = (node_a, node_b) else {
+            continue;
+        };
+        if node_a == node_b {
             return None;
         }
         let boundary_pair = plan
@@ -1057,8 +1682,8 @@ fn build_floquet_periodic_pairs(
         };
         pairs.push(FloquetPeriodicPairMetadata {
             pair_id: pair.pair_id.clone(),
-            node_a: pair.node_a as u64,
-            node_b: pair.node_b as u64,
+            node_a,
+            node_b,
             translation_m,
             phase_rad,
         });
@@ -1067,6 +1692,59 @@ fn build_floquet_periodic_pairs(
         return None;
     }
     Some(pairs)
+}
+
+#[cfg(feature = "fem-gpu")]
+fn build_floquet_node_phases(
+    node_count: usize,
+    pairs: &[FloquetPeriodicPairMetadata],
+) -> Option<Vec<f64>> {
+    let mut phases = vec![None::<f64>; node_count];
+    for seed in 0..node_count {
+        if phases[seed].is_some() {
+            continue;
+        }
+        phases[seed] = Some(0.0);
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for pair in pairs {
+                let node_a = pair.node_a as usize;
+                let node_b = pair.node_b as usize;
+                if node_a >= node_count || node_b >= node_count {
+                    return None;
+                }
+                match (phases[node_a], phases[node_b]) {
+                    (Some(phase_a), Some(phase_b)) => {
+                        if wrapped_phase_residual(phase_b - phase_a - pair.phase_rad).abs() > 1.0e-9
+                        {
+                            return None;
+                        }
+                    }
+                    (Some(phase_a), None) => {
+                        phases[node_b] = Some(phase_a + pair.phase_rad);
+                        changed = true;
+                    }
+                    (None, Some(phase_b)) => {
+                        phases[node_a] = Some(phase_b - pair.phase_rad);
+                        changed = true;
+                    }
+                    (None, None) => {}
+                }
+            }
+        }
+    }
+    phases.into_iter().collect()
+}
+
+#[cfg(feature = "fem-gpu")]
+fn wrapped_phase_residual(phase_rad: f64) -> f64 {
+    let two_pi = 2.0 * std::f64::consts::PI;
+    let mut value = (phase_rad + std::f64::consts::PI).rem_euclid(two_pi) - std::f64::consts::PI;
+    if value <= -std::f64::consts::PI {
+        value += two_pi;
+    }
+    value
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -1346,26 +2024,76 @@ fn invert3(m: [[f64; 3]; 3], det: f64) -> Option<[[f64; 3]; 3]> {
 #[cfg(feature = "fem-gpu")]
 fn build_exchange_edges(
     plan: &fullmag_ir::FemFrequencyResponsePlanIR,
+    node_index_map: &[Option<u64>],
 ) -> Option<Vec<NativeDrivenFrequencyResponseExchangeEdge>> {
     if !plan.material.exchange_stiffness.is_finite() || plan.material.exchange_stiffness <= 0.0 {
         return None;
     }
-    let node_count = plan.equilibrium_magnetization.len();
-    if plan.mesh.nodes.len() != node_count {
+    if plan.mesh.nodes.len() != node_index_map.len() {
+        return None;
+    }
+    if !plan.mesh.element_markers.is_empty()
+        && plan.mesh.element_markers.len() != plan.mesh.elements.len()
+    {
         return None;
     }
     let mut pairs = std::collections::BTreeSet::<(usize, usize)>::new();
-    for element in &plan.mesh.elements {
+    for (element_index, element) in plan.mesh.elements.iter().enumerate() {
+        if plan
+            .mesh
+            .element_markers
+            .get(element_index)
+            .is_some_and(|marker| *marker == 0)
+        {
+            continue;
+        }
+        let mut compact_element = Vec::with_capacity(element.len());
+        let mut has_airbox_node = false;
+        for node in element {
+            let Some(node) = node_index_map.get(*node as usize).copied().flatten() else {
+                has_airbox_node = true;
+                break;
+            };
+            compact_element.push(node as usize);
+        }
+        if has_airbox_node {
+            continue;
+        }
         for left in 0..element.len() {
             for right in (left + 1)..element.len() {
-                let i = element[left] as usize;
-                let j = element[right] as usize;
-                if i >= node_count || j >= node_count || i == j {
+                let i = compact_element[left];
+                let j = compact_element[right];
+                if i == j {
                     return None;
                 }
                 pairs.insert(if i < j { (i, j) } else { (j, i) });
             }
         }
+    }
+    match frequency_response_effective_spin_wave_bc_kind(plan) {
+        fullmag_ir::SpinWaveBoundaryKindIR::Periodic
+        | fullmag_ir::SpinWaveBoundaryKindIR::Floquet => {
+            let requested_pair_ids = plan.spin_wave_bc.boundary_pair_ids();
+            for pair in &plan.mesh.periodic_node_pairs {
+                if !requested_pair_ids.is_empty()
+                    && !requested_pair_ids.contains(&pair.pair_id.as_str())
+                {
+                    continue;
+                }
+                let i = node_index_map.get(pair.node_a as usize).copied().flatten();
+                let j = node_index_map.get(pair.node_b as usize).copied().flatten();
+                let (Some(i), Some(j)) = (i, j) else {
+                    continue;
+                };
+                let i = i as usize;
+                let j = j as usize;
+                if i == j {
+                    return None;
+                }
+                pairs.insert(if i < j { (i, j) } else { (j, i) });
+            }
+        }
+        _ => {}
     }
     if pairs.is_empty() {
         return None;
@@ -1401,7 +2129,7 @@ fn tangent_basis(m: [f64; 3]) -> Option<([f64; 3], [f64; 3])> {
     Some((e1, e2))
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", test))]
 fn dot3(a: [f64; 3], b: [f64; 3]) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
@@ -1446,6 +2174,13 @@ fn validation_stiffness_scale(plan: &fullmag_ir::FemFrequencyResponsePlanIR) -> 
 mod tests {
     use super::*;
 
+    fn source_block<'a>(source: &'a str, start_marker: &str, end_marker: &str) -> &'a str {
+        let start = source.find(start_marker).expect(start_marker);
+        let rest = &source[start..];
+        let end = rest.find(end_marker).expect(end_marker);
+        &rest[..end]
+    }
+
     #[test]
     fn native_frequency_response_progress_update_reports_completed_frequency_count() {
         let progress = NativeFrequencyDomainProgress {
@@ -1465,6 +2200,178 @@ mod tests {
         assert_eq!(update.stats.max_h_eff, 3.5);
         assert_eq!(update.grid, [0, 0, 0]);
         assert!(!update.finished);
+    }
+
+    #[test]
+    fn initial_frequency_response_progress_artifact_is_written_before_first_point() {
+        let unique_suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-runner-frequency-response-initial-progress-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+
+        write_initial_frequency_response_progress_artifact(&output_dir, 5)
+            .expect("initial frequency-response progress should be written");
+
+        let progress_path = output_dir.join("response/progress.v1.json");
+        let progress: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(&progress_path).expect("progress artifact should exist"),
+        )
+        .expect("progress artifact should parse");
+        assert_eq!(
+            progress["schema_version"],
+            "frequency_domain_sweep_progress.v1"
+        );
+        assert_eq!(progress["status"], "running");
+        assert_eq!(progress["state"], "not_started");
+        assert_eq!(progress["complete"], false);
+        assert_eq!(progress["total_frequency_points"], 5);
+        assert_eq!(progress["completed_frequency_points"], 0);
+        assert_eq!(progress["written_frequency_point_artifacts"], 0);
+        assert_eq!(progress["partial_artifacts_available"], false);
+
+        let _ = std::fs::remove_dir_all(output_dir);
+    }
+
+    #[test]
+    fn periodic_airbox_response_wires_native_backend_demag_tangent_provider_source_contract() {
+        let source = include_str!("frequency_response.rs");
+        assert!(
+            source.contains("struct NativeBackendDemagTangentProvider"),
+            "PeriodicAirboxK0 runner path must allocate a native backend demag tangent provider"
+        );
+        assert!(
+            source.contains("unsafe extern \"C\" fn apply_native_backend_demag_tangent"),
+            "PeriodicAirboxK0 runner path must expose a C ABI demag tangent callback"
+        );
+        let request_block = source_block(
+            source,
+            "mfem_operator_problem: Some(NativeDrivenFrequencyResponseMfemOperatorProblem",
+            "demag_tangent_matrix_row_major:",
+        );
+        assert!(
+            request_block.contains("demag_tangent_provider_callback"),
+            "MFEM operator payload must pass the native backend demag tangent callback"
+        );
+        assert!(
+            request_block.contains("demag_tangent_provider_user_data"),
+            "MFEM operator payload must pass demag tangent provider user data"
+        );
+    }
+
+    #[test]
+    fn periodic_airbox_demag_provider_preserves_frequency_response_demag_solver_policy_source_contract(
+    ) {
+        let source = include_str!("frequency_response.rs");
+        let backend_plan_block = source_block(
+            source,
+            "fn frequency_response_demag_backend_plan",
+            "thermal_seed_config:",
+        );
+        assert!(
+            backend_plan_block.contains("demag_solver_policy: plan.demag_solver_policy.clone()"),
+            "PeriodicAirboxK0 demag tangent provider must reuse the frequency-response FEM demag solver policy"
+        );
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn periodic_airbox_demag_provider_backend_plan_keeps_exchange_for_periodic_metadata() {
+        let plan = qualified_periodic_airbox_frequency_response_plan();
+        let backend_plan = super::frequency_response_demag_backend_plan(&plan);
+
+        assert!(
+            backend_plan.enable_exchange,
+            "native FEM backend validates periodic_node_pairs only when exchange is enabled"
+        );
+        assert!(!backend_plan.mesh.periodic_node_pairs.is_empty());
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn periodic_airbox_demag_provider_backend_plan_forces_cpu_mfem_device() {
+        let plan = qualified_periodic_airbox_frequency_response_plan();
+        let backend_plan = super::frequency_response_demag_backend_plan(&plan);
+
+        assert_eq!(backend_plan.mfem_device_string.as_deref(), Some("cpu"));
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn periodic_airbox_payload_filters_magnetic_pairs_from_shared_domain_pairs() {
+        let mut plan = qualified_periodic_airbox_frequency_response_plan();
+        plan.mesh.nodes.push([2.0, 0.0, 0.0]);
+        plan.mesh.nodes.push([3.0, 0.0, 0.0]);
+        plan.equilibrium_magnetization.push([0.0, 0.0, 0.0]);
+        plan.equilibrium_magnetization.push([0.0, 0.0, 0.0]);
+        plan.mesh
+            .periodic_node_pairs
+            .push(fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "x_faces".to_string(),
+                node_a: 3,
+                node_b: 4,
+            });
+
+        let payload = super::build_native_production_cpu_payload(&plan)
+            .expect("shared-domain airbox pairs must not disable native production payload");
+
+        assert_eq!(payload.static_periodic_node_pairs.len(), 2);
+        assert_eq!(
+            payload
+                .periodic_airbox_magnetostatic_periodic_node_pairs
+                .len(),
+            3
+        );
+        assert!(payload
+            .static_periodic_node_pairs
+            .iter()
+            .all(|pair| pair.node_a < 3 && pair.node_b < 3));
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn periodic_airbox_payload_compacts_magnetic_dofs_when_airbox_nodes_have_zero_m() {
+        let mut plan = qualified_periodic_airbox_frequency_response_plan();
+        plan.enable_exchange = true;
+        plan.mesh.nodes.push([1.0, 1.0, 0.0]);
+        plan.mesh.nodes.push([2.0, 1.0, 0.0]);
+        plan.mesh.elements = vec![[0, 1, 2, 3]];
+        plan.equilibrium_magnetization.push([1.0, 0.0, 0.0]);
+        plan.equilibrium_magnetization.push([0.0, 0.0, 0.0]);
+        plan.object_segments = vec![
+            fullmag_ir::FemObjectSegmentIR {
+                object_id: "magnetic".to_string(),
+                geometry_id: None,
+                node_start: 0,
+                node_count: 4,
+                element_start: 0,
+                element_count: 1,
+                boundary_face_start: 0,
+                boundary_face_count: 0,
+            },
+            fullmag_ir::FemObjectSegmentIR {
+                object_id: "__air__".to_string(),
+                geometry_id: None,
+                node_start: 4,
+                node_count: 1,
+                element_start: 1,
+                element_count: 0,
+                boundary_face_start: 0,
+                boundary_face_count: 0,
+            },
+        ];
+
+        let payload = super::build_native_production_cpu_payload(&plan)
+            .expect("periodic-airbox response should ignore zero-m airbox nodes for delta_m");
+
+        assert_eq!(payload.drive_tangent_real.len(), 8);
+        assert_eq!(payload.drive_tangent_imag.len(), 8);
+        assert_eq!(payload.periodic_airbox_delta_m_tangent_dof_count, 8);
+        assert_eq!(payload.periodic_airbox_delta_phi_dof_count, 5);
     }
 
     #[test]
@@ -1584,6 +2491,7 @@ mod tests {
             object_segments: Vec::new(),
             mesh_parts: Vec::new(),
             domain_mesh_mode: fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh,
+            domain_mesh_workflow_mode: None,
             domain_frame: None,
             fe_order: 1,
             hmax: 1.0,
@@ -1644,6 +2552,7 @@ mod tests {
             requested_device: fullmag_ir::ExecutionDevice::Cpu,
             exchange_bc: fullmag_ir::ExchangeBoundaryCondition::Neumann,
             demag_realization: None,
+            demag_solver_policy: None,
             periodic_constraint_sets: Vec::new(),
         }
     }
@@ -1701,6 +2610,7 @@ mod tests {
                 surface_anisotropy_axis: None,
             });
         plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
+        plan.enable_exchange = false;
         plan.enable_demag = true;
         plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
         plan.magnetostatic_bc = fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0;
@@ -1860,6 +2770,36 @@ mod tests {
             });
         assert!(super::production_cpu_frequency_response_rejection_reason(&multi_pair).is_none());
 
+        let mut split_surface_pair = multi_pair.clone();
+        split_surface_pair.mesh.periodic_boundary_pairs.push(
+            fullmag_ir::MeshPeriodicBoundaryPairIR {
+                pair_id: "x_faces".to_string(),
+                source_marker: None,
+                destination_marker: None,
+                marker_a: 5,
+                marker_b: 6,
+                translation: Some([1.0, 0.0, 0.0]),
+                tolerance: Some(1.0e-12),
+                axis_hint: Some("x".to_string()),
+                orientation: None,
+                pairing_policy: None,
+            },
+        );
+        assert!(
+            super::production_cpu_frequency_response_rejection_reason(&split_surface_pair)
+                .is_none(),
+            "split shared-domain periodic surfaces may publish multiple marker pairs for one logical pair id"
+        );
+
+        let mut inconsistent_split_surface_pair = split_surface_pair.clone();
+        inconsistent_split_surface_pair.mesh.periodic_boundary_pairs[2].translation =
+            Some([0.5, 0.0, 0.0]);
+        assert!(super::production_cpu_frequency_response_rejection_reason(
+            &inconsistent_split_surface_pair
+        )
+        .expect("inconsistent split-surface translation should reject")
+        .contains("consistent periodic boundary pair translations"));
+
         let periodic_airbox = qualified_periodic_airbox_frequency_response_plan();
         assert!(
             super::production_cpu_frequency_response_rejection_reason(&periodic_airbox).is_none()
@@ -1876,6 +2816,10 @@ mod tests {
                     .periodic_airbox_magnetostatic_periodic_node_pairs
                     .len(),
                 2
+            );
+            assert!(
+                payload.requires_native_backend_demag_tangent_provider,
+                "periodic-airbox CPU response must create a native backend demag tangent provider"
             );
         }
 
@@ -2005,7 +2949,14 @@ mod tests {
             k_vector: [1.0e6, 2.0e6, 0.0],
         });
 
-        let pairs = super::build_floquet_periodic_pairs(&plan)
+        let magnetic_node_indices = super::frequency_response_magnetic_node_indices(&plan)
+            .expect("magnetic node indices should be buildable");
+        let node_index_map = super::compact_node_index_map(
+            plan.equilibrium_magnetization.len(),
+            &magnetic_node_indices,
+        )
+        .expect("compact node map should be buildable");
+        let pairs = super::build_floquet_periodic_pairs(&plan, &node_index_map)
             .expect("Floquet periodic-pair metadata should be buildable");
 
         assert_eq!(pairs.len(), 2);
@@ -2057,6 +3008,21 @@ mod tests {
                 .contains("DMI")
         );
 
+        let mut periodic_airbox = qualified_periodic_airbox_frequency_response_plan();
+        periodic_airbox.requested_device = fullmag_ir::ExecutionDevice::Gpu;
+        assert!(
+            super::production_gpu_frequency_response_rejection_reason(&periodic_airbox).is_none(),
+            "forced GPU periodic-airbox dynamic demag should reach the native boundary so it can publish periodic_airbox_dynamic_demag_gpu_unsupported artifacts"
+        );
+        #[cfg(feature = "fem-gpu")]
+        {
+            let payload = super::build_native_production_gpu_payload(&periodic_airbox)
+                .expect("forced GPU periodic-airbox request should build native rejection payload");
+            assert!(payload.requires_periodic_airbox_dynamic_demag);
+            assert_eq!(payload.magnetostatic_periodic_constraint_set_count, 1);
+            assert_eq!(payload.periodic_airbox_delta_phi_dof_count, 3);
+        }
+
         let mut periodic_without_pairs = supported.clone();
         periodic_without_pairs.spin_wave_bc =
             fullmag_ir::SpinWaveBoundaryConditionIR::Config(fullmag_ir::SpinWaveBoundaryConfigIR {
@@ -2101,6 +3067,156 @@ mod tests {
                 .expect("valid static-periodic GPU response should build a native payload");
             assert_eq!(payload.static_periodic_node_pairs.len(), 1);
             assert!(payload.floquet_periodic_pairs.is_empty());
+        }
+
+        let mut floquet = periodic.clone();
+        floquet.equilibrium_magnetization = vec![[0.0, 0.0, 1.0]; 4];
+        floquet.excitation.field_au_per_m = [1.0, 0.0, 0.0];
+        floquet.spin_wave_bc =
+            fullmag_ir::SpinWaveBoundaryConditionIR::Config(fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,
+                boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            });
+        floquet.k_sampling = Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [std::f64::consts::FRAC_PI_2, 0.0, 0.0],
+        });
+        assert!(
+            super::production_gpu_frequency_response_rejection_reason(&floquet).is_none(),
+            "valid nonzero-k Floquet no-demag response should be executable on the narrow GPU projection slice"
+        );
+        #[cfg(feature = "fem-gpu")]
+        {
+            let payload = super::build_native_production_gpu_payload(&floquet)
+                .expect("valid nonzero-k Floquet GPU response should build a native payload");
+            assert!(payload.static_periodic_node_pairs.is_empty());
+            assert_eq!(payload.floquet_periodic_pairs.len(), 1);
+            assert_eq!(payload.drive_tangent_real[0], 1.0);
+            assert_eq!(payload.drive_tangent_imag[0], 0.0);
+            assert!(payload.drive_tangent_real[2].abs() < 1.0e-12);
+            assert!((payload.drive_tangent_imag[2] + 1.0).abs() < 1.0e-12);
+        }
+
+        #[cfg(feature = "fem-gpu")]
+        {
+            let mut floquet_airbox = qualified_periodic_airbox_frequency_response_plan();
+            floquet_airbox.requested_device = fullmag_ir::ExecutionDevice::Gpu;
+            floquet_airbox.spin_wave_bc = fullmag_ir::SpinWaveBoundaryConditionIR::Config(
+                fullmag_ir::SpinWaveBoundaryConfigIR {
+                    kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,
+                    boundary_pair_id: Some("x_faces".to_string()),
+                    pair_ids: Vec::new(),
+                    phase_convention: fullmag_ir::PhaseConventionIR::ExpMinusIKDotDeltaR,
+                    surface_anisotropy_ks: None,
+                    surface_anisotropy_axis: None,
+                },
+            );
+            floquet_airbox.k_sampling = Some(fullmag_ir::KSamplingIR::Single {
+                k_vector: [std::f64::consts::FRAC_PI_2, 0.0, 0.0],
+            });
+            floquet_airbox.magnetostatic_bc =
+                fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox;
+            floquet_airbox.periodic_constraint_sets = vec![
+                fullmag_ir::PeriodicConstraintSetIR {
+                    unknown_family: fullmag_ir::PeriodicUnknownFamilyIR::MagnetizationDynamic,
+                    domain_scope: fullmag_ir::PeriodicDomainScopeIR::MagneticDomain,
+                    pair_ids: vec!["x_faces".to_string()],
+                    phase_policy: fullmag_ir::PeriodicPhasePolicyIR::BlochPhase {
+                        phase_convention: fullmag_ir::PhaseConventionIR::ExpMinusIKDotDeltaR,
+                        k_vector_rad_per_m: [std::f64::consts::FRAC_PI_2, 0.0, 0.0],
+                        real_imag_mixing: true,
+                    },
+                    phase_loop_diagnostics: None,
+                },
+                fullmag_ir::PeriodicConstraintSetIR {
+                    unknown_family:
+                        fullmag_ir::PeriodicUnknownFamilyIR::MagnetostaticPotentialDynamic,
+                    domain_scope: fullmag_ir::PeriodicDomainScopeIR::MagnetostaticDomainWithAir,
+                    pair_ids: vec!["x_faces".to_string()],
+                    phase_policy: fullmag_ir::PeriodicPhasePolicyIR::BlochPhase {
+                        phase_convention: fullmag_ir::PhaseConventionIR::ExpMinusIKDotDeltaR,
+                        k_vector_rad_per_m: [std::f64::consts::FRAC_PI_2, 0.0, 0.0],
+                        real_imag_mixing: true,
+                    },
+                    phase_loop_diagnostics: None,
+                },
+            ];
+
+            let payload = super::build_native_production_payload(&floquet_airbox)
+                .expect("Floquet-airbox request should build a native metadata payload");
+            assert!(payload.requires_floquet_airbox_dynamic_demag);
+            assert_eq!(payload.magnetostatic_periodic_constraint_set_count, 1);
+            assert_eq!(payload.periodic_airbox_delta_phi_dof_count, 3);
+            assert_eq!(
+                payload
+                    .periodic_airbox_magnetostatic_periodic_node_pairs
+                    .len(),
+                1
+            );
+        }
+
+        #[cfg(feature = "fem-gpu")]
+        {
+            let mut floquet_boundary_exchange = floquet.clone();
+            floquet_boundary_exchange.mesh.nodes = vec![
+                [0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [0.0, 1.0, 1.0],
+                [1.0, 0.0, 0.0],
+                [1.0, 1.0, 0.0],
+                [1.0, 0.0, 1.0],
+                [1.0, 1.0, 1.0],
+            ];
+            floquet_boundary_exchange.mesh.elements = vec![[0, 1, 2, 3], [4, 5, 6, 7]];
+            floquet_boundary_exchange.equilibrium_magnetization = vec![[0.0, 0.0, 1.0]; 8];
+            floquet_boundary_exchange.mesh.periodic_node_pairs =
+                vec![fullmag_ir::MeshPeriodicNodePairIR {
+                    pair_id: "x_faces".to_string(),
+                    node_a: 0,
+                    node_b: 4,
+                }];
+
+            let payload = super::build_native_production_gpu_payload(&floquet_boundary_exchange)
+                .expect(
+                    "Floquet GPU response with boundary exchange should build a native payload",
+                );
+
+            assert!(
+                payload
+                    .exchange_edges
+                    .iter()
+                    .any(|edge| edge.node_i == 0 && edge.node_j == 4),
+                "Floquet GPU exchange payload must include the selected periodic boundary edge"
+            );
+        }
+
+        #[cfg(feature = "fem-gpu")]
+        {
+            let mut periodic_airbox_exchange = qualified_periodic_airbox_frequency_response_plan();
+            periodic_airbox_exchange.enable_exchange = true;
+            periodic_airbox_exchange.mesh.nodes = vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [1.0, 1.0, 0.0],
+            ];
+            periodic_airbox_exchange.equilibrium_magnetization = vec![[1.0, 0.0, 0.0]; 5];
+            periodic_airbox_exchange.mesh.elements = vec![[0, 1, 2, 3], [0, 1, 2, 4]];
+            periodic_airbox_exchange.mesh.element_markers = vec![1, 0];
+
+            let payload = super::build_native_production_cpu_payload(&periodic_airbox_exchange)
+                .expect("periodic-airbox response should build exchange payload");
+
+            assert_eq!(
+                payload.exchange_edges.len(),
+                6,
+                "exchange graph must ignore air-volume elements even when all element nodes are magnetic interface nodes"
+            );
         }
 
         let mut nonzero_k = supported.clone();
@@ -2150,13 +3266,16 @@ mod tests {
             "native FEM production CPU frequency response failed",
             super::NativeFrequencyDomainStatus::SolveError,
             "singular block system",
-            r#"{"schema_version":"frequency_domain_response_diagnostics.v1","status":"solve_error"}"#,
+            r#"{"schema_version":"frequency_domain_response_diagnostics.v1","status":"solve_error","total_iteration_count":256,"max_iterations_for_frequency":256,"relative_residual_l2_norm":0.75}"#,
             r#"{"schema_version":"frequency_domain_response_summary.v1","status":"solve_error"}"#,
         );
 
         assert!(message.contains("native_status=solve_error"));
         assert!(message.contains("diagnostics_status=solve_error"));
         assert!(message.contains("result_status=solve_error"));
+        assert!(message.contains("total_iteration_count=256"));
+        assert!(message.contains("max_iterations_for_frequency=256"));
+        assert!(message.contains("relative_residual_l2_norm=0.75"));
         assert!(message.contains("singular block system"));
         assert!(!message.contains("artifact_error"));
     }

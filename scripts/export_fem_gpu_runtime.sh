@@ -5,16 +5,27 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUNTIME_ROOT="${REPO_ROOT}/.fullmag/runtimes/fem-gpu-host"
 
 mkdir -p "${RUNTIME_ROOT}/bin" "${RUNTIME_ROOT}/lib" "${RUNTIME_ROOT}/include"
+RUNTIME_LOCK="${RUNTIME_ROOT}/.export.lock"
+exec 9>"${RUNTIME_LOCK}"
+if ! flock -n 9; then
+  echo "[export_fem_gpu_runtime] waiting for existing runtime export to finish"
+  flock 9
+fi
+chmod -R u+rwX,go+rwX "${RUNTIME_ROOT}"
 
 cd "${REPO_ROOT}"
 #rm -rf target/* target/.* 2>/dev/null || true
 
 : "${FULLMAG_FEM_RUNTIME_CARGO_JOBS:=1}"
+FULLMAG_HOST_UID="$(id -u)"
+FULLMAG_HOST_GID="$(id -g)"
 
 docker compose --profile fem-gpu build fem-gpu
 
 docker compose --profile fem-gpu run --rm -T \
   -e FULLMAG_FEM_RUNTIME_CARGO_JOBS="${FULLMAG_FEM_RUNTIME_CARGO_JOBS}" \
+  -e FULLMAG_HOST_UID="${FULLMAG_HOST_UID}" \
+  -e FULLMAG_HOST_GID="${FULLMAG_HOST_GID}" \
   fem-gpu bash -lc '
 set -euo pipefail
 echo "[export_fem_gpu_runtime] preparing runtime bundle directories"
@@ -28,10 +39,12 @@ clear_runtime_bundle_contents() {
   rm -f "$runtime_root"/_fullmag_core*.so
   rm -rf "$runtime_root/include"
   rm -rf "$runtime_root/openmpi"
+  mkdir -p "$runtime_root/bin" "$runtime_root/lib"
   mkdir -p "$runtime_root/include"
   mkdir -p "$runtime_root/openmpi/bin"
 }
-echo "[export_fem_gpu_runtime] using cached cargo target when available; no cargo clean is performed"
+echo "[export_fem_gpu_runtime] forcing fullmag-fem-sys native rebuild before copying runtime libraries"
+cargo clean -p fullmag-fem-sys
 
 echo "[export_fem_gpu_runtime] building fullmag-cli, fullmag-api, and PyO3 core with cuda fem-gpu release features"
 cargo_jobs="${FULLMAG_FEM_RUNTIME_CARGO_JOBS:-1}"
@@ -47,8 +60,9 @@ echo "[export_fem_gpu_runtime] copying launcher and API binaries"
 copy_runtime_binary() {
   local src="$1"
   local dest="$2"
-  rm -f "$dest"
-  install -m 755 "$src" "$dest"
+  rm -rf -- "$dest"
+  cp --remove-destination "$src" "$dest"
+  chmod 755 "$dest"
 }
 copy_runtime_binary target/release/fullmag .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu-bin
 copy_runtime_binary target/release/fullmag-api .fullmag/runtimes/fem-gpu-host/bin/fullmag-api
@@ -67,23 +81,45 @@ latest_native_lib_dir() {
   fi
   dirname "$selected"
 }
+copy_library_group_entry_replace() {
+  local src="$1"
+  local dest_dir="$2"
+  local dest="$dest_dir/$(basename "$src")"
+
+  rm -rf -- "$dest"
+  if [ -L "$src" ]; then
+    ln -sfn "$(readlink "$src")" "$dest"
+  else
+    install -m 755 "$src" "$dest"
+  fi
+}
 copy_native_library_group() {
   local source_dir="$1"
   local stem="$2"
   local dest_dir=".fullmag/runtimes/fem-gpu-host/lib"
+  local resolved_name=""
   find "$dest_dir" -maxdepth 1 -name "${stem}.so*" -exec rm -f -- {} +
   for src in "$source_dir"/"${stem}".so*; do
     if [ -e "$src" ] && [ ! -L "$src" ]; then
-      rm -rf "$dest_dir/$(basename "$src")"
-      cp -aT --remove-destination "$src" "$dest_dir/$(basename "$src")"
+      copy_library_group_entry_replace "$src" "$dest_dir"
     fi
   done
   for src in "$source_dir"/"${stem}".so*; do
     if [ -L "$src" ]; then
-      rm -rf "$dest_dir/$(basename "$src")"
-      cp -aT --remove-destination "$src" "$dest_dir/$(basename "$src")"
+      if [ "$(basename "$src")" = "${stem}.so" ]; then
+        continue
+      fi
+      copy_library_group_entry_replace "$src" "$dest_dir"
     fi
   done
+  if [ -e "$dest_dir/${stem}.so.0" ] || [ -L "$dest_dir/${stem}.so.0" ]; then
+    resolved_name="${stem}.so.0"
+  else
+    resolved_name="$(find "$dest_dir" -maxdepth 1 -name "${stem}.so.*" -printf '%f\n' | sort | head -n1)"
+  fi
+  if [ -n "$resolved_name" ]; then
+    ensure_runtime_soname_link "$dest_dir" "$stem" "$resolved_name"
+  fi
 }
 resolve_pkg_library_path() {
   local pkg="$1"
@@ -112,8 +148,7 @@ copy_pkg_library_group() {
   resolved_name="$(basename "$resolved")"
   copy_native_library_group "$source_dir" "$stem"
   if [ -f "$dest_dir/$resolved_name" ]; then
-    rm -f "$dest_dir/${stem}.so"
-    ln -s "$resolved_name" "$dest_dir/${stem}.so"
+    ensure_runtime_soname_link "$dest_dir" "$stem" "$resolved_name"
   fi
 }
 copy_shared_library_dependency_closure() {
@@ -341,13 +376,10 @@ payload = {
     encoding="utf-8",
 )
 PY
-runtime_owner="$(stat -c "%u:%g" .fullmag/runtimes/fem-gpu-host)"
-chown -R "${runtime_owner}" \
-  .fullmag/runtimes/fem-gpu-host/bin \
-  .fullmag/runtimes/fem-gpu-host/lib \
-  .fullmag/runtimes/fem-gpu-host/include \
-  .fullmag/runtimes/fem-gpu-host/openmpi \
-  .fullmag/runtimes/fem-gpu-host/_fullmag_core.so
+chown "${FULLMAG_HOST_UID}:${FULLMAG_HOST_GID}" .fullmag .fullmag/runtimes
+chown -R "${FULLMAG_HOST_UID}:${FULLMAG_HOST_GID}" .fullmag/runtimes/fem-gpu-host
+chmod u+rwx,go+rx,go-w .fullmag .fullmag/runtimes
+chmod -R u+rwX,go+rX,go-w .fullmag/runtimes/fem-gpu-host
 echo "[export_fem_gpu_runtime] container-side export complete"
 '
 

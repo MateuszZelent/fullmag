@@ -625,6 +625,12 @@ class MeshData:
             element_markers=self.element_markers,
             boundary_faces=self.boundary_faces,
             boundary_markers=self.boundary_markers,
+            periodic_boundary_pairs_json=np.asarray(
+                json.dumps(self.periodic_boundary_pairs),
+            ),
+            periodic_node_pairs_json=np.asarray(
+                json.dumps(self.periodic_node_pairs),
+            ),
         )
 
     def export_stl(self, path: str | Path) -> Path:
@@ -720,12 +726,26 @@ class MeshData:
             )
 
         data = np.load(source)
+        periodic_boundary_pairs: list[dict[str, object]] = []
+        periodic_node_pairs: list[dict[str, object]] = []
+        if "periodic_boundary_pairs_json" in data.files:
+            periodic_boundary_pairs = [
+                dict(pair)
+                for pair in json.loads(str(data["periodic_boundary_pairs_json"]))
+            ]
+        if "periodic_node_pairs_json" in data.files:
+            periodic_node_pairs = [
+                dict(pair)
+                for pair in json.loads(str(data["periodic_node_pairs_json"]))
+            ]
         return cls(
             nodes=data["nodes"],
             elements=data["elements"],
             element_markers=data["element_markers"],
             boundary_faces=data["boundary_faces"],
             boundary_markers=data["boundary_markers"],
+            periodic_boundary_pairs=periodic_boundary_pairs,
+            periodic_node_pairs=periodic_node_pairs,
         )
 
     def to_ir(self, mesh_name: str) -> dict[str, object]:

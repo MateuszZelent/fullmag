@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+from dataclasses import dataclass
 from dataclasses import replace as _dc_replace
 import math
 import tempfile
@@ -78,6 +80,592 @@ from ._size_field_plan import (
 _DEFAULT_AIRBOX_GROWTH_RATE = 1.3
 _DEFAULT_AIRBOX_GRADING = "geometric"
 _SIZE_DISTRIBUTION_HISTOGRAM_BINS = 30
+_FROZEN_MAGNETIC_SUBMESH_MODE = "generated_frozen_magnetic_submesh"
+_SUPPORTED_DOMAIN_MESH_MODES = frozenset(
+    {
+        "generated_shared_domain_mesh",
+        "explicit_shared_domain_mesh",
+        _FROZEN_MAGNETIC_SUBMESH_MODE,
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class FrozenMagneticSubmeshPayload:
+    mesh: MeshData
+    region_markers: list[dict[str, object]]
+    interface_boundary_faces: np.ndarray
+    magnetic_submesh_signatures: list[dict[str, object]]
+
+
+def _domain_mesh_mode_from_workflow(mesh_workflow: Mapping[str, object] | None) -> str | None:
+    if not isinstance(mesh_workflow, Mapping):
+        return None
+    mode = mesh_workflow.get("domain_mesh_mode")
+    if mode is None:
+        return None
+    return str(mode).strip() or None
+
+
+def _coerce_frozen_submesh_region_markers(raw: object) -> list[dict[str, object]]:
+    if not isinstance(raw, list) or not raw:
+        raise ValueError(
+            "frozen_magnetic_submesh_source requires a non-empty region_markers list"
+        )
+    region_markers: list[dict[str, object]] = []
+    seen_markers: set[int] = set()
+    seen_names: set[str] = set()
+    for index, entry in enumerate(raw):
+        if not isinstance(entry, Mapping):
+            raise ValueError(
+                f"frozen_magnetic_submesh_source.region_markers[{index}] must be a mapping"
+            )
+        geometry_name = entry.get("geometry_name")
+        marker = entry.get("marker")
+        if not isinstance(geometry_name, str) or not geometry_name.strip():
+            raise ValueError(
+                f"frozen_magnetic_submesh_source.region_markers[{index}].geometry_name "
+                "must be a non-empty string"
+            )
+        if not isinstance(marker, (int, np.integer)) or int(marker) <= 0:
+            raise ValueError(
+                f"frozen_magnetic_submesh_source.region_markers[{index}].marker "
+                "must be a positive integer"
+            )
+        marker_int = int(marker)
+        name = geometry_name.strip()
+        if marker_int in seen_markers:
+            raise ValueError(
+                f"frozen_magnetic_submesh_source.region_markers duplicates marker {marker_int}"
+            )
+        if name in seen_names:
+            raise ValueError(
+                f"frozen_magnetic_submesh_source.region_markers duplicates geometry_name {name!r}"
+            )
+        seen_markers.add(marker_int)
+        seen_names.add(name)
+        region_markers.append({"geometry_name": name, "marker": marker_int})
+    return region_markers
+
+
+def _load_frozen_magnetic_submesh_source(raw_source: object) -> FrozenMagneticSubmeshPayload:
+    if not isinstance(raw_source, Mapping):
+        raise ValueError(
+            "frozen_magnetic_submesh_source must be a mapping with mesh_source and region_markers"
+        )
+    mesh_source = raw_source.get("mesh_source")
+    if not isinstance(mesh_source, str) or not mesh_source.strip():
+        raise ValueError("frozen_magnetic_submesh_source.mesh_source must be a non-empty path")
+    mesh = MeshData.load(Path(mesh_source).expanduser())
+    mesh.validate_strict(require_positive_orientation=True)
+    region_markers = _coerce_frozen_submesh_region_markers(raw_source.get("region_markers"))
+    available_markers = {int(marker) for marker in np.unique(mesh.element_markers)}
+    for entry in region_markers:
+        marker = int(entry["marker"])
+        if marker not in available_markers:
+            raise ValueError(
+                "frozen_magnetic_submesh_source.region_markers references marker "
+                f"{marker}, but the frozen mesh element_markers are {sorted(available_markers)}"
+            )
+    interface_boundary_faces = np.asarray(mesh.boundary_faces, dtype=np.int32)
+    if interface_boundary_faces.size == 0:
+        raise ValueError(
+            "frozen_magnetic_submesh_source mesh must expose magnetic interface boundary_faces"
+        )
+    return FrozenMagneticSubmeshPayload(
+        mesh=mesh,
+        region_markers=region_markers,
+        interface_boundary_faces=interface_boundary_faces,
+        magnetic_submesh_signatures=_magnetic_submesh_signatures(mesh, region_markers),
+    )
+
+
+def _extract_frozen_magnetic_submesh(
+    shared_mesh: MeshData,
+    region_markers: list[dict[str, object]],
+    *,
+    geometry_name: str,
+) -> FrozenMagneticSubmeshPayload:
+    marker_entry = next(
+        (
+            entry
+            for entry in region_markers
+            if str(entry.get("geometry_name", "")).strip() == geometry_name
+        ),
+        None,
+    )
+    if marker_entry is None:
+        raise ValueError(f"no region marker found for frozen magnetic geometry {geometry_name!r}")
+    marker = marker_entry.get("marker")
+    if not isinstance(marker, (int, np.integer)):
+        raise ValueError(f"region marker for {geometry_name!r} must be an integer")
+    marker_int = int(marker)
+    magnetic_element_mask = np.asarray(shared_mesh.element_markers, dtype=np.int32) == marker_int
+    if not np.any(magnetic_element_mask):
+        raise ValueError(f"shared mesh contains no elements for magnetic marker {marker_int}")
+
+    magnetic_elements = np.asarray(shared_mesh.elements[magnetic_element_mask], dtype=np.int32)
+    used_nodes = np.unique(magnetic_elements.reshape(-1))
+    node_remap = {int(node_id): index for index, node_id in enumerate(used_nodes)}
+    remapped_elements = np.asarray(
+        [
+            [node_remap[int(node_id)] for node_id in element]
+            for element in magnetic_elements
+        ],
+        dtype=np.int32,
+    )
+
+    interface_faces: list[list[int]] = []
+    for face, boundary_marker in zip(
+        np.asarray(shared_mesh.boundary_faces, dtype=np.int32),
+        np.asarray(shared_mesh.boundary_markers, dtype=np.int32),
+        strict=False,
+    ):
+        if int(boundary_marker) != 10:
+            continue
+        if all(int(node_id) in node_remap for node_id in face):
+            interface_faces.append([node_remap[int(node_id)] for node_id in face])
+    if not interface_faces:
+        raise ValueError(
+            f"shared mesh exposes no boundary/interface faces for magnetic marker {marker_int}"
+        )
+
+    frozen_mesh = MeshData(
+        nodes=np.asarray(shared_mesh.nodes[used_nodes], dtype=np.float64),
+        elements=remapped_elements,
+        element_markers=np.full(remapped_elements.shape[0], marker_int, dtype=np.int32),
+        boundary_faces=np.asarray(interface_faces, dtype=np.int32),
+        boundary_markers=np.full(len(interface_faces), 10, dtype=np.int32),
+        periodic_boundary_pairs=[
+            dict(pair) for pair in shared_mesh.periodic_boundary_pairs
+        ],
+        periodic_node_pairs=_remap_periodic_node_pairs_by_used_nodes(
+            shared_mesh.periodic_node_pairs,
+            node_remap,
+        ),
+    )
+    frozen_region_markers = [{"geometry_name": geometry_name, "marker": marker_int}]
+    return FrozenMagneticSubmeshPayload(
+        mesh=frozen_mesh,
+        region_markers=frozen_region_markers,
+        interface_boundary_faces=frozen_mesh.boundary_faces,
+        magnetic_submesh_signatures=_magnetic_submesh_signatures(
+            frozen_mesh,
+            frozen_region_markers,
+        ),
+    )
+
+
+def _quantized_coordinate_key(
+    coordinate: np.ndarray,
+    *,
+    coordinate_quantization_m: float = 1.0e-12,
+) -> tuple[int, int, int]:
+    return tuple(
+        int(value)
+        for value in np.round(np.asarray(coordinate, dtype=np.float64) / coordinate_quantization_m)
+    )
+
+
+def _remap_periodic_node_pairs(
+    pairs: list[dict[str, object]],
+    node_map: np.ndarray,
+) -> list[dict[str, object]]:
+    remapped: list[dict[str, object]] = []
+    for pair in pairs:
+        node_a = int(pair.get("node_a", -1))
+        node_b = int(pair.get("node_b", -1))
+        if node_a < 0 or node_a >= node_map.size or node_b < 0 or node_b >= node_map.size:
+            raise ValueError("air mesh periodic_node_pairs contain invalid node indices")
+        next_pair = dict(pair)
+        next_pair["node_a"] = int(node_map[node_a])
+        next_pair["node_b"] = int(node_map[node_b])
+        if next_pair["node_a"] != next_pair["node_b"]:
+            remapped.append(next_pair)
+    return remapped
+
+
+def _remap_periodic_node_pairs_by_used_nodes(
+    pairs: list[dict[str, object]],
+    node_remap: dict[int, int],
+) -> list[dict[str, object]]:
+    remapped: list[dict[str, object]] = []
+    for pair in pairs:
+        node_a = int(pair.get("node_a", -1))
+        node_b = int(pair.get("node_b", -1))
+        if node_a not in node_remap or node_b not in node_remap:
+            continue
+        next_pair = dict(pair)
+        next_pair["node_a"] = int(node_remap[node_a])
+        next_pair["node_b"] = int(node_remap[node_b])
+        if next_pair["node_a"] != next_pair["node_b"]:
+            remapped.append(next_pair)
+    return remapped
+
+
+def _merge_frozen_magnetic_submesh_with_air_mesh(
+    frozen: FrozenMagneticSubmeshPayload,
+    air_mesh: MeshData,
+    *,
+    coordinate_quantization_m: float = 1.0e-12,
+) -> MeshData:
+    magnetic_mesh = frozen.mesh
+    frozen_nodes = np.asarray(magnetic_mesh.nodes, dtype=np.float64)
+    merged_nodes: list[np.ndarray] = [np.array(node, copy=True) for node in frozen_nodes]
+    coordinate_to_node: dict[tuple[int, int, int], int] = {
+        _quantized_coordinate_key(node, coordinate_quantization_m=coordinate_quantization_m): index
+        for index, node in enumerate(frozen_nodes)
+    }
+    air_node_map = np.empty(air_mesh.n_nodes, dtype=np.int32)
+    for index, node in enumerate(np.asarray(air_mesh.nodes, dtype=np.float64)):
+        key = _quantized_coordinate_key(
+            node,
+            coordinate_quantization_m=coordinate_quantization_m,
+        )
+        merged_index = coordinate_to_node.get(key)
+        if merged_index is None:
+            merged_index = len(merged_nodes)
+            coordinate_to_node[key] = merged_index
+            merged_nodes.append(np.array(node, copy=True))
+        air_node_map[index] = int(merged_index)
+
+    remapped_air_elements = air_node_map[np.asarray(air_mesh.elements, dtype=np.int32)]
+    merged_elements = np.vstack(
+        [
+            np.asarray(magnetic_mesh.elements, dtype=np.int32),
+            remapped_air_elements.astype(np.int32, copy=False),
+        ]
+    )
+    merged_element_markers = np.concatenate(
+        [
+            np.asarray(magnetic_mesh.element_markers, dtype=np.int32),
+            np.zeros(air_mesh.n_elements, dtype=np.int32),
+        ]
+    )
+    interface_face_keys = {
+        tuple(sorted(int(node) for node in face))
+        for face in np.asarray(frozen.interface_boundary_faces, dtype=np.int32)
+    }
+    boundary_faces: list[np.ndarray] = []
+    boundary_markers: list[int] = []
+    for face, marker in zip(air_mesh.boundary_faces, air_mesh.boundary_markers, strict=True):
+        remapped_face = air_node_map[np.asarray(face, dtype=np.int32)]
+        if tuple(sorted(int(node) for node in remapped_face)) in interface_face_keys:
+            continue
+        boundary_faces.append(remapped_face.astype(np.int32, copy=False))
+        boundary_markers.append(int(marker))
+
+    periodic_boundary_pairs = [dict(pair) for pair in air_mesh.periodic_boundary_pairs]
+    if not periodic_boundary_pairs:
+        periodic_boundary_pairs = [
+            dict(pair) for pair in magnetic_mesh.periodic_boundary_pairs
+        ]
+    periodic_node_pairs = [
+        dict(pair) for pair in magnetic_mesh.periodic_node_pairs
+    ]
+    periodic_node_pairs.extend(
+        _remap_periodic_node_pairs(
+            air_mesh.periodic_node_pairs,
+            air_node_map,
+        )
+    )
+
+    return MeshData(
+        nodes=np.asarray(merged_nodes, dtype=np.float64),
+        elements=merged_elements.astype(np.int32, copy=False),
+        element_markers=merged_element_markers.astype(np.int32, copy=False),
+        boundary_faces=(
+            np.vstack(boundary_faces).astype(np.int32, copy=False)
+            if boundary_faces
+            else np.empty((0, 3), dtype=np.int32)
+        ),
+        boundary_markers=np.asarray(boundary_markers, dtype=np.int32),
+        periodic_boundary_pairs=periodic_boundary_pairs,
+        periodic_node_pairs=periodic_node_pairs,
+    )
+
+
+def _write_frozen_boundary_ascii_stl(mesh: MeshData, path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="ascii") as handle:
+        handle.write("solid frozen_magnetic_boundary\n")
+        for face in np.asarray(mesh.boundary_faces, dtype=np.int32):
+            v0, v1, v2 = np.asarray(mesh.nodes[face], dtype=np.float64)
+            normal = np.cross(v1 - v0, v2 - v0)
+            norm = float(np.linalg.norm(normal))
+            if norm > 0.0:
+                normal = normal / norm
+            else:
+                normal = np.zeros(3, dtype=np.float64)
+            handle.write(
+                f"  facet normal {normal[0]:.17g} {normal[1]:.17g} {normal[2]:.17g}\n"
+            )
+            handle.write("    outer loop\n")
+            for vertex in (v0, v1, v2):
+                handle.write(
+                    f"      vertex {vertex[0]:.17g} {vertex[1]:.17g} {vertex[2]:.17g}\n"
+                )
+            handle.write("    endloop\n")
+            handle.write("  endfacet\n")
+        handle.write("endsolid frozen_magnetic_boundary\n")
+    return path
+
+
+def _airbox_with_clearance_for_frozen_surface(
+    airbox: AirboxOptions,
+    frozen_mesh: MeshData,
+) -> AirboxOptions:
+    if airbox.size is None or airbox.center is None or frozen_mesh.nodes.size == 0:
+        return airbox
+
+    size = np.asarray(airbox.size, dtype=np.float64)
+    center = np.asarray(airbox.center, dtype=np.float64)
+    air_min = center - size / 2.0
+    air_max = center + size / 2.0
+    frozen_nodes = np.asarray(frozen_mesh.nodes, dtype=np.float64)
+    frozen_min = np.min(frozen_nodes, axis=0)
+    frozen_max = np.max(frozen_nodes, axis=0)
+    clearance = max(1.0e-12, float(np.max(size)) * 1.0e-6)
+
+    adjusted = size.copy()
+    for axis in range(3):
+        touches_min = abs(float(frozen_min[axis] - air_min[axis])) <= clearance
+        touches_max = abs(float(frozen_max[axis] - air_max[axis])) <= clearance
+        if touches_min or touches_max:
+            adjusted[axis] += 2.0 * clearance
+
+    if np.array_equal(adjusted, size):
+        return airbox
+    return _dc_replace(airbox, size=tuple(float(value) for value in adjusted))
+
+
+def _points_inside_tetra_mesh(points: np.ndarray, mesh: MeshData) -> np.ndarray:
+    points = np.asarray(points, dtype=np.float64)
+    inside = np.zeros(points.shape[0], dtype=bool)
+    if points.size == 0 or mesh.n_elements == 0:
+        return inside
+
+    nodes = np.asarray(mesh.nodes, dtype=np.float64)
+    elements = np.asarray(mesh.elements, dtype=np.int32)
+    barycentric_tol = 1.0e-9
+    spatial_tol = max(1.0e-15, float(np.max(np.ptp(nodes, axis=0))) * 1.0e-10)
+
+    for element in elements:
+        tetra = nodes[element]
+        bbox_min = np.min(tetra, axis=0) - spatial_tol
+        bbox_max = np.max(tetra, axis=0) + spatial_tol
+        candidates = np.nonzero(
+            (~inside)
+            & np.all(points >= bbox_min.reshape(1, 3), axis=1)
+            & np.all(points <= bbox_max.reshape(1, 3), axis=1)
+        )[0]
+        if candidates.size == 0:
+            continue
+        matrix = np.column_stack(
+            (
+                tetra[1] - tetra[0],
+                tetra[2] - tetra[0],
+                tetra[3] - tetra[0],
+            )
+        )
+        try:
+            inverse = np.linalg.inv(matrix)
+        except np.linalg.LinAlgError:
+            continue
+        bary = (points[candidates] - tetra[0].reshape(1, 3)) @ inverse.T
+        candidate_inside = (
+            np.all(bary >= -barycentric_tol, axis=1)
+            & (np.sum(bary, axis=1) <= 1.0 + barycentric_tol)
+        )
+        inside[candidates[candidate_inside]] = True
+    return inside
+
+
+def _points_strictly_inside_tetra_mesh(points: np.ndarray, mesh: MeshData) -> np.ndarray:
+    points = np.asarray(points, dtype=np.float64)
+    inside = np.zeros(points.shape[0], dtype=bool)
+    if points.size == 0 or mesh.n_elements == 0:
+        return inside
+
+    nodes = np.asarray(mesh.nodes, dtype=np.float64)
+    elements = np.asarray(mesh.elements, dtype=np.int32)
+    barycentric_tol = 1.0e-9
+    spatial_tol = max(1.0e-15, float(np.max(np.ptp(nodes, axis=0))) * 1.0e-10)
+
+    for element in elements:
+        tetra = nodes[element]
+        bbox_min = np.min(tetra, axis=0) + spatial_tol
+        bbox_max = np.max(tetra, axis=0) - spatial_tol
+        candidates = np.nonzero(
+            (~inside)
+            & np.all(points > bbox_min.reshape(1, 3), axis=1)
+            & np.all(points < bbox_max.reshape(1, 3), axis=1)
+        )[0]
+        if candidates.size == 0:
+            continue
+        matrix = np.column_stack(
+            (
+                tetra[1] - tetra[0],
+                tetra[2] - tetra[0],
+                tetra[3] - tetra[0],
+            )
+        )
+        try:
+            inverse = np.linalg.inv(matrix)
+        except np.linalg.LinAlgError:
+            continue
+        bary = (points[candidates] - tetra[0].reshape(1, 3)) @ inverse.T
+        candidate_inside = (
+            np.all(bary > barycentric_tol, axis=1)
+            & (np.sum(bary, axis=1) < 1.0 - barycentric_tol)
+        )
+        inside[candidates[candidate_inside]] = True
+    return inside
+
+
+def _air_element_mask_outside_frozen_magnetic_submesh(
+    generated: MeshData,
+    frozen: FrozenMagneticSubmeshPayload,
+) -> np.ndarray:
+    marker_mask = np.asarray(generated.element_markers, dtype=np.int32) == 0
+    if not np.any(marker_mask):
+        return marker_mask
+    elements = np.asarray(generated.elements, dtype=np.int32)
+    element_nodes = np.asarray(generated.nodes, dtype=np.float64)[elements]
+    centroids = np.mean(element_nodes, axis=1)
+    inside_frozen = _points_inside_tetra_mesh(centroids[marker_mask], frozen.mesh)
+    strictly_inside_vertex = _points_strictly_inside_tetra_mesh(
+        element_nodes[marker_mask].reshape(-1, 3),
+        frozen.mesh,
+    ).reshape(-1, 4)
+    keep = marker_mask.copy()
+    keep[np.nonzero(marker_mask)[0][inside_frozen | np.any(strictly_inside_vertex, axis=1)]] = False
+    return keep
+
+
+def _boundary_faces_for_kept_elements(
+    mesh: MeshData,
+    element_mask: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    elements = np.asarray(mesh.elements, dtype=np.int32)[np.asarray(element_mask, dtype=bool)]
+    if elements.size == 0 or mesh.boundary_faces.size == 0:
+        return (
+            np.empty((0, 3), dtype=np.int32),
+            np.empty((0,), dtype=np.int32),
+        )
+    kept_faces: set[tuple[int, int, int]] = set()
+    for a, b, c, d in elements:
+        kept_faces.add(tuple(sorted((int(a), int(b), int(c)))))
+        kept_faces.add(tuple(sorted((int(a), int(b), int(d)))))
+        kept_faces.add(tuple(sorted((int(a), int(c), int(d)))))
+        kept_faces.add(tuple(sorted((int(b), int(c), int(d)))))
+    boundary_keep = np.asarray(
+        [
+            tuple(sorted(int(node_id) for node_id in face)) in kept_faces
+            for face in np.asarray(mesh.boundary_faces, dtype=np.int32)
+        ],
+        dtype=bool,
+    )
+    return (
+        np.asarray(mesh.boundary_faces[boundary_keep], dtype=np.int32),
+        np.asarray(mesh.boundary_markers[boundary_keep], dtype=np.int32),
+    )
+
+
+def _validate_domain_mesh_workflow(
+    mesh_workflow: Mapping[str, object] | None,
+) -> FrozenMagneticSubmeshPayload | None:
+    mode = _domain_mesh_mode_from_workflow(mesh_workflow)
+    if mode is None:
+        return None
+    if mode not in _SUPPORTED_DOMAIN_MESH_MODES:
+        supported = ", ".join(sorted(_SUPPORTED_DOMAIN_MESH_MODES))
+        raise ValueError(f"unknown domain_mesh_mode '{mode}'; expected one of: {supported}")
+    if mode != _FROZEN_MAGNETIC_SUBMESH_MODE:
+        return None
+    assert isinstance(mesh_workflow, Mapping)
+    if not mesh_workflow.get("frozen_magnetic_submesh_source"):
+        raise ValueError(
+            "generated_frozen_magnetic_submesh requires frozen_magnetic_submesh_source "
+            "so the magnetic MeshData and region markers cannot be silently regenerated"
+        )
+    return _load_frozen_magnetic_submesh_source(
+        mesh_workflow.get("frozen_magnetic_submesh_source")
+    )
+
+
+def _frozen_magnetic_submesh_air_mesh_source(
+    mesh_workflow: Mapping[str, object] | None,
+) -> str | None:
+    if not isinstance(mesh_workflow, Mapping):
+        return None
+    raw_source = mesh_workflow.get("frozen_magnetic_submesh_source")
+    if not isinstance(raw_source, Mapping):
+        return None
+    air_mesh_source = raw_source.get("air_mesh_source")
+    if not isinstance(air_mesh_source, str) or not air_mesh_source.strip():
+        return None
+    return air_mesh_source.strip()
+
+
+def _generate_air_mesh_for_frozen_magnetic_submesh(
+    *,
+    frozen: FrozenMagneticSubmeshPayload,
+    geometries: list[Geometry],
+    hints: FEM,
+    airbox: AirboxOptions,
+    mesh_workflow: Mapping[str, object] | None,
+    per_object_recipes: dict[str, PerObjectMeshRecipe] | None,
+    object_regions: list[dict[str, object]] | None,
+) -> MeshData:
+    del per_object_recipes, object_regions
+    with tempfile.TemporaryDirectory(prefix="fullmag-frozen-air-mesh-") as tmp_dir:
+        frozen_surface_path = Path(tmp_dir) / "frozen_magnetic_boundary.stl"
+        _write_frozen_boundary_ascii_stl(frozen.mesh, frozen_surface_path)
+        mesh_options = _mesh_options_from_runtime_metadata(
+            mesh_workflow,
+            geometries=geometries,
+            default_hmax=_shared_domain_size_field_default_hmax(hints, airbox),
+            bounds_by_name=None,
+            include_size_fields=False,
+        )
+        generated = generate_mesh_from_file(
+            frozen_surface_path,
+            hmax=float(hints.hmax),
+            order=int(hints.order),
+            airbox=_airbox_with_clearance_for_frozen_surface(airbox, frozen.mesh),
+            options=mesh_options,
+        )
+    air_mask = _air_element_mask_outside_frozen_magnetic_submesh(generated, frozen)
+    if not np.any(air_mask):
+        raise ValueError(
+            "generated_frozen_magnetic_submesh air generator produced no air tetrahedra"
+        )
+    boundary_faces, boundary_markers = _boundary_faces_for_kept_elements(generated, air_mask)
+    kept_air_nodes = {
+        int(node_id)
+        for node_id in np.asarray(generated.elements[air_mask], dtype=np.int32).reshape(-1)
+    }
+    periodic_node_pairs = _remap_periodic_node_pairs_by_used_nodes(
+        generated.periodic_node_pairs,
+        {node_id: node_id for node_id in kept_air_nodes},
+    )
+    retained_pair_ids = {str(pair.get("pair_id")) for pair in periodic_node_pairs}
+    return MeshData(
+        nodes=np.asarray(generated.nodes, dtype=np.float64),
+        elements=np.asarray(generated.elements[air_mask], dtype=np.int32),
+        element_markers=np.zeros(int(np.count_nonzero(air_mask)), dtype=np.int32),
+        boundary_faces=boundary_faces,
+        boundary_markers=boundary_markers,
+        periodic_boundary_pairs=[
+            dict(pair)
+            for pair in generated.periodic_boundary_pairs
+            if str(pair.get("pair_id")) in retained_pair_ids
+        ],
+        periodic_node_pairs=periodic_node_pairs,
+        quality=generated.quality,
+        per_domain_quality=generated.per_domain_quality,
+    )
 
 
 def _drop_degenerate_tetrahedra(
@@ -1061,6 +1649,76 @@ def _emit_shared_domain_mesh_summary(
             )
 
 
+def _magnetic_submesh_signatures(
+    mesh: MeshData,
+    region_markers: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    edge_pairs = np.asarray(
+        [[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]],
+        dtype=np.int64,
+    )
+    elements = np.asarray(mesh.elements, dtype=np.int64)
+    element_markers = np.asarray(mesh.element_markers, dtype=np.int32)
+    nodes = np.asarray(mesh.nodes, dtype=np.float64)
+    signatures: list[dict[str, object]] = []
+    for marker_entry in region_markers:
+        geometry_name = marker_entry.get("geometry_name")
+        marker = marker_entry.get("marker")
+        if not isinstance(geometry_name, str) or not isinstance(marker, (int, np.integer)):
+            continue
+        magnetic_elements = elements[element_markers == int(marker)]
+        if magnetic_elements.size == 0:
+            signatures.append(
+                {
+                    "geometry_name": geometry_name,
+                    "marker": int(marker),
+                    "node_count": 0,
+                    "tetra_count": 0,
+                    "edge_count": 0,
+                    "coordinate_quantization_m": 1.0e-12,
+                    "digest": None,
+                }
+            )
+            continue
+        edges = magnetic_elements[:, edge_pairs].reshape(-1, 2)
+        edges.sort(axis=1)
+        unique_edges = np.unique(edges, axis=0)
+        node_ids = np.unique(magnetic_elements.reshape(-1))
+        rounded_nodes = np.round(nodes[node_ids] / 1.0e-12).astype(np.int64)
+        coordinate_order = np.lexsort(rounded_nodes.T[::-1])
+        canonical_node_ids = node_ids[coordinate_order]
+        sorted_rounded_nodes = rounded_nodes[coordinate_order]
+        node_remap = {
+            int(node_id): index
+            for index, node_id in enumerate(canonical_node_ids)
+        }
+        canonical_elements = np.asarray(
+            [
+                sorted(node_remap[int(node_id)] for node_id in element)
+                for element in magnetic_elements
+            ],
+            dtype=np.int32,
+        )
+        canonical_elements = canonical_elements[
+            np.lexsort(canonical_elements.T[::-1])
+        ]
+        digest = hashlib.sha256()
+        digest.update(sorted_rounded_nodes.tobytes())
+        digest.update(canonical_elements.tobytes())
+        signatures.append(
+            {
+                "geometry_name": geometry_name,
+                "marker": int(marker),
+                "node_count": int(node_ids.size),
+                "tetra_count": int(magnetic_elements.shape[0]),
+                "edge_count": int(unique_edges.shape[0]),
+                "coordinate_quantization_m": 1.0e-12,
+                "digest": digest.hexdigest(),
+            }
+        )
+    return signatures
+
+
 def _strip_overridden_geometry_fields(
     existing_fields: list[dict[str, object]],
     per_object_recipes: dict[str, PerObjectMeshRecipe],
@@ -1143,6 +1801,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
     """
     if not geometries:
         raise ValueError("shared FEM domain mesh requires at least one geometry")
+    frozen_payload = _validate_domain_mesh_workflow(mesh_workflow)
 
     airbox = _study_universe_airbox_options(geometries, study_universe)
     if airbox is None:
@@ -1150,6 +1809,72 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             "shared FEM domain mesh generation requires a declared study universe "
             "(manual size/center or auto padding)"
         )
+
+    if frozen_payload is not None:
+        air_mesh_source = _frozen_magnetic_submesh_air_mesh_source(mesh_workflow)
+        if air_mesh_source is None:
+            air_mesh = _generate_air_mesh_for_frozen_magnetic_submesh(
+                frozen=frozen_payload,
+                geometries=geometries,
+                hints=hints,
+                airbox=airbox,
+                mesh_workflow=mesh_workflow,
+                per_object_recipes=per_object_recipes,
+                object_regions=object_regions,
+            )
+        else:
+            air_mesh = MeshData.load(Path(air_mesh_source).expanduser())
+        merged_mesh = _merge_frozen_magnetic_submesh_with_air_mesh(
+            frozen_payload,
+            air_mesh,
+        )
+        mesh_options = _mesh_options_from_runtime_metadata(
+            mesh_workflow,
+            geometries=geometries,
+            default_hmax=_shared_domain_size_field_default_hmax(hints, airbox),
+            bounds_by_name={},
+            component_aware=False,
+            per_object_recipes=per_object_recipes,
+            object_regions=object_regions,
+        )
+        region_markers = [dict(marker) for marker in frozen_payload.region_markers]
+        requested_airbox_hmax, requested_hmax_by_geometry = _resolve_requested_partition_hmaxs(
+            geometries, hints, airbox=airbox, mesh_workflow=mesh_workflow,
+            per_object_recipes=per_object_recipes,
+        )
+        _emit_shared_domain_mesh_summary(
+            merged_mesh,
+            region_markers,
+            requested_airbox_hmax=requested_airbox_hmax,
+            requested_hmax_by_geometry=requested_hmax_by_geometry,
+        )
+        report = _build_shared_domain_build_report(
+            geometries,
+            hints,
+            airbox=airbox,
+            mesh_workflow=mesh_workflow,
+            per_object_recipes=per_object_recipes,
+            size_fields=list(mesh_options.size_fields),
+            region_markers=region_markers,
+            build_mode="frozen_magnetic_submesh_merge",
+            fallbacks_triggered=[],
+            mesh_options=mesh_options,
+            magnetic_submesh_signatures=frozen_payload.magnetic_submesh_signatures,
+        )
+        emit_progress_event(
+            {
+                "kind": "mesh_build_summary",
+                "shared_domain_build_mode": report.build_mode,
+                "n_nodes": merged_mesh.n_nodes,
+                "n_elements": merged_mesh.n_elements,
+                "n_boundary_faces": merged_mesh.n_boundary_faces,
+                "mesh_statistics": merged_mesh.to_ir("shared_domain").get("mesh_statistics"),
+                **{k: v for k, v in report.to_dict().items() if k != "build_mode"},
+                "message": "Frozen magnetic submesh and air mesh merge finished",
+            }
+        )
+        return merged_mesh, region_markers, report
+
     from ._gmsh_occ import _region_uses_conformal_occ_realization
 
     conformal_object_regions = [
@@ -1688,6 +2413,10 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
         requested_airbox_hmax=requested_airbox_hmax,
         requested_hmax_by_geometry=requested_hmax_by_geometry,
     )
+    magnetic_submesh_signatures = _magnetic_submesh_signatures(
+        classified_mesh,
+        region_markers,
+    )
     report = _build_shared_domain_build_report(
         geometries,
         hints,
@@ -1702,6 +2431,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
         selector_resolution=result.selector_resolution if result is not None else [],
         boundary_layer_result=result.boundary_layer_result if result is not None else None,
         orphan_entities=result.orphan_entities if result is not None else [],
+        magnetic_submesh_signatures=magnetic_submesh_signatures,
     )
     if object_regions is not None:
         report = _dc_replace(

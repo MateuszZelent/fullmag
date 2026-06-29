@@ -862,6 +862,7 @@ def generate_shared_domain_mesh_via_occ(
                     airbox_center=(cx, cy, cz),
                     object_radius=object_radius,
                     airbox_radius=airbox_radius,
+                    air_volume_tags=air_vols,
                 )
                 if field_id is not None:
                     airbox_field_ids.append(field_id)
@@ -897,6 +898,7 @@ def generate_shared_domain_mesh_via_occ(
                     airbox_center=(cx, cy, cz),
                     object_radius=object_radius,
                     airbox_radius=airbox_radius,
+                    air_volume_tags=air_vols,
                 )
                 if field_id is not None:
                     airbox_field_ids.append(field_id)

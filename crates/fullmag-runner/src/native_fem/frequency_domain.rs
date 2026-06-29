@@ -67,10 +67,12 @@ pub(crate) struct NativeDrivenFrequencyResponseRequest<'a> {
     pub output_directory: &'a Path,
     pub write_response_fields: bool,
     pub write_partial_artifacts: bool,
+    pub operator_diagnostics_json: Option<&'a str>,
     pub interrupt_requested: Option<&'a AtomicBool>,
     pub cancel_requested: Option<&'a NativeFrequencyDomainCancelCallback<'a>>,
     pub progress_callback: Option<&'a NativeFrequencyDomainProgressCallback<'a>>,
     pub requires_periodic_airbox_dynamic_demag: bool,
+    pub requires_floquet_airbox_dynamic_demag: bool,
     pub magnetic_periodic_constraint_set_count: u64,
     pub magnetostatic_periodic_constraint_set_count: u64,
     pub periodic_airbox_delta_m_tangent_dof_count: u64,
@@ -334,6 +336,13 @@ fn solve_native_driven_frequency_response_impl(
 ) -> Result<NativeDrivenFrequencyResponseResult, String> {
     let output_directory = CString::new(request.output_directory.to_string_lossy().as_bytes())
         .map_err(|_| "native FEM frequency response output path contains NUL".to_string())?;
+    let operator_diagnostics_json = request
+        .operator_diagnostics_json
+        .map(|value| CString::new(value.as_bytes()))
+        .transpose()
+        .map_err(|_| {
+            "native FEM frequency response operator_diagnostics_json contains NUL".to_string()
+        })?;
     let cancel_callback = request.cancel_requested;
     let (cancel_requested, cancel_user_data) = if cancel_callback.is_some() {
         (
@@ -473,13 +482,6 @@ fn solve_native_driven_frequency_response_impl(
             problem.floquet_periodic_pairs,
         )?;
     }
-    if mfem_operator.is_some_and(|problem| {
-        problem.floquet_k_vector_rad_per_m.is_some() || !problem.floquet_periodic_pairs.is_empty()
-    }) {
-        return Ok(floquet_response_unavailable_result(
-            request.frequencies_hz.len() as u64,
-        ));
-    }
     let ffi_request = ffi::fullmag_fem_frequency_domain_driven_response_request {
         node_count: request.node_count,
         tangent_dof_count: request.tangent_dof_count,
@@ -495,6 +497,7 @@ fn solve_native_driven_frequency_response_impl(
         output_directory: output_directory.as_ptr(),
         write_response_fields: request.write_response_fields as i32,
         write_partial_artifacts: request.write_partial_artifacts as i32,
+        operator_diagnostics_json: optional_str_ptr(operator_diagnostics_json.as_ref()),
         cancel_requested,
         cancel_user_data,
         progress_callback: progress_callback_fn,
@@ -590,6 +593,7 @@ fn solve_native_driven_frequency_response_impl(
         mfem_floquet_periodic_pair_count: floquet_periodic_pairs.len() as u64,
         requires_periodic_airbox_dynamic_demag: request.requires_periodic_airbox_dynamic_demag
             as i32,
+        requires_floquet_airbox_dynamic_demag: request.requires_floquet_airbox_dynamic_demag as i32,
         magnetic_periodic_constraint_set_count: request.magnetic_periodic_constraint_set_count,
         magnetostatic_periodic_constraint_set_count: request
             .magnetostatic_periodic_constraint_set_count,
@@ -650,26 +654,6 @@ fn solve_native_driven_frequency_response_impl(
         ));
     }
     Ok(ffi_result.to_owned_result())
-}
-
-#[cfg(feature = "fem-gpu")]
-fn floquet_response_unavailable_result(
-    total_frequency_count: u64,
-) -> NativeDrivenFrequencyResponseResult {
-    NativeDrivenFrequencyResponseResult {
-        status: NativeFrequencyDomainStatus::Unavailable,
-        total_frequency_count,
-        completed_frequency_count: 0,
-        written_frequency_point_artifacts: 0,
-        error_message:
-            "native FEM driven frequency response does not implement Floquet/Bloch nonzero-k solve"
-                .to_string(),
-        diagnostics_json:
-            "{\"schema_version\":\"frequency_domain_response_diagnostics.v1\",\"status\":\"unavailable\",\"complete\":false,\"unsupported_reason\":\"floquet_bloch_nonzero_k\"}"
-                .to_string(),
-        result_json: "{\"status\":\"unavailable\"}".to_string(),
-        artifact_manifest_path: String::new(),
-    }
 }
 
 #[cfg(any(feature = "fem-gpu", test))]
@@ -1327,10 +1311,12 @@ mod tests {
                     output_directory: Path::new(""),
                     write_response_fields: false,
                     write_partial_artifacts: false,
+                    operator_diagnostics_json: None,
                     interrupt_requested: None,
                     cancel_requested: None,
                     progress_callback: None,
                     requires_periodic_airbox_dynamic_demag: false,
+                    requires_floquet_airbox_dynamic_demag: false,
                     magnetic_periodic_constraint_set_count: 0,
                     magnetostatic_periodic_constraint_set_count: 0,
                     periodic_airbox_delta_m_tangent_dof_count: 0,
@@ -1995,10 +1981,12 @@ mod tests {
             output_directory: Path::new("/tmp"),
             write_response_fields: false,
             write_partial_artifacts: false,
+            operator_diagnostics_json: None,
             interrupt_requested: None,
             cancel_requested: None,
             progress_callback: None,
             requires_periodic_airbox_dynamic_demag: false,
+            requires_floquet_airbox_dynamic_demag: false,
             magnetic_periodic_constraint_set_count: 0,
             magnetostatic_periodic_constraint_set_count: 0,
             periodic_airbox_delta_m_tangent_dof_count: 0,
@@ -2037,7 +2025,7 @@ mod tests {
 
     #[cfg(feature = "fem-gpu")]
     #[test]
-    fn native_frequency_response_rejects_floquet_metadata_before_native_call() {
+    fn native_frequency_response_rejects_nonperiodic_floquet_drive_through_native_call() {
         let frequencies_hz = [1.0e9];
         let equilibrium_m = [[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]];
         let h_ext_a_per_m = [0.0, 0.0, 1.0];
@@ -2060,10 +2048,12 @@ mod tests {
             output_directory: Path::new("/tmp"),
             write_response_fields: false,
             write_partial_artifacts: false,
+            operator_diagnostics_json: None,
             interrupt_requested: None,
             cancel_requested: None,
             progress_callback: None,
             requires_periodic_airbox_dynamic_demag: false,
+            requires_floquet_airbox_dynamic_demag: false,
             magnetic_periodic_constraint_set_count: 0,
             magnetostatic_periodic_constraint_set_count: 0,
             periodic_airbox_delta_m_tangent_dof_count: 0,
@@ -2097,20 +2087,243 @@ mod tests {
         })
         .expect("native frequency response boundary should return a structured result");
 
-        assert_eq!(result.status, NativeFrequencyDomainStatus::Unavailable);
+        assert_eq!(result.status, NativeFrequencyDomainStatus::ValidationError);
         assert_eq!(result.total_frequency_count, 1);
         assert_eq!(result.completed_frequency_count, 0);
         assert_eq!(result.written_frequency_point_artifacts, 0);
-        assert!(result.error_message.contains("Floquet/Bloch"));
-        assert!(result.error_message.contains("nonzero-k"));
+        assert!(result
+            .error_message
+            .contains("Floquet-periodic tangent drive"));
         assert!(result
             .diagnostics_json
             .contains("frequency_domain_response_diagnostics.v1"));
         assert!(result
             .diagnostics_json
+            .contains("\"validation_error\":\"floquet_drive_phase_mismatch\""));
+        assert!(!result
+            .diagnostics_json
             .contains("\"unsupported_reason\":\"floquet_bloch_nonzero_k\""));
-        assert!(result.result_json.contains("\"status\":\"unavailable\""));
+        assert!(result
+            .result_json
+            .contains("\"status\":\"validation_error\""));
         assert_eq!(result.artifact_manifest_path, "");
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn native_frequency_response_floquet_drive_validation_writes_partial_artifacts() {
+        let frequencies_hz = [1.0e9, 2.0e9];
+        let equilibrium_m = [[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]];
+        let h_ext_a_per_m = [0.0, 0.0, 1.0];
+        let drive_real = [0.0, 1.0, 0.0, 1.0];
+        let floquet_pairs = [NativeDrivenFrequencyResponseFloquetPeriodicPair {
+            pair_id: Some("x_faces"),
+            node_a: 0,
+            node_b: 1,
+            translation_m: Some([1.0e-9, 0.0, 0.0]),
+            phase_rad: Some(-0.01),
+        }];
+        let unique_suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-runner-native-frequency-response-floquet-unavailable-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+
+        let result = solve_native_driven_frequency_response(NativeDrivenFrequencyResponseRequest {
+            node_count: 2,
+            tangent_dof_count: 4,
+            alpha: 0.01,
+            gamma0: 2.211e5,
+            execution_lane: NativeFrequencyDomainExecutionLane::ProductionCpu,
+            frequencies_hz: &frequencies_hz,
+            output_directory: &output_dir,
+            write_response_fields: false,
+            write_partial_artifacts: true,
+            operator_diagnostics_json: None,
+            interrupt_requested: None,
+            cancel_requested: None,
+            progress_callback: None,
+            requires_periodic_airbox_dynamic_demag: false,
+            requires_floquet_airbox_dynamic_demag: false,
+            magnetic_periodic_constraint_set_count: 0,
+            magnetostatic_periodic_constraint_set_count: 0,
+            periodic_airbox_delta_m_tangent_dof_count: 0,
+            periodic_airbox_delta_phi_dof_count: 0,
+            periodic_airbox_magnetostatic_periodic_node_pairs: &[],
+            periodic_airbox_coupled_block_problem: None,
+            tiny_validation_problem: None,
+            mfem_operator_problem: Some(NativeDrivenFrequencyResponseMfemOperatorProblem {
+                equilibrium_m: &equilibrium_m,
+                h_ext_a_per_m: &h_ext_a_per_m,
+                uniaxial_anisotropy_axis: None,
+                uniaxial_anisotropy_field_a_per_m: 0.0,
+                alpha_per_node: None,
+                drive_real: &drive_real,
+                drive_imag: None,
+                exchange_edges: &[],
+                dmi_elements: &[],
+                dmi_lumped_mass: None,
+                dmi_ms_field: None,
+                dmi_uniform_ms: 0.0,
+                include_zeeman: true,
+                static_periodic_node_pairs: &[],
+                floquet_k_vector_rad_per_m: Some([1.0e7, 0.0, 0.0]),
+                phase_convention: FrequencyDomainPhaseConvention::ExpMinusIOmegaT,
+                floquet_periodic_pairs: &floquet_pairs,
+                #[cfg(feature = "fem-gpu")]
+                apply_demag_tangent: None,
+                demag_tangent_user_data: std::ptr::null_mut(),
+                demag_tangent_matrix_row_major: None,
+            }),
+        })
+        .expect("native frequency response boundary should return a structured result");
+
+        assert_eq!(result.status, NativeFrequencyDomainStatus::ValidationError);
+        assert_eq!(result.total_frequency_count, 2);
+        assert_eq!(result.completed_frequency_count, 0);
+        assert_eq!(result.written_frequency_point_artifacts, 0);
+        assert!(result
+            .diagnostics_json
+            .contains("\"validation_error\":\"floquet_drive_phase_mismatch\""));
+        assert!(result
+            .artifact_manifest_path
+            .ends_with("frequency_domain/manifest.v1.json"));
+        let manifest = std::fs::read_to_string(&result.artifact_manifest_path)
+            .expect("Floquet drive-validation manifest should be readable");
+        assert!(manifest.contains("\"status\":\"validation_error\""));
+        assert!(manifest.contains("\"validation_error\":\"floquet_drive_phase_mismatch\""));
+        assert!(!manifest.contains("response/magnetic_response_sweep.v1.json"));
+        let diagnostics =
+            std::fs::read_to_string(output_dir.join("response/diagnostics/solver.v1.json"))
+                .expect("Floquet drive-validation diagnostics should be readable");
+        assert!(diagnostics.contains("\"validation_error\":\"floquet_drive_phase_mismatch\""));
+        assert!(!diagnostics.contains("\"unsupported_reason\":\"floquet_bloch_nonzero_k\""));
+        let progress = std::fs::read_to_string(output_dir.join("response/progress.v1.json"))
+            .expect("Floquet drive-validation progress should be readable");
+        assert!(progress.contains("\"total_frequency_points\":2"));
+        assert!(progress.contains("\"completed_frequency_points\":0"));
+        assert!(progress.contains("\"status\":\"validation_error\""));
+        assert!(!output_dir
+            .join("response/magnetic_response_sweep.v1.json")
+            .exists());
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn native_frequency_response_production_gpu_runs_floquet_exchange_no_demag() {
+        let frequencies_hz = [0.15915494309189535];
+        let equilibrium_m = [[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]];
+        let h_ext_a_per_m = [0.0, 0.0, 1.0];
+        let drive_real = [1.0, 0.0, 0.0, 0.0];
+        let drive_imag = [0.0, 0.0, -1.0, 0.0];
+        let exchange_edges = [NativeDrivenFrequencyResponseExchangeEdge {
+            node_i: 0,
+            node_j: 1,
+            stiffness: 0.25,
+        }];
+        let floquet_pairs = [NativeDrivenFrequencyResponseFloquetPeriodicPair {
+            pair_id: Some("x_faces"),
+            node_a: 0,
+            node_b: 1,
+            translation_m: Some([1.0e-6, 0.0, 0.0]),
+            phase_rad: Some(-std::f64::consts::FRAC_PI_2),
+        }];
+        let unique_suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-runner-native-frequency-response-gpu-floquet-exchange-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+
+        let result = solve_native_driven_frequency_response(NativeDrivenFrequencyResponseRequest {
+            node_count: 2,
+            tangent_dof_count: 4,
+            alpha: 0.01,
+            gamma0: 2.211e5,
+            execution_lane: NativeFrequencyDomainExecutionLane::ProductionGpu,
+            frequencies_hz: &frequencies_hz,
+            output_directory: &output_dir,
+            write_response_fields: true,
+            write_partial_artifacts: true,
+            operator_diagnostics_json: None,
+            interrupt_requested: None,
+            cancel_requested: None,
+            progress_callback: None,
+            requires_periodic_airbox_dynamic_demag: false,
+            requires_floquet_airbox_dynamic_demag: false,
+            magnetic_periodic_constraint_set_count: 0,
+            magnetostatic_periodic_constraint_set_count: 0,
+            periodic_airbox_delta_m_tangent_dof_count: 0,
+            periodic_airbox_delta_phi_dof_count: 0,
+            periodic_airbox_magnetostatic_periodic_node_pairs: &[],
+            periodic_airbox_coupled_block_problem: None,
+            tiny_validation_problem: None,
+            mfem_operator_problem: Some(NativeDrivenFrequencyResponseMfemOperatorProblem {
+                equilibrium_m: &equilibrium_m,
+                h_ext_a_per_m: &h_ext_a_per_m,
+                uniaxial_anisotropy_axis: None,
+                uniaxial_anisotropy_field_a_per_m: 0.0,
+                alpha_per_node: None,
+                drive_real: &drive_real,
+                drive_imag: Some(&drive_imag),
+                exchange_edges: &exchange_edges,
+                dmi_elements: &[],
+                dmi_lumped_mass: None,
+                dmi_ms_field: None,
+                dmi_uniform_ms: 0.0,
+                include_zeeman: true,
+                static_periodic_node_pairs: &[],
+                floquet_k_vector_rad_per_m: Some([1.5707963267948966e6, 0.0, 0.0]),
+                phase_convention: FrequencyDomainPhaseConvention::ExpMinusIOmegaT,
+                floquet_periodic_pairs: &floquet_pairs,
+                #[cfg(feature = "fem-gpu")]
+                apply_demag_tangent: None,
+                demag_tangent_user_data: std::ptr::null_mut(),
+                demag_tangent_matrix_row_major: None,
+            }),
+        })
+        .expect("native frequency response boundary should return a structured result");
+
+        assert_eq!(
+            result.status,
+            NativeFrequencyDomainStatus::Ok,
+            "error_message={}, diagnostics_json={}",
+            result.error_message,
+            result.diagnostics_json
+        );
+        assert_eq!(result.total_frequency_count, 1);
+        assert_eq!(result.completed_frequency_count, 1);
+        assert!(result
+            .diagnostics_json
+            .contains("\"requested_execution_lane\":\"production_gpu\""));
+        assert!(result
+            .diagnostics_json
+            .contains("\"resolved_execution_lane\":\"production_gpu\""));
+        assert!(result
+            .diagnostics_json
+            .contains("\"floquet_phase_projection\":true"));
+        assert!(result
+            .diagnostics_json
+            .contains("\"validation_fallback_used\":false"));
+        assert!(result
+            .diagnostics_json
+            .contains("\"operator_terms_included\":[\"exchange\",\"zeeman\"]"));
+        assert!(result.result_json.contains("\"status\":\"ok\""));
+        assert!(output_dir
+            .join("frequency_domain/manifest.v1.json")
+            .exists());
+        assert!(output_dir
+            .join("response/frequency_points/frequency_0000.json")
+            .exists());
+
+        let _ = std::fs::remove_dir_all(output_dir);
     }
 
     #[cfg(feature = "fem-gpu")]
@@ -2140,10 +2353,12 @@ mod tests {
             output_directory: &output_dir,
             write_response_fields: false,
             write_partial_artifacts: false,
+            operator_diagnostics_json: None,
             interrupt_requested: None,
             cancel_requested: None,
             progress_callback: None,
             requires_periodic_airbox_dynamic_demag: false,
+            requires_floquet_airbox_dynamic_demag: false,
             magnetic_periodic_constraint_set_count: 0,
             magnetostatic_periodic_constraint_set_count: 0,
             periodic_airbox_delta_m_tangent_dof_count: 0,
@@ -2199,10 +2414,12 @@ mod tests {
             output_directory: Path::new(""),
             write_response_fields: false,
             write_partial_artifacts: false,
+            operator_diagnostics_json: None,
             interrupt_requested: None,
             cancel_requested: None,
             progress_callback: None,
             requires_periodic_airbox_dynamic_demag: false,
+            requires_floquet_airbox_dynamic_demag: false,
             magnetic_periodic_constraint_set_count: 0,
             magnetostatic_periodic_constraint_set_count: 0,
             periodic_airbox_delta_m_tangent_dof_count: 0,
@@ -2258,10 +2475,12 @@ mod tests {
             output_directory: Path::new(""),
             write_response_fields: false,
             write_partial_artifacts: false,
+            operator_diagnostics_json: None,
             interrupt_requested: None,
             cancel_requested: None,
             progress_callback: None,
             requires_periodic_airbox_dynamic_demag: false,
+            requires_floquet_airbox_dynamic_demag: false,
             magnetic_periodic_constraint_set_count: 0,
             magnetostatic_periodic_constraint_set_count: 0,
             periodic_airbox_delta_m_tangent_dof_count: 0,
@@ -2305,10 +2524,12 @@ mod tests {
                 output_directory: Path::new(""),
                 write_response_fields: false,
                 write_partial_artifacts: false,
+                operator_diagnostics_json: None,
                 interrupt_requested: None,
                 cancel_requested: None,
                 progress_callback: None,
                 requires_periodic_airbox_dynamic_demag: false,
+                requires_floquet_airbox_dynamic_demag: false,
                 magnetic_periodic_constraint_set_count: 0,
                 magnetostatic_periodic_constraint_set_count: 0,
                 periodic_airbox_delta_m_tangent_dof_count: 0,
@@ -2479,10 +2700,12 @@ mod tests {
             output_directory: &output_dir,
             write_response_fields: true,
             write_partial_artifacts: true,
+            operator_diagnostics_json: None,
             interrupt_requested: None,
             cancel_requested: None,
             progress_callback: None,
             requires_periodic_airbox_dynamic_demag: false,
+            requires_floquet_airbox_dynamic_demag: false,
             magnetic_periodic_constraint_set_count: 0,
             magnetostatic_periodic_constraint_set_count: 0,
             periodic_airbox_delta_m_tangent_dof_count: 0,
@@ -2573,10 +2796,12 @@ mod tests {
             output_directory: Path::new(""),
             write_response_fields: false,
             write_partial_artifacts: false,
+            operator_diagnostics_json: None,
             interrupt_requested: None,
             cancel_requested: None,
             progress_callback: None,
             requires_periodic_airbox_dynamic_demag: false,
+            requires_floquet_airbox_dynamic_demag: false,
             magnetic_periodic_constraint_set_count: 0,
             magnetostatic_periodic_constraint_set_count: 0,
             periodic_airbox_delta_m_tangent_dof_count: 0,
@@ -2668,10 +2893,12 @@ mod tests {
             output_directory: Path::new(""),
             write_response_fields: false,
             write_partial_artifacts: false,
+            operator_diagnostics_json: None,
             interrupt_requested: None,
             cancel_requested: None,
             progress_callback: None,
             requires_periodic_airbox_dynamic_demag: false,
+            requires_floquet_airbox_dynamic_demag: false,
             magnetic_periodic_constraint_set_count: 0,
             magnetostatic_periodic_constraint_set_count: 0,
             periodic_airbox_delta_m_tangent_dof_count: 0,

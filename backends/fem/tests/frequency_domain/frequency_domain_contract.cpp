@@ -21,6 +21,7 @@
 #include "cpu/frequency_domain/mfem_zeeman_operator.hpp"
 #include "cpu/frequency_domain/production_cpu_driven_response.hpp"
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
@@ -69,6 +70,59 @@ bool file_exists(const char *path)
     return true;
 }
 
+bool extract_m_complex_values(
+    const std::string &json,
+    double *values,
+    std::size_t value_count)
+{
+    const std::size_t start = json.find("\"m_complex\":[");
+    if (start == std::string::npos) {
+        return false;
+    }
+    const char *cursor = json.c_str() + start;
+    std::size_t count = 0;
+    while (*cursor != '\0' && count < value_count) {
+        char *end = nullptr;
+        const double value = std::strtod(cursor, &end);
+        if (end != cursor) {
+            values[count++] = value;
+            cursor = end;
+        } else {
+            ++cursor;
+        }
+    }
+    return count == value_count;
+}
+
+bool nearly_equal(double lhs, double rhs, double tolerance)
+{
+    return std::fabs(lhs - rhs) <= tolerance;
+}
+
+std::uint64_t extract_json_u64(const char *json, const char *key)
+{
+    const char *position = std::strstr(json, key);
+    check(position != nullptr, "expected JSON key is present");
+    position = std::strchr(position, ':');
+    check(position != nullptr, "expected JSON key has value separator");
+    char *end = nullptr;
+    const unsigned long long value = std::strtoull(position + 1, &end, 10);
+    check(end != position + 1, "expected JSON unsigned integer value");
+    return static_cast<std::uint64_t>(value);
+}
+
+double extract_json_double(const char *json, const char *key)
+{
+    const char *position = std::strstr(json, key);
+    check(position != nullptr, "expected JSON key is present");
+    position = std::strchr(position, ':');
+    check(position != nullptr, "expected JSON key has value separator");
+    char *end = nullptr;
+    const double value = std::strtod(position + 1, &end);
+    check(end != position + 1, "expected JSON floating-point value");
+    return value;
+}
+
 long file_size_bytes(const char *path)
 {
     FILE *input = std::fopen(path, "rb");
@@ -95,6 +149,12 @@ struct DemagTangentCallbackOperator {
     const double *matrix = nullptr;
     std::uint64_t tangent_dof_count = 0;
     std::uint64_t call_count = 0;
+};
+
+struct FirstKrylovApplyOnlyOperator {
+    std::uint64_t tangent_dof_count = 0;
+    std::uint64_t stiffness_call_count = 0;
+    std::uint64_t mass_call_count = 0;
 };
 
 struct ProductionProgressRecorder {
@@ -125,6 +185,32 @@ struct CAbiProgressRecorder {
 
 struct CAbiCancelAfterCompletedPoint {
     bool cancel_requested = false;
+};
+
+struct ScopedEnvVar {
+    const char *name = nullptr;
+    bool had_old_value = false;
+    std::string old_value;
+
+    ScopedEnvVar(const char *env_name, const char *value)
+        : name(env_name)
+    {
+        const char *old = std::getenv(name);
+        if (old != nullptr) {
+            had_old_value = true;
+            old_value = old;
+        }
+        setenv(name, value, 1);
+    }
+
+    ~ScopedEnvVar()
+    {
+        if (had_old_value) {
+            setenv(name, old_value.c_str(), 1);
+        } else {
+            unsetenv(name);
+        }
+    }
 };
 
 fd::FrequencyDomainStatus apply_diagonal_stiffness(
@@ -159,6 +245,42 @@ fd::FrequencyDomainStatus apply_diagonal_mass(
     ++op->mass_call_count;
     for (std::uint64_t index = 0; index < op->tangent_dof_count; ++index) {
         out[index] = op->mass[index] * in[index];
+    }
+    return fd::FrequencyDomainStatus::ok;
+}
+
+fd::FrequencyDomainStatus apply_first_krylov_stiffness_then_zero(
+    void *user_data,
+    const double *in,
+    double *out,
+    char error_message[128])
+{
+    auto *op = static_cast<FirstKrylovApplyOnlyOperator *>(user_data);
+    if (op == nullptr || in == nullptr || out == nullptr) {
+        std::snprintf(error_message, 128, "missing first-Krylov stiffness operator buffers");
+        return fd::FrequencyDomainStatus::validation_error;
+    }
+    ++op->stiffness_call_count;
+    for (std::uint64_t index = 0; index < op->tangent_dof_count; ++index) {
+        out[index] = op->stiffness_call_count <= 2 ? in[index] : 0.0;
+    }
+    return fd::FrequencyDomainStatus::ok;
+}
+
+fd::FrequencyDomainStatus apply_zero_mass(
+    void *user_data,
+    const double *in,
+    double *out,
+    char error_message[128])
+{
+    auto *op = static_cast<FirstKrylovApplyOnlyOperator *>(user_data);
+    if (op == nullptr || in == nullptr || out == nullptr) {
+        std::snprintf(error_message, 128, "missing zero mass operator buffers");
+        return fd::FrequencyDomainStatus::validation_error;
+    }
+    ++op->mass_call_count;
+    for (std::uint64_t index = 0; index < op->tangent_dof_count; ++index) {
+        out[index] = 0.0;
     }
     return fd::FrequencyDomainStatus::ok;
 }
@@ -528,6 +650,28 @@ void static_periodic_driven_response_is_explicitly_available()
     check(
         contains(result.diagnostics_json, "\"static_periodic_response_available\":true"),
         "diagnostics mark static-periodic response available");
+}
+
+void driven_response_solver_accepts_fmr_env_aliases_source_contract()
+{
+    const std::string source =
+        read_text_file("backends/fem/src/frequency_domain/driven_response_solver.cpp");
+
+    check(
+        contains(source.c_str(), "env_positive_double_alias"),
+        "driven response solver keeps double env alias helper");
+    check(
+        contains(source.c_str(), "env_positive_u64_alias"),
+        "driven response solver keeps u64 env alias helper");
+    check(
+        contains(source.c_str(), "FULLMAG_FMR_RESPONSE_RTOL"),
+        "driven response solver accepts FMR rtol alias");
+    check(
+        contains(source.c_str(), "FULLMAG_FMR_RESPONSE_MAX_ITERATIONS"),
+        "driven response solver accepts FMR max-iterations alias");
+    check(
+        contains(source.c_str(), "FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS"),
+        "driven response solver accepts FMR restart-iterations alias");
 }
 
 void driven_response_floquet_boundary_is_explicitly_unavailable()
@@ -2163,6 +2307,557 @@ void production_gpu_static_periodic_no_demag_runs_mfem_response_problem()
     fd::release_driven_frequency_response_result(&result);
 }
 
+void production_cpu_floquet_local_no_demag_runs_phase_constrained_response_problem()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    constexpr double phase_rad = -1.5707963267948966;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double equilibrium[] = {
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+    };
+    fd::TangentFrameNode nodes[2]{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 2, nodes, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "CPU Floquet local no-demag test builds tangent frames");
+
+    fd::MfemOperatorContextDescriptor descriptor{};
+    descriptor.node_count = 2;
+    descriptor.full_dof_count = 6;
+    descriptor.tangent_dof_count = 4;
+    descriptor.zeeman_enabled = true;
+    descriptor.mfem_mesh_available = true;
+    fd::MfemTangentSpaceLayout layout{};
+    layout.node_count = 2;
+    layout.full_dof_count = 6;
+    layout.tangent_dof_count = 4;
+    layout.tangent_components_per_node = 2;
+    layout.tangent_stride = 2;
+    const double h_ext_a_per_m[] = {0.0, 0.0, 2.0};
+    const double drive_real[] = {1.0, 0.0, 0.0, 0.0};
+    const double drive_imag[] = {0.0, 0.0, -1.0, 0.0};
+    fd::FrequencyDomainFloquetPeriodicPair floquet_pair{};
+    floquet_pair.pair_id = "x_faces";
+    floquet_pair.node_a = 0;
+    floquet_pair.node_b = 1;
+    floquet_pair.has_translation = true;
+    floquet_pair.translation_m[0] = 1.0e-6;
+    floquet_pair.has_phase = true;
+    floquet_pair.phase_rad = phase_rad;
+
+    char output_directory[192]{};
+    std::snprintf(
+        output_directory,
+        sizeof(output_directory),
+        "/tmp/fullmag-frequency-domain-cpu-floquet-local-%llu",
+        static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&floquet_pair)));
+
+    fd::DrivenFrequencyResponseSolveRequest request{};
+    request.solve_request.operator_request.node_count = 2;
+    request.solve_request.operator_request.tangent_dof_count = 4;
+    request.solve_request.operator_request.alpha = 0.0;
+    request.solve_request.operator_request.gamma0 = 1.0;
+    request.solve_request.operator_request.include_zeeman = true;
+    request.solve_request.frequencies_hz = frequencies_hz;
+    request.solve_request.frequency_count = 1;
+    request.solve_request.write_response_fields = true;
+    request.execution_lane = fd::DrivenFrequencyResponseExecutionLane::production_cpu;
+    request.has_floquet_k_vector = true;
+    request.floquet_k_vector_rad_per_m[0] = 1.5707963267948966e6;
+    request.floquet_periodic_pairs = &floquet_pair;
+    request.floquet_periodic_pair_count = 1;
+    request.magnetic_periodic_constraint_set_count = 1;
+    request.mfem_validation_problem.enabled = true;
+    request.mfem_validation_problem.descriptor = descriptor;
+    request.mfem_validation_problem.layout = layout;
+    request.mfem_validation_problem.nodes = nodes;
+    request.mfem_validation_problem.h_ext_a_per_m = h_ext_a_per_m;
+    request.mfem_validation_problem.drive_real = drive_real;
+    request.mfem_validation_problem.drive_imag = drive_imag;
+    request.output_directory = output_directory;
+    request.write_partial_artifacts = true;
+
+    fd::DrivenFrequencyResponseSolveResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_driven_frequency_response(request, &result);
+
+    check(status == fd::FrequencyDomainStatus::ok, "CPU Floquet local no-demag solve succeeds");
+    check(result.completed_frequency_count == 1, "CPU Floquet local no-demag solve completes frequency");
+    check(
+        contains(result.result_json, "\"requested_execution_lane\":\"production_cpu\""),
+        "CPU Floquet local result reports requested CPU lane");
+    check(
+        contains(result.diagnostics_json, "\"floquet_phase_projection\":true"),
+        "CPU Floquet local diagnostics report phase projection");
+    check(
+        contains(result.diagnostics_json, "\"validation_fallback_used\":false"),
+        "CPU Floquet local diagnostics reject validation fallback");
+
+    char point_path[256]{};
+    std::snprintf(
+        point_path,
+        sizeof(point_path),
+        "%s/response/frequency_points/frequency_0000.json",
+        output_directory);
+    const std::string point = read_text_file(point_path);
+    double m_complex[8]{};
+    check(
+        extract_m_complex_values(point, m_complex, 8),
+        "CPU Floquet local frequency point exposes tangent complex response");
+    const double c = std::cos(phase_rad);
+    const double s = std::sin(phase_rad);
+    const double expected_dst_real = c * m_complex[0] - s * m_complex[1];
+    const double expected_dst_imag = s * m_complex[0] + c * m_complex[1];
+    check(
+        nearly_equal(m_complex[4], expected_dst_real, 1.0e-7),
+        "CPU Floquet local response real part satisfies phase relation");
+    check(
+        nearly_equal(m_complex[5], expected_dst_imag, 1.0e-7),
+        "CPU Floquet local response imaginary part satisfies phase relation");
+    fd::release_driven_frequency_response_result(&result);
+}
+
+void production_gpu_floquet_local_no_demag_runs_phase_constrained_response_problem()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    constexpr double phase_rad = -1.5707963267948966;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double equilibrium[] = {
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+    };
+    fd::TangentFrameNode nodes[2]{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 2, nodes, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "GPU Floquet local no-demag test builds tangent frames");
+
+    fd::MfemOperatorContextDescriptor descriptor{};
+    descriptor.node_count = 2;
+    descriptor.full_dof_count = 6;
+    descriptor.tangent_dof_count = 4;
+    descriptor.zeeman_enabled = true;
+    descriptor.mfem_mesh_available = true;
+    fd::MfemTangentSpaceLayout layout{};
+    layout.node_count = 2;
+    layout.full_dof_count = 6;
+    layout.tangent_dof_count = 4;
+    layout.tangent_components_per_node = 2;
+    layout.tangent_stride = 2;
+    const double h_ext_a_per_m[] = {0.0, 0.0, 2.0};
+    const double drive_real[] = {1.0, 0.0, 0.0, 0.0};
+    const double drive_imag[] = {0.0, 0.0, -1.0, 0.0};
+    fd::FrequencyDomainFloquetPeriodicPair floquet_pair{};
+    floquet_pair.pair_id = "x_faces";
+    floquet_pair.node_a = 0;
+    floquet_pair.node_b = 1;
+    floquet_pair.has_translation = true;
+    floquet_pair.translation_m[0] = 1.0e-6;
+    floquet_pair.has_phase = true;
+    floquet_pair.phase_rad = phase_rad;
+
+    char output_directory[192]{};
+    std::snprintf(
+        output_directory,
+        sizeof(output_directory),
+        "/tmp/fullmag-frequency-domain-gpu-floquet-local-%llu",
+        static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&floquet_pair)));
+
+    fd::DrivenFrequencyResponseSolveRequest request{};
+    request.solve_request.operator_request.node_count = 2;
+    request.solve_request.operator_request.tangent_dof_count = 4;
+    request.solve_request.operator_request.alpha = 0.0;
+    request.solve_request.operator_request.gamma0 = 1.0;
+    request.solve_request.operator_request.include_zeeman = true;
+    request.solve_request.operator_request.strict_gpu = true;
+    request.solve_request.frequencies_hz = frequencies_hz;
+    request.solve_request.frequency_count = 1;
+    request.solve_request.write_response_fields = true;
+    request.execution_lane = fd::DrivenFrequencyResponseExecutionLane::production_gpu;
+    request.has_floquet_k_vector = true;
+    request.floquet_k_vector_rad_per_m[0] = 1.5707963267948966e6;
+    request.floquet_periodic_pairs = &floquet_pair;
+    request.floquet_periodic_pair_count = 1;
+    request.magnetic_periodic_constraint_set_count = 1;
+    request.mfem_validation_problem.enabled = true;
+    request.mfem_validation_problem.descriptor = descriptor;
+    request.mfem_validation_problem.layout = layout;
+    request.mfem_validation_problem.nodes = nodes;
+    request.mfem_validation_problem.h_ext_a_per_m = h_ext_a_per_m;
+    request.mfem_validation_problem.drive_real = drive_real;
+    request.mfem_validation_problem.drive_imag = drive_imag;
+    request.output_directory = output_directory;
+    request.write_partial_artifacts = true;
+
+    fd::DrivenFrequencyResponseSolveResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_driven_frequency_response(request, &result);
+
+#if FULLMAG_HAS_CUDA_RUNTIME
+    check(status == fd::FrequencyDomainStatus::ok, "GPU Floquet local no-demag solve succeeds");
+    check(result.completed_frequency_count == 1, "GPU Floquet local no-demag solve completes frequency");
+    check(
+        contains(result.result_json, "\"requested_execution_lane\":\"production_gpu\""),
+        "GPU Floquet local result reports requested GPU lane");
+    check(
+        contains(result.result_json, "\"resolved_execution_lane\":\"production_gpu\""),
+        "GPU Floquet local result reports resolved GPU lane");
+    check(
+        contains(result.diagnostics_json, "\"floquet_phase_projection\":true"),
+        "GPU Floquet local diagnostics report phase projection");
+    check(
+        contains(result.diagnostics_json, "\"validation_fallback_used\":false"),
+        "GPU Floquet local diagnostics reject validation fallback");
+
+    char point_path[256]{};
+    std::snprintf(
+        point_path,
+        sizeof(point_path),
+        "%s/response/frequency_points/frequency_0000.json",
+        output_directory);
+    const std::string point = read_text_file(point_path);
+    double m_complex[8]{};
+    check(
+        extract_m_complex_values(point, m_complex, 8),
+        "GPU Floquet local frequency point exposes tangent complex response");
+    const double c = std::cos(phase_rad);
+    const double s = std::sin(phase_rad);
+    const double expected_dst_real = c * m_complex[0] - s * m_complex[1];
+    const double expected_dst_imag = s * m_complex[0] + c * m_complex[1];
+    check(
+        nearly_equal(m_complex[4], expected_dst_real, 1.0e-7),
+        "GPU Floquet local response real part satisfies phase relation");
+    check(
+        nearly_equal(m_complex[5], expected_dst_imag, 1.0e-7),
+        "GPU Floquet local response imaginary part satisfies phase relation");
+#else
+    check(status == fd::FrequencyDomainStatus::unavailable, "non-CUDA GPU Floquet local solve is unavailable");
+    check(
+        contains(result.diagnostics_json, "\"validation_fallback_used\":false"),
+        "non-CUDA GPU Floquet local diagnostics reject validation fallback");
+#endif
+    fd::release_driven_frequency_response_result(&result);
+}
+
+void production_cpu_floquet_exchange_no_demag_runs_phase_constrained_response_problem()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    constexpr double phase_rad = -1.5707963267948966;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double equilibrium[] = {
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+    };
+    fd::TangentFrameNode nodes[2]{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 2, nodes, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "CPU Floquet exchange no-demag test builds tangent frames");
+
+    fd::MfemOperatorContextDescriptor descriptor{};
+    descriptor.node_count = 2;
+    descriptor.full_dof_count = 6;
+    descriptor.tangent_dof_count = 4;
+    descriptor.exchange_enabled = true;
+    descriptor.zeeman_enabled = true;
+    descriptor.mfem_mesh_available = true;
+    fd::MfemTangentSpaceLayout layout{};
+    layout.node_count = 2;
+    layout.full_dof_count = 6;
+    layout.tangent_dof_count = 4;
+    layout.tangent_components_per_node = 2;
+    layout.tangent_stride = 2;
+    const fd::TangentOperatorEdgeBlock exchange_edge{
+        fd::FrequencyDomainOperatorTermKind::exchange,
+        0,
+        1,
+        0.25,
+    };
+    const double h_ext_a_per_m[] = {0.0, 0.0, 2.0};
+    const double drive_real[] = {1.0, 0.0, 0.0, 0.0};
+    const double drive_imag[] = {0.0, 0.0, -1.0, 0.0};
+    fd::FrequencyDomainFloquetPeriodicPair floquet_pair{};
+    floquet_pair.pair_id = "x_faces";
+    floquet_pair.node_a = 0;
+    floquet_pair.node_b = 1;
+    floquet_pair.has_translation = true;
+    floquet_pair.translation_m[0] = 1.0e-6;
+    floquet_pair.has_phase = true;
+    floquet_pair.phase_rad = phase_rad;
+
+    char output_directory[192]{};
+    std::snprintf(
+        output_directory,
+        sizeof(output_directory),
+        "/tmp/fullmag-frequency-domain-cpu-floquet-exchange-%llu",
+        static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&exchange_edge)));
+
+    fd::DrivenFrequencyResponseSolveRequest request{};
+    request.solve_request.operator_request.node_count = 2;
+    request.solve_request.operator_request.tangent_dof_count = 4;
+    request.solve_request.operator_request.alpha = 0.0;
+    request.solve_request.operator_request.gamma0 = 1.0;
+    request.solve_request.operator_request.include_zeeman = true;
+    request.solve_request.frequencies_hz = frequencies_hz;
+    request.solve_request.frequency_count = 1;
+    request.solve_request.write_response_fields = true;
+    request.execution_lane = fd::DrivenFrequencyResponseExecutionLane::production_cpu;
+    request.has_floquet_k_vector = true;
+    request.floquet_k_vector_rad_per_m[0] = 1.5707963267948966e6;
+    request.floquet_periodic_pairs = &floquet_pair;
+    request.floquet_periodic_pair_count = 1;
+    request.magnetic_periodic_constraint_set_count = 1;
+    request.mfem_validation_problem.enabled = true;
+    request.mfem_validation_problem.descriptor = descriptor;
+    request.mfem_validation_problem.layout = layout;
+    request.mfem_validation_problem.nodes = nodes;
+    request.mfem_validation_problem.exchange_edges = &exchange_edge;
+    request.mfem_validation_problem.exchange_edge_count = 1;
+    request.mfem_validation_problem.h_ext_a_per_m = h_ext_a_per_m;
+    request.mfem_validation_problem.drive_real = drive_real;
+    request.mfem_validation_problem.drive_imag = drive_imag;
+    request.output_directory = output_directory;
+    request.write_partial_artifacts = true;
+
+    fd::DrivenFrequencyResponseSolveResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_driven_frequency_response(request, &result);
+
+    check(status == fd::FrequencyDomainStatus::ok, "CPU Floquet exchange no-demag solve succeeds");
+    check(result.completed_frequency_count == 1, "CPU Floquet exchange no-demag solve completes frequency");
+    check(
+        contains(result.result_json, "\"requested_execution_lane\":\"production_cpu\""),
+        "CPU Floquet exchange no-demag result reports requested CPU lane");
+    check(
+        contains(result.diagnostics_json, "\"floquet_phase_projection\":true"),
+        "CPU Floquet exchange no-demag diagnostics report phase projection");
+    check(
+        contains(result.diagnostics_json, "\"validation_fallback_used\":false"),
+        "CPU Floquet exchange no-demag diagnostics reject validation fallback");
+
+    char point_path[256]{};
+    std::snprintf(
+        point_path,
+        sizeof(point_path),
+        "%s/response/frequency_points/frequency_0000.json",
+        output_directory);
+    const std::string point = read_text_file(point_path);
+    double m_complex[8]{};
+    check(
+        extract_m_complex_values(point, m_complex, 8),
+        "CPU Floquet exchange no-demag frequency point exposes tangent complex response");
+    const double c = std::cos(phase_rad);
+    const double s = std::sin(phase_rad);
+    const double expected_dst_real = c * m_complex[0] - s * m_complex[1];
+    const double expected_dst_imag = s * m_complex[0] + c * m_complex[1];
+    check(
+        nearly_equal(m_complex[4], expected_dst_real, 1.0e-7),
+        "CPU Floquet exchange no-demag response real part satisfies phase relation");
+    check(
+        nearly_equal(m_complex[5], expected_dst_imag, 1.0e-7),
+        "CPU Floquet exchange no-demag response imaginary part satisfies phase relation");
+    fd::release_driven_frequency_response_result(&result);
+}
+
+void production_gpu_floquet_exchange_no_demag_runs_phase_constrained_response_problem()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    constexpr double phase_rad = -1.5707963267948966;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double equilibrium[] = {
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+    };
+    fd::TangentFrameNode nodes[2]{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 2, nodes, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "GPU Floquet exchange no-demag test builds tangent frames");
+
+    fd::MfemOperatorContextDescriptor descriptor{};
+    descriptor.node_count = 2;
+    descriptor.full_dof_count = 6;
+    descriptor.tangent_dof_count = 4;
+    descriptor.exchange_enabled = true;
+    descriptor.zeeman_enabled = true;
+    descriptor.mfem_mesh_available = true;
+    fd::MfemTangentSpaceLayout layout{};
+    layout.node_count = 2;
+    layout.full_dof_count = 6;
+    layout.tangent_dof_count = 4;
+    layout.tangent_components_per_node = 2;
+    layout.tangent_stride = 2;
+    const fd::TangentOperatorEdgeBlock exchange_edge{
+        fd::FrequencyDomainOperatorTermKind::exchange,
+        0,
+        1,
+        0.25,
+    };
+    const double h_ext_a_per_m[] = {0.0, 0.0, 2.0};
+    const double drive_real[] = {1.0, 0.0, 0.0, 0.0};
+    const double drive_imag[] = {0.0, 0.0, -1.0, 0.0};
+    fd::FrequencyDomainFloquetPeriodicPair floquet_pair{};
+    floquet_pair.pair_id = "x_faces";
+    floquet_pair.node_a = 0;
+    floquet_pair.node_b = 1;
+    floquet_pair.has_translation = true;
+    floquet_pair.translation_m[0] = 1.0e-6;
+    floquet_pair.has_phase = true;
+    floquet_pair.phase_rad = phase_rad;
+
+    char output_directory[192]{};
+    std::snprintf(
+        output_directory,
+        sizeof(output_directory),
+        "/tmp/fullmag-frequency-domain-gpu-floquet-exchange-%llu",
+        static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&exchange_edge)));
+
+    fd::DrivenFrequencyResponseSolveRequest request{};
+    request.solve_request.operator_request.node_count = 2;
+    request.solve_request.operator_request.tangent_dof_count = 4;
+    request.solve_request.operator_request.alpha = 0.0;
+    request.solve_request.operator_request.gamma0 = 1.0;
+    request.solve_request.operator_request.include_zeeman = true;
+    request.solve_request.operator_request.strict_gpu = true;
+    request.solve_request.frequencies_hz = frequencies_hz;
+    request.solve_request.frequency_count = 1;
+    request.solve_request.write_response_fields = true;
+    request.execution_lane = fd::DrivenFrequencyResponseExecutionLane::production_gpu;
+    request.has_floquet_k_vector = true;
+    request.floquet_k_vector_rad_per_m[0] = 1.5707963267948966e6;
+    request.floquet_periodic_pairs = &floquet_pair;
+    request.floquet_periodic_pair_count = 1;
+    request.magnetic_periodic_constraint_set_count = 1;
+    request.mfem_validation_problem.enabled = true;
+    request.mfem_validation_problem.descriptor = descriptor;
+    request.mfem_validation_problem.layout = layout;
+    request.mfem_validation_problem.nodes = nodes;
+    request.mfem_validation_problem.exchange_edges = &exchange_edge;
+    request.mfem_validation_problem.exchange_edge_count = 1;
+    request.mfem_validation_problem.h_ext_a_per_m = h_ext_a_per_m;
+    request.mfem_validation_problem.drive_real = drive_real;
+    request.mfem_validation_problem.drive_imag = drive_imag;
+    request.output_directory = output_directory;
+    request.write_partial_artifacts = true;
+
+    fd::DrivenFrequencyResponseSolveResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_driven_frequency_response(request, &result);
+
+#if FULLMAG_HAS_CUDA_RUNTIME
+    check(status == fd::FrequencyDomainStatus::ok, "GPU Floquet exchange no-demag solve succeeds");
+    check(result.completed_frequency_count == 1, "GPU Floquet exchange no-demag solve completes frequency");
+    check(
+        contains(result.diagnostics_json, "\"operator_terms_included\":[\"exchange\",\"zeeman\"]"),
+        "GPU Floquet exchange no-demag diagnostics report exchange and Zeeman terms");
+    check(
+        contains(result.diagnostics_json, "\"exchange_edge_count\":1"),
+        "GPU Floquet exchange no-demag diagnostics report exchange edge count");
+    check(
+        contains(result.diagnostics_json, "\"floquet_phase_projection\":true"),
+        "GPU Floquet exchange no-demag diagnostics report phase projection");
+    check(
+        contains(result.diagnostics_json, "\"floquet_real_imag_mixing\":true"),
+        "GPU Floquet exchange no-demag diagnostics report real/imag phase mixing");
+    check(
+        contains(result.diagnostics_json, "\"validation_fallback_used\":false"),
+        "GPU Floquet exchange no-demag diagnostics reject validation fallback");
+
+    char manifest_path[256]{};
+    std::snprintf(
+        manifest_path,
+        sizeof(manifest_path),
+        "%s/frequency_domain/manifest.v1.json",
+        output_directory);
+    const std::string manifest = read_text_file(manifest_path);
+    check(
+        contains(manifest.c_str(), "\"spin_wave_bc\":{\"kind\":\"floquet\"}"),
+        "GPU Floquet exchange no-demag manifest records Floquet spin-wave boundary");
+    check(
+        contains(manifest.c_str(), "\"periodic_or_floquet\":true"),
+        "GPU Floquet exchange no-demag manifest records periodic_or_floquet");
+    check(
+        contains(manifest.c_str(), "\"floquet_phase_projection\":true"),
+        "GPU Floquet exchange no-demag manifest records phase projection diagnostics");
+    check(
+        contains(manifest.c_str(), "\"floquet_real_imag_mixing\":true"),
+        "GPU Floquet exchange no-demag manifest records real/imag phase mixing diagnostics");
+    check(
+        contains(manifest.c_str(), "\"floquet_periodic_pair_count\":1"),
+        "GPU Floquet exchange no-demag manifest records Floquet pair count");
+    check(
+        contains(manifest.c_str(), "\"periodic_pairs_v1_path\":\"mesh/periodic_pairs.v1.json\""),
+        "GPU Floquet exchange no-demag manifest links Floquet periodic-pair artifact");
+    check(
+        contains(manifest.c_str(), "\"exchange_edge_count\":1"),
+        "GPU Floquet exchange no-demag manifest records exchange edge count");
+    check(
+        contains(manifest.c_str(), "\"floquet_k_vector_rad_per_m\":[1570796.3267948965,0,0]"),
+        "GPU Floquet exchange no-demag manifest records Floquet k vector");
+
+    char diagnostics_path[256]{};
+    std::snprintf(
+        diagnostics_path,
+        sizeof(diagnostics_path),
+        "%s/response/diagnostics/solver.v1.json",
+        output_directory);
+    const std::string diagnostics = read_text_file(diagnostics_path);
+    check(
+        contains(diagnostics.c_str(), "\"operator_terms_included\":[\"exchange\",\"zeeman\"]"),
+        "GPU Floquet exchange no-demag solver diagnostics record exchange and Zeeman terms");
+    check(
+        contains(diagnostics.c_str(), "\"exchange_edge_count\":1"),
+        "GPU Floquet exchange no-demag solver diagnostics record exchange edge count");
+
+    char periodic_pairs_path[256]{};
+    std::snprintf(
+        periodic_pairs_path,
+        sizeof(periodic_pairs_path),
+        "%s/mesh/periodic_pairs.v1.json",
+        output_directory);
+    const std::string periodic_pairs = read_text_file(periodic_pairs_path);
+    check(
+        contains(periodic_pairs.c_str(), "\"source\":\"native_fem_frequency_domain_floquet_phase_projection\""),
+        "GPU Floquet exchange no-demag pair artifact records Floquet projection source");
+    check(
+        contains(periodic_pairs.c_str(), "\"phase_rad\":-1.5707963267948966"),
+        "GPU Floquet exchange no-demag pair artifact records pair phase");
+
+    char point_path[256]{};
+    std::snprintf(
+        point_path,
+        sizeof(point_path),
+        "%s/response/frequency_points/frequency_0000.json",
+        output_directory);
+    const std::string point = read_text_file(point_path);
+    double m_complex[8]{};
+    check(
+        extract_m_complex_values(point, m_complex, 8),
+        "GPU Floquet exchange no-demag frequency point exposes tangent complex response");
+    const double c = std::cos(phase_rad);
+    const double s = std::sin(phase_rad);
+    const double expected_dst_real = c * m_complex[0] - s * m_complex[1];
+    const double expected_dst_imag = s * m_complex[0] + c * m_complex[1];
+    check(
+        nearly_equal(m_complex[4], expected_dst_real, 1.0e-7),
+        "GPU Floquet exchange no-demag response real part satisfies phase relation");
+    check(
+        nearly_equal(m_complex[5], expected_dst_imag, 1.0e-7),
+        "GPU Floquet exchange no-demag response imaginary part satisfies phase relation");
+#else
+    check(status == fd::FrequencyDomainStatus::unavailable, "non-CUDA GPU Floquet exchange no-demag solve is unavailable");
+    check(
+        contains(result.diagnostics_json, "\"validation_fallback_used\":false"),
+        "non-CUDA GPU Floquet exchange no-demag diagnostics reject validation fallback");
+#endif
+    fd::release_driven_frequency_response_result(&result);
+}
+
 void driven_response_solver_respects_disabled_partial_failure_artifacts()
 {
     const double frequencies_hz[] = {1.0e9, 2.0e9};
@@ -2392,6 +3087,50 @@ void production_cpu_matrix_free_solver_solves_diagonal_harmonic_response()
     check(std::abs(response_imag[1] - 0.2) < 1.0e-12, "production CPU response imag[1]");
 }
 
+void production_cpu_matrix_free_solver_skips_zero_initial_residual_operator()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double stiffness[] = {2.0};
+    const double mass[] = {1.0};
+    const double drive_real[] = {1.0};
+    double response_real[1]{};
+    double response_imag[1]{};
+    double residual_l2[1]{};
+    double relative_residual_l2[1]{};
+    DiagonalProductionOperator op{stiffness, mass, 1};
+
+    fd::ProductionCpuDrivenResponseResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_production_cpu_driven_response(
+            fd::ProductionCpuDrivenResponseProblem{
+                1,
+                frequencies_hz,
+                1,
+                drive_real,
+                apply_diagonal_stiffness,
+                apply_diagonal_mass,
+                &op,
+                1.0e-12,
+                16,
+                4,
+                response_real,
+                response_imag,
+                1,
+                residual_l2,
+                relative_residual_l2,
+                1,
+                nullptr,
+                nullptr,
+            },
+            &result);
+
+    check(status == fd::FrequencyDomainStatus::ok, "production CPU zero-residual shortcut solve succeeds");
+    check(op.stiffness_call_count == 6, "initial zero residual skips one real/imag stiffness block apply");
+    check(op.mass_call_count == 6, "initial zero residual skips one real/imag mass block apply");
+    check(result.completed_frequency_count == 1, "zero-residual shortcut solve completes one frequency");
+}
+
 void production_cpu_matrix_free_solver_solves_complex_drive()
 {
     constexpr double one_over_two_pi_hz = 0.15915494309189535;
@@ -2441,6 +3180,319 @@ void production_cpu_matrix_free_solver_solves_complex_drive()
     check(std::abs(response_imag[0] - 1.4) < 1.0e-12, "production CPU complex-drive response imag[0]");
     check(std::abs(response_real[1] - 0.5) < 1.0e-12, "production CPU complex-drive response real[1]");
     check(std::abs(response_imag[1]) < 1.0e-12, "production CPU complex-drive response imag[1]");
+}
+
+void production_cpu_matrix_free_solver_preserves_nonconvergence_diagnostics()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double stiffness[] = {2.0, 4.0};
+    const double mass[] = {1.0, 2.0};
+    const double drive_real[] = {1.0, 2.0};
+    double response_real[2]{};
+    double response_imag[2]{};
+    double residual_l2[1]{};
+    double relative_residual_l2[1]{};
+    DiagonalProductionOperator op{stiffness, mass, 2};
+
+    fd::ProductionCpuDrivenResponseResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_production_cpu_driven_response(
+            fd::ProductionCpuDrivenResponseProblem{
+                2,
+                frequencies_hz,
+                1,
+                drive_real,
+                apply_diagonal_stiffness,
+                apply_diagonal_mass,
+                &op,
+                1.0e-14,
+                1,
+                1,
+                response_real,
+                response_imag,
+                2,
+                residual_l2,
+                relative_residual_l2,
+                1,
+                nullptr,
+                nullptr,
+            },
+            &result);
+
+    check(status == fd::FrequencyDomainStatus::solve_error, "production CPU limited GMRES reports solve_error");
+    check(result.completed_frequency_count == 0, "production CPU limited GMRES completes no frequencies");
+    check(result.total_iteration_count == 1, "production CPU limited GMRES preserves attempted iteration count");
+    check(result.max_iterations_for_frequency == 1, "production CPU limited GMRES preserves max iterations for failed frequency");
+    check(result.restart_iterations_for_frequency == 1, "production CPU limited GMRES preserves restart iterations for failed frequency");
+    check(std::abs(result.solver_relative_tolerance - 1.0e-14) < 1.0e-20, "production CPU limited GMRES preserves requested tolerance");
+    check(result.rhs_l2_norm > 0.0, "production CPU limited GMRES preserves RHS norm");
+    check(result.initial_residual_l2_norm > 0.0, "production CPU limited GMRES preserves initial residual norm");
+    check(
+        result.initial_relative_residual_l2_norm > 0.0,
+        "production CPU limited GMRES preserves initial relative residual");
+    check(result.residual_l2_norm > 0.0, "production CPU limited GMRES preserves final residual norm");
+    check(result.relative_residual_l2_norm > 0.0, "production CPU limited GMRES preserves final relative residual");
+    check(
+        result.minimum_tracked_relative_residual_l2_norm > 0.0,
+        "production CPU limited GMRES preserves minimum relative residual");
+    check(
+        result.last_tracked_relative_residual_l2_norm > 0.0,
+        "production CPU limited GMRES preserves last tracked residual");
+    check(
+        result.last_recomputed_relative_residual_l2_norm > 0.0,
+        "production CPU limited GMRES preserves last recomputed residual");
+    check(
+        result.residual_growth_factor > 0.0,
+        "production CPU limited GMRES preserves residual growth factor");
+}
+
+void production_cpu_matrix_free_solver_requires_recomputed_residual_for_convergence()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double drive_real[] = {1.0};
+    double response_real[1]{};
+    double response_imag[1]{};
+    double residual_l2[1]{};
+    double relative_residual_l2[1]{};
+    FirstKrylovApplyOnlyOperator op{1};
+
+    fd::ProductionCpuDrivenResponseResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_production_cpu_driven_response(
+            fd::ProductionCpuDrivenResponseProblem{
+                1,
+                frequencies_hz,
+                1,
+                drive_real,
+                apply_first_krylov_stiffness_then_zero,
+                apply_zero_mass,
+                &op,
+                1.0e-6,
+                1,
+                1,
+                response_real,
+                response_imag,
+                1,
+                residual_l2,
+                relative_residual_l2,
+                1,
+                nullptr,
+                nullptr,
+            },
+            &result);
+
+    check(
+        status == fd::FrequencyDomainStatus::solve_error,
+        "production CPU GMRES rejects false Arnoldi convergence when recomputed residual is large");
+    check(result.completed_frequency_count == 0, "false Arnoldi convergence completes no frequencies");
+    check(result.total_iteration_count == 1, "false Arnoldi convergence preserves attempted iteration count");
+    check(
+        result.minimum_tracked_relative_residual_l2_norm < 1.0e-12,
+        "false Arnoldi convergence records small tracked Krylov residual");
+    check(
+        result.last_tracked_relative_residual_l2_norm < 1.0e-12,
+        "false Arnoldi convergence records final tracked Krylov residual");
+    check(
+        result.last_recomputed_relative_residual_l2_norm > 0.5,
+        "false Arnoldi convergence records final recomputed residual separately");
+    check(
+        result.relative_residual_l2_norm > 0.5,
+        "false Arnoldi convergence reports large recomputed residual");
+    check(
+        relative_residual_l2[0] > 0.5,
+        "false Arnoldi convergence stores large recomputed residual in output buffer");
+}
+
+void production_cpu_lane_writes_failure_artifacts_for_nonconverged_gmres()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double equilibrium[] = {
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+    };
+    fd::TangentFrameNode nodes[2]{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 2, nodes, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "production CPU GMRES failure artifact frame succeeds");
+
+    fd::MfemOperatorContextDescriptor descriptor{};
+    descriptor.node_count = 2;
+    descriptor.full_dof_count = 6;
+    descriptor.tangent_dof_count = 4;
+    descriptor.zeeman_enabled = true;
+    descriptor.mfem_mesh_available = true;
+    fd::MfemTangentSpaceLayout layout{};
+    layout.node_count = 2;
+    layout.full_dof_count = 6;
+    layout.tangent_dof_count = 4;
+    layout.tangent_components_per_node = 2;
+    layout.tangent_stride = 2;
+    const double h_ext_a_per_m[] = {0.0, 0.0, 2.0};
+    const double drive_real[] = {1.0, 2.0, 3.0, 4.0};
+
+    char output_directory[192]{};
+    std::snprintf(
+        output_directory,
+        sizeof(output_directory),
+        "/tmp/fullmag-frequency-domain-production-cpu-gmres-failure-%llu",
+        static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&nodes)));
+
+    ScopedEnvVar response_rtol("FULLMAG_FEM_FREQUENCY_RESPONSE_RTOL", "1e-14");
+    ScopedEnvVar response_max_iterations(
+        "FULLMAG_FEM_FREQUENCY_RESPONSE_MAX_ITERATIONS",
+        "1");
+    ScopedEnvVar response_restart_iterations(
+        "FULLMAG_FEM_FREQUENCY_RESPONSE_RESTART_ITERATIONS",
+        "1");
+
+    fd::DrivenFrequencyResponseSolveRequest request{};
+    request.solve_request.operator_request.node_count = 2;
+    request.solve_request.operator_request.tangent_dof_count = 4;
+    request.solve_request.operator_request.alpha = 0.01;
+    request.solve_request.operator_request.gamma0 = 1.0;
+    request.solve_request.operator_request.include_zeeman = true;
+    request.solve_request.frequencies_hz = frequencies_hz;
+    request.solve_request.frequency_count = 1;
+    request.solve_request.write_response_fields = true;
+    request.output_directory = output_directory;
+    request.write_partial_artifacts = true;
+    request.execution_lane = fd::DrivenFrequencyResponseExecutionLane::production_cpu;
+    request.mfem_validation_problem.enabled = true;
+    request.mfem_validation_problem.descriptor = descriptor;
+    request.mfem_validation_problem.layout = layout;
+    request.mfem_validation_problem.nodes = nodes;
+    request.mfem_validation_problem.h_ext_a_per_m = h_ext_a_per_m;
+    request.mfem_validation_problem.drive_real = drive_real;
+
+    fd::DrivenFrequencyResponseSolveResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_driven_frequency_response(request, &result);
+
+    check(status == fd::FrequencyDomainStatus::solve_error, "limited production CPU GMRES reports solve_error");
+    check(result.completed_frequency_count == 0, "limited production CPU GMRES completes no points");
+    check(result.written_frequency_point_artifacts == 0, "limited production CPU GMRES writes no point artifacts");
+    check(
+        contains(result.artifact_manifest_path, "frequency_domain/manifest.v1.json"),
+        "limited production CPU GMRES failure reports manifest path");
+    check(
+        contains(result.result_json, "\"partial_artifacts_available\":true"),
+        "limited production CPU GMRES failure result reports partial artifacts");
+    check(
+        contains(result.diagnostics_json, "\"total_iteration_count\":1"),
+        "limited production CPU GMRES failure diagnostics reports iteration count");
+    check(
+        contains(result.diagnostics_json, "\"restart_iterations_for_frequency\":1"),
+        "limited production CPU GMRES failure diagnostics reports restart count");
+    check(
+        contains(result.diagnostics_json, "\"solver_relative_tolerance\":1e-14"),
+        "limited production CPU GMRES failure diagnostics reports requested tolerance");
+    check(
+        contains(result.diagnostics_json, "\"rhs_l2_norm\":"),
+        "limited production CPU GMRES failure diagnostics reports RHS norm");
+    check(
+        contains(result.diagnostics_json, "\"initial_residual_l2_norm\":"),
+        "limited production CPU GMRES failure diagnostics reports initial residual");
+    check(
+        contains(result.diagnostics_json, "\"initial_relative_residual_l2_norm\":"),
+        "limited production CPU GMRES failure diagnostics reports initial relative residual");
+    check(
+        contains(result.diagnostics_json, "\"minimum_tracked_relative_residual_l2_norm\":"),
+        "limited production CPU GMRES failure diagnostics reports minimum relative residual");
+    check(
+        contains(result.diagnostics_json, "\"minimum_tracked_relative_residual_iteration\":"),
+        "limited production CPU GMRES failure diagnostics reports minimum residual iteration");
+    check(
+        contains(result.diagnostics_json, "\"last_tracked_relative_residual_l2_norm\":"),
+        "limited production CPU GMRES failure diagnostics reports last tracked residual");
+    check(
+        contains(result.diagnostics_json, "\"last_recomputed_relative_residual_l2_norm\":"),
+        "limited production CPU GMRES failure diagnostics reports last recomputed residual");
+    check(
+        contains(result.diagnostics_json, "\"residual_growth_factor\":"),
+        "limited production CPU GMRES failure diagnostics reports residual growth");
+
+    const std::string manifest = read_text_file(result.artifact_manifest_path);
+    check(contains(manifest.c_str(), "\"status\":\"solve_error\""), "GMRES failure manifest records solve_error");
+    check(contains(manifest.c_str(), "\"complete\":false"), "GMRES failure manifest records incomplete state");
+    check(
+        contains(manifest.c_str(), "\"response_diagnostics_v1_path\":\"response/diagnostics/solver.v1.json\""),
+        "GMRES failure manifest links response diagnostics");
+    check(
+        contains(manifest.c_str(), "\"response_progress_v1_path\":\"response/progress.v1.json\""),
+        "GMRES failure manifest links response progress");
+    check(
+        contains(manifest.c_str(), "\"frequency_point_paths\":[]"),
+        "GMRES failure manifest does not claim completed frequency points");
+
+    char diagnostics_path[256]{};
+    std::snprintf(
+        diagnostics_path,
+        sizeof(diagnostics_path),
+        "%s/response/diagnostics/solver.v1.json",
+        output_directory);
+    const std::string diagnostics = read_text_file(diagnostics_path);
+    check(contains(diagnostics.c_str(), "\"status\":\"solve_error\""), "GMRES failure diagnostics artifact records solve_error");
+    check(
+        contains(diagnostics.c_str(), "\"completed_frequency_point_count\":0"),
+        "GMRES failure diagnostics artifact records zero completed points");
+    check(
+        contains(diagnostics.c_str(), "\"restart_iterations_for_frequency\":1"),
+        "GMRES failure diagnostics artifact records restart iterations");
+    check(
+        contains(diagnostics.c_str(), "\"solver_relative_tolerance\":1e-14"),
+        "GMRES failure diagnostics artifact records requested tolerance");
+    check(
+        contains(diagnostics.c_str(), "\"rhs_l2_norm\":"),
+        "GMRES failure diagnostics artifact records RHS norm");
+    check(
+        contains(diagnostics.c_str(), "\"initial_residual_l2_norm\":"),
+        "GMRES failure diagnostics artifact records initial residual");
+    check(
+        contains(diagnostics.c_str(), "\"initial_relative_residual_l2_norm\":"),
+        "GMRES failure diagnostics artifact records initial relative residual");
+    check(
+        contains(diagnostics.c_str(), "\"minimum_tracked_relative_residual_l2_norm\":"),
+        "GMRES failure diagnostics artifact records minimum relative residual");
+    check(
+        contains(diagnostics.c_str(), "\"minimum_tracked_relative_residual_iteration\":"),
+        "GMRES failure diagnostics artifact records minimum residual iteration");
+    check(
+        contains(diagnostics.c_str(), "\"last_tracked_relative_residual_l2_norm\":"),
+        "GMRES failure diagnostics artifact records last tracked residual");
+    check(
+        contains(diagnostics.c_str(), "\"last_recomputed_relative_residual_l2_norm\":"),
+        "GMRES failure diagnostics artifact records last recomputed residual");
+    check(
+        contains(diagnostics.c_str(), "\"residual_growth_factor\":"),
+        "GMRES failure diagnostics artifact records residual growth");
+
+    char progress_path[256]{};
+    std::snprintf(
+        progress_path,
+        sizeof(progress_path),
+        "%s/response/progress.v1.json",
+        output_directory);
+    const std::string progress = read_text_file(progress_path);
+    check(contains(progress.c_str(), "\"status\":\"solve_error\""), "GMRES failure progress records solve_error");
+    check(contains(progress.c_str(), "\"state\":\"solve_error\""), "GMRES failure progress state records solve_error");
+    check(
+        contains(progress.c_str(), "\"partial_artifacts_available\":true"),
+        "GMRES failure progress exposes partial artifacts");
+
+    char point_path[256]{};
+    std::snprintf(
+        point_path,
+        sizeof(point_path),
+        "%s/response/frequency_points/frequency_0000.json",
+        output_directory);
+    check(!file_exists(point_path), "GMRES failure does not write incomplete frequency point");
+
+    fd::release_driven_frequency_response_result(&result);
 }
 
 void production_cpu_matrix_free_solver_respects_temporal_phase_convention_sign()
@@ -3048,6 +4100,15 @@ void production_cpu_periodic_airbox_dynamic_demag_writes_bc_artifacts()
     check(
         contains(manifest.c_str(), "\"resolved_magnetostatic_bc\":\"periodic_airbox_k0\""),
         "periodic-airbox manifest records resolved magnetostatic BC");
+    check(
+        contains(manifest.c_str(), "\"periodic_airbox_coupled_block_solver\":false"),
+        "periodic-airbox unavailable manifest records coupled-block solver is inactive");
+    check(
+        contains(manifest.c_str(), "\"mfem_coupled_block_assembly\":false"),
+        "periodic-airbox unavailable manifest does not claim MFEM coupled-block assembly");
+    check(
+        contains(manifest.c_str(), "\"dynamic_demag_operator_source\":\"unassembled_mfem_periodic_airbox_coupled_block\""),
+        "periodic-airbox unavailable manifest records missing MFEM coupled-block source");
 
     char diagnostics_path[256]{};
     std::snprintf(
@@ -3077,6 +4138,15 @@ void production_cpu_periodic_airbox_dynamic_demag_writes_bc_artifacts()
     check(
         contains(diagnostics.c_str(), "\"validation_fallback_used\":false"),
         "periodic-airbox diagnostics record no validation fallback");
+    check(
+        contains(diagnostics.c_str(), "\"periodic_airbox_coupled_block_solver\":false"),
+        "periodic-airbox unavailable diagnostics record coupled-block solver is inactive");
+    check(
+        contains(diagnostics.c_str(), "\"mfem_coupled_block_assembly\":false"),
+        "periodic-airbox unavailable diagnostics do not claim MFEM coupled-block assembly");
+    check(
+        contains(diagnostics.c_str(), "\"dynamic_demag_operator_source\":\"unassembled_mfem_periodic_airbox_coupled_block\""),
+        "periodic-airbox unavailable diagnostics record missing MFEM coupled-block source");
 
     char progress_path[256]{};
     std::snprintf(
@@ -3091,6 +4161,29 @@ void production_cpu_periodic_airbox_dynamic_demag_writes_bc_artifacts()
     check(
         contains(progress.c_str(), "\"partial_artifacts_available\":true"),
         "periodic-airbox unavailable progress reports partial artifacts");
+
+    char periodic_pairs_path[256]{};
+    std::snprintf(
+        periodic_pairs_path,
+        sizeof(periodic_pairs_path),
+        "%s/mesh/periodic_pairs.v1.json",
+        output_directory);
+    const std::string periodic_pairs = read_text_file(periodic_pairs_path);
+    check(
+        contains(periodic_pairs.c_str(), "\"pair_family\":\"magnetostatic_delta_phi\""),
+        "periodic-airbox unavailable periodic-pair metadata records the delta_phi pair family");
+    check(
+        contains(periodic_pairs.c_str(), "\"unknown_family\":\"delta_phi\""),
+        "periodic-airbox unavailable periodic-pair metadata records the delta_phi unknown family");
+    check(
+        contains(periodic_pairs.c_str(), "\"pair_id\":\"magnetostatic-delta-phi-0000\""),
+        "periodic-airbox unavailable periodic-pair metadata records the magnetostatic pair id");
+    check(
+        contains(periodic_pairs.c_str(), "\"source_marker\":\"delta_phi_node:0\""),
+        "periodic-airbox unavailable periodic-pair metadata records the delta_phi source marker");
+    check(
+        contains(periodic_pairs.c_str(), "\"destination_marker\":\"delta_phi_node:1\""),
+        "periodic-airbox unavailable periodic-pair metadata records the delta_phi destination marker");
 
     char frequency_point_path[256]{};
     std::snprintf(
@@ -3117,6 +4210,12 @@ void production_cpu_periodic_airbox_dynamic_demag_writes_bc_artifacts()
     check(
         contains(frequency_point.c_str(), "\"unsupported_reason\":\"periodic_airbox_dynamic_demag_coupled_block_unimplemented\""),
         "periodic-airbox frequency point metadata records coupled-block unavailable reason");
+    check(
+        contains(frequency_point.c_str(), "\"operator_source\":\"unassembled_mfem_periodic_airbox_coupled_block\""),
+        "periodic-airbox unavailable frequency point records missing MFEM coupled-block source");
+    check(
+        contains(frequency_point.c_str(), "\"mfem_coupled_block_assembly\":false"),
+        "periodic-airbox unavailable frequency point does not claim MFEM coupled-block assembly");
 
     fd::release_driven_frequency_response_result(&result);
 }
@@ -3232,6 +4331,38 @@ void production_cpu_periodic_airbox_dynamic_demag_solves_explicit_coupled_block(
     check(
         contains(manifest.c_str(), "\"frequency_point_paths\":[\"response/frequency_points/frequency_0000.json\"]"),
         "explicit coupled block manifest links solved frequency point metadata");
+    check(
+        contains(manifest.c_str(), "\"periodic_pairs_v1_path\":\"mesh/periodic_pairs.v1.json\""),
+        "explicit coupled block manifest links periodic-pair metadata");
+
+    char periodic_pairs_path[256]{};
+    std::snprintf(
+        periodic_pairs_path,
+        sizeof(periodic_pairs_path),
+        "%s/mesh/periodic_pairs.v1.json",
+        output_directory);
+    const std::string periodic_pairs = read_text_file(periodic_pairs_path);
+    check(
+        contains(periodic_pairs.c_str(), "\"source\":\"native_fem_frequency_domain_coupled_block\""),
+        "explicit coupled block writes periodic-pair metadata with native coupled-block source");
+    check(
+        contains(periodic_pairs.c_str(), "\"magnetostatic_periodic_node_pair_count\":1"),
+        "explicit coupled block periodic-pair metadata records magnetostatic node pairs");
+    check(
+        contains(periodic_pairs.c_str(), "\"pair_family\":\"magnetostatic_delta_phi\""),
+        "explicit coupled block periodic-pair metadata records the delta_phi pair family");
+    check(
+        contains(periodic_pairs.c_str(), "\"unknown_family\":\"delta_phi\""),
+        "explicit coupled block periodic-pair metadata records the delta_phi unknown family");
+    check(
+        contains(periodic_pairs.c_str(), "\"pair_id\":\"magnetostatic-delta-phi-0000\""),
+        "explicit coupled block periodic-pair metadata records the magnetostatic pair id");
+    check(
+        contains(periodic_pairs.c_str(), "\"source_marker\":\"delta_phi_node:0\""),
+        "explicit coupled block periodic-pair metadata records the delta_phi source marker");
+    check(
+        contains(periodic_pairs.c_str(), "\"destination_marker\":\"delta_phi_node:1\""),
+        "explicit coupled block periodic-pair metadata records the delta_phi destination marker");
 
     char frequency_point_path[256]{};
     std::snprintf(
@@ -3673,11 +4804,23 @@ void production_cpu_periodic_airbox_dynamic_demag_solves_matrix_free_coupled_blo
     check(
         contains(result.diagnostics_json, "\"dynamic_demag_operator_source\":\"matrix_free_coupled_block_provider\""),
         "matrix-free coupled block diagnostics reports provider operator source");
+    check(
+        contains(result.diagnostics_json, "\"phi_gauge_policy\":\"matrix_free_provider_responsibility\""),
+        "matrix-free coupled block diagnostics delegates phi gauge policy to the provider");
+    check(
+        contains(result.diagnostics_json, "\"phi_gauge_constraint_applied\":false"),
+        "matrix-free coupled block diagnostics does not apply an implicit gauge row");
 
     const std::string manifest = read_text_file(result.artifact_manifest_path);
     check(
         contains(manifest.c_str(), "\"dynamic_demag_operator_source\":\"matrix_free_coupled_block_provider\""),
         "matrix-free coupled block manifest records provider operator source");
+    check(
+        contains(manifest.c_str(), "\"phi_gauge_policy\":\"matrix_free_provider_responsibility\""),
+        "matrix-free coupled block manifest delegates phi gauge policy to the provider");
+    check(
+        contains(manifest.c_str(), "\"dynamic_demag_k_available\":false"),
+        "matrix-free coupled block manifest does not promote dynamic demag-k availability before MFEM assembly");
 
     char frequency_point_path[256]{};
     std::snprintf(
@@ -3690,8 +4833,385 @@ void production_cpu_periodic_airbox_dynamic_demag_solves_matrix_free_coupled_blo
         contains(frequency_point.c_str(), "\"operator_source\":\"matrix_free_coupled_block_provider\""),
         "matrix-free coupled block frequency point records provider operator source");
     check(
+        contains(frequency_point.c_str(), "\"phi_gauge_policy\":\"matrix_free_provider_responsibility\""),
+        "matrix-free coupled block frequency point delegates phi gauge policy to the provider");
+    check(
+        contains(frequency_point.c_str(), "\"mfem_coupled_block_assembly\":false"),
+        "matrix-free coupled block frequency point does not claim MFEM assembly");
+    check(
         contains(frequency_point.c_str(), "\"delta_phi_complex\""),
         "matrix-free coupled block frequency point records delta_phi response");
+    fd::release_driven_frequency_response_result(&result);
+}
+
+void production_cpu_periodic_airbox_dynamic_demag_solves_mfem_demag_tangent_provider()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double equilibrium[] = {0.0, 0.0, 1.0};
+    fd::TangentFrameNode node{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 1, &node, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "production CPU periodic-airbox demag tangent provider frame succeeds");
+
+    fd::MfemOperatorContextDescriptor descriptor{};
+    descriptor.node_count = 1;
+    descriptor.full_dof_count = 3;
+    descriptor.tangent_dof_count = 2;
+    descriptor.demag_kind = fd::FrequencyDomainDemagKind::static_k0;
+    descriptor.demag_enabled = true;
+    descriptor.mfem_mesh_available = true;
+
+    fd::MfemTangentSpaceLayout layout{};
+    layout.node_count = 1;
+    layout.full_dof_count = 3;
+    layout.tangent_dof_count = 2;
+    layout.tangent_components_per_node = 2;
+    layout.tangent_stride = 2;
+
+    const double demag_tangent_matrix[] = {
+        0.5, 0.0,
+        0.0, 0.25,
+    };
+    DemagTangentCallbackOperator demag_operator{
+        demag_tangent_matrix,
+        2,
+        0,
+    };
+    const double drive_real[] = {1.0, 0.0};
+    const std::uint64_t magnetostatic_periodic_node_pairs[] = {0, 1};
+    char output_directory[192]{};
+    std::snprintf(
+        output_directory,
+        sizeof(output_directory),
+        "/tmp/fullmag-frequency-domain-periodic-airbox-demag-tangent-%llu",
+        static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&frequencies_hz)));
+
+    fd::DrivenFrequencyResponseSolveRequest request{};
+    request.solve_request.operator_request.node_count = 1;
+    request.solve_request.operator_request.tangent_dof_count = 2;
+    request.solve_request.operator_request.alpha = 0.0;
+    request.solve_request.operator_request.gamma0 = 1.0;
+    request.solve_request.operator_request.demag_kind = fd::FrequencyDomainDemagKind::static_k0;
+    request.solve_request.frequencies_hz = frequencies_hz;
+    request.solve_request.frequency_count = 1;
+    request.execution_lane = fd::DrivenFrequencyResponseExecutionLane::production_cpu;
+    request.requires_periodic_airbox_dynamic_demag = true;
+    request.magnetic_periodic_constraint_set_count = 1;
+    request.magnetostatic_periodic_constraint_set_count = 1;
+    request.periodic_airbox_delta_m_tangent_dof_count = 2;
+    request.periodic_airbox_delta_phi_dof_count = 1;
+    request.periodic_airbox_magnetostatic_periodic_node_pairs =
+        magnetostatic_periodic_node_pairs;
+    request.periodic_airbox_magnetostatic_periodic_node_pair_count = 1;
+    request.mfem_validation_problem.enabled = true;
+    request.mfem_validation_problem.descriptor = descriptor;
+    request.mfem_validation_problem.layout = layout;
+    request.mfem_validation_problem.nodes = &node;
+    request.mfem_validation_problem.apply_demag_tangent = apply_demag_tangent_callback;
+    request.mfem_validation_problem.demag_tangent_user_data = &demag_operator;
+    request.mfem_validation_problem.drive_real = drive_real;
+    request.output_directory = output_directory;
+    request.operator_diagnostics_json =
+        "{\"schema_version\":\"frequency_domain_operator_diagnostics.v1\","
+        "\"domain_mesh_mode\":\"generated_frozen_magnetic_submesh\"}";
+
+    fd::DrivenFrequencyResponseSolveResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_driven_frequency_response(request, &result);
+
+    check(
+        status == fd::FrequencyDomainStatus::ok,
+        "production CPU periodic-airbox demag tangent provider solve succeeds");
+    check(
+        result.completed_frequency_count == 1,
+        "production CPU periodic-airbox demag tangent provider completes frequency");
+    check(
+        demag_operator.call_count > 0,
+        "production CPU periodic-airbox demag tangent provider is invoked");
+    check(
+        contains(result.diagnostics_json, "\"validation_fallback_used\":false"),
+        "periodic-airbox demag tangent provider rejects validation fallback");
+    const std::uint64_t iteration_count = extract_json_u64(
+        result.diagnostics_json,
+        "\"total_iteration_count\"");
+    check(iteration_count > 0, "periodic-airbox demag tangent provider reports Krylov iterations");
+    check(
+        demag_operator.call_count == 4 + 2 * (iteration_count + 2),
+        "periodic-airbox demag tangent provider is invoked for the linearity self-check, stiffness applications, and final h_demag artifact export");
+    check(
+        contains(result.diagnostics_json, "\"demag_tangent_operator_source\":\"matrix_free_demag_tangent_provider\""),
+        "periodic-airbox demag tangent provider diagnostics report provider source");
+    check(
+        contains(result.diagnostics_json, "\"demag_tangent_linearity_check\":true"),
+        "periodic-airbox demag tangent provider diagnostics report linearity check");
+    check(
+        extract_json_double(
+            result.diagnostics_json,
+            "\"demag_tangent_additivity_max_abs_error\"") < 1.0e-12,
+        "periodic-airbox demag tangent provider additivity check is small");
+    check(
+        extract_json_double(
+            result.diagnostics_json,
+            "\"demag_tangent_homogeneity_max_abs_error\"") < 1.0e-12,
+        "periodic-airbox demag tangent provider homogeneity check is small");
+    check(
+        contains(result.diagnostics_json, "\"requested_magnetostatic_bc\":\"periodic_airbox_k0\""),
+        "periodic-airbox demag tangent provider diagnostics report requested magnetostatic BC");
+    check(
+        contains(result.diagnostics_json, "\"periodic_airbox_coupled_block_solver\":false"),
+        "periodic-airbox demag tangent provider diagnostics do not claim coupled-block assembly");
+    check(
+        !contains(result.diagnostics_json, "periodic_airbox_dynamic_demag_coupled_block_unimplemented"),
+        "periodic-airbox demag tangent provider does not report coupled-block unavailable");
+    check(
+        contains(result.artifact_manifest_path, "frequency_domain/manifest.v1.json"),
+        "periodic-airbox demag tangent provider reports manifest path");
+    const std::string manifest = read_text_file(result.artifact_manifest_path);
+    check(
+        contains(manifest.c_str(), "\"spin_wave_bc\":{\"kind\":\"periodic\"}"),
+        "periodic-airbox demag tangent provider manifest records public periodic spin-wave BC");
+    check(
+        !contains(manifest.c_str(), "\"spin_wave_bc\":{\"kind\":\"static_periodic\"}"),
+        "periodic-airbox demag tangent provider manifest does not expose internal static-periodic reduction as spin-wave BC");
+    check(
+        contains(manifest.c_str(), "\"requested_magnetostatic_bc\":\"periodic_airbox_k0\""),
+        "periodic-airbox demag tangent provider manifest records requested magnetostatic BC");
+    check(
+        contains(manifest.c_str(), "\"demag_tangent_operator_source\":\"matrix_free_demag_tangent_provider\""),
+        "periodic-airbox demag tangent provider manifest records provider source");
+    check(
+        contains(manifest.c_str(), "\"demag_tangent_linearity_check\":true"),
+        "periodic-airbox demag tangent provider manifest records linearity check");
+    check(
+        contains(manifest.c_str(), "\"domain_mesh_mode\":\"generated_frozen_magnetic_submesh\""),
+        "periodic-airbox demag tangent provider manifest records frozen magnetic submesh workflow");
+    char solver_diagnostics_path[256]{};
+    std::snprintf(
+        solver_diagnostics_path,
+        sizeof(solver_diagnostics_path),
+        "%s/response/diagnostics/solver.v1.json",
+        output_directory);
+    const std::string solver_diagnostics = read_text_file(solver_diagnostics_path);
+    check(
+        !contains(solver_diagnostics.c_str(), ",,"),
+        "periodic-airbox demag tangent provider solver diagnostics avoid duplicate JSON separators");
+    check(
+        contains(
+            solver_diagnostics.c_str(),
+            "\"magnetostatic_periodic_node_pair_count\":1,\"krylov_solver\""),
+        "periodic-airbox demag tangent provider solver diagnostics separate periodic-airbox fields from Krylov fields");
+    check(
+        contains(solver_diagnostics.c_str(), "\"demag_tangent_additivity_max_abs_error\":"),
+        "periodic-airbox demag tangent provider solver diagnostics records additivity error");
+    check(
+        contains(
+            solver_diagnostics.c_str(),
+            "\"domain_mesh_mode\":\"generated_frozen_magnetic_submesh\""),
+        "periodic-airbox demag tangent provider solver diagnostics records frozen magnetic submesh workflow");
+
+    char point_path[256]{};
+    std::snprintf(
+        point_path,
+        sizeof(point_path),
+        "%s/response/frequency_points/frequency_0000.json",
+        output_directory);
+    const std::string point = read_text_file(point_path);
+    check(
+        contains(point.c_str(), "\"requested_magnetostatic_bc\":\"periodic_airbox_k0\""),
+        "periodic-airbox demag tangent provider point records requested magnetostatic BC");
+    check(
+        contains(point.c_str(), "\"demag_contribution\":{\"status\":\"solved\""),
+        "periodic-airbox demag tangent provider point records solved demag contribution");
+    check(
+        contains(point.c_str(), "\"delta_phi_complex\":null"),
+        "periodic-airbox demag tangent provider point does not fake delta_phi phasor payload");
+    check(
+        contains(point.c_str(), "\"h_demag_complex\":["),
+        "periodic-airbox demag tangent provider point records demag-field phasor payload");
+    check(
+        contains(point.c_str(), "\"h_demag_complex\":[["),
+        "periodic-airbox demag tangent provider point records h_demag_complex as [re, im] pairs");
+    check(
+        !contains(point.c_str(), "\"h_demag_complex\":[{\"real\""),
+        "periodic-airbox demag tangent provider point does not record h_demag_complex as real/imag objects");
+    fd::release_driven_frequency_response_result(&result);
+}
+
+void production_cpu_periodic_airbox_dynamic_demag_writes_solve_error_artifacts()
+{
+    ScopedEnvVar rtol_guard("FULLMAG_FEM_FREQUENCY_RESPONSE_RTOL", "1e-14");
+    ScopedEnvVar max_iterations_guard("FULLMAG_FEM_FREQUENCY_RESPONSE_MAX_ITERATIONS", "1");
+    ScopedEnvVar restart_guard("FULLMAG_FEM_FREQUENCY_RESPONSE_RESTART_ITERATIONS", "1");
+
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double equilibrium[] = {
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+    };
+    fd::TangentFrameNode nodes[2]{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 2, nodes, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "production CPU periodic-airbox solve-error frame succeeds");
+
+    fd::MfemOperatorContextDescriptor descriptor{};
+    descriptor.node_count = 2;
+    descriptor.full_dof_count = 6;
+    descriptor.tangent_dof_count = 4;
+    descriptor.demag_kind = fd::FrequencyDomainDemagKind::static_k0;
+    descriptor.demag_enabled = true;
+    descriptor.mfem_mesh_available = true;
+
+    fd::MfemTangentSpaceLayout layout{};
+    layout.node_count = 2;
+    layout.full_dof_count = 6;
+    layout.tangent_dof_count = 4;
+    layout.tangent_components_per_node = 2;
+    layout.tangent_stride = 2;
+
+    const double demag_tangent_matrix[] = {
+        0.5, 0.1, 0.0, 0.0,
+        0.1, 0.25, 0.0, 0.0,
+        0.0, 0.0, 0.75, 0.2,
+        0.0, 0.0, 0.2, 0.4,
+    };
+    DemagTangentCallbackOperator demag_operator{
+        demag_tangent_matrix,
+        4,
+        0,
+    };
+    const double drive_real[] = {1.0, 2.0, 3.0, 4.0};
+    const std::uint64_t magnetostatic_periodic_node_pairs[] = {0, 1};
+    char output_directory[192]{};
+    std::snprintf(
+        output_directory,
+        sizeof(output_directory),
+        "/tmp/fullmag-frequency-domain-periodic-airbox-demag-tangent-solve-error-%llu",
+        static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&frequencies_hz)));
+
+    fd::DrivenFrequencyResponseSolveRequest request{};
+    request.solve_request.operator_request.node_count = 2;
+    request.solve_request.operator_request.tangent_dof_count = 4;
+    request.solve_request.operator_request.alpha = 0.0;
+    request.solve_request.operator_request.gamma0 = 1.0;
+    request.solve_request.operator_request.demag_kind = fd::FrequencyDomainDemagKind::static_k0;
+    request.solve_request.frequencies_hz = frequencies_hz;
+    request.solve_request.frequency_count = 1;
+    request.execution_lane = fd::DrivenFrequencyResponseExecutionLane::production_cpu;
+    request.requires_periodic_airbox_dynamic_demag = true;
+    request.magnetic_periodic_constraint_set_count = 1;
+    request.magnetostatic_periodic_constraint_set_count = 1;
+    request.periodic_airbox_delta_m_tangent_dof_count = 4;
+    request.periodic_airbox_delta_phi_dof_count = 2;
+    request.periodic_airbox_magnetostatic_periodic_node_pairs =
+        magnetostatic_periodic_node_pairs;
+    request.periodic_airbox_magnetostatic_periodic_node_pair_count = 1;
+    request.mfem_validation_problem.enabled = true;
+    request.mfem_validation_problem.descriptor = descriptor;
+    request.mfem_validation_problem.layout = layout;
+    request.mfem_validation_problem.nodes = nodes;
+    request.mfem_validation_problem.apply_demag_tangent = apply_demag_tangent_callback;
+    request.mfem_validation_problem.demag_tangent_user_data = &demag_operator;
+    request.mfem_validation_problem.drive_real = drive_real;
+    request.output_directory = output_directory;
+    request.write_partial_artifacts = true;
+
+    fd::DrivenFrequencyResponseSolveResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_driven_frequency_response(request, &result);
+
+    check(
+        status == fd::FrequencyDomainStatus::solve_error,
+        "production CPU periodic-airbox demag tangent provider limited GMRES reports solve_error");
+    check(result.completed_frequency_count == 0, "solve-error run completes no frequencies");
+    check(
+        contains(result.artifact_manifest_path, "frequency_domain/manifest.v1.json"),
+        "solve-error run reports manifest path");
+    check(
+        contains(result.result_json, "frequency_domain/manifest.v1.json"),
+        "solve-error result JSON reports manifest path");
+
+    const std::string manifest = read_text_file(result.artifact_manifest_path);
+    check(contains(manifest.c_str(), "\"status\":\"solve_error\""), "solve-error manifest records status");
+    check(contains(manifest.c_str(), "\"complete\":false"), "solve-error manifest records incomplete state");
+    check(
+        contains(manifest.c_str(), "\"demag_tangent_operator_source\":\"matrix_free_demag_tangent_provider\""),
+        "solve-error manifest records demag tangent provider source");
+    check(
+        contains(manifest.c_str(), "\"total_iteration_count\":1"),
+        "solve-error manifest preserves iteration count");
+    check(
+        contains(manifest.c_str(), "\"max_iterations_for_frequency\":1"),
+        "solve-error manifest preserves max-iteration limit");
+
+    char diagnostics_path[256]{};
+    char progress_path[256]{};
+    char periodic_pairs_path[256]{};
+    std::snprintf(
+        diagnostics_path,
+        sizeof(diagnostics_path),
+        "%s/response/diagnostics/solver.v1.json",
+        output_directory);
+    std::snprintf(
+        progress_path,
+        sizeof(progress_path),
+        "%s/response/progress.v1.json",
+        output_directory);
+    std::snprintf(
+        periodic_pairs_path,
+        sizeof(periodic_pairs_path),
+        "%s/mesh/periodic_pairs.v1.json",
+        output_directory);
+    const std::string diagnostics = read_text_file(diagnostics_path);
+    const std::string progress = read_text_file(progress_path);
+    check(
+        contains(diagnostics.c_str(), "\"status\":\"solve_error\""),
+        "solve-error diagnostics records status");
+    check(
+        contains(diagnostics.c_str(), "\"total_iteration_count\":1"),
+        "solve-error diagnostics preserves iteration count");
+    check(
+        contains(diagnostics.c_str(), "\"max_iterations_for_frequency\":1"),
+        "solve-error diagnostics preserves max-iteration limit");
+    check(
+        contains(diagnostics.c_str(), "\"relative_residual_l2_norm\":"),
+        "solve-error diagnostics preserves final relative residual");
+    check(
+        contains(diagnostics.c_str(), "\"initial_relative_residual_l2_norm\":"),
+        "solve-error diagnostics preserves initial relative residual");
+    check(
+        contains(diagnostics.c_str(), "\"minimum_tracked_relative_residual_l2_norm\":"),
+        "solve-error diagnostics preserves minimum relative residual");
+    check(
+        contains(diagnostics.c_str(), "\"minimum_tracked_relative_residual_iteration\":"),
+        "solve-error diagnostics preserves minimum residual iteration");
+    check(
+        contains(diagnostics.c_str(), "\"last_tracked_relative_residual_l2_norm\":"),
+        "solve-error diagnostics preserves last tracked residual");
+    check(
+        contains(diagnostics.c_str(), "\"last_recomputed_relative_residual_l2_norm\":"),
+        "solve-error diagnostics preserves last recomputed residual");
+    check(
+        contains(diagnostics.c_str(), "\"residual_growth_factor\":"),
+        "solve-error diagnostics preserves residual growth factor");
+    check(
+        contains(progress.c_str(), "\"status\":\"solve_error\""),
+        "solve-error progress records status");
+    check(
+        contains(progress.c_str(), "\"state\":\"solve_error\""),
+        "solve-error progress records solve_error state");
+    check(
+        contains(progress.c_str(), "\"completed_frequency_points\":0"),
+        "solve-error progress records zero completed points");
+    check(
+        file_exists(periodic_pairs_path),
+        "solve-error run still writes periodic-pair metadata");
+
     fd::release_driven_frequency_response_result(&result);
 }
 
@@ -3761,6 +5281,33 @@ void production_gpu_periodic_airbox_dynamic_demag_rejects_explicit_coupled_block
     check(
         !contains(result.diagnostics_json, "\"periodic_airbox_coupled_block_solver\":true"),
         "GPU periodic-airbox rejection does not run the CPU explicit coupled block solver");
+
+    char manifest_path[256]{};
+    char diagnostics_path[256]{};
+    std::snprintf(
+        manifest_path,
+        sizeof(manifest_path),
+        "%s/frequency_domain/manifest.v1.json",
+        output_directory);
+    std::snprintf(
+        diagnostics_path,
+        sizeof(diagnostics_path),
+        "%s/response/diagnostics/solver.v1.json",
+        output_directory);
+    const std::string manifest = read_text_file(manifest_path);
+    const std::string diagnostics = read_text_file(diagnostics_path);
+    check(
+        contains(manifest.c_str(), "\"requested_execution_lane\":\"production_gpu\""),
+        "GPU periodic-airbox manifest preserves requested GPU lane");
+    check(
+        contains(manifest.c_str(), "\"resolved_execution_lane\":\"unavailable\""),
+        "GPU periodic-airbox manifest records unavailable resolved lane");
+    check(
+        contains(diagnostics.c_str(), "\"resolved_execution_lane\":\"unavailable\""),
+        "GPU periodic-airbox artifact diagnostics record unavailable resolved lane");
+    check(
+        contains(diagnostics.c_str(), "\"validation_fallback_used\":false"),
+        "GPU periodic-airbox artifact diagnostics record no validation fallback");
 
     char frequency_point_path[256]{};
     std::snprintf(
@@ -4273,7 +5820,13 @@ void production_cpu_lane_runs_mfem_matrix_free_demag_callback_response_problem()
 
     check(status == fd::FrequencyDomainStatus::ok, "production CPU MFEM demag callback solve succeeds");
     check(result.completed_frequency_count == 1, "production CPU MFEM demag callback completes frequency");
-    check(demag_operator.call_count > 0, "production CPU MFEM demag callback is invoked");
+    const std::uint64_t iteration_count = extract_json_u64(
+        result.diagnostics_json,
+        "\"total_iteration_count\"");
+    check(iteration_count > 0, "production CPU MFEM demag callback reports Krylov iterations");
+    check(
+        demag_operator.call_count == 4 + 2 * (iteration_count + 1),
+        "production CPU MFEM demag callback is invoked for the linearity self-check and stiffness applications");
     check(
         contains(result.diagnostics_json, "\"matrix_free_solver\":true"),
         "production CPU MFEM demag callback diagnostics report matrix-free solver");
@@ -5624,6 +7177,18 @@ void c_abi_driven_response_solve_rejects_floquet_metadata()
     floquet_pair.has_phase = 1;
     floquet_pair.phase_rad = -1.0;
 
+    const auto unique_tick = std::chrono::steady_clock::now()
+                                 .time_since_epoch()
+                                 .count();
+    char output_directory[192]{};
+    std::snprintf(
+        output_directory,
+        sizeof(output_directory),
+        "/tmp/fullmag-frequency-domain-floquet-nonzero-k-%llu-%llu",
+        static_cast<unsigned long long>(
+            reinterpret_cast<std::uintptr_t>(&floquet_pair)),
+        static_cast<unsigned long long>(unique_tick));
+
     fullmag_fem_frequency_domain_driven_response_request request{};
     request.node_count = 2;
     request.tangent_dof_count = 4;
@@ -5631,6 +7196,8 @@ void c_abi_driven_response_solve_rejects_floquet_metadata()
     request.gamma0 = 2.211e5;
     request.frequencies_hz = frequencies_hz;
     request.frequency_count = 1;
+    request.output_directory = output_directory;
+    request.write_partial_artifacts = 1;
     request.has_floquet_k_vector = 1;
     request.floquet_k_vector_rad_per_m[0] = 1.0e6;
     request.phase_convention = FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_I_OMEGA_T;
@@ -5655,6 +7222,484 @@ void c_abi_driven_response_solve_rejects_floquet_metadata()
     check(
         contains(result.result_json, "\"unsupported_reason\":\"floquet_bloch_nonzero_k\""),
         "C ABI Floquet solve result records structured nonzero-k reason");
+    check(
+        contains(result.artifact_manifest_path, "frequency_domain/manifest.v1.json"),
+        "C ABI Floquet unsupported solve reports manifest path");
+    check(
+        contains(result.result_json, "frequency_domain/manifest.v1.json"),
+        "C ABI Floquet unsupported solve result JSON reports manifest");
+
+    const std::string manifest = read_text_file(result.artifact_manifest_path);
+    check(
+        contains(manifest.c_str(), "\"schema_version\":\"frequency_domain_manifest.v1\""),
+        "C ABI Floquet unsupported manifest records schema");
+    check(
+        contains(manifest.c_str(), "\"status\":\"unavailable\""),
+        "C ABI Floquet unsupported manifest records unavailable status");
+    check(
+        contains(manifest.c_str(), "\"unsupported_reason\":\"floquet_bloch_nonzero_k\""),
+        "C ABI Floquet unsupported manifest records structured reason");
+    check(
+        contains(manifest.c_str(), "\"response_progress_v1_path\":\"response/progress.v1.json\""),
+        "C ABI Floquet unsupported manifest links progress");
+    check(
+        contains(manifest.c_str(), "\"response_diagnostics_v1_path\":\"response/diagnostics/solver.v1.json\""),
+        "C ABI Floquet unsupported manifest links diagnostics");
+    check(
+        !contains(manifest.c_str(), "response/magnetic_response_sweep.v1.json"),
+        "C ABI Floquet unsupported manifest does not claim sweep artifact");
+
+    char diagnostics_path[256]{};
+    std::snprintf(
+        diagnostics_path,
+        sizeof(diagnostics_path),
+        "%s/response/diagnostics/solver.v1.json",
+        output_directory);
+    const std::string diagnostics = read_text_file(diagnostics_path);
+    check(
+        contains(diagnostics.c_str(), "\"unsupported_reason\":\"floquet_bloch_nonzero_k\""),
+        "C ABI Floquet unsupported diagnostics record structured reason");
+    check(
+        contains(diagnostics.c_str(), "\"validation_fallback_used\":false"),
+        "C ABI Floquet unsupported diagnostics reject validation fallback");
+
+    char progress_path[256]{};
+    std::snprintf(progress_path, sizeof(progress_path), "%s/response/progress.v1.json", output_directory);
+    const std::string progress = read_text_file(progress_path);
+    check(
+        contains(progress.c_str(), "\"schema_version\":\"frequency_domain_sweep_progress.v1\""),
+        "C ABI Floquet unsupported progress records schema");
+    check(
+        contains(progress.c_str(), "\"status\":\"unavailable\""),
+        "C ABI Floquet unsupported progress records unavailable status");
+    check(
+        contains(progress.c_str(), "\"total_frequency_points\":1"),
+        "C ABI Floquet unsupported progress records total point count");
+    check(
+        contains(progress.c_str(), "\"completed_frequency_points\":0"),
+        "C ABI Floquet unsupported progress records zero completed points");
+
+    char sweep_path[256]{};
+    std::snprintf(
+        sweep_path,
+        sizeof(sweep_path),
+        "%s/response/magnetic_response_sweep.v1.json",
+        output_directory);
+    check(
+        !file_exists(sweep_path),
+        "C ABI Floquet unsupported path does not write a response sweep");
+
+    fullmag_fem_frequency_domain_solve_result_release(&result);
+}
+
+void c_abi_driven_response_solve_reports_floquet_airbox_unsupported_with_artifacts()
+{
+    const double frequencies_hz[] = {1.0e9};
+    fullmag_fem_frequency_domain_floquet_periodic_pair floquet_pair{};
+    floquet_pair.pair_id = "x_faces";
+    floquet_pair.node_a = 0;
+    floquet_pair.node_b = 1;
+    floquet_pair.has_translation = 1;
+    floquet_pair.translation_m[0] = 1.0e-6;
+    floquet_pair.translation_m[1] = 0.0;
+    floquet_pair.translation_m[2] = 0.0;
+    floquet_pair.has_phase = 1;
+    floquet_pair.phase_rad = -1.0;
+    const fullmag_fem_frequency_domain_periodic_node_pair magnetostatic_pair{0, 1};
+
+    const auto unique_tick = std::chrono::steady_clock::now()
+                                 .time_since_epoch()
+                                 .count();
+    char output_directory[192]{};
+    std::snprintf(
+        output_directory,
+        sizeof(output_directory),
+        "/tmp/fullmag-frequency-domain-floquet-airbox-%llu-%llu",
+        static_cast<unsigned long long>(
+            reinterpret_cast<std::uintptr_t>(&floquet_pair)),
+        static_cast<unsigned long long>(unique_tick));
+
+    fullmag_fem_frequency_domain_driven_response_request request{};
+    request.node_count = 2;
+    request.tangent_dof_count = 4;
+    request.alpha = 0.02;
+    request.gamma0 = 2.211e5;
+    request.frequencies_hz = frequencies_hz;
+    request.frequency_count = 1;
+    request.output_directory = output_directory;
+    request.write_partial_artifacts = 1;
+    request.has_floquet_k_vector = 1;
+    request.floquet_k_vector_rad_per_m[0] = 1.0e6;
+    request.phase_convention = FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_I_OMEGA_T;
+    request.mfem_floquet_periodic_pairs = &floquet_pair;
+    request.mfem_floquet_periodic_pair_count = 1;
+    request.requires_floquet_airbox_dynamic_demag = 1;
+    request.magnetic_periodic_constraint_set_count = 1;
+    request.magnetostatic_periodic_constraint_set_count = 1;
+    request.periodic_airbox_delta_phi_dof_count = 2;
+    request.periodic_airbox_magnetostatic_periodic_node_pairs = &magnetostatic_pair;
+    request.periodic_airbox_magnetostatic_periodic_node_pair_count = 1;
+
+    fullmag_fem_frequency_domain_solve_result result{};
+    const int status =
+        fullmag_fem_frequency_domain_solve_driven_response(&request, &result);
+
+    check(status == FULLMAG_FEM_OK, "C ABI Floquet-airbox solve boundary call succeeds");
+    check(
+        result.status == FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_UNAVAILABLE,
+        "C ABI Floquet-airbox solve result reports unavailable");
+    check(result.completed_frequency_count == 0, "C ABI Floquet-airbox solve completes no frequencies");
+    check(
+        contains(result.diagnostics_json, "\"unsupported_reason\":\"floquet_airbox_dynamic_demag_k_unimplemented\""),
+        "C ABI Floquet-airbox diagnostics records demag-k unsupported reason");
+    check(
+        contains(result.diagnostics_json, "\"requested_magnetostatic_bc\":\"floquet_airbox\""),
+        "C ABI Floquet-airbox diagnostics preserve requested magnetostatic BC");
+    check(
+        contains(result.diagnostics_json, "\"resolved_magnetostatic_bc\":\"floquet_airbox\""),
+        "C ABI Floquet-airbox diagnostics preserve resolved magnetostatic BC");
+    check(
+        contains(result.diagnostics_json, "\"dynamic_demag_k_available\":false"),
+        "C ABI Floquet-airbox diagnostics record missing demag-k operator");
+    check(
+        contains(result.diagnostics_json, "\"magnetostatic_periodic_constraint_set_count\":1"),
+        "C ABI Floquet-airbox diagnostics preserve delta_phi constraint-set count");
+    check(
+        contains(result.diagnostics_json, "\"delta_m_tangent_dof_count\":4"),
+        "C ABI Floquet-airbox diagnostics preserve delta_m tangent DOF count");
+    check(
+        contains(result.diagnostics_json, "\"delta_phi_dof_count\":2"),
+        "C ABI Floquet-airbox diagnostics preserve delta_phi DOF count");
+    check(
+        contains(result.diagnostics_json, "\"magnetostatic_periodic_node_pair_count\":1"),
+        "C ABI Floquet-airbox diagnostics preserve delta_phi periodic node-pair count");
+    check(
+        contains(result.diagnostics_json, "\"delta_phi_flux_validation_status\":\"not_evaluated\""),
+        "C ABI Floquet-airbox diagnostics are explicit about skipped delta_phi flux validation");
+    check(
+        contains(result.diagnostics_json, "\"floquet_k_vector_rad_per_m\":[1000000"),
+        "C ABI Floquet-airbox diagnostics preserve k-vector");
+    check(
+        contains(result.diagnostics_json, "\"validation_fallback_used\":false"),
+        "C ABI Floquet-airbox diagnostics reject validation fallback");
+    check(
+        contains(result.diagnostics_json, "\"resolved_execution_lane\":\"unavailable\""),
+        "C ABI Floquet-airbox diagnostics record unavailable resolved lane");
+    check(
+        contains(result.diagnostics_json, "\"periodic_airbox_coupled_block_solver\":false"),
+        "C ABI Floquet-airbox diagnostics record inactive coupled-block solver");
+    check(
+        contains(result.diagnostics_json, "\"mfem_coupled_block_assembly\":false"),
+        "C ABI Floquet-airbox diagnostics record missing MFEM coupled-block assembly");
+    check(
+        contains(result.artifact_manifest_path, "frequency_domain/manifest.v1.json"),
+        "C ABI Floquet-airbox unsupported solve reports manifest path");
+
+    const std::string manifest = read_text_file(result.artifact_manifest_path);
+    check(
+        contains(manifest.c_str(), "\"unsupported_reason\":\"floquet_airbox_dynamic_demag_k_unimplemented\""),
+        "C ABI Floquet-airbox manifest records structured reason");
+    check(
+        contains(manifest.c_str(), "\"requested_magnetostatic_bc\":\"floquet_airbox\""),
+        "C ABI Floquet-airbox manifest records requested magnetostatic BC");
+    check(
+        contains(manifest.c_str(), "\"resolved_magnetostatic_bc\":\"floquet_airbox\""),
+        "C ABI Floquet-airbox manifest records resolved magnetostatic BC");
+    check(
+        contains(manifest.c_str(), "\"magnetostatic_periodic_constraint_set_count\":1"),
+        "C ABI Floquet-airbox manifest records delta_phi constraint-set count");
+    check(
+        contains(manifest.c_str(), "\"delta_m_tangent_dof_count\":4"),
+        "C ABI Floquet-airbox manifest records delta_m tangent DOF count");
+    check(
+        contains(manifest.c_str(), "\"delta_phi_dof_count\":2"),
+        "C ABI Floquet-airbox manifest records delta_phi DOF count");
+    check(
+        contains(manifest.c_str(), "\"magnetostatic_periodic_node_pair_count\":1"),
+        "C ABI Floquet-airbox manifest records delta_phi periodic node-pair count");
+    check(
+        contains(manifest.c_str(), "\"periodic_pairs_v1_path\":\"mesh/periodic_pairs.v1.json\""),
+        "C ABI Floquet-airbox manifest links delta_phi periodic pair artifact");
+    check(
+        contains(manifest.c_str(), "\"delta_phi_flux_validation_status\":\"not_evaluated\""),
+        "C ABI Floquet-airbox manifest records unevaluated flux validation");
+    check(
+        contains(manifest.c_str(), "\"floquet_k_vector_rad_per_m\":[1000000"),
+        "C ABI Floquet-airbox manifest records k-vector");
+    check(
+        contains(manifest.c_str(), "\"spin_wave_bc\":{\"kind\":\"floquet\"}"),
+        "C ABI Floquet-airbox manifest records Floquet spin-wave BC object");
+    check(
+        contains(manifest.c_str(), "\"periodic_or_floquet\":true"),
+        "C ABI Floquet-airbox manifest records periodic/Floquet physics");
+    check(
+        contains(manifest.c_str(), "\"periodic_airbox_coupled_block_solver\":false"),
+        "C ABI Floquet-airbox manifest diagnostics record inactive coupled-block solver");
+    check(
+        contains(manifest.c_str(), "\"mfem_coupled_block_assembly\":false"),
+        "C ABI Floquet-airbox manifest diagnostics record missing MFEM coupled-block assembly");
+    check(
+        contains(manifest.c_str(), "\"diagnostics\":{\"requested_frequency_count\":1,\"requested_execution_lane\":\"validation\",\"resolved_execution_lane\":\"unavailable\""),
+        "C ABI Floquet-airbox manifest diagnostics record execution provenance");
+    check(
+        contains(manifest.c_str(), "\"floquet_k_vector_rad_per_m\":[1000000"),
+        "C ABI Floquet-airbox manifest diagnostics record k-vector");
+
+    char diagnostics_path[256]{};
+    char progress_path[256]{};
+    char periodic_pairs_path[256]{};
+    std::snprintf(
+        diagnostics_path,
+        sizeof(diagnostics_path),
+        "%s/response/diagnostics/solver.v1.json",
+        output_directory);
+    std::snprintf(progress_path, sizeof(progress_path), "%s/response/progress.v1.json", output_directory);
+    std::snprintf(
+        periodic_pairs_path,
+        sizeof(periodic_pairs_path),
+        "%s/mesh/periodic_pairs.v1.json",
+        output_directory);
+    const std::string diagnostics = read_text_file(diagnostics_path);
+    const std::string progress = read_text_file(progress_path);
+    const std::string periodic_pairs = read_text_file(periodic_pairs_path);
+    check(
+        contains(diagnostics.c_str(), "\"unsupported_reason\":\"floquet_airbox_dynamic_demag_k_unimplemented\""),
+        "C ABI Floquet-airbox artifact diagnostics record structured reason");
+    check(
+        contains(diagnostics.c_str(), "\"delta_phi_flux_validation_status\":\"not_evaluated\""),
+        "C ABI Floquet-airbox artifact diagnostics record unevaluated flux validation");
+    check(
+        contains(diagnostics.c_str(), "\"resolved_execution_lane\":\"unavailable\""),
+        "C ABI Floquet-airbox artifact diagnostics record unavailable resolved lane");
+    check(
+        contains(diagnostics.c_str(), "\"periodic_airbox_coupled_block_solver\":false"),
+        "C ABI Floquet-airbox artifact diagnostics record inactive coupled-block solver");
+    check(
+        contains(diagnostics.c_str(), "\"mfem_coupled_block_assembly\":false"),
+        "C ABI Floquet-airbox artifact diagnostics record missing MFEM coupled-block assembly");
+    check(
+        contains(progress.c_str(), "\"status\":\"unavailable\""),
+        "C ABI Floquet-airbox progress records unavailable status");
+    check(
+        contains(periodic_pairs.c_str(), "\"source\":\"native_fem_frequency_domain_floquet_airbox_unavailable\""),
+        "C ABI Floquet-airbox periodic-pair artifact records Floquet-airbox source");
+    check(
+        contains(periodic_pairs.c_str(), "\"pair_family\":\"magnetostatic_delta_phi\""),
+        "C ABI Floquet-airbox periodic-pair artifact records delta_phi pair family");
+    check(
+        contains(periodic_pairs.c_str(), "\"unknown_family\":\"delta_phi\""),
+        "C ABI Floquet-airbox periodic-pair artifact records delta_phi unknown family");
+    check(
+        contains(periodic_pairs.c_str(), "\"phase_convention\":\"exp_minus_i_k_dot_delta_r\""),
+        "C ABI Floquet-airbox periodic-pair artifact records Bloch phase convention");
+    check(
+        contains(periodic_pairs.c_str(), "\"floquet_k_vector_rad_per_m\":[1000000"),
+        "C ABI Floquet-airbox periodic-pair artifact records k-vector");
+    check(
+        contains(periodic_pairs.c_str(), "\"phase_metadata_status\":\"available\""),
+        "C ABI Floquet-airbox periodic-pair artifact records available phase metadata");
+    check(
+        contains(periodic_pairs.c_str(), "\"phase_rad\":-1"),
+        "C ABI Floquet-airbox periodic-pair artifact records delta_phi phase");
+    check(
+        contains(periodic_pairs.c_str(), "\"expected_phase_rad\":-1"),
+        "C ABI Floquet-airbox periodic-pair artifact records expected delta_phi phase");
+    check(
+        contains(periodic_pairs.c_str(), "\"phase_residual_rad\":0"),
+        "C ABI Floquet-airbox periodic-pair artifact records delta_phi phase residual");
+    check(
+        contains(periodic_pairs.c_str(), "\"translation_m\":["),
+        "C ABI Floquet-airbox periodic-pair artifact records delta_phi translation");
+    check(
+        contains(periodic_pairs.c_str(), "\"delta_phi_flux_validation_status\":\"not_evaluated\""),
+        "C ABI Floquet-airbox periodic-pair artifact records unevaluated flux validation");
+
+    fullmag_fem_frequency_domain_solve_result_release(&result);
+}
+
+void c_abi_driven_response_solve_rejects_floquet_airbox_missing_delta_phi_pairs()
+{
+    const double frequencies_hz[] = {1.0e9};
+    fullmag_fem_frequency_domain_floquet_periodic_pair floquet_pair{};
+    floquet_pair.pair_id = "x_faces";
+    floquet_pair.node_a = 0;
+    floquet_pair.node_b = 1;
+    floquet_pair.has_translation = 1;
+    floquet_pair.translation_m[0] = 1.0e-6;
+    floquet_pair.translation_m[1] = 0.0;
+    floquet_pair.translation_m[2] = 0.0;
+    floquet_pair.phase_rad = -1.0;
+
+    fullmag_fem_frequency_domain_driven_response_request request{};
+    request.node_count = 2;
+    request.tangent_dof_count = 4;
+    request.alpha = 0.02;
+    request.gamma0 = 2.211e5;
+    request.frequencies_hz = frequencies_hz;
+    request.frequency_count = 1;
+    request.has_floquet_k_vector = 1;
+    request.floquet_k_vector_rad_per_m[0] = 1.0e6;
+    request.phase_convention = FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_I_OMEGA_T;
+    request.mfem_floquet_periodic_pairs = &floquet_pair;
+    request.mfem_floquet_periodic_pair_count = 1;
+    request.requires_floquet_airbox_dynamic_demag = 1;
+    request.magnetic_periodic_constraint_set_count = 1;
+    request.magnetostatic_periodic_constraint_set_count = 1;
+    request.periodic_airbox_delta_phi_dof_count = 2;
+    request.periodic_airbox_magnetostatic_periodic_node_pairs = nullptr;
+    request.periodic_airbox_magnetostatic_periodic_node_pair_count = 1;
+
+    fullmag_fem_frequency_domain_solve_result result{};
+    const int status =
+        fullmag_fem_frequency_domain_solve_driven_response(&request, &result);
+
+    check(status == FULLMAG_FEM_OK, "C ABI Floquet-airbox missing delta_phi pair call succeeds");
+    check(
+        result.status == FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_VALIDATION_ERROR,
+        "C ABI Floquet-airbox missing delta_phi pairs is validation error");
+    check(
+        contains(result.diagnostics_json, "\"validation_error\":\"floquet_airbox_missing_delta_phi_periodic_node_pairs\""),
+        "C ABI Floquet-airbox missing delta_phi pair diagnostics name validation error");
+    check(
+        contains(result.error_message, "Floquet-airbox delta_phi periodic node pairs"),
+        "C ABI Floquet-airbox missing delta_phi pair error names delta_phi pairs");
+    check(
+        !contains(result.diagnostics_json, "\"unsupported_reason\":\"floquet_airbox_dynamic_demag_k_unimplemented\""),
+        "C ABI Floquet-airbox missing delta_phi pairs rejects before unsupported operator path");
+
+    fullmag_fem_frequency_domain_solve_result_release(&result);
+}
+
+void c_abi_driven_response_solve_rejects_invalid_floquet_airbox_delta_phi_pairs()
+{
+    const double frequencies_hz[] = {1.0e9};
+    fullmag_fem_frequency_domain_floquet_periodic_pair floquet_pair{};
+    floquet_pair.pair_id = "x_faces";
+    floquet_pair.node_a = 0;
+    floquet_pair.node_b = 1;
+    floquet_pair.has_translation = 1;
+    floquet_pair.translation_m[0] = 1.0e-6;
+    floquet_pair.translation_m[1] = 0.0;
+    floquet_pair.translation_m[2] = 0.0;
+    floquet_pair.phase_rad = -1.0;
+    const fullmag_fem_frequency_domain_periodic_node_pair out_of_range_pair{0, 2};
+    const fullmag_fem_frequency_domain_periodic_node_pair self_pair{1, 1};
+
+    auto base_request = [&]() {
+        fullmag_fem_frequency_domain_driven_response_request request{};
+        request.node_count = 2;
+        request.tangent_dof_count = 4;
+        request.alpha = 0.02;
+        request.gamma0 = 2.211e5;
+        request.frequencies_hz = frequencies_hz;
+        request.frequency_count = 1;
+        request.has_floquet_k_vector = 1;
+        request.floquet_k_vector_rad_per_m[0] = 1.0e6;
+        request.phase_convention = FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_I_OMEGA_T;
+        request.mfem_floquet_periodic_pairs = &floquet_pair;
+        request.mfem_floquet_periodic_pair_count = 1;
+        request.requires_floquet_airbox_dynamic_demag = 1;
+        request.magnetic_periodic_constraint_set_count = 1;
+        request.magnetostatic_periodic_constraint_set_count = 1;
+        request.periodic_airbox_delta_phi_dof_count = 2;
+        request.periodic_airbox_magnetostatic_periodic_node_pair_count = 1;
+        return request;
+    };
+
+    {
+        fullmag_fem_frequency_domain_driven_response_request request = base_request();
+        request.periodic_airbox_magnetostatic_periodic_node_pairs = &out_of_range_pair;
+
+        fullmag_fem_frequency_domain_solve_result result{};
+        const int status =
+            fullmag_fem_frequency_domain_solve_driven_response(&request, &result);
+
+        check(status == FULLMAG_FEM_OK, "C ABI Floquet-airbox out-of-range delta_phi pair call succeeds");
+        check(
+            result.status == FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_VALIDATION_ERROR,
+            "C ABI Floquet-airbox out-of-range delta_phi pair is validation error");
+        check(
+            contains(result.diagnostics_json, "\"validation_error\":\"floquet_airbox_delta_phi_periodic_node_pair_out_of_range\""),
+            "C ABI Floquet-airbox out-of-range delta_phi pair diagnostics name validation error");
+        check(
+            contains(result.error_message, "delta_phi periodic node pair is outside delta_phi DOFs"),
+            "C ABI Floquet-airbox out-of-range delta_phi pair error names delta_phi DOFs");
+        fullmag_fem_frequency_domain_solve_result_release(&result);
+    }
+
+    {
+        fullmag_fem_frequency_domain_driven_response_request request = base_request();
+        request.periodic_airbox_magnetostatic_periodic_node_pairs = &self_pair;
+
+        fullmag_fem_frequency_domain_solve_result result{};
+        const int status =
+            fullmag_fem_frequency_domain_solve_driven_response(&request, &result);
+
+        check(status == FULLMAG_FEM_OK, "C ABI Floquet-airbox self delta_phi pair call succeeds");
+        check(
+            result.status == FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_VALIDATION_ERROR,
+            "C ABI Floquet-airbox self delta_phi pair is validation error");
+        check(
+            contains(result.diagnostics_json, "\"validation_error\":\"floquet_airbox_degenerate_delta_phi_periodic_node_pair\""),
+            "C ABI Floquet-airbox self delta_phi pair diagnostics name validation error");
+        check(
+            contains(result.error_message, "distinct Floquet-airbox delta_phi nodes"),
+            "C ABI Floquet-airbox self delta_phi pair error names distinct delta_phi nodes");
+        fullmag_fem_frequency_domain_solve_result_release(&result);
+    }
+}
+
+void c_abi_driven_response_solve_rejects_floquet_airbox_delta_phi_pair_without_phase_metadata()
+{
+    const double frequencies_hz[] = {1.0e9};
+    fullmag_fem_frequency_domain_floquet_periodic_pair floquet_pair{};
+    floquet_pair.pair_id = "x_faces";
+    floquet_pair.node_a = 0;
+    floquet_pair.node_b = 1;
+    floquet_pair.has_translation = 1;
+    floquet_pair.translation_m[0] = 1.0e-6;
+    floquet_pair.translation_m[1] = 0.0;
+    floquet_pair.translation_m[2] = 0.0;
+    floquet_pair.has_phase = 0;
+    floquet_pair.phase_rad = -1.0;
+    const fullmag_fem_frequency_domain_periodic_node_pair magnetostatic_pair{0, 1};
+
+    fullmag_fem_frequency_domain_driven_response_request request{};
+    request.node_count = 2;
+    request.tangent_dof_count = 4;
+    request.alpha = 0.02;
+    request.gamma0 = 2.211e5;
+    request.frequencies_hz = frequencies_hz;
+    request.frequency_count = 1;
+    request.has_floquet_k_vector = 1;
+    request.floquet_k_vector_rad_per_m[0] = 1.0e6;
+    request.phase_convention = FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_I_OMEGA_T;
+    request.mfem_floquet_periodic_pairs = &floquet_pair;
+    request.mfem_floquet_periodic_pair_count = 1;
+    request.requires_floquet_airbox_dynamic_demag = 1;
+    request.magnetic_periodic_constraint_set_count = 1;
+    request.magnetostatic_periodic_constraint_set_count = 1;
+    request.periodic_airbox_delta_phi_dof_count = 2;
+    request.periodic_airbox_magnetostatic_periodic_node_pairs = &magnetostatic_pair;
+    request.periodic_airbox_magnetostatic_periodic_node_pair_count = 1;
+
+    fullmag_fem_frequency_domain_solve_result result{};
+    const int status =
+        fullmag_fem_frequency_domain_solve_driven_response(&request, &result);
+
+    check(status == FULLMAG_FEM_OK, "C ABI Floquet-airbox delta_phi missing phase metadata call succeeds");
+    check(
+        result.status == FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_VALIDATION_ERROR,
+        "C ABI Floquet-airbox delta_phi missing phase metadata is validation error");
+    check(
+        contains(result.diagnostics_json, "\"validation_error\":\"floquet_airbox_delta_phi_pair_missing_phase_metadata\""),
+        "C ABI Floquet-airbox delta_phi missing phase metadata diagnostics name validation error");
+    check(
+        contains(result.error_message, "Floquet-airbox delta_phi pair requires matching Floquet phase metadata"),
+        "C ABI Floquet-airbox delta_phi missing phase metadata error names phase metadata");
+    check(
+        !contains(result.diagnostics_json, "\"unsupported_reason\":\"floquet_airbox_dynamic_demag_k_unimplemented\""),
+        "C ABI Floquet-airbox delta_phi missing phase metadata rejects before unsupported operator path");
 
     fullmag_fem_frequency_domain_solve_result_release(&result);
 }
@@ -5703,6 +7748,85 @@ void c_abi_driven_response_solve_rejects_inconsistent_floquet_phase_metadata()
     check(
         !contains(result.diagnostics_json, "\"unsupported_reason\":\"floquet_bloch_nonzero_k\""),
         "C ABI inconsistent Floquet phase fails before unsupported solve path");
+
+    fullmag_fem_frequency_domain_solve_result_release(&result);
+}
+
+void c_abi_driven_response_solve_rejects_inconsistent_floquet_phase_loop()
+{
+    const double frequencies_hz[] = {3.0e9};
+    const double equilibrium_m[] = {
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+    };
+    const double drive_real[] = {
+        0.0, 0.0,
+        0.0, 0.0,
+        0.0, 0.0,
+    };
+    fullmag_fem_frequency_domain_floquet_periodic_pair floquet_pairs[3]{};
+    floquet_pairs[0].pair_id = "x_a";
+    floquet_pairs[0].node_a = 0;
+    floquet_pairs[0].node_b = 1;
+    floquet_pairs[0].has_translation = 1;
+    floquet_pairs[0].translation_m[0] = 1.0e-6;
+    floquet_pairs[0].has_phase = 1;
+    floquet_pairs[0].phase_rad = -1.0;
+
+    floquet_pairs[1].pair_id = "x_b";
+    floquet_pairs[1].node_a = 1;
+    floquet_pairs[1].node_b = 2;
+    floquet_pairs[1].has_translation = 1;
+    floquet_pairs[1].translation_m[0] = 2.0e-6;
+    floquet_pairs[1].has_phase = 1;
+    floquet_pairs[1].phase_rad = -2.0;
+
+    floquet_pairs[2].pair_id = "x_direct";
+    floquet_pairs[2].node_a = 0;
+    floquet_pairs[2].node_b = 2;
+    floquet_pairs[2].has_translation = 1;
+    floquet_pairs[2].translation_m[0] = 4.0e-6;
+    floquet_pairs[2].has_phase = 1;
+    floquet_pairs[2].phase_rad = -4.0;
+
+    fullmag_fem_frequency_domain_driven_response_request request{};
+    request.node_count = 3;
+    request.tangent_dof_count = 6;
+    request.alpha = 0.02;
+    request.gamma0 = 2.211e5;
+    request.requested_execution_lane =
+        FULLMAG_FEM_FREQUENCY_DOMAIN_EXECUTION_PRODUCTION_CPU;
+    request.frequencies_hz = frequencies_hz;
+    request.frequency_count = 1;
+    request.has_floquet_k_vector = 1;
+    request.floquet_k_vector_rad_per_m[0] = 1.0e6;
+    request.phase_convention = FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_I_OMEGA_T;
+    request.mfem_floquet_periodic_pairs = floquet_pairs;
+    request.mfem_floquet_periodic_pair_count = 3;
+    request.mfem_operator_enabled = 1;
+    request.mfem_equilibrium_m = equilibrium_m;
+    request.mfem_drive_real = drive_real;
+
+    fullmag_fem_frequency_domain_solve_result result{};
+    const int status =
+        fullmag_fem_frequency_domain_solve_driven_response(&request, &result);
+
+    check(status == FULLMAG_FEM_OK, "C ABI Floquet phase-loop mismatch call succeeds");
+    check(
+        result.status == FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_VALIDATION_ERROR,
+        "C ABI Floquet phase-loop mismatch is validation error");
+    check(result.completed_frequency_count == 0, "C ABI Floquet phase-loop mismatch completes no frequencies");
+    check(result.error_message != nullptr, "C ABI Floquet phase-loop mismatch returns error message");
+    check(
+        contains(result.error_message, "Floquet phase loop"),
+        "C ABI Floquet phase-loop mismatch reports phase-loop error");
+    check(
+        contains(result.diagnostics_json, "\"validation_error\":\"floquet_phase_loop_mismatch\""),
+        "C ABI Floquet phase-loop mismatch diagnostics record structured reason");
+    check(
+        !contains(result.diagnostics_json, "\"unsupported_reason\":\"floquet_bloch_nonzero_k\""),
+        "C ABI Floquet phase-loop mismatch fails before unsupported solve path");
 
     fullmag_fem_frequency_domain_solve_result_release(&result);
 }
@@ -6339,6 +8463,139 @@ void c_abi_production_cpu_lane_runs_mfem_matrix_free_response_problem()
     fullmag_fem_frequency_domain_solve_result_release(&result);
 }
 
+void c_abi_gamma_floquet_production_cpu_matches_static_periodic_response()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double equilibrium_m[] = {
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+    };
+    const double h_ext_a_per_m[] = {0.0, 0.0, 2.0};
+    const double drive_real[] = {1.0, 0.0, 1.0, 0.0};
+    const fullmag_fem_frequency_domain_exchange_edge exchange_edge{
+        0,
+        1,
+        2.0,
+    };
+    const fullmag_fem_frequency_domain_periodic_node_pair periodic_pair{
+        0,
+        1,
+    };
+    fullmag_fem_frequency_domain_floquet_periodic_pair floquet_pair{};
+    floquet_pair.pair_id = "x_faces";
+    floquet_pair.node_a = 0;
+    floquet_pair.node_b = 1;
+    floquet_pair.has_translation = 1;
+    floquet_pair.translation_m[0] = 1.0e-6;
+    floquet_pair.has_phase = 1;
+    floquet_pair.phase_rad = 0.0;
+
+    const auto unique_tick = std::chrono::steady_clock::now()
+                                 .time_since_epoch()
+                                 .count();
+    char static_output_directory[192]{};
+    char floquet_output_directory[192]{};
+    std::snprintf(
+        static_output_directory,
+        sizeof(static_output_directory),
+        "/tmp/fullmag-frequency-domain-cabi-gamma-static-%llu",
+        static_cast<unsigned long long>(unique_tick));
+    std::snprintf(
+        floquet_output_directory,
+        sizeof(floquet_output_directory),
+        "/tmp/fullmag-frequency-domain-cabi-gamma-floquet-%llu",
+        static_cast<unsigned long long>(unique_tick));
+
+    fullmag_fem_frequency_domain_driven_response_request static_request{};
+    static_request.node_count = 2;
+    static_request.tangent_dof_count = 4;
+    static_request.alpha = 0.0;
+    static_request.gamma0 = 1.0;
+    static_request.requested_execution_lane =
+        FULLMAG_FEM_FREQUENCY_DOMAIN_EXECUTION_PRODUCTION_CPU;
+    static_request.frequencies_hz = frequencies_hz;
+    static_request.frequency_count = 1;
+    static_request.mfem_operator_enabled = 1;
+    static_request.mfem_include_zeeman = 1;
+    static_request.mfem_equilibrium_m = equilibrium_m;
+    static_request.mfem_h_ext_a_per_m = h_ext_a_per_m;
+    static_request.mfem_drive_real = drive_real;
+    static_request.mfem_exchange_edges = &exchange_edge;
+    static_request.mfem_exchange_edge_count = 1;
+    static_request.mfem_static_periodic_node_pairs = &periodic_pair;
+    static_request.mfem_static_periodic_node_pair_count = 1;
+    static_request.output_directory = static_output_directory;
+    static_request.write_partial_artifacts = 1;
+
+    fullmag_fem_frequency_domain_driven_response_request floquet_request = static_request;
+    floquet_request.mfem_static_periodic_node_pairs = nullptr;
+    floquet_request.mfem_static_periodic_node_pair_count = 0;
+    floquet_request.has_floquet_k_vector = 1;
+    floquet_request.floquet_k_vector_rad_per_m[0] = 0.0;
+    floquet_request.floquet_k_vector_rad_per_m[1] = 0.0;
+    floquet_request.floquet_k_vector_rad_per_m[2] = 0.0;
+    floquet_request.mfem_floquet_periodic_pairs = &floquet_pair;
+    floquet_request.mfem_floquet_periodic_pair_count = 1;
+    floquet_request.output_directory = floquet_output_directory;
+
+    fullmag_fem_frequency_domain_solve_result static_result{};
+    fullmag_fem_frequency_domain_solve_result floquet_result{};
+    const int static_status =
+        fullmag_fem_frequency_domain_solve_driven_response(&static_request, &static_result);
+    const int floquet_status =
+        fullmag_fem_frequency_domain_solve_driven_response(&floquet_request, &floquet_result);
+
+    check(static_status == FULLMAG_FEM_OK, "C ABI static-periodic gamma comparison call succeeds");
+    check(floquet_status == FULLMAG_FEM_OK, "C ABI gamma-Floquet comparison call succeeds");
+    check(
+        static_result.status == FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OK,
+        "C ABI static-periodic gamma comparison solve reports ok");
+    check(
+        floquet_result.status == FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OK,
+        "C ABI gamma-Floquet comparison solve reports ok");
+    check(
+        contains(static_result.diagnostics_json, "\"static_periodic_projection\":true"),
+        "C ABI static-periodic comparison diagnostics report static-periodic projection");
+    check(
+        contains(floquet_result.diagnostics_json, "\"static_periodic_projection\":true"),
+        "C ABI gamma-Floquet comparison diagnostics canonicalize to static-periodic projection");
+    check(
+        contains(floquet_result.diagnostics_json, "\"floquet_phase_projection\":false"),
+        "C ABI gamma-Floquet comparison diagnostics do not use nonzero-k Floquet projection");
+
+    char static_point_path[256]{};
+    char floquet_point_path[256]{};
+    std::snprintf(
+        static_point_path,
+        sizeof(static_point_path),
+        "%s/response/frequency_points/frequency_0000.json",
+        static_output_directory);
+    std::snprintf(
+        floquet_point_path,
+        sizeof(floquet_point_path),
+        "%s/response/frequency_points/frequency_0000.json",
+        floquet_output_directory);
+    const std::string static_point = read_text_file(static_point_path);
+    const std::string floquet_point = read_text_file(floquet_point_path);
+    double static_m_complex[8]{};
+    double floquet_m_complex[8]{};
+    check(
+        extract_m_complex_values(static_point, static_m_complex, 8),
+        "C ABI static-periodic comparison extracts m_complex");
+    check(
+        extract_m_complex_values(floquet_point, floquet_m_complex, 8),
+        "C ABI gamma-Floquet comparison extracts m_complex");
+    for (std::size_t index = 0; index < 8; ++index) {
+        check(
+            nearly_equal(static_m_complex[index], floquet_m_complex[index], 1.0e-12),
+            "C ABI gamma-Floquet response matches static-periodic response");
+    }
+
+    fullmag_fem_frequency_domain_solve_result_release(&static_result);
+    fullmag_fem_frequency_domain_solve_result_release(&floquet_result);
+}
+
 void c_abi_production_cpu_lane_runs_mfem_matrix_free_explicit_demag_response_problem()
 {
     constexpr double one_over_two_pi_hz = 0.15915494309189535;
@@ -6900,6 +9157,182 @@ void c_abi_periodic_airbox_dynamic_demag_requires_magnetostatic_periodic_node_pa
     fullmag_fem_frequency_domain_solve_result_release(&result);
 }
 
+void c_abi_periodic_airbox_dynamic_demag_rejects_degenerate_magnetostatic_periodic_pair()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const fullmag_fem_frequency_domain_periodic_node_pair magnetostatic_pair{
+        0,
+        0,
+    };
+    char output_directory[192]{};
+    std::snprintf(
+        output_directory,
+        sizeof(output_directory),
+        "/tmp/fullmag-frequency-domain-c-abi-periodic-airbox-degenerate-pair-%llu",
+        static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&frequencies_hz)));
+    const double stiffness_matrix[] = {
+        2.0, 0.0, 0.25,
+        0.0, 3.0, -0.5,
+        0.25, -0.5, 4.0,
+    };
+    const double mass_matrix[] = {
+        1.0, 0.0, 0.0,
+        0.0, 1.5, 0.0,
+        0.0, 0.0, 0.0,
+    };
+    const double drive_real[] = {1.0, 0.5, 0.0};
+
+    fullmag_fem_frequency_domain_driven_response_request request{};
+    request.node_count = 1;
+    request.tangent_dof_count = 2;
+    request.alpha = 0.01;
+    request.gamma0 = 2.211e5;
+    request.requested_execution_lane = FULLMAG_FEM_FREQUENCY_DOMAIN_EXECUTION_PRODUCTION_CPU;
+    request.frequencies_hz = frequencies_hz;
+    request.frequency_count = 1;
+    request.requires_periodic_airbox_dynamic_demag = 1;
+    request.magnetic_periodic_constraint_set_count = 1;
+    request.magnetostatic_periodic_constraint_set_count = 1;
+    request.periodic_airbox_delta_m_tangent_dof_count = 2;
+    request.periodic_airbox_delta_phi_dof_count = 1;
+    request.periodic_airbox_magnetostatic_periodic_node_pairs = &magnetostatic_pair;
+    request.periodic_airbox_magnetostatic_periodic_node_pair_count = 1;
+    request.periodic_airbox_coupled_block_enabled = 1;
+    request.periodic_airbox_coupled_block_delta_m_tangent_dof_count = 2;
+    request.periodic_airbox_coupled_block_delta_phi_dof_count = 1;
+    request.periodic_airbox_coupled_block_stiffness_matrix_row_major = stiffness_matrix;
+    request.periodic_airbox_coupled_block_mass_matrix_row_major = mass_matrix;
+    request.periodic_airbox_coupled_block_drive_real = drive_real;
+    request.output_directory = output_directory;
+    request.write_partial_artifacts = 1;
+
+    fullmag_fem_frequency_domain_solve_result result{};
+    const int status =
+        fullmag_fem_frequency_domain_solve_driven_response(&request, &result);
+
+    check(status == FULLMAG_FEM_OK, "C ABI periodic-airbox degenerate pair call succeeds");
+    check(
+        result.status == FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_VALIDATION_ERROR,
+        "C ABI periodic-airbox rejects degenerate magnetostatic periodic pair");
+    check(
+        contains(result.diagnostics_json, "\"validation_error\":\"periodic_airbox_degenerate_magnetostatic_periodic_node_pair\""),
+        "C ABI diagnostics name degenerate magnetostatic periodic pair");
+    check(
+        contains(result.error_message, "distinct magnetostatic delta_phi nodes"),
+        "C ABI degenerate magnetostatic pair error is explicit");
+    check(
+        !contains(result.diagnostics_json, "\"periodic_airbox_coupled_block_solver\":true"),
+        "C ABI degenerate magnetostatic pair rejection does not enter coupled block solver");
+    check(
+        contains(result.artifact_manifest_path, "frequency_domain/manifest.v1.json"),
+        "C ABI degenerate magnetostatic pair rejection reports a manifest path");
+
+    const std::string manifest = read_text_file(result.artifact_manifest_path);
+    check(
+        contains(manifest.c_str(), "\"validation_error\":\"periodic_airbox_degenerate_magnetostatic_periodic_node_pair\""),
+        "C ABI degenerate magnetostatic pair manifest records machine-readable validation error");
+    check(
+        contains(manifest.c_str(), "\"magnetostatic_periodic_node_pair_count\":1"),
+        "C ABI degenerate magnetostatic pair manifest preserves pair count");
+
+    fullmag_fem_frequency_domain_solve_result_release(&result);
+}
+
+void c_abi_periodic_airbox_dynamic_demag_rejects_ambiguous_coupled_block_operator_provider()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const fullmag_fem_frequency_domain_periodic_node_pair magnetostatic_pair{
+        0,
+        1,
+    };
+    char output_directory[192]{};
+    std::snprintf(
+        output_directory,
+        sizeof(output_directory),
+        "/tmp/fullmag-frequency-domain-c-abi-periodic-airbox-ambiguous-provider-%llu",
+        static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&frequencies_hz)));
+    const double stiffness_matrix[] = {
+        2.0, 0.0, 0.25,
+        0.0, 3.0, -0.5,
+        0.25, -0.5, 4.0,
+    };
+    const double mass_matrix[] = {
+        1.0, 0.0, 0.0,
+        0.0, 1.5, 0.0,
+        0.0, 0.0, 0.0,
+    };
+    const double stiffness_diagonal[] = {2.0, 3.0, 4.0};
+    const double mass_diagonal[] = {1.0, 1.5, 0.0};
+    const double drive_real[] = {1.0, 0.5, 0.0};
+    DiagonalProductionOperator coupled_operator{
+        stiffness_diagonal,
+        mass_diagonal,
+        3,
+        0,
+        0,
+    };
+
+    fullmag_fem_frequency_domain_driven_response_request request{};
+    request.node_count = 1;
+    request.tangent_dof_count = 2;
+    request.alpha = 0.01;
+    request.gamma0 = 2.211e5;
+    request.requested_execution_lane = FULLMAG_FEM_FREQUENCY_DOMAIN_EXECUTION_PRODUCTION_CPU;
+    request.frequencies_hz = frequencies_hz;
+    request.frequency_count = 1;
+    request.requires_periodic_airbox_dynamic_demag = 1;
+    request.magnetic_periodic_constraint_set_count = 1;
+    request.magnetostatic_periodic_constraint_set_count = 1;
+    request.periodic_airbox_delta_m_tangent_dof_count = 2;
+    request.periodic_airbox_delta_phi_dof_count = 1;
+    request.periodic_airbox_magnetostatic_periodic_node_pairs = &magnetostatic_pair;
+    request.periodic_airbox_magnetostatic_periodic_node_pair_count = 1;
+    request.periodic_airbox_coupled_block_enabled = 1;
+    request.periodic_airbox_coupled_block_delta_m_tangent_dof_count = 2;
+    request.periodic_airbox_coupled_block_delta_phi_dof_count = 1;
+    request.periodic_airbox_coupled_block_stiffness_matrix_row_major = stiffness_matrix;
+    request.periodic_airbox_coupled_block_mass_matrix_row_major = mass_matrix;
+    request.periodic_airbox_coupled_block_apply_stiffness = c_abi_apply_diagonal_stiffness;
+    request.periodic_airbox_coupled_block_apply_mass = c_abi_apply_diagonal_mass;
+    request.periodic_airbox_coupled_block_operator_user_data = &coupled_operator;
+    request.periodic_airbox_coupled_block_drive_real = drive_real;
+    request.output_directory = output_directory;
+    request.write_partial_artifacts = 1;
+
+    fullmag_fem_frequency_domain_solve_result result{};
+    const int status =
+        fullmag_fem_frequency_domain_solve_driven_response(&request, &result);
+
+    check(status == FULLMAG_FEM_OK, "C ABI ambiguous coupled-block provider call succeeds");
+    check(
+        result.status == FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_VALIDATION_ERROR,
+        "C ABI rejects ambiguous coupled-block operator provider");
+    check(
+        contains(result.diagnostics_json, "\"validation_error\":\"periodic_airbox_ambiguous_coupled_block_operator_provider\""),
+        "C ABI diagnostics name ambiguous coupled-block operator provider");
+    check(
+        contains(result.error_message, "exactly one periodic-airbox coupled-block operator provider"),
+        "C ABI ambiguous provider error is explicit");
+    check(
+        !contains(result.diagnostics_json, "\"periodic_airbox_coupled_block_solver\":true"),
+        "C ABI ambiguous provider rejection does not enter coupled block solver");
+    check(
+        coupled_operator.stiffness_call_count == 0 && coupled_operator.mass_call_count == 0,
+        "C ABI ambiguous provider rejection does not invoke matrix-free callbacks");
+    check(
+        contains(result.artifact_manifest_path, "frequency_domain/manifest.v1.json"),
+        "C ABI ambiguous provider rejection reports a manifest path");
+
+    const std::string manifest = read_text_file(result.artifact_manifest_path);
+    check(
+        contains(manifest.c_str(), "\"validation_error\":\"periodic_airbox_ambiguous_coupled_block_operator_provider\""),
+        "C ABI ambiguous provider manifest records machine-readable validation error");
+
+    fullmag_fem_frequency_domain_solve_result_release(&result);
+}
+
 void c_abi_periodic_airbox_dynamic_demag_solves_explicit_coupled_block()
 {
     constexpr double one_over_two_pi_hz = 0.15915494309189535;
@@ -6981,6 +9414,375 @@ void c_abi_periodic_airbox_dynamic_demag_solves_explicit_coupled_block()
     check(
         contains(frequency_point.c_str(), "\"delta_phi_complex\""),
         "C ABI explicit coupled block writes delta_phi response");
+
+    fullmag_fem_frequency_domain_solve_result_release(&result);
+}
+
+void c_abi_floquet_airbox_dynamic_demag_solves_explicit_coupled_block_and_validates_delta_phi_phase()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    constexpr double phase_rad = -1.0;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    fullmag_fem_frequency_domain_floquet_periodic_pair floquet_pair{};
+    floquet_pair.pair_id = "x_faces";
+    floquet_pair.node_a = 0;
+    floquet_pair.node_b = 1;
+    floquet_pair.has_translation = 1;
+    floquet_pair.translation_m[0] = 1.0e-6;
+    floquet_pair.has_phase = 1;
+    floquet_pair.phase_rad = phase_rad;
+    const fullmag_fem_frequency_domain_periodic_node_pair magnetostatic_pair{
+        0,
+        1,
+    };
+    char output_directory[192]{};
+    std::snprintf(
+        output_directory,
+        sizeof(output_directory),
+        "/tmp/fullmag-frequency-domain-c-abi-floquet-airbox-coupled-block-%llu",
+        static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&frequencies_hz)));
+
+    const double c = std::cos(phase_rad);
+    const double s = std::sin(phase_rad);
+    const double stiffness_matrix[] = {
+        2.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 3.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 2.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 3.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+    };
+    const double mass_matrix[] = {
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    };
+    const double drive_real[] = {1.0, 0.5, 0.0, 0.0, 1.0, c};
+    const double drive_imag[] = {0.0, 0.0, 0.0, 0.0, 0.0, s};
+
+    fullmag_fem_frequency_domain_driven_response_request request{};
+    request.node_count = 2;
+    request.tangent_dof_count = 4;
+    request.alpha = 0.01;
+    request.gamma0 = 2.211e5;
+    request.requested_execution_lane = FULLMAG_FEM_FREQUENCY_DOMAIN_EXECUTION_PRODUCTION_CPU;
+    request.frequencies_hz = frequencies_hz;
+    request.frequency_count = 1;
+    request.has_floquet_k_vector = 1;
+    request.floquet_k_vector_rad_per_m[0] = 1.0e6;
+    request.mfem_floquet_periodic_pairs = &floquet_pair;
+    request.mfem_floquet_periodic_pair_count = 1;
+    request.requires_floquet_airbox_dynamic_demag = 1;
+    request.magnetic_periodic_constraint_set_count = 1;
+    request.magnetostatic_periodic_constraint_set_count = 1;
+    request.periodic_airbox_delta_m_tangent_dof_count = 4;
+    request.periodic_airbox_delta_phi_dof_count = 2;
+    request.periodic_airbox_magnetostatic_periodic_node_pairs = &magnetostatic_pair;
+    request.periodic_airbox_magnetostatic_periodic_node_pair_count = 1;
+    request.periodic_airbox_coupled_block_enabled = 1;
+    request.periodic_airbox_coupled_block_delta_m_tangent_dof_count = 4;
+    request.periodic_airbox_coupled_block_delta_phi_dof_count = 2;
+    request.periodic_airbox_coupled_block_stiffness_matrix_row_major = stiffness_matrix;
+    request.periodic_airbox_coupled_block_mass_matrix_row_major = mass_matrix;
+    request.periodic_airbox_coupled_block_drive_real = drive_real;
+    request.periodic_airbox_coupled_block_drive_imag = drive_imag;
+    request.output_directory = output_directory;
+    request.write_partial_artifacts = 1;
+
+    fullmag_fem_frequency_domain_solve_result result{};
+    const int status =
+        fullmag_fem_frequency_domain_solve_driven_response(&request, &result);
+
+    check(status == FULLMAG_FEM_OK, "C ABI Floquet-airbox explicit coupled block boundary call succeeds");
+    char ok_status_message[384]{};
+    std::snprintf(
+        ok_status_message,
+        sizeof(ok_status_message),
+        "C ABI Floquet-airbox explicit coupled block reports ok (status=%d, error=%s)",
+        result.status,
+        result.error_message == nullptr ? "" : result.error_message);
+    check(
+        result.status == FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OK,
+        ok_status_message);
+    check(
+        contains(result.diagnostics_json, "\"requested_magnetostatic_bc\":\"floquet_airbox\""),
+        "C ABI Floquet-airbox coupled block diagnostics preserve requested magnetostatic BC");
+    check(
+        contains(result.diagnostics_json, "\"delta_phi_phase_validation_status\":\"ok\""),
+        "C ABI Floquet-airbox coupled block diagnostics validate delta_phi phase");
+
+    char manifest_path[256]{};
+    char frequency_point_path[256]{};
+    std::snprintf(
+        manifest_path,
+        sizeof(manifest_path),
+        "%s/frequency_domain/manifest.v1.json",
+        output_directory);
+    std::snprintf(
+        frequency_point_path,
+        sizeof(frequency_point_path),
+        "%s/response/frequency_points/frequency_0000.json",
+        output_directory);
+    const std::string manifest = read_text_file(manifest_path);
+    const std::string frequency_point = read_text_file(frequency_point_path);
+    check(
+        contains(manifest.c_str(), "\"requested_magnetostatic_bc\":\"floquet_airbox\""),
+        "C ABI Floquet-airbox coupled block manifest records Floquet-airbox BC");
+    check(
+        contains(manifest.c_str(), "\"dynamic_demag_operator_source\":\"explicit_floquet_airbox_coupled_block_payload\""),
+        "C ABI Floquet-airbox coupled block manifest records explicit Floquet-airbox operator source");
+    check(
+        contains(frequency_point.c_str(), "\"requested_magnetostatic_bc\":\"floquet_airbox\""),
+        "C ABI Floquet-airbox coupled block frequency point records Floquet-airbox BC");
+    check(
+        contains(frequency_point.c_str(), "\"delta_phi_phase_validation_status\":\"ok\""),
+        "C ABI Floquet-airbox coupled block frequency point records delta_phi phase validation");
+    check(
+        contains(frequency_point.c_str(), "\"delta_phi_complex\""),
+        "C ABI Floquet-airbox coupled block writes delta_phi complex response");
+
+    fullmag_fem_frequency_domain_solve_result_release(&result);
+}
+
+void c_abi_floquet_airbox_dynamic_demag_rejects_explicit_coupled_block_delta_phi_phase_mismatch()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    constexpr double phase_rad = -1.0;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    fullmag_fem_frequency_domain_floquet_periodic_pair floquet_pair{};
+    floquet_pair.pair_id = "x_faces";
+    floquet_pair.node_a = 0;
+    floquet_pair.node_b = 1;
+    floquet_pair.has_translation = 1;
+    floquet_pair.translation_m[0] = 1.0e-6;
+    floquet_pair.has_phase = 1;
+    floquet_pair.phase_rad = phase_rad;
+    const fullmag_fem_frequency_domain_periodic_node_pair magnetostatic_pair{
+        0,
+        1,
+    };
+    char output_directory[192]{};
+    std::snprintf(
+        output_directory,
+        sizeof(output_directory),
+        "/tmp/fullmag-frequency-domain-c-abi-floquet-airbox-phase-mismatch-%llu",
+        static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&frequencies_hz)));
+
+    const double c = std::cos(phase_rad);
+    const double s = std::sin(phase_rad);
+    const double stiffness_matrix[] = {
+        2.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 3.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 2.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 3.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+    };
+    const double mass_matrix[] = {
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    };
+    const double drive_real[] = {1.0, 0.5, 0.0, 0.0, 1.0, c + 0.25};
+    const double drive_imag[] = {0.0, 0.0, 0.0, 0.0, 0.0, s};
+
+    fullmag_fem_frequency_domain_driven_response_request request{};
+    request.node_count = 2;
+    request.tangent_dof_count = 4;
+    request.alpha = 0.01;
+    request.gamma0 = 2.211e5;
+    request.requested_execution_lane = FULLMAG_FEM_FREQUENCY_DOMAIN_EXECUTION_PRODUCTION_CPU;
+    request.frequencies_hz = frequencies_hz;
+    request.frequency_count = 1;
+    request.has_floquet_k_vector = 1;
+    request.floquet_k_vector_rad_per_m[0] = 1.0e6;
+    request.mfem_floquet_periodic_pairs = &floquet_pair;
+    request.mfem_floquet_periodic_pair_count = 1;
+    request.requires_floquet_airbox_dynamic_demag = 1;
+    request.magnetic_periodic_constraint_set_count = 1;
+    request.magnetostatic_periodic_constraint_set_count = 1;
+    request.periodic_airbox_delta_m_tangent_dof_count = 4;
+    request.periodic_airbox_delta_phi_dof_count = 2;
+    request.periodic_airbox_magnetostatic_periodic_node_pairs = &magnetostatic_pair;
+    request.periodic_airbox_magnetostatic_periodic_node_pair_count = 1;
+    request.periodic_airbox_coupled_block_enabled = 1;
+    request.periodic_airbox_coupled_block_delta_m_tangent_dof_count = 4;
+    request.periodic_airbox_coupled_block_delta_phi_dof_count = 2;
+    request.periodic_airbox_coupled_block_stiffness_matrix_row_major = stiffness_matrix;
+    request.periodic_airbox_coupled_block_mass_matrix_row_major = mass_matrix;
+    request.periodic_airbox_coupled_block_drive_real = drive_real;
+    request.periodic_airbox_coupled_block_drive_imag = drive_imag;
+    request.output_directory = output_directory;
+    request.write_partial_artifacts = 1;
+
+    fullmag_fem_frequency_domain_solve_result result{};
+    const int status =
+        fullmag_fem_frequency_domain_solve_driven_response(&request, &result);
+
+    check(status == FULLMAG_FEM_OK, "C ABI Floquet-airbox phase-mismatch coupled block call succeeds");
+    check(
+        result.status == FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_VALIDATION_ERROR,
+        "C ABI Floquet-airbox rejects solved delta_phi phase mismatch");
+    check(
+        contains(result.diagnostics_json, "\"validation_error\":\"floquet_airbox_delta_phi_phase_mismatch\""),
+        "C ABI Floquet-airbox phase mismatch diagnostics name validation error");
+    check(
+        contains(result.diagnostics_json, "\"requested_magnetostatic_bc\":\"floquet_airbox\""),
+        "C ABI Floquet-airbox phase mismatch diagnostics preserve requested magnetostatic BC");
+    check(
+        contains(result.diagnostics_json, "\"delta_phi_phase_validation_status\":\"mismatch\""),
+        "C ABI Floquet-airbox phase mismatch diagnostics record phase validation status");
+    check(
+        contains(result.diagnostics_json, "\"delta_phi_phase_max_residual\":"),
+        "C ABI Floquet-airbox phase mismatch diagnostics record phase residual");
+    check(
+        contains(result.error_message, "violates Bloch phase constraints"),
+        "C ABI Floquet-airbox phase mismatch error names Bloch phase constraint");
+    check(
+        contains(result.artifact_manifest_path, "frequency_domain/manifest.v1.json"),
+        "C ABI Floquet-airbox phase mismatch reports a manifest path");
+
+    const std::string manifest = read_text_file(result.artifact_manifest_path);
+    check(
+        contains(manifest.c_str(), "\"validation_error\":\"floquet_airbox_delta_phi_phase_mismatch\""),
+        "C ABI Floquet-airbox phase mismatch manifest records validation error");
+    check(
+        contains(manifest.c_str(), "\"requested_magnetostatic_bc\":\"floquet_airbox\""),
+        "C ABI Floquet-airbox phase mismatch manifest preserves requested magnetostatic BC");
+    check(
+        contains(manifest.c_str(), "\"delta_phi_phase_validation_status\":\"mismatch\""),
+        "C ABI Floquet-airbox phase mismatch manifest records phase validation status");
+    check(
+        contains(manifest.c_str(), "\"delta_phi_phase_max_residual\":"),
+        "C ABI Floquet-airbox phase mismatch manifest records phase residual");
+
+    fullmag_fem_frequency_domain_solve_result_release(&result);
+}
+
+void c_abi_floquet_airbox_dynamic_demag_gpu_rejects_explicit_coupled_block_without_cpu_fallback()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    constexpr double phase_rad = -1.0;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    fullmag_fem_frequency_domain_floquet_periodic_pair floquet_pair{};
+    floquet_pair.pair_id = "x_faces";
+    floquet_pair.node_a = 0;
+    floquet_pair.node_b = 1;
+    floquet_pair.has_translation = 1;
+    floquet_pair.translation_m[0] = 1.0e-6;
+    floquet_pair.has_phase = 1;
+    floquet_pair.phase_rad = phase_rad;
+    const fullmag_fem_frequency_domain_periodic_node_pair magnetostatic_pair{
+        0,
+        1,
+    };
+    char output_directory[192]{};
+    std::snprintf(
+        output_directory,
+        sizeof(output_directory),
+        "/tmp/fullmag-frequency-domain-c-abi-floquet-airbox-gpu-coupled-block-%llu",
+        static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&frequencies_hz)));
+
+    const double c = std::cos(phase_rad);
+    const double s = std::sin(phase_rad);
+    const double stiffness_matrix[] = {
+        2.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 3.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 2.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 3.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+    };
+    const double mass_matrix[] = {
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    };
+    const double drive_real[] = {1.0, 0.5, 0.0, 0.0, 1.0, c};
+    const double drive_imag[] = {0.0, 0.0, 0.0, 0.0, 0.0, s};
+
+    fullmag_fem_frequency_domain_driven_response_request request{};
+    request.node_count = 2;
+    request.tangent_dof_count = 4;
+    request.alpha = 0.01;
+    request.gamma0 = 2.211e5;
+    request.requested_execution_lane = FULLMAG_FEM_FREQUENCY_DOMAIN_EXECUTION_PRODUCTION_GPU;
+    request.frequencies_hz = frequencies_hz;
+    request.frequency_count = 1;
+    request.has_floquet_k_vector = 1;
+    request.floquet_k_vector_rad_per_m[0] = 1.0e6;
+    request.mfem_floquet_periodic_pairs = &floquet_pair;
+    request.mfem_floquet_periodic_pair_count = 1;
+    request.requires_floquet_airbox_dynamic_demag = 1;
+    request.magnetic_periodic_constraint_set_count = 1;
+    request.magnetostatic_periodic_constraint_set_count = 1;
+    request.periodic_airbox_delta_m_tangent_dof_count = 4;
+    request.periodic_airbox_delta_phi_dof_count = 2;
+    request.periodic_airbox_magnetostatic_periodic_node_pairs = &magnetostatic_pair;
+    request.periodic_airbox_magnetostatic_periodic_node_pair_count = 1;
+    request.periodic_airbox_coupled_block_enabled = 1;
+    request.periodic_airbox_coupled_block_delta_m_tangent_dof_count = 4;
+    request.periodic_airbox_coupled_block_delta_phi_dof_count = 2;
+    request.periodic_airbox_coupled_block_stiffness_matrix_row_major = stiffness_matrix;
+    request.periodic_airbox_coupled_block_mass_matrix_row_major = mass_matrix;
+    request.periodic_airbox_coupled_block_drive_real = drive_real;
+    request.periodic_airbox_coupled_block_drive_imag = drive_imag;
+    request.output_directory = output_directory;
+    request.write_partial_artifacts = 1;
+
+    fullmag_fem_frequency_domain_solve_result result{};
+    const int status =
+        fullmag_fem_frequency_domain_solve_driven_response(&request, &result);
+
+    check(status == FULLMAG_FEM_OK, "C ABI Floquet-airbox GPU coupled-block rejection call succeeds");
+    check(
+        result.status == FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_UNAVAILABLE,
+        "C ABI Floquet-airbox GPU rejects supplied CPU coupled block as unavailable");
+    check(
+        contains(result.error_message, "production GPU"),
+        "C ABI Floquet-airbox GPU rejection names production GPU lane");
+    check(
+        contains(result.diagnostics_json, "\"unsupported_reason\":\"floquet_airbox_dynamic_demag_gpu_unsupported\""),
+        "C ABI Floquet-airbox GPU diagnostics record GPU-specific unsupported reason");
+    check(
+        contains(result.diagnostics_json, "\"requested_magnetostatic_bc\":\"floquet_airbox\""),
+        "C ABI Floquet-airbox GPU diagnostics preserve requested magnetostatic BC");
+    check(
+        !contains(result.diagnostics_json, "explicit_floquet_airbox_coupled_block_payload"),
+        "C ABI Floquet-airbox GPU diagnostics do not claim CPU explicit-block solver source");
+
+    char diagnostics_path[256]{};
+    std::snprintf(
+        diagnostics_path,
+        sizeof(diagnostics_path),
+        "%s/response/diagnostics/solver.v1.json",
+        output_directory);
+    const std::string manifest = read_text_file(result.artifact_manifest_path);
+    const std::string diagnostics = read_text_file(diagnostics_path);
+    check(
+        contains(manifest.c_str(), "\"unsupported_reason\":\"floquet_airbox_dynamic_demag_gpu_unsupported\""),
+        "C ABI Floquet-airbox GPU manifest records GPU-specific unsupported reason");
+    check(
+        contains(manifest.c_str(), "\"requested_magnetostatic_bc\":\"floquet_airbox\""),
+        "C ABI Floquet-airbox GPU manifest preserves requested magnetostatic BC");
+    check(
+        contains(diagnostics.c_str(), "\"requested_execution_lane\":\"production_gpu\""),
+        "C ABI Floquet-airbox GPU artifact diagnostics preserve requested GPU lane");
+    check(
+        contains(diagnostics.c_str(), "\"validation_fallback_used\":false"),
+        "C ABI Floquet-airbox GPU artifact diagnostics record no validation fallback");
+    check(
+        !contains(manifest.c_str(), "explicit_floquet_airbox_coupled_block_payload"),
+        "C ABI Floquet-airbox GPU manifest does not claim CPU explicit-block solver source");
 
     fullmag_fem_frequency_domain_solve_result_release(&result);
 }
@@ -9133,6 +11935,7 @@ int main()
     completed_sweep_progress_preserves_completed_artifacts();
     driven_response_cpu_slice_is_available();
     static_periodic_driven_response_is_explicitly_available();
+    driven_response_solver_accepts_fmr_env_aliases_source_contract();
     driven_response_floquet_boundary_is_explicitly_unavailable();
     driven_response_floquet_k_metadata_is_explicitly_unavailable();
     driven_response_gamma_floquet_k_metadata_keeps_response_available();
@@ -9174,13 +11977,21 @@ int main()
     driven_response_solver_writes_failure_artifacts_for_unavailable_run();
     production_gpu_unavailable_artifact_reports_gpu_lane();
     production_gpu_static_periodic_no_demag_runs_mfem_response_problem();
+    production_cpu_floquet_local_no_demag_runs_phase_constrained_response_problem();
+    production_gpu_floquet_local_no_demag_runs_phase_constrained_response_problem();
+    production_cpu_floquet_exchange_no_demag_runs_phase_constrained_response_problem();
+    production_gpu_floquet_exchange_no_demag_runs_phase_constrained_response_problem();
     driven_response_solver_respects_disabled_partial_failure_artifacts();
     driven_response_solver_boundary_validates_request_before_unavailable_solve();
     driven_response_solver_runs_tiny_diagonal_validation_problem();
     driven_response_solver_runs_tiny_dense_validation_problem();
     driven_response_solver_preserves_tiny_dense_solve_error_status();
     production_cpu_matrix_free_solver_solves_diagonal_harmonic_response();
+    production_cpu_matrix_free_solver_skips_zero_initial_residual_operator();
     production_cpu_matrix_free_solver_solves_complex_drive();
+    production_cpu_matrix_free_solver_preserves_nonconvergence_diagnostics();
+    production_cpu_matrix_free_solver_requires_recomputed_residual_for_convergence();
+    production_cpu_lane_writes_failure_artifacts_for_nonconverged_gmres();
     production_cpu_matrix_free_solver_respects_temporal_phase_convention_sign();
     production_cpu_matrix_free_solver_rejects_invalid_phase_convention_sign();
     production_cpu_matrix_free_solver_reports_progress();
@@ -9198,6 +12009,8 @@ int main()
     production_cpu_periodic_airbox_dynamic_demag_rejects_coupled_block_layout_mismatch();
     production_cpu_periodic_airbox_dynamic_demag_rejects_delta_m_tangent_dof_mismatch();
     production_cpu_periodic_airbox_dynamic_demag_solves_matrix_free_coupled_block_provider();
+    production_cpu_periodic_airbox_dynamic_demag_solves_mfem_demag_tangent_provider();
+    production_cpu_periodic_airbox_dynamic_demag_writes_solve_error_artifacts();
     production_gpu_periodic_airbox_dynamic_demag_rejects_explicit_coupled_block();
     production_cpu_periodic_airbox_dynamic_demag_applies_mean_zero_gauge_for_phi_nullspace();
     driven_response_solver_runs_assembled_mfem_validation_problem();
@@ -9218,7 +12031,12 @@ int main()
     driven_response_solver_interruption_preserves_partial_validation_artifacts();
     c_abi_driven_response_solve_reports_structured_unavailable_result();
     c_abi_driven_response_solve_rejects_floquet_metadata();
+    c_abi_driven_response_solve_reports_floquet_airbox_unsupported_with_artifacts();
+    c_abi_driven_response_solve_rejects_floquet_airbox_missing_delta_phi_pairs();
+    c_abi_driven_response_solve_rejects_invalid_floquet_airbox_delta_phi_pairs();
+    c_abi_driven_response_solve_rejects_floquet_airbox_delta_phi_pair_without_phase_metadata();
     c_abi_driven_response_solve_rejects_inconsistent_floquet_phase_metadata();
+    c_abi_driven_response_solve_rejects_inconsistent_floquet_phase_loop();
     c_abi_driven_response_solve_rejects_nonperiodic_floquet_drive_before_unsupported_path();
     c_abi_driven_response_solve_rejects_floquet_tangent_frame_mismatch_before_unsupported_path();
     c_abi_driven_response_solve_treats_gamma_floquet_metadata_as_zero_phase_periodic();
@@ -9228,6 +12046,7 @@ int main()
     c_abi_driven_response_solve_runs_complex_tiny_validation_problem();
     c_abi_driven_response_manifest_preserves_temporal_phase_convention();
     c_abi_production_cpu_lane_runs_mfem_matrix_free_response_problem();
+    c_abi_gamma_floquet_production_cpu_matches_static_periodic_response();
     c_abi_production_cpu_lane_runs_mfem_matrix_free_explicit_demag_response_problem();
     c_abi_production_cpu_lane_runs_mfem_matrix_free_demag_provider_response_problem();
     c_abi_production_cpu_lane_rejects_invalid_static_periodic_requests();
@@ -9236,7 +12055,12 @@ int main()
     c_abi_production_cpu_lane_does_not_fallback_to_tiny_validation_solver();
     c_abi_periodic_airbox_dynamic_demag_request_is_explicitly_unavailable();
     c_abi_periodic_airbox_dynamic_demag_requires_magnetostatic_periodic_node_pairs();
+    c_abi_periodic_airbox_dynamic_demag_rejects_degenerate_magnetostatic_periodic_pair();
+    c_abi_periodic_airbox_dynamic_demag_rejects_ambiguous_coupled_block_operator_provider();
     c_abi_periodic_airbox_dynamic_demag_solves_explicit_coupled_block();
+    c_abi_floquet_airbox_dynamic_demag_solves_explicit_coupled_block_and_validates_delta_phi_phase();
+    c_abi_floquet_airbox_dynamic_demag_rejects_explicit_coupled_block_delta_phi_phase_mismatch();
+    c_abi_floquet_airbox_dynamic_demag_gpu_rejects_explicit_coupled_block_without_cpu_fallback();
     c_abi_production_cpu_lane_runs_mfem_dmi_matrix_free_response_problem();
     c_abi_production_cpu_lane_rejects_unknown_dmi_kind();
     c_abi_driven_response_solve_reports_unavailable_failure_artifacts();

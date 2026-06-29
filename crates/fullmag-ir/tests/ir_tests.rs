@@ -37,6 +37,17 @@ fn current_ir_version_is_supported_for_read() {
 }
 
 #[test]
+fn magnetostatic_bc_floquet_airbox_round_trips_as_snake_case_json() {
+    let json = serde_json::to_string(&MagnetostaticBoundaryConditionIR::FloquetAirbox)
+        .expect("floquet_airbox magnetostatic BC should serialize");
+    assert_eq!(json, "\"floquet_airbox\"");
+
+    let decoded: MagnetostaticBoundaryConditionIR =
+        serde_json::from_str(&json).expect("floquet_airbox magnetostatic BC should deserialize");
+    assert_eq!(decoded, MagnetostaticBoundaryConditionIR::FloquetAirbox);
+}
+
+#[test]
 fn previous_public_ir_version_is_supported_for_read_and_requires_migration() {
     assert!(is_supported_ir_version_for_read(PREVIOUS_PUBLIC_IR_VERSION));
     assert!(requires_ir_migration(PREVIOUS_PUBLIC_IR_VERSION));
@@ -2978,6 +2989,7 @@ fn problem_ir_validation_accepts_valid_mesh_semantics() {
                 size_fields_realized: Vec::new(),
                 operation_statuses: Vec::new(),
                 thin_film_diagnostics: Vec::new(),
+                magnetic_submesh_signatures: Vec::new(),
                 degraded: false,
                 authored_regions_count: None,
                 realized_regions_count: None,
@@ -3045,6 +3057,15 @@ fn shared_domain_build_report_preserves_full_mesh_v2_fields() {
             "actual_method": "layered_surface_tetrahedral",
             "warnings": ["requested through-thickness layer count is below 4"]
         }],
+        "magnetic_submesh_signatures": [{
+            "geometry_name": "arch_waveguide",
+            "marker": 1,
+            "node_count": 708,
+            "tetra_count": 1941,
+            "edge_count": 3355,
+            "coordinate_quantization_m": 1e-12,
+            "digest": "44067a65a859016cea21ecf2d902837ea7322183d996d420de0ec0d942d29642"
+        }],
         "degraded": false,
         "authored_regions_count": 3,
         "realized_regions_count": 2
@@ -3067,6 +3088,11 @@ fn shared_domain_build_report_preserves_full_mesh_v2_fields() {
     );
     assert_eq!(report.authored_regions_count, Some(3));
     assert_eq!(report.realized_regions_count, Some(2));
+    assert_eq!(report.magnetic_submesh_signatures[0].node_count, 708);
+    assert_eq!(
+        report.magnetic_submesh_signatures[0].digest.as_deref(),
+        Some("44067a65a859016cea21ecf2d902837ea7322183d996d420de0ec0d942d29642")
+    );
 
     let round_trip = serde_json::to_value(&report).expect("full mesh v2 report should serialize");
     assert_eq!(
@@ -3088,6 +3114,10 @@ fn shared_domain_build_report_preserves_full_mesh_v2_fields() {
     );
     assert_eq!(round_trip["authored_regions_count"], 3);
     assert_eq!(round_trip["realized_regions_count"], 2);
+    assert_eq!(
+        round_trip["magnetic_submesh_signatures"][0]["digest"],
+        "44067a65a859016cea21ecf2d902837ea7322183d996d420de0ec0d942d29642"
+    );
 }
 
 #[test]

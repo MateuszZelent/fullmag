@@ -520,6 +520,7 @@ typedef struct {
     const char *output_directory;
     int write_response_fields;
     int write_partial_artifacts;
+    const char *operator_diagnostics_json;
     int (*cancel_requested)(void *user_data);
     void *cancel_user_data;
     void (*progress_callback)(void *user_data, const fullmag_fem_frequency_domain_progress *progress);
@@ -556,6 +557,7 @@ typedef struct {
     const fullmag_fem_frequency_domain_floquet_periodic_pair *mfem_floquet_periodic_pairs;
     uint64_t mfem_floquet_periodic_pair_count;
     int requires_periodic_airbox_dynamic_demag;
+    int requires_floquet_airbox_dynamic_demag;
     uint64_t magnetic_periodic_constraint_set_count;
     uint64_t magnetostatic_periodic_constraint_set_count;
     uint64_t periodic_airbox_delta_m_tangent_dof_count;
@@ -588,7 +590,7 @@ typedef struct {
     char *artifact_manifest_path;
 } fullmag_fem_frequency_domain_solve_result;
 
-#define FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION 7u
+#define FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION 8u
 
 typedef enum {
     FULLMAG_FEM_FD_OK = 0,
@@ -970,6 +972,25 @@ int fullmag_fem_backend_upload_magnetization_f64(
     fullmag_fem_backend *handle,
     const double *m_xyz,
     uint64_t len
+);
+
+/*
+ * Apply the native demag tangent operator around the backend's current
+ * magnetization state.
+ *
+ * The returned AoS field is:
+ *   H_demag(m + delta_m) - H_demag(m)
+ *
+ * This entrypoint is intended for frequency-domain matrix-free providers. It
+ * uses the backend's fresh demag solver path rather than frozen-field cache
+ * reuse and restores the backend magnetization state before returning.
+ */
+int fullmag_fem_backend_apply_demag_tangent_f64(
+    fullmag_fem_backend *handle,
+    const double *delta_m_xyz,
+    uint64_t delta_m_len,
+    double *out_delta_h_demag_xyz,
+    uint64_t out_len
 );
 
 int fullmag_fem_backend_snapshot_stats(
