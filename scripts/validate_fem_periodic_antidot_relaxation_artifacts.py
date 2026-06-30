@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 import sys
@@ -21,6 +22,9 @@ SUPPORTED_ALGORITHMS = {
 }
 MAX_MAGNETIZATION_NORM_DEFECT = 1.0e-9
 MAX_DEFAULT_FINAL_TORQUE_APM = 1.0e12
+MAX_DEFAULT_M_SEAM_MISMATCH = 1.0e-6
+MAX_DEFAULT_H_DEMAG_SEAM_MISMATCH_APM = 1.0e-3
+MAX_DEFAULT_DEMAG_PHI_SEAM_MISMATCH_A = 1.0e-6
 
 
 def parse_args() -> argparse.Namespace:
@@ -36,11 +40,41 @@ def parse_args() -> argparse.Namespace:
         default=MAX_DEFAULT_FINAL_TORQUE_APM,
         help="Maximum accepted final |m x H_eff| residual in A/m.",
     )
+    parser.add_argument(
+        "--max-m-seam-mismatch",
+        type=float,
+        default=MAX_DEFAULT_M_SEAM_MISMATCH,
+        help="Maximum accepted vector mismatch across periodic seams in m_final.",
+    )
+    parser.add_argument(
+        "--max-h-demag-seam-mismatch-apm",
+        type=float,
+        default=MAX_DEFAULT_H_DEMAG_SEAM_MISMATCH_APM,
+        help="Maximum accepted vector mismatch across periodic seams in H_demag [A/m].",
+    )
+    parser.add_argument(
+        "--max-demag-phi-seam-mismatch-a",
+        type=float,
+        default=MAX_DEFAULT_DEMAG_PHI_SEAM_MISMATCH_A,
+        help="Maximum accepted scalar mismatch across periodic seams in demag_phi [A].",
+    )
     args = parser.parse_args()
     if args.min_steps < 1:
         parser.error("--min-steps must be positive")
     if not math.isfinite(args.max_final_torque_apm) or args.max_final_torque_apm <= 0.0:
         parser.error("--max-final-torque-apm must be a positive finite number")
+    if not math.isfinite(args.max_m_seam_mismatch) or args.max_m_seam_mismatch < 0.0:
+        parser.error("--max-m-seam-mismatch must be a non-negative finite number")
+    if (
+        not math.isfinite(args.max_h_demag_seam_mismatch_apm)
+        or args.max_h_demag_seam_mismatch_apm < 0.0
+    ):
+        parser.error("--max-h-demag-seam-mismatch-apm must be a non-negative finite number")
+    if (
+        not math.isfinite(args.max_demag_phi_seam_mismatch_a)
+        or args.max_demag_phi_seam_mismatch_a < 0.0
+    ):
+        parser.error("--max-demag-phi-seam-mismatch-a must be a non-negative finite number")
     return args
 
 
@@ -106,6 +140,46 @@ def load_metadata(artifact_dir: Path) -> dict[str, Any]:
     return require_object(value, "metadata")
 
 
+def load_periodic_pairs_artifact(artifact_dir: Path) -> dict[str, Any]:
+    path = artifact_dir / "mesh" / "periodic_pairs.v1.json"
+    require(path.is_file(), f"missing periodic pairs artifact: {path}")
+    value = json.loads(path.read_text(encoding="utf-8"))
+    return require_object(value, "mesh/periodic_pairs.v1.json")
+
+
+def load_final_magnetization_artifact(artifact_dir: Path) -> dict[str, Any]:
+    path = artifact_dir / "m_final.json"
+    require(path.is_file(), f"missing final magnetization artifact: {path}")
+    value = json.loads(path.read_text(encoding="utf-8"))
+    return require_object(value, "m_final.json")
+
+
+def load_demag_field_snapshot_artifact(artifact_dir: Path) -> dict[str, Any]:
+    field_dir = artifact_dir / "fields" / "H_demag"
+    require(field_dir.is_dir(), f"missing H_demag field snapshot directory: {field_dir}")
+    candidates = sorted(field_dir.glob("step_*.json"))
+    require(candidates, f"missing H_demag field snapshot artifact in {field_dir}")
+    value = json.loads(candidates[-1].read_text(encoding="utf-8"))
+    return require_object(value, str(candidates[-1]))
+
+
+def load_demag_phi_snapshot_artifact(artifact_dir: Path) -> dict[str, Any]:
+    field_dir = artifact_dir / "fields" / "demag_phi"
+    require(field_dir.is_dir(), f"missing demag_phi field snapshot directory: {field_dir}")
+    candidates = sorted(field_dir.glob("step_*.json"))
+    require(candidates, f"missing demag_phi field snapshot artifact in {field_dir}")
+    value = json.loads(candidates[-1].read_text(encoding="utf-8"))
+    return require_object(value, str(candidates[-1]))
+
+
+def load_scalars_rows(artifact_dir: Path) -> list[dict[str, str]]:
+    path = artifact_dir / "scalars.csv"
+    require(path.is_file(), f"missing scalar history artifact: {path}")
+    with path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    return rows
+
+
 def validate_text_markers(text: str, engine: str) -> None:
     expected_engine = "fem_native_gpu" if engine == "gpu" else "fem_cpu_native"
     require(
@@ -136,7 +210,7 @@ def validate_summary(
     scenario: str,
     algorithm: str,
     min_steps: int,
-) -> None:
+) -> int:
     require(summary.get("status") == "completed", f"unexpected status: {summary.get('status')!r}")
     require(summary.get("backend") == "fem", f"unexpected backend: {summary.get('backend')!r}")
     require(summary.get("mode") == "strict", f"unexpected mode: {summary.get('mode')!r}")
@@ -152,6 +226,7 @@ def validate_summary(
     )
     if algorithm:
         require(isinstance(algorithm, str) and algorithm, "--algorithm must be non-empty")
+    return total_steps
 
 
 def validate_relaxation_qualification(
@@ -261,6 +336,272 @@ def validate_periodic_mesh_metadata(metadata: dict[str, Any]) -> None:
         require(int(by_node_id.get(pair_id, 0)) > 0, f"missing node pair {pair_id}")
 
 
+def validate_periodic_pairs_artifact(artifact: dict[str, Any]) -> list[tuple[int, int, str]]:
+    require(
+        artifact.get("schema_version") == "periodic_pairs.v1",
+        f"periodic pairs schema_version must be periodic_pairs.v1, got {artifact.get('schema_version')!r}",
+    )
+    require(
+        artifact.get("validation_status") == "ok",
+        f"periodic pairs validation_status must be ok, got {artifact.get('validation_status')!r}",
+    )
+    pair_count = artifact.get("pair_count")
+    require(
+        isinstance(pair_count, int) and pair_count >= 2,
+        f"periodic pairs pair_count must be at least 2, got {pair_count!r}",
+    )
+    paired_node_count = artifact.get("paired_node_count")
+    require(
+        isinstance(paired_node_count, int) and paired_node_count > 0,
+        f"periodic pairs paired_node_count must be positive, got {paired_node_count!r}",
+    )
+    max_residual = artifact.get("max_translation_residual_m")
+    if max_residual is not None:
+        require_finite_number(max_residual, "periodic pairs max_translation_residual_m")
+    pairs = require_list(artifact.get("pairs"), "periodic pairs pairs")
+    pair_ids = set()
+    node_pairs: list[tuple[int, int, str]] = []
+    for index, pair in enumerate(pairs):
+        pair_object = require_object(pair, f"periodic pairs pairs[{index}]")
+        pair_id = pair_object.get("pair_id")
+        require(isinstance(pair_id, str) and pair_id, f"periodic pairs pairs[{index}].pair_id must be non-empty")
+        pair_ids.add(pair_id)
+        require(
+            pair_object.get("status") == "valid",
+            f"periodic pairs pair {pair_id} status must be valid",
+        )
+        paired = pair_object.get("paired_node_count")
+        require(
+            isinstance(paired, int) and paired > 0,
+            f"periodic pairs pair {pair_id} paired_node_count must be positive",
+        )
+        require_finite_number(pair_object.get("max_residual_m"), f"periodic pairs pair {pair_id}.max_residual_m")
+        unpaired_source = pair_object.get("unpaired_source_node_count")
+        unpaired_destination = pair_object.get("unpaired_destination_node_count")
+        require(
+            isinstance(unpaired_source, int) and unpaired_source == 0,
+            f"periodic pairs pair {pair_id} has unpaired source nodes",
+        )
+        require(
+            isinstance(unpaired_destination, int) and unpaired_destination == 0,
+            f"periodic pairs pair {pair_id} has unpaired destination nodes",
+        )
+        raw_node_pairs = require_list(
+            pair_object.get("node_pairs"),
+            f"periodic pairs pair {pair_id}.node_pairs",
+        )
+        require(
+            len(raw_node_pairs) == paired,
+            f"periodic pairs pair {pair_id}.node_pairs must contain {paired} entries, got {len(raw_node_pairs)}",
+        )
+        for node_pair_index, raw_node_pair in enumerate(raw_node_pairs):
+            node_pair = require_object(
+                raw_node_pair,
+                f"periodic pairs pair {pair_id}.node_pairs[{node_pair_index}]",
+            )
+            node_a = node_pair.get("node_a")
+            node_b = node_pair.get("node_b")
+            require(
+                isinstance(node_a, int) and node_a >= 0,
+                f"periodic pairs pair {pair_id}.node_pairs[{node_pair_index}].node_a must be non-negative integer",
+            )
+            require(
+                isinstance(node_b, int) and node_b >= 0,
+                f"periodic pairs pair {pair_id}.node_pairs[{node_pair_index}].node_b must be non-negative integer",
+            )
+            node_pairs.append((node_a, node_b, pair_id))
+    for pair_id in ["x_faces", "y_faces"]:
+        require(pair_id in pair_ids, f"periodic pairs artifact missing pair {pair_id}")
+    return node_pairs
+
+
+def validate_vector_field_values(values: Any, name: str) -> list[list[float]]:
+    field_values = require_list(values, f"{name} values")
+    require(len(field_values) > 0, f"{name} values must be non-empty")
+    normalized_values: list[list[float]] = []
+    for value_index, raw_value in enumerate(field_values):
+        vector = require_list(raw_value, f"{name} values[{value_index}]")
+        require(len(vector) == 3, f"{name} values[{value_index}] must be a 3-vector")
+        normalized_vector = []
+        for component_index, component in enumerate(vector):
+            normalized_vector.append(
+                require_finite_number(component, f"{name} values[{value_index}][{component_index}]")
+            )
+        normalized_values.append(normalized_vector)
+    return normalized_values
+
+
+def validate_scalar_field_values(values: Any, name: str) -> list[float]:
+    field_values = require_list(values, f"{name} values")
+    require(len(field_values) > 0, f"{name} values must be non-empty")
+    return [
+        require_finite_number(value, f"{name} values[{value_index}]")
+        for value_index, value in enumerate(field_values)
+    ]
+
+
+def validate_final_magnetization_artifact(artifact: dict[str, Any]) -> tuple[int, list[list[float]]]:
+    require(
+        artifact.get("observable") == "m",
+        f"m_final.json observable must be m, got {artifact.get('observable')!r}",
+    )
+    require(
+        artifact.get("unit") == "dimensionless",
+        f"m_final.json unit must be dimensionless, got {artifact.get('unit')!r}",
+    )
+    step = artifact.get("step")
+    require(isinstance(step, int) and step >= 0, f"m_final.json step must be non-negative, got {step!r}")
+    require_finite_number(artifact.get("time"), "m_final.json time")
+    return step, validate_vector_field_values(artifact.get("values"), "m_final.json")
+
+
+def validate_demag_field_snapshot_artifact(
+    artifact: dict[str, Any],
+    *,
+    expected_step: int,
+) -> list[list[float]]:
+    require(
+        artifact.get("observable") == "H_demag",
+        f"H_demag snapshot observable must be H_demag, got {artifact.get('observable')!r}",
+    )
+    require(
+        artifact.get("unit") == "A/m",
+        f"H_demag snapshot unit must be A/m, got {artifact.get('unit')!r}",
+    )
+    step = artifact.get("step")
+    require(isinstance(step, int) and step >= 0, f"H_demag snapshot step must be non-negative, got {step!r}")
+    require(
+        step == expected_step,
+        f"H_demag snapshot step must match m_final.json step {expected_step}, got {step}",
+    )
+    require_finite_number(artifact.get("time"), "H_demag snapshot time")
+    return validate_vector_field_values(artifact.get("values"), "H_demag snapshot")
+
+
+def validate_demag_phi_snapshot_artifact(
+    artifact: dict[str, Any],
+    *,
+    expected_step: int,
+) -> list[float]:
+    require(
+        artifact.get("observable") == "demag_phi",
+        f"demag_phi snapshot observable must be demag_phi, got {artifact.get('observable')!r}",
+    )
+    require(
+        artifact.get("unit") == "A",
+        f"demag_phi snapshot unit must be A, got {artifact.get('unit')!r}",
+    )
+    step = artifact.get("step")
+    require(isinstance(step, int) and step >= 0, f"demag_phi snapshot step must be non-negative, got {step!r}")
+    require(
+        step == expected_step,
+        f"demag_phi snapshot step must match m_final.json step {expected_step}, got {step}",
+    )
+    require_finite_number(artifact.get("time"), "demag_phi snapshot time")
+    return validate_scalar_field_values(artifact.get("values"), "demag_phi snapshot")
+
+
+def validate_periodic_field_seam_mismatch(
+    *,
+    values: list[list[float]],
+    node_pairs: list[tuple[int, int, str]],
+    field_name: str,
+    tolerance: float,
+) -> None:
+    max_mismatch = 0.0
+    max_pair_id = ""
+    require(tolerance >= 0.0, f"{field_name} seam tolerance must be non-negative")
+    for node_a, node_b, pair_id in node_pairs:
+        require(
+            node_a < len(values) and node_b < len(values),
+            f"{field_name} seam pair {pair_id} references nodes outside field values: {node_a}, {node_b}",
+        )
+        delta = math.sqrt(
+            sum((values[node_a][component] - values[node_b][component]) ** 2 for component in range(3))
+        )
+        if delta > max_mismatch:
+            max_mismatch = delta
+            max_pair_id = pair_id
+    require(
+        max_mismatch <= tolerance,
+        f"{field_name} periodic seam mismatch exceeds {tolerance:.6e}: {max_mismatch:.6e} on {max_pair_id}",
+    )
+
+
+def validate_periodic_scalar_field_seam_mismatch(
+    *,
+    values: list[float],
+    node_pairs: list[tuple[int, int, str]],
+    field_name: str,
+    tolerance: float,
+) -> None:
+    max_mismatch = 0.0
+    max_pair_id = ""
+    require(tolerance >= 0.0, f"{field_name} seam tolerance must be non-negative")
+    for node_a, node_b, pair_id in node_pairs:
+        require(
+            node_a < len(values) and node_b < len(values),
+            f"{field_name} seam pair {pair_id} references nodes outside field values: {node_a}, {node_b}",
+        )
+        delta = abs(values[node_a] - values[node_b])
+        if delta > max_mismatch:
+            max_mismatch = delta
+            max_pair_id = pair_id
+    require(
+        max_mismatch <= tolerance,
+        f"{field_name} periodic seam mismatch exceeds {tolerance:.6e}: {max_mismatch:.6e} on {max_pair_id}",
+    )
+
+
+def finite_csv_number(row: dict[str, str], column: str, row_name: str) -> float:
+    require(column in row, f"scalars.csv missing column {column}")
+    try:
+        value = float(row[column])
+    except ValueError as exc:
+        fail(f"scalars.csv {row_name}.{column} must be a finite number: {exc}")
+    require(math.isfinite(value), f"scalars.csv {row_name}.{column} must be finite")
+    return value
+
+
+def validate_scalar_history(
+    rows: list[dict[str, str]],
+    *,
+    min_steps: int,
+    max_final_torque_apm: float,
+) -> int:
+    require(
+        len(rows) >= min_steps,
+        f"scalars.csv must contain at least {min_steps} rows, got {len(rows)}",
+    )
+    first = rows[0]
+    final = rows[-1]
+    for index, row in enumerate(rows):
+        row_name = f"row[{index}]"
+        for column in ["time", "E_demag", "E_total", "max_torque_Apm"]:
+            finite_csv_number(row, column, row_name)
+    initial_total = finite_csv_number(first, "E_total", "first")
+    final_total = finite_csv_number(final, "E_total", "final")
+    final_demag = finite_csv_number(final, "E_demag", "final")
+    final_torque = finite_csv_number(final, "max_torque_Apm", "final")
+    final_step_float = finite_csv_number(final, "step", "final")
+    final_step = int(final_step_float)
+    require(
+        final_step_float == final_step and final_step >= min_steps,
+        f"scalars.csv final step must be an integer >= {min_steps}, got {final_step_float!r}",
+    )
+    tolerance = max(abs(initial_total) * 1.0e-9, 1.0e-30)
+    require(
+        final_total <= initial_total + tolerance,
+        f"scalars.csv final E_total increased from {initial_total:.6e} to {final_total:.6e}",
+    )
+    require(final_demag >= 0.0, "scalars.csv final E_demag must be non-negative")
+    require(
+        0.0 <= final_torque <= max_final_torque_apm,
+        f"scalars.csv final max_torque_Apm exceeds {max_final_torque_apm:.6e}: {final_torque:.6e}",
+    )
+    return final_step
+
+
 def validate_problem_pbc(metadata: dict[str, Any]) -> None:
     pbc = require_object(metadata.get("pbc"), "metadata.pbc")
     require(
@@ -268,8 +609,8 @@ def validate_problem_pbc(metadata: dict[str, Any]) -> None:
         f"metadata.pbc.axes must be ['periodic', 'periodic', 'open'], got {pbc.get('axes')!r}",
     )
     require(
-        pbc.get("demag") == "open",
-        f"metadata.pbc.demag must be open for FEM static PBC, got {pbc.get('demag')!r}",
+        pbc.get("demag") == "periodic_airbox_k0",
+        f"metadata.pbc.demag must be periodic_airbox_k0 for FEM static PBC, got {pbc.get('demag')!r}",
     )
     require(
         "image_counts" not in pbc,
@@ -309,14 +650,18 @@ def validate_demag_runtime(metadata: dict[str, Any], engine: str) -> None:
         "demag_runtime.max_iterations must be positive",
     )
     actual_iterations = demag.get("actual_iterations")
-    if actual_iterations is not None:
-        require(
-            isinstance(actual_iterations, int) and actual_iterations >= 0,
-            "demag_runtime.actual_iterations must be non-negative",
-        )
-    final_residual = demag.get("final_residual_norm")
-    if final_residual is not None:
-        require_finite_number(final_residual, "demag_runtime.final_residual_norm")
+    require(
+        isinstance(actual_iterations, int) and 0 < actual_iterations <= max_iterations,
+        "demag_runtime.actual_iterations must be positive and <= max_iterations",
+    )
+    final_residual = require_finite_number(
+        demag.get("final_residual_norm"),
+        "demag_runtime.final_residual_norm",
+    )
+    require(
+        0.0 <= final_residual <= relative_tolerance,
+        "demag_runtime.final_residual_norm must be non-negative and <= relative_tolerance",
+    )
     mfem_device = demag.get("mfem_device")
     if engine == "gpu" and isinstance(mfem_device, str):
         require("cuda" in mfem_device.lower(), "GPU demag_runtime.mfem_device must mention cuda")
@@ -373,16 +718,60 @@ def main() -> int:
         text = args.log_path.read_text(encoding="utf-8", errors="replace")
         validate_text_markers(text, args.engine)
         summary = load_last_json_object(text)
-        validate_summary(
+        summary_total_steps = validate_summary(
             summary,
             scenario=args.scenario,
             algorithm=args.algorithm,
             min_steps=args.min_steps,
         )
-        metadata = load_metadata(resolve_artifact_dir(summary, args.log_path))
+        artifact_dir = resolve_artifact_dir(summary, args.log_path)
+        metadata = load_metadata(artifact_dir)
         validate_scenario_metadata(metadata, args.scenario)
         validate_problem_pbc(metadata)
         validate_periodic_mesh_metadata(metadata)
+        node_pairs = validate_periodic_pairs_artifact(load_periodic_pairs_artifact(artifact_dir))
+        final_step, final_m_values = validate_final_magnetization_artifact(
+            load_final_magnetization_artifact(artifact_dir)
+        )
+        require(
+            final_step == summary_total_steps,
+            f"m_final.json step must match summary total_steps {summary_total_steps}, got {final_step}",
+        )
+        h_demag_values = validate_demag_field_snapshot_artifact(
+            load_demag_field_snapshot_artifact(artifact_dir),
+            expected_step=final_step,
+        )
+        demag_phi_values = validate_demag_phi_snapshot_artifact(
+            load_demag_phi_snapshot_artifact(artifact_dir),
+            expected_step=final_step,
+        )
+        validate_periodic_field_seam_mismatch(
+            values=final_m_values,
+            node_pairs=node_pairs,
+            field_name="m_final.json",
+            tolerance=args.max_m_seam_mismatch,
+        )
+        validate_periodic_field_seam_mismatch(
+            values=h_demag_values,
+            node_pairs=node_pairs,
+            field_name="H_demag snapshot",
+            tolerance=args.max_h_demag_seam_mismatch_apm,
+        )
+        validate_periodic_scalar_field_seam_mismatch(
+            values=demag_phi_values,
+            node_pairs=node_pairs,
+            field_name="demag_phi snapshot",
+            tolerance=args.max_demag_phi_seam_mismatch_a,
+        )
+        scalar_final_step = validate_scalar_history(
+            load_scalars_rows(artifact_dir),
+            min_steps=args.min_steps,
+            max_final_torque_apm=args.max_final_torque_apm,
+        )
+        require(
+            scalar_final_step == final_step,
+            f"scalars.csv final step must match m_final.json step {final_step}, got {scalar_final_step}",
+        )
         validate_demag_runtime(metadata, args.engine)
         validate_relaxation_qualification(
             metadata,

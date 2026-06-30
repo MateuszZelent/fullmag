@@ -201,6 +201,27 @@ __global__ void retract_field_kernel(
     out_z[i] = z * inv;
 }
 
+__global__ void project_static_periodic_field_kernel(
+    double *x,
+    double *y,
+    double *z,
+    const uint32_t *periodic_representative_nodes,
+    int n)
+{
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) {
+        return;
+    }
+    const uint32_t representative = periodic_representative_nodes[i];
+    if (representative >= static_cast<uint32_t>(n) ||
+        representative == static_cast<uint32_t>(i)) {
+        return;
+    }
+    x[i] = x[representative];
+    y[i] = y[representative];
+    z[i] = z[representative];
+}
+
 __global__ void bb_curvature_kernel(
     const double *previous_mx,
     const double *previous_my,
@@ -729,6 +750,26 @@ void fullmag_cuda_relax_retract_field(
         out_x,
         out_y,
         out_z,
+        n);
+}
+
+void fullmag_cuda_relax_project_static_periodic_field(
+    double *x,
+    double *y,
+    double *z,
+    const uint32_t *periodic_representative_nodes,
+    int n,
+    cudaStream_t stream)
+{
+    if (n <= 0 || periodic_representative_nodes == nullptr) {
+        return;
+    }
+    const int blocks = (n + kBlockSize - 1) / kBlockSize;
+    project_static_periodic_field_kernel<<<blocks, kBlockSize, 0, stream>>>(
+        x,
+        y,
+        z,
+        periodic_representative_nodes,
         n);
 }
 

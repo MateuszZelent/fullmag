@@ -121,6 +121,8 @@ pub enum FdmDemagPeriodicityIR {
     Open,
     /// Truncated periodic images (MuMax-style N^pbc kernel).
     TruncatedImages,
+    /// Static k=0 FEM periodic-airbox demag.
+    PeriodicAirboxK0,
 }
 
 impl FdmPeriodicityIR {

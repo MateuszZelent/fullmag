@@ -3576,7 +3576,7 @@ class StudyBuilder:
         y: bool = False,
         z: bool = False,
         *,
-        demag: Literal["open", "truncated_images"] = "open",
+        demag: Literal["open", "truncated_images", "periodic_airbox_k0"] = "open",
         images: tuple[int, int, int] | None = None,
     ) -> "StudyBuilder":
         pbc(x=x, y=y, z=z, demag=demag, images=images)
@@ -4237,7 +4237,7 @@ def pbc(
     y: bool = False,
     z: bool = False,
     *,
-    demag: Literal["open", "truncated_images"] = "open",
+    demag: Literal["open", "truncated_images", "periodic_airbox_k0"] = "open",
     images: tuple[int, int, int] | None = None,
 ) -> None:
     """Declare problem-level periodic boundary conditions along the given axes.
@@ -4253,6 +4253,7 @@ def pbc(
     demag : str
         ``"open"`` keeps the open-boundary FFT demag kernel. ``"truncated_images"``
         enables MuMax-style periodic image summation on the CPU FDM path.
+        ``"periodic_airbox_k0"`` requests static k=0 FEM airbox demag PBC.
     images : tuple[int, int, int] | None
         Optional image counts for truncated-images demag. ``None`` uses backend defaults.
     """
@@ -5219,6 +5220,8 @@ def _collect_mesh_workflow_metadata() -> dict[str, object] | None:
         mesh_options["through_thickness_symmetric"] = True
     if primary_spec.sweep_face_meshing is not None:
         mesh_options["sweep_face_meshing"] = primary_spec.sweep_face_meshing
+    if primary_spec.periodic_pair_ids:
+        mesh_options["periodic_pair_ids"] = list(primary_spec.periodic_pair_ids)
     if primary_spec.boundary_layer_count is not None:
         mesh_options["boundary_layer_count"] = primary_spec.boundary_layer_count
     if primary_spec.boundary_layer_thickness is not None:

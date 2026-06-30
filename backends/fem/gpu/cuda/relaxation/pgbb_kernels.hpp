@@ -56,6 +56,14 @@ void fullmag_cuda_relax_retract_field(
     int n,
     cudaStream_t stream = nullptr);
 
+void fullmag_cuda_relax_project_static_periodic_field(
+    double *x,
+    double *y,
+    double *z,
+    const uint32_t *periodic_representative_nodes,
+    int n,
+    cudaStream_t stream = nullptr);
+
 void fullmag_cuda_relax_bb_curvature_blocks(
     const double *previous_mx,
     const double *previous_my,

@@ -51,3 +51,10 @@ def test_periodic_antidot_relaxation_gpu_runtime_target_runs_both_pbc_scenarios(
     assert "--engine gpu" in target
     assert "for scenario_script in" in target
     assert ".fullmag/reports/fem-periodic-antidot-relaxation-gpu-runtime" in target
+
+
+def test_static_pbc_demag_equilibrium_runtime_target_runs_cpu_and_gpu_gates() -> None:
+    target = target_block("verify-fem-static-pbc-demag-equilibrium-runtime")
+
+    assert "just verify-fem-periodic-antidot-relaxation-runtime" in target
+    assert "just verify-fem-periodic-antidot-relaxation-gpu-runtime" in target

@@ -5,6 +5,8 @@ Geometry:
     - Central circular hole: 25 nm radius.
     - Periodic airbox: 320 nm x 320 nm laterally, so repeated ferromagnetic
       films are separated by 120 nm of lateral air.
+    - PBC is intentionally x/y only: this is a 2D film array with open z,
+      not a fully 3D-periodic stack.
 
 Run with:
     fullmag --dev -i examples/fem_periodic_antidot_relax_air_gap.py
@@ -29,7 +31,7 @@ study.universe.mesh(
     maximum_element_size=20e-9,
     growth_rate=1.5,
 )
-study.pbc(x=True, y=True)
+study.pbc(x=True, y=True, demag="periodic_airbox_k0")
 study.interactive(True)
 
 # Geometry
@@ -106,8 +108,24 @@ study.objects.mesh.defaults(
 )
 study.build_domain_mesh()
 study.solver(dt=1e-13, g=2.115)
-study.tableautosave(1e-12, quantities=["time", "step", "mx", "my", "mz", "E_total"])
+study.tableautosave(
+    1e-12,
+    quantities=[
+        "time",
+        "step",
+        "mx",
+        "my",
+        "mz",
+        "e_ex",
+        "e_demag",
+        "E_total",
+        "max_h_demag",
+        "max_torque",
+    ],
+)
 study.save("m", every=10e-12)
+study.save("H_demag", every=10e-12)
+study.save("demag_phi", every=10e-12)
 
 study.stages.add_relax(
     algorithm="projected_gradient_bb",

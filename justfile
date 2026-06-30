@@ -1030,6 +1030,10 @@ verify-fem-periodic-antidot-relaxation-gpu-runtime:
             --min-steps "${FULLMAG_PBC_RELAX_MIN_STEPS:-4}"; \
         done'
 
+verify-fem-static-pbc-demag-equilibrium-runtime:
+    just verify-fem-periodic-antidot-relaxation-runtime
+    just verify-fem-periodic-antidot-relaxation-gpu-runtime
+
 verify-fem-relaxation-cpu-gpu-consistency-smoke:
     just ensure-managed-fem-runtime
     mkdir -p .fullmag/reports

@@ -65,11 +65,13 @@ class FdmPbc:
         object.__setattr__(self, "axes", axes)
 
         demag = self.demag.strip().lower()
-        if demag not in {"open", "truncated_images"}:
-            raise ValueError("FdmPbc.demag must be 'open' or 'truncated_images'")
+        if demag not in {"open", "truncated_images", "periodic_airbox_k0"}:
+            raise ValueError(
+                "FdmPbc.demag must be 'open', 'truncated_images', or 'periodic_airbox_k0'"
+            )
         object.__setattr__(self, "demag", demag)
 
-        if demag == "open" and self.image_counts is not None:
+        if demag != "truncated_images" and self.image_counts is not None:
             raise ValueError("FdmPbc.image_counts require demag='truncated_images'")
 
         if self.image_counts is not None:
@@ -277,12 +279,14 @@ def _fem_mesh_cache_key(
     hints: FEM,
     *,
     study_universe: dict[str, object] | None = None,
+    mesh_workflow: dict[str, object] | None = None,
 ) -> str:
     payload = {
         "version": _FEM_MESH_CACHE_VERSION,
         "geometry": _geometry_cache_fingerprint(geometry),
         "fem": hints.to_ir(),
         "study_universe": study_universe,
+        "mesh_workflow": mesh_workflow,
     }
     return sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
@@ -514,6 +518,7 @@ def build_geometry_assets_for_request(
                         geometry,
                         discretization.fem,
                         study_universe=study_universe,
+                        mesh_workflow=mesh_workflow,
                     )
                     cache_path = (
                         fem_mesh_cache_dir.joinpath(f"{mesh_cache_key}.npz")

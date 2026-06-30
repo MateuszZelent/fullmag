@@ -2414,6 +2414,29 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
         other => panic!("expected FEM plan, got {:?}", other),
     }
 
+    let mut z_pbc_with_x_mesh = ir.clone();
+    z_pbc_with_x_mesh.pbc = Some(fullmag_ir::FdmPeriodicityIR {
+        axes: [
+            fullmag_ir::AxisBoundary::Open,
+            fullmag_ir::AxisBoundary::Open,
+            fullmag_ir::AxisBoundary::Periodic,
+        ],
+        demag: fullmag_ir::FdmDemagPeriodicityIR::Open,
+        image_counts: None,
+    });
+    let err = plan(&z_pbc_with_x_mesh).expect_err(
+        "FEM static PBC must reject meshes whose periodic axes do not match ProblemIR.pbc",
+    );
+    assert!(
+        err.reasons.iter().any(|reason| {
+            reason.contains("mesh periodic axes")
+                && reason.contains("ProblemIR.pbc axes")
+                && reason.contains("z")
+        }),
+        "unexpected z-PBC axis mismatch rejection reasons: {:?}",
+        err.reasons
+    );
+
     let mut demag_ir = ir.clone();
     demag_ir.energy_terms = vec![
         fullmag_ir::EnergyTermIR::Exchange,
@@ -2432,8 +2455,22 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
         name: "demag_phi".to_string(),
         every_seconds: 1.0e-13,
     });
+    let err = plan(&demag_ir)
+        .expect_err("periodic FEM static demag must require explicit periodic-airbox PBC");
+    assert!(
+        err.reasons
+            .iter()
+            .any(|reason| { reason.contains("ProblemIR.pbc.demag='periodic_airbox_k0'") }),
+        "unexpected non-explicit demag PBC rejection reasons: {:?}",
+        err.reasons
+    );
+    demag_ir
+        .pbc
+        .as_mut()
+        .expect("demag fixture should carry PBC intent")
+        .demag = fullmag_ir::FdmDemagPeriodicityIR::PeriodicAirboxK0;
     let demag_planned =
-        plan(&demag_ir).expect("periodic FEM static demag with open airbox should plan");
+        plan(&demag_ir).expect("periodic FEM static demag with periodic-airbox PBC should plan");
     match demag_planned.backend_plan {
         BackendPlanIR::Fem(fem) => {
             assert!(fem.enable_demag);
@@ -2487,6 +2524,15 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
         .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
         .and_then(|asset| asset.mesh.as_mut())
         .expect("test problem should carry an inline FEM domain mesh");
+    fully_periodic.pbc = Some(fullmag_ir::FdmPeriodicityIR {
+        axes: [
+            fullmag_ir::AxisBoundary::Periodic,
+            fullmag_ir::AxisBoundary::Periodic,
+            fullmag_ir::AxisBoundary::Periodic,
+        ],
+        demag: fullmag_ir::FdmDemagPeriodicityIR::PeriodicAirboxK0,
+        image_counts: None,
+    });
     mesh.periodic_boundary_pairs.extend([
         fullmag_ir::MeshPeriodicBoundaryPairIR {
             pair_id: "y_periodic".to_string(),
@@ -7672,6 +7718,32 @@ fn fdm_cpu_pbc_truncated_images_demag_plans() {
         }
         _ => panic!("expected FDM plan"),
     }
+}
+
+#[test]
+fn fdm_rejects_fem_periodic_airbox_pbc_demag() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.energy_terms.push(EnergyTermIR::Demag {
+        realization: fullmag_ir::RequestedFemDemagIR::Auto,
+    });
+    ir.pbc = Some(FdmPeriodicityIR {
+        axes: [
+            AxisBoundary::Periodic,
+            AxisBoundary::Periodic,
+            AxisBoundary::Open,
+        ],
+        demag: FdmDemagPeriodicityIR::PeriodicAirboxK0,
+        image_counts: None,
+    });
+
+    let err = plan(&ir).expect_err("FDM must reject FEM periodic-airbox demag PBC");
+    assert!(
+        err.reasons
+            .iter()
+            .any(|reason| reason.contains("pbc.demag='periodic_airbox_k0'")),
+        "unexpected FDM periodic-airbox rejection reasons: {:?}",
+        err.reasons
+    );
 }
 
 #[test]

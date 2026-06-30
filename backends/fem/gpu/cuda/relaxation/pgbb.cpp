@@ -444,6 +444,15 @@ bool gpu_relax_retry_pgbb_line_search_with_reset(
                 gpu.rk.m_stage.z,
                 n,
                 stream);
+            if (gpu.mesh_regions.has_periodic_reduced_nodes) {
+                fullmag_cuda_relax_project_static_periodic_field(
+                    gpu.rk.m_stage.x,
+                    gpu.rk.m_stage.y,
+                    gpu.rk.m_stage.z,
+                    gpu.mesh_regions.periodic_representative_nodes,
+                    n,
+                    stream);
+            }
             if (!cuda_launch_ok("launch GPU projected-gradient BB recovery retraction", reason) ||
                 !gpu_rk_copy_component_device(
                     gpu.rk.m_stage,
@@ -713,6 +722,15 @@ int gpu_relax_projected_gradient_bb_step(
             gpu.rk.m_stage.z,
             n,
             stream);
+        if (gpu.mesh_regions.has_periodic_reduced_nodes) {
+            fullmag_cuda_relax_project_static_periodic_field(
+                gpu.rk.m_stage.x,
+                gpu.rk.m_stage.y,
+                gpu.rk.m_stage.z,
+                gpu.mesh_regions.periodic_representative_nodes,
+                n,
+                stream);
+        }
         if (!cuda_launch_ok("launch GPU projected-gradient BB trial retraction", reason) ||
             !gpu_rk_copy_component_device(
                 gpu.rk.m_stage,

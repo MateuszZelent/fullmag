@@ -1032,6 +1032,25 @@ class ProblemApiTests(unittest.TestCase):
         finally:
             fm.reset()
 
+    def test_flat_pbc_configures_fem_periodic_airbox_demag(self) -> None:
+        fm.reset()
+        try:
+            fm.pbc(x=True, y=True, demag="periodic_airbox_k0")
+
+            self.assertEqual(
+                flat_world._state._pbc.to_ir(),
+                {
+                    "axes": ["periodic", "periodic", "open"],
+                    "demag": "periodic_airbox_k0",
+                },
+            )
+            self.assertEqual(
+                flat_world._state._default_mesh_spec.periodic_pair_ids,
+                ["x_faces", "y_faces"],
+            )
+        finally:
+            fm.reset()
+
     def test_study_pbc_serializes_problem_ir_and_default_fem_pairs(self) -> None:
         fm.reset()
         try:
@@ -1058,6 +1077,38 @@ class ProblemApiTests(unittest.TestCase):
                 flat_world._build_problem().to_ir(include_geometry_assets=False)["pbc"],
                 {
                     "axes": ["periodic", "periodic", "open"],
+                    "demag": "open",
+                },
+            )
+        finally:
+            fm.reset()
+
+    def test_study_pbc_serializes_z_axis_and_default_fem_pair(self) -> None:
+        fm.reset()
+        try:
+            study = fm.study("pbc_z_test")
+            study.engine("fem")
+            study.pbc(z=True)
+            film = study.geometry(fm.Box(size=(20e-9, 20e-9, 5e-9), name="film"), name="film")
+            film.Ms = 800e3
+            film.Aex = 13e-12
+            film.m = fm.init.UniformMagnetization((0.0, 0.0, 1.0))
+
+            self.assertEqual(
+                flat_world._state._pbc.to_ir(),
+                {
+                    "axes": ["open", "open", "periodic"],
+                    "demag": "open",
+                },
+            )
+            self.assertEqual(
+                flat_world._state._default_mesh_spec.periodic_pair_ids,
+                ["z_faces"],
+            )
+            self.assertEqual(
+                flat_world._build_problem().to_ir(include_geometry_assets=False)["pbc"],
+                {
+                    "axes": ["open", "open", "periodic"],
                     "demag": "open",
                 },
             )

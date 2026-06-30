@@ -1049,6 +1049,15 @@ fn write_periodic_pairs_artifact(
                 .map(|pair| pair.node_b)
                 .collect::<BTreeSet<_>>();
             let diagnostics = mesh_periodic_pair_residuals(mesh, boundary_pair, node_pairs);
+            let node_pair_payload = node_pairs
+                .iter()
+                .map(|pair| {
+                    serde_json::json!({
+                        "node_a": pair.node_a,
+                        "node_b": pair.node_b,
+                    })
+                })
+                .collect::<Vec<_>>();
 
             serde_json::json!({
                 "pair_id": boundary_pair.pair_id.clone(),
@@ -1060,6 +1069,7 @@ fn write_periodic_pairs_artifact(
                 "paired_node_count": node_pairs.len(),
                 "unpaired_source_node_count": source_nodes.difference(&paired_source_nodes).count(),
                 "unpaired_destination_node_count": destination_nodes.difference(&paired_destination_nodes).count(),
+                "node_pairs": node_pair_payload,
                 "max_residual_m": diagnostics.max_residual_m,
                 "rms_residual_m": diagnostics.rms_residual_m,
                 "status": diagnostics.status,
@@ -3537,6 +3547,14 @@ mod tests {
         assert_eq!(artifact["pairs"][0]["paired_node_count"], 3);
         assert_eq!(artifact["pairs"][0]["unpaired_source_node_count"], 0);
         assert_eq!(artifact["pairs"][0]["unpaired_destination_node_count"], 0);
+        assert_eq!(
+            artifact["pairs"][0]["node_pairs"],
+            serde_json::json!([
+                {"node_a": 0, "node_b": 1},
+                {"node_a": 2, "node_b": 3},
+                {"node_a": 4, "node_b": 5},
+            ])
+        );
         assert_eq!(artifact["pairs"][0]["max_residual_m"], 0.0);
         assert_eq!(artifact["pairs"][0]["status"], "valid");
 
@@ -4065,7 +4083,7 @@ mod tests {
                 fullmag_ir::AxisBoundary::Periodic,
                 fullmag_ir::AxisBoundary::Open,
             ],
-            demag: fullmag_ir::FdmDemagPeriodicityIR::Open,
+            demag: fullmag_ir::FdmDemagPeriodicityIR::PeriodicAirboxK0,
             image_counts: None,
         });
         problem.problem_meta.runtime_metadata.insert(
@@ -4136,7 +4154,7 @@ mod tests {
             metadata["pbc"],
             serde_json::json!({
                 "axes": ["periodic", "periodic", "open"],
-                "demag": "open",
+                "demag": "periodic_airbox_k0",
             })
         );
         assert_eq!(metadata["mesh"]["periodic_boundary_pair_count"], 2);

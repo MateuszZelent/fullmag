@@ -1136,6 +1136,18 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
             kernels_source.find("norm <= 0.0") != std::string::npos &&
             kernels_source.find("CUDART_NAN") != std::string::npos,
         "native FEM GPU projected-gradient BB must expose normalized nodal retraction kernels without invalid-norm no-op fallback");
+    check(
+        kernels_header.find("fullmag_cuda_relax_project_static_periodic_field(") !=
+                std::string::npos &&
+            kernels_source.find("project_static_periodic_field_kernel") !=
+                std::string::npos &&
+            kernels_source.find("periodic_representative_nodes[i]") !=
+                std::string::npos &&
+            pgbb_source.find("gpu.mesh_regions.has_periodic_reduced_nodes") !=
+                std::string::npos &&
+            pgbb_source.find("fullmag_cuda_relax_project_static_periodic_field(") !=
+                std::string::npos,
+        "native FEM GPU projected-gradient BB must project trial magnetization onto static periodic classes after retraction");
     const auto invalid_norm_branch =
         kernels_source.find("if (!isfinite(norm) || norm <= 0.0)");
     const auto normalized_branch = kernels_source.find("const double inv = 1.0 / norm");
@@ -1260,9 +1272,13 @@ void gpu_relaxation_ncg_direction_state_is_device_persistent() {
                 std::string::npos &&
             ncg_source.find("fullmag_cuda_relax_retract_field(") !=
                 std::string::npos &&
+            ncg_source.find("gpu.mesh_regions.has_periodic_reduced_nodes") !=
+                std::string::npos &&
+            ncg_source.find("fullmag_cuda_relax_project_static_periodic_field(") !=
+                std::string::npos &&
             ncg_source.find("kArmijoCoefficient") != std::string::npos &&
             ncg_source.find("trial_energy <=") != std::string::npos,
-        "native FEM GPU nonlinear-CG must own a device-resident Armijo/PR+ accepted-step loop");
+        "native FEM GPU nonlinear-CG must own a device-resident Armijo/PR+ accepted-step loop with static periodic trial projection");
     check(
         scalar_readback_header.find("gpu_rk_read_control_scalar_result(") !=
                 std::string::npos &&

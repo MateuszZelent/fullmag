@@ -1,10 +1,10 @@
 use fullmag_ir::{
     BackendPlanIR, BackendTarget, CommonPlanMeta, DiscretizationHintsIR, EnergyTermIR,
     ExchangeBoundaryCondition, ExchangeCouplingModeIR, ExecutionPlanIR, ExecutionPrecision,
-    FdmLayerPlanIR, FdmMaterialIR, FdmMultilayerPlanIR, FdmMultilayerSummaryIR, FdmPlanIR,
-    GeometryEntryIR, GridDimensions, InitialMagnetizationIR, IntegratorChoice, OutputPlanIR,
-    ProblemIR, ProvenancePlanIR, RegionFrameIR, RegionShapeIR, RelaxationAlgorithmIR,
-    TimeDependenceIR, IR_VERSION,
+    FdmDemagPeriodicityIR, FdmLayerPlanIR, FdmMaterialIR, FdmMultilayerPlanIR,
+    FdmMultilayerSummaryIR, FdmPlanIR, GeometryEntryIR, GridDimensions, InitialMagnetizationIR,
+    IntegratorChoice, OutputPlanIR, ProblemIR, ProvenancePlanIR, RegionFrameIR, RegionShapeIR,
+    RelaxationAlgorithmIR, TimeDependenceIR, IR_VERSION,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -359,6 +359,17 @@ pub(crate) fn plan_fdm(
     if !(enable_exchange || enable_demag || external_field.is_some()) {
         errors.push(
             "the current executable FDM path requires at least one of Exchange, Demag, or Zeeman"
+                .to_string(),
+        );
+    }
+    if problem
+        .pbc
+        .as_ref()
+        .is_some_and(|pbc| pbc.demag == FdmDemagPeriodicityIR::PeriodicAirboxK0)
+    {
+        errors.push(
+            "pbc.demag='periodic_airbox_k0' is FEM static/time-domain airbox demag PBC; \
+             FDM supports demag='open' or demag='truncated_images'"
                 .to_string(),
         );
     }
@@ -1236,6 +1247,17 @@ pub(crate) fn plan_fdm_multilayer(
         );
     }
     reject_fdm_spatial_material_fields(problem, "multilayer FDM", &mut errors);
+    if problem
+        .pbc
+        .as_ref()
+        .is_some_and(|pbc| pbc.demag == FdmDemagPeriodicityIR::PeriodicAirboxK0)
+    {
+        errors.push(
+            "pbc.demag='periodic_airbox_k0' is FEM static/time-domain airbox demag PBC; \
+             multilayer FDM supports demag='open' or demag='truncated_images'"
+                .to_string(),
+        );
+    }
     if problem.current_density.is_some()
         || problem.stt_degree.is_some()
         || problem.stt_beta.is_some()

@@ -107,9 +107,26 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
             payload["ir"]["pbc"],
             {
                 "axes": ["periodic", "periodic", "open"],
-                "demag": "open",
+                "demag": "periodic_airbox_k0",
             },
         )
+
+    def assert_study_saves_equilibrium_and_demag_fields(self, study: dict[str, object]) -> None:
+        outputs = study["sampling"]["outputs"]
+        saved_fields = [
+            output["name"]
+            for output in outputs
+            if output.get("kind") == "field"
+        ]
+        self.assertIn("m", saved_fields)
+        self.assertIn("H_demag", saved_fields)
+        self.assertIn("demag_phi", saved_fields)
+
+    def assert_table_logs_pbc_sensitive_quantities(self, study: dict[str, object]) -> None:
+        quantities = study["sampling"]["table_autosave"]["quantities"]
+        self.assertIn("e_demag", quantities)
+        self.assertIn("max_h_demag", quantities)
+        self.assertIn("max_torque", quantities)
 
     def test_exchange_coupled_scenario_relaxes_periodic_antidot_unit_cell(self) -> None:
         self.assert_example_is_plain_python("exchange_coupled")
@@ -126,14 +143,20 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
         study = payload["stages"][0]["ir"]["study"]
         self.assertEqual(study["kind"], "relaxation")
         self.assertEqual(study["algorithm"], "projected_gradient_bb")
-        self.assertEqual(study["stop"]["max_steps"], 4)
+        self.assertEqual(study["stop"]["max_steps"], 4000)
+        self.assert_study_saves_equilibrium_and_demag_fields(study)
+        self.assert_table_logs_pbc_sensitive_quantities(study)
 
         metadata = payload["ir"]["problem_meta"]["runtime_metadata"]
         self.assertEqual(metadata["runtime_selection"]["backend"], "fem")
-        self.assertEqual(metadata["runtime_selection"]["device"], "cpu")
+        self.assertEqual(metadata["runtime_selection"]["device"], "cuda")
         self.assertEqual(metadata["mesh_workflow"]["domain_mesh_mode"], "generated_shared_domain_mesh")
         self.assertEqual(
             metadata["mesh_workflow"]["default_mesh"]["periodic_pair_ids"],
+            ["x_faces", "y_faces"],
+        )
+        self.assertEqual(
+            metadata["mesh_workflow"]["mesh_options"]["periodic_pair_ids"],
             ["x_faces", "y_faces"],
         )
         self.assert_scenario_metadata(
@@ -156,9 +179,17 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
         self.assertEqual(len(payload["stages"]), 1)
         self.assertEqual(payload["stages"][0]["entrypoint_kind"], "flat_relax")
 
+        study = payload["stages"][0]["ir"]["study"]
+        self.assert_study_saves_equilibrium_and_demag_fields(study)
+        self.assert_table_logs_pbc_sensitive_quantities(study)
+
         metadata = payload["ir"]["problem_meta"]["runtime_metadata"]
         self.assertEqual(
             metadata["mesh_workflow"]["default_mesh"]["periodic_pair_ids"],
+            ["x_faces", "y_faces"],
+        )
+        self.assertEqual(
+            metadata["mesh_workflow"]["mesh_options"]["periodic_pair_ids"],
             ["x_faces", "y_faces"],
         )
         self.assert_scenario_metadata(

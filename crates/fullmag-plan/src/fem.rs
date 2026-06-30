@@ -112,6 +112,33 @@ fn periodic_boundary_axes(mesh: &fullmag_ir::MeshIR) -> BTreeSet<usize> {
     axes
 }
 
+fn requested_problem_pbc_axes(problem: &ProblemIR) -> BTreeSet<usize> {
+    let mut axes = BTreeSet::new();
+    if let Some(pbc) = &problem.pbc {
+        for (axis, boundary) in pbc.axes.iter().enumerate() {
+            if *boundary == fullmag_ir::AxisBoundary::Periodic {
+                axes.insert(axis);
+            }
+        }
+    }
+    axes
+}
+
+fn axis_set_label(axes: &BTreeSet<usize>) -> String {
+    if axes.is_empty() {
+        return "none".to_string();
+    }
+    axes.iter()
+        .map(|axis| match axis {
+            0 => "x",
+            1 => "y",
+            2 => "z",
+            _ => "?",
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 fn study_mechanics(problem: &ProblemIR) -> Option<&fullmag_ir::MechanicsIR> {
     match &problem.study {
         fullmag_ir::StudyIR::TimeEvolution { dynamics, .. }
@@ -1631,7 +1658,46 @@ pub(crate) fn plan_fem(
             ],
         });
     }
+    if requested_static_pbc {
+        let requested_axes = requested_problem_pbc_axes(problem);
+        let mesh_axes = periodic_boundary_axes(&mesh);
+        if mesh_axes.is_empty() {
+            return Err(PlanError {
+                reasons: vec![format!(
+                    "FEM static/time-domain PBC requires mesh periodic axes to be inferable from \
+                     mesh.periodic_boundary_pairs axis_hint, pair_id, or translation; ProblemIR.pbc \
+                     axes are {}.",
+                    axis_set_label(&requested_axes)
+                )],
+            });
+        }
+        if mesh_axes != requested_axes {
+            return Err(PlanError {
+                reasons: vec![format!(
+                    "FEM static/time-domain PBC mesh periodic axes ({}) must match ProblemIR.pbc \
+                     axes ({}); mesh periodic-pair metadata is topology only and must not add or \
+                     replace physical PBC axes.",
+                    axis_set_label(&mesh_axes),
+                    axis_set_label(&requested_axes)
+                )],
+            });
+        }
+    }
     if !mesh.periodic_node_pairs.is_empty() && enable_demag {
+        if !problem
+            .pbc
+            .as_ref()
+            .is_some_and(|pbc| pbc.demag == fullmag_ir::FdmDemagPeriodicityIR::PeriodicAirboxK0)
+        {
+            return Err(PlanError {
+                reasons: vec![
+                    "FEM static/time-domain demag PBC requires ProblemIR.pbc.demag='periodic_airbox_k0'; \
+                     use study.pbc(..., demag='periodic_airbox_k0') so the dipolar boundary condition \
+                     is explicit instead of relying on mesh metadata or an open demag contract."
+                        .to_string(),
+                ],
+            });
+        }
         if mesh.periodic_boundary_pairs.is_empty() {
             return Err(PlanError {
                 reasons: vec![format!(
