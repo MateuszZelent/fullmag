@@ -103,7 +103,7 @@ The frequency-domain perturbation satisfies:
 
 ```text
 i omega delta_m =
-  -gamma0 * (m0 x delta_H[delta_m] + delta_m x H0)
+-gamma0 * (m0 x delta_H[delta_m] + delta_m x H0)
   + i omega alpha * (m0 x delta_m)
   + tau_lin[delta_m]
 ```
@@ -111,11 +111,55 @@ i omega delta_m =
 Equivalently, after projection to the local tangent basis:
 
 ```text
-A q = i omega B q
+L q = i omega B_alpha q
 ```
 
 where `q` contains the two tangent components of `delta_m` at each magnetic
-node or cell. The artifact contract stores both:
+node or cell, `L` is the projected linearized effective-field/torque operator,
+and `B_alpha` is the mass/gyrotropic operator including the chosen damping
+convention. Older notes may use `A` or `M` for the same roles; new production
+contracts must spell out the operator definitions before mapping eigenvalues
+to frequency.
+
+For the modal product, Fullmag's canonical production convention is:
+
+```text
+lambda q = B_alpha^{-1} L q
+lambda = i omega
+```
+
+or the algebraically equivalent generalized pencil:
+
+```text
+L q = lambda B_alpha q
+lambda = i omega
+```
+
+If a gyrotropic energy Hessian form is used instead, it must include the
+phasor factor explicitly. With the `exp(i omega t)` convention and a real
+skew-symmetric gyrotropic form `G`, the pencil is:
+
+```text
+K phi = -i omega G phi
+```
+
+not `K phi = omega G phi`, unless `G` has already been transformed into a
+complex or Hamiltonian operator that contains the factor `i`. Documentation and
+artifacts for such a transformed operator must name the transform and the
+eigenvalue-to-`omega_rad_s` mapping.
+
+If `K` is the second variation of physical magnetic energy in joules and
+`gamma0 = mu0 * |gamma|`, the gyrotropic bilinear form uses:
+
+```text
+G_t(p, q) = integral (mu0 * Ms / gamma0) * eta dot (m0 x xi) dV
+```
+
+where `xi = T p` and `eta = T q`. A form using `Ms / gamma0` is valid only if
+`K` has been defined as an effective-field form rather than an energy Hessian
+in joules.
+
+The artifact contract stores:
 
 ```text
 omega_rad_s
@@ -123,6 +167,19 @@ frequency_hz = Re(omega) / (2 pi)
 ```
 
 `line_width_hz` is meaningful only when the damping policy includes damping.
+With the canonical `exp(i omega t)` convention, a decaying damped mode has:
+
+```text
+omega_complex = omega_r + i Gamma
+exp(i omega_complex t) = exp(i omega_r t - Gamma t)
+Gamma > 0
+damping_rate_hz = Gamma / (2 pi)
+linewidth_fwhm_hz = Gamma / pi
+```
+
+Any path using `exp(-i omega t)` must state that convention in the manifest and
+must invert the corresponding signs consistently for LLG, absorption, Floquet
+metadata, and linewidth.
 
 ## Tangent basis
 
@@ -142,6 +199,25 @@ Production frequency-domain paths must not solve unconstrained three-component
 eigenvectors as the final physical operator. A full three-component
 representation is allowed only for debug export, temporary materialization, or
 visual reconstruction from the tangent solution.
+
+For non-uniform equilibria, tangent-frame variation is part of the operator
+contract. A production FEM operator may interpolate reconstructed vector
+fields `delta_m = T q`, or it may assemble directly in tangent coordinates, but
+the chosen implementation must match the full-vector weak form. Promotion
+requires a derivative/projection test on a non-uniform `m0` texture such as a
+domain wall, vortex, or skyrmion.
+
+The Zeeman energy Hessian for a fixed external field is zero, but the
+linearized dynamics still contains the restoring/precessional term from the
+static effective field:
+
+```text
+-gamma0 * P_T(delta_m x H0)
+```
+
+or its equivalent in the selected `L`/`K` formulation. A frequency-domain
+operator that includes only second energy derivatives and omits this term is
+not a valid FMR operator.
 
 ## Static equilibrium requirement
 
@@ -219,6 +295,35 @@ provenance, then fail explicitly with a capability error. It must not be
 rewritten to `periodic_airbox_k0`, `open`, dense validation fallback, or a CPU
 Poisson solve.
 
+The dynamic scalar potential sign convention is:
+
+```text
+delta_H_demag = -grad(delta_phi)
+div(grad(delta_phi)) = div(Ms * delta_m)
+div(-grad(delta_phi)) = -div(Ms * delta_m)
+```
+
+Any weak form may multiply both sides by `-1`, but artifacts and tests must
+preserve the physical relation `delta_H_demag = -grad(delta_phi)`. Required
+validation includes a demag energy sign check, an ellipsoid or equivalent
+field-sign oracle, and symmetry of the k=0 demag Hessian.
+
+If the response unknown is dimensionless `delta_m`, response observables must
+include `Ms` where required by SI units:
+
+```text
+delta_M = Ms * delta_m
+chi = delta_M / h_drive
+p_abs = sgn * 0.5 * mu0 * Ms * omega * Im(conj(h_drive) dot delta_m)
+P_abs = integral p_abs dV
+```
+
+The sign `sgn` is fixed by the phasor convention and the definition of
+absorbed power. The production convention must pass the gate that positive
+Gilbert damping gives positive absorbed power near resonance. A value
+`delta_m / h_drive` is not dimensionless susceptibility; it has units `m/A`
+and must be labeled as such if exported.
+
 FDM time-domain periodicity is axis-wise. CPU reference and CUDA FDM support
 periodic exchange wrapping, and truncated-image periodic demagnetization where
 the plan supplies periodic axes and image counts.
@@ -228,6 +333,11 @@ the plan supplies periodic axes and image counts.
 The minimal validation set for this contract is:
 
 - phase convention roundtrip in IR,
+- macrospin undamped check `omega = gamma0 * H0`,
+- macrospin damping sign and linewidth mapping for `exp(i omega t)`,
+- absorbed power positive near resonance for positive Gilbert damping,
+- susceptibility scaling and units with `Ms`,
+- dynamic Poisson sign check through `H = -grad(phi)`,
 - periodic pair validation and duplicate-node rejection,
 - explicit Floquet phase consistency validation against `-k dot translation`,
 - periodic/Floquet rejection when pair constraints are not enforced,

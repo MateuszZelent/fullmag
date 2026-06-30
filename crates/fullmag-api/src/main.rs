@@ -2,6 +2,8 @@ use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{DefaultBodyLimit, Query, State};
 use axum::http::header::CONTENT_TYPE;
 use axum::http::StatusCode;
+#[cfg(not(feature = "swagger-ui"))]
+use axum::response::Html;
 use axum::response::{IntoResponse, Response};
 use axum::{
     routing::{get, post},
@@ -1442,12 +1444,9 @@ async fn main() {
         // ── Feature flags (diagnostics) ──────────────────────────────
         .route("/v2/platform/docs/physics", get(list_physics_docs))
         // ── Professional session-scoped API (v2) ───────────────────────
-        .merge(router_v2::build_v2_router())
-        // ── OpenAPI / Swagger ──────────────────────────────────────────
-        .merge(
-            utoipa_swagger_ui::SwaggerUi::new("/v2/platform/docs/swagger")
-                .external_url_unchecked("/v2/platform/openapi.json", openapi_v2::openapi_json()),
-        )
+        .merge(router_v2::build_v2_router());
+
+    let app = maybe_merge_swagger_ui(app)
         .layer(DefaultBodyLimit::max(LOCAL_BRIDGE_BODY_LIMIT_BYTES))
         .layer(cors)
         .with_state(state);
@@ -1477,6 +1476,37 @@ async fn main() {
     axum::serve(listener, app)
         .await
         .expect("serving API should succeed");
+}
+
+#[cfg(feature = "swagger-ui")]
+fn maybe_merge_swagger_ui(app: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
+    app.merge(
+        utoipa_swagger_ui::SwaggerUi::new("/v2/platform/docs/swagger")
+            .external_url_unchecked("/v2/platform/openapi.json", openapi_v2::openapi_json()),
+    )
+}
+
+#[cfg(not(feature = "swagger-ui"))]
+fn maybe_merge_swagger_ui(app: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
+    app.route("/v2/platform/docs/swagger", get(swagger_ui_fallback))
+        .route("/v2/platform/docs/swagger/", get(swagger_ui_fallback))
+}
+
+#[cfg(not(feature = "swagger-ui"))]
+async fn swagger_ui_fallback() -> Html<&'static str> {
+    Html(
+        r#"<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Fullmag OpenAPI</title>
+  </head>
+  <body>
+    <p>Swagger UI is not bundled in this build.</p>
+    <p><a href="/v2/platform/openapi.json">OpenAPI JSON</a></p>
+  </body>
+</html>"#,
+    )
 }
 
 fn resolve_static_web_root(repo_root: &Path) -> Option<PathBuf> {

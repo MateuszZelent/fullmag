@@ -34,6 +34,16 @@ struct DenseDrivenResponseValidationResult {
     double max_abs_response = 0.0;
     double residual_l2_norm = 0.0;
     double relative_residual_l2_norm = 0.0;
+    double rhs_delta_m_l2_norm = 0.0;
+    double rhs_delta_phi_l2_norm = 0.0;
+    double residual_delta_m_l2_norm = 0.0;
+    double residual_delta_phi_l2_norm = 0.0;
+    double relative_residual_delta_m_l2_norm = 0.0;
+    double relative_residual_delta_phi_l2_norm = 0.0;
+    double response_delta_m_l2_norm = 0.0;
+    double response_delta_phi_l2_norm = 0.0;
+    bool coupled_block_norms_available = false;
+    char coupled_residual_partition_status[64] = "";
     char error_message[128] = "";
 };
 

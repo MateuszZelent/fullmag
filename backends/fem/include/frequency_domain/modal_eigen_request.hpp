@@ -4,7 +4,7 @@
 
 namespace fullmag::fem::frequency_domain {
 
-constexpr std::uint32_t kFrequencyDomainAbiVersion = 8;
+constexpr std::uint32_t kFrequencyDomainAbiVersion = 9;
 
 struct LinearizedOperatorRequest {
     std::uint32_t abi_version = kFrequencyDomainAbiVersion;

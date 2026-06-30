@@ -15,6 +15,20 @@ TWO_PI = 2.0 * math.pi
 PRODUCTION_SHIFT_INVERT_SOLVER_MODELS = {
     "slepc_multi_shift_invert_production_cpu_dense",
 }
+ALLOWED_MODAL_PHASOR_CONVENTIONS = {
+    "exp_i_omega_t",
+    "exp_minus_i_omega_t",
+    "not_applicable_real_reference",
+}
+ALLOWED_MODAL_EIGENVALUE_MAPPINGS = {
+    "lambda_eq_i_omega",
+    "omega_rad_s_eq_gamma0_rad_s_per_A_m_times_effective_field_lambda_A_per_m",
+}
+ALLOWED_MODAL_ALGEBRAIC_FORMS = {
+    "reference_effective_field_generalized",
+    "linearized_llg_generalized",
+    "gyrotropic_generalized",
+}
 
 
 def fail(message: str) -> None:
@@ -406,6 +420,22 @@ def validate_mode_diagnostics_fields(
     payload_path: str,
     frequency_hz: float,
 ) -> None:
+    frequency_imag_hz = require_finite_number(
+        payload.get("frequency_imag_hz"),
+        f"{payload_path}.frequency_imag_hz",
+    )
+    phasor_convention = require_non_empty_string(
+        payload.get("phasor_convention"),
+        f"{payload_path}.phasor_convention",
+    )
+    if phasor_convention not in ALLOWED_MODAL_PHASOR_CONVENTIONS:
+        fail(f"{payload_path}.phasor_convention is invalid")
+    eigenvalue_mapping = require_non_empty_string(
+        payload.get("eigenvalue_mapping"),
+        f"{payload_path}.eigenvalue_mapping",
+    )
+    if eigenvalue_mapping not in ALLOWED_MODAL_EIGENVALUE_MAPPINGS:
+        fail(f"{payload_path}.eigenvalue_mapping is invalid")
     residual_absolute_l2 = require_finite_number(
         payload.get("residual_absolute_l2"),
         f"{payload_path}.residual_absolute_l2",
@@ -476,6 +506,37 @@ def validate_mode_diagnostics_fields(
             f"{payload_path}.tangent_leakage_mean_abs must be <= "
             f"{payload_path}.tangent_leakage_max_abs"
         )
+    if (
+        payload.get("damping_policy") == "include"
+        and phasor_convention == "exp_i_omega_t"
+    ):
+        if frequency_imag_hz < 0.0:
+            fail(
+                f"{payload_path}.frequency_imag_hz must be non-negative for "
+                "exp_i_omega_t damping"
+            )
+        damping_rate_hz = require_finite_number(
+            payload.get("damping_rate_hz"),
+            f"{payload_path}.damping_rate_hz",
+        )
+        linewidth_fwhm_hz = require_finite_number(
+            payload.get("linewidth_fwhm_hz"),
+            f"{payload_path}.linewidth_fwhm_hz",
+        )
+        if damping_rate_hz < 0.0:
+            fail(f"{payload_path}.damping_rate_hz must be non-negative")
+        if linewidth_fwhm_hz < 0.0:
+            fail(f"{payload_path}.linewidth_fwhm_hz must be non-negative")
+        require_close(
+            damping_rate_hz,
+            frequency_imag_hz,
+            f"{payload_path}.damping_rate_hz",
+        )
+        require_close(
+            linewidth_fwhm_hz,
+            2.0 * frequency_imag_hz,
+            f"{payload_path}.linewidth_fwhm_hz",
+        )
     require_close(
         omega_rad_s,
         TWO_PI * frequency_hz,
@@ -491,7 +552,7 @@ def validate_mode_summary(
     manifest_mode_paths: set[str],
     manifest_mode_resources: set[str],
     requested_window_hz: list[float] | None,
-) -> tuple[int, int, float, float, float]:
+) -> tuple[int, int, float, float, float, float]:
     raw_mode_index = require_non_negative_int(mode.get("raw_mode_index"), "mode.raw_mode_index")
     expected_field_id = mode_field_id(sample_index, raw_mode_index)
     expected_resource_key = mode_field_resource_key(expected_field_id)
@@ -505,7 +566,10 @@ def validate_mode_summary(
     require_frequency_inside_window(frequency_hz, requested_window_hz, "mode.frequency_hz")
     frequency_real_hz = require_finite_number(mode.get("frequency_real_hz"), "mode.frequency_real_hz")
     require_close(frequency_hz, frequency_real_hz, "mode.frequency_hz")
-    require_finite_number(mode.get("frequency_imag_hz"), "mode.frequency_imag_hz")
+    frequency_imag_hz = require_finite_number(
+        mode.get("frequency_imag_hz"),
+        "mode.frequency_imag_hz",
+    )
     angular_frequency_rad_per_s = require_finite_number(
         mode.get("angular_frequency_rad_per_s"),
         "mode.angular_frequency_rad_per_s",
@@ -605,13 +669,14 @@ def validate_mode_summary(
         raw_mode_index,
         frequency_hz,
         frequency_real_hz,
+        frequency_imag_hz,
         angular_frequency_rad_per_s,
     )
 
 
 def validate_eigen_summary(
     summary: dict,
-    known_modes: dict[tuple[int, int], tuple[float, float, float]],
+    known_modes: dict[tuple[int, int], tuple[float, float, float, float]],
     requested_window_hz: list[float] | None,
 ) -> None:
     diagnostics = summary.get("solver_diagnostics")
@@ -800,6 +865,37 @@ def validate_solver_provenance(
     *,
     require_production_shift_invert_window: bool,
 ) -> None:
+    algebraic_form = require_non_empty_string(
+        diagnostics.get("algebraic_form"),
+        "solver_diagnostics.algebraic_form",
+    )
+    if algebraic_form not in ALLOWED_MODAL_ALGEBRAIC_FORMS:
+        fail("solver_diagnostics.algebraic_form is invalid")
+    require_non_empty_string(
+        diagnostics.get("matrix_equation"),
+        "solver_diagnostics.matrix_equation",
+    )
+    phasor_convention = require_non_empty_string(
+        diagnostics.get("phasor_convention"),
+        "solver_diagnostics.phasor_convention",
+    )
+    if phasor_convention not in ALLOWED_MODAL_PHASOR_CONVENTIONS:
+        fail("solver_diagnostics.phasor_convention is invalid")
+    diagnostics_mapping = require_non_empty_string(
+        diagnostics.get("eigenvalue_mapping"),
+        "solver_diagnostics.eigenvalue_mapping",
+    )
+    if (
+        diagnostics_mapping not in ALLOWED_MODAL_EIGENVALUE_MAPPINGS
+        and "gamma0_rad_s_per_A_m" not in diagnostics_mapping
+    ):
+        fail("solver_diagnostics.eigenvalue_mapping is invalid")
+    require_non_empty_string(
+        diagnostics.get("frequency_mapping"),
+        "solver_diagnostics.frequency_mapping",
+    )
+    if not isinstance(diagnostics.get("production_gyrotropic_mapping"), bool):
+        fail("solver_diagnostics.production_gyrotropic_mapping must be boolean")
     solver_model = require_non_empty_string(
         diagnostics.get("solver_model"),
         "solver_diagnostics.solver_model",
@@ -861,7 +957,7 @@ def validate_solver_provenance(
 
 def validate_dispersion(
     root: Path,
-    known_modes: dict[tuple[int, int], tuple[float, float, float]],
+    known_modes: dict[tuple[int, int], tuple[float, float, float, float]],
 ) -> None:
     path = root / "eigen/dispersion.csv"
     require_file(path)
@@ -903,7 +999,7 @@ def validate_dispersion(
             float(row["omega_rad_s"]),
             f"dispersion row {row_index}.omega_rad_s",
         )
-        known_frequency_hz, _, known_angular_frequency = known_modes[mode_key]
+        known_frequency_hz, _, known_frequency_imag_hz, known_angular_frequency = known_modes[mode_key]
         require_close(
             frequency_hz,
             known_frequency_hz,
@@ -915,6 +1011,19 @@ def validate_dispersion(
             f"dispersion row {row_index}.omega_rad_s",
             absolute_tolerance=1.0e-3,
         )
+        line_width_hz = row.get("line_width_hz", "").strip()
+        if line_width_hz:
+            linewidth = require_finite_number(
+                float(line_width_hz),
+                f"dispersion row {row_index}.line_width_hz",
+            )
+            if linewidth < 0.0:
+                fail(f"dispersion row {row_index}.line_width_hz must be non-negative")
+            require_close(
+                linewidth,
+                2.0 * known_frequency_imag_hz,
+                f"dispersion row {row_index}.line_width_hz",
+            )
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -1021,7 +1130,7 @@ def main(argv: list[str] | None = None) -> int:
 
     samples = require_object_list(spectrum.get("samples"), "spectrum.samples")
     require_equal(spectrum.get("sample_count"), len(samples), "spectrum.sample_count")
-    known_modes: dict[tuple[int, int], tuple[float, float, float]] = {}
+    known_modes: dict[tuple[int, int], tuple[float, float, float, float]] = {}
     for sample_position, sample in enumerate(samples):
         sample_index = require_non_negative_int(
             sample.get("sample_index"),
@@ -1035,6 +1144,7 @@ def main(argv: list[str] | None = None) -> int:
                 known_raw_mode_index,
                 known_frequency_hz,
                 known_frequency_real_hz,
+                known_frequency_imag_hz,
                 known_angular_frequency,
             ) = validate_mode_summary(
                 root,
@@ -1047,6 +1157,7 @@ def main(argv: list[str] | None = None) -> int:
             known_modes[(known_sample_index, known_raw_mode_index)] = (
                 known_frequency_hz,
                 known_frequency_real_hz,
+                known_frequency_imag_hz,
                 known_angular_frequency,
             )
     if not known_modes:
@@ -1079,6 +1190,7 @@ def main(argv: list[str] | None = None) -> int:
                 (
                     known_frequency_hz,
                     known_frequency_real_hz,
+                    _known_frequency_imag_hz,
                     known_angular_frequency,
                 ) = known_modes[branch_mode_key]
                 require_close(

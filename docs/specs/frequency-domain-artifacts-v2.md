@@ -86,6 +86,9 @@ Each mode summary must include:
 - `angular_frequency_rad_per_s`,
 - `omega_rad_s`,
 - eigenvalue real and imaginary components,
+- `phasor_convention = "exp_i_omega_t"` unless a different convention is
+  explicitly documented by the solver path,
+- `eigenvalue_mapping`, for example `lambda_eq_i_omega`,
 - `norm`,
 - `max_amplitude`,
 - `residual_norm`,
@@ -100,6 +103,21 @@ Each mode summary must include:
 - `mu0_T_m_per_A`,
 - `dominant_polarization`,
 - `k_vector`.
+
+For damped modal artifacts using `phasor_convention = "exp_i_omega_t"`,
+`frequency_imag_hz` is the positive damping rate `Gamma/(2*pi)` for a decaying
+mode:
+
+```text
+omega_complex = omega_r + i Gamma
+exp(i omega_complex t) = exp(i omega_r t - Gamma t)
+damping_rate_hz = frequency_imag_hz
+linewidth_fwhm_hz = 2 * frequency_imag_hz
+```
+
+A damped `exp_i_omega_t` mode must not publish a negative
+`frequency_imag_hz`. If a solver uses `exp(-i omega t)`, the artifact must
+state that phasor convention and keep the sign mapping self-consistent.
 
 ## branches.v2.json
 
@@ -138,6 +156,8 @@ sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_m
 `branch_id` may be empty only when no branch tracking artifact exists.
 `residual_norm` may be empty only for solver paths that explicitly report the
 diagnostic as unavailable.
+When the modal payload has positive `frequency_imag_hz`, `line_width_hz` is
+`2 * frequency_imag_hz`, matching `linewidth_fwhm_hz`.
 
 ## modes/sample_XXXX/mode_YYYY.json
 
@@ -288,6 +308,22 @@ Reference driven manifest:
 Modal solver diagnostics live at `eigen/diagnostics/solver.v1.json` and must
 describe the modal `modal_eigen` solve only.
 
+All modal diagnostics must publish the algebra/eigenvalue contract used by the
+artifact writer:
+
+- `algebraic_form`, for example `reference_effective_field_generalized` for the
+  dense reference lane or `gyrotropic_generalized` for a future production
+  gyrotropic pencil;
+- `matrix_equation`, for example `K u = lambda M u`;
+- `phasor_convention`, using the modal lane's documented convention or
+  `not_applicable_real_reference` for the current real effective-field
+  reference lane;
+- `eigenvalue_mapping`, for example
+  `omega_rad_s = gamma0_rad_s_per_A_m * max(lambda_A_per_m, 0)` for the
+  current reference lane or `lambda_eq_i_omega` for the production LLG lane;
+- `frequency_mapping`;
+- `production_gyrotropic_mapping` as a boolean.
+
 When the modal target is `frequency_window`, solver diagnostics must also
 publish the resolved window search contract:
 
@@ -309,6 +345,35 @@ The allowed statuses are `not_certified`, `certified`,
 
 Driven solver diagnostics live at `response/diagnostics/solver.v1.json` and
 must describe the driven `driven_response` solve only.
+
+## Response observable units
+
+Frequency-domain response writers must distinguish dimensionless
+magnetization perturbation from physical magnetization perturbation:
+
+```text
+delta_M = Ms * delta_m
+```
+
+If a susceptibility-like value is exported as `delta_m / h_drive`, it has units
+`m/A` and must be labeled as a normalized response, not as dimensionless SI
+susceptibility. Dimensionless magnetic susceptibility uses:
+
+```text
+chi = delta_M / h_drive = Ms * delta_m / h_drive
+```
+
+Absorbed power density for `h_drive` in `A/m` and dimensionless `delta_m`
+requires the `Ms` factor:
+
+```text
+p_abs = sgn * 0.5 * mu0 * Ms * omega * Im(conj(h_drive) dot delta_m)
+```
+
+The `sgn` is fixed by the manifest `phase_convention`; for the canonical
+`exp_i_omega_t` convention, validation must prove positive absorbed power near
+resonance for positive Gilbert damping. Response artifacts must publish units
+and provenance for every susceptibility and absorbed-power field.
 
 ## response/magnetic_response_sweep.v1.json
 
@@ -348,9 +413,20 @@ Each point must include:
 - `component_response_phase`,
 - `susceptibility_tensor` as `[re, im]` pairs,
 - `susceptibility_tensor_provenance`, including whether the value is a full
-  tensor or a drive-projected scalar response,
+  tensor or a drive-projected scalar response, and whether it represents
+  `delta_M / h_drive` or a normalized `delta_m / h_drive` response. Current
+  native response proxy artifacts must set
+  `response_quantity = "delta_m_over_h_drive"`,
+  `response_units = "m/A"`, `dimensionless_si_susceptibility = false`,
+  `requires_ms_for_chi_si = true`, and `ms_factor_applied = false` until the
+  writer emits a true `delta_M / h_drive` SI susceptibility,
 - `absorbed_power_density`,
-- `absorbed_power_density_provenance`,
+- `absorbed_power_density_provenance`, including whether the value is a
+  physical `W/m^3` power density or a drive-projected proxy. Current native
+  response proxy artifacts must set `physical_power_density = false`,
+  `units = "proxy_not_W_per_m3"`, `requires_mu0_ms_factor = true`, and
+  `ms_factor_applied = false` until the writer applies the `mu0 * Ms` factor
+  and passes the positive-absorption validation gate,
 - `residual_l2_norm`,
 - `relative_residual_l2_norm`,
 - `tangent_leakage` diagnostic status,
@@ -411,6 +487,7 @@ Each point should include:
 - `max_response_amplitude` or `response_amplitude`,
 - `phase_rad`,
 - `absorbed_power_density`,
+- `observable_units`,
 - `relative_residual_l2_norm`,
 - `excitation_provenance`,
 - `sweep_reuse`,
@@ -462,6 +539,13 @@ Required fields for native FEM production response diagnostics:
 - `max_abs_response`,
 - `residual_l2_norm`,
 - `relative_residual_l2_norm`.
+- `matrix_form`, one of `iomega_B_minus_L`, `K_plus_iomega_G`,
+  `coupled_demag_block`, or a documented compatibility value,
+- `phasor_convention`,
+- `ksp_type`,
+- `pc_type`,
+- `iterations`,
+- `converged_reason`.
 
 For native FEM production GPU response, `requested_execution_lane` and
 `resolved_execution_lane` must both be `"production_gpu"` when the GPU solve
@@ -494,6 +578,20 @@ For non-periodic response runs, writers may either omit the `static_periodic_*`
 fields or set `static_periodic_projection = false` with zero pair count and
 finite zero mismatches. Consumers must not interpret these fields as nonzero-k
 Floquet/Bloch support.
+
+When a native FEM response artifact reports `floquet_phase_projection = true`,
+the solver diagnostics and manifest diagnostics must also include:
+
+- `basis_transport_policy`, one of `tangent_frame_identity` or
+  `tangent_frame_transport` for tangent-coordinate Floquet response,
+- `floquet_tangent_frame_max_mismatch`,
+- `floquet_tangent_transport_max_nonunitarity`.
+
+The current no-demag Floquet phase-projection slice is identity-frame only:
+`basis_transport_policy = "tangent_frame_identity"` is legal only when
+`floquet_tangent_frame_max_mismatch` is below the verifier tolerance. A backend
+that cannot satisfy this identity-frame precondition must reject the request
+instead of applying scalar phase-only transport.
 
 ## response/cancel_requested.v1.json
 
@@ -609,6 +707,27 @@ visualization payload metadata is:
 }
 ```
 
+All frequency-domain field payload metadata, whether modal or driven, must
+include enough semantic information for readers to avoid guessing from byte
+lengths or labels:
+
+```text
+field_id
+source_family = analysis/eigen | analysis/frequency-response
+quantity = delta_m | delta_M | h_drive | phi_demag | H_demag
+value_kind = complex_vector | complex_scalar | real_scalar
+units
+normalization
+mesh_id
+fe_space
+basis = global_xyz | tangent_components | reconstructed_xyz
+complex_layout = real_imag | amplitude_phase
+component_order
+storage_format
+zarr_path
+revision
+```
+
 `zarr_array_path` identifies the logical Zarr array directory. `zarr_chunk_path`
 and `field_payload_path` identify the concrete chunk read by the binary
 data-plane resource. JSON resources must expose both so UI inspectors can show
@@ -676,6 +795,22 @@ descriptors, not bare payload paths:
 must match the corresponding chunk-level `response_field_payload_paths[]` entry
 in `magnetic_response_sweep.v2.json`. The array directory remains available via
 `zarr_array_path` for storage inspection and provenance.
+
+## response/derived_modes/fmr_peak_mode.v1.json
+
+A response-derived peak mode is a driven-response postprocessing product, not
+an eigenmode. Its artifact must state:
+
+```text
+source = driven_response_peak
+canonical_product = frequency_response
+linked_frequency_index
+not_an_eigenmode = true
+```
+
+UI and API surfaces may present it as a response peak shape or candidate mode,
+but must not merge it into `eigen/spectrum.v2.json`, branch tracking, modal
+normalization, or eigenfrequency capability claims.
 
 ## periodic_pairs.v1.json
 

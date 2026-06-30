@@ -27,3 +27,27 @@ ensure_runtime_soname_link() {
   rm -rf -- "$soname"
   ln -sfn "$resolved_name" "$soname"
 }
+
+copy_runtime_resolved_dependency_pair() {
+  local requested="$1"
+  local resolved="$2"
+  local dest_dir="$3"
+  local requested_name
+  local resolved_name
+
+  requested_name="$(basename "$requested")"
+  resolved_name="$(basename "$resolved")"
+
+  if [ "$requested_name" = "$resolved_name" ]; then
+    copy_runtime_entry_replace "$resolved" "$dest_dir"
+    return 0
+  fi
+
+  copy_runtime_entry_replace "$resolved" "$dest_dir"
+  if [ -L "$requested" ]; then
+    rm -rf -- "$dest_dir/$requested_name"
+    ln -sfn "$resolved_name" "$dest_dir/$requested_name"
+  elif [ -e "$requested" ]; then
+    copy_runtime_entry_replace "$requested" "$dest_dir"
+  fi
+}

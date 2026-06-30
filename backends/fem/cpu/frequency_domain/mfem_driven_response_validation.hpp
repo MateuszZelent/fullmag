@@ -39,6 +39,7 @@ struct MfemDrivenResponseValidationProblem {
 };
 
 struct MfemDrivenResponseValidationResult {
+    static constexpr std::uint64_t gmres_relative_residual_history_capacity = 64;
     std::uint64_t completed_frequency_count = 0;
     std::uint64_t response_dof_count = 0;
     std::uint64_t response_frequency_count = 0;
@@ -49,6 +50,7 @@ struct MfemDrivenResponseValidationResult {
     std::uint64_t total_iteration_count = 0;
     std::uint64_t max_iterations_for_frequency = 0;
     std::uint64_t restart_iterations_for_frequency = 0;
+    std::uint64_t progress_interval_iterations = 1;
     double solver_relative_tolerance = 0.0;
     double rhs_l2_norm = 0.0;
     double initial_residual_l2_norm = 0.0;
@@ -59,10 +61,32 @@ struct MfemDrivenResponseValidationResult {
     std::uint64_t minimum_tracked_relative_residual_iteration = 0;
     double last_tracked_relative_residual_l2_norm = 0.0;
     double last_recomputed_relative_residual_l2_norm = 0.0;
+    double rhs_real_l2_norm = 0.0;
+    double rhs_imag_l2_norm = 0.0;
+    double residual_real_l2_norm = 0.0;
+    double residual_imag_l2_norm = 0.0;
+    double response_real_l2_norm = 0.0;
+    double response_imag_l2_norm = 0.0;
+    double rhs_delta_m_l2_norm = 0.0;
+    double rhs_delta_phi_l2_norm = 0.0;
+    double residual_delta_m_l2_norm = 0.0;
+    double residual_delta_phi_l2_norm = 0.0;
+    double relative_residual_delta_m_l2_norm = 0.0;
+    double relative_residual_delta_phi_l2_norm = 0.0;
+    double response_delta_m_l2_norm = 0.0;
+    double response_delta_phi_l2_norm = 0.0;
+    bool coupled_block_norms_available = false;
+    char coupled_residual_partition_status[64] = "";
+    std::uint64_t gmres_relative_residual_history_count = 0;
+    double gmres_relative_residual_history[gmres_relative_residual_history_capacity]{};
     bool demag_tangent_linearity_check = false;
     double demag_tangent_additivity_max_abs_error = 0.0;
     double demag_tangent_homogeneity_max_abs_error = 0.0;
+    double demag_tangent_additivity_relative_error = 0.0;
+    double demag_tangent_homogeneity_relative_error = 0.0;
     double residual_growth_factor = 0.0;
+    bool right_preconditioner_applied = false;
+    char krylov_preconditioner[64] = "none";
     char error_message[128] = "";
 };
 

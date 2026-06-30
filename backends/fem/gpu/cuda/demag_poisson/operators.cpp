@@ -124,6 +124,137 @@ double scalar_ms_value(const Context &ctx, uint32_t node)
         ctx.material_fields.material.saturation_magnetisation);
 }
 
+#if FULLMAG_HAS_MFEM_STACK
+uint64_t periodic_scalar_row_count(const Context &ctx)
+{
+    return ctx.mesh.periodic_reduced_node.empty()
+        ? ctx.mesh.n_nodes
+        : ctx.mesh.periodic_reduced_node_count;
+}
+
+uint32_t periodic_scalar_column(const Context &ctx, uint32_t node)
+{
+    if (ctx.mesh.periodic_reduced_node.empty()) {
+        return node;
+    }
+    return ctx.mesh.periodic_reduced_node[static_cast<size_t>(node)];
+}
+
+bool copy_sparse_matrix_to_device_csr(
+    const mfem::SparseMatrix &matrix,
+    uint64_t rows,
+    DeviceCsrScalar &op,
+    const char *label,
+    std::string &error)
+{
+    if (matrix.Height() != static_cast<int>(rows) ||
+        matrix.Width() != static_cast<int>(rows)) {
+        error = std::string(label) + " shape does not match scalar potential DOFs";
+        return false;
+    }
+    const int *row_offsets = matrix.GetI();
+    const int *col_indices = matrix.GetJ();
+    const double *values = matrix.GetData();
+    if (row_offsets == nullptr) {
+        error = std::string(label) + " CSR row offsets are null";
+        return false;
+    }
+    const int nnz = row_offsets[static_cast<int>(rows)];
+    if (nnz < 0 || static_cast<uint64_t>(nnz) > std::numeric_limits<uint32_t>::max()) {
+        error = std::string(label) + " exceeds 32-bit CSR capacity";
+        return false;
+    }
+    if (nnz > 0 && (col_indices == nullptr || values == nullptr)) {
+        error = std::string(label) + " CSR data are null";
+        return false;
+    }
+    op.rows = rows;
+    op.nnz = static_cast<uint64_t>(nnz);
+    op.row_offsets.resize(static_cast<size_t>(rows) + 1u);
+    for (uint64_t row = 0; row <= rows; ++row) {
+        const int offset = row_offsets[static_cast<int>(row)];
+        if (offset < 0 || static_cast<uint64_t>(offset) > static_cast<uint64_t>(nnz)) {
+            error = std::string(label) + " row offset is invalid";
+            return false;
+        }
+        op.row_offsets[static_cast<size_t>(row)] = static_cast<uint32_t>(offset);
+    }
+    op.col_indices.resize(static_cast<size_t>(nnz));
+    op.values.resize(static_cast<size_t>(nnz));
+    for (int entry = 0; entry < nnz; ++entry) {
+        if (col_indices[entry] < 0 || static_cast<uint64_t>(col_indices[entry]) >= rows) {
+            error = std::string(label) + " column index is invalid";
+            return false;
+        }
+        op.col_indices[static_cast<size_t>(entry)] =
+            static_cast<uint32_t>(col_indices[entry]);
+        op.values[static_cast<size_t>(entry)] = values[entry];
+    }
+    return true;
+}
+
+bool reduce_sparse_matrix_by_periodic_classes(
+    const mfem::SparseMatrix &matrix,
+    const Context &ctx,
+    DeviceCsrScalar &op,
+    const char *label,
+    std::string &error)
+{
+    const uint64_t full_rows = ctx.mesh.n_nodes;
+    const uint64_t reduced_rows = periodic_scalar_row_count(ctx);
+    if (matrix.Height() != static_cast<int>(full_rows) ||
+        matrix.Width() != static_cast<int>(full_rows)) {
+        error = std::string(label) + " full matrix shape does not match mesh nodes";
+        return false;
+    }
+    if (reduced_rows == 0 || reduced_rows > std::numeric_limits<uint32_t>::max()) {
+        error = std::string(label) + " periodic reduced row count is invalid";
+        return false;
+    }
+
+    std::vector<std::vector<std::pair<uint32_t, double>>> rows(
+        static_cast<size_t>(reduced_rows));
+    mfem::Array<int> cols;
+    mfem::Vector vals;
+    for (uint64_t row = 0; row < full_rows; ++row) {
+        const uint32_t reduced_row =
+            periodic_scalar_column(ctx, static_cast<uint32_t>(row));
+        matrix.GetRow(static_cast<int>(row), cols, vals);
+        for (int k = 0; k < cols.Size(); ++k) {
+            if (cols[k] < 0 || static_cast<uint64_t>(cols[k]) >= full_rows) {
+                error = std::string(label) + " full matrix column index is invalid";
+                return false;
+            }
+            const uint32_t col = static_cast<uint32_t>(cols[k]);
+            const uint32_t reduced_col = periodic_scalar_column(ctx, col);
+            rows[static_cast<size_t>(reduced_row)].push_back({reduced_col, vals[k]});
+        }
+    }
+
+    uint64_t nnz = 0;
+    op.rows = reduced_rows;
+    op.row_offsets.assign(static_cast<size_t>(reduced_rows) + 1u, 0u);
+    for (uint64_t row = 0; row < reduced_rows; ++row) {
+        nnz += rows[static_cast<size_t>(row)].size();
+        if (nnz > std::numeric_limits<uint32_t>::max()) {
+            error = std::string(label) + " periodic reduced CSR exceeds 32-bit capacity";
+            return false;
+        }
+        op.row_offsets[static_cast<size_t>(row) + 1u] = static_cast<uint32_t>(nnz);
+    }
+    op.nnz = nnz;
+    op.col_indices.reserve(static_cast<size_t>(nnz));
+    op.values.reserve(static_cast<size_t>(nnz));
+    for (const auto &row_entries : rows) {
+        for (const auto &entry : row_entries) {
+            op.col_indices.push_back(entry.first);
+            op.values.push_back(entry.second);
+        }
+    }
+    return true;
+}
+#endif
+
 } // namespace
 
 #if FULLMAG_HAS_MFEM_STACK
@@ -139,35 +270,43 @@ bool build_p1_demag_operators(Context &ctx, GpuDemagPoissonWorkspace &workspace,
         error = "strict FEM GPU demag supports P1 tetrahedral elements only";
         return false;
     }
-    if (!ctx.mesh.periodic_node_pairs.empty()) {
-        error = "strict FEM GPU demag does not support periodic Poisson demag yet";
-        return false;
-    }
     if (ctx.demag.realization == FULLMAG_FEM_DEMAG_FREDKIN_KOEHLER) {
         error = "strict FEM GPU demag does not support Fredkin-Koehler FEM/BEM demag";
         return false;
     }
 
-    const uint64_t rows = static_cast<uint64_t>(fes->GetTrueVSize());
-    if (rows != ctx.mesh.n_nodes || rows > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+    const uint64_t full_rows = static_cast<uint64_t>(fes->GetTrueVSize());
+    if (full_rows != ctx.mesh.n_nodes ||
+        full_rows > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
         error = "strict FEM GPU demag requires serial P1 true DOFs to match mesh nodes";
+        return false;
+    }
+    const uint64_t rows = periodic_scalar_row_count(ctx);
+    if (rows == 0 || rows > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+        error = "strict FEM GPU periodic demag reduced scalar space is invalid";
+        return false;
+    }
+    if (!ctx.mesh.periodic_node_pairs.empty() &&
+        (ctx.mesh.periodic_reduced_node.size() != static_cast<size_t>(full_rows) ||
+            ctx.mesh.periodic_reduced_node_count == 0)) {
+        error = "strict FEM GPU periodic demag requires a valid periodic reduced-node map";
         return false;
     }
 
     workspace.rhs.rows = rows;
-    workspace.recovery_x.rows = rows;
-    workspace.recovery_y.rows = rows;
-    workspace.recovery_z.rows = rows;
+    workspace.recovery_x.rows = full_rows;
+    workspace.recovery_y.rows = full_rows;
+    workspace.recovery_z.rows = full_rows;
     workspace.rhs.row_offsets.assign(static_cast<size_t>(rows) + 1u, 0u);
-    workspace.recovery_x.row_offsets.assign(static_cast<size_t>(rows) + 1u, 0u);
-    workspace.recovery_y.row_offsets.assign(static_cast<size_t>(rows) + 1u, 0u);
-    workspace.recovery_z.row_offsets.assign(static_cast<size_t>(rows) + 1u, 0u);
+    workspace.recovery_x.row_offsets.assign(static_cast<size_t>(full_rows) + 1u, 0u);
+    workspace.recovery_y.row_offsets.assign(static_cast<size_t>(full_rows) + 1u, 0u);
+    workspace.recovery_z.row_offsets.assign(static_cast<size_t>(full_rows) + 1u, 0u);
 
     std::vector<std::vector<std::array<double, 4>>> rhs_rows(static_cast<size_t>(rows));
-    std::vector<std::vector<std::pair<uint32_t, double>>> rec_x(static_cast<size_t>(rows));
-    std::vector<std::vector<std::pair<uint32_t, double>>> rec_y(static_cast<size_t>(rows));
-    std::vector<std::vector<std::pair<uint32_t, double>>> rec_z(static_cast<size_t>(rows));
-    std::vector<double> recovery_weight(static_cast<size_t>(rows), 0.0);
+    std::vector<std::vector<std::pair<uint32_t, double>>> rec_x(static_cast<size_t>(full_rows));
+    std::vector<std::vector<std::pair<uint32_t, double>>> rec_y(static_cast<size_t>(full_rows));
+    std::vector<std::vector<std::pair<uint32_t, double>>> rec_z(static_cast<size_t>(full_rows));
+    std::vector<double> recovery_weight(static_cast<size_t>(full_rows), 0.0);
 
     mfem::Array<int> dofs;
     mfem::DenseMatrix dshape;
@@ -194,7 +333,7 @@ bool build_p1_demag_operators(Context &ctx, GpuDemagPoissonWorkspace &workspace,
         std::array<double, 4> signs{};
         for (int i = 0; i < 4; ++i) {
             const int gdof = signed_dof_index(dofs[i]);
-            if (gdof < 0 || static_cast<uint64_t>(gdof) >= rows) {
+            if (gdof < 0 || static_cast<uint64_t>(gdof) >= full_rows) {
                 error = "strict FEM GPU demag found an out-of-range P1 DOF";
                 return false;
             }
@@ -213,7 +352,8 @@ bool build_p1_demag_operators(Context &ctx, GpuDemagPoissonWorkspace &workspace,
                 ms_sum += ms_nodes[static_cast<size_t>(k)];
             }
             for (int i = 0; i < 4; ++i) {
-                const uint32_t row = nodes[static_cast<size_t>(i)];
+                const uint32_t row =
+                    periodic_scalar_column(ctx, nodes[static_cast<size_t>(i)]);
                 for (int k = 0; k < 4; ++k) {
                     const uint32_t col = nodes[static_cast<size_t>(k)];
                     const double coeff = ctx.material_fields.Ms_field.empty()
@@ -264,12 +404,13 @@ bool build_p1_demag_operators(Context &ctx, GpuDemagPoissonWorkspace &workspace,
             const double weight = (volume / 4.0) / normalizer;
             for (int k = 0; k < 4; ++k) {
                 const uint32_t col = nodes[static_cast<size_t>(k)];
+                const uint32_t scalar_col = periodic_scalar_column(ctx, col);
                 rec_x[static_cast<size_t>(row)].push_back(
-                    {col, -signs[static_cast<size_t>(k)] * dshape(k, 0) * weight});
+                    {scalar_col, -signs[static_cast<size_t>(k)] * dshape(k, 0) * weight});
                 rec_y[static_cast<size_t>(row)].push_back(
-                    {col, -signs[static_cast<size_t>(k)] * dshape(k, 1) * weight});
+                    {scalar_col, -signs[static_cast<size_t>(k)] * dshape(k, 1) * weight});
                 rec_z[static_cast<size_t>(row)].push_back(
-                    {col, -signs[static_cast<size_t>(k)] * dshape(k, 2) * weight});
+                    {scalar_col, -signs[static_cast<size_t>(k)] * dshape(k, 2) * weight});
             }
         }
     }
@@ -278,14 +419,19 @@ bool build_p1_demag_operators(Context &ctx, GpuDemagPoissonWorkspace &workspace,
     uint64_t rec_nnz = 0;
     for (uint64_t row = 0; row < rows; ++row) {
         rhs_nnz += rhs_rows[static_cast<size_t>(row)].size();
-        rec_nnz += rec_x[static_cast<size_t>(row)].size();
-        if (rhs_nnz > std::numeric_limits<uint32_t>::max() ||
-            rec_nnz > std::numeric_limits<uint32_t>::max()) {
+        if (rhs_nnz > std::numeric_limits<uint32_t>::max()) {
             error = "strict FEM GPU demag CSR operator exceeds 32-bit index capacity";
             return false;
         }
         workspace.rhs.row_offsets[static_cast<size_t>(row) + 1u] =
             static_cast<uint32_t>(rhs_nnz);
+    }
+    for (uint64_t row = 0; row < full_rows; ++row) {
+        rec_nnz += rec_x[static_cast<size_t>(row)].size();
+        if (rec_nnz > std::numeric_limits<uint32_t>::max()) {
+            error = "strict FEM GPU demag recovery CSR operator exceeds 32-bit index capacity";
+            return false;
+        }
         workspace.recovery_x.row_offsets[static_cast<size_t>(row) + 1u] =
             static_cast<uint32_t>(rec_nnz);
         workspace.recovery_y.row_offsets[static_cast<size_t>(row) + 1u] =
@@ -332,49 +478,23 @@ bool build_p1_demag_operators(Context &ctx, GpuDemagPoissonWorkspace &workspace,
         auto *bdr_mass =
             static_cast<mfem::BilinearForm *>(ctx.poisson_demag.robin_boundary_mass);
         const mfem::SparseMatrix &matrix = bdr_mass->SpMat();
-        if (matrix.Height() != static_cast<int>(rows) ||
-            matrix.Width() != static_cast<int>(rows)) {
-            error = "strict FEM GPU demag Robin boundary mass shape does not match potential DOFs";
-            return false;
-        }
-        const int *row_offsets = matrix.GetI();
-        const int *col_indices = matrix.GetJ();
-        const double *values = matrix.GetData();
-        if (row_offsets == nullptr) {
-            error = "strict FEM GPU demag Robin boundary mass CSR row offsets are null";
-            return false;
-        }
-        const int nnz = row_offsets[static_cast<int>(rows)];
-        if (nnz < 0 || static_cast<uint64_t>(nnz) > std::numeric_limits<uint32_t>::max()) {
-            error = "strict FEM GPU demag Robin boundary mass exceeds 32-bit CSR capacity";
-            return false;
-        }
-        if (nnz > 0 && (col_indices == nullptr || values == nullptr)) {
-            error = "strict FEM GPU demag Robin boundary mass CSR data are null";
-            return false;
-        }
-        workspace.robin_boundary_mass.rows = rows;
-        workspace.robin_boundary_mass.nnz = static_cast<uint64_t>(nnz);
-        workspace.robin_boundary_mass.row_offsets.resize(static_cast<size_t>(rows) + 1u);
-        for (uint64_t row = 0; row <= rows; ++row) {
-            const int offset = row_offsets[static_cast<int>(row)];
-            if (offset < 0 || static_cast<uint64_t>(offset) > static_cast<uint64_t>(nnz)) {
-                error = "strict FEM GPU demag Robin boundary mass row offset is invalid";
+        const char *label = "strict FEM GPU demag Robin boundary mass";
+        if (ctx.mesh.periodic_reduced_node.empty()) {
+            if (!copy_sparse_matrix_to_device_csr(
+                    matrix,
+                    rows,
+                    workspace.robin_boundary_mass,
+                    label,
+                    error)) {
                 return false;
             }
-            workspace.robin_boundary_mass.row_offsets[static_cast<size_t>(row)] =
-                static_cast<uint32_t>(offset);
-        }
-        workspace.robin_boundary_mass.col_indices.resize(static_cast<size_t>(nnz));
-        workspace.robin_boundary_mass.values.resize(static_cast<size_t>(nnz));
-        for (int entry = 0; entry < nnz; ++entry) {
-            if (col_indices[entry] < 0 || static_cast<uint64_t>(col_indices[entry]) >= rows) {
-                error = "strict FEM GPU demag Robin boundary mass column index is invalid";
-                return false;
-            }
-            workspace.robin_boundary_mass.col_indices[static_cast<size_t>(entry)] =
-                static_cast<uint32_t>(col_indices[entry]);
-            workspace.robin_boundary_mass.values[static_cast<size_t>(entry)] = values[entry];
+        } else if (!reduce_sparse_matrix_by_periodic_classes(
+                matrix,
+                ctx,
+                workspace.robin_boundary_mass,
+                label,
+                error)) {
+            return false;
         }
     }
 
@@ -382,7 +502,8 @@ bool build_p1_demag_operators(Context &ctx, GpuDemagPoissonWorkspace &workspace,
     workspace.ess_tdofs.reserve(ctx.poisson_demag.ess_tdof_list.size());
     for (const int tdof : ctx.poisson_demag.ess_tdof_list) {
         if (tdof >= 0) {
-            workspace.ess_tdofs.push_back(static_cast<uint32_t>(tdof));
+            workspace.ess_tdofs.push_back(
+                periodic_scalar_column(ctx, static_cast<uint32_t>(tdof)));
         }
     }
     return true;

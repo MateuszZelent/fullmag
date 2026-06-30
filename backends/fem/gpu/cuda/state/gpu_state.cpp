@@ -61,6 +61,7 @@ void reset_metadata(FemGpuState &state)
     state.mesh_metrics.node_count = 0;
     state.mesh_metrics.device_bytes = 0;
     state.mesh_regions.node_count = 0;
+    state.mesh_regions.has_periodic_reduced_nodes = false;
     state.magnetoelastic.strain_voigt_len = 0;
     state.magnetoelastic.strain_uploaded = false;
     state.mesh_geometry.element_count = 0;

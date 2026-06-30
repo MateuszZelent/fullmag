@@ -51,8 +51,17 @@ if FMR_EQUILIBRIUM_SOURCE not in {"relax", "provided"}:
     raise ValueError("FULLMAG_FMR_EQUILIBRIUM_SOURCE must be 'relax' or 'provided'")
 FROZEN_MAGNETIC_SUBMESH_SOURCE = env_str("FULLMAG_FMR_FROZEN_MAGNETIC_SUBMESH_SOURCE", "")
 FROZEN_MAGNETIC_AIR_MESH_SOURCE = env_str("FULLMAG_FMR_FROZEN_MAGNETIC_AIR_MESH_SOURCE", "")
+SUPERCELL_REPEAT_X = env_int("FULLMAG_FMR_SUPERCELL_REPEAT_X", 1)
+SUPERCELL_REPEAT_Y = env_int("FULLMAG_FMR_SUPERCELL_REPEAT_Y", 1)
+if SUPERCELL_REPEAT_X <= 0 or SUPERCELL_REPEAT_Y <= 0:
+    raise ValueError("FULLMAG_FMR_SUPERCELL_REPEAT_X/Y must be positive integers")
 
-FILM_SIZE = (200 * NM, 200 * NM, 10 * NM)
+UNIT_CELL_SIZE = (200 * NM, 200 * NM, 10 * NM)
+FILM_SIZE = (
+    UNIT_CELL_SIZE[0] * SUPERCELL_REPEAT_X,
+    UNIT_CELL_SIZE[1] * SUPERCELL_REPEAT_Y,
+    UNIT_CELL_SIZE[2],
+)
 AIRBOX_THICKNESS = env_float("FULLMAG_FMR_AIRBOX_THICKNESS_NM", 90.0) * NM
 if AIRBOX_THICKNESS <= FILM_SIZE[2]:
     raise ValueError("FULLMAG_FMR_AIRBOX_THICKNESS_NM must exceed the 10 nm film thickness")
@@ -116,6 +125,53 @@ PERIODIC_PAIR_IDS = ["x_faces", "y_faces"]
 PERIODIC_BC = fm.PeriodicBC(PERIODIC_PAIR_IDS)
 
 
+def lattice_offsets(repeat: int, pitch: float) -> list[float]:
+    center = 0.5 * (repeat - 1)
+    return [(index - center) * pitch for index in range(repeat)]
+
+
+def hole_centers() -> list[tuple[float, float]]:
+    return [
+        (x, y)
+        for x in lattice_offsets(SUPERCELL_REPEAT_X, UNIT_CELL_SIZE[0])
+        for y in lattice_offsets(SUPERCELL_REPEAT_Y, UNIT_CELL_SIZE[1])
+    ]
+
+
+def translated_cylinder(radius: float, height: float, center: tuple[float, float], name: str):
+    cylinder = fm.Cylinder(radius=radius, height=height, name=name)
+    if center == (0.0, 0.0):
+        return cylinder
+    return cylinder.translate((center[0], center[1], 0.0))
+
+
+def union_geometries(geometries: list[object]):
+    if not geometries:
+        raise ValueError("supercell antidot geometry requires at least one hole")
+    current = geometries[0]
+    for geometry in geometries[1:]:
+        current = current + geometry
+    return current
+
+
+def periodic_antidot_geometry():
+    centers = hole_centers()
+    holes = [
+        translated_cylinder(
+            HOLE_RADIUS,
+            FILM_SIZE[2],
+            center,
+            "central_hole" if len(centers) == 1 else f"hole_{index}",
+        )
+        for index, center in enumerate(centers)
+    ]
+    return fm.Difference(
+        base=fm.Box(size=FILM_SIZE, name="periodic_film_base"),
+        tool=union_geometries(holes),
+        name="periodic_film",
+    )
+
+
 def probe_frequencies_hz() -> list[float]:
     raw = os.environ.get("FULLMAG_FMR_FREQUENCIES_GHZ")
     if raw is None or raw.strip() == "":
@@ -167,28 +223,41 @@ def apply_periodic_airbox_mesh_policy(body) -> None:
         layers=FILM_THROUGH_THICKNESS_LAYERS,
         order=1,
     )
-    hole_transition_refinement = body.add_region(
-        "hole_transition_refinement",
-        fm.Cylinder(radius=HOLE_TRANSITION_REFINEMENT_RADIUS, height=FILM_SIZE[2]),
-        priority=10,
-    )
-    hole_transition_refinement.mesh(
-        minimum_element_size=FILM_MIN_ELEMENT_SIZE,
-        maximum_element_size=HOLE_TRANSITION_MAX_ELEMENT_SIZE,
-        transition_distance=14 * NM,
-        order=1,
-    )
-    hole_edge_refinement = body.add_region(
-        "hole_edge_refinement",
-        fm.Cylinder(radius=HOLE_EDGE_REFINEMENT_RADIUS, height=FILM_SIZE[2]),
-        priority=20,
-    )
-    hole_edge_refinement.mesh(
-        minimum_element_size=HOLE_EDGE_MIN_ELEMENT_SIZE,
-        maximum_element_size=HOLE_EDGE_MAX_ELEMENT_SIZE,
-        transition_distance=6 * NM,
-        order=1,
-    )
+    centers = hole_centers()
+    for index, center in enumerate(centers):
+        suffix = "" if len(centers) == 1 else f"_{index}"
+        hole_transition_refinement = body.add_region(
+            f"hole_transition_refinement{suffix}",
+            translated_cylinder(
+                HOLE_TRANSITION_REFINEMENT_RADIUS,
+                FILM_SIZE[2],
+                center,
+                f"hole_transition_refinement{suffix}",
+            ),
+            priority=10,
+        )
+        hole_transition_refinement.mesh(
+            minimum_element_size=FILM_MIN_ELEMENT_SIZE,
+            maximum_element_size=HOLE_TRANSITION_MAX_ELEMENT_SIZE,
+            transition_distance=14 * NM,
+            order=1,
+        )
+        hole_edge_refinement = body.add_region(
+            f"hole_edge_refinement{suffix}",
+            translated_cylinder(
+                HOLE_EDGE_REFINEMENT_RADIUS,
+                FILM_SIZE[2],
+                center,
+                f"hole_edge_refinement{suffix}",
+            ),
+            priority=20,
+        )
+        hole_edge_refinement.mesh(
+            minimum_element_size=HOLE_EDGE_MIN_ELEMENT_SIZE,
+            maximum_element_size=HOLE_EDGE_MAX_ELEMENT_SIZE,
+            transition_distance=6 * NM,
+            order=1,
+        )
 
 
 study = fm.study("fem_frequency_response_smoke")
@@ -216,11 +285,7 @@ study.objects.mesh.defaults(
     narrow_regions=MESH_NARROW_REGIONS,
 )
 
-body = study.geometry(
-    fm.Box(size=FILM_SIZE, name="periodic_film")
-    - fm.Cylinder(radius=HOLE_RADIUS, height=FILM_SIZE[2], name="central_hole"),
-    name="periodic_film",
-)
+body = study.geometry(periodic_antidot_geometry(), name="periodic_film")
 body.Ms = 800e3
 body.Aex = 13e-12
 body.alpha = 0.02

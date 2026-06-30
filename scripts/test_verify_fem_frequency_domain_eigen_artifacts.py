@@ -31,6 +31,7 @@ def write_eigen_fixture(
     manifest_mode_resources_override: list[str] | None = None,
     omit_mode_residual_relative_l2: bool = False,
     omit_mode_omega_rad_s: bool = False,
+    omit_mode_eigenvalue_mapping: bool = False,
     omit_mode_tangent_leakage: bool = False,
     gamma_rad_s_t_override: float | None = None,
     solver_diagnostics_override: dict[str, object] | None = None,
@@ -72,6 +73,10 @@ def write_eigen_fixture(
         "angular_frequency_rad_per_s": 6.283185307179586e9,
         "eigenvalue_real": 0.0,
         "eigenvalue_imag": 6.283185307179586e9,
+        "phasor_convention": "not_applicable_real_reference",
+        "eigenvalue_mapping": (
+            "omega_rad_s_eq_gamma0_rad_s_per_A_m_times_effective_field_lambda_A_per_m"
+        ),
         "norm": 1.0,
         "max_amplitude": 1.0,
         "residual_norm": 1.0e-9,
@@ -164,6 +169,10 @@ def write_eigen_fixture(
         "angular_frequency_rad_per_s": 6.283185307179586e9,
         "eigenvalue_real": 0.0,
         "eigenvalue_imag": 6.283185307179586e9,
+        "phasor_convention": "not_applicable_real_reference",
+        "eigenvalue_mapping": (
+            "omega_rad_s_eq_gamma0_rad_s_per_A_m_times_effective_field_lambda_A_per_m"
+        ),
         "normalization": "unit_l2",
         "damping_policy": "ignore",
         "mode_field_id": field_id,
@@ -237,6 +246,9 @@ def write_eigen_fixture(
         del mode["residual_relative_l2"]
     if omit_mode_omega_rad_s:
         del mode["omega_rad_s"]
+    if omit_mode_eigenvalue_mapping:
+        del mode_summary["eigenvalue_mapping"]
+        del mode["eigenvalue_mapping"]
     if omit_mode_tangent_leakage:
         del mode["tangent_leakage_mean_abs"]
     if omit_mode_payload_encoding:
@@ -292,6 +304,10 @@ def write_eigen_fixture(
                 "omega_rad_s": 6.283185307179586e9,
                 "eigenvalue_real": 0.0,
                 "eigenvalue_imag": 6.283185307179586e9,
+                "phasor_convention": "not_applicable_real_reference",
+                "eigenvalue_mapping": (
+                    "omega_rad_s_eq_gamma0_rad_s_per_A_m_times_effective_field_lambda_A_per_m"
+                ),
                 "norm": 1.0,
                 "max_amplitude": 1.0,
                 "residual_norm": 1.0e-9,
@@ -421,21 +437,27 @@ def write_eigen_fixture(
     }
     (root / "frequency_domain" / "manifest.v1.json").write_text(json.dumps(manifest))
     (root / "eigen" / "diagnostics").mkdir(parents=True, exist_ok=True)
-    solver_diagnostics = (
-        solver_diagnostics_override
-        if solver_diagnostics_override is not None
-        else {
-                "schema_version": "frequency_domain_modal_solver_diagnostics.v1",
-                "study_product": "modal_eigen",
-                "status": "ready",
-                "complete": True,
-                "solver_model": "dense_reference_oracle",
-                "resolved_solver_family": "dense_reference_oracle",
-                "spectral_transform": "none",
-                "sample_count": 1,
-                "mode_count": 1,
-            }
-    )
+    solver_diagnostics = {
+        "schema_version": "frequency_domain_modal_solver_diagnostics.v1",
+        "study_product": "modal_eigen",
+        "status": "ready",
+        "complete": True,
+        "algebraic_form": "reference_effective_field_generalized",
+        "matrix_equation": "K u = lambda M u",
+        "phasor_convention": "not_applicable_real_reference",
+        "eigenvalue_mapping": (
+            "omega_rad_s = gamma0_rad_s_per_A_m * max(lambda_A_per_m, 0)"
+        ),
+        "frequency_mapping": "frequency_hz = omega_rad_s / (2*pi)",
+        "production_gyrotropic_mapping": False,
+        "solver_model": "dense_reference_oracle",
+        "resolved_solver_family": "dense_reference_oracle",
+        "spectral_transform": "none",
+        "sample_count": 1,
+        "mode_count": 1,
+    }
+    if solver_diagnostics_override is not None:
+        solver_diagnostics.update(solver_diagnostics_override)
     (root / "eigen" / "diagnostics" / "solver.v1.json").write_text(
         json.dumps(solver_diagnostics)
     )
@@ -559,6 +581,45 @@ def test_validator_rejects_dispersion_frequency_drift(tmp_path: Path) -> None:
     assert "dispersion row 0.frequency_hz" in (result.stderr + result.stdout)
 
 
+def test_validator_rejects_negative_exp_i_damping_frequency(tmp_path: Path) -> None:
+    write_eigen_fixture(tmp_path)
+    mode_path = tmp_path / "eigen" / "modes" / "sample_0000" / "mode_0000.json"
+    mode = json.loads(mode_path.read_text())
+    mode["damping_policy"] = "include"
+    mode["phasor_convention"] = "exp_i_omega_t"
+    mode["frequency_imag_hz"] = -1.0e6
+    mode["damping_rate_hz"] = -1.0e6
+    mode["linewidth_fwhm_hz"] = -2.0e6
+    mode_path.write_text(json.dumps(mode))
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "frequency_imag_hz" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_dispersion_linewidth_drift(tmp_path: Path) -> None:
+    write_eigen_fixture(tmp_path)
+    spectrum_path = tmp_path / "eigen" / "spectrum.v2.json"
+    spectrum = json.loads(spectrum_path.read_text())
+    spectrum["samples"][0]["modes"][0]["frequency_imag_hz"] = 1.0e6
+    spectrum_path.write_text(json.dumps(spectrum))
+    dispersion_path = tmp_path / "eigen" / "dispersion.csv"
+    dispersion_path.write_text(
+        "\n".join(
+            [
+                "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,line_width_hz,residual_norm,overlap_score",
+                "0,0,0,0,0,G,0,0,1.0e9,6.283185307179586e9,1.0e6,1.0e-9,",
+            ]
+        )
+    )
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "line_width_hz" in (result.stderr + result.stdout)
+
+
 def test_validator_rejects_mode_zarr_quantity_drift(tmp_path: Path) -> None:
     write_eigen_fixture(tmp_path, zarr_quantity_id_override="m")
 
@@ -604,6 +665,28 @@ def test_validator_rejects_missing_omega_rad_s(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert "omega_rad_s" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_missing_mode_eigenvalue_mapping(tmp_path: Path) -> None:
+    write_eigen_fixture(tmp_path, omit_mode_eigenvalue_mapping=True)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "eigenvalue_mapping" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_missing_solver_algebraic_form(tmp_path: Path) -> None:
+    write_eigen_fixture(tmp_path)
+    diagnostics_path = tmp_path / "eigen" / "diagnostics" / "solver.v1.json"
+    diagnostics = json.loads(diagnostics_path.read_text())
+    del diagnostics["algebraic_form"]
+    diagnostics_path.write_text(json.dumps(diagnostics))
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "solver_diagnostics.algebraic_form" in (result.stderr + result.stdout)
 
 
 def test_validator_rejects_missing_tangent_leakage(tmp_path: Path) -> None:

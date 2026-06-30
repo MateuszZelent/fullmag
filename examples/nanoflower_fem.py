@@ -19,26 +19,32 @@ study = fm.study("nanoflower_fem")
 study.engine("fem")
 study.device("gpu", precision="double")
 study.universe(mode="auto", size=(4e-07, 4e-07, 4e-07), center=(0, 0, 0), padding=(0, 0, 0))
-study.universe.mesh(maximum_element_size=8e-08)
+study.universe.mesh(minimum_element_size=10e-09, maximum_element_size=1e-06)
 study.interactive(True)
 
 # Geometry & Material
-body = study.geometry(fm.ImportedGeometry(source="nanoflower.stl", name="nanoflower_left", scale=1e-09), name="nanoflower_left")
+body = study.geometry(fm.ImportedGeometry(source="fractal-fidget-sensory-parametric-hexagon-10.stl", name="nanoflower_left", scale=1e-09), name="nanoflower_left")
 body.Ms = 752000
 body.Aex = 1.55e-11
 body.alpha = 0.1
-body.m = (
-    fm.load_magnetization(RELAXED_STATE_ZARR, format="zarr")
-    if USE_SAVED_RELAXED_STATE
-    else fm.texture.random(seed=1) 
-)
+body.m = (fm.texture.random(seed=1))
+body.mesh(maximum_element_size=20e-09, order=1, compute_quality=False, per_element_quality=False)
 
 # Mesh
-study.objects.mesh.defaults(algorithm_2d=6, algorithm_3d=1, size_factor=1, size_from_curvature=0, smoothing_steps=1, optimize_iterations=1, narrow_regions=0, compute_quality=False, per_element_quality=False)
-body.mesh(maximum_element_size=20e-09, order=1, algorithm_2d=1, algorithm_3d=1, size_factor=1, size_from_curvature=1, smoothing_steps=1, optimize_iterations=1, narrow_regions=1, compute_quality=True, per_element_quality=True)
+study.demag(realization="poisson_robin")
+study.objects.mesh.defaults(
+    algorithm_2d=6,
+    algorithm_3d=10,
+    size_factor=1,
+    size_from_curvature=0,
+    smoothing_steps=1,
+    optimize_iterations=1,
+    narrow_regions=0,
+    compute_quality=False,
+    per_element_quality=False,
+)
 study.build_domain_mesh()
 
-study.demag(realization="poisson_robin")
 study.b_ext(0.0001, theta=0, phi=0)  # 0.1 T along +z
 # ── Solver ──────────────────────────────────────────────────
 # study.solver(dt=1e-15, g=2.115)

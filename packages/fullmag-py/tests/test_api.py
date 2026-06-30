@@ -1025,6 +1025,42 @@ class ProblemApiTests(unittest.TestCase):
                     "image_counts": [6, 6, 0],
                 },
             )
+            self.assertEqual(
+                flat_world._state._default_mesh_spec.periodic_pair_ids,
+                ["x_faces", "y_faces"],
+            )
+        finally:
+            fm.reset()
+
+    def test_study_pbc_serializes_problem_ir_and_default_fem_pairs(self) -> None:
+        fm.reset()
+        try:
+            study = fm.study("pbc_test")
+            study.engine("fem")
+            study.pbc(x=True, y=True)
+            film = study.geometry(fm.Box(size=(20e-9, 20e-9, 5e-9), name="film"), name="film")
+            film.Ms = 800e3
+            film.Aex = 13e-12
+            film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+
+            self.assertEqual(
+                flat_world._state._pbc.to_ir(),
+                {
+                    "axes": ["periodic", "periodic", "open"],
+                    "demag": "open",
+                },
+            )
+            self.assertEqual(
+                flat_world._state._default_mesh_spec.periodic_pair_ids,
+                ["x_faces", "y_faces"],
+            )
+            self.assertEqual(
+                flat_world._build_problem().to_ir(include_geometry_assets=False)["pbc"],
+                {
+                    "axes": ["periodic", "periodic", "open"],
+                    "demag": "open",
+                },
+            )
         finally:
             fm.reset()
 

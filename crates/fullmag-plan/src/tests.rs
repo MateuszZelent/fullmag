@@ -2382,11 +2382,32 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
     });
     ir.energy_terms = vec![fullmag_ir::EnergyTermIR::Exchange];
 
+    let err = plan(&ir)
+        .expect_err("periodic FEM mesh pairs must not enable static PBC without ProblemIR.pbc");
+    assert!(
+        err.reasons.iter().any(|reason| {
+            reason.contains("mesh.periodic_node_pairs require ProblemIR.pbc")
+                && reason.contains("physical PBC intent")
+        }),
+        "unexpected missing-ProblemIR.pbc rejection reasons: {:?}",
+        err.reasons
+    );
+
+    ir.pbc = Some(fullmag_ir::FdmPeriodicityIR {
+        axes: [
+            fullmag_ir::AxisBoundary::Periodic,
+            fullmag_ir::AxisBoundary::Open,
+            fullmag_ir::AxisBoundary::Open,
+        ],
+        demag: fullmag_ir::FdmDemagPeriodicityIR::Open,
+        image_counts: None,
+    });
+
     let planned = plan(&ir).expect("exchange-only FEM static PBC should plan");
     match planned.backend_plan {
         BackendPlanIR::Fem(fem) => {
             assert_eq!(fem.mesh.mesh_name, "periodic_strip");
-            assert_eq!(fem.mesh.periodic_node_pairs.len(), 2);
+            assert_eq!(fem.mesh.periodic_node_pairs.len(), 1);
             assert!(fem.enable_exchange);
             assert!(!fem.enable_demag);
         }
@@ -2416,7 +2437,7 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
     match demag_planned.backend_plan {
         BackendPlanIR::Fem(fem) => {
             assert!(fem.enable_demag);
-            assert_eq!(fem.mesh.periodic_node_pairs.len(), 2);
+            assert_eq!(fem.mesh.periodic_node_pairs.len(), 1);
             assert!(fem.air_box_config.is_some());
         }
         other => panic!("expected FEM plan, got {:?}", other),
@@ -6269,6 +6290,36 @@ fn fem_frequency_response_rejects_unsupported_production_slice_cases() {
             );
         }
         other => panic!("expected FemFrequencyResponse plan, got {other:?}"),
+    }
+
+    let mut cpu_periodic = periodic.clone();
+    cpu_periodic.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cpu", "precision": "double"}),
+    );
+    let cpu_planned = plan(&cpu_periodic)
+        .expect("nonzero-k Floquet no-demag response should plan for CPU execution");
+    match cpu_planned.backend_plan {
+        BackendPlanIR::FemFrequencyResponse(fem) => {
+            assert_eq!(fem.requested_device, fullmag_ir::ExecutionDevice::Cpu);
+            assert_eq!(
+                fem.spin_wave_bc.kind(),
+                fullmag_ir::SpinWaveBoundaryKindIR::Floquet
+            );
+            assert!(
+                fem.periodic_constraint_sets.iter().any(|constraint| {
+                    constraint.unknown_family
+                        == fullmag_ir::PeriodicUnknownFamilyIR::MagnetizationDynamic
+                        && matches!(
+                            constraint.phase_policy,
+                            fullmag_ir::PeriodicPhasePolicyIR::BlochPhase { .. }
+                        )
+                }),
+                "CPU nonzero-k Floquet response should carry Bloch dynamic-magnetization constraints: {:?}",
+                fem.periodic_constraint_sets
+            );
+        }
+        other => panic!("expected CPU FemFrequencyResponse plan, got {other:?}"),
     }
 
     let mut floquet_demag = periodic.clone();

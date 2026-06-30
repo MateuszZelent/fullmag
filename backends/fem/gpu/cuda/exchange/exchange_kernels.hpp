@@ -34,6 +34,24 @@ void fullmag_cuda_legacy_sparse_exchange(
     int rows,
     cudaStream_t stream = nullptr);
 
+/// Periodic assembled FEM exchange with CPU lumped periodic projection:
+/// reduced_rhs[c] = sum_{i in class c} (K m)_i,
+/// reduced_mass[c] = sum_{i in class c} M_lumped_i,
+/// H_i = -2 reduced_rhs[class(i)] / (mu0 Ms_rep(class(i)) reduced_mass[class(i)]).
+void fullmag_cuda_periodic_legacy_sparse_exchange(
+    const uint32_t *csr_row_offsets,
+    const uint32_t *csr_col_indices,
+    const double *csr_values,
+    const double *m_component,
+    const double *ms,
+    const double *lumped_mass,
+    const uint32_t *periodic_reduced_node,
+    const uint32_t *periodic_representative_nodes,
+    const uint8_t *magnetic_node_mask,
+    double *h_component,
+    int rows,
+    cudaStream_t stream = nullptr);
+
 /// Per-block exchange energy partials for legacy sparse operator:
 /// sum_i m_i · (K m)_i across x/y/z components.
 /// GPU RK planning requires exchange to be enabled before this reduction is

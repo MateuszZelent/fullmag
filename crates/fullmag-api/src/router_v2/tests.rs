@@ -23256,6 +23256,32 @@ async fn router_v2_delegates_core_control_room_resources() {
 }
 
 #[tokio::test]
+async fn router_v2_serves_openapi_json_without_swagger_ui() {
+    let app = test_v2_router_with_session().await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/platform/openapi.json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(header::CONTENT_TYPE).unwrap(),
+        "application/json"
+    );
+    let body = body_bytes(response).await;
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload.get("openapi").and_then(|value| value.as_str()),
+        Some("3.1.0")
+    );
+}
+
+#[tokio::test]
 async fn router_v2_mounts_every_openapi_endpoint() {
     let app = test_router_with_live_magnetization().await;
     let value = crate::openapi_v2::openapi_json();
@@ -23265,11 +23291,6 @@ async fn router_v2_mounts_every_openapi_endpoint() {
         .expect("OpenAPI v2 paths must be an object");
 
     for (template, path_item) in paths {
-        // In production this JSON endpoint is served by the SwaggerUi external
-        // document mount in main.rs, not by the isolated router_v2 test app.
-        if template == "/v2/platform/openapi.json" {
-            continue;
-        }
         let Some(path_item) = path_item.as_object() else {
             continue;
         };

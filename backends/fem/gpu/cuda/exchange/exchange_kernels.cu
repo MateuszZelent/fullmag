@@ -86,6 +86,61 @@ __global__ void legacy_sparse_exchange_energy_blocks_kernel(
     }
 }
 
+__global__ void periodic_legacy_sparse_exchange_kernel(
+    const uint32_t *__restrict__ csr_row_offsets,
+    const uint32_t *__restrict__ csr_col_indices,
+    const double *__restrict__ csr_values,
+    const double *__restrict__ m_component,
+    const double *__restrict__ ms,
+    const double *__restrict__ lumped_mass,
+    const uint32_t *__restrict__ periodic_reduced_node,
+    const uint32_t *__restrict__ periodic_representative_nodes,
+    const uint8_t *__restrict__ magnetic_node_mask,
+    double *__restrict__ h_component,
+    int rows)
+{
+    constexpr double kMu0 = 1.2566370614359172953850573533118e-6;
+
+    const int row = blockIdx.x * blockDim.x + threadIdx.x;
+    if (row >= rows) {
+        return;
+    }
+    if (magnetic_node_mask != nullptr && magnetic_node_mask[row] == 0u) {
+        h_component[row] = 0.0;
+        return;
+    }
+
+    const uint32_t reduced = periodic_reduced_node[row];
+    const uint32_t representative = periodic_representative_nodes[row];
+    if (representative >= static_cast<uint32_t>(rows)) {
+        h_component[row] = 0.0;
+        return;
+    }
+
+    double reduced_km = 0.0;
+    double reduced_mass = 0.0;
+    for (int source_row = 0; source_row < rows; ++source_row) {
+        if (periodic_reduced_node[source_row] != reduced) {
+            continue;
+        }
+        reduced_mass += lumped_mass[source_row];
+        double km = 0.0;
+        const uint32_t begin = csr_row_offsets[source_row];
+        const uint32_t end = csr_row_offsets[source_row + 1];
+        for (uint32_t cursor = begin; cursor < end; ++cursor) {
+            km += csr_values[cursor] * m_component[csr_col_indices[cursor]];
+        }
+        reduced_km += km;
+    }
+
+    const double ms_i = ms[representative];
+    if (ms_i <= 0.0 || reduced_mass <= 0.0) {
+        h_component[row] = 0.0;
+        return;
+    }
+    h_component[row] = -(2.0 / (kMu0 * ms_i)) * reduced_km / reduced_mass;
+}
+
 void fullmag_cuda_legacy_sparse_exchange(
     const uint32_t *csr_row_offsets,
     const uint32_t *csr_col_indices,
@@ -106,6 +161,35 @@ void fullmag_cuda_legacy_sparse_exchange(
         m_component,
         ms,
         inv_lumped_mass,
+        magnetic_node_mask,
+        h_component,
+        rows);
+}
+
+void fullmag_cuda_periodic_legacy_sparse_exchange(
+    const uint32_t *csr_row_offsets,
+    const uint32_t *csr_col_indices,
+    const double *csr_values,
+    const double *m_component,
+    const double *ms,
+    const double *lumped_mass,
+    const uint32_t *periodic_reduced_node,
+    const uint32_t *periodic_representative_nodes,
+    const uint8_t *magnetic_node_mask,
+    double *h_component,
+    int rows,
+    cudaStream_t stream)
+{
+    const int num_blocks = (rows + kBlockSize - 1) / kBlockSize;
+    periodic_legacy_sparse_exchange_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
+        csr_row_offsets,
+        csr_col_indices,
+        csr_values,
+        m_component,
+        ms,
+        lumped_mass,
+        periodic_reduced_node,
+        periodic_representative_nodes,
         magnetic_node_mask,
         h_component,
         rows);

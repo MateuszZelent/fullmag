@@ -3,14 +3,14 @@
 - Status: partial native FEM CPU module contract
 - Last updated: 2026-05-18
 - Implementation:
-  `native/backends/fem/cpu/mfem/interactions/demag_poisson.hpp/.cpp`,
+  `backends/fem/cpu/mfem/interactions/demag_poisson.hpp/.cpp`,
   `demag_poisson_ready.hpp/.cpp`, `demag_poisson_lifecycle.hpp/.cpp`,
   `demag_poisson_solve.hpp/.cpp`, `demag_poisson_rhs.hpp/.cpp`,
   `demag_poisson_boundary.hpp/.cpp`, `demag_poisson_periodic.hpp/.cpp`,
   `demag_poisson_hypre.hpp/.cpp`, `demag_poisson_recovery.hpp/.cpp`,
   `demag_poisson_field.hpp/.cpp`, `demag_poisson_cache.hpp/.cpp`,
   `demag_poisson_energy.hpp/.cpp`, and `demag_poisson_telemetry.hpp/.cpp`
-- Test: `native/backends/fem/tests/demag_poisson_contract.cpp`
+- Test: `backends/fem/tests/demag_poisson_contract.cpp`
 
 ## Energia
 
@@ -57,7 +57,7 @@ step-level timing scopes.
 Current transitional flow:
 
 ```text
-assemble RHS from div(M)
+assemble RHS for laplace(u) = div(Ms m)
 solve scalar Poisson problem on magnetic + airbox domain
 recover H_demag = -grad(u)
 zero nonmagnetic nodes for LLG/energy
@@ -135,12 +135,17 @@ Current gate:
 - `fem_demag_poisson_contract` checks the `-0.5 mu0 Ms m.H` energy convention,
   nodal lumped weights, per-node `Ms`, nonmagnetic-node masking, frozen-field
   refresh policy, cached Robin boundary energy, and demag solver stats reset in
-  local non-MFEM builds. It also checks the full-domain visualization H_eff
-  reconstruction helper, telemetry-header docstring, top-level source-contract
-  docstrings for the aggregate, ready, lifecycle, solve, RHS, boundary,
-  periodic, Hypre, recovery, field, cache, energy, and telemetry modules, and
-  source ownership for the ready/lifecycle/solve modules so runtime wrapper
-  definitions do not return to `demag_poisson.cpp` or `mfem_bridge.cpp`.
+  local non-MFEM builds. It pins the Poisson sign by requiring RHS assembly to
+  use the `+ integral Ms m dot grad(v)` source for `laplace(u) = div(Ms m)`;
+  in MFEM-stack builds it also recovers the manufactured potential
+  `u = x + 2y - 3z` on a tetrahedral cell and requires
+  `H_demag = (-1, -2, 3) = -grad(u)`. It also checks the full-domain
+  visualization H_eff reconstruction helper, telemetry-header docstring,
+  top-level source-contract docstrings for the aggregate, ready, lifecycle,
+  solve, RHS, boundary, periodic, Hypre, recovery, field, cache, energy, and
+  telemetry modules, and source ownership for the ready/lifecycle/solve modules
+  so runtime wrapper definitions do not return to `demag_poisson.cpp` or
+  `mfem_bridge.cpp`.
 - Local non-MFEM builds compile the public energy contract. The MFEM RHS,
   boundary-policy, periodic-reduction, Hypre-solve, and recovery code are
   guarded by `FULLMAG_HAS_MFEM_STACK`.

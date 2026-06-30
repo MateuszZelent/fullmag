@@ -11,6 +11,7 @@
 #include "gpu/cuda/demag_poisson/hypre_device_solver.hpp"
 
 #include "context.hpp"
+#include "cpu/mfem/interactions/demag_poisson_periodic.hpp"
 #include "cpu/mfem/runtime/mpi_init.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
@@ -127,9 +128,14 @@ bool initialize_demag_poisson_hypre_device_solver(
     mfem::Hypre::InitDevice();
     configure_hypre_device_vendor_kernels();
 
-    auto *A_bc = static_cast<mfem::SparseMatrix *>(ctx.poisson_demag.poisson_bc_op);
+    auto *A_bc = static_cast<mfem::SparseMatrix *>(
+        demag_periodic_poisson_reduction_requested(ctx)
+            ? ctx.poisson_demag.periodic_matrix
+            : ctx.poisson_demag.poisson_bc_op);
     if (A_bc == nullptr) {
-        error = "GPU Poisson demag requires an initialized Poisson boundary-conditioned operator";
+        error = demag_periodic_poisson_reduction_requested(ctx)
+            ? "GPU periodic Poisson demag requires an initialized periodic reduced operator"
+            : "GPU Poisson demag requires an initialized Poisson boundary-conditioned operator";
         return false;
     }
     ensure_mpi_initialized();

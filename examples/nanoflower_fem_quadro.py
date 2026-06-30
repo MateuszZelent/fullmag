@@ -61,13 +61,11 @@ for idx, (dx, dy) in enumerate(positions_2x2):
     # Magnetyzacja: losowa z różnym seedem dla każdej kopii (dla nietrywialnego warunku początkowego)
     body.m = fm.texture.random(seed=10 + idx)
 
-    # Mesh — wymagany explicit maximum_element_size dla każdego obiektu magnetycznego
-    body.mesh(maximum_element_size=19e-09, order=1, algorithm_2d=1, algorithm_3d=1, size_factor=1,
-              size_from_curvature=1, smoothing_steps=1, optimize_iterations=1,
-              narrow_regions=1, compute_quality=True, per_element_quality=True)
+    # Mesh - keep the STL recipe local-size only; global defaults pick the Gmsh algorithm.
+    body.mesh(maximum_element_size=19e-09, order=1, compute_quality=False, per_element_quality=False)
 
 # Mesh
-study.objects.mesh.defaults(algorithm_2d=6, algorithm_3d=1, size_factor=1, size_from_curvature=0, smoothing_steps=1, optimize_iterations=1, narrow_regions=0, compute_quality=False, per_element_quality=False)
+study.objects.mesh.defaults(algorithm_2d=6, algorithm_3d=10, size_factor=1, size_from_curvature=0, smoothing_steps=1, optimize_iterations=1, narrow_regions=0, compute_quality=False, per_element_quality=False)
 study.build_domain_mesh()
 
 # Use Poisson-Robin demag on the managed FEM GPU runtime.

@@ -87,6 +87,7 @@ from fullmag.meshing._gmsh_generators import (
     _add_airbox_volume_clamp_fields,
     _build_stl_volume_model_for_component,
     _sanitize_csg_mesh_options_for_geometries,
+    _mesh_stl_surface,
 )
 from fullmag.meshing._gmsh_extraction import _extract_periodic_pairs
 from fullmag.meshing._gmsh_airbox import (
@@ -4611,6 +4612,32 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(voxels.shape, (23, 66, 66))
         self.assertGreater(voxels.active_cell_count, 0)
 
+    def test_stl_surface_meshing_retries_hxt_after_delaunay_plc_error(self) -> None:
+        mesh = self._unit_tet_mesh()
+        attempted: list[int] = []
+
+        def _fake_stl_once(*_args: object, **kwargs: object) -> MeshData:
+            options = kwargs.get("options")
+            self.assertIsInstance(options, MeshOptions)
+            attempted.append(int(options.algorithm_3d))
+            if len(attempted) == 1:
+                raise Exception("PLC Error:  A segment and a facet intersect at point")
+            return mesh
+
+        with patch(
+            "fullmag.meshing._gmsh_generators._mesh_stl_surface_once",
+            side_effect=_fake_stl_once,
+        ):
+            result = _mesh_stl_surface(
+                Path("shape.stl"),
+                hmax=100e-9,
+                order=1,
+                options=MeshOptions(algorithm_3d=ALGO_3D_DELAUNAY),
+            )
+
+        self.assertIs(result, mesh)
+        self.assertEqual(attempted, [ALGO_3D_DELAUNAY, ALGO_3D_HXT])
+
     @unittest.skip("Skipped due to known Gmsh C++ Delaunay intersections on complex nanoflower STL boundaries")
     def test_two_nanoflower_shared_domain_hmax_changes_total_tetra_count(self) -> None:
         coarse_mesh, coarse_markers = self._realize_two_nanoflower_shared_domain(
@@ -5070,6 +5097,152 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(payload.magnetic_submesh_signatures[0]["tetra_count"], 1)
         self.assertIsInstance(payload.magnetic_submesh_signatures[0]["digest"], str)
 
+    def test_frozen_magnetic_submesh_source_rejects_sidecar_node_count_drift(self) -> None:
+        frozen_mesh = MeshData(
+            nodes=np.asarray(
+                [
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ],
+                dtype=np.float64,
+            ),
+            elements=np.asarray([[0, 1, 2, 3]], dtype=np.int32),
+            element_markers=np.asarray([1], dtype=np.int32),
+            boundary_faces=np.asarray(
+                [
+                    [0, 1, 2],
+                    [0, 1, 3],
+                    [0, 2, 3],
+                    [1, 2, 3],
+                ],
+                dtype=np.int32,
+            ),
+            boundary_markers=np.asarray([10, 10, 10, 10], dtype=np.int32),
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            mesh_path = Path(tmp_dir) / "frozen_film.npz"
+            frozen_mesh.save(mesh_path)
+            report_path = Path(f"{mesh_path}.report.json")
+            report_path.write_text(
+                json.dumps(
+                    {
+                        "frozen_magnetic_submesh_invariants": {
+                            "node_count": 5,
+                            "element_count": 1,
+                            "interface_boundary_face_count": 4,
+                            "periodic_boundary_pair_count": 0,
+                            "periodic_node_pair_count": 0,
+                            "periodic_boundary_pair_counts_by_id": {},
+                            "periodic_node_pair_counts_by_id": {},
+                            "magnetic_submesh_signatures": [
+                                {
+                                    "geometry_name": "film",
+                                    "marker": 1,
+                                    "node_count": 4,
+                                    "tetra_count": 1,
+                                    "edge_count": 6,
+                                    "coordinate_quantization_m": 1.0e-12,
+                                    "digest": "placeholder",
+                                }
+                            ],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "inconsistent frozen magnetic submesh.*node_count expected 5, got 4",
+            ):
+                mesh_asset_pipeline._load_frozen_magnetic_submesh_source(
+                    {
+                        "mesh_source": str(mesh_path),
+                        "region_markers": [
+                            {"geometry_name": "film", "marker": 1},
+                        ],
+                    }
+                )
+
+    def test_frozen_magnetic_submesh_source_rejects_sidecar_periodic_pair_drift(self) -> None:
+        frozen_mesh = MeshData(
+            nodes=np.asarray(
+                [
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ],
+                dtype=np.float64,
+            ),
+            elements=np.asarray([[0, 1, 2, 3]], dtype=np.int32),
+            element_markers=np.asarray([1], dtype=np.int32),
+            boundary_faces=np.asarray(
+                [
+                    [0, 1, 2],
+                    [0, 1, 3],
+                    [0, 2, 3],
+                    [1, 2, 3],
+                ],
+                dtype=np.int32,
+            ),
+            boundary_markers=np.asarray([10, 10, 10, 10], dtype=np.int32),
+            periodic_boundary_pairs=[
+                {"pair_id": "x_faces", "marker_a": 21, "marker_b": 22},
+            ],
+            periodic_node_pairs=[
+                {"pair_id": "x_faces", "node_a": 0, "node_b": 1},
+            ],
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            mesh_path = Path(tmp_dir) / "frozen_film.npz"
+            frozen_mesh.save(mesh_path)
+            report_path = Path(f"{mesh_path}.report.json")
+            report_path.write_text(
+                json.dumps(
+                    {
+                        "frozen_magnetic_submesh_invariants": {
+                            "node_count": 4,
+                            "element_count": 1,
+                            "interface_boundary_face_count": 4,
+                            "periodic_boundary_pair_count": 1,
+                            "periodic_node_pair_count": 2,
+                            "periodic_boundary_pair_counts_by_id": {"x_faces": 1},
+                            "periodic_node_pair_counts_by_id": {"x_faces": 2},
+                            "magnetic_submesh_signatures": [
+                                {
+                                    "geometry_name": "film",
+                                    "marker": 1,
+                                    "node_count": 4,
+                                    "tetra_count": 1,
+                                    "edge_count": 6,
+                                    "coordinate_quantization_m": 1.0e-12,
+                                    "digest": "placeholder",
+                                }
+                            ],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "inconsistent frozen magnetic submesh.*periodic_node_pair_counts_by_id\\['x_faces'\\] expected 2, got 1",
+            ):
+                mesh_asset_pipeline._load_frozen_magnetic_submesh_source(
+                    {
+                        "mesh_source": str(mesh_path),
+                        "region_markers": [
+                            {"geometry_name": "film", "marker": 1},
+                        ],
+                    }
+                )
+
     def test_extract_frozen_magnetic_submesh_from_shared_domain_preserves_interface_faces(self) -> None:
         shared_mesh = MeshData(
             nodes=np.asarray(
@@ -5449,6 +5622,10 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(
             air_mesh.periodic_node_pairs,
             [{"pair_id": "x_faces", "node_a": 0, "node_b": 1}],
+        )
+        self.assertEqual(
+            air_mesh.periodic_boundary_pairs,
+            [{"pair_id": "x_faces", "marker_a": 21, "marker_b": 22}],
         )
 
     def test_generated_frozen_magnetic_submesh_mode_merges_prebuilt_air_mesh(self) -> None:
@@ -8052,11 +8229,14 @@ class FieldStackAcceptanceTests(unittest.TestCase):
         self.assertGreater(len(baseline_mesh.periodic_node_pairs), 0)
         self.assertGreater(len(baseline_generated.periodic_node_pairs), 0)
         self.assertGreater(len(padded_generated.periodic_node_pairs), 0)
+        self.assertGreater(len(baseline_generated.periodic_boundary_pairs), 0)
+        self.assertGreater(len(padded_generated.periodic_boundary_pairs), 0)
         self.assertEqual(
             {str(pair["pair_id"]) for pair in baseline_generated.periodic_node_pairs},
             {"x_faces", "y_faces"},
         )
         self.assertIn("periodic_node_pairs", baseline_generated.to_ir("shared_domain"))
+        self.assertIn("periodic_boundary_pairs", baseline_generated.to_ir("shared_domain"))
 
     def test_airbox_geometric_grading_populates_distance_bands_and_diagonal(self) -> None:
         try:

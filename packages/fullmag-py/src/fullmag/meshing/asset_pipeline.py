@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
 from dataclasses import replace as _dc_replace
 import math
@@ -81,6 +82,7 @@ _DEFAULT_AIRBOX_GROWTH_RATE = 1.3
 _DEFAULT_AIRBOX_GRADING = "geometric"
 _SIZE_DISTRIBUTION_HISTOGRAM_BINS = 30
 _FROZEN_MAGNETIC_SUBMESH_MODE = "generated_frozen_magnetic_submesh"
+_PREEMPTIVE_IMPORTED_STL_FALLBACK = "single_imported_stl_preemptive_fallback"
 _SUPPORTED_DOMAIN_MESH_MODES = frozenset(
     {
         "generated_shared_domain_mesh",
@@ -88,6 +90,13 @@ _SUPPORTED_DOMAIN_MESH_MODES = frozenset(
         _FROZEN_MAGNETIC_SUBMESH_MODE,
     }
 )
+
+
+def _is_stl_imported_geometry(geometry: Geometry) -> bool:
+    return (
+        isinstance(geometry, ImportedGeometry)
+        and Path(geometry.source).suffix.lower() == ".stl"
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,6 +176,15 @@ def _load_frozen_magnetic_submesh_source(raw_source: object) -> FrozenMagneticSu
                 "frozen_magnetic_submesh_source.region_markers references marker "
                 f"{marker}, but the frozen mesh element_markers are {sorted(available_markers)}"
             )
+    report_path = Path(f"{Path(mesh_source).expanduser()}.report.json")
+    if report_path.is_file():
+        expected = _load_frozen_magnetic_submesh_invariants_report(report_path)
+        candidate = _frozen_magnetic_submesh_invariants(mesh, region_markers)
+        _assert_frozen_magnetic_submesh_invariants(
+            expected,
+            candidate,
+            context=str(report_path),
+        )
     interface_boundary_faces = np.asarray(mesh.boundary_faces, dtype=np.int32)
     if interface_boundary_faces.size == 0:
         raise ValueError(
@@ -1719,6 +1737,104 @@ def _magnetic_submesh_signatures(
     return signatures
 
 
+def _periodic_pair_counts_by_id(pairs: list[dict[str, object]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for pair in pairs:
+        pair_id = str(pair.get("pair_id", "")).strip()
+        if not pair_id:
+            pair_id = "<missing>"
+        counts[pair_id] = counts.get(pair_id, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _frozen_magnetic_submesh_invariants(
+    mesh: MeshData,
+    region_markers: list[dict[str, object]],
+) -> dict[str, object]:
+    return {
+        "node_count": int(mesh.n_nodes),
+        "element_count": int(mesh.n_elements),
+        "interface_boundary_face_count": int(np.asarray(mesh.boundary_faces).shape[0]),
+        "periodic_boundary_pair_count": len(mesh.periodic_boundary_pairs),
+        "periodic_node_pair_count": len(mesh.periodic_node_pairs),
+        "periodic_boundary_pair_counts_by_id": _periodic_pair_counts_by_id(
+            mesh.periodic_boundary_pairs
+        ),
+        "periodic_node_pair_counts_by_id": _periodic_pair_counts_by_id(
+            mesh.periodic_node_pairs
+        ),
+        "magnetic_submesh_signatures": _magnetic_submesh_signatures(
+            mesh,
+            region_markers,
+        ),
+    }
+
+
+def _load_frozen_magnetic_submesh_invariants_report(
+    report_path: Path,
+) -> dict[str, object]:
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, Mapping):
+        raise ValueError(
+            f"frozen magnetic submesh report {report_path} must contain a JSON object"
+        )
+    invariants = payload.get("frozen_magnetic_submesh_invariants")
+    if not isinstance(invariants, Mapping):
+        return {}
+    return dict(invariants)
+
+
+def _invariant_path(base: str, key: str) -> str:
+    if base:
+        return f"{base}[{key!r}]"
+    return key
+
+
+def _assert_frozen_magnetic_submesh_invariants(
+    expected: Mapping[str, object],
+    candidate: Mapping[str, object],
+    *,
+    context: str,
+) -> None:
+    ordered_keys = [
+        "node_count",
+        "element_count",
+        "interface_boundary_face_count",
+        "periodic_boundary_pair_count",
+        "periodic_boundary_pair_counts_by_id",
+        "periodic_node_pair_counts_by_id",
+        "periodic_node_pair_count",
+        "magnetic_submesh_signatures",
+    ]
+
+    def compare(expected_value: object, candidate_value: object, path: str) -> None:
+        if isinstance(expected_value, Mapping) and isinstance(candidate_value, Mapping):
+            for key in sorted(expected_value):
+                next_path = _invariant_path(path, str(key))
+                if key not in candidate_value:
+                    raise ValueError(
+                        "inconsistent frozen magnetic submesh "
+                        f"({context}): {next_path} expected {expected_value[key]!r}, got <missing>"
+                    )
+                compare(expected_value[key], candidate_value[key], next_path)
+            return
+        if expected_value != candidate_value:
+            raise ValueError(
+                "inconsistent frozen magnetic submesh "
+                f"({context}): {path} expected {expected_value!r}, got {candidate_value!r}"
+            )
+
+    for key in ordered_keys:
+        if key not in expected:
+            continue
+        if key not in candidate:
+            raise ValueError(
+                "inconsistent frozen magnetic submesh "
+                f"({context}): {key} expected {expected[key]!r}, got <missing>"
+            )
+        compare(expected[key], candidate[key], key)
+
+
 def _strip_overridden_geometry_fields(
     existing_fields: list[dict[str, object]],
     per_object_recipes: dict[str, PerObjectMeshRecipe],
@@ -1913,6 +2029,13 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 "automatic conformal object-region meshing requires OCC-compatible "
                 "owner geometries"
             )
+    preemptive_imported_stl_fallback = (
+        len(geometries) == 1
+        and _is_stl_imported_geometry(geometries[0])
+        and not single_geometry_occ_direct
+        and not conformal_occ_direct
+        and not conformal_object_regions
+    )
 
     with tempfile.TemporaryDirectory(prefix="fullmag-fem-domain-components-") as tmp_dir:
         component_descriptors: list[ComponentDescriptor] = []
@@ -1974,9 +2097,16 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                     tuple(float(value) for value in bounds_min),
                     tuple(float(value) for value in bounds_max),
                 )
+        if preemptive_imported_stl_fallback:
+            fallbacks_triggered.append(_PREEMPTIVE_IMPORTED_STL_FALLBACK)
+            emit_progress(
+                "Single imported STL shared-domain mesh is routed directly to "
+                "concatenated STL fallback for numerical stability"
+            )
 
         size_field_default_hmax = _shared_domain_size_field_default_hmax(hints, airbox)
         airbox_bounds = _rectangular_airbox_bounds_from_options(airbox, bounds_by_name)
+        component_aware_mesh_options = not preemptive_imported_stl_fallback
 
         mesh_options = _mesh_options_from_runtime_metadata(
             mesh_workflow,
@@ -1984,7 +2114,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             default_hmax=size_field_default_hmax,
             bounds_by_name=bounds_by_name,
             airbox_bounds=airbox_bounds,
-            component_aware=True,
+            component_aware=component_aware_mesh_options,
             per_object_recipes=per_object_recipes,
             object_regions=object_regions,
         )
@@ -1996,7 +2126,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 _policy,
                 default_hmax=size_field_default_hmax,
                 bounds_by_name=bounds_by_name,
-                component_aware=True,
+                component_aware=component_aware_mesh_options,
             )
             if recipe_fields:
                 existing = _strip_overridden_geometry_fields(
@@ -2015,6 +2145,8 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             planned_build_mode = "single_geometry_occ"
         elif conformal_occ_direct:
             planned_build_mode = "conformal_occ"
+        elif preemptive_imported_stl_fallback:
+            planned_build_mode = "concatenated_stl_fallback"
         else:
             planned_build_mode = "component_aware"
         planned_operation_statuses = _build_mesh_operation_statuses(
@@ -2163,6 +2295,11 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                         raise RuntimeError(
                             "Multi-component STL meshing is routed to concatenated STL fallback for numerical stability"
                         )
+                    elif preemptive_imported_stl_fallback:
+                        build_mode = "concatenated_stl_fallback"
+                        raise RuntimeError(
+                            "Single imported STL meshing is routed to concatenated STL fallback for numerical stability"
+                        )
                     else:
                         build_mode = "component_aware"
                         emit_progress_event(
@@ -2214,10 +2351,15 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
 
                     if primary_exc is not None:
                         build_mode = "concatenated_stl_fallback"
-                        fallbacks_triggered.append("component_aware_import_failed")
-                        emit_progress(
-                            f"Component-aware mesh failed ({primary_exc!r}), falling back to concatenated STL"
-                        )
+                        if _PREEMPTIVE_IMPORTED_STL_FALLBACK in fallbacks_triggered:
+                            emit_progress(
+                                "Generating concatenated STL mesh for single imported STL"
+                            )
+                        else:
+                            fallbacks_triggered.append("component_aware_import_failed")
+                            emit_progress(
+                                f"Component-aware mesh failed ({primary_exc!r}), falling back to concatenated STL"
+                            )
                         # Rebuild mesh options for the non-component STL path so local
                         # refinement fields do not depend on recovered component tags.
                         # This preserves per-object hmax behavior (Box/Bounds thresholds)

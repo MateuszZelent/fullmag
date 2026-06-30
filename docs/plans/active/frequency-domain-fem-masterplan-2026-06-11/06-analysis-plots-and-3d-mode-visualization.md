@@ -2,6 +2,13 @@
 
 ## Current State
 
+This section is the current state at original draft time for this target
+contract. The live rollout ledger is now
+`11-comsol-grade-frequency-domain-masterplan-2026-06-30.md`, especially the
+Control Room status and milestone table. If this section conflicts with `11`,
+use `11` for current implementation status and this file for the analysis
+plots / 3D visualization target/regression contract.
+
 Analysis plots:
 
 - `apps/control-room/src/modules/analysis-plots` renders scalar/table-oriented charts and hysteresis chart variants.

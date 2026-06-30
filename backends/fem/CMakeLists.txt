@@ -350,6 +350,12 @@ add_test(NAME fem_cuda_demag_robin_energy_contract COMMAND fem_cuda_demag_robin_
 add_executable(fem_cuda_demag_timing_contract tests/cuda_demag_timing_contract.cpp)
 add_test(NAME fem_cuda_demag_timing_contract COMMAND fem_cuda_demag_timing_contract)
 
+add_executable(fem_cuda_periodic_demag_contract tests/cuda_periodic_demag_contract.cpp)
+add_test(NAME fem_cuda_periodic_demag_contract COMMAND fem_cuda_periodic_demag_contract)
+
+add_executable(fem_cuda_periodic_exchange_contract tests/cuda_periodic_exchange_contract.cpp)
+add_test(NAME fem_cuda_periodic_exchange_contract COMMAND fem_cuda_periodic_exchange_contract)
+
 add_executable(fem_transfer_audit tests/transfer_audit.cpp)
 target_link_libraries(fem_transfer_audit PRIVATE fullmag_fem)
 target_include_directories(fem_transfer_audit PRIVATE
@@ -675,6 +681,16 @@ add_test(NAME fem_field_buffers_contract COMMAND fem_field_buffers_contract)
 
 add_executable(fem_demag_poisson_contract tests/demag_poisson_contract.cpp)
 target_link_libraries(fem_demag_poisson_contract PRIVATE fullmag_fem)
+if(FULLMAG_USE_MFEM_STACK)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_demag_poisson_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_demag_poisson_contract PRIVATE mfem)
+    endif()
+    if(FULLMAG_ENABLE_CUDA)
+        target_link_libraries(fem_demag_poisson_contract PRIVATE CUDA::cudart)
+    endif()
+endif()
 target_include_directories(fem_demag_poisson_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/include

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import math
 import sys
@@ -107,12 +108,17 @@ def stoner_wohlfarth_astroid_hc_ratio(theta_deg: float) -> float:
     return (sin_term + cos_term) ** -1.5
 
 
-def validate_gross_astroid_ratio(hc_by_variant: dict[str, float]) -> None:
+def astroid_ratio_delta(hc_by_variant: dict[str, float]) -> tuple[float, float, float]:
     expected_ratio = (
         stoner_wohlfarth_astroid_hc_ratio(EXPECTED_VARIANT_THETA_DEG["theta45"])
         / stoner_wohlfarth_astroid_hc_ratio(EXPECTED_VARIANT_THETA_DEG["easy_axis"])
     )
     observed_ratio = hc_by_variant["theta45"] / hc_by_variant["easy_axis"]
+    return observed_ratio, expected_ratio, abs(observed_ratio - expected_ratio)
+
+
+def validate_gross_astroid_ratio(hc_by_variant: dict[str, float]) -> None:
+    observed_ratio, expected_ratio, _ = astroid_ratio_delta(hc_by_variant)
     if observed_ratio < expected_ratio * GROSS_ASTROID_RATIO_FRACTION:
         raise SystemExit(
             "Stoner-Wohlfarth astroid ratio failed: "
@@ -121,13 +127,45 @@ def validate_gross_astroid_ratio(hc_by_variant: dict[str, float]) -> None:
         )
 
 
-def main() -> int:
-    if len(sys.argv) != 2:
+def validate_publication_astroid_ratio(
+    hc_by_variant: dict[str, float],
+    tolerance: float,
+) -> None:
+    if tolerance <= 0.0 or not math.isfinite(tolerance):
+        raise SystemExit("--astroid-ratio-abs-tolerance must be a positive finite number")
+    observed_ratio, expected_ratio, delta = astroid_ratio_delta(hc_by_variant)
+    if delta > tolerance:
         raise SystemExit(
-            "usage: scripts/verify_hysteresis_fdm_macrospin_sw_artifacts.py <artifact-dir>"
+            "publication astroid ratio failed: "
+            f"theta45/easy observed={observed_ratio:.6g}, "
+            f"expected={expected_ratio:.6g}, "
+            f"abs_delta={delta:.6g}, tolerance={tolerance:.6g}"
         )
 
-    root = Path(sys.argv[1])
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Validate the FDM macrospin Stoner-Wohlfarth hysteresis fixture.",
+    )
+    parser.add_argument(
+        "--require-publication-astroid-ratio",
+        action="store_true",
+        help="Require the theta45/easy coercivity ratio to match the SW astroid.",
+    )
+    parser.add_argument(
+        "--astroid-ratio-abs-tolerance",
+        type=float,
+        default=0.05,
+        help="Absolute dimensionless tolerance for --require-publication-astroid-ratio.",
+    )
+    parser.add_argument("artifact_dir")
+    return parser.parse_args(argv)
+
+
+def main() -> int:
+    args = parse_args(sys.argv[1:])
+
+    root = Path(args.artifact_dir)
     manifest_path = root / "hysteresis_angular_family.json"
     if not manifest_path.is_file():
         raise SystemExit(f"missing angular-family manifest: {manifest_path}")
@@ -156,6 +194,11 @@ def main() -> int:
             f"theta45 Hc={theta_hc:.6g} mT, easy-axis Hc={easy_hc:.6g} mT"
         )
     validate_gross_astroid_ratio(hc_by_variant)
+    if args.require_publication_astroid_ratio:
+        validate_publication_astroid_ratio(
+            hc_by_variant,
+            args.astroid_ratio_abs_tolerance,
+        )
 
     print(
         "validated FDM macrospin Stoner-Wohlfarth trend: "

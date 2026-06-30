@@ -178,12 +178,7 @@ copy_shared_library_dependency_closure() {
     lib_name="$(basename "$resolved")"
     case "$resolved" in
       /lib/*|/lib64/*|/usr/lib/*|/usr/lib64/*)
-        if [ -e "$lib" ] && [ ! -e "$dest_dir/$requested_name" ]; then
-          copy_runtime_entry_replace "$lib" "$dest_dir"
-        fi
-        if [ ! -e "$dest_dir/$lib_name" ]; then
-          copy_runtime_entry_replace "$resolved" "$dest_dir"
-        fi
+        copy_runtime_resolved_dependency_pair "$lib" "$resolved" "$dest_dir"
         ;;
     esac
     while IFS= read -r dep; do

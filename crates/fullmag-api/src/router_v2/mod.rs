@@ -27,6 +27,7 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         .route("/v2/platform/health", get(handlers::platform::get_health))
         .route("/v2", get(get_v2_index))
         .route("/v2/", get(get_v2_index))
+        .route("/v2/platform/openapi.json", get(get_openapi_json))
         .route(
             "/v2/platform/capabilities",
             get(handlers::platform::get_capabilities),
@@ -774,6 +775,10 @@ async fn get_v2_index() -> Json<Value> {
             "diagnostics"
         ]
     }))
+}
+
+async fn get_openapi_json() -> Json<Value> {
+    Json(crate::openapi_v2::openapi_json())
 }
 
 async fn list_sessions(State(state): State<Arc<AppState>>) -> Json<Value> {

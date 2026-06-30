@@ -20,6 +20,20 @@ describe("ObjectRegionsPanel physical scalar inputs", () => {
     expect(source).not.toContain("function parsePhysicalInput");
   });
 
+  it("does not write region scalar drafts when the parsed value is unchanged", () => {
+    const source = readFileSync(
+      new URL("./ObjectRegionsPanel.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain(
+      "if (parsed !== null && !Object.is(parsed, value)) {",
+    );
+    expect(source).not.toContain(
+      "if (parsed !== null) {\n          onValueChange(parsed);",
+    );
+  });
+
   it("renders capability diagnostics inline in the relevant region panels", () => {
     const meshPanel = readFileSync(
       new URL("./region/ObjectRegionMeshPanel.tsx", import.meta.url),

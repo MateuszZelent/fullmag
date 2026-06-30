@@ -839,6 +839,13 @@ fn execute_fem_eigen_inner(
         };
         let frequency_hz = angular_frequency_real / (2.0 * std::f64::consts::PI);
         let frequency_imag_hz = angular_frequency_imag / (2.0 * std::f64::consts::PI);
+        let damping_included = matches!(plan.damping_policy, EigenDampingPolicyIR::Include);
+        let phasor_convention = if damping_included {
+            "exp_i_omega_t"
+        } else {
+            "not_applicable_real_reference"
+        };
+        let linewidth_fwhm_hz = 2.0 * frequency_imag_hz;
         let dominant_polarization = classify_polarization(
             &amplitude,
             &reduction.active_nodes,
@@ -847,7 +854,7 @@ fn execute_fem_eigen_inner(
         );
         let (tangent_leakage_mean_abs, tangent_leakage_max_abs) =
             mode_tangent_leakage(&equilibrium, &real, &imag);
-        let mode_summary = serde_json::json!({
+        let mut mode_summary = serde_json::json!({
             "index": mode_index,
             "frequency_hz": frequency_hz,
             "frequency_real_hz": frequency_hz,
@@ -858,6 +865,8 @@ fn execute_fem_eigen_inner(
             "eigenvalue_field_au_per_m": eigenvalue_real.max(0.0),
             "eigenvalue_real": eigenvalue_real,
             "eigenvalue_imag": eigenvalue_imag,
+            "phasor_convention": phasor_convention,
+            "eigenvalue_mapping": "omega_rad_s_eq_gamma0_rad_s_per_A_m_times_effective_field_lambda_A_per_m",
             "norm": norm,
             "max_amplitude": max_amplitude,
             "residual_norm": residual_absolute_l2,
@@ -873,10 +882,23 @@ fn execute_fem_eigen_inner(
             "dominant_polarization": dominant_polarization,
             "k_vector": k_vector_json(plan.k_sampling.as_ref()),
         });
+        if damping_included {
+            if let Some(object) = mode_summary.as_object_mut() {
+                object.insert(
+                    "complex_frequency_convention".to_string(),
+                    serde_json::json!("omega_complex = omega_r + i Gamma for exp(i omega t)"),
+                );
+                object.insert("damping_rate_hz".to_string(), serde_json::json!(frequency_imag_hz));
+                object.insert(
+                    "linewidth_fwhm_hz".to_string(),
+                    serde_json::json!(linewidth_fwhm_hz),
+                );
+            }
+        }
         modes_summary.push(mode_summary.clone());
 
         if requested_modes.contains(&(mode_index as u32)) {
-            let payload = serde_json::json!({
+            let mut payload = serde_json::json!({
                 "index": mode_index,
                 "frequency_hz": frequency_hz,
                 "frequency_real_hz": frequency_hz,
@@ -886,6 +908,8 @@ fn execute_fem_eigen_inner(
                 "angular_frequency_imag_rad_per_s": angular_frequency_imag,
                 "eigenvalue_real": eigenvalue_real,
                 "eigenvalue_imag": eigenvalue_imag,
+                "phasor_convention": phasor_convention,
+                "eigenvalue_mapping": "omega_rad_s_eq_gamma0_rad_s_per_A_m_times_effective_field_lambda_A_per_m",
                 "max_amplitude": max_amplitude,
                 "residual_norm": residual_absolute_l2,
                 "residual_absolute_l2": residual_absolute_l2,
@@ -911,6 +935,22 @@ fn execute_fem_eigen_inner(
                 "amplitude": amplitude,
                 "phase": phase,
             });
+            if damping_included {
+                if let Some(object) = payload.as_object_mut() {
+                    object.insert(
+                        "complex_frequency_convention".to_string(),
+                        serde_json::json!("omega_complex = omega_r + i Gamma for exp(i omega t)"),
+                    );
+                    object.insert(
+                        "damping_rate_hz".to_string(),
+                        serde_json::json!(frequency_imag_hz),
+                    );
+                    object.insert(
+                        "linewidth_fwhm_hz".to_string(),
+                        serde_json::json!(linewidth_fwhm_hz),
+                    );
+                }
+            }
             auxiliary_artifacts.push(json_artifact(
                 format!("eigen/modes/mode_{mode_index:04}.json"),
                 &payload,
@@ -946,6 +986,12 @@ fn execute_fem_eigen_inner(
         },
         "solver_diagnostics": {
             "dense_reference_oracle": !use_sparse && !complex_reduction,
+            "algebraic_form": "reference_effective_field_generalized",
+            "matrix_equation": "K u = lambda M u",
+            "phasor_convention": "not_applicable_real_reference",
+            "eigenvalue_mapping": "omega_rad_s = gamma0_rad_s_per_A_m * max(lambda_A_per_m, 0)",
+            "frequency_mapping": "frequency_hz = omega_rad_s / (2*pi)",
+            "production_gyrotropic_mapping": false,
             "residual_definition": "relative_residual = ||K u - lambda M u||_2 / (||K u||_2 + |lambda| * ||M u||_2)",
             "tangent_leakage_definition": "abs(m0 dot delta_m) over reconstructed real and imaginary mode vectors",
             "constants": {
@@ -1322,6 +1368,24 @@ fn native_solver_diagnostics_json(
         .entry("spectral_transform".to_string())
         .or_insert_with(|| serde_json::json!("contour_integral"));
     object
+        .entry("algebraic_form".to_string())
+        .or_insert_with(|| serde_json::json!("linearized_llg_generalized"));
+    object
+        .entry("matrix_equation".to_string())
+        .or_insert_with(|| serde_json::json!("L phi = lambda B phi"));
+    object
+        .entry("phasor_convention".to_string())
+        .or_insert_with(|| serde_json::json!("exp_i_omega_t"));
+    object
+        .entry("eigenvalue_mapping".to_string())
+        .or_insert_with(|| serde_json::json!("lambda_eq_i_omega"));
+    object
+        .entry("frequency_mapping".to_string())
+        .or_insert_with(|| serde_json::json!("frequency_hz = abs(Im(lambda))/(2*pi)"));
+    object
+        .entry("production_gyrotropic_mapping".to_string())
+        .or_insert_with(|| serde_json::json!(true));
+    object
         .entry("dense_reference_oracle".to_string())
         .or_insert_with(|| serde_json::json!(false));
     object
@@ -1644,6 +1708,8 @@ fn native_modal_artifacts(
             "eigenvalue_field_au_per_m": mode.omega_rad_s / plan.gyromagnetic_ratio,
             "eigenvalue_real": mode.eigenvalue_real,
             "eigenvalue_imag": mode.eigenvalue_imag,
+            "phasor_convention": "exp_i_omega_t",
+            "eigenvalue_mapping": "lambda_eq_i_omega",
             "norm": norm,
             "max_amplitude": max_amplitude,
             "residual_norm": mode.residual_absolute_l2,
@@ -1672,6 +1738,8 @@ fn native_modal_artifacts(
                 "angular_frequency_imag_rad_per_s": 0.0,
                 "eigenvalue_real": mode.eigenvalue_real,
                 "eigenvalue_imag": mode.eigenvalue_imag,
+                "phasor_convention": "exp_i_omega_t",
+                "eigenvalue_mapping": "lambda_eq_i_omega",
                 "max_amplitude": max_amplitude,
                 "residual_norm": mode.residual_absolute_l2,
                 "residual_absolute_l2": mode.residual_absolute_l2,
@@ -4029,6 +4097,16 @@ fn write_eigen_v2_bundle(
                 legacy_mode["residual_linf"].clone(),
             );
             object.insert("mass_norm".to_string(), legacy_mode["mass_norm"].clone());
+            for key in [
+                "angular_frequency_imag_rad_per_s",
+                "complex_frequency_convention",
+                "damping_rate_hz",
+                "linewidth_fwhm_hz",
+            ] {
+                if legacy_mode.get(key).is_some() {
+                    object.insert(key.to_string(), legacy_mode[key].clone());
+                }
+            }
             object.insert(
                 "tangent_leakage_mean_abs".to_string(),
                 legacy_mode["tangent_leakage_mean_abs"].clone(),
@@ -4040,6 +4118,14 @@ fn write_eigen_v2_bundle(
             object.insert(
                 "omega_rad_s".to_string(),
                 legacy_mode["omega_rad_s"].clone(),
+            );
+            object.insert(
+                "phasor_convention".to_string(),
+                legacy_mode["phasor_convention"].clone(),
+            );
+            object.insert(
+                "eigenvalue_mapping".to_string(),
+                legacy_mode["eigenvalue_mapping"].clone(),
             );
             object.insert(
                 "gamma_rad_s_T".to_string(),
@@ -4228,6 +4314,12 @@ fn modal_solver_diagnostics_json(
         "solver_model": solver_model,
         "resolved_solver_family": solver_model,
         "spectral_transform": "none",
+        "algebraic_form": "reference_effective_field_generalized",
+        "matrix_equation": "K u = lambda M u",
+        "phasor_convention": "not_applicable_real_reference",
+        "eigenvalue_mapping": "omega_rad_s = gamma0_rad_s_per_A_m * max(lambda_A_per_m, 0)",
+        "frequency_mapping": "frequency_hz = omega_rad_s / (2*pi)",
+        "production_gyrotropic_mapping": false,
         "sample_count": 1,
         "mode_count": mode_count,
         "normalization": normalization_label(plan.normalization),
@@ -4309,7 +4401,7 @@ fn damping_policy_label(policy: EigenDampingPolicyIR) -> &'static str {
 fn damping_imaginary_factor(damping: f64, policy: EigenDampingPolicyIR) -> f64 {
     match policy {
         EigenDampingPolicyIR::Ignore => 0.0,
-        EigenDampingPolicyIR::Include => -(damping.abs() / (1.0 + damping * damping)),
+        EigenDampingPolicyIR::Include => damping.abs() / (1.0 + damping * damping),
     }
 }
 
@@ -4548,6 +4640,11 @@ fn dispersion_v2_csv(k_sampling: Option<&KSamplingIR>, modes: &serde_json::Value
                 .as_f64()
                 .map(|value| format!("{value:.16e}"))
                 .unwrap_or_default();
+            let line_width_hz = entry["frequency_imag_hz"]
+                .as_f64()
+                .filter(|value| value.is_finite() && *value > 0.0)
+                .map(|value| format!("{:.16e}", 2.0 * value))
+                .unwrap_or_default();
             csv.push_str(&format!(
                 "0,{:.16e},{:.16e},{:.16e},{:.16e},{},{},{},{:.16e},{:.16e},{},{},{}\n",
                 0.0,
@@ -4559,7 +4656,7 @@ fn dispersion_v2_csv(k_sampling: Option<&KSamplingIR>, modes: &serde_json::Value
                 "",
                 entry["frequency_hz"].as_f64().unwrap_or(0.0),
                 entry["angular_frequency_rad_per_s"].as_f64().unwrap_or(0.0),
-                "",
+                line_width_hz,
                 residual_norm,
                 "",
             ));
@@ -4756,6 +4853,45 @@ mod tests {
         assert_eq!(sparse_lobpcg_candidate_count(&target, 20, 50), 50);
         assert!(sparse_lobpcg_candidate_count(&target, 20, 200) > 20);
         assert!(sparse_lobpcg_candidate_count(&target, 40, 10_000) > 40);
+    }
+
+    #[test]
+    fn damping_linewidth_uses_exp_i_omega_t_decay_sign() {
+        let alpha = 0.05;
+        let factor = damping_imaginary_factor(alpha, EigenDampingPolicyIR::Include);
+
+        assert!(factor > 0.0);
+        assert!((factor - alpha / (1.0 + alpha * alpha)).abs() < 1.0e-15);
+        assert_eq!(
+            damping_imaginary_factor(alpha, EigenDampingPolicyIR::Ignore),
+            0.0
+        );
+        assert_eq!(
+            damping_imaginary_factor(-alpha, EigenDampingPolicyIR::Include),
+            factor
+        );
+    }
+
+    #[test]
+    fn dispersion_csv_maps_positive_imaginary_frequency_to_fwhm_linewidth() {
+        let modes = serde_json::json!([
+            {
+                "index": 0,
+                "frequency_hz": 1.0e9,
+                "frequency_imag_hz": 2.5e6,
+                "angular_frequency_rad_per_s": 2.0 * std::f64::consts::PI * 1.0e9,
+                "residual_norm": 1.0e-9
+            }
+        ]);
+
+        let csv = dispersion_v2_csv(None, &modes);
+        let row = csv
+            .lines()
+            .nth(1)
+            .expect("dispersion CSV should include one data row");
+        let columns: Vec<&str> = row.split(',').collect();
+
+        assert_eq!(columns[10], "5.0000000000000000e6");
     }
 
     #[test]

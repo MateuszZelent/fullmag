@@ -43,6 +43,23 @@ delta_r = r_dst - r_src
 phase_convention = exp_minus_i_k_dot_delta_r
 ```
 
+For tangent-coordinate unknowns this vector condition is not equivalent to a
+plain scalar phase unless the paired tangent frames are identical. With
+`delta_m = T q`:
+
+```text
+T_dst q_dst =
+  exp(-i k dot delta_r) * T_src q_src
+
+q_dst =
+  exp(-i k dot delta_r) * (T_dst^T T_src) q_src
+```
+
+If a backend supports only identity tangent-frame pairing and
+`||T_dst^T T_src - I|| > tolerance` for any periodic pair, the planner or native
+adapter must reject the Floquet/PBC request instead of applying only the scalar
+phase.
+
 - `mesh/periodic_pairs.v1.json` is the diagnostic artifact for periodic pair
   validation.
 - `/v2/sessions/current/meshing/mesh/periodic_pairs.v1` is the v2 resource path
@@ -269,9 +286,12 @@ Instructions:
    - generated complex phase per pair.
 3. Apply the complex phase during tangent-space operator assembly or during
    algebraic reduction, depending on the selected backend implementation.
-4. Keep static periodic `k = 0` as a special case of the same validated pair
+4. Apply the tangent-frame transport
+   `phase * (T_dst^T T_src)` for tangent unknowns. A scalar phase-only path is
+   legal only when the tangent-frame mismatch is below the documented tolerance.
+5. Keep static periodic `k = 0` as a special case of the same validated pair
    metadata, but do not lose provenance.
-5. Reject any path that receives pair metadata but does not enforce it.
+6. Reject any path that receives pair metadata but does not enforce it.
 
 Verification:
 
@@ -285,6 +305,9 @@ exp(-i k dot delta_r) = -1
 
 - `Floquet(k=0) == periodic` operator test.
 - Pair-order invariance test.
+- Tangent-frame transport test with non-identical but known `T_src`, `T_dst`.
+- Identity-frame rejection test when the backend advertises scalar phase-only
+  enforcement and `||T_dst^T T_src - I||` exceeds tolerance.
 - Complex conjugate symmetry test for reciprocal exchange-only cases.
 - Explicit runtime error if backend claims Floquet but returns an unconstrained
   operator.

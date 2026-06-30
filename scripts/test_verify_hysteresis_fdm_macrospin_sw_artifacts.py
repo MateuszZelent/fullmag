@@ -18,9 +18,9 @@ def write_json(path: Path, payload: object) -> None:
     path.write_text(json.dumps(payload))
 
 
-def run_validator(root: Path) -> subprocess.CompletedProcess[str]:
+def run_validator(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, str(VALIDATOR), str(root)],
+        [sys.executable, str(VALIDATOR), *args, str(root)],
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -201,3 +201,43 @@ def test_macrospin_validator_rejects_gross_astroid_ratio_mismatch(tmp_path: Path
 
     assert result.returncode != 0
     assert "astroid" in (result.stderr + result.stdout)
+
+
+def test_macrospin_validator_publication_gate_rejects_loose_astroid_ratio(
+    tmp_path: Path,
+) -> None:
+    write_macrospin_fixture(
+        tmp_path,
+        easy_orientation={"kind": "sample", "theta": 30.0, "phi": 0.0},
+        theta_orientation={"kind": "sample", "theta": 45.0, "phi": 0.0},
+    )
+
+    result = run_validator(
+        tmp_path,
+        "--require-publication-astroid-ratio",
+        "--astroid-ratio-abs-tolerance",
+        "0.05",
+    )
+
+    assert result.returncode != 0
+    assert "publication astroid ratio" in (result.stderr + result.stdout)
+
+
+def test_macrospin_validator_publication_gate_accepts_tight_astroid_ratio(
+    tmp_path: Path,
+) -> None:
+    write_macrospin_fixture(
+        tmp_path,
+        easy_orientation={"kind": "sample", "theta": 30.0, "phi": 0.0},
+        theta_orientation={"kind": "sample", "theta": 45.0, "phi": 0.0},
+        theta_points=loop_points(13.4),
+    )
+
+    result = run_validator(
+        tmp_path,
+        "--require-publication-astroid-ratio",
+        "--astroid-ratio-abs-tolerance",
+        "0.05",
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout

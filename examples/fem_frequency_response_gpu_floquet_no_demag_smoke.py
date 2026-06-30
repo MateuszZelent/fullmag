@@ -1,10 +1,11 @@
-"""Small FEM GPU nonzero-k Floquet no-demag frequency-response smoke.
+"""Small FEM nonzero-k Floquet no-demag frequency-response smoke.
 
-This exercises only the current narrow production GPU development slice:
-explicit GPU, magnetic-domain mesh, complete x-periodic pair metadata,
+This exercises only the current narrow production CPU/GPU development slice:
+explicit device intent, magnetic-domain mesh, complete x-periodic pair metadata,
 nonzero-k Floquet drive phase projection, exchange/local terms, no DMI, and no
-demag. It must not be used as evidence for periodic demag or full Floquet
-exchange-graph production support.
+demag. It must not be used as evidence for periodic demag or full Bloch-reduced
+operator production support. The default remains GPU; set
+``FULLMAG_FMR_DEVICE=cpu`` for the CPU runtime gate.
 """
 
 import os
@@ -13,10 +14,14 @@ from pathlib import Path
 import fullmag as fm
 
 MESH_PATH = Path(__file__).with_name("assets").joinpath("box_40x20x10_xperiodic.mesh.json")
+DEVICE = os.environ.get("FULLMAG_FMR_DEVICE", "gpu").strip().lower()
 KX_RAD_PER_M = float(os.environ.get("FULLMAG_FMR_FLOQUET_KX_RAD_PER_M", "1.0e6"))
 
 
 def build() -> fm.Problem:
+    if DEVICE not in {"cpu", "gpu"}:
+        raise ValueError("FULLMAG_FMR_DEVICE must be 'cpu' or 'gpu'")
+
     body = fm.Box(size=(40e-9, 20e-9, 10e-9), name="body")
     material = fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.02)
     magnet = fm.Ferromagnet(
@@ -45,8 +50,8 @@ def build() -> fm.Problem:
         ),
         runtime=fm.RuntimeSelection(
             backend_target="fem",
-            device_target="gpu",
-            gpu_count=1,
+            device_target=DEVICE,
+            gpu_count=1 if DEVICE == "gpu" else 0,
             execution_precision="double",
         ),
     )

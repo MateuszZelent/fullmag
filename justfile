@@ -116,13 +116,13 @@ verify-fem-frequency-domain-gpu:
 verify-fem-demag-poisson-contract:
     just ensure-managed-fem-runtime
     docker compose --profile fem-gpu run --rm \
-      fem-gpu bash -lc 'cd /workspace && cmake --build native/build --target fem_demag_poisson_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_demag_poisson_contract'
+      fem-gpu bash -lc 'cd /workspace && cmake --build native/build --target fem_demag_poisson_contract && cmake --build native/build --target fem_cuda_periodic_demag_contract && cmake --build native/build --target fem_cuda_periodic_exchange_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_demag_poisson_contract && native/build/backends/fem/fem_cuda_periodic_demag_contract && native/build/backends/fem/fem_cuda_periodic_exchange_contract'
 
 verify-fem-frequency-domain-runtime-suite:
     just verify-fem-frequency-domain-runtime
-    just verify-fem-frequency-domain-static-periodic-runtime
     just verify-fem-frequency-domain-gpu-free-runtime
-    just verify-fem-frequency-domain-gpu-static-periodic-runtime
+    just verify-fem-frequency-domain-gpu-static-periodic-parity-runtime
+    just verify-fem-frequency-domain-cpu-floquet-runtime
     just verify-fem-frequency-domain-gpu-floquet-runtime
     just verify-fem-frequency-domain-gpu-floquet-airbox-unsupported-runtime
     just verify-fem-frequency-domain-gpu-floquet-reciprocal-runtime
@@ -337,6 +337,7 @@ verify-fem-frequency-domain-periodic-airbox-runtime:
       -e FULLMAG_FMR_RESPONSE_RTOL="${FULLMAG_FMR_RESPONSE_RTOL:-1e-3}" \
       -e FULLMAG_FMR_RESPONSE_MAX_ITERATIONS="${FULLMAG_FMR_RESPONSE_MAX_ITERATIONS:-4096}" \
       -e FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS="${FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS:-4096}" \
+      -e FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL="${FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL:-128}" \
       -e FULLMAG_HOST_UID="$(id -u)" \
       -e FULLMAG_HOST_GID="$(id -g)" \
       fem-gpu bash -lc 'cd /workspace && \
@@ -384,6 +385,7 @@ verify-fem-frequency-domain-periodic-airbox-spectrum-runtime:
       -e FULLMAG_FMR_RESPONSE_RTOL="${FULLMAG_FMR_RESPONSE_RTOL:-1e-3}" \
       -e FULLMAG_FMR_RESPONSE_MAX_ITERATIONS="${FULLMAG_FMR_RESPONSE_MAX_ITERATIONS:-4096}" \
       -e FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS="${FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS:-4096}" \
+      -e FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL="${FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL:-128}" \
       -e FULLMAG_HOST_UID="$(id -u)" \
       -e FULLMAG_HOST_GID="$(id -g)" \
       fem-gpu bash -lc 'cd /workspace && \
@@ -442,6 +444,7 @@ verify-fem-frequency-domain-periodic-airbox-refined-spectrum-runtime:
       -e FULLMAG_FMR_RESPONSE_RTOL="${FULLMAG_FMR_RESPONSE_RTOL:-1e-3}" \
       -e FULLMAG_FMR_RESPONSE_MAX_ITERATIONS="${FULLMAG_FMR_RESPONSE_MAX_ITERATIONS:-4096}" \
       -e FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS="${FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS:-4096}" \
+      -e FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL="${FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL:-128}" \
       -e FULLMAG_HOST_UID="$(id -u)" \
       -e FULLMAG_HOST_GID="$(id -g)" \
       fem-gpu bash -lc 'cd /workspace && \
@@ -490,13 +493,14 @@ verify-fem-frequency-domain-periodic-airbox-z-padding-runtime:
       -e FULLMAG_FMR_RELAX_MAX_STEPS="${FULLMAG_FMR_RELAX_MAX_STEPS:-4}" \
       -e FULLMAG_FMR_RELAX_TOL="${FULLMAG_FMR_RELAX_TOL:-0.01}" \
       -e FULLMAG_FMR_FREQUENCIES_GHZ="${FULLMAG_FMR_FREQUENCIES_GHZ:-2.75}" \
-      -e FULLMAG_FMR_AIRBOX_REFERENCE_THICKNESS_NM="${FULLMAG_FMR_AIRBOX_REFERENCE_THICKNESS_NM:-90}" \
-      -e FULLMAG_FMR_AIRBOX_CANDIDATE_THICKNESS_NM="${FULLMAG_FMR_AIRBOX_CANDIDATE_THICKNESS_NM:-120}" \
+      -e FULLMAG_FMR_AIRBOX_REFERENCE_THICKNESS_NM="${FULLMAG_FMR_AIRBOX_REFERENCE_THICKNESS_NM:-120}" \
+      -e FULLMAG_FMR_AIRBOX_CANDIDATE_THICKNESS_NM="${FULLMAG_FMR_AIRBOX_CANDIDATE_THICKNESS_NM:-150}" \
       -e FULLMAG_FMR_DEMAG_RTOL="${FULLMAG_FMR_DEMAG_RTOL:-1e-4}" \
       -e FULLMAG_FMR_DEMAG_MAX_ITERATIONS="${FULLMAG_FMR_DEMAG_MAX_ITERATIONS:-500}" \
       -e FULLMAG_FMR_RESPONSE_RTOL="${FULLMAG_FMR_RESPONSE_RTOL:-1e-3}" \
       -e FULLMAG_FMR_RESPONSE_MAX_ITERATIONS="${FULLMAG_FMR_RESPONSE_MAX_ITERATIONS:-4096}" \
       -e FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS="${FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS:-4096}" \
+      -e FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL="${FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL:-128}" \
       -e FULLMAG_HOST_UID="$(id -u)" \
       -e FULLMAG_HOST_GID="$(id -g)" \
       fem-gpu bash -lc 'cd /workspace && \
@@ -529,6 +533,138 @@ verify-fem-frequency-domain-periodic-airbox-z-padding-runtime:
         python3 scripts/verify_fem_frequency_domain_runtime_artifacts.py --require-periodic-airbox-cpu-demag-solved --require-frozen-magnetic-submesh .fullmag/reports/frequency-domain-periodic-airbox-z-padding-runtime/reference/artifacts && \
         python3 scripts/verify_fem_frequency_domain_runtime_artifacts.py --require-periodic-airbox-cpu-demag-solved --require-frozen-magnetic-submesh .fullmag/reports/frequency-domain-periodic-airbox-z-padding-runtime/candidate/artifacts && \
         python3 scripts/verify_fem_frequency_domain_runtime_artifacts.py --require-periodic-airbox-cpu-demag-solved --require-frozen-magnetic-submesh --compare-airbox-reference .fullmag/reports/frequency-domain-periodic-airbox-z-padding-runtime/reference/artifacts .fullmag/reports/frequency-domain-periodic-airbox-z-padding-runtime/candidate/artifacts'
+
+verify-fem-frequency-domain-periodic-airbox-supercell-artifacts:
+    test -n "${FULLMAG_FMR_SUPERCELL_ARTIFACTS}" || { echo "FULLMAG_FMR_SUPERCELL_ARTIFACTS must point to completed supercell artifacts" >&2; exit 2; }
+    python3 scripts/verify_fem_frequency_domain_supercell_artifacts.py \
+      --unit-cell "${FULLMAG_FMR_UNIT_CELL_ARTIFACTS:-.fullmag/reports/frequency-domain-periodic-airbox-spectrum-runtime/artifacts}" \
+      --supercell "${FULLMAG_FMR_SUPERCELL_ARTIFACTS}" \
+      --repeat-x "${FULLMAG_FMR_SUPERCELL_REPEAT_X:-2}" \
+      --repeat-y "${FULLMAG_FMR_SUPERCELL_REPEAT_Y:-2}" \
+      --write-report "${FULLMAG_FMR_SUPERCELL_REPORT:-.fullmag/reports/frequency-domain-periodic-airbox-supercell-validation/supercell_validation.v1.json}"
+
+verify-fem-frequency-domain-periodic-airbox-supercell-runtime:
+    just ensure-managed-fem-runtime
+    if [ -d .fullmag/reports/frequency-domain-periodic-airbox-supercell-runtime ]; then docker compose --profile fem-gpu run --rm -e FULLMAG_HOST_UID="$(id -u)" -e FULLMAG_HOST_GID="$(id -g)" fem-gpu bash -lc 'cd /workspace && chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" .fullmag/reports/frequency-domain-periodic-airbox-supercell-runtime 2>/dev/null || true'; fi
+    rm -rf .fullmag/reports/frequency-domain-periodic-airbox-supercell-runtime
+    mkdir -p .fullmag/reports/frequency-domain-periodic-airbox-supercell-runtime
+    docker compose --profile fem-gpu run --rm \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_FDM_EXECUTION=cpu \
+      -e FULLMAG_FEM_EXECUTION=cpu \
+      -e FULLMAG_RELAX_DEVICE=cpu \
+      -e FULLMAG_CPU_THREADS="${FULLMAG_CPU_THREADS:-auto}" \
+      -e FULLMAG_FMR_FAST_RUNTIME_MESH=1 \
+      -e FULLMAG_FMR_EQUILIBRIUM_SOURCE=provided \
+      -e FULLMAG_FMR_SUPERCELL_REPEAT_X="${FULLMAG_FMR_SUPERCELL_REPEAT_X:-2}" \
+      -e FULLMAG_FMR_SUPERCELL_REPEAT_Y="${FULLMAG_FMR_SUPERCELL_REPEAT_Y:-2}" \
+      -e FULLMAG_FMR_MESH_ALGORITHM_3D="${FULLMAG_FMR_MESH_ALGORITHM_3D:-1}" \
+      -e FULLMAG_FMR_RELAX_MAX_STEPS="${FULLMAG_FMR_RELAX_MAX_STEPS:-4}" \
+      -e FULLMAG_FMR_RELAX_TOL="${FULLMAG_FMR_RELAX_TOL:-0.01}" \
+      -e FULLMAG_FMR_FREQUENCIES_GHZ="${FULLMAG_FMR_FREQUENCIES_GHZ:-2.5,2.75,3.0}" \
+      -e FULLMAG_FMR_DEMAG_RTOL="${FULLMAG_FMR_DEMAG_RTOL:-1e-4}" \
+      -e FULLMAG_FMR_DEMAG_MAX_ITERATIONS="${FULLMAG_FMR_DEMAG_MAX_ITERATIONS:-500}" \
+      -e FULLMAG_FMR_RESPONSE_RTOL="${FULLMAG_FMR_RESPONSE_RTOL:-1e-3}" \
+      -e FULLMAG_FMR_RESPONSE_MAX_ITERATIONS="${FULLMAG_FMR_RESPONSE_MAX_ITERATIONS:-4096}" \
+      -e FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS="${FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS:-4096}" \
+      -e FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL="${FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL:-128}" \
+      -e FULLMAG_HOST_UID="$(id -u)" \
+      -e FULLMAG_HOST_GID="$(id -g)" \
+      fem-gpu bash -lc 'cd /workspace && \
+        trap '\''chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" .fullmag/reports/frequency-domain-periodic-airbox-supercell-runtime 2>/dev/null || true'\'' EXIT && \
+        UNIT_FROZEN_SOURCE=.fullmag/reports/frequency-domain-periodic-airbox-supercell-runtime/unit/mesh/periodic_antidot_frozen_magnetic_submesh.npz && \
+        SUPERCELL_FROZEN_SOURCE=.fullmag/reports/frequency-domain-periodic-airbox-supercell-runtime/supercell/mesh/periodic_antidot_frozen_magnetic_submesh.npz && \
+        mkdir -p .fullmag/reports/frequency-domain-periodic-airbox-supercell-runtime/unit/mesh && \
+        mkdir -p .fullmag/reports/frequency-domain-periodic-airbox-supercell-runtime/supercell/mesh && \
+        FULLMAG_FMR_SUPERCELL_REPEAT_X=1 FULLMAG_FMR_SUPERCELL_REPEAT_Y=1 \
+          python3 scripts/prepare_fmr_frozen_magnetic_submesh.py --output "$UNIT_FROZEN_SOURCE" && \
+        FULLMAG_FMR_SUPERCELL_REPEAT_X=1 FULLMAG_FMR_SUPERCELL_REPEAT_Y=1 \
+        FULLMAG_FMR_FROZEN_MAGNETIC_SUBMESH_SOURCE="$UNIT_FROZEN_SOURCE" \
+          .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu \
+          examples/fem_frequency_response_smoke.py \
+          --backend fem \
+          --headless \
+          --json \
+          --output-dir .fullmag/reports/frequency-domain-periodic-airbox-supercell-runtime/unit/artifacts && \
+        python3 scripts/prepare_fmr_frozen_magnetic_submesh.py --output "$SUPERCELL_FROZEN_SOURCE" && \
+        FULLMAG_FMR_FROZEN_MAGNETIC_SUBMESH_SOURCE="$SUPERCELL_FROZEN_SOURCE" \
+          .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu \
+          examples/fem_frequency_response_smoke.py \
+          --backend fem \
+          --headless \
+          --json \
+          --output-dir .fullmag/reports/frequency-domain-periodic-airbox-supercell-runtime/supercell/artifacts && \
+        python3 scripts/verify_fem_frequency_domain_runtime_artifacts.py --require-periodic-airbox-cpu-demag-solved --require-frozen-magnetic-submesh --require-min-frequency-points 3 --require-response-peak .fullmag/reports/frequency-domain-periodic-airbox-supercell-runtime/unit/artifacts && \
+        python3 scripts/verify_fem_frequency_domain_runtime_artifacts.py --require-periodic-airbox-cpu-demag-solved --require-frozen-magnetic-submesh --require-min-frequency-points 3 --require-response-peak .fullmag/reports/frequency-domain-periodic-airbox-supercell-runtime/supercell/artifacts && \
+        python3 scripts/verify_fem_frequency_domain_supercell_artifacts.py \
+          --unit-cell .fullmag/reports/frequency-domain-periodic-airbox-supercell-runtime/unit/artifacts \
+          --supercell .fullmag/reports/frequency-domain-periodic-airbox-supercell-runtime/supercell/artifacts \
+          --repeat-x "$FULLMAG_FMR_SUPERCELL_REPEAT_X" \
+          --repeat-y "$FULLMAG_FMR_SUPERCELL_REPEAT_Y" \
+          --write-report .fullmag/reports/frequency-domain-periodic-airbox-supercell-runtime/supercell_validation.v1.json'
+
+verify-fem-frequency-domain-periodic-airbox-supercell-diagnostics-runtime:
+    just ensure-managed-fem-runtime
+    if [ -d .fullmag/reports/frequency-domain-periodic-airbox-supercell-diagnostics-runtime ]; then docker compose --profile fem-gpu run --rm -e FULLMAG_HOST_UID="$(id -u)" -e FULLMAG_HOST_GID="$(id -g)" fem-gpu bash -lc 'cd /workspace && chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" .fullmag/reports/frequency-domain-periodic-airbox-supercell-diagnostics-runtime 2>/dev/null || true'; fi
+    rm -rf .fullmag/reports/frequency-domain-periodic-airbox-supercell-diagnostics-runtime
+    mkdir -p .fullmag/reports/frequency-domain-periodic-airbox-supercell-diagnostics-runtime
+    docker compose --profile fem-gpu run --rm \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_FDM_EXECUTION=cpu \
+      -e FULLMAG_FEM_EXECUTION=cpu \
+      -e FULLMAG_RELAX_DEVICE=cpu \
+      -e FULLMAG_CPU_THREADS="${FULLMAG_CPU_THREADS:-auto}" \
+      -e FULLMAG_FMR_FAST_RUNTIME_MESH=1 \
+      -e FULLMAG_FMR_EQUILIBRIUM_SOURCE=provided \
+      -e FULLMAG_FMR_SUPERCELL_REPEAT_X="${FULLMAG_FMR_SUPERCELL_REPEAT_X:-2}" \
+      -e FULLMAG_FMR_SUPERCELL_REPEAT_Y="${FULLMAG_FMR_SUPERCELL_REPEAT_Y:-2}" \
+      -e FULLMAG_FMR_MESH_ALGORITHM_3D="${FULLMAG_FMR_MESH_ALGORITHM_3D:-1}" \
+      -e FULLMAG_FMR_RELAX_MAX_STEPS="${FULLMAG_FMR_RELAX_MAX_STEPS:-4}" \
+      -e FULLMAG_FMR_RELAX_TOL="${FULLMAG_FMR_RELAX_TOL:-0.01}" \
+      -e FULLMAG_FMR_FREQUENCIES_GHZ="${FULLMAG_FMR_FREQUENCIES_GHZ:-2.75}" \
+      -e FULLMAG_FMR_DEMAG_RTOL="${FULLMAG_FMR_DEMAG_RTOL:-1e-4}" \
+      -e FULLMAG_FMR_DEMAG_MAX_ITERATIONS="${FULLMAG_FMR_DEMAG_MAX_ITERATIONS:-500}" \
+      -e FULLMAG_FMR_RESPONSE_RTOL="${FULLMAG_FMR_RESPONSE_RTOL:-1e-3}" \
+      -e FULLMAG_FMR_RESPONSE_MAX_ITERATIONS="${FULLMAG_FMR_RESPONSE_MAX_ITERATIONS:-8}" \
+      -e FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS="${FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS:-8}" \
+      -e FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL="${FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL:-8}" \
+      -e FULLMAG_HOST_UID="$(id -u)" \
+      -e FULLMAG_HOST_GID="$(id -g)" \
+      fem-gpu bash -lc 'cd /workspace && \
+        trap '\''chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" .fullmag/reports/frequency-domain-periodic-airbox-supercell-diagnostics-runtime 2>/dev/null || true'\'' EXIT && \
+        UNIT_FROZEN_SOURCE=.fullmag/reports/frequency-domain-periodic-airbox-supercell-diagnostics-runtime/unit/mesh/periodic_antidot_frozen_magnetic_submesh.npz && \
+        SUPERCELL_FROZEN_SOURCE=.fullmag/reports/frequency-domain-periodic-airbox-supercell-diagnostics-runtime/supercell/mesh/periodic_antidot_frozen_magnetic_submesh.npz && \
+        mkdir -p .fullmag/reports/frequency-domain-periodic-airbox-supercell-diagnostics-runtime/unit/mesh && \
+        mkdir -p .fullmag/reports/frequency-domain-periodic-airbox-supercell-diagnostics-runtime/supercell/mesh && \
+        FULLMAG_FMR_SUPERCELL_REPEAT_X=1 FULLMAG_FMR_SUPERCELL_REPEAT_Y=1 \
+          python3 scripts/prepare_fmr_frozen_magnetic_submesh.py --output "$UNIT_FROZEN_SOURCE" && \
+        set +e; \
+        FULLMAG_FMR_SUPERCELL_REPEAT_X=1 FULLMAG_FMR_SUPERCELL_REPEAT_Y=1 \
+        FULLMAG_FMR_FROZEN_MAGNETIC_SUBMESH_SOURCE="$UNIT_FROZEN_SOURCE" \
+          .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu \
+          examples/fem_frequency_response_smoke.py \
+          --backend fem \
+          --headless \
+          --json \
+          --output-dir .fullmag/reports/frequency-domain-periodic-airbox-supercell-diagnostics-runtime/unit/artifacts; \
+        UNIT_STATUS=$?; \
+        set -e; \
+        python3 scripts/prepare_fmr_frozen_magnetic_submesh.py --output "$SUPERCELL_FROZEN_SOURCE" && \
+        set +e; \
+        FULLMAG_FMR_FROZEN_MAGNETIC_SUBMESH_SOURCE="$SUPERCELL_FROZEN_SOURCE" \
+          .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu \
+          examples/fem_frequency_response_smoke.py \
+          --backend fem \
+          --headless \
+          --json \
+          --output-dir .fullmag/reports/frequency-domain-periodic-airbox-supercell-diagnostics-runtime/supercell/artifacts; \
+        SUPERCELL_STATUS=$?; \
+        set -e; \
+        echo "unit_status=$UNIT_STATUS supercell_status=$SUPERCELL_STATUS" > .fullmag/reports/frequency-domain-periodic-airbox-supercell-diagnostics-runtime/status.txt && \
+        python3 scripts/verify_fem_frequency_domain_runtime_artifacts.py --allow-solve-error --require-periodic-airbox-cpu-demag-solved --require-frozen-magnetic-submesh .fullmag/reports/frequency-domain-periodic-airbox-supercell-diagnostics-runtime/unit/artifacts && \
+        python3 scripts/verify_fem_frequency_domain_runtime_artifacts.py --allow-solve-error --require-periodic-airbox-cpu-demag-solved --require-frozen-magnetic-submesh .fullmag/reports/frequency-domain-periodic-airbox-supercell-diagnostics-runtime/supercell/artifacts'
 
 verify-fem-frequency-domain-periodic-airbox-gpu-unsupported-runtime:
     just ensure-managed-fem-runtime
@@ -662,6 +798,40 @@ verify-fem-frequency-domain-gpu-static-periodic-runtime:
         test -f .fullmag/reports/frequency-domain-gpu-static-periodic-runtime/artifacts/frequency_domain/manifest.v1.json && \
         python3 scripts/verify_fem_frequency_domain_runtime_artifacts.py --require-production-gpu --require-static-periodic .fullmag/reports/frequency-domain-gpu-static-periodic-runtime/artifacts'
 
+verify-fem-frequency-domain-cpu-floquet-runtime:
+    just ensure-managed-fem-runtime
+    if [ -d .fullmag/reports/frequency-domain-cpu-floquet-runtime ]; then docker compose --profile fem-gpu run --rm -e FULLMAG_HOST_UID="$(id -u)" -e FULLMAG_HOST_GID="$(id -g)" fem-gpu bash -lc 'cd /workspace && chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" .fullmag/reports/frequency-domain-cpu-floquet-runtime 2>/dev/null || true'; fi
+    rm -rf .fullmag/reports/frequency-domain-cpu-floquet-runtime
+    mkdir -p .fullmag/reports/frequency-domain-cpu-floquet-runtime
+    docker compose --profile fem-gpu run --rm \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_FDM_EXECUTION=cpu \
+      -e FULLMAG_FEM_EXECUTION=cpu \
+      -e FULLMAG_RELAX_DEVICE=cpu \
+      -e FULLMAG_FMR_DEVICE=cpu \
+      -e FULLMAG_FMR_FLOQUET_KX_RAD_PER_M=1000000 \
+      -e FULLMAG_CPU_THREADS="${FULLMAG_CPU_THREADS:-auto}" \
+      -e FULLMAG_HOST_UID="$(id -u)" \
+      -e FULLMAG_HOST_GID="$(id -g)" \
+      fem-gpu bash -lc 'cd /workspace && \
+        trap '\''chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" .fullmag/reports/frequency-domain-cpu-floquet-runtime 2>/dev/null || true'\'' EXIT && \
+        rm -rf .fullmag/reports/frequency-domain-cpu-floquet-runtime/artifacts && \
+        .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu \
+          examples/fem_frequency_response_gpu_floquet_no_demag_smoke.py \
+          --backend fem \
+          --headless \
+          --json \
+          --output-dir .fullmag/reports/frequency-domain-cpu-floquet-runtime/artifacts && \
+        test -f .fullmag/reports/frequency-domain-cpu-floquet-runtime/artifacts/response/magnetic_response_sweep.v1.json && \
+        test -f .fullmag/reports/frequency-domain-cpu-floquet-runtime/artifacts/response/magnetic_response_sweep.v2.json && \
+        test -f .fullmag/reports/frequency-domain-cpu-floquet-runtime/artifacts/response/progress.v1.json && \
+        test -f .fullmag/reports/frequency-domain-cpu-floquet-runtime/artifacts/response/diagnostics/solver.v1.json && \
+        test -f .fullmag/reports/frequency-domain-cpu-floquet-runtime/artifacts/response/frequency_points/frequency_0000.json && \
+        test -f .fullmag/reports/frequency-domain-cpu-floquet-runtime/artifacts/response/field_payloads.zarr/frequency_0000/vector_xyz_complex/0.0.0 && \
+        test -f .fullmag/reports/frequency-domain-cpu-floquet-runtime/artifacts/frequency_domain/manifest.v1.json && \
+        python3 scripts/verify_fem_frequency_domain_runtime_artifacts.py --require-floquet-phase-projection .fullmag/reports/frequency-domain-cpu-floquet-runtime/artifacts'
+
 verify-fem-frequency-domain-gpu-floquet-runtime:
     just ensure-managed-fem-runtime
     if [ -d .fullmag/reports/frequency-domain-gpu-floquet-runtime ]; then docker compose --profile fem-gpu run --rm -e FULLMAG_HOST_UID="$(id -u)" -e FULLMAG_HOST_GID="$(id -g)" fem-gpu bash -lc 'cd /workspace && chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" .fullmag/reports/frequency-domain-gpu-floquet-runtime 2>/dev/null || true'; fi
@@ -673,6 +843,7 @@ verify-fem-frequency-domain-gpu-floquet-runtime:
       -e FULLMAG_FDM_EXECUTION=cpu \
       -e FULLMAG_FEM_EXECUTION=gpu \
       -e FULLMAG_RELAX_DEVICE=gpu \
+      -e FULLMAG_FMR_DEVICE=gpu \
       -e FULLMAG_CPU_THREADS="${FULLMAG_CPU_THREADS:-auto}" \
       -e FULLMAG_HOST_UID="$(id -u)" \
       -e FULLMAG_HOST_GID="$(id -g)" \
@@ -780,6 +951,84 @@ verify-fem-relaxation-convergence:
     FULLMAG_FEM_RELAXATION_MIN_RELATIVE_ENERGY_DECREASE="${FULLMAG_FEM_RELAXATION_MIN_RELATIVE_ENERGY_DECREASE:-1e-2}" \
     FULLMAG_FEM_RELAXATION_MAX_FINAL_TORQUE_GROWTH_FACTOR="${FULLMAG_FEM_RELAXATION_MAX_FINAL_TORQUE_GROWTH_FACTOR:-1.25}" \
     bash scripts/verify_fem_relaxation_runtime.sh
+
+verify-fem-periodic-antidot-relaxation-runtime:
+    just ensure-managed-fem-runtime
+    if [ -d .fullmag/reports/fem-periodic-antidot-relaxation-runtime ]; then docker compose --profile fem-gpu run --rm -e FULLMAG_HOST_UID="$(id -u)" -e FULLMAG_HOST_GID="$(id -g)" fem-gpu bash -lc 'cd /workspace && chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" .fullmag/reports/fem-periodic-antidot-relaxation-runtime 2>/dev/null || true'; fi
+    rm -rf .fullmag/reports/fem-periodic-antidot-relaxation-runtime
+    mkdir -p .fullmag/reports/fem-periodic-antidot-relaxation-runtime
+    docker compose --profile fem-gpu run --rm \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_FDM_EXECUTION=cpu \
+      -e FULLMAG_FEM_EXECUTION=cpu \
+      -e FULLMAG_RELAX_DEVICE=cpu \
+      -e FULLMAG_CPU_THREADS="${FULLMAG_CPU_THREADS:-auto}" \
+      -e FULLMAG_HOST_UID="$(id -u)" \
+      -e FULLMAG_HOST_GID="$(id -g)" \
+      fem-gpu bash -lc 'set -euo pipefail && cd /workspace && \
+        trap '\''chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" .fullmag/reports/fem-periodic-antidot-relaxation-runtime 2>/dev/null || true'\'' EXIT && \
+        for scenario_script in \
+          exchange_coupled:examples/fem_periodic_antidot_relax_exchange_coupled.py \
+          air_gap:examples/fem_periodic_antidot_relax_air_gap.py; do \
+          scenario="${scenario_script%%:*}" && \
+          script="${scenario_script#*:}" && \
+          rm -rf ".fullmag/reports/fem-periodic-antidot-relaxation-runtime/$scenario/artifacts" && \
+          mkdir -p ".fullmag/reports/fem-periodic-antidot-relaxation-runtime/$scenario" && \
+          .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu \
+            "$script" \
+            --backend fem \
+            --headless \
+            --json \
+            --output-dir ".fullmag/reports/fem-periodic-antidot-relaxation-runtime/$scenario/artifacts" \
+            2>&1 | tee ".fullmag/reports/fem-periodic-antidot-relaxation-runtime/$scenario/runtime.log"; \
+          python3 scripts/validate_fem_periodic_antidot_relaxation_artifacts.py \
+            ".fullmag/reports/fem-periodic-antidot-relaxation-runtime/$scenario/runtime.log" \
+            --scenario "$scenario" \
+            --engine cpu \
+            --algorithm projected_gradient_bb \
+            --min-steps "${FULLMAG_PBC_RELAX_MIN_STEPS:-4}"; \
+        done'
+
+verify-fem-periodic-antidot-relaxation-gpu-runtime:
+    just ensure-managed-fem-runtime
+    if [ -d .fullmag/reports/fem-periodic-antidot-relaxation-gpu-runtime ]; then docker compose --profile fem-gpu run --rm -e FULLMAG_HOST_UID="$(id -u)" -e FULLMAG_HOST_GID="$(id -g)" fem-gpu bash -lc 'cd /workspace && chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" .fullmag/reports/fem-periodic-antidot-relaxation-gpu-runtime 2>/dev/null || true'; fi
+    rm -rf .fullmag/reports/fem-periodic-antidot-relaxation-gpu-runtime
+    mkdir -p .fullmag/reports/fem-periodic-antidot-relaxation-gpu-runtime
+    docker compose --profile fem-gpu run --rm \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_FDM_EXECUTION=cpu \
+      -e FULLMAG_FEM_EXECUTION=gpu \
+      -e FULLMAG_RELAX_DEVICE=gpu \
+      -e FULLMAG_FEM_MFEM_DEVICE=cuda \
+      -e FULLMAG_FEM_GPU_DEMAG_MODE=device_hypre_poisson \
+      -e FULLMAG_CPU_THREADS="${FULLMAG_CPU_THREADS:-auto}" \
+      -e FULLMAG_HOST_UID="$(id -u)" \
+      -e FULLMAG_HOST_GID="$(id -g)" \
+      fem-gpu bash -lc 'set -euo pipefail && cd /workspace && \
+        trap '\''chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" .fullmag/reports/fem-periodic-antidot-relaxation-gpu-runtime 2>/dev/null || true'\'' EXIT && \
+        for scenario_script in \
+          exchange_coupled:examples/fem_periodic_antidot_relax_exchange_coupled.py \
+          air_gap:examples/fem_periodic_antidot_relax_air_gap.py; do \
+          scenario="${scenario_script%%:*}" && \
+          script="${scenario_script#*:}" && \
+          rm -rf ".fullmag/reports/fem-periodic-antidot-relaxation-gpu-runtime/$scenario/artifacts" && \
+          mkdir -p ".fullmag/reports/fem-periodic-antidot-relaxation-gpu-runtime/$scenario" && \
+          .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu \
+            "$script" \
+            --backend fem \
+            --headless \
+            --json \
+            --output-dir ".fullmag/reports/fem-periodic-antidot-relaxation-gpu-runtime/$scenario/artifacts" \
+            2>&1 | tee ".fullmag/reports/fem-periodic-antidot-relaxation-gpu-runtime/$scenario/runtime.log"; \
+          python3 scripts/validate_fem_periodic_antidot_relaxation_artifacts.py \
+            ".fullmag/reports/fem-periodic-antidot-relaxation-gpu-runtime/$scenario/runtime.log" \
+            --scenario "$scenario" \
+            --engine gpu \
+            --algorithm projected_gradient_bb \
+            --min-steps "${FULLMAG_PBC_RELAX_MIN_STEPS:-4}"; \
+        done'
 
 verify-fem-relaxation-cpu-gpu-consistency-smoke:
     just ensure-managed-fem-runtime
@@ -1134,7 +1383,7 @@ fullmag opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":
         elif [ ! -x "{{gpu_runtime_bin}}" ]; then echo "Managed FEM runtime is missing; run with build=True or force=True once." >&2; exit 2; fi; \
         if [ "$build" = "false" ]; then \
           if [ ! -f "{{gpu_runtime_manifest}}" ]; then echo "Managed FEM runtime manifest is missing; run with build=True or force=True once." >&2; exit 2; fi; \
-          stale_source="$(find crates/fullmag-api crates/fullmag-authoring crates/fullmag-cli crates/fullmag-runner crates/fullmag-quantities crates/fullmag-plan crates/fullmag-ir crates/fullmag-engine crates/fullmag-session crates/fullmag-fdm-demag crates/fullmag-fdm-sys crates/fullmag-fem-sys native/CMakeLists.txt native/include backends/fem backends/fdm docker/fem-gpu/Dockerfile compose.yaml scripts/export_fem_gpu_runtime.sh scripts/lib/runtime_bundle_copy.sh Cargo.toml Cargo.lock rust-toolchain.toml -type f ! -path \"*/.fullmag/*\" ! -path \"*/__pycache__/*\" ! -name \"*.pyc\" -newer '{{gpu_runtime_manifest}}' -print -quit 2>/dev/null)"; \
+          stale_source="$(find crates/fullmag-api crates/fullmag-authoring crates/fullmag-cli crates/fullmag-runner crates/fullmag-quantities crates/fullmag-plan crates/fullmag-ir crates/fullmag-engine crates/fullmag-session crates/fullmag-fdm-demag crates/fullmag-fdm-sys crates/fullmag-fem-sys native/CMakeLists.txt native/include backends/fem backends/fdm docker/fem-gpu/Dockerfile compose.yaml scripts/export_fem_gpu_runtime.sh scripts/lib/runtime_bundle_copy.sh Cargo.toml Cargo.lock rust-toolchain.toml \( -path '*/.fullmag' -o -path '*/__pycache__' \) -prune -o -type f ! -name \"*.pyc\" -newer '{{gpu_runtime_manifest}}' -print -quit 2>/dev/null)"; \
           if [ -n "$stale_source" ]; then \
             echo "Managed FEM runtime bundle is stale; newer runtime source detected: $stale_source" >&2; \
             echo "Run: just fullmag build=True fem $device $script" >&2; \
@@ -1180,10 +1429,25 @@ run-fdm-hysteresis-snapshot-smoke:
     FULLMAG_DISABLE_CHARTS=1 FULLMAG_DISABLE_PREVIEW_3D=1 \
     fullmag examples/fdm_hysteresis_snapshot_smoke.py --backend fdm --headless --json
 
+_run-hysteresis-waveguide-managed-headless device="cpu":
+    just ensure-managed-fem-runtime
+    bash -euo pipefail -c '\
+      device="{{device}}"; \
+      case "$device" in cpu|gpu) ;; *) echo "unsupported FEM execution mode: $device (expected cpu or gpu)" >&2; exit 2 ;; esac; \
+      FULLMAG_PYTHON="{{repo_python}}" \
+      FULLMAG_FDM_EXECUTION=cpu \
+      FULLMAG_FEM_EXECUTION="$device" \
+      FULLMAG_RELAX_DEVICE="$device" \
+      "{{gpu_runtime_bin}}" \
+      examples/hysteresis_waveguide_300x50x10nm.py \
+      --backend fem \
+      --headless \
+      --json'
+
 run-hysteresis-waveguide-smoke device="cpu":
     FULLMAG_DISABLE_CHARTS=1 FULLMAG_DISABLE_PREVIEW_3D=1 \
     FULLMAG_HYSTERESIS_FIELD_VALUES_MT=50,0,-50 FULLMAG_HYSTERESIS_MAX_STEPS=25 \
-    just fullmag build=False static fem "{{device}}" headless examples/hysteresis_waveguide_300x50x10nm.py
+    just _run-hysteresis-waveguide-managed-headless "{{device}}"
 
 run-hysteresis-waveguide-gpu-smoke:
     just run-hysteresis-waveguide-smoke gpu
@@ -1192,7 +1456,7 @@ run-hysteresis-waveguide-playback-smoke device="cpu":
     FULLMAG_DISABLE_CHARTS=1 FULLMAG_DISABLE_PREVIEW_3D=1 \
     FULLMAG_HYSTERESIS_FIELD_VALUES_MT=50,0,-50 FULLMAG_HYSTERESIS_MAX_STEPS=25 \
     FULLMAG_HYSTERESIS_MAGNETIZATION_STORAGE=every_step \
-    just fullmag build=False static fem "{{device}}" headless examples/hysteresis_waveguide_300x50x10nm.py
+    just _run-hysteresis-waveguide-managed-headless "{{device}}"
 
 run-hysteresis-waveguide-gpu-playback-smoke:
     just run-hysteresis-waveguide-playback-smoke gpu
@@ -1311,7 +1575,7 @@ run-hysteresis-waveguide-angular-family-smoke device="cpu":
     FULLMAG_DISABLE_CHARTS=1 FULLMAG_DISABLE_PREVIEW_3D=1 \
     FULLMAG_HYSTERESIS_FIELD_VALUES_MT=50,0,-50 FULLMAG_HYSTERESIS_MAX_STEPS=25 \
     FULLMAG_HYSTERESIS_ANGULAR_FAMILY=1 \
-    just fullmag build=False static fem "{{device}}" headless examples/hysteresis_waveguide_300x50x10nm.py
+    just _run-hysteresis-waveguide-managed-headless "{{device}}"
 
 run-hysteresis-waveguide-gpu-angular-family-smoke:
     just run-hysteresis-waveguide-angular-family-smoke gpu
@@ -1323,7 +1587,7 @@ run-hysteresis-waveguide-projection-benchmark-smoke device="cpu":
     FULLMAG_DISABLE_CHARTS=1 FULLMAG_DISABLE_PREVIEW_3D=1 \
     FULLMAG_HYSTERESIS_FIELD_VALUES_MT=50,0,-50,0,50 FULLMAG_HYSTERESIS_MAX_STEPS=1 \
     FULLMAG_HYSTERESIS_ANGULAR_FAMILY=1 \
-    just fullmag build=False static fem "{{device}}" headless examples/hysteresis_waveguide_300x50x10nm.py
+    just _run-hysteresis-waveguide-managed-headless "{{device}}"
 
 verify-hysteresis-projection-benchmark artifacts_dir:
     python3 scripts/verify_hysteresis_projection_benchmark.py "{{artifacts_dir}}"
@@ -1335,7 +1599,7 @@ run-hysteresis-waveguide-saturation-limit-smoke device="cpu":
     FULLMAG_HYSTERESIS_SATURATION_MAX_FIELD_MT=10 \
     FULLMAG_HYSTERESIS_SATURATION_SUSCEPTIBILITY_THRESHOLD=1e-12 \
     FULLMAG_HYSTERESIS_SATURATION_TRANSVERSE_THRESHOLD=1e-12 \
-    just fullmag build=False static fem "{{device}}" headless examples/hysteresis_waveguide_300x50x10nm.py
+    just _run-hysteresis-waveguide-managed-headless "{{device}}"
 
 run-hysteresis-waveguide-gpu-saturation-limit-smoke:
     just run-hysteresis-waveguide-saturation-limit-smoke gpu
@@ -1349,7 +1613,7 @@ run-hysteresis-waveguide-minor-loop-smoke device="cpu":
     FULLMAG_HYSTERESIS_MINOR_LOOP=1 \
     FULLMAG_HYSTERESIS_MINOR_REVERSAL_MT=50 \
     FULLMAG_HYSTERESIS_MINOR_RETURN_MT=-25 \
-    just fullmag build=False static fem "{{device}}" headless examples/hysteresis_waveguide_300x50x10nm.py
+    just _run-hysteresis-waveguide-managed-headless "{{device}}"
 
 run-hysteresis-waveguide-gpu-minor-loop-smoke:
     just run-hysteresis-waveguide-minor-loop-smoke gpu
@@ -1522,7 +1786,7 @@ ensure-managed-fem-runtime:
         echo "Managed FEM runtime bundle is missing or incomplete; rebuilding it now." >&2; \
         just rebuild-fem-runtime; \
     fi
-    stale_source="$(find crates/fullmag-api crates/fullmag-authoring crates/fullmag-cli crates/fullmag-runner crates/fullmag-quantities crates/fullmag-plan crates/fullmag-ir crates/fullmag-engine crates/fullmag-session crates/fullmag-fdm-demag crates/fullmag-fdm-sys crates/fullmag-fem-sys native/CMakeLists.txt native/include backends/fem backends/fdm docker/fem-gpu/Dockerfile compose.yaml scripts/export_fem_gpu_runtime.sh scripts/lib/runtime_bundle_copy.sh Cargo.toml Cargo.lock rust-toolchain.toml -type f ! -path \"*/.fullmag/*\" ! -path \"*/__pycache__/*\" ! -name \"*.pyc\" -newer '{{gpu_runtime_manifest}}' -print -quit 2>/dev/null)"; \
+    stale_source="$(find crates/fullmag-api crates/fullmag-authoring crates/fullmag-cli crates/fullmag-runner crates/fullmag-quantities crates/fullmag-plan crates/fullmag-ir crates/fullmag-engine crates/fullmag-session crates/fullmag-fdm-demag crates/fullmag-fdm-sys crates/fullmag-fem-sys native/CMakeLists.txt native/include backends/fem backends/fdm docker/fem-gpu/Dockerfile compose.yaml scripts/export_fem_gpu_runtime.sh scripts/lib/runtime_bundle_copy.sh Cargo.toml Cargo.lock rust-toolchain.toml \( -path '*/.fullmag' -o -path '*/__pycache__' \) -prune -o -type f ! -name \"*.pyc\" -newer '{{gpu_runtime_manifest}}' -print -quit 2>/dev/null)"; \
     if [ -n "$stale_source" ]; then \
         echo "Managed FEM runtime bundle is stale; newer runtime source detected: $stale_source" >&2; \
         echo "Rebuilding managed FEM runtime bundle now." >&2; \

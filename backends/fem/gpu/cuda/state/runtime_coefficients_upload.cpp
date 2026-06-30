@@ -124,6 +124,7 @@ bool gpu_runtime_coefficients_upload(
 
     std::vector<uint32_t> reduced_node(node_count);
     std::vector<uint32_t> representative_node(node_count);
+    bool has_periodic_reduced_nodes = false;
     for (size_t node = 0; node < node_count; ++node) {
         reduced_node[node] = static_cast<uint32_t>(node);
         representative_node[node] = static_cast<uint32_t>(node);
@@ -131,6 +132,12 @@ bool gpu_runtime_coefficients_upload(
     if (periodic_reduced_node != nullptr &&
         periodic_reduced_node_len == static_cast<uint64_t>(node_count)) {
         std::copy(periodic_reduced_node, periodic_reduced_node + node_count, reduced_node.begin());
+        for (size_t node = 0; node < node_count; ++node) {
+            if (reduced_node[node] != static_cast<uint32_t>(node)) {
+                has_periodic_reduced_nodes = true;
+                break;
+            }
+        }
         if (periodic_representative_nodes != nullptr) {
             for (size_t node = 0; node < node_count; ++node) {
                 const uint32_t reduced = reduced_node[node];
@@ -186,6 +193,7 @@ bool gpu_runtime_coefficients_upload(
     mesh_metrics.node_count = static_cast<uint64_t>(node_count);
     materials.node_count = static_cast<uint64_t>(node_count);
     mesh_regions.node_count = static_cast<uint64_t>(node_count);
+    mesh_regions.has_periodic_reduced_nodes = has_periodic_reduced_nodes;
     runtime_coefficients.uploaded = true;
     return true;
 #else

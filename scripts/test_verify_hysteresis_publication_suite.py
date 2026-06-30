@@ -170,6 +170,117 @@ def write_publication_suite_fixture(root: Path, *, omit_case: str | None = None)
     return manifest
 
 
+def write_validated_publication_suite_with_full_parity(root: Path) -> Path:
+    manifest = write_publication_suite_fixture(root)
+    parity_root = root / "parity"
+    for lane_dir in ("fdm_cpu", "fdm_gpu", "fem_cpu", "fem_gpu"):
+        metrics_parity_fixtures.write_json(
+            parity_root / lane_dir / "hysteresis_metrics.json",
+            metrics_parity_fixtures.metrics_payload(),
+        )
+    metrics_parity_fixtures.write_json(
+        parity_root / "hysteresis_metrics_parity.json",
+        {
+            "schema_version": "hysteresis-metrics-parity/v1",
+            "pairs": [
+                {
+                    "pair_id": "fdm_cpu_vs_fdm_gpu",
+                    "reference": {
+                        "backend": "fdm",
+                        "device": "cpu",
+                        "precision": "double",
+                        "metrics_path": "fdm_cpu/hysteresis_metrics.json",
+                    },
+                    "candidate": {
+                        "backend": "fdm",
+                        "device": "gpu",
+                        "precision": "double",
+                        "metrics_path": "fdm_gpu/hysteresis_metrics.json",
+                    },
+                    "metrics": [
+                        {"name": "H_c_plus", "unit": "mT", "abs_tolerance": 0.0},
+                        {"name": "H_c_minus", "unit": "mT", "abs_tolerance": 0.0},
+                        {"name": "M_r_plus", "unit": "1", "abs_tolerance": 0.0},
+                        {"name": "M_r_minus", "unit": "1", "abs_tolerance": 0.0},
+                    ],
+                },
+                {
+                    "pair_id": "fdm_cpu_vs_fem_cpu",
+                    "reference": {
+                        "backend": "fdm",
+                        "device": "cpu",
+                        "precision": "double",
+                        "metrics_path": "fdm_cpu/hysteresis_metrics.json",
+                    },
+                    "candidate": {
+                        "backend": "fem",
+                        "device": "cpu",
+                        "precision": "double",
+                        "metrics_path": "fem_cpu/hysteresis_metrics.json",
+                    },
+                    "metrics": [
+                        {"name": "H_c_plus", "unit": "mT", "abs_tolerance": 0.0},
+                        {"name": "H_c_minus", "unit": "mT", "abs_tolerance": 0.0},
+                        {"name": "M_r_plus", "unit": "1", "abs_tolerance": 0.0},
+                        {"name": "M_r_minus", "unit": "1", "abs_tolerance": 0.0},
+                    ],
+                },
+                {
+                    "pair_id": "fdm_cpu_vs_fem_gpu",
+                    "reference": {
+                        "backend": "fdm",
+                        "device": "cpu",
+                        "precision": "double",
+                        "metrics_path": "fdm_cpu/hysteresis_metrics.json",
+                    },
+                    "candidate": {
+                        "backend": "fem",
+                        "device": "gpu",
+                        "precision": "double",
+                        "metrics_path": "fem_gpu/hysteresis_metrics.json",
+                    },
+                    "metrics": [
+                        {"name": "H_c_plus", "unit": "mT", "abs_tolerance": 0.0},
+                        {"name": "H_c_minus", "unit": "mT", "abs_tolerance": 0.0},
+                        {"name": "M_r_plus", "unit": "1", "abs_tolerance": 0.0},
+                        {"name": "M_r_minus", "unit": "1", "abs_tolerance": 0.0},
+                    ],
+                },
+            ],
+        },
+    )
+    payload = json.loads(manifest.read_text())
+    payload["cases"]["fdm_gpu_parity"] = {
+        "backend": "fdm",
+        "device": "gpu",
+        "precision": "double",
+    }
+    payload["cases"]["fem_gpu_parity"] = {
+        "backend": "fem",
+        "device": "gpu",
+        "precision": "double",
+    }
+    payload["cross_backend_acceptance"]["status"] = "validated"
+    payload["cross_backend_acceptance"]["parity_checks"] = [
+        "parity/hysteresis_metrics_parity.json"
+    ]
+    payload["cross_backend_acceptance"]["tolerances"] = [
+        {"metric": metric, "status": "validated", "reason": "synthetic parity tolerance"}
+        for metric in ("H_c_plus", "H_c_minus", "M_r_plus", "M_r_minus")
+    ]
+    for lane in payload["cross_backend_acceptance"]["lanes"]:
+        lane["status"] = "validated"
+        lane["evidence"] = "synthetic full parity coverage evidence"
+        lane.pop("limitations", None)
+        lane.pop("reason", None)
+        if lane["backend"] == "fdm" and lane["device"] == "gpu":
+            lane["case_ids"] = ["fdm_gpu_parity"]
+        elif lane["backend"] == "fem" and lane["device"] == "gpu":
+            lane["case_ids"] = ["fem_gpu_parity"]
+    write_json(manifest, payload)
+    return manifest
+
+
 def test_publication_suite_accepts_required_cases(tmp_path: Path) -> None:
     manifest = write_publication_suite_fixture(tmp_path)
 
@@ -320,6 +431,78 @@ def test_publication_suite_surfaces_case_validator_failure(tmp_path: Path) -> No
     assert "m_parallel" in (result.stderr + result.stdout)
 
 
+def test_publication_suite_passes_case_validator_args(tmp_path: Path) -> None:
+    manifest = write_publication_suite_fixture(tmp_path)
+    payload = json.loads(manifest.read_text())
+    payload["cases"]["macrospin_sw"]["validator_args"] = [
+        "--require-publication-astroid-ratio",
+        "--astroid-ratio-abs-tolerance",
+        "0.05",
+    ]
+    write_json(manifest, payload)
+
+    result = run_validator(manifest)
+
+    assert result.returncode != 0
+    details = result.stderr + result.stdout
+    assert "macrospin_sw" in details
+    assert "publication astroid ratio" in details
+
+
+def test_publication_suite_accepts_case_validator_args_when_artifact_passes(
+    tmp_path: Path,
+) -> None:
+    manifest = write_publication_suite_fixture(tmp_path)
+    macrospin_fixtures.write_macrospin_fixture(
+        tmp_path / "macrospin_sw",
+        easy_orientation={"kind": "sample", "theta": 30.0, "phi": 0.0},
+        theta_orientation={"kind": "sample", "theta": 45.0, "phi": 0.0},
+        theta_points=macrospin_fixtures.loop_points(13.4),
+    )
+    payload = json.loads(manifest.read_text())
+    payload["cases"]["macrospin_sw"]["validator_args"] = [
+        "--require-publication-astroid-ratio",
+        "--astroid-ratio-abs-tolerance",
+        "0.05",
+    ]
+    write_json(manifest, payload)
+
+    result = run_validator(manifest)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "validated hysteresis publication suite" in result.stdout
+
+
+def test_publication_suite_rejects_non_list_case_validator_args(
+    tmp_path: Path,
+) -> None:
+    manifest = write_publication_suite_fixture(tmp_path)
+    payload = json.loads(manifest.read_text())
+    payload["cases"]["macrospin_sw"]["validator_args"] = "--require-publication-astroid-ratio"
+    write_json(manifest, payload)
+
+    result = run_validator(manifest)
+
+    assert result.returncode != 0
+    assert "validator_args" in (result.stderr + result.stdout)
+
+
+def test_publication_suite_rejects_validator_args_help_bypass(
+    tmp_path: Path,
+) -> None:
+    manifest = write_publication_suite_fixture(tmp_path)
+    payload = json.loads(manifest.read_text())
+    payload["cases"]["macrospin_sw"]["validator_args"] = ["--help"]
+    write_json(manifest, payload)
+
+    result = run_validator(manifest)
+
+    assert result.returncode != 0
+    details = result.stderr + result.stdout
+    assert "validator_args" in details
+    assert "--help" in details
+
+
 def test_publication_suite_runs_optional_metrics_parity_check(
     tmp_path: Path,
 ) -> None:
@@ -440,8 +623,10 @@ def test_publication_suite_rejects_validated_acceptance_with_open_lane(
     payload["cross_backend_acceptance"]["parity_checks"] = [
         "parity/hysteresis_metrics_parity.json"
     ]
-    for tolerance in payload["cross_backend_acceptance"]["tolerances"]:
-        tolerance["status"] = "validated"
+    payload["cross_backend_acceptance"]["tolerances"] = [
+        {"metric": metric, "status": "validated", "reason": "synthetic parity tolerance"}
+        for metric in ("H_c_plus", "H_c_minus", "M_r_plus", "M_r_minus")
+    ]
     write_json(manifest, payload)
 
     result = run_validator(manifest)
@@ -472,8 +657,10 @@ def test_publication_suite_rejects_validated_acceptance_with_uncovered_lane(
     payload["cross_backend_acceptance"]["parity_checks"] = [
         "parity/hysteresis_metrics_parity.json"
     ]
-    for tolerance in payload["cross_backend_acceptance"]["tolerances"]:
-        tolerance["status"] = "validated"
+    payload["cross_backend_acceptance"]["tolerances"] = [
+        {"metric": metric, "status": "validated", "reason": "synthetic parity tolerance"}
+        for metric in ("H_c_plus", "H_c_minus", "M_r_plus", "M_r_minus")
+    ]
     for lane in payload["cross_backend_acceptance"]["lanes"]:
         lane["status"] = "validated"
         lane["evidence"] = "synthetic lane evidence for coverage gate"
@@ -491,6 +678,28 @@ def test_publication_suite_rejects_validated_acceptance_with_uncovered_lane(
     details = result.stderr + result.stdout
     assert "parity_checks" in details
     assert "fdm/gpu/double" in details
+
+
+def test_publication_suite_rejects_validated_acceptance_without_required_metric_tolerances(
+    tmp_path: Path,
+) -> None:
+    manifest = write_validated_publication_suite_with_full_parity(tmp_path)
+    payload = json.loads(manifest.read_text())
+    payload["cross_backend_acceptance"]["tolerances"] = [
+        {
+            "metric": "loop_area",
+            "status": "validated",
+            "reason": "not a required cross-backend acceptance metric",
+        }
+    ]
+    write_json(manifest, payload)
+
+    result = run_validator(manifest)
+
+    assert result.returncode != 0
+    details = result.stderr + result.stdout
+    assert "tolerances" in details
+    assert "H_c_plus" in details
 
 
 def test_publication_suite_accepts_validated_acceptance_with_full_parity_coverage(
@@ -589,8 +798,10 @@ def test_publication_suite_accepts_validated_acceptance_with_full_parity_coverag
     payload["cross_backend_acceptance"]["parity_checks"] = [
         "parity/hysteresis_metrics_parity.json"
     ]
-    for tolerance in payload["cross_backend_acceptance"]["tolerances"]:
-        tolerance["status"] = "validated"
+    payload["cross_backend_acceptance"]["tolerances"] = [
+        {"metric": metric, "status": "validated", "reason": "synthetic parity tolerance"}
+        for metric in ("H_c_plus", "H_c_minus", "M_r_plus", "M_r_minus")
+    ]
     for lane in payload["cross_backend_acceptance"]["lanes"]:
         lane["status"] = "validated"
         lane["evidence"] = "synthetic full parity coverage evidence"
@@ -704,8 +915,10 @@ def test_publication_suite_rejects_validated_acceptance_with_reversed_parity_pai
     payload["cross_backend_acceptance"]["parity_checks"] = [
         "parity/hysteresis_metrics_parity.json"
     ]
-    for tolerance in payload["cross_backend_acceptance"]["tolerances"]:
-        tolerance["status"] = "validated"
+    payload["cross_backend_acceptance"]["tolerances"] = [
+        {"metric": metric, "status": "validated", "reason": "synthetic parity tolerance"}
+        for metric in ("H_c_plus", "H_c_minus", "M_r_plus", "M_r_minus")
+    ]
     for lane in payload["cross_backend_acceptance"]["lanes"]:
         lane["status"] = "validated"
         lane["evidence"] = "synthetic reversed coverage evidence"

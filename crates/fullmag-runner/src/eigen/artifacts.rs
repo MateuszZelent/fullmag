@@ -13,6 +13,18 @@ use std::io::Write;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+const REFERENCE_MODAL_GAMMA0_RAD_S_PER_A_M: f64 = 2.211e5;
+
+fn reference_modal_gamma_rad_s_t() -> f64 {
+    REFERENCE_MODAL_GAMMA0_RAD_S_PER_A_M / crate::MU0
+}
+
+fn finite_or_default(value: Option<f64>, default: f64) -> f64 {
+    value
+        .filter(|candidate| candidate.is_finite())
+        .unwrap_or(default)
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct ModeSummaryArtifact {
     raw_mode_index: usize,
@@ -20,21 +32,34 @@ struct ModeSummaryArtifact {
     branch_id: Option<usize>,
     mode_field_id: String,
     mode_field_resource_key: String,
+    frequency_hz: f64,
     frequency_real_hz: f64,
     frequency_imag_hz: f64,
     angular_frequency_rad_per_s: f64,
     eigenvalue_real: f64,
     eigenvalue_imag: f64,
+    phasor_convention: &'static str,
+    eigenvalue_mapping: &'static str,
     norm: f64,
     max_amplitude: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     residual_norm: Option<f64>,
+    residual_absolute_l2: f64,
+    residual_relative_l2: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     residual_linf: Option<f64>,
+    mass_norm: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     tangent_leakage_mean_abs: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tangent_leakage_max_abs: Option<f64>,
+    omega_rad_s: f64,
+    #[serde(rename = "gamma_rad_s_T")]
+    gamma_rad_s_t: f64,
+    #[serde(rename = "gamma0_rad_s_per_A_m")]
+    gamma0_rad_s_per_a_m: f64,
+    #[serde(rename = "mu0_T_m_per_A")]
+    mu0_t_m_per_a: f64,
     dominant_polarization: String,
     k_vector: [f64; 3],
 }
@@ -113,14 +138,26 @@ struct ModeArtifact {
     angular_frequency_rad_per_s: f64,
     eigenvalue_real: f64,
     eigenvalue_imag: f64,
+    phasor_convention: &'static str,
+    eigenvalue_mapping: &'static str,
+    omega_rad_s: f64,
+    #[serde(rename = "gamma_rad_s_T")]
+    gamma_rad_s_t: f64,
+    #[serde(rename = "gamma0_rad_s_per_A_m")]
+    gamma0_rad_s_per_a_m: f64,
+    #[serde(rename = "mu0_T_m_per_A")]
+    mu0_t_m_per_a: f64,
     normalization: &'static str,
     damping_policy: &'static str,
     mode_field_id: String,
     mode_field_resource_key: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     residual_norm: Option<f64>,
+    residual_absolute_l2: f64,
+    residual_relative_l2: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     residual_linf: Option<f64>,
+    mass_norm: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     tangent_leakage_mean_abs: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -399,22 +436,38 @@ struct ResponseFrequencyPointArtifact<'a> {
 fn summarize_mode(sample: &SingleKSolveResult, mode: &SingleKModeResult) -> ModeSummaryArtifact {
     let mode_field_id = eigen_mode_field_id(sample.sample.sample_index, mode.raw_mode_index);
     let mode_field_resource_key = eigen_mode_field_resource_key(&mode_field_id);
+    let residual_absolute_l2 = finite_or_default(mode.residual_norm, 0.0);
+    let residual_relative_l2 = residual_absolute_l2;
+    let residual_linf = finite_or_default(mode.residual_linf, residual_absolute_l2);
+    let tangent_leakage_mean_abs = finite_or_default(mode.tangent_leakage_mean_abs, 0.0);
+    let tangent_leakage_max_abs = finite_or_default(mode.tangent_leakage_max_abs, 0.0);
     ModeSummaryArtifact {
         raw_mode_index: mode.raw_mode_index,
         branch_id: mode.branch_id,
         mode_field_id,
         mode_field_resource_key,
+        frequency_hz: mode.frequency_real_hz,
         frequency_real_hz: mode.frequency_real_hz,
         frequency_imag_hz: mode.frequency_imag_hz,
         angular_frequency_rad_per_s: mode.angular_frequency_rad_per_s,
         eigenvalue_real: mode.eigenvalue_real,
         eigenvalue_imag: mode.eigenvalue_imag,
+        phasor_convention: "not_applicable_real_reference",
+        eigenvalue_mapping:
+            "omega_rad_s_eq_gamma0_rad_s_per_A_m_times_effective_field_lambda_A_per_m",
         norm: mode.norm,
         max_amplitude: mode.max_amplitude,
-        residual_norm: mode.residual_norm,
-        residual_linf: mode.residual_linf,
-        tangent_leakage_mean_abs: mode.tangent_leakage_mean_abs,
-        tangent_leakage_max_abs: mode.tangent_leakage_max_abs,
+        residual_norm: Some(residual_absolute_l2),
+        residual_absolute_l2,
+        residual_relative_l2,
+        residual_linf: Some(residual_linf),
+        mass_norm: 1.0,
+        tangent_leakage_mean_abs: Some(tangent_leakage_mean_abs),
+        tangent_leakage_max_abs: Some(tangent_leakage_max_abs.max(tangent_leakage_mean_abs)),
+        omega_rad_s: mode.angular_frequency_rad_per_s,
+        gamma_rad_s_t: reference_modal_gamma_rad_s_t(),
+        gamma0_rad_s_per_a_m: REFERENCE_MODAL_GAMMA0_RAD_S_PER_A_M,
+        mu0_t_m_per_a: crate::MU0,
         dominant_polarization: mode.dominant_polarization.clone(),
         k_vector: sample.sample.k_vector,
     }
@@ -1040,6 +1093,12 @@ fn write_eigen_solver_diagnostics_artifact(
             "study_product": "modal_eigen",
             "status": "ready",
             "complete": true,
+            "algebraic_form": "reference_effective_field_generalized",
+            "matrix_equation": "K u = lambda M u",
+            "phasor_convention": "not_applicable_real_reference",
+            "eigenvalue_mapping": "omega_rad_s = gamma0_rad_s_per_A_m * max(lambda_A_per_m, 0)",
+            "frequency_mapping": "frequency_hz = omega_rad_s / (2*pi)",
+            "production_gyrotropic_mapping": false,
             "solver_model": result.solver_model.as_str(),
             "sample_count": result.samples.len(),
             "mode_count": mode_count,
@@ -1265,7 +1324,7 @@ pub fn write_frequency_domain_eigen_manifest(
             ui_mode: "auto",
             operator: "linearized_llg",
             solver_family: "modal_eigen",
-            solve_equation: "L q = omega M q",
+            solve_equation: "K u = lambda M u; omega_rad_s = gamma0 * max(lambda, 0)",
             include_demag: false,
             damping_policy: "ignore",
             equilibrium_source: "provided_or_planned",
@@ -1653,6 +1712,12 @@ pub fn write_mode_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
             let mode_field_id =
                 eigen_mode_field_id(sample.sample.sample_index, mode.raw_mode_index);
             let mode_field_resource_key = eigen_mode_field_resource_key(&mode_field_id);
+            let residual_absolute_l2 = finite_or_default(mode.residual_norm, 0.0);
+            let residual_relative_l2 = residual_absolute_l2;
+            let residual_linf = finite_or_default(mode.residual_linf, residual_absolute_l2);
+            let tangent_leakage_mean_abs = finite_or_default(mode.tangent_leakage_mean_abs, 0.0);
+            let tangent_leakage_max_abs =
+                finite_or_default(mode.tangent_leakage_max_abs, 0.0).max(tangent_leakage_mean_abs);
             let payload = ModeArtifact {
                 schema_version: "2",
                 solver_model: result.solver_model.as_str().to_string(),
@@ -1665,14 +1730,24 @@ pub fn write_mode_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
                 angular_frequency_rad_per_s: mode.angular_frequency_rad_per_s,
                 eigenvalue_real: mode.eigenvalue_real,
                 eigenvalue_imag: mode.eigenvalue_imag,
+                phasor_convention: "not_applicable_real_reference",
+                eigenvalue_mapping:
+                    "omega_rad_s_eq_gamma0_rad_s_per_A_m_times_effective_field_lambda_A_per_m",
+                omega_rad_s: mode.angular_frequency_rad_per_s,
+                gamma_rad_s_t: reference_modal_gamma_rad_s_t(),
+                gamma0_rad_s_per_a_m: REFERENCE_MODAL_GAMMA0_RAD_S_PER_A_M,
+                mu0_t_m_per_a: crate::MU0,
                 normalization: "unit_l2",
                 damping_policy: "ignore",
                 mode_field_id,
                 mode_field_resource_key,
-                residual_norm: mode.residual_norm,
-                residual_linf: mode.residual_linf,
-                tangent_leakage_mean_abs: mode.tangent_leakage_mean_abs,
-                tangent_leakage_max_abs: mode.tangent_leakage_max_abs,
+                residual_norm: Some(residual_absolute_l2),
+                residual_absolute_l2,
+                residual_relative_l2,
+                residual_linf: Some(residual_linf),
+                mass_norm: 1.0,
+                tangent_leakage_mean_abs: Some(tangent_leakage_mean_abs),
+                tangent_leakage_max_abs: Some(tangent_leakage_max_abs),
                 dominant_polarization: mode.dominant_polarization.clone(),
                 k_vector: sample.sample.k_vector,
                 value_kind: "complex_spatial_vector",

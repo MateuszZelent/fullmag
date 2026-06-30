@@ -95,7 +95,7 @@ export function PhysicalScalarField({
         const nextText = event.target.value;
         setText(nextText);
         const parsed = parseRegionPhysicalScalar(nextText);
-        if (parsed !== null) {
+        if (parsed !== null && !Object.is(parsed, value)) {
           onValueChange(parsed);
         }
       }}

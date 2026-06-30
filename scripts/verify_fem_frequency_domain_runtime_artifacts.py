@@ -15,6 +15,7 @@ FLOQUET_RECIPROCAL_ABS_TOL = 1.0e-8
 FLOQUET_RECIPROCAL_REL_TOL = 1.0e-7
 FLOQUET_RECIPROCAL_K_ABS_TOL = 1.0e-6
 FLOQUET_RECIPROCAL_K_REL_TOL = 1.0e-12
+FLOQUET_TANGENT_FRAME_IDENTITY_TOL = 1.0e-10
 AIRBOX_Z_PADDING_RESPONSE_ABS_TOL = 0.0
 AIRBOX_Z_PADDING_RESPONSE_REL_TOL = 5.0e-2
 AIRBOX_Z_PADDING_FREQUENCY_ABS_TOL = 1.0e-6
@@ -131,6 +132,15 @@ def require_finite_number(value: object, name: str) -> None:
         )
 
 
+def require_non_negative_finite_number(value: object, name: str) -> None:
+    require_finite_number(value, name)
+    if float(value) < 0.0:
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            f"{name} must be non-negative"
+        )
+
+
 def require_finite_number_list(value: object, name: str) -> list[object]:
     if not isinstance(value, list) or not value:
         raise SystemExit(
@@ -140,6 +150,48 @@ def require_finite_number_list(value: object, name: str) -> list[object]:
     for index, item in enumerate(value):
         require_finite_number(item, f"{name}[{index}]")
     return value
+
+
+def require_block_norms(value: object, name: str) -> None:
+    if not isinstance(value, dict):
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            f"{name} must be an object"
+        )
+    for field_name in [
+        "rhs_real_l2_norm",
+        "rhs_imag_l2_norm",
+        "residual_real_l2_norm",
+        "residual_imag_l2_norm",
+        "response_real_l2_norm",
+        "response_imag_l2_norm",
+    ]:
+        require_non_negative_finite_number(
+            value.get(field_name),
+            f"{name}.{field_name}",
+        )
+
+
+def require_coupled_block_norms(value: object, name: str) -> None:
+    if not isinstance(value, dict):
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            f"{name} must be an object"
+        )
+    for field_name in [
+        "rhs_delta_m_l2_norm",
+        "rhs_delta_phi_l2_norm",
+        "residual_delta_m_l2_norm",
+        "residual_delta_phi_l2_norm",
+        "relative_residual_delta_m_l2_norm",
+        "relative_residual_delta_phi_l2_norm",
+        "response_delta_m_l2_norm",
+        "response_delta_phi_l2_norm",
+    ]:
+        require_non_negative_finite_number(
+            value.get(field_name),
+            f"{name}.{field_name}",
+        )
 
 
 def require_positive_integer(value: object, name: str) -> int:
@@ -248,6 +300,30 @@ def require_response_observables(point: dict, point_name: str) -> None:
         False,
         f"{point_name}.susceptibility_tensor_provenance.full_tensor",
     )
+    require_expected(
+        {
+            f"{point_name}.susceptibility_tensor_provenance.response_quantity": (
+                provenance.get("response_quantity"),
+                "delta_m_over_h_drive",
+            ),
+            f"{point_name}.susceptibility_tensor_provenance.response_units": (
+                provenance.get("response_units"),
+                "m/A",
+            ),
+            f"{point_name}.susceptibility_tensor_provenance.dimensionless_si_susceptibility": (
+                provenance.get("dimensionless_si_susceptibility"),
+                False,
+            ),
+            f"{point_name}.susceptibility_tensor_provenance.requires_ms_for_chi_si": (
+                provenance.get("requires_ms_for_chi_si"),
+                True,
+            ),
+            f"{point_name}.susceptibility_tensor_provenance.ms_factor_applied": (
+                provenance.get("ms_factor_applied"),
+                False,
+            ),
+        }
+    )
     absorbed_provenance = point.get("absorbed_power_density_provenance")
     if not isinstance(absorbed_provenance, dict):
         raise SystemExit(
@@ -255,6 +331,26 @@ def require_response_observables(point: dict, point_name: str) -> None:
             f"{point_name}.absorbed_power_density_provenance must be an object"
         )
     require_non_empty_string(absorbed_provenance.get("kind"), f"{point_name}.absorbed_power_density_provenance.kind")
+    require_expected(
+        {
+            f"{point_name}.absorbed_power_density_provenance.physical_power_density": (
+                absorbed_provenance.get("physical_power_density"),
+                False,
+            ),
+            f"{point_name}.absorbed_power_density_provenance.units": (
+                absorbed_provenance.get("units"),
+                "proxy_not_W_per_m3",
+            ),
+            f"{point_name}.absorbed_power_density_provenance.requires_mu0_ms_factor": (
+                absorbed_provenance.get("requires_mu0_ms_factor"),
+                True,
+            ),
+            f"{point_name}.absorbed_power_density_provenance.ms_factor_applied": (
+                absorbed_provenance.get("ms_factor_applied"),
+                False,
+            ),
+        }
+    )
     tangent_leakage = point.get("tangent_leakage")
     if not isinstance(tangent_leakage, dict):
         raise SystemExit(
@@ -414,6 +510,59 @@ def require_floquet_phase_projection_diagnostics(diagnostics: dict, manifest: di
                 "invalid frequency-domain runtime artifacts:\n"
                 "manifest.diagnostics.floquet_real_imag_mixing must be true when floquet_phase_projection is true"
             )
+        basis_transport_policy = diagnostics.get("basis_transport_policy")
+        if basis_transport_policy not in {
+            "tangent_frame_identity",
+            "tangent_frame_transport",
+            "full_vector",
+        }:
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                "diagnostics.basis_transport_policy must state full_vector, tangent_frame_transport, or tangent_frame_identity when floquet_phase_projection is true"
+            )
+        if manifest_diagnostics.get("basis_transport_policy") != basis_transport_policy:
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                "manifest.diagnostics.basis_transport_policy must match diagnostics.basis_transport_policy"
+            )
+        if basis_transport_policy == "full_vector":
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                "diagnostics.basis_transport_policy=full_vector is not valid for tangent-coordinate Floquet phase projection"
+            )
+        frame_mismatch = diagnostics.get("floquet_tangent_frame_max_mismatch")
+        require_non_negative_finite_number(
+            frame_mismatch,
+            "diagnostics.floquet_tangent_frame_max_mismatch",
+        )
+        if manifest_diagnostics.get("floquet_tangent_frame_max_mismatch") != frame_mismatch:
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                "manifest.diagnostics.floquet_tangent_frame_max_mismatch must match diagnostics.floquet_tangent_frame_max_mismatch"
+            )
+        transport_nonunitarity = diagnostics.get(
+            "floquet_tangent_transport_max_nonunitarity"
+        )
+        require_non_negative_finite_number(
+            transport_nonunitarity,
+            "diagnostics.floquet_tangent_transport_max_nonunitarity",
+        )
+        if (
+            manifest_diagnostics.get("floquet_tangent_transport_max_nonunitarity")
+            != transport_nonunitarity
+        ):
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                "manifest.diagnostics.floquet_tangent_transport_max_nonunitarity must match diagnostics.floquet_tangent_transport_max_nonunitarity"
+            )
+        if (
+            basis_transport_policy == "tangent_frame_identity"
+            and float(frame_mismatch) > FLOQUET_TANGENT_FRAME_IDENTITY_TOL
+        ):
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                "diagnostics.basis_transport_policy=tangent_frame_identity requires floquet_tangent_frame_max_mismatch below tolerance"
+            )
         operator_terms = require_string_list(
             diagnostics.get("operator_terms_included"),
             "diagnostics.operator_terms_included",
@@ -541,6 +690,36 @@ def require_floquet_periodic_pairs_artifact(
         residual_diagnostics.get("floquet_phase_loop_max_residual"),
         "mesh.periodic_pairs.residual_diagnostics.floquet_phase_loop_max_residual",
     )
+    basis_transport_policy = diagnostics.get("basis_transport_policy")
+    require_equal(
+        periodic_pairs.get("basis_transport_policy"),
+        basis_transport_policy,
+        "mesh.periodic_pairs.basis_transport_policy",
+    )
+    pair_frame_mismatch = residual_diagnostics.get(
+        "floquet_tangent_frame_max_mismatch"
+    )
+    require_non_negative_finite_number(
+        pair_frame_mismatch,
+        "mesh.periodic_pairs.residual_diagnostics.floquet_tangent_frame_max_mismatch",
+    )
+    require_equal(
+        pair_frame_mismatch,
+        diagnostics.get("floquet_tangent_frame_max_mismatch"),
+        "mesh.periodic_pairs.residual_diagnostics.floquet_tangent_frame_max_mismatch",
+    )
+    pair_transport_nonunitarity = residual_diagnostics.get(
+        "floquet_tangent_transport_max_nonunitarity"
+    )
+    require_non_negative_finite_number(
+        pair_transport_nonunitarity,
+        "mesh.periodic_pairs.residual_diagnostics.floquet_tangent_transport_max_nonunitarity",
+    )
+    require_equal(
+        pair_transport_nonunitarity,
+        diagnostics.get("floquet_tangent_transport_max_nonunitarity"),
+        "mesh.periodic_pairs.residual_diagnostics.floquet_tangent_transport_max_nonunitarity",
+    )
 
     k_vector = require_three_finite_numbers(
         diagnostics.get("floquet_k_vector_rad_per_m"),
@@ -561,6 +740,11 @@ def require_floquet_periodic_pairs_artifact(
             pair.get("validation_status"),
             "ok",
             f"mesh.periodic_pairs.pairs[{pair_index}].validation_status",
+        )
+        require_equal(
+            pair.get("basis_transport_policy"),
+            basis_transport_policy,
+            f"mesh.periodic_pairs.pairs[{pair_index}].basis_transport_policy",
         )
         require_non_negative_integer(
             pair.get("node_a"),
@@ -1832,6 +2016,7 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
     *,
     diagnostics: dict,
     manifest: dict,
+    require_frequency_point_artifacts: bool = True,
 ) -> None:
     manifest_diagnostics = manifest.get("diagnostics")
     if not isinstance(manifest_diagnostics, dict):
@@ -1851,6 +2036,26 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
             "invalid frequency-domain runtime artifacts:\n"
             "manifest.resolved_execution must be an object"
         )
+    schur_coupled_block = (
+        diagnostics.get("periodic_airbox_coupled_block_solver") is True
+        or manifest_diagnostics.get("periodic_airbox_coupled_block_solver") is True
+        or resolved_execution.get("periodic_airbox_coupled_block_solver") is True
+    )
+    expected_operator_field = (
+        "dynamic_demag_operator_source"
+        if schur_coupled_block
+        else "demag_tangent_operator_source"
+    )
+    expected_operator_source = (
+        "matrix_free_mfem_demag_phi_consistency_schur_provider"
+        if schur_coupled_block
+        else "matrix_free_demag_tangent_provider"
+    )
+    expected_residual_partition_status = (
+        "coupled_block"
+        if schur_coupled_block
+        else "magnetic_only_demag_tangent_provider"
+    )
     expected = {
         "diagnostics.requested_execution_lane": (
             diagnostics.get("requested_execution_lane"),
@@ -1866,15 +2071,15 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
         ),
         "diagnostics.periodic_airbox_coupled_block_solver": (
             diagnostics.get("periodic_airbox_coupled_block_solver"),
-            False,
+            schur_coupled_block,
         ),
         "diagnostics.mfem_coupled_block_assembly": (
             diagnostics.get("mfem_coupled_block_assembly"),
             False,
         ),
-        "diagnostics.demag_tangent_operator_source": (
-            diagnostics.get("demag_tangent_operator_source"),
-            "matrix_free_demag_tangent_provider",
+        f"diagnostics.{expected_operator_field}": (
+            diagnostics.get(expected_operator_field),
+            expected_operator_source,
         ),
         "diagnostics.requested_magnetostatic_bc": (
             diagnostics.get("requested_magnetostatic_bc"),
@@ -1892,13 +2097,13 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
             resolved_execution.get("resolved_execution_lane"),
             "production_cpu",
         ),
-        "manifest.diagnostics.demag_tangent_operator_source": (
-            manifest_diagnostics.get("demag_tangent_operator_source"),
-            "matrix_free_demag_tangent_provider",
+        f"manifest.diagnostics.{expected_operator_field}": (
+            manifest_diagnostics.get(expected_operator_field),
+            expected_operator_source,
         ),
         "manifest.diagnostics.periodic_airbox_coupled_block_solver": (
             manifest_diagnostics.get("periodic_airbox_coupled_block_solver"),
-            False,
+            schur_coupled_block,
         ),
         "manifest.diagnostics.mfem_coupled_block_assembly": (
             manifest_diagnostics.get("mfem_coupled_block_assembly"),
@@ -1924,6 +2129,93 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
         ),
     }
     require_expected(expected)
+    if schur_coupled_block:
+        expected_preconditioner_kind = "mfem_tangent_graph_demag_coarse_right"
+    else:
+        exchange_edge_count = require_non_negative_integer(
+            diagnostics.get("exchange_edge_count"),
+            "diagnostics.exchange_edge_count",
+        )
+        require_equal(
+            manifest_diagnostics.get("exchange_edge_count"),
+            exchange_edge_count,
+            "manifest.diagnostics.exchange_edge_count",
+        )
+        expected_preconditioner_kind = (
+            "mfem_tangent_graph_demag_coarse_right"
+            if exchange_edge_count > 0
+            else "mfem_tangent_demag_coarse_right"
+        )
+    for source_name, source in [
+        ("diagnostics", diagnostics),
+        ("manifest.diagnostics", manifest_diagnostics),
+    ]:
+        require_equal(
+            source.get("krylov_preconditioner_kind"),
+            expected_preconditioner_kind,
+            f"{source_name}.krylov_preconditioner_kind",
+        )
+        require_equal(
+            source.get("krylov_preconditioner_applied"),
+            True,
+            f"{source_name}.krylov_preconditioner_applied",
+        )
+        require_equal(
+            source.get("krylov_preconditioner_setup_status"),
+            "ok",
+            f"{source_name}.krylov_preconditioner_setup_status",
+        )
+        history = require_finite_number_list(
+            source.get("gmres_relative_residual_history"),
+            f"{source_name}.gmres_relative_residual_history",
+        )
+        if len(history) < 2:
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                f"{source_name}.gmres_relative_residual_history must contain at least initial and final residuals"
+            )
+        require_equal(
+            source.get("coupled_residual_partition_status"),
+            expected_residual_partition_status,
+            f"{source_name}.coupled_residual_partition_status",
+        )
+        require_coupled_block_norms(
+            source.get("coupled_block_norms"),
+            f"{source_name}.coupled_block_norms",
+        )
+        coupled_block_norms = source.get("coupled_block_norms")
+        if isinstance(coupled_block_norms, dict):
+            require_equal(
+                coupled_block_norms.get("rhs_delta_phi_l2_norm"),
+                0.0,
+                f"{source_name}.coupled_block_norms.rhs_delta_phi_l2_norm",
+            )
+            require_equal(
+                coupled_block_norms.get("relative_residual_delta_phi_l2_norm"),
+                0.0,
+                f"{source_name}.coupled_block_norms.relative_residual_delta_phi_l2_norm",
+            )
+        if schur_coupled_block:
+            continue
+        require_block_norms(
+            source.get("block_norms"),
+            f"{source_name}.block_norms",
+        )
+        require_equal(
+            source.get("demag_tangent_linearity_check"),
+            True,
+            f"{source_name}.demag_tangent_linearity_check",
+        )
+        for field_name in [
+            "demag_tangent_additivity_max_abs_error",
+            "demag_tangent_homogeneity_max_abs_error",
+            "demag_tangent_additivity_relative_error",
+            "demag_tangent_homogeneity_relative_error",
+        ]:
+            require_non_negative_finite_number(
+                source.get(field_name),
+                f"{source_name}.{field_name}",
+            )
     for field_name in [
         "magnetic_periodic_constraint_set_count",
         "magnetostatic_periodic_constraint_set_count",
@@ -1933,16 +2225,6 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
     ]:
         require_positive_integer(diagnostics.get(field_name), f"diagnostics.{field_name}")
         require_positive_integer(physics.get(field_name), f"manifest.physics.{field_name}")
-
-    exchange_edge_count = require_positive_integer(
-        diagnostics.get("exchange_edge_count"),
-        "diagnostics.exchange_edge_count",
-    )
-    require_equal(
-        manifest_diagnostics.get("exchange_edge_count"),
-        exchange_edge_count,
-        "manifest.diagnostics.exchange_edge_count",
-    )
 
     artifacts = manifest.get("artifacts")
     if not isinstance(artifacts, dict):
@@ -1955,6 +2237,8 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
         "manifest.artifacts.frequency_point_paths",
     )
     if not frequency_point_paths:
+        if not require_frequency_point_artifacts:
+            return
         raise SystemExit(
             "invalid frequency-domain runtime artifacts:\n"
             "periodic-airbox CPU demag solved boundary must publish frequency point artifacts"
@@ -2235,6 +2519,7 @@ def main() -> int:
     require_derived_peak_mode = False
     allow_interrupted = False
     allow_unavailable = False
+    allow_solve_error = False
     parity_reference: Path | None = None
     floquet_reciprocal_reference: Path | None = None
     airbox_reference: Path | None = None
@@ -2323,6 +2608,9 @@ def main() -> int:
     if "--allow-unavailable" in args:
         allow_unavailable = True
         args.remove("--allow-unavailable")
+    if "--allow-solve-error" in args:
+        allow_solve_error = True
+        args.remove("--allow-solve-error")
     if parity_reference is not None and not require_production_gpu:
         raise SystemExit(
             "invalid frequency-domain runtime artifacts:\n"
@@ -2732,6 +3020,167 @@ def main() -> int:
             "invalid frequency-domain runtime artifacts:\n"
             "periodic-airbox CPU demag solved boundary was required but manifest.status is unavailable"
         )
+
+    solve_error = manifest.get("status") == "solve_error"
+    if solve_error:
+        if not allow_solve_error:
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                "manifest.status is solve_error; pass --allow-solve-error to validate bounded diagnostic artifacts"
+            )
+        require_expected(
+            {
+                "manifest.schema_version": (
+                    manifest.get("schema_version"),
+                    "frequency_domain_manifest.v1",
+                ),
+                "manifest.stage_kind": (manifest.get("stage_kind"), "frequency_response"),
+                "manifest.complete": (manifest.get("complete"), False),
+                "progress.schema_version": (
+                    progress.get("schema_version"),
+                    "frequency_domain_sweep_progress.v1",
+                ),
+                "progress.status": (progress.get("status"), "solve_error"),
+                "progress.state": (progress.get("state"), "solve_error"),
+                "progress.complete": (progress.get("complete"), False),
+                "progress.completed_frequency_points": (
+                    progress.get("completed_frequency_points"),
+                    0,
+                ),
+                "progress.written_frequency_point_artifacts": (
+                    progress.get("written_frequency_point_artifacts"),
+                    0,
+                ),
+                "progress.partial_artifacts_available": (
+                    progress.get("partial_artifacts_available"),
+                    True,
+                ),
+                "diagnostics.schema_version": (
+                    diagnostics.get("schema_version"),
+                    "frequency_domain_response_diagnostics.v1",
+                ),
+                "diagnostics.status": (diagnostics.get("status"), "solve_error"),
+                "diagnostics.complete": (diagnostics.get("complete"), False),
+                "diagnostics.validation_fallback_used": (
+                    diagnostics.get("validation_fallback_used"),
+                    False,
+                ),
+                "diagnostics.matrix_free_solver": (
+                    diagnostics.get("matrix_free_solver"),
+                    True,
+                ),
+            }
+        )
+        total_frequency_points = require_positive_integer(
+            progress.get("total_frequency_points"),
+            "progress.total_frequency_points",
+        )
+        requested_execution = manifest.get("requested_execution")
+        if not isinstance(requested_execution, dict):
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                "manifest.requested_execution must be an object"
+            )
+        require_equal(
+            requested_execution.get("frequency_count"),
+            total_frequency_points,
+            "manifest.requested_execution.frequency_count",
+        )
+        max_iterations = require_positive_integer(
+            diagnostics.get("max_iterations_for_frequency"),
+            "diagnostics.max_iterations_for_frequency",
+        )
+        require_positive_integer(
+            diagnostics.get("progress_interval_iterations"),
+            "diagnostics.progress_interval_iterations",
+        )
+        total_iterations = require_positive_integer(
+            diagnostics.get("total_iteration_count"),
+            "diagnostics.total_iteration_count",
+        )
+        if total_iterations < max_iterations:
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                "solve_error diagnostics.total_iteration_count must reach max_iterations_for_frequency"
+            )
+        for field_name in [
+            "solver_relative_tolerance",
+            "rhs_l2_norm",
+            "initial_relative_residual_l2_norm",
+            "relative_residual_l2_norm",
+            "last_recomputed_relative_residual_l2_norm",
+        ]:
+            require_finite_number(diagnostics.get(field_name), f"diagnostics.{field_name}")
+        native_iteration_count = require_positive_integer(
+            progress.get("native_iteration_count"),
+            "progress.native_iteration_count",
+        )
+        require_equal(
+            native_iteration_count,
+            total_iterations,
+            "progress.native_iteration_count",
+        )
+        require_non_negative_integer(
+            progress.get("native_frequency_index"),
+            "progress.native_frequency_index",
+        )
+        require_finite_number(
+            progress.get("current_frequency_hz"),
+            "progress.current_frequency_hz",
+        )
+        require_finite_number(
+            progress.get("native_residual_l2_norm"),
+            "progress.native_residual_l2_norm",
+        )
+        require_finite_number(
+            progress.get("native_relative_residual_l2_norm"),
+            "progress.native_relative_residual_l2_norm",
+        )
+        require_equal(
+            progress.get("native_converged"),
+            False,
+            "progress.native_converged",
+        )
+        raw_progress_json = progress.get("progress_json")
+        if not isinstance(raw_progress_json, str) or not raw_progress_json.strip():
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                "progress.progress_json must preserve native solver progress details"
+            )
+        try:
+            progress_json = json.loads(raw_progress_json)
+        except json.JSONDecodeError as exc:
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                f"progress.progress_json must be valid JSON: {exc}"
+            ) from exc
+        if not isinstance(progress_json, dict):
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                "progress.progress_json must decode to an object"
+            )
+        require_equal(
+            progress_json.get("native_iteration_count"),
+            native_iteration_count,
+            "progress.progress_json.native_iteration_count",
+        )
+        require_equal(
+            progress_json.get("native_relative_residual_l2_norm"),
+            progress.get("native_relative_residual_l2_norm"),
+            "progress.progress_json.native_relative_residual_l2_norm",
+        )
+        if require_frozen_magnetic_submesh:
+            require_frozen_magnetic_submesh_mode(manifest)
+        require_manifest_physics(manifest)
+        if require_periodic_airbox_cpu_demag_solved:
+            require_periodic_airbox_cpu_demag_solved_boundary(
+                root,
+                diagnostics=diagnostics,
+                manifest=manifest,
+                require_frequency_point_artifacts=False,
+            )
+        return 0
+
     if require_frozen_magnetic_submesh:
         require_frozen_magnetic_submesh_mode(manifest)
 
@@ -2971,6 +3420,10 @@ def main() -> int:
         ),
         "diagnostics.status": (diagnostics.get("status"), expected_status),
         "diagnostics.complete": (diagnostics.get("complete"), expected_complete),
+        "diagnostics.matrix_form": (
+            diagnostics.get("matrix_form"),
+            "iomega_B_minus_L",
+        ),
         "diagnostics.requested_execution_lane": (
             diagnostics.get("requested_execution_lane"),
             expected_execution_lane,
@@ -3152,6 +3605,11 @@ def main() -> int:
     if floquet_phase_projection:
         require_floquet_periodic_pairs_artifact(root, diagnostics, manifest)
     require_manifest_physics(manifest)
+    require_equal(
+        diagnostics.get("phasor_convention"),
+        manifest["physics"]["phase_convention"],
+        "diagnostics.phasor_convention",
+    )
     if require_static_periodic:
         periodic_pairs_path = manifest.get("artifacts", {}).get("periodic_pairs_v1_path")
         require_equal(

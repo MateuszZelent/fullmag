@@ -73,6 +73,49 @@ def require_string_list(value: Any, field: str) -> list[str]:
     return value
 
 
+def require_optional_string_list(value: Any, field: str) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise SystemExit(f"{field} must be a list of strings")
+    return value
+
+
+def require_case_validator_args(case_id: str, value: Any) -> list[str]:
+    args = require_optional_string_list(value, f"case {case_id!r}.validator_args")
+    if not args:
+        return args
+    if case_id != "macrospin_sw":
+        raise SystemExit(
+            f"case {case_id!r}.validator_args is not supported for this validator"
+        )
+    allowed_flags = {
+        "--require-publication-astroid-ratio": 0,
+        "--astroid-ratio-abs-tolerance": 1,
+    }
+    index = 0
+    while index < len(args):
+        flag = args[index]
+        if flag not in allowed_flags:
+            raise SystemExit(
+                f"case {case_id!r}.validator_args contains unsupported argument {flag!r}"
+            )
+        arity = allowed_flags[flag]
+        if index + arity >= len(args):
+            raise SystemExit(
+                f"case {case_id!r}.validator_args missing value after {flag!r}"
+            )
+        for offset in range(1, arity + 1):
+            value_arg = args[index + offset]
+            if not value_arg or value_arg.startswith("-"):
+                raise SystemExit(
+                    f"case {case_id!r}.validator_args has invalid value "
+                    f"{value_arg!r} after {flag!r}"
+                )
+        index += arity + 1
+    return args
+
+
 def require_under(base: Path, path: Path, field: str) -> None:
     try:
         path.relative_to(base)
@@ -113,6 +156,7 @@ def require_case(case_id: str, value: Any) -> dict[str, Any]:
         raise SystemExit(
             f"case {case_id!r}.roles missing required role(s): {', '.join(missing_roles)}"
         )
+    require_case_validator_args(case_id, case.get("validator_args"))
     return case
 
 
@@ -269,15 +313,17 @@ def require_cross_backend_acceptance(
         raise SystemExit(
             "cross_backend_acceptance.tolerances must be a non-empty list"
         )
+    tolerance_metrics: set[str] = set()
     for index, raw_tolerance in enumerate(tolerances):
         tolerance = require_mapping(
             raw_tolerance,
             f"cross_backend_acceptance.tolerances[{index}]",
         )
-        require_string(
+        tolerance_metric = require_string(
             tolerance.get("metric"),
             f"cross_backend_acceptance.tolerances[{index}].metric",
         )
+        tolerance_metrics.add(tolerance_metric)
         tolerance_status = require_string(
             tolerance.get("status"),
             f"cross_backend_acceptance.tolerances[{index}].status",
@@ -297,6 +343,13 @@ def require_cross_backend_acceptance(
             tolerance.get("reason"),
             f"cross_backend_acceptance.tolerances[{index}].reason",
         )
+    missing_tolerance_metrics = sorted(REQUIRED_CROSS_BACKEND_METRICS - tolerance_metrics)
+    if status == "validated" and missing_tolerance_metrics:
+        raise SystemExit(
+            "cross_backend_acceptance.status='validated' requires "
+            "cross_backend_acceptance.tolerances entries for required metric(s): "
+            + ", ".join(missing_tolerance_metrics)
+        )
     return reference_key, lanes_by_key
 
 
@@ -315,9 +368,14 @@ def resolve_case_dir(manifest_path: Path, case: dict[str, Any], case_id: str) ->
     return resolved
 
 
-def run_case_validator(case_id: str, validator: Path, artifact_dir: Path) -> None:
+def run_case_validator(
+    case_id: str,
+    validator: Path,
+    artifact_dir: Path,
+    validator_args: list[str],
+) -> None:
     result = subprocess.run(
-        [sys.executable, str(validator), str(artifact_dir)],
+        [sys.executable, str(validator), *validator_args, str(artifact_dir)],
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -453,7 +511,13 @@ def main() -> int:
     for case_id, expected in REQUIRED_CASES.items():
         case = require_case(case_id, cases[case_id])
         artifact_dir = resolve_case_dir(manifest_path, case, case_id)
-        run_case_validator(case_id, scripts_dir / expected["validator"], artifact_dir)
+        validator_args = require_case_validator_args(case_id, case.get("validator_args"))
+        run_case_validator(
+            case_id,
+            scripts_dir / expected["validator"],
+            artifact_dir,
+            validator_args,
+        )
 
     cross_backend = require_mapping(
         manifest.get("cross_backend_acceptance"),

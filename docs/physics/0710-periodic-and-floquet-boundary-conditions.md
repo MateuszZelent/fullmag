@@ -34,6 +34,27 @@ phase_rad ~= -k dot translation  (mod 2*pi)
 Inconsistent phase metadata is a validation error, not a valid unsupported
 Floquet solve request.
 
+For tangent-space FEM unknowns, the boundary condition applies to the
+reconstructed vector `delta_m`, not automatically to raw local coordinates
+`q`. If `delta_m = T q` with orthonormal tangent frames `T_src` and `T_dst`,
+then a paired node must satisfy:
+
+```text
+T_dst q_dst = exp(-i k dot delta_r) * T_src q_src
+q_dst = exp(-i k dot delta_r) * (T_dst^T T_src) q_src
+```
+
+The shortcut `q_dst = phase * q_src` is valid only when the paired tangent
+frames are identical within tolerance. Production operators must either enforce
+the full tangent-frame transport or reject the case with a diagnostic. Runtime
+artifacts must state:
+
+```text
+basis_transport_policy = full_vector | tangent_frame_transport | tangent_frame_identity | rejected
+static_periodic_frame_max_mismatch
+floquet_tangent_transport_max_nonunitarity
+```
+
 ## Capability Policy
 
 If a mesh declares `periodic_node_pairs` and the selected backend does not
@@ -120,8 +141,10 @@ The v2 browser/API resource for the same contract is:
 The payload uses `schema_version = "periodic_pairs.v1"` and includes each
 `pair_id`, source/destination markers, expected translation, paired node count,
 unpaired source/destination counts, residual diagnostics, and a validation
-status. The API prefers the active FEM mesh snapshot and falls back to the
-artifact file after a completed run.
+status. For frequency-domain tangent-space runs, it must also expose the
+resolved basis transport policy and frame-transport residuals. The API prefers
+the active FEM mesh snapshot and falls back to the artifact file after a
+completed run.
 
 ## Sign Test
 
@@ -130,6 +153,17 @@ For exchange-only dispersion without DMI or other nonreciprocal terms:
 ```text
 f(k) = f(-k)
 ```
+
+Tangent-frame transport must also pass:
+
+```text
+max_pair ||q_dst - phase * (T_dst^T T_src) q_src|| < eps_q
+```
+
+For identical periodic frames this residual should be zero within numerical
+tolerance. For non-identical paired frames, production code must either use the
+full transport matrix or reject the case; it must not silently assume identity
+transport.
 
 For `k = pi / L` and `delta_r = [L, 0, 0]`, the Floquet phase is:
 

@@ -41,6 +41,7 @@ struct DrivenFrequencyResponseMfemValidationProblem {
     const std::uint64_t *static_periodic_node_pairs = nullptr;
     std::uint64_t static_periodic_node_pair_count = 0;
     ProductionCpuFrequencyDomainApply apply_demag_tangent = nullptr;
+    ProductionCpuFrequencyDomainApplyWithPotential apply_demag_tangent_with_potential = nullptr;
     void *demag_tangent_user_data = nullptr;
     const double *demag_tangent_matrix_row_major = nullptr;
 };
@@ -54,8 +55,15 @@ struct DrivenFrequencyResponsePeriodicAirboxCoupledBlockProblem {
     ProductionCpuFrequencyDomainApply apply_stiffness = nullptr;
     ProductionCpuFrequencyDomainApply apply_mass = nullptr;
     void *operator_user_data = nullptr;
+    ProductionCpuFrequencyDomainRightPreconditioner apply_right_preconditioner = nullptr;
+    void *right_preconditioner_user_data = nullptr;
+    const char *right_preconditioner_name = nullptr;
     const double *drive_real = nullptr;
     const double *drive_imag = nullptr;
+    const char *operator_source = nullptr;
+    const char *artifact_revision = nullptr;
+    const char *solver_kind = nullptr;
+    const char *frequency_point_solver_model = nullptr;
 };
 
 enum class DrivenFrequencyResponseExecutionLane {

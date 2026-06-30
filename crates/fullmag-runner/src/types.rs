@@ -124,6 +124,17 @@ pub struct FemGpuRelaxationQualificationMetadata {
     pub relaxation_algorithm: Option<String>,
     pub algorithm_policy: FemGpuRelaxationAlgorithmPolicyMetadata,
     pub device_policy: FemGpuRelaxationDevicePolicyMetadata,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_metric_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_metric_value: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_threshold: Option<f64>,
+    pub final_energy_terms_j: FemCpuRelaxationEnergyTerms,
+    pub final_torque_apm: f64,
+    pub final_torque_t: f64,
     pub norm_defect: f64,
     pub executed_steps: u64,
 }

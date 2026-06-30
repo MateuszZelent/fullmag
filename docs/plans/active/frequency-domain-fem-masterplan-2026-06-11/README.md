@@ -96,16 +96,18 @@ Browsed literature references still useful for the modal/FEM dynamic-matrix side
 
 Read in this order:
 
-1. `00-source-of-truth-and-consolidation.md`
-2. `01-backend-native-fem-frequency-domain.md`
-3. `02-ir-planner-python-capabilities-api.md`
-4. `03-artifacts-resources-and-runtime.md`
-5. `04-control-room-explorer-tree.md`
-6. `05-control-room-inspectors.md`
-7. `06-analysis-plots-and-3d-mode-visualization.md`
-8. `07-implementation-stages-and-verification.md`
-9. `08-periodic-floquet-bloch-boundary-conditions.md`
-10. `10-production-interior-window-eigensolver.md`
+1. `audyt_planu_solvera_fem_domena_czestotliwosci.md`
+2. `00-source-of-truth-and-consolidation.md`
+3. `01-backend-native-fem-frequency-domain.md`
+4. `02-ir-planner-python-capabilities-api.md`
+5. `03-artifacts-resources-and-runtime.md`
+6. `04-control-room-explorer-tree.md`
+7. `05-control-room-inspectors.md`
+8. `06-analysis-plots-and-3d-mode-visualization.md`
+9. `07-implementation-stages-and-verification.md`
+10. `08-periodic-floquet-bloch-boundary-conditions.md`
+11. `10-production-interior-window-eigensolver.md`
+12. `11-comsol-grade-frequency-domain-masterplan-2026-06-30.md`
 
 ## Non-Negotiable Success Criteria
 
@@ -113,11 +115,13 @@ Backend:
 
 - Driven frequency response is the primary frequency-domain solver deliverable.
 - FEM eigenmodes are a separate modal companion path that may share the linearized operator contract but must not be treated as the same solver.
+- Audit P0 is blocking for new production promotion: one `exp(i omega t)` convention, correct gyrotropic/eigenvalue mapping, dynamic-demag Poisson sign, `Ms`-correct susceptibility and absorbed-power units, damping/linewidth convention, and tangent-frame transport for PBC/Floquet.
 - Periodic, Floquet, and Bloch boundary conditions are first-class frequency-domain requirements for FMR and dispersion, not optional frontend flags.
+- Static PBC demag/equilibrium for magnonic-crystal unit cells is a required gate before periodic-airbox driven response or eigenfrequency dynamics; a short response smoke is not equilibrium proof.
 - Production FEM code lives under the canonical `backends/fem` native tree, not in `crates` and not in `mfem_bridge.cpp`.
 - CPU and GPU realizations are separate runtime lanes that share physics semantics but do not share hot-loop state.
 - The current dense/reference eigensolver remains a validation path for modal products until the native scalable modal solver passes the validation ladder.
-- Frequency response is executable only for explicitly proven lanes: dense FEM validation and the current native MFEM production CPU gamma/free-boundary plus k = 0 static-periodic magnetic slice may emit response artifacts; GPU response, nonzero-k Floquet response, dynamic demag response, and magnetoelastic response remain rejected until separately qualified.
+- Frequency response is executable only for explicitly proven lanes: dense FEM validation and the current native MFEM production CPU gamma/free-boundary plus k = 0 static-periodic no-demag magnetic slice may emit response artifacts; CPU periodic-airbox k = 0 demag remains a qualified diagnostic/partial-production slice until the static equilibrium and solved response gates pass; GPU periodic-airbox demag, nonzero-k Floquet demag, and magnetoelastic response remain rejected until separately qualified.
 - Native FEM build and runtime verification use repo `just` recipes, including `verify-fem-frequency-domain-native-contract`, `verify-fem-frequency-domain-runtime`, `verify-fem-frequency-domain-static-periodic-runtime`, `verify-fem-frequency-domain-eigen-runtime`, and the aggregate `verify-fem-frequency-domain-runtime-suite`.
 
 Frontend:

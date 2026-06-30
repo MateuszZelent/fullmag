@@ -143,11 +143,13 @@ struct DiagonalProductionOperator {
     std::uint64_t tangent_dof_count = 0;
     std::uint64_t stiffness_call_count = 0;
     std::uint64_t mass_call_count = 0;
+    std::uint64_t preconditioner_call_count = 0;
 };
 
 struct DemagTangentCallbackOperator {
     const double *matrix = nullptr;
     std::uint64_t tangent_dof_count = 0;
+    std::uint64_t phi_dof_count = 0;
     std::uint64_t call_count = 0;
 };
 
@@ -163,9 +165,12 @@ struct ProductionProgressRecorder {
     std::uint64_t last_completed_frequency_count = 0;
     std::uint64_t last_total_frequency_count = 0;
     std::uint64_t last_iteration_count = 0;
+    std::uint64_t positive_iteration_event_count = 0;
     double last_frequency_hz = 0.0;
     double last_relative_residual_l2_norm = 0.0;
     bool saw_converged = false;
+    bool saw_iteration_one = false;
+    bool saw_iteration_two = false;
 };
 
 struct CancelAfterCompletedProductionPoint {
@@ -249,6 +254,42 @@ fd::FrequencyDomainStatus apply_diagonal_mass(
     return fd::FrequencyDomainStatus::ok;
 }
 
+fd::FrequencyDomainStatus apply_exact_diagonal_harmonic_response_preconditioner(
+    void *user_data,
+    double omega,
+    const double *in,
+    double *out,
+    std::uint64_t tangent_dof_count,
+    char error_message[128])
+{
+    auto *op = static_cast<DiagonalProductionOperator *>(user_data);
+    if (op == nullptr ||
+        op->stiffness == nullptr ||
+        op->mass == nullptr ||
+        in == nullptr ||
+        out == nullptr ||
+        tangent_dof_count != op->tangent_dof_count) {
+        std::snprintf(error_message, 128, "missing diagonal preconditioner buffers");
+        return fd::FrequencyDomainStatus::validation_error;
+    }
+    ++op->preconditioner_call_count;
+    for (std::uint64_t index = 0; index < tangent_dof_count; ++index) {
+        const double stiffness = op->stiffness[index];
+        const double omega_mass = omega * op->mass[index];
+        const double denominator = stiffness * stiffness + omega_mass * omega_mass;
+        if (!(denominator > 0.0) || !std::isfinite(denominator)) {
+            std::snprintf(error_message, 128, "invalid diagonal preconditioner pivot");
+            return fd::FrequencyDomainStatus::validation_error;
+        }
+        const double real_in = in[index];
+        const double imag_in = in[index + tangent_dof_count];
+        out[index] = (stiffness * real_in - omega_mass * imag_in) / denominator;
+        out[index + tangent_dof_count] =
+            (omega_mass * real_in + stiffness * imag_in) / denominator;
+    }
+    return fd::FrequencyDomainStatus::ok;
+}
+
 fd::FrequencyDomainStatus apply_first_krylov_stiffness_then_zero(
     void *user_data,
     const double *in,
@@ -303,6 +344,38 @@ fd::FrequencyDomainStatus apply_demag_tangent_callback(
             value += op->matrix[row * op->tangent_dof_count + column] * in[column];
         }
         out[row] = value;
+    }
+    return fd::FrequencyDomainStatus::ok;
+}
+
+fd::FrequencyDomainStatus apply_demag_tangent_with_potential_callback(
+    void *user_data,
+    const double *in,
+    double *out,
+    double *out_phi,
+    std::uint64_t out_phi_len,
+    char error_message[128])
+{
+    auto *op = static_cast<DemagTangentCallbackOperator *>(user_data);
+    if (op == nullptr || out_phi == nullptr) {
+        std::snprintf(error_message, 128, "missing demag tangent-with-potential callback buffers");
+        return fd::FrequencyDomainStatus::validation_error;
+    }
+    if (out_phi_len != op->phi_dof_count) {
+        std::snprintf(error_message, 128, "demag tangent-with-potential callback phi length mismatch");
+        return fd::FrequencyDomainStatus::validation_error;
+    }
+    const fd::FrequencyDomainStatus status =
+        apply_demag_tangent_callback(user_data, in, out, error_message);
+    if (status != fd::FrequencyDomainStatus::ok) {
+        return status;
+    }
+    for (std::uint64_t index = 0; index < out_phi_len; ++index) {
+        const double source =
+            in == nullptr || op->tangent_dof_count == 0
+                ? 0.0
+                : in[index % op->tangent_dof_count];
+        out_phi[index] = 0.125 * static_cast<double>(index + 1) + 0.01 * source;
     }
     return fd::FrequencyDomainStatus::ok;
 }
@@ -393,6 +466,13 @@ void record_production_progress(
     recorder->last_completed_frequency_count = progress.completed_frequency_count;
     recorder->last_total_frequency_count = progress.total_frequency_count;
     recorder->last_iteration_count = progress.iteration_count;
+    if (progress.iteration_count > 0) {
+        ++recorder->positive_iteration_event_count;
+    }
+    recorder->saw_iteration_one =
+        recorder->saw_iteration_one || progress.iteration_count == 1;
+    recorder->saw_iteration_two =
+        recorder->saw_iteration_two || progress.iteration_count == 2;
     recorder->last_frequency_hz = progress.frequency_hz;
     recorder->last_relative_residual_l2_norm = progress.relative_residual_l2_norm;
     recorder->saw_converged = recorder->saw_converged || progress.converged;
@@ -672,6 +752,9 @@ void driven_response_solver_accepts_fmr_env_aliases_source_contract()
     check(
         contains(source.c_str(), "FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS"),
         "driven response solver accepts FMR restart-iterations alias");
+    check(
+        contains(source.c_str(), "FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL"),
+        "driven response solver accepts FMR progress-interval alias");
 }
 
 void driven_response_floquet_boundary_is_explicitly_unavailable()
@@ -3245,6 +3328,77 @@ void production_cpu_matrix_free_solver_preserves_nonconvergence_diagnostics()
     check(
         result.residual_growth_factor > 0.0,
         "production CPU limited GMRES preserves residual growth factor");
+    check(
+        result.gmres_relative_residual_history_count >= 2,
+        "production CPU limited GMRES preserves residual history");
+    check(
+        result.gmres_relative_residual_history[0] > result.gmres_relative_residual_history[1],
+        "production CPU limited GMRES history records residual decrease");
+    check(result.rhs_real_l2_norm > 0.0, "production CPU limited GMRES records RHS real block norm");
+    check(result.rhs_imag_l2_norm == 0.0, "production CPU limited GMRES records zero RHS imaginary block norm");
+    check(result.residual_real_l2_norm > 0.0, "production CPU limited GMRES records residual real block norm");
+    check(result.response_real_l2_norm > 0.0, "production CPU limited GMRES records response real block norm");
+}
+
+void production_cpu_matrix_free_solver_uses_right_preconditioner()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double stiffness[] = {1.0e-3, 1.0e3};
+    const double mass[] = {1.0, 2.0};
+    const double drive_real[] = {1.0, -2.0};
+    const double drive_imag[] = {0.5, 3.0};
+    double response_real[2]{};
+    double response_imag[2]{};
+    double residual_l2[1]{};
+    double relative_residual_l2[1]{};
+    DiagonalProductionOperator op{stiffness, mass, 2};
+
+    fd::ProductionCpuDrivenResponseProblem problem{};
+    problem.tangent_dof_count = 2;
+    problem.frequencies_hz = frequencies_hz;
+    problem.frequency_count = 1;
+    problem.drive_real = drive_real;
+    problem.apply_stiffness = apply_diagonal_stiffness;
+    problem.apply_mass = apply_diagonal_mass;
+    problem.operator_user_data = &op;
+    problem.relative_tolerance = 1.0e-12;
+    problem.max_iterations = 1;
+    problem.restart_iterations = 1;
+    problem.out_response_real = response_real;
+    problem.out_response_imag = response_imag;
+    problem.response_capacity = 2;
+    problem.out_residual_l2_norm = residual_l2;
+    problem.out_relative_residual_l2_norm = relative_residual_l2;
+    problem.residual_capacity = 1;
+    problem.drive_imag = drive_imag;
+    problem.apply_right_preconditioner = apply_exact_diagonal_harmonic_response_preconditioner;
+    problem.right_preconditioner_user_data = &op;
+    problem.krylov_preconditioner_name = "exact_diagonal_harmonic_response";
+
+    fd::ProductionCpuDrivenResponseResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_production_cpu_driven_response(problem, &result);
+
+    check(status == fd::FrequencyDomainStatus::ok, "production CPU right-preconditioned solve succeeds");
+    check(result.completed_frequency_count == 1, "right-preconditioned solve completes one frequency");
+    check(result.total_iteration_count == 1, "right-preconditioned solve converges in one iteration");
+    check(result.right_preconditioner_applied, "right-preconditioned solve reports preconditioner applied");
+    check(
+        contains(result.krylov_preconditioner, "exact_diagonal_harmonic_response"),
+        "right-preconditioned solve preserves preconditioner name");
+    check(op.preconditioner_call_count > 0, "right-preconditioned solve invokes preconditioner");
+    check(relative_residual_l2[0] < 1.0e-12, "right-preconditioned solve residual is small");
+    check(result.relative_residual_l2_norm < 1.0e-12, "right-preconditioned result reports small residual");
+    check(
+        result.gmres_relative_residual_history_count >= 2,
+        "right-preconditioned solve records residual history");
+    check(result.rhs_real_l2_norm > 0.0, "right-preconditioned solve records RHS real block norm");
+    check(result.rhs_imag_l2_norm > 0.0, "right-preconditioned solve records RHS imaginary block norm");
+    check(result.residual_real_l2_norm < 1.0e-12, "right-preconditioned solve records small real residual norm");
+    check(result.residual_imag_l2_norm < 1.0e-12, "right-preconditioned solve records small imaginary residual norm");
+    check(result.response_real_l2_norm > 0.0, "right-preconditioned solve records response real block norm");
+    check(result.response_imag_l2_norm > 0.0, "right-preconditioned solve records response imaginary block norm");
 }
 
 void production_cpu_matrix_free_solver_requires_recomputed_residual_for_convergence()
@@ -3415,6 +3569,15 @@ void production_cpu_lane_writes_failure_artifacts_for_nonconverged_gmres()
     check(
         contains(result.diagnostics_json, "\"residual_growth_factor\":"),
         "limited production CPU GMRES failure diagnostics reports residual growth");
+    check(
+        contains(result.diagnostics_json, "\"krylov_preconditioner_kind\":\"none\""),
+        "limited production CPU GMRES failure diagnostics reports no preconditioner");
+    check(
+        contains(result.diagnostics_json, "\"krylov_preconditioner_applied\":false"),
+        "limited production CPU GMRES failure diagnostics reports preconditioner not applied");
+    check(
+        contains(result.diagnostics_json, "\"krylov_preconditioner_setup_status\":\"not_configured\""),
+        "limited production CPU GMRES failure diagnostics reports preconditioner setup status");
 
     const std::string manifest = read_text_file(result.artifact_manifest_path);
     check(contains(manifest.c_str(), "\"status\":\"solve_error\""), "GMRES failure manifest records solve_error");
@@ -3470,6 +3633,15 @@ void production_cpu_lane_writes_failure_artifacts_for_nonconverged_gmres()
     check(
         contains(diagnostics.c_str(), "\"residual_growth_factor\":"),
         "GMRES failure diagnostics artifact records residual growth");
+    check(
+        contains(diagnostics.c_str(), "\"krylov_preconditioner_kind\":\"none\""),
+        "GMRES failure diagnostics artifact records no preconditioner");
+    check(
+        contains(diagnostics.c_str(), "\"krylov_preconditioner_applied\":false"),
+        "GMRES failure diagnostics artifact records preconditioner not applied");
+    check(
+        contains(diagnostics.c_str(), "\"krylov_preconditioner_setup_status\":\"not_configured\""),
+        "GMRES failure diagnostics artifact records preconditioner setup status");
 
     char progress_path[256]{};
     std::snprintf(
@@ -3639,6 +3811,60 @@ void production_cpu_matrix_free_solver_reports_progress()
     check(std::abs(recorder.last_frequency_hz - frequencies_hz[1]) < 1.0e-12, "production CPU progress reports frequency");
     check(recorder.last_relative_residual_l2_norm < 1.0e-12, "production CPU progress reports final residual");
     check(recorder.saw_converged, "production CPU progress reports convergence");
+}
+
+void production_cpu_matrix_free_solver_throttles_nonconverged_progress()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double stiffness[] = {2.0, 5.0};
+    const double mass[] = {1.0, 3.0};
+    const double drive_real[] = {1.0, 1.0};
+    double response_real[2]{};
+    double response_imag[2]{};
+    double residual_l2[1]{};
+    double relative_residual_l2[1]{};
+    DiagonalProductionOperator op{stiffness, mass, 2};
+    ProductionProgressRecorder recorder{};
+
+    fd::ProductionCpuDrivenResponseResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_production_cpu_driven_response(
+            fd::ProductionCpuDrivenResponseProblem{
+                2,
+                frequencies_hz,
+                1,
+                drive_real,
+                apply_diagonal_stiffness,
+                apply_diagonal_mass,
+                &op,
+                1.0e-300,
+                3,
+                1,
+                response_real,
+                response_imag,
+                2,
+                residual_l2,
+                relative_residual_l2,
+                1,
+                nullptr,
+                nullptr,
+                record_production_progress,
+                &recorder,
+                nullptr,
+                1.0,
+                nullptr,
+                nullptr,
+                2,
+            },
+            &result);
+
+    check(status == fd::FrequencyDomainStatus::solve_error, "throttled production CPU solve remains nonconverged");
+    check(result.progress_interval_iterations == 2, "production CPU result records progress interval");
+    check(recorder.event_count >= 3, "throttled production CPU progress emits initial, interval, and final events");
+    check(!recorder.saw_iteration_one, "production CPU progress interval suppresses iteration one callback");
+    check(recorder.saw_iteration_two, "production CPU progress interval emits interval callback");
+    check(recorder.last_iteration_count == 3, "production CPU progress interval still emits max-iteration callback");
 }
 
 void production_cpu_matrix_free_solver_reuses_previous_frequency_solution_as_warm_start()
@@ -3985,7 +4211,7 @@ void production_cpu_periodic_airbox_dynamic_demag_is_explicitly_unavailable()
     request.magnetic_periodic_constraint_set_count = 1;
     request.magnetostatic_periodic_constraint_set_count = 1;
     request.periodic_airbox_delta_m_tangent_dof_count = 2;
-    request.periodic_airbox_delta_phi_dof_count = 1;
+    request.periodic_airbox_delta_phi_dof_count = 2;
     request.periodic_airbox_magnetostatic_periodic_node_pairs =
         magnetostatic_periodic_node_pairs;
     request.periodic_airbox_magnetostatic_periodic_node_pair_count = 1;
@@ -4042,7 +4268,7 @@ void production_cpu_periodic_airbox_dynamic_demag_writes_bc_artifacts()
     request.magnetic_periodic_constraint_set_count = 1;
     request.magnetostatic_periodic_constraint_set_count = 1;
     request.periodic_airbox_delta_m_tangent_dof_count = 2;
-    request.periodic_airbox_delta_phi_dof_count = 1;
+    request.periodic_airbox_delta_phi_dof_count = 2;
     request.periodic_airbox_magnetostatic_periodic_node_pairs =
         magnetostatic_periodic_node_pairs;
     request.periodic_airbox_magnetostatic_periodic_node_pair_count = 1;
@@ -4083,10 +4309,10 @@ void production_cpu_periodic_airbox_dynamic_demag_writes_bc_artifacts()
         contains(manifest.c_str(), "\"delta_m_tangent_dof_count\":2"),
         "periodic-airbox unavailable manifest records delta_m tangent DOFs");
     check(
-        contains(manifest.c_str(), "\"delta_phi_dof_count\":1"),
+        contains(manifest.c_str(), "\"delta_phi_dof_count\":2"),
         "periodic-airbox unavailable manifest records delta_phi DOFs");
     check(
-        contains(manifest.c_str(), "\"coupled_complex_dof_count\":3"),
+        contains(manifest.c_str(), "\"coupled_complex_dof_count\":4"),
         "periodic-airbox unavailable manifest records coupled complex DOFs");
     check(
         contains(manifest.c_str(), "\"requested_magnetic_bc\":\"periodic\""),
@@ -4202,7 +4428,7 @@ void production_cpu_periodic_airbox_dynamic_demag_writes_bc_artifacts()
         contains(frequency_point.c_str(), "\"delta_m_tangent_dof_count\":2"),
         "periodic-airbox frequency point metadata records delta_m tangent DOFs");
     check(
-        contains(frequency_point.c_str(), "\"delta_phi_dof_count\":1"),
+        contains(frequency_point.c_str(), "\"delta_phi_dof_count\":2"),
         "periodic-airbox frequency point metadata records delta_phi DOFs");
     check(
         contains(frequency_point.c_str(), "\"demag_contribution\":{\"status\":\"unavailable\""),
@@ -4232,17 +4458,19 @@ void production_cpu_periodic_airbox_dynamic_demag_solves_explicit_coupled_block(
         "/tmp/fullmag-frequency-domain-periodic-airbox-coupled-block-%llu",
         static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&frequencies_hz)));
     const double stiffness_matrix[] = {
-        2.0, 0.0, 0.25,
-        0.0, 3.0, -0.5,
-        0.25, -0.5, 4.0,
+        2.0, 0.0, 0.25, 0.0,
+        0.0, 3.0, -0.5, 0.0,
+        0.25, -0.5, 4.0, 0.0,
+        0.0, 0.0, 0.0, 5.0,
     };
     const double mass_matrix[] = {
-        1.0, 0.0, 0.0,
-        0.0, 1.5, 0.0,
-        0.0, 0.0, 0.0,
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.5, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0,
     };
-    const double drive_real[] = {1.0, 0.5, 0.0};
-    const double drive_imag[] = {0.0, 0.0, 0.0};
+    const double drive_real[] = {1.0, 0.5, 0.0, 0.0};
+    const double drive_imag[] = {0.0, 0.0, 0.0, 0.0};
 
     fd::DrivenFrequencyResponseSolveRequest request{};
     request.solve_request.operator_request.node_count = 1;
@@ -4256,13 +4484,13 @@ void production_cpu_periodic_airbox_dynamic_demag_solves_explicit_coupled_block(
     request.magnetic_periodic_constraint_set_count = 1;
     request.magnetostatic_periodic_constraint_set_count = 1;
     request.periodic_airbox_delta_m_tangent_dof_count = 2;
-    request.periodic_airbox_delta_phi_dof_count = 1;
+    request.periodic_airbox_delta_phi_dof_count = 2;
     request.periodic_airbox_magnetostatic_periodic_node_pairs =
         magnetostatic_periodic_node_pairs;
     request.periodic_airbox_magnetostatic_periodic_node_pair_count = 1;
     request.periodic_airbox_coupled_block_problem.enabled = true;
     request.periodic_airbox_coupled_block_problem.delta_m_tangent_dof_count = 2;
-    request.periodic_airbox_coupled_block_problem.delta_phi_dof_count = 1;
+    request.periodic_airbox_coupled_block_problem.delta_phi_dof_count = 2;
     request.periodic_airbox_coupled_block_problem.stiffness_matrix_row_major = stiffness_matrix;
     request.periodic_airbox_coupled_block_problem.mass_matrix_row_major = mass_matrix;
     request.periodic_airbox_coupled_block_problem.drive_real = drive_real;
@@ -4291,7 +4519,7 @@ void production_cpu_periodic_airbox_dynamic_demag_solves_explicit_coupled_block(
         contains(result.diagnostics_json, "\"delta_m_tangent_dof_count\":2"),
         "explicit coupled block diagnostics record delta_m tangent DOFs");
     check(
-        contains(result.diagnostics_json, "\"delta_phi_dof_count\":1"),
+        contains(result.diagnostics_json, "\"delta_phi_dof_count\":2"),
         "explicit coupled block diagnostics record delta_phi DOFs");
     check(
         contains(result.diagnostics_json, "\"phi_nullspace_detected\":false"),
@@ -4404,17 +4632,19 @@ void production_cpu_periodic_airbox_dynamic_demag_requires_constraint_sets_befor
         "/tmp/fullmag-frequency-domain-periodic-airbox-missing-constraints-%llu",
         static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&frequencies_hz)));
     const double stiffness_matrix[] = {
-        2.0, 0.0, 0.25,
-        0.0, 3.0, -0.5,
-        0.25, -0.5, 4.0,
+        2.0, 0.0, 0.25, 0.0,
+        0.0, 3.0, -0.5, 0.0,
+        0.25, -0.5, 4.0, 0.0,
+        0.0, 0.0, 0.0, 5.0,
     };
     const double mass_matrix[] = {
-        1.0, 0.0, 0.0,
-        0.0, 1.5, 0.0,
-        0.0, 0.0, 0.0,
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.5, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0,
     };
-    const double drive_real[] = {1.0, 0.5, 0.0};
-    const double drive_imag[] = {0.0, 0.0, 0.0};
+    const double drive_real[] = {1.0, 0.5, 0.0, 0.0};
+    const double drive_imag[] = {0.0, 0.0, 0.0, 0.0};
 
     auto make_request = [&]() {
         fd::DrivenFrequencyResponseSolveRequest request{};
@@ -4620,13 +4850,13 @@ void production_cpu_periodic_airbox_dynamic_demag_rejects_coupled_block_layout_m
     request.magnetic_periodic_constraint_set_count = 1;
     request.magnetostatic_periodic_constraint_set_count = 1;
     request.periodic_airbox_delta_m_tangent_dof_count = 2;
-    request.periodic_airbox_delta_phi_dof_count = 1;
+    request.periodic_airbox_delta_phi_dof_count = 2;
     request.periodic_airbox_magnetostatic_periodic_node_pairs =
         magnetostatic_periodic_node_pairs;
     request.periodic_airbox_magnetostatic_periodic_node_pair_count = 1;
     request.periodic_airbox_coupled_block_problem.enabled = true;
     request.periodic_airbox_coupled_block_problem.delta_m_tangent_dof_count = 2;
-    request.periodic_airbox_coupled_block_problem.delta_phi_dof_count = 2;
+    request.periodic_airbox_coupled_block_problem.delta_phi_dof_count = 1;
     request.periodic_airbox_coupled_block_problem.stiffness_matrix_row_major = stiffness_matrix;
     request.periodic_airbox_coupled_block_problem.mass_matrix_row_major = mass_matrix;
     request.periodic_airbox_coupled_block_problem.drive_real = drive_real;
@@ -4656,7 +4886,7 @@ void production_cpu_periodic_airbox_dynamic_demag_rejects_coupled_block_layout_m
         contains(manifest.c_str(), "\"validation_error\":\"periodic_airbox_coupled_block_layout_mismatch\""),
         "coupled-block layout mismatch manifest records machine-readable validation error");
     check(
-        contains(manifest.c_str(), "\"delta_phi_dof_count\":1"),
+        contains(manifest.c_str(), "\"delta_phi_dof_count\":2"),
         "coupled-block layout mismatch manifest records requested phi DOFs");
     fd::release_driven_frequency_response_result(&result);
 }
@@ -4673,17 +4903,19 @@ void production_cpu_periodic_airbox_dynamic_demag_rejects_delta_m_tangent_dof_mi
         "/tmp/fullmag-frequency-domain-periodic-airbox-delta-m-dof-mismatch-%llu",
         static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&frequencies_hz)));
     const double stiffness_matrix[] = {
-        2.0, 0.0, 0.25,
-        0.0, 3.0, -0.5,
-        0.25, -0.5, 4.0,
+        2.0, 0.0, 0.25, 0.0,
+        0.0, 3.0, -0.5, 0.0,
+        0.25, -0.5, 4.0, 0.0,
+        0.0, 0.0, 0.0, 5.0,
     };
     const double mass_matrix[] = {
-        1.0, 0.0, 0.0,
-        0.0, 1.5, 0.0,
-        0.0, 0.0, 0.0,
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.5, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0,
     };
-    const double drive_real[] = {1.0, 0.5, 0.0};
-    const double drive_imag[] = {0.0, 0.0, 0.0};
+    const double drive_real[] = {1.0, 0.5, 0.0, 0.0};
+    const double drive_imag[] = {0.0, 0.0, 0.0, 0.0};
 
     fd::DrivenFrequencyResponseSolveRequest request{};
     request.solve_request.operator_request.node_count = 2;
@@ -4697,13 +4929,13 @@ void production_cpu_periodic_airbox_dynamic_demag_rejects_delta_m_tangent_dof_mi
     request.magnetic_periodic_constraint_set_count = 1;
     request.magnetostatic_periodic_constraint_set_count = 1;
     request.periodic_airbox_delta_m_tangent_dof_count = 2;
-    request.periodic_airbox_delta_phi_dof_count = 1;
+    request.periodic_airbox_delta_phi_dof_count = 2;
     request.periodic_airbox_magnetostatic_periodic_node_pairs =
         magnetostatic_periodic_node_pairs;
     request.periodic_airbox_magnetostatic_periodic_node_pair_count = 1;
     request.periodic_airbox_coupled_block_problem.enabled = true;
     request.periodic_airbox_coupled_block_problem.delta_m_tangent_dof_count = 2;
-    request.periodic_airbox_coupled_block_problem.delta_phi_dof_count = 1;
+    request.periodic_airbox_coupled_block_problem.delta_phi_dof_count = 2;
     request.periodic_airbox_coupled_block_problem.stiffness_matrix_row_major = stiffness_matrix;
     request.periodic_airbox_coupled_block_problem.mass_matrix_row_major = mass_matrix;
     request.periodic_airbox_coupled_block_problem.drive_real = drive_real;
@@ -4749,14 +4981,14 @@ void production_cpu_periodic_airbox_dynamic_demag_solves_matrix_free_coupled_blo
         sizeof(output_directory),
         "/tmp/fullmag-frequency-domain-periodic-airbox-matrix-free-coupled-%llu",
         static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&frequencies_hz)));
-    const double stiffness_diagonal[] = {2.0, 3.0, 4.0};
-    const double mass_diagonal[] = {1.0, 1.5, 0.0};
-    const double drive_real[] = {1.0, 0.5, 0.0};
-    const double drive_imag[] = {0.0, 0.0, 0.0};
+    const double stiffness_diagonal[] = {2.0, 3.0, 4.0, 5.0};
+    const double mass_diagonal[] = {1.0, 1.5, 0.0, 0.0};
+    const double drive_real[] = {1.0, 0.5, 0.0, 0.0};
+    const double drive_imag[] = {0.0, 0.0, 0.0, 0.0};
     DiagonalProductionOperator coupled_operator{
         stiffness_diagonal,
         mass_diagonal,
-        3,
+        4,
         0,
         0,
     };
@@ -4773,13 +5005,13 @@ void production_cpu_periodic_airbox_dynamic_demag_solves_matrix_free_coupled_blo
     request.magnetic_periodic_constraint_set_count = 1;
     request.magnetostatic_periodic_constraint_set_count = 1;
     request.periodic_airbox_delta_m_tangent_dof_count = 2;
-    request.periodic_airbox_delta_phi_dof_count = 1;
+    request.periodic_airbox_delta_phi_dof_count = 2;
     request.periodic_airbox_magnetostatic_periodic_node_pairs =
         magnetostatic_periodic_node_pairs;
     request.periodic_airbox_magnetostatic_periodic_node_pair_count = 1;
     request.periodic_airbox_coupled_block_problem.enabled = true;
     request.periodic_airbox_coupled_block_problem.delta_m_tangent_dof_count = 2;
-    request.periodic_airbox_coupled_block_problem.delta_phi_dof_count = 1;
+    request.periodic_airbox_coupled_block_problem.delta_phi_dof_count = 2;
     request.periodic_airbox_coupled_block_problem.apply_stiffness = apply_diagonal_stiffness;
     request.periodic_airbox_coupled_block_problem.apply_mass = apply_diagonal_mass;
     request.periodic_airbox_coupled_block_problem.operator_user_data = &coupled_operator;
@@ -4810,6 +5042,18 @@ void production_cpu_periodic_airbox_dynamic_demag_solves_matrix_free_coupled_blo
     check(
         contains(result.diagnostics_json, "\"phi_gauge_constraint_applied\":false"),
         "matrix-free coupled block diagnostics does not apply an implicit gauge row");
+    check(
+        contains(result.diagnostics_json, "\"coupled_residual_partition_status\":\"coupled_block\""),
+        "matrix-free coupled block diagnostics records coupled residual partition status");
+    check(
+        contains(result.diagnostics_json, "\"coupled_block_norms\":{\"rhs_delta_m_l2_norm\":"),
+        "matrix-free coupled block diagnostics records split coupled block norms");
+    check(
+        contains(result.diagnostics_json, "\"rhs_delta_phi_l2_norm\":"),
+        "matrix-free coupled block diagnostics records delta_phi RHS norm");
+    check(
+        contains(result.diagnostics_json, "\"relative_residual_delta_phi_l2_norm\":"),
+        "matrix-free coupled block diagnostics records delta_phi relative residual norm");
 
     const std::string manifest = read_text_file(result.artifact_manifest_path);
     check(
@@ -4821,6 +5065,12 @@ void production_cpu_periodic_airbox_dynamic_demag_solves_matrix_free_coupled_blo
     check(
         contains(manifest.c_str(), "\"dynamic_demag_k_available\":false"),
         "matrix-free coupled block manifest does not promote dynamic demag-k availability before MFEM assembly");
+    check(
+        contains(manifest.c_str(), "\"coupled_residual_partition_status\":\"coupled_block\""),
+        "matrix-free coupled block manifest records coupled residual partition status");
+    check(
+        contains(manifest.c_str(), "\"coupled_block_norms\":{\"rhs_delta_m_l2_norm\":"),
+        "matrix-free coupled block manifest records split coupled block norms");
 
     char frequency_point_path[256]{};
     std::snprintf(
@@ -4856,31 +5106,43 @@ void production_cpu_periodic_airbox_dynamic_demag_solves_mfem_demag_tangent_prov
             fd::FrequencyDomainStatus::ok,
         "production CPU periodic-airbox demag tangent provider frame succeeds");
 
+    const fd::TangentFrameNode nodes[] = {node, node};
+
     fd::MfemOperatorContextDescriptor descriptor{};
-    descriptor.node_count = 1;
-    descriptor.full_dof_count = 3;
-    descriptor.tangent_dof_count = 2;
+    descriptor.node_count = 2;
+    descriptor.full_dof_count = 6;
+    descriptor.tangent_dof_count = 4;
     descriptor.demag_kind = fd::FrequencyDomainDemagKind::static_k0;
     descriptor.demag_enabled = true;
+    descriptor.exchange_enabled = true;
     descriptor.mfem_mesh_available = true;
 
     fd::MfemTangentSpaceLayout layout{};
-    layout.node_count = 1;
-    layout.full_dof_count = 3;
-    layout.tangent_dof_count = 2;
+    layout.node_count = 2;
+    layout.full_dof_count = 6;
+    layout.tangent_dof_count = 4;
     layout.tangent_components_per_node = 2;
     layout.tangent_stride = 2;
 
     const double demag_tangent_matrix[] = {
-        0.5, 0.0,
-        0.0, 0.25,
+        0.5, 0.0, 0.1, 0.0,
+        0.0, 0.25, 0.0, 0.1,
+        0.1, 0.0, 0.5, 0.0,
+        0.0, 0.1, 0.0, 0.25,
     };
     DemagTangentCallbackOperator demag_operator{
         demag_tangent_matrix,
+        4,
         2,
         0,
     };
-    const double drive_real[] = {1.0, 0.0};
+    const fd::TangentOperatorEdgeBlock exchange_edge{
+        fd::FrequencyDomainOperatorTermKind::exchange,
+        0,
+        1,
+        0.25,
+    };
+    const double drive_real[] = {1.0, 0.0, 0.5, 0.0};
     const std::uint64_t magnetostatic_periodic_node_pairs[] = {0, 1};
     char output_directory[192]{};
     std::snprintf(
@@ -4890,8 +5152,8 @@ void production_cpu_periodic_airbox_dynamic_demag_solves_mfem_demag_tangent_prov
         static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&frequencies_hz)));
 
     fd::DrivenFrequencyResponseSolveRequest request{};
-    request.solve_request.operator_request.node_count = 1;
-    request.solve_request.operator_request.tangent_dof_count = 2;
+    request.solve_request.operator_request.node_count = 2;
+    request.solve_request.operator_request.tangent_dof_count = 4;
     request.solve_request.operator_request.alpha = 0.0;
     request.solve_request.operator_request.gamma0 = 1.0;
     request.solve_request.operator_request.demag_kind = fd::FrequencyDomainDemagKind::static_k0;
@@ -4901,16 +5163,19 @@ void production_cpu_periodic_airbox_dynamic_demag_solves_mfem_demag_tangent_prov
     request.requires_periodic_airbox_dynamic_demag = true;
     request.magnetic_periodic_constraint_set_count = 1;
     request.magnetostatic_periodic_constraint_set_count = 1;
-    request.periodic_airbox_delta_m_tangent_dof_count = 2;
-    request.periodic_airbox_delta_phi_dof_count = 1;
+    request.periodic_airbox_delta_m_tangent_dof_count = 4;
+    request.periodic_airbox_delta_phi_dof_count = 2;
     request.periodic_airbox_magnetostatic_periodic_node_pairs =
         magnetostatic_periodic_node_pairs;
     request.periodic_airbox_magnetostatic_periodic_node_pair_count = 1;
     request.mfem_validation_problem.enabled = true;
     request.mfem_validation_problem.descriptor = descriptor;
     request.mfem_validation_problem.layout = layout;
-    request.mfem_validation_problem.nodes = &node;
-    request.mfem_validation_problem.apply_demag_tangent = apply_demag_tangent_callback;
+    request.mfem_validation_problem.nodes = nodes;
+    request.mfem_validation_problem.exchange_edges = &exchange_edge;
+    request.mfem_validation_problem.exchange_edge_count = 1;
+    request.mfem_validation_problem.apply_demag_tangent_with_potential =
+        apply_demag_tangent_with_potential_callback;
     request.mfem_validation_problem.demag_tangent_user_data = &demag_operator;
     request.mfem_validation_problem.drive_real = drive_real;
     request.output_directory = output_directory;
@@ -4934,35 +5199,29 @@ void production_cpu_periodic_airbox_dynamic_demag_solves_mfem_demag_tangent_prov
     check(
         contains(result.diagnostics_json, "\"validation_fallback_used\":false"),
         "periodic-airbox demag tangent provider rejects validation fallback");
-    const std::uint64_t iteration_count = extract_json_u64(
-        result.diagnostics_json,
-        "\"total_iteration_count\"");
-    check(iteration_count > 0, "periodic-airbox demag tangent provider reports Krylov iterations");
-    check(
-        demag_operator.call_count == 4 + 2 * (iteration_count + 2),
-        "periodic-airbox demag tangent provider is invoked for the linearity self-check, stiffness applications, and final h_demag artifact export");
-    check(
-        contains(result.diagnostics_json, "\"demag_tangent_operator_source\":\"matrix_free_demag_tangent_provider\""),
-        "periodic-airbox demag tangent provider diagnostics report provider source");
-    check(
-        contains(result.diagnostics_json, "\"demag_tangent_linearity_check\":true"),
-        "periodic-airbox demag tangent provider diagnostics report linearity check");
-    check(
-        extract_json_double(
-            result.diagnostics_json,
-            "\"demag_tangent_additivity_max_abs_error\"") < 1.0e-12,
-        "periodic-airbox demag tangent provider additivity check is small");
-    check(
-        extract_json_double(
-            result.diagnostics_json,
-            "\"demag_tangent_homogeneity_max_abs_error\"") < 1.0e-12,
-        "periodic-airbox demag tangent provider homogeneity check is small");
     check(
         contains(result.diagnostics_json, "\"requested_magnetostatic_bc\":\"periodic_airbox_k0\""),
         "periodic-airbox demag tangent provider diagnostics report requested magnetostatic BC");
     check(
-        contains(result.diagnostics_json, "\"periodic_airbox_coupled_block_solver\":false"),
-        "periodic-airbox demag tangent provider diagnostics do not claim coupled-block assembly");
+        contains(result.diagnostics_json, "\"periodic_airbox_coupled_block_solver\":true"),
+        "periodic-airbox demag tangent-with-potential provider enters a coupled-block solve");
+    check(
+        contains(result.diagnostics_json, "\"dynamic_demag_operator_source\":\"matrix_free_mfem_demag_phi_consistency_schur_provider\""),
+        "periodic-airbox demag tangent-with-potential provider diagnostics reports phi-consistency Schur provider source");
+    check(
+        contains(result.diagnostics_json, "\"coupled_residual_partition_status\":\"coupled_block\""),
+        "periodic-airbox demag tangent-with-potential provider diagnostics reports coupled residual partition");
+    check(
+        contains(result.diagnostics_json, "\"coupled_block_norms\":{\"rhs_delta_m_l2_norm\":"),
+        "periodic-airbox demag tangent-with-potential provider diagnostics records coupled split norms");
+    check(
+        contains(result.diagnostics_json, "\"rhs_delta_phi_l2_norm\":0"),
+        "periodic-airbox demag tangent-with-potential provider diagnostics reports zero phi-consistency RHS");
+    check(
+        extract_json_double(
+            result.diagnostics_json,
+            "\"response_delta_phi_l2_norm\"") > 0.0,
+        "periodic-airbox demag tangent-with-potential provider solves a nonzero delta_phi unknown");
     check(
         !contains(result.diagnostics_json, "periodic_airbox_dynamic_demag_coupled_block_unimplemented"),
         "periodic-airbox demag tangent provider does not report coupled-block unavailable");
@@ -4980,11 +5239,14 @@ void production_cpu_periodic_airbox_dynamic_demag_solves_mfem_demag_tangent_prov
         contains(manifest.c_str(), "\"requested_magnetostatic_bc\":\"periodic_airbox_k0\""),
         "periodic-airbox demag tangent provider manifest records requested magnetostatic BC");
     check(
-        contains(manifest.c_str(), "\"demag_tangent_operator_source\":\"matrix_free_demag_tangent_provider\""),
-        "periodic-airbox demag tangent provider manifest records provider source");
+        contains(manifest.c_str(), "\"dynamic_demag_operator_source\":\"matrix_free_mfem_demag_phi_consistency_schur_provider\""),
+        "periodic-airbox demag tangent-with-potential provider manifest records phi-consistency Schur source");
     check(
-        contains(manifest.c_str(), "\"demag_tangent_linearity_check\":true"),
-        "periodic-airbox demag tangent provider manifest records linearity check");
+        contains(manifest.c_str(), "\"coupled_residual_partition_status\":\"coupled_block\""),
+        "periodic-airbox demag tangent-with-potential provider manifest records coupled residual partition");
+    check(
+        contains(manifest.c_str(), "\"coupled_block_norms\":{\"rhs_delta_m_l2_norm\":"),
+        "periodic-airbox demag tangent provider manifest records magnetic split norms");
     check(
         contains(manifest.c_str(), "\"domain_mesh_mode\":\"generated_frozen_magnetic_submesh\""),
         "periodic-airbox demag tangent provider manifest records frozen magnetic submesh workflow");
@@ -4999,13 +5261,11 @@ void production_cpu_periodic_airbox_dynamic_demag_solves_mfem_demag_tangent_prov
         !contains(solver_diagnostics.c_str(), ",,"),
         "periodic-airbox demag tangent provider solver diagnostics avoid duplicate JSON separators");
     check(
-        contains(
-            solver_diagnostics.c_str(),
-            "\"magnetostatic_periodic_node_pair_count\":1,\"krylov_solver\""),
-        "periodic-airbox demag tangent provider solver diagnostics separate periodic-airbox fields from Krylov fields");
+        contains(solver_diagnostics.c_str(), "\"coupled_residual_partition_status\":\"coupled_block\""),
+        "periodic-airbox demag tangent-with-potential provider solver diagnostics records coupled residual partition");
     check(
-        contains(solver_diagnostics.c_str(), "\"demag_tangent_additivity_max_abs_error\":"),
-        "periodic-airbox demag tangent provider solver diagnostics records additivity error");
+        contains(solver_diagnostics.c_str(), "\"coupled_block_norms\":{\"rhs_delta_m_l2_norm\":"),
+        "periodic-airbox demag tangent provider solver diagnostics records magnetic split norms");
     check(
         contains(
             solver_diagnostics.c_str(),
@@ -5026,26 +5286,22 @@ void production_cpu_periodic_airbox_dynamic_demag_solves_mfem_demag_tangent_prov
         contains(point.c_str(), "\"demag_contribution\":{\"status\":\"solved\""),
         "periodic-airbox demag tangent provider point records solved demag contribution");
     check(
-        contains(point.c_str(), "\"delta_phi_complex\":null"),
-        "periodic-airbox demag tangent provider point does not fake delta_phi phasor payload");
+        contains(point.c_str(), "\"operator_source\":\"matrix_free_mfem_demag_phi_consistency_schur_provider\""),
+        "periodic-airbox demag tangent-with-potential provider point records phi-consistency Schur source");
     check(
-        contains(point.c_str(), "\"h_demag_complex\":["),
-        "periodic-airbox demag tangent provider point records demag-field phasor payload");
+        contains(point.c_str(), "\"delta_phi_complex\":[["),
+        "periodic-airbox demag tangent-with-potential provider point records solved delta_phi unknown");
     check(
-        contains(point.c_str(), "\"h_demag_complex\":[["),
-        "periodic-airbox demag tangent provider point records h_demag_complex as [re, im] pairs");
+        !contains(point.c_str(), "\"provider_delta_phi_is_coupled_unknown\":false"),
+        "periodic-airbox demag tangent-with-potential provider point no longer labels delta_phi as provider-only output");
     check(
-        !contains(point.c_str(), "\"h_demag_complex\":[{\"real\""),
-        "periodic-airbox demag tangent provider point does not record h_demag_complex as real/imag objects");
+        contains(point.c_str(), "\"h_demag_complex\":null"),
+        "periodic-airbox phi-consistency coupled provider does not emit separate magnetic-only h_demag artifact");
     fd::release_driven_frequency_response_result(&result);
 }
 
-void production_cpu_periodic_airbox_dynamic_demag_writes_solve_error_artifacts()
+void production_cpu_periodic_airbox_dynamic_demag_writes_phi_consistency_artifacts_without_exchange_graph()
 {
-    ScopedEnvVar rtol_guard("FULLMAG_FEM_FREQUENCY_RESPONSE_RTOL", "1e-14");
-    ScopedEnvVar max_iterations_guard("FULLMAG_FEM_FREQUENCY_RESPONSE_MAX_ITERATIONS", "1");
-    ScopedEnvVar restart_guard("FULLMAG_FEM_FREQUENCY_RESPONSE_RESTART_ITERATIONS", "1");
-
     constexpr double one_over_two_pi_hz = 0.15915494309189535;
     const double frequencies_hz[] = {one_over_two_pi_hz};
     const double equilibrium[] = {
@@ -5083,6 +5339,7 @@ void production_cpu_periodic_airbox_dynamic_demag_writes_solve_error_artifacts()
     DemagTangentCallbackOperator demag_operator{
         demag_tangent_matrix,
         4,
+        2,
         0,
     };
     const double drive_real[] = {1.0, 2.0, 3.0, 4.0};
@@ -5091,7 +5348,7 @@ void production_cpu_periodic_airbox_dynamic_demag_writes_solve_error_artifacts()
     std::snprintf(
         output_directory,
         sizeof(output_directory),
-        "/tmp/fullmag-frequency-domain-periodic-airbox-demag-tangent-solve-error-%llu",
+        "/tmp/fullmag-frequency-domain-periodic-airbox-demag-tangent-no-exchange-%llu",
         static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&frequencies_hz)));
 
     fd::DrivenFrequencyResponseSolveRequest request{};
@@ -5115,7 +5372,8 @@ void production_cpu_periodic_airbox_dynamic_demag_writes_solve_error_artifacts()
     request.mfem_validation_problem.descriptor = descriptor;
     request.mfem_validation_problem.layout = layout;
     request.mfem_validation_problem.nodes = nodes;
-    request.mfem_validation_problem.apply_demag_tangent = apply_demag_tangent_callback;
+    request.mfem_validation_problem.apply_demag_tangent_with_potential =
+        apply_demag_tangent_with_potential_callback;
     request.mfem_validation_problem.demag_tangent_user_data = &demag_operator;
     request.mfem_validation_problem.drive_real = drive_real;
     request.output_directory = output_directory;
@@ -5126,28 +5384,28 @@ void production_cpu_periodic_airbox_dynamic_demag_writes_solve_error_artifacts()
         fd::solve_driven_frequency_response(request, &result);
 
     check(
-        status == fd::FrequencyDomainStatus::solve_error,
-        "production CPU periodic-airbox demag tangent provider limited GMRES reports solve_error");
-    check(result.completed_frequency_count == 0, "solve-error run completes no frequencies");
+        status == fd::FrequencyDomainStatus::ok,
+        "production CPU periodic-airbox phi-consistency provider without exchange graph solves");
+    check(result.completed_frequency_count == 1, "no-exchange phi-consistency run completes one frequency");
     check(
         contains(result.artifact_manifest_path, "frequency_domain/manifest.v1.json"),
-        "solve-error run reports manifest path");
+        "no-exchange phi-consistency run reports manifest path");
     check(
         contains(result.result_json, "frequency_domain/manifest.v1.json"),
-        "solve-error result JSON reports manifest path");
+        "no-exchange phi-consistency result JSON reports manifest path");
 
     const std::string manifest = read_text_file(result.artifact_manifest_path);
-    check(contains(manifest.c_str(), "\"status\":\"solve_error\""), "solve-error manifest records status");
-    check(contains(manifest.c_str(), "\"complete\":false"), "solve-error manifest records incomplete state");
+    check(contains(manifest.c_str(), "\"status\":\"ok\""), "no-exchange phi-consistency manifest records ok status");
+    check(contains(manifest.c_str(), "\"complete\":true"), "no-exchange phi-consistency manifest records complete state");
     check(
-        contains(manifest.c_str(), "\"demag_tangent_operator_source\":\"matrix_free_demag_tangent_provider\""),
-        "solve-error manifest records demag tangent provider source");
+        contains(manifest.c_str(), "\"dynamic_demag_operator_source\":\"matrix_free_mfem_demag_phi_consistency_schur_provider\""),
+        "no-exchange phi-consistency manifest records Schur provider source");
     check(
-        contains(manifest.c_str(), "\"total_iteration_count\":1"),
-        "solve-error manifest preserves iteration count");
+        contains(manifest.c_str(), "\"periodic_airbox_coupled_block_solver\":true"),
+        "no-exchange phi-consistency manifest records coupled-block solver");
     check(
-        contains(manifest.c_str(), "\"max_iterations_for_frequency\":1"),
-        "solve-error manifest preserves max-iteration limit");
+        contains(manifest.c_str(), "\"coupled_residual_partition_status\":\"coupled_block\""),
+        "no-exchange phi-consistency manifest records coupled residual partition");
 
     char diagnostics_path[256]{};
     char progress_path[256]{};
@@ -5170,47 +5428,239 @@ void production_cpu_periodic_airbox_dynamic_demag_writes_solve_error_artifacts()
     const std::string diagnostics = read_text_file(diagnostics_path);
     const std::string progress = read_text_file(progress_path);
     check(
-        contains(diagnostics.c_str(), "\"status\":\"solve_error\""),
-        "solve-error diagnostics records status");
+        contains(diagnostics.c_str(), "\"status\":\"ok\""),
+        "no-exchange phi-consistency diagnostics records ok status");
     check(
-        contains(diagnostics.c_str(), "\"total_iteration_count\":1"),
-        "solve-error diagnostics preserves iteration count");
+        contains(diagnostics.c_str(), "\"dynamic_demag_operator_source\":\"matrix_free_mfem_demag_phi_consistency_schur_provider\""),
+        "no-exchange phi-consistency diagnostics records Schur provider source");
     check(
-        contains(diagnostics.c_str(), "\"max_iterations_for_frequency\":1"),
-        "solve-error diagnostics preserves max-iteration limit");
+        contains(diagnostics.c_str(), "\"coupled_block_norms\":{\"rhs_delta_m_l2_norm\":"),
+        "no-exchange phi-consistency diagnostics records coupled split norms");
     check(
-        contains(diagnostics.c_str(), "\"relative_residual_l2_norm\":"),
-        "solve-error diagnostics preserves final relative residual");
+        extract_json_double(diagnostics.c_str(), "\"response_delta_phi_l2_norm\"") > 0.0,
+        "no-exchange phi-consistency diagnostics records nonzero delta_phi response norm");
     check(
-        contains(diagnostics.c_str(), "\"initial_relative_residual_l2_norm\":"),
-        "solve-error diagnostics preserves initial relative residual");
+        contains(progress.c_str(), "\"status\":\"ok\""),
+        "no-exchange phi-consistency progress records ok status");
     check(
-        contains(diagnostics.c_str(), "\"minimum_tracked_relative_residual_l2_norm\":"),
-        "solve-error diagnostics preserves minimum relative residual");
-    check(
-        contains(diagnostics.c_str(), "\"minimum_tracked_relative_residual_iteration\":"),
-        "solve-error diagnostics preserves minimum residual iteration");
-    check(
-        contains(diagnostics.c_str(), "\"last_tracked_relative_residual_l2_norm\":"),
-        "solve-error diagnostics preserves last tracked residual");
-    check(
-        contains(diagnostics.c_str(), "\"last_recomputed_relative_residual_l2_norm\":"),
-        "solve-error diagnostics preserves last recomputed residual");
-    check(
-        contains(diagnostics.c_str(), "\"residual_growth_factor\":"),
-        "solve-error diagnostics preserves residual growth factor");
-    check(
-        contains(progress.c_str(), "\"status\":\"solve_error\""),
-        "solve-error progress records status");
-    check(
-        contains(progress.c_str(), "\"state\":\"solve_error\""),
-        "solve-error progress records solve_error state");
-    check(
-        contains(progress.c_str(), "\"completed_frequency_points\":0"),
-        "solve-error progress records zero completed points");
+        contains(progress.c_str(), "\"completed_frequency_points\":1"),
+        "no-exchange phi-consistency progress records one completed point");
     check(
         file_exists(periodic_pairs_path),
-        "solve-error run still writes periodic-pair metadata");
+        "no-exchange phi-consistency run writes periodic-pair metadata");
+
+    char point_path[256]{};
+    std::snprintf(
+        point_path,
+        sizeof(point_path),
+        "%s/response/frequency_points/frequency_0000.json",
+        output_directory);
+    const std::string point = read_text_file(point_path);
+    check(
+        contains(point.c_str(), "\"operator_source\":\"matrix_free_mfem_demag_phi_consistency_schur_provider\""),
+        "no-exchange phi-consistency point records Schur provider source");
+    check(
+        contains(point.c_str(), "\"delta_phi_complex\":[["),
+        "no-exchange phi-consistency point records solved delta_phi unknown");
+
+    fd::release_driven_frequency_response_result(&result);
+}
+
+void production_cpu_periodic_airbox_phi_consistency_solve_error_writes_bounded_artifacts()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double equilibrium[] = {
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+    };
+    fd::TangentFrameNode nodes[2]{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 2, nodes, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "periodic-airbox phi-consistency solve-error frame succeeds");
+
+    fd::MfemOperatorContextDescriptor descriptor{};
+    descriptor.node_count = 2;
+    descriptor.full_dof_count = 6;
+    descriptor.tangent_dof_count = 4;
+    descriptor.demag_kind = fd::FrequencyDomainDemagKind::static_k0;
+    descriptor.demag_enabled = true;
+    descriptor.mfem_mesh_available = true;
+
+    fd::MfemTangentSpaceLayout layout{};
+    layout.node_count = 2;
+    layout.full_dof_count = 6;
+    layout.tangent_dof_count = 4;
+    layout.tangent_components_per_node = 2;
+    layout.tangent_stride = 2;
+
+    const double demag_tangent_matrix[] = {
+        0.5, 0.1, 0.0, 0.0,
+        0.1, 0.25, 0.0, 0.0,
+        0.0, 0.0, 0.75, 0.2,
+        0.0, 0.0, 0.2, 0.4,
+    };
+    DemagTangentCallbackOperator demag_operator{
+        demag_tangent_matrix,
+        4,
+        2,
+        0,
+    };
+    const double drive_real[] = {1.0, 2.0, 3.0, 4.0};
+    const std::uint64_t magnetostatic_periodic_node_pairs[] = {0, 1};
+    char output_directory[192]{};
+    std::snprintf(
+        output_directory,
+        sizeof(output_directory),
+        "/tmp/fullmag-frequency-domain-periodic-airbox-phi-solve-error-%llu",
+        static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&frequencies_hz)));
+
+    ScopedEnvVar response_rtol("FULLMAG_FEM_FREQUENCY_RESPONSE_RTOL", "1e-14");
+    ScopedEnvVar response_max_iterations(
+        "FULLMAG_FEM_FREQUENCY_RESPONSE_MAX_ITERATIONS",
+        "1");
+    ScopedEnvVar response_restart_iterations(
+        "FULLMAG_FEM_FREQUENCY_RESPONSE_RESTART_ITERATIONS",
+        "1");
+
+    fd::DrivenFrequencyResponseSolveRequest request{};
+    request.solve_request.operator_request.node_count = 2;
+    request.solve_request.operator_request.tangent_dof_count = 4;
+    request.solve_request.operator_request.alpha = 0.0;
+    request.solve_request.operator_request.gamma0 = 1.0;
+    request.solve_request.operator_request.demag_kind = fd::FrequencyDomainDemagKind::static_k0;
+    request.solve_request.frequencies_hz = frequencies_hz;
+    request.solve_request.frequency_count = 1;
+    request.execution_lane = fd::DrivenFrequencyResponseExecutionLane::production_cpu;
+    request.requires_periodic_airbox_dynamic_demag = true;
+    request.magnetic_periodic_constraint_set_count = 1;
+    request.magnetostatic_periodic_constraint_set_count = 1;
+    request.periodic_airbox_delta_m_tangent_dof_count = 4;
+    request.periodic_airbox_delta_phi_dof_count = 2;
+    request.periodic_airbox_magnetostatic_periodic_node_pairs =
+        magnetostatic_periodic_node_pairs;
+    request.periodic_airbox_magnetostatic_periodic_node_pair_count = 1;
+    request.mfem_validation_problem.enabled = true;
+    request.mfem_validation_problem.descriptor = descriptor;
+    request.mfem_validation_problem.layout = layout;
+    request.mfem_validation_problem.nodes = nodes;
+    request.mfem_validation_problem.apply_demag_tangent_with_potential =
+        apply_demag_tangent_with_potential_callback;
+    request.mfem_validation_problem.demag_tangent_user_data = &demag_operator;
+    request.mfem_validation_problem.drive_real = drive_real;
+    request.output_directory = output_directory;
+    request.write_partial_artifacts = true;
+
+    fd::DrivenFrequencyResponseSolveResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_driven_frequency_response(request, &result);
+
+    check(
+        status == fd::FrequencyDomainStatus::solve_error,
+        "periodic-airbox phi-consistency GMRES failure reports solve_error");
+    check(
+        contains(result.artifact_manifest_path, "frequency_domain/manifest.v1.json"),
+        "periodic-airbox phi-consistency solve_error reports manifest path");
+    check(
+        contains(result.result_json, "\"status\":\"solve_error\""),
+        "periodic-airbox phi-consistency solve_error result JSON records status");
+    check(
+        contains(result.result_json, "frequency_domain/manifest.v1.json"),
+        "periodic-airbox phi-consistency solve_error result JSON records manifest path");
+
+    const std::string manifest = read_text_file(result.artifact_manifest_path);
+    check(contains(manifest.c_str(), "\"status\":\"solve_error\""), "phi-consistency solve_error manifest records solve_error");
+    check(contains(manifest.c_str(), "\"complete\":false"), "phi-consistency solve_error manifest records incomplete state");
+    check(
+        contains(manifest.c_str(), "\"periodic_airbox_coupled_block_solver\":true"),
+        "phi-consistency solve_error manifest records coupled-block solver boundary");
+    check(
+        contains(manifest.c_str(), "\"dynamic_demag_operator_source\":\"matrix_free_mfem_demag_phi_consistency_schur_provider\""),
+        "phi-consistency solve_error manifest records Schur provider source");
+    check(
+        contains(manifest.c_str(), "\"resolved_execution_lane\":\"production_cpu\""),
+        "phi-consistency solve_error manifest records resolved execution lane");
+    check(
+        contains(manifest.c_str(), "\"diagnostics\":{\"requested_execution_lane\":\"production_cpu\",\"resolved_execution_lane\":\"production_cpu\""),
+        "phi-consistency solve_error manifest diagnostics records CPU execution lanes");
+    check(
+        contains(manifest.c_str(), "\"frequency_point_paths\":[]"),
+        "phi-consistency solve_error manifest publishes no solved frequency points");
+    check(
+        contains(manifest.c_str(), "\"requested_execution\":{\"solve_equation\":\"(i omega B - L) q = f\""),
+        "phi-consistency solve_error manifest records requested execution contract");
+    check(
+        contains(manifest.c_str(), "\"frequency_count\":1"),
+        "phi-consistency solve_error manifest records requested frequency count");
+    check(
+        contains(manifest.c_str(), "\"write_response_fields\":true"),
+        "phi-consistency solve_error manifest records response field request");
+    check(
+        contains(manifest.c_str(), "\"frequency_units\":\"Hz\""),
+        "phi-consistency solve_error manifest records frequency units");
+    check(
+        contains(manifest.c_str(), "\"field_units\":\"A_per_m\""),
+        "phi-consistency solve_error manifest records field units");
+    check(
+        contains(manifest.c_str(), "\"normalization\":\"linear_response_tangent\""),
+        "phi-consistency solve_error manifest records response normalization");
+    check(
+        contains(manifest.c_str(), "\"llg_gamma0_si\":1"),
+        "phi-consistency solve_error manifest records LLG gamma");
+    check(
+        contains(manifest.c_str(), "\"llg_alpha\":0"),
+        "phi-consistency solve_error manifest records damping");
+    check(
+        contains(manifest.c_str(), "\"periodic_or_floquet\":true"),
+        "phi-consistency solve_error manifest records periodic boundary family");
+
+    char diagnostics_path[256]{};
+    char progress_path[256]{};
+    char periodic_pairs_path[256]{};
+    std::snprintf(
+        diagnostics_path,
+        sizeof(diagnostics_path),
+        "%s/response/diagnostics/solver.v1.json",
+        output_directory);
+    std::snprintf(
+        progress_path,
+        sizeof(progress_path),
+        "%s/response/progress.v1.json",
+        output_directory);
+    std::snprintf(
+        periodic_pairs_path,
+        sizeof(periodic_pairs_path),
+        "%s/mesh/periodic_pairs.v1.json",
+        output_directory);
+    const std::string diagnostics = read_text_file(diagnostics_path);
+    const std::string progress = read_text_file(progress_path);
+    const std::string periodic_pairs = read_text_file(periodic_pairs_path);
+    check(
+        contains(diagnostics.c_str(), "\"status\":\"solve_error\""),
+        "phi-consistency solve_error diagnostics records solve_error");
+    check(
+        contains(diagnostics.c_str(), "\"resolved_execution_lane\":\"production_cpu\""),
+        "phi-consistency solve_error diagnostics records resolved execution lane");
+    check(
+        contains(diagnostics.c_str(), "\"total_iteration_count\":1"),
+        "phi-consistency solve_error diagnostics records attempted iteration count");
+    check(
+        contains(diagnostics.c_str(), "\"gmres_relative_residual_history\":["),
+        "phi-consistency solve_error diagnostics records GMRES history");
+    check(
+        contains(diagnostics.c_str(), "\"coupled_block_norms\":{\"rhs_delta_m_l2_norm\":"),
+        "phi-consistency solve_error diagnostics records coupled split norms");
+    check(
+        contains(progress.c_str(), "\"status\":\"solve_error\""),
+        "phi-consistency solve_error progress records solve_error");
+    check(
+        contains(progress.c_str(), "\"partial_artifacts_available\":true"),
+        "phi-consistency solve_error progress reports bounded artifacts");
+    check(
+        contains(periodic_pairs.c_str(), "\"pair_count\":1"),
+        "phi-consistency solve_error writes periodic-pair metadata");
 
     fd::release_driven_frequency_response_result(&result);
 }
@@ -5250,7 +5700,7 @@ void production_gpu_periodic_airbox_dynamic_demag_rejects_explicit_coupled_block
     request.magnetic_periodic_constraint_set_count = 1;
     request.magnetostatic_periodic_constraint_set_count = 1;
     request.periodic_airbox_delta_m_tangent_dof_count = 2;
-    request.periodic_airbox_delta_phi_dof_count = 1;
+    request.periodic_airbox_delta_phi_dof_count = 2;
     request.periodic_airbox_coupled_block_problem.enabled = true;
     request.periodic_airbox_coupled_block_problem.delta_m_tangent_dof_count = 2;
     request.periodic_airbox_coupled_block_problem.delta_phi_dof_count = 1;
@@ -6218,6 +6668,20 @@ void production_cpu_lane_writes_matrix_free_response_artifacts()
         contains(point.c_str(), "\"sweep_reuse\":{\"operator_template_reused\":true"),
         "production CPU point metadata records sweep reuse provenance");
 
+    char diagnostics_path[256]{};
+    std::snprintf(
+        diagnostics_path,
+        sizeof(diagnostics_path),
+        "%s/response/diagnostics/solver.v1.json",
+        output_directory);
+    const std::string diagnostics = read_text_file(diagnostics_path);
+    check(
+        contains(diagnostics.c_str(), "\"matrix_form\":\"iomega_B_minus_L\""),
+        "production CPU diagnostics records driven-response matrix form");
+    check(
+        contains(diagnostics.c_str(), "\"phasor_convention\":\"exp_i_omega_t\""),
+        "production CPU diagnostics records temporal phasor convention");
+
     fd::release_driven_frequency_response_result(&result);
 }
 
@@ -6543,8 +7007,29 @@ void driven_response_solver_writes_minimal_assembled_validation_artifacts()
         contains(sweep.c_str(), "\"susceptibility_tensor_provenance\":{\"kind\":\"drive_projected_scalar\""),
         "response sweep records susceptibility provenance");
     check(
+        contains(sweep.c_str(), "\"response_quantity\":\"delta_m_over_h_drive\""),
+        "response sweep labels normalized delta_m over drive response");
+    check(
+        contains(sweep.c_str(), "\"response_units\":\"m/A\""),
+        "response sweep labels normalized response units");
+    check(
+        contains(sweep.c_str(), "\"dimensionless_si_susceptibility\":false"),
+        "response sweep does not label normalized response as dimensionless SI susceptibility");
+    check(
+        contains(sweep.c_str(), "\"requires_ms_for_chi_si\":true"),
+        "response sweep records Ms requirement for SI susceptibility");
+    check(
         contains(sweep.c_str(), "\"absorbed_power_density_provenance\":{\"kind\":\"drive_projected_absorption_proxy\""),
         "response sweep records absorbed power provenance");
+    check(
+        contains(sweep.c_str(), "\"physical_power_density\":false"),
+        "response sweep labels current absorbed-power value as a proxy");
+    check(
+        contains(sweep.c_str(), "\"units\":\"proxy_not_W_per_m3\""),
+        "response sweep labels absorbed-power proxy units");
+    check(
+        contains(sweep.c_str(), "\"requires_mu0_ms_factor\":true"),
+        "response sweep records mu0 Ms requirement for physical absorbed power");
     check(
         contains(sweep.c_str(), "\"tangent_leakage\":{\"status\":\"evaluated\""),
         "response sweep records evaluated tangent leakage");
@@ -6707,8 +7192,29 @@ void driven_response_solver_writes_minimal_assembled_validation_artifacts()
         contains(point.c_str(), "\"susceptibility_tensor_provenance\":{\"kind\":\"drive_projected_scalar\""),
         "frequency point metadata records susceptibility provenance");
     check(
+        contains(point.c_str(), "\"response_quantity\":\"delta_m_over_h_drive\""),
+        "frequency point metadata labels normalized delta_m over drive response");
+    check(
+        contains(point.c_str(), "\"response_units\":\"m/A\""),
+        "frequency point metadata labels normalized response units");
+    check(
+        contains(point.c_str(), "\"dimensionless_si_susceptibility\":false"),
+        "frequency point metadata does not label normalized response as dimensionless SI susceptibility");
+    check(
+        contains(point.c_str(), "\"requires_ms_for_chi_si\":true"),
+        "frequency point metadata records Ms requirement for SI susceptibility");
+    check(
         contains(point.c_str(), "\"absorbed_power_density_provenance\":{\"kind\":\"drive_projected_absorption_proxy\""),
         "frequency point metadata records absorbed power provenance");
+    check(
+        contains(point.c_str(), "\"physical_power_density\":false"),
+        "frequency point metadata labels current absorbed-power value as a proxy");
+    check(
+        contains(point.c_str(), "\"units\":\"proxy_not_W_per_m3\""),
+        "frequency point metadata labels absorbed-power proxy units");
+    check(
+        contains(point.c_str(), "\"requires_mu0_ms_factor\":true"),
+        "frequency point metadata records mu0 Ms requirement for physical absorbed power");
     check(
         contains(point.c_str(), "\"residual_l2_norm\":"),
         "frequency point metadata records residual norm");
@@ -8036,6 +8542,9 @@ void c_abi_driven_response_solve_rejects_floquet_tangent_frame_mismatch_before_u
         contains(result.diagnostics_json, "\"validation_error\":\"floquet_tangent_frame_mismatch\""),
         "C ABI Floquet frame mismatch diagnostics record structured frame mismatch");
     check(
+        contains(result.diagnostics_json, "\"basis_transport_policy\":\"rejected\""),
+        "C ABI Floquet frame mismatch diagnostics record rejected transport policy");
+    check(
         !contains(result.diagnostics_json, "\"unsupported_reason\":\"floquet_bloch_nonzero_k\""),
         "C ABI Floquet frame mismatch fails before unsupported solve path");
 
@@ -9067,7 +9576,7 @@ void c_abi_periodic_airbox_dynamic_demag_request_is_explicitly_unavailable()
     request.magnetic_periodic_constraint_set_count = 1;
     request.magnetostatic_periodic_constraint_set_count = 1;
     request.periodic_airbox_delta_m_tangent_dof_count = 2;
-    request.periodic_airbox_delta_phi_dof_count = 1;
+    request.periodic_airbox_delta_phi_dof_count = 2;
     request.periodic_airbox_magnetostatic_periodic_node_pairs = &magnetostatic_pair;
     request.periodic_airbox_magnetostatic_periodic_node_pair_count = 1;
 
@@ -9200,7 +9709,7 @@ void c_abi_periodic_airbox_dynamic_demag_rejects_degenerate_magnetostatic_period
     request.periodic_airbox_magnetostatic_periodic_node_pair_count = 1;
     request.periodic_airbox_coupled_block_enabled = 1;
     request.periodic_airbox_coupled_block_delta_m_tangent_dof_count = 2;
-    request.periodic_airbox_coupled_block_delta_phi_dof_count = 1;
+    request.periodic_airbox_coupled_block_delta_phi_dof_count = 2;
     request.periodic_airbox_coupled_block_stiffness_matrix_row_major = stiffness_matrix;
     request.periodic_airbox_coupled_block_mass_matrix_row_major = mass_matrix;
     request.periodic_airbox_coupled_block_drive_real = drive_real;
@@ -9239,6 +9748,90 @@ void c_abi_periodic_airbox_dynamic_demag_rejects_degenerate_magnetostatic_period
     fullmag_fem_frequency_domain_solve_result_release(&result);
 }
 
+void c_abi_periodic_airbox_dynamic_demag_rejects_out_of_range_magnetostatic_periodic_pair()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const fullmag_fem_frequency_domain_periodic_node_pair magnetostatic_pair{
+        0,
+        2,
+    };
+    char output_directory[192]{};
+    std::snprintf(
+        output_directory,
+        sizeof(output_directory),
+        "/tmp/fullmag-frequency-domain-c-abi-periodic-airbox-out-of-range-pair-%llu",
+        static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&frequencies_hz)));
+    const double stiffness_matrix[] = {
+        2.0, 0.0, 0.25, 0.0,
+        0.0, 3.0, -0.5, 0.0,
+        0.25, -0.5, 4.0, 0.0,
+        0.0, 0.0, 0.0, 1.0,
+    };
+    const double mass_matrix[] = {
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.5, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0,
+    };
+    const double drive_real[] = {1.0, 0.5, 0.0, 0.0};
+
+    fullmag_fem_frequency_domain_driven_response_request request{};
+    request.node_count = 1;
+    request.tangent_dof_count = 2;
+    request.alpha = 0.01;
+    request.gamma0 = 2.211e5;
+    request.requested_execution_lane = FULLMAG_FEM_FREQUENCY_DOMAIN_EXECUTION_PRODUCTION_CPU;
+    request.frequencies_hz = frequencies_hz;
+    request.frequency_count = 1;
+    request.requires_periodic_airbox_dynamic_demag = 1;
+    request.magnetic_periodic_constraint_set_count = 1;
+    request.magnetostatic_periodic_constraint_set_count = 1;
+    request.periodic_airbox_delta_m_tangent_dof_count = 2;
+    request.periodic_airbox_delta_phi_dof_count = 2;
+    request.periodic_airbox_magnetostatic_periodic_node_pairs = &magnetostatic_pair;
+    request.periodic_airbox_magnetostatic_periodic_node_pair_count = 1;
+    request.periodic_airbox_coupled_block_enabled = 1;
+    request.periodic_airbox_coupled_block_delta_m_tangent_dof_count = 2;
+    request.periodic_airbox_coupled_block_delta_phi_dof_count = 2;
+    request.periodic_airbox_coupled_block_stiffness_matrix_row_major = stiffness_matrix;
+    request.periodic_airbox_coupled_block_mass_matrix_row_major = mass_matrix;
+    request.periodic_airbox_coupled_block_drive_real = drive_real;
+    request.output_directory = output_directory;
+    request.write_partial_artifacts = 1;
+
+    fullmag_fem_frequency_domain_solve_result result{};
+    const int status =
+        fullmag_fem_frequency_domain_solve_driven_response(&request, &result);
+
+    check(status == FULLMAG_FEM_OK, "C ABI periodic-airbox out-of-range pair call succeeds");
+    check(
+        result.status == FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_VALIDATION_ERROR,
+        "C ABI periodic-airbox rejects out-of-range magnetostatic periodic pair");
+    check(
+        contains(result.diagnostics_json, "\"validation_error\":\"periodic_airbox_magnetostatic_periodic_node_pair_out_of_range\""),
+        "C ABI diagnostics name out-of-range magnetostatic periodic pair");
+    check(
+        contains(result.error_message, "inside delta_phi DOFs"),
+        "C ABI out-of-range magnetostatic pair error is explicit");
+    check(
+        !contains(result.diagnostics_json, "\"periodic_airbox_coupled_block_solver\":true"),
+        "C ABI out-of-range magnetostatic pair rejection does not enter coupled block solver");
+    check(
+        contains(result.artifact_manifest_path, "frequency_domain/manifest.v1.json"),
+        "C ABI out-of-range magnetostatic pair rejection reports a manifest path");
+
+    const std::string manifest = read_text_file(result.artifact_manifest_path);
+    check(
+        contains(manifest.c_str(), "\"validation_error\":\"periodic_airbox_magnetostatic_periodic_node_pair_out_of_range\""),
+        "C ABI out-of-range magnetostatic pair manifest records machine-readable validation error");
+    check(
+        contains(manifest.c_str(), "\"magnetostatic_periodic_node_pair_count\":1"),
+        "C ABI out-of-range magnetostatic pair manifest preserves pair count");
+
+    fullmag_fem_frequency_domain_solve_result_release(&result);
+}
+
 void c_abi_periodic_airbox_dynamic_demag_rejects_ambiguous_coupled_block_operator_provider()
 {
     constexpr double one_over_two_pi_hz = 0.15915494309189535;
@@ -9254,22 +9847,24 @@ void c_abi_periodic_airbox_dynamic_demag_rejects_ambiguous_coupled_block_operato
         "/tmp/fullmag-frequency-domain-c-abi-periodic-airbox-ambiguous-provider-%llu",
         static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&frequencies_hz)));
     const double stiffness_matrix[] = {
-        2.0, 0.0, 0.25,
-        0.0, 3.0, -0.5,
-        0.25, -0.5, 4.0,
+        2.0, 0.0, 0.25, 0.0,
+        0.0, 3.0, -0.5, 0.0,
+        0.25, -0.5, 4.0, 0.0,
+        0.0, 0.0, 0.0, 5.0,
     };
     const double mass_matrix[] = {
-        1.0, 0.0, 0.0,
-        0.0, 1.5, 0.0,
-        0.0, 0.0, 0.0,
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.5, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0,
     };
-    const double stiffness_diagonal[] = {2.0, 3.0, 4.0};
-    const double mass_diagonal[] = {1.0, 1.5, 0.0};
-    const double drive_real[] = {1.0, 0.5, 0.0};
+    const double stiffness_diagonal[] = {2.0, 3.0, 4.0, 5.0};
+    const double mass_diagonal[] = {1.0, 1.5, 0.0, 0.0};
+    const double drive_real[] = {1.0, 0.5, 0.0, 0.0};
     DiagonalProductionOperator coupled_operator{
         stiffness_diagonal,
         mass_diagonal,
-        3,
+        4,
         0,
         0,
     };
@@ -9286,12 +9881,12 @@ void c_abi_periodic_airbox_dynamic_demag_rejects_ambiguous_coupled_block_operato
     request.magnetic_periodic_constraint_set_count = 1;
     request.magnetostatic_periodic_constraint_set_count = 1;
     request.periodic_airbox_delta_m_tangent_dof_count = 2;
-    request.periodic_airbox_delta_phi_dof_count = 1;
+    request.periodic_airbox_delta_phi_dof_count = 2;
     request.periodic_airbox_magnetostatic_periodic_node_pairs = &magnetostatic_pair;
     request.periodic_airbox_magnetostatic_periodic_node_pair_count = 1;
     request.periodic_airbox_coupled_block_enabled = 1;
     request.periodic_airbox_coupled_block_delta_m_tangent_dof_count = 2;
-    request.periodic_airbox_coupled_block_delta_phi_dof_count = 1;
+    request.periodic_airbox_coupled_block_delta_phi_dof_count = 2;
     request.periodic_airbox_coupled_block_stiffness_matrix_row_major = stiffness_matrix;
     request.periodic_airbox_coupled_block_mass_matrix_row_major = mass_matrix;
     request.periodic_airbox_coupled_block_apply_stiffness = c_abi_apply_diagonal_stiffness;
@@ -9372,12 +9967,12 @@ void c_abi_periodic_airbox_dynamic_demag_solves_explicit_coupled_block()
     request.magnetic_periodic_constraint_set_count = 1;
     request.magnetostatic_periodic_constraint_set_count = 1;
     request.periodic_airbox_delta_m_tangent_dof_count = 2;
-    request.periodic_airbox_delta_phi_dof_count = 1;
+    request.periodic_airbox_delta_phi_dof_count = 2;
     request.periodic_airbox_magnetostatic_periodic_node_pairs = &magnetostatic_pair;
     request.periodic_airbox_magnetostatic_periodic_node_pair_count = 1;
     request.periodic_airbox_coupled_block_enabled = 1;
     request.periodic_airbox_coupled_block_delta_m_tangent_dof_count = 2;
-    request.periodic_airbox_coupled_block_delta_phi_dof_count = 1;
+    request.periodic_airbox_coupled_block_delta_phi_dof_count = 2;
     request.periodic_airbox_coupled_block_stiffness_matrix_row_major = stiffness_matrix;
     request.periodic_airbox_coupled_block_mass_matrix_row_major = mass_matrix;
     request.periodic_airbox_coupled_block_drive_real = drive_real;
@@ -9513,6 +10108,9 @@ void c_abi_floquet_airbox_dynamic_demag_solves_explicit_coupled_block_and_valida
     check(
         contains(result.diagnostics_json, "\"delta_phi_phase_validation_status\":\"ok\""),
         "C ABI Floquet-airbox coupled block diagnostics validate delta_phi phase");
+    check(
+        contains(result.diagnostics_json, "\"delta_phi_flux_validation_status\":\"not_evaluated\""),
+        "C ABI Floquet-airbox coupled block diagnostics record unevaluated delta_phi flux validation");
 
     char manifest_path[256]{};
     char frequency_point_path[256]{};
@@ -9535,11 +10133,17 @@ void c_abi_floquet_airbox_dynamic_demag_solves_explicit_coupled_block_and_valida
         contains(manifest.c_str(), "\"dynamic_demag_operator_source\":\"explicit_floquet_airbox_coupled_block_payload\""),
         "C ABI Floquet-airbox coupled block manifest records explicit Floquet-airbox operator source");
     check(
+        contains(manifest.c_str(), "\"delta_phi_flux_validation_status\":\"not_evaluated\""),
+        "C ABI Floquet-airbox coupled block manifest records unevaluated delta_phi flux validation");
+    check(
         contains(frequency_point.c_str(), "\"requested_magnetostatic_bc\":\"floquet_airbox\""),
         "C ABI Floquet-airbox coupled block frequency point records Floquet-airbox BC");
     check(
         contains(frequency_point.c_str(), "\"delta_phi_phase_validation_status\":\"ok\""),
         "C ABI Floquet-airbox coupled block frequency point records delta_phi phase validation");
+    check(
+        contains(frequency_point.c_str(), "\"delta_phi_flux_validation_status\":\"not_evaluated\""),
+        "C ABI Floquet-airbox coupled block frequency point records unevaluated delta_phi flux validation");
     check(
         contains(frequency_point.c_str(), "\"delta_phi_complex\""),
         "C ABI Floquet-airbox coupled block writes delta_phi complex response");
@@ -9801,14 +10405,14 @@ void c_abi_periodic_airbox_dynamic_demag_solves_matrix_free_coupled_block_provid
         sizeof(output_directory),
         "/tmp/fullmag-frequency-domain-c-abi-periodic-airbox-matrix-free-coupled-%llu",
         static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&frequencies_hz)));
-    const double stiffness_diagonal[] = {2.0, 3.0, 4.0};
-    const double mass_diagonal[] = {1.0, 1.5, 0.0};
-    const double drive_real[] = {1.0, 0.5, 0.0};
-    const double drive_imag[] = {0.0, 0.0, 0.0};
+    const double stiffness_diagonal[] = {2.0, 3.0, 4.0, 5.0};
+    const double mass_diagonal[] = {1.0, 1.5, 0.0, 0.0};
+    const double drive_real[] = {1.0, 0.5, 0.0, 0.0};
+    const double drive_imag[] = {0.0, 0.0, 0.0, 0.0};
     DiagonalProductionOperator coupled_operator{
         stiffness_diagonal,
         mass_diagonal,
-        3,
+        4,
         0,
         0,
     };
@@ -9825,12 +10429,12 @@ void c_abi_periodic_airbox_dynamic_demag_solves_matrix_free_coupled_block_provid
     request.magnetic_periodic_constraint_set_count = 1;
     request.magnetostatic_periodic_constraint_set_count = 1;
     request.periodic_airbox_delta_m_tangent_dof_count = 2;
-    request.periodic_airbox_delta_phi_dof_count = 1;
+    request.periodic_airbox_delta_phi_dof_count = 2;
     request.periodic_airbox_magnetostatic_periodic_node_pairs = &magnetostatic_pair;
     request.periodic_airbox_magnetostatic_periodic_node_pair_count = 1;
     request.periodic_airbox_coupled_block_enabled = 1;
     request.periodic_airbox_coupled_block_delta_m_tangent_dof_count = 2;
-    request.periodic_airbox_coupled_block_delta_phi_dof_count = 1;
+    request.periodic_airbox_coupled_block_delta_phi_dof_count = 2;
     request.periodic_airbox_coupled_block_apply_stiffness = c_abi_apply_diagonal_stiffness;
     request.periodic_airbox_coupled_block_apply_mass = c_abi_apply_diagonal_mass;
     request.periodic_airbox_coupled_block_operator_user_data = &coupled_operator;
@@ -11990,11 +12594,13 @@ int main()
     production_cpu_matrix_free_solver_skips_zero_initial_residual_operator();
     production_cpu_matrix_free_solver_solves_complex_drive();
     production_cpu_matrix_free_solver_preserves_nonconvergence_diagnostics();
+    production_cpu_matrix_free_solver_uses_right_preconditioner();
     production_cpu_matrix_free_solver_requires_recomputed_residual_for_convergence();
     production_cpu_lane_writes_failure_artifacts_for_nonconverged_gmres();
     production_cpu_matrix_free_solver_respects_temporal_phase_convention_sign();
     production_cpu_matrix_free_solver_rejects_invalid_phase_convention_sign();
     production_cpu_matrix_free_solver_reports_progress();
+    production_cpu_matrix_free_solver_throttles_nonconverged_progress();
     production_cpu_matrix_free_solver_reuses_previous_frequency_solution_as_warm_start();
     production_cpu_matrix_free_solver_honors_pre_start_cancel_without_operator_work();
     production_cpu_matrix_free_solver_honors_mid_frequency_cancel_without_completion();
@@ -12010,7 +12616,8 @@ int main()
     production_cpu_periodic_airbox_dynamic_demag_rejects_delta_m_tangent_dof_mismatch();
     production_cpu_periodic_airbox_dynamic_demag_solves_matrix_free_coupled_block_provider();
     production_cpu_periodic_airbox_dynamic_demag_solves_mfem_demag_tangent_provider();
-    production_cpu_periodic_airbox_dynamic_demag_writes_solve_error_artifacts();
+    production_cpu_periodic_airbox_dynamic_demag_writes_phi_consistency_artifacts_without_exchange_graph();
+    production_cpu_periodic_airbox_phi_consistency_solve_error_writes_bounded_artifacts();
     production_gpu_periodic_airbox_dynamic_demag_rejects_explicit_coupled_block();
     production_cpu_periodic_airbox_dynamic_demag_applies_mean_zero_gauge_for_phi_nullspace();
     driven_response_solver_runs_assembled_mfem_validation_problem();
@@ -12056,6 +12663,7 @@ int main()
     c_abi_periodic_airbox_dynamic_demag_request_is_explicitly_unavailable();
     c_abi_periodic_airbox_dynamic_demag_requires_magnetostatic_periodic_node_pairs();
     c_abi_periodic_airbox_dynamic_demag_rejects_degenerate_magnetostatic_periodic_pair();
+    c_abi_periodic_airbox_dynamic_demag_rejects_out_of_range_magnetostatic_periodic_pair();
     c_abi_periodic_airbox_dynamic_demag_rejects_ambiguous_coupled_block_operator_provider();
     c_abi_periodic_airbox_dynamic_demag_solves_explicit_coupled_block();
     c_abi_floquet_airbox_dynamic_demag_solves_explicit_coupled_block_and_validates_delta_phi_phase();

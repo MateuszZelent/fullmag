@@ -54,6 +54,16 @@ pub(crate) type NativeFrequencyDomainApplyCallback =
         out: *mut f64,
         error_message: *mut c_char,
     ) -> ffi::fullmag_fem_frequency_domain_status;
+#[cfg(feature = "fem-gpu")]
+pub(crate) type NativeFrequencyDomainApplyWithPotentialCallback =
+    unsafe extern "C" fn(
+        user_data: *mut c_void,
+        in_: *const f64,
+        out: *mut f64,
+        out_phi: *mut f64,
+        out_phi_len: u64,
+        error_message: *mut c_char,
+    ) -> ffi::fullmag_fem_frequency_domain_status;
 
 #[derive(Clone)]
 #[allow(dead_code)]
@@ -136,6 +146,8 @@ pub(crate) struct NativeDrivenFrequencyResponseMfemOperatorProblem<'a> {
     pub floquet_periodic_pairs: &'a [NativeDrivenFrequencyResponseFloquetPeriodicPair<'a>],
     #[cfg(feature = "fem-gpu")]
     pub apply_demag_tangent: Option<NativeFrequencyDomainApplyCallback>,
+    #[cfg(feature = "fem-gpu")]
+    pub apply_demag_tangent_with_potential: Option<NativeFrequencyDomainApplyWithPotentialCallback>,
     pub demag_tangent_user_data: *mut c_void,
     pub demag_tangent_matrix_row_major: Option<&'a [f64]>,
 }
@@ -644,9 +656,22 @@ fn solve_native_driven_frequency_response_impl(
             .and_then(|problem| problem.demag_tangent_matrix_row_major)
             .map_or(std::ptr::null(), slice_ptr_or_null),
     };
+    let mfem_apply_demag_tangent_with_potential =
+        mfem_operator.and_then(|problem| problem.apply_demag_tangent_with_potential);
     let mut ffi_result = NativeDrivenFrequencyResponseFfiResult::default();
     let rc = unsafe {
-        ffi::fullmag_fem_frequency_domain_solve_driven_response(&ffi_request, &mut ffi_result.inner)
+        if mfem_apply_demag_tangent_with_potential.is_some() {
+            ffi::fullmag_fem_frequency_domain_solve_driven_response_v9(
+                &ffi_request,
+                mfem_apply_demag_tangent_with_potential,
+                &mut ffi_result.inner,
+            )
+        } else {
+            ffi::fullmag_fem_frequency_domain_solve_driven_response(
+                &ffi_request,
+                &mut ffi_result.inner,
+            )
+        }
     };
     if rc != ffi::FULLMAG_FEM_OK {
         return Err(format!(
@@ -2014,6 +2039,7 @@ mod tests {
                 floquet_periodic_pairs: &floquet_pairs,
                 #[cfg(feature = "fem-gpu")]
                 apply_demag_tangent: None,
+                apply_demag_tangent_with_potential: None,
                 demag_tangent_user_data: std::ptr::null_mut(),
                 demag_tangent_matrix_row_major: None,
             }),
@@ -2081,6 +2107,7 @@ mod tests {
                 floquet_periodic_pairs: &floquet_pairs,
                 #[cfg(feature = "fem-gpu")]
                 apply_demag_tangent: None,
+                apply_demag_tangent_with_potential: None,
                 demag_tangent_user_data: std::ptr::null_mut(),
                 demag_tangent_matrix_row_major: None,
             }),
@@ -2176,6 +2203,7 @@ mod tests {
                 floquet_periodic_pairs: &floquet_pairs,
                 #[cfg(feature = "fem-gpu")]
                 apply_demag_tangent: None,
+                apply_demag_tangent_with_potential: None,
                 demag_tangent_user_data: std::ptr::null_mut(),
                 demag_tangent_matrix_row_major: None,
             }),
@@ -2285,6 +2313,7 @@ mod tests {
                 floquet_periodic_pairs: &floquet_pairs,
                 #[cfg(feature = "fem-gpu")]
                 apply_demag_tangent: None,
+                apply_demag_tangent_with_potential: None,
                 demag_tangent_user_data: std::ptr::null_mut(),
                 demag_tangent_matrix_row_major: None,
             }),
@@ -2733,6 +2762,7 @@ mod tests {
                 floquet_periodic_pairs: &[],
                 #[cfg(feature = "fem-gpu")]
                 apply_demag_tangent: None,
+                apply_demag_tangent_with_potential: None,
                 demag_tangent_user_data: std::ptr::null_mut(),
                 demag_tangent_matrix_row_major: None,
             }),
@@ -2829,6 +2859,7 @@ mod tests {
                 floquet_periodic_pairs: &[],
                 #[cfg(feature = "fem-gpu")]
                 apply_demag_tangent: None,
+                apply_demag_tangent_with_potential: None,
                 demag_tangent_user_data: std::ptr::null_mut(),
                 demag_tangent_matrix_row_major: Some(&demag_tangent_matrix),
             }),
@@ -2926,6 +2957,7 @@ mod tests {
                 floquet_periodic_pairs: &[],
                 #[cfg(feature = "fem-gpu")]
                 apply_demag_tangent: None,
+                apply_demag_tangent_with_potential: None,
                 demag_tangent_user_data: std::ptr::null_mut(),
                 demag_tangent_matrix_row_major: None,
             }),

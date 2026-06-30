@@ -2,6 +2,13 @@
 
 ## Current State
 
+This section is the current state at original draft time for this target
+contract. The live rollout ledger is now
+`11-comsol-grade-frequency-domain-masterplan-2026-06-30.md`, especially the
+Control Room status and milestone table. If this section conflicts with `11`,
+use `11` for current implementation status and this file for the Explorer
+target/regression contract.
+
 The Explorer currently has only shallow authoring support for the two related but distinct study kinds: modal `eigenmodes` and driven `frequency_response`.
 
 Verified current nodes:

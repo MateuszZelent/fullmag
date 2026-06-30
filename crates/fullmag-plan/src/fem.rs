@@ -1612,6 +1612,16 @@ pub(crate) fn plan_fem(
     let n_elements = mesh.elements.len();
     let mesh_name = mesh.mesh_name.clone();
     let domain_mesh_mode = resolved_domain_mesh_mode(&mesh);
+    if !requested_static_pbc && !mesh.periodic_node_pairs.is_empty() {
+        return Err(PlanError {
+            reasons: vec![
+                "FEM static/time-domain mesh.periodic_node_pairs require ProblemIR.pbc to declare \
+                 the physical PBC intent; mesh periodic-pair metadata is topology only and must not \
+                 enable periodic physics implicitly."
+                    .to_string(),
+            ],
+        });
+    }
     if requested_static_pbc && mesh.periodic_node_pairs.is_empty() {
         return Err(PlanError {
             reasons: vec![
@@ -3012,11 +3022,6 @@ fn fem_frequency_response_production_slice_rejection_reason(
             }
         }
         fullmag_ir::SpinWaveBoundaryKindIR::Floquet => {
-            if plan.requested_device != fullmag_ir::ExecutionDevice::Gpu {
-                return Some(
-                    "nonzero-k Floquet/Bloch driven response currently requires production GPU execution",
-                );
-            }
             if plan.mesh.periodic_boundary_pairs.is_empty() {
                 return Some(
                     "nonzero-k Floquet/Bloch driven response requires mesh.periodic_boundary_pairs metadata with translations",

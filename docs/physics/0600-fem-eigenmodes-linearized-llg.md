@@ -73,13 +73,13 @@ See `docs/physics/0600-fem-eigenmodes.md` for the block-matrix equations.
 
 ## Discrete operator
 
-The current solver assembles:
+The current dense/reference solver assembles:
 
 - a consistent scalar mass matrix on the active FEM nodes,
 - a projected scalar stiffness-like operator built from exchange plus the field component parallel to `m0`,
 - a tangent-basis lift from reduced nodal amplitudes back to vector mode fields.
 
-This is an MVP generalized eigenproblem:
+This is an MVP reference generalized eigenproblem:
 
 `K u = lambda M u`
 
@@ -95,6 +95,37 @@ written as `m/(A s)`. Therefore frequency artifacts must report both constants:
 `gamma0_rad_s_per_A_m = gamma0` and `gamma_rad_s_T = gamma0 / mu0`. The
 frequency mapping above is equivalently `omega = gamma0 * max(lambda, 0)` when
 `lambda` is an effective-field eigenvalue in `A/m`.
+
+This real symmetric reference problem is not the production gyrotropic modal
+contract for general frequency-domain FEM. It is valid only as a small
+effective-field/reference lane for the explicitly documented MVP scope. The
+production modal/eigenfrequency contract must use the tangent LLG convention
+from `docs/physics/0700-frequency-domain-linearized-llg.md`:
+
+```text
+L q = lambda B_alpha q
+lambda = i omega
+```
+
+or, for an energy-Hessian gyrotropic form with the canonical
+`exp(i omega t)` phasor:
+
+```text
+K phi = -i omega G phi
+G_t(p, q) = integral (mu0 * Ms / gamma0) * eta dot (m0 x xi) dV
+```
+
+The documentation must not promote a real pencil `K phi = omega G phi` unless
+the operator has been explicitly transformed into a real Hamiltonian or
+symplectic form and the transform, signs, norm, and eigenvalue-to-frequency
+mapping are stated. Before SLEPc/shift-invert promotion, a 2-DOF macrospin test
+without MFEM must prove:
+
+- undamped sign and magnitude `omega = gamma0 * H0`,
+- the positive-frequency branch,
+- the conjugate partner,
+- residual consistency for the selected pencil,
+- damping sign and linewidth mapping when damping is included.
 
 The small-reference implementation uses a dense symmetric reduction:
 
@@ -231,6 +262,8 @@ The control room should show:
 - CPU reference path plus transitional sparse LOBPCG for selected real-valued
   cases; no production SLEPc/FEAST lane yet
 - no residual / orthogonality / tangent leakage diagnostics exported yet
+- production gyrotropic pencil and eigenvalue mapping are not closed until the
+  macrospin and phasor-convention tests above pass
 - nonzero-k Floquet demag is explicitly rejected until dynamic demag-k exists
 - no native MFEM/libCEED/hypre/SLEPc eigen backend yet
 - interactive preview snapshots are not supported for FEM eigen plans

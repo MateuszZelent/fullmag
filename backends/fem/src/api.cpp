@@ -51,6 +51,11 @@ void fullmag_fem_set_handle_error(fullmag_fem_backend *handle, const std::string
 
 namespace {
 
+struct DrivenResponseCAbiDemagTangentContext {
+    const fullmag_fem_frequency_domain_driven_response_request *request;
+    fullmag_fem_frequency_domain_apply_with_potential_callback apply_with_potential;
+};
+
 constexpr const char *kUnavailableMessage =
     "fullmag_fem native backend was built without the MFEM stack; rebuild with FULLMAG_USE_MFEM_STACK=ON and an installed MFEM toolchain";
 
@@ -768,7 +773,8 @@ frequency_domain_mfem_apply_demag_tangent_from_c_abi(
     double *out,
     char error_message[128]) noexcept
 {
-    auto *request = static_cast<const fullmag_fem_frequency_domain_driven_response_request *>(user_data);
+    auto *context = static_cast<const DrivenResponseCAbiDemagTangentContext *>(user_data);
+    const auto *request = context != nullptr ? context->request : nullptr;
     if (request == nullptr || request->mfem_apply_demag_tangent == nullptr) {
         std::snprintf(error_message, 128, "missing MFEM demag tangent callback");
         return fullmag::fem::frequency_domain::FrequencyDomainStatus::validation_error;
@@ -777,6 +783,30 @@ frequency_domain_mfem_apply_demag_tangent_from_c_abi(
         request->mfem_demag_tangent_user_data,
         in,
         out,
+        error_message));
+}
+
+fullmag::fem::frequency_domain::FrequencyDomainStatus
+frequency_domain_mfem_apply_demag_tangent_with_potential_from_c_abi(
+    void *user_data,
+    const double *in,
+    double *out,
+    double *out_phi,
+    std::uint64_t out_phi_len,
+    char error_message[128]) noexcept
+{
+    auto *context = static_cast<const DrivenResponseCAbiDemagTangentContext *>(user_data);
+    const auto *request = context != nullptr ? context->request : nullptr;
+    if (request == nullptr || context->apply_with_potential == nullptr) {
+        std::snprintf(error_message, 128, "missing MFEM demag tangent-with-potential callback");
+        return fullmag::fem::frequency_domain::FrequencyDomainStatus::validation_error;
+    }
+    return from_abi_status(context->apply_with_potential(
+        request->mfem_demag_tangent_user_data,
+        in,
+        out,
+        out_phi,
+        out_phi_len,
         error_message));
 }
 
@@ -1159,8 +1189,9 @@ int fullmag_fem_frequency_domain_completed_sweep_progress(
     return FULLMAG_FEM_OK;
 }
 
-int fullmag_fem_frequency_domain_solve_driven_response(
+static int fullmag_fem_frequency_domain_solve_driven_response_from_c_abi(
     const fullmag_fem_frequency_domain_driven_response_request *request,
+    fullmag_fem_frequency_domain_apply_with_potential_callback mfem_apply_demag_tangent_with_potential,
     fullmag_fem_frequency_domain_solve_result *out_result
 ) {
     if (request == nullptr || out_result == nullptr) {
@@ -1177,6 +1208,10 @@ int fullmag_fem_frequency_domain_solve_driven_response(
     std::vector<std::uint64_t> frequency_domain_static_periodic_node_pairs;
     std::vector<std::uint64_t> frequency_domain_periodic_airbox_magnetostatic_periodic_node_pairs;
     std::vector<fd::FrequencyDomainFloquetPeriodicPair> frequency_domain_floquet_periodic_pairs;
+    const DrivenResponseCAbiDemagTangentContext demag_tangent_context{
+        request,
+        mfem_apply_demag_tangent_with_potential,
+    };
     native_request.solve_request.operator_request.node_count = request->node_count;
     native_request.solve_request.operator_request.tangent_dof_count =
         request->tangent_dof_count;
@@ -1307,7 +1342,13 @@ int fullmag_fem_frequency_domain_solve_driven_response(
         native_request.mfem_validation_problem.apply_demag_tangent =
             frequency_domain_mfem_apply_demag_tangent_from_c_abi;
         native_request.mfem_validation_problem.demag_tangent_user_data =
-            const_cast<fullmag_fem_frequency_domain_driven_response_request *>(request);
+            const_cast<DrivenResponseCAbiDemagTangentContext *>(&demag_tangent_context);
+    }
+    if (mfem_apply_demag_tangent_with_potential != nullptr) {
+        native_request.mfem_validation_problem.apply_demag_tangent_with_potential =
+            frequency_domain_mfem_apply_demag_tangent_with_potential_from_c_abi;
+        native_request.mfem_validation_problem.demag_tangent_user_data =
+            const_cast<DrivenResponseCAbiDemagTangentContext *>(&demag_tangent_context);
     }
     native_request.mfem_validation_problem.demag_tangent_matrix_row_major =
         request->mfem_demag_tangent_matrix_row_major;
@@ -1355,6 +1396,7 @@ int fullmag_fem_frequency_domain_solve_driven_response(
             request->mfem_dmi_elements != nullptr;
         const bool has_mfem_demag_tangent =
             request->mfem_apply_demag_tangent != nullptr ||
+            mfem_apply_demag_tangent_with_potential != nullptr ||
             request->mfem_demag_tangent_matrix_row_major != nullptr;
         native_request.mfem_validation_problem.descriptor.demag_enabled =
             has_mfem_demag_tangent;
@@ -1516,6 +1558,27 @@ int fullmag_fem_frequency_domain_solve_driven_response(
     fd::release_driven_frequency_response_result(&native_result);
     fullmag_fem_clear_global_error();
     return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_frequency_domain_solve_driven_response(
+    const fullmag_fem_frequency_domain_driven_response_request *request,
+    fullmag_fem_frequency_domain_solve_result *out_result
+) {
+    return fullmag_fem_frequency_domain_solve_driven_response_from_c_abi(
+        request,
+        nullptr,
+        out_result);
+}
+
+int fullmag_fem_frequency_domain_solve_driven_response_v9(
+    const fullmag_fem_frequency_domain_driven_response_request *request,
+    fullmag_fem_frequency_domain_apply_with_potential_callback mfem_apply_demag_tangent_with_potential,
+    fullmag_fem_frequency_domain_solve_result *out_result
+) {
+    return fullmag_fem_frequency_domain_solve_driven_response_from_c_abi(
+        request,
+        mfem_apply_demag_tangent_with_potential,
+        out_result);
 }
 
 void fullmag_fem_frequency_domain_solve_result_release(

@@ -39,6 +39,28 @@ double norm2(const double *values, std::uint64_t count) noexcept
     return std::sqrt(value);
 }
 
+double complex_split_norm2(
+    const std::vector<double> &values,
+    std::uint64_t tangent_dof_count,
+    std::uint64_t offset,
+    std::uint64_t count) noexcept
+{
+    if (count == 0 || offset >= tangent_dof_count) {
+        return 0.0;
+    }
+    const std::uint64_t bounded_count =
+        std::min<std::uint64_t>(count, tangent_dof_count - offset);
+    double value = 0.0;
+    for (std::uint64_t index = 0; index < bounded_count; ++index) {
+        const std::uint64_t dof = offset + index;
+        const double real_part = values[static_cast<std::size_t>(dof)];
+        const double imag_part =
+            values[static_cast<std::size_t>(dof + tangent_dof_count)];
+        value += real_part * real_part + imag_part * imag_part;
+    }
+    return std::sqrt(value);
+}
+
 bool all_finite(const double *values, std::uint64_t count) noexcept
 {
     for (std::uint64_t index = 0; index < count; ++index) {
@@ -70,6 +92,91 @@ bool checked_mul_u64(
     }
     out = lhs * rhs;
     return true;
+}
+
+void append_residual_history(
+    std::vector<double> &history,
+    double relative_residual) noexcept
+{
+    if (history.size() >= kProductionCpuGmresResidualHistoryCapacity ||
+        !std::isfinite(relative_residual)) {
+        return;
+    }
+    if (!history.empty() && history.back() == relative_residual) {
+        return;
+    }
+    history.push_back(relative_residual);
+}
+
+void copy_residual_history(
+    const std::vector<double> &history,
+    ProductionCpuDrivenResponseResult &result) noexcept
+{
+    const std::uint64_t count = std::min<std::uint64_t>(
+        static_cast<std::uint64_t>(history.size()),
+        kProductionCpuGmresResidualHistoryCapacity);
+    result.gmres_relative_residual_history_count = count;
+    for (std::uint64_t index = 0; index < count; ++index) {
+        result.gmres_relative_residual_history[index] = history[static_cast<std::size_t>(index)];
+    }
+}
+
+void record_block_norms(
+    const std::vector<double> &rhs,
+    const std::vector<double> &residual,
+    const std::vector<double> &x,
+    std::uint64_t tangent_dof_count,
+    ProductionCpuDrivenResponseResult &result) noexcept
+{
+    result.rhs_real_l2_norm = norm2(rhs.data(), tangent_dof_count);
+    result.rhs_imag_l2_norm = norm2(rhs.data() + tangent_dof_count, tangent_dof_count);
+    result.residual_real_l2_norm = norm2(residual.data(), tangent_dof_count);
+    result.residual_imag_l2_norm = norm2(residual.data() + tangent_dof_count, tangent_dof_count);
+    result.response_real_l2_norm = norm2(x.data(), tangent_dof_count);
+    result.response_imag_l2_norm = norm2(x.data() + tangent_dof_count, tangent_dof_count);
+}
+
+void record_coupled_block_norms(
+    const ProductionCpuDrivenResponseProblem &problem,
+    const std::vector<double> &rhs,
+    const std::vector<double> &residual,
+    const std::vector<double> &x,
+    ProductionCpuDrivenResponseResult &result) noexcept
+{
+    const std::uint64_t delta_m_count = problem.logical_delta_m_dof_count;
+    const std::uint64_t delta_phi_count = problem.logical_delta_phi_dof_count;
+    if (delta_m_count == 0 && delta_phi_count == 0) {
+        return;
+    }
+    const std::uint64_t tangent_dof_count = problem.tangent_dof_count;
+    result.rhs_delta_m_l2_norm =
+        complex_split_norm2(rhs, tangent_dof_count, 0, delta_m_count);
+    result.rhs_delta_phi_l2_norm =
+        complex_split_norm2(rhs, tangent_dof_count, delta_m_count, delta_phi_count);
+    result.residual_delta_m_l2_norm =
+        complex_split_norm2(residual, tangent_dof_count, 0, delta_m_count);
+    result.residual_delta_phi_l2_norm =
+        complex_split_norm2(residual, tangent_dof_count, delta_m_count, delta_phi_count);
+    result.response_delta_m_l2_norm =
+        complex_split_norm2(x, tangent_dof_count, 0, delta_m_count);
+    result.response_delta_phi_l2_norm =
+        complex_split_norm2(x, tangent_dof_count, delta_m_count, delta_phi_count);
+    result.relative_residual_delta_m_l2_norm =
+        result.rhs_delta_m_l2_norm > 0.0
+            ? result.residual_delta_m_l2_norm / result.rhs_delta_m_l2_norm
+            : 0.0;
+    result.relative_residual_delta_phi_l2_norm =
+        result.rhs_delta_phi_l2_norm > 0.0
+            ? result.residual_delta_phi_l2_norm / result.rhs_delta_phi_l2_norm
+            : 0.0;
+    result.coupled_block_norms_available = true;
+    const char *status =
+        problem.coupled_residual_partition_status != nullptr &&
+        problem.coupled_residual_partition_status[0] != '\0'
+            ? problem.coupled_residual_partition_status
+            : "configured";
+    std::strncpy(result.coupled_residual_partition_status, status, 63);
+    result.coupled_residual_partition_status[63] = '\0';
 }
 
 FrequencyDomainStatus project_block_vector(
@@ -154,6 +261,71 @@ void publish_progress(
             relative_residual_l2,
             converged,
         });
+}
+
+bool should_publish_progress(
+    const ProductionCpuDrivenResponseProblem &problem,
+    std::uint64_t iteration_count,
+    bool converged) noexcept
+{
+    const std::uint64_t interval = std::max<std::uint64_t>(
+        1,
+        problem.progress_interval_iterations);
+    return iteration_count == 0 ||
+        converged ||
+        iteration_count >= problem.max_iterations ||
+        iteration_count % interval == 0;
+}
+
+void copy_preconditioner_name(
+    char out[64],
+    const ProductionCpuDrivenResponseProblem &problem) noexcept
+{
+    const char *name = "none";
+    if (problem.apply_right_preconditioner != nullptr) {
+        name =
+            (problem.krylov_preconditioner_name != nullptr &&
+             problem.krylov_preconditioner_name[0] != '\0') ?
+            problem.krylov_preconditioner_name :
+            "custom_right";
+    }
+    std::strncpy(out, name, 63);
+    out[63] = '\0';
+}
+
+FrequencyDomainStatus apply_right_preconditioner(
+    const ProductionCpuDrivenResponseProblem &problem,
+    double omega,
+    const double *input,
+    std::vector<double> &workspace,
+    double *output,
+    char error_message[128]) noexcept
+{
+    const std::uint64_t block_count = problem.tangent_dof_count * 2;
+    if (problem.apply_right_preconditioner == nullptr) {
+        if (output != input) {
+            std::memcpy(output, input, static_cast<std::size_t>(block_count * sizeof(double)));
+        }
+        return FrequencyDomainStatus::ok;
+    }
+
+    workspace.resize(static_cast<std::size_t>(block_count));
+    const FrequencyDomainStatus status = problem.apply_right_preconditioner(
+        problem.right_preconditioner_user_data,
+        omega,
+        input,
+        workspace.data(),
+        problem.tangent_dof_count,
+        error_message);
+    if (status != FrequencyDomainStatus::ok) {
+        return status;
+    }
+    if (!all_finite(workspace.data(), block_count)) {
+        copy_error(error_message, "production CPU frequency response right preconditioner produced non-finite values");
+        return FrequencyDomainStatus::operator_error;
+    }
+    std::memcpy(output, workspace.data(), static_cast<std::size_t>(block_count * sizeof(double)));
+    return FrequencyDomainStatus::ok;
 }
 
 FrequencyDomainStatus apply_block_operator(
@@ -324,6 +496,7 @@ FrequencyDomainStatus solve_frequency_gmres(
     double &last_tracked_relative_residual_l2,
     double &last_recomputed_relative_residual_l2,
     std::uint64_t &iteration_count,
+    std::vector<double> &relative_residual_history,
     char error_message[128]) noexcept
 {
     const std::uint64_t n = problem.tangent_dof_count;
@@ -367,6 +540,7 @@ FrequencyDomainStatus solve_frequency_gmres(
     minimum_relative_residual_l2 = relative_residual_l2;
     last_tracked_relative_residual_l2 = relative_residual_l2;
     last_recomputed_relative_residual_l2 = relative_residual_l2;
+    append_residual_history(relative_residual_history, relative_residual_l2);
     publish_progress(
         problem,
         frequency_index,
@@ -381,12 +555,14 @@ FrequencyDomainStatus solve_frequency_gmres(
     }
 
     std::vector<double> basis((restart + 1) * block_count, 0.0);
+    std::vector<double> preconditioned_basis(restart * block_count, 0.0);
     std::vector<double> h((restart + 1) * restart, 0.0);
     std::vector<double> cs(restart, 0.0);
     std::vector<double> sn(restart, 0.0);
     std::vector<double> g(restart + 1, 0.0);
     std::vector<double> y(restart, 0.0);
     std::vector<double> w(block_count, 0.0);
+    std::vector<double> preconditioner_workspace(block_count, 0.0);
 
     while (iteration_count < problem.max_iterations) {
         if (problem.cancel_requested != nullptr &&
@@ -410,10 +586,24 @@ FrequencyDomainStatus solve_frequency_gmres(
         for (std::uint64_t column = 0;
              column < restart && iteration_count < problem.max_iterations;
              ++column) {
+            const double *operator_input = basis.data() + column * block_count;
+            if (problem.apply_right_preconditioner != nullptr) {
+                status = apply_right_preconditioner(
+                    problem,
+                    omega,
+                    basis.data() + column * block_count,
+                    preconditioner_workspace,
+                    preconditioned_basis.data() + column * block_count,
+                    error_message);
+                if (status != FrequencyDomainStatus::ok) {
+                    return status;
+                }
+                operator_input = preconditioned_basis.data() + column * block_count;
+            }
             status = apply_block_operator(
                 problem,
                 omega,
-                basis.data() + column * block_count,
+                operator_input,
                 w.data(),
                 stiffness_workspace,
                 mass_workspace,
@@ -462,20 +652,25 @@ FrequencyDomainStatus solve_frequency_gmres(
             residual_l2 = std::abs(g[column + 1]);
             relative_residual_l2 = residual_l2 / rhs_l2;
             last_tracked_relative_residual_l2 = relative_residual_l2;
+            append_residual_history(relative_residual_history, relative_residual_l2);
             if (relative_residual_l2 < minimum_relative_residual_l2) {
                 minimum_relative_residual_l2 = relative_residual_l2;
                 minimum_tracked_relative_residual_iteration = iteration_count;
             }
-            publish_progress(
-                problem,
-                frequency_index,
-                frequency_index,
-                iteration_count,
-                frequency_hz,
-                residual_l2,
-                relative_residual_l2,
-                false);
-            if (relative_residual_l2 <= problem.relative_tolerance) {
+            const bool tracked_converged =
+                relative_residual_l2 <= problem.relative_tolerance;
+            if (should_publish_progress(problem, iteration_count, tracked_converged)) {
+                publish_progress(
+                    problem,
+                    frequency_index,
+                    frequency_index,
+                    iteration_count,
+                    frequency_hz,
+                    residual_l2,
+                    relative_residual_l2,
+                    tracked_converged);
+            }
+            if (tracked_converged) {
                 converged = true;
                 break;
             }
@@ -497,8 +692,12 @@ FrequencyDomainStatus solve_frequency_gmres(
         }
 
         for (std::uint64_t column = 0; column < used_columns; ++column) {
+            const double *solution_basis =
+                problem.apply_right_preconditioner != nullptr ?
+                preconditioned_basis.data() + column * block_count :
+                basis.data() + column * block_count;
             for (std::uint64_t index = 0; index < block_count; ++index) {
-                x[index] += y[column] * basis[column * block_count + index];
+                x[index] += y[column] * solution_basis[index];
             }
         }
         if (problem.project_block != nullptr) {
@@ -530,21 +729,24 @@ FrequencyDomainStatus solve_frequency_gmres(
         }
         relative_residual_l2 = residual_l2 / rhs_l2;
         last_recomputed_relative_residual_l2 = relative_residual_l2;
+        append_residual_history(relative_residual_history, relative_residual_l2);
         if (relative_residual_l2 < minimum_relative_residual_l2) {
             minimum_relative_residual_l2 = relative_residual_l2;
             minimum_tracked_relative_residual_iteration = iteration_count;
         }
         const bool recomputed_converged =
             relative_residual_l2 <= problem.relative_tolerance;
-        publish_progress(
-            problem,
-            frequency_index,
-            frequency_index,
-            iteration_count,
-            frequency_hz,
-            residual_l2,
-            relative_residual_l2,
-            recomputed_converged);
+        if (should_publish_progress(problem, iteration_count, recomputed_converged)) {
+            publish_progress(
+                problem,
+                frequency_index,
+                frequency_index,
+                iteration_count,
+                frequency_hz,
+                residual_l2,
+                relative_residual_l2,
+                recomputed_converged);
+        }
         if (recomputed_converged) {
             return FrequencyDomainStatus::ok;
         }
@@ -582,9 +784,14 @@ FrequencyDomainStatus solve_production_cpu_driven_response(
         return FrequencyDomainStatus::validation_error;
     }
     out_result->solver_relative_tolerance = problem.relative_tolerance;
+    out_result->right_preconditioner_applied = problem.apply_right_preconditioner != nullptr;
+    copy_preconditioner_name(out_result->krylov_preconditioner, problem);
     out_result->restart_iterations_for_frequency = std::max<std::uint64_t>(
         1,
         std::min(problem.restart_iterations, problem.max_iterations));
+    out_result->progress_interval_iterations = std::max<std::uint64_t>(
+        1,
+        problem.progress_interval_iterations);
     if (!(std::abs(problem.angular_frequency_sign) == 1.0) ||
         !std::isfinite(problem.angular_frequency_sign)) {
         copy_error(out_result->error_message, "production CPU frequency response has invalid phasor convention sign");
@@ -666,6 +873,7 @@ FrequencyDomainStatus solve_production_cpu_driven_response(
         double last_tracked_relative_residual_l2 = 0.0;
         double last_recomputed_relative_residual_l2 = 0.0;
         std::uint64_t iteration_count = 0;
+        std::vector<double> relative_residual_history;
         const FrequencyDomainStatus status = solve_frequency_gmres(
             problem,
             frequency_index,
@@ -687,8 +895,12 @@ FrequencyDomainStatus solve_production_cpu_driven_response(
             last_tracked_relative_residual_l2,
             last_recomputed_relative_residual_l2,
             iteration_count,
+            relative_residual_history,
             out_result->error_message);
         if (status != FrequencyDomainStatus::ok) {
+            record_block_norms(rhs, residual, x, n, *out_result);
+            record_coupled_block_norms(problem, rhs, residual, x, *out_result);
+            copy_residual_history(relative_residual_history, *out_result);
             out_result->total_iteration_count += iteration_count;
             out_result->max_iterations_for_frequency = std::max(
                 out_result->max_iterations_for_frequency,
@@ -744,6 +956,9 @@ FrequencyDomainStatus solve_production_cpu_driven_response(
                 std::hypot(x[dof], x[dof + n]));
         }
         out_result->total_iteration_count += iteration_count;
+        record_block_norms(rhs, residual, x, n, *out_result);
+        record_coupled_block_norms(problem, rhs, residual, x, *out_result);
+        copy_residual_history(relative_residual_history, *out_result);
         out_result->max_iterations_for_frequency = std::max(
             out_result->max_iterations_for_frequency,
             iteration_count);

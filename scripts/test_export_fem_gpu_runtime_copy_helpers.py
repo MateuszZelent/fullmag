@@ -94,6 +94,32 @@ def test_runtime_copy_replaces_existing_symlink_with_source_symlink(tmp_path: Pa
     assert result.returncode == 0, result.stderr + result.stdout
 
 
+def test_runtime_copy_dependency_closure_can_copy_same_resolved_library_twice(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "source"
+    dest_dir = tmp_path / "dest"
+    source_dir.mkdir()
+    dest_dir.mkdir()
+    resolved = source_dir / "libtrilinos_ml.so.13.2"
+    requested = source_dir / "libtrilinos_ml.so"
+    resolved.write_text("trilinos ml\n", encoding="utf-8")
+    requested.symlink_to(resolved.name)
+
+    result = run_bash(
+        f"""
+        source {HELPER}
+        copy_runtime_resolved_dependency_pair {requested} {resolved} {dest_dir}
+        copy_runtime_resolved_dependency_pair {requested} {resolved} {dest_dir}
+        test -L {dest_dir / requested.name}
+        test "$(readlink {dest_dir / requested.name})" = "{resolved.name}"
+        test "$(cat {dest_dir / resolved.name})" = "trilinos ml"
+        """
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
 def test_runtime_soname_link_is_noop_when_resolved_name_is_unversioned(
     tmp_path: Path,
 ) -> None:

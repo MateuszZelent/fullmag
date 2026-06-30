@@ -11,6 +11,10 @@
 #include "cpu/mfem/interactions/demag_poisson_energy.hpp"
 #include "cpu/mfem/interactions/demag_poisson_field.hpp"
 
+#if FULLMAG_HAS_MFEM_STACK
+#include <mfem.hpp>
+#endif
+
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -547,6 +551,22 @@ void demag_rhs_assembly_is_owned_by_poisson_rhs_module() {
     }
 }
 
+void demag_rhs_sign_contract_matches_laplace_phi_equals_div_m() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string rhs =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_rhs.cpp");
+
+    check(
+        rhs.find("rhs_form.AddDomainIntegrator(new mfem::DomainLFGradIntegrator(m_coeff));") !=
+            std::string::npos,
+        "Poisson demag RHS must assemble the +int Ms*m dot grad(v) weak-form source");
+    check(
+        rhs.find("-m_coeff") == std::string::npos &&
+            rhs.find("AddDomainIntegrator(new mfem::DomainLFGradIntegrator(-") ==
+                std::string::npos,
+        "Poisson demag RHS must not negate the Ms*m source coefficient");
+}
+
 void demag_boundary_operator_is_owned_by_poisson_boundary_module() {
     const std::filesystem::path root = fem_source_root();
     const std::string poisson =
@@ -905,6 +925,64 @@ void demag_recovery_parallel_path_avoids_full_per_thread_node_buffers() {
         "Poisson demag recovery parallel path must accumulate directly into shared nodal buffers");
 }
 
+#if FULLMAG_HAS_MFEM_STACK
+void demag_recovery_uses_negative_scalar_potential_gradient() {
+    mfem::Mesh mesh = mfem::Mesh::MakeCartesian3D(
+        1, 1, 1, mfem::Element::TETRAHEDRON, 1.0, 1.0, 1.0);
+    mfem::H1_FECollection fec(1, 3);
+    mfem::FiniteElementSpace fes(&mesh, &fec);
+
+    fullmag::fem::Context ctx;
+    ctx.mfem_context.mesh = &mesh;
+    ctx.mesh.n_nodes = static_cast<uint32_t>(fes.GetNDofs());
+    ctx.material_fields.material.saturation_magnetisation = 800e3;
+    ctx.integration_weights.mfem_lumped_mass.assign(
+        static_cast<size_t>(ctx.mesh.n_nodes),
+        1.0);
+
+    std::string error;
+    check(
+        fullmag::fem::initialize_demag_poisson_recovery_workspace(ctx, fes, error),
+        "Poisson demag recovery workspace initializes for sign test");
+    check(error.empty(), "Poisson demag recovery sign test leaves init error empty");
+
+    mfem::GridFunction potential_grid(&fes);
+    mfem::FunctionCoefficient potential_function(
+        [](const mfem::Vector &x) { return x[0] + 2.0 * x[1] - 3.0 * x[2]; });
+    potential_grid.ProjectCoefficient(potential_function);
+
+    mfem::Vector potential;
+    potential_grid.GetTrueDofs(potential);
+
+    std::vector<double> h_demag;
+    double demag_energy = 0.0;
+    std::vector<double> m_xyz(static_cast<size_t>(ctx.mesh.n_nodes) * 3u, 0.0);
+    uint64_t energy_wall_time_ns = 0;
+    error.clear();
+    check(
+        fullmag::fem::recover_demag_poisson_field(
+            ctx,
+            potential,
+            h_demag,
+            demag_energy,
+            m_xyz,
+            &energy_wall_time_ns,
+            error),
+        "Poisson demag recovery sign test succeeds");
+    check(error.empty(), "Poisson demag recovery sign test leaves recover error empty");
+
+    for (uint32_t node = 0; node < ctx.mesh.n_nodes; ++node) {
+        const size_t base = static_cast<size_t>(node) * 3u;
+        check_near(h_demag[base + 0], -1.0, 1.0e-12, "H_demag x equals -grad(phi)_x");
+        check_near(h_demag[base + 1], -2.0, 1.0e-12, "H_demag y equals -grad(phi)_y");
+        check_near(h_demag[base + 2], 3.0, 1.0e-12, "H_demag z equals -grad(phi)_z");
+    }
+    check_near(demag_energy, 0.0, 1.0e-30, "zero magnetization has zero demag energy");
+
+    fullmag::fem::destroy_demag_poisson_recovery_workspace(ctx);
+}
+#endif
+
 void demag_recovery_finalizes_periodic_field_before_energy() {
     const std::filesystem::path root = fem_source_root();
     const std::string recovery =
@@ -1197,6 +1275,7 @@ int main() {
     demag_telemetry_is_owned_by_poisson_telemetry_module();
     demag_field_visual_postprocessing_is_owned_by_poisson_field_module();
     demag_rhs_assembly_is_owned_by_poisson_rhs_module();
+    demag_rhs_sign_contract_matches_laplace_phi_equals_div_m();
     demag_boundary_operator_is_owned_by_poisson_boundary_module();
     demag_periodic_reduction_is_owned_by_poisson_periodic_module();
     backend_demag_tangent_abi_uses_fresh_poisson_dispatch();
@@ -1206,6 +1285,9 @@ int main() {
     demag_poisson_solver_runtime_state_is_owned_by_poisson_module();
     demag_recovery_is_owned_by_poisson_recovery_module();
     demag_recovery_parallel_path_avoids_full_per_thread_node_buffers();
+#if FULLMAG_HAS_MFEM_STACK
+    demag_recovery_uses_negative_scalar_potential_gradient();
+#endif
     demag_recovery_finalizes_periodic_field_before_energy();
     demag_solver_stats_are_filled_by_poisson_module();
     demag_poisson_ready_contract_is_owned_by_poisson_module();

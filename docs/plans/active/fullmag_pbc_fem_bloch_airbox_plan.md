@@ -6,6 +6,22 @@
 
 **Architecture:** PBC jest kontraktem kilku rodzin niewiadomych, nie jedna flaga solvera. Aktualny solver ma juz statyczne `k=0` redukcje okresowe dla wybranych sciezek, ale pelny dynamiczny `delta_m + delta_phi` z airboxem i niezerowym `k` nadal wymaga nowego kontraktu IR, mesha, assemblera, walidacji i capability gatingu.
 
+**Status guard 2026-06-30:** P3 nie jest 97% production-complete. Aktualny
+`periodic_airbox_k0` CPU tor nalezy opisywac jako waski, kwalifikowany
+driven-response diagnostic slice z matrix-free demag tangent providerem. Nie
+wolno go opisywac jako pelnego solvera modow, eigenmode path, pelnego
+sprzezonego ukladu `[delta_m, delta_phi]`, GPU dynamic demag ani zamknietego
+FMR spectrum dla antidotu.
+
+**COMSOL guard 2026-06-30:** dokumentacja COMSOL Micromagnetics Module
+rozdziela jeden zlinearyzowany frequency-domain LLG core na dwa study:
+`Frequency Domain` jako harmoniczny forced/driven response oraz
+`Eigenfrequency` jako naturalne mody/wartosci wlasne. Fullmag ma isc tym samym
+kierunkiem: P3a utrzymuje `periodic_airbox_k0` jako COMSOL-like Frequency
+Domain driven-response evidence, a nowy P3b/Pmodal musi zbudowac prawdziwy
+`k=0` Eigenfrequency/modal solver na tym samym linearized LLG, PBC i dynamic
+demag contract. Piki driven-response sa mode candidates, nie eigenmodes.
+
 **Tech Stack:** Python DSL (`packages/fullmag-py`), `ProblemIR` / planner (`crates/fullmag-ir`, `crates/fullmag-plan`), Rust runner (`crates/fullmag-runner`), native FEM/MFEM/hypre/libCEED/CUDA (`backends/fem`, `native/include/fullmag_fem.h`), managed/container-backed `just` recipes.
 
 ---
@@ -30,6 +46,91 @@ potwierdza, ze ten cel nadal wykracza poza obecny wykonawczy zakres solvera:
   powinien wpadac w sciezke `floquet_bloch_nonzero_k`.
 - Nonzero-k Floquet ma pozostac structured unavailable/rejected, z walidacja
   `phase_rad = -k dot translation` przed obecnym unsupported solve path.
+
+### Aktualizacja 2026-06-29 po audycie TetraX/Tetmag/Fullmag
+
+Raport `docs/reports/2026-06-29/frequency-domain-tetrax-tetmag-fullmag-audit.md`
+jest teraz korekta priorytetow dla tego planu. Wniosek jest jednoznaczny:
+Fullmag ma dobra architekture kontrolna dla PBC/Floquet, ale nie jest jeszcze
+produkcyjnie rownowazny TetraX dla ogolnego magnonic-crystal frequency-domain
+z dynamicznym demag. Dlatego najblizszy milestone nie moze byc sprzedawany jako
+"general magnonic crystal FMR" ani jako pelny periodic/Floquet demag.
+
+Obowiazujaca kolejnosc po audycie:
+
+1. P0/P1: domknac produkcyjny `k=0` periodic **no-demag** driven-response
+   slice z jasnymi capability rows, strict CPU/GPU semantics, artefaktami i
+   UI/provenance.
+2. P2: dopiac inspekcje FMR w UI: parametry etapu, requested/resolved
+   execution, wykres amplitudy/fazy, wybor punktu/peaku i wizualizacje
+   complex response.
+3. P3: dopiero potem domykac CPU dynamic demag dla `periodic_airbox_k0`.
+   Antidotowy `periodic_airbox_k0` smoke z `include_demag=True` jest
+   wartosciowym gate'em eksperymentalnym dla P3, ale nie jest P1 production
+   readiness proof.
+4. P4/P5: nonzero-k Floquet no-demag, a nastepnie dynamic Floquet demag.
+   Dynamic demag-k musi pozostac jawnie gated/unsupported, dopoki nie istnieje
+   zwalidowany operator CPU i potem parytet GPU.
+
+### Aktualizacja 2026-06-30 po managed P3 k=0 periodic-airbox smoke
+
+Cel biezacego etapu to najpierw sprawdzic PBC/relaksacje/demag dla ukladu
+200 x 200 x 10 nm z centralna dziura 50 nm i polem in-plane 10 mT, zanim
+bedziemy raportowac widmo lub mody. Wynik managed runu
+`just verify-fem-frequency-domain-periodic-airbox-runtime`:
+
+| Obszar | Wynik | Wniosek |
+|---|---:|---|
+| Frozen magnetic submesh | pass | `periodic_node_pair_count=106`, po `53` pary dla `x_faces` i `y_faces`; magnetic prefix stabilny dla 705 wezlow i 1895 tetra. |
+| Shared airbox mesh | pass jako materializacja smoke | mesh finalny mial 4893 wezly, 16032 tetra, z czego 1895 w `periodic_film` i 14137 w airboxie; lateralne PBC sa w danych wejsciowych, ale pelny solved bundle nie powstal. |
+| Relaksacja | smoke-only | target wymusza `FULLMAG_FMR_RELAX_MAX_STEPS=4`; moment spadl z ok. `2.3081 T` do `1.2141e-1 T`, ale stop reason to `max_steps`, wiec nie jest to fizycznie domknieta rownowaga. |
+| Driven response 2.75 GHz | fail | GMRES doszedl do `native_iteration_count=4096`, `native_relative_residual_l2_norm=1.0438936681296503e-3` przy celu `1e-3`; nie wolno uznac punktu za solved FMR result. |
+| Artefakty po failure | pass dla bounded `solve_error` bundle po follow-up | pierwszy run ujawnil observability gap, ale po rebuildzie managed runtime krotki `MAX_ITERATIONS=1` smoke zapisuje manifest/diagnostics/periodic-pair bundle, ktory przechodzi verifier `--allow-solve-error --require-periodic-airbox-cpu-demag-solved --require-frozen-magnetic-submesh`. |
+
+Konsekwencja: P3 nalezy cofnac do statusu "qualified CPU matrix-free
+driven-response diagnostic slice under convergence/observability work".
+Najblizsze zadania nie powinny podbijac jedynie limitu iteracji. Trzeba:
+
+- utrzymac bounded solve-error bundle jako obowiazkowy artifact gate dla
+  regresji i dopilnowac, aby solved bundle niosl ten sam provenance;
+- uruchomic dluzsza relaksacje albo osobny artifact gate rownowagi przed
+  frequency-response;
+- poprawic preconditioner/Schur model tak, aby punkt 2.75 GHz schodzil ponizej
+  `1e-3` bez arbitralnego zwiekszania `max_iterations`;
+- dopiero po solved single-point gate odswiezyc spectrum/refined spectrum i
+  domknac supercell acceptance.
+
+Follow-up 2026-06-30 po rebuildzie managed runtime: wymuszony
+`just rebuild-fem-runtime` zakonczyl sie powodzeniem i wyeksportowal nowy
+`.fullmag/runtimes/fem-gpu-host`. Krotki smoke:
+
+```bash
+env FULLMAG_FMR_RESPONSE_MAX_ITERATIONS=1 \
+  FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS=1 \
+  just verify-fem-frequency-domain-periodic-airbox-runtime
+```
+
+celowo zakonczyl strict recipe statusem `solve_error` po jednej iteracji
+GMRES (`relative_residual_l2_norm=0.9421556034969718`), ale zapisany bounded
+bundle przeszedl:
+
+```bash
+python3 scripts/verify_fem_frequency_domain_runtime_artifacts.py \
+  --allow-solve-error \
+  --require-periodic-airbox-cpu-demag-solved \
+  --require-frozen-magnetic-submesh \
+  .fullmag/reports/frequency-domain-periodic-airbox-runtime/artifacts
+```
+
+To zamyka poprzedni observability gap dla `solve_error` artefaktow. Nie zamyka
+P3 solver acceptance: nadal brakuje solved single-point, dluzszej relaksacji,
+supercell acceptance i swiezego spectrum/refined sweepu.
+
+TetraX jest referencja naukowa dla `k/m`-zaleznego dynamic demag i modalnego
+operatora. Tetmag jest referencja dla finite-sample FEM/BEM demag oraz RF
+time-domain, ale nie dowodzi PBC/Floquet mesh semantics. Fullmag ma zachowac
+wlasna architekture IR/planner/runner/provenance i nie kopiowac tych solverow
+bez capability gatingu.
 
 Zamkniety mikroetap:
 
@@ -1111,15 +1212,19 @@ Aktualizacja 2026-06-29 z biezacej weryfikacji:
   periodic-airbox dostaly konserwatywniejsze
   `FULLMAG_FMR_RESPONSE_MAX_ITERATIONS=4096` i
   `FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS=4096` bez luzowania tolerancji.
-  Swiezy `just verify-fem-frequency-domain-periodic-airbox-runtime` przeszedl
-  kodem `0`; finalne diagnostics mialy `pair_count=106`,
+  Starszy snapshot `just verify-fem-frequency-domain-periodic-airbox-runtime`
+  przeszedl kodem `0`; finalne diagnostics mialy `pair_count=106`,
   `paired_node_count=212`, `completed_frequency_point_count=1`,
   `total_iteration_count=2145`,
   `relative_residual_l2_norm=0.0009999960955354035`,
   `restart_iterations_for_frequency=4096` i `validation_fallback_used=false`.
-  To domyka high-level CPU frozen-source periodic-airbox smoke; nadal zostaja
-  koszt/preconditioning, wyjasnienie additivity self-check, docelowy MFEM
-  coupled assembly `[delta_m, delta_phi]` i GPU periodic demag.
+  Ten snapshot jest obecnie traktowany jako historyczny: ponowny managed run z
+  2026-06-30 nie odtworzyl solved bundle i zakonczyl sie `solve_error` przy
+  residualu `1.0438936681296503e-3` po 4096 iteracjach. Nie domyka to
+  high-level CPU frozen-source periodic-airbox smoke; nadal zostaja
+  koszt/preconditioning, zapis bounded failure artifacts, wyjasnienie
+  additivity self-check, docelowy MFEM coupled assembly `[delta_m, delta_phi]`
+  i GPU periodic demag.
 - P3 ma teraz osobny artifact-backed multi-frequency spectrum gate dla tego
   samego CPU frozen-source `periodic_airbox_k0` antidot workflowu. Verifier
   dostal flagi `--require-min-frequency-points`,
@@ -1348,7 +1453,8 @@ Procent realizacji wzgledem pelnego celu PBC/Floquet/GPU:
 | P0 docs/metadane | 100% | Zakonczone w planie; mesh translations i capability truth sa opisane. |
 | P1 k=0 magnetic-only response | 100% dla kwalifikowanego slice | CPU static-periodic/no-demag ma aktualny managed gate i artifact-backed verifier; GPU gamma/free i GPU static-periodic/no-demag maja runtime verifiers z `--require-production-gpu`, `--require-static-periodic` oraz bez fallbacku; dodatkowo `just verify-fem-frequency-domain-gpu-static-periodic-parity-runtime` porownuje GPU artifacts do CPU reference dla tego samego minimalnego `x_faces` static-periodic mesh assetu. To nadal nie obejmuje demag, nonzero-k ani duzego antidot lattice. |
 | P2 static/time-domain demag PBC | 100% dla CPU slice | Static/time-domain periodic airbox CPU/MFEM ma artifacted validation; GPU pozostaje gated. |
-| P3 k=0 frequency-response demag periodic airbox | 97% | Sa IR/ABI/artifact gates, explicit dense/matrix-free coupled-block seams, `delta_phi` layout, periodic-pair validation, honest unavailable provenance dla braku MFEM coupled-block assembly oraz runtime artifacts dla CPU/GPU boundaries. Native backend ma realny `apply_demag_tangent` bridge oparty o swiezy MFEM Poisson/PBC demag solve `H_demag(delta_m)`, a runner buduje `NativeBackendDemagTangentProvider` dla CPU `PeriodicAirboxK0`. Focused native demag i frequency-domain contracts przechodza, artifact diagnostics zapisuja self-check liniowosci demag tangent providera, a managed `just verify-fem-frequency-domain-periodic-airbox-runtime` przechodzi kodem `0` dla realnego 200 nm antidot smoke z frozen source: `complete=true`, `completed_frequency_point_count=1`, `relative_residual_l2_norm=0.0009999960955354035`, `total_iteration_count=2145`, `operator_terms_included=["exchange","zeeman","demag"]`, `domain_mesh_mode="generated_frozen_magnetic_submesh"` i `pair_count=106`. Osobny multi-frequency spectrum gate przechodzi dla 3 punktow 2.5/2.75/3.0 GHz z field payloadami, solved demag contribution i `validation_fallback_used=false`; verifier wymusza teraz derived peak mode artifact dla maksimum odpowiedzi oraz rekomendacje kolejnego lokalnego sweepu, a refined 5-point spectrum ma osobny runtime target bez nadpisywania coarse artifactow. Stary z-padding diagnostic nadal pokazuje drift shared OCC path, ale `generated_frozen_magnetic_submesh` acceptance dla tego samego 200 nm antidot/PBC setupu stabilizuje magnetic nodes/elements jako prefiks przy zmianie airbox z=90.0/90.1 nm, filtruje frozen/air overlap i zachowuje `periodic_node_pairs` przez extraction, `.npz` oraz merge. `examples/fem_frequency_response_smoke.py` potrafi przez `FULLMAG_FMR_FROZEN_MAGNETIC_SUBMESH_SOURCE` wejsc w frozen workflow i DSL/rewrite zachowuja source metadata. Nadal zostaje redukcja kosztu/solidniejszy preconditioning, wyjasnienie pozostalego additivity self-check, docelowe MFEM coupled assembly `[delta_m, delta_phi]` oraz GPU periodic demag, ktory pozostaje structured unsupported. |
+| P3a k=0 driven-response demag periodic airbox | 76% | Sa IR/ABI/artifact gates, frozen-submesh PBC materializacja, matrix-free CPU Schur/phi-consistency provider path i verifier dla solved/solve-error kontraktow. Po 2026-06-30 `just rebuild-fem-runtime` swiezy managed smoke z `FULLMAG_FMR_RESPONSE_MAX_ITERATIONS=1` celowo konczy strict recipe na `solve_error`, ale bounded bundle przechodzi `scripts/verify_fem_frequency_domain_runtime_artifacts.py --allow-solve-error --require-periodic-airbox-cpu-demag-solved --require-frozen-magnetic-submesh`. P3a nadal nie jest solver-accepted: pelny 4096-iteration proof byl tuz nad tolerancja (`1.0438936681296503e-3` vs `1e-3`), relaksacja byla tylko smoke (`max_steps=4`), spectrum/refined artifacts sa nieaktualne wzgledem obecnego verifiera/preconditioner provenance, a supercell acceptance nie jest zamkniete. Nastepne prace: dluzszy equilibrium gate, lepszy preconditioner/Schur model albo realny assembled coupled block, solved single-point, potem swieze spectrum/refined i supercell. |
+| P3b k=0 eigenfrequency/modal periodic airbox | 18% | COMSOL manual jasno rozdziela Frequency Domain driven response od Eigenfrequency modes. Fullmag ma juz czesc wspolnego linearized LLG/PBC/demag provenance oraz SLEPc dependency export w managed runtime, ale brak prawdziwego `periodic_airbox_k0` eigenproblem assembly, shift-invert/target-window solve, modal normalization, mode artifacts i verifiera dla modow antidotu. Driven-response peaks moga byc tylko mode candidates; nie sa modalnym proofem. |
 | P4 nonzero-k Floquet response | 69% | Sa IR/planner metadata, phase diagnostics, gamma alias, structured unsupported, C ABI validation dla niespojnego `phase_rad != -k dot translation`, C ABI validation dla niespojnych corner/loop phase constraints, C ABI validation dla nie-Floquet-periodic tangent frames/drive, durable partial artifacts dla Floquet drive validation errors i samej sciezki `floquet_bloch_nonzero_k` unavailable w C ABI; produkcyjny C ABI CPU path kanonizuje teraz zero-fazowe gamma-Floquet pary do static-periodic node pairs i ma numeryczny test rownowaznosci odpowiedzi wzgledem static-periodic. Rust native wrapper przepuszcza dopuszczony GPU no-demag Floquet supplied exchange-edge slice do C ABI zamiast short-circuitowac go jako unavailable. Planner dopuszcza teraz tylko waski high-level `requested_device=gpu` nonzero-k Floquet/no-demag/no-DMI slice z kompletnymi pair metadata, a runner buduje Bloch-phase tangent drive dla periodic pairs. Runner payload doklada wybrane periodic-node exchange edges do natywnego exchange graph dla `Periodic`/`Floquet`, wiec waski GPU Floquet no-demag slice nie opiera sie juz wylacznie na lokalnych tetrahedralnych krawedziach. Waski CPU/GPU phase-projected no-demag Floquet smoke oraz CPU/GPU supplied exchange-edge smoke przechodza w native contract, manifest zapisuje Floquet/projection provenance razem z pair count i k-vector, a `just verify-fem-frequency-domain-gpu-floquet-runtime` daje artifact-backed high-level managed proof dla tego slice. Verifier tej bramki wymaga teraz `dynamic_demag_k_available=false`, `operator_terms_included` z `exchange`, dodatniego `exchange_edge_count`, `floquet_real_imag_mixing=true`, `periodic_pairs_v1_path`, kompletnej listy par z `translation_m`/`phase_rad` oraz zgodnosci `phase_rad=-k dot translation`, zeby nie mylic phase projection bez exchange graph/real-imag rotation/constraint metadata z produkcyjnym operatorem. `just verify-fem-frequency-domain-gpu-floquet-reciprocal-runtime` przeszedl kodem `0` w biezacej weryfikacji i porownuje exchange-only widmo dla `+k` i `-k` w waskim GPU Floquet/no-demag slice. Brak pelnego Bloch-reduced production operatora, DMI, demag-k i k-path validation. |
 | P5 Floquet dynamic demag | 38% | Jest physics note i gating; forced GPU `periodic_airbox_k0` zachowuje teraz natywna unsupported-artifact granice bez CPU/dense fallbacku. Osobny managed target `just verify-fem-frequency-domain-periodic-airbox-gpu-unsupported-runtime` materializuje realny 200 nm antidot periodic-airbox request z `FULLMAG_FMR_DEVICE=gpu`, `equilibrium_source=provided` i wymaga verifiera `--require-production-gpu --require-periodic-airbox-gpu-unsupported`. Planner odrzuca teraz publiczne nonzero-k `Floquet` + `include_demag=true` bez `magnetostatic_bc=floquet_airbox` jako niekompletny request, a jawne `magnetostatic_bc=floquet_airbox` istnieje w physics docs, Python DSL, ProblemIR serde i plannerze jako canonical Bloch/Floquet airbox intent dla dynamicznego `delta_phi`, lecz failuje capability errorem `demag-k operator is not implemented`. Native C ABI v8 i Rust FFI niosa teraz jawne `requires_floquet_airbox_dynamic_demag`; C ABI driven-response boundary zapisuje partial artifacts dla `floquet_airbox` z `unsupported_reason="floquet_airbox_dynamic_demag_k_unimplemented"`, `requested_magnetostatic_bc="floquet_airbox"`, `resolved_magnetostatic_bc="floquet_airbox"`, `dynamic_demag_k_available=false` i `validation_fallback_used=false`. Ten boundary zapisuje tez `mesh/periodic_pairs.v1.json` dla magnetostatycznych par `delta_phi` z `pair_family="magnetostatic_delta_phi"`, `unknown_family="delta_phi"`, `phase_convention="exp_minus_i_k_dot_delta_r"`, `floquet_k_vector_rad_per_m`, `phase_metadata_status="available"`, `phase_rad`, `expected_phase_rad`, `phase_residual_rad`, `translation_m` i `delta_phi_flux_validation_status="not_evaluated"` w periodic-pair artifact, diagnostics i manifest. Native C ABI waliduje teraz, ze zadeklarowane magnetostatyczne pary `delta_phi` dla `floquet_airbox` maja realny bufor par; brak bufora zwraca `validation_error="floquet_airbox_missing_delta_phi_periodic_node_pairs"`, indeks poza `delta_phi_dof_count` zwraca `validation_error="floquet_airbox_delta_phi_periodic_node_pair_out_of_range"`, self-pair zwraca `validation_error="floquet_airbox_degenerate_delta_phi_periodic_node_pair"`, a brak pokrywajacej pary Floquet z `has_phase` i `has_translation` zwraca `validation_error="floquet_airbox_delta_phi_pair_missing_phase_metadata"` przed obecna sciezka unsupported. Planner helper emituje teraz osobny `MagnetostaticPotentialDynamic/MagnetostaticDomainWithAir` `BlochPhase` constraint-set dla `floquet_airbox`, a runner payload przenosi odpowiadajace `delta_phi` DOF count i magnetostatyczne periodic-node pairs do natywnego requestu. Focused planner RED/GREEN, `fullmag-plan fem_frequency_response`, focused `fullmag-runner --features fem-gpu` payload test, focused native contract i managed native-contract gate przechodza. Nowy waski C ABI seam potrafi rozwiazac dostarczony explicite CPU `floquet_airbox` coupled block `[delta_m, delta_phi]`, waliduje faze `delta_phi_dst = exp(i phase_rad) * delta_phi_src`, zapisuje `delta_phi_phase_validation_status="ok"` oraz `dynamic_demag_operator_source="explicit_floquet_airbox_coupled_block_payload"`, a zla solved phase wraca teraz jako `validation_error="floquet_airbox_delta_phi_phase_mismatch"` z zachowanym `requested_magnetostatic_bc="floquet_airbox"`, `delta_phi_phase_validation_status="mismatch"` i `delta_phi_phase_max_residual` w diagnostics i manifest. C ABI GPU request z dostarczonym explicit `floquet_airbox` coupled blockiem ma teraz osobny `unsupported_reason="floquet_airbox_dynamic_demag_gpu_unsupported"`, zachowuje requested GPU lane w artifact diagnostics i nie raportuje CPU explicit-block solver source. Managed `just verify-fem-frequency-domain-gpu-floquet-airbox-unsupported-runtime` przechodzi teraz z kompletnymi artifactami unavailable dla high-level GPU Floquet-airbox smoke. Brak MFEM-assembled coupled operatora, full-face/flux validation, GPU Poisson/libCEED/hypre realization i produkcyjnego GPU solvera. |
 | GPU PBC/Floquet/dynamic demag | 46% | GPU no-demag/free i k=0 static-periodic/no-demag dzialaja jako baza artefaktowa z runtime verifierem i parytetem CPU/GPU dla kwalifikowanego minimalnego static-periodic smoke; waski phase-projected no-demag Floquet smoke z periodic-node exchange edges przechodzi native contract oraz Rust runner path do C ABI, a manifest/diagnostics zachowuja teraz pair count, k-vector provenance, `operator_terms_included=["exchange","zeeman"]`, dodatni `exchange_edge_count`, `floquet_real_imag_mixing=true` oraz `mesh/periodic_pairs.v1.json` z lista par, translacjami i fazami. High-level planner/runner payload dopuszcza waski `requested_device=gpu` nonzero-k Floquet/no-demag/no-DMI request, buduje Bloch-phase tangent drive z periodic pair metadata i ma osobny managed runtime verifier z `--require-floquet-phase-projection`, ktory dodatkowo wymaga `dynamic_demag_k_available=false`, exchange term, exchange-edge count, real/imag mixing oraz sprawdzonego `phase_rad=-k dot translation` dla tego no-demag slice. Ten slice ma teraz rowniez przechodzacy managed reciprocal gate dla `+k/-k`, ktory porownuje amplitudy widma i odrzuca brak przeciwnego k-vectora. Forced GPU `periodic_airbox_k0` z dynamic demag dociera do natywnego structured unsupported/artifact boundary zamiast wczesnego runner rejection, a `floquet_airbox` ma teraz osobny C ABI/FFI unsupported artifact boundary, CPU supplied-coupled-block seam z walidacja `delta_phi(k)` oraz high-level managed unsupported gate z kompletnym manifest/diagnostics provenance, zamiast byc mylony ze zwyklym `floquet_bloch_nonzero_k`. Nadal brak pelnego nonzero-k Bloch-reduced operatora, periodic Poisson/dynamic demag na GPU i parity validation dla docelowego antidot lattice. |
@@ -1545,17 +1651,22 @@ cargo test -p fullmag-runner fem_frequency_response_periodic_floquet_rejects_den
 
 ### P1: Zamkniecie obecnego k=0 magnetic-only frequency-response slice
 
-**Cel:** obecny `include_demag=False` static-periodic response ma byc jawnie kwalifikowany jako narrow production CPU slice.
+**Cel:** obecny `include_demag=False` static-periodic response ma byc jawnie
+kwalifikowany jako narrow production CPU/GPU slice i nie moze byc mylony z
+P3/gated antidot periodic-airbox demag smoke.
 
 **Files:**
-- Modify only if needed: `examples/fem_frequency_response_smoke.py`
 - Modify only if needed: `examples/fem_frequency_response_static_periodic_smoke.py`
 - Modify only if needed: `crates/fullmag-runner/src/frequency_response.rs`
 - Test: `crates/fullmag-runner/src/frequency_response.rs`
 - Test: `backends/fem/tests/frequency_domain/frequency_domain_contract.cpp`
 
-- [x] Keep `examples/fem_frequency_response_smoke.py` with `include_demag=False` until P3/P4 exists. Do not turn demag on to make the example look more physical.
-- [x] Ensure the example description says "periodic spin-wave boundary, demag disabled" and not "full periodic antidot demag".
+- [x] P1 uses `examples/fem_frequency_response_static_periodic_smoke.py` as the
+  canonical no-demag static-periodic smoke. The 200 nm antidot
+  `examples/fem_frequency_response_smoke.py` is P3/gated antidot
+  periodic-airbox demag smoke and must not be cited as P1 production proof.
+- [x] Ensure the P1 example description says "periodic spin-wave boundary,
+  demag disabled" and not "full periodic antidot demag".
 - [x] Ensure production rejection messages mention all three excluded cases: `include_demag=true`, shared-domain airbox, nonzero-k/Floquet.
 - [x] Run the native/container-backed gates:
 
@@ -1601,6 +1712,22 @@ Progress notes:
   managed target `just verify-fem-frequency-domain-gpu-static-periodic-runtime`;
   CPU/GPU parity for the same minimal static-periodic mesh asset is now
   covered by `just verify-fem-frequency-domain-gpu-static-periodic-parity-runtime`.
+- The top-level `just verify-fem-frequency-domain-runtime-suite` now runs
+  `just verify-fem-frequency-domain-gpu-static-periodic-parity-runtime`
+  instead of treating the CPU and GPU static-periodic smokes as independent
+  proof. Focused static guard:
+  `python3 -m pytest scripts/test_frequency_domain_runtime_targets.py -q`
+  returns `17 passed` after the suite-level parity check and P1/P3 naming
+  guards were added.
+- Fresh managed-runtime evidence after the 2026-06-29 audit alignment: the
+  runtime export completed after rebuilding the CUDA FEM release bundle, suite
+  artifacts were regenerated under `.fullmag/reports` at 2026-06-29 21:30-21:31,
+  and the artifact verifiers passed for CPU free response, GPU free response,
+  CPU static-periodic, GPU static-periodic, CPU/GPU static-periodic parity,
+  GPU Floquet no-demag, GPU Floquet-airbox unsupported, reciprocal +/-k
+  Floquet comparison, frequency-domain eigen artifacts, and free demag-airbox
+  eigen artifacts. This confirms the current P1 no-demag periodic/GPU parity
+  evidence, not P3/P5 demag promotion.
 
 ### P2: Kwalifikacja static/time-domain k=0 demag PBC z airboxem
 
@@ -1794,6 +1921,18 @@ delta_phi: full magnetostatic-domain-with-air lateral pairs
   Focused RED/GREEN `fem_frequency_domain_contract` and managed
   `just verify-fem-frequency-domain-native-contract` finished with code `0`;
   this is still mesh/constraint-family validation, not MFEM coupled assembly.
+  Progress: the same public C ABI/native boundary now rejects magnetostatic
+  `delta_phi` periodic node pairs whose indices are outside
+  `periodic_airbox_delta_phi_dof_count`. The validation error is
+  `periodic_airbox_magnetostatic_periodic_node_pair_out_of_range`, writes the
+  standard partial validation artifact set, and runs before the explicit or
+  matrix-free coupled-block hooks. Existing `periodic_airbox_k0` contract
+  fixtures were updated so their `{0,1}` magnetostatic pair is backed by two
+  declared `delta_phi` DOFs instead of an invalid one-DOF layout. Focused
+  container contract and managed
+  `just verify-fem-frequency-domain-native-contract` both finished with code
+  `0`. This closes another mesh metadata validation gap; it still does not
+  implement the MFEM `[delta_m, delta_phi]` coupled assembler.
   Progress: the public C ABI/native boundary now rejects ambiguous coupled-block
   operator source metadata when both dense row-major matrices and matrix-free
   callbacks are supplied for the same `periodic_airbox_k0` hook. The validation
@@ -2012,6 +2151,16 @@ Acceptance:
   `just verify-fem-frequency-domain-gpu-floquet-runtime` gate passed with the
   stricter verifier. This is durable graph provenance for the narrow no-demag
   projection slice, not full reduced-operator graph consumption.
+  Follow-up 2026-06-30: the high-level production CPU runner gate now permits
+  the same qualified nonzero-k Floquet/no-demag magnetic-body slice that the
+  native CPU phase-projection path can solve. A focused runner RED first failed
+  because `production_cpu_frequency_response_rejection_reason(...)` still
+  rejected every nonzero-k Floquet request; after the gate update,
+  `build_native_production_cpu_payload(...)` emits `floquet_periodic_pairs`
+  instead of `static_periodic_node_pairs` and preserves the phased tangent
+  drive for the selected pair. This is high-level access to the narrow
+  phase-projected no-demag CPU slice, not the full phase-aware reduced
+  production operator.
 - [ ] Support real/imag mixing for `u_dst = exp(-i k dot delta_r) u_src`.
   Progress: the new `BlochPhase` policy explicitly records
   `real_imag_mixing=true` for Floquet frequency-response constraints. The
@@ -2120,6 +2269,12 @@ phase(x then y) == phase(y then x)
   `unsupported_reason="floquet_bloch_nonzero_k"`. This improves artifact
   provenance for rejected Floquet inputs; it still does not implement the
   phase-aware production operator.
+  Follow-up 2026-06-30: the same high-level drive-phase treatment is now
+  verified for the production CPU payload, not only GPU. The focused
+  `fullmag-runner` test checks that a qualified CPU nonzero-k Floquet/no-demag
+  plan builds a native payload with one Floquet pair and a complex tangent drive
+  rotated according to `phase_rad=-k dot translation`. DMI, demag,
+  shared-domain airbox and non-Floquet nonzero-k requests remain rejected.
 - [x] Keep `include_demag=true` gated until P5 dynamic magnetostatic Floquet exists.
   Progress: planner/runtime gating now preserves the intended P4/P5 boundary:
   nonzero-k `Floquet` with `include_demag=true` and no
@@ -2384,13 +2539,24 @@ max_pair |partial_n(dst) delta_phi(dst) + phase * partial_n(src) delta_phi(src)|
   checks those fields, and `just verify-fem-frequency-domain-native-contract`
   passed after a managed runtime rebuild. This is an honesty boundary, not a
   flux-continuity implementation.
+  Follow-up 2026-06-30: the solved explicit CPU `floquet_airbox` coupled-block
+  seam now carries the same honesty boundary instead of omitting flux
+  provenance. Result diagnostics, manifest, frequency-point demag contribution
+  and coupled-block `mesh/periodic_pairs.v1.json` record
+  `delta_phi_flux_validation_status="not_evaluated"` with reason
+  `floquet_airbox_flux_validation_geometry_unavailable`. RED/GREEN proof:
+  focused native `fem_frequency_domain_contract` first failed on the missing
+  solved-seam flux status and then passed after the artifact writer and direct
+  diagnostics were updated. This still does not implement the normal-flux
+  check; current C ABI data carries node pairs/phases, not the face normals or
+  gradient data required by the flux residual.
 
 - [x] Add artifact-backed airbox z-padding response comparison gate for response
   peaks and amplitudes. The verifier tolerates airbox/potential DOF changes,
   but compares stable scalar response quantities only when magnetic operator
   invariants such as tangent DOF count and exchange-edge count are invariant
   across the comparison.
-- [ ] Make the airbox z-padding convergence gate pass with meaningful mesh,
+- [x] Make the airbox z-padding convergence gate pass with meaningful mesh,
   airbox and solver settings. The 90/90.1 nm fast-mesh probe remains red after
   the air-volume `exchange_edges` fix: the fresh reference/candidate pair
   changes `delta_m_tangent_dof_count` (`1408` vs `1410`), `delta_phi_dof_count`
@@ -2399,12 +2565,579 @@ max_pair |partial_n(dst) delta_phi(dst) + phase * partial_n(src) delta_phi(src)|
   trusted. A trial with `FULLMAG_FMR_MESH_ALGORITHM_3D=10` did not resolve the
   gate because the reference solve failed to converge before artifact
   comparison.
+  Follow-up 2026-06-29: generated frozen-submesh air filtering is now covered
+  for both periodic node-pair and periodic boundary-pair metadata. Focused
+  tests assert that `_generate_air_mesh_for_frozen_magnetic_submesh(...)`
+  keeps `periodic_boundary_pairs` for retained pair ids and that the periodic
+  antidot generated-frozen workflow preserves both `periodic_node_pairs` and
+  `periodic_boundary_pairs` through the z-padding materialization and IR
+  export path. Targeted proof:
+  `PYTHONPATH=packages/fullmag-py/src:packages/fullmag-py/tests:scripts python3 -m pytest -q packages/fullmag-py/tests/test_meshing.py -k "generate_air_mesh_for_frozen_submesh_drops_periodic_pairs_without_kept_elements or periodic_antidot_frozen_magnetic_submesh_stays_stable_across_airbox_z_padding"`
+  returned `2 passed`. Current offline z-padding artifact comparison on
+  `.fullmag/reports/frequency-domain-periodic-airbox-z-padding-runtime` no
+  longer fails on magnetic operator invariants in the inspected run:
+  reference/candidate both report `delta_m_tangent_dof_count=1410` and
+  `exchange_edge_count=3408`. The gate still fails honestly on response drift:
+  candidate `response_amplitude=8.4391478672086095e-09` vs reference
+  `7.9882497515691826e-09`, diff `4.5089811563942689e-10` against the current
+  5% tolerance `4.2195739336043051e-10`. At that point the remaining blocker
+  was airbox convergence/tolerance qualification rather than lost PBC metadata
+  or remeshed magnetic exchange topology for that run.
+  Final follow-up 2026-06-29: the managed z-padding gate now uses the more
+  converged default comparison `120 nm -> 150 nm` instead of the too-tight
+  `90 nm -> 120 nm` probe. The verifier tolerance remains unchanged at 5%;
+  this is not a tolerance relaxation. Authoritative managed proof:
+  `FULLMAG_FMR_AIRBOX_REFERENCE_THICKNESS_NM=120 FULLMAG_FMR_AIRBOX_CANDIDATE_THICKNESS_NM=150 just verify-fem-frequency-domain-periodic-airbox-z-padding-runtime`
+  completed with code `0`. The resulting artifacts report matching magnetic
+  operator invariants (`delta_m_tangent_dof_count=1408`,
+  `exchange_edge_count=3511`) and solved CPU periodic-airbox demag response
+  without validation fallback. The reference response amplitude is
+  `4.333321785289847e-09`, the candidate response amplitude is
+  `4.414796392493283e-09`, relative drift is about `1.85%`, and both residuals
+  are below the `1e-3` response tolerance. Static target coverage now asserts
+  these `120/150` defaults so the gate does not regress back to the
+  non-converged `90/120` range. This closes the default z-padding acceptance
+  gate for the CPU frozen-submesh P3 smoke; it does not claim full open-boundary
+  convergence for arbitrary airbox sizes or GPU periodic demag.
 - [ ] Add supercell validation:
 
 ```text
 1x1 cell, k=0 PBC
 2x2 or 3x3 supercell, Gamma-like excitation
 ```
+  Progress: there is now an artifact-level supercell comparison gate:
+  `scripts/verify_fem_frequency_domain_supercell_artifacts.py` compares a
+  completed 1x1 `periodic_airbox_k0` CPU demag bundle against a completed
+  Gamma-like supercell bundle, requires both sides to be production CPU,
+  periodic, `periodic_airbox_k0`, demag-solved, no validation fallback, checks
+  matching frequency grids, matching peak index, and bounded drift in
+  `response_amplitude` / `component_response_amplitude`. The just target
+  `verify-fem-frequency-domain-periodic-airbox-supercell-artifacts` writes a
+  durable `frequency_domain_supercell_validation.v1` report, but intentionally
+  requires `FULLMAG_FMR_SUPERCELL_ARTIFACTS` instead of pretending that the
+  current one-cell example can generate a 2x2/3x3 supercell. Remaining work:
+  parameterize the antidot example/frozen-magnetic-submesh generator for
+  repeated holes and run the full 2x2 or 3x3 managed runtime comparison.
+  Follow-up: `examples/fem_frequency_response_smoke.py` and
+  `scripts/prepare_fmr_frozen_magnetic_submesh.py` now share
+  `FULLMAG_FMR_SUPERCELL_REPEAT_X/Y`. Defaults remain 1x1; repeat values scale
+  the film/airbox x/y size and place one 50 nm hole at each 200 nm unit-cell
+  center while keeping outer x/y PBC. The helper report records
+  `supercell_repeat_x`, `supercell_repeat_y`, and `supercell_cell_count`.
+  A managed target
+  `verify-fem-frequency-domain-periodic-airbox-supercell-runtime` now generates
+  a 1x1 unit-cell bundle and a repeated supercell bundle with frozen magnetic
+  submesh sources, validates both as CPU `periodic_airbox_k0` demag-solved
+  artifacts, and then runs the supercell artifact comparison. Focused static
+  guards pass (`scripts/test_frequency_domain_runtime_targets.py` now covers
+  both the full comparison and bounded diagnostics targets), but the full
+  managed supercell runtime still needs to converge and be qualified for a
+  concrete 2x2 or 3x3 mesh before this checkbox can close. Follow-up:
+  `verify-fem-frequency-domain-periodic-airbox-supercell-diagnostics-runtime`
+  is now a bounded managed gate for the current blocker. It runs both the 1x1
+  and default 2x2 frozen-submesh paths with one 2.75 GHz point and
+  `FULLMAG_FMR_RESPONSE_MAX_ITERATIONS=8`, then validates the resulting
+  `solve_error` artifacts via
+  `scripts/verify_fem_frequency_domain_runtime_artifacts.py --allow-solve-error
+  --require-periodic-airbox-cpu-demag-solved --require-frozen-magnetic-submesh`.
+  Current evidence: the target exits code `0`; both unit and supercell runtime
+  commands exit `1` as expected; diagnostics reach production CPU
+  `periodic_airbox_k0` without validation fallback and report
+  `total_iteration_count=8`. The unit artifact has
+  `relative_residual_l2_norm=0.9687946798276228`,
+  `delta_phi_dof_count=4844`, `delta_m_tangent_dof_count=1408`; the default
+  2x2 supercell artifact has
+  `relative_residual_l2_norm=0.9673266205036173`,
+  `delta_phi_dof_count=11483`, `delta_m_tangent_dof_count=4668`. This confirms
+  geometry/mesh/materialization reaches the real solver for 2x2, while full
+  FMR mode extraction remains blocked by periodic-airbox GMRES convergence or
+  preconditioning, not by the supercell geometry plumbing.
+  Follow-up 2026-06-29: production CPU GMRES progress publication is now
+  throttled by `FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL` /
+  `FULLMAG_FEM_FREQUENCY_RESPONSE_PROGRESS_INTERVAL`. Defaults remain
+  behavior-compatible for direct solver use, managed long-running runtime
+  targets use `128`, and the bounded supercell diagnostics target uses `8`.
+  The field is persisted as `progress_interval_iterations` in solver
+  diagnostics/manifest data and is required by the `--allow-solve-error`
+  verifier path. RED/GREEN evidence: focused verifier and justfile tests
+  passed as `150 passed`, `py_compile` passed, and
+  `just verify-fem-frequency-domain-native-contract` rebuilt the managed FEM
+  runtime and completed the native contract suite with code `0`. The latest
+  `verify-fem-frequency-domain-periodic-airbox-supercell-diagnostics-runtime`
+  artifacts again validate the bounded diagnostic gate: `unit_status=1`,
+  `supercell_status=1`, both diagnostics record
+  `progress_interval_iterations=8`, `total_iteration_count=8` and
+  `status="solve_error"`. Current residuals are
+  `relative_residual_l2_norm=0.9677756675433288` for the unit cell and
+  `relative_residual_l2_norm=0.9669814436218694` for the default 2x2
+  supercell. This reduces progress-log pressure and gives durable convergence
+  telemetry, but it intentionally does not close the supercell checkbox: the
+  production blocker remains GMRES convergence/preconditioning or a stronger
+  coupled-block assembly, not mesh materialization.
+  Follow-up 2026-06-29: runner-side native frequency-response progress now
+  updates `response/progress.v1.json` from the native GMRES progress callback
+  during an in-flight frequency point. The artifact records
+  `state="solving_frequency"`, `current_frequency_hz`,
+  `native_frequency_index`, `native_iteration_count`,
+  `native_residual_l2_norm`, `native_relative_residual_l2_norm`, and
+  `native_converged` before any frequency-point artifact has been written.
+  The native callback is registered even when there is no live `StepUpdate`
+  sink, so headless long supercell runs can be inspected from disk while the
+  first point is still solving. RED/GREEN proof:
+  `CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test -p fullmag-runner
+  native_frequency_response_progress -- --nocapture` returned `3 passed`.
+  This improves observability for the next 2x2 convergence/preconditioning
+  pass; it still does not close the supercell validation acceptance item.
+  Follow-up 2026-06-29: the final native `solve_error` progress artifact now
+  preserves the last native progress callback telemetry after the C++ artifact
+  writer overwrites `response/progress.v1.json`. The runner stores the last
+  `NativeFrequencyDomainProgress` callback and merges
+  `native_iteration_count`, `native_residual_l2_norm`,
+  `native_relative_residual_l2_norm`, `native_frequency_index`,
+  `current_frequency_hz`, and `native_converged` back into the final progress
+  artifact and its embedded `progress_json`. The artifact verifier now requires
+  this telemetry on `--allow-solve-error`, including
+  `progress.native_iteration_count == diagnostics.total_iteration_count`, so
+  the managed diagnostics gate protects the behavior instead of relying only on
+  Rust unit tests. During this pass a stale import in
+  `scripts/prepare_fmr_frozen_magnetic_submesh.py` also exposed that
+  `asset_pipeline.py` had lost the frozen-submesh invariant helper API used by
+  the script and tests; the helper set was restored and the loader again
+  validates sidecar invariant drift while allowing legacy reports that do not
+  yet contain an invariant block. Evidence:
+  `PYTHONPATH=packages/fullmag-py/src:scripts python3 -m pytest
+  scripts/test_prepare_fmr_frozen_magnetic_submesh.py -q` returned `2 passed`;
+  `python3 -m pytest scripts/test_verify_fem_frequency_domain_runtime_artifacts.py
+  -q -k "native_progress_telemetry or bounded_periodic_airbox_solve_error"`
+  returned `2 passed`; `CARGO_TARGET_DIR=/tmp/fullmag-codex-target cargo test
+  -p fullmag-runner
+  native_frequency_response_final_progress_artifact_preserves_solver_iteration
+  -- --nocapture` returned `1 passed`; and
+  `just verify-fem-frequency-domain-periodic-airbox-supercell-diagnostics-runtime`
+  completed with code `0` after rebuilding the managed runtime. Fresh artifacts
+  report `unit_status=1 supercell_status=1`; unit progress records
+  `native_iteration_count=8`,
+  `native_relative_residual_l2_norm=0.9692591559114221`, and supercell progress
+  records `native_iteration_count=8`,
+  `native_relative_residual_l2_norm=0.9682014312856757`. This closes the
+  supercell observability blocker for bounded diagnostics, but not the
+  supercell validation acceptance item: the next blocker remains reducing the
+  residual through GMRES/preconditioning or stronger coupled-block assembly.
+  Follow-up 2026-06-30: periodic-airbox CPU demag solved-boundary diagnostics
+  now also publish relative demag tangent linearity metrics in native
+  diagnostics, manifest diagnostics, and the artifact verifier gate:
+  `demag_tangent_additivity_relative_error` and
+  `demag_tangent_homogeneity_relative_error`. Focused Python verifier tests
+  passed for the new required fields, `git diff --check` passed for the touched
+  files, and `just verify-fem-frequency-domain-native-contract` rebuilt the
+  managed runtime and completed the native contract suite with code `0`. A fresh
+  bounded supercell diagnostics run also completed with code `0`; the 1x1 unit
+  bundle reports `relative_residual_l2_norm=0.9688382321971676`,
+  `delta_m_tangent_dof_count=1410`, `delta_phi_dof_count=4855`,
+  `exchange_edge_count=3406`,
+  `demag_tangent_additivity_relative_error=2.1687807970627865e-4`, and
+  `demag_tangent_homogeneity_relative_error=4.626446601819367e-15`. The 2x2
+  supercell bundle reports `relative_residual_l2_norm=0.9678214618073501`,
+  `delta_m_tangent_dof_count=4624`, `delta_phi_dof_count=11751`,
+  `exchange_edge_count=11555`,
+  `demag_tangent_additivity_relative_error=8.45470813050584e-4`, and
+  `demag_tangent_homogeneity_relative_error=8.645407971889203e-14`. The large
+  absolute additivity errors are therefore mostly scale-sensitive diagnostics;
+  they no longer look like the primary blocker. The remaining acceptance blocker
+  is still solver convergence/preconditioning or a stronger real coupled-block
+  assembly, not supercell geometry materialization and not an obviously
+  nonlinear demag-tangent provider.
+  Follow-up 2026-06-30: production CPU restarted GMRES now has a tested
+  right-preconditioner seam. The new callback applies search-space vectors
+  `z=M^{-1}v` while convergence is still accepted only after recomputing the
+  physical residual `b-Ax`, so the existing residual semantics are preserved.
+  A focused RED first failed to compile on missing
+  `apply_right_preconditioner` / `krylov_preconditioner` fields; after the
+  implementation the container-backed `fem_frequency_domain_contract` passed.
+  Native diagnostics and runtime artifacts now also record
+  `krylov_preconditioner_kind`, `krylov_preconditioner_applied`, and
+  `krylov_preconditioner_setup_status` in both
+  `response/diagnostics/solver.v1.json` and
+  `frequency_domain/manifest.v1.json`. The Python verifier requires these
+  fields for `--require-periodic-airbox-cpu-demag-solved`, including
+  `--allow-solve-error`. Evidence: focused Python verifier tests passed as
+  `4 passed`, `git diff --check` passed for the touched files, and
+  `just verify-fem-frequency-domain-native-contract` rebuilt the managed
+  runtime and completed the native suite with code `0`.
+  A fresh bounded supercell diagnostics run completed with code `0` under the
+  updated verifier. The 1x1 bundle reports
+  `relative_residual_l2_norm=0.9677758675555572`,
+  `delta_m_tangent_dof_count=1408`, `delta_phi_dof_count=4904`,
+  `exchange_edge_count=3496`,
+  `krylov_preconditioner_kind="none"`,
+  `krylov_preconditioner_applied=false`,
+  `krylov_preconditioner_setup_status="not_configured"`,
+  `demag_tangent_additivity_relative_error=3.639281953757781e-4`, and
+  `demag_tangent_homogeneity_relative_error=3.3647867071839762e-15`. The 2x2
+  supercell bundle reports `relative_residual_l2_norm=0.9669456819063182`,
+  `delta_m_tangent_dof_count=4652`, `delta_phi_dof_count=11447`,
+  `exchange_edge_count=11476`,
+  `krylov_preconditioner_kind="none"`,
+  `krylov_preconditioner_applied=false`,
+  `krylov_preconditioner_setup_status="not_configured"`,
+  `demag_tangent_additivity_relative_error=6.407022147912542e-4`, and
+  `demag_tangent_homogeneity_relative_error=4.502406102129175e-15`. This closes
+  the preconditioner seam/provenance step, but intentionally does not close
+  supercell acceptance: the next implementation step is a real
+  periodic-airbox preconditioner or a stronger coupled-block assembly.
+  Follow-up 2026-06-30: bounded supercell diagnostics publish now the GMRES
+  relative residual history and real/imag block norms for RHS, residual and
+  response in both `response/diagnostics/solver.v1.json` and
+  `frequency_domain/manifest.v1.json`. The verifier requires these fields for
+  `--require-periodic-airbox-cpu-demag-solved` even on `--allow-solve-error`
+  bundles, so the next preconditioner pass has durable input data instead of
+  relying on log scraping. Evidence: focused verifier tests passed as
+  `6 passed`, `python3 -m py_compile` passed, `git diff --check` passed for
+  touched files, focused container `fem_frequency_domain_contract` passed,
+  and managed `just verify-fem-frequency-domain-native-contract` completed
+  with code `0`. A fresh
+  `just verify-fem-frequency-domain-periodic-airbox-supercell-diagnostics-runtime`
+  completed with code `0` under the stricter verifier. The 1x1 bundle reports
+  `relative_residual_l2_norm=0.9668840843966506`,
+  `krylov_preconditioner_kind="none"`, residual history
+  `[1, ..., 0.9668840843966506]`, block norms
+  `rhs_real_l2_norm=26.514147167125703`,
+  `residual_real_l2_norm=25.214433351611515`,
+  `residual_imag_l2_norm=4.630586152616681`, and relative demag tangent
+  additivity/homogeneity errors
+  `6.517416559809004e-4` / `2.778593043768647e-15`. The default 2x2
+  supercell bundle reports
+  `relative_residual_l2_norm=0.9672455647069121`,
+  `krylov_preconditioner_kind="none"`, residual history
+  `[1, ..., 0.9672455647069121]`, block norms
+  `rhs_real_l2_norm=48.394214530251446`,
+  `residual_real_l2_norm=46.05997934521094`,
+  `residual_imag_l2_norm=8.34081228690541`, and relative demag tangent
+  additivity/homogeneity errors
+  `6.498829711775768e-4` / `4.432707512171262e-15`. The residual history is
+  almost flat near `0.967`, with nontrivial real and imaginary residual
+  blocks, so the plan should not spend the next iteration on raising GMRES
+  limits. The next P3 task is to implement and prove a concrete
+  periodic-airbox right preconditioner, for example diagonal/block-Jacobi or a
+  Schur-like approximation, or to replace the provider path with a stronger
+  assembled coupled block `[delta_m, delta_phi]`.
+  Follow-up 2026-06-30: the first concrete periodic-airbox preconditioner is
+  now wired into the production CPU MFEM path. `solve_mfem_production_cpu_problem`
+  sets up `mfem_tangent_block_jacobi_right` in the
+  `MfemProductionCpuOperatorAdapter` for `periodic_airbox_k0` dynamic-demag
+  provider requests and passes it through the existing restarted-GMRES
+  right-preconditioner callback. The preconditioner inverts a per-node 4x4
+  harmonic block `[K, omega M; -omega M, K]`, where `K` comes from local
+  Zeeman/anisotropy plus exchange diagonal contributions and `M` is the same
+  tangent frequency-mass block used by the production operator. Dynamic demag
+  remains in the true matrix-free operator and the recomputed physical residual
+  `||b-Ax||/||b||`; the preconditioner does not redefine convergence and does
+  not call the expensive demag-tangent Poisson provider during setup.
+  Focused evidence: Python verifier tests for periodic-airbox solved-boundary,
+  bounded solve-error, preconditioner metadata, residual history and block
+  norms passed as `6 passed`; focused container build and
+  `fem_frequency_domain_contract` passed; authoritative
+  `just verify-fem-frequency-domain-native-contract` rebuilt the managed FEM
+  runtime and completed with code `0`; and
+  `just verify-fem-frequency-domain-periodic-airbox-supercell-diagnostics-runtime`
+  completed with code `0` under the stricter verifier that now requires
+  `krylov_preconditioner_kind="mfem_tangent_block_jacobi_right"`,
+  `krylov_preconditioner_applied=true` and
+  `krylov_preconditioner_setup_status="ok"`. Fresh bounded artifacts show a
+  real but insufficient convergence improvement: 1x1 residual after 8
+  iterations is now `0.9461442798003576` with history
+  `[1, ..., 0.9461442798003576]`, and default 2x2 supercell residual is now
+  `0.9424373883009138` with history `[1, ..., 0.9424373883009138]`. Previous
+  no-preconditioner bounded diagnostics were near `0.967`. This closes the
+  first real preconditioner task, but not supercell acceptance: the next P3
+  step must strengthen this approximation, for example by adding demag-aware
+  low-rank/Schur information, a better exchange/airbox block model, or moving
+  toward the assembled coupled block `[delta_m, delta_phi]`.
+  Follow-up verification 2026-06-30 after rejecting a preconditioned initial
+  guess experiment: the managed native contract and bounded supercell
+  diagnostics were rerun against the current source/runtime state. A trial that
+  initialized GMRES with `x0 = M^{-1}b` was not retained because bounded
+  diagnostics worsened the recomputed physical residual to about `8.7`, despite
+  using the same right-preconditioner callback. The accepted source keeps the
+  preconditioner inside the Krylov search space only and preserves convergence
+  on the recomputed true residual. Fresh evidence: focused container
+  `fem_frequency_domain_contract` passed, authoritative
+  `just verify-fem-frequency-domain-native-contract` rebuilt the managed FEM
+  runtime and completed with code `0`, full Python verifier
+  `scripts/test_verify_fem_frequency_domain_runtime_artifacts.py` passed as
+  `134 passed`, and
+  `just verify-fem-frequency-domain-periodic-airbox-supercell-diagnostics-runtime`
+  completed with code `0`. Current bounded artifacts report
+  `krylov_preconditioner_kind="mfem_tangent_block_jacobi_right"`,
+  `krylov_preconditioner_applied=true`, and
+  `krylov_preconditioner_setup_status="ok"` on both bundles. The 1x1 residual
+  is now `0.9449355121055708` with history
+  `[1, 0.9961262906144299, 0.962907614947698, 0.9628420962987121,
+  0.9602856690243036, 0.9601819163687646, 0.9461311796837173,
+  0.9461296152923788, 0.9449353966666812, 0.9449355121055708]`;
+  the default 2x2 supercell residual is now `0.94214197362812` with history
+  `[1, 0.9961466253899408, 0.9648866782775357, 0.9648817827038029,
+  0.9521059217679207, 0.9518820571430617, 0.9421740848708203,
+  0.9421432517133604, 0.9421428239601907, 0.94214197362812]`. This confirms
+  the first real local preconditioner is active and modestly useful, but still
+  leaves P3 acceptance blocked on a stronger demag-aware preconditioner or real
+  MFEM coupled-block assembly.
+  Follow-up 2026-06-30: the production CPU MFEM provider path now has a first
+  demag-aware coarse correction on top of the local block-Jacobi inverse. Setup
+  applies the existing demag tangent operator to two uniform tangent-component
+  coarse modes, projects them through the same static-periodic representative
+  map, averages the resulting demag response, and folds that coarse demag block
+  into the per-node harmonic right-preconditioner. This keeps the public
+  `ProductionCpuDrivenResponseProblem` callback contract unchanged and avoids
+  an expensive per-DOF Poisson setup. Native diagnostics, manifest diagnostics,
+  and the Python artifact verifier now require
+  `krylov_preconditioner_kind="mfem_tangent_demag_coarse_right"` for solved or
+  bounded-solve-error CPU `periodic_airbox_k0` demag provider bundles. RED/GREEN
+  proof: focused native contract first failed on the missing
+  `mfem_tangent_demag_coarse_right` kind, then passed after the setup/callback
+  implementation; Python verifier fixtures first failed because the verifier
+  still expected `mfem_tangent_block_jacobi_right`, then passed after the
+  artifact boundary was updated. Managed proof:
+  `just verify-fem-frequency-domain-native-contract` rebuilt the runtime and
+  completed with code `0`, full
+  `scripts/test_verify_fem_frequency_domain_runtime_artifacts.py` passed as
+  `134 passed`, and
+  `just verify-fem-frequency-domain-periodic-airbox-supercell-diagnostics-runtime`
+  completed with code `0`. A read-only review then found an out-of-bounds write
+  in the helper 4x4 solve (`augmented[4][8]` with an unused identity block);
+  the helper now uses an RHS-only `4x5` augmented system. Focused native
+  `fem_frequency_domain_contract`, managed
+  `just verify-fem-frequency-domain-native-contract`, and the bounded supercell
+  diagnostics were rerun after that fix. Fresh bounded artifacts show another
+  real but still insufficient improvement: 1x1 residual after 8 iterations is
+  now `0.9303533862702587` with history
+  `[1, 0.962650700252278, 0.9482237010029079, 0.9399980692500466,
+  0.9393970830518134, 0.938582783903623, 0.9349326784480618,
+  0.9308191687966018, 0.93035177313369, 0.9303533862702587]`; default 2x2
+  supercell residual is now `0.9205419115331417` with history
+  `[1, 0.9658488866969286, 0.941996226732767, 0.928537646321476,
+  0.9264124717855357, 0.9263056481435036, 0.9227763714264126,
+  0.921041164878278, 0.9205394151476073, 0.9205419115331417]`. This improves
+  the previous local block-Jacobi bounded residuals near `0.945` / `0.942`, but
+  does not close supercell acceptance; the next P3 step still needs a stronger
+  Schur/low-rank model, graph-aware block preconditioner, or real assembled
+  `[delta_m, delta_phi]` coupled block.
+
+  Follow-up 2026-06-30: graph-aware demag-coarse provenance and verifier
+  policy are now wired for the MFEM periodic-airbox provider path. The native
+  provider fixture with a real exchange edge reports
+  `krylov_preconditioner_kind="mfem_tangent_graph_demag_coarse_right"`, while
+  the no-exchange bounded solve-error fixture remains on
+  `mfem_tangent_demag_coarse_right`; focused
+  `fem_frequency_domain_contract` passed after this split. The runtime
+  artifact verifier now requires `mfem_tangent_graph_demag_coarse_right` when
+  `exchange_edge_count > 0`, keeps `mfem_tangent_demag_coarse_right` for
+  no-exchange bounded solve-error bundles, and rejects stale/inverted
+  provenance in both directions. Verification: full
+  `scripts/test_verify_fem_frequency_domain_runtime_artifacts.py` passed as
+  `136 passed`, `python3 -m py_compile` passed for the verifier files,
+  `git diff --check` passed, authoritative
+  `just verify-fem-frequency-domain-native-contract` rebuilt the managed FEM
+  runtime and completed with code `0`, and
+  `just verify-fem-frequency-domain-periodic-airbox-supercell-diagnostics-runtime`
+  completed with code `0`. Fresh bounded artifacts now report graph-aware
+  preconditioning for both bundles: unit `exchange_edge_count=3503`,
+  residual `0.9248314406633902`, history
+  `[1, 0.9622553708741248, 0.9463135689106296, 0.9343294857037113,
+  0.9327919227836555, 0.9318321923586852, 0.9290221370996725,
+  0.924877331746529, 0.9248272699173263, 0.9248314406633902]`; default 2x2
+  supercell `exchange_edge_count=11553`, residual `0.9202701080216813`,
+  history `[1, 0.9659398981251328, 0.9418329642598114, 0.9281972484028594,
+  0.9261095980180513, 0.9260315664682404, 0.9219502520782707,
+  0.9207239765509623, 0.9202637510214058, 0.9202701080216813]`. This is a
+  small runtime improvement and a stricter provenance contract, but it still
+  does not close P3 solver acceptance; the next step remains a stronger
+  Schur/low-rank/coupled-block preconditioner or real MFEM assembled
+  `[delta_m, delta_phi]` block.
+
+  Follow-up 2026-06-30: P3 residual diagnostics now split the recomputed
+  production residual by unknown family. Native diagnostics, manifest
+  diagnostics and the runtime verifier require
+  `coupled_residual_partition_status` plus `coupled_block_norms` with
+  `rhs_delta_m_l2_norm`, `rhs_delta_phi_l2_norm`,
+  `residual_delta_m_l2_norm`, `residual_delta_phi_l2_norm`,
+  `relative_residual_delta_m_l2_norm`,
+  `relative_residual_delta_phi_l2_norm`, `response_delta_m_l2_norm` and
+  `response_delta_phi_l2_norm`. The matrix-free coupled-block provider reports
+  `coupled_residual_partition_status="coupled_block"`. The current MFEM demag
+  tangent provider reports
+  `coupled_residual_partition_status="magnetic_only_demag_tangent_provider"`
+  and keeps the `delta_phi` split norms at zero, so the artifacts no longer
+  hide that this is still a magnetic-only demag tangent provider rather than a
+  solved assembled `[delta_m, delta_phi]` block. Verification: focused native
+  `fem_frequency_domain_contract` passed after RED on the missing partition
+  diagnostics; full
+  `scripts/test_verify_fem_frequency_domain_runtime_artifacts.py` passed as
+  `137 passed`; `python3 -m py_compile` passed for the verifier files;
+  `git diff --check` passed; authoritative
+  `just verify-fem-frequency-domain-native-contract` rebuilt the managed FEM
+  runtime and completed with code `0`; and
+  `just verify-fem-frequency-domain-periodic-airbox-supercell-diagnostics-runtime`
+  completed with code `0` under the stricter verifier. Fresh bounded artifacts
+  report unit `exchange_edge_count=3503`, residual `0.9239511290096685`,
+  history `[1, 0.9604398131294462, 0.947415662693977,
+  0.9305722614824463, 0.9298315975453703, 0.9292880458857756,
+  0.9250815151128083, 0.9239892385410934, 0.9239549066151899,
+  0.9239511290096685]`, `rhs_delta_m_l2_norm=26.551836094703507`,
+  `rhs_delta_phi_l2_norm=0`, `relative_residual_delta_m_l2_norm=0.9239511290096677`
+  and `relative_residual_delta_phi_l2_norm=0`; default 2x2 supercell
+  `exchange_edge_count=11381`, residual `0.9214445176764008`, history
+  `[1, 0.966832346906518, 0.9437792316666256, 0.9285355397710986,
+  0.9262738818856475, 0.9260945908861443, 0.9229206580841998,
+  0.921651921375344, 0.9214445617238696, 0.9214445176764009]`,
+  `rhs_delta_m_l2_norm=48.218253804964775`, `rhs_delta_phi_l2_norm=0`,
+  `relative_residual_delta_m_l2_norm=0.9214445176763977` and
+  `relative_residual_delta_phi_l2_norm=0`. This improves observability and
+  artifact honesty, but it still does not close P3 solver acceptance; the next
+  solver step should add real `delta_phi` participation through an assembled
+  coupled block or a stronger Schur/low-rank model rather than further tuning
+  the magnetic-only provider.
+
+  Follow-up 2026-06-30: the high-level Rust runner no longer hard-codes
+  `periodic_airbox_coupled_block_problem: None` at the native request site.
+  The request now flows through an explicit
+  `periodic_airbox_coupled_block_problem(&payload)` seam, and a source-contract
+  test prevents regressing back to an inline absent coupled block. The helper
+  intentionally returns `None` for the current provider-based path, so this does
+  not claim real `[delta_m, delta_phi]` participation and does not alter the
+  `magnetic_only_demag_tangent_provider` artifacts. RED/GREEN proof: focused
+  `fullmag-runner` test
+  `periodic_airbox_response_does_not_hardcode_absent_coupled_block_source_contract`
+  first failed on the hard-coded `None`, then passed after adding the seam.
+  Wider focused verification
+  `cargo test -p fullmag-runner periodic_airbox --features fem-gpu --no-default-features`
+  passed `7 passed`; `cargo fmt --package fullmag-runner` and
+  `git diff --check` for the touched runner files also passed. This prepares
+  the runner integration point for a future real coupled-block provider, but P3
+  solver acceptance remains blocked on producing a physically valid assembled
+  block or Schur/low-rank equivalent.
+  Follow-up guard 2026-06-30: the runner now precomputes the coupled-block
+  provider decision before allocating `NativeBackendDemagTangentProvider` and
+  attaches the magnetic-only demag tangent callback only when
+  `periodic_airbox_coupled_block_problem.is_none()`. A new source-contract test
+  first failed on the missing exclusion and then passed after the guard. Focused
+  verification `cargo test -p fullmag-runner periodic_airbox --features fem-gpu
+  --no-default-features` now reports `8 passed`, and `cargo fmt
+  --package fullmag-runner` plus `git diff --check` passed for the touched
+  files. A read-only coupled-block path inspection confirmed that wrapping the
+  existing `apply_demag_tangent(delta_m)` callback as a matrix-free coupled
+  provider would be misleading: it has no `delta_phi` input, no scalar-potential
+  residual rows, no phi gauge handling, and cannot produce a physical
+  `delta_phi_complex`. The next RED test for
+  `periodic_airbox_coupled_block_problem(&payload).is_some()` should therefore
+  be introduced together with a real assembled coupled-block provider or
+  documented Schur/low-rank equivalent, not satisfied by identity/zero phi
+  blocks.
+  Follow-up potential seam 2026-06-30: the Rust native FEM backend wrapper now
+  exposes `copy_demag_phi(...)` and `apply_demag_tangent_with_potential(...)`.
+  This uses the existing native `FULLMAG_FEM_OBSERVABLE_DEMAG_PHI` copy path
+  after the fresh `apply_demag_tangent(delta_m)` Poisson solve, because the MFEM
+  solve stores the lifted scalar potential in `ctx.poisson_demag.gf_potential`
+  for both periodic-reduced and non-periodic paths. The returned `delta_phi` is
+  a full-node scalar potential matching the current runner
+  `periodic_airbox_delta_phi_dof_count = plan.mesh.nodes.len()`, not the reduced
+  periodic class vector and not a gauge-fixed coupled-block unknown. RED/GREEN
+  proof: source-contract
+  `native_fem_backend_exposes_demag_tangent_potential_bridge` first failed on
+  the missing Rust wrapper, then passed after adding `copy_scalar_field`,
+  `copy_demag_phi`, and `apply_demag_tangent_with_potential`. A stale source
+  contract that still expected finite-difference
+  `H_demag(m + delta_m) - H_demag(m)` was corrected to the current direct
+  `H_demag(delta_m)` ABI contract. Focused verification
+  `cargo test -p fullmag-runner demag_tangent --features fem-gpu --no-default-features`
+  passed with `3 passed; 1 ignored`, and the runner `periodic_airbox` filter
+  still passed with `8 passed`; `cargo fmt --package fullmag-runner` and
+  scoped `git diff --check` passed. This is the first usable high-level access
+  to fresh `delta_phi` from the periodic-airbox demag provider, but it still
+  does not assemble or solve the full `[delta_m, delta_phi]` coupled block.
+  Follow-up provider phi artifact 2026-06-30: the native frequency-domain ABI
+  is now v9 and exposes an optional
+  `mfem_apply_demag_tangent_with_potential` callback through the separate
+  `fullmag_fem_frequency_domain_solve_driven_response_v9(...)` entrypoint.
+  The old `fullmag_fem_frequency_domain_driven_response_request` layout stays
+  unchanged, so ABI8-style callers cannot have `mfem_demag_tangent_user_data`
+  misread as a function pointer. The Rust runner wires the existing
+  native-backend demag tangent provider through
+  `apply_demag_tangent_with_potential(...)`, and the provider-based
+  periodic-airbox frequency-point artifact now records
+  `provider_delta_phi_full_node_complex` plus
+  `provider_delta_phi_layout="full_node_scalar_potential_after_demag_tangent_solve"`
+  and `provider_delta_phi_is_coupled_unknown=false`. The same artifact keeps
+  `delta_phi_complex=null`, `mfem_coupled_block_assembly=false`, and
+  `coupled_residual_partition_status="magnetic_only_demag_tangent_provider"`,
+  so it exposes the fresh Poisson scalar potential without promoting it to a
+  gauge-fixed coupled-block unknown. RED/GREEN proof: focused native
+  `fem_frequency_domain_contract` first failed on the missing provider phi
+  artifact field, then passed after adding the optional callback and artifact
+  writer path. Verification also included `just verify-fem-demag-poisson-contract`,
+  `cargo test -p fullmag-runner demag_tangent --features fem-gpu --no-default-features`,
+  `cargo test -p fullmag-runner periodic_airbox --features fem-gpu --no-default-features`,
+  fresh `just ensure-managed-fem-runtime`, and `cargo test -p fullmag-fem-sys`
+  after the managed runtime export. This improves P3 observability only; the
+  next solver-quality step remains real MFEM coupled assembly or a documented
+  Schur/low-rank equivalent.
+  Follow-up review fix 2026-06-30: the P3 provider path now treats
+  `apply_demag_tangent_with_potential` as a real demag tangent operator and
+  requires that callback before entering the solved periodic-airbox provider
+  path. This prevents an old `apply_demag_tangent`-only provider from writing a
+  solved P3 provider artifact without `provider_delta_phi_full_node_complex`.
+  Focused native `fem_frequency_domain_contract` passed after updating the
+  provider tests to exercise the with-potential-only operator path; focused
+  `fullmag-runner` `demag_tangent` and `periodic_airbox` filters also passed.
+  Follow-up progress artifact fix 2026-06-30: live native progress no longer
+  reports completed frequency points as written point artifacts while
+  `latest_artifact_manifest_path=null`. The runner now patches final native
+  progress telemetry with the native result's
+  `written_frequency_point_artifacts` and `artifact_manifest_path` after the
+  solve returns. Focused proof:
+  `cargo test -p fullmag-runner native_frequency_response_final_progress --features fem-gpu --no-default-features`
+  passed with `2 passed`.
+  Follow-up 2026-06-30: native `periodic_airbox_k0` production CPU dispatch now
+  routes an MFEM `apply_demag_tangent_with_potential` provider through a
+  matrix-free phi-consistency Schur coupled solve instead of the older
+  magnetic-only demag tangent response. The internal provider solves the
+  unknown layout `[delta_m, delta_phi]` with zero phi RHS and rows enforcing
+  `delta_phi - Phi_backend(delta_m)=0`; frequency-point artifacts now report
+  `delta_phi_complex`, `periodic_airbox_coupled_block_solver=true`,
+  `coupled_residual_partition_status="coupled_block"` and
+  `dynamic_demag_operator_source="matrix_free_mfem_demag_phi_consistency_schur_provider"`.
+  The coupled-block writer now emits complex arrays as `[real, imag]` pairs,
+  matching the runtime verifier's complex-pair contract. This is a documented
+  Schur/consistency approximation using the existing MFEM Poisson/PBC backend;
+  it still keeps `mfem_coupled_block_assembly=false` and does not implement
+  full assembled MFEM `[delta_m, delta_phi]`, nonzero-k demag, or GPU periodic
+  demag. Focused native RED/GREEN: `fem_frequency_domain_contract` first failed
+  on the missing coupled-block solve and then passed after the provider bridge,
+  artifact labels and point payload format were updated.
+  Follow-up 2026-06-30: bounded `solve_error` artifacts for the Schur
+  coupled-block path now carry the same physics/provenance contract expected by
+  the runtime verifier: `requested_execution`, `resolved_execution_lane`, LLG
+  `gamma0/alpha`, units/normalization, `periodic_or_floquet=true`,
+  `periodic_airbox_coupled_block_solver=true`,
+  `dynamic_demag_operator_source="matrix_free_mfem_demag_phi_consistency_schur_provider"`,
+  preconditioner provenance and coupled residual split norms. The verifier now
+  distinguishes the legacy magnetic-only demag-tangent provider from the
+  current Schur/coupled-block provider instead of forcing the old
+  `matrix_free_demag_tangent_provider` fields on both paths. Focused proof:
+  `docker compose --profile fem-gpu run --rm fem-gpu bash -lc 'cd /workspace &&
+  cmake --build native/build --target fem_frequency_domain_contract &&
+  LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-}
+  native/build/backends/fem/fem_frequency_domain_contract'` passed, and
+  `python3 -m pytest scripts/test_verify_fem_frequency_domain_runtime_artifacts.py
+  -q -k 'periodic_airbox_cpu_demag_solved or solve_error or preconditioner or
+  frozen_magnetic_submesh'` passed with `18 passed, 120 deselected`. Follow-up
+  managed proof after `just rebuild-fem-runtime`: the one-iteration strict
+  smoke intentionally returned `solve_error`, and the generated bundle passed
+  `scripts/verify_fem_frequency_domain_runtime_artifacts.py --allow-solve-error
+  --require-periodic-airbox-cpu-demag-solved --require-frozen-magnetic-submesh`.
+  This improves P3 observability and artifact honesty only; it is still a
+  driven-response diagnostic path, not an eigenmode/modal solver or full
+  assembled `[delta_m, delta_phi]` production operator.
 
 - [ ] Keep GPU unsupported until strict GPU Poisson/libCEED/hypre periodic operators are implemented and verified.
   Progress: native driven-response dispatch now rejects
@@ -2526,9 +3259,10 @@ unsupported_or_debug_downgrade = null
   `study.demag(realization="poisson_robin")`, and requests
   `include_demag=True`, `bc=PeriodicBC(["x_faces", "y_faces"])`,
   `magnetostatic_bc="periodic_airbox_k0"` in the frequency-response stage;
-- should be described as a CPU provider-based `periodic_airbox_k0` FMR smoke,
-  not as full MFEM coupled-block `[delta_m, delta_phi]` assembly and not as GPU
-  periodic demag evidence.
+- after the 2026-06-29 TetraX/Tetmag/Fullmag audit, this must be described as
+  a P3/gated CPU provider-based `periodic_airbox_k0` FMR smoke, not as P1
+  production readiness proof. It is not full MFEM coupled-block
+  `[delta_m, delta_phi]` assembly and not GPU periodic demag evidence.
 - current mesh contract is a shared-domain magnetic+airbox mesh with explicit
   x/y PBC metadata for both magnetic and magnetostatic constraint families. It
   uses the same thin-film/antidot sizing policy needed by the target example,
@@ -2544,6 +3278,8 @@ unsupported_or_debug_downgrade = null
 `examples/fem_frequency_response_static_periodic_smoke.py`:
 
 - is the clean smallest k=0 static-periodic frequency-response smoke;
+- has `include_demag=False` and is the correct P1 production-readiness smoke
+  for `k=0` periodic driven response before periodic-airbox demag is promoted;
 - should remain the fast runtime gate for P1.
 
 `examples/fem_fmr_periodic_k0_smoke.py`:
@@ -2576,7 +3312,11 @@ Top and bottom airbox boundaries approximate open space and require convergence 
 
 ## 10. Zakazy
 
-- Nie wlaczac `include_demag=True` w frequency-response PBC przykladzie, dopoki P3 nie istnieje.
+- Nie traktowac `include_demag=True` + `magnetostatic_bc="periodic_airbox_k0"`
+  w frequency-response PBC przykladzie jako P1 production proof. Taki run jest
+  P3/gated periodic-airbox demag evidence i musi pozostac opisany jako
+  ograniczony CPU provider path, dopoki pelny zwalidowany
+  `[delta_m, delta_phi]` / demag tangent operator nie istnieje.
 - Nie oznaczac `PeriodicBC(["x_faces", "y_faces"])` jako pelnego PBC, jezeli dotyczy tylko `delta_m`.
 - Nie traktowac lateralnych scian airboxa jako open/Robin/Dirichlet w modelu okresowym x/y.
 - Nie akceptowac mesh PBC bez translacji dla sciezek, ktore waliduja `r_dst - r_src`.
@@ -2589,9 +3329,17 @@ Top and bottom airbox boundaries approximate open space and require convergence 
 1. P0: zsynchronizowac dokumenty, komentarze ABI i mesh translations.
 2. P1: zamknac oraz zweryfikowac obecny k=0 magnetic-only frequency-response slice.
 3. P2: zakwalifikowac static/time-domain k=0 demag PBC z airboxem.
-4. P3: dodac k=0 dynamic/frequency-response demag z periodic airboxem.
-5. P4: dodac nonzero-k Floquet response bez demag.
-6. P5: dodac nonzero-k Floquet dynamic demag.
-7. P6: dopiero potem wybierac lepszy open-boundary model niz finite z-airbox.
+4. P3a: dodac i zaakceptowac k=0 dynamic/frequency-response demag z periodic
+   airboxem jako COMSOL-like `Frequency Domain` driven response.
+5. P3b/Pmodal: zbudowac prawdziwy k=0 `Eigenfrequency`/modal solver dla tego
+   samego linearized LLG, PBC i dynamic demag contract.
+6. P4: dodac nonzero-k Floquet response bez demag.
+7. P5: dodac nonzero-k Floquet dynamic demag.
+8. P6: dopiero potem wybierac lepszy open-boundary model niz finite z-airbox.
 
 Najblizszy poprawny krok nie jest "pelny Bloch airbox od razu". Najblizszy poprawny krok to P0 + P1, bo obecny kod ma juz waski dzialajacy slice i kilka dokumentow/metadata nie nadaza za implementacja.
+
+Po audycie TetraX/Tetmag/Fullmag z 2026-06-29 P1 oznacza konkretnie
+`k=0` periodic no-demag driven response plus artefakty/provenance/UI. Demagowy
+antidot `periodic_airbox_k0` pozostaje nastepnym etapem P3, a nie skrotem do
+produkcyjnej deklaracji magnonic-crystal FMR.

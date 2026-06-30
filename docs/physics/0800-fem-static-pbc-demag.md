@@ -176,16 +176,15 @@ non-PBC Robin/Dirichlet reference path remains zero-started in this slice.
 ## 9. Python API impact
 
 ```python
-study.pbc(
-    axes=["x", "y"],
-    mode="static_node_pairs",
-    demag="periodic_unit_cell_open_z",
-    require_airbox_pairs=True,
-)
+study.pbc(x=True, y=True)
+study.demag(realization="poisson_robin")
+study.build_domain_mesh()
 ```
 
 Validation on the Python side:
 ```python
+if backend == "fem" and pbc:
+    mesh_defaults.periodic_pair_ids = ["x_faces", "y_faces"]
 if backend == "fem" and demag and pbc and not mesh.has_periodic_boundary_pairs:
     raise ValueError(
         "FEM demag PBC requires periodic_boundary_pairs and shared-domain airbox mesh"
@@ -196,11 +195,21 @@ if backend == "fem" and demag and pbc and not mesh.has_periodic_boundary_pairs:
 
 ## 10. ProblemIR impact
 
+`ProblemIR.pbc` is the physical source of truth for static/time-domain FEM
+PBC. Mesh periodic-pair metadata is topology only: it tells the mesher/planner
+which boundaries can be identified, but it must not enable periodic physics by
+itself.
+
 `MeshIR` must carry:
 - `periodic_node_pairs: Vec<MeshPeriodicNodePairIR>`
 - `periodic_boundary_pairs: Vec<MeshPeriodicBoundaryPairIR>` (with marker annotations)
 
-The planner validates that both are present when `enable_demag && !periodic_node_pairs.is_empty()`.
+The planner validates that:
+
+- `ProblemIR.pbc.has_any_periodic()` is present before accepting static/time-domain
+  FEM meshes with `periodic_node_pairs`;
+- `periodic_node_pairs` are present when static/time-domain FEM PBC is requested;
+- `periodic_boundary_pairs` are present when `enable_demag && pbc`.
 
 ---
 
@@ -233,14 +242,40 @@ Every run with demag PBC records:
 ```json
 {
   "pbc": {
-    "kind": "static_node_pairs",
-    "node_pair_count": 512,
-    "effective_lane": "rust_reference",
-    "fallback": null,
-    "unsupported_terms": []
+    "axes": ["periodic", "periodic", "open"],
+    "demag": "open"
+  },
+  "mesh": {
+    "periodic_boundary_pair_count": 2,
+    "periodic_node_pair_count": 512
+  },
+  "execution_provenance": {
+    "execution_engine": "fem_cpu_native",
+    "resolved_fallback": null
   }
 }
 ```
+
+The top-level `pbc` block is copied from `ProblemIR.pbc` and proves the
+physical intent. Mesh pair counts prove that the resolved mesh can realize that
+intent; they are not a replacement for `ProblemIR.pbc`.
+
+For periodic-antidot relaxation gates, the accepted equilibrium artifact must
+also publish the same final physical observables on CPU and GPU relaxation
+qualification metadata:
+
+- final energy terms in joules, including non-negative `E_demag`,
+- final torque residual `final_torque_apm` and `final_torque_t`,
+- magnetic-body magnetization norm defect,
+- executed step count and stop reason,
+- demag runtime policy, residual, iteration count, and requested/resolved
+  device provenance.
+
+For GPU qualification, `fem_gpu_relaxation_qualification.device_policy` must
+prove that CUDA kernels and device Poisson demag were used:
+`uses_cuda_kernels=true`, `uses_gpu_poisson=true`, and
+`demag_operator_mode="device_hypre_poisson"`. A GPU PBC relaxation gate that
+lacks these fields is an incomplete runtime smoke, not an accepted equilibrium.
 
 ---
 

@@ -62,6 +62,31 @@ export type FormFieldProps =
   | SelectFieldProps
   | CheckboxFieldProps;
 
+const FORM_FIELD_WRAPPER_PROP_KEYS = [
+  "disabled",
+  "error",
+  "help",
+  "hint",
+  "inline",
+  "invalid",
+  "label",
+  "unit",
+] as const;
+
+function controlRestProps(
+  props: object,
+  extraKeys: readonly string[] = [],
+): object {
+  const rest = { ...(props as Record<string, unknown>) };
+  for (const key of FORM_FIELD_WRAPPER_PROP_KEYS) {
+    delete rest[key];
+  }
+  for (const key of extraKeys) {
+    delete rest[key];
+  }
+  return rest;
+}
+
 function FormFieldLabel({
   fieldId,
   help,
@@ -169,10 +194,16 @@ export function FormField(props: FormFieldProps) {
   }
 
   if (props.type === "select") {
-    const { children, onChange, value, ...rest } = props as SelectFieldProps & {
+    const { children, onChange, value } = props as SelectFieldProps & {
       onChange?: ComponentPropsWithoutRef<"select">["onChange"];
       value?: ComponentPropsWithoutRef<"select">["value"];
     };
+    const rest = controlRestProps(props, [
+      "children",
+      "onChange",
+      "type",
+      "value",
+    ]);
     return (
       <div className={wrapClass}>
         <FormFieldLabel fieldId={fieldId} help={help} label={label} />
@@ -196,12 +227,19 @@ export function FormField(props: FormFieldProps) {
   }
 
   if (props.type === "textarea") {
-    const { onChange, value, rows, readOnly, ...rest } = props as TextareaFieldProps & {
+    const { onChange, readOnly, rows, value } = props as TextareaFieldProps & {
       onChange?: ComponentPropsWithoutRef<"textarea">["onChange"];
       value?: ComponentPropsWithoutRef<"textarea">["value"];
       rows?: number;
       readOnly?: boolean;
     };
+    const rest = controlRestProps(props, [
+      "onChange",
+      "readOnly",
+      "rows",
+      "type",
+      "value",
+    ]);
     return (
       <div className="fm-inspector-form-field">
         <FormFieldLabel fieldId={fieldId} help={help} label={label} />
@@ -225,11 +263,18 @@ export function FormField(props: FormFieldProps) {
   }
 
   // text / number
-  const { type, mono, onChange, value, inputMode, ...rest } = props as TextFieldProps & {
+  const { inputMode, mono, onChange, type, value } = props as TextFieldProps & {
     onChange?: ComponentPropsWithoutRef<"input">["onChange"];
     value?: ComponentPropsWithoutRef<"input">["value"];
     inputMode?: ComponentPropsWithoutRef<"input">["inputMode"];
   };
+  const rest = controlRestProps(props, [
+    "inputMode",
+    "mono",
+    "onChange",
+    "type",
+    "value",
+  ]);
   const inputClass = [
     "fm-inspector-input",
     mono === false ? "fm-inspector-input--text" : "",

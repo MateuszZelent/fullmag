@@ -2475,6 +2475,18 @@ Niezamkniete braki produkcyjne:
   Manifest zawiera `ip_x` jako `computed_active_stage` oraz `oop` i
   `custom_theta45_phi30` jako `computed_variant_run`, kazdy z publicznym
   `/v2/sessions/current/analysis/hysteresis-family/stage-000/variants/<variant_id>/points`.
+  Aktualizacja 2026-06-30: publiczny target
+  `just run-hysteresis-waveguide-angular-family-smoke cpu` nie przechodzi juz
+  przez ogolny wrapper `just fullmag build=False ...`, tylko przez bezposredni
+  managed FEM runtime helper po `just ensure-managed-fem-runtime`. To usuwa
+  zaleznosc headless smoke od statycznego UI i od szerokiego wrappera
+  interaktywnego. Swiezy przebieg targetu wykryl nowszy
+  `crates/fullmag-runner/src/artifacts.rs`, przebudowal
+  `.fullmag/runtimes/fem-gpu-host`, zakonczyl sesje
+  `session-1782810209356-1791762` ze statusem `completed`, a
+  `just verify-hysteresis-angular-family-artifacts .fullmag/local-live/history/session-1782810209356-1791762/artifacts`
+  zwrocil
+  `validated hysteresis angular family: family_id=waveguide_ip_oop_family variants=3`.
   W tym srodowisku `just run-hysteresis-waveguide-gpu-smoke` dochodzi do
   planowania/runtime, ale nie jest walidacja GPU, bo lokalny sterownik CUDA jest
   starszy niz runtime CUDA (`cudaGetDeviceCount failed ... CUDA driver version
@@ -4576,7 +4588,7 @@ Status wykonania:
   `points_resource_ref`, odrzuca brak przejscia koercji i odrzuca przypadek,
   w ktorym `theta45` nie ma nizszego `H_c` od wariantu easy-axis. Weryfikacja:
   `python3 -m pytest scripts/test_verify_hysteresis_projection_benchmark.py scripts/test_verify_hysteresis_fdm_macrospin_sw_artifacts.py -q`
-  dala `9 passed`, a
+  dala `18 passed`, a
   `python3 -m py_compile scripts/verify_hysteresis_fdm_macrospin_sw_artifacts.py scripts/test_verify_hysteresis_fdm_macrospin_sw_artifacts.py`
   przeszlo bez bledow.
   Aktualizacja 2026-06-26: validator SW odrzuca teraz rowniez razaco
@@ -4585,7 +4597,29 @@ Status wykonania:
   sanity gate dla obecnego coarse fixture, nie pelna tolerancja analityczna
   publikacyjnego sweepu. Weryfikacja:
   `python3 -m pytest scripts/test_verify_hysteresis_fdm_macrospin_sw_artifacts.py -q`
-  zwrocilo `8 passed`.
+  zwrocilo `8 passed`. Aktualizacja 2026-06-30: ten sam validator ma teraz
+  jawny tryb publikacyjny
+  `--require-publication-astroid-ratio --astroid-ratio-abs-tolerance <ratio>`,
+  ktory porownuje `Hc(theta45)/Hc(theta30)` z analitycznym astroidem SW i
+  odrzuca obecny coarse smoke, jezeli operator probuje nazwac go gate'em
+  publikacyjnym. RED test najpierw pokazal brak flag, po implementacji
+  `python3 -m pytest scripts/test_verify_hysteresis_fdm_macrospin_sw_artifacts.py -q`
+  zwraca `10 passed`.
+  Aktualizacja 2026-06-30: po odblokowaniu kompilacji `fullmag-runner`
+  (`has_requested_dmi` musi byc dostepny takze poza `feature="fem-gpu"`)
+  swiezy headless smoke FDM macrospin przeszedl bezposrednio z release
+  binarium `.fullmag/target/release/fullmag` i wygenerowal
+  `session-1782806532311-2`. Validator
+  `python3 scripts/verify_hysteresis_fdm_macrospin_sw_artifacts.py .fullmag/local-live/history/session-1782806532311-2/artifacts`
+  zwrocil `validated FDM macrospin Stoner-Wohlfarth trend: Hc_easy=13.6318mT Hc_theta45=10.2317mT`.
+  Aktualizacja 2026-06-30: publiczny target
+  `just run-hysteresis-fdm-macrospin-sw-smoke` przechodzi po przeniesieniu
+  `/v2/platform/openapi.json` do zwyklej trasy `router_v2` i zbudowaniu
+  `fullmag-api` bez domyslnego feature'u `swagger-ui` w sciezce
+  `make install-cli`. Target wygenerowal `session-1782807610985-1420` ze
+  statusem `completed`, a validator
+  `python3 scripts/verify_hysteresis_fdm_macrospin_sw_artifacts.py .fullmag/local-live/history/session-1782807610985-1420/artifacts`
+  zwrocil `validated FDM macrospin Stoner-Wohlfarth trend: Hc_easy=13.6318mT Hc_theta45=10.2317mT`.
 - Zamkniety szybki fixture FDM CPU dla cienkiej warstwy OOP i paska in-plane:
   `examples/hysteresis_fdm_thinfilm_oop_ip_validation.py` uruchamia maly
   pasek `100 x 20 x 10 nm`, demag wlaczony, rodzine katowa `ip_near_x` oraz
@@ -4611,7 +4645,7 @@ Status wykonania:
   odrzuca fixture jako niewystarczajacy dla szybkiej bramki publikacyjnej.
   Weryfikacja:
   `python3 -m pytest scripts/test_verify_hysteresis_projection_benchmark.py scripts/test_verify_hysteresis_fdm_macrospin_sw_artifacts.py scripts/test_verify_hysteresis_fdm_thinfilm_oop_ip_artifacts.py -q`
-  zwraca obecnie `24 passed`, a
+  zwraca obecnie `26 passed`, a
   `python3 -m py_compile scripts/verify_hysteresis_fdm_macrospin_sw_artifacts.py scripts/test_verify_hysteresis_fdm_macrospin_sw_artifacts.py scripts/verify_hysteresis_fdm_thinfilm_oop_ip_artifacts.py scripts/test_verify_hysteresis_fdm_thinfilm_oop_ip_artifacts.py`
   przeszlo bez bledow.
 - Zamknieta manifestowa bramka publication suite dla trzech szybkich
@@ -4620,7 +4654,8 @@ Status wykonania:
   wymaga manifestu `hysteresis-publication-suite/v1`, sprawdza obecność
   wszystkich trzech przypadkow, wymaga metadanych reprodukowalnosci
   (`artifact_dir`, `run_command`, `validator`, `backend`, `device`,
-  `precision`, `roles`) i deleguje do istniejacych walidatorow:
+  `precision`, `roles`, opcjonalne `validator_args`) i deleguje do istniejacych
+  walidatorow:
   `verify_hysteresis_fdm_macrospin_sw_artifacts.py`,
   `verify_hysteresis_fdm_thinfilm_oop_ip_artifacts.py` oraz
   `verify_hysteresis_projection_benchmark.py`. Target
@@ -4643,10 +4678,25 @@ Status wykonania:
   ograniczenia cross-backend, ale nie udaje jeszcze policzonej parytetowej
   tolerancji FDM/FEM. Aktualna weryfikacja
   `python3 -m pytest scripts/test_verify_hysteresis_publication_suite.py -q`
-  zwraca `19 passed`; pelny szybki agregat publikacyjny bez osobnego
+  zwraca `23 passed`; pelny szybki agregat publikacyjny bez osobnego
   metrics-parity validatora
   `python3 -m pytest scripts/test_verify_hysteresis_projection_benchmark.py scripts/test_verify_hysteresis_fdm_macrospin_sw_artifacts.py scripts/test_verify_hysteresis_fdm_thinfilm_oop_ip_artifacts.py scripts/test_verify_hysteresis_publication_suite.py -q`
-  zwraca `43 passed`.
+  zwraca `49 passed`.
+  Aktualizacja 2026-06-30: `validator_args` sa teraz przekazywane do
+  validatora case'a przed `artifact_dir`, bez powloki. RED test pokazal, ze
+  manifest z `macrospin_sw.validator_args=[
+  "--require-publication-astroid-ratio", "--astroid-ratio-abs-tolerance",
+  "0.05"]` byl ignorowany; po poprawce suite odrzuca coarse SW fixture przez
+  blad `publication astroid ratio`, czyli manifest moze juz wymusic ostrzejszy
+  gate publikacyjny. Pozytywny test nadpisuje syntetyczny `theta45` loop
+  bliskim analitycznemu ratio i potwierdza, ze ten sam `validator_args`
+  przechodzi, gdy artefakt miesci sie w zadanej tolerancji. Dodatkowy test
+  manifestu odrzuca `validator_args` podane jako pojedynczy string zamiast
+  listy stringow. Aktualizacja 2026-06-30: `validator_args` sa allowlistowane
+  per case; obecnie tylko `macrospin_sw` moze wlaczyc
+  `--require-publication-astroid-ratio` i `--astroid-ratio-abs-tolerance`.
+  Test `--help` potwierdza, ze manifest nie moze ominac walidacji artefaktu
+  przez argument CLI zwracajacy sukces bez sprawdzenia danych.
   Bramka pozostaje szybkim suite gate dla obecnych FDM/projection fixtures; pelne
   publikacyjne tolerancje analityczne i validated cross-backend numerical parity
   pozostaja osobnym etapem.
@@ -4667,18 +4717,27 @@ Status wykonania:
   `parity_checks` jest obecne; dla
   `cross_backend_acceptance.status == "validated"` co najmniej jeden parity
   check jest wymagany, wszystkie wpisy `tolerances` musza miec
-  `status="validated"` zamiast `deferred`, a wszystkie lane'y w
+  `status="validated"` zamiast `deferred`, lista `tolerances` musi zawierac
+  osobny wpis dla kazdej wymaganej metryki `H_c_plus`, `H_c_minus`,
+  `M_r_plus` i `M_r_minus`, a wszystkie lane'y w
   `cross_backend_acceptance.lanes` musza miec status `validated` i byc
   pokryte przez `parity_checks`, w ktorych `pair.reference` jest deklarowanym
-  `reference_lane`, a `pair.candidate` jest sprawdzanym lane'em.
+  `reference_lane`, a `pair.candidate` jest sprawdzanym lane'em. Aktualizacja
+  2026-06-30: RED test
+  `test_publication_suite_rejects_validated_acceptance_without_required_metric_tolerances`
+  pokazal, ze manifest `validated` mogl przejsc z tolerancja tylko dla
+  `loop_area`; po poprawce walidator odrzuca brakujace tolerancje dla
+  wymaganego zestawu Hc/Mr.
   Weryfikacja:
-  `python3 -m pytest scripts/test_verify_hysteresis_metrics_parity.py scripts/test_verify_hysteresis_publication_suite.py -q`
-  zwraca obecnie `27 passed`. Ta bramka zamyka narzedzie porownawcze dla
+  `python3 -m pytest scripts/test_verify_hysteresis_publication_suite.py scripts/test_verify_hysteresis_metrics_parity.py -q`
+  zwraca `32 passed`; dodatkowo
+  `python3 -m py_compile scripts/verify_hysteresis_publication_suite.py scripts/test_verify_hysteresis_publication_suite.py scripts/verify_hysteresis_metrics_parity.py scripts/test_verify_hysteresis_metrics_parity.py`
+  przechodzi bez bledow. Ta bramka zamyka narzedzie porownawcze dla
   rzeczywistych paired metrics artifacts, ale nadal nie deklaruje, ze takie
   publikacyjne FDM/FEM artefakty runtime zostaly juz wygenerowane.
   Pelny szybki agregat razem z metrics parity
   `python3 -m pytest scripts/test_verify_hysteresis_metrics_parity.py scripts/test_verify_hysteresis_projection_benchmark.py scripts/test_verify_hysteresis_fdm_macrospin_sw_artifacts.py scripts/test_verify_hysteresis_fdm_thinfilm_oop_ip_artifacts.py scripts/test_verify_hysteresis_publication_suite.py -q`
-  zwraca `51 passed`.
+  zwraca `57 passed`.
 - Zamkniety fixture niewystarczajacego pola saturacji: target
   `just run-hysteresis-waveguide-saturation-limit-smoke cpu` uruchomil sesje
   `session-1781258014197-2056303`, a

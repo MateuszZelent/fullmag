@@ -391,6 +391,15 @@ typedef fullmag_fem_frequency_domain_status (*fullmag_fem_frequency_domain_apply
     char error_message[128]
 );
 
+typedef fullmag_fem_frequency_domain_status (*fullmag_fem_frequency_domain_apply_with_potential_callback)(
+    void *user_data,
+    const double *in,
+    double *out,
+    double *out_phi,
+    uint64_t out_phi_len,
+    char error_message[128]
+);
+
 typedef enum {
     FULLMAG_FEM_FREQUENCY_DOMAIN_STUDY_RESPONSE = 1,
     FULLMAG_FEM_FREQUENCY_DOMAIN_STUDY_EIGENMODES = 2,
@@ -590,7 +599,7 @@ typedef struct {
     char *artifact_manifest_path;
 } fullmag_fem_frequency_domain_solve_result;
 
-#define FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION 8u
+#define FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION 9u
 
 typedef enum {
     FULLMAG_FEM_FD_OK = 0,
@@ -849,6 +858,11 @@ int fullmag_fem_frequency_domain_solve_driven_response(
     const fullmag_fem_frequency_domain_driven_response_request *request,
     fullmag_fem_frequency_domain_solve_result *out_result
 );
+int fullmag_fem_frequency_domain_solve_driven_response_v9(
+    const fullmag_fem_frequency_domain_driven_response_request *request,
+    fullmag_fem_frequency_domain_apply_with_potential_callback mfem_apply_demag_tangent_with_potential,
+    fullmag_fem_frequency_domain_solve_result *out_result
+);
 void fullmag_fem_frequency_domain_solve_result_release(
     fullmag_fem_frequency_domain_solve_result *result
 );
@@ -975,15 +989,15 @@ int fullmag_fem_backend_upload_magnetization_f64(
 );
 
 /*
- * Apply the native demag tangent operator around the backend's current
- * magnetization state.
+ * Apply the native demag tangent operator to the supplied tangent
+ * magnetization field.
  *
- * The returned AoS field is:
- *   H_demag(m + delta_m) - H_demag(m)
+ * The returned AoS field is the direct fresh demag solve:
+ *   H_demag(delta_m)
  *
  * This entrypoint is intended for frequency-domain matrix-free providers. It
  * uses the backend's fresh demag solver path rather than frozen-field cache
- * reuse and restores the backend magnetization state before returning.
+ * reuse.
  */
 int fullmag_fem_backend_apply_demag_tangent_f64(
     fullmag_fem_backend *handle,

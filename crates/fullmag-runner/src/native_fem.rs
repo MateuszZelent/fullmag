@@ -31,6 +31,7 @@ pub(crate) use frequency_domain::{
     NativeDrivenFrequencyResponseDmiKind, NativeDrivenFrequencyResponseExchangeEdge,
     NativeDrivenFrequencyResponseFloquetPeriodicPair,
     NativeDrivenFrequencyResponseMfemOperatorProblem,
+    NativeDrivenFrequencyResponsePeriodicAirboxCoupledBlockProblem,
     NativeDrivenFrequencyResponsePeriodicNodePair, NativeDrivenFrequencyResponseRequest,
     NativeDrivenFrequencyResponseResult, NativeDrivenFrequencyResponseTinyValidationProblem,
     NativeDrivenResponseContractRequest, NativeFrequencyDomainCancelCallback,
@@ -1962,9 +1963,36 @@ impl NativeFemBackend {
         Ok(flat.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect())
     }
 
+    pub fn copy_scalar_field(
+        &self,
+        observable: ffi::fullmag_fem_observable,
+        node_count: usize,
+    ) -> Result<Vec<f64>, RunError> {
+        let mut values = vec![0.0f64; node_count];
+        let rc = unsafe {
+            ffi::fullmag_fem_backend_copy_field_f64(
+                self.handle,
+                observable,
+                values.as_mut_ptr(),
+                values.len() as u64,
+            )
+        };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM GPU copy scalar field failed"));
+        }
+        Ok(values)
+    }
+
     pub fn copy_m(&self, node_count: usize) -> Result<Vec<[f64; 3]>, RunError> {
         self.copy_field(
             ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_M,
+            node_count,
+        )
+    }
+
+    pub fn copy_demag_phi(&self, node_count: usize) -> Result<Vec<f64>, RunError> {
+        self.copy_scalar_field(
+            ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_DEMAG_PHI,
             node_count,
         )
     }
@@ -2010,6 +2038,16 @@ impl NativeFemBackend {
             .chunks_exact(3)
             .map(|chunk| [chunk[0], chunk[1], chunk[2]])
             .collect())
+    }
+
+    #[allow(dead_code)]
+    pub fn apply_demag_tangent_with_potential(
+        &mut self,
+        delta_m: &[[f64; 3]],
+    ) -> Result<(Vec<[f64; 3]>, Vec<f64>), RunError> {
+        let delta_h_demag = self.apply_demag_tangent(delta_m)?;
+        let delta_phi = self.copy_demag_phi(delta_m.len())?;
+        Ok((delta_h_demag, delta_phi))
     }
 
     pub fn snapshot_step_stats(&mut self, _node_count: usize) -> Result<StepStats, RunError> {
@@ -5843,18 +5881,50 @@ mod tests {
         assert!(
             api.contains("int fullmag_fem_backend_apply_demag_tangent_f64(")
                 && api.contains("compute_fresh_demag_field_for_magnetization(")
-                && api.contains("perturbed_demag[index] - baseline_demag[index]"),
-            "native FEM C ABI implementation must apply the fresh demag tangent operator"
+                && api.contains("delta_m,")
+                && !api.contains("perturbed_demag[index] - baseline_demag[index]"),
+            "native FEM C ABI implementation must apply direct H_demag(delta_m), not finite-difference demag tangent"
         );
         let backend_state_io = source_block(
             source,
-            "pub fn upload_magnetization(",
+            "pub fn copy_field(",
             "\n    pub fn snapshot_step_stats(",
         );
         assert!(
             backend_state_io.contains("pub fn apply_demag_tangent(")
                 && backend_state_io.contains("ffi::fullmag_fem_backend_apply_demag_tangent_f64("),
             "Rust native FEM backend wrapper must expose the demag tangent provider bridge"
+        );
+    }
+
+    #[test]
+    fn native_fem_backend_exposes_demag_tangent_potential_bridge() {
+        let source = include_str!("native_fem.rs");
+        let state_io = include_str!("../../../backends/fem/cpu/mfem/runtime/state_io.cpp");
+        let solve_source =
+            include_str!("../../../backends/fem/cpu/mfem/interactions/demag_poisson_solve.cpp");
+
+        assert!(
+            state_io.contains("copy_demag_phi_observable_f64")
+                && state_io.contains("FULLMAG_FEM_OBSERVABLE_DEMAG_PHI")
+                && state_io.contains("gf_potential"),
+            "native state I/O must expose the MFEM scalar demag potential observable"
+        );
+        assert!(
+            solve_source.contains("gf_potential_pbc->SetFromTrueDofs(*full_solution)")
+                && solve_source.contains("gf_potential->SetFromTrueDofs(*solved_solution)"),
+            "fresh Poisson demag solves must leave gf_potential containing the solved scalar potential"
+        );
+        assert!(
+            source.contains("pub fn copy_demag_phi(")
+                && source.contains("ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_DEMAG_PHI"),
+            "Rust native FEM backend wrapper must expose scalar demag potential copying"
+        );
+        assert!(
+            source.contains("pub fn apply_demag_tangent_with_potential(")
+                && source.contains("let delta_h_demag = self.apply_demag_tangent(delta_m)?")
+                && source.contains("let delta_phi = self.copy_demag_phi(delta_m.len())?"),
+            "Rust native FEM backend wrapper must return H_demag(delta_m) together with the fresh scalar potential"
         );
     }
 

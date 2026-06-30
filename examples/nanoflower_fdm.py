@@ -28,7 +28,7 @@ FLOWER_OFFSET_X = 0.5 * FLOWER_PITCH_X
 def add_nanoflower(name: str, offset_x: float, seed: int):
     flower = fm.geometry(
         fm.ImportedGeometry(
-            source="nanoflower.stl",
+            source="/home/kkingstoun/git/fullmag/fullmag/examples/bowl_3_cprt.stl",
             units="nm",
             name=name,
         ).translate((offset_x, 0.0, 0.0)),

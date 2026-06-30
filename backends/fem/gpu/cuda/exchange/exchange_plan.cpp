@@ -31,12 +31,6 @@ GpuExchangePlan gpu_exchange_plan_stage_exchange(const Context &ctx, std::string
             "legacy sparse exchange; consistent-mass projection is still host/MFEM";
         return plan;
     }
-    if (!ctx.mesh.periodic_reduced_node.empty()) {
-        reason =
-            "stage H_ex device-resident exchange does not support periodic "
-            "reduced-node exchange yet";
-        return plan;
-    }
     if (!ctx.gpu_state.legacy_exchange.legacy_sparse_metadata_ready) {
         reason = "stage H_ex device-resident exchange requires captured legacy sparse exchange metadata";
         return plan;

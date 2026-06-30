@@ -334,8 +334,10 @@ are included in the final metrics calculation.
   local minimization and needs an explicit perturbation/noise policy. The fast
   artifact validator also rejects gross violations of the analytical
   Stoner-Wohlfarth astroid coercivity ratio between the $\theta=30^\circ$ and
-  $\theta=45^\circ$ variants; tighter publication tolerances remain a separate
-  acceptance gate.
+  $\theta=45^\circ$ variants. The same validator exposes an explicit
+  publication astroid-ratio gate via `--require-publication-astroid-ratio`
+  and `--astroid-ratio-abs-tolerance`; this gate is separate from the default
+  coarse smoke contract and is intended for denser publication sweeps.
 - Thin-film demagnetizing contrast for OOP versus in-plane applied fields. The
   fast FDM CPU regression uses a tiny strip with demag enabled and verifies that
   the in-plane high-field projection remains much larger than the OOP
@@ -352,7 +354,11 @@ are included in the final metrics calculation.
 - The publication-suite manifest validator requires the fast FDM macrospin
   Stoner-Wohlfarth trend, the FDM thin-film OOP/IP demag contrast fixture, and
   the projection/custom-angle benchmark to be present, reproducibly described,
-  and individually valid before the suite is accepted.
+  and individually valid before the suite is accepted. Case-level
+  `validator_args` are part of that reproducibility contract: a suite manifest
+  can require stricter validator modes such as the macrospin
+  `--require-publication-astroid-ratio` gate instead of relying on the default
+  coarse smoke behavior.
 - Playback artifact validation must verify `m_avg` directly from stored `m`
   snapshots. For `uniform_sample_average`, the verifier uses the unweighted
   mean. For weighted FDM/FEM cases, the verifier uses the stored
@@ -420,7 +426,8 @@ are included in the final metrics calculation.
   publication-suite manifest may claim validated cross-backend acceptance.
   Metrics and parity manifests must resolve only within the manifest tree, and
   a `validated` cross-backend acceptance claim may not retain deferred
-  tolerance entries, non-validated lane statuses, or lane statuses not covered
-  by parity checks whose pair reference is the declared reference lane.
+  tolerance entries, omit any required Hc/Mr tolerance entry, retain
+  non-validated lane statuses, or declare lane statuses not covered by parity
+  checks whose pair reference is the declared reference lane.
 - [ ] Publication-grade scientific validation suite with analytical
   Stoner-Wohlfarth tolerances and validated cross-backend numerical parity

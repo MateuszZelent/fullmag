@@ -427,6 +427,17 @@ pub type fullmag_fem_frequency_domain_apply_callback = Option<
     ) -> fullmag_fem_frequency_domain_status,
 >;
 
+pub type fullmag_fem_frequency_domain_apply_with_potential_callback = Option<
+    unsafe extern "C" fn(
+        user_data: *mut c_void,
+        in_: *const f64,
+        out: *mut f64,
+        out_phi: *mut f64,
+        out_phi_len: u64,
+        error_message: *mut c_char,
+    ) -> fullmag_fem_frequency_domain_status,
+>;
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum fullmag_fem_frequency_domain_study_kind {
@@ -662,7 +673,7 @@ pub struct fullmag_fem_frequency_domain_solve_result {
     pub artifact_manifest_path: *mut c_char,
 }
 
-pub const FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION: u32 = 8;
+pub const FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION: u32 = 9;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -960,6 +971,12 @@ extern "C" {
     ) -> i32;
     pub fn fullmag_fem_frequency_domain_solve_driven_response(
         request: *const fullmag_fem_frequency_domain_driven_response_request,
+        out_result: *mut fullmag_fem_frequency_domain_solve_result,
+    ) -> i32;
+    pub fn fullmag_fem_frequency_domain_solve_driven_response_v9(
+        request: *const fullmag_fem_frequency_domain_driven_response_request,
+        mfem_apply_demag_tangent_with_potential:
+            fullmag_fem_frequency_domain_apply_with_potential_callback,
         out_result: *mut fullmag_fem_frequency_domain_solve_result,
     ) -> i32;
     pub fn fullmag_fem_frequency_domain_solve_result_release(
@@ -1704,6 +1721,11 @@ mod tests {
             Request,
             periodic_airbox_magnetostatic_periodic_node_pair_count
         );
+        let mfem_apply_demag_tangent = std::mem::offset_of!(Request, mfem_apply_demag_tangent);
+        let mfem_demag_tangent_user_data =
+            std::mem::offset_of!(Request, mfem_demag_tangent_user_data);
+        let mfem_demag_tangent_matrix =
+            std::mem::offset_of!(Request, mfem_demag_tangent_matrix_row_major);
 
         assert!(static_pair_ptr < static_pair_count);
         assert!(static_pair_count < has_floquet_k_vector);
@@ -1713,6 +1735,8 @@ mod tests {
         assert!(floquet_pair_ptr < floquet_pair_count);
         assert!(floquet_pair_count < airbox_phi_pair_ptr);
         assert!(airbox_phi_pair_ptr < airbox_phi_pair_count);
+        assert!(mfem_apply_demag_tangent < mfem_demag_tangent_user_data);
+        assert!(mfem_demag_tangent_user_data < mfem_demag_tangent_matrix);
         assert!(
             std::mem::size_of::<fullmag_fem_frequency_domain_floquet_periodic_pair>()
                 <= std::mem::size_of::<Request>()

@@ -197,7 +197,9 @@ is the implementation target for the first COMSOL-class modal milestone:
 
 ```text
 G q_dot = -K q
-K phi = omega G phi
+q(t) = phi exp(+i omega t)
+i omega G phi = -K phi
+K phi = -i omega G phi
 ```
 
 where:
@@ -215,13 +217,13 @@ choice must be recorded in diagnostics:
 
 ```text
 form = "gyrotropic_generalized"
-  K phi = omega G phi
+  K phi = sigma G phi, sigma = -i omega
 
 form = "first_order_complex"
   L q = lambda M q, lambda = i omega
 
 form = "real_hamiltonian_block"
-  H y = omega B y
+  q_dot = A q, A = -G^{-1} K, A phi = lambda phi, lambda = i omega
 ```
 
 The first production implementation must not silently mix these forms. It must
@@ -233,6 +235,7 @@ frequency_hz
 eigenvalue_real
 eigenvalue_imag
 algebraic_form
+eigenvalue_to_omega_rad_s
 positive_frequency_pair_index
 discarded_negative_frequency_partner
 ```
@@ -286,12 +289,19 @@ documented weighted inner product.
 Later non-Hermitian modal lane:
 
 ```text
-time dependence: exp(-i omega_complex t)
-omega_complex = omega_r - i Gamma
+time dependence: exp(+i omega_complex t)
+omega_complex = omega_r + i Gamma
+Gamma > 0 means decay because exp(i omega_complex t) =
+  exp(i omega_r t - Gamma t)
 frequency_hz = omega_r / (2*pi)
 linewidth_fwhm_hz = Gamma / pi
 Q = omega_r / (2*Gamma)
 ```
+
+No modal or response artifact may mix `exp(+i omega t)` and
+`exp(-i omega t)` semantics. If a later backend lane uses the opposite
+phasor convention internally, the native adapter must translate signs at the
+API boundary and write the translation into diagnostics.
 
 Driven response may include Gilbert damping earlier because the harmonic linear
 system naturally contains the `i omega alpha m0 x delta_m` term.
@@ -329,7 +339,7 @@ M_t             A m^2
 The gyrotropic bilinear form is:
 
 ```text
-G_t(p, q) = integral_Omega_m (Ms(r) / gamma0) *
+G_t(p, q) = integral_Omega_m (mu0 * Ms(r) / gamma0) *
             eta(r) dot (m0(r) x xi(r)) dV
 ```
 
@@ -337,8 +347,13 @@ Units:
 
 ```text
 gamma0          rad s^-1 (A/m)^-1
-G_t             A^2 s m / rad
+mu0 * Ms/gamma0 J s / m^3
+G_t             J s
 ```
+
+Equivalently, if an implementation uses `|gamma|` in rad s^-1 T^-1 rather than
+`gamma0 = mu0 * |gamma|`, the coefficient is `Ms / |gamma|`. The documented
+energy Hessian form and the gyrotropic form must not mix these two constants.
 
 The tangent energy Hessian is assembled from second variation terms:
 
@@ -412,7 +427,8 @@ model:
 
 ```text
 delta_H_demag[xi] = -grad(delta_phi)
-div(-grad(delta_phi)) = div(Ms * xi)   in magnetic domain
+laplace(delta_phi) = div(Ms * xi)      in magnetic domain
+div(-grad(delta_phi)) = -div(Ms * xi)  equivalent sign form
 ```
 
 The first production modal lane may support only `k = 0` and free/static
@@ -426,7 +442,9 @@ dynamic_demag_k = [0, 0, 0]
 
 For Poisson airbox demag:
 
-- source is `div(Ms * xi)` assembled from tangent trial functions;
+- source is `div(Ms * xi)` in the `laplace(delta_phi)` equation, or
+  `-div(Ms * xi)` if the assembled weak form is written as
+  `div(-grad(delta_phi))`;
 - boundary condition is inherited from the static demag configuration;
 - airbox mesh and magnetic mesh coupling are recorded in diagnostics;
 - Poisson residual tolerance must be stricter than the target modal residual by
@@ -441,6 +459,9 @@ For FEM/BEM demag:
   contract;
 - symmetry of the demag Hessian must be tested by `p^T K_demag q` versus
   `q^T K_demag p` for undamped k=0 cases.
+- sign consistency must be tested by `H_equals_minus_grad_phi_consistency`,
+  `demag_poisson_sign_sphere`, and `demag_energy_nonnegative` fixtures before
+  promotion beyond diagnostic status.
 
 Nonzero-k Floquet dynamic demag remains unsupported until a separate physics
 note and validation suite define the dynamic demag-k operator. The production
@@ -1574,15 +1595,20 @@ artifact wiring.
 The first production modal lane must implement one of these two explicit
 pencils and record the selected value in diagnostics:
 
-Option A, generalized gyrotropic pencil:
+Option A, canonical gyrotropic generalized pencil:
 
 ```text
-K phi = omega G phi
+K phi = sigma G phi
+sigma = -i omega
+omega_rad_s = Im(i * sigma)
+frequency_hz = abs(omega_rad_s) / (2*pi)
 ```
 
 where `K` is the tangent energy Hessian and `G` is the gyrotropic tangent
-operator. Because `G` is skew-symmetric, this path generally uses a
-nonsymmetric generalized solver and filters positive physical frequencies.
+operator. Because `G` is skew-symmetric and `sigma` is imaginary for the
+undamped conservative lane, this path generally uses a nonsymmetric generalized
+solver and filters positive physical frequencies through the explicit
+`sigma -> omega_rad_s` mapping.
 
 Option B, real Hamiltonian first-order operator:
 
@@ -1604,7 +1630,9 @@ Required diagnostics:
 {
   "algebraic_form": "gyrotropic_generalized",
   "slepc_problem_type": "gnhep",
+  "phasor_convention": "exp_plus_i_omega_t",
   "positive_frequency_filter": "omega_rad_s > 0",
+  "eigenvalue_to_omega_rad_s": "omega_rad_s = Im(i * sigma)",
   "eigenvalue_to_frequency": "frequency_hz = abs(omega_rad_s)/(2*pi)",
   "conjugate_pair_policy": "keep_positive_frequency_partner"
 }
@@ -1691,9 +1719,10 @@ relative_residual = ||r||_2 / (||A q||_2 + |lambda| * ||B q||_2)
 For the gyrotropic pencil:
 
 ```text
-r = K phi - omega G phi
+r = K phi - sigma G phi
+sigma = -i omega
 relative_residual =
-  ||r||_2 / (||K phi||_2 + |omega| * ||G phi||_2)
+  ||r||_2 / (||K phi||_2 + |sigma| * ||G phi||_2)
 ```
 
 For the first-order complex form:
@@ -2224,16 +2253,33 @@ Compute:
 ```text
 response_amplitude = abs(q)
 response_phase = atan2(Im(q), Re(q))
-susceptibility = projected_response / projected_drive
-absorbed_power_density = 0.5 * mu0 * omega * Im(conj(h_drive) dot delta_m)
+delta_m = T q
+delta_M = Ms * delta_m
+
+normalized_response = delta_m / h_drive
+# units: m/A
+
+chi_SI = delta_M / h_drive
+# dimensionless in SI
+
+p_abs(r) =
+  sgn * 0.5 * mu0 * Ms(r) * omega *
+  Im(conj(h_drive(r)) dot delta_m(r))
+# units: W/m^3
 ```
+
+`sgn` is fixed by the global `exp(+i omega t)` convention and must make
+absorbed power positive at resonance for positive Gilbert damping. The sign is
+not a plotting convention; it is part of the response-observable contract.
 
 All units must be stated:
 
 - `delta_m` dimensionless;
+- `delta_M` in A/m;
 - drive field in A/m;
 - power density in W/m^3;
-- susceptibility dimensionless where defined.
+- `normalized_response` in m/A;
+- `chi_SI` dimensionless where defined.
 
 Artifact field distinction:
 
@@ -2248,12 +2294,19 @@ response/drive/{frequency_index}:
   payload_units = "A/m"
 
 response/susceptibility:
-  observable_kind = "projected_susceptibility"
-  payload_units = "dimensionless" unless tensor component states otherwise
+  observable_kind = "projected_chi_SI"
+  payload_units = "dimensionless"
+  numerator = "projected_delta_M"
+  denominator = "projected_h_drive"
+
+response/normalized_response:
+  observable_kind = "projected_delta_m_per_h_drive"
+  payload_units = "m/A"
 
 response/absorbed_power_density:
   observable_kind = "absorbed_power_density"
   payload_units = "W/m^3"
+  formula = "sgn * 0.5 * mu0 * Ms * omega * Im(conj(h_drive) dot delta_m)"
 ```
 
 Do not reuse modal mode-field labels for driven response fields. A response
@@ -2684,6 +2737,9 @@ Modal solver diagnostics:
   "study_product": "modal_eigen",
   "solver_family": "slepc_krylovschur_shift_invert",
   "algebraic_form": "gyrotropic_generalized",
+  "phasor_convention": "exp_plus_i_omega_t",
+  "eigenvalue_to_omega_rad_s": "omega_rad_s = Im(i * sigma)",
+  "eigenvalue_to_frequency": "frequency_hz = abs(omega_rad_s)/(2*pi)",
   "frequency_window_hz": [100000000.0, 5000000000.0],
   "requested_mode_count": 20,
   "accepted_mode_count": 18,
@@ -2757,7 +2813,10 @@ Response diagnostics:
   "max_linear_residual_relative_l2": 1.0e-7,
   "drive_units": "A/m",
   "response_unknown_units": "dimensionless_delta_m",
+  "normalized_response_units": "m/A",
+  "chi_si_units": "dimensionless",
   "absorbed_power_density_units": "W/m^3",
+  "absorbed_power_formula": "sgn * 0.5 * mu0 * Ms * omega * Im(conj(h_drive) dot delta_m)",
   "stop_reason": "converged"
 }
 ```
@@ -3358,7 +3417,7 @@ Visible fields:
 | Field | Source | Contract |
 |---|---|---|
 | Product | constant `modal_eigen` | Must distinguish from driven response. |
-| Equation | physics contract | `K phi = omega G phi` or selected algebraic form. |
+| Equation | physics contract | `K phi = -i omega G phi`, `lambda = i omega`, or selected algebraically equivalent form with explicit eigenvalue mapping. |
 | Stage ID | `StudyIR` | Stable stage reference. |
 | Status | stage execution | Runtime state. |
 | Requested modes | `count` | Primary user intent. |

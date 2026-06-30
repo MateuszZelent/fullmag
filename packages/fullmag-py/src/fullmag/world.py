@@ -31,6 +31,7 @@ Multi-magnet example::
 
 from __future__ import annotations
 
+import copy
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1805,6 +1806,7 @@ class _WorldState:
     _domain_region_markers: list[dict[str, object]] | None = None
     _domain_object_region_markers: list[dict[str, object]] | None = None
     _frozen_magnetic_submesh_source: dict[str, object] | None = None
+    _extra_runtime_metadata: dict[str, object] = field(default_factory=dict)
     _exchange_enabled: bool = True
     _demag_enabled: bool = True
     _demag_realization: str | None = None
@@ -3568,6 +3570,18 @@ class StudyBuilder:
         boundary_correction(mode)
         return self
 
+    def pbc(
+        self,
+        x: bool = False,
+        y: bool = False,
+        z: bool = False,
+        *,
+        demag: Literal["open", "truncated_images"] = "open",
+        images: tuple[int, int, int] | None = None,
+    ) -> "StudyBuilder":
+        pbc(x=x, y=y, z=z, demag=demag, images=images)
+        return self
+
     def mesh(
         self,
         *args: object,
@@ -3642,6 +3656,10 @@ class StudyBuilder:
             chunk_until_seconds=chunk_until_seconds,
             steps_per_pass=steps_per_pass,
         )
+        return self
+
+    def runtime_metadata(self, key: str, value: object) -> "StudyBuilder":
+        runtime_metadata(key, value)
         return self
 
     def visualization(
@@ -4198,6 +4216,22 @@ def boundary_correction(mode: str) -> None:
     _state._boundary_correction = mode
 
 
+_PBC_AXIS_PAIR_IDS = ("x_faces", "y_faces", "z_faces")
+
+
+def _periodic_pair_ids_for_axes(axes: tuple[bool, bool, bool]) -> list[str]:
+    return [pair_id for pair_id, enabled in zip(_PBC_AXIS_PAIR_IDS, axes) if enabled]
+
+
+def _sync_default_mesh_periodic_pair_ids_from_pbc(axes: tuple[bool, bool, bool]) -> None:
+    pair_ids = _periodic_pair_ids_for_axes(axes)
+    current = _state._default_mesh_spec.periodic_pair_ids
+    if pair_ids:
+        _state._default_mesh_spec.periodic_pair_ids = pair_ids
+    elif current and all(pair_id in _PBC_AXIS_PAIR_IDS for pair_id in current):
+        _state._default_mesh_spec.periodic_pair_ids = []
+
+
 def pbc(
     x: bool = False,
     y: bool = False,
@@ -4206,7 +4240,11 @@ def pbc(
     demag: Literal["open", "truncated_images"] = "open",
     images: tuple[int, int, int] | None = None,
 ) -> None:
-    """Enable periodic boundary conditions for FDM along the given axes.
+    """Declare problem-level periodic boundary conditions along the given axes.
+
+    For FEM, this also requests the matching periodic mesh pairs in the default
+    mesh options. For FDM, ``demag="truncated_images"`` enables MuMax-style
+    periodic image summation on supported FDM paths.
 
     Parameters
     ----------
@@ -4225,6 +4263,7 @@ def pbc(
         _state._pbc = None
     else:
         _state._pbc = FdmPbc(axes=axes, demag=demag, image_counts=images)
+    _sync_default_mesh_periodic_pair_ids_from_pbc(axes)
 
 
 def _configure_object_mesh_defaults(
@@ -4631,6 +4670,12 @@ def adaptive_mesh(
         "chunk_until_seconds": chunk_until_seconds,
         "steps_per_pass": steps_per_pass,
     }
+
+
+def runtime_metadata(key: str, value: object) -> None:
+    """Attach script-owned runtime metadata to the exported problem."""
+    normalized_key = require_non_empty(str(key), "runtime_metadata key")
+    _state._extra_runtime_metadata[normalized_key] = copy.deepcopy(value)
 
 
 def visualization(
@@ -5994,6 +6039,7 @@ def _build_problem(
     mesh_workflow = _collect_mesh_workflow_metadata()
     if mesh_workflow is not None:
         runtime_metadata["mesh_workflow"] = mesh_workflow
+    runtime_metadata.update(copy.deepcopy(s._extra_runtime_metadata))
 
     # Partition outputs by study family.
     _EIGEN_OUTPUT_TYPES = (SaveSpectrum, SaveMode, SaveDispersion)

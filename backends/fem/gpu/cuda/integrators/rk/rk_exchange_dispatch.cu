@@ -60,39 +60,87 @@ bool gpu_rk_compute_legacy_sparse_exchange(
     }
 
     const int rows = static_cast<int>(gpu.lifecycle.node_count);
-    fullmag_cuda_legacy_sparse_exchange(
-        gpu.legacy_exchange.csr_row_offsets,
-        gpu.legacy_exchange.csr_col_indices,
-        gpu.legacy_exchange.csr_values,
-        m.x,
-        gpu.materials.ms,
-        gpu.mesh_metrics.inv_lumped_mass,
-        gpu.mesh_regions.magnetic_node_mask,
-        gpu.fields.h_ex.x,
-        rows,
-        stream);
-    fullmag_cuda_legacy_sparse_exchange(
-        gpu.legacy_exchange.csr_row_offsets,
-        gpu.legacy_exchange.csr_col_indices,
-        gpu.legacy_exchange.csr_values,
-        m.y,
-        gpu.materials.ms,
-        gpu.mesh_metrics.inv_lumped_mass,
-        gpu.mesh_regions.magnetic_node_mask,
-        gpu.fields.h_ex.y,
-        rows,
-        stream);
-    fullmag_cuda_legacy_sparse_exchange(
-        gpu.legacy_exchange.csr_row_offsets,
-        gpu.legacy_exchange.csr_col_indices,
-        gpu.legacy_exchange.csr_values,
-        m.z,
-        gpu.materials.ms,
-        gpu.mesh_metrics.inv_lumped_mass,
-        gpu.mesh_regions.magnetic_node_mask,
-        gpu.fields.h_ex.z,
-        rows,
-        stream);
+    if (gpu.mesh_regions.has_periodic_reduced_nodes) {
+        if (gpu.mesh_metrics.lumped_mass == nullptr ||
+            gpu.mesh_regions.periodic_reduced_node == nullptr ||
+            gpu.mesh_regions.periodic_representative_nodes == nullptr) {
+            reason = "GPU periodic sparse exchange requires lumped mass and periodic node maps";
+            return false;
+        }
+        fullmag_cuda_periodic_legacy_sparse_exchange(
+            gpu.legacy_exchange.csr_row_offsets,
+            gpu.legacy_exchange.csr_col_indices,
+            gpu.legacy_exchange.csr_values,
+            m.x,
+            gpu.materials.ms,
+            gpu.mesh_metrics.lumped_mass,
+            gpu.mesh_regions.periodic_reduced_node,
+            gpu.mesh_regions.periodic_representative_nodes,
+            gpu.mesh_regions.magnetic_node_mask,
+            gpu.fields.h_ex.x,
+            rows,
+            stream);
+        fullmag_cuda_periodic_legacy_sparse_exchange(
+            gpu.legacy_exchange.csr_row_offsets,
+            gpu.legacy_exchange.csr_col_indices,
+            gpu.legacy_exchange.csr_values,
+            m.y,
+            gpu.materials.ms,
+            gpu.mesh_metrics.lumped_mass,
+            gpu.mesh_regions.periodic_reduced_node,
+            gpu.mesh_regions.periodic_representative_nodes,
+            gpu.mesh_regions.magnetic_node_mask,
+            gpu.fields.h_ex.y,
+            rows,
+            stream);
+        fullmag_cuda_periodic_legacy_sparse_exchange(
+            gpu.legacy_exchange.csr_row_offsets,
+            gpu.legacy_exchange.csr_col_indices,
+            gpu.legacy_exchange.csr_values,
+            m.z,
+            gpu.materials.ms,
+            gpu.mesh_metrics.lumped_mass,
+            gpu.mesh_regions.periodic_reduced_node,
+            gpu.mesh_regions.periodic_representative_nodes,
+            gpu.mesh_regions.magnetic_node_mask,
+            gpu.fields.h_ex.z,
+            rows,
+            stream);
+    } else {
+        fullmag_cuda_legacy_sparse_exchange(
+            gpu.legacy_exchange.csr_row_offsets,
+            gpu.legacy_exchange.csr_col_indices,
+            gpu.legacy_exchange.csr_values,
+            m.x,
+            gpu.materials.ms,
+            gpu.mesh_metrics.inv_lumped_mass,
+            gpu.mesh_regions.magnetic_node_mask,
+            gpu.fields.h_ex.x,
+            rows,
+            stream);
+        fullmag_cuda_legacy_sparse_exchange(
+            gpu.legacy_exchange.csr_row_offsets,
+            gpu.legacy_exchange.csr_col_indices,
+            gpu.legacy_exchange.csr_values,
+            m.y,
+            gpu.materials.ms,
+            gpu.mesh_metrics.inv_lumped_mass,
+            gpu.mesh_regions.magnetic_node_mask,
+            gpu.fields.h_ex.y,
+            rows,
+            stream);
+        fullmag_cuda_legacy_sparse_exchange(
+            gpu.legacy_exchange.csr_row_offsets,
+            gpu.legacy_exchange.csr_col_indices,
+            gpu.legacy_exchange.csr_values,
+            m.z,
+            gpu.materials.ms,
+            gpu.mesh_metrics.inv_lumped_mass,
+            gpu.mesh_regions.magnetic_node_mask,
+            gpu.fields.h_ex.z,
+            rows,
+            stream);
+    }
     return cuda_launch_ok("launch GPU legacy sparse exchange", reason);
 }
 

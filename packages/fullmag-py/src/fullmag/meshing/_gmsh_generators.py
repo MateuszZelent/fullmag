@@ -27,6 +27,7 @@ from ._gmsh_types import (
     ALGO_2D_FRONTAL_DELAUNAY,
     ALGO_2D_FRONTAL_QUADS,
     ALGO_3D_DELAUNAY,
+    ALGO_3D_FRONTAL,
     ALGO_3D_HXT,
     AirboxOptions,
     ComponentDescriptor,
@@ -58,6 +59,42 @@ from ._gmsh_waveguides import add_arch_waveguide_to_occ
 from ._gmsh_occ import _configure_axis_periodic_surfaces, _scale_periodic_boundary_pairs
 
 _NO_OP_FIELD_SIZE = 1.0e22
+
+
+def _algorithm_3d_name(algorithm: int) -> str:
+    return {
+        ALGO_3D_DELAUNAY: "Delaunay",
+        ALGO_3D_FRONTAL: "Frontal",
+        ALGO_3D_HXT: "HXT",
+    }.get(int(algorithm), str(int(algorithm)))
+
+
+def _stl_boundary_recovery_retry_algorithm(
+    algorithm_3d: int,
+    attempted_algorithms: set[int],
+    exc: Exception,
+) -> int | None:
+    message = str(exc)
+    if (
+        "PLC Error" not in message
+        and "segment and a facet intersect" not in message
+        and "Recovering boundary" not in message
+    ):
+        return None
+
+    if int(algorithm_3d) == ALGO_3D_DELAUNAY:
+        candidates = (ALGO_3D_HXT, ALGO_3D_FRONTAL)
+    elif int(algorithm_3d) == ALGO_3D_HXT:
+        candidates = (ALGO_3D_FRONTAL,)
+    elif int(algorithm_3d) == ALGO_3D_FRONTAL:
+        candidates = (ALGO_3D_HXT,)
+    else:
+        candidates = (ALGO_3D_HXT, ALGO_3D_FRONTAL)
+
+    for candidate in candidates:
+        if candidate not in attempted_algorithms:
+            return candidate
+    return None
 
 
 def _airbox_volume_tags_for_components(
@@ -910,6 +947,44 @@ def _mesh_stl_surface(
 ) -> MeshData:
     opts = options or MeshOptions()
     stl_opts = _sanitize_volume_mesh_options(opts, context="STL mesh")
+    attempted_algorithms: set[int] = set()
+    while True:
+        attempted_algorithms.add(int(stl_opts.algorithm_3d))
+        try:
+            return _mesh_stl_surface_once(
+                path,
+                hmax,
+                order=order,
+                airbox=airbox,
+                scale_xyz=scale_xyz,
+                options=stl_opts,
+            )
+        except Exception as exc:
+            retry_algorithm = _stl_boundary_recovery_retry_algorithm(
+                int(stl_opts.algorithm_3d),
+                attempted_algorithms,
+                exc,
+            )
+            if retry_algorithm is None:
+                raise
+            emit_progress(
+                "Gmsh: STL boundary recovery failed "
+                f"({_algorithm_3d_name(int(stl_opts.algorithm_3d))}: {exc}); "
+                f"retrying with {_algorithm_3d_name(retry_algorithm)}"
+            )
+            stl_opts = _dc_replace(stl_opts, algorithm_3d=retry_algorithm)
+
+
+def _mesh_stl_surface_once(
+    path: Path,
+    hmax: float,
+    *,
+    order: int,
+    airbox: AirboxOptions | None,
+    scale_xyz: NDArray[np.float64],
+    options: MeshOptions,
+) -> MeshData:
+    stl_opts = options
     gmsh = _import_gmsh()
     gmsh.initialize()
     gmsh.option.setNumber("General.Terminal", 0)

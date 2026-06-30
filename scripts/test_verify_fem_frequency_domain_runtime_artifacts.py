@@ -62,12 +62,18 @@ def write_frequency_domain_fixture(
     progress_complete: bool = True,
     progress_state: str = "completed",
     omit_diagnostics_krylov_solver: bool = False,
+    omit_diagnostics_matrix_form: bool = False,
+    omit_diagnostics_phasor_convention: bool = False,
     diagnostics_status: str = "ready",
     diagnostics_complete: bool = True,
     diagnostics_matrix_free_solver: bool = True,
     diagnostics_completed_frequency_point_count: int = 2,
     include_static_periodic_diagnostics: bool = False,
     include_floquet_phase_projection: bool = False,
+    omit_floquet_basis_transport_policy: bool = False,
+    floquet_basis_transport_policy: str = "tangent_frame_identity",
+    floquet_tangent_frame_max_mismatch: float = 0.0,
+    floquet_tangent_transport_max_nonunitarity: float = 0.0,
     omit_floquet_pair_artifact: bool = False,
     omit_floquet_metadata: bool = False,
     omit_floquet_k_vector_metadata: bool = False,
@@ -179,6 +185,10 @@ def write_frequency_domain_fixture(
             "absorbed_power_density_provenance": {
                 "kind": "drive_projected_absorption_proxy",
                 "basis": "local_tangent_drive",
+                "physical_power_density": False,
+                "units": "proxy_not_W_per_m3",
+                "requires_mu0_ms_factor": True,
+                "ms_factor_applied": False,
                 "full_power_density": False,
             },
             "susceptibility_tensor": [[1.0, 0.0]],
@@ -187,6 +197,11 @@ def write_frequency_domain_fixture(
                 "basis": "local_tangent_drive",
                 "component_pair_count": 1,
                 "full_tensor": False,
+                "response_quantity": "delta_m_over_h_drive",
+                "response_units": "m/A",
+                "dimensionless_si_susceptibility": False,
+                "requires_ms_for_chi_si": True,
+                "ms_factor_applied": False,
             },
             "tangent_leakage": {
                 "status": "evaluated",
@@ -324,6 +339,10 @@ def write_frequency_domain_fixture(
                 "absorbed_power_density_provenance": {
                     "kind": "drive_projected_absorption_proxy",
                     "basis": "local_tangent_drive",
+                    "physical_power_density": False,
+                    "units": "proxy_not_W_per_m3",
+                    "requires_mu0_ms_factor": True,
+                    "ms_factor_applied": False,
                     "full_power_density": False,
                 },
                 "susceptibility_tensor": [[1.0, 0.0]],
@@ -332,6 +351,11 @@ def write_frequency_domain_fixture(
                     "basis": "local_tangent_drive",
                     "component_pair_count": 1,
                     "full_tensor": False,
+                    "response_quantity": "delta_m_over_h_drive",
+                    "response_units": "m/A",
+                    "dimensionless_si_susceptibility": False,
+                    "requires_ms_for_chi_si": True,
+                    "ms_factor_applied": False,
                 },
                 "tangent_leakage": {
                     "status": "evaluated",
@@ -448,6 +472,8 @@ def write_frequency_domain_fixture(
         "schema_version": "frequency_domain_response_diagnostics.v1",
         "status": diagnostics_status,
         "complete": diagnostics_complete,
+        "matrix_form": "iomega_B_minus_L",
+        "phasor_convention": manifest_phase_convention,
         "requested_execution_lane": execution_lane,
         "resolved_execution_lane": execution_lane,
         "validation_fallback_used": False,
@@ -462,6 +488,10 @@ def write_frequency_domain_fixture(
     }
     if omit_diagnostics_krylov_solver:
         del diagnostics["krylov_solver"]
+    if omit_diagnostics_matrix_form:
+        del diagnostics["matrix_form"]
+    if omit_diagnostics_phasor_convention:
+        del diagnostics["phasor_convention"]
     if include_static_periodic_diagnostics:
         diagnostics["static_periodic_projection"] = static_periodic_projection
         if static_periodic_node_pair_count is not None:
@@ -481,6 +511,14 @@ def write_frequency_domain_fixture(
         )
         diagnostics["floquet_phase_projection"] = True
         diagnostics["floquet_real_imag_mixing"] = True
+        if not omit_floquet_basis_transport_policy:
+            diagnostics["basis_transport_policy"] = floquet_basis_transport_policy
+        diagnostics["floquet_tangent_frame_max_mismatch"] = (
+            floquet_tangent_frame_max_mismatch
+        )
+        diagnostics["floquet_tangent_transport_max_nonunitarity"] = (
+            floquet_tangent_transport_max_nonunitarity
+        )
         diagnostics["operator_terms_included"] = ["exchange", "zeeman"]
         diagnostics["exchange_edge_count"] = 1
         if not omit_floquet_metadata:
@@ -550,7 +588,14 @@ def write_frequency_domain_fixture(
                     "residual_diagnostics": {
                         "max_translation_residual_m": 0.0,
                         "floquet_phase_loop_max_residual": 0.0,
+                        "floquet_tangent_frame_max_mismatch": (
+                            floquet_tangent_frame_max_mismatch
+                        ),
+                        "floquet_tangent_transport_max_nonunitarity": (
+                            floquet_tangent_transport_max_nonunitarity
+                        ),
                     },
+                    "basis_transport_policy": floquet_basis_transport_policy,
                     "pairs": [
                         {
                             "pair_id": "x_faces",
@@ -565,6 +610,7 @@ def write_frequency_domain_fixture(
                             "unpaired_destination_count": 0,
                             "translation_residual_m": 0.0,
                             "phase_rad": floquet_pair_phase,
+                            "basis_transport_policy": floquet_basis_transport_policy,
                             "validation_status": "ok",
                         }
                     ],
@@ -723,6 +769,16 @@ def write_frequency_domain_fixture(
         assert isinstance(manifest_diagnostics, dict)
         manifest_diagnostics["floquet_phase_projection"] = True
         manifest_diagnostics["floquet_real_imag_mixing"] = True
+        if not omit_floquet_basis_transport_policy:
+            manifest_diagnostics["basis_transport_policy"] = (
+                floquet_basis_transport_policy
+            )
+        manifest_diagnostics["floquet_tangent_frame_max_mismatch"] = (
+            floquet_tangent_frame_max_mismatch
+        )
+        manifest_diagnostics["floquet_tangent_transport_max_nonunitarity"] = (
+            floquet_tangent_transport_max_nonunitarity
+        )
         manifest_diagnostics["exchange_edge_count"] = 1
         if not omit_floquet_metadata:
             manifest_diagnostics["floquet_periodic_pair_count"] = 1
@@ -752,6 +808,7 @@ def run_validator(
     require_derived_peak_mode: bool = False,
     allow_interrupted: bool = False,
     allow_unavailable: bool = False,
+    allow_solve_error: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     command = [sys.executable, str(VALIDATOR)]
     if require_static_periodic:
@@ -788,6 +845,8 @@ def run_validator(
         command.append("--allow-interrupted")
     if allow_unavailable:
         command.append("--allow-unavailable")
+    if allow_solve_error:
+        command.append("--allow-solve-error")
     command.append(str(root))
     return subprocess.run(
         command,
@@ -1160,6 +1219,7 @@ def write_periodic_airbox_cpu_demag_solved_fixture(
     root: Path,
     *,
     frequency_point_count: int = 1,
+    exchange_edge_count: int = 4,
 ) -> None:
     write_frequency_domain_fixture(
         root,
@@ -1174,6 +1234,21 @@ def write_periodic_airbox_cpu_demag_solved_fixture(
     )
     diagnostics_path = root / "response" / "diagnostics" / "solver.v1.json"
     diagnostics = json.loads(diagnostics_path.read_text())
+    preconditioner_kind = (
+        "mfem_tangent_graph_demag_coarse_right"
+        if exchange_edge_count > 0
+        else "mfem_tangent_demag_coarse_right"
+    )
+    coupled_block_norms = {
+        "rhs_delta_m_l2_norm": 1.0,
+        "rhs_delta_phi_l2_norm": 0.0,
+        "residual_delta_m_l2_norm": 0.5,
+        "residual_delta_phi_l2_norm": 0.0,
+        "relative_residual_delta_m_l2_norm": 0.5,
+        "relative_residual_delta_phi_l2_norm": 0.0,
+        "response_delta_m_l2_norm": 1.0,
+        "response_delta_phi_l2_norm": 0.0,
+    }
     diagnostics.update(
         {
             "requested_execution_lane": "production_cpu",
@@ -1182,6 +1257,25 @@ def write_periodic_airbox_cpu_demag_solved_fixture(
             "periodic_airbox_coupled_block_solver": False,
             "mfem_coupled_block_assembly": False,
             "demag_tangent_operator_source": "matrix_free_demag_tangent_provider",
+            "demag_tangent_linearity_check": True,
+            "demag_tangent_additivity_max_abs_error": 0.0,
+            "demag_tangent_homogeneity_max_abs_error": 0.0,
+            "demag_tangent_additivity_relative_error": 0.0,
+            "demag_tangent_homogeneity_relative_error": 0.0,
+            "krylov_preconditioner_kind": preconditioner_kind,
+            "krylov_preconditioner_applied": True,
+            "krylov_preconditioner_setup_status": "ok",
+            "gmres_relative_residual_history": [1.0, 0.5],
+            "block_norms": {
+                "rhs_real_l2_norm": 1.0,
+                "rhs_imag_l2_norm": 0.0,
+                "residual_real_l2_norm": 0.5,
+                "residual_imag_l2_norm": 0.0,
+                "response_real_l2_norm": 1.0,
+                "response_imag_l2_norm": 0.0,
+            },
+            "coupled_residual_partition_status": "magnetic_only_demag_tangent_provider",
+            "coupled_block_norms": coupled_block_norms,
             "requested_magnetostatic_bc": "periodic_airbox_k0",
             "resolved_magnetostatic_bc": "periodic_airbox_k0",
             "magnetic_periodic_constraint_set_count": 1,
@@ -1189,7 +1283,7 @@ def write_periodic_airbox_cpu_demag_solved_fixture(
             "delta_m_tangent_dof_count": 2,
             "delta_phi_dof_count": 1,
             "magnetostatic_periodic_node_pair_count": 1,
-            "exchange_edge_count": 4,
+            "exchange_edge_count": exchange_edge_count,
         }
     )
     diagnostics_path.write_text(json.dumps(diagnostics))
@@ -1218,6 +1312,25 @@ def write_periodic_airbox_cpu_demag_solved_fixture(
             "periodic_airbox_coupled_block_solver": False,
             "mfem_coupled_block_assembly": False,
             "demag_tangent_operator_source": "matrix_free_demag_tangent_provider",
+            "demag_tangent_linearity_check": True,
+            "demag_tangent_additivity_max_abs_error": 0.0,
+            "demag_tangent_homogeneity_max_abs_error": 0.0,
+            "demag_tangent_additivity_relative_error": 0.0,
+            "demag_tangent_homogeneity_relative_error": 0.0,
+            "krylov_preconditioner_kind": preconditioner_kind,
+            "krylov_preconditioner_applied": True,
+            "krylov_preconditioner_setup_status": "ok",
+            "gmres_relative_residual_history": [1.0, 0.5],
+            "block_norms": {
+                "rhs_real_l2_norm": 1.0,
+                "rhs_imag_l2_norm": 0.0,
+                "residual_real_l2_norm": 0.5,
+                "residual_imag_l2_norm": 0.0,
+                "response_real_l2_norm": 1.0,
+                "response_imag_l2_norm": 0.0,
+            },
+            "coupled_residual_partition_status": "magnetic_only_demag_tangent_provider",
+            "coupled_block_norms": coupled_block_norms,
             "requested_magnetostatic_bc": "periodic_airbox_k0",
             "resolved_magnetostatic_bc": "periodic_airbox_k0",
             "magnetic_periodic_constraint_set_count": 1,
@@ -1225,7 +1338,7 @@ def write_periodic_airbox_cpu_demag_solved_fixture(
             "delta_m_tangent_dof_count": 2,
             "delta_phi_dof_count": 1,
             "magnetostatic_periodic_node_pair_count": 1,
-            "exchange_edge_count": 4,
+            "exchange_edge_count": exchange_edge_count,
         }
     )
     manifest_path.write_text(json.dumps(manifest))
@@ -1249,6 +1362,177 @@ def write_periodic_airbox_cpu_demag_solved_fixture(
             }
         )
         point_path.write_text(json.dumps(point))
+
+
+def write_periodic_airbox_cpu_demag_solve_error_fixture(root: Path) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(
+        root,
+        frequency_point_count=0,
+        exchange_edge_count=0,
+    )
+    (root / "mesh").mkdir(parents=True, exist_ok=True)
+    (root / "mesh" / "periodic_pairs.v1.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "periodic_pairs.v1",
+                "pair_count": 1,
+                "unpaired_source_count": 0,
+                "unpaired_destination_count": 0,
+                "max_translation_residual_m": 0.0,
+                "residual_diagnostics": {
+                    "max_translation_residual_m": 0.0,
+                    "floquet_phase_loop_max_residual": 0.0,
+                },
+                "pairs": [
+                    {
+                        "pair_id": "x0",
+                        "validation_status": "ok",
+                        "node_a": 0,
+                        "node_b": 1,
+                        "translation_m": [2.0e-7, 0.0, 0.0],
+                        "expected_translation_m": [2.0e-7, 0.0, 0.0],
+                        "translation_residual_m": 0.0,
+                        "phase_rad": 0.0,
+                    }
+                ],
+            }
+        )
+    )
+    progress_path = root / "response" / "progress.v1.json"
+    progress = json.loads(progress_path.read_text())
+    progress.update(
+        {
+            "status": "solve_error",
+            "complete": False,
+            "state": "solve_error",
+            "total_frequency_points": 1,
+            "completed_frequency_points": 0,
+            "written_frequency_point_artifacts": 0,
+            "partial_artifacts_available": True,
+            "latest_artifact_manifest_path": "frequency_domain/manifest.v1.json",
+            "current_frequency_hz": 2.75e9,
+            "native_frequency_index": 0,
+            "native_iteration_count": 8,
+            "native_residual_l2_norm": 25.0,
+            "native_relative_residual_l2_norm": 0.95,
+            "native_converged": False,
+            "progress_json": json.dumps(
+                {
+                    "schema_version": "frequency_domain_sweep_progress.v1",
+                    "state": "solve_error",
+                    "total_frequency_points": 1,
+                    "completed_frequency_points": 0,
+                    "written_frequency_point_artifacts": 0,
+                    "partial_artifacts_available": True,
+                    "latest_artifact_manifest_path": "frequency_domain/manifest.v1.json",
+                    "current_frequency_hz": 2.75e9,
+                    "native_frequency_index": 0,
+                    "native_iteration_count": 8,
+                    "native_residual_l2_norm": 25.0,
+                    "native_relative_residual_l2_norm": 0.95,
+                    "native_converged": False,
+                }
+            ),
+        }
+    )
+    progress_path.write_text(json.dumps(progress))
+
+    diagnostics_path = root / "response" / "diagnostics" / "solver.v1.json"
+    diagnostics = json.loads(diagnostics_path.read_text())
+    diagnostics.update(
+        {
+            "status": "solve_error",
+            "complete": False,
+            "completed_frequency_point_count": 0,
+            "written_frequency_point_artifacts": 0,
+            "total_iteration_count": 8,
+            "max_iterations_for_frequency": 8,
+            "restart_iterations_for_frequency": 8,
+            "progress_interval_iterations": 8,
+            "solver_relative_tolerance": 1.0e-3,
+            "rhs_l2_norm": 1.0,
+            "initial_relative_residual_l2_norm": 1.0,
+            "relative_residual_l2_norm": 0.95,
+            "last_recomputed_relative_residual_l2_norm": 0.95,
+        }
+    )
+    diagnostics_path.write_text(json.dumps(diagnostics))
+    (root / "response" / "diagnostics.v1.json").write_text(json.dumps(diagnostics))
+
+    manifest_path = root / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest.update({"status": "solve_error", "complete": False})
+    manifest["requested_execution"]["frequency_count"] = 1
+    manifest["artifacts"]["frequency_point_paths"] = []
+    manifest["resources"]["response_field_resources"] = []
+    manifest["diagnostics"].update(diagnostics)
+    for section in (manifest, manifest["diagnostics"], manifest["physics"]):
+        section["domain_mesh_mode"] = "generated_frozen_magnetic_submesh"
+    manifest_path.write_text(json.dumps(manifest))
+
+
+def convert_periodic_airbox_fixture_to_schur_coupled_block(root: Path) -> None:
+    diagnostics_path = root / "response" / "diagnostics" / "solver.v1.json"
+    diagnostics = json.loads(diagnostics_path.read_text())
+    for key in [
+        "demag_tangent_operator_source",
+        "demag_tangent_linearity_check",
+        "demag_tangent_additivity_max_abs_error",
+        "demag_tangent_homogeneity_max_abs_error",
+        "demag_tangent_additivity_relative_error",
+        "demag_tangent_homogeneity_relative_error",
+        "block_norms",
+        "exchange_edge_count",
+    ]:
+        diagnostics.pop(key, None)
+    diagnostics.update(
+        {
+            "periodic_airbox_coupled_block_solver": True,
+            "dynamic_demag_operator_source": "matrix_free_mfem_demag_phi_consistency_schur_provider",
+            "coupled_residual_partition_status": "coupled_block",
+            "krylov_preconditioner_kind": "mfem_tangent_graph_demag_coarse_right",
+        }
+    )
+    diagnostics_path.write_text(json.dumps(diagnostics))
+    (root / "response" / "diagnostics.v1.json").write_text(json.dumps(diagnostics))
+
+    manifest_path = root / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["resolved_execution"].update(
+        {
+            "solver_model": "periodic_airbox_mfem_phi_consistency_schur",
+            "periodic_airbox_coupled_block_solver": True,
+            "mfem_coupled_block_assembly": False,
+            "dynamic_demag_operator_source": "matrix_free_mfem_demag_phi_consistency_schur_provider",
+        }
+    )
+    manifest["capabilities"].update(
+        {
+            "periodic_airbox_coupled_block_solver": True,
+            "mfem_coupled_block_assembly": False,
+            "dynamic_demag_operator_source": "matrix_free_mfem_demag_phi_consistency_schur_provider",
+        }
+    )
+    for key in [
+        "demag_tangent_operator_source",
+        "demag_tangent_linearity_check",
+        "demag_tangent_additivity_max_abs_error",
+        "demag_tangent_homogeneity_max_abs_error",
+        "demag_tangent_additivity_relative_error",
+        "demag_tangent_homogeneity_relative_error",
+        "block_norms",
+        "exchange_edge_count",
+    ]:
+        manifest["diagnostics"].pop(key, None)
+    manifest["diagnostics"].update(
+        {
+            "periodic_airbox_coupled_block_solver": True,
+            "dynamic_demag_operator_source": "matrix_free_mfem_demag_phi_consistency_schur_provider",
+            "coupled_residual_partition_status": "coupled_block",
+            "krylov_preconditioner_kind": "mfem_tangent_graph_demag_coarse_right",
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest))
 
 
 def set_frequency_point_response(
@@ -1357,6 +1641,19 @@ def set_exchange_edge_count(root: Path, *, count: int) -> None:
     manifest_path = root / "frequency_domain" / "manifest.v1.json"
     manifest = json.loads(manifest_path.read_text())
     manifest["diagnostics"]["exchange_edge_count"] = count
+    manifest_path.write_text(json.dumps(manifest))
+
+
+def set_krylov_preconditioner_kind(root: Path, *, kind: str) -> None:
+    diagnostics_path = root / "response" / "diagnostics" / "solver.v1.json"
+    diagnostics = json.loads(diagnostics_path.read_text())
+    diagnostics["krylov_preconditioner_kind"] = kind
+    diagnostics_path.write_text(json.dumps(diagnostics))
+    (root / "response" / "diagnostics.v1.json").write_text(json.dumps(diagnostics))
+
+    manifest_path = root / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["diagnostics"]["krylov_preconditioner_kind"] = kind
     manifest_path.write_text(json.dumps(manifest))
 
 
@@ -1804,6 +2101,252 @@ def test_validator_rejects_unavailable_bundle_without_explicit_flag(tmp_path: Pa
     assert "--allow-unavailable" in (result.stderr + result.stdout)
 
 
+def test_validator_accepts_bounded_periodic_airbox_solve_error_bundle(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solve_error_fixture(tmp_path)
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+        require_frozen_magnetic_submesh=True,
+        allow_solve_error=True,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_accepts_bounded_periodic_airbox_schur_solve_error_bundle(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solve_error_fixture(tmp_path)
+    convert_periodic_airbox_fixture_to_schur_coupled_block(tmp_path)
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+        require_frozen_magnetic_submesh=True,
+        allow_solve_error=True,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_rejects_solve_error_bundle_without_demag_tangent_relative_linearity(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solve_error_fixture(tmp_path)
+    diagnostics_path = tmp_path / "response" / "diagnostics" / "solver.v1.json"
+    diagnostics = json.loads(diagnostics_path.read_text())
+    del diagnostics["demag_tangent_additivity_relative_error"]
+    diagnostics_path.write_text(json.dumps(diagnostics))
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    del manifest["diagnostics"]["demag_tangent_additivity_relative_error"]
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+        require_frozen_magnetic_submesh=True,
+        allow_solve_error=True,
+    )
+
+    assert result.returncode != 0
+    assert "demag_tangent_additivity_relative_error" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_solve_error_bundle_without_krylov_preconditioner_kind(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solve_error_fixture(tmp_path)
+    diagnostics_path = tmp_path / "response" / "diagnostics" / "solver.v1.json"
+    diagnostics = json.loads(diagnostics_path.read_text())
+    del diagnostics["krylov_preconditioner_kind"]
+    diagnostics_path.write_text(json.dumps(diagnostics))
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    del manifest["diagnostics"]["krylov_preconditioner_kind"]
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+        require_frozen_magnetic_submesh=True,
+        allow_solve_error=True,
+    )
+
+    assert result.returncode != 0
+    assert "krylov_preconditioner_kind" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_exchange_graph_bundle_with_demag_coarse_preconditioner_kind(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path)
+    set_krylov_preconditioner_kind(
+        tmp_path,
+        kind="mfem_tangent_demag_coarse_right",
+    )
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+    )
+
+    assert result.returncode != 0
+    assert "krylov_preconditioner_kind" in (result.stderr + result.stdout)
+    assert "mfem_tangent_graph_demag_coarse_right" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_no_exchange_bundle_with_graph_preconditioner_kind(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solve_error_fixture(tmp_path)
+    set_krylov_preconditioner_kind(
+        tmp_path,
+        kind="mfem_tangent_graph_demag_coarse_right",
+    )
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+        require_frozen_magnetic_submesh=True,
+        allow_solve_error=True,
+    )
+
+    assert result.returncode != 0
+    assert "krylov_preconditioner_kind" in (result.stderr + result.stdout)
+    assert "mfem_tangent_demag_coarse_right" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_solve_error_bundle_without_block_norms(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solve_error_fixture(tmp_path)
+    diagnostics_path = tmp_path / "response" / "diagnostics" / "solver.v1.json"
+    diagnostics = json.loads(diagnostics_path.read_text())
+    del diagnostics["block_norms"]
+    diagnostics_path.write_text(json.dumps(diagnostics))
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    del manifest["diagnostics"]["block_norms"]
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+        require_frozen_magnetic_submesh=True,
+        allow_solve_error=True,
+    )
+
+    assert result.returncode != 0
+    assert "block_norms" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_solve_error_bundle_without_coupled_block_norms(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solve_error_fixture(tmp_path)
+    diagnostics_path = tmp_path / "response" / "diagnostics" / "solver.v1.json"
+    diagnostics = json.loads(diagnostics_path.read_text())
+    diagnostics.pop("coupled_block_norms", None)
+    diagnostics_path.write_text(json.dumps(diagnostics))
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["diagnostics"].pop("coupled_block_norms", None)
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+        require_frozen_magnetic_submesh=True,
+        allow_solve_error=True,
+    )
+
+    assert result.returncode != 0
+    assert "coupled_block_norms" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_solve_error_bundle_with_empty_gmres_history(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solve_error_fixture(tmp_path)
+    diagnostics_path = tmp_path / "response" / "diagnostics" / "solver.v1.json"
+    diagnostics = json.loads(diagnostics_path.read_text())
+    diagnostics["gmres_relative_residual_history"] = []
+    diagnostics_path.write_text(json.dumps(diagnostics))
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["diagnostics"]["gmres_relative_residual_history"] = []
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+        require_frozen_magnetic_submesh=True,
+        allow_solve_error=True,
+    )
+
+    assert result.returncode != 0
+    assert "gmres_relative_residual_history" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_solve_error_bundle_without_explicit_flag(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solve_error_fixture(tmp_path)
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+        require_frozen_magnetic_submesh=True,
+    )
+
+    assert result.returncode != 0
+    assert "--allow-solve-error" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_solve_error_bundle_with_validation_fallback(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solve_error_fixture(tmp_path)
+    diagnostics_path = tmp_path / "response" / "diagnostics" / "solver.v1.json"
+    diagnostics = json.loads(diagnostics_path.read_text())
+    diagnostics["validation_fallback_used"] = True
+    diagnostics_path.write_text(json.dumps(diagnostics))
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+        require_frozen_magnetic_submesh=True,
+        allow_solve_error=True,
+    )
+
+    assert result.returncode != 0
+    assert "validation_fallback_used" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_solve_error_bundle_without_native_progress_telemetry(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solve_error_fixture(tmp_path)
+    progress_path = tmp_path / "response" / "progress.v1.json"
+    progress = json.loads(progress_path.read_text())
+    del progress["native_iteration_count"]
+    progress_path.write_text(json.dumps(progress))
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+        require_frozen_magnetic_submesh=True,
+        allow_solve_error=True,
+    )
+
+    assert result.returncode != 0
+    assert "progress.native_iteration_count" in (result.stderr + result.stdout)
+
+
 def test_validator_rejects_unavailable_manifest_missing_resource_keys(
     tmp_path: Path,
 ) -> None:
@@ -2158,6 +2701,24 @@ def test_validator_rejects_missing_diagnostics_krylov_solver(tmp_path: Path) -> 
     assert "diagnostics.krylov_solver" in (result.stderr + result.stdout)
 
 
+def test_validator_rejects_missing_diagnostics_matrix_form(tmp_path: Path) -> None:
+    write_frequency_domain_fixture(tmp_path, omit_diagnostics_matrix_form=True)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "diagnostics.matrix_form" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_missing_diagnostics_phasor_convention(tmp_path: Path) -> None:
+    write_frequency_domain_fixture(tmp_path, omit_diagnostics_phasor_convention=True)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "diagnostics.phasor_convention" in (result.stderr + result.stdout)
+
+
 def test_validator_rejects_non_matrix_free_diagnostics(tmp_path: Path) -> None:
     write_frequency_domain_fixture(tmp_path, diagnostics_matrix_free_solver=False)
 
@@ -2199,6 +2760,72 @@ def test_validator_accepts_required_floquet_phase_projection(tmp_path: Path) -> 
     )
 
     assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_rejects_floquet_projection_without_basis_transport_policy(
+    tmp_path: Path,
+) -> None:
+    write_frequency_domain_fixture(
+        tmp_path,
+        include_floquet_phase_projection=True,
+        omit_floquet_basis_transport_policy=True,
+        execution_lane="production_gpu",
+        manifest_engine="native_fem_mfem_frequency_domain_gpu",
+        sweep_v1_lane_classification="fem_gpu_production",
+    )
+
+    result = run_validator(
+        tmp_path,
+        require_production_gpu=True,
+        require_floquet_phase_projection=True,
+    )
+
+    assert result.returncode != 0
+    assert "basis_transport_policy" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_floquet_projection_with_full_vector_transport_policy(
+    tmp_path: Path,
+) -> None:
+    write_frequency_domain_fixture(
+        tmp_path,
+        include_floquet_phase_projection=True,
+        floquet_basis_transport_policy="full_vector",
+        execution_lane="production_gpu",
+        manifest_engine="native_fem_mfem_frequency_domain_gpu",
+        sweep_v1_lane_classification="fem_gpu_production",
+    )
+
+    result = run_validator(
+        tmp_path,
+        require_production_gpu=True,
+        require_floquet_phase_projection=True,
+    )
+
+    assert result.returncode != 0
+    assert "basis_transport_policy=full_vector" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_floquet_identity_transport_with_frame_mismatch(
+    tmp_path: Path,
+) -> None:
+    write_frequency_domain_fixture(
+        tmp_path,
+        include_floquet_phase_projection=True,
+        floquet_tangent_frame_max_mismatch=1.0e-6,
+        execution_lane="production_gpu",
+        manifest_engine="native_fem_mfem_frequency_domain_gpu",
+        sweep_v1_lane_classification="fem_gpu_production",
+    )
+
+    result = run_validator(
+        tmp_path,
+        require_production_gpu=True,
+        require_floquet_phase_projection=True,
+    )
+
+    assert result.returncode != 0
+    assert "tangent_frame_identity" in (result.stderr + result.stdout)
 
 
 def test_validator_rejects_missing_required_floquet_phase_projection(

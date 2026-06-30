@@ -31,6 +31,17 @@ Until the complete coupled operator is assembled and validated, production code
 must reject these requests with explicit capability diagnostics rather than
 falling back to finite isolated airbox demag.
 
+COMSOL taxonomy alignment, 2026-06-30: COMSOL's Micromagnetics Module uses the
+same frequency-domain linearized LLG formulation for two distinct studies.
+`Frequency Domain` is a forced harmonic response study with a dynamic external
+field perturbation; `Eigenfrequency` is a modal/eigenvalue study that returns
+natural frequencies and mode profiles. Fullmag must keep the same separation:
+the current `study_product=driven_response` artifacts prove only forced
+response/susceptibility behavior. Peaks extracted from a response sweep are
+mode candidates, not eigenmodes. A production modal path must introduce a
+separate `study_product=eigenfrequency` contract over the same tangent LLG,
+PBC/Floquet constraints, and dynamic demag operator.
+
 ## 2. Physical model
 
 Fullmag stores fields in SI units. The dynamic magnetization perturbation is
@@ -60,6 +71,18 @@ The dynamic demag field phasor is:
 delta_H_demag = -grad(delta_phi)
 ```
 
+Equivalently:
+
+```text
+div(-grad(delta_phi)) = -div(delta_M)
+```
+
+This sign convention follows from `H = -grad(phi)` and `div(H + M) = 0`.
+Weak forms may multiply both sides by `-1`, but the implementation and
+artifacts must preserve the same physical field relation. Production promotion
+requires tests for demag energy sign, an analytical field-sign oracle such as
+an ellipsoid/sphere case, and symmetry of the k=0 demag Hessian.
+
 For a lateral periodic pair with source point `r_src`, destination point
 `r_dst`, and lattice vector:
 
@@ -74,6 +97,18 @@ the boundary conditions are:
 delta_m_dst = phase * delta_m_src
 delta_phi_dst = phase * delta_phi_src
 ```
+
+For tangent-space magnetic unknowns this condition is enforced on the
+reconstructed vector, not on raw local tangent coordinates:
+
+```text
+T_dst q_dst = phase * T_src q_src
+q_dst = phase * (T_dst^T T_src) q_src
+```
+
+The scalar-potential constraint is phase-only because `delta_phi` is a scalar.
+The magnetic block must report whether it used full-vector transport,
+tangent-frame transport, identity-frame transport, or rejected the pair set.
 
 The normal flux check must account for opposite outward normals on paired side
 faces:
@@ -90,8 +125,8 @@ pin just because lateral boundaries are periodic.
 
 ## 3. Coupled frequency-domain system
 
-The target driven response system is not a magnetic-only solve with a post hoc
-demag correction. It is a coupled harmonic system:
+The target driven-response system is not a magnetic-only solve with a post hoc
+demag correction. It is a coupled harmonic forced-response system:
 
 ```text
 [A_mm(omega)  A_mphi] [delta_m]   [drive_m]
@@ -113,6 +148,30 @@ linearized RHS, boundary constraints, phase convention, and gauge semantics are
 explicitly correct for the dynamic phasor. Reusing a static k=0 solve while
 ignoring `A_mphi`, `A_phim`, or nonzero-k phase is not an implementation of this
 contract.
+
+Current implementation note, 2026-06-30: the narrow CPU `periodic_airbox_k0`
+driven-response work is not this full assembled block. It routes the magnetic
+GMRES operator through a matrix-free demag tangent provider / Schur-like
+magnetic operator and may expose provider-side scalar-potential diagnostics, but
+that does not make `delta_phi` an independently solved coupled unknown. It must
+be described as a qualified driven-response slice, not as an eigenmode solver
+and not as complete `[delta_m, delta_phi]` physics.
+
+The target eigenfrequency system reuses the same linearized operators but has no
+external RF drive. In abstract form it is a generalized eigenproblem over the
+periodic/Floquet constrained tangent space and, when dynamic demag is enabled,
+the matching scalar-potential airbox space:
+
+```text
+L(q) = omega B(q)
+q = [delta_m, delta_phi]
+```
+
+For practical FEM sizes this should be solved as a selected-spectrum problem
+around a requested frequency window/shift, not as a dense full diagonalization.
+The eigenfrequency path must have separate artifacts for eigenvalues, damping
+or linewidth convention, mode profiles, normalization, residuals, and the
+constraint families used for `delta_m` and `delta_phi`.
 
 ## 4. Numerical interpretation
 
@@ -188,7 +247,19 @@ response/frequency_points/frequency_*.json
 Each solved frequency point with demag must state whether dynamic demag was
 solved, unavailable, or rejected, and must include the phase convention,
 magnetic and magnetostatic BC provenance, gauge policy, and either
-`delta_phi_complex` or an explicit unsupported reason.
+`delta_phi_complex` or an explicit unsupported reason. It must also report the
+operator/preconditioner split when a coupled or Schur-like path is used:
+
+```text
+matrix_form = coupled_demag_block | schur_phi_consistency_provider | magnetic_only
+ksp_type
+pc_type
+magnetic_block_iterations
+poisson_block_iterations
+converged_reason
+linear_residual_absolute
+linear_residual_relative
+```
 
 ## 6. Validation strategy
 
@@ -203,6 +274,12 @@ Minimum validation before production enablement:
 
 ```text
 max_pair ||delta_m_dst - phase * delta_m_src|| < eps_dm
+```
+
+- Tangent-frame transport:
+
+```text
+max_pair ||q_dst - phase * (T_dst^T T_src) q_src|| < eps_q
 ```
 
 - Magnetostatic scalar-potential continuity:

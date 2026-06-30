@@ -11,7 +11,7 @@ use crate::types::{
     FemGpuRelaxationDevicePolicyMetadata, FemGpuRelaxationQualificationMetadata, StepStats,
 };
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
 use std::fs;
 use std::io::{Error, ErrorKind, Write};
@@ -25,6 +25,39 @@ fn runtime_threading_summary(problem: &fullmag_ir::ProblemIR) -> serde_json::Val
         "requested_fem_omp_threads": serde_json::Value::Null,
         "effective_fem_omp_threads": serde_json::Value::Null,
     })
+}
+
+fn count_periodic_pairs_by_id<T>(
+    pairs: &[T],
+    pair_id: impl Fn(&T) -> &str,
+) -> BTreeMap<String, usize> {
+    let mut counts = BTreeMap::new();
+    for pair in pairs {
+        *counts.entry(pair_id(pair).to_string()).or_insert(0) += 1;
+    }
+    counts
+}
+
+fn mesh_runtime_metadata(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Value {
+    match &plan.backend_plan {
+        BackendPlanIR::Fem(fem) => serde_json::json!({
+            "mesh_name": fem.mesh.mesh_name,
+            "node_count": fem.mesh.nodes.len(),
+            "element_count": fem.mesh.elements.len(),
+            "boundary_face_count": fem.mesh.boundary_faces.len(),
+            "periodic_boundary_pair_count": fem.mesh.periodic_boundary_pairs.len(),
+            "periodic_node_pair_count": fem.mesh.periodic_node_pairs.len(),
+            "periodic_boundary_pair_counts_by_id": count_periodic_pairs_by_id(
+                &fem.mesh.periodic_boundary_pairs,
+                |pair| pair.pair_id.as_str(),
+            ),
+            "periodic_node_pair_counts_by_id": count_periodic_pairs_by_id(
+                &fem.mesh.periodic_node_pairs,
+                |pair| pair.pair_id.as_str(),
+            ),
+        }),
+        _ => serde_json::Value::Null,
+    }
 }
 
 fn provenance_with_runtime_threading(
@@ -414,6 +447,7 @@ fn fem_gpu_relaxation_qualification_metadata(
     let Some(last) = executed.result.steps.last() else {
         return serde_json::Value::Null;
     };
+    let completion = executed.result.completion.as_ref();
 
     let metadata = FemGpuRelaxationQualificationMetadata {
         schema_version: "fem_gpu_relaxation_qualification.v1".to_string(),
@@ -442,6 +476,23 @@ fn fem_gpu_relaxation_qualification_metadata(
             hot_loop_control_scalar_host_sync_count: provenance
                 .hot_loop_control_scalar_host_sync_count,
         },
+        stop_reason: completion
+            .and_then(|entry| entry.reason.as_ref())
+            .map(stage_stop_reason_as_str)
+            .map(str::to_string),
+        stop_metric_name: completion.and_then(|entry| entry.metric_name.clone()),
+        stop_metric_value: completion.and_then(|entry| entry.metric_value),
+        stop_threshold: completion.and_then(|entry| entry.threshold),
+        final_energy_terms_j: FemCpuRelaxationEnergyTerms {
+            e_ex: last.e_ex,
+            e_demag: last.e_demag,
+            e_ext: last.e_ext,
+            e_ani: last.e_ani,
+            e_dmi: last.e_dmi,
+            e_total: last.e_total,
+        },
+        final_torque_apm: last.max_torque_Apm,
+        final_torque_t: last.max_torque_T,
         norm_defect: magnetization_norm_defect_for_fem_plan(
             fem,
             &executed.result.final_magnetization,
@@ -633,6 +684,13 @@ pub(crate) fn write_artifacts(
     );
     let fem_gpu_relaxation_qualification =
         fem_gpu_relaxation_qualification_metadata(plan, &execution_provenance, executed);
+    let periodic_antidot_relaxation = problem
+        .problem_meta
+        .runtime_metadata
+        .get("periodic_antidot_relaxation")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let mesh_metadata = mesh_runtime_metadata(plan);
     let material_field_assets = write_material_field_artifacts(output_dir, plan)?;
 
     let metadata = serde_json::json!({
@@ -640,8 +698,11 @@ pub(crate) fn write_artifacts(
         "ir_version": problem.ir_version,
         "source_hash": problem.problem_meta.source_hash,
         "problem_meta": problem.problem_meta,
+        "pbc": problem.pbc,
         "execution_plan": plan,
         "artifact_layout": field_context.layout.clone(),
+        "mesh": mesh_metadata,
+        "periodic_antidot_relaxation": periodic_antidot_relaxation,
         "execution_provenance": execution_provenance,
         "runtime_threading": runtime_threading,
         "demag_runtime": demag_runtime,
@@ -2127,6 +2188,51 @@ mod tests {
         }
     }
 
+    fn test_periodic_fem_execution_plan() -> ExecutionPlanIR {
+        let mut plan = test_fem_execution_plan();
+        if let BackendPlanIR::Fem(fem) = &mut plan.backend_plan {
+            fem.mesh.periodic_boundary_pairs = vec![
+                fullmag_ir::MeshPeriodicBoundaryPairIR {
+                    pair_id: "x_faces".to_string(),
+                    source_marker: None,
+                    destination_marker: None,
+                    marker_a: 1,
+                    marker_b: 2,
+                    translation: Some([1.0, 0.0, 0.0]),
+                    tolerance: Some(1.0e-12),
+                    axis_hint: Some("x".to_string()),
+                    orientation: None,
+                    pairing_policy: None,
+                },
+                fullmag_ir::MeshPeriodicBoundaryPairIR {
+                    pair_id: "y_faces".to_string(),
+                    source_marker: None,
+                    destination_marker: None,
+                    marker_a: 3,
+                    marker_b: 4,
+                    translation: Some([0.0, 1.0, 0.0]),
+                    tolerance: Some(1.0e-12),
+                    axis_hint: Some("y".to_string()),
+                    orientation: None,
+                    pairing_policy: None,
+                },
+            ];
+            fem.mesh.periodic_node_pairs = vec![
+                fullmag_ir::MeshPeriodicNodePairIR {
+                    pair_id: "x_faces".to_string(),
+                    node_a: 0,
+                    node_b: 1,
+                },
+                fullmag_ir::MeshPeriodicNodePairIR {
+                    pair_id: "y_faces".to_string(),
+                    node_a: 0,
+                    node_b: 2,
+                },
+            ];
+        }
+        plan
+    }
+
     #[test]
     fn metadata_execution_provenance_persists_resolved_fallback() {
         let problem = fullmag_ir::ProblemIR::bootstrap_example();
@@ -2592,7 +2698,13 @@ mod tests {
                     ..StepStats::default()
                 }],
                 final_magnetization: vec![[1.0, 0.0, 0.0]; 4],
-                completion: None,
+                completion: Some(fullmag_ir::StageCompletionIR {
+                    status: "completed".to_string(),
+                    reason: Some(fullmag_ir::StageStopReason::MaxSteps),
+                    metric_name: Some("step".to_string()),
+                    metric_value: Some(4.0),
+                    threshold: Some(4.0),
+                }),
             },
             initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
             field_snapshots: Vec::new(),
@@ -2678,7 +2790,13 @@ mod tests {
                     ..StepStats::default()
                 }],
                 final_magnetization: vec![[1.0, 0.0, 0.0]; 4],
-                completion: None,
+                completion: Some(fullmag_ir::StageCompletionIR {
+                    status: "completed".to_string(),
+                    reason: Some(fullmag_ir::StageStopReason::MaxSteps),
+                    metric_name: Some("step".to_string()),
+                    metric_value: Some(4.0),
+                    threshold: Some(4.0),
+                }),
             },
             initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
             field_snapshots: Vec::new(),
@@ -2859,7 +2977,13 @@ mod tests {
                     ..StepStats::default()
                 }],
                 final_magnetization: vec![[1.0, 0.0, 0.0]; 4],
-                completion: None,
+                completion: Some(fullmag_ir::StageCompletionIR {
+                    status: "completed".to_string(),
+                    reason: Some(fullmag_ir::StageStopReason::MaxSteps),
+                    metric_name: Some("step".to_string()),
+                    metric_value: Some(4.0),
+                    threshold: Some(4.0),
+                }),
             },
             initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
             field_snapshots: Vec::new(),
@@ -2909,6 +3033,14 @@ mod tests {
             qualification["device_policy"]["hot_loop_exchange_host_sync_count"],
             0
         );
+        assert_eq!(qualification["stop_reason"], "max_steps");
+        assert_eq!(qualification["stop_metric_name"], "step");
+        assert_eq!(qualification["stop_metric_value"], 4.0);
+        assert_eq!(qualification["stop_threshold"], 4.0);
+        assert_eq!(qualification["final_energy_terms_j"]["E_ex"], 1.0);
+        assert_eq!(qualification["final_energy_terms_j"]["E_demag"], 2.0);
+        assert_eq!(qualification["final_energy_terms_j"]["E_total"], 3.0);
+        assert_eq!(qualification["final_torque_apm"], 2.0e-4);
         assert_eq!(qualification["norm_defect"], 0.0);
 
         fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
@@ -3919,6 +4051,104 @@ mod tests {
         )
         .expect("metadata should parse");
         assert_eq!(metadata["field_snapshots"], 1);
+
+        fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[test]
+    fn metadata_copies_periodic_antidot_relaxation_runtime_provenance() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.problem_meta.name = "fem_periodic_antidot_relax_air_gap".to_string();
+        problem.pbc = Some(fullmag_ir::FdmPeriodicityIR {
+            axes: [
+                fullmag_ir::AxisBoundary::Periodic,
+                fullmag_ir::AxisBoundary::Periodic,
+                fullmag_ir::AxisBoundary::Open,
+            ],
+            demag: fullmag_ir::FdmDemagPeriodicityIR::Open,
+            image_counts: None,
+        });
+        problem.problem_meta.runtime_metadata.insert(
+            "periodic_antidot_relaxation".to_string(),
+            serde_json::json!({
+                "scenario": "air_gap",
+                "exchange_coupled_across_periods": false,
+                "magnetostatic_pbc": "periodic_airbox_k0",
+                "periodic_pair_ids": ["x_faces", "y_faces"],
+                "film_size_m": [2.0e-7, 2.0e-7, 1.0e-8],
+                "universe_size_m": [3.2e-7, 3.2e-7, 9.0e-8],
+                "lateral_air_gap_m": [1.2e-7, 1.2e-7],
+            }),
+        );
+        let plan = test_periodic_fem_execution_plan();
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-periodic-antidot-relaxation-metadata-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+
+        let executed = ExecutedRun {
+            result: RunResult {
+                status: RunStatus::Completed,
+                steps: vec![StepStats {
+                    step: 4,
+                    max_torque_T: 1.0e-3,
+                    ..StepStats::default()
+                }],
+                final_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+                completion: None,
+            },
+            initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+            field_snapshots: Vec::new(),
+            field_snapshot_count: 0,
+            auxiliary_artifacts: Vec::new(),
+            provenance: ExecutionProvenance {
+                execution_engine: "fem_cpu_native".to_string(),
+                precision: "double".to_string(),
+                ..ExecutionProvenance::default()
+            },
+        };
+
+        write_artifacts(&output_dir, &problem, &plan, &executed, None)
+            .expect("artifact write should preserve periodic antidot metadata");
+
+        let metadata: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("metadata.json")).expect("metadata should exist"),
+        )
+        .expect("metadata should parse");
+        assert_eq!(
+            metadata["periodic_antidot_relaxation"]["scenario"],
+            "air_gap"
+        );
+        assert_eq!(
+            metadata["periodic_antidot_relaxation"]["magnetostatic_pbc"],
+            "periodic_airbox_k0"
+        );
+        assert_eq!(
+            metadata["periodic_antidot_relaxation"]["periodic_pair_ids"],
+            serde_json::json!(["x_faces", "y_faces"])
+        );
+        assert_eq!(
+            metadata["pbc"],
+            serde_json::json!({
+                "axes": ["periodic", "periodic", "open"],
+                "demag": "open",
+            })
+        );
+        assert_eq!(metadata["mesh"]["periodic_boundary_pair_count"], 2);
+        assert_eq!(metadata["mesh"]["periodic_node_pair_count"], 2);
+        assert_eq!(
+            metadata["mesh"]["periodic_boundary_pair_counts_by_id"]["x_faces"],
+            1
+        );
+        assert_eq!(
+            metadata["mesh"]["periodic_node_pair_counts_by_id"]["y_faces"],
+            1
+        );
 
         fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
     }
