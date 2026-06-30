@@ -113,6 +113,7 @@ import {
 import {
   buildViewport3DTargetRenderPlan,
   buildViewport3DFieldResourceRequestId,
+  DEFAULT_VIEWPORT3D_SHADER_MONO_COLOR,
   mergeViewport3DFieldVectorQueries,
   resolveViewport3DAirboxFieldVectorDemandPlan,
   resolveViewport3DPrimaryFieldDemandPlan,
@@ -1532,7 +1533,8 @@ export function resolveViewport3DPrimaryFieldRenderOptions({
             fieldRenderOptions.partScalarColorPalettes?.get(partId) ??
             fieldRenderOptions.scalarColorPalette ??
             "viridis",
-          shaderMonoColor: settings.shaderMonoColor ?? "#ffffff",
+          shaderMonoColor:
+            settings.shaderMonoColor ?? DEFAULT_VIEWPORT3D_SHADER_MONO_COLOR,
           shaderVisible:
             analysisOverlayAppearance?.shaderVisible ?? settings.shaderVisible,
           surfaceColorSource: effectiveSurfaceColorSource,

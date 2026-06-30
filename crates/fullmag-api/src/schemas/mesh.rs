@@ -455,13 +455,33 @@ pub struct MeshPeriodicPairResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expected_translation_m: Option<[f64; 3]>,
     pub paired_node_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain_node_pair_counts: Option<MeshPeriodicDomainNodePairCountsResource>,
     pub unpaired_source_node_count: u32,
     pub unpaired_destination_node_count: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub boundary_face_pairs: Vec<MeshPeriodicBoundaryFacePairResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_residual_m: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rms_residual_m: Option<f64>,
     pub status: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
+pub struct MeshPeriodicDomainNodePairCountsResource {
+    pub magnetic: u32,
+    pub airbox: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct MeshPeriodicBoundaryFacePairResource {
+    pub face_a: u32,
+    pub face_b: u32,
+    pub translation_m: [f64; 3],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub normal_dot: Option<f64>,
+    pub orientation: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]

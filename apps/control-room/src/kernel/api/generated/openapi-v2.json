@@ -9556,12 +9556,85 @@
         },
         "type": "object"
       },
+      "MeshPeriodicBoundaryFacePairResource": {
+        "properties": {
+          "face_a": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "face_b": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "normal_dot": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "orientation": {
+            "type": "string"
+          },
+          "translation_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "face_a",
+          "face_b",
+          "translation_m",
+          "orientation"
+        ],
+        "type": "object"
+      },
+      "MeshPeriodicDomainNodePairCountsResource": {
+        "properties": {
+          "airbox": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "magnetic": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "magnetic",
+          "airbox"
+        ],
+        "type": "object"
+      },
       "MeshPeriodicPairResource": {
         "properties": {
+          "boundary_face_pairs": {
+            "items": {
+              "$ref": "#/components/schemas/MeshPeriodicBoundaryFacePairResource"
+            },
+            "type": "array"
+          },
           "destination_marker": {
             "type": [
               "string",
               "null"
+            ]
+          },
+          "domain_node_pair_counts": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MeshPeriodicDomainNodePairCountsResource"
+              }
             ]
           },
           "expected_translation_m": {

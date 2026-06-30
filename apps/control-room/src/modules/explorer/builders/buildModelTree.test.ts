@@ -29,7 +29,7 @@ import {
   createObjectExtensionActivationState,
   resolveActiveObjectExtensionExplorerItems,
   setObjectExtensionEnabled,
-} from "@/modules/inspector/extensions/ObjectExtensionsSectionModel";
+} from "@/kernel/object-extensions/ObjectExtensionsSectionModel";
 
 import {
   buildExplorerTree,
@@ -42,6 +42,7 @@ import {
 } from "./sceneModelTreeAdapter";
 
 const TORQUE_TOLERANCE_FOR_1E_4_T = 1e-4 / (4 * Math.PI * 1e-7);
+const RESPONSE_MAP_RESOURCE_KEY = "analysis:frequency-domain:response-map.v2";
 
 const capability = (status: string, reason = "test fixture") => ({ status, reason });
 
@@ -3280,8 +3281,7 @@ describe("buildModelTree", () => {
             calculation_mode: "response_map",
           },
           resources: {
-            response_map_resource_key:
-              "/v2/sessions/current/analysis/frequency-domain/response-map.v2",
+            response_map_resource_key: RESPONSE_MAP_RESOURCE_KEY,
           },
         },
         resource_key: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
@@ -3307,8 +3307,7 @@ describe("buildModelTree", () => {
       badge: "available",
       calculationMode: "response_map",
       kind: "results.frequency_domain.response_map",
-      resourceRef:
-        "/v2/sessions/current/analysis/frequency-domain/response-map.v2",
+      resourceRef: RESPONSE_MAP_RESOURCE_KEY,
       status: "ready",
     });
   });

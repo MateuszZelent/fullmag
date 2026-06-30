@@ -353,6 +353,50 @@ describe("StudyInspectorPanelModel", () => {
     });
   });
 
+  it("prefers selected stage id over stale selected stage index", () => {
+    const snapshot = studySnapshotFromScene({
+      study: {
+        stages: [
+          { kind: "relax", stage_id: "relax-1" },
+          { kind: "run", stage_id: "run-2" },
+          { kind: "hysteresis", stage_id: "hysteresis-3" },
+        ],
+      },
+    } as never);
+
+    const model = resolveStudyInspectorModel({
+      commandQueue: null,
+      currentRun: null,
+      selectedStageRef: {
+        nodeId: "model:study:stages:stage:hysteresis-3:live-run",
+        stageId: "hysteresis-3",
+        stageIndex: 0,
+      },
+      snapshot,
+      solverStatus: null,
+      stageExecution: {
+        active_stage_index: null,
+        active_stage_kind: null,
+        completed_stage_indexes: [],
+        revision: 17,
+        runtime_state: "idle",
+        stage_statuses: ["idle", "idle", "idle"],
+        stages: [
+          { index: 0, stage_id: "relax-1", status: "idle" },
+          { index: 1, stage_id: "run-2", status: "idle" },
+          { index: 2, stage_id: "hysteresis-3", status: "idle" },
+        ],
+        total_stages: 3,
+      } as never,
+    });
+
+    expect(model.selectedStage).toMatchObject({
+      index: 2,
+      kind: "hysteresis",
+      stageId: "hysteresis-3",
+    });
+  });
+
   it("uses solver pseudotime for active relax stages with pseudotime budgets", () => {
     const snapshot = studySnapshotFromScene({
       study: {

@@ -2638,12 +2638,17 @@ impl NativeFemFieldSnapshot {
     pub fn into_vector_field(mut self) -> Result<Vec<[f64; 3]>, RunError> {
         let (data, _, info) = self.wait_payload()?;
         let expected_len = info.node_count.saturating_mul(info.component_count);
-        Ok(
-            unsafe { std::slice::from_raw_parts(data.cast::<f64>(), expected_len) }
-                .chunks_exact(3)
-                .map(|c| [c[0], c[1], c[2]])
-                .collect(),
-        )
+        let values = unsafe { std::slice::from_raw_parts(data.cast::<f64>(), expected_len) };
+        match info.component_count {
+            3 => Ok(values.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect()),
+            1 => Ok(values.iter().map(|value| [*value, 0.0, 0.0]).collect()),
+            _ => Err(RunError {
+                message: format!(
+                    "native FEM field snapshot '{}' returned unsupported component count {}",
+                    self.name, info.component_count
+                ),
+            }),
+        }
     }
 }
 

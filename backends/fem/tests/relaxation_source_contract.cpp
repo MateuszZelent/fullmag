@@ -828,6 +828,8 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
         read_text_file(relaxation_root / "pgbb_kernels.hpp");
     const std::string kernels_source =
         read_text_file(relaxation_root / "pgbb_kernels.cu");
+    const std::string gpu_demag_stage =
+        read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "stage_compute.cpp");
     const std::string runner_algorithm =
         read_text_file(repo_root() / "crates" / "fullmag-runner" / "src" /
                        "fem" / "relax" / "algorithm.rs");
@@ -1148,6 +1150,15 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
             pgbb_source.find("fullmag_cuda_relax_project_static_periodic_field(") !=
                 std::string::npos,
         "native FEM GPU projected-gradient BB must project trial magnetization onto static periodic classes after retraction");
+    check(
+        gpu_demag_stage.find("#include \"gpu/cuda/relaxation/pgbb_kernels.hpp\"") !=
+                std::string::npos &&
+            gpu_demag_stage.find("gpu.mesh_regions.has_periodic_reduced_nodes") !=
+                std::string::npos &&
+            gpu_demag_stage.find("gpu.fields.h_demag.x") != std::string::npos &&
+            gpu_demag_stage.find("fullmag_cuda_relax_project_static_periodic_field(") !=
+                std::string::npos,
+        "native FEM GPU Poisson demag must project recovered H_demag onto static periodic classes before energy/snapshots");
     const auto invalid_norm_branch =
         kernels_source.find("if (!isfinite(norm) || norm <= 0.0)");
     const auto normalized_branch = kernels_source.find("const double inv = 1.0 / norm");

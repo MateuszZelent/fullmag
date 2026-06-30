@@ -5241,8 +5241,26 @@ export interface components {
             transition_growth?: number | null;
             transition_realization?: string | null;
         };
+        MeshPeriodicBoundaryFacePairResource: {
+            /** Format: int32 */
+            face_a: number;
+            /** Format: int32 */
+            face_b: number;
+            /** Format: double */
+            normal_dot?: number | null;
+            orientation: string;
+            translation_m: number[];
+        };
+        MeshPeriodicDomainNodePairCountsResource: {
+            /** Format: int32 */
+            airbox: number;
+            /** Format: int32 */
+            magnetic: number;
+        };
         MeshPeriodicPairResource: {
+            boundary_face_pairs?: components["schemas"]["MeshPeriodicBoundaryFacePairResource"][];
             destination_marker?: string | null;
+            domain_node_pair_counts?: null | components["schemas"]["MeshPeriodicDomainNodePairCountsResource"];
             expected_translation_m?: number[] | null;
             /** Format: int32 */
             marker_a: number;

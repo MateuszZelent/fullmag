@@ -888,7 +888,10 @@ fn execute_fem_eigen_inner(
                     "complex_frequency_convention".to_string(),
                     serde_json::json!("omega_complex = omega_r + i Gamma for exp(i omega t)"),
                 );
-                object.insert("damping_rate_hz".to_string(), serde_json::json!(frequency_imag_hz));
+                object.insert(
+                    "damping_rate_hz".to_string(),
+                    serde_json::json!(frequency_imag_hz),
+                );
                 object.insert(
                     "linewidth_fwhm_hz".to_string(),
                     serde_json::json!(linewidth_fwhm_hz),

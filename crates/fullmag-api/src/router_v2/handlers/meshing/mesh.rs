@@ -32,6 +32,7 @@ use crate::schemas::mesh::{
     MeshLastSuccessfulBuildResource, MeshObjectConfigEntryResource, MeshObjectConfigReplaceRequest,
     MeshObjectConfigResource, MeshObjectQualityResource, MeshObjectReportResource,
     MeshObjectSegmentResource, MeshObjectSizeFieldResource, MeshPartResource,
+    MeshPeriodicBoundaryFacePairResource, MeshPeriodicDomainNodePairCountsResource,
     MeshPeriodicPairResource, MeshPeriodicPairsResource, MeshQualityGatesResource,
     MeshRealizedSizeFieldResource, MeshRealizedSizeFieldsPayload, MeshRealizedSizeFieldsResource,
     MeshRegionResource, MeshSemanticsResource, MeshSharedDomainBuildReportResource,
@@ -3045,6 +3046,8 @@ fn build_periodic_pairs_resource(
                 .map(|pair| pair.node_b)
                 .collect::<BTreeSet<_>>();
             let diagnostics = periodic_pair_residuals(mesh, boundary_pair, node_pairs);
+            let domain_node_pair_counts = periodic_domain_node_pair_counts(mesh, node_pairs);
+            let boundary_face_pairs = periodic_boundary_face_pairs(mesh, boundary_pair);
 
             MeshPeriodicPairResource {
                 pair_id: boundary_pair.pair_id.clone(),
@@ -3054,11 +3057,13 @@ fn build_periodic_pairs_resource(
                 marker_b: boundary_pair.marker_b,
                 expected_translation_m: boundary_pair.translation,
                 paired_node_count: node_pairs.len() as u32,
+                domain_node_pair_counts: Some(domain_node_pair_counts),
                 unpaired_source_node_count: source_nodes.difference(&paired_source_nodes).count()
                     as u32,
                 unpaired_destination_node_count: destination_nodes
                     .difference(&paired_destination_nodes)
                     .count() as u32,
+                boundary_face_pairs,
                 max_residual_m: diagnostics.max_residual_m,
                 rms_residual_m: diagnostics.rms_residual_m,
                 status: diagnostics.status,
@@ -3155,6 +3160,147 @@ fn boundary_nodes_by_marker(mesh: &FemMeshPayload) -> HashMap<u32, BTreeSet<u32>
         nodes.extend(face.iter().copied());
     }
     nodes_by_marker
+}
+
+fn periodic_domain_node_pair_counts(
+    mesh: &FemMeshPayload,
+    node_pairs: &[&fullmag_ir::MeshPeriodicNodePairIR],
+) -> MeshPeriodicDomainNodePairCountsResource {
+    let (magnetic_nodes, airbox_nodes) = mesh_node_domain_sets(mesh);
+    let mut magnetic = 0u32;
+    let mut airbox = 0u32;
+    for pair in node_pairs {
+        let node_a_is_magnetic = magnetic_nodes.contains(&pair.node_a);
+        let node_b_is_magnetic = magnetic_nodes.contains(&pair.node_b);
+        let node_a_is_airbox = airbox_nodes.contains(&pair.node_a);
+        let node_b_is_airbox = airbox_nodes.contains(&pair.node_b);
+        if !node_a_is_magnetic && !node_b_is_magnetic && (node_a_is_airbox || node_b_is_airbox) {
+            airbox += 1;
+        } else {
+            magnetic += 1;
+        }
+    }
+    MeshPeriodicDomainNodePairCountsResource { magnetic, airbox }
+}
+
+fn mesh_node_domain_sets(mesh: &FemMeshPayload) -> (BTreeSet<u32>, BTreeSet<u32>) {
+    let mut magnetic_nodes = BTreeSet::new();
+    let mut airbox_nodes = BTreeSet::new();
+    for (element_index, element) in mesh.elements.iter().enumerate() {
+        let marker = mesh
+            .element_markers
+            .get(element_index)
+            .copied()
+            .unwrap_or(1);
+        let target = if marker == 0 {
+            &mut airbox_nodes
+        } else {
+            &mut magnetic_nodes
+        };
+        target.extend(element.iter().copied());
+    }
+    (magnetic_nodes, airbox_nodes)
+}
+
+fn periodic_boundary_face_pairs(
+    mesh: &FemMeshPayload,
+    boundary_pair: &fullmag_ir::MeshPeriodicBoundaryPairIR,
+) -> Vec<MeshPeriodicBoundaryFacePairResource> {
+    let Some(translation) = boundary_pair.translation else {
+        return Vec::new();
+    };
+    let source_faces = boundary_face_indices_by_marker(mesh, boundary_pair.marker_a);
+    let mut destination_faces = boundary_face_indices_by_marker(mesh, boundary_pair.marker_b);
+    let mut pairs = Vec::new();
+    for source_face_index in source_faces {
+        let Some(source_centroid) = boundary_face_centroid(mesh, source_face_index) else {
+            continue;
+        };
+        let mut best_destination: Option<(usize, usize, f64)> = None;
+        for (candidate_position, destination_face_index) in destination_faces.iter().enumerate() {
+            let Some(destination_centroid) = boundary_face_centroid(mesh, *destination_face_index)
+            else {
+                continue;
+            };
+            let residual = [
+                destination_centroid[0] - source_centroid[0] - translation[0],
+                destination_centroid[1] - source_centroid[1] - translation[1],
+                destination_centroid[2] - source_centroid[2] - translation[2],
+            ];
+            let residual_norm =
+                (residual[0] * residual[0] + residual[1] * residual[1] + residual[2] * residual[2])
+                    .sqrt();
+            if best_destination
+                .as_ref()
+                .is_none_or(|(_, _, best_norm)| residual_norm < *best_norm)
+            {
+                best_destination =
+                    Some((candidate_position, *destination_face_index, residual_norm));
+            }
+        }
+        let Some((destination_position, destination_face_index, _)) = best_destination else {
+            continue;
+        };
+        destination_faces.remove(destination_position);
+        let normal_dot = boundary_face_normal(mesh, source_face_index)
+            .zip(boundary_face_normal(mesh, destination_face_index))
+            .map(|(source_normal, destination_normal)| {
+                source_normal[0] * destination_normal[0]
+                    + source_normal[1] * destination_normal[1]
+                    + source_normal[2] * destination_normal[2]
+            });
+        pairs.push(MeshPeriodicBoundaryFacePairResource {
+            face_a: source_face_index as u32,
+            face_b: destination_face_index as u32,
+            translation_m: translation,
+            normal_dot,
+            orientation: if normal_dot.is_some_and(|dot| dot <= -0.999) {
+                "opposed_normals".to_string()
+            } else {
+                "not_opposed".to_string()
+            },
+        });
+    }
+    pairs
+}
+
+fn boundary_face_indices_by_marker(mesh: &FemMeshPayload, marker: u32) -> Vec<usize> {
+    mesh.boundary_markers
+        .iter()
+        .enumerate()
+        .filter_map(|(index, face_marker)| (*face_marker == marker).then_some(index))
+        .collect()
+}
+
+fn boundary_face_centroid(mesh: &FemMeshPayload, face_index: usize) -> Option<[f64; 3]> {
+    let face = mesh.boundary_faces.get(face_index)?;
+    let a = mesh.nodes.get(face[0] as usize)?;
+    let b = mesh.nodes.get(face[1] as usize)?;
+    let c = mesh.nodes.get(face[2] as usize)?;
+    Some([
+        (a[0] + b[0] + c[0]) / 3.0,
+        (a[1] + b[1] + c[1]) / 3.0,
+        (a[2] + b[2] + c[2]) / 3.0,
+    ])
+}
+
+fn boundary_face_normal(mesh: &FemMeshPayload, face_index: usize) -> Option<[f64; 3]> {
+    let face = mesh.boundary_faces.get(face_index)?;
+    let a = mesh.nodes.get(face[0] as usize)?;
+    let b = mesh.nodes.get(face[1] as usize)?;
+    let c = mesh.nodes.get(face[2] as usize)?;
+    let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    let cross = [
+        ab[1] * ac[2] - ab[2] * ac[1],
+        ab[2] * ac[0] - ab[0] * ac[2],
+        ab[0] * ac[1] - ab[1] * ac[0],
+    ];
+    let norm = (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]).sqrt();
+    if norm <= f64::EPSILON {
+        return None;
+    }
+    Some([cross[0] / norm, cross[1] / norm, cross[2] / norm])
 }
 
 fn mesh_manifest_regions(scene: &SceneDocument, mesh: &FemMeshPayload) -> Vec<MeshRegionResource> {

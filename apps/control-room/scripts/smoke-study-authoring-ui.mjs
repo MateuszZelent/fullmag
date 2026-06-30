@@ -461,7 +461,14 @@ async function verifyFrequencyDomainModalResults() {
     .waitFor({ state: "visible", timeout: timeoutMs });
   await inspector.getByRole("heading", {
     exact: true,
-    name: "Modal Spectrum",
+    name: "FMR Modal Spectrum Control",
+  }).waitFor({
+    state: "visible",
+    timeout: timeoutMs,
+  });
+  await inspector.getByRole("heading", {
+    exact: true,
+    name: "FMR Modal Spectrum Chart",
   }).waitFor({
     state: "visible",
     timeout: timeoutMs,
@@ -1094,6 +1101,37 @@ async function clickExplorerRow(row) {
       node.click();
     }
   });
+  await assertExplorerRowSelected(row);
+}
+
+async function assertExplorerRowSelected(row) {
+  const nodeId = await row.getAttribute("data-node-id");
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if ((await row.getAttribute("aria-selected")) === "true") {
+      return;
+    }
+    await page.waitForTimeout(50);
+  }
+
+  const selectedRows = await page
+    .locator('.fm-explorer [aria-selected="true"]')
+    .evaluateAll((nodes) =>
+      nodes.map((node) => ({
+        nodeId: node.getAttribute("data-node-id"),
+        text: node.textContent?.trim() ?? "",
+      })),
+    )
+    .catch((error) => [
+      { nodeId: "unavailable", text: error instanceof Error ? error.message : String(error) },
+    ]);
+  const inspectorText = await page
+    .locator(".fm-inspector")
+    .textContent()
+    .catch((error) => error instanceof Error ? error.message : String(error));
+  throw new Error(
+    `Explorer row did not become selected. Expected aria-selected="true" for ${nodeId}. Selected rows: ${JSON.stringify(selectedRows)}. Inspector text: ${JSON.stringify(inspectorText?.slice(0, 2000))}.`,
+  );
 }
 
 function assertCreatedRegion(createdScene, regionName) {

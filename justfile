@@ -964,6 +964,9 @@ verify-fem-periodic-antidot-relaxation-runtime:
       -e FULLMAG_FEM_EXECUTION=cpu \
       -e FULLMAG_RELAX_DEVICE=cpu \
       -e FULLMAG_CPU_THREADS="${FULLMAG_CPU_THREADS:-auto}" \
+      -e FULLMAG_PBC_RELAX_MIN_STEPS="${FULLMAG_PBC_RELAX_MIN_STEPS:-4}" \
+      -e FULLMAG_PBC_RELAX_Z_PADDING_REPORT="${FULLMAG_PBC_RELAX_Z_PADDING_REPORT:-}" \
+      -e FULLMAG_PBC_RELAX_SUPERCELL_REPORT="${FULLMAG_PBC_RELAX_SUPERCELL_REPORT:-}" \
       -e FULLMAG_HOST_UID="$(id -u)" \
       -e FULLMAG_HOST_GID="$(id -g)" \
       fem-gpu bash -lc 'set -euo pipefail && cd /workspace && \
@@ -982,12 +985,20 @@ verify-fem-periodic-antidot-relaxation-runtime:
             --json \
             --output-dir ".fullmag/reports/fem-periodic-antidot-relaxation-runtime/$scenario/artifacts" \
             2>&1 | tee ".fullmag/reports/fem-periodic-antidot-relaxation-runtime/$scenario/runtime.log"; \
-          python3 scripts/validate_fem_periodic_antidot_relaxation_artifacts.py \
+          validation_args=( \
             ".fullmag/reports/fem-periodic-antidot-relaxation-runtime/$scenario/runtime.log" \
             --scenario "$scenario" \
             --engine cpu \
             --algorithm projected_gradient_bb \
-            --min-steps "${FULLMAG_PBC_RELAX_MIN_STEPS:-4}"; \
+            --min-steps "${FULLMAG_PBC_RELAX_MIN_STEPS:-4}" \
+          ); \
+          if [ -n "${FULLMAG_PBC_RELAX_Z_PADDING_REPORT:-}" ]; then \
+            validation_args+=(--require-z-padding-report "$FULLMAG_PBC_RELAX_Z_PADDING_REPORT"); \
+          fi; \
+          if [ -n "${FULLMAG_PBC_RELAX_SUPERCELL_REPORT:-}" ]; then \
+            validation_args+=(--require-supercell-report "$FULLMAG_PBC_RELAX_SUPERCELL_REPORT"); \
+          fi; \
+          python3 scripts/validate_fem_periodic_antidot_relaxation_artifacts.py "${validation_args[@]}"; \
         done'
 
 verify-fem-periodic-antidot-relaxation-gpu-runtime:
@@ -1004,6 +1015,9 @@ verify-fem-periodic-antidot-relaxation-gpu-runtime:
       -e FULLMAG_FEM_MFEM_DEVICE=cuda \
       -e FULLMAG_FEM_GPU_DEMAG_MODE=device_hypre_poisson \
       -e FULLMAG_CPU_THREADS="${FULLMAG_CPU_THREADS:-auto}" \
+      -e FULLMAG_PBC_RELAX_MIN_STEPS="${FULLMAG_PBC_RELAX_MIN_STEPS:-4}" \
+      -e FULLMAG_PBC_RELAX_Z_PADDING_REPORT="${FULLMAG_PBC_RELAX_Z_PADDING_REPORT:-}" \
+      -e FULLMAG_PBC_RELAX_SUPERCELL_REPORT="${FULLMAG_PBC_RELAX_SUPERCELL_REPORT:-}" \
       -e FULLMAG_HOST_UID="$(id -u)" \
       -e FULLMAG_HOST_GID="$(id -g)" \
       fem-gpu bash -lc 'set -euo pipefail && cd /workspace && \
@@ -1022,17 +1036,112 @@ verify-fem-periodic-antidot-relaxation-gpu-runtime:
             --json \
             --output-dir ".fullmag/reports/fem-periodic-antidot-relaxation-gpu-runtime/$scenario/artifacts" \
             2>&1 | tee ".fullmag/reports/fem-periodic-antidot-relaxation-gpu-runtime/$scenario/runtime.log"; \
-          python3 scripts/validate_fem_periodic_antidot_relaxation_artifacts.py \
+          validation_args=( \
             ".fullmag/reports/fem-periodic-antidot-relaxation-gpu-runtime/$scenario/runtime.log" \
             --scenario "$scenario" \
             --engine gpu \
             --algorithm projected_gradient_bb \
-            --min-steps "${FULLMAG_PBC_RELAX_MIN_STEPS:-4}"; \
+            --min-steps "${FULLMAG_PBC_RELAX_MIN_STEPS:-4}" \
+          ); \
+          if [ -n "${FULLMAG_PBC_RELAX_Z_PADDING_REPORT:-}" ]; then \
+            validation_args+=(--require-z-padding-report "$FULLMAG_PBC_RELAX_Z_PADDING_REPORT"); \
+          fi; \
+          if [ -n "${FULLMAG_PBC_RELAX_SUPERCELL_REPORT:-}" ]; then \
+            validation_args+=(--require-supercell-report "$FULLMAG_PBC_RELAX_SUPERCELL_REPORT"); \
+          fi; \
+          python3 scripts/validate_fem_periodic_antidot_relaxation_artifacts.py "${validation_args[@]}"; \
         done'
 
 verify-fem-static-pbc-demag-equilibrium-runtime:
+    test -n "${FULLMAG_PBC_RELAX_Z_PADDING_REPORT:-}" || (echo "FULLMAG_PBC_RELAX_Z_PADDING_REPORT must point to fem_static_pbc_z_padding_validation.v1 before strict M5 equilibrium verification" >&2; exit 2)
+    test -n "${FULLMAG_PBC_RELAX_SUPERCELL_REPORT:-}" || (echo "FULLMAG_PBC_RELAX_SUPERCELL_REPORT must point to fem_static_pbc_supercell_validation.v1 before strict M5 equilibrium verification" >&2; exit 2)
     just verify-fem-periodic-antidot-relaxation-runtime
     just verify-fem-periodic-antidot-relaxation-gpu-runtime
+
+verify-fem-static-pbc-demag-z-padding-runtime:
+    just ensure-managed-fem-runtime
+    if [ -d .fullmag/reports/fem-static-pbc-demag-z-padding-runtime ]; then docker compose --profile fem-gpu run --rm -e FULLMAG_HOST_UID="$(id -u)" -e FULLMAG_HOST_GID="$(id -g)" fem-gpu bash -lc 'cd /workspace && chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" .fullmag/reports/fem-static-pbc-demag-z-padding-runtime 2>/dev/null || true'; fi
+    rm -rf .fullmag/reports/fem-static-pbc-demag-z-padding-runtime
+    mkdir -p .fullmag/reports/fem-static-pbc-demag-z-padding-runtime
+    docker compose --profile fem-gpu run --rm \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_FDM_EXECUTION=cpu \
+      -e FULLMAG_FEM_EXECUTION=cpu \
+      -e FULLMAG_RELAX_DEVICE=cpu \
+      -e FULLMAG_CPU_THREADS="${FULLMAG_CPU_THREADS:-auto}" \
+      -e FULLMAG_HOST_UID="$(id -u)" \
+      -e FULLMAG_HOST_GID="$(id -g)" \
+      fem-gpu bash -lc 'set -euo pipefail && cd /workspace && \
+        trap '\''chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" .fullmag/reports/fem-static-pbc-demag-z-padding-runtime 2>/dev/null || true'\'' EXIT && \
+        for run_script in \
+          candidate:examples/fem_periodic_antidot_relax_exchange_coupled.py \
+          reference:examples/fem_periodic_antidot_relax_exchange_coupled_z_padding_reference.py; do \
+          run_name="${run_script%%:*}" && \
+          script="${run_script#*:}" && \
+          rm -rf ".fullmag/reports/fem-static-pbc-demag-z-padding-runtime/$run_name/artifacts" && \
+          mkdir -p ".fullmag/reports/fem-static-pbc-demag-z-padding-runtime/$run_name" && \
+          .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu \
+            "$script" \
+            --backend fem \
+            --headless \
+            --json \
+            --output-dir ".fullmag/reports/fem-static-pbc-demag-z-padding-runtime/$run_name/artifacts" \
+            2>&1 | tee ".fullmag/reports/fem-static-pbc-demag-z-padding-runtime/$run_name/runtime.log"; \
+        done'
+    just verify-fem-static-pbc-demag-z-padding-artifacts .fullmag/reports/fem-static-pbc-demag-z-padding-runtime/reference/artifacts .fullmag/reports/fem-static-pbc-demag-z-padding-runtime/candidate/artifacts .fullmag/reports/fem-static-pbc-demag-equilibrium-runtime/reports/z_padding_validation.v1.json
+
+prepare-fem-static-pbc-demag-supercell-runtime-artifacts:
+    just ensure-managed-fem-runtime
+    if [ -d .fullmag/reports/fem-static-pbc-demag-supercell-runtime ]; then docker compose --profile fem-gpu run --rm -e FULLMAG_HOST_UID="$(id -u)" -e FULLMAG_HOST_GID="$(id -g)" fem-gpu bash -lc 'cd /workspace && chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" .fullmag/reports/fem-static-pbc-demag-supercell-runtime 2>/dev/null || true'; fi
+    rm -rf .fullmag/reports/fem-static-pbc-demag-supercell-runtime
+    mkdir -p .fullmag/reports/fem-static-pbc-demag-supercell-runtime
+    docker compose --profile fem-gpu run --rm \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_FDM_EXECUTION=cpu \
+      -e FULLMAG_FEM_EXECUTION=cpu \
+      -e FULLMAG_RELAX_DEVICE=cpu \
+      -e FULLMAG_CPU_THREADS="${FULLMAG_CPU_THREADS:-auto}" \
+      -e FULLMAG_HOST_UID="$(id -u)" \
+      -e FULLMAG_HOST_GID="$(id -g)" \
+      fem-gpu bash -lc 'set -euo pipefail && cd /workspace && \
+        trap '\''chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" .fullmag/reports/fem-static-pbc-demag-supercell-runtime 2>/dev/null || true'\'' EXIT && \
+        for run_script in \
+          unit:examples/fem_periodic_antidot_relax_exchange_coupled.py \
+          supercell:examples/fem_periodic_antidot_relax_exchange_coupled_supercell_3x3.py; do \
+          run_name="${run_script%%:*}" && \
+          script="${run_script#*:}" && \
+          rm -rf ".fullmag/reports/fem-static-pbc-demag-supercell-runtime/$run_name/artifacts" && \
+          mkdir -p ".fullmag/reports/fem-static-pbc-demag-supercell-runtime/$run_name" && \
+          .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu \
+            "$script" \
+            --backend fem \
+            --headless \
+            --json \
+            --output-dir ".fullmag/reports/fem-static-pbc-demag-supercell-runtime/$run_name/artifacts" \
+            2>&1 | tee ".fullmag/reports/fem-static-pbc-demag-supercell-runtime/$run_name/runtime.log"; \
+        done'
+    test -d .fullmag/reports/fem-static-pbc-demag-supercell-runtime/unit/artifacts
+    test -d .fullmag/reports/fem-static-pbc-demag-supercell-runtime/supercell/artifacts
+
+verify-fem-static-pbc-demag-supercell-runtime:
+    test -n "${FULLMAG_PBC_RELAX_SUPERCELL_MAGNETIC_NODE_INDICES:-}" || (echo "FULLMAG_PBC_RELAX_SUPERCELL_MAGNETIC_NODE_INDICES must point to central-cell magnetic node indices" >&2; exit 2)
+    test -n "${FULLMAG_PBC_RELAX_SUPERCELL_FIELD_CELL_INDICES:-}" || (echo "FULLMAG_PBC_RELAX_SUPERCELL_FIELD_CELL_INDICES must point to central-cell field cell indices" >&2; exit 2)
+    test -n "${FULLMAG_PBC_RELAX_SUPERCELL_CENTRAL_CELL_DEMAG_ENERGY_J:-}" || (echo "FULLMAG_PBC_RELAX_SUPERCELL_CENTRAL_CELL_DEMAG_ENERGY_J must be supplied" >&2; exit 2)
+    test -n "${FULLMAG_PBC_RELAX_SUPERCELL_CENTRAL_CELL_TORQUE_APM:-}" || (echo "FULLMAG_PBC_RELAX_SUPERCELL_CENTRAL_CELL_TORQUE_APM must be supplied" >&2; exit 2)
+    just prepare-fem-static-pbc-demag-supercell-runtime-artifacts
+    just write-fem-static-pbc-demag-supercell-central-cell-artifact .fullmag/reports/fem-static-pbc-demag-supercell-runtime/supercell/artifacts 3 3 "${FULLMAG_PBC_RELAX_SUPERCELL_MAGNETIC_NODE_INDICES}" "${FULLMAG_PBC_RELAX_SUPERCELL_FIELD_CELL_INDICES}" "${FULLMAG_PBC_RELAX_SUPERCELL_CENTRAL_CELL_DEMAG_ENERGY_J}" "${FULLMAG_PBC_RELAX_SUPERCELL_CENTRAL_CELL_TORQUE_APM}"
+    just verify-fem-static-pbc-demag-supercell-artifacts .fullmag/reports/fem-static-pbc-demag-supercell-runtime/unit/artifacts .fullmag/reports/fem-static-pbc-demag-supercell-runtime/supercell/artifacts 3 3 .fullmag/reports/fem-static-pbc-demag-equilibrium-runtime/reports/supercell_validation.v1.json
+
+verify-fem-static-pbc-demag-z-padding-artifacts reference candidate report=".fullmag/reports/fem-static-pbc-demag-equilibrium-runtime/reports/z_padding_validation.v1.json":
+    python3 scripts/compare_fem_static_pbc_equilibrium_artifacts.py z-padding --reference "{{reference}}" --candidate "{{candidate}}" --report "{{report}}"
+
+verify-fem-static-pbc-demag-supercell-artifacts unit_cell supercell repeat_x repeat_y report=".fullmag/reports/fem-static-pbc-demag-equilibrium-runtime/reports/supercell_validation.v1.json":
+    python3 scripts/compare_fem_static_pbc_equilibrium_artifacts.py supercell --unit-cell "{{unit_cell}}" --supercell "{{supercell}}" --repeat-x "{{repeat_x}}" --repeat-y "{{repeat_y}}" --report "{{report}}"
+
+write-fem-static-pbc-demag-supercell-central-cell-artifact supercell repeat_x repeat_y magnetic_node_indices field_cell_indices central_cell_demag_energy_j central_cell_torque_apm:
+    python3 scripts/write_fem_static_pbc_supercell_central_cell_artifact.py "{{supercell}}" --repeat-x "{{repeat_x}}" --repeat-y "{{repeat_y}}" --magnetic-node-indices "{{magnetic_node_indices}}" --field-cell-indices "{{field_cell_indices}}" --central-cell-demag-energy-j "{{central_cell_demag_energy_j}}" --central-cell-torque-apm "{{central_cell_torque_apm}}"
 
 verify-fem-relaxation-cpu-gpu-consistency-smoke:
     just ensure-managed-fem-runtime

@@ -17,6 +17,8 @@ use std::fs;
 use std::io::{Error, ErrorKind, Write};
 use std::path::Path;
 
+const MU0_H_PER_M: f64 = 1.256_637_062_12e-6;
+
 fn runtime_threading_summary(problem: &fullmag_ir::ProblemIR) -> serde_json::Value {
     let resolved_cpu_threads = u32::try_from(crate::configured_cpu_threads(problem)).ok();
     serde_json::json!({
@@ -792,6 +794,13 @@ pub(crate) fn write_artifacts(
     if should_write_plan_periodic_pairs_artifact(plan, executed) {
         write_periodic_pairs_artifact(output_dir, plan)?;
     }
+    write_static_pbc_demag_seam_diagnostics_artifact(
+        output_dir,
+        problem,
+        plan,
+        executed,
+        &final_stats,
+    )?;
 
     write_prescribed_current_transport_artifacts(
         output_dir,
@@ -1049,6 +1058,9 @@ fn write_periodic_pairs_artifact(
                 .map(|pair| pair.node_b)
                 .collect::<BTreeSet<_>>();
             let diagnostics = mesh_periodic_pair_residuals(mesh, boundary_pair, node_pairs);
+            let (magnetic_node_pair_count, airbox_node_pair_count) =
+                mesh_periodic_domain_node_pair_counts(mesh, node_pairs);
+            let boundary_face_pairs = mesh_periodic_boundary_face_pairs(mesh, boundary_pair);
             let node_pair_payload = node_pairs
                 .iter()
                 .map(|pair| {
@@ -1067,8 +1079,13 @@ fn write_periodic_pairs_artifact(
                 "marker_b": boundary_pair.marker_b,
                 "expected_translation_m": boundary_pair.translation,
                 "paired_node_count": node_pairs.len(),
+                "domain_node_pair_counts": {
+                    "magnetic": magnetic_node_pair_count,
+                    "airbox": airbox_node_pair_count,
+                },
                 "unpaired_source_node_count": source_nodes.difference(&paired_source_nodes).count(),
                 "unpaired_destination_node_count": destination_nodes.difference(&paired_destination_nodes).count(),
+                "boundary_face_pairs": boundary_face_pairs,
                 "node_pairs": node_pair_payload,
                 "max_residual_m": diagnostics.max_residual_m,
                 "rms_residual_m": diagnostics.rms_residual_m,
@@ -1121,6 +1138,301 @@ fn write_periodic_pairs_artifact(
     )?;
 
     Ok(())
+}
+
+fn static_pbc_demag_fem_plan<'a>(
+    problem: &fullmag_ir::ProblemIR,
+    plan: &'a fullmag_ir::ExecutionPlanIR,
+) -> Option<&'a fullmag_ir::FemPlanIR> {
+    let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
+        return None;
+    };
+    if !fem.enable_demag || fem.mesh.periodic_boundary_pairs.is_empty() {
+        return None;
+    }
+    let pbc = problem.pbc.as_ref()?;
+    if !pbc.has_any_periodic()
+        || !matches!(
+            pbc.demag,
+            fullmag_ir::FdmDemagPeriodicityIR::PeriodicAirboxK0
+        )
+    {
+        return None;
+    }
+    Some(fem)
+}
+
+fn write_static_pbc_demag_seam_diagnostics_artifact(
+    output_dir: &Path,
+    problem: &fullmag_ir::ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    executed: &ExecutedRun,
+    final_stats: &StepStats,
+) -> std::io::Result<()> {
+    let Some(fem) = static_pbc_demag_fem_plan(problem, plan) else {
+        return Ok(());
+    };
+
+    let mut issues = Vec::<String>::new();
+    let h_demag_snapshot = field_snapshot_at_step(executed, "H_demag", final_stats.step);
+    let demag_phi_snapshot = field_snapshot_at_step(executed, "demag_phi", final_stats.step);
+    let h_demag = h_demag_snapshot.map(|snapshot| snapshot.values.as_slice());
+    let demag_phi = demag_phi_snapshot.map(|snapshot| snapshot.values.as_slice());
+    if h_demag.is_none() {
+        issues.push(format!(
+            "missing H_demag field snapshot at final step {}",
+            final_stats.step
+        ));
+    }
+    if demag_phi.is_none() {
+        issues.push(format!(
+            "missing demag_phi field snapshot at final step {}",
+            final_stats.step
+        ));
+    }
+    if let Some(values) = h_demag {
+        if values.len() != fem.mesh.nodes.len() {
+            issues.push(format!(
+                "H_demag field snapshot length {} does not match FEM mesh node count {}",
+                values.len(),
+                fem.mesh.nodes.len()
+            ));
+        }
+    }
+    if let Some(values) = demag_phi {
+        if values.len() != fem.mesh.nodes.len() {
+            issues.push(format!(
+                "demag_phi field snapshot length {} does not match FEM mesh node count {}",
+                values.len(),
+                fem.mesh.nodes.len()
+            ));
+        }
+    }
+
+    let mut pair_diagnostics = Vec::new();
+    if let (Some(h_demag), Some(demag_phi)) = (h_demag, demag_phi) {
+        if h_demag.len() == fem.mesh.nodes.len() && demag_phi.len() == fem.mesh.nodes.len() {
+            let node_pairs_by_id = fem.mesh.periodic_node_pairs.iter().fold(
+                HashMap::<String, Vec<&fullmag_ir::MeshPeriodicNodePairIR>>::new(),
+                |mut acc, pair| {
+                    acc.entry(pair.pair_id.clone()).or_default().push(pair);
+                    acc
+                },
+            );
+            let (magnetic_nodes, _) = mesh_node_domain_sets(&fem.mesh);
+            for boundary_pair in &fem.mesh.periodic_boundary_pairs {
+                let node_pairs = node_pairs_by_id
+                    .get(&boundary_pair.pair_id)
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]);
+                let (diagnostics, pair_issues) = static_pbc_demag_pair_diagnostics(
+                    fem,
+                    &magnetic_nodes,
+                    boundary_pair,
+                    node_pairs,
+                    &executed.result.final_magnetization,
+                    h_demag,
+                    demag_phi,
+                );
+                issues.extend(pair_issues);
+                pair_diagnostics.push(diagnostics);
+            }
+        }
+    }
+    if pair_diagnostics.is_empty() {
+        issues.push("no static PBC demag pair diagnostics could be evaluated".to_string());
+    }
+
+    let status = if issues.is_empty() { "ok" } else { "failed" };
+    let payload = serde_json::json!({
+        "schema_version": "fem_static_pbc_demag_seams.v1",
+        "artifact_path": "diagnostics/fem_static_pbc_demag_seams.v1.json",
+        "status": status,
+        "step": final_stats.step,
+        "time": final_stats.time,
+        "solver_dt": final_stats.dt,
+        "basis": "node_pairs_plus_boundary_face_integrals",
+        "pair_diagnostics": pair_diagnostics,
+        "issues": issues,
+    });
+    let artifact_path = output_dir
+        .join("diagnostics")
+        .join("fem_static_pbc_demag_seams.v1.json");
+    if let Some(parent) = artifact_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(
+        artifact_path,
+        serde_json::to_string_pretty(&payload).unwrap(),
+    )?;
+
+    Ok(())
+}
+
+fn field_snapshot_at_step<'a>(
+    executed: &'a ExecutedRun,
+    name: &str,
+    step: u64,
+) -> Option<&'a crate::types::FieldSnapshot> {
+    executed
+        .field_snapshots
+        .iter()
+        .rev()
+        .find(|snapshot| snapshot.name == name && snapshot.step == step)
+}
+
+fn static_pbc_demag_pair_diagnostics(
+    fem: &fullmag_ir::FemPlanIR,
+    magnetic_nodes: &BTreeSet<u32>,
+    boundary_pair: &fullmag_ir::MeshPeriodicBoundaryPairIR,
+    node_pairs: &[&fullmag_ir::MeshPeriodicNodePairIR],
+    magnetization: &[[f64; 3]],
+    h_demag: &[[f64; 3]],
+    demag_phi: &[[f64; 3]],
+) -> (serde_json::Value, Vec<String>) {
+    let mut issues = Vec::<String>::new();
+    if node_pairs.is_empty() {
+        issues.push(format!(
+            "periodic boundary pair '{}' has no node pairs",
+            boundary_pair.pair_id
+        ));
+    }
+    let normal = periodic_pair_unit_normal(boundary_pair);
+    if normal.is_none() {
+        issues.push(format!(
+            "periodic boundary pair '{}' has no usable translation or axis hint",
+            boundary_pair.pair_id
+        ));
+    }
+
+    let mut max_m_seam = 0.0f64;
+    let mut max_h_seam = 0.0f64;
+    let mut max_b_normal_flux = 0.0f64;
+    let mut phi_deltas = Vec::<f64>::new();
+
+    for pair in node_pairs {
+        let node_a = pair.node_a as usize;
+        let node_b = pair.node_b as usize;
+        if node_a >= h_demag.len() || node_b >= h_demag.len() {
+            issues.push(format!(
+                "periodic boundary pair '{}' references H_demag node outside field length",
+                boundary_pair.pair_id
+            ));
+            continue;
+        }
+        if node_a >= demag_phi.len() || node_b >= demag_phi.len() {
+            issues.push(format!(
+                "periodic boundary pair '{}' references demag_phi node outside field length",
+                boundary_pair.pair_id
+            ));
+            continue;
+        }
+
+        let node_a_magnetic = magnetic_nodes.contains(&pair.node_a);
+        let node_b_magnetic = magnetic_nodes.contains(&pair.node_b);
+        if node_a_magnetic != node_b_magnetic {
+            issues.push(format!(
+                "periodic boundary pair '{}' maps magnetic and airbox nodes together",
+                boundary_pair.pair_id
+            ));
+            continue;
+        }
+        if node_a_magnetic && (node_a >= magnetization.len() || node_b >= magnetization.len()) {
+            issues.push(format!(
+                "periodic boundary pair '{}' references magnetic node outside magnetization length",
+                boundary_pair.pair_id
+            ));
+            continue;
+        }
+
+        if node_a_magnetic {
+            max_m_seam = max_m_seam.max(vector_difference_norm(
+                magnetization[node_a],
+                magnetization[node_b],
+            ));
+        }
+        max_h_seam = max_h_seam.max(vector_difference_norm(h_demag[node_a], h_demag[node_b]));
+        phi_deltas.push(demag_phi[node_a][0] - demag_phi[node_b][0]);
+        if let Some(normal) = normal {
+            let b_a = demag_b_vector(fem, magnetic_nodes, node_a, magnetization, h_demag[node_a]);
+            let b_b = demag_b_vector(fem, magnetic_nodes, node_b, magnetization, h_demag[node_b]);
+            max_b_normal_flux =
+                max_b_normal_flux.max(vector_dot(vector_subtract(b_a, b_b), normal).abs());
+        }
+    }
+
+    let demag_phi_seam_max_after_offset = if phi_deltas.is_empty() {
+        issues.push(format!(
+            "periodic boundary pair '{}' has no phi deltas to gauge-fit",
+            boundary_pair.pair_id
+        ));
+        0.0
+    } else {
+        let offset = phi_deltas.iter().sum::<f64>() / phi_deltas.len() as f64;
+        phi_deltas
+            .iter()
+            .map(|delta| (delta - offset).abs())
+            .fold(0.0f64, f64::max)
+    };
+
+    let face_pairs = mesh_periodic_boundary_face_index_pairs(&fem.mesh, boundary_pair);
+    if face_pairs.is_empty() {
+        issues.push(format!(
+            "periodic boundary pair '{}' has no paired boundary faces for side-charge integral",
+            boundary_pair.pair_id
+        ));
+    }
+    let mut side_charge_sum = 0.0f64;
+    for (source_face_index, destination_face_index) in &face_pairs {
+        let Some(normal) = normal else {
+            continue;
+        };
+        let source_normal = [-normal[0], -normal[1], -normal[2]];
+        let Some(source_charge) = face_magnetic_charge_integral(
+            fem,
+            magnetic_nodes,
+            *source_face_index,
+            source_normal,
+            magnetization,
+        ) else {
+            issues.push(format!(
+                "periodic boundary pair '{}' has invalid source face {} for side-charge integral",
+                boundary_pair.pair_id, source_face_index
+            ));
+            continue;
+        };
+        let Some(destination_charge) = face_magnetic_charge_integral(
+            fem,
+            magnetic_nodes,
+            *destination_face_index,
+            normal,
+            magnetization,
+        ) else {
+            issues.push(format!(
+                "periodic boundary pair '{}' has invalid destination face {} for side-charge integral",
+                boundary_pair.pair_id, destination_face_index
+            ));
+            continue;
+        };
+        side_charge_sum += source_charge + destination_charge;
+    }
+    let side_charge_sum_abs = side_charge_sum.abs();
+    let pair_status = if issues.is_empty() { "ok" } else { "failed" };
+
+    (
+        serde_json::json!({
+            "pair_id": boundary_pair.pair_id,
+            "status": pair_status,
+            "paired_node_count": node_pairs.len(),
+            "boundary_face_pair_count": face_pairs.len(),
+            "m_seam_max": max_m_seam,
+            "h_demag_seam_max_Apm": max_h_seam,
+            "demag_phi_seam_max_after_offset_A": demag_phi_seam_max_after_offset,
+            "b_normal_flux_seam_max_T": max_b_normal_flux,
+            "side_magnetic_charge_sum_abs_Am": side_charge_sum_abs,
+        }),
+        issues,
+    )
 }
 
 fn periodic_mesh(plan: &fullmag_ir::ExecutionPlanIR) -> Option<&fullmag_ir::MeshIR> {
@@ -1214,6 +1526,244 @@ fn mesh_boundary_nodes_by_marker(mesh: &fullmag_ir::MeshIR) -> HashMap<u32, BTre
         nodes.extend(face.iter().copied());
     }
     nodes_by_marker
+}
+
+fn mesh_node_domain_sets(mesh: &fullmag_ir::MeshIR) -> (BTreeSet<u32>, BTreeSet<u32>) {
+    let mut magnetic_nodes = BTreeSet::new();
+    let mut airbox_nodes = BTreeSet::new();
+    for (element_index, element) in mesh.elements.iter().enumerate() {
+        let marker = mesh
+            .element_markers
+            .get(element_index)
+            .copied()
+            .unwrap_or(1);
+        let target = if marker == 0 {
+            &mut airbox_nodes
+        } else {
+            &mut magnetic_nodes
+        };
+        target.extend(element.iter().copied());
+    }
+    (magnetic_nodes, airbox_nodes)
+}
+
+fn mesh_periodic_domain_node_pair_counts(
+    mesh: &fullmag_ir::MeshIR,
+    node_pairs: &[&fullmag_ir::MeshPeriodicNodePairIR],
+) -> (usize, usize) {
+    let (magnetic_nodes, airbox_nodes) = mesh_node_domain_sets(mesh);
+    let mut magnetic_count = 0usize;
+    let mut airbox_count = 0usize;
+    for pair in node_pairs {
+        let node_a_is_magnetic = magnetic_nodes.contains(&pair.node_a);
+        let node_b_is_magnetic = magnetic_nodes.contains(&pair.node_b);
+        let node_a_is_airbox = airbox_nodes.contains(&pair.node_a);
+        let node_b_is_airbox = airbox_nodes.contains(&pair.node_b);
+        if !node_a_is_magnetic && !node_b_is_magnetic && (node_a_is_airbox || node_b_is_airbox) {
+            airbox_count += 1;
+        } else {
+            magnetic_count += 1;
+        }
+    }
+    (magnetic_count, airbox_count)
+}
+
+fn mesh_periodic_boundary_face_pairs(
+    mesh: &fullmag_ir::MeshIR,
+    boundary_pair: &fullmag_ir::MeshPeriodicBoundaryPairIR,
+) -> Vec<serde_json::Value> {
+    let mut pairs = Vec::new();
+    for (source_face_index, destination_face_index) in
+        mesh_periodic_boundary_face_index_pairs(mesh, boundary_pair)
+    {
+        let normal_dot = periodic_pair_unit_normal(boundary_pair).map(|_| -1.0);
+        pairs.push(serde_json::json!({
+            "face_a": source_face_index,
+            "face_b": destination_face_index,
+            "translation_m": boundary_pair.translation,
+            "normal_dot": normal_dot,
+            "orientation": if normal_dot.is_some_and(|dot| dot <= -0.999) {
+                "opposed_normals"
+            } else {
+                "not_opposed"
+            },
+        }));
+    }
+    pairs
+}
+
+fn mesh_periodic_boundary_face_index_pairs(
+    mesh: &fullmag_ir::MeshIR,
+    boundary_pair: &fullmag_ir::MeshPeriodicBoundaryPairIR,
+) -> Vec<(usize, usize)> {
+    let Some(translation) = boundary_pair.translation else {
+        return Vec::new();
+    };
+    let source_faces = mesh_boundary_face_indices_by_marker(mesh, boundary_pair.marker_a);
+    let mut destination_faces = mesh_boundary_face_indices_by_marker(mesh, boundary_pair.marker_b);
+    let mut pairs = Vec::new();
+    for source_face_index in source_faces {
+        let Some(source_centroid) = mesh_boundary_face_centroid(mesh, source_face_index) else {
+            continue;
+        };
+        let mut best_destination: Option<(usize, usize, f64)> = None;
+        for (candidate_position, destination_face_index) in destination_faces.iter().enumerate() {
+            let Some(destination_centroid) =
+                mesh_boundary_face_centroid(mesh, *destination_face_index)
+            else {
+                continue;
+            };
+            let residual = [
+                destination_centroid[0] - source_centroid[0] - translation[0],
+                destination_centroid[1] - source_centroid[1] - translation[1],
+                destination_centroid[2] - source_centroid[2] - translation[2],
+            ];
+            let residual_norm =
+                (residual[0] * residual[0] + residual[1] * residual[1] + residual[2] * residual[2])
+                    .sqrt();
+            if best_destination
+                .as_ref()
+                .is_none_or(|(_, _, best_norm)| residual_norm < *best_norm)
+            {
+                best_destination =
+                    Some((candidate_position, *destination_face_index, residual_norm));
+            }
+        }
+        let Some((destination_position, destination_face_index, _)) = best_destination else {
+            continue;
+        };
+        destination_faces.remove(destination_position);
+        pairs.push((source_face_index, destination_face_index));
+    }
+    pairs
+}
+
+fn mesh_boundary_face_indices_by_marker(mesh: &fullmag_ir::MeshIR, marker: u32) -> Vec<usize> {
+    mesh.boundary_markers
+        .iter()
+        .enumerate()
+        .filter_map(|(index, face_marker)| (*face_marker == marker).then_some(index))
+        .collect()
+}
+
+fn mesh_boundary_face_centroid(mesh: &fullmag_ir::MeshIR, face_index: usize) -> Option<[f64; 3]> {
+    let face = mesh.boundary_faces.get(face_index)?;
+    let a = mesh.nodes.get(face[0] as usize)?;
+    let b = mesh.nodes.get(face[1] as usize)?;
+    let c = mesh.nodes.get(face[2] as usize)?;
+    Some([
+        (a[0] + b[0] + c[0]) / 3.0,
+        (a[1] + b[1] + c[1]) / 3.0,
+        (a[2] + b[2] + c[2]) / 3.0,
+    ])
+}
+
+fn mesh_boundary_face_area(mesh: &fullmag_ir::MeshIR, face_index: usize) -> Option<f64> {
+    let face = mesh.boundary_faces.get(face_index)?;
+    let a = mesh.nodes.get(face[0] as usize)?;
+    let b = mesh.nodes.get(face[1] as usize)?;
+    let c = mesh.nodes.get(face[2] as usize)?;
+    let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    let cross = [
+        ab[1] * ac[2] - ab[2] * ac[1],
+        ab[2] * ac[0] - ab[0] * ac[2],
+        ab[0] * ac[1] - ab[1] * ac[0],
+    ];
+    Some(0.5 * (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]).sqrt())
+}
+
+fn periodic_pair_unit_normal(
+    boundary_pair: &fullmag_ir::MeshPeriodicBoundaryPairIR,
+) -> Option<[f64; 3]> {
+    if let Some(translation) = boundary_pair.translation {
+        let norm = vector_norm(translation);
+        if norm > f64::EPSILON {
+            return Some([
+                translation[0] / norm,
+                translation[1] / norm,
+                translation[2] / norm,
+            ]);
+        }
+    }
+    match boundary_pair.axis_hint.as_deref() {
+        Some("x") => Some([1.0, 0.0, 0.0]),
+        Some("y") => Some([0.0, 1.0, 0.0]),
+        Some("z") => Some([0.0, 0.0, 1.0]),
+        _ => None,
+    }
+}
+
+fn vector_norm(value: [f64; 3]) -> f64 {
+    (value[0] * value[0] + value[1] * value[1] + value[2] * value[2]).sqrt()
+}
+
+fn vector_difference_norm(a: [f64; 3], b: [f64; 3]) -> f64 {
+    vector_norm(vector_subtract(a, b))
+}
+
+fn vector_subtract(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn vector_dot(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn material_ms_at(material: &fullmag_ir::MaterialIR, node_index: usize) -> f64 {
+    material
+        .ms_field
+        .as_ref()
+        .and_then(|values| values.get(node_index))
+        .copied()
+        .unwrap_or(material.saturation_magnetisation)
+}
+
+fn magnetization_vector_at(
+    fem: &fullmag_ir::FemPlanIR,
+    magnetic_nodes: &BTreeSet<u32>,
+    node_index: usize,
+    magnetization: &[[f64; 3]],
+) -> Option<[f64; 3]> {
+    if !magnetic_nodes.contains(&(node_index as u32)) {
+        return Some([0.0, 0.0, 0.0]);
+    }
+    let m = magnetization.get(node_index)?;
+    let ms = material_ms_at(&fem.material, node_index);
+    Some([ms * m[0], ms * m[1], ms * m[2]])
+}
+
+fn demag_b_vector(
+    fem: &fullmag_ir::FemPlanIR,
+    magnetic_nodes: &BTreeSet<u32>,
+    node_index: usize,
+    magnetization: &[[f64; 3]],
+    h_demag: [f64; 3],
+) -> [f64; 3] {
+    let magnetization = magnetization_vector_at(fem, magnetic_nodes, node_index, magnetization)
+        .unwrap_or([0.0, 0.0, 0.0]);
+    [
+        MU0_H_PER_M * (h_demag[0] + magnetization[0]),
+        MU0_H_PER_M * (h_demag[1] + magnetization[1]),
+        MU0_H_PER_M * (h_demag[2] + magnetization[2]),
+    ]
+}
+
+fn face_magnetic_charge_integral(
+    fem: &fullmag_ir::FemPlanIR,
+    magnetic_nodes: &BTreeSet<u32>,
+    face_index: usize,
+    normal: [f64; 3],
+    magnetization: &[[f64; 3]],
+) -> Option<f64> {
+    let face = fem.mesh.boundary_faces.get(face_index)?;
+    let area = mesh_boundary_face_area(&fem.mesh, face_index)?;
+    let mut average_m_dot_n = 0.0f64;
+    for node in face {
+        let vector = magnetization_vector_at(fem, magnetic_nodes, *node as usize, magnetization)?;
+        average_m_dot_n += vector_dot(vector, normal);
+    }
+    Some(area * average_m_dot_n / face.len() as f64)
 }
 
 fn artifacts_object_ids_match(a: &str, b: &str) -> bool {
@@ -3488,7 +4038,9 @@ mod tests {
             [0.0, 0.0, 1.0e-6],
             [1.0e-6, 0.0, 1.0e-6],
         ];
-        fem.mesh.boundary_faces = vec![[0, 2, 4], [1, 3, 5]];
+        fem.mesh.elements = vec![[0, 1, 2, 3], [0, 1, 4, 5]];
+        fem.mesh.element_markers = vec![1, 0];
+        fem.mesh.boundary_faces = vec![[0, 2, 4], [1, 5, 3]];
         fem.mesh.boundary_markers = vec![10, 11];
         fem.mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
             pair_id: "x_periodic".to_string(),
@@ -3547,6 +4099,22 @@ mod tests {
         assert_eq!(artifact["pairs"][0]["paired_node_count"], 3);
         assert_eq!(artifact["pairs"][0]["unpaired_source_node_count"], 0);
         assert_eq!(artifact["pairs"][0]["unpaired_destination_node_count"], 0);
+        assert_eq!(
+            artifact["pairs"][0]["domain_node_pair_counts"],
+            serde_json::json!({"magnetic": 2, "airbox": 1})
+        );
+        assert_eq!(
+            artifact["pairs"][0]["boundary_face_pairs"],
+            serde_json::json!([
+                {
+                    "face_a": 0,
+                    "face_b": 1,
+                    "translation_m": [1.0e-6, 0.0, 0.0],
+                    "normal_dot": -1.0,
+                    "orientation": "opposed_normals",
+                }
+            ])
+        );
         assert_eq!(
             artifact["pairs"][0]["node_pairs"],
             serde_json::json!([
@@ -4365,6 +4933,213 @@ mod tests {
         assert_eq!(top["values"].as_array().expect("values").len(), 2);
         assert_eq!(top["values"][0], serde_json::json!([0.0, 1.0, 0.0]));
         assert_eq!(top["values"][1], serde_json::json!([0.0, 0.9, 0.1]));
+
+        fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[test]
+    fn write_artifacts_persists_static_pbc_demag_seam_diagnostics() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.problem_meta.name = "fem_periodic_antidot_relax_air_gap".to_string();
+        problem.pbc = Some(fullmag_ir::FdmPeriodicityIR {
+            axes: [
+                fullmag_ir::AxisBoundary::Periodic,
+                fullmag_ir::AxisBoundary::Periodic,
+                fullmag_ir::AxisBoundary::Open,
+            ],
+            demag: fullmag_ir::FdmDemagPeriodicityIR::PeriodicAirboxK0,
+            image_counts: None,
+        });
+        let mut plan = test_periodic_fem_execution_plan();
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            panic!("test plan should be FEM");
+        };
+        fem.enable_demag = true;
+        fem.material.saturation_magnetisation = 800e3;
+        fem.mesh.nodes = vec![
+            [0.0, 0.0, 0.0],
+            [40.0e-9, 0.0, 0.0],
+            [40.0e-9, 20.0e-9, 0.0],
+            [0.0, 20.0e-9, 0.0],
+            [0.0, 0.0, 10.0e-9],
+            [40.0e-9, 0.0, 10.0e-9],
+            [40.0e-9, 20.0e-9, 10.0e-9],
+            [0.0, 20.0e-9, 10.0e-9],
+        ];
+        fem.mesh.elements = vec![[0, 1, 2, 4], [3, 5, 6, 7]];
+        fem.mesh.element_markers = vec![1, 1];
+        fem.mesh.boundary_faces = vec![
+            [0, 3, 7],
+            [0, 7, 4],
+            [1, 5, 6],
+            [1, 6, 2],
+            [0, 4, 5],
+            [0, 5, 1],
+            [3, 2, 6],
+            [3, 6, 7],
+        ];
+        fem.mesh.boundary_markers = vec![1, 1, 2, 2, 3, 3, 4, 4];
+        fem.mesh.periodic_boundary_pairs = vec![
+            fullmag_ir::MeshPeriodicBoundaryPairIR {
+                pair_id: "x_faces".to_string(),
+                source_marker: Some("x_min".to_string()),
+                destination_marker: Some("x_max".to_string()),
+                marker_a: 1,
+                marker_b: 2,
+                translation: Some([40.0e-9, 0.0, 0.0]),
+                tolerance: Some(1.0e-12),
+                axis_hint: Some("x".to_string()),
+                orientation: Some("opposed_normals".to_string()),
+                pairing_policy: Some("explicit_node_pairs".to_string()),
+            },
+            fullmag_ir::MeshPeriodicBoundaryPairIR {
+                pair_id: "y_faces".to_string(),
+                source_marker: Some("y_min".to_string()),
+                destination_marker: Some("y_max".to_string()),
+                marker_a: 3,
+                marker_b: 4,
+                translation: Some([0.0, 20.0e-9, 0.0]),
+                tolerance: Some(1.0e-12),
+                axis_hint: Some("y".to_string()),
+                orientation: Some("opposed_normals".to_string()),
+                pairing_policy: Some("explicit_node_pairs".to_string()),
+            },
+        ];
+        fem.mesh.periodic_node_pairs = vec![
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "x_faces".to_string(),
+                node_a: 0,
+                node_b: 1,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "x_faces".to_string(),
+                node_a: 3,
+                node_b: 2,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "x_faces".to_string(),
+                node_a: 4,
+                node_b: 5,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "x_faces".to_string(),
+                node_a: 7,
+                node_b: 6,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "y_faces".to_string(),
+                node_a: 0,
+                node_b: 3,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "y_faces".to_string(),
+                node_a: 1,
+                node_b: 2,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "y_faces".to_string(),
+                node_a: 4,
+                node_b: 7,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "y_faces".to_string(),
+                node_a: 5,
+                node_b: 6,
+            },
+        ];
+
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-static-pbc-demag-seams-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+
+        let executed = ExecutedRun {
+            result: RunResult {
+                status: RunStatus::Completed,
+                steps: vec![StepStats {
+                    step: 4,
+                    time: 2.0e-12,
+                    dt: 5.0e-13,
+                    e_demag: 1.0e-21,
+                    ..StepStats::default()
+                }],
+                final_magnetization: vec![[1.0, 0.0, 0.0]; 8],
+                completion: None,
+            },
+            initial_magnetization: vec![[1.0, 0.0, 0.0]; 8],
+            field_snapshots: vec![
+                FieldSnapshot {
+                    name: "H_demag".to_string(),
+                    step: 4,
+                    time: 2.0e-12,
+                    solver_dt: 5.0e-13,
+                    values: vec![[10.0, 2.0, 0.0]; 8],
+                },
+                FieldSnapshot {
+                    name: "demag_phi".to_string(),
+                    step: 4,
+                    time: 2.0e-12,
+                    solver_dt: 5.0e-13,
+                    values: vec![
+                        [1.0e-6, 0.0, 0.0],
+                        [3.0e-6, 0.0, 0.0],
+                        [3.0e-6, 0.0, 0.0],
+                        [1.0e-6, 0.0, 0.0],
+                        [1.0e-6, 0.0, 0.0],
+                        [3.0e-6, 0.0, 0.0],
+                        [3.0e-6, 0.0, 0.0],
+                        [1.0e-6, 0.0, 0.0],
+                    ],
+                },
+            ],
+            field_snapshot_count: 2,
+            auxiliary_artifacts: Vec::new(),
+            provenance: ExecutionProvenance {
+                execution_engine: "fem_cpu_native".to_string(),
+                precision: "double".to_string(),
+                ..ExecutionProvenance::default()
+            },
+        };
+
+        write_artifacts(&output_dir, &problem, &plan, &executed, None)
+            .expect("artifact write should persist static PBC demag seam diagnostics");
+
+        let artifact: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("diagnostics/fem_static_pbc_demag_seams.v1.json"))
+                .expect("static PBC demag seam diagnostics artifact should exist"),
+        )
+        .expect("static PBC demag seam diagnostics artifact should parse");
+        assert_eq!(artifact["schema_version"], "fem_static_pbc_demag_seams.v1");
+        assert_eq!(
+            artifact["artifact_path"],
+            "diagnostics/fem_static_pbc_demag_seams.v1.json"
+        );
+        assert_eq!(artifact["status"], "ok");
+        assert_eq!(artifact["step"], 4);
+        assert_eq!(
+            artifact["pair_diagnostics"].as_array().map(Vec::len),
+            Some(2)
+        );
+        assert_eq!(artifact["pair_diagnostics"][0]["pair_id"], "x_faces");
+        assert_eq!(artifact["pair_diagnostics"][0]["m_seam_max"], 0.0);
+        assert_eq!(artifact["pair_diagnostics"][0]["h_demag_seam_max_Apm"], 0.0);
+        assert_eq!(
+            artifact["pair_diagnostics"][0]["demag_phi_seam_max_after_offset_A"],
+            0.0
+        );
+        assert_eq!(
+            artifact["pair_diagnostics"][0]["b_normal_flux_seam_max_T"],
+            0.0
+        );
+        assert_eq!(
+            artifact["pair_diagnostics"][0]["side_magnetic_charge_sum_abs_Am"],
+            0.0
+        );
 
         fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
     }

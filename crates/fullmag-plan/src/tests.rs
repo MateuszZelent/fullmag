@@ -2480,6 +2480,51 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
         other => panic!("expected FEM plan, got {:?}", other),
     }
 
+    let mut z_demag_ir = demag_ir.clone();
+    z_demag_ir.pbc = Some(fullmag_ir::FdmPeriodicityIR {
+        axes: [
+            fullmag_ir::AxisBoundary::Open,
+            fullmag_ir::AxisBoundary::Open,
+            fullmag_ir::AxisBoundary::Periodic,
+        ],
+        demag: fullmag_ir::FdmDemagPeriodicityIR::PeriodicAirboxK0,
+        image_counts: None,
+    });
+    let mesh = z_demag_ir
+        .geometry_assets
+        .as_mut()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+        .and_then(|asset| asset.mesh.as_mut())
+        .expect("test problem should carry an inline FEM domain mesh");
+    mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
+        pair_id: "z_periodic".to_string(),
+        source_marker: None,
+        destination_marker: None,
+        marker_a: 10,
+        marker_b: 11,
+        translation: Some([0.0, 0.0, 1.0]),
+        tolerance: Some(1e-12),
+        axis_hint: Some("z".to_string()),
+        orientation: None,
+        pairing_policy: None,
+    }];
+    mesh.periodic_node_pairs = vec![fullmag_ir::MeshPeriodicNodePairIR {
+        pair_id: "z_periodic".to_string(),
+        node_a: 0,
+        node_b: 3,
+    }];
+    let z_demag_planned = plan(&z_demag_ir)
+        .expect("single-axis z FEM demag PBC with open x/y airbox should plan");
+    match z_demag_planned.backend_plan {
+        BackendPlanIR::Fem(fem) => {
+            assert!(fem.enable_demag);
+            assert_eq!(fem.mesh.periodic_boundary_pairs.len(), 1);
+            assert_eq!(fem.mesh.periodic_boundary_pairs[0].pair_id, "z_periodic");
+            assert!(fem.air_box_config.is_some());
+        }
+        other => panic!("expected FEM plan, got {:?}", other),
+    }
+
     let mut missing_boundary_pairs = demag_ir.clone();
     missing_boundary_pairs
         .geometry_assets

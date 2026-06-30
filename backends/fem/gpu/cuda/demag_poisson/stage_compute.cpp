@@ -18,6 +18,7 @@
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include "gpu/cuda/demag_poisson/demag_kernels.hpp"
 #include "gpu/cuda/fields/vector_field_kernels.hpp"
+#include "gpu/cuda/relaxation/pgbb_kernels.hpp"
 #include "gpu/cuda/reductions/reduction_kernels.hpp"
 #include <cuda_runtime.h>
 #endif
@@ -253,11 +254,23 @@ bool compute_device_demag_for_device_stage(
     if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson demag recovery CSR", reason)) {
         return false;
     }
+    const int n = static_cast<int>(gpu.lifecycle.node_count);
+    if (gpu.mesh_regions.has_periodic_reduced_nodes) {
+        fullmag_cuda_relax_project_static_periodic_field(
+            gpu.fields.h_demag.x,
+            gpu.fields.h_demag.y,
+            gpu.fields.h_demag.z,
+            gpu.mesh_regions.periodic_representative_nodes,
+            n,
+            stream);
+        if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson demag periodic H_demag projection", reason)) {
+            return false;
+        }
+    }
     if (!recover_timer.finish(reason)) {
         return false;
     }
 
-    const int n = static_cast<int>(gpu.lifecycle.node_count);
     const int blocks = (n + 255) / 256;
     GpuDemagPhaseTimer energy_timer;
     if (!energy_timer.start(

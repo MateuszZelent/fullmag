@@ -321,17 +321,58 @@ errors after the current working-tree fixes for FormField and ObjectRegionsPanel
 Those fixes still need final review and commit hygiene, but they were not
 expanded by this audit.
 
+## 2026-06-30 Follow-Up: Maximum Update Depth Recheck
+
+The `Maximum update depth exceeded` error was rechecked against a fresh local
+Next.js 16.2.6 dev server on `http://localhost:3102/workspace`.
+
+Additional evidence:
+
+- `FormField.tsx` has no effect or state setter; it maps the Inspector-only
+  `invalid` prop to `aria-invalid` and strips wrapper props before spreading DOM
+  props.
+- `PhysicalScalarField` in `ObjectRegionsPanel.tsx` is the nearest write-back
+  path in the reported stack. It now buffers text locally and calls
+  `onValueChange(parsed)` only when `!Object.is(parsed, value)`.
+- A subagent independently checked the same path and did not find a current
+  render-time setter loop in `FormField.tsx` or `ObjectRegionsPanel.tsx`.
+- Targeted Vitest commands for `ObjectRegionsPanel`, `FormField`, and
+  `ResourceRuntimeStore` passed.
+- Browser smoke with Playwright required unsandboxed execution because Chromium
+  cannot launch inside the current process sandbox. The fresh dev-server run did
+  not emit `Maximum update depth exceeded` in `.next/dev/logs/next-development.log`.
+
+Current interpretation:
+
+- The originally reported depth loop is most likely either already fixed in the
+  current source by the scalar write-back guard, or was observed from a stale
+  browser/dev-server bundle.
+- It is not yet proven impossible, because the full Study authoring smoke still
+  fails later on the Hysteresis `Live Progress` expectation. That failure is a
+  separate workflow contract failure and remains the active High-severity item.
+
+Regression coverage still needed:
+
+- Add a real client-render interaction test for `PhysicalScalarField` when a
+  DOM-capable Vitest environment is available. The test should render
+  `value={1e-9}`, edit the input to an equivalent string such as `1e-9` or
+  `0.000000001`, and assert that `onValueChange` is not called.
+- Until jsdom/happy-dom is available in the package, keep the existing static
+  source test that asserts the `Object.is(parsed, value)` guard is present.
+
 ## Recommended Fix Order
 
-1. Fix or update `smoke:study-authoring-ui` for both Hysteresis child inspectors
+1. Keep the `Object.is(parsed, value)` guard in `PhysicalScalarField` and add
+   client-render regression coverage when the test environment supports it.
+2. Fix or update `smoke:study-authoring-ui` for both Hysteresis child inspectors
    and frequency-domain modal-spectrum selection.
-2. Repair `check:architecture-hygiene`: move Explorer's Inspector imports out of
+3. Repair `check:architecture-hygiene`: move Explorer's Inspector imports out of
    the module boundary and replace raw viewport colors with token-derived
    colors.
-3. Repair `check:api-hygiene` by removing the raw response-map endpoint fixture.
-4. Add a pinned React Doctor command if React Doctor is expected to be part of
+4. Repair `check:api-hygiene` by removing the raw response-map endpoint fixture.
+5. Add a pinned React Doctor command if React Doctor is expected to be part of
    the standard frontend audit.
-5. Profile `/workspace` startup fan-out after functional browser smokes are
+6. Profile `/workspace` startup fan-out after functional browser smokes are
    stable.
 
 ## Current Shippability

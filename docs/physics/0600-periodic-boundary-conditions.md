@@ -2,7 +2,7 @@
 
 - Status: draft
 - Owners: fullmag team
-- Last updated: 2026-04-11
+- Last updated: 2026-06-30
 - Related ADRs: —
 - Related specs: fullmag-application-architecture-v2, session-run-api-v1
 - Related reports: docs/reports/11.04.2026/PBC/raport-diagnostyczny-pbc-fem-fdm-fullmag-2026-04-11.mdx,
@@ -20,9 +20,11 @@ Fullmag currently has **no** unified PBC system.  Several limited lanes are
 implemented, but they must not be collapsed into a blanket "PBC works" claim:
 FDM has axis-wise periodic local operators and truncated-image demag support;
 native FEM has k=0 static reductions for selected CPU/MFEM static/time-domain
-paths; FEM eigen has periodic/Floquet phase reduction for magnetic operators
-without dynamic demag; driven FEM frequency response has only the gamma/free and
-k=0 static-periodic magnetic slice without demag.
+paths, but the static demag path remains diagnostic/source-visible for
+magnonic-crystal workloads until the M5 equilibrium gate proves full
+magnetostatic PBC; FEM eigen has periodic/Floquet phase reduction for magnetic
+operators without dynamic demag; driven FEM frequency response has only the
+gamma/free and k=0 static-periodic magnetic slice without demag.
 
 This note covers the physics, numerics, and IR design for two functional lines:
 
@@ -224,6 +226,9 @@ open airbox faces.  Static/time-domain k=0 demag PBC has a limited
 shared-domain-airbox implementation using periodic node classes and
 `P^T A P` scalar-potential reduction.  Periodic seam faces must be excluded
 from Robin mass assembly through `periodic_boundary_pairs`.
+Pairing or projecting only `m` is not sufficient: if `phi` or `H_demag`
+remains discontinuous across the seam, the result is finite isolated-airbox
+demag with periodic magnetization projection, not physical magnetostatic PBC.
 
 This does **not** imply full frequency-domain or Floquet demag.  Driven
 frequency-response demag, nonzero-k Floquet magnetostatics, fully periodic 3D
@@ -312,7 +317,7 @@ pub tolerance: Option<f64>,
 | FDM + periodic + Floquet | — | Error: Floquet not valid for FDM time-domain |
 | FEM static + periodic | requires `periodic_node_pairs` | Error if pairs missing |
 | FEM eigen + periodic | existing validation | Already implemented |
-| FEM static/time-domain + periodic demag | CPU/MFEM k=0 shared-domain-airbox slice | Requires `periodic_node_pairs`, `periodic_boundary_pairs`, and at least one open axis |
+| FEM static/time-domain + periodic demag | diagnostic/source-visible CPU/MFEM k=0 shared-domain-airbox slice until M5 acceptance | Requires `ProblemIR.pbc.demag = "periodic_airbox_k0"`, `periodic_node_pairs`, `periodic_boundary_pairs`, complete magnetic plus airbox pair coverage, and at least one open axis |
 | FEM frequency response + periodic demag | — | Error: unsupported until dynamic magnetostatic response exists |
 | Hybrid + periodic | — | Error: unsupported |
 
@@ -380,13 +385,16 @@ pub tolerance: Option<f64>,
 
 ## 7. Known limits and deferred work
 
-1. **FEM static/time-domain PBC** is limited to the qualified CPU/MFEM k=0
-   static-reduction slice.  Missing pair metadata, incompatible periodic
-   classes, and unsupported GPU paths must reject.
+1. **FEM static/time-domain PBC** is limited to the CPU/MFEM k=0
+   static-reduction diagnostic/source-visible slice until the M5 equilibrium
+   gate passes for the target workload. Missing pair metadata, incompatible
+   periodic classes, and unsupported GPU paths must reject.
 2. **FEM periodic demag** is limited to static/time-domain k=0
-   shared-domain-airbox reduction.  Frequency-domain demag, nonzero-k Floquet
-   magnetostatics, fully periodic 3D demag, and GPU periodic demag remain
-   deferred.
+   shared-domain-airbox reduction, and acceptance requires periodic `m`,
+   gauge-adjusted `phi`, periodic `H_demag`, balanced seam flux, no artificial
+   side-edge magnetic charge, and primitive-vs-supercell agreement. Frequency-
+   domain demag, nonzero-k Floquet magnetostatics, fully periodic 3D demag,
+   and GPU periodic demag remain deferred.
 3. **Infinite-series demag** (`Infinite1D`, `Infinite2D`, `Infinite3D` via Ewald
    summation) is not implemented; only truncated images are provided.
 4. **CUDA PBC** mirrors Rust reference semantics but requires separate kernel

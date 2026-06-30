@@ -7,12 +7,12 @@ import { InspectorSection } from "@/modules/inspector/primitives/InspectorSectio
 import {
   resolveObjectExtensionsSectionModel,
   setObjectExtensionEnabled,
-} from "./ObjectExtensionsSectionModel";
+} from "@/kernel/object-extensions/ObjectExtensionsSectionModel";
 import type {
   ObjectExtensionActivationState,
   ObjectExtensionId,
-} from "./objectExtensionTypes";
-import { useObjectExtensionActivation } from "./useObjectExtensionActivation";
+} from "@/kernel/object-extensions/objectExtensionTypes";
+import { useObjectExtensionActivation } from "@/kernel/object-extensions/useObjectExtensionActivation";
 
 interface ObjectExtensionsSectionProps {
   activation?: ObjectExtensionActivationState;

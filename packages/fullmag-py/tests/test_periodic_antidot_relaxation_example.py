@@ -12,6 +12,12 @@ from fullmag.runtime import helper as runtime_helper
 
 EXAMPLES = {
     "exchange_coupled": Path("examples/fem_periodic_antidot_relax_exchange_coupled.py"),
+    "exchange_coupled_z_padding_reference": Path(
+        "examples/fem_periodic_antidot_relax_exchange_coupled_z_padding_reference.py"
+    ),
+    "exchange_coupled_supercell_3x3": Path(
+        "examples/fem_periodic_antidot_relax_exchange_coupled_supercell_3x3.py"
+    ),
     "air_gap": Path("examples/fem_periodic_antidot_relax_air_gap.py"),
 }
 
@@ -81,6 +87,8 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
         exchange_coupled: bool,
         universe_xy: float,
         lateral_gap_xy: float,
+        universe_z: float = 9e-8,
+        supercell_repeat: list[int] | None = None,
     ) -> None:
         scenario_metadata = metadata["periodic_antidot_relaxation"]
         self.assertEqual(scenario_metadata["scenario"], scenario)
@@ -98,9 +106,13 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
         self.assertAlmostEqual(scenario_metadata["film_size_m"][2], 1e-8)
         self.assertAlmostEqual(scenario_metadata["universe_size_m"][0], universe_xy)
         self.assertAlmostEqual(scenario_metadata["universe_size_m"][1], universe_xy)
-        self.assertAlmostEqual(scenario_metadata["universe_size_m"][2], 9e-8)
+        self.assertAlmostEqual(scenario_metadata["universe_size_m"][2], universe_z)
         self.assertAlmostEqual(scenario_metadata["lateral_air_gap_m"][0], lateral_gap_xy)
         self.assertAlmostEqual(scenario_metadata["lateral_air_gap_m"][1], lateral_gap_xy)
+        if supercell_repeat is None:
+            self.assertNotIn("supercell_repeat", scenario_metadata)
+        else:
+            self.assertEqual(scenario_metadata["supercell_repeat"], supercell_repeat)
 
     def assert_problem_ir_declares_xy_pbc(self, payload: dict[str, object]) -> None:
         self.assertEqual(
@@ -144,6 +156,7 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
         self.assertEqual(study["kind"], "relaxation")
         self.assertEqual(study["algorithm"], "projected_gradient_bb")
         self.assertEqual(study["stop"]["max_steps"], 4000)
+        self.assertEqual(study["stop"]["torque_tolerance_apm"], 5.0e3)
         self.assert_study_saves_equilibrium_and_demag_fields(study)
         self.assert_table_logs_pbc_sensitive_quantities(study)
 
@@ -180,6 +193,9 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
         self.assertEqual(payload["stages"][0]["entrypoint_kind"], "flat_relax")
 
         study = payload["stages"][0]["ir"]["study"]
+        self.assertEqual(study["algorithm"], "projected_gradient_bb")
+        self.assertEqual(study["stop"]["max_steps"], 4000)
+        self.assertEqual(study["stop"]["torque_tolerance_apm"], 5.0e3)
         self.assert_study_saves_equilibrium_and_demag_fields(study)
         self.assert_table_logs_pbc_sensitive_quantities(study)
 
@@ -198,6 +214,45 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
             exchange_coupled=False,
             universe_xy=3.2e-7,
             lateral_gap_xy=1.2e-7,
+        )
+
+    def test_exchange_coupled_z_padding_reference_uses_same_workload_with_larger_open_z_airbox(self) -> None:
+        self.assert_example_is_plain_python("exchange_coupled_z_padding_reference")
+        payload = self.export_run_config("exchange_coupled_z_padding_reference")
+        self.assert_problem_ir_declares_xy_pbc(payload)
+
+        self.assertEqual(
+            payload["ir"]["problem_meta"]["name"],
+            "fem_periodic_antidot_relax_exchange_coupled_z_padding_reference",
+        )
+        metadata = payload["ir"]["problem_meta"]["runtime_metadata"]
+        self.assert_scenario_metadata(
+            metadata,
+            scenario="exchange_coupled",
+            exchange_coupled=True,
+            universe_xy=2e-7,
+            lateral_gap_xy=0.0,
+            universe_z=1.3e-7,
+        )
+
+    def test_exchange_coupled_supercell_3x3_uses_repeated_workload_with_scaled_universe(self) -> None:
+        self.assert_example_is_plain_python("exchange_coupled_supercell_3x3")
+        payload = self.export_run_config("exchange_coupled_supercell_3x3")
+        self.assert_problem_ir_declares_xy_pbc(payload)
+
+        self.assertEqual(
+            payload["ir"]["problem_meta"]["name"],
+            "fem_periodic_antidot_relax_exchange_coupled_supercell_3x3",
+        )
+        metadata = payload["ir"]["problem_meta"]["runtime_metadata"]
+        self.assert_scenario_metadata(
+            metadata,
+            scenario="exchange_coupled",
+            exchange_coupled=True,
+            universe_xy=6e-7,
+            lateral_gap_xy=0.0,
+            universe_z=9e-8,
+            supercell_repeat=[3, 3],
         )
 
 

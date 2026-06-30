@@ -177,8 +177,8 @@ export function resolveStudyInspectorModel({
   const activeStageIndex =
     stageExecution?.active_stage_index ?? currentRun?.active_stage_index ?? null;
   const selectedStageIndex =
-    selectedStageRef?.stageIndex ??
     selectedStageIndexFromId(selectedStageRef?.stageId ?? null, stageExecution) ??
+    selectedStageRef?.stageIndex ??
     selectedStageIndexFromNode(selectedNodeId ?? null, stageExecution);
   const activeStageSnapshot = snapshot.stages[activeStageIndex ?? -1] ?? null;
   const progressPercent = resolveProgressPercent({

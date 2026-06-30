@@ -59,6 +59,7 @@ pub(crate) fn finalize_native_fem_relaxation(
     let finalization_start = std::time::Instant::now();
     let mut finalization_field_copy_wall_time_ns = 0_u64;
     let mut finalization_field_copy_bytes = 0_u64;
+    let mut diagnostic_field_snapshots = Vec::<FieldSnapshot>::new();
 
     // Flush a final cached-preview update so H_demag/H_eff land in preview_cache
     // regardless of whether the last loop iteration had preview_due = true.
@@ -107,6 +108,16 @@ pub(crate) fn finalize_native_fem_relaxation(
                 final_stats.dt,
             )?;
             artifacts.record_native_fem_field_snapshot(snapshot)?;
+            if matches!(schedule.name.as_str(), "H_demag" | "demag_phi") {
+                let values = copy_native_fem_field_snapshot(backend, &schedule.name, node_count)?;
+                diagnostic_field_snapshots.push(FieldSnapshot {
+                    name: schedule.name.clone(),
+                    step: final_stats.step,
+                    time: final_stats.time,
+                    solver_dt: final_stats.dt,
+                    values,
+                });
+            }
             finalization_field_copy_wall_time_ns =
                 finalization_field_copy_wall_time_ns.saturating_add(elapsed_ns(copy_start));
             finalization_field_copy_bytes =
@@ -133,7 +144,8 @@ pub(crate) fn finalize_native_fem_relaxation(
         finalization_field_copy_wall_time_ns.saturating_add(elapsed_ns(copy_start));
     finalization_field_copy_bytes =
         finalization_field_copy_bytes.saturating_add(vector3_f64_bytes(final_magnetization.len()));
-    let (field_snapshots, field_snapshot_count, mut provenance) = artifacts.finish();
+    let (mut field_snapshots, field_snapshot_count, mut provenance) = artifacts.finish();
+    field_snapshots.extend(diagnostic_field_snapshots);
     let finalization_wall_time_ns = elapsed_ns(finalization_start);
     final_stats.finalization_wall_time_ns = finalization_wall_time_ns;
     final_stats.finalization_field_copy_wall_time_ns = finalization_field_copy_wall_time_ns;

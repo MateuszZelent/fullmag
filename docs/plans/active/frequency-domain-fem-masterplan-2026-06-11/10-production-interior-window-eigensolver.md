@@ -1600,7 +1600,7 @@ Option A, canonical gyrotropic generalized pencil:
 ```text
 K phi = sigma G phi
 sigma = -i omega
-omega_rad_s = Im(i * sigma)
+omega_rad_s = -Im(sigma)
 frequency_hz = abs(omega_rad_s) / (2*pi)
 ```
 
@@ -1608,7 +1608,9 @@ where `K` is the tangent energy Hessian and `G` is the gyrotropic tangent
 operator. Because `G` is skew-symmetric and `sigma` is imaginary for the
 undamped conservative lane, this path generally uses a nonsymmetric generalized
 solver and filters positive physical frequencies through the explicit
-`sigma -> omega_rad_s` mapping.
+`sigma -> omega_rad_s` mapping. Equivalently, `omega_rad_s = Re(i * sigma)`;
+do not take the imaginary part after multiplying by `i`, which would vanish
+for the intended `sigma = -i omega` eigenvalue.
 
 Option B, real Hamiltonian first-order operator:
 
@@ -1632,7 +1634,7 @@ Required diagnostics:
   "slepc_problem_type": "gnhep",
   "phasor_convention": "exp_plus_i_omega_t",
   "positive_frequency_filter": "omega_rad_s > 0",
-  "eigenvalue_to_omega_rad_s": "omega_rad_s = Im(i * sigma)",
+  "eigenvalue_to_omega_rad_s": "omega_rad_s = -Im(sigma)",
   "eigenvalue_to_frequency": "frequency_hz = abs(omega_rad_s)/(2*pi)",
   "conjugate_pair_policy": "keep_positive_frequency_partner"
 }
@@ -2738,7 +2740,7 @@ Modal solver diagnostics:
   "solver_family": "slepc_krylovschur_shift_invert",
   "algebraic_form": "gyrotropic_generalized",
   "phasor_convention": "exp_plus_i_omega_t",
-  "eigenvalue_to_omega_rad_s": "omega_rad_s = Im(i * sigma)",
+  "eigenvalue_to_omega_rad_s": "omega_rad_s = -Im(sigma)",
   "eigenvalue_to_frequency": "frequency_hz = abs(omega_rad_s)/(2*pi)",
   "frequency_window_hz": [100000000.0, 5000000000.0],
   "requested_mode_count": 20,

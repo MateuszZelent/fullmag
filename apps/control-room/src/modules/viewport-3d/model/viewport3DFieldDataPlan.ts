@@ -31,6 +31,9 @@ export type Viewport3DPassDemandKind =
   | "surface"
   | "vector-glyph";
 
+export const DEFAULT_VIEWPORT3D_SHADER_MONO_COLOR =
+  "var(--fm-syntax-string)";
+
 export type Viewport3DFieldScopeKind =
   | "airbox"
   | "full"
@@ -552,7 +555,7 @@ export function resolveViewport3DAirboxFieldVectorDemandPlan({
       settings: {
         geometryScope: "full",
         scalarColorPalette: "viridis",
-        shaderMonoColor: "#ffffff",
+        shaderMonoColor: DEFAULT_VIEWPORT3D_SHADER_MONO_COLOR,
         shaderVisible,
         surfaceColorSource,
         surfaceProjectionMode: "raw_nodal",
@@ -1187,7 +1190,7 @@ function resolveViewport3DScopedPartFieldRequest({
     settings: {
       geometryScope: "full",
       scalarColorPalette: "viridis",
-      shaderMonoColor: "#ffffff",
+      shaderMonoColor: DEFAULT_VIEWPORT3D_SHADER_MONO_COLOR,
       shaderVisible: settings.shaderVisible,
       surfaceColorSource: settings.surfaceColorSource,
       surfaceProjectionMode: settings.surfaceProjectionMode,

@@ -38,10 +38,10 @@ import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import {
   resolveActiveObjectExtensionExplorerItems,
-} from "@/modules/inspector/extensions/ObjectExtensionsSectionModel";
+} from "@/kernel/object-extensions/ObjectExtensionsSectionModel";
 import {
   useObjectExtensionActivationSnapshot,
-} from "@/modules/inspector/extensions/useObjectExtensionActivation";
+} from "@/kernel/object-extensions/useObjectExtensionActivation";
 import type { ModuleProps } from "@/kernel/types";
 import { useCrossSectionWorkspaceSelector } from "@/kernel/workspace/useCrossSectionWorkspace";
 import {

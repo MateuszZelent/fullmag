@@ -7,6 +7,7 @@ import argparse
 import csv
 import json
 import math
+import struct
 import sys
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,16 @@ MAX_DEFAULT_FINAL_TORQUE_APM = 1.0e12
 MAX_DEFAULT_M_SEAM_MISMATCH = 1.0e-6
 MAX_DEFAULT_H_DEMAG_SEAM_MISMATCH_APM = 1.0e-3
 MAX_DEFAULT_DEMAG_PHI_SEAM_MISMATCH_A = 1.0e-6
+MAX_DEFAULT_B_NORMAL_FLUX_SEAM_MISMATCH_T = 1.0e-12
+MAX_DEFAULT_SIDE_MAGNETIC_CHARGE_SUM_ABS_AM = 1.0e-18
+MAX_STATIC_Z_PADDING_E_DEMAG_RELERR = 2.0e-2
+MAX_STATIC_Z_PADDING_H_DEMAG_P99_RELERR = 2.0e-2
+MAX_STATIC_Z_PADDING_DEMAG_PHI_RANGE_RELERR = 2.0e-2
+MAX_STATIC_SUPERCELL_AVERAGE_M_L2_DELTA = 2.0e-2
+MAX_STATIC_SUPERCELL_E_DEMAG_DENSITY_RELERR = 2.0e-2
+MAX_STATIC_SUPERCELL_H_DEMAG_STATS_RELERR = 2.0e-2
+MAX_STATIC_SUPERCELL_DEMAG_PHI_DELTA_A = 1.0e-6
+MAX_STATIC_SUPERCELL_TORQUE_RELERR = 2.0e-1
 
 
 def parse_args() -> argparse.Namespace:
@@ -58,6 +69,36 @@ def parse_args() -> argparse.Namespace:
         default=MAX_DEFAULT_DEMAG_PHI_SEAM_MISMATCH_A,
         help="Maximum accepted scalar mismatch across periodic seams in demag_phi [A].",
     )
+    parser.add_argument(
+        "--max-b-normal-flux-seam-mismatch-t",
+        type=float,
+        default=MAX_DEFAULT_B_NORMAL_FLUX_SEAM_MISMATCH_T,
+        help="Maximum accepted normal B flux mismatch across periodic seams [T].",
+    )
+    parser.add_argument(
+        "--max-side-magnetic-charge-sum-abs-am",
+        type=float,
+        default=MAX_DEFAULT_SIDE_MAGNETIC_CHARGE_SUM_ABS_AM,
+        help="Maximum accepted absolute paired side magnetic charge sum [A m].",
+    )
+    parser.add_argument(
+        "--require-z-padding-report",
+        type=Path,
+        default=None,
+        help=(
+            "Require a fem_static_pbc_z_padding_validation.v1 JSON report with "
+            "status=ok before accepting the equilibrium."
+        ),
+    )
+    parser.add_argument(
+        "--require-supercell-report",
+        type=Path,
+        default=None,
+        help=(
+            "Require a fem_static_pbc_supercell_validation.v1 JSON report with "
+            "status=ok before accepting the equilibrium."
+        ),
+    )
     args = parser.parse_args()
     if args.min_steps < 1:
         parser.error("--min-steps must be positive")
@@ -75,6 +116,16 @@ def parse_args() -> argparse.Namespace:
         or args.max_demag_phi_seam_mismatch_a < 0.0
     ):
         parser.error("--max-demag-phi-seam-mismatch-a must be a non-negative finite number")
+    if (
+        not math.isfinite(args.max_b_normal_flux_seam_mismatch_t)
+        or args.max_b_normal_flux_seam_mismatch_t < 0.0
+    ):
+        parser.error("--max-b-normal-flux-seam-mismatch-t must be a non-negative finite number")
+    if (
+        not math.isfinite(args.max_side_magnetic_charge_sum_abs_am)
+        or args.max_side_magnetic_charge_sum_abs_am < 0.0
+    ):
+        parser.error("--max-side-magnetic-charge-sum-abs-am must be a non-negative finite number")
     return args
 
 
@@ -156,20 +207,93 @@ def load_final_magnetization_artifact(artifact_dir: Path) -> dict[str, Any]:
 
 def load_demag_field_snapshot_artifact(artifact_dir: Path) -> dict[str, Any]:
     field_dir = artifact_dir / "fields" / "H_demag"
-    require(field_dir.is_dir(), f"missing H_demag field snapshot directory: {field_dir}")
-    candidates = sorted(field_dir.glob("step_*.json"))
-    require(candidates, f"missing H_demag field snapshot artifact in {field_dir}")
-    value = json.loads(candidates[-1].read_text(encoding="utf-8"))
-    return require_object(value, str(candidates[-1]))
+    if field_dir.is_dir():
+        candidates = sorted(field_dir.glob("step_*.json"))
+        require(candidates, f"missing H_demag field snapshot artifact in {field_dir}")
+        value = json.loads(candidates[-1].read_text(encoding="utf-8"))
+        return require_object(value, str(candidates[-1]))
+    return load_zarr_field_snapshot_artifact(artifact_dir, "H_demag")
 
 
 def load_demag_phi_snapshot_artifact(artifact_dir: Path) -> dict[str, Any]:
     field_dir = artifact_dir / "fields" / "demag_phi"
-    require(field_dir.is_dir(), f"missing demag_phi field snapshot directory: {field_dir}")
-    candidates = sorted(field_dir.glob("step_*.json"))
-    require(candidates, f"missing demag_phi field snapshot artifact in {field_dir}")
-    value = json.loads(candidates[-1].read_text(encoding="utf-8"))
-    return require_object(value, str(candidates[-1]))
+    if field_dir.is_dir():
+        candidates = sorted(field_dir.glob("step_*.json"))
+        require(candidates, f"missing demag_phi field snapshot artifact in {field_dir}")
+        value = json.loads(candidates[-1].read_text(encoding="utf-8"))
+        return require_object(value, str(candidates[-1]))
+    return load_zarr_field_snapshot_artifact(artifact_dir, "demag_phi")
+
+
+def load_zarr_field_snapshot_artifact(artifact_dir: Path, observable: str) -> dict[str, Any]:
+    field_dir = artifact_dir / "fields" / f"{observable}.zarr"
+    require(field_dir.is_dir(), f"missing {observable} zarr field snapshot directory: {field_dir}")
+    attrs_path = field_dir / ".zattrs"
+    array_path = field_dir / ".zarray"
+    samples_path = field_dir / "samples.csv"
+    require(attrs_path.is_file(), f"missing {observable} zarr attrs: {attrs_path}")
+    require(array_path.is_file(), f"missing {observable} zarr array metadata: {array_path}")
+    require(samples_path.is_file(), f"missing {observable} zarr sample index: {samples_path}")
+    attrs = require_object(json.loads(attrs_path.read_text(encoding="utf-8")), str(attrs_path))
+    array = require_object(json.loads(array_path.read_text(encoding="utf-8")), str(array_path))
+    with samples_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    require(rows, f"{observable} zarr samples.csv must contain at least one sample")
+    sample = rows[-1]
+    chunk_key = sample.get("chunk_key")
+    require(isinstance(chunk_key, str) and chunk_key, f"{observable} zarr chunk_key must be non-empty")
+    chunk_path = field_dir / chunk_key
+    require(chunk_path.is_file(), f"missing {observable} zarr chunk: {chunk_path}")
+    require(array.get("dtype") == "<f8", f"{observable} zarr dtype must be <f8, got {array.get('dtype')!r}")
+    require(array.get("order") == "C", f"{observable} zarr order must be C, got {array.get('order')!r}")
+    shape = require_list(array.get("shape"), f"{observable} zarr shape")
+    require(
+        len(shape) == 3 and shape[0] == 1 and isinstance(shape[1], int) and isinstance(shape[2], int),
+        f"{observable} zarr shape must be [1, component_count, cell_count], got {shape!r}",
+    )
+    component_count = int(shape[1])
+    cell_count = int(shape[2])
+    require(component_count > 0 and cell_count > 0, f"{observable} zarr shape must be positive")
+    raw = chunk_path.read_bytes()
+    expected_values = component_count * cell_count
+    require(
+        len(raw) == expected_values * 8,
+        f"{observable} zarr chunk byte length must be {expected_values * 8}, got {len(raw)}",
+    )
+    values = list(struct.unpack(f"<{expected_values}d", raw))
+    component_order = require_list(attrs.get("component_order"), f"{observable} zarr component_order")
+    if component_order == ["x", "y", "z"]:
+        require(component_count == 3, f"{observable} vector zarr must have 3 components")
+        field_values: list[Any] = [
+            [values[index], values[cell_count + index], values[2 * cell_count + index]]
+            for index in range(cell_count)
+        ]
+    elif component_order == ["scalar"]:
+        require(component_count == 1, f"{observable} scalar zarr must have 1 component")
+        field_values = values
+    else:
+        fail(f"{observable} zarr has unsupported component_order {component_order!r}")
+    try:
+        step = int(sample.get("step", "-1"))
+        time = float(sample.get("time", "nan"))
+        solver_dt = float(sample.get("solver_dt", "nan"))
+    except (TypeError, ValueError):
+        fail(f"{observable} zarr sample has invalid step/time/solver_dt")
+    return {
+        "observable": attrs.get("observable"),
+        "unit": attrs.get("unit"),
+        "step": step,
+        "time": time,
+        "solver_dt": solver_dt,
+        "values": field_values,
+    }
+
+
+def load_static_pbc_demag_seam_diagnostics_artifact(artifact_dir: Path) -> dict[str, Any]:
+    path = artifact_dir / "diagnostics" / "fem_static_pbc_demag_seams.v1.json"
+    require(path.is_file(), f"missing static PBC demag seam diagnostics artifact: {path}")
+    value = json.loads(path.read_text(encoding="utf-8"))
+    return require_object(value, "diagnostics/fem_static_pbc_demag_seams.v1.json")
 
 
 def load_scalars_rows(artifact_dir: Path) -> list[dict[str, str]]:
@@ -178,6 +302,12 @@ def load_scalars_rows(artifact_dir: Path) -> list[dict[str, str]]:
     with path.open(newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
     return rows
+
+
+def load_required_report(path: Path, report_name: str) -> dict[str, Any]:
+    require(path.is_file(), f"missing required {report_name} comparison report: {path}")
+    value = json.loads(path.read_text(encoding="utf-8"))
+    return require_object(value, f"{report_name} comparison report")
 
 
 def validate_text_markers(text: str, engine: str) -> None:
@@ -336,7 +466,7 @@ def validate_periodic_mesh_metadata(metadata: dict[str, Any]) -> None:
         require(int(by_node_id.get(pair_id, 0)) > 0, f"missing node pair {pair_id}")
 
 
-def validate_periodic_pairs_artifact(artifact: dict[str, Any]) -> list[tuple[int, int, str]]:
+def validate_periodic_pairs_artifact(artifact: dict[str, Any], *, scenario: str) -> list[tuple[int, int, str]]:
     require(
         artifact.get("schema_version") == "periodic_pairs.v1",
         f"periodic pairs schema_version must be periodic_pairs.v1, got {artifact.get('schema_version')!r}",
@@ -375,6 +505,38 @@ def validate_periodic_pairs_artifact(artifact: dict[str, Any]) -> list[tuple[int
             isinstance(paired, int) and paired > 0,
             f"periodic pairs pair {pair_id} paired_node_count must be positive",
         )
+        domain_counts = require_object(
+            pair_object.get("domain_node_pair_counts"),
+            f"periodic pairs pair {pair_id}.domain_node_pair_counts",
+        )
+        magnetic_count = domain_counts.get("magnetic")
+        airbox_count = domain_counts.get("airbox")
+        require(
+            isinstance(magnetic_count, int) and magnetic_count >= 0,
+            f"periodic pairs pair {pair_id}.domain_node_pair_counts.magnetic must be non-negative",
+        )
+        if scenario == "exchange_coupled":
+            require(
+                magnetic_count > 0,
+                f"periodic pairs pair {pair_id}.domain_node_pair_counts.magnetic must be positive for exchange_coupled",
+            )
+        else:
+            require(
+                scenario == "air_gap",
+                f"unsupported scenario for periodic-pair domain validation: {scenario!r}",
+            )
+        require(
+            magnetic_count > 0 or scenario == "air_gap",
+            f"periodic pairs pair {pair_id}.domain_node_pair_counts.magnetic must be positive",
+        )
+        require(
+            isinstance(airbox_count, int) and airbox_count > 0,
+            f"periodic pairs pair {pair_id}.domain_node_pair_counts.airbox must be positive",
+        )
+        require(
+            magnetic_count + airbox_count == paired,
+            f"periodic pairs pair {pair_id}.domain_node_pair_counts must sum to paired_node_count",
+        )
         require_finite_number(pair_object.get("max_residual_m"), f"periodic pairs pair {pair_id}.max_residual_m")
         unpaired_source = pair_object.get("unpaired_source_node_count")
         unpaired_destination = pair_object.get("unpaired_destination_node_count")
@@ -394,6 +556,55 @@ def validate_periodic_pairs_artifact(artifact: dict[str, Any]) -> list[tuple[int
             len(raw_node_pairs) == paired,
             f"periodic pairs pair {pair_id}.node_pairs must contain {paired} entries, got {len(raw_node_pairs)}",
         )
+        raw_face_pairs = require_list(
+            pair_object.get("boundary_face_pairs"),
+            f"periodic pairs pair {pair_id}.boundary_face_pairs",
+        )
+        require(
+            len(raw_face_pairs) > 0,
+            f"periodic pairs pair {pair_id}.boundary_face_pairs must be non-empty",
+        )
+        for face_pair_index, raw_face_pair in enumerate(raw_face_pairs):
+            face_pair = require_object(
+                raw_face_pair,
+                f"periodic pairs pair {pair_id}.boundary_face_pairs[{face_pair_index}]",
+            )
+            face_a = face_pair.get("face_a")
+            face_b = face_pair.get("face_b")
+            require(
+                isinstance(face_a, int) and face_a >= 0,
+                f"periodic pairs pair {pair_id}.boundary_face_pairs[{face_pair_index}].face_a must be non-negative integer",
+            )
+            require(
+                isinstance(face_b, int) and face_b >= 0,
+                f"periodic pairs pair {pair_id}.boundary_face_pairs[{face_pair_index}].face_b must be non-negative integer",
+            )
+            translation = require_list(
+                face_pair.get("translation_m"),
+                f"periodic pairs pair {pair_id}.boundary_face_pairs[{face_pair_index}].translation_m",
+            )
+            require(
+                len(translation) == 3,
+                f"periodic pairs pair {pair_id}.boundary_face_pairs[{face_pair_index}].translation_m must be a 3-vector",
+            )
+            for component_index, component in enumerate(translation):
+                require_finite_number(
+                    component,
+                    f"periodic pairs pair {pair_id}.boundary_face_pairs[{face_pair_index}].translation_m[{component_index}]",
+                )
+            orientation = face_pair.get("orientation")
+            require(
+                orientation == "opposed_normals",
+                f"periodic pairs pair {pair_id}.boundary_face_pairs[{face_pair_index}].orientation must be opposed_normals",
+            )
+            normal_dot = require_finite_number(
+                face_pair.get("normal_dot"),
+                f"periodic pairs pair {pair_id}.boundary_face_pairs[{face_pair_index}].normal_dot",
+            )
+            require(
+                normal_dot <= -0.999,
+                f"periodic pairs pair {pair_id}.boundary_face_pairs[{face_pair_index}].normal_dot must be <= -0.999",
+            )
         for node_pair_index, raw_node_pair in enumerate(raw_node_pairs):
             node_pair = require_object(
                 raw_node_pair,
@@ -538,19 +749,96 @@ def validate_periodic_scalar_field_seam_mismatch(
     max_mismatch = 0.0
     max_pair_id = ""
     require(tolerance >= 0.0, f"{field_name} seam tolerance must be non-negative")
+    deltas_by_pair_id: dict[str, list[float]] = {}
     for node_a, node_b, pair_id in node_pairs:
         require(
             node_a < len(values) and node_b < len(values),
             f"{field_name} seam pair {pair_id} references nodes outside field values: {node_a}, {node_b}",
         )
-        delta = abs(values[node_a] - values[node_b])
-        if delta > max_mismatch:
-            max_mismatch = delta
-            max_pair_id = pair_id
+        deltas_by_pair_id.setdefault(pair_id, []).append(values[node_a] - values[node_b])
+    for pair_id, deltas in deltas_by_pair_id.items():
+        best_constant_offset = sum(deltas) / len(deltas)
+        for delta in deltas:
+            residual = abs(delta - best_constant_offset)
+            if residual > max_mismatch:
+                max_mismatch = residual
+                max_pair_id = pair_id
     require(
         max_mismatch <= tolerance,
-        f"{field_name} periodic seam mismatch exceeds {tolerance:.6e}: {max_mismatch:.6e} on {max_pair_id}",
+        f"{field_name} periodic seam mismatch exceeds {tolerance:.6e} after constant offset: {max_mismatch:.6e} on {max_pair_id}",
     )
+
+
+def validate_static_pbc_demag_seam_diagnostics(
+    artifact: dict[str, Any],
+    *,
+    expected_step: int,
+    max_m_seam_mismatch: float,
+    max_h_demag_seam_mismatch_apm: float,
+    max_demag_phi_seam_mismatch_a: float,
+    max_b_normal_flux_seam_mismatch_t: float,
+    max_side_magnetic_charge_sum_abs_am: float,
+) -> None:
+    require(
+        artifact.get("schema_version") == "fem_static_pbc_demag_seams.v1",
+        (
+            "static PBC demag seam diagnostics schema_version must be "
+            f"fem_static_pbc_demag_seams.v1, got {artifact.get('schema_version')!r}"
+        ),
+    )
+    require(
+        artifact.get("status") == "ok",
+        f"static PBC demag seam diagnostics status must be ok, got {artifact.get('status')!r}",
+    )
+    step = artifact.get("step")
+    require(
+        step == expected_step,
+        f"static PBC demag seam diagnostics step must match m_final.json step {expected_step}, got {step!r}",
+    )
+    pair_diagnostics = require_list(
+        artifact.get("pair_diagnostics"),
+        "static PBC demag seam diagnostics pair_diagnostics",
+    )
+    pair_ids: set[str] = set()
+    for index, raw_pair in enumerate(pair_diagnostics):
+        pair = require_object(
+            raw_pair,
+            f"static PBC demag seam diagnostics pair_diagnostics[{index}]",
+        )
+        pair_id = pair.get("pair_id")
+        require(
+            isinstance(pair_id, str) and pair_id,
+            f"static PBC demag seam diagnostics pair_diagnostics[{index}].pair_id must be non-empty",
+        )
+        pair_ids.add(pair_id)
+        metric_limits = [
+            ("m_seam_max", max_m_seam_mismatch),
+            ("h_demag_seam_max_Apm", max_h_demag_seam_mismatch_apm),
+            ("demag_phi_seam_max_after_offset_A", max_demag_phi_seam_mismatch_a),
+            ("b_normal_flux_seam_max_T", max_b_normal_flux_seam_mismatch_t),
+            ("side_magnetic_charge_sum_abs_Am", max_side_magnetic_charge_sum_abs_am),
+        ]
+        for metric, limit in metric_limits:
+            value = require_finite_number(
+                pair.get(metric),
+                f"static PBC demag seam diagnostics {pair_id}.{metric}",
+            )
+            require(
+                value >= 0.0,
+                f"static PBC demag seam diagnostics {pair_id}.{metric} must be non-negative",
+            )
+            require(
+                value <= limit,
+                (
+                    f"static PBC demag seam diagnostics {pair_id}.{metric} exceeds "
+                    f"{limit:.6e}: {value:.6e}"
+                ),
+            )
+    for pair_id in ["x_faces", "y_faces"]:
+        require(
+            pair_id in pair_ids,
+            f"static PBC demag seam diagnostics missing pair {pair_id}",
+        )
 
 
 def finite_csv_number(row: dict[str, str], column: str, row_name: str) -> float:
@@ -616,6 +904,205 @@ def validate_problem_pbc(metadata: dict[str, Any]) -> None:
         "image_counts" not in pbc,
         "metadata.pbc.image_counts must be absent for FEM static PBC",
     )
+
+
+def expected_static_comparison_workload(metadata: dict[str, Any], scenario: str) -> dict[str, Any]:
+    pbc = require_object(metadata.get("pbc"), "metadata.pbc")
+    scenario_meta = require_object(
+        metadata.get("periodic_antidot_relaxation"),
+        "metadata.periodic_antidot_relaxation",
+    )
+    film_size = [
+        require_finite_number(value, f"metadata.periodic_antidot_relaxation.film_size_m[{index}]")
+        for index, value in enumerate(require_list(scenario_meta.get("film_size_m"), "metadata.periodic_antidot_relaxation.film_size_m"))
+    ]
+    require(len(film_size) == 3, "metadata.periodic_antidot_relaxation.film_size_m must be a 3-vector")
+    lateral_air_gap = [
+        require_finite_number(value, f"metadata.periodic_antidot_relaxation.lateral_air_gap_m[{index}]")
+        for index, value in enumerate(require_list(scenario_meta.get("lateral_air_gap_m"), "metadata.periodic_antidot_relaxation.lateral_air_gap_m"))
+    ]
+    require(len(lateral_air_gap) == 2, "metadata.periodic_antidot_relaxation.lateral_air_gap_m must be a 2-vector")
+    periodic_pair_ids = [
+        str(value)
+        for value in require_list(scenario_meta.get("periodic_pair_ids"), "metadata.periodic_antidot_relaxation.periodic_pair_ids")
+    ]
+    require(periodic_pair_ids, "metadata.periodic_antidot_relaxation.periodic_pair_ids must be non-empty")
+    return {
+        "axes": require_list(pbc.get("axes"), "metadata.pbc.axes"),
+        "scenario": scenario,
+        "film_size_m": film_size,
+        "lateral_air_gap_m": lateral_air_gap,
+        "periodic_pair_ids": periodic_pair_ids,
+        "exchange_coupled_across_periods": bool(scenario_meta.get("exchange_coupled_across_periods")),
+    }
+
+
+def comparison_float_list(workload: dict[str, Any], report_name: str, key: str, length: int) -> list[float]:
+    values = [
+        require_finite_number(value, f"{report_name} comparison report workload.{key}[{index}]")
+        for index, value in enumerate(
+            require_list(workload.get(key), f"{report_name} comparison report workload.{key}")
+        )
+    ]
+    require(len(values) == length, f"{report_name} comparison report workload.{key} must be a {length}-vector")
+    return values
+
+
+def validate_static_comparison_workload(report: dict[str, Any], *, report_name: str, expected: dict[str, Any]) -> None:
+    workload = require_object(report.get("workload"), f"{report_name} comparison report workload")
+    axes = require_list(workload.get("axes"), f"{report_name} comparison report workload.axes")
+    require(
+        axes == expected["axes"],
+        f"{report_name} comparison report workload.axes must match {expected['axes']!r}",
+    )
+    scenario = workload.get("scenario")
+    require(
+        scenario == expected["scenario"],
+        f"{report_name} comparison report workload.scenario must match {expected['scenario']}",
+    )
+    film_size = comparison_float_list(workload, report_name, "film_size_m", 3)
+    require(
+        film_size == expected["film_size_m"],
+        f"{report_name} comparison report workload.film_size_m must match {expected['film_size_m']!r}",
+    )
+    lateral_air_gap = comparison_float_list(workload, report_name, "lateral_air_gap_m", 2)
+    require(
+        lateral_air_gap == expected["lateral_air_gap_m"],
+        f"{report_name} comparison report workload.lateral_air_gap_m must match {expected['lateral_air_gap_m']!r}",
+    )
+    periodic_pair_ids = [
+        str(value)
+        for value in require_list(workload.get("periodic_pair_ids"), f"{report_name} comparison report workload.periodic_pair_ids")
+    ]
+    require(
+        periodic_pair_ids == expected["periodic_pair_ids"],
+        f"{report_name} comparison report workload.periodic_pair_ids must match {expected['periodic_pair_ids']!r}",
+    )
+    require(
+        workload.get("exchange_coupled_across_periods") == expected["exchange_coupled_across_periods"],
+        (
+            f"{report_name} comparison report workload.exchange_coupled_across_periods must match "
+            f"{expected['exchange_coupled_across_periods']!r}"
+        ),
+    )
+
+
+def validate_z_padding_workload_geometry(report: dict[str, Any]) -> None:
+    workload = require_object(report.get("workload"), "z-padding comparison report workload")
+    axes = require_list(workload.get("axes"), "z-padding comparison report workload.axes")
+    require(
+        axes == ["periodic", "periodic", "open"],
+        "z-padding comparison report workload.axes must be ['periodic', 'periodic', 'open']",
+    )
+    reference_universe = [
+        require_finite_number(value, f"z-padding comparison report workload.reference_universe_size_m[{index}]")
+        for index, value in enumerate(
+            require_list(
+                workload.get("reference_universe_size_m"),
+                "z-padding comparison report workload.reference_universe_size_m",
+            )
+        )
+    ]
+    candidate_universe = [
+        require_finite_number(value, f"z-padding comparison report workload.candidate_universe_size_m[{index}]")
+        for index, value in enumerate(
+            require_list(
+                workload.get("candidate_universe_size_m"),
+                "z-padding comparison report workload.candidate_universe_size_m",
+            )
+        )
+    ]
+    require(
+        len(reference_universe) == 3,
+        "z-padding comparison report workload.reference_universe_size_m must be a 3-vector",
+    )
+    require(
+        len(candidate_universe) == 3,
+        "z-padding comparison report workload.candidate_universe_size_m must be a 3-vector",
+    )
+    require(
+        reference_universe[:2] == candidate_universe[:2],
+        "z-padding comparison report workload must have matching lateral universe_size_m",
+    )
+    require(
+        reference_universe[2] > candidate_universe[2],
+        "z-padding comparison report workload requires reference open-z universe_size_m thicker than candidate",
+    )
+
+
+def validate_supercell_workload_geometry(report: dict[str, Any]) -> None:
+    workload = require_object(report.get("workload"), "supercell comparison report workload")
+    axes = require_list(workload.get("axes"), "supercell comparison report workload.axes")
+    require(
+        axes == ["periodic", "periodic", "open"],
+        "supercell comparison report workload.axes must be ['periodic', 'periodic', 'open']",
+    )
+    unit_universe = [
+        require_finite_number(value, f"supercell comparison report workload.unit_universe_size_m[{index}]")
+        for index, value in enumerate(
+            require_list(
+                workload.get("unit_universe_size_m"),
+                "supercell comparison report workload.unit_universe_size_m",
+            )
+        )
+    ]
+    supercell_universe = [
+        require_finite_number(value, f"supercell comparison report workload.supercell_universe_size_m[{index}]")
+        for index, value in enumerate(
+            require_list(
+                workload.get("supercell_universe_size_m"),
+                "supercell comparison report workload.supercell_universe_size_m",
+            )
+        )
+    ]
+    expected_supercell_universe = [
+        require_finite_number(value, f"supercell comparison report workload.expected_supercell_universe_size_m[{index}]")
+        for index, value in enumerate(
+            require_list(
+                workload.get("expected_supercell_universe_size_m"),
+                "supercell comparison report workload.expected_supercell_universe_size_m",
+            )
+        )
+    ]
+    for name, values in (
+        ("unit_universe_size_m", unit_universe),
+        ("supercell_universe_size_m", supercell_universe),
+        ("expected_supercell_universe_size_m", expected_supercell_universe),
+    ):
+        require(
+            len(values) == 3,
+            f"supercell comparison report workload.{name} must be a 3-vector",
+        )
+    require(
+        all(
+            math.isclose(actual, expected, rel_tol=1.0e-12, abs_tol=1.0e-18)
+            for actual, expected in zip(supercell_universe, expected_supercell_universe)
+        ),
+        "supercell comparison report workload.supercell_universe_size_m must match expected_supercell_universe_size_m",
+    )
+    require(
+        supercell_universe[0] > unit_universe[0] and supercell_universe[1] > unit_universe[1],
+        "supercell comparison report workload requires larger lateral supercell universe_size_m",
+    )
+    require(
+        math.isclose(supercell_universe[2], unit_universe[2], rel_tol=1.0e-12, abs_tol=1.0e-18),
+        "supercell comparison report workload requires matching open-z universe_size_m",
+    )
+
+
+def validate_static_comparison_metric_limits(
+    metrics: dict[str, Any],
+    *,
+    report_name: str,
+    limits: dict[str, float],
+) -> None:
+    for metric, limit in limits.items():
+        value = require_finite_number(metrics.get(metric), f"{report_name} comparison report metrics.{metric}")
+        require(value >= 0.0, f"{report_name} comparison report metrics.{metric} must be non-negative")
+        require(
+            value <= limit,
+            f"{report_name} comparison report metrics.{metric} exceeds {limit:.6e}: {value:.6e}",
+        )
 
 
 def validate_demag_runtime(metadata: dict[str, Any], engine: str) -> None:
@@ -712,6 +1199,153 @@ def validate_equilibrium_observables(
         )
 
 
+def validate_static_z_padding_report(report: dict[str, Any], *, expected_workload: dict[str, Any]) -> None:
+    require(
+        report.get("schema_version") == "fem_static_pbc_z_padding_validation.v1",
+        f"z-padding comparison report schema_version must be fem_static_pbc_z_padding_validation.v1, got {report.get('schema_version')!r}",
+    )
+    require(
+        report.get("status") == "ok",
+        f"z-padding comparison report status must be ok, got {report.get('status')!r}",
+    )
+    require(
+        isinstance(report.get("reference_artifacts"), str) and report.get("reference_artifacts"),
+        "z-padding comparison report reference_artifacts must be a non-empty string",
+    )
+    require(
+        isinstance(report.get("candidate_artifacts"), str) and report.get("candidate_artifacts"),
+        "z-padding comparison report candidate_artifacts must be a non-empty string",
+    )
+    validate_static_comparison_workload(report, report_name="z-padding", expected=expected_workload)
+    validate_z_padding_workload_geometry(report)
+    metrics = require_object(report.get("metrics"), "z-padding comparison report metrics")
+    validate_static_comparison_metric_limits(
+        metrics,
+        report_name="z-padding",
+        limits={
+            "e_demag_relative_error": MAX_STATIC_Z_PADDING_E_DEMAG_RELERR,
+            "h_demag_p99_relative_error": MAX_STATIC_Z_PADDING_H_DEMAG_P99_RELERR,
+            "demag_phi_range_relative_error": MAX_STATIC_Z_PADDING_DEMAG_PHI_RANGE_RELERR,
+        },
+    )
+
+
+def validate_supercell_central_cell_extraction_summary(
+    report: dict[str, Any],
+    *,
+    repeat_x: int,
+    repeat_y: int,
+    cell_count: int,
+) -> None:
+    extraction = require_object(
+        report.get("central_cell_extraction"),
+        "supercell comparison report central_cell_extraction",
+    )
+    require(
+        extraction.get("schema_version") == "fem_static_pbc_supercell_central_cell.v1",
+        (
+            "supercell comparison report central_cell_extraction.schema_version must be "
+            f"fem_static_pbc_supercell_central_cell.v1, got {extraction.get('schema_version')!r}"
+        ),
+    )
+    require(
+        isinstance(extraction.get("path"), str) and extraction.get("path"),
+        "supercell comparison report central_cell_extraction.path must be a non-empty string",
+    )
+    require(
+        extraction.get("repeat_x") == repeat_x,
+        "supercell comparison report central_cell_extraction.repeat_x must match repeat_x",
+    )
+    require(
+        extraction.get("repeat_y") == repeat_y,
+        "supercell comparison report central_cell_extraction.repeat_y must match repeat_y",
+    )
+    require(
+        extraction.get("cell_count") == cell_count,
+        "supercell comparison report central_cell_extraction.cell_count must match cell_count",
+    )
+    central_index = require_list(
+        extraction.get("central_cell_index"),
+        "supercell comparison report central_cell_extraction.central_cell_index",
+    )
+    require(
+        len(central_index) == 2,
+        "supercell comparison report central_cell_extraction.central_cell_index must be a 2-vector",
+    )
+    for axis, (value, repeat) in enumerate(zip(central_index, [repeat_x, repeat_y])):
+        require(
+            isinstance(value, int),
+            f"supercell comparison report central_cell_extraction.central_cell_index[{axis}] must be an integer",
+        )
+        require(
+            0 <= value < repeat,
+            f"supercell comparison report central_cell_extraction.central_cell_index[{axis}] must be in [0, {repeat})",
+        )
+    for key in ("magnetic_node_count", "field_cell_count"):
+        value = extraction.get(key)
+        require(
+            isinstance(value, int) and value > 0,
+            f"supercell comparison report central_cell_extraction.{key} must be positive",
+        )
+    for key in ("central_cell_demag_energy_j", "central_cell_torque_apm"):
+        value = require_finite_number(
+            extraction.get(key),
+            f"supercell comparison report central_cell_extraction.{key}",
+        )
+        require(
+            value >= 0.0,
+            f"supercell comparison report central_cell_extraction.{key} must be non-negative",
+        )
+
+
+def validate_static_supercell_report(report: dict[str, Any], *, expected_workload: dict[str, Any]) -> None:
+    require(
+        report.get("schema_version") == "fem_static_pbc_supercell_validation.v1",
+        f"supercell comparison report schema_version must be fem_static_pbc_supercell_validation.v1, got {report.get('schema_version')!r}",
+    )
+    require(
+        report.get("status") == "ok",
+        f"supercell comparison report status must be ok, got {report.get('status')!r}",
+    )
+    require(
+        isinstance(report.get("unit_cell_artifacts"), str) and report.get("unit_cell_artifacts"),
+        "supercell comparison report unit_cell_artifacts must be a non-empty string",
+    )
+    require(
+        isinstance(report.get("supercell_artifacts"), str) and report.get("supercell_artifacts"),
+        "supercell comparison report supercell_artifacts must be a non-empty string",
+    )
+    validate_static_comparison_workload(report, report_name="supercell", expected=expected_workload)
+    validate_supercell_workload_geometry(report)
+    repeat_x = report.get("repeat_x")
+    repeat_y = report.get("repeat_y")
+    cell_count = report.get("cell_count")
+    require(isinstance(repeat_x, int) and repeat_x > 0, "supercell comparison report repeat_x must be positive")
+    require(isinstance(repeat_y, int) and repeat_y > 0, "supercell comparison report repeat_y must be positive")
+    require(
+        isinstance(cell_count, int) and cell_count == repeat_x * repeat_y and cell_count > 1,
+        "supercell comparison report cell_count must equal repeat_x * repeat_y and be greater than one",
+    )
+    validate_supercell_central_cell_extraction_summary(
+        report,
+        repeat_x=repeat_x,
+        repeat_y=repeat_y,
+        cell_count=cell_count,
+    )
+    metrics = require_object(report.get("metrics"), "supercell comparison report metrics")
+    validate_static_comparison_metric_limits(
+        metrics,
+        report_name="supercell",
+        limits={
+            "average_m_l2_delta": MAX_STATIC_SUPERCELL_AVERAGE_M_L2_DELTA,
+            "e_demag_density_relative_error": MAX_STATIC_SUPERCELL_E_DEMAG_DENSITY_RELERR,
+            "h_demag_stats_relative_error": MAX_STATIC_SUPERCELL_H_DEMAG_STATS_RELERR,
+            "demag_phi_max_abs_delta_A": MAX_STATIC_SUPERCELL_DEMAG_PHI_DELTA_A,
+            "central_cell_torque_residual_relative_error": MAX_STATIC_SUPERCELL_TORQUE_RELERR,
+        },
+    )
+
+
 def main() -> int:
     args = parse_args()
     try:
@@ -729,7 +1363,10 @@ def main() -> int:
         validate_scenario_metadata(metadata, args.scenario)
         validate_problem_pbc(metadata)
         validate_periodic_mesh_metadata(metadata)
-        node_pairs = validate_periodic_pairs_artifact(load_periodic_pairs_artifact(artifact_dir))
+        node_pairs = validate_periodic_pairs_artifact(
+            load_periodic_pairs_artifact(artifact_dir),
+            scenario=args.scenario,
+        )
         final_step, final_m_values = validate_final_magnetization_artifact(
             load_final_magnetization_artifact(artifact_dir)
         )
@@ -763,6 +1400,15 @@ def main() -> int:
             field_name="demag_phi snapshot",
             tolerance=args.max_demag_phi_seam_mismatch_a,
         )
+        validate_static_pbc_demag_seam_diagnostics(
+            load_static_pbc_demag_seam_diagnostics_artifact(artifact_dir),
+            expected_step=final_step,
+            max_m_seam_mismatch=args.max_m_seam_mismatch,
+            max_h_demag_seam_mismatch_apm=args.max_h_demag_seam_mismatch_apm,
+            max_demag_phi_seam_mismatch_a=args.max_demag_phi_seam_mismatch_a,
+            max_b_normal_flux_seam_mismatch_t=args.max_b_normal_flux_seam_mismatch_t,
+            max_side_magnetic_charge_sum_abs_am=args.max_side_magnetic_charge_sum_abs_am,
+        )
         scalar_final_step = validate_scalar_history(
             load_scalars_rows(artifact_dir),
             min_steps=args.min_steps,
@@ -784,6 +1430,17 @@ def main() -> int:
             engine=args.engine,
             max_final_torque_apm=args.max_final_torque_apm,
         )
+        expected_workload = expected_static_comparison_workload(metadata, args.scenario)
+        if args.require_z_padding_report is not None:
+            validate_static_z_padding_report(
+                load_required_report(args.require_z_padding_report, "z-padding"),
+                expected_workload=expected_workload,
+            )
+        if args.require_supercell_report is not None:
+            validate_static_supercell_report(
+                load_required_report(args.require_supercell_report, "supercell"),
+                expected_workload=expected_workload,
+            )
     except Exception as exc:
         print(f"invalid FEM periodic antidot relaxation artifacts: {exc}", file=sys.stderr)
         return 1

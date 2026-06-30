@@ -20,6 +20,8 @@
 
 ## Non-Negotiable Success Criteria
 
+- The `Maximum update depth exceeded` path remains non-reproducible on a fresh
+  dev-server bundle after the scalar write-back guard is verified.
 - `pnpm --dir apps/control-room check:architecture-hygiene` passes.
 - `pnpm --dir apps/control-room check:api-hygiene` passes.
 - `CONTROL_ROOM_URL=http://localhost:3100/workspace pnpm --dir apps/control-room smoke:study-authoring-ui` passes.
@@ -35,9 +37,9 @@
 
 Use subagents because the user requested them and the work splits cleanly.
 
-- Worker A: Study authoring smoke and Inspector selection contract, Tasks 1-3.
-- Worker B: architecture/API/viewport hygiene, Tasks 4-6.
-- Worker C: performance/React Doctor repeatability, Tasks 7-8.
+- Worker A: scalar-depth regression and Study authoring smoke, Tasks 1-4.
+- Worker B: architecture/API/viewport hygiene, Tasks 5-7.
+- Worker C: performance/React Doctor repeatability, Tasks 8-10.
 - Main agent: integration, final gates, and resolving conflicts.
 
 Workers must not revert the existing dirty files unless explicitly assigned:
@@ -166,7 +168,83 @@ Expected:
 
 ---
 
-## Task 1: Fix Stale Frequency-Domain Modal Spectrum Smoke Assertion
+## Task 1: Guard The Object Region Scalar Write-Back Loop
+
+**Files:**
+- Read: `apps/control-room/src/modules/inspector/panels/ObjectRegionsPanel.tsx`
+- Read: `apps/control-room/src/modules/inspector/primitives/FormField.tsx`
+- Modify if test environment supports it:
+  - `apps/control-room/src/modules/inspector/panels/ObjectRegionsPanel.test.ts`
+  - or a new DOM-capable co-located test file if `apps/control-room` adds
+    jsdom/happy-dom.
+
+**Rationale:** The reported stack enters `FormField` through
+`PhysicalScalarField`. The current source has the necessary guard:
+`if (parsed !== null && !Object.is(parsed, value))`. Removing that guard would
+turn equivalent text edits into redundant draft writes and can feed an Inspector
+render/update loop.
+
+- [ ] **Step 1: Verify the guard is still present**
+
+Run:
+
+```bash
+pnpm --dir apps/control-room exec vitest run \
+  src/modules/inspector/panels/ObjectRegionsPanel.test.ts \
+  src/modules/inspector/primitives/FormField.test.ts
+```
+
+Expected:
+
+- Existing tests pass.
+- `ObjectRegionsPanel.test.ts` asserts the `Object.is(parsed, value)` guard.
+- `FormField.test.ts` asserts Inspector-only wrapper props such as `invalid`
+  are not forwarded to DOM controls.
+
+- [ ] **Step 2: Add client-render coverage when the DOM test environment exists**
+
+If `apps/control-room` has jsdom/happy-dom available, add a focused interaction
+test:
+
+1. Render `PhysicalScalarField` with `value={1e-9}` and a spy
+   `onValueChange`.
+2. Focus the input.
+3. Change the input text to an equivalent value, for example `1e-9` or
+   `0.000000001`.
+4. Assert `onValueChange` was not called.
+5. Change the text to a different valid value.
+6. Assert `onValueChange` was called once with the parsed SI value.
+
+If the package still has only the Node Vitest environment, do not add a fake DOM
+shim in this task. Keep the static guard test and record the missing DOM
+environment in the implementation notes.
+
+- [ ] **Step 3: Recheck a fresh browser bundle**
+
+Start a fresh dev server on an unused port:
+
+```bash
+pnpm --dir apps/control-room exec next dev --webpack -p 3102
+```
+
+Then run the browser smoke against that port:
+
+```bash
+CONTROL_ROOM_URL=http://localhost:3102/workspace \
+CONTROL_ROOM_STUDY_AUTHORING_SMOKE_TIMEOUT_MS=60000 \
+pnpm --dir apps/control-room smoke:study-authoring-ui
+```
+
+Expected:
+
+- No `Maximum update depth exceeded` entry appears in
+  `apps/control-room/.next/dev/logs/next-development.log`.
+- The command may still fail on the known Hysteresis `Live Progress` timeout
+  until Task 4 is fixed.
+
+---
+
+## Task 2: Fix Stale Frequency-Domain Modal Spectrum Smoke Assertion
 
 **Files:**
 - Modify: `apps/control-room/scripts/smoke-study-authoring-ui.mjs`
@@ -250,7 +328,7 @@ Expected:
 
 ---
 
-## Task 2: Make Study Smoke Explorer Selection Failures Observable
+## Task 3: Make Study Smoke Explorer Selection Failures Observable
 
 **Files:**
 - Modify: `apps/control-room/scripts/smoke-study-authoring-ui.mjs`
@@ -407,14 +485,14 @@ pnpm --dir apps/control-room smoke:study-authoring-ui
 
 Expected:
 
-- Frequency-only smoke passes after Task 1, or reports a later actionable failure.
+- Frequency-only smoke passes after Task 2, or reports a later actionable failure.
 - Full smoke either passes Hysteresis child inspector checks or fails with one of:
   - `Explorer selection did not settle...`: fix Explorer click/selection behavior.
-  - `Live Progress` timeout after selected row is correct: continue to Task 3.
+  - `Live Progress` timeout after selected row is correct: continue to Task 4.
 
 ---
 
-## Task 3: Repair Hysteresis Child Inspector Routing
+## Task 4: Repair Hysteresis Child Inspector Routing
 
 **Files:**
 - Modify: `apps/control-room/src/modules/inspector/panels/stages/StageInspectors.test.tsx`
@@ -575,7 +653,7 @@ Expected:
 
 ---
 
-## Task 4: Move Object Extension Shared Model And State Out Of Inspector
+## Task 5: Move Object Extension Shared Model And State Out Of Inspector
 
 **Files:**
 - Create/move: `apps/control-room/src/kernel/object-extensions/objectExtensionTypes.ts`
@@ -690,11 +768,11 @@ Expected:
 
 - Tests pass.
 - Architecture gate no longer reports Explorer importing Inspector internals.
-- It may still report raw viewport colors until Task 5 is complete.
+- It may still report raw viewport colors until Task 6 is complete.
 
 ---
 
-## Task 5: Replace Raw Viewport `#ffffff` Fallbacks With Token-Derived Defaults
+## Task 6: Replace Raw Viewport `#ffffff` Fallbacks With Token-Derived Defaults
 
 **Files:**
 - Modify: `apps/control-room/src/modules/viewport-3d/hooks/useViewport3DSceneModel.ts`
@@ -814,7 +892,7 @@ Expected:
 
 ---
 
-## Task 6: Remove Raw Response-Map Endpoint Literal From Explorer Fixture
+## Task 7: Remove Raw Response-Map Endpoint Literal From Explorer Fixture
 
 **Files:**
 - Modify: `apps/control-room/src/modules/explorer/builders/buildModelTree.test.ts`
@@ -876,7 +954,7 @@ Expected:
 
 ---
 
-## Task 7: Add Viewport Startup Request Attribution Before Optimizing
+## Task 8: Add Viewport Startup Request Attribution Before Optimizing
 
 **Files:**
 - Modify: `apps/control-room/scripts/smoke-viewport-3d.mjs`
@@ -943,7 +1021,7 @@ If the top request groups clearly show duplicate resource hook fan-out from one 
 
 ---
 
-## Task 8: Make React Doctor Repeatable Without `npx @latest`
+## Task 9: Make React Doctor Repeatable Without `npx @latest`
 
 **Files:**
 - Modify only with explicit dependency approval:
@@ -997,7 +1075,7 @@ No code change is needed for Path B.
 
 ---
 
-## Task 9: Final Full Verification
+## Task 10: Final Full Verification
 
 **Files:**
 - No edits unless a verification failure points to a task-specific bug.

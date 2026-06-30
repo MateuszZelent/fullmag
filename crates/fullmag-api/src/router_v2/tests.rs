@@ -280,7 +280,9 @@ fn sample_periodic_fem_mesh_payload() -> FemMeshPayload {
         [0.0, 0.0, 1.0e-6],
         [1.0e-6, 0.0, 1.0e-6],
     ];
-    mesh.boundary_faces = vec![[0, 2, 4], [1, 3, 5]];
+    mesh.elements = vec![[0, 1, 2, 3], [0, 1, 4, 5]];
+    mesh.element_markers = vec![7, 0];
+    mesh.boundary_faces = vec![[0, 2, 4], [1, 5, 3]];
     mesh.boundary_markers = vec![10, 11];
     mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
         pair_id: "x_periodic".to_string(),
@@ -6387,6 +6389,20 @@ async fn mesh_periodic_pairs_returns_v1_diagnostics() {
     assert_eq!(json["pairs"][0]["paired_node_count"], 3);
     assert_eq!(json["pairs"][0]["unpaired_source_node_count"], 0);
     assert_eq!(json["pairs"][0]["unpaired_destination_node_count"], 0);
+    assert_eq!(
+        json["pairs"][0]["domain_node_pair_counts"],
+        serde_json::json!({"magnetic": 2, "airbox": 1})
+    );
+    assert_eq!(
+        json["pairs"][0]["boundary_face_pairs"],
+        serde_json::json!([{
+            "face_a": 0,
+            "face_b": 1,
+            "translation_m": [1.0e-6, 0.0, 0.0],
+            "normal_dot": -1.0,
+            "orientation": "opposed_normals"
+        }])
+    );
     assert_eq!(json["pairs"][0]["max_residual_m"], 0.0);
     assert_eq!(json["pairs"][0]["rms_residual_m"], 0.0);
     assert_eq!(json["pairs"][0]["status"], "valid");
@@ -6409,8 +6425,19 @@ async fn mesh_periodic_pairs_falls_back_to_artifact_file() {
                 "marker_b": 11,
                 "expected_translation_m": [1.0e-6, 0.0, 0.0],
                 "paired_node_count": 3,
+                "domain_node_pair_counts": {
+                    "magnetic": 2,
+                    "airbox": 1
+                },
                 "unpaired_source_node_count": 0,
                 "unpaired_destination_node_count": 0,
+                "boundary_face_pairs": [{
+                    "face_a": 0,
+                    "face_b": 1,
+                    "translation_m": [1.0e-6, 0.0, 0.0],
+                    "normal_dot": -1.0,
+                    "orientation": "opposed_normals"
+                }],
                 "max_residual_m": 0.0,
                 "rms_residual_m": 0.0,
                 "status": "valid"
@@ -6435,6 +6462,14 @@ async fn mesh_periodic_pairs_falls_back_to_artifact_file() {
     assert_eq!(json["schema_version"], "periodic_pairs.v1");
     assert_eq!(json["revision"], 0);
     assert_eq!(json["pairs"][0]["pair_id"], "x_periodic");
+    assert_eq!(
+        json["pairs"][0]["domain_node_pair_counts"],
+        serde_json::json!({"magnetic": 2, "airbox": 1})
+    );
+    assert_eq!(
+        json["pairs"][0]["boundary_face_pairs"][0]["orientation"],
+        "opposed_normals"
+    );
 
     let _ = fs::remove_dir_all(&artifact_dir);
 }

@@ -1,28 +1,30 @@
-"""Relax a periodic Permalloy antidot unit cell with exchange-coupled repeats.
+"""Relax a periodic Permalloy antidot unit cell with larger open-z airbox.
 
 Geometry:
     - Permalloy film: 200 nm x 200 nm x 10 nm.
     - Central circular hole: 25 nm radius.
     - Periodic unit cell: 200 nm x 200 nm laterally, so opposite magnetic
       boundaries touch their periodic neighbours.
+    - Open-z airbox: 130 nm, used as the z-padding reference for the same
+      x/y-periodic workload.
     - PBC is intentionally x/y only: this is a 2D film array with open z,
       not a fully 3D-periodic stack.
 
 Run with:
-    fullmag --dev -i examples/fem_periodic_antidot_relax_exchange_coupled.py
+    fullmag --dev -i examples/fem_periodic_antidot_relax_exchange_coupled_z_padding_reference.py
 """
 
 import fullmag as fm
 
 
-study = fm.study("fem_periodic_antidot_relax_exchange_coupled")
+study = fm.study("fem_periodic_antidot_relax_exchange_coupled_z_padding_reference")
 
 # Engine and universe
 study.engine("fem")
 study.device("gpu", precision="double")
 study.universe(
     mode="manual",
-    size=(200e-9, 200e-9, 90e-9),
+    size=(200e-9, 200e-9, 130e-9),
     center=(0.0, 0.0, 0.0),
     padding=(0.0, 0.0, 0.0),
 )
@@ -74,18 +76,6 @@ hole_transition.mesh(
     order=1,
 )
 
-# hole_edge = body.add_region(
-#     "hole_edge_refinement",
-#     fm.Cylinder(radius=30e-9, height=10e-9, name="hole_edge_refinement"),
-#     priority=20,
-# )
-# hole_edge.mesh(
-#     minimum_element_size=8e-9,
-#     maximum_element_size=12e-9,
-#     transition_distance=6e-9,
-#     order=1,
-# )
-
 # Scenario provenance
 study.runtime_metadata(
     "periodic_antidot_relaxation",
@@ -95,7 +85,7 @@ study.runtime_metadata(
         "magnetostatic_pbc": "periodic_airbox_k0",
         "periodic_pair_ids": ["x_faces", "y_faces"],
         "film_size_m": [200e-9, 200e-9, 10e-9],
-        "universe_size_m": [200e-9, 200e-9, 90e-9],
+        "universe_size_m": [200e-9, 200e-9, 130e-9],
         "lateral_air_gap_m": [0.0, 0.0],
     },
 )

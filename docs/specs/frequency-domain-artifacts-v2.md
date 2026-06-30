@@ -823,7 +823,11 @@ must include:
 - source and destination markers,
 - expected translation,
 - paired node count,
+- `domain_node_pair_counts` with separate `magnetic` and `airbox` pair
+  coverage,
 - unpaired source and destination counts,
+- `boundary_face_pairs` with paired source/destination face indices,
+  translation, normal dot product, and orientation status,
 - residual diagnostics,
 - validation status.
 
@@ -832,6 +836,50 @@ The v2 API resource for the same contract is:
 ```text
 /v2/sessions/current/meshing/mesh/periodic_pairs.v1
 ```
+
+That resource must preserve the same domain-node coverage and opposed-normal
+boundary-face diagnostics for both live `FemMeshPayload` data and artifact-file
+fallback responses. A periodic-pairs API response that reports valid node
+residuals but omits airbox coverage or face-orientation diagnostics is
+insufficient for the M5 periodic-airbox demag gate.
+
+`domain_node_pair_counts.magnetic` is geometry-dependent. For magnetic bodies
+that cross a selected periodic seam, accepted pair diagnostics must report
+positive `magnetic` and `airbox` coverage. For separated magnetic islands inside
+a periodic air gap, the side seam may be airbox-only and `magnetic = 0` is
+valid; validators must still require airbox coverage, opposed-normal
+boundary-face pairs, same-step `phi`/`H_demag` continuity, balanced normal `B`
+flux, and no artificial side magnetic charge.
+
+## diagnostics/fem_static_pbc_demag_seams.v1.json
+
+Static PBC demag seam diagnostics are acceptance artifacts for the M5
+periodic-airbox equilibrium gate. They are required for accepted
+periodic-antidot or magnonic-crystal relaxation artifacts and must be evaluated
+at the same step as `m_final.json`, `fields/H_demag/step_*.json`, and
+`fields/demag_phi/step_*.json`.
+
+Required fields:
+
+- `schema_version = "fem_static_pbc_demag_seams.v1"`,
+- `status = "ok"`,
+- `step`,
+- `pair_diagnostics[]`,
+- each `pair_id`,
+- `m_seam_max`,
+- `h_demag_seam_max_Apm`,
+- `demag_phi_seam_max_after_offset_A`,
+- `b_normal_flux_seam_max_T`,
+- `side_magnetic_charge_sum_abs_Am`.
+
+`b_normal_flux_seam_max_T` and `side_magnetic_charge_sum_abs_Am` are the
+false-PBC guard. A run that passes magnetization seam checks but has unbalanced
+normal `B` flux or non-cancelled side magnetic charge is finite isolated-airbox
+demag with periodic magnetization projection, not accepted magnetostatic PBC.
+The runner may still emit this artifact with `status = "failed"` when required
+same-step `H_demag`/`demag_phi` snapshots, full-domain field lengths, node
+pairs, or boundary-face pairs are missing. Validators must treat any non-`ok`
+status as failed acceptance evidence, not as a successful degraded mode.
 
 ## Frontend contract
 

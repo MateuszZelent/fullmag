@@ -121,7 +121,7 @@ Backend:
 - Production FEM code lives under the canonical `backends/fem` native tree, not in `crates` and not in `mfem_bridge.cpp`.
 - CPU and GPU realizations are separate runtime lanes that share physics semantics but do not share hot-loop state.
 - The current dense/reference eigensolver remains a validation path for modal products until the native scalable modal solver passes the validation ladder.
-- Frequency response is executable only for explicitly proven lanes: dense FEM validation and the current native MFEM production CPU gamma/free-boundary plus k = 0 static-periodic no-demag magnetic slice may emit response artifacts; CPU periodic-airbox k = 0 demag remains a qualified diagnostic/partial-production slice until the static equilibrium and solved response gates pass; GPU periodic-airbox demag, nonzero-k Floquet demag, and magnetoelastic response remain rejected until separately qualified.
+- Frequency response is executable only for explicitly proven lanes: dense FEM validation and the current native MFEM production CPU gamma/free-boundary plus k = 0 static-periodic no-demag magnetic slice may emit response artifacts; CPU periodic-airbox k = 0 demag remains a diagnostic slice until the static equilibrium and solved response gates pass; GPU periodic-airbox demag, nonzero-k Floquet demag, and magnetoelastic response remain rejected until separately qualified.
 - Native FEM build and runtime verification use repo `just` recipes, including `verify-fem-frequency-domain-native-contract`, `verify-fem-frequency-domain-runtime`, `verify-fem-frequency-domain-static-periodic-runtime`, `verify-fem-frequency-domain-eigen-runtime`, and the aggregate `verify-fem-frequency-domain-runtime-suite`.
 
 Frontend:

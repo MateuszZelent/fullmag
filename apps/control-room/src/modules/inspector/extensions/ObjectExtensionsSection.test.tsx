@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import { Accordion } from "@/shared/ui/Accordion";
 
-import { createObjectExtensionActivationState } from "./ObjectExtensionsSectionModel";
+import { createObjectExtensionActivationState } from "@/kernel/object-extensions/ObjectExtensionsSectionModel";
 import { ObjectExtensionsSection } from "./ObjectExtensionsSection";
 
 const objectRootSelection: Selection = {
