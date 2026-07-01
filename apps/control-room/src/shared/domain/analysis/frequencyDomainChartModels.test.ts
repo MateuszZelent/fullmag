@@ -293,6 +293,109 @@ describe("frequencyDomainChartModels", () => {
     ]);
   });
 
+  it("reads modal tracking overlap scores from canonical dispersion CSV rows", () => {
+    const model = buildEigenDispersionChartModel(
+      textResource(
+        [
+          "sample_index,raw_mode_index,branch_id,path_s_rad_per_m,frequency_hz,overlap_score",
+          "1,0,acoustic,25000000,1.4e9,0.7510407640085653",
+        ].join("\n"),
+      ),
+    );
+
+    expect(model.points[0]).toEqual(
+      expect.objectContaining({
+        overlap: 0.7510407640085653,
+      }),
+    );
+  });
+
+  it("reads modal linewidth from canonical dispersion CSV rows", () => {
+    const model = buildEigenDispersionChartModel(
+      textResource(
+        [
+          "sample_index,raw_mode_index,branch_id,path_s_rad_per_m,frequency_hz,line_width_hz",
+          "1,0,acoustic,25000000,1.4e9,2800000",
+        ].join("\n"),
+      ),
+    );
+
+    expect(model.points[0]).toEqual(
+      expect.objectContaining({
+        linewidthHz: 2800000,
+      }),
+    );
+    expect(model.series[0]?.points[0]).toEqual(
+      expect.objectContaining({
+        linewidthHz: 2800000,
+      }),
+    );
+  });
+
+  it("preserves dispersion sample labels for high-symmetry k-path points", () => {
+    const model = buildEigenDispersionChartModel(
+      textResource(
+        [
+          "sample_index,raw_mode_index,branch_id,path_s_rad_per_m,label,frequency_hz",
+          "0,1,acoustic,0,G,1.2e9",
+          "1,1,acoustic,78539816.33974482,X,1.4e9",
+        ].join("\n"),
+      ),
+    );
+
+    expect(model.points.map((point) => point.sampleLabel)).toEqual(["G", "X"]);
+    expect(model.series[0]?.points).toEqual([
+      { label: "G", rowIndex: 0, x: 0, y: 1.2 },
+      { label: "X", rowIndex: 1, x: 78539816.33974482, y: 1.4 },
+    ]);
+  });
+
+  it("uses branches.v2 identity when dispersion CSV has no branch ids", () => {
+    const branchesModel = buildEigenBranchesModel(
+      jsonResource({
+        branches: [
+          {
+            branch_id: "acoustic",
+            points: [
+              {
+                frequency_real_hz: 1.2e9,
+                raw_mode_index: 1,
+                sample_index: 0,
+              },
+              {
+                frequency_real_hz: 1.4e9,
+                raw_mode_index: 2,
+                sample_index: 1,
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    const model = buildEigenDispersionChartModel(
+      textResource(
+        [
+          "sample_index,raw_mode_index,path_s_rad_per_m,frequency_hz",
+          "0,1,0,1.2e9",
+          "1,2,3.14e7,1.4e9",
+        ].join("\n"),
+      ),
+      branchesModel,
+    );
+
+    expect(model.points.map((point) => point.branchId)).toEqual([
+      "acoustic",
+      "acoustic",
+    ]);
+    expect(model.series.map((series) => series.label)).toEqual([
+      "Branch acoustic",
+    ]);
+    expect(model.series[0]?.points).toEqual([
+      { rowIndex: 0, x: 0, y: 1.2 },
+      { rowIndex: 1, x: 3.14e7, y: 1.4 },
+    ]);
+  });
+
   it("builds canonical frequency-domain selection refs for dispersion points", () => {
     const model = buildEigenDispersionChartModel(
       textResource(
@@ -314,6 +417,37 @@ describe("frequencyDomainChartModels", () => {
       nodeId: "results:eigen:dispersion:sample:4:mode:5",
       resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
       sampleIndex: 4,
+      type: "frequency-domain",
+    });
+  });
+
+  it("selects a dispersion point with mode field metadata as a 3D mode handoff", () => {
+    const model = buildEigenDispersionChartModel(
+      textResource(
+        [
+          "sample_index,raw_mode_index,branch_id,path_s_rad_per_m,frequency_hz,mode_field_id,mode_field_resource_key",
+          `2,0,acoustic,5.0e7,1.2e9,analysis:eigen:sample-0002:mode-0000,${fieldVectorResourceKey("analysis:eigen:sample-0002:mode-0000")}`,
+        ].join("\n"),
+      ),
+    );
+
+    expect(model.points[0]).toEqual(
+      expect.objectContaining({
+        modeFieldId: "analysis:eigen:sample-0002:mode-0000",
+        modeFieldResourceKey: fieldVectorResourceKey(
+          "analysis:eigen:sample-0002:mode-0000",
+        ),
+      }),
+    );
+    expect(buildEigenDispersionPointSelectionRef(model.points[0]!)).toEqual({
+      branchId: "acoustic",
+      calculationMode: "dispersion_modal",
+      fieldId: "analysis:eigen:sample-0002:mode-0000",
+      kind: "results.eigen.mode",
+      modeIndex: 0,
+      nodeId: "results:eigen:dispersion:sample:2:mode:0",
+      resourceRef: fieldVectorResourceKey("analysis:eigen:sample-0002:mode-0000"),
+      sampleIndex: 2,
       type: "frequency-domain",
     });
   });

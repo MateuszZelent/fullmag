@@ -399,7 +399,7 @@ double production_frequency_response_relative_tolerance() noexcept
     return env_positive_double_alias(
         "FULLMAG_FEM_FREQUENCY_RESPONSE_RTOL",
         "FULLMAG_FMR_RESPONSE_RTOL",
-        1.0e-10);
+        1.0e-3);
 }
 
 std::uint64_t production_frequency_response_max_iterations() noexcept
@@ -407,7 +407,7 @@ std::uint64_t production_frequency_response_max_iterations() noexcept
     return env_positive_u64_alias(
         "FULLMAG_FEM_FREQUENCY_RESPONSE_MAX_ITERATIONS",
         "FULLMAG_FMR_RESPONSE_MAX_ITERATIONS",
-        256);
+        8192);
 }
 
 std::uint64_t production_frequency_response_restart_iterations(
@@ -417,7 +417,7 @@ std::uint64_t production_frequency_response_restart_iterations(
         env_positive_u64_alias(
             "FULLMAG_FEM_FREQUENCY_RESPONSE_RESTART_ITERATIONS",
             "FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS",
-            32);
+            max_iterations);
     return std::max<std::uint64_t>(1, std::min(restart, max_iterations));
 }
 
@@ -1631,6 +1631,57 @@ void copy_production_cpu_preconditioner_diagnostics(
     }
 }
 
+void copy_production_cpu_diagnostics(
+    const ProductionCpuDrivenResponseResult &source,
+    DenseDrivenResponseValidationResult &target) noexcept
+{
+    target.total_iteration_count = source.total_iteration_count;
+    target.max_iterations_for_frequency = source.max_iterations_for_frequency;
+    target.restart_iterations_for_frequency = source.restart_iterations_for_frequency;
+    target.progress_interval_iterations = source.progress_interval_iterations;
+    target.solver_relative_tolerance = source.solver_relative_tolerance;
+    target.rhs_l2_norm = source.rhs_l2_norm;
+    target.initial_residual_l2_norm = source.initial_residual_l2_norm;
+    target.initial_relative_residual_l2_norm = source.initial_relative_residual_l2_norm;
+    target.minimum_tracked_relative_residual_l2_norm =
+        source.minimum_tracked_relative_residual_l2_norm;
+    target.minimum_tracked_relative_residual_iteration =
+        source.minimum_tracked_relative_residual_iteration;
+    target.last_tracked_relative_residual_l2_norm =
+        source.last_tracked_relative_residual_l2_norm;
+    target.last_recomputed_relative_residual_l2_norm =
+        source.last_recomputed_relative_residual_l2_norm;
+    target.residual_growth_factor = source.residual_growth_factor;
+    target.rhs_delta_m_l2_norm = source.rhs_delta_m_l2_norm;
+    target.rhs_delta_phi_l2_norm = source.rhs_delta_phi_l2_norm;
+    target.residual_delta_m_l2_norm = source.residual_delta_m_l2_norm;
+    target.residual_delta_phi_l2_norm = source.residual_delta_phi_l2_norm;
+    target.relative_residual_delta_m_l2_norm =
+        source.relative_residual_delta_m_l2_norm;
+    target.relative_residual_delta_phi_l2_norm =
+        source.relative_residual_delta_phi_l2_norm;
+    target.response_delta_m_l2_norm = source.response_delta_m_l2_norm;
+    target.response_delta_phi_l2_norm = source.response_delta_phi_l2_norm;
+    target.coupled_block_norms_available = source.coupled_block_norms_available;
+    std::strncpy(
+        target.coupled_residual_partition_status,
+        source.coupled_residual_partition_status,
+        63);
+    target.coupled_residual_partition_status[63] = '\0';
+    target.right_preconditioner_applied = source.right_preconditioner_applied;
+    std::strncpy(target.krylov_preconditioner, source.krylov_preconditioner, 63);
+    target.krylov_preconditioner[63] = '\0';
+    target.gmres_relative_residual_history_count = std::min<std::uint64_t>(
+        source.gmres_relative_residual_history_count,
+        DenseDrivenResponseValidationResult::gmres_relative_residual_history_capacity);
+    for (std::uint64_t index = 0;
+         index < target.gmres_relative_residual_history_count;
+         ++index) {
+        target.gmres_relative_residual_history[index] =
+            source.gmres_relative_residual_history[index];
+    }
+}
+
 const char *preconditioner_setup_status(const MfemDrivenResponseValidationResult &result) noexcept
 {
     return result.right_preconditioner_applied ? "ok" : "not_configured";
@@ -1668,6 +1719,30 @@ std::string gmres_relative_residual_history_json(
     const std::uint64_t count = std::min<std::uint64_t>(
         result.gmres_relative_residual_history_count,
         kProductionCpuGmresResidualHistoryCapacity);
+    for (std::uint64_t index = 0; index < count; ++index) {
+        if (index != 0) {
+            json += ",";
+        }
+        if (!append_format(
+                json,
+                error_message,
+                "%.17g",
+                result.gmres_relative_residual_history[index])) {
+            return "[]";
+        }
+    }
+    json += "]";
+    return json;
+}
+
+std::string gmres_relative_residual_history_json(
+    const DenseDrivenResponseValidationResult &result,
+    char error_message[128])
+{
+    std::string json = "[";
+    const std::uint64_t count = std::min<std::uint64_t>(
+        result.gmres_relative_residual_history_count,
+        DenseDrivenResponseValidationResult::gmres_relative_residual_history_capacity);
     for (std::uint64_t index = 0; index < count; ++index) {
         if (index != 0) {
             json += ",";
@@ -4560,6 +4635,10 @@ FrequencyDomainStatus write_unavailable_response_artifacts(
     char frequency_domain_dir[256]{};
     char response_dir[256]{};
     char frequency_points_dir[256]{};
+    char field_payloads_dir[256]{};
+    char field_payloads_zarr_dir[256]{};
+    char sweep[256]{};
+    char sweep_v2[256]{};
     char manifest[256]{};
     char diagnostics[256]{};
     char diagnostics_dir[256]{};
@@ -4570,6 +4649,10 @@ FrequencyDomainStatus write_unavailable_response_artifacts(
     if (std::snprintf(frequency_domain_dir, sizeof(frequency_domain_dir), "%s/frequency_domain", request.output_directory) < 0 ||
         std::snprintf(response_dir, sizeof(response_dir), "%s/response", request.output_directory) < 0 ||
         std::snprintf(frequency_points_dir, sizeof(frequency_points_dir), "%s/frequency_points", response_dir) < 0 ||
+        std::snprintf(field_payloads_dir, sizeof(field_payloads_dir), "%s/field_payloads", response_dir) < 0 ||
+        std::snprintf(field_payloads_zarr_dir, sizeof(field_payloads_zarr_dir), "%s/field_payloads.zarr", response_dir) < 0 ||
+        std::snprintf(sweep, sizeof(sweep), "%s/magnetic_response_sweep.v1.json", response_dir) < 0 ||
+        std::snprintf(sweep_v2, sizeof(sweep_v2), "%s/magnetic_response_sweep.v2.json", response_dir) < 0 ||
         std::snprintf(manifest, sizeof(manifest), "%s/manifest.v1.json", frequency_domain_dir) < 0 ||
         std::snprintf(diagnostics, sizeof(diagnostics), "%s/diagnostics.v1.json", response_dir) < 0 ||
         std::snprintf(diagnostics_dir, sizeof(diagnostics_dir), "%s/diagnostics", response_dir) < 0 ||
@@ -4583,6 +4666,10 @@ FrequencyDomainStatus write_unavailable_response_artifacts(
     if (std::strlen(frequency_domain_dir) >= sizeof(frequency_domain_dir) - 1 ||
         std::strlen(response_dir) >= sizeof(response_dir) - 1 ||
         std::strlen(frequency_points_dir) >= sizeof(frequency_points_dir) - 1 ||
+        std::strlen(field_payloads_dir) >= sizeof(field_payloads_dir) - 1 ||
+        std::strlen(field_payloads_zarr_dir) >= sizeof(field_payloads_zarr_dir) - 1 ||
+        std::strlen(sweep) >= sizeof(sweep) - 1 ||
+        std::strlen(sweep_v2) >= sizeof(sweep_v2) - 1 ||
         std::strlen(manifest) >= sizeof(manifest) - 1 ||
         std::strlen(diagnostics) >= sizeof(diagnostics) - 1 ||
         std::strlen(diagnostics_dir) >= sizeof(diagnostics_dir) - 1 ||
@@ -4598,6 +4685,8 @@ FrequencyDomainStatus write_unavailable_response_artifacts(
     std::string progress_json;
     std::string manifest_json;
     std::string periodic_pairs_json;
+    std::string sweep_json;
+    std::string sweep_v2_json;
     std::string frequency_point_paths_json = "[";
     std::string unsupported_reason_json = "null";
     if (unsupported_reason != nullptr && unsupported_reason[0] != '\0') {
@@ -5131,6 +5220,10 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
     char frequency_domain_dir[256]{};
     char response_dir[256]{};
     char frequency_points_dir[256]{};
+    char field_payloads_dir[256]{};
+    char field_payloads_zarr_dir[256]{};
+    char sweep[256]{};
+    char sweep_v2[256]{};
     char manifest[256]{};
     char diagnostics_dir[256]{};
     char solver_diagnostics[256]{};
@@ -5140,6 +5233,10 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
     if (std::snprintf(frequency_domain_dir, sizeof(frequency_domain_dir), "%s/frequency_domain", request.output_directory) < 0 ||
         std::snprintf(response_dir, sizeof(response_dir), "%s/response", request.output_directory) < 0 ||
         std::snprintf(frequency_points_dir, sizeof(frequency_points_dir), "%s/frequency_points", response_dir) < 0 ||
+        std::snprintf(field_payloads_dir, sizeof(field_payloads_dir), "%s/field_payloads", response_dir) < 0 ||
+        std::snprintf(field_payloads_zarr_dir, sizeof(field_payloads_zarr_dir), "%s/field_payloads.zarr", response_dir) < 0 ||
+        std::snprintf(sweep, sizeof(sweep), "%s/magnetic_response_sweep.v1.json", response_dir) < 0 ||
+        std::snprintf(sweep_v2, sizeof(sweep_v2), "%s/magnetic_response_sweep.v2.json", response_dir) < 0 ||
         std::snprintf(manifest, sizeof(manifest), "%s/manifest.v1.json", frequency_domain_dir) < 0 ||
         std::snprintf(diagnostics_dir, sizeof(diagnostics_dir), "%s/diagnostics", response_dir) < 0 ||
         std::snprintf(solver_diagnostics, sizeof(solver_diagnostics), "%s/solver.v1.json", diagnostics_dir) < 0 ||
@@ -5152,6 +5249,10 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
     if (std::strlen(frequency_domain_dir) >= sizeof(frequency_domain_dir) - 1 ||
         std::strlen(response_dir) >= sizeof(response_dir) - 1 ||
         std::strlen(frequency_points_dir) >= sizeof(frequency_points_dir) - 1 ||
+        std::strlen(field_payloads_dir) >= sizeof(field_payloads_dir) - 1 ||
+        std::strlen(field_payloads_zarr_dir) >= sizeof(field_payloads_zarr_dir) - 1 ||
+        std::strlen(sweep) >= sizeof(sweep) - 1 ||
+        std::strlen(sweep_v2) >= sizeof(sweep_v2) - 1 ||
         std::strlen(manifest) >= sizeof(manifest) - 1 ||
         std::strlen(diagnostics_dir) >= sizeof(diagnostics_dir) - 1 ||
         std::strlen(solver_diagnostics) >= sizeof(solver_diagnostics) - 1 ||
@@ -5196,6 +5297,8 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
     std::string progress_json;
     std::string manifest_json;
     std::string periodic_pairs_json;
+    std::string sweep_json;
+    std::string sweep_v2_json;
     const bool has_magnetostatic_pairs =
         request.periodic_airbox_magnetostatic_periodic_node_pair_count > 0 &&
         request.periodic_airbox_magnetostatic_periodic_node_pairs != nullptr;
@@ -5224,11 +5327,462 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
         coupled_block_norms_diagnostics_json(validation_result, error_message);
     const char *artifact_status =
         run_status != nullptr && run_status[0] != '\0' ? run_status : "ok";
+    if (complete && std::strcmp(artifact_status, "ok") == 0) {
+        artifact_status = "ready";
+    }
     const char *progress_state = complete ? "completed" : artifact_status;
     const bool partial_artifacts_available =
         !complete || validation_result.completed_frequency_count > 0;
     const char *extra_diagnostics =
         extra_diagnostics_json != nullptr ? extra_diagnostics_json : "";
+    const DrivenFrequencyResponsePeriodicAirboxCoupledBlockProblem &coupled_problem =
+        request.periodic_airbox_coupled_block_problem;
+    const bool write_field_payloads = request.solve_request.write_response_fields;
+    const bool write_spatial_field_payloads =
+        write_field_payloads &&
+        request.mfem_validation_problem.nodes != nullptr &&
+        request.mfem_validation_problem.descriptor.node_count > 0 &&
+        request.mfem_validation_problem.descriptor.tangent_dof_count ==
+            delta_m_tangent_dof_count &&
+        request.mfem_validation_problem.descriptor.tangent_dof_count ==
+            request.mfem_validation_problem.descriptor.node_count * 2 &&
+        request.mfem_validation_problem.descriptor.full_dof_count ==
+            request.mfem_validation_problem.descriptor.node_count * 3;
+    const double excitation_phase_rad = drive_global_phase_rad(
+        coupled_problem.drive_real,
+        coupled_problem.drive_imag,
+        delta_m_tangent_dof_count);
+    const char *residual_source = "matrix_free_gmres";
+    const char *sweep_solver_model = "matrix_free_gmres";
+    const char *lane_classification = "fem_cpu_production";
+    const char *engine = "native_fem_mfem_frequency_domain_cpu";
+    const char *native_backend = "native_mfem_matrix_free";
+    const char *solver_library = "native_gmres";
+    const char *preconditioner_kind =
+        validation_result.krylov_preconditioner[0] != '\0'
+            ? validation_result.krylov_preconditioner
+            : "none";
+    const char *preconditioner_setup =
+        validation_result.right_preconditioner_applied ? "ok" : "not_configured";
+    const std::string gmres_history_json =
+        gmres_relative_residual_history_json(validation_result, error_message);
+    std::string field_payload_resources_json = "[";
+    std::string sweep_v2_point_paths_json = "[";
+    std::string sweep_v2_payload_paths_json = "[";
+    std::string points_json = "[";
+    std::vector<std::string> frequency_point_jsons;
+    frequency_point_jsons.reserve(
+        static_cast<std::size_t>(validation_result.completed_frequency_count));
+    for (std::uint64_t frequency_index = 0;
+         frequency_index < validation_result.completed_frequency_count;
+         ++frequency_index) {
+        char frequency_point_path[96]{};
+        char field_payload_path[96]{};
+        char tangent_field_payload_path[96]{};
+        char field_payload_path_json[128]{};
+        char tangent_field_payload_path_json[128]{};
+        char compatibility_field_payload_path_json[128]{};
+        char storage_metadata_json[512]{};
+        char sweep_reuse_json[256]{};
+        const int point_path_written = std::snprintf(
+            frequency_point_path,
+            sizeof(frequency_point_path),
+            "response/frequency_points/frequency_%04llu.json",
+            static_cast<unsigned long long>(frequency_index));
+        int payload_path_written = 0;
+        int tangent_payload_path_written = 0;
+        int payload_path_json_written =
+            std::snprintf(field_payload_path_json, sizeof(field_payload_path_json), "null");
+        int tangent_payload_path_json_written =
+            std::snprintf(tangent_field_payload_path_json, sizeof(tangent_field_payload_path_json), "null");
+        int compatibility_payload_path_json_written =
+            std::snprintf(compatibility_field_payload_path_json, sizeof(compatibility_field_payload_path_json), "null");
+        int storage_metadata_written =
+            std::snprintf(storage_metadata_json, sizeof(storage_metadata_json), "\"storage_format\":null");
+        if (write_field_payloads) {
+            payload_path_written = std::snprintf(
+                field_payload_path,
+                sizeof(field_payload_path),
+                write_spatial_field_payloads ?
+                    "response/field_payloads.zarr/frequency_%04llu/vector_xyz_complex/0.0.0" :
+                    "response/field_payloads.zarr/frequency_%04llu/vector_tangent_complex/0.0.0",
+                static_cast<unsigned long long>(frequency_index));
+            if (payload_path_written >= 0 &&
+                static_cast<std::size_t>(payload_path_written) < sizeof(field_payload_path)) {
+                payload_path_json_written = std::snprintf(
+                    field_payload_path_json,
+                    sizeof(field_payload_path_json),
+                    "\"%s\"",
+                    field_payload_path);
+            }
+            tangent_payload_path_written = std::snprintf(
+                tangent_field_payload_path,
+                sizeof(tangent_field_payload_path),
+                "response/field_payloads.zarr/frequency_%04llu/vector_tangent_complex/0.0.0",
+                static_cast<unsigned long long>(frequency_index));
+            if (tangent_payload_path_written >= 0 &&
+                static_cast<std::size_t>(tangent_payload_path_written) < sizeof(tangent_field_payload_path)) {
+                tangent_payload_path_json_written = std::snprintf(
+                    tangent_field_payload_path_json,
+                    sizeof(tangent_field_payload_path_json),
+                    "\"%s\"",
+                    tangent_field_payload_path);
+            }
+            compatibility_payload_path_json_written = std::snprintf(
+                compatibility_field_payload_path_json,
+                sizeof(compatibility_field_payload_path_json),
+                write_spatial_field_payloads ?
+                    "\"response/field_payloads/frequency_%04llu/vector_xyz.bin\"" :
+                    "\"response/field_payloads/frequency_%04llu/vector.bin\"",
+                static_cast<unsigned long long>(frequency_index));
+            storage_metadata_written = std::snprintf(
+                storage_metadata_json,
+                sizeof(storage_metadata_json),
+                "\"storage_format\":\"zarr\","
+                "\"zarr_store_path\":\"response/field_payloads.zarr\","
+                "\"zarr_array_path\":\"response/field_payloads.zarr/frequency_%04llu/%s\","
+                "\"zarr_chunk_path\":%s,"
+                "\"zarr_dtype\":\"<f8\","
+                "\"zarr_shape\":[%llu,%u,2],"
+                "\"zarr_chunk_shape\":[%llu,%u,2],"
+                "\"zarr_compressor\":null,"
+                "\"compatibility_binary_payload_path\":%s",
+                static_cast<unsigned long long>(frequency_index),
+                write_spatial_field_payloads ? "vector_xyz_complex" : "vector_tangent_complex",
+                field_payload_path_json,
+                static_cast<unsigned long long>(
+                    write_spatial_field_payloads
+                        ? request.mfem_validation_problem.descriptor.node_count
+                        : delta_m_tangent_dof_count / 2),
+                write_spatial_field_payloads ? 3u : 2u,
+                static_cast<unsigned long long>(
+                    write_spatial_field_payloads
+                        ? request.mfem_validation_problem.descriptor.node_count
+                        : delta_m_tangent_dof_count / 2),
+                write_spatial_field_payloads ? 3u : 2u,
+                compatibility_field_payload_path_json);
+        }
+        const int sweep_reuse_written =
+            frequency_index == 0 ?
+                std::snprintf(
+                    sweep_reuse_json,
+                    sizeof(sweep_reuse_json),
+                    "{\"operator_template_reused\":true,\"warm_start\":null}") :
+                std::snprintf(
+                    sweep_reuse_json,
+                    sizeof(sweep_reuse_json),
+                    "{\"operator_template_reused\":true,"
+                    "\"warm_start\":{\"kind\":\"previous_frequency_response\","
+                    "\"source_frequency_rad_per_s\":%.17g,"
+                    "\"residual_l2_norm\":null,"
+                    "\"relative_residual_l2_norm\":null}}",
+                    request.solve_request.frequencies_hz[frequency_index - 1] *
+                        6.28318530717958647692);
+        if (point_path_written < 0 ||
+            static_cast<std::size_t>(point_path_written) >= sizeof(frequency_point_path) ||
+            payload_path_json_written < 0 ||
+            static_cast<std::size_t>(payload_path_json_written) >= sizeof(field_payload_path_json) ||
+            tangent_payload_path_json_written < 0 ||
+            static_cast<std::size_t>(tangent_payload_path_json_written) >= sizeof(tangent_field_payload_path_json) ||
+            compatibility_payload_path_json_written < 0 ||
+            static_cast<std::size_t>(compatibility_payload_path_json_written) >= sizeof(compatibility_field_payload_path_json) ||
+            storage_metadata_written < 0 ||
+            static_cast<std::size_t>(storage_metadata_written) >= sizeof(storage_metadata_json) ||
+            sweep_reuse_written < 0 ||
+            static_cast<std::size_t>(sweep_reuse_written) >= sizeof(sweep_reuse_json) ||
+            (write_field_payloads &&
+                (payload_path_written < 0 ||
+                    static_cast<std::size_t>(payload_path_written) >= sizeof(field_payload_path) ||
+                    tangent_payload_path_written < 0 ||
+                    static_cast<std::size_t>(tangent_payload_path_written) >= sizeof(tangent_field_payload_path)))) {
+            std::snprintf(error_message, 128, "failed to format periodic-airbox coupled block sweep paths");
+            return FrequencyDomainStatus::artifact_error;
+        }
+
+        const std::uint64_t response_offset =
+            frequency_index * coupled_complex_dof_count;
+        const double angular_frequency_rad_per_s =
+            request.solve_request.frequencies_hz[frequency_index] * 6.28318530717958647692;
+        ResponsePointSeriesJson series{};
+        if (!build_response_point_series_json(
+                response_real + response_offset,
+                response_imag + response_offset,
+                delta_m_tangent_dof_count,
+                series,
+                error_message)) {
+            return FrequencyDomainStatus::artifact_error;
+        }
+        const ResponsePointObservableJson observables =
+            build_response_point_observable_json(
+                response_real + response_offset,
+                response_imag + response_offset,
+                coupled_problem.drive_real,
+                coupled_problem.drive_imag,
+                delta_m_tangent_dof_count,
+                angular_frequency_rad_per_s);
+        std::string delta_phi_complex;
+        if (!append_complex_response_array(
+                delta_phi_complex,
+                error_message,
+                response_real,
+                response_imag,
+                response_offset + delta_m_tangent_dof_count,
+                delta_phi_dof_count)) {
+            return FrequencyDomainStatus::artifact_error;
+        }
+        std::string coupled_demag_json;
+        if (!append_format(
+                coupled_demag_json,
+                error_message,
+                "\"requested_magnetic_bc\":\"%s\","
+                "\"resolved_magnetic_bc\":\"%s\","
+                "\"requested_magnetostatic_bc\":\"%s\","
+                "\"resolved_magnetostatic_bc\":\"%s\","
+                "\"delta_m_tangent_dof_count\":%llu,"
+                "\"delta_phi_dof_count\":%llu,"
+                "\"coupled_complex_dof_count\":%llu,"
+                "\"demag_contribution\":{\"status\":\"solved\","
+                "\"solver_model\":\"%s\","
+                "\"operator_source\":\"%s\","
+                "\"mfem_coupled_block_assembly\":false,"
+                "\"phi_nullspace_detected\":%s,"
+                "\"phi_gauge_policy\":\"%s\","
+                "\"phi_gauge_constraint_applied\":%s,"
+                "\"delta_phi_phase_validation_status\":\"%s\","
+                "\"delta_phi_phase_max_residual\":%.17g,"
+                "\"delta_phi_flux_validation_status\":\"%s\","
+                "\"delta_phi_flux_validation_reason\":\"%s\","
+                "\"delta_phi_complex\":%s,"
+                "\"h_demag_complex\":null,"
+                "\"energy_density\":null,"
+                "\"unsupported_reason\":null},",
+                magnetic_bc,
+                magnetic_bc,
+                magnetostatic_bc,
+                magnetostatic_bc,
+                static_cast<unsigned long long>(delta_m_tangent_dof_count),
+                static_cast<unsigned long long>(delta_phi_dof_count),
+                static_cast<unsigned long long>(coupled_complex_dof_count),
+                frequency_point_solver_model,
+                operator_source,
+                phi_gauge_diagnostics.phi_nullspace_detected ? "true" : "false",
+                phi_gauge_diagnostics.phi_gauge_policy,
+                phi_gauge_diagnostics.phi_gauge_constraint_applied ? "true" : "false",
+                phi_gauge_diagnostics.delta_phi_phase_validation_status,
+                phi_gauge_diagnostics.delta_phi_phase_max_residual,
+                delta_phi_flux_validation_status,
+                delta_phi_flux_validation_reason,
+                delta_phi_complex.c_str())) {
+            return FrequencyDomainStatus::artifact_error;
+        }
+        if (!append_format(
+                points_json,
+                error_message,
+                "%s{\"frequency_index\":%llu,"
+                "\"frequency_point_artifact_path\":\"%s\","
+                "\"response_field_payload_path\":%s,"
+                "\"response_tangent_field_payload_path\":%s,"
+                "%s,"
+                "\"frequency_hz\":%.17g,"
+                "\"angular_frequency_rad_per_s\":%.17g,"
+                "\"m_complex\":%s,"
+                "\"response_amplitude\":%.17g,"
+                "\"response_phase\":%.17g,"
+                "\"phase_rad\":%.17g,"
+                "\"component_response_amplitude\":%s,"
+                "\"component_response_phase\":%s,"
+                "%s"
+                "\"susceptibility_tensor\":%s,"
+                "\"susceptibility_tensor_provenance\":%s,"
+                "\"absorbed_power_density\":%.17g,"
+                "\"absorbed_power_density_provenance\":{\"kind\":\"drive_projected_absorption_proxy\","
+                "\"basis\":\"local_tangent_drive\","
+                "\"physical_power_density\":false,"
+                "\"units\":\"proxy_not_W_per_m3\","
+                "\"requires_mu0_ms_factor\":true,"
+                "\"ms_factor_applied\":false,"
+                "\"normalization\":\"0.5*abs(omega)*abs(imag(sum(response*conj(drive))))/tangent_dof_count\","
+                "\"full_power_density\":false},"
+                "\"residual_l2_norm\":%.17g,"
+                "\"relative_residual_l2_norm\":%.17g,"
+                "\"residual_source\":\"%s\","
+                "\"tangent_leakage\":%s,"
+                "\"excitation_provenance\":{\"kind\":\"field\",\"phase_rad\":%.17g},"
+                "\"sweep_reuse\":%s}",
+                frequency_index == 0 ? "" : ",",
+                static_cast<unsigned long long>(frequency_index),
+                frequency_point_path,
+                field_payload_path_json,
+                tangent_field_payload_path_json,
+                storage_metadata_json,
+                request.solve_request.frequencies_hz[frequency_index],
+                angular_frequency_rad_per_s,
+                series.m_complex.c_str(),
+                series.response_amplitude,
+                series.response_phase,
+                series.response_phase,
+                series.component_amplitude.c_str(),
+                series.component_phase.c_str(),
+                coupled_demag_json.c_str(),
+                observables.susceptibility_tensor.c_str(),
+                observables.susceptibility_provenance.c_str(),
+                observables.absorbed_power_density,
+                residual_l2_norm[frequency_index],
+                relative_residual_l2_norm[frequency_index],
+                residual_source,
+                observables.tangent_leakage.c_str(),
+                excitation_phase_rad,
+                sweep_reuse_json)) {
+            return FrequencyDomainStatus::artifact_error;
+        }
+        std::string frequency_point_json;
+        const char *field_payload_key =
+            write_field_payloads ? "\"field_payload_path\":%s," : "\"field_payload_path\":null,";
+        if (!append_format(
+                frequency_point_json,
+                error_message,
+                "{\"schema_version\":\"frequency_response_point.v1\","
+                "\"frequency_index\":%llu,"
+                "\"frequency_hz\":%.17g,"
+                "\"status\":\"ok\","
+                "\"complete\":true,"
+                "\"angular_frequency_rad_per_s\":%.17g,"
+                "\"m_complex\":%s,"
+                "\"response_amplitude\":%.17g,"
+                "\"response_phase\":%.17g,"
+                "\"phase_rad\":%.17g,"
+                "\"component_response_amplitude\":%s,"
+                "\"component_response_phase\":%s,"
+                "%s"
+                "\"susceptibility_tensor\":%s,"
+                "\"susceptibility_tensor_provenance\":%s,"
+                "\"absorbed_power_density\":%.17g,"
+                "\"absorbed_power_density_provenance\":{\"kind\":\"drive_projected_absorption_proxy\","
+                "\"basis\":\"local_tangent_drive\","
+                "\"physical_power_density\":false,"
+                "\"units\":\"proxy_not_W_per_m3\","
+                "\"requires_mu0_ms_factor\":true,"
+                "\"ms_factor_applied\":false,"
+                "\"normalization\":\"0.5*abs(omega)*abs(imag(sum(response*conj(drive))))/tangent_dof_count\","
+                "\"full_power_density\":false},"
+                "\"residual_l2_norm\":%.17g,"
+                "\"relative_residual_l2_norm\":%.17g,"
+                "\"residual_source\":\"%s\","
+                "\"tangent_leakage\":%s,"
+                "\"excitation_provenance\":{\"kind\":\"field\",\"phase_rad\":%.17g},"
+                "\"sweep_reuse\":%s,",
+                static_cast<unsigned long long>(frequency_index),
+                request.solve_request.frequencies_hz[frequency_index],
+                angular_frequency_rad_per_s,
+                series.m_complex.c_str(),
+                series.response_amplitude,
+                series.response_phase,
+                series.response_phase,
+                series.component_amplitude.c_str(),
+                series.component_phase.c_str(),
+                coupled_demag_json.c_str(),
+                observables.susceptibility_tensor.c_str(),
+                observables.susceptibility_provenance.c_str(),
+                observables.absorbed_power_density,
+                residual_l2_norm[frequency_index],
+                relative_residual_l2_norm[frequency_index],
+                residual_source,
+                observables.tangent_leakage.c_str(),
+                excitation_phase_rad,
+                sweep_reuse_json) ||
+            !append_format(
+                frequency_point_json,
+                error_message,
+                field_payload_key,
+                field_payload_path_json) ||
+            !append_format(
+                frequency_point_json,
+                error_message,
+                "\"tangent_field_payload_path\":%s,"
+                "%s,"
+                "\"payload_encoding\":\"%s\","
+                "\"tangent_payload_encoding\":\"f64_interleaved_real_imag_tangent\","
+                "\"binary_layout\":\"complex_f64_pairs_little_endian\","
+                "\"value_kind\":\"%s\","
+                "\"component_basis\":\"%s\","
+                "\"component_count\":%u,"
+                "\"components\":%s,"
+                "\"complex_pair_count\":%llu,"
+                "\"payload_value_count\":%llu,"
+                "\"tangent_value_kind\":\"complex_tangent_vector\","
+                "\"tangent_component_basis\":\"local_tangent_frame\","
+                "\"tangent_component_count\":2,"
+                "\"tangent_components\":[\"tangent_e1\",\"tangent_e2\"],"
+                "\"tangent_complex_pair_count\":%llu,"
+                "\"tangent_payload_value_count\":%llu,"
+                "\"available_views\":[\"complex\",\"real\",\"imag\",\"abs\",\"amplitude\",\"phase\",\"phase_rotated_real\"],"
+                "\"default_view\":\"phase_rotated_real\","
+                "\"default_phase_rad\":0.0}",
+                tangent_field_payload_path_json,
+                storage_metadata_json,
+                write_field_payloads
+                    ? (write_spatial_field_payloads
+                        ? "f64_interleaved_real_imag_xyz"
+                        : "f64_interleaved_real_imag_tangent")
+                    : "not_written",
+                write_spatial_field_payloads
+                    ? "complex_spatial_vector"
+                    : "complex_tangent_vector",
+                write_spatial_field_payloads
+                    ? "global_xyz"
+                    : "local_tangent_frame",
+                write_spatial_field_payloads ? 3u : 2u,
+                write_spatial_field_payloads
+                    ? "[\"x\",\"y\",\"z\"]"
+                    : "[\"tangent_e1\",\"tangent_e2\"]",
+                static_cast<unsigned long long>(
+                    write_spatial_field_payloads
+                        ? request.mfem_validation_problem.descriptor.full_dof_count
+                        : delta_m_tangent_dof_count),
+                static_cast<unsigned long long>(
+                    write_field_payloads
+                        ? (write_spatial_field_payloads
+                            ? request.mfem_validation_problem.descriptor.full_dof_count * 2
+                            : delta_m_tangent_dof_count * 2)
+                        : 0),
+                static_cast<unsigned long long>(delta_m_tangent_dof_count),
+                static_cast<unsigned long long>(delta_m_tangent_dof_count * 2))) {
+            return FrequencyDomainStatus::artifact_error;
+        }
+        frequency_point_jsons.push_back(frequency_point_json);
+        if (!append_format(
+                sweep_v2_point_paths_json,
+                error_message,
+                "%s\"%s\"",
+                frequency_index == 0 ? "" : ",",
+                frequency_point_path)) {
+            return FrequencyDomainStatus::artifact_error;
+        }
+        if (write_field_payloads &&
+            (!append_format(
+                field_payload_resources_json,
+                error_message,
+                "%s{\"frequency_index\":%llu,"
+                "\"field_resource_id\":\"analysis:frequency-response:frequency-%04llu\","
+                "\"storage_format\":\"zarr\","
+                "\"payload_path\":\"%s\"}",
+                frequency_index == 0 ? "" : ",",
+                static_cast<unsigned long long>(frequency_index),
+                static_cast<unsigned long long>(frequency_index),
+                field_payload_path) ||
+             !append_format(
+                sweep_v2_payload_paths_json,
+                error_message,
+                "%s\"%s\"",
+                frequency_index == 0 ? "" : ",",
+                field_payload_path))) {
+            return FrequencyDomainStatus::artifact_error;
+        }
+    }
+    field_payload_resources_json += "]";
+    sweep_v2_point_paths_json += "]";
+    sweep_v2_payload_paths_json += "]";
+    points_json += "]";
     if (!append_format(
             periodic_pairs_json,
             error_message,
@@ -5322,6 +5876,50 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
     periodic_pairs_json += "]}";
 
     if (!append_format(
+            sweep_json,
+            error_message,
+            "{\"schema_version\":\"magnetic_response_sweep.v1\","
+            "\"backend_engine_id\":\"native_fem_mfem\","
+            "\"solver_model\":\"%s\","
+            "\"damping_policy\":\"linearized_llg_tangent\","
+            "\"lane_classification\":\"%s\","
+            "\"matrix_layout\":\"matrix_free_block_real\","
+            "\"excitation_kind\":\"uniform_field\","
+            "\"si_units\":{\"frequency\":\"Hz\",\"angular_frequency\":\"rad/s\"},"
+            "\"point_count\":%llu,"
+            "\"points\":%s}",
+            sweep_solver_model,
+            lane_classification,
+            static_cast<unsigned long long>(validation_result.completed_frequency_count),
+            points_json.c_str()) ||
+        !append_format(
+            sweep_v2_json,
+            error_message,
+            "{\"schema_version\":\"magnetic_response_sweep.v2\","
+            "\"solve_kind\":\"direct_harmonic_response\","
+            "\"complete\":%s,"
+            "\"completed_frequency_point_count\":%llu,"
+            "\"point_count\":%llu,"
+            "\"frequency_point_artifact_path\":\"response/frequency_points/frequency_0000.json\","
+            "\"response_field_payload_path\":%s,"
+            "\"frequency_point_artifact_paths\":%s,"
+            "\"response_field_payload_paths\":%s,"
+            "\"points\":%s}",
+            complete ? "true" : "false",
+            static_cast<unsigned long long>(validation_result.completed_frequency_count),
+            static_cast<unsigned long long>(validation_result.completed_frequency_count),
+            write_field_payloads && validation_result.completed_frequency_count > 0
+                ? (write_spatial_field_payloads
+                    ? "\"response/field_payloads.zarr/frequency_0000/vector_xyz_complex/0.0.0\""
+                    : "\"response/field_payloads.zarr/frequency_0000/vector_tangent_complex/0.0.0\"")
+                : "null",
+            sweep_v2_point_paths_json.c_str(),
+            sweep_v2_payload_paths_json.c_str(),
+            points_json.c_str())) {
+        return FrequencyDomainStatus::artifact_error;
+    }
+
+    if (!append_format(
             diagnostics_json,
             error_message,
             "{\"schema_version\":\"frequency_domain_response_diagnostics.v1\","
@@ -5329,11 +5927,22 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
             "\"complete\":%s,"
             "\"solver_engine\":\"native_fem_mfem_driven_response\","
             "\"solver_kind\":\"%s\","
+            "\"matrix_form\":\"iomega_B_minus_L\","
+            "\"phasor_convention\":\"%s\","
             "\"requested_execution_lane\":\"production_cpu\","
             "\"resolved_execution_lane\":\"production_cpu\","
             "\"production_solver_requested\":true,"
             "\"production_solver_available\":true,"
             "\"validation_fallback_used\":false,"
+            "\"assembled_mfem_operator_solver\":false,"
+            "\"dense_block_real_solver\":false,"
+            "\"matrix_free_solver\":true,"
+            "\"krylov_solver\":\"gmres\","
+            "\"krylov_preconditioner_kind\":\"%s\","
+            "\"krylov_preconditioner_applied\":%s,"
+            "\"krylov_preconditioner_setup_status\":\"%s\","
+            "\"gmres_relative_residual_history\":%s,"
+            "\"coupled_residual_partition_status\":\"%s\","
             "\"periodic_airbox_coupled_block_solver\":true,"
             "\"mfem_coupled_block_assembly\":false,"
             "\"dynamic_demag_operator_source\":\"%s\","
@@ -5359,10 +5968,17 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
             "\"completed_frequency_point_count\":%llu,"
             "\"written_frequency_point_artifacts\":%llu,"
             "\"max_abs_response\":%.17g,"
+            "\"residual_l2_norm\":%.17g,"
             "\"relative_residual_l2_norm\":%.17g%s}",
             artifact_status,
             complete ? "true" : "false",
             solver_kind,
+            phase_convention_to_string(request.phase_convention),
+            preconditioner_kind,
+            validation_result.right_preconditioner_applied ? "true" : "false",
+            preconditioner_setup,
+            gmres_history_json.c_str(),
+            validation_result.coupled_residual_partition_status,
             operator_source,
             magnetic_bc,
             magnetic_bc,
@@ -5387,6 +6003,7 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
             static_cast<unsigned long long>(validation_result.completed_frequency_count),
             static_cast<unsigned long long>(validation_result.completed_frequency_count),
             validation_result.max_abs_response,
+            validation_result.residual_l2_norm,
             validation_result.relative_residual_l2_norm,
             domain_mesh_mode_field.c_str()) ||
         !append_format(
@@ -5426,12 +6043,17 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
             "\"solve_kind\":\"direct_harmonic_response\","
             "\"study_kind\":\"frequency_response\","
             "\"frequency_count\":%llu,"
-            "\"write_response_fields\":true},"
+            "\"write_response_fields\":%s},"
             "\"resolved_execution\":{\"backend_engine_id\":\"native_fem_mfem\","
-            "\"engine\":\"native_fem_mfem_frequency_domain\","
-            "\"native_backend\":\"native_mfem\","
+            "\"engine\":\"%s\","
+            "\"native_backend\":\"%s\","
             "\"reference_or_production\":\"production\","
             "\"solver_model\":\"%s\","
+            "\"solver_library\":\"%s\","
+            "\"solver_kind\":\"%s\","
+            "\"solve_kind\":\"direct_harmonic_response\","
+            "\"lane_classification\":\"%s\","
+            "\"production_solver\":true,"
             "\"requested_execution_lane\":\"production_cpu\","
             "\"resolved_execution_lane\":\"production_cpu\","
             "\"periodic_airbox_coupled_block_solver\":true,"
@@ -5465,14 +6087,32 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
             "\"delta_phi_phase_max_residual\":%.17g},"
             "\"delta_phi_flux_validation_status\":\"%s\","
             "\"delta_phi_flux_validation_reason\":\"%s\","
-            "\"artifacts\":{\"response_diagnostics_v1_path\":\"response/diagnostics/solver.v1.json\","
+            "\"artifacts\":{\"response_sweep_v1_path\":\"response/magnetic_response_sweep.v1.json\","
+            "\"response_sweep_v2_path\":\"response/magnetic_response_sweep.v2.json\","
+            "\"response_diagnostics_v1_path\":\"response/diagnostics/solver.v1.json\","
             "\"solver_diagnostics_path\":\"response/diagnostics/solver.v1.json\","
             "\"periodic_pairs_v1_path\":\"mesh/periodic_pairs.v1.json\","
             "\"response_progress_v1_path\":\"response/progress.v1.json\","
+            "\"response_map_v1_path\":null,"
+            "\"response_map_v2_path\":null,"
             "\"frequency_point_paths\":%s},"
+            "\"resources\":{\"response_sweep_resource_key\":\"/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep\","
+            "\"response_progress_resource_key\":\"/v2/sessions/current/analysis/frequency-domain/response/progress.v1\","
+            "\"response_diagnostics_resource_key\":\"/v2/sessions/current/analysis/frequency-domain/response/diagnostics/solver.v1\","
+            "\"response_map_resource_key\":null,"
+            "\"response_field_resources\":%s},"
             "\"diagnostics\":{\"requested_execution_lane\":\"production_cpu\","
             "\"resolved_execution_lane\":\"production_cpu\","
             "\"validation_fallback_used\":false,"
+            "\"assembled_mfem_operator_solver\":false,"
+            "\"dense_block_real_solver\":false,"
+            "\"matrix_free_solver\":true,"
+            "\"krylov_solver\":\"gmres\","
+            "\"krylov_preconditioner_kind\":\"%s\","
+            "\"krylov_preconditioner_applied\":%s,"
+            "\"krylov_preconditioner_setup_status\":\"%s\","
+            "\"gmres_relative_residual_history\":%s,"
+            "\"coupled_residual_partition_status\":\"%s\","
             "\"periodic_airbox_coupled_block_solver\":true,"
             "\"mfem_coupled_block_assembly\":false,"
             "\"dynamic_demag_operator_source\":\"%s\","
@@ -5482,8 +6122,12 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
             "%s"
             "\"requested_frequency_count\":%llu,"
             "\"completed_frequency_point_count\":%llu,"
-            "\"written_frequency_point_artifacts\":%llu%s},"
+            "\"written_frequency_point_artifacts\":%llu,"
+            "\"residual_l2_norm\":%.17g,"
+            "\"relative_residual_l2_norm\":%.17g%s},"
             "\"capabilities\":{\"production_solver_available\":true,"
+            "\"production_native_solver_available\":true,"
+            "\"validation_artifact\":false,"
             "\"periodic_airbox_coupled_block_solver\":true,"
             "\"mfem_coupled_block_assembly\":false,"
             "\"dynamic_demag_operator_source\":\"%s\","
@@ -5494,7 +6138,13 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
             artifact_status,
             complete ? "true" : "false",
             static_cast<unsigned long long>(request.solve_request.frequency_count),
-            solver_model,
+            request.solve_request.write_response_fields ? "true" : "false",
+            engine,
+            native_backend,
+            sweep_solver_model,
+            solver_library,
+            solver_kind,
+            lane_classification,
             operator_source,
             request.solve_request.operator_request.gamma0,
             request.solve_request.operator_request.alpha,
@@ -5521,6 +6171,12 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
             delta_phi_flux_validation_status,
             delta_phi_flux_validation_reason,
             frequency_point_paths_json.c_str(),
+            field_payload_resources_json.c_str(),
+            preconditioner_kind,
+            validation_result.right_preconditioner_applied ? "true" : "false",
+            preconditioner_setup,
+            gmres_history_json.c_str(),
+            validation_result.coupled_residual_partition_status,
             operator_source,
             magnetostatic_bc,
             magnetostatic_bc,
@@ -5529,6 +6185,8 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
             static_cast<unsigned long long>(request.solve_request.frequency_count),
             static_cast<unsigned long long>(validation_result.completed_frequency_count),
             static_cast<unsigned long long>(validation_result.completed_frequency_count),
+            validation_result.residual_l2_norm,
+            validation_result.relative_residual_l2_norm,
             domain_mesh_mode_field.c_str(),
             operator_source)) {
         return FrequencyDomainStatus::artifact_error;
@@ -5550,6 +6208,24 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
     if (status != FrequencyDomainStatus::ok) {
         return status;
     }
+    if (write_field_payloads) {
+        status = ensure_directory(field_payloads_dir, error_message);
+        if (status != FrequencyDomainStatus::ok) {
+            return status;
+        }
+        status = ensure_directory(field_payloads_zarr_dir, error_message);
+        if (status != FrequencyDomainStatus::ok) {
+            return status;
+        }
+        status = write_zarr_group_artifact(field_payloads_zarr_dir, error_message);
+        if (status != FrequencyDomainStatus::ok) {
+            return status;
+        }
+        status = write_response_zarr_store_attrs(field_payloads_zarr_dir, error_message);
+        if (status != FrequencyDomainStatus::ok) {
+            return status;
+        }
+    }
     status = ensure_directory(diagnostics_dir, error_message);
     if (status != FrequencyDomainStatus::ok) {
         return status;
@@ -5566,6 +6242,14 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
     if (status != FrequencyDomainStatus::ok) {
         return status;
     }
+    status = write_text_artifact(sweep, sweep_json.c_str(), error_message);
+    if (status != FrequencyDomainStatus::ok) {
+        return status;
+    }
+    status = write_text_artifact(sweep_v2, sweep_v2_json.c_str(), error_message);
+    if (status != FrequencyDomainStatus::ok) {
+        return status;
+    }
     status = write_text_artifact(progress, progress_json.c_str(), error_message);
     if (status != FrequencyDomainStatus::ok) {
         return status;
@@ -5579,96 +6263,183 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
          frequency_index < validation_result.completed_frequency_count;
          ++frequency_index) {
         char frequency_point_path[256]{};
+        char field_payload_dir[256]{};
+        char zarr_frequency_group_dir[256]{};
+        char zarr_tangent_array_dir[256]{};
+        char zarr_spatial_array_dir[256]{};
+        char zarr_tangent_chunk[256]{};
+        char zarr_spatial_chunk[256]{};
+        char field_payload[256]{};
+        char spatial_field_payload[256]{};
         const int point_path_written = std::snprintf(
             frequency_point_path,
             sizeof(frequency_point_path),
             "%s/frequency_%04llu.json",
             frequency_points_dir,
             static_cast<unsigned long long>(frequency_index));
-        if (point_path_written < 0 ||
-            static_cast<std::size_t>(point_path_written) >= sizeof(frequency_point_path)) {
+        if (write_field_payloads &&
+            (std::snprintf(
+                 field_payload_dir,
+                 sizeof(field_payload_dir),
+                 "%s/frequency_%04llu",
+                 field_payloads_dir,
+                 static_cast<unsigned long long>(frequency_index)) < 0 ||
+             std::snprintf(
+                 zarr_frequency_group_dir,
+                 sizeof(zarr_frequency_group_dir),
+                 "%s/frequency_%04llu",
+                 field_payloads_zarr_dir,
+                 static_cast<unsigned long long>(frequency_index)) < 0 ||
+             std::snprintf(
+                 zarr_tangent_array_dir,
+                 sizeof(zarr_tangent_array_dir),
+                 "%s/vector_tangent_complex",
+                 zarr_frequency_group_dir) < 0 ||
+             std::snprintf(
+                 zarr_spatial_array_dir,
+                 sizeof(zarr_spatial_array_dir),
+                 "%s/vector_xyz_complex",
+                 zarr_frequency_group_dir) < 0 ||
+             std::snprintf(zarr_tangent_chunk, sizeof(zarr_tangent_chunk), "%s/0.0.0", zarr_tangent_array_dir) < 0 ||
+             std::snprintf(zarr_spatial_chunk, sizeof(zarr_spatial_chunk), "%s/0.0.0", zarr_spatial_array_dir) < 0 ||
+             std::snprintf(field_payload, sizeof(field_payload), "%s/vector.bin", field_payload_dir) < 0 ||
+             std::snprintf(spatial_field_payload, sizeof(spatial_field_payload), "%s/vector_xyz.bin", field_payload_dir) < 0)) {
             std::snprintf(error_message, 128, "failed to format periodic-airbox coupled block frequency point artifact path");
             return FrequencyDomainStatus::artifact_error;
         }
-
-        const std::uint64_t response_offset = frequency_index * coupled_complex_dof_count;
-        std::string delta_m_complex;
-        std::string delta_phi_complex;
-        if (!append_complex_response_array(
-                delta_m_complex,
-                error_message,
-                response_real,
-                response_imag,
-                response_offset,
-                delta_m_tangent_dof_count) ||
-            !append_complex_response_array(
-                delta_phi_complex,
-                error_message,
-                response_real,
-                response_imag,
-                response_offset + delta_m_tangent_dof_count,
-                delta_phi_dof_count)) {
+        if (point_path_written < 0 ||
+            static_cast<std::size_t>(point_path_written) >= sizeof(frequency_point_path) ||
+            (write_field_payloads &&
+                (std::strlen(field_payload_dir) >= sizeof(field_payload_dir) - 1 ||
+                 std::strlen(zarr_frequency_group_dir) >= sizeof(zarr_frequency_group_dir) - 1 ||
+                 std::strlen(zarr_tangent_array_dir) >= sizeof(zarr_tangent_array_dir) - 1 ||
+                 std::strlen(zarr_spatial_array_dir) >= sizeof(zarr_spatial_array_dir) - 1 ||
+                 std::strlen(zarr_tangent_chunk) >= sizeof(zarr_tangent_chunk) - 1 ||
+                 std::strlen(zarr_spatial_chunk) >= sizeof(zarr_spatial_chunk) - 1 ||
+                 std::strlen(field_payload) >= sizeof(field_payload) - 1 ||
+                 std::strlen(spatial_field_payload) >= sizeof(spatial_field_payload) - 1))) {
+            std::snprintf(error_message, 128, "periodic-airbox coupled block frequency point artifact path exceeded fixed buffer");
             return FrequencyDomainStatus::artifact_error;
         }
-
-        std::string frequency_point_json;
-        if (!append_format(
-                frequency_point_json,
-                error_message,
-                "{\"schema_version\":\"frequency_domain_point.v1\","
-                "\"frequency_index\":%llu,"
-                "\"frequency_hz\":%.17g,"
-                "\"status\":\"ok\","
-                "\"complete\":true,"
-                "\"requested_magnetic_bc\":\"%s\","
-                "\"resolved_magnetic_bc\":\"%s\","
-                "\"requested_magnetostatic_bc\":\"%s\","
-                "\"resolved_magnetostatic_bc\":\"%s\","
-                "\"delta_m_tangent_dof_count\":%llu,"
-                "\"delta_phi_dof_count\":%llu,"
-                "\"coupled_complex_dof_count\":%llu,"
-                "\"m_complex\":%s,"
-                "\"residual_l2_norm\":%.17g,"
-                "\"relative_residual_l2_norm\":%.17g,"
-                "\"demag_contribution\":{\"status\":\"solved\","
-                "\"solver_model\":\"%s\","
-                "\"operator_source\":\"%s\","
-                "\"mfem_coupled_block_assembly\":false,"
-                "\"phi_nullspace_detected\":%s,"
-                "\"phi_gauge_policy\":\"%s\","
-                "\"phi_gauge_constraint_applied\":%s,"
-                "\"delta_phi_phase_validation_status\":\"%s\","
-                "\"delta_phi_phase_max_residual\":%.17g,"
-                "\"delta_phi_flux_validation_status\":\"%s\","
-                "\"delta_phi_flux_validation_reason\":\"%s\","
-                "\"delta_phi_complex\":%s,"
-                "\"h_demag_complex\":null,"
-                "\"energy_density\":null}}",
-                static_cast<unsigned long long>(frequency_index),
-                request.solve_request.frequencies_hz[frequency_index],
-                magnetic_bc,
-                magnetic_bc,
-                magnetostatic_bc,
-                magnetostatic_bc,
-                static_cast<unsigned long long>(delta_m_tangent_dof_count),
-                static_cast<unsigned long long>(delta_phi_dof_count),
-                static_cast<unsigned long long>(coupled_complex_dof_count),
-                delta_m_complex.c_str(),
-                residual_l2_norm[frequency_index],
-                relative_residual_l2_norm[frequency_index],
-                frequency_point_solver_model,
-                operator_source,
-                phi_gauge_diagnostics.phi_nullspace_detected ? "true" : "false",
-                phi_gauge_diagnostics.phi_gauge_policy,
-                phi_gauge_diagnostics.phi_gauge_constraint_applied ? "true" : "false",
-                phi_gauge_diagnostics.delta_phi_phase_validation_status,
-                phi_gauge_diagnostics.delta_phi_phase_max_residual,
-                delta_phi_flux_validation_status,
-                delta_phi_flux_validation_reason,
-                delta_phi_complex.c_str())) {
+        if (frequency_index >= frequency_point_jsons.size()) {
+            std::snprintf(error_message, 128, "missing periodic-airbox coupled block frequency point JSON");
             return FrequencyDomainStatus::artifact_error;
         }
-        status = write_text_artifact(frequency_point_path, frequency_point_json.c_str(), error_message);
+        status = write_text_artifact(
+            frequency_point_path,
+            frequency_point_jsons[static_cast<std::size_t>(frequency_index)].c_str(),
+            error_message);
+        if (status != FrequencyDomainStatus::ok) {
+            return status;
+        }
+        if (!write_field_payloads) {
+            continue;
+        }
+        status = ensure_directory(field_payload_dir, error_message);
+        if (status != FrequencyDomainStatus::ok) {
+            return status;
+        }
+        status = ensure_directory(zarr_frequency_group_dir, error_message);
+        if (status != FrequencyDomainStatus::ok) {
+            return status;
+        }
+        status = write_zarr_group_artifact(zarr_frequency_group_dir, error_message);
+        if (status != FrequencyDomainStatus::ok) {
+            return status;
+        }
+        status = ensure_directory(zarr_tangent_array_dir, error_message);
+        if (status != FrequencyDomainStatus::ok) {
+            return status;
+        }
+        status = write_response_zarr_array_artifacts(
+            zarr_tangent_array_dir,
+            delta_m_tangent_dof_count / 2,
+            2,
+            "[\"tangent_e1\",\"tangent_e2\"]",
+            "local_tangent_frame",
+            "complex_tangent_vector",
+            error_message);
+        if (status != FrequencyDomainStatus::ok) {
+            return status;
+        }
+        const std::uint64_t response_offset =
+            frequency_index * coupled_complex_dof_count;
+        std::vector<double> tangent_payload(
+            static_cast<std::size_t>(delta_m_tangent_dof_count * 2));
+        for (std::uint64_t dof = 0; dof < delta_m_tangent_dof_count; ++dof) {
+            tangent_payload[static_cast<std::size_t>(dof * 2)] =
+                response_real[response_offset + dof];
+            tangent_payload[static_cast<std::size_t>(dof * 2 + 1)] =
+                response_imag[response_offset + dof];
+        }
+        status = write_binary_artifact(
+            zarr_tangent_chunk,
+            tangent_payload.data(),
+            tangent_payload.size() * sizeof(double),
+            error_message);
+        if (status != FrequencyDomainStatus::ok) {
+            return status;
+        }
+        status = write_binary_artifact(
+            field_payload,
+            tangent_payload.data(),
+            tangent_payload.size() * sizeof(double),
+            error_message);
+        if (status != FrequencyDomainStatus::ok) {
+            return status;
+        }
+        if (!write_spatial_field_payloads) {
+            continue;
+        }
+        status = ensure_directory(zarr_spatial_array_dir, error_message);
+        if (status != FrequencyDomainStatus::ok) {
+            return status;
+        }
+        status = write_response_zarr_array_artifacts(
+            zarr_spatial_array_dir,
+            request.mfem_validation_problem.descriptor.node_count,
+            3,
+            "[\"x\",\"y\",\"z\"]",
+            "global_xyz",
+            "complex_spatial_vector",
+            error_message);
+        if (status != FrequencyDomainStatus::ok) {
+            return status;
+        }
+        const std::uint64_t node_count =
+            request.mfem_validation_problem.descriptor.node_count;
+        const std::uint64_t full_dof_count =
+            request.mfem_validation_problem.descriptor.full_dof_count;
+        std::vector<double> spatial_real(static_cast<std::size_t>(full_dof_count));
+        std::vector<double> spatial_imag(static_cast<std::size_t>(full_dof_count));
+        std::vector<double> spatial_payload(static_cast<std::size_t>(full_dof_count * 2));
+        lift_tangent_to_full(
+            request.mfem_validation_problem.nodes,
+            response_real + response_offset,
+            node_count,
+            spatial_real.data());
+        lift_tangent_to_full(
+            request.mfem_validation_problem.nodes,
+            response_imag + response_offset,
+            node_count,
+            spatial_imag.data());
+        for (std::uint64_t dof = 0; dof < full_dof_count; ++dof) {
+            spatial_payload[static_cast<std::size_t>(dof * 2)] = spatial_real[dof];
+            spatial_payload[static_cast<std::size_t>(dof * 2 + 1)] = spatial_imag[dof];
+        }
+        status = write_binary_artifact(
+            zarr_spatial_chunk,
+            spatial_payload.data(),
+            spatial_payload.size() * sizeof(double),
+            error_message);
+        if (status != FrequencyDomainStatus::ok) {
+            return status;
+        }
+        status = write_binary_artifact(
+            spatial_field_payload,
+            spatial_payload.data(),
+            spatial_payload.size() * sizeof(double),
+            error_message);
         if (status != FrequencyDomainStatus::ok) {
             return status;
         }
@@ -7410,6 +8181,7 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_coupled_block(
             production_result.coupled_residual_partition_status,
             63);
         validation_result.coupled_residual_partition_status[63] = '\0';
+        copy_production_cpu_diagnostics(production_result, validation_result);
         std::snprintf(
             validation_result.error_message,
             sizeof(validation_result.error_message),
@@ -7749,10 +8521,6 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
             static_cast<std::size_t>(delta_m_tangent_dof_count * sizeof(double)));
     }
 
-    std::vector<double> magnetic_response_real(static_cast<std::size_t>(
-        delta_m_tangent_dof_count * request.solve_request.frequency_count));
-    std::vector<double> magnetic_response_imag(static_cast<std::size_t>(
-        delta_m_tangent_dof_count * request.solve_request.frequency_count));
     std::vector<double> response_real(static_cast<std::size_t>(
         coupled_dof_count * request.solve_request.frequency_count));
     std::vector<double> response_imag(static_cast<std::size_t>(
@@ -7773,19 +8541,19 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
     ProductionCpuDrivenResponseResult production_result{};
     const FrequencyDomainStatus solve_status = solve_production_cpu_driven_response(
         ProductionCpuDrivenResponseProblem{
-            delta_m_tangent_dof_count,
+            coupled_dof_count,
             request.solve_request.frequencies_hz,
             request.solve_request.frequency_count,
-            magnetic_drive_real,
-            apply_mfem_production_cpu_stiffness,
-            apply_mfem_production_cpu_mass,
-            &context.adapter,
+            drive_real.data(),
+            apply_mfem_phi_consistency_schur_stiffness,
+            apply_mfem_phi_consistency_schur_mass,
+            &context,
             solver_relative_tolerance,
             solver_max_iterations,
             solver_restart_iterations,
-            magnetic_response_real.data(),
-            magnetic_response_imag.data(),
-            delta_m_tangent_dof_count * request.solve_request.frequency_count,
+            response_real.data(),
+            response_imag.data(),
+            coupled_dof_count * request.solve_request.frequency_count,
             residual_l2_norm.data(),
             relative_residual_l2_norm.data(),
             request.solve_request.frequency_count,
@@ -7793,28 +8561,16 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
             request.cancel_user_data,
             request.progress_callback,
             request.progress_user_data,
-            magnetic_drive_imag,
+            drive_imag.empty() ? nullptr : drive_imag.data(),
             angular_frequency_sign(request.phase_convention),
             nullptr,
             nullptr,
             solver_progress_interval,
-            context.adapter.graph_preconditioner_enabled ?
-                apply_mfem_tangent_graph_demag_coarse_right_preconditioner :
-                context.adapter.demag_coarse_preconditioner_enabled ?
-                apply_mfem_tangent_demag_coarse_right_preconditioner :
-                context.adapter.block_jacobi_preconditioner_enabled ?
-                apply_mfem_tangent_block_jacobi_right_preconditioner :
-                nullptr,
-            context.adapter.block_jacobi_preconditioner_enabled ? &context.adapter : nullptr,
-            context.adapter.graph_preconditioner_enabled ?
-                "mfem_tangent_graph_demag_coarse_right" :
-                context.adapter.demag_coarse_preconditioner_enabled ?
-                "mfem_tangent_demag_coarse_right" :
-                context.adapter.block_jacobi_preconditioner_enabled ?
-                "mfem_tangent_block_jacobi_right" :
-                nullptr,
+            apply_mfem_phi_consistency_schur_right_preconditioner,
+            &context,
+            "mfem_phi_consistency_schur_right",
             delta_m_tangent_dof_count,
-            0,
+            delta_phi_dof_count,
             "coupled_block",
         },
         &production_result);
@@ -7830,23 +8586,7 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
         validation_result.residual_l2_norm = production_result.residual_l2_norm;
         validation_result.relative_residual_l2_norm =
             production_result.relative_residual_l2_norm;
-        validation_result.rhs_delta_m_l2_norm = production_result.rhs_l2_norm;
-        validation_result.rhs_delta_phi_l2_norm = 0.0;
-        validation_result.residual_delta_m_l2_norm =
-            production_result.residual_l2_norm;
-        validation_result.residual_delta_phi_l2_norm = 0.0;
-        validation_result.relative_residual_delta_m_l2_norm =
-            production_result.relative_residual_l2_norm;
-        validation_result.relative_residual_delta_phi_l2_norm = 0.0;
-        validation_result.response_delta_m_l2_norm = std::hypot(
-            production_result.response_real_l2_norm,
-            production_result.response_imag_l2_norm);
-        validation_result.response_delta_phi_l2_norm = 0.0;
-        validation_result.coupled_block_norms_available = true;
-        std::snprintf(
-            validation_result.coupled_residual_partition_status,
-            sizeof(validation_result.coupled_residual_partition_status),
-            "coupled_block");
+        copy_production_cpu_diagnostics(production_result, validation_result);
 
         PeriodicAirboxPhiGaugeDiagnostics phi_gauge_diagnostics{};
         phi_gauge_diagnostics.phi_gauge_policy =
@@ -8007,68 +8747,6 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
         return result.status;
     }
 
-    double response_delta_phi_l2_norm_squared = 0.0;
-    for (std::uint64_t frequency_index = 0;
-         frequency_index < production_result.completed_frequency_count;
-         ++frequency_index) {
-        const std::uint64_t magnetic_offset =
-            frequency_index * delta_m_tangent_dof_count;
-        const std::uint64_t coupled_offset =
-            frequency_index * coupled_dof_count;
-        std::memcpy(
-            response_real.data() + coupled_offset,
-            magnetic_response_real.data() + magnetic_offset,
-            static_cast<std::size_t>(delta_m_tangent_dof_count * sizeof(double)));
-        std::memcpy(
-            response_imag.data() + coupled_offset,
-            magnetic_response_imag.data() + magnetic_offset,
-            static_cast<std::size_t>(delta_m_tangent_dof_count * sizeof(double)));
-        FrequencyDomainStatus phi_status = problem.apply_demag_tangent_with_potential(
-            problem.demag_tangent_user_data,
-            magnetic_response_real.data() + magnetic_offset,
-            context.demag_tangent_workspace.data(),
-            context.delta_phi_workspace.data(),
-            delta_phi_dof_count,
-            preconditioner_setup_error);
-        if (phi_status != FrequencyDomainStatus::ok) {
-            result.status = phi_status;
-            assign_result_strings(
-                result,
-                preconditioner_setup_error,
-                status_diagnostics_json(phi_status),
-                status_result_json(phi_status),
-                "");
-            return result.status;
-        }
-        for (std::uint64_t phi = 0; phi < delta_phi_dof_count; ++phi) {
-            const double value = context.delta_phi_workspace[static_cast<std::size_t>(phi)];
-            response_real[static_cast<std::size_t>(coupled_offset + delta_m_tangent_dof_count + phi)] = value;
-            response_delta_phi_l2_norm_squared += value * value;
-        }
-        phi_status = problem.apply_demag_tangent_with_potential(
-            problem.demag_tangent_user_data,
-            magnetic_response_imag.data() + magnetic_offset,
-            context.demag_tangent_workspace.data(),
-            context.delta_phi_workspace.data(),
-            delta_phi_dof_count,
-            preconditioner_setup_error);
-        if (phi_status != FrequencyDomainStatus::ok) {
-            result.status = phi_status;
-            assign_result_strings(
-                result,
-                preconditioner_setup_error,
-                status_diagnostics_json(phi_status),
-                status_result_json(phi_status),
-                "");
-            return result.status;
-        }
-        for (std::uint64_t phi = 0; phi < delta_phi_dof_count; ++phi) {
-            const double value = context.delta_phi_workspace[static_cast<std::size_t>(phi)];
-            response_imag[static_cast<std::size_t>(coupled_offset + delta_m_tangent_dof_count + phi)] = value;
-            response_delta_phi_l2_norm_squared += value * value;
-        }
-    }
-
     DenseDrivenResponseValidationResult validation_result{};
     validation_result.completed_frequency_count =
         production_result.completed_frequency_count;
@@ -8089,24 +8767,7 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
     validation_result.residual_l2_norm = production_result.residual_l2_norm;
     validation_result.relative_residual_l2_norm =
         production_result.relative_residual_l2_norm;
-    validation_result.rhs_delta_m_l2_norm = production_result.rhs_l2_norm;
-    validation_result.rhs_delta_phi_l2_norm = 0.0;
-    validation_result.residual_delta_m_l2_norm =
-        production_result.residual_l2_norm;
-    validation_result.residual_delta_phi_l2_norm = 0.0;
-    validation_result.relative_residual_delta_m_l2_norm =
-        production_result.relative_residual_l2_norm;
-    validation_result.relative_residual_delta_phi_l2_norm = 0.0;
-    validation_result.response_delta_m_l2_norm = std::hypot(
-        production_result.response_real_l2_norm,
-        production_result.response_imag_l2_norm);
-    validation_result.response_delta_phi_l2_norm =
-        std::sqrt(response_delta_phi_l2_norm_squared);
-    validation_result.coupled_block_norms_available = true;
-    std::snprintf(
-        validation_result.coupled_residual_partition_status,
-        sizeof(validation_result.coupled_residual_partition_status),
-        "coupled_block");
+    copy_production_cpu_diagnostics(production_result, validation_result);
 
     PeriodicAirboxPhiGaugeDiagnostics phi_gauge_diagnostics{};
     phi_gauge_diagnostics.phi_gauge_policy =

@@ -4521,9 +4521,21 @@
           },
           "k_path": {
             "$ref": "#/components/schemas/FrequencyDomainCapabilityEntryResource"
+          },
+          "production_cpu": {
+            "$ref": "#/components/schemas/FrequencyDomainCapabilityEntryResource"
+          },
+          "production_gpu": {
+            "$ref": "#/components/schemas/FrequencyDomainCapabilityEntryResource"
+          },
+          "reference_cpu": {
+            "$ref": "#/components/schemas/FrequencyDomainCapabilityEntryResource"
           }
         },
         "required": [
+          "reference_cpu",
+          "production_cpu",
+          "production_gpu",
           "k_path",
           "branch_tracking"
         ],

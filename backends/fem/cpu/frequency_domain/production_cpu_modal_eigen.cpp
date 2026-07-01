@@ -89,6 +89,40 @@ std::string format_double(double value) noexcept
     return buffer;
 }
 
+std::string operator_k_vector_diagnostics_json(const ModalEigenRequest &request)
+{
+    if (request.operator_request.k_vector_rad_m == nullptr ||
+        request.operator_request.k_vector_len <= 0) {
+        return "";
+    }
+    std::string json =
+        ",\"k_vector_len\":" +
+        std::to_string(request.operator_request.k_vector_len) +
+        ",\"k_vector_rad_m\":[";
+    for (int index = 0; index < request.operator_request.k_vector_len; ++index) {
+        if (index != 0) {
+            json += ",";
+        }
+        json += format_double(request.operator_request.k_vector_rad_m[index]);
+    }
+    json += "]";
+    return json;
+}
+
+std::string with_modal_request_diagnostics(
+    std::string diagnostics_json,
+    const ModalEigenRequest &request)
+{
+    if (!diagnostics_json.empty() && diagnostics_json.back() == '}') {
+        diagnostics_json.pop_back();
+        diagnostics_json += operator_k_vector_diagnostics_json(request);
+        diagnostics_json += "}";
+    }
+    return with_operator_diagnostics(
+        std::move(diagnostics_json),
+        request.operator_request.operator_diagnostics_json);
+}
+
 std::string format_slepc_modes_json(
     const std::vector<SLEPcModalAcceptedMode> &accepted_modes)
 {
@@ -238,9 +272,8 @@ FrequencyDomainContractResult dense_payload_validation_error(
         "\"reason\":\"" +
         std::string(reason != nullptr ? reason : "validation_error") +
         "\"}";
-    result.diagnostics_json = with_operator_diagnostics(
-        result.diagnostics_json,
-        request.operator_request.operator_diagnostics_json);
+    result.diagnostics_json =
+        with_modal_request_diagnostics(result.diagnostics_json, request);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
@@ -267,9 +300,8 @@ FrequencyDomainContractResult sparse_payload_validation_error(
         "\"reason\":\"" +
         std::string(reason != nullptr ? reason : "validation_error") +
         "\"}";
-    result.diagnostics_json = with_operator_diagnostics(
-        result.diagnostics_json,
-        request.operator_request.operator_diagnostics_json);
+    result.diagnostics_json =
+        with_modal_request_diagnostics(result.diagnostics_json, request);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
@@ -333,9 +365,8 @@ FrequencyDomainContractResult sparse_payload_solver_pending_result(
         "\"modal_eigen_native_cpu_slepc_available\":" +
         std::string(adapter.slepc_available ? "true" : "false") +
         ",\"unsupported_reason\":\"sparse_modal_operator_payload_solver_pending\"}";
-    result.diagnostics_json = with_operator_diagnostics(
-        result.diagnostics_json,
-        request.operator_request.operator_diagnostics_json);
+    result.diagnostics_json =
+        with_modal_request_diagnostics(result.diagnostics_json, request);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
@@ -846,9 +877,8 @@ FrequencyDomainContractResult solve_dense_production_modal_contour_payload(
         result.diagnostics_json += ",";
         result.diagnostics_json += contour_interval_diagnostics_json(contour_result);
         result.diagnostics_json += "}";
-        result.diagnostics_json = with_operator_diagnostics(
-            result.diagnostics_json,
-            request.operator_request.operator_diagnostics_json);
+        result.diagnostics_json =
+            with_modal_request_diagnostics(result.diagnostics_json, request);
         result.result_json =
             "{\"schema_version\":\"frequency_domain_modal_result.v1\","
             "\"study_product\":\"modal_eigen\","
@@ -916,9 +946,8 @@ FrequencyDomainContractResult solve_dense_production_modal_contour_payload(
     result.diagnostics_json += ",";
     result.diagnostics_json += contour_interval_diagnostics_json(contour_result);
     result.diagnostics_json += "}";
-    result.diagnostics_json = with_operator_diagnostics(
-        result.diagnostics_json,
-        request.operator_request.operator_diagnostics_json);
+    result.diagnostics_json =
+        with_modal_request_diagnostics(result.diagnostics_json, request);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
@@ -1146,9 +1175,8 @@ FrequencyDomainContractResult solve_dense_production_modal_window_payload(
             "\",";
         result.diagnostics_json += window_diagnostics;
         result.diagnostics_json += "}";
-        result.diagnostics_json = with_operator_diagnostics(
-            result.diagnostics_json,
-            request.operator_request.operator_diagnostics_json);
+        result.diagnostics_json =
+            with_modal_request_diagnostics(result.diagnostics_json, request);
         result.result_json =
             "{\"schema_version\":\"frequency_domain_modal_result.v1\","
             "\"study_product\":\"modal_eigen\","
@@ -1226,9 +1254,8 @@ FrequencyDomainContractResult solve_dense_production_modal_window_payload(
         ",";
     result.diagnostics_json += window_diagnostics;
     result.diagnostics_json += "}";
-    result.diagnostics_json = with_operator_diagnostics(
-        result.diagnostics_json,
-        request.operator_request.operator_diagnostics_json);
+    result.diagnostics_json =
+        with_modal_request_diagnostics(result.diagnostics_json, request);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
@@ -1328,9 +1355,8 @@ FrequencyDomainContractResult solve_dense_production_modal_payload(
             ",\"stop_reason\":\"" +
             std::string(stop_reason) +
             "\"}";
-        result.diagnostics_json = with_operator_diagnostics(
-            result.diagnostics_json,
-            request.operator_request.operator_diagnostics_json);
+        result.diagnostics_json =
+            with_modal_request_diagnostics(result.diagnostics_json, request);
         result.result_json =
             "{\"schema_version\":\"frequency_domain_modal_result.v1\","
             "\"study_product\":\"modal_eigen\","
@@ -1417,9 +1443,8 @@ FrequencyDomainContractResult solve_dense_production_modal_payload(
         std::to_string(slepc_result.linear_iterations_total) +
         ",\"relative_residual_max\":" +
         format_double(slepc_result.max_relative_residual) + "}";
-    result.diagnostics_json = with_operator_diagnostics(
-        result.diagnostics_json,
-        request.operator_request.operator_diagnostics_json);
+    result.diagnostics_json =
+        with_modal_request_diagnostics(result.diagnostics_json, request);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
@@ -1526,9 +1551,8 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
             ",\"stop_reason\":\"" +
             std::string(stop_reason) +
             "\"}";
-        result.diagnostics_json = with_operator_diagnostics(
-            result.diagnostics_json,
-            request.operator_request.operator_diagnostics_json);
+        result.diagnostics_json =
+            with_modal_request_diagnostics(result.diagnostics_json, request);
         result.result_json =
             "{\"schema_version\":\"frequency_domain_modal_result.v1\","
             "\"study_product\":\"modal_eigen\","
@@ -1616,9 +1640,8 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
         std::to_string(slepc_result.linear_iterations_total) +
         ",\"relative_residual_max\":" +
         format_double(slepc_result.max_relative_residual) + "}";
-    result.diagnostics_json = with_operator_diagnostics(
-        result.diagnostics_json,
-        request.operator_request.operator_diagnostics_json);
+    result.diagnostics_json =
+        with_modal_request_diagnostics(result.diagnostics_json, request);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
@@ -1803,9 +1826,8 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
             "\",";
         result.diagnostics_json += window_diagnostics;
         result.diagnostics_json += "}";
-        result.diagnostics_json = with_operator_diagnostics(
-            result.diagnostics_json,
-            request.operator_request.operator_diagnostics_json);
+        result.diagnostics_json =
+        with_modal_request_diagnostics(result.diagnostics_json, request);
         result.result_json =
             "{\"schema_version\":\"frequency_domain_modal_result.v1\","
             "\"study_product\":\"modal_eigen\","
@@ -1886,9 +1908,8 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
         "\",";
     result.diagnostics_json += window_diagnostics;
     result.diagnostics_json += "}";
-    result.diagnostics_json = with_operator_diagnostics(
-        result.diagnostics_json,
-        request.operator_request.operator_diagnostics_json);
+    result.diagnostics_json =
+        with_modal_request_diagnostics(result.diagnostics_json, request);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
@@ -2061,9 +2082,8 @@ FrequencyDomainContractResult production_cpu_modal_eigen_unavailable(
             std::string(adapter.eigenvalue_to_frequency) + "\"";
     }
     result.diagnostics_json += "}";
-    result.diagnostics_json = with_operator_diagnostics(
-        result.diagnostics_json,
-        request.operator_request.operator_diagnostics_json);
+    result.diagnostics_json =
+        with_modal_request_diagnostics(result.diagnostics_json, request);
     result.result_json =
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","

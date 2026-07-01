@@ -284,6 +284,7 @@ study.objects.mesh.defaults(
     size_from_curvature=MESH_SIZE_FROM_CURVATURE,
     narrow_regions=MESH_NARROW_REGIONS,
 )
+study.pbc(x=True, y=True, demag="periodic_airbox_k0")
 
 body = study.geometry(periodic_antidot_geometry(), name="periodic_film")
 body.Ms = 800e3

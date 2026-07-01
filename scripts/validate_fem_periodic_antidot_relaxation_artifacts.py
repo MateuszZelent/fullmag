@@ -38,6 +38,9 @@ MAX_STATIC_SUPERCELL_H_DEMAG_STATS_RELERR = 2.0e-2
 MAX_STATIC_SUPERCELL_DEMAG_PHI_DELTA_A = 1.0e-6
 MAX_STATIC_SUPERCELL_TORQUE_RELERR = 2.0e-1
 MAX_STATIC_SUPERCELL_RELAXATION_STATE_MEAN_DEVIATION_RELERR = 2.0e-1
+MAX_STATIC_SUPERCELL_INTERPOLATED_M_P99_L2_DELTA = 2.0e-2
+MAX_STATIC_SUPERCELL_INTERPOLATED_H_DEMAG_P99_RELERR = 2.0e-2
+MAX_STATIC_SUPERCELL_INTERPOLATED_DEMAG_PHI_DELTA_A = 1.0e-6
 MAX_INITIAL_STATE_OVERRIDE_COMPONENT_DELTA = 1.0e-12
 
 
@@ -109,6 +112,15 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Require a fem_static_pbc_supercell_validation.v1 JSON report whose "
             "supercell artifact was seeded through initial_magnetization_state_override."
+        ),
+    )
+    parser.add_argument(
+        "--require-interpolated-supercell-report",
+        type=Path,
+        default=None,
+        help=(
+            "Require a fem_static_pbc_supercell_validation.v1 JSON report with "
+            "acceptance_basis=interpolated_remesh."
         ),
     )
     parser.add_argument(
@@ -297,12 +309,23 @@ def load_zarr_field_snapshot_artifact(artifact_dir: Path, observable: str) -> di
     require(array.get("order") == "C", f"{observable} zarr order must be C, got {array.get('order')!r}")
     shape = require_list(array.get("shape"), f"{observable} zarr shape")
     require(
-        len(shape) == 3 and shape[0] == 1 and isinstance(shape[1], int) and isinstance(shape[2], int),
-        f"{observable} zarr shape must be [1, component_count, cell_count], got {shape!r}",
+        len(shape) == 3
+        and isinstance(shape[0], int)
+        and isinstance(shape[1], int)
+        and isinstance(shape[2], int),
+        f"{observable} zarr shape must be [sample_count, component_count, cell_count], got {shape!r}",
     )
+    sample_count = int(shape[0])
     component_count = int(shape[1])
     cell_count = int(shape[2])
-    require(component_count > 0 and cell_count > 0, f"{observable} zarr shape must be positive")
+    require(
+        sample_count > 0 and component_count > 0 and cell_count > 0,
+        f"{observable} zarr shape must be positive",
+    )
+    require(
+        len(rows) <= sample_count,
+        f"{observable} zarr samples.csv has {len(rows)} rows but shape declares {sample_count} samples",
+    )
     raw = chunk_path.read_bytes()
     expected_values = component_count * cell_count
     require(
@@ -1829,10 +1852,10 @@ def validate_nonnegative_stats_section(section: dict[str, Any], *, name: str) ->
         require(value >= 0.0, f"{name}.{key} must be non-negative")
 
 
-def validate_supercell_interpolated_comparability(report: dict[str, Any]) -> None:
+def validate_supercell_interpolated_comparability(report: dict[str, Any]) -> dict[str, Any] | None:
     raw = report.get("interpolated_central_cell_comparability")
     if raw is None:
-        return
+        return None
     interpolated = require_object(
         raw,
         "supercell comparison report interpolated_central_cell_comparability",
@@ -1906,9 +1929,14 @@ def validate_supercell_interpolated_comparability(report: dict[str, Any]) -> Non
             value >= 0.0,
             f"supercell comparison report interpolated_central_cell_comparability.demag_phi.{key} must be non-negative",
         )
+    return interpolated
 
 
-def validate_static_supercell_report(report: dict[str, Any], *, expected_workload: dict[str, Any]) -> None:
+def validate_static_supercell_report_structure(
+    report: dict[str, Any],
+    *,
+    expected_workload: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
     require(
         report.get("schema_version") == "fem_static_pbc_supercell_validation.v1",
         f"supercell comparison report schema_version must be fem_static_pbc_supercell_validation.v1, got {report.get('schema_version')!r}",
@@ -1943,7 +1971,12 @@ def validate_static_supercell_report(report: dict[str, Any], *, expected_workloa
         cell_count=cell_count,
     )
     mapped = validate_supercell_mapped_comparability(report)
-    validate_supercell_interpolated_comparability(report)
+    interpolated = validate_supercell_interpolated_comparability(report)
+    return mapped, interpolated
+
+
+def validate_static_supercell_report(report: dict[str, Any], *, expected_workload: dict[str, Any]) -> None:
+    mapped, _ = validate_static_supercell_report_structure(report, expected_workload=expected_workload)
     relaxation_state = validate_supercell_relaxation_state_comparability(report)
     metrics = require_object(report.get("metrics"), "supercell comparison report metrics")
     metric_state_relerr = require_finite_number(
@@ -1991,6 +2024,59 @@ def validate_static_supercell_report(report: dict[str, Any], *, expected_workloa
             "relaxation_state_mean_deviation_relative_error": (
                 MAX_STATIC_SUPERCELL_RELAXATION_STATE_MEAN_DEVIATION_RELERR
             ),
+        },
+    )
+
+
+def validate_interpolated_supercell_report(
+    report: dict[str, Any],
+    *,
+    expected_workload: dict[str, Any],
+) -> None:
+    _, interpolated = validate_static_supercell_report_structure(report, expected_workload=expected_workload)
+    require(
+        report.get("acceptance_basis") == "interpolated_remesh",
+        (
+            "interpolated supercell comparison report acceptance_basis must be "
+            "interpolated_remesh"
+        ),
+    )
+    require(
+        interpolated is not None,
+        "interpolated supercell comparison report interpolated_central_cell_comparability is required",
+    )
+    metrics = require_object(report.get("metrics"), "interpolated supercell comparison report metrics")
+    metric_pairs = {
+        "interpolated_field_missed_count": float(interpolated["field_missed_count"]),
+        "interpolated_magnetic_missed_count": float(interpolated["magnetic_missed_count"]),
+        "interpolated_m_p99_l2_delta": interpolated["m"]["p99_l2_delta"],
+        "interpolated_h_demag_p99_relative_error": interpolated["H_demag"]["p99_relative_error"],
+        "interpolated_demag_phi_max_abs_delta_after_offset_A": interpolated["demag_phi"][
+            "max_abs_delta_after_offset_A"
+        ],
+    }
+    for metric, expected in metric_pairs.items():
+        value = require_finite_number(metrics.get(metric), f"interpolated supercell comparison report metrics.{metric}")
+        require(
+            math.isclose(value, expected, rel_tol=1.0e-12, abs_tol=1.0e-18),
+            (
+                f"interpolated supercell comparison report metrics.{metric} must match "
+                "interpolated_central_cell_comparability"
+            ),
+        )
+    validate_static_comparison_metric_limits(
+        metrics,
+        report_name="interpolated supercell",
+        limits={
+            "interpolated_field_missed_count": 0.0,
+            "interpolated_magnetic_missed_count": 0.0,
+            "interpolated_m_p99_l2_delta": MAX_STATIC_SUPERCELL_INTERPOLATED_M_P99_L2_DELTA,
+            "interpolated_h_demag_p99_relative_error": MAX_STATIC_SUPERCELL_INTERPOLATED_H_DEMAG_P99_RELERR,
+            "interpolated_demag_phi_max_abs_delta_after_offset_A": (
+                MAX_STATIC_SUPERCELL_INTERPOLATED_DEMAG_PHI_DELTA_A
+            ),
+            "e_demag_density_relative_error": MAX_STATIC_SUPERCELL_E_DEMAG_DENSITY_RELERR,
+            "central_cell_torque_residual_relative_error": MAX_STATIC_SUPERCELL_TORQUE_RELERR,
         },
     )
 
@@ -2148,6 +2234,11 @@ def main() -> int:
         if args.require_supercell_report is not None:
             validate_static_supercell_report(
                 load_required_report(args.require_supercell_report, "supercell"),
+                expected_workload=expected_workload,
+            )
+        if args.require_interpolated_supercell_report is not None:
+            validate_interpolated_supercell_report(
+                load_required_report(args.require_interpolated_supercell_report, "interpolated supercell"),
                 expected_workload=expected_workload,
             )
         if args.require_repeated_state_supercell_report is not None:

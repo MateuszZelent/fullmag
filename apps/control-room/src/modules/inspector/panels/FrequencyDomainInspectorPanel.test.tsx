@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DIAGNOSTICS_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
@@ -244,6 +245,24 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
     revision: "branches:1",
     status: "ready",
   }),
+  useFrequencyDomainEigenDiagnosticsResource: () => ({
+    ...emptyResource,
+    data: {
+      artifact_path: "eigen/diagnostics.v2.json",
+      payload: {
+        basis_transport_policy: "tangent_frame_transport",
+        floquet_tangent_frame_max_mismatch: 0,
+        floquet_tangent_transport_max_nonunitarity: 0,
+        schema_version: "frequency_domain_eigen_diagnostics.v2",
+        solver_model: "reference_full_2x2_tangent",
+      },
+      resource_key: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DIAGNOSTICS_V2_PATH,
+      schema_version: "frequency_domain_eigen_diagnostics.v2",
+      status: "ready",
+    },
+    revision: "eigen-diagnostics:1",
+    status: "ready",
+  }),
   useFrequencyDomainEigenDispersionResource: () => ({
     ...emptyResource,
     data: {
@@ -396,6 +415,15 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
         dispersion: {
           branch_tracking: { reason: "Reference tracking", status: "ready" },
           k_path: { reason: "Reference k-path", status: "ready" },
+          production_cpu: {
+            reason: "selected-spectrum deferred",
+            status: "unsupported",
+          },
+          production_gpu: {
+            reason: "modal GPU deferred",
+            status: "unsupported",
+          },
+          reference_cpu: { reason: "Reference CPU dispersion", status: "ready" },
         },
         modal: {
           absorption_from_modes: { reason: "deferred", status: "unsupported" },
@@ -508,6 +536,7 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
           },
           requested_execution: {
             calculation_mode: "fmr_response",
+            magnetostatic_bc: "periodic_airbox_k0",
           },
           physics: {
             analysis_family: "magnetic_frequency_domain",
@@ -534,6 +563,7 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
           },
           schema_version: "frequency_domain_manifest.v1",
           stage_kind: "frequency_response",
+          magnetostatic_bc: "periodic_airbox_k0",
           spin_wave_bc: {
             floquet_k_vector_rad_per_m: [78539816.33974482, 0, 0],
             kind: "floquet",
@@ -1349,11 +1379,18 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Modal availability");
     expect(html).toContain("eigenmodes: unavailable; modal=false; gpu=false");
     expect(html).toContain("Capability summary");
-    expect(html).toContain("k_path: ready; branch_tracking: ready");
+    expect(html).toContain(
+      "reference_cpu: ready; production_cpu: unsupported; production_gpu: unsupported; k_path: ready; branch_tracking: ready",
+    );
     expect(html).toContain("Modal spectrum");
     expect(html).toContain("2 mode(s), 2 field overlay(s)");
     expect(html).toContain("Branch diagnostics");
     expect(html).toContain("1 branch(es), 2 tracked point(s)");
+    expect(html).toContain("Solver model");
+    expect(html).toContain("reference_full_2x2_tangent");
+    expect(html).toContain("Floquet transport");
+    expect(html).toContain("tangent_frame_transport");
+    expect(html).toContain("frame mismatch 0; nonunitarity 0");
     expect(html).toContain("Demag-k gate");
     expect(html).toContain("modal ready; response unsupported");
   });
@@ -1698,7 +1735,13 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(solverHtml).toContain("Response residuals");
     expect(solverHtml).toContain("0/1 point(s)");
     expect(solverHtml).toContain("Execution lane");
-    expect(solverHtml).toContain("native MFEM CPU gamma/free-boundary response");
+    expect(solverHtml).toContain(
+      "native_fem_mfem_frequency_domain_cpu; response=ok",
+    );
+    expect(solverHtml).toContain("Modal transport");
+    expect(solverHtml).toContain(
+      "reference_full_2x2_tangent; tangent_frame_transport; frame mismatch 0; nonunitarity 0",
+    );
     expect(artifactsHtml).toContain("Frequency-Domain Artifact Diagnostics");
     expect(artifactsHtml).toContain("Manifest");
     expect(artifactsHtml).toContain("frequency_domain/manifest.v1.json");
@@ -2457,7 +2500,9 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Modal overlays");
     expect(html).toContain("2 mode field(s) available from modal spectrum");
     expect(html).toContain("Capability summary");
-    expect(html).toContain("k_path: ready; branch_tracking: ready");
+    expect(html).toContain(
+      "reference_cpu: ready; production_cpu: unsupported; production_gpu: unsupported; k_path: ready; branch_tracking: ready",
+    );
     expect(html).toContain("Floquet gate");
     expect(html).toContain("modal ready; response unsupported");
     expect(html).toContain("Dispersion Chart");
@@ -3333,7 +3378,16 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(studyHtml).toContain("Study kind");
     expect(studyHtml).toContain("frequency_response: ok");
     expect(studyHtml).toContain("Execution lane");
-    expect(studyHtml).toContain("native MFEM CPU gamma/free-boundary response");
+    expect(studyHtml).toContain(
+      "native_fem_mfem_frequency_domain_cpu; response=ok",
+    );
+    expect(studyHtml).toContain("Requested spin-wave BC");
+    expect(studyHtml).toContain(
+      "floquet; k [7.854e+7, 0, 0] rad/m; phase exp_minus_i_k_dot_delta_r",
+    );
+    expect(studyHtml).toContain("Requested magnetostatic BC");
+    expect(studyHtml).toContain("periodic_airbox_k0");
+    expect(studyHtml).not.toContain("gamma/free-boundary response");
     expect(studyHtml).toContain("Artifacts");
     expect(studyHtml).toContain("response/magnetic_response_sweep.v2.json");
     expect(studyHtml).toContain("Response Study Readback");
@@ -3465,6 +3519,12 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain(
       "frequency_response: ok; driven=true; static_periodic=true; gpu=false",
     );
+    expect(html).toContain("Requested spin-wave BC");
+    expect(html).toContain(
+      "floquet; k [7.854e+7, 0, 0] rad/m; phase exp_minus_i_k_dot_delta_r",
+    );
+    expect(html).toContain("Requested magnetostatic BC");
+    expect(html).toContain("periodic_airbox_k0");
     expect(html).toContain("Response sweep artifact");
     expect(html).toContain("response/magnetic_response_sweep.v2.json");
     expect(html).toContain("Response field artifacts");

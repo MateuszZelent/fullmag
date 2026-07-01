@@ -1320,6 +1320,13 @@ class ProblemApiTests(unittest.TestCase):
             },
         )
         problem_ir = problem.to_ir(requested_backend=fm.BackendTarget.FEM)
+        self.assertEqual(
+            problem_ir["pbc"],
+            {
+                "axes": ["periodic", "periodic", "open"],
+                "demag": "periodic_airbox_k0",
+            },
+        )
         runtime_metadata = problem_ir["problem_meta"]["runtime_metadata"]
         self.assertEqual(runtime_metadata["study_universe"]["mode"], "manual")
         self.assertEqual(
@@ -4469,6 +4476,41 @@ class ProblemApiTests(unittest.TestCase):
 
         rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
         self.assertIn('study.stages.change_device("cpu")', rewritten)
+
+    def test_study_stage_builder_eigenmodes_operator_roundtrips(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("stage_eigen_operator")
+        study.engine("fem")
+        study.device("cpu", precision="double")
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.texture.uniform(1, 0, 0)
+        study.stages.add_eigenmodes(
+            count=4,
+            target="frequency_window",
+            frequency_min=100e6,
+            frequency_max=5e9,
+            operator="full_2x2",
+            include_demag=True,
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_builder_eigen_operator.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+
+        self.assertEqual(
+            loaded.stages[0].problem.study.to_ir()["operator"]["kind"],
+            "full_2x2",
+        )
+
+        rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+        self.assertIn('operator="full_2x2"', rewritten)
 
     def test_study_builder_relax_stage_roundtrips_solver_and_dt(self) -> None:
         script = """

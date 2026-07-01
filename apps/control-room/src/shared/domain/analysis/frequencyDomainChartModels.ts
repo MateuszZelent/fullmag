@@ -55,6 +55,8 @@ export interface FrequencyDomainChartBuildResult<TPoint> {
 }
 
 export interface FrequencyDomainChartPoint {
+  label?: string | null;
+  linewidthHz?: number | null;
   rowIndex: number;
   x: number;
   y: number;
@@ -87,10 +89,14 @@ export interface EigenSpectrumPoint {
 export interface EigenDispersionPoint {
   branchId: string | null;
   frequencyHz: number;
+  linewidthHz: number | null;
+  modeFieldId: string | null;
+  modeFieldResourceKey: string | null;
   overlap: number | null;
   pathS: number;
   rawModeIndex: number;
   residualNorm: number | null;
+  sampleLabel?: string | null;
   sampleIndex: number;
 }
 
@@ -120,6 +126,13 @@ export interface EigenBranch {
   sampleMin: number | null;
   trackingConfidenceMin: number | null;
   warnings?: string[];
+}
+
+export interface EigenBranchesModel {
+  branches: EigenBranch[];
+  diagnostics: string[];
+  droppedBranchCount: number;
+  droppedPointCount: number;
 }
 
 interface EigenBranchDetailChartPoint {
@@ -486,22 +499,31 @@ export function buildEigenModeSelectionRef(
 
 export function buildEigenDispersionChartModel(
   resource: FrequencyDomainTextArtifactLike | null | undefined,
+  branchesModel?: EigenBranchesModel | null,
 ): FrequencyDomainChartBuildResult<EigenDispersionPoint> {
   const parsed = parseDispersionCsv(resource?.text ?? "");
-  const branchIds = new Set(parsed.points.map((point) => point.branchId ?? "raw"));
+  const points = applyBranchIdentityFromBranches(
+    parsed.points,
+    branchesModel?.branches ?? [],
+  );
+  const branchIds = new Set(points.map((point) => point.branchId ?? "raw"));
   const frequencyScale = frequencyChartScale(
-    parsed.points.map((point) => point.frequencyHz),
+    points.map((point) => point.frequencyHz),
   );
   const series = [...branchIds].map((branchId) => ({
     id: `analysis.frequency-domain:eigen:dispersion:${branchId}`,
     label: branchId === "raw" ? "Raw modes" : `Branch ${branchId}`,
-    points: parsed.points.flatMap((point, rowIndex) =>
+    points: points.flatMap((point, rowIndex) =>
       (point.branchId ?? "raw") === branchId
-        ? [{
-        rowIndex,
-        x: point.pathS,
-        y: point.frequencyHz / frequencyScale.divisor,
-          }]
+        ? [
+            {
+              ...(point.sampleLabel ? { label: point.sampleLabel } : {}),
+              ...(point.linewidthHz != null ? { linewidthHz: point.linewidthHz } : {}),
+              rowIndex,
+              x: point.pathS,
+              y: point.frequencyHz / frequencyScale.divisor,
+            },
+          ]
         : [],
     ),
     quantity: "frequency",
@@ -518,7 +540,7 @@ export function buildEigenDispersionChartModel(
     dataSourceVersion: "unknown",
     diagnostics: [],
     droppedPointCount: parsed.droppedPointCount,
-    points: parsed.points,
+    points,
     series,
   };
 }
@@ -527,6 +549,24 @@ export function buildEigenDispersionPointSelectionRef(
   point: EigenDispersionPoint,
   context: FrequencyDomainSelectionContext = {},
 ): SelectionRef {
+  if (point.modeFieldId) {
+    return cleanFrequencyDomainSelectionRef({
+      analysisRunId: context.analysisRunId ?? undefined,
+      analysisStageId: context.analysisStageId ?? undefined,
+      artifactPath: context.artifactPath ?? undefined,
+      branchId: point.branchId ?? undefined,
+      calculationMode: context.calculationMode ?? "dispersion_modal",
+      fieldId: point.modeFieldId,
+      kind: "results.eigen.mode",
+      modeIndex: point.rawModeIndex,
+      nodeId: context.nodeId ?? frequencyDomainDispersionPointNodeId(point),
+      resourceRef:
+        point.modeFieldResourceKey ??
+        fieldVectorResourceKey(point.modeFieldId),
+      sampleIndex: point.sampleIndex,
+      type: "frequency-domain",
+    });
+  }
   return cleanFrequencyDomainSelectionRef({
     analysisRunId: context.analysisRunId ?? undefined,
     analysisStageId: context.analysisStageId ?? undefined,
@@ -617,12 +657,7 @@ export function buildEigenBranchDetailChartModel(
 
 export function buildEigenBranchesModel(
   resource: FrequencyDomainJsonArtifactLike | null | undefined,
-): {
-  branches: EigenBranch[];
-  diagnostics: string[];
-  droppedBranchCount: number;
-  droppedPointCount: number;
-} {
+): EigenBranchesModel {
   const root = record(resource?.payload);
   const branches: EigenBranch[] = [];
   const diagnostics: string[] = [];
@@ -1103,6 +1138,36 @@ function responseDataSourceVersion(
   return "unknown";
 }
 
+function applyBranchIdentityFromBranches(
+  points: readonly EigenDispersionPoint[],
+  branches: readonly EigenBranch[],
+): EigenDispersionPoint[] {
+  if (branches.length === 0) return [...points];
+  const branchIdByPoint = new Map<string, string>();
+  for (const branch of branches) {
+    for (const point of branch.points) {
+      branchIdByPoint.set(
+        dispersionPointIdentityKey(point.sampleIndex, point.rawModeIndex),
+        branch.branchId,
+      );
+    }
+  }
+  return points.map((point) => {
+    if (point.branchId) return point;
+    const branchId = branchIdByPoint.get(
+      dispersionPointIdentityKey(point.sampleIndex, point.rawModeIndex),
+    );
+    return branchId ? { ...point, branchId } : point;
+  });
+}
+
+function dispersionPointIdentityKey(
+  sampleIndex: number,
+  rawModeIndex: number,
+): string {
+  return `${sampleIndex}:${rawModeIndex}`;
+}
+
 function parseDispersionCsv(csv: string): {
   droppedPointCount: number;
   points: EigenDispersionPoint[];
@@ -1130,10 +1195,18 @@ function parseDispersionCsv(csv: string): {
     points.push({
       branchId: stringValue(row.branch_id ?? row.branchId),
       frequencyHz,
-      overlap: finiteNumber(row.overlap),
+      linewidthHz: finiteNumber(
+        row.line_width_hz ?? row.linewidth_hz ?? row.linewidthHz,
+      ),
+      modeFieldId: stringValue(row.mode_field_id ?? row.modeFieldId),
+      modeFieldResourceKey: stringValue(
+        row.mode_field_resource_key ?? row.modeFieldResourceKey,
+      ),
+      overlap: finiteNumber(row.overlap_score ?? row.overlapScore ?? row.overlap),
       pathS,
       rawModeIndex: finiteInteger(row.raw_mode_index ?? row.mode_index),
       residualNorm: finiteNumber(row.residual_norm),
+      sampleLabel: stringValue(row.label ?? row.sample_label ?? row.sampleLabel),
       sampleIndex: finiteInteger(row.sample_index),
     });
   }

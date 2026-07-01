@@ -3987,6 +3987,9 @@ export interface components {
         FrequencyDomainDispersionCapabilitiesResource: {
             branch_tracking: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
             k_path: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+            production_cpu: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+            production_gpu: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+            reference_cpu: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
         };
         FrequencyDomainFieldResource: {
             artifact_path: string;

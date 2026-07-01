@@ -124,6 +124,53 @@ Purpose:
 - Magnonic crystal band structure.
 - Branch tracking along k-paths.
 - COMSOL/TetraX-style mode profiles at selected k samples.
+- COMSOL-like nonzero-k dispersion: solve `Eigenmodes` at each swept Floquet
+  wave vector on the minimal cell, not `FrequencyResponse` response peaks or a
+  time-domain pulse/FFT surrogate.
+
+COMSOL manual interpretation:
+
+- COMSOL computes nonzero-k dispersion as an `Eigenfrequency` study with a
+  Floquet Periodic Boundary Condition, not as a forced frequency-domain
+  response and not as a time-domain FFT.
+- Each sampled Floquet wave vector `k_F` defines one homogeneous modal problem
+  on the minimal periodic cell.
+- The dispersion curve is assembled afterwards from the eigenfrequencies and
+  eigenvectors returned at each k sample.
+- Fullmag maps that workflow to `StudyIR::Eigenmodes`, `modal_eigen`,
+  `spin_wave_bc.kind="floquet"`, and `k_sampling`.
+
+Fullmag authoring and IR contract:
+
+- `KSamplingIR::Single` represents one Floquet wave vector `k_vector` in
+  `rad/m`.
+- `KSamplingIR::Path` represents a labeled k path with expanded samples,
+  segment metadata, `path_s_rad_per_m`, and optional high-symmetry labels.
+- `FrequencyResponse` may later use k sampling for response maps over `(k, f)`,
+  but those response maps do not prove modal dispersion and must not promote
+  the `modal_eigen` capability.
+- Response-sweep peaks may be displayed as response-derived mode candidates,
+  but they are not eigenmodes and must not feed the branch-tracked dispersion
+  artifact family.
+
+Modal operator contract:
+
+```text
+L(k) q = lambda B(k) q
+lambda = i omega
+frequency_hz = Re(omega) / (2*pi)
+```
+
+or the equivalent gyrotropic energy-Hessian form:
+
+```text
+K(k) phi = -i omega G(k) phi
+```
+
+Any native implementation may use an algebraically equivalent form only if it
+records the chosen form and eigenvalue-to-`omega_rad_s` mapping in diagnostics.
+A shorthand such as `L q = omega B q` is not acceptable for production because
+it hides the required phasor factor.
 
 Required semantics:
 
@@ -152,6 +199,58 @@ First-release operator scope for Floquet modal:
 - Bulk DMI: supported only when the operator enforces Floquet derivatives consistently; nonreciprocal dispersion test required.
 - Demag: not supported for nonzero-k Floquet; hard rejection until dynamic demag-k exists.
 - Surface anisotropy: deferred until Floquet seam surface-term handling is documented.
+
+Current CPU/GPU status for this lane:
+
+- CPU modal dispersion is reference/MVP only today. Existing artifacts can
+  represent spectrum, branches, `eigen/dispersion.csv`, mode payloads,
+  `k_vector`, and `path_s_rad_per_m`; narrow single-k Floquet exchange evidence
+  is not production multi-k COMSOL-class execution.
+- The runner's reference/MVP multi-k path now preserves requested per-sample
+  mode metadata and mode-field payloads from the single-k solves, remapped to
+  `sample_XXXX`, and emits a frequency-domain manifest that indexes
+  `mode_metadata_paths` and `mode_field_resources` for Control Room handoff.
+- The runner's `eigen/dispersion.csv` now also carries `mode_field_id` and
+  `mode_field_resource_key` when mode payloads are emitted, so a dispersion
+  row can be selected as the corresponding 3D mode field instead of only as a
+  CSV point.
+- The runner's `eigen/branches.v2.json` points carry the same mode-field
+  handoff columns, so branch-detail sample rows and dispersion rows select the
+  same overlay-ready mode payloads.
+- Branch points now also preserve per-mode residual and tangent-leakage
+  diagnostics from the single-k solves, so branch-detail inspection is not
+  weaker than the spectrum/dispersion artifacts.
+- The current reference/MVP branch matcher now uses modal-vector overlap when
+  the single-k solver has emitted vectors for internal tracking. It still has a
+  relative-frequency fallback when vectors are unavailable, and records
+  `tracking_score_source`, `modal_overlap_available`, and
+  `modal_overlap_unavailable_reason` in `eigen/branches.v2.json`,
+  `eigen/diagnostics.v2.json`, `frequency_domain/manifest.v1.json`, and
+  `eigen/dispersion.csv`. Internal all-mode vectors used for tracking do not
+  publish unrequested mode payloads.
+- Production CPU modal k-path execution requires the corrected gyrotropic
+  pencil, selected-spectrum eigensolver, modal residuals, tangent leakage,
+  native selected-spectrum branch tracking with the same modal-overlap or
+  stronger vector-aware semantics, and managed runtime proof.
+- GPU modal dispersion is unavailable until a native modal GPU eigensolver and
+  matching Floquet operator exist; forced GPU `KSamplingIR::Path` modal
+  requests are explicitly rejected by the runner before backend execution.
+- The current GPU nonzero-k Floquet no-demag work is a driven-response smoke
+  slice. It must stay visible as `driven_response` evidence only and must not
+  be reused as modal-dispersion proof.
+
+Control Room requirements for this lane:
+
+- Study authoring must expose k-path setup for `Eigenmodes` through the
+  canonical transaction path, not through result-only preview state.
+- Results must route `eigen/dispersion.csv` and `eigen/branches.v2.json` to
+  modal dispersion charts with `path_s_rad_per_m` on the x-axis.
+- Selecting a dispersion point selects the corresponding modal sample, branch,
+  raw mode, and mode-field overlay when mode payload columns exist; rows
+  without mode payloads remain metadata-only dispersion selections.
+- Capability text must distinguish reference/MVP CPU modal artifacts,
+  production-gated CPU modal k-path execution, unavailable modal GPU
+  dispersion, and unrelated driven-response GPU Floquet smoke.
 
 Hard rejection:
 

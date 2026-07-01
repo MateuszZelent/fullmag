@@ -139,9 +139,13 @@ def zarr_cell_count(root: Path, observable: str, expected_components: list[str])
     require(array.get("order") == "C", f"{observable} zarr order must be C")
     shape = require_list(array.get("shape"), f"{observable}.shape")
     require(
-        len(shape) == 3 and shape[0] == 1 and shape[1] == len(expected_components),
-        f"{observable}.shape must be [1, {len(expected_components)}, cells]",
+        len(shape) == 3
+        and isinstance(shape[0], int)
+        and shape[0] >= 1
+        and shape[1] == len(expected_components),
+        f"{observable}.shape must be [samples>=1, {len(expected_components)}, cells]",
     )
+    sample_count = int(shape[0])
     cell_count = int(shape[2])
     require(cell_count > 0, f"{observable} zarr cell count must be positive")
     samples_path = field_dir / "samples.csv"
@@ -149,6 +153,10 @@ def zarr_cell_count(root: Path, observable: str, expected_components: list[str])
     with samples_path.open(newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
     require(rows, f"{observable} samples.csv must not be empty")
+    require(
+        len(rows) == sample_count,
+        f"{observable} samples.csv has {len(rows)} rows but shape declares {sample_count} samples",
+    )
     chunk_key = rows[-1].get("chunk_key")
     require(isinstance(chunk_key, str) and chunk_key, f"{observable} chunk_key must be present")
     raw = (field_dir / chunk_key).read_bytes()
@@ -176,9 +184,13 @@ def load_zarr_vectors(root: Path, observable: str, expected_components: list[str
     require(array.get("order") == "C", f"{observable} zarr order must be C")
     shape = require_list(array.get("shape"), f"{observable}.shape")
     require(
-        len(shape) == 3 and shape[0] == 1 and shape[1] == len(expected_components),
-        f"{observable}.shape must be [1, {len(expected_components)}, cells]",
+        len(shape) == 3
+        and isinstance(shape[0], int)
+        and shape[0] >= 1
+        and shape[1] == len(expected_components),
+        f"{observable}.shape must be [samples>=1, {len(expected_components)}, cells]",
     )
+    sample_count = int(shape[0])
     cell_count = int(shape[2])
     require(cell_count > 0, f"{observable} zarr cell count must be positive")
     samples_path = field_dir / "samples.csv"
@@ -186,6 +198,10 @@ def load_zarr_vectors(root: Path, observable: str, expected_components: list[str
     with samples_path.open(newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
     require(rows, f"{observable} samples.csv must not be empty")
+    require(
+        len(rows) == sample_count,
+        f"{observable} samples.csv has {len(rows)} rows but shape declares {sample_count} samples",
+    )
     chunk_key = rows[-1].get("chunk_key")
     require(isinstance(chunk_key, str) and chunk_key, f"{observable} chunk_key must be present")
     raw = (field_dir / chunk_key).read_bytes()

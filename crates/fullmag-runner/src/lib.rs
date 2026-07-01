@@ -176,6 +176,9 @@ pub struct FrequencyDomainDemagCapabilities {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FrequencyDomainDispersionCapabilities {
+    pub reference_cpu: FrequencyDomainCapabilityEntry,
+    pub production_cpu: FrequencyDomainCapabilityEntry,
+    pub production_gpu: FrequencyDomainCapabilityEntry,
     pub k_path: FrequencyDomainCapabilityEntry,
     pub branch_tracking: FrequencyDomainCapabilityEntry,
 }
@@ -372,6 +375,18 @@ fn frequency_domain_capability_snapshot_v1() -> FrequencyDomainCapabilitySnapsho
             floquet_dynamic_k: capability("unsupported", dynamic_demag_k),
         },
         dispersion: FrequencyDomainDispersionCapabilities {
+            reference_cpu: capability(
+                "reference_executable",
+                "reference/MVP FEM modal k-path dispersion emits spectrum, branches, dispersion.csv, and mode-field artifacts on the CPU reference lane",
+            ),
+            production_cpu: capability(
+                "unsupported",
+                "production selected-spectrum CPU modal dispersion is gated until the sparse/matrix-free eigensolver, Floquet operator, residuals, and window completeness contract are validated",
+            ),
+            production_gpu: capability(
+                "unsupported",
+                "native modal GPU dispersion is unavailable until a real modal GPU eigensolver and matching Floquet operator exist; driven-response GPU Floquet smoke must not be reused as modal dispersion",
+            ),
             k_path: capability(
                 "reference_executable",
                 "runner FEM eigen reference path emits dispersion.csv",
@@ -494,6 +509,30 @@ mod frequency_domain_manifest_tests {
             manifest.capabilities.demag.floquet_dynamic_k.status,
             "unsupported"
         );
+        assert_eq!(
+            manifest.capabilities.dispersion.reference_cpu.status,
+            "reference_executable"
+        );
+        assert_eq!(
+            manifest.capabilities.dispersion.production_cpu.status,
+            "unsupported"
+        );
+        assert!(manifest
+            .capabilities
+            .dispersion
+            .production_cpu
+            .reason
+            .contains("selected-spectrum"));
+        assert_eq!(
+            manifest.capabilities.dispersion.production_gpu.status,
+            "unsupported"
+        );
+        assert!(manifest
+            .capabilities
+            .dispersion
+            .production_gpu
+            .reason
+            .contains("modal GPU"));
         assert_eq!(
             manifest.capabilities.visualization.mode_3d_overlay.status,
             "reference_executable"

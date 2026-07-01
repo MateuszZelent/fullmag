@@ -64,6 +64,9 @@ pub struct FrequencyDomainDemagCapabilitiesResource {
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct FrequencyDomainDispersionCapabilitiesResource {
+    pub reference_cpu: FrequencyDomainCapabilityEntryResource,
+    pub production_cpu: FrequencyDomainCapabilityEntryResource,
+    pub production_gpu: FrequencyDomainCapabilityEntryResource,
     pub k_path: FrequencyDomainCapabilityEntryResource,
     pub branch_tracking: FrequencyDomainCapabilityEntryResource,
 }
@@ -298,6 +301,9 @@ impl From<fullmag_runner::FrequencyDomainDispersionCapabilities>
 {
     fn from(value: fullmag_runner::FrequencyDomainDispersionCapabilities) -> Self {
         Self {
+            reference_cpu: value.reference_cpu.into(),
+            production_cpu: value.production_cpu.into(),
+            production_gpu: value.production_gpu.into(),
             k_path: value.k_path.into(),
             branch_tracking: value.branch_tracking.into(),
         }

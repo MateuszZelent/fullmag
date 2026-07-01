@@ -29,6 +29,21 @@ ALLOWED_MODAL_ALGEBRAIC_FORMS = {
     "linearized_llg_generalized",
     "gyrotropic_generalized",
 }
+ALLOWED_TRACKING_SCORE_SUMMARY_SOURCES = {
+    "seed_only",
+    "frequency_score_fallback",
+    "modal_overlap_weighted_score",
+    "mixed_modal_overlap_and_frequency_fallback",
+}
+ALLOWED_TRACKING_SCORE_POINT_SOURCES = {
+    "seed",
+    "frequency_score_fallback",
+    "modal_overlap_weighted_score",
+}
+TRACKING_SOURCES_REQUIRING_MODAL_OVERLAP = {
+    "modal_overlap_weighted_score",
+    "mixed_modal_overlap_and_frequency_fallback",
+}
 
 
 def fail(message: str) -> None:
@@ -59,6 +74,23 @@ def require_finite_number(value: object, name: str) -> float:
     if not isinstance(value, (int, float)) or not math.isfinite(float(value)):
         fail(f"{name} must be a finite number")
     return float(value)
+
+
+def require_boolean(value: object, name: str) -> bool:
+    if not isinstance(value, bool):
+        fail(f"{name} must be boolean")
+    return value
+
+
+def require_tracking_score_source(
+    value: object,
+    name: str,
+    allowed: set[str],
+) -> str:
+    source = require_non_empty_string(value, name)
+    if source not in allowed:
+        fail(f"{name} is invalid")
+    return source
 
 
 def require_close(
@@ -141,6 +173,51 @@ def mode_zarr_array_path(sample_index: int, raw_mode_index: int) -> str:
 
 def mode_zarr_chunk_path(sample_index: int, raw_mode_index: int) -> str:
     return f"{mode_zarr_array_path(sample_index, raw_mode_index)}/0.0.0"
+
+
+def require_mode_field_handoff(
+    payload: dict,
+    name: str,
+    sample_index: int,
+    raw_mode_index: int,
+) -> None:
+    expected_field_id = mode_field_id(sample_index, raw_mode_index)
+    expected_resource_key = mode_field_resource_key(expected_field_id)
+    require_equal(payload.get("mode_field_id"), expected_field_id, f"{name}.mode_field_id")
+    require_equal(
+        payload.get("mode_field_resource_key"),
+        expected_resource_key,
+        f"{name}.mode_field_resource_key",
+    )
+
+
+def require_tracking_summary(payload: dict, name: str) -> None:
+    source = require_tracking_score_source(
+        payload.get("tracking_score_source"),
+        f"{name}.tracking_score_source",
+        ALLOWED_TRACKING_SCORE_SUMMARY_SOURCES,
+    )
+    modal_overlap_available = require_boolean(
+        payload.get("modal_overlap_available"),
+        f"{name}.modal_overlap_available",
+    )
+    if source in TRACKING_SOURCES_REQUIRING_MODAL_OVERLAP and not modal_overlap_available:
+        fail(f"{name}.modal_overlap_available must be true for {source}")
+
+
+def require_tracking_point(payload: dict, name: str) -> str:
+    source = require_tracking_score_source(
+        payload.get("tracking_score_source"),
+        f"{name}.tracking_score_source",
+        ALLOWED_TRACKING_SCORE_POINT_SOURCES,
+    )
+    modal_overlap_available = require_boolean(
+        payload.get("modal_overlap_available"),
+        f"{name}.modal_overlap_available",
+    )
+    if source in TRACKING_SOURCES_REQUIRING_MODAL_OVERLAP and not modal_overlap_available:
+        fail(f"{name}.modal_overlap_available must be true for {source}")
+    return source
 
 
 def require_mode_payload(root: Path, relative_path: str, name: str) -> int:
@@ -775,6 +852,16 @@ def validate_solver_window_diagnostics(
     )
     if resolved[0] > requested[0] or resolved[1] < requested[1]:
         fail("solver_diagnostics.resolved_search_window_hz must cover requested_window_hz")
+    requested_mode_count = require_non_negative_int(
+        diagnostics.get("requested_mode_count"),
+        "solver_diagnostics.requested_mode_count",
+    )
+    mode_count = require_non_negative_int(
+        diagnostics.get("mode_count"),
+        "solver_diagnostics.mode_count",
+    )
+    if mode_count > requested_mode_count:
+        fail("solver_diagnostics.mode_count must not exceed requested_mode_count")
 
     completeness = diagnostics.get("window_completeness")
     if not isinstance(completeness, dict):
@@ -796,6 +883,17 @@ def validate_solver_window_diagnostics(
         fail("solver_diagnostics.window_completeness.certification_method must be a string")
     if not isinstance(completeness.get("additional_modes_may_exist"), bool):
         fail("solver_diagnostics.window_completeness.additional_modes_may_exist must be boolean")
+    if status == "truncated_by_requested_count":
+        if mode_count != requested_mode_count:
+            fail(
+                "solver_diagnostics.window_completeness.status=truncated_by_requested_count "
+                "requires mode_count to equal requested_mode_count"
+            )
+        if completeness.get("additional_modes_may_exist") is not True:
+            fail(
+                "solver_diagnostics.window_completeness.status=truncated_by_requested_count "
+                "requires additional_modes_may_exist=true"
+            )
     for key in ["estimated_modes_in_window", "certified_modes_in_window"]:
         if key in completeness:
             require_non_negative_int(
@@ -864,6 +962,8 @@ def validate_solver_provenance(
     diagnostics: dict,
     *,
     require_production_shift_invert_window: bool,
+    require_production_modal_k_path: bool,
+    require_reference_full_2x2_floquet: bool,
 ) -> None:
     algebraic_form = require_non_empty_string(
         diagnostics.get("algebraic_form"),
@@ -910,6 +1010,122 @@ def validate_solver_provenance(
     )
     if spectral_transform not in {"none", "shift_invert", "contour_integral"}:
         fail("solver_diagnostics.spectral_transform is invalid")
+    if require_reference_full_2x2_floquet:
+        require_equal(
+            solver_model,
+            "reference_full_2x2_tangent",
+            "solver_diagnostics.solver_model",
+        )
+        solver_notes = require_string_list(
+            diagnostics.get("solver_notes"),
+            "solver_diagnostics.solver_notes",
+        )
+        if "cpu_full_2x2_phase_reduced_floquet" not in solver_notes:
+            fail(
+                "solver_diagnostics.solver_notes must include "
+                "'cpu_full_2x2_phase_reduced_floquet'"
+            )
+        require_equal(
+            diagnostics.get("basis_transport_policy"),
+            "tangent_frame_transport",
+            "solver_diagnostics.basis_transport_policy",
+        )
+        frame_mismatch = require_finite_number(
+            diagnostics.get("floquet_tangent_frame_max_mismatch"),
+            "solver_diagnostics.floquet_tangent_frame_max_mismatch",
+        )
+        if frame_mismatch < 0.0:
+            fail("solver_diagnostics.floquet_tangent_frame_max_mismatch must be non-negative")
+        nonunitarity = require_finite_number(
+            diagnostics.get("floquet_tangent_transport_max_nonunitarity"),
+            "solver_diagnostics.floquet_tangent_transport_max_nonunitarity",
+        )
+        if nonunitarity < 0.0:
+            fail("solver_diagnostics.floquet_tangent_transport_max_nonunitarity must be non-negative")
+        if "requested_window_hz" in diagnostics and diagnostics.get("sample_count", 0) > 1:
+            require_equal(
+                diagnostics.get("frequency_window_solver_policy"),
+                "reference_k_path_window_filter_not_shift_invert_or_feast",
+                "solver_diagnostics.frequency_window_solver_policy",
+            )
+            window_completeness = diagnostics.get("window_completeness")
+            if not isinstance(window_completeness, dict):
+                fail("solver_diagnostics.window_completeness must be an object")
+            require_equal(
+                window_completeness.get("status"),
+                "not_certified",
+                "solver_diagnostics.window_completeness.status",
+            )
+            require_equal(
+                diagnostics.get("production_solver_available"),
+                False,
+                "solver_diagnostics.production_solver_available",
+            )
+            require_equal(
+                spectral_transform,
+                "none",
+                "solver_diagnostics.spectral_transform",
+            )
+    if require_production_modal_k_path:
+        sample_count = require_non_negative_int(
+            diagnostics.get("sample_count"),
+            "solver_diagnostics.sample_count",
+        )
+        if sample_count <= 1:
+            fail("production modal k-path requires solver_diagnostics.sample_count > 1")
+        if solver_model not in PRODUCTION_SHIFT_INVERT_SOLVER_MODELS:
+            fail(
+                "production modal k-path requires the managed production "
+                f"selected-spectrum adapter; got solver_model={solver_model!r}"
+            )
+        require_equal(
+            diagnostics.get("solver_family"),
+            solver_model,
+            "solver_diagnostics.solver_family",
+        )
+        require_equal(
+            resolved_solver_family,
+            "shift_invert",
+            "solver_diagnostics.resolved_solver_family",
+        )
+        require_equal(
+            spectral_transform,
+            "shift_invert",
+            "solver_diagnostics.spectral_transform",
+        )
+        require_equal(
+            diagnostics.get("solver_adapter"),
+            "slepc_modal_eigen",
+            "solver_diagnostics.solver_adapter",
+        )
+        require_equal(
+            diagnostics.get("execution_lane"),
+            "production_cpu",
+            "solver_diagnostics.execution_lane",
+        )
+        require_equal(
+            phasor_convention,
+            "exp_i_omega_t",
+            "solver_diagnostics.phasor_convention",
+        )
+        require_equal(
+            diagnostics.get("production_solver_available"),
+            True,
+            "solver_diagnostics.production_solver_available",
+        )
+        require_equal(
+            diagnostics.get("dense_reference_oracle"),
+            False,
+            "solver_diagnostics.dense_reference_oracle",
+        )
+        if (
+            diagnostics.get("frequency_window_solver_policy")
+            == "reference_k_path_window_filter_not_shift_invert_or_feast"
+        ):
+            fail(
+                "production modal k-path must not use the reference "
+                "k-path window-filter policy"
+            )
     if not require_production_shift_invert_window:
         return
 
@@ -955,27 +1171,55 @@ def validate_solver_provenance(
     )
 
 
+def validate_reference_full_2x2_floquet_mode_metadata(
+    root: Path,
+    mode_metadata_paths: set[str],
+) -> None:
+    if not mode_metadata_paths:
+        fail("manifest.artifacts.mode_metadata_paths must not be empty")
+    for metadata_path in sorted(mode_metadata_paths):
+        metadata = load_json(root / metadata_path)
+        if metadata.get("solver_model") == "cpu_full_2x2_phase_reduced_floquet":
+            return
+    fail(
+        "at least one mode metadata artifact must report "
+        "solver_model='cpu_full_2x2_phase_reduced_floquet'"
+    )
+
+
 def validate_dispersion(
     root: Path,
     known_modes: dict[tuple[int, int], tuple[float, float, float, float]],
+    known_samples: dict[int, tuple[float, tuple[float, float, float], str]],
+    branch_ids_by_mode: dict[tuple[int, int], int],
+    tracking_sources_by_mode: dict[tuple[int, int], str],
 ) -> None:
     path = root / "eigen/dispersion.csv"
     require_file(path)
-    rows = list(csv.DictReader(path.read_text().splitlines()))
+    reader = csv.DictReader(path.read_text().splitlines())
+    rows = list(reader)
     required_columns = {
         "sample_index",
         "path_s_rad_per_m",
         "kx_rad_per_m",
         "ky_rad_per_m",
         "kz_rad_per_m",
+        "label",
         "raw_mode_index",
+        "branch_id",
         "frequency_hz",
         "omega_rad_s",
+        "line_width_hz",
         "residual_norm",
+        "overlap_score",
+        "tracking_score_source",
+        "mode_field_id",
+        "mode_field_resource_key",
     }
-    missing = required_columns.difference(rows[0].keys() if rows else [])
+    missing = required_columns.difference(reader.fieldnames or [])
     if missing:
         fail(f"eigen/dispersion.csv missing columns: {sorted(missing)!r}")
+    seen_mode_keys: set[tuple[int, int]] = set()
     for row_index, row in enumerate(rows):
         sample_index = require_non_negative_int(
             int(row["sample_index"]),
@@ -986,11 +1230,112 @@ def validate_dispersion(
             f"dispersion row {row_index}.raw_mode_index",
         )
         mode_key = (sample_index, raw_mode_index)
+        if mode_key in seen_mode_keys:
+            fail(
+                "duplicate dispersion row for "
+                f"sample={sample_index}, raw_mode={raw_mode_index}"
+            )
+        seen_mode_keys.add(mode_key)
         if mode_key not in known_modes:
             fail(
                 "eigen/dispersion.csv references unknown mode "
                 f"sample={sample_index}, raw_mode={raw_mode_index}"
             )
+        sample_metadata = known_samples.get(sample_index)
+        if sample_metadata is None:
+            fail(
+                "eigen/dispersion.csv references unknown sample "
+                f"sample={sample_index}"
+            )
+        expected_path_s, expected_k_vector, expected_label = sample_metadata
+        path_s = require_finite_number(
+            float(row["path_s_rad_per_m"]),
+            f"dispersion row {row_index}.path_s_rad_per_m",
+        )
+        require_close(
+            path_s,
+            expected_path_s,
+            f"dispersion row {row_index}.path_s_rad_per_m",
+            absolute_tolerance=1.0e-9,
+        )
+        for component_name, actual_text, expected_value in [
+            ("kx_rad_per_m", row["kx_rad_per_m"], expected_k_vector[0]),
+            ("ky_rad_per_m", row["ky_rad_per_m"], expected_k_vector[1]),
+            ("kz_rad_per_m", row["kz_rad_per_m"], expected_k_vector[2]),
+        ]:
+            component_value = require_finite_number(
+                float(actual_text),
+                f"dispersion row {row_index}.{component_name}",
+            )
+            require_close(
+                component_value,
+                expected_value,
+                f"dispersion row {row_index}.{component_name}",
+                absolute_tolerance=1.0e-9,
+            )
+        require_equal(
+            row.get("label", ""),
+            expected_label,
+            f"dispersion row {row_index}.label",
+        )
+        branch_id = require_non_negative_int(
+            int(row["branch_id"]),
+            f"dispersion row {row_index}.branch_id",
+        )
+        expected_branch_id = branch_ids_by_mode.get(mode_key)
+        if expected_branch_id is None:
+            fail(
+                "eigen/dispersion.csv references mode without branch point "
+                f"sample={sample_index}, raw_mode={raw_mode_index}"
+            )
+        require_equal(
+            branch_id,
+            expected_branch_id,
+            f"dispersion row {row_index}.branch_id",
+        )
+        tracking_score_source = require_tracking_score_source(
+            row.get("tracking_score_source"),
+            f"dispersion row {row_index}.tracking_score_source",
+            ALLOWED_TRACKING_SCORE_POINT_SOURCES,
+        )
+        expected_tracking_score_source = tracking_sources_by_mode.get(mode_key)
+        if expected_tracking_score_source is None:
+            fail(
+                "eigen/dispersion.csv references mode without branch tracking source "
+                f"sample={sample_index}, raw_mode={raw_mode_index}"
+            )
+        require_equal(
+            tracking_score_source,
+            expected_tracking_score_source,
+            f"dispersion row {row_index}.tracking_score_source",
+        )
+        overlap_score_text = row.get("overlap_score", "").strip()
+        if tracking_score_source == "modal_overlap_weighted_score" and not overlap_score_text:
+            fail(
+                f"dispersion row {row_index}.overlap_score must be present "
+                "for modal_overlap_weighted_score"
+            )
+        if overlap_score_text:
+            overlap_score = require_finite_number(
+                float(overlap_score_text),
+                f"dispersion row {row_index}.overlap_score",
+            )
+            if overlap_score < 0.0 or overlap_score > 1.0:
+                fail(
+                    f"dispersion row {row_index}.overlap_score must be in [0, 1]"
+                )
+        expected_field_id = mode_field_id(sample_index, raw_mode_index)
+        expected_resource_key = mode_field_resource_key(expected_field_id)
+        require_equal(
+            row.get("mode_field_id"),
+            expected_field_id,
+            f"dispersion row {row_index}.mode_field_id",
+        )
+        require_equal(
+            row.get("mode_field_resource_key"),
+            expected_resource_key,
+            f"dispersion row {row_index}.mode_field_resource_key",
+        )
         frequency_hz = require_finite_number(
             float(row["frequency_hz"]),
             f"dispersion row {row_index}.frequency_hz",
@@ -1012,6 +1357,11 @@ def validate_dispersion(
             absolute_tolerance=1.0e-3,
         )
         line_width_hz = row.get("line_width_hz", "").strip()
+        if known_frequency_imag_hz > 0.0 and not line_width_hz:
+            fail(
+                f"dispersion row {row_index}.line_width_hz must be present "
+                "when frequency_imag_hz is positive"
+            )
         if line_width_hz:
             linewidth = require_finite_number(
                 float(line_width_hz),
@@ -1024,6 +1374,9 @@ def validate_dispersion(
                 2.0 * known_frequency_imag_hz,
                 f"dispersion row {row_index}.line_width_hz",
             )
+    missing_mode_keys = set(known_modes.keys()).difference(seen_mode_keys)
+    if missing_mode_keys:
+        fail(f"missing dispersion rows for modes: {sorted(missing_mode_keys)!r}")
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -1042,6 +1395,22 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help=(
             "require managed runtime frequency-window artifacts from the "
             "native production modal SLEPc shift-invert adapter"
+        ),
+    )
+    parser.add_argument(
+        "--require-reference-full-2x2-floquet",
+        action="store_true",
+        help=(
+            "require reference/MVP nonzero-k Floquet dispersion artifacts from "
+            "the CPU full-2x2 phase-reduced tangent path"
+        ),
+    )
+    parser.add_argument(
+        "--require-production-modal-k-path",
+        action="store_true",
+        help=(
+            "require production selected-spectrum modal k-path/Floquet "
+            "dispersion artifacts rather than the reference k-path filter"
         ),
     )
     return parser.parse_args(argv)
@@ -1079,6 +1448,10 @@ def main(argv: list[str] | None = None) -> int:
         "eigen/diagnostics/solver.v1.json",
         "manifest.artifacts.solver_diagnostics_path",
     )
+    manifest_diagnostics = manifest.get("diagnostics")
+    if not isinstance(manifest_diagnostics, dict):
+        fail("manifest.diagnostics must be an object")
+    require_tracking_summary(manifest_diagnostics, "manifest.diagnostics")
     require_file(root / "eigen/diagnostics/solver.v1.json")
     require_equal(
         solver_diagnostics.get("schema_version"),
@@ -1093,10 +1466,21 @@ def main(argv: list[str] | None = None) -> int:
     validate_solver_provenance(
         solver_diagnostics,
         require_production_shift_invert_window=args.require_production_shift_invert_window,
+        require_production_modal_k_path=args.require_production_modal_k_path,
+        require_reference_full_2x2_floquet=args.require_reference_full_2x2_floquet,
     )
+    if args.require_production_modal_k_path:
+        require_equal(
+            manifest.get("physics", {}).get("phase_convention"),
+            "exp_i_omega_t",
+            "manifest.physics.phase_convention",
+        )
     requested_window_hz = validate_solver_window_diagnostics(
         solver_diagnostics,
-        require_window=args.require_production_shift_invert_window,
+        require_window=(
+            args.require_production_shift_invert_window
+            or args.require_production_modal_k_path
+        ),
     )
     require_equal(
         manifest.get("artifacts", {}).get("spectrum_v2_path"),
@@ -1131,13 +1515,32 @@ def main(argv: list[str] | None = None) -> int:
     samples = require_object_list(spectrum.get("samples"), "spectrum.samples")
     require_equal(spectrum.get("sample_count"), len(samples), "spectrum.sample_count")
     known_modes: dict[tuple[int, int], tuple[float, float, float, float]] = {}
+    known_samples: dict[int, tuple[float, tuple[float, float, float], str]] = {}
+    published_mode_counts: list[int] = []
     for sample_position, sample in enumerate(samples):
         sample_index = require_non_negative_int(
             sample.get("sample_index"),
             f"spectrum.samples[{sample_position}].sample_index",
         )
-        require_finite_number(sample.get("path_s"), f"spectrum.samples[{sample_position}].path_s")
+        path_s = require_finite_number(sample.get("path_s"), f"spectrum.samples[{sample_position}].path_s")
+        k_vector_raw = sample.get("k_vector")
+        if not isinstance(k_vector_raw, list) or len(k_vector_raw) != 3:
+            fail(f"spectrum.samples[{sample_position}].k_vector must be a length-3 array")
+        k_vector = tuple(
+            require_finite_number(
+                component,
+                f"spectrum.samples[{sample_position}].k_vector[{component_index}]",
+            )
+            for component_index, component in enumerate(k_vector_raw)
+        )
+        label = sample.get("label")
+        if label is None:
+            label = ""
+        if not isinstance(label, str):
+            fail(f"spectrum.samples[{sample_position}].label must be a string or null")
+        known_samples[sample_index] = (path_s, k_vector, label)
         modes = require_object_list(sample.get("modes"), f"spectrum.samples[{sample_position}].modes")
+        published_mode_counts.append(len(modes))
         for mode in modes:
             (
                 known_sample_index,
@@ -1162,10 +1565,29 @@ def main(argv: list[str] | None = None) -> int:
             )
     if not known_modes:
         fail("spectrum.samples must include at least one mode")
+    diagnostics_mode_count = require_non_negative_int(
+        solver_diagnostics.get("mode_count"),
+        "solver_diagnostics.mode_count",
+    )
+    published_mode_count = max(published_mode_counts, default=0)
+    require_equal(
+        diagnostics_mode_count,
+        published_mode_count,
+        "solver_diagnostics.mode_count",
+    )
+    if args.require_reference_full_2x2_floquet:
+        validate_reference_full_2x2_floquet_mode_metadata(root, manifest_mode_paths)
 
     branch_modes: set[tuple[int, int]] = set()
+    branch_ids_by_mode: dict[tuple[int, int], int] = {}
+    tracking_sources_by_mode: dict[tuple[int, int], str] = {}
+    require_tracking_summary(branches, "branches")
+    branch_diagnostics = branches.get("diagnostics")
+    if not isinstance(branch_diagnostics, dict):
+        fail("branches.diagnostics must be an object")
+    require_tracking_summary(branch_diagnostics, "branches.diagnostics")
     for branch_index, branch in enumerate(require_object_list(branches.get("branches"), "branches.branches")):
-        require_non_negative_int(branch.get("branch_id"), f"branches[{branch_index}].branch_id")
+        branch_id = require_non_negative_int(branch.get("branch_id"), f"branches[{branch_index}].branch_id")
         for point in require_object_list(branch.get("points"), f"branches[{branch_index}].points"):
             sample_index = require_non_negative_int(point.get("sample_index"), "branch point.sample_index")
             raw_mode_index = require_non_negative_int(
@@ -1174,6 +1596,21 @@ def main(argv: list[str] | None = None) -> int:
             )
             branch_mode_key = (sample_index, raw_mode_index)
             branch_modes.add(branch_mode_key)
+            existing_branch_id = branch_ids_by_mode.get(branch_mode_key)
+            if existing_branch_id is not None and existing_branch_id != branch_id:
+                fail(
+                    "branches contain duplicate mode points with conflicting branch_id: "
+                    f"sample={sample_index}, raw_mode={raw_mode_index}"
+                )
+            branch_ids_by_mode[branch_mode_key] = branch_id
+            tracking_source = require_tracking_point(point, "branch point")
+            tracking_sources_by_mode[branch_mode_key] = tracking_source
+            require_mode_field_handoff(
+                point,
+                "branch point",
+                sample_index,
+                raw_mode_index,
+            )
             if branch_mode_key in known_modes:
                 frequency_hz = require_finite_number(
                     point.get("frequency_hz"),
@@ -1214,7 +1651,13 @@ def main(argv: list[str] | None = None) -> int:
         fail(f"branches reference unknown modes: {sorted(unknown_branch_modes)!r}")
 
     validate_eigen_summary(summary, known_modes, requested_window_hz)
-    validate_dispersion(root, known_modes)
+    validate_dispersion(
+        root,
+        known_modes,
+        known_samples,
+        branch_ids_by_mode,
+        tracking_sources_by_mode,
+    )
     return 0
 
 

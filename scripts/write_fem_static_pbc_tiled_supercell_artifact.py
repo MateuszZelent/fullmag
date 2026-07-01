@@ -135,15 +135,16 @@ def load_node_geometry_mask(root: Path, node_count: int) -> list[bool] | None:
     return out
 
 
-def load_m_values(root: Path, node_count: int) -> dict[str, Any]:
-    payload = load_json(root / "m_final.json")
-    values = require_list(payload.get("values"), "m_final.values")
-    require(len(values) == node_count, "m_final.values length must match metadata mesh nodes")
+def load_m_artifact(root: Path, node_count: int, artifact_name: str) -> dict[str, Any]:
+    payload = load_json(root / artifact_name)
+    values_name = f"{artifact_name}.values"
+    values = require_list(payload.get("values"), values_name)
+    require(len(values) == node_count, f"{values_name} length must match metadata mesh nodes")
     for index, raw in enumerate(values):
-        vector = require_list(raw, f"m_final.values[{index}]")
-        require(len(vector) == 3, f"m_final.values[{index}] must be a 3-vector")
+        vector = require_list(raw, f"{values_name}[{index}]")
+        require(len(vector) == 3, f"{values_name}[{index}] must be a 3-vector")
         for component in range(3):
-            finite_number(vector[component], f"m_final.values[{index}][{component}]")
+            finite_number(vector[component], f"{values_name}[{index}][{component}]")
     return payload
 
 
@@ -236,40 +237,59 @@ def tile_zarr_field(unit_root: Path, output: Path, observable: str, node_count: 
     require(array.get("dtype") == "<f8", f"{observable} zarr dtype must be <f8")
     require(array.get("order") == "C", f"{observable} zarr order must be C")
     shape = require_list(array.get("shape"), f"{observable}.shape")
-    require(len(shape) == 3 and shape[0] == 1, f"{observable}.shape must be [1, components, cells]")
+    require(
+        len(shape) == 3
+        and isinstance(shape[0], int)
+        and isinstance(shape[1], int)
+        and isinstance(shape[2], int),
+        f"{observable}.shape must be [samples, components, cells]",
+    )
+    sample_count = int(shape[0])
     component_count = int(shape[1])
-    require(component_count > 0, f"{observable}.shape component count must be positive")
+    require(sample_count > 0 and component_count > 0, f"{observable}.shape sample/component count must be positive")
     require(int(shape[2]) == node_count, f"{observable}.shape cell count must match metadata mesh nodes")
     with (source / "samples.csv").open(newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
     require(rows, f"{observable} samples.csv must not be empty")
-    chunk_key = rows[-1].get("chunk_key")
-    require(isinstance(chunk_key, str) and chunk_key, f"{observable} chunk_key must be present")
-    raw = (source / chunk_key).read_bytes()
+    require(
+        len(rows) <= sample_count,
+        f"{observable} samples.csv has {len(rows)} rows but shape declares {sample_count} samples",
+    )
     value_count = node_count * component_count
-    require(len(raw) == value_count * 8, f"{observable} chunk byte length mismatch")
-    values = list(struct.unpack(f"<{value_count}d", raw))
-    require(all(math.isfinite(value) for value in values), f"{observable} values must be finite")
-    tiled_values: list[float] = []
     tile_count = repeat_x * repeat_y
-    for component in range(component_count):
-        block = values[component * node_count : (component + 1) * node_count]
-        for _ in range(tile_count):
-            tiled_values.extend(block)
     target.mkdir(parents=True, exist_ok=True)
     write_json(target / ".zattrs", attrs)
-    array["shape"] = [1, component_count, node_count * tile_count]
-    write_json(target / ".zarray", array)
+    target_array = copy.deepcopy(array)
+    target_array["shape"] = [sample_count, component_count, node_count * tile_count]
+    if isinstance(target_array.get("chunks"), list) and len(target_array["chunks"]) == 3:
+        target_array["chunks"] = [1, component_count, node_count * tile_count]
+    write_json(target / ".zarray", target_array)
     with (target / "samples.csv").open("w", newline="", encoding="utf-8") as handle:
         fieldnames = list(rows[-1].keys())
         if "chunk_key" not in fieldnames:
             fieldnames.append("chunk_key")
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
-        row = {key: rows[-1].get(key, "") for key in fieldnames}
-        row["chunk_key"] = "0.0.0"
-        writer.writerow(row)
-    (target / "0.0.0").write_bytes(struct.pack(f"<{len(tiled_values)}d", *tiled_values))
+        for row_index, source_row in enumerate(rows):
+            chunk_key = source_row.get("chunk_key")
+            require(isinstance(chunk_key, str) and chunk_key, f"{observable} chunk_key must be present")
+            raw = (source / chunk_key).read_bytes()
+            require(len(raw) == value_count * 8, f"{observable} chunk byte length mismatch")
+            values = list(struct.unpack(f"<{value_count}d", raw))
+            require(all(math.isfinite(value) for value in values), f"{observable} values must be finite")
+            tiled_values: list[float] = []
+            for component in range(component_count):
+                block = values[component * node_count : (component + 1) * node_count]
+                for _ in range(tile_count):
+                    tiled_values.extend(block)
+            row = {key: source_row.get(key, "") for key in fieldnames}
+            row["chunk_key"] = chunk_key
+            if "sample" in fieldnames:
+                row["sample"] = source_row.get("sample") or str(row_index)
+            if "cell_count" in fieldnames:
+                row["cell_count"] = str(node_count * tile_count)
+            writer.writerow(row)
+            (target / chunk_key).write_bytes(struct.pack(f"<{len(tiled_values)}d", *tiled_values))
 
 
 def tile_zarr_fields(unit_root: Path, output: Path, node_count: int, repeat_x: int, repeat_y: int) -> list[str]:
@@ -390,7 +410,12 @@ def write_tiled_artifact(args: argparse.Namespace) -> Path:
     node_count = len(unit_nodes)
     unit_elements = parse_elements(mesh, node_count)
     magnetic_mask = load_node_geometry_mask(args.unit_cell, node_count) or magnetic_mask_from_metadata(mesh, node_count)
-    m_payload = load_m_values(args.unit_cell, node_count)
+    m_payload = load_m_artifact(args.unit_cell, node_count, "m_final.json")
+    initial_m_payload = (
+        load_m_artifact(args.unit_cell, node_count, "m_initial.json")
+        if (args.unit_cell / "m_initial.json").is_file()
+        else None
+    )
 
     tiled_nodes = tile_nodes(unit_nodes, args.repeat_x, args.repeat_y, periods)
     tiled_elements = tile_elements(unit_elements, node_count, args.repeat_x, args.repeat_y)
@@ -415,6 +440,14 @@ def write_tiled_artifact(args: argparse.Namespace) -> Path:
     m_payload = copy.deepcopy(m_payload)
     m_payload["values"] = tile_list(require_list(m_payload.get("values"), "m_final.values"), args.repeat_x, args.repeat_y)
     write_json(args.output / "m_final.json", m_payload)
+    if initial_m_payload is not None:
+        initial_m_payload = copy.deepcopy(initial_m_payload)
+        initial_m_payload["values"] = tile_list(
+            require_list(initial_m_payload.get("values"), "m_initial.values"),
+            args.repeat_x,
+            args.repeat_y,
+        )
+        write_json(args.output / "m_initial.json", initial_m_payload)
 
     copied_observables = tile_zarr_fields(args.unit_cell, args.output, node_count, args.repeat_x, args.repeat_y)
     write_node_geometry(

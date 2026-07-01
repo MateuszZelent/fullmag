@@ -59,9 +59,9 @@ struct ProductionCpuDrivenResponseProblem {
     ProductionCpuFrequencyDomainApply apply_stiffness = nullptr;
     ProductionCpuFrequencyDomainApply apply_mass = nullptr;
     void *operator_user_data = nullptr;
-    double relative_tolerance = 1.0e-10;
-    std::uint64_t max_iterations = 200;
-    std::uint64_t restart_iterations = 32;
+    double relative_tolerance = 1.0e-3;
+    std::uint64_t max_iterations = 8192;
+    std::uint64_t restart_iterations = 8192;
     double *out_response_real = nullptr;
     double *out_response_imag = nullptr;
     std::uint64_t response_capacity = 0;

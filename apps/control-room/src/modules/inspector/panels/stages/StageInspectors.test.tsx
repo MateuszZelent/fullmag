@@ -422,6 +422,53 @@ describe("Study stage inspectors", () => {
     expect(html).toContain("requested 10; result artifacts pending");
   });
 
+  it("shows driven-response PBC and active sweep telemetry without falling back to free", () => {
+    const frameProps = props("frequency_response");
+    const html = render(
+      <FrequencyResponseStageInspector
+        {...frameProps}
+        authoringView="boundary"
+        draft={
+          {
+            ...frameProps.draft!,
+            bc: '{"kind":"periodic","axes":["x","y"]}',
+            magnetostaticBc: "periodic_airbox_k0",
+          } as typeof frameProps.draft
+        }
+        stage={{
+          ...frameProps.stage!,
+          commandId: "cmd-response-1",
+          lastProgressUnixMs: 1_781_467_092_000,
+          progressDetail: "frequency 3/7; current 3 GHz",
+          progressLabel: "sweeping",
+          progressPercent: 42,
+          startedAtUnixMs: 1_781_467_068_771,
+          status: "running",
+        }}
+        stageExecutionRevision={651}
+      />,
+      [
+        "telemetry",
+        "frequency-response-boundary-detail",
+        "frequency-response-command-center",
+        "frequency-response-wavevector",
+      ],
+    );
+
+    expect(html).toContain("Frequency response sweep progress");
+    expect(html).toContain("sweeping");
+    expect(html).toContain("frequency 3/7; current 3 GHz");
+    expect(html).toContain(
+      "simulation/stages/execution@651; progress telemetry observed",
+    );
+    expect(html).toContain("cmd-response-1");
+    expect(html).toContain("Spin-wave BC");
+    expect(html).toContain("periodic; axes x, y");
+    expect(html).toContain("Magnetostatic BC");
+    expect(html).toContain("periodic_airbox_k0");
+    expect(html).not.toContain("Boundary condition</span><span>free</span>");
+  });
+
   it("enables hysteresis initial-state action when a point snapshot exists", () => {
     expect(hysteresisInitialStateActionPresentation("hysteresis_point_005")).toEqual({
       disabled: false,

@@ -513,30 +513,36 @@ pub(crate) fn materialize_script_stages(
         )]);
     }
 
-    let materialized = stages
-        .into_iter()
-        .map(|mut stage| {
-            if stage.ir.geometry_assets.is_none() {
-                stage.ir.geometry_assets = shared_geometry_assets.clone();
+    let mut materialized = Vec::with_capacity(stages.len());
+    let mut device_override: Option<String> = None;
+    for mut stage in stages {
+        if stage.ir.geometry_assets.is_none() {
+            stage.ir.geometry_assets = shared_geometry_assets.clone();
+        }
+        if let Some(device) = device_override.as_deref() {
+            set_runtime_selection_device(&mut stage.ir, device);
+        }
+        normalize_stage_sampling(&mut stage.ir);
+        if let Some(action) = stage.action {
+            if let ScriptExecutionStageAction::ChangeDevice { device } = &action {
+                set_runtime_selection_device(&mut stage.ir, device);
+                device_override = Some(device.clone());
             }
-            normalize_stage_sampling(&mut stage.ir);
-            if let Some(action) = stage.action {
-                Ok(resolve_explicit_stage_action(
-                    stage.ir,
-                    stage.entrypoint_kind,
-                    action,
-                ))
-            } else {
-                let until_seconds =
-                    resolve_script_until_seconds(&stage.ir, stage.default_until_seconds)?;
-                Ok(ResolvedScriptStage::solver(
-                    stage.ir,
-                    until_seconds,
-                    stage.entrypoint_kind,
-                ))
-            }
-        })
-        .collect::<Result<Vec<_>>>()?;
+            materialized.push(resolve_explicit_stage_action(
+                stage.ir,
+                stage.entrypoint_kind,
+                action,
+            ));
+        } else {
+            let until_seconds =
+                resolve_script_until_seconds(&stage.ir, stage.default_until_seconds)?;
+            materialized.push(ResolvedScriptStage::solver(
+                stage.ir,
+                until_seconds,
+                stage.entrypoint_kind,
+            ));
+        }
+    }
     Ok(annotate_stage_transitions(materialized))
 }
 
@@ -1232,6 +1238,13 @@ fn materialize_pipeline_frequency_response(
         .as_ref()
         .map(|current| current.5.clone())
         .unwrap_or_default();
+    let default_magnetostatic_bc = match &base_ir.study {
+        fullmag_ir::StudyIR::FrequencyResponse {
+            magnetostatic_bc,
+            ..
+        } => *magnetostatic_bc,
+        _ => fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
+    };
     let default_excitation = current_frequency
         .as_ref()
         .map(|current| current.6.field_au_per_m)
@@ -1274,7 +1287,8 @@ fn materialize_pipeline_frequency_response(
         damping_policy: payload_eigen_damping_policy(&frequency_payload)?
             .unwrap_or(default_damping_policy),
         spin_wave_bc: payload_spin_wave_bc(&frequency_payload)?.unwrap_or(default_spin_wave_bc),
-        magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
+        magnetostatic_bc: payload_frequency_magnetostatic_bc(payload)?
+            .unwrap_or(default_magnetostatic_bc),
         excitation: fullmag_ir::FrequencyExcitationIR {
             field_au_per_m: payload_vec3(
                 payload,
@@ -2345,6 +2359,17 @@ fn payload_spin_wave_bc(
     match payload_string(payload, "eigen_spin_wave_bc") {
         Some(value) => serde_json::from_value(Value::String(value))
             .context("invalid eigen_spin_wave_bc in study pipeline payload")
+            .map(Some),
+        None => Ok(None),
+    }
+}
+
+fn payload_frequency_magnetostatic_bc(
+    payload: &BTreeMap<String, Value>,
+) -> Result<Option<fullmag_ir::MagnetostaticBoundaryConditionIR>> {
+    match payload_string(payload, "frequency_magnetostatic_bc") {
+        Some(value) => serde_json::from_value(Value::String(value))
+            .context("invalid frequency_magnetostatic_bc in study pipeline payload")
             .map(Some),
         None => Ok(None),
     }
@@ -3502,6 +3527,116 @@ mod tests {
     }
 
     #[test]
+    fn explicit_change_device_stage_propagates_to_following_frequency_response() {
+        let mut base = sample_problem_ir();
+        base.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fem;
+        set_runtime_selection_device(&mut base, "gpu");
+        let dynamics = base.study.dynamics().clone();
+        let sampling = base.study.sampling().clone();
+
+        let mut relax_ir = base.clone();
+        relax_ir.problem_meta.entrypoint_kind = "flat_relax".to_string();
+        relax_ir.study = fullmag_ir::StudyIR::Relaxation {
+            algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+            dynamics: dynamics.clone(),
+            stop: fullmag_ir::RelaxStopIR {
+                torque_tolerance_apm: Some(5.0e3),
+                energy_tolerance_j: None,
+                max_steps: Some(25),
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+            },
+            sampling: sampling.clone(),
+        };
+
+        let mut change_device_ir = base.clone();
+        change_device_ir.problem_meta.entrypoint_kind = "flat_change_device".to_string();
+
+        let mut frequency_ir = base.clone();
+        frequency_ir.problem_meta.entrypoint_kind = "flat_frequency_response".to_string();
+        frequency_ir.study = fullmag_ir::StudyIR::FrequencyResponse {
+            dynamics,
+            operator: fullmag_ir::EigenOperatorConfigIR {
+                kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+                include_demag: true,
+            },
+            equilibrium: fullmag_ir::EquilibriumSourceIR::RelaxedInitialState,
+            k_sampling: None,
+            normalization: fullmag_ir::FrequencyResponseNormalizationIR::UnitL2,
+            damping_policy: fullmag_ir::EigenDampingPolicyIR::Include,
+            spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::Config(
+                fullmag_ir::SpinWaveBoundaryConfigIR {
+                    kind: fullmag_ir::SpinWaveBoundaryKindIR::Periodic,
+                    boundary_pair_id: None,
+                    pair_ids: vec!["x_faces".to_string(), "y_faces".to_string()],
+                    phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                    surface_anisotropy_ks: None,
+                    surface_anisotropy_axis: None,
+                },
+            ),
+            magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0,
+            excitation: fullmag_ir::FrequencyExcitationIR {
+                field_au_per_m: [0.0, 0.0, 1.0],
+                phase_rad: 0.0,
+            },
+            frequencies_hz: fullmag_ir::FrequencySweepIR {
+                values_hz: vec![2.0e9, 2.5e9],
+            },
+            sampling: fullmag_ir::SamplingIR {
+                table_autosave: None,
+                outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
+                    observable: fullmag_ir::FrequencyResponseOutputIR::SusceptibilityTensor,
+                }],
+            },
+        };
+
+        let stages = materialize_script_stages(ScriptExecutionConfig {
+            ir: base,
+            shared_geometry_assets: None,
+            default_until_seconds: Some(1e-12),
+            study_pipeline: None,
+            stages: vec![
+                ScriptExecutionStage {
+                    ir: relax_ir,
+                    default_until_seconds: None,
+                    entrypoint_kind: "flat_relax".to_string(),
+                    action: None,
+                },
+                ScriptExecutionStage {
+                    ir: change_device_ir,
+                    default_until_seconds: None,
+                    entrypoint_kind: "flat_change_device".to_string(),
+                    action: Some(crate::types::ScriptExecutionStageAction::ChangeDevice {
+                        device: "cpu".to_string(),
+                    }),
+                },
+                ScriptExecutionStage {
+                    ir: frequency_ir,
+                    default_until_seconds: None,
+                    entrypoint_kind: "flat_frequency_response".to_string(),
+                    action: None,
+                },
+            ],
+        })
+        .expect("explicit stages should materialize");
+
+        assert_eq!(stages.len(), 3);
+        assert_eq!(requested_device(&stages[0].ir), "gpu");
+        assert!(matches!(
+            &stages[1].action,
+            Some(ResolvedScriptStageAction::ChangeDevice { device }) if device == "cpu"
+        ));
+        assert_eq!(requested_device(&stages[1].ir), "cpu");
+        assert_eq!(requested_device(&stages[2].ir), "cpu");
+        assert!(matches!(
+            &stages[2].ir.study,
+            fullmag_ir::StudyIR::FrequencyResponse { magnetostatic_bc, .. }
+                if *magnetostatic_bc
+                    == fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0
+        ));
+    }
+
+    #[test]
     fn materialized_hysteresis_points_continue_same_branch_state() {
         let config = ScriptExecutionConfig {
             ir: sample_problem_ir(),
@@ -4079,6 +4214,62 @@ mod tests {
                 .and_then(|transition| transition.transfer_operator),
             Some(StateTransferOperatorKind::IdentityCopy)
         );
+    }
+
+    #[test]
+    fn materialize_pipeline_change_device_preserves_frequency_response_magnetostatic_bc() {
+        let mut base = sample_problem_ir();
+        base.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fem;
+        set_runtime_selection_device(&mut base, "gpu");
+        let config = ScriptExecutionConfig {
+            ir: base,
+            shared_geometry_assets: None,
+            default_until_seconds: Some(3e-12),
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![
+                    StudyPipelineNode::Primitive {
+                        id: "stage_change_device".to_string(),
+                        label: "Change device".to_string(),
+                        enabled: true,
+                        notes: None,
+                        source: Some("ui_authored".to_string()),
+                        stage_kind: "change_device".to_string(),
+                        payload: serde_json::from_value(json!({
+                            "device": "cpu"
+                        }))
+                        .expect("payload"),
+                    },
+                    StudyPipelineNode::Primitive {
+                        id: "stage_frequency_response".to_string(),
+                        label: "Frequency response".to_string(),
+                        enabled: true,
+                        notes: None,
+                        source: Some("ui_authored".to_string()),
+                        stage_kind: "frequency_response".to_string(),
+                        payload: serde_json::from_value(json!({
+                            "frequency_values_hz": [2.0e9, 2.5e9],
+                            "frequency_spin_wave_bc": "periodic",
+                            "frequency_magnetostatic_bc": "periodic_airbox_k0"
+                        }))
+                        .expect("payload"),
+                    },
+                ],
+            }),
+            stages: vec![],
+        };
+
+        let stages = materialize_script_stages(config).expect("pipeline should materialize");
+
+        assert_eq!(stages.len(), 2);
+        assert_eq!(requested_device(&stages[0].ir), "cpu");
+        assert_eq!(requested_device(&stages[1].ir), "cpu");
+        assert!(matches!(
+            &stages[1].ir.study,
+            fullmag_ir::StudyIR::FrequencyResponse { magnetostatic_bc, .. }
+                if *magnetostatic_bc
+                    == fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0
+        ));
     }
 
     #[test]

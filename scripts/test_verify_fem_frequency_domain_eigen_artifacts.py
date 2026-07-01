@@ -13,6 +13,23 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 VALIDATOR = REPO_ROOT / "scripts" / "verify_fem_frequency_domain_eigen_artifacts.py"
 
 
+def drop_csv_columns(header: str, row: str, columns: set[str]) -> tuple[str, str]:
+    names = header.split(",")
+    values = row.split(",")
+    keep_indices = [index for index, name in enumerate(names) if name not in columns]
+    return (
+        ",".join(names[index] for index in keep_indices),
+        ",".join(values[index] for index in keep_indices),
+    )
+
+
+def set_csv_column(header: str, row: str, column: str, value: str) -> str:
+    names = header.split(",")
+    values = row.split(",")
+    values[names.index(column)] = value
+    return ",".join(values)
+
+
 def write_eigen_fixture(
     root: Path,
     *,
@@ -33,6 +50,21 @@ def write_eigen_fixture(
     omit_mode_omega_rad_s: bool = False,
     omit_mode_eigenvalue_mapping: bool = False,
     omit_mode_tangent_leakage: bool = False,
+    omit_branch_tracking_source: bool = False,
+    branch_tracking_score_source_override: str | None = None,
+    branch_modal_overlap_available_override: bool | None = None,
+    omit_dispersion_overlap_score: bool = False,
+    omit_dispersion_required_display_columns: bool = False,
+    dispersion_branch_id_override: str | None = None,
+    dispersion_tracking_score_source_override: str | None = None,
+    dispersion_overlap_score_override: str | None = None,
+    dispersion_path_s_override: str | None = None,
+    dispersion_kx_override: str | None = None,
+    dispersion_label_override: str | None = None,
+    dispersion_line_width_override: str | None = None,
+    duplicate_dispersion_row: bool = False,
+    omit_dispersion_rows: bool = False,
+    omit_dispersion_mode_field_columns: bool = False,
     gamma_rad_s_t_override: float | None = None,
     solver_diagnostics_override: dict[str, object] | None = None,
 ) -> None:
@@ -117,44 +149,141 @@ def write_eigen_fixture(
     }
     (root / "eigen" / "spectrum.v2.json").write_text(json.dumps(spectrum))
 
+    branch_point = {
+        "sample_index": 0,
+        "raw_mode_index": 0,
+        "frequency_hz": (
+            branch_frequency_hz_override
+            if branch_frequency_hz_override is not None
+            else 1.0e9
+        ),
+        "frequency_real_hz": 1.0e9,
+        "frequency_imag_hz": 0.0,
+        "angular_frequency_rad_per_s": 6.283185307179586e9,
+        "tracking_confidence": 1.0,
+        "overlap_prev": None,
+        "tracking_score_source": (
+            branch_tracking_score_source_override
+            if branch_tracking_score_source_override is not None
+            else "seed"
+        ),
+        "modal_overlap_available": (
+            branch_modal_overlap_available_override
+            if branch_modal_overlap_available_override is not None
+            else False
+        ),
+        "mode_field_id": field_id,
+        "mode_field_resource_key": field_resource,
+    }
+    if omit_branch_tracking_source:
+        del branch_point["tracking_score_source"]
     branches = {
         "schema_version": "eigen_branches.v2",
         "solver_model": "reference_scalar_tangent",
+        "tracking_score_source": "seed_only",
+        "modal_overlap_available": False,
         "branches": [
             {
                 "branch_id": 0,
                 "label": "B0",
-                "points": [
-                    {
-                        "sample_index": 0,
-                        "raw_mode_index": 0,
-                        "frequency_hz": (
-                            branch_frequency_hz_override
-                            if branch_frequency_hz_override is not None
-                            else 1.0e9
-                        ),
-                        "frequency_real_hz": 1.0e9,
-                        "frequency_imag_hz": 0.0,
-                        "angular_frequency_rad_per_s": 6.283185307179586e9,
-                        "tracking_confidence": 1.0,
-                        "overlap_prev": None,
-                    }
-                ],
+                "points": [branch_point],
             }
         ],
+        "diagnostics": {
+            "tracking_score_source": "seed_only",
+            "modal_overlap_available": False,
+        },
     }
     (root / "eigen" / "branches.v2.json").write_text(json.dumps(branches))
-    (root / "eigen" / "dispersion.csv").write_text(
-        "\n".join(
-            [
-                "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,line_width_hz,residual_norm,overlap_score",
-                (
-                    "0,0,0,0,0,G,0,0,"
-                    f"{dispersion_frequency_hz_override if dispersion_frequency_hz_override is not None else 1.0e9},"
-                    "6.283185307179586e9,0,1.0e-9,"
-                ),
-            ]
+    dispersion_header = (
+        "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,"
+        "label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,line_width_hz,"
+        "residual_norm,overlap_score,tracking_score_source,mode_field_id,"
+        "mode_field_resource_key"
+    )
+    dispersion_row = (
+        "0,0,0,0,0,G,0,0,"
+        f"{dispersion_frequency_hz_override if dispersion_frequency_hz_override is not None else 1.0e9},"
+        "6.283185307179586e9,0,1.0e-9,,seed,"
+        f"{field_id},{field_resource}"
+    )
+    if omit_dispersion_mode_field_columns:
+        dispersion_header = (
+            "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,"
+            "label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,line_width_hz,"
+            "residual_norm,overlap_score,tracking_score_source"
         )
+        dispersion_row = (
+            "0,0,0,0,0,G,0,0,"
+            f"{dispersion_frequency_hz_override if dispersion_frequency_hz_override is not None else 1.0e9},"
+            "6.283185307179586e9,0,1.0e-9,,seed"
+        )
+    if omit_dispersion_overlap_score:
+        dispersion_header, dispersion_row = drop_csv_columns(
+            dispersion_header,
+            dispersion_row,
+            {"overlap_score"},
+        )
+    if omit_dispersion_required_display_columns:
+        dispersion_header, dispersion_row = drop_csv_columns(
+            dispersion_header,
+            dispersion_row,
+            {"label", "branch_id", "line_width_hz"},
+        )
+    if dispersion_branch_id_override is not None:
+        dispersion_row = set_csv_column(
+            dispersion_header,
+            dispersion_row,
+            "branch_id",
+            dispersion_branch_id_override,
+        )
+    if dispersion_tracking_score_source_override is not None:
+        dispersion_row = set_csv_column(
+            dispersion_header,
+            dispersion_row,
+            "tracking_score_source",
+            dispersion_tracking_score_source_override,
+        )
+    if dispersion_overlap_score_override is not None:
+        dispersion_row = set_csv_column(
+            dispersion_header,
+            dispersion_row,
+            "overlap_score",
+            dispersion_overlap_score_override,
+        )
+    if dispersion_path_s_override is not None:
+        dispersion_row = set_csv_column(
+            dispersion_header,
+            dispersion_row,
+            "path_s_rad_per_m",
+            dispersion_path_s_override,
+        )
+    if dispersion_kx_override is not None:
+        dispersion_row = set_csv_column(
+            dispersion_header,
+            dispersion_row,
+            "kx_rad_per_m",
+            dispersion_kx_override,
+        )
+    if dispersion_label_override is not None:
+        dispersion_row = set_csv_column(
+            dispersion_header,
+            dispersion_row,
+            "label",
+            dispersion_label_override,
+        )
+    if dispersion_line_width_override is not None:
+        dispersion_row = set_csv_column(
+            dispersion_header,
+            dispersion_row,
+            "line_width_hz",
+            dispersion_line_width_override,
+        )
+    dispersion_rows = [] if omit_dispersion_rows else [dispersion_row]
+    if duplicate_dispersion_row and dispersion_rows:
+        dispersion_rows.append(dispersion_row)
+    (root / "eigen" / "dispersion.csv").write_text(
+        "\n".join([dispersion_header, *dispersion_rows])
     )
 
     mode = {
@@ -423,6 +552,10 @@ def write_eigen_fixture(
                 else [meta_resource]
             ),
         },
+        "diagnostics": {
+            "tracking_score_source": "seed_only",
+            "modal_overlap_available": False,
+        },
         "physics": (
             manifest_physics_override
             if manifest_physics_override is not None
@@ -581,6 +714,158 @@ def test_validator_rejects_dispersion_frequency_drift(tmp_path: Path) -> None:
     assert "dispersion row 0.frequency_hz" in (result.stderr + result.stdout)
 
 
+def test_validator_rejects_missing_branch_tracking_score_source(tmp_path: Path) -> None:
+    write_eigen_fixture(tmp_path, omit_branch_tracking_source=True)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "tracking_score_source" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_dispersion_missing_mode_field_handoff_columns(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path, omit_dispersion_mode_field_columns=True)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "eigen/dispersion.csv missing columns" in (result.stderr + result.stdout)
+    assert "mode_field_id" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_dispersion_missing_overlap_score_column(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path, omit_dispersion_overlap_score=True)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "eigen/dispersion.csv missing columns" in (result.stderr + result.stdout)
+    assert "overlap_score" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_dispersion_missing_required_display_columns(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path, omit_dispersion_required_display_columns=True)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "eigen/dispersion.csv missing columns" in (result.stderr + result.stdout)
+    assert "label" in (result.stderr + result.stdout)
+    assert "branch_id" in (result.stderr + result.stdout)
+    assert "line_width_hz" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_dispersion_branch_id_drift_from_branches(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path, dispersion_branch_id_override="7")
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "dispersion row 0.branch_id" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_dispersion_tracking_source_drift_from_branch_point(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(
+        tmp_path,
+        dispersion_tracking_score_source_override="frequency_score_fallback",
+    )
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "dispersion row 0.tracking_score_source" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_dispersion_path_s_drift_from_spectrum(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path, dispersion_path_s_override="1.0")
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "dispersion row 0.path_s_rad_per_m" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_dispersion_k_vector_drift_from_spectrum(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path, dispersion_kx_override="1.0")
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "dispersion row 0.kx_rad_per_m" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_dispersion_label_drift_from_spectrum(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path, dispersion_label_override="X")
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "dispersion row 0.label" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_duplicate_dispersion_mode_rows(tmp_path: Path) -> None:
+    write_eigen_fixture(tmp_path, duplicate_dispersion_row=True)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "duplicate dispersion row" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_missing_dispersion_mode_rows(tmp_path: Path) -> None:
+    write_eigen_fixture(tmp_path, omit_dispersion_rows=True)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "missing dispersion rows" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_modal_overlap_row_without_overlap_score(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(
+        tmp_path,
+        branch_tracking_score_source_override="modal_overlap_weighted_score",
+        branch_modal_overlap_available_override=True,
+        dispersion_tracking_score_source_override="modal_overlap_weighted_score",
+    )
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "dispersion row 0.overlap_score" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_dispersion_overlap_score_outside_unit_interval(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path, dispersion_overlap_score_override="1.5")
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "dispersion row 0.overlap_score" in (result.stderr + result.stdout)
+
+
 def test_validator_rejects_negative_exp_i_damping_frequency(tmp_path: Path) -> None:
     write_eigen_fixture(tmp_path)
     mode_path = tmp_path / "eigen" / "modes" / "sample_0000" / "mode_0000.json"
@@ -608,11 +893,26 @@ def test_validator_rejects_dispersion_linewidth_drift(tmp_path: Path) -> None:
     dispersion_path.write_text(
         "\n".join(
             [
-                "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,line_width_hz,residual_norm,overlap_score",
-                "0,0,0,0,0,G,0,0,1.0e9,6.283185307179586e9,1.0e6,1.0e-9,",
+                "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_id,mode_field_resource_key",
+                "0,0,0,0,0,G,0,0,1.0e9,6.283185307179586e9,1.0e6,1.0e-9,,seed,analysis:eigen:sample-0000:mode-0000,/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0000/samples/vector?view=phase_rotated_real&phase_rad=0",
             ]
         )
     )
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "line_width_hz" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_missing_positive_damping_dispersion_linewidth(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path, dispersion_line_width_override="")
+    spectrum_path = tmp_path / "eigen" / "spectrum.v2.json"
+    spectrum = json.loads(spectrum_path.read_text())
+    spectrum["samples"][0]["modes"][0]["frequency_imag_hz"] = 1.0e6
+    spectrum_path.write_text(json.dumps(spectrum))
 
     result = run_validator(tmp_path)
 
@@ -722,6 +1022,7 @@ def test_validator_rejects_window_completeness_without_subwindows(
             "spectral_transform": "shift_invert",
             "sample_count": 1,
             "mode_count": 1,
+            "requested_mode_count": 1,
             "requested_window_hz": [1.0e8, 5.0e9],
             "resolved_search_window_hz": [7.5e7, 5.125e9],
             "window_completeness": {
@@ -737,6 +1038,211 @@ def test_validator_rejects_window_completeness_without_subwindows(
 
     assert result.returncode != 0
     assert "solver_diagnostics.subwindows" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_frequency_window_without_requested_mode_count(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(
+        tmp_path,
+        solver_diagnostics_override={
+            "schema_version": "frequency_domain_modal_solver_diagnostics.v1",
+            "study_product": "modal_eigen",
+            "status": "ready",
+            "complete": True,
+            "solver_model": "shift_invert",
+            "resolved_solver_family": "shift_invert",
+            "spectral_transform": "shift_invert",
+            "sample_count": 1,
+            "mode_count": 1,
+            "requested_window_hz": [1.0e8, 5.0e9],
+            "resolved_search_window_hz": [7.5e7, 5.125e9],
+            "window_completeness": {
+                "policy": "best_effort",
+                "status": "not_certified",
+                "certification_method": "none",
+                "estimated_modes_in_window": 1,
+                "certified_modes_in_window": 0,
+                "additional_modes_may_exist": True,
+            },
+            "subwindows": [
+                {
+                    "index": 0,
+                    "requested_hz": [1.0e8, 5.0e9],
+                    "search_hz": [7.5e7, 5.125e9],
+                    "shift_hz": 2.55e9,
+                    "shift_frequency_hz": 2.55e9,
+                    "shift_omega_rad_s": 16022122533.30759,
+                    "outer_iterations": 1,
+                    "linear_iterations_total": 3,
+                    "candidate_modes": 2,
+                    "accepted_modes": 1,
+                    "residual_max": 1.0e-9,
+                    "stop_reason": "converged",
+                }
+            ],
+        },
+    )
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "solver_diagnostics.requested_mode_count" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_solver_mode_count_that_exceeds_published_modes(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(
+        tmp_path,
+        solver_diagnostics_override={
+            "schema_version": "frequency_domain_modal_solver_diagnostics.v1",
+            "study_product": "modal_eigen",
+            "status": "ready",
+            "complete": True,
+            "solver_model": "shift_invert",
+            "resolved_solver_family": "shift_invert",
+            "spectral_transform": "shift_invert",
+            "sample_count": 1,
+            "mode_count": 2,
+            "requested_mode_count": 2,
+            "requested_window_hz": [1.0e8, 5.0e9],
+            "resolved_search_window_hz": [7.5e7, 5.125e9],
+            "window_completeness": {
+                "policy": "best_effort",
+                "status": "not_certified",
+                "certification_method": "none",
+                "estimated_modes_in_window": 1,
+                "certified_modes_in_window": 0,
+                "additional_modes_may_exist": True,
+            },
+            "subwindows": [
+                {
+                    "index": 0,
+                    "requested_hz": [1.0e8, 5.0e9],
+                    "search_hz": [7.5e7, 5.125e9],
+                    "shift_hz": 2.55e9,
+                    "shift_frequency_hz": 2.55e9,
+                    "shift_omega_rad_s": 16022122533.30759,
+                    "outer_iterations": 1,
+                    "linear_iterations_total": 3,
+                    "candidate_modes": 2,
+                    "accepted_modes": 1,
+                    "residual_max": 1.0e-9,
+                    "stop_reason": "converged",
+                }
+            ],
+        },
+    )
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "solver_diagnostics.mode_count" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_truncated_window_below_requested_mode_count(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(
+        tmp_path,
+        solver_diagnostics_override={
+            "schema_version": "frequency_domain_modal_solver_diagnostics.v1",
+            "study_product": "modal_eigen",
+            "status": "ready",
+            "complete": True,
+            "solver_model": "shift_invert",
+            "resolved_solver_family": "shift_invert",
+            "spectral_transform": "shift_invert",
+            "sample_count": 1,
+            "mode_count": 1,
+            "requested_mode_count": 2,
+            "requested_window_hz": [1.0e8, 5.0e9],
+            "resolved_search_window_hz": [7.5e7, 5.125e9],
+            "window_completeness": {
+                "policy": "best_effort",
+                "status": "truncated_by_requested_count",
+                "certification_method": "mode_cap",
+                "estimated_modes_in_window": 1,
+                "certified_modes_in_window": 0,
+                "additional_modes_may_exist": True,
+            },
+            "subwindows": [
+                {
+                    "index": 0,
+                    "requested_hz": [1.0e8, 5.0e9],
+                    "search_hz": [7.5e7, 5.125e9],
+                    "shift_hz": 2.55e9,
+                    "shift_frequency_hz": 2.55e9,
+                    "shift_omega_rad_s": 16022122533.30759,
+                    "outer_iterations": 1,
+                    "linear_iterations_total": 3,
+                    "candidate_modes": 2,
+                    "accepted_modes": 1,
+                    "residual_max": 1.0e-9,
+                    "stop_reason": "converged",
+                }
+            ],
+        },
+    )
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "truncated_by_requested_count" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_truncated_window_without_possible_extra_modes(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(
+        tmp_path,
+        solver_diagnostics_override={
+            "schema_version": "frequency_domain_modal_solver_diagnostics.v1",
+            "study_product": "modal_eigen",
+            "status": "ready",
+            "complete": True,
+            "solver_model": "shift_invert",
+            "resolved_solver_family": "shift_invert",
+            "spectral_transform": "shift_invert",
+            "sample_count": 1,
+            "mode_count": 2,
+            "requested_mode_count": 2,
+            "requested_window_hz": [1.0e8, 5.0e9],
+            "resolved_search_window_hz": [7.5e7, 5.125e9],
+            "window_completeness": {
+                "policy": "best_effort",
+                "status": "truncated_by_requested_count",
+                "certification_method": "mode_cap",
+                "estimated_modes_in_window": 2,
+                "certified_modes_in_window": 0,
+                "additional_modes_may_exist": False,
+            },
+            "subwindows": [
+                {
+                    "index": 0,
+                    "requested_hz": [1.0e8, 5.0e9],
+                    "search_hz": [7.5e7, 5.125e9],
+                    "shift_hz": 2.55e9,
+                    "shift_frequency_hz": 2.55e9,
+                    "shift_omega_rad_s": 16022122533.30759,
+                    "outer_iterations": 1,
+                    "linear_iterations_total": 3,
+                    "candidate_modes": 2,
+                    "accepted_modes": 2,
+                    "residual_max": 1.0e-9,
+                    "stop_reason": "converged",
+                }
+            ],
+        },
+    )
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "additional_modes_may_exist" in (result.stderr + result.stdout)
 
 
 def test_validator_requires_production_shift_invert_provenance_when_requested(
@@ -770,6 +1276,7 @@ def test_validator_accepts_production_shift_invert_window_provenance(
             "dense_reference_oracle": False,
             "sample_count": 1,
             "mode_count": 1,
+            "requested_mode_count": 1,
             "requested_window_hz": [1.0e8, 5.0e9],
             "resolved_search_window_hz": [7.5e7, 5.125e9],
             "window_completeness": {
@@ -804,6 +1311,463 @@ def test_validator_accepts_production_shift_invert_window_provenance(
     assert result.returncode == 0, result.stderr + result.stdout
 
 
+def test_validator_requires_reference_full_2x2_floquet_when_requested(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+
+    result = run_validator(tmp_path, "--require-reference-full-2x2-floquet")
+
+    assert result.returncode != 0
+    assert "solver_diagnostics.solver_model" in (result.stderr + result.stdout)
+
+
+def test_validator_accepts_reference_full_2x2_floquet_when_requested(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(
+        tmp_path,
+        solver_diagnostics_override={
+            "schema_version": "frequency_domain_modal_solver_diagnostics.v1",
+            "study_product": "modal_eigen",
+            "status": "ready",
+            "complete": True,
+            "solver_model": "reference_full_2x2_tangent",
+            "resolved_solver_family": "reference_full_2x2_tangent",
+            "spectral_transform": "none",
+            "solver_notes": [
+                "1 sample(s) generated from k_sampling",
+                "cpu_full_2x2_phase_reduced_floquet",
+            ],
+            "basis_transport_policy": "tangent_frame_transport",
+            "floquet_tangent_frame_max_mismatch": 0.0,
+            "floquet_tangent_transport_max_nonunitarity": 0.0,
+            "sample_count": 1,
+            "mode_count": 1,
+        },
+    )
+    mode_path = tmp_path / "eigen" / "modes" / "sample_0000" / "mode_0000.json"
+    mode = json.loads(mode_path.read_text())
+    mode["solver_model"] = "cpu_full_2x2_phase_reduced_floquet"
+    mode_path.write_text(json.dumps(mode))
+
+    result = run_validator(tmp_path, "--require-reference-full-2x2-floquet")
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_rejects_reference_full_2x2_floquet_window_without_reference_policy(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(
+        tmp_path,
+        solver_diagnostics_override={
+            "schema_version": "frequency_domain_modal_solver_diagnostics.v1",
+            "study_product": "modal_eigen",
+            "status": "ready",
+            "complete": True,
+            "solver_model": "reference_full_2x2_tangent",
+            "resolved_solver_family": "reference_full_2x2_tangent",
+            "spectral_transform": "none",
+            "solver_notes": [
+                "3 sample(s) generated from k_sampling",
+                "cpu_full_2x2_phase_reduced_floquet",
+            ],
+            "basis_transport_policy": "tangent_frame_transport",
+            "floquet_tangent_frame_max_mismatch": 0.0,
+            "floquet_tangent_transport_max_nonunitarity": 0.0,
+            "sample_count": 3,
+            "mode_count": 1,
+            "requested_mode_count": 1,
+            "requested_window_hz": [1.0, 1.0e13],
+            "resolved_search_window_hz": [0.0, 1.125e13],
+            "window_completeness": {
+                "policy": "best_effort",
+                "status": "not_certified",
+                "certification_method": "none",
+                "estimated_modes_in_window": 1,
+                "certified_modes_in_window": 0,
+                "additional_modes_may_exist": True,
+            },
+            "subwindows": [
+                {
+                    "index": 0,
+                    "requested_hz": [1.0, 1.0e13],
+                    "search_hz": [0.0, 1.125e13],
+                    "shift_hz": 5.0e12,
+                    "shift_frequency_hz": 5.0e12,
+                    "shift_omega_rad_s": 3.141592653589793e13,
+                    "outer_iterations": 0,
+                    "linear_iterations_total": 0,
+                    "candidate_modes": 1,
+                    "accepted_modes": 1,
+                    "residual_max": 0.0,
+                    "stop_reason": "window_exhausted",
+                }
+            ],
+        },
+    )
+    mode_path = tmp_path / "eigen" / "modes" / "sample_0000" / "mode_0000.json"
+    mode = json.loads(mode_path.read_text())
+    mode["solver_model"] = "cpu_full_2x2_phase_reduced_floquet"
+    mode_path.write_text(json.dumps(mode))
+
+    result = run_validator(tmp_path, "--require-reference-full-2x2-floquet")
+
+    assert result.returncode != 0
+    assert "frequency_window_solver_policy" in (result.stderr + result.stdout)
+
+
+def test_validator_accepts_reference_full_2x2_floquet_window_with_reference_policy(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(
+        tmp_path,
+        solver_diagnostics_override={
+            "schema_version": "frequency_domain_modal_solver_diagnostics.v1",
+            "study_product": "modal_eigen",
+            "status": "ready",
+            "complete": True,
+            "solver_model": "reference_full_2x2_tangent",
+            "resolved_solver_family": "reference_full_2x2_tangent",
+            "spectral_transform": "none",
+            "solver_notes": [
+                "3 sample(s) generated from k_sampling",
+                "cpu_full_2x2_phase_reduced_floquet",
+            ],
+            "basis_transport_policy": "tangent_frame_transport",
+            "floquet_tangent_frame_max_mismatch": 0.0,
+            "floquet_tangent_transport_max_nonunitarity": 0.0,
+            "sample_count": 3,
+            "mode_count": 1,
+            "production_solver_available": False,
+            "frequency_window_solver_policy": (
+                "reference_k_path_window_filter_not_shift_invert_or_feast"
+            ),
+            "requested_window_hz": [1.0, 1.0e13],
+            "requested_mode_count": 1,
+            "resolved_search_window_hz": [0.0, 1.125e13],
+            "window_completeness": {
+                "policy": "best_effort",
+                "status": "not_certified",
+                "certification_method": "none",
+                "estimated_modes_in_window": 1,
+                "certified_modes_in_window": 0,
+                "additional_modes_may_exist": True,
+            },
+            "subwindows": [
+                {
+                    "index": 0,
+                    "requested_hz": [1.0, 1.0e13],
+                    "search_hz": [0.0, 1.125e13],
+                    "shift_hz": 5.0e12,
+                    "shift_frequency_hz": 5.0e12,
+                    "shift_omega_rad_s": 3.141592653589793e13,
+                    "outer_iterations": 0,
+                    "linear_iterations_total": 0,
+                    "candidate_modes": 1,
+                    "accepted_modes": 1,
+                    "residual_max": 0.0,
+                    "stop_reason": "window_exhausted",
+                }
+            ],
+        },
+    )
+    mode_path = tmp_path / "eigen" / "modes" / "sample_0000" / "mode_0000.json"
+    mode = json.loads(mode_path.read_text())
+    mode["solver_model"] = "cpu_full_2x2_phase_reduced_floquet"
+    mode_path.write_text(json.dumps(mode))
+
+    result = run_validator(tmp_path, "--require-reference-full-2x2-floquet")
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_rejects_reference_k_path_when_production_modal_k_path_required(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(
+        tmp_path,
+        solver_diagnostics_override={
+            "schema_version": "frequency_domain_modal_solver_diagnostics.v1",
+            "study_product": "modal_eigen",
+            "status": "ready",
+            "complete": True,
+            "solver_model": "reference_full_2x2_tangent",
+            "resolved_solver_family": "reference_full_2x2_tangent",
+            "spectral_transform": "none",
+            "solver_notes": [
+                "3 sample(s) generated from k_sampling",
+                "cpu_full_2x2_phase_reduced_floquet",
+            ],
+            "basis_transport_policy": "tangent_frame_transport",
+            "floquet_tangent_frame_max_mismatch": 0.0,
+            "floquet_tangent_transport_max_nonunitarity": 0.0,
+            "sample_count": 3,
+            "mode_count": 1,
+            "production_solver_available": False,
+            "frequency_window_solver_policy": (
+                "reference_k_path_window_filter_not_shift_invert_or_feast"
+            ),
+            "requested_window_hz": [1.0, 1.0e13],
+            "requested_mode_count": 1,
+            "resolved_search_window_hz": [0.0, 1.125e13],
+            "window_completeness": {
+                "policy": "best_effort",
+                "status": "not_certified",
+                "certification_method": "none",
+                "estimated_modes_in_window": 1,
+                "certified_modes_in_window": 0,
+                "additional_modes_may_exist": True,
+            },
+            "subwindows": [
+                {
+                    "index": 0,
+                    "requested_hz": [1.0, 1.0e13],
+                    "search_hz": [0.0, 1.125e13],
+                    "shift_hz": 5.0e12,
+                    "shift_frequency_hz": 5.0e12,
+                    "shift_omega_rad_s": 3.141592653589793e13,
+                    "outer_iterations": 0,
+                    "linear_iterations_total": 0,
+                    "candidate_modes": 1,
+                    "accepted_modes": 1,
+                    "residual_max": 0.0,
+                    "stop_reason": "window_exhausted",
+                }
+            ],
+        },
+    )
+
+    result = run_validator(tmp_path, "--require-production-modal-k-path")
+
+    assert result.returncode != 0
+    assert "production modal k-path" in (result.stderr + result.stdout)
+
+
+def test_validator_accepts_production_modal_k_path_provenance(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(
+        tmp_path,
+        solver_diagnostics_override={
+            "schema_version": "frequency_domain_modal_solver_diagnostics.v1",
+            "study_product": "modal_eigen",
+            "status": "ready",
+            "complete": True,
+            "algebraic_form": "gyrotropic_generalized",
+            "matrix_equation": "A q = lambda B q",
+            "phasor_convention": "exp_i_omega_t",
+            "eigenvalue_mapping": "lambda_eq_i_omega",
+            "production_gyrotropic_mapping": True,
+            "solver_model": "slepc_multi_shift_invert_production_cpu_dense",
+            "solver_family": "slepc_multi_shift_invert_production_cpu_dense",
+            "resolved_solver_family": "shift_invert",
+            "spectral_transform": "shift_invert",
+            "solver_adapter": "slepc_modal_eigen",
+            "execution_lane": "production_cpu",
+            "production_solver_available": True,
+            "dense_reference_oracle": False,
+            "sample_count": 3,
+            "mode_count": 1,
+            "requested_mode_count": 1,
+            "requested_window_hz": [1.0, 1.0e13],
+            "resolved_search_window_hz": [0.0, 1.125e13],
+            "window_completeness": {
+                "policy": "best_effort",
+                "status": "not_certified",
+                "certification_method": "none",
+                "estimated_modes_in_window": 1,
+                "certified_modes_in_window": 0,
+                "additional_modes_may_exist": True,
+            },
+            "subwindows": [
+                {
+                    "index": 0,
+                    "requested_hz": [1.0, 1.0e13],
+                    "search_hz": [0.0, 1.125e13],
+                    "shift_hz": 5.0e12,
+                    "shift_frequency_hz": 5.0e12,
+                    "shift_omega_rad_s": 3.141592653589793e13,
+                    "outer_iterations": 1,
+                    "linear_iterations_total": 3,
+                    "candidate_modes": 2,
+                    "accepted_modes": 1,
+                    "residual_max": 1.0e-9,
+                    "stop_reason": "converged",
+                }
+            ],
+        },
+        manifest_physics_override={
+            "analysis_family": "magnetic_frequency_domain",
+            "phase_convention": "exp_i_omega_t",
+            "frequency_units": "Hz",
+            "field_units": "dimensionless_delta_m",
+            "normalization": "unit_l2",
+        },
+    )
+
+    result = run_validator(tmp_path, "--require-production-modal-k-path")
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_rejects_production_modal_k_path_wrong_phasor_convention(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(
+        tmp_path,
+        solver_diagnostics_override={
+            "schema_version": "frequency_domain_modal_solver_diagnostics.v1",
+            "study_product": "modal_eigen",
+            "status": "ready",
+            "complete": True,
+            "algebraic_form": "gyrotropic_generalized",
+            "matrix_equation": "A q = lambda B q",
+            "phasor_convention": "exp_minus_i_omega_t",
+            "eigenvalue_mapping": "lambda_eq_i_omega",
+            "production_gyrotropic_mapping": True,
+            "solver_model": "slepc_multi_shift_invert_production_cpu_dense",
+            "solver_family": "slepc_multi_shift_invert_production_cpu_dense",
+            "resolved_solver_family": "shift_invert",
+            "spectral_transform": "shift_invert",
+            "solver_adapter": "slepc_modal_eigen",
+            "execution_lane": "production_cpu",
+            "production_solver_available": True,
+            "dense_reference_oracle": False,
+            "sample_count": 3,
+            "mode_count": 1,
+            "requested_mode_count": 1,
+            "requested_window_hz": [1.0, 1.0e13],
+            "resolved_search_window_hz": [0.0, 1.125e13],
+            "window_completeness": {
+                "policy": "best_effort",
+                "status": "not_certified",
+                "certification_method": "none",
+                "estimated_modes_in_window": 1,
+                "certified_modes_in_window": 0,
+                "additional_modes_may_exist": True,
+            },
+            "subwindows": [
+                {
+                    "index": 0,
+                    "requested_hz": [1.0, 1.0e13],
+                    "search_hz": [0.0, 1.125e13],
+                    "shift_hz": 5.0e12,
+                    "shift_frequency_hz": 5.0e12,
+                    "shift_omega_rad_s": 3.141592653589793e13,
+                    "outer_iterations": 1,
+                    "linear_iterations_total": 3,
+                    "candidate_modes": 2,
+                    "accepted_modes": 1,
+                    "residual_max": 1.0e-9,
+                    "stop_reason": "converged",
+                }
+            ],
+        },
+    )
+
+    result = run_validator(tmp_path, "--require-production-modal-k-path")
+
+    assert result.returncode != 0
+    assert "solver_diagnostics.phasor_convention" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_production_modal_k_path_manifest_phasor_mismatch(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(
+        tmp_path,
+        solver_diagnostics_override={
+            "schema_version": "frequency_domain_modal_solver_diagnostics.v1",
+            "study_product": "modal_eigen",
+            "status": "ready",
+            "complete": True,
+            "algebraic_form": "gyrotropic_generalized",
+            "matrix_equation": "A q = lambda B q",
+            "phasor_convention": "exp_i_omega_t",
+            "eigenvalue_mapping": "lambda_eq_i_omega",
+            "production_gyrotropic_mapping": True,
+            "solver_model": "slepc_multi_shift_invert_production_cpu_dense",
+            "solver_family": "slepc_multi_shift_invert_production_cpu_dense",
+            "resolved_solver_family": "shift_invert",
+            "spectral_transform": "shift_invert",
+            "solver_adapter": "slepc_modal_eigen",
+            "execution_lane": "production_cpu",
+            "production_solver_available": True,
+            "dense_reference_oracle": False,
+            "sample_count": 3,
+            "mode_count": 1,
+            "requested_mode_count": 1,
+            "requested_window_hz": [1.0, 1.0e13],
+            "resolved_search_window_hz": [0.0, 1.125e13],
+            "window_completeness": {
+                "policy": "best_effort",
+                "status": "not_certified",
+                "certification_method": "none",
+                "estimated_modes_in_window": 1,
+                "certified_modes_in_window": 0,
+                "additional_modes_may_exist": True,
+            },
+            "subwindows": [
+                {
+                    "index": 0,
+                    "requested_hz": [1.0, 1.0e13],
+                    "search_hz": [0.0, 1.125e13],
+                    "shift_hz": 5.0e12,
+                    "shift_frequency_hz": 5.0e12,
+                    "shift_omega_rad_s": 3.141592653589793e13,
+                    "outer_iterations": 1,
+                    "linear_iterations_total": 3,
+                    "candidate_modes": 2,
+                    "accepted_modes": 1,
+                    "residual_max": 1.0e-9,
+                    "stop_reason": "converged",
+                }
+            ],
+        },
+    )
+
+    result = run_validator(tmp_path, "--require-production-modal-k-path")
+
+    assert result.returncode != 0
+    assert "manifest.physics.phase_convention" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_reference_full_2x2_floquet_without_transport_policy(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(
+        tmp_path,
+        solver_diagnostics_override={
+            "schema_version": "frequency_domain_modal_solver_diagnostics.v1",
+            "study_product": "modal_eigen",
+            "status": "ready",
+            "complete": True,
+            "solver_model": "reference_full_2x2_tangent",
+            "resolved_solver_family": "reference_full_2x2_tangent",
+            "spectral_transform": "none",
+            "solver_notes": [
+                "1 sample(s) generated from k_sampling",
+                "cpu_full_2x2_phase_reduced_floquet",
+            ],
+            "sample_count": 1,
+            "mode_count": 1,
+        },
+    )
+    mode_path = tmp_path / "eigen" / "modes" / "sample_0000" / "mode_0000.json"
+    mode = json.loads(mode_path.read_text())
+    mode["solver_model"] = "cpu_full_2x2_phase_reduced_floquet"
+    mode_path.write_text(json.dumps(mode))
+
+    result = run_validator(tmp_path, "--require-reference-full-2x2-floquet")
+
+    assert result.returncode != 0
+    assert "solver_diagnostics.basis_transport_policy" in (
+        result.stderr + result.stdout
+    )
+
+
 def test_validator_rejects_production_window_mode_outside_requested_range(
     tmp_path: Path,
 ) -> None:
@@ -824,6 +1788,7 @@ def test_validator_rejects_production_window_mode_outside_requested_range(
             "dense_reference_oracle": False,
             "sample_count": 1,
             "mode_count": 1,
+            "requested_mode_count": 1,
             "requested_window_hz": [2.0e9, 3.0e9],
             "resolved_search_window_hz": [1.9e9, 3.1e9],
             "window_completeness": {

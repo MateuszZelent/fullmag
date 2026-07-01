@@ -49,6 +49,12 @@ def write_unit_artifact(root: Path) -> None:
         root,
         e_demag=1.0e-18,
         final_torque=4.0e3,
+        m_initial_values=[
+            [0.0, 1.0, 0.0],
+            [0.01, 0.99, 0.0],
+            [0.02, 0.98, 0.0],
+            [0.03, 0.97, 0.0],
+        ],
         m_values=[
             [1.0, 0.0, 0.0],
             [0.99, 0.01, 0.0],
@@ -69,7 +75,22 @@ def write_unit_artifact(root: Path) -> None:
             0.0,
             0.0,
         ],
+        h_initial_values=[
+            100.0,
+            200.0,
+            300.0,
+            400.0,
+            10.0,
+            20.0,
+            30.0,
+            40.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
         phi_values=[1.0e-3, 2.0e-3, 3.0e-3, 4.0e-3],
+        phi_initial_values=[10.0e-3, 20.0e-3, 30.0e-3, 40.0e-3],
     )
     write_node_geometry(root, magnetic_node_mask=[True, True, True, True], nodes_m=nodes)
     add_metadata_mesh(
@@ -141,6 +162,56 @@ def test_tiled_supercell_fixture_passes_strict_same_local_comparator(tmp_path: P
     assert payload["mapped_central_cell_comparability"]["same_local_discretization"] is True
     assert payload["metrics"]["mapped_max_nearest_field_node_distance_m"] < 1.0e-20
     assert payload["metrics"]["mapped_max_nearest_magnetic_node_distance_m"] < 1.0e-20
+    assert payload["metrics"]["mapped_m_p99_l2_delta"] == 0.0
+    assert payload["metrics"]["mapped_h_demag_p99_relative_error"] == 0.0
+    assert payload["metrics"]["mapped_demag_phi_max_abs_delta_after_offset_A"] == 0.0
+
+
+def test_tiled_supercell_fixture_preserves_initial_state_and_field_samples(tmp_path: Path) -> None:
+    unit = tmp_path / "unit" / "artifacts"
+    supercell = tmp_path / "supercell" / "artifacts"
+    report = tmp_path / "reports" / "supercell_initial_validation.v1.json"
+    write_unit_artifact(unit)
+
+    result = run_script(
+        "--unit-cell",
+        str(unit),
+        "--output",
+        str(supercell),
+        "--repeat-x",
+        "3",
+        "--repeat-y",
+        "3",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert len(json.loads((supercell / "m_initial.json").read_text(encoding="utf-8"))["values"]) == 36
+    h_array = json.loads((supercell / "fields" / "H_demag.zarr" / ".zarray").read_text(encoding="utf-8"))
+    assert h_array["shape"] == [2, 3, 36]
+    h_samples = (supercell / "fields" / "H_demag.zarr" / "samples.csv").read_text(encoding="utf-8")
+    assert "0,0,0.0,0.0,0.0.0" in h_samples
+    assert "1,4,0.0,0.0,1.0.0" in h_samples
+
+    compare = run_compare(
+        "supercell",
+        "--unit-cell",
+        str(unit),
+        "--supercell",
+        str(supercell),
+        "--repeat-x",
+        "3",
+        "--repeat-y",
+        "3",
+        "--state",
+        "initial",
+        "--report",
+        str(report),
+    )
+
+    assert compare.returncode == 0, compare.stderr
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["status"] == "ok"
+    assert payload["comparison_state"] == "initial"
     assert payload["metrics"]["mapped_m_p99_l2_delta"] == 0.0
     assert payload["metrics"]["mapped_h_demag_p99_relative_error"] == 0.0
     assert payload["metrics"]["mapped_demag_phi_max_abs_delta_after_offset_A"] == 0.0

@@ -32,6 +32,7 @@ const RELAX_MAX_STEPS: u64 = 4_000;
 const SPARSE_EIGEN_THRESHOLD: usize = 3_000;
 const FLOQUET_DYNAMIC_DEMAG_UNSUPPORTED: &str = "dynamic demag for Floquet periodic FEM is not implemented yet. Disable demag or use k=0/free boundary.";
 const NATIVE_CPU_MODAL_WINDOW_SOLVER_KIND: &str = "slepc_multi_shift_invert_production_cpu_dense";
+const TANGENT_FRAME_IDENTITY_TOLERANCE: f64 = 1.0e-8;
 
 #[derive(Debug, Clone)]
 pub(crate) struct FemEigenProgress {
@@ -393,7 +394,7 @@ fn native_cpu_modal_window_enabled(plan: &FemEigenPlanIR) -> bool {
             plan.spin_wave_bc.kind(),
             fullmag_ir::SpinWaveBoundaryKindIR::Free
         )
-        && plan.k_sampling.is_none()
+        && is_gamma_k_sampling(plan.k_sampling.as_ref())
 }
 
 fn execute_fem_eigen_inner(
@@ -689,13 +690,24 @@ fn execute_fem_eigen_inner(
         solver_kind = "cpu_sparse_lobpcg";
     }
     let complex_eigenpairs = if complex_reduction {
-        let (stiffness, mass) = assemble_projected_scalar_operator_complex(
-            plan,
-            topology,
-            &reduction,
-            &observables,
-            &equilibrium,
-        );
+        let (stiffness, mass) = if is_full_2x2 {
+            assemble_projected_full_2x2_operator_complex(
+                plan,
+                topology,
+                &reduction,
+                &observables,
+                &equilibrium,
+                &bases,
+            )
+        } else {
+            assemble_projected_scalar_operator_complex(
+                plan,
+                topology,
+                &reduction,
+                &observables,
+                &equilibrium,
+            )
+        };
         solve_complex_hermitian_eigenpairs(plan, stiffness, mass)?
     } else {
         Vec::new()
@@ -756,13 +768,21 @@ fn execute_fem_eigen_inner(
             norm,
         ) = if complex_reduction {
             let pair = &complex_eigenpairs[mode_index];
-            let (real, imag, amplitude, phase, max_amplitude) =
+            let (real, imag, amplitude, phase, max_amplitude) = if is_full_2x2 {
+                project_complex_2x2_mode_to_tangent_basis(
+                    topology.n_nodes,
+                    &reduction.active_nodes,
+                    &pair.vector,
+                    &bases,
+                )
+            } else {
                 project_complex_mode_to_tangent_basis(
                     topology.n_nodes,
                     &reduction.active_nodes,
                     &pair.vector,
                     &bases,
-                );
+                )
+            };
             let norm = pair
                 .vector
                 .iter()
@@ -961,7 +981,7 @@ fn execute_fem_eigen_inner(
         }
     }
 
-    let summary_payload = serde_json::json!({
+    let mut summary_payload = serde_json::json!({
         "study_kind": "eigenmodes",
         "solver_backend": "cpu_baseline_fem_eigen",
         "solver_kind": solver_kind,
@@ -1008,6 +1028,10 @@ fn execute_fem_eigen_inner(
         "relaxation_steps": relaxation_steps,
         "modes": modes_summary,
     });
+    merge_modal_transport_diagnostics(
+        &mut summary_payload["solver_diagnostics"],
+        modal_tangent_transport_diagnostics(plan),
+    );
 
     if wants_spectrum {
         auxiliary_artifacts.push(json_artifact("eigen/spectrum.json", &summary_payload)?);
@@ -1160,7 +1184,7 @@ fn execute_native_cpu_modal_window_from_full_2x2(
         demag_realization: resolved_demag_realization(plan).map(|value| value.provenance_name()),
         damping_policy: native_modal_damping_policy(plan.damping_policy),
         spin_wave_bc_kind: native_modal_spin_wave_bc_kind(&plan.spin_wave_bc),
-        k_vector_rad_m: None,
+        k_vector_rad_m: native_modal_k_vector(plan.k_sampling.as_ref()),
         operator_diagnostics_json: Some(
             "{\"schema_version\":\"frequency_domain_operator_diagnostics.v1\",\
              \"payload_kind\":\"rust_full_2x2_dense_operator\",\
@@ -1416,11 +1440,17 @@ fn native_solver_diagnostics_json(
         plan.target,
         fullmag_ir::EigenTargetIR::FrequencyWindow { .. }
     ) {
+        object
+            .entry("requested_mode_count".to_string())
+            .or_insert_with(|| serde_json::json!(plan.count));
         let accepted_modes = object
             .get("accepted_mode_count_after_dedup")
             .or_else(|| object.get("accepted_mode_count"))
             .and_then(|value| value.as_u64())
             .unwrap_or(0);
+        object
+            .entry("mode_count".to_string())
+            .or_insert_with(|| serde_json::json!(accepted_modes));
         object
             .entry("window_completeness".to_string())
             .or_insert_with(|| {
@@ -1860,34 +1890,6 @@ fn native_modal_artifacts(
     Ok(auxiliary_artifacts)
 }
 
-fn project_complex_2x2_mode_to_tangent_basis(
-    total_nodes: usize,
-    active_nodes: &[usize],
-    amplitudes: &[Complex64],
-    bases: &[(Vector3, Vector3)],
-) -> (Vec<Vector3>, Vec<Vector3>, Vec<f64>, Vec<f64>, f64) {
-    let n = active_nodes.len();
-    let mut real = vec![[0.0, 0.0, 0.0]; total_nodes];
-    let mut imag = vec![[0.0, 0.0, 0.0]; total_nodes];
-    let mut amplitude = vec![0.0; total_nodes];
-    let mut phase = vec![0.0; total_nodes];
-    let mut max_amplitude: f64 = 0.0;
-
-    for (reduced_index, node_index) in active_nodes.iter().enumerate() {
-        let u1 = amplitudes[reduced_index];
-        let u2 = amplitudes[reduced_index + n];
-        let (e1, e2) = bases[*node_index];
-        real[*node_index] = add_vector(scale_vector(e1, u1.re), scale_vector(e2, u2.re));
-        imag[*node_index] = add_vector(scale_vector(e1, u1.im), scale_vector(e2, u2.im));
-        let amp = (u1.norm_sqr() + u2.norm_sqr()).sqrt();
-        amplitude[*node_index] = amp;
-        phase[*node_index] = (u1.im + u2.im).atan2(u1.re + u2.re);
-        max_amplitude = max_amplitude.max(amp);
-    }
-
-    (real, imag, amplitude, phase, max_amplitude)
-}
-
 fn execution_provenance(plan: &FemEigenPlanIR, used_gpu: bool) -> ExecutionProvenance {
     let engine = if used_gpu {
         format!("gpu_cusolver_fem_eigen/{}", solver_kind_label(plan))
@@ -1952,6 +1954,7 @@ fn materialize_equilibrium(
     let topology = MeshTopology::from_ir(&plan.mesh).map_err(|error| RunError {
         message: format!("MeshTopology: {}", error),
     })?;
+    validate_tangent_frame_transport_support(plan, &topology, &equilibrium_guess)?;
     let material = MaterialParameters::new(
         plan.material.saturation_magnetisation,
         plan.material.exchange_stiffness,
@@ -2214,6 +2217,40 @@ fn is_gamma_k_sampling(k_sampling: Option<&KSamplingIR>) -> bool {
     }
 }
 
+fn validate_tangent_frame_transport_support(
+    plan: &FemEigenPlanIR,
+    topology: &MeshTopology,
+    equilibrium: &[Vector3],
+) -> Result<(), RunError> {
+    let kind = plan.spin_wave_bc.kind();
+    if !matches!(
+        kind,
+        SpinWaveBoundaryKindIR::Periodic | SpinWaveBoundaryKindIR::Floquet
+    ) || topology.periodic_node_pairs.is_empty()
+    {
+        return Ok(());
+    }
+    let requested_pair_ids = plan.spin_wave_bc.boundary_pair_ids();
+    let selected_pairs = topology
+        .periodic_node_pairs
+        .iter()
+        .filter(|(pair_id, _, _)| {
+            requested_pair_ids.is_empty()
+                || requested_pair_ids
+                    .iter()
+                    .any(|requested| *requested == pair_id)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if selected_pairs.is_empty() {
+        return Ok(());
+    }
+    if matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2) {
+        return Ok(());
+    }
+    reject_nonidentity_tangent_frame_transport(topology, &selected_pairs, equilibrium)
+}
+
 #[derive(Debug, Clone)]
 struct PhaseGroups {
     roots: Vec<usize>,
@@ -2283,7 +2320,6 @@ fn phase_reduction(
             ),
         });
     }
-
     let dof_map = if let Some(k) = k_vector {
         PeriodicDofMap::from_periodic_pair_tuples_floquet(
             topology.n_nodes,
@@ -2311,6 +2347,129 @@ fn phase_reduction(
         .collect::<Vec<_>>();
 
     Ok(Some(PhaseGroups { roots, phases }))
+}
+
+fn reject_nonidentity_tangent_frame_transport(
+    topology: &MeshTopology,
+    selected_pairs: &[(String, u32, u32)],
+    equilibrium: &[Vector3],
+) -> Result<(), RunError> {
+    if equilibrium.len() < topology.n_nodes {
+        return Err(RunError {
+            message: format!(
+                "periodic/Floquet modal tangent-frame transport cannot be validated: \
+                 equilibrium has {} nodes but mesh has {} nodes",
+                equilibrium.len(),
+                topology.n_nodes
+            ),
+        });
+    }
+    let bases = tangent_bases(equilibrium);
+    let mut max_mismatch: f64 = 0.0;
+    let mut worst_pair: Option<(&str, usize, usize)> = None;
+    for (pair_id, node_a, node_b) in selected_pairs {
+        let node_a = *node_a as usize;
+        let node_b = *node_b as usize;
+        if topology.magnetic_node_volumes[node_a] <= 0.0
+            || topology.magnetic_node_volumes[node_b] <= 0.0
+        {
+            continue;
+        }
+        let mismatch = tangent_frame_identity_mismatch(bases[node_a], bases[node_b]);
+        if mismatch > max_mismatch {
+            max_mismatch = mismatch;
+            worst_pair = Some((pair_id.as_str(), node_a, node_b));
+        }
+    }
+    if max_mismatch > TANGENT_FRAME_IDENTITY_TOLERANCE {
+        let (pair_id, node_a, node_b) = worst_pair.unwrap_or(("unknown", 0, 0));
+        return Err(RunError {
+            message: format!(
+                "periodic/Floquet modal tangent-frame transport requires full \
+                 phase*(T_dst^T T_src) support; the current reference runner only \
+                 supports identity tangent-frame transport. pair_id='{pair_id}' \
+                 node_a={node_a} node_b={node_b} \
+                 tangent_frame_mismatch={max_mismatch:.6e} \
+                 tolerance={TANGENT_FRAME_IDENTITY_TOLERANCE:.6e}"
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn tangent_frame_identity_mismatch(src: (Vector3, Vector3), dst: (Vector3, Vector3)) -> f64 {
+    let transport = tangent_transport_matrix(src, dst);
+    ((transport[0][0] - 1.0).powi(2)
+        + transport[0][1].powi(2)
+        + transport[1][0].powi(2)
+        + (transport[1][1] - 1.0).powi(2))
+    .sqrt()
+}
+
+fn tangent_transport_matrix(src: (Vector3, Vector3), dst: (Vector3, Vector3)) -> [[f64; 2]; 2] {
+    let (src_e1, src_e2) = src;
+    let (dst_e1, dst_e2) = dst;
+    [
+        [dot(dst_e1, src_e1), dot(dst_e1, src_e2)],
+        [dot(dst_e2, src_e1), dot(dst_e2, src_e2)],
+    ]
+}
+
+fn tangent_transport_nonunitarity(transport: [[f64; 2]; 2]) -> f64 {
+    let c00 = transport[0][0] * transport[0][0] + transport[1][0] * transport[1][0];
+    let c01 = transport[0][0] * transport[0][1] + transport[1][0] * transport[1][1];
+    let c10 = transport[0][1] * transport[0][0] + transport[1][1] * transport[1][0];
+    let c11 = transport[0][1] * transport[0][1] + transport[1][1] * transport[1][1];
+    ((c00 - 1.0).powi(2) + c01.powi(2) + c10.powi(2) + (c11 - 1.0).powi(2)).sqrt()
+}
+
+fn tangent_transport_to_root(
+    node: usize,
+    root: usize,
+    bases: &[(Vector3, Vector3)],
+) -> [[f64; 2]; 2] {
+    let (node_e1, node_e2) = bases[node];
+    let (root_e1, root_e2) = bases[root];
+    [
+        [dot(node_e1, root_e1), dot(node_e1, root_e2)],
+        [dot(node_e2, root_e1), dot(node_e2, root_e2)],
+    ]
+}
+
+fn project_local_tangent_block_to_reduced(
+    coeff: Complex64,
+    row_transport: [[f64; 2]; 2],
+    local_block: [[f64; 2]; 2],
+    col_transport: [[f64; 2]; 2],
+) -> [[Complex64; 2]; 2] {
+    let mut reduced = [[Complex64::new(0.0, 0.0); 2]; 2];
+    for row_component in 0..2 {
+        for col_component in 0..2 {
+            let mut value = 0.0;
+            for local_row in 0..2 {
+                for local_col in 0..2 {
+                    value += row_transport[local_row][row_component]
+                        * local_block[local_row][local_col]
+                        * col_transport[local_col][col_component];
+                }
+            }
+            reduced[row_component][col_component] = coeff * value;
+        }
+    }
+    reduced
+}
+
+fn add_complex_tangent_block(
+    matrix: &mut [Vec<Complex64>],
+    n: usize,
+    row: usize,
+    col: usize,
+    block: [[Complex64; 2]; 2],
+) {
+    matrix[row][col] += block[0][0];
+    matrix[row][col + n] += block[0][1];
+    matrix[row + n][col] += block[1][0];
+    matrix[row + n][col + n] += block[1][1];
 }
 
 /// Returns the set of indices of nodes that lie on the surface of the magnetic
@@ -2705,6 +2864,154 @@ fn assemble_projected_scalar_operator_complex(
 
     add_surface_anisotropy_complex(plan, topology, reduction, equilibrium, &mut stiffness);
     add_dmi_complex(plan, reduction, &mut stiffness, plan.k_sampling.as_ref());
+    (stiffness, mass)
+}
+
+fn assemble_projected_full_2x2_operator_complex(
+    plan: &FemEigenPlanIR,
+    topology: &MeshTopology,
+    reduction: &ReductionMap,
+    observables: &EffectiveFieldObservables,
+    equilibrium: &[Vector3],
+    bases: &[(Vector3, Vector3)],
+) -> (Vec<Vec<Complex64>>, Vec<Vec<Complex64>>) {
+    let n = reduction.active_nodes.len();
+    let dim = 2 * n;
+    let mut stiffness = vec![vec![Complex64::new(0.0, 0.0); dim]; dim];
+    let mut mass = vec![vec![Complex64::new(0.0, 0.0); dim]; dim];
+
+    let field_blocks: Vec<[f64; 4]> = observables
+        .magnetization
+        .iter()
+        .enumerate()
+        .map(|(idx, m)| {
+            let mut h_eff = [0.0, 0.0, 0.0];
+            if plan.enable_exchange {
+                h_eff = add_vector(h_eff, observables.exchange_field[idx]);
+            }
+            if plan.enable_demag {
+                h_eff = add_vector(h_eff, observables.demag_field[idx]);
+            }
+            if plan.external_field.is_some() {
+                h_eff = add_vector(h_eff, observables.external_field[idx]);
+            }
+            h_eff = add_vector(h_eff, volume_anisotropy_field(*m, plan));
+
+            let (e1, e2) = bases[idx];
+            let h_parallel = dot(*m, h_eff).max(0.0);
+            let h_e1 = dot(e1, h_eff);
+            let h_e2 = dot(e2, h_eff);
+            [
+                h_parallel,
+                h_e1 * h_e2 / (h_parallel.max(1e-30)),
+                h_e1 * h_e2 / (h_parallel.max(1e-30)),
+                h_parallel,
+            ]
+        })
+        .collect();
+
+    for (element_index, element) in topology.elements.iter().enumerate() {
+        if !topology.magnetic_element_mask[element_index] {
+            continue;
+        }
+        let volume = topology.element_volumes[element_index];
+        let local_mass = [
+            [
+                2.0 * volume / 20.0,
+                volume / 20.0,
+                volume / 20.0,
+                volume / 20.0,
+            ],
+            [
+                volume / 20.0,
+                2.0 * volume / 20.0,
+                volume / 20.0,
+                volume / 20.0,
+            ],
+            [
+                volume / 20.0,
+                volume / 20.0,
+                2.0 * volume / 20.0,
+                volume / 20.0,
+            ],
+            [
+                volume / 20.0,
+                volume / 20.0,
+                volume / 20.0,
+                2.0 * volume / 20.0,
+            ],
+        ];
+        for i in 0..4 {
+            let node_i = element[i] as usize;
+            let Some(row) = reduction.node_map[node_i] else {
+                continue;
+            };
+            let phase_i = reduction.node_phases[node_i];
+            let row_root = reduction.active_nodes[row];
+            let row_transport = tangent_transport_to_root(node_i, row_root, bases);
+            for j in 0..4 {
+                let node_j = element[j] as usize;
+                let Some(col) = reduction.node_map[node_j] else {
+                    continue;
+                };
+                let coeff = phase_i.conj() * reduction.node_phases[node_j];
+                let col_root = reduction.active_nodes[col];
+                let col_transport = tangent_transport_to_root(node_j, col_root, bases);
+                let m_ij = local_mass[i][j];
+                let fb_i = &field_blocks[node_i];
+                let fb_j = &field_blocks[node_j];
+
+                add_complex_tangent_block(
+                    &mut mass,
+                    n,
+                    row,
+                    col,
+                    project_local_tangent_block_to_reduced(
+                        coeff,
+                        row_transport,
+                        [[m_ij, 0.0], [0.0, m_ij]],
+                        col_transport,
+                    ),
+                );
+
+                if plan.enable_exchange {
+                    let ex = topology.element_stiffness[element_index][i][j];
+                    add_complex_tangent_block(
+                        &mut stiffness,
+                        n,
+                        row,
+                        col,
+                        project_local_tangent_block_to_reduced(
+                            coeff,
+                            row_transport,
+                            [[ex, 0.0], [0.0, ex]],
+                            col_transport,
+                        ),
+                    );
+                }
+
+                let h11 = 0.5 * (fb_i[0] + fb_j[0]);
+                let h12 = 0.5 * (fb_i[1] + fb_j[1]);
+                let h21 = 0.5 * (fb_i[2] + fb_j[2]);
+                let h22 = 0.5 * (fb_i[3] + fb_j[3]);
+                add_complex_tangent_block(
+                    &mut stiffness,
+                    n,
+                    row,
+                    col,
+                    project_local_tangent_block_to_reduced(
+                        coeff,
+                        row_transport,
+                        [[m_ij * h11, m_ij * h12], [m_ij * h21, m_ij * h22]],
+                        col_transport,
+                    ),
+                );
+            }
+        }
+    }
+
+    add_surface_anisotropy_2x2_complex(plan, topology, reduction, equilibrium, &mut stiffness, n);
+    add_dmi_2x2_complex(plan, reduction, &mut stiffness, plan.k_sampling.as_ref(), n);
     (stiffness, mass)
 }
 
@@ -3416,6 +3723,68 @@ fn add_dmi_complex(
     }
 }
 
+fn add_surface_anisotropy_2x2_complex(
+    plan: &FemEigenPlanIR,
+    _topology: &MeshTopology,
+    reduction: &ReductionMap,
+    equilibrium: &[Vector3],
+    stiffness: &mut [Vec<Complex64>],
+    n: usize,
+) {
+    let Some((axis, coefficient)) = surface_anisotropy_config(plan) else {
+        return;
+    };
+    for face in &plan.mesh.boundary_faces {
+        let local = triangle_surface_matrix(face, &plan.mesh.nodes, axis, equilibrium, coefficient);
+        for i in 0..3 {
+            let node_i = face[i] as usize;
+            let Some(row) = reduction.node_map[node_i] else {
+                continue;
+            };
+            let phase_i = reduction.node_phases[node_i];
+            for j in 0..3 {
+                let node_j = face[j] as usize;
+                let Some(col) = reduction.node_map[node_j] else {
+                    continue;
+                };
+                let coeff = phase_i.conj() * reduction.node_phases[node_j] * local[i][j];
+                stiffness[row][col] += coeff;
+                stiffness[row + n][col + n] += coeff;
+            }
+        }
+    }
+}
+
+fn add_dmi_2x2_complex(
+    plan: &FemEigenPlanIR,
+    reduction: &ReductionMap,
+    stiffness: &mut [Vec<Complex64>],
+    k_sampling: Option<&KSamplingIR>,
+    n: usize,
+) {
+    let interfacial = plan.interfacial_dmi.unwrap_or(0.0);
+    let bulk = plan.bulk_dmi.unwrap_or(0.0);
+    if interfacial == 0.0 && bulk == 0.0 {
+        return;
+    }
+    let k = match k_sampling {
+        Some(KSamplingIR::Single { k_vector }) => *k_vector,
+        Some(KSamplingIR::Path { .. }) => [0.0, 0.0, 0.0],
+        None => [0.0, 0.0, 0.0],
+    };
+    let ms = plan.material.saturation_magnetisation.max(1e-30);
+    let interfacial_coeff = interfacial / (MU0 * ms);
+    let bulk_coeff = bulk / (MU0 * ms);
+    let nonreciprocal_shift = interfacial_coeff * (k[0] + k[1]) + bulk_coeff * (k[0] + k[1] + k[2]);
+    if nonreciprocal_shift.abs() <= 0.0 {
+        return;
+    }
+    for index in 0..reduction.active_nodes.len() {
+        stiffness[index][index] += Complex64::new(nonreciprocal_shift, 0.0);
+        stiffness[index + n][index + n] += Complex64::new(nonreciprocal_shift, 0.0);
+    }
+}
+
 /// Apply surface anisotropy to the 2×2 block operator.
 /// Both diagonal blocks (K_11, K_22) get the same surface anisotropy term.
 fn add_surface_anisotropy_2x2(
@@ -3655,6 +4024,38 @@ fn project_complex_mode_to_tangent_basis(
         amplitude[*node_index] = value.norm();
         phase[*node_index] = value.arg();
         max_amplitude = max_amplitude.max(amplitude[*node_index]);
+    }
+
+    (real, imag, amplitude, phase, max_amplitude)
+}
+
+fn project_complex_2x2_mode_to_tangent_basis(
+    total_nodes: usize,
+    active_nodes: &[usize],
+    amplitudes: &[Complex64],
+    bases: &[(Vector3, Vector3)],
+) -> (Vec<Vector3>, Vec<Vector3>, Vec<f64>, Vec<f64>, f64) {
+    let n = active_nodes.len();
+    let mut real = vec![[0.0, 0.0, 0.0]; total_nodes];
+    let mut imag = vec![[0.0, 0.0, 0.0]; total_nodes];
+    let mut amplitude = vec![0.0; total_nodes];
+    let mut phase = vec![0.0; total_nodes];
+    let mut max_amplitude: f64 = 0.0;
+
+    if amplitudes.len() < 2 * n {
+        return (real, imag, amplitude, phase, max_amplitude);
+    }
+
+    for (reduced_index, node_index) in active_nodes.iter().enumerate() {
+        let u1 = amplitudes[reduced_index];
+        let u2 = amplitudes[reduced_index + n];
+        let (e1, e2) = bases[*node_index];
+        real[*node_index] = add_vector(scale_vector(e1, u1.re), scale_vector(e2, u2.re));
+        imag[*node_index] = add_vector(scale_vector(e1, u1.im), scale_vector(e2, u2.im));
+        let amp = (u1.norm_sqr() + u2.norm_sqr()).sqrt();
+        amplitude[*node_index] = amp;
+        phase[*node_index] = (u1.im + u2.im).atan2(u1.re + u2.re);
+        max_amplitude = max_amplitude.max(amp);
     }
 
     (real, imag, amplitude, phase, max_amplitude)
@@ -4017,6 +4418,10 @@ fn write_eigen_v2_bundle(
                     "frequency_imag_hz": mode["frequency_imag_hz"],
                     "angular_frequency_rad_per_s": mode["angular_frequency_rad_per_s"],
                     "tracking_confidence": 1.0,
+                    "tracking_score_source": "seed",
+                    "modal_overlap_available": false,
+                    "mode_field_id": mode_field_id(raw_mode_index),
+                    "mode_field_resource_key": mode_field_resource_key(raw_mode_index),
                     "overlap_prev": null,
                 }],
             })
@@ -4027,7 +4432,13 @@ fn write_eigen_v2_bundle(
         &serde_json::json!({
             "schema_version": "eigen_branches.v2",
             "solver_model": summary_payload["solver_kind"],
+            "tracking_score_source": "seed_only",
+            "modal_overlap_available": false,
             "branches": branches,
+            "diagnostics": {
+                "tracking_score_source": "seed_only",
+                "modal_overlap_available": false,
+            },
         }),
     )?);
     if !auxiliary_artifacts
@@ -4291,6 +4702,10 @@ fn write_eigen_v2_bundle(
                 "dispersion_resource_key": "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion",
                 "mode_field_resources": mode_resource_keys,
             },
+            "diagnostics": {
+                "tracking_score_source": "seed_only",
+                "modal_overlap_available": false,
+            },
         }),
     )?);
 
@@ -4325,8 +4740,10 @@ fn modal_solver_diagnostics_json(
         "production_gyrotropic_mapping": false,
         "sample_count": 1,
         "mode_count": mode_count,
+        "requested_mode_count": plan.count,
         "normalization": normalization_label(plan.normalization),
     });
+    merge_modal_transport_diagnostics(&mut diagnostics, modal_tangent_transport_diagnostics(plan));
     if let fullmag_ir::EigenTargetIR::FrequencyWindow {
         frequency_min_hz,
         frequency_max_hz,
@@ -4394,6 +4811,84 @@ fn modal_solver_diagnostics_json(
     diagnostics
 }
 
+pub(crate) fn modal_tangent_transport_diagnostics(plan: &FemEigenPlanIR) -> serde_json::Value {
+    if !matches!(
+        plan.spin_wave_bc.kind(),
+        SpinWaveBoundaryKindIR::Periodic | SpinWaveBoundaryKindIR::Floquet
+    ) {
+        return serde_json::json!({
+            "basis_transport_policy": "not_applicable",
+            "floquet_tangent_frame_max_mismatch": 0.0,
+            "floquet_tangent_transport_max_nonunitarity": 0.0,
+        });
+    }
+
+    let topology = match MeshTopology::from_ir(&plan.mesh) {
+        Ok(topology) => topology,
+        Err(error) => {
+            return serde_json::json!({
+                "basis_transport_policy": "unavailable",
+                "basis_transport_error": format!("MeshTopology: {}", error),
+                "floquet_tangent_frame_max_mismatch": f64::NAN,
+                "floquet_tangent_transport_max_nonunitarity": f64::NAN,
+            });
+        }
+    };
+    let requested_pair_ids = plan.spin_wave_bc.boundary_pair_ids();
+    let selected_pairs = topology
+        .periodic_node_pairs
+        .iter()
+        .filter(|(pair_id, _, _)| {
+            requested_pair_ids.is_empty()
+                || requested_pair_ids
+                    .iter()
+                    .any(|requested| *requested == pair_id)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let bases = tangent_bases(&plan.equilibrium_magnetization);
+    let mut max_mismatch: f64 = 0.0;
+    let mut max_nonunitarity: f64 = 0.0;
+    for (_, node_a, node_b) in selected_pairs {
+        let node_a = node_a as usize;
+        let node_b = node_b as usize;
+        if node_a >= bases.len()
+            || node_b >= bases.len()
+            || topology.magnetic_node_volumes[node_a] <= 0.0
+            || topology.magnetic_node_volumes[node_b] <= 0.0
+        {
+            continue;
+        }
+        let transport = tangent_transport_matrix(bases[node_a], bases[node_b]);
+        max_mismatch = max_mismatch.max(tangent_frame_identity_mismatch(
+            bases[node_a],
+            bases[node_b],
+        ));
+        max_nonunitarity = max_nonunitarity.max(tangent_transport_nonunitarity(transport));
+    }
+    serde_json::json!({
+        "basis_transport_policy": if matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2) {
+            "tangent_frame_transport"
+        } else {
+            "tangent_frame_identity"
+        },
+        "floquet_tangent_frame_max_mismatch": max_mismatch,
+        "floquet_tangent_transport_max_nonunitarity": max_nonunitarity,
+    })
+}
+
+fn merge_modal_transport_diagnostics(target: &mut serde_json::Value, transport: serde_json::Value) {
+    let Some(target_object) = target.as_object_mut() else {
+        return;
+    };
+    let Some(transport_object) = transport.as_object() else {
+        return;
+    };
+    for (key, value) in transport_object {
+        target_object.insert(key.clone(), value.clone());
+    }
+}
+
 fn damping_policy_label(policy: EigenDampingPolicyIR) -> &'static str {
     match policy {
         EigenDampingPolicyIR::Ignore => "ignore",
@@ -4431,7 +4926,11 @@ fn spin_wave_bc_json(bc: &SpinWaveBoundaryConditionIR) -> serde_json::Value {
 
 fn solver_kind_label(plan: &FemEigenPlanIR) -> &'static str {
     if matches!(plan.spin_wave_bc.kind(), SpinWaveBoundaryKindIR::Floquet) {
-        "cpu_phase_reduced_floquet"
+        if matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2) {
+            "cpu_full_2x2_phase_reduced_floquet"
+        } else {
+            "cpu_phase_reduced_floquet"
+        }
     } else {
         match (plan.operator.kind, plan.damping_policy) {
             (fullmag_ir::EigenOperatorIR::Full2x2, EigenDampingPolicyIR::Ignore) => {
@@ -4447,7 +4946,9 @@ fn solver_kind_label(plan: &FemEigenPlanIR) -> &'static str {
 }
 
 fn solver_notes(plan: &FemEigenPlanIR, complex_reduction: bool, use_sparse: bool) -> &'static str {
-    if complex_reduction {
+    if complex_reduction && matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2) {
+        "phase-aware Floquet reduction on the full 2x2 tangent-frame block with phase*(T_node^T T_root) transport"
+    } else if complex_reduction {
         "phase-aware periodic reduction on a real doubled Hermitian block"
     } else if use_sparse && matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2) {
         "sparse LOBPCG on full 2×2 Herring-Kittel block operator (2N DOF)"
@@ -4523,6 +5024,9 @@ fn solver_capabilities(
     }
     if complex_reduction {
         capabilities.push("complex_mode_projection");
+        if matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2) {
+            capabilities.push("floquet_tangent_frame_transport");
+        }
     }
     capabilities
 }
@@ -4553,6 +5057,9 @@ fn solver_limitations(
     }
     if complex_reduction {
         limitations.push("floquet_uses_phase_reduced_hermitian_block");
+        if !matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2) {
+            limitations.push("scalar_floquet_requires_identity_tangent_frame_transport");
+        }
     }
     if plan.interfacial_dmi.is_some() || plan.bulk_dmi.is_some() {
         limitations.push("dmi_operator_is_cpu_first_reference_approximation");
@@ -4635,10 +5142,11 @@ fn dispersion_v2_csv(k_sampling: Option<&KSamplingIR>, modes: &serde_json::Value
         ""
     };
     let mut csv = String::from(
-        "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,line_width_hz,residual_norm,overlap_score\n",
+        "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_id,mode_field_resource_key\n",
     );
     if let Some(entries) = modes.as_array() {
         for entry in entries {
+            let raw_mode_index = entry["index"].as_u64().unwrap_or(0);
             let residual_norm = entry["residual_norm"]
                 .as_f64()
                 .map(|value| format!("{value:.16e}"))
@@ -4649,19 +5157,21 @@ fn dispersion_v2_csv(k_sampling: Option<&KSamplingIR>, modes: &serde_json::Value
                 .map(|value| format!("{:.16e}", 2.0 * value))
                 .unwrap_or_default();
             csv.push_str(&format!(
-                "0,{:.16e},{:.16e},{:.16e},{:.16e},{},{},{},{:.16e},{:.16e},{},{},{}\n",
+                "0,{:.16e},{:.16e},{:.16e},{:.16e},{},{},{},{:.16e},{:.16e},{},{},{},seed,{},{}\n",
                 0.0,
                 k_vector[0],
                 k_vector[1],
                 k_vector[2],
                 label,
-                entry["index"].as_u64().unwrap_or(0),
+                raw_mode_index,
                 "",
                 entry["frequency_hz"].as_f64().unwrap_or(0.0),
                 entry["angular_frequency_rad_per_s"].as_f64().unwrap_or(0.0),
                 line_width_hz,
                 residual_norm,
                 "",
+                mode_field_id(raw_mode_index),
+                mode_field_resource_key(raw_mode_index),
             ));
         }
     }
@@ -4888,6 +5398,13 @@ mod tests {
         ]);
 
         let csv = dispersion_v2_csv(None, &modes);
+        let header = csv
+            .lines()
+            .next()
+            .expect("dispersion CSV should include a header");
+        assert!(header.contains("tracking_score_source"));
+        assert!(header.contains("mode_field_id"));
+        assert!(header.contains("mode_field_resource_key"));
         let row = csv
             .lines()
             .nth(1)
@@ -4895,6 +5412,12 @@ mod tests {
         let columns: Vec<&str> = row.split(',').collect();
 
         assert_eq!(columns[10], "5.0000000000000000e6");
+        assert_eq!(columns[13], "seed");
+        assert_eq!(columns[14], "analysis:eigen:sample-0000:mode-0000");
+        assert_eq!(
+            columns[15],
+            "/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0000/samples/vector?view=phase_rotated_real&phase_rad=0"
+        );
     }
 
     #[test]
@@ -4945,6 +5468,12 @@ mod tests {
         );
         assert_eq!(
             diagnostics
+                .get("requested_mode_count")
+                .and_then(|value| value.as_u64()),
+            Some(u64::from(plan.count))
+        );
+        assert_eq!(
+            diagnostics
                 .get("window_completeness")
                 .and_then(|value| value.get("status"))
                 .and_then(|value| value.as_str()),
@@ -4984,6 +5513,97 @@ mod tests {
                 .get("shift_omega_rad_s")
                 .and_then(|value| value.as_f64()),
             Some(2.0 * std::f64::consts::PI * shift_frequency_hz)
+        );
+    }
+
+    #[test]
+    fn native_frequency_window_solver_diagnostics_publish_mode_count() {
+        let mut plan = minimal_native_modal_plan();
+        plan.count = 10;
+        plan.target = fullmag_ir::EigenTargetIR::FrequencyWindow {
+            frequency_min_hz: 1.0e8,
+            frequency_max_hz: 5.0e9,
+        };
+        let diagnostics_json = serde_json::json!({
+            "accepted_mode_count": 1,
+            "accepted_mode_count_after_dedup": 1,
+            "resolved_solver_family": "shift_invert",
+            "solver_model": "slepc_multi_shift_invert_production_cpu_dense",
+            "spectral_transform": "shift_invert",
+            "requested_window_hz": [1.0e8, 5.0e9],
+            "resolved_search_window_hz": [7.5e7, 5.125e9],
+            "window_completeness": {
+                "policy": "certified_count",
+                "status": "not_certified",
+                "certification_method": "none",
+                "estimated_modes_in_window": 0,
+                "certified_modes_in_window": 0,
+                "additional_modes_may_exist": true,
+            },
+            "subwindows": [
+                {
+                    "index": 0,
+                    "requested_hz": [1.0e8, 5.0e9],
+                    "search_hz": [7.5e7, 5.125e9],
+                    "shift_hz": 2.55e9,
+                    "shift_frequency_hz": 2.55e9,
+                    "shift_omega_rad_s": std::f64::consts::TAU * 2.55e9,
+                    "outer_iterations": 1,
+                    "linear_iterations_total": 1,
+                    "candidate_modes": 12,
+                    "accepted_modes": 1,
+                    "residual_max": 0.0,
+                    "stop_reason": "converged",
+                }
+            ],
+        });
+
+        let diagnostics_raw =
+            serde_json::to_string(&diagnostics_json).expect("diagnostics JSON should serialize");
+        let diagnostics = native_solver_diagnostics_json(&plan, &diagnostics_raw)
+            .expect("native diagnostics should be normalized");
+
+        assert_eq!(
+            diagnostics
+                .get("mode_count")
+                .and_then(|value| value.as_u64()),
+            Some(1)
+        );
+        assert_eq!(
+            diagnostics
+                .get("requested_mode_count")
+                .and_then(|value| value.as_u64()),
+            Some(10)
+        );
+    }
+
+    #[test]
+    fn native_cpu_modal_window_accepts_explicit_gamma_single_k() {
+        let mut plan = minimal_native_modal_plan();
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.damping_policy = EigenDampingPolicyIR::Ignore;
+        plan.k_sampling = Some(KSamplingIR::Single {
+            k_vector: [0.0, 0.0, 0.0],
+        });
+
+        assert!(
+            native_cpu_modal_window_enabled(&plan),
+            "explicit gamma-point single-k sampling must not demote the production CPU window path"
+        );
+    }
+
+    #[test]
+    fn native_cpu_modal_window_rejects_nonzero_single_k_until_floquet_operator_exists() {
+        let mut plan = minimal_native_modal_plan();
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.damping_policy = EigenDampingPolicyIR::Ignore;
+        plan.k_sampling = Some(KSamplingIR::Single {
+            k_vector: [1.0e6, 0.0, 0.0],
+        });
+
+        assert!(
+            !native_cpu_modal_window_enabled(&plan),
+            "nonzero-k modal production still requires a real Floquet/Bloch operator path"
         );
     }
 

@@ -1490,7 +1490,7 @@ def convert_periodic_airbox_fixture_to_schur_coupled_block(root: Path) -> None:
             "periodic_airbox_coupled_block_solver": True,
             "dynamic_demag_operator_source": "matrix_free_mfem_demag_phi_consistency_schur_provider",
             "coupled_residual_partition_status": "coupled_block",
-            "krylov_preconditioner_kind": "mfem_tangent_graph_demag_coarse_right",
+            "krylov_preconditioner_kind": "mfem_phi_consistency_schur_right",
         }
     )
     diagnostics_path.write_text(json.dumps(diagnostics))
@@ -1529,7 +1529,7 @@ def convert_periodic_airbox_fixture_to_schur_coupled_block(root: Path) -> None:
             "periodic_airbox_coupled_block_solver": True,
             "dynamic_demag_operator_source": "matrix_free_mfem_demag_phi_consistency_schur_provider",
             "coupled_residual_partition_status": "coupled_block",
-            "krylov_preconditioner_kind": "mfem_tangent_graph_demag_coarse_right",
+            "krylov_preconditioner_kind": "mfem_phi_consistency_schur_right",
         }
     )
     manifest_path.write_text(json.dumps(manifest))
@@ -2130,6 +2130,28 @@ def test_validator_accepts_bounded_periodic_airbox_schur_solve_error_bundle(
     )
 
     assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_rejects_schur_bundle_with_legacy_graph_preconditioner_kind(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solve_error_fixture(tmp_path)
+    convert_periodic_airbox_fixture_to_schur_coupled_block(tmp_path)
+    set_krylov_preconditioner_kind(
+        tmp_path,
+        kind="mfem_tangent_graph_demag_coarse_right",
+    )
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+        require_frozen_magnetic_submesh=True,
+        allow_solve_error=True,
+    )
+
+    assert result.returncode != 0
+    assert "krylov_preconditioner_kind" in (result.stderr + result.stdout)
+    assert "mfem_phi_consistency_schur_right" in (result.stderr + result.stdout)
 
 
 def test_validator_rejects_solve_error_bundle_without_demag_tangent_relative_linearity(

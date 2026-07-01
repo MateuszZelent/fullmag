@@ -26,6 +26,11 @@ DEFAULT_MAX_MAPPED_H_DEMAG_P99_RELERR = 2.0e-2
 DEFAULT_MAX_MAPPED_DEMAG_PHI_DELTA_A = 1.0e-6
 DEFAULT_MAX_MAPPED_SUPERCELL_NEAREST_DISTANCE_M = 1.0e-12
 DEFAULT_INTERPOLATION_BARYCENTRIC_TOL = 1.0e-10
+DEFAULT_MAX_INTERPOLATED_M_P99_L2_DELTA = 2.0e-2
+DEFAULT_MAX_INTERPOLATED_H_DEMAG_P99_RELERR = 2.0e-2
+DEFAULT_MAX_INTERPOLATED_DEMAG_PHI_DELTA_A = 1.0e-6
+STATE_FINAL = "final"
+STATE_INITIAL = "initial"
 
 
 def fail(message: str) -> None:
@@ -248,21 +253,30 @@ def require_supercell_workload(
     }
 
 
-def load_m_values(root: Path) -> list[list[float]]:
-    data = load_json(root / "m_final.json")
-    values = require_list(data.get("values"), "m_final.values")
+def m_artifact_name(state: str) -> str:
+    if state == STATE_INITIAL:
+        return "m_initial.json"
+    require(state == STATE_FINAL, f"unsupported comparison state {state!r}")
+    return "m_final.json"
+
+
+def load_m_values(root: Path, *, state: str = STATE_FINAL) -> list[list[float]]:
+    artifact_name = m_artifact_name(state)
+    data = load_json(root / artifact_name)
+    values_name = f"{artifact_name}.values"
+    values = require_list(data.get("values"), values_name)
     out: list[list[float]] = []
     for index, raw in enumerate(values):
-        vector = require_list(raw, f"m_final.values[{index}]")
-        require(len(vector) == 3, f"m_final.values[{index}] must be a 3-vector")
-        out.append([finite_number(vector[i], f"m_final.values[{index}][{i}]") for i in range(3)])
-    require(out, "m_final.values must be non-empty")
+        vector = require_list(raw, f"{values_name}[{index}]")
+        require(len(vector) == 3, f"{values_name}[{index}] must be a 3-vector")
+        out.append([finite_number(vector[i], f"{values_name}[{index}][{i}]") for i in range(3)])
+    require(out, f"{values_name} must be non-empty")
     return out
 
 
-def average_m(root: Path) -> list[float]:
-    values = load_m_values(root)
-    return average_vectors(values, magnetic_node_indices(root, len(values)), "m_final.values")
+def average_m(root: Path, *, state: str = STATE_FINAL) -> list[float]:
+    values = load_m_values(root, state=state)
+    return average_vectors(values, magnetic_node_indices(root, len(values)), f"{m_artifact_name(state)}.values")
 
 
 def magnetic_node_indices(root: Path, node_count: int) -> list[int]:
@@ -645,8 +659,8 @@ def nearest_periodic_unit_node(
     return best_index, math.sqrt(best_distance2)
 
 
-def zarr_vectors(root: Path, observable: str) -> list[list[float]]:
-    components, values = load_zarr_values(root, observable)
+def zarr_vectors(root: Path, observable: str, *, state: str = STATE_FINAL) -> list[list[float]]:
+    components, values = load_zarr_values(root, observable, state=state)
     require(components == ["x", "y", "z"], f"{observable} component_order must be x/y/z")
     cell_count = len(values) // 3
     return [
@@ -655,8 +669,8 @@ def zarr_vectors(root: Path, observable: str) -> list[list[float]]:
     ]
 
 
-def zarr_scalars(root: Path, observable: str) -> list[float]:
-    components, values = load_zarr_values(root, observable)
+def zarr_scalars(root: Path, observable: str, *, state: str = STATE_FINAL) -> list[float]:
+    components, values = load_zarr_values(root, observable, state=state)
     require(components == ["scalar"], f"{observable} component_order must be scalar")
     return values
 
@@ -733,37 +747,186 @@ def vector_interpolated_delta_stats(
     *,
     reference_values: list[list[float]],
     sample_values: list[list[float]],
-) -> dict[str, float]:
+    sample_points_m: list[list[float]] | None = None,
+    unit_periods_m: list[float] | None = None,
+) -> dict[str, Any]:
     zero = [0.0, 0.0, 0.0]
     deltas = [l2_delta(sample, reference) for sample, reference in zip(sample_values, reference_values)]
+    delta_vectors = [
+        [sample[component] - reference[component] for component in range(3)]
+        for sample, reference in zip(sample_values, reference_values)
+    ]
+    mean_delta = [
+        sum(delta[component] for delta in delta_vectors) / float(len(delta_vectors))
+        for component in range(3)
+    ]
+    deltas_after_mean = [
+        l2_delta(delta, mean_delta)
+        for delta in delta_vectors
+    ]
     reference_norms = [l2_delta(value, zero) for value in reference_values]
     sample_norms = [l2_delta(value, zero) for value in sample_values]
     scale = max(percentile(reference_norms, 0.99), percentile(sample_norms, 0.99), 1.0e-300)
-    return {
+    result = {
         "mean_l2_delta": sum(deltas) / float(len(deltas)),
         "p99_l2_delta": percentile(deltas, 0.99),
         "max_l2_delta": max(deltas),
         "p99_relative_error": percentile(deltas, 0.99) / scale,
+        "mean_delta_vector_Apm": mean_delta,
+        "p99_l2_delta_after_mean_delta": percentile(deltas_after_mean, 0.99),
+        "max_l2_delta_after_mean_delta": max(deltas_after_mean),
+        "p99_relative_error_after_mean_delta": percentile(deltas_after_mean, 0.99) / scale,
     }
+    if sample_points_m is not None and unit_periods_m is not None:
+        result["spatial_error_profile"] = spatial_error_profile(
+            points=sample_points_m,
+            errors=deltas,
+            unit_periods_m=unit_periods_m,
+        )
+        result["spatial_error_profile_after_mean_delta"] = spatial_error_profile(
+            points=sample_points_m,
+            errors=deltas_after_mean,
+            unit_periods_m=unit_periods_m,
+        )
+    return result
+
+
+def lateral_seam_distance_m(point: list[float], unit_periods_m: list[float]) -> float:
+    distances: list[float] = []
+    for axis in (0, 1):
+        period = unit_periods_m[axis]
+        coordinate = reduce_periodic_coordinate(point[axis], period)
+        distances.append(coordinate)
+        distances.append(period - coordinate)
+    return min(distances)
+
+
+def spatial_error_profile(
+    *,
+    points: list[list[float]],
+    errors: list[float],
+    unit_periods_m: list[float],
+) -> dict[str, Any]:
+    require(len(points) == len(errors), "spatial error profile points/errors length mismatch")
+    require(points, "spatial error profile requires at least one sample")
+    max_index = max(range(len(errors)), key=lambda index: errors[index])
+    ranked_indices = sorted(range(len(errors)), key=lambda index: errors[index], reverse=True)
+    top_count = max(1, int(math.ceil(len(errors) * 0.01)))
+    top_indices = ranked_indices[:top_count]
+    top_distances = [lateral_seam_distance_m(points[index], unit_periods_m) for index in top_indices]
+    return {
+        "sample_count": len(errors),
+        "top_error_fraction": 0.01,
+        "top_error_sample_count": top_count,
+        "max_error": errors[max_index],
+        "max_error_point_m": points[max_index],
+        "max_error_lateral_seam_distance_m": lateral_seam_distance_m(points[max_index], unit_periods_m),
+        "max_error_z_m": points[max_index][2],
+        "top_error_mean_lateral_seam_distance_m": sum(top_distances) / float(len(top_distances)),
+        "top_error_min_lateral_seam_distance_m": min(top_distances),
+        "top_error_max_lateral_seam_distance_m": max(top_distances),
+    }
+
+
+def solve_linear_system(matrix: list[list[float]], rhs: list[float]) -> list[float] | None:
+    size = len(rhs)
+    augmented = [row[:] + [rhs[index]] for index, row in enumerate(matrix)]
+    for pivot_index in range(size):
+        pivot_row = max(range(pivot_index, size), key=lambda row: abs(augmented[row][pivot_index]))
+        pivot_value = augmented[pivot_row][pivot_index]
+        if abs(pivot_value) <= 1.0e-300:
+            return None
+        if pivot_row != pivot_index:
+            augmented[pivot_index], augmented[pivot_row] = augmented[pivot_row], augmented[pivot_index]
+        pivot_value = augmented[pivot_index][pivot_index]
+        for column in range(pivot_index, size + 1):
+            augmented[pivot_index][column] /= pivot_value
+        for row in range(size):
+            if row == pivot_index:
+                continue
+            factor = augmented[row][pivot_index]
+            if factor == 0.0:
+                continue
+            for column in range(pivot_index, size + 1):
+                augmented[row][column] -= factor * augmented[pivot_index][column]
+    return [augmented[row][size] for row in range(size)]
+
+
+def affine_delta_fit(
+    *,
+    points: list[list[float]],
+    offsets: list[float],
+) -> tuple[list[float], list[float]]:
+    normal = [[0.0 for _ in range(4)] for _ in range(4)]
+    rhs = [0.0 for _ in range(4)]
+    for point, offset in zip(points, offsets):
+        row = [1.0, point[0], point[1], point[2]]
+        for i in range(4):
+            rhs[i] += row[i] * offset
+            for j in range(4):
+                normal[i][j] += row[i] * row[j]
+    coefficients = solve_linear_system(normal, rhs)
+    if coefficients is None:
+        best_offset = sum(offsets) / float(len(offsets))
+        coefficients = [best_offset, 0.0, 0.0, 0.0]
+    residuals = [
+        abs(offset - (coefficients[0] + coefficients[1] * point[0] + coefficients[2] * point[1] + coefficients[3] * point[2]))
+        for point, offset in zip(points, offsets)
+    ]
+    return coefficients, residuals
 
 
 def scalar_interpolated_delta_stats_with_offset(
     *,
     reference_values: list[float],
     sample_values: list[float],
-) -> dict[str, float]:
+    sample_points_m: list[list[float]] | None = None,
+    unit_periods_m: list[float] | None = None,
+) -> dict[str, Any]:
     offsets = [sample - reference for sample, reference in zip(sample_values, reference_values)]
     best_offset = sum(offsets) / float(len(offsets))
     residuals = [abs(offset - best_offset) for offset in offsets]
-    return {
+    result = {
         "best_constant_offset_A": best_offset,
         "mean_abs_delta_after_offset_A": sum(residuals) / float(len(residuals)),
         "p99_abs_delta_after_offset_A": percentile(residuals, 0.99),
         "max_abs_delta_after_offset_A": max(residuals),
     }
+    if sample_points_m is not None and unit_periods_m is not None:
+        result["spatial_residual_profile_after_offset"] = spatial_error_profile(
+            points=sample_points_m,
+            errors=residuals,
+            unit_periods_m=unit_periods_m,
+        )
+    if sample_points_m is not None and len(sample_points_m) == len(offsets):
+        coefficients, affine_residuals = affine_delta_fit(points=sample_points_m, offsets=offsets)
+        result.update(
+            {
+                "best_affine_offset_A": coefficients[0],
+                "best_affine_gradient_A_per_m": coefficients[1:4],
+                "mean_abs_delta_after_affine_A": sum(affine_residuals) / float(len(affine_residuals)),
+                "p99_abs_delta_after_affine_A": percentile(affine_residuals, 0.99),
+                "max_abs_delta_after_affine_A": max(affine_residuals),
+            }
+        )
+        if unit_periods_m is not None:
+            result["spatial_residual_profile_after_affine"] = spatial_error_profile(
+                points=sample_points_m,
+                errors=affine_residuals,
+                unit_periods_m=unit_periods_m,
+            )
+    return result
 
 
-def load_zarr_values(root: Path, observable: str) -> tuple[list[str], list[float]]:
+def zarr_sample_row(rows: list[dict[str, str]], *, observable: str, state: str) -> dict[str, str]:
+    if state == STATE_INITIAL:
+        return rows[0]
+    if state == STATE_FINAL:
+        return rows[-1]
+    fail(f"{observable} zarr state must be '{STATE_FINAL}' or '{STATE_INITIAL}', got {state!r}")
+
+
+def load_zarr_values(root: Path, observable: str, *, state: str = STATE_FINAL) -> tuple[list[str], list[float]]:
     field_dir = root / "fields" / f"{observable}.zarr"
     require(field_dir.is_dir(), f"missing {observable} zarr directory: {field_dir}")
     attrs = load_json(field_dir / ".zattrs")
@@ -773,15 +936,29 @@ def load_zarr_values(root: Path, observable: str) -> tuple[list[str], list[float
     require(array.get("dtype") == "<f8", f"{observable} zarr dtype must be <f8")
     require(array.get("order") == "C", f"{observable} zarr order must be C")
     shape = require_list(array.get("shape"), f"{observable}.shape")
-    require(len(shape) == 3 and shape[0] == 1, f"{observable}.shape must be [1, components, cells]")
+    require(
+        len(shape) == 3
+        and isinstance(shape[0], int)
+        and isinstance(shape[1], int)
+        and isinstance(shape[2], int),
+        f"{observable}.shape must be [samples, components, cells]",
+    )
+    sample_count = int(shape[0])
     component_count = int(shape[1])
     cell_count = int(shape[2])
     require(component_count == len(component_names), f"{observable}.shape/component_order mismatch")
-    require(component_count > 0 and cell_count > 0, f"{observable} zarr dimensions must be positive")
+    require(
+        sample_count > 0 and component_count > 0 and cell_count > 0,
+        f"{observable} zarr dimensions must be positive",
+    )
     with (field_dir / "samples.csv").open(newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
     require(rows, f"{observable} samples.csv must not be empty")
-    chunk_key = rows[-1].get("chunk_key")
+    require(
+        len(rows) <= sample_count,
+        f"{observable} samples.csv has {len(rows)} rows but shape declares {sample_count} samples",
+    )
+    chunk_key = zarr_sample_row(rows, observable=observable, state=state).get("chunk_key")
     require(isinstance(chunk_key, str) and chunk_key, f"{observable} chunk_key must be present")
     raw = (field_dir / chunk_key).read_bytes()
     expected = component_count * cell_count
@@ -804,8 +981,8 @@ def require_index_list(value: Any, name: str, upper_bound: int) -> list[int]:
     return indices
 
 
-def h_demag_max_norm_from_indices(root: Path, indices: list[int]) -> float:
-    components, values = load_zarr_values(root, "H_demag")
+def h_demag_max_norm_from_indices(root: Path, indices: list[int], *, state: str = STATE_FINAL) -> float:
+    components, values = load_zarr_values(root, "H_demag", state=state)
     require(components == ["x", "y", "z"], "H_demag component_order must be x/y/z")
     cell_count = len(values) // 3
     bounded_indices = require_index_list(indices, "central-cell field_cell_indices", cell_count)
@@ -815,22 +992,22 @@ def h_demag_max_norm_from_indices(root: Path, indices: list[int]) -> float:
     )
 
 
-def h_demag_max_norm(root: Path) -> float:
-    components, values = load_zarr_values(root, "H_demag")
+def h_demag_max_norm(root: Path, *, state: str = STATE_FINAL) -> float:
+    components, values = load_zarr_values(root, "H_demag", state=state)
     require(components == ["x", "y", "z"], "H_demag component_order must be x/y/z")
     cell_count = len(values) // 3
-    return h_demag_max_norm_from_indices(root, list(range(cell_count)))
+    return h_demag_max_norm_from_indices(root, list(range(cell_count)), state=state)
 
 
-def h_demag_cell_count(root: Path) -> int:
-    components, values = load_zarr_values(root, "H_demag")
+def h_demag_cell_count(root: Path, *, state: str = STATE_FINAL) -> int:
+    components, values = load_zarr_values(root, "H_demag", state=state)
     require(components == ["x", "y", "z"], "H_demag component_order must be x/y/z")
     return len(values) // 3
 
 
-def h_demag_norm_percentile(root: Path, percentile: float) -> float:
+def h_demag_norm_percentile(root: Path, percentile: float, *, state: str = STATE_FINAL) -> float:
     require(0.0 <= percentile <= 1.0, "H_demag percentile must be in [0, 1]")
-    components, values = load_zarr_values(root, "H_demag")
+    components, values = load_zarr_values(root, "H_demag", state=state)
     require(components == ["x", "y", "z"], "H_demag component_order must be x/y/z")
     cell_count = len(values) // 3
     norms = sorted(
@@ -842,16 +1019,16 @@ def h_demag_norm_percentile(root: Path, percentile: float) -> float:
     return norms[index]
 
 
-def demag_phi_range_from_indices(root: Path, indices: list[int]) -> float:
-    components, values = load_zarr_values(root, "demag_phi")
+def demag_phi_range_from_indices(root: Path, indices: list[int], *, state: str = STATE_FINAL) -> float:
+    components, values = load_zarr_values(root, "demag_phi", state=state)
     require(components == ["scalar"], "demag_phi component_order must be scalar")
     bounded_indices = require_index_list(indices, "central-cell field_cell_indices", len(values))
     selected = [values[index] for index in bounded_indices]
     return max(selected) - min(selected)
 
 
-def demag_phi_range(root: Path) -> float:
-    components, values = load_zarr_values(root, "demag_phi")
+def demag_phi_range(root: Path, *, state: str = STATE_FINAL) -> float:
+    components, values = load_zarr_values(root, "demag_phi", state=state)
     require(components == ["scalar"], "demag_phi component_order must be scalar")
     return max(values) - min(values)
 
@@ -870,6 +1047,7 @@ def load_supercell_central_cell_extraction(
     *,
     repeat_x: int,
     repeat_y: int,
+    state: str = STATE_FINAL,
 ) -> dict[str, Any]:
     path = root / "diagnostics" / "fem_static_pbc_supercell_central_cell.v1.json"
     require(path.is_file(), f"missing supercell central-cell extraction artifact: {path}")
@@ -902,9 +1080,9 @@ def load_supercell_central_cell_extraction(
     )
     require(energy >= 0.0, "supercell central-cell extraction central_cell_demag_energy_j must be non-negative")
     require(torque >= 0.0, "supercell central-cell extraction central_cell_torque_apm must be non-negative")
-    m_values = load_m_values(root)
-    _, h_values = load_zarr_values(root, "H_demag")
-    _, phi_values = load_zarr_values(root, "demag_phi")
+    m_values = load_m_values(root, state=state)
+    _, h_values = load_zarr_values(root, "H_demag", state=state)
+    _, phi_values = load_zarr_values(root, "demag_phi", state=state)
     magnetic_indices = require_index_list(
         payload.get("magnetic_node_indices"),
         "supercell central-cell extraction magnetic_node_indices",
@@ -941,6 +1119,8 @@ def mapped_central_cell_comparability(
     unit_magnetic_indices: list[int],
     supercell_m_values: list[list[float]],
     same_local_distance_limit_m: float,
+    unit_state: str = STATE_FINAL,
+    supercell_state: str = STATE_FINAL,
 ) -> dict[str, Any]:
     unit_nodes = load_node_geometry_nodes(unit_root, expected_count=len(unit_m_values))
     supercell_nodes = load_node_geometry_nodes(supercell_root, expected_count=len(supercell_m_values))
@@ -986,13 +1166,13 @@ def mapped_central_cell_comparability(
             pairs=magnetic_pairs,
         ),
         "H_demag": vector_pair_delta_stats(
-            unit_values=zarr_vectors(unit_root, "H_demag"),
-            supercell_values=zarr_vectors(supercell_root, "H_demag"),
+            unit_values=zarr_vectors(unit_root, "H_demag", state=unit_state),
+            supercell_values=zarr_vectors(supercell_root, "H_demag", state=supercell_state),
             pairs=field_pairs,
         ),
         "demag_phi": scalar_pair_delta_stats_with_offset(
-            unit_values=zarr_scalars(unit_root, "demag_phi"),
-            supercell_values=zarr_scalars(supercell_root, "demag_phi"),
+            unit_values=zarr_scalars(unit_root, "demag_phi", state=unit_state),
+            supercell_values=zarr_scalars(supercell_root, "demag_phi", state=supercell_state),
             pairs=field_pairs,
         ),
     }
@@ -1007,6 +1187,8 @@ def interpolated_central_cell_comparability(
     unit_m_values: list[list[float]],
     supercell_m_values: list[list[float]],
     barycentric_tolerance: float,
+    unit_state: str = STATE_FINAL,
+    supercell_state: str = STATE_FINAL,
 ) -> dict[str, Any]:
     unit_nodes, unit_elements, unit_markers = metadata_mesh(unit_root)
     require(len(unit_nodes) == len(unit_m_values), "unit metadata mesh node count must match m_final.values")
@@ -1016,12 +1198,12 @@ def interpolated_central_cell_comparability(
         finite_number(value, f"workload.unit_universe_size_m[{index}]")
         for index, value in enumerate(raw_periods)
     ]
-    unit_h = zarr_vectors(unit_root, "H_demag")
-    unit_phi = zarr_scalars(unit_root, "demag_phi")
+    unit_h = zarr_vectors(unit_root, "H_demag", state=unit_state)
+    unit_phi = zarr_scalars(unit_root, "demag_phi", state=unit_state)
     require(len(unit_h) == len(unit_nodes), "unit H_demag node count must match metadata mesh nodes")
     require(len(unit_phi) == len(unit_nodes), "unit demag_phi node count must match metadata mesh nodes")
-    supercell_h = zarr_vectors(supercell_root, "H_demag")
-    supercell_phi = zarr_scalars(supercell_root, "demag_phi")
+    supercell_h = zarr_vectors(supercell_root, "H_demag", state=supercell_state)
+    supercell_phi = zarr_scalars(supercell_root, "demag_phi", state=supercell_state)
 
     magnetic_element_indices = element_index_filter(unit_markers, magnetic_only=True)
     spatial_cell_size = estimate_element_cell_size(unit_nodes, unit_elements)
@@ -1043,6 +1225,7 @@ def interpolated_central_cell_comparability(
     field_reference_values: list[list[float]] = []
     phi_sample_values: list[float] = []
     phi_reference_values: list[float] = []
+    field_sample_points_m: list[list[float]] = []
     magnetic_sample_values: list[list[float]] = []
     magnetic_reference_values: list[list[float]] = []
     min_barycentric_weight = math.inf
@@ -1073,6 +1256,7 @@ def interpolated_central_cell_comparability(
         field_sample_values.append(supercell_h[supercell_index])
         phi_reference_values.append(interpolate_scalar(unit_phi, element, weights))
         phi_sample_values.append(supercell_phi[supercell_index])
+        field_sample_points_m.append(reduced)
 
     for supercell_index in extraction["magnetic_node_indices"]:
         reduced = [
@@ -1126,10 +1310,14 @@ def interpolated_central_cell_comparability(
         "H_demag": vector_interpolated_delta_stats(
             reference_values=field_reference_values,
             sample_values=field_sample_values,
+            sample_points_m=field_sample_points_m,
+            unit_periods_m=unit_periods,
         ),
         "demag_phi": scalar_interpolated_delta_stats_with_offset(
             reference_values=phi_reference_values,
             sample_values=phi_sample_values,
+            sample_points_m=field_sample_points_m,
+            unit_periods_m=unit_periods,
         ),
     }
 
@@ -1182,6 +1370,48 @@ def compare_z_padding(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def supercell_comparison_contract(*, unit_state: str, supercell_state: str) -> dict[str, Any]:
+    if unit_state == STATE_FINAL and supercell_state == STATE_INITIAL:
+        return {
+            "purpose": "frozen_repeated_state_operator_equivalence",
+            "precision_class": "technical_operator",
+            "primitive_supercell_equivalence": "same_magnetization_state_only",
+            "independent_supercell_relaxation": False,
+            "recommended_h_demag_p99_relative_error_band": [1.0e-6, 1.0e-4],
+            "recommended_e_demag_density_relative_error_band": [1.0e-6, 1.0e-4],
+            "status_semantics": "operator_consistency_gate_not_physical_supercell_convergence",
+        }
+    if unit_state == STATE_INITIAL and supercell_state == STATE_INITIAL:
+        return {
+            "purpose": "initial_state_operator_equivalence",
+            "precision_class": "technical_operator",
+            "primitive_supercell_equivalence": "same_magnetization_state_only",
+            "independent_supercell_relaxation": False,
+            "recommended_h_demag_p99_relative_error_band": [1.0e-6, 1.0e-4],
+            "recommended_e_demag_density_relative_error_band": [1.0e-6, 1.0e-4],
+            "status_semantics": "operator_consistency_gate_not_physical_supercell_convergence",
+        }
+    if unit_state == STATE_FINAL and supercell_state == STATE_FINAL:
+        return {
+            "purpose": "independent_relaxed_supercell_convergence",
+            "precision_class": "physical_convergence",
+            "primitive_supercell_equivalence": "not_exact_unless_state_periodicity_is_constrained",
+            "independent_supercell_relaxation": True,
+            "recommended_h_demag_p99_relative_error_band": [1.0e-2, 5.0e-2],
+            "recommended_e_demag_density_relative_error_band": [1.0e-2, 2.0e-2],
+            "status_semantics": "acceptance_gate_not_exact_equality",
+        }
+    return {
+        "purpose": "asymmetric_state_diagnostic",
+        "precision_class": "diagnostic",
+        "primitive_supercell_equivalence": "not_a_physical_equivalence_claim",
+        "independent_supercell_relaxation": False,
+        "recommended_h_demag_p99_relative_error_band": [1.0e-2, 5.0e-2],
+        "recommended_e_demag_density_relative_error_band": [1.0e-2, 2.0e-2],
+        "status_semantics": "diagnostic_only",
+    }
+
+
 def compare_supercell(args: argparse.Namespace) -> dict[str, Any]:
     require_different_roots(
         args.unit_cell,
@@ -1194,37 +1424,45 @@ def compare_supercell(args: argparse.Namespace) -> dict[str, Any]:
         repeat_x=args.repeat_x,
         repeat_y=args.repeat_y,
     )
+    unit_state = args.unit_state or args.state
+    supercell_state = args.supercell_state or args.state
+    comparison_state = unit_state if unit_state == supercell_state else f"{unit_state}_to_{supercell_state}"
     cell_count = args.repeat_x * args.repeat_y
-    unit_e = final_e_demag(args.unit_cell)
     extraction = load_supercell_central_cell_extraction(
         args.supercell,
         repeat_x=args.repeat_x,
         repeat_y=args.repeat_y,
+        state=supercell_state,
     )
-    unit_m_values = load_m_values(args.unit_cell)
+    unit_m_values = load_m_values(args.unit_cell, state=unit_state)
     unit_magnetic_indices = magnetic_node_indices(args.unit_cell, len(unit_m_values))
-    unit_average_m = average_vectors(unit_m_values, unit_magnetic_indices, "m_final.values")
-    supercell_m_values = load_m_values(args.supercell)
+    unit_m_values_name = f"{m_artifact_name(unit_state)}.values"
+    supercell_m_values_name = f"{m_artifact_name(supercell_state)}.values"
+    unit_average_m = average_vectors(unit_m_values, unit_magnetic_indices, unit_m_values_name)
+    supercell_m_values = load_m_values(args.supercell, state=supercell_state)
     supercell_average_m = average_vectors(
         supercell_m_values,
         extraction["magnetic_node_indices"],
-        "m_final.values",
+        supercell_m_values_name,
     )
-    unit_field_cell_count = h_demag_cell_count(args.unit_cell)
-    supercell_e_density = float(extraction["central_cell_demag_energy_j"])
-    unit_h = h_demag_max_norm(args.unit_cell)
-    supercell_h = h_demag_max_norm_from_indices(args.supercell, extraction["field_cell_indices"])
+    unit_field_cell_count = h_demag_cell_count(args.unit_cell, state=unit_state)
+    unit_h = h_demag_max_norm(args.unit_cell, state=unit_state)
+    supercell_h = h_demag_max_norm_from_indices(
+        args.supercell,
+        extraction["field_cell_indices"],
+        state=supercell_state,
+    )
     unit_deviation = vector_deviation_stats(
         unit_m_values,
         unit_magnetic_indices,
         unit_average_m,
-        "unit-cell m_final.values",
+        f"unit-cell {unit_m_values_name}",
     )
     central_deviation = vector_deviation_stats(
         supercell_m_values,
         extraction["magnetic_node_indices"],
         unit_average_m,
-        "supercell central-cell m_final.values",
+        f"supercell central-cell {supercell_m_values_name}",
     )
     relaxation_state = {
         "unit_average_m": unit_average_m,
@@ -1248,9 +1486,11 @@ def compare_supercell(args: argparse.Namespace) -> dict[str, Any]:
         unit_magnetic_indices=unit_magnetic_indices,
         supercell_m_values=supercell_m_values,
         same_local_distance_limit_m=args.max_mapped_nearest_distance_m,
+        unit_state=unit_state,
+        supercell_state=supercell_state,
     )
     interpolated_comparison = None
-    if args.include_interpolated_comparison:
+    if args.include_interpolated_comparison or args.accept_interpolated_comparison:
         interpolated_comparison = interpolated_central_cell_comparability(
             args.unit_cell,
             args.supercell,
@@ -1259,6 +1499,8 @@ def compare_supercell(args: argparse.Namespace) -> dict[str, Any]:
             unit_m_values=unit_m_values,
             supercell_m_values=supercell_m_values,
             barycentric_tolerance=args.interpolation_barycentric_tolerance,
+            unit_state=unit_state,
+            supercell_state=supercell_state,
         )
     mesh_comparability = {
         "unit_magnetic_node_count": len(unit_magnetic_indices),
@@ -1276,15 +1518,10 @@ def compare_supercell(args: argparse.Namespace) -> dict[str, Any]:
     }
     metrics = {
         "average_m_l2_delta": relaxation_state["central_cell_average_m_l2_delta"],
-        "e_demag_density_relative_error": relative_error(supercell_e_density, unit_e),
         "h_demag_stats_relative_error": relative_error(supercell_h, unit_h),
         "demag_phi_max_abs_delta_A": abs(
-            demag_phi_range_from_indices(args.supercell, extraction["field_cell_indices"])
-            - demag_phi_range(args.unit_cell)
-        ),
-        "central_cell_torque_residual_relative_error": relative_error(
-            float(extraction["central_cell_torque_apm"]),
-            final_torque(args.unit_cell),
+            demag_phi_range_from_indices(args.supercell, extraction["field_cell_indices"], state=supercell_state)
+            - demag_phi_range(args.unit_cell, state=unit_state)
         ),
         "relaxation_state_mean_deviation_relative_error": relaxation_state["mean_l2_deviation_relative_error"],
         "mapped_m_p99_l2_delta": mapped_comparison["m"]["p99_l2_delta"],
@@ -1299,12 +1536,11 @@ def compare_supercell(args: argparse.Namespace) -> dict[str, Any]:
         "magnetic_node_count_relative_error": mesh_comparability["magnetic_node_count_relative_error"],
         "field_cell_count_relative_error": mesh_comparability["field_cell_count_relative_error"],
     }
+    acceptance_basis = "same_local_mapped"
     limits = {
         "average_m_l2_delta": args.max_average_m_l2_delta,
-        "e_demag_density_relative_error": args.max_e_demag_density_relative_error,
         "h_demag_stats_relative_error": args.max_h_demag_stats_relative_error,
         "demag_phi_max_abs_delta_A": args.max_demag_phi_max_abs_delta_a,
-        "central_cell_torque_residual_relative_error": args.max_central_cell_torque_residual_relative_error,
         "relaxation_state_mean_deviation_relative_error": args.max_relaxation_state_mean_deviation_relative_error,
         "mapped_m_p99_l2_delta": args.max_mapped_m_p99_l2_delta,
         "mapped_h_demag_p99_relative_error": args.max_mapped_h_demag_p99_relative_error,
@@ -1312,15 +1548,58 @@ def compare_supercell(args: argparse.Namespace) -> dict[str, Any]:
         "mapped_max_nearest_field_node_distance_m": args.max_mapped_nearest_distance_m,
         "mapped_max_nearest_magnetic_node_distance_m": args.max_mapped_nearest_distance_m,
     }
+    if args.accept_interpolated_comparison:
+        require(interpolated_comparison is not None, "interpolated acceptance requires interpolated comparison")
+        acceptance_basis = "interpolated_remesh"
+        metrics.update(
+            {
+                "interpolated_field_missed_count": float(interpolated_comparison["field_missed_count"]),
+                "interpolated_magnetic_missed_count": float(interpolated_comparison["magnetic_missed_count"]),
+                "interpolated_m_p99_l2_delta": interpolated_comparison["m"]["p99_l2_delta"],
+                "interpolated_h_demag_p99_relative_error": interpolated_comparison["H_demag"][
+                    "p99_relative_error"
+                ],
+                "interpolated_demag_phi_max_abs_delta_after_offset_A": interpolated_comparison["demag_phi"][
+                    "max_abs_delta_after_offset_A"
+                ],
+            }
+        )
+        limits = {
+            "interpolated_field_missed_count": 0.0,
+            "interpolated_magnetic_missed_count": 0.0,
+            "interpolated_m_p99_l2_delta": args.max_interpolated_m_p99_l2_delta,
+            "interpolated_h_demag_p99_relative_error": args.max_interpolated_h_demag_p99_relative_error,
+            "interpolated_demag_phi_max_abs_delta_after_offset_A": (
+                args.max_interpolated_demag_phi_max_abs_delta_after_offset_a
+            ),
+        }
+    if unit_state == STATE_FINAL and supercell_state == STATE_FINAL:
+        unit_e = final_e_demag(args.unit_cell)
+        supercell_e_density = float(extraction["central_cell_demag_energy_j"])
+        metrics["e_demag_density_relative_error"] = relative_error(supercell_e_density, unit_e)
+        metrics["central_cell_torque_residual_relative_error"] = relative_error(
+            float(extraction["central_cell_torque_apm"]),
+            final_torque(args.unit_cell),
+        )
+        limits["e_demag_density_relative_error"] = args.max_e_demag_density_relative_error
+        limits["central_cell_torque_residual_relative_error"] = args.max_central_cell_torque_residual_relative_error
     status, failures = status_from_limits(metrics, limits)
     report = {
         "schema_version": "fem_static_pbc_supercell_validation.v1",
         "status": status,
+        "comparison_state": comparison_state,
+        "unit_comparison_state": unit_state,
+        "supercell_comparison_state": supercell_state,
+        "comparison_contract": supercell_comparison_contract(
+            unit_state=unit_state,
+            supercell_state=supercell_state,
+        ),
         "unit_cell_artifacts": str(args.unit_cell),
         "supercell_artifacts": str(args.supercell),
         "repeat_x": args.repeat_x,
         "repeat_y": args.repeat_y,
         "cell_count": cell_count,
+        "acceptance_basis": acceptance_basis,
         "central_cell_extraction": {
             key: value
             for key, value in extraction.items()
@@ -1371,6 +1650,27 @@ def parse_args() -> argparse.Namespace:
     supercell.add_argument("--supercell", type=Path, required=True)
     supercell.add_argument("--repeat-x", type=int, required=True)
     supercell.add_argument("--repeat-y", type=int, required=True)
+    supercell.add_argument(
+        "--state",
+        choices=[STATE_FINAL, STATE_INITIAL],
+        default=STATE_FINAL,
+        help=(
+            "Field/magnetization state to compare. 'final' uses m_final and the last field snapshot; "
+            "'initial' uses m_initial and the first field snapshot and does not gate final energy/torque."
+        ),
+    )
+    supercell.add_argument(
+        "--unit-state",
+        choices=[STATE_FINAL, STATE_INITIAL],
+        default=None,
+        help="Override the primitive unit-cell state used as the comparison reference.",
+    )
+    supercell.add_argument(
+        "--supercell-state",
+        choices=[STATE_FINAL, STATE_INITIAL],
+        default=None,
+        help="Override the repeated supercell state used as the comparison sample.",
+    )
     supercell.add_argument("--max-average-m-l2-delta", type=float, default=DEFAULT_MAX_AVERAGE_M_L2_DELTA)
     supercell.add_argument("--max-e-demag-density-relative-error", type=float, default=DEFAULT_MAX_E_DEMAG_RELERR)
     supercell.add_argument("--max-h-demag-stats-relative-error", type=float, default=DEFAULT_MAX_E_DEMAG_RELERR)
@@ -1408,6 +1708,30 @@ def parse_args() -> argparse.Namespace:
             "Add a diagnostic primitive-tetrahedron interpolation comparison for independently remeshed "
             "supercell central cells. This does not replace the strict same-local nearest-node gate."
         ),
+    )
+    supercell.add_argument(
+        "--accept-interpolated-comparison",
+        action="store_true",
+        help=(
+            "Use the primitive-tetrahedron interpolated central-cell comparison as the report acceptance basis. "
+            "This explicit independently-remeshed supercell gate does not change the default strict same-local "
+            "nearest-node gate."
+        ),
+    )
+    supercell.add_argument(
+        "--max-interpolated-m-p99-l2-delta",
+        type=float,
+        default=DEFAULT_MAX_INTERPOLATED_M_P99_L2_DELTA,
+    )
+    supercell.add_argument(
+        "--max-interpolated-h-demag-p99-relative-error",
+        type=float,
+        default=DEFAULT_MAX_INTERPOLATED_H_DEMAG_P99_RELERR,
+    )
+    supercell.add_argument(
+        "--max-interpolated-demag-phi-max-abs-delta-after-offset-a",
+        type=float,
+        default=DEFAULT_MAX_INTERPOLATED_DEMAG_PHI_DELTA_A,
     )
     supercell.add_argument(
         "--interpolation-barycentric-tolerance",

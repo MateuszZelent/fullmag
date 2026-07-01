@@ -567,16 +567,18 @@ def write_zarr_snapshot(
     component_order: list[str],
     values: list[float],
     total_steps: int,
+    initial_values: list[float] | None = None,
 ) -> None:
     zarr_dir = root / "artifacts" / "fields" / f"{observable}.zarr"
     zarr_dir.mkdir(parents=True)
     component_count = len(component_order)
     cell_count = len(values) // component_count
+    sample_count = 2 if initial_values is not None else 1
     (zarr_dir / ".zarray").write_text(
         json.dumps(
             {
                 "zarr_format": 2,
-                "shape": [1, component_count, cell_count],
+                "shape": [sample_count, component_count, cell_count],
                 "chunks": [1, component_count, cell_count],
                 "dtype": "<f8",
                 "compressor": None,
@@ -601,12 +603,20 @@ def write_zarr_snapshot(
         ),
         encoding="utf-8",
     )
-    (zarr_dir / "samples.csv").write_text(
-        "sample,step,time,solver_dt,chunk_key,dtype,scalar_bytes,cell_count\n"
-        f"0,{total_steps},1.000000000000000e-12,1.000000000000000e-13,0.0.0,<f8,8,{cell_count}\n",
-        encoding="utf-8",
-    )
-    (zarr_dir / "0.0.0").write_bytes(struct.pack(f"<{len(values)}d", *values))
+    rows = ["sample,step,time,solver_dt,chunk_key,dtype,scalar_bytes,cell_count"]
+    if initial_values is not None:
+        rows.append(f"0,0,0.000000000000000e0,0.000000000000000e0,0.0.0,<f8,8,{cell_count}")
+        rows.append(
+            f"1,{total_steps},1.000000000000000e-12,1.000000000000000e-13,1.0.0,<f8,8,{cell_count}"
+        )
+        (zarr_dir / "0.0.0").write_bytes(struct.pack(f"<{len(initial_values)}d", *initial_values))
+        (zarr_dir / "1.0.0").write_bytes(struct.pack(f"<{len(values)}d", *values))
+    else:
+        rows.append(
+            f"0,{total_steps},1.000000000000000e-12,1.000000000000000e-13,0.0.0,<f8,8,{cell_count}"
+        )
+        (zarr_dir / "0.0.0").write_bytes(struct.pack(f"<{len(values)}d", *values))
+    (zarr_dir / "samples.csv").write_text("\n".join(rows) + "\n", encoding="utf-8")
 
 
 def test_validator_accepts_native_zarr_field_snapshots(tmp_path: Path) -> None:
@@ -640,6 +650,60 @@ def test_validator_accepts_native_zarr_field_snapshots(tmp_path: Path) -> None:
         unit="A",
         component_order=["scalar"],
         values=[2.0e-3, 2.0e-3, 2.0e-3, 2.0e-3],
+        total_steps=4,
+    )
+
+    result = run_validator(log_path, "exchange_coupled")
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_validator_accepts_native_zarr_initial_and_final_field_snapshots(tmp_path: Path) -> None:
+    log_path = write_summary_fixture(tmp_path, scenario="exchange_coupled", coupled=True)
+    shutil.rmtree(tmp_path / "artifacts" / "fields" / "H_demag")
+    shutil.rmtree(tmp_path / "artifacts" / "fields" / "demag_phi")
+    write_zarr_snapshot(
+        tmp_path,
+        observable="H_demag",
+        unit="A/m",
+        component_order=["x", "y", "z"],
+        values=[
+            1.0e3,
+            1.0e3,
+            1.0e3,
+            1.0e3,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        initial_values=[
+            2.0e3,
+            2.0e3,
+            2.0e3,
+            2.0e3,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        total_steps=4,
+    )
+    write_zarr_snapshot(
+        tmp_path,
+        observable="demag_phi",
+        unit="A",
+        component_order=["scalar"],
+        values=[2.0e-3, 2.0e-3, 2.0e-3, 2.0e-3],
+        initial_values=[4.0e-3, 4.0e-3, 4.0e-3, 4.0e-3],
         total_steps=4,
     )
 
@@ -793,6 +857,42 @@ def write_static_equilibrium_supercell_report(
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def add_interpolated_supercell_comparison(payload: dict[str, object]) -> None:
+    payload["interpolated_central_cell_comparability"] = {
+        "schema_version": "fem_static_pbc_supercell_interpolated_comparison.v1",
+        "mapping": "supercell central-cell node -> modulo(x/y) primitive tetrahedral linear interpolation",
+        "interpolation_method": "linear_tetrahedral_barycentric",
+        "barycentric_tolerance": 1.0e-10,
+        "field_sample_count": 2,
+        "field_located_count": 2,
+        "field_missed_count": 0,
+        "field_coverage_ratio": 1.0,
+        "magnetic_sample_count": 2,
+        "magnetic_located_count": 2,
+        "magnetic_missed_count": 0,
+        "magnetic_coverage_ratio": 1.0,
+        "min_barycentric_weight": 0.25,
+        "m": {
+            "mean_l2_delta": 1.0e-7,
+            "p99_l2_delta": 1.0e-6,
+            "max_l2_delta": 2.0e-6,
+            "p99_relative_error": 1.0e-6,
+        },
+        "H_demag": {
+            "mean_l2_delta": 1.0,
+            "p99_l2_delta": 2.0,
+            "max_l2_delta": 3.0,
+            "p99_relative_error": 1.0e-3,
+        },
+        "demag_phi": {
+            "best_constant_offset_A": 1.0e-9,
+            "mean_abs_delta_after_offset_A": 1.0e-9,
+            "p99_abs_delta_after_offset_A": 5.0e-9,
+            "max_abs_delta_after_offset_A": 1.0e-8,
+        },
+    }
+
+
 def test_validator_accepts_exchange_coupled_relaxation_metadata(tmp_path: Path) -> None:
     log_path = write_summary_fixture(tmp_path, scenario="exchange_coupled", coupled=True)
 
@@ -888,39 +988,7 @@ def test_validator_accepts_supercell_report_with_interpolated_comparison(tmp_pat
     supercell_report = tmp_path / "reports" / "supercell_validation.v1.json"
     write_static_equilibrium_supercell_report(supercell_report)
     payload = json.loads(supercell_report.read_text(encoding="utf-8"))
-    payload["interpolated_central_cell_comparability"] = {
-        "schema_version": "fem_static_pbc_supercell_interpolated_comparison.v1",
-        "mapping": "supercell central-cell node -> modulo(x/y) primitive tetrahedral linear interpolation",
-        "interpolation_method": "linear_tetrahedral_barycentric",
-        "barycentric_tolerance": 1.0e-10,
-        "field_sample_count": 2,
-        "field_located_count": 2,
-        "field_missed_count": 0,
-        "field_coverage_ratio": 1.0,
-        "magnetic_sample_count": 2,
-        "magnetic_located_count": 2,
-        "magnetic_missed_count": 0,
-        "magnetic_coverage_ratio": 1.0,
-        "min_barycentric_weight": 0.25,
-        "m": {
-            "mean_l2_delta": 1.0e-7,
-            "p99_l2_delta": 1.0e-6,
-            "max_l2_delta": 2.0e-6,
-            "p99_relative_error": 1.0e-6,
-        },
-        "H_demag": {
-            "mean_l2_delta": 1.0,
-            "p99_l2_delta": 2.0,
-            "max_l2_delta": 3.0,
-            "p99_relative_error": 1.0e-3,
-        },
-        "demag_phi": {
-            "best_constant_offset_A": 1.0e-9,
-            "mean_abs_delta_after_offset_A": 1.0e-9,
-            "p99_abs_delta_after_offset_A": 5.0e-9,
-            "max_abs_delta_after_offset_A": 1.0e-8,
-        },
-    }
+    add_interpolated_supercell_comparison(payload)
     supercell_report.write_text(json.dumps(payload), encoding="utf-8")
 
     result = run_validator_with_args(
@@ -930,6 +998,56 @@ def test_validator_accepts_supercell_report_with_interpolated_comparison(tmp_pat
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_validator_accepts_required_interpolated_supercell_report(tmp_path: Path) -> None:
+    log_path = write_summary_fixture(tmp_path, scenario="exchange_coupled", coupled=True)
+    supercell_report = tmp_path / "reports" / "supercell_interpolated_validation.v1.json"
+    write_static_equilibrium_supercell_report(supercell_report)
+    payload = json.loads(supercell_report.read_text(encoding="utf-8"))
+    payload["acceptance_basis"] = "interpolated_remesh"
+    mapped = payload["mapped_central_cell_comparability"]
+    mapped["same_local_discretization"] = False
+    mapped["same_local_discretization_limit_m"] = 1.0e-12
+    mapped["max_nearest_field_node_distance_m"] = 1.0e-9
+    mapped["max_nearest_magnetic_node_distance_m"] = 1.0e-9
+    payload["metrics"].update(
+        {
+            "interpolated_field_missed_count": 0,
+            "interpolated_magnetic_missed_count": 0,
+            "interpolated_m_p99_l2_delta": 1.0e-6,
+            "interpolated_h_demag_p99_relative_error": 1.0e-3,
+            "interpolated_demag_phi_max_abs_delta_after_offset_A": 1.0e-8,
+        }
+    )
+    add_interpolated_supercell_comparison(payload)
+    supercell_report.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = run_validator_with_args(
+        log_path,
+        "exchange_coupled",
+        ["--require-interpolated-supercell-report", str(supercell_report)],
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_validator_rejects_interpolated_supercell_report_without_acceptance_basis(tmp_path: Path) -> None:
+    log_path = write_summary_fixture(tmp_path, scenario="exchange_coupled", coupled=True)
+    supercell_report = tmp_path / "reports" / "supercell_interpolated_validation.v1.json"
+    write_static_equilibrium_supercell_report(supercell_report)
+    payload = json.loads(supercell_report.read_text(encoding="utf-8"))
+    add_interpolated_supercell_comparison(payload)
+    supercell_report.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = run_validator_with_args(
+        log_path,
+        "exchange_coupled",
+        ["--require-interpolated-supercell-report", str(supercell_report)],
+    )
+
+    assert result.returncode != 0
+    assert "acceptance_basis" in result.stderr
 
 
 def test_validator_rejects_bad_interpolated_comparison_schema(tmp_path: Path) -> None:

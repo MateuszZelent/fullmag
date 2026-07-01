@@ -201,10 +201,14 @@ describe("FrequencyDomainCharts", () => {
             {
               branchId: "acoustic",
               frequencyHz: 7.5e9,
+              linewidthHz: 2.8e6,
+              modeFieldId: null,
+              modeFieldResourceKey: null,
               overlap: 0.97,
               pathS: 1.25e6,
               rawModeIndex: 2,
               residualNorm: 1e-8,
+              sampleLabel: "G",
               sampleIndex: 4,
             },
           ],
@@ -231,8 +235,10 @@ describe("FrequencyDomainCharts", () => {
     expect(responseHtml).toContain("Select response point 0 at 9.5 GHz");
     expect(responseHtml).toContain("Plot response field 0 at 9.5 GHz");
     expect(responseHtml).toContain("field ready");
-    expect(dispersionHtml).toContain("Select dispersion sample 4 mode 2");
+    expect(dispersionHtml).toContain("Select dispersion G sample 4, mode 2");
+    expect(dispersionHtml).toContain("G sample 4, mode 2");
     expect(dispersionHtml).toContain("branch acoustic");
+    expect(dispersionHtml).toContain("linewidth 2.8 MHz");
   });
 
   it("highlights the selected spectrum mode without changing point identity", () => {

@@ -307,6 +307,16 @@ canonical user-facing model for large FEM eigenmode studies because users
 usually care about a measurement band, device band, or FMR band, not about a
 global dense ordering of every eigenpair.
 
+Frequency-window artifacts must preserve this cap as
+`requested_mode_count`.  If the solver stops because the cap was reached, the
+published `mode_count` must equal `requested_mode_count` and the completeness
+metadata must report `truncated_by_requested_count` with
+`additional_modes_may_exist=true`; otherwise the window is not cap-truncated
+and must use a different completeness status.  For k-path dispersion,
+`mode_count` is the public maximum mode count per k sample after applying the
+requested output filter, not the number of internal modes retained for branch
+tracking.
+
 ### 4.2 ProblemIR representation
 
 `StudyIR::Eigenmodes` fields (defined in `fullmag-ir/src/lib.rs`):
@@ -315,7 +325,7 @@ global dense ordering of every eigenpair.
 |-------|------|-------------|
 | `dynamics` | `DynamicsIR` | LLG parameters (gyromagnetic ratio, integrator for equilibrium) |
 | `operator` | `EigenOperatorConfigIR` | `kind=LinearizedLlg`, `include_demag` |
-| `count` | `u32` | Number of modes to compute |
+| `count` | `u32` | Maximum number of modes to return; for `FrequencyWindow` this is the accepted-mode cap inside the requested interval |
 | `target` | `EigenTargetIR` | `Lowest`, `Nearest { frequency_hz }`, or production target `FrequencyWindow { frequency_min_hz, frequency_max_hz }` |
 | `equilibrium` | `EquilibriumSourceIR` | `Provided`, `RelaxedInitialState`, `Artifact { path }` |
 | `k_sampling` | `Option<KSamplingIR>` | For dispersion: `Single { k_vector: [f64; 3] }` |

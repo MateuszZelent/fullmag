@@ -1911,6 +1911,7 @@ class EigenmodesStageSpec:
     target_frequency: float | None = None
     frequency_min: float | None = None
     frequency_max: float | None = None
+    operator: str = "linearized_llg"
     include_demag: bool = True
     equilibrium_source: str = "relax"
     equilibrium_artifact: str | None = None
@@ -2256,6 +2257,7 @@ def eigenmodes_stage(
     target_frequency: float | None = None,
     frequency_min: float | None = None,
     frequency_max: float | None = None,
+    operator: str = "linearized_llg",
     include_demag: bool = True,
     equilibrium_source: str = "relax",
     equilibrium_artifact: str | None = None,
@@ -2271,6 +2273,7 @@ def eigenmodes_stage(
         target_frequency=target_frequency,
         frequency_min=frequency_min,
         frequency_max=frequency_max,
+        operator=operator,
         include_demag=include_demag,
         equilibrium_source=equilibrium_source,
         equilibrium_artifact=equilibrium_artifact,
@@ -2397,6 +2400,7 @@ def _capture_stage(stage_spec: object) -> CapturedStage:
                 eigen_target_frequency=stage_spec.target_frequency,
                 eigen_frequency_min=stage_spec.frequency_min,
                 eigen_frequency_max=stage_spec.frequency_max,
+                eigen_operator=stage_spec.operator,
                 eigen_include_demag=stage_spec.include_demag,
                 eigen_equilibrium_source=stage_spec.equilibrium_source,
                 eigen_equilibrium_artifact=stage_spec.equilibrium_artifact,
@@ -2919,6 +2923,7 @@ class StudyStagesBuilder:
         target_frequency: float | None = None,
         frequency_min: float | None = None,
         frequency_max: float | None = None,
+        operator: str = "linearized_llg",
         include_demag: bool = True,
         equilibrium_source: str = "relax",
         equilibrium_artifact: str | None = None,
@@ -2935,6 +2940,7 @@ class StudyStagesBuilder:
                 target_frequency=target_frequency,
                 frequency_min=frequency_min,
                 frequency_max=frequency_max,
+                operator=operator,
                 include_demag=include_demag,
                 equilibrium_source=equilibrium_source,
                 equilibrium_artifact=equilibrium_artifact,
@@ -5914,6 +5920,7 @@ def _build_problem(
     eigen_target_frequency: float | None = None,
     eigen_frequency_min: float | None = None,
     eigen_frequency_max: float | None = None,
+    eigen_operator: str = "linearized_llg",
     eigen_include_demag: bool = True,
     eigen_equilibrium_source: str = "relax",
     eigen_equilibrium_artifact: str | None = None,
@@ -6082,6 +6089,7 @@ def _build_problem(
             target_frequency=eigen_target_frequency,
             frequency_min=eigen_frequency_min,
             frequency_max=eigen_frequency_max,
+            operator=eigen_operator,
             include_demag=eigen_include_demag,
             equilibrium_source=eigen_equilibrium_source,
             equilibrium_artifact=eigen_equilibrium_artifact,
@@ -6507,6 +6515,7 @@ def eigenmodes(
     target_frequency: float | None = None,
     frequency_min: float | None = None,
     frequency_max: float | None = None,
+    operator: str = "linearized_llg",
     include_demag: bool = True,
     equilibrium_source: str = "relax",
     equilibrium_artifact: str | None = None,
@@ -6551,6 +6560,7 @@ def eigenmodes(
         eigen_target_frequency=target_frequency,
         eigen_frequency_min=frequency_min,
         eigen_frequency_max=frequency_max,
+        eigen_operator=operator,
         eigen_include_demag=include_demag,
         eigen_equilibrium_source=equilibrium_source,
         eigen_equilibrium_artifact=equilibrium_artifact,

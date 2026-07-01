@@ -12,6 +12,9 @@ from fullmag.runtime import helper as runtime_helper
 
 EXAMPLES = {
     "exchange_coupled": Path("examples/fem_periodic_antidot_relax_exchange_coupled.py"),
+    "exchange_coupled_frequency_driven": Path(
+        "examples/fem_periodic_antidot_relax_exchange_coupled_frequency_driven.py"
+    ),
     "exchange_coupled_z_padding_reference": Path(
         "examples/fem_periodic_antidot_relax_exchange_coupled_z_padding_reference.py"
     ),
@@ -176,6 +179,86 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
         self.assert_scenario_metadata(
             metadata,
             scenario="exchange_coupled",
+            exchange_coupled=True,
+            universe_xy=2e-7,
+            lateral_gap_xy=0.0,
+        )
+
+    def test_exchange_coupled_frequency_driven_scenario_relaxes_then_computes_driven_response(self) -> None:
+        self.assert_example_is_plain_python("exchange_coupled_frequency_driven")
+        payload = self.export_run_config("exchange_coupled_frequency_driven")
+        self.assert_problem_ir_declares_xy_pbc(payload)
+
+        self.assertEqual(
+            payload["ir"]["problem_meta"]["name"],
+            "fem_periodic_antidot_relax_exchange_coupled_frequency_driven",
+        )
+        self.assertEqual(len(payload["stages"]), 3)
+        self.assertEqual(payload["stages"][0]["entrypoint_kind"], "flat_relax")
+        self.assertEqual(payload["stages"][1]["entrypoint_kind"], "flat_change_device")
+        self.assertEqual(
+            payload["stages"][1]["action"],
+            {"kind": "change_device", "device": "cpu"},
+        )
+        self.assertEqual(payload["stages"][2]["entrypoint_kind"], "flat_frequency_response")
+
+        relax = payload["stages"][0]["ir"]["study"]
+        self.assertEqual(
+            payload["stages"][0]["ir"]["problem_meta"]["runtime_metadata"][
+                "runtime_selection"
+            ]["device"],
+            "cuda",
+        )
+        self.assertEqual(relax["kind"], "relaxation")
+        self.assertEqual(relax["algorithm"], "projected_gradient_bb")
+        self.assertEqual(relax["stop"]["torque_tolerance_apm"], 5.0e3)
+        self.assert_study_saves_equilibrium_and_demag_fields(relax)
+        self.assert_table_logs_pbc_sensitive_quantities(relax)
+
+        self.assertEqual(
+            payload["stages"][2]["ir"]["problem_meta"]["runtime_metadata"][
+                "runtime_selection"
+            ]["device"],
+            "cpu",
+        )
+        frequency_response = payload["stages"][2]["ir"]["study"]
+        self.assertEqual(frequency_response["kind"], "frequency_response")
+        self.assertEqual(frequency_response["operator"]["include_demag"], True)
+        self.assertEqual(frequency_response["magnetostatic_bc"], "periodic_airbox_k0")
+        self.assertEqual(frequency_response["equilibrium"], {"kind": "relaxed_initial_state"})
+        self.assertEqual(frequency_response["damping_policy"], "include")
+        self.assertEqual(
+            frequency_response["spin_wave_bc"],
+            {"kind": "periodic", "pair_ids": ["x_faces", "y_faces"]},
+        )
+        self.assertEqual(
+            frequency_response["frequencies_hz"],
+            {
+                "values_hz": [
+                    2.0e9,
+                    2.5e9,
+                    3.0e9,
+                    3.5e9,
+                    4.0e9,
+                    4.5e9,
+                    5.0e9,
+                ],
+            },
+        )
+        self.assertEqual(
+            frequency_response["sampling"]["outputs"],
+            [
+                {
+                    "kind": "frequency_response_output",
+                    "observable": "susceptibility_tensor",
+                },
+            ],
+        )
+
+        metadata = payload["ir"]["problem_meta"]["runtime_metadata"]
+        self.assert_scenario_metadata(
+            metadata,
+            scenario="exchange_coupled_frequency_driven",
             exchange_coupled=True,
             universe_xy=2e-7,
             lateral_gap_xy=0.0,

@@ -28,6 +28,10 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
       : props.runtimeCommandDisabledReason?.("study.run") ??
         "Study run command is unavailable in this inspector.";
   const validationSummary = summarizeValidation(props.validation);
+  const boundarySummary = summarizeBoundary(
+    draft?.bc,
+    draft?.magnetostaticBc,
+  );
   const excitationSummary = summarizeExcitation(
     draft?.excitationField,
     draft?.excitationPhaseRad,
@@ -76,7 +80,7 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
           />
           <FieldRow
             label="Boundary preset"
-            value={`${draft?.bc || "free"}; ${draft?.kSampling || "k = 0"}`}
+            value={`${boundarySummary.spinWave}; ${boundarySummary.magnetostatic}; ${draft?.kSampling || "k = 0"}`}
           />
           <FieldRow
             label="Frequency summary"
@@ -180,7 +184,7 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
           />
           <FieldRow
             label="Plan fields"
-            value="mesh, FE order, equilibrium, material, operator, excitation, frequencies, precision, demag realization"
+          value="mesh, FE order, equilibrium, material, operator, excitation, frequencies, precision, demag realization"
           />
           <FieldRow
             label="Progress"
@@ -333,9 +337,13 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
         <InspectorSection
           value="frequency-response-boundary-detail"
           title="Boundary"
-          badge={draft?.bc || "free"}
+          badge={boundarySummary.spinWave}
         >
-          <FieldRow label="Boundary condition" value={draft?.bc || "free"} />
+          <FieldRow label="Spin-wave BC" value={boundarySummary.spinWave} />
+          <FieldRow
+            label="Magnetostatic BC"
+            value={boundarySummary.magnetostatic}
+          />
           <FieldRow
             label="Current production slice"
             value="k = 0 free/open or static-periodic response"
@@ -366,9 +374,13 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
         <InspectorSection
           value="frequency-response-periodic-pairs-detail"
           title="Periodic Pairs"
-          badge={draft?.bc || "periodic pairs"}
+          badge={boundarySummary.spinWave}
         >
-          <FieldRow label="Boundary condition" value={draft?.bc || "free"} />
+          <FieldRow label="Spin-wave BC" value={boundarySummary.spinWave} />
+          <FieldRow
+            label="Magnetostatic BC"
+            value={boundarySummary.magnetostatic}
+          />
           <FieldRow
             label="Periodic pair source"
             value="shared-domain mesh periodic_pairs.v1 resource"
@@ -393,7 +405,11 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
           title="k/f Grid"
           badge={draft?.kSampling || "k-grid"}
         >
-          <FieldRow label="Boundary condition" value={draft?.bc || "free"} />
+          <FieldRow label="Spin-wave BC" value={boundarySummary.spinWave} />
+          <FieldRow
+            label="Magnetostatic BC"
+            value={boundarySummary.magnetostatic}
+          />
           <FieldRow label="k vector" value={draft?.kVector || "not set"} />
           <FieldRow label="k grid" value={draft?.kSampling || "not set"} />
           <FieldRow
@@ -430,7 +446,7 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
           />
           <FieldRow
             label="Boundary/k sampling"
-            value={`${draft?.bc || "free"}; ${draft?.kSampling || "k = 0"}`}
+            value={`${boundarySummary.spinWave}; ${boundarySummary.magnetostatic}; ${draft?.kSampling || "k = 0"}`}
           />
           <FieldRow
             label="Excitation phasor"
@@ -522,7 +538,11 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
         <FieldRow label="Include demag" value={draft?.includeDemag ? "yes" : "no"} />
       </InspectorSection>
       <InspectorSection value="frequency-response-wavevector" title="Spin-Wave Sampling">
-        <FieldRow label="Boundary condition" value={draft?.bc || "free"} />
+        <FieldRow label="Spin-wave BC" value={boundarySummary.spinWave} />
+        <FieldRow
+          label="Magnetostatic BC"
+          value={boundarySummary.magnetostatic}
+        />
         <FieldRow label="k vector" value={draft?.kVector || "not set"} />
         <FieldRow label="k sampling" value={draft?.kSampling || "not set"} />
       </InspectorSection>
@@ -539,6 +559,62 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
       </InspectorSection>
     </>
   );
+}
+
+function summarizeBoundary(
+  spinWaveValue: string | null | undefined,
+  magnetostaticValue: string | null | undefined,
+) {
+  return {
+    magnetostatic: formatMagnetostaticBc(magnetostaticValue),
+    spinWave: formatSpinWaveBc(spinWaveValue),
+  };
+}
+
+function formatSpinWaveBc(value: string | null | undefined): string {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed) return "not authored";
+  const parsed = parseObject(trimmed);
+  if (parsed) {
+    const kind = String(parsed.kind ?? "custom");
+    const axes = Array.isArray(parsed.axes)
+      ? parsed.axes.map(String).filter(Boolean)
+      : [];
+    if (kind === "periodic") {
+      return axes.length ? `periodic; axes ${axes.join(", ")}` : "periodic";
+    }
+    if (kind === "floquet") {
+      const kVector = Array.isArray(parsed.k_vector_rad_per_m)
+        ? parsed.k_vector_rad_per_m.map(String).join(", ")
+        : Array.isArray(parsed.floquet_k_vector_rad_per_m)
+          ? parsed.floquet_k_vector_rad_per_m.map(String).join(", ")
+          : "";
+      return kVector ? `floquet; k [${kVector}] rad/m` : "floquet";
+    }
+    return kind;
+  }
+  if (trimmed === "free" || trimmed === "open") return "free/open";
+  return trimmed;
+}
+
+function formatMagnetostaticBc(value: string | null | undefined): string {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed) return "not authored";
+  if (trimmed === "open") return "open";
+  if (trimmed === "periodic_airbox_k0") return "periodic_airbox_k0";
+  if (trimmed === "floquet_airbox") return "floquet_airbox";
+  return trimmed;
+}
+
+function parseObject(value: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function formatFrequencyDraftList(value: string | null | undefined): string {

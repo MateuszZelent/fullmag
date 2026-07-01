@@ -47,3 +47,18 @@ def test_floquet_tangent_frame_transport_and_identity_rejection_are_documented()
     assert "must reject the Floquet/PBC request" in pbc_plan
     assert "scalar phase-only" in pbc_plan
     assert "phase*(T_dst^T T_src)" in masterplan
+
+
+def test_modal_dispersion_artifact_contract_names_tracking_and_mode_handoff() -> None:
+    artifacts = read(REPO_ROOT / "docs/specs/frequency-domain-artifacts-v2.md")
+
+    assert "`tracking_score_source`" in artifacts
+    assert "`modal_overlap_available`" in artifacts
+    assert "`modal_overlap_unavailable_reason`" in artifacts
+    assert "`mode_field_id` and `mode_field_resource_key`" in artifacts
+    assert (
+        "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,"
+        "label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,line_width_hz,"
+        "residual_norm,overlap_score,tracking_score_source,mode_field_id,"
+        "mode_field_resource_key"
+    ) in artifacts

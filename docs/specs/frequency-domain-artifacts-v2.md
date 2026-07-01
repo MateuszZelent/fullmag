@@ -125,6 +125,9 @@ Required fields:
 
 - `schema_version = "eigen_branches.v2"`,
 - `solver_model`,
+- `tracking_score_source`,
+- `modal_overlap_available`,
+- optional `modal_overlap_unavailable_reason`,
 - `branches[]`.
 
 Each branch must include:
@@ -137,27 +140,60 @@ Each point must include:
 
 - `sample_index`,
 - `raw_mode_index`,
+- `frequency_hz`,
 - `frequency_real_hz`,
 - `frequency_imag_hz`,
+- `angular_frequency_rad_per_s`,
 - `tracking_confidence`,
-- optional `overlap_prev`.
+- `tracking_score_source`,
+- `modal_overlap_available`,
+- `mode_field_id`,
+- `mode_field_resource_key`,
+- optional `overlap_prev`,
+- optional `modal_overlap_unavailable_reason`.
 
 Branch identity must be tracked by modal overlap or a stricter future tracking
 method. It must not be inferred only from sorted frequency order.
+When modal vectors are unavailable, the artifact must say so through
+`tracking_score_source = "frequency_score_fallback"` or a mixed summary source
+and `modal_overlap_available = false`; clients must not infer overlap-based
+tracking from branch continuity alone.
 
 ## dispersion.csv
 
 The CSV header must include:
 
 ```text
-sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,line_width_hz,residual_norm,overlap_score
+sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_id,mode_field_resource_key
 ```
 
+The eigen artifact validator treats every header field listed above as required.
+Each public mode key `(sample_index, raw_mode_index)` published in
+`eigen/spectrum.v2.json` must appear exactly once in `dispersion.csv`.
+`path_s_rad_per_m`, `kx_rad_per_m`, `ky_rad_per_m`, `kz_rad_per_m`, and
+`label` must match the corresponding `eigen/spectrum.v2.json` sample metadata
+for the same `sample_index`; an unlabeled spectrum sample is represented as an
+empty CSV label.
 `branch_id` may be empty only when no branch tracking artifact exists.
+When `eigen/branches.v2.json` is present, each non-empty CSV `branch_id` must
+match the branch containing the same `(sample_index, raw_mode_index)` point.
 `residual_norm` may be empty only for solver paths that explicitly report the
 diagnostic as unavailable.
+`overlap_score` is a required column for branch-tracking quality handoff, but
+its value may be empty for seed points or rows whose tracking score source does
+not have an overlap value. Rows with
+`tracking_score_source = "modal_overlap_weighted_score"` must publish a finite
+`overlap_score` in `[0, 1]`; any non-empty `overlap_score` value must also stay
+inside `[0, 1]`.
+`tracking_score_source` must identify whether the row is a seed point,
+modal-overlap-tracked point, or frequency-fallback point. When
+`eigen/branches.v2.json` is present, the CSV `tracking_score_source` must match
+the branch point with the same `(sample_index, raw_mode_index)`.
+`mode_field_id` and `mode_field_resource_key` must match the selected mode
+payload resource when a mode field is emitted, so a dispersion point can be
+handed off to the same 3D mode overlay as the corresponding branch point.
 When the modal payload has positive `frequency_imag_hz`, `line_width_hz` is
-`2 * frequency_imag_hz`, matching `linewidth_fwhm_hz`.
+required and equals `2 * frequency_imag_hz`, matching `linewidth_fwhm_hz`.
 
 ## modes/sample_XXXX/mode_YYYY.json
 
@@ -226,6 +262,20 @@ Tangent leakage diagnostics are the mean and max absolute `m0 dot dm` over the
 exported real and imaginary mode vectors, and must be emitted whenever the
 solver reconstructs physical mode vectors.
 
+For modal periodic/Floquet tangent-coordinate runs, solver diagnostics must
+also emit:
+
+- `basis_transport_policy`, one of `not_applicable`,
+  `tangent_frame_identity`, `tangent_frame_transport`, or `rejected`,
+- `floquet_tangent_frame_max_mismatch`,
+- `floquet_tangent_transport_max_nonunitarity`.
+
+For the CPU/reference `Full2x2` Floquet modal path,
+`basis_transport_policy = "tangent_frame_transport"` means the reduced
+stiffness and mass blocks used `phase*(T_node^T T_root)` transport. Scalar
+Floquet modal paths may report `tangent_frame_identity` only after rejecting
+nonidentity paired tangent frames.
+
 ## eigen/metadata/eigen_summary.json
 
 The dense reference oracle summary must include:
@@ -255,7 +305,10 @@ eigen manifests must include:
 - `artifacts.dispersion_csv_path = "eigen/dispersion.csv"`,
 - `artifacts.solver_diagnostics_path = "eigen/diagnostics/solver.v1.json"`,
 - `artifacts.mode_metadata_paths[]`,
-- `resources.mode_field_resources[]`.
+- `resources.mode_field_resources[]`,
+- `diagnostics.tracking_score_source`,
+- `diagnostics.modal_overlap_available`,
+- optional `diagnostics.modal_overlap_unavailable_reason`.
 
 Driven response manifests must include:
 
@@ -329,9 +382,45 @@ publish the resolved window search contract:
 
 - `requested_window_hz = [frequency_min_hz, frequency_max_hz]`,
 - `resolved_search_window_hz = [min_guarded_hz, max_guarded_hz]`,
+- `requested_mode_count`, copied from the public `Eigenmodes.count` mode cap,
 - `window_completeness.{policy,status,certification_method,additional_modes_may_exist}`,
 - `subwindows[]` with requested/search bounds, shift, iteration totals,
   candidate/accepted counts, residual max, and a modal `stop_reason`.
+
+`mode_count` is the public number of published modes. For a multi-k dispersion
+bundle, it is the maximum `spectrum.samples[*].modes.length` after applying the
+requested output filter; it must not count internal extra modes carried only for
+branch tracking or overlap assignment. `mode_count` must not exceed
+`requested_mode_count`. A solver that stops because this cap was reached must
+use `window_completeness.status = "truncated_by_requested_count"` rather than
+presenting the window as certified or exhausted. This status is valid only when
+`mode_count == requested_mode_count` and
+`window_completeness.additional_modes_may_exist = true`; otherwise the artifact
+must use a more specific non-cap status such as `not_certified`,
+`partial_convergence`, or `window_exhausted`.
+
+Reference/MVP multi-k Floquet `FrequencyWindow` artifacts must also publish
+`frequency_window_solver_policy =
+"reference_k_path_window_filter_not_shift_invert_or_feast"` when the window is
+filtered by the reference k-path orchestrator rather than solved by a production
+shift-invert/FEAST/SLEPc backend. In that case `spectral_transform` remains
+`none`, `production_solver_available = false`, and
+`window_completeness.status = "not_certified"`.
+
+Production modal k-path/Floquet acceptance must not reuse the reference policy
+above. Artifacts promoted as production selected-spectrum modal k-path evidence
+must be multi-sample (`sample_count > 1`), report the managed production modal
+adapter, set `spectral_transform = "shift_invert"`,
+`execution_lane = "production_cpu"`, `production_solver_available = true`, and
+`dense_reference_oracle = false`. Production selected-spectrum modal k-path
+evidence uses the native modal `lambda_eq_i_omega` mapping with
+`phasor_convention = "exp_i_omega_t"` in both
+`eigen/diagnostics/solver.v1.json` and
+`frequency_domain/manifest.v1.json`; artifacts using the opposite phasor
+convention or internally inconsistent modal phasor metadata must not pass this
+production acceptance gate. The current GPU modal path has no production
+acceptance contract until a native modal GPU eigensolver and Floquet operator
+exist.
 
 The allowed completeness policies are `best_effort` and `certified_count`.
 The allowed statuses are `not_certified`, `certified`,
@@ -886,9 +975,17 @@ status as failed acceptance evidence, not as a successful degraded mode.
 Analyze UI must:
 
 - use `path_s` as the dispersion x-axis,
-- show high-symmetry labels from sample labels,
+- show high-symmetry labels from sample labels in dispersion point controls and
+  selected-point summaries when the CSV `label` column is present,
 - use `branches.v2.json` for branch grouping when present,
+- match `branches.v2.json` branch identity to dispersion CSV rows by
+  `(sample_index, raw_mode_index)` when CSV rows omit `branch_id`,
 - fall back to raw mode grouping only when branch tracking is absent,
+- preserve `overlap_score` from `dispersion.csv` as the point-level modal
+  tracking quality when the column is present,
+- preserve `line_width_hz` from `dispersion.csv` as point-level modal linewidth
+  in Hz when the column value is present, including selected-point summaries in
+  Analysis Plots,
 - propagate click selection as `{ branchId, sampleIndex, rawModeIndex }`,
 - load mode artifacts by `sample_index` and `raw_mode_index`.
 

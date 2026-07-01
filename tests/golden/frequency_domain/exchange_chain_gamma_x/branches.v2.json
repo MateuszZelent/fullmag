@@ -1,6 +1,8 @@
 {
   "schema_version": "eigen_branches.v2",
   "solver_model": "fem_eigen_floquet_dense_debug",
+  "tracking_score_source": "modal_overlap_weighted_score",
+  "modal_overlap_available": true,
   "branches": [
     {
       "branch_id": 0,
@@ -9,20 +11,39 @@
         {
           "sample_index": 0,
           "raw_mode_index": 0,
+          "frequency_hz": 1400000000.0,
           "frequency_real_hz": 1400000000.0,
           "frequency_imag_hz": 0.0,
+          "angular_frequency_rad_per_s": 8796459430.05142,
           "tracking_confidence": 1.0,
+          "tracking_score_source": "seed",
+          "modal_overlap_available": false,
+          "mode_field_id": "analysis:eigen:sample-0000:mode-0000",
+          "mode_field_resource_key": "/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0000/samples/vector?view=phase_rotated_real&phase_rad=0",
           "overlap_prev": null
         },
         {
           "sample_index": 1,
           "raw_mode_index": 0,
+          "frequency_hz": 1450000000.0,
           "frequency_real_hz": 1450000000.0,
           "frequency_imag_hz": 0.0,
+          "angular_frequency_rad_per_s": 9110618695.4104,
           "tracking_confidence": 0.99,
+          "tracking_score_source": "modal_overlap_weighted_score",
+          "modal_overlap_available": true,
+          "mode_field_id": "analysis:eigen:sample-0001:mode-0000",
+          "mode_field_resource_key": "/v2/sessions/current/data/fields/analysis:eigen:sample-0001:mode-0000/samples/vector?view=phase_rotated_real&phase_rad=0",
           "overlap_prev": 0.99
         }
       ]
     }
-  ]
+  ],
+  "diagnostics": {
+    "tracking_score_source": "modal_overlap_weighted_score",
+    "modal_overlap_available": true,
+    "min_overlap": 0.99,
+    "gap_count": 0,
+    "ambiguous_assignment_count": 0
+  }
 }

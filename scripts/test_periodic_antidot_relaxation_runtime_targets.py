@@ -125,6 +125,9 @@ def test_static_pbc_demag_uniform_slab_runtime_target_runs_cpu_and_gpu_controls(
 def test_static_pbc_demag_equilibrium_repeated_state_target_generates_all_reports() -> None:
     target = target_block("verify-fem-static-pbc-demag-equilibrium-repeated-state-runtime")
 
+    uniform_gate = target.index("just verify-fem-static-pbc-demag-uniform-slab-runtime")
+    z_padding_gate = target.index("just verify-fem-static-pbc-demag-z-padding-runtime")
+    assert uniform_gate < z_padding_gate
     assert "just verify-fem-static-pbc-demag-z-padding-runtime" in target
     assert "just prepare-fem-static-pbc-demag-supercell-runtime-artifacts" in target
     assert "just write-fem-static-pbc-demag-supercell-diagnostic-report" in target
@@ -210,6 +213,37 @@ def test_static_pbc_demag_supercell_interpolated_diagnostic_report_is_opt_in() -
     assert "verify-fem-static-pbc-demag-equilibrium-runtime" not in target
 
 
+def test_static_pbc_demag_supercell_interpolated_acceptance_target_is_opt_in() -> None:
+    target = target_block("verify-fem-static-pbc-demag-supercell-interpolated-artifacts")
+
+    assert "scripts/compare_fem_static_pbc_equilibrium_artifacts.py supercell" in target
+    assert "--accept-interpolated-comparison" in target
+    assert "supercell_interpolated_validation.v1.json" in target
+    assert "verify-fem-static-pbc-demag-equilibrium-runtime" not in target
+
+
+def test_static_pbc_demag_repeated_state_initial_operator_target_is_opt_in() -> None:
+    target = target_block("verify-fem-static-pbc-demag-supercell-repeated-state-initial-operator-artifacts")
+
+    assert "scripts/compare_fem_static_pbc_equilibrium_artifacts.py supercell" in target
+    assert "--unit-state final" in target
+    assert "--supercell-state initial" in target
+    assert "--accept-interpolated-comparison" in target
+    assert "supercell_interpolated_initial_operator_validation.v1.json" in target
+    assert "verify-fem-static-pbc-demag-equilibrium-runtime" not in target
+
+
+def test_static_pbc_demag_repeated_state_initial_operator_diagnostic_target_allows_failed_status() -> None:
+    target = target_block("write-fem-static-pbc-demag-supercell-repeated-state-initial-operator-diagnostic-report")
+
+    assert "scripts/compare_fem_static_pbc_equilibrium_artifacts.py --allow-failed-status supercell" in target
+    assert "--unit-state final" in target
+    assert "--supercell-state initial" in target
+    assert "--accept-interpolated-comparison" in target
+    assert "supercell_interpolated_initial_operator_validation.v1.json" in target
+    assert "verify-fem-static-pbc-demag-equilibrium-runtime" not in target
+
+
 def test_static_pbc_demag_repeated_state_target_splits_prepared_artifacts() -> None:
     standalone = target_block("verify-fem-static-pbc-demag-supercell-repeated-state-runtime")
     prepared = target_block("verify-fem-static-pbc-demag-supercell-repeated-state-runtime-from-prepared")
@@ -218,6 +252,8 @@ def test_static_pbc_demag_repeated_state_target_splits_prepared_artifacts() -> N
     assert "just verify-fem-static-pbc-demag-supercell-repeated-state-runtime-from-prepared" in standalone
     assert "just prepare-fem-static-pbc-demag-supercell-runtime-artifacts" not in prepared
     assert "just write-fem-static-pbc-demag-repeated-unit-initial-state" in prepared
+    assert "just verify-fem-static-pbc-demag-supercell-interpolated-artifacts" in prepared
+    assert "just verify-fem-static-pbc-demag-supercell-artifacts" not in prepared
     assert "central_cell_demag_energy_j" not in prepared
     assert "central_cell_torque_apm" not in prepared
 
@@ -246,6 +282,7 @@ def test_static_pbc_demag_tiled_supercell_fixture_target_is_diagnostic() -> None
     assert "--repeat-y" in writer
     assert "just write-fem-static-pbc-demag-tiled-supercell-fixture" in verifier
     assert "just verify-fem-static-pbc-demag-supercell-artifacts" in verifier
+    assert "just verify-fem-static-pbc-demag-supercell-initial-state-artifacts" in verifier
     assert "verify-fem-static-pbc-demag-equilibrium-runtime" not in verifier
     assert "ensure-managed-fem-runtime" not in verifier
 
@@ -257,6 +294,7 @@ def test_static_pbc_demag_supercell_repeated_state_runtime_uses_headless_initial
     assert 'FULLMAG_GMSH_THREADS="${FULLMAG_PBC_RELAX_GMSH_THREADS:-1}"' in target
     assert "just write-fem-static-pbc-demag-repeated-unit-initial-state" in target
     assert '"${FULLMAG_PBC_RELAX_REPEATED_STATE_MAX_NEAREST_DISTANCE_M:-1e-12}"' in target
+    assert "linear_tetrahedral_interpolation" in target
     assert '"${FULLMAG_PBC_RELAX_REPEATED_STATE_MAX_NEAREST_DISTANCE_M:-1e-8}"' not in target
     assert "examples/fem_periodic_antidot_relax_exchange_coupled_supercell_3x3.py" in target
     assert "--initial-magnetization-state" in target
@@ -265,13 +303,19 @@ def test_static_pbc_demag_supercell_repeated_state_runtime_uses_headless_initial
     assert "--supercell-repeat 3 3" in target
     assert "--require-initial-magnetization-state-override" in target
     assert "just write-fem-static-pbc-demag-supercell-central-cell-artifact-auto" in target
-    assert "just verify-fem-static-pbc-demag-supercell-artifacts" in target
+    assert "just verify-fem-static-pbc-demag-supercell-interpolated-artifacts" in target
+    diagnostic_report = target.index(
+        "just write-fem-static-pbc-demag-supercell-repeated-state-initial-operator-diagnostic-report"
+    )
+    strict_report = target.index("just verify-fem-static-pbc-demag-supercell-interpolated-artifacts")
+    assert diagnostic_report < strict_report
     assert ".fullmag/reports/fem-static-pbc-demag-supercell-repeated-state-runtime/reports/supercell_validation.v1.json" in target
 
 
 def test_static_pbc_demag_report_targets_call_static_artifact_comparator() -> None:
     z_padding_target = target_block("verify-fem-static-pbc-demag-z-padding-artifacts")
     supercell_target = target_block("verify-fem-static-pbc-demag-supercell-artifacts")
+    initial_state_target = target_block("verify-fem-static-pbc-demag-supercell-initial-state-artifacts")
 
     assert "scripts/compare_fem_static_pbc_equilibrium_artifacts.py z-padding" in z_padding_target
     assert "--reference" in z_padding_target
@@ -282,6 +326,9 @@ def test_static_pbc_demag_report_targets_call_static_artifact_comparator() -> No
     assert "--supercell" in supercell_target
     assert "--repeat-x" in supercell_target
     assert "--repeat-y" in supercell_target
+    assert "scripts/compare_fem_static_pbc_equilibrium_artifacts.py supercell" in initial_state_target
+    assert "--state initial" in initial_state_target
+    assert "supercell_initial_state_validation.v1.json" in initial_state_target
 
 
 def test_static_pbc_demag_supercell_central_cell_target_writes_extraction_artifact() -> None:

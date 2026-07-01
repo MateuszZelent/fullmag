@@ -456,7 +456,9 @@ just prepare-fem-static-pbc-demag-supercell-runtime-artifacts
 
 just verify-fem-static-pbc-demag-supercell-runtime
 
-# Canonical managed strict-M5 wrapper including the repeated-state supercell report.
+# Canonical managed strict-M5 wrapper. This starts with the uniform slab
+# false-PBC diagnostic, then runs the antidot z-padding and repeated-state
+# supercell report path.
 just verify-fem-static-pbc-demag-equilibrium-repeated-state-runtime
 
 # Or compare already-produced artifact roots explicitly.
@@ -588,7 +590,11 @@ It computes the central-cell torque residual as
 `max(norm(cross(m_i,H_eff_i)))` over selected magnetic nodes. It validates the
 selected indices against
 `m_final.json`, `fields/H_demag.zarr`, `fields/H_eff.zarr`, and
-`fields/demag_phi.zarr`. The manual
+`fields/demag_phi.zarr`. Field Zarr inputs may contain one or more samples; the
+producer requires `samples.csv` to match `.zarray.shape[0]` and uses the final
+sample row, so runtime artifacts with both the requested step-0 field snapshot
+and the final field snapshot remain valid central-cell extraction inputs. The
+manual
 `just write-fem-static-pbc-demag-supercell-central-cell-artifact` target remains
 available when an external extraction workflow supplies explicit index lists;
 those index inputs may be comma-separated lists or paths to files containing
@@ -629,17 +635,22 @@ producer for controlled supercell fixtures. It consumes a primitive artifact
 root, a repeated-supercell artifact root, and `repeat_x/repeat_y`, then writes a
 file-backed sampled `m` state plus
 `fem_static_pbc_repeated_unit_initial_state.v1` provenance by reducing each
-supercell magnetic node into the primitive lateral period and copying the
-nearest primitive `m_final` vector. The producer is strict by default:
-`max_nearest_distance_m = 1e-12` is intended for same-local-discretization
-repeated meshes. Looser thresholds are diagnostic only and must be recorded in
-the provenance. On the current independently remeshed 3x3 exchange-coupled
-artifacts, the strict threshold rejects the map; a diagnostic run with
-`max_nearest_distance_m = 1e-8` reports
-`max_nearest_unit_node_distance_m = 5.7101071070060185e-09` and
-`mean_nearest_unit_node_distance_m = 1.3493516002184034e-09`. That output can
-help build a frozen/repeated-state experiment, but it does not close M5 and
-should not be treated as proof of primitive-vs-supercell equivalence.
+supercell magnetic node into the primitive lateral period. The producer has two
+explicit mapping modes. `nearest` copies the nearest primitive `m_final` vector
+and is strict by default: `max_nearest_distance_m = 1e-12` is intended only for
+same-local-discretization repeated meshes. Looser nearest thresholds are
+diagnostic only and must be recorded in the provenance. The managed
+repeated-state strict-M5 path uses `linear_tetrahedral_interpolation`, which
+locates each reduced supercell magnetic node in primitive magnetic tetrahedra
+and writes the barycentric interpolation of primitive `m_final`. This keeps the
+state-generation contract aligned with the `interpolated_remesh` report basis
+for independently remeshed supercells. A 2026-07-01 writer check on the current
+independently remeshed 3x3 exchange-coupled artifacts mapped all `42953`
+supercell magnetic nodes with `min_barycentric_weight =
+-2.123200791492914e-14` at tolerance `1e-10`. This only proves that the seeded
+state can now be generated consistently for a remesh; it does not close M5
+until a fresh managed repeated-state runtime artifact and the corresponding
+primitive-vs-supercell field/potential/energy/torque reports pass.
 `just write-fem-static-pbc-demag-tiled-supercell-fixture` is an even narrower
 diagnostic fixture producer: it copies a primitive artifact root into an
 explicitly tiled repeated artifact with the same local node coordinates modulo
@@ -666,16 +677,87 @@ barycentric tolerance, minimum barycentric weight, vector errors, and
 gauge-adjusted `demag_phi` residuals. This remains diagnostic until explicit
 coverage and interpolation-error thresholds are promoted into the M5 acceptance
 contract; the strict nearest-node same-local gate is unchanged.
+`just verify-fem-static-pbc-demag-supercell-interpolated-artifacts` is the
+separate opt-in acceptance writer for that promoted contract. It invokes the
+report writer with `--accept-interpolated-comparison`, writes
+`acceptance_basis = "interpolated_remesh"`, and gates report `status` on zero
+missed interpolated field/magnetic samples plus interpolated `m`,
+`H_demag`, and gauge-adjusted `demag_phi` thresholds. The runtime artifact
+validator consumes such a report only through the separate
+`--require-interpolated-supercell-report` flag. This path is intentionally not
+the default `--require-supercell-report` strict same-local gate and is not wired
+into the managed strict-M5 wrapper until a real workload report passes the
+interpolated metrics.
 On the current independently remeshed runtime artifacts, this diagnostic writes
 `.fullmag/reports/fem-static-pbc-demag-equilibrium-runtime/reports/supercell_interpolated_validation.v1.json`
 with full interpolation coverage (`field_coverage_ratio = 1.0`,
 `magnetic_coverage_ratio = 1.0`) but still reports
-`H_demag.p99_relative_error = 2.170060e-01`,
-`demag_phi.max_abs_delta_after_offset_A = 1.417297e-04`, and
-`m.p99_l2_delta = 1.072672e-02`. Therefore the current supercell mismatch is
-not only a nearest-node remesh artifact: after primitive tetrahedral
-interpolation, the field and potential remain outside the prospective strict
-M5 tolerances.
+`interpolated_h_demag_p99_relative_error = 2.179207e-01`,
+`interpolated_demag_phi_max_abs_delta_after_offset_A = 1.062366e-04`,
+`e_demag_density_relative_error = 3.224739e-02`, and
+`central_cell_torque_residual_relative_error = 8.173551e-01`; interpolated
+`m.p99_l2_delta = 8.775846e-03` is below the current `2e-2` threshold.
+Therefore the current supercell mismatch is not only a nearest-node remesh
+artifact: after primitive tetrahedral interpolation, the field, potential,
+energy, and torque remain outside the strict M5 tolerances.
+For controlled repeated-state supercells, an additional operator-level
+diagnostic uses asymmetric states:
+
+```bash
+just verify-fem-static-pbc-demag-supercell-repeated-state-initial-operator-artifacts \
+  unit/artifacts repeated-state-supercell/artifacts 3 3
+```
+
+The managed repeated-state runtime writes the same report as a diagnostic before
+the strict final-state interpolated report:
+
+```bash
+just write-fem-static-pbc-demag-supercell-repeated-state-initial-operator-diagnostic-report \
+  unit/artifacts repeated-state-supercell/artifacts 3 3
+```
+
+That diagnostic target uses `--allow-failed-status`, so the report is preserved
+even when the current demag/PBC mismatch is expected to make the strict final
+acceptance fail.
+
+This writes
+`supercell_interpolated_initial_operator_validation.v1.json` with
+`comparison_state = "final_to_initial"`, `unit_comparison_state = "final"`,
+and `supercell_comparison_state = "initial"`. The asymmetry is intentional:
+the repeated supercell is seeded from primitive `m_final`, so comparing it to
+primitive `m_initial` is physically wrong. This report does not gate final
+energy or torque; it asks whether the first demag evaluation on the seeded
+supercell agrees with the primitive final-state demag field. After regenerating
+the repeated-state run from the interpolated and unit-normalized seed, the
+report has full interpolation coverage and the seeded `m` check now passes
+(`interpolated_m_p99_l2_delta = 5.254146e-04`). It still fails on the demag
+operator observables with `interpolated_h_demag_p99_relative_error =
+2.163426e-01` and `interpolated_demag_phi_max_abs_delta_after_offset_A =
+1.068777e-04`. This is stronger negative evidence than a final-relaxation
+mismatch: after removing the seed-mapping error, the primitive-vs-supercell
+demag disagreement is already visible at the seeded operator evaluation.
+The comparator now also separates removable gauge/affine artifacts from a real
+demag-field-shape mismatch. On the regenerated `final_to_initial` report, the
+best constant `H_demag` delta is only `[17.875229, -14.443734,
+-32.324580] A/m`, and subtracting it does not improve the mismatch:
+`p99_l2_delta_after_mean_delta = 3.589741e+04 A/m` and
+`p99_relative_error_after_mean_delta = 2.164383e-01`. For `demag_phi`, the best
+affine fit has gradient `[4.800680, 0.735719, 3.324225] A/m`, but the residual
+remains `max_abs_delta_after_affine_A = 1.069810e-04` with
+`p99_abs_delta_after_affine_A = 3.724454e-05`. Therefore the current blocker is
+not a scalar-potential gauge offset and not a uniform-field offset; it is still
+a demag/PBC operator, boundary-model, or remeshing/interpolation field-shape
+disagreement.
+The managed repeated-state wrapper now uses the `interpolated_remesh`
+acceptance target for its final-state supercell report, because the repeated
+supercell is independently remeshed. On the same regenerated artifacts that
+report reaches the physical metrics and fails with
+`interpolated_h_demag_p99_relative_error = 2.162412e-01`,
+`interpolated_demag_phi_max_abs_delta_after_offset_A = 1.018032e-04`, and
+`e_demag_density_relative_error = 2.404344e-02`; interpolated `m` and
+central-cell torque are below their current thresholds. This keeps the managed
+target's failure reason aligned with the demag/PBC operator mismatch instead
+of the expected nearest-node mismatch of independent remeshes.
 Headless script execution can consume that sampled state through
 `--initial-magnetization-state PATH`, with optional
 `--initial-magnetization-state-format`, `--initial-magnetization-state-dataset`,
@@ -766,6 +848,14 @@ When those environment variables are set, the validator requires:
   comparison metrics below the strict supercell thresholds. For strict M5
   acceptance, `mapped_central_cell_comparability.same_local_discretization`
   must be `true`; `false` marks the report as a diagnostic remesh comparison.
+- `fem_static_pbc_supercell_validation.v1` may instead be used as an explicit
+  independently remeshed supercell gate only when it has `status="ok"`,
+  `acceptance_basis="interpolated_remesh"`, a valid
+  `interpolated_central_cell_comparability` section, zero interpolated missed
+  field/magnetic samples, and below-threshold interpolated `m`, `H_demag`,
+  gauge-adjusted `demag_phi`, demag-energy, and central-cell torque metrics.
+  This is accepted only through `--require-interpolated-supercell-report`; it
+  does not change the strict same-local `--require-supercell-report` contract.
 
 ---
 
@@ -939,12 +1029,25 @@ the tested state, so the stored demag energy is non-negative.
       residual while
       validating index ranges and scalar bounds against the resolved supercell
       artifacts; a manual target still accepts literal index lists or files
+- [x] Central-cell extraction accepts multi-sample field Zarr artifacts and
+      selects the final `samples.csv` row, so step-0 plus final field snapshots
+      do not break strict-M5 supercell report generation
 - [x] A diagnostic tiled same-local supercell fixture can prove the strict
       primitive-vs-supercell comparator accepts a known same-local artifact
       without treating that fixture as runtime or physical M5 closure
 - [x] An opt-in interpolated primitive-vs-supercell diagnostic can compare
       independently remeshed central-cell nodes against primitive tetrahedral
       linear interpolation without relaxing the strict same-local gate
+- [x] A separate opt-in `interpolated_remesh` supercell acceptance report and
+      validator flag exist, while the strict same-local supercell gate remains
+      unchanged
+- [x] Repeated-state operator diagnostics can compare primitive final state
+      against repeated-supercell initial state through an explicit
+      `comparison_state="final_to_initial"` report
+- [x] The managed repeated-state wrapper uses the explicit
+      `interpolated_remesh` acceptance target for independently remeshed
+      repeated supercells, so failures report physical demag-field/potential
+      metrics rather than same-local nearest-node mismatch
 - [x] GPU projected-gradient BB and nonlinear-CG source contracts project trial
       magnetisation onto static periodic classes after retraction
 - [x] GPU device Poisson demag recovery projects recovered `H_demag` onto

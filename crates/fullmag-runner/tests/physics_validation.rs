@@ -62,8 +62,25 @@ fn frequency_domain_golden_artifacts_are_contract_shaped() {
     )
     .expect("branches.v2 golden should be valid json");
     assert_eq!(branches["schema_version"], "eigen_branches.v2");
+    assert_eq!(
+        branches["tracking_score_source"].as_str(),
+        Some("modal_overlap_weighted_score")
+    );
+    assert_eq!(branches["modal_overlap_available"].as_bool(), Some(true));
+    assert_eq!(
+        branches["diagnostics"]["tracking_score_source"].as_str(),
+        Some("modal_overlap_weighted_score")
+    );
     assert_eq!(branches["branches"][0]["points"][1]["sample_index"], 1);
     assert_eq!(branches["branches"][0]["points"][1]["overlap_prev"], 0.99);
+    assert_eq!(
+        branches["branches"][0]["points"][1]["frequency_hz"].as_f64(),
+        Some(1_450_000_000.0)
+    );
+    assert_eq!(
+        branches["branches"][0]["points"][1]["tracking_score_source"].as_str(),
+        Some("modal_overlap_weighted_score")
+    );
 
     let dispersion = std::fs::read_to_string(golden_dir.join("dispersion.csv"))
         .expect("csv golden should exist");
@@ -76,6 +93,9 @@ fn frequency_domain_golden_artifacts_are_contract_shaped() {
         "kz_rad_per_m",
         "branch_id",
         "residual_norm",
+        "tracking_score_source",
+        "mode_field_id",
+        "mode_field_resource_key",
     ] {
         assert!(
             header.split(',').any(|column| column == required),
@@ -1711,6 +1731,198 @@ fn fem_eigen_floquet_runs_with_phase_aware_metadata() {
 }
 
 #[test]
+fn fem_eigen_full_2x2_floquet_executes_nonidentity_tangent_frame_transport() {
+    let mut mesh = cube_mesh(20.0);
+    mesh.mesh_name = "floquet_frame_transport_cube".to_string();
+    let mut equilibrium_magnetization = vec![[1.0, 0.0, 0.0]; 8];
+    equilibrium_magnetization[1] = [0.0, 1.0, 0.0];
+    let plan = FemEigenPlanIR {
+        mesh_name: "floquet_frame_transport_cube".to_string(),
+        mesh_source: None,
+        mesh,
+        object_segments: Vec::new(),
+        mesh_parts: Vec::new(),
+        domain_mesh_mode: fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh,
+        domain_frame: None,
+        fe_order: 1,
+        hmax: 20e-9,
+        equilibrium_magnetization,
+        material: fem_permalloy(),
+        operator: EigenOperatorConfigIR {
+            kind: EigenOperatorIR::Full2x2,
+            include_demag: false,
+        },
+        count: 2,
+        target: EigenTargetIR::Lowest,
+        equilibrium: EquilibriumSourceIR::Provided,
+        k_sampling: Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [5.0e7, 0.0, 0.0],
+        }),
+        normalization: EigenNormalizationIR::UnitL2,
+        damping_policy: EigenDampingPolicyIR::Ignore,
+        enable_exchange: true,
+        enable_demag: false,
+        interfacial_dmi: None,
+        bulk_dmi: None,
+        external_field: Some([39_789.0, 0.0, 0.0]),
+        gyromagnetic_ratio: 2.211e5,
+        precision: ExecutionPrecision::Double,
+        exchange_bc: ExchangeBoundaryCondition::Neumann,
+        spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::Config(
+            fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,
+                boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            },
+        ),
+        demag_realization: None,
+        dmi_interface_normal: None,
+        mode_tracking: None,
+    };
+
+    let result = fullmag_runner::run_reference_fem_eigen(
+        &plan,
+        &[
+            OutputIR::EigenSpectrum {
+                quantity: "eigenfrequency".to_string(),
+            },
+            OutputIR::EigenMode {
+                field: "mode".to_string(),
+                indices: vec![0],
+            },
+        ],
+    )
+    .expect("Full2x2 Floquet modal path must transport nonidentity tangent frames");
+
+    let spectrum: serde_json::Value = serde_json::from_slice(
+        result
+            .artifact_bytes("eigen/spectrum.v2.json")
+            .expect("Full2x2 Floquet transport should write spectrum.v2"),
+    )
+    .expect("Full2x2 Floquet spectrum.v2 should be valid JSON");
+    assert!(
+        spectrum["samples"][0]["modes"][0]["frequency_hz"]
+            .as_f64()
+            .is_some_and(|value| value.is_finite() && value > 0.0),
+        "Full2x2 Floquet transport should produce a finite frequency, got: {spectrum}"
+    );
+    let mode_metadata: serde_json::Value = serde_json::from_slice(
+        result
+            .artifact_bytes("eigen/modes/sample_0000/mode_0000.json")
+            .expect("Full2x2 Floquet transport should write mode metadata"),
+    )
+    .expect("Full2x2 Floquet mode metadata should be valid JSON");
+    assert_eq!(
+        mode_metadata["solver_model"].as_str(),
+        Some("cpu_full_2x2_phase_reduced_floquet")
+    );
+    assert!(
+        mode_metadata["tangent_leakage_max_abs"]
+            .as_f64()
+            .is_some_and(|value| value.is_finite() && value < 1.0e-10),
+        "transported Full2x2 mode should reconstruct tangent vectors, got: {mode_metadata}"
+    );
+    let diagnostics: serde_json::Value = serde_json::from_slice(
+        result
+            .artifact_bytes("eigen/diagnostics/solver.v1.json")
+            .expect("Full2x2 Floquet transport should write solver diagnostics"),
+    )
+    .expect("Full2x2 Floquet solver diagnostics should be valid JSON");
+    assert_eq!(
+        diagnostics["basis_transport_policy"].as_str(),
+        Some("tangent_frame_transport")
+    );
+    assert!(
+        diagnostics["floquet_tangent_frame_max_mismatch"]
+            .as_f64()
+            .is_some_and(|value| value.is_finite() && value > 0.0),
+        "nonidentity tangent-frame run should report a positive frame mismatch, got: {diagnostics}"
+    );
+    assert!(
+        diagnostics["floquet_tangent_transport_max_nonunitarity"]
+            .as_f64()
+            .is_some_and(|value| value.is_finite() && value >= 0.0),
+        "tangent-frame transport should report finite nonunitarity, got: {diagnostics}"
+    );
+}
+
+#[test]
+fn fem_eigen_scalar_floquet_still_rejects_nonidentity_tangent_frame_transport() {
+    let mut mesh = cube_mesh(20.0);
+    mesh.mesh_name = "floquet_scalar_frame_mismatch_cube".to_string();
+    let mut equilibrium_magnetization = vec![[1.0, 0.0, 0.0]; 8];
+    equilibrium_magnetization[1] = [0.0, 1.0, 0.0];
+    let plan = FemEigenPlanIR {
+        mesh_name: "floquet_scalar_frame_mismatch_cube".to_string(),
+        mesh_source: None,
+        mesh,
+        object_segments: Vec::new(),
+        mesh_parts: Vec::new(),
+        domain_mesh_mode: fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh,
+        domain_frame: None,
+        fe_order: 1,
+        hmax: 20e-9,
+        equilibrium_magnetization,
+        material: fem_permalloy(),
+        operator: EigenOperatorConfigIR {
+            kind: EigenOperatorIR::LinearizedLlg,
+            include_demag: false,
+        },
+        count: 2,
+        target: EigenTargetIR::Lowest,
+        equilibrium: EquilibriumSourceIR::Provided,
+        k_sampling: Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [5.0e7, 0.0, 0.0],
+        }),
+        normalization: EigenNormalizationIR::UnitL2,
+        damping_policy: EigenDampingPolicyIR::Ignore,
+        enable_exchange: true,
+        enable_demag: false,
+        interfacial_dmi: None,
+        bulk_dmi: None,
+        external_field: Some([39_789.0, 0.0, 0.0]),
+        gyromagnetic_ratio: 2.211e5,
+        precision: ExecutionPrecision::Double,
+        exchange_bc: ExchangeBoundaryCondition::Neumann,
+        spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::Config(
+            fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,
+                boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            },
+        ),
+        demag_realization: None,
+        dmi_interface_normal: None,
+        mode_tracking: None,
+    };
+
+    let error = fullmag_runner::run_reference_fem_eigen(
+        &plan,
+        &[OutputIR::EigenSpectrum {
+            quantity: "eigenfrequency".to_string(),
+        }],
+    )
+    .expect_err("scalar Floquet modal path must reject nonidentity tangent-frame transport");
+
+    assert!(
+        error.message.contains("phase*(T_dst^T T_src) support"),
+        "error should name the missing scalar tangent-frame transport, got: {}",
+        error.message
+    );
+    assert!(
+        error.message.contains("tangent_frame_mismatch"),
+        "error should report mismatch diagnostics, got: {}",
+        error.message
+    );
+}
+
+#[test]
 fn fem_eigen_damping_include_emits_nonzero_imaginary_frequency() {
     let mesh = cube_mesh(20.0);
     let plan = FemEigenPlanIR {
@@ -2712,9 +2924,15 @@ fn fem_eigen_path_writes_v2_dispersion_artifacts() {
 
     let result = fullmag_runner::run_reference_fem_eigen(
         &plan,
-        &[OutputIR::EigenSpectrum {
-            quantity: "eigenfrequency".to_string(),
-        }],
+        &[
+            OutputIR::EigenSpectrum {
+                quantity: "eigenfrequency".to_string(),
+            },
+            OutputIR::EigenMode {
+                field: "mode".to_string(),
+                indices: vec![0],
+            },
+        ],
     )
     .expect("path eigensolve should produce V2 artifacts");
 
@@ -2728,9 +2946,27 @@ fn fem_eigen_path_writes_v2_dispersion_artifacts() {
         spectrum["schema_version"].as_str(),
         Some("eigen_spectrum.v2")
     );
+    assert_eq!(spectrum["sample_count"].as_u64(), Some(3));
     assert_eq!(spectrum["samples"].as_array().map(Vec::len), Some(3));
     assert_eq!(spectrum["samples"][2]["label"].as_str(), Some("X"));
     assert!(spectrum["samples"][2]["path_s"].as_f64().unwrap_or(0.0) > 0.0);
+    let spectrum_mode = &spectrum["samples"][2]["modes"][0];
+    assert_eq!(
+        spectrum_mode["mode_field_id"].as_str(),
+        Some("analysis:eigen:sample-0002:mode-0000")
+    );
+    assert!(
+        spectrum_mode["frequency_hz"]
+            .as_f64()
+            .is_some_and(|value| value.is_finite() && value > 0.0),
+        "spectrum.v2 sample_0002 mode_0000 should carry frequency_hz, got {spectrum_mode}"
+    );
+    assert!(
+        spectrum_mode["residual_absolute_l2"]
+            .as_f64()
+            .is_some_and(|value| value.is_finite() && value >= 0.0),
+        "spectrum.v2 sample_0002 mode_0000 should carry residual diagnostics, got {spectrum_mode}"
+    );
 
     let branches: serde_json::Value = serde_json::from_slice(
         result
@@ -2742,9 +2978,106 @@ fn fem_eigen_path_writes_v2_dispersion_artifacts() {
         branches["schema_version"].as_str(),
         Some("eigen_branches.v2")
     );
+    assert_eq!(
+        branches["tracking_score_source"].as_str(),
+        Some("modal_overlap_weighted_score")
+    );
+    assert_eq!(branches["modal_overlap_available"].as_bool(), Some(true));
     assert!(branches["branches"]
         .as_array()
         .is_some_and(|items| !items.is_empty()));
+    let branch_mode_point = branches["branches"]
+        .as_array()
+        .and_then(|branches| {
+            branches.iter().find_map(|branch| {
+                branch["points"].as_array().and_then(|points| {
+                    points.iter().find(|point| {
+                        point["sample_index"].as_u64() == Some(2)
+                            && point["raw_mode_index"].as_u64() == Some(0)
+                    })
+                })
+            })
+        })
+        .expect("branches.v2 should contain sample_0002 mode_0000");
+    assert_eq!(
+        branch_mode_point["mode_field_id"].as_str(),
+        Some("analysis:eigen:sample-0002:mode-0000")
+    );
+    assert_eq!(
+        branch_mode_point["mode_field_resource_key"].as_str(),
+        Some(
+            "/v2/sessions/current/data/fields/analysis:eigen:sample-0002:mode-0000/samples/vector?view=phase_rotated_real&phase_rad=0"
+        )
+    );
+    assert!(
+        branch_mode_point["residual_norm"]
+            .as_f64()
+            .is_some_and(|value| value.is_finite()),
+        "branches.v2 sample_0002 mode_0000 should carry residual_norm, got {branch_mode_point}"
+    );
+    assert!(
+        branch_mode_point["tangent_leakage_mean_abs"]
+            .as_f64()
+            .is_some_and(|value| value.is_finite()),
+        "branches.v2 sample_0002 mode_0000 should carry tangent_leakage_mean_abs, got {branch_mode_point}"
+    );
+    assert!(
+        branch_mode_point["tangent_leakage_max_abs"]
+            .as_f64()
+            .is_some_and(|value| value.is_finite()),
+        "branches.v2 sample_0002 mode_0000 should carry tangent_leakage_max_abs, got {branch_mode_point}"
+    );
+    assert_eq!(
+        branch_mode_point["tracking_score_source"].as_str(),
+        Some("modal_overlap_weighted_score")
+    );
+    assert_eq!(
+        branch_mode_point["modal_overlap_available"].as_bool(),
+        Some(true)
+    );
+    assert!(
+        branch_mode_point["frequency_hz"]
+            .as_f64()
+            .is_some_and(|value| value.is_finite() && value > 0.0),
+        "branches.v2 sample_0002 mode_0000 should carry frequency_hz, got {branch_mode_point}"
+    );
+    assert!(
+        branch_mode_point["angular_frequency_rad_per_s"]
+            .as_f64()
+            .is_some_and(|value| value.is_finite() && value > 0.0),
+        "branches.v2 sample_0002 mode_0000 should carry angular_frequency_rad_per_s, got {branch_mode_point}"
+    );
+
+    let diagnostics: serde_json::Value = serde_json::from_slice(
+        result
+            .artifact_bytes("eigen/diagnostics.v2.json")
+            .expect("diagnostics.v2 artifact should exist"),
+    )
+    .expect("diagnostics.v2 should be valid json");
+    assert_eq!(
+        diagnostics["dispersion"]["tracking_score_source"].as_str(),
+        Some("modal_overlap_weighted_score")
+    );
+    assert_eq!(
+        diagnostics["dispersion"]["modal_overlap_available"].as_bool(),
+        Some(true)
+    );
+    let solver_diagnostics: serde_json::Value = serde_json::from_slice(
+        result
+            .artifact_bytes("eigen/diagnostics/solver.v1.json")
+            .expect("solver diagnostics artifact should exist"),
+    )
+    .expect("solver diagnostics should be valid json");
+    assert_eq!(
+        solver_diagnostics["mode_count"].as_u64(),
+        Some(1),
+        "solver diagnostics mode_count must match the public published modes, not internal tracking modes"
+    );
+    assert_eq!(
+        solver_diagnostics["requested_mode_count"].as_u64(),
+        Some(2),
+        "requested_mode_count must preserve the public Eigenmodes.count cap"
+    );
 
     let csv = std::str::from_utf8(
         result
@@ -2762,14 +3095,18 @@ fn fem_eigen_path_writes_v2_dispersion_artifacts() {
         "kz_rad_per_m",
         "branch_id",
         "residual_norm",
+        "mode_field_id",
+        "mode_field_resource_key",
     ] {
         assert!(
             header.split(',').any(|column| column == required),
             "dispersion.csv header must contain {required}, got {header}"
         );
     }
-    let first_row = lines
-        .next()
+    let rows: Vec<&str> = lines.collect();
+    let first_row = rows
+        .first()
+        .copied()
         .expect("dispersion.csv should contain mode rows");
     assert!(
         first_row
@@ -2777,6 +3114,362 @@ fn fem_eigen_path_writes_v2_dispersion_artifacts() {
             .nth(11)
             .is_some_and(|value| !value.is_empty()),
         "dispersion.csv residual_norm column should be populated, row={first_row}"
+    );
+    assert!(
+        rows.iter().any(|row| row.contains(
+            "analysis:eigen:sample-0002:mode-0000,/v2/sessions/current/data/fields/analysis:eigen:sample-0002:mode-0000/samples/vector?view=phase_rotated_real&phase_rad=0"
+        )),
+        "dispersion.csv should carry sample_0002 mode-field handoff columns, rows={rows:?}"
+    );
+
+    let mode_metadata: serde_json::Value = serde_json::from_slice(
+        result
+            .artifact_bytes("eigen/modes/sample_0002/mode_0000.json")
+            .expect("path eigensolve should write per-sample mode metadata"),
+    )
+    .expect("path eigensolve mode metadata should be valid json");
+    assert_eq!(mode_metadata["sample_index"].as_u64(), Some(2));
+    assert_eq!(
+        mode_metadata["mode_field_id"].as_str(),
+        Some("analysis:eigen:sample-0002:mode-0000")
+    );
+    assert_eq!(
+        mode_metadata["zarr_array_path"].as_str(),
+        Some("eigen/mode_fields.zarr/sample_0002/mode_0000/vector_xyz_complex")
+    );
+    assert_eq!(
+        mode_metadata["compatibility_binary_payload_path"].as_str(),
+        Some("eigen/mode_fields/sample_0002/mode_0000/vector.bin")
+    );
+    assert!(
+        result
+            .artifact_bytes("eigen/mode_fields/sample_0002/mode_0000/vector.bin")
+            .is_some(),
+        "path eigensolve should write per-sample compatibility mode field payload"
+    );
+    assert!(
+        result
+            .artifact_bytes("eigen/mode_fields.zarr/sample_0002/mode_0000/vector_xyz_complex/0.0.0")
+            .is_some(),
+        "path eigensolve should write per-sample zarr mode field payload"
+    );
+    assert!(
+        result
+            .artifact_bytes("eigen/modes/sample_0002/mode_0001.json")
+            .is_none(),
+        "path eigensolve should not publish unrequested mode_0001 metadata even when it uses vectors internally for tracking"
+    );
+    assert!(
+        result
+            .artifact_bytes("eigen/mode_fields.zarr/sample_0002/mode_0001/vector_xyz_complex/0.0.0")
+            .is_none(),
+        "path eigensolve should not publish unrequested mode_0001 payloads even when it uses vectors internally for tracking"
+    );
+    let manifest: serde_json::Value = serde_json::from_slice(
+        result
+            .artifact_bytes("frequency_domain/manifest.v1.json")
+            .expect("path eigensolve should write frequency-domain manifest"),
+    )
+    .expect("path eigensolve frequency-domain manifest should be valid json");
+    assert_eq!(
+        manifest["requested_execution"]["calculation_mode"].as_str(),
+        Some("dispersion_modal")
+    );
+    assert_eq!(
+        manifest["diagnostics"]["tracking_score_source"].as_str(),
+        Some("modal_overlap_weighted_score")
+    );
+    assert_eq!(
+        manifest["diagnostics"]["modal_overlap_available"].as_bool(),
+        Some(true)
+    );
+    assert!(
+        manifest["artifacts"]["mode_metadata_paths"]
+            .as_array()
+            .is_some_and(|paths| paths
+                .iter()
+                .any(|path| path.as_str() == Some("eigen/modes/sample_0002/mode_0000.json"))),
+        "path eigensolve manifest should index sample_0002 mode metadata"
+    );
+    assert!(
+        manifest["resources"]["mode_field_resources"]
+            .as_array()
+            .is_some_and(
+                |resources| resources.iter().any(|resource| resource.as_str()
+                    == Some(
+                        "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/2/0/meta"
+                    ))
+            ),
+        "path eigensolve manifest should index sample_0002 mode meta resource"
+    );
+    assert_eq!(
+        manifest["artifacts"]["solver_diagnostics_path"].as_str(),
+        Some("eigen/diagnostics/solver.v1.json")
+    );
+    assert!(
+        result
+            .artifact_bytes("eigen/metadata/eigen_summary.json")
+            .is_some(),
+        "path eigensolve should write eigen_summary metadata for the validator"
+    );
+    assert!(
+        result
+            .artifact_bytes("eigen/diagnostics/solver.v1.json")
+            .is_some(),
+        "path eigensolve should write solver diagnostics for the validator"
+    );
+}
+
+#[test]
+fn fem_eigen_path_executes_full_2x2_nonzero_k_floquet_phase_reduction() {
+    let mut mesh = cube_mesh(20.0);
+    mesh.mesh_name = "path_full2x2_floquet_cube".to_string();
+    let plan = FemEigenPlanIR {
+        mesh_name: "path_full2x2_floquet_cube".to_string(),
+        mesh_source: None,
+        mesh,
+        object_segments: Vec::new(),
+        mesh_parts: Vec::new(),
+        domain_mesh_mode: fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh,
+        domain_frame: None,
+        fe_order: 1,
+        hmax: 20e-9,
+        equilibrium_magnetization: vec![[1.0, 0.0, 0.0]; 8],
+        material: fem_permalloy(),
+        operator: EigenOperatorConfigIR {
+            kind: EigenOperatorIR::Full2x2,
+            include_demag: false,
+        },
+        count: 2,
+        target: EigenTargetIR::Lowest,
+        equilibrium: EquilibriumSourceIR::Provided,
+        k_sampling: Some(KSamplingIR::Path {
+            points: vec![
+                KPointIR {
+                    label: Some("G".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+                KPointIR {
+                    label: Some("X".to_string()),
+                    k_vector: [5.0e7, 0.0, 0.0],
+                },
+            ],
+            samples_per_segment: vec![2],
+            closed: false,
+        }),
+        normalization: EigenNormalizationIR::UnitL2,
+        damping_policy: EigenDampingPolicyIR::Ignore,
+        enable_exchange: true,
+        enable_demag: false,
+        interfacial_dmi: None,
+        bulk_dmi: None,
+        external_field: Some([39_789.0, 0.0, 0.0]),
+        gyromagnetic_ratio: 2.211e5,
+        precision: ExecutionPrecision::Double,
+        exchange_bc: ExchangeBoundaryCondition::Neumann,
+        spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::Config(
+            fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,
+                boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            },
+        ),
+        demag_realization: None,
+        dmi_interface_normal: None,
+        mode_tracking: None,
+    };
+
+    let result = fullmag_runner::run_reference_fem_eigen(
+        &plan,
+        &[
+            OutputIR::EigenSpectrum {
+                quantity: "eigenfrequency".to_string(),
+            },
+            OutputIR::EigenMode {
+                field: "mode".to_string(),
+                indices: vec![0],
+            },
+        ],
+    )
+    .expect("Full2x2 nonzero-k Floquet path should execute with phase-reduced 2x2 tangent blocks");
+
+    let spectrum: serde_json::Value = serde_json::from_slice(
+        result
+            .artifact_bytes("eigen/spectrum.v2.json")
+            .expect("full2x2 Floquet path should write spectrum.v2"),
+    )
+    .expect("full2x2 Floquet spectrum.v2 should be valid json");
+    assert_eq!(spectrum["sample_count"].as_u64(), Some(3));
+    assert!(
+        spectrum["samples"][2]["modes"][0]["frequency_hz"]
+            .as_f64()
+            .is_some_and(|value| value.is_finite() && value > 0.0),
+        "nonzero-k full2x2 Floquet sample should carry finite frequency, got: {}",
+        spectrum["samples"][2]["modes"][0]
+    );
+
+    let mode_metadata: serde_json::Value = serde_json::from_slice(
+        result
+            .artifact_bytes("eigen/modes/sample_0002/mode_0000.json")
+            .expect("full2x2 Floquet path should write nonzero-k mode metadata"),
+    )
+    .expect("full2x2 Floquet mode metadata should be valid json");
+    assert_eq!(
+        mode_metadata["mode_field_id"].as_str(),
+        Some("analysis:eigen:sample-0002:mode-0000")
+    );
+    assert_eq!(
+        mode_metadata["solver_model"].as_str(),
+        Some("cpu_full_2x2_phase_reduced_floquet")
+    );
+    assert!(
+        mode_metadata["amplitude_summary"]["max"]
+            .as_f64()
+            .is_some_and(|value| value.is_finite() && value > 0.0),
+        "full2x2 Floquet mode metadata should carry a nonzero mode field, got: {mode_metadata}"
+    );
+
+    let diagnostics: serde_json::Value = serde_json::from_slice(
+        result
+            .artifact_bytes("eigen/diagnostics/solver.v1.json")
+            .expect("full2x2 Floquet path should write solver diagnostics"),
+    )
+    .expect("full2x2 Floquet solver diagnostics should be valid json");
+    assert_eq!(
+        diagnostics["solver_model"].as_str(),
+        Some("reference_full_2x2_tangent")
+    );
+    assert_eq!(
+        diagnostics["basis_transport_policy"].as_str(),
+        Some("tangent_frame_transport")
+    );
+    assert!(
+        diagnostics["floquet_tangent_transport_max_nonunitarity"]
+            .as_f64()
+            .is_some_and(|value| value.is_finite() && value < 1.0e-8),
+        "full2x2 Floquet diagnostics should report unitary tangent transport, got: {diagnostics}"
+    );
+    assert!(
+        diagnostics["solver_notes"]
+            .as_array()
+            .is_some_and(|items| items
+                .iter()
+                .any(|item| item.as_str() == Some("cpu_full_2x2_phase_reduced_floquet"))),
+        "full2x2 Floquet diagnostics should preserve the single-k solver kind, got: {diagnostics}"
+    );
+}
+
+#[test]
+fn fem_eigen_path_frequency_window_writes_window_diagnostics() {
+    let mut mesh = cube_mesh(20.0);
+    mesh.mesh_name = "path_frequency_window_cube".to_string();
+    let plan = FemEigenPlanIR {
+        mesh_name: "path_frequency_window_cube".to_string(),
+        mesh_source: None,
+        mesh,
+        object_segments: Vec::new(),
+        mesh_parts: Vec::new(),
+        domain_mesh_mode: fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh,
+        domain_frame: None,
+        fe_order: 1,
+        hmax: 20e-9,
+        equilibrium_magnetization: vec![[1.0, 0.0, 0.0]; 8],
+        material: fem_permalloy(),
+        operator: EigenOperatorConfigIR {
+            kind: EigenOperatorIR::LinearizedLlg,
+            include_demag: false,
+        },
+        count: 1,
+        target: EigenTargetIR::FrequencyWindow {
+            frequency_min_hz: 1.0,
+            frequency_max_hz: 1.0e13,
+        },
+        equilibrium: EquilibriumSourceIR::Provided,
+        k_sampling: Some(KSamplingIR::Path {
+            points: vec![
+                KPointIR {
+                    label: Some("G".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+                KPointIR {
+                    label: Some("X".to_string()),
+                    k_vector: [5.0e7, 0.0, 0.0],
+                },
+            ],
+            samples_per_segment: vec![2],
+            closed: false,
+        }),
+        normalization: EigenNormalizationIR::UnitL2,
+        damping_policy: EigenDampingPolicyIR::Ignore,
+        enable_exchange: true,
+        enable_demag: false,
+        interfacial_dmi: None,
+        bulk_dmi: None,
+        external_field: Some([39_789.0, 0.0, 0.0]),
+        gyromagnetic_ratio: 2.211e5,
+        precision: ExecutionPrecision::Double,
+        exchange_bc: ExchangeBoundaryCondition::Neumann,
+        spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::Config(
+            fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,
+                boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            },
+        ),
+        demag_realization: None,
+        dmi_interface_normal: None,
+        mode_tracking: Some(fullmag_ir::ModeTrackingIR::default()),
+    };
+
+    let result = fullmag_runner::run_reference_fem_eigen(
+        &plan,
+        &[OutputIR::EigenSpectrum {
+            quantity: "eigenfrequency".to_string(),
+        }],
+    )
+    .expect("path frequency-window eigensolve should not panic or fail");
+
+    let solver_diagnostics: serde_json::Value = serde_json::from_slice(
+        result
+            .artifact_bytes("eigen/diagnostics/solver.v1.json")
+            .expect("path eigensolve should write solver diagnostics"),
+    )
+    .expect("path eigensolve solver diagnostics should be valid json");
+    assert_eq!(
+        solver_diagnostics["requested_window_hz"],
+        serde_json::json!([1.0, 1.0e13]),
+        "path eigensolve frequency-window diagnostics must preserve the requested window"
+    );
+    assert!(
+        solver_diagnostics["window_completeness"]
+            .as_object()
+            .is_some_and(|window| window.get("status").and_then(|value| value.as_str())
+                == Some("not_certified")),
+        "path eigensolve frequency-window diagnostics must report non-certified window completeness, got {solver_diagnostics}"
+    );
+    assert!(
+        solver_diagnostics["subwindows"]
+            .as_array()
+            .is_some_and(|subwindows| !subwindows.is_empty()),
+        "path eigensolve frequency-window diagnostics must include subwindow provenance, got {solver_diagnostics}"
+    );
+
+    let eigen_summary: serde_json::Value = serde_json::from_slice(
+        result
+            .artifact_bytes("eigen/metadata/eigen_summary.json")
+            .expect("path eigensolve should write eigen summary"),
+    )
+    .expect("path eigensolve eigen summary should be valid json");
+    assert_eq!(
+        eigen_summary["solver_diagnostics"]["requested_window_hz"],
+        serde_json::json!([1.0, 1.0e13]),
+        "eigen summary must carry the same frequency-window diagnostics"
     );
 }
 

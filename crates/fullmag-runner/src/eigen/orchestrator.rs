@@ -57,15 +57,37 @@ pub fn run_path_or_single<S: SingleKSolver>(
         .ok_or_else(|| RunError {
             message: "single-k solve returned no samples".to_string(),
         })?;
+    if let Some(mixed) = sample_results
+        .iter()
+        .find(|sample| sample.solver_model != solver_model)
+    {
+        return Err(RunError {
+            message: format!(
+                "mixed single-k solver models in k-path aggregation are not supported: first={}, sample_{}={}",
+                solver_model.as_str(),
+                mixed.sample.sample_index,
+                mixed.solver_model.as_str()
+            ),
+        });
+    }
+    let mut notes = vec![format!(
+        "{} sample(s) generated from k_sampling",
+        sample_descriptors.len()
+    )];
+    for note in sample_results
+        .iter()
+        .flat_map(|sample| sample.solver_notes.iter())
+    {
+        if !notes.iter().any(|existing| existing == note) {
+            notes.push(note.clone());
+        }
+    }
 
     let mut result = PathSolveResult {
         samples: sample_results,
         branches: Vec::new(),
         solver_model,
-        notes: vec![format!(
-            "{} sample(s) generated from k_sampling",
-            sample_descriptors.len()
-        )],
+        notes,
     };
     track_branches(&mut result, mode_tracking);
 
@@ -271,5 +293,87 @@ mod tests {
             family_manifest["resources"]["mode_field_resources"][0],
             "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/0/2/meta"
         );
+    }
+
+    #[test]
+    fn production_cpu_shift_invert_solver_model_uses_native_adapter_token() {
+        assert_eq!(
+            EigenSolverModel::ProductionCpuShiftInvert.as_str(),
+            "slepc_multi_shift_invert_production_cpu_dense"
+        );
+    }
+
+    struct SolverModelBySample {
+        models: Vec<EigenSolverModel>,
+    }
+
+    impl SingleKSolver for SolverModelBySample {
+        fn solve_single_k(
+            &self,
+            _plan: &FemEigenPlanIR,
+            _outputs: &[OutputIR],
+            sample: &KSampleDescriptor,
+        ) -> Result<SingleKSolveResult, RunError> {
+            Ok(SingleKSolveResult {
+                sample: sample.clone(),
+                modes: vec![SingleKModeResult {
+                    raw_mode_index: 0,
+                    branch_id: None,
+                    frequency_real_hz: 12.5e9,
+                    frequency_imag_hz: 0.0,
+                    angular_frequency_rad_per_s: std::f64::consts::TAU * 12.5e9,
+                    eigenvalue_real: 0.0,
+                    eigenvalue_imag: std::f64::consts::TAU * 12.5e9,
+                    norm: 1.0,
+                    max_amplitude: 1.0,
+                    residual_norm: Some(1.0e-8),
+                    residual_linf: Some(1.0e-9),
+                    tangent_leakage_mean_abs: Some(1.0e-12),
+                    tangent_leakage_max_abs: Some(2.0e-12),
+                    dominant_polarization: "linear".to_string(),
+                    reduced_vector: Some(vec![Complex64::new(1.0, 0.0)]),
+                    lifted_real: Some(vec![[1.0, 0.0, 0.0]]),
+                    lifted_imag: Some(vec![[0.0, 1.0, 0.0]]),
+                    amplitude: Some(vec![1.0]),
+                    phase: Some(vec![0.0]),
+                }],
+                relaxation_steps: 0,
+                solver_model: self.models[sample.sample_index],
+                solver_notes: vec!["sample model fixture".to_string()],
+            })
+        }
+    }
+
+    #[test]
+    fn run_path_or_single_rejects_mixed_sample_solver_models() {
+        let solver = SolverModelBySample {
+            models: vec![
+                EigenSolverModel::ProductionCpuShiftInvert,
+                EigenSolverModel::ReferenceFull2x2Tangent,
+            ],
+        };
+        let plan = minimal_plan(Some(KSamplingIR::Path {
+            points: vec![
+                fullmag_ir::KPointIR {
+                    label: Some("G".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+                fullmag_ir::KPointIR {
+                    label: Some("X".to_string()),
+                    k_vector: [1.0e6, 0.0, 0.0],
+                },
+            ],
+            samples_per_segment: vec![1],
+            closed: false,
+        }));
+
+        let err = run_path_or_single(&solver, &plan, &[], None, None)
+            .expect_err("mixed production/reference samples must not be aggregated");
+
+        assert!(err.message.contains("mixed single-k solver models"));
+        assert!(err
+            .message
+            .contains("slepc_multi_shift_invert_production_cpu_dense"));
+        assert!(err.message.contains("reference_full_2x2_tangent"));
     }
 }

@@ -575,7 +575,10 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
   const manifestPhysics = record(record(manifestPayload)?.physics);
   const spectrumModel = buildEigenSpectrumChartModel(spectrum.data);
   const branchesModel = buildEigenBranchesModel(branches.data);
-  const dispersionModel = buildEigenDispersionChartModel(dispersion.data);
+  const dispersionModel = buildEigenDispersionChartModel(
+    dispersion.data,
+    branchesModel,
+  );
   const responseModel = buildFrequencyResponseChartModel(responseSweep.data);
   const responseFieldResources =
     responseFieldResourcesFromManifest(manifestPayload);

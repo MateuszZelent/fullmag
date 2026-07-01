@@ -1433,6 +1433,71 @@ describe("AnalysisPlotsView", () => {
     expect(html).toContain("FMR mode inspector and 3D overlay controls");
   });
 
+  it("renders selected dispersion high-symmetry labels from chart points", () => {
+    const html = renderToStaticMarkup(
+      <AnalysisPlotsView
+        kernel={mockKernel}
+        frequencyDomainSeries={[
+          {
+            id: "analysis.frequency-domain:eigen:dispersion:acoustic",
+            label: "Branch acoustic",
+            points: [
+              { label: "G", linewidthHz: 2.8e6, rowIndex: 0, x: 0, y: 9.5 },
+            ],
+            quantity: "frequency",
+            source: {
+              kind: "analysis.frequency_domain",
+              resourceKey: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+              tableId: "frequency-domain:eigen-dispersion",
+            },
+            status: "ready",
+            unit: "GHz",
+            xUnit: "rad/m",
+          },
+        ]}
+        frequencyDomainStatus="ready"
+        frequencyDomainTitle="Frequency-domain dispersion"
+        onClearRange={() => undefined}
+        onPointSelect={() => undefined}
+        onRangeChange={() => undefined}
+        onSeriesSelect={() => undefined}
+        range={null}
+        selectedPoint={{
+          label: "Branch acoustic",
+          point: {
+            label: "G",
+            linewidthHz: 2.8e6,
+            rowIndex: 0,
+            x: 0,
+            y: 9.5,
+          },
+          quantity: "frequency",
+          seriesId: "analysis.frequency-domain:eigen:dispersion:acoustic",
+          source: {
+            kind: "analysis.frequency_domain",
+            resourceKey: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+            tableId: "frequency-domain:eigen-dispersion",
+          },
+          unit: "GHz",
+          xUnit: "rad/m",
+        }}
+        solverEnergySeries={[]}
+        solverEnergyStatus="idle"
+        tableRowsStatus="idle"
+        visibleTable={null}
+        xAxisId="step"
+        yAxisIds={["mx"]}
+      />,
+    );
+
+    expect(html).toContain("dispersion point");
+    expect(html).toContain("k-label");
+    expect(html).toContain("G");
+    expect(html).toContain("Linewidth");
+    expect(html).toContain("2.8 MHz");
+    expect(html).toContain("Dispersion inspector");
+  });
+
   it("renders selected FMR response point context as a response-field overlay workflow", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
@@ -1737,8 +1802,8 @@ describe("AnalysisPlotsView", () => {
     const dispersionModel = buildEigenDispersionChartModel({
       status: "ready",
       text: [
-        "sample_index,raw_mode_index,branch_id,path_s_rad_per_m,frequency_hz",
-        "4,5,acoustic,78539816.33974482,12.5e9",
+        "sample_index,raw_mode_index,branch_id,path_s_rad_per_m,frequency_hz,mode_field_id,mode_field_resource_key",
+        `4,5,acoustic,78539816.33974482,12.5e9,analysis:eigen:sample-0004:mode-0005,${analysisFieldVectorResourceKey("analysis:eigen:sample-0004:mode-0005")}`,
       ].join("\n"),
     });
 
@@ -1763,7 +1828,7 @@ describe("AnalysisPlotsView", () => {
     });
 
     expect(selection).toEqual({
-      kind: "results.eigen.dispersion",
+      kind: "results.eigen.mode",
       label: "Branch acoustic 12.5 GHz",
       nodeId:
         "analysis:charts:frequency-domain:eigen-dispersion:point:analysis.frequency-domain:eigen:dispersion:acoustic:0",
@@ -1771,11 +1836,14 @@ describe("AnalysisPlotsView", () => {
       ref: {
         branchId: "acoustic",
         calculationMode: "dispersion_modal",
-        kind: "results.eigen.dispersion",
+        fieldId: "analysis:eigen:sample-0004:mode-0005",
+        kind: "results.eigen.mode",
         modeIndex: 5,
         nodeId:
           "analysis:charts:frequency-domain:eigen-dispersion:point:analysis.frequency-domain:eigen:dispersion:acoustic:0",
-        resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+        resourceRef: analysisFieldVectorResourceKey(
+          "analysis:eigen:sample-0004:mode-0005",
+        ),
         sampleIndex: 4,
         type: "frequency-domain",
       },

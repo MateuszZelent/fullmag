@@ -490,6 +490,7 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
             "eigen_target_frequency": _text_number(study.target_frequency),
             "eigen_frequency_min": _text_number(study.frequency_min),
             "eigen_frequency_max": _text_number(study.frequency_max),
+            "eigen_operator": study.operator,
             "eigen_include_demag": study.include_demag,
             "eigen_equilibrium_source": study.equilibrium_source,
             "eigen_normalization": study.normalization,
@@ -2725,6 +2726,7 @@ def _render_stages(
                 except ValueError:
                     pass
             target = _override_string(stage_override, "eigen_target", study.target) or study.target
+            operator = _override_string(stage_override, "eigen_operator", study.operator) or study.operator
             include_demag_ov = stage_override.get("eigen_include_demag")
             include_demag = bool(include_demag_ov) if isinstance(include_demag_ov, bool) else study.include_demag
             equilibrium_source = _override_string(stage_override, "eigen_equilibrium_source", study.equilibrium_source) or study.equilibrium_source
@@ -2743,6 +2745,8 @@ def _render_stages(
             frequency_max = _override_number(stage_override, "eigen_frequency_max", study.frequency_max)
             if frequency_max is not None:
                 call_parts.append(f"frequency_max={_py_number(frequency_max)}")
+            if operator != "linearized_llg":
+                call_parts.append(f"operator={_py_repr(operator)}")
             call_parts.append(f"include_demag={include_demag!r}")
             call_parts.append(f"equilibrium_source={_py_repr(equilibrium_source)}")
             if study.equilibrium_artifact is not None:

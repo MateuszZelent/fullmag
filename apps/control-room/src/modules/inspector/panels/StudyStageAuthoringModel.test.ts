@@ -105,9 +105,11 @@ describe("StudyStageAuthoringModel", () => {
       createStudyStageDraft(
         {
           entrypoint_kind: "pipeline_frequency_response",
+          frequency_magnetostatic_bc: "periodic_airbox_k0",
           frequency_excitation_field_au_per_m: [0, -2, 3],
           frequency_excitation_phase_rad: 0.375,
           frequency_observable: "mx",
+          frequency_spin_wave_bc: { kind: "periodic", axes: ["x", "y"] },
           frequency_values_hz: [1e9, 2e9],
           kind: "frequency_response",
           stage_id: "freq-1",
@@ -115,10 +117,12 @@ describe("StudyStageAuthoringModel", () => {
         3,
       ),
     ).toMatchObject({
+      bc: '{"kind":"periodic","axes":["x","y"]}',
       excitationField: "0, -2, 3",
       excitationPhaseRad: "0.375",
       frequenciesHz: "1000000000, 2000000000",
       kind: "frequency_response",
+      magnetostaticBc: "periodic_airbox_k0",
       observable: "mx",
       stageId: "freq-1",
     });
@@ -552,22 +556,28 @@ describe("StudyStageAuthoringModel", () => {
     expect(
       studyStageDraftToSceneStage({
         ...createDefaultStudyStageDraft("frequency_response", 1),
+        bc: '{"kind":"periodic","axes":["x","y"]}',
         excitationField: "0, -2, 3",
         excitationPhaseRad: "0.375",
         frequenciesHz: "1e9, 2e9",
+        magnetostaticBc: "periodic_airbox_k0",
         observable: "mx",
         stageId: "freq-1",
       }),
     ).toMatchObject({
+      bc: { axes: ["x", "y"], kind: "periodic" },
       entrypoint_kind: "flat_frequency_response",
       excitation_field_au_per_m: [0, -2, 3],
       excitation_phase_rad: 0.375,
       frequency_excitation_field_au_per_m: [0, -2, 3],
       frequency_excitation_phase_rad: 0.375,
+      frequency_magnetostatic_bc: "periodic_airbox_k0",
       frequency_observable: "mx",
+      frequency_spin_wave_bc: { axes: ["x", "y"], kind: "periodic" },
       frequency_values_hz: [1e9, 2e9],
       frequencies_hz: [1e9, 2e9],
       kind: "frequency_response",
+      magnetostatic_bc: "periodic_airbox_k0",
       observable: "mx",
       stage_id: "freq-1",
     });

@@ -72,6 +72,9 @@ const frequencyDomainCapabilityFixture = {
   dispersion: {
     branch_tracking: capability("reference_executable"),
     k_path: capability("reference_executable"),
+    production_cpu: capability("unsupported"),
+    production_gpu: capability("unsupported"),
+    reference_cpu: capability("reference_executable"),
   },
   modal: {
     absorption_from_modes: capability("unsupported"),

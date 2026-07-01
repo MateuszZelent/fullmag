@@ -15,23 +15,36 @@ SCRIPT = Path("scripts/write_fem_static_pbc_supercell_central_cell_artifact.py")
 
 
 def write_zarr(root: Path, observable: str, component_order: list[str], values: list[float]) -> None:
+    write_zarr_samples(root, observable, component_order, [values])
+
+
+def write_zarr_samples(
+    root: Path,
+    observable: str,
+    component_order: list[str],
+    samples: list[list[float]],
+) -> None:
     field_dir = root / "fields" / f"{observable}.zarr"
     field_dir.mkdir(parents=True, exist_ok=True)
     component_count = len(component_order)
-    cell_count = len(values) // component_count
+    assert samples
+    cell_count = len(samples[0]) // component_count
+    assert all(len(values) == cell_count * component_count for values in samples)
     (field_dir / ".zattrs").write_text(
         json.dumps({"component_order": component_order}),
         encoding="utf-8",
     )
     (field_dir / ".zarray").write_text(
-        json.dumps({"dtype": "<f8", "order": "C", "shape": [1, component_count, cell_count]}),
+        json.dumps({"dtype": "<f8", "order": "C", "shape": [len(samples), component_count, cell_count]}),
         encoding="utf-8",
     )
     (field_dir / "samples.csv").write_text(
-        "step,time,solver_dt,chunk_key\n4,0.0,0.0,0.0.0\n",
+        "step,time,solver_dt,chunk_key\n"
+        + "".join(f"{index},0.0,0.0,{index}.0.0\n" for index in range(len(samples))),
         encoding="utf-8",
     )
-    (field_dir / "0.0.0").write_bytes(struct.pack(f"<{len(values)}d", *values))
+    for index, values in enumerate(samples):
+        (field_dir / f"{index}.0.0").write_bytes(struct.pack(f"<{len(values)}d", *values))
 
 
 def write_supercell_root(root: Path) -> None:
@@ -426,6 +439,123 @@ def test_auto_scalars_compute_energy_and_torque_from_mesh_and_fields(tmp_path: P
     assert math.isclose(payload["central_cell_demag_energy_j"], expected_energy)
     assert payload["central_cell_torque_apm"] == 4.0
     assert payload["scalar_selection"]["method"] == "element_centroid_mesh_integral"
+
+
+def test_auto_scalars_use_final_sample_from_multi_sample_zarr(tmp_path: Path) -> None:
+    root = tmp_path / "supercell" / "artifacts"
+    write_mesh_backed_geometry_supercell_root(root)
+    write_zarr_samples(
+        root,
+        "H_demag",
+        ["x", "y", "z"],
+        [
+            [
+                -30.0,
+                -30.0,
+                -30.0,
+                -30.0,
+                100.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+            ],
+            [
+                -3.0,
+                -3.0,
+                -3.0,
+                -3.0,
+                100.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+            ],
+        ],
+    )
+    write_zarr_samples(
+        root,
+        "H_eff",
+        ["x", "y", "z"],
+        [
+            [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                100.0,
+                40.0,
+                40.0,
+                40.0,
+                40.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+            ],
+            [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                100.0,
+                4.0,
+                4.0,
+                4.0,
+                4.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+            ],
+        ],
+    )
+    write_zarr_samples(root, "demag_phi", ["scalar"], [[0.0, 0.0, 0.0, 0.0, 0.0], [1.0e-3, 1.1e-3, 1.2e-3, 1.3e-3, 1.4e-3]])
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            str(root),
+            "--repeat-x",
+            "3",
+            "--repeat-y",
+            "3",
+            "--auto-central-cell-indices",
+            "--auto-central-cell-scalars",
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(
+        (root / "diagnostics" / "fem_static_pbc_supercell_central_cell.v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    expected_volume = (0.5 * 0.5 * 0.25) / 6.0
+    expected_energy = 0.5 * 4.0 * math.pi * 1.0e-7 * 2.0 * 3.0 * expected_volume
+    assert math.isclose(payload["central_cell_demag_energy_j"], expected_energy)
+    assert payload["central_cell_torque_apm"] == 4.0
 
 
 def test_auto_scalars_reject_missing_h_eff_field(tmp_path: Path) -> None:

@@ -205,3 +205,69 @@ def test_writer_rejects_nonzero_nearest_node_mismatch_above_tolerance(tmp_path: 
     assert "nearest unit node distance exceeds" in result.stderr
     assert "inf" not in result.stderr
     assert "5.000000e-02" in result.stderr
+
+
+def test_writer_can_map_remeshed_supercell_by_unit_tetrahedral_interpolation(tmp_path: Path) -> None:
+    unit = tmp_path / "unit" / "artifacts"
+    supercell = tmp_path / "supercell" / "artifacts"
+    output = tmp_path / "states" / "m_repeated_unit.json"
+    report = tmp_path / "states" / "m_repeated_unit.report.json"
+    write_metadata(
+        unit,
+        nodes=[
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 2.0],
+        ],
+        elements=[[0, 1, 2, 3], [1, 2, 3, 4]],
+        markers=[1, 0],
+    )
+    write_m_final(
+        unit,
+        [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0],
+        ],
+    )
+    write_node_geometry(
+        supercell,
+        nodes=[
+            [0.25, 0.25, 0.25],
+            [2.25, 0.25, 0.25],
+            [0.1, 0.1, 1.7],
+        ],
+        magnetic_mask=[True, True, False],
+    )
+
+    result = run_writer(
+        "--unit-cell",
+        str(unit),
+        "--supercell",
+        str(supercell),
+        "--repeat-x",
+        "3",
+        "--repeat-y",
+        "3",
+        "--mapping-mode",
+        "linear_tetrahedral_interpolation",
+        "--output",
+        str(output),
+        "--report",
+        str(report),
+    )
+
+    assert result.returncode == 0, result.stderr
+    state = json.loads(output.read_text(encoding="utf-8"))
+    unit_component = 1.0 / (3.0**0.5)
+    assert state["values"][0] == [unit_component, unit_component, unit_component]
+    assert state["values"][1] == [unit_component, unit_component, unit_component]
+    assert state["values"][2] == [0.0, 0.0, 0.0]
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["mapping_mode"] == "linear_tetrahedral_interpolation"
+    assert payload["interpolation_method"] == "linear_tetrahedral_barycentric"
+    assert payload["interpolated_magnetic_node_count"] == 2

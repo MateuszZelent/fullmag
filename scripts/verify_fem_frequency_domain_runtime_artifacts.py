@@ -2130,7 +2130,7 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
     }
     require_expected(expected)
     if schur_coupled_block:
-        expected_preconditioner_kind = "mfem_tangent_graph_demag_coarse_right"
+        expected_preconditioner_kind = "mfem_phi_consistency_schur_right"
     else:
         exchange_edge_count = require_non_negative_integer(
             diagnostics.get("exchange_edge_count"),
@@ -2276,7 +2276,7 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
                 ),
                 f"{point_name}.demag_contribution.operator_source": (
                     demag_contribution.get("operator_source"),
-                    "matrix_free_demag_tangent_provider",
+                    expected_operator_source,
                 ),
                 f"{point_name}.demag_contribution.mfem_coupled_block_assembly": (
                     demag_contribution.get("mfem_coupled_block_assembly"),
@@ -2295,19 +2295,33 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
                 delta_phi_complex,
                 f"{point_name}.demag_contribution.delta_phi_complex",
             )
-        h_demag_complex = demag_contribution.get("h_demag_complex")
-        h_demag_pairs = require_complex_pair_list(
-            h_demag_complex,
-            f"{point_name}.demag_contribution.h_demag_complex",
-        )
-        if len(h_demag_pairs) != expected_delta_m_tangent_dof_count:
+        elif schur_coupled_block:
             raise SystemExit(
                 "invalid frequency-domain runtime artifacts:\n"
-                f"{point_name}.demag_contribution.h_demag_complex length "
-                f"{len(h_demag_pairs)} does not match "
-                f"{point_name}.delta_m_tangent_dof_count "
-                f"{expected_delta_m_tangent_dof_count}"
+                f"{point_name}.demag_contribution.delta_phi_complex must be present "
+                "for periodic-airbox Schur coupled-block demag"
             )
+        h_demag_complex = demag_contribution.get("h_demag_complex")
+        if h_demag_complex is None:
+            if not schur_coupled_block:
+                raise SystemExit(
+                    "invalid frequency-domain runtime artifacts:\n"
+                    f"{point_name}.demag_contribution.h_demag_complex must be present "
+                    "for magnetic-only periodic-airbox demag tangent provider"
+                )
+        else:
+            h_demag_pairs = require_complex_pair_list(
+                h_demag_complex,
+                f"{point_name}.demag_contribution.h_demag_complex",
+            )
+            if len(h_demag_pairs) != expected_delta_m_tangent_dof_count:
+                raise SystemExit(
+                    "invalid frequency-domain runtime artifacts:\n"
+                    f"{point_name}.demag_contribution.h_demag_complex length "
+                    f"{len(h_demag_pairs)} does not match "
+                    f"{point_name}.delta_m_tangent_dof_count "
+                    f"{expected_delta_m_tangent_dof_count}"
+                )
 
 
 def select_response_peak(sweep_points: list[object]) -> tuple[int, dict, float]:

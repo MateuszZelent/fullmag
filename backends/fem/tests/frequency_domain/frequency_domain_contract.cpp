@@ -4542,11 +4542,20 @@ void production_cpu_periodic_airbox_dynamic_demag_solves_explicit_coupled_block(
 
     const std::string manifest = read_text_file(result.artifact_manifest_path);
     check(
-        contains(manifest.c_str(), "\"status\":\"ok\""),
-        "explicit coupled block manifest records ok status");
+        contains(manifest.c_str(), "\"status\":\"ready\""),
+        "explicit coupled block manifest records ready artifact status");
     check(
         contains(manifest.c_str(), "\"periodic_airbox_coupled_block_solver\":true"),
         "explicit coupled block manifest records solver provenance");
+    check(
+        contains(manifest.c_str(), "\"response_sweep_v1_path\":\"response/magnetic_response_sweep.v1.json\""),
+        "explicit coupled block manifest links response sweep v1");
+    check(
+        contains(manifest.c_str(), "\"response_sweep_v2_path\":\"response/magnetic_response_sweep.v2.json\""),
+        "explicit coupled block manifest links response sweep v2");
+    check(
+        contains(manifest.c_str(), "\"response_sweep_resource_key\":\"/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep\""),
+        "explicit coupled block manifest links response sweep resource");
     check(
         contains(manifest.c_str(), "\"dynamic_demag_operator_source\":\"explicit_coupled_block_payload\""),
         "explicit coupled block manifest identifies the supplied operator source");
@@ -4592,6 +4601,36 @@ void production_cpu_periodic_airbox_dynamic_demag_solves_explicit_coupled_block(
         contains(periodic_pairs.c_str(), "\"destination_marker\":\"delta_phi_node:1\""),
         "explicit coupled block periodic-pair metadata records the delta_phi destination marker");
 
+    char sweep_v1_path[256]{};
+    char sweep_v2_path[256]{};
+    std::snprintf(
+        sweep_v1_path,
+        sizeof(sweep_v1_path),
+        "%s/response/magnetic_response_sweep.v1.json",
+        output_directory);
+    std::snprintf(
+        sweep_v2_path,
+        sizeof(sweep_v2_path),
+        "%s/response/magnetic_response_sweep.v2.json",
+        output_directory);
+    const std::string sweep_v1 = read_text_file(sweep_v1_path);
+    const std::string sweep_v2 = read_text_file(sweep_v2_path);
+    check(
+        contains(sweep_v1.c_str(), "\"schema_version\":\"magnetic_response_sweep.v1\""),
+        "explicit coupled block writes response sweep v1");
+    check(
+        contains(sweep_v1.c_str(), "\"point_count\":1"),
+        "explicit coupled block response sweep v1 records point count");
+    check(
+        contains(sweep_v1.c_str(), "\"demag_contribution\":{\"status\":\"solved\""),
+        "explicit coupled block response sweep includes solved demag contribution");
+    check(
+        contains(sweep_v2.c_str(), "\"schema_version\":\"magnetic_response_sweep.v2\""),
+        "explicit coupled block writes response sweep v2");
+    check(
+        contains(sweep_v2.c_str(), "\"frequency_point_artifact_paths\":[\"response/frequency_points/frequency_0000.json\"]"),
+        "explicit coupled block response sweep v2 links frequency point metadata");
+
     char frequency_point_path[256]{};
     std::snprintf(
         frequency_point_path,
@@ -4599,6 +4638,9 @@ void production_cpu_periodic_airbox_dynamic_demag_solves_explicit_coupled_block(
         "%s/response/frequency_points/frequency_0000.json",
         output_directory);
     const std::string frequency_point = read_text_file(frequency_point_path);
+    check(
+        contains(frequency_point.c_str(), "\"schema_version\":\"frequency_response_point.v1\""),
+        "explicit coupled block frequency point uses response point schema");
     check(
         contains(frequency_point.c_str(), "\"status\":\"ok\""),
         "explicit coupled block frequency point records ok status");
@@ -5377,6 +5419,7 @@ void production_cpu_periodic_airbox_dynamic_demag_writes_phi_consistency_artifac
     request.mfem_validation_problem.demag_tangent_user_data = &demag_operator;
     request.mfem_validation_problem.drive_real = drive_real;
     request.output_directory = output_directory;
+    request.solve_request.write_response_fields = true;
     request.write_partial_artifacts = true;
 
     fd::DrivenFrequencyResponseSolveResult result{};
@@ -5395,7 +5438,7 @@ void production_cpu_periodic_airbox_dynamic_demag_writes_phi_consistency_artifac
         "no-exchange phi-consistency result JSON reports manifest path");
 
     const std::string manifest = read_text_file(result.artifact_manifest_path);
-    check(contains(manifest.c_str(), "\"status\":\"ok\""), "no-exchange phi-consistency manifest records ok status");
+    check(contains(manifest.c_str(), "\"status\":\"ready\""), "no-exchange phi-consistency manifest records ready artifact status");
     check(contains(manifest.c_str(), "\"complete\":true"), "no-exchange phi-consistency manifest records complete state");
     check(
         contains(manifest.c_str(), "\"dynamic_demag_operator_source\":\"matrix_free_mfem_demag_phi_consistency_schur_provider\""),
@@ -5428,8 +5471,8 @@ void production_cpu_periodic_airbox_dynamic_demag_writes_phi_consistency_artifac
     const std::string diagnostics = read_text_file(diagnostics_path);
     const std::string progress = read_text_file(progress_path);
     check(
-        contains(diagnostics.c_str(), "\"status\":\"ok\""),
-        "no-exchange phi-consistency diagnostics records ok status");
+        contains(diagnostics.c_str(), "\"status\":\"ready\""),
+        "no-exchange phi-consistency diagnostics records ready artifact status");
     check(
         contains(diagnostics.c_str(), "\"dynamic_demag_operator_source\":\"matrix_free_mfem_demag_phi_consistency_schur_provider\""),
         "no-exchange phi-consistency diagnostics records Schur provider source");
@@ -5440,8 +5483,8 @@ void production_cpu_periodic_airbox_dynamic_demag_writes_phi_consistency_artifac
         extract_json_double(diagnostics.c_str(), "\"response_delta_phi_l2_norm\"") > 0.0,
         "no-exchange phi-consistency diagnostics records nonzero delta_phi response norm");
     check(
-        contains(progress.c_str(), "\"status\":\"ok\""),
-        "no-exchange phi-consistency progress records ok status");
+        contains(progress.c_str(), "\"status\":\"ready\""),
+        "no-exchange phi-consistency progress records ready artifact status");
     check(
         contains(progress.c_str(), "\"completed_frequency_points\":1"),
         "no-exchange phi-consistency progress records one completed point");
@@ -5551,6 +5594,7 @@ void production_cpu_periodic_airbox_phi_consistency_solve_error_writes_bounded_a
     request.mfem_validation_problem.demag_tangent_user_data = &demag_operator;
     request.mfem_validation_problem.drive_real = drive_real;
     request.output_directory = output_directory;
+    request.solve_request.write_response_fields = true;
     request.write_partial_artifacts = true;
 
     fd::DrivenFrequencyResponseSolveResult result{};

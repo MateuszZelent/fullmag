@@ -7,6 +7,7 @@ import { analysisPlotsWorkspaceStore } from "@/kernel/workspace/analysisPlotsWor
 import { useAnalysisPlotsWorkspaceSelector } from "@/kernel/workspace/useAnalysisPlotsWorkspace";
 import {
   shouldLoadRuntimeScalars,
+  useFrequencyDomainEigenBranchesResource,
   useSolverEnergyHistoryResource,
   useFrequencyDomainEigenDispersionResource,
   useFrequencyDomainEigenSpectrumResource,
@@ -42,6 +43,7 @@ import {
 } from "./components/chartDiagnostics";
 import { buildSolverEnergyHistoryChartSeries } from "./energyHistoryAdapter";
 import {
+  buildEigenBranchesModel,
   buildEigenDispersionPointSelectionRef,
   buildEigenDispersionChartModel,
   buildEigenModeSelectionRef,
@@ -120,6 +122,9 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
   const frequencyDomainDispersion = useFrequencyDomainEigenDispersionResource({
     enabled: frequencyDomainRoute.primaryChart === "dispersion",
   });
+  const frequencyDomainBranches = useFrequencyDomainEigenBranchesResource({
+    enabled: frequencyDomainRoute.primaryChart === "dispersion",
+  });
   const frequencyDomainResponse = useFrequencyDomainResponseSweepResource({
     enabled: frequencyDomainRoute.primaryChart === "response-sweep",
   });
@@ -128,8 +133,14 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     [frequencyDomainSpectrum.data],
   );
   const frequencyDomainDispersionModel = useMemo(
-    () => buildEigenDispersionChartModel(frequencyDomainDispersion.data),
-    [frequencyDomainDispersion.data],
+    () =>
+      buildEigenDispersionChartModel(
+        frequencyDomainDispersion.data,
+        frequencyDomainBranches.data == null
+          ? null
+          : buildEigenBranchesModel(frequencyDomainBranches.data),
+      ),
+    [frequencyDomainBranches.data, frequencyDomainDispersion.data],
   );
   const frequencyDomainResponseModel = useMemo(
     () =>

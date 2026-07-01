@@ -34,7 +34,14 @@ fn frequency_score(
                 1.0 - delta / window
             }
         }
-        _ => 1.0 / (1.0 + delta),
+        _ => {
+            let scale_hz = prev
+                .frequency_real_hz
+                .abs()
+                .max(current.frequency_real_hz.abs())
+                .max(1.0);
+            1.0 / (1.0 + delta / scale_hz)
+        }
     }
 }
 
@@ -81,7 +88,6 @@ pub fn track_branches(result: &mut PathSolveResult, config: Option<&ModeTracking
         .collect();
 
     for sample_index in 1..result.samples.len() {
-        let prev_modes = result.samples[sample_index - 1].modes.clone();
         let current_modes = result.samples[sample_index].modes.clone();
         let mut edges: Vec<(usize, usize, f64)> = Vec::new();
 
@@ -89,7 +95,13 @@ pub fn track_branches(result: &mut PathSolveResult, config: Option<&ModeTracking
             let Some(last_point) = branch.points.last() else {
                 continue;
             };
-            let prev_mode = &prev_modes[last_point.raw_mode_index];
+            let Some(prev_mode) = mode_for_branch_point(
+                &result.samples,
+                last_point.sample_index,
+                last_point.raw_mode_index,
+            ) else {
+                continue;
+            };
             for current in &current_modes {
                 let score = edge_score(prev_mode, current, cfg);
                 if score >= cfg.overlap_floor {
@@ -124,13 +136,18 @@ pub fn track_branches(result: &mut PathSolveResult, config: Option<&ModeTracking
                 .iter_mut()
                 .find(|branch| branch.branch_id == branch_id)
             {
+                let Some(mode) = result.samples[sample_index]
+                    .modes
+                    .iter()
+                    .find(|mode| mode.raw_mode_index == raw_mode_index)
+                else {
+                    continue;
+                };
                 branch.points.push(TrackedBranchPoint {
                     sample_index,
                     raw_mode_index,
-                    frequency_real_hz: result.samples[sample_index].modes[raw_mode_index]
-                        .frequency_real_hz,
-                    frequency_imag_hz: result.samples[sample_index].modes[raw_mode_index]
-                        .frequency_imag_hz,
+                    frequency_real_hz: mode.frequency_real_hz,
+                    frequency_imag_hz: mode.frequency_imag_hz,
                     tracking_confidence: score,
                     overlap_prev: Some(score),
                 });
@@ -159,6 +176,22 @@ pub fn track_branches(result: &mut PathSolveResult, config: Option<&ModeTracking
     }
 
     result.branches = branches;
+}
+
+fn mode_for_branch_point(
+    samples: &[crate::eigen::types::SingleKSolveResult],
+    sample_index: usize,
+    raw_mode_index: usize,
+) -> Option<&SingleKModeResult> {
+    samples
+        .iter()
+        .find(|sample| sample.sample.sample_index == sample_index)
+        .and_then(|sample| {
+            sample
+                .modes
+                .iter()
+                .find(|mode| mode.raw_mode_index == raw_mode_index)
+        })
 }
 
 #[cfg(test)]
@@ -210,6 +243,88 @@ mod tests {
             amplitude: None,
             phase: None,
         }
+    }
+
+    fn frequency_only_mode(raw_mode_index: usize, frequency_real_hz: f64) -> SingleKModeResult {
+        SingleKModeResult {
+            raw_mode_index,
+            branch_id: None,
+            frequency_real_hz,
+            frequency_imag_hz: 0.0,
+            angular_frequency_rad_per_s: frequency_real_hz,
+            eigenvalue_real: frequency_real_hz,
+            eigenvalue_imag: 0.0,
+            norm: 1.0,
+            max_amplitude: 1.0,
+            residual_norm: None,
+            residual_linf: None,
+            tangent_leakage_mean_abs: None,
+            tangent_leakage_max_abs: None,
+            dominant_polarization: "test".to_string(),
+            reduced_vector: None,
+            lifted_real: None,
+            lifted_imag: None,
+            amplitude: None,
+            phase: None,
+        }
+    }
+
+    #[test]
+    fn frequency_fallback_tracks_large_hz_modes_when_vectors_are_absent() {
+        let mut result = PathSolveResult {
+            samples: vec![
+                sample(
+                    0,
+                    vec![frequency_only_mode(0, 2.0e9), frequency_only_mode(1, 5.0e9)],
+                ),
+                sample(
+                    1,
+                    vec![frequency_only_mode(0, 5.2e9), frequency_only_mode(1, 2.1e9)],
+                ),
+            ],
+            branches: Vec::new(),
+            solver_model: EigenSolverModel::ReferenceScalarTangent,
+            notes: Vec::new(),
+        };
+        let cfg = ModeTrackingIR {
+            method: ModeTrackingMethodIR::OverlapGreedy,
+            frequency_window_hz: None,
+            overlap_floor: 0.5,
+            max_branch_gap: 0,
+        };
+
+        track_branches(&mut result, Some(&cfg));
+
+        assert_eq!(result.samples[1].modes[1].branch_id, Some(0));
+        assert_eq!(result.samples[1].modes[0].branch_id, Some(1));
+        assert_eq!(result.branches.len(), 2);
+    }
+
+    #[test]
+    fn tracking_skips_empty_intermediate_samples_without_panicking() {
+        let vector = [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)];
+        let mut result = PathSolveResult {
+            samples: vec![
+                sample(0, vec![mode(0, 1.0e9, vector)]),
+                sample(1, Vec::new()),
+                sample(2, vec![mode(0, 1.1e9, vector)]),
+            ],
+            branches: Vec::new(),
+            solver_model: EigenSolverModel::ReferenceScalarTangent,
+            notes: Vec::new(),
+        };
+        let cfg = ModeTrackingIR {
+            method: ModeTrackingMethodIR::OverlapGreedy,
+            frequency_window_hz: None,
+            overlap_floor: 0.5,
+            max_branch_gap: 0,
+        };
+
+        track_branches(&mut result, Some(&cfg));
+
+        assert_eq!(result.samples[2].modes[0].branch_id, Some(0));
+        assert_eq!(result.branches[0].points.len(), 2);
+        assert_eq!(result.branches[0].points[1].sample_index, 2);
     }
 
     #[test]

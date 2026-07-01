@@ -66,7 +66,14 @@ FEM static and time-domain paths support only the limited k=0 static-reduction
 slice where the active native operator enforces `periodic_node_pairs`. Requests
 outside that slice, including unsupported GPU periodic demag reductions, must
 reject. FEM eigen supports periodic and Floquet phase reduction for exchange,
-anisotropy, external field, and DMI terms.
+anisotropy, external field, and DMI terms. The reference/MVP modal path supports
+scalar tangent reduction only for identity-frame pairs, and supports
+nonzero-k `Full2x2` tangent blocks by reducing each complex stiffness and mass
+contribution with the selected Bloch phase and the local tangent-frame
+transport matrix `T_node^T T_root`. This implements the reference/MVP CPU
+`phase*(T_dst^T T_src)` modal transport for `Full2x2`; it does not implement
+dynamic Floquet demagnetization or a production selected-spectrum/GPU modal
+Floquet eigensolver.
 
 FEM driven frequency response is narrower still: the native production CPU lane
 supports gamma/free response and k=0 static-periodic magnetic response without

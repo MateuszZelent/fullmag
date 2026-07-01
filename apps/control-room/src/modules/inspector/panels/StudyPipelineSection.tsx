@@ -2354,12 +2354,28 @@ function SpectralStageDraftFields({
         </>
       ) : null}
       {showBoundary ? (
-        <FormField
-          label="BC"
-          hint="Boundary condition name or JSON object."
-          value={draft.bc}
-          onChange={(event) => onUpdate({ bc: event.target.value })}
-        />
+        <>
+          <FormField
+            label="BC"
+            hint="Boundary condition name or JSON object."
+            value={draft.bc}
+            onChange={(event) => onUpdate({ bc: event.target.value })}
+          />
+          {draft.kind === "frequency_response" ? (
+            <FormField
+              label="Magnetostatic BC"
+              type="select"
+              value={draft.magnetostaticBc}
+              onChange={(event) =>
+                onUpdate({ magnetostaticBc: event.target.value })
+              }
+            >
+              <option value="open">Open</option>
+              <option value="periodic_airbox_k0">Periodic airbox k=0</option>
+              <option value="floquet_airbox">Floquet airbox</option>
+            </FormField>
+          ) : null}
+        </>
       ) : null}
     </>
   );

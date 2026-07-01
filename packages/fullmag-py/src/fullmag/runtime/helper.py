@@ -170,6 +170,36 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(json.dumps(ir))
             return 0
 
+        stages = []
+        device_override: str | None = None
+        for stage in loaded.stages or ():
+            action_device = _change_device_action_device(stage.action)
+            stage_device_override = action_device or device_override
+            stage_ir = stage.to_ir(
+                requested_backend=requested_backend,
+                execution_mode=execution_mode,
+                execution_precision=execution_precision,
+                script_source=loaded.script_source,
+                source_root=loaded.source_path.parent,
+                asset_cache=asset_cache,
+                include_geometry_assets=not getattr(args, "skip_geometry_assets", False),
+                study_pipeline=study_pipeline,
+                runtime_device_override=stage_device_override,
+            )
+            if action_device is not None:
+                device_override = action_device
+            stages.append(
+                {
+                    "ir": _compact_stage_ir(
+                        stage_ir,
+                        shared_geometry_assets=shared_geometry_assets,
+                    ),
+                    "default_until_seconds": stage.default_until_seconds,
+                    "entrypoint_kind": stage.entrypoint_kind,
+                    "action": stage.action,
+                }
+            )
+
         print(
             json.dumps(
                 {
@@ -177,27 +207,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "shared_geometry_assets": shared_geometry_assets,
                     "default_until_seconds": loaded.default_until_seconds,
                     "study_pipeline": study_pipeline,
-                    "stages": [
-                        {
-                            "ir": _compact_stage_ir(
-                                stage.to_ir(
-                                    requested_backend=requested_backend,
-                                    execution_mode=execution_mode,
-                                    execution_precision=execution_precision,
-                                    script_source=loaded.script_source,
-                                    source_root=loaded.source_path.parent,
-                                    asset_cache=asset_cache,
-                                    include_geometry_assets=not getattr(args, "skip_geometry_assets", False),
-                                    study_pipeline=study_pipeline,
-                                ),
-                                shared_geometry_assets=shared_geometry_assets,
-                            ),
-                            "default_until_seconds": stage.default_until_seconds,
-                            "entrypoint_kind": stage.entrypoint_kind,
-                            "action": stage.action,
-                        }
-                        for stage in (loaded.stages or ())
-                    ],
+                    "stages": stages,
                 }
             )
         )
@@ -321,6 +331,13 @@ def _compact_stage_ir(
     if shared_geometry_assets is not None and compacted.get("geometry_assets") == shared_geometry_assets:
         compacted["geometry_assets"] = None
     return compacted
+
+
+def _change_device_action_device(action: dict[str, object] | None) -> str | None:
+    if not isinstance(action, dict) or action.get("kind") != "change_device":
+        return None
+    device = action.get("device")
+    return device if isinstance(device, str) else None
 
 
 if __name__ == "__main__":  # pragma: no cover

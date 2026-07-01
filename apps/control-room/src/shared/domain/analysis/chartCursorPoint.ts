@@ -1,4 +1,6 @@
 interface AnalysisChartPoint {
+  label?: string | null;
+  linewidthHz?: number | null;
   rowIndex: number;
   x: number;
   y: number;

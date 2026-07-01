@@ -142,28 +142,40 @@ export function FrequencyDomainDispersionChart({
       title="Bloch / Floquet dispersion"
       xLabel="k-path s [rad/m]"
     >
-      {model.points.slice(0, 4).map((point) => (
-        <Button
-          aria-label={`Select dispersion sample ${point.sampleIndex} mode ${point.rawModeIndex}`}
-          className="fm-frequency-domain-chart__mode"
-          key={`${point.sampleIndex}:${point.rawModeIndex}:${point.pathS}`}
-          size="sm"
-          type="button"
-          variant="secondary"
-          onClick={() => onSelectPoint?.(point)}
-        >
-          <Eye aria-hidden="true" size={13} />
-          <span>
-            sample {point.sampleIndex}, mode {point.rawModeIndex}
-          </span>
-          <small>
-            {formatFrequencyHz(point.frequencyHz)}
-            {point.branchId ? ` | branch ${point.branchId}` : ""}
-          </small>
-        </Button>
-      ))}
+      {model.points.slice(0, 4).map((point) => {
+        const pointLabel = dispersionPointLabel(point);
+        return (
+          <Button
+            aria-label={`Select dispersion ${pointLabel}`}
+            className="fm-frequency-domain-chart__mode"
+            key={`${point.sampleIndex}:${point.rawModeIndex}:${point.pathS}`}
+            size="sm"
+            type="button"
+            variant="secondary"
+            onClick={() => onSelectPoint?.(point)}
+          >
+            <Eye aria-hidden="true" size={13} />
+            <span>{pointLabel}</span>
+            <small>
+              {formatFrequencyHz(point.frequencyHz)}
+              {point.branchId ? ` | branch ${point.branchId}` : ""}
+              {point.linewidthHz != null
+                ? ` | linewidth ${formatFrequencyHz(point.linewidthHz)}`
+                : ""}
+            </small>
+          </Button>
+        );
+      })}
     </FrequencyDomainSeriesChart>
   );
+}
+
+function dispersionPointLabel(point: EigenDispersionPoint): string {
+  const sample = `sample ${point.sampleIndex}`;
+  const mode = `mode ${point.rawModeIndex}`;
+  return point.sampleLabel
+    ? `${point.sampleLabel} ${sample}, ${mode}`
+    : `${sample}, ${mode}`;
 }
 
 export function FrequencyDomainResponseChart({

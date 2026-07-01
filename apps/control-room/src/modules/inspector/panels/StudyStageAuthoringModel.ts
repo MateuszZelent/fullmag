@@ -81,6 +81,11 @@ const SUPPORTED_RESPONSE_CALCULATION_MODES = [
   "fmr_response",
   "response_map",
 ] as const;
+const SUPPORTED_FREQUENCY_MAGNETOSTATIC_BCS = [
+  "open",
+  "periodic_airbox_k0",
+  "floquet_airbox",
+] as const;
 const SPECTRAL_NORMALIZATION_ALIASES: Record<string, string> = {
   max_component: "unit_max_amplitude",
 };
@@ -129,6 +134,7 @@ export interface StudyStageDraft {
   kind: StudyStageDraftKind;
   kSampling: string;
   kVector: string;
+  magnetostaticBc: string;
   maxError: string;
   maxPhysicalTime: string;
   maxPseudotime: string;
@@ -202,6 +208,7 @@ const DEFAULT_RELAX_STAGE_DRAFT: StudyStageDraft = {
   kind: "relax",
   kSampling: "",
   kVector: "",
+  magnetostaticBc: "open",
   maxError: "",
   maxPhysicalTime: "",
   maxPseudotime: "",
@@ -269,6 +276,7 @@ const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
   kind: "run",
   kSampling: "",
   kVector: "",
+  magnetostaticBc: "open",
   maxError: "",
   maxPhysicalTime: "",
   maxPseudotime: "",
@@ -397,11 +405,16 @@ export function createStudyStageDraft(
     };
   }
   if (kind === "eigenmodes") {
-    return spectralDraft(DEFAULT_EIGENMODES_STAGE_DRAFT, record, index);
+    return spectralDraft(DEFAULT_EIGENMODES_STAGE_DRAFT, record, index, kind);
   }
   if (kind === "frequency_response") {
     return {
-      ...spectralDraft(DEFAULT_FREQUENCY_RESPONSE_STAGE_DRAFT, record, index),
+      ...spectralDraft(
+        DEFAULT_FREQUENCY_RESPONSE_STAGE_DRAFT,
+        record,
+        index,
+        kind,
+      ),
       excitationField: vectorText(
         record?.excitation_field_au_per_m ?? record?.frequency_excitation_field_au_per_m,
         "0, 0, 1",
@@ -908,6 +921,12 @@ export function validateStudyStageDraft(
     validateOptionalVector3(issues, draft.kVector, "k vector");
     validateOptionalJson(issues, draft.kSampling, "k sampling");
     validateJsonOrString(issues, draft.bc, "BC");
+    validateSupportedText(
+      issues,
+      draft.magnetostaticBc,
+      SUPPORTED_FREQUENCY_MAGNETOSTATIC_BCS,
+      "Magnetostatic BC",
+    );
     return issues;
   }
   if (draft.kind === "frequency_response") {
@@ -2336,29 +2355,54 @@ function spectralDraft(
   base: StudyStageDraft,
   record: JsonRecord | null,
   index: number,
+  kind: "eigenmodes" | "frequency_response",
 ): StudyStageDraft {
   return {
     ...base,
-    bc: scalarOrObjectText(record?.bc, base.bc),
+    bc: scalarOrObjectText(
+      spectralRecordValue(record, kind, "spin_wave_bc") ?? record?.bc,
+      base.bc,
+    ),
     calculationMode: scalarText(
-      record?.calculation_mode,
+      spectralRecordValue(record, kind, "calculation_mode"),
       base.calculationMode,
     ),
-    count: scalarText(record?.count, base.count),
+    count: scalarText(spectralRecordValue(record, kind, "count"), base.count),
     dampingPolicy: canonicalSpectralOption(
-      scalarText(record?.damping_policy, base.dampingPolicy),
+      scalarText(
+        spectralRecordValue(record, kind, "damping_policy"),
+        base.dampingPolicy,
+      ),
       SPECTRAL_DAMPING_POLICY_ALIASES,
     ),
-    equilibriumArtifact: scalarText(record?.equilibrium_artifact, ""),
+    equilibriumArtifact: scalarText(
+      spectralRecordValue(record, kind, "equilibrium_artifact"),
+      "",
+    ),
     equilibriumSource: canonicalSpectralOption(
-      scalarText(record?.equilibrium_source, base.equilibriumSource),
+      scalarText(
+        spectralRecordValue(record, kind, "equilibrium_source"),
+        base.equilibriumSource,
+      ),
       SPECTRAL_EQUILIBRIUM_SOURCE_ALIASES,
     ),
-    includeDemag: booleanValue(record?.include_demag, base.includeDemag),
-    kSampling: objectText(record?.k_sampling),
-    kVector: vectorText(record?.k_vector, ""),
+    includeDemag: booleanValue(
+      spectralRecordValue(record, kind, "include_demag"),
+      base.includeDemag,
+    ),
+    kSampling: objectText(spectralRecordValue(record, kind, "k_sampling")),
+    kVector: vectorText(spectralRecordValue(record, kind, "k_vector"), ""),
+    magnetostaticBc: scalarText(
+      kind === "frequency_response"
+        ? spectralRecordValue(record, kind, "magnetostatic_bc")
+        : record?.magnetostatic_bc,
+      base.magnetostaticBc,
+    ),
     normalization: canonicalSpectralOption(
-      scalarText(record?.normalization, base.normalization),
+      scalarText(
+        spectralRecordValue(record, kind, "normalization"),
+        base.normalization,
+      ),
       SPECTRAL_NORMALIZATION_ALIASES,
     ),
     stageId: stringValue(record?.stage_id ?? record?.id, `stage-${index + 1}`),
@@ -2367,6 +2411,16 @@ function spectralDraft(
     frequencyMin: scalarText(record?.frequency_min ?? record?.eigen_frequency_min, ""),
     frequencyMax: scalarText(record?.frequency_max ?? record?.eigen_frequency_max, ""),
   };
+}
+
+function spectralRecordValue(
+  record: JsonRecord | null,
+  kind: "eigenmodes" | "frequency_response",
+  field: string,
+): unknown {
+  if (!record) return undefined;
+  const prefix = kind === "eigenmodes" ? "eigen" : "frequency";
+  return record[`${prefix}_${field}`] ?? record[field];
 }
 
 function spectralSceneStage(
@@ -2413,9 +2467,11 @@ function spectralSceneStage(
     if (kSampling) stage.eigen_k_sampling = kSampling;
     stage.eigen_spin_wave_bc = stage.bc;
   } else {
+    stage.magnetostatic_bc = requiredText(draft.magnetostaticBc, "open");
     stage.frequency_calculation_mode = stage.calculation_mode;
     stage.frequency_include_demag = draft.includeDemag;
     stage.frequency_equilibrium_source = stage.equilibrium_source;
+    stage.frequency_magnetostatic_bc = stage.magnetostatic_bc;
     stage.frequency_normalization = stage.normalization;
     stage.frequency_damping_policy = stage.damping_policy;
     if (kVector) stage.frequency_k_vector = kVector;

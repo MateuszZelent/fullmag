@@ -49,6 +49,7 @@ study.stages.add_eigenmodes(
     target="frequency_window",
     frequency_min=FREQUENCY_MIN_HZ,
     frequency_max=FREQUENCY_MAX_HZ,
+    operator="full_2x2",
     include_demag=True,
     equilibrium_source="provided",
     normalization="unit_l2",

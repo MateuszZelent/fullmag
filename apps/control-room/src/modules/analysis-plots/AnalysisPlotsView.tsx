@@ -6,6 +6,7 @@ import type { TableRowsResource } from "@/kernel/api/apiTypes";
 import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
 import type { KernelApi } from "@/kernel/types";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
+import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
 import { HysteresisChart } from "@/shared/domain/study/HysteresisChart";
 import { Button } from "@/shared/ui/Button";
 
@@ -374,6 +375,12 @@ function useAnalysisPlotsView({
                       label={selectedFrequencyDomainPoint.yLabel}
                       value={selectedFrequencyDomainPoint.yValue}
                     />
+                    {selectedFrequencyDomainPoint.linewidthValue ? (
+                      <StatusPill
+                        label="Linewidth"
+                        value={selectedFrequencyDomainPoint.linewidthValue}
+                      />
+                    ) : null}
                     <StatusPill
                       label="Inspector"
                       value={selectedFrequencyDomainPoint.inspectorTarget}
@@ -572,6 +579,7 @@ function buildFrequencyDomainCursorSummary(
   chartTitle: string,
 ): {
   inspectorTarget: string;
+  linewidthValue?: string | null;
   title: string;
   xLabel: string;
   xValue: string;
@@ -602,8 +610,26 @@ function buildFrequencyDomainCursorSummary(
         yValue,
       };
     case "frequency-domain:eigen-dispersion":
+      if (point.point.label) {
+        return {
+          inspectorTarget: "Dispersion inspector",
+          linewidthValue:
+            point.point.linewidthHz != null
+              ? formatFrequencyHz(point.point.linewidthHz)
+              : null,
+          title: "dispersion point",
+          xLabel: "k-label",
+          xValue: point.point.label,
+          yLabel: point.quantity || "frequency",
+          yValue,
+        };
+      }
       return {
         inspectorTarget: "Dispersion inspector",
+        linewidthValue:
+          point.point.linewidthHz != null
+            ? formatFrequencyHz(point.point.linewidthHz)
+            : null,
         title: "dispersion point",
         xLabel: "path_s",
         xValue,

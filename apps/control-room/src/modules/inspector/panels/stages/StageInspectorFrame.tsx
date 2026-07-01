@@ -67,23 +67,46 @@ export function StageInspectorFrame({
 }: StageInspectorFrameProps) {
   const hasDraftErrors = validation.some((issue) => issue.severity === "error");
   const isExpectedDraft = draft?.kind === expectedKind;
+  const stageKind = (stage?.kind ?? expectedKind).toLowerCase();
+  const stageStatus = (stage?.status ?? "draft").toLowerCase();
+  const activeStageStatuses = [
+    "accepted",
+    "dispatched",
+    "materializing",
+    "pending",
+    "queued",
+    "running",
+  ];
   const eigenmodeSolving =
-    (stage?.kind ?? expectedKind).toLowerCase().includes("eigen") &&
-    ["accepted", "dispatched", "materializing", "pending", "queued", "running"].includes(
-      (stage?.status ?? "draft").toLowerCase(),
-    );
+    stageKind.includes("eigen") && activeStageStatuses.includes(stageStatus);
+  const frequencyResponseSolving =
+    stageKind.includes("frequency_response") &&
+    activeStageStatuses.includes(stageStatus);
   const hasStageProgress =
     stage !== null &&
     (stage.progressLabel != null ||
       stage.progressDetail != null ||
       stage.progressPercent > 0);
   const stageProgressValue =
-    eigenmodeSolving && !hasStageProgress ? null : (stage?.progressPercent ?? null);
+    (eigenmodeSolving || frequencyResponseSolving) && !hasStageProgress
+      ? null
+      : (stage?.progressPercent ?? null);
   const stageProgressLabel =
     stage?.progressLabel ??
-    (eigenmodeSolving ? "stage running; per-iteration modal telemetry pending" : undefined);
+    (eigenmodeSolving
+      ? "stage running; per-iteration modal telemetry pending"
+      : frequencyResponseSolving
+        ? "stage running; per-frequency sweep telemetry pending"
+        : undefined);
   const eigenmodeActivity = eigenmodeSolving
     ? summarizeEigenmodeActivity({
+        hasStageProgress,
+        stage,
+        stageExecutionRevision,
+      })
+    : null;
+  const frequencyResponseActivity = frequencyResponseSolving
+    ? summarizeFrequencyResponseActivity({
         hasStageProgress,
         stage,
         stageExecutionRevision,
@@ -174,11 +197,43 @@ export function StageInspectorFrame({
             />
           </>
         ) : null}
+        {frequencyResponseSolving ? (
+          <>
+            <FieldRow
+              label="Frequency response sweep progress"
+              value={stageProgressLabel}
+            />
+            <FieldRow
+              label="Sweep activity"
+              value={frequencyResponseActivity?.activity ?? "not available"}
+            />
+            <FieldRow
+              label="Progress source"
+              value={frequencyResponseActivity?.source ?? "not available"}
+            />
+            <FieldRow
+              label="Stage started"
+              value={formatUnixMs(stage?.startedAtUnixMs)}
+            />
+            <FieldRow
+              label="Last solver update"
+              value={formatUnixMs(stage?.lastProgressUnixMs)}
+            />
+            <FieldRow
+              label="Command ID"
+              value={stage?.commandId ?? "not available"}
+            />
+          </>
+        ) : null}
         <StudyProgressBar
-          indeterminate={eigenmodeSolving && !hasStageProgress}
+          indeterminate={
+            (eigenmodeSolving || frequencyResponseSolving) && !hasStageProgress
+          }
           label={
             eigenmodeSolving
               ? "Eigenmode solve progress"
+              : frequencyResponseSolving
+                ? "Frequency response sweep progress"
               : "Selected stage progress"
           }
           statusLabel={stage?.progressLabel ?? undefined}
@@ -226,6 +281,27 @@ function summarizeEigenmodeActivity({
     activity: hasStageProgress
       ? `${status}; ${detail ?? "solver progress telemetry published"}`
       : `${status}; solver stage is active; no modal iteration counter published yet`,
+    source: `simulation/stages/execution@${stageExecutionRevision ?? "unknown"}; ${
+      hasStageProgress ? "progress telemetry observed" : "stage lifecycle observed"
+    }`,
+  };
+}
+
+function summarizeFrequencyResponseActivity({
+  hasStageProgress,
+  stage,
+  stageExecutionRevision,
+}: {
+  hasStageProgress: boolean;
+  stage: StudyStageModel | null;
+  stageExecutionRevision: number | null;
+}) {
+  const status = stage?.status ?? "draft";
+  const detail = stage?.progressDetail ?? stage?.progressLabel ?? null;
+  return {
+    activity: hasStageProgress
+      ? `${status}; ${detail ?? "frequency sweep progress telemetry published"}`
+      : `${status}; response sweep is active; no per-frequency counter published yet`,
     source: `simulation/stages/execution@${stageExecutionRevision ?? "unknown"}; ${
       hasStageProgress ? "progress telemetry observed" : "stage lifecycle observed"
     }`,

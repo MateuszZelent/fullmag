@@ -620,6 +620,14 @@ FrequencyDomainStatus solve_frequency_gmres(
                         basis[row * block_count + index];
                 }
             }
+            for (std::uint64_t row = 0; row <= column; ++row) {
+                const double correction =
+                    dot(w, basis.data() + row * block_count, block_count);
+                h[row * restart + column] += correction;
+                for (std::uint64_t index = 0; index < block_count; ++index) {
+                    w[index] -= correction * basis[row * block_count + index];
+                }
+            }
             h[(column + 1) * restart + column] = norm2(w.data(), block_count);
             if (h[(column + 1) * restart + column] > 0.0) {
                 for (std::uint64_t index = 0; index < block_count; ++index) {

@@ -77,8 +77,11 @@ export function buildFrequencyDomainResultNode(
   const status: ExplorerNodeStatus = manifest ? "ready" : "stale";
   const parentId = "results:frequency-domain";
   const spectrumModel = buildEigenSpectrumChartModel(spectrum);
-  const dispersionModel = buildEigenDispersionChartModel(dispersion);
   const branchesModel = buildEigenBranchesModel(branches);
+  const dispersionModel = buildEigenDispersionChartModel(
+    dispersion,
+    branchesModel,
+  );
   const responseModel = buildFrequencyResponseChartModel(responseSweep);
   const fmrPeaks = buildFmrPeakTableModel({ responseSweep, spectrum });
   const hasEigenResults =
@@ -149,6 +152,7 @@ export function buildFrequencyDomainResultNode(
             status: "ready",
             children: compactExplorerNodes([
               buildEigenKPathNode({
+                branches,
                 dispersion,
                 id: "results:eigen:k-path",
                 manifest,
@@ -325,17 +329,22 @@ function responseMapResultState(
 }
 
 function buildEigenKPathNode({
+  branches,
   dispersion,
   id,
   manifest,
   parentId,
 }: {
+  branches: FrequencyDomainJsonArtifactResource | null | undefined;
   dispersion: FrequencyDomainTextArtifactResource | null | undefined;
   id: string;
   manifest: FrequencyDomainManifestResource | null | undefined;
   parentId: string;
 }): ExplorerNode {
-  const model = buildEigenDispersionChartModel(dispersion);
+  const model = buildEigenDispersionChartModel(
+    dispersion,
+    buildEigenBranchesModel(branches),
+  );
   const sampleCount = new Set(model.points.map((point) => point.sampleIndex)).size;
   return {
     id,
@@ -493,7 +502,11 @@ function buildEigenResultNode(
 ): ExplorerNode {
   const parentId = "results:eigen";
   const modeNodes = buildEigenModeNodes(`${parentId}:modes`, spectrum);
-  const dispersionModel = buildEigenDispersionChartModel(dispersion);
+  const branchesModel = buildEigenBranchesModel(branches);
+  const dispersionModel = buildEigenDispersionChartModel(
+    dispersion,
+    branchesModel,
+  );
   const spectrumModel = buildEigenSpectrumChartModel(spectrum);
   const modeVisualizationNode = buildEigenModesVisualizationNode(
     `${parentId}:modes`,

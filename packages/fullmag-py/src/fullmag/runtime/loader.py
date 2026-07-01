@@ -27,8 +27,9 @@ class LoadedStage:
         asset_cache: dict[str, dict[str, object] | None] | None = None,
         include_geometry_assets: bool = True,
         study_pipeline: dict[str, object] | None = None,
+        runtime_device_override: str | None = None,
     ) -> dict[str, object]:
-        return self.problem.to_ir(
+        ir = self.problem.to_ir(
             requested_backend=requested_backend,
             execution_mode=execution_mode,
             execution_precision=execution_precision,
@@ -39,6 +40,53 @@ class LoadedStage:
             include_geometry_assets=include_geometry_assets,
             study_pipeline=study_pipeline,
         )
+        if runtime_device_override is not None:
+            apply_ir_runtime_device_override(ir, runtime_device_override)
+        return ir
+
+
+def apply_ir_runtime_device_override(ir: dict[str, object], device: str) -> None:
+    problem_meta = ir.get("problem_meta")
+    if not isinstance(problem_meta, dict):
+        return
+    runtime_metadata = problem_meta.get("runtime_metadata")
+    if not isinstance(runtime_metadata, dict):
+        return
+    for runtime in _runtime_metadata_runtime_maps(runtime_metadata):
+        runtime["device"] = device
+        if device == "cpu":
+            runtime["gpu_count"] = 0
+            runtime["device_index"] = None
+        elif device.startswith("cuda"):
+            runtime["gpu_count"] = max(int(runtime.get("gpu_count") or 0), 1)
+            runtime["device_index"] = _cuda_device_index(device)
+
+
+def _runtime_metadata_runtime_maps(
+    runtime_metadata: dict[str, object],
+) -> tuple[dict[str, object], ...]:
+    runtime_maps: list[dict[str, object]] = []
+    runtime_selection = runtime_metadata.get("runtime_selection")
+    if isinstance(runtime_selection, dict):
+        runtime_maps.append(runtime_selection)
+    model_builder = runtime_metadata.get("model_builder")
+    if isinstance(model_builder, dict):
+        problem = model_builder.get("problem")
+        if isinstance(problem, dict):
+            runtime = problem.get("runtime")
+            if isinstance(runtime, dict):
+                runtime_maps.append(runtime)
+    return tuple(runtime_maps)
+
+
+def _cuda_device_index(device: str) -> int | None:
+    if not device.startswith("cuda:"):
+        return None
+    _, raw_index = device.split(":", 1)
+    try:
+        return int(raw_index)
+    except ValueError:
+        return None
 
 
 @dataclass(frozen=True, slots=True)

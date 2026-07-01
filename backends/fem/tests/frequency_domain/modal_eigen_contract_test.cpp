@@ -535,6 +535,9 @@ void modal_shift_invert_payload_can_be_assembled_from_mfem_operator()
     request.mfem_mass_matrix_row_major = tangent_mass_matrix_row_major;
     request.operator_request.operator_diagnostics_json =
         "{\"operator_family\":\"mfem_linearized_llg\",\"payload_kind\":\"dense_linearized_mfem_operator\"}";
+    constexpr double k_vector_rad_m[] = {0.0, 0.0, 0.0};
+    request.operator_request.k_vector_rad_m = k_vector_rad_m;
+    request.operator_request.k_vector_len = 3;
 
     FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
 #if FULLMAG_FEM_WITH_SLEPC
@@ -556,6 +559,8 @@ void modal_shift_invert_payload_can_be_assembled_from_mfem_operator()
     check(result.status == FULLMAG_FEM_FD_UNAVAILABLE,
           "MFEM-assembled modal payload remains unavailable without SLEPc");
 #endif
+    check(contains(result.diagnostics_json, "\"k_vector_rad_m\":[0,0,0]"),
+          "MFEM-assembled modal payload diagnostics preserve explicit k-vector");
     fullmag_fem_frequency_domain_result_destroy(&result);
 }
 
@@ -733,6 +738,43 @@ void modal_without_validation_problem_stays_unavailable()
     fullmag_fem_frequency_domain_result_destroy(&result);
 }
 
+void modal_sparse_validation_error_preserves_explicit_k_vector()
+{
+    constexpr double k_vector_rad_m[] = {0.0, 0.0, 0.0};
+
+    FullmagFemModalEigenRequest request = base_request();
+    request.mfem_sparse_operator_enabled = 1;
+    request.mfem_sparse_stiffness_csr.row_count = 1;
+    request.mfem_sparse_stiffness_csr.column_count = 1;
+    request.operator_request.k_vector_rad_m = k_vector_rad_m;
+    request.operator_request.k_vector_len = 3;
+
+    FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "modal sparse validation error keeps validation status");
+    check(contains(result.diagnostics_json, "\"k_vector_rad_m\":[0,0,0]"),
+          "modal sparse validation diagnostics preserve the explicit k-vector");
+    check(contains(result.diagnostics_json, "\"k_vector_len\":3"),
+          "modal sparse validation diagnostics preserve the explicit k-vector length");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+}
+
+void modal_diagnostics_preserve_explicit_k_vector()
+{
+    constexpr double k_vector_rad_m[] = {0.0, 0.0, 0.0};
+
+    FullmagFemModalEigenRequest request = base_request();
+    request.operator_request.k_vector_rad_m = k_vector_rad_m;
+    request.operator_request.k_vector_len = 3;
+
+    FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
+    check(contains(result.diagnostics_json, "\"k_vector_rad_m\":[0,0,0]"),
+          "modal diagnostics preserve the explicit k-vector");
+    check(contains(result.diagnostics_json, "\"k_vector_len\":3"),
+          "modal diagnostics preserve the explicit k-vector length");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+}
+
 } // namespace
 
 int main()
@@ -755,5 +797,7 @@ int main()
     modal_shift_invert_payload_can_be_assembled_from_mfem_operator();
     modal_shift_invert_sparse_payload_can_be_assembled_from_mfem_operator();
     modal_without_validation_problem_stays_unavailable();
+    modal_sparse_validation_error_preserves_explicit_k_vector();
+    modal_diagnostics_preserve_explicit_k_vector();
     return 0;
 }

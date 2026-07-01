@@ -3,14 +3,18 @@ use num_complex::Complex64;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EigenSolverModel {
     ReferenceScalarTangent,
+    ReferenceFull2x2Tangent,
     LinearizedLlgTangentPlane,
+    ProductionCpuShiftInvert,
 }
 
 impl EigenSolverModel {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::ReferenceScalarTangent => "reference_scalar_tangent",
+            Self::ReferenceFull2x2Tangent => "reference_full_2x2_tangent",
             Self::LinearizedLlgTangentPlane => "linearized_llg_tangent_plane",
+            Self::ProductionCpuShiftInvert => "slepc_multi_shift_invert_production_cpu_dense",
         }
     }
 }

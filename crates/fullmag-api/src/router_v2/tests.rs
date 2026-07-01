@@ -6809,6 +6809,30 @@ async fn frequency_domain_manifest_reports_solver_family_availability() {
         "unsupported"
     );
     assert_eq!(
+        json["capabilities"]["dispersion"]["reference_cpu"]["status"],
+        "reference_executable"
+    );
+    assert_eq!(
+        json["capabilities"]["dispersion"]["production_cpu"]["status"],
+        "unsupported"
+    );
+    assert!(
+        json["capabilities"]["dispersion"]["production_cpu"]["reason"]
+            .as_str()
+            .expect("production_cpu dispersion reason should be a string")
+            .contains("selected-spectrum")
+    );
+    assert_eq!(
+        json["capabilities"]["dispersion"]["production_gpu"]["status"],
+        "unsupported"
+    );
+    assert!(
+        json["capabilities"]["dispersion"]["production_gpu"]["reason"]
+            .as_str()
+            .expect("production_gpu dispersion reason should be a string")
+            .contains("modal GPU")
+    );
+    assert_eq!(
         json["capabilities"]["visualization"]["mode_3d_overlay"]["status"],
         "reference_executable"
     );
