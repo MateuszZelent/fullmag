@@ -1089,6 +1089,10 @@ impl MeshTopology {
         let stiffness_csr = CsrMatrix::from_tet_assembly(n_nodes, &elements, &element_stiffness);
         let boundary_mass_csr =
             CsrMatrix::from_boundary_mass_assembly(n_nodes, &mesh.boundary_faces, &coords);
+        // WARNING: demag_csr includes Robin boundary mass on ALL boundary faces,
+        // including periodic seam faces. It must NOT be used when PBC is active;
+        // the PBC path uses `periodic_demag_reduced` which builds its own operator
+        // with `build_open_boundary_mass_csr` excluding periodic seam faces.
         let demag_csr = if robin_beta > 0.0 {
             stiffness_csr.add_scaled(&boundary_mass_csr, robin_beta)
         } else {
@@ -2226,6 +2230,23 @@ impl FemLlgProblem {
             )));
         }
 
+        // PBC + demag requires a shared-domain mesh with at least one airbox
+        // (non-magnetic) element.  Without airbox, Robin boundary conditions
+        // would be applied on periodic seam faces of the magnetic body itself,
+        // creating unphysical surface charges.  Exchange-only PBC on a purely
+        // magnetic mesh is fine — this check only gates the demag path.
+        if self.terms.demag
+            && self.periodic_demag_reduced.is_some()
+            && !self.topology.magnetic_element_mask.is_empty()
+            && self.topology.magnetic_element_mask.iter().all(|&m| m)
+        {
+            return Err(EngineError::new(
+                "FEM periodic demag requires a shared-domain mesh with airbox (non-magnetic) \
+                 elements surrounding the magnetic body; PBC on a purely magnetic mesh \
+                 without airbox leads to incorrect Robin boundary conditions on the periodic seam",
+            ));
+        }
+
         // C2: DMI requires a well-defined interface normal.
         if self.terms.interfacial_dmi.is_some() && norm(self.dmi_interface_normal) < ZERO_THRESHOLD
         {
@@ -2812,6 +2833,11 @@ impl FemLlgProblem {
         self.demag_field_from_potential_into(&u_full, &mut field[..n_full], &mut weights[..n_full]);
 
         // --- Step 6: project H_demag onto periodic classes ---
+        // The Rust reference uses class averaging (not representative copy) to
+        // smooth gradient recovery noise across periodic seams.  The native MFEM
+        // backend uses representative copy after zeroing airbox nodes, which is
+        // effectively equivalent for magnetic nodes.  Both yield the same physics
+        // to within gradient recovery precision.
         project_vector_field_by_periodic_classes(
             &mut field[..n_full],
             &pdr.full_to_reduced,
@@ -3806,12 +3832,17 @@ mod tests {
     }
 
     #[test]
-    fn reference_semantics_accepts_periodic_demag_reduced_path() {
+    fn reference_semantics_rejects_periodic_demag_without_airbox() {
         let problem = unit_tet_problem_with_static_periodic(true, true);
 
-        problem
-            .validate_reference_semantics()
-            .expect("periodic FEM demag should use the reduced Poisson operator");
+        let err = problem.validate_reference_semantics().expect_err(
+            "periodic FEM demag on purely magnetic mesh (no airbox) should be rejected",
+        );
+        assert!(
+            err.to_string().contains("airbox"),
+            "error message should mention airbox requirement: {}",
+            err
+        );
     }
 
     #[test]

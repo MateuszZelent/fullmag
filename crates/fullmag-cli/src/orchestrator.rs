@@ -1070,10 +1070,12 @@ fn fem_live_mesh_payload_and_initial_magnetization(
 fn initial_live_state_manifest_from_backend_plan(
     update: &fullmag_runner::StepUpdate,
     backend_plan: &BackendPlanIR,
+    continuation_magnetization: Option<&[[f64; 3]]>,
 ) -> anyhow::Result<LiveStateManifest> {
     let mut live_state = live_state_manifest_from_update(update);
     if let Some(mesh_payload) = fem_mesh_payload_from_backend_plan(backend_plan) {
-        let initial_magnetization = current_stage_magnetization_vectors(None, backend_plan);
+        let initial_magnetization =
+            current_stage_magnetization_vectors(continuation_magnetization, backend_plan);
         if mesh_payload.nodes.len() != initial_magnetization.len() {
             bail!(
                 "initial FEM live mesh has {} nodes but initial magnetization has {} vectors",
@@ -3987,6 +3989,70 @@ fn current_stage_magnetization_vectors(
     }
 }
 
+struct LoadedInitialMagnetizationState {
+    values: Vec<[f64; 3]>,
+    provenance: serde_json::Value,
+}
+
+fn initial_magnetization_state_override(
+    args: &ScriptCli,
+) -> Result<Option<LoadedInitialMagnetizationState>> {
+    let Some(path) = args.initial_magnetization_state.as_deref() else {
+        return Ok(None);
+    };
+    let path_label = path.display().to_string();
+    let format = normalize_magnetization_state_format(
+        args.initial_magnetization_state_format.as_deref(),
+        Some(&path_label),
+    )?;
+    let loaded = read_magnetization_state(
+        path,
+        Some(format.as_str()),
+        args.initial_magnetization_state_dataset.as_deref(),
+        args.initial_magnetization_state_sample_index,
+    )
+    .with_context(|| {
+        format!(
+            "failed to load --initial-magnetization-state {}",
+            path.display()
+        )
+    })?;
+    Ok(Some(LoadedInitialMagnetizationState {
+        provenance: serde_json::json!({
+            "kind": "initial_magnetization_state_override",
+            "source_path": path_label,
+            "format": format,
+            "dataset": args.initial_magnetization_state_dataset,
+            "sample_index": args.initial_magnetization_state_sample_index,
+            "vector_count": loaded.vector_count,
+        }),
+        values: loaded.values,
+    }))
+}
+
+fn attach_initial_magnetization_state_override_metadata(
+    problem: &mut ProblemIR,
+    provenance: Option<&serde_json::Value>,
+) {
+    if let Some(provenance) = provenance {
+        problem.problem_meta.runtime_metadata.insert(
+            "initial_magnetization_state_override".to_string(),
+            provenance.clone(),
+        );
+    }
+}
+
+fn apply_initial_magnetization_state_override(
+    problem: &mut ProblemIR,
+    state: Option<&LoadedInitialMagnetizationState>,
+) -> Result<()> {
+    if let Some(state) = state {
+        apply_continuation_initial_state(problem, &state.values)?;
+        attach_initial_magnetization_state_override_metadata(problem, Some(&state.provenance));
+    }
+    Ok(())
+}
+
 fn resolve_named_state_artifact_path(artifact_dir: &Path, artifact_name: &str) -> Option<PathBuf> {
     let safe = sanitize_stage_file_name(artifact_name);
     if safe.is_empty() {
@@ -4588,6 +4654,11 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     if stages.is_empty() {
         bail!("script did not produce any executable stages");
     }
+    let initial_magnetization_override = initial_magnetization_state_override(&args)?;
+    apply_initial_magnetization_state_override(
+        &mut stages[0].ir,
+        initial_magnetization_override.as_ref(),
+    )?;
     for stage in &stages {
         validate_ir(&stage.ir)?;
     }
@@ -4607,6 +4678,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let mut current_adaptive_runtime_state: Option<serde_json::Value> = None;
     let initial_execution_plan = stage_execution_plans[0].clone();
     let initial_update = initial_step_update(&initial_execution_plan.backend_plan);
+    let initial_magnetization_override_values = initial_magnetization_override
+        .as_ref()
+        .map(|state| state.values.clone());
 
     let final_problem_name = stages
         .last()
@@ -4700,6 +4774,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         live_state: initial_live_state_manifest_from_backend_plan(
             &initial_update,
             &initial_execution_plan.backend_plan,
+            initial_magnetization_override_values.as_deref(),
         )?,
         metadata: Some(current_live_metadata(
             &stages[0].ir,
@@ -8143,21 +8218,24 @@ pub(crate) fn prepare_live_workspace_for_ui(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_current_fem_overrides, apply_live_step_update_to_workspace_state,
-        apply_remeshed_problem_snapshot_to_stages, apply_stage_heartbeat_progress,
+        apply_current_fem_overrides, apply_initial_magnetization_state_override,
+        apply_live_step_update_to_workspace_state, apply_remeshed_problem_snapshot_to_stages,
+        apply_stage_heartbeat_progress, attach_initial_magnetization_state_override_metadata,
         classify_wait_for_solve_command, default_domain_region_markers,
         discard_active_paused_stage_execution, execute_synthetic_stage,
         fem_gpu_memory_preflight_message, fem_interactive_dense_ram_estimate,
         fem_live_mesh_payload_and_initial_magnetization, fem_mesh_payload_from_backend_plan,
-        has_heavy_live_payload, initial_live_state_manifest_from_backend_plan, initial_step_update,
+        has_heavy_live_payload, initial_live_state_manifest_from_backend_plan,
+        initial_magnetization_state_override, initial_step_update,
         interactive_session_should_stay_alive, live_step_ingest_cached_m_preview_len,
         live_step_ingest_legacy_mag_len, live_step_ingest_preview_len,
         mesh_build_pipeline_status_json, scripted_stage_execution_state,
         stage_allows_sampled_continuation_initial_state, user_cancelled_stage_completion,
         wait_for_solve_prompt, wait_for_solve_should_block, wait_for_solve_supported,
-        ActiveSequenceState, LiveProgressCadence, SceneProblemPatch, WaitForSolveCommandAction,
-        LIVE_PROGRESS_PUBLISH_INTERVAL,
+        ActiveSequenceState, LiveProgressCadence, LoadedInitialMagnetizationState,
+        SceneProblemPatch, WaitForSolveCommandAction, LIVE_PROGRESS_PUBLISH_INTERVAL,
     };
+    use crate::args::ScriptCli;
     use crate::live_workspace::bootstrap_live_state;
     use crate::types::{
         CurrentLiveLatestFields, CurrentLivePreviewFieldCache, CurrentLiveStageExecutionRecord,
@@ -9548,7 +9626,7 @@ mod tests {
         let plan = tiny_shared_domain_fem_plan();
         let update = initial_step_update(&plan);
 
-        let live_state = initial_live_state_manifest_from_backend_plan(&update, &plan)
+        let live_state = initial_live_state_manifest_from_backend_plan(&update, &plan, None)
             .expect("initial FEM live state should carry shared-domain mesh");
 
         let mesh = live_state
@@ -9564,6 +9642,129 @@ mod tests {
                 .as_ref()
                 .map(|values| values.len()),
             Some(mesh.nodes.len() * 3)
+        );
+    }
+
+    #[test]
+    fn initial_live_state_uses_loaded_initial_magnetization_override() {
+        let plan = tiny_shared_domain_fem_plan();
+        let update = initial_step_update(&plan);
+        let override_m = vec![
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [0.0, 0.0, -1.0],
+            [0.5, 0.5, 0.0],
+            [0.0, 0.5, 0.5],
+        ];
+
+        let live_state =
+            initial_live_state_manifest_from_backend_plan(&update, &plan, Some(&override_m))
+                .expect("initial FEM live state should accept matching override");
+
+        assert_eq!(
+            live_state.latest_step.magnetization.as_deref(),
+            Some(
+                &[
+                    0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, -1.0, 0.0,
+                    0.0, 0.0, -1.0, 0.5, 0.5, 0.0, 0.0, 0.5, 0.5
+                ][..]
+            )
+        );
+    }
+
+    #[test]
+    fn initial_magnetization_state_override_records_runtime_provenance() {
+        let dir = temp_test_dir("initial-m-state-provenance");
+        let state_path = dir.join("m_repeated_unit.json");
+        fs::write(
+            &state_path,
+            serde_json::json!({
+                "kind": "magnetization_state",
+                "observable": "m",
+                "format": "json",
+                "vector_count": 2,
+                "values": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            })
+            .to_string(),
+        )
+        .expect("state fixture should be writable");
+        let args = ScriptCli {
+            script: PathBuf::from(
+                "examples/fem_periodic_antidot_relax_exchange_coupled_supercell_3x3.py",
+            ),
+            interactive: false,
+            backend: None,
+            mode: None,
+            precision: None,
+            output_dir: None,
+            initial_magnetization_state: Some(state_path.clone()),
+            initial_magnetization_state_format: Some("json".to_string()),
+            initial_magnetization_state_dataset: None,
+            initial_magnetization_state_sample_index: None,
+            session_root: PathBuf::from(".fullmag/local-live/history"),
+            headless: true,
+            dev: false,
+            json: true,
+            web_port: None,
+        };
+
+        let loaded =
+            initial_magnetization_state_override(&args).expect("override state should load");
+
+        assert_eq!(loaded.as_ref().map(|state| state.values.len()), Some(2));
+        let provenance = loaded
+            .as_ref()
+            .map(|state| state.provenance.clone())
+            .expect("loaded override should carry provenance");
+        assert_eq!(provenance["kind"], "initial_magnetization_state_override");
+        assert_eq!(provenance["source_path"], state_path.display().to_string());
+        assert_eq!(provenance["format"], "json");
+        assert_eq!(provenance["vector_count"], 2);
+
+        let mut problem = ProblemIR::bootstrap_example();
+        attach_initial_magnetization_state_override_metadata(&mut problem, Some(&provenance));
+        assert_eq!(
+            problem.problem_meta.runtime_metadata["initial_magnetization_state_override"],
+            provenance
+        );
+    }
+
+    #[test]
+    fn initial_magnetization_state_override_updates_problem_initial_state() {
+        let values = vec![[0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        let provenance = serde_json::json!({
+            "kind": "initial_magnetization_state_override",
+            "source_path": "states/m_repeated_unit.json",
+            "format": "json",
+            "dataset": null,
+            "sample_index": null,
+            "vector_count": values.len(),
+        });
+        let state = LoadedInitialMagnetizationState {
+            values: values.clone(),
+            provenance: provenance.clone(),
+        };
+        let mut problem = ProblemIR::bootstrap_example();
+
+        apply_initial_magnetization_state_override(&mut problem, Some(&state))
+            .expect("override should update problem initial state");
+
+        let initial = problem.magnets[0]
+            .initial_magnetization
+            .as_ref()
+            .expect("override should set sampled initial magnetization");
+        match initial {
+            InitialMagnetizationIR::SampledField { values: sampled } => {
+                assert_eq!(sampled, &values);
+            }
+            other => panic!("expected sampled initial magnetization, got {other:?}"),
+        }
+        assert_eq!(
+            problem.problem_meta.runtime_metadata["initial_magnetization_state_override"],
+            provenance
         );
     }
 

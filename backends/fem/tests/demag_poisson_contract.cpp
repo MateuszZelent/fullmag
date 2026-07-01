@@ -579,6 +579,8 @@ void demag_boundary_operator_is_owned_by_poisson_boundary_module() {
         "ctx.poisson_demag.robin_beta_factor",
         "ctx.poisson_demag.robin_beta_mode",
         "ctx.poisson_demag.boundary_marker",
+        "double robin_reference_radius_for_mesh(",
+        "if (!periodic_axis[axis])",
         "ctx.poisson_demag.robin_effective_beta = c / R_star;",
         "A_robin->Add(ctx.poisson_demag.robin_effective_beta",
         "A_bc->EliminateRowCol",

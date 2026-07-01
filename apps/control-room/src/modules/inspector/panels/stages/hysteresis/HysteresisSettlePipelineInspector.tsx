@@ -90,7 +90,10 @@ export function HysteresisSettlePipelineInspector({
     : rawPipelineBranches.length > 0
       ? rawPipelineBranches
       : parseJsonArray(draft?.settleBranches);
-  const activeNode = executionTree?.nodes.find((node) => node.status === "active");
+  const executionNodes = Array.isArray(executionTree?.nodes)
+    ? executionTree.nodes
+    : [];
+  const activeNode = executionNodes.find((node) => node.status === "active");
   const activeStep = activeNode?.children?.find((node) => node.status === "active");
 
   return (

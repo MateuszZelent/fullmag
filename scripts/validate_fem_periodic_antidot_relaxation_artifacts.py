@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 
-SUPPORTED_SCENARIOS = {"air_gap", "exchange_coupled"}
+SUPPORTED_SCENARIOS = {"air_gap", "exchange_coupled", "uniform_slab"}
 SUPPORTED_ENGINES = {"cpu", "gpu"}
 SUPPORTED_ALGORITHMS = {
     "llg_overdamped",
@@ -28,6 +28,7 @@ MAX_DEFAULT_H_DEMAG_SEAM_MISMATCH_APM = 1.0e-3
 MAX_DEFAULT_DEMAG_PHI_SEAM_MISMATCH_A = 1.0e-6
 MAX_DEFAULT_B_NORMAL_FLUX_SEAM_MISMATCH_T = 1.0e-12
 MAX_DEFAULT_SIDE_MAGNETIC_CHARGE_SUM_ABS_AM = 1.0e-18
+MAX_DEMAG_ENERGY_NEGATIVE_NOISE_J = 1.0e-24
 MAX_STATIC_Z_PADDING_E_DEMAG_RELERR = 2.0e-2
 MAX_STATIC_Z_PADDING_H_DEMAG_P99_RELERR = 2.0e-2
 MAX_STATIC_Z_PADDING_DEMAG_PHI_RANGE_RELERR = 2.0e-2
@@ -36,6 +37,8 @@ MAX_STATIC_SUPERCELL_E_DEMAG_DENSITY_RELERR = 2.0e-2
 MAX_STATIC_SUPERCELL_H_DEMAG_STATS_RELERR = 2.0e-2
 MAX_STATIC_SUPERCELL_DEMAG_PHI_DELTA_A = 1.0e-6
 MAX_STATIC_SUPERCELL_TORQUE_RELERR = 2.0e-1
+MAX_STATIC_SUPERCELL_RELAXATION_STATE_MEAN_DEVIATION_RELERR = 2.0e-1
+MAX_INITIAL_STATE_OVERRIDE_COMPONENT_DELTA = 1.0e-12
 
 
 def parse_args() -> argparse.Namespace:
@@ -99,6 +102,34 @@ def parse_args() -> argparse.Namespace:
             "status=ok before accepting the equilibrium."
         ),
     )
+    parser.add_argument(
+        "--require-repeated-state-supercell-report",
+        type=Path,
+        default=None,
+        help=(
+            "Require a fem_static_pbc_supercell_validation.v1 JSON report whose "
+            "supercell artifact was seeded through initial_magnetization_state_override."
+        ),
+    )
+    parser.add_argument(
+        "--supercell-repeat",
+        type=int,
+        nargs=2,
+        metavar=("REPEAT_X", "REPEAT_Y"),
+        default=None,
+        help=(
+            "Validate a prepared repeated-supercell artifact instead of the primitive "
+            "periodic-antidot unit-cell artifact."
+        ),
+    )
+    parser.add_argument(
+        "--require-initial-magnetization-state-override",
+        action="store_true",
+        help=(
+            "Require metadata proving the run was seeded from a file-backed initial "
+            "magnetization state."
+        ),
+    )
     args = parser.parse_args()
     if args.min_steps < 1:
         parser.error("--min-steps must be positive")
@@ -126,6 +157,10 @@ def parse_args() -> argparse.Namespace:
         or args.max_side_magnetic_charge_sum_abs_am < 0.0
     ):
         parser.error("--max-side-magnetic-charge-sum-abs-am must be a non-negative finite number")
+    if args.supercell_repeat is not None:
+        repeat_x, repeat_y = args.supercell_repeat
+        if repeat_x < 1 or repeat_y < 1 or repeat_x * repeat_y <= 1:
+            parser.error("--supercell-repeat must describe a repeated cell count greater than one")
     return args
 
 
@@ -198,11 +233,25 @@ def load_periodic_pairs_artifact(artifact_dir: Path) -> dict[str, Any]:
     return require_object(value, "mesh/periodic_pairs.v1.json")
 
 
+def load_node_geometry_artifact(artifact_dir: Path) -> dict[str, Any]:
+    path = artifact_dir / "mesh" / "node_geometry.v1.json"
+    require(path.is_file(), f"missing node geometry artifact: {path}")
+    value = json.loads(path.read_text(encoding="utf-8"))
+    return require_object(value, "mesh/node_geometry.v1.json")
+
+
 def load_final_magnetization_artifact(artifact_dir: Path) -> dict[str, Any]:
     path = artifact_dir / "m_final.json"
     require(path.is_file(), f"missing final magnetization artifact: {path}")
     value = json.loads(path.read_text(encoding="utf-8"))
     return require_object(value, "m_final.json")
+
+
+def load_initial_magnetization_artifact(artifact_dir: Path) -> dict[str, Any]:
+    path = artifact_dir / "m_initial.json"
+    require(path.is_file(), f"missing initial magnetization artifact: {path}")
+    value = json.loads(path.read_text(encoding="utf-8"))
+    return require_object(value, "m_initial.json")
 
 
 def load_demag_field_snapshot_artifact(artifact_dir: Path) -> dict[str, Any]:
@@ -310,6 +359,16 @@ def load_required_report(path: Path, report_name: str) -> dict[str, Any]:
     return require_object(value, f"{report_name} comparison report")
 
 
+def expected_problem_name(scenario: str, supercell_repeat: list[int] | None) -> str:
+    if scenario == "uniform_slab":
+        name = "fem_periodic_uniform_slab_relax"
+    else:
+        name = f"fem_periodic_antidot_relax_{scenario}"
+    if supercell_repeat is not None:
+        name = f"{name}_supercell_{supercell_repeat[0]}x{supercell_repeat[1]}"
+    return name
+
+
 def validate_text_markers(text: str, engine: str) -> None:
     expected_engine = "fem_native_gpu" if engine == "gpu" else "fem_cpu_native"
     require(
@@ -340,13 +399,15 @@ def validate_summary(
     scenario: str,
     algorithm: str,
     min_steps: int,
+    supercell_repeat: list[int] | None,
 ) -> int:
     require(summary.get("status") == "completed", f"unexpected status: {summary.get('status')!r}")
     require(summary.get("backend") == "fem", f"unexpected backend: {summary.get('backend')!r}")
     require(summary.get("mode") == "strict", f"unexpected mode: {summary.get('mode')!r}")
     require(summary.get("precision") == "double", f"unexpected precision: {summary.get('precision')!r}")
+    expected_name = expected_problem_name(scenario, supercell_repeat)
     require(
-        summary.get("problem_name") == f"fem_periodic_antidot_relax_{scenario}",
+        summary.get("problem_name") == expected_name,
         f"unexpected problem_name: {summary.get('problem_name')!r}",
     )
     total_steps = summary.get("total_steps")
@@ -392,7 +453,19 @@ def validate_relaxation_qualification(
     )
 
 
-def validate_scenario_metadata(metadata: dict[str, Any], scenario: str) -> None:
+def require_close(actual: float, expected: float, message: str) -> None:
+    require(
+        math.isclose(actual, expected, rel_tol=1.0e-12, abs_tol=1.0e-18),
+        f"{message}: got {actual:.15e}, expected {expected:.15e}",
+    )
+
+
+def validate_scenario_metadata(
+    metadata: dict[str, Any],
+    scenario: str,
+    *,
+    supercell_repeat: list[int] | None,
+) -> None:
     scenario_meta = require_object(
         metadata.get("periodic_antidot_relaxation"),
         "metadata.periodic_antidot_relaxation",
@@ -412,7 +485,7 @@ def validate_scenario_metadata(metadata: dict[str, Any], scenario: str) -> None:
     coupled = scenario_meta.get("exchange_coupled_across_periods")
     require(isinstance(coupled, bool), "exchange_coupled_across_periods must be boolean")
     require(
-        coupled is (scenario == "exchange_coupled"),
+        coupled is (scenario in {"exchange_coupled", "uniform_slab"}),
         "exchange_coupled_across_periods does not match requested scenario",
     )
     film_size = [require_finite_number(v, f"film_size_m[{i}]") for i, v in enumerate(require_list(scenario_meta.get("film_size_m"), "film_size_m"))]
@@ -421,6 +494,24 @@ def validate_scenario_metadata(metadata: dict[str, Any], scenario: str) -> None:
     require(len(film_size) == 3, "film_size_m must be a 3-vector")
     require(len(universe_size) == 3, "universe_size_m must be a 3-vector")
     require(len(lateral_gap) == 2, "lateral_air_gap_m must be a 2-vector")
+    raw_supercell_repeat = scenario_meta.get("supercell_repeat")
+    if supercell_repeat is None:
+        require(
+            raw_supercell_repeat is None,
+            "primitive validation must not receive metadata.periodic_antidot_relaxation.supercell_repeat",
+        )
+    else:
+        require(
+            scenario == "exchange_coupled",
+            "prepared supercell validation currently supports only exchange_coupled",
+        )
+        require(
+            raw_supercell_repeat == supercell_repeat,
+            (
+                "metadata.periodic_antidot_relaxation.supercell_repeat must match "
+                f"{supercell_repeat!r}"
+            ),
+        )
     if scenario == "air_gap":
         require(
             lateral_gap[0] > 0.0 and lateral_gap[1] > 0.0,
@@ -433,12 +524,28 @@ def validate_scenario_metadata(metadata: dict[str, Any], scenario: str) -> None:
     else:
         require(
             lateral_gap == [0.0, 0.0],
-            "exchange_coupled scenario must have zero lateral air gap",
+            "exchange-coupled PBC scenarios must have zero lateral air gap",
         )
-        require(
-            universe_size[0] == film_size[0] and universe_size[1] == film_size[1],
-            "exchange_coupled universe must match the magnetic film laterally",
-        )
+        if supercell_repeat is None:
+            require(
+                universe_size[0] == film_size[0] and universe_size[1] == film_size[1],
+                "exchange-coupled PBC universe must match the magnetic film laterally",
+            )
+        else:
+            require_close(
+                universe_size[0],
+                film_size[0] * supercell_repeat[0],
+                "supercell universe_size_m[0] must equal primitive universe x repeat_x",
+            )
+            require_close(
+                universe_size[1],
+                film_size[1] * supercell_repeat[1],
+                "supercell universe_size_m[1] must equal primitive universe y repeat_y",
+            )
+            require(
+                universe_size[2] > film_size[2],
+                "supercell universe_size_m[2] must remain an open-z airbox thickness",
+            )
 
 
 def validate_periodic_mesh_metadata(metadata: dict[str, Any]) -> None:
@@ -515,10 +622,10 @@ def validate_periodic_pairs_artifact(artifact: dict[str, Any], *, scenario: str)
             isinstance(magnetic_count, int) and magnetic_count >= 0,
             f"periodic pairs pair {pair_id}.domain_node_pair_counts.magnetic must be non-negative",
         )
-        if scenario == "exchange_coupled":
+        if scenario in {"exchange_coupled", "uniform_slab"}:
             require(
                 magnetic_count > 0,
-                f"periodic pairs pair {pair_id}.domain_node_pair_counts.magnetic must be positive for exchange_coupled",
+                f"periodic pairs pair {pair_id}.domain_node_pair_counts.magnetic must be positive for exchange-coupled PBC",
             )
         else:
             require(
@@ -626,6 +733,96 @@ def validate_periodic_pairs_artifact(artifact: dict[str, Any], *, scenario: str)
     return node_pairs
 
 
+def validate_supercell_node_geometry_artifact(
+    artifact: dict[str, Any],
+    *,
+    expected_node_count: int,
+    expected_vector_field_count: int,
+    expected_scalar_field_count: int,
+) -> None:
+    require(
+        artifact.get("schema_version") == "fem_mesh_node_geometry.v1",
+        (
+            "node geometry schema_version must be fem_mesh_node_geometry.v1, "
+            f"got {artifact.get('schema_version')!r}"
+        ),
+    )
+    require(
+        artifact.get("artifact_path") == "mesh/node_geometry.v1.json",
+        "node geometry artifact_path must be mesh/node_geometry.v1.json",
+    )
+    node_count = artifact.get("node_count")
+    require(
+        isinstance(node_count, int) and node_count == expected_node_count,
+        f"node geometry node_count must match m_final node count {expected_node_count}, got {node_count!r}",
+    )
+    nodes_m = require_list(artifact.get("nodes_m"), "node geometry nodes_m")
+    require(
+        len(nodes_m) == node_count,
+        f"node geometry nodes_m length must match node_count {node_count}, got {len(nodes_m)}",
+    )
+    for node_index, raw_node in enumerate(nodes_m):
+        node = require_list(raw_node, f"node geometry nodes_m[{node_index}]")
+        require(len(node) == 3, f"node geometry nodes_m[{node_index}] must be a 3-vector")
+        for component_index, component in enumerate(node):
+            require_finite_number(
+                component,
+                f"node geometry nodes_m[{node_index}][{component_index}]",
+            )
+    magnetic_node_mask = require_list(
+        artifact.get("magnetic_node_mask"),
+        "node geometry magnetic_node_mask",
+    )
+    require(
+        len(magnetic_node_mask) == node_count,
+        (
+            "node geometry magnetic_node_mask length must match node_count "
+            f"{node_count}, got {len(magnetic_node_mask)}"
+        ),
+    )
+    require(
+        all(isinstance(value, bool) for value in magnetic_node_mask),
+        "node geometry magnetic_node_mask must contain booleans",
+    )
+    magnetic_node_count = artifact.get("magnetic_node_count")
+    require(
+        isinstance(magnetic_node_count, int) and magnetic_node_count == sum(magnetic_node_mask),
+        "node geometry magnetic_node_count must equal true magnetic_node_mask entries",
+    )
+    require(magnetic_node_count > 0, "node geometry magnetic_node_count must be positive")
+    alignment = require_object(artifact.get("field_cell_alignment"), "node geometry field_cell_alignment")
+    require(
+        alignment.get("m") == "node_index",
+        "node geometry field_cell_alignment.m must be node_index",
+    )
+    require(
+        alignment.get("H_demag") == "node_index",
+        "node geometry field_cell_alignment.H_demag must be node_index",
+    )
+    require(
+        alignment.get("H_eff") == "node_index",
+        "node geometry field_cell_alignment.H_eff must be node_index",
+    )
+    require(
+        alignment.get("demag_phi") == "node_index",
+        "node geometry field_cell_alignment.demag_phi must be node_index",
+    )
+    require(
+        expected_vector_field_count == node_count,
+        (
+            "H_demag snapshot count must match node geometry node_count "
+            f"{node_count}, got {expected_vector_field_count}"
+        ),
+    )
+    require(
+        expected_scalar_field_count == node_count,
+        (
+            "demag_phi snapshot count must match node geometry node_count "
+            f"{node_count}, got {expected_scalar_field_count}"
+        ),
+    )
+
+
 def validate_vector_field_values(values: Any, name: str) -> list[list[float]]:
     field_values = require_list(values, f"{name} values")
     require(len(field_values) > 0, f"{name} values must be non-empty")
@@ -664,6 +861,18 @@ def validate_final_magnetization_artifact(artifact: dict[str, Any]) -> tuple[int
     require(isinstance(step, int) and step >= 0, f"m_final.json step must be non-negative, got {step!r}")
     require_finite_number(artifact.get("time"), "m_final.json time")
     return step, validate_vector_field_values(artifact.get("values"), "m_final.json")
+
+
+def validate_initial_magnetization_artifact(artifact: dict[str, Any]) -> list[list[float]]:
+    require(
+        artifact.get("observable") == "m",
+        f"m_initial.json observable must be m, got {artifact.get('observable')!r}",
+    )
+    require(
+        artifact.get("unit") == "dimensionless",
+        f"m_initial.json unit must be dimensionless, got {artifact.get('unit')!r}",
+    )
+    return validate_vector_field_values(artifact.get("values"), "m_initial.json")
 
 
 def validate_demag_field_snapshot_artifact(
@@ -882,7 +1091,13 @@ def validate_scalar_history(
         final_total <= initial_total + tolerance,
         f"scalars.csv final E_total increased from {initial_total:.6e} to {final_total:.6e}",
     )
-    require(final_demag >= 0.0, "scalars.csv final E_demag must be non-negative")
+    require(
+        final_demag >= -MAX_DEMAG_ENERGY_NEGATIVE_NOISE_J,
+        (
+            "scalars.csv final E_demag must be non-negative within "
+            f"{MAX_DEMAG_ENERGY_NEGATIVE_NOISE_J:.1e} J numerical noise"
+        ),
+    )
     require(
         0.0 <= final_torque <= max_final_torque_apm,
         f"scalars.csv final max_torque_Apm exceeds {max_final_torque_apm:.6e}: {final_torque:.6e}",
@@ -904,6 +1119,123 @@ def validate_problem_pbc(metadata: dict[str, Any]) -> None:
         "image_counts" not in pbc,
         "metadata.pbc.image_counts must be absent for FEM static PBC",
     )
+
+
+def validate_initial_magnetization_state_override(
+    metadata: dict[str, Any],
+    *,
+    artifact_dir: Path,
+    expected_vector_count: int,
+) -> None:
+    problem_meta_value = metadata.get("problem_meta")
+    require(
+        isinstance(problem_meta_value, dict),
+        "missing metadata.problem_meta.runtime_metadata.initial_magnetization_state_override",
+    )
+    problem_meta = problem_meta_value
+    runtime_metadata_value = problem_meta.get("runtime_metadata")
+    require(
+        isinstance(runtime_metadata_value, dict),
+        "missing metadata.problem_meta.runtime_metadata.initial_magnetization_state_override",
+    )
+    runtime_metadata = runtime_metadata_value
+    override = require_object(
+        runtime_metadata.get("initial_magnetization_state_override"),
+        "metadata.problem_meta.runtime_metadata.initial_magnetization_state_override",
+    )
+    require(
+        override.get("kind") == "initial_magnetization_state_override",
+        "initial_magnetization_state_override.kind must be initial_magnetization_state_override",
+    )
+    source_path = override.get("source_path")
+    require(
+        isinstance(source_path, str) and source_path,
+        "initial_magnetization_state_override.source_path must be a non-empty string",
+    )
+    state_format = override.get("format")
+    require(
+        state_format == "json",
+        f"initial_magnetization_state_override.format must be json for artifact comparison, got {state_format!r}",
+    )
+    if override.get("dataset") is not None:
+        require(
+            isinstance(override.get("dataset"), str) and override.get("dataset"),
+            "initial_magnetization_state_override.dataset must be null or a non-empty string",
+        )
+    if override.get("sample_index") is not None:
+        require(
+            isinstance(override.get("sample_index"), int),
+            "initial_magnetization_state_override.sample_index must be null or an integer",
+        )
+    vector_count = override.get("vector_count")
+    require(
+        isinstance(vector_count, int) and vector_count == expected_vector_count,
+        (
+            "initial_magnetization_state_override.vector_count must match m_final vector count "
+            f"{expected_vector_count}, got {vector_count!r}"
+        ),
+    )
+    source_file = resolve_initial_magnetization_state_override_source_path(
+        source_path,
+        artifact_dir=artifact_dir,
+    )
+    source_state = require_object(
+        json.loads(source_file.read_text(encoding="utf-8")),
+        "initial_magnetization_state_override source",
+    )
+    source_values = validate_vector_field_values(
+        source_state.get("values"),
+        "initial_magnetization_state_override source",
+    )
+    require(
+        len(source_values) == expected_vector_count,
+        (
+            "initial_magnetization_state_override source vector count must match "
+            f"m_final vector count {expected_vector_count}, got {len(source_values)}"
+        ),
+    )
+    initial_values = validate_initial_magnetization_artifact(
+        load_initial_magnetization_artifact(artifact_dir)
+    )
+    require(
+        len(initial_values) == len(source_values),
+        (
+            "m_initial.json vector count must match initial_magnetization_state_override "
+            f"source vector count {len(source_values)}, got {len(initial_values)}"
+        ),
+    )
+    max_delta = max(
+        abs(initial_values[index][axis] - source_values[index][axis])
+        for index in range(len(source_values))
+        for axis in range(3)
+    )
+    require(
+        max_delta <= MAX_INITIAL_STATE_OVERRIDE_COMPONENT_DELTA,
+        (
+            "m_initial.json values must match initial_magnetization_state_override source "
+            f"within {MAX_INITIAL_STATE_OVERRIDE_COMPONENT_DELTA:.1e}, got max delta {max_delta:.6e}"
+        ),
+    )
+
+
+def resolve_initial_magnetization_state_override_source_path(
+    source_path: str,
+    *,
+    artifact_dir: Path,
+) -> Path:
+    path = Path(source_path)
+    if path.is_absolute():
+        candidates = [path]
+    else:
+        candidates = [
+            path,
+            artifact_dir / path,
+            artifact_dir.parent / path,
+        ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    fail(f"initial_magnetization_state_override.source_path file does not exist: {source_path}")
 
 
 def expected_static_comparison_workload(metadata: dict[str, Any], scenario: str) -> dict[str, Any]:
@@ -1112,8 +1444,51 @@ def validate_demag_runtime(metadata: dict[str, Any], engine: str) -> None:
         f"demag_runtime.model must be airbox, got {demag.get('model')!r}",
     )
     require(
+        demag.get("magnetostatic_boundary_model") == "periodic_airbox_k0",
+        (
+            "demag_runtime.magnetostatic_boundary_model must be "
+            f"periodic_airbox_k0, got {demag.get('magnetostatic_boundary_model')!r}"
+        ),
+    )
+    require(
         demag.get("boundary_variant") == "robin",
         f"demag_runtime.boundary_variant must be robin, got {demag.get('boundary_variant')!r}",
+    )
+    require(
+        demag.get("poisson_operator") == "pbc_reduced_poisson",
+        f"demag_runtime.poisson_operator must be pbc_reduced_poisson, got {demag.get('poisson_operator')!r}",
+    )
+    periodic_reduction = require_object(
+        demag.get("periodic_reduction"),
+        "demag_runtime.periodic_reduction",
+    )
+    require(
+        periodic_reduction.get("enabled") is True,
+        "demag_runtime.periodic_reduction.enabled must be true",
+    )
+    require(
+        periodic_reduction.get("method") == "P^T A P",
+        (
+            "demag_runtime.periodic_reduction.method must be P^T A P, "
+            f"got {periodic_reduction.get('method')!r}"
+        ),
+    )
+    node_pair_count = periodic_reduction.get("node_pair_count")
+    require(
+        isinstance(node_pair_count, int) and node_pair_count > 0,
+        "demag_runtime.periodic_reduction.node_pair_count must be positive",
+    )
+    boundary_pair_count = periodic_reduction.get("boundary_pair_count")
+    require(
+        isinstance(boundary_pair_count, int) and boundary_pair_count > 0,
+        "demag_runtime.periodic_reduction.boundary_pair_count must be positive",
+    )
+    require(
+        periodic_reduction.get("periodic_boundary_markers_excluded_from_robin") is True,
+        (
+            "demag_runtime.periodic_reduction."
+            "periodic_boundary_markers_excluded_from_robin must be true"
+        ),
     )
     require(
         demag.get("linear_solver") in {"CG", "PCG"},
@@ -1172,7 +1547,13 @@ def validate_equilibrium_observables(
     )
     e_demag = require_finite_number(energies.get("E_demag"), f"{key}.final_energy_terms_j.E_demag")
     e_total = require_finite_number(energies.get("E_total"), f"{key}.final_energy_terms_j.E_total")
-    require(e_demag >= 0.0, f"{key}.final_energy_terms_j.E_demag must be non-negative")
+    require(
+        e_demag >= -MAX_DEMAG_ENERGY_NEGATIVE_NOISE_J,
+        (
+            f"{key}.final_energy_terms_j.E_demag must be non-negative within "
+            f"{MAX_DEMAG_ENERGY_NEGATIVE_NOISE_J:.1e} J numerical noise"
+        ),
+    )
     require(math.isfinite(e_total), f"{key}.final_energy_terms_j.E_total must be finite")
     final_torque = require_finite_number(qualification.get("final_torque_apm"), f"{key}.final_torque_apm")
     require(final_torque >= 0.0, f"{key}.final_torque_apm must be non-negative")
@@ -1298,6 +1679,235 @@ def validate_supercell_central_cell_extraction_summary(
         )
 
 
+def validate_supercell_relaxation_state_comparability(report: dict[str, Any]) -> dict[str, Any]:
+    state = require_object(
+        report.get("relaxation_state_comparability"),
+        "supercell comparison report relaxation_state_comparability",
+    )
+    unit_average = require_list(
+        state.get("unit_average_m"),
+        "supercell comparison report relaxation_state_comparability.unit_average_m",
+    )
+    central_average = require_list(
+        state.get("central_cell_average_m"),
+        "supercell comparison report relaxation_state_comparability.central_cell_average_m",
+    )
+    for name, values in (
+        ("unit_average_m", unit_average),
+        ("central_cell_average_m", central_average),
+    ):
+        require(
+            len(values) == 3,
+            f"supercell comparison report relaxation_state_comparability.{name} must be a 3-vector",
+        )
+        for index, value in enumerate(values):
+            require_finite_number(
+                value,
+                f"supercell comparison report relaxation_state_comparability.{name}[{index}]",
+            )
+    for key in (
+        "central_cell_average_m_l2_delta",
+        "unit_mean_l2_deviation_from_unit_average_m",
+        "unit_max_l2_deviation_from_unit_average_m",
+        "central_cell_mean_l2_deviation_from_unit_average_m",
+        "central_cell_max_l2_deviation_from_unit_average_m",
+        "mean_l2_deviation_relative_error",
+    ):
+        value = require_finite_number(
+            state.get(key),
+            f"supercell comparison report relaxation_state_comparability.{key}",
+        )
+        require(
+            value >= 0.0,
+            f"supercell comparison report relaxation_state_comparability.{key} must be non-negative",
+        )
+    return state
+
+
+def validate_supercell_mapped_comparability(report: dict[str, Any]) -> dict[str, Any]:
+    mapped = require_object(
+        report.get("mapped_central_cell_comparability"),
+        "supercell comparison report mapped_central_cell_comparability",
+    )
+    require(
+        mapped.get("schema_version") == "fem_static_pbc_supercell_mapped_comparison.v1",
+        (
+            "supercell comparison report mapped_central_cell_comparability.schema_version "
+            "must be fem_static_pbc_supercell_mapped_comparison.v1"
+        ),
+    )
+    for key in ("magnetic_pair_count", "field_pair_count"):
+        value = mapped.get(key)
+        require(
+            isinstance(value, int) and value > 0,
+            f"supercell comparison report mapped_central_cell_comparability.{key} must be positive",
+        )
+    same_local = mapped.get("same_local_discretization")
+    require(
+        isinstance(same_local, bool),
+        "supercell comparison report mapped_central_cell_comparability.same_local_discretization must be boolean",
+    )
+    same_local_limit = require_finite_number(
+        mapped.get("same_local_discretization_limit_m"),
+        "supercell comparison report mapped_central_cell_comparability.same_local_discretization_limit_m",
+    )
+    require(
+        same_local_limit >= 0.0,
+        "supercell comparison report mapped_central_cell_comparability.same_local_discretization_limit_m must be non-negative",
+    )
+    distances: dict[str, float] = {}
+    for key in (
+        "max_nearest_magnetic_node_distance_m",
+        "mean_nearest_magnetic_node_distance_m",
+        "max_nearest_field_node_distance_m",
+        "mean_nearest_field_node_distance_m",
+    ):
+        value = require_finite_number(
+            mapped.get(key),
+            f"supercell comparison report mapped_central_cell_comparability.{key}",
+        )
+        require(
+            value >= 0.0,
+            f"supercell comparison report mapped_central_cell_comparability.{key} must be non-negative",
+        )
+        distances[key] = value
+    expected_same_local = (
+        distances["max_nearest_magnetic_node_distance_m"] <= same_local_limit
+        and distances["max_nearest_field_node_distance_m"] <= same_local_limit
+    )
+    require(
+        same_local == expected_same_local,
+        (
+            "supercell comparison report mapped_central_cell_comparability.same_local_discretization "
+            "must match max nearest-node distances and same_local_discretization_limit_m"
+        ),
+    )
+    for section_name in ("m", "H_demag"):
+        section = require_object(
+            mapped.get(section_name),
+            f"supercell comparison report mapped_central_cell_comparability.{section_name}",
+        )
+        for key in ("mean_l2_delta", "p99_l2_delta", "max_l2_delta", "p99_relative_error"):
+            value = require_finite_number(
+                section.get(key),
+                f"supercell comparison report mapped_central_cell_comparability.{section_name}.{key}",
+            )
+            require(
+                value >= 0.0,
+                (
+                    "supercell comparison report "
+                    f"mapped_central_cell_comparability.{section_name}.{key} must be non-negative"
+                ),
+            )
+    phi = require_object(
+        mapped.get("demag_phi"),
+        "supercell comparison report mapped_central_cell_comparability.demag_phi",
+    )
+    require_finite_number(
+        phi.get("best_constant_offset_A"),
+        "supercell comparison report mapped_central_cell_comparability.demag_phi.best_constant_offset_A",
+    )
+    for key in (
+        "mean_abs_delta_after_offset_A",
+        "p99_abs_delta_after_offset_A",
+        "max_abs_delta_after_offset_A",
+    ):
+        value = require_finite_number(
+            phi.get(key),
+            f"supercell comparison report mapped_central_cell_comparability.demag_phi.{key}",
+        )
+        require(
+            value >= 0.0,
+            f"supercell comparison report mapped_central_cell_comparability.demag_phi.{key} must be non-negative",
+        )
+    return mapped
+
+
+def validate_nonnegative_stats_section(section: dict[str, Any], *, name: str) -> None:
+    for key in ("mean_l2_delta", "p99_l2_delta", "max_l2_delta", "p99_relative_error"):
+        value = require_finite_number(section.get(key), f"{name}.{key}")
+        require(value >= 0.0, f"{name}.{key} must be non-negative")
+
+
+def validate_supercell_interpolated_comparability(report: dict[str, Any]) -> None:
+    raw = report.get("interpolated_central_cell_comparability")
+    if raw is None:
+        return
+    interpolated = require_object(
+        raw,
+        "supercell comparison report interpolated_central_cell_comparability",
+    )
+    require(
+        interpolated.get("schema_version") == "fem_static_pbc_supercell_interpolated_comparison.v1",
+        (
+            "supercell comparison report interpolated_central_cell_comparability.schema_version "
+            "must be fem_static_pbc_supercell_interpolated_comparison.v1"
+        ),
+    )
+    for key in ("field_sample_count", "field_located_count", "magnetic_sample_count", "magnetic_located_count"):
+        value = interpolated.get(key)
+        require(
+            isinstance(value, int) and value > 0,
+            f"supercell comparison report interpolated_central_cell_comparability.{key} must be positive",
+        )
+    for key in ("field_missed_count", "magnetic_missed_count"):
+        value = interpolated.get(key)
+        require(
+            isinstance(value, int) and value >= 0,
+            f"supercell comparison report interpolated_central_cell_comparability.{key} must be non-negative",
+        )
+    for key in ("field_coverage_ratio", "magnetic_coverage_ratio"):
+        value = require_finite_number(
+            interpolated.get(key),
+            f"supercell comparison report interpolated_central_cell_comparability.{key}",
+        )
+        require(
+            0.0 <= value <= 1.0,
+            f"supercell comparison report interpolated_central_cell_comparability.{key} must be in [0, 1]",
+        )
+    barycentric_tolerance = require_finite_number(
+        interpolated.get("barycentric_tolerance"),
+        "supercell comparison report interpolated_central_cell_comparability.barycentric_tolerance",
+    )
+    require(
+        barycentric_tolerance >= 0.0,
+        "supercell comparison report interpolated_central_cell_comparability.barycentric_tolerance must be non-negative",
+    )
+    require_finite_number(
+        interpolated.get("min_barycentric_weight"),
+        "supercell comparison report interpolated_central_cell_comparability.min_barycentric_weight",
+    )
+    for section_name in ("m", "H_demag"):
+        validate_nonnegative_stats_section(
+            require_object(
+                interpolated.get(section_name),
+                f"supercell comparison report interpolated_central_cell_comparability.{section_name}",
+            ),
+            name=f"supercell comparison report interpolated_central_cell_comparability.{section_name}",
+        )
+    phi = require_object(
+        interpolated.get("demag_phi"),
+        "supercell comparison report interpolated_central_cell_comparability.demag_phi",
+    )
+    require_finite_number(
+        phi.get("best_constant_offset_A"),
+        "supercell comparison report interpolated_central_cell_comparability.demag_phi.best_constant_offset_A",
+    )
+    for key in (
+        "mean_abs_delta_after_offset_A",
+        "p99_abs_delta_after_offset_A",
+        "max_abs_delta_after_offset_A",
+    ):
+        value = require_finite_number(
+            phi.get(key),
+            f"supercell comparison report interpolated_central_cell_comparability.demag_phi.{key}",
+        )
+        require(
+            value >= 0.0,
+            f"supercell comparison report interpolated_central_cell_comparability.demag_phi.{key} must be non-negative",
+        )
+
+
 def validate_static_supercell_report(report: dict[str, Any], *, expected_workload: dict[str, Any]) -> None:
     require(
         report.get("schema_version") == "fem_static_pbc_supercell_validation.v1",
@@ -1332,7 +1942,43 @@ def validate_static_supercell_report(report: dict[str, Any], *, expected_workloa
         repeat_y=repeat_y,
         cell_count=cell_count,
     )
+    mapped = validate_supercell_mapped_comparability(report)
+    validate_supercell_interpolated_comparability(report)
+    relaxation_state = validate_supercell_relaxation_state_comparability(report)
     metrics = require_object(report.get("metrics"), "supercell comparison report metrics")
+    metric_state_relerr = require_finite_number(
+        metrics.get("relaxation_state_mean_deviation_relative_error"),
+        "supercell comparison report metrics.relaxation_state_mean_deviation_relative_error",
+    )
+    state_relerr = require_finite_number(
+        relaxation_state.get("mean_l2_deviation_relative_error"),
+        "supercell comparison report relaxation_state_comparability.mean_l2_deviation_relative_error",
+    )
+    require(
+        math.isclose(metric_state_relerr, state_relerr, rel_tol=1.0e-12, abs_tol=1.0e-15),
+        (
+            "supercell comparison report metrics.relaxation_state_mean_deviation_relative_error "
+            "must match relaxation_state_comparability.mean_l2_deviation_relative_error"
+        ),
+    )
+    mapped_metric_pairs = {
+        "mapped_m_p99_l2_delta": mapped["m"]["p99_l2_delta"],
+        "mapped_h_demag_p99_relative_error": mapped["H_demag"]["p99_relative_error"],
+        "mapped_demag_phi_max_abs_delta_after_offset_A": mapped["demag_phi"][
+            "max_abs_delta_after_offset_A"
+        ],
+        "mapped_max_nearest_field_node_distance_m": mapped["max_nearest_field_node_distance_m"],
+        "mapped_max_nearest_magnetic_node_distance_m": mapped["max_nearest_magnetic_node_distance_m"],
+    }
+    for metric, expected in mapped_metric_pairs.items():
+        value = require_finite_number(metrics.get(metric), f"supercell comparison report metrics.{metric}")
+        require(
+            math.isclose(value, expected, rel_tol=1.0e-12, abs_tol=1.0e-18),
+            (
+                f"supercell comparison report metrics.{metric} must match "
+                "mapped_central_cell_comparability"
+            ),
+        )
     validate_static_comparison_metric_limits(
         metrics,
         report_name="supercell",
@@ -1342,12 +1988,57 @@ def validate_static_supercell_report(report: dict[str, Any], *, expected_workloa
             "h_demag_stats_relative_error": MAX_STATIC_SUPERCELL_H_DEMAG_STATS_RELERR,
             "demag_phi_max_abs_delta_A": MAX_STATIC_SUPERCELL_DEMAG_PHI_DELTA_A,
             "central_cell_torque_residual_relative_error": MAX_STATIC_SUPERCELL_TORQUE_RELERR,
+            "relaxation_state_mean_deviation_relative_error": (
+                MAX_STATIC_SUPERCELL_RELAXATION_STATE_MEAN_DEVIATION_RELERR
+            ),
         },
+    )
+
+
+def validate_repeated_state_supercell_report(
+    report: dict[str, Any],
+    *,
+    expected_workload: dict[str, Any],
+) -> None:
+    validate_static_supercell_report(report, expected_workload=expected_workload)
+    override = require_object(
+        report.get("supercell_initial_magnetization_state_override"),
+        "supercell comparison report supercell_initial_magnetization_state_override",
+    )
+    require(
+        override.get("kind") == "initial_magnetization_state_override",
+        (
+            "supercell comparison report supercell_initial_magnetization_state_override.kind "
+            "must be initial_magnetization_state_override"
+        ),
+    )
+    require(
+        isinstance(override.get("source_path"), str) and override.get("source_path"),
+        (
+            "supercell comparison report supercell_initial_magnetization_state_override.source_path "
+            "must be a non-empty string"
+        ),
+    )
+    require(
+        override.get("format") == "json",
+        (
+            "supercell comparison report supercell_initial_magnetization_state_override.format "
+            "must be json"
+        ),
+    )
+    vector_count = override.get("vector_count")
+    require(
+        isinstance(vector_count, int) and vector_count > 0,
+        (
+            "supercell comparison report supercell_initial_magnetization_state_override.vector_count "
+            "must be positive"
+        ),
     )
 
 
 def main() -> int:
     args = parse_args()
+    supercell_repeat = args.supercell_repeat
     try:
         text = args.log_path.read_text(encoding="utf-8", errors="replace")
         validate_text_markers(text, args.engine)
@@ -1357,10 +2048,15 @@ def main() -> int:
             scenario=args.scenario,
             algorithm=args.algorithm,
             min_steps=args.min_steps,
+            supercell_repeat=supercell_repeat,
         )
         artifact_dir = resolve_artifact_dir(summary, args.log_path)
         metadata = load_metadata(artifact_dir)
-        validate_scenario_metadata(metadata, args.scenario)
+        validate_scenario_metadata(
+            metadata,
+            args.scenario,
+            supercell_repeat=supercell_repeat,
+        )
         validate_problem_pbc(metadata)
         validate_periodic_mesh_metadata(metadata)
         node_pairs = validate_periodic_pairs_artifact(
@@ -1370,6 +2066,12 @@ def main() -> int:
         final_step, final_m_values = validate_final_magnetization_artifact(
             load_final_magnetization_artifact(artifact_dir)
         )
+        if args.require_initial_magnetization_state_override:
+            validate_initial_magnetization_state_override(
+                metadata,
+                artifact_dir=artifact_dir,
+                expected_vector_count=len(final_m_values),
+            )
         require(
             final_step == summary_total_steps,
             f"m_final.json step must match summary total_steps {summary_total_steps}, got {final_step}",
@@ -1382,6 +2084,13 @@ def main() -> int:
             load_demag_phi_snapshot_artifact(artifact_dir),
             expected_step=final_step,
         )
+        if supercell_repeat is not None:
+            validate_supercell_node_geometry_artifact(
+                load_node_geometry_artifact(artifact_dir),
+                expected_node_count=len(final_m_values),
+                expected_vector_field_count=len(h_demag_values),
+                expected_scalar_field_count=len(demag_phi_values),
+            )
         validate_periodic_field_seam_mismatch(
             values=final_m_values,
             node_pairs=node_pairs,
@@ -1439,6 +2148,14 @@ def main() -> int:
         if args.require_supercell_report is not None:
             validate_static_supercell_report(
                 load_required_report(args.require_supercell_report, "supercell"),
+                expected_workload=expected_workload,
+            )
+        if args.require_repeated_state_supercell_report is not None:
+            validate_repeated_state_supercell_report(
+                load_required_report(
+                    args.require_repeated_state_supercell_report,
+                    "repeated-state supercell",
+                ),
                 expected_workload=expected_workload,
             )
     except Exception as exc:

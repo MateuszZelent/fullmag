@@ -33,6 +33,14 @@ pub(crate) struct ScriptCli {
     pub precision: Option<PrecisionArg>,
     #[arg(long)]
     pub output_dir: Option<PathBuf>,
+    #[arg(long)]
+    pub initial_magnetization_state: Option<PathBuf>,
+    #[arg(long)]
+    pub initial_magnetization_state_format: Option<String>,
+    #[arg(long)]
+    pub initial_magnetization_state_dataset: Option<String>,
+    #[arg(long)]
+    pub initial_magnetization_state_sample_index: Option<i64>,
     #[arg(long = "workspace-root", default_value = ".fullmag/local-live/history")]
     pub session_root: PathBuf,
     #[arg(long, default_value_t = false)]

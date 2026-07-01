@@ -310,6 +310,26 @@ bool validate_periodic_plan_compatibility(Context &ctx, std::string &error)
         return false;
     }
 
+    // PBC + demag requires a shared-domain mesh with an airbox region.
+    // Without airbox elements (marker == 0), Robin/Dirichlet boundary
+    // conditions would be applied on periodic seam faces of the magnetic
+    // body itself, creating unphysical surface charges instead of smooth
+    // periodic magnetostatic coupling.
+    if (ctx.demag.enabled && !ctx.mesh.magnetic_element_mask.empty()) {
+        const bool has_airbox_element = std::any_of(
+            ctx.mesh.magnetic_element_mask.begin(),
+            ctx.mesh.magnetic_element_mask.end(),
+            [](uint8_t value) { return value == 0u; });
+        if (!has_airbox_element) {
+            error =
+                "native FEM periodic demag requires a shared-domain mesh with "
+                "airbox (non-magnetic) elements surrounding the magnetic body; "
+                "PBC on a purely magnetic mesh without airbox leads to incorrect "
+                "Robin/Dirichlet boundary conditions on the periodic seam";
+            return false;
+        }
+    }
+
     if (!validate_periodic_scalar_field_classes(ctx, ctx.material_fields.Ms_field, "Ms_field", error) ||
         !validate_periodic_scalar_field_classes(ctx, ctx.material_fields.A_field, "A_field", error) ||
         !validate_periodic_scalar_field_classes(ctx, ctx.material_fields.alpha_field, "alpha_field", error)) {

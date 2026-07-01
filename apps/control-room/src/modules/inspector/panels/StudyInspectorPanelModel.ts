@@ -177,9 +177,13 @@ export function resolveStudyInspectorModel({
   const activeStageIndex =
     stageExecution?.active_stage_index ?? currentRun?.active_stage_index ?? null;
   const selectedStageIndex =
-    selectedStageIndexFromId(selectedStageRef?.stageId ?? null, stageExecution) ??
+    selectedStageIndexFromId(
+      selectedStageRef?.stageId ?? null,
+      snapshot.stages,
+      stageExecution,
+    ) ??
     selectedStageRef?.stageIndex ??
-    selectedStageIndexFromNode(selectedNodeId ?? null, stageExecution);
+    selectedStageIndexFromNode(selectedNodeId ?? null, snapshot.stages, stageExecution);
   const activeStageSnapshot = snapshot.stages[activeStageIndex ?? -1] ?? null;
   const progressPercent = resolveProgressPercent({
     currentRun,
@@ -605,27 +609,25 @@ function resolveProgressPercent({
 
 function selectedStageIndexFromNode(
   nodeId: string | null,
+  stages: readonly StudyStageSnapshot[],
   stageExecution: StageExecutionResource | null,
 ): number | null {
-  const match = nodeId?.match(/:stage:([^:]+)$/);
+  const match = nodeId?.match(/:stage:([^:]+)/);
   if (!match) return null;
   const token = match[1];
-  const index = Number(token);
-  if (Number.isInteger(index) && index >= 0) return index;
-  const runtimeIndex = stageExecution?.stages.findIndex(
-    (stage) => stage.stage_id === token,
-  );
-  if (runtimeIndex !== undefined && runtimeIndex >= 0) return runtimeIndex;
-  return null;
+  return selectedStageIndexFromId(token, stages, stageExecution);
 }
 
 function selectedStageIndexFromId(
   stageId: string | null,
+  stages: readonly StudyStageSnapshot[],
   stageExecution: StageExecutionResource | null,
 ): number | null {
   if (!stageId) return null;
   const index = Number(stageId);
   if (Number.isInteger(index) && index >= 0) return index;
+  const snapshotIndex = stages.findIndex((stage) => stage.stageId === stageId);
+  if (snapshotIndex >= 0) return snapshotIndex;
   const runtimeIndex = stageExecution?.stages.findIndex(
     (stage) => stage.stage_id === stageId,
   );

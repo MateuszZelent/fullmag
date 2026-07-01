@@ -11,6 +11,7 @@
 #include "context.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
 
 #if FULLMAG_HAS_MFEM_STACK
@@ -20,6 +21,60 @@
 namespace fullmag::fem {
 
 #if FULLMAG_HAS_MFEM_STACK
+namespace {
+
+double robin_reference_radius_for_mesh(const Context &ctx, mfem::Mesh &mesh)
+{
+    mfem::Vector bb_min;
+    mfem::Vector bb_max;
+    mesh.GetBoundingBox(bb_min, bb_max);
+    const int dimension = mesh.Dimension();
+    double max_extent = 0.0;
+    for (int d = 0; d < dimension; ++d) {
+        max_extent = std::max(max_extent, bb_max(d) - bb_min(d));
+    }
+
+    bool periodic_axis[3] = {false, false, false};
+    if (!ctx.mesh.periodic_node_pairs.empty() &&
+        ctx.mesh.nodes_xyz.size() >= static_cast<size_t>(ctx.mesh.n_nodes) * 3u) {
+        const double axis_tolerance = std::max(1.0e-15, 1.0e-9 * max_extent);
+        const size_t n_pairs = ctx.mesh.periodic_node_pairs.size() / 2u;
+        for (size_t pair_index = 0; pair_index < n_pairs; ++pair_index) {
+            const uint32_t node_a = ctx.mesh.periodic_node_pairs[2u * pair_index];
+            const uint32_t node_b = ctx.mesh.periodic_node_pairs[2u * pair_index + 1u];
+            if (node_a >= ctx.mesh.n_nodes || node_b >= ctx.mesh.n_nodes) {
+                continue;
+            }
+            const size_t base_a = static_cast<size_t>(node_a) * 3u;
+            const size_t base_b = static_cast<size_t>(node_b) * 3u;
+            for (int axis = 0; axis < dimension && axis < 3; ++axis) {
+                const double delta =
+                    std::abs(ctx.mesh.nodes_xyz[base_b + static_cast<size_t>(axis)] -
+                             ctx.mesh.nodes_xyz[base_a + static_cast<size_t>(axis)]);
+                if (delta > axis_tolerance) {
+                    periodic_axis[axis] = true;
+                }
+            }
+        }
+    }
+
+    double open_axis_extent = 0.0;
+    for (int axis = 0; axis < dimension && axis < 3; ++axis) {
+        if (!periodic_axis[axis]) {
+            open_axis_extent = std::max(open_axis_extent, bb_max(axis) - bb_min(axis));
+        }
+    }
+
+    const double reference_extent = open_axis_extent > 0.0 ? open_axis_extent : max_extent;
+    double R_star = reference_extent / 2.0;
+    if (R_star <= 0.0) {
+        R_star = 1.0;
+    }
+    return R_star;
+}
+
+} // namespace
+
 bool initialize_demag_poisson_boundary_operator(
     Context &ctx,
     mfem::Mesh &mesh,
@@ -35,17 +90,7 @@ bool initialize_demag_poisson_boundary_operator(
             c = 2.0;
         }
 
-        mfem::Vector bb_min;
-        mfem::Vector bb_max;
-        mesh.GetBoundingBox(bb_min, bb_max);
-        double max_extent = 0.0;
-        for (int d = 0; d < mesh.Dimension(); ++d) {
-            max_extent = std::max(max_extent, bb_max(d) - bb_min(d));
-        }
-        double R_star = max_extent / 2.0;
-        if (R_star <= 0.0) {
-            R_star = 1.0;
-        }
+        const double R_star = robin_reference_radius_for_mesh(ctx, mesh);
         ctx.poisson_demag.robin_effective_beta = c / R_star;
 
         if (ctx.poisson_demag.boundary_marker < 1 ||

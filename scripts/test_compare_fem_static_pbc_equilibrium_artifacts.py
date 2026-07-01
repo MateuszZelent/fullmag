@@ -75,6 +75,63 @@ def write_supercell_central_cell_extraction(
     )
 
 
+def write_node_geometry(
+    root: Path,
+    *,
+    magnetic_node_mask: list[bool],
+    nodes_m: list[list[float]] | None = None,
+) -> None:
+    if nodes_m is None:
+        nodes_m = [[float(index) * 1.0e-8, 0.0, 0.0] for index in range(len(magnetic_node_mask))]
+    mesh_dir = root / "mesh"
+    mesh_dir.mkdir(parents=True, exist_ok=True)
+    (mesh_dir / "node_geometry.v1.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "mesh_node_geometry.v1",
+                "node_count": len(magnetic_node_mask),
+                "nodes_m": nodes_m,
+                "magnetic_node_mask": magnetic_node_mask,
+                "field_cell_alignment": {
+                    "m": "node_index",
+                    "H_demag": "node_index",
+                    "demag_phi": "node_index",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def add_metadata_mesh(root: Path, *, nodes: list[list[float]], elements: list[list[int]], element_markers: list[int]) -> None:
+    metadata_path = root / "metadata.json"
+    payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    payload.setdefault("execution_plan", {}).setdefault("backend_plan", {})["mesh"] = {
+        "nodes": nodes,
+        "elements": elements,
+        "element_markers": element_markers,
+    }
+    metadata_path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def add_initial_state_override_metadata(root: Path) -> None:
+    metadata_path = root / "metadata.json"
+    payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    payload["problem_meta"] = {
+        "runtime_metadata": {
+            "initial_magnetization_state_override": {
+                "kind": "initial_magnetization_state_override",
+                "source_path": "states/m_repeated_unit.json",
+                "format": "json",
+                "dataset": None,
+                "sample_index": None,
+                "vector_count": 2,
+            }
+        }
+    }
+    metadata_path.write_text(json.dumps(payload), encoding="utf-8")
+
+
 def write_artifacts(
     root: Path,
     *,
@@ -120,6 +177,7 @@ def write_artifacts(
         json.dumps({"observable": "m", "unit": "1", "step": 4, "values": m_values}),
         encoding="utf-8",
     )
+    write_node_geometry(root, magnetic_node_mask=[any(abs(component) > 0.0 for component in vector) for vector in m_values])
     if h_values is None:
         h_values = [1.0e3, 1.0e3, 0.0, 0.0, 0.0, 0.0]
     if phi_values is None:
@@ -235,7 +293,298 @@ def test_supercell_report_compares_scaled_demag_density(tmp_path: Path) -> None:
     assert report["status"] == "ok"
     assert report["cell_count"] == 9
     assert report["metrics"]["e_demag_density_relative_error"] < 2.0e-2
+    assert report["metrics"]["relaxation_state_mean_deviation_relative_error"] == 0.0
+    assert report["metrics"]["magnetic_node_count_relative_error"] == 0.0
+    assert report["metrics"]["field_cell_count_relative_error"] == 0.0
     assert report["central_cell_extraction"]["schema_version"] == "fem_static_pbc_supercell_central_cell.v1"
+    assert report["mesh_comparability"]["unit_magnetic_node_count"] == 2
+    assert report["mesh_comparability"]["central_cell_magnetic_node_count"] == 2
+    assert report["mesh_comparability"]["magnetic_node_count_relative_error"] == 0.0
+
+
+def test_supercell_report_adds_mapped_central_cell_comparison(tmp_path: Path) -> None:
+    unit = tmp_path / "unit" / "artifacts"
+    supercell = tmp_path / "supercell" / "artifacts"
+    report_path = tmp_path / "reports" / "supercell_validation.v1.json"
+    write_artifacts(
+        unit,
+        e_demag=1.0e-18,
+        final_torque=4.0e3,
+        m_values=[
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0],
+        ],
+        h_values=[10.0, 20.0, 30.0, 1.0, 2.0, 3.0, 0.0, 0.0, 0.0],
+        phi_values=[1.0e-3, 2.0e-3, 3.0e-3],
+    )
+    write_node_geometry(
+        unit,
+        magnetic_node_mask=[True, True, False],
+        nodes_m=[[-1.0e-8, 0.0, 0.0], [1.0e-8, 0.0, 0.0], [0.0, 0.0, 3.0e-8]],
+    )
+    write_artifacts(
+        supercell,
+        e_demag=9.0e-18,
+        final_torque=4.0e3,
+        universe_size_m=[6.0e-7, 6.0e-7, 9.0e-8],
+        m_values=[
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+        ],
+        h_values=[10.0, 20.0, 30.0, 99.0, 1.0, 2.0, 3.0, 99.0, 0.0, 0.0, 0.0, 99.0],
+        phi_values=[1.7e-3, 2.7e-3, 3.7e-3, 9.0e-3],
+    )
+    write_node_geometry(
+        supercell,
+        magnetic_node_mask=[True, True, False, False],
+        nodes_m=[[1.9e-7, 0.0, 0.0], [2.1e-7, 0.0, 0.0], [2.0e-7, 0.0, 3.0e-8], [0.0, 0.0, 0.0]],
+    )
+    write_supercell_central_cell_extraction(
+        supercell,
+        magnetic_node_indices=[0, 1],
+        field_cell_indices=[0, 1, 2],
+        e_demag=1.0e-18,
+        final_torque=4.0e3,
+    )
+
+    result = run_report(
+        "supercell",
+        "--unit-cell",
+        str(unit),
+        "--supercell",
+        str(supercell),
+        "--repeat-x",
+        "3",
+        "--repeat-y",
+        "3",
+        "--report",
+        str(report_path),
+    )
+
+    assert result.returncode == 0, result.stderr
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    mapped = report["mapped_central_cell_comparability"]
+    assert mapped["schema_version"] == "fem_static_pbc_supercell_mapped_comparison.v1"
+    assert mapped["same_local_discretization"] is True
+    assert mapped["same_local_discretization_limit_m"] == 1.0e-12
+    assert mapped["magnetic_pair_count"] == 2
+    assert mapped["field_pair_count"] == 3
+    assert mapped["max_nearest_field_node_distance_m"] < 1.0e-18
+    assert mapped["m"]["max_l2_delta"] == 0.0
+    assert mapped["H_demag"]["max_l2_delta"] == 0.0
+    assert abs(mapped["demag_phi"]["best_constant_offset_A"] - 7.0e-4) < 1.0e-18
+    assert mapped["demag_phi"]["max_abs_delta_after_offset_A"] < 1.0e-18
+    assert report["metrics"]["mapped_h_demag_p99_relative_error"] == 0.0
+
+
+def test_supercell_report_fails_when_mapped_nearest_distance_is_not_strict(tmp_path: Path) -> None:
+    unit = tmp_path / "unit" / "artifacts"
+    supercell = tmp_path / "supercell" / "artifacts"
+    report_path = tmp_path / "reports" / "supercell_validation.v1.json"
+    write_artifacts(
+        unit,
+        e_demag=1.0e-18,
+        final_torque=4.0e3,
+        m_values=[[1.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+        h_values=[10.0, 20.0, 1.0, 2.0, 0.0, 0.0],
+        phi_values=[1.0e-3, 2.0e-3],
+    )
+    write_node_geometry(
+        unit,
+        magnetic_node_mask=[True, False],
+        nodes_m=[[0.0, 0.0, 0.0], [0.0, 0.0, 2.0e-8]],
+    )
+    write_artifacts(
+        supercell,
+        e_demag=9.0e-18,
+        final_torque=4.0e3,
+        universe_size_m=[6.0e-7, 6.0e-7, 9.0e-8],
+        m_values=[[1.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+        h_values=[10.0, 20.0, 1.0, 2.0, 0.0, 0.0],
+        phi_values=[1.7e-3, 2.7e-3],
+    )
+    write_node_geometry(
+        supercell,
+        magnetic_node_mask=[True, False],
+        nodes_m=[[2.0e-7 + 1.0e-9, 0.0, 0.0], [2.0e-7, 0.0, 2.0e-8]],
+    )
+    write_supercell_central_cell_extraction(
+        supercell,
+        magnetic_node_indices=[0],
+        field_cell_indices=[0, 1],
+        e_demag=1.0e-18,
+        final_torque=4.0e3,
+    )
+
+    result = run_report(
+        "--allow-failed-status",
+        "supercell",
+        "--unit-cell",
+        str(unit),
+        "--supercell",
+        str(supercell),
+        "--repeat-x",
+        "3",
+        "--repeat-y",
+        "3",
+        "--report",
+        str(report_path),
+    )
+
+    assert result.returncode == 0, result.stderr
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    mapped = report["mapped_central_cell_comparability"]
+    assert report["status"] == "failed"
+    assert "mapped_max_nearest_magnetic_node_distance_m" in result.stderr
+    assert mapped["same_local_discretization"] is False
+    assert mapped["same_local_discretization_limit_m"] == 1.0e-12
+    assert report["metrics"]["mapped_max_nearest_magnetic_node_distance_m"] > 1.0e-12
+
+
+def test_supercell_report_can_add_interpolated_remesh_comparison(tmp_path: Path) -> None:
+    unit = tmp_path / "unit" / "artifacts"
+    supercell = tmp_path / "supercell" / "artifacts"
+    report_path = tmp_path / "reports" / "supercell_validation.v1.json"
+    unit_nodes = [
+        [0.0, 0.0, 0.0],
+        [1.0e-8, 0.0, 0.0],
+        [0.0, 1.0e-8, 0.0],
+        [0.0, 0.0, 1.0e-8],
+    ]
+    supercell_node = [2.5e-9, 2.5e-9, 2.5e-9]
+    write_artifacts(
+        unit,
+        e_demag=1.0e-18,
+        final_torque=4.0e3,
+        m_values=[
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 1.0, 1.0],
+        ],
+        h_values=[10.0, 20.0, 30.0, 40.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        phi_values=[1.0e-3, 2.0e-3, 3.0e-3, 4.0e-3],
+    )
+    write_node_geometry(unit, magnetic_node_mask=[True, True, True, True], nodes_m=unit_nodes)
+    add_metadata_mesh(unit, nodes=unit_nodes, elements=[[0, 1, 2, 3]], element_markers=[1])
+    write_artifacts(
+        supercell,
+        e_demag=9.0e-18,
+        final_torque=4.0e3,
+        universe_size_m=[6.0e-7, 6.0e-7, 9.0e-8],
+        m_values=[[0.5, 0.5, 0.5]],
+        h_values=[25.0, 0.0, 0.0],
+        phi_values=[2.5e-3],
+    )
+    write_node_geometry(supercell, magnetic_node_mask=[True], nodes_m=[supercell_node])
+    write_supercell_central_cell_extraction(
+        supercell,
+        magnetic_node_indices=[0],
+        field_cell_indices=[0],
+        e_demag=1.0e-18,
+        final_torque=4.0e3,
+    )
+
+    result = run_report(
+        "--allow-failed-status",
+        "supercell",
+        "--unit-cell",
+        str(unit),
+        "--supercell",
+        str(supercell),
+        "--repeat-x",
+        "3",
+        "--repeat-y",
+        "3",
+        "--include-interpolated-comparison",
+        "--report",
+        str(report_path),
+    )
+
+    assert result.returncode == 0, result.stderr
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["status"] == "failed"
+    interpolated = report["interpolated_central_cell_comparability"]
+    assert interpolated["schema_version"] == "fem_static_pbc_supercell_interpolated_comparison.v1"
+    assert interpolated["field_coverage_ratio"] == 1.0
+    assert interpolated["magnetic_coverage_ratio"] == 1.0
+    assert interpolated["m"]["max_l2_delta"] < 1.0e-14
+    assert interpolated["H_demag"]["max_l2_delta"] < 1.0e-12
+    assert interpolated["demag_phi"]["max_abs_delta_after_offset_A"] < 1.0e-18
+
+
+def test_supercell_report_can_write_failed_diagnostic_status(tmp_path: Path) -> None:
+    unit = tmp_path / "unit" / "artifacts"
+    supercell = tmp_path / "supercell" / "artifacts"
+    report_path = tmp_path / "reports" / "supercell_validation.v1.json"
+    write_artifacts(unit, e_demag=1.0e-18, final_torque=4.0e3)
+    write_artifacts(
+        supercell,
+        e_demag=9.8e-18,
+        final_torque=4.01e3,
+        universe_size_m=[6.0e-7, 6.0e-7, 9.0e-8],
+    )
+    write_supercell_central_cell_extraction(supercell, e_demag=1.2e-18, final_torque=4.01e3)
+
+    result = run_report(
+        "--allow-failed-status",
+        "supercell",
+        "--unit-cell",
+        str(unit),
+        "--supercell",
+        str(supercell),
+        "--repeat-x",
+        "3",
+        "--repeat-y",
+        "3",
+        "--report",
+        str(report_path),
+    )
+
+    assert result.returncode == 0, result.stderr
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["status"] == "failed"
+    assert "e_demag_density_relative_error" in result.stderr
+
+
+def test_supercell_report_carries_repeated_state_initial_override_provenance(tmp_path: Path) -> None:
+    unit = tmp_path / "unit" / "artifacts"
+    supercell = tmp_path / "supercell" / "artifacts"
+    report_path = tmp_path / "reports" / "supercell_validation.v1.json"
+    write_artifacts(unit, e_demag=1.0e-18, final_torque=4.0e3)
+    write_artifacts(
+        supercell,
+        e_demag=9.01e-18,
+        final_torque=4.01e3,
+        universe_size_m=[6.0e-7, 6.0e-7, 9.0e-8],
+    )
+    add_initial_state_override_metadata(supercell)
+    write_supercell_central_cell_extraction(supercell, e_demag=1.001e-18, final_torque=4.01e3)
+
+    result = run_report(
+        "supercell",
+        "--unit-cell",
+        str(unit),
+        "--supercell",
+        str(supercell),
+        "--repeat-x",
+        "3",
+        "--repeat-y",
+        "3",
+        "--report",
+        str(report_path),
+    )
+
+    assert result.returncode == 0, result.stderr
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    override = report["supercell_initial_magnetization_state_override"]
+    assert override["kind"] == "initial_magnetization_state_override"
+    assert override["source_path"] == "states/m_repeated_unit.json"
+    assert override["format"] == "json"
+    assert override["vector_count"] == 2
 
 
 def test_supercell_report_rejects_missing_central_cell_extraction(tmp_path: Path) -> None:
@@ -267,6 +616,129 @@ def test_supercell_report_rejects_missing_central_cell_extraction(tmp_path: Path
     assert result.returncode != 0
     assert "missing supercell central-cell extraction artifact" in result.stderr
     assert not report_path.exists()
+
+
+def test_supercell_report_records_noncomparable_global_mesh_counts(tmp_path: Path) -> None:
+    unit = tmp_path / "unit" / "artifacts"
+    supercell = tmp_path / "supercell" / "artifacts"
+    report_path = tmp_path / "reports" / "supercell_validation.v1.json"
+    write_artifacts(
+        unit,
+        e_demag=1.0e-18,
+        final_torque=4.0e3,
+        m_values=[
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+        ],
+        h_values=[1.0e3] * 5 + [0.0] * 10,
+        phi_values=[1.0e-3, 1.2e-3, 1.1e-3, 1.15e-3, 1.05e-3],
+    )
+    write_artifacts(
+        supercell,
+        e_demag=9.0e-18,
+        final_torque=4.0e3,
+        universe_size_m=[6.0e-7, 6.0e-7, 9.0e-8],
+        m_values=[
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+        ],
+        h_values=[1.0e3] * 5 + [0.0] * 10,
+        phi_values=[1.0e-3, 1.2e-3, 1.1e-3, 1.15e-3, 1.05e-3],
+    )
+    write_supercell_central_cell_extraction(
+        supercell,
+        magnetic_node_indices=[0, 1],
+        field_cell_indices=[0, 1],
+        e_demag=1.0e-18,
+        final_torque=4.0e3,
+    )
+
+    result = run_report(
+        "supercell",
+        "--unit-cell",
+        str(unit),
+        "--supercell",
+        str(supercell),
+        "--repeat-x",
+        "3",
+        "--repeat-y",
+        "3",
+        "--report",
+        str(report_path),
+    )
+
+    assert result.returncode == 0, result.stderr
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["status"] == "ok"
+    assert report["metrics"]["magnetic_node_count_relative_error"] > 0.2
+    assert report["metrics"]["field_cell_count_relative_error"] > 0.2
+    assert report["mesh_comparability"]["magnetic_node_count_relative_error"] > 0.2
+    assert report["mesh_comparability"]["field_cell_count_relative_error"] > 0.2
+
+
+def test_supercell_report_records_relaxation_state_mismatch(tmp_path: Path) -> None:
+    unit = tmp_path / "unit" / "artifacts"
+    supercell = tmp_path / "supercell" / "artifacts"
+    report_path = tmp_path / "reports" / "supercell_validation.v1.json"
+    write_artifacts(
+        unit,
+        e_demag=1.0e-18,
+        final_torque=4.0e3,
+        m_values=[[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+    )
+    write_artifacts(
+        supercell,
+        e_demag=9.0e-18,
+        final_torque=4.0e3,
+        universe_size_m=[6.0e-7, 6.0e-7, 9.0e-8],
+        m_values=[
+            [0.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 0.0, 0.0],
+        ],
+        h_values=[1.0e3, 1.0e3, 1.0e3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        phi_values=[1.0e-3, 1.2e-3, 1.1e-3],
+    )
+    write_supercell_central_cell_extraction(
+        supercell,
+        magnetic_node_indices=[0, 1],
+        field_cell_indices=[0, 1],
+        e_demag=1.0e-18,
+        final_torque=4.0e3,
+    )
+
+    result = run_report(
+        "supercell",
+        "--unit-cell",
+        str(unit),
+        "--supercell",
+        str(supercell),
+        "--repeat-x",
+        "3",
+        "--repeat-y",
+        "3",
+        "--report",
+        str(report_path),
+    )
+
+    assert result.returncode != 0
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["status"] == "failed"
+    state = report["relaxation_state_comparability"]
+    assert state["unit_average_m"] == [1.0, 0.0, 0.0]
+    assert state["central_cell_average_m"] == [0.0, 1.0, 0.0]
+    assert state["central_cell_average_m_l2_delta"] > 1.4
+    assert state["unit_mean_l2_deviation_from_unit_average_m"] == 0.0
+    assert state["central_cell_mean_l2_deviation_from_unit_average_m"] > 1.4
+    assert state["mean_l2_deviation_relative_error"] == 1.0
+    assert report["metrics"]["relaxation_state_mean_deviation_relative_error"] == 1.0
+    assert "relaxation_state_mean_deviation_relative_error" in result.stderr
 
 
 def test_supercell_report_uses_central_cell_extraction_not_global_average(tmp_path: Path) -> None:
@@ -319,6 +791,129 @@ def test_supercell_report_uses_central_cell_extraction_not_global_average(tmp_pa
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["status"] == "failed"
     assert "average_m_l2_delta" in result.stderr
+
+
+def test_supercell_report_uses_unit_magnetic_node_mask_for_average_m(tmp_path: Path) -> None:
+    unit = tmp_path / "unit" / "artifacts"
+    supercell = tmp_path / "supercell" / "artifacts"
+    report_path = tmp_path / "reports" / "supercell_validation.v1.json"
+    write_artifacts(
+        unit,
+        e_demag=1.0e-18,
+        final_torque=4.0e3,
+        m_values=[
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+        ],
+        h_values=[1.0e3, 1.0e3, 1.0e3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        phi_values=[1.0e-3, 1.2e-3, 1.1e-3],
+    )
+    write_node_geometry(unit, magnetic_node_mask=[True, True, False])
+    write_artifacts(
+        supercell,
+        e_demag=9.0e-18,
+        final_torque=4.0e3,
+        universe_size_m=[6.0e-7, 6.0e-7, 9.0e-8],
+        m_values=[
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ],
+        h_values=[1.0e3, 1.0e3, 1.0e3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        phi_values=[1.0e-3, 1.2e-3, 1.1e-3],
+    )
+    write_supercell_central_cell_extraction(
+        supercell,
+        magnetic_node_indices=[0, 1],
+        field_cell_indices=[0, 1],
+        e_demag=1.0e-18,
+        final_torque=4.0e3,
+    )
+
+    result = run_report(
+        "supercell",
+        "--unit-cell",
+        str(unit),
+        "--supercell",
+        str(supercell),
+        "--repeat-x",
+        "3",
+        "--repeat-y",
+        "3",
+        "--report",
+        str(report_path),
+    )
+
+    assert result.returncode == 0, result.stderr
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["status"] == "ok"
+    assert report["metrics"]["average_m_l2_delta"] == 0.0
+
+
+def test_supercell_report_uses_unit_metadata_mesh_for_average_m_without_node_geometry(tmp_path: Path) -> None:
+    unit = tmp_path / "unit" / "artifacts"
+    supercell = tmp_path / "supercell" / "artifacts"
+    report_path = tmp_path / "reports" / "supercell_validation.v1.json"
+    write_artifacts(
+        unit,
+        e_demag=1.0e-18,
+        final_torque=4.0e3,
+        m_values=[
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+        ],
+        h_values=[1.0e3] * 5 + [0.0] * 10,
+        phi_values=[1.0e-3, 1.2e-3, 1.1e-3, 1.05e-3, 1.15e-3],
+    )
+    add_metadata_mesh(
+        unit,
+        nodes=[[float(index), 0.0, 0.0] for index in range(5)],
+        elements=[[0, 1, 2, 3], [1, 2, 3, 4]],
+        element_markers=[1, 0],
+    )
+    write_artifacts(
+        supercell,
+        e_demag=9.0e-18,
+        final_torque=4.0e3,
+        universe_size_m=[6.0e-7, 6.0e-7, 9.0e-8],
+        m_values=[
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ],
+        h_values=[1.0e3, 1.0e3, 1.0e3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        phi_values=[1.0e-3, 1.2e-3, 1.1e-3],
+    )
+    write_supercell_central_cell_extraction(
+        supercell,
+        magnetic_node_indices=[0, 1],
+        field_cell_indices=[0, 1],
+        e_demag=1.0e-18,
+        final_torque=4.0e3,
+    )
+
+    result = run_report(
+        "supercell",
+        "--unit-cell",
+        str(unit),
+        "--supercell",
+        str(supercell),
+        "--repeat-x",
+        "3",
+        "--repeat-y",
+        "3",
+        "--report",
+        str(report_path),
+    )
+
+    assert result.returncode == 0, result.stderr
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["status"] == "ok"
+    assert report["metrics"]["average_m_l2_delta"] == 0.0
 
 
 def test_report_writer_rejects_excessive_z_padding_energy_drift(tmp_path: Path) -> None:

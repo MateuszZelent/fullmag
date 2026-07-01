@@ -3191,6 +3191,29 @@ describe("Study stage inspectors", () => {
     expect(settleMarkup).toContain("Max steps: 2000");
   });
 
+  it("renders hysteresis settle pipeline when execution tree nodes are absent", () => {
+    const executionTreeKey = SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH.replace(
+      "{stage_id}",
+      "hysteresis-1",
+    );
+    sharedResourceRuntimeStore.updateData(
+      executionTreeKey,
+      {
+        revision: 31,
+        stage_id: "hysteresis-1",
+        stage_index: 0,
+      } as never,
+      31,
+    );
+
+    const settleMarkup = render(
+      <HysteresisStageInspector {...props("hysteresis")} />,
+      ["hysteresis-settle"],
+    );
+
+    expect(settleMarkup).toContain("Settle Pipeline");
+  });
+
   it("prefers resolved hysteresis settle pipeline fields over raw fallback steps", () => {
     const settlePipelineKey = SIMULATION_STAGE_HYSTERESIS_SETTLE_PIPELINE_PATH.replace(
       "{stage_id}",

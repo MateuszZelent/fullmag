@@ -120,7 +120,8 @@ bool context_compute_demag_poisson(
                 : 0;
         debug_checkpoint("context_compute_demag_poisson:recover_done");
 
-        finalize_demag_poisson_recovered_field(ctx, h_demag_xyz);
+        // NOTE: finalize_demag_poisson_recovered_field is already called inside
+        // recover_demag_poisson_field — no duplicate call needed here.
 
         if (allow_interrupt && poll_interrupt(ctx)) {
             return false;

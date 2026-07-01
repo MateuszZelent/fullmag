@@ -18,6 +18,7 @@ EXAMPLES = {
     "exchange_coupled_supercell_3x3": Path(
         "examples/fem_periodic_antidot_relax_exchange_coupled_supercell_3x3.py"
     ),
+    "uniform_slab": Path("examples/fem_periodic_uniform_slab_relax_exchange_coupled.py"),
     "air_gap": Path("examples/fem_periodic_antidot_relax_air_gap.py"),
 }
 
@@ -214,6 +215,36 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
             exchange_coupled=False,
             universe_xy=3.2e-7,
             lateral_gap_xy=1.2e-7,
+        )
+
+    def test_uniform_slab_scenario_relaxes_minimal_periodic_pbc_demag_control(self) -> None:
+        self.assert_example_is_plain_python("uniform_slab")
+        payload = self.export_run_config("uniform_slab")
+        self.assert_problem_ir_declares_xy_pbc(payload)
+
+        self.assertEqual(
+            payload["ir"]["problem_meta"]["name"],
+            "fem_periodic_uniform_slab_relax",
+        )
+        self.assertEqual(len(payload["stages"]), 1)
+        self.assertEqual(payload["stages"][0]["entrypoint_kind"], "flat_relax")
+
+        study = payload["stages"][0]["ir"]["study"]
+        self.assertEqual(study["algorithm"], "projected_gradient_bb")
+        self.assertEqual(study["stop"]["max_steps"], 120)
+        self.assertEqual(study["stop"]["torque_tolerance_apm"], 5.0e3)
+        self.assert_study_saves_equilibrium_and_demag_fields(study)
+        self.assert_table_logs_pbc_sensitive_quantities(study)
+
+        metadata = payload["ir"]["problem_meta"]["runtime_metadata"]
+        self.assertEqual(metadata["runtime_selection"]["backend"], "fem")
+        self.assertEqual(metadata["runtime_selection"]["device"], "cuda")
+        self.assert_scenario_metadata(
+            metadata,
+            scenario="uniform_slab",
+            exchange_coupled=True,
+            universe_xy=2e-7,
+            lateral_gap_xy=0.0,
         )
 
     def test_exchange_coupled_z_padding_reference_uses_same_workload_with_larger_open_z_airbox(self) -> None:

@@ -17,6 +17,20 @@ describe("study authoring smoke script", () => {
     expect(smokeScript).not.toContain('name: "Modal Spectrum"');
   });
 
+  it("asserts current Eigen mode inspector headings", () => {
+    expect(smokeScript).toContain('[data-inspector-surface="eigen-mode"]');
+    expect(smokeScript).toContain("Eigen Mode Control");
+    expect(smokeScript).toContain("Eigen Mode 3D Visualization");
+    expect(smokeScript).toContain(
+      "Plot selected eigen mode with phase-rotated real display",
+    );
+    expect(smokeScript).toContain(
+      "Plot this response field with phase-rotated real display at 12.55 GHz",
+    );
+    expect(smokeScript).not.toContain("Selected Eigen Mode");
+    expect(smokeScript).not.toContain("Plot mode rotated");
+  });
+
   it("reports Explorer row selection state after smoke clicks", () => {
     expect(smokeScript).toContain("assertExplorerRowSelected");
     expect(smokeScript).toContain('aria-selected="true"');

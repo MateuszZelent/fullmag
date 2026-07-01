@@ -355,6 +355,9 @@ bool recover_demag_poisson_field(
     // Preserve full-domain H_demag for visualization before zeroing airbox.
     ctx.demag.h_visual_xyz = h_demag_xyz;
 
+    // The LLG field is zeroed on non-magnetic nodes before periodic projection
+    // so the energy path consumes the same material-domain field as the solver.
+    // Periodic classes must not mix magnetic and airbox material classes.
     zero_non_magnetic_nodes_aos(h_demag_xyz, ctx.mesh.magnetic_node_mask);
     finalize_demag_poisson_recovered_field(ctx, h_demag_xyz);
 

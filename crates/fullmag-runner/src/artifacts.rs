@@ -148,6 +148,28 @@ fn demag_runtime_metadata(
             let resolved_demag = fem
                 .demag_realization
                 .unwrap_or(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+            let periodic_poisson_reduction_enabled =
+                resolved_demag.is_poisson() && !fem.mesh.periodic_node_pairs.is_empty();
+            let periodic_boundary_markers_excluded_from_robin =
+                periodic_poisson_reduction_enabled && !fem.mesh.periodic_boundary_pairs.is_empty();
+            let magnetostatic_boundary_model = if periodic_poisson_reduction_enabled {
+                "periodic_airbox_k0"
+            } else {
+                match resolved_demag {
+                    fullmag_ir::ResolvedFemDemagIR::PoissonDirichlet => "open_airbox_dirichlet",
+                    fullmag_ir::ResolvedFemDemagIR::PoissonRobin => "open_airbox_robin",
+                    fullmag_ir::ResolvedFemDemagIR::FredkinKoehler => "fredkin_koehler",
+                    fullmag_ir::ResolvedFemDemagIR::Bem => "bem",
+                    fullmag_ir::ResolvedFemDemagIR::Fmm => "fmm",
+                }
+            };
+            let poisson_operator = if periodic_poisson_reduction_enabled {
+                Some("pbc_reduced_poisson")
+            } else if resolved_demag.is_poisson() {
+                Some("full_poisson")
+            } else {
+                None
+            };
             let last = steps.last();
             let boundary_variant = match resolved_demag {
                 fullmag_ir::ResolvedFemDemagIR::PoissonDirichlet => Some("dirichlet"),
@@ -176,7 +198,24 @@ fn demag_runtime_metadata(
 
             serde_json::json!({
                 "model": resolved_demag.model_name(),
+                "magnetostatic_boundary_model": magnetostatic_boundary_model,
                 "boundary_variant": boundary_variant,
+                "poisson_operator": poisson_operator,
+                "periodic_reduction": {
+                    "enabled": periodic_poisson_reduction_enabled,
+                    "method": if periodic_poisson_reduction_enabled { Some("P^T A P") } else { None },
+                    "node_pair_count": fem.mesh.periodic_node_pairs.len(),
+                    "boundary_pair_count": fem.mesh.periodic_boundary_pairs.len(),
+                    "node_pair_counts_by_id": count_periodic_pairs_by_id(
+                        &fem.mesh.periodic_node_pairs,
+                        |pair| pair.pair_id.as_str(),
+                    ),
+                    "boundary_pair_counts_by_id": count_periodic_pairs_by_id(
+                        &fem.mesh.periodic_boundary_pairs,
+                        |pair| pair.pair_id.as_str(),
+                    ),
+                    "periodic_boundary_markers_excluded_from_robin": periodic_boundary_markers_excluded_from_robin,
+                },
                 "linear_solver": linear_solver,
                 "preconditioner": preconditioner,
                 "amg_profile": amg_profile,
@@ -794,6 +833,7 @@ pub(crate) fn write_artifacts(
     if should_write_plan_periodic_pairs_artifact(plan, executed) {
         write_periodic_pairs_artifact(output_dir, plan)?;
     }
+    write_fem_supercell_node_geometry_artifact(output_dir, problem, plan)?;
     write_static_pbc_demag_seam_diagnostics_artifact(
         output_dir,
         problem,
@@ -874,6 +914,55 @@ fn write_material_field_artifacts(
     }
 
     Ok(metadata_assets)
+}
+
+fn write_fem_supercell_node_geometry_artifact(
+    output_dir: &Path,
+    problem: &fullmag_ir::ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+) -> std::io::Result<()> {
+    let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
+        return Ok(());
+    };
+    let Some(runtime_metadata) = problem
+        .problem_meta
+        .runtime_metadata
+        .get("periodic_antidot_relaxation")
+        .and_then(|value| value.as_object())
+    else {
+        return Ok(());
+    };
+    if !runtime_metadata.contains_key("supercell_repeat") {
+        return Ok(());
+    }
+
+    let magnetic_node_mask = crate::preview::mesh_quantity_active_mask("m", &fem.mesh)
+        .unwrap_or_else(|| vec![true; fem.mesh.nodes.len()]);
+    let magnetic_node_count = magnetic_node_mask.iter().filter(|value| **value).count();
+    let artifact = serde_json::json!({
+        "schema_version": "fem_mesh_node_geometry.v1",
+        "artifact_path": "mesh/node_geometry.v1.json",
+        "mesh_name": fem.mesh.mesh_name,
+        "node_count": fem.mesh.nodes.len(),
+        "element_count": fem.mesh.elements.len(),
+        "nodes_m": fem.mesh.nodes,
+        "magnetic_node_mask": magnetic_node_mask,
+        "magnetic_node_count": magnetic_node_count,
+        "field_cell_alignment": {
+            "m": "node_index",
+            "H_demag": "node_index",
+            "H_eff": "node_index",
+            "demag_phi": "node_index"
+        },
+        "source": "ExecutionPlanIR.FemPlanIR.mesh.nodes",
+    });
+    let mesh_dir = output_dir.join("mesh");
+    fs::create_dir_all(&mesh_dir)?;
+    fs::write(
+        mesh_dir.join("node_geometry.v1.json"),
+        serde_json::to_vec_pretty(&artifact).unwrap(),
+    )?;
+    Ok(())
 }
 
 fn fem_material_field_values<'a>(
@@ -3066,6 +3155,41 @@ mod tests {
     }
 
     #[test]
+    fn demag_profile_metadata_exposes_periodic_reduced_poisson_contract() {
+        let mut plan = test_periodic_fem_execution_plan();
+        if let BackendPlanIR::Fem(fem) = &mut plan.backend_plan {
+            fem.enable_demag = true;
+            fem.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+        }
+
+        let metadata = demag_runtime_metadata(&plan, &ExecutionProvenance::default(), &[]);
+
+        assert_eq!(metadata["model"], "airbox");
+        assert_eq!(
+            metadata["magnetostatic_boundary_model"],
+            "periodic_airbox_k0"
+        );
+        assert_eq!(metadata["boundary_variant"], "robin");
+        assert_eq!(metadata["poisson_operator"], "pbc_reduced_poisson");
+        assert_eq!(metadata["periodic_reduction"]["enabled"], true);
+        assert_eq!(metadata["periodic_reduction"]["method"], "P^T A P");
+        assert_eq!(metadata["periodic_reduction"]["node_pair_count"], 2);
+        assert_eq!(metadata["periodic_reduction"]["boundary_pair_count"], 2);
+        assert_eq!(
+            metadata["periodic_reduction"]["node_pair_counts_by_id"]["x_faces"],
+            1
+        );
+        assert_eq!(
+            metadata["periodic_reduction"]["boundary_pair_counts_by_id"]["y_faces"],
+            1
+        );
+        assert_eq!(
+            metadata["periodic_reduction"]["periodic_boundary_markers_excluded_from_robin"],
+            true
+        );
+    }
+
+    #[test]
     fn demag_profile_metadata_distinguishes_explicit_policy_from_resolved_policy() {
         let mut plan = test_fem_execution_plan();
         if let BackendPlanIR::Fem(fem) = &mut plan.backend_plan {
@@ -4735,6 +4859,128 @@ mod tests {
             metadata["mesh"]["periodic_node_pair_counts_by_id"]["y_faces"],
             1
         );
+
+        fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[test]
+    fn supercell_runtime_metadata_writes_fem_node_geometry_artifact() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.problem_meta.name =
+            "fem_periodic_antidot_relax_exchange_coupled_supercell_3x3".to_string();
+        problem.problem_meta.runtime_metadata.insert(
+            "periodic_antidot_relaxation".to_string(),
+            serde_json::json!({
+                "scenario": "exchange_coupled",
+                "exchange_coupled_across_periods": true,
+                "magnetostatic_pbc": "periodic_airbox_k0",
+                "periodic_pair_ids": ["x_faces", "y_faces"],
+                "film_size_m": [2.0e-7, 2.0e-7, 1.0e-8],
+                "universe_size_m": [6.0e-7, 6.0e-7, 9.0e-8],
+                "lateral_air_gap_m": [0.0, 0.0],
+                "supercell_repeat": [3, 3],
+            }),
+        );
+        let plan = test_fem_execution_plan();
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-artifacts-supercell-node-geometry-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+        let executed = ExecutedRun {
+            result: RunResult {
+                status: RunStatus::Completed,
+                steps: Vec::new(),
+                final_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+                completion: None,
+            },
+            initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+            field_snapshots: Vec::new(),
+            field_snapshot_count: 0,
+            auxiliary_artifacts: Vec::new(),
+            provenance: ExecutionProvenance {
+                execution_engine: "fem_cpu_native".to_string(),
+                precision: "double".to_string(),
+                ..ExecutionProvenance::default()
+            },
+        };
+
+        write_artifacts(&output_dir, &problem, &plan, &executed, None)
+            .expect("supercell node geometry artifact should write");
+
+        let artifact: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("mesh/node_geometry.v1.json"))
+                .expect("node geometry artifact should exist"),
+        )
+        .expect("node geometry artifact should parse");
+        assert_eq!(artifact["schema_version"], "fem_mesh_node_geometry.v1");
+        assert_eq!(artifact["artifact_path"], "mesh/node_geometry.v1.json");
+        assert_eq!(artifact["node_count"], 4);
+        assert_eq!(artifact["nodes_m"][1], serde_json::json!([1.0, 0.0, 0.0]));
+        assert_eq!(
+            artifact["magnetic_node_mask"],
+            serde_json::json!([true, true, true, true])
+        );
+        assert_eq!(artifact["magnetic_node_count"], 4);
+        assert_eq!(artifact["field_cell_alignment"]["H_demag"], "node_index");
+        assert_eq!(artifact["field_cell_alignment"]["H_eff"], "node_index");
+        assert_eq!(artifact["field_cell_alignment"]["demag_phi"], "node_index");
+
+        fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[test]
+    fn primitive_periodic_antidot_does_not_write_supercell_node_geometry_artifact() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.problem_meta.name = "fem_periodic_antidot_relax_exchange_coupled".to_string();
+        problem.problem_meta.runtime_metadata.insert(
+            "periodic_antidot_relaxation".to_string(),
+            serde_json::json!({
+                "scenario": "exchange_coupled",
+                "exchange_coupled_across_periods": true,
+                "magnetostatic_pbc": "periodic_airbox_k0",
+                "periodic_pair_ids": ["x_faces", "y_faces"],
+                "film_size_m": [2.0e-7, 2.0e-7, 1.0e-8],
+                "universe_size_m": [2.0e-7, 2.0e-7, 9.0e-8],
+                "lateral_air_gap_m": [0.0, 0.0],
+            }),
+        );
+        let plan = test_fem_execution_plan();
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-artifacts-primitive-node-geometry-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+        let executed = ExecutedRun {
+            result: RunResult {
+                status: RunStatus::Completed,
+                steps: Vec::new(),
+                final_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+                completion: None,
+            },
+            initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+            field_snapshots: Vec::new(),
+            field_snapshot_count: 0,
+            auxiliary_artifacts: Vec::new(),
+            provenance: ExecutionProvenance {
+                execution_engine: "fem_cpu_native".to_string(),
+                precision: "double".to_string(),
+                ..ExecutionProvenance::default()
+            },
+        };
+
+        write_artifacts(&output_dir, &problem, &plan, &executed, None)
+            .expect("primitive artifacts should write");
+
+        assert!(!output_dir.join("mesh/node_geometry.v1.json").exists());
 
         fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
     }

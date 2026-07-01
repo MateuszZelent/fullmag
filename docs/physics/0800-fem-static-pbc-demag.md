@@ -5,8 +5,8 @@ implementation support, and the managed periodic-antidot CPU/GPU relaxation
 gates now pass the ordinary artifact validator with same-step `m`, `phi`,
 `H_demag`, normal-flux, side-charge, pair-topology, and device-Poisson
 provenance checks. The full M5 production gate is still not closed until the
-same accepted workload also passes strict z-padding and primitive-vs-supercell
-comparison reports. A run that only pairs or projects magnetization while
+same accepted workload also passes strict z-padding and controlled
+primitive-vs-supercell comparison reports. A run that only pairs or projects magnetization while
 `phi`/`H_demag` still behave like a finite isolated airbox is false or
 incomplete PBC and must be rejected. Fully periodic 3D demag and
 frequency-domain dynamic demag remain unqualified.
@@ -179,6 +179,12 @@ pairs and at least one remaining axis supplies the open airbox boundary.
 
 Implementation: `build_boundary_mass_excluding_periodic_faces(mesh)` is used
 instead of the full `boundary_mass_csr`.
+
+For Poisson-Robin airbox realizations, the Robin reference radius is computed
+from the non-periodic open-axis extent. It must not use the full bounding-box
+maximum when a repeated supercell changes only periodic directions; otherwise a
+primitive `x/y` periodic cell and its `3x3` repeated supercell would get
+different open-`z` Robin impedances despite the same physical z-padding.
 
 ---
 
@@ -399,11 +405,18 @@ artifact is written with `status = "failed"` so the run remains rejectable by
 the acceptance validator.
 The scalar history `scalars.csv` is part of the accepted equilibrium record: it
 must contain at least the required relaxation step count, finite `E_demag`,
-`E_total`, and `max_torque_Apm` values, non-negative final `E_demag`, bounded
-final torque, and no increase of final `E_total` relative to the first accepted
-scalar row.
+`E_total`, and `max_torque_Apm` values, non-negative final `E_demag` within
+`1e-24 J` absolute numerical roundoff, bounded final torque, and no increase of
+final `E_total` relative to the first accepted scalar row.
 The `demag_runtime` metadata must also prove that the Poisson solve actually
-converged: `actual_iterations` is positive and does not exceed
+used the periodic magnetostatic model, not only a finite-airbox solve with
+periodic `m` postprocessing. For accepted PBC-demag runs it must publish
+`magnetostatic_boundary_model = "periodic_airbox_k0"`,
+`poisson_operator = "pbc_reduced_poisson"`, and
+`periodic_reduction.enabled = true` with
+`periodic_reduction.method = "P^T A P"`, positive periodic node/boundary-pair
+counts, and `periodic_boundary_markers_excluded_from_robin = true`. It must
+also prove convergence: `actual_iterations` is positive and does not exceed
 `max_iterations`, and `final_residual_norm` is finite, non-negative, and no
 larger than `relative_tolerance`.
 
@@ -411,7 +424,8 @@ For periodic-antidot relaxation gates, the accepted equilibrium artifact must
 also publish the same final physical observables on CPU and GPU relaxation
 qualification metadata:
 
-- final energy terms in joules, including non-negative `E_demag`,
+- final energy terms in joules, including non-negative `E_demag` within
+  `1e-24 J` absolute numerical roundoff,
 - final torque residual `final_torque_apm` and `final_torque_t`,
 - magnetic-body magnetization norm defect,
 - executed step count and stop reason,
@@ -431,31 +445,33 @@ The managed periodic-antidot validator can also be run in strict M5 mode with
 explicit static comparison reports:
 
 ```bash
+# Minimal false-PBC diagnostic without the antidot hole.
+just verify-fem-static-pbc-demag-uniform-slab-runtime
+
 # Canonical managed z-padding report for the exchange-coupled antidot workload.
 just verify-fem-static-pbc-demag-z-padding-runtime
 
 # Canonical managed supercell report for the 3x3 exchange-coupled antidot workload.
-# First produce the unit/supercell runtime artifacts if central-cell extraction
-# inputs are not available yet.
 just prepare-fem-static-pbc-demag-supercell-runtime-artifacts
 
-FULLMAG_PBC_RELAX_SUPERCELL_MAGNETIC_NODE_INDICES=magnetic_node_indices \
-FULLMAG_PBC_RELAX_SUPERCELL_FIELD_CELL_INDICES=field_cell_indices \
-FULLMAG_PBC_RELAX_SUPERCELL_CENTRAL_CELL_DEMAG_ENERGY_J=central_cell_E_demag_J \
-FULLMAG_PBC_RELAX_SUPERCELL_CENTRAL_CELL_TORQUE_APM=central_cell_torque_Apm \
 just verify-fem-static-pbc-demag-supercell-runtime
+
+# Canonical managed strict-M5 wrapper including the repeated-state supercell report.
+just verify-fem-static-pbc-demag-equilibrium-repeated-state-runtime
 
 # Or compare already-produced artifact roots explicitly.
 just verify-fem-static-pbc-demag-z-padding-artifacts \
   reference/artifacts candidate/artifacts reports/z_padding_validation.v1.json
-just write-fem-static-pbc-demag-supercell-central-cell-artifact \
-  supercell/artifacts 3 3 magnetic_node_indices field_cell_indices \
-  central_cell_E_demag_J central_cell_torque_Apm
+just write-fem-static-pbc-demag-supercell-central-cell-artifact-auto \
+  supercell/artifacts 3 3
+just write-fem-static-pbc-demag-repeated-unit-initial-state \
+  unit/artifacts supercell/artifacts 3 3
+just verify-fem-static-pbc-demag-supercell-repeated-state-runtime
 just verify-fem-static-pbc-demag-supercell-artifacts \
   unit/artifacts supercell/artifacts 3 3 reports/supercell_validation.v1.json
 
 FULLMAG_PBC_RELAX_Z_PADDING_REPORT=.fullmag/reports/fem-static-pbc-demag-equilibrium-runtime/reports/z_padding_validation.v1.json \
-FULLMAG_PBC_RELAX_SUPERCELL_REPORT=reports/supercell_validation.v1.json \
+FULLMAG_PBC_RELAX_REPEATED_STATE_SUPERCELL_REPORT=.fullmag/reports/fem-static-pbc-demag-supercell-repeated-state-runtime/reports/supercell_validation.v1.json \
 just verify-fem-static-pbc-demag-equilibrium-runtime
 ```
 
@@ -464,6 +480,18 @@ The report targets call
 artifact roots. They must not be replaced by hand-written placeholder JSON:
 `verify-fem-static-pbc-demag-equilibrium-runtime` now rejects missing report
 paths before running the CPU/GPU periodic-antidot gates. The report writer also
+copies `problem_meta.runtime_metadata.initial_magnetization_state_override` from
+a repeated-state supercell artifact into
+`supercell_initial_magnetization_state_override`. When
+`FULLMAG_PBC_RELAX_REPEATED_STATE_SUPERCELL_REPORT` is set, the runtime
+validator requires that provenance block and the same supercell-report workload
+and metric checks. An ordinary independently relaxed primitive-vs-3x3 report
+may be written as diagnostic evidence, but the repeated-state report is the
+blocking controlled-supercell artifact for this wrapper. These comparison reports are
+currently exchange-coupled antidot workload evidence; the managed CPU/GPU
+periodic-antidot loops attach them only to `exchange_coupled`, while `air_gap`
+continues to exercise the ordinary finite-gap periodic-array smoke without
+claiming strict supercell/z-padding acceptance. The report writer also
 rejects self-comparison: z-padding `reference` and `candidate` roots must be
 different, and supercell `unit-cell` and `supercell` roots must be different.
 It also records and enforces workload identity: both roots must have
@@ -484,9 +512,28 @@ the canonical exchange-coupled candidate artifact from
 reference artifact from
 `examples/fem_periodic_antidot_relax_exchange_coupled_z_padding_reference.py`,
 and writes the strict z-padding report at the default strict-M5 report path.
+The managed
+`verify-fem-static-pbc-demag-equilibrium-repeated-state-runtime` target is the
+one-command strict-M5 preparation wrapper: it generates the z-padding report,
+ordinary primitive-vs-3x3 supercell diagnostic report, repeated-state
+supercell report, and then runs
+`verify-fem-static-pbc-demag-equilibrium-runtime` with the z-padding and
+repeated-state report paths. Passing that wrapper still means the blocking
+physical report metrics passed; the wrapper itself does not relax the
+same-local-discretization or primitive-vs-supercell acceptance criteria.
+The managed `verify-fem-static-pbc-demag-uniform-slab-runtime` target runs the
+same static PBC-demag artifact validator on a uniform exchange-coupled
+`200 nm x 200 nm x 10 nm` film slab with no hole, transverse initial
+magnetization, and short explicit `max_steps=120`, on both CPU and GPU/device
+Poisson demag. This is a minimal false-PBC diagnostic: because the magnetic body
+crosses the lateral periodic seams, every selected side pair must have positive
+magnetic and airbox coverage, periodic `H_demag`/gauge-adjusted `demag_phi`,
+balanced normal flux, and no artificial side magnetic charge before the more
+complex antidot geometry is interpreted.
 The periodic-antidot runtime validator repeats that check when
-`--require-z-padding-report` or `--require-supercell-report` is used, so a
-hand-written `status="ok"` report without matching `workload` cannot satisfy
+`--require-z-padding-report`, `--require-supercell-report`, or
+`--require-repeated-state-supercell-report` is used, so a hand-written
+`status="ok"` report without matching `workload` cannot satisfy
 the strict gate. It also requires the z-padding report to carry
 `reference_universe_size_m` and `candidate_universe_size_m` with the same
 open-`z` ordering, and independently checks the report metrics against the same
@@ -511,19 +558,194 @@ canonical primitive artifact from
 `examples/fem_periodic_antidot_relax_exchange_coupled.py`, the 3x3 repeated
 artifact from
 `examples/fem_periodic_antidot_relax_exchange_coupled_supercell_3x3.py`, writes
-the central-cell extraction artifact from the supplied index/value inputs, and
-then writes the strict supercell report at the default strict-M5 report path.
-`just write-fem-static-pbc-demag-supercell-central-cell-artifact` is the
-explicit producer for that artifact when the central-cell index sets and
-central-cell scalar values have been determined by the supercell preparation
-workflow. It validates the supplied indices against `m_final.json`,
-`fields/H_demag.zarr`, and `fields/demag_phi.zarr`; it also rejects
-central-cell demag energy or torque values that exceed the global supercell
-`metadata.final_energy_terms_j.E_demag` or `metadata.final_torque_apm`. It does
-not infer central-cell energy from the total supercell energy. The index inputs
-may be comma-separated lists or paths to files containing comma-separated,
-newline-separated, or JSON `indices` lists, so a preparation workflow can write
-auditable index files before the strict report is generated.
+the central-cell extraction artifact from node geometry plus runtime field
+snapshots, and then writes the strict supercell report at the default strict-M5
+report path.
+The preparatory
+`just prepare-fem-static-pbc-demag-supercell-runtime-artifacts` target runs the
+same primitive and 3x3 workloads before strict report generation, then
+validates the primitive artifact with the ordinary
+periodic-antidot validator and the repeated artifact with
+`--supercell-repeat 3 3`. The supercell validator accepts the run only when
+`metadata.periodic_antidot_relaxation.supercell_repeat` matches the requested
+repeat and the lateral `universe_size_m` is scaled by the repeat while the
+open-`z` airbox remains present; it also requires the repeated root's
+`mesh/node_geometry.v1.json` artifact. Repeated FEM artifact roots write
+`mesh/node_geometry.v1.json` with node coordinates, the magnetic-node mask, and
+node-index alignment for `m`, `H_demag`, `H_eff`, and `demag_phi`; this gives
+the preparation workflow an auditable source for central-cell index selection
+without deriving those indices from flattened field lengths.
+`just write-fem-static-pbc-demag-supercell-central-cell-artifact-auto` is the
+default producer for that artifact. It selects magnetic-node and node-aligned
+field indices from `mesh/node_geometry.v1.json` using the requested
+`central_cell_index`, the repeated `film_size_m`, and the repeated
+`universe_size_m`; for the canonical 3x3 case the default central cell is
+`[1, 1]`. It computes central-cell demag
+energy from the same native FEM Poisson convention by summing magnetic
+tetrahedra whose `x/y` centroids lie in the selected central cell:
+`E_d = -0.5*mu0*sum_e(V_e*mean_vertices(Ms_i*dot(m_i,H_demag_i)))`.
+It computes the central-cell torque residual as
+`max(norm(cross(m_i,H_eff_i)))` over selected magnetic nodes. It validates the
+selected indices against
+`m_final.json`, `fields/H_demag.zarr`, `fields/H_eff.zarr`, and
+`fields/demag_phi.zarr`. The manual
+`just write-fem-static-pbc-demag-supercell-central-cell-artifact` target remains
+available when an external extraction workflow supplies explicit index lists;
+those index inputs may be comma-separated lists or paths to files containing
+comma-separated, newline-separated, or JSON `indices` lists. Both producers
+reject central-cell demag energy or torque values that exceed the global
+supercell `metadata.final_energy_terms_j.E_demag` or
+`metadata.final_torque_apm`. They do not infer central-cell energy from the
+total supercell energy or infer torque from global supercell statistics.
+The supercell report also records `mesh_comparability` diagnostics with unit
+magnetic-node/field-cell counts, central-cell counts, and count relative errors.
+Large global count errors are not by themselves a failure, because the primitive
+mesh has a periodic seam as a boundary while the central supercell extraction
+does not. They are diagnostic evidence to interpret the strict physics metrics
+and to decide whether a same-local-discretization mesh fixture is still needed.
+The same report records `relaxation_state_comparability` diagnostics with the
+primitive magnetic average, central-cell magnetic average, their L2 delta, and
+the mean/max node-wise deviations from the primitive average. The strict report
+also gates
+`relaxation_state_mean_deviation_relative_error <= 2e-1`, and the runtime
+validator requires that metric to match
+`relaxation_state_comparability.mean_l2_deviation_relative_error`. These values
+do not relax the supercell acceptance thresholds; they distinguish a true
+magnetostatic-PBC/operator mismatch from a comparison between two different
+relaxed equilibria.
+The 2026-07-01 managed ordinary primitive-vs-3x3 run wrote
+`.fullmag/reports/fem-static-pbc-demag-equilibrium-runtime/reports/supercell_validation.v1.json`
+with `status="failed"`: `e_demag_density_relative_error=5.183127e-02`,
+`h_demag_stats_relative_error=3.049715e-02`,
+`central_cell_torque_residual_relative_error=8.435489e-01`, and
+`relaxation_state_mean_deviation_relative_error=5.990150e-01`. Its
+`mesh_comparability` diagnostics also showed large count mismatches
+(`magnetic_node_count_relative_error=6.226461e-01`,
+`field_cell_count_relative_error=5.979100e-01`). That report is useful
+negative evidence, but it is not the controlled repeated-state acceptance
+artifact and must not block the repeated-state diagnostic path from running.
+`just write-fem-static-pbc-demag-repeated-unit-initial-state` is a preparatory
+producer for controlled supercell fixtures. It consumes a primitive artifact
+root, a repeated-supercell artifact root, and `repeat_x/repeat_y`, then writes a
+file-backed sampled `m` state plus
+`fem_static_pbc_repeated_unit_initial_state.v1` provenance by reducing each
+supercell magnetic node into the primitive lateral period and copying the
+nearest primitive `m_final` vector. The producer is strict by default:
+`max_nearest_distance_m = 1e-12` is intended for same-local-discretization
+repeated meshes. Looser thresholds are diagnostic only and must be recorded in
+the provenance. On the current independently remeshed 3x3 exchange-coupled
+artifacts, the strict threshold rejects the map; a diagnostic run with
+`max_nearest_distance_m = 1e-8` reports
+`max_nearest_unit_node_distance_m = 5.7101071070060185e-09` and
+`mean_nearest_unit_node_distance_m = 1.3493516002184034e-09`. That output can
+help build a frozen/repeated-state experiment, but it does not close M5 and
+should not be treated as proof of primitive-vs-supercell equivalence.
+`just write-fem-static-pbc-demag-tiled-supercell-fixture` is an even narrower
+diagnostic fixture producer: it copies a primitive artifact root into an
+explicitly tiled repeated artifact with the same local node coordinates modulo
+the primitive period, scales extensive energy terms by the repeated-cell count,
+and writes `diagnostics/fem_static_pbc_supercell_central_cell.v1.json` from the
+central copied tile. This is not a runtime solve and is not physical
+primitive-vs-supercell evidence. Its purpose is to prove that the strict
+same-local `fem_static_pbc_supercell_validation.v1` comparison path accepts a
+known-good same-local artifact and therefore to separate comparator/plumbing
+bugs from solver, mesh, or interpolation failures. Passing
+`just verify-fem-static-pbc-demag-tiled-supercell-fixture ...` is a diagnostic
+precondition only; M5 still requires a runtime-produced same-local supercell or
+an explicitly validated interpolation path plus passing field, potential,
+state, energy, torque, and seam metrics.
+`just write-fem-static-pbc-demag-supercell-interpolated-diagnostic-report` adds
+the first explicit interpolation diagnostic for independently remeshed
+primitive-vs-supercell comparisons. It invokes the same strict supercell report
+writer with `--include-interpolated-comparison`, producing
+`interpolated_central_cell_comparability` by reducing central supercell nodes
+modulo the primitive lateral periods and evaluating primitive nodal `m`,
+`H_demag`, and `demag_phi` by linear barycentric interpolation on primitive
+tetrahedra. The section reports field/magnetic coverage, missed samples,
+barycentric tolerance, minimum barycentric weight, vector errors, and
+gauge-adjusted `demag_phi` residuals. This remains diagnostic until explicit
+coverage and interpolation-error thresholds are promoted into the M5 acceptance
+contract; the strict nearest-node same-local gate is unchanged.
+On the current independently remeshed runtime artifacts, this diagnostic writes
+`.fullmag/reports/fem-static-pbc-demag-equilibrium-runtime/reports/supercell_interpolated_validation.v1.json`
+with full interpolation coverage (`field_coverage_ratio = 1.0`,
+`magnetic_coverage_ratio = 1.0`) but still reports
+`H_demag.p99_relative_error = 2.170060e-01`,
+`demag_phi.max_abs_delta_after_offset_A = 1.417297e-04`, and
+`m.p99_l2_delta = 1.072672e-02`. Therefore the current supercell mismatch is
+not only a nearest-node remesh artifact: after primitive tetrahedral
+interpolation, the field and potential remain outside the prospective strict
+M5 tolerances.
+Headless script execution can consume that sampled state through
+`--initial-magnetization-state PATH`, with optional
+`--initial-magnetization-state-format`, `--initial-magnetization-state-dataset`,
+and `--initial-magnetization-state-sample-index` matching the existing
+magnetization-state loader semantics. This is a runtime initial-state override:
+it does not change `ProblemIR.pbc`, mesh PBC, demag boundary conditions, or the
+physics contract. Accepted diagnostic artifacts must preserve that runtime
+intent in `problem_meta.runtime_metadata.initial_magnetization_state_override`
+with at least the source path, normalized format, dataset/sample index when
+provided, and loaded vector count, so a repeated-state supercell run cannot be
+mistaken for a uniform-initial-state relaxation. The periodic-antidot validator
+enforces this in repeated-state flows through
+`--require-initial-magnetization-state-override`, which now requires a JSON
+source state, resolves the recorded `source_path`, checks that the recorded and
+source vector counts match the accepted `m_final.json` vector count, and checks
+that artifact `m_initial.json` matches the source state component-wise within
+`1e-12`. For shared-domain airbox meshes the repeated-state producer fills
+air/non-magnetic nodes with `[0, 0, 0]`, matching the native FEM `m` artifact
+semantics outside magnetic material; only magnetic nodes receive mapped unit-cell
+magnetization. The strict-preflight
+`just verify-fem-static-pbc-demag-supercell-repeated-state-runtime` target first
+prepares primitive/supercell artifacts, writes the repeated-unit state, and then
+reruns the 3x3 supercell with that state as the first-stage magnetization. After
+the run passes the required initial-state override gate, the target writes a
+central-cell extraction artifact for the repeated-state supercell and writes a
+separate primitive-vs-repeated-state supercell report under
+`.fullmag/reports/fem-static-pbc-demag-supercell-repeated-state-runtime/reports/`.
+The target uses `FULLMAG_PBC_RELAX_REPEATED_STATE_MAX_NEAREST_DISTANCE_M` with a
+strict default of `1e-12`, so the current independently remeshed fixture fails
+at the repeated-unit mapping preflight instead of running a misleading loose
+seeded supercell. A diagnostic `1e-8 m` mapping can still be produced manually
+through `just write-fem-static-pbc-demag-repeated-unit-initial-state ... 1e-8`,
+but it is not the managed M5 default. The last loose repeated-state report
+failed strict M5 with `h_demag_stats_relative_error=6.591465e-02`,
+`demag_phi_max_abs_delta_A=4.783996e-05`, and
+`relaxation_state_mean_deviation_relative_error=5.578288e-01`. The report also
+fails the mapped strict gates with
+`mapped_m_p99_l2_delta=2.874209e-02`,
+`mapped_h_demag_p99_relative_error=2.324448e-01`,
+`mapped_demag_phi_max_abs_delta_after_offset_A=3.779693e-04`,
+`mapped_max_nearest_field_node_distance_m=9.740109e-09`, and
+`mapped_max_nearest_magnetic_node_distance_m=5.135622e-09`; its
+`mapped_central_cell_comparability.same_local_discretization` flag is therefore
+`false` for the strict `1e-12 m` nearest-node limit. Its demag-energy density
+error and central-cell torque residual are within the current thresholds, so the
+remaining blocker is the field/potential, state-comparability, and
+same-local-discretization effect of the independently remeshed supercell, not
+missing runtime provenance.
+The supercell report now also writes
+`mapped_central_cell_comparability` by reducing central-cell supercell nodes
+modulo the primitive lateral periods and matching them to nearest primitive
+nodes. This records nearest-node distances plus pointwise mapped errors for
+`m`, `H_demag`, and gauge-adjusted `demag_phi`. The current repeated-state run
+still shows a mapped-field discrepancy:
+`mapped_h_demag_p99_relative_error=2.32444757146736e-01` and
+`mapped_demag_phi_max_abs_delta_after_offset_A=3.7796929083539486e-04`,
+with nearest field-node distance below `1e-8 m`. Therefore the present failure
+is not only an artifact of comparing aggregate maxima on different meshes. These
+mapped quantities are now part of the supercell report `thresholds`; diagnostic
+nearest-node tolerances around `1e-8 m` may be used to write evidence, but
+strict same-local acceptance requires `mapped_max_nearest_*_distance_m <= 1e-12`.
+The report records this explicitly as
+`mapped_central_cell_comparability.same_local_discretization`, and validators
+reject a report whose boolean flag disagrees with the recorded max nearest-node
+distances and `same_local_discretization_limit_m`.
+Because the repeated-state
+file is written against the prepared supercell mesh and then consumed by a
+second headless run, the managed supercell prepare and repeated-state targets
+default `FULLMAG_PBC_RELAX_GMSH_THREADS=1` to avoid multithreaded Gmsh
+non-determinism changing the node count between those two materializations.
 
 When those environment variables are set, the validator requires:
 
@@ -535,9 +757,15 @@ When those environment variables are set, the validator requires:
 - `fem_static_pbc_supercell_validation.v1` with `status="ok"`, non-empty
   primitive/supercell artifact references, a repeated-cell count greater than
   one, a `central_cell_extraction` summary copied from
-  `fem_static_pbc_supercell_central_cell.v1`, and finite, non-negative
-  central-cell `m`, demag-energy, `H_demag`, `demag_phi`, and torque-residual
-  comparison metrics below the strict supercell thresholds.
+  `fem_static_pbc_supercell_central_cell.v1`,
+  `mapped_central_cell_comparability` proving how central-cell nodes were
+  matched back to primitive-cell nodes for pointwise diagnostics, and finite,
+  non-negative
+  central-cell `m`, demag-energy, `H_demag`, `demag_phi`, torque-residual,
+  mapped pointwise `m`/`H_demag`/`demag_phi`, and mapped nearest-distance
+  comparison metrics below the strict supercell thresholds. For strict M5
+  acceptance, `mapped_central_cell_comparability.same_local_discretization`
+  must be `true`; `false` marks the report as a diagnostic remesh comparison.
 
 ---
 
@@ -671,6 +899,10 @@ the tested state, so the stored demag energy is non-negative.
       comparisons; accepted z-padding reports must compare an `x/y` periodic,
       open-`z` candidate against a same-lateral-size reference with larger
       open-`z` `universe_size_m`
+- [x] `examples/fem_periodic_uniform_slab_relax_exchange_coupled.py` and
+      `just verify-fem-static-pbc-demag-uniform-slab-runtime` provide a
+      managed CPU/GPU false-PBC diagnostic for a uniform film slab before the
+      centered-hole antidot workload is interpreted
 - [x] `examples/fem_periodic_antidot_relax_exchange_coupled_z_padding_reference.py`
       and `just verify-fem-static-pbc-demag-z-padding-runtime` provide a
       canonical managed path to generate the exchange-coupled z-padding report
@@ -692,15 +924,27 @@ the tested state, so the stored demag energy is non-negative.
       canonical managed path to run the primitive/3x3 supercell artifacts and
       generate the strict report from supplied central-cell extraction inputs
 - [x] `just prepare-fem-static-pbc-demag-supercell-runtime-artifacts` can
-      produce the unit/supercell runtime artifact roots before central-cell
-      extraction inputs are available, so the index/scalar extraction workflow
-      can operate on concrete runtime data instead of being blocked by the
-      strict report preflight
+      produce and ordinary-validate the unit/supercell runtime artifact roots
+      before central-cell extraction inputs are available, using explicit
+      `--supercell-repeat 3 3` validation for the repeated artifact, so the
+      index/scalar extraction workflow can operate on concrete runtime data
+      instead of being blocked by the strict report preflight
+- [x] Repeated FEM artifact roots write `mesh/node_geometry.v1.json` with
+      coordinates, magnetic-node mask, and node-index field alignment, so
+      central-cell index selection can be audited against mesh geometry rather
+      than inferred from field-vector lengths
 - [x] A managed `just` entry point can write the central-cell extraction
-      artifact from explicit magnetic-node indices, field-cell indices,
-      central-cell demag energy, and central-cell torque residual while
+      artifact from automatically selected central-cell indices,
+      automatically computed central-cell demag energy and central-cell torque
+      residual while
       validating index ranges and scalar bounds against the resolved supercell
-      artifacts; index inputs may be literal lists or files
+      artifacts; a manual target still accepts literal index lists or files
+- [x] A diagnostic tiled same-local supercell fixture can prove the strict
+      primitive-vs-supercell comparator accepts a known same-local artifact
+      without treating that fixture as runtime or physical M5 closure
+- [x] An opt-in interpolated primitive-vs-supercell diagnostic can compare
+      independently remeshed central-cell nodes against primitive tetrahedral
+      linear interpolation without relaxing the strict same-local gate
 - [x] GPU projected-gradient BB and nonlinear-CG source contracts project trial
       magnetisation onto static periodic classes after retraction
 - [x] GPU device Poisson demag recovery projects recovered `H_demag` onto

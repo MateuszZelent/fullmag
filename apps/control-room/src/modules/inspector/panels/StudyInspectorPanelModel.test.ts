@@ -380,14 +380,43 @@ describe("StudyInspectorPanelModel", () => {
         completed_stage_indexes: [],
         revision: 17,
         runtime_state: "idle",
-        stage_statuses: ["idle", "idle", "idle"],
+        stage_statuses: ["idle", "idle"],
         stages: [
           { index: 0, stage_id: "relax-1", status: "idle" },
           { index: 1, stage_id: "run-2", status: "idle" },
-          { index: 2, stage_id: "hysteresis-3", status: "idle" },
         ],
-        total_stages: 3,
+        total_stages: 2,
       } as never,
+    });
+
+    expect(model.selectedStage).toMatchObject({
+      index: 2,
+      kind: "hysteresis",
+      stageId: "hysteresis-3",
+    });
+  });
+
+  it("resolves selected stage from a child node id when the selection ref is generic", () => {
+    const snapshot = studySnapshotFromScene({
+      study: {
+        stages: [
+          { kind: "relax", stage_id: "relax-1" },
+          { kind: "run", stage_id: "run-2" },
+          { kind: "hysteresis", stage_id: "hysteresis-3" },
+        ],
+      },
+    } as never);
+
+    const model = resolveStudyInspectorModel({
+      commandQueue: null,
+      currentRun: null,
+      selectedNodeId: "model:study:stages:stage:hysteresis-3:live-run",
+      selectedStageRef: {
+        nodeId: "model:study:stages:stage:hysteresis-3:live-run",
+      },
+      snapshot,
+      solverStatus: null,
+      stageExecution: null,
     });
 
     expect(model.selectedStage).toMatchObject({

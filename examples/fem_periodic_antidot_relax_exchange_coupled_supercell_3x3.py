@@ -234,6 +234,7 @@ study.tableautosave(
 )
 study.save("m", every=10e-12)
 study.save("H_demag", every=10e-12)
+study.save("H_eff", every=10e-12)
 study.save("demag_phi", every=10e-12)
 
 study.stages.add_relax(

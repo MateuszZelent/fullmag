@@ -18,6 +18,8 @@ def write_summary_fixture(
     coupled: bool,
     engine: str = "cpu",
     total_steps: int = 4,
+    supercell_repeat: tuple[int, int] | None = None,
+    initial_state_override: bool = False,
 ) -> Path:
     artifact_dir = root / "artifacts"
     artifact_dir.mkdir(parents=True)
@@ -57,23 +59,42 @@ def write_summary_fixture(
             "uses_gpu_poisson": True,
             "demag_operator_mode": "device_hypre_poisson",
         }
+    primitive_universe_size = [2e-7, 2e-7, 9e-8] if coupled else [3.2e-7, 3.2e-7, 9e-8]
+    universe_size = list(primitive_universe_size)
+    if supercell_repeat is not None:
+        universe_size[0] *= supercell_repeat[0]
+        universe_size[1] *= supercell_repeat[1]
+    scenario_metadata = {
+        "scenario": scenario,
+        "exchange_coupled_across_periods": coupled,
+        "magnetostatic_pbc": "periodic_airbox_k0",
+        "periodic_pair_ids": ["x_faces", "y_faces"],
+        "film_size_m": [2e-7, 2e-7, 1e-8],
+        "universe_size_m": universe_size,
+        "lateral_air_gap_m": [0.0, 0.0] if coupled else [1.2e-7, 1.2e-7],
+    }
+    if supercell_repeat is not None:
+        scenario_metadata["supercell_repeat"] = list(supercell_repeat)
     metadata = {
         "pbc": {
             "axes": ["periodic", "periodic", "open"],
             "demag": "periodic_airbox_k0",
         },
-        "periodic_antidot_relaxation": {
-            "scenario": scenario,
-            "exchange_coupled_across_periods": coupled,
-            "magnetostatic_pbc": "periodic_airbox_k0",
-            "periodic_pair_ids": ["x_faces", "y_faces"],
-            "film_size_m": [2e-7, 2e-7, 1e-8],
-            "universe_size_m": [2e-7, 2e-7, 9e-8] if coupled else [3.2e-7, 3.2e-7, 9e-8],
-            "lateral_air_gap_m": [0.0, 0.0] if coupled else [1.2e-7, 1.2e-7],
-        },
+        "periodic_antidot_relaxation": scenario_metadata,
         "demag_runtime": {
             "model": "airbox",
+            "magnetostatic_boundary_model": "periodic_airbox_k0",
             "boundary_variant": "robin",
+            "poisson_operator": "pbc_reduced_poisson",
+            "periodic_reduction": {
+                "enabled": True,
+                "method": "P^T A P",
+                "node_pair_count": 4,
+                "boundary_pair_count": 2,
+                "node_pair_counts_by_id": {"x_faces": 2, "y_faces": 2},
+                "boundary_pair_counts_by_id": {"x_faces": 1, "y_faces": 1},
+                "periodic_boundary_markers_excluded_from_robin": True,
+            },
             "linear_solver": "CG",
             "preconditioner": "AMG",
             "relative_tolerance": 1.0e-4,
@@ -90,6 +111,39 @@ def write_summary_fixture(
             "periodic_node_pair_counts_by_id": {"x_faces": 2, "y_faces": 2},
         },
     }
+    if initial_state_override:
+        initial_state_values = [
+            [0.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ]
+        state_dir = root / "states"
+        state_dir.mkdir()
+        state_path = state_dir / "m_repeated_unit.json"
+        initial_state = {
+            "observable": "m",
+            "unit": "dimensionless",
+            "layout": {"backend": "fem"},
+            "values": initial_state_values,
+        }
+        state_path.write_text(json.dumps(initial_state), encoding="utf-8")
+        (artifact_dir / "m_initial.json").write_text(
+            json.dumps(initial_state),
+            encoding="utf-8",
+        )
+        metadata["problem_meta"] = {
+            "runtime_metadata": {
+                "initial_magnetization_state_override": {
+                    "kind": "initial_magnetization_state_override",
+                    "source_path": str(state_path),
+                    "format": "json",
+                    "dataset": None,
+                    "sample_index": None,
+                    "vector_count": 4,
+                }
+            }
+        }
     (artifact_dir / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
     periodic_pairs = {
         "schema_version": "periodic_pairs.v1",
@@ -151,6 +205,33 @@ def write_summary_fixture(
         json.dumps(periodic_pairs),
         encoding="utf-8",
     )
+    if supercell_repeat is not None:
+        node_geometry = {
+            "schema_version": "fem_mesh_node_geometry.v1",
+            "artifact_path": "mesh/node_geometry.v1.json",
+            "mesh_name": "periodic_antidot_supercell",
+            "node_count": 4,
+            "element_count": 1,
+            "nodes_m": [
+                [0.0, 0.0, 0.0],
+                [2.0e-7, 0.0, 0.0],
+                [0.0, 2.0e-7, 0.0],
+                [2.0e-7, 2.0e-7, 0.0],
+            ],
+            "magnetic_node_mask": [True, True, True, True],
+            "magnetic_node_count": 4,
+            "field_cell_alignment": {
+                "m": "node_index",
+                "H_demag": "node_index",
+                "H_eff": "node_index",
+                "demag_phi": "node_index",
+            },
+            "source": "ExecutionPlanIR.FemPlanIR.mesh.nodes",
+        }
+        (mesh_dir / "node_geometry.v1.json").write_text(
+            json.dumps(node_geometry),
+            encoding="utf-8",
+        )
     final_magnetization = {
         "observable": "m",
         "unit": "dimensionless",
@@ -246,12 +327,18 @@ def write_summary_fixture(
         scalars_header + "".join(scalar_rows),
         encoding="utf-8",
     )
+    if scenario == "uniform_slab":
+        problem_name = "fem_periodic_uniform_slab_relax"
+    else:
+        problem_name = f"fem_periodic_antidot_relax_{scenario}"
+    if supercell_repeat is not None:
+        problem_name = f"{problem_name}_supercell_{supercell_repeat[0]}x{supercell_repeat[1]}"
     summary = {
         "status": "completed",
         "backend": "fem",
         "mode": "strict",
         "precision": "double",
-        "problem_name": f"fem_periodic_antidot_relax_{scenario}",
+        "problem_name": problem_name,
         "total_steps": total_steps,
         "artifact_dir": str(artifact_dir),
     }
@@ -317,6 +404,159 @@ def run_validator_with_args(
         stderr=subprocess.PIPE,
         check=False,
     )
+
+
+def test_validator_accepts_explicit_exchange_coupled_supercell_metadata(tmp_path: Path) -> None:
+    log_path = write_summary_fixture(
+        tmp_path,
+        scenario="exchange_coupled",
+        coupled=True,
+        supercell_repeat=(3, 3),
+    )
+
+    result = run_validator_with_args(
+        log_path,
+        "exchange_coupled",
+        ["--supercell-repeat", "3", "3"],
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_validator_rejects_supercell_metadata_without_explicit_repeat_arg(tmp_path: Path) -> None:
+    log_path = write_summary_fixture(
+        tmp_path,
+        scenario="exchange_coupled",
+        coupled=True,
+        supercell_repeat=(3, 3),
+    )
+
+    result = run_validator(log_path, "exchange_coupled")
+
+    assert result.returncode != 0
+    assert "unexpected problem_name" in result.stderr
+
+
+def test_validator_rejects_supercell_with_unscaled_universe_size(tmp_path: Path) -> None:
+    log_path = write_summary_fixture(
+        tmp_path,
+        scenario="exchange_coupled",
+        coupled=True,
+        supercell_repeat=(3, 3),
+    )
+    metadata_path = tmp_path / "artifacts" / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["periodic_antidot_relaxation"]["universe_size_m"] = [2.0e-7, 2.0e-7, 9.0e-8]
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    result = run_validator_with_args(
+        log_path,
+        "exchange_coupled",
+        ["--supercell-repeat", "3", "3"],
+    )
+
+    assert result.returncode != 0
+    assert "supercell universe_size_m[0] must equal primitive universe x repeat_x" in result.stderr
+
+
+def test_validator_rejects_supercell_without_node_geometry(tmp_path: Path) -> None:
+    log_path = write_summary_fixture(
+        tmp_path,
+        scenario="exchange_coupled",
+        coupled=True,
+        supercell_repeat=(3, 3),
+    )
+    (tmp_path / "artifacts" / "mesh" / "node_geometry.v1.json").unlink()
+
+    result = run_validator_with_args(
+        log_path,
+        "exchange_coupled",
+        ["--supercell-repeat", "3", "3"],
+    )
+
+    assert result.returncode != 0
+    assert "missing node geometry artifact" in result.stderr
+
+
+def test_validator_requires_initial_magnetization_state_override_when_requested(tmp_path: Path) -> None:
+    log_path = write_summary_fixture(
+        tmp_path,
+        scenario="exchange_coupled",
+        coupled=True,
+        supercell_repeat=(3, 3),
+    )
+
+    result = run_validator_with_args(
+        log_path,
+        "exchange_coupled",
+        ["--supercell-repeat", "3", "3", "--require-initial-magnetization-state-override"],
+    )
+
+    assert result.returncode != 0
+    assert "initial_magnetization_state_override" in result.stderr
+
+
+def test_validator_accepts_required_initial_magnetization_state_override(tmp_path: Path) -> None:
+    log_path = write_summary_fixture(
+        tmp_path,
+        scenario="exchange_coupled",
+        coupled=True,
+        supercell_repeat=(3, 3),
+        initial_state_override=True,
+    )
+
+    result = run_validator_with_args(
+        log_path,
+        "exchange_coupled",
+        ["--supercell-repeat", "3", "3", "--require-initial-magnetization-state-override"],
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_validator_rejects_initial_state_override_when_source_is_missing(tmp_path: Path) -> None:
+    log_path = write_summary_fixture(
+        tmp_path,
+        scenario="exchange_coupled",
+        coupled=True,
+        supercell_repeat=(3, 3),
+        initial_state_override=True,
+    )
+    shutil.rmtree(tmp_path / "states")
+
+    result = run_validator_with_args(
+        log_path,
+        "exchange_coupled",
+        ["--supercell-repeat", "3", "3", "--require-initial-magnetization-state-override"],
+    )
+
+    assert result.returncode != 0
+    assert "initial_magnetization_state_override.source_path file does not exist" in result.stderr
+
+
+def test_validator_rejects_initial_state_override_when_m_initial_differs_from_source(
+    tmp_path: Path,
+) -> None:
+    log_path = write_summary_fixture(
+        tmp_path,
+        scenario="exchange_coupled",
+        coupled=True,
+        supercell_repeat=(3, 3),
+        initial_state_override=True,
+    )
+    initial_path = tmp_path / "artifacts" / "m_initial.json"
+    initial_state = json.loads(initial_path.read_text(encoding="utf-8"))
+    initial_state["values"][2] = [1.0, 0.0, 0.0]
+    initial_path.write_text(json.dumps(initial_state), encoding="utf-8")
+
+    result = run_validator_with_args(
+        log_path,
+        "exchange_coupled",
+        ["--supercell-repeat", "3", "3", "--require-initial-magnetization-state-override"],
+    )
+
+    assert result.returncode != 0
+    assert "m_initial.json values must match initial_magnetization_state_override source" in result.stderr
 
 
 def write_zarr_snapshot(
@@ -455,6 +695,7 @@ def write_static_equilibrium_supercell_report(
     status: str = "ok",
     scenario: str = "exchange_coupled",
     include_workload: bool = True,
+    initial_state_override: bool = False,
 ) -> None:
     payload: dict[str, object] = {
         "schema_version": "fem_static_pbc_supercell_validation.v1",
@@ -482,6 +723,54 @@ def write_static_equilibrium_supercell_report(
             "h_demag_stats_relative_error": 1.0e-3,
             "demag_phi_max_abs_delta_A": 1.0e-8,
             "central_cell_torque_residual_relative_error": 1.0e-2,
+            "relaxation_state_mean_deviation_relative_error": 1.0e-3,
+            "mapped_m_p99_l2_delta": 1.0e-6,
+            "mapped_h_demag_p99_relative_error": 1.0e-3,
+            "mapped_demag_phi_max_abs_delta_after_offset_A": 1.0e-8,
+            "mapped_max_nearest_field_node_distance_m": 1.0e-9,
+            "mapped_max_nearest_magnetic_node_distance_m": 1.0e-9,
+            "magnetic_node_count_relative_error": 1.0e-3,
+            "field_cell_count_relative_error": 1.0e-3,
+        },
+        "mapped_central_cell_comparability": {
+            "schema_version": "fem_static_pbc_supercell_mapped_comparison.v1",
+            "mapping": "supercell central-cell node -> modulo(x/y) nearest primitive-cell node",
+            "same_local_discretization": True,
+            "same_local_discretization_limit_m": 1.0e-8,
+            "magnetic_pair_count": 2,
+            "field_pair_count": 2,
+            "max_nearest_magnetic_node_distance_m": 1.0e-9,
+            "mean_nearest_magnetic_node_distance_m": 5.0e-10,
+            "max_nearest_field_node_distance_m": 1.0e-9,
+            "mean_nearest_field_node_distance_m": 5.0e-10,
+            "m": {
+                "mean_l2_delta": 1.0e-7,
+                "p99_l2_delta": 1.0e-6,
+                "max_l2_delta": 2.0e-6,
+                "p99_relative_error": 1.0e-6,
+            },
+            "H_demag": {
+                "mean_l2_delta": 1.0,
+                "p99_l2_delta": 2.0,
+                "max_l2_delta": 3.0,
+                "p99_relative_error": 1.0e-3,
+            },
+            "demag_phi": {
+                "best_constant_offset_A": 1.0e-9,
+                "mean_abs_delta_after_offset_A": 1.0e-9,
+                "p99_abs_delta_after_offset_A": 5.0e-9,
+                "max_abs_delta_after_offset_A": 1.0e-8,
+            },
+        },
+        "relaxation_state_comparability": {
+            "unit_average_m": [1.0, 0.0, 0.0],
+            "central_cell_average_m": [0.999999, 0.0, 0.0],
+            "central_cell_average_m_l2_delta": 1.0e-6,
+            "unit_mean_l2_deviation_from_unit_average_m": 1.0e-3,
+            "unit_max_l2_deviation_from_unit_average_m": 2.0e-3,
+            "central_cell_mean_l2_deviation_from_unit_average_m": 1.001e-3,
+            "central_cell_max_l2_deviation_from_unit_average_m": 2.001e-3,
+            "mean_l2_deviation_relative_error": 1.0e-3,
         },
     }
     if include_workload:
@@ -490,6 +779,15 @@ def write_static_equilibrium_supercell_report(
             "unit_universe_size_m": [2.0e-7, 2.0e-7, 9.0e-8],
             "supercell_universe_size_m": [6.0e-7, 6.0e-7, 9.0e-8],
             "expected_supercell_universe_size_m": [6.0e-7, 6.0e-7, 9.0e-8],
+        }
+    if initial_state_override:
+        payload["supercell_initial_magnetization_state_override"] = {
+            "kind": "initial_magnetization_state_override",
+            "source_path": "states/m_repeated_unit.json",
+            "format": "json",
+            "dataset": None,
+            "sample_index": None,
+            "vector_count": 4,
         }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
@@ -545,6 +843,148 @@ def test_validator_accepts_required_static_equilibrium_comparison_reports(tmp_pa
     assert result.returncode == 0, result.stderr
 
 
+def test_validator_rejects_supercell_report_without_mapped_comparison(tmp_path: Path) -> None:
+    log_path = write_summary_fixture(tmp_path, scenario="exchange_coupled", coupled=True)
+    supercell_report = tmp_path / "reports" / "supercell_validation.v1.json"
+    write_static_equilibrium_supercell_report(supercell_report)
+    payload = json.loads(supercell_report.read_text(encoding="utf-8"))
+    payload.pop("mapped_central_cell_comparability")
+    supercell_report.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = run_validator_with_args(
+        log_path,
+        "exchange_coupled",
+        ["--require-supercell-report", str(supercell_report)],
+    )
+
+    assert result.returncode != 0
+    assert "mapped_central_cell_comparability" in result.stderr
+
+
+def test_validator_rejects_inconsistent_same_local_discretization_flag(tmp_path: Path) -> None:
+    log_path = write_summary_fixture(tmp_path, scenario="exchange_coupled", coupled=True)
+    supercell_report = tmp_path / "reports" / "supercell_validation.v1.json"
+    write_static_equilibrium_supercell_report(supercell_report)
+    payload = json.loads(supercell_report.read_text(encoding="utf-8"))
+    mapped = payload["mapped_central_cell_comparability"]
+    mapped["same_local_discretization"] = True
+    mapped["same_local_discretization_limit_m"] = 1.0e-12
+    mapped["max_nearest_field_node_distance_m"] = 1.0e-9
+    mapped["max_nearest_magnetic_node_distance_m"] = 1.0e-9
+    supercell_report.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = run_validator_with_args(
+        log_path,
+        "exchange_coupled",
+        ["--require-supercell-report", str(supercell_report)],
+    )
+
+    assert result.returncode != 0
+    assert "same_local_discretization" in result.stderr
+
+
+def test_validator_accepts_supercell_report_with_interpolated_comparison(tmp_path: Path) -> None:
+    log_path = write_summary_fixture(tmp_path, scenario="exchange_coupled", coupled=True)
+    supercell_report = tmp_path / "reports" / "supercell_validation.v1.json"
+    write_static_equilibrium_supercell_report(supercell_report)
+    payload = json.loads(supercell_report.read_text(encoding="utf-8"))
+    payload["interpolated_central_cell_comparability"] = {
+        "schema_version": "fem_static_pbc_supercell_interpolated_comparison.v1",
+        "mapping": "supercell central-cell node -> modulo(x/y) primitive tetrahedral linear interpolation",
+        "interpolation_method": "linear_tetrahedral_barycentric",
+        "barycentric_tolerance": 1.0e-10,
+        "field_sample_count": 2,
+        "field_located_count": 2,
+        "field_missed_count": 0,
+        "field_coverage_ratio": 1.0,
+        "magnetic_sample_count": 2,
+        "magnetic_located_count": 2,
+        "magnetic_missed_count": 0,
+        "magnetic_coverage_ratio": 1.0,
+        "min_barycentric_weight": 0.25,
+        "m": {
+            "mean_l2_delta": 1.0e-7,
+            "p99_l2_delta": 1.0e-6,
+            "max_l2_delta": 2.0e-6,
+            "p99_relative_error": 1.0e-6,
+        },
+        "H_demag": {
+            "mean_l2_delta": 1.0,
+            "p99_l2_delta": 2.0,
+            "max_l2_delta": 3.0,
+            "p99_relative_error": 1.0e-3,
+        },
+        "demag_phi": {
+            "best_constant_offset_A": 1.0e-9,
+            "mean_abs_delta_after_offset_A": 1.0e-9,
+            "p99_abs_delta_after_offset_A": 5.0e-9,
+            "max_abs_delta_after_offset_A": 1.0e-8,
+        },
+    }
+    supercell_report.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = run_validator_with_args(
+        log_path,
+        "exchange_coupled",
+        ["--require-supercell-report", str(supercell_report)],
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_validator_rejects_bad_interpolated_comparison_schema(tmp_path: Path) -> None:
+    log_path = write_summary_fixture(tmp_path, scenario="exchange_coupled", coupled=True)
+    supercell_report = tmp_path / "reports" / "supercell_validation.v1.json"
+    write_static_equilibrium_supercell_report(supercell_report)
+    payload = json.loads(supercell_report.read_text(encoding="utf-8"))
+    payload["interpolated_central_cell_comparability"] = {
+        "schema_version": "wrong",
+    }
+    supercell_report.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = run_validator_with_args(
+        log_path,
+        "exchange_coupled",
+        ["--require-supercell-report", str(supercell_report)],
+    )
+
+    assert result.returncode != 0
+    assert "interpolated_central_cell_comparability.schema_version" in result.stderr
+
+
+def test_validator_rejects_repeated_state_supercell_report_without_initial_override_provenance(
+    tmp_path: Path,
+) -> None:
+    log_path = write_summary_fixture(tmp_path, scenario="exchange_coupled", coupled=True)
+    supercell_report = tmp_path / "reports" / "supercell_validation.v1.json"
+    write_static_equilibrium_supercell_report(supercell_report)
+
+    result = run_validator_with_args(
+        log_path,
+        "exchange_coupled",
+        ["--require-repeated-state-supercell-report", str(supercell_report)],
+    )
+
+    assert result.returncode != 0
+    assert "supercell_initial_magnetization_state_override" in result.stderr
+
+
+def test_validator_accepts_repeated_state_supercell_report_with_initial_override_provenance(
+    tmp_path: Path,
+) -> None:
+    log_path = write_summary_fixture(tmp_path, scenario="exchange_coupled", coupled=True)
+    supercell_report = tmp_path / "reports" / "supercell_validation.v1.json"
+    write_static_equilibrium_supercell_report(supercell_report, initial_state_override=True)
+
+    result = run_validator_with_args(
+        log_path,
+        "exchange_coupled",
+        ["--require-repeated-state-supercell-report", str(supercell_report)],
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_validator_rejects_air_gap_without_lateral_air_gap(tmp_path: Path) -> None:
     log_path = write_summary_fixture(tmp_path, scenario="air_gap", coupled=False)
     artifact_dir = tmp_path / "artifacts"
@@ -558,6 +998,14 @@ def test_validator_rejects_air_gap_without_lateral_air_gap(tmp_path: Path) -> No
     assert "air_gap scenario must have positive lateral air gap" in result.stderr
 
 
+def test_validator_accepts_uniform_slab_static_pbc_demag_control(tmp_path: Path) -> None:
+    log_path = write_summary_fixture(tmp_path, scenario="uniform_slab", coupled=True)
+
+    result = run_validator(log_path, "uniform_slab")
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_validator_rejects_exchange_coupled_with_lateral_air_gap(tmp_path: Path) -> None:
     log_path = write_summary_fixture(tmp_path, scenario="exchange_coupled", coupled=True)
     artifact_dir = tmp_path / "artifacts"
@@ -568,7 +1016,7 @@ def test_validator_rejects_exchange_coupled_with_lateral_air_gap(tmp_path: Path)
     result = run_validator(log_path, "exchange_coupled")
 
     assert result.returncode != 0
-    assert "exchange_coupled scenario must have zero lateral air gap" in result.stderr
+    assert "exchange-coupled PBC scenarios must have zero lateral air gap" in result.stderr
 
 
 def test_validator_rejects_missing_demag_runtime(tmp_path: Path) -> None:
@@ -595,6 +1043,19 @@ def test_validator_rejects_unconverged_demag_runtime_residual(tmp_path: Path) ->
 
     assert result.returncode != 0
     assert "final_residual_norm must be non-negative and <= relative_tolerance" in result.stderr
+
+
+def test_validator_rejects_demag_runtime_without_periodic_reduction(tmp_path: Path) -> None:
+    log_path = write_summary_fixture(tmp_path, scenario="exchange_coupled", coupled=True)
+    artifact_dir = tmp_path / "artifacts"
+    metadata = json.loads((artifact_dir / "metadata.json").read_text(encoding="utf-8"))
+    metadata["demag_runtime"].pop("periodic_reduction")
+    (artifact_dir / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+
+    result = run_validator(log_path, "exchange_coupled")
+
+    assert result.returncode != 0
+    assert "demag_runtime.periodic_reduction must be a JSON object" in result.stderr
 
 
 def test_validator_rejects_missing_problem_pbc(tmp_path: Path) -> None:
@@ -687,7 +1148,7 @@ def test_validator_rejects_exchange_coupled_without_magnetic_seam_node_coverage(
 
     assert result.returncode != 0
     assert (
-        "periodic pairs pair x_faces.domain_node_pair_counts.magnetic must be positive for exchange_coupled"
+        "periodic pairs pair x_faces.domain_node_pair_counts.magnetic must be positive for exchange-coupled PBC"
         in result.stderr
     )
 
@@ -943,6 +1404,62 @@ def test_validator_rejects_required_supercell_report_without_central_cell_extrac
     assert "supercell comparison report central_cell_extraction must be a JSON object" in result.stderr
 
 
+def test_validator_rejects_required_supercell_report_without_relaxation_state(tmp_path: Path) -> None:
+    log_path = write_summary_fixture(tmp_path, scenario="exchange_coupled", coupled=True)
+    supercell_report = tmp_path / "reports" / "supercell_validation.v1.json"
+    write_static_equilibrium_supercell_report(supercell_report)
+    payload = json.loads(supercell_report.read_text(encoding="utf-8"))
+    payload.pop("relaxation_state_comparability")
+    supercell_report.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = run_validator_with_args(
+        log_path,
+        "exchange_coupled",
+        ["--require-supercell-report", str(supercell_report)],
+    )
+
+    assert result.returncode != 0
+    assert "supercell comparison report relaxation_state_comparability must be a JSON object" in result.stderr
+
+
+def test_validator_rejects_required_supercell_report_with_excessive_relaxation_state_metric(tmp_path: Path) -> None:
+    log_path = write_summary_fixture(tmp_path, scenario="exchange_coupled", coupled=True)
+    supercell_report = tmp_path / "reports" / "supercell_validation.v1.json"
+    write_static_equilibrium_supercell_report(supercell_report)
+    payload = json.loads(supercell_report.read_text(encoding="utf-8"))
+    payload["metrics"]["relaxation_state_mean_deviation_relative_error"] = 1.0
+    payload["relaxation_state_comparability"]["mean_l2_deviation_relative_error"] = 1.0
+    supercell_report.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = run_validator_with_args(
+        log_path,
+        "exchange_coupled",
+        ["--require-supercell-report", str(supercell_report)],
+    )
+
+    assert result.returncode != 0
+    assert "supercell comparison report metrics.relaxation_state_mean_deviation_relative_error exceeds" in result.stderr
+
+
+def test_validator_rejects_required_supercell_report_with_relaxation_state_metric_drift(tmp_path: Path) -> None:
+    log_path = write_summary_fixture(tmp_path, scenario="exchange_coupled", coupled=True)
+    supercell_report = tmp_path / "reports" / "supercell_validation.v1.json"
+    write_static_equilibrium_supercell_report(supercell_report)
+    payload = json.loads(supercell_report.read_text(encoding="utf-8"))
+    payload["metrics"]["relaxation_state_mean_deviation_relative_error"] = 1.0e-3
+    payload["relaxation_state_comparability"]["mean_l2_deviation_relative_error"] = 1.0
+    supercell_report.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = run_validator_with_args(
+        log_path,
+        "exchange_coupled",
+        ["--require-supercell-report", str(supercell_report)],
+    )
+
+    assert result.returncode != 0
+    assert "must match relaxation_state_comparability.mean_l2_deviation_relative_error" in result.stderr
+
+
 def test_validator_rejects_required_supercell_report_without_scaled_geometry(tmp_path: Path) -> None:
     log_path = write_summary_fixture(tmp_path, scenario="exchange_coupled", coupled=True)
     supercell_report = tmp_path / "reports" / "supercell_validation.v1.json"
@@ -1134,7 +1651,25 @@ def test_validator_rejects_negative_demag_energy(tmp_path: Path) -> None:
     result = run_validator(log_path, "exchange_coupled")
 
     assert result.returncode != 0
-    assert "E_demag must be non-negative" in result.stderr
+    assert "E_demag must be non-negative within 1.0e-24 J numerical noise" in result.stderr
+
+
+def test_validator_accepts_tiny_negative_demag_energy_roundoff(tmp_path: Path) -> None:
+    log_path = write_summary_fixture(tmp_path, scenario="uniform_slab", coupled=True, engine="gpu")
+    artifact_dir = tmp_path / "artifacts"
+    metadata = json.loads((artifact_dir / "metadata.json").read_text(encoding="utf-8"))
+    metadata["fem_gpu_relaxation_qualification"]["final_energy_terms_j"]["E_demag"] = -1.0e-25
+    (artifact_dir / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+    scalars_path = artifact_dir / "scalars.csv"
+    lines = scalars_path.read_text(encoding="utf-8").splitlines()
+    final_columns = lines[-1].split(",")
+    final_columns[7] = "-1.000000e-25"
+    lines[-1] = ",".join(final_columns)
+    scalars_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    result = run_validator(log_path, "uniform_slab", engine="gpu")
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_validator_rejects_gpu_without_device_poisson(tmp_path: Path) -> None:

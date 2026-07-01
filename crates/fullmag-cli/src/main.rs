@@ -435,6 +435,10 @@ fn is_script_mode(raw_args: &[OsString]) -> bool {
         "--mode",
         "--precision",
         "--output-dir",
+        "--initial-magnetization-state",
+        "--initial-magnetization-state-format",
+        "--initial-magnetization-state-dataset",
+        "--initial-magnetization-state-sample-index",
         "--workspace-root",
         "--web-port",
     ];
@@ -1202,6 +1206,24 @@ mod tests {
             cli.command,
             Command::Runtime(RuntimeCommand::FemAvailability { json: true })
         ));
+    }
+
+    #[test]
+    fn script_mode_accepts_initial_magnetization_state_flag() {
+        let args = vec![
+            OsString::from("fullmag"),
+            OsString::from("--headless"),
+            OsString::from("--initial-magnetization-state"),
+            OsString::from("states/m_repeated_unit.json"),
+            OsString::from("examples/fem_periodic_antidot_relax_exchange_coupled_supercell_3x3.py"),
+        ];
+
+        assert!(is_script_mode(&args));
+        let parsed = ScriptCli::try_parse_from(args).expect("script args should parse");
+        assert_eq!(
+            parsed.initial_magnetization_state.as_deref(),
+            Some(std::path::Path::new("states/m_repeated_unit.json"))
+        );
     }
 
     #[test]

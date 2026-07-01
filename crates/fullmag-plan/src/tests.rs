@@ -2513,8 +2513,8 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
         node_a: 0,
         node_b: 3,
     }];
-    let z_demag_planned = plan(&z_demag_ir)
-        .expect("single-axis z FEM demag PBC with open x/y airbox should plan");
+    let z_demag_planned =
+        plan(&z_demag_ir).expect("single-axis z FEM demag PBC with open x/y airbox should plan");
     match z_demag_planned.backend_plan {
         BackendPlanIR::Fem(fem) => {
             assert!(fem.enable_demag);

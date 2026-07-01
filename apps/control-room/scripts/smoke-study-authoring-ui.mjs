@@ -486,7 +486,17 @@ async function verifyFrequencyDomainModalResults() {
   await inspector
     .locator('[data-inspector-surface="eigen-mode"]')
     .waitFor({ state: "visible", timeout: timeoutMs });
-  await inspector.getByText("Selected Eigen Mode").waitFor({
+  await inspector.getByRole("heading", {
+    exact: true,
+    name: "Eigen Mode Control",
+  }).waitFor({
+    state: "visible",
+    timeout: timeoutMs,
+  });
+  await inspector.getByRole("heading", {
+    exact: true,
+    name: "Eigen Mode 3D Visualization",
+  }).waitFor({
     state: "visible",
     timeout: timeoutMs,
   });
@@ -499,7 +509,7 @@ async function verifyFrequencyDomainModalResults() {
     });
   const plotButton = inspector.getByRole("button", {
     exact: true,
-    name: "Plot mode rotated",
+    name: "Plot selected eigen mode with phase-rotated real display",
   });
   await plotButton.waitFor({
     state: "visible",
@@ -541,7 +551,10 @@ async function verifyFrequencyDomainResponseResults() {
   const plotButton = inspector
     .locator('tr[data-status="ready"]')
     .filter({ hasText: "12.55 GHz" })
-    .getByRole("button", { exact: true, name: "Plot rotated" });
+    .getByRole("button", {
+      exact: true,
+      name: "Plot this response field with phase-rotated real display at 12.55 GHz",
+    });
   await plotButton.waitFor({ state: "visible", timeout: timeoutMs });
   if (!(await plotButton.isEnabled())) {
     throw new Error("FMR response field 3D visualization button is disabled.");
@@ -1043,10 +1056,16 @@ async function assertHysteresisChildInspectors(stageId) {
   );
   await liveRunNode.waitFor({ state: "visible", timeout: timeoutMs });
   await clickExplorerRow(liveRunNode);
-  await inspector.getByText("Live Progress").waitFor({
-    state: "visible",
-    timeout: timeoutMs,
-  });
+  try {
+    await inspector.getByText("Live Progress").waitFor({
+      state: "visible",
+      timeout: timeoutMs,
+    });
+  } catch (error) {
+    throw new Error(
+      `Hysteresis live-run inspector did not show Live Progress. ${await inspectorDebugSnapshot()}. ${error}`,
+    );
+  }
   await inspector.getByText("Measurement Plan").waitFor({
     state: "hidden",
     timeout: timeoutMs,
@@ -1286,48 +1305,81 @@ function makeFrequencyResponseFieldVectorBuffer() {
 
 async function waitForEigenModeFieldVectorRequest() {
   const deadline = Date.now() + timeoutMs;
-  while (fieldVectorRequests.length === 0 && Date.now() < deadline) {
+  let request = matchingPhaseRotatedRequest(fieldVectorRequests, "0");
+  while (!request && Date.now() < deadline) {
     await page.waitForTimeout(50);
+    request = matchingPhaseRotatedRequest(fieldVectorRequests, "0");
   }
-  const request = fieldVectorRequests.at(-1);
   if (!request) {
-    throw new Error("Plot mode rotated did not request the eigen-mode field.");
-  }
-  const expectedQuery = "view=phase_rotated_real";
-  if (
-    request.searchParams.get("component") !== "full" ||
-    request.searchParams.get("scope_kind") !== "full" ||
-    request.searchParams.get("view") !== "phase_rotated_real" ||
-    request.searchParams.get("phase_rad") !== "0"
-  ) {
     throw new Error(
-      `Eigen-mode field request is missing ${expectedQuery}: ${request.href}`,
+      "Plot selected eigen mode with phase-rotated real display did not request the eigen-mode field.",
     );
   }
 }
 
 async function waitForFrequencyResponseFieldVectorRequest() {
   const deadline = Date.now() + timeoutMs;
-  while (responseFieldVectorRequests.length === 0 && Date.now() < deadline) {
+  let request = matchingPhaseRotatedRequest(responseFieldVectorRequests, "0.08");
+  while (!request && Date.now() < deadline) {
     await page.waitForTimeout(50);
+    request = matchingPhaseRotatedRequest(responseFieldVectorRequests, "0.08");
   }
-  const request = responseFieldVectorRequests.at(-1);
   if (!request) {
     throw new Error(
       "Plot rotated did not request the driven FMR response field.",
     );
   }
-  const expectedQuery = "view=phase_rotated_real";
-  if (
-    request.searchParams.get("component") !== "full" ||
-    request.searchParams.get("scope_kind") !== "full" ||
-    request.searchParams.get("view") !== "phase_rotated_real" ||
-    request.searchParams.get("phase_rad") !== "0.08"
-  ) {
-    throw new Error(
-      `Driven FMR response field request is missing ${expectedQuery}: ${request.href}`,
-    );
-  }
+}
+
+function matchingPhaseRotatedRequest(requests, phaseRad) {
+  return requests.findLast(
+    (request) =>
+      request.searchParams.get("component") === "full" &&
+      request.searchParams.get("scope_kind") === "full" &&
+      request.searchParams.get("view") === "phase_rotated_real" &&
+      request.searchParams.get("phase_rad") === phaseRad,
+  );
+}
+
+async function inspectorDebugSnapshot() {
+  const inspector = page.locator(".fm-inspector");
+  const text =
+    (await inspector.count()) > 0
+      ? await inspector.textContent({ timeout: 1_000 }).catch((error) =>
+          error instanceof Error ? error.message : String(error),
+        )
+      : "inspector not mounted";
+  const panel = inspector.locator(".fm-inspector-panel").first();
+  const attrs =
+    (await panel.count()) > 0
+      ? await panel.evaluate((node) => {
+          const element = node instanceof HTMLElement ? node : null;
+          return {
+            sceneRevision: element?.dataset.sceneRevision ?? null,
+            sceneStageCount: element?.dataset.sceneStageCount ?? null,
+            sceneStatus: element?.dataset.sceneStatus ?? null,
+            stageDraftCount: element?.dataset.stageDraftCount ?? null,
+          };
+        }).catch((error) => ({
+          error: error instanceof Error ? error.message : String(error),
+        }))
+      : { mounted: false };
+  const selectedRows = await page
+    .locator('.fm-explorer [aria-selected="true"]')
+    .evaluateAll((nodes) =>
+      nodes.map((node) =>
+        node instanceof HTMLElement
+          ? {
+              nodeId: node.dataset.nodeId ?? null,
+              text: node.textContent?.trim().slice(0, 200) ?? "",
+            }
+          : null,
+      ),
+    )
+    .catch((error) => [
+      { error: error instanceof Error ? error.message : String(error) },
+    ]);
+  return `Inspector attrs: ${JSON.stringify(attrs)}. Selected rows: ${JSON.stringify(selectedRows)}. Browser errors: ${JSON.stringify(errors)}. Failed responses: ${JSON.stringify(failedResponses)}. Inspector text: ${JSON.stringify(text?.slice(0, 3000))}`;
 }
 
 async function assertStableViewport3DCanvas() {
