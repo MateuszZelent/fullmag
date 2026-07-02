@@ -3623,6 +3623,11 @@ mod tests {
             "fem/relax/preview.rs must own native FEM relaxation cached-preview helpers"
         );
         assert!(
+            module.contains("pub(crate) fn build_fem_final_cached_preview_fields")
+                && module.contains("quantity_ids.push(display_selection.selection.quantity.as_str())"),
+            "fem/relax/preview.rs must own final cached-preview flushing that includes the active vector field"
+        );
+        assert!(
             module.contains("struct FemCachedPreviewHandoff")
                 && module.contains("request_cached_previews(")
                 && module.contains("snapshot.is_ready()"),
@@ -3661,6 +3666,11 @@ mod tests {
         assert!(
             finalize.contains("engine: FemEngine") && !finalize.contains("FemEngine::CpuNative,"),
             "FEM relaxation finalization must use the resolved engine for cached-preview flushes"
+        );
+        assert!(
+            finalize.contains("build_fem_final_cached_preview_fields(")
+                && !finalize.contains("build_fem_cached_preview_fields("),
+            "FEM relaxation finalization must flush active and inactive cached preview fields"
         );
     }
 

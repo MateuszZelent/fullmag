@@ -200,6 +200,7 @@ describe("analysis field overlay commands", () => {
       shaderMonoColor: "#44ccff",
       surfaceColorSource: "component_z",
     });
+    expect(overlay.getSnapshot()?.query.component).toBe("full");
   });
 
   it("reuses active mode-field appearance when switching analysis fields", async () => {

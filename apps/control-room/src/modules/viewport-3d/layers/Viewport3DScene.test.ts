@@ -9,6 +9,7 @@ import {
   resolveViewport3DProjectionCameraClip,
   resolveViewport3DOrthographicCameraFrame,
   resolveViewport3DOrthographicZoom,
+  hasExplicitVisibleRegionSettings,
   resolveNextViewport3DModelLayerStage,
   resolveAuthoredRegionOverlayVisibility,
   resolveViewport3DModelLayerStageVisibility,
@@ -515,5 +516,34 @@ describe("Viewport3DScene region overlay visibility", () => {
         overlayLayersEnabled: false,
       }),
     ).toBe(false);
+  });
+
+  it("lets explicit inspector region visibility mount overlays even when global mode is off", () => {
+    expect(
+      resolveAuthoredRegionOverlayVisibility({
+        explicitRegionSettingsVisible: true,
+        hasMeshBackedRegionOverlays: false,
+        overlayLayersEnabled: true,
+        realizedBuildStatus: "disabled",
+        regionOverlayMode: "off",
+        stageVisible: true,
+      }),
+    ).toBe(true);
+    expect(
+      resolveAuthoredRegionOverlayVisibility({
+        explicitRegionSettingsVisible: true,
+        hasMeshBackedRegionOverlays: false,
+        overlayLayersEnabled: false,
+        realizedBuildStatus: "disabled",
+        regionOverlayMode: "off",
+        stageVisible: true,
+      }),
+    ).toBe(false);
+    expect(
+      hasExplicitVisibleRegionSettings([
+        ["film:core", { visible: false } as never],
+        ["film:shell", { visible: true } as never],
+      ]),
+    ).toBe(true);
   });
 });

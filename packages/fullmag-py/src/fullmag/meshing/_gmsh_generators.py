@@ -69,20 +69,26 @@ def _algorithm_3d_name(algorithm: int) -> str:
     }.get(int(algorithm), str(int(algorithm)))
 
 
-def _stl_boundary_recovery_retry_algorithm(
+def _stl_meshing_retry_algorithm(
     algorithm_3d: int,
     attempted_algorithms: set[int],
     exc: Exception,
 ) -> int | None:
     message = str(exc)
-    if (
-        "PLC Error" not in message
-        and "segment and a facet intersect" not in message
-        and "Recovering boundary" not in message
-    ):
+    is_boundary_recovery_failure = (
+        "PLC Error" in message
+        or "segment and a facet intersect" in message
+        or "Recovering boundary" in message
+        or "Invalid boundary mesh" in message
+        or "overlapping facets" in message
+    )
+    is_algorithm_failure = "3D mesh failed" in message
+    if not is_boundary_recovery_failure and not is_algorithm_failure:
         return None
 
-    if int(algorithm_3d) == ALGO_3D_DELAUNAY:
+    if is_algorithm_failure and int(algorithm_3d) == ALGO_3D_HXT:
+        candidates = (ALGO_3D_DELAUNAY, ALGO_3D_FRONTAL)
+    elif int(algorithm_3d) == ALGO_3D_DELAUNAY:
         candidates = (ALGO_3D_HXT, ALGO_3D_FRONTAL)
     elif int(algorithm_3d) == ALGO_3D_HXT:
         candidates = (ALGO_3D_FRONTAL,)
@@ -874,20 +880,37 @@ def _build_stl_volume_model(
     """
     from collections import defaultdict
 
-    emit_progress("Gmsh: importing STL surface")
-    gmsh.merge(str(path))
     angle = 40.0 * math.pi / 180.0
-    emit_progress("Gmsh: classifying STL surfaces")
-    # Gmsh reparametrization fragments thin lofted STL surfaces into artificial
-    # patches; keep physical facet classification for edge-distance fields.
-    gmsh.model.mesh.classifySurfaces(
-        angle,
-        boundary=True,
-        forReparametrization=False,
-        curveAngle=math.pi,
-    )
-    emit_progress("Gmsh: creating geometry from classified surfaces")
-    gmsh.model.mesh.createGeometry()
+    for reparametrize in (False, True):
+        if reparametrize:
+            emit_progress(
+                "Gmsh: STL geometry recovery failed without reparametrization; retrying with reparametrized surfaces"
+            )
+            gmsh.clear()
+            gmsh.model.add(path.stem)
+        emit_progress("Gmsh: importing STL surface")
+        gmsh.merge(str(path))
+        emit_progress("Gmsh: classifying STL surfaces")
+        # Gmsh reparametrization fragments thin lofted STL surfaces into
+        # artificial patches; keep physical facet classification first and only
+        # reparametrize when Gmsh cannot recover geometry otherwise.
+        gmsh.model.mesh.classifySurfaces(
+            angle,
+            boundary=True,
+            forReparametrization=reparametrize,
+            curveAngle=math.pi,
+        )
+        emit_progress("Gmsh: creating geometry from classified surfaces")
+        try:
+            gmsh.model.mesh.createGeometry()
+            break
+        except Exception as exc:
+            if (
+                not reparametrize
+                and "Wrong topology of boundary mesh for parametrization" in str(exc)
+            ):
+                continue
+            raise
     surfaces = gmsh.model.getEntities(2)
     if not surfaces:
         raise ValueError(f"failed to recover closed surfaces from STL: {path}")
@@ -960,7 +983,7 @@ def _mesh_stl_surface(
                 options=stl_opts,
             )
         except Exception as exc:
-            retry_algorithm = _stl_boundary_recovery_retry_algorithm(
+            retry_algorithm = _stl_meshing_retry_algorithm(
                 int(stl_opts.algorithm_3d),
                 attempted_algorithms,
                 exc,
@@ -968,7 +991,7 @@ def _mesh_stl_surface(
             if retry_algorithm is None:
                 raise
             emit_progress(
-                "Gmsh: STL boundary recovery failed "
+                "Gmsh: STL meshing failed "
                 f"({_algorithm_3d_name(int(stl_opts.algorithm_3d))}: {exc}); "
                 f"retrying with {_algorithm_3d_name(retry_algorithm)}"
             )

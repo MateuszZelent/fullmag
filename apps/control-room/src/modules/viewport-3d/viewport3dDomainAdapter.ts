@@ -2,6 +2,7 @@ import type {
   DomainMetaResource,
   MeshSharedDomainManifestResource,
 } from "@/kernel/api/apiTypes";
+import { visualizationObjectIdForMeshPartLike } from "@/kernel/selection/selectionTypes";
 
 import {
   resolveDomainBounds,
@@ -278,12 +279,13 @@ export function selectionForMeshPart(
   part: MeshPart,
   boundaryFaceIndex: number | null = null,
 ): Viewport3DPartSelection {
+  const objectId = visualizationObjectIdForMeshPartLike(part);
   return {
     boundaryFaceIndex,
     kind: part.role === "air" ? "mesh-part-airbox" : "mesh-part",
     label: part.label,
     nodeId: part.id,
-    objectId: part.object_id ?? null,
+    objectId,
     part,
   };
 }

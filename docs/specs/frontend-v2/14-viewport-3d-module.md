@@ -175,6 +175,15 @@ mode renders the two representations together for comparison. This display mode
 does not mutate physics, rebuild topology, or create a second visualization API
 store.
 
+Region overlay mode is diagnostic geometry/realization state, not physical field
+visualization state. Overlay surfaces may use uniform materials to show authored,
+realized, or projected region ownership. They must not be presented as HSL,
+component, scalar colormap, or vector-field rendering. Physical region field
+visualization uses the normal target registry and must resolve a region target
+through current manifest `mesh_part_ids` into mesh-part render-model carriers.
+Projection memberships and authored primitive overlays remain diagnostic-only
+unless a future OpenAPI/runtime contract promotes them to field-capable carriers.
+
 Newly committed objects render in primitive display immediately after `model/scene` refreshes. They must not wait for solver topology. If wireframe is enabled before a mesh exists, the layer renders a simplified procedural wireframe derived from primitive parameters and transform, and marks it as primitive/fallback. Mesh edges are used only when object topology is current for the scene revision.
 
 Field, scalar, and vector layers never attach to primitive fallback geometry. They attach only to current solver topology and published field resources.

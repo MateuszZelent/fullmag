@@ -79,6 +79,7 @@ import {
 } from "./panels/frequency-domain/FrequencyDomainResultInspectors";
 import { GeometryObjectPanel } from "./panels/GeometryObjectPanel";
 import { MeshDetailsPanel } from "./panels/MeshDetailsPanel";
+import { ModeVisualizationInspectorPanel } from "./panels/ModeVisualizationInspectorPanel";
 import { ObjectGeneralPanel } from "./panels/ObjectGeneralPanel";
 import { ObjectMagneticTexturePanel } from "./panels/ObjectMagneticTexturePanel";
 import { ObjectMaterialPanel } from "./panels/ObjectMaterialPanel";
@@ -464,6 +465,17 @@ const PANELS: InspectorPanelContribution[] = [
       "mesh-part",
     ],
     component: ObjectVisualizationPanel,
+  },
+  {
+    id: "object-mode-visualization",
+    title: "Mode Visualization",
+    selectionKinds: [
+      "object.mode_visualization",
+      "object.mode_visualization.group",
+      "object.mode_visualization.field",
+      "object.mode_visualization.view",
+    ],
+    component: ModeVisualizationInspectorPanel,
   },
   {
     id: "physics-interaction",

@@ -6,7 +6,7 @@
 use fullmag_ir::FemPlanIR;
 
 use crate::dispatch::{flatten_vectors, FemEngine};
-use crate::interactive_runtime::cached_preview_quantities_for;
+use crate::interactive_runtime::{cached_preview_quantities_for, display_is_global_scalar};
 use crate::native_fem::{NativeFemBackend, NativeFemFieldSnapshot, NativeFemPreviewSnapshot};
 use crate::quantities::active_fem_preview_quantities;
 use crate::types::{LivePreviewField, LivePreviewRequest, RunError};
@@ -259,6 +259,48 @@ pub(crate) fn build_fem_cached_preview_fields(
         plan,
         &cached_preview_quantities_for(display_selection),
     );
+    if quantities.is_empty() {
+        return None;
+    }
+    let base_request = display_selection.preview_request();
+    let mut cached = Vec::new();
+    for quantity in quantities {
+        let mut req = base_request.clone();
+        req.quantity = quantity.to_string();
+        match build_fem_live_preview_field(backend, &req, node_count) {
+            Ok(field) => cached.push(field),
+            Err(_) => { /* quantity not computed yet - skip */ }
+        }
+    }
+    if cached.is_empty() {
+        None
+    } else {
+        Some(cached)
+    }
+}
+
+/// Build final FEM preview cache for all cacheable quantities, including the
+/// currently active vector field.
+///
+/// During live stepping the active field is delivered through `preview_field`,
+/// so `build_fem_cached_preview_fields` intentionally excludes it. At stage
+/// finalization there may be no later active preview update before the next
+/// solver phase starts, so the final handoff must persist the active field too.
+pub(crate) fn build_fem_final_cached_preview_fields(
+    backend: &NativeFemBackend,
+    engine: FemEngine,
+    display_selection: &crate::DisplaySelectionState,
+    plan: &FemPlanIR,
+    node_count: usize,
+) -> Option<Vec<LivePreviewField>> {
+    let mut quantity_ids = cached_preview_quantities_for(display_selection);
+    if !display_is_global_scalar(display_selection) {
+        quantity_ids.push(display_selection.selection.quantity.as_str());
+    }
+    quantity_ids.sort_unstable();
+    quantity_ids.dedup();
+
+    let quantities = active_fem_preview_quantities(engine, plan, &quantity_ids);
     if quantities.is_empty() {
         return None;
     }

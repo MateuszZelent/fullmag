@@ -714,12 +714,13 @@ def _drop_degenerate_tetrahedra(
     emit_progress(
         f"{context}: removed {removed} degenerate tetrahedra below strict volume threshold"
     )
+    boundary_faces, boundary_markers = _boundary_faces_for_kept_elements(mesh, keep)
     return MeshData(
         nodes=mesh.nodes,
         elements=mesh.elements[keep],
         element_markers=mesh.element_markers[keep],
-        boundary_faces=mesh.boundary_faces,
-        boundary_markers=mesh.boundary_markers,
+        boundary_faces=boundary_faces,
+        boundary_markers=boundary_markers,
         periodic_boundary_pairs=mesh.periodic_boundary_pairs,
         periodic_node_pairs=mesh.periodic_node_pairs,
         quality=mesh.quality,
@@ -793,6 +794,44 @@ def _surface_trimesh_kwargs_for_geometry(
         if surface_hmax is not None:
             kwargs["surface_maximum_element_size"] = surface_hmax
     return kwargs
+
+
+def _sanitize_surface_mesh_for_stl_export(surface: object) -> object:
+    mesh = surface.copy() if hasattr(surface, "copy") else surface
+    if hasattr(mesh, "remove_unreferenced_vertices"):
+        mesh.remove_unreferenced_vertices()
+    if hasattr(mesh, "merge_vertices"):
+        mesh.merge_vertices(digits_vertex=15)
+
+    faces = getattr(mesh, "faces", None)
+    if faces is None:
+        return mesh
+    face_array = np.asarray(faces)
+    if face_array.ndim != 2 or face_array.shape[1] < 3 or face_array.shape[0] == 0:
+        return mesh
+
+    triangle_faces = face_array[:, :3]
+    nondegenerate = np.array(
+        [len(set(int(node) for node in face)) == 3 for face in triangle_faces],
+        dtype=bool,
+    )
+    if np.any(nondegenerate):
+        canonical = np.sort(triangle_faces[nondegenerate], axis=1)
+        _, unique_offsets = np.unique(canonical, axis=0, return_index=True)
+        nondegenerate_indices = np.flatnonzero(nondegenerate)
+        keep_indices = nondegenerate_indices[np.sort(unique_offsets)]
+    else:
+        keep_indices = np.asarray([], dtype=np.int64)
+
+    if keep_indices.shape[0] != face_array.shape[0]:
+        if hasattr(mesh, "update_faces"):
+            mesh.update_faces(keep_indices)
+        else:
+            mesh.faces = face_array[keep_indices]
+        if hasattr(mesh, "remove_unreferenced_vertices"):
+            mesh.remove_unreferenced_vertices()
+
+    return mesh
 
 
 def _surface_preview_to_mesh_data(preview: dict[str, object]) -> MeshData:
@@ -2058,6 +2097,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                         mesh_workflow,
                     ),
                 )
+                comp_mesh = _sanitize_surface_mesh_for_stl_export(comp_mesh)
                 verts = np.asarray(comp_mesh.vertices)
                 b_min = tuple(float(v) for v in verts.min(axis=0))
                 b_max = tuple(float(v) for v in verts.max(axis=0))
@@ -2400,18 +2440,22 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                             )
                         trimesh = _prepare_component_descriptors()
                         component_meshes = [
-                            _geometry_to_trimesh(
-                                g,
-                                trimesh,
-                                **_surface_trimesh_kwargs_for_geometry(
+                            _sanitize_surface_mesh_for_stl_export(
+                                _geometry_to_trimesh(
                                     g,
-                                    surface_trimesh_kwargs,
-                                    mesh_workflow,
-                                ),
-                            ).copy()
+                                    trimesh,
+                                    **_surface_trimesh_kwargs_for_geometry(
+                                        g,
+                                        surface_trimesh_kwargs,
+                                        mesh_workflow,
+                                    ),
+                                )
+                            )
                             for g in geometries
                         ]
-                        combined_surface = trimesh.util.concatenate(component_meshes)
+                        combined_surface = _sanitize_surface_mesh_for_stl_export(
+                            trimesh.util.concatenate(component_meshes)
+                        )
                         surface_path = Path(tmp_dir) / "shared_domain_surface.stl"
                         combined_surface.export(surface_path)
                         from .gmsh_bridge import generate_mesh_from_file

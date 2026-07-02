@@ -4636,8 +4636,8 @@ mod tests {
     use super::{
         analysis_complex_vector_view_values, analysis_frequency_response_view_values,
         decode_complex_f64_pairs_little_endian, is_fem_runtime, parse_analysis_eigen_mode_field_id,
-        parse_analysis_frequency_response_field_id, resolve_field_scope, FieldVectorQuery,
-        ResolvedFieldScopeDomain,
+        parse_analysis_frequency_response_field_id, parse_component, project_values,
+        resolve_field_scope, FieldVectorQuery, ResolvedFieldScopeDomain,
     };
     use crate::session::default_current_live_state;
     use crate::types::CurrentLiveSnapshotRequest;
@@ -4994,6 +4994,27 @@ mod tests {
         assert_eq!(values, vec![5.0, 13.0, 17.0]);
         assert_eq!(n_comp, 3);
         assert_eq!(default_component, Some("full"));
+    }
+
+    #[test]
+    fn frequency_response_real_view_can_project_xyz_components() {
+        let (values, n_comp, default_component) = analysis_frequency_response_view_values(
+            &[
+                1.0, 10.0, 2.0, 20.0, 3.0, 30.0, 4.0, 40.0, 5.0, 50.0, 6.0, 60.0,
+            ],
+            Some("real"),
+            None,
+        )
+        .expect("real vector response view should resolve");
+        let component = parse_component(Some("y"), n_comp).expect("y component is valid");
+        let (out_n_comp, projected) =
+            project_values(&values, n_comp, &component).expect("y projection should resolve");
+
+        assert_eq!(values, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        assert_eq!(n_comp, 3);
+        assert_eq!(default_component, Some("full"));
+        assert_eq!(out_n_comp, 1);
+        assert_eq!(projected, vec![2.0, 5.0]);
     }
 
     #[test]

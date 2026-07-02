@@ -110,6 +110,31 @@ describe("useViewport3DSceneModel", () => {
       .toBe("magnitude");
   });
 
+  it("does not request generic field metadata for analysis mode fields", () => {
+    const requests = resolveViewport3DPartScalarRangeRequests({
+      fieldRenderOptions: {
+        partScalarColorModes: new Map([["film-part", "magnitude"]]),
+      },
+      getPartSettings: () => ({
+        ...DEFAULT_OBJECT_VISUALIZATION,
+        activeQuantityId: "analysis:frequency-response:frequency-0002",
+        shaderVisible: true,
+        visible: true,
+      }),
+      magneticParts: [
+        {
+          part: {
+            geometry_id: "film",
+            id: "film-part",
+            object_id: "film",
+          } as never,
+        },
+      ],
+    });
+
+    expect(requests.size).toBe(0);
+  });
+
   it("subscribes to build diagnostic snapshot versions for live compact diagnostics", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
 
@@ -1959,8 +1984,32 @@ describe("useViewport3DSceneModel", () => {
       }),
     ).toMatchObject({
       shaderVisible: false,
-      vectorsVisible: true,
+      vectorsVisible: false,
       wireframeVisible: false,
+    });
+  });
+
+  it("does not let implicit region defaults hide mesh-backed object parts", () => {
+    const visualization = new ObjectVisualizationController();
+    const part = {
+      id: "part:film:core",
+      label: "Core",
+      object_id: "film",
+    } as never;
+
+    expect(
+      resolveViewport3DPartVisualizationSettings({
+        objectVisualizationSnapshot: visualization.getSnapshot(),
+        part,
+        regionTarget: {
+          id: "region:film:film%3Acore",
+          kind: "region",
+        },
+      }),
+    ).toMatchObject({
+      shaderVisible: true,
+      visible: true,
+      wireframeVisible: true,
     });
   });
 

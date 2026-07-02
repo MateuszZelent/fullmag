@@ -40,6 +40,7 @@ from fullmag.meshing.asset_pipeline import (
     _mesh_options_from_runtime_metadata,
     _resolve_per_object_mesh_options,
     _resolve_effective_shared_domain_targets,
+    _sanitize_surface_mesh_for_stl_export,
     _shared_domain_size_field_default_hmax,
     _shared_domain_local_size_fields,
     _study_universe_airbox_options,
@@ -85,6 +86,7 @@ from fullmag.meshing.gmsh_bridge import (
 )
 from fullmag.meshing._gmsh_generators import (
     _add_airbox_volume_clamp_fields,
+    _build_stl_volume_model,
     _build_stl_volume_model_for_component,
     _sanitize_csg_mesh_options_for_geometries,
     _mesh_stl_surface,
@@ -301,6 +303,94 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(cleaned.elements.tolist(), [[0, 1, 2, 3]])
         self.assertEqual(cleaned.element_markers.tolist(), [7])
         self.assertEqual(fallbacks, ["shared_domain_degenerate_tetra_cleanup"])
+
+    def test_drop_degenerate_tetrahedra_removes_orphan_boundary_faces(self) -> None:
+        mesh = MeshData(
+            nodes=np.asarray(
+                [
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [2.0, 0.0, 0.0],
+                ],
+                dtype=np.float64,
+            ),
+            elements=np.asarray(
+                [
+                    [0, 1, 2, 3],
+                    [0, 1, 2, 4],
+                ],
+                dtype=np.int32,
+            ),
+            element_markers=np.asarray([7, 8], dtype=np.int32),
+            boundary_faces=np.asarray(
+                [
+                    [0, 1, 3],
+                    [0, 1, 4],
+                ],
+                dtype=np.int32,
+            ),
+            boundary_markers=np.asarray([11, 12], dtype=np.int32),
+        )
+
+        cleaned = _drop_degenerate_tetrahedra(
+            mesh,
+            context="test mesh",
+            fallbacks_triggered=[],
+        )
+
+        cleaned.validate_strict()
+        self.assertEqual(cleaned.boundary_faces.tolist(), [[0, 1, 3]])
+        self.assertEqual(cleaned.boundary_markers.tolist(), [11])
+
+    def test_sanitize_surface_mesh_for_stl_export_removes_duplicate_and_degenerate_faces(self) -> None:
+        class _FakeSurface:
+            def __init__(self) -> None:
+                self.vertices = np.asarray(
+                    [
+                        [0.0, 0.0, 0.0],
+                        [1.0, 0.0, 0.0],
+                        [0.0, 1.0, 0.0],
+                        [0.0, 0.0, 1.0],
+                    ],
+                    dtype=np.float64,
+                )
+                self.faces = np.asarray(
+                    [
+                        [0, 1, 2],
+                        [2, 1, 0],
+                        [0, 0, 3],
+                        [0, 2, 3],
+                    ],
+                    dtype=np.int64,
+                )
+                self.merge_vertices_digits: int | None = None
+                self.remove_unreferenced_vertices_called = 0
+
+            def copy(self) -> "_FakeSurface":
+                return self
+
+            def merge_vertices(self, *, digits_vertex: int) -> None:
+                self.merge_vertices_digits = digits_vertex
+
+            def remove_unreferenced_vertices(self) -> None:
+                self.remove_unreferenced_vertices_called += 1
+
+            def update_faces(self, keep_indices: np.ndarray) -> None:
+                self.faces = self.faces[keep_indices]
+
+        surface = _FakeSurface()
+
+        sanitized = _sanitize_surface_mesh_for_stl_export(surface)
+
+        self.assertIs(sanitized, surface)
+        self.assertEqual(surface.merge_vertices_digits, 15)
+        self.assertEqual(surface.remove_unreferenced_vertices_called, 2)
+        np.testing.assert_array_equal(
+            surface.faces,
+            np.asarray([[0, 1, 2], [0, 2, 3]], dtype=np.int64),
+        )
 
     def test_meshdata_validate_strict_rejects_fem_topology_floor_tets(self) -> None:
         mesh = MeshData(
@@ -4637,6 +4727,151 @@ class MeshScaffoldTests(unittest.TestCase):
 
         self.assertIs(result, mesh)
         self.assertEqual(attempted, [ALGO_3D_DELAUNAY, ALGO_3D_HXT])
+
+    def test_stl_surface_meshing_retries_delaunay_after_hxt_failure(self) -> None:
+        mesh = self._unit_tet_mesh()
+        attempted: list[int] = []
+
+        def _fake_stl_once(*_args: object, **kwargs: object) -> MeshData:
+            options = kwargs.get("options")
+            self.assertIsInstance(options, MeshOptions)
+            attempted.append(int(options.algorithm_3d))
+            if len(attempted) == 1:
+                raise Exception("HXT 3D mesh failed")
+            return mesh
+
+        with patch(
+            "fullmag.meshing._gmsh_generators._mesh_stl_surface_once",
+            side_effect=_fake_stl_once,
+        ):
+            result = _mesh_stl_surface(
+                Path("shape.stl"),
+                hmax=100e-9,
+                order=1,
+                options=MeshOptions(algorithm_3d=ALGO_3D_HXT),
+            )
+
+        self.assertIs(result, mesh)
+        self.assertEqual(attempted, [ALGO_3D_HXT, ALGO_3D_DELAUNAY])
+
+    def test_stl_surface_meshing_retries_frontal_after_hxt_and_delaunay_boundary_failures(self) -> None:
+        mesh = self._unit_tet_mesh()
+        attempted: list[int] = []
+
+        def _fake_stl_once(*_args: object, **kwargs: object) -> MeshData:
+            options = kwargs.get("options")
+            self.assertIsInstance(options, MeshOptions)
+            attempted.append(int(options.algorithm_3d))
+            if len(attempted) == 1:
+                raise Exception("HXT 3D mesh failed")
+            if len(attempted) == 2:
+                raise Exception("Invalid boundary mesh (overlapping facets) on surface 2 surface 120")
+            return mesh
+
+        with patch(
+            "fullmag.meshing._gmsh_generators._mesh_stl_surface_once",
+            side_effect=_fake_stl_once,
+        ):
+            result = _mesh_stl_surface(
+                Path("shape.stl"),
+                hmax=100e-9,
+                order=1,
+                options=MeshOptions(algorithm_3d=ALGO_3D_HXT),
+            )
+
+        self.assertIs(result, mesh)
+        self.assertEqual(
+            attempted,
+            [ALGO_3D_HXT, ALGO_3D_DELAUNAY, ALGO_3D_FRONTAL],
+        )
+
+    def test_stl_volume_model_retries_geometry_recovery_with_reparametrization(self) -> None:
+        test_case = self
+
+        class _FakeMesh:
+            def __init__(self) -> None:
+                self.classify_reparametrize: list[bool] = []
+                self.create_calls = 0
+
+            def classifySurfaces(
+                self,
+                _angle: float,
+                *,
+                boundary: bool,
+                forReparametrization: bool,
+                curveAngle: float,
+            ) -> None:
+                test_case.assertTrue(boundary)
+                test_case.assertGreater(curveAngle, 0.0)
+                self.classify_reparametrize.append(forReparametrization)
+
+            def createGeometry(self) -> None:
+                self.create_calls += 1
+                if self.create_calls == 1:
+                    raise Exception("Wrong topology of boundary mesh for parametrization")
+
+        class _FakeGeo:
+            def __init__(self) -> None:
+                self.synchronized = False
+
+            def addSurfaceLoop(self, tags: list[int]) -> int:
+                test_case.assertEqual(tags, [5])
+                return 6
+
+            def addVolume(self, loops: list[int]) -> int:
+                test_case.assertEqual(loops, [6])
+                return 7
+
+            def synchronize(self) -> None:
+                self.synchronized = True
+
+        class _FakeModel:
+            def __init__(self) -> None:
+                self.mesh = _FakeMesh()
+                self.geo = _FakeGeo()
+                self.added: list[str] = []
+
+            def add(self, name: str) -> None:
+                self.added.append(name)
+
+            def getEntities(self, dim: int) -> list[tuple[int, int]]:
+                return [(2, 5)] if dim == 2 else []
+
+            def getBoundary(
+                self,
+                _entities: list[tuple[int, int]],
+                *,
+                oriented: bool,
+            ) -> list[tuple[int, int]]:
+                test_case.assertFalse(oriented)
+                return []
+
+        class _FakeGmsh:
+            def __init__(self) -> None:
+                self.model = _FakeModel()
+                self.clear_calls = 0
+                self.merged: list[str] = []
+
+            def merge(self, path: str) -> None:
+                self.merged.append(path)
+
+            def clear(self) -> None:
+                self.clear_calls += 1
+
+        fake_gmsh = _FakeGmsh()
+
+        volumes, surfaces = _build_stl_volume_model(fake_gmsh, Path("shape.stl"))
+
+        self.assertEqual(volumes, [7])
+        self.assertEqual(surfaces, [5])
+        self.assertEqual(fake_gmsh.clear_calls, 1)
+        self.assertEqual(fake_gmsh.merged, ["shape.stl", "shape.stl"])
+        self.assertEqual(fake_gmsh.model.added, ["shape"])
+        self.assertEqual(
+            fake_gmsh.model.mesh.classify_reparametrize,
+            [False, True],
+        )
+        self.assertTrue(fake_gmsh.model.geo.synchronized)
 
     @unittest.skip("Skipped due to known Gmsh C++ Delaunay intersections on complex nanoflower STL boundaries")
     def test_two_nanoflower_shared_domain_hmax_changes_total_tetra_count(self) -> None:

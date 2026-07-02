@@ -4,8 +4,12 @@ import type {
   FieldMetaQuery,
   MeshSharedDomainManifestResource,
 } from "@/kernel/api/apiTypes";
-import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
 import {
+  visualizationObjectIdForMeshPartLike,
+  visualizationTargetIdForSceneObject,
+} from "@/kernel/selection/selectionTypes";
+import {
+  isAnalysisFieldQuantityId,
   isMagneticOnlyQuantityId,
   isScalarSpatialQuantityId,
   resolveCanonicalQuantityId,
@@ -119,6 +123,7 @@ export function surfaceColorSourceFieldMetaComponent(
   surfaceColorSource: SurfaceColorSource,
   activeQuantityId: string,
 ): string | null | undefined {
+  if (isAnalysisFieldQuantityId(activeQuantityId)) return undefined;
   switch (surfaceColorSource) {
     case "component_x":
       return "x";
@@ -150,6 +155,7 @@ export function shouldShowSurfaceFieldColorbar(
 
 export function fieldMetaScopeQueryForVisualizationTarget(
   target: VisualizationTargetRef | null | undefined,
+  carrier?: RegionVisualizationCarrier | null,
 ): Pick<FieldMetaQuery, "scope_id" | "scope_kind"> {
   switch (target?.kind) {
     case "object":
@@ -164,6 +170,10 @@ export function fieldMetaScopeQueryForVisualizationTarget(
     case "airbox":
       return { scope_id: null, scope_kind: "airbox" };
     case "region":
+      if (carrier?.kind === "mesh-parts" && carrier.partIds.length === 1) {
+        return { scope_id: carrier.partIds[0] ?? null, scope_kind: "part" };
+      }
+      return { scope_id: null, scope_kind: null };
     case undefined:
       return { scope_id: null, scope_kind: null };
   }
@@ -172,9 +182,10 @@ export function fieldMetaScopeQueryForVisualizationTarget(
 export function objectVisualizationTargetForMeshPart(
   part: NonNullable<MeshSharedDomainManifestResource["mesh_parts"]>[number],
 ): VisualizationTargetRef {
-  return part.object_id
+  const objectId = visualizationObjectIdForMeshPartLike(part);
+  return objectId
     ? {
-        id: visualizationTargetIdForSceneObject(part.object_id),
+        id: visualizationTargetIdForSceneObject(objectId),
         kind: "object",
         label: part.label,
       }
@@ -287,6 +298,19 @@ export const VISUALIZATION_QUANTITY_ITEMS: Array<{
 const FALLBACK_VECTOR_BUDGET_MAX = 4096;
 
 type MeshPart = NonNullable<MeshSharedDomainManifestResource["mesh_parts"]>[number];
+type MeshRegion = NonNullable<MeshSharedDomainManifestResource["regions"]>[number];
+
+export type RegionVisualizationCarrier =
+  | {
+      kind: "mesh-parts";
+      objectId: string;
+      partIds: readonly string[];
+      regionId: string;
+    }
+  | {
+      kind: "unavailable";
+      reason: string;
+    };
 
 export interface VisualizationVectorBudgetRange {
   availableNodeCount: number;
@@ -305,10 +329,12 @@ export interface VisualizationVectorBudgetDiagnostic {
 
 export function resolveVisualizationVectorBudgetRange({
   geometryScope = "full",
+  manifestRegions,
   meshParts,
   target,
 }: {
   geometryScope?: VisualizationGeometryScope;
+  manifestRegions?: readonly MeshRegion[] | null | undefined;
   meshParts: readonly MeshPart[] | null | undefined;
   target: VisualizationTargetRef | null | undefined;
 }): VisualizationVectorBudgetRange {
@@ -316,8 +342,19 @@ export function resolveVisualizationVectorBudgetRange({
     return fallbackVisualizationVectorBudgetRange();
   }
 
+  const carrier = resolveRegionVisualizationCarrier({
+    manifestRegions,
+    target,
+  });
+  if (target.kind === "region" && manifestRegions && carrier?.kind !== "mesh-parts") {
+    return fallbackVisualizationVectorBudgetRange();
+  }
+  const carrierPartIds =
+    carrier?.kind === "mesh-parts" ? new Set(carrier.partIds) : null;
   const matchingParts = meshParts.filter((part) =>
-    meshPartMatchesVisualizationTarget(part, target),
+    carrierPartIds
+      ? carrierPartIds.has(part.id)
+      : meshPartMatchesVisualizationTarget(part, target),
   );
   let exact = true;
   const max = matchingParts.reduce((total, part) => {
@@ -339,6 +376,58 @@ export function resolveVisualizationVectorBudgetRange({
   };
 }
 
+export function resolveRegionVisualizationCarrier({
+  manifestRegions,
+  target,
+}: {
+  manifestRegions?: readonly MeshRegion[] | null | undefined;
+  target: VisualizationTargetRef | null | undefined;
+}): RegionVisualizationCarrier | null {
+  if (target?.kind !== "region") return null;
+  const regionTarget = parseRegionVisualizationTargetId(target.id);
+  if (!regionTarget) {
+    return {
+      kind: "unavailable",
+      reason: "Region target id is not canonical.",
+    };
+  }
+  if (!manifestRegions) {
+    return {
+      kind: "unavailable",
+      reason: "No mesh manifest regions are available.",
+    };
+  }
+
+  for (const region of manifestRegions) {
+    const regionId = region.source_region_candidate_id;
+    if (!regionId || decodeSafe(regionId) !== regionTarget.regionId) continue;
+    const objectMatch = (region.source_object_ids ?? []).some(
+      (objectId) => decodeSafe(objectId) === regionTarget.objectId,
+    );
+    if (!objectMatch) continue;
+    const partIds = (region.mesh_part_ids ?? []).flatMap((partId) =>
+      typeof partId === "string" && partId.trim() ? [partId] : [],
+    );
+    if (partIds.length > 0) {
+      return {
+        kind: "mesh-parts",
+        objectId: regionTarget.objectId,
+        partIds,
+        regionId: regionTarget.regionId,
+      };
+    }
+    return {
+      kind: "unavailable",
+      reason: "Region is not realized as mesh parts.",
+    };
+  }
+
+  return {
+    kind: "unavailable",
+    reason: "Region is not present in the mesh manifest.",
+  };
+}
+
 export function buildVisualizationVectorBudgetDiagnostic({
   requestedBudget,
   vectorBudgetRange,
@@ -353,6 +442,43 @@ export function buildVisualizationVectorBudgetDiagnostic({
     displayedGlyphCount: Math.min(safeBudget, availableNodeCount),
     exact: vectorBudgetRange.exact,
     requestedBudget: safeBudget,
+  };
+}
+
+export function geometryScopeVectorBudgetPatch({
+  currentRange,
+  geometryScope,
+  nextRange,
+  settings,
+}: {
+  currentRange: VisualizationVectorBudgetRange;
+  geometryScope: VisualizationGeometryScope;
+  nextRange: VisualizationVectorBudgetRange;
+  settings: VisualizationTargetSettings;
+}): VisualizationTargetPatch {
+  if (geometryScope === settings.geometryScope) {
+    return { geometryScope };
+  }
+
+  const currentMax = Math.max(currentRange.min, currentRange.max);
+  const nextMax = Math.max(nextRange.min, nextRange.max);
+  if (currentMax <= 0 || nextMax <= 0) {
+    return { geometryScope };
+  }
+
+  const displayedBudget = Math.max(
+    currentRange.min,
+    Math.min(currentMax, Math.floor(settings.vectorBudget)),
+  );
+  const coverage = displayedBudget / currentMax;
+  const nextBudget = Math.max(
+    nextRange.min,
+    Math.min(nextMax, Math.round(nextMax * coverage)),
+  );
+
+  return {
+    geometryScope,
+    vectorBudget: nextBudget,
   };
 }
 
@@ -457,7 +583,35 @@ export function surfaceDisplayPassPatch(
     return { shaderVisible: false };
   }
 
-  return renderModePatch("surface");
+  return {
+    ...renderModePatch("surface"),
+    visible: true,
+  };
+}
+
+export function renderModeDisplayPatch(
+  renderMode: VisualizationTargetSettings["renderMode"],
+): VisualizationTargetPatch {
+  return {
+    ...renderModePatch(renderMode),
+    visible: true,
+  };
+}
+
+export function displayPassTogglePatch(
+  settings: VisualizationTargetSettings,
+  field:
+    | "boundsVisible"
+    | "pointsVisible"
+    | "primitiveVisible"
+    | "vectorsVisible"
+    | "wireframeVisible",
+): VisualizationTargetPatch {
+  const nextVisible = !settings[field];
+  return {
+    [field]: nextVisible,
+    ...(nextVisible ? { visible: true } : {}),
+  };
 }
 
 export function geometryScopeDisplayPatch(
@@ -475,6 +629,7 @@ export function geometryScopeDisplayPatch(
   return {
     ...renderModePatch("surface+edges"),
     geometryScope,
+    visible: true,
   };
 }
 
@@ -570,6 +725,14 @@ function parseRegionVisualizationTargetId(
     };
   } catch {
     return null;
+  }
+}
+
+function decodeSafe(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
   }
 }
 

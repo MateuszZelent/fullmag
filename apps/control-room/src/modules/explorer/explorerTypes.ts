@@ -41,6 +41,10 @@ type ExplorerNodeKind =
   | "object.mesh"
   | "object.extension.topological-charge"
   | "object.visualization"
+  | "object.mode_visualization"
+  | "object.mode_visualization.group"
+  | "object.mode_visualization.field"
+  | "object.mode_visualization.view"
   | "airbox.mesh"
   | "airbox.mesh-quality"
   | "airbox.visualization"
@@ -238,6 +242,8 @@ export interface ExplorerNode {
   fieldRevision?: number | string;
   fmrPeakIndex?: number;
   frequencyIndex?: number;
+  analysisFieldSource?: "eigen-mode" | "frequency-response";
+  analysisFieldView?: string;
   icon?: ExplorerIconToken;
   hysteresisExecutionNodeId?: string;
   hysteresisExecutionNodeKind?: string;

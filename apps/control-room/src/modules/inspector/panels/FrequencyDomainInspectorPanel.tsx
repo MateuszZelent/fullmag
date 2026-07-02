@@ -1,6 +1,6 @@
 "use client";
 
-import { useReducer, useRef } from "react";
+import { useEffect, useMemo, useReducer, useRef } from "react";
 import { Activity, CheckCircle2, Play, RotateCw } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -239,8 +239,11 @@ function maxAbsComplexPairs(value: unknown): number | null {
 
 function formatScalar(value: number | null | undefined, unit = ""): string {
   if (value == null || !Number.isFinite(value)) return "not available";
-  const normalized = Math.abs(value) < 1e-12 ? 0 : value;
-  return `${normalized}${unit}`;
+  if (Math.abs(value) < 1e-12) return `0${unit}`;
+  if (Math.abs(value) >= 1e4 || Math.abs(value) < 1e-3) {
+    return `${value.toExponential(3)}${unit}`;
+  }
+  return `${Number(value.toPrecision(5))}${unit}`;
 }
 
 function analysisFieldViewOptions(
@@ -493,7 +496,28 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
     useRef<HTMLInputElement | null>(null);
   const frequencyDomainRef =
     selection.ref?.type === "frequency-domain" ? selection.ref : null;
+
+  // C6: Sync the phase input from the overlay when animation stops or phase changes externally
+  useEffect(() => {
+    const overlay = activeAnalysisFieldOverlay;
+    if (!overlay) return;
+    const isAnimating = overlay.animation?.animatePhase === true;
+    if (isAnimating) return;
+    const overlayPhase = overlay.visualizationPhaseRad ?? overlay.query?.phase_rad ?? 0;
+    if (analysisFieldPhaseInputRef.current) {
+      analysisFieldPhaseInputRef.current.value = String(overlayPhase);
+    }
+  }, [
+    activeAnalysisFieldOverlay,
+    activeAnalysisFieldOverlay?.visualizationPhaseRad,
+    activeAnalysisFieldOverlay?.animation?.animatePhase,
+  ]);
   const manifest = useFrequencyDomainManifestResource();
+  const data = manifest.data;
+  const manifestPayload = useMemo(
+    () => frequencyDomainManifestPayload(data),
+    [data],
+  );
   const spectrum = useFrequencyDomainEigenSpectrumResource({
     enabled:
       selection.kind?.includes("eigen") ||
@@ -527,13 +551,12 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
       selection.kind?.includes("fmr") ||
       false,
   });
+  const cancelRequestedResourceEnabled =
+    selection.kind?.includes("cancel_requested") ||
+    Boolean(data?.response_cancel_requested?.partial_artifacts_available);
   const responseCancelRequested =
     useFrequencyDomainResponseCancelRequestedResource({
-      enabled:
-        selection.kind?.includes("frequency_response") ||
-        selection.kind?.includes("response") ||
-        selection.kind?.includes("fmr") ||
-        false,
+      enabled: cancelRequestedResourceEnabled,
     });
   const periodicPairs = useMeshPeriodicPairsResource({
     enabled:
@@ -571,31 +594,43 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
         false,
     },
   );
-  const data = manifest.data;
-  const manifestPayload = frequencyDomainManifestPayload(data);
   const manifestPhysics = record(record(manifestPayload)?.physics);
-  const spectrumModel = buildEigenSpectrumChartModel(spectrum.data);
-  const branchesModel = buildEigenBranchesModel(branches.data);
-  const dispersionModel = buildEigenDispersionChartModel(
-    dispersion.data,
-    branchesModel,
+  const spectrumModel = useMemo(
+    () => buildEigenSpectrumChartModel(spectrum.data),
+    [spectrum.data],
   );
-  const responseModel = buildFrequencyResponseChartModel(
-    responseSweep.data,
-    manifestPayload,
+  const branchesModel = useMemo(
+    () => buildEigenBranchesModel(branches.data),
+    [branches.data],
+  );
+  const dispersionModel = useMemo(
+    () => buildEigenDispersionChartModel(dispersion.data, branchesModel),
+    [dispersion.data, branchesModel],
+  );
+  const responseModel = useMemo(
+    () => buildFrequencyResponseChartModel(responseSweep.data, manifestPayload),
+    [responseSweep.data, manifestPayload],
   );
   const responseFieldResources =
     responseFieldResourcesFromManifest(manifestPayload);
-  const fmrPeakModel = buildFmrPeakTableModel({
-    manifestPayload,
-    responseSweep: responseSweep.data,
-    spectrum: spectrum.data,
-  });
-  const fmrComparisonModel = buildFmrModalDrivenComparisonModel({
-    manifestPayload,
-    responseSweep: responseSweep.data,
-    spectrum: spectrum.data,
-  });
+  const fmrPeakModel = useMemo(
+    () =>
+      buildFmrPeakTableModel({
+        manifestPayload,
+        responseSweep: responseSweep.data,
+        spectrum: spectrum.data,
+      }),
+    [manifestPayload, responseSweep.data, spectrum.data],
+  );
+  const fmrComparisonModel = useMemo(
+    () =>
+      buildFmrModalDrivenComparisonModel({
+        manifestPayload,
+        responseSweep: responseSweep.data,
+        spectrum: spectrum.data,
+      }),
+    [manifestPayload, responseSweep.data, spectrum.data],
+  );
   const chartRoute = routeFrequencyDomainCalculationMode(manifestPayload);
   const selectedFieldMeta = responseFieldMeta.data ?? eigenModeFieldMeta.data;
   const selectedFieldId = selectedFieldMeta?.field_id ?? frequencyDomainRef?.fieldId ?? null;

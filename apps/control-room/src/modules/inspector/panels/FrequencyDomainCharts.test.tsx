@@ -51,12 +51,12 @@ describe("FrequencyDomainCharts", () => {
               id: "analysis.frequency-domain:eigen:spectrum:frequency",
               label: "Eigen frequency",
               points: [
-                { rowIndex: 0, x: 1, y: 750 },
-                { rowIndex: 1, x: 2, y: 800 },
-                { rowIndex: 2, x: 3, y: 825 },
-                { rowIndex: 3, x: 4, y: 850 },
-                { rowIndex: 4, x: 5, y: 875 },
-                { rowIndex: 5, x: 6, y: 900 },
+                { rowIndex: 0, x: 750, y: 1 },
+                { rowIndex: 1, x: 800, y: 2 },
+                { rowIndex: 2, x: 825, y: 3 },
+                { rowIndex: 3, x: 850, y: 4 },
+                { rowIndex: 4, x: 875, y: 5 },
+                { rowIndex: 5, x: 900, y: 6 },
               ],
               quantity: "frequency",
               source: {
@@ -66,7 +66,7 @@ describe("FrequencyDomainCharts", () => {
               },
               status: "ready",
               unit: "MHz",
-              xUnit: "mode index",
+              xUnit: "MHz",
             },
           ],
         }}
@@ -244,6 +244,140 @@ describe("FrequencyDomainCharts", () => {
     expect(dispersionHtml).toContain("linewidth 2.8 MHz");
   });
 
+  it("renders response component and quantity controls without mixing chart units", () => {
+    const model = {
+      dataSourceVersion: "response.v2" as const,
+      diagnostics: [],
+      droppedPointCount: 0,
+      points: [
+        {
+          absorbedPowerDensity: 10,
+          amplitude: 2,
+          fieldId: "analysis:frequency-response:frequency-0000",
+          frequencyHz: 9.5e9,
+          frequencyIndex: 0,
+          phaseRad: 0.25,
+          residualNorm: 1e-7,
+          susceptibility: null,
+          observableId: "mx",
+        },
+        {
+          absorbedPowerDensity: 11,
+          amplitude: 3,
+          fieldId: "analysis:frequency-response:frequency-0001",
+          frequencyHz: 9.7e9,
+          frequencyIndex: 1,
+          phaseRad: 0.5,
+          residualNorm: 2e-7,
+          susceptibility: null,
+          observableId: "mx",
+        },
+        {
+          absorbedPowerDensity: 12,
+          amplitude: 4,
+          fieldId: "analysis:frequency-response:frequency-0002",
+          frequencyHz: 9.9e9,
+          frequencyIndex: 2,
+          phaseRad: 0.75,
+          residualNorm: 3e-7,
+          susceptibility: null,
+          observableId: "mx",
+        },
+        {
+          absorbedPowerDensity: 13,
+          amplitude: 5,
+          fieldId: "analysis:frequency-response:frequency-0003",
+          frequencyHz: 10.1e9,
+          frequencyIndex: 3,
+          phaseRad: 1,
+          residualNorm: 4e-7,
+          susceptibility: null,
+          observableId: "mx",
+        },
+        {
+          absorbedPowerDensity: 14,
+          amplitude: 6,
+          fieldId: "analysis:frequency-response:frequency-0004",
+          frequencyHz: 10.3e9,
+          frequencyIndex: 4,
+          phaseRad: 1.25,
+          residualNorm: 5e-7,
+          susceptibility: null,
+          observableId: "mx",
+        },
+        {
+          absorbedPowerDensity: 20,
+          amplitude: 7,
+          fieldId: "analysis:frequency-response:frequency-0005",
+          frequencyHz: 10.5e9,
+          frequencyIndex: 5,
+          phaseRad: 1.5,
+          residualNorm: 6e-7,
+          susceptibility: null,
+          observableId: "my",
+        },
+      ],
+      series: [
+        {
+          id: "analysis.frequency-domain:response:amplitude",
+          label: "Amplitude",
+          points: [
+            { rowIndex: 0, x: 9.5, y: 2 },
+            { rowIndex: 1, x: 9.7, y: 3 },
+            { rowIndex: 2, x: 9.9, y: 4 },
+            { rowIndex: 3, x: 10.1, y: 5 },
+            { rowIndex: 4, x: 10.3, y: 6 },
+            { rowIndex: 5, x: 10.5, y: 7 },
+          ],
+          quantity: "amplitude",
+          source: {
+            kind: "analysis.frequency_domain" as const,
+            resourceKey: "analysis/frequency-domain/response/magnetic-sweep",
+            tableId: "frequency-domain:response-sweep",
+          },
+          status: "ready" as const,
+          unit: "a.u.",
+          xUnit: "GHz",
+        },
+        {
+          id: "analysis.frequency-domain:response:phase",
+          label: "Phase",
+          points: [
+            { rowIndex: 0, x: 9.5, y: 0.25 },
+            { rowIndex: 1, x: 9.7, y: 0.5 },
+            { rowIndex: 2, x: 9.9, y: 0.75 },
+            { rowIndex: 3, x: 10.1, y: 1 },
+            { rowIndex: 4, x: 10.3, y: 1.25 },
+            { rowIndex: 5, x: 10.5, y: 1.5 },
+          ],
+          quantity: "phase",
+          source: {
+            kind: "analysis.frequency_domain" as const,
+            resourceKey: "analysis/frequency-domain/response/magnetic-sweep",
+            tableId: "frequency-domain:response-sweep",
+          },
+          status: "ready" as const,
+          unit: "rad",
+          xUnit: "GHz",
+        },
+      ],
+    };
+    const html = renderToStaticMarkup(
+      <FrequencyDomainResponseChart model={model} />,
+    );
+    const option = buildFrequencyDomainSeriesOption(model.series, "frequency");
+
+    expect(html).toContain("Response component");
+    expect(html).toContain("mx");
+    expect(html).toContain("my");
+    expect(html).toContain("Chart quantity");
+    expect(html).toContain("Amplitude");
+    expect(html).toContain("Phase");
+    expect(html).toContain("Plot response field 4 at 10.3 GHz");
+    expect(Array.isArray(option.series) ? option.series : []).toHaveLength(1);
+    expect(option.yAxis).toEqual(expect.objectContaining({ name: "Amplitude [a.u.]" }));
+  });
+
   it("highlights the selected spectrum mode without changing point identity", () => {
     const option = buildSpectrumOption(
       [
@@ -272,27 +406,23 @@ describe("FrequencyDomainCharts", () => {
       ],
       "GHz",
     );
-    const series = Array.isArray(option.series) ? option.series[0] : null;
+    // The new spectrum chart uses scatter instead of bar, with frequency on x-axis
+    const allSeries = Array.isArray(option.series) ? option.series : [];
+    // Find the Modes scatter series (last one, or the one without envelope data)
+    const modesSeries = allSeries.find(
+      (s) => (s as { name?: string }).name === "Modes",
+    );
 
-    expect(series).toEqual(
+    expect(modesSeries).toEqual(
       expect.objectContaining({
         data: [
-          expect.objectContaining({ value: [3, 7.5, 0] }),
+          expect.objectContaining({ value: [7.5, 1, 0] }),
           expect.objectContaining({
             itemStyle: expect.objectContaining({ borderWidth: 2 }),
-            value: [4, 8.25, 1],
+            value: [8.25, 1, 1],
           }),
         ],
-      }),
-    );
-    expect(Array.isArray(option.yAxis) ? option.yAxis[1] : null).toEqual(
-      expect.objectContaining({ name: "Residual" }),
-    );
-    expect(Array.isArray(option.series) ? option.series[1] : null).toEqual(
-      expect.objectContaining({
-        name: "Residual",
-        type: "line",
-        yAxisIndex: 1,
+        type: "scatter",
       }),
     );
   });

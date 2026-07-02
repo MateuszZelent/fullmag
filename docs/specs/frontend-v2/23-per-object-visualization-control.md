@@ -8,6 +8,7 @@
 Every renderable visualization target can be configured independently:
 
 - each scene object, including multi-ferromagnet models;
+- each realized object region, when it has a mesh-backed carrier;
 - airbox visualization;
 - future 2D slice/projection views for the same targets.
 
@@ -20,13 +21,28 @@ Canonical target ids:
 | Target | Id |
 |---|---|
 | Scene object | `object:<object_id>` |
+| Object region | `region:<object_id>:<url_encoded_region_id>` |
 | Airbox | `airbox` |
 | Mesh part fallback | `part:<part_id>` only when no object id exists |
 | Future 2D mode-specific override | `<target_id>:2d:<mode>` if required by the 2D backend |
 
 Object ids come from scene/model resources and mesh manifests. Airbox is never treated as a scene object.
+Region target ids refer to authored object-region intent, but physical field
+visualization for a region is available only when the current mesh manifest maps
+that region to realized `mesh_part_ids`. The near-term data-plane carrier for a
+region is therefore `region target -> manifest region -> mesh part id(s)`, not a
+frontend-only `scope_kind=region`. If no manifest-backed mesh parts exist, region
+field visualization must be reported as unavailable or degraded; authored and
+projection overlays may still be shown as diagnostic overlays.
 
 When a new object is committed but no current mesh exists yet, the target id still exists as `object:<object_id>`. Its default display uses primitive surface plus simplified wireframe fallback in Geometry context. Target visualization state must not imply that solver topology or field data exists.
+
+Region defaults are intentionally safer than object defaults. A region target is
+hidden by default: surface, wireframe, points, vectors, primitive display, and
+master visibility start inactive. Region targets may inherit object quantity,
+palette, and style as baseline values, but the active display passes remain off
+until the user explicitly enables the region target. Selecting a region must not
+silently enable a region-colored overlay.
 
 ## 3. State Ownership
 
@@ -50,6 +66,12 @@ The registry stores only small display preferences:
 - render mode summary for ribbon menus.
 
 It must not store topology, field arrays, mesh manifests, scene documents, or backend runtime snapshots.
+
+Diagnostic region overlay mode is not the same state as region field
+visualization. Authored, realized, and comparison overlays describe region
+geometry/realization status. They must not be interpreted as `m`, `mx`, HSL, or
+other physical field coloring unless the overlay is explicitly backed by the
+normal mesh-part field rendering path.
 
 ### 3.1 Configured vs effective display state
 
@@ -83,9 +105,13 @@ Explorer:
 
 Inspector:
 
-- shows the selected target id and whether the target is object, airbox, or part fallback;
+- shows the selected target id and whether the target is object, region, airbox,
+  or part fallback;
 - provides toggles for shader, wireframe, points, vectors, visibility, and opacity;
 - exposes whether mesh/vector passes sample only boundary surface nodes or the full target volume;
+- for region targets, exposes whether field visualization has a realized
+  mesh-part carrier, and shows an unavailable/degraded state for authored-only
+  or projection-only regions;
 - auto-applies because these are safe display preferences;
 - includes reset/clear override action.
 
@@ -104,6 +130,9 @@ Viewport:
 - vector glyph visibility can be independent per target when full-domain vector data is available.
 - wireframe display must use the same geometry scope vocabulary as vectors, even when the renderer chooses a bounded fallback for very large full-volume meshes.
 - vector glyph sampling must respect the target geometry scope: boundary-surface nodes for `surface`, the full target node selection for `full`.
+- region target rendering resolves through manifest `mesh_part_ids`; projection
+  membership and authored primitive overlays are diagnostic-only unless a future
+  API explicitly promotes them to a field-capable carrier.
 - no-session smoke must allow an absent runtime API only when `CONTROL_ROOM_SMOKE_ALLOW_MISSING_SESSION=1`; active-session smoke may tolerate explicitly enumerated optional 404 resources for primitive-only sessions that have not built a mesh or run yet, but must still fail on missing `model/scene`, failed scene transactions, or websocket invalidation.
 
 ## 5. 2D Extension

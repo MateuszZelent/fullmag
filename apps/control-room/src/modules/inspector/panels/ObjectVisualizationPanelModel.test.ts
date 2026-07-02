@@ -19,12 +19,15 @@ import {
   buildVisualizationVectorBudgetDiagnostic,
   buildVisualizationPanelSections,
   colorPickerInputValue,
+  displayPassTogglePatch,
   fieldMetaScopeQueryForVisualizationTarget,
   geometryScopeDisplayPatch,
+  geometryScopeVectorBudgetPatch,
   quantitySourcePatch,
   objectVisualizationTargetForMeshPart,
   resolveSurfaceColorSourceItems,
   resolveObjectVisualizationPanelTopologyFreshness,
+  resolveRegionVisualizationCarrier,
   scalarColorPalettePatch,
   resolveVisualizationVectorBudgetRange,
   shouldShowPrimitiveDisplayToggle,
@@ -36,6 +39,7 @@ import {
   surfaceColorSourceFieldMetaComponent,
   surfaceDisplayPassPatch,
   surfaceSolidColorPatch,
+  renderModeDisplayPatch,
   VISUALIZATION_COLOR_MODE_ITEMS,
   VISUALIZATION_QUANTITY_ITEMS,
   visualizationQuantityItems,
@@ -169,6 +173,18 @@ describe("ObjectVisualizationPanelModel", () => {
     expect(shouldShowSurfaceFieldColorbar("component_x", "m")).toBe(true);
     expect(shouldShowSurfaceFieldColorbar("magnitude", "m")).toBe(true);
     expect(shouldShowSurfaceFieldColorbar("colormap", "mat_ms")).toBe(true);
+    expect(
+      shouldShowSurfaceFieldColorbar(
+        "magnitude",
+        "analysis:frequency-response:frequency-0002",
+      ),
+    ).toBe(false);
+    expect(
+      shouldShowSurfaceFieldColorbar(
+        "magnitude",
+        "analysis:eigen:sample-0000:mode-0002",
+      ),
+    ).toBe(false);
     expect(shouldShowSurfaceFieldColorbar("orientation", "m")).toBe(false);
     expect(shouldShowSurfaceFieldColorbar("solid", "m")).toBe(false);
   });
@@ -209,6 +225,36 @@ describe("ObjectVisualizationPanelModel", () => {
         label: "Region A",
       }),
     ).toEqual({ scope_id: null, scope_kind: null });
+    expect(
+      fieldMetaScopeQueryForVisualizationTarget(
+        {
+          id: "region:film:film%3Acore",
+          kind: "region",
+          label: "Core",
+        },
+        {
+          kind: "mesh-parts",
+          objectId: "film",
+          partIds: ["part:film:core"],
+          regionId: "film:core",
+        },
+      ),
+    ).toEqual({ scope_id: "part:film:core", scope_kind: "part" });
+    expect(
+      fieldMetaScopeQueryForVisualizationTarget(
+        {
+          id: "region:film:film%3Acore",
+          kind: "region",
+          label: "Core",
+        },
+        {
+          kind: "mesh-parts",
+          objectId: "film",
+          partIds: ["part:film:core", "part:film:shell"],
+          regionId: "film:core",
+        },
+      ),
+    ).toEqual({ scope_id: null, scope_kind: null });
   });
 
   it("maps manifest mesh parts to the same canonical object targets as the viewport", () => {
@@ -217,6 +263,21 @@ describe("ObjectVisualizationPanelModel", () => {
         id: "part:permalloy_layer",
         label: "Permalloy layer",
         object_id: "permalloy_layer",
+      } as MeshPart),
+    ).toEqual({
+      id: "object:permalloy_layer",
+      kind: "object",
+      label: "Permalloy layer",
+    });
+  });
+
+  it("maps geometry-only mesh parts to canonical object targets", () => {
+    expect(
+      objectVisualizationTargetForMeshPart({
+        id: "part:permalloy_layer",
+        geometry_id: "permalloy_layer_geom",
+        label: "Permalloy layer",
+        object_id: null,
       } as MeshPart),
     ).toEqual({
       id: "object:permalloy_layer",
@@ -360,6 +421,40 @@ describe("ObjectVisualizationPanelModel", () => {
         wireframeVisible: false,
       }),
     ).toEqual({ shaderVisible: false });
+  });
+
+  it("turns hidden target pass toggles into visible renderable passes", () => {
+    const hiddenRegionSettings = {
+      ...DEFAULT_OBJECT_VISUALIZATION,
+      boundsVisible: false,
+      pointsVisible: false,
+      primitiveVisible: false,
+      shaderVisible: false,
+      vectorsVisible: false,
+      visible: false,
+      wireframeVisible: false,
+    };
+
+    expect(surfaceDisplayPassPatch(hiddenRegionSettings)).toMatchObject({
+      shaderVisible: true,
+      visible: true,
+    });
+    expect(
+      displayPassTogglePatch(hiddenRegionSettings, "wireframeVisible"),
+    ).toEqual({
+      visible: true,
+      wireframeVisible: true,
+    });
+    expect(
+      displayPassTogglePatch(hiddenRegionSettings, "boundsVisible"),
+    ).toEqual({
+      boundsVisible: true,
+      visible: true,
+    });
+    expect(renderModeDisplayPatch("points")).toMatchObject({
+      pointsVisible: true,
+      visible: true,
+    });
   });
 
   it("turns Full geometry scope into a visible volume-mesh pass when only the surface is active", () => {
@@ -649,6 +744,145 @@ describe("ObjectVisualizationPanelModel", () => {
     });
   });
 
+  it("uses manifest region mesh parts before region id aliases for arrow budgets", () => {
+    const meshParts: MeshPart[] = [
+      meshPart({
+        geometry_id: "film:core",
+        id: "part:film:alias-core",
+        label: "Alias core",
+        node_count: 123,
+        object_id: "film",
+        role: "object",
+      }),
+      meshPart({
+        geometry_id: "realized-core",
+        id: "part:film:realized-core",
+        label: "Realized core",
+        node_count: 456,
+        object_id: "film",
+        role: "object",
+      }),
+    ];
+    const manifestRegions: NonNullable<
+      MeshSharedDomainManifestResource["regions"]
+    > = [
+      {
+        material_ref: "material:film",
+        mesh_part_ids: ["part:film:realized-core"],
+        name: "Core",
+        region_id: "manifest:film:core",
+        source_object_ids: ["film"],
+        source_region_candidate_id: "film:core",
+      },
+    ];
+
+    expect(
+      resolveVisualizationVectorBudgetRange({
+        manifestRegions,
+        meshParts,
+        target: {
+          id: "region:film:film%3Acore",
+          kind: "region",
+        },
+      }),
+    ).toMatchObject({
+      availableNodeCount: 456,
+      exact: true,
+      max: 456,
+    });
+  });
+
+  it("resolves region visualization carriers from manifest mesh parts", () => {
+    const manifestRegions: NonNullable<
+      MeshSharedDomainManifestResource["regions"]
+    > = [
+      {
+        material_ref: "material:film",
+        mesh_part_ids: ["part:film:core"],
+        name: "Core",
+        region_id: "manifest:film:core",
+        source_object_ids: ["film"],
+        source_region_candidate_id: "film:core",
+      },
+      {
+        material_ref: "material:film",
+        mesh_part_ids: [],
+        name: "Shell",
+        region_id: "manifest:film:shell",
+        source_object_ids: ["film"],
+        source_region_candidate_id: "film:shell",
+      },
+    ];
+
+    expect(
+      resolveRegionVisualizationCarrier({
+        manifestRegions,
+        target: {
+          id: "region:film:film%3Acore",
+          kind: "region",
+        },
+      }),
+    ).toEqual({
+      kind: "mesh-parts",
+      objectId: "film",
+      partIds: ["part:film:core"],
+      regionId: "film:core",
+    });
+    expect(
+      resolveRegionVisualizationCarrier({
+        manifestRegions,
+        target: {
+          id: "region:film:film%3Ashell",
+          kind: "region",
+        },
+      }),
+    ).toMatchObject({
+      kind: "unavailable",
+    });
+  });
+
+  it("does not use alias-matched mesh parts for unrealized manifest regions", () => {
+    const meshParts: MeshPart[] = [
+      meshPart({
+        geometry_id: "film:core",
+        id: "part:film:alias-core",
+        label: "Alias core",
+        node_count: 123,
+        object_id: "film",
+        role: "object",
+      }),
+    ];
+    const manifestRegions: NonNullable<
+      MeshSharedDomainManifestResource["regions"]
+    > = [
+      {
+        material_ref: "material:film",
+        mesh_part_ids: [],
+        name: "Core",
+        region_id: "manifest:film:core",
+        source_object_ids: ["film"],
+        source_region_candidate_id: "film:core",
+      },
+    ];
+
+    expect(
+      resolveVisualizationVectorBudgetRange({
+        manifestRegions,
+        meshParts,
+        target: {
+          id: "region:film:film%3Acore",
+          kind: "region",
+        },
+      }),
+    ).toEqual({
+      availableNodeCount: 4096,
+      exact: false,
+      max: 4096,
+      min: 0,
+      step: 1,
+    });
+  });
+
   it("scales surface arrow budgets to surface node counts", () => {
     const meshParts: MeshPart[] = [
       meshPart({
@@ -676,6 +910,66 @@ describe("ObjectVisualizationPanelModel", () => {
       max: 5,
       min: 0,
       step: 1,
+    });
+  });
+
+  it("expands full arrow budgets from the current surface coverage", () => {
+    expect(
+      geometryScopeVectorBudgetPatch({
+        currentRange: {
+          availableNodeCount: 5,
+          exact: true,
+          max: 5,
+          min: 0,
+          step: 1,
+        },
+        geometryScope: "full",
+        nextRange: {
+          availableNodeCount: 20,
+          exact: true,
+          max: 20,
+          min: 0,
+          step: 1,
+        },
+        settings: {
+          ...DEFAULT_OBJECT_VISUALIZATION,
+          geometryScope: "surface",
+          vectorBudget: 5,
+        },
+      }),
+    ).toEqual({
+      geometryScope: "full",
+      vectorBudget: 20,
+    });
+  });
+
+  it("preserves partial arrow budget coverage when the vector extent changes", () => {
+    expect(
+      geometryScopeVectorBudgetPatch({
+        currentRange: {
+          availableNodeCount: 10,
+          exact: true,
+          max: 10,
+          min: 0,
+          step: 1,
+        },
+        geometryScope: "full",
+        nextRange: {
+          availableNodeCount: 40,
+          exact: true,
+          max: 40,
+          min: 0,
+          step: 1,
+        },
+        settings: {
+          ...DEFAULT_OBJECT_VISUALIZATION,
+          geometryScope: "surface",
+          vectorBudget: 3,
+        },
+      }),
+    ).toEqual({
+      geometryScope: "full",
+      vectorBudget: 12,
     });
   });
 

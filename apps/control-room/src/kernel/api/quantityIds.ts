@@ -149,6 +149,14 @@ export function isScalarSpatialQuantityId(quantityId: string): boolean {
   return SCALAR_SPATIAL_QUANTITY_IDS.has(resolveCanonicalQuantityId(quantityId));
 }
 
+export function isAnalysisFieldQuantityId(quantityId: string): boolean {
+  const canonicalQuantityId = resolveCanonicalQuantityId(quantityId);
+  return (
+    canonicalQuantityId.startsWith("analysis:frequency-response:") ||
+    canonicalQuantityId.startsWith("analysis:eigen:")
+  );
+}
+
 export function quantityUnitForColorbar(quantityId: string): string {
   return QUANTITY_UNITS[resolveCanonicalQuantityId(quantityId)] ?? "";
 }

@@ -769,23 +769,7 @@ export function resolveAirboxTopologyVisualizationSettings(
 export function resolveAirboxRuntimeVisualizationSettings(
   settings: VisualizationTargetSettings,
 ): VisualizationTargetSettings {
-  const isLegacyWireframeOnlyMode =
-    settings.visible &&
-    settings.wireframeVisible &&
-    !settings.shaderVisible &&
-    !settings.pointsVisible &&
-    !settings.vectorsVisible &&
-    !settings.boundsVisible;
-
-  if (!isLegacyWireframeOnlyMode) {
-    return settings;
-  }
-  return {
-    ...settings,
-    renderMode: "surface",
-    shaderVisible: true,
-    wireframeVisible: false,
-  };
+  return settings;
 }
 
 export function resolveAirboxSurfaceColorState(

@@ -664,6 +664,44 @@ describe("selectExplorerNode", () => {
     });
   });
 
+  it("selects object mode visualization view nodes as analysis overlay targets", () => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      fieldId: "analysis:frequency-response:field-0001",
+      frequencyIndex: 1,
+      id: "model:object:film:visualization:mode-visualization:response:frequency:1:view:real",
+      kind: "object.mode_visualization.view" as ExplorerNode["kind"],
+      label: "Real",
+      objectId: "film",
+      parentId:
+        "model:object:film:visualization:mode-visualization:response:frequency:1",
+      status: "ready",
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "object.mode_visualization.view",
+      label: "Real",
+      nodeId:
+        "model:object:film:visualization:mode-visualization:response:frequency:1:view:real",
+      objectId: "film",
+      ref: {
+        fieldId: "analysis:frequency-response:field-0001",
+        frequencyIndex: 1,
+        kind: "object.mode_visualization.view",
+        nodeId:
+          "model:object:film:visualization:mode-visualization:response:frequency:1:view:real",
+        objectId: "film",
+        source: "frequency-response",
+        type: "mode-visualization",
+        view: "real",
+        visualizationTargetId:
+          "mode:film:frequency-response:analysis%3Afrequency-response%3Afield-0001",
+      },
+    });
+  });
+
   it("selects object texture load nodes as scene-object selections", () => {
     const kernel = makeKernel();
     const node: ExplorerNode = {

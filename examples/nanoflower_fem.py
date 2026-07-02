@@ -23,7 +23,7 @@ study.universe.mesh(minimum_element_size=10e-09, maximum_element_size=1e-06)
 study.interactive(True)
 
 # Geometry & Material
-body = study.geometry(fm.ImportedGeometry(source="fractal-fidget-sensory-parametric-hexagon-10.stl", name="nanoflower_left", scale=1e-09), name="nanoflower_left")
+body = study.geometry(fm.ImportedGeometry(source="nanoflower.stl", name="nanoflower_left", scale=1e-09), name="nanoflower_left")
 body.Ms = 752000
 body.Aex = 1.55e-11
 body.alpha = 0.1

@@ -22,13 +22,13 @@ study.engine("fem")
 study.device("gpu", precision="double")
 study.universe(
     mode="manual",
-    size=(200e-9, 200e-9, 90e-9),
+    size=(200e-9, 200e-9, 400e-9),
     center=(0.0, 0.0, 0.0),
     padding=(0.0, 0.0, 0.0),
 )
 study.universe.mesh(
     minimum_element_size=5e-9,
-    maximum_element_size=20e-9,
+    maximum_element_size=100e-9,
     growth_rate=1.5,
 )
 study.pbc(x=True, y=True, demag="periodic_airbox_k0")
@@ -62,17 +62,17 @@ body.mesh.thin_film(
     order=1,
 )
 
-hole_transition = body.add_region(
-    "hole_transition_refinement",
-    fm.Cylinder(radius=43e-9, height=10e-9, name="hole_transition_refinement"),
-    priority=10,
-)
-hole_transition.mesh(
-    minimum_element_size=1e-9,
-    maximum_element_size=54e-9,
-    # transition_distance=14e-9,
-    order=1,
-)
+# hole_transition = body.add_region(
+#     "hole_transition_refinement",
+#     fm.Cylinder(radius=43e-9, height=10e-9, name="hole_transition_refinement"),
+#     priority=10,
+# )
+# hole_transition.mesh(
+#     minimum_element_size=1e-9,
+#     maximum_element_size=54e-9,
+#     # transition_distance=14e-9,
+#     order=1,
+# )
 
 # hole_edge = body.add_region(
 #     "hole_edge_refinement",
@@ -140,8 +140,18 @@ study.save("H_demag", every=10e-12)
 study.save("H_eff", every=10e-12)
 study.save("demag_phi", every=10e-12)
 
-study.stages.add_relax(
-    algorithm="projected_gradient_bb",
+study.stages.add_minimize(
+    method="bb",
     max_steps=4000,
-    tol=5.0e3,  # A/m
+    tol=1e-4,
+)
+
+study.stages.add_relax(
+    algorithm="llg_overdamped",
+    solver="rk23",
+    max_error=1e-6,
+    dt_min=1e-17,
+    dt_max=1e-13,
+    max_steps=100,
+    tol=1e-4,
 )

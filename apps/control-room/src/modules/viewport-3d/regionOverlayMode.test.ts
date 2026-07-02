@@ -7,6 +7,8 @@ import {
 
 describe("regionOverlayMode", () => {
   it.each([
+    ["off", false, false, false],
+    ["off", true, false, false],
     ["authored", false, true, false],
     ["realized", false, false, true],
     ["both", false, true, true],

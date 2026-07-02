@@ -1,5 +1,7 @@
 "use client";
 
+import { useMemo } from "react";
+
 import { Activity, Eye, Play, RotateCw } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -12,9 +14,7 @@ import type {
 import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
 import { Button } from "@/shared/ui/Button";
 
-function formatFrequency(valueHz: number): string {
-  return formatFrequencyHz(valueHz);
-}
+
 
 function formatOptionalFrequency(valueHz: number | null): string {
   return valueHz == null ? "-" : formatFrequencyHz(valueHz);
@@ -155,11 +155,15 @@ export function FrequencyDomainModeTable({
   points: readonly EigenSpectrumPoint[];
   selectedModeKey?: string | null;
 }) {
-  const rows = points.toSorted(
-    (left, right) =>
-      left.sampleIndex - right.sampleIndex ||
-      left.frequencyHz - right.frequencyHz ||
-      left.rawModeIndex - right.rawModeIndex,
+  const rows = useMemo(
+    () =>
+      points.toSorted(
+        (left, right) =>
+          left.sampleIndex - right.sampleIndex ||
+          left.frequencyHz - right.frequencyHz ||
+          left.rawModeIndex - right.rawModeIndex,
+      ),
+    [points],
   );
 
   if (rows.length === 0) {
@@ -212,7 +216,7 @@ export function FrequencyDomainModeTable({
                 <td>{point.sampleIndex}</td>
                 <td>{point.rawModeIndex}</td>
                 <td>{point.branchId ?? "-"}</td>
-                <td>{formatFrequency(point.frequencyHz)}</td>
+                <td>{formatFrequencyHz(point.frequencyHz)}</td>
                 <td>{formatOptionalFrequency(point.imaginaryFrequencyHz)}</td>
                 <td>{formatMHz(point.dampingRateHz)}</td>
                 <td>{formatCompact(point.residualNorm)}</td>
@@ -271,8 +275,11 @@ export function FrequencyDomainResponsePointTable({
   ) => void;
   points: readonly FrequencyResponsePoint[];
 }) {
-  const rows = points.toSorted(
-    (left, right) => left.frequencyHz - right.frequencyHz,
+  const rows = useMemo(
+    () => points.toSorted(
+      (left, right) => left.frequencyHz - right.frequencyHz,
+    ),
+    [points],
   );
 
   if (rows.length === 0) {
@@ -312,7 +319,7 @@ export function FrequencyDomainResponsePointTable({
             >
               <td>{point.frequencyIndex ?? "-"}</td>
               <td>{point.observableId}</td>
-              <td>{formatFrequency(point.frequencyHz)}</td>
+              <td>{formatFrequencyHz(point.frequencyHz)}</td>
               <td>{formatCompact(point.amplitude)}</td>
               <td>{formatCompact(point.phaseRad)}</td>
               <td>{formatCompact(point.absorbedPowerDensity)}</td>
@@ -323,7 +330,7 @@ export function FrequencyDomainResponsePointTable({
                   const Icon = entry.icon;
                   return (
                     <Button
-                      aria-label={`${entry.title} at ${formatFrequency(point.frequencyHz)}`}
+                      aria-label={`${entry.title} at ${formatFrequencyHz(point.frequencyHz)}`}
                       className="fm-inspector-action-button"
                       disabled={!point.fieldId}
                       key={entry.action}
@@ -364,8 +371,11 @@ export function FrequencyDomainBranchTable({
   onSelectBranch?: (branch: EigenBranch) => void;
   selectedBranchId?: string | null;
 }) {
-  const rows = branches.toSorted((left, right) =>
-    left.branchId.localeCompare(right.branchId),
+  const rows = useMemo(
+    () => branches.toSorted((left, right) =>
+      left.branchId.localeCompare(right.branchId),
+    ),
+    [branches],
   );
 
   if (rows.length === 0) {
@@ -422,7 +432,7 @@ export function FrequencyDomainBranchTable({
                 </td>
                 <td>
                   {branch.frequencyMinHz != null && branch.frequencyMaxHz != null
-                    ? `${formatFrequency(branch.frequencyMinHz)}-${formatFrequency(branch.frequencyMaxHz)}`
+                    ? `${formatFrequencyHz(branch.frequencyMinHz)}-${formatFrequencyHz(branch.frequencyMaxHz)}`
                     : "-"}
                 </td>
                 <td>{formatCompact(branch.overlapPrevMin)}</td>
@@ -460,7 +470,10 @@ export function FrequencyDomainFmrPeakTable({
   onSelectPeak: (peak: FmrPeakPoint) => void;
   peaks: readonly FmrPeakPoint[];
 }) {
-  const rows = peaks.toSorted((left, right) => left.frequencyHz - right.frequencyHz);
+  const rows = useMemo(
+    () => peaks.toSorted((left, right) => left.frequencyHz - right.frequencyHz),
+    [peaks],
+  );
 
   if (rows.length === 0) {
     return (
@@ -497,7 +510,7 @@ export function FrequencyDomainFmrPeakTable({
               key={`${peak.source}:${peak.frequencyHz}:${peak.frequencyPointIndex ?? peak.modeRef?.rawModeIndex ?? "raw"}`}
             >
               <td>{peak.source}</td>
-              <td>{formatFrequency(peak.frequencyHz)}</td>
+              <td>{formatFrequencyHz(peak.frequencyHz)}</td>
               <td>{formatPeakRef(peak)}</td>
               <td>{formatCompact(peak.amplitude)}</td>
               <td>{formatCompact(peak.phaseRad)}</td>

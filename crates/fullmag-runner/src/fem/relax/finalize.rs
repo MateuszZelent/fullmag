@@ -16,7 +16,7 @@ use crate::types::{
     StepUpdate,
 };
 
-use super::preview::build_fem_cached_preview_fields;
+use super::preview::build_fem_final_cached_preview_fields;
 use super::scalars::ensure_fem_object_scalars;
 use super::snapshots::copy_native_fem_field_snapshot;
 
@@ -66,7 +66,7 @@ pub(crate) fn finalize_native_fem_relaxation(
     if let Some(live) = live.as_mut() {
         if let Some(display_selection) = live.display_selection.map(|get| get()) {
             let cached_start = std::time::Instant::now();
-            if let Some(cached) = build_fem_cached_preview_fields(
+            if let Some(cached) = build_fem_final_cached_preview_fields(
                 backend,
                 engine,
                 &display_selection,

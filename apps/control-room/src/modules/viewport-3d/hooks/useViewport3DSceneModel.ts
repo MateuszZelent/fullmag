@@ -29,6 +29,7 @@ import {
 import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
 import type { MeshSizeHistogramHighlight } from "@/kernel/events/eventTypes";
 import {
+  isAnalysisFieldQuantityId,
   isMagneticOnlyQuantityId,
   isScalarSpatialQuantityId,
   resolveCanonicalQuantityId,
@@ -319,6 +320,7 @@ export function resolveViewport3DPartScalarRangeRequests({
     const settings = getPartSettings(partModel.part);
     if (!settings.visible || !settings.shaderVisible) continue;
     const quantityId = resolveCanonicalQuantityId(settings.activeQuantityId);
+    if (isAnalysisFieldQuantityId(quantityId)) continue;
     const objectScopeId = partModel.part.object_id ?? partModel.part.geometry_id;
     requests.set(partId, {
       component: resolveViewport3DFieldMetaScalarComponent(quantityId, component),
@@ -1139,6 +1141,9 @@ export function resolveViewport3DPartVisualizationSettings({
     visualizationState: renderingState,
   });
   if (!regionTarget) return objectVisualization.effectiveSettings;
+  if (!objectVisualizationSnapshot.overrides[visualizationTargetKey(regionTarget)]) {
+    return objectVisualization.effectiveSettings;
+  }
   return resolveTargetVisualization({
     inheritedSettings: objectVisualization.settings,
     snapshot: objectVisualizationSnapshot,
@@ -3085,12 +3090,15 @@ export function useViewport3DSceneModel({
   );
   const scalarRangeStatsEnabled =
     fieldVectorEnabled && primaryFieldRenderOptions.scalarColorsVisible !== false;
+  const primaryFieldMetaEnabled =
+    scalarRangeStatsEnabled &&
+    !isAnalysisFieldQuantityId(primaryFieldQuantityId);
   const primaryMagnitudeFieldMeta = useFieldMetaResource({
     component: resolveViewport3DFieldMetaScalarComponent(
       primaryFieldQuantityId,
       "magnitude",
     ),
-    enabled: scalarRangeStatsEnabled && scalarRangeModeFlags.magnitude,
+    enabled: primaryFieldMetaEnabled && scalarRangeModeFlags.magnitude,
     quantityId: primaryFieldQuantityId,
     snapshot_id: selectedSnapshotQuery?.snapshot_id ?? null,
     stage_id: selectedSnapshotQuery?.stage_id ?? null,
@@ -3100,7 +3108,7 @@ export function useViewport3DSceneModel({
       primaryFieldQuantityId,
       "x",
     ),
-    enabled: scalarRangeStatsEnabled && scalarRangeModeFlags.x,
+    enabled: primaryFieldMetaEnabled && scalarRangeModeFlags.x,
     quantityId: primaryFieldQuantityId,
     snapshot_id: selectedSnapshotQuery?.snapshot_id ?? null,
     stage_id: selectedSnapshotQuery?.stage_id ?? null,
@@ -3110,7 +3118,7 @@ export function useViewport3DSceneModel({
       primaryFieldQuantityId,
       "y",
     ),
-    enabled: scalarRangeStatsEnabled && scalarRangeModeFlags.y,
+    enabled: primaryFieldMetaEnabled && scalarRangeModeFlags.y,
     quantityId: primaryFieldQuantityId,
     snapshot_id: selectedSnapshotQuery?.snapshot_id ?? null,
     stage_id: selectedSnapshotQuery?.stage_id ?? null,
@@ -3120,7 +3128,7 @@ export function useViewport3DSceneModel({
       primaryFieldQuantityId,
       "z",
     ),
-    enabled: scalarRangeStatsEnabled && scalarRangeModeFlags.z,
+    enabled: primaryFieldMetaEnabled && scalarRangeModeFlags.z,
     quantityId: primaryFieldQuantityId,
     snapshot_id: selectedSnapshotQuery?.snapshot_id ?? null,
     stage_id: selectedSnapshotQuery?.stage_id ?? null,

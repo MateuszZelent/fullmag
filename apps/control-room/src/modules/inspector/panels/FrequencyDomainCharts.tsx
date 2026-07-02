@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Eye } from "lucide-react";
 
 import type { ECharts, EChartsOption } from "echarts";
@@ -49,7 +49,7 @@ export function FrequencyDomainSpectrumChart({
   const data = model.points.map((point, rowIndex) => {
     const frequencyValue =
       frequencySeries?.points.find((seriesPoint) => seriesPoint.rowIndex === rowIndex)
-        ?.y ?? point.frequencyHz;
+        ?.x ?? point.frequencyHz;
     return {
       dampingRateHz: point.dampingRateHz,
       frequencyLabel: `${formatNumber(frequencyValue)} ${frequencyUnit}`,
@@ -187,6 +187,42 @@ export function FrequencyDomainResponseChart({
   onPlotPoint?: (point: FrequencyResponsePoint) => void;
   onSelectPoint?: (point: FrequencyResponsePoint) => void;
 }) {
+  const observableOptions = useMemo(
+    () => responseObservableOptions(model.points),
+    [model.points],
+  );
+  const [selectedObservable, setSelectedObservable] = useState(
+    () => observableOptions[0]?.value ?? "response",
+  );
+  const effectiveObservable =
+    observableOptions.find((option) => option.value === selectedObservable)
+      ?.value ??
+    observableOptions[0]?.value ??
+    "response";
+  const quantityOptions = useMemo(
+    () => responseQuantityOptions(model.series, model.points, effectiveObservable),
+    [effectiveObservable, model.points, model.series],
+  );
+  const [selectedQuantity, setSelectedQuantity] = useState("amplitude");
+  const effectiveQuantity =
+    quantityOptions.find((option) => option.value === selectedQuantity)?.value ??
+    quantityOptions[0]?.value ??
+    "amplitude";
+  const chartSeries = useMemo(
+    () =>
+      filterResponseChartSeries(
+        model.series,
+        model.points,
+        effectiveObservable,
+        effectiveQuantity,
+      ),
+    [effectiveObservable, effectiveQuantity, model.points, model.series],
+  );
+  const chartPoints = useMemo(
+    () =>
+      model.points.filter((point) => point.observableId === effectiveObservable),
+    [effectiveObservable, model.points],
+  );
   const resolvePoint = (event: unknown) => {
     const rowIndex = frequencyDomainSeriesPointIndexFromChartEvent(event);
     return rowIndex == null ? null : model.points[rowIndex] ?? null;
@@ -203,11 +239,43 @@ export function FrequencyDomainResponseChart({
         const point = resolvePoint(event);
         if (point) onPlotPoint?.(point);
       }}
-      series={model.series}
+      series={chartSeries}
       title="Driven FMR frequency response"
       xLabel="frequency"
     >
-      {model.points.slice(0, 4).map((point, index) => {
+      <div className="fm-frequency-domain-chart__controls">
+        <label className="fm-frequency-domain-chart__control">
+          <span>Response component</span>
+          <select
+            aria-label="Response component"
+            className="fm-inspector-select"
+            value={effectiveObservable}
+            onChange={(event) => setSelectedObservable(event.target.value)}
+          >
+            {observableOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="fm-frequency-domain-chart__control">
+          <span>Chart quantity</span>
+          <select
+            aria-label="Chart quantity"
+            className="fm-inspector-select"
+            value={effectiveQuantity}
+            onChange={(event) => setSelectedQuantity(event.target.value)}
+          >
+            {quantityOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label} [{option.unit}]
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      {chartPoints.map((point, index) => {
         const pointIndex = point.frequencyIndex ?? index;
         const frequencyLabel = formatFrequencyHz(point.frequencyHz);
         return (
@@ -246,6 +314,114 @@ export function FrequencyDomainResponseChart({
       })}
     </FrequencyDomainSeriesChart>
   );
+}
+
+interface ResponseChartOption {
+  label: string;
+  unit?: string;
+  value: string;
+}
+
+function responseObservableOptions(
+  points: readonly FrequencyResponsePoint[],
+): ResponseChartOption[] {
+  const seen = new Set<string>();
+  const options: ResponseChartOption[] = [];
+  for (const point of points) {
+    if (seen.has(point.observableId)) continue;
+    seen.add(point.observableId);
+    options.push({
+      label: responseObservableLabel(point.observableId),
+      value: point.observableId,
+    });
+  }
+  return options.length > 0
+    ? options.toSorted((left, right) =>
+        responseObservableSortKey(left.value) - responseObservableSortKey(right.value) ||
+        left.label.localeCompare(right.label),
+      )
+    : [{ label: "response", value: "response" }];
+}
+
+function responseQuantityOptions(
+  series: readonly FrequencyDomainChartSeries[],
+  points: readonly FrequencyResponsePoint[],
+  observableId: string,
+): ResponseChartOption[] {
+  const rowIndices = new Set(
+    points.flatMap((point, rowIndex) =>
+      point.observableId === observableId ? [rowIndex] : [],
+    ),
+  );
+  const options = series.flatMap((entry) =>
+    entry.points.some((point) => rowIndices.has(point.rowIndex))
+      ? [
+          {
+            label: entry.label,
+            unit: entry.unit,
+            value: entry.quantity,
+          },
+        ]
+      : [],
+  );
+  return options.length > 0
+    ? options
+    : [{ label: "Amplitude", unit: "a.u.", value: "amplitude" }];
+}
+
+function filterResponseChartSeries(
+  series: readonly FrequencyDomainChartSeries[],
+  points: readonly FrequencyResponsePoint[],
+  observableId: string,
+  quantity: string,
+): FrequencyDomainChartSeries[] {
+  const rowIndices = new Set(
+    points.flatMap((point, rowIndex) =>
+      point.observableId === observableId ? [rowIndex] : [],
+    ),
+  );
+  return series.flatMap((entry) => {
+    if (entry.quantity !== quantity) return [];
+    const filteredPoints = entry.points.filter((point) =>
+      rowIndices.has(point.rowIndex),
+    );
+    return filteredPoints.length > 0 ? [{ ...entry, points: filteredPoints }] : [];
+  });
+}
+
+function responseObservableLabel(value: string): string {
+  switch (value) {
+    case "mx":
+    case "m_x":
+      return "mx";
+    case "my":
+    case "m_y":
+      return "my";
+    case "mz":
+    case "m_z":
+      return "mz";
+    case "magnitude":
+    case "mag":
+    case "|m|":
+      return "|m|";
+    default:
+      return value;
+  }
+}
+
+function responseObservableSortKey(value: string): number {
+  switch (responseObservableLabel(value)) {
+    case "mx":
+      return 0;
+    case "my":
+      return 1;
+    case "mz":
+      return 2;
+    case "|m|":
+      return 3;
+    default:
+      return 10;
+  }
 }
 
 function FrequencyDomainSeriesChart({
@@ -435,46 +611,72 @@ export function buildSpectrumOption(
   frequencyUnit: string,
 ): EChartsOption {
   const frequencyLabel = `frequency [${frequencyUnit}]`;
-  const qualitySeries = [
-    {
-      id: "residual",
-      label: "Residual",
-      values: data.map((point) => point.residualNorm ?? null),
-    },
-    {
-      id: "damping",
-      label: "Damping [Hz]",
-      values: data.map((point) => point.dampingRateHz ?? null),
-    },
-    {
-      id: "leakage",
-      label: "Tangent leakage",
-      values: data.map((point) => point.leakage ?? null),
-    },
-  ].find((series) => series.values.some((value) => finiteNumber(value) != null));
-  const yAxis = qualitySeries
-    ? ([
-        yValueAxis(frequencyLabel),
-        {
-          name: qualitySeries.label,
-          nameTextStyle: { color: "var(--fm-text-muted)" },
-          splitLine: { show: false },
-          type: "value",
-        },
-      ] as EChartsOption["yAxis"])
-    : yValueAxis(frequencyLabel);
+  const hasDamping = data.some(
+    (point) =>
+      point.dampingRateHz != null &&
+      Number.isFinite(point.dampingRateHz) &&
+      point.dampingRateHz > 0,
+  );
+
+  // Build Lorentzian envelope when damping rates are available
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const envelopeSeries: any[] = [];
+  if (hasDamping && data.length > 0) {
+    const fMin = Math.min(...data.map((p) => p.frequencyValue));
+    const fMax = Math.max(...data.map((p) => p.frequencyValue));
+    const fRange = fMax - fMin || fMax * 0.1 || 1;
+    const nSamples = 500;
+    const fStart = fMin - fRange * 0.15;
+    const fEnd = fMax + fRange * 0.15;
+    const step = (fEnd - fStart) / nSamples;
+    const envelopeData: [number, number][] = [];
+    for (let i = 0; i <= nSamples; i++) {
+      const f = fStart + step * i;
+      let intensity = 0;
+      for (const point of data) {
+        const gamma = point.dampingRateHz ?? 0;
+        if (gamma <= 0) continue;
+        const halfGamma = gamma / 2;
+        intensity += 1.0 / ((f - point.frequencyValue) ** 2 + halfGamma ** 2);
+      }
+      envelopeData.push([f, intensity]);
+    }
+    // Normalize envelope to [0, 1]
+    let peakIntensity = 0;
+    for (const [, y] of envelopeData) {
+      if (y > peakIntensity) peakIntensity = y;
+    }
+    if (peakIntensity > 0) {
+      for (const entry of envelopeData) {
+        entry[1] /= peakIntensity;
+      }
+    }
+    envelopeSeries.push({
+      data: envelopeData,
+      lineStyle: { width: 2 },
+      name: "Spectral envelope",
+      showSymbol: false,
+      smooth: true,
+      type: "line",
+      areaStyle: {
+        color: "var(--fm-chart-blue)",
+        opacity: 0.15,
+      },
+      z: 0,
+    });
+  }
+
   return {
     animation: false,
-    color: qualitySeries ? [CHART_COLORS[0], CHART_COLORS[3]] : [CHART_COLORS[0]],
+    color: [CHART_COLORS[0], CHART_COLORS[3]],
     grid: chartGrid(),
-    legend: qualitySeries
-      ? {
-          icon: "circle",
-          textStyle: { color: "var(--fm-text-primary)" },
-          top: 0,
-        }
-      : undefined,
+    legend: {
+      icon: "circle",
+      textStyle: { color: "var(--fm-text-primary)" },
+      top: 0,
+    },
     series: [
+      ...envelopeSeries,
       {
         data: data.map((point) => ({
           itemStyle: point.selected
@@ -483,47 +685,42 @@ export function buildSpectrumOption(
                 borderWidth: 2,
                 color: "var(--fm-chart-yellow)",
               }
-            : undefined,
+            : { color: CHART_COLORS[0] },
           name: point.name,
-          value: [point.mode, point.frequencyValue, point.rowIndex],
+          value: [point.frequencyValue, hasDamping ? 1.0 : 1.0, point.rowIndex],
         })),
-        itemStyle: { borderRadius: [5, 5, 0, 0] },
-        name: frequencyLabel,
-        type: "bar",
+        name: "Modes",
+        symbolSize: (value: number[]) => {
+          const rowIndex = value[2];
+          const point = data.find((d) => d.rowIndex === rowIndex);
+          return point?.selected ? 14 : 10;
+        },
+        type: "scatter",
+        z: 1,
       },
-      ...(qualitySeries
-        ? [
-            {
-              data: data.map((point, index) => [
-                point.mode,
-                qualitySeries.values[index],
-                point.rowIndex,
-              ]),
-              lineStyle: { width: 2 },
-              name: qualitySeries.label,
-              showSymbol: true,
-              symbolSize: 6,
-              type: "line" as const,
-              yAxisIndex: 1,
-            },
-          ]
-        : []),
     ],
-    tooltip: chartTooltip("mode"),
-    xAxis: xValueAxis("mode"),
-    yAxis,
+    tooltip: chartTooltip(frequencyLabel),
+    xAxis: xValueAxis(frequencyLabel),
+    yAxis: hasDamping
+      ? yValueAxis("intensity [a.u.]")
+      : {
+          axisLabel: { show: false },
+          axisLine: { show: false },
+          axisTick: { show: false },
+          max: 2,
+          min: 0,
+          splitLine: { show: false },
+          type: "value" as const,
+        },
   };
-}
-
-function finiteNumber(value: number | null | undefined): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 export function buildFrequencyDomainSeriesOption(
   chartSeries: readonly FrequencyDomainChartSeries[],
   xLabel: string,
 ): EChartsOption {
-  const resolvedXLabel = resolveSeriesXLabel(chartSeries, xLabel);
+  const renderSeries = compatibleChartSeries(chartSeries);
+  const resolvedXLabel = resolveSeriesXLabel(renderSeries, xLabel);
   return {
     animation: false,
     color: [...CHART_COLORS],
@@ -534,7 +731,7 @@ export function buildFrequencyDomainSeriesOption(
       top: 0,
       type: "scroll",
     },
-    series: chartSeries.map((entry) => ({
+    series: renderSeries.map((entry) => ({
       data: entry.points.map((point) => ({
         value: [point.x, point.y, point.rowIndex],
       })),
@@ -545,8 +742,30 @@ export function buildFrequencyDomainSeriesOption(
     })),
     tooltip: chartTooltip(resolvedXLabel),
     xAxis: xValueAxis(resolvedXLabel),
-    yAxis: yValueAxis("response"),
+    yAxis: yValueAxis(seriesYAxisLabel(renderSeries)),
   };
+}
+
+function compatibleChartSeries(
+  chartSeries: readonly FrequencyDomainChartSeries[],
+): readonly FrequencyDomainChartSeries[] {
+  const first = chartSeries.find((entry) => entry.points.length > 0);
+  if (!first) return [];
+  return chartSeries.filter(
+    (entry) =>
+      entry.points.length > 0 &&
+      entry.quantity === first.quantity &&
+      entry.unit === first.unit &&
+      entry.xUnit === first.xUnit,
+  );
+}
+
+function seriesYAxisLabel(
+  chartSeries: readonly FrequencyDomainChartSeries[],
+): string {
+  const first = chartSeries[0];
+  if (!first) return "response";
+  return first.unit ? `${first.label} [${first.unit}]` : first.label;
 }
 
 function resolveSeriesXLabel(
@@ -614,10 +833,19 @@ function chartTooltip(axisLabel: string): EChartsOption["tooltip"] {
       typeof value === "number" ? formatNumber(value) : String(value),
     formatter: (params) => {
       const items = Array.isArray(params) ? params : [params];
-      return [
-        `<strong>${axisLabel}</strong>`,
-        ...items.map((item) => `${item.marker ?? ""}${item.seriesName}: ${item.value}`),
-      ].join("<br/>");
+      const xValue = Array.isArray(items[0]?.value)
+        ? formatNumber(items[0]!.value[0] as number)
+        : String(items[0]?.value ?? "");
+      const lines = [`<strong>${axisLabel}: ${xValue}</strong>`];
+      for (const item of items) {
+        const yValue = Array.isArray(item.value)
+          ? formatNumber(item.value[1] as number)
+          : typeof item.value === "number"
+            ? formatNumber(item.value)
+            : String(item.value);
+        lines.push(`${item.marker ?? ""}${item.seriesName}: ${yValue}`);
+      }
+      return lines.join("<br/>");
     },
   };
 }

@@ -704,7 +704,7 @@ describe("ribbon structure", () => {
 
     expect(quantityNode).toMatchObject({
       commandId: RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND,
-      value: "m",
+      value: "H_demag",
     });
     if (quantityNode?.type !== "radio-group") {
       throw new Error("Expected selected airbox quantity control");
@@ -767,20 +767,20 @@ describe("ribbon structure", () => {
     );
 
     expect(wireframeNode).toMatchObject({
-      checked: true,
+      checked: false,
       commandId: "visualization.target.set-wireframe-visible",
     });
     if (wireframeNode?.type !== "checkbox") {
       throw new Error("Expected selected region wireframe control");
     }
 
-    await runRibbonNode(wireframeNode, false, { ...context, selection });
+    await runRibbonNode(wireframeNode, true, { ...context, selection });
 
     expect(patches).toEqual([
       {
         overrides: [
           {
-            display: { wireframe: { visible: false } },
+            display: { wireframe: { visible: true } },
             scope: "region",
             scope_id: "region:free-layer:region%3Acore",
           },

@@ -201,14 +201,9 @@ describe("AirboxLayer", () => {
     });
   });
 
-  it("converts legacy wireframe-only airbox settings to surface shading at runtime", () => {
-    expect(
-      resolveAirboxRuntimeVisualizationSettings(visibleWireframeAirbox),
-    ).toMatchObject({
-      renderMode: "surface",
-      shaderVisible: true,
-      wireframeVisible: false,
-    });
+  it("preserves wireframe-only airbox settings at runtime", () => {
+    expect(resolveAirboxRuntimeVisualizationSettings(visibleWireframeAirbox))
+      .toBe(visibleWireframeAirbox);
   });
 
   it("preserves airbox settings that already have another drawable pass", () => {
@@ -473,12 +468,7 @@ buildReference: null,
     expect(child.props).toMatchObject({
       onSelectPart,
       materialProfile,
-      settings: {
-        ...visibleWireframeAirbox,
-        renderMode: "surface",
-        shaderVisible: true,
-        wireframeVisible: false,
-      },
+      settings: visibleWireframeAirbox,
       topologyModel,
       topologyFreshness: "current",
     });

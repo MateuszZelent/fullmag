@@ -473,8 +473,8 @@ export function buildEigenSpectrumChartModel(
         label: "Eigen frequency",
         points: points.map((point, rowIndex) => ({
           rowIndex,
-          x: point.rawModeIndex,
-          y: point.frequencyHz / frequencyScale.divisor,
+          x: point.frequencyHz / frequencyScale.divisor,
+          y: point.rawModeIndex,
         })),
         quantity: "frequency",
         source: {
@@ -484,7 +484,7 @@ export function buildEigenSpectrumChartModel(
         },
         status: artifactStatus(resource),
         unit: frequencyScale.unit,
-        xUnit: "mode index",
+        xUnit: frequencyScale.unit,
       },
     ],
   };
@@ -1055,14 +1055,14 @@ function localResponsePeaks(
       peaks.push(sorted[0]!);
       continue;
     }
-    sorted.forEach((point, index) => {
-      const value = peakMetric(point);
-      const previous = sorted[index - 1] ? peakMetric(sorted[index - 1]!) : -Infinity;
-      const next = sorted[index + 1] ? peakMetric(sorted[index + 1]!) : -Infinity;
-      if (value >= previous && value >= next) {
-        peaks.push(point);
+    for (let index = 1; index < sorted.length - 1; index++) {
+      const value = peakMetric(sorted[index]!);
+      const previous = peakMetric(sorted[index - 1]!);
+      const next = peakMetric(sorted[index + 1]!);
+      if (value > previous && value > next) {
+        peaks.push(sorted[index]!);
       }
-    });
+    }
   }
   return peaks;
 }
@@ -1131,10 +1131,14 @@ function branchSampleGapSummary(points: readonly EigenBranchPoint[]): {
 
 function minMax(values: readonly number[]): { max: number | null; min: number | null } {
   if (values.length === 0) return { max: null, min: null };
-  return {
-    max: Math.max(...values),
-    min: Math.min(...values),
-  };
+  let min = values[0]!;
+  let max = values[0]!;
+  for (let i = 1; i < values.length; i++) {
+    const v = values[i]!;
+    if (v < min) min = v;
+    if (v > max) max = v;
+  }
+  return { max, min };
 }
 
 function spectrumRows(payload: unknown): unknown[] {
@@ -1313,11 +1317,11 @@ function parseDispersionCsv(csv: string): {
       ),
       overlap: finiteNumber(row.overlap_score ?? row.overlapScore ?? row.overlap),
       pathS,
-      rawModeIndex: finiteInteger(row.raw_mode_index ?? row.mode_index),
+      rawModeIndex: finiteInteger(row.raw_mode_index ?? row.mode_index ?? row.rawModeIndex ?? row.modeIndex),
       relativeError: finiteNumber(row.relative_error ?? row.relativeError),
-      residualNorm: finiteNumber(row.residual_norm),
+      residualNorm: finiteNumber(row.residual_norm ?? row.residualNorm),
       sampleLabel: stringValue(row.label ?? row.sample_label ?? row.sampleLabel),
-      sampleIndex: finiteInteger(row.sample_index),
+      sampleIndex: finiteInteger(row.sample_index ?? row.sampleIndex),
       validationGeometry: stringValue(
         row.validation_geometry ?? row.validationGeometry,
       ),

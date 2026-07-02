@@ -80,7 +80,7 @@ describe("frequencyDomainChartModels", () => {
         sampleIndex: 2,
       }),
     ]);
-    expect(model.series[0]?.points).toEqual([{ rowIndex: 0, x: 3, y: 2.5 }]);
+    expect(model.series[0]?.points).toEqual([{ rowIndex: 0, x: 2.5, y: 3 }]);
     expect(model.series[0]?.unit).toBe("GHz");
   });
 
@@ -143,8 +143,8 @@ describe("frequencyDomainChartModels", () => {
       }),
     ]);
     expect(model.series[0]?.points).toEqual([
-      { rowIndex: 0, x: 0, y: 1.481196536 },
-      { rowIndex: 1, x: 1, y: 2.25 },
+      { rowIndex: 0, x: 1.481196536, y: 0 },
+      { rowIndex: 1, x: 2.25, y: 1 },
     ]);
   });
 

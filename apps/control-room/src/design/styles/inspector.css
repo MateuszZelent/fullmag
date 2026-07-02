@@ -1532,6 +1532,29 @@ button.fm-mesh-detail-list__item:focus-visible {
   background: color-mix(in srgb, var(--fm-bg-surface) 72%, transparent);
 }
 
+.fm-frequency-domain-chart__controls {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: var(--fm-space-2);
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.fm-frequency-domain-chart__control {
+  display: grid;
+  gap: var(--fm-space-1);
+  min-width: 0;
+  color: var(--fm-text-muted);
+  font-family: var(--fm-font-sans);
+  font-size: var(--fm-font-size-xs);
+  font-weight: 550;
+}
+
+.fm-frequency-domain-chart__control span {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
 .fm-frequency-domain-chart__mode {
   display: grid;
   gap: 2px;

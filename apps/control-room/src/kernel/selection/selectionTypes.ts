@@ -1,5 +1,6 @@
 import type { ModuleId } from "../types";
 import type { CrossSectionQualityMetric } from "../api/apiTypes";
+import type { AnalysisFieldOverlaySource } from "../visualization/AnalysisFieldOverlayController";
 
 type ObjectSelectionKind =
   | "object.root"
@@ -26,7 +27,11 @@ type ObjectSelectionKind =
   | "object.magnetic-texture.transform"
   | "object.mesh"
   | "object.extension.topological-charge"
-  | "object.visualization";
+  | "object.visualization"
+  | "object.mode_visualization"
+  | "object.mode_visualization.group"
+  | "object.mode_visualization.field"
+  | "object.mode_visualization.view";
 
 type MeshQualitySelectionMetric = CrossSectionQualityMetric;
 export type RegionVisualizationTargetId = `region:${string}:${string}`;
@@ -35,8 +40,23 @@ export function visualizationTargetIdForSceneObject(
   objectId: string,
   regionId?: string | null,
 ): `object:${string}` | RegionVisualizationTargetId {
-  if (!regionId) return `object:${objectId}`;
-  return `region:${objectId}:${encodeURIComponent(regionId)}`;
+  const targetObjectId = canonicalVisualizationSceneObjectId(objectId);
+  if (!regionId) return `object:${targetObjectId}`;
+  return `region:${targetObjectId}:${encodeURIComponent(regionId)}`;
+}
+
+export function canonicalVisualizationSceneObjectId(objectId: string): string {
+  return objectId.endsWith("_geom") ? objectId.slice(0, -5) : objectId;
+}
+
+export function visualizationObjectIdForMeshPartLike(part: {
+  geometry_id?: string | null;
+  object_id?: string | null;
+  role?: string | null;
+}): string | null {
+  if (part.role === "air" || part.role === "airbox") return null;
+  const objectId = part.object_id ?? part.geometry_id;
+  return objectId ? canonicalVisualizationSceneObjectId(objectId) : null;
 }
 
 export type SelectionRef =
@@ -207,6 +227,23 @@ export type SelectionRef =
       resourceRef?: string;
       sampleIndex?: number;
       type: "frequency-domain";
+    }
+  | {
+      fieldId: string;
+      frequencyIndex?: number;
+      kind:
+        | "object.mode_visualization"
+        | "object.mode_visualization.group"
+        | "object.mode_visualization.field"
+        | "object.mode_visualization.view";
+      modeIndex?: number;
+      nodeId: string;
+      objectId: string;
+      sampleIndex?: number;
+      source: AnalysisFieldOverlaySource;
+      type: "mode-visualization";
+      view?: string;
+      visualizationTargetId: `mode:${string}:${AnalysisFieldOverlaySource}:${string}`;
     };
 
 export interface Selection {
@@ -420,6 +457,20 @@ export function selectionRefEquals(
         nullableStringEquals(left.observableId, right.observableId) &&
         nullableStringEquals(left.resourceRef, right.resourceRef) &&
         left.sampleIndex === right.sampleIndex
+      );
+    case "mode-visualization":
+      return (
+        right.type === "mode-visualization" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.objectId === right.objectId &&
+        left.fieldId === right.fieldId &&
+        left.source === right.source &&
+        left.frequencyIndex === right.frequencyIndex &&
+        left.modeIndex === right.modeIndex &&
+        left.sampleIndex === right.sampleIndex &&
+        nullableStringEquals(left.view, right.view) &&
+        left.visualizationTargetId === right.visualizationTargetId
       );
   }
 }

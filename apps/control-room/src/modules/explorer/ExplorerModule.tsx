@@ -36,6 +36,7 @@ import {
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
+import { useAnalysisFieldOverlay } from "@/kernel/visualization/AnalysisFieldOverlayController";
 import {
   resolveActiveObjectExtensionExplorerItems,
 } from "@/kernel/object-extensions/ObjectExtensionsSectionModel";
@@ -187,6 +188,11 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     return ids;
   }, [crossSections]);
   const modelTabActive = activeTab === "model";
+  const activeAnalysisFieldOverlay = useAnalysisFieldOverlay(
+    kernel.analysisFieldOverlay,
+  );
+  const modeVisualizationResourceActive =
+    modelTabActive && Boolean(activeAnalysisFieldOverlay);
   const frequencyDomainTabActive =
     activeTab === "results" ||
     activeTab === "resources" ||
@@ -239,10 +245,10 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     },
   );
   const frequencyDomainManifest = useFrequencyDomainManifestResource({
-    enabled: frequencyDomainTabActive,
+    enabled: frequencyDomainTabActive || modeVisualizationResourceActive,
   });
   const frequencyDomainSpectrum = useFrequencyDomainEigenSpectrumResource({
-    enabled: activeTab === "results",
+    enabled: activeTab === "results" || modeVisualizationResourceActive,
   });
   const frequencyDomainBranches = useFrequencyDomainEigenBranchesResource({
     enabled: activeTab === "results",
@@ -251,15 +257,20 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     enabled: activeTab === "results",
   });
   const frequencyDomainResponseSweep = useFrequencyDomainResponseSweepResource({
-    enabled: activeTab === "results",
+    enabled: activeTab === "results" || modeVisualizationResourceActive,
   });
   const frequencyDomainResponseProgress =
     useFrequencyDomainResponseProgressResource({
       enabled: frequencyDomainTabActive,
     });
+  const frequencyDomainCancelRequestedAvailable = Boolean(
+    frequencyDomainManifest.data?.response_cancel_requested
+      ?.partial_artifacts_available,
+  );
   const frequencyDomainCancelRequested =
     useFrequencyDomainResponseCancelRequestedResource({
-      enabled: frequencyDomainTabActive,
+      enabled:
+        frequencyDomainTabActive && frequencyDomainCancelRequestedAvailable,
     });
 
   const nodes = useMemo(() => {
@@ -313,7 +324,15 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     }));
     const baseNodes =
       activeTab === "model"
-        ? buildModelTree({ ...modelSnapshot, crossSections, mesh, objects })
+        ? buildModelTree(
+            { ...modelSnapshot, crossSections, mesh, objects },
+            {
+              activeAnalysisFieldOverlay,
+              frequencyDomainManifest: frequencyDomainManifest.data,
+              frequencyDomainResponseSweep: frequencyDomainResponseSweep.data,
+              frequencyDomainSpectrum: frequencyDomainSpectrum.data,
+            },
+          )
         : buildExplorerTree(activeTab, {
             frequencyDomainBranches: frequencyDomainBranches.data,
             frequencyDomainCancelRequested: frequencyDomainCancelRequested.data,
@@ -340,6 +359,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     hysteresisExecutionTree.data,
     textureLoadObjectIds,
     objectExtensionActivation,
+    activeAnalysisFieldOverlay,
     qualityGates.data,
     realizedSizeFields.data,
     frequencyDomainBranches.data,

@@ -196,6 +196,22 @@ describe("viewport3dDomainAdapter", () => {
     });
   });
 
+  it("preserves geometry-only object ownership in mesh part selections", () => {
+    expect(
+      selectionForMeshPart({
+        geometry_id: "free-layer_geom",
+        id: "part:free-layer",
+        label: "Free layer",
+        object_id: null,
+        role: "magnetic",
+      } as Parameters<typeof selectionForMeshPart>[0]),
+    ).toMatchObject({
+      kind: "mesh-part",
+      nodeId: "part:free-layer",
+      objectId: "free-layer",
+    });
+  });
+
   it("resolves mesh-part bounds for airbox and selection layers", () => {
     const domain = adaptFemSharedDomainManifest(manifestFixture());
 

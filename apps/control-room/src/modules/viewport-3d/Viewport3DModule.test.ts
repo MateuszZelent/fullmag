@@ -1422,14 +1422,15 @@ describe("Viewport3DModule scene wiring", () => {
     expect(source).toContain("onAnglesCommit={commitOrbitDebugAngles}");
   });
 
-  it("offers automatic, authored, realized, and combined region overlay modes", () => {
+  it("offers disabled, automatic, authored, realized, and combined region overlay modes", () => {
     const source = readFileSync(
       new URL("./Viewport3DModule.tsx", import.meta.url),
       "utf8",
     );
 
-    expect(source).toContain('useState<RegionOverlayMode>("auto")');
+    expect(source).toContain('useState<RegionOverlayMode>("off")');
     expect(source).toContain('aria-label="Region overlays"');
+    expect(source).toContain("Off");
     expect(source).toContain("Auto");
     expect(source).toContain("Authored");
     expect(source).toContain("Realized");

@@ -77,6 +77,7 @@ import {
   ANALYSIS_FIELD_VIEW_OPTIONS,
   FrequencyDomainModeDisplayControls,
   analysisFieldViewLabel,
+  isActiveAnalysisFieldView,
   normalizeAnalysisFieldView,
   useFrequencyDomainModeDisplaySettings,
 } from "../FrequencyDomainModeDisplayControls";
@@ -3070,6 +3071,16 @@ export const EigenModeInspectorPanel =
   function EigenModeInspectorPanel(props: InspectorPanelProps) {
     const summary = useEigenModeSummary(props);
     const modeDisplaySettings = useFrequencyDomainModeDisplaySettings({
+      activation: {
+        commandId: "analysis.eigen.plot-mode-3d",
+        componentBasis: summary.componentBasis,
+        componentCount: summary.componentCount,
+        defaultPhaseRad: 0,
+        fieldId: summary.fieldId,
+        label: summary.modeIdentity,
+        source: "eigen-mode",
+        valueKind: summary.valueKind,
+      },
       sourceDetail: "results.eigen.mode",
     });
 
@@ -3118,7 +3129,7 @@ export const EigenModeInspectorPanel =
             viewDefaultValue={summary.defaultView}
             viewOptions={summary.availableViewValues}
           />
-          <EigenMode3DActions summary={summary} />
+          <EigenMode3DActions settings={modeDisplaySettings} summary={summary} />
         </InspectorSection>
       </div>
     );
@@ -3126,8 +3137,10 @@ export const EigenModeInspectorPanel =
 EigenModeInspectorPanel.displayName = "EigenModeInspectorPanel";
 
 function EigenMode3DActions({
+  settings,
   summary,
 }: {
+  settings: ReturnType<typeof useFrequencyDomainModeDisplaySettings>;
   summary: ReturnType<typeof useEigenModeSummary>;
 }) {
   const kernel = useKernel();
@@ -3175,7 +3188,7 @@ function EigenMode3DActions({
       icon: RotateCw,
       label: "Rotated",
       title: "Plot selected eigen mode with phase-rotated real display",
-      variant: "primary" as const,
+      variant: "secondary" as const,
       view: "phase_rotated_real" as const,
     },
     {
@@ -3222,16 +3235,25 @@ function EigenMode3DActions({
     >
       {actions.map((entry) => {
         const Icon = entry.icon;
+        const isActive =
+          entry.view !== "animate" &&
+          isActiveAnalysisFieldView(
+            settings,
+            summary.fieldId,
+            "eigen-mode",
+            entry.view,
+          );
         return (
           <Button
             aria-label={entry.title}
+            aria-pressed={isActive}
             className="fm-inspector-action-button"
             disabled={disabled}
             key={entry.view}
             size="sm"
             title={disabled ? "Mode field payload is missing" : entry.title}
             type="button"
-            variant={entry.variant}
+            variant={isActive ? "primary" : entry.variant}
             onClick={() => plot(entry.view)}
           >
             <Icon aria-hidden="true" size={13} />
@@ -3266,6 +3288,16 @@ export function FrequencyResponsePointInspectorPanel(
   void props;
   const summary = useFrequencyResponsePointSummary(props);
   const modeDisplaySettings = useFrequencyDomainModeDisplaySettings({
+    activation: {
+      commandId: "analysis.frequency-response.plot-response-field-3d",
+      componentBasis: summary.componentBasis,
+      componentCount: summary.componentCount,
+      defaultPhaseRad: summary.defaultPhaseRad,
+      fieldId: summary.fieldId,
+      label: summary.frequencyDisplay,
+      source: "frequency-response",
+      valueKind: summary.valueKind,
+    },
     sourceDetail: "results.frequency_response.frequency_point",
   });
 
@@ -3310,15 +3342,20 @@ export function FrequencyResponsePointInspectorPanel(
           viewDefaultValue={summary.defaultView}
           viewOptions={summary.availableViewValues}
         />
-        <FrequencyResponsePoint3DActions summary={summary} />
+        <FrequencyResponsePoint3DActions
+          settings={modeDisplaySettings}
+          summary={summary}
+        />
       </InspectorSection>
     </div>
   );
 }
 
 function FrequencyResponsePoint3DActions({
+  settings,
   summary,
 }: {
+  settings: ReturnType<typeof useFrequencyDomainModeDisplaySettings>;
   summary: ReturnType<typeof useFrequencyResponsePointSummary>;
 }) {
   const kernel = useKernel();
@@ -3366,7 +3403,7 @@ function FrequencyResponsePoint3DActions({
       icon: RotateCw,
       label: "Rotated",
       title: "Plot response field with phase-rotated real display",
-      variant: "primary" as const,
+      variant: "secondary" as const,
       view: "phase_rotated_real" as const,
     },
     {
@@ -3413,16 +3450,25 @@ function FrequencyResponsePoint3DActions({
     >
       {actions.map((entry) => {
         const Icon = entry.icon;
+        const isActive =
+          entry.view !== "animate" &&
+          isActiveAnalysisFieldView(
+            settings,
+            summary.fieldId,
+            "frequency-response",
+            entry.view,
+          );
         return (
           <Button
             aria-label={entry.title}
+            aria-pressed={isActive}
             className="fm-inspector-action-button"
             disabled={disabled}
             key={entry.view}
             size="sm"
             title={disabled ? "Response field payload is missing" : entry.title}
             type="button"
-            variant={entry.variant}
+            variant={isActive ? "primary" : entry.variant}
             onClick={() => plot(entry.view)}
           >
             <Icon aria-hidden="true" size={13} />
@@ -5521,6 +5567,8 @@ function useEigenModeSummary({ selection }: InspectorPanelProps) {
         : eigenMode.status === "ready"
           ? `sample ${sampleIndex}, mode ${modeIndex}`
           : eigenMode.status,
+    componentBasis: stringValue(fieldMetaRecord?.component_basis),
+    componentCount: finiteNumber(fieldMetaRecord?.component_count),
     dominantPolarization: dominantPolarization ?? "not available",
     defaultView: normalizeAnalysisFieldView(defaultView),
     defaultViewLabel: defaultView ? analysisFieldViewLabel(defaultView) : "not available",
@@ -5537,6 +5585,7 @@ function useEigenModeSummary({ selection }: InspectorPanelProps) {
     phaseConvention,
     residual: formatNumberOrUnavailable(residual),
     tangentLeakageMax: formatNumberOrUnavailable(tangentLeakage),
+    valueKind: stringValue(fieldMetaRecord?.value_kind),
     workflow:
       fieldId && availableViews.length
         ? `phasor reconstruction; ${realSamples ?? "?"} real samples, ${imagSamples ?? "?"} imag samples`
@@ -5726,6 +5775,8 @@ function useFrequencyResponsePointSummary({ selection }: InspectorPanelProps) {
         : frequencyPoint.status === "ready"
           ? `frequency ${frequencyIndex}`
           : frequencyPoint.status,
+    componentBasis: fieldMeta.data?.component_basis ?? null,
+    componentCount: finiteNumber(fieldMeta.data?.component_count),
     defaultPhaseLabel: `${formatNumber(defaultPhaseRad)} rad`,
     defaultPhaseRad,
     defaultView: normalizeAnalysisFieldView(defaultView),
@@ -5746,6 +5797,7 @@ function useFrequencyResponsePointSummary({ selection }: InspectorPanelProps) {
             "{frequency_index}",
             String(frequencyIndex),
           ),
+    valueKind: fieldMeta.data?.value_kind ?? null,
   };
 }
 

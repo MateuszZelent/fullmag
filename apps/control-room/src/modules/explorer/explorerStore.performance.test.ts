@@ -23,4 +23,14 @@ describe("explorer store subscription performance contracts", () => {
     expect(explorerModuleSource).toContain("useExplorerStoreSelector");
     expect(explorerModuleSource).not.toContain("const explorer = useExplorerStore()");
   });
+
+  it("keeps model mode visualization resource loading narrower than full results loading", () => {
+    expect(explorerModuleSource).toContain("modeVisualizationResourceActive");
+    expect(explorerModuleSource).toContain(
+      "enabled: frequencyDomainTabActive",
+    );
+    expect(explorerModuleSource).toContain(
+      "enabled: activeTab === \"results\" || modeVisualizationResourceActive",
+    );
+  });
 });

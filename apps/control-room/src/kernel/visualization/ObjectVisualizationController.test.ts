@@ -66,6 +66,53 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
+  it("keeps region visualization hidden by default", () => {
+    const controller = new ObjectVisualizationController();
+    const target = {
+      id: "region:film:film%3Acore",
+      kind: "region" as const,
+    };
+
+    expect(controller.getSettings(target)).toMatchObject({
+      activeQuantityId: "m",
+      shaderVisible: false,
+      vectorsVisible: false,
+      visible: false,
+      wireframeVisible: false,
+    });
+    expect(resolveEffectiveVisualizationSettings(controller.getSettings(target)))
+      .toMatchObject({
+        shaderVisible: false,
+        vectorsVisible: false,
+        wireframeVisible: false,
+      });
+  });
+
+  it("uses one canonical object target key for raw and prefixed object ids", () => {
+    const controller = new ObjectVisualizationController();
+    const rawTarget = { id: "film", kind: "object" as const };
+    const canonicalTarget = { id: "object:film", kind: "object" as const };
+    const geometryTarget = { id: "object:film_geom", kind: "object" as const };
+
+    controller.patchTarget(rawTarget, { visible: false });
+
+    expect(visualizationTargetKey(rawTarget)).toBe(
+      visualizationTargetKey(canonicalTarget),
+    );
+    expect(visualizationTargetKey(geometryTarget)).toBe(
+      visualizationTargetKey(canonicalTarget),
+    );
+    expect(controller.getSettings(canonicalTarget)).toMatchObject({
+      visible: false,
+    });
+    expect(controller.getSettings(geometryTarget)).toMatchObject({
+      visible: false,
+    });
+    expect(Object.keys(controller.getSnapshot().overrides)).toEqual([
+      visualizationTargetKey(canonicalTarget),
+    ]);
+  });
+
   it("patches and normalizes per-target shader point wireframe and vector style fields", () => {
     const controller = new ObjectVisualizationController();
     const target = { id: "arch", kind: "object" as const };
@@ -320,7 +367,7 @@ describe("ObjectVisualizationController", () => {
     const controller = new ObjectVisualizationController();
     const objectTarget = { id: "film", kind: "object" as const };
     const regionTarget = {
-      id: "film:region%3Afilm%3Acore",
+      id: "region:film:film%3Acore",
       kind: "region" as const,
     };
 
@@ -333,7 +380,7 @@ describe("ObjectVisualizationController", () => {
       .toMatchObject({ opacityPercent: 35 });
     expect(controller.getSettings(regionTarget)).toMatchObject({
       opacityPercent: 35,
-      visible: true,
+      visible: false,
     });
   });
 
@@ -364,8 +411,9 @@ describe("ObjectVisualizationController", () => {
 
     expect(region.settings).toMatchObject({
       shaderVisible: false,
-      vectorsVisible: true,
+      vectorsVisible: false,
       wireframeVisible: false,
+      visible: false,
     });
   });
 
@@ -589,6 +637,28 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
+  it("uses canonical sampling max glyphs before legacy vector density", () => {
+    expect(
+      resolveGlobalObjectVisualizationSettings({
+        layers: {
+          vectors: {
+            density: 512,
+            domain: "full_domain",
+            visible: true,
+          },
+        },
+        sampling: {
+          max_glyphs: 1536,
+        },
+        vector_density: 256,
+        vector_glyphs: true,
+      } as never),
+    ).toMatchObject({
+      vectorBudget: 1536,
+      vectorsVisible: true,
+    });
+  });
+
   it("defaults scalar surface quantities to colormap instead of vector orientation coloring", () => {
     expect(
       resolveGlobalObjectVisualizationSettings({
@@ -651,6 +721,33 @@ describe("ObjectVisualizationController", () => {
       settings: {
         visible: true,
       },
+    });
+  });
+
+  it("matches backend object overrides that use geometry suffixed scope ids", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "object:free-layer", kind: "object" as const };
+    const visualizationState = {
+      overrides: [
+        {
+          display: { wireframe: { visible: true } },
+          scope: "object",
+          scope_id: "free-layer_geom",
+          visible: true,
+        },
+      ],
+      revision: 12,
+    };
+
+    expect(
+      resolveTargetVisualization({
+        snapshot: controller.getSnapshot(),
+        target,
+        visualizationState: visualizationState as never,
+      }).settings,
+    ).toMatchObject({
+      visible: true,
+      wireframeVisible: true,
     });
   });
 
@@ -1126,6 +1223,15 @@ describe("ObjectVisualizationController", () => {
       resolveAirboxVisualizationSettingsFromState({
         active_quantity_id: "m",
         quantity: { active_quantity_id: "H_demag" },
+      }).activeQuantityId,
+    ).toBe("H_demag");
+  });
+
+  it("does not inherit global H_eff quantity into airbox compatibility state", () => {
+    expect(
+      resolveAirboxVisualizationSettingsFromState({
+        active_quantity_id: "H_eff",
+        quantity: { active_quantity_id: "H_eff" },
       }).activeQuantityId,
     ).toBe("H_demag");
   });

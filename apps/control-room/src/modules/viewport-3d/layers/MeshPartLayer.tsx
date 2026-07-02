@@ -655,18 +655,20 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     }
   }, [hasScalarColors]);
 
-  const hasAnyVisibleSubLayer =
-    renderSettings.shaderVisible ||
-    renderSettings.wireframeVisible ||
-    renderSettings.pointsVisible ||
-    renderSettings.vectorsVisible ||
-    renderSettings.boundsVisible;
   const vectorLayerInput = resolveMeshPartVectorLayerInput({
     fieldModel,
     partId: part.id,
   });
+  const hasAnyVisibleRenderableSubLayer =
+    (renderSettings.shaderVisible && Boolean(geometry)) ||
+    (renderSettings.wireframeVisible && Boolean(edgeGeometry)) ||
+    (renderSettings.pointsVisible && Boolean(pointGeometry)) ||
+    renderSettings.boundsVisible ||
+    (renderSettings.vectorsVisible &&
+      viewport3DVectorLayersEnabledFromBrowserConfig() &&
+      Boolean(vectorLayerInput.segments));
 
-  if (!geometry || !renderSettings.visible || !hasAnyVisibleSubLayer) return null;
+  if (!renderSettings.visible || !hasAnyVisibleRenderableSubLayer) return null;
   const meshColor = resolveMeshPartSurfaceMaterialColor(
     renderSettings,
     colors.mesh,
@@ -690,7 +692,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
 
   return (
     <group onPointerDown={handlePointerDown}>
-      {renderSettings.shaderVisible ? (
+      {renderSettings.shaderVisible && geometry ? (
         <mesh
           geometry={geometry}
           renderOrder={surfacePolicy.transparent

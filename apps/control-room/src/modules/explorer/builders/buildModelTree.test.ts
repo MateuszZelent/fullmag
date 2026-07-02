@@ -1367,7 +1367,7 @@ describe("buildModelTree", () => {
       results.find((node) => node.id === "results:frequency-domain:fmr:peaks"),
     ).toMatchObject({
       artifactPath: "response/magnetic_response_sweep.v2.json",
-      badge: "4 peak(s)",
+      badge: "3 peak(s)",
       children: expect.any(Array),
       calculationMode: "fmr_response",
       kind: "results.frequency_domain.fmr_peaks",
@@ -1393,7 +1393,7 @@ describe("buildModelTree", () => {
     });
     expect(
       results.find(
-        (node) => node.id === "results:frequency-domain:fmr:peaks:peak:2",
+        (node) => node.id === "results:frequency-domain:fmr:peaks:peak:1",
       ),
     ).toMatchObject({
       artifactPath: "eigen/spectrum.v2.json",
@@ -1410,9 +1410,9 @@ describe("buildModelTree", () => {
         "analysis.eigen.set-mode-3d-animation",
       ],
       fieldId: "analysis:eigen:sample-0000:mode-0002",
-      fmrPeakIndex: 2,
+      fmrPeakIndex: 1,
       kind: "results.frequency_domain.fmr_peak",
-      label: "Modal Peak 3",
+      label: "Modal Peak 2",
       modeIndex: 2,
       parentId: "results:frequency-domain:fmr:peaks",
       resourceRef: analysisFieldVectorResourceKey(
@@ -2208,6 +2208,102 @@ describe("buildModelTree", () => {
     ).toMatchObject({
       kind: "results.frequency_domain.comparison",
       label: "Modal vs Driven Comparison",
+      status: "ready",
+    });
+  });
+
+  it("projects frequency-domain mode fields under object visualization nodes", () => {
+    const flattened = flattenExplorerNodes(
+      (
+        buildModelTree as unknown as (
+          snapshot: Parameters<typeof buildModelTree>[0],
+          resources: Record<string, unknown>,
+        ) => ReturnType<typeof buildModelTree>
+      )(
+        {
+          objects: [
+            {
+              geometryKind: "box",
+              id: "film",
+              label: "Film",
+              magnetization: "m",
+              objectRole: "magnet",
+            },
+          ],
+        },
+        {
+          activeAnalysisFieldOverlay: {
+            fieldId: "analysis:frequency-response:field-0001",
+            label: "Response field 1",
+            query: {
+              component: "full",
+              phase_rad: 0,
+              scope_kind: "full",
+              view: "real",
+            },
+            source: "frequency-response",
+          },
+          frequencyDomainManifest: {
+            ...FREQUENCY_DOMAIN_MANIFEST,
+            result_manifest: {
+              payload: {
+                resources: {
+                  response_field_resources: [
+                    {
+                      field_resource_id: "analysis:frequency-response:field-0001",
+                      frequency_index: 1,
+                    },
+                  ],
+                },
+              },
+            },
+          } as FrequencyDomainManifestResource,
+          frequencyDomainResponseSweep: FREQUENCY_DOMAIN_RESPONSE_SWEEP,
+          frequencyDomainSpectrum: FREQUENCY_DOMAIN_SPECTRUM,
+        },
+      ),
+    );
+
+    expect(
+      flattened.find(
+        (node) =>
+          node.id === "model:object:film:visualization:mode-visualization",
+      ),
+    ).toMatchObject({
+      badge: "2 field(s)",
+      kind: "object.mode_visualization",
+      label: "Mode visualization",
+      objectId: "film",
+      parentId: "model:object:film:visualization",
+      status: "ready",
+    });
+    expect(
+      flattened.find(
+        (node) =>
+          node.id ===
+          "model:object:film:visualization:mode-visualization:eigen:sample:0:mode:2:view:real",
+      ),
+    ).toMatchObject({
+      fieldId: "analysis:eigen:sample-0000:mode-0002",
+      kind: "object.mode_visualization.view",
+      label: "Real",
+      modeIndex: 2,
+      objectId: "film",
+      sampleIndex: 0,
+      status: "ready",
+    });
+    expect(
+      flattened.find(
+        (node) =>
+          node.id ===
+          "model:object:film:visualization:mode-visualization:response:frequency:1:view:phase_rotated_real",
+      ),
+    ).toMatchObject({
+      fieldId: "analysis:frequency-response:field-0001",
+      frequencyIndex: 1,
+      kind: "object.mode_visualization.view",
+      label: "Phase-rotated real",
+      objectId: "film",
       status: "ready",
     });
   });

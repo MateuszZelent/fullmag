@@ -48,6 +48,35 @@ describe("viewport3DTargets", () => {
     });
   });
 
+  it("maps geometry-suffixed mesh part ownership to the scene object target", () => {
+    expect(
+      targetForMeshPart({
+        id: "mesh-part:free-layer",
+        label: "Free layer",
+        object_id: "free-layer_geom",
+      } as Parameters<typeof targetForMeshPart>[0]),
+    ).toEqual({
+      id: "object:free-layer",
+      kind: "object",
+      label: "Free layer",
+    });
+  });
+
+  it("maps geometry-only mesh parts to canonical object visualization targets", () => {
+    expect(
+      targetForMeshPart({
+        id: "mesh-part:free-layer",
+        label: "Free layer",
+        geometry_id: "free-layer_geom",
+        object_id: null,
+      } as Parameters<typeof targetForMeshPart>[0]),
+    ).toEqual({
+      id: "object:free-layer",
+      kind: "object",
+      label: "Free layer",
+    });
+  });
+
   it("does not create an FDM visualization target without a domain id", () => {
     expect(targetForFdmDomain(null)).toBeNull();
   });

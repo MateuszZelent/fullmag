@@ -19,7 +19,14 @@ import {
 } from "./frequencyDomainExplorerNodes";
 import { buildStudyNodes } from "./study/studyExplorerNodes";
 
+import type { AnalysisFieldOverlayState } from "@/kernel/visualization/AnalysisFieldOverlayController";
 import { meshPipelineStatusIsActive } from "@/shared/domain/mesh/buildPipeline";
+import {
+  buildEigenSpectrumChartModel,
+  buildFrequencyResponseChartModel,
+  frequencyDomainManifestPayload,
+} from "@/shared/domain/analysis/frequencyDomainChartModels";
+import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
 import {
   resolveMeshBuildFreshness,
   type MeshFreshnessState,
@@ -37,7 +44,34 @@ function formatSize(size: readonly [number, number, number] | null | undefined):
   return size.map(formatLength).join(" x ");
 }
 
-function objectNodes(object: ModelTreeObjectSnapshot): ExplorerNode {
+type ModelTreeResources = ExplorerTreeResources & {
+  activeAnalysisFieldOverlay?: AnalysisFieldOverlayState | null;
+};
+
+const MODE_VISUALIZATION_VIEWS = [
+  "phase_rotated_real",
+  "real",
+  "imag",
+  "abs",
+  "phase",
+] as const;
+
+interface ModeVisualizationFieldNode {
+  badge: string;
+  fieldId: string;
+  frequencyIndex?: number;
+  frequencyHz?: number;
+  id: string;
+  label: string;
+  modeIndex?: number;
+  sampleIndex?: number;
+  source: "eigen-mode" | "frequency-response";
+}
+
+function objectNodes(
+  object: ModelTreeObjectSnapshot,
+  resources: ModelTreeResources = {},
+): ExplorerNode {
   const objectId = object.id;
   const parentId = `model:object:${objectId}`;
   const meshStatus = object.meshStatus ?? "primitive-only";
@@ -91,6 +125,9 @@ function objectNodes(object: ModelTreeObjectSnapshot): ExplorerNode {
           objectId,
           status: "ready",
           contextCommands: ["workspace.focus-selection"],
+          children: compactExplorerNodes([
+            modeVisualizationNode(`${parentId}:visualization`, object, resources),
+          ]),
         },
       ],
     };
@@ -164,10 +201,240 @@ function objectNodes(object: ModelTreeObjectSnapshot): ExplorerNode {
         objectId,
         status: "ready",
         contextCommands: ["workspace.focus-selection"],
+        children: compactExplorerNodes([
+          modeVisualizationNode(`${parentId}:visualization`, object, resources),
+        ]),
       },
       ...objectExtensionNodes(parentId, object),
     ],
   };
+}
+
+function compactExplorerNodes(
+  nodes: Array<ExplorerNode | null | undefined>,
+): ExplorerNode[] {
+  return nodes.filter((node): node is ExplorerNode => Boolean(node));
+}
+
+function modeVisualizationNode(
+  parentId: string,
+  object: ModelTreeObjectSnapshot,
+  resources: ModelTreeResources,
+): ExplorerNode | null {
+  const activeOverlay = resources.activeAnalysisFieldOverlay ?? null;
+  if (!activeOverlay) return null;
+
+  const fields = modeVisualizationFields(resources);
+  if (fields.length === 0) return null;
+
+  const nodeId = `${parentId}:mode-visualization`;
+  const primaryField =
+    fields.find(
+      (field) =>
+        field.fieldId === activeOverlay.fieldId &&
+        field.source === activeOverlay.source,
+    ) ?? fields[0];
+  return {
+    id: nodeId,
+    kind: "object.mode_visualization",
+    label: "Mode visualization",
+    parentId,
+    badge: `${fields.length} field(s)`,
+    analysisFieldSource: primaryField.source,
+    ...(activeOverlay.query.view ? { analysisFieldView: activeOverlay.query.view } : {}),
+    fieldId: primaryField.fieldId,
+    icon: "wave",
+    objectId: object.id,
+    status: "ready",
+    children: modeVisualizationGroupNodes(nodeId, object.id, fields, activeOverlay),
+  };
+}
+
+function modeVisualizationGroupNodes(
+  parentId: string,
+  objectId: string,
+  fields: readonly ModeVisualizationFieldNode[],
+  activeOverlay: AnalysisFieldOverlayState,
+): ExplorerNode[] {
+  const eigenFields = fields.filter((field) => field.source === "eigen-mode");
+  const responseFields = fields.filter(
+    (field) => field.source === "frequency-response",
+  );
+  return compactExplorerNodes([
+    modeVisualizationGroupNode({
+      activeOverlay,
+      fields: responseFields,
+      id: `${parentId}:response`,
+      label: "Driven response",
+      objectId,
+      parentId,
+    }),
+    modeVisualizationGroupNode({
+      activeOverlay,
+      fields: eigenFields,
+      id: `${parentId}:eigen`,
+      label: "Eigenmodes",
+      objectId,
+      parentId,
+    }),
+  ]);
+}
+
+function modeVisualizationGroupNode({
+  activeOverlay,
+  fields,
+  id,
+  label,
+  objectId,
+  parentId,
+}: {
+  activeOverlay: AnalysisFieldOverlayState;
+  fields: readonly ModeVisualizationFieldNode[];
+  id: string;
+  label: string;
+  objectId: string;
+  parentId: string;
+}): ExplorerNode | null {
+  if (fields.length === 0) return null;
+  const firstField = fields[0];
+  return {
+    id,
+    kind: "object.mode_visualization.group",
+    label,
+    parentId,
+    badge: `${fields.length}`,
+    analysisFieldSource: firstField.source,
+    fieldId: firstField.fieldId,
+    icon: "folder",
+    objectId,
+    status: "ready",
+    children: fields.map((field) =>
+      modeVisualizationFieldNode(id, objectId, field, activeOverlay),
+    ),
+  };
+}
+
+function modeVisualizationFieldNode(
+  parentId: string,
+  objectId: string,
+  field: ModeVisualizationFieldNode,
+  activeOverlay: AnalysisFieldOverlayState,
+): ExplorerNode {
+  const active = activeOverlay.fieldId === field.fieldId &&
+    activeOverlay.source === field.source;
+  const id = `${parentId}:${field.id}`;
+  return {
+    id,
+    kind: "object.mode_visualization.field",
+    label: field.label,
+    parentId,
+    badge: active ? "active" : field.badge,
+    analysisFieldSource: field.source,
+    fieldId: field.fieldId,
+    ...(field.frequencyIndex !== undefined
+      ? { frequencyIndex: field.frequencyIndex }
+      : {}),
+    icon: "wave",
+    ...(field.modeIndex !== undefined ? { modeIndex: field.modeIndex } : {}),
+    objectId,
+    ...(field.sampleIndex !== undefined ? { sampleIndex: field.sampleIndex } : {}),
+    status: "ready",
+    children: MODE_VISUALIZATION_VIEWS.map((view) =>
+      modeVisualizationViewNode(id, objectId, field, view, activeOverlay),
+    ),
+  };
+}
+
+function modeVisualizationViewNode(
+  parentId: string,
+  objectId: string,
+  field: ModeVisualizationFieldNode,
+  view: string,
+  activeOverlay: AnalysisFieldOverlayState,
+): ExplorerNode {
+  const active =
+    activeOverlay.fieldId === field.fieldId &&
+    activeOverlay.source === field.source &&
+    (activeOverlay.query.view ?? "phase_rotated_real") === view;
+  return {
+    id: `${parentId}:view:${view}`,
+    kind: "object.mode_visualization.view",
+    label: modeVisualizationViewLabel(view),
+    parentId,
+    badge: active ? "active" : undefined,
+    analysisFieldSource: field.source,
+    analysisFieldView: view,
+    fieldId: field.fieldId,
+    ...(field.frequencyIndex !== undefined
+      ? { frequencyIndex: field.frequencyIndex }
+      : {}),
+    icon: "wave",
+    ...(field.modeIndex !== undefined ? { modeIndex: field.modeIndex } : {}),
+    objectId,
+    ...(field.sampleIndex !== undefined ? { sampleIndex: field.sampleIndex } : {}),
+    status: "ready",
+  };
+}
+
+function modeVisualizationFields(
+  resources: ModelTreeResources,
+): ModeVisualizationFieldNode[] {
+  return [
+    ...modeVisualizationResponseFields(resources),
+    ...modeVisualizationEigenFields(resources),
+  ];
+}
+
+function modeVisualizationResponseFields(
+  resources: ModelTreeResources,
+): ModeVisualizationFieldNode[] {
+  const manifestPayload = frequencyDomainManifestPayload(
+    resources.frequencyDomainManifest,
+  );
+  const responseModel = buildFrequencyResponseChartModel(
+    resources.frequencyDomainResponseSweep,
+    manifestPayload,
+  );
+  const fields = new Map<string, ModeVisualizationFieldNode>();
+  for (const point of responseModel.points) {
+    if (!point.fieldId || point.frequencyIndex == null) continue;
+    if (fields.has(point.fieldId)) continue;
+    fields.set(point.fieldId, {
+      badge: formatFrequencyHz(point.frequencyHz),
+      fieldId: point.fieldId,
+      frequencyHz: point.frequencyHz,
+      frequencyIndex: point.frequencyIndex,
+      id: `frequency:${point.frequencyIndex}`,
+      label: formatFrequencyHz(point.frequencyHz),
+      source: "frequency-response",
+    });
+  }
+  return [...fields.values()];
+}
+
+function modeVisualizationEigenFields(
+  resources: ModelTreeResources,
+): ModeVisualizationFieldNode[] {
+  return buildEigenSpectrumChartModel(resources.frequencyDomainSpectrum)
+    .points.filter((point) => point.modeFieldId != null)
+    .map((point) => ({
+      badge: formatFrequencyHz(point.frequencyHz),
+      fieldId: point.modeFieldId as string,
+      frequencyHz: point.frequencyHz,
+      id: `sample:${point.sampleIndex}:mode:${point.rawModeIndex}`,
+      label: `Sample ${point.sampleIndex} Mode ${point.rawModeIndex}`,
+      modeIndex: point.rawModeIndex,
+      sampleIndex: point.sampleIndex,
+      source: "eigen-mode" as const,
+    }));
+}
+
+function modeVisualizationViewLabel(view: string): string {
+  if (view === "real") return "Real";
+  if (view === "imag") return "Imag";
+  if (view === "abs") return "Complex (abs)";
+  if (view === "phase") return "Phase";
+  return "Phase-rotated real";
 }
 
 function objectExtensionNodes(
@@ -651,7 +918,10 @@ function physicsInteractionBadge(
   return `${interaction.enabledCount}/${interaction.objectCount} active`;
 }
 
-export function buildModelTree(snapshot: ModelTreeSnapshot | null = null): ExplorerNode[] {
+export function buildModelTree(
+  snapshot: ModelTreeSnapshot | null = null,
+  resources: ModelTreeResources = {},
+): ExplorerNode[] {
   const universe = snapshot?.universe ?? {
     id: "universe",
     label: "Universe",
@@ -698,7 +968,7 @@ export function buildModelTree(snapshot: ModelTreeSnapshot | null = null): Explo
       badge: `${objects.length}`,
       icon: "layers",
       status: "ready",
-      children: objects.map(objectNodes),
+      children: objects.map((object) => objectNodes(object, resources)),
     },
   ];
 
@@ -750,7 +1020,7 @@ export function buildExplorerTree(
   tabId: ExplorerTabId,
   resources: ExplorerTreeResources = {},
 ): ExplorerNode[] {
-  if (tabId === "model") return buildModelTree();
+  if (tabId === "model") return buildModelTree(null, resources);
   if (tabId === "resources") {
     return [
       {

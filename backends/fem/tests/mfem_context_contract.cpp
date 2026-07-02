@@ -384,12 +384,33 @@ void mfem_context_uses_elementwise_material_coefficients_when_present() {
         "exchange operator must accept generic MFEM coefficients, not only GridFunctionCoefficient");
 }
 
+void mfem_context_filters_internal_boundary_faces_before_mfem_mesh_creation() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string runtime =
+        read_text_file(root / "cpu" / "mfem" / "runtime" / "mfem_context.cpp");
+
+    check(
+        runtime.find("std::vector<MfemBoundaryTriangle> exterior_mfem_boundary_triangles(") !=
+            std::string::npos,
+        "MFEM context must build boundary elements from exterior tetra faces");
+    check(
+        runtime.find("record.adjacent_elements != 1u") != std::string::npos,
+        "MFEM boundary filtering must skip internal shared-domain interface faces");
+    check(
+        runtime.find("static_cast<int>(mfem_boundary_triangles.size())") !=
+                std::string::npos &&
+            runtime.find("for (const auto &tri : mfem_boundary_triangles)") !=
+                std::string::npos,
+        "MFEM mesh creation must use filtered exterior boundary triangles");
+}
+
 } // namespace
 
 int main() {
     mfem_context_lifecycle_is_owned_by_runtime_module();
     mfem_runtime_pointers_are_typed();
     mfem_context_uses_elementwise_material_coefficients_when_present();
+    mfem_context_filters_internal_boundary_faces_before_mfem_mesh_creation();
     runtime_source_files_document_module_boundaries();
     runtime_headers_document_module_boundaries();
     return 0;

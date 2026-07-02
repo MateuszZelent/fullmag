@@ -8,6 +8,7 @@ import {
   resolveCanonicalQuantityId,
 } from "../api/quantityIds";
 import {
+  canonicalVisualizationSceneObjectId,
   visualizationTargetIdForSceneObject,
   type Selection,
 } from "../selection/selectionTypes";
@@ -154,6 +155,18 @@ export const DEFAULT_OBJECT_VISUALIZATION: VisualizationTargetSettings = {
   wireframeColor: "var(--fm-border-strong)",
   wireframeOpacityPercent: 100,
   wireframeVisible: true,
+};
+
+export const DEFAULT_REGION_VISUALIZATION: VisualizationTargetSettings = {
+  ...DEFAULT_OBJECT_VISUALIZATION,
+  boundsVisible: false,
+  pointsVisible: false,
+  primitiveVisible: false,
+  renderMode: "surface",
+  shaderVisible: false,
+  vectorsVisible: false,
+  visible: false,
+  wireframeVisible: false,
 };
 
 export const DEFAULT_AIRBOX_VISUALIZATION: VisualizationTargetSettings = {
@@ -304,6 +317,7 @@ function defaultVisualizationSettings(
 ): VisualizationTargetSettings {
   if (kind === "airbox") return DEFAULT_AIRBOX_VISUALIZATION;
   if (kind === "part") return DEFAULT_PART_VISUALIZATION;
+  if (kind === "region") return DEFAULT_REGION_VISUALIZATION;
   return DEFAULT_OBJECT_VISUALIZATION;
 }
 
@@ -384,6 +398,14 @@ export function resolveDefaultVisualizationSettings(
   kind: VisualizationTargetKind,
   baseSettings?: VisualizationTargetSettings,
 ): VisualizationTargetSettings {
+  if (kind === "region") {
+    return normalizeVisualizationSettings({
+      ...DEFAULT_OBJECT_VISUALIZATION,
+      ...(baseSettings ?? {}),
+      ...DEFAULT_REGION_VISUALIZATION,
+      ...(snapshot.defaults[kind] ?? {}),
+    });
+  }
   return normalizeVisualizationSettings({
     ...defaultVisualizationSettings(kind),
     ...(baseSettings ?? {}),
@@ -651,7 +673,9 @@ export function visualizationStateOverrideFromTargetPatch(
 
 function visualizationStateScopeIdForTarget(target: VisualizationTargetRef): string {
   if (target.kind === "object" && target.id.startsWith("object:")) {
-    return target.id.slice("object:".length);
+    return canonicalVisualizationSceneObjectId(
+      target.id.slice("object:".length),
+    );
   }
   return target.id;
 }
@@ -681,7 +705,8 @@ export function visualizationStateOverrideMatchesTarget(
   return (
     target.kind === "object" &&
     target.id.startsWith("object:") &&
-    entry.scope_id === target.id.slice("object:".length)
+    canonicalVisualizationSceneObjectId(entry.scope_id) ===
+      canonicalVisualizationSceneObjectId(target.id.slice("object:".length))
   );
 }
 
@@ -860,7 +885,10 @@ export function resolveGlobalObjectVisualizationSettings(
   const vectorMonoColor =
     state?.vector_style?.mono_color ??
     DEFAULT_OBJECT_VISUALIZATION.vectorMonoColor;
-  const vectorBudget = state?.layers?.vectors?.density;
+  const vectorBudget =
+    state?.sampling?.max_glyphs ??
+    state?.layers?.vectors?.density ??
+    state?.vector_density;
   const activeQuantityId = normalizeQuantityIdOrDefault(
     state.quantity?.active_quantity_id ?? state.active_quantity_id,
     DEFAULT_OBJECT_VISUALIZATION.activeQuantityId,
@@ -923,9 +951,7 @@ export function resolveAirboxVisualizationSettingsFromState(
   );
   const baseSettings = targetSettings ?? DEFAULT_AIRBOX_VISUALIZATION;
   const activeQuantityId = normalizeQuantityIdOrDefault(
-    state?.targets?.airbox?.settings?.active_quantity_id ??
-      state?.quantity?.active_quantity_id ??
-      state?.active_quantity_id,
+    state?.targets?.airbox?.settings?.active_quantity_id,
     baseSettings.activeQuantityId,
   );
   const airbox = state?.layers?.airbox;
@@ -1242,7 +1268,35 @@ export function resolveVisualizationTargetFromSelection(
 
 export function visualizationTargetKey(target: VisualizationTargetRef): string {
   if (target.kind === "airbox") return "airbox";
-  return `${target.kind}:${target.id}`;
+  return canonicalVisualizationTargetId(target);
+}
+
+function canonicalVisualizationTargetId(target: VisualizationTargetRef): string {
+  if (target.kind === "object") {
+    const objectId = target.id.startsWith("object:")
+      ? target.id.slice("object:".length)
+      : target.id;
+    return `object:${canonicalVisualizationSceneObjectId(objectId)}`;
+  }
+  if (target.kind === "region") {
+    const match = /^region:([^:]+):(.+)$/.exec(target.id);
+    if (!match) return target.id;
+    try {
+      const objectId = encodeURIComponent(
+        canonicalVisualizationSceneObjectId(
+          decodeURIComponent(match[1] ?? ""),
+        ),
+      );
+      const regionId = encodeURIComponent(decodeURIComponent(match[2] ?? ""));
+      return `region:${objectId}:${regionId}`;
+    } catch {
+      return target.id;
+    }
+  }
+  if (target.kind === "part") {
+    return target.id.startsWith("part:") ? target.id : `part:${target.id}`;
+  }
+  return target.id;
 }
 
 function normalizePatch(

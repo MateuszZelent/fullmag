@@ -65,17 +65,17 @@ describe("MeshPartLayer", () => {
     );
   });
 
-  it("uses target visibility as the master display gate for mesh-backed parts", () => {
+  it("does not require surface geometry before rendering mesh-backed subpasses", () => {
     const source = readFileSync(
       fileURLToPath(new URL("./MeshPartLayer.tsx", import.meta.url)),
       "utf8",
     );
 
     expect(source).toContain(
-      "if (!geometry || !renderSettings.visible || !hasAnyVisibleSubLayer) return null;",
+      "if (!renderSettings.visible || !hasAnyVisibleRenderableSubLayer) return null;",
     );
     expect(source).not.toContain(
-      "(!renderSettings.visible && !hasAnyVisibleSubLayer)",
+      "if (!geometry || !renderSettings.visible",
     );
   });
 

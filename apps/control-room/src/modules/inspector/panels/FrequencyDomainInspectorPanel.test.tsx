@@ -1075,13 +1075,13 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("x-periodic");
     expect(html).toContain("markers 11/12");
     expect(html).toContain("Max residual");
-    expect(html).toContain("1e-12 m");
+    expect(html).toContain("1.000e-12 m");
     expect(html).toContain("Invalid pairs");
     expect(html).toContain("0");
     expect(html).toContain("Floquet phase preview");
     expect(html).toContain("exp(-i k dot delta_r)");
     expect(html).toContain("Phase angle");
-    expect(html).toContain("3.141592653589793 rad");
+    expect(html).toContain("3.1416 rad");
     expect(html).toContain("Re(exp(-i k dot delta_r))");
     expect(html).toContain("-1");
     expect(html).toContain("Im(exp(-i k dot delta_r))");
@@ -3158,6 +3158,10 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Volume inspection roadmap");
     expect(html).toContain("clip planes and shader opacity remain planned");
     expect(html).toContain("Mode field view");
+    expect(html).toContain("Mode component");
+    expect(html).toContain("delta m_x");
+    expect(html).toContain("delta m_y");
+    expect(html).toContain("delta m_z");
     expect(html).toContain("Display passes");
     expect(html).toContain("Mode color source");
     expect(html).toContain("Mode solid color");
@@ -3291,6 +3295,10 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Complex response convention");
     expect(html).toContain("phasor response; view controls select real");
     expect(html).toContain("Mode field view");
+    expect(html).toContain("Mode component");
+    expect(html).toContain("delta m_x");
+    expect(html).toContain("delta m_y");
+    expect(html).toContain("delta m_z");
     expect(html).toContain("Display passes");
     expect(html).toContain("Mode color source");
     expect(html).toContain("Mode solid color");
@@ -4477,6 +4485,10 @@ describe("FrequencyDomainInspectorPanel", () => {
       resolve(__dirname, "FrequencyDomainModeDisplayControls.tsx"),
       "utf8",
     );
+    const resultInspectorsSource = readFileSync(
+      resolve(__dirname, "frequency-domain/FrequencyDomainResultInspectors.tsx"),
+      "utf8",
+    );
 
     expect(source).toContain("analysisFieldPhaseInputRef.current?.value");
     expect(source).toContain("selectedFieldMeta?.default_phase_rad");
@@ -4496,9 +4508,21 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(displayControlsSource).toContain('"analysis.frequency-domain.set-3d-appearance"');
     expect(displayControlsSource).toContain("activeAnalysisFieldOverlay?.appearance?.surfaceColorSource");
     expect(displayControlsSource).toContain("activeAnalysisFieldOverlay?.appearance?.scalarColorPalette");
+    expect(displayControlsSource).toContain("Mode component");
+    expect(displayControlsSource).toContain("delta m_x");
+    expect(displayControlsSource).toContain("delta m_y");
+    expect(displayControlsSource).toContain("delta m_z");
+    expect(displayControlsSource).toContain("activation?.fieldId");
+    expect(displayControlsSource).toContain("activation.commandId");
+    expect(displayControlsSource).toContain("source: activation.source");
+    expect(displayControlsSource).toContain("fieldId: activation.fieldId");
+    expect(displayControlsSource).toContain("isActiveAnalysisFieldView");
+    expect(resultInspectorsSource).toContain("aria-pressed={isActive}");
+    expect(resultInspectorsSource).toContain('variant={isActive ? "primary" : entry.variant}');
     expect(displayControlsSource).toContain("kernel.visualizationSync.queuePatch");
     expect(displayControlsSource).toContain("kernel.visualization.patchDefaults(\"part\"");
     expect(displayControlsSource).toContain("surfaceColorSource,");
+    expect(displayControlsSource).toContain("surfaceColorSource: nextComponent");
     expect(displayControlsSource).toContain("quantity: {");
     expect(displayControlsSource).toContain("colormap: nextColormap");
     expect(source).toContain("selectedModeKey={");

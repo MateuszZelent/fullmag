@@ -57,6 +57,32 @@ function extensionIdFromNode(node: ExplorerNode): string | undefined {
   return undefined;
 }
 
+function modeVisualizationSourceFromNode(
+  node: ExplorerNode,
+): "eigen-mode" | "frequency-response" | null {
+  if (node.analysisFieldSource) return node.analysisFieldSource;
+  if (node.fieldId?.startsWith("analysis:eigen:")) return "eigen-mode";
+  if (node.fieldId?.startsWith("analysis:frequency-response:")) {
+    return "frequency-response";
+  }
+  return null;
+}
+
+function modeVisualizationViewFromNode(node: ExplorerNode): string | undefined {
+  if (node.analysisFieldView) return node.analysisFieldView;
+  const marker = ":view:";
+  const markerIndex = node.id.lastIndexOf(marker);
+  return markerIndex >= 0 ? node.id.slice(markerIndex + marker.length) : undefined;
+}
+
+function modeVisualizationTargetId(
+  objectId: string,
+  source: "eigen-mode" | "frequency-response",
+  fieldId: string,
+): `mode:${string}:${typeof source}:${string}` {
+  return `mode:${objectId}:${source}:${encodeURIComponent(fieldId)}`;
+}
+
 function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
   if (isFrequencyDomainSelectionNode(node)) {
     return {
@@ -79,6 +105,39 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       ...(node.resourceRef ? { resourceRef: node.resourceRef } : {}),
       ...(node.sampleIndex !== undefined ? { sampleIndex: node.sampleIndex } : {}),
       type: "frequency-domain",
+    };
+  }
+
+  if (
+    node.objectId &&
+    node.fieldId &&
+    (node.kind === "object.mode_visualization" ||
+      node.kind === "object.mode_visualization.group" ||
+      node.kind === "object.mode_visualization.field" ||
+      node.kind === "object.mode_visualization.view")
+  ) {
+    const source = modeVisualizationSourceFromNode(node);
+    if (!source) return null;
+    return {
+      fieldId: node.fieldId,
+      ...(node.frequencyIndex !== undefined
+        ? { frequencyIndex: node.frequencyIndex }
+        : {}),
+      kind: node.kind,
+      ...(node.modeIndex !== undefined ? { modeIndex: node.modeIndex } : {}),
+      nodeId: node.id,
+      objectId: node.objectId,
+      ...(node.sampleIndex !== undefined ? { sampleIndex: node.sampleIndex } : {}),
+      source,
+      type: "mode-visualization",
+      ...(modeVisualizationViewFromNode(node)
+        ? { view: modeVisualizationViewFromNode(node) }
+        : {}),
+      visualizationTargetId: modeVisualizationTargetId(
+        node.objectId,
+        source,
+        node.fieldId,
+      ),
     };
   }
 

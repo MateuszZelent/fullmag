@@ -949,7 +949,7 @@ export default function Viewport3DModule({
   const commandState = useViewport3DCommandState();
   const meshSizeHighlight = useMeshSizeHistogramHighlight(kernel.bus);
   const [regionOverlayMode, setRegionOverlayMode] =
-    useState<RegionOverlayMode>("auto");
+    useState<RegionOverlayMode>("off");
   const meshHistogramBinElements = useMeshHistogramBinElementsResource(
     meshSizeHighlight?.resource ?? null,
   );
@@ -1516,6 +1516,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           >
             {(
               [
+                ["off", "Off"],
                 ["auto", "Auto"],
                 ["authored", "Authored"],
                 ["realized", "Realized"],

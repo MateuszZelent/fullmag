@@ -142,6 +142,15 @@ describe("inspectorRegistry", () => {
     );
   });
 
+  it("resolves object mode visualization selections to the mode visualization panel", () => {
+    expect(resolveInspectorPanel({ kind: "object.mode_visualization" })?.id).toBe(
+      "object-mode-visualization",
+    );
+    expect(
+      resolveInspectorPanel({ kind: "object.mode_visualization.view" })?.id,
+    ).toBe("object-mode-visualization");
+  });
+
   it("resolves object region and magnetic texture groups", () => {
     expect(resolveInspectorPanel({ kind: "object.regions" })?.id).toBe(
       "object-regions",

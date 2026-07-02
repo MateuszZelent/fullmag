@@ -23,7 +23,6 @@ import {
   displayLabelForVisualizationTarget,
   hasVisualizationStatePatch,
   mergeVisualizationStateTargetOverride,
-  renderModePatch,
   resolveTargetVisualization,
   resolveVisualizationTargetFromSelection,
   visualizationStateOverrideMatchesTarget,
@@ -65,6 +64,7 @@ import {
   useMeshSharedDomainManifestResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
+import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
 import { useLayoutSelector } from "@/kernel/layout/useLayout";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
@@ -78,11 +78,14 @@ import {
   buildVisualizationVectorBudgetDiagnostic,
   buildVisualizationPanelSections,
   colorPickerInputValue,
+  displayPassTogglePatch,
   fieldMetaScopeQueryForVisualizationTarget,
   formatScalarColorbarValue,
+  geometryScopeVectorBudgetPatch,
   objectVisualizationTargetForMeshPart,
   resolveVisualizationVectorBudgetRange,
   resolveObjectVisualizationPanelTopologyFreshness,
+  resolveRegionVisualizationCarrier,
   resolveVisualizationRenderResolution,
   resolveSurfaceColorSourceItems,
   scalarColorPaletteGradientCss,
@@ -96,10 +99,12 @@ import {
   surfaceColorSourceFieldMetaComponent,
   geometryScopeDisplayPatch,
   quantitySourcePatch,
+  renderModeDisplayPatch,
   surfaceDisplayPassPatch,
   surfaceSolidColorPatch,
   VISUALIZATION_COLOR_MODE_ITEMS,
   type VisualizationVectorBudgetRange,
+  type RegionVisualizationCarrier,
   visualizationQuantityItems,
 } from "./ObjectVisualizationPanelModel";
 import { formatCount } from "./MeshResourceView";
@@ -360,17 +365,17 @@ function VisualizationDisplayPassesSection({
           onClick={handleVisibleClick}
         />
         <ToggleButton active={displaySettings.shaderVisible} disabled={passControlsDisabled} label="Surface" onClick={() => void patch(surfaceDisplayPassPatch(settings))} />
-        <ToggleButton active={displaySettings.wireframeVisible} disabled={passControlsDisabled} label="Wireframe" onClick={() => void patch({ wireframeVisible: !settings.wireframeVisible })} />
-        <ToggleButton active={displaySettings.boundsVisible} disabled={passControlsDisabled} label="Frame" onClick={() => void patch({ boundsVisible: !settings.boundsVisible })} />
-        <ToggleButton active={displaySettings.pointsVisible} disabled={passControlsDisabled} label="Points" onClick={() => void patch({ pointsVisible: !settings.pointsVisible })} />
-        <ToggleButton active={displaySettings.vectorsVisible} disabled={passControlsDisabled} label="Vectors" onClick={() => void patch({ vectorsVisible: !settings.vectorsVisible })} />
+        <ToggleButton active={displaySettings.wireframeVisible} disabled={passControlsDisabled} label="Wireframe" onClick={() => void patch(displayPassTogglePatch(settings, "wireframeVisible"))} />
+        <ToggleButton active={displaySettings.boundsVisible} disabled={passControlsDisabled} label="Frame" onClick={() => void patch(displayPassTogglePatch(settings, "boundsVisible"))} />
+        <ToggleButton active={displaySettings.pointsVisible} disabled={passControlsDisabled} label="Points" onClick={() => void patch(displayPassTogglePatch(settings, "pointsVisible"))} />
+        <ToggleButton active={displaySettings.vectorsVisible} disabled={passControlsDisabled} label="Vectors" onClick={() => void patch(displayPassTogglePatch(settings, "vectorsVisible"))} />
         {primitiveDisplayToggleVisible ? (
           <ToggleButton
             active={Boolean(displaySettings.primitiveVisible)}
             disabled={passControlsDisabled}
             label="Primitive"
             onClick={() =>
-              void patch({ primitiveVisible: !settings.primitiveVisible })
+              void patch(displayPassTogglePatch(settings, "primitiveVisible"))
             }
           />
         ) : null}
@@ -449,7 +454,7 @@ function VisualizationRenderModeSection({
             type="button"
             disabled={passControlsDisabled}
             variant={displaySettings.visible && displaySettings.renderMode === mode.value ? "primary" : "secondary"}
-            onClick={() => void patch(renderModePatch(mode.value))}
+            onClick={() => void patch(renderModeDisplayPatch(mode.value))}
           >
             {mode.label}
           </Button>
@@ -466,6 +471,7 @@ function VisualizationSurfaceColoringSection({
   sectionDisabled,
   fieldCatalog,
   onFieldCatalogRequest,
+  regionCarrier,
   settings,
   target,
 }: {
@@ -478,6 +484,7 @@ function VisualizationSurfaceColoringSection({
   sectionDisabled: SectionDisabled;
   fieldCatalog: ReturnType<typeof useFieldCatalogResource>;
   onFieldCatalogRequest: () => void;
+  regionCarrier?: RegionVisualizationCarrier | null;
   settings: VisualizationTargetSettings;
   target: VisualizationTargetRef;
 }) {
@@ -489,7 +496,16 @@ function VisualizationSurfaceColoringSection({
     settings.surfaceColorSource,
     settings.activeQuantityId,
   );
-  const fieldMetaScopeQuery = fieldMetaScopeQueryForVisualizationTarget(target);
+  const fieldMetaScopeQuery = fieldMetaScopeQueryForVisualizationTarget(
+    target,
+    regionCarrier,
+  );
+  const regionFieldUnavailable =
+    target.kind === "region" && regionCarrier?.kind !== "mesh-parts";
+  const regionFieldUnavailableReason =
+    regionCarrier?.kind === "unavailable"
+      ? regionCarrier.reason
+      : "region has no realized mesh-part carrier";
   const colorbarRangeIdentity = [
     settings.activeQuantityId,
     colorbarComponent ?? "none",
@@ -498,12 +514,18 @@ function VisualizationSurfaceColoringSection({
   ].join(":");
   const fieldMeta = useFieldMetaResource({
     component: colorbarComponent ?? null,
-    enabled: showColorbar,
+    enabled: showColorbar && !regionFieldUnavailable,
     quantityId: settings.activeQuantityId,
     ...fieldMetaScopeQuery,
   });
   return (
     <InspectorSection title="Surface Coloring" collapsible>
+      {regionFieldUnavailable ? (
+        <FeedbackBanner
+          kind="warning"
+          message={`Physical field coloring for this region is unavailable: ${regionFieldUnavailableReason}. Region overlays are diagnostic and remain separate from field visualization.`}
+        />
+      ) : null}
       <FormField
         disabled={pending || sectionDisabled("surface-coloring")}
         label="Color source"
@@ -542,7 +564,7 @@ function VisualizationSurfaceColoringSection({
           </option>
         ))}
       </FormField>
-      {showColorbar ? (
+      {showColorbar && !regionFieldUnavailable ? (
         <ScalarColorbarControl
           disabled={pending || sectionDisabled("surface-coloring")}
           fieldMeta={fieldMeta}
@@ -551,7 +573,7 @@ function VisualizationSurfaceColoringSection({
           rangeIdentity={colorbarRangeIdentity}
         />
       ) : null}
-      {showColorbar ? (
+      {showColorbar && !regionFieldUnavailable ? (
         <label className="fm-inspector-checkbox-row">
           <input
             className="fm-inspector-checkbox"
@@ -794,6 +816,7 @@ function VisualizationVectorsSection({
   settings,
   targetKind,
   vectorBudgetRange,
+  vectorBudgetRanges,
 }: {
   meshParts?: ReadonlyArray<{
     id: string;
@@ -817,6 +840,10 @@ function VisualizationVectorsSection({
   settings: VisualizationTargetSettings;
   targetKind: VisualizationTargetKind;
   vectorBudgetRange: VisualizationVectorBudgetRange;
+  vectorBudgetRanges: Record<
+    VisualizationGeometryScope,
+    VisualizationVectorBudgetRange
+  >;
 }) {
   const vectorBudgetValue = Math.max(
     vectorBudgetRange.min,
@@ -908,7 +935,18 @@ function VisualizationVectorsSection({
             type="button"
             disabled={pending || sectionDisabled("vectors")}
             variant={settings.geometryScope === scope.value ? "primary" : "secondary"}
-            onClick={() => void patch({ geometryScope: scope.value })}
+            onClick={() =>
+              void patch(
+                geometryScopeVectorBudgetPatch({
+                  currentRange:
+                    vectorBudgetRanges[settings.geometryScope] ??
+                    vectorBudgetRange,
+                  geometryScope: scope.value,
+                  nextRange: vectorBudgetRanges[scope.value],
+                  settings,
+                }),
+              )
+            }
           >
             {scope.label}
           </Button>
@@ -938,10 +976,17 @@ function VisualizationGeometryScopeSection({
   passControlsDisabled,
   patch,
   settings,
+  vectorBudgetRange,
+  vectorBudgetRanges,
 }: {
   passControlsDisabled: boolean;
   patch: PatchVisualizationTarget;
   settings: VisualizationTargetSettings;
+  vectorBudgetRange: VisualizationVectorBudgetRange;
+  vectorBudgetRanges: Record<
+    VisualizationGeometryScope,
+    VisualizationVectorBudgetRange
+  >;
 }) {
   return (
     <InspectorSection title="Geometry Scope">
@@ -953,7 +998,19 @@ function VisualizationGeometryScopeSection({
             type="button"
             disabled={passControlsDisabled}
             variant={settings.visible && settings.geometryScope === scope.value ? "primary" : "secondary"}
-            onClick={() => void patch(geometryScopeDisplayPatch(settings, scope.value))}
+            onClick={() =>
+              void patch({
+                ...geometryScopeDisplayPatch(settings, scope.value),
+                ...geometryScopeVectorBudgetPatch({
+                  currentRange:
+                    vectorBudgetRanges[settings.geometryScope] ??
+                    vectorBudgetRange,
+                  geometryScope: scope.value,
+                  nextRange: vectorBudgetRanges[scope.value],
+                  settings,
+                }),
+              })
+            }
           >
             {scope.label}
           </Button>
@@ -1037,7 +1094,7 @@ function useObjectVisualizationPanelState(
       targets.push(target);
       if (target.kind === "region" && selection.objectId) {
         targets.push({
-          id: selection.objectId,
+          id: visualizationTargetIdForSceneObject(selection.objectId),
           kind: "object",
           label: selection.label,
         });
@@ -1064,7 +1121,7 @@ function useObjectVisualizationPanelState(
       ? resolveTargetVisualization({
           snapshot,
           target: {
-            id: selection.objectId,
+            id: visualizationTargetIdForSceneObject(selection.objectId),
             kind: "object",
             label: selection.label,
           },
@@ -1117,7 +1174,7 @@ function useObjectVisualizationPanelState(
         settings,
       })
     : [];
-  const passControlsDisabled = pending || !settings?.visible;
+  const passControlsDisabled = pending;
   const primitiveDisplayToggleVisible = target
     ? shouldShowPrimitiveDisplayToggle(activeModuleTab, target.kind, topologyFreshness)
     : false;
@@ -1280,11 +1337,29 @@ function useObjectVisualizationPanelState(
     ? renderResolution?.finalSettings ?? effectiveSettings ?? settings
     : null;
   const renderWarning = renderResolution?.degradedReasons[0]?.message ?? null;
-  const vectorBudgetRange = resolveVisualizationVectorBudgetRange({
-    geometryScope: settings?.geometryScope,
-    meshParts: manifest.data?.mesh_parts,
+  const regionCarrier = resolveRegionVisualizationCarrier({
+    manifestRegions: manifest.data?.regions,
     target,
   });
+  const vectorBudgetRanges = {
+    full: resolveVisualizationVectorBudgetRange({
+      geometryScope: "full",
+      manifestRegions: manifest.data?.regions,
+      meshParts: manifest.data?.mesh_parts,
+      target,
+    }),
+    surface: resolveVisualizationVectorBudgetRange({
+      geometryScope: "surface",
+      manifestRegions: manifest.data?.regions,
+      meshParts: manifest.data?.mesh_parts,
+      target,
+    }),
+  } satisfies Record<
+    VisualizationGeometryScope,
+    VisualizationVectorBudgetRange
+  >;
+  const vectorBudgetRange =
+    vectorBudgetRanges[settings?.geometryScope ?? "full"];
 
   function onTogglePartVectors(partId: string, visible: boolean) {
     const part = manifest.data?.mesh_parts?.find((p) => p.id === partId);
@@ -1314,6 +1389,7 @@ function useObjectVisualizationPanelState(
     pending,
     renderResolution,
     renderWarning,
+    regionCarrier,
     resetTarget,
     revision,
     sectionDisabled,
@@ -1322,6 +1398,7 @@ function useObjectVisualizationPanelState(
     primitiveDisplayToggleVisible,
     vectorDomain,
     vectorBudgetRange,
+    vectorBudgetRanges,
     vectorMeshParts,
   } as const;
 }
@@ -1378,6 +1455,7 @@ function ObjectVisualizationPanelView({
     pending,
     renderResolution,
     renderWarning,
+    regionCarrier,
     resetTarget,
     revision,
     sectionDisabled,
@@ -1386,6 +1464,7 @@ function ObjectVisualizationPanelView({
     primitiveDisplayToggleVisible,
     vectorDomain,
     vectorBudgetRange,
+    vectorBudgetRanges,
     vectorMeshParts,
   } = panel;
 
@@ -1439,6 +1518,7 @@ function ObjectVisualizationPanelView({
         sectionDisabled={sectionDisabled}
         fieldCatalog={fieldCatalog}
         onFieldCatalogRequest={onFieldCatalogRequest}
+        regionCarrier={regionCarrier}
         settings={settings}
         target={target}
       />
@@ -1466,11 +1546,14 @@ function ObjectVisualizationPanelView({
         settings={settings}
         targetKind={target.kind}
         vectorBudgetRange={vectorBudgetRange}
+        vectorBudgetRanges={vectorBudgetRanges}
       />
       <VisualizationGeometryScopeSection
         passControlsDisabled={passControlsDisabled}
         patch={patch}
         settings={settings}
+        vectorBudgetRange={vectorBudgetRange}
+        vectorBudgetRanges={vectorBudgetRanges}
       />
       <VisualizationOpacitySection patch={patch} settings={settings} />
       <VisualizationOverridesSection

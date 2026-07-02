@@ -1,6 +1,7 @@
 import type { FieldVectorQuery } from "@/kernel/api/apiTypes";
 import {
   visualizationTargetIdForSceneObject,
+  visualizationObjectIdForMeshPartLike,
   type Selection,
 } from "@/kernel/selection/selectionTypes";
 import {
@@ -73,9 +74,10 @@ export function targetForFdmDomain(
 export function targetForMeshPart(
   part: Viewport3DMeshPart,
 ): VisualizationTargetRef {
-  if (part.object_id) {
+  const objectId = visualizationObjectIdForMeshPartLike(part);
+  if (objectId) {
     return {
-      id: visualizationTargetIdForSceneObject(part.object_id),
+      id: visualizationTargetIdForSceneObject(objectId),
       kind: "object",
       label: part.label,
     };
