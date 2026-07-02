@@ -1785,6 +1785,71 @@ describe("useViewport3DSceneModel", () => {
     ).toEqual([]);
   });
 
+  it("hides authored primitive overlays for mesh-backed geometry-id region aliases", () => {
+    const realizedRegionKeys = resolveViewport3DMeshBackedRegionKeys([
+      {
+        material_ref: "permalloy",
+        mesh_part_ids: ["part:film:r1"],
+        name: "core",
+        region_id: "mesh:film:r1",
+        source_object_ids: ["film_geom"],
+        source_region_candidate_id: "film:r1",
+      },
+    ] as never);
+
+    expect(
+      resolveViewport3DRegionOverlays({
+        objectTransformsById: new Map(),
+        realizedRegionKeys,
+        regionResource: {
+          geometry_realization_revision: 8,
+          regions: [
+            {
+              bounds_max: [0, 0, 0],
+              bounds_min: [0, 0, 0],
+              enabled: true,
+              interaction_refs: [],
+              material_parameter_fields: [],
+              material_ref: "permalloy",
+              mesh_part_ids: [],
+              name: "core",
+              owner_object_id: "film",
+              owner_path: "film/film:r1",
+              region_id: "film:r1",
+              shape: {
+                center: [0, 0, 0],
+                kind: "sphere",
+                radius: 1,
+              },
+              source: "authored_object_region",
+              source_body_ids: [],
+              source_object_ids: ["film"],
+            },
+          ],
+          scene_revision: 8,
+        },
+        scene: {
+          objects: [
+            {
+              id: "film",
+              regions: [
+                {
+                  name: "core",
+                  region_id: "film:r1",
+                  shape: {
+                    center: [0, 0, 0],
+                    kind: "sphere",
+                    radius: 1,
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    ).toEqual([]);
+  });
+
   it("maps mesh-backed region parts to the same visualization target as authored overlays", () => {
     const regions = [
       {

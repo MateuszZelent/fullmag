@@ -5,6 +5,7 @@ import type {
   MeshSharedDomainManifestResource,
 } from "@/kernel/api/apiTypes";
 import {
+  canonicalVisualizationSceneObjectId,
   visualizationObjectIdForMeshPartLike,
   visualizationTargetIdForSceneObject,
 } from "@/kernel/selection/selectionTypes";
@@ -402,7 +403,9 @@ export function resolveRegionVisualizationCarrier({
     const regionId = region.source_region_candidate_id;
     if (!regionId || decodeSafe(regionId) !== regionTarget.regionId) continue;
     const objectMatch = (region.source_object_ids ?? []).some(
-      (objectId) => decodeSafe(objectId) === regionTarget.objectId,
+      (objectId) =>
+        canonicalVisualizationSceneObjectId(decodeSafe(objectId)) ===
+        canonicalVisualizationSceneObjectId(regionTarget.objectId),
     );
     if (!objectMatch) continue;
     const partIds = (region.mesh_part_ids ?? []).flatMap((partId) =>

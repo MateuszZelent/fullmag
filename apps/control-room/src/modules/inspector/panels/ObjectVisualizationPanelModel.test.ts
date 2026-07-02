@@ -830,6 +830,29 @@ describe("ObjectVisualizationPanelModel", () => {
     });
     expect(
       resolveRegionVisualizationCarrier({
+        manifestRegions: [
+          {
+            material_ref: "material:film",
+            mesh_part_ids: ["part:film:geom-core"],
+            name: "Core",
+            region_id: "manifest:film:geom-core",
+            source_object_ids: ["film_geom"],
+            source_region_candidate_id: "film:core",
+          },
+        ],
+        target: {
+          id: "region:film:film%3Acore",
+          kind: "region",
+        },
+      }),
+    ).toEqual({
+      kind: "mesh-parts",
+      objectId: "film",
+      partIds: ["part:film:geom-core"],
+      regionId: "film:core",
+    });
+    expect(
+      resolveRegionVisualizationCarrier({
         manifestRegions,
         target: {
           id: "region:film:film%3Ashell",

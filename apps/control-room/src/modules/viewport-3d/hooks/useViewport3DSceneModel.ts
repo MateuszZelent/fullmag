@@ -52,7 +52,10 @@ import type {
   ResourceStatus,
 } from "@/kernel/resources/resourceTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
-import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
+import {
+  canonicalVisualizationSceneObjectId,
+  visualizationTargetIdForSceneObject,
+} from "@/kernel/selection/selectionTypes";
 import {
   activeCrossSectionFramePreview,
   crossSectionFramePreviewEquals,
@@ -950,7 +953,9 @@ export function resolveViewport3DMeshBackedRegionKeys(
     }
     for (const objectId of region.source_object_ids ?? []) {
       const owner = asNonEmptyString(objectId);
-      if (owner) keys.add(regionOverlayKey(owner, regionId));
+      if (owner) {
+        keys.add(regionOverlayKey(canonicalVisualizationSceneObjectId(owner), regionId));
+      }
     }
   }
   return keys;
