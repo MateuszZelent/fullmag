@@ -58,4 +58,15 @@ describe("study authoring smoke script", () => {
       '[data-node-id="model:study:stages:stage:${stageId}:k-grid"]',
     );
   });
+
+  it("asserts transaction-backed frequency-response advanced setup authoring", () => {
+    expect(smokeScript).toContain("frequency_k_sampling");
+    expect(smokeScript).toContain("frequency_values_hz");
+    expect(smokeScript).toContain("frequency_observable");
+    expect(smokeScript).toContain("frequency_include_demag");
+    expect(smokeScript).toContain("frequency_magnetostatic_bc");
+    expect(smokeScript).toContain(
+      '[data-node-id="model:study:stages:stage:${stageId}:periodic-pairs"]',
+    );
+  });
 });

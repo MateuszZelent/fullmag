@@ -16,6 +16,8 @@ Use this for all viewport and rendering work.
 5. Track and dispose WebGL/ECharts/worker resources.
 6. Keep renderer inputs domain-neutral; FDM/FEM handling belongs in adapters/render-model builders.
 7. Keep 2D viewport lifecycle independent from 3D WebGL resources.
+8. For ECharts or other 2D analysis renderers, create renderer instances once per mount, update from stable options only
+   when resource revisions or user controls change, use observer-driven resize, and dispose the renderer and observer on unmount.
 
 ## Banned Patterns
 
@@ -25,12 +27,16 @@ Use this for all viewport and rendering work.
 - component-level FDM/FEM renderer fork;
 - quantity switching that rebuilds topology without topology revision change;
 - hiding memory leaks by disabling layers.
+- interval-driven chart resize/redraw loops;
+- chart options rebuilt from large artifacts on unrelated React renders;
+- raw artifact arrays kept in React state solely for renderer convenience.
 
 ## Verification
 
 ```bash
 pnpm --dir apps/control-room test -- --run viewport
 pnpm --dir apps/control-room test -- --run viewport-memory-stress
+pnpm --dir apps/control-room test -- --run chart
 pnpm --dir apps/control-room audit:idle-performance
 ```
 

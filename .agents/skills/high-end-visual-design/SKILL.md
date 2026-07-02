@@ -28,6 +28,21 @@ Fullmag should look like a serious scientific instrument: exact, calm, fast, and
 - Use semantic status color consistently: selected, running, succeeded, warning, failed, degraded, stale.
 - Use `fm-*` classes for Fullmag geometry/state and `--fm-*` tokens for color. Raw Catppuccin hex values belong only in central theme/token CSS.
 
+## Scientific Chart Standard
+
+- Treat charts as primary analysis tools. They need physically meaningful axes, SI units, clear quantity names,
+  resource/provenance context, and visible degraded/unsupported states.
+- Prefer controls that match the analysis task: observable selectors for incompatible quantities, segmented controls
+  for view modes, toggles for log scale/markers, and tables for exact point inspection.
+- Never ship raw library defaults. Tooltips, legends, axis labels, selection states, empty states, and loading states
+  must be styled with `--fm-*` tokens and formatted for scientific reading.
+- Never show raw tuple/array values in tooltips. Parse chart values into named fields and format numbers with units.
+- Do not place amplitude, phase, power, susceptibility, residual, or frequency on one unlabeled axis. Use a selector,
+  split chart, or explicit dual-axis treatment.
+- For modal spectra, distinguish diagnostic mode-index/stem views from physical intensity spectra. Do not invent peak
+  intensities unless the backend provides a coupling/intensity source or the UI labels the result as synthetic/diagnostic.
+- Dense result sets need scrollable or virtualized inspection tables instead of hidden `slice(0, n)` action buttons.
+
 ## Banned Defaults
 
 - Marketing hero layouts inside the workspace.
@@ -52,11 +67,16 @@ Fullmag should look like a serious scientific instrument: exact, calm, fast, and
 - Separate viewport topology rebuilds from buffer/style changes.
 - Avoid expensive blur/noise effects in scrolling or canvas-adjacent surfaces.
 - Memoize heavy panels and render layers when resource revisions have not changed.
+- Chart model builders must be memoized or pure resource adapters when they parse artifacts, sort rows, detect peaks,
+  or aggregate branches.
+- Large chart datasets must be decimated, paged, virtualized, or bounded by explicit sample budgets before rendering.
+- ECharts instances, resize observers, subscriptions, workers, object URLs, and large buffers must be released on unmount.
 
 ## Final Check
 
 - The UI reads as a Fullmag control room, not a generic SaaS dashboard.
 - Physical state, resource state, and execution state are distinguishable.
+- Charts are readable at a glance and exact on inspection: formatted units, clean tooltips, meaningful axes, no mixed-unit ambiguity, and no hidden valid points.
 - The unified viewport and one ribbon direction remain intact.
 - The UI remains Catppuccin Mocha/Latte and shadcn-based, not an ad-hoc component system.
 - The design improved clarity without adding architectural drift.

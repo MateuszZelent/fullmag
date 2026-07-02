@@ -14,7 +14,9 @@ Use this before claiming a frontend v2 performance improvement or memory fix.
 3. Instrument render reasons, resource counts, or request timings where needed.
 4. Verify idle behavior separately from active interaction behavior.
 5. Use stress loops for leak claims.
-6. Report measurements, not impressions.
+6. For chart work, define the artifact size, point count, series count, update cadence, and expected idle redraw
+   count before changing code.
+7. Report measurements, not impressions.
 
 ## Banned Patterns
 
@@ -24,6 +26,10 @@ Use this before claiming a frontend v2 performance improvement or memory fix.
 - unbounded diagnostic logs;
 - memoization used to hide wrong state ownership;
 - profiler code left always-on in production paths.
+- rebuilding chart models from raw artifacts on every render;
+- spreading large arrays into `Math.min`, `Math.max`, or similar variadic calls;
+- chart libraries that keep instances, observers, workers, or buffers alive after unmount;
+- hidden `slice(0, n)` UI truncation as a substitute for pagination, virtualization, or decimation.
 
 ## Verification
 
@@ -31,6 +37,7 @@ Use this before claiming a frontend v2 performance improvement or memory fix.
 pnpm --dir apps/control-room audit:idle-performance
 pnpm --dir apps/control-room test -- --run resource-hooks
 pnpm --dir apps/control-room test -- --run viewport-memory-stress
+pnpm --dir apps/control-room test -- --run chart
 npx -y react-doctor@latest apps/control-room --verbose --diff
 ```
 

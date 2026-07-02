@@ -207,6 +207,10 @@ When the user corrects your approach, append a one-line rule here before ending 
 - Keep `apps/control-room/app/globals.css` import-only; put real CSS in `src/design/styles/*`.
 - Color palette is Catppuccin: Mocha for dark theme, Latte for light theme. Raw Catppuccin hex values belong only in central token/theme files; components consume `--fm-*` tokens.
 - Build menus, ribbons, tabs, dropdowns, dialogs, command palette, context menus, tooltips, switches, and segmented controls from shadcn/ui-style shared primitives. Bespoke widgets need a documented exception.
+- Build Control Room charts as first-class scientific instruments: every interactive chart must be readable,
+  unit-aware, physically honest, keyboard/mouse inspectable, and performance-bounded; no ugly default chart
+  skins, raw tuple tooltips, mixed-unit axes without selectors/dual-axis handling, unbounded datasets,
+  leaking ECharts instances, or redraws while idle.
 - Every semantic Explorer tree node in `apps/control-room` must map to its own Inspector detail view; do not reuse one generic inspector view for distinct child nodes such as asset, load, and transform.
 - Treat frontend file-size limits as review triggers, not automatic split commands; split only when it reduces real mixed responsibility, lifecycle risk, or comprehension cost.
 - Client components in `apps/control-room` that read external stores, browser state, local storage, runtime resources, or cached API data must make their first client render match SSR; use `useSyncExternalStore` server snapshots or another explicit hydration gate instead of rendering live client-only values immediately.
@@ -530,6 +534,20 @@ Workspace UI doctrine:
 - When touching frontend workspace code, agents must actively remove remaining `Build`/`Study`/`Analyze`
   stage assumptions unless they are explicitly marked as temporary compatibility shims.
 
+Interactive chart doctrine:
+
+- Charts are analysis surfaces, not decorative widgets. Use physically meaningful axes, visible SI units,
+  clear legends, formatted tooltips, selectable observables, and explicit unsupported/degraded states.
+- Do not mix unrelated units on one y-axis unless the chart offers a selector, split panels, or a clearly labelled dual-axis design.
+- Large chart data must be bounded, decimated, paged, or virtualized before rendering. Do not spread large
+  arrays into `Math.min`/`Math.max`, put large typed arrays in React state, or rebuild chart models on unrelated renders.
+- ECharts and similar renderers need explicit lifecycle ownership: create once per mounted chart, update only from
+  resource revisions or user interaction, resize by observer, dispose on unmount, and avoid interval polling or idle redraw loops.
+- Chart styling must use `--fm-*` tokens, readable contrast, stable panel geometry, tabular numeric formatting,
+  and accessible hover/focus/selection states. Raw JSON tuples and unformatted arrays must never appear in user-facing tooltips.
+- Any new scientific chart must include focused model tests plus at least one UI/render test or browser smoke when
+  interaction, canvas lifecycle, or tooltip/selection behavior changes.
+
 ### 9.3 Frontend v2 rewrite doctrine
 
 The target browser frontend is documented in:
@@ -698,7 +716,9 @@ Fullmag aims for top-tier computational performance, but never through semantic 
 - no accidental always-on rendering without reason,
 - topology rebuilds must be separate from field-buffer swaps,
 - overlays and viewport logic should be modular and low-churn,
-- state shape must be canonical and transport-friendly.
+- state shape must be canonical and transport-friendly,
+- charts must be revision-driven, memoized where model building is non-trivial, and quiet when idle,
+- chart datasets must have bounded memory behavior through pagination, decimation, virtualization, or explicit sample budgets.
 
 ---
 

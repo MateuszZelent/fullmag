@@ -1283,6 +1283,175 @@ async function addFrequencyResponseAndEditExcitation(stageNumber) {
     `[data-node-id="model:study:stages:stage:${stageId}:k-grid"]`,
   );
   await kGridNode.waitFor({ state: "visible", timeout: timeoutMs });
+  await clickExplorerRow(kGridNode);
+  await inspector.getByLabel("k vector", { exact: true }).waitFor({
+    state: "visible",
+    timeout: timeoutMs,
+  });
+  await inspector.getByLabel("k vector", { exact: true }).fill("1e6, 0, 0");
+  await inspector
+    .getByLabel("k sampling", { exact: true })
+    .fill('{"kind":"grid","points":[[0,0,0],[1000000,0,0]]}');
+  await inspector.getByRole("button", { name: /Save stage/i }).click();
+  await waitForTransactionCount(transactionBeforeAdd + 4);
+
+  const kGridStages =
+    transactions[transactionBeforeAdd + 3]?.merge_patch?.study?.stages;
+  const kGridStage = Array.isArray(kGridStages)
+    ? kGridStages[stageNumber - 1]
+    : null;
+  if (
+    JSON.stringify(kGridStage?.k_vector) !== "[1000000,0,0]" ||
+    JSON.stringify(kGridStage?.frequency_k_vector) !== "[1000000,0,0]" ||
+    kGridStage?.k_sampling?.kind !== "grid" ||
+    kGridStage?.frequency_k_sampling?.kind !== "grid"
+  ) {
+    throw new Error(
+      `Frequency Response k/f grid did not round-trip: ${JSON.stringify(kGridStage)}`,
+    );
+  }
+
+  const sweepNode = page.locator(
+    `[data-node-id="model:study:stages:stage:${stageId}:sweep"]`,
+  );
+  await sweepNode.waitFor({ state: "visible", timeout: timeoutMs });
+  await clickExplorerRow(sweepNode);
+  await inspector.getByLabel("Frequencies", { exact: true }).waitFor({
+    state: "visible",
+    timeout: timeoutMs,
+  });
+  if (await inspector.getByLabel("Excitation").isVisible().catch(() => false)) {
+    throw new Error("Sweep inspector leaked excitation controls.");
+  }
+  await inspector
+    .getByLabel("Frequencies", { exact: true })
+    .fill("1e9, 2e9, 3e9");
+  await inspector.getByRole("button", { name: /Save stage/i }).click();
+  await waitForTransactionCount(transactionBeforeAdd + 5);
+
+  const sweepStages =
+    transactions[transactionBeforeAdd + 4]?.merge_patch?.study?.stages;
+  const sweepStage = Array.isArray(sweepStages)
+    ? sweepStages[stageNumber - 1]
+    : null;
+  if (
+    JSON.stringify(sweepStage?.frequencies_hz) !==
+      "[1000000000,2000000000,3000000000]" ||
+    JSON.stringify(sweepStage?.frequency_values_hz) !==
+      "[1000000000,2000000000,3000000000]"
+  ) {
+    throw new Error(
+      `Frequency Response sweep did not round-trip: ${JSON.stringify(sweepStage)}`,
+    );
+  }
+
+  const outputsNode = page.locator(
+    `[data-node-id="model:study:stages:stage:${stageId}:outputs"]`,
+  );
+  await outputsNode.waitFor({ state: "visible", timeout: timeoutMs });
+  await clickExplorerRow(outputsNode);
+  await inspector.getByLabel("Observable", { exact: true }).waitFor({
+    state: "visible",
+    timeout: timeoutMs,
+  });
+  await inspector.getByLabel("Observable", { exact: true }).fill("mx");
+  await inspector.getByRole("button", { name: /Save stage/i }).click();
+  await waitForTransactionCount(transactionBeforeAdd + 6);
+
+  const outputStages =
+    transactions[transactionBeforeAdd + 5]?.merge_patch?.study?.stages;
+  const outputStage = Array.isArray(outputStages)
+    ? outputStages[stageNumber - 1]
+    : null;
+  if (
+    outputStage?.observable !== "mx" ||
+    outputStage?.frequency_observable !== "mx"
+  ) {
+    throw new Error(
+      `Frequency Response outputs did not round-trip: ${JSON.stringify(outputStage)}`,
+    );
+  }
+
+  const operatorNode = page.locator(
+    `[data-node-id="model:study:stages:stage:${stageId}:operator"]`,
+  );
+  await operatorNode.waitFor({ state: "visible", timeout: timeoutMs });
+  await clickExplorerRow(operatorNode);
+  await inspector.getByLabel("Include demag", { exact: true }).waitFor({
+    state: "visible",
+    timeout: timeoutMs,
+  });
+  const includeDemag = inspector.getByLabel("Include demag", { exact: true });
+  if (await includeDemag.isChecked()) {
+    await includeDemag.uncheck();
+  }
+  await inspector
+    .getByLabel("Normalization", { exact: true })
+    .selectOption("unit_max_amplitude");
+  await inspector
+    .getByLabel("Damping", { exact: true })
+    .selectOption("include");
+  await inspector.getByRole("button", { name: /Save stage/i }).click();
+  await waitForTransactionCount(transactionBeforeAdd + 7);
+
+  const operatorStages =
+    transactions[transactionBeforeAdd + 6]?.merge_patch?.study?.stages;
+  const operatorStage = Array.isArray(operatorStages)
+    ? operatorStages[stageNumber - 1]
+    : null;
+  if (
+    operatorStage?.include_demag !== false ||
+    operatorStage?.frequency_include_demag !== false ||
+    operatorStage?.normalization !== "unit_max_amplitude" ||
+    operatorStage?.frequency_normalization !== "unit_max_amplitude" ||
+    operatorStage?.damping_policy !== "include" ||
+    operatorStage?.frequency_damping_policy !== "include"
+  ) {
+    throw new Error(
+      `Frequency Response operator options did not round-trip: ${JSON.stringify(operatorStage)}`,
+    );
+  }
+
+  await clickExplorerRow(stageNode);
+  await inspector.getByLabel("BC", { exact: true }).waitFor({
+    state: "visible",
+    timeout: timeoutMs,
+  });
+  await inspector
+    .getByLabel("BC", { exact: true })
+    .fill('{"kind":"periodic","axes":["x","y"]}');
+  await inspector
+    .getByLabel("Magnetostatic BC", { exact: true })
+    .selectOption("periodic_airbox_k0");
+  await inspector.getByRole("button", { name: /Save stage/i }).click();
+  await waitForTransactionCount(transactionBeforeAdd + 8);
+
+  const boundaryStages =
+    transactions[transactionBeforeAdd + 7]?.merge_patch?.study?.stages;
+  const boundaryStage = Array.isArray(boundaryStages)
+    ? boundaryStages[stageNumber - 1]
+    : null;
+  if (
+    JSON.stringify(boundaryStage?.bc) !==
+      '{"kind":"periodic","axes":["x","y"]}' ||
+    JSON.stringify(boundaryStage?.frequency_spin_wave_bc) !==
+      '{"kind":"periodic","axes":["x","y"]}' ||
+    boundaryStage?.magnetostatic_bc !== "periodic_airbox_k0" ||
+    boundaryStage?.frequency_magnetostatic_bc !== "periodic_airbox_k0"
+  ) {
+    throw new Error(
+      `Frequency Response boundary options did not round-trip: ${JSON.stringify(boundaryStage)}`,
+    );
+  }
+
+  await page
+    .locator(`[data-node-id="model:study:stages:stage:${stageId}:boundary"]`)
+    .waitFor({ state: "visible", timeout: timeoutMs });
+  await page
+    .locator(
+      `[data-node-id="model:study:stages:stage:${stageId}:periodic-pairs"]`,
+    )
+    .waitFor({ state: "visible", timeout: timeoutMs });
 }
 
 async function assertHysteresisChildInspectors(stageId) {
