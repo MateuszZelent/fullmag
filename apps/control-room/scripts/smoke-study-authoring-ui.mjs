@@ -285,7 +285,9 @@ try {
     await verifyFrequencyDomainResponseResults();
   } else {
     await addHysteresisFromRibbon();
-    await addFrequencyResponseAndEditExcitation(4);
+    await addEigenmodesAndEditKPath(4);
+    await addEigenmodesAndEditFrequencyWindow(5);
+    await addFrequencyResponseAndEditExcitation(6);
     await createObjectRegionAndAssertScriptSync();
   }
 
@@ -527,6 +529,18 @@ async function verifyFrequencyDomainModalResults() {
   await plotButton.click();
   await waitForEigenModeFieldVectorRequest();
   await assertStableViewport3DCanvas();
+
+  const imagButton = inspector.getByRole("button", {
+    exact: true,
+    name: "Plot selected eigen mode imaginary component",
+  });
+  await imagButton.waitFor({ state: "visible", timeout: timeoutMs });
+  if (!(await imagButton.isEnabled())) {
+    throw new Error("Selected eigen mode Imag visualization button is disabled.");
+  }
+  await imagButton.click();
+  await waitForEigenModeFieldVectorRequest("imag");
+  await assertStableViewport3DCanvas();
 }
 
 async function verifyFrequencyDomainResponseResults() {
@@ -548,13 +562,14 @@ async function verifyFrequencyDomainResponseResults() {
     .locator(".fm-frequency-domain-chart canvas")
     .waitFor({ state: "visible", timeout: timeoutMs });
 
-  const plotButton = inspector
-    .locator('tr[data-status="ready"]')
-    .filter({ hasText: "12.55 GHz" })
-    .getByRole("button", {
-      exact: true,
-      name: "Plot this response field with phase-rotated real display at 12.55 GHz",
-    });
+  const responseCard = inspector
+    .locator('article.fm-frequency-domain-response-card[data-status="ready"]')
+    .filter({ hasText: "12.55 GHz" });
+  await responseCard.waitFor({ state: "visible", timeout: timeoutMs });
+  const plotButton = responseCard.getByRole("button", {
+    exact: true,
+    name: "Plot 3D",
+  });
   await plotButton.waitFor({ state: "visible", timeout: timeoutMs });
   if (!(await plotButton.isEnabled())) {
     throw new Error("FMR response field 3D visualization button is disabled.");
@@ -567,6 +582,27 @@ async function verifyFrequencyDomainResponseResults() {
   }
   await plotButton.click();
   await waitForFrequencyResponseFieldVectorRequest();
+  await assertStableViewport3DCanvas();
+
+  const inspectButton = responseCard.getByRole("button", {
+    exact: true,
+    name: "Inspect",
+  });
+  await inspectButton.waitFor({ state: "visible", timeout: timeoutMs });
+  await inspectButton.click();
+  await inspector
+    .locator('[data-inspector-surface="frequency-response-point"]')
+    .waitFor({ state: "visible", timeout: timeoutMs });
+  const realButton = inspector.getByRole("button", {
+    exact: true,
+    name: "Plot response field real component",
+  });
+  await realButton.waitFor({ state: "visible", timeout: timeoutMs });
+  if (!(await realButton.isEnabled())) {
+    throw new Error("Selected response point Real visualization button is disabled.");
+  }
+  await realButton.click();
+  await waitForFrequencyResponseFieldVectorRequest("real");
   await assertStableViewport3DCanvas();
 }
 
@@ -595,6 +631,14 @@ function frequencyDomainManifest() {
       dispersion: {
         branch_tracking: frequencyDomainCapability("reference_executable"),
         k_path: frequencyDomainCapability("reference_executable"),
+        production_cpu: frequencyDomainCapability(
+          "partial_production_executable",
+        ),
+        production_cpu_gamma_k_path: frequencyDomainCapability(
+          "partial_production_executable",
+        ),
+        production_gpu: frequencyDomainCapability("unsupported"),
+        reference_cpu: frequencyDomainCapability("reference_executable"),
       },
       modal: {
         absorption_from_modes: frequencyDomainCapability("unsupported"),
@@ -840,7 +884,6 @@ function frequencyDomainResponseSweep() {
         {
           absorbed_power_density: 8.4e3,
           amplitude: 1.8,
-          field_id: "analysis:frequency-response:frequency-0001",
           frequency_hz: 12.55e9,
           frequency_index: 1,
           observable_id: "mx",
@@ -966,9 +1009,169 @@ async function addHysteresisFromRibbon() {
   await assertHysteresisChildInspectors("hysteresis-3");
 }
 
+async function addEigenmodesAndEditKPath(stageNumber) {
+  const transactionBeforeAdd = transactions.length;
+  const studyTab = page
+    .locator(".fm-ribbon__tab")
+    .filter({ hasText: /^Study$/i });
+  await studyTab.click();
+  const eigenmodesButton = page.locator(
+    '.fm-ribbon [data-action-id="study.add-eigenmodes-stage"]',
+  );
+  await eigenmodesButton.waitFor({ state: "visible", timeout: timeoutMs });
+  await eigenmodesButton.click();
+  await waitForTransactionCount(transactionBeforeAdd + 1);
+
+  const stages =
+    transactions[transactionBeforeAdd]?.merge_patch?.study?.stages;
+  const stageId = `eigenmodes-${stageNumber}`;
+  const eigenmodes = Array.isArray(stages) ? stages[stageNumber - 1] : null;
+  if (
+    eigenmodes?.kind !== "eigenmodes" ||
+    eigenmodes?.entrypoint_kind !== "flat_eigenmodes" ||
+    eigenmodes?.stage_id !== stageId
+  ) {
+    throw new Error(
+      `Ribbon Eigenmodes serialized an invalid stage: ${JSON.stringify(eigenmodes)}`,
+    );
+  }
+
+  const stageNode = page.locator(
+    `[data-node-id="model:study:stages:stage:${stageId}"]`,
+  );
+  await stageNode.waitFor({ state: "visible", timeout: timeoutMs });
+  await clickExplorerRow(stageNode);
+
+  const inspector = page.locator(".fm-inspector");
+  const kPath = "Gamma:0,0,0; X:1e7,0,0 | samples=5";
+  await inspector.getByLabel("k path", { exact: true }).fill(kPath);
+  await inspector.getByRole("button", { name: /Save stage/i }).click();
+  await waitForTransactionCount(transactionBeforeAdd + 2);
+
+  const savedStages =
+    transactions[transactionBeforeAdd + 1]?.merge_patch?.study?.stages;
+  const savedEigenmodes = Array.isArray(savedStages)
+    ? savedStages[stageNumber - 1]
+    : null;
+  if (savedEigenmodes?.eigen_k_path !== kPath) {
+    throw new Error(
+      `Eigenmodes k path did not round-trip: ${JSON.stringify(savedEigenmodes)}`,
+    );
+  }
+
+  const kPathNode = page.locator(
+    `[data-node-id="model:study:stages:stage:${stageId}:k-path"]`,
+  );
+  if ((await stageNode.getAttribute("aria-expanded")) === "false") {
+    await stageNode.dblclick();
+  }
+  await kPathNode.waitFor({ state: "visible", timeout: timeoutMs });
+  await clickExplorerRow(kPathNode);
+  await inspector.getByText(kPath, { exact: true }).waitFor({
+    state: "visible",
+    timeout: timeoutMs,
+  });
+}
+
+async function addEigenmodesAndEditFrequencyWindow(stageNumber) {
+  const transactionBeforeAdd = transactions.length;
+  const studyTab = page
+    .locator(".fm-ribbon__tab")
+    .filter({ hasText: /^Study$/i });
+  await studyTab.click();
+  const eigenmodesButton = page.locator(
+    '.fm-ribbon [data-action-id="study.add-eigenmodes-stage"]',
+  );
+  await eigenmodesButton.waitFor({ state: "visible", timeout: timeoutMs });
+  await eigenmodesButton.click();
+  await waitForTransactionCount(transactionBeforeAdd + 1);
+
+  const stages =
+    transactions[transactionBeforeAdd]?.merge_patch?.study?.stages;
+  const stageId = `eigenmodes-${stageNumber}`;
+  const eigenmodes = Array.isArray(stages) ? stages[stageNumber - 1] : null;
+  if (
+    eigenmodes?.kind !== "eigenmodes" ||
+    eigenmodes?.entrypoint_kind !== "flat_eigenmodes" ||
+    eigenmodes?.stage_id !== stageId
+  ) {
+    throw new Error(
+      `Ribbon Eigenmodes frequency-window setup serialized an invalid stage: ${JSON.stringify(eigenmodes)}`,
+    );
+  }
+
+  const stageNode = page.locator(
+    `[data-node-id="model:study:stages:stage:${stageId}"]`,
+  );
+  await stageNode.waitFor({ state: "visible", timeout: timeoutMs });
+  await clickExplorerRow(stageNode);
+
+  const inspector = page.locator(".fm-inspector");
+  await inspector
+    .getByLabel("Operator", { exact: true })
+    .selectOption("full_2x2");
+  await inspector
+    .getByLabel("Target", { exact: true })
+    .selectOption("frequency_window");
+  await inspector.getByLabel("Frequency min", { exact: true }).fill("1.5e9");
+  await inspector.getByLabel("Frequency max", { exact: true }).fill("2.5e9");
+  await inspector.getByRole("button", { name: /Save stage/i }).click();
+  await waitForTransactionCount(transactionBeforeAdd + 2);
+
+  const savedStages =
+    transactions[transactionBeforeAdd + 1]?.merge_patch?.study?.stages;
+  const savedEigenmodes = Array.isArray(savedStages)
+    ? savedStages[stageNumber - 1]
+    : null;
+  if (
+    savedEigenmodes?.target !== "frequency_window" ||
+    savedEigenmodes?.eigen_target !== "frequency_window" ||
+    savedEigenmodes?.frequency_min !== 1.5e9 ||
+    savedEigenmodes?.eigen_frequency_min !== 1.5e9 ||
+    savedEigenmodes?.frequency_max !== 2.5e9 ||
+    savedEigenmodes?.eigen_frequency_max !== 2.5e9 ||
+    savedEigenmodes?.operator !== "full_2x2" ||
+    savedEigenmodes?.eigen_operator !== "full_2x2"
+  ) {
+    throw new Error(
+      `Eigenmodes frequency window did not round-trip: ${JSON.stringify(savedEigenmodes)}`,
+    );
+  }
+
+  const savedTarget = await inspector
+    .getByLabel("Target", { exact: true })
+    .inputValue();
+  const savedFrequencyMin = await inspector
+    .getByLabel("Frequency min", { exact: true })
+    .inputValue();
+  const savedFrequencyMax = await inspector
+    .getByLabel("Frequency max", { exact: true })
+    .inputValue();
+  const savedOperator = await inspector
+    .getByLabel("Operator", { exact: true })
+    .inputValue();
+  if (
+    savedTarget !== "frequency_window" ||
+    savedFrequencyMin !== "1.5e9" ||
+    savedFrequencyMax !== "2.5e9" ||
+    savedOperator !== "full_2x2"
+  ) {
+    throw new Error(
+      `Eigenmodes frequency window inspector readback drifted: ${JSON.stringify({
+        savedFrequencyMax,
+        savedFrequencyMin,
+        savedOperator,
+        savedTarget,
+      })}`,
+    );
+  }
+}
+
 async function addFrequencyResponseAndEditExcitation(stageNumber) {
   const transactionBeforeAdd = transactions.length;
-  const studyTab = page.locator(".fm-ribbon__tab").filter({ hasText: /^Study$/i });
+  const studyTab = page
+    .locator(".fm-ribbon__tab")
+    .filter({ hasText: /^Study$/i });
   await studyTab.click();
   const frequencyButton = page.locator(
     '.fm-ribbon [data-action-id="study.add-frequency-response-stage"]',
@@ -1040,6 +1243,46 @@ async function addFrequencyResponseAndEditExcitation(stageNumber) {
       `Frequency Response excitation did not round-trip: ${JSON.stringify(savedResponse)}`,
     );
   }
+
+  const calculationModeNode = page.locator(
+    `[data-node-id="model:study:stages:stage:${stageId}:calculation-mode"]`,
+  );
+  await calculationModeNode.waitFor({ state: "visible", timeout: timeoutMs });
+  await clickExplorerRow(calculationModeNode);
+  await inspector.getByLabel("Calculation mode", { exact: true }).waitFor({
+    state: "visible",
+    timeout: timeoutMs,
+  });
+  if (await inspector.getByLabel("Frequencies").isVisible().catch(() => false)) {
+    throw new Error("Calculation-mode inspector leaked sweep controls.");
+  }
+  if (await inspector.getByLabel("Excitation").isVisible().catch(() => false)) {
+    throw new Error("Calculation-mode inspector leaked excitation controls.");
+  }
+  await inspector
+    .getByLabel("Calculation mode", { exact: true })
+    .selectOption("response_map");
+  await inspector.getByRole("button", { name: /Save stage/i }).click();
+  await waitForTransactionCount(transactionBeforeAdd + 3);
+
+  const responseMapStages =
+    transactions[transactionBeforeAdd + 2]?.merge_patch?.study?.stages;
+  const responseMapStage = Array.isArray(responseMapStages)
+    ? responseMapStages[stageNumber - 1]
+    : null;
+  if (
+    responseMapStage?.calculation_mode !== "response_map" ||
+    responseMapStage?.frequency_calculation_mode !== "response_map"
+  ) {
+    throw new Error(
+      `Frequency Response calculation mode did not round-trip: ${JSON.stringify(responseMapStage)}`,
+    );
+  }
+
+  const kGridNode = page.locator(
+    `[data-node-id="model:study:stages:stage:${stageId}:k-grid"]`,
+  );
+  await kGridNode.waitFor({ state: "visible", timeout: timeoutMs });
 }
 
 async function assertHysteresisChildInspectors(stageId) {
@@ -1303,41 +1546,48 @@ function makeFrequencyResponseFieldVectorBuffer() {
   return buffer;
 }
 
-async function waitForEigenModeFieldVectorRequest() {
+async function waitForEigenModeFieldVectorRequest(
+  view = "phase_rotated_real",
+) {
   const deadline = Date.now() + timeoutMs;
-  let request = matchingPhaseRotatedRequest(fieldVectorRequests, "0");
+  const phaseRad = view === "phase_rotated_real" ? "0" : null;
+  let request = matchingFieldViewRequest(fieldVectorRequests, view, phaseRad);
   while (!request && Date.now() < deadline) {
     await page.waitForTimeout(50);
-    request = matchingPhaseRotatedRequest(fieldVectorRequests, "0");
+    request = matchingFieldViewRequest(fieldVectorRequests, view, phaseRad);
   }
   if (!request) {
     throw new Error(
-      "Plot selected eigen mode with phase-rotated real display did not request the eigen-mode field.",
+      `Plot selected eigen mode ${view} display did not request the eigen-mode field.`,
     );
   }
 }
 
-async function waitForFrequencyResponseFieldVectorRequest() {
+async function waitForFrequencyResponseFieldVectorRequest(
+  view = "phase_rotated_real",
+) {
   const deadline = Date.now() + timeoutMs;
-  let request = matchingPhaseRotatedRequest(responseFieldVectorRequests, "0.08");
+  const phaseRad = view === "phase_rotated_real" ? "0.08" : null;
+  let request = matchingFieldViewRequest(responseFieldVectorRequests, view, phaseRad);
   while (!request && Date.now() < deadline) {
     await page.waitForTimeout(50);
-    request = matchingPhaseRotatedRequest(responseFieldVectorRequests, "0.08");
+    request = matchingFieldViewRequest(responseFieldVectorRequests, view, phaseRad);
   }
   if (!request) {
     throw new Error(
-      "Plot rotated did not request the driven FMR response field.",
+      `Plot ${view} did not request the driven FMR response field.`,
     );
   }
 }
 
-function matchingPhaseRotatedRequest(requests, phaseRad) {
+function matchingFieldViewRequest(requests, view, phaseRad) {
   return requests.findLast(
     (request) =>
       request.searchParams.get("component") === "full" &&
       request.searchParams.get("scope_kind") === "full" &&
-      request.searchParams.get("view") === "phase_rotated_real" &&
-      request.searchParams.get("phase_rad") === phaseRad,
+      request.searchParams.get("view") === view &&
+      (phaseRad === null ||
+        request.searchParams.get("phase_rad") === phaseRad),
   );
 }
 

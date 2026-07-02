@@ -775,6 +775,155 @@ void modal_diagnostics_preserve_explicit_k_vector()
     fullmag_fem_frequency_domain_result_destroy(&result);
 }
 
+void modal_nonzero_k_floquet_payload_rejects_until_production_operator_exists()
+{
+    constexpr double stiffness_matrix_row_major[] = {1.0, 0.0, 0.0, 1.0};
+    constexpr double gyrotropic_mass_row_major[] = {0.0, -1.0, 1.0, 0.0};
+    constexpr double k_vector_rad_m[] = {1.0e6, 0.0, 0.0};
+
+    FullmagFemModalEigenRequest request = base_request();
+    request.target_kind = "frequency_window";
+    request.frequency_min_hz = 0.1;
+    request.frequency_max_hz = 0.2;
+    request.mfem_operator_enabled = 1;
+    request.mfem_tangent_dof_count = 2;
+    request.mfem_stiffness_matrix_row_major = stiffness_matrix_row_major;
+    request.mfem_gyrotropic_matrix_row_major = gyrotropic_mass_row_major;
+    request.operator_request.spin_wave_bc_kind = "floquet";
+    request.operator_request.k_vector_rad_m = k_vector_rad_m;
+    request.operator_request.k_vector_len = 3;
+
+    FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_UNAVAILABLE,
+          "nonzero-k Floquet modal payload must remain unavailable until the production operator exists");
+    check(contains(result.diagnostics_json,
+                   "\"production_cpu_rejection_reason\":\"production_cpu_modal_nonzero_k_floquet_operator_missing\""),
+          "nonzero-k Floquet modal diagnostics expose production CPU rejection reason");
+    check(contains(result.diagnostics_json,
+                   "\"production_cpu_rejection_scope\":\"selected_spectrum_nonzero_k_floquet_modal\""),
+          "nonzero-k Floquet modal diagnostics expose rejection scope");
+    check(contains(result.diagnostics_json,
+                   "\"required_operator_contract\":\"bloch_floquet_tangent_operator_with_periodic_pairs\""),
+          "nonzero-k Floquet modal diagnostics name the missing operator contract");
+    check(contains(result.diagnostics_json,
+                   "\"required_operator_payload_kind\":\"bloch_floquet_tangent_operator\""),
+          "nonzero-k Floquet modal diagnostics name the missing operator payload kind");
+    check(contains(result.diagnostics_json, "\"modal_periodic_pair_contract_available\":false"),
+          "nonzero-k Floquet modal diagnostics report missing modal periodic-pair contract");
+    check(contains(result.result_json,
+                   "\"required_operator_contract\":\"bloch_floquet_tangent_operator_with_periodic_pairs\""),
+          "nonzero-k Floquet modal result names the missing operator contract");
+    check(contains(result.diagnostics_json, "\"k_vector_rad_m\":[1000000,0,0]"),
+          "nonzero-k Floquet modal diagnostics preserve the requested k-vector");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+}
+
+void modal_nonzero_k_floquet_tail_payload_preserves_periodic_pair_contract()
+{
+    constexpr double stiffness_matrix_row_major[] = {1.0, 0.0, 0.0, 1.0};
+    constexpr double gyrotropic_mass_row_major[] = {0.0, -1.0, 1.0, 0.0};
+
+    fullmag_fem_frequency_domain_floquet_periodic_pair pair{};
+    pair.pair_id = "x_periodic_pair_0";
+    pair.node_a = 10;
+    pair.node_b = 20;
+    pair.has_translation = 1;
+    pair.translation_m[0] = 1.0e-6;
+    pair.has_phase = 1;
+    pair.phase_rad = -1.0;
+
+    FullmagFemModalEigenRequest request = base_request();
+    request.target_kind = "frequency_window";
+    request.frequency_min_hz = 0.1;
+    request.frequency_max_hz = 0.2;
+    request.mfem_operator_enabled = 1;
+    request.mfem_tangent_dof_count = 2;
+    request.mfem_stiffness_matrix_row_major = stiffness_matrix_row_major;
+    request.mfem_gyrotropic_matrix_row_major = gyrotropic_mass_row_major;
+    request.operator_request.spin_wave_bc_kind = "floquet";
+    request.has_floquet_k_vector = 1;
+    request.floquet_k_vector_rad_per_m[0] = 1.0e6;
+    request.phase_convention =
+        FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_I_OMEGA_T;
+    request.mfem_floquet_periodic_pairs = &pair;
+    request.mfem_floquet_periodic_pair_count = 1;
+
+    FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_UNAVAILABLE,
+          "modal Floquet tail payload must reject until the production operator exists");
+    check(contains(result.diagnostics_json,
+                   "\"production_cpu_rejection_reason\":\"production_cpu_modal_nonzero_k_floquet_operator_missing\""),
+          "modal Floquet tail diagnostics expose production CPU rejection reason");
+    check(contains(result.diagnostics_json, "\"k_vector_rad_m\":[1000000,0,0]"),
+          "modal Floquet tail diagnostics preserve the requested k-vector");
+    check(contains(result.diagnostics_json, "\"floquet_periodic_pair_count\":1"),
+          "modal Floquet tail diagnostics preserve the periodic-pair count");
+    check(contains(result.diagnostics_json,
+                   "\"modal_periodic_pair_contract_available\":true"),
+          "modal Floquet tail diagnostics report the supplied periodic-pair contract");
+    check(contains(result.diagnostics_json,
+                   "\"required_operator_payload_kind\":\"bloch_floquet_tangent_operator\""),
+          "modal Floquet tail diagnostics still name the missing operator payload kind");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+}
+
+void modal_nonzero_k_floquet_bloch_payload_reaches_production_solver()
+{
+    constexpr double stiffness_matrix_row_major[] = {1.0, 0.0, 0.0, 1.0};
+    constexpr double gyrotropic_mass_row_major[] = {0.0, -1.0, 1.0, 0.0};
+
+    fullmag_fem_frequency_domain_floquet_periodic_pair pair{};
+    pair.pair_id = "x_periodic_pair_0";
+    pair.node_a = 10;
+    pair.node_b = 20;
+    pair.has_translation = 1;
+    pair.translation_m[0] = 1.0e-6;
+    pair.has_phase = 1;
+    pair.phase_rad = -1.0;
+
+    FullmagFemModalEigenRequest request = base_request();
+    request.target_kind = "frequency_window";
+    request.frequency_min_hz = 0.1;
+    request.frequency_max_hz = 0.2;
+    request.eigensolver_family = 1;
+    request.mfem_operator_enabled = 1;
+    request.mfem_tangent_dof_count = 2;
+    request.mfem_stiffness_matrix_row_major = stiffness_matrix_row_major;
+    request.mfem_gyrotropic_matrix_row_major = gyrotropic_mass_row_major;
+    request.operator_request.operator_diagnostics_json =
+        "{\"operator_family\":\"mfem_linearized_llg\","
+        "\"payload_kind\":\"bloch_floquet_tangent_operator\"}";
+    request.operator_request.spin_wave_bc_kind = "floquet";
+    request.has_floquet_k_vector = 1;
+    request.floquet_k_vector_rad_per_m[0] = 1.0e6;
+    request.phase_convention =
+        FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_I_OMEGA_T;
+    request.mfem_floquet_periodic_pairs = &pair;
+    request.mfem_floquet_periodic_pair_count = 1;
+
+    FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
+#if FULLMAG_FEM_WITH_SLEPC
+    check(result.status == FULLMAG_FEM_FD_OK,
+          "nonzero-k Floquet Bloch payload reaches the production SLEPc path");
+    check(contains(result.diagnostics_json, "\"execution_lane\":\"production_cpu\""),
+          "nonzero-k Floquet Bloch payload diagnostics report production lane");
+    check(contains(result.result_json, "\"accepted_mode_count\":1"),
+          "nonzero-k Floquet Bloch payload solves one accepted mode");
+#else
+    check(result.status == FULLMAG_FEM_FD_UNAVAILABLE,
+          "nonzero-k Floquet Bloch payload remains unavailable without SLEPc");
+#endif
+    check(!contains(result.diagnostics_json,
+                    "\"production_cpu_rejection_reason\":\"production_cpu_modal_nonzero_k_floquet_operator_missing\""),
+          "nonzero-k Floquet Bloch payload must not be rejected as a missing operator");
+    check(contains(result.diagnostics_json, "\"floquet_periodic_pair_count\":1"),
+          "nonzero-k Floquet Bloch payload diagnostics preserve periodic-pair count");
+    check(contains(result.diagnostics_json,
+                   "\"payload_kind\":\"bloch_floquet_tangent_operator\""),
+          "nonzero-k Floquet Bloch payload diagnostics preserve operator payload kind");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+}
+
 } // namespace
 
 int main()
@@ -799,5 +948,8 @@ int main()
     modal_without_validation_problem_stays_unavailable();
     modal_sparse_validation_error_preserves_explicit_k_vector();
     modal_diagnostics_preserve_explicit_k_vector();
+    modal_nonzero_k_floquet_payload_rejects_until_production_operator_exists();
+    modal_nonzero_k_floquet_tail_payload_preserves_periodic_pair_contract();
+    modal_nonzero_k_floquet_bloch_payload_reaches_production_solver();
     return 0;
 }

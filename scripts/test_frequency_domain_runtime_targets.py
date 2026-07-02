@@ -12,14 +12,28 @@ FMR_SMOKE = REPO_ROOT / "examples" / "fem_frequency_response_smoke.py"
 EIGEN_DISPERSION_SMOKE = (
     REPO_ROOT / "examples" / "fem_eigenmodes_dispersion_k_path.py"
 )
+EIGEN_DISPERSION_WINDOW_SMOKE = (
+    REPO_ROOT / "examples" / "fem_eigenmodes_dispersion_window_k_path.py"
+)
+EIGEN_DISPERSION_DE_BV_LOW_K = (
+    REPO_ROOT / "examples" / "fem_eigenmodes_dispersion_de_bv_low_k.py"
+)
 EIGEN_FREQUENCY_WINDOW_SMOKE = (
     REPO_ROOT / "examples" / "fem_eigenmodes_frequency_window.py"
+)
+EIGEN_PRODUCTION_GAMMA_K_PATH_SMOKE = (
+    REPO_ROOT / "examples" / "fem_eigenmodes_production_gamma_k_path.py"
 )
 PERIODIC_K0_SMOKE = REPO_ROOT / "examples" / "fem_fmr_periodic_k0_smoke.py"
 PERIODIC_ANTIDOT_FREQUENCY_DRIVEN = (
     REPO_ROOT
     / "examples"
     / "fem_periodic_antidot_relax_exchange_coupled_frequency_driven.py"
+)
+SHARED_DOMAIN_STATIC_PERIODIC_RESPONSE = (
+    REPO_ROOT
+    / "examples"
+    / "fem_frequency_response_shared_domain_static_periodic_smoke.py"
 )
 DRIVEN_RESPONSE_SOLVER = (
     REPO_ROOT / "backends" / "fem" / "src" / "frequency_domain" / "driven_response_solver.cpp"
@@ -92,6 +106,27 @@ def test_periodic_airbox_fmr_runtime_target_uses_real_antidot_example() -> None:
     )
 
 
+def test_periodic_airbox_promotion_artifact_target_requires_m5_equilibrium_gate() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+
+    target_start = justfile.find(
+        "verify-fem-frequency-domain-periodic-airbox-promotion-artifacts:"
+    )
+    assert target_start != -1
+    next_target = justfile.find("\nverify-", target_start + 1)
+    target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
+
+    assert "FULLMAG_FMR_PROMOTION_ARTIFACTS" in target
+    assert "--require-periodic-airbox-cpu-demag-solved" in target
+    assert "--require-frozen-magnetic-submesh" in target
+    assert "--require-m5-equilibrium-provenance" in target
+    assert "--require-min-frequency-points" in target
+    assert "--require-response-peak" in target
+    assert "--require-field-payloads-for-frequency-points" in target
+    assert "--require-derived-peak-mode" in target
+    assert "verify-fem-frequency-domain-periodic-airbox-runtime" not in target
+
+
 def test_eigen_dispersion_runtime_target_uses_k_path_example_and_validator() -> None:
     justfile = JUSTFILE.read_text(encoding="utf-8")
 
@@ -100,17 +135,91 @@ def test_eigen_dispersion_runtime_target_uses_k_path_example_and_validator() -> 
     next_target = justfile.find("\nverify-", target_start + 1)
     target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
 
-    assert 'fem_execution="cpu"' in target
+    assert "FULLMAG_FEM_EXECUTION=cpu" in target
     assert "just ensure-managed-fem-runtime" in target
     assert "examples/fem_eigenmodes_dispersion_k_path.py" in target
     assert ".fullmag/reports/frequency-domain-eigen-dispersion-runtime/artifacts" in target
     assert "eigen/spectrum.v2.json" in target
     assert "eigen/branches.v2.json" in target
     assert "eigen/dispersion.csv" in target
-    assert "eigen/modes/sample_0002/mode_0000.json" in target
-    assert "eigen/mode_fields.zarr/sample_0002/mode_0000/vector_xyz_complex/0.0.0" in target
+    assert "eigen/dispersion/path.json" in target
+    assert "eigen/modes/sample_0003/mode_0000.json" in target
+    assert "eigen/mode_fields.zarr/sample_0003/mode_0000/vector_xyz_complex/0.0.0" in target
     assert "scripts/verify_fem_frequency_domain_eigen_artifacts.py" in target
     assert "--require-reference-full-2x2-floquet" in target
+    assert "--require-exchange-only-analytic-dispersion" in target
+    assert "--require-exchange-only-reciprocal-dispersion" in target
+    assert "scripts/plot_fem_frequency_domain_eigen_artifacts.py" in target
+    assert "--dispersion-png examples/dyspersje.png" in target
+    assert ".fullmag/reports/frequency-domain-eigen-dispersion-runtime/plots/spectrum.svg" in target
+    assert "test -f examples/dyspersje.png" in target
+
+
+def test_eigen_dispersion_window_runtime_target_uses_windowed_k_path_example() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+
+    target_start = justfile.find(
+        "verify-fem-frequency-domain-eigen-dispersion-window-runtime:"
+    )
+    assert target_start != -1
+    next_target = justfile.find("\nverify-", target_start + 1)
+    target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
+
+    assert "just ensure-managed-fem-runtime" in target
+    assert "examples/fem_eigenmodes_dispersion_window_k_path.py" in target
+    assert ".fullmag/reports/frequency-domain-eigen-dispersion-window-runtime/artifacts" in target
+    assert "eigen/spectrum.v2.json" in target
+    assert "eigen/branches.v2.json" in target
+    assert "eigen/dispersion.csv" in target
+    assert "eigen/dispersion/path.json" in target
+    assert "eigen/diagnostics/solver.v1.json" in target
+    assert "production_cpu_rejection_reason" not in target
+    assert "required_operator_contract" not in target
+    assert "--require-production-modal-k-path" in target
+    assert "--require-reference-full-2x2-floquet" not in target
+    assert "--require-exchange-only-analytic-dispersion" in target
+    assert "--require-exchange-only-reciprocal-dispersion" in target
+    assert "scripts/plot_fem_frequency_domain_eigen_artifacts.py" in target
+    assert "--dispersion-png examples/dyspersje.png" in target
+    assert (
+        ".fullmag/reports/frequency-domain-eigen-dispersion-window-runtime/plots/spectrum.svg"
+        in target
+    )
+    assert "test -f examples/dyspersje.png" in target
+
+
+def test_de_bv_low_k_dispersion_runtime_target_uses_analytic_reference_gate() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+
+    target_start = justfile.find(
+        "verify-fem-frequency-domain-eigen-dispersion-de-bv-low-k-runtime:"
+    )
+    assert target_start != -1
+    next_target = justfile.find("\nverify-", target_start + 1)
+    target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
+
+    assert "just ensure-managed-fem-runtime" in target
+    assert "examples/fem_eigenmodes_dispersion_de_bv_low_k.py" in target
+    assert (
+        ".fullmag/reports/frequency-domain-eigen-dispersion-de-bv-low-k-runtime"
+        in target
+    )
+    assert "eigen/spectrum.v2.json" in target
+    assert "eigen/branches.v2.json" in target
+    assert "eigen/dispersion.csv" in target
+    assert "eigen/dispersion/path.json" in target
+    assert "eigen/modes/sample_0005/mode_0000.json" in target
+    assert "eigen/mode_fields/sample_0005/mode_0000/vector.bin" in target
+    assert "frequency_domain/manifest.v1.json" in target
+    assert "--require-low-k-de-bv-analytic-dispersion" in target
+    assert "scripts/plot_fem_frequency_domain_eigen_artifacts.py" in target
+    assert (
+        ".fullmag/reports/frequency-domain-eigen-dispersion-de-bv-low-k-runtime/plots/spectrum.svg"
+        in target
+    )
+    assert "--dispersion-png examples/dyspersje.png" in target
+    assert "test -f examples/dyspersje.png" in target
+    assert "dynamic demag for Floquet periodic FEM is not implemented yet" not in target
 
 
 def test_eigen_frequency_window_runtime_requires_production_shift_invert_validator() -> None:
@@ -135,6 +244,32 @@ def test_eigen_frequency_window_runtime_requires_production_shift_invert_validat
     assert window_example < window_validator < production_flag < window_artifacts
 
 
+def test_eigen_production_gamma_k_path_runtime_requires_production_gamma_gate() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+
+    target_start = justfile.find(
+        "verify-fem-frequency-domain-eigen-production-gamma-k-path-runtime:"
+    )
+    assert target_start != -1
+    next_target = justfile.find("\nverify-", target_start + 1)
+    target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
+
+    assert "just ensure-managed-fem-runtime" in target
+    assert "examples/fem_eigenmodes_production_gamma_k_path.py" in target
+    assert (
+        ".fullmag/reports/frequency-domain-eigen-production-gamma-k-path-runtime/artifacts"
+        in target
+    )
+    assert "eigen/spectrum.v2.json" in target
+    assert "eigen/branches.v2.json" in target
+    assert "eigen/dispersion.csv" in target
+    assert "eigen/dispersion/path.json" in target
+    assert "eigen/modes/sample_0002/mode_0000.json" in target
+    assert "eigen/mode_fields.zarr/sample_0002/mode_0000/vector_xyz_complex/0.0.0" in target
+    assert "--require-production-gamma-k-path" in target
+    assert "--require-production-modal-k-path" not in target
+
+
 def test_eigen_frequency_window_example_requests_full_2x2_operator() -> None:
     example = EIGEN_FREQUENCY_WINDOW_SMOKE.read_text(encoding="utf-8")
 
@@ -142,24 +277,89 @@ def test_eigen_frequency_window_example_requests_full_2x2_operator() -> None:
     assert 'operator="full_2x2"' in example
 
 
+def test_eigen_production_gamma_k_path_example_stays_gamma_only_and_windowed() -> None:
+    assert EIGEN_PRODUCTION_GAMMA_K_PATH_SMOKE.is_file()
+    example = EIGEN_PRODUCTION_GAMMA_K_PATH_SMOKE.read_text(encoding="utf-8")
+
+    assert 'target="frequency_window"' in example
+    assert 'operator="full_2x2"' in example
+    assert "include_demag=True" in example
+    assert 'bc="free"' in example
+    assert "fm.KPath" in example
+    assert 'fm.KPoint("G0", (0.0, 0.0, 0.0))' in example
+    assert 'fm.KPoint("G2", (0.0, 0.0, 0.0))' in example
+    assert 'fm.KPoint("X"' not in example
+    assert "fm.FloquetBC" not in example
+    assert 'study.save("dispersion")' in example
+    assert 'study.save("mode", indices=(0,))' in example
+
+
 def test_eigen_dispersion_example_declares_k_path_and_dispersion_outputs() -> None:
     assert EIGEN_DISPERSION_SMOKE.is_file()
     example = EIGEN_DISPERSION_SMOKE.read_text(encoding="utf-8")
 
-    assert "FREQUENCY_MIN_HZ = 1.0" in example
-    assert "FREQUENCY_MAX_HZ = 1.0e13" in example
-    assert 'target="frequency_window"' in example
-    assert "frequency_min=FREQUENCY_MIN_HZ" in example
-    assert "frequency_max=FREQUENCY_MAX_HZ" in example
+    assert "size=(80e-9, 40e-9, 40e-9)" not in example
+    assert "size=(40e-9, 40e-9, 40e-9)" in example
+    assert 'target="lowest"' in example
+    assert "FREQUENCY_MIN_HZ" not in example
+    assert "FREQUENCY_MAX_HZ" not in example
     assert "fm.KPath" in example
     assert "fm.KPoint" in example
-    assert "samples_per_segment=[2]" in example
+    assert 'fm.KPoint("X", (2.0e6, 0.0, 0.0))' in example
+    assert 'fm.KPoint("-X", (-2.0e6, 0.0, 0.0))' in example
+    assert "samples_per_segment=[1, 1, 1]" in example
     assert 'study.save("spectrum")' in example
     assert 'study.save("dispersion")' in example
     assert 'study.save("mode", indices=(0,))' in example
     assert "study.pbc(x=True)" in example
     assert "include_demag=False" in example
     assert 'bc=fm.FloquetBC(["x_faces"])' in example
+
+
+def test_eigen_dispersion_window_example_declares_selected_spectrum_k_path() -> None:
+    assert EIGEN_DISPERSION_WINDOW_SMOKE.is_file()
+    example = EIGEN_DISPERSION_WINDOW_SMOKE.read_text(encoding="utf-8")
+
+    assert 'study = fm.study("fem_eigenmodes_dispersion_window_k_path")' in example
+    assert 'target="frequency_window"' in example
+    assert "frequency_min=1.0e9" in example
+    assert "frequency_max=3.0e9" in example
+    assert 'operator="full_2x2"' in example
+    assert "include_demag=False" in example
+    assert "fm.KPath" in example
+    assert 'fm.KPoint("G", (0.0, 0.0, 0.0))' in example
+    assert 'fm.KPoint("X", (2.0e6, 0.0, 0.0))' in example
+    assert 'fm.KPoint("-X", (-2.0e6, 0.0, 0.0))' in example
+    assert "samples_per_segment=[1, 1, 1]" in example
+    assert 'bc=fm.FloquetBC(["x_faces"])' in example
+    assert 'study.save("dispersion")' in example
+    assert 'study.save("mode", indices=(0,))' in example
+
+
+def test_de_bv_low_k_dispersion_example_declares_dynamic_demag_validation_target() -> None:
+    assert EIGEN_DISPERSION_DE_BV_LOW_K.is_file()
+    example = EIGEN_DISPERSION_DE_BV_LOW_K.read_text(encoding="utf-8")
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+
+    assert 'study = fm.study("fem_eigenmodes_dispersion_de_bv_low_k")' in example
+    assert "study.pbc(x=True, y=True)" in example
+    assert "fm.ThinFilmDEBVDispersionValidation" in example
+    assert "fm.DispersionValidationScenario(\"backward_volume\"" in example
+    assert "fm.DispersionValidationScenario(\"damon_eshbach\"" in example
+    assert '[3, 4, 5]' in example
+    assert "max_k_rad_per_m=3.0e6" in example
+    assert "frequency_window_hz=(0.0, 5.0e9)" in example
+    assert 'target="frequency_window"' in example
+    assert "frequency_max=5.0e9" in example
+    assert 'operator="full_2x2"' in example
+    assert "include_demag=True" in example
+    assert 'fm.KPoint("BV", (3.0e6, 0.0, 0.0))' in example
+    assert 'fm.KPoint("DE", (0.0, 3.0e6, 0.0))' in example
+    assert 'bc=fm.FloquetBC(["x_faces", "y_faces"])' in example
+    assert (
+        "verify-fem-frequency-domain-eigen-dispersion-de-bv-low-k-runtime"
+        in justfile
+    )
 
 
 def test_pbc_airbox_plan_keeps_tetrax_audit_priority_boundary() -> None:
@@ -225,6 +425,40 @@ def test_periodic_airbox_spectrum_runtime_target_uses_multifrequency_gate() -> N
     assert "scripts/derive_fem_frequency_response_modes.py" in target
     assert "response/derived_modes/fmr_peak_mode.v1.json" in target
     assert "--require-derived-peak-mode" in target
+
+
+def test_periodic_airbox_spectrum_bounded_runtime_target_is_diagnostic() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+
+    target_start = justfile.find(
+        "verify-fem-frequency-domain-periodic-airbox-spectrum-bounded-runtime:"
+    )
+    assert target_start != -1
+    next_target = justfile.find("\nverify-", target_start + 1)
+    target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
+
+    assert "frequency-domain-periodic-airbox-spectrum-bounded-runtime" in target
+    assert "examples/fem_frequency_response_smoke.py" in target
+    assert "scripts/prepare_fmr_frozen_magnetic_submesh.py" in target
+    assert 'FULLMAG_FMR_FREQUENCIES_GHZ="${FULLMAG_FMR_FREQUENCIES_GHZ:-2.5,2.75,3.0}"' in target
+    assert (
+        'FULLMAG_FMR_RESPONSE_MAX_ITERATIONS="${FULLMAG_FMR_RESPONSE_MAX_ITERATIONS:-512}"'
+        in target
+    )
+    assert (
+        'FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS="${FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS:-512}"'
+        in target
+    )
+    assert (
+        'FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL="${FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL:-128}"'
+        in target
+    )
+    assert "set +e;" in target
+    assert "RESPONSE_STATUS=$?;" in target
+    assert 'echo "response_status=$RESPONSE_STATUS"' in target
+    assert "--allow-solve-error" in target
+    assert "--require-periodic-airbox-cpu-demag-solved" in target
+    assert "--require-frozen-magnetic-submesh" in target
 
 
 def test_refinement_env_target_exports_next_periodic_airbox_sweep() -> None:
@@ -344,13 +578,15 @@ def test_simple_periodic_antidot_frequency_driven_target_runs_new_plain_script()
         "--output-dir .fullmag/reports/fem-periodic-antidot-frequency-driven-runtime/artifacts"
         in target
     )
+    assert "scripts/verify_fem_frequency_domain_runtime_artifacts.py" in target
+    assert "--require-production-gpu --require-static-periodic" in target
     assert 'fem_execution="script"' in target
-    assert "GPU frequency-response is not qualified here" in target
-    assert "expected cpu" in target
+    assert "native GPU static-periodic no-demag response slice" in target
+    assert "expected gpu" in target
     assert "env -u FULLMAG_FEM_EXECUTION" in target
     assert 'FULLMAG_FEM_EXECUTION="$mode"' not in target
     assert "FULLMAG_RELAX_DEVICE=gpu" in target
-    assert "FULLMAG_FMR_DEVICE=cpu" in target
+    assert "FULLMAG_FMR_DEVICE=gpu" in target
     assert "FULLMAG_FDM_EXECUTION=cpu" in target
     assert 'FULLMAG_FMR_RESPONSE_RTOL="${FULLMAG_FMR_RESPONSE_RTOL:-1e-3}"' in target
     assert (
@@ -367,11 +603,14 @@ def test_simple_periodic_antidot_frequency_driven_target_runs_new_plain_script()
     )
 
 
-def test_periodic_antidot_frequency_driven_example_uses_cpu_transition() -> None:
+def test_periodic_antidot_frequency_driven_example_uses_gpu_transition() -> None:
     example = PERIODIC_ANTIDOT_FREQUENCY_DRIVEN.read_text(encoding="utf-8")
 
     assert 'study.device("gpu", precision="double")' in example
-    assert 'study.stages.change_device("cpu")' in example
+    assert "frequency_response_dynamic_demag" in example
+    assert "study.clear_outputs()" in example
+    assert "include_demag=False" in example
+    assert 'study.stages.change_device("gpu")' in example
 
 
 def test_periodic_airbox_gpu_unsupported_runtime_target_is_artifact_backed() -> None:
@@ -382,15 +621,13 @@ def test_periodic_airbox_gpu_unsupported_runtime_target_is_artifact_backed() -> 
     next_target = justfile.find("\nverify-", target_start + 1)
     target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
 
-    assert "examples/fem_frequency_response_smoke.py" in target
+    assert "examples/fem_frequency_response_gpu_periodic_airbox_unsupported_smoke.py" in target
     assert "--require-production-gpu" in target
     assert "--require-periodic-airbox-gpu-unsupported" in target
+    assert "--allow-unavailable" in target
     assert ".fullmag/reports/frequency-domain-periodic-airbox-gpu-unsupported-runtime/artifacts" in target
     assert "FULLMAG_FEM_EXECUTION=gpu" in target
-    assert "FULLMAG_FMR_DEVICE=gpu" in target
-    assert "FULLMAG_FMR_EQUILIBRIUM_SOURCE=provided" in target
-    assert "FULLMAG_FMR_FAST_RUNTIME_MESH=1" in target
-    assert "FULLMAG_FMR_MESH_ALGORITHM_3D=" in target
+    assert "FULLMAG_RELAX_DEVICE=gpu" in target
 
 
 def test_periodic_airbox_z_padding_runtime_target_compares_two_airboxes() -> None:
@@ -588,6 +825,17 @@ def test_frequency_domain_runtime_suite_includes_floquet_airbox_gpu_boundary() -
     assert "just verify-fem-frequency-domain-gpu-floquet-airbox-unsupported-runtime" in target
 
 
+def test_frequency_domain_runtime_suite_includes_periodic_airbox_gpu_boundary() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+
+    target_start = justfile.find("verify-fem-frequency-domain-runtime-suite:")
+    assert target_start != -1
+    next_target = justfile.find("\nverify-", target_start + 1)
+    target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
+
+    assert "just verify-fem-frequency-domain-periodic-airbox-gpu-unsupported-runtime" in target
+
+
 def test_frequency_domain_runtime_suite_includes_cpu_floquet_gate() -> None:
     justfile = JUSTFILE.read_text(encoding="utf-8")
 
@@ -608,6 +856,61 @@ def test_frequency_domain_runtime_suite_includes_static_periodic_parity_gate() -
     target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
 
     assert "just verify-fem-frequency-domain-gpu-static-periodic-parity-runtime" in target
+
+
+def test_frequency_domain_runtime_suite_includes_shared_domain_static_periodic_parity_gate() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+
+    target_start = justfile.find("verify-fem-frequency-domain-runtime-suite:")
+    assert target_start != -1
+    next_target = justfile.find("\nverify-", target_start + 1)
+    target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
+
+    assert "just verify-fem-frequency-domain-shared-domain-static-periodic-parity-runtime" in target
+
+
+def test_shared_domain_static_periodic_parity_target_compares_cpu_and_gpu() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+
+    target_start = justfile.find(
+        "verify-fem-frequency-domain-shared-domain-static-periodic-parity-runtime cpu_threads="
+    )
+    assert target_start != -1
+    next_target = justfile.find("\nverify-", target_start + 1)
+    target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
+
+    assert "examples/fem_frequency_response_shared_domain_static_periodic_smoke.py" in target
+    assert "frequency-domain-shared-domain-static-periodic-parity-runtime/cpu/artifacts" in target
+    assert "frequency-domain-shared-domain-static-periodic-parity-runtime/gpu/artifacts" in target
+    assert "FULLMAG_FMR_DEVICE=cpu" in target
+    assert "FULLMAG_FMR_DEVICE=gpu" in target
+    assert "--require-static-periodic" in target
+    assert "--require-production-gpu --require-static-periodic --compare-reference" in target
+    assert 'FULLMAG_GMSH_THREADS="${FULLMAG_GMSH_THREADS:-1}"' in target
+
+
+def test_shared_domain_static_periodic_smoke_is_no_demag_shared_domain() -> None:
+    example = SHARED_DOMAIN_STATIC_PERIODIC_RESPONSE.read_text(encoding="utf-8")
+
+    assert 'study.universe(' in example
+    assert 'study.pbc(x=True, demag="periodic_airbox_k0")' in example
+    assert 'study.demag(realization="poisson_robin")' in example
+    assert "study.build_domain_mesh()" in example
+    assert "study.demag(enabled=False)" in example
+    assert "include_demag=False" in example
+    assert 'bc=fm.PeriodicBC(["x_faces"])' in example
+    assert "magnetostatic_bc=" not in example
+
+
+def test_frequency_domain_runtime_suite_includes_production_modal_k_path_gate() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+
+    target_start = justfile.find("verify-fem-frequency-domain-runtime-suite:")
+    assert target_start != -1
+    next_target = justfile.find("\nverify-", target_start + 1)
+    target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
+
+    assert "just verify-fem-frequency-domain-eigen-dispersion-window-runtime" in target
 
 
 def test_managed_fem_runtime_staleness_tracks_runtime_copy_helper() -> None:

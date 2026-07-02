@@ -197,8 +197,10 @@ function inferActiveCalculationMode(
 }
 
 function hasNonzeroKSampling(draft: StudyStageDraft | null): boolean {
+  const kPath = draft?.kPath?.trim().toLowerCase();
   const kSampling = draft?.kSampling?.trim().toLowerCase();
   const kVector = draft?.kVector?.trim().toLowerCase();
+  if (kPath && kPath !== "k = 0" && kPath !== "k=0") return true;
   if (kSampling && kSampling !== "k = 0" && kSampling !== "k=0") return true;
   if (kVector && kVector !== "0,0,0" && kVector !== "0 0 0") return true;
   return false;

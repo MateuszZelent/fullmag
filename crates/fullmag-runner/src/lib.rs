@@ -178,6 +178,7 @@ pub struct FrequencyDomainDemagCapabilities {
 pub struct FrequencyDomainDispersionCapabilities {
     pub reference_cpu: FrequencyDomainCapabilityEntry,
     pub production_cpu: FrequencyDomainCapabilityEntry,
+    pub production_cpu_gamma_k_path: FrequencyDomainCapabilityEntry,
     pub production_gpu: FrequencyDomainCapabilityEntry,
     pub k_path: FrequencyDomainCapabilityEntry,
     pub branch_tracking: FrequencyDomainCapabilityEntry,
@@ -380,8 +381,12 @@ fn frequency_domain_capability_snapshot_v1() -> FrequencyDomainCapabilitySnapsho
                 "reference/MVP FEM modal k-path dispersion emits spectrum, branches, dispersion.csv, and mode-field artifacts on the CPU reference lane",
             ),
             production_cpu: capability(
-                "unsupported",
-                "production selected-spectrum CPU modal dispersion is gated until the sparse/matrix-free eigensolver, Floquet operator, residuals, and window completeness contract are validated",
+                "partial_production_executable",
+                "managed native CPU selected-spectrum no-demag Full2x2 Floquet k-path dispersion is executable for the labelled Bloch/Floquet tangent payload slice; dynamic demag-k, broader sparse/matrix-free validation, and production GPU remain gated",
+            ),
+            production_cpu_gamma_k_path: capability(
+                "partial_production_executable",
+                "managed production CPU selected-spectrum adapter is validated for gamma-equivalent k-path samples; this is a provenance bridge and not nonzero-k Bloch/Floquet dispersion",
             ),
             production_gpu: capability(
                 "unsupported",
@@ -470,6 +475,52 @@ mod frequency_domain_manifest_tests {
         native_fem::FrequencyDomainSweepProgress,
     };
     use crate::native_fem::FrequencyDomainAvailability;
+    use serde_json::Value;
+
+    fn assert_progress_json_checkpoint(
+        progress: &FrequencyDomainSweepProgress,
+        state: &str,
+        status: Option<&str>,
+        complete: Option<bool>,
+    ) {
+        let progress_json: Value = serde_json::from_str(&progress.progress_json)
+            .expect("progress_json should be valid JSON");
+        assert_eq!(
+            progress_json["schema_version"],
+            "frequency_domain_sweep_progress.v1"
+        );
+        assert_eq!(progress_json["state"], state);
+        assert_eq!(
+            progress_json["total_frequency_points"],
+            progress.total_frequency_points
+        );
+        assert_eq!(
+            progress_json["completed_frequency_points"],
+            progress.completed_frequency_points
+        );
+        assert_eq!(
+            progress_json["written_frequency_point_artifacts"],
+            progress.written_frequency_point_artifacts
+        );
+        assert_eq!(
+            progress_json["current_frequency_hz"],
+            progress.current_frequency_hz
+        );
+        assert_eq!(
+            progress_json["partial_artifacts_available"],
+            progress.partial_artifacts_available
+        );
+        assert_eq!(
+            progress_json["latest_artifact_manifest_path"],
+            progress.latest_artifact_manifest_path
+        );
+        if let Some(expected_status) = status {
+            assert_eq!(progress_json["status"], expected_status);
+        }
+        if let Some(expected_complete) = complete {
+            assert_eq!(progress_json["complete"], expected_complete);
+        }
+    }
 
     #[test]
     fn frequency_domain_manifest_preserves_response_and_eigen_namespaces() {
@@ -515,14 +566,28 @@ mod frequency_domain_manifest_tests {
         );
         assert_eq!(
             manifest.capabilities.dispersion.production_cpu.status,
-            "unsupported"
+            "partial_production_executable"
         );
+        assert_eq!(
+            manifest
+                .capabilities
+                .dispersion
+                .production_cpu_gamma_k_path
+                .status,
+            "partial_production_executable"
+        );
+        assert!(manifest
+            .capabilities
+            .dispersion
+            .production_cpu_gamma_k_path
+            .reason
+            .contains("gamma-equivalent"));
         assert!(manifest
             .capabilities
             .dispersion
             .production_cpu
             .reason
-            .contains("selected-spectrum"));
+            .contains("Bloch/Floquet tangent payload"));
         assert_eq!(
             manifest.capabilities.dispersion.production_gpu.status,
             "unsupported"
@@ -589,9 +654,7 @@ mod frequency_domain_manifest_tests {
         assert_eq!(progress.current_frequency_hz, 0.0);
         assert!(!progress.partial_artifacts_available);
         assert!(progress.latest_artifact_manifest_path.is_empty());
-        assert!(progress
-            .progress_json
-            .contains("frequency_domain_sweep_progress.v1"));
+        assert_progress_json_checkpoint(&progress, "not_started", None, None);
     }
 
     #[test]
@@ -613,7 +676,7 @@ mod frequency_domain_manifest_tests {
             progress.latest_artifact_manifest_path,
             "frequency_domain/manifest.v1.json"
         );
-        assert!(progress.progress_json.contains("interrupted"));
+        assert_progress_json_checkpoint(&progress, "interrupted", Some("interrupted"), Some(false));
     }
 
     #[test]
@@ -635,7 +698,12 @@ mod frequency_domain_manifest_tests {
             progress.latest_artifact_manifest_path,
             "frequency_domain/manifest.v1.json"
         );
-        assert!(progress.progress_json.contains("cancel_requested"));
+        assert_progress_json_checkpoint(
+            &progress,
+            "cancel_requested",
+            Some("cancel_requested"),
+            Some(false),
+        );
     }
 
     #[test]
@@ -657,7 +725,7 @@ mod frequency_domain_manifest_tests {
             progress.latest_artifact_manifest_path,
             "response/artifact_manifest.json"
         );
-        assert!(progress.progress_json.contains("completed"));
+        assert_progress_json_checkpoint(&progress, "completed", Some("ready"), Some(true));
     }
 }
 

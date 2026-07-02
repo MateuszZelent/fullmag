@@ -5371,9 +5371,38 @@ fn fem_eigen_backend_with_mesh_asset_plans_successfully() {
         },
         mode_tracking: None,
     };
+    let dispersion_validation = serde_json::json!({
+        "kind": "thin_film_de_bv_low_k",
+        "analytic_model": "kalinikos_slab_n0",
+        "film_thickness_m": 80.0e-9,
+        "equilibrium_magnetization": [1.0, 0.0, 0.0],
+        "film_normal": [0.0, 0.0, 1.0],
+        "max_k_rad_per_m": 3.0e6,
+        "max_relative_error": 0.10,
+        "frequency_window_hz": {
+            "min": 0.0,
+            "max": 5.0e9
+        },
+        "scenarios": [
+            {
+                "geometry": "backward_volume",
+                "branch_id": "branch_0",
+                "sample_indices": [0, 1, 2]
+            },
+            {
+                "geometry": "damon_eshbach",
+                "branch_id": "branch_0",
+                "sample_indices": [0, 3, 4]
+            }
+        ]
+    });
+    ir.problem_meta.runtime_metadata.insert(
+        "dispersion_validation".to_string(),
+        dispersion_validation.clone(),
+    );
 
-    let plan = plan(&ir).expect("FEM eigen mesh asset should produce a FemEigenPlanIR");
-    match plan.backend_plan {
+    let planned = plan(&ir).expect("FEM eigen mesh asset should produce a FemEigenPlanIR");
+    match planned.backend_plan {
         BackendPlanIR::FemEigen(fem) => {
             assert_eq!(fem.mesh.mesh_name, "strip");
             assert_eq!(fem.mesh.nodes.len(), 4);
@@ -5389,9 +5418,47 @@ fn fem_eigen_backend_with_mesh_asset_plans_successfully() {
             assert!(normal[0].abs() <= 1e-12);
             assert!((normal[1] - 0.6).abs() <= 1e-12);
             assert!((normal[2] - 0.8).abs() <= 1e-12);
+            let planned_validation = serde_json::to_value(&fem.dispersion_validation)
+                .expect("dispersion_validation should serialize");
+            assert_eq!(planned_validation, serde_json::json!(dispersion_validation));
         }
         other => panic!("expected FEM eigen plan, got {other:?}"),
     }
+
+    let mut invalid = ir;
+    invalid.problem_meta.runtime_metadata.insert(
+        "dispersion_validation".to_string(),
+        serde_json::json!({
+            "kind": "thin_film_de_bv_low_k",
+            "analytic_model": "kalinikos_slab_n0",
+            "film_thickness_m": 80.0e-9,
+            "equilibrium_magnetization": [1.0, 0.0, 0.0],
+            "film_normal": [0.0, 0.0, 1.0],
+            "max_k_rad_per_m": 4.0e6,
+            "frequency_window_hz": {
+                "min": 0.0,
+                "max": 5.0e9
+            },
+            "scenarios": [
+                {
+                    "geometry": "backward_volume",
+                    "branch_id": "branch_0",
+                    "sample_indices": [0, 1, 2]
+                },
+                {
+                    "geometry": "damon_eshbach",
+                    "branch_id": "branch_0",
+                    "sample_indices": [0, 3, 4]
+                }
+            ]
+        }),
+    );
+    let err =
+        plan(&invalid).expect_err("FEM eigen dispersion validation must reject broad k range");
+    assert!(err
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("max_k_rad_per_m")));
 }
 
 #[test]
@@ -6089,6 +6156,68 @@ fn fem_eigen_floquet_dynamic_demag_is_rejected() {
     assert!(err.reasons.iter().any(|reason| {
         reason.contains("dynamic demag for Floquet periodic FEM is not implemented yet")
     }));
+
+    ir.problem_meta.runtime_metadata.insert(
+        "dispersion_validation".to_string(),
+        serde_json::json!({
+            "kind": "thin_film_de_bv_low_k",
+            "analytic_model": "kalinikos_slab_n0",
+            "film_thickness_m": 80.0e-9,
+            "equilibrium_magnetization": [1.0, 0.0, 0.0],
+            "film_normal": [0.0, 0.0, 1.0],
+            "max_k_rad_per_m": 2.0e6,
+            "frequency_window_hz": {
+                "min": 0.0,
+                "max": 5.0e9
+            },
+            "max_relative_error": 0.08,
+            "scenarios": [
+                {
+                    "geometry": "backward_volume",
+                    "branch_id": "branch_0",
+                    "sample_indices": [0, 1, 2]
+                },
+                {
+                    "geometry": "damon_eshbach",
+                    "branch_id": "branch_0",
+                    "sample_indices": [3, 4, 5]
+                }
+            ]
+        }),
+    );
+    if let fullmag_ir::StudyIR::Eigenmodes { k_sampling, .. } = &mut ir.study {
+        *k_sampling = Some(fullmag_ir::KSamplingIR::Path {
+            points: vec![
+                fullmag_ir::KPointIR {
+                    label: Some("G".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+                fullmag_ir::KPointIR {
+                    label: Some("BV".to_string()),
+                    k_vector: [2.0e6, 0.0, 0.0],
+                },
+                fullmag_ir::KPointIR {
+                    label: Some("G".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+                fullmag_ir::KPointIR {
+                    label: Some("DE".to_string()),
+                    k_vector: [0.0, 2.0e6, 0.0],
+                },
+            ],
+            samples_per_segment: vec![2, 1, 2],
+            closed: false,
+        });
+    }
+    let planned =
+        plan(&ir).expect("low-k DE/BV analytic reference should bypass Floquet-demag guard");
+    match planned.backend_plan {
+        BackendPlanIR::FemEigen(fem) => {
+            assert!(fem.operator.include_demag);
+            assert!(fem.dispersion_validation.is_some());
+        }
+        other => panic!("expected FEM eigen plan, got {other:?}"),
+    }
 }
 
 #[test]
@@ -6195,6 +6324,50 @@ fn fem_frequency_response_with_mesh_asset_plans_successfully() {
 }
 
 #[test]
+fn fem_frequency_response_carries_m5_equilibrium_provenance_from_runtime_metadata() {
+    let mut ir = fem_frequency_response_mesh_asset_problem();
+    ir.problem_meta.runtime_metadata.insert(
+        "frequency_response_m5_equilibrium_provenance".to_string(),
+        serde_json::json!({
+            "schema_version": "fem_frequency_domain_equilibrium_provenance.v1",
+            "acceptance_gate": "M5_static_pbc_demag_equilibrium",
+            "accepted": true,
+            "source_kind": "m5_static_pbc_demag_equilibrium",
+            "source_artifact_root": ".fullmag/reports/fem-static-pbc-demag-equilibrium-runtime/artifacts",
+            "equilibrium_field_path": "m_final.json",
+            "seam_diagnostics_path": "diagnostics/fem_static_pbc_demag_seams.v1.json",
+            "z_padding_report_path": "reports/z_padding_validation.v1.json",
+            "supercell_report_path": "reports/supercell_validation.v1.json",
+            "magnetostatic_bc": "periodic_airbox_k0",
+            "pbc_axes": ["x", "y"],
+        }),
+    );
+
+    let planned =
+        plan(&ir).expect("FEM frequency response with M5 equilibrium provenance should plan");
+    match planned.backend_plan {
+        BackendPlanIR::FemFrequencyResponse(fem) => {
+            let provenance = fem
+                .equilibrium_provenance
+                .expect("M5 equilibrium provenance should be preserved in the backend plan");
+            assert_eq!(
+                provenance.schema_version,
+                "fem_frequency_domain_equilibrium_provenance.v1"
+            );
+            assert_eq!(
+                provenance.acceptance_gate,
+                "M5_static_pbc_demag_equilibrium"
+            );
+            assert!(provenance.accepted);
+            assert_eq!(provenance.source_kind, "m5_static_pbc_demag_equilibrium");
+            assert_eq!(provenance.magnetostatic_bc, "periodic_airbox_k0");
+            assert_eq!(provenance.pbc_axes, vec!["x".to_string(), "y".to_string()]);
+        }
+        other => panic!("expected FemFrequencyResponse plan, got {other:?}"),
+    }
+}
+
+#[test]
 fn fem_frequency_response_rejects_unsupported_production_slice_cases() {
     let mut demag = fem_frequency_response_mesh_asset_problem();
     demag.energy_terms = vec![
@@ -6254,6 +6427,32 @@ fn fem_frequency_response_rejects_unsupported_production_slice_cases() {
         "unexpected shared-domain rejection reasons: {:?}",
         err.reasons
     );
+
+    let mut gpu_shared_domain_no_demag = shared_domain.clone();
+    gpu_shared_domain_no_demag
+        .problem_meta
+        .runtime_metadata
+        .insert(
+            "runtime_selection".to_string(),
+            serde_json::json!({"device": "gpu", "precision": "double"}),
+        );
+    let planned = plan(&gpu_shared_domain_no_demag)
+        .expect("explicit GPU no-demag shared-domain response should plan as a magnetic slice");
+    match planned.backend_plan {
+        BackendPlanIR::FemFrequencyResponse(fem) => {
+            assert_eq!(fem.requested_device, fullmag_ir::ExecutionDevice::Gpu);
+            assert_eq!(
+                fem.domain_mesh_mode,
+                fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir
+            );
+            assert!(!fem.enable_demag);
+            assert_eq!(
+                fem.magnetostatic_bc,
+                fullmag_ir::MagnetostaticBoundaryConditionIR::Open
+            );
+        }
+        other => panic!("expected FemFrequencyResponse plan, got {other:?}"),
+    }
 
     let mut nonzero_k = fem_frequency_response_mesh_asset_problem();
     if let fullmag_ir::StudyIR::FrequencyResponse { k_sampling, .. } = &mut nonzero_k.study {

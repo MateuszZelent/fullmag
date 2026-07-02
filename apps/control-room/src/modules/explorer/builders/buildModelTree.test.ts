@@ -82,7 +82,8 @@ const frequencyDomainCapabilityFixture = {
   dispersion: {
     branch_tracking: capability("reference_executable"),
     k_path: capability("reference_executable"),
-    production_cpu: capability("unsupported"),
+    production_cpu: capability("partial_production_executable"),
+    production_cpu_gamma_k_path: capability("partial_production_executable"),
     production_gpu: capability("unsupported"),
     reference_cpu: capability("reference_executable"),
   },
@@ -223,7 +224,7 @@ const FREQUENCY_DOMAIN_BRANCHES = {
 } as const;
 
 const FREQUENCY_DOMAIN_DISPERSION = {
-  artifact_path: "eigen/dispersion/branch_table.csv",
+  artifact_path: "eigen/dispersion.csv",
   content_type: "text/csv",
   missing_reason: null,
   resource_key: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
@@ -273,6 +274,9 @@ const FREQUENCY_DOMAIN_RESPONSE_PROGRESS: FrequencyDomainSweepProgressResource =
   complete: false,
   completed_frequency_points: 3,
   current_frequency_hz: 10.5e9,
+  demag_mode: "periodic_airbox_k0",
+  frequency_max_hz: 12.0e9,
+  frequency_min_hz: 8.0e9,
   latest_artifact_manifest_path: "frequency_domain/manifest.partial.v1.json",
   missing_reason: null,
   partial_artifacts_available: true,
@@ -288,7 +292,10 @@ const FREQUENCY_DOMAIN_RESPONSE_PROGRESS: FrequencyDomainSweepProgressResource =
 const FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED: FrequencyDomainSweepProgressResource = {
   complete: false,
   completed_frequency_points: 4,
-  current_frequency_hz: null,
+  current_frequency_hz: 10.0e9,
+  demag_mode: "periodic_airbox_k0",
+  frequency_max_hz: 12.0e9,
+  frequency_min_hz: 8.0e9,
   latest_artifact_manifest_path: "frequency_domain/manifest.cancelled.v1.json",
   missing_reason: null,
   partial_artifacts_available: true,
@@ -1183,6 +1190,29 @@ describe("buildModelTree", () => {
     );
   });
 
+  it("reads eigen k-path text as a path sampling node", () => {
+    const snapshot = modelTreeSnapshotFromScene({
+      objects: [],
+      study: {
+        stages: [
+          {
+            eigen_k_path: "Gamma:0,0,0; X:1e7,0,0 | samples=5",
+            kind: "eigenmodes",
+            stage_id: "eigen-path",
+          },
+        ],
+      },
+    });
+
+    const flattened = flattenExplorerNodes(buildModelTree(snapshot));
+
+    expect(flattened.map((node) => node.id)).toEqual(
+      expect.arrayContaining([
+        "model:study:stages:stage:eigen-path:k-path",
+      ]),
+    );
+  });
+
   it("omits periodic and k-grid response nodes without response-map semantics", () => {
     const snapshot = modelTreeSnapshotFromScene({
       objects: [],
@@ -1560,11 +1590,12 @@ describe("buildModelTree", () => {
         (node) => node.id === "results:frequency-response:frequency-points:0",
       ),
     ).toMatchObject({
-      badge: "9.5 GHz, 2 observable(s)",
+      badge: "frequency 0, 2 observable(s)",
       contextCommands: undefined,
       fieldId: undefined,
       frequencyIndex: 0,
       kind: "results.frequency_response.frequency_point",
+      label: "9.5 GHz",
       resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
       status: "stale",
     });
@@ -1630,7 +1661,7 @@ describe("buildModelTree", () => {
     );
     expect(cancelRequestedNode).toMatchObject({
       artifactPath: "response/cancel_requested.v1.json",
-      badge: "1/4",
+      badge: "1/4 cancel_requested @ 1 GHz",
       resourceRef:
         ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
       status: "ready",
@@ -1666,7 +1697,7 @@ describe("buildModelTree", () => {
             payload: {
               artifacts: {
                 branches_v2_path: "eigen/branches.v2.json",
-                dispersion_csv_path: "eigen/dispersion/branch_table.csv",
+                dispersion_csv_path: "eigen/dispersion.csv",
                 eigen_diagnostics_v2_path: "eigen/diagnostics.v2.json",
                 mode_metadata_paths: [
                   "eigen/modes/sample_0000/mode_0002.json",
@@ -1834,7 +1865,7 @@ describe("buildModelTree", () => {
         (node) => node.kind === "resources.analysis.eigen.dispersion",
       ),
     ).toMatchObject({
-      artifactPath: "eigen/dispersion/branch_table.csv",
+      artifactPath: "eigen/dispersion.csv",
       resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
     });
     expect(
@@ -2139,6 +2170,28 @@ describe("buildModelTree", () => {
     expect(drivenOnlyResults.map((node) => node.id)).not.toContain(
       "results:frequency-domain:comparison",
     );
+    expect(
+      drivenOnlyResults.find(
+        (node) => node.id === "results:frequency-response:frequency-points:0",
+      ),
+    ).toMatchObject({
+      badge: "frequency 0, 2 observable(s)",
+      fieldId: undefined,
+      kind: "results.frequency_response.frequency_point",
+      label: "9.5 GHz",
+      status: "stale",
+    });
+    expect(
+      drivenOnlyResults.find(
+        (node) => node.id === "results:frequency-response:frequency-points:1",
+      ),
+    ).toMatchObject({
+      badge: "frequency 1, 1 observable(s)",
+      fieldId: undefined,
+      kind: "results.frequency_response.frequency_point",
+      label: "10.5 GHz",
+      status: "stale",
+    });
 
     const modalAndDrivenResults = flattenExplorerNodes(
       buildExplorerTree("results", {
@@ -2173,7 +2226,7 @@ describe("buildModelTree", () => {
     expect(
       jobs.find((node) => node.id === "jobs:frequency-domain"),
     ).toMatchObject({
-      badge: "3/10 running",
+      badge: "3/10 running @ 10.5 GHz periodic_airbox_k0",
       kind: "jobs.frequency_domain.root",
       status: "cancelled",
     });
@@ -2196,14 +2249,14 @@ describe("buildModelTree", () => {
         (node) => node.id === "jobs:frequency-domain:response-frequency",
       ),
     ).toMatchObject({
-      badge: "3/10",
+      badge: "8 GHz-12 GHz",
       resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
       status: "cancelled",
     });
     expect(
       jobs.find((node) => node.id === "jobs:frequency-domain:response-progress"),
     ).toMatchObject({
-      badge: "3/10 running",
+      badge: "3/10 running @ 10.5 GHz periodic_airbox_k0",
       resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
       status: "cancelled",
     });
@@ -2266,6 +2319,7 @@ describe("buildModelTree", () => {
       fieldId: "analysis:frequency-response:frequency-0042",
       frequencyIndex: 1,
       kind: "results.frequency_response.frequency_point",
+      label: "10.5 GHz",
       status: "ready",
     });
   });

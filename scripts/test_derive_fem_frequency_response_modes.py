@@ -93,6 +93,22 @@ def test_derives_peak_response_mode_candidate(tmp_path: Path) -> None:
         payload["frequency_point_artifact_path"]
         == "response/frequency_points/frequency_0001.json"
     )
+    assert payload["interpretation"] == "driven_response_field_at_peak_frequency"
+    assert payload["provenance"] == {
+        "canonical_product": "frequency_response",
+        "derivation_method": "select_max_response_amplitude",
+        "not_an_eigenmode": True,
+        "schema_version": "frequency_response_derived_mode_provenance.v1",
+        "selected_field_payload_path": "response/field_payloads.zarr/frequency_0001/vector_xyz_complex/0.0.0",
+        "selected_frequency_hz": 2.75e9,
+        "selected_frequency_index": 1,
+        "selected_frequency_point_artifact_path": "response/frequency_points/frequency_0001.json",
+        "selected_response_amplitude": 2.5,
+        "selected_sweep_point_index": 1,
+        "selection_metric": "response_amplitude",
+        "source_artifact_path": "response/magnetic_response_sweep.v2.json",
+        "source_schema_version": "magnetic_response_sweep.v2",
+    }
     assert payload["refinement_recommendation"] == {
         "schema_version": "frequency_response_peak_refinement.v1",
         "strategy": "local_peak_window",

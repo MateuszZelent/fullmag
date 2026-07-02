@@ -1457,6 +1457,12 @@ static int fullmag_fem_frequency_domain_solve_driven_response_from_c_abi(
             request->mfem_dmi_ms_field;
         native_request.mfem_validation_problem.dmi_uniform_ms =
             request->mfem_dmi_uniform_ms;
+        native_request.mfem_validation_problem.observable_ms_field =
+            request->mfem_observable_ms_field;
+        native_request.mfem_validation_problem.observable_ms_field_len =
+            request->mfem_observable_ms_field_len;
+        native_request.mfem_validation_problem.observable_uniform_ms =
+            request->mfem_observable_uniform_ms;
         if (request->mfem_exchange_edge_count > 0 &&
             request->mfem_exchange_edges != nullptr) {
             frequency_domain_exchange_edges.reserve(
@@ -1719,6 +1725,60 @@ FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve(
         request->mfem_sparse_mass_csr.values;
     native_request.mfem_sparse_mass_csr.values_len =
         request->mfem_sparse_mass_csr.values_len;
+    std::vector<fd::FrequencyDomainFloquetPeriodicPair> modal_floquet_periodic_pairs;
+    native_request.has_floquet_k_vector = request->has_floquet_k_vector != 0;
+    native_request.floquet_k_vector_rad_per_m[0] =
+        request->floquet_k_vector_rad_per_m[0];
+    native_request.floquet_k_vector_rad_per_m[1] =
+        request->floquet_k_vector_rad_per_m[1];
+    native_request.floquet_k_vector_rad_per_m[2] =
+        request->floquet_k_vector_rad_per_m[2];
+    if (native_request.has_floquet_k_vector &&
+        native_request.operator_request.k_vector_rad_m == nullptr) {
+        native_request.operator_request.k_vector_rad_m =
+            native_request.floquet_k_vector_rad_per_m;
+        native_request.operator_request.k_vector_len = 3;
+    }
+    if (!from_abi_frequency_domain_phase_convention(
+            request->phase_convention,
+            &native_request.phase_convention)) {
+        fd::FrequencyDomainContractResult invalid_phase{};
+        invalid_phase.status = fd::FrequencyDomainStatus::validation_error;
+        invalid_phase.error_message = "invalid frequency-domain phase convention";
+        invalid_phase.diagnostics_json =
+            "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\","
+            "\"study_product\":\"modal_eigen\","
+            "\"status\":\"validation_error\","
+            "\"validation_error\":\"invalid frequency-domain phase convention\"}";
+        return copy_frequency_domain_contract_result(
+            invalid_phase);
+    }
+    native_request.floquet_periodic_pair_count =
+        request->mfem_floquet_periodic_pair_count;
+    if (request->mfem_floquet_periodic_pair_count > 0 &&
+        request->mfem_floquet_periodic_pairs != nullptr) {
+        modal_floquet_periodic_pairs.reserve(
+            static_cast<std::size_t>(request->mfem_floquet_periodic_pair_count));
+        for (std::uint64_t pair_index = 0;
+             pair_index < request->mfem_floquet_periodic_pair_count;
+             ++pair_index) {
+            const fullmag_fem_frequency_domain_floquet_periodic_pair &source =
+                request->mfem_floquet_periodic_pairs[pair_index];
+            fd::FrequencyDomainFloquetPeriodicPair target{};
+            target.pair_id = source.pair_id;
+            target.node_a = source.node_a;
+            target.node_b = source.node_b;
+            target.has_translation = source.has_translation != 0;
+            target.translation_m[0] = source.translation_m[0];
+            target.translation_m[1] = source.translation_m[1];
+            target.translation_m[2] = source.translation_m[2];
+            target.has_phase = source.has_phase != 0;
+            target.phase_rad = source.phase_rad;
+            modal_floquet_periodic_pairs.push_back(target);
+        }
+        native_request.floquet_periodic_pairs =
+            modal_floquet_periodic_pairs.data();
+    }
 
     return copy_frequency_domain_contract_result(
         fd::solve_modal_eigen_contract(native_request));

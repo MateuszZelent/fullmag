@@ -31,6 +31,7 @@ from fullmag.model.spin_torque import (
 from fullmag.model.domain_frame import build_domain_frame, geometry_bounds as shared_geometry_bounds
 from fullmag.model.dynamics import DEFAULT_GAMMA, LLG
 from fullmag.model.energy import BulkDMI, CubicAnisotropy, Demag, Exchange, InterfacialDMI, Magnetoelastic, OerstedField, OerstedCylinder, Pulse, SincPulse, Sinusoidal, ThermalNoise, UniaxialAnisotropy, Zeeman
+from fullmag.model.eigen import serialize_k_sampling
 from fullmag.model.geometry import (
     ArchWaveguide,
     Box,
@@ -496,7 +497,7 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
             "eigen_normalization": study.normalization,
             "eigen_damping_policy": study.damping_policy,
             "eigen_k_vector": ",".join(str(component) for component in study.k_vector) if study.k_vector is not None else "",
-            "eigen_k_path": "",
+            "eigen_k_path": _text_k_path(study.k_sampling),
             "eigen_spin_wave_bc": _spin_wave_bc_kind(study.spin_wave_bc),
             "eigen_spin_wave_bc_config": _spin_wave_bc_config(study.spin_wave_bc),
         }
@@ -2718,13 +2719,7 @@ def _render_stages(
         previous_dynamics_signature = dynamics_signature
 
         if isinstance(study, Eigenmodes):
-            count_raw = _override_string(stage_override, "eigen_count", None)
-            count = study.count
-            if count_raw is not None:
-                try:
-                    count = int(count_raw)
-                except ValueError:
-                    pass
+            count = _override_int(stage_override, "eigen_count", study.count) or study.count
             target = _override_string(stage_override, "eigen_target", study.target) or study.target
             operator = _override_string(stage_override, "eigen_operator", study.operator) or study.operator
             include_demag_ov = stage_override.get("eigen_include_demag")
@@ -2785,6 +2780,10 @@ def _render_stages(
                     pass
             elif study.k_vector is not None:
                 call_parts.append(f"k_vector={study.k_vector!r}")
+            elif study.k_sampling is not None:
+                k_sampling_expr = _render_k_sampling_expr(study.k_sampling)
+                if k_sampling_expr is not None:
+                    call_parts.append(f"k_sampling={k_sampling_expr}")
             if is_study_surface:
                 lines.append(f"study.stages.add_eigenmodes({', '.join(call_parts)})")
             else:
@@ -4783,6 +4782,14 @@ def _override_number(overrides: dict[str, object], key: str, fallback: float | N
         return None
     if isinstance(value, (int, float)):
         return float(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            return float(stripped)
+        except ValueError:
+            return fallback
     return fallback
 
 
@@ -4794,6 +4801,14 @@ def _override_int(overrides: dict[str, object], key: str, fallback: int | None) 
         return None
     if isinstance(value, (int, float)):
         return int(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            return int(float(stripped))
+        except ValueError:
+            return fallback
     return fallback
 
 
@@ -4859,14 +4874,22 @@ def _render_stage_k_path_expr(value: str | None) -> str | None:
         return None
 
     samples: list[int] = []
+    closed = False
     for option in option_part.split(";"):
         key, sep, option_value = option.strip().partition("=")
-        if sep and key.strip().lower() in {"samples", "samples_per_segment"}:
+        option_key = key.strip().lower()
+        if sep and option_key in {"samples", "samples_per_segment"}:
             try:
                 samples = [max(1, int(part.strip())) for part in option_value.split(",") if part.strip()]
             except ValueError:
                 return None
-    segment_count = len(points) - 1
+        elif sep and option_key == "closed":
+            closed_value = option_value.strip().lower()
+            if closed_value in {"1", "true", "yes"}:
+                closed = True
+            elif closed_value not in {"0", "false", "no"}:
+                return None
+    segment_count = len(points) if closed else len(points) - 1
     if not samples:
         samples = [41] * segment_count
     elif len(samples) == 1 and segment_count > 1:
@@ -4880,8 +4903,79 @@ def _render_stage_k_path_expr(value: str | None) -> str | None:
     )
     return (
         f"fm.KPath(points=[{rendered_points}], "
-        f"samples_per_segment={samples!r})"
+        f"samples_per_segment={samples!r}"
+        f"{', closed=True' if closed else ''})"
     )
+
+
+def _text_k_path(value: object | None) -> str:
+    if value is None:
+        return ""
+    try:
+        payload = serialize_k_sampling(value)
+    except ValueError:
+        return ""
+    if payload is None or payload.get("kind") != "path":
+        return ""
+    points = payload.get("points")
+    samples = payload.get("samples_per_segment")
+    if not isinstance(points, list) or not isinstance(samples, list):
+        return ""
+    rendered_points: list[str] = []
+    for point in points:
+        if not isinstance(point, dict):
+            return ""
+        k_vector = point.get("k_vector")
+        if not isinstance(k_vector, list) or len(k_vector) != 3:
+            return ""
+        label = str(point.get("label") or "")
+        rendered_points.append(
+            f"{label}:{','.join(_py_number(float(component)) for component in k_vector)}"
+        )
+    rendered_samples = ",".join(str(int(sample)) for sample in samples)
+    options = [f"samples={rendered_samples}"]
+    if payload.get("closed") is True:
+        options.append("closed=true")
+    return f"{'; '.join(rendered_points)} | {'; '.join(options)}"
+
+
+def _render_k_sampling_expr(value: object | None) -> str | None:
+    if value is None:
+        return None
+    try:
+        payload = serialize_k_sampling(value)
+    except ValueError:
+        return None
+    if payload is None:
+        return None
+    if payload.get("kind") == "single":
+        k_vector = payload.get("k_vector")
+        if not isinstance(k_vector, list) or len(k_vector) != 3:
+            return None
+        return _py_tuple3(k_vector)
+    if payload.get("kind") == "path":
+        points = payload.get("points")
+        samples = payload.get("samples_per_segment")
+        if not isinstance(points, list) or not isinstance(samples, list):
+            return None
+        rendered_points: list[str] = []
+        for point in points:
+            if not isinstance(point, dict):
+                return None
+            k_vector = point.get("k_vector")
+            if not isinstance(k_vector, list) or len(k_vector) != 3:
+                return None
+            rendered_points.append(
+                f"fm.KPoint({_py_literal(point.get('label'))}, {_py_tuple3(k_vector)})"
+            )
+        args = [
+            f"points=[{', '.join(rendered_points)}]",
+            f"samples_per_segment={samples!r}",
+        ]
+        if payload.get("closed") is True:
+            args.append("closed=True")
+        return f"fm.KPath({', '.join(args)})"
+    return None
 
 
 def _text_mesh_size(value: object) -> str:

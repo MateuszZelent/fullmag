@@ -140,9 +140,13 @@ function useObjectRegionMagneticParametersPanelView({
       ),
     [model.regionId, objectMaterialFields],
   );
-  const unsupportedRegionFieldCount = objectMaterialFields.filter(
-    (field) => field.region_id === model.regionId && !isEditableMaterialField(field),
-  ).length;
+  const unsupportedRegionFieldCount = useMemo(
+    () =>
+      objectMaterialFields.filter(
+        (field) => field.region_id === model.regionId && !isEditableMaterialField(field),
+      ).length,
+    [model.regionId, objectMaterialFields],
+  );
   const fieldDraftKey = materialFieldDraftKey(editableRegionAssignments);
   const baseFieldDrafts = useMemo(
     () =>

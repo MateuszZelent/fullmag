@@ -11,8 +11,10 @@
 use fullmag_ir::{
     EigenDampingPolicyIR, EigenNormalizationIR, EigenOperatorConfigIR, EigenOperatorIR,
     EigenTargetIR, EquilibriumSourceIR, ExchangeBoundaryCondition, ExecutionPrecision,
-    FdmMaterialIR, FdmPlanIR, FemEigenPlanIR, GridDimensions, IntegratorChoice, KPointIR,
-    KSamplingIR, MaterialIR, MeshIR, OutputIR, RelaxationAlgorithmIR, RelaxationControlIR,
+    FdmMaterialIR, FdmPlanIR, FemEigenDispersionValidationIR,
+    FemEigenDispersionValidationScenarioIR, FemEigenDispersionValidationWindowIR, FemEigenPlanIR,
+    GridDimensions, IntegratorChoice, KPointIR, KSamplingIR, MaterialIR, MeshIR, OutputIR,
+    RelaxationAlgorithmIR, RelaxationControlIR,
 };
 use fullmag_runner::RunStatus;
 
@@ -916,6 +918,7 @@ fn fem_eigen_smoke_completes_without_errors() {
         demag_realization: None,
         dmi_interface_normal: None,
         mode_tracking: None,
+        dispersion_validation: None,
     };
 
     let outputs = vec![
@@ -1102,6 +1105,7 @@ fn macrospin_kittel_frequency_order_of_magnitude() {
         demag_realization: None,
         dmi_interface_normal: None,
         mode_tracking: None,
+        dispersion_validation: None,
     };
 
     let outputs = vec![OutputIR::EigenSpectrum {
@@ -1172,6 +1176,7 @@ fn fem_eigen_modes_are_non_trivial() {
         demag_realization: None,
         dmi_interface_normal: None,
         mode_tracking: None,
+        dispersion_validation: None,
     };
 
     let outputs = vec![
@@ -1274,6 +1279,7 @@ fn dense_eigen_exports_relative_residuals() {
         demag_realization: None,
         dmi_interface_normal: None,
         mode_tracking: None,
+        dispersion_validation: None,
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -1373,6 +1379,7 @@ fn dense_eigen_exports_tangent_leakage() {
         demag_realization: None,
         dmi_interface_normal: None,
         mode_tracking: None,
+        dispersion_validation: None,
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -1445,6 +1452,7 @@ fn dense_eigen_frequency_units_are_hz_and_rad_s() {
         demag_realization: None,
         dmi_interface_normal: None,
         mode_tracking: None,
+        dispersion_validation: None,
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -1551,6 +1559,7 @@ fn fem_eigen_frequency_is_stable_across_resolutions() {
             demag_realization: None,
             dmi_interface_normal: None,
             mode_tracking: None,
+            dispersion_validation: None,
         };
         let outputs = vec![OutputIR::EigenSpectrum {
             quantity: "eigenfrequency".to_string(),
@@ -1633,6 +1642,7 @@ fn fem_eigen_periodic_k_zero_runs_with_periodic_node_pairs() {
         demag_realization: None,
         dmi_interface_normal: None,
         mode_tracking: None,
+        dispersion_validation: None,
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -1704,6 +1714,7 @@ fn fem_eigen_floquet_runs_with_phase_aware_metadata() {
         demag_realization: None,
         dmi_interface_normal: None,
         mode_tracking: None,
+        dispersion_validation: None,
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -1781,6 +1792,7 @@ fn fem_eigen_full_2x2_floquet_executes_nonidentity_tangent_frame_transport() {
         demag_realization: None,
         dmi_interface_normal: None,
         mode_tracking: None,
+        dispersion_validation: None,
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -1792,6 +1804,9 @@ fn fem_eigen_full_2x2_floquet_executes_nonidentity_tangent_frame_transport() {
             OutputIR::EigenMode {
                 field: "mode".to_string(),
                 indices: vec![0],
+            },
+            OutputIR::DispersionCurve {
+                name: "dispersion".to_string(),
             },
         ],
     )
@@ -1900,6 +1915,7 @@ fn fem_eigen_scalar_floquet_still_rejects_nonidentity_tangent_frame_transport() 
         demag_realization: None,
         dmi_interface_normal: None,
         mode_tracking: None,
+        dispersion_validation: None,
     };
 
     let error = fullmag_runner::run_reference_fem_eigen(
@@ -1959,6 +1975,7 @@ fn fem_eigen_damping_include_emits_nonzero_imaginary_frequency() {
         demag_realization: None,
         dmi_interface_normal: None,
         mode_tracking: None,
+        dispersion_validation: None,
     };
     let result = fullmag_runner::run_reference_fem_eigen(
         &plan,
@@ -2022,6 +2039,7 @@ fn fem_eigen_surface_anisotropy_runs_and_reports_term() {
         demag_realization: None,
         dmi_interface_normal: None,
         mode_tracking: None,
+        dispersion_validation: None,
     };
     let result = fullmag_runner::run_reference_fem_eigen(
         &plan,
@@ -2094,6 +2112,7 @@ fn fem_eigen_floquet_exchange_only_is_reciprocal_for_plus_minus_k() {
             demag_realization: None,
             dmi_interface_normal: None,
             mode_tracking: None,
+            dispersion_validation: None,
         }
     };
 
@@ -2123,6 +2142,98 @@ fn fem_eigen_floquet_exchange_only_is_reciprocal_for_plus_minus_k() {
         rel_diff < 1e-10,
         "exchange-only Floquet spectrum should be reciprocal: f(+k)={f_plus:.9e}, f(-k)={f_minus:.9e}, rel_diff={rel_diff:.3e}"
     );
+}
+
+#[test]
+fn fem_eigen_full_2x2_floquet_exchange_dispersion_matches_analytic() {
+    let build_plan = |kx: f64| {
+        let mut mesh = cube_mesh(20.0);
+        mesh.mesh_name = format!("floquet_full2x2_exchange_k_{kx:.0}");
+        FemEigenPlanIR {
+            mesh_name: mesh.mesh_name.clone(),
+            mesh_source: None,
+            mesh,
+            object_segments: Vec::new(),
+            mesh_parts: Vec::new(),
+            domain_mesh_mode: fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh,
+            domain_frame: None,
+            fe_order: 1,
+            hmax: 20e-9,
+            equilibrium_magnetization: vec![[1.0, 0.0, 0.0]; 8],
+            material: fem_permalloy(),
+            operator: EigenOperatorConfigIR {
+                kind: EigenOperatorIR::Full2x2,
+                include_demag: false,
+            },
+            count: 1,
+            target: EigenTargetIR::Lowest,
+            equilibrium: EquilibriumSourceIR::Provided,
+            k_sampling: Some(fullmag_ir::KSamplingIR::Single {
+                k_vector: [kx, 0.0, 0.0],
+            }),
+            normalization: EigenNormalizationIR::UnitL2,
+            damping_policy: EigenDampingPolicyIR::Ignore,
+            enable_exchange: true,
+            enable_demag: false,
+            interfacial_dmi: None,
+            bulk_dmi: None,
+            external_field: Some([39_789.0, 0.0, 0.0]),
+            gyromagnetic_ratio: 2.211e5,
+            precision: ExecutionPrecision::Double,
+            exchange_bc: ExchangeBoundaryCondition::Neumann,
+            spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::Config(
+                fullmag_ir::SpinWaveBoundaryConfigIR {
+                    kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,
+                    boundary_pair_id: Some("x_faces".to_string()),
+                    pair_ids: Vec::new(),
+                    phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                    surface_anisotropy_ks: None,
+                    surface_anisotropy_axis: None,
+                },
+            ),
+            demag_realization: None,
+            dmi_interface_normal: None,
+            mode_tracking: None,
+            dispersion_validation: None,
+        }
+    };
+
+    let run_freq = |kx: f64| {
+        let plan = build_plan(kx);
+        let result = fullmag_runner::run_reference_fem_eigen(
+            &plan,
+            &[OutputIR::EigenSpectrum {
+                quantity: "eigenfrequency".to_string(),
+            }],
+        )
+        .expect("full2x2 Floquet exchange-only FEM eigen solve should execute");
+        let spectrum = result
+            .artifact_bytes("eigen/spectrum.json")
+            .expect("spectrum artifact must exist");
+        let value: serde_json::Value =
+            serde_json::from_slice(spectrum).expect("valid spectrum json");
+        value["modes"][0]["frequency_real_hz"]
+            .as_f64()
+            .expect("first mode frequency")
+    };
+
+    let material = fem_permalloy();
+    let h0 = 39_789.0;
+    let exchange_field = |kx: f64| {
+        2.0 * material.exchange_stiffness * kx * kx
+            / (fullmag_engine::MU0 * material.saturation_magnetisation)
+    };
+    let expected_freq = |kx: f64| 2.211e5 * (h0 + exchange_field(kx)) / std::f64::consts::TAU;
+
+    for kx in [0.0, 1.0e7, 2.0e7] {
+        let actual = run_freq(kx);
+        let expected = expected_freq(kx);
+        let rel = (actual - expected).abs() / expected.max(1.0);
+        assert!(
+            rel < 0.25,
+            "exchange-only Full2x2 Floquet frequency should match analytic dispersion within coarse-mesh tolerance: kx={kx:.3e}, actual={actual:.9e}, expected={expected:.9e}, rel={rel:.3e}"
+        );
+    }
 }
 
 #[test]
@@ -2178,6 +2289,7 @@ fn fem_eigen_floquet_bulk_dmi_is_nonreciprocal_for_plus_minus_k() {
             demag_realization: None,
             dmi_interface_normal: None,
             mode_tracking: None,
+            dispersion_validation: None,
         }
     };
 
@@ -2264,6 +2376,7 @@ fn fem_eigen_demag_lowers_frequency() {
             demag_realization: None,
             dmi_interface_normal: None,
             mode_tracking: None,
+            dispersion_validation: None,
         }
     };
 
@@ -2366,6 +2479,7 @@ fn fem_eigen_poisson_robin_demag_runs_on_shared_domain_mesh() {
         demag_realization: Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin),
         dmi_interface_normal: None,
         mode_tracking: None,
+        dispersion_validation: None,
     };
 
     let outputs = [OutputIR::EigenSpectrum {
@@ -2441,6 +2555,7 @@ fn eigen_bc_free_baseline() {
         demag_realization: None,
         dmi_interface_normal: None,
         mode_tracking: None,
+        dispersion_validation: None,
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -2545,6 +2660,7 @@ fn eigen_bc_pinned_higher_frequency() {
             demag_realization: None,
             dmi_interface_normal: None,
             mode_tracking: None,
+            dispersion_validation: None,
         }
     };
 
@@ -2655,6 +2771,7 @@ fn eigen_bc_periodic_requires_pairs_error() {
         demag_realization: None,
         dmi_interface_normal: None,
         mode_tracking: None,
+        dispersion_validation: None,
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -2741,6 +2858,7 @@ fn eigen_bc_periodic_k_zero_matches_free() {
             demag_realization: None,
             dmi_interface_normal: None,
             mode_tracking: None,
+            dispersion_validation: None,
         }
     };
 
@@ -2831,6 +2949,7 @@ fn floquet_k0_equals_periodic() {
             demag_realization: None,
             dmi_interface_normal: None,
             mode_tracking: None,
+            dispersion_validation: None,
         }
     };
 
@@ -2890,11 +3009,15 @@ fn fem_eigen_path_writes_v2_dispersion_artifacts() {
                     k_vector: [0.0, 0.0, 0.0],
                 },
                 KPointIR {
-                    label: Some("X".to_string()),
-                    k_vector: [5.0e7, 0.0, 0.0],
+                    label: Some("BV".to_string()),
+                    k_vector: [2.0e6, 0.0, 0.0],
+                },
+                KPointIR {
+                    label: Some("DE".to_string()),
+                    k_vector: [0.0, 2.0e6, 0.0],
                 },
             ],
-            samples_per_segment: vec![2],
+            samples_per_segment: vec![2, 2],
             closed: false,
         }),
         normalization: EigenNormalizationIR::UnitL2,
@@ -2920,6 +3043,31 @@ fn fem_eigen_path_writes_v2_dispersion_artifacts() {
         demag_realization: None,
         dmi_interface_normal: None,
         mode_tracking: Some(fullmag_ir::ModeTrackingIR::default()),
+        dispersion_validation: Some(FemEigenDispersionValidationIR {
+            kind: "thin_film_de_bv_low_k".to_string(),
+            analytic_model: "kalinikos_slab_n0".to_string(),
+            film_thickness_m: 20.0e-9,
+            equilibrium_magnetization: [1.0, 0.0, 0.0],
+            film_normal: [0.0, 0.0, 1.0],
+            frequency_window_hz: FemEigenDispersionValidationWindowIR {
+                min: 0.0,
+                max: 5.0e9,
+            },
+            max_k_rad_per_m: 2.0e6,
+            max_relative_error: 0.10,
+            scenarios: vec![
+                FemEigenDispersionValidationScenarioIR {
+                    geometry: "backward_volume".to_string(),
+                    branch_id: "branch_0".to_string(),
+                    sample_indices: vec![0, 1, 2],
+                },
+                FemEigenDispersionValidationScenarioIR {
+                    geometry: "damon_eshbach".to_string(),
+                    branch_id: "branch_0".to_string(),
+                    sample_indices: vec![0, 3, 4],
+                },
+            ],
+        }),
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -2931,6 +3079,9 @@ fn fem_eigen_path_writes_v2_dispersion_artifacts() {
             OutputIR::EigenMode {
                 field: "mode".to_string(),
                 indices: vec![0],
+            },
+            OutputIR::DispersionCurve {
+                name: "dispersion".to_string(),
             },
         ],
     )
@@ -2946,9 +3097,15 @@ fn fem_eigen_path_writes_v2_dispersion_artifacts() {
         spectrum["schema_version"].as_str(),
         Some("eigen_spectrum.v2")
     );
-    assert_eq!(spectrum["sample_count"].as_u64(), Some(3));
-    assert_eq!(spectrum["samples"].as_array().map(Vec::len), Some(3));
-    assert_eq!(spectrum["samples"][2]["label"].as_str(), Some("X"));
+    assert_eq!(spectrum["sample_count"].as_u64(), Some(5));
+    assert_eq!(
+        spectrum["mode_count"].as_u64(),
+        Some(1),
+        "spectrum.v2 top-level mode_count must match the public published modes"
+    );
+    assert_eq!(spectrum["samples"].as_array().map(Vec::len), Some(5));
+    assert_eq!(spectrum["samples"][2]["label"].as_str(), Some("BV"));
+    assert_eq!(spectrum["samples"][4]["label"].as_str(), Some("DE"));
     assert!(spectrum["samples"][2]["path_s"].as_f64().unwrap_or(0.0) > 0.0);
     let spectrum_mode = &spectrum["samples"][2]["modes"][0];
     assert_eq!(
@@ -3062,6 +3219,42 @@ fn fem_eigen_path_writes_v2_dispersion_artifacts() {
         diagnostics["dispersion"]["modal_overlap_available"].as_bool(),
         Some(true)
     );
+    assert!(
+        diagnostics["dispersion"]["median_overlap"]
+            .as_f64()
+            .is_some_and(|value| value.is_finite() && value > 0.0),
+        "diagnostics.v2 should publish finite median_overlap when modal overlap is available, got {diagnostics}"
+    );
+    assert!(
+        branches["diagnostics"]["median_overlap"]
+            .as_f64()
+            .is_some_and(|value| value.is_finite() && value > 0.0),
+        "branches.v2 should publish finite diagnostics.median_overlap when modal overlap is available, got {branches}"
+    );
+    let mut published_overlaps = branches["branches"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|branch| branch["points"].as_array().into_iter().flatten())
+        .filter(|point| {
+            point["tracking_score_source"].as_str() == Some("modal_overlap_weighted_score")
+        })
+        .filter_map(|point| point["overlap_prev"].as_f64())
+        .collect::<Vec<_>>();
+    published_overlaps.sort_by(|left, right| left.total_cmp(right));
+    let midpoint = published_overlaps.len() / 2;
+    let expected_median_overlap = if published_overlaps.len() % 2 == 0 {
+        (published_overlaps[midpoint - 1] + published_overlaps[midpoint]) / 2.0
+    } else {
+        published_overlaps[midpoint]
+    };
+    let branch_median_overlap = branches["diagnostics"]["median_overlap"]
+        .as_f64()
+        .expect("branches.v2 diagnostics.median_overlap must be numeric");
+    assert!(
+        (branch_median_overlap - expected_median_overlap).abs() <= 1.0e-12,
+        "branches.v2 diagnostics.median_overlap must match published modal-overlap points: got {branch_median_overlap}, expected {expected_median_overlap}"
+    );
     let solver_diagnostics: serde_json::Value = serde_json::from_slice(
         result
             .artifact_bytes("eigen/diagnostics/solver.v1.json")
@@ -3141,6 +3334,27 @@ fn fem_eigen_path_writes_v2_dispersion_artifacts() {
         mode_metadata["compatibility_binary_payload_path"].as_str(),
         Some("eigen/mode_fields/sample_0002/mode_0000/vector.bin")
     );
+    let eigen_summary: serde_json::Value = serde_json::from_slice(
+        result
+            .artifact_bytes("eigen/metadata/eigen_summary.json")
+            .expect("path eigensolve should write eigen summary metadata"),
+    )
+    .expect("path eigensolve eigen summary should be valid json");
+    let summary_mode = eigen_summary["modes"]
+        .as_array()
+        .and_then(|modes| modes.iter().find(|mode| mode["index"].as_u64() == Some(0)))
+        .expect("eigen summary should include mode_0000");
+    let summary_mass_norm = summary_mode["mass_norm"]
+        .as_f64()
+        .expect("eigen summary mode_0000 should carry mass_norm");
+    let metadata_mass_norm = mode_metadata["mass_norm"]
+        .as_f64()
+        .expect("nested mode metadata should carry mass_norm");
+    assert!(
+        (summary_mass_norm - metadata_mass_norm).abs()
+            <= 1.0e-9 * summary_mass_norm.abs().max(metadata_mass_norm.abs()).max(1.0),
+        "eigen_summary mode_0000 mass_norm must match nested mode metadata: summary={summary_mass_norm:.9e}, metadata={metadata_mass_norm:.9e}"
+    );
     assert!(
         result
             .artifact_bytes("eigen/mode_fields/sample_0002/mode_0000/vector.bin")
@@ -3182,6 +3396,57 @@ fn fem_eigen_path_writes_v2_dispersion_artifacts() {
     assert_eq!(
         manifest["diagnostics"]["modal_overlap_available"].as_bool(),
         Some(true)
+    );
+    let dispersion_validation = &manifest["validation"]["dispersion_validation"];
+    assert_eq!(
+        dispersion_validation["kind"].as_str(),
+        Some("thin_film_de_bv_low_k")
+    );
+    assert_eq!(
+        dispersion_validation["analytic_model"].as_str(),
+        Some("kalinikos_slab_n0")
+    );
+    assert_eq!(
+        dispersion_validation["frequency_window_hz"]["max"].as_f64(),
+        Some(5.0e9)
+    );
+    assert_eq!(
+        dispersion_validation["max_k_rad_per_m"].as_f64(),
+        Some(2.0e6)
+    );
+    assert!(
+        dispersion_validation["scenarios"]
+            .as_array()
+            .is_some_and(|scenarios| scenarios.iter().any(|scenario| {
+                scenario["geometry"].as_str() == Some("backward_volume")
+                    && scenario["sample_indices"]
+                        .as_array()
+                        .is_some_and(|indices| {
+                            indices
+                                .iter()
+                                .map(|index| index.as_u64())
+                                .collect::<Vec<_>>()
+                                == [Some(0), Some(1), Some(2)]
+                        })
+            })),
+        "manifest should carry BV low-k analytic validation scenario"
+    );
+    assert!(
+        dispersion_validation["scenarios"]
+            .as_array()
+            .is_some_and(|scenarios| scenarios.iter().any(|scenario| {
+                scenario["geometry"].as_str() == Some("damon_eshbach")
+                    && scenario["sample_indices"]
+                        .as_array()
+                        .is_some_and(|indices| {
+                            indices
+                                .iter()
+                                .map(|index| index.as_u64())
+                                .collect::<Vec<_>>()
+                                == [Some(0), Some(3), Some(4)]
+                        })
+            })),
+        "manifest should carry DE low-k analytic validation scenario"
     );
     assert!(
         manifest["artifacts"]["mode_metadata_paths"]
@@ -3280,6 +3545,7 @@ fn fem_eigen_path_executes_full_2x2_nonzero_k_floquet_phase_reduction() {
         demag_realization: None,
         dmi_interface_normal: None,
         mode_tracking: None,
+        dispersion_validation: None,
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -3363,6 +3629,86 @@ fn fem_eigen_path_executes_full_2x2_nonzero_k_floquet_phase_reduction() {
 }
 
 #[test]
+fn fem_eigen_path_rejects_floquet_dynamic_demag_before_sample_solves() {
+    let mut mesh = cube_mesh(20.0);
+    mesh.mesh_name = "path_floquet_dynamic_demag_reject_cube".to_string();
+    let plan = FemEigenPlanIR {
+        mesh_name: "path_floquet_dynamic_demag_reject_cube".to_string(),
+        mesh_source: None,
+        mesh,
+        object_segments: Vec::new(),
+        mesh_parts: Vec::new(),
+        domain_mesh_mode: fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh,
+        domain_frame: None,
+        fe_order: 1,
+        hmax: 20e-9,
+        equilibrium_magnetization: vec![[1.0, 0.0, 0.0]; 8],
+        material: fem_permalloy(),
+        operator: EigenOperatorConfigIR {
+            kind: EigenOperatorIR::Full2x2,
+            include_demag: true,
+        },
+        count: 2,
+        target: EigenTargetIR::Lowest,
+        equilibrium: EquilibriumSourceIR::Provided,
+        k_sampling: Some(KSamplingIR::Path {
+            points: vec![
+                KPointIR {
+                    label: Some("G".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+                KPointIR {
+                    label: Some("X".to_string()),
+                    k_vector: [5.0e7, 0.0, 0.0],
+                },
+            ],
+            samples_per_segment: vec![2],
+            closed: false,
+        }),
+        normalization: EigenNormalizationIR::UnitL2,
+        damping_policy: EigenDampingPolicyIR::Ignore,
+        enable_exchange: true,
+        enable_demag: true,
+        interfacial_dmi: None,
+        bulk_dmi: None,
+        external_field: Some([39_789.0, 0.0, 0.0]),
+        gyromagnetic_ratio: 2.211e5,
+        precision: ExecutionPrecision::Double,
+        exchange_bc: ExchangeBoundaryCondition::Neumann,
+        spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::Config(
+            fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,
+                boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            },
+        ),
+        demag_realization: None,
+        dmi_interface_normal: None,
+        mode_tracking: None,
+        dispersion_validation: None,
+    };
+
+    let error = fullmag_runner::run_reference_fem_eigen(
+        &plan,
+        &[OutputIR::EigenSpectrum {
+            quantity: "eigenfrequency".to_string(),
+        }],
+    )
+    .expect_err("modal Floquet k-path with demag must reject before sample solves");
+
+    assert!(
+        error
+            .message
+            .contains("dynamic demag for Floquet periodic FEM is not implemented yet"),
+        "unexpected Floquet dynamic-demag rejection: {}",
+        error.message
+    );
+}
+
+#[test]
 fn fem_eigen_path_frequency_window_writes_window_diagnostics() {
     let mut mesh = cube_mesh(20.0);
     mesh.mesh_name = "path_frequency_window_cube".to_string();
@@ -3425,6 +3771,7 @@ fn fem_eigen_path_frequency_window_writes_window_diagnostics() {
         demag_realization: None,
         dmi_interface_normal: None,
         mode_tracking: Some(fullmag_ir::ModeTrackingIR::default()),
+        dispersion_validation: None,
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -3522,6 +3869,7 @@ fn fem_eigen_single_k_dispersion_request_writes_v2_dispersion_artifact() {
         demag_realization: None,
         dmi_interface_normal: None,
         mode_tracking: None,
+        dispersion_validation: None,
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(

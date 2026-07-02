@@ -1889,6 +1889,12 @@ export function resolveViewport3DAnalysisComplexFieldQuery(
   };
 }
 
+export function resolveViewport3DAnalysisComplexProjectionEnabled(
+  query: FieldVectorQuery | null | undefined,
+): boolean {
+  return query?.view === "phase_rotated_real";
+}
+
 function selectViewport3DComputeRunning(
   status: ResourceResult<LiveStatusResource>,
 ): boolean {
@@ -3152,10 +3158,16 @@ export function useViewport3DSceneModel({
         : {},
     [analysisOverlay],
   );
+  const analysisComplexProjectionEnabled = useMemo(
+    () => resolveViewport3DAnalysisComplexProjectionEnabled(analysisOverlay?.query),
+    [analysisOverlay?.query],
+  );
   const analysisComplexFieldVector = useViewport3DFieldVector(
     primaryFieldQuantityId,
     analysisComplexFieldQuery,
-    Boolean(analysisOverlay) && fieldVectorEnabled,
+    Boolean(analysisOverlay) &&
+      analysisComplexProjectionEnabled &&
+      fieldVectorEnabled,
     { pauseLoad: fieldUpdateHoldActive },
   );
   const fieldDataIssue = useMemo<Viewport3DFieldDataIssue | null>(() => {
@@ -3225,8 +3237,11 @@ export function useViewport3DSceneModel({
     ],
   );
   const analysisComplexField = useMemo(
-    () => asDecodedComplexFieldVector(analysisComplexFieldVector.data),
-    [analysisComplexFieldVector.data],
+    () =>
+      analysisComplexProjectionEnabled
+        ? asDecodedComplexFieldVector(analysisComplexFieldVector.data)
+        : null,
+    [analysisComplexFieldVector.data, analysisComplexProjectionEnabled],
   );
   const fdmFieldVector =
     sameViewport3DQuantityId(fdmSettings.activeQuantityId, primaryFieldQuantityId)

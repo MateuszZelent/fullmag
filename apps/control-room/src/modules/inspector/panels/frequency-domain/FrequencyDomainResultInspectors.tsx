@@ -11,6 +11,7 @@ import type { InspectorPanelProps } from "../../inspectorTypes";
 import { FmrPeakInspector } from "./FmrPeakInspector";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorSection } from "../../primitives/InspectorSection";
+import { StudyProgressBar } from "../StudyProgressBar";
 import { Activity, Download, Eye, Play, RotateCw } from "lucide-react";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
@@ -36,6 +37,7 @@ import {
   useFrequencyDomainEigenModeResource,
   useFrequencyDomainManifestResource,
   useFrequencyDomainResponseCancelRequestedResource,
+  useFrequencyDomainResponseDiagnosticsResource,
   useFrequencyDomainResponseFieldMetaResource,
   useFrequencyDomainResponseFrequencyPointResource,
   useFrequencyDomainResponseProgressResource,
@@ -45,6 +47,7 @@ import {
 import {
   buildEigenBranchDetailChartModel,
   buildEigenBranchPointModeSelectionRef,
+  buildEigenBranchSelectionRef,
   buildEigenBranchesModel,
   buildEigenDispersionChartModel,
   buildEigenSpectrumChartModel,
@@ -52,12 +55,14 @@ import {
   buildFrequencyResponseChartModel,
   buildFmrModalDrivenComparisonModel,
   buildFmrPeakTableModel,
+  frequencyDomainManifestPayload,
   responseFieldResourcesFromManifest,
   routeFrequencyDomainCalculationMode,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import type {
   EigenBranch,
   EigenBranchPoint,
+  EigenDispersionPoint,
   EigenSpectrumPoint,
   FmrModalDrivenComparisonPoint,
   FmrPeakPoint,
@@ -1073,8 +1078,19 @@ export function FrequencyDomainDispersionInspectorPanel(
 ) {
   void props;
   const summary = useFrequencyDomainDispersionSummary();
+  const kernel = useKernel();
   const selectBranch = (branch: EigenBranch): void => {
-    void branch;
+    const ref = buildEigenBranchSelectionRef(branch);
+    kernel.selection.set(
+      {
+        kind: "results.eigen.branch",
+        label: branch.label ?? `Branch ${branch.branchId}`,
+        nodeId: ref.nodeId ?? `results:eigen:branches:branch:${branch.branchId}`,
+        objectId: null,
+        ref,
+      },
+      "inspector",
+    );
   };
 
   return (
@@ -1092,8 +1108,22 @@ export function FrequencyDomainDispersionInspectorPanel(
           value={summary.dispersionResource}
         />
         <FieldRow
+          label="Path metadata artifact"
+          value={summary.pathMetadataArtifact}
+        />
+        <FieldRow label="Path sampling" value={summary.pathSampling} />
+        <FieldRow label="Path labels" value={summary.pathLabels} />
+        <FieldRow
           label="Dispersion points"
           value={`${summary.dispersionPointCount} point(s), ${summary.dispersionSeriesCount} series`}
+        />
+        <FieldRow
+          label="Analytic reference"
+          value={summary.analyticReference}
+        />
+        <FieldRow
+          label="Validation intent"
+          value={summary.validationIntent}
         />
         <FieldRow label="Frequency range" value={summary.frequencyRange} />
         <FieldRow label="k-path span" value={summary.kPathSpan} />
@@ -1140,10 +1170,24 @@ export function EigenKPathInspectorPanel(props: InspectorPanelProps) {
           label="Dispersion resource"
           value={summary.dispersionResource}
         />
+        <FieldRow
+          label="Path metadata artifact"
+          value={summary.pathMetadataArtifact}
+        />
+        <FieldRow label="Path sampling" value={summary.pathSampling} />
+        <FieldRow label="Path labels" value={summary.pathLabels} />
         <FieldRow label="k-path span" value={summary.kPathSpan} />
         <FieldRow
           label="Frequency coverage"
           value={summary.frequencyRange}
+        />
+        <FieldRow
+          label="Analytic reference"
+          value={summary.analyticReference}
+        />
+        <FieldRow
+          label="Validation intent"
+          value={summary.validationIntent}
         />
         <FieldRow
           label="Sample count"
@@ -1178,7 +1222,20 @@ export function EigenDispersionInspectorPanel(props: InspectorPanelProps) {
           label="Dispersion resource"
           value={summary.dispersionResource}
         />
+        <FieldRow
+          label="Path metadata artifact"
+          value={summary.pathMetadataArtifact}
+        />
+        <FieldRow label="Path sampling" value={summary.pathSampling} />
         <FieldRow label="Frequency range" value={summary.frequencyRange} />
+        <FieldRow
+          label="Analytic reference"
+          value={summary.analyticReference}
+        />
+        <FieldRow
+          label="Validation intent"
+          value={summary.validationIntent}
+        />
         <FieldRow label="k-path span" value={summary.kPathSpan} />
         <FieldRow
           label="Branch tracking"
@@ -3458,10 +3515,17 @@ export function FrequencyResponseProgressInspectorPanel(
   return (
     <div data-inspector-surface="frequency-response-progress">
       <InspectorSection title="Response Sweep Progress" badge={summary.badge}>
+        <StudyProgressBar
+          label="Frequency response sweep progress"
+          statusLabel={summary.progressLabel}
+          value={summary.progressPercent}
+        />
         <FieldRow label="Resource" value={summary.resourceKey} />
         <FieldRow label="Status" value={summary.status} />
         <FieldRow label="Progress" value={summary.progress} />
         <FieldRow label="Current frequency" value={summary.currentFrequency} />
+        <FieldRow label="Frequency range" value={summary.frequencyRange} />
+        <FieldRow label="Solver progress" value={summary.solverProgress} />
         <FieldRow label="Complete" value={summary.complete} />
         <FieldRow label="Partial artifacts" value={summary.partialArtifacts} />
         <FieldRow
@@ -3491,6 +3555,8 @@ export function FrequencyResponseCancelRequestedInspectorPanel(
         <FieldRow label="Status" value={summary.status} />
         <FieldRow label="Progress" value={summary.progress} />
         <FieldRow label="Current frequency" value={summary.currentFrequency} />
+        <FieldRow label="Frequency range" value={summary.frequencyRange} />
+        <FieldRow label="Solver progress" value={summary.solverProgress} />
         <FieldRow label="Complete" value={summary.complete} />
         <FieldRow label="Partial artifacts" value={summary.partialArtifacts} />
         <FieldRow
@@ -3665,6 +3731,10 @@ export function FrequencyResponseDiagnosticsInspectorPanel(
         <FieldRow label="Sweep progress" value={summary.sweepProgress} />
         <FieldRow label="Cancel state" value={summary.cancelState} />
         <FieldRow label="Response fields" value={summary.responseFields} />
+        <FieldRow
+          label="Krylov preconditioner"
+          value={summary.krylovPreconditioner}
+        />
         <FieldRow label="Residual coverage" value={summary.residualCoverage} />
         <FieldRow label="Response artifact" value={summary.responseArtifact} />
         <FieldRow label="Capability summary" value={summary.capabilitySummary} />
@@ -3775,9 +3845,17 @@ export function FrequencyResponseProgressJobInspectorPanel(
         title="Response Sweep Progress Job"
         badge={summary.badge}
       >
+        <StudyProgressBar
+          label="Frequency response sweep progress"
+          statusLabel={summary.progressLabel}
+          value={summary.progressPercent}
+        />
         <FieldRow label="Progress resource" value={summary.resourceKey} />
         <FieldRow label="Status" value={summary.status} />
         <FieldRow label="Progress" value={summary.progress} />
+        <FieldRow label="Current frequency" value={summary.currentFrequency} />
+        <FieldRow label="Frequency range" value={summary.frequencyRange} />
+        <FieldRow label="Solver progress" value={summary.solverProgress} />
         <FieldRow label="Runtime state" value={summary.runtimeState} />
         <FieldRow label="Partial artifacts" value={summary.partialArtifacts} />
         <FieldRow
@@ -3916,6 +3994,10 @@ export function FrequencyDomainSolverDiagnosticInspectorPanel(
       >
         <FieldRow label="Execution lane" value={summary.executionLane} />
         <FieldRow label="Modal transport" value={summary.modalTransport} />
+        <FieldRow
+          label="Production CPU gate"
+          value={summary.productionCpuGate}
+        />
         <FieldRow label="Response residuals" value={summary.responseResiduals} />
         <FieldRow label="Modal residuals" value={summary.modalResiduals} />
         <FieldRow label="Progress" value={summary.progress} />
@@ -4199,21 +4281,35 @@ export function FrequencyResponseProgressResourceInspectorPanel(
   props: InspectorPanelProps,
 ) {
   void props;
-  const summary = useFrequencyResponseFrequencyPointsSummary();
+  const summary = useFrequencyResponseProgressSummary();
 
   return (
     <div data-inspector-surface="frequency-response-progress-resource">
       <InspectorSection
         title="Frequency Response Progress Resource"
-        badge={summary.progressState}
+        badge={summary.badge}
       >
+        <StudyProgressBar
+          label="Frequency response sweep progress"
+          statusLabel={summary.progressLabel}
+          value={summary.progressPercent}
+        />
         <FieldRow
           label="Progress endpoint"
           value={ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH}
         />
-        <FieldRow label="Progress state" value={summary.progressState} />
-        <FieldRow label="Cancellation state" value={summary.cancellationState} />
-        <FieldRow label="Field overlays" value={summary.fieldOverlays} />
+        <FieldRow label="Status" value={summary.status} />
+        <FieldRow label="Progress" value={summary.progress} />
+        <FieldRow label="Current frequency" value={summary.currentFrequency} />
+        <FieldRow label="Frequency range" value={summary.frequencyRange} />
+        <FieldRow label="Solver progress" value={summary.solverProgress} />
+        <FieldRow label="Partial artifacts" value={summary.partialArtifacts} />
+        <FieldRow
+          label="Written point artifacts"
+          value={summary.writtenArtifacts}
+        />
+        <FieldRow label="Latest manifest" value={summary.latestManifest} />
+        <FieldRow label="Reason" value={summary.reason} />
       </InspectorSection>
     </div>
   );
@@ -4270,17 +4366,22 @@ function useFmrResultSummary() {
   const manifest = useFrequencyDomainManifestResource();
   const spectrum = useFrequencyDomainEigenSpectrumResource();
   const responseSweep = useFrequencyDomainResponseSweepResource();
+  const manifestPayload = record(frequencyDomainManifestPayload(manifest.data));
   const spectrumModel = buildEigenSpectrumChartModel(spectrum.data);
-  const responseModel = buildFrequencyResponseChartModel(responseSweep.data);
+  const responseModel = buildFrequencyResponseChartModel(
+    responseSweep.data,
+    manifestPayload,
+  );
   const peakModel = buildFmrPeakTableModel({
+    manifestPayload,
     responseSweep: responseSweep.data,
     spectrum: spectrum.data,
   });
   const comparisonModel = buildFmrModalDrivenComparisonModel({
+    manifestPayload,
     responseSweep: responseSweep.data,
     spectrum: spectrum.data,
   });
-  const manifestPayload = record(manifest.data?.result_manifest?.payload);
   const chartRoute = routeFrequencyDomainCalculationMode(manifestPayload);
   const responseFieldCount =
     responseFieldResourcesFromManifest(manifestPayload).length ||
@@ -4310,7 +4411,7 @@ function useFmrResultSummary() {
   ).length;
   const firstPeak = peakModel.peaks[0] ?? null;
   const nearestComparison = comparisonModel.nearestComparison;
-  const capabilities = record(manifest.data?.capabilities);
+  const capabilities = frequencyDomainRuntimeCapabilities(manifest.data);
   const modalCapabilities = record(capabilities?.modal);
   const responseCapabilities = record(capabilities?.response);
   const modalReferenceCpu = capabilityStatus(modalCapabilities?.reference_cpu);
@@ -4385,18 +4486,19 @@ function useFrequencyDomainOverviewSummary() {
   const manifest = useFrequencyDomainManifestResource();
   const spectrum = useFrequencyDomainEigenSpectrumResource();
   const responseSweep = useFrequencyDomainResponseSweepResource();
+  const manifestPayload = record(frequencyDomainManifestPayload(manifest.data));
   const spectrumModel = buildEigenSpectrumChartModel(spectrum.data);
   const responseModel = buildFrequencyResponseChartModel(
     responseSweep.data,
-    manifest.data?.result_manifest?.payload,
+    manifestPayload,
   );
   const peakModel = buildFmrPeakTableModel({
+    manifestPayload,
     responseSweep: responseSweep.data,
     spectrum: spectrum.data,
   });
-  const manifestPayload = record(manifest.data?.result_manifest?.payload);
   const chartRoute = routeFrequencyDomainCalculationMode(manifestPayload);
-  const capabilities = record(manifest.data?.capabilities);
+  const capabilities = frequencyDomainRuntimeCapabilities(manifest.data);
   const modalCapabilities = record(capabilities?.modal);
   const responseCapabilities = record(capabilities?.response);
   const responseFieldCount =
@@ -4441,7 +4543,7 @@ function useFrequencyDomainResourceFamilySummary() {
 
 function useFrequencyDomainManifestResourceSummary() {
   const manifest = useFrequencyDomainManifestResource();
-  const manifestPayload = record(manifest.data?.result_manifest?.payload);
+  const manifestPayload = record(frequencyDomainManifestPayload(manifest.data));
   const physics = record(manifestPayload?.physics);
 
   return {
@@ -4468,7 +4570,7 @@ function useEigenOverviewSummary() {
     dispersion.data,
     branchesModel,
   );
-  const capabilities = record(manifest.data?.capabilities);
+  const capabilities = frequencyDomainRuntimeCapabilities(manifest.data);
   const dispersionCapabilities = record(capabilities?.dispersion);
   const modalFieldCount = spectrumModel.points.filter(
     (point) => point.modeFieldId,
@@ -4498,9 +4600,9 @@ function useEigenStudySummary() {
   const manifest = useFrequencyDomainManifestResource();
   const spectrum = useFrequencyDomainEigenSpectrumResource();
   const branches = useFrequencyDomainEigenBranchesResource();
-  const manifestPayload = record(manifest.data?.result_manifest?.payload);
+  const manifestPayload = record(frequencyDomainManifestPayload(manifest.data));
   const physics = record(manifestPayload?.physics);
-  const capabilities = record(manifest.data?.capabilities);
+  const capabilities = frequencyDomainRuntimeCapabilities(manifest.data);
   const boundaryCapabilities = record(capabilities?.boundary);
   const eigenmodes = manifest.data?.eigenmodes;
   const spectrumModel = buildEigenSpectrumChartModel(spectrum.data);
@@ -4532,12 +4634,12 @@ function useFrequencyResponseOverviewSummary() {
   const responseSweep = useFrequencyDomainResponseSweepResource();
   const progress = useFrequencyDomainResponseProgressResource();
   const cancelRequested = useFrequencyDomainResponseCancelRequestedResource();
-  const manifestPayload = record(manifest.data?.result_manifest?.payload);
+  const manifestPayload = record(frequencyDomainManifestPayload(manifest.data));
   const responseModel = buildFrequencyResponseChartModel(
     responseSweep.data,
     manifestPayload,
   );
-  const capabilities = record(manifest.data?.capabilities);
+  const capabilities = frequencyDomainRuntimeCapabilities(manifest.data);
   const responseCapabilities = record(capabilities?.response);
   const responseFieldCount =
     responseFieldResourcesFromManifest(manifestPayload).length ||
@@ -4567,7 +4669,7 @@ function useFrequencyResponseOverviewSummary() {
 function useFrequencyResponseStudySummary() {
   const manifest = useFrequencyDomainManifestResource();
   const responseSweep = useFrequencyDomainResponseSweepResource();
-  const manifestPayload = record(manifest.data?.result_manifest?.payload);
+  const manifestPayload = record(frequencyDomainManifestPayload(manifest.data));
   const physics = record(manifestPayload?.physics);
   const response = manifest.data?.response;
   const responseModel = buildFrequencyResponseChartModel(
@@ -4603,7 +4705,7 @@ function capabilityStatus(value: unknown): string {
 
 function useFrequencyDomainRunSummary() {
   const manifest = useFrequencyDomainManifestResource();
-  const manifestPayload = record(manifest.data?.result_manifest?.payload);
+  const manifestPayload = record(frequencyDomainManifestPayload(manifest.data));
   const requestedExecution = record(manifestPayload?.requested_execution);
   const physics = record(manifestPayload?.physics);
   const response = manifest.data?.response;
@@ -4646,9 +4748,11 @@ function useFrequencyDomainRunSummary() {
 
 function useFmrComparisonSummary() {
   const summary = useFmrResultSummary();
+  const manifest = useFrequencyDomainManifestResource();
   const spectrum = useFrequencyDomainEigenSpectrumResource();
   const responseSweep = useFrequencyDomainResponseSweepResource();
   const comparisonModel = buildFmrModalDrivenComparisonModel({
+    manifestPayload: frequencyDomainManifestPayload(manifest.data),
     responseSweep: responseSweep.data,
     spectrum: spectrum.data,
   });
@@ -4727,7 +4831,7 @@ function useFrequencyDomainProvenanceSummary() {
   const branches = useFrequencyDomainEigenBranchesResource();
   const responseSweep = useFrequencyDomainResponseSweepResource();
   const cancelRequested = useFrequencyDomainResponseCancelRequestedResource();
-  const manifestPayload = record(manifest.data?.result_manifest?.payload);
+  const manifestPayload = record(frequencyDomainManifestPayload(manifest.data));
   const requestedExecution = record(manifestPayload?.requested_execution);
   const physics = record(manifestPayload?.physics);
   const response = manifest.data?.response;
@@ -4784,15 +4888,24 @@ function useFrequencyDomainDispersionSummary() {
     dispersion.data,
     branchesModel,
   );
-  const capabilities = record(manifest.data?.capabilities);
+  const manifestPayload = record(frequencyDomainManifestPayload(manifest.data));
+  const capabilities = frequencyDomainRuntimeCapabilities(manifest.data);
   const dispersionCapabilities = record(capabilities?.dispersion);
   const boundaryCapabilities = record(capabilities?.boundary);
   const frequencies = dispersionModel.points.map((point) => point.frequencyHz);
   const pathValues = dispersionModel.points.map((point) => point.pathS);
+  const analyticReference = dispersionAnalyticReferenceSummary(
+    dispersionModel.points,
+  );
+  const validationIntent =
+    dispersionValidationIntentSummary(manifestPayload);
   const primaryBranch = branchesModel.branches[0] ?? null;
   const trackedPointCount = branchesModel.branches.reduce(
     (count, branch) => count + branch.points.length,
     0,
+  );
+  const pathMetadata = dispersionPathMetadataSummary(
+    dispersion.data?.path_metadata,
   );
 
   return {
@@ -4801,6 +4914,7 @@ function useFrequencyDomainDispersionSummary() {
         ? `${dispersionModel.points.length} point(s)`
         : dispersion.status,
     branchCount: branchesModel.branches.length,
+    analyticReference,
     capabilitySummary: dispersionCapabilitySummary(dispersionCapabilities),
     branchesModel,
     dispersionPointCount: dispersionModel.points.length,
@@ -4811,12 +4925,139 @@ function useFrequencyDomainDispersionSummary() {
     frequencyRange: formatFrequencyRange(frequencies),
     kPathSpan: `${formatNumberRange(pathValues)} rad/m`,
     modalOverlays: `${spectrumModel.points.filter((point) => point.modeFieldId).length} mode field(s) available from modal spectrum`,
+    pathLabels: pathMetadata.labels,
+    pathMetadataArtifact: pathMetadata.artifact,
+    pathSampling: pathMetadata.sampling,
     primaryBranch: primaryBranch
       ? `${primaryBranch.label ?? primaryBranch.branchId}; ${formatFrequencyRange(
           primaryBranch.points.map((point) => point.frequencyRealHz),
         )}`
       : "not available",
     trackedPointCount,
+    validationIntent,
+  };
+}
+
+function dispersionAnalyticReferenceSummary(
+  points: readonly EigenDispersionPoint[],
+): string {
+  const analyticPoints = points.filter(
+    (point) => point.analyticFrequencyHz != null,
+  );
+  if (analyticPoints.length === 0) return "not available";
+  const geometries = [
+    ...new Set(
+      analyticPoints.flatMap((point) =>
+        point.validationGeometry == null ? [] : [point.validationGeometry],
+      ),
+    ),
+  ].sort();
+  const relativeErrors = analyticPoints.flatMap((point) =>
+    point.relativeError == null ? [] : [point.relativeError],
+  );
+  const maxRelativeError = maxFinite(relativeErrors);
+  const geometrySummary = geometries.length > 0 ? geometries.join(", ") : "unlabelled";
+  const errorSummary =
+    maxRelativeError == null
+      ? "max error not available"
+      : `max rel. error ${formatNumber(maxRelativeError)}`;
+  return `${analyticPoints.length} point(s); ${geometrySummary}; ${errorSummary}`;
+}
+
+function dispersionValidationIntentSummary(
+  manifestPayload: Record<string, unknown> | null,
+): string {
+  const validation = record(manifestPayload?.validation);
+  const dispersionValidation = record(validation?.dispersion_validation);
+  if (!dispersionValidation) return "not available";
+  const kind = stringValue(dispersionValidation.kind) ?? "unknown";
+  const analyticModel =
+    stringValue(dispersionValidation.analytic_model) ?? "unknown";
+  const maxK = finiteNumber(dispersionValidation.max_k_rad_per_m);
+  const frequencyWindow = record(dispersionValidation.frequency_window_hz);
+  const frequencyMin = finiteNumber(frequencyWindow?.min);
+  const frequencyMax = finiteNumber(frequencyWindow?.max);
+  const scenarios = Array.isArray(dispersionValidation.scenarios)
+    ? dispersionValidation.scenarios
+    : [];
+  const scenarioSummary = scenarios
+    .flatMap((scenario) => {
+      const scenarioRecord = record(scenario);
+      if (!scenarioRecord) return [];
+      const geometry = stringValue(scenarioRecord.geometry) ?? "unknown";
+      const branchId = stringValue(scenarioRecord.branch_id) ?? "unlabelled";
+      const sampleIndices = Array.isArray(scenarioRecord.sample_indices)
+        ? scenarioRecord.sample_indices.length
+        : 0;
+      return [`${geometry}: ${branchId} [${sampleIndices} sample(s)]`];
+    })
+    .sort()
+    .join(", ");
+  const maxKSummary =
+    maxK == null
+      ? "k<=not available"
+      : `k<=${formatWaveVectorLimit(maxK)} rad/m`;
+  const frequencySummary =
+    frequencyMin == null || frequencyMax == null
+      ? "frequency window not available"
+      : formatValidationFrequencyWindow(frequencyMin, frequencyMax);
+  return [
+    kind,
+    analyticModel,
+    maxKSummary,
+    frequencySummary,
+    scenarioSummary || "scenarios not available",
+  ].join("; ");
+}
+
+function formatWaveVectorLimit(value: number): string {
+  return value >= 1.0e5 ? value.toExponential(3) : formatNumber(value);
+}
+
+function formatValidationFrequencyWindow(minHz: number, maxHz: number): string {
+  if (minHz === 0) return `0-${formatFrequency(maxHz)}`;
+  return `${formatFrequency(minHz)}-${formatFrequency(maxHz)}`;
+}
+
+function dispersionPathMetadataSummary(pathMetadata: unknown): {
+  artifact: string;
+  labels: string;
+  sampling: string;
+} {
+  const metadata = record(pathMetadata);
+  const sampling = record(metadata?.sampling);
+  if (!sampling) {
+    return {
+      artifact: "not available",
+      labels: "not available",
+      sampling: "not available",
+    };
+  }
+
+  const points = Array.isArray(sampling.points) ? sampling.points : [];
+  const labels = points
+    .map((point) => stringValue(record(point)?.label))
+    .filter((label): label is string => Boolean(label));
+  const samplesPerSegment = Array.isArray(sampling.samples_per_segment)
+    ? sampling.samples_per_segment
+        .map((sample) => finiteNumber(sample))
+        .filter((sample): sample is number => sample != null)
+    : [];
+  const segmentCount =
+    samplesPerSegment.length > 0
+      ? samplesPerSegment.length
+      : Math.max(0, points.length - 1);
+  const sampleCount =
+    samplesPerSegment.length > 0
+      ? samplesPerSegment.reduce((sum, sample) => sum + sample, 1)
+      : null;
+  const kind = stringValue(sampling.kind) ?? "path";
+  const closure = sampling.closed === true ? "closed" : "open";
+
+  return {
+    artifact: "eigen/dispersion/path.json",
+    labels: labels.length > 0 ? labels.join(" -> ") : "not available",
+    sampling: `${kind}; ${segmentCount} segment(s), ${formatNullableNumber(sampleCount)} sample(s), ${closure}`,
   };
 }
 
@@ -4832,7 +5073,7 @@ function useEigenDiagnosticsSummary() {
     dispersion.data,
     branchesModel,
   );
-  const capabilities = record(manifest.data?.capabilities);
+  const capabilities = frequencyDomainRuntimeCapabilities(manifest.data);
   const dispersionCapabilities = record(capabilities?.dispersion);
   const boundaryCapabilities = record(capabilities?.boundary);
   const eigenmodes = manifest.data?.eigenmodes;
@@ -4874,10 +5115,27 @@ function dispersionCapabilitySummary(
   return [
     `reference_cpu: ${capabilityStatus(dispersionCapabilities?.reference_cpu)}`,
     `production_cpu: ${capabilityStatus(dispersionCapabilities?.production_cpu)}`,
+    `production_cpu_gamma_k_path: ${capabilityStatus(dispersionCapabilities?.production_cpu_gamma_k_path)}`,
     `production_gpu: ${capabilityStatus(dispersionCapabilities?.production_gpu)}`,
     `k_path: ${capabilityStatus(dispersionCapabilities?.k_path)}`,
     `branch_tracking: ${capabilityStatus(dispersionCapabilities?.branch_tracking)}`,
   ].join("; ");
+}
+
+function frequencyDomainRuntimeCapabilities(
+  manifest: unknown,
+): Record<string, unknown> | null {
+  const manifestRecord = record(manifest);
+  const resultManifest = record(manifestRecord?.result_manifest);
+  const payload = record(resultManifest?.payload);
+  const manifestCapabilities = record(manifestRecord?.capabilities);
+  const runtimeCapabilities = record(payload?.capabilities);
+
+  if (manifestCapabilities && runtimeCapabilities) {
+    return { ...manifestCapabilities, ...runtimeCapabilities };
+  }
+
+  return runtimeCapabilities ?? manifestCapabilities;
 }
 
 function useEigenBranchesSummary() {
@@ -4981,7 +5239,7 @@ function useEigenSpectrumSummary() {
   const manifest = useFrequencyDomainManifestResource();
   const spectrum = useFrequencyDomainEigenSpectrumResource();
   const spectrumModel = buildEigenSpectrumChartModel(spectrum.data);
-  const capabilities = record(manifest.data?.capabilities);
+  const capabilities = frequencyDomainRuntimeCapabilities(manifest.data);
   const modalCapabilities = record(capabilities?.modal);
   const frequencies = spectrumModel.points.map((point) => point.frequencyHz);
   const dampingCount = spectrumModel.points.filter(
@@ -5017,8 +5275,8 @@ function useEigenSpectrumSummary() {
 function useFrequencyDomainResponseMapSummary() {
   const manifest = useFrequencyDomainManifestResource();
   const responseSweep = useFrequencyDomainResponseSweepResource();
-  const manifestPayload = record(manifest.data?.result_manifest?.payload);
-  const capabilities = record(manifest.data?.capabilities);
+  const manifestPayload = record(frequencyDomainManifestPayload(manifest.data));
+  const capabilities = frequencyDomainRuntimeCapabilities(manifest.data);
   const demagCapabilities = record(capabilities?.demag);
   const responseModel = buildFrequencyResponseChartModel(
     responseSweep.data,
@@ -5065,7 +5323,7 @@ function useEigenModesSummary() {
   const manifest = useFrequencyDomainManifestResource();
   const spectrum = useFrequencyDomainEigenSpectrumResource();
   const spectrumModel = buildEigenSpectrumChartModel(spectrum.data);
-  const capabilities = record(manifest.data?.capabilities);
+  const capabilities = frequencyDomainRuntimeCapabilities(manifest.data);
   const visualizationCapabilities = record(capabilities?.visualization);
   const modeCount = spectrumModel.points.length;
   const overlayReadyCount = spectrumModel.points.filter(
@@ -5100,9 +5358,9 @@ function useFrequencyDomainExportsSummary() {
   const spectrumModel = buildEigenSpectrumChartModel(spectrum.data);
   const responseModel = buildFrequencyResponseChartModel(
     responseSweep.data,
-    manifest.data?.result_manifest?.payload,
+    frequencyDomainManifestPayload(manifest.data),
   );
-  const manifestPayload = record(manifest.data?.result_manifest?.payload);
+  const manifestPayload = record(frequencyDomainManifestPayload(manifest.data));
   const responseFieldCount =
     responseFieldResourcesFromManifest(manifestPayload).length ||
     responseModel.points.filter((point) => point.fieldId).length;
@@ -5144,7 +5402,7 @@ function useCalculationModesSummary() {
   const manifest = useFrequencyDomainManifestResource();
   const spectrum = useFrequencyDomainEigenSpectrumResource();
   const responseSweep = useFrequencyDomainResponseSweepResource();
-  const manifestPayload = record(manifest.data?.result_manifest?.payload);
+  const manifestPayload = record(frequencyDomainManifestPayload(manifest.data));
   const chartRoute = routeFrequencyDomainCalculationMode(manifestPayload);
   const modeRows = buildFrequencyDomainCalculationModeRows(
     manifest.data?.capabilities,
@@ -5289,9 +5547,11 @@ function useEigenModeSummary({ selection }: InspectorPanelProps) {
 function useFmrPeakSummary({ selection }: InspectorPanelProps) {
   const ref = selection.ref?.type === "frequency-domain" ? selection.ref : null;
   const peakIndex = ref?.fmrPeakIndex ?? null;
+  const manifest = useFrequencyDomainManifestResource();
   const spectrum = useFrequencyDomainEigenSpectrumResource();
   const responseSweep = useFrequencyDomainResponseSweepResource();
   const peakModel = buildFmrPeakTableModel({
+    manifestPayload: frequencyDomainManifestPayload(manifest.data),
     responseSweep: responseSweep.data,
     spectrum: spectrum.data,
   });
@@ -5402,7 +5662,7 @@ function useFrequencyResponsePointSummary({ selection }: InspectorPanelProps) {
   const fieldMeta = useFrequencyDomainResponseFieldMetaResource(frequencyIndex);
   const responseModel = buildFrequencyResponseChartModel(
     responseSweep.data,
-    manifest.data?.result_manifest?.payload,
+    frequencyDomainManifestPayload(manifest.data),
   );
   const matchingPoints = responseModel.points.filter(
     (point) => point.frequencyIndex === frequencyIndex,
@@ -5503,7 +5763,7 @@ function useFrequencyResponseFrequencyPointsSummary() {
   const responseSweep = useFrequencyDomainResponseSweepResource();
   const progress = useFrequencyDomainResponseProgressResource();
   const cancelRequested = useFrequencyDomainResponseCancelRequestedResource();
-  const manifestPayload = record(manifest.data?.result_manifest?.payload);
+  const manifestPayload = record(frequencyDomainManifestPayload(manifest.data));
   const responseModel = buildFrequencyResponseChartModel(
     responseSweep.data,
     manifestPayload,
@@ -5572,7 +5832,7 @@ function useFrequencyResponseObservableSummary({ selection }: InspectorPanelProp
   const responseSweep = useFrequencyDomainResponseSweepResource();
   const responseModel = buildFrequencyResponseChartModel(
     responseSweep.data,
-    manifest.data?.result_manifest?.payload,
+    frequencyDomainManifestPayload(manifest.data),
   );
   const observableId = ref?.observableId ?? selection.label ?? null;
   const points = responseModel.points.filter(
@@ -5629,9 +5889,10 @@ function useFrequencyResponseSweepSummary() {
   const cancelRequested = useFrequencyDomainResponseCancelRequestedResource();
   const responseModel = buildFrequencyResponseChartModel(
     responseSweep.data,
-    manifest.data?.result_manifest?.payload,
+    frequencyDomainManifestPayload(manifest.data),
   );
   const fmrPeakModel = buildFmrPeakTableModel({
+    manifestPayload: frequencyDomainManifestPayload(manifest.data),
     responseSweep: responseSweep.data,
     spectrum: null,
   });
@@ -5684,14 +5945,16 @@ function useFrequencyResponseDiagnosticsSummary() {
   const responseSweep = useFrequencyDomainResponseSweepResource();
   const progress = useFrequencyDomainResponseProgressResource();
   const cancelRequested = useFrequencyDomainResponseCancelRequestedResource();
-  const manifestPayload = record(manifest.data?.result_manifest?.payload);
+  const diagnostics = useFrequencyDomainResponseDiagnosticsResource();
+  const manifestPayload = record(frequencyDomainManifestPayload(manifest.data));
+  const diagnosticsPayload = record(diagnostics.data?.payload);
   const responseModel = buildFrequencyResponseChartModel(
     responseSweep.data,
     manifestPayload,
   );
   const response = manifest.data?.response;
   const studyKind = response?.study_kind ?? "frequency_response";
-  const capabilities = record(manifest.data?.capabilities);
+  const capabilities = frequencyDomainRuntimeCapabilities(manifest.data);
   const responseCapabilities = record(capabilities?.response);
   const manifestFieldCount = responseFieldResourcesFromManifest(manifestPayload)
     .length;
@@ -5700,6 +5963,12 @@ function useFrequencyResponseDiagnosticsSummary() {
   const residualCount = responseModel.points.filter(
     (point) => point.residualNorm != null,
   ).length;
+  const krylovPreconditionerKind = stringValue(
+    diagnosticsPayload?.krylov_preconditioner_kind,
+  );
+  const krylovPreconditionerVariant = stringValue(
+    diagnosticsPayload?.krylov_preconditioner_variant,
+  );
 
   return {
     badge:
@@ -5715,6 +5984,9 @@ function useFrequencyResponseDiagnosticsSummary() {
     )}; static_periodic=${String(
       response?.static_periodic_response_available ?? false,
     )}; gpu=${String(response?.gpu_available ?? false)}`,
+    krylovPreconditioner: krylovPreconditionerVariant
+      ? `${krylovPreconditionerVariant}${krylovPreconditionerKind ? ` (${krylovPreconditionerKind})` : ""}`
+      : (krylovPreconditionerKind ?? "not reported"),
     residualCoverage: `${residualCount}/${responseModel.points.length} point(s)`,
     responseArtifact: responseSweep.data?.artifact_path ?? "not available",
     responseFields: `${manifestFieldCount} manifest field(s), ${sweepFieldCount} sweep field(s)`,
@@ -5746,11 +6018,11 @@ function useFrequencyDomainJobsSummary() {
     artifactExport: exportsSummary.badge,
     badge: progressSummary.runtimeState,
     cancelCheckpoint: cancelRequested.data
-      ? `${cancelSummary.runtimeState}; ${cancelSummary.progress}; partial artifacts ${cancelSummary.partialArtifacts}`
+      ? `${cancelSummary.runtimeState}; ${cancelSummary.progress}; partial artifacts ${cancelSummary.partialArtifacts}; range ${cancelSummary.frequencyRange}; ${cancelSummary.solverProgress}`
       : "not requested",
     eigenSamples: eigenSummary.kPathSamples,
     responseFrequencies: responseSummary.frequencyWorkUnits,
-    responseProgress: `${progressSummary.runtimeState}; ${progressSummary.progress}; written ${progressSummary.writtenArtifacts}`,
+    responseProgress: `${progressSummary.runtimeState}; ${progressSummary.progress}; written ${progressSummary.writtenArtifacts}; range ${progressSummary.frequencyRange}; ${progressSummary.solverProgress}`,
     stageRun: `${runSummary.stageKind}; ${runSummary.calculationMode}`,
   };
 }
@@ -5792,7 +6064,7 @@ function useFrequencyResponseFrequencyJobSummary() {
   const responseSweep = useFrequencyDomainResponseSweepResource();
   const progress = useFrequencyDomainResponseProgressResource();
   const cancelRequested = useFrequencyDomainResponseCancelRequestedResource();
-  const manifestPayload = record(manifest.data?.result_manifest?.payload);
+  const manifestPayload = record(frequencyDomainManifestPayload(manifest.data));
   const responseModel = buildFrequencyResponseChartModel(
     responseSweep.data,
     manifestPayload,
@@ -5822,13 +6094,13 @@ function useFrequencyResponseFrequencyJobSummary() {
         ? `${responseModel.points.length} frequency point(s)`
         : responseSweep.status,
     cancelCheckpoint: cancelRequested.data
-      ? `${cancelSummary.runtimeState}; ${cancelSummary.progress}`
+      ? `${cancelSummary.runtimeState}; ${cancelSummary.progress}; range ${cancelSummary.frequencyRange}; ${cancelSummary.solverProgress}`
       : "not requested",
     fieldArtifacts: `${manifestFieldCount} manifest field(s), ${sweepFieldCount} sweep field(s)`,
     frequencyWorkUnits: `${responseModel.points.length} point(s), ${responseModel.series.length} observable series`,
     residualCoverage: `${residualCount}/${responseModel.points.length} point(s)`,
     solverLane: `${response?.study_kind ?? "frequency_response"}: ${response?.status ?? "missing"}`,
-    sweepProgress: `${progressSummary.runtimeState}; ${progressSummary.progress}`,
+    sweepProgress: `${progressSummary.runtimeState}; ${progressSummary.progress}; range ${progressSummary.frequencyRange}; ${progressSummary.solverProgress}`,
     sweepResource:
       responseSweep.data?.resource_key ??
       ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
@@ -5859,7 +6131,7 @@ function useFrequencyDomainDiagnosticsSummary() {
 
 function useFrequencyDomainCapabilitiesDiagnosticSummary() {
   const manifest = useFrequencyDomainManifestResource();
-  const capabilities = record(manifest.data?.capabilities);
+  const capabilities = frequencyDomainRuntimeCapabilities(manifest.data);
   const modalCapabilities = record(capabilities?.modal);
   const responseCapabilities = record(capabilities?.response);
   const boundaryCapabilities = record(capabilities?.boundary);
@@ -5878,7 +6150,7 @@ function useFrequencyDomainCapabilitiesDiagnosticSummary() {
 
 function useFrequencyDomainEquilibriumDiagnosticSummary() {
   const manifest = useFrequencyDomainManifestResource();
-  const manifestPayload = record(manifest.data?.result_manifest?.payload);
+  const manifestPayload = record(frequencyDomainManifestPayload(manifest.data));
   const response = manifest.data?.response;
   const eigenmodes = manifest.data?.eigenmodes;
 
@@ -5894,9 +6166,9 @@ function useFrequencyDomainEquilibriumDiagnosticSummary() {
 
 function useFrequencyDomainOperatorDiagnosticSummary() {
   const manifest = useFrequencyDomainManifestResource();
-  const manifestPayload = record(manifest.data?.result_manifest?.payload);
+  const manifestPayload = record(frequencyDomainManifestPayload(manifest.data));
   const physics = record(manifestPayload?.physics);
-  const capabilities = record(manifest.data?.capabilities);
+  const capabilities = frequencyDomainRuntimeCapabilities(manifest.data);
   const boundaryCapabilities = record(capabilities?.boundary);
   const demagCapabilities = record(capabilities?.demag);
 
@@ -5917,7 +6189,7 @@ function useFrequencyDomainSolverDiagnosticSummary() {
   const responseSweep = useFrequencyDomainResponseSweepResource();
   const progress = useFrequencyDomainResponseProgressResource();
   const cancelRequested = useFrequencyDomainResponseCancelRequestedResource();
-  const manifestPayload = record(manifest.data?.result_manifest?.payload);
+  const manifestPayload = record(frequencyDomainManifestPayload(manifest.data));
   const responseModel = buildFrequencyResponseChartModel(
     responseSweep.data,
     manifestPayload,
@@ -5939,6 +6211,7 @@ function useFrequencyDomainSolverDiagnosticSummary() {
     executionLane: responseExecutionLaneFromManifest(manifest.data?.response),
     modalTransport: `${modalDiagnostics.solverModel}; ${modalDiagnostics.transport}`,
     modalResiduals: `${modalResidualCount}/${spectrumModel.points.length} mode(s)`,
+    productionCpuGate: modalDiagnostics.productionCpuGate,
     progress: progress.data
       ? `${progress.data.status}; ${progress.data.completed_frequency_points}/${progress.data.total_frequency_points}`
       : "not available",
@@ -5962,7 +6235,7 @@ function useFrequencyDomainVisualizationDiagnosticSummary() {
   const manifest = useFrequencyDomainManifestResource();
   const spectrum = useFrequencyDomainEigenSpectrumResource();
   const responseSweep = useFrequencyDomainResponseSweepResource();
-  const manifestPayload = record(manifest.data?.result_manifest?.payload);
+  const manifestPayload = record(frequencyDomainManifestPayload(manifest.data));
   const spectrumModel = buildEigenSpectrumChartModel(spectrum.data);
   const responseModel = buildFrequencyResponseChartModel(
     responseSweep.data,
@@ -6009,9 +6282,13 @@ function frequencyResponseSweepStatusSummary({
     complete?: boolean | null;
     completed_frequency_points?: number | null;
     current_frequency_hz?: number | null;
+    demag_mode?: string | null;
+    frequency_max_hz?: number | null;
+    frequency_min_hz?: number | null;
     latest_artifact_manifest_path?: string | null;
     missing_reason?: string | null;
     partial_artifacts_available?: boolean | null;
+    progress_json?: string | null;
     state?: string | null;
     status?: string | null;
     total_frequency_points?: number | null;
@@ -6026,6 +6303,7 @@ function frequencyResponseSweepStatusSummary({
     completed == null || total == null
       ? "not available"
       : `${completed}/${total} frequency points`;
+  const progressPercent = frequencyResponseProgressPercent(data);
   const runtimeState = data
     ? `${data.state ?? data.status ?? status}`
     : status;
@@ -6033,7 +6311,8 @@ function frequencyResponseSweepStatusSummary({
   return {
     badge: runtimeState,
     complete: data?.complete === true ? "yes" : data?.complete === false ? "no" : "unknown",
-    currentFrequency: formatFrequency(data?.current_frequency_hz ?? null),
+    currentFrequency: formatFrequency(frequencyResponseCurrentFrequency(data)),
+    frequencyRange: frequencyResponseProgressRangeSummary(data),
     latestManifest: data?.latest_artifact_manifest_path ?? "not available",
     partialArtifacts:
       data?.partial_artifacts_available === true
@@ -6042,15 +6321,152 @@ function frequencyResponseSweepStatusSummary({
           ? "no"
           : "unknown",
     progress,
+    progressLabel: progress,
+    progressPercent,
     reason: data?.missing_reason ?? "none",
     resourceKey,
     runtimeState,
+    solverProgress: frequencyResponseProgressSolverSummary(data),
     status: data?.status ?? status,
     writtenArtifacts:
       data?.written_frequency_point_artifacts == null
         ? "not available"
         : String(data.written_frequency_point_artifacts),
   };
+}
+
+function frequencyResponseProgressRangeSummary(data: {
+  frequency_max_hz?: number | null;
+  frequency_min_hz?: number | null;
+  progress_json?: string | null;
+} | null): string {
+  const topLevelRange = formatFrequencyRangeFromBounds(
+    data?.frequency_min_hz,
+    data?.frequency_max_hz,
+  );
+  if (topLevelRange !== "not available") return topLevelRange;
+  const payload = parsedJsonRecord(data?.progress_json);
+  return formatFrequencyRangeFromBounds(
+    finiteOptionalNumber(payload?.frequency_min_hz),
+    finiteOptionalNumber(payload?.frequency_max_hz),
+  );
+}
+
+function frequencyResponseCurrentFrequency(data: {
+  current_frequency_hz?: number | null;
+  progress_json?: string | null;
+} | null): number | null {
+  const topLevelFrequency = finiteOptionalNumber(data?.current_frequency_hz);
+  if (topLevelFrequency != null) return topLevelFrequency;
+  const payload = parsedJsonRecord(data?.progress_json);
+  return finiteOptionalNumber(payload?.current_frequency_hz);
+}
+
+function frequencyResponseProgressPercent(data: {
+  complete?: boolean | null;
+  completed_frequency_points?: number | null;
+  progress_json?: string | null;
+  total_frequency_points?: number | null;
+} | null): number | null {
+  if (data?.complete === true) return 100;
+  const payload = parsedJsonRecord(data?.progress_json);
+  const total =
+    finiteOptionalNumber(data?.total_frequency_points) ??
+    finiteOptionalNumber(payload?.total_frequency_points);
+  if (total == null || total <= 0) return null;
+  const completed = clampNumber(
+    finiteOptionalNumber(data?.completed_frequency_points) ??
+      finiteOptionalNumber(payload?.completed_frequency_points) ??
+      0,
+    0,
+    total,
+  );
+  const nativeFrequencyIndex = finiteOptionalNumber(
+    payload?.native_frequency_index,
+  );
+  const nativeSolveFraction = finiteOptionalNumber(
+    payload?.native_current_frequency_solve_fraction,
+  );
+  const activeWork =
+    nativeFrequencyIndex == null || nativeSolveFraction == null
+      ? completed
+      : Math.max(
+          completed,
+          clampNumber(nativeFrequencyIndex, 0, total) +
+            clampNumber(nativeSolveFraction, 0, 1),
+        );
+  return clampNumber(
+    Math.round((clampNumber(activeWork, 0, total) / total) * 100),
+    0,
+    100,
+  );
+}
+
+function frequencyResponseProgressSolverSummary(data: {
+  demag_mode?: string | null;
+  progress_json?: string | null;
+} | null): string {
+  const payload = parsedJsonRecord(data?.progress_json);
+  const parts = [
+    data?.demag_mode ?? stringValue(payload?.demag_mode),
+    formatGmresIteration(
+      payload?.native_iteration_count,
+      payload?.native_max_iterations_for_frequency,
+    ),
+    formatNativeSolveFraction(payload?.native_current_frequency_solve_fraction),
+    formatProgressRelativeResidual(payload?.native_relative_residual_l2_norm),
+  ].filter((part): part is string => Boolean(part));
+  return parts.length > 0 ? parts.join("; ") : "not available";
+}
+
+function formatFrequencyRangeFromBounds(
+  minHz: number | null | undefined,
+  maxHz: number | null | undefined,
+): string {
+  if (
+    minHz == null ||
+    maxHz == null ||
+    !Number.isFinite(minHz) ||
+    !Number.isFinite(maxHz) ||
+    minHz <= 0 ||
+    maxHz <= 0 ||
+    maxHz < minHz
+  ) {
+    return "not available";
+  }
+  if (minHz === maxHz) return formatFrequency(minHz);
+  return `${formatFrequency(minHz)}-${formatFrequency(maxHz)}`;
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function finiteOptionalNumber(value: unknown): number | null {
+  return value == null ? null : finiteNumber(value);
+}
+
+function formatGmresIteration(
+  value: unknown,
+  maxValue?: unknown,
+): string | null {
+  const iteration = finiteOptionalNumber(value);
+  if (iteration == null) return null;
+  const maxIteration = finiteOptionalNumber(maxValue);
+  return maxIteration == null
+    ? `GMRES ${Math.round(iteration)}`
+    : `GMRES ${Math.round(iteration)}/${Math.round(maxIteration)}`;
+}
+
+function formatNativeSolveFraction(value: unknown): string | null {
+  const fraction = finiteOptionalNumber(value);
+  if (fraction == null) return null;
+  return `solve ${Math.round(clampNumber(fraction, 0, 1) * 100)}%`;
+}
+
+function formatProgressRelativeResidual(value: unknown): string | null {
+  const residual = finiteOptionalNumber(value);
+  return residual == null ? null : `relres ${residual.toExponential(3)}`;
 }
 
 function useFrequencyDomainPeriodicPairsSummary() {
@@ -6079,9 +6495,9 @@ function useFrequencyDomainPeriodicPairsSummary() {
 function useFrequencyDomainPeriodicFloquetSummary() {
   const manifest = useFrequencyDomainManifestResource();
   const periodicPairs = useFrequencyDomainPeriodicPairsSummary();
-  const manifestPayload = record(manifest.data?.result_manifest?.payload);
+  const manifestPayload = record(frequencyDomainManifestPayload(manifest.data));
   const spinWaveBc = record(manifestPayload?.spin_wave_bc);
-  const capabilities = record(manifest.data?.capabilities);
+  const capabilities = frequencyDomainRuntimeCapabilities(manifest.data);
   const boundaryCapabilities = record(capabilities?.boundary);
   const demagCapabilities = record(capabilities?.demag);
 
@@ -6124,6 +6540,7 @@ function parsedJsonRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function eigenDiagnosticTransportSummary(data: unknown): {
+  productionCpuGate: string;
   solverModel: string;
   transport: string;
 } {
@@ -6145,8 +6562,42 @@ function eigenDiagnosticTransportSummary(data: unknown): {
     payload?.floquet_tangent_transport_max_nonunitarity ??
       payload?.floquetTangentTransportMaxNonunitarity,
   );
+  const productionCpuRejectionReason =
+    stringValue(payload?.production_cpu_rejection_reason) ??
+    stringValue(payload?.productionCpuRejectionReason);
+  const productionCpuRejectionScope =
+    stringValue(payload?.production_cpu_rejection_scope) ??
+    stringValue(payload?.productionCpuRejectionScope);
+  const executionLane =
+    stringValue(payload?.execution_lane) ??
+    stringValue(payload?.executionLane) ??
+    stringValue(payload?.resolved_execution_lane) ??
+    stringValue(payload?.resolvedExecutionLane);
+  const solverAdapter =
+    stringValue(payload?.solver_adapter) ??
+    stringValue(payload?.solverAdapter);
+  const productionSolverAvailable =
+    payload?.production_solver_available === true ||
+    payload?.productionSolverAvailable === true;
+  const sampleCount =
+    finiteNumber(payload?.sample_count) ??
+    finiteNumber(payload?.sampleCount);
+  const acceptedProductionCpuGate =
+    !productionCpuRejectionReason &&
+    (executionLane === "production_cpu" ||
+      productionSolverAvailable ||
+      solverAdapter === "slepc_modal_eigen");
 
   return {
+    productionCpuGate: productionCpuRejectionReason
+      ? `${productionCpuRejectionReason}; ${
+          productionCpuRejectionScope ?? "scope not reported"
+        }`
+      : acceptedProductionCpuGate
+        ? `accepted production_cpu selected-spectrum modal k-path; adapter ${
+            solverAdapter ?? "not reported"
+          }; sample_count ${formatNullableNumber(sampleCount)}`
+        : "not reported",
     solverModel,
     transport: `${transportPolicy}; frame mismatch ${formatNullableNumber(frameMismatch)}; nonunitarity ${formatNullableNumber(nonunitarity)}`,
   };

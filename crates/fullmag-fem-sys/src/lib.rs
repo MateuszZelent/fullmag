@@ -658,6 +658,9 @@ pub struct fullmag_fem_frequency_domain_driven_response_request {
     pub mfem_apply_demag_tangent: fullmag_fem_frequency_domain_apply_callback,
     pub mfem_demag_tangent_user_data: *mut c_void,
     pub mfem_demag_tangent_matrix_row_major: *const f64,
+    pub mfem_observable_ms_field: *const f64,
+    pub mfem_observable_ms_field_len: u64,
+    pub mfem_observable_uniform_ms: f64,
 }
 
 #[repr(C)]
@@ -757,6 +760,11 @@ pub struct FullmagFemModalEigenRequest {
     pub mfem_sparse_stiffness_csr: FullmagFemCsrMatrixView,
     pub mfem_sparse_gyrotropic_csr: FullmagFemCsrMatrixView,
     pub mfem_sparse_mass_csr: FullmagFemCsrMatrixView,
+    pub has_floquet_k_vector: i32,
+    pub floquet_k_vector_rad_per_m: [f64; 3],
+    pub phase_convention: fullmag_fem_frequency_domain_phase_convention,
+    pub mfem_floquet_periodic_pairs: *const fullmag_fem_frequency_domain_floquet_periodic_pair,
+    pub mfem_floquet_periodic_pair_count: u64,
 }
 
 #[repr(C)]
@@ -1595,6 +1603,35 @@ mod tests {
     }
 
     #[test]
+    fn modal_eigen_request_abi_exposes_floquet_tail_layout() {
+        type Request = FullmagFemModalEigenRequest;
+        let request = std::mem::MaybeUninit::<Request>::zeroed();
+        let request = unsafe { request.assume_init() };
+
+        assert_eq!(request.has_floquet_k_vector, 0);
+        assert_eq!(request.floquet_k_vector_rad_per_m, [0.0; 3]);
+        assert_eq!(
+            request.phase_convention,
+            fullmag_fem_frequency_domain_phase_convention::FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_I_OMEGA_T
+        );
+        assert!(request.mfem_floquet_periodic_pairs.is_null());
+        assert_eq!(request.mfem_floquet_periodic_pair_count, 0);
+
+        let sparse_mass = std::mem::offset_of!(Request, mfem_sparse_mass_csr);
+        let has_floquet_k_vector = std::mem::offset_of!(Request, has_floquet_k_vector);
+        let floquet_k_vector = std::mem::offset_of!(Request, floquet_k_vector_rad_per_m);
+        let phase_convention = std::mem::offset_of!(Request, phase_convention);
+        let floquet_pair_ptr = std::mem::offset_of!(Request, mfem_floquet_periodic_pairs);
+        let floquet_pair_count = std::mem::offset_of!(Request, mfem_floquet_periodic_pair_count);
+
+        assert!(sparse_mass < has_floquet_k_vector);
+        assert!(has_floquet_k_vector < floquet_k_vector);
+        assert!(floquet_k_vector < phase_convention);
+        assert!(phase_convention < floquet_pair_ptr);
+        assert!(floquet_pair_ptr < floquet_pair_count);
+    }
+
+    #[test]
     fn frequency_domain_driven_response_solve_abi_has_owned_result_boundary() {
         let request =
             std::mem::MaybeUninit::<fullmag_fem_frequency_domain_driven_response_request>::zeroed();
@@ -1638,6 +1675,9 @@ mod tests {
         assert_eq!(request.mfem_dmi_element_count, 0);
         assert!(request.mfem_dmi_lumped_mass.is_null());
         assert!(request.mfem_dmi_ms_field.is_null());
+        assert!(request.mfem_observable_ms_field.is_null());
+        assert_eq!(request.mfem_observable_ms_field_len, 0);
+        assert_eq!(request.mfem_observable_uniform_ms, 0.0);
         assert!(request.tiny_validation_drive_imag.is_null());
         assert!(request.mfem_drive_imag.is_null());
         assert!(request.mfem_static_periodic_node_pairs.is_null());
@@ -1726,6 +1766,9 @@ mod tests {
             std::mem::offset_of!(Request, mfem_demag_tangent_user_data);
         let mfem_demag_tangent_matrix =
             std::mem::offset_of!(Request, mfem_demag_tangent_matrix_row_major);
+        let observable_ms_field = std::mem::offset_of!(Request, mfem_observable_ms_field);
+        let observable_ms_field_len = std::mem::offset_of!(Request, mfem_observable_ms_field_len);
+        let observable_uniform_ms = std::mem::offset_of!(Request, mfem_observable_uniform_ms);
 
         assert!(static_pair_ptr < static_pair_count);
         assert!(static_pair_count < has_floquet_k_vector);
@@ -1737,6 +1780,9 @@ mod tests {
         assert!(airbox_phi_pair_ptr < airbox_phi_pair_count);
         assert!(mfem_apply_demag_tangent < mfem_demag_tangent_user_data);
         assert!(mfem_demag_tangent_user_data < mfem_demag_tangent_matrix);
+        assert!(mfem_demag_tangent_matrix < observable_ms_field);
+        assert!(observable_ms_field < observable_ms_field_len);
+        assert!(observable_ms_field_len < observable_uniform_ms);
         assert!(
             std::mem::size_of::<fullmag_fem_frequency_domain_floquet_periodic_pair>()
                 <= std::mem::size_of::<Request>()

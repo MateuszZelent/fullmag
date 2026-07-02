@@ -468,11 +468,39 @@ export function frequencyDomainSweepProgressRevision(
         data.complete,
         data.completed_frequency_points,
         data.total_frequency_points,
+        data.current_frequency_hz,
+        data.frequency_min_hz,
+        data.frequency_max_hz,
+        data.demag_mode,
+        data.progress_json,
         data.written_frequency_point_artifacts,
         data.partial_artifacts_available,
         data.latest_artifact_manifest_path,
       ].join(":")
     : null;
+}
+
+export function frequencyDomainTextArtifactRevision(
+  data: FrequencyDomainTextArtifactResource | null,
+): string | null {
+  if (!data) return null;
+  const text = data.text ?? "";
+  let checksum = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    checksum = Math.imul(31, checksum) + text.charCodeAt(index);
+    checksum >>>= 0;
+  }
+  return [
+    data.schema_version,
+    data.status,
+    data.artifact_path,
+    data.resource_key,
+    data.content_type,
+    data.path_metadata == null ? "" : JSON.stringify(data.path_metadata),
+    data.missing_reason ?? "",
+    text.length,
+    checksum.toString(16),
+  ].join("|");
 }
 
 function hasPositiveRevision(revision: number | null | undefined): boolean {
@@ -958,7 +986,7 @@ export function useFrequencyDomainEigenSpectrumResource({
   const { api } = useKernel();
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
-      api.analysis.eigen.eigenSpectrumV2({ signal }),
+      api.analysis.frequencyDomain.eigenSpectrumV2({ signal }),
     [api],
   );
   return useFrequencyDomainJsonResource(
@@ -974,7 +1002,7 @@ export function useFrequencyDomainEigenBranchesResource({
   const { api } = useKernel();
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
-      api.analysis.eigen.eigenBranchesV2({ signal }),
+      api.analysis.frequencyDomain.eigenBranchesV2({ signal }),
     [api],
   );
   return useFrequencyDomainJsonResource(
@@ -990,7 +1018,7 @@ export function useFrequencyDomainEigenDiagnosticsResource({
   const { api } = useKernel();
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
-      api.analysis.eigen.eigenDiagnosticsV2({ signal }),
+      api.analysis.frequencyDomain.eigenDiagnosticsV2({ signal }),
     [api],
   );
   return useFrequencyDomainJsonResource(
@@ -1010,13 +1038,13 @@ export function useFrequencyDomainEigenDispersionResource({
   );
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
-      api.analysis.eigen.eigenDispersion({ signal }),
+      api.analysis.frequencyDomain.eigenDispersion({ signal }),
     [api],
   );
   return useResource<FrequencyDomainTextArtifactResource | null>({
     enabled: shouldLoadFrequencyDomainManifest(enabled, sessionStatus),
     load,
-    resolveRevision: (data) => data ? `${data.status}:${data.artifact_path}` : null,
+    resolveRevision: frequencyDomainTextArtifactRevision,
     resourceKey: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
   });
 }
@@ -1161,9 +1189,13 @@ export function useFrequencyDomainEigenModeFieldMetaResource(
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
       sampleIndex != null && modeIndex != null
-        ? api.analysis.eigen.eigenModeFieldMeta(sampleIndex, modeIndex, {
-            signal,
-          })
+        ? api.analysis.frequencyDomain.eigenModeFieldMeta(
+            sampleIndex,
+            modeIndex,
+            {
+              signal,
+            },
+          )
         : Promise.resolve(null),
     [api, modeIndex, sampleIndex],
   );

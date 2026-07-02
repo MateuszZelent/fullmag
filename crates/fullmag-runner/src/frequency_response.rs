@@ -143,9 +143,14 @@ pub(crate) fn execute_fem_frequency_response_validation(
         |completed_points| {
             if completed_points > 0 {
                 if let Some(on_step) = on_step.as_deref_mut() {
+                    let completed_frequency_count = completed_points as u64;
                     let action = on_step(dense_frequency_response_progress_update(
-                        completed_points as u64,
+                        completed_frequency_count,
+                        plan.frequencies_hz.values_hz.len() as u64,
+                        plan.frequencies_hz.values_hz[completed_points - 1],
+                        frequency_response_range_hz(&plan.frequencies_hz.values_hz),
                         drive_norm,
+                        plan.enable_demag,
                     ));
                     if action != StepAction::Continue {
                         stop_requested = true;
@@ -207,14 +212,50 @@ pub(crate) fn execute_fem_frequency_response_validation(
 
 fn dense_frequency_response_progress_update(
     completed_frequency_count: u64,
+    total_frequency_count: u64,
+    frequency_hz: f64,
+    frequency_range_hz: Option<(f64, f64)>,
     drive_norm: f64,
+    demag_enabled: bool,
 ) -> StepUpdate {
+    let mut progress_scalars = std::collections::HashMap::new();
+    progress_scalars.insert(
+        "completed_frequency_count".to_string(),
+        completed_frequency_count as f64,
+    );
+    progress_scalars.insert(
+        "total_frequency_count".to_string(),
+        total_frequency_count as f64,
+    );
+    progress_scalars.insert("frequency_hz".to_string(), frequency_hz);
+    if let Some((min_hz, max_hz)) = frequency_range_hz {
+        progress_scalars.insert("frequency_min_hz".to_string(), min_hz);
+        progress_scalars.insert("frequency_max_hz".to_string(), max_hz);
+    }
+    progress_scalars.insert(
+        "percent".to_string(),
+        frequency_response_progress_percent(completed_frequency_count, total_frequency_count),
+    );
+    progress_scalars.insert("phase_solving_frequency_point".to_string(), 1.0);
+    insert_frequency_response_demag_progress_scalars(
+        &mut progress_scalars,
+        demag_enabled,
+        false,
+        false,
+    );
+    let mut per_object_scalars = std::collections::HashMap::new();
+    per_object_scalars.insert(
+        "fem_frequency_response_progress".to_string(),
+        progress_scalars,
+    );
+
     StepUpdate {
         stats: StepStats {
             step: completed_frequency_count,
             time: 0.0,
             dt: 0.0,
             max_h_eff: drive_norm,
+            per_object_scalars,
             ..StepStats::default()
         },
         grid: [0, 0, 0],
@@ -235,14 +276,80 @@ fn dense_frequency_response_progress_update(
 #[cfg(any(feature = "fem-gpu", test))]
 fn native_frequency_response_progress_update(
     progress: NativeFrequencyDomainProgress,
+    frequency_range_hz: Option<(f64, f64)>,
     drive_norm: f64,
+    demag_enabled: bool,
+    periodic_airbox_demag: bool,
+    floquet_airbox_demag: bool,
 ) -> StepUpdate {
+    let mut progress_scalars = std::collections::HashMap::new();
+    progress_scalars.insert(
+        "frequency_index".to_string(),
+        progress.frequency_index as f64,
+    );
+    progress_scalars.insert(
+        "completed_frequency_count".to_string(),
+        progress.completed_frequency_count as f64,
+    );
+    progress_scalars.insert(
+        "total_frequency_count".to_string(),
+        progress.total_frequency_count as f64,
+    );
+    progress_scalars.insert("iteration".to_string(), progress.iteration_count as f64);
+    let max_iterations_for_frequency = native_frequency_response_max_iterations_for_progress();
+    progress_scalars.insert(
+        "max_iterations_for_frequency".to_string(),
+        max_iterations_for_frequency as f64,
+    );
+    let current_frequency_solve_fraction = frequency_response_current_solve_fraction(
+        progress.iteration_count,
+        max_iterations_for_frequency,
+        progress.converged,
+    );
+    progress_scalars.insert(
+        "current_frequency_solve_fraction".to_string(),
+        current_frequency_solve_fraction,
+    );
+    progress_scalars.insert("frequency_hz".to_string(), progress.frequency_hz);
+    if let Some((min_hz, max_hz)) = frequency_range_hz {
+        progress_scalars.insert("frequency_min_hz".to_string(), min_hz);
+        progress_scalars.insert("frequency_max_hz".to_string(), max_hz);
+    }
+    progress_scalars.insert("residual_l2_norm".to_string(), progress.residual_l2_norm);
+    progress_scalars.insert(
+        "relative_residual_l2_norm".to_string(),
+        progress.relative_residual_l2_norm,
+    );
+    progress_scalars.insert("converged".to_string(), progress.converged as u8 as f64);
+    progress_scalars.insert(
+        "percent".to_string(),
+        native_frequency_response_progress_percent(
+            progress.frequency_index,
+            progress.completed_frequency_count,
+            progress.total_frequency_count,
+            current_frequency_solve_fraction,
+        ),
+    );
+    progress_scalars.insert("phase_solving_frequency_point".to_string(), 1.0);
+    insert_frequency_response_demag_progress_scalars(
+        &mut progress_scalars,
+        demag_enabled,
+        periodic_airbox_demag,
+        floquet_airbox_demag,
+    );
+    let mut per_object_scalars = std::collections::HashMap::new();
+    per_object_scalars.insert(
+        "fem_frequency_response_progress".to_string(),
+        progress_scalars,
+    );
+
     StepUpdate {
         stats: StepStats {
             step: progress.completed_frequency_count,
             time: 0.0,
             dt: 0.0,
             max_h_eff: drive_norm,
+            per_object_scalars,
             ..StepStats::default()
         },
         grid: [0, 0, 0],
@@ -260,6 +367,127 @@ fn native_frequency_response_progress_update(
     }
 }
 
+fn insert_frequency_response_demag_progress_scalars(
+    progress_scalars: &mut std::collections::HashMap<String, f64>,
+    demag_enabled: bool,
+    periodic_airbox_demag: bool,
+    floquet_airbox_demag: bool,
+) {
+    if demag_enabled {
+        progress_scalars.insert("demag_enabled".to_string(), 1.0);
+    }
+    if periodic_airbox_demag {
+        progress_scalars.insert("demag_periodic_airbox_k0".to_string(), 1.0);
+    }
+    if floquet_airbox_demag {
+        progress_scalars.insert("demag_floquet_airbox".to_string(), 1.0);
+    }
+}
+
+fn frequency_response_range_hz(frequencies_hz: &[f64]) -> Option<(f64, f64)> {
+    let mut iter = frequencies_hz
+        .iter()
+        .copied()
+        .filter(|value| value.is_finite() && *value > 0.0);
+    let first = iter.next()?;
+    let (min_hz, max_hz) = iter.fold((first, first), |(min_hz, max_hz), value| {
+        (min_hz.min(value), max_hz.max(value))
+    });
+    Some((min_hz, max_hz))
+}
+
+#[cfg(any(feature = "fem-gpu", test))]
+fn first_frequency_response_hz(frequencies_hz: &[f64]) -> Option<f64> {
+    frequencies_hz
+        .iter()
+        .copied()
+        .find(|value| value.is_finite() && *value > 0.0)
+}
+
+#[cfg(feature = "fem-gpu")]
+fn frequency_response_demag_mode(
+    demag_enabled: bool,
+    periodic_airbox_demag: bool,
+    floquet_airbox_demag: bool,
+) -> Option<&'static str> {
+    if periodic_airbox_demag {
+        Some("periodic_airbox_k0")
+    } else if floquet_airbox_demag {
+        Some("floquet_airbox")
+    } else if demag_enabled {
+        Some("enabled")
+    } else {
+        None
+    }
+}
+
+fn frequency_response_progress_percent(
+    completed_frequency_count: u64,
+    total_frequency_count: u64,
+) -> f64 {
+    if total_frequency_count == 0 {
+        0.0
+    } else {
+        ((completed_frequency_count as f64 / total_frequency_count as f64) * 100.0)
+            .clamp(0.0, 100.0)
+    }
+}
+
+#[cfg(any(feature = "fem-gpu", test))]
+fn native_frequency_response_progress_percent(
+    frequency_index: u64,
+    completed_frequency_count: u64,
+    total_frequency_count: u64,
+    current_frequency_solve_fraction: f64,
+) -> f64 {
+    if total_frequency_count == 0 {
+        return 0.0;
+    }
+    let completed_before_current = completed_frequency_count.min(frequency_index);
+    let effective_completed =
+        completed_before_current as f64 + current_frequency_solve_fraction.clamp(0.0, 1.0);
+    ((effective_completed / total_frequency_count as f64) * 100.0).clamp(0.0, 100.0)
+}
+
+#[cfg(any(feature = "fem-gpu", test))]
+fn frequency_response_current_solve_fraction(
+    iteration_count: u64,
+    max_iterations_for_frequency: u64,
+    converged: bool,
+) -> f64 {
+    if converged {
+        return 1.0;
+    }
+    if max_iterations_for_frequency == 0 {
+        return 0.0;
+    }
+    (iteration_count as f64 / max_iterations_for_frequency as f64).clamp(0.0, 1.0)
+}
+
+#[cfg(any(feature = "fem-gpu", test))]
+fn native_frequency_response_max_iterations_for_progress() -> u64 {
+    env_positive_u64_alias(
+        "FULLMAG_FEM_FREQUENCY_RESPONSE_MAX_ITERATIONS",
+        "FULLMAG_FMR_RESPONSE_MAX_ITERATIONS",
+        8192,
+    )
+}
+
+#[cfg(any(feature = "fem-gpu", test))]
+fn env_positive_u64_alias(primary: &str, alias: &str, fallback: u64) -> u64 {
+    std::env::var(primary)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .or_else(|| {
+            std::env::var(alias)
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .filter(|value| *value > 0)
+        })
+        .unwrap_or(fallback)
+}
+
 #[cfg(any(feature = "fem-gpu", test))]
 fn write_frequency_response_progress_artifact(
     output_dir: &Path,
@@ -269,6 +497,8 @@ fn write_frequency_response_progress_artifact(
     completed_frequency_points: u64,
     written_frequency_point_artifacts: u64,
     current_frequency_hz: Option<f64>,
+    frequency_range_hz: Option<(f64, f64)>,
+    demag_mode: Option<&str>,
     latest_artifact_manifest_path: Option<&str>,
 ) -> std::io::Result<()> {
     let response_dir = output_dir.join("response");
@@ -276,13 +506,18 @@ fn write_frequency_response_progress_artifact(
     let partial_artifacts_available = written_frequency_point_artifacts > 0;
     let progress_json = serde_json::json!({
         "schema_version": "frequency_domain_sweep_progress.v1",
+        "status": status,
         "state": state,
+        "complete": false,
         "total_frequency_points": total_frequency_points,
         "completed_frequency_points": completed_frequency_points,
         "written_frequency_point_artifacts": written_frequency_point_artifacts,
         "current_frequency_hz": current_frequency_hz,
+        "frequency_min_hz": frequency_range_hz.map(|range| range.0),
+        "frequency_max_hz": frequency_range_hz.map(|range| range.1),
         "partial_artifacts_available": partial_artifacts_available,
         "latest_artifact_manifest_path": latest_artifact_manifest_path,
+        "demag_mode": demag_mode,
     })
     .to_string();
     let progress_artifact = serde_json::json!({
@@ -294,9 +529,12 @@ fn write_frequency_response_progress_artifact(
         "completed_frequency_points": completed_frequency_points,
         "written_frequency_point_artifacts": written_frequency_point_artifacts,
         "current_frequency_hz": current_frequency_hz,
+        "frequency_min_hz": frequency_range_hz.map(|range| range.0),
+        "frequency_max_hz": frequency_range_hz.map(|range| range.1),
         "partial_artifacts_available": partial_artifacts_available,
         "latest_artifact_manifest_path": latest_artifact_manifest_path,
         "missing_reason": null,
+        "demag_mode": demag_mode,
         "progress_json": progress_json,
     });
     std::fs::write(
@@ -309,26 +547,41 @@ fn write_frequency_response_progress_artifact(
 fn write_native_frequency_response_progress_artifact(
     output_dir: &Path,
     progress: NativeFrequencyDomainProgress,
+    demag_mode: Option<&str>,
+    frequency_range_hz: Option<(f64, f64)>,
 ) -> std::io::Result<()> {
     let response_dir = output_dir.join("response");
     std::fs::create_dir_all(&response_dir)?;
     let completed_frequency_points = progress.completed_frequency_count;
     let written_frequency_point_artifacts = 0;
     let partial_artifacts_available = written_frequency_point_artifacts > 0;
+    let max_iterations_for_frequency = native_frequency_response_max_iterations_for_progress();
+    let current_frequency_solve_fraction = frequency_response_current_solve_fraction(
+        progress.iteration_count,
+        max_iterations_for_frequency,
+        progress.converged,
+    );
     let progress_json_value = serde_json::json!({
         "schema_version": "frequency_domain_sweep_progress.v1",
+        "status": "running",
         "state": "solving_frequency",
+        "complete": false,
         "total_frequency_points": progress.total_frequency_count,
         "completed_frequency_points": completed_frequency_points,
         "written_frequency_point_artifacts": written_frequency_point_artifacts,
         "current_frequency_hz": progress.frequency_hz,
+        "frequency_min_hz": frequency_range_hz.map(|range| range.0),
+        "frequency_max_hz": frequency_range_hz.map(|range| range.1),
         "partial_artifacts_available": partial_artifacts_available,
         "latest_artifact_manifest_path": null,
         "native_frequency_index": progress.frequency_index,
         "native_iteration_count": progress.iteration_count,
+        "native_max_iterations_for_frequency": max_iterations_for_frequency,
+        "native_current_frequency_solve_fraction": current_frequency_solve_fraction,
         "native_residual_l2_norm": progress.residual_l2_norm,
         "native_relative_residual_l2_norm": progress.relative_residual_l2_norm,
         "native_converged": progress.converged,
+        "demag_mode": demag_mode,
     });
     let progress_artifact = serde_json::json!({
         "schema_version": "frequency_domain_sweep_progress.v1",
@@ -339,14 +592,19 @@ fn write_native_frequency_response_progress_artifact(
         "completed_frequency_points": completed_frequency_points,
         "written_frequency_point_artifacts": written_frequency_point_artifacts,
         "current_frequency_hz": progress.frequency_hz,
+        "frequency_min_hz": frequency_range_hz.map(|range| range.0),
+        "frequency_max_hz": frequency_range_hz.map(|range| range.1),
         "partial_artifacts_available": partial_artifacts_available,
         "latest_artifact_manifest_path": null,
         "missing_reason": null,
         "native_frequency_index": progress.frequency_index,
         "native_iteration_count": progress.iteration_count,
+        "native_max_iterations_for_frequency": max_iterations_for_frequency,
+        "native_current_frequency_solve_fraction": current_frequency_solve_fraction,
         "native_residual_l2_norm": progress.residual_l2_norm,
         "native_relative_residual_l2_norm": progress.relative_residual_l2_norm,
         "native_converged": progress.converged,
+        "demag_mode": demag_mode,
         "progress_json": progress_json_value.to_string(),
     });
     std::fs::write(
@@ -373,12 +631,20 @@ fn frequency_response_artifact_manifest_progress_path(
 fn preserve_native_frequency_response_progress_artifact(
     output_dir: &Path,
     progress: NativeFrequencyDomainProgress,
+    demag_mode: Option<&str>,
+    frequency_range_hz: Option<(f64, f64)>,
+    final_status: NativeFrequencyDomainStatus,
     written_frequency_point_artifacts: u64,
     latest_artifact_manifest_path: Option<&str>,
 ) -> std::io::Result<()> {
     let progress_path = output_dir.join("response/progress.v1.json");
     if !progress_path.is_file() {
-        write_native_frequency_response_progress_artifact(output_dir, progress)?;
+        write_native_frequency_response_progress_artifact(
+            output_dir,
+            progress,
+            demag_mode,
+            frequency_range_hz,
+        )?;
     }
     let mut progress_artifact: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&progress_path)?)
@@ -389,6 +655,18 @@ fn preserve_native_frequency_response_progress_artifact(
             "frequency-response progress artifact must be a JSON object",
         ));
     };
+    let final_progress_status = native_frequency_domain_progress_status(final_status);
+    let final_progress_state = native_frequency_domain_progress_state(final_status);
+    let final_progress_complete = final_status == NativeFrequencyDomainStatus::Ok;
+    progress_object.insert(
+        "status".to_string(),
+        serde_json::json!(final_progress_status),
+    );
+    progress_object.insert("state".to_string(), serde_json::json!(final_progress_state));
+    progress_object.insert(
+        "complete".to_string(),
+        serde_json::json!(final_progress_complete),
+    );
     progress_object.insert(
         "native_frequency_index".to_string(),
         serde_json::json!(progress.frequency_index),
@@ -396,6 +674,20 @@ fn preserve_native_frequency_response_progress_artifact(
     progress_object.insert(
         "native_iteration_count".to_string(),
         serde_json::json!(progress.iteration_count),
+    );
+    let max_iterations_for_frequency = native_frequency_response_max_iterations_for_progress();
+    let current_frequency_solve_fraction = frequency_response_current_solve_fraction(
+        progress.iteration_count,
+        max_iterations_for_frequency,
+        progress.converged,
+    );
+    progress_object.insert(
+        "native_max_iterations_for_frequency".to_string(),
+        serde_json::json!(max_iterations_for_frequency),
+    );
+    progress_object.insert(
+        "native_current_frequency_solve_fraction".to_string(),
+        serde_json::json!(current_frequency_solve_fraction),
     );
     progress_object.insert(
         "native_residual_l2_norm".to_string(),
@@ -409,9 +701,16 @@ fn preserve_native_frequency_response_progress_artifact(
         "native_converged".to_string(),
         serde_json::json!(progress.converged),
     );
+    if let Some(demag_mode) = demag_mode {
+        progress_object.insert("demag_mode".to_string(), serde_json::json!(demag_mode));
+    }
     progress_object
         .entry("current_frequency_hz".to_string())
         .or_insert_with(|| serde_json::json!(progress.frequency_hz));
+    if let Some((min_hz, max_hz)) = frequency_range_hz {
+        progress_object.insert("frequency_min_hz".to_string(), serde_json::json!(min_hz));
+        progress_object.insert("frequency_max_hz".to_string(), serde_json::json!(max_hz));
+    }
     progress_object.insert(
         "written_frequency_point_artifacts".to_string(),
         serde_json::json!(written_frequency_point_artifacts),
@@ -451,12 +750,14 @@ fn preserve_native_frequency_response_progress_artifact(
         "schema_version".to_string(),
         serde_json::json!("frequency_domain_sweep_progress.v1"),
     );
+    progress_json_object.insert("state".to_string(), serde_json::json!(final_progress_state));
     progress_json_object.insert(
-        "state".to_string(),
-        progress_object
-            .get("state")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!("solving_frequency")),
+        "status".to_string(),
+        serde_json::json!(final_progress_status),
+    );
+    progress_json_object.insert(
+        "complete".to_string(),
+        serde_json::json!(final_progress_complete),
     );
     progress_json_object.insert(
         "total_frequency_points".to_string(),
@@ -486,6 +787,12 @@ fn preserve_native_frequency_response_progress_artifact(
             .cloned()
             .unwrap_or_else(|| serde_json::json!(progress.frequency_hz)),
     );
+    if let Some(frequency_min_hz) = progress_object.get("frequency_min_hz").cloned() {
+        progress_json_object.insert("frequency_min_hz".to_string(), frequency_min_hz);
+    }
+    if let Some(frequency_max_hz) = progress_object.get("frequency_max_hz").cloned() {
+        progress_json_object.insert("frequency_max_hz".to_string(), frequency_max_hz);
+    }
     progress_json_object.insert(
         "partial_artifacts_available".to_string(),
         progress_object
@@ -509,6 +816,14 @@ fn preserve_native_frequency_response_progress_artifact(
         serde_json::json!(progress.iteration_count),
     );
     progress_json_object.insert(
+        "native_max_iterations_for_frequency".to_string(),
+        serde_json::json!(max_iterations_for_frequency),
+    );
+    progress_json_object.insert(
+        "native_current_frequency_solve_fraction".to_string(),
+        serde_json::json!(current_frequency_solve_fraction),
+    );
+    progress_json_object.insert(
         "native_residual_l2_norm".to_string(),
         serde_json::json!(progress.residual_l2_norm),
     );
@@ -520,6 +835,11 @@ fn preserve_native_frequency_response_progress_artifact(
         "native_converged".to_string(),
         serde_json::json!(progress.converged),
     );
+    if let Some(demag_mode) = demag_mode {
+        progress_json_object.insert("demag_mode".to_string(), serde_json::json!(demag_mode));
+    } else if let Some(existing_demag_mode) = progress_object.get("demag_mode").cloned() {
+        progress_json_object.insert("demag_mode".to_string(), existing_demag_mode);
+    }
     progress_object.insert(
         "progress_json".to_string(),
         serde_json::json!(progress_json_value.to_string()),
@@ -534,16 +854,19 @@ fn preserve_native_frequency_response_progress_artifact(
 #[cfg(any(feature = "fem-gpu", test))]
 fn write_initial_frequency_response_progress_artifact(
     output_dir: &Path,
-    total_frequency_points: usize,
+    frequencies_hz: &[f64],
+    demag_mode: Option<&str>,
 ) -> std::io::Result<()> {
     write_frequency_response_progress_artifact(
         output_dir,
         "running",
         "running",
-        total_frequency_points,
+        frequencies_hz.len(),
         0,
         0,
-        None,
+        first_frequency_response_hz(frequencies_hz),
+        frequency_response_range_hz(frequencies_hz),
+        demag_mode,
         None,
     )
 }
@@ -569,7 +892,8 @@ fn interrupted_frequency_response_point_artifact_count(output_dir: &Path) -> u64
 #[cfg(any(feature = "fem-gpu", test))]
 fn write_interrupted_frequency_response_progress_artifact(
     output_dir: &Path,
-    total_frequency_points: usize,
+    frequencies_hz: &[f64],
+    demag_mode: Option<&str>,
 ) -> std::io::Result<()> {
     let written_frequency_point_artifacts =
         interrupted_frequency_response_point_artifact_count(output_dir);
@@ -577,10 +901,12 @@ fn write_interrupted_frequency_response_progress_artifact(
         output_dir,
         "interrupted",
         "interrupted",
-        total_frequency_points,
+        frequencies_hz.len(),
         written_frequency_point_artifacts,
         written_frequency_point_artifacts,
-        None,
+        first_frequency_response_hz(frequencies_hz),
+        frequency_response_range_hz(frequencies_hz),
+        demag_mode,
         None,
     )
 }
@@ -588,7 +914,8 @@ fn write_interrupted_frequency_response_progress_artifact(
 #[cfg(any(feature = "fem-gpu", test))]
 fn preserve_interrupted_frequency_response_progress_artifact_if_needed(
     output_dir: &Path,
-    total_frequency_points: usize,
+    frequencies_hz: &[f64],
+    demag_mode: Option<&str>,
     status: NativeFrequencyDomainStatus,
 ) -> std::io::Result<()> {
     let has_legacy_manifest = output_dir.join("response/artifact_manifest.json").is_file();
@@ -599,9 +926,43 @@ fn preserve_interrupted_frequency_response_progress_artifact_if_needed(
         && !has_legacy_manifest
         && !has_frequency_domain_manifest
     {
-        write_interrupted_frequency_response_progress_artifact(output_dir, total_frequency_points)?;
+        write_interrupted_frequency_response_progress_artifact(
+            output_dir,
+            frequencies_hz,
+            demag_mode,
+        )?;
     }
     Ok(())
+}
+
+#[cfg(any(feature = "fem-gpu", test))]
+fn patch_frequency_response_manifest_equilibrium_provenance(
+    output_dir: &Path,
+    provenance: Option<&fullmag_ir::FemFrequencyDomainEquilibriumProvenanceIR>,
+) -> std::io::Result<()> {
+    let Some(provenance) = provenance else {
+        return Ok(());
+    };
+    let manifest_path = output_dir.join("frequency_domain/manifest.v1.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path)?)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    let manifest_object = manifest.as_object_mut().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "frequency-domain manifest must be a JSON object",
+        )
+    })?;
+    manifest_object.insert(
+        "equilibrium_provenance".to_string(),
+        serde_json::to_value(provenance)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?,
+    );
+    std::fs::write(
+        manifest_path,
+        serde_json::to_vec_pretty(&manifest)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?,
+    )
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -671,9 +1032,20 @@ fn try_execute_fem_frequency_response_native_production_cpu(
     };
     let live_progress_sink = RefCell::new(on_step.as_deref_mut());
     let last_native_progress: RefCell<Option<NativeFrequencyDomainProgress>> = RefCell::new(None);
+    let demag_mode = frequency_response_demag_mode(
+        plan.enable_demag,
+        payload.requires_periodic_airbox_dynamic_demag,
+        payload.requires_floquet_airbox_dynamic_demag,
+    );
+    let response_frequency_range_hz = frequency_response_range_hz(&plan.frequencies_hz.values_hz);
     let progress_callback = |progress: NativeFrequencyDomainProgress| {
         *last_native_progress.borrow_mut() = Some(progress);
-        if let Err(err) = write_native_frequency_response_progress_artifact(output_dir, progress) {
+        if let Err(err) = write_native_frequency_response_progress_artifact(
+            output_dir,
+            progress,
+            demag_mode,
+            response_frequency_range_hz,
+        ) {
             eprintln!(
                 "[fullmag-runner] failed to write native FEM frequency-response progress artifact: {err}"
             );
@@ -681,7 +1053,11 @@ fn try_execute_fem_frequency_response_native_production_cpu(
         if let Some(on_step) = live_progress_sink.borrow_mut().as_deref_mut() {
             let action = on_step(native_frequency_response_progress_update(
                 progress,
+                response_frequency_range_hz,
                 payload.drive_norm,
+                plan.enable_demag,
+                payload.requires_periodic_airbox_dynamic_demag,
+                payload.requires_floquet_airbox_dynamic_demag,
             ));
             if action != StepAction::Continue {
                 stop_requested.store(true, Ordering::Relaxed);
@@ -731,7 +1107,8 @@ fn try_execute_fem_frequency_response_native_production_cpu(
     });
     write_initial_frequency_response_progress_artifact(
         output_dir,
-        plan.frequencies_hz.values_hz.len(),
+        &plan.frequencies_hz.values_hz,
+        demag_mode,
     )
     .map_err(|err| RunError {
         message: format!("failed to write initial FEM frequency-response progress artifact: {err}"),
@@ -776,6 +1153,8 @@ fn try_execute_fem_frequency_response_native_production_cpu(
                 dmi_lumped_mass: payload.dmi_lumped_mass.as_deref(),
                 dmi_ms_field: payload.dmi_ms_field.as_deref(),
                 dmi_uniform_ms: payload.dmi_uniform_ms,
+                observable_ms_field: payload.observable_ms_field.as_deref(),
+                observable_uniform_ms: payload.observable_uniform_ms,
                 include_zeeman: true,
                 static_periodic_node_pairs: &payload.static_periodic_node_pairs,
                 floquet_k_vector_rad_per_m: payload.floquet_k_vector_rad_per_m,
@@ -810,6 +1189,9 @@ fn try_execute_fem_frequency_response_native_production_cpu(
         preserve_native_frequency_response_progress_artifact(
             output_dir,
             progress,
+            demag_mode,
+            response_frequency_range_hz,
+            native_result.status,
             final_written_frequency_point_artifacts,
             final_artifact_manifest_path,
         )
@@ -821,12 +1203,22 @@ fn try_execute_fem_frequency_response_native_production_cpu(
     }
     preserve_interrupted_frequency_response_progress_artifact_if_needed(
         output_dir,
-        plan.frequencies_hz.values_hz.len(),
+        &plan.frequencies_hz.values_hz,
+        demag_mode,
         native_result.status,
     )
     .map_err(|err| RunError {
         message: format!(
             "native FEM frequency response was interrupted, but the runner failed to preserve interrupted progress state: {err}"
+        ),
+    })?;
+    patch_frequency_response_manifest_equilibrium_provenance(
+        output_dir,
+        plan.equilibrium_provenance.as_ref(),
+    )
+    .map_err(|err| RunError {
+        message: format!(
+            "native FEM frequency response finished, but the runner failed to preserve equilibrium provenance: {err}"
         ),
     })?;
     match native_result.status {
@@ -952,7 +1344,7 @@ fn native_frequency_response_failure_message(
     details
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", test))]
 fn native_frequency_domain_status_label(status: NativeFrequencyDomainStatus) -> &'static str {
     match status {
         NativeFrequencyDomainStatus::Ok => "ok",
@@ -962,6 +1354,22 @@ fn native_frequency_domain_status_label(status: NativeFrequencyDomainStatus) -> 
         NativeFrequencyDomainStatus::SolveError => "solve_error",
         NativeFrequencyDomainStatus::ArtifactError => "artifact_error",
         NativeFrequencyDomainStatus::Interrupted => "interrupted",
+    }
+}
+
+#[cfg(any(feature = "fem-gpu", test))]
+fn native_frequency_domain_progress_status(status: NativeFrequencyDomainStatus) -> &'static str {
+    match status {
+        NativeFrequencyDomainStatus::Ok => "ready",
+        other => native_frequency_domain_status_label(other),
+    }
+}
+
+#[cfg(any(feature = "fem-gpu", test))]
+fn native_frequency_domain_progress_state(status: NativeFrequencyDomainStatus) -> &'static str {
+    match status {
+        NativeFrequencyDomainStatus::Ok => "completed",
+        other => native_frequency_domain_status_label(other),
     }
 }
 
@@ -1007,6 +1415,8 @@ struct NativeProductionCpuPayload {
     dmi_lumped_mass: Option<Vec<f64>>,
     dmi_ms_field: Option<Vec<f64>>,
     dmi_uniform_ms: f64,
+    observable_ms_field: Option<Vec<f64>>,
+    observable_uniform_ms: f64,
     drive_norm: f64,
     static_periodic_node_pairs: Vec<NativeDrivenFrequencyResponsePeriodicNodePair>,
     floquet_k_vector_rad_per_m: Option<[f64; 3]>,
@@ -1461,6 +1871,8 @@ fn build_native_production_payload(
         .iter()
         .map(|node_index| plan.equilibrium_magnetization[*node_index])
         .collect::<Vec<_>>();
+    let observable_ms_field =
+        build_frequency_response_observable_ms_field(plan, &magnetic_node_indices)?;
     let alpha_per_node = alpha_per_node.map(|values| {
         magnetic_node_indices
             .iter()
@@ -1571,6 +1983,8 @@ fn build_native_production_payload(
         dmi_lumped_mass: dmi_payload.lumped_mass,
         dmi_ms_field: dmi_payload.ms_field,
         dmi_uniform_ms: dmi_payload.uniform_ms,
+        observable_ms_field,
+        observable_uniform_ms: plan.material.saturation_magnetisation,
         drive_norm,
         static_periodic_node_pairs,
         floquet_k_vector_rad_per_m,
@@ -1610,6 +2024,34 @@ fn build_native_production_payload(
             })
             .count() as u64,
     })
+}
+
+#[cfg(feature = "fem-gpu")]
+fn build_frequency_response_observable_ms_field(
+    plan: &fullmag_ir::FemFrequencyResponsePlanIR,
+    magnetic_node_indices: &[usize],
+) -> Option<Option<Vec<f64>>> {
+    if !plan.material.saturation_magnetisation.is_finite()
+        || plan.material.saturation_magnetisation <= 0.0
+    {
+        return None;
+    }
+    let Some(values) = plan.material.ms_field.as_ref() else {
+        return Some(None);
+    };
+    if values.len() != plan.equilibrium_magnetization.len()
+        || values
+            .iter()
+            .any(|value| !value.is_finite() || *value <= 0.0)
+    {
+        return None;
+    }
+    Some(Some(
+        magnetic_node_indices
+            .iter()
+            .map(|node_index| values[*node_index])
+            .collect::<Vec<_>>(),
+    ))
 }
 
 fn production_cpu_frequency_response_rejection_reason(
@@ -1654,9 +2096,15 @@ fn production_cpu_frequency_response_rejection_reason(
             );
         }
     } else {
-        if plan.domain_mesh_mode != fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh {
+        let shared_domain_no_demag = plan.domain_mesh_mode
+            == fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir
+            && !plan.enable_demag
+            && plan.demag_realization.is_none();
+        if plan.domain_mesh_mode != fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh
+            && !shared_domain_no_demag
+        {
             return Some(
-                "production CPU frequency response currently supports only magnetic-body meshes without shared-domain airbox elements",
+                "production CPU frequency response currently supports only magnetic-body meshes or compacted shared-domain no-demag magnetic slices",
             );
         }
         if plan.enable_demag || plan.demag_realization.is_some() {
@@ -1800,7 +2248,13 @@ fn production_gpu_frequency_response_rejection_reason(
         }
         return None;
     }
-    if plan.domain_mesh_mode != fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh {
+    let gpu_shared_domain_no_demag = plan.requested_device == fullmag_ir::ExecutionDevice::Gpu
+        && plan.domain_mesh_mode == fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir
+        && !plan.enable_demag
+        && plan.demag_realization.is_none();
+    if plan.domain_mesh_mode != fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh
+        && !gpu_shared_domain_no_demag
+    {
         return Some(
             "production GPU frequency response currently supports only magnetic-body meshes without shared-domain airbox elements",
         );
@@ -1995,24 +2449,19 @@ fn frequency_response_magnetic_node_indices(
     if plan.mesh.nodes.len() != plan.equilibrium_magnetization.len() {
         return None;
     }
-    let indices = if plan.domain_mesh_mode
-        == fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir
-        && matches!(
-            plan.magnetostatic_bc,
-            fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0
-                | fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox
-        ) {
-        plan.equilibrium_magnetization
-            .iter()
-            .enumerate()
-            .filter_map(|(node_index, m)| {
-                let norm = dot3(*m, *m).sqrt();
-                (norm > 1.0e-12).then_some(node_index)
-            })
-            .collect::<Vec<_>>()
-    } else {
-        (0..plan.equilibrium_magnetization.len()).collect::<Vec<_>>()
-    };
+    let indices =
+        if plan.domain_mesh_mode == fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir {
+            plan.equilibrium_magnetization
+                .iter()
+                .enumerate()
+                .filter_map(|(node_index, m)| {
+                    let norm = dot3(*m, *m).sqrt();
+                    (norm > 1.0e-12).then_some(node_index)
+                })
+                .collect::<Vec<_>>()
+        } else {
+            (0..plan.equilibrium_magnetization.len()).collect::<Vec<_>>()
+        };
     if indices.is_empty() {
         return None;
     }
@@ -2667,12 +3116,81 @@ mod tests {
             converged: true,
         };
 
-        let update = native_frequency_response_progress_update(progress, 3.5);
+        let update = native_frequency_response_progress_update(
+            progress,
+            Some((1.0e9, 4.0e9)),
+            3.5,
+            true,
+            true,
+            false,
+        );
 
         assert_eq!(update.stats.step, 2);
         assert_eq!(update.stats.max_h_eff, 3.5);
         assert_eq!(update.grid, [0, 0, 0]);
         assert!(!update.finished);
+        let live_progress = update
+            .stats
+            .per_object_scalars
+            .get("fem_frequency_response_progress")
+            .expect("frequency response progress should be published for live telemetry");
+        assert_eq!(live_progress["frequency_index"], 1.0);
+        assert_eq!(live_progress["completed_frequency_count"], 2.0);
+        assert_eq!(live_progress["total_frequency_count"], 4.0);
+        assert_eq!(live_progress["iteration"], 17.0);
+        assert_eq!(
+            live_progress["max_iterations_for_frequency"],
+            native_frequency_response_max_iterations_for_progress() as f64
+        );
+        assert_eq!(live_progress["current_frequency_solve_fraction"], 1.0);
+        assert_eq!(live_progress["frequency_hz"], 2.0e9);
+        assert_eq!(live_progress["frequency_min_hz"], 1.0e9);
+        assert_eq!(live_progress["frequency_max_hz"], 4.0e9);
+        assert_eq!(live_progress["relative_residual_l2_norm"], 2.0e-9);
+        assert_eq!(live_progress["percent"], 50.0);
+        assert_eq!(live_progress["demag_enabled"], 1.0);
+        assert_eq!(live_progress["demag_periodic_airbox_k0"], 1.0);
+    }
+
+    #[test]
+    fn native_frequency_response_progress_percent_advances_inside_current_solve() {
+        let max_iterations = native_frequency_response_max_iterations_for_progress();
+        let iteration_count = max_iterations.saturating_div(2).max(1);
+        let expected_fraction = (iteration_count as f64 / max_iterations as f64).clamp(0.0, 1.0);
+        let progress = NativeFrequencyDomainProgress {
+            frequency_index: 0,
+            completed_frequency_count: 0,
+            total_frequency_count: 4,
+            iteration_count,
+            frequency_hz: 2.0e9,
+            residual_l2_norm: 1.0e-4,
+            relative_residual_l2_norm: 5.0e-1,
+            converged: false,
+        };
+
+        let update = native_frequency_response_progress_update(
+            progress,
+            Some((2.0e9, 5.0e9)),
+            1.0,
+            true,
+            true,
+            false,
+        );
+
+        let live_progress = update
+            .stats
+            .per_object_scalars
+            .get("fem_frequency_response_progress")
+            .expect("frequency response progress should be published for live telemetry");
+        assert_eq!(
+            live_progress["max_iterations_for_frequency"],
+            max_iterations as f64
+        );
+        assert_eq!(
+            live_progress["current_frequency_solve_fraction"],
+            expected_fraction
+        );
+        assert_eq!(live_progress["percent"], expected_fraction * 25.0);
     }
 
     #[test]
@@ -2687,8 +3205,12 @@ mod tests {
             unique_suffix
         ));
 
-        write_initial_frequency_response_progress_artifact(&output_dir, 5)
-            .expect("initial frequency-response progress should be written");
+        write_initial_frequency_response_progress_artifact(
+            &output_dir,
+            &[2.0e9, 3.5e9, 5.0e9],
+            Some("periodic_airbox_k0"),
+        )
+        .expect("initial frequency-response progress should be written");
 
         let progress_path = output_dir.join("response/progress.v1.json");
         let progress: serde_json::Value = serde_json::from_slice(
@@ -2702,7 +3224,7 @@ mod tests {
         assert_eq!(progress["status"], "running");
         assert_eq!(progress["state"], "running");
         assert_eq!(progress["complete"], false);
-        assert_eq!(progress["total_frequency_points"], 5);
+        assert_eq!(progress["total_frequency_points"], 3);
         assert_eq!(progress["completed_frequency_points"], 0);
         assert_eq!(progress["written_frequency_point_artifacts"], 0);
         assert_eq!(progress["partial_artifacts_available"], false);
@@ -2710,11 +3232,22 @@ mod tests {
             progress["latest_artifact_manifest_path"],
             serde_json::Value::Null
         );
-        assert_eq!(progress["current_frequency_hz"], serde_json::Value::Null);
-        assert!(progress["progress_json"]
+        assert_eq!(progress["current_frequency_hz"], 2.0e9);
+        assert_eq!(progress["frequency_min_hz"], 2.0e9);
+        assert_eq!(progress["frequency_max_hz"], 5.0e9);
+        assert_eq!(progress["demag_mode"], "periodic_airbox_k0");
+        let progress_json = progress["progress_json"]
             .as_str()
-            .expect("progress_json should be a string")
-            .contains("\"state\":\"running\""));
+            .expect("progress_json should be a string");
+        let progress_json_value: serde_json::Value =
+            serde_json::from_str(progress_json).expect("progress_json should parse");
+        assert_eq!(progress_json_value["status"], "running");
+        assert_eq!(progress_json_value["complete"], false);
+        assert!(progress_json.contains("\"state\":\"running\""));
+        assert!(progress_json.contains("\"current_frequency_hz\":2000000000.0"));
+        assert!(progress_json.contains("\"frequency_min_hz\":2000000000.0"));
+        assert!(progress_json.contains("\"frequency_max_hz\":5000000000.0"));
+        assert!(progress_json.contains("\"demag_mode\":\"periodic_airbox_k0\""));
 
         let _ = std::fs::remove_dir_all(output_dir);
     }
@@ -2743,6 +3276,8 @@ mod tests {
                 relative_residual_l2_norm: 9.9e-4,
                 converged: false,
             },
+            Some("periodic_airbox_k0"),
+            Some((2.0e9, 5.0e9)),
         )
         .expect("native frequency-response progress should be written");
 
@@ -2757,16 +3292,30 @@ mod tests {
         assert_eq!(progress["completed_frequency_points"], 0);
         assert_eq!(progress["written_frequency_point_artifacts"], 0);
         assert_eq!(progress["current_frequency_hz"], 2.75e9);
+        assert_eq!(progress["frequency_min_hz"], 2.0e9);
+        assert_eq!(progress["frequency_max_hz"], 5.0e9);
         assert_eq!(progress["native_frequency_index"], 0);
         assert_eq!(progress["native_iteration_count"], 2807);
+        assert_eq!(
+            progress["native_max_iterations_for_frequency"],
+            native_frequency_response_max_iterations_for_progress()
+        );
         assert_eq!(progress["native_residual_l2_norm"], 4.5e-6);
         assert_eq!(progress["native_relative_residual_l2_norm"], 9.9e-4);
         assert_eq!(progress["native_converged"], false);
+        assert_eq!(progress["demag_mode"], "periodic_airbox_k0");
         let progress_json = progress["progress_json"]
             .as_str()
             .expect("progress_json should be a string");
+        let progress_json_value: serde_json::Value =
+            serde_json::from_str(progress_json).expect("progress_json should parse");
+        assert_eq!(progress_json_value["status"], "running");
+        assert_eq!(progress_json_value["complete"], false);
         assert!(progress_json.contains("\"state\":\"solving_frequency\""));
+        assert!(progress_json.contains("\"demag_mode\":\"periodic_airbox_k0\""));
         assert!(progress_json.contains("\"native_iteration_count\":2807"));
+        assert!(progress_json.contains("\"native_max_iterations_for_frequency\""));
+        assert!(progress_json.contains("\"native_current_frequency_solve_fraction\""));
         assert!(progress_json.contains("\"native_relative_residual_l2_norm\":0.00099"));
 
         let _ = std::fs::remove_dir_all(output_dir);
@@ -2783,13 +3332,22 @@ mod tests {
             std::process::id(),
             unique_suffix
         ));
-        let response_dir = output_dir.join("response");
-        std::fs::create_dir_all(&response_dir).expect("response dir should be created");
-        std::fs::write(
-            response_dir.join("progress.v1.json"),
-            br#"{"schema_version":"frequency_domain_sweep_progress.v1","status":"solve_error","complete":false,"state":"solve_error","total_frequency_points":1,"completed_frequency_points":0,"written_frequency_point_artifacts":0,"partial_artifacts_available":true,"latest_artifact_manifest_path":"frequency_domain/manifest.v1.json"}"#,
+        write_native_frequency_response_progress_artifact(
+            &output_dir,
+            NativeFrequencyDomainProgress {
+                frequency_index: 0,
+                completed_frequency_count: 0,
+                total_frequency_count: 1,
+                iteration_count: 8,
+                frequency_hz: 2.75e9,
+                residual_l2_norm: 1.25e-5,
+                relative_residual_l2_norm: 0.967,
+                converged: false,
+            },
+            Some("periodic_airbox_k0"),
+            Some((2.0e9, 5.0e9)),
         )
-        .expect("final progress should be written");
+        .expect("live running progress should be written");
         let native_manifest_path = output_dir
             .join("frequency_domain/manifest.v1.json")
             .to_string_lossy()
@@ -2807,23 +3365,30 @@ mod tests {
                 relative_residual_l2_norm: 0.967,
                 converged: false,
             },
+            None,
+            Some((2.0e9, 5.0e9)),
+            NativeFrequencyDomainStatus::SolveError,
             0,
             Some(native_manifest_path.as_str()),
         )
         .expect("native frequency-response progress should be preserved");
 
         let progress: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(response_dir.join("progress.v1.json"))
+            &std::fs::read(output_dir.join("response/progress.v1.json"))
                 .expect("progress artifact should exist"),
         )
         .expect("progress artifact should parse");
         assert_eq!(progress["status"], "solve_error");
         assert_eq!(progress["state"], "solve_error");
+        assert_eq!(progress["complete"], false);
         assert_eq!(
             progress["latest_artifact_manifest_path"],
             "frequency_domain/manifest.v1.json"
         );
         assert_eq!(progress["partial_artifacts_available"], true);
+        assert_eq!(progress["demag_mode"], "periodic_airbox_k0");
+        assert_eq!(progress["frequency_min_hz"], 2.0e9);
+        assert_eq!(progress["frequency_max_hz"], 5.0e9);
         assert_eq!(progress["native_frequency_index"], 0);
         assert_eq!(progress["native_iteration_count"], 8);
         assert_eq!(progress["native_residual_l2_norm"], 1.25e-5);
@@ -2832,7 +3397,10 @@ mod tests {
         let progress_json = progress["progress_json"]
             .as_str()
             .expect("progress_json should be a string");
+        assert!(progress_json.contains("\"status\":\"solve_error\""));
         assert!(progress_json.contains("\"state\":\"solve_error\""));
+        assert!(progress_json.contains("\"complete\":false"));
+        assert!(progress_json.contains("\"demag_mode\":\"periodic_airbox_k0\""));
         assert!(progress_json.contains("\"partial_artifacts_available\":true"));
         assert!(progress_json.contains("\"native_iteration_count\":8"));
         assert!(progress_json.contains("\"native_relative_residual_l2_norm\":0.967"));
@@ -2864,6 +3432,8 @@ mod tests {
                 relative_residual_l2_norm: 8.0e-4,
                 converged: true,
             },
+            None,
+            Some((2.0e9, 3.0e9)),
         )
         .expect("native live progress should be written");
 
@@ -2879,6 +3449,9 @@ mod tests {
                 relative_residual_l2_norm: 8.0e-4,
                 converged: true,
             },
+            None,
+            Some((2.0e9, 3.0e9)),
+            NativeFrequencyDomainStatus::Ok,
             1,
             Some("frequency_domain/manifest.v1.json"),
         )
@@ -2889,6 +3462,9 @@ mod tests {
                 .expect("progress artifact should exist"),
         )
         .expect("progress artifact should parse");
+        assert_eq!(progress["status"], "ready");
+        assert_eq!(progress["state"], "completed");
+        assert_eq!(progress["complete"], true);
         assert_eq!(progress["written_frequency_point_artifacts"], 1);
         assert_eq!(progress["partial_artifacts_available"], true);
         assert_eq!(
@@ -2898,10 +3474,79 @@ mod tests {
         let progress_json = progress["progress_json"]
             .as_str()
             .expect("progress_json should be a string");
+        assert!(progress_json.contains("\"status\":\"ready\""));
+        assert!(progress_json.contains("\"state\":\"completed\""));
+        assert!(progress_json.contains("\"complete\":true"));
         assert!(progress_json.contains("\"written_frequency_point_artifacts\":1"));
         assert!(progress_json.contains("\"partial_artifacts_available\":true"));
         assert!(progress_json
             .contains("\"latest_artifact_manifest_path\":\"frequency_domain/manifest.v1.json\""));
+
+        let _ = std::fs::remove_dir_all(output_dir);
+    }
+
+    fn m5_equilibrium_provenance_fixture() -> fullmag_ir::FemFrequencyDomainEquilibriumProvenanceIR
+    {
+        fullmag_ir::FemFrequencyDomainEquilibriumProvenanceIR {
+            schema_version: "fem_frequency_domain_equilibrium_provenance.v1".to_string(),
+            acceptance_gate: "M5_static_pbc_demag_equilibrium".to_string(),
+            accepted: true,
+            source_kind: "m5_static_pbc_demag_equilibrium".to_string(),
+            source_artifact_root:
+                ".fullmag/reports/fem-static-pbc-demag-equilibrium-runtime/artifacts".to_string(),
+            equilibrium_field_path: "m_final.json".to_string(),
+            seam_diagnostics_path: "diagnostics/fem_static_pbc_demag_seams.v1.json".to_string(),
+            z_padding_report_path: "reports/z_padding_validation.v1.json".to_string(),
+            supercell_report_path: "reports/supercell_validation.v1.json".to_string(),
+            magnetostatic_bc: "periodic_airbox_k0".to_string(),
+            pbc_axes: vec!["x".to_string(), "y".to_string()],
+        }
+    }
+
+    #[test]
+    fn frequency_response_manifest_preserves_m5_equilibrium_provenance() {
+        let unique_suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-runner-frequency-response-m5-provenance-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+        let manifest_dir = output_dir.join("frequency_domain");
+        std::fs::create_dir_all(&manifest_dir).expect("manifest dir should be created");
+        std::fs::write(
+            manifest_dir.join("manifest.v1.json"),
+            br#"{"schema_version":"frequency_domain_manifest.v1","study_product":"driven_response"}"#,
+        )
+        .expect("manifest should be written");
+
+        patch_frequency_response_manifest_equilibrium_provenance(
+            &output_dir,
+            Some(&m5_equilibrium_provenance_fixture()),
+        )
+        .expect("M5 equilibrium provenance should patch manifest");
+
+        let manifest: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(output_dir.join("frequency_domain/manifest.v1.json"))
+                .expect("manifest should exist"),
+        )
+        .expect("manifest should parse");
+        let provenance = &manifest["equilibrium_provenance"];
+        assert_eq!(
+            provenance["schema_version"],
+            "fem_frequency_domain_equilibrium_provenance.v1"
+        );
+        assert_eq!(
+            provenance["acceptance_gate"],
+            "M5_static_pbc_demag_equilibrium"
+        );
+        assert_eq!(provenance["accepted"], true);
+        assert_eq!(provenance["source_kind"], "m5_static_pbc_demag_equilibrium");
+        assert_eq!(provenance["magnetostatic_bc"], "periodic_airbox_k0");
+        assert_eq!(provenance["pbc_axes"][0], "x");
+        assert_eq!(provenance["pbc_axes"][1], "y");
 
         let _ = std::fs::remove_dir_all(output_dir);
     }
@@ -2918,11 +3563,16 @@ mod tests {
             unique_suffix
         ));
 
-        write_initial_frequency_response_progress_artifact(&output_dir, 5)
-            .expect("initial frequency-response progress should be written");
+        write_initial_frequency_response_progress_artifact(
+            &output_dir,
+            &[2.0e9, 3.0e9, 4.0e9, 5.0e9, 6.0e9],
+            Some("periodic_airbox_k0"),
+        )
+        .expect("initial frequency-response progress should be written");
         preserve_interrupted_frequency_response_progress_artifact_if_needed(
             &output_dir,
-            5,
+            &[2.0e9, 3.0e9, 4.0e9, 5.0e9, 6.0e9],
+            Some("periodic_airbox_k0"),
             NativeFrequencyDomainStatus::Interrupted,
         )
         .expect("interrupted frequency-response progress should be preserved");
@@ -2947,11 +3597,18 @@ mod tests {
             progress["latest_artifact_manifest_path"],
             serde_json::Value::Null
         );
-        assert_eq!(progress["current_frequency_hz"], serde_json::Value::Null);
-        assert!(progress["progress_json"]
+        assert_eq!(progress["current_frequency_hz"], 2.0e9);
+        assert_eq!(progress["frequency_min_hz"], 2.0e9);
+        assert_eq!(progress["frequency_max_hz"], 6.0e9);
+        assert_eq!(progress["demag_mode"], "periodic_airbox_k0");
+        let progress_json = progress["progress_json"]
             .as_str()
-            .expect("progress_json should be a string")
-            .contains("\"state\":\"interrupted\""));
+            .expect("progress_json should be a string");
+        assert!(progress_json.contains("\"state\":\"interrupted\""));
+        assert!(progress_json.contains("\"current_frequency_hz\":2000000000.0"));
+        assert!(progress_json.contains("\"frequency_min_hz\":2000000000.0"));
+        assert!(progress_json.contains("\"frequency_max_hz\":6000000000.0"));
+        assert!(progress_json.contains("\"demag_mode\":\"periodic_airbox_k0\""));
 
         let _ = std::fs::remove_dir_all(output_dir);
     }
@@ -2984,7 +3641,8 @@ mod tests {
 
         preserve_interrupted_frequency_response_progress_artifact_if_needed(
             &output_dir,
-            5,
+            &[1.0e9, 2.0e9, 3.0e9, 4.0e9, 5.0e9],
+            None,
             NativeFrequencyDomainStatus::Interrupted,
         )
         .expect("interrupted frequency-response progress should be preserved");
@@ -3106,9 +3764,9 @@ mod tests {
         );
         assert!(
             progress_block.contains(
-                "write_native_frequency_response_progress_artifact(output_dir, progress)"
+                "write_native_frequency_response_progress_artifact(\n            output_dir,"
             ),
-            "native progress callback must persist solver iteration telemetry"
+            "native progress callback must persist solver iteration and demag telemetry"
         );
         assert!(
             progress_block.contains("Some(&progress_callback)"),
@@ -3396,6 +4054,7 @@ mod tests {
             demag_realization: None,
             demag_solver_policy: None,
             periodic_constraint_sets: Vec::new(),
+            equilibrium_provenance: None,
         }
     }
 
@@ -3488,9 +4147,8 @@ mod tests {
         let mut shared_domain = minimal_frequency_response_plan();
         shared_domain.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
         assert!(
-            super::production_cpu_frequency_response_rejection_reason(&shared_domain)
-                .expect("shared-domain mesh should reject")
-                .contains("without shared-domain airbox")
+            super::production_cpu_frequency_response_rejection_reason(&shared_domain).is_none(),
+            "shared-domain no-demag response should compact to the magnetic-node CPU slice"
         );
 
         let mut demag = minimal_frequency_response_plan();
@@ -3844,6 +4502,97 @@ mod tests {
             super::build_native_production_gpu_payload(&supported).is_some(),
             "supported GPU slice should build a native production payload"
         );
+
+        let mut shared_domain_static_periodic = supported.clone();
+        shared_domain_static_periodic.domain_mesh_mode =
+            fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
+        shared_domain_static_periodic.mesh.nodes = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, -1.0],
+            [1.0, 0.0, -1.0],
+        ];
+        shared_domain_static_periodic.mesh.elements = vec![[0, 1, 2, 3], [0, 1, 4, 5]];
+        shared_domain_static_periodic.mesh.element_markers = vec![1, 0];
+        shared_domain_static_periodic.equilibrium_magnetization = vec![
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+        ];
+        shared_domain_static_periodic.mesh.periodic_boundary_pairs =
+            vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
+                pair_id: "x_faces".to_string(),
+                source_marker: None,
+                destination_marker: None,
+                marker_a: 1,
+                marker_b: 2,
+                translation: Some([1.0, 0.0, 0.0]),
+                tolerance: Some(1.0e-12),
+                axis_hint: Some("x".to_string()),
+                orientation: None,
+                pairing_policy: None,
+            }];
+        shared_domain_static_periodic.mesh.periodic_node_pairs = vec![
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "x_faces".to_string(),
+                node_a: 0,
+                node_b: 1,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "x_faces".to_string(),
+                node_a: 4,
+                node_b: 5,
+            },
+        ];
+        shared_domain_static_periodic.spin_wave_bc =
+            fullmag_ir::SpinWaveBoundaryConditionIR::Config(fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: fullmag_ir::SpinWaveBoundaryKindIR::Periodic,
+                boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            });
+        assert!(
+            super::production_gpu_frequency_response_rejection_reason(
+                &shared_domain_static_periodic
+            )
+            .is_none(),
+            "explicit GPU shared-domain no-demag static-periodic response should reach the native magnetic slice"
+        );
+        let magnetic_node_indices =
+            super::frequency_response_magnetic_node_indices(&shared_domain_static_periodic)
+                .expect("shared-domain response should identify magnetic nodes");
+        assert_eq!(magnetic_node_indices, vec![0, 1, 2, 3]);
+        #[cfg(feature = "fem-gpu")]
+        {
+            let cpu_payload =
+                super::build_native_production_cpu_payload(&shared_domain_static_periodic)
+                    .expect("shared-domain no-demag CPU response should build a compact payload");
+            assert_eq!(cpu_payload.equilibrium_magnetization.len(), 4);
+            assert_eq!(cpu_payload.static_periodic_node_pairs.len(), 1);
+            assert!(cpu_payload
+                .periodic_airbox_magnetostatic_periodic_node_pairs
+                .is_empty());
+            assert!(!cpu_payload.requires_periodic_airbox_dynamic_demag);
+            assert_eq!(cpu_payload.periodic_airbox_delta_phi_dof_count, 0);
+
+            let payload =
+                super::build_native_production_gpu_payload(&shared_domain_static_periodic)
+                    .expect("shared-domain no-demag GPU response should build a compact payload");
+            assert_eq!(payload.equilibrium_magnetization.len(), 4);
+            assert_eq!(payload.static_periodic_node_pairs.len(), 1);
+            assert!(payload
+                .periodic_airbox_magnetostatic_periodic_node_pairs
+                .is_empty());
+            assert!(!payload.requires_periodic_airbox_dynamic_demag);
+            assert_eq!(payload.periodic_airbox_delta_phi_dof_count, 0);
+        }
 
         let mut demag = supported.clone();
         demag.enable_demag = true;

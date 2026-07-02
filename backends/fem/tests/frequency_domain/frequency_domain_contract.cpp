@@ -588,6 +588,12 @@ void initial_sweep_progress_reports_not_started_contract()
     check(
         contains(progress.progress_json, "frequency_domain_sweep_progress.v1"),
         "progress JSON reports schema");
+    check(
+        contains(progress.progress_json, "\"status\":\"running\""),
+        "initial progress JSON mirrors running status");
+    check(
+        contains(progress.progress_json, "\"complete\":false"),
+        "initial progress JSON mirrors incomplete state");
 }
 
 void interrupted_sweep_progress_preserves_partial_artifacts()
@@ -1120,6 +1126,21 @@ void c_abi_reports_frequency_domain_progress()
     check(
         contains(initial.progress_json, "not_started"),
         "C ABI initial progress JSON reports not started");
+    check(
+        contains(initial.progress_json, "\"status\":\"running\""),
+        "C ABI initial progress JSON mirrors running status");
+    check(
+        contains(initial.progress_json, "\"complete\":false"),
+        "C ABI initial progress JSON mirrors incomplete state");
+    check(
+        contains(initial.progress_json, "\"total_frequency_points\":11"),
+        "C ABI initial progress JSON mirrors total count");
+    check(
+        contains(initial.progress_json, "\"completed_frequency_points\":0"),
+        "C ABI initial progress JSON mirrors completed count");
+    check(
+        contains(initial.progress_json, "\"written_frequency_point_artifacts\":0"),
+        "C ABI initial progress JSON mirrors written count");
 
     fullmag_fem_frequency_domain_sweep_progress interrupted{};
     check(
@@ -1147,6 +1168,26 @@ void c_abi_reports_frequency_domain_progress()
     check(
         contains(interrupted.progress_json, "interrupted"),
         "C ABI interrupted progress JSON reports interrupted");
+    check(
+        contains(interrupted.progress_json, "\"status\":\"interrupted\""),
+        "C ABI interrupted progress JSON mirrors status");
+    check(
+        contains(interrupted.progress_json, "\"complete\":false"),
+        "C ABI interrupted progress JSON mirrors completeness");
+    check(
+        contains(interrupted.progress_json, "\"total_frequency_points\":11"),
+        "C ABI interrupted progress JSON mirrors total count");
+    check(
+        contains(interrupted.progress_json, "\"completed_frequency_points\":3"),
+        "C ABI interrupted progress JSON mirrors completed count");
+    check(
+        contains(interrupted.progress_json, "\"written_frequency_point_artifacts\":3"),
+        "C ABI interrupted progress JSON mirrors written count");
+    check(
+        contains(
+            interrupted.progress_json,
+            "\"latest_artifact_manifest_path\":\"frequency_domain/manifest.v1.json\""),
+        "C ABI interrupted progress JSON mirrors manifest path");
 
     fullmag_fem_frequency_domain_sweep_progress pre_first_interrupted{};
     check(
@@ -1164,6 +1205,9 @@ void c_abi_reports_frequency_domain_progress()
     check(
         contains(pre_first_interrupted.progress_json, "\"partial_artifacts_available\":false"),
         "C ABI pre-first interrupted progress JSON reports no partials");
+    check(
+        contains(pre_first_interrupted.progress_json, "\"completed_frequency_points\":0"),
+        "C ABI pre-first interrupted progress JSON mirrors completed count");
 
     fullmag_fem_frequency_domain_sweep_progress cancelling{};
     check(
@@ -1191,6 +1235,26 @@ void c_abi_reports_frequency_domain_progress()
     check(
         contains(cancelling.progress_json, "cancel_requested"),
         "C ABI cancelling progress JSON reports cancel request");
+    check(
+        contains(cancelling.progress_json, "\"status\":\"cancel_requested\""),
+        "C ABI cancelling progress JSON mirrors status");
+    check(
+        contains(cancelling.progress_json, "\"complete\":false"),
+        "C ABI cancelling progress JSON mirrors completeness");
+    check(
+        contains(cancelling.progress_json, "\"total_frequency_points\":11"),
+        "C ABI cancelling progress JSON mirrors total count");
+    check(
+        contains(cancelling.progress_json, "\"completed_frequency_points\":3"),
+        "C ABI cancelling progress JSON mirrors completed count");
+    check(
+        contains(cancelling.progress_json, "\"written_frequency_point_artifacts\":3"),
+        "C ABI cancelling progress JSON mirrors written count");
+    check(
+        contains(
+            cancelling.progress_json,
+            "\"latest_artifact_manifest_path\":\"frequency_domain/manifest.v1.json\""),
+        "C ABI cancelling progress JSON mirrors manifest path");
 
     fullmag_fem_frequency_domain_sweep_progress pre_first_cancelling{};
     check(
@@ -1208,6 +1272,9 @@ void c_abi_reports_frequency_domain_progress()
     check(
         contains(pre_first_cancelling.progress_json, "\"partial_artifacts_available\":false"),
         "C ABI pre-first cancelling progress JSON reports no partials");
+    check(
+        contains(pre_first_cancelling.progress_json, "\"completed_frequency_points\":0"),
+        "C ABI pre-first cancelling progress JSON mirrors completed count");
 
     fullmag_fem_frequency_domain_sweep_progress completed{};
     check(
@@ -1235,6 +1302,21 @@ void c_abi_reports_frequency_domain_progress()
     check(
         contains(completed.progress_json, "completed"),
         "C ABI completed progress JSON reports completed");
+    check(
+        contains(completed.progress_json, "\"status\":\"ready\""),
+        "C ABI completed progress JSON mirrors ready status");
+    check(
+        contains(completed.progress_json, "\"complete\":true"),
+        "C ABI completed progress JSON mirrors completeness");
+    check(
+        contains(completed.progress_json, "\"total_frequency_points\":11"),
+        "C ABI completed progress JSON mirrors total count");
+    check(
+        contains(completed.progress_json, "\"completed_frequency_points\":11"),
+        "C ABI completed progress JSON mirrors completed count");
+    check(
+        contains(completed.progress_json, "\"written_frequency_point_artifacts\":11"),
+        "C ABI completed progress JSON mirrors written count");
 }
 
 void tangent_frame_builds_orthonormal_basis_and_projects_vectors()
@@ -2154,6 +2236,18 @@ void driven_response_solver_writes_failure_artifacts_for_unavailable_run()
     check(
         contains(progress.c_str(), "\"total_frequency_points\":2"),
         "failure progress records requested frequency count");
+    check(
+        contains(progress.c_str(), "\"current_frequency_hz\":null"),
+        "failure progress records null current frequency");
+    check(
+        contains(progress.c_str(), "\"progress_json\":\"{\\\"schema_version\\\":\\\"frequency_domain_sweep_progress.v1\\\""),
+        "failure progress carries nested checkpoint JSON");
+    check(
+        contains(progress.c_str(), "\\\"status\\\":\\\"unavailable\\\""),
+        "failure nested checkpoint mirrors unavailable status");
+    check(
+        contains(progress.c_str(), "\\\"total_frequency_points\\\":2"),
+        "failure nested checkpoint mirrors requested frequency count");
 
     char response_path[256]{};
     std::snprintf(
@@ -5251,6 +5345,9 @@ void production_cpu_periodic_airbox_dynamic_demag_solves_mfem_demag_tangent_prov
         contains(result.diagnostics_json, "\"dynamic_demag_operator_source\":\"matrix_free_mfem_demag_phi_consistency_schur_provider\""),
         "periodic-airbox demag tangent-with-potential provider diagnostics reports phi-consistency Schur provider source");
     check(
+        contains(result.diagnostics_json, "\"krylov_preconditioner_variant\":\"graph_demag_coarse\""),
+        "periodic-airbox demag tangent-with-potential provider diagnostics reports graph-aware preconditioner variant");
+    check(
         contains(result.diagnostics_json, "\"coupled_residual_partition_status\":\"coupled_block\""),
         "periodic-airbox demag tangent-with-potential provider diagnostics reports coupled residual partition");
     check(
@@ -5305,6 +5402,9 @@ void production_cpu_periodic_airbox_dynamic_demag_solves_mfem_demag_tangent_prov
     check(
         contains(solver_diagnostics.c_str(), "\"coupled_residual_partition_status\":\"coupled_block\""),
         "periodic-airbox demag tangent-with-potential provider solver diagnostics records coupled residual partition");
+    check(
+        contains(solver_diagnostics.c_str(), "\"krylov_preconditioner_variant\":\"graph_demag_coarse\""),
+        "periodic-airbox demag tangent-with-potential provider solver diagnostics records graph-aware preconditioner variant");
     check(
         contains(solver_diagnostics.c_str(), "\"coupled_block_norms\":{\"rhs_delta_m_l2_norm\":"),
         "periodic-airbox demag tangent provider solver diagnostics records magnetic split norms");
@@ -5476,6 +5576,9 @@ void production_cpu_periodic_airbox_dynamic_demag_writes_phi_consistency_artifac
     check(
         contains(diagnostics.c_str(), "\"dynamic_demag_operator_source\":\"matrix_free_mfem_demag_phi_consistency_schur_provider\""),
         "no-exchange phi-consistency diagnostics records Schur provider source");
+    check(
+        contains(diagnostics.c_str(), "\"krylov_preconditioner_variant\":\"demag_coarse\""),
+        "no-exchange phi-consistency diagnostics records demag-coarse preconditioner variant");
     check(
         contains(diagnostics.c_str(), "\"coupled_block_norms\":{\"rhs_delta_m_l2_norm\":"),
         "no-exchange phi-consistency diagnostics records coupled split norms");
@@ -5703,6 +5806,9 @@ void production_cpu_periodic_airbox_phi_consistency_solve_error_writes_bounded_a
         contains(progress.c_str(), "\"partial_artifacts_available\":true"),
         "phi-consistency solve_error progress reports bounded artifacts");
     check(
+        !contains(progress.c_str(), "\"current_frequency_hz\":null"),
+        "phi-consistency solve_error progress keeps failed frequency");
+    check(
         contains(periodic_pairs.c_str(), "\"pair_count\":1"),
         "phi-consistency solve_error writes periodic-pair metadata");
 
@@ -5857,6 +5963,7 @@ void driven_response_solver_runs_assembled_mfem_validation_problem()
     request.mfem_validation_problem.nodes = &node;
     request.mfem_validation_problem.h_ext_a_per_m = h_ext_a_per_m;
     request.mfem_validation_problem.drive_real = drive_real;
+    request.mfem_validation_problem.observable_uniform_ms = 2.0;
 
     fd::DrivenFrequencyResponseSolveResult result{};
     const fd::FrequencyDomainStatus status =
@@ -6970,6 +7077,7 @@ void driven_response_solver_writes_minimal_assembled_validation_artifacts()
     request.mfem_validation_problem.nodes = &node;
     request.mfem_validation_problem.h_ext_a_per_m = h_ext_a_per_m;
     request.mfem_validation_problem.drive_real = drive_real;
+    request.mfem_validation_problem.observable_uniform_ms = 2.0;
 
     fd::DrivenFrequencyResponseSolveResult result{};
     const fd::FrequencyDomainStatus status =
@@ -7048,32 +7156,32 @@ void driven_response_solver_writes_minimal_assembled_validation_artifacts()
         !contains(sweep.c_str(), "\"susceptibility_tensor\":[]"),
         "response sweep does not emit an empty susceptibility placeholder");
     check(
-        contains(sweep.c_str(), "\"susceptibility_tensor_provenance\":{\"kind\":\"drive_projected_scalar\""),
+        contains(sweep.c_str(), "\"susceptibility_tensor_provenance\":{\"kind\":\"drive_projected_si_susceptibility\""),
         "response sweep records susceptibility provenance");
     check(
-        contains(sweep.c_str(), "\"response_quantity\":\"delta_m_over_h_drive\""),
-        "response sweep labels normalized delta_m over drive response");
+        contains(sweep.c_str(), "\"response_quantity\":\"delta_M_over_h_drive\""),
+        "response sweep labels SI delta_M over drive response");
     check(
-        contains(sweep.c_str(), "\"response_units\":\"m/A\""),
-        "response sweep labels normalized response units");
+        contains(sweep.c_str(), "\"response_units\":\"dimensionless\""),
+        "response sweep labels SI susceptibility units");
     check(
-        contains(sweep.c_str(), "\"dimensionless_si_susceptibility\":false"),
-        "response sweep does not label normalized response as dimensionless SI susceptibility");
+        contains(sweep.c_str(), "\"dimensionless_si_susceptibility\":true"),
+        "response sweep labels Ms-correct response as dimensionless SI susceptibility");
     check(
-        contains(sweep.c_str(), "\"requires_ms_for_chi_si\":true"),
-        "response sweep records Ms requirement for SI susceptibility");
+        contains(sweep.c_str(), "\"ms_factor_applied\":true"),
+        "response sweep records applied Ms factor for SI susceptibility");
     check(
-        contains(sweep.c_str(), "\"absorbed_power_density_provenance\":{\"kind\":\"drive_projected_absorption_proxy\""),
+        contains(sweep.c_str(), "\"absorbed_power_density_provenance\":{\"kind\":\"drive_projected_absorbed_power_density\""),
         "response sweep records absorbed power provenance");
     check(
-        contains(sweep.c_str(), "\"physical_power_density\":false"),
-        "response sweep labels current absorbed-power value as a proxy");
+        contains(sweep.c_str(), "\"physical_power_density\":true"),
+        "response sweep labels absorbed-power value as physical density");
     check(
-        contains(sweep.c_str(), "\"units\":\"proxy_not_W_per_m3\""),
-        "response sweep labels absorbed-power proxy units");
+        contains(sweep.c_str(), "\"units\":\"W/m^3\""),
+        "response sweep labels absorbed-power density units");
     check(
-        contains(sweep.c_str(), "\"requires_mu0_ms_factor\":true"),
-        "response sweep records mu0 Ms requirement for physical absorbed power");
+        contains(sweep.c_str(), "\"mu0_ms_factor_applied\":true"),
+        "response sweep records applied mu0 Ms factor for physical absorbed power");
     check(
         contains(sweep.c_str(), "\"tangent_leakage\":{\"status\":\"evaluated\""),
         "response sweep records evaluated tangent leakage");
@@ -7233,32 +7341,32 @@ void driven_response_solver_writes_minimal_assembled_validation_artifacts()
         contains(point.c_str(), "\"susceptibility_tensor\":[["),
         "frequency point metadata records non-empty susceptibility summary");
     check(
-        contains(point.c_str(), "\"susceptibility_tensor_provenance\":{\"kind\":\"drive_projected_scalar\""),
+        contains(point.c_str(), "\"susceptibility_tensor_provenance\":{\"kind\":\"drive_projected_si_susceptibility\""),
         "frequency point metadata records susceptibility provenance");
     check(
-        contains(point.c_str(), "\"response_quantity\":\"delta_m_over_h_drive\""),
-        "frequency point metadata labels normalized delta_m over drive response");
+        contains(point.c_str(), "\"response_quantity\":\"delta_M_over_h_drive\""),
+        "frequency point metadata labels SI delta_M over drive response");
     check(
-        contains(point.c_str(), "\"response_units\":\"m/A\""),
-        "frequency point metadata labels normalized response units");
+        contains(point.c_str(), "\"response_units\":\"dimensionless\""),
+        "frequency point metadata labels SI susceptibility units");
     check(
-        contains(point.c_str(), "\"dimensionless_si_susceptibility\":false"),
-        "frequency point metadata does not label normalized response as dimensionless SI susceptibility");
+        contains(point.c_str(), "\"dimensionless_si_susceptibility\":true"),
+        "frequency point metadata labels Ms-correct response as dimensionless SI susceptibility");
     check(
-        contains(point.c_str(), "\"requires_ms_for_chi_si\":true"),
-        "frequency point metadata records Ms requirement for SI susceptibility");
+        contains(point.c_str(), "\"ms_factor_applied\":true"),
+        "frequency point metadata records applied Ms factor for SI susceptibility");
     check(
-        contains(point.c_str(), "\"absorbed_power_density_provenance\":{\"kind\":\"drive_projected_absorption_proxy\""),
+        contains(point.c_str(), "\"absorbed_power_density_provenance\":{\"kind\":\"drive_projected_absorbed_power_density\""),
         "frequency point metadata records absorbed power provenance");
     check(
-        contains(point.c_str(), "\"physical_power_density\":false"),
-        "frequency point metadata labels current absorbed-power value as a proxy");
+        contains(point.c_str(), "\"physical_power_density\":true"),
+        "frequency point metadata labels absorbed-power value as physical density");
     check(
-        contains(point.c_str(), "\"units\":\"proxy_not_W_per_m3\""),
-        "frequency point metadata labels absorbed-power proxy units");
+        contains(point.c_str(), "\"units\":\"W/m^3\""),
+        "frequency point metadata labels absorbed-power density units");
     check(
-        contains(point.c_str(), "\"requires_mu0_ms_factor\":true"),
-        "frequency point metadata records mu0 Ms requirement for physical absorbed power");
+        contains(point.c_str(), "\"mu0_ms_factor_applied\":true"),
+        "frequency point metadata records applied mu0 Ms factor for physical absorbed power");
     check(
         contains(point.c_str(), "\"residual_l2_norm\":"),
         "frequency point metadata records residual norm");
@@ -7541,6 +7649,31 @@ void production_cpu_lane_interruption_preserves_partial_artifacts()
     check(
         contains(progress.c_str(), "\"latest_artifact_manifest_path\":\"frequency_domain/manifest.v1.json\""),
         "production CPU interrupted progress records latest manifest path");
+    check(
+        contains(progress.c_str(), "\"progress_json\":\"{\\\"schema_version\\\":\\\"frequency_domain_sweep_progress.v1\\\""),
+        "production CPU interrupted progress carries nested checkpoint JSON");
+    check(
+        contains(progress.c_str(), "\\\"status\\\":\\\"interrupted\\\""),
+        "production CPU interrupted nested checkpoint mirrors status");
+    char cancel_requested_path[256]{};
+    std::snprintf(
+        cancel_requested_path,
+        sizeof(cancel_requested_path),
+        "%s/response/cancel_requested.v1.json",
+        output_directory);
+    const std::string cancel_requested = read_text_file(cancel_requested_path);
+    check(
+        contains(cancel_requested.c_str(), "\"status\":\"cancel_requested\""),
+        "production CPU cancel-request artifact records cancel status");
+    check(
+        contains(cancel_requested.c_str(), "\"state\":\"cancel_requested\""),
+        "production CPU cancel-request artifact records cancel state");
+    check(
+        contains(cancel_requested.c_str(), "\"progress_json\":\"{\\\"schema_version\\\":\\\"frequency_domain_sweep_progress.v1\\\""),
+        "production CPU cancel-request artifact carries nested checkpoint JSON");
+    check(
+        contains(cancel_requested.c_str(), "\\\"status\\\":\\\"cancel_requested\\\""),
+        "production CPU cancel-request nested checkpoint mirrors status");
 
     fd::release_driven_frequency_response_result(&result);
 }
@@ -7649,6 +7782,31 @@ void driven_response_solver_interruption_preserves_partial_validation_artifacts(
     check(
         contains(progress.c_str(), "\"written_frequency_point_artifacts\":1"),
         "interrupted progress records durable point count");
+    check(
+        contains(progress.c_str(), "\"progress_json\":\"{\\\"schema_version\\\":\\\"frequency_domain_sweep_progress.v1\\\""),
+        "interrupted progress carries nested checkpoint JSON");
+    check(
+        contains(progress.c_str(), "\\\"status\\\":\\\"interrupted\\\""),
+        "interrupted nested checkpoint mirrors status");
+    char cancel_requested_path[256]{};
+    std::snprintf(
+        cancel_requested_path,
+        sizeof(cancel_requested_path),
+        "%s/response/cancel_requested.v1.json",
+        output_directory);
+    const std::string cancel_requested = read_text_file(cancel_requested_path);
+    check(
+        contains(cancel_requested.c_str(), "\"status\":\"cancel_requested\""),
+        "cancel-request artifact records cancel status");
+    check(
+        contains(cancel_requested.c_str(), "\"state\":\"cancel_requested\""),
+        "cancel-request artifact records cancel state");
+    check(
+        contains(cancel_requested.c_str(), "\"progress_json\":\"{\\\"schema_version\\\":\\\"frequency_domain_sweep_progress.v1\\\""),
+        "cancel-request artifact carries nested checkpoint JSON");
+    check(
+        contains(cancel_requested.c_str(), "\\\"status\\\":\\\"cancel_requested\\\""),
+        "cancel-request nested checkpoint mirrors status");
 
     char completed_point_path[256]{};
     std::snprintf(

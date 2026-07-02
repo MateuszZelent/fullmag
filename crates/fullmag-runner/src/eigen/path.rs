@@ -141,4 +141,44 @@ mod tests {
             .all(|pair| pair[0].path_s < pair[1].path_s));
         assert_eq!(samples[4].path_s, 4.0);
     }
+
+    #[test]
+    fn closed_path_expansion_includes_return_segment_to_first_point() {
+        let sampling = KSamplingIR::Path {
+            points: vec![
+                KPointIR {
+                    label: Some("G".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+                KPointIR {
+                    label: Some("X".to_string()),
+                    k_vector: [2.0, 0.0, 0.0],
+                },
+                KPointIR {
+                    label: Some("M".to_string()),
+                    k_vector: [2.0, 2.0, 0.0],
+                },
+            ],
+            samples_per_segment: vec![2, 2, 2],
+            closed: true,
+        };
+
+        let samples = expand_k_sampling(Some(&sampling)).expect("closed path should expand");
+
+        assert_eq!(samples.len(), 7);
+        assert_eq!(samples[0].label.as_deref(), Some("G"));
+        assert_eq!(samples[2].label.as_deref(), Some("X"));
+        assert_eq!(samples[4].label.as_deref(), Some("M"));
+        assert_eq!(
+            samples.last().map(|sample| sample.k_vector),
+            Some([0.0, 0.0, 0.0])
+        );
+        assert_eq!(
+            samples.last().and_then(|sample| sample.segment_index),
+            Some(2)
+        );
+        assert!(samples
+            .windows(2)
+            .all(|pair| pair[0].path_s < pair[1].path_s));
+    }
 }

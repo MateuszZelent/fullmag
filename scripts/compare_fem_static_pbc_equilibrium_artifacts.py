@@ -29,6 +29,11 @@ DEFAULT_INTERPOLATION_BARYCENTRIC_TOL = 1.0e-10
 DEFAULT_MAX_INTERPOLATED_M_P99_L2_DELTA = 2.0e-2
 DEFAULT_MAX_INTERPOLATED_H_DEMAG_P99_RELERR = 2.0e-2
 DEFAULT_MAX_INTERPOLATED_DEMAG_PHI_DELTA_A = 1.0e-6
+DEFAULT_MAX_M_SEAM_MISMATCH = 1.0e-6
+DEFAULT_MAX_H_DEMAG_SEAM_MISMATCH_APM = 1.0e-3
+DEFAULT_MAX_DEMAG_PHI_SEAM_MISMATCH_A = 1.0e-6
+DEFAULT_MAX_B_NORMAL_FLUX_SEAM_MISMATCH_T = 1.0e-12
+DEFAULT_MAX_SIDE_MAGNETIC_CHARGE_SUM_ABS_AM = 1.0e-18
 STATE_FINAL = "final"
 STATE_INITIAL = "initial"
 
@@ -114,6 +119,9 @@ def metadata_contract(root: Path) -> dict[str, Any]:
         pbc.get("demag") == "periodic_airbox_k0",
         f"{root}/metadata.pbc.demag must be periodic_airbox_k0",
     )
+    require_static_pbc_demag_runtime_contract(root, metadata)
+    require_periodic_pairs_artifact(root, metadata)
+    require_static_pbc_demag_seam_diagnostics(root)
     axes = require_list(pbc.get("axes"), f"{root}/metadata.pbc.axes")
     periodic = require_object(
         metadata.get("periodic_antidot_relaxation"),
@@ -156,6 +164,292 @@ def metadata_contract(root: Path) -> dict[str, Any]:
         "periodic_pair_ids": periodic_pair_ids,
         "exchange_coupled_across_periods": bool(periodic.get("exchange_coupled_across_periods")),
     }
+
+
+def m_final_step(root: Path) -> int:
+    payload = load_json(root / "m_final.json")
+    step = payload.get("step")
+    require(isinstance(step, int) and step >= 0, f"{root}/m_final.json.step must be non-negative integer")
+    return step
+
+
+def require_static_pbc_demag_seam_diagnostics(root: Path) -> None:
+    path = root / "diagnostics" / "fem_static_pbc_demag_seams.v1.json"
+    require(path.is_file(), f"missing static PBC demag seam diagnostics artifact: {path}")
+    payload = load_json(path)
+    require(
+        payload.get("schema_version") == "fem_static_pbc_demag_seams.v1",
+        f"{path}.schema_version must be fem_static_pbc_demag_seams.v1",
+    )
+    require(payload.get("status") == "ok", f"{path}.status must be ok")
+    require(
+        payload.get("step") == m_final_step(root),
+        f"{path}.step must match m_final.json.step",
+    )
+    pair_diagnostics = require_list(payload.get("pair_diagnostics"), f"{path}.pair_diagnostics")
+    pair_ids: set[str] = set()
+    for index, raw_pair in enumerate(pair_diagnostics):
+        pair = require_object(raw_pair, f"{path}.pair_diagnostics[{index}]")
+        pair_id = pair.get("pair_id")
+        require(isinstance(pair_id, str) and pair_id, f"{path}.pair_diagnostics[{index}].pair_id must be non-empty")
+        pair_ids.add(pair_id)
+        metric_limits = {
+            "m_seam_max": DEFAULT_MAX_M_SEAM_MISMATCH,
+            "h_demag_seam_max_Apm": DEFAULT_MAX_H_DEMAG_SEAM_MISMATCH_APM,
+            "demag_phi_seam_max_after_offset_A": DEFAULT_MAX_DEMAG_PHI_SEAM_MISMATCH_A,
+            "b_normal_flux_seam_max_T": DEFAULT_MAX_B_NORMAL_FLUX_SEAM_MISMATCH_T,
+            "side_magnetic_charge_sum_abs_Am": DEFAULT_MAX_SIDE_MAGNETIC_CHARGE_SUM_ABS_AM,
+        }
+        for metric, limit in metric_limits.items():
+            value = finite_number(pair.get(metric), f"{path}.{pair_id}.{metric}")
+            require(value >= 0.0, f"{path}.{pair_id}.{metric} must be non-negative")
+            require(
+                value <= limit,
+                f"{path}.{pair_id}.{metric} exceeds {limit:.6e}: {value:.6e}",
+            )
+    for pair_id in ("x_faces", "y_faces"):
+        require(pair_id in pair_ids, f"{path} missing pair {pair_id}")
+
+
+def require_periodic_pairs_artifact(root: Path, metadata: dict[str, Any]) -> None:
+    path = root / "mesh" / "periodic_pairs.v1.json"
+    require(path.is_file(), f"missing periodic pairs artifact: {path}")
+    payload = load_json(path)
+    require(payload.get("schema_version") == "periodic_pairs.v1", f"{path}.schema_version must be periodic_pairs.v1")
+    require(payload.get("validation_status") == "ok", f"{path}.validation_status must be ok")
+    mesh = require_object(metadata.get("mesh"), f"{root}/metadata.mesh")
+    mesh_node_count = mesh.get("periodic_node_pair_count")
+    require(
+        isinstance(mesh_node_count, int) and mesh_node_count > 0,
+        f"{root}/metadata.mesh.periodic_node_pair_count must be positive",
+    )
+    mesh_boundary_count = mesh.get("periodic_boundary_pair_count")
+    require(
+        isinstance(mesh_boundary_count, int) and mesh_boundary_count > 0,
+        f"{root}/metadata.mesh.periodic_boundary_pair_count must be positive",
+    )
+    mesh_node_counts = require_object(
+        mesh.get("periodic_node_pair_counts_by_id"),
+        f"{root}/metadata.mesh.periodic_node_pair_counts_by_id",
+    )
+    mesh_boundary_counts = require_object(
+        mesh.get("periodic_boundary_pair_counts_by_id"),
+        f"{root}/metadata.mesh.periodic_boundary_pair_counts_by_id",
+    )
+    pairs = require_list(payload.get("pairs"), f"{path}.pairs")
+    require(payload.get("pair_count") == len(pairs), f"{path}.pair_count must match pairs length")
+    require(payload.get("paired_node_count") == mesh_node_count, f"{path}.paired_node_count must match metadata.mesh")
+    pair_ids: set[str] = set()
+    paired_node_sum = 0
+    boundary_pair_sum = 0
+    for index, raw_pair in enumerate(pairs):
+        pair = require_object(raw_pair, f"{path}.pairs[{index}]")
+        pair_id = pair.get("pair_id")
+        require(isinstance(pair_id, str) and pair_id, f"{path}.pairs[{index}].pair_id must be non-empty")
+        pair_ids.add(pair_id)
+        require(pair.get("status") == "valid", f"{path}.{pair_id}.status must be valid")
+        paired_node_count = pair.get("paired_node_count")
+        mesh_pair_node_count = mesh_node_counts.get(pair_id)
+        require(
+            isinstance(mesh_pair_node_count, int) and mesh_pair_node_count > 0,
+            f"{root}/metadata.mesh.periodic_node_pair_counts_by_id.{pair_id} must be positive",
+        )
+        require(
+            paired_node_count == mesh_pair_node_count,
+            f"{path}.{pair_id}.paired_node_count must match metadata.mesh",
+        )
+        paired_node_sum += mesh_pair_node_count
+        domain_counts = require_object(pair.get("domain_node_pair_counts"), f"{path}.{pair_id}.domain_node_pair_counts")
+        magnetic_count = domain_counts.get("magnetic")
+        airbox_count = domain_counts.get("airbox")
+        require(isinstance(magnetic_count, int) and magnetic_count >= 0, f"{path}.{pair_id}.domain_node_pair_counts.magnetic must be non-negative")
+        require(isinstance(airbox_count, int) and airbox_count > 0, f"{path}.{pair_id}.domain_node_pair_counts.airbox must be positive")
+        require(
+            magnetic_count + airbox_count == paired_node_count,
+            f"{path}.{pair_id}.domain_node_pair_counts must sum to paired_node_count",
+        )
+        node_pairs = require_list(pair.get("node_pairs"), f"{path}.{pair_id}.node_pairs")
+        require(
+            len(node_pairs) == paired_node_count,
+            f"{path}.{pair_id}.node_pairs must contain {paired_node_count} entries",
+        )
+        for node_pair_index, raw_node_pair in enumerate(node_pairs):
+            node_pair = require_object(
+                raw_node_pair,
+                f"{path}.{pair_id}.node_pairs[{node_pair_index}]",
+            )
+            node_a = node_pair.get("node_a")
+            node_b = node_pair.get("node_b")
+            require(
+                isinstance(node_a, int) and node_a >= 0,
+                f"{path}.{pair_id}.node_pairs[{node_pair_index}].node_a must be non-negative integer",
+            )
+            require(
+                isinstance(node_b, int) and node_b >= 0,
+                f"{path}.{pair_id}.node_pairs[{node_pair_index}].node_b must be non-negative integer",
+            )
+        boundary_face_pairs = require_list(pair.get("boundary_face_pairs"), f"{path}.{pair_id}.boundary_face_pairs")
+        require(boundary_face_pairs, f"{path}.{pair_id}.boundary_face_pairs must be non-empty")
+        mesh_pair_boundary_count = mesh_boundary_counts.get(pair_id)
+        require(
+            isinstance(mesh_pair_boundary_count, int) and mesh_pair_boundary_count > 0,
+            f"{root}/metadata.mesh.periodic_boundary_pair_counts_by_id.{pair_id} must be positive",
+        )
+        require(
+            len(boundary_face_pairs) == mesh_pair_boundary_count,
+            f"{path}.{pair_id}.boundary_face_pairs length must match metadata.mesh",
+        )
+        for face_pair_index, raw_face_pair in enumerate(boundary_face_pairs):
+            face_pair = require_object(
+                raw_face_pair,
+                f"{path}.{pair_id}.boundary_face_pairs[{face_pair_index}]",
+            )
+            face_a = face_pair.get("face_a")
+            face_b = face_pair.get("face_b")
+            require(
+                isinstance(face_a, int) and face_a >= 0,
+                f"{path}.{pair_id}.boundary_face_pairs[{face_pair_index}].face_a must be non-negative integer",
+            )
+            require(
+                isinstance(face_b, int) and face_b >= 0,
+                f"{path}.{pair_id}.boundary_face_pairs[{face_pair_index}].face_b must be non-negative integer",
+            )
+            translation = require_list(
+                face_pair.get("translation_m"),
+                f"{path}.{pair_id}.boundary_face_pairs[{face_pair_index}].translation_m",
+            )
+            require(
+                len(translation) == 3,
+                f"{path}.{pair_id}.boundary_face_pairs[{face_pair_index}].translation_m must be a 3-vector",
+            )
+            for component_index, component in enumerate(translation):
+                finite_number(
+                    component,
+                    f"{path}.{pair_id}.boundary_face_pairs[{face_pair_index}].translation_m[{component_index}]",
+                )
+            require(
+                face_pair.get("orientation") == "opposed_normals",
+                f"{path}.{pair_id}.boundary_face_pairs[{face_pair_index}].orientation must be opposed_normals",
+            )
+            normal_dot = finite_number(
+                face_pair.get("normal_dot"),
+                f"{path}.{pair_id}.boundary_face_pairs[{face_pair_index}].normal_dot",
+            )
+            require(
+                normal_dot <= -0.999,
+                f"{path}.{pair_id}.boundary_face_pairs[{face_pair_index}].normal_dot must be <= -0.999",
+            )
+        boundary_pair_sum += mesh_pair_boundary_count
+    for pair_id in ("x_faces", "y_faces"):
+        require(pair_id in pair_ids, f"{path} missing pair {pair_id}")
+    require(paired_node_sum == mesh_node_count, f"{path}.paired_node_count must match per-pair-id sum")
+    require(boundary_pair_sum == mesh_boundary_count, f"{path}.boundary_face_pairs length must match metadata.mesh aggregate")
+
+
+def require_static_pbc_demag_runtime_contract(root: Path, metadata: dict[str, Any]) -> None:
+    demag = require_object(metadata.get("demag_runtime"), f"{root}/metadata.demag_runtime")
+    require(
+        demag.get("magnetostatic_boundary_model") == "periodic_airbox_k0",
+        (
+            f"{root}/metadata.demag_runtime.magnetostatic_boundary_model "
+            "must be periodic_airbox_k0"
+        ),
+    )
+    require(
+        demag.get("poisson_operator") == "pbc_reduced_poisson",
+        f"{root}/metadata.demag_runtime.poisson_operator must be pbc_reduced_poisson",
+    )
+    periodic_reduction = require_object(
+        demag.get("periodic_reduction"),
+        f"{root}/metadata.demag_runtime.periodic_reduction",
+    )
+    require(
+        periodic_reduction.get("enabled") is True,
+        f"{root}/metadata.demag_runtime.periodic_reduction.enabled must be true",
+    )
+    require(
+        periodic_reduction.get("method") == "P^T A P",
+        f"{root}/metadata.demag_runtime.periodic_reduction.method must be P^T A P",
+    )
+    require(
+        periodic_reduction.get("periodic_boundary_markers_excluded_from_robin") is True,
+        (
+            f"{root}/metadata.demag_runtime.periodic_reduction."
+            "periodic_boundary_markers_excluded_from_robin must be true"
+        ),
+    )
+    mesh = require_object(metadata.get("mesh"), f"{root}/metadata.mesh")
+    mesh_node_count = mesh.get("periodic_node_pair_count")
+    require(
+        isinstance(mesh_node_count, int) and mesh_node_count > 0,
+        f"{root}/metadata.mesh.periodic_node_pair_count must be positive",
+    )
+    mesh_boundary_count = mesh.get("periodic_boundary_pair_count")
+    require(
+        isinstance(mesh_boundary_count, int) and mesh_boundary_count > 0,
+        f"{root}/metadata.mesh.periodic_boundary_pair_count must be positive",
+    )
+    mesh_node_counts = require_object(
+        mesh.get("periodic_node_pair_counts_by_id"),
+        f"{root}/metadata.mesh.periodic_node_pair_counts_by_id",
+    )
+    mesh_boundary_counts = require_object(
+        mesh.get("periodic_boundary_pair_counts_by_id"),
+        f"{root}/metadata.mesh.periodic_boundary_pair_counts_by_id",
+    )
+    reduction_node_count = periodic_reduction.get("node_pair_count")
+    reduction_boundary_count = periodic_reduction.get("boundary_pair_count")
+    reduction_node_counts = require_object(
+        periodic_reduction.get("node_pair_counts_by_id"),
+        f"{root}/metadata.demag_runtime.periodic_reduction.node_pair_counts_by_id",
+    )
+    reduction_boundary_counts = require_object(
+        periodic_reduction.get("boundary_pair_counts_by_id"),
+        f"{root}/metadata.demag_runtime.periodic_reduction.boundary_pair_counts_by_id",
+    )
+    node_sum = 0
+    boundary_sum = 0
+    for pair_id in ("x_faces", "y_faces"):
+        mesh_pair_node_count = mesh_node_counts.get(pair_id)
+        require(
+            isinstance(mesh_pair_node_count, int) and mesh_pair_node_count > 0,
+            f"{root}/metadata.mesh.periodic_node_pair_counts_by_id.{pair_id} must be positive",
+        )
+        node_sum += mesh_pair_node_count
+        require(
+            reduction_node_counts.get(pair_id) == mesh_pair_node_count,
+            (
+                f"{root}/metadata.demag_runtime.periodic_reduction."
+                f"node_pair_counts_by_id.{pair_id} must match metadata.mesh"
+            ),
+        )
+        mesh_pair_boundary_count = mesh_boundary_counts.get(pair_id)
+        require(
+            isinstance(mesh_pair_boundary_count, int) and mesh_pair_boundary_count > 0,
+            f"{root}/metadata.mesh.periodic_boundary_pair_counts_by_id.{pair_id} must be positive",
+        )
+        boundary_sum += mesh_pair_boundary_count
+        require(
+            reduction_boundary_counts.get(pair_id) == mesh_pair_boundary_count,
+            (
+                f"{root}/metadata.demag_runtime.periodic_reduction."
+                f"boundary_pair_counts_by_id.{pair_id} must match metadata.mesh"
+            ),
+        )
+    require(
+        reduction_node_count == mesh_node_count == node_sum,
+        (
+            f"{root}/metadata.demag_runtime.periodic_reduction.node_pair_count "
+            "must match metadata.mesh and per-pair-id sum"
+        ),
+    )
+    require(
+        reduction_boundary_count == mesh_boundary_count == boundary_sum,
+        (
+            f"{root}/metadata.demag_runtime.periodic_reduction.boundary_pair_count "
+            "must match metadata.mesh and per-pair-id sum"
+        ),
+    )
 
 
 def require_same_static_workload(left_root: Path, right_root: Path) -> dict[str, Any]:

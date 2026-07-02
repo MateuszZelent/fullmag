@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { CommandRegistry } from "../commands/CommandRegistry";
 import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
+import { LayoutController } from "../layout/LayoutController";
 import { SelectionController } from "../selection/SelectionController";
 
 import { AnalysisFieldOverlayController } from "./AnalysisFieldOverlayController";
@@ -38,6 +39,10 @@ describe("analysis field overlay commands", () => {
 
     expect(result.status).toBe("completed");
     expect(overlay.getSnapshot()).toEqual({
+      appearance: {
+        shaderVisible: true,
+        surfaceColorSource: "magnitude",
+      },
       fieldId: "analysis:eigen:sample-0000:mode-0002",
       label: "Mode 2",
       query: {
@@ -80,6 +85,10 @@ describe("analysis field overlay commands", () => {
 
       expect(result.status).toBe("completed");
       expect(overlay.getSnapshot()?.query.view).toBe(expectedView);
+      expect(overlay.getSnapshot()?.appearance).toMatchObject({
+        shaderVisible: true,
+        surfaceColorSource: "magnitude",
+      });
     },
   );
 
@@ -122,6 +131,47 @@ describe("analysis field overlay commands", () => {
       },
       source: "eigen-mode",
     });
+  });
+
+  it("activates the 3D viewport when plotting a selected analysis field", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    const events = new EventBus<KernelEventMap>();
+    const layout = new LayoutController(events);
+    const selection = new SelectionController(events);
+    layout.setActiveViewportMainModule("analysis-plots");
+    selection.set(
+      {
+        kind: "results.eigen.mode",
+        label: "Mode 2",
+        nodeId: "results:eigen:sample:0:mode:2",
+        objectId: null,
+        ref: {
+          fieldId: "analysis:eigen:sample-0000:mode-0002",
+          kind: "results.eigen.mode",
+          modeIndex: 2,
+          nodeId: "results:eigen:sample:0:mode:2",
+          sampleIndex: 0,
+          type: "frequency-domain",
+        },
+      },
+      "test",
+    );
+
+    const result = await commands.execute(
+      "analysis.eigen.plot-mode-3d-imag",
+      {
+        analysisFieldOverlay: overlay,
+        layout,
+        selection,
+        source: "test",
+      },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(overlay.getSnapshot()?.query.view).toBe("imag");
+    expect(layout.get().activeViewportMainModuleId).toBe("viewport-3d");
+    expect(layout.get().focusedSlot).toBe("viewport-main");
   });
 
   it("stores mode appearance on the analysis overlay when plotting", async () => {
@@ -474,6 +524,10 @@ describe("analysis field overlay commands", () => {
     expect(overlay.getSnapshot()?.fieldId).toBe(
       "analysis:frequency-response:frequency-0003",
     );
+    expect(overlay.getSnapshot()?.appearance).toMatchObject({
+      shaderVisible: true,
+      surfaceColorSource: "magnitude",
+    });
     expect(overlay.getSnapshot()?.source).toBe("frequency-response");
   });
 

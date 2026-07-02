@@ -737,28 +737,16 @@ impl ProblemIR {
                 if let Some(KSamplingIR::Path {
                     points,
                     samples_per_segment,
-                    ..
+                    closed,
                 }) = k_sampling
                 {
-                    if points.len() < 2 {
-                        errors.push(
-                            "eigenmodes.k_sampling.path requires at least two control points"
-                                .to_string(),
-                        );
-                    }
-                    for point in points {
-                        if !point.k_vector.iter().all(|v| v.is_finite()) {
-                            errors.push(
-                                "eigenmodes.k_sampling.path point k_vector must contain finite values".to_string(),
-                            );
-                        }
-                    }
-                    if samples_per_segment.iter().any(|n| *n == 0) {
-                        errors.push(
-                            "eigenmodes.k_sampling.path samples_per_segment entries must be > 0"
-                                .to_string(),
-                        );
-                    }
+                    validate_k_sampling_path(
+                        "eigenmodes.k_sampling.path",
+                        points,
+                        samples_per_segment,
+                        *closed,
+                        &mut errors,
+                    );
                 }
                 let has_mode_output = self
                     .study
@@ -825,28 +813,16 @@ impl ProblemIR {
                 if let Some(KSamplingIR::Path {
                     points,
                     samples_per_segment,
-                    ..
+                    closed,
                 }) = k_sampling
                 {
-                    if points.len() < 2 {
-                        errors.push(
-                            "frequency_response.k_sampling.path requires at least two control points"
-                                .to_string(),
-                        );
-                    }
-                    for point in points {
-                        if !point.k_vector.iter().all(|v| v.is_finite()) {
-                            errors.push(
-                                "frequency_response.k_sampling.path point k_vector must contain finite values".to_string(),
-                            );
-                        }
-                    }
-                    if samples_per_segment.iter().any(|n| *n == 0) {
-                        errors.push(
-                            "frequency_response.k_sampling.path samples_per_segment entries must be > 0"
-                                .to_string(),
-                        );
-                    }
+                    validate_k_sampling_path(
+                        "frequency_response.k_sampling.path",
+                        points,
+                        samples_per_segment,
+                        *closed,
+                        &mut errors,
+                    );
                 }
                 if !excitation
                     .field_au_per_m
@@ -1500,6 +1476,39 @@ impl ProblemIR {
             execution_mode,
             notes,
         })
+    }
+}
+
+fn validate_k_sampling_path(
+    prefix: &str,
+    points: &[KPointIR],
+    samples_per_segment: &[u32],
+    closed: bool,
+    errors: &mut Vec<String>,
+) {
+    if points.len() < 2 {
+        errors.push(format!("{prefix} requires at least two control points"));
+    }
+    for point in points {
+        if !point.k_vector.iter().all(|v| v.is_finite()) {
+            errors.push(format!(
+                "{prefix} point k_vector must contain finite values"
+            ));
+        }
+    }
+    let expected_segments = if closed {
+        points.len()
+    } else {
+        points.len().saturating_sub(1)
+    };
+    if samples_per_segment.len() != expected_segments {
+        errors.push(format!(
+            "{prefix} expected {expected_segments} samples_per_segment entries, got {}",
+            samples_per_segment.len()
+        ));
+    }
+    if samples_per_segment.iter().any(|n| *n == 0) {
+        errors.push(format!("{prefix} samples_per_segment entries must be > 0"));
     }
 }
 

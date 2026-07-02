@@ -332,6 +332,32 @@ describe("frequencyDomainChartModels", () => {
     );
   });
 
+  it("reads analytic DE/BV reference columns from canonical dispersion CSV rows", () => {
+    const model = buildEigenDispersionChartModel(
+      textResource(
+        [
+          "sample_index,raw_mode_index,branch_id,path_s_rad_per_m,frequency_hz,analytic_frequency_hz,relative_error,validation_geometry",
+          "1,0,acoustic,25000000,1.39e9,1.4e9,0.007142857142857143,backward_volume",
+        ].join("\n"),
+      ),
+    );
+
+    expect(model.points[0]).toEqual(
+      expect.objectContaining({
+        analyticFrequencyHz: 1.4e9,
+        relativeError: 0.007142857142857143,
+        validationGeometry: "backward_volume",
+      }),
+    );
+    expect(model.series.map((series) => series.id)).toEqual([
+      "analysis.frequency-domain:eigen:dispersion:acoustic",
+      "analysis.frequency-domain:eigen:dispersion:acoustic:analytic",
+    ]);
+    expect(model.series[1]?.points).toEqual([
+      { rowIndex: 0, x: 25000000, y: 1.4 },
+    ]);
+  });
+
   it("preserves dispersion sample labels for high-symmetry k-path points", () => {
     const model = buildEigenDispersionChartModel(
       textResource(
@@ -347,6 +373,41 @@ describe("frequencyDomainChartModels", () => {
     expect(model.series[0]?.points).toEqual([
       { label: "G", rowIndex: 0, x: 0, y: 1.2 },
       { label: "X", rowIndex: 1, x: 78539816.33974482, y: 1.4 },
+    ]);
+  });
+
+  it("uses dispersion path metadata labels when the CSV row label is absent", () => {
+    const model = buildEigenDispersionChartModel({
+      path_metadata: {
+        sampling: {
+          closed: false,
+          kind: "path",
+          points: [
+            { k_vector: [0, 0, 0], label: "G" },
+            { k_vector: [78539816.33974482, 0, 0], label: "X" },
+            { k_vector: [0, 0, 0], label: "G" },
+          ],
+          samples_per_segment: [1, 1],
+        },
+      },
+      status: "ready",
+      text: [
+        "sample_index,raw_mode_index,branch_id,path_s_rad_per_m,frequency_hz",
+        "0,1,acoustic,0,1.2e9",
+        "1,1,acoustic,78539816.33974482,1.4e9",
+        "2,1,acoustic,157079632.67948964,1.2e9",
+      ].join("\n"),
+    });
+
+    expect(model.points.map((point) => point.sampleLabel)).toEqual([
+      "G",
+      "X",
+      "G",
+    ]);
+    expect(model.series[0]?.points.map((point) => point.label)).toEqual([
+      "G",
+      "X",
+      "G",
     ]);
   });
 
@@ -947,6 +1008,61 @@ describe("frequencyDomainChartModels", () => {
         source: "driven_response",
       }),
     ]);
+  });
+
+  it("links driven FMR peaks to manifest response field resources", () => {
+    const model = buildFmrPeakTableModel({
+      manifestPayload: {
+        resources: {
+          response_field_resources: [
+            {
+              field_resource_id: "analysis:frequency-response:frequency-0001",
+              frequency_index: 1,
+              payload_path:
+                "response/field_payloads/frequency_0001/vector_xyz.bin",
+            },
+          ],
+        },
+        schema_version: "frequency_domain_manifest.v1",
+      },
+      responseSweep: jsonResource(
+        {
+          points: [
+            {
+              frequency_hz: 9.5e9,
+              frequency_index: 0,
+              max_response_amplitude: 0.5,
+              observable_id: "mx",
+            },
+            {
+              frequency_hz: 10.5e9,
+              frequency_index: 1,
+              max_response_amplitude: 1.2,
+              observable_id: "mx",
+            },
+            {
+              frequency_hz: 11.5e9,
+              frequency_index: 2,
+              max_response_amplitude: 0.8,
+              observable_id: "mx",
+            },
+          ],
+          schema_version: "magnetic_response_sweep.v2",
+        },
+        "response/magnetic_response_sweep.v2.json",
+      ),
+    });
+
+    expect(model.peaks).toContainEqual(
+      expect.objectContaining({
+        fieldId: "analysis:frequency-response:frequency-0001",
+        fieldResourceKey: fieldVectorResourceKey(
+          "analysis:frequency-response:frequency-0001",
+        ),
+        frequencyPointIndex: 1,
+        source: "driven_response",
+      }),
+    );
   });
 
   it("routes fmr_response manifests to response sweep charts", () => {

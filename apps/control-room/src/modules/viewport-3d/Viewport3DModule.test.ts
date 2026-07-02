@@ -1312,13 +1312,41 @@ describe("Viewport3DModule scene wiring", () => {
     expect(source).not.toContain("interactionActive: sceneProps.interactionActive");
   });
 
+  it("keeps R3F Canvas configuration props referentially stable", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DModule.tsx", import.meta.url),
+      "utf8",
+    );
+    const canvasStart = source.indexOf("<Canvas");
+    const canvasBlock = source.slice(canvasStart, source.indexOf(">", canvasStart));
+
+    expect(source).toContain("const canvasCamera = useMemo");
+    expect(source).toContain("VIEWPORT_3D_CANVAS_GL_NO_ANTIALIAS");
+    expect(source).toContain("VIEWPORT_3D_CANVAS_GL_ANTIALIAS");
+    expect(source).toContain("VIEWPORT_3D_CANVAS_GL_CAPTURE");
+    expect(source).toContain("resolveStableViewport3DCanvasGlOptions");
+    expect(source).toContain(
+      "const canvasGlOptions = resolveStableViewport3DCanvasGlOptions(visualProfile);",
+    );
+    expect(source).toContain("const handleCanvasCreated = useCallback");
+    expect(source).toContain("const handleCanvasContextMenu = useCallback");
+    expect(source).toContain("const handleCanvasPointerMissed = useCallback");
+    expect(canvasBlock).toContain("camera={canvasCamera}");
+    expect(canvasBlock).toContain("gl={canvasGlOptions}");
+    expect(canvasBlock).toContain("onCreated={handleCanvasCreated}");
+    expect(canvasBlock).toContain("onContextMenu={handleCanvasContextMenu}");
+    expect(canvasBlock).toContain("onPointerMissed={handleCanvasPointerMissed}");
+    expect(canvasBlock).not.toContain("camera={{");
+    expect(canvasBlock).not.toContain("onCreated={({ gl }) =>");
+  });
+
   it("suppresses the native context menu because right button pans the camera", () => {
     const source = readFileSync(
       new URL("./Viewport3DModule.tsx", import.meta.url),
       "utf8",
     );
 
-    expect(source).toContain("onContextMenu={(event) => {");
+    expect(source).toContain("const handleCanvasContextMenu = useCallback");
     expect(source).toContain("event.preventDefault();");
   });
 

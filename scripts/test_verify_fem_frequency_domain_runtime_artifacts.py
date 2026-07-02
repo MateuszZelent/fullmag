@@ -53,6 +53,8 @@ def write_frequency_domain_fixture(
     omit_sweep_v1_point_count: bool = False,
     omit_sweep_v1_si_units: bool = False,
     omit_progress_schema_version: bool = False,
+    omit_progress_json: bool = False,
+    omit_manifest_progress_links: bool = False,
     omit_cancel_requested_artifact: bool = False,
     emitted_frequency_point_count: int = 2,
     progress_total_frequency_points: int = 2,
@@ -189,6 +191,7 @@ def write_frequency_domain_fixture(
                 "units": "proxy_not_W_per_m3",
                 "requires_mu0_ms_factor": True,
                 "ms_factor_applied": False,
+                "normalization": "0.5*abs(omega)*abs(imag(sum(response*conj(drive))))/tangent_dof_count",
                 "full_power_density": False,
             },
             "susceptibility_tensor": [[1.0, 0.0]],
@@ -202,6 +205,7 @@ def write_frequency_domain_fixture(
                 "dimensionless_si_susceptibility": False,
                 "requires_ms_for_chi_si": True,
                 "ms_factor_applied": False,
+                "normalization": "sum(response*conj(drive))/sum(abs(drive)^2)",
             },
             "tangent_leakage": {
                 "status": "evaluated",
@@ -341,10 +345,11 @@ def write_frequency_domain_fixture(
                     "basis": "local_tangent_drive",
                     "physical_power_density": False,
                     "units": "proxy_not_W_per_m3",
-                    "requires_mu0_ms_factor": True,
-                    "ms_factor_applied": False,
-                    "full_power_density": False,
-                },
+                "requires_mu0_ms_factor": True,
+                "ms_factor_applied": False,
+                "normalization": "0.5*abs(omega)*abs(imag(sum(response*conj(drive))))/tangent_dof_count",
+                "full_power_density": False,
+            },
                 "susceptibility_tensor": [[1.0, 0.0]],
                 "susceptibility_tensor_provenance": {
                     "kind": "drive_projected_scalar",
@@ -353,10 +358,11 @@ def write_frequency_domain_fixture(
                     "full_tensor": False,
                     "response_quantity": "delta_m_over_h_drive",
                     "response_units": "m/A",
-                    "dimensionless_si_susceptibility": False,
-                    "requires_ms_for_chi_si": True,
-                    "ms_factor_applied": False,
-                },
+                "dimensionless_si_susceptibility": False,
+                "requires_ms_for_chi_si": True,
+                "ms_factor_applied": False,
+                "normalization": "sum(response*conj(drive))/sum(abs(drive)^2)",
+            },
                 "tangent_leakage": {
                     "status": "evaluated",
                     "mean_abs_m0_dot_delta_m": 0.0,
@@ -452,11 +458,33 @@ def write_frequency_domain_fixture(
         "total_frequency_points": progress_total_frequency_points,
         "completed_frequency_points": progress_completed_frequency_points,
         "written_frequency_point_artifacts": progress_written_frequency_point_artifacts,
+        "current_frequency_hz": (
+            float(progress_completed_frequency_points) * 1.0e9
+            if progress_completed_frequency_points > 0
+            else None
+        ),
         "partial_artifacts_available": emitted_frequency_point_count > 0,
         "latest_artifact_manifest_path": "frequency_domain/manifest.v1.json",
     }
+    if not omit_progress_json:
+        progress["progress_json"] = json.dumps(
+            {
+                "schema_version": "frequency_domain_sweep_progress.v1",
+                "status": progress_status,
+                "complete": progress_complete,
+                "state": progress_state,
+                "total_frequency_points": progress_total_frequency_points,
+                "completed_frequency_points": progress_completed_frequency_points,
+                "written_frequency_point_artifacts": progress_written_frequency_point_artifacts,
+                "current_frequency_hz": progress["current_frequency_hz"],
+                "partial_artifacts_available": emitted_frequency_point_count > 0,
+                "latest_artifact_manifest_path": "frequency_domain/manifest.v1.json",
+            }
+        )
     if omit_progress_schema_version:
         del progress["schema_version"]
+    if omit_progress_json:
+        progress.pop("progress_json", None)
     (root / "response" / "progress.v1.json").write_text(json.dumps(progress))
     if progress_status == "interrupted" and not omit_cancel_requested_artifact:
         cancel_requested = {
@@ -465,6 +493,16 @@ def write_frequency_domain_fixture(
             "state": "cancel_requested",
             "complete": False,
         }
+        if isinstance(cancel_requested.get("progress_json"), str):
+            cancel_progress_json = json.loads(cancel_requested["progress_json"])
+            cancel_progress_json.update(
+                {
+                    "status": "cancel_requested",
+                    "complete": False,
+                    "state": "cancel_requested",
+                }
+            )
+            cancel_requested["progress_json"] = json.dumps(cancel_progress_json)
         (root / "response" / "cancel_requested.v1.json").write_text(
             json.dumps(cancel_requested)
         )
@@ -661,6 +699,7 @@ def write_frequency_domain_fixture(
         "artifacts": {
             "solver_diagnostics_path": "response/diagnostics/solver.v1.json",
             "response_diagnostics_v1_path": "response/diagnostics/solver.v1.json",
+            "response_progress_v1_path": "response/progress.v1.json",
             "response_cancel_requested_v1_path": manifest_cancel_requested_artifact_path,
             "response_map_v1_path": None,
             "response_map_v2_path": None,
@@ -706,6 +745,7 @@ def write_frequency_domain_fixture(
                 "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep"
             ),
             "response_diagnostics_resource_key": "/v2/sessions/current/analysis/frequency-domain/response/diagnostics/solver.v1",
+            "response_progress_resource_key": "/v2/sessions/current/analysis/frequency-domain/response/progress.v1",
             "response_cancel_requested_resource_key": manifest_cancel_requested_resource_key,
             "response_map_resource_key": None,
             "response_field_resources": (
@@ -719,6 +759,13 @@ def write_frequency_domain_fixture(
         artifacts = manifest["artifacts"]
         assert isinstance(artifacts, dict)
         del artifacts["frequency_point_paths"]
+    if omit_manifest_progress_links:
+        artifacts = manifest["artifacts"]
+        resources = manifest["resources"]
+        assert isinstance(artifacts, dict)
+        assert isinstance(resources, dict)
+        del artifacts["response_progress_v1_path"]
+        del resources["response_progress_resource_key"]
     if manifest_legacy_completed_frequency_count is not None:
         manifest_diagnostics = manifest["diagnostics"]
         assert isinstance(manifest_diagnostics, dict)
@@ -798,6 +845,7 @@ def run_validator(
     require_periodic_airbox_gpu_unsupported: bool = False,
     require_floquet_airbox_gpu_unsupported: bool = False,
     require_periodic_airbox_cpu_demag_solved: bool = False,
+    require_m5_equilibrium_provenance: bool = False,
     require_frozen_magnetic_submesh: bool = False,
     parity_reference: Path | None = None,
     floquet_reciprocal_reference: Path | None = None,
@@ -823,6 +871,8 @@ def run_validator(
         command.append("--require-floquet-airbox-gpu-unsupported")
     if require_periodic_airbox_cpu_demag_solved:
         command.append("--require-periodic-airbox-cpu-demag-solved")
+    if require_m5_equilibrium_provenance:
+        command.append("--require-m5-equilibrium-provenance")
     if require_frozen_magnetic_submesh:
         command.append("--require-frozen-magnetic-submesh")
     if parity_reference is not None:
@@ -870,8 +920,23 @@ def write_unavailable_frequency_domain_fixture(root: Path) -> None:
                 "total_frequency_points": 2,
                 "completed_frequency_points": 0,
                 "written_frequency_point_artifacts": 0,
+                "current_frequency_hz": None,
                 "partial_artifacts_available": False,
                 "latest_artifact_manifest_path": "frequency_domain/manifest.v1.json",
+                "progress_json": json.dumps(
+                    {
+                        "schema_version": "frequency_domain_sweep_progress.v1",
+                        "status": "unavailable",
+                        "complete": False,
+                        "state": "unavailable",
+                        "total_frequency_points": 2,
+                        "completed_frequency_points": 0,
+                        "written_frequency_point_artifacts": 0,
+                        "current_frequency_hz": None,
+                        "partial_artifacts_available": False,
+                        "latest_artifact_manifest_path": "frequency_domain/manifest.v1.json",
+                    }
+                ),
             }
         )
     )
@@ -981,6 +1046,10 @@ def write_periodic_airbox_gpu_unavailable_fixture(root: Path) -> None:
             "partial_artifacts_available": True,
         }
     )
+    progress_json = json.loads(progress["progress_json"])
+    progress_json["written_frequency_point_artifacts"] = 2
+    progress_json["partial_artifacts_available"] = True
+    progress["progress_json"] = json.dumps(progress_json)
     progress_path.write_text(json.dumps(progress))
 
     diagnostics_path = root / "response" / "diagnostics" / "solver.v1.json"
@@ -1195,6 +1264,9 @@ def write_floquet_airbox_gpu_unavailable_fixture(root: Path) -> None:
     progress_path = root / "response" / "progress.v1.json"
     progress = json.loads(progress_path.read_text())
     progress["written_frequency_point_artifacts"] = 0
+    progress_json = json.loads(progress["progress_json"])
+    progress_json["written_frequency_point_artifacts"] = 0
+    progress["progress_json"] = json.dumps(progress_json)
     progress_path.write_text(json.dumps(progress))
 
     for point_path in sorted((root / "response" / "frequency_points").glob("frequency_*.json")):
@@ -1232,12 +1304,72 @@ def write_periodic_airbox_cpu_demag_solved_fixture(
         manifest_written_frequency_point_artifacts=frequency_point_count,
         sweep_v2_point_count=frequency_point_count,
     )
+    progress_path = root / "response" / "progress.v1.json"
+    progress = json.loads(progress_path.read_text())
+    progress["demag_mode"] = "periodic_airbox_k0"
+    progress.update(
+        {
+            "native_frequency_index": max(frequency_point_count - 1, 0),
+            "native_iteration_count": 4,
+            "native_max_iterations_for_frequency": 8,
+            "native_current_frequency_solve_fraction": 1.0,
+            "native_residual_l2_norm": 1.0e-9,
+            "native_relative_residual_l2_norm": 1.0e-9,
+            "native_converged": True,
+        }
+    )
+    progress_json = (
+        json.loads(progress["progress_json"])
+        if isinstance(progress.get("progress_json"), str)
+        else {
+            "schema_version": "frequency_domain_sweep_progress.v1",
+            "state": progress.get("state"),
+            "total_frequency_points": progress.get("total_frequency_points"),
+            "completed_frequency_points": progress.get("completed_frequency_points"),
+            "written_frequency_point_artifacts": progress.get(
+                "written_frequency_point_artifacts"
+            ),
+            "current_frequency_hz": progress.get("current_frequency_hz"),
+            "partial_artifacts_available": progress.get(
+                "partial_artifacts_available"
+            ),
+            "latest_artifact_manifest_path": progress.get(
+                "latest_artifact_manifest_path"
+            ),
+        }
+    )
+    progress_json["demag_mode"] = "periodic_airbox_k0"
+    progress_json.update(
+        {
+            "native_frequency_index": progress["native_frequency_index"],
+            "native_iteration_count": progress["native_iteration_count"],
+            "native_max_iterations_for_frequency": progress[
+                "native_max_iterations_for_frequency"
+            ],
+            "native_current_frequency_solve_fraction": progress[
+                "native_current_frequency_solve_fraction"
+            ],
+            "native_residual_l2_norm": progress["native_residual_l2_norm"],
+            "native_relative_residual_l2_norm": progress[
+                "native_relative_residual_l2_norm"
+            ],
+            "native_converged": progress["native_converged"],
+        }
+    )
+    progress["progress_json"] = json.dumps(progress_json)
+    progress_path.write_text(json.dumps(progress))
+
     diagnostics_path = root / "response" / "diagnostics" / "solver.v1.json"
     diagnostics = json.loads(diagnostics_path.read_text())
     preconditioner_kind = (
         "mfem_tangent_graph_demag_coarse_right"
         if exchange_edge_count > 0
         else "mfem_tangent_demag_coarse_right"
+    )
+    preconditioner_variant = (
+        "graph_demag_coarse"
+        if exchange_edge_count > 0
+        else "demag_coarse"
     )
     coupled_block_norms = {
         "rhs_delta_m_l2_norm": 1.0,
@@ -1263,9 +1395,14 @@ def write_periodic_airbox_cpu_demag_solved_fixture(
             "demag_tangent_additivity_relative_error": 0.0,
             "demag_tangent_homogeneity_relative_error": 0.0,
             "krylov_preconditioner_kind": preconditioner_kind,
+            "krylov_preconditioner_variant": preconditioner_variant,
             "krylov_preconditioner_applied": True,
             "krylov_preconditioner_setup_status": "ok",
             "gmres_relative_residual_history": [1.0, 0.5],
+            "total_iteration_count": 4,
+            "max_iterations_for_frequency": 8,
+            "restart_iterations_for_frequency": 8,
+            "progress_interval_iterations": 2,
             "block_norms": {
                 "rhs_real_l2_norm": 1.0,
                 "rhs_imag_l2_norm": 0.0,
@@ -1318,9 +1455,14 @@ def write_periodic_airbox_cpu_demag_solved_fixture(
             "demag_tangent_additivity_relative_error": 0.0,
             "demag_tangent_homogeneity_relative_error": 0.0,
             "krylov_preconditioner_kind": preconditioner_kind,
+            "krylov_preconditioner_variant": preconditioner_variant,
             "krylov_preconditioner_applied": True,
             "krylov_preconditioner_setup_status": "ok",
             "gmres_relative_residual_history": [1.0, 0.5],
+            "total_iteration_count": 4,
+            "max_iterations_for_frequency": 8,
+            "restart_iterations_for_frequency": 8,
+            "progress_interval_iterations": 2,
             "block_norms": {
                 "rhs_real_l2_norm": 1.0,
                 "rhs_imag_l2_norm": 0.0,
@@ -1362,6 +1504,25 @@ def write_periodic_airbox_cpu_demag_solved_fixture(
             }
         )
         point_path.write_text(json.dumps(point))
+
+
+def add_m5_equilibrium_provenance_fixture(root: Path) -> None:
+    manifest_path = root / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["equilibrium_provenance"] = {
+        "schema_version": "fem_frequency_domain_equilibrium_provenance.v1",
+        "acceptance_gate": "M5_static_pbc_demag_equilibrium",
+        "accepted": True,
+        "source_kind": "m5_static_pbc_demag_equilibrium",
+        "source_artifact_root": ".fullmag/reports/fem-static-pbc-demag-equilibrium-runtime/artifacts",
+        "equilibrium_field_path": "m_final.json",
+        "seam_diagnostics_path": "diagnostics/fem_static_pbc_demag_seams.v1.json",
+        "z_padding_report_path": "reports/z_padding_validation.v1.json",
+        "supercell_report_path": "reports/supercell_validation.v1.json",
+        "magnetostatic_bc": "periodic_airbox_k0",
+        "pbc_axes": ["x", "y"],
+    }
+    manifest_path.write_text(json.dumps(manifest))
 
 
 def write_periodic_airbox_cpu_demag_solve_error_fixture(root: Path) -> None:
@@ -1413,12 +1574,17 @@ def write_periodic_airbox_cpu_demag_solve_error_fixture(root: Path) -> None:
             "current_frequency_hz": 2.75e9,
             "native_frequency_index": 0,
             "native_iteration_count": 8,
+            "native_max_iterations_for_frequency": 8,
+            "native_current_frequency_solve_fraction": 1.0,
             "native_residual_l2_norm": 25.0,
             "native_relative_residual_l2_norm": 0.95,
             "native_converged": False,
+            "demag_mode": "periodic_airbox_k0",
             "progress_json": json.dumps(
                 {
                     "schema_version": "frequency_domain_sweep_progress.v1",
+                    "status": "solve_error",
+                    "complete": False,
                     "state": "solve_error",
                     "total_frequency_points": 1,
                     "completed_frequency_points": 0,
@@ -1428,9 +1594,12 @@ def write_periodic_airbox_cpu_demag_solve_error_fixture(root: Path) -> None:
                     "current_frequency_hz": 2.75e9,
                     "native_frequency_index": 0,
                     "native_iteration_count": 8,
+                    "native_max_iterations_for_frequency": 8,
+                    "native_current_frequency_solve_fraction": 1.0,
                     "native_residual_l2_norm": 25.0,
                     "native_relative_residual_l2_norm": 0.95,
                     "native_converged": False,
+                    "demag_mode": "periodic_airbox_k0",
                 }
             ),
         }
@@ -1491,6 +1660,7 @@ def convert_periodic_airbox_fixture_to_schur_coupled_block(root: Path) -> None:
             "dynamic_demag_operator_source": "matrix_free_mfem_demag_phi_consistency_schur_provider",
             "coupled_residual_partition_status": "coupled_block",
             "krylov_preconditioner_kind": "mfem_phi_consistency_schur_right",
+            "krylov_preconditioner_variant": "demag_coarse",
         }
     )
     diagnostics_path.write_text(json.dumps(diagnostics))
@@ -1530,6 +1700,7 @@ def convert_periodic_airbox_fixture_to_schur_coupled_block(root: Path) -> None:
             "dynamic_demag_operator_source": "matrix_free_mfem_demag_phi_consistency_schur_provider",
             "coupled_residual_partition_status": "coupled_block",
             "krylov_preconditioner_kind": "mfem_phi_consistency_schur_right",
+            "krylov_preconditioner_variant": "demag_coarse",
         }
     )
     manifest_path.write_text(json.dumps(manifest))
@@ -1593,9 +1764,15 @@ def write_derived_peak_mode_fixture(
     *,
     index: int = 1,
     omit_refinement_recommendation: bool = False,
+    omit_provenance: bool = False,
 ) -> None:
     sweep = json.loads((root / "response" / "magnetic_response_sweep.v2.json").read_text())
     point = sweep["points"][index]
+    response_amplitude_source = (
+        "max_response_amplitude"
+        if point.get("max_response_amplitude") is not None
+        else "response_amplitude"
+    )
     payload = {
         "schema_version": "frequency_response_derived_mode.v1",
         "source": "magnetic_response_sweep.v2",
@@ -1608,6 +1785,24 @@ def write_derived_peak_mode_fixture(
         "field_payload_path": point["response_field_payload_path"],
         "interpretation": "driven_response_field_at_peak_frequency",
     }
+    if not omit_provenance:
+        payload["provenance"] = {
+            "schema_version": "frequency_response_derived_mode_provenance.v1",
+            "canonical_product": "frequency_response",
+            "source_artifact_path": "response/magnetic_response_sweep.v2.json",
+            "source_schema_version": sweep["schema_version"],
+            "derivation_method": "select_max_response_amplitude",
+            "selection_metric": response_amplitude_source,
+            "selected_sweep_point_index": index,
+            "selected_frequency_index": point["frequency_index"],
+            "selected_frequency_hz": point["frequency_hz"],
+            "selected_response_amplitude": point[response_amplitude_source],
+            "selected_frequency_point_artifact_path": point[
+                "frequency_point_artifact_path"
+            ],
+            "selected_field_payload_path": point["response_field_payload_path"],
+            "not_an_eigenmode": True,
+        }
     if not omit_refinement_recommendation:
         payload["refinement_recommendation"] = {
             "schema_version": "frequency_response_peak_refinement.v1",
@@ -1721,6 +1916,127 @@ def test_validator_accepts_periodic_airbox_cpu_demag_solved_boundary(
     )
 
     assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_rejects_periodic_airbox_cpu_demag_without_preconditioner_variant(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path)
+    diagnostics_path = tmp_path / "response" / "diagnostics" / "solver.v1.json"
+    diagnostics = json.loads(diagnostics_path.read_text())
+    diagnostics.pop("krylov_preconditioner_variant", None)
+    diagnostics_path.write_text(json.dumps(diagnostics))
+    (tmp_path / "response" / "diagnostics.v1.json").write_text(json.dumps(diagnostics))
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["diagnostics"].pop("krylov_preconditioner_variant", None)
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+    )
+
+    assert result.returncode != 0
+    assert "krylov_preconditioner_variant" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_periodic_airbox_response_without_m5_equilibrium_provenance(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path)
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+        require_m5_equilibrium_provenance=True,
+    )
+
+    assert result.returncode != 0
+    assert "manifest.equilibrium_provenance" in (result.stderr + result.stdout)
+
+
+def test_validator_accepts_periodic_airbox_response_with_m5_equilibrium_provenance(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path)
+    add_m5_equilibrium_provenance_fixture(tmp_path)
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+        require_m5_equilibrium_provenance=True,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_rejects_periodic_airbox_solved_boundary_without_progress_demag_mode(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path)
+    progress_path = tmp_path / "response" / "progress.v1.json"
+    progress = json.loads(progress_path.read_text())
+    progress.pop("demag_mode", None)
+    if isinstance(progress.get("progress_json"), str):
+        progress_json = json.loads(progress["progress_json"])
+        progress_json.pop("demag_mode", None)
+        progress["progress_json"] = json.dumps(progress_json)
+    progress_path.write_text(json.dumps(progress))
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+    )
+
+    assert result.returncode != 0
+    assert "progress.demag_mode" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_periodic_airbox_solved_boundary_without_native_progress_budget(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path)
+    progress_path = tmp_path / "response" / "progress.v1.json"
+    progress = json.loads(progress_path.read_text())
+    progress.pop("native_max_iterations_for_frequency", None)
+    if isinstance(progress.get("progress_json"), str):
+        progress_json = json.loads(progress["progress_json"])
+        progress_json.pop("native_max_iterations_for_frequency", None)
+        progress["progress_json"] = json.dumps(progress_json)
+    progress_path.write_text(json.dumps(progress))
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+    )
+
+    assert result.returncode != 0
+    assert "progress.native_max_iterations_for_frequency" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_periodic_airbox_solved_boundary_with_progress_json_drift(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path)
+    progress_path = tmp_path / "response" / "progress.v1.json"
+    progress = json.loads(progress_path.read_text())
+    progress_json = json.loads(progress["progress_json"])
+    progress_json["native_current_frequency_solve_fraction"] = 0.5
+    progress["progress_json"] = json.dumps(progress_json)
+    progress_path.write_text(json.dumps(progress))
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+    )
+
+    assert result.returncode != 0
+    assert "progress.progress_json.native_current_frequency_solve_fraction" in (
+        result.stderr + result.stdout
+    )
 
 
 def test_validator_accepts_frozen_magnetic_submesh_boundary(
@@ -1845,6 +2161,36 @@ def test_validator_rejects_derived_peak_mode_without_refinement_recommendation(
 
     assert result.returncode != 0
     assert "derived_peak_mode.refinement_recommendation" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_derived_peak_mode_without_provenance(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path, frequency_point_count=3)
+    set_manifest_domain_mesh_mode(tmp_path, mode="generated_frozen_magnetic_submesh")
+    set_frequency_point_response(tmp_path, index=0, frequency_hz=2.0e9, response_amplitude=0.5)
+    set_frequency_point_response(tmp_path, index=1, frequency_hz=2.5e9, response_amplitude=2.0)
+    set_frequency_point_response(tmp_path, index=2, frequency_hz=3.0e9, response_amplitude=0.8)
+    write_derived_peak_mode_fixture(
+        tmp_path,
+        index=1,
+        omit_provenance=True,
+    )
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+        require_frozen_magnetic_submesh=True,
+        require_min_frequency_points=3,
+        require_response_peak=True,
+        require_field_payloads_for_frequency_points=True,
+        require_derived_peak_mode=True,
+    )
+
+    assert result.returncode != 0
+    assert "derived_peak_mode.provenance" in (
         result.stderr + result.stdout
     )
 
@@ -2369,6 +2715,33 @@ def test_validator_rejects_solve_error_bundle_without_native_progress_telemetry(
     assert "progress.native_iteration_count" in (result.stderr + result.stdout)
 
 
+def test_validator_rejects_periodic_airbox_solve_error_without_progress_demag_mode(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solve_error_fixture(tmp_path)
+    progress_path = tmp_path / "response" / "progress.v1.json"
+    progress = json.loads(progress_path.read_text())
+    del progress["demag_mode"]
+    progress["progress_json"] = json.dumps(
+        {
+            key: value
+            for key, value in json.loads(progress["progress_json"]).items()
+            if key != "demag_mode"
+        }
+    )
+    progress_path.write_text(json.dumps(progress))
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+        require_frozen_magnetic_submesh=True,
+        allow_solve_error=True,
+    )
+
+    assert result.returncode != 0
+    assert "progress.demag_mode" in (result.stderr + result.stdout)
+
+
 def test_validator_rejects_unavailable_manifest_missing_resource_keys(
     tmp_path: Path,
 ) -> None:
@@ -2525,6 +2898,106 @@ def test_validator_rejects_empty_susceptibility_tensor(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert "susceptibility_tensor" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_susceptibility_provenance_kind_drift(
+    tmp_path: Path,
+) -> None:
+    write_frequency_domain_fixture(tmp_path)
+    sweep_path = tmp_path / "response" / "magnetic_response_sweep.v2.json"
+    sweep = json.loads(sweep_path.read_text())
+    sweep["points"][0]["susceptibility_tensor_provenance"]["kind"] = "si_tensor"
+    sweep_path.write_text(json.dumps(sweep))
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "susceptibility_tensor_provenance.kind" in (
+        result.stderr + result.stdout
+    )
+
+
+def set_ms_correct_si_observables(root: Path, *, include_ms_source: bool = True) -> None:
+    sweep_path = root / "response" / "magnetic_response_sweep.v2.json"
+    sweep = json.loads(sweep_path.read_text())
+    point_paths = [
+        root / point["frequency_point_artifact_path"]
+        for point in sweep["points"]
+    ]
+    for point in sweep["points"]:
+        point["susceptibility_tensor_provenance"] = {
+            "kind": "drive_projected_si_susceptibility",
+            "basis": "local_tangent_drive",
+            "component_pair_count": 1,
+            "full_tensor": False,
+            "response_quantity": "delta_M_over_h_drive",
+            "response_units": "dimensionless",
+            "dimensionless_si_susceptibility": True,
+            "requires_ms_for_chi_si": False,
+            "ms_factor_applied": True,
+            "normalization": "sum(Ms*response*conj(drive))/sum(abs(drive)^2)",
+        }
+        point["absorbed_power_density_provenance"] = {
+            "kind": "drive_projected_absorbed_power_density",
+            "basis": "local_tangent_drive",
+            "physical_power_density": True,
+            "units": "W/m^3",
+            "requires_mu0_ms_factor": False,
+            "mu0_ms_factor_applied": True,
+            "normalization": "0.5*mu0*abs(omega)*abs(imag(sum(Ms*response*conj(drive))))/tangent_dof_count",
+            "volume_weighted": False,
+            "spatial_reduction": "drive_projected_tangent_dof_average",
+            "full_power_density": True,
+        }
+        if include_ms_source:
+            point["susceptibility_tensor_provenance"]["ms_source"] = "uniform"
+            point["absorbed_power_density_provenance"]["ms_source"] = "uniform"
+    sweep_path.write_text(json.dumps(sweep))
+    for point_path, point in zip(point_paths, sweep["points"]):
+        point_artifact = json.loads(point_path.read_text())
+        point_artifact["susceptibility_tensor_provenance"] = point[
+            "susceptibility_tensor_provenance"
+        ]
+        point_artifact["absorbed_power_density_provenance"] = point[
+            "absorbed_power_density_provenance"
+        ]
+        point_path.write_text(json.dumps(point_artifact))
+
+
+def test_validator_accepts_ms_correct_si_response_observables(tmp_path: Path) -> None:
+    write_frequency_domain_fixture(tmp_path)
+    set_ms_correct_si_observables(tmp_path)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_rejects_si_observables_without_ms_source(tmp_path: Path) -> None:
+    write_frequency_domain_fixture(tmp_path)
+    set_ms_correct_si_observables(tmp_path, include_ms_source=False)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "ms_source" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_absorbed_power_proxy_without_normalization(
+    tmp_path: Path,
+) -> None:
+    write_frequency_domain_fixture(tmp_path)
+    sweep_path = tmp_path / "response" / "magnetic_response_sweep.v2.json"
+    sweep = json.loads(sweep_path.read_text())
+    del sweep["points"][0]["absorbed_power_density_provenance"]["normalization"]
+    sweep_path.write_text(json.dumps(sweep))
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "absorbed_power_density_provenance.normalization" in (
+        result.stderr + result.stdout
+    )
 
 
 def test_validator_rejects_not_evaluated_tangent_leakage(tmp_path: Path) -> None:
@@ -2703,6 +3176,66 @@ def test_validator_rejects_missing_progress_schema_version(tmp_path: Path) -> No
 
     assert result.returncode != 0
     assert "progress.schema_version" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_missing_progress_json_checkpoint(tmp_path: Path) -> None:
+    write_frequency_domain_fixture(tmp_path, omit_progress_json=True)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "progress.progress_json" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_completed_manifest_missing_progress_links(
+    tmp_path: Path,
+) -> None:
+    write_frequency_domain_fixture(tmp_path, omit_manifest_progress_links=True)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "manifest.artifacts.response_progress_v1_path" in (
+        result.stderr + result.stdout
+    ) or "manifest.resources.response_progress_resource_key" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_progress_json_without_status_and_complete(
+    tmp_path: Path,
+) -> None:
+    write_frequency_domain_fixture(tmp_path)
+    progress_path = tmp_path / "response" / "progress.v1.json"
+    progress = json.loads(progress_path.read_text())
+    progress_json = json.loads(progress["progress_json"])
+    progress_json.pop("status", None)
+    progress_json.pop("complete", None)
+    progress["progress_json"] = json.dumps(progress_json)
+    progress_path.write_text(json.dumps(progress))
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "progress.progress_json.status" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_progress_range_not_mirrored_in_progress_json(
+    tmp_path: Path,
+) -> None:
+    write_frequency_domain_fixture(tmp_path)
+    progress_path = tmp_path / "response" / "progress.v1.json"
+    progress = json.loads(progress_path.read_text())
+    progress["frequency_min_hz"] = 2.0e9
+    progress["frequency_max_hz"] = 5.0e9
+    progress_path.write_text(json.dumps(progress))
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "progress.progress_json.frequency_min_hz" in (
+        result.stderr + result.stdout
+    )
 
 
 def test_validator_rejects_mismatched_progress_work_units(tmp_path: Path) -> None:
@@ -3303,6 +3836,36 @@ def test_validator_rejects_interrupted_sweep_without_cancel_requested_artifact(
 
     assert result.returncode != 0
     assert "response/cancel_requested.v1.json" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_cancel_requested_without_progress_json_checkpoint(
+    tmp_path: Path,
+) -> None:
+    write_frequency_domain_fixture(
+        tmp_path,
+        emitted_frequency_point_count=1,
+        progress_completed_frequency_points=1,
+        progress_written_frequency_point_artifacts=1,
+        progress_status="interrupted",
+        progress_complete=False,
+        progress_state="interrupted",
+        diagnostics_status="interrupted",
+        diagnostics_complete=False,
+        diagnostics_completed_frequency_point_count=1,
+        manifest_status="interrupted",
+        manifest_complete=False,
+        manifest_completed_frequency_count=1,
+        manifest_written_frequency_point_artifacts=1,
+    )
+    cancel_requested_path = tmp_path / "response" / "cancel_requested.v1.json"
+    cancel_requested = json.loads(cancel_requested_path.read_text())
+    cancel_requested.pop("progress_json", None)
+    cancel_requested_path.write_text(json.dumps(cancel_requested))
+
+    result = run_validator(tmp_path, allow_interrupted=True)
+
+    assert result.returncode != 0
+    assert "cancel_requested.progress_json" in (result.stderr + result.stdout)
 
 
 def test_validator_rejects_interrupted_manifest_without_cancel_requested_links(

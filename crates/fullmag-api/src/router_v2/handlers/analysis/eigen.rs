@@ -130,7 +130,11 @@ pub async fn get_dispersion(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<EigenDispersionResponse>, ApiError> {
     let artifact_dir = require_current_live_artifact_dir(&state).await?;
-    let csv_path = "eigen/dispersion/branch_table.csv";
+    let csv_path = if try_resolve_artifact_path(&artifact_dir, "eigen/dispersion.csv")?.is_some() {
+        "eigen/dispersion.csv"
+    } else {
+        "eigen/dispersion/branch_table.csv"
+    };
     let csv_content = read_text_artifact_value(&artifact_dir, csv_path)?;
     let path_metadata =
         if try_resolve_artifact_path(&artifact_dir, "eigen/dispersion/path.json")?.is_some() {

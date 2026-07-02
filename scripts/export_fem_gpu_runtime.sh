@@ -61,7 +61,7 @@ copy_runtime_binary() {
   local src="$1"
   local dest="$2"
   rm -rf -- "$dest"
-  cp --remove-destination "$src" "$dest"
+  cp -aT --remove-destination "$src" "$dest"
   chmod 755 "$dest"
 }
 copy_runtime_binary target/release/fullmag .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu-bin
@@ -339,7 +339,7 @@ export PETSC_VERSION="$petsc_version"
 export SLEPC_VERSION="$slepc_version"
 export PETSC_PKGCONFIG_DIR="$petsc_pkgconfig_dir"
 export SLEPC_PKGCONFIG_DIR="$slepc_pkgconfig_dir"
-python3 - <<'PY'
+python3 - <<PY
 import json
 import os
 from pathlib import Path
@@ -376,7 +376,7 @@ chown -R "${FULLMAG_HOST_UID}:${FULLMAG_HOST_GID}" .fullmag/runtimes/fem-gpu-hos
 chmod u+rwx,go+rx,go-w .fullmag .fullmag/runtimes
 chmod -R u+rwX,go+rX,go-w .fullmag/runtimes/fem-gpu-host
 echo "[export_fem_gpu_runtime] container-side export complete"
-'
+' < /dev/null
 
 cat > "${RUNTIME_ROOT}/bin/fullmag-fem-gpu" <<'EOF'
 #!/usr/bin/env bash

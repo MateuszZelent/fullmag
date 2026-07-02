@@ -6608,6 +6608,7 @@ async fn eigen_v2_artifact_endpoints_return_json_and_csv_contracts() {
     assert_eq!(mode_json["branch_id"], 4);
 
     let dispersion = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/v2/sessions/current/analysis/eigen/dispersion.csv")
@@ -6624,6 +6625,26 @@ async fn eigen_v2_artifact_endpoints_return_json_and_csv_contracts() {
     let csv = String::from_utf8(body_bytes(dispersion).await).expect("csv body should be utf-8");
     assert!(csv.starts_with("sample_index,path_s_rad_per_m,kx_rad_per_m"));
     assert!(csv.contains(",branch_id,"));
+
+    let dispersion_json = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/analysis/eigenmodes/dispersion")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(dispersion_json.status(), StatusCode::OK);
+    let dispersion_json = body_json(dispersion_json).await;
+    assert_eq!(dispersion_json["csv_path"], "eigen/dispersion.csv");
+    assert_eq!(dispersion_json["rows"][0]["modeIndex"], 7);
+    assert_eq!(dispersion_json["rows"][0]["kx"], 1.0);
+    assert_eq!(dispersion_json["rows"][0]["frequencyHz"], 1.5e9);
+    assert_eq!(
+        dispersion_json["rows"][0]["angularFrequencyRadPerS"],
+        9424777960.77
+    );
 
     let _ = fs::remove_dir_all(&artifact_dir);
 }
@@ -6814,13 +6835,23 @@ async fn frequency_domain_manifest_reports_solver_family_availability() {
     );
     assert_eq!(
         json["capabilities"]["dispersion"]["production_cpu"]["status"],
-        "unsupported"
+        "partial_production_executable"
+    );
+    assert_eq!(
+        json["capabilities"]["dispersion"]["production_cpu_gamma_k_path"]["status"],
+        "partial_production_executable"
+    );
+    assert!(
+        json["capabilities"]["dispersion"]["production_cpu_gamma_k_path"]["reason"]
+            .as_str()
+            .expect("production_cpu_gamma_k_path dispersion reason should be a string")
+            .contains("gamma-equivalent")
     );
     assert!(
         json["capabilities"]["dispersion"]["production_cpu"]["reason"]
             .as_str()
             .expect("production_cpu dispersion reason should be a string")
-            .contains("selected-spectrum")
+            .contains("Bloch/Floquet tangent payload")
     );
     assert_eq!(
         json["capabilities"]["dispersion"]["production_gpu"]["status"],
@@ -12814,6 +12845,124 @@ async fn stage_execution_endpoint_returns_current_stage_tree() {
     assert_eq!(
         json["stages"][1]["last_progress_unix_ms"],
         1_700_000_002_850u64
+    );
+}
+
+#[tokio::test]
+async fn stage_execution_endpoint_projects_frequency_response_live_progress() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 41;
+        snapshot.stage_execution = Some(StageExecutionState {
+            total_stages: 1,
+            completed_stage_indexes: Vec::new(),
+            stages: vec![StageExecutionRecord {
+                stage_id: Some("stage-003".into()),
+                kind: Some("flat_frequency_response".into()),
+                status: StageLifecycleState::Running,
+                command_id: Some("cmd-stage-3".into()),
+                started_at_unix_ms: Some(1_700_000_010_000),
+                completed_at_unix_ms: None,
+                reason: None,
+                artifact_refs: Vec::new(),
+                checkpoint_ref: None,
+                loaded_state_ref: None,
+                resume_from_checkpoint_ref: None,
+                state_transition: None,
+                state_transition_kind: None,
+                state_transition_reason: None,
+                state_transfer_operator_kind: None,
+                state_transition_ui_presentation: None,
+                metric_name: None,
+                metric_value: None,
+                threshold: None,
+                progress_percent: None,
+                progress_label: None,
+                progress_detail: None,
+                last_progress_unix_ms: None,
+                current_field_m_t: None,
+                current_point_index: None,
+                current_settle_step_index: None,
+                current_settle_step_kind: None,
+                current_settle_step_method: None,
+            }],
+            stage_statuses: vec![StageLifecycleState::Running],
+            active_stage_index: Some(0),
+            active_stage_kind: Some("flat_frequency_response".into()),
+            runtime_state: RuntimeLifecycleState::Running,
+        });
+        snapshot.live_state = Some(LiveState {
+            status: "running".into(),
+            updated_at_unix_ms: 1_700_000_011_250,
+            latest_step: StepUpdateView {
+                step: 257,
+                time: 0.0,
+                dt: 0.0,
+                pseudo_time_s: None,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 1.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 0,
+                grid: [0, 0, 0],
+                fem_mesh: None,
+                magnetization: None,
+                per_object_scalars: HashMap::from([(
+                    "fem_frequency_response_progress".into(),
+                    HashMap::from([
+                        ("completed_frequency_count".into(), 1.0),
+                        ("total_frequency_count".into(), 7.0),
+                        ("frequency_hz".into(), 3.0e9),
+                        ("frequency_min_hz".into(), 2.0e9),
+                        ("frequency_max_hz".into(), 5.0e9),
+                        ("iteration".into(), 64.0),
+                        ("max_iterations_for_frequency".into(), 256.0),
+                        ("current_frequency_solve_fraction".into(), 0.25),
+                        ("relative_residual_l2_norm".into(), 7.5e-3),
+                        ("percent".into(), 14.285714285714286),
+                        ("demag_enabled".into(), 1.0),
+                        ("demag_periodic_airbox_k0".into(), 1.0),
+                    ]),
+                )]),
+                preview_field: None,
+                finished: false,
+            },
+        });
+    }
+
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/stages/execution")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(
+        json["stages"][0]["progress_label"],
+        "solving frequency point"
+    );
+    assert_eq!(json["stages"][0]["progress_percent"], 14.285714285714286);
+    assert_eq!(
+        json["stages"][0]["progress_detail"],
+        "demag=periodic_airbox_k0; range=2.000000-5.000000 GHz; frequency point 2/7; completed=1; f=3.000000 GHz; GMRES iteration=64/256; current frequency solve=25%; relative residual=7.500e-3"
+    );
+    assert_eq!(
+        json["stages"][0]["last_progress_unix_ms"],
+        1_700_000_011_250u64
     );
 }
 
@@ -23406,11 +23555,109 @@ fn schema_property_names(
         .collect()
 }
 
+#[test]
+fn openapi_frequency_domain_progress_schema_exposes_sweep_context() {
+    let value = crate::openapi_v2::openapi_json();
+    let schemas = value
+        .get("components")
+        .and_then(|value| value.get("schemas"))
+        .and_then(|value| value.as_object())
+        .expect("OpenAPI schemas must be present");
+    let progress_props = schema_property_names(schemas, "FrequencyDomainSweepProgressResource");
+
+    for required in [
+        "current_frequency_hz",
+        "frequency_min_hz",
+        "frequency_max_hz",
+        "demag_mode",
+        "progress_json",
+    ] {
+        assert!(
+            progress_props.contains(required),
+            "FrequencyDomainSweepProgressResource missing `{required}`"
+        );
+    }
+}
+
+#[test]
+fn openapi_frequency_domain_text_artifact_schema_exposes_path_metadata() {
+    let value = crate::openapi_v2::openapi_json();
+    let schemas = value
+        .get("components")
+        .and_then(|value| value.get("schemas"))
+        .and_then(|value| value.as_object())
+        .expect("OpenAPI schemas must be present");
+    let text_props = schema_property_names(schemas, "FrequencyDomainTextArtifactResource");
+
+    assert!(
+        text_props.contains("path_metadata"),
+        "FrequencyDomainTextArtifactResource missing `path_metadata`"
+    );
+    let text_schema = schemas
+        .get("FrequencyDomainTextArtifactResource")
+        .expect("FrequencyDomainTextArtifactResource schema must be present");
+    assert_eq!(
+        text_schema["properties"]["path_metadata"]["oneOf"][1]["$ref"],
+        "#/components/schemas/FrequencyDomainKPathMetadataResource"
+    );
+    let metadata_props = schema_property_names(schemas, "FrequencyDomainKPathMetadataResource");
+    assert!(
+        metadata_props.contains("sampling"),
+        "FrequencyDomainKPathMetadataResource missing `sampling`"
+    );
+    let sampling_props = schema_property_names(schemas, "FrequencyDomainKPathSamplingResource");
+    for required in ["kind", "points", "samples_per_segment"] {
+        assert!(
+            sampling_props.contains(required),
+            "FrequencyDomainKPathSamplingResource missing `{required}`"
+        );
+    }
+    let point_props = schema_property_names(schemas, "FrequencyDomainKPathControlPointResource");
+    for required in ["label", "k_vector"] {
+        assert!(
+            point_props.contains(required),
+            "FrequencyDomainKPathControlPointResource missing `{required}`"
+        );
+    }
+    let point_schema = schemas
+        .get("FrequencyDomainKPathControlPointResource")
+        .expect("FrequencyDomainKPathControlPointResource schema must be present");
+    assert_eq!(
+        point_schema["properties"]["k_vector"]["minItems"], 3,
+        "FrequencyDomainKPathControlPointResource.k_vector must document length 3"
+    );
+    assert_eq!(
+        point_schema["properties"]["k_vector"]["maxItems"], 3,
+        "FrequencyDomainKPathControlPointResource.k_vector must document length 3"
+    );
+}
+
 #[tokio::test]
 async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
     let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
     write_response_sweep_bundle(&artifact_dir, &frequency_domain_response_sweep_fixture(2))
         .expect("response sweep bundle should be written");
+    let progress_path = artifact_dir.join("response").join("progress.v1.json");
+    let mut progress_payload: serde_json::Value =
+        serde_json::from_slice(&fs::read(&progress_path).expect("progress fixture should exist"))
+            .expect("progress fixture should parse");
+    progress_payload["frequency_min_hz"] = serde_json::json!(1.0e9);
+    progress_payload["frequency_max_hz"] = serde_json::json!(2.0e9);
+    if let Some(raw_progress_json) = progress_payload
+        .get("progress_json")
+        .and_then(serde_json::Value::as_str)
+    {
+        let mut progress_json: serde_json::Value =
+            serde_json::from_str(raw_progress_json).expect("progress_json should parse");
+        progress_json["frequency_min_hz"] = serde_json::json!(1.0e9);
+        progress_json["frequency_max_hz"] = serde_json::json!(2.0e9);
+        progress_payload["progress_json"] = serde_json::json!(progress_json.to_string());
+    }
+    fs::write(
+        &progress_path,
+        serde_json::to_vec(&progress_payload).expect("progress fixture should serialize"),
+    )
+    .expect("progress fixture should be patched");
     let eigen_dir = artifact_dir.join("eigen");
     fs::create_dir_all(&eigen_dir).expect("eigen artifact directory should be created");
     fs::write(
@@ -23447,9 +23694,27 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
     .expect("branches fixture should be written");
     fs::write(
         eigen_dir.join("dispersion.csv"),
-        "sample_index,path_s_rad_per_m,raw_mode_index,branch_id,frequency_hz\n0,0,3,0,1250000000\n",
+        "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz\n0,0,0,0,0,G,3,0,1250000000\n",
     )
     .expect("dispersion fixture should be written");
+    let dispersion_dir = eigen_dir.join("dispersion");
+    fs::create_dir_all(&dispersion_dir).expect("dispersion path directory should be created");
+    fs::write(
+        dispersion_dir.join("path.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "sampling": {
+                "kind": "path",
+                "closed": false,
+                "points": [
+                    {"label": "G", "k_vector": [0.0, 0.0, 0.0]},
+                    {"label": "X", "k_vector": [78539816.33974482, 0.0, 0.0]}
+                ],
+                "samples_per_segment": [1]
+            }
+        }))
+        .expect("dispersion path fixture should serialize"),
+    )
+    .expect("dispersion path fixture should be written");
     fs::create_dir_all(eigen_dir.join("modes").join("sample_0000"))
         .expect("mode metadata directory should be created");
     fs::write(
@@ -23560,6 +23825,8 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
     assert_eq!(payload["completed_frequency_points"], 2);
     assert_eq!(payload["written_frequency_point_artifacts"], 2);
     assert_eq!(payload["current_frequency_hz"], 2.0e9);
+    assert_eq!(payload["frequency_min_hz"], 1.0e9);
+    assert_eq!(payload["frequency_max_hz"], 2.0e9);
     assert_eq!(payload["partial_artifacts_available"], true);
     assert!(payload["progress_json"]
         .as_str()
@@ -23708,6 +23975,14 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
     assert_eq!(payload["status"], "ready");
     assert_eq!(payload["artifact_path"], "eigen/dispersion.csv");
     assert_eq!(payload["content_type"], "text/csv; charset=utf-8");
+    assert_eq!(
+        payload["path_metadata"]["sampling"]["points"][1]["label"],
+        "X"
+    );
+    assert_eq!(
+        payload["path_metadata"]["sampling"]["samples_per_segment"][0],
+        1
+    );
     assert!(payload["text"]
         .as_str()
         .expect("dispersion text should be present")
@@ -24003,6 +24278,102 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
 }
 
 #[tokio::test]
+async fn frequency_domain_dispersion_resource_rejects_invalid_path_metadata() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let eigen_dir = artifact_dir.join("eigen");
+    fs::create_dir_all(eigen_dir.join("dispersion"))
+        .expect("dispersion path directory should be created");
+    fs::write(
+        eigen_dir.join("dispersion.csv"),
+        "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz\n0,0,0,0,0,G,0,0,1000000000\n",
+    )
+    .expect("dispersion fixture should be written");
+    fs::write(
+        eigen_dir.join("dispersion").join("path.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "sampling": {
+                "kind": "path",
+                "closed": false,
+                "points": [
+                    {"label": "G", "k_vector": [0.0, 0.0, 0.0]},
+                    {"label": "X", "k_vector": [78539816.33974482, 0.0, 0.0]}
+                ],
+                "samples_per_segment": [1, 1]
+            }
+        }))
+        .expect("dispersion path fixture should serialize"),
+    )
+    .expect("dispersion path fixture should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/eigen/dispersion")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = body_bytes(response).await;
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let error = payload["error"].as_str().expect("error should be present");
+    assert!(error.contains("invalid eigen/dispersion/path.json"));
+    assert!(error.contains("expected 1 samples_per_segment entries, got 2"));
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn frequency_domain_dispersion_resource_rejects_path_metadata_csv_drift() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let eigen_dir = artifact_dir.join("eigen");
+    fs::create_dir_all(eigen_dir.join("dispersion"))
+        .expect("dispersion path directory should be created");
+    fs::write(
+        eigen_dir.join("dispersion.csv"),
+        "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz\n0,0,1,0,0,G,0,0,1000000000\n",
+    )
+    .expect("dispersion fixture should be written");
+    fs::write(
+        eigen_dir.join("dispersion").join("path.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "sampling": {
+                "kind": "path",
+                "closed": false,
+                "points": [
+                    {"label": "G", "k_vector": [0.0, 0.0, 0.0]},
+                    {"label": "X", "k_vector": [78539816.33974482, 0.0, 0.0]}
+                ],
+                "samples_per_segment": [1]
+            }
+        }))
+        .expect("dispersion path fixture should serialize"),
+    )
+    .expect("dispersion path fixture should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/eigen/dispersion")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = body_bytes(response).await;
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let error = payload["error"].as_str().expect("error should be present");
+    assert!(error.contains("invalid eigen/dispersion/path.json against eigen/dispersion.csv"));
+    assert!(error.contains("sample_index 0 k_vector[0]"));
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
 async fn frequency_domain_eigen_mode_field_meta_rejects_invalid_complex_xyz_payload() {
     let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
     let mode_field_dir = artifact_dir
@@ -24206,6 +24577,45 @@ async fn frequency_domain_progress_fallback_reads_nested_frequency_point_hz() {
     assert_eq!(payload["completed_frequency_points"], 2);
     assert_eq!(payload["state"], "completed");
     assert_eq!(payload["current_frequency_hz"], 2.0e9);
+    assert_eq!(payload["frequency_min_hz"], 1.0e9);
+    assert_eq!(payload["frequency_max_hz"], 2.0e9);
+    let progress_json: serde_json::Value = serde_json::from_str(
+        payload["progress_json"]
+            .as_str()
+            .expect("fallback progress_json should be present"),
+    )
+    .expect("fallback progress_json should parse");
+    assert_eq!(
+        progress_json["schema_version"],
+        "frequency_domain_sweep_progress.v1"
+    );
+    assert_eq!(progress_json["status"], payload["status"]);
+    assert_eq!(progress_json["state"], payload["state"]);
+    assert_eq!(progress_json["complete"], payload["complete"]);
+    assert_eq!(
+        progress_json["total_frequency_points"],
+        payload["total_frequency_points"]
+    );
+    assert_eq!(
+        progress_json["completed_frequency_points"],
+        payload["completed_frequency_points"]
+    );
+    assert_eq!(
+        progress_json["written_frequency_point_artifacts"],
+        payload["written_frequency_point_artifacts"]
+    );
+    assert_eq!(
+        progress_json["current_frequency_hz"],
+        payload["current_frequency_hz"]
+    );
+    assert_eq!(
+        progress_json["frequency_min_hz"],
+        payload["frequency_min_hz"]
+    );
+    assert_eq!(
+        progress_json["frequency_max_hz"],
+        payload["frequency_max_hz"]
+    );
 }
 
 #[tokio::test]
@@ -24318,6 +24728,23 @@ async fn frequency_domain_progress_fallback_reports_unavailable_manifest() {
         payload["missing_reason"],
         "frequency-domain response is unavailable"
     );
+    let progress_json: serde_json::Value = serde_json::from_str(
+        payload["progress_json"]
+            .as_str()
+            .expect("fallback unavailable progress_json should be present"),
+    )
+    .expect("fallback unavailable progress_json should parse");
+    assert_eq!(progress_json["status"], "unavailable");
+    assert_eq!(progress_json["state"], "unavailable");
+    assert_eq!(progress_json["complete"], false);
+    assert_eq!(progress_json["total_frequency_points"], 2);
+    assert_eq!(progress_json["completed_frequency_points"], 0);
+    assert_eq!(progress_json["written_frequency_point_artifacts"], 0);
+    assert_eq!(progress_json["partial_artifacts_available"], false);
+    assert_eq!(
+        progress_json["latest_artifact_manifest_path"],
+        "frequency_domain/manifest.v1.json"
+    );
 }
 
 #[tokio::test]
@@ -24400,6 +24827,15 @@ async fn frequency_domain_progress_fallback_uses_v2_linked_frequency_point_paths
     assert_eq!(payload["completed_frequency_points"], 2);
     assert_eq!(payload["state"], "completed");
     assert_eq!(payload["current_frequency_hz"], 4.2e9);
+    let progress_json: serde_json::Value = serde_json::from_str(
+        payload["progress_json"]
+            .as_str()
+            .expect("linked-path fallback progress_json should be present"),
+    )
+    .expect("linked-path fallback progress_json should parse");
+    assert_eq!(progress_json["state"], "completed");
+    assert_eq!(progress_json["completed_frequency_points"], 2);
+    assert_eq!(progress_json["current_frequency_hz"], 4.2e9);
 }
 
 #[tokio::test]

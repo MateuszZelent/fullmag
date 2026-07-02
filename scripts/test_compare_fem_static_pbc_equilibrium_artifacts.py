@@ -148,6 +148,90 @@ def add_initial_state_override_metadata(root: Path) -> None:
     metadata_path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def write_static_pbc_seam_diagnostics(root: Path, *, step: int = 4) -> None:
+    diagnostics_dir = root / "diagnostics"
+    diagnostics_dir.mkdir(parents=True, exist_ok=True)
+    (diagnostics_dir / "fem_static_pbc_demag_seams.v1.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "fem_static_pbc_demag_seams.v1",
+                "status": "ok",
+                "step": step,
+                "pair_diagnostics": [
+                    {
+                        "pair_id": "x_faces",
+                        "m_seam_max": 0.0,
+                        "h_demag_seam_max_Apm": 0.0,
+                        "demag_phi_seam_max_after_offset_A": 0.0,
+                        "b_normal_flux_seam_max_T": 0.0,
+                        "side_magnetic_charge_sum_abs_Am": 0.0,
+                    },
+                    {
+                        "pair_id": "y_faces",
+                        "m_seam_max": 0.0,
+                        "h_demag_seam_max_Apm": 0.0,
+                        "demag_phi_seam_max_after_offset_A": 0.0,
+                        "b_normal_flux_seam_max_T": 0.0,
+                        "side_magnetic_charge_sum_abs_Am": 0.0,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def write_periodic_pairs_artifact(root: Path) -> None:
+    mesh_dir = root / "mesh"
+    mesh_dir.mkdir(parents=True, exist_ok=True)
+    (mesh_dir / "periodic_pairs.v1.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "periodic_pairs.v1",
+                "validation_status": "ok",
+                "pair_count": 2,
+                "paired_node_count": 4,
+                "max_translation_residual_m": 0.0,
+                "pairs": [
+                    {
+                        "pair_id": "x_faces",
+                        "status": "valid",
+                        "paired_node_count": 2,
+                        "domain_node_pair_counts": {"magnetic": 1, "airbox": 1},
+                        "node_pairs": [{"node_a": 0, "node_b": 1}, {"node_a": 2, "node_b": 3}],
+                        "boundary_face_pairs": [
+                            {
+                                "face_a": 10,
+                                "face_b": 11,
+                                "translation_m": [2.0e-7, 0.0, 0.0],
+                                "normal_dot": -1.0,
+                                "orientation": "opposed_normals",
+                            }
+                        ],
+                    },
+                    {
+                        "pair_id": "y_faces",
+                        "status": "valid",
+                        "paired_node_count": 2,
+                        "domain_node_pair_counts": {"magnetic": 1, "airbox": 1},
+                        "node_pairs": [{"node_a": 0, "node_b": 2}, {"node_a": 1, "node_b": 3}],
+                        "boundary_face_pairs": [
+                            {
+                                "face_a": 20,
+                                "face_b": 21,
+                                "translation_m": [0.0, 2.0e-7, 0.0],
+                                "normal_dot": -1.0,
+                                "orientation": "opposed_normals",
+                            }
+                        ],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def write_artifacts(
     root: Path,
     *,
@@ -181,6 +265,26 @@ def write_artifacts(
                     "periodic_pair_ids": ["x_faces", "y_faces"],
                     "universe_size_m": universe_size_m,
                 },
+                "mesh": {
+                    "periodic_boundary_pair_count": 2,
+                    "periodic_node_pair_count": 4,
+                    "periodic_boundary_pair_counts_by_id": {"x_faces": 1, "y_faces": 1},
+                    "periodic_node_pair_counts_by_id": {"x_faces": 2, "y_faces": 2},
+                },
+                "demag_runtime": {
+                    "model": "airbox",
+                    "magnetostatic_boundary_model": "periodic_airbox_k0",
+                    "poisson_operator": "pbc_reduced_poisson",
+                    "periodic_reduction": {
+                        "enabled": True,
+                        "method": "P^T A P",
+                        "node_pair_count": 4,
+                        "boundary_pair_count": 2,
+                        "node_pair_counts_by_id": {"x_faces": 2, "y_faces": 2},
+                        "boundary_pair_counts_by_id": {"x_faces": 1, "y_faces": 1},
+                        "periodic_boundary_markers_excluded_from_robin": True,
+                    },
+                },
                 "fem_cpu_relaxation_qualification": {
                     "schema_version": "fem_cpu_relaxation_qualification.v1",
                     "final_energy_terms_j": {"E_demag": e_demag, "E_total": e_demag},
@@ -202,6 +306,8 @@ def write_artifacts(
         json.dumps({"observable": "m", "unit": "1", "step": 0, "values": m_initial_values}),
         encoding="utf-8",
     )
+    write_static_pbc_seam_diagnostics(root)
+    write_periodic_pairs_artifact(root)
     write_node_geometry(root, magnetic_node_mask=[any(abs(component) > 0.0 for component in vector) for vector in m_values])
     if h_values is None:
         h_values = [1.0e3, 1.0e3, 0.0, 0.0, 0.0, 0.0]
@@ -256,6 +362,191 @@ def test_z_padding_report_accepts_matching_static_artifacts(tmp_path: Path) -> N
     assert report["reference_artifacts"] == str(reference)
     assert report["candidate_artifacts"] == str(candidate)
     assert report["metrics"]["e_demag_relative_error"] > 0.0
+
+
+def test_z_padding_report_rejects_candidate_without_pbc_reduced_demag_runtime(
+    tmp_path: Path,
+) -> None:
+    reference = tmp_path / "reference" / "artifacts"
+    candidate = tmp_path / "candidate" / "artifacts"
+    report_path = tmp_path / "reports" / "z_padding_validation.v1.json"
+    write_artifacts(reference, e_demag=1.0e-18, universe_size_m=[2.0e-7, 2.0e-7, 1.3e-7])
+    write_artifacts(candidate, e_demag=1.001e-18, universe_size_m=[2.0e-7, 2.0e-7, 9.0e-8])
+    metadata_path = candidate / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["demag_runtime"]["poisson_operator"] = "finite_airbox_robin"
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    result = run_report(
+        "z-padding",
+        "--reference",
+        str(reference),
+        "--candidate",
+        str(candidate),
+        "--report",
+        str(report_path),
+    )
+
+    assert result.returncode != 0
+    assert "metadata.demag_runtime.poisson_operator" in result.stderr
+
+
+def test_z_padding_report_rejects_candidate_without_seam_diagnostics(
+    tmp_path: Path,
+) -> None:
+    reference = tmp_path / "reference" / "artifacts"
+    candidate = tmp_path / "candidate" / "artifacts"
+    report_path = tmp_path / "reports" / "z_padding_validation.v1.json"
+    write_artifacts(reference, e_demag=1.0e-18, universe_size_m=[2.0e-7, 2.0e-7, 1.3e-7])
+    write_artifacts(candidate, e_demag=1.001e-18, universe_size_m=[2.0e-7, 2.0e-7, 9.0e-8])
+    seam_path = candidate / "diagnostics" / "fem_static_pbc_demag_seams.v1.json"
+    seam_path.unlink(missing_ok=True)
+
+    result = run_report(
+        "z-padding",
+        "--reference",
+        str(reference),
+        "--candidate",
+        str(candidate),
+        "--report",
+        str(report_path),
+    )
+
+    assert result.returncode != 0
+    assert "fem_static_pbc_demag_seams.v1.json" in result.stderr
+
+
+def test_z_padding_report_rejects_candidate_without_periodic_pairs_artifact(
+    tmp_path: Path,
+) -> None:
+    reference = tmp_path / "reference" / "artifacts"
+    candidate = tmp_path / "candidate" / "artifacts"
+    report_path = tmp_path / "reports" / "z_padding_validation.v1.json"
+    write_artifacts(reference, e_demag=1.0e-18, universe_size_m=[2.0e-7, 2.0e-7, 1.3e-7])
+    write_artifacts(candidate, e_demag=1.001e-18, universe_size_m=[2.0e-7, 2.0e-7, 9.0e-8])
+    (candidate / "mesh" / "periodic_pairs.v1.json").unlink()
+
+    result = run_report(
+        "z-padding",
+        "--reference",
+        str(reference),
+        "--candidate",
+        str(candidate),
+        "--report",
+        str(report_path),
+    )
+
+    assert result.returncode != 0
+    assert "mesh/periodic_pairs.v1.json" in result.stderr
+
+
+def test_z_padding_report_rejects_candidate_with_periodic_pairs_count_drift(
+    tmp_path: Path,
+) -> None:
+    reference = tmp_path / "reference" / "artifacts"
+    candidate = tmp_path / "candidate" / "artifacts"
+    report_path = tmp_path / "reports" / "z_padding_validation.v1.json"
+    write_artifacts(reference, e_demag=1.0e-18, universe_size_m=[2.0e-7, 2.0e-7, 1.3e-7])
+    write_artifacts(candidate, e_demag=1.001e-18, universe_size_m=[2.0e-7, 2.0e-7, 9.0e-8])
+    pairs_path = candidate / "mesh" / "periodic_pairs.v1.json"
+    pairs = json.loads(pairs_path.read_text(encoding="utf-8"))
+    pairs["pairs"][0]["paired_node_count"] = 1
+    pairs_path.write_text(json.dumps(pairs), encoding="utf-8")
+
+    result = run_report(
+        "z-padding",
+        "--reference",
+        str(reference),
+        "--candidate",
+        str(candidate),
+        "--report",
+        str(report_path),
+    )
+
+    assert result.returncode != 0
+    assert "mesh/periodic_pairs.v1.json.x_faces.paired_node_count must match metadata.mesh" in result.stderr
+
+
+def test_z_padding_report_rejects_candidate_without_periodic_node_pairs(
+    tmp_path: Path,
+) -> None:
+    reference = tmp_path / "reference" / "artifacts"
+    candidate = tmp_path / "candidate" / "artifacts"
+    report_path = tmp_path / "reports" / "z_padding_validation.v1.json"
+    write_artifacts(reference, e_demag=1.0e-18, universe_size_m=[2.0e-7, 2.0e-7, 1.3e-7])
+    write_artifacts(candidate, e_demag=1.001e-18, universe_size_m=[2.0e-7, 2.0e-7, 9.0e-8])
+    pairs_path = candidate / "mesh" / "periodic_pairs.v1.json"
+    pairs = json.loads(pairs_path.read_text(encoding="utf-8"))
+    pairs["pairs"][0]["node_pairs"] = []
+    pairs_path.write_text(json.dumps(pairs), encoding="utf-8")
+
+    result = run_report(
+        "z-padding",
+        "--reference",
+        str(reference),
+        "--candidate",
+        str(candidate),
+        "--report",
+        str(report_path),
+    )
+
+    assert result.returncode != 0
+    assert "node_pairs must contain 2 entries" in result.stderr
+
+
+def test_z_padding_report_rejects_candidate_with_bad_periodic_face_orientation(
+    tmp_path: Path,
+) -> None:
+    reference = tmp_path / "reference" / "artifacts"
+    candidate = tmp_path / "candidate" / "artifacts"
+    report_path = tmp_path / "reports" / "z_padding_validation.v1.json"
+    write_artifacts(reference, e_demag=1.0e-18, universe_size_m=[2.0e-7, 2.0e-7, 1.3e-7])
+    write_artifacts(candidate, e_demag=1.001e-18, universe_size_m=[2.0e-7, 2.0e-7, 9.0e-8])
+    pairs_path = candidate / "mesh" / "periodic_pairs.v1.json"
+    pairs = json.loads(pairs_path.read_text(encoding="utf-8"))
+    pairs["pairs"][0]["boundary_face_pairs"][0]["orientation"] = "parallel_normals"
+    pairs["pairs"][0]["boundary_face_pairs"][0]["normal_dot"] = 1.0
+    pairs_path.write_text(json.dumps(pairs), encoding="utf-8")
+
+    result = run_report(
+        "z-padding",
+        "--reference",
+        str(reference),
+        "--candidate",
+        str(candidate),
+        "--report",
+        str(report_path),
+    )
+
+    assert result.returncode != 0
+    assert "boundary_face_pairs[0].orientation must be opposed_normals" in result.stderr
+
+
+def test_z_padding_report_rejects_candidate_with_bad_seam_flux_diagnostics(
+    tmp_path: Path,
+) -> None:
+    reference = tmp_path / "reference" / "artifacts"
+    candidate = tmp_path / "candidate" / "artifacts"
+    report_path = tmp_path / "reports" / "z_padding_validation.v1.json"
+    write_artifacts(reference, e_demag=1.0e-18, universe_size_m=[2.0e-7, 2.0e-7, 1.3e-7])
+    write_artifacts(candidate, e_demag=1.001e-18, universe_size_m=[2.0e-7, 2.0e-7, 9.0e-8])
+    seam_path = candidate / "diagnostics" / "fem_static_pbc_demag_seams.v1.json"
+    seams = json.loads(seam_path.read_text(encoding="utf-8"))
+    seams["pair_diagnostics"][0]["b_normal_flux_seam_max_T"] = 1.0
+    seam_path.write_text(json.dumps(seams), encoding="utf-8")
+
+    result = run_report(
+        "z-padding",
+        "--reference",
+        str(reference),
+        "--candidate",
+        str(candidate),
+        "--report",
+        str(report_path),
+    )
+
+    assert result.returncode != 0
+    assert "b_normal_flux_seam_max_T" in result.stderr
 
 
 def test_z_padding_report_uses_robust_field_stats_not_global_max_outlier(tmp_path: Path) -> None:

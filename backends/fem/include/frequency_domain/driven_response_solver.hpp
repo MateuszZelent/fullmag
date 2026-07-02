@@ -36,6 +36,9 @@ struct DrivenFrequencyResponseMfemValidationProblem {
     const double *dmi_lumped_mass = nullptr;
     const double *dmi_ms_field = nullptr;
     double dmi_uniform_ms = 0.0;
+    const double *observable_ms_field = nullptr;
+    std::uint64_t observable_ms_field_len = 0;
+    double observable_uniform_ms = 0.0;
     const double *drive_real = nullptr;
     const double *drive_imag = nullptr;
     const std::uint64_t *static_periodic_node_pairs = nullptr;

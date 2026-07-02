@@ -356,6 +356,7 @@ function StageCard({
       </div>
       <StudyProgressBar
         label={`${stage.label} progress`}
+        statusLabel={stage.progressLabel ?? undefined}
         value={stage.progressPercent}
       />
       <div className="fm-study-stage-card__meta">
@@ -2281,6 +2282,17 @@ function SpectralStageDraftFields({
     <>
       {showOperator ? (
         <>
+          {draft.kind === "eigenmodes" ? (
+            <FormField
+              label="Operator"
+              type="select"
+              value={draft.operator}
+              onChange={(event) => onUpdate({ operator: event.target.value })}
+            >
+              <option value="linearized_llg">Linearized LLG</option>
+              <option value="full_2x2">Full 2x2</option>
+            </FormField>
+          ) : null}
           <FormField
             label="Include demag"
             checked={draft.includeDemag}
@@ -2351,6 +2363,16 @@ function SpectralStageDraftFields({
             value={draft.kSampling}
             onChange={(event) => onUpdate({ kSampling: event.target.value })}
           />
+          {draft.kind === "eigenmodes" ? (
+            <FormField
+              label="k path"
+              hint="Label:kx,ky,kz; Label:kx,ky,kz | samples=n,n"
+              type="textarea"
+              rows={3}
+              value={draft.kPath}
+              onChange={(event) => onUpdate({ kPath: event.target.value })}
+            />
+          ) : null}
         </>
       ) : null}
       {showBoundary ? (

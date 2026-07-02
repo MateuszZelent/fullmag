@@ -19,6 +19,7 @@ import {
   applyViewport3DFieldLayerDiagnosticOverrides,
   resolveViewport3DActiveQuantityId,
   resolveViewport3DAnalysisComplexFieldQuery,
+  resolveViewport3DAnalysisComplexProjectionEnabled,
   resolveViewport3DDisplayedLiveValue,
   resolveViewport3DFieldMetaScalarComponent,
   resolveViewport3DPrimaryFieldDataOptions,
@@ -622,6 +623,26 @@ describe("useViewport3DSceneModel", () => {
       scope_kind: "full",
       view: "complex",
     });
+  });
+
+  it("uses complex projection only for phase-rotated analysis views", () => {
+    expect(
+      resolveViewport3DAnalysisComplexProjectionEnabled({
+        component: "full",
+        phase_rad: 0,
+        view: "phase_rotated_real",
+      }),
+    ).toBe(true);
+
+    for (const view of ["real", "imag", "abs", "phase"] as const) {
+      expect(
+        resolveViewport3DAnalysisComplexProjectionEnabled({
+          component: "full",
+          phase_rad: 0,
+          view,
+        }),
+      ).toBe(false);
+    }
   });
 
   it("does not fetch authored regions before a scene resource exists", () => {

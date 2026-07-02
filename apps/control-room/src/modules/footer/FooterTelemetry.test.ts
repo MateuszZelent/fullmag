@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import type {
+  FrequencyDomainSweepProgressResource,
   LiveStatusResource,
   ObjectMetricsResource,
   SceneResource,
   SolverStatusResource,
+  StageExecutionResource,
 } from "@/kernel/api/apiTypes";
 
 import {
@@ -337,6 +339,450 @@ describe("FooterTelemetry", () => {
     expect(byId.dt?.label).toBe("Pseudo dt");
     expect(byId.dt?.detail).toBe("Minimizer pseudotime step");
     expect(byId.step?.subdetail).toBe("t=0.000000e+0 s");
+  });
+
+  it("shows frequency-response sweep progress instead of time-step progress", () => {
+    const telemetryStatus = selectFooterTelemetryStatus({
+      data: status,
+      error: null,
+      refetch: () => {},
+      revision: 1,
+      status: "ready",
+    });
+    const stageExecution: StageExecutionResource = {
+      active_stage_index: 0,
+      active_stage_kind: "flat_frequency_response",
+      completed_stage_indexes: [],
+      revision: 7,
+      runtime_state: "running",
+      stage_statuses: ["running"],
+      stages: [
+        {
+          index: 0,
+          kind: "flat_frequency_response",
+          label: "Frequency response",
+          progress_detail:
+            "frequency point 1/4; f=2.750000 GHz; GMRES iteration=384; relative residual=8.500e-4",
+          progress_label: "solving frequency point",
+          progress_percent: 25,
+          stage_id: "stage-3",
+          status: "running",
+        },
+      ],
+      total_stages: 1,
+    };
+    const responseProgress: FrequencyDomainSweepProgressResource = {
+      complete: false,
+      completed_frequency_points: 1,
+      current_frequency_hz: 2.75e9,
+      latest_artifact_manifest_path: "frequency_domain/manifest.partial.v1.json",
+      missing_reason: null,
+      partial_artifacts_available: true,
+      progress_json:
+        '{"schema_version":"frequency_domain_sweep_progress.v1","state":"running"}',
+      schema_version: "frequency_domain_sweep_progress.v1",
+      state: "running",
+      status: "ready",
+      total_frequency_points: 4,
+      written_frequency_point_artifacts: 1,
+    };
+
+    const model = buildFooterTelemetryModel(
+      telemetryStatus,
+      objectMetrics,
+      solverStatusFixture({
+        algorithm: "fem_frequency_response_production_cpu",
+        can_accept_commands: false,
+        converged: false,
+        dt_seconds: 0,
+        integrator: null,
+        is_busy: true,
+        last_error: null,
+        max_torque_T: 0,
+        active_runtime_seconds: 12.5,
+        pseudo_time_seconds: null,
+        revision: 8,
+        run_id: status.run?.run_id ?? null,
+        runtime_state: "running",
+        runtime_status_code: "running",
+        runtime_status_kind: "running",
+        session_status: "running",
+        sim_time_seconds: 0,
+        stage_kind: "flat_frequency_response",
+        step_index: 257,
+        warnings: [],
+      }),
+      null,
+      stageExecution,
+      responseProgress,
+      {
+        points: [
+          { frequency_hz: 2.0e9 },
+          { frequency_hz: 3.0e9 },
+          { frequency_hz: 4.0e9 },
+          { frequency_hz: 5.0e9 },
+        ],
+        schema_version: "frequency_domain_response_sweep_resource.v1",
+      },
+    );
+
+    expect(model.frequencyDomainProgress?.title).toBe("Frequency response");
+    expect(model.frequencyDomainProgress?.percent).toBe(25);
+    expect(model.frequencyDomainProgress?.percentLabel).toBe("25%");
+    expect(model.frequencyDomainProgress?.pointLabel).toBe("point 1/4");
+    expect(model.frequencyDomainProgress?.solutionLabel).toBe("solution 1/4");
+    expect(model.frequencyDomainProgress?.frequencyLabel).toBe("2.750 GHz");
+    expect(model.frequencyDomainProgress?.solverLabel).toBe("GMRES 384");
+    expect(model.frequencyDomainProgress?.residualLabel).toBe("relres 8.500e-4");
+    expect(model.frequencyDomainProgress?.rangeLabel).toBe("2.000-5.000 GHz");
+    expect(model.frequencyDomainProgress?.detail).toContain("solution 1/4");
+    expect(model.frequencyDomainProgress?.detail).toContain("GMRES 384");
+    expect(model.frequencyDomainProgress?.detail).toContain("2.750 GHz");
+    expect(model.frequencyDomainProgress?.detail).toContain("2.000-5.000 GHz");
+  });
+
+  it("shows periodic demag frequency-response progress as a distinct sweep mode", () => {
+    const telemetryStatus = selectFooterTelemetryStatus({
+      data: status,
+      error: null,
+      refetch: () => {},
+      revision: 1,
+      status: "ready",
+    });
+    const stageExecution: StageExecutionResource = {
+      active_stage_index: 0,
+      active_stage_kind: "flat_frequency_response",
+      completed_stage_indexes: [],
+      revision: 9,
+      runtime_state: "running",
+      stage_statuses: ["running"],
+      stages: [
+        {
+          index: 0,
+          kind: "flat_frequency_response",
+          label: "Frequency response",
+          progress_detail:
+            "demag=periodic_airbox_k0; range=2.000000-5.000000 GHz; frequency point 2/7; completed=1; f=3.000000 GHz; GMRES iteration=64; current frequency solve=25%; relative residual=7.500e-3",
+          progress_label: "solving frequency point",
+          progress_percent: 14,
+          stage_id: "stage-3",
+          status: "running",
+        },
+      ],
+      total_stages: 1,
+    };
+
+    const model = buildFooterTelemetryModel(
+      telemetryStatus,
+      objectMetrics,
+      solverStatusFixture({
+        algorithm: "fem_frequency_response_production_cpu",
+        can_accept_commands: false,
+        converged: false,
+        dt_seconds: 0,
+        integrator: null,
+        is_busy: true,
+        last_error: null,
+        max_torque_T: 0,
+        active_runtime_seconds: 18.5,
+        pseudo_time_seconds: null,
+        revision: 10,
+        run_id: status.run?.run_id ?? null,
+        runtime_state: "running",
+        runtime_status_code: "running",
+        runtime_status_kind: "running",
+        session_status: "running",
+        sim_time_seconds: 0,
+        stage_kind: "flat_frequency_response",
+        step_index: 257,
+        warnings: [],
+      }),
+      null,
+      stageExecution,
+      {
+        complete: false,
+        completed_frequency_points: 1,
+        current_frequency_hz: 3.0e9,
+        latest_artifact_manifest_path: "frequency_domain/manifest.partial.v1.json",
+        missing_reason: null,
+        partial_artifacts_available: true,
+        progress_json:
+          '{"schema_version":"frequency_domain_sweep_progress.v1","state":"solving_frequency"}',
+        schema_version: "frequency_domain_sweep_progress.v1",
+        state: "running",
+        status: "ready",
+        total_frequency_points: 7,
+        written_frequency_point_artifacts: 1,
+      },
+      null,
+    );
+
+    expect(model.frequencyDomainProgress?.title).toBe("Demag frequency sweep");
+    expect(model.frequencyDomainProgress?.modeLabel).toBe("periodic airbox demag");
+    expect(model.frequencyDomainProgress?.pointLabel).toBe("point 2/7");
+    expect(model.frequencyDomainProgress?.solutionLabel).toBe("solution 2/7");
+    expect(model.frequencyDomainProgress?.solveLabel).toBe("solve 25%");
+    expect(model.frequencyDomainProgress?.rangeLabel).toBe("2.000-5.000 GHz");
+    expect(model.frequencyDomainProgress?.detail).toContain("periodic airbox demag");
+    expect(model.frequencyDomainProgress?.detail).toContain("solution 2/7");
+    expect(model.frequencyDomainProgress?.detail).toContain("solve 25%");
+  });
+
+  it("shows an indeterminate frequency-response progress before the first point reports", () => {
+    const telemetryStatus = selectFooterTelemetryStatus({
+      data: status,
+      error: null,
+      refetch: () => {},
+      revision: 1,
+      status: "ready",
+    });
+    const stageExecution: StageExecutionResource = {
+      active_stage_index: 0,
+      active_stage_kind: "flat_frequency_response",
+      completed_stage_indexes: [],
+      revision: 7,
+      runtime_state: "running",
+      stage_statuses: ["running"],
+      stages: [
+        {
+          index: 0,
+          kind: "flat_frequency_response",
+          label: "Frequency response",
+          progress_detail: null,
+          progress_label: null,
+          progress_percent: null,
+          stage_id: "stage-3",
+          status: "running",
+        },
+      ],
+      total_stages: 1,
+    };
+
+    const model = buildFooterTelemetryModel(
+      telemetryStatus,
+      objectMetrics,
+      solverStatusFixture({
+        algorithm: "fem_frequency_response_production_cpu",
+        can_accept_commands: false,
+        converged: false,
+        dt_seconds: 0,
+        integrator: null,
+        is_busy: true,
+        last_error: null,
+        max_torque_T: 0,
+        active_runtime_seconds: 12.5,
+        pseudo_time_seconds: null,
+        revision: 8,
+        run_id: status.run?.run_id ?? null,
+        runtime_state: "running",
+        runtime_status_code: "running",
+        runtime_status_kind: "running",
+        session_status: "running",
+        sim_time_seconds: 0,
+        stage_kind: "flat_frequency_response",
+        step_index: 257,
+        warnings: [],
+      }),
+      null,
+      stageExecution,
+      null,
+      {
+        frequencies_hz: [2.0e9, 3.0e9, 4.0e9, 5.0e9],
+        schema_version: "frequency_domain_response_sweep_resource.v1",
+      },
+    );
+
+    expect(model.frequencyDomainProgress?.title).toBe("Frequency response");
+    expect(model.frequencyDomainProgress?.percent).toBeNull();
+    expect(model.frequencyDomainProgress?.percentLabel).toBe("running");
+    expect(model.frequencyDomainProgress?.pointLabel).toBe("waiting for first point");
+    expect(model.frequencyDomainProgress?.frequencyLabel).toBe("pending");
+    expect(model.frequencyDomainProgress?.rangeLabel).toBe("2.000-5.000 GHz");
+    expect(model.frequencyDomainProgress?.detail).toBe(
+      "waiting for first frequency point · range 2.000-5.000 GHz",
+    );
+  });
+
+  it("uses durable progress range and demag mode when stage detail and sweep are absent", () => {
+    const telemetryStatus = selectFooterTelemetryStatus({
+      data: status,
+      error: null,
+      refetch: () => {},
+      revision: 1,
+      status: "ready",
+    });
+    const stageExecution: StageExecutionResource = {
+      active_stage_index: 0,
+      active_stage_kind: "flat_frequency_response",
+      completed_stage_indexes: [],
+      revision: 12,
+      runtime_state: "running",
+      stage_statuses: ["running"],
+      stages: [
+        {
+          index: 0,
+          kind: "flat_frequency_response",
+          label: "Frequency response",
+          progress_detail: null,
+          progress_label: null,
+          progress_percent: 0,
+          stage_id: "stage-3",
+          status: "running",
+        },
+      ],
+      total_stages: 1,
+    };
+
+    const model = buildFooterTelemetryModel(
+      telemetryStatus,
+      objectMetrics,
+      solverStatusFixture({
+        algorithm: "fem_frequency_response_production_cpu",
+        can_accept_commands: false,
+        converged: false,
+        dt_seconds: 0,
+        integrator: null,
+        is_busy: true,
+        last_error: null,
+        max_torque_T: 0,
+        active_runtime_seconds: 8.5,
+        pseudo_time_seconds: null,
+        revision: 13,
+        run_id: status.run?.run_id ?? null,
+        runtime_state: "running",
+        runtime_status_code: "running",
+        runtime_status_kind: "running",
+        session_status: "running",
+        sim_time_seconds: 0,
+        stage_kind: "flat_frequency_response",
+        step_index: 257,
+        warnings: [],
+      }),
+      null,
+      stageExecution,
+      {
+        complete: false,
+        completed_frequency_points: 0,
+        current_frequency_hz: 2.0e9,
+        demag_mode: "periodic_airbox_k0",
+        frequency_max_hz: 5.0e9,
+        frequency_min_hz: 2.0e9,
+        latest_artifact_manifest_path: null,
+        missing_reason: null,
+        partial_artifacts_available: false,
+        progress_json:
+          '{"schema_version":"frequency_domain_sweep_progress.v1","state":"running","completed_frequency_points":0,"total_frequency_points":7,"native_frequency_index":0,"native_iteration_count":128,"native_max_iterations_for_frequency":256,"native_current_frequency_solve_fraction":0.5,"frequency_min_hz":2000000000.0,"frequency_max_hz":5000000000.0,"demag_mode":"periodic_airbox_k0"}',
+        schema_version: "frequency_domain_sweep_progress.v1",
+        state: "running",
+        status: "running",
+        total_frequency_points: 7,
+        written_frequency_point_artifacts: 0,
+      },
+      null,
+    );
+
+    expect(model.frequencyDomainProgress?.title).toBe("Demag frequency sweep");
+    expect(model.frequencyDomainProgress?.modeLabel).toBe("periodic airbox demag");
+    expect(model.frequencyDomainProgress?.percent).toBe(7);
+    expect(model.frequencyDomainProgress?.percentLabel).toBe("7%");
+    expect(model.frequencyDomainProgress?.pointLabel).toBe("point 1/7");
+    expect(model.frequencyDomainProgress?.solutionLabel).toBe("solution 1/7");
+    expect(model.frequencyDomainProgress?.frequencyLabel).toBe("2.000 GHz");
+    expect(model.frequencyDomainProgress?.solveLabel).toBe("solve 50%");
+    expect(model.frequencyDomainProgress?.solverLabel).toBe("GMRES 128/256");
+    expect(model.frequencyDomainProgress?.rangeLabel).toBe("2.000-5.000 GHz");
+    expect(model.frequencyDomainProgress?.detail).toBe(
+      "periodic airbox demag · solution 1/7 · 2.000 GHz · solve 50% · GMRES 128/256 · range 2.000-5.000 GHz",
+    );
+  });
+
+  it("shows eigenmode solver progress from stage execution", () => {
+    const telemetryStatus = selectFooterTelemetryStatus({
+      data: status,
+      error: null,
+      refetch: () => {},
+      revision: 1,
+      status: "ready",
+    });
+    const stageExecution: StageExecutionResource = {
+      active_stage_index: 0,
+      active_stage_kind: "flat_eigenmodes",
+      completed_stage_indexes: [],
+      revision: 11,
+      runtime_state: "running",
+      stage_statuses: ["running"],
+      stages: [
+        {
+          index: 0,
+          kind: "flat_eigenmodes",
+          label: "Eigenmodes",
+          progress_detail:
+            "solving sparse LOBPCG; solver=cpu_sparse_lobpcg; active_nodes=1931; effective_dof=3862; requested_modes=20; computed_modes=4; iteration=37/5000; residual=1.200e-5",
+          progress_label: "solving sparse LOBPCG",
+          progress_percent: 48,
+          stage_id: "stage-2",
+          status: "running",
+        },
+      ],
+      total_stages: 1,
+    };
+
+    const model = buildFooterTelemetryModel(
+      telemetryStatus,
+      objectMetrics,
+      solverStatusFixture({
+        algorithm: "fem_eigen_production_cpu",
+        can_accept_commands: false,
+        converged: false,
+        dt_seconds: 0,
+        integrator: null,
+        is_busy: true,
+        last_error: null,
+        max_torque_T: 0,
+        active_runtime_seconds: 22.5,
+        pseudo_time_seconds: null,
+        revision: 12,
+        run_id: status.run?.run_id ?? null,
+        runtime_state: "running",
+        runtime_status_code: "running",
+        runtime_status_kind: "running",
+        session_status: "running",
+        sim_time_seconds: 0,
+        stage_kind: "flat_eigenmodes",
+        step_index: 37,
+        warnings: [],
+      }),
+      null,
+      stageExecution,
+      {
+        complete: false,
+        completed_frequency_points: 1,
+        current_frequency_hz: 2.75e9,
+        latest_artifact_manifest_path: "frequency_domain/manifest.partial.v1.json",
+        missing_reason: null,
+        partial_artifacts_available: true,
+        progress_json:
+          '{"schema_version":"frequency_domain_sweep_progress.v1","state":"running"}',
+        schema_version: "frequency_domain_sweep_progress.v1",
+        state: "running",
+        status: "ready",
+        total_frequency_points: 4,
+        written_frequency_point_artifacts: 1,
+      },
+      {
+        points: [{ frequency_hz: 2.0e9 }, { frequency_hz: 5.0e9 }],
+        schema_version: "frequency_domain_response_sweep_resource.v1",
+      },
+    );
+
+    expect(model.frequencyDomainProgress?.title).toBe("Eigenmodes");
+    expect(model.frequencyDomainProgress?.percent).toBe(48);
+    expect(model.frequencyDomainProgress?.percentLabel).toBe("48%");
+    expect(model.frequencyDomainProgress?.detail).toContain("solving sparse LOBPCG");
+    expect(model.frequencyDomainProgress?.detail).toContain("effective_dof=3862");
+    expect(model.frequencyDomainProgress?.detail).toContain("iteration=37/5000");
+    expect(model.frequencyDomainProgress?.detail).toContain("residual=1.200e-5");
+    expect(model.frequencyDomainProgress?.detail).not.toContain("range 2.000-5.000 GHz");
   });
 
   it("ignores stale live scalar samples from a previous run", () => {

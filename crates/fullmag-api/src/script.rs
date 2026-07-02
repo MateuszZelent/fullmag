@@ -330,6 +330,23 @@ mod tests {
     }
 
     #[test]
+    fn parse_eigen_dispersion_csv_decodes_canonical_v2_rows() {
+        let csv = "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,line_width_hz,residual_norm,overlap_score\n3,1.0,1.0,2.0,3.0,X,7,4,1500000000.0,9424777960.77,0.0,1e-9,0.99\n";
+        let rows = parse_eigen_dispersion_csv(csv).expect("csv should parse");
+        assert_eq!(
+            rows,
+            vec![EigenDispersionRow {
+                mode_index: 7,
+                kx: 1.0,
+                ky: 2.0,
+                kz: 3.0,
+                frequency_hz: 1.5e9,
+                angular_frequency_rad_per_s: 9424777960.77,
+            }]
+        );
+    }
+
+    #[test]
     fn parse_eigen_dispersion_csv_rejects_short_rows() {
         let error = parse_eigen_dispersion_csv(
             "mode_index,kx,ky,kz,frequency_hz,angular_frequency_rad_per_s\n0,1,2\n",

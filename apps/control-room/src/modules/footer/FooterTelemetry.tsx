@@ -13,18 +13,23 @@ import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 
 import type {
+  FrequencyDomainSweepProgressResource,
   LiveStatusResource,
   ObjectMetricsResource,
   SceneResource,
   SolverStatusResource,
+  StageExecutionResource,
 } from "@/kernel/api/apiTypes";
 import type { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 import type { ResourceResult } from "@/kernel/resources/resourceTypes";
 import {
+  useFrequencyDomainResponseProgressResource,
+  useFrequencyDomainResponseSweepResource,
   useObjectMetricsResource,
   useSolverStatusResource,
+  useStageExecutionResource,
 } from "@/kernel/resources/studyRuntimeResources";
 import {
   formatRuntimeStateLabel,
@@ -65,11 +70,21 @@ export function FooterTelemetry({
   );
   const objectMetrics = useObjectMetricsResource(objectId);
   const solverStatus = useSolverStatusResource({ enabled: Boolean(status) });
+  const stageExecution = useStageExecutionResource({ enabled: Boolean(status) });
+  const responseProgress = useFrequencyDomainResponseProgressResource({
+    enabled: Boolean(status),
+  });
+  const responseSweep = useFrequencyDomainResponseSweepResource({
+    enabled: Boolean(status),
+  });
   const telemetry = buildFooterTelemetryModel(
     status,
     objectMetrics.data,
     solverStatus.data,
     liveSample,
+    stageExecution.data,
+    responseProgress.data,
+    responseSweep.data,
   );
 
   return (
@@ -98,6 +113,9 @@ export function FooterTelemetry({
             {telemetry.onlineDetail}
           </span>
         </div>
+        {telemetry.frequencyDomainProgress ? (
+          <FrequencyDomainProgress progress={telemetry.frequencyDomainProgress} />
+        ) : null}
       </div>
 
       <div className="fm-footer-telemetry__metrics-grid" aria-label="Runtime metrics">
@@ -257,6 +275,9 @@ export function buildFooterTelemetryModel(
   objectMetrics: ObjectMetricsResource | null | undefined,
   solverStatus?: SolverStatusResource | null,
   liveSample?: FooterLiveScalarSample | null,
+  stageExecution?: StageExecutionResource | null,
+  responseProgress?: FrequencyDomainSweepProgressResource | null,
+  responseSweep?: unknown,
 ) {
   const liveSampleForStatus = resolveLiveSampleForStatus(status, liveSample);
   const liveRow = liveSampleForStatus?.row ?? null;
@@ -331,8 +352,15 @@ export function buildFooterTelemetryModel(
       : status
         ? "Last sync: status"
         : "Last sync: pending";
+  const frequencyDomainProgress = buildFrequencyDomainProgress({
+    responseProgress,
+    responseSweep,
+    solverStageKind: solverStatus?.stage_kind,
+    stageExecution,
+  });
 
   return {
+    frequencyDomainProgress,
     metrics: [
       {
         detail: usesPseudoTime
@@ -536,6 +564,466 @@ export function buildFooterTelemetryModel(
   };
 }
 
+type FooterFrequencyDomainProgress = {
+  detail: string;
+  frequencyLabel: string | null;
+  modeLabel: string | null;
+  percent: number | null;
+  percentLabel: string;
+  pointLabel: string | null;
+  rangeLabel: string | null;
+  residualLabel: string | null;
+  solutionLabel: string | null;
+  solveLabel: string | null;
+  solverLabel: string | null;
+  state: string;
+  title: string;
+};
+
+function buildFrequencyDomainProgress({
+  responseProgress,
+  responseSweep,
+  solverStageKind,
+  stageExecution,
+}: {
+  responseProgress?: FrequencyDomainSweepProgressResource | null;
+  responseSweep?: unknown;
+  solverStageKind?: string | null;
+  stageExecution?: StageExecutionResource | null;
+}): FooterFrequencyDomainProgress | null {
+  const activeStage = activeStageRecord(stageExecution);
+  const stageKind =
+    solverStageKind ??
+    stageExecution?.active_stage_kind ??
+    activeStage?.kind ??
+    null;
+  const stageIsFrequencyResponse = isFrequencyResponseStageKind(stageKind);
+  const stageIsEigenmodes = isEigenmodesStageKind(stageKind);
+  const responseHasProgress =
+    responseProgress &&
+    (responseProgress.total_frequency_points > 0 ||
+      responseProgress.partial_artifacts_available ||
+      responseProgress.state === "running");
+
+  if (!stageIsFrequencyResponse && !stageIsEigenmodes && !responseHasProgress) {
+    return null;
+  }
+
+  const usesResponseProgress = stageIsFrequencyResponse || !stageIsEigenmodes;
+  const activeResponseProgress = usesResponseProgress ? responseProgress : null;
+  const activeResponseSweep = usesResponseProgress ? responseSweep : null;
+  const total = activeResponseProgress?.total_frequency_points ?? null;
+  const completed = activeResponseProgress?.completed_frequency_points ?? null;
+  const parsedStageProgress = parseFrequencyResponseStageDetail(
+    activeStage?.progress_detail,
+  );
+  const stagePercent =
+    typeof activeStage?.progress_percent === "number" &&
+    Number.isFinite(activeStage.progress_percent)
+      ? activeStage.progress_percent
+      : null;
+  const jsonOverallPercent = frequencyProgressJsonOverallPercent(
+    activeResponseProgress?.progress_json,
+  );
+  const completedOnlyPercent =
+    typeof completed === "number" && typeof total === "number" && total > 0
+      ? (completed / total) * 100
+      : null;
+  const percent = stageIsFrequencyResponse
+    ? (jsonOverallPercent ?? stagePercent ?? completedOnlyPercent)
+    : (stagePercent ?? jsonOverallPercent ?? completedOnlyPercent);
+  const activeDetail =
+    activeStage?.progress_detail ?? activeStage?.progress_label ?? null;
+  const pointLabel =
+    parsedStageProgress.pointLabel ??
+    (typeof completed === "number" && typeof total === "number" && total > 0
+      ? `point ${Math.min(completed + 1, total)}/${total}`
+      : stageIsFrequencyResponse
+        ? "waiting for first point"
+        : null);
+  const rangeLabel =
+    parsedStageProgress.rangeLabel ??
+    frequencyProgressRangeLabel(activeResponseProgress) ??
+    frequencyRangeLabel(activeResponseSweep);
+  const currentFrequencyHz =
+    typeof activeResponseProgress?.current_frequency_hz === "number" &&
+    Number.isFinite(activeResponseProgress.current_frequency_hz)
+      ? activeResponseProgress.current_frequency_hz
+      : parsedStageProgress.frequencyHz;
+  const frequencyLabel =
+    currentFrequencyHz !== null
+      ? formatFrequencyGHz(currentFrequencyHz)
+      : stageIsFrequencyResponse
+        ? "pending"
+        : null;
+  const solverLabel =
+    parsedStageProgress.solverLabel ??
+    frequencyProgressJsonSolverLabel(activeResponseProgress?.progress_json);
+  const solveLabel =
+    parsedStageProgress.solveLabel ??
+    frequencyProgressJsonSolveLabel(activeResponseProgress?.progress_json);
+  const residualLabel =
+    parsedStageProgress.residualLabel ??
+    frequencyProgressJsonResidualLabel(activeResponseProgress?.progress_json);
+  const modeLabel =
+    parsedStageProgress.modeLabel ??
+    frequencyProgressDemagModeLabel(activeResponseProgress) ??
+    frequencyProgressJsonDemagModeLabel(activeResponseProgress?.progress_json);
+  const waitingDetail = stageIsFrequencyResponse
+    ? "waiting for first frequency point"
+    : null;
+  const normalizedActiveDetail =
+    activeDetail && !activeDetail.toLowerCase().includes("frequency point")
+      ? activeDetail
+      : null;
+  const pointDetail =
+    parsedStageProgress.rawPointDetail ??
+    (pointLabel && pointLabel !== "waiting for first point" ? pointLabel : null);
+  const solutionLabel = frequencyProgressSolutionLabel(pointLabel);
+  const detailParts = [
+    normalizedActiveDetail,
+    modeLabel,
+    solutionLabel ?? pointDetail ?? waitingDetail,
+    frequencyLabel && frequencyLabel !== "pending" ? frequencyLabel : null,
+    solveLabel,
+    solverLabel,
+    residualLabel,
+    rangeLabel ? `range ${rangeLabel}` : null,
+  ].filter((part): part is string => Boolean(part));
+
+  return {
+    detail: detailParts.join(" · ") || "stage progress pending",
+    frequencyLabel,
+    modeLabel,
+    percent: percent === null ? null : Math.round(percent),
+    percentLabel:
+      percent === null ? "running" : `${Math.round(percent).toString()}%`,
+    pointLabel,
+    rangeLabel,
+    residualLabel,
+    solutionLabel,
+    solveLabel,
+    solverLabel,
+    state: activeResponseProgress?.state ?? activeStage?.status ?? "running",
+    title: stageIsEigenmodes
+      ? "Eigenmodes"
+      : modeLabel
+        ? "Demag frequency sweep"
+        : "Frequency response",
+  };
+}
+
+function activeStageRecord(
+  stageExecution: StageExecutionResource | null | undefined,
+): StageExecutionResource["stages"][number] | null {
+  const index = stageExecution?.active_stage_index;
+  if (typeof index !== "number") return null;
+  return stageExecution?.stages[index] ?? null;
+}
+
+function isFrequencyResponseStageKind(kind: string | null | undefined): boolean {
+  if (!kind) return false;
+  return kind === "frequency_response" || kind === "flat_frequency_response";
+}
+
+function isEigenmodesStageKind(kind: string | null | undefined): boolean {
+  if (!kind) return false;
+  return kind === "eigenmodes" || kind === "flat_eigenmodes";
+}
+
+function frequencyRangeLabel(sweep: unknown): string | null {
+  const frequencies = collectFrequenciesHz(sweep).toSorted(
+    (left, right) => left - right,
+  );
+  if (frequencies.length === 0) return null;
+  const first = frequencies[0];
+  const last = frequencies[frequencies.length - 1];
+  if (first === last) return formatFrequencyGHz(first);
+  return `${(first / 1.0e9).toFixed(3)}-${formatFrequencyGHz(last)}`;
+}
+
+function frequencyProgressRangeLabel(
+  progress: FrequencyDomainSweepProgressResource | null | undefined,
+): string | null {
+  const topLevelRange = frequencyRangeLabelFromValues(
+    progress?.frequency_min_hz,
+    progress?.frequency_max_hz,
+  );
+  if (topLevelRange) return topLevelRange;
+  const payload = parseJsonRecord(progress?.progress_json);
+  return frequencyRangeLabelFromValues(
+    numberFromRecord(payload, "frequency_min_hz"),
+    numberFromRecord(payload, "frequency_max_hz"),
+  );
+}
+
+function frequencyRangeLabelFromValues(
+  minHz: number | null | undefined,
+  maxHz: number | null | undefined,
+): string | null {
+  if (
+    typeof minHz !== "number" ||
+    typeof maxHz !== "number" ||
+    !Number.isFinite(minHz) ||
+    !Number.isFinite(maxHz) ||
+    minHz <= 0 ||
+    maxHz <= 0 ||
+    maxHz < minHz
+  ) {
+    return null;
+  }
+  if (minHz === maxHz) return formatFrequencyGHz(minHz);
+  return `${(minHz / 1.0e9).toFixed(3)}-${formatFrequencyGHz(maxHz)}`;
+}
+
+function parseFrequencyResponseStageDetail(
+  detail: string | null | undefined,
+): {
+  frequencyHz: number | null;
+  pointLabel: string | null;
+  rawPointDetail: string | null;
+  modeLabel: string | null;
+  rangeLabel: string | null;
+  residualLabel: string | null;
+  solveLabel: string | null;
+  solverLabel: string | null;
+} {
+  if (!detail) {
+    return {
+      frequencyHz: null,
+      modeLabel: null,
+      pointLabel: null,
+      rawPointDetail: null,
+      rangeLabel: null,
+      residualLabel: null,
+      solveLabel: null,
+      solverLabel: null,
+    };
+  }
+
+  const pointMatch = detail.match(/frequency point\s+(\d+)\/(\d+)/i);
+  const frequencyMatch = detail.match(/f=([0-9.+-eE]+)\s*GHz/i);
+  const rangeMatch = detail.match(/range=([0-9.+-eE]+)-([0-9.+-eE]+)\s*GHz/i);
+  const iterationMatch = detail.match(/GMRES iteration=(\d+)(?:\/(\d+))?/i);
+  const solveMatch = detail.match(/current frequency solve=([0-9.+-eE]+)%/i);
+  const residualMatch = detail.match(/relative residual=([0-9.+-eE]+)/i);
+  const demagMatch = detail.match(/demag=([^;]+)/i);
+  const frequencyGhz = frequencyMatch ? Number(frequencyMatch[1]) : NaN;
+  const rangeMinGhz = rangeMatch ? Number(rangeMatch[1]) : NaN;
+  const rangeMaxGhz = rangeMatch ? Number(rangeMatch[2]) : NaN;
+
+  return {
+    frequencyHz: Number.isFinite(frequencyGhz) ? frequencyGhz * 1.0e9 : null,
+    modeLabel: demagMatch ? demagModeLabel(demagMatch[1]) : null,
+    pointLabel: pointMatch ? `point ${pointMatch[1]}/${pointMatch[2]}` : null,
+    rawPointDetail: pointMatch ? pointMatch[0] : null,
+    rangeLabel:
+      Number.isFinite(rangeMinGhz) && Number.isFinite(rangeMaxGhz)
+        ? `${rangeMinGhz.toFixed(3)}-${rangeMaxGhz.toFixed(3)} GHz`
+        : null,
+    residualLabel: residualMatch ? `relres ${residualMatch[1]}` : null,
+    solveLabel: solveMatch ? `solve ${solveMatch[1]}%` : null,
+    solverLabel: iterationMatch
+      ? `GMRES ${iterationMatch[1]}${iterationMatch[2] ? `/${iterationMatch[2]}` : ""}`
+      : null,
+  };
+}
+
+function frequencyProgressDemagModeLabel(
+  progress: FrequencyDomainSweepProgressResource | null | undefined,
+): string | null {
+  return progress?.demag_mode ? demagModeLabel(progress.demag_mode) : null;
+}
+
+function frequencyProgressJsonDemagModeLabel(
+  progressJson: string | null | undefined,
+): string | null {
+  const payload = parseJsonRecord(progressJson);
+  const rawMode = asString(payload?.demag_mode);
+  return rawMode ? demagModeLabel(rawMode) : null;
+}
+
+function frequencyProgressJsonSolverLabel(
+  progressJson: string | null | undefined,
+): string | null {
+  const payload = parseJsonRecord(progressJson);
+  const iteration = numberFromRecord(payload, "native_iteration_count");
+  const maxIterations = numberFromRecord(
+    payload,
+    "native_max_iterations_for_frequency",
+  );
+  if (iteration === null) return null;
+  const iterationLabel = Math.round(iteration).toString();
+  return maxIterations === null
+    ? `GMRES ${iterationLabel}`
+    : `GMRES ${iterationLabel}/${Math.round(maxIterations).toString()}`;
+}
+
+function frequencyProgressJsonSolveLabel(
+  progressJson: string | null | undefined,
+): string | null {
+  const payload = parseJsonRecord(progressJson);
+  const solveFraction = numberFromRecord(
+    payload,
+    "native_current_frequency_solve_fraction",
+  );
+  if (solveFraction === null) return null;
+  const percent = Math.round(Math.max(0, Math.min(1, solveFraction)) * 100);
+  return `solve ${percent.toString()}%`;
+}
+
+function frequencyProgressJsonResidualLabel(
+  progressJson: string | null | undefined,
+): string | null {
+  const payload = parseJsonRecord(progressJson);
+  const residual = numberFromRecord(payload, "native_relative_residual_l2_norm");
+  return residual === null ? null : `relres ${residual.toExponential(3)}`;
+}
+
+function frequencyProgressJsonOverallPercent(
+  progressJson: string | null | undefined,
+): number | null {
+  const payload = parseJsonRecord(progressJson);
+  const completed = numberFromRecord(payload, "completed_frequency_points");
+  const total = numberFromRecord(payload, "total_frequency_points");
+  const frequencyIndex = numberFromRecord(payload, "native_frequency_index");
+  const solveFraction = numberFromRecord(
+    payload,
+    "native_current_frequency_solve_fraction",
+  );
+  if (
+    completed === null ||
+    total === null ||
+    frequencyIndex === null ||
+    solveFraction === null ||
+    total <= 0
+  ) {
+    return null;
+  }
+  const completedBeforeCurrent = Math.min(
+    Math.max(0, completed),
+    Math.max(0, frequencyIndex),
+  );
+  return Math.max(
+    0,
+    Math.min(
+      100,
+      ((completedBeforeCurrent + Math.max(0, Math.min(1, solveFraction))) /
+        total) *
+        100,
+    ),
+  );
+}
+
+function frequencyProgressSolutionLabel(pointLabel: string | null): string | null {
+  if (!pointLabel) return null;
+  const match = pointLabel.match(/^point\s+(\d+)\/(\d+)$/i);
+  if (!match) return null;
+  return `solution ${match[1]}/${match[2]}`;
+}
+
+function demagModeLabel(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "periodic_airbox_k0") return "periodic airbox demag";
+  if (normalized === "floquet_airbox") return "Floquet airbox demag";
+  if (normalized === "enabled") return "demag";
+  return `${normalized.replaceAll("_", " ")} demag`;
+}
+
+function parseJsonRecord(value: string | null | undefined): Record<string, unknown> | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return asRecord(parsed);
+  } catch {
+    return null;
+  }
+}
+
+function numberFromRecord(
+  record: Record<string, unknown> | null,
+  key: string,
+): number | null {
+  const value = record?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function collectFrequenciesHz(value: unknown): number[] {
+  if (!value || typeof value !== "object") return [];
+  if (Array.isArray(value)) {
+    return value.flatMap(collectFrequenciesHz);
+  }
+
+  const record = value as Record<string, unknown>;
+  const direct = record.frequency_hz;
+  const fromDirect =
+    typeof direct === "number" && Number.isFinite(direct) ? [direct] : [];
+  const fromArrays = ["frequencies_hz", "frequency_hz_values"]
+    .flatMap((key) => {
+      const item = record[key];
+      return Array.isArray(item)
+        ? item.filter(
+            (entry): entry is number =>
+              typeof entry === "number" && Number.isFinite(entry),
+          )
+        : [];
+    });
+  const nested = ["points", "samples", "data"]
+    .flatMap((key) => collectFrequenciesHz(record[key]));
+  return [...fromDirect, ...fromArrays, ...nested];
+}
+
+function FrequencyDomainProgress({
+  progress,
+}: {
+  progress: FooterFrequencyDomainProgress;
+}) {
+  const width = progress.percent ?? 100;
+  return (
+    <div className="fm-footer-telemetry__frequency-progress">
+      <div className="fm-footer-telemetry__frequency-progress-header">
+        <span>{progress.title}</span>
+        <span>{progress.percentLabel}</span>
+      </div>
+      <div className="fm-footer-telemetry__frequency-progress-chips">
+        {[
+          progress.solutionLabel ?? progress.pointLabel,
+          progress.frequencyLabel,
+          progress.solveLabel,
+          progress.modeLabel,
+          progress.solverLabel,
+          progress.residualLabel,
+          progress.rangeLabel,
+        ]
+          .filter((label): label is string => Boolean(label))
+          .map((label) => (
+            <span key={label}>{label}</span>
+          ))}
+      </div>
+      <div
+        aria-label={progress.title}
+        aria-valuemax={100}
+        aria-valuemin={0}
+        aria-valuenow={progress.percent ?? undefined}
+        className={
+          progress.percent === null
+            ? "fm-footer-telemetry__frequency-progress-track fm-footer-telemetry__frequency-progress-track--indeterminate"
+            : "fm-footer-telemetry__frequency-progress-track"
+        }
+        role="progressbar"
+      >
+        <span
+          className="fm-footer-telemetry__frequency-progress-bar"
+          style={{ width: `${width}%` }}
+        />
+      </div>
+      <span className="fm-footer-telemetry__frequency-progress-detail">
+        {progress.detail}
+      </span>
+    </div>
+  );
+}
+
 function resolveLiveSampleForStatus(
   status: FooterTelemetryStatus | null | undefined,
   liveSample: FooterLiveScalarSample | null | undefined,
@@ -677,6 +1165,10 @@ function formatInteger(value: number | null | undefined): string {
   return typeof value === "number" && Number.isFinite(value)
     ? INTEGER_FORMAT.format(value)
     : "0";
+}
+
+function formatFrequencyGHz(valueHz: number): string {
+  return `${(valueHz / 1.0e9).toFixed(3)} GHz`;
 }
 
 function formatScientific(

@@ -1,18 +1,19 @@
-"""FEM modal k-path dispersion example.
+"""FEM production CPU selected-spectrum no-demag k-path dispersion example.
 
-Computes a small no-demag Floquet eigenmode dispersion bundle on a reciprocal
-low-k Gamma-X-Gamma-minus-X path. This is a managed-runtime smoke for the
-lowest-branch modal artifact contract; it is not a dynamic-demag,
-selected-spectrum, Damon-Eshbach/backward-volume, or GPU production example.
+Computes a small no-demag reciprocal low-k Floquet k-path with a
+frequency-window target. This is a managed-runtime proof for the current
+production CPU Bloch/Floquet selected-spectrum modal slice; dynamic demag-k,
+Damon-Eshbach/backward-volume analytic acceptance, broader sparse/matrix-free
+Floquet validation, and native GPU modal dispersion remain unsupported.
 
 Usage:
-    FULLMAG_FEM_EXECUTION=cpu fullmag examples/fem_eigenmodes_dispersion_k_path.py --headless
+    FULLMAG_FEM_EXECUTION=cpu fullmag examples/fem_eigenmodes_dispersion_window_k_path.py --headless
 """
 
 import fullmag as fm
 
 
-study = fm.study("fem_eigenmodes_dispersion_k_path")
+study = fm.study("fem_eigenmodes_dispersion_window_k_path")
 study.engine("fem")
 study.device("cpu", precision="double")
 study.universe(
@@ -40,7 +41,9 @@ study.save("mode", indices=(0,))
 
 study.stages.add_eigenmodes(
     count=2,
-    target="lowest",
+    target="frequency_window",
+    frequency_min=1.0e9,
+    frequency_max=3.0e9,
     operator="full_2x2",
     include_demag=False,
     equilibrium_source="provided",

@@ -97,6 +97,39 @@ pub(crate) struct FrequencyDomainSweepProgress {
 }
 
 impl FrequencyDomainSweepProgress {
+    fn progress_json(
+        state: &str,
+        status: Option<&str>,
+        complete: Option<bool>,
+        total_frequency_points: u64,
+        completed_frequency_points: u64,
+        written_frequency_point_artifacts: u64,
+        current_frequency_hz: f64,
+        partial_artifacts_available: bool,
+        latest_artifact_manifest_path: &str,
+    ) -> String {
+        let mut value = serde_json::json!({
+            "schema_version": "frequency_domain_sweep_progress.v1",
+            "state": state,
+            "total_frequency_points": total_frequency_points,
+            "completed_frequency_points": completed_frequency_points,
+            "written_frequency_point_artifacts": written_frequency_point_artifacts,
+            "current_frequency_hz": current_frequency_hz,
+            "partial_artifacts_available": partial_artifacts_available,
+            "latest_artifact_manifest_path": latest_artifact_manifest_path,
+        });
+        let object = value
+            .as_object_mut()
+            .expect("progress checkpoint should be a JSON object");
+        if let Some(status) = status {
+            object.insert("status".to_string(), serde_json::json!(status));
+        }
+        if let Some(complete) = complete {
+            object.insert("complete".to_string(), serde_json::json!(complete));
+        }
+        value.to_string()
+    }
+
     #[allow(dead_code)]
     pub(crate) fn not_started(total_frequency_points: u64) -> Self {
         #[cfg(feature = "fem-gpu")]
@@ -153,8 +186,16 @@ impl FrequencyDomainSweepProgress {
             current_frequency_hz,
             partial_artifacts_available,
             latest_artifact_manifest_path: latest_artifact_manifest_path.to_string(),
-            progress_json: format!(
-                "{{\"schema_version\":\"frequency_domain_sweep_progress.v1\",\"state\":\"interrupted\",\"partial_artifacts_available\":{partial_artifacts_available}}}"
+            progress_json: Self::progress_json(
+                "interrupted",
+                Some("interrupted"),
+                Some(false),
+                total_frequency_points,
+                completed_frequency_points,
+                written_frequency_point_artifacts,
+                current_frequency_hz,
+                partial_artifacts_available,
+                latest_artifact_manifest_path,
             ),
         }
     }
@@ -196,8 +237,16 @@ impl FrequencyDomainSweepProgress {
             current_frequency_hz,
             partial_artifacts_available,
             latest_artifact_manifest_path: latest_artifact_manifest_path.to_string(),
-            progress_json: format!(
-                "{{\"schema_version\":\"frequency_domain_sweep_progress.v1\",\"state\":\"cancel_requested\",\"partial_artifacts_available\":{partial_artifacts_available}}}"
+            progress_json: Self::progress_json(
+                "cancel_requested",
+                Some("cancel_requested"),
+                Some(false),
+                total_frequency_points,
+                completed_frequency_points,
+                written_frequency_point_artifacts,
+                current_frequency_hz,
+                partial_artifacts_available,
+                latest_artifact_manifest_path,
             ),
         }
     }
@@ -229,17 +278,26 @@ impl FrequencyDomainSweepProgress {
             }
         }
 
+        let partial_artifacts_available =
+            completed_frequency_points > 0 || written_frequency_point_artifacts > 0;
         Self {
             total_frequency_points,
             completed_frequency_points,
             written_frequency_point_artifacts,
             current_frequency_hz,
-            partial_artifacts_available:
-                completed_frequency_points > 0 || written_frequency_point_artifacts > 0,
+            partial_artifacts_available,
             latest_artifact_manifest_path: latest_artifact_manifest_path.to_string(),
-            progress_json:
-                "{\"schema_version\":\"frequency_domain_sweep_progress.v1\",\"state\":\"completed\",\"partial_artifacts_available\":true}"
-                    .to_string(),
+            progress_json: Self::progress_json(
+                "completed",
+                Some("ready"),
+                Some(true),
+                total_frequency_points,
+                completed_frequency_points,
+                written_frequency_point_artifacts,
+                current_frequency_hz,
+                partial_artifacts_available,
+                latest_artifact_manifest_path,
+            ),
         }
     }
 
@@ -251,8 +309,16 @@ impl FrequencyDomainSweepProgress {
             current_frequency_hz: 0.0,
             partial_artifacts_available: false,
             latest_artifact_manifest_path: String::new(),
-            progress_json: format!(
-                "{{\"schema_version\":\"frequency_domain_sweep_progress.v1\",\"state\":\"not_started\",\"total_frequency_points\":{total_frequency_points},\"partial_artifacts_available\":false}}"
+            progress_json: Self::progress_json(
+                "not_started",
+                None,
+                None,
+                total_frequency_points,
+                0,
+                0,
+                0.0,
+                false,
+                "",
             ),
         }
     }

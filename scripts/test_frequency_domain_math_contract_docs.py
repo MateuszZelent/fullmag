@@ -20,6 +20,13 @@ def test_modal_gyrotropic_mapping_contract_is_explicit() -> None:
     assert "omega_rad_s = Im(i * sigma)" not in plan
     assert "mu0 * Ms(r) / gamma0" in plan
 
+    physics = read(REPO_ROOT / "docs/physics/0700-frequency-domain-linearized-llg.md")
+    artifacts = read(REPO_ROOT / "docs/specs/frequency-domain-artifacts-v2.md")
+
+    assert "B = -G" in physics
+    assert "K phi = lambda (-G) phi" in physics
+    assert 'gyrotropic_form = "pencil_B=-G=[[0,M],[-M,0]]"' in artifacts
+
 
 def test_dynamic_demag_and_response_observables_use_si_contract() -> None:
     plan = read(PLAN_ROOT / "10-production-interior-window-eigensolver.md")
@@ -58,7 +65,21 @@ def test_modal_dispersion_artifact_contract_names_tracking_and_mode_handoff() ->
     assert "`mode_field_id` and `mode_field_resource_key`" in artifacts
     assert (
         "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,"
-        "label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,line_width_hz,"
-        "residual_norm,overlap_score,tracking_score_source,mode_field_id,"
-        "mode_field_resource_key"
+        "label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,"
+        "analytic_frequency_hz,relative_error,validation_geometry,"
+        "line_width_hz,residual_norm,overlap_score,tracking_score_source,"
+        "mode_field_id,mode_field_resource_key"
     ) in artifacts
+
+
+def test_driven_response_manifest_links_progress_resource_contract() -> None:
+    artifacts = read(REPO_ROOT / "docs/specs/frequency-domain-artifacts-v2.md")
+
+    assert "artifacts.response_progress_v1_path" in artifacts
+    assert "resources.response_progress_resource_key" in artifacts
+    assert '"response/progress.v1.json"' in artifacts
+    assert (
+        '"/v2/sessions/current/analysis/frequency-domain/response/progress.v1"'
+        in artifacts
+    )
+    assert "Completed driven-response manifests" in artifacts

@@ -203,14 +203,30 @@ function realtimeBatchChange(change: unknown): RealtimeBatchChange | null {
 }
 
 function resourceFamilyPrefix(pathWithObjectId: string): string {
-  return pathWithObjectId.slice(0, pathWithObjectId.indexOf("{object_id}"));
+  const idx = pathWithObjectId.indexOf("{object_id}");
+  if (idx === -1 && process.env.NODE_ENV !== "production") {
+    throw new Error(
+      `resourceFamilyPrefix: missing {object_id} in "${pathWithObjectId}"`,
+    );
+  }
+  return pathWithObjectId.slice(0, idx);
+}
+
+const stageScopedRegexCache = new Map<string, RegExp>();
+
+function stageScopedRegex(pathTemplate: string): RegExp {
+  let cached = stageScopedRegexCache.get(pathTemplate);
+  if (!cached) {
+    cached = new RegExp(
+      `^${escapeResourcePathTemplate(pathTemplate)}(?:[:?]|$)`,
+    );
+    stageScopedRegexCache.set(pathTemplate, cached);
+  }
+  return cached;
 }
 
 function matchesStageScopedResource(resourceKey: string, pathWithStageId: string): boolean {
-  const pattern = new RegExp(
-    `^${escapeResourcePathTemplate(pathWithStageId)}(?:[:?]|$)`,
-  );
-  return pattern.test(resourceKey);
+  return stageScopedRegex(pathWithStageId).test(resourceKey);
 }
 
 function concreteStageIdFromResourceKey(
@@ -232,10 +248,7 @@ function matchesConcreteStageScopedResource(
   stageId: string,
 ): boolean {
   const stagePathTemplate = pathWithStageId.replace("{stage_id}", stageId);
-  const pattern = new RegExp(
-    `^${escapeResourcePathTemplate(stagePathTemplate)}(?:[:?]|$)`,
-  );
-  return pattern.test(resourceKey);
+  return stageScopedRegex(stagePathTemplate).test(resourceKey);
 }
 
 function escapeResourcePathTemplate(pathTemplate: string): string {
@@ -486,9 +499,7 @@ export class RealtimeInvalidationBridge {
     const canonicalQuantityId = resolveCanonicalQuantityId(quantityId);
     const quantityPrefix = `${DATA_FIELDS_PATH}/${encodeURIComponent(canonicalQuantityId)}/`;
     this.queueMatchingInvalidation(
-      (resourceKey) =>
-        resourceKey.startsWith(quantityPrefix) ||
-        resourceKey.includes(quantityPrefix),
+      (resourceKey) => resourceKey.includes(quantityPrefix),
       revision,
     );
     if (canonicalQuantityId === "m") {

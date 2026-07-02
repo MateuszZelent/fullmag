@@ -1513,6 +1513,80 @@ def validate_demag_runtime(metadata: dict[str, Any], engine: str) -> None:
             "periodic_boundary_markers_excluded_from_robin must be true"
         ),
     )
+    mesh = require_object(metadata.get("mesh"), "metadata.mesh")
+    expected_node_counts = require_object(
+        mesh.get("periodic_node_pair_counts_by_id"),
+        "metadata.mesh.periodic_node_pair_counts_by_id",
+    )
+    expected_boundary_counts = require_object(
+        mesh.get("periodic_boundary_pair_counts_by_id"),
+        "metadata.mesh.periodic_boundary_pair_counts_by_id",
+    )
+    reduction_node_counts = require_object(
+        periodic_reduction.get("node_pair_counts_by_id"),
+        "demag_runtime.periodic_reduction.node_pair_counts_by_id",
+    )
+    reduction_boundary_counts = require_object(
+        periodic_reduction.get("boundary_pair_counts_by_id"),
+        "demag_runtime.periodic_reduction.boundary_pair_counts_by_id",
+    )
+    mesh_node_pair_count = mesh.get("periodic_node_pair_count")
+    require(
+        isinstance(mesh_node_pair_count, int) and mesh_node_pair_count > 0,
+        "metadata.mesh.periodic_node_pair_count must be positive",
+    )
+    mesh_boundary_pair_count = mesh.get("periodic_boundary_pair_count")
+    require(
+        isinstance(mesh_boundary_pair_count, int) and mesh_boundary_pair_count > 0,
+        "metadata.mesh.periodic_boundary_pair_count must be positive",
+    )
+    expected_total_node_pairs = 0
+    expected_total_boundary_pairs = 0
+    for pair_id in ("x_faces", "y_faces"):
+        expected_node_count = expected_node_counts.get(pair_id)
+        reduction_node_count = reduction_node_counts.get(pair_id)
+        require(
+            isinstance(expected_node_count, int) and expected_node_count > 0,
+            f"metadata.mesh.periodic_node_pair_counts_by_id.{pair_id} must be positive",
+        )
+        expected_total_node_pairs += expected_node_count
+        require(
+            isinstance(reduction_node_count, int)
+            and reduction_node_count == expected_node_count,
+            (
+                f"demag_runtime.periodic_reduction.node_pair_counts_by_id.{pair_id} "
+                "must match metadata.mesh.periodic_node_pair_counts_by_id"
+            ),
+        )
+        expected_boundary_count = expected_boundary_counts.get(pair_id)
+        reduction_boundary_count = reduction_boundary_counts.get(pair_id)
+        require(
+            isinstance(expected_boundary_count, int) and expected_boundary_count > 0,
+            f"metadata.mesh.periodic_boundary_pair_counts_by_id.{pair_id} must be positive",
+        )
+        expected_total_boundary_pairs += expected_boundary_count
+        require(
+            isinstance(reduction_boundary_count, int)
+            and reduction_boundary_count == expected_boundary_count,
+            (
+                f"demag_runtime.periodic_reduction.boundary_pair_counts_by_id.{pair_id} "
+                "must match metadata.mesh.periodic_boundary_pair_counts_by_id"
+            ),
+        )
+    require(
+        node_pair_count == mesh_node_pair_count == expected_total_node_pairs,
+        (
+            "demag_runtime.periodic_reduction.node_pair_count must match "
+            "metadata.mesh.periodic_node_pair_count and the per-pair-id sum"
+        ),
+    )
+    require(
+        boundary_pair_count == mesh_boundary_pair_count == expected_total_boundary_pairs,
+        (
+            "demag_runtime.periodic_reduction.boundary_pair_count must match "
+            "metadata.mesh.periodic_boundary_pair_count and the per-pair-id sum"
+        ),
+    )
     require(
         demag.get("linear_solver") in {"CG", "PCG"},
         f"demag_runtime.linear_solver must be CG/PCG, got {demag.get('linear_solver')!r}",

@@ -1,6 +1,7 @@
 use fullmag_ir::{
     BackendPlanIR, BackendTarget, CommonPlanMeta, DiscretizationHintsIR, DomainFrameIR,
-    EnergyTermIR, ExchangeBoundaryCondition, ExecutionPlanIR, ExecutionPrecision, FemEigenPlanIR,
+    EnergyTermIR, ExchangeBoundaryCondition, ExecutionPlanIR, ExecutionPrecision,
+    FemEigenDispersionValidationIR, FemEigenPlanIR, FemFrequencyDomainEquilibriumProvenanceIR,
     FemFrequencyResponsePlanIR, FemMagnetoelasticPlanIR, FemMechanicalModeIR, FemMechanicalPlanIR,
     FemPlanIR, GeometryEntryIR, MagnetostrictionLawIR, MechanicalLoadIR, OutputPlanIR, ProblemIR,
     ProvenancePlanIR, TimeDependenceIR, IR_VERSION,
@@ -42,6 +43,179 @@ fn domain_mesh_workflow_mode(problem: &ProblemIR) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+fn frequency_response_equilibrium_provenance(
+    problem: &ProblemIR,
+) -> Result<Option<FemFrequencyDomainEquilibriumProvenanceIR>, PlanError> {
+    let Some(value) = problem
+        .problem_meta
+        .runtime_metadata
+        .get("frequency_response_m5_equilibrium_provenance")
+    else {
+        return Ok(None);
+    };
+    serde_json::from_value::<FemFrequencyDomainEquilibriumProvenanceIR>(value.clone())
+        .map(Some)
+        .map_err(|error| PlanError {
+            reasons: vec![format!(
+                "runtime_metadata.frequency_response_m5_equilibrium_provenance is invalid: {error}"
+            )],
+        })
+}
+
+fn eigen_dispersion_validation(
+    problem: &ProblemIR,
+) -> Result<Option<FemEigenDispersionValidationIR>, PlanError> {
+    let Some(value) = problem
+        .problem_meta
+        .runtime_metadata
+        .get("dispersion_validation")
+    else {
+        return Ok(None);
+    };
+    let validation = serde_json::from_value::<FemEigenDispersionValidationIR>(value.clone())
+        .map_err(|error| PlanError {
+            reasons: vec![format!(
+                "runtime_metadata.dispersion_validation is invalid: {error}"
+            )],
+        })?;
+    validate_eigen_dispersion_validation(&validation)?;
+    Ok(Some(validation))
+}
+
+fn validate_eigen_dispersion_validation(
+    validation: &FemEigenDispersionValidationIR,
+) -> Result<(), PlanError> {
+    let mut errors = Vec::new();
+    if validation.kind != "thin_film_de_bv_low_k" {
+        errors.push(
+            "runtime_metadata.dispersion_validation.kind must be 'thin_film_de_bv_low_k'"
+                .to_string(),
+        );
+    }
+    if validation.analytic_model != "kalinikos_slab_n0" {
+        errors.push(
+            "runtime_metadata.dispersion_validation.analytic_model must be 'kalinikos_slab_n0'"
+                .to_string(),
+        );
+    }
+    if !(validation.film_thickness_m.is_finite() && validation.film_thickness_m > 0.0) {
+        errors.push(
+            "runtime_metadata.dispersion_validation.film_thickness_m must be finite and positive"
+                .to_string(),
+        );
+    }
+    if !(validation.max_k_rad_per_m.is_finite()
+        && validation.max_k_rad_per_m > 0.0
+        && validation.max_k_rad_per_m <= 3.0e6)
+    {
+        errors.push(
+            "runtime_metadata.dispersion_validation.max_k_rad_per_m must be in (0, 3e6]"
+                .to_string(),
+        );
+    }
+    if !(validation.max_relative_error.is_finite()
+        && validation.max_relative_error > 0.0
+        && validation.max_relative_error <= 0.25)
+    {
+        errors.push(
+            "runtime_metadata.dispersion_validation.max_relative_error must be in (0, 0.25]"
+                .to_string(),
+        );
+    }
+    let window = &validation.frequency_window_hz;
+    if !(window.min.is_finite()
+        && window.max.is_finite()
+        && window.min >= 0.0
+        && window.max > window.min
+        && window.max <= 5.0e9)
+    {
+        errors.push(
+            "runtime_metadata.dispersion_validation.frequency_window_hz must be finite, ordered, non-negative, and not exceed 5 GHz"
+                .to_string(),
+        );
+    }
+
+    let m0_norm = vector_norm(validation.equilibrium_magnetization);
+    let film_normal_norm = vector_norm(validation.film_normal);
+    if !(m0_norm.is_finite() && m0_norm > 0.0) {
+        errors.push(
+            "runtime_metadata.dispersion_validation.equilibrium_magnetization must be finite and non-zero"
+                .to_string(),
+        );
+    }
+    if !(film_normal_norm.is_finite() && film_normal_norm > 0.0) {
+        errors.push(
+            "runtime_metadata.dispersion_validation.film_normal must be finite and non-zero"
+                .to_string(),
+        );
+    }
+    if m0_norm.is_finite()
+        && m0_norm > 0.0
+        && film_normal_norm.is_finite()
+        && film_normal_norm > 0.0
+    {
+        let cos_angle = vector_dot(validation.equilibrium_magnetization, validation.film_normal)
+            .abs()
+            / (m0_norm * film_normal_norm);
+        if cos_angle > 1.0e-6 {
+            errors.push(
+                "runtime_metadata.dispersion_validation.equilibrium_magnetization must be in-plane"
+                    .to_string(),
+            );
+        }
+    }
+
+    let mut geometries = BTreeSet::new();
+    for (index, scenario) in validation.scenarios.iter().enumerate() {
+        match scenario.geometry.as_str() {
+            "damon_eshbach" | "backward_volume" => {
+                geometries.insert(scenario.geometry.as_str());
+            }
+            _ => errors.push(format!(
+                "runtime_metadata.dispersion_validation.scenarios[{index}].geometry must be damon_eshbach or backward_volume"
+            )),
+        }
+        if scenario.branch_id.trim().is_empty() {
+            errors.push(format!(
+                "runtime_metadata.dispersion_validation.scenarios[{index}].branch_id must not be empty"
+            ));
+        }
+        if scenario.sample_indices.len() < 3 {
+            errors.push(format!(
+                "runtime_metadata.dispersion_validation.scenarios[{index}].sample_indices must contain at least three samples"
+            ));
+        }
+    }
+    if !(geometries.contains("damon_eshbach") && geometries.contains("backward_volume")) {
+        errors.push(
+            "runtime_metadata.dispersion_validation.scenarios must include both damon_eshbach and backward_volume"
+                .to_string(),
+        );
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(PlanError { reasons: errors })
+    }
+}
+
+fn allows_low_k_de_bv_analytic_reference(
+    validation: &Option<FemEigenDispersionValidationIR>,
+) -> bool {
+    validation.as_ref().is_some_and(|validation| {
+        validation.kind == "thin_film_de_bv_low_k"
+            && validation.analytic_model == "kalinikos_slab_n0"
+    })
+}
+
+fn vector_dot(lhs: [f64; 3], rhs: [f64; 3]) -> f64 {
+    lhs[0] * rhs[0] + lhs[1] * rhs[1] + lhs[2] * rhs[2]
+}
+
+fn vector_norm(value: [f64; 3]) -> f64 {
+    vector_dot(value, value).sqrt()
 }
 
 fn requested_fem_demag_realization(problem: &ProblemIR) -> fullmag_ir::RequestedFemDemagIR {
@@ -2374,11 +2548,19 @@ pub(crate) fn plan_fem_eigen(
                 .to_string(),
         );
     }
+    let dispersion_validation = match eigen_dispersion_validation(problem) {
+        Ok(validation) => validation,
+        Err(error) => {
+            errors.extend(error.reasons);
+            None
+        }
+    };
     if operator.include_demag
         && matches!(
             spin_wave_bc.kind(),
             fullmag_ir::SpinWaveBoundaryKindIR::Floquet
         )
+        && !allows_low_k_de_bv_analytic_reference(&dispersion_validation)
     {
         errors.push(
             "dynamic demag for Floquet periodic FEM is not implemented yet. Disable demag or use k=0/free boundary."
@@ -2691,6 +2873,7 @@ pub(crate) fn plan_fem_eigen(
         spin_wave_bc: spin_wave_bc.clone(),
         demag_realization: resolved_demag_realization,
         mode_tracking: mode_tracking.clone(),
+        dispersion_validation,
     };
 
     let study_note = format!(
@@ -2916,6 +3099,7 @@ pub(crate) fn plan_fem_frequency_response(
             .and_then(|hints| hints.fem.as_ref())
             .and_then(|fem| fem.demag_solver_policy.clone()),
         periodic_constraint_sets: Vec::new(),
+        equilibrium_provenance: frequency_response_equilibrium_provenance(problem)?,
     };
     response_plan.periodic_constraint_sets =
         frequency_response_periodic_constraint_sets(&response_plan);
@@ -3057,7 +3241,13 @@ fn fem_frequency_response_production_slice_rejection_reason(
         }
         return None;
     }
-    if plan.domain_mesh_mode != fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh {
+    let shared_domain_no_demag = plan.domain_mesh_mode
+        == fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir
+        && !plan.enable_demag
+        && plan.demag_realization.is_none();
+    if plan.domain_mesh_mode != fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh
+        && !shared_domain_no_demag
+    {
         return Some("shared-domain airbox meshes are not supported by the driven frequency-response operator");
     }
     if plan.enable_demag || plan.demag_realization.is_some() {

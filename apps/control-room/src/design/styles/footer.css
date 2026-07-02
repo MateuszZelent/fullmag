@@ -715,6 +715,108 @@
   white-space: nowrap;
 }
 
+.fm-footer-telemetry__frequency-progress {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--fm-accent) 20%, var(--fm-border-subtle));
+  border-radius: var(--fm-radius-md);
+  background: color-mix(in srgb, var(--fm-bg-panel-raised) 94%, var(--fm-accent));
+  padding: var(--fm-space-2) var(--fm-space-3);
+}
+
+.fm-footer-telemetry__frequency-progress-header {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--fm-space-2);
+  min-width: 0;
+  color: var(--fm-text-primary);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.fm-footer-telemetry__frequency-progress-header span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-footer-telemetry__frequency-progress-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.fm-footer-telemetry__frequency-progress-chips span {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--fm-accent) 18%, var(--fm-border-subtle));
+  border-radius: var(--fm-radius-sm);
+  background: color-mix(in srgb, var(--fm-bg-canvas) 75%, var(--fm-accent));
+  color: var(--fm-text-secondary);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1;
+  padding: 3px 5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-footer-telemetry__frequency-progress-track {
+  position: relative;
+  overflow: hidden;
+  height: 7px;
+  border-radius: var(--fm-radius-sm);
+  background: color-mix(in srgb, var(--fm-bg-canvas) 68%, var(--fm-border-default));
+}
+
+.fm-footer-telemetry__frequency-progress-bar {
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    var(--fm-accent),
+    color-mix(in srgb, var(--fm-success) 76%, var(--fm-accent))
+  );
+}
+
+.fm-footer-telemetry__frequency-progress-track--indeterminate
+  .fm-footer-telemetry__frequency-progress-bar {
+  width: 42% !important;
+  animation: fm-footer-frequency-progress-indeterminate 1.4s ease-in-out infinite;
+}
+
+.fm-footer-telemetry__frequency-progress-detail {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fm-text-secondary);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes fm-footer-frequency-progress-indeterminate {
+  0% {
+    transform: translateX(-110%);
+  }
+
+  50% {
+    transform: translateX(70%);
+  }
+
+  100% {
+    transform: translateX(240%);
+  }
+}
+
 .fm-footer-telemetry__metrics-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));

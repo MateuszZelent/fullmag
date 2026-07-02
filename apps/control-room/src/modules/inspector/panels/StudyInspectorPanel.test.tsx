@@ -542,6 +542,84 @@ describe("StudyInspectorPanel", () => {
     expect(html).toContain("Tangent-plane implicit");
   });
 
+  it("shows runtime progress labels on stage pipeline progress bars", () => {
+    const draft = createDefaultStudyStageDraft("frequency_response", 0);
+    const html = renderToStaticMarkup(
+      <Accordion type="multiple" defaultValue={["pipeline"]}>
+        <StudyPipelineSection
+          activeStageIndex={0}
+          authoringBusy={false}
+          authoringFeedback={null}
+          commandDisabledReason={() => null}
+          draft={draft}
+          draftIndex={0}
+          drafts={[draft]}
+          model={{
+            boundary: testBoundary(),
+            requested: testRequested(),
+            runtime: {
+              activeStageLabel: "Frequency response 1",
+              commandBadge: "running",
+              commandError: null,
+              commandId: "cmd-frequency",
+              commandLabel: "Run running",
+              maxTorque: "unavailable",
+              progressPercent: 14,
+              relaxEnergyStop: null,
+              relaxTimeStop: null,
+              relaxTorqueStop: null,
+              runId: "run-frequency",
+              state: "running",
+            },
+            selectedStage: null,
+            stages: [
+              {
+                algorithm: null,
+                artifactRefs: [],
+                checkpointRef: null,
+                commandId: "cmd-frequency",
+                completedAtIso: null,
+                completedAtUnixMs: null,
+                energyTolerance: null,
+                index: 0,
+                kind: "frequency_response",
+                label: "Frequency response 1",
+                lastProgressUnixMs: 1_781_467_092_000,
+                maxSteps: null,
+                progressDetail:
+                  "demag=periodic_airbox_k0; range=2.000000-5.000000 GHz; frequency point 2/7",
+                progressLabel: "solving frequency point",
+                progressPercent: 14,
+                runtimeMetric: null,
+                stageId: "stage-frequency",
+                status: "running",
+                stopReason: null,
+                timeBudgetKind: "physical",
+                torqueTolerance: null,
+                torqueToleranceFormatted: null,
+                torqueToleranceShortFormatted: null,
+                transition: null,
+                untilSeconds: null,
+              },
+            ],
+          }}
+          onAddStage={() => undefined}
+          onCommit={() => undefined}
+          onDuplicateStage={() => undefined}
+          onMoveStage={() => undefined}
+          onRemoveStage={() => undefined}
+          onSelectDraft={() => undefined}
+          onUpdateDraft={() => undefined}
+          runCommand={() => undefined}
+        />
+      </Accordion>,
+    );
+
+    expect(html).toContain("Frequency response 1");
+    expect(html).toContain("solving frequency point");
+    expect(html).toContain("aria-valuenow=\"14\"");
+  });
+
   it("renders spectral authoring selects with Python DSL option values", () => {
     const draft = createDefaultStudyStageDraft("eigenmodes", 0);
     const html = renderToStaticMarkup(

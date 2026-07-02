@@ -10,6 +10,7 @@
 #include "context.hpp"
 #include "fem_common.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -22,7 +23,20 @@ namespace fullmag::fem {
 
 bool demag_periodic_poisson_reduction_requested(const Context &ctx)
 {
-    return ctx.demag.enabled && !ctx.mesh.periodic_node_pairs.empty();
+    if (!ctx.demag.enabled ||
+        ctx.mesh.periodic_node_pairs.empty() ||
+        ctx.mesh.periodic_reduced_node_count == 0 ||
+        ctx.mesh.periodic_reduced_node.size() != static_cast<size_t>(ctx.mesh.n_nodes) ||
+        ctx.mesh.periodic_representative_nodes.size() !=
+            static_cast<size_t>(ctx.mesh.periodic_reduced_node_count)) {
+        return false;
+    }
+    return std::all_of(
+        ctx.mesh.periodic_reduced_node.begin(),
+        ctx.mesh.periodic_reduced_node.end(),
+        [&ctx](uint32_t reduced) {
+            return reduced < ctx.mesh.periodic_reduced_node_count;
+        });
 }
 
 #if FULLMAG_HAS_MFEM_STACK

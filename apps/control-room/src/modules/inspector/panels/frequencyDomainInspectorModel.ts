@@ -21,6 +21,21 @@ function capabilityLabel(
   return `${label}: ${nestedStatus(capabilities, ...path)}`;
 }
 
+function dispersionModalCapabilityLabel(capabilities: unknown): string {
+  return [
+    capabilityLabel(capabilities, "reference_cpu", "dispersion", "reference_cpu"),
+    capabilityLabel(capabilities, "production_cpu", "dispersion", "production_cpu"),
+    capabilityLabel(
+      capabilities,
+      "production_cpu_gamma_k_path",
+      "dispersion",
+      "production_cpu_gamma_k_path",
+    ),
+    capabilityLabel(capabilities, "production_gpu", "dispersion", "production_gpu"),
+    capabilityLabel(capabilities, "k_path", "dispersion", "k_path"),
+  ].join("; ");
+}
+
 export interface FrequencyDomainCalculationModeRow {
   artifacts: string;
   boundaryPreset: string;
@@ -85,12 +100,7 @@ export function buildFrequencyDomainCalculationModeRows(
     {
       artifacts: "dispersion.csv + branches.v2 + mode fields",
       boundaryPreset: "Floquet/Bloch k-path",
-      capabilityStatus: capabilityLabel(
-        capabilities,
-        "k_path",
-        "dispersion",
-        "k_path",
-      ),
+      capabilityStatus: dispersionModalCapabilityLabel(capabilities),
       canonicalStudy: "Eigenmodes",
       excitationRequirement: "not required",
       kRequirement: "k-path required",

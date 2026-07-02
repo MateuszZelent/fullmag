@@ -91,22 +91,38 @@ std::string format_double(double value) noexcept
 
 std::string operator_k_vector_diagnostics_json(const ModalEigenRequest &request)
 {
-    if (request.operator_request.k_vector_rad_m == nullptr ||
-        request.operator_request.k_vector_len <= 0) {
+    const double *k_vector = request.operator_request.k_vector_rad_m;
+    int k_vector_len = request.operator_request.k_vector_len;
+    if ((k_vector == nullptr || k_vector_len <= 0) &&
+        request.has_floquet_k_vector) {
+        k_vector = request.floquet_k_vector_rad_per_m;
+        k_vector_len = 3;
+    }
+    if (k_vector == nullptr || k_vector_len <= 0) {
         return "";
     }
     std::string json =
         ",\"k_vector_len\":" +
-        std::to_string(request.operator_request.k_vector_len) +
+        std::to_string(k_vector_len) +
         ",\"k_vector_rad_m\":[";
-    for (int index = 0; index < request.operator_request.k_vector_len; ++index) {
+    for (int index = 0; index < k_vector_len; ++index) {
         if (index != 0) {
             json += ",";
         }
-        json += format_double(request.operator_request.k_vector_rad_m[index]);
+        json += format_double(k_vector[index]);
     }
     json += "]";
     return json;
+}
+
+std::string modal_floquet_periodic_pair_diagnostics_json(
+    const ModalEigenRequest &request)
+{
+    if (request.floquet_periodic_pair_count == 0) {
+        return "";
+    }
+    return ",\"floquet_periodic_pair_count\":" +
+           std::to_string(request.floquet_periodic_pair_count);
 }
 
 std::string with_modal_request_diagnostics(
@@ -116,11 +132,85 @@ std::string with_modal_request_diagnostics(
     if (!diagnostics_json.empty() && diagnostics_json.back() == '}') {
         diagnostics_json.pop_back();
         diagnostics_json += operator_k_vector_diagnostics_json(request);
+        diagnostics_json += modal_floquet_periodic_pair_diagnostics_json(request);
         diagnostics_json += "}";
     }
     return with_operator_diagnostics(
         std::move(diagnostics_json),
         request.operator_request.operator_diagnostics_json);
+}
+
+bool modal_request_is_nonzero_k_floquet(const ModalEigenRequest &request) noexcept
+{
+    const double *k_vector = request.operator_request.k_vector_rad_m;
+    int k_vector_len = request.operator_request.k_vector_len;
+    if ((k_vector == nullptr || k_vector_len <= 0) &&
+        request.has_floquet_k_vector) {
+        k_vector = request.floquet_k_vector_rad_per_m;
+        k_vector_len = 3;
+    }
+    if (request.operator_request.spin_wave_bc_kind == nullptr ||
+        std::strcmp(request.operator_request.spin_wave_bc_kind, "floquet") != 0 ||
+        k_vector == nullptr ||
+        k_vector_len <= 0) {
+        return false;
+    }
+    for (int index = 0; index < k_vector_len; ++index) {
+        if (std::abs(k_vector[index]) > 0.0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool modal_request_has_bloch_floquet_tangent_operator_payload(
+    const ModalEigenRequest &request) noexcept
+{
+    const char *diagnostics = request.operator_request.operator_diagnostics_json;
+    return request.floquet_periodic_pair_count > 0 &&
+           diagnostics != nullptr &&
+           std::strstr(
+               diagnostics,
+               "\"payload_kind\":\"bloch_floquet_tangent_operator\"") != nullptr;
+}
+
+FrequencyDomainContractResult nonzero_k_floquet_modal_operator_missing(
+    const ModalEigenRequest &request) noexcept
+{
+    FrequencyDomainContractResult result{};
+    result.status = FrequencyDomainStatus::unavailable;
+    result.error_message =
+        "native FEM modal_eigen production CPU nonzero-k Floquet operator is not implemented yet";
+    result.diagnostics_json =
+        "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\","
+        "\"study_product\":\"modal_eigen\","
+        "\"status\":\"unavailable\","
+        "\"complete\":false,"
+        "\"execution_lane\":\"production_cpu\","
+        "\"solver_adapter_status\":\"unsupported\","
+        "\"unsupported_reason\":\"production_cpu_modal_nonzero_k_floquet_operator_missing\","
+        "\"production_cpu_rejection_reason\":\"production_cpu_modal_nonzero_k_floquet_operator_missing\","
+        "\"production_cpu_rejection_scope\":\"selected_spectrum_nonzero_k_floquet_modal\","
+        "\"required_operator_contract\":\"bloch_floquet_tangent_operator_with_periodic_pairs\","
+        "\"required_operator_payload_kind\":\"bloch_floquet_tangent_operator\","
+        "\"modal_periodic_pair_contract_available\":" +
+        std::string(request.floquet_periodic_pair_count > 0 ? "true" : "false") +
+        ","
+        "\"spectral_transform\":\"shift_invert\","
+        "\"phasor_convention\":\"exp_i_omega_t\"}";
+    result.diagnostics_json =
+        with_modal_request_diagnostics(result.diagnostics_json, request);
+    result.result_json =
+        "{\"schema_version\":\"frequency_domain_modal_result.v1\","
+        "\"study_product\":\"modal_eigen\","
+        "\"status\":\"unavailable\","
+        "\"accepted_mode_count\":0,"
+        "\"unsupported_reason\":\"production_cpu_modal_nonzero_k_floquet_operator_missing\","
+        "\"required_operator_contract\":\"bloch_floquet_tangent_operator_with_periodic_pairs\","
+        "\"required_operator_payload_kind\":\"bloch_floquet_tangent_operator\"}";
+    result.result_json = with_modal_request_diagnostics(result.result_json, request);
+    result.artifact_manifest_path.clear();
+    return result;
 }
 
 std::string format_slepc_modes_json(
@@ -1954,6 +2044,10 @@ FrequencyDomainContractResult production_cpu_modal_eigen_unavailable(
 {
     FrequencyDomainContractResult result{};
     result.status = FrequencyDomainStatus::unavailable;
+    if (modal_request_is_nonzero_k_floquet(request) &&
+        !modal_request_has_bloch_floquet_tangent_operator_payload(request)) {
+        return nonzero_k_floquet_modal_operator_missing(request);
+    }
     const ModalSolverSelection selection = select_modal_solver_for_frequency_window(
         request.frequency_min_hz,
         request.frequency_max_hz,

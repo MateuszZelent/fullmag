@@ -239,6 +239,23 @@ The SI contract is:
 - if the iteration cap or tolerance stops the solve first, the solver reports a
   partial result with residual diagnostics instead of pretending success.
 
+Dispersion validation should mirror the common experimental/theoretical workflow
+instead of defaulting to an exhaustive sweep over every k direction. Production
+acceptance must include narrow one-dimensional film sweeps in both standard
+geometries:
+
+- Damon-Eshbach (DE): in-plane `k` perpendicular to the equilibrium
+  magnetization;
+- backward-volume (BV): in-plane `k` parallel to the equilibrium magnetization.
+
+The default validation range is `|k| <= 2e6..3e6 rad/m` (`2..3 1/um`) and a
+low-frequency modal window such as `0..5e9 Hz`, unless the material/bias setup
+requires a narrower window. Those sweeps must be compared with the applicable
+analytic dispersion for the documented film thickness, saturation
+magnetization, exchange, bias field, demag model, and boundary assumptions. The
+existing higher-k exchange-only checks may remain as unit/sign stress tests, but
+they are not a substitute for the DE/BV low-k acceptance sweeps.
+
 This is the route to COMSOL-class behavior: sparse operators, spectral targeting,
 preconditioned shifted solves, and clear diagnostics.  The UI must expose this
 as a first-class eigenmode target, not as an advanced hidden backend knob.
@@ -276,4 +293,9 @@ The MVP is considered correct when:
 - FEM planning produces `BackendPlanIR::FemEigen`,
 - the runner exports the eigen artifact family,
 - Analyze can open spectrum, saved modes, and dispersion rows without reconstructing semantics from ad hoc UI logic,
+- `KSamplingIR::Path` uses the same open/closed segment semantics in Python,
+  ProblemIR validation, runtime expansion, and `eigen/dispersion.csv`: open
+  paths have `len(points)-1` segments, closed paths have `len(points)` segments
+  with the final segment returning to the first point, and both publish
+  `sum(samples_per_segment)+1` samples,
 - validation rejects mixing time outputs with eigen outputs.

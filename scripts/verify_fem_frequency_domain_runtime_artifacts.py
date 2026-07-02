@@ -20,6 +20,11 @@ AIRBOX_Z_PADDING_RESPONSE_ABS_TOL = 0.0
 AIRBOX_Z_PADDING_RESPONSE_REL_TOL = 5.0e-2
 AIRBOX_Z_PADDING_FREQUENCY_ABS_TOL = 1.0e-6
 AIRBOX_Z_PADDING_FREQUENCY_REL_TOL = 1.0e-12
+PERIODIC_AIRBOX_CPU_DEMAG_PRECONDITIONER_VARIANTS = {
+    "graph_demag_coarse",
+    "demag_coarse",
+    "block_jacobi",
+}
 
 
 def load_json(path: Path) -> dict:
@@ -141,6 +146,17 @@ def require_non_negative_finite_number(value: object, name: str) -> None:
         )
 
 
+def require_fraction(value: object, name: str) -> float:
+    require_finite_number(value, name)
+    fraction = float(value)
+    if fraction < 0.0 or fraction > 1.0:
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            f"{name} must be in [0, 1]"
+        )
+    return fraction
+
+
 def require_finite_number_list(value: object, name: str) -> list[object]:
     if not isinstance(value, list) or not value:
         raise SystemExit(
@@ -210,6 +226,125 @@ def require_non_negative_integer(value: object, name: str) -> int:
             f"{name} must be a non-negative integer"
         )
     return value
+
+
+def decode_progress_json(progress: dict, name: str = "progress.progress_json") -> dict:
+    raw_progress_json = progress.get("progress_json")
+    if not isinstance(raw_progress_json, str) or not raw_progress_json.strip():
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            f"{name} must preserve native solver progress details"
+        )
+    try:
+        progress_json = json.loads(raw_progress_json)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            f"{name} must be valid JSON: {exc}"
+        ) from exc
+    if not isinstance(progress_json, dict):
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            f"{name} must decode to an object"
+        )
+    return progress_json
+
+
+def require_native_frequency_response_progress_observability(
+    progress: dict,
+    *,
+    expected_demag_mode: str | None = None,
+    expected_converged: bool | None = None,
+) -> dict:
+    native_iteration_count = require_positive_integer(
+        progress.get("native_iteration_count"),
+        "progress.native_iteration_count",
+    )
+    native_max_iterations = require_positive_integer(
+        progress.get("native_max_iterations_for_frequency"),
+        "progress.native_max_iterations_for_frequency",
+    )
+    if native_iteration_count > native_max_iterations:
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "progress.native_iteration_count must be <= native_max_iterations_for_frequency"
+        )
+    require_non_negative_integer(
+        progress.get("native_frequency_index"),
+        "progress.native_frequency_index",
+    )
+    require_finite_number(
+        progress.get("current_frequency_hz"),
+        "progress.current_frequency_hz",
+    )
+    require_finite_number(
+        progress.get("native_residual_l2_norm"),
+        "progress.native_residual_l2_norm",
+    )
+    require_finite_number(
+        progress.get("native_relative_residual_l2_norm"),
+        "progress.native_relative_residual_l2_norm",
+    )
+    solve_fraction = require_fraction(
+        progress.get("native_current_frequency_solve_fraction"),
+        "progress.native_current_frequency_solve_fraction",
+    )
+    native_converged = progress.get("native_converged")
+    if expected_converged is not None:
+        require_equal(
+            native_converged,
+            expected_converged,
+            "progress.native_converged",
+        )
+    elif not isinstance(native_converged, bool):
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "progress.native_converged must be a boolean"
+        )
+    if native_converged is True and solve_fraction != 1.0:
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "progress.native_current_frequency_solve_fraction must be 1.0 when native_converged is true"
+        )
+
+    progress_json = decode_progress_json(progress)
+    require_equal(
+        progress_json.get("native_iteration_count"),
+        native_iteration_count,
+        "progress.progress_json.native_iteration_count",
+    )
+    require_equal(
+        progress_json.get("native_max_iterations_for_frequency"),
+        native_max_iterations,
+        "progress.progress_json.native_max_iterations_for_frequency",
+    )
+    require_equal(
+        progress_json.get("native_current_frequency_solve_fraction"),
+        progress.get("native_current_frequency_solve_fraction"),
+        "progress.progress_json.native_current_frequency_solve_fraction",
+    )
+    require_equal(
+        progress_json.get("native_relative_residual_l2_norm"),
+        progress.get("native_relative_residual_l2_norm"),
+        "progress.progress_json.native_relative_residual_l2_norm",
+    )
+    require_equal(
+        progress_json.get("native_converged"),
+        native_converged,
+        "progress.progress_json.native_converged",
+    )
+    if expected_demag_mode is not None:
+        require_equal(
+            progress.get("demag_mode"),
+            expected_demag_mode,
+            "progress.demag_mode",
+        )
+        require_equal(
+            progress_json.get("demag_mode"),
+            expected_demag_mode,
+            "progress.progress_json.demag_mode",
+        )
+    return progress_json
 
 
 def canonical_phase_residual_rad(phase_rad: float) -> float:
@@ -300,30 +435,83 @@ def require_response_observables(point: dict, point_name: str) -> None:
         False,
         f"{point_name}.susceptibility_tensor_provenance.full_tensor",
     )
-    require_expected(
-        {
-            f"{point_name}.susceptibility_tensor_provenance.response_quantity": (
-                provenance.get("response_quantity"),
-                "delta_m_over_h_drive",
-            ),
-            f"{point_name}.susceptibility_tensor_provenance.response_units": (
-                provenance.get("response_units"),
-                "m/A",
-            ),
-            f"{point_name}.susceptibility_tensor_provenance.dimensionless_si_susceptibility": (
-                provenance.get("dimensionless_si_susceptibility"),
-                False,
-            ),
-            f"{point_name}.susceptibility_tensor_provenance.requires_ms_for_chi_si": (
-                provenance.get("requires_ms_for_chi_si"),
-                True,
-            ),
-            f"{point_name}.susceptibility_tensor_provenance.ms_factor_applied": (
-                provenance.get("ms_factor_applied"),
-                False,
-            ),
-        }
-    )
+    susceptibility_kind = provenance.get("kind")
+    if susceptibility_kind == "drive_projected_si_susceptibility":
+        require_expected(
+            {
+                f"{point_name}.susceptibility_tensor_provenance.basis": (
+                    provenance.get("basis"),
+                    "local_tangent_drive",
+                ),
+                f"{point_name}.susceptibility_tensor_provenance.response_quantity": (
+                    provenance.get("response_quantity"),
+                    "delta_M_over_h_drive",
+                ),
+                f"{point_name}.susceptibility_tensor_provenance.response_units": (
+                    provenance.get("response_units"),
+                    "dimensionless",
+                ),
+                f"{point_name}.susceptibility_tensor_provenance.dimensionless_si_susceptibility": (
+                    provenance.get("dimensionless_si_susceptibility"),
+                    True,
+                ),
+                f"{point_name}.susceptibility_tensor_provenance.requires_ms_for_chi_si": (
+                    provenance.get("requires_ms_for_chi_si"),
+                    False,
+                ),
+                f"{point_name}.susceptibility_tensor_provenance.ms_factor_applied": (
+                    provenance.get("ms_factor_applied"),
+                    True,
+                ),
+                f"{point_name}.susceptibility_tensor_provenance.normalization": (
+                    provenance.get("normalization"),
+                    "sum(Ms*response*conj(drive))/sum(abs(drive)^2)",
+                ),
+            }
+        )
+        if provenance.get("ms_source") not in {"uniform", "per_node_field"}:
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                f"{point_name}.susceptibility_tensor_provenance.ms_source must be uniform or per_node_field"
+            )
+    elif susceptibility_kind == "drive_projected_scalar":
+        require_expected(
+            {
+                f"{point_name}.susceptibility_tensor_provenance.basis": (
+                    provenance.get("basis"),
+                    "local_tangent_drive",
+                ),
+                f"{point_name}.susceptibility_tensor_provenance.response_quantity": (
+                    provenance.get("response_quantity"),
+                    "delta_m_over_h_drive",
+                ),
+                f"{point_name}.susceptibility_tensor_provenance.response_units": (
+                    provenance.get("response_units"),
+                    "m/A",
+                ),
+                f"{point_name}.susceptibility_tensor_provenance.dimensionless_si_susceptibility": (
+                    provenance.get("dimensionless_si_susceptibility"),
+                    False,
+                ),
+                f"{point_name}.susceptibility_tensor_provenance.requires_ms_for_chi_si": (
+                    provenance.get("requires_ms_for_chi_si"),
+                    True,
+                ),
+                f"{point_name}.susceptibility_tensor_provenance.ms_factor_applied": (
+                    provenance.get("ms_factor_applied"),
+                    False,
+                ),
+                f"{point_name}.susceptibility_tensor_provenance.normalization": (
+                    provenance.get("normalization"),
+                    "sum(response*conj(drive))/sum(abs(drive)^2)",
+                ),
+            }
+        )
+    else:
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            f"{point_name}.susceptibility_tensor_provenance.kind must be drive_projected_scalar or drive_projected_si_susceptibility"
+        )
     absorbed_provenance = point.get("absorbed_power_density_provenance")
     if not isinstance(absorbed_provenance, dict):
         raise SystemExit(
@@ -331,26 +519,83 @@ def require_response_observables(point: dict, point_name: str) -> None:
             f"{point_name}.absorbed_power_density_provenance must be an object"
         )
     require_non_empty_string(absorbed_provenance.get("kind"), f"{point_name}.absorbed_power_density_provenance.kind")
-    require_expected(
-        {
-            f"{point_name}.absorbed_power_density_provenance.physical_power_density": (
-                absorbed_provenance.get("physical_power_density"),
-                False,
-            ),
-            f"{point_name}.absorbed_power_density_provenance.units": (
-                absorbed_provenance.get("units"),
-                "proxy_not_W_per_m3",
-            ),
-            f"{point_name}.absorbed_power_density_provenance.requires_mu0_ms_factor": (
-                absorbed_provenance.get("requires_mu0_ms_factor"),
-                True,
-            ),
-            f"{point_name}.absorbed_power_density_provenance.ms_factor_applied": (
-                absorbed_provenance.get("ms_factor_applied"),
-                False,
-            ),
-        }
-    )
+    absorbed_kind = absorbed_provenance.get("kind")
+    if absorbed_kind == "drive_projected_absorbed_power_density":
+        require_expected(
+            {
+                f"{point_name}.absorbed_power_density_provenance.basis": (
+                    absorbed_provenance.get("basis"),
+                    "local_tangent_drive",
+                ),
+                f"{point_name}.absorbed_power_density_provenance.physical_power_density": (
+                    absorbed_provenance.get("physical_power_density"),
+                    True,
+                ),
+                f"{point_name}.absorbed_power_density_provenance.units": (
+                    absorbed_provenance.get("units"),
+                    "W/m^3",
+                ),
+                f"{point_name}.absorbed_power_density_provenance.requires_mu0_ms_factor": (
+                    absorbed_provenance.get("requires_mu0_ms_factor"),
+                    False,
+                ),
+                f"{point_name}.absorbed_power_density_provenance.mu0_ms_factor_applied": (
+                    absorbed_provenance.get("mu0_ms_factor_applied"),
+                    True,
+                ),
+                f"{point_name}.absorbed_power_density_provenance.normalization": (
+                    absorbed_provenance.get("normalization"),
+                    "0.5*mu0*abs(omega)*abs(imag(sum(Ms*response*conj(drive))))/tangent_dof_count",
+                ),
+                f"{point_name}.absorbed_power_density_provenance.full_power_density": (
+                    absorbed_provenance.get("full_power_density"),
+                    True,
+                ),
+            }
+        )
+        if absorbed_provenance.get("ms_source") not in {"uniform", "per_node_field"}:
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                f"{point_name}.absorbed_power_density_provenance.ms_source must be uniform or per_node_field"
+            )
+    elif absorbed_kind == "drive_projected_absorption_proxy":
+        require_expected(
+            {
+                f"{point_name}.absorbed_power_density_provenance.basis": (
+                    absorbed_provenance.get("basis"),
+                    "local_tangent_drive",
+                ),
+                f"{point_name}.absorbed_power_density_provenance.physical_power_density": (
+                    absorbed_provenance.get("physical_power_density"),
+                    False,
+                ),
+                f"{point_name}.absorbed_power_density_provenance.units": (
+                    absorbed_provenance.get("units"),
+                    "proxy_not_W_per_m3",
+                ),
+                f"{point_name}.absorbed_power_density_provenance.requires_mu0_ms_factor": (
+                    absorbed_provenance.get("requires_mu0_ms_factor"),
+                    True,
+                ),
+                f"{point_name}.absorbed_power_density_provenance.ms_factor_applied": (
+                    absorbed_provenance.get("ms_factor_applied"),
+                    False,
+                ),
+                f"{point_name}.absorbed_power_density_provenance.normalization": (
+                    absorbed_provenance.get("normalization"),
+                    "0.5*abs(omega)*abs(imag(sum(response*conj(drive))))/tangent_dof_count",
+                ),
+                f"{point_name}.absorbed_power_density_provenance.full_power_density": (
+                    absorbed_provenance.get("full_power_density"),
+                    False,
+                ),
+            }
+        )
+    else:
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            f"{point_name}.absorbed_power_density_provenance.kind must be drive_projected_absorption_proxy or drive_projected_absorbed_power_density"
+        )
     tangent_leakage = point.get("tangent_leakage")
     if not isinstance(tangent_leakage, dict):
         raise SystemExit(
@@ -840,6 +1085,125 @@ def require_manifest_physics(manifest: dict) -> None:
             "invalid frequency-domain runtime artifacts:\n"
             "manifest.physics.periodic_or_floquet must be a boolean"
         )
+
+
+def expected_progress_demag_mode(manifest: dict) -> str | None:
+    physics = manifest.get("physics")
+    if not isinstance(physics, dict):
+        return None
+    resolved_bc = physics.get("resolved_magnetostatic_bc")
+    if resolved_bc in {"periodic_airbox_k0", "floquet_airbox"}:
+        return resolved_bc
+    operator_terms = physics.get("operator_terms_included")
+    if isinstance(operator_terms, list) and "demag" in operator_terms:
+        return "enabled"
+    return None
+
+
+def require_progress_demag_mode(progress: dict, manifest: dict) -> None:
+    expected_demag_mode = expected_progress_demag_mode(manifest)
+    if expected_demag_mode is None:
+        return
+    require_equal(
+        progress.get("demag_mode"),
+        expected_demag_mode,
+        "progress.demag_mode",
+    )
+    raw_progress_json = progress.get("progress_json")
+    if not isinstance(raw_progress_json, str) or not raw_progress_json.strip():
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "progress.progress_json must preserve demag mode details"
+        )
+    try:
+        progress_json = json.loads(raw_progress_json)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            f"progress.progress_json must be valid JSON: {exc}"
+        ) from exc
+    if not isinstance(progress_json, dict):
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "progress.progress_json must decode to an object"
+        )
+    require_equal(
+        progress_json.get("demag_mode"),
+        expected_demag_mode,
+        "progress.progress_json.demag_mode",
+    )
+
+
+def require_progress_json_checkpoint(progress: dict, artifact_name: str = "progress") -> dict:
+    raw_progress_json = progress.get("progress_json")
+    if not isinstance(raw_progress_json, str) or not raw_progress_json.strip():
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            f"{artifact_name}.progress_json must be a non-empty serialized checkpoint object"
+        )
+    try:
+        progress_json = json.loads(raw_progress_json)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            f"{artifact_name}.progress_json must be valid JSON: {exc}"
+        ) from exc
+    if not isinstance(progress_json, dict):
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            f"{artifact_name}.progress_json must decode to an object"
+        )
+    expected = {
+        f"{artifact_name}.progress_json.schema_version": (
+            progress_json.get("schema_version"),
+            "frequency_domain_sweep_progress.v1",
+        ),
+        f"{artifact_name}.progress_json.state": (
+            progress_json.get("state"),
+            progress.get("state"),
+        ),
+        f"{artifact_name}.progress_json.status": (
+            progress_json.get("status"),
+            progress.get("status"),
+        ),
+        f"{artifact_name}.progress_json.complete": (
+            progress_json.get("complete"),
+            progress.get("complete"),
+        ),
+        f"{artifact_name}.progress_json.total_frequency_points": (
+            progress_json.get("total_frequency_points"),
+            progress.get("total_frequency_points"),
+        ),
+        f"{artifact_name}.progress_json.completed_frequency_points": (
+            progress_json.get("completed_frequency_points"),
+            progress.get("completed_frequency_points"),
+        ),
+        f"{artifact_name}.progress_json.written_frequency_point_artifacts": (
+            progress_json.get("written_frequency_point_artifacts"),
+            progress.get("written_frequency_point_artifacts"),
+        ),
+        f"{artifact_name}.progress_json.partial_artifacts_available": (
+            progress_json.get("partial_artifacts_available"),
+            progress.get("partial_artifacts_available"),
+        ),
+        f"{artifact_name}.progress_json.latest_artifact_manifest_path": (
+            progress_json.get("latest_artifact_manifest_path"),
+            progress.get("latest_artifact_manifest_path"),
+        ),
+    }
+    if "current_frequency_hz" in progress_json:
+        expected[f"{artifact_name}.progress_json.current_frequency_hz"] = (
+            progress_json.get("current_frequency_hz"),
+            progress.get("current_frequency_hz"),
+        )
+    for optional_key in ("frequency_min_hz", "frequency_max_hz", "demag_mode"):
+        if optional_key in progress or optional_key in progress_json:
+            expected[f"{artifact_name}.progress_json.{optional_key}"] = (
+                progress_json.get(optional_key),
+                progress.get(optional_key),
+            )
+    require_expected(expected)
+    return progress_json
 
 
 def require_frozen_magnetic_submesh_mode(manifest: dict) -> None:
@@ -2131,6 +2495,7 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
     require_expected(expected)
     if schur_coupled_block:
         expected_preconditioner_kind = "mfem_phi_consistency_schur_right"
+        expected_preconditioner_variant = None
     else:
         exchange_edge_count = require_non_negative_integer(
             diagnostics.get("exchange_edge_count"),
@@ -2146,6 +2511,32 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
             if exchange_edge_count > 0
             else "mfem_tangent_demag_coarse_right"
         )
+        expected_preconditioner_variant = (
+            "graph_demag_coarse"
+            if exchange_edge_count > 0
+            else "demag_coarse"
+        )
+    preconditioner_variant = require_non_empty_string(
+        diagnostics.get("krylov_preconditioner_variant"),
+        "diagnostics.krylov_preconditioner_variant",
+    )
+    if preconditioner_variant not in PERIODIC_AIRBOX_CPU_DEMAG_PRECONDITIONER_VARIANTS:
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "diagnostics.krylov_preconditioner_variant must be one of "
+            f"{sorted(PERIODIC_AIRBOX_CPU_DEMAG_PRECONDITIONER_VARIANTS)!r}"
+        )
+    if expected_preconditioner_variant is not None:
+        require_equal(
+            preconditioner_variant,
+            expected_preconditioner_variant,
+            "diagnostics.krylov_preconditioner_variant",
+        )
+    require_equal(
+        manifest_diagnostics.get("krylov_preconditioner_variant"),
+        preconditioner_variant,
+        "manifest.diagnostics.krylov_preconditioner_variant",
+    )
     for source_name, source in [
         ("diagnostics", diagnostics),
         ("manifest.diagnostics", manifest_diagnostics),
@@ -2324,6 +2715,59 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
                 )
 
 
+def require_m5_equilibrium_provenance_contract(manifest: dict) -> None:
+    provenance = manifest.get("equilibrium_provenance")
+    if not isinstance(provenance, dict):
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "manifest.equilibrium_provenance must be an object for M5-gated periodic-airbox response"
+        )
+    require_expected(
+        {
+            "manifest.equilibrium_provenance.schema_version": (
+                provenance.get("schema_version"),
+                "fem_frequency_domain_equilibrium_provenance.v1",
+            ),
+            "manifest.equilibrium_provenance.acceptance_gate": (
+                provenance.get("acceptance_gate"),
+                "M5_static_pbc_demag_equilibrium",
+            ),
+            "manifest.equilibrium_provenance.accepted": (
+                provenance.get("accepted"),
+                True,
+            ),
+            "manifest.equilibrium_provenance.source_kind": (
+                provenance.get("source_kind"),
+                "m5_static_pbc_demag_equilibrium",
+            ),
+            "manifest.equilibrium_provenance.magnetostatic_bc": (
+                provenance.get("magnetostatic_bc"),
+                "periodic_airbox_k0",
+            ),
+        }
+    )
+    for field_name in [
+        "source_artifact_root",
+        "equilibrium_field_path",
+        "seam_diagnostics_path",
+        "z_padding_report_path",
+        "supercell_report_path",
+    ]:
+        require_non_empty_string(
+            provenance.get(field_name),
+            f"manifest.equilibrium_provenance.{field_name}",
+        )
+    axes = require_string_list(
+        provenance.get("pbc_axes"),
+        "manifest.equilibrium_provenance.pbc_axes",
+    )
+    if not axes:
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "manifest.equilibrium_provenance.pbc_axes must not be empty"
+        )
+
+
 def select_response_peak(sweep_points: list[object]) -> tuple[int, dict, float]:
     selected: tuple[int, dict, float] | None = None
     for index, point in enumerate(sweep_points):
@@ -2402,7 +2846,21 @@ def response_peak_refinement_recommendation(
     }
 
 
-def require_derived_peak_mode_artifact(root: Path, sweep_points: list[object]) -> None:
+def response_peak_amplitude_source(point: dict) -> str:
+    return (
+        "max_response_amplitude"
+        if point.get("max_response_amplitude") is not None
+        else "response_amplitude"
+    )
+
+
+def require_derived_peak_mode_artifact(root: Path, sweep: dict) -> None:
+    sweep_points = sweep.get("points")
+    if not isinstance(sweep_points, list):
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "sweep.points must be a list before derived peak-mode validation"
+        )
     derived_path = root / "response/derived_modes/fmr_peak_mode.v1.json"
     if not derived_path.is_file():
         raise SystemExit(
@@ -2459,6 +2917,68 @@ def require_derived_peak_mode_artifact(root: Path, sweep_points: list[object]) -
             "derived_peak_mode.interpretation": (
                 derived.get("interpretation"),
                 "driven_response_field_at_peak_frequency",
+            ),
+        }
+    )
+    provenance = derived.get("provenance")
+    if not isinstance(provenance, dict):
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "derived_peak_mode.provenance must be an object"
+        )
+    require_expected(
+        {
+            "derived_peak_mode.provenance.schema_version": (
+                provenance.get("schema_version"),
+                "frequency_response_derived_mode_provenance.v1",
+            ),
+            "derived_peak_mode.provenance.canonical_product": (
+                provenance.get("canonical_product"),
+                "frequency_response",
+            ),
+            "derived_peak_mode.provenance.source_artifact_path": (
+                provenance.get("source_artifact_path"),
+                "response/magnetic_response_sweep.v2.json",
+            ),
+            "derived_peak_mode.provenance.source_schema_version": (
+                provenance.get("source_schema_version"),
+                sweep.get("schema_version"),
+            ),
+            "derived_peak_mode.provenance.derivation_method": (
+                provenance.get("derivation_method"),
+                "select_max_response_amplitude",
+            ),
+            "derived_peak_mode.provenance.selection_metric": (
+                provenance.get("selection_metric"),
+                response_peak_amplitude_source(peak),
+            ),
+            "derived_peak_mode.provenance.selected_sweep_point_index": (
+                provenance.get("selected_sweep_point_index"),
+                fallback_index,
+            ),
+            "derived_peak_mode.provenance.selected_frequency_index": (
+                provenance.get("selected_frequency_index"),
+                frequency_index,
+            ),
+            "derived_peak_mode.provenance.selected_frequency_hz": (
+                provenance.get("selected_frequency_hz"),
+                frequency_hz,
+            ),
+            "derived_peak_mode.provenance.selected_response_amplitude": (
+                provenance.get("selected_response_amplitude"),
+                amplitude,
+            ),
+            "derived_peak_mode.provenance.selected_frequency_point_artifact_path": (
+                provenance.get("selected_frequency_point_artifact_path"),
+                point_path,
+            ),
+            "derived_peak_mode.provenance.selected_field_payload_path": (
+                provenance.get("selected_field_payload_path"),
+                payload_path,
+            ),
+            "derived_peak_mode.provenance.not_an_eigenmode": (
+                provenance.get("not_an_eigenmode"),
+                True,
             ),
         }
     )
@@ -2526,6 +3046,7 @@ def main() -> int:
     require_periodic_airbox_gpu_unsupported = False
     require_floquet_airbox_gpu_unsupported = False
     require_periodic_airbox_cpu_demag_solved = False
+    require_m5_equilibrium_provenance = False
     require_frozen_magnetic_submesh = False
     require_min_frequency_points: int | None = None
     require_response_peak = False
@@ -2555,6 +3076,9 @@ def main() -> int:
     if "--require-periodic-airbox-cpu-demag-solved" in args:
         require_periodic_airbox_cpu_demag_solved = True
         args.remove("--require-periodic-airbox-cpu-demag-solved")
+    if "--require-m5-equilibrium-provenance" in args:
+        require_m5_equilibrium_provenance = True
+        args.remove("--require-m5-equilibrium-provenance")
     if "--require-frozen-magnetic-submesh" in args:
         require_frozen_magnetic_submesh = True
         args.remove("--require-frozen-magnetic-submesh")
@@ -2663,6 +3187,11 @@ def main() -> int:
             "invalid frequency-domain runtime artifacts:\n"
             "airbox z-padding comparison requires --require-periodic-airbox-cpu-demag-solved"
         )
+    if require_m5_equilibrium_provenance and not require_periodic_airbox_cpu_demag_solved:
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "M5 equilibrium provenance validation requires --require-periodic-airbox-cpu-demag-solved"
+        )
     root = (
         Path(args[0])
         if args
@@ -2683,6 +3212,7 @@ def main() -> int:
     progress = load_json(root / "response/progress.v1.json")
     diagnostics = load_json(root / "response/diagnostics/solver.v1.json")
     manifest = load_json(root / "frequency_domain/manifest.v1.json")
+    progress_json = require_progress_json_checkpoint(progress)
     unavailable = manifest.get("status") == "unavailable"
     if unavailable:
         if not allow_unavailable:
@@ -3125,6 +3655,11 @@ def main() -> int:
             "last_recomputed_relative_residual_l2_norm",
         ]:
             require_finite_number(diagnostics.get(field_name), f"diagnostics.{field_name}")
+        progress_json = require_native_frequency_response_progress_observability(
+            progress,
+            expected_demag_mode=expected_progress_demag_mode(manifest),
+            expected_converged=False,
+        )
         native_iteration_count = require_positive_integer(
             progress.get("native_iteration_count"),
             "progress.native_iteration_count",
@@ -3134,54 +3669,21 @@ def main() -> int:
             total_iterations,
             "progress.native_iteration_count",
         )
-        require_non_negative_integer(
-            progress.get("native_frequency_index"),
-            "progress.native_frequency_index",
-        )
-        require_finite_number(
-            progress.get("current_frequency_hz"),
-            "progress.current_frequency_hz",
-        )
-        require_finite_number(
-            progress.get("native_residual_l2_norm"),
-            "progress.native_residual_l2_norm",
-        )
-        require_finite_number(
-            progress.get("native_relative_residual_l2_norm"),
-            "progress.native_relative_residual_l2_norm",
+        require_equal(
+            progress.get("native_max_iterations_for_frequency"),
+            max_iterations,
+            "progress.native_max_iterations_for_frequency",
         )
         require_equal(
-            progress.get("native_converged"),
-            False,
-            "progress.native_converged",
+            progress_json.get("native_max_iterations_for_frequency"),
+            max_iterations,
+            "progress.progress_json.native_max_iterations_for_frequency",
         )
-        raw_progress_json = progress.get("progress_json")
-        if not isinstance(raw_progress_json, str) or not raw_progress_json.strip():
-            raise SystemExit(
-                "invalid frequency-domain runtime artifacts:\n"
-                "progress.progress_json must preserve native solver progress details"
-            )
-        try:
-            progress_json = json.loads(raw_progress_json)
-        except json.JSONDecodeError as exc:
-            raise SystemExit(
-                "invalid frequency-domain runtime artifacts:\n"
-                f"progress.progress_json must be valid JSON: {exc}"
-            ) from exc
-        if not isinstance(progress_json, dict):
-            raise SystemExit(
-                "invalid frequency-domain runtime artifacts:\n"
-                "progress.progress_json must decode to an object"
-            )
+        expected_fraction = float(total_iterations) / float(max_iterations)
         require_equal(
-            progress_json.get("native_iteration_count"),
-            native_iteration_count,
-            "progress.progress_json.native_iteration_count",
-        )
-        require_equal(
-            progress_json.get("native_relative_residual_l2_norm"),
-            progress.get("native_relative_residual_l2_norm"),
-            "progress.progress_json.native_relative_residual_l2_norm",
+            progress.get("native_current_frequency_solve_fraction"),
+            expected_fraction,
+            "progress.native_current_frequency_solve_fraction",
         )
         if require_frozen_magnetic_submesh:
             require_frozen_magnetic_submesh_mode(manifest)
@@ -3193,10 +3695,14 @@ def main() -> int:
                 manifest=manifest,
                 require_frequency_point_artifacts=False,
             )
+            if require_m5_equilibrium_provenance:
+                require_m5_equilibrium_provenance_contract(manifest)
         return 0
 
     if require_frozen_magnetic_submesh:
         require_frozen_magnetic_submesh_mode(manifest)
+    if require_m5_equilibrium_provenance:
+        require_m5_equilibrium_provenance_contract(manifest)
 
     sweep_required = [
         root / "response/magnetic_response_sweep.v1.json",
@@ -3328,6 +3834,7 @@ def main() -> int:
             ),
         }
         require_expected(cancel_expected)
+        require_progress_json_checkpoint(cancel_requested, "cancel_requested")
 
     expected_cancel_requested_artifact_path = (
         "response/cancel_requested.v1.json" if interrupted else None
@@ -3550,9 +4057,17 @@ def main() -> int:
             manifest.get("artifacts", {}).get("response_diagnostics_v1_path"),
             "response/diagnostics/solver.v1.json",
         ),
+        "manifest.artifacts.response_progress_v1_path": (
+            manifest.get("artifacts", {}).get("response_progress_v1_path"),
+            "response/progress.v1.json",
+        ),
         "manifest.resources.response_diagnostics_resource_key": (
             manifest.get("resources", {}).get("response_diagnostics_resource_key"),
             "/v2/sessions/current/analysis/frequency-domain/response/diagnostics/solver.v1",
+        ),
+        "manifest.resources.response_progress_resource_key": (
+            manifest.get("resources", {}).get("response_progress_resource_key"),
+            "/v2/sessions/current/analysis/frequency-domain/response/progress.v1",
         ),
         "manifest.resources.response_map_resource_key": (
             manifest.get("resources", {}).get("response_map_resource_key"),
@@ -3619,6 +4134,7 @@ def main() -> int:
     if floquet_phase_projection:
         require_floquet_periodic_pairs_artifact(root, diagnostics, manifest)
     require_manifest_physics(manifest)
+    require_progress_demag_mode(progress, manifest)
     require_equal(
         diagnostics.get("phasor_convention"),
         manifest["physics"]["phase_convention"],
@@ -4100,7 +4616,7 @@ def main() -> int:
                 "multi-frequency spectrum requires a positive response peak"
             )
     if require_derived_peak_mode:
-        require_derived_peak_mode_artifact(root, sweep_points)
+        require_derived_peak_mode_artifact(root, sweep)
 
     if parity_reference is not None:
         require_cpu_gpu_parity_reference(
@@ -4130,6 +4646,38 @@ def main() -> int:
         )
 
     if require_periodic_airbox_cpu_demag_solved:
+        progress_json = require_native_frequency_response_progress_observability(
+            progress,
+            expected_demag_mode=expected_progress_demag_mode(manifest),
+            expected_converged=True,
+        )
+        max_iterations = require_positive_integer(
+            diagnostics.get("max_iterations_for_frequency"),
+            "diagnostics.max_iterations_for_frequency",
+        )
+        require_equal(
+            max_iterations,
+            progress.get("native_max_iterations_for_frequency"),
+            "diagnostics.max_iterations_for_frequency vs progress.native_max_iterations_for_frequency",
+        )
+        total_iterations = require_positive_integer(
+            diagnostics.get("total_iteration_count"),
+            "diagnostics.total_iteration_count",
+        )
+        native_iteration_count = require_positive_integer(
+            progress.get("native_iteration_count"),
+            "progress.native_iteration_count",
+        )
+        if total_iterations < native_iteration_count:
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                "diagnostics.total_iteration_count must be >= progress.native_iteration_count"
+            )
+        require_equal(
+            progress_json.get("native_max_iterations_for_frequency"),
+            max_iterations,
+            "progress.progress_json.native_max_iterations_for_frequency vs diagnostics.max_iterations_for_frequency",
+        )
         require_periodic_airbox_cpu_demag_solved_boundary(
             root,
             diagnostics=diagnostics,

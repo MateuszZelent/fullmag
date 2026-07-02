@@ -199,6 +199,7 @@ describe("FrequencyDomainCharts", () => {
           droppedPointCount: 0,
           points: [
             {
+              analyticFrequencyHz: null,
               branchId: "acoustic",
               frequencyHz: 7.5e9,
               linewidthHz: 2.8e6,
@@ -207,9 +208,11 @@ describe("FrequencyDomainCharts", () => {
               overlap: 0.97,
               pathS: 1.25e6,
               rawModeIndex: 2,
+              relativeError: null,
               residualNorm: 1e-8,
               sampleLabel: "G",
               sampleIndex: 4,
+              validationGeometry: null,
             },
           ],
           series: [

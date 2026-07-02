@@ -18,6 +18,7 @@ import {
   Dialog,
   DialogClose,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -206,6 +207,7 @@ export function Viewport3DCameraDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
+        aria-describedby="fm-viewport-camera-dialog-description"
         aria-label="3D camera parameters"
         className="fm-viewport-camera-dialog"
         style={dialogStyle}
@@ -218,6 +220,13 @@ export function Viewport3DCameraDialog({
           onPointerCancel={endDrag}
         >
           <DialogTitle>Camera Parameters</DialogTitle>
+          <DialogDescription
+            className="fm-visually-hidden"
+            id="fm-viewport-camera-dialog-description"
+          >
+            Inspect and edit the 3D viewport camera position, target, projection,
+            and orientation.
+          </DialogDescription>
           <DialogClose asChild>
             <Button
               aria-label="Close camera parameters"

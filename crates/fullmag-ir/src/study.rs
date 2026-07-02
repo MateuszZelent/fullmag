@@ -687,19 +687,11 @@ impl KSamplingIR {
             KSamplingIR::Path {
                 samples_per_segment,
                 ..
-            } => {
-                if samples_per_segment.is_empty() {
-                    0
-                } else {
-                    let repeated_segment_starts = samples_per_segment.len().saturating_sub(1);
-                    samples_per_segment
-                        .iter()
-                        .map(|value| *value as usize)
-                        .sum::<usize>()
-                        .saturating_add(1)
-                        .saturating_sub(repeated_segment_starts)
-                }
-            }
+            } => samples_per_segment
+                .iter()
+                .map(|value| *value as usize)
+                .sum::<usize>()
+                .saturating_add(usize::from(!samples_per_segment.is_empty())),
         }
     }
 }

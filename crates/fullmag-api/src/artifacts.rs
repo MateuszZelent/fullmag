@@ -133,9 +133,35 @@ pub(crate) fn read_json_artifact_value(artifact_dir: &Path, raw: &str) -> Result
 pub(crate) fn parse_eigen_dispersion_csv(
     content: &str,
 ) -> Result<Vec<EigenDispersionRow>, ApiError> {
+    let Some((header_line_number, header_line)) = content
+        .lines()
+        .enumerate()
+        .find(|(_, line)| !line.trim().is_empty())
+    else {
+        return Ok(Vec::new());
+    };
+    let headers = header_line.split(',').map(str::trim).collect::<Vec<_>>();
+    let find_column = |labels: &[&str]| {
+        labels
+            .iter()
+            .find_map(|label| headers.iter().position(|header| header == label))
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "invalid eigen dispersion header: missing {}",
+                    labels.join(" or ")
+                ))
+            })
+    };
+    let mode_index_col = find_column(&["mode_index", "raw_mode_index"])?;
+    let kx_col = find_column(&["kx", "kx_rad_per_m"])?;
+    let ky_col = find_column(&["ky", "ky_rad_per_m"])?;
+    let kz_col = find_column(&["kz", "kz_rad_per_m"])?;
+    let frequency_col = find_column(&["frequency_hz"])?;
+    let angular_frequency_col = find_column(&["angular_frequency_rad_per_s", "omega_rad_s"])?;
+
     let mut rows = Vec::new();
     for (line_number, line) in content.lines().enumerate() {
-        if line_number == 0 {
+        if line_number <= header_line_number {
             continue;
         }
         let trimmed = line.trim();
@@ -143,13 +169,15 @@ pub(crate) fn parse_eigen_dispersion_csv(
             continue;
         }
         let columns = trimmed.split(',').map(str::trim).collect::<Vec<_>>();
-        if columns.len() != 6 {
-            return Err(ApiError::internal(format!(
-                "invalid eigen dispersion row {}: expected 6 columns, got {}",
-                line_number + 1,
-                columns.len()
-            )));
-        }
+        let column = |label: &str, index: usize| {
+            columns.get(index).copied().ok_or_else(|| {
+                ApiError::internal(format!(
+                    "invalid eigen dispersion row {}: missing {} column value",
+                    line_number + 1,
+                    label
+                ))
+            })
+        };
         let parse_u32 = |label: &str, raw: &str| {
             raw.parse::<u32>().map_err(|error| {
                 ApiError::internal(format!(
@@ -173,12 +201,15 @@ pub(crate) fn parse_eigen_dispersion_csv(
             })
         };
         rows.push(EigenDispersionRow {
-            mode_index: parse_u32("mode_index", columns[0])?,
-            kx: parse_f64("kx", columns[1])?,
-            ky: parse_f64("ky", columns[2])?,
-            kz: parse_f64("kz", columns[3])?,
-            frequency_hz: parse_f64("frequency_hz", columns[4])?,
-            angular_frequency_rad_per_s: parse_f64("angular_frequency_rad_per_s", columns[5])?,
+            mode_index: parse_u32("mode_index", column("mode_index", mode_index_col)?)?,
+            kx: parse_f64("kx", column("kx", kx_col)?)?,
+            ky: parse_f64("ky", column("ky", ky_col)?)?,
+            kz: parse_f64("kz", column("kz", kz_col)?)?,
+            frequency_hz: parse_f64("frequency_hz", column("frequency_hz", frequency_col)?)?,
+            angular_frequency_rad_per_s: parse_f64(
+                "angular_frequency_rad_per_s",
+                column("angular_frequency_rad_per_s", angular_frequency_col)?,
+            )?,
         });
     }
     Ok(rows)

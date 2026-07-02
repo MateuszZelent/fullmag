@@ -3988,6 +3988,7 @@ export interface components {
             branch_tracking: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
             k_path: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
             production_cpu: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+            production_cpu_gamma_k_path: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
             production_gpu: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
             reference_cpu: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
         };
@@ -4044,6 +4045,19 @@ export interface components {
             schema_version: string;
             status: string;
         };
+        FrequencyDomainKPathControlPointResource: {
+            k_vector: number[];
+            label?: string | null;
+        };
+        FrequencyDomainKPathMetadataResource: {
+            sampling: components["schemas"]["FrequencyDomainKPathSamplingResource"];
+        };
+        FrequencyDomainKPathSamplingResource: {
+            closed?: boolean | null;
+            kind: string;
+            points: components["schemas"]["FrequencyDomainKPathControlPointResource"][];
+            samples_per_segment: number[];
+        };
         FrequencyDomainManifestResource: {
             capabilities: components["schemas"]["FrequencyDomainCapabilitySnapshotResource"];
             eigen_namespace: string;
@@ -4082,6 +4096,11 @@ export interface components {
             completed_frequency_points: number;
             /** Format: double */
             current_frequency_hz?: number | null;
+            demag_mode?: string | null;
+            /** Format: double */
+            frequency_max_hz?: number | null;
+            /** Format: double */
+            frequency_min_hz?: number | null;
             latest_artifact_manifest_path?: string | null;
             missing_reason?: string | null;
             partial_artifacts_available: boolean;
@@ -4098,6 +4117,7 @@ export interface components {
             artifact_path: string;
             content_type: string;
             missing_reason?: string | null;
+            path_metadata?: null | components["schemas"]["FrequencyDomainKPathMetadataResource"];
             resource_key: string;
             schema_version: string;
             status: string;

@@ -5753,6 +5753,338 @@ class ProblemApiTests(unittest.TestCase):
         self.assertIn("samples_per_segment=[41]", rewritten)
         self.assertIn('bc=fm.FloquetBC(["x_periodic"])', rewritten)
 
+    def test_study_stage_preserves_floquet_k_path_demag_intent(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("floquet_k_path_demag_intent")
+        study.engine("fem")
+        study.device("cpu", precision="double")
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.texture.uniform(1, 0, 0)
+        study.pbc(x=True)
+        study.save("spectrum")
+        study.save("dispersion")
+        study.stages.add_eigenmodes(
+            count=2,
+            operator="full_2x2",
+            include_demag=True,
+            k_sampling=fm.KPath(
+                points=[
+                    fm.KPoint("G", (0.0, 0.0, 0.0)),
+                    fm.KPoint("X", (2.0e7, 0.0, 0.0)),
+                ],
+                samples_per_segment=[2],
+            ),
+            bc=fm.FloquetBC(["x_faces"]),
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "floquet_k_path_demag_intent.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+
+        study_ir = loaded.stages[0].problem.study.to_ir()
+        self.assertEqual(study_ir["operator"], {
+            "kind": "full_2x2",
+            "include_demag": True,
+        })
+        self.assertEqual(
+            study_ir["k_sampling"],
+            {
+                "kind": "path",
+                "points": [
+                    {"label": "G", "k_vector": [0.0, 0.0, 0.0]},
+                    {"label": "X", "k_vector": [2.0e7, 0.0, 0.0]},
+                ],
+                "samples_per_segment": [2],
+                "closed": False,
+            },
+        )
+        self.assertEqual(
+            study_ir["spin_wave_bc"],
+            {
+                "kind": "floquet",
+                "pair_ids": ["x_faces"],
+                "phase_convention": "exp_minus_i_k_dot_delta_r",
+            },
+        )
+
+        draft = export_builder_draft(loaded)
+        stage = draft["stages"][0]
+        self.assertEqual(stage["eigen_include_demag"], True)
+        self.assertEqual(stage["eigen_k_path"], "G:0,0,0; X:20000000,0,0 | samples=2")
+        self.assertEqual(stage["eigen_spin_wave_bc"], "floquet")
+
+        rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+        self.assertIn("include_demag=True", rewritten)
+        self.assertIn("k_sampling=fm.KPath", rewritten)
+        self.assertIn('bc=fm.FloquetBC(["x_faces"])', rewritten)
+
+    def test_study_dispersion_validation_lowers_to_runtime_metadata(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("low_k_de_bv_validation")
+        study.engine("fem")
+        study.device("cpu", precision="double")
+        body = study.geometry(fm.Box(size=(80e-9, 40e-9, 10e-9), name="film"), name="film")
+        body.Ms = 140e3
+        body.Aex = 3.5e-12
+        body.alpha = 0.001
+        body.m = fm.texture.uniform(1, 0, 0)
+        study.pbc(x=True, y=True)
+        study.save("spectrum")
+        study.save("dispersion")
+        study.dispersion_validation(
+            fm.ThinFilmDEBVDispersionValidation(
+                film_thickness_m=80e-9,
+                equilibrium_magnetization=(1.0, 0.0, 0.0),
+                film_normal=(0.0, 0.0, 1.0),
+                frequency_window_hz=(0.0, 5.0e9),
+                max_k_rad_per_m=3.0e6,
+                scenarios=[
+                    fm.DispersionValidationScenario("backward_volume", "branch_0", [0, 1, 2]),
+                    fm.DispersionValidationScenario("damon_eshbach", "branch_0", [0, 3, 4]),
+                ],
+            )
+        )
+        study.stages.add_eigenmodes(
+            count=1,
+            target="frequency_window",
+            frequency_min=1.0e6,
+            frequency_max=5.0e9,
+            operator="full_2x2",
+            include_demag=True,
+            equilibrium_source="provided",
+            k_sampling=fm.KPath(
+                points=[
+                    fm.KPoint("G", (0.0, 0.0, 0.0)),
+                    fm.KPoint("BV", (3.0e6, 0.0, 0.0)),
+                    fm.KPoint("G", (0.0, 0.0, 0.0)),
+                    fm.KPoint("DE", (0.0, 3.0e6, 0.0)),
+                ],
+                samples_per_segment=[2, 1, 2],
+            ),
+            bc=fm.FloquetBC(["x_faces", "y_faces"]),
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "low_k_de_bv_validation.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+
+        metadata = loaded.problem.runtime_metadata["dispersion_validation"]
+        self.assertEqual(metadata["kind"], "thin_film_de_bv_low_k")
+        self.assertEqual(metadata["analytic_model"], "kalinikos_slab_n0")
+        self.assertEqual(metadata["film_thickness_m"], 80e-9)
+        self.assertEqual(metadata["equilibrium_magnetization"], [1.0, 0.0, 0.0])
+        self.assertEqual(metadata["film_normal"], [0.0, 0.0, 1.0])
+        self.assertEqual(metadata["frequency_window_hz"], {"min": 0.0, "max": 5.0e9})
+        self.assertEqual(metadata["max_k_rad_per_m"], 3.0e6)
+        self.assertEqual(
+            {scenario["geometry"] for scenario in metadata["scenarios"]},
+            {"backward_volume", "damon_eshbach"},
+        )
+
+    def test_thin_film_de_bv_dispersion_validation_rejects_broad_k_range(self) -> None:
+        with self.assertRaisesRegex(ValueError, "max_k_rad_per_m"):
+            fm.ThinFilmDEBVDispersionValidation(
+                film_thickness_m=80e-9,
+                equilibrium_magnetization=(1.0, 0.0, 0.0),
+                scenarios=[
+                    fm.DispersionValidationScenario("bv", "branch_0", [0, 1, 2]),
+                    fm.DispersionValidationScenario("de", "branch_0", [0, 3, 4]),
+                ],
+                max_k_rad_per_m=4.0e6,
+            )
+
+    def test_script_rewrite_preserves_windowed_dispersion_k_path(self) -> None:
+        loaded = fm.load_problem_from_script(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "fem_eigenmodes_dispersion_window_k_path.py",
+            lightweight_assets=True,
+        )
+
+        rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+
+        self.assertIn('target="frequency_window"', rewritten)
+        self.assertIn("frequency_min=1000000000", rewritten)
+        self.assertIn("frequency_max=3000000000", rewritten)
+        self.assertIn('operator="full_2x2"', rewritten)
+        self.assertIn("include_demag=False", rewritten)
+        self.assertIn("k_sampling=fm.KPath", rewritten)
+        self.assertIn('fm.KPoint("G", (0, 0, 0))', rewritten)
+        self.assertIn('fm.KPoint("X", (20000000, 0, 0))', rewritten)
+        self.assertIn('fm.KPoint("-X", (-20000000, 0, 0))', rewritten)
+        self.assertIn("samples_per_segment=[1, 1, 1]", rewritten)
+        self.assertIn('bc=fm.FloquetBC(["x_faces"])', rewritten)
+
+    def test_builder_draft_preserves_windowed_dispersion_k_path(self) -> None:
+        loaded = fm.load_problem_from_script(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "fem_eigenmodes_dispersion_window_k_path.py",
+            lightweight_assets=True,
+        )
+
+        draft = export_builder_draft(loaded)
+        stage = draft["stages"][0]
+
+        self.assertEqual(stage["kind"], "eigenmodes")
+        self.assertEqual(stage["eigen_target"], "frequency_window")
+        self.assertEqual(stage["eigen_frequency_min"], "1000000000")
+        self.assertEqual(stage["eigen_frequency_max"], "3000000000")
+        self.assertEqual(stage["eigen_operator"], "full_2x2")
+        self.assertEqual(stage["eigen_include_demag"], False)
+        self.assertEqual(
+            stage["eigen_k_path"],
+            "G:0,0,0; X:20000000,0,0; G:0,0,0; -X:-20000000,0,0 | samples=1,1,1",
+        )
+        self.assertEqual(stage["eigen_spin_wave_bc"], "floquet")
+        self.assertEqual(
+            stage["eigen_spin_wave_bc_config"],
+            {
+                "kind": "floquet",
+                "pair_ids": ["x_faces"],
+                "phase_convention": "exp_minus_i_k_dot_delta_r",
+            },
+        )
+
+    def test_windowed_dispersion_closed_k_path_round_trips_through_builder_text(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("closed_dispersion_k_path")
+        study.engine("fem")
+        study.device("cpu", precision="double")
+        body = study.geometry(fm.Box(40e-9, 20e-9, 10e-9), name="body")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.02
+        body.m = fm.texture.uniform(1, 0, 0)
+        study.pbc(x=True)
+        study.save("spectrum")
+        study.save("dispersion")
+        study.stages.add_eigenmodes(
+            count=2,
+            target="frequency_window",
+            frequency_min=1.0e9,
+            frequency_max=3.0e9,
+            operator="full_2x2",
+            include_demag=False,
+            k_sampling=fm.KPath(
+                points=[
+                    fm.KPoint("G", (0.0, 0.0, 0.0)),
+                    fm.KPoint("X", (2.0e7, 0.0, 0.0)),
+                    fm.KPoint("M", (2.0e7, 2.0e7, 0.0)),
+                ],
+                samples_per_segment=[2, 3, 4],
+                closed=True,
+            ),
+            bc=fm.FloquetBC(["x_faces"]),
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "closed_dispersion_k_path.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+
+        study_ir = loaded.stages[0].problem.study.to_ir()
+        self.assertEqual(study_ir["target"]["kind"], "frequency_window")
+        self.assertEqual(study_ir["sampling"]["outputs"][1]["kind"], "dispersion_curve")
+        self.assertEqual(
+            study_ir["k_sampling"],
+            {
+                "kind": "path",
+                "points": [
+                    {"label": "G", "k_vector": [0.0, 0.0, 0.0]},
+                    {"label": "X", "k_vector": [2.0e7, 0.0, 0.0]},
+                    {"label": "M", "k_vector": [2.0e7, 2.0e7, 0.0]},
+                ],
+                "samples_per_segment": [2, 3, 4],
+                "closed": True,
+            },
+        )
+
+        draft = export_builder_draft(loaded)
+        stage = draft["stages"][0]
+        self.assertEqual(
+            stage["eigen_k_path"],
+            "G:0,0,0; X:20000000,0,0; M:20000000,20000000,0 | samples=2,3,4; closed=true",
+        )
+
+        rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+        self.assertIn("samples_per_segment=[2, 3, 4], closed=True", rewritten)
+
+    def test_script_rewrite_applies_windowed_dispersion_builder_text_overrides(self) -> None:
+        loaded = fm.load_problem_from_script(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "fem_eigenmodes_dispersion_window_k_path.py",
+            lightweight_assets=True,
+        )
+        draft = export_builder_draft(loaded)
+        stage = dict(draft["stages"][0])
+        stage.update(
+            {
+                "eigen_count": "3",
+                "eigen_frequency_min": "1.5e9",
+                "eigen_frequency_max": "2.5e9",
+                "eigen_k_path": "G:0,0,0; X:1e7,0,0; G:0,0,0 | samples=2,2",
+            }
+        )
+
+        rewritten = rewrite_loaded_problem_script(
+            loaded,
+            overrides={"stages": [stage]},
+        )["rendered_source"]
+
+        self.assertIn("count=3", rewritten)
+        self.assertIn("frequency_min=1500000000", rewritten)
+        self.assertIn("frequency_max=2500000000", rewritten)
+        self.assertIn('fm.KPoint("X", (10000000, 0, 0))', rewritten)
+        self.assertIn("samples_per_segment=[2, 2]", rewritten)
+
+    def test_scene_document_overrides_preserve_windowed_dispersion_authoring(self) -> None:
+        loaded = fm.load_problem_from_script(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "fem_eigenmodes_dispersion_window_k_path.py",
+            lightweight_assets=True,
+        )
+        draft = export_builder_draft(loaded)
+        stage = dict(draft["stages"][0])
+        stage.update(
+            {
+                "eigen_count": "3",
+                "eigen_frequency_min": "1.5e9",
+                "eigen_frequency_max": "2.5e9",
+                "eigen_operator": "full_2x2",
+                "eigen_k_path": "G:0,0,0; X:1e7,0,0; G:0,0,0 | samples=2,2",
+            }
+        )
+        draft["stages"] = [stage]
+        draft["study_pipeline"]["nodes"][0]["payload"] = stage
+
+        scene = build_scene_document_from_builder(draft)
+        overrides = builder_overrides_from_scene_document(scene)
+        rewritten = rewrite_loaded_problem_script(loaded, overrides=overrides)["rendered_source"]
+
+        self.assertIn("count=3", rewritten)
+        self.assertIn("frequency_min=1500000000", rewritten)
+        self.assertIn("frequency_max=2500000000", rewritten)
+        self.assertIn('operator="full_2x2"', rewritten)
+        self.assertIn('fm.KPoint("X", (10000000, 0, 0))', rewritten)
+        self.assertIn("samples_per_segment=[2, 2]", rewritten)
+
     def test_relaxation_stop_and_field_refresh_serialize_to_ir(self) -> None:
         geometry = fm.Box(size=(100e-9, 20e-9, 5e-9), name="track")
         material = fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.1)

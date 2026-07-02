@@ -1,6 +1,6 @@
 //! Frequency-domain analysis family manifest and artifact resource endpoints.
 
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use axum::extract::{Path, State};
 use axum::Json;
@@ -66,6 +66,7 @@ pub struct FrequencyDomainDemagCapabilitiesResource {
 pub struct FrequencyDomainDispersionCapabilitiesResource {
     pub reference_cpu: FrequencyDomainCapabilityEntryResource,
     pub production_cpu: FrequencyDomainCapabilityEntryResource,
+    pub production_cpu_gamma_k_path: FrequencyDomainCapabilityEntryResource,
     pub production_gpu: FrequencyDomainCapabilityEntryResource,
     pub k_path: FrequencyDomainCapabilityEntryResource,
     pub branch_tracking: FrequencyDomainCapabilityEntryResource,
@@ -142,7 +143,31 @@ pub struct FrequencyDomainTextArtifactResource {
     pub resource_key: String,
     pub content_type: String,
     pub text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path_metadata: Option<FrequencyDomainKPathMetadataResource>,
     pub missing_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FrequencyDomainKPathMetadataResource {
+    pub sampling: FrequencyDomainKPathSamplingResource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FrequencyDomainKPathSamplingResource {
+    pub kind: String,
+    pub points: Vec<FrequencyDomainKPathControlPointResource>,
+    pub samples_per_segment: Vec<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub closed: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FrequencyDomainKPathControlPointResource {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[schema(min_items = 3, max_items = 3)]
+    pub k_vector: [f64; 3],
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -218,6 +243,12 @@ pub struct FrequencyDomainSweepProgressResource {
     pub completed_frequency_points: u64,
     pub written_frequency_point_artifacts: u64,
     pub current_frequency_hz: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frequency_min_hz: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frequency_max_hz: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub demag_mode: Option<String>,
     pub partial_artifacts_available: bool,
     pub latest_artifact_manifest_path: Option<String>,
     pub missing_reason: Option<String>,
@@ -303,6 +334,7 @@ impl From<fullmag_runner::FrequencyDomainDispersionCapabilities>
         Self {
             reference_cpu: value.reference_cpu.into(),
             production_cpu: value.production_cpu.into(),
+            production_cpu_gamma_k_path: value.production_cpu_gamma_k_path.into(),
             production_gpu: value.production_gpu.into(),
             k_path: value.k_path.into(),
             branch_tracking: value.branch_tracking.into(),
@@ -470,14 +502,30 @@ pub async fn get_frequency_domain_eigen_branches_v2(
 pub async fn get_frequency_domain_eigen_dispersion(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<FrequencyDomainTextArtifactResource>, ApiError> {
-    text_artifact_resource(
+    let Json(mut resource) = text_artifact_resource(
         &state,
         "frequency_domain_eigen_dispersion.v1",
         "eigen/dispersion.csv",
         "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion",
         "text/csv; charset=utf-8",
     )
-    .await
+    .await?;
+    let artifact_dir = require_current_live_artifact_dir(&state).await?;
+    if try_resolve_artifact_path(&artifact_dir, "eigen/dispersion/path.json")?.is_some() {
+        let path_metadata =
+            read_dispersion_path_metadata_resource(&artifact_dir, "eigen/dispersion/path.json")?;
+        if let Some(text) = resource.text.as_deref() {
+            validate_dispersion_path_metadata_against_csv(&path_metadata, text).map_err(
+                |error| {
+                    ApiError::internal(format!(
+                        "invalid eigen/dispersion/path.json against eigen/dispersion.csv: {error}"
+                    ))
+                },
+            )?;
+        }
+        resource.path_metadata = Some(path_metadata);
+    }
+    Ok(Json(resource))
 }
 
 #[utoipa::path(
@@ -624,9 +672,14 @@ async fn response_progress_resource(
             .flatten()
             .map(|_| path)
     });
-    let total_frequency_points = sweep_path
-        .and_then(|path| read_json_artifact_value(&artifact_dir, path).ok())
-        .map(|payload| response_sweep_total_frequency_points(&payload))
+    let sweep_payload =
+        sweep_path.and_then(|path| read_json_artifact_value(&artifact_dir, path).ok());
+    let frequency_range_hz = sweep_payload
+        .as_ref()
+        .and_then(response_sweep_frequency_range_hz);
+    let total_frequency_points = sweep_payload
+        .as_ref()
+        .map(response_sweep_total_frequency_points)
         .unwrap_or(0);
     let frequency_points = response_frequency_point_artifacts(&artifact_dir)?;
     let completed_frequency_points = frequency_points.len() as u64;
@@ -715,24 +768,44 @@ async fn response_progress_resource(
         "not_started"
     };
 
+    let status = if interrupted {
+        "interrupted"
+    } else if unavailable {
+        "unavailable"
+    } else if partial_artifacts_available {
+        "ready"
+    } else {
+        "missing"
+    }
+    .to_string();
+    let progress_json = serde_json::json!({
+        "schema_version": "frequency_domain_sweep_progress.v1",
+        "status": status.clone(),
+        "complete": complete,
+        "state": state,
+        "total_frequency_points": total_frequency_points,
+        "completed_frequency_points": completed_frequency_points,
+        "written_frequency_point_artifacts": written_frequency_point_artifacts,
+        "current_frequency_hz": current_frequency_hz,
+        "frequency_min_hz": frequency_range_hz.map(|range| range.0),
+        "frequency_max_hz": frequency_range_hz.map(|range| range.1),
+        "partial_artifacts_available": partial_artifacts_available,
+        "latest_artifact_manifest_path": manifest_path.clone(),
+    })
+    .to_string();
+
     Ok(FrequencyDomainSweepProgressResource {
         schema_version: "frequency_domain_sweep_progress.v1".to_string(),
-        status: if interrupted {
-            "interrupted"
-        } else if unavailable {
-            "unavailable"
-        } else if partial_artifacts_available {
-            "ready"
-        } else {
-            "missing"
-        }
-        .to_string(),
+        status,
         state: state.to_string(),
         complete,
         total_frequency_points,
         completed_frequency_points,
         written_frequency_point_artifacts,
         current_frequency_hz,
+        frequency_min_hz: frequency_range_hz.map(|range| range.0),
+        frequency_max_hz: frequency_range_hz.map(|range| range.1),
+        demag_mode: None,
         partial_artifacts_available,
         latest_artifact_manifest_path: manifest_path,
         missing_reason: if unavailable {
@@ -741,10 +814,7 @@ async fn response_progress_resource(
             (!partial_artifacts_available)
                 .then(|| "response sweep progress artifacts are not present".to_string())
         },
-        progress_json: Some(format!(
-            "{{\"schema_version\":\"frequency_domain_sweep_progress.v1\",\"state\":\"{}\",\"partial_artifacts_available\":{}}}",
-            state, partial_artifacts_available
-        )),
+        progress_json: Some(progress_json),
     })
 }
 
@@ -1058,6 +1128,39 @@ fn response_sweep_total_frequency_points(payload: &Value) -> u64 {
         .unwrap_or(0)
 }
 
+fn response_sweep_frequency_range_hz(payload: &Value) -> Option<(f64, f64)> {
+    let mut frequencies = Vec::new();
+    if let Some(points) = payload
+        .get("points")
+        .or_else(|| payload.get("frequency_points"))
+        .and_then(Value::as_array)
+    {
+        frequencies.extend(
+            points
+                .iter()
+                .filter_map(response_frequency_point_hz)
+                .filter(|value| value.is_finite() && *value > 0.0),
+        );
+    }
+    if let Some(values) = payload
+        .get("frequencies")
+        .or_else(|| payload.get("frequencies_hz"))
+        .and_then(Value::as_array)
+    {
+        frequencies.extend(
+            values
+                .iter()
+                .filter_map(Value::as_f64)
+                .filter(|value| value.is_finite() && *value > 0.0),
+        );
+    }
+    let mut iter = frequencies.into_iter();
+    let first = iter.next()?;
+    Some(iter.fold((first, first), |(min_hz, max_hz), value| {
+        (min_hz.min(value), max_hz.max(value))
+    }))
+}
+
 fn frequency_domain_manifest_diagnostics_u64(payload: &Value, field_name: &str) -> Option<u64> {
     payload
         .get("diagnostics")
@@ -1140,6 +1243,267 @@ fn response_frequency_point_artifacts(
     Ok(paths)
 }
 
+fn read_dispersion_path_metadata_resource(
+    artifact_dir: &std::path::Path,
+    artifact_path: &str,
+) -> Result<FrequencyDomainKPathMetadataResource, ApiError> {
+    let value = read_json_artifact_value(artifact_dir, artifact_path)?;
+    let normalized = if value.get("sampling").is_some() {
+        value
+    } else {
+        serde_json::json!({ "sampling": value })
+    };
+    let mut resource =
+        serde_json::from_value::<FrequencyDomainKPathMetadataResource>(normalized)
+            .map_err(|error| ApiError::internal(format!("invalid {artifact_path}: {error}")))?;
+    normalize_and_validate_dispersion_path_metadata(&mut resource)
+        .map_err(|error| ApiError::internal(format!("invalid {artifact_path}: {error}")))?;
+    Ok(resource)
+}
+
+fn normalize_and_validate_dispersion_path_metadata(
+    resource: &mut FrequencyDomainKPathMetadataResource,
+) -> Result<(), String> {
+    let sampling = &mut resource.sampling;
+    if sampling.kind != "path" {
+        return Err(format!(
+            "sampling.kind must be `path`, got `{}`",
+            sampling.kind
+        ));
+    }
+    if sampling.points.len() < 2 {
+        return Err("sampling.points must include at least two control points".to_string());
+    }
+    for (point_index, point) in sampling.points.iter_mut().enumerate() {
+        if !point.k_vector.iter().all(|value| value.is_finite()) {
+            return Err(format!(
+                "sampling.points[{point_index}].k_vector must contain finite values"
+            ));
+        }
+        if let Some(label) = point.label.as_mut() {
+            let trimmed = label.trim();
+            if trimmed.is_empty() {
+                point.label = None;
+            } else if trimmed.len() != label.len() {
+                *label = trimmed.to_string();
+            }
+        }
+    }
+    if sampling
+        .samples_per_segment
+        .iter()
+        .any(|sample_count| *sample_count == 0)
+    {
+        return Err("sampling.samples_per_segment entries must be positive".to_string());
+    }
+    let expected_segment_count = if sampling.closed.unwrap_or(false) {
+        sampling.points.len()
+    } else {
+        sampling.points.len() - 1
+    };
+    if sampling.samples_per_segment.len() != expected_segment_count {
+        return Err(format!(
+            "sampling expected {expected_segment_count} samples_per_segment entries, got {}",
+            sampling.samples_per_segment.len()
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct DispersionCsvPathSample {
+    k_vector: [f64; 3],
+    label: Option<String>,
+}
+
+fn validate_dispersion_path_metadata_against_csv(
+    resource: &FrequencyDomainKPathMetadataResource,
+    csv_content: &str,
+) -> Result<(), String> {
+    let csv_samples = parse_dispersion_csv_path_samples(csv_content)?;
+    if csv_samples.is_empty() {
+        return Ok(());
+    }
+    let expected_samples = expand_dispersion_path_metadata_samples(resource)?;
+    for (sample_index, csv_sample) in csv_samples {
+        let expected = expected_samples.get(sample_index as usize).ok_or_else(|| {
+            format!(
+                "dispersion.csv sample_index {sample_index} is outside path_metadata sample range"
+            )
+        })?;
+        for (component_index, (actual, expected)) in csv_sample
+            .k_vector
+            .iter()
+            .zip(expected.k_vector.iter())
+            .enumerate()
+        {
+            if (actual - expected).abs() > 1.0e-6 {
+                return Err(format!(
+                    "dispersion.csv sample_index {sample_index} k_vector[{component_index}] \
+                     = {actual} does not match path_metadata {expected}"
+                ));
+            }
+        }
+        if let (Some(actual_label), Some(expected_label)) =
+            (csv_sample.label.as_deref(), expected.label.as_deref())
+        {
+            if actual_label != expected_label {
+                return Err(format!(
+                    "dispersion.csv sample_index {sample_index} label `{actual_label}` \
+                     does not match path_metadata `{expected_label}`"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn expand_dispersion_path_metadata_samples(
+    resource: &FrequencyDomainKPathMetadataResource,
+) -> Result<Vec<DispersionCsvPathSample>, String> {
+    let sampling = &resource.sampling;
+    let mut samples = Vec::new();
+    let Some(first_point) = sampling.points.first() else {
+        return Ok(samples);
+    };
+    samples.push(DispersionCsvPathSample {
+        k_vector: first_point.k_vector,
+        label: first_point.label.clone(),
+    });
+    for (segment_index, sample_count) in sampling.samples_per_segment.iter().enumerate() {
+        let start = &sampling.points[segment_index % sampling.points.len()];
+        let end = &sampling.points[(segment_index + 1) % sampling.points.len()];
+        for offset in 1..=*sample_count {
+            let t = offset as f64 / *sample_count as f64;
+            let k_vector = [
+                start.k_vector[0] + (end.k_vector[0] - start.k_vector[0]) * t,
+                start.k_vector[1] + (end.k_vector[1] - start.k_vector[1]) * t,
+                start.k_vector[2] + (end.k_vector[2] - start.k_vector[2]) * t,
+            ];
+            let label = (offset == *sample_count)
+                .then(|| end.label.clone())
+                .flatten();
+            samples.push(DispersionCsvPathSample { k_vector, label });
+        }
+    }
+    Ok(samples)
+}
+
+fn parse_dispersion_csv_path_samples(
+    csv_content: &str,
+) -> Result<BTreeMap<u64, DispersionCsvPathSample>, String> {
+    let Some((header_line_number, header_line)) = csv_content
+        .lines()
+        .enumerate()
+        .find(|(_, line)| !line.trim().is_empty())
+    else {
+        return Ok(BTreeMap::new());
+    };
+    let headers = header_line.split(',').map(str::trim).collect::<Vec<_>>();
+    let find_column = |labels: &[&str]| {
+        labels
+            .iter()
+            .find_map(|label| headers.iter().position(|header| header == label))
+            .ok_or_else(|| format!("dispersion.csv missing {}", labels.join(" or ")))
+    };
+    let sample_index_col = find_column(&["sample_index"])?;
+    let kx_col = find_column(&["kx_rad_per_m", "kx"])?;
+    let ky_col = find_column(&["ky_rad_per_m", "ky"])?;
+    let kz_col = find_column(&["kz_rad_per_m", "kz"])?;
+    let label_col = headers.iter().position(|header| *header == "label");
+    let mut samples: BTreeMap<u64, DispersionCsvPathSample> = BTreeMap::new();
+    for (line_number, line) in csv_content.lines().enumerate() {
+        if line_number <= header_line_number {
+            continue;
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let columns = trimmed.split(',').map(str::trim).collect::<Vec<_>>();
+        let column = |name: &str, index: usize| {
+            columns.get(index).copied().ok_or_else(|| {
+                format!(
+                    "dispersion.csv row {} missing {name} column value",
+                    line_number + 1
+                )
+            })
+        };
+        let sample_index = column("sample_index", sample_index_col)?
+            .parse::<u64>()
+            .map_err(|error| {
+                format!(
+                    "invalid sample_index value in dispersion.csv row {}: {error}",
+                    line_number + 1
+                )
+            })?;
+        let parse_f64 = |name: &str, index: usize| {
+            let raw = column(name, index)?;
+            let value = raw.parse::<f64>().map_err(|error| {
+                format!(
+                    "invalid {name} value in dispersion.csv row {}: {error}",
+                    line_number + 1
+                )
+            })?;
+            if value.is_finite() {
+                Ok(value)
+            } else {
+                Err(format!(
+                    "dispersion.csv row {} {name} must be finite",
+                    line_number + 1
+                ))
+            }
+        };
+        let label = label_col
+            .and_then(|index| columns.get(index).copied())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let sample = DispersionCsvPathSample {
+            k_vector: [
+                parse_f64("kx", kx_col)?,
+                parse_f64("ky", ky_col)?,
+                parse_f64("kz", kz_col)?,
+            ],
+            label,
+        };
+        if let Some(existing) = samples.get(&sample_index) {
+            for (component_index, (left, right)) in existing
+                .k_vector
+                .iter()
+                .zip(sample.k_vector.iter())
+                .enumerate()
+            {
+                if (left - right).abs() > 1.0e-12 {
+                    return Err(format!(
+                        "dispersion.csv sample_index {sample_index} has inconsistent \
+                         k_vector[{component_index}] values"
+                    ));
+                }
+            }
+            if existing
+                .label
+                .as_deref()
+                .filter(|value| !value.is_empty())
+                .is_some()
+                && sample
+                    .label
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
+                    .is_some()
+                && existing.label != sample.label
+            {
+                return Err(format!(
+                    "dispersion.csv sample_index {sample_index} has inconsistent labels"
+                ));
+            }
+            continue;
+        }
+        samples.insert(sample_index, sample);
+    }
+    Ok(samples)
+}
+
 async fn text_artifact_resource(
     state: &Arc<AppState>,
     schema_version: &str,
@@ -1156,6 +1520,7 @@ async fn text_artifact_resource(
             resource_key: resource_key.to_string(),
             content_type: content_type.to_string(),
             text: Some(read_text_artifact_value(&artifact_dir, artifact_path)?),
+            path_metadata: None,
             missing_reason: None,
         }));
     }
@@ -1166,6 +1531,7 @@ async fn text_artifact_resource(
         resource_key: resource_key.to_string(),
         content_type: content_type.to_string(),
         text: None,
+        path_metadata: None,
         missing_reason: Some("artifact is not present in the active workspace".to_string()),
     }))
 }

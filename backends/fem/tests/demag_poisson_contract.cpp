@@ -10,6 +10,7 @@
 #include "cpu/mfem/interactions/demag_poisson.hpp"
 #include "cpu/mfem/interactions/demag_poisson_energy.hpp"
 #include "cpu/mfem/interactions/demag_poisson_field.hpp"
+#include "cpu/mfem/interactions/demag_poisson_periodic.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>
@@ -635,9 +636,20 @@ void demag_periodic_reduction_is_owned_by_poisson_periodic_module() {
             std::string::npos,
         "Poisson periodic header must declare the periodic-demag predicate");
     check(
-        periodic.find("return ctx.demag.enabled && !ctx.mesh.periodic_node_pairs.empty();") !=
+        periodic.find("ctx.mesh.periodic_reduced_node.size() != static_cast<size_t>(ctx.mesh.n_nodes)") !=
             std::string::npos,
-        "Poisson periodic module must define the periodic-demag predicate semantics");
+        "Poisson periodic module must require a complete periodic reduced-node map");
+    check(
+        periodic.find("ctx.mesh.periodic_reduced_node_count == 0") != std::string::npos,
+        "Poisson periodic module must require at least one reduced periodic class");
+    check(
+        periodic.find("ctx.mesh.periodic_representative_nodes.size() !=") !=
+            std::string::npos,
+        "Poisson periodic module must require representative-node count consistency");
+    check(
+        periodic.find("return reduced < ctx.mesh.periodic_reduced_node_count;") !=
+            std::string::npos,
+        "Poisson periodic module must reject reduced-node ids outside the class count");
     check(
         periodic.find("periodic_workspace->solver.GetNumIterations()") != std::string::npos,
         "Poisson periodic reduced solve must publish actual CG iteration telemetry");
@@ -654,6 +666,45 @@ void demag_periodic_reduction_is_owned_by_poisson_periodic_module() {
     check(
         periodic.find("ctx.poisson_demag.last_residual = 0.0;") == std::string::npos,
         "Poisson periodic reduced solve must not report a hard-coded zero residual");
+}
+
+void demag_periodic_reduction_predicate_requires_complete_class_map() {
+    fullmag::fem::Context ctx;
+    ctx.demag.enabled = true;
+    ctx.mesh.n_nodes = 3u;
+    ctx.mesh.periodic_node_pairs = {0u, 2u};
+
+    check(
+        !fullmag::fem::demag_periodic_poisson_reduction_requested(ctx),
+        "periodic demag reduction must reject missing reduced-node map");
+
+    ctx.mesh.periodic_reduced_node = {0u, 1u};
+    ctx.mesh.periodic_representative_nodes = {0u, 1u};
+    ctx.mesh.periodic_reduced_node_count = 2u;
+    check(
+        !fullmag::fem::demag_periodic_poisson_reduction_requested(ctx),
+        "periodic demag reduction must reject reduced-node map shorter than n_nodes");
+
+    ctx.mesh.periodic_reduced_node = {0u, 1u, 0u};
+    ctx.mesh.periodic_representative_nodes = {0u, 1u};
+    ctx.mesh.periodic_reduced_node_count = 2u;
+    check(
+        fullmag::fem::demag_periodic_poisson_reduction_requested(ctx),
+        "periodic demag reduction must accept complete reduced-node map");
+
+    ctx.mesh.periodic_reduced_node = {0u, 2u, 0u};
+    ctx.mesh.periodic_representative_nodes = {0u, 1u};
+    ctx.mesh.periodic_reduced_node_count = 2u;
+    check(
+        !fullmag::fem::demag_periodic_poisson_reduction_requested(ctx),
+        "periodic demag reduction must reject reduced-node ids outside the class count");
+
+    ctx.mesh.periodic_reduced_node = {0u, 1u, 0u};
+    ctx.mesh.periodic_representative_nodes = {0u};
+    ctx.mesh.periodic_reduced_node_count = 2u;
+    check(
+        !fullmag::fem::demag_periodic_poisson_reduction_requested(ctx),
+        "periodic demag reduction must reject representative-node count drift");
 }
 
 void backend_demag_tangent_abi_uses_fresh_poisson_dispatch() {
@@ -1280,6 +1331,7 @@ int main() {
     demag_rhs_sign_contract_matches_laplace_phi_equals_div_m();
     demag_boundary_operator_is_owned_by_poisson_boundary_module();
     demag_periodic_reduction_is_owned_by_poisson_periodic_module();
+    demag_periodic_reduction_predicate_requires_complete_class_map();
     backend_demag_tangent_abi_uses_fresh_poisson_dispatch();
     demag_robin_boundary_mass_excludes_periodic_seam_markers();
     demag_hypre_solve_is_owned_by_poisson_hypre_module();

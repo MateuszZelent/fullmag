@@ -230,22 +230,73 @@ pub(crate) fn initial_step_update(backend_plan: &BackendPlanIR) -> fullmag_runne
             scalar_row_due: false,
             finished: false,
         },
-        BackendPlanIR::FemFrequencyResponse(fem) => fullmag_runner::StepUpdate {
-            stats,
-            grid: [0, 0, 0],
-            fem_mesh: Some(fullmag_runner::FemMeshPayload::from(fem)),
-            magnetization: Some(flatten_magnetization(&fem.equilibrium_magnetization)),
-            preview_field: None,
-            cached_preview_fields: None,
-            hysteresis_field_m_t: None,
-            hysteresis_point_index: None,
-            hysteresis_settle_step_index: None,
-            hysteresis_settle_step_kind: None,
-            hysteresis_settle_step_method: None,
-            scalar_row_due: false,
-            finished: false,
-        },
+        BackendPlanIR::FemFrequencyResponse(fem) => {
+            let mut stats = stats;
+            stats.per_object_scalars = initial_frequency_response_progress_scalars(fem);
+            fullmag_runner::StepUpdate {
+                stats,
+                grid: [0, 0, 0],
+                fem_mesh: Some(fullmag_runner::FemMeshPayload::from(fem)),
+                magnetization: Some(flatten_magnetization(&fem.equilibrium_magnetization)),
+                preview_field: None,
+                cached_preview_fields: None,
+                hysteresis_field_m_t: None,
+                hysteresis_point_index: None,
+                hysteresis_settle_step_index: None,
+                hysteresis_settle_step_kind: None,
+                hysteresis_settle_step_method: None,
+                scalar_row_due: false,
+                finished: false,
+            }
+        }
     }
+}
+
+fn initial_frequency_response_progress_scalars(
+    fem: &fullmag_ir::FemFrequencyResponsePlanIR,
+) -> std::collections::HashMap<String, std::collections::HashMap<String, f64>> {
+    let mut progress = std::collections::HashMap::new();
+    let total = fem.frequencies_hz.values_hz.len() as f64;
+    progress.insert("frequency_index".to_string(), 0.0);
+    progress.insert("completed_frequency_count".to_string(), 0.0);
+    progress.insert("total_frequency_count".to_string(), total);
+    progress.insert("percent".to_string(), 0.0);
+    progress.insert("phase_solving_frequency_point".to_string(), 1.0);
+    if let Some(first_frequency_hz) = fem.frequencies_hz.values_hz.first().copied() {
+        if first_frequency_hz.is_finite() && first_frequency_hz > 0.0 {
+            progress.insert("frequency_hz".to_string(), first_frequency_hz);
+        }
+    }
+    if let Some((min_hz, max_hz)) = frequency_response_range_hz(&fem.frequencies_hz.values_hz) {
+        progress.insert("frequency_min_hz".to_string(), min_hz);
+        progress.insert("frequency_max_hz".to_string(), max_hz);
+    }
+    if fem.enable_demag {
+        progress.insert("demag_enabled".to_string(), 1.0);
+    }
+    match fem.magnetostatic_bc {
+        fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0 => {
+            progress.insert("demag_periodic_airbox_k0".to_string(), 1.0);
+        }
+        fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox => {
+            progress.insert("demag_floquet_airbox".to_string(), 1.0);
+        }
+        fullmag_ir::MagnetostaticBoundaryConditionIR::Open => {}
+    }
+
+    std::collections::HashMap::from([("fem_frequency_response_progress".to_string(), progress)])
+}
+
+fn frequency_response_range_hz(frequencies_hz: &[f64]) -> Option<(f64, f64)> {
+    let mut iter = frequencies_hz
+        .iter()
+        .copied()
+        .filter(|value| value.is_finite() && *value > 0.0);
+    let first = iter.next()?;
+    let (min_hz, max_hz) = iter.fold((first, first), |(min_hz, max_hz), value| {
+        (min_hz.min(value), max_hz.max(value))
+    });
+    Some((min_hz, max_hz))
 }
 
 pub(crate) fn final_stage_step_update(
@@ -1240,8 +1291,7 @@ fn materialize_pipeline_frequency_response(
         .unwrap_or_default();
     let default_magnetostatic_bc = match &base_ir.study {
         fullmag_ir::StudyIR::FrequencyResponse {
-            magnetostatic_bc,
-            ..
+            magnetostatic_bc, ..
         } => *magnetostatic_bc,
         _ => fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
     };
@@ -3066,6 +3116,116 @@ mod tests {
             }
         }))
         .expect("sample ProblemIR should deserialize")
+    }
+
+    fn minimal_frequency_response_plan() -> fullmag_ir::FemFrequencyResponsePlanIR {
+        fullmag_ir::FemFrequencyResponsePlanIR {
+            mesh_name: "unit".to_string(),
+            mesh_source: None,
+            mesh: fullmag_ir::MeshIR {
+                mesh_name: "unit".to_string(),
+                nodes: vec![[0.0, 0.0, 0.0]],
+                elements: Vec::new(),
+                element_markers: Vec::new(),
+                boundary_faces: Vec::new(),
+                boundary_markers: Vec::new(),
+                periodic_boundary_pairs: Vec::new(),
+                periodic_node_pairs: Vec::new(),
+                per_domain_quality: std::collections::HashMap::new(),
+            },
+            object_segments: Vec::new(),
+            mesh_parts: Vec::new(),
+            domain_mesh_mode: fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh,
+            domain_mesh_workflow_mode: None,
+            domain_frame: None,
+            fe_order: 1,
+            hmax: 1.0,
+            equilibrium_magnetization: vec![[1.0, 0.0, 0.0]],
+            material: fullmag_ir::MaterialIR {
+                name: "mat".to_string(),
+                saturation_magnetisation: 8.0e5,
+                exchange_stiffness: 1.3e-11,
+                damping: 0.01,
+                uniaxial_anisotropy: None,
+                uniaxial_anisotropy_k2: None,
+                anisotropy_axis: None,
+                cubic_anisotropy_kc1: None,
+                cubic_anisotropy_kc2: None,
+                cubic_anisotropy_kc3: None,
+                cubic_anisotropy_axis1: None,
+                cubic_anisotropy_axis2: None,
+                ms_field: None,
+                a_field: None,
+                alpha_field: None,
+                ku_field: None,
+                ku2_field: None,
+                kc1_field: None,
+                kc2_field: None,
+                kc3_field: None,
+                interfacial_dmi: None,
+                bulk_dmi: None,
+                dind_field: None,
+                dbulk_field: None,
+            },
+            operator: fullmag_ir::EigenOperatorConfigIR {
+                kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+                include_demag: false,
+            },
+            equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+            k_sampling: Some(fullmag_ir::KSamplingIR::Single {
+                k_vector: [0.0, 0.0, 0.0],
+            }),
+            normalization: fullmag_ir::FrequencyResponseNormalizationIR::UnitL2,
+            damping_policy: fullmag_ir::EigenDampingPolicyIR::Include,
+            spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+            magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
+            excitation: fullmag_ir::FrequencyExcitationIR {
+                field_au_per_m: [1.0, 0.0, 0.0],
+                phase_rad: 0.0,
+            },
+            frequencies_hz: fullmag_ir::FrequencySweepIR {
+                values_hz: vec![1.0e9],
+            },
+            enable_exchange: true,
+            enable_demag: false,
+            interfacial_dmi: None,
+            dmi_interface_normal: None,
+            bulk_dmi: None,
+            external_field: Some([1.0, 0.0, 0.0]),
+            gyromagnetic_ratio: 2.211e5,
+            precision: fullmag_ir::ExecutionPrecision::Double,
+            requested_device: fullmag_ir::ExecutionDevice::Cpu,
+            exchange_bc: fullmag_ir::ExchangeBoundaryCondition::Neumann,
+            demag_realization: None,
+            demag_solver_policy: None,
+            periodic_constraint_sets: Vec::new(),
+            equilibrium_provenance: None,
+        }
+    }
+
+    #[test]
+    fn initial_frequency_response_step_publishes_sweep_progress() {
+        let mut plan = minimal_frequency_response_plan();
+        plan.frequencies_hz.values_hz = vec![2.0e9, 3.5e9, 5.0e9];
+        plan.enable_demag = true;
+        plan.magnetostatic_bc = fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0;
+        let update = initial_step_update(&BackendPlanIR::FemFrequencyResponse(plan));
+
+        let progress = update
+            .stats
+            .per_object_scalars
+            .get("fem_frequency_response_progress")
+            .expect("frequency response initial live update should publish sweep progress");
+
+        assert_eq!(progress["frequency_index"], 0.0);
+        assert_eq!(progress["completed_frequency_count"], 0.0);
+        assert_eq!(progress["total_frequency_count"], 3.0);
+        assert_eq!(progress["frequency_hz"], 2.0e9);
+        assert_eq!(progress["frequency_min_hz"], 2.0e9);
+        assert_eq!(progress["frequency_max_hz"], 5.0e9);
+        assert_eq!(progress["percent"], 0.0);
+        assert_eq!(progress["demag_enabled"], 1.0);
+        assert_eq!(progress["demag_periodic_airbox_k0"], 1.0);
     }
 
     #[test]

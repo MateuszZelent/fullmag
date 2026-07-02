@@ -729,7 +729,9 @@ function sceneStudyStageSnapshot(
     kSamplingKind:
       kSamplingKind(stage.k_sampling) ??
       kSamplingKind(stage.eigen_k_sampling) ??
-      kSamplingKind(stage.frequency_k_sampling),
+      kSamplingKind(stage.frequency_k_sampling) ??
+      kPathSamplingKind(stage.k_path) ??
+      kPathSamplingKind(stage.eigen_k_path),
     maxSteps: scalarText(stage.max_steps),
     stageId: stringValue(stage.stage_id) ?? stringValue(stage.id),
     torqueTolerance: stageTorqueToleranceApm(stage),
@@ -751,6 +753,13 @@ function kSamplingKind(value: unknown): string | null {
   if (record.grid != null) return "grid";
   if (record.points != null || record.vectors != null) return "explicit";
   return null;
+}
+
+function kPathSamplingKind(value: unknown): string | null {
+  if (typeof value === "string" && value.trim()) return "path";
+  const record = recordValue(value);
+  if (!record) return null;
+  return record.path != null ? "path" : null;
 }
 
 function hysteresisSaturationMode(value: unknown): string | null {

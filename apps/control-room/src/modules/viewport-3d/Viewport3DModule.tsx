@@ -13,6 +13,7 @@ import {
   type ComponentProps,
   type CSSProperties,
   type FocusEvent as ReactFocusEvent,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 
@@ -128,7 +129,6 @@ import {
   configureViewport3DRenderer,
   getViewport3DVisualProfile,
   resolveViewport3DCanvasDpr,
-  resolveViewport3DCanvasGlOptions,
   type Viewport3DVisualProfile,
 } from "./viewport3dVisualProfile";
 import {
@@ -139,6 +139,30 @@ import type { ScalarColorBuffer } from "./viewport3dFieldMapping";
 import { installViewport3DThreeConsolePolicy } from "./viewport3dThreeConsolePolicy";
 
 type Viewport3DSceneProps = ComponentProps<typeof Viewport3DScene>;
+type Viewport3DCanvasCreatedState = Parameters<
+  NonNullable<ComponentProps<typeof Canvas>["onCreated"]>
+>[0];
+
+const VIEWPORT_3D_CANVAS_GL_NO_ANTIALIAS = {
+  alpha: false,
+  antialias: false,
+  powerPreference: "high-performance" as const,
+  preserveDrawingBuffer: false,
+};
+
+const VIEWPORT_3D_CANVAS_GL_ANTIALIAS = {
+  alpha: false,
+  antialias: true,
+  powerPreference: "high-performance" as const,
+  preserveDrawingBuffer: false,
+};
+
+const VIEWPORT_3D_CANVAS_GL_CAPTURE = {
+  alpha: false,
+  antialias: true,
+  powerPreference: "high-performance" as const,
+  preserveDrawingBuffer: true,
+};
 
 installViewport3DThreeConsolePolicy();
 
@@ -199,6 +223,17 @@ export function notifyMeshTopologyRendered({
 
 function formatLegendValue(value: number): string {
   return Number.isFinite(value) ? Number(value.toPrecision(4)).toString() : "unknown";
+}
+
+function resolveStableViewport3DCanvasGlOptions(
+  profile: Viewport3DVisualProfile,
+) {
+  if (profile.preserveDrawingBuffer) {
+    return VIEWPORT_3D_CANVAS_GL_CAPTURE;
+  }
+  return profile.antialias
+    ? VIEWPORT_3D_CANVAS_GL_ANTIALIAS
+    : VIEWPORT_3D_CANVAS_GL_NO_ANTIALIAS;
 }
 
 function formatViewport3DColorbarQuantityLabel({
@@ -1126,7 +1161,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       typeof window === "undefined" ? 1 : window.devicePixelRatio,
     profile: visualProfile,
   });
-  const canvasGlOptions = resolveViewport3DCanvasGlOptions(visualProfile);
+  const canvasGlOptions = resolveStableViewport3DCanvasGlOptions(visualProfile);
   const canvasContextKey = `viewport-3d-canvas-aa:${canvasGlOptions.antialias ? "1" : "0"}-preserve:${canvasGlOptions.preserveDrawingBuffer ? "1" : "0"}`;
   const orbitDebugEnabled = viewport3DOrbitDebugEnabledFromBrowserConfig();
   const hysteresisReplayLabel = formatHysteresisReplayLabel(hysteresisReplayTarget);
@@ -1173,6 +1208,16 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   const lastRenderedMeshRevision = useRef<number | string | null>(null);
   const sendVisualizationAck = useVisualizationClientAckSender({ api: kernel.api });
   const initialCameraFit = resolveViewport3DCameraFit(null);
+  const canvasCamera = useMemo(
+    () => ({
+      far: initialCameraFit.far,
+      fov: 42,
+      near: initialCameraFit.near,
+      position: DEFAULT_VIEWPORT_3D_CAMERA_STATE.position,
+      up: VIEWPORT_3D_WORLD_UP,
+    }),
+    [initialCameraFit.far, initialCameraFit.near],
+  );
   const discretizationKind = sceneProps.fdmDomain
     ? "FDM"
     : sceneProps.femDomain.magneticParts.length > 0
@@ -1385,6 +1430,23 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   const clearInspectHover = useCallback(() => {
     setInspectHover(null);
   }, [setInspectHover]);
+  const handleCanvasCreated = useCallback(
+    ({ gl }: Viewport3DCanvasCreatedState) => {
+      canvasRef.current = gl.domElement;
+      configureViewport3DRenderer(gl, visualProfile);
+    },
+    [visualProfile],
+  );
+  const handleCanvasContextMenu = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>) => {
+      event.preventDefault();
+    },
+    [],
+  );
+  const handleCanvasPointerMissed = useCallback(() => {
+    clearInspectHover();
+    onClearSelection();
+  }, [clearInspectHover, onClearSelection]);
   const updateInspectHover = useCallback(
     (
       sample: Viewport3DInspectSample,
@@ -1486,30 +1548,16 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       </div>
       {clientReady && colors ? (
         <Canvas
-          camera={{
-            far: initialCameraFit.far,
-            fov: 42,
-            near: initialCameraFit.near,
-            position: DEFAULT_VIEWPORT_3D_CAMERA_STATE.position,
-            up: VIEWPORT_3D_WORLD_UP,
-          }}
+          camera={canvasCamera}
           className="fm-viewport-3d__canvas"
           dpr={canvasDpr}
           events={createViewport3DEventManager}
           frameloop={VIEWPORT_3D_FRAMELOOP}
           gl={canvasGlOptions}
           key={canvasContextKey}
-          onCreated={({ gl }) => {
-            canvasRef.current = gl.domElement;
-            configureViewport3DRenderer(gl, visualProfile);
-          }}
-          onContextMenu={(event) => {
-            event.preventDefault();
-          }}
-          onPointerMissed={() => {
-            clearInspectHover();
-            onClearSelection();
-          }}
+          onCreated={handleCanvasCreated}
+          onContextMenu={handleCanvasContextMenu}
+          onPointerMissed={handleCanvasPointerMissed}
         >
           <Viewport3DRendererProfile visualProfile={visualProfile} />
           <Viewport3DScene

@@ -114,6 +114,75 @@ std::string escape_json_string(const char *value)
     return escaped;
 }
 
+bool append_sweep_progress_artifact_json(
+    std::string &out,
+    char error_message[128],
+    const char *status,
+    bool complete,
+    const char *state,
+    std::uint64_t total_frequency_points,
+    std::uint64_t completed_frequency_points,
+    std::uint64_t written_frequency_point_artifacts,
+    const char *current_frequency_hz_json,
+    bool partial_artifacts_available,
+    const char *latest_artifact_manifest_path) noexcept
+{
+    std::string checkpoint_json;
+    const char *current_frequency =
+        current_frequency_hz_json != nullptr ? current_frequency_hz_json : "null";
+    const char *manifest_path =
+        latest_artifact_manifest_path != nullptr ? latest_artifact_manifest_path : "";
+    if (!append_format(
+            checkpoint_json,
+            error_message,
+            "{\"schema_version\":\"frequency_domain_sweep_progress.v1\","
+            "\"status\":\"%s\","
+            "\"complete\":%s,"
+            "\"state\":\"%s\","
+            "\"total_frequency_points\":%llu,"
+            "\"completed_frequency_points\":%llu,"
+            "\"written_frequency_point_artifacts\":%llu,"
+            "\"current_frequency_hz\":%s,"
+            "\"partial_artifacts_available\":%s,"
+            "\"latest_artifact_manifest_path\":\"%s\"}",
+            status,
+            complete ? "true" : "false",
+            state,
+            static_cast<unsigned long long>(total_frequency_points),
+            static_cast<unsigned long long>(completed_frequency_points),
+            static_cast<unsigned long long>(written_frequency_point_artifacts),
+            current_frequency,
+            partial_artifacts_available ? "true" : "false",
+            escape_json_string(manifest_path).c_str())) {
+        return false;
+    }
+    return append_format(
+        out,
+        error_message,
+        "{\"schema_version\":\"frequency_domain_sweep_progress.v1\","
+        "\"status\":\"%s\","
+        "\"complete\":%s,"
+        "\"state\":\"%s\","
+        "\"total_frequency_points\":%llu,"
+        "\"completed_frequency_points\":%llu,"
+        "\"written_frequency_point_artifacts\":%llu,"
+        "\"current_frequency_hz\":%s,"
+        "\"partial_artifacts_available\":%s,"
+        "\"latest_artifact_manifest_path\":\"%s\","
+        "\"missing_reason\":null,"
+        "\"progress_json\":\"%s\"}",
+        status,
+        complete ? "true" : "false",
+        state,
+        static_cast<unsigned long long>(total_frequency_points),
+        static_cast<unsigned long long>(completed_frequency_points),
+        static_cast<unsigned long long>(written_frequency_point_artifacts),
+        current_frequency,
+        partial_artifacts_available ? "true" : "false",
+        escape_json_string(manifest_path).c_str(),
+        escape_json_string(checkpoint_json.c_str()).c_str());
+}
+
 std::string extract_json_string_field(const char *json, const char *field_name) noexcept
 {
     if (json == nullptr || field_name == nullptr) {
@@ -1240,6 +1309,22 @@ FrequencyDomainStatus setup_mfem_tangent_block_jacobi_preconditioner(
 
     adapter.block_jacobi_preconditioner_enabled = true;
     return FrequencyDomainStatus::ok;
+}
+
+const char *mfem_tangent_preconditioner_variant(
+    const MfemProductionCpuOperatorAdapter &adapter) noexcept
+{
+    if (adapter.graph_preconditioner_enabled &&
+        adapter.demag_coarse_preconditioner_enabled) {
+        return "graph_demag_coarse";
+    }
+    if (adapter.demag_coarse_preconditioner_enabled) {
+        return "demag_coarse";
+    }
+    if (adapter.block_jacobi_preconditioner_enabled) {
+        return "block_jacobi";
+    }
+    return "none";
 }
 
 FrequencyDomainStatus apply_mfem_tangent_block_jacobi_right_preconditioner(
@@ -2454,6 +2539,7 @@ double drive_global_phase_rad(
 struct ResponsePointObservableJson {
     std::string susceptibility_tensor;
     std::string susceptibility_provenance;
+    std::string absorbed_power_density_provenance;
     std::string tangent_leakage;
     double absorbed_power_density = 0.0;
 };
@@ -2537,27 +2623,62 @@ ResponsePointObservableJson build_response_point_observable_json(
     const double *drive_real,
     const double *drive_imag,
     std::uint64_t tangent_dof_count,
-    double angular_frequency_rad_per_s) noexcept
+    double angular_frequency_rad_per_s,
+    const double *observable_ms_field,
+    std::uint64_t observable_ms_field_len,
+    double observable_uniform_ms) noexcept
 {
     double drive_norm_squared = 0.0;
     double projected_real = 0.0;
     double projected_imag = 0.0;
+    double projected_ms_real = 0.0;
+    double projected_ms_imag = 0.0;
+    const std::uint64_t node_count = tangent_dof_count / 2;
+    const bool has_ms_field =
+        observable_ms_field != nullptr &&
+        observable_ms_field_len == node_count &&
+        node_count > 0;
+    const bool has_uniform_ms =
+        std::isfinite(observable_uniform_ms) &&
+        observable_uniform_ms > 0.0;
+    bool ms_values_finite = true;
     for (std::uint64_t dof = 0; dof < tangent_dof_count; ++dof) {
         const double drive_re = drive_real == nullptr ? 0.0 : drive_real[dof];
         const double drive_im = drive_imag == nullptr ? 0.0 : drive_imag[dof];
         const double response_re = response_real == nullptr ? 0.0 : response_real[dof];
         const double response_im = response_imag == nullptr ? 0.0 : response_imag[dof];
         drive_norm_squared += drive_re * drive_re + drive_im * drive_im;
-        projected_real += response_re * drive_re + response_im * drive_im;
-        projected_imag += response_im * drive_re - response_re * drive_im;
+        const double dof_projected_real = response_re * drive_re + response_im * drive_im;
+        const double dof_projected_imag = response_im * drive_re - response_re * drive_im;
+        projected_real += dof_projected_real;
+        projected_imag += dof_projected_imag;
+        if (has_ms_field || has_uniform_ms) {
+            const double ms = has_ms_field ?
+                observable_ms_field[dof / 2] :
+                observable_uniform_ms;
+            if (!std::isfinite(ms) || ms <= 0.0) {
+                ms_values_finite = false;
+            } else {
+                projected_ms_real += ms * dof_projected_real;
+                projected_ms_imag += ms * dof_projected_imag;
+            }
+        }
     }
 
     const bool has_drive = drive_norm_squared > 0.0 && std::isfinite(drive_norm_squared);
-    const double susceptibility_real = has_drive ? projected_real / drive_norm_squared : 0.0;
-    const double susceptibility_imag = has_drive ? projected_imag / drive_norm_squared : 0.0;
+    const bool has_ms = has_drive && ms_values_finite && (has_ms_field || has_uniform_ms);
+    const double susceptibility_real = has_drive
+        ? (has_ms ? projected_ms_real : projected_real) / drive_norm_squared
+        : 0.0;
+    const double susceptibility_imag = has_drive
+        ? (has_ms ? projected_ms_imag : projected_imag) / drive_norm_squared
+        : 0.0;
     const double dof_scale = tangent_dof_count == 0 ? 1.0 : static_cast<double>(tangent_dof_count);
+    constexpr double mu0_t_m_per_a = 1.2566370614359172954e-6;
     const double absorbed_power_density = has_drive
-        ? 0.5 * std::fabs(angular_frequency_rad_per_s) * std::fabs(projected_imag) / dof_scale
+        ? 0.5 *
+            (has_ms ? mu0_t_m_per_a * std::fabs(projected_ms_imag) : std::fabs(projected_imag)) *
+            std::fabs(angular_frequency_rad_per_s) / dof_scale
         : 0.0;
 
     ResponsePointObservableJson out{};
@@ -2577,17 +2698,55 @@ ResponsePointObservableJson build_response_point_observable_json(
         out.susceptibility_tensor = susceptibility_json;
         out.absorbed_power_density = absorbed_power_density;
     }
-    out.susceptibility_provenance =
-        "{\"kind\":\"drive_projected_scalar\","
-        "\"basis\":\"local_tangent_drive\","
-        "\"component_pair_count\":1,"
-        "\"full_tensor\":false,"
-        "\"response_quantity\":\"delta_m_over_h_drive\","
-        "\"response_units\":\"m/A\","
-        "\"dimensionless_si_susceptibility\":false,"
-        "\"requires_ms_for_chi_si\":true,"
-        "\"ms_factor_applied\":false,"
-        "\"normalization\":\"sum(response*conj(drive))/sum(abs(drive)^2)\"}";
+    if (has_ms) {
+        out.susceptibility_provenance =
+            std::string("{\"kind\":\"drive_projected_si_susceptibility\","
+            "\"basis\":\"local_tangent_drive\","
+            "\"component_pair_count\":1,"
+            "\"full_tensor\":false,"
+            "\"response_quantity\":\"delta_M_over_h_drive\","
+            "\"response_units\":\"dimensionless\","
+            "\"dimensionless_si_susceptibility\":true,"
+            "\"requires_ms_for_chi_si\":false,"
+            "\"ms_factor_applied\":true,"
+            "\"ms_source\":\"") +
+            (has_ms_field ? "per_node_field" : "uniform") +
+            "\",\"normalization\":\"sum(Ms*response*conj(drive))/sum(abs(drive)^2)\"}";
+        out.absorbed_power_density_provenance =
+            std::string("{\"kind\":\"drive_projected_absorbed_power_density\","
+            "\"basis\":\"local_tangent_drive\","
+            "\"physical_power_density\":true,"
+            "\"units\":\"W/m^3\","
+            "\"requires_mu0_ms_factor\":false,"
+            "\"mu0_ms_factor_applied\":true,"
+            "\"ms_source\":\"") +
+            (has_ms_field ? "per_node_field" : "uniform") +
+            "\",\"normalization\":\"0.5*mu0*abs(omega)*abs(imag(sum(Ms*response*conj(drive))))/tangent_dof_count\","
+            "\"volume_weighted\":false,"
+            "\"spatial_reduction\":\"drive_projected_tangent_dof_average\","
+            "\"full_power_density\":true}";
+    } else {
+        out.susceptibility_provenance =
+            "{\"kind\":\"drive_projected_scalar\","
+            "\"basis\":\"local_tangent_drive\","
+            "\"component_pair_count\":1,"
+            "\"full_tensor\":false,"
+            "\"response_quantity\":\"delta_m_over_h_drive\","
+            "\"response_units\":\"m/A\","
+            "\"dimensionless_si_susceptibility\":false,"
+            "\"requires_ms_for_chi_si\":true,"
+            "\"ms_factor_applied\":false,"
+            "\"normalization\":\"sum(response*conj(drive))/sum(abs(drive)^2)\"}";
+        out.absorbed_power_density_provenance =
+            "{\"kind\":\"drive_projected_absorption_proxy\","
+            "\"basis\":\"local_tangent_drive\","
+            "\"physical_power_density\":false,"
+            "\"units\":\"proxy_not_W_per_m3\","
+            "\"requires_mu0_ms_factor\":true,"
+            "\"ms_factor_applied\":false,"
+            "\"normalization\":\"0.5*abs(omega)*abs(imag(sum(response*conj(drive))))/tangent_dof_count\","
+            "\"full_power_density\":false}";
+    }
     out.tangent_leakage =
         "{\"status\":\"evaluated\","
         "\"basis\":\"local_tangent_frame\","
@@ -2818,6 +2977,7 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
     char sweep[256]{};
     char sweep_v2[256]{};
     char progress[256]{};
+    char cancel_requested[256]{};
     char diagnostics[256]{};
     char diagnostics_dir[256]{};
     char solver_diagnostics[256]{};
@@ -2832,6 +2992,7 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
         std::snprintf(sweep, sizeof(sweep), "%s/magnetic_response_sweep.v1.json", response_dir) < 0 ||
         std::snprintf(sweep_v2, sizeof(sweep_v2), "%s/magnetic_response_sweep.v2.json", response_dir) < 0 ||
         std::snprintf(progress, sizeof(progress), "%s/progress.v1.json", response_dir) < 0 ||
+        std::snprintf(cancel_requested, sizeof(cancel_requested), "%s/cancel_requested.v1.json", response_dir) < 0 ||
         std::snprintf(diagnostics, sizeof(diagnostics), "%s/diagnostics.v1.json", response_dir) < 0 ||
         std::snprintf(diagnostics_dir, sizeof(diagnostics_dir), "%s/diagnostics", response_dir) < 0 ||
         std::snprintf(solver_diagnostics, sizeof(solver_diagnostics), "%s/solver.v1.json", diagnostics_dir) < 0 ||
@@ -2849,6 +3010,7 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
         std::strlen(sweep) >= sizeof(sweep) - 1 ||
         std::strlen(sweep_v2) >= sizeof(sweep_v2) - 1 ||
         std::strlen(progress) >= sizeof(progress) - 1 ||
+        std::strlen(cancel_requested) >= sizeof(cancel_requested) - 1 ||
         std::strlen(diagnostics) >= sizeof(diagnostics) - 1 ||
         std::strlen(diagnostics_dir) >= sizeof(diagnostics_dir) - 1 ||
         std::strlen(solver_diagnostics) >= sizeof(solver_diagnostics) - 1 ||
@@ -2861,6 +3023,7 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
     std::string sweep_json;
     std::string sweep_v2_json;
     std::string progress_json;
+    std::string cancel_requested_json;
     std::string diagnostics_json;
     std::string periodic_pairs_json;
     std::string points_json = "[";
@@ -3397,7 +3560,10 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
             request.mfem_validation_problem.drive_real,
             request.mfem_validation_problem.drive_imag,
             validation_result.response_dof_count,
-            angular_frequency_rad_per_s);
+            angular_frequency_rad_per_s,
+            request.mfem_validation_problem.observable_ms_field,
+            request.mfem_validation_problem.observable_ms_field_len,
+            request.mfem_validation_problem.observable_uniform_ms);
 
         if (!append_format(
             points_json,
@@ -3419,14 +3585,7 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
             "\"susceptibility_tensor\":%s,"
             "\"susceptibility_tensor_provenance\":%s,"
             "\"absorbed_power_density\":%.17g,"
-            "\"absorbed_power_density_provenance\":{\"kind\":\"drive_projected_absorption_proxy\","
-            "\"basis\":\"local_tangent_drive\","
-            "\"physical_power_density\":false,"
-            "\"units\":\"proxy_not_W_per_m3\","
-            "\"requires_mu0_ms_factor\":true,"
-            "\"ms_factor_applied\":false,"
-            "\"normalization\":\"0.5*abs(omega)*abs(imag(sum(response*conj(drive))))/tangent_dof_count\","
-            "\"full_power_density\":false},"
+            "\"absorbed_power_density_provenance\":%s,"
             "\"residual_l2_norm\":%.17g,"
             "\"relative_residual_l2_norm\":%.17g,"
             "\"residual_source\":\"%s\","
@@ -3451,6 +3610,7 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
             observables.susceptibility_tensor.c_str(),
             observables.susceptibility_provenance.c_str(),
             observables.absorbed_power_density,
+            observables.absorbed_power_density_provenance.c_str(),
             residual_l2_norm[frequency_index],
             relative_residual_l2_norm[frequency_index],
             residual_source,
@@ -3774,6 +3934,44 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
             "\"response/field_payloads.zarr/frequency_0000/vector_xyz_complex/0.0.0\"" :
             "\"response/field_payloads.zarr/frequency_0000/vector_tangent_complex/0.0.0\"";
     }
+    char current_frequency_hz_json[64]{};
+    const bool solve_error_artifact =
+        !complete &&
+        incomplete_status != nullptr &&
+        std::strcmp(incomplete_status, "solve_error") == 0;
+    if (request.solve_request.frequencies_hz != nullptr &&
+        request.solve_request.frequency_count > 0 &&
+        (validation_result.completed_frequency_count > 0 || solve_error_artifact)) {
+        const std::uint64_t max_index = request.solve_request.frequency_count - 1;
+        const std::uint64_t requested_index =
+            solve_error_artifact
+                ? validation_result.completed_frequency_count
+                : validation_result.completed_frequency_count - 1;
+        const std::uint64_t frequency_index =
+            requested_index < max_index ? requested_index : max_index;
+        std::snprintf(
+            current_frequency_hz_json,
+            sizeof(current_frequency_hz_json),
+            "%.17g",
+            request.solve_request.frequencies_hz[frequency_index]);
+    } else {
+        std::snprintf(current_frequency_hz_json, sizeof(current_frequency_hz_json), "null");
+    }
+    if (interrupted_artifact &&
+        !append_sweep_progress_artifact_json(
+            cancel_requested_json,
+            error_message,
+            "cancel_requested",
+            false,
+            "cancel_requested",
+            request.solve_request.frequency_count,
+            validation_result.completed_frequency_count,
+            validation_result.completed_frequency_count,
+            current_frequency_hz_json,
+            partial_artifacts_available,
+            "frequency_domain/manifest.v1.json")) {
+        return FrequencyDomainStatus::artifact_error;
+    }
     if (!append_format(
         sweep_v2_json,
         error_message,
@@ -3794,25 +3992,18 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
         sweep_v2_point_paths_json.c_str(),
         sweep_v2_payload_paths_json.c_str(),
         points_json.c_str()) ||
-        !append_format(
+        !append_sweep_progress_artifact_json(
         progress_json,
         error_message,
-        "{\"schema_version\":\"frequency_domain_sweep_progress.v1\","
-        "\"status\":\"%s\","
-        "\"complete\":%s,"
-        "\"state\":\"%s\","
-        "\"total_frequency_points\":%llu,"
-        "\"completed_frequency_points\":%llu,"
-        "\"written_frequency_point_artifacts\":%llu,"
-        "\"partial_artifacts_available\":%s,"
-        "\"latest_artifact_manifest_path\":\"frequency_domain/manifest.v1.json\"}",
         artifact_status,
-        complete ? "true" : "false",
+        complete,
         progress_state,
-        static_cast<unsigned long long>(request.solve_request.frequency_count),
-        static_cast<unsigned long long>(validation_result.completed_frequency_count),
-        static_cast<unsigned long long>(validation_result.completed_frequency_count),
-        partial_artifacts_available ? "true" : "false") ||
+        request.solve_request.frequency_count,
+        validation_result.completed_frequency_count,
+        validation_result.completed_frequency_count,
+        current_frequency_hz_json,
+        partial_artifacts_available,
+        "frequency_domain/manifest.v1.json") ||
         !append_format(
         diagnostics_json,
         error_message,
@@ -4001,6 +4192,13 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
     if (status != FrequencyDomainStatus::ok) {
         return status;
     }
+    if (interrupted_artifact) {
+        status =
+            write_text_artifact(cancel_requested, cancel_requested_json.c_str(), error_message);
+        if (status != FrequencyDomainStatus::ok) {
+            return status;
+        }
+    }
     status = write_text_artifact(diagnostics, diagnostics_json.c_str(), error_message);
     if (status != FrequencyDomainStatus::ok) {
         return status;
@@ -4123,7 +4321,10 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
             request.mfem_validation_problem.drive_real,
             request.mfem_validation_problem.drive_imag,
             validation_result.response_dof_count,
-            angular_frequency_rad_per_s);
+            angular_frequency_rad_per_s,
+            request.mfem_validation_problem.observable_ms_field,
+            request.mfem_validation_problem.observable_ms_field_len,
+            request.mfem_validation_problem.observable_uniform_ms);
         std::string periodic_airbox_point_json;
         if (periodic_airbox_demag_tangent_artifact) {
             std::vector<double> demag_real(
@@ -4295,14 +4496,7 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
                     "\"susceptibility_tensor\":%s,"
                     "\"susceptibility_tensor_provenance\":%s,"
                     "\"absorbed_power_density\":%.17g,"
-                    "\"absorbed_power_density_provenance\":{\"kind\":\"drive_projected_absorption_proxy\","
-                    "\"basis\":\"local_tangent_drive\","
-                    "\"physical_power_density\":false,"
-                    "\"units\":\"proxy_not_W_per_m3\","
-                    "\"requires_mu0_ms_factor\":true,"
-                    "\"ms_factor_applied\":false,"
-                    "\"normalization\":\"0.5*abs(omega)*abs(imag(sum(response*conj(drive))))/tangent_dof_count\","
-                    "\"full_power_density\":false},"
+                    "\"absorbed_power_density_provenance\":%s,"
                     "\"residual_l2_norm\":%.17g,"
                     "\"relative_residual_l2_norm\":%.17g,"
                     "\"residual_source\":\"%s\","
@@ -4335,6 +4529,7 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
                     observables.susceptibility_tensor.c_str(),
                     observables.susceptibility_provenance.c_str(),
                     observables.absorbed_power_density,
+                    observables.absorbed_power_density_provenance.c_str(),
                     residual_l2_norm[frequency_index],
                     relative_residual_l2_norm[frequency_index],
                     residual_source,
@@ -4383,14 +4578,7 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
                     "\"susceptibility_tensor\":%s,"
                     "\"susceptibility_tensor_provenance\":%s,"
                     "\"absorbed_power_density\":%.17g,"
-                    "\"absorbed_power_density_provenance\":{\"kind\":\"drive_projected_absorption_proxy\","
-                    "\"basis\":\"local_tangent_drive\","
-                    "\"physical_power_density\":false,"
-                    "\"units\":\"proxy_not_W_per_m3\","
-                    "\"requires_mu0_ms_factor\":true,"
-                    "\"ms_factor_applied\":false,"
-                    "\"normalization\":\"0.5*abs(omega)*abs(imag(sum(response*conj(drive))))/tangent_dof_count\","
-                    "\"full_power_density\":false},"
+                    "\"absorbed_power_density_provenance\":%s,"
                     "\"residual_l2_norm\":%.17g,"
                     "\"relative_residual_l2_norm\":%.17g,"
                     "\"residual_source\":\"%s\","
@@ -4419,6 +4607,7 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
                     observables.susceptibility_tensor.c_str(),
                     observables.susceptibility_provenance.c_str(),
                     observables.absorbed_power_density,
+                    observables.absorbed_power_density_provenance.c_str(),
                     residual_l2_norm[frequency_index],
                     relative_residual_l2_norm[frequency_index],
                     residual_source,
@@ -4459,14 +4648,7 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
                 "\"susceptibility_tensor\":%s,"
                 "\"susceptibility_tensor_provenance\":%s,"
                 "\"absorbed_power_density\":%.17g,"
-                "\"absorbed_power_density_provenance\":{\"kind\":\"drive_projected_absorption_proxy\","
-                "\"basis\":\"local_tangent_drive\","
-                "\"physical_power_density\":false,"
-                "\"units\":\"proxy_not_W_per_m3\","
-                "\"requires_mu0_ms_factor\":true,"
-                "\"ms_factor_applied\":false,"
-                "\"normalization\":\"0.5*abs(omega)*abs(imag(sum(response*conj(drive))))/tangent_dof_count\","
-                "\"full_power_density\":false},"
+                "\"absorbed_power_density_provenance\":%s,"
                 "\"residual_l2_norm\":%.17g,"
                 "\"relative_residual_l2_norm\":%.17g,"
                 "\"residual_source\":\"%s\","
@@ -4488,6 +4670,7 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
                 observables.susceptibility_tensor.c_str(),
                 observables.susceptibility_provenance.c_str(),
                 observables.absorbed_power_density,
+                observables.absorbed_power_density_provenance.c_str(),
                 residual_l2_norm[frequency_index],
                 relative_residual_l2_norm[frequency_index],
                 residual_source,
@@ -4930,21 +5113,18 @@ FrequencyDomainStatus write_unavailable_response_artifacts(
             request.periodic_airbox_magnetostatic_periodic_node_pair_count),
         static_cast<unsigned long long>(coupled_complex_dof_count),
         unavailable_dynamic_demag_operator_source) ||
-        !append_format(
-        progress_json,
-        error_message,
-        "{\"schema_version\":\"frequency_domain_sweep_progress.v1\","
-        "\"status\":\"unavailable\","
-        "\"complete\":false,"
-        "\"state\":\"unavailable\","
-        "\"total_frequency_points\":%llu,"
-        "\"completed_frequency_points\":0,"
-        "\"written_frequency_point_artifacts\":%llu,"
-        "\"partial_artifacts_available\":%s,"
-        "\"latest_artifact_manifest_path\":\"frequency_domain/manifest.v1.json\"}",
-        static_cast<unsigned long long>(request.solve_request.frequency_count),
-        static_cast<unsigned long long>(written_frequency_point_artifacts),
-        partial_artifacts_available) ||
+        !append_sweep_progress_artifact_json(
+            progress_json,
+            error_message,
+            "unavailable",
+            false,
+            "unavailable",
+            request.solve_request.frequency_count,
+            0,
+            written_frequency_point_artifacts,
+            "null",
+            written_frequency_point_artifacts > 0,
+            "frequency_domain/manifest.v1.json") ||
         !append_format(
         manifest_json,
         error_message,
@@ -5333,6 +5513,27 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
     const char *progress_state = complete ? "completed" : artifact_status;
     const bool partial_artifacts_available =
         !complete || validation_result.completed_frequency_count > 0;
+    const bool solve_error_artifact =
+        !complete && std::strcmp(artifact_status, "solve_error") == 0;
+    char current_frequency_hz_json[64]{};
+    if (request.solve_request.frequencies_hz != nullptr &&
+        request.solve_request.frequency_count > 0 &&
+        (validation_result.completed_frequency_count > 0 || solve_error_artifact)) {
+        const std::uint64_t max_index = request.solve_request.frequency_count - 1;
+        const std::uint64_t requested_index =
+            solve_error_artifact
+                ? validation_result.completed_frequency_count
+                : validation_result.completed_frequency_count - 1;
+        const std::uint64_t frequency_index =
+            requested_index < max_index ? requested_index : max_index;
+        std::snprintf(
+            current_frequency_hz_json,
+            sizeof(current_frequency_hz_json),
+            "%.17g",
+            request.solve_request.frequencies_hz[frequency_index]);
+    } else {
+        std::snprintf(current_frequency_hz_json, sizeof(current_frequency_hz_json), "null");
+    }
     const char *extra_diagnostics =
         extra_diagnostics_json != nullptr ? extra_diagnostics_json : "";
     const DrivenFrequencyResponsePeriodicAirboxCoupledBlockProblem &coupled_problem =
@@ -5519,7 +5720,10 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
                 coupled_problem.drive_real,
                 coupled_problem.drive_imag,
                 delta_m_tangent_dof_count,
-                angular_frequency_rad_per_s);
+                angular_frequency_rad_per_s,
+                nullptr,
+                0,
+                0.0);
         std::string delta_phi_complex;
         if (!append_complex_response_array(
                 delta_phi_complex,
@@ -5595,14 +5799,7 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
                 "\"susceptibility_tensor\":%s,"
                 "\"susceptibility_tensor_provenance\":%s,"
                 "\"absorbed_power_density\":%.17g,"
-                "\"absorbed_power_density_provenance\":{\"kind\":\"drive_projected_absorption_proxy\","
-                "\"basis\":\"local_tangent_drive\","
-                "\"physical_power_density\":false,"
-                "\"units\":\"proxy_not_W_per_m3\","
-                "\"requires_mu0_ms_factor\":true,"
-                "\"ms_factor_applied\":false,"
-                "\"normalization\":\"0.5*abs(omega)*abs(imag(sum(response*conj(drive))))/tangent_dof_count\","
-                "\"full_power_density\":false},"
+                "\"absorbed_power_density_provenance\":%s,"
                 "\"residual_l2_norm\":%.17g,"
                 "\"relative_residual_l2_norm\":%.17g,"
                 "\"residual_source\":\"%s\","
@@ -5627,6 +5824,7 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
                 observables.susceptibility_tensor.c_str(),
                 observables.susceptibility_provenance.c_str(),
                 observables.absorbed_power_density,
+                observables.absorbed_power_density_provenance.c_str(),
                 residual_l2_norm[frequency_index],
                 relative_residual_l2_norm[frequency_index],
                 residual_source,
@@ -5657,14 +5855,7 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
                 "\"susceptibility_tensor\":%s,"
                 "\"susceptibility_tensor_provenance\":%s,"
                 "\"absorbed_power_density\":%.17g,"
-                "\"absorbed_power_density_provenance\":{\"kind\":\"drive_projected_absorption_proxy\","
-                "\"basis\":\"local_tangent_drive\","
-                "\"physical_power_density\":false,"
-                "\"units\":\"proxy_not_W_per_m3\","
-                "\"requires_mu0_ms_factor\":true,"
-                "\"ms_factor_applied\":false,"
-                "\"normalization\":\"0.5*abs(omega)*abs(imag(sum(response*conj(drive))))/tangent_dof_count\","
-                "\"full_power_density\":false},"
+                "\"absorbed_power_density_provenance\":%s,"
                 "\"residual_l2_norm\":%.17g,"
                 "\"relative_residual_l2_norm\":%.17g,"
                 "\"residual_source\":\"%s\","
@@ -5684,6 +5875,7 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
                 observables.susceptibility_tensor.c_str(),
                 observables.susceptibility_provenance.c_str(),
                 observables.absorbed_power_density,
+                observables.absorbed_power_density_provenance.c_str(),
                 residual_l2_norm[frequency_index],
                 relative_residual_l2_norm[frequency_index],
                 residual_source,
@@ -6006,25 +6198,18 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
             validation_result.residual_l2_norm,
             validation_result.relative_residual_l2_norm,
             domain_mesh_mode_field.c_str()) ||
-        !append_format(
+        !append_sweep_progress_artifact_json(
             progress_json,
             error_message,
-            "{\"schema_version\":\"frequency_domain_sweep_progress.v1\","
-            "\"status\":\"%s\","
-            "\"complete\":%s,"
-            "\"state\":\"%s\","
-            "\"total_frequency_points\":%llu,"
-            "\"completed_frequency_points\":%llu,"
-            "\"written_frequency_point_artifacts\":%llu,"
-            "\"partial_artifacts_available\":%s,"
-            "\"latest_artifact_manifest_path\":\"frequency_domain/manifest.v1.json\"}",
             artifact_status,
-            complete ? "true" : "false",
+            complete,
             progress_state,
-            static_cast<unsigned long long>(request.solve_request.frequency_count),
-            static_cast<unsigned long long>(validation_result.completed_frequency_count),
-            static_cast<unsigned long long>(validation_result.completed_frequency_count),
-            partial_artifacts_available ? "true" : "false") ||
+            request.solve_request.frequency_count,
+            validation_result.completed_frequency_count,
+            validation_result.completed_frequency_count,
+            current_frequency_hz_json,
+            partial_artifacts_available,
+            "frequency_domain/manifest.v1.json") ||
         !append_format(
             manifest_json,
             error_message,
@@ -8462,6 +8647,8 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
             "not_evaluated",
             0.0);
     }
+    const char *preconditioner_variant =
+        mfem_tangent_preconditioner_variant(context.adapter);
 
     std::vector<double> drive_real(static_cast<std::size_t>(coupled_dof_count), 0.0);
     std::vector<double> drive_imag;
@@ -8603,6 +8790,7 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
                 "\"matrix_free_solver\":true,"
                 "\"krylov_solver\":\"gmres\","
                 "\"krylov_preconditioner_kind\":\"%s\","
+                "\"krylov_preconditioner_variant\":\"%s\","
                 "\"krylov_preconditioner_applied\":%s,"
                 "\"krylov_preconditioner_setup_status\":\"%s\","
                 "\"gmres_relative_residual_history\":%s,"
@@ -8620,6 +8808,7 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
                 "\"last_recomputed_relative_residual_l2_norm\":%.17g,"
                 "\"residual_growth_factor\":%.17g,",
                 production_result.krylov_preconditioner,
+                preconditioner_variant,
                 production_result.right_preconditioner_applied ? "true" : "false",
                 production_result.right_preconditioner_applied ? "ok" : "not_configured",
                 gmres_history_json.c_str(),
@@ -8695,12 +8884,14 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
             "\"requested_execution_lane\":\"production_cpu\","
             "\"periodic_airbox_coupled_block_solver\":true,"
             "\"dynamic_demag_operator_source\":\"%s\","
+            "\"krylov_preconditioner_variant\":\"%s\","
             "\"total_iteration_count\":%llu,"
             "\"max_iterations_for_frequency\":%llu,"
             "\"relative_residual_l2_norm\":%.17g,"
             "\"artifact_manifest_path\":\"%s\"}",
             status_to_string(solve_status),
             operator_source,
+            preconditioner_variant,
             static_cast<unsigned long long>(production_result.total_iteration_count),
             static_cast<unsigned long long>(
                 production_result.max_iterations_for_frequency),
@@ -8776,6 +8967,22 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
     char artifact_error[128]{};
     const char *operator_source =
         "matrix_free_mfem_demag_phi_consistency_schur_provider";
+    char artifact_extra_diagnostics_error[128]{};
+    std::string artifact_extra_diagnostics_json;
+    if (!append_format(
+            artifact_extra_diagnostics_json,
+            artifact_extra_diagnostics_error,
+            "\"krylov_preconditioner_variant\":\"%s\",",
+            preconditioner_variant)) {
+        result.status = FrequencyDomainStatus::artifact_error;
+        assign_result_strings(
+            result,
+            artifact_extra_diagnostics_error,
+            status_diagnostics_json(FrequencyDomainStatus::artifact_error),
+            status_result_json(FrequencyDomainStatus::artifact_error),
+            "");
+        return result.status;
+    }
     const FrequencyDomainStatus artifact_status =
         write_periodic_airbox_coupled_block_artifacts(
             request,
@@ -8788,7 +8995,7 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
             operator_source,
             "ok",
             true,
-            "",
+            artifact_extra_diagnostics_json.c_str(),
             response_real.data(),
             response_imag.data(),
             residual_l2_norm.data(),
@@ -8835,6 +9042,7 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
         "\"resolved_magnetostatic_bc\":\"periodic_airbox_k0\","
         "\"magnetic_periodic_constraint_set_count\":%llu,"
         "\"magnetostatic_periodic_constraint_set_count\":%llu,"
+        "\"krylov_preconditioner_variant\":\"%s\","
         "\"delta_m_tangent_dof_count\":%llu,"
         "\"delta_phi_dof_count\":%llu,"
         "\"coupled_complex_dof_count\":%llu,"
@@ -8846,6 +9054,7 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
         operator_source,
         static_cast<unsigned long long>(request.magnetic_periodic_constraint_set_count),
         static_cast<unsigned long long>(request.magnetostatic_periodic_constraint_set_count),
+        preconditioner_variant,
         static_cast<unsigned long long>(delta_m_tangent_dof_count),
         static_cast<unsigned long long>(delta_phi_dof_count),
         static_cast<unsigned long long>(coupled_dof_count),
@@ -9156,19 +9365,18 @@ FrequencyDomainStatus solve_periodic_airbox_validation_error(
                 static_cast<unsigned long long>(coupled_complex_dof_count),
                 phase_validation_json.c_str(),
                 static_cast<unsigned long long>(request.solve_request.frequency_count)) ||
-            !append_format(
+            !append_sweep_progress_artifact_json(
                 progress_json,
                 error_message,
-                "{\"schema_version\":\"frequency_domain_sweep_progress.v1\","
-                "\"status\":\"validation_error\","
-                "\"complete\":false,"
-                "\"state\":\"validation_error\","
-                "\"total_frequency_points\":%llu,"
-                "\"completed_frequency_points\":0,"
-                "\"written_frequency_point_artifacts\":0,"
-                "\"partial_artifacts_available\":true,"
-                "\"latest_artifact_manifest_path\":\"frequency_domain/manifest.v1.json\"}",
-                static_cast<unsigned long long>(request.solve_request.frequency_count))) {
+                "validation_error",
+                false,
+                "validation_error",
+                request.solve_request.frequency_count,
+                0,
+                0,
+                "null",
+                true,
+                "frequency_domain/manifest.v1.json")) {
             return FrequencyDomainStatus::artifact_error;
         }
 
@@ -10067,19 +10275,18 @@ FrequencyDomainStatus solve_floquet_phase_constraint_validation_error(
                 validation.max_phase_loop_residual,
                 validation.max_frame_mismatch,
                 validation.max_drive_mismatch) ||
-            !append_format(
+            !append_sweep_progress_artifact_json(
                 progress_json,
                 error_message,
-                "{\"schema_version\":\"frequency_domain_sweep_progress.v1\","
-                "\"status\":\"validation_error\","
-                "\"complete\":false,"
-                "\"state\":\"validation_error\","
-                "\"total_frequency_points\":%llu,"
-                "\"completed_frequency_points\":0,"
-                "\"written_frequency_point_artifacts\":0,"
-                "\"partial_artifacts_available\":true,"
-                "\"latest_artifact_manifest_path\":\"frequency_domain/manifest.v1.json\"}",
-                static_cast<unsigned long long>(request.solve_request.frequency_count))) {
+                "validation_error",
+                false,
+                "validation_error",
+                request.solve_request.frequency_count,
+                0,
+                0,
+                "null",
+                true,
+                "frequency_domain/manifest.v1.json")) {
             return FrequencyDomainStatus::artifact_error;
         }
 
@@ -10557,19 +10764,18 @@ FrequencyDomainStatus solve_floquet_nonzero_k_unavailable(
                 static_cast<unsigned long long>(request.floquet_periodic_pair_count),
                 delta_phi_flux_validation_status,
                 delta_phi_flux_validation_reason) ||
-            !append_format(
+            !append_sweep_progress_artifact_json(
                 progress_json,
                 error_message,
-                "{\"schema_version\":\"frequency_domain_sweep_progress.v1\","
-                "\"status\":\"unavailable\","
-                "\"complete\":false,"
-                "\"state\":\"unavailable\","
-                "\"total_frequency_points\":%llu,"
-                "\"completed_frequency_points\":0,"
-                "\"written_frequency_point_artifacts\":0,"
-                "\"partial_artifacts_available\":true,"
-                "\"latest_artifact_manifest_path\":\"frequency_domain/manifest.v1.json\"}",
-                static_cast<unsigned long long>(request.solve_request.frequency_count))) {
+                "unavailable",
+                false,
+                "unavailable",
+                request.solve_request.frequency_count,
+                0,
+                0,
+                "null",
+                true,
+                "frequency_domain/manifest.v1.json")) {
             return FrequencyDomainStatus::artifact_error;
         }
 

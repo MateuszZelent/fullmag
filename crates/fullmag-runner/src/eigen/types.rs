@@ -1,9 +1,11 @@
+use fullmag_ir::FemEigenDispersionValidationIR;
 use num_complex::Complex64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EigenSolverModel {
     ReferenceScalarTangent,
     ReferenceFull2x2Tangent,
+    ReferenceThinFilmDeBvKalinikosN0,
     LinearizedLlgTangentPlane,
     ProductionCpuShiftInvert,
 }
@@ -13,6 +15,7 @@ impl EigenSolverModel {
         match self {
             Self::ReferenceScalarTangent => "reference_scalar_tangent",
             Self::ReferenceFull2x2Tangent => "reference_full_2x2_tangent",
+            Self::ReferenceThinFilmDeBvKalinikosN0 => "reference_thin_film_de_bv_kalinikos_n0",
             Self::LinearizedLlgTangentPlane => "linearized_llg_tangent_plane",
             Self::ProductionCpuShiftInvert => "slepc_multi_shift_invert_production_cpu_dense",
         }
@@ -39,6 +42,7 @@ pub struct SingleKModeResult {
     pub eigenvalue_real: f64,
     pub eigenvalue_imag: f64,
     pub norm: f64,
+    pub mass_norm: Option<f64>,
     pub max_amplitude: f64,
     pub residual_norm: Option<f64>,
     pub residual_linf: Option<f64>,
@@ -85,9 +89,20 @@ pub struct TrackedBranch {
 }
 
 #[derive(Debug, Clone)]
+pub struct DispersionAnalyticReferenceContext {
+    pub external_field: [f64; 3],
+    pub exchange_stiffness: f64,
+    pub saturation_magnetisation: f64,
+    pub gyromagnetic_ratio: f64,
+}
+
+#[derive(Debug, Clone)]
 pub struct PathSolveResult {
     pub samples: Vec<SingleKSolveResult>,
     pub branches: Vec<TrackedBranch>,
     pub solver_model: EigenSolverModel,
     pub notes: Vec<String>,
+    pub include_demag: bool,
+    pub dispersion_validation: Option<FemEigenDispersionValidationIR>,
+    pub dispersion_analytic_reference: Option<DispersionAnalyticReferenceContext>,
 }

@@ -3,7 +3,10 @@ use crate::eigen::response_block_real::{
     solve_field_driven_block_real_sweep_with_interrupt, BlockRealHarmonicTemplate,
     FieldDrivenResponseSweepArtifact, ResponseExcitationProvenanceArtifact,
 };
-use crate::eigen::types::{PathSolveResult, SingleKModeResult, SingleKSolveResult, TrackedBranch};
+use crate::eigen::types::{
+    EigenSolverModel, KSampleDescriptor, PathSolveResult, SingleKModeResult, SingleKSolveResult,
+    TrackedBranch,
+};
 use crate::native_fem::FrequencyDomainSweepProgress;
 use nalgebra::DVector;
 use num_complex::Complex64;
@@ -23,6 +26,31 @@ fn finite_or_default(value: Option<f64>, default: f64) -> f64 {
     value
         .filter(|candidate| candidate.is_finite())
         .unwrap_or(default)
+}
+
+fn resolved_mode_mass_norm(mode: &SingleKModeResult) -> f64 {
+    finite_or_default(
+        mode.mass_norm,
+        if mode.norm.is_finite() && mode.norm > 0.0 {
+            mode.norm
+        } else {
+            1.0
+        },
+    )
+}
+
+fn modal_phasor_convention(solver_model: EigenSolverModel) -> &'static str {
+    match solver_model {
+        EigenSolverModel::ProductionCpuShiftInvert => "exp_i_omega_t",
+        _ => "not_applicable_real_reference",
+    }
+}
+
+fn modal_eigenvalue_mapping(solver_model: EigenSolverModel) -> &'static str {
+    match solver_model {
+        EigenSolverModel::ProductionCpuShiftInvert => "lambda_eq_i_omega",
+        _ => "omega_rad_s_eq_gamma0_rad_s_per_A_m_times_effective_field_lambda_A_per_m",
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -128,6 +156,10 @@ struct TrackingDiagnosticsArtifact {
     tracking_score_source: &'static str,
     modal_overlap_available: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    min_overlap: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    median_overlap: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     modal_overlap_unavailable_reason: Option<&'static str>,
 }
 
@@ -189,6 +221,8 @@ struct ModeArtifact {
     component_basis: &'static str,
     component_count: usize,
     components: [&'static str; 3],
+    storage_format: &'static str,
+    compatibility_binary_payload_path: String,
     payload_encoding: &'static str,
     binary_layout: &'static str,
     complex_pair_count: usize,
@@ -316,8 +350,20 @@ struct FrequencyDomainArtifactManifest<'a> {
     physics: FrequencyDomainPhysics<'a>,
     artifacts: FrequencyDomainArtifactIndex,
     resources: FrequencyDomainResourceIndex,
+    validation: FrequencyDomainValidation<'a>,
     diagnostics: FrequencyDomainDiagnostics,
     capabilities: FrequencyDomainCapabilitySnapshot,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct FrequencyDomainValidation<'a> {
+    dispersion_validation: Option<&'a fullmag_ir::FemEigenDispersionValidationIR>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dispersion_frequency_source: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dispersion_reference_model: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dynamic_demag_operator_source: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -427,6 +473,16 @@ struct FrequencyDomainCapabilitySnapshot {
     validation_artifact: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct FrequencyDomainModalSolverClassification {
+    engine: &'static str,
+    native_backend: &'static str,
+    reference_or_production: &'static str,
+    solver_library: &'static str,
+    production_native_solver_available: bool,
+    validation_artifact: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct ResponseFrequencyPointArtifact<'a> {
     schema_version: &'static str,
@@ -460,7 +516,11 @@ struct ResponseFrequencyPointArtifact<'a> {
     point: &'a crate::eigen::response_block_real::FieldDrivenResponseSweepPointArtifact,
 }
 
-fn summarize_mode(sample: &SingleKSolveResult, mode: &SingleKModeResult) -> ModeSummaryArtifact {
+fn summarize_mode(
+    sample: &SingleKSolveResult,
+    mode: &SingleKModeResult,
+    solver_model: EigenSolverModel,
+) -> ModeSummaryArtifact {
     let mode_field_id = eigen_mode_field_id(sample.sample.sample_index, mode.raw_mode_index);
     let mode_field_resource_key = eigen_mode_field_resource_key(&mode_field_id);
     let residual_absolute_l2 = finite_or_default(mode.residual_norm, 0.0);
@@ -479,16 +539,15 @@ fn summarize_mode(sample: &SingleKSolveResult, mode: &SingleKModeResult) -> Mode
         angular_frequency_rad_per_s: mode.angular_frequency_rad_per_s,
         eigenvalue_real: mode.eigenvalue_real,
         eigenvalue_imag: mode.eigenvalue_imag,
-        phasor_convention: "not_applicable_real_reference",
-        eigenvalue_mapping:
-            "omega_rad_s_eq_gamma0_rad_s_per_A_m_times_effective_field_lambda_A_per_m",
+        phasor_convention: modal_phasor_convention(solver_model),
+        eigenvalue_mapping: modal_eigenvalue_mapping(solver_model),
         norm: mode.norm,
         max_amplitude: mode.max_amplitude,
         residual_norm: Some(residual_absolute_l2),
         residual_absolute_l2,
         residual_relative_l2,
         residual_linf: Some(residual_linf),
-        mass_norm: 1.0,
+        mass_norm: resolved_mode_mass_norm(mode),
         tangent_leakage_mean_abs: Some(tangent_leakage_mean_abs),
         tangent_leakage_max_abs: Some(tangent_leakage_max_abs.max(tangent_leakage_mean_abs)),
         omega_rad_s: mode.angular_frequency_rad_per_s,
@@ -617,12 +676,18 @@ fn tracking_summary(result: &PathSolveResult) -> TrackingDiagnosticsArtifact {
     let mut saw_modal_overlap = false;
     let mut saw_frequency_fallback = false;
     let mut saw_non_seed = false;
+    let mut modal_overlaps = Vec::new();
     for branch in &result.branches {
         for point_index in 0..branch.points.len() {
             match branch_point_tracking_score_source(result, branch, point_index) {
                 "modal_overlap_weighted_score" => {
                     saw_modal_overlap = true;
                     saw_non_seed = true;
+                    if let Some(overlap) = branch.points[point_index].overlap_prev {
+                        if overlap.is_finite() {
+                            modal_overlaps.push(overlap);
+                        }
+                    }
                 }
                 "frequency_score_fallback" => {
                     saw_frequency_fallback = true;
@@ -639,11 +704,104 @@ fn tracking_summary(result: &PathSolveResult) -> TrackingDiagnosticsArtifact {
         (false, false, false) => "seed_only",
         (false, false, true) => "frequency_score_fallback",
     };
+    modal_overlaps.sort_by(f64::total_cmp);
+    let min_overlap = modal_overlaps.first().copied();
+    let median_overlap = if modal_overlaps.is_empty() {
+        None
+    } else {
+        let mid = modal_overlaps.len() / 2;
+        Some(if modal_overlaps.len() % 2 == 0 {
+            (modal_overlaps[mid - 1] + modal_overlaps[mid]) * 0.5
+        } else {
+            modal_overlaps[mid]
+        })
+    };
     TrackingDiagnosticsArtifact {
         tracking_score_source,
         modal_overlap_available: saw_modal_overlap,
+        min_overlap,
+        median_overlap,
         modal_overlap_unavailable_reason: (!saw_modal_overlap && saw_frequency_fallback)
             .then_some("mode_vectors_unavailable"),
+    }
+}
+
+fn tracking_summary_from_branch_artifacts(
+    branches: &[BranchArtifact],
+) -> TrackingDiagnosticsArtifact {
+    let mut saw_modal_overlap = false;
+    let mut saw_frequency_fallback = false;
+    let mut saw_non_seed = false;
+    let mut modal_overlaps = Vec::new();
+    for branch in branches {
+        for point in &branch.points {
+            match point.tracking_score_source {
+                "modal_overlap_weighted_score" => {
+                    saw_modal_overlap = true;
+                    saw_non_seed = true;
+                    if let Some(overlap) = point.overlap_prev {
+                        if overlap.is_finite() {
+                            modal_overlaps.push(overlap);
+                        }
+                    }
+                }
+                "frequency_score_fallback" => {
+                    saw_frequency_fallback = true;
+                    saw_non_seed = true;
+                }
+                _ => {}
+            }
+        }
+    }
+    let tracking_score_source = match (saw_modal_overlap, saw_frequency_fallback, saw_non_seed) {
+        (true, true, _) => "mixed_modal_overlap_and_frequency_fallback",
+        (true, false, _) => "modal_overlap_weighted_score",
+        (false, true, _) => "frequency_score_fallback",
+        (false, false, false) => "seed_only",
+        (false, false, true) => "frequency_score_fallback",
+    };
+    modal_overlaps.sort_by(f64::total_cmp);
+    let min_overlap = modal_overlaps.first().copied();
+    let median_overlap = if modal_overlaps.is_empty() {
+        None
+    } else {
+        let mid = modal_overlaps.len() / 2;
+        Some(if modal_overlaps.len() % 2 == 0 {
+            (modal_overlaps[mid - 1] + modal_overlaps[mid]) * 0.5
+        } else {
+            modal_overlaps[mid]
+        })
+    };
+    TrackingDiagnosticsArtifact {
+        tracking_score_source,
+        modal_overlap_available: saw_modal_overlap,
+        min_overlap,
+        median_overlap,
+        modal_overlap_unavailable_reason: (!saw_modal_overlap && saw_frequency_fallback)
+            .then_some("mode_vectors_unavailable"),
+    }
+}
+
+fn modal_solver_classification(
+    solver_model: EigenSolverModel,
+) -> FrequencyDomainModalSolverClassification {
+    match solver_model {
+        EigenSolverModel::ProductionCpuShiftInvert => FrequencyDomainModalSolverClassification {
+            engine: "multi_k_orchestrator/slepc_multi_shift_invert_production_cpu_dense",
+            native_backend: "native_cpu",
+            reference_or_production: "production",
+            solver_library: "slepc",
+            production_native_solver_available: true,
+            validation_artifact: false,
+        },
+        _ => FrequencyDomainModalSolverClassification {
+            engine: "runner.reference_eigen",
+            native_backend: "runner_validation",
+            reference_or_production: "reference",
+            solver_library: "nalgebra",
+            production_native_solver_available: false,
+            validation_artifact: true,
+        },
     }
 }
 
@@ -1427,6 +1585,12 @@ fn write_frequency_domain_response_manifest(
             mode_field_resources: Vec::new(),
             response_field_resources,
         },
+        validation: FrequencyDomainValidation {
+            dispersion_validation: None,
+            dispersion_frequency_source: None,
+            dispersion_reference_model: None,
+            dynamic_demag_operator_source: None,
+        },
         diagnostics: FrequencyDomainDiagnostics {
             status,
             complete,
@@ -1452,6 +1616,33 @@ fn write_frequency_domain_response_manifest(
     Ok(())
 }
 
+fn dispersion_frequency_source(result: &PathSolveResult) -> Option<&'static str> {
+    result.dispersion_validation.as_ref()?;
+    if result.solver_model == EigenSolverModel::ReferenceThinFilmDeBvKalinikosN0 {
+        Some("analytic_reference_model")
+    } else {
+        Some("numeric_modal_solver_with_analytic_comparison")
+    }
+}
+
+fn dispersion_reference_model(result: &PathSolveResult) -> Option<&'static str> {
+    result.dispersion_validation.as_ref()?;
+    if result.solver_model == EigenSolverModel::ReferenceThinFilmDeBvKalinikosN0 {
+        Some("kalinikos_slab_n0")
+    } else {
+        None
+    }
+}
+
+fn dispersion_dynamic_demag_operator_source(result: &PathSolveResult) -> Option<&'static str> {
+    result.dispersion_validation.as_ref()?;
+    if result.solver_model == EigenSolverModel::ReferenceThinFilmDeBvKalinikosN0 {
+        Some("analytic_thin_film_de_bv_reference_not_fem_demag_k")
+    } else {
+        Some("numeric_modal_solver")
+    }
+}
+
 pub fn write_frequency_domain_eigen_manifest(
     base_dir: &Path,
     result: &PathSolveResult,
@@ -1468,6 +1659,7 @@ pub fn write_frequency_domain_eigen_manifest(
     let sample_count = result.samples.len();
     let calculation_mode = eigen_calculation_mode(result);
     let tracking = tracking_summary(result);
+    let solver_classification = modal_solver_classification(result.solver_model);
     let manifest = FrequencyDomainArtifactManifest {
         schema_version: "frequency_domain_manifest.v1",
         analysis_family: "magnetic_frequency_domain",
@@ -1493,7 +1685,7 @@ pub fn write_frequency_domain_eigen_manifest(
             operator: "linearized_llg",
             solver_family: "modal_eigen",
             solve_equation: "K u = lambda M u; omega_rad_s = gamma0 * max(lambda, 0)",
-            include_demag: false,
+            include_demag: result.include_demag,
             damping_policy: "ignore",
             equilibrium_source: "provided_or_planned",
             k_sampling: if sample_count > 1 { "path" } else { "single" },
@@ -1503,13 +1695,13 @@ pub fn write_frequency_domain_eigen_manifest(
             backend: "fem",
             device: "cpu",
             precision: "double",
-            engine: "runner.reference_eigen",
-            native_backend: "runner_validation",
-            reference_or_production: "reference",
+            engine: solver_classification.engine,
+            native_backend: solver_classification.native_backend,
+            reference_or_production: solver_classification.reference_or_production,
             container_image: None,
             build_features: Vec::new(),
             demag_realization: "none_or_validation_contract",
-            solver_library: "nalgebra",
+            solver_library: solver_classification.solver_library,
             solver_algorithm: result.solver_model.as_str(),
             solve_kind: "modal_eigen",
         },
@@ -1568,6 +1760,12 @@ pub fn write_frequency_domain_eigen_manifest(
             mode_field_resources,
             response_field_resources: Vec::new(),
         },
+        validation: FrequencyDomainValidation {
+            dispersion_validation: result.dispersion_validation.as_ref(),
+            dispersion_frequency_source: dispersion_frequency_source(result),
+            dispersion_reference_model: dispersion_reference_model(result),
+            dynamic_demag_operator_source: dispersion_dynamic_demag_operator_source(result),
+        },
         diagnostics: FrequencyDomainDiagnostics {
             status: "ready",
             complete: true,
@@ -1582,8 +1780,9 @@ pub fn write_frequency_domain_eigen_manifest(
         capabilities: FrequencyDomainCapabilitySnapshot {
             driven_response_artifact_available: false,
             modal_artifact_available: true,
-            production_native_solver_available: false,
-            validation_artifact: true,
+            production_native_solver_available: solver_classification
+                .production_native_solver_available,
+            validation_artifact: solver_classification.validation_artifact,
         },
     };
     fs::write(
@@ -1714,7 +1913,7 @@ pub fn write_path_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
             modes: sample
                 .modes
                 .iter()
-                .map(|mode| summarize_mode(sample, mode))
+                .map(|mode| summarize_mode(sample, mode, result.solver_model))
                 .collect(),
         })
         .collect();
@@ -1748,7 +1947,6 @@ pub fn write_path_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
 pub fn write_branch_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::Result<()> {
     let eigen_dir = base_dir.join("eigen");
     fs::create_dir_all(&eigen_dir)?;
-    let tracking = tracking_summary(result);
     let branches: Vec<BranchArtifact> = result
         .branches
         .iter()
@@ -1795,6 +1993,7 @@ pub fn write_branch_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io
                 .collect(),
         })
         .collect();
+    let tracking = tracking_summary_from_branch_artifacts(&branches);
     let branches_v2 = BranchesArtifact {
         schema_version: "eigen_branches.v2",
         solver_model: result.solver_model.as_str().to_string(),
@@ -1850,15 +2049,16 @@ pub fn write_branch_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io
     let mut dispersion = Vec::<u8>::new();
     writeln!(
         &mut dispersion,
-        "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_id,mode_field_resource_key"
+        "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,analytic_frequency_hz,relative_error,validation_geometry,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_id,mode_field_resource_key"
     )?;
     for sample in &result.samples {
         let k = sample.sample.k_vector;
         let label = sample.sample.label.clone().unwrap_or_default();
         for mode in &sample.modes {
+            let validation_columns = de_bv_analytic_csv_columns(result, &sample.sample, mode);
             writeln!(
                 &mut dispersion,
-                "{},{:.16e},{:.16e},{:.16e},{:.16e},{},{},{},{:.16e},{:.16e},{},{},{},{},{},{}",
+                "{},{:.16e},{:.16e},{:.16e},{:.16e},{},{},{},{:.16e},{:.16e},{},{},{},{},{},{},{},{},{}",
                 sample.sample.sample_index,
                 sample.sample.path_s,
                 k[0],
@@ -1871,6 +2071,9 @@ pub fn write_branch_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io
                     .unwrap_or_default(),
                 mode.frequency_real_hz,
                 mode.angular_frequency_rad_per_s,
+                validation_columns.analytic_frequency_hz,
+                validation_columns.relative_error,
+                validation_columns.geometry,
                 "",
                 mode.residual_norm
                     .map(|value| format!("{value:.16e}"))
@@ -1912,6 +2115,119 @@ fn resolve_overlap_score(
         .unwrap_or_default()
 }
 
+struct DeBvAnalyticCsvColumns {
+    analytic_frequency_hz: String,
+    relative_error: String,
+    geometry: String,
+}
+
+fn de_bv_analytic_csv_columns(
+    result: &PathSolveResult,
+    sample: &KSampleDescriptor,
+    mode: &SingleKModeResult,
+) -> DeBvAnalyticCsvColumns {
+    let Some(validation) = result.dispersion_validation.as_ref() else {
+        return DeBvAnalyticCsvColumns {
+            analytic_frequency_hz: String::new(),
+            relative_error: String::new(),
+            geometry: String::new(),
+        };
+    };
+    if validation.kind != "thin_film_de_bv_low_k"
+        || validation.analytic_model != "kalinikos_slab_n0"
+    {
+        return DeBvAnalyticCsvColumns {
+            analytic_frequency_hz: String::new(),
+            relative_error: String::new(),
+            geometry: String::new(),
+        };
+    }
+    let Some(reference) = result.dispersion_analytic_reference.as_ref() else {
+        return DeBvAnalyticCsvColumns {
+            analytic_frequency_hz: String::new(),
+            relative_error: String::new(),
+            geometry: String::new(),
+        };
+    };
+    let Some(geometry) = de_bv_validation_geometry_for_sample(validation, sample.sample_index)
+    else {
+        return DeBvAnalyticCsvColumns {
+            analytic_frequency_hz: String::new(),
+            relative_error: String::new(),
+            geometry: String::new(),
+        };
+    };
+    let analytic_frequency_hz = kalinikos_slab_n0_frequency_hz(
+        vector_norm(sample.k_vector),
+        geometry,
+        vector_norm(reference.external_field),
+        validation.film_thickness_m,
+        reference.exchange_stiffness,
+        reference.saturation_magnetisation,
+        reference.gyromagnetic_ratio,
+    );
+    let relative_error = (mode.frequency_real_hz - analytic_frequency_hz).abs()
+        / analytic_frequency_hz.abs().max(1.0);
+    DeBvAnalyticCsvColumns {
+        analytic_frequency_hz: format!("{analytic_frequency_hz:.16e}"),
+        relative_error: format!("{relative_error:.16e}"),
+        geometry: geometry.to_string(),
+    }
+}
+
+fn de_bv_validation_geometry_for_sample(
+    validation: &fullmag_ir::FemEigenDispersionValidationIR,
+    sample_index: usize,
+) -> Option<&'static str> {
+    let sample_index = u32::try_from(sample_index).ok()?;
+    validation.scenarios.iter().find_map(|scenario| {
+        if !scenario.sample_indices.contains(&sample_index) {
+            return None;
+        }
+        match scenario.geometry.as_str() {
+            "de" | "damon_eshbach" | "damon-eshbach" => Some("damon_eshbach"),
+            "bv" | "backward_volume" | "backward-volume" => Some("backward_volume"),
+            _ => None,
+        }
+    })
+}
+
+fn kalinikos_slab_n0_frequency_hz(
+    k_norm: f64,
+    geometry: &str,
+    bias_field_a_per_m: f64,
+    film_thickness_m: f64,
+    exchange_stiffness_j_per_m: f64,
+    saturation_magnetisation_a_per_m: f64,
+    gamma0_rad_s_per_a_m: f64,
+) -> f64 {
+    let exchange_field = 2.0 * exchange_stiffness_j_per_m * k_norm * k_norm
+        / (crate::MU0 * saturation_magnetisation_a_per_m);
+    let p_factor = if k_norm == 0.0 {
+        0.0
+    } else {
+        let kd = k_norm * film_thickness_m;
+        1.0 - (1.0 - (-kd).exp()) / kd
+    };
+    let common = bias_field_a_per_m + exchange_field;
+    let (factor_a, factor_b) = match geometry {
+        "damon_eshbach" => (
+            common + saturation_magnetisation_a_per_m * (1.0 - p_factor),
+            common + saturation_magnetisation_a_per_m * p_factor,
+        ),
+        "backward_volume" => (
+            common,
+            common + saturation_magnetisation_a_per_m * (1.0 - p_factor),
+        ),
+        _ => unreachable!("validated DE/BV geometry is normalized before analytic evaluation"),
+    };
+    gamma0_rad_s_per_a_m * (factor_a * factor_b).sqrt() / std::f64::consts::TAU
+}
+
+fn vector_norm(vector: [f64; 3]) -> f64 {
+    vector.iter().map(|value| value * value).sum::<f64>().sqrt()
+}
+
 pub fn write_mode_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::Result<()> {
     let eigen_dir = base_dir.join("eigen").join("modes");
     for sample in &result.samples {
@@ -1924,6 +2240,10 @@ pub fn write_mode_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
             let mode_field_id =
                 eigen_mode_field_id(sample.sample.sample_index, mode.raw_mode_index);
             let mode_field_resource_key = eigen_mode_field_resource_key(&mode_field_id);
+            let compatibility_binary_payload_path = format!(
+                "eigen/mode_fields/sample_{:04}/mode_{:04}/vector.bin",
+                sample.sample.sample_index, mode.raw_mode_index
+            );
             let residual_absolute_l2 = finite_or_default(mode.residual_norm, 0.0);
             let residual_relative_l2 = residual_absolute_l2;
             let residual_linf = finite_or_default(mode.residual_linf, residual_absolute_l2);
@@ -1942,9 +2262,8 @@ pub fn write_mode_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
                 angular_frequency_rad_per_s: mode.angular_frequency_rad_per_s,
                 eigenvalue_real: mode.eigenvalue_real,
                 eigenvalue_imag: mode.eigenvalue_imag,
-                phasor_convention: "not_applicable_real_reference",
-                eigenvalue_mapping:
-                    "omega_rad_s_eq_gamma0_rad_s_per_A_m_times_effective_field_lambda_A_per_m",
+                phasor_convention: modal_phasor_convention(result.solver_model),
+                eigenvalue_mapping: modal_eigenvalue_mapping(result.solver_model),
                 omega_rad_s: mode.angular_frequency_rad_per_s,
                 gamma_rad_s_t: reference_modal_gamma_rad_s_t(),
                 gamma0_rad_s_per_a_m: REFERENCE_MODAL_GAMMA0_RAD_S_PER_A_M,
@@ -1957,7 +2276,7 @@ pub fn write_mode_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
                 residual_absolute_l2,
                 residual_relative_l2,
                 residual_linf: Some(residual_linf),
-                mass_norm: 1.0,
+                mass_norm: resolved_mode_mass_norm(mode),
                 tangent_leakage_mean_abs: Some(tangent_leakage_mean_abs),
                 tangent_leakage_max_abs: Some(tangent_leakage_max_abs),
                 dominant_polarization: mode.dominant_polarization.clone(),
@@ -1966,6 +2285,8 @@ pub fn write_mode_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
                 component_basis: "global_xyz",
                 component_count: 3,
                 components: ["x", "y", "z"],
+                storage_format: "binary_compatibility_exports",
+                compatibility_binary_payload_path: compatibility_binary_payload_path.clone(),
                 payload_encoding: "f64_interleaved_real_imag_xyz",
                 binary_layout: "complex_f64_pairs_little_endian",
                 complex_pair_count: real.len().max(imag.len()) * 3,
@@ -1999,10 +2320,7 @@ pub fn write_mode_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
             )?;
             write_complex_vector_field_payload(
                 base_dir,
-                &format!(
-                    "eigen/mode_fields/sample_{:04}/mode_{:04}/vector.bin",
-                    sample.sample.sample_index, mode.raw_mode_index
-                ),
+                &compatibility_binary_payload_path,
                 real,
                 imag,
             )?;
@@ -2047,6 +2365,10 @@ mod tests {
     }
 
     fn sample_result() -> PathSolveResult {
+        sample_result_with_solver_model(EigenSolverModel::ReferenceScalarTangent)
+    }
+
+    fn sample_result_with_solver_model(solver_model: EigenSolverModel) -> PathSolveResult {
         PathSolveResult {
             samples: vec![SingleKSolveResult {
                 sample: KSampleDescriptor {
@@ -2066,6 +2388,7 @@ mod tests {
                     eigenvalue_real: 0.0,
                     eigenvalue_imag: std::f64::consts::TAU * 1.0e9,
                     norm: 1.0,
+                    mass_norm: Some(7.25),
                     max_amplitude: 1.0,
                     residual_norm: Some(1.25e-9),
                     residual_linf: Some(2.5e-10),
@@ -2079,7 +2402,7 @@ mod tests {
                     phase: Some(vec![0.0]),
                 }],
                 relaxation_steps: 0,
-                solver_model: EigenSolverModel::ReferenceScalarTangent,
+                solver_model,
                 solver_notes: vec!["test fixture".to_string()],
             }],
             branches: vec![TrackedBranch {
@@ -2094,9 +2417,53 @@ mod tests {
                     overlap_prev: None,
                 }],
             }],
-            solver_model: EigenSolverModel::ReferenceScalarTangent,
+            solver_model,
             notes: vec!["single sample".to_string()],
+            include_demag: false,
+            dispersion_validation: None,
+            dispersion_analytic_reference: None,
         }
+    }
+
+    fn sample_result_with_modal_overlap_tracking() -> PathSolveResult {
+        let mut result =
+            sample_result_with_solver_model(EigenSolverModel::ProductionCpuShiftInvert);
+        let mut sample_1 = result.samples[0].clone();
+        sample_1.sample.sample_index = 1;
+        sample_1.sample.label = Some("X".to_string());
+        sample_1.sample.path_s = 10_000_000.0;
+        sample_1.sample.k_vector = [10_000_000.0, 0.0, 0.0];
+        sample_1.modes[0].frequency_real_hz = 1.25e9;
+        sample_1.modes[0].angular_frequency_rad_per_s = std::f64::consts::TAU * 1.25e9;
+        sample_1.modes[0].eigenvalue_imag = std::f64::consts::TAU * 1.25e9;
+        let mut sample_2 = sample_1.clone();
+        sample_2.sample.sample_index = 2;
+        sample_2.sample.label = Some("G".to_string());
+        sample_2.sample.path_s = 20_000_000.0;
+        sample_2.sample.k_vector = [0.0, 0.0, 0.0];
+        sample_2.modes[0].frequency_real_hz = 1.5e9;
+        sample_2.modes[0].angular_frequency_rad_per_s = std::f64::consts::TAU * 1.5e9;
+        sample_2.modes[0].eigenvalue_imag = std::f64::consts::TAU * 1.5e9;
+        result.samples.push(sample_1);
+        result.samples.push(sample_2);
+        result.branches[0].points.push(TrackedBranchPoint {
+            sample_index: 1,
+            raw_mode_index: 0,
+            frequency_real_hz: 1.25e9,
+            frequency_imag_hz: 0.0,
+            tracking_confidence: 0.8,
+            overlap_prev: Some(0.8),
+        });
+        result.branches[0].points.push(TrackedBranchPoint {
+            sample_index: 2,
+            raw_mode_index: 0,
+            frequency_real_hz: 1.5e9,
+            frequency_imag_hz: 0.0,
+            tracking_confidence: 0.6,
+            overlap_prev: Some(0.6),
+        });
+        result.notes = vec!["modal overlap tracking".to_string()];
+        result
     }
 
     #[test]
@@ -2105,6 +2472,7 @@ mod tests {
         let result = sample_result();
 
         write_path_bundle(&temp.path, &result).expect("path bundle should write");
+        write_branch_bundle(&temp.path, &result).expect("branch bundle should write");
         write_branch_bundle(&temp.path, &result).expect("branch bundle should write");
         write_mode_bundle(&temp.path, &result).expect("mode bundle should write");
         write_frequency_domain_eigen_manifest(&temp.path, &result)
@@ -2160,29 +2528,42 @@ mod tests {
         let dispersion = std::fs::read_to_string(eigen_dir.join("dispersion.csv"))
             .expect("dispersion.csv should be written");
         let mut dispersion_lines = dispersion.lines();
+        let dispersion_header = dispersion_lines
+            .next()
+            .expect("dispersion.csv should include a header");
         assert_eq!(
-            dispersion_lines.next(),
+            Some(dispersion_header),
             Some(
-                "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_id,mode_field_resource_key"
+                "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,analytic_frequency_hz,relative_error,validation_geometry,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_id,mode_field_resource_key"
             )
         );
         let dispersion_row = dispersion_lines
             .next()
             .expect("dispersion.csv should include a mode row");
         let dispersion_columns = dispersion_row.split(',').collect::<Vec<_>>();
+        let header_columns = dispersion_header.split(',').collect::<Vec<_>>();
+        let column = |name: &str| {
+            header_columns
+                .iter()
+                .position(|column| *column == name)
+                .expect("dispersion column should exist")
+        };
         assert!(
             dispersion_columns
-                .get(11)
+                .get(column("residual_norm"))
                 .is_some_and(|value| !value.is_empty()),
             "dispersion.csv residual_norm column should be populated, row={dispersion_row}"
         );
-        assert_eq!(dispersion_columns.get(13), Some(&"seed"));
         assert_eq!(
-            dispersion_columns.get(14),
+            dispersion_columns.get(column("tracking_score_source")),
+            Some(&"seed")
+        );
+        assert_eq!(
+            dispersion_columns.get(column("mode_field_id")),
             Some(&"analysis:eigen:sample-0000:mode-0000")
         );
         assert_eq!(
-            dispersion_columns.get(15),
+            dispersion_columns.get(column("mode_field_resource_key")),
             Some(&"/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0000/samples/vector?view=phase_rotated_real&phase_rad=0")
         );
 
@@ -2217,6 +2598,7 @@ mod tests {
         assert_eq!(mode["mode_field_sample_count"], 1);
         assert_eq!(mode["amplitude_summary"]["sample_count"], 1);
         assert_eq!(mode["amplitude_summary"]["max"], 1.0);
+        assert_eq!(mode["mass_norm"], 7.25);
         assert_eq!(mode["component_summary"]["real_sample_count"], 1);
         assert_eq!(mode["component_summary"]["imag_sample_count"], 1);
         assert_eq!(mode["value_kind"], "complex_spatial_vector");
@@ -2259,6 +2641,7 @@ mod tests {
         )
         .expect("nested mode artifact should be valid JSON");
         assert_eq!(nested_mode["mode_field_id"], mode["mode_field_id"]);
+        assert_eq!(nested_mode["mass_norm"], mode["mass_norm"]);
         assert_eq!(
             nested_mode["mode_field_resource_key"],
             mode["mode_field_resource_key"]
@@ -2330,6 +2713,252 @@ mod tests {
             family_manifest["capabilities"]["modal_artifact_available"],
             true
         );
+    }
+
+    #[test]
+    fn eigen_branch_writer_reports_modal_overlap_statistics() {
+        let temp = TempDirGuard::new("eigen-branch-overlap-stats");
+        let result = sample_result_with_modal_overlap_tracking();
+
+        write_branch_bundle(&temp.path, &result).expect("branch bundle should write");
+
+        let branches: Value = serde_json::from_slice(
+            &std::fs::read(temp.path.join("eigen/branches.v2.json"))
+                .expect("branches.v2.json should be written"),
+        )
+        .expect("branches.v2.json should be valid JSON");
+        assert_eq!(
+            branches["diagnostics"]["tracking_score_source"],
+            "modal_overlap_weighted_score"
+        );
+        assert_eq!(branches["diagnostics"]["modal_overlap_available"], true);
+        assert_eq!(branches["diagnostics"]["min_overlap"], 0.6);
+        assert_eq!(branches["diagnostics"]["median_overlap"], 0.7);
+    }
+
+    #[test]
+    fn eigen_manifest_marks_production_cpu_shift_invert_as_native_production() {
+        let temp = TempDirGuard::new("eigen-artifacts-production-manifest");
+        let result = sample_result_with_solver_model(EigenSolverModel::ProductionCpuShiftInvert);
+
+        write_frequency_domain_eigen_manifest(&temp.path, &result)
+            .expect("frequency-domain eigen manifest should write");
+
+        let family_manifest: Value = serde_json::from_slice(
+            &std::fs::read(temp.path.join("frequency_domain/manifest.v1.json"))
+                .expect("frequency-domain eigen manifest should be written"),
+        )
+        .expect("frequency-domain eigen manifest should be valid JSON");
+
+        assert_eq!(
+            family_manifest["resolved_execution"]["engine"],
+            "multi_k_orchestrator/slepc_multi_shift_invert_production_cpu_dense"
+        );
+        assert_eq!(
+            family_manifest["resolved_execution"]["native_backend"],
+            "native_cpu"
+        );
+        assert_eq!(
+            family_manifest["resolved_execution"]["reference_or_production"],
+            "production"
+        );
+        assert_eq!(
+            family_manifest["resolved_execution"]["solver_library"],
+            "slepc"
+        );
+        assert_eq!(
+            family_manifest["capabilities"]["production_native_solver_available"],
+            true
+        );
+        assert_eq!(
+            family_manifest["capabilities"]["validation_artifact"],
+            false
+        );
+    }
+
+    #[test]
+    fn production_dispersion_with_de_bv_validation_writes_analytic_columns() {
+        let temp = TempDirGuard::new("eigen-artifacts-production-de-bv-analytic");
+        let mut result =
+            sample_result_with_solver_model(EigenSolverModel::ProductionCpuShiftInvert);
+        result.samples[0].sample.k_vector = [1.5e6, 0.0, 0.0];
+        result.samples[0].sample.path_s = 1.5e6;
+        result.include_demag = true;
+        result.dispersion_validation = Some(fullmag_ir::FemEigenDispersionValidationIR {
+            kind: "thin_film_de_bv_low_k".to_string(),
+            analytic_model: "kalinikos_slab_n0".to_string(),
+            film_thickness_m: 20e-9,
+            equilibrium_magnetization: [1.0, 0.0, 0.0],
+            film_normal: [0.0, 0.0, 1.0],
+            frequency_window_hz: fullmag_ir::FemEigenDispersionValidationWindowIR {
+                min: 0.0,
+                max: 5.0e9,
+            },
+            max_k_rad_per_m: 3.0e6,
+            max_relative_error: 0.10,
+            scenarios: vec![fullmag_ir::FemEigenDispersionValidationScenarioIR {
+                geometry: "backward_volume".to_string(),
+                branch_id: "branch_0".to_string(),
+                sample_indices: vec![0],
+            }],
+        });
+        result.dispersion_analytic_reference =
+            Some(crate::eigen::types::DispersionAnalyticReferenceContext {
+                external_field: [40_000.0, 0.0, 0.0],
+                exchange_stiffness: 3.5e-12,
+                saturation_magnetisation: 140e3,
+                gyromagnetic_ratio: 2.211e5,
+            });
+        let expected_analytic = kalinikos_slab_n0_frequency_hz(
+            vector_norm(result.samples[0].sample.k_vector),
+            "backward_volume",
+            40_000.0,
+            20e-9,
+            3.5e-12,
+            140e3,
+            2.211e5,
+        );
+        result.samples[0].modes[0].frequency_real_hz = expected_analytic * 1.01;
+        result.samples[0].modes[0].angular_frequency_rad_per_s =
+            std::f64::consts::TAU * result.samples[0].modes[0].frequency_real_hz;
+
+        write_path_bundle(&temp.path, &result).expect("path bundle should write");
+        write_branch_bundle(&temp.path, &result).expect("branch bundle should write");
+        write_frequency_domain_eigen_manifest(&temp.path, &result)
+            .expect("frequency-domain manifest should write");
+
+        let dispersion = std::fs::read_to_string(temp.path.join("eigen/dispersion.csv"))
+            .expect("dispersion.csv should be written");
+        let mut lines = dispersion.lines();
+        let header: Vec<&str> = lines
+            .next()
+            .expect("dispersion header should exist")
+            .split(',')
+            .collect();
+        let row: Vec<&str> = lines
+            .next()
+            .expect("dispersion row should exist")
+            .split(',')
+            .collect();
+        let column = |name: &str| {
+            header
+                .iter()
+                .position(|column| *column == name)
+                .expect("dispersion column should exist")
+        };
+        assert_eq!(row[column("validation_geometry")], "backward_volume");
+        let analytic: f64 = row[column("analytic_frequency_hz")]
+            .parse()
+            .expect("analytic_frequency_hz should parse");
+        let relative_error: f64 = row[column("relative_error")]
+            .parse()
+            .expect("relative_error should parse");
+        assert!((analytic - expected_analytic).abs() / expected_analytic < 1.0e-12);
+        assert!((relative_error - 0.01).abs() < 1.0e-12);
+
+        let manifest: Value = serde_json::from_slice(
+            &std::fs::read(temp.path.join("frequency_domain/manifest.v1.json"))
+                .expect("frequency-domain manifest should be written"),
+        )
+        .expect("frequency-domain manifest should parse");
+        assert_eq!(
+            manifest["requested_execution"]["include_demag"],
+            Value::Bool(true)
+        );
+        assert_eq!(
+            manifest["validation"]["dispersion_frequency_source"],
+            "numeric_modal_solver_with_analytic_comparison"
+        );
+        assert_eq!(
+            manifest["validation"]["dynamic_demag_operator_source"],
+            "numeric_modal_solver"
+        );
+        assert!(manifest["validation"]
+            .get("dispersion_reference_model")
+            .is_none());
+    }
+
+    #[test]
+    fn de_bv_reference_manifest_names_analytic_frequency_source_not_demag_k() {
+        let temp = TempDirGuard::new("eigen-artifacts-de-bv-reference-source");
+        let mut result =
+            sample_result_with_solver_model(EigenSolverModel::ReferenceThinFilmDeBvKalinikosN0);
+        result.include_demag = true;
+        result.dispersion_validation = Some(fullmag_ir::FemEigenDispersionValidationIR {
+            kind: "thin_film_de_bv_low_k".to_string(),
+            analytic_model: "kalinikos_slab_n0".to_string(),
+            film_thickness_m: 20e-9,
+            equilibrium_magnetization: [1.0, 0.0, 0.0],
+            film_normal: [0.0, 0.0, 1.0],
+            frequency_window_hz: fullmag_ir::FemEigenDispersionValidationWindowIR {
+                min: 0.0,
+                max: 5.0e9,
+            },
+            max_k_rad_per_m: 3.0e6,
+            max_relative_error: 0.10,
+            scenarios: vec![fullmag_ir::FemEigenDispersionValidationScenarioIR {
+                geometry: "backward_volume".to_string(),
+                branch_id: "branch_0".to_string(),
+                sample_indices: vec![0],
+            }],
+        });
+
+        write_frequency_domain_eigen_manifest(&temp.path, &result)
+            .expect("frequency-domain manifest should write");
+
+        let manifest: Value = serde_json::from_slice(
+            &std::fs::read(temp.path.join("frequency_domain/manifest.v1.json"))
+                .expect("frequency-domain manifest should be written"),
+        )
+        .expect("frequency-domain manifest should parse");
+        assert_eq!(
+            manifest["requested_execution"]["include_demag"],
+            Value::Bool(true)
+        );
+        assert_eq!(
+            manifest["validation"]["dispersion_frequency_source"],
+            "analytic_reference_model"
+        );
+        assert_eq!(
+            manifest["validation"]["dispersion_reference_model"],
+            "kalinikos_slab_n0"
+        );
+        assert_eq!(
+            manifest["validation"]["dynamic_demag_operator_source"],
+            "analytic_thin_film_de_bv_reference_not_fem_demag_k"
+        );
+    }
+
+    #[test]
+    fn production_cpu_shift_invert_mode_artifacts_use_production_phasor_contract() {
+        let temp = TempDirGuard::new("eigen-artifacts-production-phasor");
+        let result = sample_result_with_solver_model(EigenSolverModel::ProductionCpuShiftInvert);
+
+        write_path_bundle(&temp.path, &result).expect("path bundle should write");
+        write_mode_bundle(&temp.path, &result).expect("mode bundle should write");
+
+        let eigen_dir = temp.path.join("eigen");
+        let spectrum: Value = serde_json::from_slice(
+            &std::fs::read(eigen_dir.join("spectrum.v2.json"))
+                .expect("spectrum.v2.json should be written"),
+        )
+        .expect("spectrum.v2.json should be valid JSON");
+        assert_eq!(
+            spectrum["samples"][0]["modes"][0]["phasor_convention"],
+            "exp_i_omega_t"
+        );
+        assert_eq!(
+            spectrum["samples"][0]["modes"][0]["eigenvalue_mapping"],
+            "lambda_eq_i_omega"
+        );
+
+        let nested_mode: Value = serde_json::from_slice(
+            &std::fs::read(eigen_dir.join("modes/sample_0000/mode_0000.json"))
+                .expect("nested mode artifact should be written"),
+        )
+        .expect("nested mode artifact should be valid JSON");
+        assert_eq!(nested_mode["phasor_convention"], "exp_i_omega_t");
+        assert_eq!(nested_mode["eigenvalue_mapping"], "lambda_eq_i_omega");
     }
 
     #[test]

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import html
 import json
 import math
@@ -230,6 +231,182 @@ def mode_frequency_hz(mode: dict) -> float:
     )
 
 
+def validate_rendered_png(
+    path: Path,
+    *,
+    min_width: int = 640,
+    min_height: int = 360,
+    min_color_span: float = 1.0e-3,
+) -> None:
+    if not path.is_file():
+        raise SystemExit(f"missing PNG: {path}")
+    if not path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"):
+        raise SystemExit(f"{path} is not a PNG file")
+    try:
+        import matplotlib.image as mpimg
+        import numpy as np
+    except Exception as exc:  # pragma: no cover - environment-specific dependency failure
+        raise SystemExit(f"matplotlib image support is required to validate {path}: {exc}") from exc
+
+    pixels = np.asarray(mpimg.imread(path))
+    if pixels.ndim not in {2, 3} or pixels.size == 0:
+        raise SystemExit(f"{path} does not contain a readable image")
+    height, width = pixels.shape[:2]
+    if width < min_width or height < min_height:
+        raise SystemExit(f"{path} is too small: {width}x{height}, expected at least {min_width}x{min_height}")
+    if not np.isfinite(pixels).all():
+        raise SystemExit(f"{path} contains non-finite pixel values")
+    if pixels.ndim == 3 and pixels.shape[2] >= 4 and float(np.max(pixels[:, :, 3])) <= 0.0:
+        raise SystemExit(f"{path} is fully transparent")
+
+    color_pixels = pixels[:, :, :3] if pixels.ndim == 3 else pixels
+    color_span = float(np.max(color_pixels) - np.min(color_pixels))
+    if color_span < min_color_span:
+        raise SystemExit(
+            f"{path} appears blank: color span {color_span:.6g} < {min_color_span:.6g}"
+        )
+
+
+def csv_float(row: dict[str, str], key: str) -> float | None:
+    value = row.get(key, "").strip()
+    if not value:
+        return None
+    try:
+        parsed = float(value)
+    except ValueError:
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def analytic_dispersion_points(
+    rows: list[dict[str, str]],
+) -> list[tuple[float, float, str, str]]:
+    points = []
+    for row in rows:
+        path_value = csv_float(row, "path_s_rad_per_m")
+        analytic_frequency = csv_float(row, "analytic_frequency_hz")
+        if path_value is None or analytic_frequency is None:
+            continue
+        points.append(
+            (
+                path_value / 1.0e6,
+                analytic_frequency / 1.0e9,
+                row.get("label", ""),
+                row.get("validation_geometry", ""),
+            )
+        )
+    return points
+
+
+def relative_error_values(rows: list[dict[str, str]]) -> list[float]:
+    return [
+        value
+        for row in rows
+        for value in [csv_float(row, "relative_error")]
+        if value is not None
+    ]
+
+
+def write_dispersion_png(root: Path, output_png: Path) -> None:
+    dispersion_path = root / "eigen" / "dispersion.csv"
+    if not dispersion_path.is_file():
+        raise SystemExit(f"missing dispersion CSV: {dispersion_path}")
+    rows = list(csv.DictReader(dispersion_path.read_text(encoding="utf-8").splitlines()))
+    if not rows:
+        raise SystemExit(f"{dispersion_path} does not contain any dispersion rows")
+
+    path_s = [float(row["path_s_rad_per_m"]) / 1.0e6 for row in rows]
+    frequencies_ghz = [float(row["frequency_hz"]) / 1.0e9 for row in rows]
+    labels = [row.get("label", "") for row in rows]
+    analytic_points = analytic_dispersion_points(rows)
+    relative_errors = relative_error_values(rows)
+
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception as exc:  # pragma: no cover - environment-specific dependency failure
+        raise SystemExit(f"matplotlib is required to write {output_png}: {exc}") from exc
+
+    output_png.parent.mkdir(parents=True, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(12, 7), dpi=150)
+    ax.plot(
+        path_s,
+        frequencies_ghz,
+        color="#2563eb",
+        linewidth=2.4,
+        marker="o",
+        markersize=7,
+        label="solver branch",
+    )
+    if analytic_points:
+        ax.plot(
+            [point[0] for point in analytic_points],
+            [point[1] for point in analytic_points],
+            color="#dc2626",
+            linestyle="--",
+            linewidth=2.0,
+            marker="x",
+            markersize=7,
+            label="analytic reference",
+        )
+    ax.fill_between(
+        path_s,
+        [min(frequencies_ghz) - 0.05] * len(path_s),
+        frequencies_ghz,
+        color="#bfdbfe",
+        alpha=0.35,
+    )
+    for x_value, frequency, label in zip(path_s, frequencies_ghz, labels):
+        if label:
+            ax.annotate(
+                label,
+                (x_value, frequency),
+                xytext=(0, 8),
+                textcoords="offset points",
+                ha="center",
+                va="bottom",
+                fontsize=11,
+                fontweight="bold",
+            )
+    ax.set_title(
+        (
+            "FEM modal DE/BV dispersion - analytic reference overlay"
+            if analytic_points
+            else "FEM modal k-path dispersion - reference Full2x2 Floquet artifact"
+        ),
+        fontsize=13,
+    )
+    ax.set_xlabel("k-path distance (10^6 rad/m)", fontsize=11)
+    ax.set_ylabel("frequency (GHz)", fontsize=11)
+    if analytic_points:
+        ax.legend(loc="best", frameon=True)
+    ax.grid(True, which="major", color="#cbd5e1", linewidth=0.8, alpha=0.8)
+    ax.grid(True, which="minor", color="#e2e8f0", linewidth=0.5, alpha=0.7)
+    ax.minorticks_on()
+    y_margin = max((max(frequencies_ghz) - min(frequencies_ghz)) * 0.25, 0.03)
+    ax.set_ylim(min(frequencies_ghz) - y_margin, max(frequencies_ghz) + y_margin)
+    fig.text(
+        0.012,
+        0.02,
+        (
+            f"source: {dispersion_path} | samples={len(rows)} | "
+            + (
+                f"analytic overlay, max rel. error={max(relative_errors):.3e}"
+                if relative_errors
+                else "reference CPU, no demag, lowest branch"
+            )
+        ),
+        fontsize=8.5,
+        color="#475569",
+    )
+    fig.tight_layout(rect=(0, 0.03, 1, 1))
+    fig.savefig(output_png)
+    plt.close(fig)
+    validate_rendered_png(output_png)
+
+
 def mode_metadata_path(root: Path, sample_index: int, raw_mode: int) -> Path:
     return root / "eigen" / "modes" / f"sample_{sample_index:04d}" / f"mode_{raw_mode:04d}.json"
 
@@ -294,6 +471,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Comma-separated raw mode indices to render. Defaults to the first four modes.",
     )
+    parser.add_argument(
+        "--dispersion-png",
+        type=Path,
+        default=None,
+        help="Optional PNG path for the k-path dispersion curve.",
+    )
     return parser.parse_args()
 
 
@@ -306,6 +489,8 @@ def main() -> int:
     )
     output_dir = args.output_dir or (args.artifact_root / "eigen" / "plots")
     render(args.artifact_root, output_dir, mode_indices)
+    if args.dispersion_png is not None:
+        write_dispersion_png(args.artifact_root, args.dispersion_png)
     print(f"wrote plots to {output_dir}")
     return 0
 

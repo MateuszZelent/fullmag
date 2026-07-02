@@ -177,48 +177,182 @@ pub async fn get_stage_execution(
             .stages
             .iter()
             .enumerate()
-            .map(|(index, record)| StageExecutionRecordResource {
-                stage_id: record
-                    .stage_id
-                    .clone()
-                    .unwrap_or_else(|| stage_id_for_index(index)),
-                index: index as u32,
-                label: Some(format!("Stage {}", index + 1)),
-                kind: record
+            .map(|(index, record)| {
+                let kind = record
                     .kind
                     .clone()
-                    .or_else(|| stage_kind_for_index(stage, index)),
-                action: None,
-                status: record.status.as_str().to_string(),
-                command_id: record.command_id.clone(),
-                started_at_unix_ms: record.started_at_unix_ms,
-                completed_at_unix_ms: record.completed_at_unix_ms,
-                reason: record.reason.as_ref().map(stage_stop_reason_string),
-                artifact_refs: record.artifact_refs.clone(),
-                checkpoint_ref: record.checkpoint_ref.clone(),
-                loaded_state_ref: record.loaded_state_ref.clone(),
-                resume_from_checkpoint_ref: record.resume_from_checkpoint_ref.clone(),
-                state_transition: record.state_transition.clone(),
-                state_transition_kind: record.state_transition_kind.clone(),
-                state_transition_reason: record.state_transition_reason.clone(),
-                state_transfer_operator_kind: record.state_transfer_operator_kind.clone(),
-                state_transition_ui_presentation: record.state_transition_ui_presentation.clone(),
-                metric_name: record.metric_name.clone(),
-                metric_value: record.metric_value,
-                threshold: record.threshold,
-                progress_percent: record.progress_percent,
-                progress_label: record.progress_label.clone(),
-                progress_detail: record.progress_detail.clone(),
-                last_progress_unix_ms: record.last_progress_unix_ms,
-                current_field_m_t: record.current_field_m_t,
-                current_point_index: record.current_point_index,
-                current_settle_step_index: record.current_settle_step_index,
-                current_settle_step_kind: record.current_settle_step_kind.clone(),
-                current_settle_step_method: record.current_settle_step_method.clone(),
+                    .or_else(|| stage_kind_for_index(stage, index));
+                let progress =
+                    frequency_response_stage_progress(snapshot, stage, index, kind.as_deref());
+                StageExecutionRecordResource {
+                    stage_id: record
+                        .stage_id
+                        .clone()
+                        .unwrap_or_else(|| stage_id_for_index(index)),
+                    index: index as u32,
+                    label: Some(format!("Stage {}", index + 1)),
+                    kind,
+                    action: None,
+                    status: record.status.as_str().to_string(),
+                    command_id: record.command_id.clone(),
+                    started_at_unix_ms: record.started_at_unix_ms,
+                    completed_at_unix_ms: record.completed_at_unix_ms,
+                    reason: record.reason.as_ref().map(stage_stop_reason_string),
+                    artifact_refs: record.artifact_refs.clone(),
+                    checkpoint_ref: record.checkpoint_ref.clone(),
+                    loaded_state_ref: record.loaded_state_ref.clone(),
+                    resume_from_checkpoint_ref: record.resume_from_checkpoint_ref.clone(),
+                    state_transition: record.state_transition.clone(),
+                    state_transition_kind: record.state_transition_kind.clone(),
+                    state_transition_reason: record.state_transition_reason.clone(),
+                    state_transfer_operator_kind: record.state_transfer_operator_kind.clone(),
+                    state_transition_ui_presentation: record
+                        .state_transition_ui_presentation
+                        .clone(),
+                    metric_name: record.metric_name.clone(),
+                    metric_value: record.metric_value,
+                    threshold: record.threshold,
+                    progress_percent: progress
+                        .as_ref()
+                        .and_then(|value| value.progress_percent)
+                        .or(record.progress_percent),
+                    progress_label: progress
+                        .as_ref()
+                        .and_then(|value| value.progress_label.clone())
+                        .or_else(|| record.progress_label.clone()),
+                    progress_detail: progress
+                        .as_ref()
+                        .and_then(|value| value.progress_detail.clone())
+                        .or_else(|| record.progress_detail.clone()),
+                    last_progress_unix_ms: progress
+                        .as_ref()
+                        .and_then(|value| value.last_progress_unix_ms)
+                        .or(record.last_progress_unix_ms),
+                    current_field_m_t: record.current_field_m_t,
+                    current_point_index: record.current_point_index,
+                    current_settle_step_index: record.current_settle_step_index,
+                    current_settle_step_kind: record.current_settle_step_kind.clone(),
+                    current_settle_step_method: record.current_settle_step_method.clone(),
+                }
             })
             .collect(),
     })
     .into_response())
+}
+
+struct StageProgressProjection {
+    progress_percent: Option<f64>,
+    progress_label: Option<String>,
+    progress_detail: Option<String>,
+    last_progress_unix_ms: Option<u64>,
+}
+
+fn frequency_response_stage_progress(
+    snapshot: &SessionStateResponse,
+    stage: &StageExecutionState,
+    index: usize,
+    kind: Option<&str>,
+) -> Option<StageProgressProjection> {
+    if stage.active_stage_index != Some(index) || !is_frequency_response_stage_kind(kind) {
+        return None;
+    }
+    let live_state = snapshot.live_state.as_ref()?;
+    let progress = live_state
+        .latest_step
+        .per_object_scalars
+        .get("fem_frequency_response_progress")?;
+    let total = finite_positive(progress.get("total_frequency_count").copied())?;
+    let completed = finite_nonnegative(progress.get("completed_frequency_count").copied())?;
+    let percent = progress
+        .get("percent")
+        .copied()
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .map(|value| value.clamp(0.0, 100.0))
+        .or_else(|| Some(((completed / total) * 100.0).clamp(0.0, 100.0)));
+    let current_point = (completed.floor() as u64).saturating_add(1);
+    let total_points = total.floor().max(1.0) as u64;
+    let current_point = current_point.clamp(1, total_points);
+    let mut detail_parts = Vec::new();
+    if let Some(demag_mode) = frequency_response_demag_mode_from_progress(progress) {
+        detail_parts.push(format!("demag={demag_mode}"));
+    }
+    if let (Some(min_hz), Some(max_hz)) = (
+        finite_positive(progress.get("frequency_min_hz").copied()),
+        finite_positive(progress.get("frequency_max_hz").copied()),
+    ) {
+        detail_parts.push(format!(
+            "range={:.6}-{:.6} GHz",
+            min_hz / 1.0e9,
+            max_hz / 1.0e9
+        ));
+    }
+    detail_parts.push(format!("frequency point {current_point}/{total_points}"));
+    detail_parts.push(format!("completed={}", completed.floor().max(0.0) as u64));
+    if let Some(frequency_hz) = finite_positive(progress.get("frequency_hz").copied()) {
+        detail_parts.push(format!("f={:.6} GHz", frequency_hz / 1.0e9));
+    }
+    if let Some(iteration) = finite_nonnegative(progress.get("iteration").copied()) {
+        if let Some(max_iterations) =
+            finite_positive(progress.get("max_iterations_for_frequency").copied())
+        {
+            detail_parts.push(format!(
+                "GMRES iteration={}/{}",
+                iteration.floor() as u64,
+                max_iterations.floor() as u64
+            ));
+        } else {
+            detail_parts.push(format!("GMRES iteration={}", iteration.floor() as u64));
+        }
+    }
+    if let Some(solve_fraction) =
+        finite_nonnegative(progress.get("current_frequency_solve_fraction").copied())
+    {
+        detail_parts.push(format!(
+            "current frequency solve={:.0}%",
+            solve_fraction.clamp(0.0, 1.0) * 100.0
+        ));
+    }
+    if let Some(residual) = finite_nonnegative(progress.get("relative_residual_l2_norm").copied()) {
+        detail_parts.push(format!("relative residual={residual:.3e}"));
+    }
+
+    Some(StageProgressProjection {
+        progress_percent: percent,
+        progress_label: Some("solving frequency point".to_string()),
+        progress_detail: Some(detail_parts.join("; ")),
+        last_progress_unix_ms: u64::try_from(live_state.updated_at_unix_ms).ok(),
+    })
+}
+
+fn is_frequency_response_stage_kind(kind: Option<&str>) -> bool {
+    matches!(kind, Some("frequency_response" | "flat_frequency_response"))
+}
+
+fn frequency_response_demag_mode_from_progress(
+    progress: &HashMap<String, f64>,
+) -> Option<&'static str> {
+    if progress
+        .get("demag_periodic_airbox_k0")
+        .copied()
+        .unwrap_or(0.0)
+        > 0.0
+    {
+        Some("periodic_airbox_k0")
+    } else if progress.get("demag_floquet_airbox").copied().unwrap_or(0.0) > 0.0 {
+        Some("floquet_airbox")
+    } else if progress.get("demag_enabled").copied().unwrap_or(0.0) > 0.0 {
+        Some("enabled")
+    } else {
+        None
+    }
+}
+
+fn finite_positive(value: Option<f64>) -> Option<f64> {
+    value.filter(|value| value.is_finite() && *value > 0.0)
+}
+
+fn finite_nonnegative(value: Option<f64>) -> Option<f64> {
+    value.filter(|value| value.is_finite() && *value >= 0.0)
 }
 
 #[utoipa::path(

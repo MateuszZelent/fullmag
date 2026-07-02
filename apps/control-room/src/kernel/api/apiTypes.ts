@@ -125,6 +125,12 @@ export type FrequencyDomainJsonArtifactResource =
   components["schemas"]["FrequencyDomainJsonArtifactResource"];
 export type FrequencyDomainTextArtifactResource =
   components["schemas"]["FrequencyDomainTextArtifactResource"];
+export type FrequencyDomainKPathMetadataResource =
+  components["schemas"]["FrequencyDomainKPathMetadataResource"];
+export type FrequencyDomainKPathSamplingResource =
+  components["schemas"]["FrequencyDomainKPathSamplingResource"];
+export type FrequencyDomainKPathControlPointResource =
+  components["schemas"]["FrequencyDomainKPathControlPointResource"];
 export type FrequencyDomainFieldResource =
   components["schemas"]["FrequencyDomainFieldResource"];
 export type FrequencyDomainSweepProgressResource =

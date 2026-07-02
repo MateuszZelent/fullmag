@@ -500,6 +500,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
                 "max_steps": _int_or_none(stage.get("max_steps")),
                 "eigen_count": _int_or_none(stage.get("eigen_count")),
                 "eigen_target": stage.get("eigen_target") or None,
+                "eigen_operator": stage.get("eigen_operator") or None,
                 "eigen_include_demag": (
                     bool(stage.get("eigen_include_demag"))
                     if isinstance(stage.get("eigen_include_demag"), bool)
@@ -512,6 +513,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
                 "eigen_frequency_max": _number_or_none(stage.get("eigen_frequency_max")),
                 "eigen_damping_policy": stage.get("eigen_damping_policy") or None,
                 "eigen_k_vector": stage.get("eigen_k_vector") or None,
+                "eigen_k_path": stage.get("eigen_k_path") or None,
                 "eigen_spin_wave_bc": stage.get("eigen_spin_wave_bc") or None,
                 "eigen_spin_wave_bc_config": (
                     dict(stage.get("eigen_spin_wave_bc_config"))

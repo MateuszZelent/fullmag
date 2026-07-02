@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_FIELD_META_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
@@ -41,6 +42,7 @@ import {
   STUDY_RUNTIME_CONTROL_RESOURCE_KEYS,
   frequencyDomainManifestRevision,
   frequencyDomainSweepProgressRevision,
+  frequencyDomainTextArtifactRevision,
   resolveHysteresisExecutionTreeResourceKey,
   resolveFieldMetaResourceKey,
   runtimeCommandControlSessionStatusEquals,
@@ -72,7 +74,8 @@ const frequencyDomainCapabilityFixture = {
   dispersion: {
     branch_tracking: capability("reference_executable"),
     k_path: capability("reference_executable"),
-    production_cpu: capability("unsupported"),
+    production_cpu: capability("partial_production_executable"),
+    production_cpu_gamma_k_path: capability("partial_production_executable"),
     production_gpu: capability("unsupported"),
     reference_cpu: capability("reference_executable"),
   },
@@ -468,6 +471,70 @@ describe("study runtime command resource bundles", () => {
     ).toBe(true);
   });
 
+  it("changes frequency-domain text artifact revision when dispersion CSV contents change", () => {
+    const baseArtifact = {
+      artifact_path: "eigen/dispersion.csv",
+      content_type: "text/csv; charset=utf-8",
+      missing_reason: null,
+      path_metadata: {
+        sampling: {
+          closed: false,
+          kind: "path",
+          points: [
+            { k_vector: [0, 0, 0], label: "G" },
+            { k_vector: [1, 0, 0], label: "X" },
+          ],
+          samples_per_segment: [1],
+        },
+      },
+      resource_key: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+      schema_version: "frequency_domain_text_artifact.v1",
+      status: "ready",
+      text: "sample_index,path_s_rad_per_m,frequency_hz\n0,0,1400000000\n",
+    };
+    const baseRevision = frequencyDomainTextArtifactRevision(baseArtifact);
+
+    expect(
+      frequencyDomainTextArtifactRevision({
+        ...baseArtifact,
+        text: "sample_index,path_s_rad_per_m,frequency_hz\n0,0,1780000000\n",
+      }),
+    ).not.toBe(baseRevision);
+    expect(
+      frequencyDomainTextArtifactRevision({
+        ...baseArtifact,
+        path_metadata: {
+          sampling: {
+            closed: false,
+            kind: "path",
+            points: [
+              { k_vector: [0, 0, 0], label: "G" },
+              { k_vector: [2, 0, 0], label: "M" },
+            ],
+            samples_per_segment: [1],
+          },
+        },
+      }),
+    ).not.toBe(baseRevision);
+  });
+
+  it("exposes modal dispersion as a canonical text artifact resource", () => {
+    const source = readFileSync(studyRuntimeResourcesUrl, "utf8");
+    const hookSource = source.slice(
+      source.indexOf("export function useFrequencyDomainEigenDispersionResource"),
+      source.indexOf("export function useFrequencyDomainEigenModeResource"),
+    );
+
+    expect(ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH).toBeTruthy();
+    expect(hookSource).toMatch(/api\.analysis\.frequencyDomain\s*\.eigenDispersion/);
+    expect(hookSource).toContain(
+      "resolveRevision: frequencyDomainTextArtifactRevision",
+    );
+    expect(hookSource).toContain(
+      "resourceKey: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH",
+    );
+  });
+
   it("exposes mesh periodic pairs as a revision-gated meshing resource", () => {
     const source = readFileSync(studyRuntimeResourcesUrl, "utf8");
     const hookSource = source.slice(
@@ -550,6 +617,9 @@ describe("study runtime command resource bundles", () => {
       complete: false,
       completed_frequency_points: 1,
       current_frequency_hz: 1.0e9,
+      demag_mode: "periodic_airbox_k0",
+      frequency_max_hz: 4.0e9,
+      frequency_min_hz: 1.0e9,
       latest_artifact_manifest_path: "frequency_domain/manifest.v1.json",
       missing_reason: null,
       partial_artifacts_available: true,
@@ -579,6 +649,37 @@ describe("study runtime command resource bundles", () => {
       frequencyDomainSweepProgressRevision({
         ...baseProgress,
         latest_artifact_manifest_path: "frequency_domain/manifest.partial.v1.json",
+      }),
+    ).not.toBe(baseRevision);
+    expect(
+      frequencyDomainSweepProgressRevision({
+        ...baseProgress,
+        current_frequency_hz: 1.5e9,
+      }),
+    ).not.toBe(baseRevision);
+    expect(
+      frequencyDomainSweepProgressRevision({
+        ...baseProgress,
+        frequency_min_hz: 1.25e9,
+      }),
+    ).not.toBe(baseRevision);
+    expect(
+      frequencyDomainSweepProgressRevision({
+        ...baseProgress,
+        frequency_max_hz: 5.0e9,
+      }),
+    ).not.toBe(baseRevision);
+    expect(
+      frequencyDomainSweepProgressRevision({
+        ...baseProgress,
+        demag_mode: "enabled",
+      }),
+    ).not.toBe(baseRevision);
+    expect(
+      frequencyDomainSweepProgressRevision({
+        ...baseProgress,
+        progress_json:
+          '{"schema_version":"frequency_domain_sweep_progress.v1","state":"running","native_iteration_count":64,"native_relative_residual_l2_norm":0.0075}',
       }),
     ).not.toBe(baseRevision);
   });
@@ -810,7 +911,10 @@ describe("study runtime command resource bundles", () => {
     expect(ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH).toBeTruthy();
     expect(ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_FIELD_META_PATH).toBeTruthy();
     expect(ANALYSIS_EIGEN_MODE_V2_PATH).toBeTruthy();
-    expect(hookSource).toMatch(/analysis\.eigen\.eigenSpectrumV2/);
+    expect(hookSource).toMatch(/frequencyDomain\.eigenSpectrumV2/);
+    expect(hookSource).toMatch(/frequencyDomain\.eigenBranchesV2/);
+    expect(hookSource).toMatch(/frequencyDomain\.eigenDiagnosticsV2/);
+    expect(hookSource).toMatch(/frequencyDomain\.eigenDispersion/);
     expect(hookSource).toMatch(/analysis\.eigen\s*\.modeV2/);
     expect(hookSource).toMatch(/frequencyDomain\.responseMagneticSweep/);
     expect(hookSource).toMatch(/frequencyDomain\s*\.responseCancelRequestedV1/);
@@ -821,7 +925,7 @@ describe("study runtime command resource bundles", () => {
     expect(hookSource).toContain("useMagneticResponseSweepV2Resource");
     expect(hookSource).toContain("useFrequencyResponsePointResource");
     expect(hookSource).toContain("useFrequencyResponseFieldMetaResource");
-    expect(hookSource).toMatch(/analysis\.eigen\.eigenModeFieldMeta/);
+    expect(hookSource).toMatch(/frequencyDomain\.eigenModeFieldMeta/);
     expect(hookSource).toContain(
       "ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH",
     );

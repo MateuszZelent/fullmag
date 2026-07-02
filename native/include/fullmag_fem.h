@@ -586,6 +586,9 @@ typedef struct {
     fullmag_fem_frequency_domain_apply_callback mfem_apply_demag_tangent;
     void *mfem_demag_tangent_user_data;
     const double *mfem_demag_tangent_matrix_row_major;
+    const double *mfem_observable_ms_field;
+    uint64_t mfem_observable_ms_field_len;
+    double mfem_observable_uniform_ms;
 } fullmag_fem_frequency_domain_driven_response_request;
 
 typedef struct {
@@ -674,6 +677,11 @@ typedef struct {
     FullmagFemCsrMatrixView mfem_sparse_stiffness_csr;
     FullmagFemCsrMatrixView mfem_sparse_gyrotropic_csr;
     FullmagFemCsrMatrixView mfem_sparse_mass_csr;
+    int has_floquet_k_vector;
+    double floquet_k_vector_rad_per_m[3];
+    fullmag_fem_frequency_domain_phase_convention phase_convention;
+    const fullmag_fem_frequency_domain_floquet_periodic_pair *mfem_floquet_periodic_pairs;
+    uint64_t mfem_floquet_periodic_pair_count;
 } FullmagFemModalEigenRequest;
 
 typedef struct {

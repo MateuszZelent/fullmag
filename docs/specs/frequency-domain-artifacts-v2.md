@@ -17,6 +17,7 @@ artifacts/eigen/diagnostics/solver.v1.json
 artifacts/eigen/spectrum.v2.json
 artifacts/eigen/branches.v2.json
 artifacts/eigen/dispersion.csv
+artifacts/eigen/dispersion/path.json
 artifacts/eigen/modes/sample_XXXX/mode_YYYY.json
 artifacts/eigen/mode_fields.zarr/
 artifacts/response/diagnostics/solver.v1.json
@@ -63,6 +64,7 @@ Required fields:
 - `schema_version = "eigen_spectrum.v2"`,
 - `solver_model`,
 - `sample_count`,
+- `mode_count`,
 - `samples[]`.
 
 Each sample must include:
@@ -119,6 +121,32 @@ A damped `exp_i_omega_t` mode must not publish a negative
 `frequency_imag_hz`. If a solver uses `exp(-i omega t)`, the artifact must
 state that phasor convention and keep the sign mapping self-consistent.
 
+For modal payloads with `eigenvalue_mapping = "lambda_eq_i_omega"`, every
+mode summary, mode metadata payload, and eigen-summary mode entry must publish
+finite `eigenvalue_real` and `eigenvalue_imag` fields, and the accepted branch
+must satisfy:
+
+```text
+eigenvalue_imag > 0
+omega_rad_s = eigenvalue_imag
+frequency_hz = eigenvalue_imag / (2*pi)
+```
+
+The conjugate negative-frequency branch must not be published as an accepted
+positive-frequency mode under this mapping.
+
+`eigen/metadata/eigen_summary.json` is a compact index, not a second physical
+source of truth. For every `(sample_index, raw_mode_index)` it summarizes, the
+modal contract fields must match the corresponding `spectrum.v2.json` mode
+summary exactly: phasor convention, eigenvalue mapping/components,
+`frequency_real_hz`, `frequency_imag_hz`, `angular_frequency_rad_per_s`,
+`omega_rad_s`, `mass_norm`, tangent-leakage diagnostics, and SI constants
+`gamma_rad_s_T`, `gamma0_rad_s_per_A_m`, and `mu0_T_m_per_A`.
+Compact legacy summaries that omit `sample_index` are interpreted as
+`sample_index = 0`; when `sample_index` is present, consumers and validators
+must use `(sample_index, index)` as the summary key rather than assuming the
+gamma sample.
+
 ## branches.v2.json
 
 Required fields:
@@ -158,14 +186,54 @@ When modal vectors are unavailable, the artifact must say so through
 `tracking_score_source = "frequency_score_fallback"` or a mixed summary source
 and `modal_overlap_available = false`; clients must not infer overlap-based
 tracking from branch continuity alone.
+When `modal_overlap_available = true`, `modal_overlap_unavailable_reason` must
+be absent, `null`, or empty on summaries and branch points.
+
+For the production nonzero-k modal k-path acceptance gate
+(`--require-production-modal-k-path`), branch tracking is stricter: every
+non-seed branch point must avoid `frequency_score_fallback`, the branch summary
+and diagnostics plus `frequency_domain/manifest.v1.json.diagnostics` must
+report `modal_overlap_available = true` and
+`tracking_score_source = "modal_overlap_weighted_score"`; mixed fallback
+summary sources are not production acceptance evidence. `branches.v2.json` must report
+`tracking_method = "overlap_hungarian"`, and the artifact must include at least
+one `tracking_score_source = "modal_overlap_weighted_score"` branch point.
+`branches.overlap_floor`, `branches.diagnostics.min_overlap`, and non-seed
+`overlap_prev` / `tracking_confidence` values must be finite values in
+`[0, 1]`. Accepted modal-overlap branch points must not fall below the declared
+`overlap_floor`, must publish `overlap_prev`, their `tracking_confidence` must
+match `overlap_prev`, `branches.diagnostics.min_overlap` must match the
+minimum modal-overlap `overlap_prev` value in the branch points, and
+`branches.diagnostics.median_overlap` must publish the corresponding median.
+The gamma-only production bridge does not satisfy this nonzero-k modal-overlap
+proof.
 
 ## dispersion.csv
+
+`eigen/dispersion.csv` is the public artifact for an explicit
+`OutputIR::DispersionCurve` / Python `SaveDispersion` request. A multi-k
+`KSamplingIR::Path` solve may still emit spectrum, branch, diagnostics, and
+manifest metadata for bookkeeping, but it must not publish the public
+dispersion CSV or legacy branch table unless the user requested a dispersion
+curve. If a k-path request asks for dispersion but does not ask for explicit
+mode payloads, the runtime publishes the default branch/mode range
+`raw_mode_index = 0..count-1` so the curve is usable and every row can still
+hand off to mode-field resources.
 
 The CSV header must include:
 
 ```text
-sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_id,mode_field_resource_key
+sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,analytic_frequency_hz,relative_error,validation_geometry,line_width_hz,residual_norm,overlap_score,tracking_score_source,mode_field_id,mode_field_resource_key
 ```
+
+For `KSamplingIR::Path`, public sample count and `path_s_rad_per_m` must follow
+the same path expansion rule used by the runner. Open paths and closed paths
+both publish `sum(samples_per_segment) + 1` samples when
+`samples_per_segment` is non-empty. For `closed=true`,
+`samples_per_segment.len()` must equal the number of control points and the
+last segment returns from the final control point to the first control point;
+the final CSV sample therefore has the first control point k-vector at the
+total closed-loop arclength.
 
 The eigen artifact validator treats every header field listed above as required.
 Each public mode key `(sample_index, raw_mode_index)` published in
@@ -174,6 +242,46 @@ Each public mode key `(sample_index, raw_mode_index)` published in
 `label` must match the corresponding `eigen/spectrum.v2.json` sample metadata
 for the same `sample_index`; an unlabeled spectrum sample is represented as an
 empty CSV label.
+When path sampling metadata is present in
+`metadata.json.execution_plan.backend_plan.k_sampling` or
+`eigen/dispersion/path.json`, the validator also checks the
+`samples_per_segment` length, expanded sample count, and monotonic `path_s`.
+It checks final arclength and final endpoint k-vector for
+`eigen/dispersion/path.json` metadata and for any `closed=true` path, including
+the return to the first control point.
+Strict reference Full2x2 and production modal k-path validation require
+`eigen/dispersion/path.json`; the legacy execution metadata path is not enough
+to prove the published dispersion sampling contract.
+The resource-first Control Room endpoint
+`/v2/sessions/current/analysis/frequency-domain/eigen/dispersion` returns the
+CSV as `FrequencyDomainTextArtifactResource.text` and publishes
+`eigen/dispersion/path.json` as optional `path_metadata` when the sidecar is
+present. `path_metadata` is typed in OpenAPI as
+`FrequencyDomainKPathMetadataResource`, with `sampling.kind`,
+`sampling.points[].label`, `sampling.points[].k_vector`,
+`sampling.samples_per_segment`, and optional `sampling.closed`; it is not an
+untyped JSON side channel. Each `sampling.points[].k_vector` is a fixed
+three-component vector in `rad/m`, and OpenAPI must document it with
+`minItems = maxItems = 3`. UI consumers must use that resource hook instead of
+switching to the legacy-compatible `/analysis/eigenmodes/dispersion` endpoint
+for k-path sampling metadata. The shared frequency-domain chart model may use
+`path_metadata.sampling.points[].label` and `samples_per_segment` to restore
+high-symmetry point labels on dispersion chart points when a legacy or partial
+CSV row omits the `label` value; `dispersion.csv` remains the canonical numeric
+series source. The resource endpoint rejects malformed `path_metadata` sidecars
+before exposing them to UI consumers: `kind` must be `path`, at least two
+control points are required, `samples_per_segment` entries must be positive,
+and the segment count must match open or closed path semantics. When the CSV is
+present, the endpoint also expands the sidecar sampling path and rejects
+resource publication if any CSV `sample_index` lies outside that expanded path,
+if the CSV `kx_rad_per_m`, `ky_rad_per_m`, or `kz_rad_per_m` value differs from
+the sidecar-derived sample k-vector, or if both the CSV row and sidecar-derived
+sample publish non-empty conflicting labels. Missing CSV samples remain legal
+for frequency-window artifacts whose selected spectrum omits a path sample. The
+eigen artifact validator additionally checks `eigen/dispersion/path.json`
+control-point k-vectors against the expanded public `spectrum.v2` samples, and
+rejects non-empty label conflicts between sidecar control points and the
+corresponding published spectrum/CSV samples.
 `branch_id` may be empty only when no branch tracking artifact exists.
 When `eigen/branches.v2.json` is present, each non-empty CSV `branch_id` must
 match the branch containing the same `(sample_index, raw_mode_index)` point.
@@ -184,7 +292,9 @@ its value may be empty for seed points or rows whose tracking score source does
 not have an overlap value. Rows with
 `tracking_score_source = "modal_overlap_weighted_score"` must publish a finite
 `overlap_score` in `[0, 1]`; any non-empty `overlap_score` value must also stay
-inside `[0, 1]`.
+inside `[0, 1]`. When `eigen/branches.v2.json` is present, a modal-overlap CSV
+row's `overlap_score` must match the matching branch point's `overlap_prev` for
+the same `(sample_index, raw_mode_index)`.
 `tracking_score_source` must identify whether the row is a seed point,
 modal-overlap-tracked point, or frequency-fallback point. When
 `eigen/branches.v2.json` is present, the CSV `tracking_score_source` must match
@@ -194,6 +304,120 @@ payload resource when a mode field is emitted, so a dispersion point can be
 handed off to the same 3D mode overlay as the corresponding branch point.
 When the modal payload has positive `frequency_imag_hz`, `line_width_hz` is
 required and equals `2 * frequency_imag_hz`, matching `linewidth_fwhm_hz`.
+`analytic_frequency_hz`, `relative_error`, and `validation_geometry` may be
+empty for generic dispersion artifacts. For
+`--require-low-k-de-bv-analytic-dispersion`, those columns are required for
+every sample named by the DE/BV validation scenarios: `validation_geometry`
+must be the normalized scenario geometry (`damon_eshbach` or
+`backward_volume`), `analytic_frequency_hz` must equal the independently
+computed analytic thin-film reference for the declared material/film/bias/demag
+assumptions, and `relative_error` must equal
+`abs(frequency_hz - analytic_frequency_hz) / max(abs(analytic_frequency_hz), 1)`.
+The low-k DE/BV acceptance fixture should use separate Gamma/sample rows for
+the DE and BV paths when both scenarios need a `k=0` anchor, so each published
+CSV row has one unambiguous validation geometry.
+Writers must derive those analytic columns from the declared DE/BV validation
+intent and the run's material/bias/reference context, not from the solver-model
+name alone. A future production CPU/GPU modal solver that carries the same
+`thin_film_de_bv_low_k` validation intent must therefore publish the same
+analytic reference and relative-error columns; the current
+`reference_thin_film_de_bv_kalinikos_n0` adapter is only one producer of that
+contract.
+The shared artifact plotter
+`scripts/plot_fem_frequency_domain_eigen_artifacts.py --dispersion-png` must
+use the same columns when present: numerical solver points remain the primary
+series, `analytic_frequency_hz` is rendered as an analytic reference overlay on
+the same `path_s_rad_per_m` axis, and the plot footer reports the maximum
+published `relative_error`.
+
+The reference CPU `Full2x2` Floquet gate is stricter than the generic CSV
+schema. `scripts/verify_fem_frequency_domain_eigen_artifacts.py
+--require-reference-full-2x2-floquet` requires a real k-path dispersion bundle:
+at least three samples, at least one nonzero wave vector, strictly increasing
+`path_s`, labelled path endpoints, and a branch whose frequency span is
+distinguishable from a flat gamma-only artifact. This gate is for the
+reference/MVP lane only; it does not promote production selected-spectrum CPU
+or GPU modal dispersion.
+
+For the managed no-demag exchange+Zeeman reference example, the optional
+`--require-exchange-only-analytic-dispersion` gate also checks the branch scale
+against
+
+```text
+f(k) = gamma0 * (|H0| + 2 A |k|^2 / (mu0 Ms)) / (2*pi)
+```
+
+using material, external-field, and gyromagnetic-ratio values from
+`metadata.json`. `--require-exchange-only-reciprocal-dispersion` is the
+companion reciprocal gate: it requires at least one published nonzero `+k/-k`
+pair and checks `f(k)=f(-k)` for the exchange-only/no-DMI/no-demag case. The
+tolerances are intentionally coarse for the current small reference FEM mesh;
+these gates catch unit/sign/order-of-magnitude and reciprocity drift in the
+exchange dispersion, not production convergence.
+
+Production-facing modal dispersion gates should not require an exhaustive
+all-direction k-space map by default. The canonical acceptance fixtures are
+narrow one-dimensional film sweeps in the two standard geometries:
+
+- Damon-Eshbach (DE): in-plane `k` perpendicular to the equilibrium
+  magnetization;
+- backward-volume (BV): in-plane `k` parallel to the equilibrium magnetization.
+
+The default target range is `|k| <= 2e6..3e6 rad/m` (`2..3 1/um`) with a
+low-GHz modal/frequency window such as `0..5e9 Hz`. Accepted production bundles
+must record enough material, geometry, bias-field, demag-model, and boundary
+provenance for validators to compare the published branch against the applicable
+analytic DE/BV dispersion. Broader k-direction scans may be added as stress or
+coverage tests, but they are not the primary scientific acceptance path.
+Regression tests should follow the same shape: separate DE and BV fixtures,
+sample only the documented low-k range needed for the analytic comparison, and
+use a modal/frequency window no wider than the low-GHz acceptance band by
+default. Tests that sweep many k directions or larger Brillouin-zone paths must
+be labelled as stress/exploration coverage rather than DE/BV analytic
+acceptance.
+`scripts/verify_fem_frequency_domain_eigen_artifacts.py
+--require-low-k-de-bv-analytic-dispersion` is the first artifact-level gate for
+this acceptance shape. It requires
+`metadata.json.execution_plan.backend_plan.dispersion_validation` with
+`kind = "thin_film_de_bv_low_k"`,
+`analytic_model = "kalinikos_slab_n0"`, `film_thickness_m`,
+`equilibrium_magnetization`, `film_normal`, `frequency_window_hz`,
+`max_k_rad_per_m <= 3e6`, and scenario entries for both `damon_eshbach` and
+`backward_volume`. Each scenario names the `branch_id` and `sample_indices` to
+check; validators reject out-of-range k, out-of-plane k, wrong DE/BV
+orientation, windows above 5 GHz, missing scenarios, and branch frequencies
+whose relative error exceeds the declared tolerance.
+Runtime-produced bundles obtain this validation block from authored
+`problem_meta.runtime_metadata.dispersion_validation`; Python scripts should set
+it with `study.dispersion_validation(fm.ThinFilmDEBVDispersionValidation(...))`
+or the equivalent flat `fm.dispersion_validation(...)` helper rather than
+hand-writing backend-plan metadata. The FEM eigen planner copies this payload
+into the typed `FemEigenDispersionValidationIR`
+`backend_plan.dispersion_validation` field, rejecting unsupported shape, broad
+k ranges, missing DE/BV scenarios, invalid vectors, or windows above 5 GHz at
+planning time. Runtime modal k-path bundles must also mirror the same payload
+in `frequency_domain/manifest.v1.json.validation.dispersion_validation`, so API
+and Control Room consumers can inspect the declared DE/BV analytic acceptance
+intent through the existing manifest resource without inventing a second
+endpoint. The artifact validator then checks that the manifest validation block
+semantically matches `metadata.json.execution_plan.backend_plan.dispersion_validation`
+and checks that exact validation intent against the published branch data.
+The same `validation` object must also state where the published branch
+frequencies came from:
+
+- `dispersion_frequency_source = "analytic_reference_model"` for the current
+  CPU/reference `reference_thin_film_de_bv_kalinikos_n0` slice;
+- `dispersion_reference_model = "kalinikos_slab_n0"` for that analytic
+  reference slice;
+- `dynamic_demag_operator_source =
+  "analytic_thin_film_de_bv_reference_not_fem_demag_k"` for that slice, so
+  validators and Control Room do not mistake it for a numerical FEM
+  dynamic-demag-k operator;
+- future production CPU/GPU modal solvers that emit the same analytic columns
+  must use `dispersion_frequency_source =
+  "numeric_modal_solver_with_analytic_comparison"` and leave
+  `dispersion_reference_model` empty unless they are themselves an analytic
+  reference adapter.
 
 ## modes/sample_XXXX/mode_YYYY.json
 
@@ -231,6 +455,13 @@ Mode metadata must not inline large vector arrays such as `real`, `imag`,
 `amplitude`, or `phase`. Reconstructed physical vectors live in
 `eigen/mode_fields.zarr` by default and are exposed through the data-plane
 field resource referenced by `mode_field_resource_key`.
+
+The per-mode metadata payload is the detailed version of the corresponding
+`eigen/spectrum.v2.json` mode summary, not a second source of truth. For the
+same `(sample_index, raw_mode_index)`, the metadata payload must match the
+spectrum summary for phasor convention, eigenvalue mapping, eigenvalue
+components, `frequency_imag_hz`, `omega_rad_s`, mass norm, tangent leakage
+diagnostics, and SI constants.
 
 The canonical Zarr group layout for modal fields is:
 
@@ -306,9 +537,28 @@ eigen manifests must include:
 - `artifacts.solver_diagnostics_path = "eigen/diagnostics/solver.v1.json"`,
 - `artifacts.mode_metadata_paths[]`,
 - `resources.mode_field_resources[]`,
+- `validation.dispersion_validation` as the optional
+  `FemEigenDispersionValidationIR` payload copied from the FEM eigen plan,
 - `diagnostics.tracking_score_source`,
 - `diagnostics.modal_overlap_available`,
 - optional `diagnostics.modal_overlap_unavailable_reason`.
+
+For modal k-path dispersion manifests, `capabilities.dispersion` must publish
+lane-specific status entries for:
+
+- `reference_cpu`,
+- `production_cpu`,
+- `production_cpu_gamma_k_path`,
+- `production_gpu`,
+- `k_path`,
+- `branch_tracking`.
+
+The current production nonzero-k modal k-path acceptance gate requires
+`production_cpu.status = "partial_production_executable"`,
+`production_cpu_gamma_k_path.status = "partial_production_executable"`, and
+`production_gpu.status = "unsupported"` with a reason that explicitly names
+modal GPU dispersion as unavailable. The gamma-only bridge remains separate
+from the nonzero-k Bloch/Floquet production lane.
 
 Driven response manifests must include:
 
@@ -321,6 +571,43 @@ Driven response manifests must include:
 - `physics.frequency_units = "Hz"`,
 - `physics.field_units = "dimensionless_delta_m"`,
 - `artifacts.solver_diagnostics_path = "response/diagnostics/solver.v1.json"`.
+
+Completed driven-response manifests must also link the durable progress
+checkpoint explicitly:
+
+- `artifacts.response_progress_v1_path = "response/progress.v1.json"`,
+- `resources.response_progress_resource_key =
+  "/v2/sessions/current/analysis/frequency-domain/response/progress.v1"`.
+
+These fields are required even though the file path is currently canonical.
+Consumers must discover progress through the manifest/resource contract rather
+than hardcoding a filesystem convention.
+
+For a promoted `periodic_airbox_k0` driven-response bundle, the manifest must
+also include `equilibrium_provenance` linking the response solve to the
+accepted static PBC demag equilibrium that supplied `m0`. Diagnostic smoke
+bundles may omit this object, but promotion gates using
+`--require-m5-equilibrium-provenance` must reject the bundle unless it contains:
+
+- `schema_version = "fem_frequency_domain_equilibrium_provenance.v1"`,
+- `acceptance_gate = "M5_static_pbc_demag_equilibrium"`,
+- `accepted = true`,
+- `source_kind = "m5_static_pbc_demag_equilibrium"`,
+- `source_artifact_root`,
+- `equilibrium_field_path`,
+- `seam_diagnostics_path`,
+- `z_padding_report_path`,
+- `supercell_report_path`,
+- `magnetostatic_bc = "periodic_airbox_k0"`,
+- non-empty `pbc_axes[]`.
+
+The canonical runtime handoff for this block is
+`problem_meta.runtime_metadata["frequency_response_m5_equilibrium_provenance"]`.
+Planner code may copy that object into `FemFrequencyResponsePlanIR`, and the
+runner must preserve it in `frequency_domain/manifest.v1.json` after the native
+response solve writes the base manifest. This metadata is provenance only: it
+must not enable PBC, select demag, or override the study's requested
+`magnetostatic_bc`.
 
 The manifest must always distinguish the two study products with
 `study_product = "modal_eigen"` or `study_product = "driven_response"`.
@@ -377,6 +664,16 @@ artifact writer:
 - `frequency_mapping`;
 - `production_gyrotropic_mapping` as a boolean.
 
+For `production_gyrotropic_mapping = true` with
+`eigenvalue_mapping = "lambda_eq_i_omega"`, diagnostics should also preserve
+the operator-side sign convention. If the physics contract is the energy
+gyrotropic form `K phi = -i omega G phi`, the generalized solver must use the
+right-hand-side pencil matrix `B = -G`, i.e. `K phi = lambda B phi` with
+`lambda = i omega`. Operator diagnostics should name this explicitly, for
+example `gyrotropic_form = "pencil_B=-G=[[0,M],[-M,0]]"`.
+Mode payloads using that mapping must also pass the per-mode
+`Im(lambda)`/`omega_rad_s`/`frequency_hz` consistency rule above.
+
 When the modal target is `frequency_window`, solver diagnostics must also
 publish the resolved window search contract:
 
@@ -405,7 +702,46 @@ Reference/MVP multi-k Floquet `FrequencyWindow` artifacts must also publish
 filtered by the reference k-path orchestrator rather than solved by a production
 shift-invert/FEAST/SLEPc backend. In that case `spectral_transform` remains
 `none`, `production_solver_available = false`, and
-`window_completeness.status = "not_certified"`.
+`window_completeness.status = "not_certified"`. Nonzero-k Floquet variants of
+that reference policy must also publish `production_cpu_rejection_reason =
+"production_cpu_modal_nonzero_k_floquet_operator_missing"` and
+`production_cpu_rejection_scope =
+"selected_spectrum_nonzero_k_floquet_modal"` so downstream consumers can
+distinguish a deliberate reference/MVP fallback from a production
+selected-spectrum modal solve. They must also publish
+`required_operator_contract =
+"bloch_floquet_tangent_operator_with_periodic_pairs"` and
+`required_operator_payload_kind = "bloch_floquet_tangent_operator"` plus
+`modal_periodic_pair_contract_available = false` for the current
+runner/reference artifact path, so UI/runtime consumers can name the missing
+production operator payload instead of reporting a generic unsupported path or
+mistaking pair metadata for an executable Bloch/Floquet operator.
+The native modal C ABI can carry Floquet k-vector and periodic-pair metadata.
+The Rust native modal wrapper and FEM eigen runner can now derive and forward
+that payload from selected `mesh.periodic_node_pairs` and matching boundary-pair
+translation metadata for single-k Floquet modal requests, with
+`phase_rad = -k dot translation`. Native diagnostics for direct requests or
+runner paths with supplied pairs may therefore report
+`modal_periodic_pair_contract_available = true`; that only proves the pair
+metadata handoff. Direct native modal requests may proceed past the nonzero-k
+Floquet rejection only when the operator diagnostics also declare
+`payload_kind = "bloch_floquet_tangent_operator"`. Current reference artifacts
+may still report `modal_periodic_pair_contract_available = false` when they are
+produced by the reference/MVP path rather than by the native modal production
+ABI handoff, and runner-produced nonzero-k k-path artifacts must remain
+reference-labelled until the runner/native FEM operator builder emits that
+labelled Bloch/Floquet payload per sample. The runner-side algebraic
+materializer for that payload embeds a complex Bloch/Floquet generalized
+operator into the native gyrotropic pencil as `K_embedded = diag(K_R, K_R)` and
+`B_embedded = [[0, -M_R], [M_R, 0]]`. Production k-path artifacts may claim
+this path only when the managed runtime uses the selected-spectrum adapter,
+de-embeds native mode vectors, writes persisted mode-field payloads, and keeps
+`eigen/spectrum.v2.json`, nested mode metadata, solver diagnostics, and the
+frequency-domain manifest on the same `lambda_eq_i_omega` /
+`exp_i_omega_t` contract. The de-embedding contract is defined for positive
+native branches as
+`v = [x, i x] -> q = x_re + i x_im`, where `q` is the physical complex
+tangent-vector payload expected by the existing modal field artifacts.
 
 Production modal k-path/Floquet acceptance must not reuse the reference policy
 above. Artifacts promoted as production selected-spectrum modal k-path evidence
@@ -413,14 +749,75 @@ must be multi-sample (`sample_count > 1`), report the managed production modal
 adapter, set `spectral_transform = "shift_invert"`,
 `execution_lane = "production_cpu"`, `production_solver_available = true`, and
 `dense_reference_oracle = false`. Production selected-spectrum modal k-path
-evidence uses the native modal `lambda_eq_i_omega` mapping with
+evidence is currently a no-demag/no-DMI contract. The manifest must publish
+`requested_execution.include_demag = false`,
+`resolved_execution.demag_realization = "none"`, and must not publish DMI,
+dynamic demag, periodic Poisson, Floquet-airbox demag, or magnetoelastic terms
+inside `requested_execution.operator_terms_included[]` or
+`resolved_execution.operator_terms_included[]`. Production selected-spectrum
+modal k-path evidence uses the native modal `lambda_eq_i_omega` mapping with
 `phasor_convention = "exp_i_omega_t"` in both
 `eigen/diagnostics/solver.v1.json` and
 `frequency_domain/manifest.v1.json`; artifacts using the opposite phasor
 convention or internally inconsistent modal phasor metadata must not pass this
-production acceptance gate. The current GPU modal path has no production
+production acceptance gate. The `--require-production-modal-k-path` validator
+gate is reserved for production nonzero-k modal dispersion and therefore also
+requires at least one sampled nonzero `k_vector`; gamma-equivalent bundles must
+use the separate gamma gate below. The current GPU modal path has no production
 acceptance contract until a native modal GPU eigensolver and Floquet operator
 exist.
+
+Because the production modal k-path gate is the nonzero-k Floquet acceptance
+gate, its solver diagnostics must also publish
+`basis_transport_policy = "tangent_frame_transport"`,
+`floquet_tangent_frame_max_mismatch`, and
+`floquet_tangent_transport_max_nonunitarity`. This proves that the accepted
+artifact used the phase-aware tangent-frame transport contract at the artifact
+boundary. The gamma-only production bridge below is not a nonzero-k Floquet
+transport proof and must remain a separate validator gate.
+
+Production modal k-path tracking summaries must be vector-overlap only:
+`frequency_domain/manifest.v1.json.diagnostics.tracking_score_source`,
+`eigen/branches.v2.json.tracking_score_source`, and
+`eigen/branches.v2.json.diagnostics.tracking_score_source` must all be
+`modal_overlap_weighted_score`. Mixed modal/frequency fallback summaries remain
+valid for non-production or reference artifacts, but cannot satisfy
+`--require-production-modal-k-path`.
+
+Until the production k-path lane has certified window-completeness evidence,
+accepted production modal/gamma k-path artifacts that publish
+`requested_window_hz` must keep
+`window_completeness.status = "not_certified"`,
+`window_completeness.certification_method = "none"`, and
+`window_completeness.additional_modes_may_exist = true`. A certified modal
+count, exhausted window, or no-extra-modes claim belongs to a later production
+gate with explicit contour/count or sparse/matrix-free validation evidence.
+Accepted production modal/gamma k-path mode summaries must also satisfy the
+current quality guard:
+
+- `residual_relative_l2 <= 1e-6`,
+- `tangent_leakage_max_abs <= 1e-8`.
+
+Solver subwindow diagnostics are part of the same acceptance contract:
+
+- each `subwindows[]` entry must report `accepted_modes > 0`,
+- each `subwindows[]` entry must keep `residual_max <= 1e-6`.
+
+These thresholds are acceptance guards for the current no-demag selected-
+spectrum artifact slice. They do not certify window completeness, dynamic
+demag-k, DMI, GPU modal dispersion, or broader magnonic-crystal production
+coverage.
+
+The frequency-domain manifest capability
+`dispersion.production_cpu_gamma_k_path` is deliberately narrower than
+`dispersion.production_cpu`. It marks only the managed production CPU
+selected-spectrum bridge for gamma-equivalent k-path samples, where the
+multi-k orchestrator preserves per-sample shift-invert provenance without
+claiming Bloch/Floquet nonzero-k physics. Nonzero-k production modal
+dispersion must satisfy the production selected-spectrum modal k-path
+requirements above. The `--require-production-gamma-k-path` validator gate
+requires the same production selected-spectrum provenance as the modal k-path
+gate, but all sampled `k_vector` values must be gamma-equivalent zero.
 
 The allowed completeness policies are `best_effort` and `certified_count`.
 The allowed statuses are `not_certified`, `certified`,
@@ -503,19 +900,43 @@ Each point must include:
 - `susceptibility_tensor` as `[re, im]` pairs,
 - `susceptibility_tensor_provenance`, including whether the value is a full
   tensor or a drive-projected scalar response, and whether it represents
-  `delta_M / h_drive` or a normalized `delta_m / h_drive` response. Current
-  native response proxy artifacts must set
+  `delta_M / h_drive` or a normalized `delta_m / h_drive` response.
+  A native response writer with a valid `Ms` contract must set
+  `kind = "drive_projected_si_susceptibility"`,
+  `basis = "local_tangent_drive"`,
+  `response_quantity = "delta_M_over_h_drive"`,
+  `response_units = "dimensionless"`,
+  `dimensionless_si_susceptibility = true`,
+  `requires_ms_for_chi_si = false`,
+  `ms_factor_applied = true`,
+  `ms_source = "uniform"` or `"per_node_field"`, and
+  `normalization = "sum(Ms*response*conj(drive))/sum(abs(drive)^2)"`.
+  Writers without a valid `Ms` contract may only emit the proxy form with
+  `kind = "drive_projected_scalar"`, `basis = "local_tangent_drive"`,
   `response_quantity = "delta_m_over_h_drive"`,
   `response_units = "m/A"`, `dimensionless_si_susceptibility = false`,
-  `requires_ms_for_chi_si = true`, and `ms_factor_applied = false` until the
-  writer emits a true `delta_M / h_drive` SI susceptibility,
+  `requires_ms_for_chi_si = true`, `ms_factor_applied = false`, and
+  `normalization = "sum(response*conj(drive))/sum(abs(drive)^2)"`,
 - `absorbed_power_density`,
 - `absorbed_power_density_provenance`, including whether the value is a
-  physical `W/m^3` power density or a drive-projected proxy. Current native
-  response proxy artifacts must set `physical_power_density = false`,
+  physical `W/m^3` power density or a drive-projected proxy. A native response
+  writer with a valid `Ms` contract must set
+  `kind = "drive_projected_absorbed_power_density"`,
+  `basis = "local_tangent_drive"`, `physical_power_density = true`,
+  `units = "W/m^3"`, `requires_mu0_ms_factor = false`,
+  `mu0_ms_factor_applied = true`, `ms_source = "uniform"` or
+  `"per_node_field"`,
+  `normalization = "0.5*mu0*abs(omega)*abs(imag(sum(Ms*response*conj(drive))))/tangent_dof_count"`,
+  `volume_weighted = false`,
+  `spatial_reduction = "drive_projected_tangent_dof_average"`, and
+  `full_power_density = true`. Writers without a valid `Ms` contract may only
+  emit the proxy form with
+  `kind = "drive_projected_absorption_proxy"`,
+  `basis = "local_tangent_drive"`, `physical_power_density = false`,
   `units = "proxy_not_W_per_m3"`, `requires_mu0_ms_factor = true`, and
-  `ms_factor_applied = false` until the writer applies the `mu0 * Ms` factor
-  and passes the positive-absorption validation gate,
+  `ms_factor_applied = false`,
+  `normalization = "0.5*abs(omega)*abs(imag(sum(response*conj(drive))))/tangent_dof_count"`,
+  and `full_power_density = false`,
 - `residual_l2_norm`,
 - `relative_residual_l2_norm`,
 - `tangent_leakage` diagnostic status,
@@ -682,6 +1103,113 @@ The current no-demag Floquet phase-projection slice is identity-frame only:
 that cannot satisfy this identity-frame precondition must reject the request
 instead of applying scalar phase-only transport.
 
+## response/progress.v1.json and live stage progress
+
+`response/progress.v1.json` is the durable driven-response sweep checkpoint. It
+records artifact-level progress for completed, interrupted, cancelled,
+unavailable, or partially written frequency sweeps. It is not a time-step
+telemetry stream.
+
+Completed driven-response manifests must link this checkpoint through
+`artifacts.response_progress_v1_path` and
+`resources.response_progress_resource_key` using the canonical artifact path
+and v2 resource path documented in the manifest section above.
+
+Required fields:
+
+- `schema_version = "frequency_domain_sweep_progress.v1"`,
+- `status`,
+- `state`,
+- `complete`,
+- `total_frequency_points`,
+- `completed_frequency_points`,
+- `written_frequency_point_artifacts`,
+- `current_frequency_hz`,
+- optional `frequency_min_hz`,
+- optional `frequency_max_hz`,
+- `partial_artifacts_available`,
+- `latest_artifact_manifest_path`,
+- `missing_reason`,
+- `progress_json`.
+
+The `progress_json` field is a small serialized checkpoint object for backward
+compatibility and fallback readers. It is required for completed, interrupted,
+unavailable, and bounded-failure bundles, must parse as JSON, and must mirror
+the top-level `schema_version`, `state`, frequency work-unit counts,
+`partial_artifacts_available`, and `latest_artifact_manifest_path`. When it
+publishes `status`, `complete`, `current_frequency_hz`, `frequency_min_hz`,
+`frequency_max_hz`, or `demag_mode`, those values must match the top-level
+fields. Native response writers may also include
+iteration-level values such as:
+
+- `native_frequency_index`,
+- `native_iteration_count`,
+- `native_max_iterations_for_frequency`,
+- `native_current_frequency_solve_fraction`,
+- `native_residual_l2_norm`,
+- `native_relative_residual_l2_norm`,
+- `native_converged`.
+
+For native demag response bundles that are used as solved or bounded-failure
+periodic-airbox acceptance evidence, the iteration-level native fields above
+are required rather than optional. `native_max_iterations_for_frequency` is the
+current GMRES budget used for the active frequency point, and
+`progress_json` must mirror `native_iteration_count`,
+`native_max_iterations_for_frequency`,
+`native_current_frequency_solve_fraction`,
+`native_relative_residual_l2_norm`, and `native_converged` exactly. This keeps
+long single-frequency demag solves auditable by validators and by Control Room
+without inferring progress from generic stage `step/t/dt` telemetry.
+
+`native_current_frequency_solve_fraction` is the bounded `[0, 1]` progress
+estimate for the current Krylov solve. Live overall sweep progress may combine
+it with completed points as
+`(min(completed_frequency_points, native_frequency_index) +
+native_current_frequency_solve_fraction) / total_frequency_points`. This is a
+progress indicator only; it is not convergence evidence and does not replace
+the residual, `native_converged`, or final solver diagnostics.
+
+For native driven-response progress with demag enabled, the durable checkpoint
+must also expose `demag_mode` both at the top level and inside `progress_json`.
+Allowed current values are:
+
+- `periodic_airbox_k0`,
+- `floquet_airbox`,
+- `enabled`.
+
+Control Room live progress must prefer
+`/v2/sessions/current/simulation/stages/execution` for the active stage and use
+`response/progress.v1.json` only as the artifact checkpoint/fallback. For active
+`frequency_response` / `flat_frequency_response` stages, the CLI maps native
+`fem_frequency_response_progress` scalar updates into
+`stage_execution.stages[active].progress_percent`,
+`progress_label`, `progress_detail`, and `last_progress_unix_ms`. The footer and
+other live UI surfaces should render progress by frequency point, sweep range,
+current frequency, Krylov iteration/max-iteration budget, current-frequency
+solve fraction, and residual. They must not present
+generic `step`, `t`, or `dt` telemetry as the primary progress indicator for a
+frequency-domain solve.
+
+Durable progress checkpoints and native live scalar progress may publish
+`frequency_min_hz` and `frequency_max_hz` with the active point update so
+telemetry can show the sweep interval even before the durable response-sweep
+resource has refreshed. The initial `running` checkpoint should set
+`current_frequency_hz` to the first finite positive requested frequency and
+include `demag_mode` when the requested response uses demag.
+
+If a driven-response stage is active but no point has reported yet, the live UI
+may show indeterminate progress with the requested sweep range when available.
+Once solver progress arrives, `stage_execution.progress_*` is authoritative for
+the current point and iteration. Once artifacts are complete or interrupted,
+`response/progress.v1.json` is the durable source for completed/written point
+counts.
+
+If the v2 API must synthesize a progress resource from legacy sweep/manifest
+artifacts because `response/progress.v1.json` is absent, the synthesized
+`progress_json` must follow the same checkpoint mirror contract as the durable
+artifact. Fallback readers must not receive only a partial `{state, ...}`
+diagnostic string.
+
 ## response/cancel_requested.v1.json
 
 This artifact records the moment a driven-response sweep observed a cancellation
@@ -701,11 +1229,16 @@ Required fields:
 - `total_frequency_points`,
 - `completed_frequency_points`,
 - `written_frequency_point_artifacts`,
-- `partial_artifacts_available`.
+- `partial_artifacts_available`,
+- `progress_json`.
 
 `completed_frequency_points`, `written_frequency_point_artifacts`, and
 `partial_artifacts_available` must match the final interrupted
-`response/progress.v1.json` checkpoint. The API resource is
+`response/progress.v1.json` checkpoint. `progress_json` follows the same
+serialized checkpoint mirror contract as `response/progress.v1.json`, but its
+`status`, `state`, and `complete` values must mirror the cancel-requested
+artifact itself: `cancel_requested`, `cancel_requested`, and `false`.
+The API resource is
 `/v2/sessions/current/analysis/frequency-domain/response/cancel-requested.v1`,
 while the artifact path on disk is `response/cancel_requested.v1.json`.
 
@@ -891,10 +1424,27 @@ A response-derived peak mode is a driven-response postprocessing product, not
 an eigenmode. Its artifact must state:
 
 ```text
-source = driven_response_peak
+source = magnetic_response_sweep.v2
 canonical_product = frequency_response
 linked_frequency_index
 not_an_eigenmode = true
+```
+
+The artifact must also include:
+
+```text
+provenance.schema_version = "frequency_response_derived_mode_provenance.v1"
+provenance.source_artifact_path = "response/magnetic_response_sweep.v2.json"
+provenance.source_schema_version = "magnetic_response_sweep.v2"
+provenance.derivation_method = "select_max_response_amplitude"
+provenance.selection_metric = "max_response_amplitude" | "response_amplitude"
+provenance.selected_sweep_point_index
+provenance.selected_frequency_index
+provenance.selected_frequency_hz
+provenance.selected_response_amplitude
+provenance.selected_frequency_point_artifact_path
+provenance.selected_field_payload_path
+provenance.not_an_eigenmode = true
 ```
 
 UI and API surfaces may present it as a response peak shape or candidate mode,
@@ -939,6 +1489,9 @@ a periodic air gap, the side seam may be airbox-only and `magnetic = 0` is
 valid; validators must still require airbox coverage, opposed-normal
 boundary-face pairs, same-step `phi`/`H_demag` continuity, balanced normal `B`
 flux, and no artificial side magnetic charge.
+The domain counts are strict homogeneous-pair counts. A periodic node pair that
+connects a magnetic endpoint to an airbox endpoint is mixed-domain topology and
+must leave `magnetic + airbox < paired_node_count` so validators reject it.
 
 ## diagnostics/fem_static_pbc_demag_seams.v1.json
 
@@ -986,6 +1539,18 @@ Analyze UI must:
 - preserve `line_width_hz` from `dispersion.csv` as point-level modal linewidth
   in Hz when the column value is present, including selected-point summaries in
   Analysis Plots,
+- preserve `analytic_frequency_hz`, `relative_error`, and
+  `validation_geometry` from DE/BV low-k `dispersion.csv` rows; when analytic
+  frequencies are present, the shared dispersion chart model must expose them
+  as a reference/overlay series using the same `path_s` x-axis and frequency
+  unit scaling as the numerical branch,
+- show a compact analytic-reference summary in dispersion inspectors when those
+  columns are present, including the validated DE/BV geometries and maximum
+  published relative error,
+- show the declared
+  `frequency_domain/manifest.v1.json.validation.dispersion_validation` intent
+  in dispersion inspectors when present, including the analytic model, maximum
+  accepted `k`, frequency window, and DE/BV scenario-to-branch mapping,
 - propagate click selection as `{ branchId, sampleIndex, rawModeIndex }`,
 - load mode artifacts by `sample_index` and `raw_mode_index`.
 

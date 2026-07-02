@@ -6,6 +6,7 @@ import {
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
   DATA_FIELD_VECTOR_PATH,
 } from "@/kernel/api/apiPaths";
+import type { FrequencyDomainKPathMetadataResource } from "@/kernel/api/apiTypes";
 import type { SelectionRef } from "@/kernel/selection/selectionTypes";
 
 type ResourceStatus = "idle" | "loading" | "ready" | "stale" | "error";
@@ -35,6 +36,7 @@ export interface FrequencyDomainJsonArtifactLike {
 }
 
 export interface FrequencyDomainTextArtifactLike {
+  path_metadata?: FrequencyDomainKPathMetadataResource | null;
   status: string;
   text?: string | null;
 }
@@ -87,6 +89,7 @@ export interface EigenSpectrumPoint {
 }
 
 export interface EigenDispersionPoint {
+  analyticFrequencyHz: number | null;
   branchId: string | null;
   frequencyHz: number;
   linewidthHz: number | null;
@@ -95,9 +98,11 @@ export interface EigenDispersionPoint {
   overlap: number | null;
   pathS: number;
   rawModeIndex: number;
+  relativeError: number | null;
   residualNorm: number | null;
   sampleLabel?: string | null;
   sampleIndex: number;
+  validationGeometry: string | null;
 }
 
 export interface EigenBranchPoint {
@@ -282,6 +287,14 @@ function finiteInteger(value: unknown, fallback = 0): number {
 
 function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+export function frequencyDomainManifestPayload(manifestResource: unknown): unknown {
+  const resource = record(manifestResource);
+  const resultManifest = record(resource?.result_manifest);
+  return resultManifest && "payload" in resultManifest
+    ? resultManifest.payload
+    : manifestResource;
 }
 
 export function routeFrequencyDomainCalculationMode(
@@ -502,40 +515,78 @@ export function buildEigenDispersionChartModel(
   branchesModel?: EigenBranchesModel | null,
 ): FrequencyDomainChartBuildResult<EigenDispersionPoint> {
   const parsed = parseDispersionCsv(resource?.text ?? "");
-  const points = applyBranchIdentityFromBranches(
+  const pointsWithPathLabels = applyDispersionPathMetadataLabels(
     parsed.points,
+    resource?.path_metadata,
+  );
+  const points = applyBranchIdentityFromBranches(
+    pointsWithPathLabels,
     branchesModel?.branches ?? [],
   );
   const branchIds = new Set(points.map((point) => point.branchId ?? "raw"));
-  const frequencyScale = frequencyChartScale(
-    points.map((point) => point.frequencyHz),
-  );
-  const series = [...branchIds].map((branchId) => ({
-    id: `analysis.frequency-domain:eigen:dispersion:${branchId}`,
-    label: branchId === "raw" ? "Raw modes" : `Branch ${branchId}`,
-    points: points.flatMap((point, rowIndex) =>
-      (point.branchId ?? "raw") === branchId
+  const frequencyScale = frequencyChartScale([
+    ...points.map((point) => point.frequencyHz),
+    ...points.flatMap((point) =>
+      point.analyticFrequencyHz == null ? [] : [point.analyticFrequencyHz],
+    ),
+  ]);
+  const source = {
+    kind: "analysis.frequency_domain" as const,
+    resourceKey: FREQUENCY_DOMAIN_EIGEN_DISPERSION_RESOURCE_KEY,
+    tableId: "frequency-domain:eigen-dispersion",
+  };
+  const status = resource?.status === "ready" ? "ready" as const : "stale" as const;
+  const series = [...branchIds].flatMap((branchId) => {
+    const branchLabel = branchId === "raw" ? "Raw modes" : `Branch ${branchId}`;
+    const numericalSeries = {
+      id: `analysis.frequency-domain:eigen:dispersion:${branchId}`,
+      label: branchLabel,
+      points: points.flatMap((point, rowIndex) =>
+        (point.branchId ?? "raw") === branchId
+          ? [
+              {
+                ...(point.sampleLabel ? { label: point.sampleLabel } : {}),
+                ...(point.linewidthHz != null ? { linewidthHz: point.linewidthHz } : {}),
+                rowIndex,
+                x: point.pathS,
+                y: point.frequencyHz / frequencyScale.divisor,
+              },
+            ]
+          : [],
+      ),
+      quantity: "frequency",
+      source,
+      status,
+      unit: frequencyScale.unit,
+      xUnit: "rad/m",
+    };
+    const analyticPoints = points.flatMap((point, rowIndex) =>
+      (point.branchId ?? "raw") === branchId && point.analyticFrequencyHz != null
         ? [
             {
               ...(point.sampleLabel ? { label: point.sampleLabel } : {}),
-              ...(point.linewidthHz != null ? { linewidthHz: point.linewidthHz } : {}),
               rowIndex,
               x: point.pathS,
-              y: point.frequencyHz / frequencyScale.divisor,
+              y: point.analyticFrequencyHz / frequencyScale.divisor,
             },
           ]
         : [],
-    ),
-    quantity: "frequency",
-    source: {
-      kind: "analysis.frequency_domain" as const,
-      resourceKey: FREQUENCY_DOMAIN_EIGEN_DISPERSION_RESOURCE_KEY,
-      tableId: "frequency-domain:eigen-dispersion",
-    },
-    status: resource?.status === "ready" ? "ready" as const : "stale" as const,
-    unit: frequencyScale.unit,
-    xUnit: "rad/m",
-  }));
+    );
+    if (analyticPoints.length === 0) return [numericalSeries];
+    return [
+      numericalSeries,
+      {
+        id: `analysis.frequency-domain:eigen:dispersion:${branchId}:analytic`,
+        label: `${branchLabel} analytic`,
+        points: analyticPoints,
+        quantity: "analytic_frequency",
+        source,
+        status,
+        unit: frequencyScale.unit,
+        xUnit: "rad/m",
+      },
+    ];
+  });
   return {
     dataSourceVersion: "unknown",
     diagnostics: [],
@@ -867,9 +918,11 @@ export function buildFrequencyResponsePointSelectionRef(
 }
 
 export function buildFmrPeakTableModel({
+  manifestPayload,
   responseSweep,
   spectrum,
 }: {
+  manifestPayload?: unknown;
   responseSweep?: FrequencyDomainJsonArtifactLike | null;
   spectrum?: FrequencyDomainJsonArtifactLike | null;
 }): {
@@ -878,7 +931,7 @@ export function buildFmrPeakTableModel({
 } {
   const diagnostics: string[] = [];
   const modal = buildEigenSpectrumChartModel(spectrum);
-  const response = buildFrequencyResponseChartModel(responseSweep);
+  const response = buildFrequencyResponseChartModel(responseSweep, manifestPayload);
   const peaks: FmrPeakPoint[] = [
     ...modal.points.map((point) => ({
       absorbedPowerDensity: null,
@@ -923,13 +976,19 @@ export function buildFmrPeakTableModel({
 }
 
 export function buildFmrModalDrivenComparisonModel({
+  manifestPayload,
   responseSweep,
   spectrum,
 }: {
+  manifestPayload?: unknown;
   responseSweep?: FrequencyDomainJsonArtifactLike | null;
   spectrum?: FrequencyDomainJsonArtifactLike | null;
 }): FmrModalDrivenComparisonModel {
-  const peakModel = buildFmrPeakTableModel({ responseSweep, spectrum });
+  const peakModel = buildFmrPeakTableModel({
+    manifestPayload,
+    responseSweep,
+    spectrum,
+  });
   const modalPeaks = peakModel.peaks.filter((peak) => peak.source === "modal");
   const drivenPeaks = peakModel.peaks.filter(
     (peak) => peak.source === "driven_response",
@@ -1138,6 +1197,53 @@ function responseDataSourceVersion(
   return "unknown";
 }
 
+function applyDispersionPathMetadataLabels(
+  points: readonly EigenDispersionPoint[],
+  pathMetadata: FrequencyDomainKPathMetadataResource | null | undefined,
+): EigenDispersionPoint[] {
+  const labelsBySampleIndex =
+    dispersionControlPointLabelsBySampleIndex(pathMetadata);
+  if (labelsBySampleIndex.size === 0) return [...points];
+  return points.map((point) => {
+    if (point.sampleLabel) return point;
+    const label = labelsBySampleIndex.get(point.sampleIndex);
+    return label ? { ...point, sampleLabel: label } : point;
+  });
+}
+
+function dispersionControlPointLabelsBySampleIndex(
+  pathMetadata: FrequencyDomainKPathMetadataResource | null | undefined,
+): Map<number, string> {
+  const sampling = pathMetadata?.sampling;
+  const controlPoints = array(sampling?.points).map(record);
+  const samplesPerSegment = finiteNumberList(sampling?.samples_per_segment)
+    .map((sampleCount) => Math.max(0, Math.trunc(sampleCount)));
+  const labels = new Map<number, string>();
+  if (controlPoints.length === 0 || samplesPerSegment.length === 0) {
+    return labels;
+  }
+
+  const firstLabel = stringValue(controlPoints[0]?.label);
+  if (firstLabel) labels.set(0, firstLabel);
+
+  let sampleIndex = 0;
+  for (let segmentIndex = 0; segmentIndex < samplesPerSegment.length; segmentIndex += 1) {
+    const segmentSampleCount = samplesPerSegment[segmentIndex] ?? 0;
+    const targetControlPoint =
+      controlPoints[
+        (segmentIndex + 1) % controlPoints.length
+      ];
+    for (let offset = 1; offset <= segmentSampleCount; offset += 1) {
+      sampleIndex += 1;
+      if (offset !== segmentSampleCount) continue;
+      const label = stringValue(targetControlPoint?.label);
+      if (label) labels.set(sampleIndex, label);
+    }
+  }
+
+  return labels;
+}
+
 function applyBranchIdentityFromBranches(
   points: readonly EigenDispersionPoint[],
   branches: readonly EigenBranch[],
@@ -1193,6 +1299,9 @@ function parseDispersionCsv(csv: string): {
       continue;
     }
     points.push({
+      analyticFrequencyHz: finiteNumber(
+        row.analytic_frequency_hz ?? row.analyticFrequencyHz,
+      ),
       branchId: stringValue(row.branch_id ?? row.branchId),
       frequencyHz,
       linewidthHz: finiteNumber(
@@ -1205,9 +1314,13 @@ function parseDispersionCsv(csv: string): {
       overlap: finiteNumber(row.overlap_score ?? row.overlapScore ?? row.overlap),
       pathS,
       rawModeIndex: finiteInteger(row.raw_mode_index ?? row.mode_index),
+      relativeError: finiteNumber(row.relative_error ?? row.relativeError),
       residualNorm: finiteNumber(row.residual_norm),
       sampleLabel: stringValue(row.label ?? row.sample_label ?? row.sampleLabel),
       sampleIndex: finiteInteger(row.sample_index),
+      validationGeometry: stringValue(
+        row.validation_geometry ?? row.validationGeometry,
+      ),
     });
   }
 

@@ -41,6 +41,7 @@ import {
   buildFrequencyResponsePointSelectionRef,
   buildFmrModalDrivenComparisonModel,
   buildFmrPeakTableModel,
+  frequencyDomainManifestPayload,
   responseFieldResourcesFromManifest,
   routeFrequencyDomainCalculationMode,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
@@ -571,7 +572,7 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
     },
   );
   const data = manifest.data;
-  const manifestPayload = data?.result_manifest?.payload;
+  const manifestPayload = frequencyDomainManifestPayload(data);
   const manifestPhysics = record(record(manifestPayload)?.physics);
   const spectrumModel = buildEigenSpectrumChartModel(spectrum.data);
   const branchesModel = buildEigenBranchesModel(branches.data);
@@ -579,14 +580,19 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
     dispersion.data,
     branchesModel,
   );
-  const responseModel = buildFrequencyResponseChartModel(responseSweep.data);
+  const responseModel = buildFrequencyResponseChartModel(
+    responseSweep.data,
+    manifestPayload,
+  );
   const responseFieldResources =
     responseFieldResourcesFromManifest(manifestPayload);
   const fmrPeakModel = buildFmrPeakTableModel({
+    manifestPayload,
     responseSweep: responseSweep.data,
     spectrum: spectrum.data,
   });
   const fmrComparisonModel = buildFmrModalDrivenComparisonModel({
+    manifestPayload,
     responseSweep: responseSweep.data,
     spectrum: spectrum.data,
   });

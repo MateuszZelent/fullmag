@@ -24,6 +24,9 @@ use crate::types::*;
 
 // ── helpers local to the orchestrator ────────────────────────────────────────
 
+const FEM_FREQUENCY_RESPONSE_PROGRESS_KEY: &str = "fem_frequency_response_progress";
+const FREQUENCY_RESPONSE_TERMINAL_BAR_WIDTH: usize = 16;
+
 fn interactive_dense_ram_budget_bytes(available_ram: u64) -> u64 {
     let available_budget = (available_ram as f64 * 0.8) as u64;
     let default_interactive_budget = 12 * 1024 * 1024 * 1024_u64;
@@ -337,7 +340,11 @@ impl Default for LiveProgressCadence {
 
 impl LiveProgressCadence {
     fn should_publish(&mut self, update: &fullmag_runner::StepUpdate) -> bool {
-        if update.stats.step <= 1 || update.finished || has_heavy_live_payload(update) {
+        if update.stats.step <= 1
+            || update.finished
+            || has_heavy_live_payload(update)
+            || step_update_has_frequency_response_progress(update)
+        {
             self.last_publish_at = Some(Instant::now());
             return true;
         }
@@ -350,11 +357,14 @@ impl LiveProgressCadence {
         should_publish
     }
 
-    fn should_log(&mut self, step: u64, finished: bool) -> bool {
+    fn should_log(&mut self, update: &fullmag_runner::StepUpdate) -> bool {
         // Always log step 1 (simulation started) and the final step.
         // All other steps go through the time gate so fast GPU runs don't flood
         // the terminal with milestone-based lines.
-        if finished || step <= 1 {
+        if update.finished
+            || update.stats.step <= 1
+            || step_update_has_frequency_response_progress(update)
+        {
             self.last_log_at = Some(Instant::now());
             return true;
         }
@@ -375,6 +385,18 @@ fn has_heavy_live_payload(update: &fullmag_runner::StepUpdate) -> bool {
             .cached_preview_fields
             .as_ref()
             .is_some_and(|fields| !fields.is_empty())
+}
+
+fn step_update_has_frequency_response_progress(update: &fullmag_runner::StepUpdate) -> bool {
+    update
+        .stats
+        .per_object_scalars
+        .get(FEM_FREQUENCY_RESPONSE_PROGRESS_KEY)
+        .is_some_and(|progress| {
+            progress
+                .get("total_frequency_count")
+                .is_some_and(|value| value.is_finite() && *value > 0.0)
+        })
 }
 
 fn publish_live_step_update(
@@ -497,6 +519,8 @@ fn apply_live_step_update_to_workspace_state(
     update: &fullmag_runner::StepUpdate,
     include_scalar_row: bool,
 ) {
+    let mut update = update.clone();
+    preserve_frequency_response_progress_scalars_from_live_state(state, &mut update);
     let cached_preview_count = update
         .cached_preview_fields
         .as_ref()
@@ -506,16 +530,16 @@ fn apply_live_step_update_to_workspace_state(
         eprintln!(
             "[fullmag-cli] live step ingest step={} legacy_mag_len={} preview_field={} preview_quantity={} preview_len={} cached_preview_fields={} cached_m_preview_len={} scalar_row_due={} finished={}",
             update.stats.step,
-            live_step_ingest_legacy_mag_len(update),
+            live_step_ingest_legacy_mag_len(&update),
             update.preview_field.is_some(),
             update
                 .preview_field
                 .as_ref()
                 .map(|field| field.quantity.as_str())
                 .unwrap_or("-"),
-            live_step_ingest_preview_len(update),
+            live_step_ingest_preview_len(&update),
             cached_preview_count,
-            live_step_ingest_cached_m_preview_len(update),
+            live_step_ingest_cached_m_preview_len(&update),
             update.scalar_row_due,
             update.finished,
         );
@@ -525,22 +549,220 @@ fn apply_live_step_update_to_workspace_state(
     } else {
         "running".to_string()
     };
-    state.run = running_run_manifest_from_update(run_id, session_id, artifact_dir, update);
+    state.run = running_run_manifest_from_update(run_id, session_id, artifact_dir, &update);
     let previous_step = state.live_state.latest_step.clone();
-    state.live_state = live_state_manifest_from_update(update);
+    state.live_state = live_state_manifest_from_update(&update);
     if state.live_state.latest_step.magnetization.is_none()
-        && !step_update_has_magnetization_preview(update)
+        && !step_update_has_magnetization_preview(&update)
     {
         state.live_state.latest_step.magnetization = previous_step.magnetization;
     }
     if state.live_state.latest_step.fem_mesh.is_none() {
         state.live_state.latest_step.fem_mesh = previous_step.fem_mesh;
     }
-    merge_cached_preview_fields_from_update(state, update);
-    apply_hysteresis_progress_to_stage_execution(state, update);
-    apply_fem_eigen_progress_to_stage_execution(state, update);
+    merge_cached_preview_fields_from_update(state, &update);
+    apply_hysteresis_progress_to_stage_execution(state, &update);
+    apply_fem_eigen_progress_to_stage_execution(state, &update);
+    apply_fem_frequency_response_progress_to_stage_execution(state, &update);
     if include_scalar_row {
-        set_latest_scalar_row_if_due(state, update);
+        set_latest_scalar_row_if_due(state, &update);
+    }
+}
+
+fn preserve_frequency_response_progress_scalars_from_live_state(
+    state: &LocalLiveWorkspaceState,
+    update: &mut fullmag_runner::StepUpdate,
+) {
+    if update
+        .stats
+        .per_object_scalars
+        .contains_key(FEM_FREQUENCY_RESPONSE_PROGRESS_KEY)
+    {
+        return;
+    }
+    if !active_stage_kind_is_frequency_response(state) {
+        return;
+    }
+    let Some(previous) = state
+        .live_state
+        .latest_step
+        .per_object_scalars
+        .get(FEM_FREQUENCY_RESPONSE_PROGRESS_KEY)
+        .cloned()
+    else {
+        return;
+    };
+    update
+        .stats
+        .per_object_scalars
+        .insert(FEM_FREQUENCY_RESPONSE_PROGRESS_KEY.to_string(), previous);
+}
+
+fn active_stage_kind_is_frequency_response(state: &LocalLiveWorkspaceState) -> bool {
+    state
+        .stage_execution
+        .as_ref()
+        .and_then(|stage_execution| stage_execution.active_stage_kind.as_deref())
+        .is_some_and(is_frequency_response_stage_kind)
+}
+
+fn is_frequency_response_stage_kind(kind: &str) -> bool {
+    matches!(kind, "frequency_response" | "flat_frequency_response")
+}
+
+fn preserve_frequency_response_progress_scalars_from_previous_update(
+    previous: &fullmag_runner::StepUpdate,
+    update: &mut fullmag_runner::StepUpdate,
+) {
+    if update
+        .stats
+        .per_object_scalars
+        .contains_key(FEM_FREQUENCY_RESPONSE_PROGRESS_KEY)
+    {
+        return;
+    }
+    let Some(previous_progress) = previous
+        .stats
+        .per_object_scalars
+        .get(FEM_FREQUENCY_RESPONSE_PROGRESS_KEY)
+        .cloned()
+    else {
+        return;
+    };
+    update.stats.per_object_scalars.insert(
+        FEM_FREQUENCY_RESPONSE_PROGRESS_KEY.to_string(),
+        previous_progress,
+    );
+}
+
+fn apply_fem_frequency_response_progress_to_stage_execution(
+    state: &mut LocalLiveWorkspaceState,
+    update: &fullmag_runner::StepUpdate,
+) {
+    let Some(progress) = update
+        .stats
+        .per_object_scalars
+        .get(FEM_FREQUENCY_RESPONSE_PROGRESS_KEY)
+    else {
+        return;
+    };
+    let Some(stage_execution) = state.stage_execution.as_mut() else {
+        return;
+    };
+    let Some(active_index) = stage_execution.active_stage_index else {
+        return;
+    };
+    let Some(stage) = stage_execution.stages.get_mut(active_index) else {
+        return;
+    };
+
+    let percent = progress
+        .get("percent")
+        .copied()
+        .filter(|value| value.is_finite())
+        .map(|value| value.clamp(0.0, 100.0));
+    if let Some(percent) = percent {
+        stage.progress_percent = Some(percent);
+    }
+    stage.progress_label = Some("solving frequency point".to_string());
+    stage.progress_detail = Some(fem_frequency_response_progress_detail(progress));
+    stage.last_progress_unix_ms = Some(current_unix_millis_u64());
+}
+
+fn fem_frequency_response_progress_detail(
+    progress: &std::collections::HashMap<String, f64>,
+) -> String {
+    let completed = progress
+        .get("completed_frequency_count")
+        .copied()
+        .unwrap_or(0.0) as u64;
+    let total = progress
+        .get("total_frequency_count")
+        .copied()
+        .unwrap_or(0.0) as u64;
+    let current = progress
+        .get("frequency_index")
+        .copied()
+        .map(|index| index.max(0.0) as u64 + 1)
+        .unwrap_or(completed)
+        .min(total.max(1));
+    let frequency_hz = progress.get("frequency_hz").copied().unwrap_or(0.0);
+    let mut detail = String::new();
+    if let Some(demag) = fem_frequency_response_demag_mode(progress) {
+        detail.push_str("demag=");
+        detail.push_str(demag);
+        detail.push_str("; ");
+    }
+    if let Some((min_hz, max_hz)) = fem_frequency_response_range_hz(progress) {
+        detail.push_str(&format!(
+            "range={:.6}-{:.6} GHz; ",
+            min_hz / 1.0e9,
+            max_hz / 1.0e9
+        ));
+    }
+    detail.push_str(&format!(
+        "frequency point {current}/{total}; completed={completed}; f={:.6} GHz",
+        frequency_hz / 1.0e9
+    ));
+    if let Some(iteration) = progress.get("iteration").copied() {
+        if let Some(max_iterations) = progress.get("max_iterations_for_frequency").copied() {
+            detail.push_str(&format!(
+                "; GMRES iteration={}/{}",
+                iteration as u64, max_iterations as u64
+            ));
+        } else {
+            detail.push_str(&format!("; GMRES iteration={}", iteration as u64));
+        }
+    }
+    if let Some(solve_fraction) = progress.get("current_frequency_solve_fraction").copied() {
+        if solve_fraction.is_finite() {
+            detail.push_str(&format!(
+                "; current frequency solve={:.0}%",
+                solve_fraction.clamp(0.0, 1.0) * 100.0
+            ));
+        }
+    }
+    if let Some(residual) = progress.get("relative_residual_l2_norm").copied() {
+        detail.push_str(&format!("; relative residual={residual:.3e}"));
+    }
+    if progress.get("converged").is_some_and(|value| *value > 0.0) {
+        detail.push_str("; converged=true");
+    }
+    detail
+}
+
+fn fem_frequency_response_demag_mode(
+    progress: &std::collections::HashMap<String, f64>,
+) -> Option<&'static str> {
+    if progress
+        .get("demag_periodic_airbox_k0")
+        .is_some_and(|value| *value > 0.0)
+    {
+        Some("periodic_airbox_k0")
+    } else if progress
+        .get("demag_floquet_airbox")
+        .is_some_and(|value| *value > 0.0)
+    {
+        Some("floquet_airbox")
+    } else if progress
+        .get("demag_enabled")
+        .is_some_and(|value| *value > 0.0)
+    {
+        Some("enabled")
+    } else {
+        None
+    }
+}
+
+fn fem_frequency_response_range_hz(
+    progress: &std::collections::HashMap<String, f64>,
+) -> Option<(f64, f64)> {
+    let min_hz = progress.get("frequency_min_hz").copied()?;
+    let max_hz = progress.get("frequency_max_hz").copied()?;
+    if min_hz.is_finite() && max_hz.is_finite() && min_hz > 0.0 && max_hz >= min_hz {
+        Some((min_hz, max_hz))
+    } else {
+        None
     }
 }
 
@@ -768,6 +990,94 @@ fn append_detailed_fem_step_profile(line: &mut String, stats: &fullmag_runner::S
     ));
 }
 
+fn frequency_response_step_progress_segment(stats: &fullmag_runner::StepStats) -> Option<String> {
+    let Some(progress) = stats
+        .per_object_scalars
+        .get(FEM_FREQUENCY_RESPONSE_PROGRESS_KEY)
+    else {
+        return None;
+    };
+    let completed = progress
+        .get("completed_frequency_count")
+        .copied()
+        .unwrap_or(0.0) as u64;
+    let total = progress
+        .get("total_frequency_count")
+        .copied()
+        .unwrap_or(0.0) as u64;
+    let current = progress
+        .get("frequency_index")
+        .copied()
+        .map(|index| index.max(0.0) as u64 + 1)
+        .unwrap_or(completed)
+        .min(total.max(1));
+    let percent = progress
+        .get("percent")
+        .copied()
+        .filter(|value| value.is_finite())
+        .map(|value| value.clamp(0.0, 100.0));
+    let frequency_hz = progress.get("frequency_hz").copied().unwrap_or(0.0);
+    let mut segment = String::from("freq[");
+    if let Some(demag) = fem_frequency_response_demag_mode(progress) {
+        segment.push_str("demag=");
+        segment.push_str(demag);
+        segment.push(' ');
+    }
+    segment.push_str(&format!("solution {current}/{total}"));
+    if let Some(percent) = percent {
+        segment.push(' ');
+        segment.push_str(&frequency_response_terminal_progress_bar(percent));
+        segment.push_str(&format!(" {:.0}%", percent));
+    }
+    if let Some((min_hz, max_hz)) = fem_frequency_response_range_hz(progress) {
+        segment.push_str(&format!(
+            " range={:.6}-{:.6}GHz",
+            min_hz / 1.0e9,
+            max_hz / 1.0e9
+        ));
+    }
+    segment.push_str(&format!(" f={:.6} GHz", frequency_hz / 1.0e9));
+    if let Some(iteration) = progress.get("iteration").copied() {
+        if let Some(max_iterations) = progress.get("max_iterations_for_frequency").copied() {
+            segment.push_str(&format!(
+                " GMRES={}/{}",
+                iteration as u64, max_iterations as u64
+            ));
+        } else {
+            segment.push_str(&format!(" GMRES={}", iteration as u64));
+        }
+    }
+    if let Some(solve_fraction) = progress.get("current_frequency_solve_fraction").copied() {
+        if solve_fraction.is_finite() {
+            segment.push_str(&format!(
+                " solve={:.0}%",
+                solve_fraction.clamp(0.0, 1.0) * 100.0
+            ));
+        }
+    }
+    if let Some(residual) = progress.get("relative_residual_l2_norm").copied() {
+        segment.push_str(&format!(" relres={residual:.3e}"));
+    }
+    segment.push(']');
+    Some(segment)
+}
+
+fn append_frequency_response_step_progress(line: &mut String, stats: &fullmag_runner::StepStats) {
+    if let Some(segment) = frequency_response_step_progress_segment(stats) {
+        line.push_str("  ");
+        line.push_str(&segment);
+    }
+}
+
+fn frequency_response_terminal_progress_bar(percent: f64) -> String {
+    let clamped = percent.clamp(0.0, 100.0);
+    let filled =
+        ((clamped / 100.0) * FREQUENCY_RESPONSE_TERMINAL_BAR_WIDTH as f64).round() as usize;
+    let filled = filled.min(FREQUENCY_RESPONSE_TERMINAL_BAR_WIDTH);
+    let empty = FREQUENCY_RESPONSE_TERMINAL_BAR_WIDTH - filled;
+    format!("[{}{}]", "#".repeat(filled), "-".repeat(empty))
+}
+
 fn format_stage_progress_line(
     prefix: &str,
     stats: &fullmag_runner::StepStats,
@@ -776,6 +1086,12 @@ fn format_stage_progress_line(
     hysteresis_field_m_t: Option<f64>,
 ) -> String {
     let wall_ms = stats.wall_time_ns as f64 / 1e6;
+    if let Some(progress) = frequency_response_step_progress_segment(stats) {
+        let heartbeat = heartbeat_age
+            .map(|age| format!("  heartbeat idle={:.1}s", age.as_secs_f64()))
+            .unwrap_or_default();
+        return format!("{prefix}  frequency sweep  {progress}{heartbeat}  [{wall_ms:.0}ms]");
+    }
     let torque_t = if stats.max_torque_T > 0.0 {
         stats.max_torque_T
     } else {
@@ -796,6 +1112,7 @@ fn format_stage_progress_line(
             age.as_secs_f64(),
             wall_ms,
         );
+        append_frequency_response_step_progress(&mut line, stats);
         append_detailed_fem_step_profile(&mut line, stats);
         line
     } else {
@@ -803,6 +1120,7 @@ fn format_stage_progress_line(
             "{prefix}  step {:>6}  t={:.4e}  dt={:.3e}  max_torque[T]={:.4e}  E_total={:.4e}  |H_eff|={:.4e}{hysteresis_field}  [{:.0}ms]",
             stats.step, stats.time, stats.dt, torque_t, stats.e_total, stats.max_h_eff, wall_ms,
         );
+        append_frequency_response_step_progress(&mut line, stats);
         append_detailed_fem_step_profile(&mut line, stats);
         line
     }
@@ -876,66 +1194,60 @@ impl StageProgressHeartbeat {
                 "fullmag-stage-heartbeat-{}",
                 run_id.chars().take(24).collect::<String>()
             ))
-            .spawn(move || {
-                loop {
-                    match stop_rx.recv_timeout(LIVE_PROGRESS_PUBLISH_INTERVAL) {
-                        Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                        Err(mpsc::RecvTimeoutError::Timeout) => {}
-                    }
-                    let snapshot = match thread_snapshot.lock() {
-                        Ok(snapshot) => snapshot.clone(),
-                        Err(_) => break,
-                    };
-                    if snapshot.latest_update.finished
-                        || snapshot.last_step_at.elapsed() < LIVE_PROGRESS_PUBLISH_INTERVAL
-                    {
-                        continue;
-                    }
+            .spawn(move || loop {
+                match stop_rx.recv_timeout(LIVE_PROGRESS_PUBLISH_INTERVAL) {
+                    Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                }
+                let snapshot = match thread_snapshot.lock() {
+                    Ok(snapshot) => snapshot.clone(),
+                    Err(_) => break,
+                };
+                if snapshot.latest_update.finished
+                    || snapshot.last_step_at.elapsed() < LIVE_PROGRESS_PUBLISH_INTERVAL
+                {
+                    continue;
+                }
 
-                    let mut heartbeat_update = snapshot.latest_update.clone();
-                    heartbeat_update.stats.wall_time_ns = heartbeat_update
-                        .stats
-                        .wall_time_ns
-                        .max(saturating_nanos_u64(snapshot.stage_started_at.elapsed()));
-                    let idle_for = snapshot.last_step_at.elapsed();
-                    let terminal_line = format_stage_progress_line(
-                        &terminal_prefix,
-                        &heartbeat_update.stats,
-                        torque_mode,
-                        Some(idle_for),
-                        heartbeat_update.hysteresis_field_m_t,
+                let mut heartbeat_update = snapshot.latest_update.clone();
+                heartbeat_update.stats.wall_time_ns = heartbeat_update
+                    .stats
+                    .wall_time_ns
+                    .max(saturating_nanos_u64(snapshot.stage_started_at.elapsed()));
+                let idle_for = snapshot.last_step_at.elapsed();
+                let terminal_line = format_stage_progress_line(
+                    &terminal_prefix,
+                    &heartbeat_update.stats,
+                    torque_mode,
+                    Some(idle_for),
+                    heartbeat_update.hysteresis_field_m_t,
+                );
+                eprintln!("{terminal_line}");
+                let heartbeat_message =
+                    format_stage_heartbeat_message(&ui_label, &heartbeat_update, idle_for);
+                live_workspace.update(|state| {
+                    apply_live_step_update_to_workspace_state(
+                        state,
+                        &run_id,
+                        &session_id,
+                        &artifact_dir,
+                        &heartbeat_update,
+                        false,
                     );
-                    eprintln!("{terminal_line}");
-                    let heartbeat_message = format!(
-                        "{STAGE_HEARTBEAT_LOG_PREFIX}{ui_label}: last completed step {} at t={:.4e}, waiting {:.1}s for the next solver update",
-                        heartbeat_update.stats.step,
-                        heartbeat_update.stats.time,
-                        idle_for.as_secs_f64(),
-                    );
-                    live_workspace.update(|state| {
-                        state.session.status = "running".to_string();
-                        state.run = running_run_manifest_from_update(
-                            &run_id,
-                            &session_id,
-                            &artifact_dir,
-                            &heartbeat_update,
-                        );
-                        state.live_state = live_state_manifest_from_update(&heartbeat_update);
-                        if let Some(stage_execution) = state.stage_execution.as_mut() {
-                            if let Some(active_index) = stage_execution.active_stage_index {
-                                if let Some(stage) = stage_execution.stages.get_mut(active_index) {
-                                    apply_stage_heartbeat_progress(stage, idle_for);
-                                }
+                    if let Some(stage_execution) = state.stage_execution.as_mut() {
+                        if let Some(active_index) = stage_execution.active_stage_index {
+                            if let Some(stage) = stage_execution.stages.get_mut(active_index) {
+                                apply_stage_heartbeat_progress(stage, idle_for);
                             }
                         }
-                        upsert_engine_log_tail(
-                            &mut state.engine_log,
-                            "info",
-                            STAGE_HEARTBEAT_LOG_PREFIX,
-                            heartbeat_message,
-                        );
-                    });
-                }
+                    }
+                    upsert_engine_log_tail(
+                        &mut state.engine_log,
+                        "info",
+                        STAGE_HEARTBEAT_LOG_PREFIX,
+                        heartbeat_message,
+                    );
+                });
             })
             .expect("stage heartbeat thread should spawn");
         Self {
@@ -947,7 +1259,12 @@ impl StageProgressHeartbeat {
 
     fn record(&mut self, update: &fullmag_runner::StepUpdate) {
         if let Ok(mut snapshot) = self.snapshot.lock() {
-            snapshot.latest_update = update.clone();
+            let mut update = update.clone();
+            preserve_frequency_response_progress_scalars_from_previous_update(
+                &snapshot.latest_update,
+                &mut update,
+            );
+            snapshot.latest_update = update;
             snapshot.last_step_at = Instant::now();
         }
     }
@@ -960,6 +1277,24 @@ impl StageProgressHeartbeat {
             let _ = join_handle.join();
         }
     }
+}
+
+fn format_stage_heartbeat_message(
+    ui_label: &str,
+    update: &fullmag_runner::StepUpdate,
+    idle_for: Duration,
+) -> String {
+    let mut message = format!(
+        "{STAGE_HEARTBEAT_LOG_PREFIX}{ui_label}: last completed step {} at t={:.4e}, waiting {:.1}s for the next solver update",
+        update.stats.step,
+        update.stats.time,
+        idle_for.as_secs_f64(),
+    );
+    if let Some(progress) = frequency_response_step_progress_segment(&update.stats) {
+        message.push_str("; ");
+        message.push_str(&progress);
+    }
+    message
 }
 
 impl Drop for StageProgressHeartbeat {
@@ -3410,14 +3745,14 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
                 }
                 if live_cadence.should_publish(&adjusted) {
                     live_workspace.update(|state| {
-                        state.session.status = "running".to_string();
-                        state.run = running_run_manifest_from_update(
+                        apply_live_step_update_to_workspace_state(
+                            state,
                             run_id,
                             session_id,
                             artifact_dir,
                             &adjusted,
+                            true,
                         );
-                        state.live_state = live_state_manifest_from_update(&adjusted);
                         state.metadata =
                             Some(current_live_metadata(&stage.ir, execution_plan, "running"));
                         state.mesh_workspace = current_mesh_workspace(
@@ -3427,7 +3762,6 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
                             current_mesh_quality.as_ref(),
                             current_mesh_history,
                         );
-                        set_latest_scalar_row_if_due(state, &adjusted);
                     });
                 }
                 fullmag_runner::StepAction::Continue
@@ -6049,7 +6383,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             return fullmag_runner::StepAction::Continue;
                         }
                         let s = &adjusted.stats;
-                        if live_cadence.should_log(s.step, adjusted.finished) {
+                        if live_cadence.should_log(&adjusted) {
                             eprintln!(
                                 "{}",
                                 format_stage_progress_line(
@@ -6110,7 +6444,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             heartbeat.record(&adjusted);
                         }
                         drain_solver_profile_commands(&display_selection_handle, &live_workspace);
-                        if live_cadence.should_log(s.step, adjusted.finished) {
+                        if live_cadence.should_log(&adjusted) {
                             eprintln!(
                                 "{}",
                                 format_stage_progress_line(
@@ -6124,21 +6458,14 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         }
 
                         if live_cadence.should_publish(&adjusted) {
-                            live_workspace.update(|state| {
-                                state.session.status = if adjusted.finished {
-                                    "completed".to_string()
-                                } else {
-                                    "running".to_string()
-                                };
-                                state.run = running_run_manifest_from_update(
-                                    &run_id,
-                                    &session_id,
-                                    &artifact_dir,
-                                    &adjusted,
-                                );
-                                state.live_state = live_state_manifest_from_update(&adjusted);
-                                set_latest_scalar_row_if_due(state, &adjusted);
-                            });
+                            publish_live_step_update(
+                                &live_workspace,
+                                &run_id,
+                                &session_id,
+                                &artifact_dir,
+                                &adjusted,
+                                true,
+                            );
                         }
                         record_solver_profile_step_with_orchestration(
                             &live_workspace,
@@ -7197,7 +7524,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             return fullmag_runner::StepAction::Continue;
                         }
                         let s = &adjusted.stats;
-                        if live_cadence.should_log(s.step, adjusted.finished) {
+                        if live_cadence.should_log(&adjusted) {
                             eprintln!(
                                 "{}",
                                 format_stage_progress_line(
@@ -7318,7 +7645,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 heartbeat.record(&adjusted);
                             }
                             drain_solver_profile_commands(&running_control, &live_workspace);
-                            if live_cadence.should_log(s.step, adjusted.finished) {
+                            if live_cadence.should_log(&adjusted) {
                                 eprintln!(
                                     "{}",
                                     format_stage_progress_line(
@@ -7333,15 +7660,14 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
 
                             if live_cadence.should_publish(&adjusted) {
                                 live_workspace.update(|state| {
-                                    state.session.status = "running".to_string();
-                                    state.run = running_run_manifest_from_update(
+                                    apply_live_step_update_to_workspace_state(
+                                        state,
                                         &run_id,
                                         &session_id,
                                         &artifact_dir,
                                         &adjusted,
+                                        true,
                                     );
-                                    state.live_state = live_state_manifest_from_update(&adjusted);
-                                    set_latest_scalar_row_if_due(state, &adjusted);
                                 });
                             }
 
@@ -8225,15 +8551,17 @@ mod tests {
         discard_active_paused_stage_execution, execute_synthetic_stage,
         fem_gpu_memory_preflight_message, fem_interactive_dense_ram_estimate,
         fem_live_mesh_payload_and_initial_magnetization, fem_mesh_payload_from_backend_plan,
-        has_heavy_live_payload, initial_live_state_manifest_from_backend_plan,
-        initial_magnetization_state_override, initial_step_update,
-        interactive_session_should_stay_alive, live_step_ingest_cached_m_preview_len,
-        live_step_ingest_legacy_mag_len, live_step_ingest_preview_len,
-        mesh_build_pipeline_status_json, scripted_stage_execution_state,
-        stage_allows_sampled_continuation_initial_state, user_cancelled_stage_completion,
+        format_stage_heartbeat_message, format_stage_progress_line, has_heavy_live_payload,
+        initial_live_state_manifest_from_backend_plan, initial_magnetization_state_override,
+        initial_step_update, interactive_session_should_stay_alive,
+        live_step_ingest_cached_m_preview_len, live_step_ingest_legacy_mag_len,
+        live_step_ingest_preview_len, mesh_build_pipeline_status_json,
+        scripted_stage_execution_state, stage_allows_sampled_continuation_initial_state,
+        step_update_has_frequency_response_progress, user_cancelled_stage_completion,
         wait_for_solve_prompt, wait_for_solve_should_block, wait_for_solve_supported,
         ActiveSequenceState, LiveProgressCadence, LoadedInitialMagnetizationState,
-        SceneProblemPatch, WaitForSolveCommandAction, LIVE_PROGRESS_PUBLISH_INTERVAL,
+        SceneProblemPatch, WaitForSolveCommandAction, FEM_FREQUENCY_RESPONSE_PROGRESS_KEY,
+        LIVE_PROGRESS_PUBLISH_INTERVAL,
     };
     use crate::args::ScriptCli;
     use crate::live_workspace::bootstrap_live_state;
@@ -8509,6 +8837,262 @@ mod tests {
     }
 
     #[test]
+    fn frequency_response_progress_updates_stage_execution() {
+        let mut state = test_workspace_state();
+        state.stage_execution = Some(CurrentLiveStageExecutionState {
+            total_stages: 1,
+            completed_stage_indexes: Vec::new(),
+            stages: vec![CurrentLiveStageExecutionRecord {
+                status: "running".to_string(),
+                ..CurrentLiveStageExecutionRecord::default()
+            }],
+            stage_statuses: vec!["running".to_string()],
+            active_stage_index: Some(0),
+            active_stage_kind: Some("flat_frequency_response".to_string()),
+            runtime_state: "running".to_string(),
+        });
+        let mut progress = std::collections::HashMap::new();
+        progress.insert("percent".to_string(), 25.0);
+        progress.insert("completed_frequency_count".to_string(), 1.0);
+        progress.insert("total_frequency_count".to_string(), 4.0);
+        progress.insert("frequency_hz".to_string(), 2.75e9);
+        progress.insert("frequency_min_hz".to_string(), 2.0e9);
+        progress.insert("frequency_max_hz".to_string(), 5.0e9);
+        progress.insert("iteration".to_string(), 384.0);
+        progress.insert("relative_residual_l2_norm".to_string(), 8.5e-4);
+        let mut update = test_step_update(1);
+        update
+            .stats
+            .per_object_scalars
+            .insert("fem_frequency_response_progress".to_string(), progress);
+
+        apply_live_step_update_to_workspace_state(
+            &mut state,
+            "run-test",
+            "session-test",
+            PathBuf::from("/tmp/artifacts").as_path(),
+            &update,
+            false,
+        );
+
+        let stage = &state.stage_execution.as_ref().unwrap().stages[0];
+        assert_eq!(stage.progress_percent, Some(25.0));
+        assert_eq!(
+            stage.progress_label.as_deref(),
+            Some("solving frequency point")
+        );
+        let detail = stage.progress_detail.as_deref().unwrap_or_default();
+        assert!(detail.contains("frequency point 1/4"));
+        assert!(detail.contains("range=2.000000-5.000000 GHz"));
+        assert!(detail.contains("f=2.750000 GHz"));
+        assert!(detail.contains("GMRES iteration=384"));
+        assert!(detail.contains("relative residual=8.500e-4"));
+        assert!(stage.last_progress_unix_ms.is_some());
+    }
+
+    #[test]
+    fn frequency_response_progress_survives_generic_live_update() {
+        let mut state = test_workspace_state();
+        state.stage_execution = Some(CurrentLiveStageExecutionState {
+            total_stages: 1,
+            completed_stage_indexes: Vec::new(),
+            stages: vec![CurrentLiveStageExecutionRecord {
+                status: "running".to_string(),
+                ..CurrentLiveStageExecutionRecord::default()
+            }],
+            stage_statuses: vec!["running".to_string()],
+            active_stage_index: Some(0),
+            active_stage_kind: Some("flat_frequency_response".to_string()),
+            runtime_state: "running".to_string(),
+        });
+        let mut progress = std::collections::HashMap::new();
+        progress.insert("percent".to_string(), 14.0);
+        progress.insert("frequency_index".to_string(), 1.0);
+        progress.insert("completed_frequency_count".to_string(), 1.0);
+        progress.insert("total_frequency_count".to_string(), 7.0);
+        progress.insert("frequency_hz".to_string(), 3.0e9);
+        progress.insert("frequency_min_hz".to_string(), 2.0e9);
+        progress.insert("frequency_max_hz".to_string(), 5.0e9);
+        progress.insert("iteration".to_string(), 64.0);
+        progress.insert("max_iterations_for_frequency".to_string(), 256.0);
+        progress.insert("current_frequency_solve_fraction".to_string(), 0.25);
+        progress.insert("relative_residual_l2_norm".to_string(), 7.5e-3);
+        progress.insert("demag_periodic_airbox_k0".to_string(), 1.0);
+        let mut progress_update = test_step_update(257);
+        progress_update
+            .stats
+            .per_object_scalars
+            .insert("fem_frequency_response_progress".to_string(), progress);
+
+        apply_live_step_update_to_workspace_state(
+            &mut state,
+            "run-test",
+            "session-test",
+            PathBuf::from("/tmp/artifacts").as_path(),
+            &progress_update,
+            false,
+        );
+
+        let generic_update = test_step_update(258);
+        apply_live_step_update_to_workspace_state(
+            &mut state,
+            "run-test",
+            "session-test",
+            PathBuf::from("/tmp/artifacts").as_path(),
+            &generic_update,
+            false,
+        );
+
+        let stage = &state.stage_execution.as_ref().unwrap().stages[0];
+        assert_eq!(stage.progress_percent, Some(14.0));
+        assert_eq!(
+            stage.progress_label.as_deref(),
+            Some("solving frequency point")
+        );
+        let detail = stage.progress_detail.as_deref().unwrap_or_default();
+        assert!(detail.contains("demag=periodic_airbox_k0"));
+        assert!(detail.contains("range=2.000000-5.000000 GHz"));
+        assert!(detail.contains("frequency point 2/7"));
+        assert!(detail.contains("GMRES iteration=64"));
+    }
+
+    #[test]
+    fn frequency_response_progress_is_visible_in_terminal_stage_line() {
+        let mut progress = std::collections::HashMap::new();
+        progress.insert("percent".to_string(), 14.0);
+        progress.insert("frequency_index".to_string(), 1.0);
+        progress.insert("completed_frequency_count".to_string(), 1.0);
+        progress.insert("total_frequency_count".to_string(), 7.0);
+        progress.insert("frequency_hz".to_string(), 3.0e9);
+        progress.insert("frequency_min_hz".to_string(), 2.0e9);
+        progress.insert("frequency_max_hz".to_string(), 5.0e9);
+        progress.insert("iteration".to_string(), 64.0);
+        progress.insert("max_iterations_for_frequency".to_string(), 256.0);
+        progress.insert("current_frequency_solve_fraction".to_string(), 0.25);
+        progress.insert("relative_residual_l2_norm".to_string(), 7.5e-3);
+        progress.insert("demag_periodic_airbox_k0".to_string(), 1.0);
+        let mut per_object_scalars = std::collections::HashMap::new();
+        per_object_scalars.insert("fem_frequency_response_progress".to_string(), progress);
+        let stats = fullmag_runner::StepStats {
+            step: 257,
+            max_h_eff: 1.0,
+            per_object_scalars,
+            ..fullmag_runner::StepStats::default()
+        };
+
+        let line = format_stage_progress_line(
+            "stage 3/3 (flat_frequency_response)",
+            &stats,
+            None,
+            Some(Duration::from_secs(8)),
+            None,
+        );
+
+        assert!(line.contains("frequency sweep"));
+        assert!(line.contains("freq[demag=periodic_airbox_k0 solution 2/7"));
+        assert!(line.contains("[##--------------]"));
+        assert!(line.contains("14%"));
+        assert!(line.contains("range=2.000000-5.000000GHz"));
+        assert!(line.contains("f=3.000000 GHz"));
+        assert!(line.contains("GMRES=64/256"));
+        assert!(line.contains("solve=25%"));
+        assert!(line.contains("relres=7.500e-3"));
+        assert!(line.contains("heartbeat idle=8.0s"));
+        assert!(!line.contains("max_torque"));
+        assert!(!line.contains("E_total"));
+    }
+
+    #[test]
+    fn frequency_response_progress_is_visible_in_heartbeat_engine_log_message() {
+        let mut progress = std::collections::HashMap::new();
+        progress.insert("percent".to_string(), 14.0);
+        progress.insert("frequency_index".to_string(), 1.0);
+        progress.insert("completed_frequency_count".to_string(), 1.0);
+        progress.insert("total_frequency_count".to_string(), 7.0);
+        progress.insert("frequency_hz".to_string(), 3.0e9);
+        progress.insert("frequency_min_hz".to_string(), 2.0e9);
+        progress.insert("frequency_max_hz".to_string(), 5.0e9);
+        progress.insert("iteration".to_string(), 64.0);
+        progress.insert("max_iterations_for_frequency".to_string(), 256.0);
+        progress.insert("current_frequency_solve_fraction".to_string(), 0.25);
+        progress.insert("relative_residual_l2_norm".to_string(), 7.5e-3);
+        progress.insert("demag_periodic_airbox_k0".to_string(), 1.0);
+        let mut per_object_scalars = std::collections::HashMap::new();
+        per_object_scalars.insert("fem_frequency_response_progress".to_string(), progress);
+        let update = fullmag_runner::StepUpdate {
+            stats: fullmag_runner::StepStats {
+                step: 257,
+                max_h_eff: 1.0,
+                per_object_scalars,
+                ..fullmag_runner::StepStats::default()
+            },
+            grid: [0, 0, 0],
+            fem_mesh: None,
+            magnetization: None,
+            preview_field: None,
+            cached_preview_fields: None,
+            hysteresis_field_m_t: None,
+            hysteresis_point_index: None,
+            hysteresis_settle_step_index: None,
+            hysteresis_settle_step_kind: None,
+            hysteresis_settle_step_method: None,
+            scalar_row_due: false,
+            finished: false,
+        };
+
+        let message =
+            format_stage_heartbeat_message("Frequency response 3", &update, Duration::from_secs(8));
+
+        assert!(message.contains("Frequency response 3"));
+        assert!(message.contains("waiting 8.0s for the next solver update"));
+        assert!(message.contains("freq[demag=periodic_airbox_k0 solution 2/7"));
+        assert!(message.contains("[##--------------]"));
+        assert!(message.contains("14%"));
+        assert!(message.contains("GMRES=64/256"));
+        assert!(message.contains("solve=25%"));
+        assert!(message.contains("relres=7.500e-3"));
+    }
+
+    #[test]
+    fn initial_frequency_response_progress_is_visible_in_terminal_heartbeat_line() {
+        let mut progress = std::collections::HashMap::new();
+        progress.insert("percent".to_string(), 0.0);
+        progress.insert("frequency_index".to_string(), 0.0);
+        progress.insert("completed_frequency_count".to_string(), 0.0);
+        progress.insert("total_frequency_count".to_string(), 7.0);
+        progress.insert("frequency_hz".to_string(), 2.0e9);
+        progress.insert("frequency_min_hz".to_string(), 2.0e9);
+        progress.insert("frequency_max_hz".to_string(), 5.0e9);
+        progress.insert("demag_periodic_airbox_k0".to_string(), 1.0);
+        let mut per_object_scalars = std::collections::HashMap::new();
+        per_object_scalars.insert("fem_frequency_response_progress".to_string(), progress);
+        let stats = fullmag_runner::StepStats {
+            step: 257,
+            max_h_eff: 1.0,
+            per_object_scalars,
+            ..fullmag_runner::StepStats::default()
+        };
+
+        let line = format_stage_progress_line(
+            "stage 3/3 (flat_frequency_response)",
+            &stats,
+            None,
+            Some(Duration::from_secs(8)),
+            None,
+        );
+
+        assert!(line.contains("heartbeat"));
+        assert!(line.contains("frequency sweep"));
+        assert!(line.contains("freq[demag=periodic_airbox_k0 solution 1/7"));
+        assert!(line.contains("[----------------]"));
+        assert!(line.contains("0%"));
+        assert!(line.contains("range=2.000000-5.000000GHz"));
+        assert!(line.contains("f=2.000000 GHz"));
+        assert!(!line.contains("max_torque"));
+        assert!(!line.contains("E_total"));
+    }
+
+    #[test]
     fn stage_heartbeat_initializes_progress_when_solver_has_not_reported() {
         let mut stage = CurrentLiveStageExecutionRecord::default();
 
@@ -8539,6 +9123,21 @@ mod tests {
         assert!(
             frequency_response_live_callback_matches >= 2,
             "FEM frequency-response scripted and interactive stages must stay on the live callback path so solver progress callbacks reach stage execution"
+        );
+    }
+
+    #[test]
+    fn stage_heartbeat_reuses_live_step_ingest_for_frequency_response_progress() {
+        let source = include_str!("orchestrator.rs");
+        let heartbeat_block = source
+            .split("let heartbeat_message =")
+            .nth(1)
+            .and_then(|tail| tail.split("upsert_engine_log_tail(").next())
+            .expect("heartbeat publish block should stay visible to the contract test");
+
+        assert!(
+            heartbeat_block.contains("apply_live_step_update_to_workspace_state("),
+            "heartbeat publishing must reuse live-step ingest so frequency-response sweep progress is re-applied before generic idle progress"
         );
     }
 
@@ -8789,6 +9388,29 @@ mod tests {
 
         assert!(has_heavy_live_payload(&heavy));
         assert!(cadence.should_publish(&heavy));
+    }
+
+    #[test]
+    fn frequency_response_progress_forces_publish_and_log_without_heavy_payload() {
+        let mut cadence = LiveProgressCadence::default();
+        cadence.last_publish_at = Some(Instant::now());
+        cadence.last_log_at = Some(Instant::now());
+        let mut progress = std::collections::HashMap::new();
+        progress.insert("percent".to_string(), 14.0);
+        progress.insert("frequency_index".to_string(), 1.0);
+        progress.insert("completed_frequency_count".to_string(), 1.0);
+        progress.insert("total_frequency_count".to_string(), 7.0);
+        progress.insert("frequency_hz".to_string(), 3.0e9);
+        let mut update = test_step_update(257);
+        update
+            .stats
+            .per_object_scalars
+            .insert(FEM_FREQUENCY_RESPONSE_PROGRESS_KEY.to_string(), progress);
+
+        assert!(!has_heavy_live_payload(&update));
+        assert!(step_update_has_frequency_response_progress(&update));
+        assert!(cadence.should_publish(&update));
+        assert!(cadence.should_log(&update));
     }
 
     #[test]

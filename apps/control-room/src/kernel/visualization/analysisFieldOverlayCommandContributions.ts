@@ -33,6 +33,10 @@ interface AnalysisFieldOverlayCommandInput {
 }
 
 const DEFAULT_ANALYSIS_FIELD_VIEW = "phase_rotated_real";
+const DEFAULT_ANALYSIS_FIELD_OVERLAY_APPEARANCE: AnalysisFieldOverlayAppearanceState = {
+  shaderVisible: true,
+  surfaceColorSource: "magnitude",
+};
 const ANALYSIS_FIELD_VIEWS = new Set([
   "real",
   "imag",
@@ -256,7 +260,10 @@ function overlayStateFromContext(
   const resolvedSource = overlaySourceFromContext(context, source);
   const input = overlayCommandInput(context);
   const appearancePatch = overlayAppearanceFromInput(input);
-  const appearance = appearancePatch ?? activeOverlay?.appearance;
+  const appearance =
+    appearancePatch ??
+    activeOverlay?.appearance ??
+    DEFAULT_ANALYSIS_FIELD_OVERLAY_APPEARANCE;
   const phaseRad =
     numberValue(input.phaseRad) ??
     activeOverlay?.visualizationPhaseRad ??
@@ -272,6 +279,11 @@ function overlayStateFromContext(
     source: resolvedSource,
     visualizationPhaseRad: phaseRad,
   };
+}
+
+function activateViewport3D(context: CommandContext): void {
+  context.layout?.setActiveViewportMainModule("viewport-3d");
+  context.layout?.setFocusedSlot("viewport-main");
 }
 
 function setOverlayAppearanceCommand(options: {
@@ -451,6 +463,7 @@ function setOverlayAnimationCommand(options: {
       } else {
         controller.set(nextOverlay);
       }
+      activateViewport3D(context);
       return {
         status: "completed",
         message: animatePhase
@@ -556,6 +569,7 @@ function plotCommand(
         };
       }
       context.analysisFieldOverlay.set(state);
+      activateViewport3D(context);
       return {
         status: "completed",
         message: `Plotting ${state.label} in 3D.`,

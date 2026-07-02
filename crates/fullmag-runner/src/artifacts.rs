@@ -1648,10 +1648,13 @@ fn mesh_periodic_domain_node_pair_counts(
         let node_b_is_magnetic = magnetic_nodes.contains(&pair.node_b);
         let node_a_is_airbox = airbox_nodes.contains(&pair.node_a);
         let node_b_is_airbox = airbox_nodes.contains(&pair.node_b);
-        if !node_a_is_magnetic && !node_b_is_magnetic && (node_a_is_airbox || node_b_is_airbox) {
-            airbox_count += 1;
-        } else {
+        if node_a_is_magnetic && node_b_is_magnetic {
             magnetic_count += 1;
+        } else if !node_a_is_magnetic
+            && !node_b_is_magnetic
+            && (node_a_is_airbox || node_b_is_airbox)
+        {
+            airbox_count += 1;
         }
     }
     (magnetic_count, airbox_count)
@@ -4161,10 +4164,11 @@ mod tests {
             [1.0e-6, 1.0e-6, 0.0],
             [0.0, 0.0, 1.0e-6],
             [1.0e-6, 0.0, 1.0e-6],
+            [1.0e-6, 1.0e-6, 0.0],
         ];
-        fem.mesh.elements = vec![[0, 1, 2, 3], [0, 1, 4, 5]];
-        fem.mesh.element_markers = vec![1, 0];
-        fem.mesh.boundary_faces = vec![[0, 2, 4], [1, 5, 3]];
+        fem.mesh.elements = vec![[0, 1, 2, 3], [0, 1, 4, 5], [1, 4, 5, 6]];
+        fem.mesh.element_markers = vec![1, 0, 0];
+        fem.mesh.boundary_faces = vec![[0, 2, 4], [1, 6, 5]];
         fem.mesh.boundary_markers = vec![10, 11];
         fem.mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
             pair_id: "x_periodic".to_string(),
@@ -4194,6 +4198,11 @@ mod tests {
                 node_a: 4,
                 node_b: 5,
             },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "x_periodic".to_string(),
+                node_a: 2,
+                node_b: 6,
+            },
         ];
 
         let unique_suffix = SystemTime::now()
@@ -4218,9 +4227,9 @@ mod tests {
         assert_eq!(artifact["artifact_path"], "mesh/periodic_pairs.v1.json");
         assert_eq!(artifact["validation_status"], "ok");
         assert_eq!(artifact["pair_count"], 1);
-        assert_eq!(artifact["paired_node_count"], 3);
+        assert_eq!(artifact["paired_node_count"], 4);
         assert_eq!(artifact["pairs"][0]["pair_id"], "x_periodic");
-        assert_eq!(artifact["pairs"][0]["paired_node_count"], 3);
+        assert_eq!(artifact["pairs"][0]["paired_node_count"], 4);
         assert_eq!(artifact["pairs"][0]["unpaired_source_node_count"], 0);
         assert_eq!(artifact["pairs"][0]["unpaired_destination_node_count"], 0);
         assert_eq!(
@@ -4245,6 +4254,7 @@ mod tests {
                 {"node_a": 0, "node_b": 1},
                 {"node_a": 2, "node_b": 3},
                 {"node_a": 4, "node_b": 5},
+                {"node_a": 2, "node_b": 6},
             ])
         );
         assert_eq!(artifact["pairs"][0]["max_residual_m"], 0.0);
@@ -4367,6 +4377,7 @@ mod tests {
                     demag_realization: fem.demag_realization,
                     demag_solver_policy: None,
                     periodic_constraint_sets: Vec::new(),
+                    equilibrium_provenance: None,
                 },
             ),
             output_plan,
@@ -4517,6 +4528,7 @@ mod tests {
                     demag_realization: None,
                     demag_solver_policy: None,
                     periodic_constraint_sets: Vec::new(),
+                    equilibrium_provenance: None,
                 },
             ),
             output_plan,

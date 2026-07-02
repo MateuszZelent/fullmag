@@ -15,9 +15,11 @@ struct Context;
  * Poisson demag periodic-reduction enablement predicate.
  *
  * Periodic demag is a Poisson-demag realization detail: it is requested only
- * when demag is active and the imported mesh carries periodic node pairs. The
- * Context facade stores those facts, but this module owns the policy for when
- * to build and use the algebraic P^T A P reduced system.
+ * when demag is active, the imported mesh carries periodic node pairs, and the
+ * static periodic class map has been built for every node with a valid
+ * representative for every reduced class. The Context facade stores those
+ * facts, but this module owns the policy for when to build and use the
+ * algebraic P^T A P reduced system.
  */
 bool demag_periodic_poisson_reduction_requested(const Context &ctx);
 

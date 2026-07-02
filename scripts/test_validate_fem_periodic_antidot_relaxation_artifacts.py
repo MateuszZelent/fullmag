@@ -1176,6 +1176,66 @@ def test_validator_rejects_demag_runtime_without_periodic_reduction(tmp_path: Pa
     assert "demag_runtime.periodic_reduction must be a JSON object" in result.stderr
 
 
+def test_validator_rejects_demag_runtime_missing_periodic_reduction_axis(
+    tmp_path: Path,
+) -> None:
+    log_path = write_summary_fixture(tmp_path, scenario="exchange_coupled", coupled=True)
+    artifact_dir = tmp_path / "artifacts"
+    metadata = json.loads((artifact_dir / "metadata.json").read_text(encoding="utf-8"))
+    metadata["demag_runtime"]["periodic_reduction"]["node_pair_counts_by_id"].pop("y_faces")
+    (artifact_dir / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+
+    result = run_validator(log_path, "exchange_coupled")
+
+    assert result.returncode != 0
+    assert "demag_runtime.periodic_reduction.node_pair_counts_by_id.y_faces" in result.stderr
+
+
+def test_validator_rejects_demag_runtime_periodic_reduction_mesh_count_drift(
+    tmp_path: Path,
+) -> None:
+    log_path = write_summary_fixture(tmp_path, scenario="exchange_coupled", coupled=True)
+    artifact_dir = tmp_path / "artifacts"
+    metadata = json.loads((artifact_dir / "metadata.json").read_text(encoding="utf-8"))
+    metadata["demag_runtime"]["periodic_reduction"]["boundary_pair_counts_by_id"]["x_faces"] = 0
+    (artifact_dir / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+
+    result = run_validator(log_path, "exchange_coupled")
+
+    assert result.returncode != 0
+    assert "demag_runtime.periodic_reduction.boundary_pair_counts_by_id.x_faces" in result.stderr
+
+
+def test_validator_rejects_demag_runtime_periodic_reduction_node_count_drift(
+    tmp_path: Path,
+) -> None:
+    log_path = write_summary_fixture(tmp_path, scenario="exchange_coupled", coupled=True)
+    artifact_dir = tmp_path / "artifacts"
+    metadata = json.loads((artifact_dir / "metadata.json").read_text(encoding="utf-8"))
+    metadata["demag_runtime"]["periodic_reduction"]["node_pair_count"] = 3
+    (artifact_dir / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+
+    result = run_validator(log_path, "exchange_coupled")
+
+    assert result.returncode != 0
+    assert "demag_runtime.periodic_reduction.node_pair_count" in result.stderr
+
+
+def test_validator_rejects_demag_runtime_periodic_reduction_boundary_count_drift(
+    tmp_path: Path,
+) -> None:
+    log_path = write_summary_fixture(tmp_path, scenario="exchange_coupled", coupled=True)
+    artifact_dir = tmp_path / "artifacts"
+    metadata = json.loads((artifact_dir / "metadata.json").read_text(encoding="utf-8"))
+    metadata["demag_runtime"]["periodic_reduction"]["boundary_pair_count"] = 1
+    (artifact_dir / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+
+    result = run_validator(log_path, "exchange_coupled")
+
+    assert result.returncode != 0
+    assert "demag_runtime.periodic_reduction.boundary_pair_count" in result.stderr
+
+
 def test_validator_rejects_missing_problem_pbc(tmp_path: Path) -> None:
     log_path = write_summary_fixture(tmp_path, scenario="exchange_coupled", coupled=True)
     artifact_dir = tmp_path / "artifacts"
@@ -1237,6 +1297,22 @@ def test_validator_rejects_periodic_pairs_without_airbox_node_coverage(tmp_path:
 
     assert result.returncode != 0
     assert "periodic pairs pair x_faces.domain_node_pair_counts.airbox must be positive" in result.stderr
+
+
+def test_validator_rejects_mixed_magnetic_airbox_periodic_node_pairs(tmp_path: Path) -> None:
+    log_path = write_summary_fixture(tmp_path, scenario="exchange_coupled", coupled=True)
+    periodic_pairs_path = tmp_path / "artifacts" / "mesh" / "periodic_pairs.v1.json"
+    payload = json.loads(periodic_pairs_path.read_text(encoding="utf-8"))
+    payload["pairs"][0]["paired_node_count"] = 3
+    payload["pairs"][0]["node_pairs"].append({"node_a": 4, "node_b": 5})
+    payload["pairs"][0]["domain_node_pair_counts"] = {"magnetic": 1, "airbox": 1}
+    payload["paired_node_count"] = 5
+    periodic_pairs_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = run_validator(log_path, "exchange_coupled")
+
+    assert result.returncode != 0
+    assert "periodic pairs pair x_faces.domain_node_pair_counts must sum to paired_node_count" in result.stderr
 
 
 def test_validator_accepts_air_gap_without_magnetic_seam_node_coverage(tmp_path: Path) -> None:

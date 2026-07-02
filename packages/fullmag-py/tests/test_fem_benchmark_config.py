@@ -11475,7 +11475,10 @@ def test_frequency_domain_eigen_runtime_recipe_runs_modal_artifact_verifier():
     assert "eigen/branches.v2.json" in recipe
     assert "eigen/dispersion.csv" in recipe
     assert "eigen/modes/sample_0000/mode_0000.json" in recipe
-    assert "eigen/mode_fields/sample_0000/mode_0000/vector.bin" in recipe
+    assert (
+        "eigen/mode_fields.zarr/sample_0000/mode_0000/vector_xyz_complex/0.0.0"
+        in recipe
+    )
     assert "frequency_domain/manifest.v1.json" in recipe
     assert "scripts/verify_fem_frequency_domain_eigen_artifacts.py" in recipe
 
@@ -11488,29 +11491,17 @@ def test_frequency_domain_runtime_suite_runs_response_static_periodic_and_eigen_
     )
 
     assert "just verify-fem-frequency-domain-runtime" in recipe
-    assert "just verify-fem-frequency-domain-static-periodic-runtime" in recipe
+    assert "just verify-fem-frequency-domain-gpu-static-periodic-parity-runtime" in recipe
     assert "just verify-fem-frequency-domain-eigen-runtime" in recipe
-    assert "just verify-fem-fmr-periodic-k0-runtime" in recipe
+    assert "just verify-fem-frequency-domain-eigen-dispersion-window-runtime" in recipe
+    assert "just verify-fem-fmr-free-demag-airbox-runtime" in recipe
 
 
 def test_fmr_periodic_k0_runtime_recipe_runs_artifact_verifier_and_plotter():
     justfile_text = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
     recipe = just_recipe_block(justfile_text, "verify-fem-fmr-periodic-k0-runtime")
 
-    assert "just ensure-managed-fem-runtime" in recipe
-    assert "examples/fem_fmr_periodic_k0_smoke.py" in recipe
-    assert "eigen/spectrum.v2.json" in recipe
-    assert "eigen/modes/sample_0000/mode_0000.json" in recipe
-    assert "eigen/mode_fields/sample_0000/mode_0000/vector.bin" in recipe
-    assert "frequency_domain/manifest.v1.json" in recipe
-    assert "scripts/verify_fem_frequency_domain_eigen_artifacts.py" in recipe
-    assert "scripts/plot_fem_frequency_domain_eigen_artifacts.py" in recipe
-    assert "mode_sample_0000_mode_0000_real.svg" in recipe
-    assert "mode_sample_0000_mode_0000_imag.svg" in recipe
-    assert "mode_sample_0000_mode_0000_complex.svg" in recipe
-    assert "mode_sample_0000_mode_0000_abs.svg" in recipe
-    assert "mode_sample_0000_mode_0000_phase.svg" in recipe
-    assert "mode_sample_0000_mode_0000_animation.svg" in recipe
+    assert "just verify-fem-frequency-domain-periodic-airbox-runtime" in recipe
 
 
 def test_permalloy_box_fmr_modes_recipe_runs_artifact_verifier_and_plotter():
@@ -11523,7 +11514,10 @@ def test_permalloy_box_fmr_modes_recipe_runs_artifact_verifier_and_plotter():
     assert "eigen/branches.v2.json" in recipe
     assert "eigen/dispersion.csv" in recipe
     assert "eigen/modes/sample_0000/mode_0000.json" in recipe
-    assert "eigen/mode_fields/sample_0000/mode_0000/vector.bin" in recipe
+    assert (
+        "eigen/mode_fields.zarr/sample_0000/mode_0000/vector_xyz_complex/0.0.0"
+        in recipe
+    )
     assert "frequency_domain/manifest.v1.json" in recipe
     assert "scripts/verify_fem_frequency_domain_eigen_artifacts.py" in recipe
     assert "scripts/plot_fem_frequency_domain_eigen_artifacts.py" in recipe

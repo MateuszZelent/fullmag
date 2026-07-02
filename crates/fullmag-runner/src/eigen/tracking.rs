@@ -231,6 +231,7 @@ mod tests {
             eigenvalue_real: 0.0,
             eigenvalue_imag: frequency_real_hz * std::f64::consts::TAU,
             norm: 1.0,
+            mass_norm: Some(1.0),
             max_amplitude: 1.0,
             residual_norm: None,
             residual_linf: None,
@@ -255,6 +256,7 @@ mod tests {
             eigenvalue_real: frequency_real_hz,
             eigenvalue_imag: 0.0,
             norm: 1.0,
+            mass_norm: Some(1.0),
             max_amplitude: 1.0,
             residual_norm: None,
             residual_linf: None,
@@ -285,6 +287,9 @@ mod tests {
             branches: Vec::new(),
             solver_model: EigenSolverModel::ReferenceScalarTangent,
             notes: Vec::new(),
+            include_demag: false,
+            dispersion_validation: None,
+            dispersion_analytic_reference: None,
         };
         let cfg = ModeTrackingIR {
             method: ModeTrackingMethodIR::OverlapGreedy,
@@ -312,6 +317,9 @@ mod tests {
             branches: Vec::new(),
             solver_model: EigenSolverModel::ReferenceScalarTangent,
             notes: Vec::new(),
+            include_demag: false,
+            dispersion_validation: None,
+            dispersion_analytic_reference: None,
         };
         let cfg = ModeTrackingIR {
             method: ModeTrackingMethodIR::OverlapGreedy,
@@ -339,6 +347,9 @@ mod tests {
             branches: Vec::new(),
             solver_model: EigenSolverModel::ReferenceScalarTangent,
             notes: Vec::new(),
+            include_demag: false,
+            dispersion_validation: None,
+            dispersion_analytic_reference: None,
         };
         let cfg = ModeTrackingIR {
             method: ModeTrackingMethodIR::OverlapGreedy,

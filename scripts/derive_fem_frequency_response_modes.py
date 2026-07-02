@@ -41,6 +41,14 @@ def point_amplitude(point: dict, index: int) -> float:
     return finite_number(value, f"sweep.points[{index}].response_amplitude")
 
 
+def point_amplitude_source(point: dict) -> str:
+    return (
+        "max_response_amplitude"
+        if point.get("max_response_amplitude") is not None
+        else "response_amplitude"
+    )
+
+
 def select_peak(points: list[dict]) -> tuple[int, dict, float]:
     if not points:
         fail("sweep.points must not be empty")
@@ -129,6 +137,21 @@ def derive_peak_mode(root: Path, output_path: Path) -> dict:
         fail(f"peak response field payload is missing: {field_payload_path}")
     if not (root / point_path).is_file():
         fail(f"peak frequency point artifact is missing: {point_path}")
+    provenance = {
+        "schema_version": "frequency_response_derived_mode_provenance.v1",
+        "canonical_product": "frequency_response",
+        "source_artifact_path": "response/magnetic_response_sweep.v2.json",
+        "source_schema_version": sweep.get("schema_version"),
+        "derivation_method": "select_max_response_amplitude",
+        "selection_metric": point_amplitude_source(peak),
+        "selected_sweep_point_index": fallback_index,
+        "selected_frequency_index": frequency_index,
+        "selected_frequency_hz": frequency_hz,
+        "selected_response_amplitude": amplitude,
+        "selected_frequency_point_artifact_path": point_path,
+        "selected_field_payload_path": field_payload_path,
+        "not_an_eigenmode": True,
+    }
     payload = {
         "schema_version": "frequency_response_derived_mode.v1",
         "source": "magnetic_response_sweep.v2",
@@ -140,6 +163,7 @@ def derive_peak_mode(root: Path, output_path: Path) -> dict:
         "frequency_point_artifact_path": point_path,
         "field_payload_path": field_payload_path,
         "interpretation": "driven_response_field_at_peak_frequency",
+        "provenance": provenance,
         "refinement_recommendation": refinement_recommendation(
             points_value,
             fallback_index,

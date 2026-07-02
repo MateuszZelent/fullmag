@@ -25,7 +25,10 @@ describe("study authoring smoke script", () => {
       "Plot selected eigen mode with phase-rotated real display",
     );
     expect(smokeScript).toContain(
-      "Plot this response field with phase-rotated real display at 12.55 GHz",
+      'article.fm-frequency-domain-response-card[data-status="ready"]',
+    );
+    expect(smokeScript).toContain(
+      'name: "Plot 3D"',
     );
     expect(smokeScript).not.toContain("Selected Eigen Mode");
     expect(smokeScript).not.toContain("Plot mode rotated");
@@ -35,5 +38,24 @@ describe("study authoring smoke script", () => {
     expect(smokeScript).toContain("assertExplorerRowSelected");
     expect(smokeScript).toContain('aria-selected="true"');
     expect(smokeScript).toContain("Explorer row did not become selected");
+  });
+
+  it("asserts transaction-backed eigen frequency-window authoring", () => {
+    expect(smokeScript).toContain("addEigenmodesAndEditFrequencyWindow");
+    expect(smokeScript).toContain('selectOption("frequency_window")');
+    expect(smokeScript).toContain("eigen_frequency_min");
+    expect(smokeScript).toContain("eigen_frequency_max");
+    expect(smokeScript).toContain("eigen_operator");
+  });
+
+  it("asserts transaction-backed frequency-response response-map authoring", () => {
+    expect(smokeScript).toContain(
+      '[data-node-id="model:study:stages:stage:${stageId}:calculation-mode"]',
+    );
+    expect(smokeScript).toContain('selectOption("response_map")');
+    expect(smokeScript).toContain("frequency_calculation_mode");
+    expect(smokeScript).toContain(
+      '[data-node-id="model:study:stages:stage:${stageId}:k-grid"]',
+    );
   });
 });

@@ -16,7 +16,9 @@ use crate::eigen::artifacts::{
 };
 use crate::eigen::path::expand_k_sampling;
 use crate::eigen::tracking::track_branches;
-use crate::eigen::types::{KSampleDescriptor, PathSolveResult, SingleKSolveResult};
+use crate::eigen::types::{
+    DispersionAnalyticReferenceContext, KSampleDescriptor, PathSolveResult, SingleKSolveResult,
+};
 use crate::types::RunError;
 use fullmag_ir::{FemEigenPlanIR, ModeTrackingIR, OutputIR};
 use std::path::Path;
@@ -88,6 +90,16 @@ pub fn run_path_or_single<S: SingleKSolver>(
         branches: Vec::new(),
         solver_model,
         notes,
+        include_demag: plan.operator.include_demag,
+        dispersion_validation: plan.dispersion_validation.clone(),
+        dispersion_analytic_reference: plan.dispersion_validation.as_ref().map(|_| {
+            DispersionAnalyticReferenceContext {
+                external_field: plan.external_field.unwrap_or([0.0, 0.0, 0.0]),
+                exchange_stiffness: plan.material.exchange_stiffness,
+                saturation_magnetisation: plan.material.saturation_magnetisation,
+                gyromagnetic_ratio: plan.gyromagnetic_ratio,
+            }
+        }),
     };
     track_branches(&mut result, mode_tracking);
 
@@ -162,6 +174,7 @@ mod tests {
                     eigenvalue_real: 0.0,
                     eigenvalue_imag: std::f64::consts::TAU * 12.5e9,
                     norm: 1.0,
+                    mass_norm: Some(1.0),
                     max_amplitude: 1.0,
                     residual_norm: Some(1.0e-8),
                     residual_linf: Some(1.0e-9),
@@ -257,6 +270,7 @@ mod tests {
             spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
             demag_realization: None,
             mode_tracking: None,
+            dispersion_validation: None,
         }
     }
 
@@ -325,6 +339,7 @@ mod tests {
                     eigenvalue_real: 0.0,
                     eigenvalue_imag: std::f64::consts::TAU * 12.5e9,
                     norm: 1.0,
+                    mass_norm: Some(1.0),
                     max_amplitude: 1.0,
                     residual_norm: Some(1.0e-8),
                     residual_linf: Some(1.0e-9),

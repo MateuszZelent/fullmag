@@ -2349,6 +2349,144 @@ fn eigenmodes_with_spectrum_and_mode_outputs_validate() {
 }
 
 #[test]
+fn eigenmodes_closed_k_path_sample_count_and_segment_length_validate() {
+    assert_eq!(
+        (KSamplingIR::Path {
+            points: vec![
+                KPointIR {
+                    label: Some("G".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+                KPointIR {
+                    label: Some("X".to_string()),
+                    k_vector: [2.0e7, 0.0, 0.0],
+                },
+                KPointIR {
+                    label: Some("M".to_string()),
+                    k_vector: [2.0e7, 2.0e7, 0.0],
+                },
+            ],
+            samples_per_segment: vec![2, 3],
+            closed: false,
+        })
+        .sample_count_hint(),
+        6,
+        "open path sampling must match runtime expansion: sum(samples_per_segment)+1"
+    );
+    let sampling = KSamplingIR::Path {
+        points: vec![
+            KPointIR {
+                label: Some("G".to_string()),
+                k_vector: [0.0, 0.0, 0.0],
+            },
+            KPointIR {
+                label: Some("X".to_string()),
+                k_vector: [2.0e7, 0.0, 0.0],
+            },
+            KPointIR {
+                label: Some("M".to_string()),
+                k_vector: [2.0e7, 2.0e7, 0.0],
+            },
+        ],
+        samples_per_segment: vec![2, 3, 4],
+        closed: true,
+    };
+    assert_eq!(
+        sampling.sample_count_hint(),
+        10,
+        "closed path sampling must match runtime expansion: sum(samples_per_segment)+1"
+    );
+
+    let mut ir = ProblemIR::bootstrap_example();
+    let dynamics = ir.study.dynamics().clone();
+    ir.study = StudyIR::Eigenmodes {
+        dynamics,
+        operator: EigenOperatorConfigIR {
+            kind: EigenOperatorIR::Full2x2,
+            include_demag: false,
+        },
+        count: 2,
+        target: EigenTargetIR::FrequencyWindow {
+            frequency_min_hz: 1.0e9,
+            frequency_max_hz: 3.0e9,
+        },
+        equilibrium: EquilibriumSourceIR::Provided,
+        k_sampling: Some(sampling),
+        normalization: EigenNormalizationIR::UnitL2,
+        damping_policy: EigenDampingPolicyIR::Ignore,
+        spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
+        sampling: SamplingIR {
+            table_autosave: None,
+            outputs: vec![
+                OutputIR::EigenSpectrum {
+                    quantity: "frequency_hz".to_string(),
+                },
+                OutputIR::DispersionCurve {
+                    name: "dispersion".to_string(),
+                },
+            ],
+        },
+        mode_tracking: None,
+    };
+
+    ir.validate()
+        .expect("closed eigenmode k-path with one segment count per control point should validate");
+}
+
+#[test]
+fn eigenmodes_rejects_closed_k_path_with_open_segment_count() {
+    let mut ir = ProblemIR::bootstrap_example();
+    let dynamics = ir.study.dynamics().clone();
+    ir.study = StudyIR::Eigenmodes {
+        dynamics,
+        operator: EigenOperatorConfigIR {
+            kind: EigenOperatorIR::Full2x2,
+            include_demag: false,
+        },
+        count: 2,
+        target: EigenTargetIR::Lowest,
+        equilibrium: EquilibriumSourceIR::Provided,
+        k_sampling: Some(KSamplingIR::Path {
+            points: vec![
+                KPointIR {
+                    label: Some("G".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+                KPointIR {
+                    label: Some("X".to_string()),
+                    k_vector: [2.0e7, 0.0, 0.0],
+                },
+                KPointIR {
+                    label: Some("M".to_string()),
+                    k_vector: [2.0e7, 2.0e7, 0.0],
+                },
+            ],
+            samples_per_segment: vec![2, 3],
+            closed: true,
+        }),
+        normalization: EigenNormalizationIR::UnitL2,
+        damping_policy: EigenDampingPolicyIR::Ignore,
+        spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
+        sampling: SamplingIR {
+            table_autosave: None,
+            outputs: vec![OutputIR::EigenSpectrum {
+                quantity: "frequency_hz".to_string(),
+            }],
+        },
+        mode_tracking: None,
+    };
+
+    let errors = ir
+        .validate()
+        .expect_err("closed k-path must require a sample count for the closing segment");
+    assert!(
+        errors.iter().any(|error| error
+            .contains("eigenmodes.k_sampling.path expected 3 samples_per_segment entries, got 2")),
+        "expected closed segment-count diagnostic, got {errors:?}"
+    );
+}
+
+#[test]
 fn frequency_response_round_trips_as_first_class_study() {
     let mut ir = ProblemIR::bootstrap_example();
     let dynamics = ir.study.dynamics().clone();

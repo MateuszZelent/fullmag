@@ -132,6 +132,7 @@ export interface StudyStageDraft {
   frequenciesHz: string;
   includeDemag: boolean;
   kind: StudyStageDraftKind;
+  kPath: string;
   kSampling: string;
   kVector: string;
   magnetostaticBc: string;
@@ -141,6 +142,7 @@ export interface StudyStageDraft {
   maxSteps: string;
   normalization: string;
   observable: string;
+  operator: string;
   relaxAlpha: string;
   solver: string;
   stageId: string;
@@ -206,6 +208,7 @@ const DEFAULT_RELAX_STAGE_DRAFT: StudyStageDraft = {
   frequenciesHz: "1e9",
   includeDemag: true,
   kind: "relax",
+  kPath: "",
   kSampling: "",
   kVector: "",
   magnetostaticBc: "open",
@@ -215,6 +218,7 @@ const DEFAULT_RELAX_STAGE_DRAFT: StudyStageDraft = {
   maxSteps: "50000",
   normalization: "unit_l2",
   observable: "susceptibility_tensor",
+  operator: "linearized_llg",
   relaxAlpha: "1",
   solver: "rk23",
   stageId: "",
@@ -274,6 +278,7 @@ const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
   frequenciesHz: "1e9",
   includeDemag: true,
   kind: "run",
+  kPath: "",
   kSampling: "",
   kVector: "",
   magnetostaticBc: "open",
@@ -283,6 +288,7 @@ const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
   maxSteps: "",
   normalization: "unit_l2",
   observable: "susceptibility_tensor",
+  operator: "linearized_llg",
   relaxAlpha: "",
   solver: "",
   stageId: "",
@@ -673,12 +679,15 @@ export function studyStageDraftToSceneStage(
     stage.eigen_count = stage.count;
     stage.target = requiredText(draft.target, "lowest");
     stage.eigen_target = stage.target;
+    stage.operator = requiredText(draft.operator, "linearized_llg");
+    stage.eigen_operator = stage.operator;
     setOptionalNumber(stage, "target_frequency", draft.targetFrequency);
     setOptionalNumber(stage, "eigen_target_frequency", draft.targetFrequency);
     setOptionalNumber(stage, "frequency_min", draft.frequencyMin);
     setOptionalNumber(stage, "frequency_max", draft.frequencyMax);
     setOptionalNumber(stage, "eigen_frequency_min", draft.frequencyMin);
     setOptionalNumber(stage, "eigen_frequency_max", draft.frequencyMax);
+    setOptionalText(stage, "eigen_k_path", draft.kPath);
     return stage;
   }
   if (draft.kind === "frequency_response") {
@@ -2390,6 +2399,10 @@ function spectralDraft(
       spectralRecordValue(record, kind, "include_demag"),
       base.includeDemag,
     ),
+    kPath: scalarText(
+      kind === "eigenmodes" ? spectralRecordValue(record, kind, "k_path") : undefined,
+      base.kPath,
+    ),
     kSampling: objectText(spectralRecordValue(record, kind, "k_sampling")),
     kVector: vectorText(spectralRecordValue(record, kind, "k_vector"), ""),
     magnetostaticBc: scalarText(
@@ -2405,8 +2418,12 @@ function spectralDraft(
       ),
       SPECTRAL_NORMALIZATION_ALIASES,
     ),
+    operator:
+      kind === "eigenmodes"
+        ? scalarText(spectralRecordValue(record, kind, "operator"), base.operator)
+        : base.operator,
     stageId: stringValue(record?.stage_id ?? record?.id, `stage-${index + 1}`),
-    target: scalarText(record?.target, base.target),
+    target: scalarText(spectralRecordValue(record, kind, "target"), base.target),
     targetFrequency: scalarText(record?.target_frequency ?? record?.eigen_target_frequency, ""),
     frequencyMin: scalarText(record?.frequency_min ?? record?.eigen_frequency_min, ""),
     frequencyMax: scalarText(record?.frequency_max ?? record?.eigen_frequency_max, ""),

@@ -26,6 +26,7 @@ import {
   buildEigenSpectrumChartModel,
   buildFrequencyResponseChartModel,
   buildFmrPeakTableModel,
+  frequencyDomainManifestPayload,
   responseFieldResourcesFromManifest,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import {
@@ -82,8 +83,16 @@ export function buildFrequencyDomainResultNode(
     dispersion,
     branchesModel,
   );
-  const responseModel = buildFrequencyResponseChartModel(responseSweep);
-  const fmrPeaks = buildFmrPeakTableModel({ responseSweep, spectrum });
+  const manifestPayload = frequencyDomainManifestPayload(manifest);
+  const responseModel = buildFrequencyResponseChartModel(
+    responseSweep,
+    manifestPayload,
+  );
+  const fmrPeaks = buildFmrPeakTableModel({
+    manifestPayload,
+    responseSweep,
+    spectrum,
+  });
   const hasEigenResults =
     spectrumModel.points.length > 0 ||
     dispersionModel.points.length > 0 ||
@@ -378,9 +387,17 @@ function buildFrequencyDomainFmrNode({
   spectrum: FrequencyDomainJsonArtifactResource | null | undefined;
   status: ExplorerNodeStatus;
 }): ExplorerNode {
-  const fmrPeaks = buildFmrPeakTableModel({ responseSweep, spectrum });
+  const manifestPayload = frequencyDomainManifestPayload(manifest);
+  const fmrPeaks = buildFmrPeakTableModel({
+    manifestPayload,
+    responseSweep,
+    spectrum,
+  });
   const spectrumModel = buildEigenSpectrumChartModel(spectrum);
-  const responseModel = buildFrequencyResponseChartModel(responseSweep);
+  const responseModel = buildFrequencyResponseChartModel(
+    responseSweep,
+    manifestPayload,
+  );
   const peakCount = fmrPeaks.peaks.length;
   return {
     id: `${parentId}:fmr`,
@@ -733,7 +750,9 @@ function buildFrequencyResponseResultNode(
             kind: "results.frequency_response.progress",
             label: "Sweep Progress",
             parentId,
-            badge: `${progress.completed_frequency_points}/${progress.total_frequency_points}`,
+            badge:
+              frequencyDomainProgressBadge(progress) ??
+              `${progress.completed_frequency_points}/${progress.total_frequency_points}`,
             icon: "gauge",
             status: progress.partial_artifacts_available
               ? "ready"
@@ -748,7 +767,9 @@ function buildFrequencyResponseResultNode(
             kind: "results.frequency_response.cancel_requested",
             label: "Cancel Requested",
             parentId,
-            badge: `${cancelRequested.completed_frequency_points}/${cancelRequested.total_frequency_points}`,
+            badge:
+              frequencyDomainProgressBadge(cancelRequested) ??
+              `${cancelRequested.completed_frequency_points}/${cancelRequested.total_frequency_points}`,
             icon: "gauge",
             status: cancelRequested.partial_artifacts_available
               ? "ready"
@@ -844,8 +865,9 @@ function buildResponseFrequencyPointNodes(
   if (fromSweep.length > 0) {
     return fromSweep.map(([frequencyIndex, point]) =>
       responseFrequencyPointNode({
-        badge: `${formatFrequencyHz(point.frequencyHz)}, ${point.observableCount} observable(s)`,
+        badge: `frequency ${frequencyIndex}, ${point.observableCount} observable(s)`,
         fieldResources,
+        frequencyHz: point.frequencyHz,
         frequencyIndex,
         parentId,
       }),
@@ -866,19 +888,23 @@ function buildResponseFrequencyPointNodes(
 function responseFrequencyPointNode({
   badge,
   fieldResources,
+  frequencyHz,
   frequencyIndex,
   parentId,
 }: {
   badge: string;
   fieldResources: Map<number, string>;
+  frequencyHz?: number;
   frequencyIndex: number;
   parentId: string;
 }): ExplorerNode {
   const fieldId = responseFieldId(fieldResources, frequencyIndex);
+  const label =
+    frequencyHz == null ? `Frequency ${frequencyIndex}` : formatFrequencyHz(frequencyHz);
   return {
     id: `${parentId}:${frequencyIndex}`,
     kind: "results.frequency_response.frequency_point",
-    label: `Frequency ${frequencyIndex}`,
+    label,
     parentId,
     badge,
     contextCommands: fieldId ? FREQUENCY_RESPONSE_FIELD_3D_COMMANDS : undefined,
@@ -1221,7 +1247,7 @@ function responseResourceNode(
   }
   if (key === "field") {
     const fieldResources = responseFieldResourcesFromManifest(
-      manifest?.result_manifest?.payload,
+      frequencyDomainManifestPayload(manifest),
     );
     const firstFrequencyIndex = fieldResources[0]?.frequencyIndex;
     if (fieldResources.length === 0) return null;
@@ -1345,7 +1371,7 @@ function manifestString(
   section: string,
   key: string,
 ): string | undefined {
-  const payload = manifest?.result_manifest?.payload;
+  const payload = frequencyDomainManifestPayload(manifest);
   if (!isRecord(payload)) return undefined;
   const sectionValue = payload[section];
   if (!isRecord(sectionValue)) return undefined;
@@ -1358,7 +1384,7 @@ function manifestStringArray(
   section: string,
   key: string,
 ): string[] {
-  const payload = manifest?.result_manifest?.payload;
+  const payload = frequencyDomainManifestPayload(manifest);
   if (!isRecord(payload)) return [];
   const sectionValue = payload[section];
   if (!isRecord(sectionValue)) return [];
@@ -1373,7 +1399,7 @@ function responseFieldResourceMap(
 ): Map<number, string> {
   const fieldResources = new Map<number, string>();
   for (const entry of responseFieldResourcesFromManifest(
-    manifest?.result_manifest?.payload,
+    frequencyDomainManifestPayload(manifest),
   )) {
     fieldResources.set(entry.frequencyIndex, entry.fieldResourceId);
   }
@@ -1470,11 +1496,12 @@ export function buildFrequencyDomainJobsNode(
       }),
       jobNode({
         badge:
-          totalFrequencyPoints > 0
+          frequencyDomainProgressRangeBadge(progress ?? cancelRequested) ??
+          (totalFrequencyPoints > 0
             ? `${completedFrequencyPoints}/${totalFrequencyPoints}`
             : responseModel.points.length > 0
               ? `${responseModel.points.length} point(s)`
-              : "waiting for sweep",
+              : "waiting for sweep"),
         icon: "activity",
         kind: "jobs.frequency_domain.response_frequency",
         key: "response-frequency",
@@ -1514,7 +1541,29 @@ function frequencyDomainProgressBadge(
   progress: FrequencyDomainSweepProgressResource | null | undefined,
 ): string | null {
   if (!progress) return null;
-  return `${progress.completed_frequency_points}/${progress.total_frequency_points} ${progress.state}`;
+  const currentFrequency =
+    progress.current_frequency_hz == null || progress.current_frequency_hz <= 0
+      ? null
+      : formatFrequencyHz(progress.current_frequency_hz);
+  return [
+    `${progress.completed_frequency_points}/${progress.total_frequency_points}`,
+    progress.state,
+    currentFrequency == null ? null : `@ ${currentFrequency}`,
+    progress.demag_mode ?? null,
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join(" ");
+}
+
+function frequencyDomainProgressRangeBadge(
+  progress: FrequencyDomainSweepProgressResource | null | undefined,
+): string | null {
+  if (!progress) return null;
+  const range = formatFrequencyRangeBoundsHz(
+    progress.frequency_min_hz,
+    progress.frequency_max_hz,
+  );
+  return range === "not available" ? null : range;
 }
 
 function frequencyDomainJobStatus(

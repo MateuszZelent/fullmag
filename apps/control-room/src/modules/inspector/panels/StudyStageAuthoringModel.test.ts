@@ -506,6 +506,40 @@ describe("StudyStageAuthoringModel", () => {
     });
   });
 
+  it("round-trips eigenmode k-path text for Python dispersion authoring", () => {
+    const kPath = "G:0,0,0; X:1e7,0,0; G:0,0,0 | samples=2,2";
+    const draft = createStudyStageDraft(
+      {
+        eigen_count: 3,
+        eigen_frequency_max: 2.5e9,
+        eigen_frequency_min: 1.5e9,
+        eigen_k_path: kPath,
+        eigen_operator: "full_2x2",
+        eigen_target: "frequency_window",
+        kind: "eigenmodes",
+        stage_id: "dispersion-1",
+      },
+      0,
+    );
+
+    expect(draft).toMatchObject({
+      count: "3",
+      frequencyMax: "2500000000",
+      frequencyMin: "1500000000",
+      kPath,
+      kind: "eigenmodes",
+      target: "frequency_window",
+    });
+    expect(studyStageDraftToSceneStage(draft)).toMatchObject({
+      eigen_count: 3,
+      eigen_frequency_max: 2.5e9,
+      eigen_frequency_min: 1.5e9,
+      eigen_k_path: kPath,
+      eigen_operator: "full_2x2",
+      eigen_target: "frequency_window",
+    });
+  });
+
   it("serializes eigenmodes, frequency response, and save-state stages", () => {
     expect(
       studyStageDraftToSceneStage({
@@ -537,6 +571,7 @@ describe("StudyStageAuthoringModel", () => {
       eigen_k_sampling: { points: 5 },
       eigen_k_vector: [0, 1, -1],
       eigen_normalization: "unit_max_amplitude",
+      eigen_operator: "linearized_llg",
       eigen_spin_wave_bc: { axes: ["x"], kind: "periodic" },
       eigen_target: "near_frequency",
       eigen_target_frequency: 2e9,
@@ -548,6 +583,7 @@ describe("StudyStageAuthoringModel", () => {
       k_vector: [0, 1, -1],
       kind: "eigenmodes",
       normalization: "unit_max_amplitude",
+      operator: "linearized_llg",
       stage_id: "modes-1",
       target: "near_frequency",
       target_frequency: 2e9,

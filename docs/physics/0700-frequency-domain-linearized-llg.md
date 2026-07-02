@@ -96,6 +96,43 @@ m_anim(r,t) = m0(r) + scale * Re[delta_m(r) exp(i (omega t + phi0))]
 - Nonzero-k Floquet dynamic demagnetization remains unsupported until Fullmag
   implements and validates a mathematically consistent dynamic demag-k
   operator.
+- A modal `KSamplingIR::Path` is orchestrated as repeated single-k modal solves
+  plus branch tracking. Each sample must use the most specific legal modal
+  entrypoint for that sample: gamma-equivalent free-boundary `Full2x2`
+  `FrequencyWindow` samples may use the production CPU selected-spectrum /
+  shift-invert path, while no-demag `Full2x2` nonzero-k Floquet samples may use
+  the native production CPU selected-spectrum path when the runner can build an
+  explicitly labelled Bloch/Floquet tangent payload from periodic pair
+  metadata. Reference/MVP nonzero-k dispersion artifacts must stay explicitly
+  labelled as such and must publish `production_cpu_rejection_reason =
+  "production_cpu_modal_nonzero_k_floquet_operator_missing"` only when that
+  labelled payload path is unavailable. Native diagnostics also publish
+  `required_operator_payload_kind = "bloch_floquet_tangent_operator"` on
+  rejection so the presence of Floquet pair metadata is not mistaken for the
+  actual production operator payload. The native modal C ABI can now carry a Floquet k-vector,
+  phase convention, explicit Floquet periodic-pair tail, and a direct dense
+  modal payload explicitly labelled as
+  `payload_kind = "bloch_floquet_tangent_operator"`. Native production CPU may
+  pass such an explicitly labelled payload into the selected-spectrum adapter.
+  The runner has the algebraic materializer for that payload: a complex
+  Bloch/Floquet generalized operator
+  `K q = lambda M q` can be embedded as a real gyrotropic pencil with
+  `K_embedded = diag(K_R, K_R)` and
+  `B_embedded = [[0, -M_R], [M_R, 0]]`, producing the native
+  `lambda = i omega` form for the selected-spectrum adapter. Native positive
+  branches in the embedded form `v = [x, i x]` are reduced back to the physical
+  complex tangent vector by recovering `x` and mapping
+  `q = x_re + i x_im`. The Rust native modal wrapper and FEM eigen runner build
+  the periodic-pair payload for each `KSamplingIR::Single` Floquet request from
+  `MeshIR.periodic_node_pairs` plus matching
+  `MeshIR.periodic_boundary_pairs[*].translation`, using
+  `phase_rad = -k dot translation` for the current
+  `exp_minus_i_k_dot_delta_r` convention. Dynamic demag-k, native GPU modal
+  dispersion, and broader sparse/matrix-free Floquet validation remain gated.
+- A gamma-only k-path is a production-adapter proof, not a spin-wave dispersion
+  proof: it may verify that multi-k orchestration preserves production CPU
+  selected-spectrum provenance and mode-field sample remapping, but it must not
+  be described as nonzero-k Bloch/Floquet dispersion.
 
 ## Linearized equation
 
@@ -134,6 +171,12 @@ or the algebraically equivalent generalized pencil:
 L q = lambda B_alpha q
 lambda = i omega
 ```
+
+For an energy-Hessian gyrotropic implementation with physical `G`, this means
+the generalized solver matrix on the right-hand side is `B = -G`, because the
+canonical phasor equation is `K phi = -i omega G phi`. A solver that reports
+`lambda = i omega` must therefore solve `K phi = lambda (-G) phi` or publish a
+different, explicitly derived mapping.
 
 If a gyrotropic energy Hessian form is used instead, it must include the
 phasor factor explicitly. With the `exp(i omega t)` convention and a real
@@ -344,6 +387,22 @@ The minimal validation set for this contract is:
 - `Floquet(k=0) == Periodic`,
 - exchange-only reciprocal dispersion `f(k) = f(-k)` when DMI and other
   nonreciprocal terms are disabled,
+- exchange-only Floquet modal dispersion must match the analytic effective-field
+  scale `H_ex(k) = 2 A k^2 / (mu0 Ms)` within the stated mesh-discretization
+  tolerance,
+- production-facing spin-wave dispersion validation must include narrow,
+  physically typical one-dimensional sweeps rather than only broad or
+  all-direction k-space scans: Damon-Eshbach geometry with in-plane `k`
+  perpendicular to the equilibrium magnetization, backward-volume geometry with
+  in-plane `k` parallel to the equilibrium magnetization, `|k| <= 2e6..3e6
+  rad/m` (`2..3 1/um`), and requested modal/frequency windows no wider than the
+  relevant low-GHz band such as `0..5 GHz`; those sweeps must be compared with
+  the applicable analytic dispersion for the documented material, film
+  thickness, bias field, demag model, and boundary assumptions,
+- default regression tests should therefore parameterize the DE and BV
+  geometries separately and sample only the narrow low-k interval needed for the
+  analytic comparison; exhaustive all-direction k-space maps are optional stress
+  or exploration tests, not the normal publication acceptance route,
 - explicit capability error for nonzero-k Floquet demag that distinguishes
   "missing `magnetostatic_bc=floquet_airbox`" from "`floquet_airbox` requested
   but demag-k operator not implemented",

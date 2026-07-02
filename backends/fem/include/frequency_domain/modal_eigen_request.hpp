@@ -1,5 +1,7 @@
 #pragma once
 
+#include "frequency_domain/frequency_domain_contract.hpp"
+
 #include <cstdint>
 
 namespace fullmag::fem::frequency_domain {
@@ -69,6 +71,12 @@ struct ModalEigenRequest {
     CsrMatrixView mfem_sparse_stiffness_csr{};
     CsrMatrixView mfem_sparse_gyrotropic_csr{};
     CsrMatrixView mfem_sparse_mass_csr{};
+    bool has_floquet_k_vector = false;
+    double floquet_k_vector_rad_per_m[3] = {0.0, 0.0, 0.0};
+    FrequencyDomainPhaseConvention phase_convention =
+        FrequencyDomainPhaseConvention::exp_i_omega_t;
+    const FrequencyDomainFloquetPeriodicPair *floquet_periodic_pairs = nullptr;
+    std::uint64_t floquet_periodic_pair_count = 0;
 };
 
 struct DrivenResponseContractRequest {

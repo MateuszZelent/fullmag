@@ -1,6 +1,10 @@
 #include "frequency_domain/frequency_domain_contract.hpp"
 
+#include <array>
 #include <cmath>
+#include <sstream>
+#include <string>
+#include <utility>
 
 namespace fullmag::fem::frequency_domain {
 
@@ -52,36 +56,6 @@ constexpr const char *kGpuStaticPeriodicDrivenResponseDiagnosticsJson =
     "\"execution_lane\":\"native_fem_mfem_frequency_domain_gpu\","
     "\"scope\":\"gamma_free_or_static_periodic_magnetic_response_no_demag\"}";
 
-constexpr const char *kInitialProgressJson =
-    "{\"schema_version\":\"frequency_domain_sweep_progress.v1\","
-    "\"state\":\"not_started\","
-    "\"partial_artifacts_available\":false}";
-
-constexpr const char *kInterruptedWithArtifactsProgressJson =
-    "{\"schema_version\":\"frequency_domain_sweep_progress.v1\","
-    "\"state\":\"interrupted\","
-    "\"partial_artifacts_available\":true}";
-
-constexpr const char *kInterruptedWithoutArtifactsProgressJson =
-    "{\"schema_version\":\"frequency_domain_sweep_progress.v1\","
-    "\"state\":\"interrupted\","
-    "\"partial_artifacts_available\":false}";
-
-constexpr const char *kCancellingWithArtifactsProgressJson =
-    "{\"schema_version\":\"frequency_domain_sweep_progress.v1\","
-    "\"state\":\"cancel_requested\","
-    "\"partial_artifacts_available\":true}";
-
-constexpr const char *kCancellingWithoutArtifactsProgressJson =
-    "{\"schema_version\":\"frequency_domain_sweep_progress.v1\","
-    "\"state\":\"cancel_requested\","
-    "\"partial_artifacts_available\":false}";
-
-constexpr const char *kCompletedProgressJson =
-    "{\"schema_version\":\"frequency_domain_sweep_progress.v1\","
-    "\"state\":\"completed\","
-    "\"partial_artifacts_available\":true}";
-
 bool floquet_k_vector_is_nonzero_or_invalid(const double (&k_vector)[3]) noexcept
 {
     constexpr double tolerance = 1.0e-12;
@@ -91,6 +65,64 @@ bool floquet_k_vector_is_nonzero_or_invalid(const double (&k_vector)[3]) noexcep
         }
     }
     return false;
+}
+
+std::string json_string(const char *value)
+{
+    std::string result = "\"";
+    if (value != nullptr) {
+        for (const char c : std::string(value)) {
+            if (c == '"' || c == '\\') {
+                result.push_back('\\');
+            }
+            result.push_back(c);
+        }
+    }
+    result.push_back('"');
+    return result;
+}
+
+std::string sweep_progress_json(
+    const char *state,
+    const char *status,
+    const char *complete,
+    std::uint64_t total_frequency_points,
+    std::uint64_t completed_frequency_points,
+    std::uint64_t written_frequency_point_artifacts,
+    double current_frequency_hz,
+    bool partial_artifacts_available,
+    const char *latest_artifact_manifest_path)
+{
+    std::ostringstream json;
+    json.precision(17);
+    json << "{\"schema_version\":\"frequency_domain_sweep_progress.v1\""
+         << ",\"state\":" << json_string(state);
+    if (status != nullptr) {
+        json << ",\"status\":" << json_string(status);
+    }
+    if (complete != nullptr) {
+        json << ",\"complete\":" << complete;
+    }
+    json << ",\"total_frequency_points\":" << total_frequency_points
+         << ",\"completed_frequency_points\":" << completed_frequency_points
+         << ",\"written_frequency_point_artifacts\":"
+         << written_frequency_point_artifacts
+         << ",\"current_frequency_hz\":" << current_frequency_hz
+         << ",\"partial_artifacts_available\":"
+         << (partial_artifacts_available ? "true" : "false")
+         << ",\"latest_artifact_manifest_path\":"
+         << json_string(latest_artifact_manifest_path) << "}";
+    return json.str();
+}
+
+const char *stored_sweep_progress_json(std::string json)
+{
+    static thread_local std::array<std::string, 8> storage{};
+    static thread_local std::size_t next_index = 0;
+    std::string &slot = storage[next_index % storage.size()];
+    next_index += 1;
+    slot = std::move(json);
+    return slot.c_str();
 }
 
 } // namespace
@@ -137,7 +169,8 @@ FrequencyDomainSweepProgress initial_sweep_progress(
 {
     FrequencyDomainSweepProgress progress{};
     progress.total_frequency_points = total_frequency_points;
-    progress.progress_json = kInitialProgressJson;
+    progress.progress_json = stored_sweep_progress_json(sweep_progress_json(
+        "not_started", "running", "false", total_frequency_points, 0, 0, 0.0, false, ""));
     return progress;
 }
 
@@ -157,9 +190,16 @@ FrequencyDomainSweepProgress interrupted_sweep_progress(
         completed_frequency_points > 0 || written_frequency_point_artifacts > 0;
     progress.latest_artifact_manifest_path =
         latest_artifact_manifest_path != nullptr ? latest_artifact_manifest_path : "";
-    progress.progress_json = progress.partial_artifacts_available
-        ? kInterruptedWithArtifactsProgressJson
-        : kInterruptedWithoutArtifactsProgressJson;
+    progress.progress_json = stored_sweep_progress_json(sweep_progress_json(
+        "interrupted",
+        "interrupted",
+        "false",
+        total_frequency_points,
+        completed_frequency_points,
+        written_frequency_point_artifacts,
+        current_frequency_hz,
+        progress.partial_artifacts_available,
+        progress.latest_artifact_manifest_path));
     return progress;
 }
 
@@ -179,7 +219,16 @@ FrequencyDomainSweepProgress completed_sweep_progress(
         completed_frequency_points > 0 || written_frequency_point_artifacts > 0;
     progress.latest_artifact_manifest_path =
         latest_artifact_manifest_path != nullptr ? latest_artifact_manifest_path : "";
-    progress.progress_json = kCompletedProgressJson;
+    progress.progress_json = stored_sweep_progress_json(sweep_progress_json(
+        "completed",
+        "ready",
+        "true",
+        total_frequency_points,
+        completed_frequency_points,
+        written_frequency_point_artifacts,
+        current_frequency_hz,
+        progress.partial_artifacts_available,
+        progress.latest_artifact_manifest_path));
     return progress;
 }
 
@@ -199,9 +248,16 @@ FrequencyDomainSweepProgress cancelling_sweep_progress(
         completed_frequency_points > 0 || written_frequency_point_artifacts > 0;
     progress.latest_artifact_manifest_path =
         latest_artifact_manifest_path != nullptr ? latest_artifact_manifest_path : "";
-    progress.progress_json = progress.partial_artifacts_available
-        ? kCancellingWithArtifactsProgressJson
-        : kCancellingWithoutArtifactsProgressJson;
+    progress.progress_json = stored_sweep_progress_json(sweep_progress_json(
+        "cancel_requested",
+        "cancel_requested",
+        "false",
+        total_frequency_points,
+        completed_frequency_points,
+        written_frequency_point_artifacts,
+        current_frequency_hz,
+        progress.partial_artifacts_available,
+        progress.latest_artifact_manifest_path));
     return progress;
 }
 

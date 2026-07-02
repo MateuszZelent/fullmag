@@ -101,7 +101,7 @@ fn dmatrix_to_csr(mat: &DMatrix<f64>, drop_tol: f64) -> CsrMatrix {
     }
 }
 
-fn reject_unsupported_floquet_dynamic_demag(
+pub(crate) fn reject_unsupported_floquet_dynamic_demag(
     spin_wave_bc: &SpinWaveBoundaryConditionIR,
     include_demag: bool,
 ) -> Result<(), RunError> {
@@ -154,6 +154,15 @@ struct NativeModalEigenpair {
     residual_linf: f64,
     mass_norm: f64,
     vector: Vec<Complex64>,
+}
+
+#[derive(Debug, Clone)]
+struct NativeBlochFloquetDensePayload {
+    physical_complex_dof: usize,
+    stiffness: DMatrix<f64>,
+    gyrotropic_row_major: Vec<f64>,
+    tangent_mass: DMatrix<f64>,
+    physical_mass: Vec<Vec<Complex64>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -216,6 +225,7 @@ fn gpu_solve_real_symmetric_eigenpairs(
     Ok(eigenpairs)
 }
 
+#[allow(dead_code)]
 pub(crate) fn execute_baseline_fem_eigen(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
@@ -381,8 +391,108 @@ fn native_modal_k_vector(k_sampling: Option<&KSamplingIR>) -> Option<&[f64]> {
     }
 }
 
+fn native_modal_floquet_periodic_pairs<'a>(
+    plan: &'a FemEigenPlanIR,
+    topology: &'a MeshTopology,
+) -> Result<Vec<native_fem::NativeModalEigenFloquetPeriodicPair<'a>>, RunError> {
+    if !matches!(plan.spin_wave_bc.kind(), SpinWaveBoundaryKindIR::Floquet) {
+        return Ok(Vec::new());
+    }
+    let Some(KSamplingIR::Single { k_vector }) = plan.k_sampling.as_ref() else {
+        return Ok(Vec::new());
+    };
+    let requested_pair_ids = plan.spin_wave_bc.boundary_pair_ids();
+    let mut pairs = Vec::new();
+    for (pair_id, node_a, node_b) in &topology.periodic_node_pairs {
+        if !requested_pair_ids.is_empty()
+            && !requested_pair_ids
+                .iter()
+                .any(|requested| requested == pair_id)
+        {
+            continue;
+        }
+        let translation_m = topology
+            .periodic_boundary_pairs
+            .iter()
+            .find(|(boundary_pair_id, _)| boundary_pair_id == pair_id)
+            .and_then(|(_, translation)| *translation)
+            .ok_or_else(|| RunError {
+                message: format!(
+                    "Floquet modal periodic pair '{pair_id}' requires mesh.periodic_boundary_pairs translation metadata"
+                ),
+            })?;
+        let phase_rad = match plan.spin_wave_bc.phase_convention() {
+            fullmag_ir::PhaseConventionIR::ExpMinusIKDotDeltaR => {
+                -(k_vector[0] * translation_m[0]
+                    + k_vector[1] * translation_m[1]
+                    + k_vector[2] * translation_m[2])
+            }
+        };
+        pairs.push(native_fem::NativeModalEigenFloquetPeriodicPair {
+            pair_id: Some(pair_id.as_str()),
+            node_a: u64::from(*node_a),
+            node_b: u64::from(*node_b),
+            translation_m: Some(translation_m),
+            phase_rad: Some(phase_rad),
+        });
+    }
+    Ok(pairs)
+}
+
 fn native_cpu_modal_window_enabled(plan: &FemEigenPlanIR) -> bool {
-    matches!(
+    let base_window_supported =
+        matches!(
+            plan.target,
+            fullmag_ir::EigenTargetIR::FrequencyWindow { .. }
+        ) && matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2)
+            && matches!(
+                plan.damping_policy,
+                fullmag_ir::EigenDampingPolicyIR::Ignore
+            );
+    base_window_supported
+        && ((matches!(
+            plan.spin_wave_bc.kind(),
+            fullmag_ir::SpinWaveBoundaryKindIR::Free
+        ) && is_gamma_k_sampling(plan.k_sampling.as_ref()))
+            || native_cpu_modal_window_has_bloch_floquet_payload_path(plan))
+}
+
+fn native_cpu_modal_window_has_bloch_floquet_payload_path(plan: &FemEigenPlanIR) -> bool {
+    if !matches!(
+        plan.spin_wave_bc.kind(),
+        fullmag_ir::SpinWaveBoundaryKindIR::Floquet
+    ) || !matches!(
+        plan.k_sampling.as_ref(),
+        Some(fullmag_ir::KSamplingIR::Single { .. })
+    ) {
+        return false;
+    }
+    let requested_pair_ids = plan.spin_wave_bc.boundary_pair_ids();
+    if requested_pair_ids.is_empty() {
+        return false;
+    }
+    requested_pair_ids.iter().any(|pair_id| {
+        let has_nodes = plan
+            .mesh
+            .periodic_node_pairs
+            .iter()
+            .any(|pair| pair.pair_id == *pair_id);
+        let has_translation = plan
+            .mesh
+            .periodic_boundary_pairs
+            .iter()
+            .any(|pair| pair.pair_id == *pair_id && pair.translation.is_some());
+        has_nodes && has_translation
+    })
+}
+
+pub(crate) fn native_cpu_modal_window_rejection_reason(
+    plan: &FemEigenPlanIR,
+) -> Option<&'static str> {
+    if native_cpu_modal_window_enabled(plan) {
+        return None;
+    }
+    if matches!(
         plan.target,
         fullmag_ir::EigenTargetIR::FrequencyWindow { .. }
     ) && matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2)
@@ -392,9 +502,30 @@ fn native_cpu_modal_window_enabled(plan: &FemEigenPlanIR) -> bool {
         )
         && matches!(
             plan.spin_wave_bc.kind(),
-            fullmag_ir::SpinWaveBoundaryKindIR::Free
+            fullmag_ir::SpinWaveBoundaryKindIR::Floquet
         )
-        && is_gamma_k_sampling(plan.k_sampling.as_ref())
+        && k_sampling_contains_nonzero(plan.k_sampling.as_ref())
+    {
+        return Some("production_cpu_modal_nonzero_k_floquet_operator_missing");
+    }
+    None
+}
+
+pub(crate) fn insert_native_cpu_modal_window_rejection_contract(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+) {
+    object.insert(
+        "required_operator_contract".to_string(),
+        serde_json::json!("bloch_floquet_tangent_operator_with_periodic_pairs"),
+    );
+    object.insert(
+        "required_operator_payload_kind".to_string(),
+        serde_json::json!("bloch_floquet_tangent_operator"),
+    );
+    object.insert(
+        "modal_periodic_pair_contract_available".to_string(),
+        serde_json::json!(false),
+    );
 }
 
 fn execute_fem_eigen_inner(
@@ -708,6 +839,23 @@ fn execute_fem_eigen_inner(
                 &equilibrium,
             )
         };
+        if is_full_2x2 && use_native_modal_production {
+            return execute_native_cpu_modal_window_from_bloch_floquet_complex(
+                plan,
+                outputs,
+                initial_magnetization,
+                equilibrium,
+                observables,
+                relaxation_steps,
+                &reduction,
+                &bases,
+                &stiffness,
+                &mass,
+                progress,
+                active_n,
+                effective_dof,
+            );
+        }
         solve_complex_hermitian_eigenpairs(plan, stiffness, mass)?
     } else {
         Vec::new()
@@ -1173,6 +1321,11 @@ fn execute_native_cpu_modal_window_from_full_2x2(
     let stiffness_row_major = dmatrix_to_row_major(&stiffness_omega);
     let gyrotropic_row_major = gyrotropic_matrix_row_major_from_tangent_mass(mass, active_nodes)?;
     let tangent_mass_row_major = dmatrix_to_row_major(mass);
+    let native_modal_topology = MeshTopology::from_ir(&plan.mesh).map_err(|error| RunError {
+        message: format!("failed to build native modal Floquet pair topology: {error}"),
+    })?;
+    let native_floquet_periodic_pairs =
+        native_modal_floquet_periodic_pairs(plan, &native_modal_topology)?;
     let native_result = native_fem::solve_native_modal_eigen(native_fem::NativeModalEigenRequest {
         mesh_asset_id: &plan.mesh_name,
         equilibrium_source_kind: native_modal_equilibrium_source_kind(&plan.equilibrium),
@@ -1189,7 +1342,7 @@ fn execute_native_cpu_modal_window_from_full_2x2(
             "{\"schema_version\":\"frequency_domain_operator_diagnostics.v1\",\
              \"payload_kind\":\"rust_full_2x2_dense_operator\",\
              \"stiffness_units\":\"rad_s_inv\",\
-             \"gyrotropic_form\":\"[[0,-M],[M,0]]\"}",
+             \"gyrotropic_form\":\"pencil_B=-G=[[0,M],[-M,0]]\"}",
         ),
         requested_mode_count: plan.count as i32,
         target_kind: native_modal_target_kind(&plan.target),
@@ -1212,6 +1365,8 @@ fn execute_native_cpu_modal_window_from_full_2x2(
             stiffness_matrix_row_major: Some(&stiffness_row_major),
             gyrotropic_matrix_row_major: Some(&gyrotropic_row_major),
             mass_matrix_row_major: Some(&tangent_mass_row_major),
+            phase_convention: native_fem::FrequencyDomainPhaseConvention::ExpIOmegaT,
+            floquet_periodic_pairs: &native_floquet_periodic_pairs,
         }),
         mfem_sparse_operator_problem: None,
     })
@@ -1236,6 +1391,211 @@ fn execute_native_cpu_modal_window_from_full_2x2(
     if modes.is_empty() {
         return Err(RunError {
             message: "native FEM modal_eigen production CPU solve returned no modes".to_string(),
+        });
+    }
+
+    emit_fem_eigen_progress(
+        &mut progress,
+        FemEigenProgress {
+            phase: "writing_artifacts",
+            phase_index: 4,
+            phase_count: 5,
+            percent: 85.0,
+            solver_kind: NATIVE_CPU_MODAL_WINDOW_SOLVER_KIND,
+            active_nodes,
+            effective_dof,
+            requested_modes: plan.count as usize,
+            candidate_modes: modes.len(),
+            computed_modes: modes.len(),
+            iteration: None,
+            max_iterations: None,
+            residual: modes
+                .iter()
+                .map(|mode| mode.residual_relative_l2)
+                .reduce(f64::max),
+            warning: None,
+        },
+    )?;
+
+    let auxiliary_artifacts = native_modal_artifacts(
+        plan,
+        outputs,
+        &equilibrium,
+        reduction,
+        bases,
+        &modes,
+        solver_diagnostics,
+        relaxation_steps,
+    )?;
+
+    let stats = StepStats {
+        step: relaxation_steps,
+        time: 0.0,
+        dt: 0.0,
+        e_ex: observables.exchange_energy_joules,
+        e_demag: observables.demag_energy_joules,
+        e_ext: observables.external_energy_joules,
+        e_total: observables.total_energy_joules,
+        max_dm_dt: observables.max_rhs_amplitude,
+        max_h_eff: observables.max_effective_field_amplitude,
+        max_h_demag: observables.max_demag_field_amplitude,
+        ..StepStats::default()
+    };
+
+    emit_fem_eigen_progress(
+        &mut progress,
+        FemEigenProgress {
+            phase: "completed",
+            phase_index: 5,
+            phase_count: 5,
+            percent: 100.0,
+            solver_kind: NATIVE_CPU_MODAL_WINDOW_SOLVER_KIND,
+            active_nodes,
+            effective_dof,
+            requested_modes: plan.count as usize,
+            candidate_modes: modes.len(),
+            computed_modes: modes.len(),
+            iteration: None,
+            max_iterations: None,
+            residual: None,
+            warning: None,
+        },
+    )?;
+
+    Ok(ExecutedRun {
+        result: RunResult {
+            status: RunStatus::Completed,
+            steps: vec![stats],
+            final_magnetization: equilibrium,
+            completion: Some(crate::relaxation::infer_stage_completion(
+                RunStatus::Completed,
+                None,
+                &[],
+                0.0,
+                0.0,
+                false,
+            )),
+        },
+        initial_magnetization,
+        field_snapshots: Vec::new(),
+        field_snapshot_count: 0,
+        auxiliary_artifacts,
+        provenance: native_modal_execution_provenance(plan),
+    })
+}
+
+fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    initial_magnetization: Vec<Vector3>,
+    equilibrium: Vec<Vector3>,
+    observables: EffectiveFieldObservables,
+    relaxation_steps: u64,
+    reduction: &ReductionMap,
+    bases: &[(Vector3, Vector3)],
+    stiffness: &[Vec<Complex64>],
+    mass: &[Vec<Complex64>],
+    mut progress: Option<&mut FemEigenProgressCallback<'_>>,
+    active_nodes: usize,
+    effective_dof: usize,
+) -> Result<ExecutedRun, RunError> {
+    emit_fem_eigen_progress(
+        &mut progress,
+        FemEigenProgress {
+            phase: "solving_native_shift_invert",
+            phase_index: 3,
+            phase_count: 5,
+            percent: 35.0,
+            solver_kind: NATIVE_CPU_MODAL_WINDOW_SOLVER_KIND,
+            active_nodes,
+            effective_dof,
+            requested_modes: plan.count as usize,
+            candidate_modes: plan.count as usize,
+            computed_modes: 0,
+            iteration: Some(0),
+            max_iterations: Some(300),
+            residual: None,
+            warning: None,
+        },
+    )?;
+
+    let payload = native_bloch_floquet_dense_payload_from_complex_pair(stiffness, mass)?;
+    let payload = NativeBlochFloquetDensePayload {
+        physical_complex_dof: payload.physical_complex_dof,
+        stiffness: payload.stiffness * plan.gyromagnetic_ratio,
+        gyrotropic_row_major: payload.gyrotropic_row_major,
+        tangent_mass: payload.tangent_mass,
+        physical_mass: payload.physical_mass,
+    };
+    let stiffness_row_major = dmatrix_to_row_major(&payload.stiffness);
+    let tangent_mass_row_major = dmatrix_to_row_major(&payload.tangent_mass);
+    let native_modal_topology = MeshTopology::from_ir(&plan.mesh).map_err(|error| RunError {
+        message: format!("failed to build native modal Bloch/Floquet pair topology: {error}"),
+    })?;
+    let native_floquet_periodic_pairs =
+        native_modal_floquet_periodic_pairs(plan, &native_modal_topology)?;
+    let native_result = native_fem::solve_native_modal_eigen(native_fem::NativeModalEigenRequest {
+        mesh_asset_id: &plan.mesh_name,
+        equilibrium_source_kind: native_modal_equilibrium_source_kind(&plan.equilibrium),
+        gamma_rad_s_t: plan.gyromagnetic_ratio / MU0,
+        mu0_t_m_a: MU0,
+        alpha: plan.material.damping,
+        include_exchange: plan.enable_exchange,
+        include_demag: plan.enable_demag,
+        demag_realization: resolved_demag_realization(plan).map(|value| value.provenance_name()),
+        damping_policy: native_modal_damping_policy(plan.damping_policy),
+        spin_wave_bc_kind: native_modal_spin_wave_bc_kind(&plan.spin_wave_bc),
+        k_vector_rad_m: native_modal_k_vector(plan.k_sampling.as_ref()),
+        operator_diagnostics_json: Some(
+            "{\"schema_version\":\"frequency_domain_operator_diagnostics.v1\",\
+             \"payload_kind\":\"bloch_floquet_tangent_operator\",\
+             \"stiffness_units\":\"rad_s_inv\",\
+             \"gyrotropic_form\":\"pencil_B=-G=[[0,-M],[M,0]]\",\
+             \"operator_embedding\":\"complex_bloch_floquet_to_real_gyrotropic_pencil\"}",
+        ),
+        requested_mode_count: plan.count as i32,
+        target_kind: native_modal_target_kind(&plan.target),
+        target_frequency_hz: native_modal_target_frequency_hz(&plan.target),
+        frequency_min_hz: native_modal_frequency_min_hz(&plan.target),
+        frequency_max_hz: native_modal_frequency_max_hz(&plan.target),
+        residual_tolerance: 1.0e-8,
+        max_outer_iterations: 300,
+        max_linear_iterations: 1000,
+        output_directory: None,
+        write_partial_artifacts: false,
+        completeness_policy: 1,
+        eigensolver_family: 1,
+        spectral_transform_kind: 1,
+        cancel_requested: None,
+        progress_callback: None,
+        tiny_validation_problem: None,
+        mfem_operator_problem: Some(native_fem::NativeModalEigenMfemOperatorProblem {
+            tangent_dof_count: payload.stiffness.nrows() as u64,
+            stiffness_matrix_row_major: Some(&stiffness_row_major),
+            gyrotropic_matrix_row_major: Some(&payload.gyrotropic_row_major),
+            mass_matrix_row_major: Some(&tangent_mass_row_major),
+            phase_convention: native_fem::FrequencyDomainPhaseConvention::ExpIOmegaT,
+            floquet_periodic_pairs: &native_floquet_periodic_pairs,
+        }),
+        mfem_sparse_operator_problem: None,
+    })
+    .map_err(|message| RunError { message })?;
+
+    if native_result.status != native_fem::NativeFrequencyDomainStatus::Ok {
+        return Err(RunError {
+            message: format!(
+                "native FEM modal_eigen Bloch/Floquet production CPU solve failed: {} (diagnostics_json={})",
+                native_result.error_message, native_result.diagnostics_json
+            ),
+        });
+    }
+    let solver_diagnostics = native_solver_diagnostics_json(plan, &native_result.diagnostics_json)?;
+    let modes =
+        native_bloch_floquet_modes_from_result_json(plan, &native_result.result_json, &payload)?;
+    if modes.is_empty() {
+        return Err(RunError {
+            message: "native FEM modal_eigen Bloch/Floquet production CPU solve returned no modes"
+                .to_string(),
         });
     }
 
@@ -1361,8 +1721,8 @@ fn gyrotropic_matrix_row_major_from_tangent_mass(
     for row in 0..active_nodes {
         for col in 0..active_nodes {
             let tangent_mass = mass[(row, col)];
-            gyrotropic[row * dim + col + active_nodes] = -tangent_mass;
-            gyrotropic[(row + active_nodes) * dim + col] = tangent_mass;
+            gyrotropic[row * dim + col + active_nodes] = tangent_mass;
+            gyrotropic[(row + active_nodes) * dim + col] = -tangent_mass;
         }
     }
     Ok(gyrotropic)
@@ -1408,7 +1768,11 @@ fn native_solver_diagnostics_json(
         .or_insert_with(|| serde_json::json!("lambda_eq_i_omega"));
     object
         .entry("frequency_mapping".to_string())
-        .or_insert_with(|| serde_json::json!("frequency_hz = abs(Im(lambda))/(2*pi)"));
+        .or_insert_with(|| {
+            serde_json::json!(
+                "frequency_hz = Im(lambda)/(2*pi) for the accepted positive-frequency branch"
+            )
+        });
     object
         .entry("production_gyrotropic_mapping".to_string())
         .or_insert_with(|| serde_json::json!(true));
@@ -1419,7 +1783,7 @@ fn native_solver_diagnostics_json(
         .entry("residual_definition".to_string())
         .or_insert_with(|| {
             serde_json::json!(
-                "relative_residual = ||K phi - omega G phi||_2 / (||K phi||_2 + |omega| * ||G phi||_2)"
+                "relative_residual = ||K phi - lambda B phi||_2 / (||K phi||_2 + |lambda| * ||B phi||_2), B=-G"
             )
         });
     object
@@ -1497,6 +1861,78 @@ fn native_modal_modes_from_result_json(
         .collect()
 }
 
+fn native_bloch_floquet_modes_from_result_json(
+    plan: &FemEigenPlanIR,
+    raw: &str,
+    payload: &NativeBlochFloquetDensePayload,
+) -> Result<Vec<NativeModalEigenpair>, RunError> {
+    let result = serde_json::from_str::<serde_json::Value>(raw).map_err(|error| RunError {
+        message: format!("failed to parse native Bloch/Floquet modal result JSON: {error}"),
+    })?;
+    let modes = result
+        .get("modes")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| RunError {
+            message: "native Bloch/Floquet modal result JSON is missing modes[]".to_string(),
+        })?;
+    modes
+        .iter()
+        .map(|mode| native_bloch_floquet_mode_from_json(plan, mode, payload))
+        .collect()
+}
+
+fn native_bloch_floquet_mode_from_json(
+    plan: &FemEigenPlanIR,
+    mode: &serde_json::Value,
+    payload: &NativeBlochFloquetDensePayload,
+) -> Result<NativeModalEigenpair, RunError> {
+    let real = required_f64_array(mode, "mode_vector_real")?;
+    let imag = required_f64_array(mode, "mode_vector_imag")?;
+    if real.len() != imag.len() || real.len() != payload.stiffness.nrows() {
+        return Err(RunError {
+            message: format!(
+                "native Bloch/Floquet modal mode vector length mismatch: real={}, imag={}, operator={}",
+                real.len(),
+                imag.len(),
+                payload.stiffness.nrows()
+            ),
+        });
+    }
+    let embedded = real
+        .iter()
+        .zip(imag.iter())
+        .map(|(re, im)| Complex64::new(*re, *im))
+        .collect::<Vec<_>>();
+    let mut vector =
+        deembed_native_bloch_floquet_mode_vector(&embedded, payload.physical_complex_dof)?;
+    vector = normalize_complex_mode(&vector, &payload.physical_mass, &plan.normalization);
+    let eigenvalue_real = required_f64(mode, "eigenvalue_real")?;
+    let eigenvalue_imag = required_f64(mode, "eigenvalue_imag")?;
+    let frequency_hz = required_f64(mode, "frequency_hz")?;
+    let omega_rad_s = required_f64(mode, "omega_rad_s")?;
+    validate_native_modal_lambda_frequency_mapping(eigenvalue_imag, omega_rad_s, frequency_hz)?;
+    let lambda = Complex64::new(eigenvalue_real, eigenvalue_imag);
+    let (residual_absolute_l2, residual_relative_l2, residual_linf) =
+        gyrotropic_pencil_residual_norms(
+            &payload.stiffness,
+            &payload.gyrotropic_row_major,
+            lambda,
+            &embedded,
+        );
+    let mass_norm = complex_mass_norm(&payload.physical_mass, &vector).re;
+    Ok(NativeModalEigenpair {
+        frequency_hz,
+        omega_rad_s,
+        eigenvalue_real,
+        eigenvalue_imag,
+        residual_absolute_l2,
+        residual_relative_l2,
+        residual_linf,
+        mass_norm,
+        vector,
+    })
+}
+
 fn native_modal_mode_from_json(
     plan: &FemEigenPlanIR,
     mode: &serde_json::Value,
@@ -1524,13 +1960,16 @@ fn native_modal_mode_from_json(
     normalize_complex_block_mode(&mut vector, tangent_mass, plan.normalization);
     let eigenvalue_real = required_f64(mode, "eigenvalue_real")?;
     let eigenvalue_imag = required_f64(mode, "eigenvalue_imag")?;
+    let frequency_hz = required_f64(mode, "frequency_hz")?;
+    let omega_rad_s = required_f64(mode, "omega_rad_s")?;
+    validate_native_modal_lambda_frequency_mapping(eigenvalue_imag, omega_rad_s, frequency_hz)?;
     let lambda = Complex64::new(eigenvalue_real, eigenvalue_imag);
     let (residual_absolute_l2, residual_relative_l2, residual_linf) =
         gyrotropic_pencil_residual_norms(stiffness_omega, gyrotropic_row_major, lambda, &vector);
     let mass_norm = complex_block_mass_norm(tangent_mass, &vector).re;
     Ok(NativeModalEigenpair {
-        frequency_hz: required_f64(mode, "frequency_hz")?,
-        omega_rad_s: required_f64(mode, "omega_rad_s")?,
+        frequency_hz,
+        omega_rad_s,
         eigenvalue_real,
         eigenvalue_imag,
         residual_absolute_l2,
@@ -1539,6 +1978,41 @@ fn native_modal_mode_from_json(
         mass_norm,
         vector,
     })
+}
+
+fn validate_native_modal_lambda_frequency_mapping(
+    eigenvalue_imag: f64,
+    omega_rad_s: f64,
+    frequency_hz: f64,
+) -> Result<(), RunError> {
+    if eigenvalue_imag <= 0.0 {
+        return Err(RunError {
+            message: format!(
+                "native modal lambda=i*omega contract requires a positive-frequency branch, got Im(lambda)={eigenvalue_imag}"
+            ),
+        });
+    }
+    let expected_omega = eigenvalue_imag;
+    if !approximately_equal(omega_rad_s, expected_omega, 1.0e-9, 1.0e-9) {
+        return Err(RunError {
+            message: format!(
+                "native modal lambda=i*omega contract mismatch: omega_rad_s={omega_rad_s}, Im(lambda)={eigenvalue_imag}"
+            ),
+        });
+    }
+    let expected_frequency = expected_omega / std::f64::consts::TAU;
+    if !approximately_equal(frequency_hz, expected_frequency, 1.0e-9, 1.0e-9) {
+        return Err(RunError {
+            message: format!(
+                "native modal frequency mapping mismatch: frequency_hz={frequency_hz}, expected Im(lambda)/(2*pi)={expected_frequency}"
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn approximately_equal(left: f64, right: f64, relative_tol: f64, absolute_tol: f64) -> bool {
+    (left - right).abs() <= absolute_tol.max(relative_tol * left.abs().max(right.abs()))
 }
 
 fn required_f64(value: &serde_json::Value, key: &str) -> Result<f64, RunError> {
@@ -2217,6 +2691,16 @@ fn is_gamma_k_sampling(k_sampling: Option<&KSamplingIR>) -> bool {
     }
 }
 
+fn k_sampling_contains_nonzero(k_sampling: Option<&KSamplingIR>) -> bool {
+    match k_sampling {
+        Some(KSamplingIR::Single { k_vector }) => k_vector.iter().any(|value| *value != 0.0),
+        Some(KSamplingIR::Path { points, .. }) => points
+            .iter()
+            .any(|point| point.k_vector.iter().any(|value| *value != 0.0)),
+        None => false,
+    }
+}
+
 fn validate_tangent_frame_transport_support(
     plan: &FemEigenPlanIR,
     topology: &MeshTopology,
@@ -2522,6 +3006,7 @@ fn assemble_projected_scalar_operator_real(
     let active_count = reduction.active_nodes.len();
     let mut stiffness = DMatrix::<f64>::zeros(active_count, active_count);
     let mut mass = DMatrix::<f64>::zeros(active_count, active_count);
+    let exchange_coeff = exchange_field_coefficient(plan);
     let parallel_field = observables
         .magnetization
         .iter()
@@ -2590,7 +3075,8 @@ fn assemble_projected_scalar_operator_real(
                 };
                 mass[(row, col)] += local_mass[i][j];
                 if plan.enable_exchange {
-                    stiffness[(row, col)] += topology.element_stiffness[element_index][i][j];
+                    stiffness[(row, col)] +=
+                        exchange_coeff * topology.element_stiffness[element_index][i][j];
                 }
                 let shift = 0.5 * (local_shift[i] + local_shift[j]);
                 stiffness[(row, col)] += local_mass[i][j] * shift;
@@ -2635,6 +3121,7 @@ fn assemble_full_2x2_operator_real(
     let dim = 2 * n;
     let mut stiffness = DMatrix::<f64>::zeros(dim, dim);
     let mut mass = DMatrix::<f64>::zeros(dim, dim);
+    let exchange_coeff = exchange_field_coefficient(plan);
 
     // Compute local effective-field tangent-plane projection at each node.
     // For the full 2×2 operator we need all four components:
@@ -2738,7 +3225,7 @@ fn assemble_full_2x2_operator_real(
 
                 // Exchange stiffness: isotropic → K_11 and K_22 only
                 if plan.enable_exchange {
-                    let ex = topology.element_stiffness[element_index][i][j];
+                    let ex = exchange_coeff * topology.element_stiffness[element_index][i][j];
                     stiffness[(row, col)] += ex;
                     stiffness[(row + n, col + n)] += ex;
                 }
@@ -2781,6 +3268,7 @@ fn assemble_projected_scalar_operator_complex(
     let active_count = reduction.active_nodes.len();
     let mut stiffness = vec![vec![Complex64::new(0.0, 0.0); active_count]; active_count];
     let mut mass = vec![vec![Complex64::new(0.0, 0.0); active_count]; active_count];
+    let exchange_coeff = exchange_field_coefficient(plan);
     let parallel_field = observables
         .magnetization
         .iter()
@@ -2854,7 +3342,8 @@ fn assemble_projected_scalar_operator_complex(
                 let coeff = phase_i.conj() * phase_j;
                 mass[row][col] += coeff * local_mass[i][j];
                 if plan.enable_exchange {
-                    stiffness[row][col] += coeff * topology.element_stiffness[element_index][i][j];
+                    stiffness[row][col] +=
+                        coeff * exchange_coeff * topology.element_stiffness[element_index][i][j];
                 }
                 let shift = 0.5 * (local_shift[i] + local_shift[j]);
                 stiffness[row][col] += coeff * (local_mass[i][j] * shift);
@@ -2879,6 +3368,7 @@ fn assemble_projected_full_2x2_operator_complex(
     let dim = 2 * n;
     let mut stiffness = vec![vec![Complex64::new(0.0, 0.0); dim]; dim];
     let mut mass = vec![vec![Complex64::new(0.0, 0.0); dim]; dim];
+    let exchange_coeff = exchange_field_coefficient(plan);
 
     let field_blocks: Vec<[f64; 4]> = observables
         .magnetization
@@ -2975,7 +3465,7 @@ fn assemble_projected_full_2x2_operator_complex(
                 );
 
                 if plan.enable_exchange {
-                    let ex = topology.element_stiffness[element_index][i][j];
+                    let ex = exchange_coeff * topology.element_stiffness[element_index][i][j];
                     add_complex_tangent_block(
                         &mut stiffness,
                         n,
@@ -3473,6 +3963,95 @@ fn complex_pair_to_real_blocks(
     (a, b)
 }
 
+fn native_bloch_floquet_dense_payload_from_complex_pair(
+    stiffness: &[Vec<Complex64>],
+    mass: &[Vec<Complex64>],
+) -> Result<NativeBlochFloquetDensePayload, RunError> {
+    if stiffness.is_empty() || stiffness.len() != mass.len() {
+        return Err(RunError {
+            message: "native Bloch/Floquet payload requires non-empty matching stiffness and mass matrices"
+                .to_string(),
+        });
+    }
+    let physical_complex_dof = stiffness.len();
+    if stiffness
+        .iter()
+        .any(|row| row.len() != physical_complex_dof)
+        || mass.iter().any(|row| row.len() != physical_complex_dof)
+    {
+        return Err(RunError {
+            message:
+                "native Bloch/Floquet payload requires square complex stiffness and mass matrices"
+                    .to_string(),
+        });
+    }
+
+    let (stiffness_block, mass_block) = complex_pair_to_real_blocks(stiffness, mass);
+    let block_dof = stiffness_block.nrows();
+    let embedded_dof = block_dof.checked_mul(2).ok_or_else(|| RunError {
+        message: "native Bloch/Floquet embedded payload dimension overflow".to_string(),
+    })?;
+    let mut stiffness_embedded = DMatrix::<f64>::zeros(embedded_dof, embedded_dof);
+    let mut tangent_mass = DMatrix::<f64>::zeros(embedded_dof, embedded_dof);
+    for row in 0..block_dof {
+        for col in 0..block_dof {
+            stiffness_embedded[(row, col)] = stiffness_block[(row, col)];
+            stiffness_embedded[(row + block_dof, col + block_dof)] = stiffness_block[(row, col)];
+            tangent_mass[(row, col)] = mass_block[(row, col)];
+            tangent_mass[(row + block_dof, col + block_dof)] = mass_block[(row, col)];
+        }
+    }
+    let mut gyrotropic_row_major = vec![0.0; embedded_dof * embedded_dof];
+    for row in 0..block_dof {
+        for col in 0..block_dof {
+            let value = mass_block[(row, col)];
+            gyrotropic_row_major[row * embedded_dof + col + block_dof] = -value;
+            gyrotropic_row_major[(row + block_dof) * embedded_dof + col] = value;
+        }
+    }
+
+    Ok(NativeBlochFloquetDensePayload {
+        physical_complex_dof,
+        stiffness: stiffness_embedded,
+        gyrotropic_row_major,
+        tangent_mass,
+        physical_mass: mass.to_vec(),
+    })
+}
+
+fn deembed_native_bloch_floquet_mode_vector(
+    embedded: &[Complex64],
+    physical_complex_dof: usize,
+) -> Result<Vec<Complex64>, RunError> {
+    let real_block_dof = physical_complex_dof
+        .checked_mul(2)
+        .ok_or_else(|| RunError {
+            message: "native Bloch/Floquet de-embedding dimension overflow".to_string(),
+        })?;
+    let expected = real_block_dof.checked_mul(2).ok_or_else(|| RunError {
+        message: "native Bloch/Floquet embedded mode dimension overflow".to_string(),
+    })?;
+    if physical_complex_dof == 0 || embedded.len() != expected {
+        return Err(RunError {
+            message: format!(
+                "native Bloch/Floquet embedded mode has length {}, expected {} for {} physical complex DOF",
+                embedded.len(),
+                expected,
+                physical_complex_dof
+            ),
+        });
+    }
+
+    let mut real_block = Vec::with_capacity(real_block_dof);
+    for index in 0..real_block_dof {
+        real_block
+            .push((embedded[index] - Complex64::i() * embedded[index + real_block_dof]) * 0.5);
+    }
+    Ok((0..physical_complex_dof)
+        .map(|index| real_block[index] + Complex64::i() * real_block[index + physical_complex_dof])
+        .collect())
+}
+
 fn real_block_vector_to_complex(vector: &DVector<f64>, active_count: usize) -> Vec<Complex64> {
     (0..active_count)
         .map(|index| Complex64::new(vector[index], vector[index + active_count]))
@@ -3524,6 +4103,18 @@ fn normalize_complex_mode(
             vector.iter().map(|value| *value / scale).collect()
         }
     }
+}
+
+fn complex_mass_norm(mass: &[Vec<Complex64>], vector: &[Complex64]) -> Complex64 {
+    let mut norm = Complex64::new(0.0, 0.0);
+    for row in 0..vector.len() {
+        let mut projected = Complex64::new(0.0, 0.0);
+        for col in 0..vector.len() {
+            projected += mass[row][col] * vector[col];
+        }
+        norm += vector[row].conj() * projected;
+    }
+    norm
 }
 
 fn sort_and_truncate_real_modes(plan: &FemEigenPlanIR, eigenpairs: &mut Vec<RealEigenpair>) {
@@ -3854,6 +4445,11 @@ fn add_dmi_2x2(
             }
         }
     }
+}
+
+fn exchange_field_coefficient(plan: &FemEigenPlanIR) -> f64 {
+    2.0 * plan.material.exchange_stiffness
+        / (MU0 * plan.material.saturation_magnetisation.max(1e-30))
 }
 
 /// Compute the uniaxial anisotropy effective field at a single node.
@@ -4808,6 +5404,19 @@ fn modal_solver_diagnostics_json(
             object.insert("subwindows".to_string(), serde_json::json!(subwindows));
         }
     }
+    if let Some(reason) = native_cpu_modal_window_rejection_reason(plan) {
+        if let Some(object) = diagnostics.as_object_mut() {
+            object.insert(
+                "production_cpu_rejection_reason".to_string(),
+                serde_json::json!(reason),
+            );
+            object.insert(
+                "production_cpu_rejection_scope".to_string(),
+                serde_json::json!("selected_spectrum_nonzero_k_floquet_modal"),
+            );
+            insert_native_cpu_modal_window_rejection_contract(object);
+        }
+    }
     diagnostics
 }
 
@@ -5344,7 +5953,40 @@ mod tests {
             spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
             demag_realization: None,
             mode_tracking: None,
+            dispersion_validation: None,
         }
+    }
+
+    fn add_x_floquet_pair_to_plan(plan: &mut FemEigenPlanIR) {
+        plan.mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
+            pair_id: "x_faces".to_string(),
+            source_marker: None,
+            destination_marker: None,
+            marker_a: 10,
+            marker_b: 11,
+            translation: Some([1.0, 0.0, 0.0]),
+            tolerance: Some(1e-12),
+            axis_hint: None,
+            orientation: None,
+            pairing_policy: None,
+        }];
+        plan.mesh.periodic_node_pairs = vec![fullmag_ir::MeshPeriodicNodePairIR {
+            pair_id: "x_faces".to_string(),
+            node_a: 0,
+            node_b: 1,
+        }];
+        plan.spin_wave_bc =
+            SpinWaveBoundaryConditionIR::Config(fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: SpinWaveBoundaryKindIR::Floquet,
+                boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            });
+        plan.k_sampling = Some(KSamplingIR::Single {
+            k_vector: [1.0e6, 0.0, 0.0],
+        });
     }
 
     #[test]
@@ -5366,6 +6008,48 @@ mod tests {
         assert_eq!(sparse_lobpcg_candidate_count(&target, 20, 50), 50);
         assert!(sparse_lobpcg_candidate_count(&target, 20, 200) > 20);
         assert!(sparse_lobpcg_candidate_count(&target, 40, 10_000) > 40);
+    }
+
+    #[test]
+    fn native_modal_gyrotropic_pencil_uses_exp_i_omega_t_sign() {
+        let mass = DMatrix::identity(2, 2);
+
+        let gyrotropic = gyrotropic_matrix_row_major_from_tangent_mass(&mass, 1)
+            .expect("single macrospin tangent mass should build a pencil matrix");
+
+        assert_eq!(gyrotropic, vec![0.0, 1.0, -1.0, 0.0]);
+    }
+
+    #[test]
+    fn native_modal_lambda_i_omega_macrospin_mapping_has_positive_frequency_residual() {
+        let stiffness_omega = DMatrix::identity(2, 2);
+        let mass = DMatrix::identity(2, 2);
+        let gyrotropic = gyrotropic_matrix_row_major_from_tangent_mass(&mass, 1)
+            .expect("single macrospin tangent mass should build a pencil matrix");
+        let lambda = Complex64::new(0.0, 1.0);
+        let mode = vec![Complex64::new(1.0, 0.0), Complex64::new(0.0, -1.0)];
+
+        let (absolute, relative, linf) =
+            gyrotropic_pencil_residual_norms(&stiffness_omega, &gyrotropic, lambda, &mode);
+
+        assert!(absolute < 1.0e-14);
+        assert!(relative < 1.0e-14);
+        assert!(linf < 1.0e-14);
+        validate_native_modal_lambda_frequency_mapping(
+            lambda.im,
+            lambda.im,
+            1.0 / std::f64::consts::TAU,
+        )
+        .expect("lambda=i*omega maps to positive frequency for the accepted branch");
+    }
+
+    #[test]
+    fn native_modal_lambda_i_omega_mapping_rejects_negative_branch() {
+        let error =
+            validate_native_modal_lambda_frequency_mapping(-1.0, 1.0, 1.0 / std::f64::consts::TAU)
+                .expect_err("negative-frequency conjugate branch must not pass as accepted mode");
+
+        assert!(error.message.contains("positive-frequency branch"));
     }
 
     #[test]
@@ -5608,6 +6292,73 @@ mod tests {
     }
 
     #[test]
+    fn native_cpu_modal_window_accepts_nonzero_floquet_single_k_with_bloch_payload_path() {
+        let mut plan = minimal_native_modal_plan();
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.damping_policy = EigenDampingPolicyIR::Ignore;
+        add_x_floquet_pair_to_plan(&mut plan);
+
+        assert!(
+            native_cpu_modal_window_enabled(&plan),
+            "nonzero-k Floquet Full2x2 frequency-window requests should use the native Bloch/Floquet payload path"
+        );
+        assert_eq!(native_cpu_modal_window_rejection_reason(&plan), None);
+    }
+
+    #[test]
+    fn reference_modal_diagnostics_name_nonzero_k_production_cpu_rejection() {
+        let mut plan = minimal_native_modal_plan();
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.damping_policy = EigenDampingPolicyIR::Ignore;
+        plan.spin_wave_bc =
+            SpinWaveBoundaryConditionIR::Config(fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: SpinWaveBoundaryKindIR::Floquet,
+                boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            });
+        plan.k_sampling = Some(KSamplingIR::Single {
+            k_vector: [1.0e6, 0.0, 0.0],
+        });
+
+        let diagnostics =
+            modal_solver_diagnostics_json(&plan, "cpu_full_2x2_phase_reduced_floquet", 1);
+
+        assert_eq!(
+            diagnostics
+                .get("production_cpu_rejection_reason")
+                .and_then(|value| value.as_str()),
+            Some("production_cpu_modal_nonzero_k_floquet_operator_missing")
+        );
+        assert_eq!(
+            diagnostics
+                .get("production_cpu_rejection_scope")
+                .and_then(|value| value.as_str()),
+            Some("selected_spectrum_nonzero_k_floquet_modal")
+        );
+        assert_eq!(
+            diagnostics
+                .get("required_operator_contract")
+                .and_then(|value| value.as_str()),
+            Some("bloch_floquet_tangent_operator_with_periodic_pairs")
+        );
+        assert_eq!(
+            diagnostics
+                .get("required_operator_payload_kind")
+                .and_then(|value| value.as_str()),
+            Some("bloch_floquet_tangent_operator")
+        );
+        assert_eq!(
+            diagnostics
+                .get("modal_periodic_pair_contract_available")
+                .and_then(|value| value.as_bool()),
+            Some(false)
+        );
+    }
+
+    #[test]
     fn sparse_lowest_without_retained_modes_does_not_raise_window_error() {
         let target = fullmag_ir::EigenTargetIR::Lowest;
 
@@ -5710,6 +6461,131 @@ mod tests {
             (phase.im + 1.0).abs() < 1e-12,
             "expected exp(-i*pi/2) from boundary translation, got {phase:?}"
         );
+    }
+
+    #[test]
+    fn native_modal_floquet_pair_payload_uses_selected_boundary_translation() {
+        let mut plan = minimal_native_modal_plan();
+        plan.mesh = fullmag_ir::MeshIR {
+            mesh_name: "periodic_tet".to_string(),
+            nodes: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            elements: vec![[0, 1, 2, 3]],
+            element_markers: vec![1],
+            boundary_faces: vec![[0, 2, 3], [1, 2, 3]],
+            boundary_markers: vec![10, 11],
+            periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
+                pair_id: "x_faces".to_string(),
+                source_marker: None,
+                destination_marker: None,
+                marker_a: 10,
+                marker_b: 11,
+                translation: Some([1.0, 0.0, 0.0]),
+                tolerance: Some(1e-12),
+                axis_hint: None,
+                orientation: None,
+                pairing_policy: None,
+            }],
+            periodic_node_pairs: vec![fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "x_faces".to_string(),
+                node_a: 0,
+                node_b: 1,
+            }],
+            per_domain_quality: std::collections::HashMap::new(),
+        };
+        plan.spin_wave_bc =
+            SpinWaveBoundaryConditionIR::Config(fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: SpinWaveBoundaryKindIR::Floquet,
+                boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            });
+        plan.k_sampling = Some(KSamplingIR::Single {
+            k_vector: [std::f64::consts::FRAC_PI_2, 0.0, 0.0],
+        });
+
+        let topology = MeshTopology::from_ir(&plan.mesh).expect("valid FEM mesh");
+        let pairs = native_modal_floquet_periodic_pairs(&plan, &topology)
+            .expect("native modal Floquet pairs should be built");
+
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0].pair_id, Some("x_faces"));
+        assert_eq!(pairs[0].node_a, 0);
+        assert_eq!(pairs[0].node_b, 1);
+        assert_eq!(pairs[0].translation_m, Some([1.0, 0.0, 0.0]));
+        assert_eq!(pairs[0].phase_rad, Some(-std::f64::consts::FRAC_PI_2));
+    }
+
+    #[test]
+    fn bloch_floquet_dense_payload_embeds_complex_operator_as_gyrotropic_pencil() {
+        let stiffness = vec![vec![Complex64::new(2.0, 0.0)]];
+        let mass = vec![vec![Complex64::new(1.0, 0.0)]];
+
+        let payload = native_bloch_floquet_dense_payload_from_complex_pair(&stiffness, &mass)
+            .expect("1x1 complex operator should embed as native Bloch/Floquet payload");
+
+        assert_eq!(payload.physical_complex_dof, 1);
+        assert_eq!(payload.stiffness.nrows(), 4);
+        assert_eq!(payload.stiffness.ncols(), 4);
+        assert_eq!(
+            payload.gyrotropic_row_major,
+            vec![
+                0.0, 0.0, -1.0, 0.0, //
+                0.0, 0.0, 0.0, -1.0, //
+                1.0, 0.0, 0.0, 0.0, //
+                0.0, 1.0, 0.0, 0.0,
+            ]
+        );
+        assert_eq!(payload.tangent_mass.nrows(), 4);
+        assert_eq!(payload.tangent_mass.ncols(), 4);
+
+        let mode = vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 1.0),
+            Complex64::new(0.0, 0.0),
+        ];
+        let lambda = Complex64::new(0.0, 2.0);
+        let (absolute, relative, linf) = gyrotropic_pencil_residual_norms(
+            &payload.stiffness,
+            &payload.gyrotropic_row_major,
+            lambda,
+            &mode,
+        );
+
+        assert!(absolute < 1.0e-12, "absolute residual={absolute}");
+        assert!(relative < 1.0e-12, "relative residual={relative}");
+        assert!(linf < 1.0e-12, "linf residual={linf}");
+    }
+
+    #[test]
+    fn bloch_floquet_embedded_native_mode_deembeds_to_physical_complex_mode() {
+        let physical_mode = vec![Complex64::new(1.0, 2.0), Complex64::new(-0.5, 0.25)];
+        let real_block = vec![
+            Complex64::new(physical_mode[0].re, 0.0),
+            Complex64::new(physical_mode[1].re, 0.0),
+            Complex64::new(physical_mode[0].im, 0.0),
+            Complex64::new(physical_mode[1].im, 0.0),
+        ];
+        let mut embedded = real_block.clone();
+        embedded.extend(real_block.iter().map(|value| Complex64::i() * *value));
+
+        let deembedded = deembed_native_bloch_floquet_mode_vector(&embedded, physical_mode.len())
+            .expect("embedded native mode should deembed to the physical complex mode");
+
+        assert_eq!(deembedded.len(), physical_mode.len());
+        for (actual, expected) in deembedded.iter().zip(physical_mode.iter()) {
+            assert!(
+                (*actual - *expected).norm() < 1.0e-12,
+                "actual={actual:?}, expected={expected:?}"
+            );
+        }
     }
 
     #[test]
@@ -5819,6 +6695,96 @@ mod tests {
             "{}",
             summary_json
         );
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn cpu_full_2x2_nonzero_floquet_window_uses_native_bloch_payload_artifact_path() {
+        let mut plan = minimal_native_modal_plan();
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.damping_policy = EigenDampingPolicyIR::Ignore;
+        plan.count = 2;
+        plan.target = fullmag_ir::EigenTargetIR::FrequencyWindow {
+            frequency_min_hz: 1.0e8,
+            frequency_max_hz: 5.0e9,
+        };
+        plan.external_field = Some([39_789.0, 0.0, 0.0]);
+        add_x_floquet_pair_to_plan(&mut plan);
+
+        let run = execute_cpu_fem_eigen(
+            &plan,
+            &[
+                OutputIR::EigenSpectrum {
+                    quantity: "frequency_hz".to_string(),
+                },
+                OutputIR::EigenMode {
+                    field: "mode".to_string(),
+                    indices: vec![0],
+                },
+            ],
+        )
+        .expect(
+            "eligible nonzero-k Floquet window should use native Bloch/Floquet modal production",
+        );
+
+        let summary = run
+            .auxiliary_artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == "eigen/metadata/eigen_summary.json")
+            .expect("native modal path must publish eigen summary");
+        let summary_json: serde_json::Value =
+            serde_json::from_slice(&summary.bytes).expect("summary should be JSON");
+        assert_eq!(
+            summary_json
+                .get("solver_backend")
+                .and_then(|value| value.as_str()),
+            Some("native_fem_modal_eigen")
+        );
+        let diagnostics = summary_json
+            .get("solver_diagnostics")
+            .expect("native summary should carry solver diagnostics");
+        assert_eq!(
+            diagnostics
+                .get("execution_lane")
+                .and_then(|value| value.as_str()),
+            Some("production_cpu")
+        );
+        assert_eq!(
+            diagnostics
+                .get("operator_diagnostics")
+                .and_then(|value| value.get("payload_kind"))
+                .and_then(|value| value.as_str()),
+            Some("bloch_floquet_tangent_operator")
+        );
+        assert!(
+            diagnostics
+                .get("production_cpu_rejection_reason")
+                .and_then(|value| value.as_str())
+                .is_none(),
+            "{}",
+            diagnostics
+        );
+    }
+
+    #[test]
+    fn native_cpu_modal_window_accepts_floquet_gamma_with_pair_payload() {
+        let mut plan = minimal_native_modal_plan();
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.damping_policy = EigenDampingPolicyIR::Ignore;
+        plan.target = fullmag_ir::EigenTargetIR::FrequencyWindow {
+            frequency_min_hz: 1.0e8,
+            frequency_max_hz: 5.0e9,
+        };
+        add_x_floquet_pair_to_plan(&mut plan);
+        plan.k_sampling = Some(KSamplingIR::Single {
+            k_vector: [0.0, 0.0, 0.0],
+        });
+
+        assert!(
+            native_cpu_modal_window_enabled(&plan),
+            "Floquet gamma samples with periodic pair metadata must use the same native Bloch/Floquet payload path as nonzero-k samples so production k-paths do not mix reference and production samples"
+        );
+        assert_eq!(native_cpu_modal_window_rejection_reason(&plan), None);
     }
 
     #[cfg(feature = "fem-gpu")]

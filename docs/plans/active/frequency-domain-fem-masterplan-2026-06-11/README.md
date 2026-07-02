@@ -6,7 +6,7 @@ Scope: production-grade FEM frequency-domain driven-response execution and compl
 
 ## Current-State Conclusions
 
-The backend is not empty, and the eigenmode path is intentionally not the same product as the driven frequency-response solver. Fullmag has a first-class semantic layer for eigenmodes and frequency response, FEM planning paths, runner/native tests, and v2 artifacts. Active rollout work has promoted a limited native MFEM production CPU driven-response slice for gamma/free-boundary and k = 0 static-periodic magnetic response, while nonzero-k Floquet response, dynamic demag response, magnetoelastic response, and production GPU response remain capability-gated. Eigenmodes, dispersion, linewidths, absorption-from-modes, and 3D mode profiles are companion modal products that must be supported by the UI without being mislabeled as the driven solver.
+The backend is not empty, and the eigenmode path is intentionally not the same product as the driven frequency-response solver. Fullmag has a first-class semantic layer for eigenmodes and frequency response, FEM planning paths, runner/native tests, and v2 artifacts. Active rollout work has promoted limited native MFEM production CPU and GPU driven-response slices for gamma/free-boundary and k = 0 static-periodic no-demag magnetic response, while nonzero-k Floquet production response, dynamic demag response, GPU periodic-airbox dynamic demag, and magnetoelastic response remain capability-gated. Eigenmodes, dispersion, linewidths, absorption-from-modes, and 3D mode profiles are companion modal products that must be supported by the UI without being mislabeled as the driven solver.
 
 Baseline code facts verified when this masterplan was created:
 

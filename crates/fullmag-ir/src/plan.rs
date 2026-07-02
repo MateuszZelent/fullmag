@@ -702,6 +702,38 @@ pub struct FemMechanicalPlanIR {
     pub mechanical_dt: Option<f64>,
 }
 
+fn default_de_bv_dispersion_max_relative_error() -> f64 {
+    0.10
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FemEigenDispersionValidationWindowIR {
+    pub min: f64,
+    pub max: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FemEigenDispersionValidationScenarioIR {
+    pub geometry: String,
+    pub branch_id: String,
+    pub sample_indices: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FemEigenDispersionValidationIR {
+    pub kind: String,
+    pub analytic_model: String,
+    pub film_thickness_m: f64,
+    pub equilibrium_magnetization: [f64; 3],
+    pub film_normal: [f64; 3],
+    pub frequency_window_hz: FemEigenDispersionValidationWindowIR,
+    pub max_k_rad_per_m: f64,
+    #[serde(default = "default_de_bv_dispersion_max_relative_error")]
+    pub max_relative_error: f64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scenarios: Vec<FemEigenDispersionValidationScenarioIR>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FemEigenPlanIR {
     pub mesh_name: String,
@@ -750,6 +782,8 @@ pub struct FemEigenPlanIR {
     pub demag_realization: Option<ResolvedFemDemagIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode_tracking: Option<ModeTrackingIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dispersion_validation: Option<FemEigenDispersionValidationIR>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -805,6 +839,23 @@ pub struct FemFrequencyResponsePlanIR {
     pub demag_solver_policy: Option<FemLinearSolverPolicy>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub periodic_constraint_sets: Vec<PeriodicConstraintSetIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equilibrium_provenance: Option<FemFrequencyDomainEquilibriumProvenanceIR>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FemFrequencyDomainEquilibriumProvenanceIR {
+    pub schema_version: String,
+    pub acceptance_gate: String,
+    pub accepted: bool,
+    pub source_kind: String,
+    pub source_artifact_root: String,
+    pub equilibrium_field_path: String,
+    pub seam_diagnostics_path: String,
+    pub z_padding_report_path: String,
+    pub supercell_report_path: String,
+    pub magnetostatic_bc: String,
+    pub pbc_axes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

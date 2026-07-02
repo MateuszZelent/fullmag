@@ -87,7 +87,13 @@ from .structure import (
     RegionTextureOverride,
 )
 from .study import Eigenmodes, FloquetBC, FrequencyResponse, PeriodicBC, RelaxStop, Relaxation, TableAutosave, TimeEvolution, FieldOrientation, MeasurementAxis, HysteresisAngularVariant, HysteresisAngularFamily, SaturationProbe, HysteresisStorage, MinorLoop, FieldSegment, PiecewiseFieldSchedule, FieldWindow, AdaptiveRefinement, SettleStep, RelaxStep, MinimizeStep, DynamicsSettleStep, SettleBranch, SettlePipeline, SettleTree, Hysteresis
-from .eigen import KPath, KPoint, ModeTracking
+from .eigen import (
+    DispersionValidationScenario,
+    KPath,
+    KPoint,
+    ModeTracking,
+    ThinFilmDEBVDispersionValidation,
+)
 
 __all__ = [
     "BackendTarget",
@@ -179,9 +185,11 @@ __all__ = [
     "Sphere",
     "SpinWaveExcitationAnalysis",
     "FrequencyResponse",
+    "DispersionValidationScenario",
     "KPath",
     "KPoint",
     "ModeTracking",
+    "ThinFilmDEBVDispersionValidation",
     "TimeEvolution",
     "Translate",
     "Union",

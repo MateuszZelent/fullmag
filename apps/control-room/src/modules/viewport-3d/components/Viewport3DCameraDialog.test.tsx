@@ -45,5 +45,7 @@ describe("Viewport3DCameraDialog", () => {
     expect(html).toContain("Pitch");
     expect(html).toContain("Roll");
     expect(html).toContain("Close camera parameters");
+    expect(html).toContain('aria-describedby="fm-viewport-camera-dialog-description"');
+    expect(html).toContain("Inspect and edit the 3D viewport camera position");
   });
 });

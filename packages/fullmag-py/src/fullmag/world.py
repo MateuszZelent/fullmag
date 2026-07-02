@@ -99,6 +99,7 @@ from fullmag.model.problem import (
 )
 from fullmag.model.discretization import FDM, FEM, FemLinearSolverPolicy
 from fullmag.model.geometry import Box, Translate
+from fullmag.model.eigen import serialize_dispersion_validation
 
 _MESH_SIZE_CALIBRATIONS = (
     "general_physics",
@@ -3668,6 +3669,10 @@ class StudyBuilder:
         runtime_metadata(key, value)
         return self
 
+    def dispersion_validation(self, validation: object) -> "StudyBuilder":
+        dispersion_validation(validation)
+        return self
+
     def visualization(
         self,
         active_quantity_id: str | None = None,
@@ -3797,6 +3802,10 @@ class StudyBuilder:
 
     def save_response(self, observable: str = "susceptibility_tensor") -> "StudyBuilder":
         save_response(observable)
+        return self
+
+    def clear_outputs(self) -> "StudyBuilder":
+        clear_outputs()
         return self
 
     def snapshot(
@@ -4683,6 +4692,14 @@ def runtime_metadata(key: str, value: object) -> None:
     """Attach script-owned runtime metadata to the exported problem."""
     normalized_key = require_non_empty(str(key), "runtime_metadata key")
     _state._extra_runtime_metadata[normalized_key] = copy.deepcopy(value)
+
+
+def dispersion_validation(validation: object) -> None:
+    """Attach modal dispersion validation intent to the exported problem."""
+    runtime_metadata(
+        "dispersion_validation",
+        serialize_dispersion_validation(validation),
+    )
 
 
 def visualization(
@@ -5710,6 +5727,11 @@ def save(
 def save_response(observable: str = "susceptibility_tensor") -> None:
     """Register a frequency-response observable output."""
     _state._outputs.append(SaveResponse(observable))
+
+
+def clear_outputs() -> None:
+    """Clear previously registered flat-script output quantities."""
+    _state._outputs.clear()
 
 
 def snapshot(

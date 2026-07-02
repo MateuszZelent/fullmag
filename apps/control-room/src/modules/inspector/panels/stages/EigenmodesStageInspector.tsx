@@ -175,6 +175,10 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
             value={draft?.includeDemag ? "included" : "excluded"}
           />
           <FieldRow
+            label="Operator"
+            value={draft?.operator || "linearized_llg"}
+          />
+          <FieldRow
             label="Normalization"
             value={draft?.normalization ?? "not set"}
           />
@@ -353,6 +357,7 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
           <FieldRow label="Boundary condition" value={draft?.bc || "free"} />
           <FieldRow label="k vector" value={draft?.kVector || "not set"} />
           <FieldRow label="k sampling" value={draft?.kSampling || "not set"} />
+          <FieldRow label="k path" value={draft?.kPath || "not set"} />
           <FieldRow
             label="Workflow inference"
             value="Gamma/free FMR when empty; dispersion_modal when nonzero k-path is set"
@@ -383,11 +388,11 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
           />
           <FieldRow
             label="Operator"
-            value="linearized LLG, tangent-space projected"
+            value={draft?.operator || "linearized_llg"}
           />
           <FieldRow
             label="Boundary/k sampling"
-            value={`${draft?.bc || "free"}; ${draft?.kSampling || "k = 0"}`}
+            value={`${draft?.bc || "free"}; ${draft?.kPath || draft?.kSampling || "k = 0"}`}
           />
           <FieldRow
             label="Solver request"
@@ -510,9 +515,10 @@ function renderEigenmodesStageInspector(props: StageInspectorFrameProps) {
         <FieldRow label="Include demag" value={draft?.includeDemag ? "yes" : "no"} />
       </InspectorSection>
       <InspectorSection value="eigenmodes-wavevector" title="Spin-Wave Sampling">
-        <FieldRow label="Boundary condition" value={draft?.bc || "free"} />
-        <FieldRow label="k vector" value={draft?.kVector || "not set"} />
-        <FieldRow label="k sampling" value={draft?.kSampling || "not set"} />
+          <FieldRow label="Boundary condition" value={draft?.bc || "free"} />
+          <FieldRow label="k vector" value={draft?.kVector || "not set"} />
+          <FieldRow label="k sampling" value={draft?.kSampling || "not set"} />
+          <FieldRow label="k path" value={draft?.kPath || "not set"} />
       </InspectorSection>
       <InspectorSection value="eigenmodes-results" title="Eigenmode Results">
         <FieldRow label="Status" value={stage?.status ?? "not started"} />

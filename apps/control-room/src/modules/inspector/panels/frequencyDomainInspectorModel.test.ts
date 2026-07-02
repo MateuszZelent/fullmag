@@ -40,9 +40,34 @@ describe("frequencyDomainInspectorModel", () => {
     );
     expect(
       rows.find((row) => row.mode === "dispersion_modal")?.capabilityStatus,
-    ).toBe("k_path: ready");
+    ).toBe(
+      "reference_cpu: unknown; production_cpu: unknown; production_cpu_gamma_k_path: unknown; production_gpu: unknown; k_path: ready",
+    );
     expect(rows.find((row) => row.mode === "response_map")?.capabilityStatus).toBe(
       "floquet_response: unsupported; nonzero-k response unavailable",
+    );
+  });
+
+  it("keeps modal dispersion lane statuses explicit", () => {
+    const rows = buildFrequencyDomainCalculationModeRows(
+      {
+        dispersion: {
+          k_path: { status: "reference_executable" },
+          production_cpu: { status: "partial_production_executable" },
+          production_cpu_gamma_k_path: {
+            status: "partial_production_executable",
+          },
+          production_gpu: { status: "unsupported" },
+          reference_cpu: { status: "reference_executable" },
+        },
+      },
+      false,
+    );
+
+    expect(
+      rows.find((row) => row.mode === "dispersion_modal")?.capabilityStatus,
+    ).toBe(
+      "reference_cpu: reference_executable; production_cpu: partial_production_executable; production_cpu_gamma_k_path: partial_production_executable; production_gpu: unsupported; k_path: reference_executable",
     );
   });
 

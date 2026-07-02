@@ -1,4 +1,4 @@
-"""Relax a periodic Permalloy antidot unit cell, then run driven frequency response.
+"""Relax a periodic Permalloy antidot unit cell, then run GPU driven response.
 
 Geometry:
     - Permalloy film: 200 nm x 200 nm x 10 nm.
@@ -7,6 +7,9 @@ Geometry:
       boundaries touch their periodic neighbours.
     - PBC is intentionally x/y only: this is a 2D film array with open z,
       not a fully 3D-periodic stack.
+    - The relaxation stage uses periodic-airbox demag. The frequency-response
+      stage is the currently executable MFEM GPU static-periodic magnetic
+      slice, so dynamic demag is intentionally disabled there.
 
 Run with:
     fullmag --dev -i examples/fem_periodic_antidot_relax_exchange_coupled_frequency_driven.py
@@ -94,6 +97,8 @@ study.runtime_metadata(
         "scenario": "exchange_coupled_frequency_driven",
         "exchange_coupled_across_periods": True,
         "magnetostatic_pbc": "periodic_airbox_k0",
+        "frequency_response_device": "gpu",
+        "frequency_response_dynamic_demag": False,
         "periodic_pair_ids": ["x_faces", "y_faces"],
         "film_size_m": [200e-9, 200e-9, 10e-9],
         "universe_size_m": [200e-9, 200e-9, 90e-9],
@@ -146,7 +151,14 @@ study.stages.add_relax(
     max_steps=400,
     tol=5.0e3,  # A/m
 )
-study.stages.change_device("cpu")
+
+# Current MFEM GPU frequency response supports the static-periodic magnetic
+# slice, but not dynamic periodic-airbox demag. Keep the already-captured
+# relaxation stage above with demag outputs, then clear those outputs and
+# disable demag for this response stage.
+study.clear_outputs()
+study.demag(enabled=False)
+study.stages.change_device("gpu")
 
 study.stages.add_frequency_response(
     frequencies_hz=[
@@ -159,9 +171,8 @@ study.stages.add_frequency_response(
         5.0e9,
     ],
     excitation_field_au_per_m=(0.0, 0.0, 1.0),
-    include_demag=True,
+    include_demag=False,
     equilibrium_source="relax",
     damping_policy="include",
     bc=fm.PeriodicBC(["x_faces", "y_faces"]),
-    magnetostatic_bc="periodic_airbox_k0",
 )

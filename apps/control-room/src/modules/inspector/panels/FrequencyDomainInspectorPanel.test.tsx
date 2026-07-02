@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
@@ -19,6 +19,7 @@ import {
   DATA_FIELD_VECTOR_PATH,
   MESHING_PERIODIC_PAIRS_PATH,
 } from "@/kernel/api/apiPaths";
+import type { FrequencyDomainSweepProgressResource } from "@/kernel/api/apiTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 
 import { FREQUENCY_DOMAIN_INSPECTOR_SELECTION_KINDS } from "../inspectorRegistry";
@@ -92,6 +93,48 @@ const emptyResource = {
   revision: null,
   status: "idle",
 } as const;
+
+const responseProgressFixture = vi.hoisted((): {
+  data: FrequencyDomainSweepProgressResource;
+} => ({
+  data: {
+    complete: false,
+    completed_frequency_points: 0,
+    current_frequency_hz: null,
+    latest_artifact_manifest_path: "frequency_domain/manifest.v1.json",
+    missing_reason: "frequency-domain response is unavailable",
+    partial_artifacts_available: false,
+    progress_json:
+      '{"schema_version":"frequency_domain_sweep_progress.v1","state":"unavailable"}',
+    schema_version: "frequency_domain_sweep_progress.v1",
+    state: "unavailable",
+    status: "unavailable",
+    total_frequency_points: 2,
+    written_frequency_point_artifacts: 0,
+  },
+}));
+
+const eigenDiagnosticsFixture = vi.hoisted(() => ({
+  payload: {
+    basis_transport_policy: "tangent_frame_transport",
+    floquet_tangent_frame_max_mismatch: 0,
+    floquet_tangent_transport_max_nonunitarity: 0,
+    production_cpu_rejection_reason:
+      "production_cpu_modal_nonzero_k_floquet_operator_missing",
+    production_cpu_rejection_scope: "selected_spectrum_nonzero_k_floquet_modal",
+    schema_version: "frequency_domain_eigen_diagnostics.v2",
+    solver_model: "reference_full_2x2_tangent",
+  } as Record<string, unknown>,
+}));
+
+const responseDiagnosticsFixture = vi.hoisted(() => ({
+  payload: {
+    krylov_preconditioner_applied: true,
+    krylov_preconditioner_kind: "mfem_phi_consistency_schur_right",
+    krylov_preconditioner_variant: "graph_demag_coarse",
+    schema_version: "frequency_domain_response_diagnostics.v1",
+  } as Record<string, unknown>,
+}));
 
 function analysisFieldVectorResourceKey(fieldId: string): string {
   return `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", fieldId)}?view=phase_rotated_real&phase_rad=0`;
@@ -249,13 +292,7 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
     ...emptyResource,
     data: {
       artifact_path: "eigen/diagnostics.v2.json",
-      payload: {
-        basis_transport_policy: "tangent_frame_transport",
-        floquet_tangent_frame_max_mismatch: 0,
-        floquet_tangent_transport_max_nonunitarity: 0,
-        schema_version: "frequency_domain_eigen_diagnostics.v2",
-        solver_model: "reference_full_2x2_tangent",
-      },
+      payload: eigenDiagnosticsFixture.payload,
       resource_key: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DIAGNOSTICS_V2_PATH,
       schema_version: "frequency_domain_eigen_diagnostics.v2",
       status: "ready",
@@ -266,11 +303,26 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
   useFrequencyDomainEigenDispersionResource: () => ({
     ...emptyResource,
     data: {
+      artifact_path: "eigen/dispersion.csv",
+      content_type: "text/csv; charset=utf-8",
+      path_metadata: {
+        sampling: {
+          closed: false,
+          kind: "path",
+          points: [
+            { k_vector: [0, 0, 0], label: "G" },
+            { k_vector: [78539816.33974482, 0, 0], label: "X" },
+          ],
+          samples_per_segment: [1],
+        },
+      },
+      resource_key: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+      schema_version: "frequency_domain_eigen_dispersion.v1",
       status: "ready",
       text: [
-        "sample_index,raw_mode_index,branch_id,path_s_rad_per_m,frequency_hz,endpoint_label",
-        "0,1,acoustic,0,9.5e9,Gamma",
-        "1,1,acoustic,78539816.33974482,12.0e9,X",
+        "sample_index,raw_mode_index,branch_id,path_s_rad_per_m,frequency_hz,analytic_frequency_hz,relative_error,validation_geometry,label",
+        "0,1,acoustic,0,9.5e9,9.45e9,0.005291005291005291,backward_volume,Gamma",
+        "1,1,acoustic,78539816.33974482,12.0e9,11.94e9,0.005025125628140704,damon_eshbach,X",
       ].join("\n"),
     },
     revision: "dispersion:1",
@@ -416,8 +468,12 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
           branch_tracking: { reason: "Reference tracking", status: "ready" },
           k_path: { reason: "Reference k-path", status: "ready" },
           production_cpu: {
-            reason: "selected-spectrum deferred",
-            status: "unsupported",
+            reason: "managed no-demag Bloch/Floquet k-path slice",
+            status: "partial_production_executable",
+          },
+          production_cpu_gamma_k_path: {
+            reason: "gamma-equivalent selected-spectrum bridge",
+            status: "partial_production_executable",
           },
           production_gpu: {
             reason: "modal GPU deferred",
@@ -534,6 +590,34 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
           artifacts: {
             response_sweep_v2_path: "response/magnetic_response_sweep.v2.json",
           },
+          capabilities: {
+            dispersion: {
+              branch_tracking: {
+                reason: "Artifact branch tracking available",
+                status: "reference_executable",
+              },
+              k_path: {
+                reason: "Artifact k-path available",
+                status: "reference_executable",
+              },
+              production_cpu: {
+                reason: "managed no-demag Bloch/Floquet k-path slice",
+                status: "partial_production_executable",
+              },
+              production_cpu_gamma_k_path: {
+                reason: "gamma-equivalent selected-spectrum bridge",
+                status: "partial_production_executable",
+              },
+              production_gpu: {
+                reason: "modal GPU deferred",
+                status: "unsupported",
+              },
+              reference_cpu: {
+                reason: "Reference Full2x2 Floquet dispersion",
+                status: "reference_executable",
+              },
+            },
+          },
           requested_execution: {
             calculation_mode: "fmr_response",
             magnetostatic_bc: "periodic_airbox_k0",
@@ -544,6 +628,26 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
             frequency_units: "Hz",
             normalization: "unit_l2",
             phase_convention: "exp_minus_i_omega_t",
+          },
+          validation: {
+            dispersion_validation: {
+              analytic_model: "kalinikos_slab_n0",
+              frequency_window_hz: { max: 5.0e9, min: 0 },
+              kind: "thin_film_de_bv_low_k",
+              max_k_rad_per_m: 3.0e6,
+              scenarios: [
+                {
+                  branch_id: "acoustic",
+                  geometry: "backward_volume",
+                  sample_indices: [0, 1, 2],
+                },
+                {
+                  branch_id: "acoustic",
+                  geometry: "damon_eshbach",
+                  sample_indices: [3, 4, 5],
+                },
+              ],
+            },
           },
           resources: {
             response_field_resources: [
@@ -585,17 +689,33 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
       complete: false,
       completed_frequency_points: 1,
       current_frequency_hz: 9.5e9,
+      demag_mode: "periodic_airbox_k0",
+      frequency_max_hz: 12.0e9,
+      frequency_min_hz: 8.0e9,
       latest_artifact_manifest_path: "response/artifact_manifest.json",
       missing_reason: null,
       partial_artifacts_available: true,
       progress_json:
-        '{"schema_version":"frequency_domain_sweep_progress.v1","state":"cancel_requested"}',
+        '{"schema_version":"frequency_domain_sweep_progress.v1","state":"cancel_requested","native_iteration_count":128,"native_relative_residual_l2_norm":0.0125}',
       schema_version: "frequency_domain_sweep_progress.v1",
       status: "cancel_requested",
       total_frequency_points: 4,
       written_frequency_point_artifacts: 1,
     },
     revision: "cancel:1",
+    status: "ready",
+  }),
+  useFrequencyDomainResponseDiagnosticsResource: () => ({
+    ...emptyResource,
+    data: {
+      artifact_path: "response/diagnostics/solver.v1.json",
+      missing_reason: null,
+      payload: responseDiagnosticsFixture.payload,
+      resource_key: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_V1_PATH,
+      schema_version: "frequency_domain_response_diagnostics_resource.v1",
+      status: "ready",
+    },
+    revision: "response-diagnostics:1",
     status: "ready",
   }),
   useFrequencyDomainResponseFieldMetaResource: (frequencyIndex?: number) =>
@@ -687,22 +807,8 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
   }),
   useFrequencyDomainResponseProgressResource: () => ({
     ...emptyResource,
-    data: {
-      complete: false,
-      completed_frequency_points: 0,
-      current_frequency_hz: null,
-      latest_artifact_manifest_path: "frequency_domain/manifest.v1.json",
-      missing_reason: "frequency-domain response is unavailable",
-      partial_artifacts_available: false,
-      progress_json:
-        '{"schema_version":"frequency_domain_sweep_progress.v1","state":"unavailable"}',
-      schema_version: "frequency_domain_sweep_progress.v1",
-      state: "unavailable",
-      status: "unavailable",
-      total_frequency_points: 2,
-      written_frequency_point_artifacts: 0,
-    },
-    revision: "progress:unavailable",
+    data: responseProgressFixture.data,
+    revision: `progress:${responseProgressFixture.data.status}:${responseProgressFixture.data.current_frequency_hz ?? "none"}`,
     status: "ready",
   }),
   useFrequencyDomainResponseSweepResource: () => ({
@@ -755,6 +861,40 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
     status: "ready",
   }),
 }));
+
+beforeEach(() => {
+  eigenDiagnosticsFixture.payload = {
+    basis_transport_policy: "tangent_frame_transport",
+    floquet_tangent_frame_max_mismatch: 0,
+    floquet_tangent_transport_max_nonunitarity: 0,
+    production_cpu_rejection_reason:
+      "production_cpu_modal_nonzero_k_floquet_operator_missing",
+    production_cpu_rejection_scope: "selected_spectrum_nonzero_k_floquet_modal",
+    schema_version: "frequency_domain_eigen_diagnostics.v2",
+    solver_model: "reference_full_2x2_tangent",
+  };
+  responseDiagnosticsFixture.payload = {
+    krylov_preconditioner_applied: true,
+    krylov_preconditioner_kind: "mfem_phi_consistency_schur_right",
+    krylov_preconditioner_variant: "graph_demag_coarse",
+    schema_version: "frequency_domain_response_diagnostics.v1",
+  };
+  responseProgressFixture.data = {
+    complete: false,
+    completed_frequency_points: 0,
+    current_frequency_hz: null,
+    latest_artifact_manifest_path: "frequency_domain/manifest.v1.json",
+    missing_reason: "frequency-domain response is unavailable",
+    partial_artifacts_available: false,
+    progress_json:
+      '{"schema_version":"frequency_domain_sweep_progress.v1","state":"unavailable"}',
+    schema_version: "frequency_domain_sweep_progress.v1",
+    state: "unavailable",
+    status: "unavailable",
+    total_frequency_points: 2,
+    written_frequency_point_artifacts: 0,
+  };
+});
 
 describe("FrequencyDomainInspectorPanel", () => {
   it("keeps cancel-requested resource endpoint distinct from the disk artifact path", () => {
@@ -1344,9 +1484,21 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("dispersion_modal -&gt; StudyIR::Eigenmodes");
     expect(html).toContain("Dispersion resource");
     expect(html).toContain(ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH);
+    expect(html).toContain("Path metadata artifact");
+    expect(html).toContain("eigen/dispersion/path.json");
+    expect(html).toContain("Path sampling");
+    expect(html).toContain("path; 1 segment(s), 2 sample(s), open");
+    expect(html).toContain("Path labels");
+    expect(html).toContain("G -&gt; X");
     expect(html).toContain("k-path span");
     expect(html).toContain("0-7.854e+7 rad/m");
     expect(html).toContain("Frequency coverage");
+    expect(html).toContain("Analytic reference");
+    expect(html).toContain("2 point(s); backward_volume, damon_eshbach; max rel. error 0.005291");
+    expect(html).toContain("Validation intent");
+    expect(html).toContain(
+      "thin_film_de_bv_low_k; kalinikos_slab_n0; k&lt;=3.000e+6 rad/m; 0-5 GHz; backward_volume: acoustic [3 sample(s)], damon_eshbach: acoustic [3 sample(s)]",
+    );
     expect(html).toContain("9.5 GHz-12 GHz");
     expect(html).toContain("Sample count");
     expect(html).toContain("2 point(s)");
@@ -1380,7 +1532,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("eigenmodes: unavailable; modal=false; gpu=false");
     expect(html).toContain("Capability summary");
     expect(html).toContain(
-      "reference_cpu: ready; production_cpu: unsupported; production_gpu: unsupported; k_path: ready; branch_tracking: ready",
+      "reference_cpu: reference_executable; production_cpu: partial_production_executable; production_cpu_gamma_k_path: partial_production_executable; production_gpu: unsupported; k_path: reference_executable; branch_tracking: reference_executable",
     );
     expect(html).toContain("Modal spectrum");
     expect(html).toContain("2 mode(s), 2 field overlay(s)");
@@ -1424,6 +1576,9 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("cancel_requested; 1/4");
     expect(html).toContain("Response fields");
     expect(html).toContain("2 manifest field(s), 1 sweep field(s)");
+    expect(html).toContain("Krylov preconditioner");
+    expect(html).toContain("graph_demag_coarse");
+    expect(html).toContain("mfem_phi_consistency_schur_right");
     expect(html).toContain("Residual coverage");
     expect(html).toContain("0/1 point(s)");
     expect(html).toContain("Response artifact");
@@ -1464,6 +1619,205 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("frequency-domain response is unavailable");
   });
 
+  it("renders solver-level frequency-response progress from backend progress json", () => {
+    responseProgressFixture.data = {
+      complete: false,
+      completed_frequency_points: 1,
+      current_frequency_hz: 3.0e9,
+      demag_mode: "periodic_airbox_k0",
+      frequency_max_hz: 5.0e9,
+      frequency_min_hz: 2.0e9,
+      latest_artifact_manifest_path: "frequency_domain/manifest.partial.v1.json",
+      missing_reason: null,
+      partial_artifacts_available: true,
+      progress_json:
+        '{"schema_version":"frequency_domain_sweep_progress.v1","state":"running","native_iteration_count":64,"native_relative_residual_l2_norm":0.0075}',
+      schema_version: "frequency_domain_sweep_progress.v1",
+      state: "running",
+      status: "ready",
+      total_frequency_points: 7,
+      written_frequency_point_artifacts: 1,
+    };
+    const selection: Selection = {
+      kind: "results.frequency_response.progress",
+      label: "Progress",
+      moduleSource: "explorer",
+      nodeId: "results:frequency-response:progress",
+      objectId: null,
+      ref: {
+        kind: "results.frequency_response.progress",
+        nodeId: "results:frequency-response:progress",
+        resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
+        type: "frequency-domain",
+      },
+    };
+
+    const html = renderToStaticMarkup(
+      <FrequencyResponseProgressInspectorPanel selection={selection} />,
+    );
+
+    expect(html).toContain("Response Sweep Progress");
+    expect(html).toContain("1/7 frequency points");
+    expect(html).toContain("role=\"progressbar\"");
+    expect(html).toContain("aria-valuenow=\"14\"");
+    expect(html).toContain("3 GHz");
+    expect(html).toContain("Frequency range");
+    expect(html).toContain("2 GHz-5 GHz");
+    expect(html).toContain("Solver progress");
+    expect(html).toContain("periodic_airbox_k0");
+    expect(html).toContain("GMRES 64");
+    expect(html).toContain("relres 7.500e-3");
+  });
+
+  it("shows active native solve progress before the first frequency point is written", () => {
+    responseProgressFixture.data = {
+      complete: false,
+      completed_frequency_points: 0,
+      current_frequency_hz: 2.5e9,
+      demag_mode: "periodic_airbox_k0",
+      frequency_max_hz: 3.0e9,
+      frequency_min_hz: 2.5e9,
+      latest_artifact_manifest_path: "frequency_domain/manifest.partial.v1.json",
+      missing_reason: "production CPU GMRES frequency response did not converge",
+      partial_artifacts_available: true,
+      progress_json:
+        '{"schema_version":"frequency_domain_sweep_progress.v1","state":"solve_error","status":"solve_error","total_frequency_points":3,"completed_frequency_points":0,"current_frequency_hz":2500000000,"frequency_min_hz":2500000000,"frequency_max_hz":3000000000,"demag_mode":"periodic_airbox_k0","native_frequency_index":0,"native_iteration_count":512,"native_max_iterations_for_frequency":512,"native_current_frequency_solve_fraction":1.0,"native_relative_residual_l2_norm":0.4179088861990189}',
+      schema_version: "frequency_domain_sweep_progress.v1",
+      state: "solve_error",
+      status: "solve_error",
+      total_frequency_points: 3,
+      written_frequency_point_artifacts: 0,
+    };
+
+    const html = renderToStaticMarkup(
+      <FrequencyResponseProgressInspectorPanel
+        selection={{
+          kind: "results.frequency_response.progress",
+          label: "Progress",
+          moduleSource: "explorer",
+          nodeId: "results:frequency-response:progress",
+          objectId: null,
+          ref: {
+            kind: "results.frequency_response.progress",
+            nodeId: "results:frequency-response:progress",
+            resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
+            type: "frequency-domain",
+          },
+        }}
+      />,
+    );
+
+    expect(html).toContain("Response Sweep Progress");
+    expect(html).toContain("0/3 frequency points");
+    expect(html).toContain("role=\"progressbar\"");
+    expect(html).toContain("aria-valuenow=\"33\"");
+    expect(html).toContain("2.5 GHz");
+    expect(html).toContain("2.5 GHz-3 GHz");
+    expect(html).toContain("periodic_airbox_k0");
+    expect(html).toContain("GMRES 512/512");
+    expect(html).toContain("relres 4.179e-1");
+    expect(html).toContain("production CPU GMRES frequency response did not converge");
+  });
+
+  it("renders the frequency-response progress resource from the progress artifact resource", () => {
+    responseProgressFixture.data = {
+      complete: false,
+      completed_frequency_points: 0,
+      current_frequency_hz: 2.5e9,
+      demag_mode: "periodic_airbox_k0",
+      frequency_max_hz: 3.0e9,
+      frequency_min_hz: 2.5e9,
+      latest_artifact_manifest_path: "frequency_domain/manifest.partial.v1.json",
+      missing_reason: "production CPU GMRES frequency response did not converge",
+      partial_artifacts_available: true,
+      progress_json:
+        '{"schema_version":"frequency_domain_sweep_progress.v1","state":"solve_error","status":"solve_error","total_frequency_points":3,"completed_frequency_points":0,"current_frequency_hz":2500000000,"frequency_min_hz":2500000000,"frequency_max_hz":3000000000,"demag_mode":"periodic_airbox_k0","native_frequency_index":0,"native_iteration_count":512,"native_max_iterations_for_frequency":512,"native_current_frequency_solve_fraction":1.0,"native_relative_residual_l2_norm":0.4179088861990189}',
+      schema_version: "frequency_domain_sweep_progress.v1",
+      state: "solve_error",
+      status: "solve_error",
+      total_frequency_points: 3,
+      written_frequency_point_artifacts: 0,
+    };
+
+    const html = renderToStaticMarkup(
+      <FrequencyResponseProgressResourceInspectorPanel
+        selection={{
+          kind: "resources.analysis.frequency_response.progress",
+          label: "Progress",
+          moduleSource: "explorer",
+          nodeId: "resources:analysis:frequency-response:progress",
+          objectId: null,
+          ref: {
+            kind: "resources.analysis.frequency_response.progress",
+            nodeId: "resources:analysis:frequency-response:progress",
+            type: "frequency-domain",
+          },
+        }}
+      />,
+    );
+
+    expect(html).toContain("Frequency Response Progress Resource");
+    expect(html).toContain("role=\"progressbar\"");
+    expect(html).toContain("aria-valuenow=\"33\"");
+    expect(html).toContain("0/3 frequency points");
+    expect(html).toContain("Current frequency");
+    expect(html).toContain("2.5 GHz");
+    expect(html).toContain("Solver progress");
+    expect(html).toContain("periodic_airbox_k0");
+    expect(html).toContain("GMRES 512/512");
+    expect(html).toContain("relres 4.179e-1");
+  });
+
+  it("renders COMSOL-style frequency-response progress in the job surface", () => {
+    responseProgressFixture.data = {
+      complete: false,
+      completed_frequency_points: 1,
+      current_frequency_hz: 3.0e9,
+      demag_mode: "periodic_airbox_k0",
+      frequency_max_hz: 5.0e9,
+      frequency_min_hz: 2.0e9,
+      latest_artifact_manifest_path: "frequency_domain/manifest.partial.v1.json",
+      missing_reason: null,
+      partial_artifacts_available: true,
+      progress_json:
+        '{"schema_version":"frequency_domain_sweep_progress.v1","state":"running","native_iteration_count":64,"native_relative_residual_l2_norm":0.0075}',
+      schema_version: "frequency_domain_sweep_progress.v1",
+      state: "running",
+      status: "ready",
+      total_frequency_points: 7,
+      written_frequency_point_artifacts: 1,
+    };
+
+    const html = renderToStaticMarkup(
+      <FrequencyResponseProgressJobInspectorPanel
+        selection={{
+          kind: "jobs.frequency_domain.response_progress",
+          label: "Response Progress",
+          moduleSource: "explorer",
+          nodeId: "jobs:frequency-domain:response-progress",
+          objectId: null,
+          ref: {
+            kind: "jobs.frequency_domain.response_progress",
+            nodeId: "jobs:frequency-domain:response-progress",
+            type: "frequency-domain",
+          },
+        }}
+      />,
+    );
+
+    expect(html).toContain("Response Sweep Progress Job");
+    expect(html).toContain("role=\"progressbar\"");
+    expect(html).toContain("aria-valuenow=\"14\"");
+    expect(html).toContain("1/7 frequency points");
+    expect(html).toContain("3 GHz");
+    expect(html).toContain("Frequency range");
+    expect(html).toContain("2 GHz-5 GHz");
+    expect(html).toContain("Solver progress");
+    expect(html).toContain("periodic_airbox_k0");
+    expect(html).toContain("GMRES 64");
+    expect(html).toContain("relres 7.500e-3");
+  });
+
   it("renders a dedicated frequency-response cancel-requested status surface", () => {
     const selection: Selection = {
       kind: "results.frequency_response.cancel_requested",
@@ -1490,6 +1844,12 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("1/4 frequency points");
     expect(html).toContain("Current frequency");
     expect(html).toContain("9.5 GHz");
+    expect(html).toContain("Frequency range");
+    expect(html).toContain("8 GHz-12 GHz");
+    expect(html).toContain("Solver progress");
+    expect(html).toContain("periodic_airbox_k0");
+    expect(html).toContain("GMRES 128");
+    expect(html).toContain("relres 1.250e-2");
     expect(html).toContain("Partial artifacts");
     expect(html).toContain("yes");
     expect(html).toContain("Written point artifacts");
@@ -1742,6 +2102,10 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(solverHtml).toContain(
       "reference_full_2x2_tangent; tangent_frame_transport; frame mismatch 0; nonunitarity 0",
     );
+    expect(solverHtml).toContain("Production CPU gate");
+    expect(solverHtml).toContain(
+      "production_cpu_modal_nonzero_k_floquet_operator_missing; selected_spectrum_nonzero_k_floquet_modal",
+    );
     expect(artifactsHtml).toContain("Frequency-Domain Artifact Diagnostics");
     expect(artifactsHtml).toContain("Manifest");
     expect(artifactsHtml).toContain("frequency_domain/manifest.v1.json");
@@ -1757,6 +2121,46 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(visualizationHtml).toContain("2 mode field overlay(s)");
     expect(visualizationHtml).toContain("Response overlays");
     expect(visualizationHtml).toContain("2 response field artifact(s)");
+  });
+
+  it("reports accepted production CPU modal k-path diagnostics without a stale rejection reason", () => {
+    eigenDiagnosticsFixture.payload = {
+      basis_transport_policy: "tangent_frame_identity",
+      execution_lane: "production_cpu",
+      floquet_tangent_frame_max_mismatch: 0,
+      floquet_tangent_transport_max_nonunitarity: 0,
+      phasor_convention: "exp_i_omega_t",
+      production_solver_available: true,
+      sample_count: 4,
+      schema_version: "frequency_domain_eigen_diagnostics.v2",
+      solver_adapter: "slepc_modal_eigen",
+      solver_model: "slepc_multi_shift_invert_production_cpu_dense",
+    };
+
+    const html = renderToStaticMarkup(
+      <FrequencyDomainSolverDiagnosticInspectorPanel
+        selection={{
+          kind: "diagnostics.frequency_domain.solver",
+          label: "Solver",
+          moduleSource: "explorer",
+          nodeId: "diagnostics:frequency-domain:solver",
+          objectId: null,
+          ref: {
+            kind: "diagnostics.frequency_domain.solver",
+            nodeId: "diagnostics:frequency-domain:solver",
+            type: "frequency-domain",
+          },
+        }}
+      />,
+    );
+
+    expect(html).toContain("Production CPU gate");
+    expect(html).toContain(
+      "accepted production_cpu selected-spectrum modal k-path; adapter slepc_modal_eigen; sample_count 4",
+    );
+    expect(html).not.toContain(
+      "production_cpu_modal_nonzero_k_floquet_operator_missing",
+    );
   });
 
   it("marks frequency-domain visualization diagnostics degraded when field artifacts are missing", () => {
@@ -1879,8 +2283,14 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(progressHtml).toContain("Frequency Response Progress Resource");
     expect(progressHtml).toContain("Progress endpoint");
     expect(progressHtml).toContain(ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH);
-    expect(progressHtml).toContain("Progress state");
-    expect(progressHtml).toContain("unavailable; 0/2");
+    expect(progressHtml).toContain("role=\"progressbar\"");
+    expect(progressHtml).toContain("aria-valuenow=\"0\"");
+    expect(progressHtml).toContain("Status");
+    expect(progressHtml).toContain("unavailable");
+    expect(progressHtml).toContain("Progress");
+    expect(progressHtml).toContain("0/2 frequency points");
+    expect(progressHtml).toContain("Current frequency");
+    expect(progressHtml).toContain("not available");
     expect(fieldHtml).toContain("Frequency Response Field Resource");
     expect(fieldHtml).toContain("Field endpoint");
     expect(fieldHtml).toContain(ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FIELD_META_PATH);
@@ -1932,6 +2342,10 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(eigenDispersionHtml).toContain("Eigen Dispersion Inspector");
     expect(eigenDispersionHtml).toContain("Dispersion resource");
     expect(eigenDispersionHtml).toContain(ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH);
+    expect(eigenDispersionHtml).toContain("Path metadata artifact");
+    expect(eigenDispersionHtml).toContain("eigen/dispersion/path.json");
+    expect(eigenDispersionHtml).toContain("Analytic reference");
+    expect(eigenDispersionHtml).toContain("2 point(s); backward_volume, damon_eshbach; max rel. error 0.005291");
     expect(eigenDispersionHtml).toContain("Branch tracking");
     expect(eigenDispersionHtml).toContain("1 branch(es), 2 tracked point(s)");
     expect(observablesHtml).toContain("Frequency Response Observables");
@@ -2008,7 +2422,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Peak rows");
     expect(html).toContain("3 total, 2 modal, 1 driven");
     expect(html).toContain("Overlay-ready peaks");
-    expect(html).toContain("2 with field artifacts");
+    expect(html).toContain("3 with field artifacts");
     expect(html).toContain("First peak");
     expect(html).toContain("modal, 9.5 GHz");
     expect(html).toContain("Comparison state");
@@ -2024,7 +2438,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Power density");
     expect(html).toContain("3D field");
     expect(html).toContain("overlay-ready");
-    expect(html).toContain("missing");
+    expect(html).toContain("mode field ready; driven field ready");
     expect(html).toContain("Frequency-domain FMR peak table");
     expect(html).toContain("<th>Q factor</th>");
     expect(html).toContain("Mode / point");
@@ -2418,7 +2832,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Modal overlay");
     expect(html).toContain("analysis:eigen:sample-0000:mode-0001; mode field ready");
     expect(html).toContain("Driven overlay");
-    expect(html).toContain("driven peak field missing");
+    expect(html).toContain("analysis:frequency-response:frequency-0000; response field ready");
     expect(html).toContain("Validation state");
     expect(html).toContain("unavailable modal, unavailable driven");
     expect(html).toContain("FMR Comparison Browser");
@@ -2426,7 +2840,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Modal field");
     expect(html).toContain("Driven field");
     expect(html).toContain("overlay-ready");
-    expect(html).toContain("missing");
+    expect(html).toContain("mode field ready; driven field ready");
     expect(html).toContain("Amplitude ratio");
     expect(html).toContain("Field handoff");
     expect(html).toContain("Plot modal");
@@ -2440,12 +2854,12 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("<td>mode 1 @ 9.5 GHz</td>");
     expect(html).toContain("<td>response @ 9.5 GHz</td>");
     expect(html).toContain("<td>0 Hz</td>");
-    expect(html).toContain("mode field ready; driven field missing");
+    expect(html).toContain("mode field ready; driven field ready");
     expect(html).toContain("Resources");
     expect(html).toContain(ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH);
     expect(html).toContain(ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH);
     expect(html).toContain("FMR Comparison Actions");
-    expect(html).toContain("modal overlay ready");
+    expect(html).toContain("both overlays ready");
     expect(html).toContain("Modal target");
     expect(html).toContain("modal mode 1 9.5 GHz");
     expect(html).toContain("Driven target");
@@ -2454,9 +2868,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Open driven point");
     expect(html).toContain("Plot modal overlay");
     expect(html).toContain("Plot driven overlay");
-    expect(html).toMatch(
-      /disabled="" title="Driven comparison field is missing"/,
-    );
+    expect(html).toContain('title="Plot the driven comparison field in 3D"');
     expect(html).not.toMatch(
       /disabled="" title="Plot the modal comparison field in 3D"/,
     );
@@ -2488,7 +2900,9 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Dispersion resource");
     expect(html).toContain(ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH);
     expect(html).toContain("Dispersion points");
-    expect(html).toContain("2 point(s), 1 series");
+    expect(html).toContain("2 point(s), 2 series");
+    expect(html).toContain("Analytic reference");
+    expect(html).toContain("2 point(s); backward_volume, damon_eshbach; max rel. error 0.005291");
     expect(html).toContain("Frequency range");
     expect(html).toContain("9.5 GHz-12 GHz");
     expect(html).toContain("k-path span");
@@ -2501,7 +2915,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("2 mode field(s) available from modal spectrum");
     expect(html).toContain("Capability summary");
     expect(html).toContain(
-      "reference_cpu: ready; production_cpu: unsupported; production_gpu: unsupported; k_path: ready; branch_tracking: ready",
+      "reference_cpu: reference_executable; production_cpu: partial_production_executable; production_cpu_gamma_k_path: partial_production_executable; production_gpu: unsupported; k_path: reference_executable; branch_tracking: reference_executable",
     );
     expect(html).toContain("Floquet gate");
     expect(html).toContain("modal ready; response unsupported");
@@ -2624,6 +3038,20 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(source).toContain("createCommandContext(\"inspector\", kernel");
     expect(source).toContain("navigator.clipboard.writeText");
     expect(source).toContain("branchSamplesCsv(branch)");
+  });
+
+  it("wires the dispersion branch table to the eigen branch inspector selection", () => {
+    const source = readFileSync(
+      resolve(
+        __dirname,
+        "frequency-domain/FrequencyDomainResultInspectors.tsx",
+      ),
+      "utf8",
+    );
+
+    expect(source).toContain("buildEigenBranchSelectionRef(branch)");
+    expect(source).toContain('kind: "results.eigen.branch"');
+    expect(source).toContain("kernel.selection.set");
   });
 
   it("renders a dedicated frequency-domain export package surface", () => {
@@ -2783,7 +3211,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("1 chart series");
     expect(html).toContain("3D handoff");
     expect(html).toContain(
-      "0/1 frequency points are directly linked; 2 field payloads published",
+      "1/1 frequency points are directly linked; 2 field payloads published",
     );
     expect(html).toContain("FMR Response Sweep Chart");
     expect(html).toContain("Driven FMR frequency response");
@@ -2798,7 +3226,8 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Susceptibility");
     expect(html).toContain("Residual");
     expect(html).toContain("Response field");
-    expect(html).toContain("field missing");
+    expect(html).toContain("overlay-ready");
+    expect(html).not.toContain("field missing");
     expect(html).toContain("Inspect");
     expect(html).toContain("FMR Response Point Table");
     expect(html).toContain("Frequency-domain response point table");
@@ -2995,8 +3424,9 @@ describe("FrequencyDomainInspectorPanel", () => {
       /<button class="fm-button fm-button--primary fm-button--sm fm-inspector-action-button" aria-label="Plot selected eigen mode with phase-rotated real display"[^>]*><svg[^>]*class="lucide lucide-rotate-cw"/,
     );
     expect(html).toMatch(
-      /aria-label="Plot this response field with phase-rotated real display at 9.5 GHz" disabled="" title="Response field artifact is missing"/,
+      /aria-label="Plot this response field with phase-rotated real display at 9.5 GHz" title="Plot this response field with phase-rotated real display"/,
     );
+    expect(html).not.toContain("Response field artifact is missing");
     expect(html).toContain("Frequency-domain mode table");
     expect(html).toContain("Frequency-domain response point table");
     expect(html).toContain("Frequency-domain FMR peak table");
@@ -3164,6 +3594,11 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("dispersion_modal");
     expect(html).toContain("Floquet/Bloch k-path");
     expect(html).toContain("k-path required");
+    expect(html).toContain("production_cpu: partial_production_executable");
+    expect(html).toContain(
+      "production_cpu_gamma_k_path: partial_production_executable",
+    );
+    expect(html).toContain("production_gpu: unsupported");
     expect(html).toContain("k_path: ready");
     expect(html).toContain("response_map");
     expect(html).toContain("k/f grid required");

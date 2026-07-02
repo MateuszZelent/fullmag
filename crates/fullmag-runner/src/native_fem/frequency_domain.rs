@@ -139,6 +139,8 @@ pub(crate) struct NativeDrivenFrequencyResponseMfemOperatorProblem<'a> {
     pub dmi_lumped_mass: Option<&'a [f64]>,
     pub dmi_ms_field: Option<&'a [f64]>,
     pub dmi_uniform_ms: f64,
+    pub observable_ms_field: Option<&'a [f64]>,
+    pub observable_uniform_ms: f64,
     pub include_zeeman: bool,
     pub static_periodic_node_pairs: &'a [NativeDrivenFrequencyResponsePeriodicNodePair],
     pub floquet_k_vector_rad_per_m: Option<[f64; 3]>,
@@ -176,6 +178,9 @@ pub(crate) struct NativeDrivenFrequencyResponseFloquetPeriodicPair<'a> {
     pub translation_m: Option<[f64; 3]>,
     pub phase_rad: Option<f64>,
 }
+
+pub(crate) type NativeModalEigenFloquetPeriodicPair<'a> =
+    NativeDrivenFrequencyResponseFloquetPeriodicPair<'a>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
@@ -261,6 +266,8 @@ pub(crate) struct NativeModalEigenMfemOperatorProblem<'a> {
     pub stiffness_matrix_row_major: Option<&'a [f64]>,
     pub gyrotropic_matrix_row_major: Option<&'a [f64]>,
     pub mass_matrix_row_major: Option<&'a [f64]>,
+    pub phase_convention: FrequencyDomainPhaseConvention,
+    pub floquet_periodic_pairs: &'a [NativeModalEigenFloquetPeriodicPair<'a>],
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -655,6 +662,14 @@ fn solve_native_driven_frequency_response_impl(
         mfem_demag_tangent_matrix_row_major: mfem_operator
             .and_then(|problem| problem.demag_tangent_matrix_row_major)
             .map_or(std::ptr::null(), slice_ptr_or_null),
+        mfem_observable_ms_field: mfem_operator
+            .and_then(|problem| problem.observable_ms_field)
+            .map_or(std::ptr::null(), slice_ptr_or_null),
+        mfem_observable_ms_field_len: mfem_operator
+            .and_then(|problem| problem.observable_ms_field)
+            .map_or(0, |values| values.len() as u64),
+        mfem_observable_uniform_ms: mfem_operator
+            .map_or(0.0, |problem| problem.observable_uniform_ms),
     };
     let mfem_apply_demag_tangent_with_potential =
         mfem_operator.and_then(|problem| problem.apply_demag_tangent_with_potential);
@@ -842,6 +857,61 @@ fn solve_native_modal_eigen_impl(
     let tiny_validation = request.tiny_validation_problem.as_ref();
     let mfem_operator = request.mfem_operator_problem.as_ref();
     let mfem_sparse_operator = request.mfem_sparse_operator_problem.as_ref();
+    let floquet_k_vector_rad_per_m = request.k_vector_rad_m.and_then(|values| {
+        if values.len() == 3 {
+            Some([values[0], values[1], values[2]])
+        } else {
+            None
+        }
+    });
+    let has_floquet_k_vector =
+        request.spin_wave_bc_kind == "floquet" && floquet_k_vector_rad_per_m.is_some();
+    let floquet_pair_ids = mfem_operator
+        .map(|problem| {
+            problem
+                .floquet_periodic_pairs
+                .iter()
+                .map(|pair| {
+                    pair.pair_id
+                        .map(|pair_id| {
+                            CString::new(pair_id.as_bytes()).map_err(|_| {
+                                "native FEM modal_eigen Floquet pair id contains NUL".to_string()
+                            })
+                        })
+                        .transpose()
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
+    let floquet_periodic_pairs = mfem_operator
+        .map(|problem| {
+            problem
+                .floquet_periodic_pairs
+                .iter()
+                .zip(floquet_pair_ids.iter())
+                .map(
+                    |(pair, pair_id)| ffi::fullmag_fem_frequency_domain_floquet_periodic_pair {
+                        pair_id: pair_id
+                            .as_ref()
+                            .map_or(std::ptr::null(), |value| value.as_ptr()),
+                        node_a: pair.node_a,
+                        node_b: pair.node_b,
+                        has_translation: pair.translation_m.is_some() as i32,
+                        translation_m: pair.translation_m.unwrap_or([0.0; 3]),
+                        has_phase: pair.phase_rad.is_some() as i32,
+                        phase_rad: pair.phase_rad.unwrap_or(0.0),
+                    },
+                )
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if let Some(problem) = mfem_operator {
+        validate_floquet_pair_phase_metadata(
+            floquet_k_vector_rad_per_m,
+            problem.floquet_periodic_pairs,
+        )?;
+    }
 
     let ffi_request = ffi::FullmagFemModalEigenRequest {
         abi_version: ffi::FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION,
@@ -921,6 +991,19 @@ fn solve_native_modal_eigen_impl(
         mfem_sparse_mass_csr: csr_matrix_view_or_zero(
             mfem_sparse_operator.map(|problem| &problem.mass_csr),
         ),
+        has_floquet_k_vector: i32::from(has_floquet_k_vector),
+        floquet_k_vector_rad_per_m: floquet_k_vector_rad_per_m.unwrap_or([0.0; 3]),
+        phase_convention: map_phase_convention(
+            mfem_operator
+                .map(|problem| problem.phase_convention)
+                .unwrap_or(FrequencyDomainPhaseConvention::ExpIOmegaT),
+        ),
+        mfem_floquet_periodic_pairs: if floquet_periodic_pairs.is_empty() {
+            std::ptr::null()
+        } else {
+            floquet_periodic_pairs.as_ptr()
+        },
+        mfem_floquet_periodic_pair_count: floquet_periodic_pairs.len() as u64,
     };
 
     let mut ffi_result = NativeFrequencyDomainContractFfiResult {
@@ -1794,6 +1877,8 @@ mod tests {
                 stiffness_matrix_row_major: Some(&stiffness_matrix_row_major),
                 gyrotropic_matrix_row_major: Some(&gyrotropic_mass_row_major),
                 mass_matrix_row_major: Some(&mass_matrix_row_major),
+                phase_convention: FrequencyDomainPhaseConvention::ExpIOmegaT,
+                floquet_periodic_pairs: &[],
             }),
             mfem_sparse_operator_problem: None,
         })
@@ -1908,6 +1993,8 @@ mod tests {
                 stiffness_matrix_row_major: Some(&stiffness_matrix_row_major),
                 gyrotropic_matrix_row_major: Some(&gyrotropic_mass_row_major),
                 mass_matrix_row_major: Some(&mass_matrix_row_major),
+                phase_convention: FrequencyDomainPhaseConvention::ExpIOmegaT,
+                floquet_periodic_pairs: &[],
             }),
             mfem_sparse_operator_problem: None,
         })
@@ -1932,6 +2019,85 @@ mod tests {
             result.result_json.contains("\"accepted_mode_count\":2"),
             "{}",
             result.result_json
+        );
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn modal_floquet_periodic_pairs_are_forwarded_to_native_diagnostics() {
+        let stiffness_matrix_row_major = [1.0, 0.0, 0.0, 1.0];
+        let gyrotropic_mass_row_major = [0.0, -1.0, 1.0, 0.0];
+        let k_vector_rad_m = [1.0e6, 0.0, 0.0];
+        let floquet_pairs = [NativeModalEigenFloquetPeriodicPair {
+            pair_id: Some("x_faces"),
+            node_a: 0,
+            node_b: 1,
+            translation_m: Some([1.0e-6, 0.0, 0.0]),
+            phase_rad: Some(-1.0),
+        }];
+
+        let result = solve_native_modal_eigen(NativeModalEigenRequest {
+            mesh_asset_id: "mfem_modal_floquet_payload",
+            equilibrium_source_kind: "provided",
+            gamma_rad_s_t: 1.760859e11,
+            mu0_t_m_a: 1.25663706212e-6,
+            alpha: 0.0,
+            include_exchange: true,
+            include_demag: false,
+            demag_realization: None,
+            damping_policy: "ignore",
+            spin_wave_bc_kind: "floquet",
+            k_vector_rad_m: Some(&k_vector_rad_m),
+            operator_diagnostics_json: None,
+            requested_mode_count: 2,
+            target_kind: "frequency_window",
+            target_frequency_hz: 0.0,
+            frequency_min_hz: 0.1,
+            frequency_max_hz: 0.5,
+            residual_tolerance: 1.0e-10,
+            max_outer_iterations: 32,
+            max_linear_iterations: 128,
+            output_directory: None,
+            write_partial_artifacts: false,
+            completeness_policy: 1,
+            eigensolver_family: 1,
+            spectral_transform_kind: 1,
+            cancel_requested: None,
+            progress_callback: None,
+            tiny_validation_problem: None,
+            mfem_operator_problem: Some(NativeModalEigenMfemOperatorProblem {
+                tangent_dof_count: 2,
+                stiffness_matrix_row_major: Some(&stiffness_matrix_row_major),
+                gyrotropic_matrix_row_major: Some(&gyrotropic_mass_row_major),
+                mass_matrix_row_major: None,
+                phase_convention: FrequencyDomainPhaseConvention::ExpIOmegaT,
+                floquet_periodic_pairs: &floquet_pairs,
+            }),
+            mfem_sparse_operator_problem: None,
+        })
+        .expect("native modal Floquet payload should return a structured result");
+
+        assert_eq!(result.status, NativeFrequencyDomainStatus::Unavailable);
+        assert!(
+            result
+                .diagnostics_json
+                .contains("\"production_cpu_rejection_reason\":\"production_cpu_modal_nonzero_k_floquet_operator_missing\""),
+            "{}",
+            result.diagnostics_json
+        );
+        assert!(
+            result
+                .diagnostics_json
+                .contains("\"floquet_periodic_pair_count\":1"),
+            "{}",
+            result.diagnostics_json
+        );
+        assert!(
+            result
+                .diagnostics_json
+                .contains("\"modal_periodic_pair_contract_available\":true"),
+            "{}",
+            result.diagnostics_json
         );
     }
 
@@ -2032,6 +2198,8 @@ mod tests {
                 dmi_lumped_mass: None,
                 dmi_ms_field: None,
                 dmi_uniform_ms: 0.0,
+                observable_ms_field: None,
+                observable_uniform_ms: 0.0,
                 include_zeeman: true,
                 static_periodic_node_pairs: &[],
                 floquet_k_vector_rad_per_m: Some([1.0e7, 0.0, 0.0]),
@@ -2100,6 +2268,8 @@ mod tests {
                 dmi_lumped_mass: None,
                 dmi_ms_field: None,
                 dmi_uniform_ms: 0.0,
+                observable_ms_field: None,
+                observable_uniform_ms: 0.0,
                 include_zeeman: true,
                 static_periodic_node_pairs: &[],
                 floquet_k_vector_rad_per_m: Some([1.0e7, 0.0, 0.0]),
@@ -2196,6 +2366,8 @@ mod tests {
                 dmi_lumped_mass: None,
                 dmi_ms_field: None,
                 dmi_uniform_ms: 0.0,
+                observable_ms_field: None,
+                observable_uniform_ms: 0.0,
                 include_zeeman: true,
                 static_periodic_node_pairs: &[],
                 floquet_k_vector_rad_per_m: Some([1.0e7, 0.0, 0.0]),
@@ -2306,6 +2478,8 @@ mod tests {
                 dmi_lumped_mass: None,
                 dmi_ms_field: None,
                 dmi_uniform_ms: 0.0,
+                observable_ms_field: None,
+                observable_uniform_ms: 0.0,
                 include_zeeman: true,
                 static_periodic_node_pairs: &[],
                 floquet_k_vector_rad_per_m: Some([1.5707963267948966e6, 0.0, 0.0]),
@@ -2755,6 +2929,8 @@ mod tests {
                 dmi_lumped_mass: None,
                 dmi_ms_field: None,
                 dmi_uniform_ms: 0.0,
+                observable_ms_field: None,
+                observable_uniform_ms: 0.0,
                 include_zeeman: true,
                 static_periodic_node_pairs: &[],
                 floquet_k_vector_rad_per_m: None,
@@ -2852,6 +3028,8 @@ mod tests {
                 dmi_lumped_mass: None,
                 dmi_ms_field: None,
                 dmi_uniform_ms: 0.0,
+                observable_ms_field: None,
+                observable_uniform_ms: 0.0,
                 include_zeeman: true,
                 static_periodic_node_pairs: &[],
                 floquet_k_vector_rad_per_m: None,
@@ -2950,6 +3128,8 @@ mod tests {
                 dmi_lumped_mass: Some(&dmi_lumped_mass),
                 dmi_ms_field: None,
                 dmi_uniform_ms: 800000.0,
+                observable_ms_field: None,
+                observable_uniform_ms: 0.0,
                 include_zeeman: false,
                 static_periodic_node_pairs: &[],
                 floquet_k_vector_rad_per_m: None,

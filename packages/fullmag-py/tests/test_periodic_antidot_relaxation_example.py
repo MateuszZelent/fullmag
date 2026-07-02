@@ -198,7 +198,7 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
         self.assertEqual(payload["stages"][1]["entrypoint_kind"], "flat_change_device")
         self.assertEqual(
             payload["stages"][1]["action"],
-            {"kind": "change_device", "device": "cpu"},
+            {"kind": "change_device", "device": "gpu"},
         )
         self.assertEqual(payload["stages"][2]["entrypoint_kind"], "flat_frequency_response")
 
@@ -219,12 +219,12 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
             payload["stages"][2]["ir"]["problem_meta"]["runtime_metadata"][
                 "runtime_selection"
             ]["device"],
-            "cpu",
+            "gpu",
         )
         frequency_response = payload["stages"][2]["ir"]["study"]
         self.assertEqual(frequency_response["kind"], "frequency_response")
-        self.assertEqual(frequency_response["operator"]["include_demag"], True)
-        self.assertEqual(frequency_response["magnetostatic_bc"], "periodic_airbox_k0")
+        self.assertEqual(frequency_response["operator"]["include_demag"], False)
+        self.assertEqual(frequency_response["magnetostatic_bc"], "open")
         self.assertEqual(frequency_response["equilibrium"], {"kind": "relaxed_initial_state"})
         self.assertEqual(frequency_response["damping_policy"], "include")
         self.assertEqual(

@@ -71,6 +71,15 @@ Let `full_to_reduced[i]` map every full node `i` to its periodic class
 representative index `c`.  Define the injection operator `P` such that
 `(P q)[i] = q[full_to_reduced[i]]`.
 
+This map is part of the physical PBC-demag contract, not optional telemetry.
+For an accepted `periodic_airbox_k0` solve, `full_to_reduced` must be defined
+for every node of the full shared-domain mesh, including magnetic and airbox
+nodes, the reduced class count must be positive, every reduced id must be less
+than that class count, and the representative-node list must contain exactly
+one valid representative for each reduced class. Periodic node-pair metadata
+alone is insufficient: if the backend has not built a complete static periodic
+class map, it must not request or report the `pbc_reduced_poisson` operator.
+
 The open-boundary (non-periodic) Poisson system assembled on the full mesh is:
 
 $$
@@ -342,6 +351,9 @@ same-step `fields/H_demag/step_*.json`, and same-step
 residuals or pair counts. A periodic artifact that pairs only magnetic nodes
 but does not pair airbox nodes/faces is classified as incomplete PBC for
 magnetostatics.
+`domain_node_pair_counts` are strict homogeneous-pair counts: a periodic node
+pair with one magnetic endpoint and one airbox endpoint is invalid mixed-domain
+topology and must not be hidden inside either `magnetic` or `airbox` counts.
 
 The top-level `pbc` block is copied from `ProblemIR.pbc` and proves the
 physical intent. Mesh pair counts prove that the resolved mesh can realize that
@@ -415,8 +427,20 @@ periodic `m` postprocessing. For accepted PBC-demag runs it must publish
 `poisson_operator = "pbc_reduced_poisson"`, and
 `periodic_reduction.enabled = true` with
 `periodic_reduction.method = "P^T A P"`, positive periodic node/boundary-pair
-counts, and `periodic_boundary_markers_excluded_from_robin = true`. It must
-also prove convergence: `actual_iterations` is positive and does not exceed
+counts, a complete full-mesh periodic class map, and
+`periodic_boundary_markers_excluded_from_robin = true`. A backend that only
+has `periodic_node_pairs` but lacks a `full_to_reduced`/`periodic_reduced_node`
+entry for every mesh node, publishes a reduced id outside the class count, or
+has a representative-node count that drifts from the reduced class count must
+leave periodic reduction disabled and fail the PBC-demag acceptance gate rather
+than publishing `pbc_reduced_poisson`. The
+periodic reduction must also publish `node_pair_counts_by_id` and
+`boundary_pair_counts_by_id` matching `metadata.mesh` for every selected
+periodic pair id, and the aggregate reduction counts must match both
+`metadata.mesh` and the per-pair-id sums. Aggregate counts alone do not prove
+that the Poisson operator used all requested PBC axes, and per-axis maps alone
+must not contradict the user-facing summary counts. It must also prove
+convergence: `actual_iterations` is positive and does not exceed
 `max_iterations`, and `final_residual_norm` is finite, non-negative, and no
 larger than `relative_tolerance`.
 
@@ -482,6 +506,18 @@ The report targets call
 artifact roots. They must not be replaced by hand-written placeholder JSON:
 `verify-fem-static-pbc-demag-equilibrium-runtime` now rejects missing report
 paths before running the CPU/GPU periodic-antidot gates. The report writer also
+rejects source roots whose `metadata.demag_runtime` does not prove
+`periodic_airbox_k0` through `pbc_reduced_poisson` and `P^T A P` periodic
+reduction counts matching `metadata.mesh`, whose `mesh/periodic_pairs.v1.json`
+is missing, invalid, lacks explicit node pairs, has periodic-pair counts that
+drift from `metadata.mesh`, or has boundary face pairs without finite
+translations and opposed normals, or whose
+`diagnostics/fem_static_pbc_demag_seams.v1.json` is missing, failed, not at the
+final `m_final.json` step, missing the selected `x_faces/y_faces` seam ids, or
+publishes `m`, `H_demag`, gauge-adjusted `demag_phi`, normal `B` flux, or side
+magnetic charge seam metrics above the strict-M5 limits;
+matching `metadata.pbc` alone is not enough to generate a strict-M5 comparison
+report. The report writer also
 copies `problem_meta.runtime_metadata.initial_magnetization_state_override` from
 a repeated-state supercell artifact into
 `supercell_initial_magnetization_state_override`. When
