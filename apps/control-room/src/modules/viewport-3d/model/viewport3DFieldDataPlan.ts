@@ -733,8 +733,8 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
             maxVectorGlyphs,
           ),
           replayQuery: selectedSnapshotQuery,
-          scopeId: null,
-          scopeKind: "full",
+          scopeId: partModel.part.id,
+          scopeKind: "part",
         },
       ),
     );

@@ -27,6 +27,7 @@ import {
   objectVisualizationTargetForMeshPart,
   resolveSurfaceColorSourceItems,
   resolveObjectVisualizationPanelTopologyFreshness,
+  resolveObjectChildRegionVisualizationTargets,
   resolveRegionVisualizationCarrier,
   scalarColorPalettePatch,
   resolveVisualizationVectorBudgetRange,
@@ -40,9 +41,13 @@ import {
   surfaceDisplayPassPatch,
   surfaceSolidColorPatch,
   renderModeDisplayPatch,
+  regionVisualizationCarrierSupportsFieldMeta,
+  regionVisualizationFieldWarning,
   VISUALIZATION_COLOR_MODE_ITEMS,
   VISUALIZATION_QUANTITY_ITEMS,
+  visualizationOverrideStateLabel,
   visualizationQuantityItems,
+  visualizationResetActionLabel,
 } from "./ObjectVisualizationPanelModel";
 
 type MeshPart = NonNullable<MeshSharedDomainManifestResource["mesh_parts"]>[number];
@@ -82,6 +87,42 @@ describe("ObjectVisualizationPanelModel", () => {
       "z",
       "magnitude",
       "monochrome",
+    ]);
+  });
+
+  it("resolves object child region visualization targets from scene and manifest data", () => {
+    expect(
+      resolveObjectChildRegionVisualizationTargets({
+        manifestRegions: [
+          {
+            mesh_part_ids: ["part:film:shell"],
+            name: "Shell",
+            source_object_ids: ["film_geom"],
+            source_region_candidate_id: "film:shell",
+          },
+          {
+            mesh_part_ids: ["part:other:core"],
+            name: "Other",
+            source_object_ids: ["other"],
+            source_region_candidate_id: "other:core",
+          },
+        ] as never,
+        objectId: "film",
+        scene: {
+          objects: [
+            {
+              id: "film",
+              regions: [
+                { name: "Core", region_id: "film:core" },
+                { id: "film:shell", name: "Shell duplicate" },
+              ],
+            },
+          ],
+        },
+      }).map((target) => [target.id, target.label]),
+    ).toEqual([
+      ["region:film:film%3Acore", "Core"],
+      ["region:film:film%3Ashell", "Shell duplicate"],
     ]);
   });
 
@@ -255,6 +296,72 @@ describe("ObjectVisualizationPanelModel", () => {
         },
       ),
     ).toEqual({ scope_id: null, scope_kind: null });
+  });
+
+  it("describes region field carrier capability without confusing overlays with textures", () => {
+    expect(
+      regionVisualizationFieldWarning({
+        kind: "mesh-parts",
+        objectId: "film",
+        partIds: ["part:film:core"],
+        regionId: "film:core",
+      }),
+    ).toBeNull();
+    expect(
+      regionVisualizationCarrierSupportsFieldMeta({
+        kind: "mesh-parts",
+        objectId: "film",
+        partIds: ["part:film:core"],
+        regionId: "film:core",
+      }),
+    ).toBe(true);
+    expect(
+      regionVisualizationFieldWarning({
+        kind: "mesh-parts",
+        objectId: "film",
+        partIds: ["part:film:core", "part:film:shell"],
+        regionId: "film:core",
+      }),
+    ).toContain("Scoped colorbar statistics");
+    expect(
+      regionVisualizationCarrierSupportsFieldMeta({
+        kind: "mesh-parts",
+        objectId: "film",
+        partIds: ["part:film:core", "part:film:shell"],
+        regionId: "film:core",
+      }),
+    ).toBe(false);
+    expect(
+      regionVisualizationFieldWarning({
+        kind: "membership",
+        objectId: "film",
+        regionId: "film:shell",
+        syntheticPartId: "membership:film%3Ashell",
+      }),
+    ).toContain("diagnostic");
+    expect(
+      regionVisualizationFieldWarning({
+        kind: "unavailable",
+        reason: "No mesh manifest regions are available.",
+      }),
+    ).toContain("Physical field coloring");
+  });
+
+  it("labels region override state as inherited until a local override exists", () => {
+    expect(
+      visualizationOverrideStateLabel({
+        hasOverride: false,
+        targetKind: "region",
+      }),
+    ).toBe("Inherited from parent");
+    expect(
+      visualizationOverrideStateLabel({
+        hasOverride: true,
+        targetKind: "region",
+      }),
+    ).toBe("Overridden locally");
+    expect(visualizationResetActionLabel("region")).toBe("Reset to parent");
+    expect(visualizationResetActionLabel("object")).toBe("Reset display");
   });
 
   it("maps manifest mesh parts to the same canonical object targets as the viewport", () => {
@@ -861,6 +968,37 @@ describe("ObjectVisualizationPanelModel", () => {
       }),
     ).toMatchObject({
       kind: "unavailable",
+    });
+  });
+
+  it("resolves region visualization carriers from memberships when not present in manifest regions", () => {
+    const memberships = [
+      {
+        boundary_face_indices: [],
+        element_indices: [1, 2, 3],
+        mesh_id: "shared-domain",
+        mesh_part_ids: [],
+        mesh_revision: 1,
+        node_indices: [1, 2, 3, 4],
+        region_id: "film:shell",
+        source: "test",
+      },
+    ];
+
+    expect(
+      resolveRegionVisualizationCarrier({
+        manifestRegions: [],
+        memberships,
+        target: {
+          id: "region:film:film%3Ashell",
+          kind: "region",
+        },
+      }),
+    ).toEqual({
+      kind: "membership",
+      objectId: "film",
+      syntheticPartId: "membership:film%3Ashell",
+      regionId: "film:shell",
     });
   });
 

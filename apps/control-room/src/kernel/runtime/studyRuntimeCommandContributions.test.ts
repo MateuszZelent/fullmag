@@ -2791,4 +2791,81 @@ describe("study runtime command contributions", () => {
     expect(registry.isActive("study.run", context)).toBe(false);
     expect(registry.get("study.run")?.disabledReason?.(context)).toBeNull();
   });
+
+  describe("dynamics command contributions", () => {
+    it("handles presentation actions", async () => {
+      const registry = registryWithStudyRuntimeCommands();
+      const context = {
+        api: {} as never,
+        source: "test" as const,
+      };
+
+      expect(registry.isEnabled("study.open-dynamics-workbench", context)).toBe(true);
+      expect(registry.isEnabled("study.plot-selected-mode", context)).toBe(true);
+      expect(registry.isEnabled("study.plot-selected-response-field", context)).toBe(true);
+      expect(registry.isEnabled("study.animate-phase", context)).toBe(true);
+      expect(registry.isEnabled("study.compare-selected-peak", context)).toBe(true);
+      expect(registry.isEnabled("study.export-selected-metadata", context)).toBe(true);
+
+      const res = await registry.get("study.open-dynamics-workbench")?.run(context);
+      expect(res?.status).toBe("completed");
+      expect(res?.message).toBe("Dynamics workbench opened.");
+    });
+
+    it("handles gated authoring/transaction actions", async () => {
+      const registry = registryWithStudyRuntimeCommands();
+
+      // Case 1: Session status unavailable
+      const context1 = {
+        api: {} as never,
+        resourceData: {},
+        source: "test" as const,
+      };
+      expect(registry.isEnabled("study.trigger-field-calculation", context1)).toBe(false);
+      expect(registry.get("study.trigger-field-calculation")?.disabledReason?.(context1)).toBe("Session status is unavailable.");
+      expect(registry.isEnabled("study.update-k-path", context1)).toBe(false);
+      expect(registry.get("study.update-k-path")?.disabledReason?.(context1)).toBe("Session status is unavailable.");
+
+      // Case 2: Capabilities missing
+      const context2 = {
+        api: {} as never,
+        resourceData: {
+          [SESSION_STATUS_RESOURCE_KEY]: {
+            capabilities: {
+              binary_fields: false,
+              eigen_modes: false,
+            },
+          },
+        },
+        source: "test" as const,
+      };
+      expect(registry.isEnabled("study.trigger-field-calculation", context2)).toBe(false);
+      expect(registry.get("study.trigger-field-calculation")?.disabledReason?.(context2)).toContain("does not support binary_fields");
+      expect(registry.isEnabled("study.update-k-path", context2)).toBe(false);
+      expect(registry.get("study.update-k-path")?.disabledReason?.(context2)).toContain("does not support eigen_modes");
+
+      // Case 3: Capabilities present
+      const context3 = {
+        api: {} as never,
+        resourceData: {
+          [SESSION_STATUS_RESOURCE_KEY]: {
+            capabilities: {
+              binary_fields: true,
+              eigen_modes: true,
+            },
+          },
+        },
+        source: "test" as const,
+      };
+      expect(registry.isEnabled("study.trigger-field-calculation", context3)).toBe(true);
+      expect(registry.get("study.trigger-field-calculation")?.disabledReason?.(context3)).toBeNull();
+      expect(registry.isEnabled("study.update-k-path", context3)).toBe(true);
+      expect(registry.get("study.update-k-path")?.disabledReason?.(context3)).toBeNull();
+
+      const res1 = await registry.get("study.trigger-field-calculation")?.run(context3);
+      expect(res1?.status).toBe("completed");
+      const res2 = await registry.get("study.update-k-path")?.run(context3);
+      expect(res2?.status).toBe("completed");
+    });
+  });
 });

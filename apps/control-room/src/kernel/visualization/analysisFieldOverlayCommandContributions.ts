@@ -193,7 +193,7 @@ function unsupported3DPlotReason(context: CommandContext): string | null {
     valueKind === "complex_tangent_vector" ||
     (componentCount != null && componentCount !== 3)
   ) {
-    return "Frequency-domain 3D overlay requires a spatial XYZ field; this payload is local tangent-space and needs tangent-to-XYZ reconstruction first.";
+    return "Frequency-domain 3D field requires a spatial XYZ field; this payload is local tangent-space and needs tangent-to-XYZ reconstruction first.";
   }
   return null;
 }
@@ -298,7 +298,7 @@ function setOverlayAppearanceCommand(options: {
     category: "analysis",
     disabledReason: (context) => {
       if (!context.analysisFieldOverlay) {
-        return "Analysis field overlay controller is unavailable.";
+        return "Analysis field controller is unavailable.";
       }
       return options.activeOverlay(context)
         ? null
@@ -322,7 +322,7 @@ function setOverlayAppearanceCommand(options: {
       if (!appearancePatch) {
         return {
           status: "completed",
-          message: "Frequency-domain 3D overlay appearance unchanged.",
+          message: "Frequency-domain 3D field appearance unchanged.",
         };
       }
       controller.update({
@@ -333,7 +333,7 @@ function setOverlayAppearanceCommand(options: {
       });
       return {
         status: "completed",
-        message: "Frequency-domain 3D overlay appearance updated.",
+        message: "Frequency-domain 3D field appearance updated.",
       };
     },
     scope: "viewport",
@@ -361,7 +361,7 @@ function setOverlayPhaseCommand(options: {
     category: "analysis",
     disabledReason: (context) => {
       if (!context.analysisFieldOverlay) {
-        return "Analysis field overlay controller is unavailable.";
+        return "Analysis field controller is unavailable.";
       }
       return options.activeOverlay(context)
         ? null
@@ -405,7 +405,7 @@ function setOverlayAnimationCommand(options: {
     category: "analysis",
     disabledReason: (context) => {
       if (!context.analysisFieldOverlay) {
-        return "Analysis field overlay controller is unavailable.";
+        return "Analysis field controller is unavailable.";
       }
       return options.activeOverlay(context)
         ? null
@@ -487,7 +487,7 @@ function stopOverlayAnimationCommand(options: {
     category: "analysis",
     disabledReason: (context) => {
       if (!context.analysisFieldOverlay) {
-        return "Analysis field overlay controller is unavailable.";
+        return "Analysis field controller is unavailable.";
       }
       return options.activeOverlay(context)
         ? null
@@ -532,7 +532,7 @@ function plotCommand(
     category: "analysis",
     disabledReason: (context) => {
       if (!context.analysisFieldOverlay) {
-        return "Analysis field overlay controller is unavailable.";
+        return "Analysis field controller is unavailable.";
       }
       const unsupportedReason = unsupported3DPlotReason(context);
       if (unsupportedReason) {
@@ -620,39 +620,39 @@ export const ANALYSIS_FIELD_OVERLAY_COMMANDS: CommandContribution[] = [
   setOverlayPhaseCommand({
     activeOverlay: activeEigenModeOverlay,
     id: "analysis.eigen.set-mode-3d-phase",
-    missingMessage: "No eigen mode overlay is active.",
+    missingMessage: "No eigen mode field is active.",
     title: "Set eigen mode 3D phase",
   }),
   setOverlayAnimationCommand({
     activeOverlay: activeEigenModeOverlay,
     defaultSource: "eigen-mode",
     id: "analysis.eigen.set-mode-3d-animation",
-    missingMessage: "No eigen mode overlay is active.",
+    missingMessage: "No eigen mode field is active.",
     title: "Animate eigen mode phase",
   }),
   setOverlayPhaseCommand({
     activeOverlay: activeAnalysisOverlay,
     id: "analysis.frequency-domain.set-3d-phase",
-    missingMessage: "No frequency-domain field overlay is active.",
+    missingMessage: "No frequency-domain field is active.",
     title: "Set frequency-domain 3D phase",
   }),
   setOverlayAnimationCommand({
     activeOverlay: activeAnalysisOverlay,
     defaultSource: "frequency-response",
     id: "analysis.frequency-domain.set-3d-animation",
-    missingMessage: "No frequency-domain field overlay is active.",
+    missingMessage: "No frequency-domain field is active.",
     title: "Animate frequency-domain phase",
   }),
   stopOverlayAnimationCommand({
     activeOverlay: activeAnalysisOverlay,
     id: "analysis.frequency-domain.stop-3d-animation",
-    missingMessage: "No frequency-domain field overlay is active.",
+    missingMessage: "No frequency-domain field is active.",
     title: "Stop frequency-domain phase animation",
   }),
   setOverlayAppearanceCommand({
     activeOverlay: activeAnalysisOverlay,
     id: "analysis.frequency-domain.set-3d-appearance",
-    missingMessage: "No frequency-domain field overlay is active.",
+    missingMessage: "No frequency-domain field is active.",
     title: "Set frequency-domain 3D appearance",
   }),
   plotCommand(
@@ -698,15 +698,15 @@ export const ANALYSIS_FIELD_OVERLAY_COMMANDS: CommandContribution[] = [
   ),
   {
     id: "analysis.frequency-domain.clear-3d-overlay",
-    title: "Clear frequency-domain 3D overlay",
+    title: "Clear frequency-domain 3D field",
     category: "analysis",
     disabledReason: (context) => {
       if (!context.analysisFieldOverlay) {
-        return "Analysis field overlay controller is unavailable.";
+        return "Analysis field controller is unavailable.";
       }
       return context.analysisFieldOverlay.getSnapshot()
         ? null
-        : "No frequency-domain field overlay is active.";
+        : "No frequency-domain field is active.";
     },
     group: "analysis.frequency-domain",
     isEnabled: (context) =>
@@ -715,7 +715,7 @@ export const ANALYSIS_FIELD_OVERLAY_COMMANDS: CommandContribution[] = [
       context.analysisFieldOverlay?.clear();
       return {
         status: "completed",
-        message: "Frequency-domain 3D overlay cleared.",
+        message: "Frequency-domain 3D field cleared.",
       };
     },
     scope: "viewport",

@@ -2,6 +2,11 @@
 
 import { useSyncExternalStore } from "react";
 
+import type {
+  FloquetSpatialConvention,
+  PhasorConvention,
+} from "@/shared/domain/analysis/phasorConventionAdapter";
+
 import type { FieldVectorQuery } from "../api/apiTypes";
 import type {
   SurfaceColorSource,
@@ -33,6 +38,10 @@ export interface AnalysisFieldOverlayState {
   query: FieldVectorQuery;
   source: AnalysisFieldOverlaySource;
   visualizationPhaseRad?: number;
+  wavevectorKf?: [number, number, number];
+  cellOrigin?: [number, number, number];
+  floquetSpatialConvention?: FloquetSpatialConvention;
+  phasorConvention?: PhasorConvention;
 }
 
 type AnalysisFieldOverlayListener = () => void;
@@ -99,6 +108,16 @@ export class AnalysisFieldOverlayController {
   }
 }
 
+function numberArrayEquals(
+  left: readonly number[] | undefined | null,
+  right: readonly number[] | undefined | null,
+): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  if (left.length !== right.length) return false;
+  return left.every((val, index) => val === right[index]);
+}
+
 function analysisFieldOverlayStateEquals(
   left: AnalysisFieldOverlayState | null,
   right: AnalysisFieldOverlayState | null,
@@ -113,7 +132,11 @@ function analysisFieldOverlayStateEquals(
       (right.visualizationPhaseRad ?? null) &&
     analysisFieldOverlayAppearanceEquals(left.appearance, right.appearance) &&
     analysisFieldOverlayAnimationEquals(left.animation, right.animation) &&
-    fieldVectorQueryEquals(left.query, right.query)
+    fieldVectorQueryEquals(left.query, right.query) &&
+    numberArrayEquals(left.wavevectorKf, right.wavevectorKf) &&
+    numberArrayEquals(left.cellOrigin, right.cellOrigin) &&
+    left.floquetSpatialConvention === right.floquetSpatialConvention &&
+    left.phasorConvention === right.phasorConvention
   );
 }
 

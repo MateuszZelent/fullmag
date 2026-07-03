@@ -1036,7 +1036,7 @@ describe("Study stage inspectors", () => {
     expect(html).toContain("Frequency point metadata");
     expect(html).toContain("one JSON metadata artifact per solved frequency");
     expect(html).toContain("Response field payload");
-    expect(html).toContain("complex vector payload for selected frequency 3D overlay");
+    expect(html).toContain("complex vector payload for selected frequency 3D field");
     expect(html).toContain("Diagnostics output");
     expect(html).toContain(
       "response/diagnostics/solver.v1.json plus progress/cancel resources",

@@ -88,6 +88,80 @@ describe("ObjectVisualizationController", () => {
       });
   });
 
+  it("inherits parent object display when a region only overrides quantity", () => {
+    const controller = new ObjectVisualizationController();
+    const objectTarget = {
+      id: "object:film",
+      kind: "object" as const,
+      label: "film",
+    };
+    const regionTarget = {
+      id: "region:film:film%3Acore",
+      kind: "region" as const,
+      label: "core",
+    };
+
+    controller.patchTarget(objectTarget, {
+      shaderVisible: true,
+      surfaceColorSource: "component_x",
+      visible: true,
+      wireframeVisible: true,
+    });
+    controller.patchTarget(regionTarget, { activeQuantityId: "H_eff" });
+
+    const snapshot = controller.getSnapshot();
+    const objectSettings = resolveTargetVisualization({
+      snapshot,
+      target: objectTarget,
+    }).settings;
+    const regionSettings = resolveTargetVisualization({
+      inheritedSettings: objectSettings,
+      snapshot,
+      target: regionTarget,
+    }).settings;
+
+    expect(regionSettings).toMatchObject({
+      activeQuantityId: "H_eff",
+      shaderVisible: true,
+      surfaceColorSource: "component_x",
+      vectorsVisible: false,
+      visible: true,
+      wireframeVisible: true,
+    });
+  });
+
+  it("does not inherit global vector visibility for a region without parent context", () => {
+    const controller = new ObjectVisualizationController();
+    const regionTarget = {
+      id: "region:film:film%3Acore",
+      kind: "region" as const,
+      label: "core",
+    };
+
+    const resolved = resolveTargetVisualization({
+      snapshot: controller.getSnapshot(),
+      target: regionTarget,
+      visualizationState: {
+        layers: {
+          vectors: {
+            density: 512,
+            domain: "full_domain",
+            visible: true,
+          },
+        },
+        revision: 12,
+        vector_glyphs: true,
+      } as never,
+    });
+
+    expect(resolved.settings).toMatchObject({
+      shaderVisible: false,
+      vectorsVisible: false,
+      visible: false,
+      wireframeVisible: false,
+    });
+  });
+
   it("uses one canonical object target key for raw and prefixed object ids", () => {
     const controller = new ObjectVisualizationController();
     const rawTarget = { id: "film", kind: "object" as const };
@@ -411,9 +485,9 @@ describe("ObjectVisualizationController", () => {
 
     expect(region.settings).toMatchObject({
       shaderVisible: false,
-      vectorsVisible: false,
+      vectorsVisible: true,
       wireframeVisible: false,
-      visible: false,
+      visible: true,
     });
   });
 

@@ -280,7 +280,7 @@ function selectedField3DPlotStatus(
   ) {
     return "requires tangent-to-XYZ reconstruction artifact";
   }
-  return "ready for spatial XYZ overlay";
+  return "ready for spatial XYZ field";
 }
 
 function canPlotSelectedFieldIn3D(
@@ -291,7 +291,7 @@ function canPlotSelectedFieldIn3D(
     value_kind?: string | null;
   } | null | undefined,
 ): boolean {
-  return selectedField3DPlotStatus(meta) === "ready for spatial XYZ overlay";
+  return selectedField3DPlotStatus(meta) === "ready for spatial XYZ field";
 }
 
 function floquetKVectorFromManifest(manifestPayload: unknown): number[] {
@@ -2761,9 +2761,9 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
           Stop animate
         </Button>
         <Button
-          aria-label="Clear frequency-domain 3D overlay"
+          aria-label="Clear frequency-domain 3D field"
           size="sm"
-          title="Clear frequency-domain 3D overlay"
+          title="Clear frequency-domain 3D field"
           type="button"
           onClick={() => {
             void kernel.commands
@@ -2778,7 +2778,7 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
               });
           }}
         >
-          Clear 3D overlay
+          Clear 3D field
         </Button>
         {commandMessage ? (
           <FieldRow label="3D command" value={commandMessage} />
@@ -3204,14 +3204,14 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
         />
         <FieldRow
           label="Modal modes"
-          value={`${spectrumModel.points.length} modes, ${spectrumModeFieldCount} field overlays`}
+          value={`${spectrumModel.points.length} modes, ${spectrumModeFieldCount} field payloads`}
         />
         <FieldRow
           label="FMR peaks"
           value={`${modalPeakCount} modal, ${drivenPeakCount} driven`}
         />
         <FieldRow
-          label="Overlay readiness"
+          label="Field readiness"
           value={selectedSpectrumModeOverlayStatus}
         />
         <FieldRow

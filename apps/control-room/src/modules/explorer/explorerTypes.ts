@@ -225,6 +225,7 @@ export interface ExplorerNode {
   kind: ExplorerNodeKind;
   label: string;
   parentId: string | null;
+  activeAnalysisField?: boolean;
   badge?: string;
   children?: ExplorerNode[];
   contextCommands?: CommandId[];

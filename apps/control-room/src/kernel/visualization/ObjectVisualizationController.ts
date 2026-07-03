@@ -401,8 +401,8 @@ export function resolveDefaultVisualizationSettings(
   if (kind === "region") {
     return normalizeVisualizationSettings({
       ...DEFAULT_OBJECT_VISUALIZATION,
-      ...(baseSettings ?? {}),
       ...DEFAULT_REGION_VISUALIZATION,
+      ...(baseSettings ?? {}),
       ...(snapshot.defaults[kind] ?? {}),
     });
   }
@@ -433,11 +433,13 @@ export function resolveTargetVisualization({
     visualizationState,
     target,
   );
+  const inheritedDefaultSettings =
+    target.kind === "region" ? inheritedSettings : inheritedSettings ?? baseSettings;
   const settings = normalizeVisualizationSettings({
     ...resolveDefaultVisualizationSettings(
       snapshot,
       target.kind,
-      inheritedSettings ?? baseSettings,
+      inheritedDefaultSettings,
     ),
     ...(backendOverride ?? {}),
     ...(localOverride ?? {}),

@@ -69,7 +69,7 @@ describe("surfaceMaterialColorFromSettings", () => {
 });
 
 describe("resolveMeshPartSurfaceMaterialColor", () => {
-  it("uses neutral mesh color instead of magnetization preview when field colors are missing", () => {
+  it("uses magnetization preview color when field colors are missing", () => {
     expect(
       resolveMeshPartSurfaceMaterialColor(
         settings({ surfaceColorSource: "orientation" }),
@@ -77,7 +77,7 @@ describe("resolveMeshPartSurfaceMaterialColor", () => {
         "#c255f0",
         false,
       ),
-    ).toBe("#313244");
+    ).toBe("#c255f0");
   });
 });
 

@@ -334,6 +334,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
             },
           )
         : buildExplorerTree(activeTab, {
+            activeAnalysisFieldOverlay,
             frequencyDomainBranches: frequencyDomainBranches.data,
             frequencyDomainCancelRequested: frequencyDomainCancelRequested.data,
             frequencyDomainDispersion: frequencyDomainDispersion.data,

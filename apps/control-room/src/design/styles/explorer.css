@@ -116,6 +116,17 @@
   color: var(--fm-text-primary);
 }
 
+.fm-explorer-tree-row--active-analysis-field {
+  border-color: color-mix(in srgb, var(--fm-accent) 42%, transparent);
+  background: color-mix(in srgb, var(--fm-accent) 11%, transparent);
+  color: var(--fm-text-primary);
+}
+
+.fm-explorer-tree-row[data-active="true"].fm-explorer-tree-row--active-analysis-field {
+  border-color: color-mix(in srgb, var(--fm-accent) 58%, var(--fm-border-default));
+  background: color-mix(in srgb, var(--fm-accent) 16%, var(--fm-bg-selected));
+}
+
 .fm-explorer-tree-row[data-status="stale"] {
   color: var(--fm-stale);
 }
@@ -201,6 +212,7 @@
 }
 
 .fm-explorer-tree-row__badge,
+.fm-explorer-tree-row__active-field,
 .fm-explorer-tree-row__status {
   border: 1px solid var(--fm-border-subtle);
   border-radius: var(--fm-radius-xs);
@@ -209,4 +221,10 @@
   font-size: 10px;
   padding: 1px var(--fm-space-1);
   white-space: nowrap;
+}
+
+.fm-explorer-tree-row__active-field {
+  border-color: color-mix(in srgb, var(--fm-accent) 54%, var(--fm-border-subtle));
+  background: color-mix(in srgb, var(--fm-accent) 14%, transparent);
+  color: var(--fm-accent);
 }

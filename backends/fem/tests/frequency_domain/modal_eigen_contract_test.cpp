@@ -924,6 +924,66 @@ void modal_nonzero_k_floquet_bloch_payload_reaches_production_solver()
     fullmag_fem_frequency_domain_result_destroy(&result);
 }
 
+void modal_nonzero_k_floquet_bloch_payload_with_demag_requires_dynamic_demag_k()
+{
+    constexpr double stiffness_matrix_row_major[] = {1.0, 0.0, 0.0, 1.0};
+    constexpr double gyrotropic_mass_row_major[] = {0.0, -1.0, 1.0, 0.0};
+
+    fullmag_fem_frequency_domain_floquet_periodic_pair pair{};
+    pair.pair_id = "x_periodic_pair_0";
+    pair.node_a = 10;
+    pair.node_b = 20;
+    pair.has_translation = 1;
+    pair.translation_m[0] = 1.0e-6;
+    pair.has_phase = 1;
+    pair.phase_rad = -1.0;
+
+    FullmagFemModalEigenRequest request = base_request();
+    request.target_kind = "frequency_window";
+    request.frequency_min_hz = 0.1;
+    request.frequency_max_hz = 0.2;
+    request.eigensolver_family = 1;
+    request.mfem_operator_enabled = 1;
+    request.mfem_tangent_dof_count = 2;
+    request.mfem_stiffness_matrix_row_major = stiffness_matrix_row_major;
+    request.mfem_gyrotropic_matrix_row_major = gyrotropic_mass_row_major;
+    request.operator_request.include_demag = 1;
+    request.operator_request.demag_realization = "floquet_airbox";
+    request.operator_request.operator_diagnostics_json =
+        "{\"operator_family\":\"mfem_linearized_llg\","
+        "\"payload_kind\":\"bloch_floquet_tangent_operator\"}";
+    request.operator_request.spin_wave_bc_kind = "floquet";
+    request.has_floquet_k_vector = 1;
+    request.floquet_k_vector_rad_per_m[0] = 1.0e6;
+    request.phase_convention =
+        FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_I_OMEGA_T;
+    request.mfem_floquet_periodic_pairs = &pair;
+    request.mfem_floquet_periodic_pair_count = 1;
+
+    FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_UNAVAILABLE,
+          "nonzero-k Floquet modal demag payload must remain unavailable until dynamic demag-k exists");
+    check(contains(result.diagnostics_json,
+                   "\"production_cpu_rejection_reason\":\"production_cpu_modal_dynamic_demag_k_operator_missing\""),
+          "nonzero-k Floquet modal demag diagnostics expose the dynamic demag-k rejection reason");
+    check(contains(result.diagnostics_json,
+                   "\"required_operator_contract\":\"bloch_floquet_tangent_operator_with_dynamic_demag_k\""),
+          "nonzero-k Floquet modal demag diagnostics name the dynamic demag-k operator contract");
+    check(contains(result.diagnostics_json,
+                   "\"required_demag_payload_kind\":\"dynamic_demag_k_operator\""),
+          "nonzero-k Floquet modal demag diagnostics name the required demag payload kind");
+    check(contains(result.diagnostics_json,
+                   "\"dynamic_demag_operator_source\":\"missing_numeric_fem_demag_k\""),
+          "nonzero-k Floquet modal demag diagnostics report missing numeric FEM demag-k source");
+    check(!contains(result.diagnostics_json,
+                    "\"production_cpu_rejection_reason\":\"production_cpu_modal_nonzero_k_floquet_operator_missing\""),
+          "nonzero-k Floquet modal demag must not be rejected as a generic missing Bloch payload");
+    check(contains(result.result_json,
+                   "\"required_operator_contract\":\"bloch_floquet_tangent_operator_with_dynamic_demag_k\""),
+          "nonzero-k Floquet modal demag result names the dynamic demag-k operator contract");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+}
+
 } // namespace
 
 int main()
@@ -951,5 +1011,6 @@ int main()
     modal_nonzero_k_floquet_payload_rejects_until_production_operator_exists();
     modal_nonzero_k_floquet_tail_payload_preserves_periodic_pair_contract();
     modal_nonzero_k_floquet_bloch_payload_reaches_production_solver();
+    modal_nonzero_k_floquet_bloch_payload_with_demag_requires_dynamic_demag_k();
     return 0;
 }

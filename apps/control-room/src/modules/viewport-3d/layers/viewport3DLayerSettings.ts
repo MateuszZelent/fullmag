@@ -41,10 +41,14 @@ export function surfaceMaterialColorFromSettings(
 export function resolveMeshPartSurfaceMaterialColor(
   settings: VisualizationTargetSettings,
   meshColor: ColorRepresentation,
-  _magnetizationTexturePreviewColor: ColorRepresentation | null,
+  magnetizationTexturePreviewColor: ColorRepresentation | null,
   hasVertexColors: boolean,
 ): ColorRepresentation {
-  return surfaceMaterialColorFromSettings(settings, meshColor, hasVertexColors);
+  const fallback =
+    settings.surfaceColorSource === "solid"
+      ? meshColor
+      : magnetizationTexturePreviewColor ?? meshColor;
+  return surfaceMaterialColorFromSettings(settings, fallback, hasVertexColors);
 }
 
 export function shaderUsesVertexColors(

@@ -592,7 +592,8 @@ describe("viewport3DFieldDataPlan", () => {
     expect([...targetQuantity.requests.values()][0]).toMatchObject({
       query: {
         component: "y",
-        scope_kind: "full",
+        scope_id: "part-b",
+        scope_kind: "part",
       },
       quantityId: "H_eff",
     });

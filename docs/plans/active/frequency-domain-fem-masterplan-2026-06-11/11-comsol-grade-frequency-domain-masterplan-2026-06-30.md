@@ -1270,6 +1270,22 @@ bundle.
 | Production GPU modal dispersion | 0-5% | Forced GPU modal k-path requests are rejected explicitly; no native GPU modal eigensolver/Floquet operator is implemented. |
 | Release-ready COMSOL-like dispersion | 45-50% | We can calculate and plot a narrow DE/BV analytic/reference dispersion now, but production physical dispersion with dynamic demag-k and CPU/GPU validation is still open. |
 
+### Detailed progress ledger at pause
+
+| Layer / artifact | Done in this dispersion thread | Evidence now expected in the tree | Remaining work | Readiness |
+|---|---|---|---|---:|
+| COMSOL-style workflow semantics | Dispersion is documented as an `Eigenmodes` / eigenfrequency k-sweep over Floquet samples, not a driven `FrequencyResponse` pulse/FFT workflow. | This masterplan, `docs/physics/0700-frequency-domain-linearized-llg.md`, and `docs/physics/0828-fem-frequency-domain-floquet-demag.md` distinguish modal/eigen from driven response. | Keep UI labels, capability messages, examples, and reports from mixing response peaks with modal branches. | 85% |
+| Scientific test shape | Default dispersion acceptance is now narrow DE/BV low-k, not all-direction scans: DE has in-plane `k perpendicular m0`, BV has in-plane `k parallel m0`, `|k| <= 2e6..3e6 rad/m`, and a low-GHz window such as `0..5 GHz`. | This masterplan and the frequency-domain physics note both state the DE/BV matrix and analytic-comparison rule. | Add production numerical convergence evidence for the same fixture after dynamic demag-k exists. | 80% |
+| Python authoring | Added public authoring for DE/BV validation intent and the canonical example shape. | `examples/fem_eigenmodes_dispersion_de_bv_low_k.py` plus Python API helpers for `DispersionValidationScenario`, `ThinFilmDEBVDispersionValidation`, `fm.dispersion_validation(...)`, and `study.dispersion_validation(...)`. | Keep script export/Control Room authoring aligned with the same names and do not introduce a separate UI-only validation model. | 80% |
+| IR/planner metadata | The DE/BV validation intent is typed and validated before execution planning instead of being an ad hoc artifact-validator convention. | `FemEigenDispersionValidationIR` and planned `backend_plan.dispersion_validation` require `thin_film_de_bv_low_k`, `kalinikos_slab_n0`, both DE/BV scenarios, valid film geometry, `max_k_rad_per_m <= 3e6`, and `0..5 GHz` style bounds. | Planner must keep rejecting ordinary nonzero-k Floquet demag unless the analytic DE/BV reference adapter is explicitly selected or the future numeric demag-k operator exists. | 75% |
+| CPU/reference DE/BV calculation | A narrow DE/BV dispersion can be calculated today through the analytic Kalinikos `n=0` reference adapter and emitted as normal eigen artifacts. | Managed artifact bundle under `.fullmag/reports/frequency-domain-eigen-dispersion-de-bv-low-k-runtime/artifacts`; manifest source fields identify `analytic_reference_model` and `analytic_thin_film_de_bv_reference_not_fem_demag_k`. | Replace this frequency source with a numerical FEM modal solve once M10 dynamic demag-k is implemented, retaining analytic data only as comparison. | 65% for reference utility; 20% for production demag-k |
+| Production CPU no-demag Floquet modal path | The current selected-spectrum CPU path can publish no-demag Bloch/Floquet k-path artifacts with production provenance and validator gates. | `--require-production-modal-k-path` gates no-demag production k-path artifacts separately from the DE/BV analytic adapter and from the gamma-only bridge. | Broaden sparse/matrix-free validation, residual/normalization/window-completeness coverage, and keep demag/DMI/magnetoelastic excluded until implemented. | 65% |
+| Dynamic demag-k / `floquet_airbox` | Physics contract and rejection policy exist; the actual coupled phase-aware `delta_m/delta_phi` operator does not. | `docs/physics/0828-fem-frequency-domain-floquet-demag.md` defines the target; capability docs and validators keep this lane gated. | Implement CPU coupled modal operator, operator diagnostics, provenance, validation, and then GPU counterpart. | 20% |
+| Artifact validator | The validator can distinguish a real low-k DE/BV analytic acceptance bundle from generic dispersion output. | `--require-low-k-de-bv-analytic-dispersion` checks DE/BV scenarios, k-range, orientation, frequency window, branch/sample mapping, manifest/plan validation intent, analytic columns, and relative error. | Add a future `--require-production-de-bv-dynamic-demag-k-dispersion` gate that requires numeric modal frequency source and dynamic demag-k operator provenance. | 80% |
+| Plot output | `examples/dyspersje.png` can be regenerated from validated DE/BV artifacts with analytic overlay. | PNG generated from `eigen/dispersion.csv` via the shared eigen artifact plotter; current file is `1800 x 1050` RGBA. | Keep plot captions/metadata explicit about analytic-reference source until production numeric demag-k exists. | 85% |
+| Control Room readback | Result inspectors can expose DE/BV validation intent and analytic comparison metadata. | Frequency-domain inspector reads manifest validation payload and dispersion CSV analytic columns. | Full frontend gate still needs broader typecheck/lint/test pass before claiming a larger Control Room slice; UI must show frequency source and demag-source honestly. | 60% |
+| GPU modal dispersion | No production implementation exists. | Forced GPU modal k-path remains explicitly unavailable. | Add native GPU modal eigensolver/Floquet operator, then dynamic demag-k GPU operator and parity gates. | 0-5% |
+
 ### What is already done
 
 1. The documentation now states that the default scientific dispersion test is
@@ -1399,6 +1415,29 @@ This is not yet production numerical FEM dispersion with dynamic demag-k.
    show frequency source, analytic reference model, demag-operator source,
    DE/BV scenario mapping, and relative-error summaries without implying
    production demag-k when the source is analytic.
+
+### Resume plan
+
+When work resumes, continue in this order:
+
+1. Add the native CPU modal contract test that rejects `include_demag=true`
+   plus nonzero-k Floquet unless the request carries a real dynamic demag-k
+   operator payload. This prevents the existing
+   `payload_kind="bloch_floquet_tangent_operator"` from being over-read as
+   full demag support.
+2. Add the native unavailable diagnostic for that case with a stable reason
+   such as `production_cpu_modal_dynamic_demag_k_operator_missing`, required
+   contract `bloch_floquet_tangent_operator_with_dynamic_demag_k`, and required
+   demag payload kind `dynamic_demag_k_operator`.
+3. Wire the runner/artifact provenance so analytic DE/BV, no-demag production
+   Floquet, and future numeric dynamic-demag-k production runs cannot share the
+   same manifest source labels.
+4. Only after the missing-contract gate is green, implement the CPU coupled
+   modal demag-k operator against the physics contract in
+   `docs/physics/0828-fem-frequency-domain-floquet-demag.md`.
+5. Promote the new CPU lane only with managed/container proof through the
+   matching `just` recipe and a validator gate that requires numerical modal
+   frequencies plus analytic DE/BV comparison.
 
 ### Do not do next
 

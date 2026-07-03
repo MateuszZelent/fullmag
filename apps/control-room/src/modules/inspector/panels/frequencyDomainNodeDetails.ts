@@ -190,7 +190,7 @@ const FREQUENCY_DOMAIN_RESULT_NODE_DETAILS: Record<
     focus: "modal FMR spectrum",
     resource: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
     title: "FMR Modal Spectrum",
-    visualization: "modal resonance spectrum and mode overlay",
+    visualization: "modal resonance spectrum and mode field",
   },
   "results.frequency_domain.fmr_response_sweep": {
     artifact: "response/magnetic_response_sweep.v2.json",
@@ -267,7 +267,7 @@ const FREQUENCY_DOMAIN_RESULT_NODE_DETAILS: Record<
     focus: "eigen modes",
     resource: "mode metadata resources",
     title: "Eigen Modes",
-    visualization: "mode table and selectable 3D mode overlays",
+    visualization: "mode table and selectable 3D mode fields",
   },
   "results.eigen.modes.visualization": {
     artifact: "eigen/modes",
@@ -295,7 +295,7 @@ const FREQUENCY_DOMAIN_RESULT_NODE_DETAILS: Record<
     focus: "eigen branches",
     resource: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
     title: "Eigen Branches",
-    visualization: "branch table and dispersion overlays",
+    visualization: "branch table and dispersion fields",
   },
   "results.eigen.diagnostics": {
     artifact: "eigen/diagnostics.v2.json",
@@ -434,7 +434,7 @@ const FREQUENCY_DOMAIN_RESOURCE_NODE_DETAILS: Record<
     focus: "eigen branches resource",
     resource: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
     title: "Eigen Branches Resource Detail",
-    visualization: "branch table and dispersion branch overlays",
+    visualization: "branch table and dispersion branch fields",
   },
   "resources.analysis.eigen.dispersion": {
     artifact: "eigen/dispersion.csv",
@@ -621,7 +621,7 @@ const FREQUENCY_DOMAIN_DIAGNOSTIC_NODE_DETAILS: Record<
     focus: "visualization diagnostics",
     resource: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
     title: "Visualization Diagnostic Detail",
-    visualization: "3D mode overlays, phase animation, and chart readiness",
+    visualization: "3D mode fields, phase animation, and chart readiness",
   },
 };
 
@@ -698,7 +698,7 @@ export function resolveFrequencyDomainNodeDetail(
       focus: ref?.branchId ?? "branch not selected",
       resource: ref?.resourceRef ?? "branch resource",
       title: "Eigen Branch",
-      visualization: "dispersion branch chart and selected-mode overlay",
+      visualization: "dispersion branch chart and selected-mode field",
     };
   }
   if (kind === "results.frequency_response.frequency_point") {
@@ -759,7 +759,7 @@ export function resolveFrequencyDomainNodeDetail(
       focus: selection.label ?? "modal FMR spectrum",
       resource: ref?.resourceRef ?? ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
       title: "FMR Modal Spectrum",
-      visualization: "modal resonance spectrum and mode overlay",
+      visualization: "modal resonance spectrum and mode field",
     };
   }
   if (kind === "results.frequency_domain.fmr_response_sweep") {

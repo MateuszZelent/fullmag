@@ -3,6 +3,7 @@ import type {
   FieldCatalogResource,
   FieldMetaQuery,
   MeshSharedDomainManifestResource,
+  MeshRegionMembershipResource,
 } from "@/kernel/api/apiTypes";
 import {
   canonicalVisualizationSceneObjectId,
@@ -309,9 +310,56 @@ export type RegionVisualizationCarrier =
       regionId: string;
     }
   | {
+      kind: "membership";
+      objectId: string;
+      syntheticPartId: string;
+      regionId: string;
+    }
+  | {
       kind: "unavailable";
       reason: string;
     };
+
+export function regionVisualizationFieldWarning(
+  carrier: RegionVisualizationCarrier | null | undefined,
+): string | null {
+  if (!carrier) return null;
+  if (carrier.kind === "unavailable") {
+    return `Physical field coloring for this region is unavailable: ${carrier.reason}. Region overlays are diagnostic and remain separate from field visualization.`;
+  }
+  if (carrier.kind === "membership") {
+    return "Physical field coloring for this region is unavailable: region memberships are diagnostic until the runtime exposes a field-capable mesh-part carrier.";
+  }
+  if (carrier.partIds.length !== 1) {
+    return "Scoped colorbar statistics for this region require exactly one mesh-part carrier. Field rendering can still use the region mesh parts, but range metadata is disabled for this target.";
+  }
+  return null;
+}
+
+export function regionVisualizationCarrierSupportsFieldMeta(
+  carrier: RegionVisualizationCarrier | null | undefined,
+): boolean {
+  return carrier?.kind === "mesh-parts" && carrier.partIds.length === 1;
+}
+
+export function visualizationOverrideStateLabel({
+  hasOverride,
+  targetKind,
+}: {
+  hasOverride: boolean;
+  targetKind: VisualizationTargetKind;
+}): string {
+  if (targetKind === "region") {
+    return hasOverride ? "Overridden locally" : "Inherited from parent";
+  }
+  return hasOverride ? "Overridden" : "Default";
+}
+
+export function visualizationResetActionLabel(
+  targetKind: VisualizationTargetKind,
+): string {
+  return targetKind === "region" ? "Reset to parent" : "Reset display";
+}
 
 export interface VisualizationVectorBudgetRange {
   availableNodeCount: number;
@@ -331,11 +379,13 @@ export interface VisualizationVectorBudgetDiagnostic {
 export function resolveVisualizationVectorBudgetRange({
   geometryScope = "full",
   manifestRegions,
+  memberships,
   meshParts,
   target,
 }: {
   geometryScope?: VisualizationGeometryScope;
   manifestRegions?: readonly MeshRegion[] | null | undefined;
+  memberships?: readonly MeshRegionMembershipResource[] | null | undefined;
   meshParts: readonly MeshPart[] | null | undefined;
   target: VisualizationTargetRef | null | undefined;
 }): VisualizationVectorBudgetRange {
@@ -345,11 +395,34 @@ export function resolveVisualizationVectorBudgetRange({
 
   const carrier = resolveRegionVisualizationCarrier({
     manifestRegions,
+    memberships,
     target,
   });
-  if (target.kind === "region" && manifestRegions && carrier?.kind !== "mesh-parts") {
+  if (
+    target.kind === "region" &&
+    manifestRegions &&
+    carrier?.kind !== "mesh-parts" &&
+    carrier?.kind !== "membership"
+  ) {
     return fallbackVisualizationVectorBudgetRange();
   }
+
+  if (carrier?.kind === "membership") {
+    const regionId = carrier.regionId;
+    const membership = memberships?.find((m) => m.region_id === regionId);
+    const nodeCount = membership?.node_indices?.length ?? 0;
+    if (nodeCount <= 0) {
+      return fallbackVisualizationVectorBudgetRange();
+    }
+    return {
+      availableNodeCount: nodeCount,
+      exact: true,
+      max: nodeCount,
+      min: 0,
+      step: 1,
+    };
+  }
+
   const carrierPartIds =
     carrier?.kind === "mesh-parts" ? new Set(carrier.partIds) : null;
   const matchingParts = meshParts.filter((part) =>
@@ -379,9 +452,11 @@ export function resolveVisualizationVectorBudgetRange({
 
 export function resolveRegionVisualizationCarrier({
   manifestRegions,
+  memberships,
   target,
 }: {
   manifestRegions?: readonly MeshRegion[] | null | undefined;
+  memberships?: readonly MeshRegionMembershipResource[] | null | undefined;
   target: VisualizationTargetRef | null | undefined;
 }): RegionVisualizationCarrier | null {
   if (target?.kind !== "region") return null;
@@ -392,6 +467,49 @@ export function resolveRegionVisualizationCarrier({
       reason: "Region target id is not canonical.",
     };
   }
+
+  if (manifestRegions) {
+    for (const region of manifestRegions) {
+      const regionId = region.source_region_candidate_id;
+      if (!regionId || decodeSafe(regionId) !== regionTarget.regionId) continue;
+      const objectMatch = (region.source_object_ids ?? []).some(
+        (objectId) =>
+          canonicalVisualizationSceneObjectId(decodeSafe(objectId)) ===
+          canonicalVisualizationSceneObjectId(regionTarget.objectId),
+      );
+      if (!objectMatch) continue;
+      const partIds = (region.mesh_part_ids ?? []).flatMap((partId) =>
+        typeof partId === "string" && partId.trim() ? [partId] : [],
+      );
+      if (partIds.length > 0) {
+        return {
+          kind: "mesh-parts",
+          objectId: regionTarget.objectId,
+          partIds,
+          regionId: regionTarget.regionId,
+        };
+      }
+    }
+  }
+
+  if (memberships) {
+    for (const membership of memberships) {
+      if (membership.region_id === regionTarget.regionId) {
+        const hasElements = (membership.element_indices && membership.element_indices.length > 0) ||
+                            (membership.node_indices && membership.node_indices.length > 0) ||
+                            (membership.boundary_face_indices && membership.boundary_face_indices.length > 0);
+        if (hasElements) {
+          return {
+            kind: "membership",
+            objectId: regionTarget.objectId,
+            syntheticPartId: `membership:${encodeURIComponent(regionTarget.regionId)}`,
+            regionId: regionTarget.regionId,
+          };
+        }
+      }
+    }
+  }
+
   if (!manifestRegions) {
     return {
       kind: "unavailable",
@@ -399,35 +517,9 @@ export function resolveRegionVisualizationCarrier({
     };
   }
 
-  for (const region of manifestRegions) {
-    const regionId = region.source_region_candidate_id;
-    if (!regionId || decodeSafe(regionId) !== regionTarget.regionId) continue;
-    const objectMatch = (region.source_object_ids ?? []).some(
-      (objectId) =>
-        canonicalVisualizationSceneObjectId(decodeSafe(objectId)) ===
-        canonicalVisualizationSceneObjectId(regionTarget.objectId),
-    );
-    if (!objectMatch) continue;
-    const partIds = (region.mesh_part_ids ?? []).flatMap((partId) =>
-      typeof partId === "string" && partId.trim() ? [partId] : [],
-    );
-    if (partIds.length > 0) {
-      return {
-        kind: "mesh-parts",
-        objectId: regionTarget.objectId,
-        partIds,
-        regionId: regionTarget.regionId,
-      };
-    }
-    return {
-      kind: "unavailable",
-      reason: "Region is not realized as mesh parts.",
-    };
-  }
-
   return {
     kind: "unavailable",
-    reason: "Region is not present in the mesh manifest.",
+    reason: "Region is not present in the mesh manifest or region memberships.",
   };
 }
 
@@ -716,7 +808,7 @@ function meshPartMatchesVisualizationTarget(
   });
 }
 
-function parseRegionVisualizationTargetId(
+export function parseRegionVisualizationTargetId(
   targetId: string,
 ): { objectId: string; regionId: string } | null {
   const match = /^region:([^:]+):(.+)$/.exec(targetId);
@@ -729,6 +821,57 @@ function parseRegionVisualizationTargetId(
   } catch {
     return null;
   }
+}
+
+export function resolveObjectChildRegionVisualizationTargets({
+  manifestRegions,
+  objectId,
+  scene,
+}: {
+  manifestRegions?: readonly MeshRegion[] | null | undefined;
+  objectId: string | null | undefined;
+  scene: unknown;
+}): VisualizationTargetRef[] {
+  const ownerId = typeof objectId === "string" ? objectId.trim() : "";
+  if (!ownerId) return [];
+
+  const targets: VisualizationTargetRef[] = [];
+  const seen = new Set<string>();
+  const pushRegion = (regionId: unknown, label: unknown) => {
+    if (typeof regionId !== "string" || !regionId.trim()) return;
+    const target: VisualizationTargetRef = {
+      id: visualizationTargetIdForSceneObject(ownerId, regionId),
+      kind: "region",
+      label: typeof label === "string" && label.trim() ? label : regionId,
+    };
+    const key = target.id;
+    if (seen.has(key)) return;
+    seen.add(key);
+    targets.push(target);
+  };
+
+  const sceneRecord = isRecord(scene) ? scene : null;
+  const objects = Array.isArray(sceneRecord?.objects) ? sceneRecord.objects : [];
+  for (const objectValue of objects) {
+    const object = isRecord(objectValue) ? objectValue : null;
+    if (object?.id !== ownerId || !Array.isArray(object.regions)) continue;
+    for (const regionValue of object.regions) {
+      const region = isRecord(regionValue) ? regionValue : null;
+      pushRegion(region?.region_id ?? region?.id, region?.name);
+    }
+  }
+
+  for (const region of manifestRegions ?? []) {
+    const sourceObjectMatch = (region.source_object_ids ?? []).some(
+      (sourceObjectId) =>
+        canonicalVisualizationSceneObjectId(decodeSafe(sourceObjectId)) ===
+        canonicalVisualizationSceneObjectId(ownerId),
+    );
+    if (!sourceObjectMatch) continue;
+    pushRegion(region.source_region_candidate_id, region.name);
+  }
+
+  return targets;
 }
 
 function decodeSafe(value: string): string {
@@ -766,6 +909,10 @@ function meshIdAliases(value: string | null | undefined): Set<string> {
   aliases.add(`${withoutGeometrySuffix}_geom`);
 
   return aliases;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 interface VisualizationPanelField {

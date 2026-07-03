@@ -1883,8 +1883,9 @@ fn analysis_frequency_response_vector_response(
     let (out_n_comp, projected) = project_values(&raw_values, n_comp, &component)?;
     let point_count = raw_values.len() / n_comp;
     let out_grid = [point_count as u32, 1, 1];
-    let binary = serialize_field_vector_binary_v2(field_id, out_n_comp, out_grid, &projected)
-        .map_err(ApiError::internal)?;
+    let binary = serialize_analysis_field_vector_binary(
+        snapshot, field_id, out_n_comp, out_grid, &projected,
+    )?;
     let revision = analysis_payload_revision(snapshot, &relative_path, bytes.len());
     let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
         "{field_id}:{revision}:{}:{}:{}",
@@ -1991,6 +1992,66 @@ fn response_field_payload_path_from_point_artifact(
                 frequency_point_artifact_path
             ))
         })
+}
+
+fn serialize_analysis_field_vector_binary(
+    snapshot: &SessionStateResponse,
+    field_id: &str,
+    out_n_comp: usize,
+    out_grid: [u32; 3],
+    projected: &[f64],
+) -> Result<Vec<u8>, ApiError> {
+    let Some(mesh) = snapshot.fem_mesh.as_ref() else {
+        return serialize_field_vector_binary_v2(field_id, out_n_comp, out_grid, projected)
+            .map_err(ApiError::internal);
+    };
+    let point_count = if out_n_comp > 0 {
+        projected.len() / out_n_comp
+    } else {
+        projected.len()
+    };
+    let full_node_count = mesh.nodes.len();
+    let magnetic_node_indices = if point_count == full_node_count {
+        Vec::new()
+    } else {
+        let indices = magnetic_node_index_set(mesh);
+        if indices.len() != point_count {
+            return serialize_field_vector_binary_v2(field_id, out_n_comp, out_grid, projected)
+                .map_err(ApiError::internal);
+        }
+        indices
+            .into_iter()
+            .map(|index| {
+                u32::try_from(index).map_err(|_| {
+                    ApiError::internal(format!(
+                        "analysis field node index {index} exceeds u32 payload capacity"
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>, ApiError>>()?
+    };
+    let topology_hash = fullmag_runner::fem_mesh_topology_fingerprint(mesh);
+    let topology_hash_bytes = mesh_topology_hash_bytes(&topology_hash)?;
+    let indexing = if magnetic_node_indices.is_empty() {
+        FieldVectorIndexing::FullDomain
+    } else {
+        FieldVectorIndexing::ExplicitNodeIndices
+    };
+    let metadata = FieldVectorBinaryMetadata {
+        domain_generation_id: domain_generation_id(snapshot),
+        mesh_topology_revision: snapshot.mesh_revision,
+        mesh_topology_hash: topology_hash_bytes,
+        scope_kind: if magnetic_node_indices.is_empty() {
+            "full"
+        } else {
+            "magnetic_only"
+        },
+        scope_id: "",
+        indexing,
+        node_indices: &magnetic_node_indices,
+    };
+    serialize_field_vector_binary_v3(field_id, out_n_comp, out_grid, projected, &metadata)
+        .map_err(ApiError::internal)
 }
 
 struct ResponseFieldDataPlaneMetadata {
@@ -2420,8 +2481,9 @@ fn analysis_eigen_mode_vector_response(
     let (out_n_comp, projected) = project_values(&raw_values, n_comp, &component)?;
     let point_count = raw_values.len() / n_comp;
     let out_grid = [point_count as u32, 1, 1];
-    let binary = serialize_field_vector_binary_v2(field_id, out_n_comp, out_grid, &projected)
-        .map_err(ApiError::internal)?;
+    let binary = serialize_analysis_field_vector_binary(
+        snapshot, field_id, out_n_comp, out_grid, &projected,
+    )?;
     let revision = analysis_payload_revision(snapshot, &relative_path, bytes.len());
     let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
         "{field_id}:{revision}:{}:{}:{}",
@@ -4637,7 +4699,8 @@ mod tests {
         analysis_complex_vector_view_values, analysis_frequency_response_view_values,
         decode_complex_f64_pairs_little_endian, is_fem_runtime, parse_analysis_eigen_mode_field_id,
         parse_analysis_frequency_response_field_id, parse_component, project_values,
-        resolve_field_scope, FieldVectorQuery, ResolvedFieldScopeDomain,
+        resolve_field_scope, serialize_analysis_field_vector_binary, FieldVectorQuery,
+        ResolvedFieldScopeDomain,
     };
     use crate::session::default_current_live_state;
     use crate::types::CurrentLiveSnapshotRequest;
@@ -4994,6 +5057,131 @@ mod tests {
         assert_eq!(values, vec![5.0, 13.0, 17.0]);
         assert_eq!(n_comp, 3);
         assert_eq!(default_component, Some("full"));
+    }
+
+    #[test]
+    fn analysis_field_vector_binary_uses_fmvp_v3_explicit_nodes_for_scoped_fem_payload() {
+        let mut snapshot = default_current_live_state(&CurrentLiveSnapshotRequest {
+            session_id: "analysis-field-fem-scope".to_string(),
+            session: None,
+            session_status: None,
+            metadata: None,
+            mesh_workspace: None,
+            stage_execution: None,
+            run: None,
+            live_state: None,
+            latest_scalar_row: None,
+            latest_fields: None,
+            preview_fields: None,
+            clear_preview_cache: false,
+            engine_log: None,
+            solver_profile: None,
+            fem_mesh: None,
+        });
+        snapshot.fem_mesh = Some(FemMeshPayload {
+            boundary_faces: Vec::new(),
+            boundary_markers: Vec::new(),
+            domain_frame: None,
+            domain_mesh_mode: None,
+            element_markers: vec![1],
+            elements: vec![[1, 2, 3, 4]],
+            generation_id: None,
+            mesh_id: "mesh:analysis-field-fem-scope".to_string(),
+            mesh_name: "analysis-field-fem-scope".to_string(),
+            mesh_parts: vec![FemMeshPartPayload {
+                boundary_face_count: 0,
+                boundary_face_indices: Vec::new(),
+                boundary_face_start: 0,
+                bounds_max: None,
+                bounds_min: None,
+                element_count: 1,
+                element_start: 0,
+                geometry_id: Some("film_geom".to_string()),
+                id: "part:film".to_string(),
+                label: "Film".to_string(),
+                material_id: None,
+                node_count: 2,
+                node_indices: vec![1, 3],
+                node_start: 0,
+                object_id: Some("film".to_string()),
+                role: "magnetic_object".to_string(),
+                surface_faces: Vec::new(),
+            }],
+            nodes: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [1.0, 1.0, 1.0],
+            ],
+            object_segments: Vec::new(),
+            per_domain_quality: std::collections::HashMap::new(),
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+        });
+        let values = vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+
+        let binary = serialize_analysis_field_vector_binary(
+            &snapshot,
+            "analysis:frequency-response:frequency-0000",
+            3,
+            [2, 1, 1],
+            &values,
+        )
+        .expect("analysis FEM field should serialize");
+
+        assert_eq!(&binary[0..4], b"FMVP");
+        assert_eq!(binary[4], 3);
+        assert_eq!(binary[6], 3);
+        assert_eq!(u32::from_le_bytes(binary[12..16].try_into().unwrap()), 6);
+        assert_eq!(u32::from_le_bytes(binary[16..20].try_into().unwrap()), 2);
+        let metadata_len = u32::from_le_bytes(binary[8..12].try_into().unwrap()) as usize;
+        assert!(metadata_len >= 68);
+        let metadata_start = 48;
+        assert_eq!(&binary[metadata_start..metadata_start + 4], b"FMMI");
+        assert_eq!(
+            u32::from_le_bytes(
+                binary[metadata_start + 56..metadata_start + 60]
+                    .try_into()
+                    .unwrap()
+            ),
+            1
+        );
+        assert_eq!(
+            u32::from_le_bytes(
+                binary[metadata_start + 60..metadata_start + 64]
+                    .try_into()
+                    .unwrap()
+            ),
+            2
+        );
+        let scope_kind_len = u16::from_le_bytes(
+            binary[metadata_start + 64..metadata_start + 66]
+                .try_into()
+                .unwrap(),
+        ) as usize;
+        let scope_id_len = u16::from_le_bytes(
+            binary[metadata_start + 66..metadata_start + 68]
+                .try_into()
+                .unwrap(),
+        ) as usize;
+        let node_indices_start = metadata_start + 68 + scope_kind_len + scope_id_len;
+        assert_eq!(
+            u32::from_le_bytes(
+                binary[node_indices_start..node_indices_start + 4]
+                    .try_into()
+                    .unwrap()
+            ),
+            1
+        );
+        assert_eq!(
+            u32::from_le_bytes(
+                binary[node_indices_start + 4..node_indices_start + 8]
+                    .try_into()
+                    .unwrap()
+            ),
+            3
+        );
     }
 
     #[test]

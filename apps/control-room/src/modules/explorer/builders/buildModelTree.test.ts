@@ -2281,6 +2281,36 @@ describe("buildModelTree", () => {
       flattened.find(
         (node) =>
           node.id ===
+          "model:object:film:visualization:mode-visualization:response:frequency:1",
+      ),
+    ).toMatchObject({
+      activeAnalysisField: true,
+      badge: "10.5 GHz",
+      fieldId: "analysis:frequency-response:field-0001",
+      frequencyIndex: 1,
+      kind: "object.mode_visualization.field",
+      objectId: "film",
+      status: "ready",
+    });
+    expect(
+      flattened.find(
+        (node) =>
+          node.id ===
+          "model:object:film:visualization:mode-visualization:response:frequency:1:view:real",
+      ),
+    ).toMatchObject({
+      activeAnalysisField: true,
+      fieldId: "analysis:frequency-response:field-0001",
+      frequencyIndex: 1,
+      kind: "object.mode_visualization.view",
+      label: "Real",
+      objectId: "film",
+      status: "ready",
+    });
+    expect(
+      flattened.find(
+        (node) =>
+          node.id ===
           "model:object:film:visualization:mode-visualization:eigen:sample:0:mode:2:view:real",
       ),
     ).toMatchObject({
@@ -2299,12 +2329,144 @@ describe("buildModelTree", () => {
           "model:object:film:visualization:mode-visualization:response:frequency:1:view:phase_rotated_real",
       ),
     ).toMatchObject({
+      activeAnalysisField: false,
       fieldId: "analysis:frequency-response:field-0001",
       frequencyIndex: 1,
       kind: "object.mode_visualization.view",
       label: "Phase-rotated real",
       objectId: "film",
       status: "ready",
+    });
+  });
+
+  it("marks active frequency-domain result and resource nodes from the visualization field", () => {
+    const activeEigenResults = flattenExplorerNodes(
+      buildExplorerTree("results", {
+        activeAnalysisFieldOverlay: {
+          fieldId: "analysis:eigen:sample-0000:mode-0002",
+          label: "Sample 0 Mode 2",
+          query: {
+            component: "full",
+            phase_rad: 0,
+            scope_kind: "full",
+            view: "phase_rotated_real",
+          },
+          source: "eigen-mode",
+        },
+        frequencyDomainManifest: FREQUENCY_DOMAIN_MANIFEST,
+        frequencyDomainResponseSweep: FREQUENCY_DOMAIN_RESPONSE_SWEEP,
+        frequencyDomainSpectrum: FREQUENCY_DOMAIN_SPECTRUM,
+      }),
+    );
+
+    expect(
+      activeEigenResults.find(
+        (node) => node.id === "results:eigen:sample:0:mode:2",
+      ),
+    ).toMatchObject({
+      activeAnalysisField: true,
+      fieldId: "analysis:eigen:sample-0000:mode-0002",
+      kind: "results.eigen.mode",
+    });
+    expect(
+      activeEigenResults.find(
+        (node) => node.id === "results:frequency-domain:fmr:peaks:peak:1",
+      ),
+    ).toMatchObject({
+      activeAnalysisField: true,
+      fieldId: "analysis:eigen:sample-0000:mode-0002",
+      kind: "results.frequency_domain.fmr_peak",
+    });
+    expect(
+      activeEigenResults.find(
+        (node) => node.id === "results:eigen:modes:visualization",
+      ),
+    ).toMatchObject({
+      activeAnalysisField: true,
+      fieldId: "analysis:eigen:sample-0000:mode-0002",
+      kind: "results.eigen.modes.visualization",
+    });
+
+    const activeResponseResults = flattenExplorerNodes(
+      buildExplorerTree("results", {
+        activeAnalysisFieldOverlay: {
+          fieldId: "analysis:frequency-response:field-0001",
+          label: "Response field 1",
+          query: {
+            component: "full",
+            phase_rad: 0,
+            scope_kind: "full",
+            view: "real",
+          },
+          source: "frequency-response",
+        },
+        frequencyDomainManifest: {
+          ...FREQUENCY_DOMAIN_MANIFEST,
+          result_manifest: {
+            payload: {
+              resources: {
+                response_field_resources: [
+                  {
+                    field_resource_id: "analysis:frequency-response:field-0001",
+                    frequency_index: 1,
+                  },
+                ],
+              },
+            },
+          },
+        } as FrequencyDomainManifestResource,
+        frequencyDomainResponseSweep: FREQUENCY_DOMAIN_RESPONSE_SWEEP,
+      }),
+    );
+
+    expect(
+      activeResponseResults.find(
+        (node) => node.id === "results:frequency-response:frequency-points:1",
+      ),
+    ).toMatchObject({
+      activeAnalysisField: true,
+      fieldId: "analysis:frequency-response:field-0001",
+      kind: "results.frequency_response.frequency_point",
+    });
+
+    const activeResources = flattenExplorerNodes(
+      buildExplorerTree("resources", {
+        activeAnalysisFieldOverlay: {
+          fieldId: "analysis:frequency-response:field-0001",
+          label: "Response field 1",
+          query: {
+            component: "full",
+            phase_rad: 0,
+            scope_kind: "full",
+            view: "real",
+          },
+          source: "frequency-response",
+        },
+        frequencyDomainManifest: {
+          ...FREQUENCY_DOMAIN_MANIFEST,
+          result_manifest: {
+            payload: {
+              resources: {
+                response_field_resources: [
+                  {
+                    field_resource_id: "analysis:frequency-response:field-0001",
+                    frequency_index: 1,
+                  },
+                ],
+              },
+            },
+          },
+        } as FrequencyDomainManifestResource,
+      }),
+    );
+
+    expect(
+      activeResources.find(
+        (node) => node.id === "resources:analysis:frequency-response:field",
+      ),
+    ).toMatchObject({
+      activeAnalysisField: true,
+      kind: "resources.analysis.frequency_response.field",
     });
   });
 

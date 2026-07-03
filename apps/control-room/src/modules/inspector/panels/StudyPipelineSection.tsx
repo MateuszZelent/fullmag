@@ -460,17 +460,27 @@ export function StudyStageDraftEditor({
       ) : draft.kind === "hysteresis" ? (
         <HysteresisStageDraftFields draft={draft} onUpdate={onUpdate} />
       ) : draft.kind === "eigenmodes" ? (
-        <EigenmodesStageDraftFields
-          draft={draft}
-          onUpdate={onUpdate}
-          view={view}
-        />
+        <div style={{ pointerEvents: "none", opacity: 0.8 }}>
+          <div className="fm-inspector-alert fm-alert-warning" style={{ pointerEvents: "auto", opacity: 1, padding: "12px", borderLeft: "4px solid var(--fm-warning, #f59e0b)", background: "rgba(245, 158, 11, 0.1)", borderRadius: "4px", marginBottom: "12px" }}>
+            <strong>Configuration not yet available: backend schema missing</strong>
+          </div>
+          <EigenmodesStageDraftFields
+            draft={draft}
+            onUpdate={onUpdate}
+            view={view}
+          />
+        </div>
       ) : draft.kind === "frequency_response" ? (
-        <FrequencyResponseStageDraftFields
-          draft={draft}
-          onUpdate={onUpdate}
-          view={view}
-        />
+        <div style={{ pointerEvents: "none", opacity: 0.8 }}>
+          <div className="fm-inspector-alert fm-alert-warning" style={{ pointerEvents: "auto", opacity: 1, padding: "12px", borderLeft: "4px solid var(--fm-warning, #f59e0b)", background: "rgba(245, 158, 11, 0.1)", borderRadius: "4px", marginBottom: "12px" }}>
+            <strong>Configuration not yet available: backend schema missing</strong>
+          </div>
+          <FrequencyResponseStageDraftFields
+            draft={draft}
+            onUpdate={onUpdate}
+            view={view}
+          />
+        </div>
       ) : draft.kind === "save_state" ? (
         <SaveStateStageDraftFields draft={draft} onUpdate={onUpdate} />
       ) : draft.kind === "change_device" ? (

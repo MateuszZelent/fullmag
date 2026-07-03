@@ -144,6 +144,23 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("buildDiagnosticsSnapshotVersion");
   });
 
+  it("filters live authored region overlays once matching mesh-backed regions exist", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+    const regionOverlayBlock = source.slice(
+      source.indexOf("const regionOverlays = useMemo<RegionOverlayInput[]>"),
+      source.indexOf(
+        "const topologyFreshness = useMemo",
+        source.indexOf("const regionOverlays = useMemo<RegionOverlayInput[]>"),
+      ),
+    );
+
+    expect(regionOverlayBlock).toContain("resolveViewport3DRegionOverlays");
+    expect(regionOverlayBlock).toContain(
+      "realizedRegionKeys: meshBackedRegionKeys",
+    );
+    expect(regionOverlayBlock).toContain("meshBackedRegionKeys");
+  });
+
   it("wraps primary field payloads as target field buffers without mixing legacy maps", () => {
     const primaryVector = fieldVectorFixture({ quantityId: "m" });
     const scopedVector = fieldVectorFixture({ pointCount: 2, quantityId: "m" });
@@ -214,6 +231,57 @@ describe("useViewport3DSceneModel", () => {
     expect(merged.partTargetFieldBuffers?.has("part-c")).toBe(false);
   });
 
+  it("wraps analysis mode payloads as active target field buffers", () => {
+    const modeVector = fieldVectorFixture({
+      quantityId: "analysis:eigen:sample-0000:mode-0002",
+    });
+
+    const merged = mergeViewport3DPrimaryTargetFieldBuffers({
+      fieldRevision: "mode-field-r1",
+      fieldRenderOptions: {
+        partVectorBudgets: new Map([["part-a", 64]]),
+        scalarColorModes: new Set(["magnitude"]),
+        scalarColorsVisible: true,
+      },
+      fieldVector: modeVector,
+      getPartSettings: () => ({
+        ...DEFAULT_OBJECT_VISUALIZATION,
+        activeQuantityId: "m",
+        shaderVisible: true,
+        vectorsVisible: true,
+        visible: true,
+      }),
+      primaryFieldQuantityId: "analysis:eigen:sample-0000:mode-0002",
+      primaryFieldRequest: {
+        consumers: ["primary-field-vector"],
+        quantityId: "analysis:eigen:sample-0000:mode-0002",
+        query: {
+          component: "full",
+          scope_kind: "full",
+          view: "phase_rotated_real",
+        },
+        requestId: "quantity=analysis:eigen:sample-0000:mode-0002&component=full",
+      },
+      topology: {
+        magneticParts: [{ part: { id: "part-a", label: "A" } }],
+      } as never,
+      topologyRevision: "topology-r1",
+    });
+
+    expect(merged.partTargetFieldBuffers?.get("part-a")).toMatchObject({
+      capability: "full-vector-complete",
+      consumers: [
+        "part-a:surface",
+        "part-a:vector-glyph",
+        "primary-field-vector",
+      ],
+      fieldRevision: "mode-field-r1",
+      quantityId: "analysis:eigen:sample-0000:mode-0002",
+      scopeKind: "full",
+      topologyRevision: "topology-r1",
+    });
+  });
+
   it("resolves planned resource payloads into target buffers without mixing legacy maps", () => {
     const targetQuantityVector = fieldVectorFixture({ quantityId: "H_eff" });
     const legacyOnlyVector = fieldVectorFixture({ quantityId: "m" });
@@ -234,9 +302,10 @@ describe("useViewport3DSceneModel", () => {
             quantityId: "H_eff",
             query: {
               component: "x",
-              scope_kind: "full",
+              scope_id: "part-a",
+              scope_kind: "part",
             },
-            requestId: "quantity=H_eff&component=x&scope_kind=full",
+            requestId: "quantity=H_eff&component=x&scope_kind=part&scope_id=part-a",
           },
         ],
       ]),
@@ -259,7 +328,7 @@ describe("useViewport3DSceneModel", () => {
       fieldRevision: "target-r1",
       quantityId: "H_eff",
       requestId: expect.stringContaining("quantity=H_eff"),
-      scopeKind: "full",
+      scopeKind: "part",
       topologyRevision: "topology-r1",
     });
     expect(resolved.partFieldVectors.get("part-b")).toBeUndefined();
@@ -975,6 +1044,41 @@ describe("useViewport3DSceneModel", () => {
     expect(options.partScalarColorPalettes?.get("part:film")).toBe("magma");
   });
 
+  it("removes stale scalar color plans for hidden region-backed parts", () => {
+    const options = resolveViewport3DPrimaryFieldRenderOptions({
+      fieldRenderOptions: {
+        fullVectorBudget: 0,
+        partScalarColorModes: new Map([["part:film:core", "x"]]),
+        partScalarColorPalettes: new Map([["part:film:core", "inferno"]]),
+        partVectorBudgets: new Map([["part:film:core", 512]]),
+        scalarColorModes: new Set(),
+        scalarColorsVisible: true,
+      },
+      getPartSettings: () => ({
+        activeQuantityId: "m",
+        scalarColorPalette: "inferno",
+        shaderVisible: true,
+        surfaceColorSource: "component_x",
+        vectorBudget: 512,
+        vectorsVisible: true,
+        visible: false,
+      }),
+      magneticParts: [{ part: { id: "part:film:core" } as never }],
+      quantityId: "m",
+      vectorDomain: "auto",
+    });
+
+    expect(Boolean(options.partScalarColorModes?.has("part:film:core"))).toBe(false);
+    expect(Boolean(options.partScalarColorPalettes?.has("part:film:core"))).toBe(false);
+    expect(Boolean(options.partVectorBudgets?.has("part:film:core"))).toBe(false);
+    expect(options.scalarColorsVisible).toBe(false);
+    expect(options.targetRenderPlans?.get("part:film:core")).toMatchObject({
+      shader: { visible: false },
+      vectors: { visible: false },
+      visible: false,
+    });
+  });
+
   it("builds per-part scalar range metadata requests for numeric component color modes", () => {
     const requests = resolveViewport3DPartScalarRangeRequests({
       fieldRenderOptions: {
@@ -1563,7 +1667,8 @@ describe("useViewport3DSceneModel", () => {
       quantityId: "H_eff",
       query: {
         component: "full",
-        scope_kind: "full",
+        scope_id: "part:a",
+        scope_kind: "part",
         snapshot_id: "hysteresis_point_007",
         stage_id: "hysteresis-1",
       },
@@ -1571,7 +1676,8 @@ describe("useViewport3DSceneModel", () => {
     expect(request?.query).not.toHaveProperty("max_samples");
     expect(request?.requestId).toContain("quantity=H_eff");
     expect(request?.requestId).toContain("component=full");
-    expect(request?.requestId).toContain("scope_kind=full");
+    expect(request?.requestId).toContain("scope_kind=part");
+    expect(request?.requestId).toContain("scope_id=part:a");
     expect(request?.requestId).toContain("snapshot_id=hysteresis_point_007");
     expect(request?.requestId).toContain("stage_id=hysteresis-1");
   });
@@ -2049,8 +2155,112 @@ describe("useViewport3DSceneModel", () => {
       }),
     ).toMatchObject({
       shaderVisible: false,
-      vectorsVisible: false,
+      vectorsVisible: true,
       wireframeVisible: false,
+    });
+  });
+
+  it("applies backend region overrides to mesh-backed region parts", () => {
+    const visualization = new ObjectVisualizationController();
+    const part = {
+      id: "part:film:core",
+      label: "Core",
+      object_id: "film",
+    } as never;
+    const regionTarget = {
+      id: "region:film:film%3Acore",
+      kind: "region" as const,
+    };
+    visualization.patchTarget(
+      { id: "object:film", kind: "object" },
+      {
+        activeQuantityId: "m",
+        shaderVisible: true,
+        surfaceColorSource: "component_x",
+        visible: true,
+      },
+    );
+
+    expect(
+      resolveViewport3DPartVisualizationSettings({
+        objectVisualizationSnapshot: visualization.getSnapshot(),
+        part,
+        regionTarget,
+        renderingState: {
+          overrides: [
+            {
+              display: {
+                surface: { visible: true },
+                visible: false,
+              },
+              quantity: { active_quantity_id: "H_eff" },
+              scope: "region",
+              scope_id: "region:film:film%3Acore",
+            },
+          ],
+        } as never,
+      }),
+    ).toMatchObject({
+      activeQuantityId: "H_eff",
+      shaderVisible: false,
+      visible: false,
+    });
+  });
+
+  it("applies region component color overrides to mesh-backed part render plans", () => {
+    const visualization = new ObjectVisualizationController();
+    const part = {
+      id: "part:film:core",
+      label: "Core",
+      object_id: "film",
+    } as never;
+    const regionTarget = {
+      id: "region:film:film%3Acore",
+      kind: "region" as const,
+    };
+    visualization.patchTarget(
+      { id: "object:film", kind: "object" },
+      {
+        activeQuantityId: "m",
+        shaderVisible: true,
+        surfaceColorSource: "orientation",
+        visible: true,
+      },
+    );
+    visualization.patchTarget(regionTarget, {
+      activeQuantityId: "m",
+      shaderVisible: true,
+      surfaceColorSource: "component_z",
+      visible: true,
+    });
+
+    const regionSettings = resolveViewport3DPartVisualizationSettings({
+      objectVisualizationSnapshot: visualization.getSnapshot(),
+      part,
+      regionTarget,
+    });
+    const options = resolveViewport3DPrimaryFieldRenderOptions({
+      fieldRenderOptions: {
+        fullVectorBudget: 0,
+        partVectorBudgets: new Map(),
+        scalarColorModes: new Set(),
+        scalarColorPalette: "viridis",
+        scalarColorsVisible: false,
+      },
+      getPartSettings: () => regionSettings,
+      magneticParts: [{ part }],
+      quantityId: "m",
+      vectorDomain: "auto",
+    });
+
+    expect(options.partScalarColorModes?.get("part:film:core")).toBe("z");
+    expect(options.targetRenderPlans?.get("part:film:core")).toMatchObject({
+      quantityId: "m",
+      shader: {
+        scalarColorMode: "z",
+        surfaceColorSource: "component_z",
+        visible: true,
+      },
     });
   });
 

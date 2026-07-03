@@ -62,6 +62,7 @@ import {
 } from "@/shared/ui/Dialog";
 import {
   useMeshSharedDomainManifestResource,
+  useMeshRegionMembershipsResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
@@ -85,6 +86,7 @@ import {
   objectVisualizationTargetForMeshPart,
   resolveVisualizationVectorBudgetRange,
   resolveObjectVisualizationPanelTopologyFreshness,
+  resolveObjectChildRegionVisualizationTargets,
   resolveRegionVisualizationCarrier,
   resolveVisualizationRenderResolution,
   resolveSurfaceColorSourceItems,
@@ -99,13 +101,18 @@ import {
   surfaceColorSourceFieldMetaComponent,
   geometryScopeDisplayPatch,
   quantitySourcePatch,
+  regionVisualizationCarrierSupportsFieldMeta,
+  regionVisualizationFieldWarning,
   renderModeDisplayPatch,
   surfaceDisplayPassPatch,
   surfaceSolidColorPatch,
+  visualizationOverrideStateLabel,
   VISUALIZATION_COLOR_MODE_ITEMS,
   type VisualizationVectorBudgetRange,
   type RegionVisualizationCarrier,
   visualizationQuantityItems,
+  visualizationResetActionLabel,
+  parseRegionVisualizationTargetId,
 } from "./ObjectVisualizationPanelModel";
 import { formatCount } from "./MeshResourceView";
 
@@ -500,12 +507,11 @@ function VisualizationSurfaceColoringSection({
     target,
     regionCarrier,
   );
-  const regionFieldUnavailable =
-    target.kind === "region" && regionCarrier?.kind !== "mesh-parts";
-  const regionFieldUnavailableReason =
-    regionCarrier?.kind === "unavailable"
-      ? regionCarrier.reason
-      : "region has no realized mesh-part carrier";
+  const regionFieldWarning =
+    target.kind === "region" ? regionVisualizationFieldWarning(regionCarrier) : null;
+  const regionFieldMetaUnavailable =
+    target.kind === "region" &&
+    !regionVisualizationCarrierSupportsFieldMeta(regionCarrier);
   const colorbarRangeIdentity = [
     settings.activeQuantityId,
     colorbarComponent ?? "none",
@@ -514,16 +520,16 @@ function VisualizationSurfaceColoringSection({
   ].join(":");
   const fieldMeta = useFieldMetaResource({
     component: colorbarComponent ?? null,
-    enabled: showColorbar && !regionFieldUnavailable,
+    enabled: showColorbar && !regionFieldMetaUnavailable,
     quantityId: settings.activeQuantityId,
     ...fieldMetaScopeQuery,
   });
   return (
     <InspectorSection title="Surface Coloring" collapsible>
-      {regionFieldUnavailable ? (
+      {regionFieldWarning ? (
         <FeedbackBanner
           kind="warning"
-          message={`Physical field coloring for this region is unavailable: ${regionFieldUnavailableReason}. Region overlays are diagnostic and remain separate from field visualization.`}
+          message={regionFieldWarning}
         />
       ) : null}
       <FormField
@@ -564,7 +570,7 @@ function VisualizationSurfaceColoringSection({
           </option>
         ))}
       </FormField>
-      {showColorbar && !regionFieldUnavailable ? (
+      {showColorbar && !regionFieldMetaUnavailable ? (
         <ScalarColorbarControl
           disabled={pending || sectionDisabled("surface-coloring")}
           fieldMeta={fieldMeta}
@@ -573,7 +579,7 @@ function VisualizationSurfaceColoringSection({
           rangeIdentity={colorbarRangeIdentity}
         />
       ) : null}
-      {showColorbar && !regionFieldUnavailable ? (
+      {showColorbar && !regionFieldMetaUnavailable ? (
         <label className="fm-inspector-checkbox-row">
           <input
             className="fm-inspector-checkbox"
@@ -1044,21 +1050,41 @@ function VisualizationOpacitySection({
 }
 
 function VisualizationOverridesSection({
+  childRegionOverrideCount,
+  childRegionTargets,
   feedback,
   onReset,
+  onResetChildRegions,
   pending,
+  resetLabel,
 }: {
+  childRegionOverrideCount: number;
+  childRegionTargets: number;
   feedback: string | null;
   onReset: () => void;
+  onResetChildRegions: () => void;
   pending: boolean;
+  resetLabel: string;
 }) {
   return (
     <InspectorSection title="Overrides">
       <div className="fm-inspector-toolbar">
         <Button size="sm" type="button" disabled={pending} variant="ghost" onClick={onReset}>
           <RotateCcw size={12} aria-hidden="true" />
-          Reset display
+          {resetLabel}
         </Button>
+        {childRegionTargets > 0 ? (
+          <Button
+            size="sm"
+            type="button"
+            disabled={pending || childRegionOverrideCount === 0}
+            variant="ghost"
+            onClick={onResetChildRegions}
+          >
+            <RotateCcw size={12} aria-hidden="true" />
+            Clear child region overrides
+          </Button>
+        ) : null}
       </div>
       {feedback && <FeedbackBanner kind="error" message={feedback} />}
     </InspectorSection>
@@ -1081,6 +1107,7 @@ function useObjectVisualizationPanelState(
     },
   );
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [patchChildRegions, setPatchChildRegions] = useState(false);
   const [fieldCatalogRequestedTargetKey, setFieldCatalogRequestedTargetKey] =
     useState<string | null>(null);
   const pending = false;
@@ -1088,6 +1115,26 @@ function useObjectVisualizationPanelState(
   const manifest = useMeshSharedDomainManifestResource({
     enabled: shouldLoadRuntimeMeshManifest(Boolean(target), manifestStatus),
   });
+  const regionId = useMemo(() => {
+    if (target?.kind !== "region") return null;
+    const parsed = parseRegionVisualizationTargetId(target.id);
+    return parsed?.regionId ?? null;
+  }, [target]);
+  const regionMemberships = useMeshRegionMembershipsResource(
+    regionId ? [regionId] : [],
+    { enabled: Boolean(regionId) }
+  );
+  const childRegionTargets = useMemo(
+    () =>
+      target?.kind === "object"
+        ? resolveObjectChildRegionVisualizationTargets({
+            manifestRegions: manifest.data?.regions,
+            objectId: selection.objectId,
+            scene: scene.data,
+          })
+        : [],
+    [manifest.data?.regions, scene.data, selection.objectId, target?.kind],
+  );
   const visualizationTargets = useMemo(() => {
     const targets: VisualizationTargetRef[] = [];
     if (target) {
@@ -1106,8 +1153,18 @@ function useObjectVisualizationPanelState(
       targets.push(objectVisualizationTargetForMeshPart(part));
     }
 
+    if (target?.kind === "object") {
+      targets.push(...childRegionTargets);
+    }
+
     return targets;
-  }, [manifest.data?.mesh_parts, selection.label, selection.objectId, target]);
+  }, [
+    childRegionTargets,
+    manifest.data?.mesh_parts,
+    selection.label,
+    selection.objectId,
+    target,
+  ]);
   const selectPanelSnapshot = useCallback(
     (snapshot: ObjectVisualizationSnapshot) =>
       selectObjectVisualizationPanelSnapshot(snapshot, visualizationTargets),
@@ -1138,6 +1195,11 @@ function useObjectVisualizationPanelState(
     : null;
   const settings = targetVisualization?.settings ?? null;
   const effectiveSettings = targetVisualization?.effectiveSettings ?? null;
+  const hasTargetOverride = Boolean(targetVisualization?.override);
+  const childRegionOverrideCount = childRegionTargets.filter(
+    (childTarget) => snapshot.overrides[visualizationTargetKey(childTarget)],
+  ).length;
+  const panelSettings = settings;
   const targetKey = target ? visualizationTargetKey(target) : null;
   const fieldCatalogRequested =
     targetKey !== null && fieldCatalogRequestedTargetKey === targetKey;
@@ -1182,6 +1244,10 @@ function useObjectVisualizationPanelState(
 
   async function patch(patchValue: VisualizationTargetPatch): Promise<void> {
     if (!target) return;
+    const patchTargets =
+      target.kind === "object" && patchChildRegions && childRegionTargets.length > 0
+        ? [target, ...childRegionTargets]
+        : [target];
     if (target.kind === "airbox") {
       const localPatch =
         airboxLocalVisualizationPatchFromTargetPatch(patchValue);
@@ -1203,23 +1269,31 @@ function useObjectVisualizationPanelState(
     }
 
     if (!visualizationState.data) {
-      visualization.patchTarget(target, patchValue);
+      for (const patchTarget of patchTargets) {
+        visualization.patchTarget(patchTarget, patchValue);
+      }
       return;
     }
 
     const remotePatch = remoteVisualizationTargetPatch(patchValue);
     if (Object.keys(remotePatch).length > 0) {
-      visualizationSync.queuePatch({
-        overrides: mergeVisualizationStateTargetOverride(
-          visualizationState.data.overrides ?? [],
-          target,
+      let overrides = visualizationState.data.overrides ?? [];
+      for (const patchTarget of patchTargets) {
+        overrides = mergeVisualizationStateTargetOverride(
+          overrides,
+          patchTarget,
           remotePatch,
-        ),
+        );
+      }
+      visualizationSync.queuePatch({
+        overrides,
       });
     }
     // Keep the patch locally for immediate inspector/ribbon feedback until the
     // revision-driven resource refetch lands.
-    visualization.patchTarget(target, patchValue);
+    for (const patchTarget of patchTargets) {
+      visualization.patchTarget(patchTarget, patchValue);
+    }
     setFeedback(null);
   }
 
@@ -1247,6 +1321,29 @@ function useObjectVisualizationPanelState(
       ),
     });
     visualization.clearTarget(target);
+    setFeedback(null);
+  }
+
+  async function resetChildRegionTargets(): Promise<void> {
+    if (childRegionTargets.length === 0) return;
+    if (!visualizationState.data) {
+      for (const childTarget of childRegionTargets) {
+        visualization.clearTarget(childTarget);
+      }
+      return;
+    }
+
+    visualizationSync.queuePatch({
+      overrides: (visualizationState.data.overrides ?? []).filter(
+        (entry) =>
+          !childRegionTargets.some((childTarget) =>
+            visualizationStateOverrideMatchesTarget(entry, childTarget),
+          ),
+      ),
+    });
+    for (const childTarget of childRegionTargets) {
+      visualization.clearTarget(childTarget);
+    }
     setFeedback(null);
   }
 
@@ -1333,24 +1430,26 @@ function useObjectVisualizationPanelState(
     });
   })();
 
-  const displaySettings = settings
-    ? renderResolution?.finalSettings ?? effectiveSettings ?? settings
-    : null;
+  const displaySettings =
+    renderResolution?.finalSettings ?? effectiveSettings ?? panelSettings;
   const renderWarning = renderResolution?.degradedReasons[0]?.message ?? null;
   const regionCarrier = resolveRegionVisualizationCarrier({
     manifestRegions: manifest.data?.regions,
+    memberships: regionMemberships.data,
     target,
   });
   const vectorBudgetRanges = {
     full: resolveVisualizationVectorBudgetRange({
       geometryScope: "full",
       manifestRegions: manifest.data?.regions,
+      memberships: regionMemberships.data,
       meshParts: manifest.data?.mesh_parts,
       target,
     }),
     surface: resolveVisualizationVectorBudgetRange({
       geometryScope: "surface",
       manifestRegions: manifest.data?.regions,
+      memberships: regionMemberships.data,
       meshParts: manifest.data?.mesh_parts,
       target,
     }),
@@ -1380,21 +1479,27 @@ function useObjectVisualizationPanelState(
     airboxPartIds,
     feedback,
     fieldCatalog,
+    childRegionOverrideCount,
+    childRegionTargets,
+    hasTargetOverride,
     onFieldCatalogRequest: () => setFieldCatalogRequestedTargetKey(targetKey),
     onTogglePartVectors,
     passControlsDisabled,
     patch,
+    patchChildRegions,
     patchColor,
     patchNumber,
     pending,
     renderResolution,
     renderWarning,
     regionCarrier,
+    resetChildRegionTargets,
     resetTarget,
     revision,
     sectionDisabled,
-    settings,
+    settings: panelSettings,
     target,
+    setPatchChildRegions,
     primitiveDisplayToggleVisible,
     vectorDomain,
     vectorBudgetRange,
@@ -1444,22 +1549,28 @@ function ObjectVisualizationPanelView({
   const {
     displaySettings,
     airboxPartIds,
+    childRegionOverrideCount,
+    childRegionTargets,
     feedback,
     fieldCatalog,
+    hasTargetOverride,
     onFieldCatalogRequest,
     onTogglePartVectors,
     passControlsDisabled,
     patch,
+    patchChildRegions,
     patchColor,
     patchNumber,
     pending,
     renderResolution,
     renderWarning,
     regionCarrier,
+    resetChildRegionTargets,
     resetTarget,
     revision,
     sectionDisabled,
     settings,
+    setPatchChildRegions,
     target,
     primitiveDisplayToggleVisible,
     vectorDomain,
@@ -1474,6 +1585,29 @@ function ObjectVisualizationPanelView({
         <FieldRow label="Name" value={displayLabelForVisualizationTarget(target)} />
         <FieldRow label="Target ID" value={target.kind === "airbox" ? "airbox" : target.id} />
         <FieldRow label="Kind" value={target.kind} />
+        <FieldRow
+          label="Override"
+          value={visualizationOverrideStateLabel({
+            hasOverride: hasTargetOverride,
+            targetKind: target.kind,
+          })}
+        />
+        {target.kind === "object" && childRegionTargets.length > 0 ? (
+          <>
+            <FieldRow
+              label="Child overrides"
+              value={`${childRegionOverrideCount}/${childRegionTargets.length}`}
+            />
+            <label className="fm-visualization-part-toggle">
+              <input
+                checked={patchChildRegions}
+                type="checkbox"
+                onChange={(event) => setPatchChildRegions(event.target.checked)}
+              />
+              <span>Apply edits to child regions</span>
+            </label>
+          </>
+        ) : null}
         <FieldRow
           label="Render state"
           value={
@@ -1557,9 +1691,13 @@ function ObjectVisualizationPanelView({
       />
       <VisualizationOpacitySection patch={patch} settings={settings} />
       <VisualizationOverridesSection
+        childRegionOverrideCount={childRegionOverrideCount}
+        childRegionTargets={childRegionTargets.length}
         feedback={feedback}
         onReset={() => void resetTarget()}
+        onResetChildRegions={() => void resetChildRegionTargets()}
         pending={pending}
+        resetLabel={visualizationResetActionLabel(target.kind)}
       />
     </div>
   );

@@ -32,6 +32,10 @@ export interface ScalarColorBuffer {
   complexImagValues?: Float32Array;
   complexPhaseRad?: number;
   complexRealValues?: Float32Array;
+  wavevectorKf?: [number, number, number];
+  cellOrigin?: [number, number, number];
+  floquetSpatialConvention?: string;
+  phasorConvention?: string;
   quantityId?: string;
   range: ScalarRange;
   rangeDiagnostics?: ScalarRangeDiagnostics;

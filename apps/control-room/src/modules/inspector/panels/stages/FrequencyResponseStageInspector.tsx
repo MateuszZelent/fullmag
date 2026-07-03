@@ -280,7 +280,7 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
           />
           <FieldRow
             label="Response field payload"
-            value="complex vector payload for selected frequency 3D overlay"
+            value="complex vector payload for selected frequency 3D field"
           />
           <FieldRow
             label="Diagnostics output"

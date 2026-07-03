@@ -72,6 +72,7 @@ import {
   formatFrequencyHz,
   formatFrequencyRangeHz,
 } from "@/shared/domain/analysis/frequencyUnits";
+import { phasorAdapter } from "@/shared/domain/analysis/phasorConventionAdapter";
 import { Button } from "@/shared/ui/Button";
 import {
   ANALYSIS_FIELD_VIEW_OPTIONS,
@@ -699,7 +700,26 @@ export function FrequencyResponseOverviewInspectorPanel(
   props: InspectorPanelProps,
 ) {
   void props;
+  const manifest = useFrequencyDomainManifestResource();
+  const manifestPayload = record(frequencyDomainManifestPayload(manifest.data));
+  const missingExcitation = isDrivenExcitationMissing(manifestPayload);
+
   const summary = useFrequencyResponseOverviewSummary();
+
+  if (missingExcitation) {
+    return (
+      <div data-inspector-surface="frequency-response-overview">
+        <InspectorSection title="Driven Response Validation" badge="blocking">
+          <div className="fm-inspector-alert fm-alert-danger" style={{ padding: "12px", borderLeft: "4px solid var(--fm-danger, #ef4444)", background: "rgba(239, 68, 68, 0.1)", borderRadius: "4px", margin: "8px 0" }}>
+            <div style={{ fontWeight: "bold", fontSize: "1.1em", marginBottom: "6px" }}>Drive source: missing</div>
+            <div style={{ fontSize: "0.9em", margin: "4px 0" }}><strong>Severity:</strong> blocking</div>
+            <div style={{ fontSize: "0.9em", margin: "4px 0" }}><strong>Message:</strong> Frequency-domain response requires a dynamic perturbation δh. Without excitation, the response is identically zero.</div>
+            <div style={{ fontSize: "0.9em", margin: "4px 0" }}><strong>Action:</strong> Add drive source</div>
+          </div>
+        </InspectorSection>
+      </div>
+    );
+  }
 
   return (
     <div data-inspector-surface="frequency-response-overview">
@@ -906,7 +926,7 @@ export function FmrOverviewInspectorPanel(props: InspectorPanelProps) {
         <FieldRow label="Active chart route" value={summary.activeChartRoute} />
         <FieldRow
           label="Modal spectrum"
-          value={`${summary.modalModeCount} mode(s), ${summary.modalFieldCount} overlay-ready`}
+          value={`${summary.modalModeCount} mode(s), ${summary.modalFieldCount} field-ready`}
         />
         <FieldRow
           label="Driven sweep"
@@ -1133,7 +1153,7 @@ export function FrequencyDomainDispersionInspectorPanel(
           value={`${summary.branchCount} branch(es), ${summary.trackedPointCount} tracked point(s)`}
         />
         <FieldRow label="Primary branch" value={summary.primaryBranch} />
-        <FieldRow label="Modal overlays" value={summary.modalOverlays} />
+        <FieldRow label="Modal fields" value={summary.modalOverlays} />
         <FieldRow
           label="Capability summary"
           value={summary.capabilitySummary}
@@ -1604,7 +1624,7 @@ export function EigenSpectrumInspectorPanel(props: InspectorPanelProps) {
         <FieldRow label="Spectrum resource" value={summary.spectrumResource} />
         <FieldRow
           label="Mode rows"
-          value={`${summary.modeCount} mode(s), ${summary.fieldOverlayCount} field overlay(s)`}
+          value={`${summary.modeCount} mode(s), ${summary.fieldOverlayCount} field payload(s)`}
         />
         <FieldRow label="Frequency range" value={summary.frequencyRange} />
         <FieldRow label="Primary mode" value={summary.primaryMode} />
@@ -1612,7 +1632,7 @@ export function EigenSpectrumInspectorPanel(props: InspectorPanelProps) {
         <FieldRow label="Residual coverage" value={summary.residualCoverage} />
         <FieldRow
           label="3D workflow"
-          value="select mode -> plot phase-rotated real overlay"
+          value="select mode -> plot phase-rotated real field"
         />
         <FieldRow
           label="Capability summary"
@@ -1734,7 +1754,7 @@ export function EigenModesVisualizationInspectorPanel(
         <FieldRow label="Mode table resource" value={summary.modeTableResource} />
         <FieldRow label="Mode table" value={summary.modeTable} />
         <FieldRow
-          label="Selectable overlays"
+          label="Selectable fields"
           value={summary.firstSelectableMode}
         />
         <FieldRow
@@ -1841,12 +1861,12 @@ export function FmrModalSpectrumInspectorPanel(props: InspectorPanelProps) {
       >
         <FieldRow
           label="Mode workflow"
-          value="modal k=0 eigenmodes -> resonances -> 3D mode overlay"
+          value="modal k=0 eigenmodes -> resonances -> 3D mode field"
         />
         <FieldRow label="Spectrum resource" value={summary.spectrumResource} />
         <FieldRow
           label="Mode rows"
-          value={`${summary.modalModeCount} modes, ${summary.modalFieldCount} 3D overlays`}
+          value={`${summary.modalModeCount} modes, ${summary.modalFieldCount} 3D fields`}
         />
         <FieldRow label="Frequency span" value={summary.modalFrequencyRange} />
         <FieldRow
@@ -1862,7 +1882,7 @@ export function FmrModalSpectrumInspectorPanel(props: InspectorPanelProps) {
           value={summary.modalDampingCoverage}
         />
         <FieldRow
-          label="Overlay readiness"
+          label="Field readiness"
           value={summary.modalFieldCount > 0 ? "mode fields available" : "mode fields missing"}
         />
         <FieldRow
@@ -1894,7 +1914,7 @@ export function FmrModalSpectrumInspectorPanel(props: InspectorPanelProps) {
       </InspectorSection>
       <InspectorSection
         title="FMR Modal Mode Table"
-        badge={`${summary.modalFieldCount} overlay(s)`}
+        badge={`${summary.modalFieldCount} field(s)`}
       >
         <FrequencyDomainModeTable
           onPlotMode={plotMode}
@@ -1971,7 +1991,7 @@ function FmrResonanceBrowser({
             />
             <FieldRow
               label="Mode field"
-              value={point.modeFieldId ? "overlay-ready" : "missing"}
+              value={point.modeFieldId ? "field-ready" : "missing"}
             />
           </div>
           <div className="fm-frequency-domain-resonance-card__actions">
@@ -2109,7 +2129,7 @@ export function FmrResponseSweepInspectorPanel(props: InspectorPanelProps) {
           value={`${summary.responsePointCount} points, ${summary.responseSeriesCount} observable series`}
         />
         <FieldRow
-          label="Response overlays"
+          label="Response fields"
           value={`${summary.responseFieldCount} field artifacts`}
         />
         <FieldRow
@@ -2240,7 +2260,7 @@ function FmrResponsePointBrowser({
             <FieldRow label="Residual" value={formatResidual(point.residualNorm)} />
             <FieldRow
               label="Response field"
-              value={point.fieldId ? "overlay-ready" : "missing"}
+              value={point.fieldId ? "field-ready" : "missing"}
             />
           </div>
           <div className="fm-frequency-domain-response-card__actions">
@@ -2434,7 +2454,7 @@ function FmrPeakBrowser({
             <FieldRow label="Q factor" value={formatFmrPeakQualityFactor(peak)} />
             <FieldRow
               label="3D field"
-              value={peak.fieldId ? "overlay-ready" : "missing"}
+              value={peak.fieldId ? "field-ready" : "missing"}
             />
           </div>
           <div className="fm-frequency-domain-peak-card__actions">
@@ -2715,8 +2735,9 @@ export function FmrComparisonInspectorPanel(props: InspectorPanelProps) {
         <FieldRow label="Driven peak" value={summary.drivenPeak} />
         <FieldRow label="Frequency offset" value={summary.frequencyOffset} />
         <FieldRow label="Peak amplitude ratio" value={summary.amplitudeRatio} />
-        <FieldRow label="Modal overlay" value={summary.modalOverlay} />
-        <FieldRow label="Driven overlay" value={summary.drivenOverlay} />
+        <FieldRow label="Spatial overlap (eta_j)" value={summary.spatialOverlap} />
+        <FieldRow label="Modal field" value={summary.modalOverlay} />
+        <FieldRow label="Driven field" value={summary.drivenOverlay} />
         <FieldRow label="Validation state" value={summary.validationState} />
         <FieldRow label="Resources" value={summary.resources} />
       </InspectorSection>
@@ -2882,7 +2903,7 @@ function FmrComparisonActions({
         onClick={plotModal}
       >
         <Activity size={13} aria-hidden="true" />
-        <span>Plot modal overlay</span>
+        <span>Plot modal field</span>
       </Button>
       <Button
         className="fm-inspector-action-button"
@@ -2898,7 +2919,7 @@ function FmrComparisonActions({
         onClick={plotDriven}
       >
         <Activity size={13} aria-hidden="true" />
-        <span>Plot driven overlay</span>
+        <span>Plot driven field</span>
       </Button>
     </div>
   );
@@ -2953,11 +2974,11 @@ function FmrComparisonPairBrowser({
             <FieldRow label="Driven" value={formatFmrDrivenPairLabel(pair)} />
             <FieldRow
               label="Modal field"
-              value={pair.modalPeak.fieldId ? "overlay-ready" : "missing"}
+              value={pair.modalPeak.fieldId ? "field-ready" : "missing"}
             />
             <FieldRow
               label="Driven field"
-              value={pair.drivenPeak.fieldId ? "overlay-ready" : "missing"}
+              value={pair.drivenPeak.fieldId ? "field-ready" : "missing"}
             />
             <FieldRow
               label="Amplitude ratio"
@@ -3091,6 +3112,9 @@ export const EigenModeInspectorPanel =
           <FieldRow label="Mode identity" value={summary.modeIdentity} />
           <FieldRow label="Frequency" value={summary.frequencyDisplay} />
           <FieldRow label="Imaginary frequency" value={summary.imaginaryFrequency} />
+          <FieldRow label="Decay rate (Gamma)" value={summary.decayRate} />
+          <FieldRow label="Linewidth (FWHM)" value={summary.linewidthFwhm} />
+          <FieldRow label="Q-factor" value={summary.qualityFactor} />
           <FieldRow label="Angular frequency" value={summary.angularFrequency} />
           <FieldRow label="Mode field" value={summary.fieldStatus} />
           <FieldRow label="Mode field resource" value={summary.fieldResource} />
@@ -3534,7 +3558,7 @@ export function FrequencyResponseFrequencyPointsInspectorPanel(
         <FieldRow label="Frequency range" value={summary.frequencyRange} />
         <FieldRow label="Amplitude range" value={summary.amplitudeRange} />
         <FieldRow label="Residual coverage" value={summary.residualCoverage} />
-        <FieldRow label="Field overlays" value={summary.fieldOverlays} />
+        <FieldRow label="Field payloads" value={summary.fieldOverlays} />
         <FieldRow label="Progress state" value={summary.progressState} />
         <FieldRow label="Cancellation state" value={summary.cancellationState} />
         <FieldRow label="3D workflow" value={summary.workflow} />
@@ -3641,7 +3665,7 @@ export function FrequencyResponseObservableInspectorPanel(
           label="Max absorbed power density"
           value={summary.maxAbsorbedPowerDensity}
         />
-        <FieldRow label="Field overlays" value={summary.fieldOverlayStatus} />
+        <FieldRow label="Field payloads" value={summary.fieldOverlayStatus} />
         <FieldRow label="Chart series" value={summary.chartSeriesStatus} />
       </InspectorSection>
     </div>
@@ -3663,7 +3687,7 @@ export function FrequencyResponseObservablesInspectorPanel(
         <FieldRow label="Observable series" value={summary.seriesStatus} />
         <FieldRow label="Frequency range" value={summary.frequencyRange} />
         <FieldRow label="Frequency points" value={summary.pointCount} />
-        <FieldRow label="Field overlays" value={summary.fieldOverlayStatus} />
+        <FieldRow label="Field payloads" value={summary.fieldOverlayStatus} />
         <FieldRow label="Peak response" value={summary.peakResponse} />
       </InspectorSection>
     </div>
@@ -3672,6 +3696,10 @@ export function FrequencyResponseObservablesInspectorPanel(
 
 export function FrequencyResponseSweepInspectorPanel(props: InspectorPanelProps) {
   void props;
+  const manifest = useFrequencyDomainManifestResource();
+  const manifestPayload = record(frequencyDomainManifestPayload(manifest.data));
+  const missingExcitation = isDrivenExcitationMissing(manifestPayload);
+
   const summary = useFrequencyResponseSweepSummary();
   const kernel = useKernel();
   const plotPoint = (point: FrequencyResponsePoint): void => {
@@ -3690,6 +3718,21 @@ export function FrequencyResponseSweepInspectorPanel(props: InspectorPanelProps)
       },
     );
   };
+
+  if (missingExcitation) {
+    return (
+      <div data-inspector-surface="frequency-response-sweep">
+        <InspectorSection title="Driven Response Validation" badge="blocking">
+          <div className="fm-inspector-alert fm-alert-danger" style={{ padding: "12px", borderLeft: "4px solid var(--fm-danger, #ef4444)", background: "rgba(239, 68, 68, 0.1)", borderRadius: "4px", margin: "8px 0" }}>
+            <div style={{ fontWeight: "bold", fontSize: "1.1em", marginBottom: "6px" }}>Drive source: missing</div>
+            <div style={{ fontSize: "0.9em", margin: "4px 0" }}><strong>Severity:</strong> blocking</div>
+            <div style={{ fontSize: "0.9em", margin: "4px 0" }}><strong>Message:</strong> Frequency-domain response requires a dynamic perturbation δh. Without excitation, the response is identically zero.</div>
+            <div style={{ fontSize: "0.9em", margin: "4px 0" }}><strong>Action:</strong> Add drive source</div>
+          </div>
+        </InspectorSection>
+      </div>
+    );
+  }
 
   return (
     <div data-inspector-surface="frequency-response-sweep">
@@ -3720,7 +3763,7 @@ export function FrequencyResponseSweepInspectorPanel(props: InspectorPanelProps)
           label="Max absorbed power density"
           value={summary.maxAbsorbedPowerDensity}
         />
-        <FieldRow label="Field overlays" value={summary.fieldOverlayStatus} />
+        <FieldRow label="Field payloads" value={summary.fieldOverlayStatus} />
         <FieldRow label="Progress state" value={summary.progressState} />
         <FieldRow label="Cancellation state" value={summary.cancellationState} />
       </InspectorSection>
@@ -4008,6 +4051,10 @@ export function FrequencyDomainOperatorDiagnosticInspectorPanel(
   props: InspectorPanelProps,
 ) {
   void props;
+  const manifest = useFrequencyDomainManifestResource();
+  const manifestPayload = record(frequencyDomainManifestPayload(manifest.data));
+  const diagnostics = Array.isArray(manifestPayload?.diagnostics) ? manifestPayload.diagnostics : [];
+  const dmiWarning = diagnostics.find(d => record(d)?.id === "frequency_domain.dmi_boundary_condition_uncertain");
   const summary = useFrequencyDomainOperatorDiagnosticSummary();
 
   return (
@@ -4016,6 +4063,14 @@ export function FrequencyDomainOperatorDiagnosticInspectorPanel(
         title="Frequency-Domain Operator Diagnostics"
         badge={summary.badge}
       >
+        {dmiWarning && (
+          <div className="fm-inspector-alert fm-alert-warning" style={{ padding: "12px", borderLeft: "4px solid var(--fm-warning, #f59e0b)", background: "rgba(245, 158, 11, 0.1)", borderRadius: "4px", margin: "8px 0" }}>
+            <div style={{ fontWeight: "bold", fontSize: "1.1em", marginBottom: "6px" }}>DMI BC uncertain</div>
+            <div style={{ fontSize: "0.9em", margin: "4px 0" }}><strong>Severity:</strong> warning</div>
+            <div style={{ fontSize: "0.9em", margin: "4px 0" }}><strong>Message:</strong> Frequency-domain DMI boundary conditions are not yet fully resolved. Use with caution.</div>
+            <div style={{ fontSize: "0.9em", margin: "4px 0" }}><strong>ID:</strong> frequency_domain.dmi_boundary_condition_uncertain</div>
+          </div>
+        )}
         <FieldRow label="Operator family" value={summary.operatorFamily} />
         <FieldRow label="Normalization" value={summary.normalization} />
         <FieldRow label="Phase convention" value={summary.phaseConvention} />
@@ -4117,8 +4172,8 @@ export function FrequencyDomainVisualizationDiagnosticInspectorPanel(
         title="Frequency-Domain Visualization Diagnostics"
         badge={summary.badge}
       >
-        <FieldRow label="Mode overlays" value={summary.modeOverlays} />
-        <FieldRow label="Response overlays" value={summary.responseOverlays} />
+        <FieldRow label="Mode fields" value={summary.modeOverlays} />
+        <FieldRow label="Response fields" value={summary.responseOverlays} />
         <FieldRow label="Chart readiness" value={summary.chartReadiness} />
         <FieldRow label="Animation" value={summary.animation} />
         <FieldRow label="Viewport handoff" value={summary.viewportHandoff} />
@@ -4246,7 +4301,7 @@ export function EigenSpectrumResourceInspectorPanel(props: InspectorPanelProps) 
         <FieldRow label="Resource endpoint" value={summary.spectrumResource} />
         <FieldRow
           label="Mode rows"
-          value={`${summary.modeCount} mode(s), ${summary.fieldOverlayCount} field overlay(s)`}
+          value={`${summary.modeCount} mode(s), ${summary.fieldOverlayCount} field payload(s)`}
         />
         <FieldRow label="Frequency range" value={summary.frequencyRange} />
         <FieldRow label="Residual coverage" value={summary.residualCoverage} />
@@ -4292,7 +4347,7 @@ export function EigenModeFieldResourceInspectorPanel(
         />
         <FieldRow label="Mode fields" value={summary.modeFields} />
         <FieldRow label="Output resources" value={summary.outputResources} />
-        <FieldRow label="Viewport handoff" value="mode selection -> 3D overlay" />
+        <FieldRow label="Viewport handoff" value="mode selection -> 3D field" />
       </InspectorSection>
     </div>
   );
@@ -4564,7 +4619,7 @@ function useFrequencyDomainOverviewSummary() {
     drivenVisualization: `${responseFieldCount} response field artifact(s)`,
     fmrReadiness: `${spectrumModel.points.length} modal mode(s), ${responseModel.points.length} driven point(s), ${peakModel.peaks.length} peak(s)`,
     frequencyCoverage: formatFrequencyRange(frequencyValues),
-    modalVisualization: `${modalFieldCount} mode field overlay(s)`,
+    modalVisualization: `${modalFieldCount} mode field payload(s)`,
     nextAction:
       peakModel.peaks.length > 0 || spectrumModel.points.length > 0
         ? "open FMR peaks or mode browser"
@@ -4638,7 +4693,7 @@ function useEigenOverviewSummary() {
       spectrumModel.points.map((point) => point.frequencyHz),
     ),
     handoff: "select mode or branch point -> plot mode field",
-    spectrum: `${spectrumModel.points.length} mode(s), ${modalFieldCount} field overlay(s)`,
+    spectrum: `${spectrumModel.points.length} mode(s), ${modalFieldCount} field payload(s)`,
   };
 }
 
@@ -4816,12 +4871,12 @@ function useFmrComparisonSummary() {
   return {
     actionBadge:
       modalPeak?.fieldId && drivenPeak?.fieldId
-        ? "both overlays ready"
+        ? "both fields ready"
         : modalPeak?.fieldId
-          ? "modal overlay ready"
+          ? "modal field ready"
           : drivenPeak?.fieldId
-            ? "driven overlay ready"
-            : "overlays missing",
+            ? "driven field ready"
+            : "fields missing",
     amplitudeRatio:
       amplitudeRatio == null
         ? "not available"
@@ -4868,6 +4923,11 @@ function useFmrComparisonSummary() {
     validationState: modalPeak && drivenPeak
       ? `${modalPeak.validationStatus} modal, ${drivenPeak.validationStatus} driven`
       : "requires both modal and driven peaks",
+    spatialOverlap: nearestComparison?.drivenPeak?.overlap != null
+      ? formatNumber(nearestComparison.drivenPeak.overlap)
+      : (!modalPeak?.fieldId || !drivenPeak?.fieldId
+          ? "degraded (field payload missing; request link)"
+          : "degraded (field payload missing; request link)"),
   };
 }
 
@@ -5149,7 +5209,7 @@ function useEigenDiagnosticsSummary() {
     modalAvailability: `${studyKind}: ${eigenmodes?.status ?? "missing"}; modal=${String(
       eigenmodes?.modal_solver_available ?? false,
     )}; gpu=${String(eigenmodes?.gpu_available ?? false)}`,
-    modalSpectrum: `${spectrumModel.points.length} mode(s), ${fieldOverlayCount} field overlay(s)`,
+    modalSpectrum: `${spectrumModel.points.length} mode(s), ${fieldOverlayCount} field payload(s)`,
     residualCoverage: `${residualCount}/${spectrumModel.points.length} mode(s)`,
     solverModel: modalDiagnostics.solverModel,
   };
@@ -5259,7 +5319,7 @@ function useEigenBranchSummary({ selection }: InspectorPanelProps) {
       ? formatFrequencyRange(branch.points.map((point) => point.frequencyRealHz))
       : "not available",
     handoff: representativePoint
-      ? "open representative mode and plot its field overlay"
+      ? "open representative mode and plot its field payload"
       : "requires mode field metadata",
     representativeMode: representativePoint
       ? `sample ${representativePoint.sampleIndex}, mode ${representativePoint.rawModeIndex}, ${formatFrequency(representativePoint.frequencyRealHz)}`
@@ -5389,7 +5449,7 @@ function useEigenModesSummary() {
     frequencyRange: formatFrequencyRange(
       spectrumModel.points.map((point) => point.frequencyHz),
     ),
-    modeTable: `${modeCount} mode(s), ${overlayReadyCount} overlay-ready`,
+    modeTable: `${modeCount} mode(s), ${overlayReadyCount} field-ready`,
     modeTableResource: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
     spectrumModel,
   };
@@ -5485,7 +5545,7 @@ function useCalculationModesSummary() {
       spectrumModel.points.length > 0
         ? `${spectrumModel.points.length} mode(s), ${
             spectrumModel.points.filter((point) => point.modeFieldId).length
-          } overlay-ready`
+          } field-ready`
         : "no modal spectrum loaded",
     modalWorkflows: modalRows.map((row) => row.mode).join(", "),
     modeRows,
@@ -5550,8 +5610,21 @@ function useEigenModeSummary({ selection }: InspectorPanelProps) {
     stringValue(record(modePayload?.metadata)?.phase_convention) ??
     "exp(-i omega t)";
 
+  const manifest = useFrequencyDomainManifestResource();
+  const manifestPayload = record(frequencyDomainManifestPayload(manifest.data));
+  const physics = record(manifestPayload?.physics);
+  const rawPhasorConvention = stringValue(physics?.phase_convention) ?? "exp_i_omega_t";
+  const phasorConv = rawPhasorConvention.includes("exp_minus") ? "exp_minus_i_omega_t" : "exp_i_omega_t";
+  const { decayRateSign } = phasorAdapter(phasorConv);
+
+  const decayRateHz = imaginaryFrequencyHz != null ? decayRateSign * imaginaryFrequencyHz : null;
+  const linewidthFwhmHz = decayRateHz != null ? 2 * Math.abs(decayRateHz) : null;
+  const qualityFactor = (frequencyHz != null && linewidthFwhmHz && linewidthFwhmHz > 0)
+    ? frequencyHz / linewidthFwhmHz
+    : null;
+
   return {
-    actionBadge: fieldId ? "3D overlay ready" : "field missing",
+    actionBadge: fieldId ? "3D field ready" : "field missing",
     angularFrequency:
       angularFrequency == null
         ? "not available"
@@ -5575,9 +5648,12 @@ function useEigenModeSummary({ selection }: InspectorPanelProps) {
     fieldId,
     fieldIdLabel: fieldId ?? "not available",
     fieldResource: fieldResource ?? "not available",
-    fieldStatus: fieldId ? `${fieldId}; overlay-ready` : "mode field missing",
+    fieldStatus: fieldId ? `${fieldId}; field-ready` : "mode field missing",
     frequencyDisplay: formatFrequency(frequencyHz),
     imaginaryFrequency: formatFrequency(imaginaryFrequencyHz),
+    decayRate: decayRateHz == null ? "not available" : formatFrequency(decayRateHz),
+    linewidthFwhm: linewidthFwhmHz == null ? "not available" : formatFrequency(linewidthFwhmHz),
+    qualityFactor: qualityFactor == null ? "not available" : formatNumber(qualityFactor),
     modeIdentity:
       sampleIndex == null || modeIndex == null
         ? "not selected"
@@ -5589,7 +5665,7 @@ function useEigenModeSummary({ selection }: InspectorPanelProps) {
     workflow:
       fieldId && availableViews.length
         ? `phasor reconstruction; ${realSamples ?? "?"} real samples, ${imagSamples ?? "?"} imag samples`
-        : "field payload required for 3D phasor overlay",
+        : "field payload required for 3D phasor field",
   };
 }
 
@@ -5642,7 +5718,7 @@ function useFmrPeakSummary({ selection }: InspectorPanelProps) {
           ? `peak ${peakIndex + 1}`
           : "missing",
     fieldId: peak?.fieldId ?? null,
-    fieldPayload: peak?.fieldId ? `${peak.fieldId}; overlay-ready` : "missing",
+    fieldPayload: peak?.fieldId ? `${peak.fieldId}; field-ready` : "missing",
     dataPlaneResource: fieldResource ?? resource ?? "not available",
     frequency: formatFrequency(peak?.frequencyHz),
     frequencyPointIndex,
@@ -5697,7 +5773,7 @@ function useFmrPeakSummary({ selection }: InspectorPanelProps) {
     validation: peak?.validationStatus ?? "not available",
     visualizationReadiness: peak?.fieldId
       ? "field id is published; plot command can use the linked field id"
-      : "field payload missing; 3D overlay is unavailable",
+      : "field payload missing; 3D field is unavailable",
   };
 }
 
@@ -5757,7 +5833,7 @@ function useFrequencyResponsePointSummary({ selection }: InspectorPanelProps) {
     .join("; ");
 
   return {
-    actionBadge: fieldId ? "3D overlay ready" : "field missing",
+    actionBadge: fieldId ? "3D field ready" : "field missing",
     absorbedPowerDensity:
       absorbedPowerDensity == null
         ? "not available"
@@ -5784,7 +5860,7 @@ function useFrequencyResponsePointSummary({ selection }: InspectorPanelProps) {
     fieldId,
     fieldIdLabel: fieldId ?? "not available",
     fieldResource: fieldResource ?? "not available",
-    fieldStatus: fieldId ? `${fieldId}; overlay-ready` : "field artifact missing",
+    fieldStatus: fieldId ? `${fieldId}; field-ready` : "field artifact missing",
     frequencyDisplay: formatFrequency(frequencyHz),
     observableRows: `${matchingPoints.length} sweep row(s)`,
     phase: phase == null ? "not available" : `${formatNumber(phase)} rad`,
@@ -5852,7 +5928,7 @@ function useFrequencyResponseFrequencyPointsSummary() {
       ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
     responseModel,
     solvedFrequencies: `${responseModel.points.length} point(s), ${responseModel.series.length} observable series`,
-    workflow: "select frequency point -> inspect response field overlay in 3D",
+    workflow: "select frequency point -> inspect response field payload in 3D",
   };
 }
 
@@ -5915,7 +5991,7 @@ function useFrequencyResponseObservableSummary({ selection }: InspectorPanelProp
     chartSeriesStatus: chartSeries.length
       ? `${chartSeries.length} series, ${chartSeries.map((series) => series.label).join(", ")}`
       : "not available",
-    fieldOverlayStatus: `${fieldOverlayCount}/${points.length} point(s) overlay-ready`,
+    fieldOverlayStatus: `${fieldOverlayCount}/${points.length} point(s) field-ready`,
     frequencyRange: formatFrequencyRange(frequencies),
     maxAbsorbedPowerDensity: maxFinite(absorbedPowers) == null
       ? "not available"
@@ -5966,7 +6042,7 @@ function useFrequencyResponseSweepSummary() {
     cancellationState: cancelRequested.data
       ? `${cancelRequested.data.status}; ${cancelRequested.data.completed_frequency_points}/${cancelRequested.data.total_frequency_points}`
       : "not requested",
-    fieldOverlayStatus: `${fieldOverlayCount}/${responseModel.points.length} point(s) overlay-ready`,
+    fieldOverlayStatus: `${fieldOverlayCount}/${responseModel.points.length} point(s) field-ready`,
     frequencyRange: formatFrequencyRange(frequencies),
     maxAbsorbedPowerDensity: maxFinite(absorbedPowers) == null
       ? "not available"
@@ -6105,7 +6181,7 @@ function useEigenSampleJobSummary() {
         : dispersion.status,
     branchTracking: `${branchesModel.branches.length} branch(es), ${trackedPointCount} tracked point(s)`,
     kPathSamples: `${dispersionModel.points.length} point(s)`,
-    modeFields: `${modeFieldCount} overlay-ready`,
+    modeFields: `${modeFieldCount} field-ready`,
     outputResources: `${ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH}; ${ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH}`,
     solverLane: `${eigenmodes?.study_kind ?? "eigenmodes"}: ${eigenmodes?.status ?? "missing"}`,
   };
@@ -6306,9 +6382,9 @@ function useFrequencyDomainVisualizationDiagnosticSummary() {
       responseFieldCount,
     }),
     chartReadiness: `${spectrumModel.series.length} modal series, ${responseModel.series.length} response series`,
-    modeOverlays: `${modeFieldCount} mode field overlay(s)`,
+    modeOverlays: `${modeFieldCount} mode field payload(s)`,
     responseOverlays: `${responseFieldCount} response field artifact(s)`,
-    viewportHandoff: "selection -> command registry -> unified viewport overlay",
+    viewportHandoff: "selection -> command registry -> unified viewport field",
   };
 }
 
@@ -6570,6 +6646,17 @@ function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+export function isDrivenExcitationMissing(manifestPayload: unknown): boolean {
+  if (!manifestPayload) return false;
+  const payload = record(manifestPayload);
+  if (!payload) return true;
+  const excitation = record(payload.excitation);
+  if (!excitation) return true;
+  const field = excitation.field_au_per_m || excitation.excitation_field;
+  if (!field || !Array.isArray(field)) return true;
+  return field.every(v => v === 0);
 }
 
 function finiteNumber(value: unknown): number | null {

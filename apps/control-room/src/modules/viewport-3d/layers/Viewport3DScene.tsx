@@ -472,7 +472,6 @@ export function resolveViewport3DModelLayerStageVisibility(
 }
 
 export interface Viewport3DAuthoredRegionOverlayVisibilityInput {
-  readonly explicitRegionSettingsVisible?: boolean;
   readonly hasMeshBackedRegionOverlays: boolean;
   readonly overlayLayersEnabled: boolean;
   readonly realizedBuildStatus: Viewport3DRegionOverlayBuildStatus;
@@ -481,7 +480,6 @@ export interface Viewport3DAuthoredRegionOverlayVisibilityInput {
 }
 
 export function resolveAuthoredRegionOverlayVisibility({
-  explicitRegionSettingsVisible = false,
   hasMeshBackedRegionOverlays,
   overlayLayersEnabled,
   realizedBuildStatus,
@@ -489,7 +487,6 @@ export function resolveAuthoredRegionOverlayVisibility({
   stageVisible,
 }: Viewport3DAuthoredRegionOverlayVisibilityInput): boolean {
   if (!stageVisible || !overlayLayersEnabled) return false;
-  if (explicitRegionSettingsVisible) return true;
   if (
     regionOverlayModeShowsAuthored(
       regionOverlayMode,
@@ -869,17 +866,13 @@ function Viewport3DModelLayerStack({
     () => resolveRegionSettingsEntries(meshRegionOverlays, getRegionSettings),
     [getRegionSettings, meshRegionOverlays],
   );
-  const explicitMeshRegionOverlaysVisible = hasExplicitVisibleRegionSettings(
-    meshRegionOverlaySettingsByRegionId,
-  );
   const hasMeshBackedRegionOverlays = meshRegionOverlays.length > 0;
   const overlayLayersEnabled = viewport3DOverlayLayersEnabledFromBrowserConfig();
   const realizedRegionOverlaysVisible =
-    (explicitMeshRegionOverlaysVisible ||
-      regionOverlayModeShowsRealized(
-        regionOverlayMode,
-        hasMeshBackedRegionOverlays,
-      )) &&
+    regionOverlayModeShowsRealized(
+      regionOverlayMode,
+      hasMeshBackedRegionOverlays,
+    ) &&
     stageVisibility.realizedRegionOverlays &&
     overlayLayersEnabled;
   const realizedRegionOverlayModels = useViewport3DRegionOverlayModels({
@@ -901,9 +894,6 @@ function Viewport3DModelLayerStack({
   if (!viewport3DSceneLayersEnabledFromBrowserConfig()) return null;
 
   const authoredRegionOverlaysVisible = resolveAuthoredRegionOverlayVisibility({
-    explicitRegionSettingsVisible: hasExplicitVisibleRegionSettings(
-      resolveRegionSettingsEntries(regionOverlays, getRegionSettings),
-    ),
     hasMeshBackedRegionOverlays,
     overlayLayersEnabled,
     realizedBuildStatus: realizedRegionOverlayBuildStatus,

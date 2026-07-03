@@ -371,6 +371,23 @@ describe("flattenVisibleExplorerRows", () => {
     expect(css).toContain("var(--fm-success)");
   });
 
+  it("renders active analysis fields as a separate explorer row state", () => {
+    expect(explorerTreeViewSource).toContain(
+      "fm-explorer-tree-row--active-analysis-field",
+    );
+    expect(explorerTreeViewSource).toContain(
+      'data-active-analysis-field={node.activeAnalysisField ? "true" : undefined}',
+    );
+    expect(explorerTreeViewSource).toContain(
+      'className="fm-explorer-tree-row__active-field"',
+    );
+
+    const explorerCssUrl = new URL("../../design/styles/explorer.css", import.meta.url);
+    const css = readFileSync(fileURLToPath(explorerCssUrl), "utf8");
+    expect(css).toContain(".fm-explorer-tree-row--active-analysis-field");
+    expect(css).toContain(".fm-explorer-tree-row__active-field");
+  });
+
   it("maps explorer node statuses to explicit semantic CSS classes", () => {
     expect(explorerStatusClassName("completed")).toBe("fm-explorer-node--done");
     expect(explorerStatusClassName("running")).toBe("fm-explorer-node--active");

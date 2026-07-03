@@ -212,4 +212,43 @@ describe("viewport3dScalarSurfaceShader", () => {
 
     material.dispose();
   });
+
+  it("sets Floquet uniforms when Floquet parameters are present in the buffer", () => {
+    const buffer = complexBuffer();
+    buffer.wavevectorKf = [1, 2, 3];
+    buffer.cellOrigin = [0.1, 0.2, 0.3];
+    buffer.floquetSpatialConvention = "dst_equals_src_exp_minus_i_k_dot_delta_r";
+    buffer.phasorConvention = "exp_minus_i_omega_t";
+
+    const material = createScalarSurfaceShaderMaterial(buffer, {
+      depthTest: true,
+      depthWrite: true,
+      opacity: 0.8,
+      polygonOffset: false,
+      polygonOffsetFactor: 0,
+      polygonOffsetUnits: 0,
+      side: 0,
+      transparent: true,
+    });
+
+    expect(material.uniforms.fmWavevectorKf.value).toEqual([1, 2, 3]);
+    expect(material.uniforms.fmCellOrigin.value).toEqual([0.1, 0.2, 0.3]);
+    expect(material.uniforms.fmSpatialPhaseSign.value).toBe(-1);
+    expect(material.uniforms.fmTemporalPhaseSign.value).toBe(-1);
+    expect(material.uniforms.fmFloquetActive.value).toBe(1);
+
+    // Update with alternative conventions
+    const nextBuffer = complexBuffer();
+    nextBuffer.wavevectorKf = [0, 0, 0];
+    nextBuffer.cellOrigin = [0, 0, 0];
+    nextBuffer.floquetSpatialConvention = "dst_equals_src_exp_plus_i_k_dot_delta_r";
+    nextBuffer.phasorConvention = "exp_i_omega_t";
+
+    updateScalarSurfaceShaderMaterial(material, nextBuffer, 0.8);
+    expect(material.uniforms.fmSpatialPhaseSign.value).toBe(1);
+    expect(material.uniforms.fmTemporalPhaseSign.value).toBe(1);
+    expect(material.uniforms.fmFloquetActive.value).toBe(1);
+
+    material.dispose();
+  });
 });

@@ -8,6 +8,7 @@ import {
 } from "@/kernel/api/apiPaths";
 import type { FrequencyDomainKPathMetadataResource } from "@/kernel/api/apiTypes";
 import type { SelectionRef } from "@/kernel/selection/selectionTypes";
+import type { DecodedComplexFieldVector } from "@/kernel/api/codecs/types";
 
 type ResourceStatus = "idle" | "loading" | "ready" | "stale" | "error";
 type FrequencyDomainCalculationMode =
@@ -172,6 +173,7 @@ export interface FrequencyResponsePoint {
   phaseRad: number | null;
   residualNorm: number | null;
   susceptibility: readonly number[] | null;
+  overlap?: number | null;
 }
 
 export interface FmrPeakPoint {
@@ -186,6 +188,7 @@ export interface FmrPeakPoint {
   phaseRad: number | null;
   source: "driven_response" | "modal";
   validationStatus: "fail" | "pass" | "unavailable" | "warn";
+  overlap?: number | null;
 }
 
 export interface FmrModalDrivenComparisonPoint {
@@ -845,6 +848,7 @@ export function buildFrequencyResponseChartModel(
       phaseRad: finiteNumber(item?.phase_rad ?? item?.phaseRad ?? item?.response_phase),
       residualNorm: finiteNumber(item?.residual_norm ?? item?.relative_residual_norm),
       susceptibility: susceptibility.length ? susceptibility : null,
+      overlap: finiteNumber(item?.overlap_score ?? item?.overlapScore ?? item?.overlap),
     });
   });
 
@@ -948,6 +952,7 @@ export function buildFmrPeakTableModel({
       phaseRad: null,
       source: "modal" as const,
       validationStatus: "unavailable" as const,
+      overlap: null,
     })),
     ...localResponsePeaks(response.points).map((point) => ({
       absorbedPowerDensity: point.absorbedPowerDensity,
@@ -961,6 +966,7 @@ export function buildFmrPeakTableModel({
       phaseRad: point.phaseRad,
       source: "driven_response" as const,
       validationStatus: "unavailable" as const,
+      overlap: point.overlap,
     })),
   ].sort((left, right) => left.frequencyHz - right.frequencyHz);
 
@@ -1370,4 +1376,63 @@ function maxAbsSusceptibility(values: readonly number[] | null): number | null {
     maxValue = maxValue == null ? absValue : Math.max(maxValue, absValue);
   }
   return maxValue;
+}
+
+export function calculateSpatialOverlap(
+  drivenField: DecodedComplexFieldVector | null | undefined,
+  modalField: DecodedComplexFieldVector | null | undefined,
+  massWeights: Float64Array | number[] | null | undefined,
+): number | null {
+  if (!drivenField || !modalField) {
+    return null;
+  }
+  const pointCount = Math.min(drivenField.pointCount, modalField.pointCount);
+  if (pointCount === 0) {
+    return null;
+  }
+  const uComp = drivenField.componentCount;
+  const vComp = modalField.componentCount;
+  const compCount = Math.min(uComp, vComp);
+
+  let sumReal = 0;
+  let sumImag = 0;
+  let normUSq = 0;
+  let normVSq = 0;
+
+  for (let e = 0; e < pointCount; e++) {
+    const w = massWeights && e < massWeights.length ? massWeights[e] ?? 1.0 : 1.0;
+    let dotReal = 0;
+    let dotImag = 0;
+    let uSq = 0;
+    let vSq = 0;
+
+    for (let c = 0; c < compCount; c++) {
+      const uRealIdx = (e * uComp + c) * 2;
+      const uImagIdx = uRealIdx + 1;
+      const vRealIdx = (e * vComp + c) * 2;
+      const vImagIdx = vRealIdx + 1;
+
+      const ur = drivenField.values[uRealIdx] ?? 0;
+      const ui = drivenField.values[uImagIdx] ?? 0;
+      const vr = modalField.values[vRealIdx] ?? 0;
+      const vi = modalField.values[vImagIdx] ?? 0;
+
+      dotReal += ur * vr + ui * vi;
+      dotImag += ur * vi - ui * vr;
+      uSq += ur * ur + ui * ui;
+      vSq += vr * vr + vi * vi;
+    }
+
+    sumReal += w * dotReal;
+    sumImag += w * dotImag;
+    normUSq += w * uSq;
+    normVSq += w * vSq;
+  }
+
+  if (normUSq <= 0 || normVSq <= 0) {
+    return 0;
+  }
+
+  const overlap = Math.sqrt(sumReal * sumReal + sumImag * sumImag) / (Math.sqrt(normUSq) * Math.sqrt(normVSq));
+  return Math.min(1.0, Math.max(0.0, overlap));
 }

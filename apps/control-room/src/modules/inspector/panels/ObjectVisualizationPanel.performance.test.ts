@@ -53,6 +53,21 @@ describe("ObjectVisualizationPanel performance contracts", () => {
     expect(panelSource).toContain("onFieldCatalogRequest()");
   });
 
+  it("keeps target controls from patching the active analysis overlay", () => {
+    expect(panelSource).not.toContain("settingsWithAnalysisField");
+    expect(panelSource).not.toContain("analysisFieldOverlay.update");
+    expect(panelSource).not.toContain("analysisAppearancePatchFromVisualizationPatch");
+  });
+
+  it("can propagate object visualization edits to child region targets", () => {
+    expect(panelSource).toContain("resolveObjectChildRegionVisualizationTargets");
+    expect(panelSource).toContain("patchChildRegions");
+    expect(panelSource).toContain("Apply edits to child regions");
+    expect(panelSource).toContain("patchTargets");
+    expect(panelSource).toContain("Clear child region overrides");
+    expect(panelSource).toContain("resetChildRegionTargets");
+  });
+
   it("renders the airbox synthetic vector developer toggle locally", () => {
     expect(panelSource).toContain('label="Dev fallback +Z"');
     expect(panelSource).toContain("airboxSyntheticVectorsEnabled");

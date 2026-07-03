@@ -33,6 +33,7 @@ import {
   formatFrequencyHz,
   formatFrequencyRangeBoundsHz,
 } from "@/shared/domain/analysis/frequencyUnits";
+import type { AnalysisFieldOverlayState } from "@/kernel/visualization/AnalysisFieldOverlayController";
 
 import type { ExplorerNode, ExplorerNodeStatus } from "../explorerTypes";
 
@@ -66,6 +67,7 @@ export interface ExplorerTreeResources {
   frequencyDomainResponseProgress?: FrequencyDomainSweepProgressResource | null;
   frequencyDomainResponseSweep?: FrequencyDomainJsonArtifactResource | null;
   frequencyDomainSpectrum?: FrequencyDomainJsonArtifactResource | null;
+  activeAnalysisFieldOverlay?: AnalysisFieldOverlayState | null;
 }
 
 export function buildFrequencyDomainResultNode(
@@ -74,6 +76,7 @@ export function buildFrequencyDomainResultNode(
   dispersion?: FrequencyDomainTextArtifactResource | null,
   responseSweep?: FrequencyDomainJsonArtifactResource | null,
   spectrum?: FrequencyDomainJsonArtifactResource | null,
+  activeAnalysisFieldOverlay?: AnalysisFieldOverlayState | null,
 ): ExplorerNode {
   const status: ExplorerNodeStatus = manifest ? "ready" : "stale";
   const parentId = "results:frequency-domain";
@@ -145,6 +148,7 @@ export function buildFrequencyDomainResultNode(
             responseSweep,
             spectrum,
             status,
+            activeAnalysisFieldOverlay,
           })
         : null,
       dispersionModel.points.length > 0 || branchesModel.branches.length > 0
@@ -176,10 +180,22 @@ export function buildFrequencyDomainResultNode(
           } satisfies ExplorerNode
         : null,
       hasEigenResults
-        ? buildEigenResultNode(manifest, parentId, branches, dispersion, spectrum)
+        ? buildEigenResultNode(
+            manifest,
+            parentId,
+            branches,
+            dispersion,
+            spectrum,
+            activeAnalysisFieldOverlay,
+          )
         : null,
       hasResponseResults
-        ? buildFrequencyResponseResultNode(manifest, parentId, responseSweep)
+        ? buildFrequencyResponseResultNode(
+            manifest,
+            parentId,
+            responseSweep,
+            activeAnalysisFieldOverlay,
+          )
         : null,
       fmrPeaks.peaks.some((peak) => peak.source === "modal") &&
       fmrPeaks.peaks.some((peak) => peak.source === "driven_response")
@@ -375,12 +391,14 @@ function buildEigenKPathNode({
 }
 
 function buildFrequencyDomainFmrNode({
+  activeAnalysisFieldOverlay,
   manifest,
   parentId,
   responseSweep,
   spectrum,
   status,
 }: {
+  activeAnalysisFieldOverlay?: AnalysisFieldOverlayState | null;
   manifest: FrequencyDomainManifestResource | null | undefined;
   parentId: string;
   responseSweep: FrequencyDomainJsonArtifactResource | null | undefined;
@@ -454,6 +472,7 @@ function buildFrequencyDomainFmrNode({
                 : undefined,
             status: "ready",
             children: buildFmrPeakNodes({
+              activeAnalysisFieldOverlay,
               parentId: `${parentId}:fmr:peaks`,
               peaks: fmrPeaks.peaks,
               responseSweep,
@@ -466,11 +485,13 @@ function buildFrequencyDomainFmrNode({
 }
 
 function buildFmrPeakNodes({
+  activeAnalysisFieldOverlay,
   parentId,
   peaks,
   responseSweep,
   spectrum,
 }: {
+  activeAnalysisFieldOverlay?: AnalysisFieldOverlayState | null;
   parentId: string;
   peaks: ReturnType<typeof buildFmrPeakTableModel>["peaks"];
   responseSweep: FrequencyDomainJsonArtifactResource | null | undefined;
@@ -479,7 +500,13 @@ function buildFmrPeakNodes({
   return peaks.map((peak, index) => {
     const isModal = peak.source === "modal";
     const hasField = peak.fieldId != null;
+    const activeAnalysisField = isActiveAnalysisField(
+      activeAnalysisFieldOverlay,
+      peak.fieldId,
+      isModal ? "eigen-mode" : "frequency-response",
+    );
     return {
+      activeAnalysisField,
       artifactPath: isModal
         ? spectrum?.artifact_path ?? undefined
         : responseSweep?.artifact_path ?? undefined,
@@ -516,9 +543,14 @@ function buildEigenResultNode(
   branches: FrequencyDomainJsonArtifactResource | null | undefined,
   dispersion: FrequencyDomainTextArtifactResource | null | undefined,
   spectrum: FrequencyDomainJsonArtifactResource | null | undefined,
+  activeAnalysisFieldOverlay?: AnalysisFieldOverlayState | null,
 ): ExplorerNode {
   const parentId = "results:eigen";
-  const modeNodes = buildEigenModeNodes(`${parentId}:modes`, spectrum);
+  const modeNodes = buildEigenModeNodes(
+    `${parentId}:modes`,
+    spectrum,
+    activeAnalysisFieldOverlay,
+  );
   const branchesModel = buildEigenBranchesModel(branches);
   const dispersionModel = buildEigenDispersionChartModel(
     dispersion,
@@ -528,6 +560,7 @@ function buildEigenResultNode(
   const modeVisualizationNode = buildEigenModesVisualizationNode(
     `${parentId}:modes`,
     spectrumModel,
+    activeAnalysisFieldOverlay,
   );
   return {
     id: parentId,
@@ -646,13 +679,20 @@ function buildEigenBranchesNode({
 function buildEigenModeNodes(
   parentId: string,
   spectrum: FrequencyDomainJsonArtifactResource | null | undefined,
+  activeAnalysisFieldOverlay?: AnalysisFieldOverlayState | null,
 ): ExplorerNode[] {
   const model = buildEigenSpectrumChartModel(spectrum);
   return model.points.slice(0, 64).map((point) => {
     const modeIndex = point.rawModeIndex;
     const sampleIndex = point.sampleIndex;
     const hasModeField = point.modeFieldId != null;
+    const activeAnalysisField = isActiveAnalysisField(
+      activeAnalysisFieldOverlay,
+      point.modeFieldId,
+      "eigen-mode",
+    );
     return {
+      activeAnalysisField,
       id: `results:eigen:sample:${sampleIndex}:mode:${modeIndex}`,
       kind: "results.eigen.mode",
       label: `Sample ${sampleIndex} Mode ${modeIndex}`,
@@ -674,6 +714,7 @@ function buildEigenModeNodes(
 function buildEigenModesVisualizationNode(
   parentId: string,
   spectrumModel: ReturnType<typeof buildEigenSpectrumChartModel>,
+  activeAnalysisFieldOverlay?: AnalysisFieldOverlayState | null,
 ): ExplorerNode | null {
   const modeFieldPoints = spectrumModel.points.filter(
     (point) => point.modeFieldId != null,
@@ -687,6 +728,11 @@ function buildEigenModesVisualizationNode(
     parentId,
     badge: `${modeFieldPoints.length} mode field(s)`,
     contextCommands: EIGEN_MODE_FIELD_3D_COMMANDS,
+    activeAnalysisField: isActiveAnalysisField(
+      activeAnalysisFieldOverlay,
+      firstModeField.modeFieldId,
+      "eigen-mode",
+    ),
     fieldId: firstModeField.modeFieldId ?? undefined,
     icon: "wave",
     resourceRef:
@@ -700,6 +746,7 @@ function buildFrequencyResponseResultNode(
   manifest: FrequencyDomainManifestResource | null | undefined,
   familyParentId: string,
   responseSweep: FrequencyDomainJsonArtifactResource | null | undefined,
+  activeAnalysisFieldOverlay?: AnalysisFieldOverlayState | null,
 ): ExplorerNode {
   const parentId = "results:frequency-response";
   const progress = manifest?.response_progress;
@@ -714,6 +761,7 @@ function buildFrequencyResponseResultNode(
     manifest,
     responseSweep,
     progress?.completed_frequency_points ?? 0,
+    activeAnalysisFieldOverlay,
   );
   return {
     id: parentId,
@@ -845,6 +893,7 @@ function buildResponseFrequencyPointNodes(
   manifest: FrequencyDomainManifestResource | null | undefined,
   responseSweep: FrequencyDomainJsonArtifactResource | null | undefined,
   completedFrequencyPoints: number,
+  activeAnalysisFieldOverlay?: AnalysisFieldOverlayState | null,
 ): ExplorerNode[] {
   const model = buildFrequencyResponseChartModel(responseSweep);
   const fieldResources = responseFieldResourceMap(manifest);
@@ -870,6 +919,7 @@ function buildResponseFrequencyPointNodes(
         frequencyHz: point.frequencyHz,
         frequencyIndex,
         parentId,
+        activeAnalysisFieldOverlay,
       }),
     );
   }
@@ -881,17 +931,20 @@ function buildResponseFrequencyPointNodes(
       fieldResources,
       frequencyIndex,
       parentId,
+      activeAnalysisFieldOverlay,
     }),
   );
 }
 
 function responseFrequencyPointNode({
+  activeAnalysisFieldOverlay,
   badge,
   fieldResources,
   frequencyHz,
   frequencyIndex,
   parentId,
 }: {
+  activeAnalysisFieldOverlay?: AnalysisFieldOverlayState | null;
   badge: string;
   fieldResources: Map<number, string>;
   frequencyHz?: number;
@@ -906,6 +959,11 @@ function responseFrequencyPointNode({
     kind: "results.frequency_response.frequency_point",
     label,
     parentId,
+    activeAnalysisField: isActiveAnalysisField(
+      activeAnalysisFieldOverlay,
+      fieldId,
+      "frequency-response",
+    ),
     badge,
     contextCommands: fieldId ? FREQUENCY_RESPONSE_FIELD_3D_COMMANDS : undefined,
     fieldId: fieldId ?? undefined,
@@ -918,6 +976,7 @@ function responseFrequencyPointNode({
 
 export function buildFrequencyDomainResourceNodes(
   manifest: FrequencyDomainManifestResource | null | undefined,
+  activeAnalysisFieldOverlay?: AnalysisFieldOverlayState | null,
 ): ExplorerNode[] {
   const parentId = "resources:analysis:frequency-domain";
   const status: ExplorerNodeStatus = manifest ? "ready" : "stale";
@@ -989,7 +1048,14 @@ export function buildFrequencyDomainResourceNodes(
         eigenResourceNode(parentId, "dispersion", "Eigen Dispersion", "wave", manifest),
         eigenResourceNode(parentId, "diagnostics", "Eigen Diagnostics", "gauge", manifest),
         eigenResourceNode(parentId, "mode-metadata", "Mode Metadata", "file", manifest),
-        eigenResourceNode(parentId, "mode-field", "Mode Fields", "wave", manifest),
+        eigenResourceNode(
+          parentId,
+          "mode-field",
+          "Mode Fields",
+          "wave",
+          manifest,
+          activeAnalysisFieldOverlay,
+        ),
         responseResourceNode(parentId, "sweep", "Response Sweep", "wave", manifest),
         responseResourceNode(
           parentId,
@@ -998,7 +1064,14 @@ export function buildFrequencyDomainResourceNodes(
           "layers",
           manifest,
         ),
-        responseResourceNode(parentId, "field", "Response Fields", "wave", manifest),
+        responseResourceNode(
+          parentId,
+          "field",
+          "Response Fields",
+          "wave",
+          manifest,
+          activeAnalysisFieldOverlay,
+        ),
         responseResourceNode(
           parentId,
           "observables",
@@ -1078,6 +1151,7 @@ function eigenResourceNode(
   label: string,
   icon: ExplorerNode["icon"],
   manifest: FrequencyDomainManifestResource | null | undefined,
+  activeAnalysisFieldOverlay?: AnalysisFieldOverlayState | null,
 ): ExplorerNode | null {
   const suffix = key.replace("-", "_");
   if (key === "mode-metadata") {
@@ -1121,6 +1195,10 @@ function eigenResourceNode(
       kind: `resources.analysis.eigen.${suffix}` as ExplorerNode["kind"],
       label,
       parentId,
+      activeAnalysisField: isActiveAnalysisSource(
+        activeAnalysisFieldOverlay,
+        "eigen-mode",
+      ),
       badge:
         ready
           ? `${resources.length} mode fields`
@@ -1215,6 +1293,7 @@ function responseResourceNode(
   label: string,
   icon: ExplorerNode["icon"],
   manifest: FrequencyDomainManifestResource | null | undefined,
+  activeAnalysisFieldOverlay?: AnalysisFieldOverlayState | null,
 ): ExplorerNode | null {
   const suffix = key.replace("-", "_");
   if (key === "frequency-point") {
@@ -1256,6 +1335,10 @@ function responseResourceNode(
       kind: `resources.analysis.frequency_response.${suffix}` as ExplorerNode["kind"],
       label,
       parentId,
+      activeAnalysisField: isActiveAnalysisSource(
+        activeAnalysisFieldOverlay,
+        "frequency-response",
+      ),
       badge:
         fieldResources.length > 0
           ? `${fieldResources.length} response fields`
@@ -1411,6 +1494,25 @@ function responseFieldId(
   frequencyIndex: number,
 ): string | null {
   return fieldResources.get(frequencyIndex) ?? null;
+}
+
+function isActiveAnalysisField(
+  activeAnalysisFieldOverlay: AnalysisFieldOverlayState | null | undefined,
+  fieldId: string | null | undefined,
+  source: AnalysisFieldOverlayState["source"],
+): boolean {
+  return (
+    Boolean(fieldId) &&
+    activeAnalysisFieldOverlay?.fieldId === fieldId &&
+    activeAnalysisFieldOverlay?.source === source
+  );
+}
+
+function isActiveAnalysisSource(
+  activeAnalysisFieldOverlay: AnalysisFieldOverlayState | null | undefined,
+  source: AnalysisFieldOverlayState["source"],
+): boolean {
+  return activeAnalysisFieldOverlay?.source === source;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

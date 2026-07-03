@@ -328,7 +328,8 @@ function modeVisualizationFieldNode(
     kind: "object.mode_visualization.field",
     label: field.label,
     parentId,
-    badge: active ? "active" : field.badge,
+    activeAnalysisField: active,
+    badge: field.badge,
     analysisFieldSource: field.source,
     fieldId: field.fieldId,
     ...(field.frequencyIndex !== undefined
@@ -361,7 +362,7 @@ function modeVisualizationViewNode(
     kind: "object.mode_visualization.view",
     label: modeVisualizationViewLabel(view),
     parentId,
-    badge: active ? "active" : undefined,
+    activeAnalysisField: active,
     analysisFieldSource: field.source,
     analysisFieldView: view,
     fieldId: field.fieldId,
@@ -1026,7 +1027,10 @@ export function buildExplorerTree(
       {
         ...branch("resources:root", "Session Resources", "resources.root"),
         children: [
-          ...buildFrequencyDomainResourceNodes(resources.frequencyDomainManifest),
+          ...buildFrequencyDomainResourceNodes(
+            resources.frequencyDomainManifest,
+            resources.activeAnalysisFieldOverlay,
+          ),
           {
             id: "resources:fields",
             kind: "resources.field",
@@ -1061,6 +1065,7 @@ export function buildExplorerTree(
             resources.frequencyDomainDispersion,
             resources.frequencyDomainResponseSweep,
             resources.frequencyDomainSpectrum,
+            resources.activeAnalysisFieldOverlay,
           ),
           {
             id: "results:field:m",

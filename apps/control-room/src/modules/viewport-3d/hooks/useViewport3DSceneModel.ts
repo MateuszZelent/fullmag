@@ -440,10 +440,13 @@ export function mergeViewport3DPrimaryTargetFieldBuffers({
     }
 
     const settings = getPartSettings(partModel.part);
+    const primaryFieldAppliesToPart =
+      isAnalysisFieldQuantityId(primaryFieldQuantityId) ||
+      sameViewport3DQuantityId(settings.activeQuantityId, primaryFieldQuantityId);
     if (
       !settings.visible ||
       (!settings.shaderVisible && !settings.vectorsVisible) ||
-      !sameViewport3DQuantityId(settings.activeQuantityId, primaryFieldQuantityId)
+      !primaryFieldAppliesToPart
     ) {
       continue;
     }
@@ -1146,15 +1149,16 @@ export function resolveViewport3DPartVisualizationSettings({
     visualizationState: renderingState,
   });
   if (!regionTarget) return objectVisualization.effectiveSettings;
-  if (!objectVisualizationSnapshot.overrides[visualizationTargetKey(regionTarget)]) {
-    return objectVisualization.effectiveSettings;
-  }
-  return resolveTargetVisualization({
+  const regionVisualization = resolveTargetVisualization({
     inheritedSettings: objectVisualization.settings,
     snapshot: objectVisualizationSnapshot,
     target: regionTarget,
     visualizationState: renderingState,
-  }).effectiveSettings;
+  });
+  if (!regionVisualization.override) {
+    return objectVisualization.effectiveSettings;
+  }
+  return regionVisualization.effectiveSettings;
 }
 
 export function resolveViewport3DRegionSelectionBounds(
@@ -1568,6 +1572,8 @@ export function resolveViewport3DPrimaryFieldRenderOptions({
     );
     if (!settings.visible) {
       partVectorBudgets.delete(partId);
+      partScalarColorModes.delete(partId);
+      partScalarColorPalettes.delete(partId);
       continue;
     }
     const partUsesPrimaryQuantity = sameViewport3DQuantityId(
@@ -2223,9 +2229,6 @@ export function useViewport3DSceneModel({
 
     return transforms;
   }, [scene.data]);
-  const regionTargetByPartId = useMemo(() => {
-    return resolveViewport3DRegionTargetByPartId(sharedDomainManifest.data?.regions);
-  }, [sharedDomainManifest.data?.regions]);
   const meshBackedRegionKeys = useMemo(
     () => resolveViewport3DMeshBackedRegionKeys(sharedDomainManifest.data?.regions),
     [sharedDomainManifest.data?.regions],
@@ -2238,6 +2241,16 @@ export function useViewport3DSceneModel({
         scene: scene.data,
       }),
     [modelRegions.data, objectTransformsById, scene.data],
+  );
+  const regionOverlays = useMemo<RegionOverlayInput[]>(
+    () =>
+      resolveViewport3DRegionOverlays({
+        objectTransformsById,
+        realizedRegionKeys: meshBackedRegionKeys,
+        regionResource: modelRegions.data,
+        scene: scene.data,
+      }),
+    [meshBackedRegionKeys, modelRegions.data, objectTransformsById, scene.data],
   );
   const topologyFreshness = useMemo(
     () =>
@@ -2291,6 +2304,20 @@ export function useViewport3DSceneModel({
         : { ownerParts: [], regions: [] },
     [allRegionOverlays, regionMemberships.data, topologyCurrent],
   );
+  const regionTargetByPartId = useMemo(() => {
+    const targets = resolveViewport3DRegionTargetByPartId(sharedDomainManifest.data?.regions);
+    for (const part of membershipRegionOverlays.ownerParts) {
+      if (!part.id || !part.object_id) continue;
+      const regionId = decodeURIComponent(part.id.substring("membership:".length));
+      const label = allRegionOverlays.find((r) => r.region_id === regionId)?.name ?? regionId;
+      targets.set(part.id, {
+        id: visualizationTargetIdForSceneObject(part.object_id, regionId),
+        kind: "region",
+        label,
+      });
+    }
+    return targets;
+  }, [sharedDomainManifest.data?.regions, membershipRegionOverlays.ownerParts, allRegionOverlays]);
   const meshRegionOverlays = useMemo(
     () => {
       if (!topologyCurrent) return [];
@@ -2313,7 +2340,6 @@ export function useViewport3DSceneModel({
     () => [...femDomain.magneticParts, ...membershipRegionOverlays.ownerParts],
     [femDomain.magneticParts, membershipRegionOverlays.ownerParts],
   );
-  const regionOverlays = allRegionOverlays;
   const currentTopologyRenderModel = topologyRenderable ? topologyRenderModel : null;
   const clipCrossSectionQuery = useMemo(() => {
     const query = resolveCrossSectionQueryFromVisualizationState(renderingState);
@@ -3409,6 +3435,10 @@ export function useViewport3DSceneModel({
             scalarRangesByMode: fieldScalarRangesByMode,
             targetVisualizationRevision: renderingState?.revision ?? null,
             topologyRevision: topology.revision,
+            wavevectorKf: analysisOverlay?.wavevectorKf,
+            cellOrigin: analysisOverlay?.cellOrigin,
+            floquetSpatialConvention: analysisOverlay?.floquetSpatialConvention,
+            phasorConvention: analysisOverlay?.phasorConvention,
           },
         ),
     );
@@ -3432,6 +3462,10 @@ export function useViewport3DSceneModel({
     topology.revision,
     vectorColorMode,
     vectorScale,
+    analysisOverlay?.cellOrigin,
+    analysisOverlay?.floquetSpatialConvention,
+    analysisOverlay?.phasorConvention,
+    analysisOverlay?.wavevectorKf,
   ]);
   const selectedLabel = selection.label ?? "No selection";
   const status =

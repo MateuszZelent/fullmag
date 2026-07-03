@@ -18,7 +18,7 @@ function commandRegistry(): CommandRegistry {
 }
 
 describe("analysis field overlay commands", () => {
-  it("plots an eigen mode field through the shared overlay controller", async () => {
+  it("plots an eigen mode field through the shared analysis field controller", async () => {
     const commands = commandRegistry();
     const overlay = new AnalysisFieldOverlayController();
 
@@ -375,7 +375,7 @@ describe("analysis field overlay commands", () => {
     });
   });
 
-  it("updates the active frequency-domain overlay appearance", async () => {
+  it("updates the active frequency-domain field appearance", async () => {
     const commands = commandRegistry();
     const overlay = new AnalysisFieldOverlayController();
     overlay.set({
@@ -409,7 +409,7 @@ describe("analysis field overlay commands", () => {
     });
   });
 
-  it("updates mode overlay display passes and vector scope appearance", async () => {
+  it("updates mode field display passes and vector scope appearance", async () => {
     const commands = commandRegistry();
     const overlay = new AnalysisFieldOverlayController();
     overlay.set({
@@ -622,7 +622,7 @@ describe("analysis field overlay commands", () => {
     },
   );
 
-  it("rejects local tangent-space response payloads for 3D spatial overlays", async () => {
+  it("rejects local tangent-space response payloads for 3D spatial fields", async () => {
     const commands = commandRegistry();
     const overlay = new AnalysisFieldOverlayController();
 
@@ -647,7 +647,7 @@ describe("analysis field overlay commands", () => {
     expect(overlay.getSnapshot()).toBeNull();
   });
 
-  it("gates eigen and response overlay commands by selected analysis field source", async () => {
+  it("gates eigen and response field commands by selected analysis field source", async () => {
     const commands = commandRegistry();
     const overlay = new AnalysisFieldOverlayController();
     const selection = new SelectionController(new EventBus<KernelEventMap>());
@@ -691,7 +691,7 @@ describe("analysis field overlay commands", () => {
     expect(result.message).toBe("Selected analysis field is not a modal eigen field.");
   });
 
-  it("gates response overlay commands away from selected eigen mode fields", () => {
+  it("gates response field commands away from selected eigen mode fields", () => {
     const commands = commandRegistry();
     const overlay = new AnalysisFieldOverlayController();
     const selection = new SelectionController(new EventBus<KernelEventMap>());
@@ -728,7 +728,7 @@ describe("analysis field overlay commands", () => {
     ).toBe(false);
   });
 
-  it("clears the active analysis overlay", async () => {
+  it("clears the active analysis field", async () => {
     const commands = commandRegistry();
     const overlay = new AnalysisFieldOverlayController();
     overlay.set({
@@ -1078,7 +1078,7 @@ describe("analysis field overlay commands", () => {
     );
 
     expect(result.status).toBe("failed");
-    expect(result.message).toBe("No eigen mode overlay is active.");
+    expect(result.message).toBe("No eigen mode field is active.");
     expect(overlay.getSnapshot()?.animation).toBeUndefined();
   });
 });

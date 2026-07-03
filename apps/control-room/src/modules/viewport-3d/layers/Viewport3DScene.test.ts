@@ -9,7 +9,6 @@ import {
   resolveViewport3DProjectionCameraClip,
   resolveViewport3DOrthographicCameraFrame,
   resolveViewport3DOrthographicZoom,
-  hasExplicitVisibleRegionSettings,
   resolveNextViewport3DModelLayerStage,
   resolveAuthoredRegionOverlayVisibility,
   resolveViewport3DModelLayerStageVisibility,
@@ -518,20 +517,18 @@ describe("Viewport3DScene region overlay visibility", () => {
     ).toBe(false);
   });
 
-  it("lets explicit inspector region visibility mount overlays even when global mode is off", () => {
+  it("does not let target region visibility mount diagnostic overlays while global mode is off", () => {
     expect(
       resolveAuthoredRegionOverlayVisibility({
-        explicitRegionSettingsVisible: true,
         hasMeshBackedRegionOverlays: false,
         overlayLayersEnabled: true,
         realizedBuildStatus: "disabled",
         regionOverlayMode: "off",
         stageVisible: true,
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       resolveAuthoredRegionOverlayVisibility({
-        explicitRegionSettingsVisible: true,
         hasMeshBackedRegionOverlays: false,
         overlayLayersEnabled: false,
         realizedBuildStatus: "disabled",
@@ -539,11 +536,29 @@ describe("Viewport3DScene region overlay visibility", () => {
         stageVisible: true,
       }),
     ).toBe(false);
+  });
+
+  it("does not treat inherited region visibility as a request for diagnostic overlays", () => {
     expect(
-      hasExplicitVisibleRegionSettings([
-        ["film:core", { visible: false } as never],
-        ["film:shell", { visible: true } as never],
-      ]),
-    ).toBe(true);
+      resolveAuthoredRegionOverlayVisibility({
+        hasMeshBackedRegionOverlays: false,
+        overlayLayersEnabled: true,
+        realizedBuildStatus: "disabled",
+        regionOverlayMode: "off",
+        stageVisible: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not let explicit inspector visibility duplicate mesh-backed region overlays", () => {
+    expect(
+      resolveAuthoredRegionOverlayVisibility({
+        hasMeshBackedRegionOverlays: true,
+        overlayLayersEnabled: true,
+        realizedBuildStatus: "ready",
+        regionOverlayMode: "auto",
+        stageVisible: true,
+      }),
+    ).toBe(false);
   });
 });

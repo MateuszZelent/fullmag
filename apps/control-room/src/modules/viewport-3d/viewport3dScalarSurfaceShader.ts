@@ -5,6 +5,11 @@ import {
   type Side,
 } from "three";
 
+import {
+  floquetPhaseAdapter,
+  phasorAdapter,
+} from "@/shared/domain/analysis/phasorConventionAdapter";
+
 import type { ScalarColorBuffer } from "./viewport3dFieldMapping";
 import {
   normalizeViewport3DColorPalette,
@@ -125,6 +130,13 @@ export function createScalarSurfaceShaderMaterial(
   const colorModeId = shaderColorModeId(buffer.colorMode);
   const orientationMode = colorModeId === 1;
   const complexMode = hasComplexShaderValues(buffer);
+  const spatialPhaseSign = buffer.floquetSpatialConvention
+    ? floquetPhaseAdapter(buffer.floquetSpatialConvention as Parameters<typeof floquetPhaseAdapter>[0]).spatialPhaseSign
+    : -1;
+  const temporalPhaseSign = buffer.phasorConvention
+    ? phasorAdapter(buffer.phasorConvention as Parameters<typeof phasorAdapter>[0]).phaseAnimationDirection
+    : 1;
+  const floquetActive = buffer.wavevectorKf ? 1 : 0;
   const material = new ShaderMaterial({
     depthTest: options.depthTest,
     depthWrite: options.depthWrite,
@@ -144,6 +156,11 @@ export function createScalarSurfaceShaderMaterial(
       fmPhaseRad: { value: finitePhaseRad(buffer.complexPhaseRad) ?? 0 },
       fmScalarMax: { value: buffer.range.max },
       fmScalarMin: { value: buffer.range.min },
+      fmWavevectorKf: { value: buffer.wavevectorKf ?? [0, 0, 0] },
+      fmCellOrigin: { value: buffer.cellOrigin ?? [0, 0, 0] },
+      fmSpatialPhaseSign: { value: spatialPhaseSign },
+      fmTemporalPhaseSign: { value: temporalPhaseSign },
+      fmFloquetActive: { value: floquetActive },
     },
     vertexShader: resolveSurfaceVertexShader(orientationMode, complexMode),
   });
@@ -175,12 +192,25 @@ export function updateScalarSurfaceShaderMaterial(
     material.needsUpdate = true;
   }
 
+  const spatialPhaseSign = buffer.floquetSpatialConvention
+    ? floquetPhaseAdapter(buffer.floquetSpatialConvention as Parameters<typeof floquetPhaseAdapter>[0]).spatialPhaseSign
+    : -1;
+  const temporalPhaseSign = buffer.phasorConvention
+    ? phasorAdapter(buffer.phasorConvention as Parameters<typeof phasorAdapter>[0]).phaseAnimationDirection
+    : 1;
+  const floquetActive = buffer.wavevectorKf ? 1 : 0;
+
   material.uniforms.fmColorModeId.value = nextColorModeId;
   material.uniforms.fmOpacity.value = opacity;
   material.uniforms.fmPaletteId.value = scalarPaletteId(buffer.colorPalette);
   material.uniforms.fmPhaseRad.value = finitePhaseRad(buffer.complexPhaseRad) ?? 0;
   material.uniforms.fmScalarMax.value = buffer.range.max;
   material.uniforms.fmScalarMin.value = buffer.range.min;
+  material.uniforms.fmWavevectorKf.value = buffer.wavevectorKf ?? [0, 0, 0];
+  material.uniforms.fmCellOrigin.value = buffer.cellOrigin ?? [0, 0, 0];
+  material.uniforms.fmSpatialPhaseSign.value = spatialPhaseSign;
+  material.uniforms.fmTemporalPhaseSign.value = temporalPhaseSign;
+  material.uniforms.fmFloquetActive.value = floquetActive;
 }
 
 function canApplyComplexShaderColorBuffer(
@@ -313,6 +343,11 @@ attribute vec3 ${VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE};
 attribute vec3 ${VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE};
 uniform int fmColorModeId;
 uniform float fmPhaseRad;
+uniform vec3 fmWavevectorKf;
+uniform vec3 fmCellOrigin;
+uniform float fmSpatialPhaseSign;
+uniform float fmTemporalPhaseSign;
+uniform int fmFloquetActive;
 varying float vScalarValue;
 
 float scalarFromVector(vec3 value) {
@@ -323,7 +358,11 @@ float scalarFromVector(vec3 value) {
 }
 
 void main() {
-  vec3 projected = ${VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE} * cos(fmPhaseRad) - ${VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE} * sin(fmPhaseRad);
+  float theta = fmTemporalPhaseSign * fmPhaseRad;
+  if (fmFloquetActive == 1) {
+    theta += fmSpatialPhaseSign * dot(fmWavevectorKf, position - fmCellOrigin);
+  }
+  vec3 projected = ${VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE} * cos(theta) - ${VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE} * sin(theta);
   vScalarValue = scalarFromVector(projected);
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }
@@ -333,10 +372,19 @@ const COMPLEX_ORIENTATION_SURFACE_VERTEX_SHADER = `
 attribute vec3 ${VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE};
 attribute vec3 ${VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE};
 uniform float fmPhaseRad;
+uniform vec3 fmWavevectorKf;
+uniform vec3 fmCellOrigin;
+uniform float fmSpatialPhaseSign;
+uniform float fmTemporalPhaseSign;
+uniform int fmFloquetActive;
 varying vec3 vVectorValue;
 
 void main() {
-  vVectorValue = ${VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE} * cos(fmPhaseRad) - ${VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE} * sin(fmPhaseRad);
+  float theta = fmTemporalPhaseSign * fmPhaseRad;
+  if (fmFloquetActive == 1) {
+    theta += fmSpatialPhaseSign * dot(fmWavevectorKf, position - fmCellOrigin);
+  }
+  vVectorValue = ${VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE} * cos(theta) - ${VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE} * sin(theta);
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }
 `;

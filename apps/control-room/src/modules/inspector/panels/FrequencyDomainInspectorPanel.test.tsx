@@ -244,6 +244,8 @@ vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({
   }),
 }));
 
+let mockManifestDiagnostics: unknown[] = [];
+
 vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
   useFrequencyDomainEigenBranchesResource: () => ({
     ...emptyResource,
@@ -524,10 +526,10 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
             reason: "Spectrum chart available",
             status: "ready",
           },
-          mode_3d_overlay: { reason: "3D overlay available", status: "ready" },
+          mode_3d_overlay: { reason: "3D field available", status: "ready" },
           mode_table: { reason: "Mode table available", status: "ready" },
           response_field_3d_overlay: {
-            reason: "Response overlay available",
+            reason: "Response field available",
             status: "ready",
           },
           response_sweep_chart: {
@@ -587,6 +589,7 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
         artifact_path: "frequency_domain/manifest.v1.json",
         missing_reason: null,
         payload: {
+          diagnostics: mockManifestDiagnostics,
           artifacts: {
             response_sweep_v2_path: "response/magnetic_response_sweep.v2.json",
           },
@@ -628,6 +631,10 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
             frequency_units: "Hz",
             normalization: "unit_l2",
             phase_convention: "exp_minus_i_omega_t",
+          },
+          excitation: {
+            field_au_per_m: [1.0, 0.0, 0.0],
+            phase_rad: 0.0,
           },
           validation: {
             dispersion_validation: {
@@ -1300,7 +1307,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Raw tangent encoding");
     expect(html).toContain("f64_interleaved_real_imag_tangent");
     expect(html).toContain("3D plot status");
-    expect(html).toContain("ready for spatial XYZ overlay");
+    expect(html).toContain("ready for spatial XYZ field");
   });
 
   it("renders selected response observable sweep details", () => {
@@ -1370,8 +1377,8 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Mean amplitude");
     expect(html).toContain("1.500");
     expect(html).toContain("Peak amplitude");
-    expect(html).toContain("Field overlays");
-    expect(html).toContain("1/1 point(s) overlay-ready");
+    expect(html).toContain("Field payloads");
+    expect(html).toContain("1/1 point(s) field-ready");
     expect(html).toContain("Selected Response Observable");
   });
 
@@ -1407,8 +1414,8 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("1 series");
     expect(html).toContain("Peak response");
     expect(html).toContain("9.5 GHz; amplitude 1.500");
-    expect(html).toContain("Field overlays");
-    expect(html).toContain("1/1 point(s) overlay-ready");
+    expect(html).toContain("Field payloads");
+    expect(html).toContain("1/1 point(s) field-ready");
     expect(html).toContain("Response series controls");
     expect(html).toContain("Amplitude, Phase, Absorbed power density, Max |susceptibility|");
     expect(html).toContain("Susceptibility component");
@@ -1451,7 +1458,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("9.5 GHz-9.5 GHz");
     expect(html).toContain("Amplitude range");
     expect(html).toContain("1.500-1.500");
-    expect(html).toContain("Field overlays");
+    expect(html).toContain("Field payloads");
     expect(html).toContain("2 manifest field(s), 1 sweep field(s)");
     expect(html).toContain("Progress state");
     expect(html).toContain("unavailable; 0/2");
@@ -1535,7 +1542,7 @@ describe("FrequencyDomainInspectorPanel", () => {
       "reference_cpu: reference_executable; production_cpu: partial_production_executable; production_cpu_gamma_k_path: partial_production_executable; production_gpu: unsupported; k_path: reference_executable; branch_tracking: reference_executable",
     );
     expect(html).toContain("Modal spectrum");
-    expect(html).toContain("2 mode(s), 2 field overlay(s)");
+    expect(html).toContain("2 mode(s), 2 field payload(s)");
     expect(html).toContain("Branch diagnostics");
     expect(html).toContain("1 branch(es), 2 tracked point(s)");
     expect(html).toContain("Solver model");
@@ -1972,7 +1979,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(eigenSampleHtml).toContain("k-path samples");
     expect(eigenSampleHtml).toContain("2 point(s)");
     expect(eigenSampleHtml).toContain("Mode fields");
-    expect(eigenSampleHtml).toContain("2 overlay-ready");
+    expect(eigenSampleHtml).toContain("2 field-ready");
     expect(responseFrequencyHtml).toContain("Response Frequency Solve Job");
     expect(responseFrequencyHtml).toContain("Frequency work units");
     expect(responseFrequencyHtml).toContain("1 point(s), 1 observable series");
@@ -2117,10 +2124,40 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(apiHtml).toContain("Response progress endpoint");
     expect(apiHtml).toContain(ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH);
     expect(visualizationHtml).toContain("Frequency-Domain Visualization Diagnostics");
-    expect(visualizationHtml).toContain("Mode overlays");
-    expect(visualizationHtml).toContain("2 mode field overlay(s)");
-    expect(visualizationHtml).toContain("Response overlays");
+    expect(visualizationHtml).toContain("Mode fields");
+    expect(visualizationHtml).toContain("2 mode field payload(s)");
+    expect(visualizationHtml).toContain("Response fields");
     expect(visualizationHtml).toContain("2 response field artifact(s)");
+  });
+
+  it("renders a DMI boundary warning alert when reported in diagnostics", () => {
+    mockManifestDiagnostics = [
+      {
+        id: "frequency_domain.dmi_boundary_condition_uncertain",
+        severity: "warning",
+        message: "Frequency-domain DMI boundary conditions are not yet fully resolved."
+      }
+    ];
+
+    const html = renderToStaticMarkup(
+      <FrequencyDomainOperatorDiagnosticInspectorPanel
+        selection={{
+          kind: "diagnostics.frequency_domain.operator",
+          label: "Operator",
+          moduleSource: "explorer",
+          nodeId: "diagnostics:frequency-domain:operator",
+          objectId: null,
+          ref: null,
+        }}
+      />
+    );
+
+    expect(html).toContain("DMI BC uncertain");
+    expect(html).toContain("Frequency-domain DMI boundary conditions are not yet fully resolved.");
+    expect(html).toContain("frequency_domain.dmi_boundary_condition_uncertain");
+
+    // Clean up
+    mockManifestDiagnostics = [];
   });
 
   it("reports accepted production CPU modal k-path diagnostics without a stale rejection reason", () => {
@@ -2269,12 +2306,12 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(spectrumHtml).toContain("Resource endpoint");
     expect(spectrumHtml).toContain(ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH);
     expect(spectrumHtml).toContain("Mode rows");
-    expect(spectrumHtml).toContain("2 mode(s), 2 field overlay(s)");
+    expect(spectrumHtml).toContain("2 mode(s), 2 field payload(s)");
     expect(modeFieldHtml).toContain("Eigen Mode Field Resource");
     expect(modeFieldHtml).toContain("Field payload contract");
     expect(modeFieldHtml).toContain("phase-rotated real / real / imag / abs / phase");
     expect(modeFieldHtml).toContain("Mode fields");
-    expect(modeFieldHtml).toContain("2 overlay-ready");
+    expect(modeFieldHtml).toContain("2 field-ready");
     expect(sweepHtml).toContain("Frequency Response Sweep Resource");
     expect(sweepHtml).toContain("Sweep endpoint");
     expect(sweepHtml).toContain(ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH);
@@ -2351,8 +2388,8 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(observablesHtml).toContain("Frequency Response Observables");
     expect(observablesHtml).toContain("Observable series");
     expect(observablesHtml).toContain("1 series: Amplitude");
-    expect(observablesHtml).toContain("Field overlays");
-    expect(observablesHtml).toContain("1/1 point(s) overlay-ready");
+    expect(observablesHtml).toContain("Field payloads");
+    expect(observablesHtml).toContain("1/1 point(s) field-ready");
     expect(periodicResourceHtml).toContain("Periodic/Floquet Pair Resource");
     expect(periodicResourceHtml).toContain("Pair count");
     expect(periodicResourceHtml).toContain("1 pair(s)");
@@ -2437,7 +2474,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Target");
     expect(html).toContain("Power density");
     expect(html).toContain("3D field");
-    expect(html).toContain("overlay-ready");
+    expect(html).toContain("field-ready");
     expect(html).toContain("mode field ready; driven field ready");
     expect(html).toContain("Frequency-domain FMR peak table");
     expect(html).toContain("<th>Q factor</th>");
@@ -2566,12 +2603,12 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("FMR Modal Spectrum Control");
     expect(html).toContain("Mode workflow");
     expect(html).toContain(
-      "modal k=0 eigenmodes -&gt; resonances -&gt; 3D mode overlay",
+      "modal k=0 eigenmodes -&gt; resonances -&gt; 3D mode field",
     );
     expect(html).toContain("Spectrum resource");
     expect(html).toContain(ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH);
     expect(html).toContain("Mode rows");
-    expect(html).toContain("2 modes, 2 3D overlays");
+    expect(html).toContain("2 modes, 2 3D fields");
     expect(html).toContain("Frequency span");
     expect(html).toContain("9.5 GHz-12 GHz");
     expect(html).toContain("Primary resonance");
@@ -2580,7 +2617,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("0/2 mode(s)");
     expect(html).toContain("Damping coverage");
     expect(html).toContain("0/2 mode(s)");
-    expect(html).toContain("Overlay readiness");
+    expect(html).toContain("Field readiness");
     expect(html).toContain("mode fields available");
     expect(html).toContain("Visualization style scope");
     expect(html).toContain(
@@ -2599,7 +2636,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Damping rate");
     expect(html).toContain("Tangent leakage");
     expect(html).toContain("Mode field");
-    expect(html).toContain("overlay-ready");
+    expect(html).toContain("field-ready");
     expect(html).toContain("Inspect");
     expect(html).toContain("mode 1: 9.5 GHz");
     expect(html).toContain("mode 2: 12 GHz");
@@ -2636,7 +2673,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Spectrum resource");
     expect(html).toContain(ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH);
     expect(html).toContain("Mode rows");
-    expect(html).toContain("2 mode(s), 2 field overlay(s)");
+    expect(html).toContain("2 mode(s), 2 field payload(s)");
     expect(html).toContain("Frequency range");
     expect(html).toContain("9.5 GHz-12 GHz");
     expect(html).toContain("Primary mode");
@@ -2646,7 +2683,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Residual coverage");
     expect(html).toContain("0/2 mode(s)");
     expect(html).toContain("3D workflow");
-    expect(html).toContain("select mode -&gt; plot phase-rotated real overlay");
+    expect(html).toContain("select mode -&gt; plot phase-rotated real field");
     expect(html).toContain("Capability summary");
     expect(html).toContain("reference_cpu: ready; mode_field_payload: ready");
     expect(html).toContain("Frequency-domain mode table");
@@ -2677,7 +2714,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Mode table resource");
     expect(html).toContain(ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH);
     expect(html).toContain("Mode table");
-    expect(html).toContain("2 mode(s), 2 overlay-ready");
+    expect(html).toContain("2 mode(s), 2 field-ready");
     expect(html).toContain("Frequency range");
     expect(html).toContain("9.5 GHz-12 GHz");
     expect(html).toContain("Default 3D action");
@@ -2719,7 +2756,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Active chart route");
     expect(html).toContain("fmr_response -&gt; response-sweep");
     expect(html).toContain("Modal spectrum");
-    expect(html).toContain("2 mode(s), 2 overlay-ready");
+    expect(html).toContain("2 mode(s), 2 field-ready");
     expect(html).toContain("Driven sweep");
     expect(html).toContain("1 frequency point(s), 1 observable series");
     expect(html).toContain("Peak comparison");
@@ -2829,9 +2866,11 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("0 Hz (0 Hz)");
     expect(html).toContain("Peak amplitude ratio");
     expect(html).toContain("not available");
-    expect(html).toContain("Modal overlay");
+    expect(html).toContain("Spatial overlap (eta_j)");
+    expect(html).toContain("degraded (field payload missing; request link)");
+    expect(html).toContain("Modal field");
     expect(html).toContain("analysis:eigen:sample-0000:mode-0001; mode field ready");
-    expect(html).toContain("Driven overlay");
+    expect(html).toContain("Driven field");
     expect(html).toContain("analysis:frequency-response:frequency-0000; response field ready");
     expect(html).toContain("Validation state");
     expect(html).toContain("unavailable modal, unavailable driven");
@@ -2839,7 +2878,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("modal-driven detuning");
     expect(html).toContain("Modal field");
     expect(html).toContain("Driven field");
-    expect(html).toContain("overlay-ready");
+    expect(html).toContain("field-ready");
     expect(html).toContain("mode field ready; driven field ready");
     expect(html).toContain("Amplitude ratio");
     expect(html).toContain("Field handoff");
@@ -2859,15 +2898,15 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain(ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH);
     expect(html).toContain(ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH);
     expect(html).toContain("FMR Comparison Actions");
-    expect(html).toContain("both overlays ready");
+    expect(html).toContain("both fields ready");
     expect(html).toContain("Modal target");
     expect(html).toContain("modal mode 1 9.5 GHz");
     expect(html).toContain("Driven target");
     expect(html).toContain("driven response 9.5 GHz");
     expect(html).toContain("Open modal mode");
     expect(html).toContain("Open driven point");
-    expect(html).toContain("Plot modal overlay");
-    expect(html).toContain("Plot driven overlay");
+    expect(html).toContain("Plot modal field");
+    expect(html).toContain("Plot driven field");
     expect(html).toContain('title="Plot the driven comparison field in 3D"');
     expect(html).not.toMatch(
       /disabled="" title="Plot the modal comparison field in 3D"/,
@@ -2911,7 +2950,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("1 branch(es), 2 tracked point(s)");
     expect(html).toContain("Primary branch");
     expect(html).toContain("acoustic; 12.5 GHz-13.1 GHz");
-    expect(html).toContain("Modal overlays");
+    expect(html).toContain("Modal fields");
     expect(html).toContain("2 mode field(s) available from modal spectrum");
     expect(html).toContain("Capability summary");
     expect(html).toContain(
@@ -2998,7 +3037,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Representative mode");
     expect(html).toContain("sample 0, mode 2, 12.5 GHz");
     expect(html).toContain("3D handoff");
-    expect(html).toContain("open representative mode and plot its field overlay");
+    expect(html).toContain("open representative mode and plot its field payload");
     expect(html).toContain("Branch resource");
     expect(html).toContain(ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH);
     expect(html).toContain("Tracked Branch Samples");
@@ -3127,10 +3166,16 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).not.toContain("12000000000 Hz");
     expect(html).toContain("Imaginary frequency");
     expect(html).toContain("-12 MHz");
+    expect(html).toContain("Decay rate (Gamma)");
+    expect(html).toContain("12 MHz");
+    expect(html).toContain("Linewidth (FWHM)");
+    expect(html).toContain("24 MHz");
+    expect(html).toContain("Q-factor");
+    expect(html).toContain("500");
     expect(html).toContain("Angular frequency");
     expect(html).toContain("7.540e+10 rad/s");
     expect(html).toContain("Mode field");
-    expect(html).toContain("analysis:eigen:sample-0000:mode-0002; overlay-ready");
+    expect(html).toContain("analysis:eigen:sample-0000:mode-0002; field-ready");
     expect(html).toContain("Mode field resource");
     expect(html).toContain(
       analysisFieldVectorResourceKey(
@@ -3148,7 +3193,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("3D workflow");
     expect(html).toContain("phasor reconstruction");
     expect(html).toContain("Eigen Mode 3D Visualization");
-    expect(html).toContain("3D overlay ready");
+    expect(html).toContain("3D field ready");
     expect(html).toContain("Field ID");
     expect(html).toContain("Default view");
     expect(html).toContain("Phase-rotated real");
@@ -3207,7 +3252,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain(ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH);
     expect(html).toContain("Frequency points");
     expect(html).toContain("1 points, 1 observable series");
-    expect(html).toContain("Response overlays");
+    expect(html).toContain("Response fields");
     expect(html).toContain("2 field artifacts");
     expect(html).toContain("Driven peak status");
     expect(html).toContain("1 driven peaks");
@@ -3230,7 +3275,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Susceptibility");
     expect(html).toContain("Residual");
     expect(html).toContain("Response field");
-    expect(html).toContain("overlay-ready");
+    expect(html).toContain("field-ready");
     expect(html).not.toContain("field missing");
     expect(html).toContain("Inspect");
     expect(html).toContain("FMR Response Point Table");
@@ -3280,13 +3325,13 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Absorbed power density");
     expect(html).toContain("42 W/m^3");
     expect(html).toContain("3D field");
-    expect(html).toContain("analysis:frequency-response:frequency-0001; overlay-ready");
+    expect(html).toContain("analysis:frequency-response:frequency-0001; field-ready");
     expect(html).toContain("Available field views");
     expect(html).toContain("phase_rotated_real");
     expect(html).toContain("Provenance");
     expect(html).toContain("drive_projected_absorption_proxy");
     expect(html).toContain("Response Point 3D Visualization");
-    expect(html).toContain("3D overlay ready");
+    expect(html).toContain("3D field ready");
     expect(html).toContain("Field ID");
     expect(html).toContain("Field resource");
     expect(html).toContain("Default view");
@@ -3382,10 +3427,10 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Active modal resonance");
     expect(html).toContain("mode 1 at 9.5 GHz");
     expect(html).toContain("Modal modes");
-    expect(html).toContain("2 modes, 2 field overlays");
+    expect(html).toContain("2 modes, 2 field payloads");
     expect(html).toContain("FMR peaks");
     expect(html).toContain("2 modal, 1 driven");
-    expect(html).toContain("Overlay readiness");
+    expect(html).toContain("Field readiness");
     expect(html).toContain("selected mode field ready");
     expect(html).toContain("Driven comparison");
     expect(html).toContain("response sweep available");
@@ -3646,7 +3691,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Supported driven workflows");
     expect(html).toContain("fmr_response, response_map");
     expect(html).toContain("Modal evidence");
-    expect(html).toContain("2 mode(s), 2 overlay-ready");
+    expect(html).toContain("2 mode(s), 2 field-ready");
     expect(html).toContain("Driven evidence");
     expect(html).toContain("1 response point(s), 1 observable series");
     expect(html).toContain("Response-map gate");
@@ -3693,7 +3738,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("FMR readiness");
     expect(html).toContain("2 modal mode(s), 1 driven point(s), 3 peak(s)");
     expect(html).toContain("Modal visualization");
-    expect(html).toContain("2 mode field overlay(s)");
+    expect(html).toContain("2 mode field payload(s)");
     expect(html).toContain("Driven visualization");
     expect(html).toContain("2 response field artifact(s)");
     expect(html).toContain("Frequency coverage");
@@ -3745,7 +3790,7 @@ describe("FrequencyDomainInspectorPanel", () => {
 
     expect(rootHtml).toContain("Eigen Results Overview");
     expect(rootHtml).toContain("Spectrum");
-    expect(rootHtml).toContain("2 mode(s), 2 field overlay(s)");
+    expect(rootHtml).toContain("2 mode(s), 2 field payload(s)");
     expect(rootHtml).toContain("Dispersion");
     expect(rootHtml).toContain("2 k-path point(s), 1 branch(es)");
     expect(rootHtml).toContain("3D handoff");
@@ -4268,7 +4313,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     [
       "results.frequency_domain.fmr_modal_spectrum",
       "FMR Modal Spectrum",
-      "modal resonance spectrum and mode overlay",
+      "modal resonance spectrum and mode field",
     ],
     [
       "results.frequency_domain.fmr_response_sweep",
@@ -4602,7 +4647,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     [
       "diagnostics.frequency_domain.visualization",
       "Visualization Diagnostic Detail",
-      "3D mode overlays, phase animation, and chart readiness",
+      "3D mode fields, phase animation, and chart readiness",
     ],
   ])(
     "renders a non-generic node detail for %s",

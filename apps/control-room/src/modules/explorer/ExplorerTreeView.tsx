@@ -342,9 +342,11 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
     <div
       className={[
         "fm-explorer-tree-row",
+        node.activeAnalysisField ? "fm-explorer-tree-row--active-analysis-field" : null,
         explorerStatusClassName(node.status),
       ].filter(Boolean).join(" ")}
       data-active={active}
+      data-active-analysis-field={node.activeAnalysisField ? "true" : undefined}
       data-node-id={node.id}
       data-status={statusLabel(node.status)}
       role="treeitem"
@@ -375,6 +377,9 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
       <span className="fm-explorer-tree-row__label">{node.label}</span>
       {node.status && node.status !== "ready" ? (
         <span className="fm-explorer-tree-row__status">{node.status}</span>
+      ) : null}
+      {node.activeAnalysisField ? (
+        <span className="fm-explorer-tree-row__active-field">active</span>
       ) : null}
       {node.badge ? (
         <span className="fm-explorer-tree-row__badge">{node.badge}</span>

@@ -767,20 +767,20 @@ describe("ribbon structure", () => {
     );
 
     expect(wireframeNode).toMatchObject({
-      checked: false,
+      checked: true,
       commandId: "visualization.target.set-wireframe-visible",
     });
     if (wireframeNode?.type !== "checkbox") {
       throw new Error("Expected selected region wireframe control");
     }
 
-    await runRibbonNode(wireframeNode, true, { ...context, selection });
+    await runRibbonNode(wireframeNode, false, { ...context, selection });
 
     expect(patches).toEqual([
       {
         overrides: [
           {
-            display: { wireframe: { visible: true } },
+            display: { wireframe: { visible: false } },
             scope: "region",
             scope_id: "region:free-layer:region%3Acore",
           },

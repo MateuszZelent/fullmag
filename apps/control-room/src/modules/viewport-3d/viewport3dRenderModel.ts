@@ -236,6 +236,10 @@ export interface Viewport3DFieldRenderOptions {
   topologyRevision?: string | number | null;
   vectorColorMode?: string;
   visualizationPhaseRad?: number | null;
+  wavevectorKf?: [number, number, number];
+  cellOrigin?: [number, number, number];
+  floquetSpatialConvention?: string;
+  phasorConvention?: string;
 }
 
 export type Viewport3DVectorAnchorMode = "center" | "tail";
@@ -701,6 +705,10 @@ export function buildViewport3DFieldRenderModel(
     fullFieldVector ? null : magneticFieldNodeIndices,
     topology.nodeCount,
     visualizationPhaseRad,
+    options.wavevectorKf,
+    options.cellOrigin,
+    options.floquetSpatialConvention,
+    options.phasorConvention,
   );
   const scalarColors =
     scalarColorsByMode.get(options.vectorColorMode ?? "magnitude") ?? null;
@@ -1379,6 +1387,10 @@ function attachComplexShaderValuesByMode(
   targetNodeIndices: Uint32Array | null,
   vertexCount: number,
   phaseRad: number | null,
+  wavevectorKf?: [number, number, number],
+  cellOrigin?: [number, number, number],
+  floquetSpatialConvention?: string,
+  phasorConvention?: string,
 ): void {
   if (!complexFieldVector || phaseRad === null) return;
   for (const buffer of scalarColorsByMode.values()) {
@@ -1388,6 +1400,10 @@ function attachComplexShaderValuesByMode(
       targetNodeIndices,
       vertexCount,
       phaseRad,
+      wavevectorKf,
+      cellOrigin,
+      floquetSpatialConvention,
+      phasorConvention,
     );
   }
 }
@@ -1398,6 +1414,10 @@ function attachComplexShaderValues(
   targetNodeIndices: Uint32Array | null,
   vertexCount: number,
   phaseRad: number,
+  wavevectorKf?: [number, number, number],
+  cellOrigin?: [number, number, number],
+  floquetSpatialConvention?: string,
+  phasorConvention?: string,
 ): void {
   if (!buffer || complexFieldVector.pointCount <= 0) return;
   const fullTopologyField = complexFieldVector.pointCount === vertexCount;
@@ -1441,6 +1461,10 @@ function attachComplexShaderValues(
   buffer.complexRealValues = complexRealValues;
   buffer.complexImagValues = complexImagValues;
   buffer.complexPhaseRad = phaseRad;
+  buffer.wavevectorKf = wavevectorKf;
+  buffer.cellOrigin = cellOrigin;
+  buffer.floquetSpatialConvention = floquetSpatialConvention;
+  buffer.phasorConvention = phasorConvention;
 }
 
 function isFullTopologyFieldVector(
