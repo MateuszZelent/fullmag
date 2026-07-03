@@ -62,17 +62,18 @@ body.mesh.thin_film(
     order=1,
 )
 
-# hole_transition = body.add_region(
-#     "hole_transition_refinement",
-#     fm.Cylinder(radius=43e-9, height=10e-9, name="hole_transition_refinement"),
-#     priority=10,
-# )
-# hole_transition.mesh(
-#     minimum_element_size=1e-9,
-#     maximum_element_size=54e-9,
-#     # transition_distance=14e-9,
-#     order=1,
-# )
+hole_transition = body.add_region(
+    "hole_transition_refinement",
+    fm.Cylinder(radius=43e-9, height=10e-9, name="hole_transition_refinement"),
+    priority=10,
+    realization_policy="conformal",
+)
+hole_transition.mesh(
+    minimum_element_size=0.15e-9,
+    maximum_element_size=1e-9,
+    transition_distance=10e-9,
+    order=1,
+)
 
 # hole_edge = body.add_region(
 #     "hole_edge_refinement",

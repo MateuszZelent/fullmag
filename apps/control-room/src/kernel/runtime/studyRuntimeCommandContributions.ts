@@ -190,6 +190,7 @@ function isStageControlCommandKind(kind: SimpleStudyRuntimeCommandKind): boolean
   return (
     kind === "pause" ||
     kind === "resume" ||
+    kind === "save_vtk" ||
     kind === "skip" ||
     kind === "stop"
   );
@@ -247,6 +248,10 @@ function runtimeCommandStateDisabledReason(
       return state === "running" ? null : "Runtime is not running.";
     case "resume":
       return state === "paused" ? null : "Runtime is not paused.";
+    case "save_vtk":
+      return state === "running" || state === "paused"
+        ? "Runtime is already active."
+        : null;
     case "stop":
       return state === "running" || state === "paused"
         ? null
@@ -293,6 +298,8 @@ function backendRuntimeControlReasonIsStateDerived(
     case "compute_fields":
     case "solve":
       return false;
+    case "save_vtk":
+      return reason === "Runtime is already active.";
   }
 }
 
@@ -788,6 +795,7 @@ function buildRuntimeCommandFromContext(
       options.target ??
       (kind === "pause" ||
       kind === "resume" ||
+      kind === "save_vtk" ||
       kind === "skip" ||
       kind === "stop"
         ? activeStageTarget(context)
@@ -1716,7 +1724,83 @@ function checkCapability(context: CommandContext, capability: string, actionName
   return null;
 }
 
+function plannedCommandMessage(title: string): string {
+  return `${title} is not implemented yet.`;
+}
+
+function plannedCommandDisabledReason(title: string): () => string {
+  return () => plannedCommandMessage(title);
+}
+
+function plannedCommandRun(title: string) {
+  return () => ({
+    message: plannedCommandMessage(title),
+    status: "failed" as const,
+  });
+}
+
+function kPathDisabledReason(context: CommandContext): string | null {
+  return (
+    checkCapability(context, "eigen_modes", "updating k-path") ??
+    plannedCommandMessage("Update k-Path")
+  );
+}
+
+function fieldCalculationDisabledReason(context: CommandContext): string | null {
+  return (
+    checkCapability(context, "binary_fields", "field calculation") ??
+    runtimeCommandDisabledReason(context, "compute_fields")
+  );
+}
+
+function studyNavigationCommand(
+  id: string,
+  title: string,
+  kind: "study.root" | "study.stages",
+  label: string,
+  nodeId: string,
+): CommandContribution {
+  return {
+    id,
+    title,
+    category: "Study",
+    group: "study-navigation",
+    scope: "workspace",
+    run: (context) => {
+      context.selection?.set(
+        {
+          kind,
+          label,
+          nodeId,
+          objectId: null,
+          ref: {
+            kind,
+            nodeId,
+            type: "study",
+          },
+        },
+        "ribbon",
+      );
+      return { status: "completed" };
+    },
+  };
+}
+
 export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
+  studyNavigationCommand(
+    "study.open-overview",
+    "Open Study Overview",
+    "study.root",
+    "Study",
+    "model:study",
+  ),
+  studyNavigationCommand(
+    "study.open-stages",
+    "Open Study Stages",
+    "study.stages",
+    "Stages",
+    "model:study:stages",
+  ),
   addStageCommand(
     "study.add-relax-stage",
     "Add Relax Stage",
@@ -1823,6 +1907,12 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
     "Skip Stage",
     "skip",
     "Skip stage command accepted.",
+  ),
+  runtimeCommand(
+    "study.save-vtk",
+    "Export VTK",
+    "save_vtk",
+    "VTK export command accepted.",
   ),
   {
     id: "study.discard-paused-state",
@@ -2440,13 +2530,9 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
     category: "Study",
     group: "study-runtime",
     scope: "workspace",
-    isEnabled: () => true,
-    run: async () => {
-      return {
-        status: "completed",
-        message: "Dynamics workbench opened.",
-      };
-    },
+    isEnabled: () => false,
+    disabledReason: plannedCommandDisabledReason("Open Dynamics Workbench"),
+    run: plannedCommandRun("Open Dynamics Workbench"),
   },
   {
     id: "study.plot-selected-mode",
@@ -2454,13 +2540,9 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
     category: "Study",
     group: "study-runtime",
     scope: "selection",
-    isEnabled: () => true,
-    run: async () => {
-      return {
-        status: "completed",
-        message: "Selected mode plotted.",
-      };
-    },
+    isEnabled: () => false,
+    disabledReason: plannedCommandDisabledReason("Plot Selected Mode"),
+    run: plannedCommandRun("Plot Selected Mode"),
   },
   {
     id: "study.plot-selected-response-field",
@@ -2468,13 +2550,9 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
     category: "Study",
     group: "study-runtime",
     scope: "selection",
-    isEnabled: () => true,
-    run: async () => {
-      return {
-        status: "completed",
-        message: "Selected response field plotted.",
-      };
-    },
+    isEnabled: () => false,
+    disabledReason: plannedCommandDisabledReason("Plot Selected Response Field"),
+    run: plannedCommandRun("Plot Selected Response Field"),
   },
   {
     id: "study.animate-phase",
@@ -2482,13 +2560,9 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
     category: "Study",
     group: "study-runtime",
     scope: "viewport",
-    isEnabled: () => true,
-    run: async () => {
-      return {
-        status: "completed",
-        message: "Phase animation started.",
-      };
-    },
+    isEnabled: () => false,
+    disabledReason: plannedCommandDisabledReason("Animate Phase"),
+    run: plannedCommandRun("Animate Phase"),
   },
   {
     id: "study.compare-selected-peak",
@@ -2496,13 +2570,9 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
     category: "Study",
     group: "study-runtime",
     scope: "selection",
-    isEnabled: () => true,
-    run: async () => {
-      return {
-        status: "completed",
-        message: "Peak comparison completed.",
-      };
-    },
+    isEnabled: () => false,
+    disabledReason: plannedCommandDisabledReason("Compare Selected Peak"),
+    run: plannedCommandRun("Compare Selected Peak"),
   },
   {
     id: "study.export-selected-metadata",
@@ -2510,13 +2580,9 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
     category: "Study",
     group: "study-runtime",
     scope: "selection",
-    isEnabled: () => true,
-    run: async () => {
-      return {
-        status: "completed",
-        message: "Selected metadata exported.",
-      };
-    },
+    isEnabled: () => false,
+    disabledReason: plannedCommandDisabledReason("Export Selected Metadata"),
+    run: plannedCommandRun("Export Selected Metadata"),
   },
   {
     id: "study.trigger-field-calculation",
@@ -2524,14 +2590,18 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
     category: "Study",
     group: "study-runtime",
     scope: "runtime",
-    isEnabled: (context) => checkCapability(context, "binary_fields", "field calculation") === null,
-    disabledReason: (context) => checkCapability(context, "binary_fields", "field calculation"),
-    run: async () => {
-      return {
-        status: "completed",
-        message: "Field calculation triggered.",
-      };
-    },
+    isEnabled: (context) =>
+      fieldCalculationDisabledReason(context) === null,
+    disabledReason: (context) => fieldCalculationDisabledReason(context),
+    isActive: (context) => isRuntimeCommandActive(context, "compute_fields"),
+    activeResource: (context) =>
+      activeRuntimeCommandResource(context, "compute_fields"),
+    run: (context) =>
+      submitRuntimeCommand(
+        context,
+        buildRuntimeCommandFromContext(context, "compute_fields"),
+        "Field calculation command accepted.",
+      ),
   },
   {
     id: "study.update-k-path",
@@ -2539,13 +2609,8 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
     category: "Study",
     group: "study-runtime",
     scope: "runtime",
-    isEnabled: (context) => checkCapability(context, "eigen_modes", "updating k-path") === null,
-    disabledReason: (context) => checkCapability(context, "eigen_modes", "updating k-path"),
-    run: async () => {
-      return {
-        status: "completed",
-        message: "k-path updated successfully.",
-      };
-    },
+    isEnabled: (context) => kPathDisabledReason(context) === null,
+    disabledReason: kPathDisabledReason,
+    run: plannedCommandRun("Update k-Path"),
   },
 ];

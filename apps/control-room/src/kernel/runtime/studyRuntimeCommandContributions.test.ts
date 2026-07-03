@@ -139,6 +139,10 @@ function studyStageSelection(stageIndex = 1, stageId = "run-2") {
   };
 }
 
+function selectionController() {
+  return new SelectionController(new EventBus<KernelEventMap>());
+}
+
 function runtimeResourceData({
   activeStageIndex = null,
   binaryFields = true,
@@ -268,6 +272,45 @@ function runtimeResourceData({
 }
 
 describe("study runtime command contributions", () => {
+  it("selects Study root and stages nodes from local navigation commands", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const selection = selectionController();
+
+    await expect(
+      registry.execute("study.open-overview", {
+        selection,
+        source: "test",
+      }),
+    ).resolves.toMatchObject({ status: "completed" });
+    expect(selection.get()).toMatchObject({
+      kind: "study.root",
+      label: "Study",
+      nodeId: "model:study",
+      ref: {
+        kind: "study.root",
+        nodeId: "model:study",
+        type: "study",
+      },
+    });
+
+    await expect(
+      registry.execute("study.open-stages", {
+        selection,
+        source: "test",
+      }),
+    ).resolves.toMatchObject({ status: "completed" });
+    expect(selection.get()).toMatchObject({
+      kind: "study.stages",
+      label: "Stages",
+      nodeId: "model:study:stages",
+      ref: {
+        kind: "study.stages",
+        nodeId: "model:study:stages",
+        type: "study",
+      },
+    });
+  });
+
   it("adds relax stages with mumax-compatible torque tolerance stored in A/m", async () => {
     const registry = registryWithStudyRuntimeCommands();
     const bus = new EventBus<KernelEventMap>();
@@ -1600,6 +1643,39 @@ describe("study runtime command contributions", () => {
     expect(resources.getRevision(PERSISTENCE_EXPORTS_PATH)).toBe("session-1");
   });
 
+  it("submits VTK export through the runtime command facade", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const submit = vi.fn(async () => ({
+      accepted: true,
+      command_id: "cmd-vtk",
+    }));
+
+    const result = await registry.execute("study.save-vtk", {
+      api: {
+        commands: { submit },
+      } as never,
+      resourceData: runtimeResourceData({
+        activeStageIndex: 1,
+        runtimeState: "idle",
+      }),
+      source: "test",
+    });
+
+    expect(result).toEqual({
+      message: "VTK export command accepted.",
+      status: "completed",
+    });
+    expect(submit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "save_vtk",
+        target: {
+          kind: "stage_id",
+          stage_id: "stage-001",
+        },
+      }),
+    );
+  });
+
   it("exports selected object field state through the persistence facade", async () => {
     const registry = registryWithStudyRuntimeCommands();
     const bus = new EventBus<KernelEventMap>();
@@ -2793,23 +2869,30 @@ describe("study runtime command contributions", () => {
   });
 
   describe("dynamics command contributions", () => {
-    it("handles presentation actions", async () => {
+    it("keeps presentation actions disabled until real command contracts exist", async () => {
       const registry = registryWithStudyRuntimeCommands();
       const context = {
         api: {} as never,
         source: "test" as const,
       };
+      const ids = [
+        "study.open-dynamics-workbench",
+        "study.plot-selected-mode",
+        "study.plot-selected-response-field",
+        "study.animate-phase",
+        "study.compare-selected-peak",
+        "study.export-selected-metadata",
+      ];
 
-      expect(registry.isEnabled("study.open-dynamics-workbench", context)).toBe(true);
-      expect(registry.isEnabled("study.plot-selected-mode", context)).toBe(true);
-      expect(registry.isEnabled("study.plot-selected-response-field", context)).toBe(true);
-      expect(registry.isEnabled("study.animate-phase", context)).toBe(true);
-      expect(registry.isEnabled("study.compare-selected-peak", context)).toBe(true);
-      expect(registry.isEnabled("study.export-selected-metadata", context)).toBe(true);
-
-      const res = await registry.get("study.open-dynamics-workbench")?.run(context);
-      expect(res?.status).toBe("completed");
-      expect(res?.message).toBe("Dynamics workbench opened.");
+      for (const id of ids) {
+        expect(registry.isEnabled(id, context), id).toBe(false);
+        expect(registry.get(id)?.disabledReason?.(context), id).toContain(
+          "is not implemented",
+        );
+        const res = await registry.get(id)?.run(context);
+        expect(res?.status, id).toBe("failed");
+        expect(res?.message, id).toContain("is not implemented");
+      }
     });
 
     it("handles gated authoring/transaction actions", async () => {
@@ -2845,27 +2928,41 @@ describe("study runtime command contributions", () => {
       expect(registry.get("study.update-k-path")?.disabledReason?.(context2)).toContain("does not support eigen_modes");
 
       // Case 3: Capabilities present
+      const submit = vi.fn(async () => ({
+        accepted: true,
+        command_id: "cmd-fields",
+        error: null,
+      }));
+      const context3ResourceData = runtimeResourceData();
+      const status = context3ResourceData[SESSION_STATUS_RESOURCE_KEY] as {
+        capabilities: Record<string, unknown>;
+      };
+      status.capabilities.eigen_modes = true;
       const context3 = {
-        api: {} as never,
-        resourceData: {
-          [SESSION_STATUS_RESOURCE_KEY]: {
-            capabilities: {
-              binary_fields: true,
-              eigen_modes: true,
-            },
-          },
-        },
+        api: {
+          commands: { submit },
+        } as never,
+        resourceData: context3ResourceData,
         source: "test" as const,
       };
       expect(registry.isEnabled("study.trigger-field-calculation", context3)).toBe(true);
       expect(registry.get("study.trigger-field-calculation")?.disabledReason?.(context3)).toBeNull();
-      expect(registry.isEnabled("study.update-k-path", context3)).toBe(true);
-      expect(registry.get("study.update-k-path")?.disabledReason?.(context3)).toBeNull();
+      expect(registry.isEnabled("study.update-k-path", context3)).toBe(false);
+      expect(registry.get("study.update-k-path")?.disabledReason?.(context3)).toBe("Update k-Path is not implemented yet.");
 
       const res1 = await registry.get("study.trigger-field-calculation")?.run(context3);
       expect(res1?.status).toBe("completed");
+      expect(res1?.message).toBe("Field calculation command accepted.");
+      expect(submit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "compute_fields",
+          reason: "user_requested",
+          target: { kind: "study" },
+        }),
+      );
       const res2 = await registry.get("study.update-k-path")?.run(context3);
-      expect(res2?.status).toBe("completed");
+      expect(res2?.status).toBe("failed");
+      expect(res2?.message).toBe("Update k-Path is not implemented yet.");
     });
   });
 });

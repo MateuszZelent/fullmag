@@ -14,7 +14,11 @@ import {
   RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND,
   visualizationTargetCommandInput,
 } from "./ribbonCommands";
-import { resolveRibbonIconColor, RibbonGroupsRow } from "./RibbonGroupsRow";
+import {
+  resolveRibbonActionTriggerState,
+  resolveRibbonIconColor,
+  RibbonGroupsRow,
+} from "./RibbonGroupsRow";
 import { RIBBON_TABS, type RibbonMenuNode } from "./ribbonTypes";
 import {
   MODEL_GEOMETRY_VALIDATION_PATH,
@@ -41,6 +45,12 @@ import {
   crossSectionWorkspaceStore,
   resetCrossSectionWorkspaceForTests,
 } from "@/kernel/workspace/crossSectionWorkspace";
+import { GEOMETRY_LIFECYCLE_COMMANDS } from "@/kernel/authoring/geometryLifecycleCommandContributions";
+import { MAGNETIZATION_TEXTURE_COMMANDS } from "@/kernel/authoring/magnetization-texture/commands";
+import { REGION_COMMANDS } from "@/kernel/authoring/regionCommandContributions";
+import { SHELL_COMMANDS } from "@/kernel/layout/shellCommands";
+import { ANALYSIS_FIELD_OVERLAY_COMMANDS } from "@/kernel/visualization/analysisFieldOverlayCommandContributions";
+import { ALL_MODULES } from "@/modules/registry";
 
 type DeepPartial<T> = {
   [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K];
@@ -50,6 +60,28 @@ function createRibbonCommandRegistry(): CommandRegistry {
   const registry = new CommandRegistry();
   for (const command of [...RIBBON_COMMANDS, ...VISUALIZATION_TARGET_COMMANDS]) {
     registry.register(command);
+  }
+  return registry;
+}
+
+function createControlRoomCommandRegistry(): CommandRegistry {
+  const registry = new CommandRegistry();
+  for (const command of [
+    ...SHELL_COMMANDS,
+    ...GEOMETRY_LIFECYCLE_COMMANDS,
+    ...STUDY_RUNTIME_COMMANDS,
+    ...MAGNETIZATION_TEXTURE_COMMANDS,
+    ...REGION_COMMANDS,
+    ...VISUALIZATION_TARGET_COMMANDS,
+    ...ANALYSIS_FIELD_OVERLAY_COMMANDS,
+    ...RIBBON_COMMANDS,
+  ]) {
+    if (!registry.get(command.id)) registry.register(command);
+  }
+  for (const manifest of ALL_MODULES) {
+    for (const command of manifest.contributes?.commands ?? []) {
+      if (!registry.get(command.id)) registry.register(command);
+    }
   }
   return registry;
 }
@@ -111,6 +143,87 @@ async function runRibbonNode(
   expect(result, result.message).toMatchObject({ status: "completed" });
 }
 
+function clickableRibbonCommandGaps(content: NonNullable<ReturnType<typeof buildRibbonTabContent>>, commands: CommandRegistry): string[] {
+  const gaps: string[] = [];
+
+  for (const group of content.groups) {
+    for (const action of group.actions) {
+      const actionPath = `${content.tabId}/${group.id}/${action.id}`;
+      const triggerState = resolveRibbonActionTriggerState({
+        disabled: action.disabled,
+        hasMenu: Boolean(action.menu?.length),
+        splitButton: action.splitButton,
+      });
+      if (
+        !triggerState.disabled &&
+        (triggerState.runsActionFromButton ||
+          triggerState.runsActionFromSplitBody)
+      ) {
+        const commandId = action.commandId ?? action.id;
+        if (!commands.get(commandId)) {
+          gaps.push(`${actionPath} -> ${commandId}`);
+        }
+      }
+      for (const gap of clickableRibbonMenuCommandGaps(
+        action.menu ?? [],
+        commands,
+        actionPath,
+        triggerState.disabled,
+      )) {
+        gaps.push(gap);
+      }
+    }
+  }
+
+  return gaps;
+}
+
+function clickableRibbonMenuCommandGaps(
+  nodes: readonly RibbonMenuNode[],
+  commands: CommandRegistry,
+  parentPath: string,
+  parentDisabled: boolean,
+): string[] {
+  if (parentDisabled) return [];
+  const gaps: string[] = [];
+
+  for (const node of nodes) {
+    const nodePath = `${parentPath}/${node.id}`;
+    if (node.type === "label" || node.type === "separator" || node.type === "status") {
+      continue;
+    }
+    if (node.type === "submenu") {
+      gaps.push(
+        ...clickableRibbonMenuCommandGaps(
+          node.nodes,
+          commands,
+          nodePath,
+          Boolean(node.disabled),
+        ),
+      );
+      continue;
+    }
+    if (node.type === "radio-group") {
+      if (node.disabled) continue;
+      for (const item of node.items) {
+        if (item.disabled) continue;
+        const commandId = item.commandId ?? node.commandId ?? node.id;
+        if (!commands.get(commandId)) {
+          gaps.push(`${nodePath}:${item.value} -> ${commandId}`);
+        }
+      }
+      continue;
+    }
+    if (node.disabled) continue;
+    const commandId = node.commandId ?? node.id;
+    if (!commands.get(commandId)) {
+      gaps.push(`${nodePath} -> ${commandId}`);
+    }
+  }
+
+  return gaps;
+}
+
 describe("ribbon structure", () => {
   it("defines visible content and dropdown structure for every ribbon tab", () => {
     for (const tab of RIBBON_TABS) {
@@ -147,6 +260,83 @@ describe("ribbon structure", () => {
         "study.load-field-state",
       ]),
     );
+  });
+
+  it("wires Home workspace shortcuts to concrete workspace commands", () => {
+    const commands = createControlRoomCommandRegistry();
+    const layout = {
+      get: () => ({
+        activeViewportMainModuleId: "viewport-3d",
+        panelVisible: {
+          bottom: true,
+          left: true,
+          right: true,
+        },
+      }),
+    } as unknown as CommandContext["layout"];
+    const visualization = new ObjectVisualizationController();
+    const content = buildRibbonTabContent("home", {
+      commands,
+      commandContext: {
+        layout,
+        source: "test",
+      },
+      selection: {
+        kind: null,
+        label: null,
+        moduleSource: null,
+        nodeId: null,
+        objectId: null,
+        ref: null,
+      },
+      visualization,
+      visualizationSnapshot: visualization.getSnapshot(),
+    });
+    const workspaceGroup = content?.groups.find(
+      (group) => group.id === "workspace",
+    );
+    const twoDimensionalAction = workspaceGroup?.actions.find(
+      (action) => action.id === "ws-2d",
+    );
+    const analysisAction = workspaceGroup?.actions.find(
+      (action) => action.id === "ws-analyze",
+    );
+    const panelAction = workspaceGroup?.actions.find(
+      (action) => action.id === "ws-panel",
+    );
+
+    expect(twoDimensionalAction).toMatchObject({
+      commandId: "cross-section-image.open",
+      disabled: false,
+    });
+    expect(analysisAction).toMatchObject({
+      commandId: "analysis-plots.open",
+      disabled: false,
+    });
+    expect(panelAction).toMatchObject({
+      disabled: false,
+      menu: expect.arrayContaining([
+        expect.objectContaining({
+          commandId: "panels:explorer:toggle",
+          id: "home-panels:explorer",
+          type: "checkbox",
+        }),
+        expect.objectContaining({
+          commandId: "panels:inspector:toggle",
+          id: "home-panels:inspector",
+          type: "checkbox",
+        }),
+        expect.objectContaining({
+          commandId: "panels:footer:toggle",
+          id: "home-panels:bottom-dock",
+          type: "checkbox",
+        }),
+        expect.objectContaining({
+          disabled: true,
+          id: "home-panels:reset-layout",
+        }),
+      ]),
+    });
   });
 
   it("keeps ribbon visual tokens theme-driven instead of hardcoded", () => {
@@ -190,6 +380,61 @@ describe("ribbon structure", () => {
     );
 
     expect(unresolved).toEqual([]);
+  });
+
+  it("keeps every clickable ribbon action command-backed", () => {
+    const commands = createControlRoomCommandRegistry();
+    const visualization = new ObjectVisualizationController();
+    const context = {
+      api: {} as never,
+      commandContext: {
+        api: {} as never,
+        resourceData: {
+          [MODEL_GEOMETRY_VALIDATION_PATH]: { diagnostics: [] },
+          [SESSION_STATUS_RESOURCE_KEY]: {
+            capabilities: {
+              binary_fields: true,
+              eigen_modes: true,
+              explicit_topology: true,
+            },
+            domain: {
+              discretization: "fem",
+            },
+            resources: {
+              mesh_revision: 0,
+              scene_revision: 1,
+            },
+          },
+          [SIMULATION_COMMANDS_PATH]: { commands: [] },
+          [SIMULATION_SOLVER_STATUS_PATH]: { runtime_state: "idle" },
+          [SIMULATION_STAGES_EXECUTION_PATH]: {
+            active_stage_index: null,
+            revision: 1,
+            runtime_state: "idle",
+            stages: [],
+          },
+        },
+        source: "test" as const,
+      },
+      commands,
+      selection: {
+        kind: null,
+        label: null,
+        moduleSource: null,
+        nodeId: null,
+        objectId: null,
+        ref: null,
+      },
+      visualization,
+      visualizationSnapshot: visualization.getSnapshot(),
+      visualizationState: null,
+    };
+    const gaps = RIBBON_TABS.flatMap((tab) => {
+      const content = buildRibbonTabContent(tab.id, context);
+      return content ? clickableRibbonCommandGaps(content, commands) : [];
+    });
+
+    expect(gaps).toEqual([]);
   });
 
   it("starts an editable 2D cross-section draft from the View ribbon", async () => {
@@ -328,6 +573,48 @@ describe("ribbon structure", () => {
     expect(html).toContain(
       'title="Build a shared-domain mesh before running FEM runtime commands."',
     );
+  });
+
+  it("does not execute pure-menu ribbon actions through the button body", () => {
+    expect(
+      resolveRibbonActionTriggerState({
+        disabled: false,
+        hasMenu: true,
+        splitButton: false,
+      }),
+    ).toMatchObject({
+      disabled: false,
+      runsActionFromButton: false,
+      runsActionFromSplitBody: false,
+    });
+  });
+
+  it("keeps disabled menu ribbon actions non-clickable", () => {
+    expect(
+      resolveRibbonActionTriggerState({
+        disabled: true,
+        hasMenu: true,
+        splitButton: false,
+      }),
+    ).toMatchObject({
+      disabled: true,
+      runsActionFromButton: false,
+      runsActionFromSplitBody: false,
+    });
+  });
+
+  it("keeps split-button bodies command-backed while the chevron opens the menu", () => {
+    expect(
+      resolveRibbonActionTriggerState({
+        disabled: false,
+        hasMenu: true,
+        splitButton: true,
+      }),
+    ).toMatchObject({
+      disabled: false,
+      runsActionFromButton: false,
+      runsActionFromSplitBody: true,
+    });
   });
 
   it("enables selected display controls from the object visualization registry", async () => {
@@ -1034,6 +1321,42 @@ describe("ribbon structure", () => {
         objectId: "free-layer",
       }),
     ]);
+  });
+
+  it("keeps unsupported Physics shell workflows disabled", () => {
+    const unsupportedIds = new Set([
+      "physics-add-dmi",
+      "physics-add-ku",
+      "physics-global",
+      "manage-rf",
+      "add-cpw",
+    ]);
+    const matchedIds = new Set<string>();
+
+    for (const group of ALL_TAB_CONTENT.physics.groups) {
+      for (const action of group.actions) {
+        if (unsupportedIds.has(action.id)) {
+          matchedIds.add(action.id);
+          expect(action.disabled, action.id).toBe(true);
+        }
+      }
+    }
+    expect(matchedIds).toEqual(unsupportedIds);
+  });
+
+  it("wires Physics Microstrip to the geometry antenna command", () => {
+    const rfGroup = ALL_TAB_CONTENT.physics.groups.find(
+      (group) => group.id === "rf-sources",
+    );
+
+    const microstripAction = rfGroup?.actions.find(
+      (action) => action.id === "add-microstrip",
+    );
+
+    expect(microstripAction).toMatchObject({
+      commandId: "geometry.add-microstrip-antenna",
+    });
+    expect(microstripAction?.disabled).not.toBe(true);
   });
 
   it("wires global Surface and Texture ribbon menus to object and part display defaults", async () => {
@@ -1874,12 +2197,19 @@ describe("ribbon structure", () => {
     const hEffAction = quantityGroup?.actions.find(
       (action) => action.id === "res-heff",
     );
+    const energyAction = quantityGroup?.actions.find(
+      (action) => action.id === "res-energy",
+    );
     const mAction = quantityGroup?.actions.find((action) => action.id === "res-m");
     const sourceNode = mAction?.menu?.find(
       (node) => node.type === "radio-group" && node.id === "results-quantity:radio",
     );
 
     expect(hEffAction).toMatchObject({
+      active: false,
+      commandId: RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
+    });
+    expect(energyAction).toMatchObject({
       active: false,
       commandId: RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
     });
@@ -1893,7 +2223,11 @@ describe("ribbon structure", () => {
         expect.objectContaining({ value: "eden_total" }),
       ]),
     );
-    if (!hEffAction?.commandId || sourceNode?.type !== "radio-group") {
+    if (
+      !hEffAction?.commandId ||
+      !energyAction?.commandId ||
+      sourceNode?.type !== "radio-group"
+    ) {
       throw new Error("Expected Results quantity controls");
     }
 
@@ -1905,12 +2239,24 @@ describe("ribbon structure", () => {
           : hEffAction.commandInput,
       source: "ribbon",
     } as unknown as CommandContext);
+    await createRibbonCommandRegistry().execute(energyAction.commandId, {
+      ...context,
+      input:
+        typeof energyAction.commandInput === "function"
+          ? energyAction.commandInput(undefined)
+          : energyAction.commandInput,
+      source: "ribbon",
+    } as unknown as CommandContext);
     await runRibbonNode(sourceNode, "H_demag", context);
 
     expect(patches).toEqual([
       {
         active_quantity_id: "H_eff",
         quantity: { active_quantity_id: "H_eff" },
+      },
+      {
+        active_quantity_id: "eden_total",
+        quantity: { active_quantity_id: "eden_total" },
       },
       {
         active_quantity_id: "H_demag",
@@ -1921,6 +2267,7 @@ describe("ribbon structure", () => {
       expect(invalidations).toEqual([
         [VISUALIZATION_STATE_PATH, 41],
         [VISUALIZATION_STATE_PATH, 42],
+        [VISUALIZATION_STATE_PATH, 43],
       ]),
     );
   });
@@ -2701,6 +3048,274 @@ describe("ribbon structure", () => {
     });
   });
 
+  it("keeps unsupported Mesh policy controls disabled while wiring 3D view navigation", () => {
+    const commands = createControlRoomCommandRegistry();
+    const visualization = new ObjectVisualizationController();
+    const content = buildRibbonTabContent("mesh", {
+      commands,
+      commandContext: { source: "test" },
+      selection: {
+        kind: null,
+        label: null,
+        moduleSource: null,
+        nodeId: null,
+        objectId: null,
+        ref: null,
+      },
+      visualization,
+      visualizationSnapshot: visualization.getSnapshot(),
+    });
+    const transitionAction = content?.groups
+      .find((group) => group.id === "size")
+      ?.actions.find((action) => action.id === "transitions");
+    const mesherAction = content?.groups
+      .find((group) => group.id === "method")
+      ?.actions.find((action) => action.id === "mesher");
+    const mesh3dAction = content?.groups
+      .find((group) => group.id === "mesh-view")
+      ?.actions.find((action) => action.id === "mesh-3d");
+
+    expect(transitionAction).toMatchObject({
+      disabled: true,
+      label: "Transitions",
+    });
+    expect(mesherAction).toMatchObject({
+      disabled: true,
+      label: "Mesher",
+    });
+    expect(mesh3dAction).toMatchObject({
+      commandId: "viewport-3d.open",
+      disabled: false,
+      label: "3D View",
+    });
+  });
+
+  it("keeps Study script sync disabled until a command contract exists", () => {
+    const content = buildRibbonTabContent("study", {
+      commands: createControlRoomCommandRegistry(),
+      commandContext: { source: "test" },
+      selection: {
+        kind: null,
+        label: null,
+        moduleSource: null,
+        nodeId: null,
+        objectId: null,
+        ref: null,
+      },
+      visualization: new ObjectVisualizationController(),
+      visualizationSnapshot: new ObjectVisualizationController().getSnapshot(),
+    });
+    const syncAction = content?.groups
+      .find((group) => group.id === "builder-sync")
+      ?.actions.find((action) => action.id === "study-sync");
+    const syncMenuItems =
+      syncAction?.menu?.filter((node) => node.type === "item") ?? [];
+
+    expect(syncAction).toMatchObject({
+      disabled: true,
+      label: "Sync Script",
+    });
+    expect(syncMenuItems.map((node) => node.disabled)).toEqual([true, true, true]);
+  });
+
+  it("keeps Automation script sync disabled until a command contract exists", () => {
+    const syncAction = ALL_TAB_CONTENT.automation.groups
+      .find((group) => group.id === "automation-sync")
+      ?.actions.find((action) => action.id === "automation-sync-script");
+    const syncMenuItems =
+      syncAction?.menu?.filter((node) => node.type === "item") ?? [];
+
+    expect(syncAction).toMatchObject({
+      disabled: true,
+      label: "Sync Script",
+    });
+    expect(syncMenuItems.map((node) => node.disabled)).toEqual([true, true, true]);
+  });
+
+  it("keeps unsupported Study composite workflows disabled", () => {
+    const unsupportedIds = new Set([
+      "study-sweep-relax",
+      "study-sweep-snap",
+      "study-relax-run",
+      "study-param-sweep",
+      "study-current-sweep",
+    ]);
+    const compositeActions =
+      ALL_TAB_CONTENT.study.groups.find((group) => group.id === "study-composite")
+        ?.actions ?? [];
+
+    for (const action of compositeActions) {
+      if (unsupportedIds.has(action.id)) {
+        expect(action.disabled, action.id).toBe(true);
+      }
+    }
+  });
+
+  it("wires Study navigation buttons to local selection commands", () => {
+    const content = buildRibbonTabContent("study", {
+      commands: createControlRoomCommandRegistry(),
+      commandContext: { source: "test" },
+      selection: {
+        kind: null,
+        label: null,
+        moduleSource: null,
+        nodeId: null,
+        objectId: null,
+        ref: null,
+      },
+      visualization: new ObjectVisualizationController(),
+      visualizationSnapshot: new ObjectVisualizationController().getSnapshot(),
+    });
+    const navigationGroup = content?.groups.find((group) => group.id === "navigate");
+
+    expect(
+      navigationGroup?.actions.find((action) => action.id === "study-overview"),
+    ).toMatchObject({
+      commandId: "study.open-overview",
+      disabled: false,
+    });
+    expect(
+      navigationGroup?.actions.find((action) => action.id === "study-stages"),
+    ).toMatchObject({
+      commandId: "study.open-stages",
+      disabled: false,
+    });
+  });
+
+  it("wires Results export buttons to concrete export commands", () => {
+    const content = buildRibbonTabContent("results", {
+      commands: createControlRoomCommandRegistry(),
+      commandContext: {
+        api: {
+          commands: { submit: vi.fn() },
+          persistence: { exports: { create: vi.fn() } },
+        } as never,
+        resourceData: {
+          [MODEL_GEOMETRY_VALIDATION_PATH]: { diagnostics: [] },
+          [SIMULATION_COMMANDS_PATH]: { commands: [] },
+          [SIMULATION_SOLVER_STATUS_PATH]: { runtime_state: "idle" },
+          [SIMULATION_STAGES_EXECUTION_PATH]: {
+            active_stage_index: 0,
+            revision: 1,
+            runtime_state: "idle",
+            stages: [{ stage_id: "stage-000" }],
+          },
+        },
+        source: "test",
+      },
+      selection: {
+        kind: null,
+        label: null,
+        moduleSource: null,
+        nodeId: null,
+        objectId: null,
+        ref: null,
+      },
+      visualization: new ObjectVisualizationController(),
+      visualizationSnapshot: new ObjectVisualizationController().getSnapshot(),
+      visualizationState: null,
+    });
+    const exportGroup = content?.groups.find(
+      (group) => group.id === "results-export",
+    );
+
+    expect(exportGroup?.actions.find((action) => action.id === "export-vtk"))
+      .toMatchObject({
+        commandId: "study.save-vtk",
+        disabled: false,
+      });
+    expect(exportGroup?.actions.find((action) => action.id === "export-state"))
+      .toMatchObject({
+        commandId: "study.export-state",
+        disabled: false,
+      });
+  });
+
+  it("keeps unsupported Results analysis workflows disabled", () => {
+    const unsupportedIds = new Set([
+      "results-spectrum",
+      "results-vortex-add",
+      "results-add-spectrum",
+      "results-dispersion",
+      "results-modes",
+    ]);
+    const analyzeGroup = ALL_TAB_CONTENT.results.groups.find(
+      (group) => group.id === "analyze",
+    );
+    const matchedIds = new Set<string>();
+
+    for (const action of analyzeGroup?.actions ?? []) {
+      if (unsupportedIds.has(action.id)) {
+        matchedIds.add(action.id);
+        expect(action.disabled, action.id).toBe(true);
+      }
+    }
+    expect(matchedIds).toEqual(unsupportedIds);
+  });
+
+  it("keeps unsupported Results time-domain workflows disabled", () => {
+    const unsupportedIds = new Set([
+      "add-time-traces",
+      "add-fft",
+      "add-trajectory",
+      "add-orbit",
+    ]);
+    const timeDomainGroup = ALL_TAB_CONTENT.results.groups.find(
+      (group) => group.id === "results-vortex",
+    );
+    const matchedIds = new Set<string>();
+
+    for (const action of timeDomainGroup?.actions ?? []) {
+      if (unsupportedIds.has(action.id)) {
+        matchedIds.add(action.id);
+        expect(action.disabled, action.id).toBe(true);
+      }
+    }
+    expect(matchedIds).toEqual(unsupportedIds);
+  });
+
+  it("keeps unsupported Results plot and workspace workflows disabled", () => {
+    const unsupportedIds = new Set([
+      "results-chart",
+      "results-snapshot",
+      "add-quantity-ws",
+      "add-table-ws",
+    ]);
+    const matchedIds = new Set<string>();
+
+    for (const group of ALL_TAB_CONTENT.results.groups) {
+      for (const action of group.actions) {
+        if (unsupportedIds.has(action.id)) {
+          matchedIds.add(action.id);
+          expect(action.disabled, action.id).toBe(true);
+        }
+      }
+    }
+    expect(matchedIds).toEqual(unsupportedIds);
+  });
+
+  it("keeps unsupported Materials edit and transform workflows disabled", () => {
+    const unsupportedIds = new Set([
+      "mat-params",
+      "mat-dmi",
+      "mat-ku",
+      "mat-texture-inspector",
+      "mat-transform-scope",
+      "mat-transform-tool",
+    ]);
+    const matchedIds = new Set<string>();
+
+    for (const group of ALL_TAB_CONTENT.materials.groups) {
+      for (const action of group.actions) {
+        if (unsupportedIds.has(action.id)) {
+          matchedIds.add(action.id);
+          expect(action.disabled, action.id).toBe(true);
+        }
+      }
+    }
+    expect(matchedIds).toEqual(unsupportedIds);
+  });
+
   it("exposes study compute commands through the Study control group", () => {
     const commands = new CommandRegistry();
     for (const command of STUDY_RUNTIME_COMMANDS) {
@@ -3105,6 +3720,46 @@ describe("ribbon structure", () => {
     expect(createGroup?.actions.map((action) => action.id)).toEqual(
       expect.arrayContaining(["geometry.add-microstrip-antenna"]),
     );
+  });
+
+  it("keeps unsupported Geometry builder controls explicitly disabled", () => {
+    const unsupportedIds = new Set([
+      "builder-add-ellipsoid",
+      "builder-add-disk",
+      "builder-add-thin_film",
+      "builder-add-pillar",
+      "builder-add-nanowire",
+      "builder-add-ring",
+      "builder-add-triangular_prism",
+      "builder-add-cone",
+      "builder-add-capsule",
+      "builder-add-tube",
+      "builder-add-wedge",
+      "builder-add-polygon_prism",
+      "builder-tool-move",
+      "builder-tool-rotate",
+      "builder-tool-scale",
+      "builder-mode-camera",
+      "builder-mode-manipulate",
+      "builder-toggle-snap",
+      "builder-validate",
+      "builder-show-universe",
+    ]);
+    const actions = ALL_TAB_CONTENT.geometry.groups.flatMap(
+      (group) => group.actions,
+    );
+
+    for (const action of actions) {
+      if (unsupportedIds.has(action.id)) {
+        expect(action.disabled, action.id).toBe(true);
+      }
+    }
+    const frameAllAction = actions.find((action) => action.id === "builder-frame-all");
+
+    expect(frameAllAction).toMatchObject({
+      commandId: "viewport-3d.fit",
+    });
+    expect(frameAllAction).not.toHaveProperty("disabled");
   });
 
   it("exposes concrete study stage authoring commands in the Study ribbon", () => {

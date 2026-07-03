@@ -149,13 +149,15 @@ explicitly correct for the dynamic phasor. Reusing a static k=0 solve while
 ignoring `A_mphi`, `A_phim`, or nonzero-k phase is not an implementation of this
 contract.
 
-Current implementation note, 2026-06-30: the narrow CPU `periodic_airbox_k0`
-driven-response work is not this full assembled block. It routes the magnetic
-GMRES operator through a matrix-free demag tangent provider / Schur-like
-magnetic operator and may expose provider-side scalar-potential diagnostics, but
-that does not make `delta_phi` an independently solved coupled unknown. It must
-be described as a qualified driven-response slice, not as an eigenmode solver
-and not as complete `[delta_m, delta_phi]` physics.
+Current implementation note, 2026-07-03: the native CPU driven-response path can
+include dynamic demag at k=0 by routing the magnetic GMRES operator through a
+matrix-free backend demag tangent provider. The narrow CPU
+`periodic_airbox_k0` path uses the same idea with a Schur/phi-consistency
+provider and may expose provider-side scalar-potential diagnostics, but that
+does not make `delta_phi` an independently assembled coupled unknown. It must be
+described as a qualified driven-response slice, not as an eigenmode solver and
+not as complete `[delta_m, delta_phi]` physics. GPU dynamic demag remains gated
+until a strict GPU dynamic demag operator exists.
 
 The target eigenfrequency system reuses the same linearized operators but has no
 external RF drive. In abstract form it is a generalized eigenproblem over the

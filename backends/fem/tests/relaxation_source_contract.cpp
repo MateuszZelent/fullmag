@@ -491,11 +491,43 @@ void c_abi_exposes_native_relaxation_step() {
                 std::string::npos &&
             projected_gradient.find("accept_monotone_recovery_step(") !=
                 std::string::npos &&
+            projected_gradient.find("line_search_energy_tolerance(") !=
+                std::string::npos &&
             projected_gradient.find("trial_step = restart_step;") !=
                 std::string::npos &&
             projected_gradient.find("reset_consecutive") <
                 projected_gradient.find("restore_after_failed_line_search("),
-        "native FEM projected-gradient BB must attempt a bounded Armijo recovery with reset step-size policy, fresh restart step, and monotone fallback before failing the step");
+        "native FEM projected-gradient BB must attempt a bounded Armijo recovery with reset step-size policy, fresh restart step, and noise-tolerant monotone fallback before failing the step");
+    const auto pgbb_main_backtracks =
+        projected_gradient.find("uint32_t backtracks = 0;");
+    const auto pgbb_first_armijo =
+        pgbb_main_backtracks == std::string::npos
+            ? std::string::npos
+            : projected_gradient.find("bool armijo = false", pgbb_main_backtracks);
+    check(
+        projected_gradient.find("constexpr double kLineSearchEnergyNoiseFloorJ = 1.0e-23") !=
+                std::string::npos &&
+            projected_gradient.find("constexpr double kLineSearchEnergyNoiseRelative = 1.0e-12") !=
+                std::string::npos &&
+            projected_gradient.find("accept_monotone_line_search_step(") !=
+                std::string::npos &&
+            pgbb_first_armijo != std::string::npos &&
+            projected_gradient.find("accept_monotone_line_search_step(", pgbb_first_armijo) <
+                projected_gradient.find(
+                    "if (backtracks >= relaxation::kProjectedGradientMaxBacktracks)",
+                    pgbb_first_armijo),
+        "native FEM projected-gradient BB must accept noise-level monotone line-search trials before exhausting Armijo backtracks");
+    check(
+        projected_gradient.find("format_projected_gradient_bb_scalar(") !=
+                std::string::npos &&
+            projected_gradient.find("std::scientific") != std::string::npos &&
+            projected_gradient.find("std::setprecision(17)") != std::string::npos &&
+            projected_gradient.find("current_energy_j=") != std::string::npos &&
+            projected_gradient.find("last_trial_energy_j=") != std::string::npos &&
+            projected_gradient.find("armijo_rhs_j=") != std::string::npos &&
+            projected_gradient.find("direction_dot_gradient=") != std::string::npos &&
+            projected_gradient.find("gradient_norm_sq=") != std::string::npos,
+        "native FEM projected-gradient BB exhausted Armijo diagnostics must preserve subattojoule scientific values");
     check(
         nonlinear_cg.find("not implemented yet") == std::string::npos,
         "native FEM nonlinear CG must not be an unavailable stub");

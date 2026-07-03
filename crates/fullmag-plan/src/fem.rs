@@ -3107,7 +3107,7 @@ pub(crate) fn plan_fem_frequency_response(
     if let Some(reason) = fem_frequency_response_production_slice_rejection_reason(&response_plan) {
         return Err(PlanError {
             reasons: vec![format!(
-                "FEM frequency response is currently executable only for the native MFEM production CPU gamma/free-boundary magnetic slice: {reason}"
+                "FEM frequency response is currently executable only for the native MFEM production CPU/GPU supported frequency-domain slices: {reason}"
             )],
         });
     }
@@ -3241,17 +3241,18 @@ fn fem_frequency_response_production_slice_rejection_reason(
         }
         return None;
     }
-    let shared_domain_no_demag = plan.domain_mesh_mode
-        == fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir
-        && !plan.enable_demag
-        && plan.demag_realization.is_none();
     if plan.domain_mesh_mode != fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh
-        && !shared_domain_no_demag
+        && plan.domain_mesh_mode != fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir
     {
-        return Some("shared-domain airbox meshes are not supported by the driven frequency-response operator");
+        return Some("frequency-response dynamic demag requires a magnetic-body or shared-domain airbox mesh");
     }
-    if plan.enable_demag || plan.demag_realization.is_some() {
-        return Some("dynamic demag is not implemented for driven frequency response");
+    if plan.enable_demag != plan.demag_realization.is_some() {
+        return Some("frequency-response dynamic demag requires include_demag=true and a resolved Demag energy term");
+    }
+    if plan.requested_device == fullmag_ir::ExecutionDevice::Gpu
+        && (plan.enable_demag || plan.demag_realization.is_some())
+    {
+        return Some("dynamic demag is not implemented for production GPU frequency response");
     }
     match plan.spin_wave_bc.kind() {
         fullmag_ir::SpinWaveBoundaryKindIR::Free => {

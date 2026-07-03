@@ -389,6 +389,12 @@ native CPU/MFEM lane through a global tangent-plane `mass + step * exchange`
 solve; it includes local anisotropy, Zeeman curvature, DMI weak-residual
 action, and demag fresh-solve linear response in the implicit operator, but is
 not yet a GPU/libCEED-resident tangent-plane solver.
+Both CPU/MFEM and CUDA direct-minimizer Armijo loops allow a bounded
+noise-level monotone acceptance window when the trial energy is indistinguishable
+from the current energy at the simulation's joule scale. The guard is a
+finite-precision safeguard, not a physical energy tolerance: it uses
+`max(1e-23 J, 1e-12 * max(|E_current|, |E_trial|))` and still requires finite
+energies.
 CPU/MFEM relaxation qualification artifacts carry an `algorithm_policy` block
 with the resolved native realization, FEM mass metric, line-search policy, and
 preconditioner/linear-solver contract. They intentionally do not report an

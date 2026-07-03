@@ -1313,8 +1313,20 @@ pub(crate) fn apply_current_live_snapshot(
     if let Some(preview_fields) = req.preview_fields.as_ref() {
         affected_field_quantities.extend(preview_fields.iter().map(|field| field.quantity.clone()));
     }
+    if let Some(preview_field) = current
+        .live_state
+        .as_ref()
+        .and_then(|live_state| live_state.latest_step.preview_field.as_ref())
+    {
+        affected_field_quantities.insert(preview_field.quantity.clone());
+    }
     if req.live_state.is_some() || req.fem_mesh.is_some() {
         affected_field_quantities.insert("m".to_string());
+    }
+    if let Some(live_state) = req.live_state.as_ref() {
+        if let Some(preview_field) = live_state.latest_step.preview_field.as_ref() {
+            affected_field_quantities.insert(preview_field.quantity.clone());
+        }
     }
     let previous_field_sources =
         capture_effective_field_sources(current, &affected_field_quantities);
@@ -1383,6 +1395,20 @@ pub(crate) fn apply_current_live_snapshot(
     if let Some(preview_fields) = req.preview_fields {
         merge_cached_preview_fields(&mut current.preview_cache, preview_fields);
     }
+    // Promote the active preview field into preview_cache so that API
+    // query handlers (get_field_meta, get_field_vector, etc.) can find
+    // it.  Without this, the field is only reachable via
+    // live_state.latest_step.preview_field, which those handlers do not
+    // consult, causing a 404 when the user switches to a non-"m" quantity.
+    // This runs AFTER clear_preview_cache + preview_fields merge so the
+    // active field survives cache clears.
+    if let Some(preview_field) = current
+        .live_state
+        .as_ref()
+        .and_then(|ls| ls.latest_step.preview_field.clone())
+    {
+        current.preview_cache.insert(preview_field);
+    }
     if let Some(engine_log) = req.engine_log {
         current.engine_log = engine_log;
     }
@@ -1443,8 +1469,20 @@ pub(crate) fn apply_current_live_runtime_frame(
     frame: CurrentLiveRuntimeFrameRequest,
 ) -> Result<(), ApiError> {
     let mut affected_field_quantities = BTreeSet::new();
+    if let Some(preview_field) = current
+        .live_state
+        .as_ref()
+        .and_then(|live_state| live_state.latest_step.preview_field.as_ref())
+    {
+        affected_field_quantities.insert(preview_field.quantity.clone());
+    }
     if frame.live_state.is_some() || frame.fem_mesh.is_some() {
         affected_field_quantities.insert("m".to_string());
+    }
+    if let Some(live_state) = frame.live_state.as_ref() {
+        if let Some(preview_field) = live_state.latest_step.preview_field.as_ref() {
+            affected_field_quantities.insert(preview_field.quantity.clone());
+        }
     }
     let previous_field_sources =
         capture_effective_field_sources(current, &affected_field_quantities);
@@ -1472,6 +1510,12 @@ pub(crate) fn apply_current_live_runtime_frame(
             if live_state.latest_step.preview_field.is_none() {
                 live_state.latest_step.preview_field = prev.latest_step.preview_field.clone();
             }
+        }
+        // Promote the active preview field into preview_cache so that API
+        // query handlers (get_field_meta, get_field_vector, etc.) can find
+        // it — same rationale as in apply_current_live_snapshot.
+        if let Some(preview_field) = live_state.latest_step.preview_field.clone() {
+            current.preview_cache.insert(preview_field);
         }
         current.live_state = Some(live_state);
     }
@@ -2959,5 +3003,225 @@ mod tests {
             active_stage_kind: Some("relax".into()),
             runtime_state,
         }
+    }
+
+    #[test]
+    fn snapshot_promotes_active_preview_field_into_preview_cache() {
+        let mut current = test_current_snapshot();
+        assert!(current.preview_cache.get("H_eff").is_none());
+
+        let req = CurrentLiveSnapshotRequest {
+            session_id: "test-session".to_string(),
+            session: None,
+            session_status: None,
+            metadata: None,
+            mesh_workspace: None,
+            stage_execution: None,
+            run: None,
+            live_state: Some(LiveState {
+                status: "running".into(),
+                updated_at_unix_ms: 1_700_000_000_000,
+                latest_step: StepUpdateView {
+                    step: 10,
+                    time: 1e-9,
+                    dt: 1e-13,
+                    pseudo_time_s: None,
+                    e_ex: 0.0,
+                    e_demag: 0.0,
+                    e_ext: 0.0,
+                    e_ani: 0.0,
+                    e_dmi: 0.0,
+                    e_total: 0.0,
+                    max_dm_dt: 0.0,
+                    max_h_eff: 0.0,
+                    max_h_demag: 0.0,
+                    max_torque_Apm: 0.0,
+                    max_torque_T: 0.0,
+                    wall_time_ns: 100,
+                    grid: [1, 1, 1],
+                    fem_mesh: None,
+                    magnetization: None,
+                    per_object_scalars: Default::default(),
+                    preview_field: Some(preview_field("H_eff")),
+                    finished: false,
+                },
+            }),
+            latest_scalar_row: None,
+            latest_fields: None,
+            preview_fields: None,
+            clear_preview_cache: false,
+            engine_log: None,
+            solver_profile: None,
+            fem_mesh: None,
+        };
+        apply_current_live_snapshot(&mut current, req).unwrap();
+
+        let cached = current
+            .preview_cache
+            .get("H_eff")
+            .expect("active preview field should be promoted into preview_cache");
+        assert_eq!(cached.quantity, "H_eff");
+    }
+
+    #[test]
+    fn snapshot_promotes_active_preview_field_after_clear_preview_cache() {
+        let mut current = test_current_snapshot();
+        // Seed with an old cached field that should be wiped.
+        merge_cached_preview_fields(&mut current.preview_cache, vec![preview_field("H_demag")]);
+        assert!(current.preview_cache.get("H_demag").is_some());
+
+        // Set up live_state with active preview field = H_eff.
+        current.live_state = Some(LiveState {
+            status: "running".into(),
+            updated_at_unix_ms: 1_700_000_000_000,
+            latest_step: StepUpdateView {
+                step: 10,
+                time: 1e-9,
+                dt: 1e-13,
+                pseudo_time_s: None,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 100,
+                grid: [1, 1, 1],
+                fem_mesh: None,
+                magnetization: None,
+                per_object_scalars: Default::default(),
+                preview_field: Some(preview_field("H_eff")),
+                finished: false,
+            },
+        });
+
+        // Apply a snapshot with clear_preview_cache = true but no new
+        // preview_fields or live_state.  This simulates a mesh change where the
+        // runner clears old cached fields.
+        let req = CurrentLiveSnapshotRequest {
+            session_id: "test-session".to_string(),
+            session: None,
+            session_status: None,
+            metadata: None,
+            mesh_workspace: None,
+            stage_execution: None,
+            run: None,
+            live_state: None,
+            latest_scalar_row: None,
+            latest_fields: None,
+            preview_fields: None,
+            clear_preview_cache: true,
+            engine_log: None,
+            solver_profile: None,
+            fem_mesh: None,
+        };
+        apply_current_live_snapshot(&mut current, req).unwrap();
+
+        // H_demag should have been wiped by clear_preview_cache.
+        assert!(
+            current.preview_cache.get("H_demag").is_none(),
+            "old cached H_demag should be cleared"
+        );
+        // H_eff from live_state.latest_step.preview_field should be
+        // re-promoted after the cache clear.
+        let cached = current
+            .preview_cache
+            .get("H_eff")
+            .expect("active preview field should survive clear_preview_cache");
+        assert_eq!(cached.quantity, "H_eff");
+        assert!(
+            current.field_quantity_revisions.contains_key("H_eff"),
+            "promoted active preview field should publish a field revision"
+        );
+        assert!(
+            current.field_catalog_revision > 0,
+            "promoted active preview field should update the field catalog revision"
+        );
+    }
+
+    #[test]
+    fn runtime_frame_promotes_carried_preview_field_with_field_revision() {
+        let mut current = test_current_snapshot();
+        current.live_state = Some(LiveState {
+            status: "running".into(),
+            updated_at_unix_ms: 1_700_000_000_000,
+            latest_step: StepUpdateView {
+                step: 10,
+                time: 1e-9,
+                dt: 1e-13,
+                pseudo_time_s: None,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 100,
+                grid: [1, 1, 1],
+                fem_mesh: None,
+                magnetization: None,
+                per_object_scalars: Default::default(),
+                preview_field: Some(preview_field("H_eff")),
+                finished: false,
+            },
+        });
+
+        apply_current_live_runtime_frame(
+            &mut current,
+            CurrentLiveRuntimeFrameRequest {
+                session_id: "test-session".to_string(),
+                live_state: Some(LiveState {
+                    status: "running".into(),
+                    updated_at_unix_ms: 1_700_000_001_000,
+                    latest_step: StepUpdateView {
+                        step: 11,
+                        time: 1.1e-9,
+                        dt: 1e-13,
+                        pseudo_time_s: None,
+                        e_ex: 0.0,
+                        e_demag: 0.0,
+                        e_ext: 0.0,
+                        e_ani: 0.0,
+                        e_dmi: 0.0,
+                        e_total: 0.0,
+                        max_dm_dt: 0.0,
+                        max_h_eff: 0.0,
+                        max_h_demag: 0.0,
+                        max_torque_Apm: 0.0,
+                        max_torque_T: 0.0,
+                        wall_time_ns: 100,
+                        grid: [1, 1, 1],
+                        fem_mesh: None,
+                        magnetization: None,
+                        per_object_scalars: Default::default(),
+                        preview_field: None,
+                        finished: false,
+                    },
+                }),
+                engine_log: None,
+                solver_profile: None,
+                fem_mesh: None,
+            },
+        )
+        .expect("runtime frame should apply");
+
+        assert!(
+            current.preview_cache.get("H_eff").is_some(),
+            "carried active preview field should be promoted into preview_cache"
+        );
+        assert!(
+            current.field_quantity_revisions.contains_key("H_eff"),
+            "carried active preview field should publish a field revision"
+        );
     }
 }

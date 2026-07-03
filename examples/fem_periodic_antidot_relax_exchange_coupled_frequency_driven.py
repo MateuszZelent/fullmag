@@ -148,8 +148,8 @@ study.save("demag_phi", every=10e-12)
 
 study.stages.add_relax(
     algorithm="projected_gradient_bb",
-    max_steps=400,
-    tol=5.0e3,  # A/m
+    max_steps=4000,
+    tol=5.0e-4,  # A/m
 )
 
 # Current MFEM GPU frequency response supports the static-periodic magnetic
@@ -157,22 +157,22 @@ study.stages.add_relax(
 # relaxation stage above with demag outputs, then clear those outputs and
 # disable demag for this response stage.
 study.clear_outputs()
-study.demag(enabled=False)
+# study.demag(enabled=False)
 study.stages.change_device("gpu")
 
-study.stages.add_frequency_response(
-    frequencies_hz=[
-        2.0e9,
-        2.5e9,
-        3.0e9,
-        3.5e9,
-        4.0e9,
-        4.5e9,
-        5.0e9,
-    ],
-    excitation_field_au_per_m=(0.0, 0.0, 1.0),
-    include_demag=False,
-    equilibrium_source="relax",
-    damping_policy="include",
-    bc=fm.PeriodicBC(["x_faces", "y_faces"]),
-)
+# study.stages.add_frequency_response(
+#     frequencies_hz=[
+#         2.0e9,
+#         2.5e9,
+#         3.0e9,
+#         3.5e9,
+#         4.0e9,
+#         4.5e9,
+#         5.0e9,
+#     ],
+#     excitation_field_au_per_m=(0.0, 0.0, 1.0),
+#     include_demag=False,
+#     equilibrium_source="relax",
+#     damping_policy="include",
+#     bc=fm.PeriodicBC(["x_faces", "y_faces"]),
+# )

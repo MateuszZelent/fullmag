@@ -116,6 +116,20 @@ function binaryResponse(body: ArrayBuffer, init: ResponseInit = {}): Response {
   });
 }
 
+function parseRequestJsonBody(body: unknown): unknown {
+  if (body instanceof ArrayBuffer) {
+    return JSON.parse(new TextDecoder().decode(body));
+  }
+  if (ArrayBuffer.isView(body)) {
+    return JSON.parse(
+      new TextDecoder().decode(
+        new Uint8Array(body.buffer, body.byteOffset, body.byteLength),
+      ),
+    );
+  }
+  return JSON.parse(String(body));
+}
+
 function makeTableRowsBuffer(values: readonly number[]): ArrayBuffer {
   const buffer = new ArrayBuffer(60 + values.length * Float64Array.BYTES_PER_ELEMENT);
   const bytes = new Uint8Array(buffer);
@@ -1180,6 +1194,68 @@ describe("ControlRoomApi", () => {
     );
   });
 
+  it("materializes missing field metadata on demand before retrying", async () => {
+    const calls: Array<{ body: unknown; method: string | undefined; url: string }> = [];
+    let metaRequests = 0;
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        calls.push({
+          body: init?.body,
+          method: init?.method,
+          url: String(url),
+        });
+        const requestUrl = String(url);
+        if (requestUrl.endsWith("/v2/sessions/current/simulation/commands")) {
+          return jsonResponse({
+            accepted: true,
+            command_id: "cmd-fields",
+            error: null,
+          });
+        }
+        if (requestUrl.includes("/v2/sessions/current/data/fields/H_demag/meta")) {
+          metaRequests += 1;
+          if (metaRequests === 1) {
+            return jsonResponse(
+              { message: "field 'H_demag' not available in memory" },
+              { status: 404 },
+            );
+          }
+          return jsonResponse({
+            components: 3,
+            domain_generation_id: 4,
+            field_revision: 12,
+            kind: "vector",
+            label: "Demagnetizing field",
+            location: "cells",
+            quantity_id: "H_demag",
+            stats: { max: 0.2, mean: 0.01, min: -0.3 },
+            unit: "A/m",
+          });
+        }
+        throw new Error(`Unexpected request ${requestUrl}`);
+      },
+    });
+
+    const meta = await api.data.fields.meta("H_demag", {
+      component: "z",
+      scope_id: "periodic_antidot_film",
+      scope_kind: "object",
+    });
+
+    expect(meta.stats?.min).toBe(-0.3);
+    expect(metaRequests).toBe(2);
+    const commandCall = calls.find((call) =>
+      call.url.endsWith("/v2/sessions/current/simulation/commands"),
+    );
+    expect(commandCall?.method).toBe("POST");
+    expect(parseRequestJsonBody(commandCall?.body)).toMatchObject({
+      kind: "compute_fields",
+      reason: "field_on_demand",
+      target: { kind: "study" },
+    });
+  });
+
   it("normalizes object-prefixed field metadata scope ids for object scopes", async () => {
     let observedUrl = "";
     const api = new ControlRoomApi({
@@ -1230,6 +1306,64 @@ describe("ControlRoomApi", () => {
     expect(observedUrl).toBe(
       "http://127.0.0.1:8765/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_id=permalloy_layer&scope_kind=object",
     );
+  });
+
+  it("materializes missing field vectors on demand before retrying", async () => {
+    const calls: Array<{ body: unknown; method: string | undefined; url: string }> = [];
+    let vectorRequests = 0;
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        calls.push({
+          body: init?.body,
+          method: init?.method,
+          url: String(url),
+        });
+        const requestUrl = String(url);
+        if (requestUrl.endsWith("/v2/sessions/current/simulation/commands")) {
+          return jsonResponse({
+            accepted: true,
+            command_id: "cmd-fields",
+            error: null,
+          });
+        }
+        if (
+          requestUrl.includes(
+            "/v2/sessions/current/data/fields/H_demag/samples/vector",
+          )
+        ) {
+          vectorRequests += 1;
+          if (vectorRequests === 1) {
+            return new Response(null, {
+              headers: contractHeaders,
+              status: 204,
+            });
+          }
+          return binaryResponse(makeFieldVectorBuffer(), {
+            headers: { etag: '"field-1"', ...contractHeaders },
+          });
+        }
+        throw new Error(`Unexpected request ${requestUrl}`);
+      },
+    });
+
+    const result = await api.data.fields.vector("H_demag", {
+      component: "full",
+      scope_id: "periodic_antidot_film",
+      scope_kind: "object",
+    });
+
+    expect(result.status).toBe("ready");
+    expect(vectorRequests).toBe(2);
+    const commandCall = calls.find((call) =>
+      call.url.endsWith("/v2/sessions/current/simulation/commands"),
+    );
+    expect(commandCall?.method).toBe("POST");
+    expect(parseRequestJsonBody(commandCall?.body)).toMatchObject({
+      kind: "compute_fields",
+      reason: "field_on_demand",
+      target: { kind: "study" },
+    });
   });
 
   it("loads scalar windows through the v2 data facade", async () => {

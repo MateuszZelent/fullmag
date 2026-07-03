@@ -18,7 +18,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <iomanip>
 #include <limits>
+#include <sstream>
 #include <vector>
 
 namespace fullmag::fem {
@@ -26,6 +28,45 @@ namespace fullmag::fem {
 namespace {
 
 constexpr uint32_t kProjectedGradientArmijoRecoveryCycles = 1;
+constexpr double kLineSearchEnergyNoiseFloorJ = 1.0e-23;
+constexpr double kLineSearchEnergyNoiseRelative = 1.0e-12;
+
+double line_search_energy_tolerance(
+    const fullmag_fem_step_stats &current,
+    const fullmag_fem_step_stats &trial)
+{
+    return std::max(
+        kLineSearchEnergyNoiseFloorJ,
+        kLineSearchEnergyNoiseRelative *
+            std::max(
+                std::abs(current.total_energy_joules),
+                std::abs(trial.total_energy_joules)));
+}
+
+bool accept_monotone_line_search_step(
+    const fullmag_fem_step_stats &current,
+    const fullmag_fem_step_stats &trial)
+{
+    return std::isfinite(current.total_energy_joules) &&
+        std::isfinite(trial.total_energy_joules) &&
+        trial.total_energy_joules <=
+            current.total_energy_joules +
+                line_search_energy_tolerance(current, trial);
+}
+
+bool accept_monotone_recovery_step(
+    const fullmag_fem_step_stats &current,
+    const fullmag_fem_step_stats &trial)
+{
+    return accept_monotone_line_search_step(current, trial);
+}
+
+std::string format_projected_gradient_bb_scalar(double value)
+{
+    std::ostringstream out;
+    out << std::scientific << std::setprecision(17) << value;
+    return out.str();
+}
 
 void update_bb_step_size(
     const Context &ctx,
@@ -139,13 +180,6 @@ bool retry_projected_gradient_bb_line_search_with_reset(
     int &failure_status,
     std::string &error)
 {
-    auto accept_monotone_recovery_step =
-        [](const fullmag_fem_step_stats &current,
-           const fullmag_fem_step_stats &trial) {
-            return std::isfinite(current.total_energy_joules) &&
-                std::isfinite(trial.total_energy_joules) &&
-                trial.total_energy_joules <= current.total_energy_joules;
-        };
     for (uint32_t recovery_cycle = 0;
          recovery_cycle < kProjectedGradientArmijoRecoveryCycles;
          ++recovery_cycle) {
@@ -366,6 +400,10 @@ int run_projected_gradient_bb_step(
             line_search_accepted = true;
             break;
         }
+        if (accept_monotone_line_search_step(current_stats, trial_stats)) {
+            line_search_accepted = true;
+            break;
+        }
         if (backtracks >= relaxation::kProjectedGradientMaxBacktracks) {
             break;
         }
@@ -398,14 +436,14 @@ int run_projected_gradient_bb_step(
             relaxation::kArmijoCoefficient * trial_step * direction_dot_gradient;
         const std::string diagnostics =
             "current_energy_j=" +
-            std::to_string(current_stats.total_energy_joules) +
+            format_projected_gradient_bb_scalar(current_stats.total_energy_joules) +
             " last_trial_energy_j=" +
-            std::to_string(trial_stats.total_energy_joules) +
-            " armijo_rhs_j=" + std::to_string(armijo_rhs) +
-            " last_trial_step=" + std::to_string(trial_step) +
+            format_projected_gradient_bb_scalar(trial_stats.total_energy_joules) +
+            " armijo_rhs_j=" + format_projected_gradient_bb_scalar(armijo_rhs) +
+            " last_trial_step=" + format_projected_gradient_bb_scalar(trial_step) +
             " direction_dot_gradient=" +
-            std::to_string(direction_dot_gradient) +
-            " gradient_norm_sq=" + std::to_string(g_norm_sq);
+            format_projected_gradient_bb_scalar(direction_dot_gradient) +
+            " gradient_norm_sq=" + format_projected_gradient_bb_scalar(g_norm_sq);
         return relaxation::restore_after_failed_line_search(
             ctx,
             previous_m,

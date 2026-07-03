@@ -26,8 +26,9 @@ pub mod step_data;
 pub mod transport;
 
 pub use catalog::{
-    all_quantity_ids, cached_preview_quantity_ids, interactive_preview_quantity_ids,
-    quantity_catalog, quantity_spec, quantity_specs, quantity_unit,
+    all_quantity_ids, cached_preview_quantity_ids, field_materialization_quantity_ids,
+    interactive_preview_quantity_ids, quantity_catalog, quantity_spec, quantity_specs,
+    quantity_unit,
 };
 pub use descriptor::{NormalizationHint, QuantityDomain, QuantityLocation, QuantitySpec};
 pub use eval::{eval_global_scalar, reduce_scalars, reduce_vector_field, QuantityValue};

@@ -19,6 +19,10 @@ import {
   type ResourceRuntimeSnapshot,
   type ResourceRuntimeStore,
 } from "./ResourceRuntimeStore";
+import {
+  emitResourceLoadFailed,
+  normalizeResourceLoadFailure,
+} from "./resourceLoadFailure";
 import type { ResourceKey, ResourceResult } from "./resourceTypes";
 import { markResourceLoading, type ResourceState } from "./resourceState";
 
@@ -53,7 +57,7 @@ export function useResource<TData>({
   resolveRevision,
   resourceKey,
 }: UseResourceOptions<TData>): ResourceResult<TData> {
-  const { diagnosticRecorder, resources } = useKernel();
+  const { bus, diagnosticRecorder, resources } = useKernel();
   const runtimeStore = sharedResourceRuntimeStore as ResourceRuntimeStore<TData>;
 
   // Stabilize the subscribe callback so useSyncExternalStore doesn't
@@ -100,6 +104,7 @@ export function useResource<TData>({
 
   useResourceLoader({
     abortStaleInflight,
+    bus,
     diagnosticRecorder,
     enabled,
     errorCountRef,
@@ -152,7 +157,7 @@ export function useResourceSelector<TData, TSelected>({
   resourceKey,
   selector,
 }: UseResourceSelectorOptions<TData, TSelected>): TSelected {
-  const { diagnosticRecorder, resources } = useKernel();
+  const { bus, diagnosticRecorder, resources } = useKernel();
   const runtimeStore = sharedResourceRuntimeStore as ResourceRuntimeStore<TData>;
   const [refreshToken, setRefreshToken] = useState(0);
   const [loadedRefreshToken, setLoadedRefreshToken] = useState(refreshToken);
@@ -229,6 +234,7 @@ export function useResourceSelector<TData, TSelected>({
 
   useResourceLoader({
     abortStaleInflight,
+    bus,
     diagnosticRecorder,
     enabled,
     errorCountRef,
@@ -249,6 +255,7 @@ export function useResourceSelector<TData, TSelected>({
 
 function useResourceLoader<TData>({
   abortStaleInflight = false,
+  bus,
   diagnosticRecorder,
   enabled,
   errorCountRef,
@@ -264,6 +271,7 @@ function useResourceLoader<TData>({
   setLoadedRefreshToken,
 }: {
   abortStaleInflight?: boolean;
+  bus: KernelApi["bus"];
   diagnosticRecorder: KernelApi["diagnosticRecorder"];
   enabled: boolean;
   errorCountRef: { current: number };
@@ -344,8 +352,34 @@ function useResourceLoader<TData>({
               revision: snapshot.revision,
             });
           }
-          errorCountRef.current =
-            snapshot.status === "error" ? errorCountRef.current + 1 : 0;
+          if (snapshot.status === "error") {
+            const error =
+              snapshot.error ??
+              new Error("Resource load failed without error detail");
+            const failure = normalizeResourceLoadFailure(error);
+            emitResourceLoadFailed({
+              bus,
+              error,
+              resourceKey,
+              revision: externalRevision,
+            });
+            recordResourceHookDiagnostic({
+              action: "miss",
+              diagnosticRecorder,
+              detail: {
+                cause: failure.cause,
+                errorName: failure.errorName,
+                reason: "load-failed",
+                status: failure.status,
+              },
+              resourceKey,
+              revision: externalRevision,
+              severity: "warning",
+            });
+            errorCountRef.current += 1;
+          } else {
+            errorCountRef.current = 0;
+          }
         });
     }, delay);
 
@@ -364,6 +398,7 @@ function useResourceLoader<TData>({
     };
   }, [
     abortStaleInflight,
+    bus,
     diagnosticRecorder,
     enabled,
     errorCountRef,
@@ -386,12 +421,14 @@ function recordResourceHookDiagnostic({
   diagnosticRecorder,
   resourceKey,
   revision,
+  severity = "info",
 }: {
   action: "abort" | "hit" | "miss" | "set" | "stale-skip";
   detail: Record<string, boolean | number | string | null>;
   diagnosticRecorder: KernelApi["diagnosticRecorder"];
   resourceKey: ResourceKey;
   revision: ResourceRevision | null;
+  severity?: "info" | "warning";
 }): void {
   diagnosticRecorder.record({
     byteLength: null,
@@ -408,7 +445,7 @@ function recordResourceHookDiagnostic({
         : `resource-hook.${action}`,
     resourceKey,
     revision,
-    severity: "info",
+    severity,
     startTimeMs: null,
     timestampMs: Date.now(),
   });

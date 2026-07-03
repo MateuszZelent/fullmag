@@ -114,12 +114,33 @@ export function NotificationsSurface({
     },
   );
 
+  const handleResourceLoadFailed = useEffectEvent(
+    (payload: KernelEventMap["resource:load-failed"]) => {
+      const notification = buildNotificationItem({
+        ...payload,
+        type: "resource-load-failed",
+      });
+      setNotifications((current) =>
+        pushNotificationItem(current, notification),
+      );
+      scheduleDismiss(notification.id);
+    },
+  );
+
   useEffect(() => {
     const timers = dismissTimers.current;
     if (timers === null) return;
-    const unsubscribe = bus.on("mesh:topology-rendered", handleMeshTopologyRendered);
+    const unsubscribeMesh = bus.on(
+      "mesh:topology-rendered",
+      handleMeshTopologyRendered,
+    );
+    const unsubscribeResourceLoadFailed = bus.on(
+      "resource:load-failed",
+      handleResourceLoadFailed,
+    );
     return () => {
-      unsubscribe();
+      unsubscribeMesh();
+      unsubscribeResourceLoadFailed();
       for (const timer of timers.values()) {
         clearTimeout(timer);
       }

@@ -62,6 +62,34 @@ export function resolveRibbonIconColor(iconColor?: string): string | undefined {
   return ICON_COLOR_ALIASES[tailwindToken[1]];
 }
 
+export function resolveRibbonActionTriggerState({
+  disabled,
+  hasMenu,
+  splitButton,
+}: {
+  disabled?: boolean;
+  hasMenu: boolean;
+  splitButton?: boolean;
+}): {
+  disabled: boolean;
+  runsActionFromButton: boolean;
+  runsActionFromSplitBody: boolean;
+} {
+  if (disabled) {
+    return {
+      disabled: true,
+      runsActionFromButton: false,
+      runsActionFromSplitBody: false,
+    };
+  }
+
+  return {
+    disabled: false,
+    runsActionFromButton: !hasMenu,
+    runsActionFromSplitBody: hasMenu && Boolean(splitButton),
+  };
+}
+
 interface RibbonGroupsRowProps {
   groups: RibbonGroupData[];
   onAction?: (actionId: string, input?: unknown) => void;
@@ -102,14 +130,18 @@ function RibbonActionButton({
   onCommandDetail?: (commandId: string) => void;
 }) {
   const hasMenu = Boolean(actionMenu?.length);
-  const isTriggerDisabled = Boolean(disabled && !hasMenu);
+  const triggerState = resolveRibbonActionTriggerState({
+    disabled,
+    hasMenu,
+    splitButton,
+  });
   const resolvedIconColor = active ? undefined : resolveRibbonIconColor(iconColor);
   const style = resolvedIconColor
     ? ({ "--fm-ribbon-icon-color": resolvedIconColor } as CSSProperties)
     : undefined;
   const tooltipText = tooltip ?? label;
   const runAction = () => {
-    if (!isTriggerDisabled) {
+    if (!triggerState.disabled) {
       onAction?.(commandId ?? id, commandInput);
     }
   };
@@ -142,14 +174,18 @@ function RibbonActionButton({
       data-active={active ?? false}
       data-accent={accent ?? false}
       data-has-menu={hasMenu}
-      data-disabled={isTriggerDisabled}
-      disabled={isTriggerDisabled}
+      data-disabled={triggerState.disabled}
+      disabled={triggerState.disabled}
       style={style}
       title={tooltipText}
       type="button"
-      onClick={hasMenu && splitButton ? undefined : runAction}
-      onKeyDownCapture={hasMenu && splitButton ? runMenuActionFromKeyboard : undefined}
-      onPointerDownCapture={hasMenu && splitButton ? runMenuActionFromPointer : undefined}
+      onClick={triggerState.runsActionFromButton ? runAction : undefined}
+      onKeyDownCapture={
+        triggerState.runsActionFromSplitBody ? runMenuActionFromKeyboard : undefined
+      }
+      onPointerDownCapture={
+        triggerState.runsActionFromSplitBody ? runMenuActionFromPointer : undefined
+      }
     >
       <span className="fm-ribbon-action__icon">
         {icon}

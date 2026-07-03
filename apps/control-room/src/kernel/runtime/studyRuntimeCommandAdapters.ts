@@ -9,6 +9,7 @@ export type SimpleStudyRuntimeCommandKind =
   | "compute_fields"
   | "pause"
   | "resume"
+  | "save_vtk"
   | "skip"
   | "solve"
   | "stop";
@@ -54,6 +55,7 @@ function defaultTargetForKind(
       return STUDY_TARGET;
     case "pause":
     case "resume":
+    case "save_vtk":
     case "skip":
     case "stop":
       return CURRENT_STAGE_TARGET;

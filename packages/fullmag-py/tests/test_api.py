@@ -364,6 +364,27 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(region_ir["mesh_policy"]["maximum_element_size"], 5e-9)
         self.assertEqual(region_ir["mesh_policy"]["transition_distance"], 30e-9)
 
+    def test_object_region_mesh_rejects_minimum_larger_than_maximum(self) -> None:
+        fm.reset()
+        fm.engine("fem")
+        layer = fm.geometry(
+            fm.Box(100e-9, 100e-9, 10e-9),
+            name="film",
+        )
+        region = layer.add_region(
+            "hole_transition_refinement",
+            fm.Cylinder(radius=40e-9, height=10e-9),
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "film:hole_transition_refinement.mesh: minimum_element_size must be <= maximum_element_size",
+        ):
+            region.mesh(
+                minimum_element_size=0.15e-9,
+                maximum_element_size=0.11e-9,
+            )
+
     def test_problem_asset_build_receives_owner_geometry_for_object_regions(self) -> None:
         fm.reset()
         fm.engine("fem")

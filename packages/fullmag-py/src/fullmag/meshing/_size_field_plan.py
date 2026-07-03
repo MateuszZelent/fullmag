@@ -1562,6 +1562,44 @@ def _mesh_options_from_runtime_metadata(
                 return value
         return None
 
+    patch = raw_mesh_options.get("scene_problem_patch")
+    patch_object_regions = patch.get("object_regions") if isinstance(patch, Mapping) else None
+    effective_object_regions = patch_object_regions or object_regions
+
+    def _object_region_hmin() -> float | None:
+        if not include_size_fields or not isinstance(effective_object_regions, list):
+            return None
+        values: list[float] = []
+        for region in effective_object_regions:
+            if not isinstance(region, Mapping) or region.get("enabled", True) is False:
+                continue
+            mesh_policy = region.get("mesh_policy")
+            if not isinstance(mesh_policy, Mapping):
+                continue
+            maximum_element_size = _coerce_positive_float(
+                mesh_policy.get("maximum_element_size")
+            )
+            if maximum_element_size is None:
+                continue
+            values.append(maximum_element_size)
+            minimum_element_size = _coerce_positive_float(
+                mesh_policy.get("minimum_element_size")
+            )
+            if minimum_element_size is not None:
+                values.append(minimum_element_size)
+        return min(values) if values else None
+
+    def _mesh_hmin_value() -> object | None:
+        values = [
+            value
+            for value in (
+                _mesh_option_value("hmin", "minimum_element_size", reducer="min"),
+                _object_region_hmin(),
+            )
+            if isinstance(value, (int, float))
+        ]
+        return min(values) if values else None
+
     def _shared_per_geometry_value(key: str) -> object | None:
         values = _per_geometry_values(key)
         if not values:
@@ -1585,8 +1623,6 @@ def _mesh_options_from_runtime_metadata(
             if isinstance(raw_mesh_options.get("size_fields"), list)
             else []
         )
-        patch = raw_mesh_options.get("scene_problem_patch")
-        patch_object_regions = patch.get("object_regions") if isinstance(patch, Mapping) else None
         size_fields.extend(
             _build_field_stack(
                 geometries,
@@ -1595,7 +1631,7 @@ def _mesh_options_from_runtime_metadata(
                 bounds_by_name=bounds_by_name,
                 airbox_bounds=airbox_bounds,
                 component_aware=component_aware,
-                object_regions=patch_object_regions or object_regions,
+                object_regions=effective_object_regions,
             )
         )
     optimize = _mesh_option_value("optimize")
@@ -1677,9 +1713,7 @@ def _mesh_options_from_runtime_metadata(
     return MeshOptions(
         algorithm_2d=int(_mesh_option_value("algorithm_2d") or 6),
         algorithm_3d=int(_mesh_option_value("algorithm_3d") or 1),
-        hmin=_coerce_positive_float(
-            _mesh_option_value("hmin", "minimum_element_size", reducer="min")
-        ),
+        hmin=_coerce_positive_float(_mesh_hmin_value()),
         calibrate_for=(
             str(_mesh_option_value("calibrate_for"))
             if isinstance(_mesh_option_value("calibrate_for"), str)

@@ -10,6 +10,7 @@ use fullmag_ir::{FdmMaterialIR, FdmPlanIR, FemPlanIR, MaterialIR};
 pub use fullmag_quantities::{
     all_quantity_ids,
     cached_preview_quantity_ids,
+    field_materialization_quantity_ids,
     interactive_preview_quantity_ids,
     quantity_catalog,
     quantity_spec,

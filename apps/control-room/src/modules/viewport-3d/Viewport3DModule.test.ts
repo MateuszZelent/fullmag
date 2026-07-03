@@ -163,8 +163,23 @@ describe("resolveViewport3DColorbarLegend", () => {
       label: "mat_ms [A/m]",
       paletteGradient:
         "linear-gradient(90deg, rgb(0, 0, 4), rgb(66, 10, 104), rgb(147, 43, 93), rgb(221, 81, 58), rgb(252, 255, 164))",
-      maxLabel: "800000",
-      minLabel: "400000",
+      maxLabel: "800000 A/m",
+      minLabel: "400000 A/m",
+    });
+  });
+
+  it("keeps physical units on field component colorbar limits", () => {
+    expect(
+      resolveViewport3DColorbarLegend({
+        colorMode: "x",
+        quantityId: "H_demag",
+        range: { max: 1200, min: -350 },
+        unit: "A/m",
+      }),
+    ).toMatchObject({
+      label: "H_demag x [A/m]",
+      maxLabel: "1200 A/m",
+      minLabel: "-350 A/m",
     });
   });
 
@@ -1428,7 +1443,7 @@ describe("Viewport3DModule scene wiring", () => {
       "utf8",
     );
 
-    expect(source).toContain('useState<RegionOverlayMode>("off")');
+    expect(source).toContain('useState<RegionOverlayMode>("auto")');
     expect(source).toContain('aria-label="Region overlays"');
     expect(source).toContain("Off");
     expect(source).toContain("Auto");

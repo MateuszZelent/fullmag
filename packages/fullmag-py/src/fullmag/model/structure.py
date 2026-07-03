@@ -475,6 +475,14 @@ class ObjectRegion:
         order: int | None = None,
     ) -> "ObjectRegion":
         mesh_policy: dict[str, object] = {}
+        if (
+            minimum_element_size is not None
+            and maximum_element_size is not None
+            and float(minimum_element_size) > float(maximum_element_size)
+        ):
+            raise ValueError(
+                f"{self.owner_object}:{self.name}.mesh: minimum_element_size must be <= maximum_element_size"
+            )
         if maximum_element_size is not None:
             mesh_policy["maximum_element_size"] = require_positive(
                 float(maximum_element_size),

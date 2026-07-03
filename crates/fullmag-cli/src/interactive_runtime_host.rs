@@ -590,7 +590,7 @@ impl InteractiveRuntimeHost {
                 &display_selection,
                 live_workspace,
             )?;
-            let quantities = fullmag_runner::quantities::cached_preview_quantity_ids();
+            let quantities = fullmag_runner::quantities::field_materialization_quantity_ids();
             let cached_fields = runtime
                 .snapshot_vector_fields(&quantities, &display_selection.preview_request())?;
             live_workspace.update(|state| {
@@ -1162,7 +1162,7 @@ fn snapshot_interactive_preview_payload(
         apply_continuation_initial_state(&mut problem, previous_final_magnetization)?;
     }
     let preview_field = fullmag_runner::snapshot_problem_preview(&problem, request)?;
-    let quantities = fullmag_runner::quantities::cached_preview_quantity_ids();
+    let quantities = fullmag_runner::quantities::field_materialization_quantity_ids();
     let cached_fields =
         fullmag_runner::snapshot_problem_vector_fields(&problem, &quantities, request)?;
     Ok((preview_field, cached_fields))

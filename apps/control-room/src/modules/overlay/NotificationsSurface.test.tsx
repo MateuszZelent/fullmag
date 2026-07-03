@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
+import { DATA_FIELD_META_PATH } from "@/kernel/api/apiPaths";
 
 import {
   buildNotificationItems,
@@ -49,6 +50,39 @@ describe("NotificationsSurface", () => {
 
     expect(notifications).toHaveLength(1);
     expect(notifications[0]?.id).toBe("mesh-rendered:viewport-main:4");
+  });
+
+  it("creates an error toast when a quantity resource cannot be loaded", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resourceKey = `${DATA_FIELD_META_PATH.replace(
+      "{quantity_id}",
+      "H_eff",
+    )}?component=magnitude`;
+    const notifications = buildNotificationItems(bus, [
+      {
+        cause: "Request failed with status 404",
+        errorName: "ControlRoomApiError",
+        resourceKey,
+        revision: null,
+        situation: "Loading field metadata for the selected quantity",
+        source: "resource-hook",
+        status: 404,
+        type: "resource-load-failed",
+      },
+    ]);
+
+    const html = renderToStaticMarkup(
+      <NotificationsView notifications={notifications} />,
+    );
+
+    expect(html).toContain("data-kind=\"error\"");
+    expect(html).toContain("Quantity data unavailable");
+    expect(html).toContain("Quantity H_eff");
+    expect(html).toContain("field metadata request");
+    expect(html).toContain("Status 404");
+    expect(html).toContain("Cause ControlRoomApiError");
+    expect(html).toContain("Loading field metadata");
+    expect(html).toContain("Log resource:load-failed");
   });
 
   it("keeps only the latest instance when the same notification id is pushed again", () => {

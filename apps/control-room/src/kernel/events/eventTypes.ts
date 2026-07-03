@@ -97,6 +97,15 @@ export interface KernelEventMap {
     resourceKey: string;
     revision: string | number;
   };
+  "resource:load-failed": {
+    cause: string;
+    errorName: string;
+    resourceKey: string;
+    revision: string | number | null;
+    situation: string;
+    source: "resource-hook";
+    status: number | null;
+  };
   "telemetry:scalar-sample": {
     revision: string | number;
     row: Record<string, number>;

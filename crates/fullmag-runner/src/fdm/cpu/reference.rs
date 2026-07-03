@@ -2396,6 +2396,84 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_vector_fields_materializes_energy_density_quantities_for_frontend() {
+        let plan = FdmPlanIR {
+            enable_demag: true,
+            interfacial_dmi: Some(1.0e-3),
+            external_field: Some([0.0, 0.0, 1.0]),
+            material: fullmag_ir::FdmMaterialIR {
+                uniaxial_anisotropy_ku1: Some(1.0e5),
+                ..make_test_plan().material
+            },
+            ..make_test_plan()
+        };
+        let quantities = crate::quantities::field_materialization_quantity_ids();
+        let active = crate::quantities::active_fdm_preview_quantities(
+            crate::dispatch::FdmEngine::CpuReference,
+            &plan,
+            &quantities,
+        );
+        assert_eq!(
+            active,
+            vec![
+                "m",
+                "H_ex",
+                "H_demag",
+                "H_ext",
+                "H_eff",
+                "torque",
+                "H_ani",
+                "H_dmi",
+                "eden_ex",
+                "eden_demag",
+                "eden_ext",
+                "eden_ani",
+                "eden_dmi",
+                "eden_total",
+                "mat_ms",
+                "mat_aex",
+                "mat_alpha",
+            ]
+        );
+
+        let fields = snapshot_vector_fields(
+            &plan,
+            &active,
+            &LivePreviewRequest {
+                auto_scale_enabled: false,
+                ..Default::default()
+            },
+        )
+        .expect("field materialization should build frontend payloads");
+        let field_ids = fields
+            .iter()
+            .map(|field| field.quantity.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(field_ids, active);
+
+        for id in [
+            "eden_ex",
+            "eden_demag",
+            "eden_ext",
+            "eden_ani",
+            "eden_dmi",
+            "eden_total",
+        ] {
+            assert!(
+                field_ids.contains(&id),
+                "{id} should be returned by explicit field materialization"
+            );
+            let field = fields
+                .iter()
+                .find(|field| field.quantity == id)
+                .expect("checked field id should exist");
+            assert_eq!(field.unit, "J/m³");
+            assert_eq!(field.vector_field_values.len(), 16);
+        }
+        assert!(!field_ids.contains(&"E_total"));
+    }
+
+    #[test]
     fn uniform_relaxation_produces_stable_energy() {
         let plan = make_test_plan();
         let result =

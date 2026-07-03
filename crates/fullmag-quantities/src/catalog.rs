@@ -994,6 +994,23 @@ pub fn cached_preview_quantity_ids() -> Vec<&'static str> {
         .collect()
 }
 
+/// IDs of spatial quantities that an explicit field materialization command
+/// should evaluate for later data-plane reads.
+pub fn field_materialization_quantity_ids() -> Vec<&'static str> {
+    CATALOG
+        .iter()
+        .filter(|spec| {
+            spec.ui_exposed
+                && spec.interactive_preview
+                && matches!(
+                    spec.shape,
+                    QuantityShape::VectorField | QuantityShape::SpatialScalar
+                )
+        })
+        .map(|spec| spec.id.as_str())
+        .collect()
+}
+
 /// Look up the display unit for a quantity.
 pub fn quantity_unit(id: &str) -> &'static str {
     quantity_spec(id).map(|spec| spec.unit).unwrap_or("")
@@ -1080,5 +1097,32 @@ mod tests {
             assert!(spec.supports_preview_2d);
             assert!(spec.supports_preview_3d);
         }
+    }
+
+    #[test]
+    fn field_materialization_includes_energy_density_but_warm_cache_does_not() {
+        let materialized = field_materialization_quantity_ids();
+        let cached = cached_preview_quantity_ids();
+
+        for id in [
+            "eden_ex",
+            "eden_demag",
+            "eden_ext",
+            "eden_ani",
+            "eden_dmi",
+            "eden_total",
+        ] {
+            assert!(
+                materialized.contains(&id),
+                "{id} should be evaluated by explicit compute_fields"
+            );
+            assert!(
+                !cached.contains(&id),
+                "{id} should not be part of the warm vector-field cache"
+            );
+        }
+
+        assert!(materialized.contains(&"m"));
+        assert!(!materialized.contains(&"E_total"));
     }
 }

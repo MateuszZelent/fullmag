@@ -21,6 +21,7 @@ import {
   colorPickerInputValue,
   displayPassTogglePatch,
   fieldMetaScopeQueryForVisualizationTarget,
+  formatScalarColorbarValueWithUnit,
   geometryScopeDisplayPatch,
   geometryScopeVectorBudgetPatch,
   quantitySourcePatch,
@@ -208,6 +209,13 @@ describe("ObjectVisualizationPanelModel", () => {
     expect(surfaceColorSourceFieldMetaComponent("colormap", "mat_ms")).toBeNull();
     expect(surfaceColorSourceFieldMetaComponent("orientation", "m")).toBeUndefined();
     expect(surfaceColorSourceFieldMetaComponent("solid", "m")).toBeUndefined();
+  });
+
+  it("formats scalar colorbar values with physical units when available", () => {
+    expect(formatScalarColorbarValueWithUnit(1250, "A/m")).toBe("1250 A/m");
+    expect(formatScalarColorbarValueWithUnit(2.5e-4, "J/m³")).toBe("0.00025 J/m³");
+    expect(formatScalarColorbarValueWithUnit(0.25, "1")).toBe("0.25");
+    expect(formatScalarColorbarValueWithUnit(0.25, "")).toBe("0.25");
   });
 
   it("shows inspector colorbars only for numeric surface color modes", () => {

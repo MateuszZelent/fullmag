@@ -1994,8 +1994,8 @@ fn build_native_production_payload(
             == fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0,
         requires_floquet_airbox_dynamic_demag: plan.magnetostatic_bc
             == fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox,
-        requires_native_backend_demag_tangent_provider: plan.magnetostatic_bc
-            == fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0
+        requires_native_backend_demag_tangent_provider: plan.enable_demag
+            && plan.demag_realization.is_some()
             && plan.requested_device != fullmag_ir::ExecutionDevice::Gpu,
         periodic_airbox_delta_m_tangent_dof_count,
         periodic_airbox_delta_phi_dof_count: if matches!(
@@ -2096,19 +2096,17 @@ fn production_cpu_frequency_response_rejection_reason(
             );
         }
     } else {
-        let shared_domain_no_demag = plan.domain_mesh_mode
-            == fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir
-            && !plan.enable_demag
-            && plan.demag_realization.is_none();
         if plan.domain_mesh_mode != fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh
-            && !shared_domain_no_demag
+            && plan.domain_mesh_mode != fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir
         {
             return Some(
-                "production CPU frequency response currently supports only magnetic-body meshes or compacted shared-domain no-demag magnetic slices",
+                "production CPU frequency response currently supports only magnetic-body meshes or compacted shared-domain magnetic slices",
             );
         }
-        if plan.enable_demag || plan.demag_realization.is_some() {
-            return Some("dynamic demag is not implemented for production CPU frequency response");
+        if plan.enable_demag != plan.demag_realization.is_some() {
+            return Some(
+                "dynamic demag requires include_demag=true and a resolved Demag energy term",
+            );
         }
     }
     #[cfg(not(feature = "fem-gpu"))]
@@ -4155,10 +4153,20 @@ mod tests {
         demag.enable_demag = true;
         demag.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
         assert!(
-            super::production_cpu_frequency_response_rejection_reason(&demag)
-                .expect("demag should reject")
-                .contains("dynamic demag")
+            super::production_cpu_frequency_response_rejection_reason(&demag).is_none(),
+            "CPU frequency response should accept demag when a tangent provider can be built"
         );
+        #[cfg(feature = "fem-gpu")]
+        {
+            let payload = super::build_native_production_cpu_payload(&demag)
+                .expect("CPU demag response should build a native payload");
+            assert!(
+                payload.requires_native_backend_demag_tangent_provider,
+                "CPU demag response must provide a backend demag tangent operator"
+            );
+            assert!(!payload.requires_periodic_airbox_dynamic_demag);
+            assert_eq!(payload.periodic_airbox_delta_phi_dof_count, 0);
+        }
 
         let mut nonzero_k = minimal_frequency_response_plan();
         nonzero_k.k_sampling = Some(fullmag_ir::KSamplingIR::Single {

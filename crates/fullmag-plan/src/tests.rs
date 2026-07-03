@@ -6379,13 +6379,30 @@ fn fem_frequency_response_rejects_unsupported_production_slice_cases() {
     if let fullmag_ir::StudyIR::FrequencyResponse { operator, .. } = &mut demag.study {
         operator.include_demag = true;
     }
-    let err = plan(&demag).expect_err("frequency-response demag should be gated");
+    let planned = plan(&demag).expect("CPU frequency-response demag should plan");
+    match planned.backend_plan {
+        BackendPlanIR::FemFrequencyResponse(fem) => {
+            assert!(fem.enable_demag);
+            assert_eq!(
+                fem.demag_realization,
+                Some(fullmag_ir::ResolvedFemDemagIR::FredkinKoehler)
+            );
+            assert_eq!(fem.requested_device, fullmag_ir::ExecutionDevice::Cpu);
+        }
+        other => panic!("expected FemFrequencyResponse plan, got {other:?}"),
+    }
+
+    let mut gpu_demag = demag.clone();
+    gpu_demag.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "gpu", "precision": "double"}),
+    );
+    let err = plan(&gpu_demag).expect_err("GPU frequency-response demag should stay gated");
     assert!(
         err.reasons.iter().any(|reason| {
-            reason.contains("gamma/free-boundary magnetic slice")
-                && reason.contains("dynamic demag")
+            reason.contains("supported frequency-domain slices") && reason.contains("dynamic demag")
         }),
-        "unexpected demag rejection reasons: {:?}",
+        "unexpected GPU demag rejection reasons: {:?}",
         err.reasons
     );
 
@@ -6418,15 +6435,19 @@ fn fem_frequency_response_rejects_unsupported_production_slice_cases() {
         object_region_markers: Vec::new(),
         build_report: None,
     });
-    let err = plan(&shared_domain).expect_err("shared-domain response should be gated");
-    assert!(
-        err.reasons.iter().any(|reason| {
-            reason.contains("gamma/free-boundary magnetic slice")
-                && reason.contains("shared-domain airbox")
-        }),
-        "unexpected shared-domain rejection reasons: {:?}",
-        err.reasons
-    );
+    let planned = plan(&shared_domain)
+        .expect("CPU no-demag shared-domain response should plan as a magnetic slice");
+    match planned.backend_plan {
+        BackendPlanIR::FemFrequencyResponse(fem) => {
+            assert_eq!(fem.requested_device, fullmag_ir::ExecutionDevice::Cpu);
+            assert_eq!(
+                fem.domain_mesh_mode,
+                fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir
+            );
+            assert!(!fem.enable_demag);
+        }
+        other => panic!("expected FemFrequencyResponse plan, got {other:?}"),
+    }
 
     let mut gpu_shared_domain_no_demag = shared_domain.clone();
     gpu_shared_domain_no_demag
@@ -6462,7 +6483,7 @@ fn fem_frequency_response_rejects_unsupported_production_slice_cases() {
     }
     let err = plan(&nonzero_k).expect_err("nonzero-k response should be gated");
     assert!(err.reasons.iter().any(|reason| {
-        reason.contains("gamma/free-boundary magnetic slice")
+        reason.contains("supported frequency-domain slices")
             && reason.contains("nonzero-k driven response requires spin_wave_bc=floquet")
     }));
 

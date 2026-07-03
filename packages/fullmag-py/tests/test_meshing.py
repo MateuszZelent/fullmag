@@ -9349,6 +9349,51 @@ class RegionMeshPolicyTests(unittest.TestCase):
         self.assertEqual(region_fields[0]["params"]["Radius"], hole_radius + 30e-9)
         self.assertEqual(region_fields[0]["params"]["VIn"], 5e-9)
 
+    def test_region_local_refinement_lowers_global_hmin_clamp(self) -> None:
+        hole_radius = 25e-9
+        geometry = fm.Difference(
+            base=fm.Box(200e-9, 200e-9, 10e-9),
+            tool=fm.Cylinder(radius=hole_radius, height=10e-9),
+            name="periodic_antidot_film",
+        )
+        object_regions = [
+            {
+                "owner_object": "periodic_antidot_film",
+                "name": "hole_transition_refinement",
+                "enabled": True,
+                "shape": {
+                    "kind": "cylinder",
+                    "radius": 43e-9,
+                    "height": 10e-9,
+                    "center": [0.0, 0.0, 0.0],
+                    "axis": [0.0, 0.0, 1.0],
+                },
+                "mesh_policy": {
+                    "minimum_element_size": 0.15e-9,
+                    "maximum_element_size": 1e-9,
+                    "transition_distance": 3e-9,
+                    "order": 1,
+                },
+            }
+        ]
+
+        mesh_options = _mesh_options_from_runtime_metadata(
+            {
+                "per_geometry": [
+                    {
+                        "geometry": "periodic_antidot_film",
+                        "minimum_element_size": 3e-9,
+                        "maximum_element_size": 8e-9,
+                    }
+                ]
+            },
+            geometries=[geometry],
+            default_hmax=100e-9,
+            object_regions=object_regions,
+        )
+
+        self.assertEqual(mesh_options.hmin, 0.15e-9)
+
     def test_region_mesh_policy_fields_and_axes(self) -> None:
         # Create waveguide geometry
         waveguide = fm.ArchWaveguide(

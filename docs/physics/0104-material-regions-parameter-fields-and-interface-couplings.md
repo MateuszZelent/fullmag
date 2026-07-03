@@ -337,6 +337,24 @@ core.material.Ms = 7.5e5
 core.m = fm.texture.neel_skyrmion(300e-9, 40e-9, -1, 1, "xy")
 ```
 
+Region mesh policy is a local sizing policy unless the region explicitly asks
+for a conformal realization. A region with `realization_policy="inherit"` may
+emit local mesh size fields and diagnostic authored overlays, but it does not
+create a separate FEM domain marker or field-capable mesh-part visualization
+target. A conformal region may create a realized region marker/mesh part when
+the backend can fragment the owner geometry.
+
+Mesh controls are validated with the same ordering rule as object mesh
+controls: if both bounds are present, `minimum_element_size <=
+maximum_element_size`. Reversed ranges are invalid because they make local
+Gmsh size fields ambiguous and can otherwise look like ignored region controls.
+For local region size fields, `maximum_element_size` is the requested target
+size inside the region (`VIn` in the Gmsh field). `minimum_element_size` is the
+lower bound that must be allowed by the global Gmsh characteristic-length clamp;
+it is not the target size by itself. A region-local target below an object-level
+minimum must therefore lower the generated `Mesh.CharacteristicLengthMin`, or
+the local field is clipped before meshing.
+
 Smooth gradients should be authored as fields:
 
 ```python

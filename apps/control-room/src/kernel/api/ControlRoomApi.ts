@@ -352,11 +352,47 @@ export interface HysteresisExecutionTreeQuery {
 
 const CHUNKED_TOPOLOGY_THRESHOLD_BYTES = 16 * 1024 * 1024;
 const TOPOLOGY_RANGE_CHUNK_BYTES = 8 * 1024 * 1024;
+const FIELD_MATERIALIZATION_TIMEOUT_MS = 5_000;
+const FIELD_MATERIALIZATION_RETRY_MS = 250;
+const FIELD_MATERIALIZATION_REQUEST_KEY = "current-field-cache";
 
 function baseRevisionPayload(options?: AuthoringWriteOptions): { base_revision?: number } {
   return options?.baseRevision === undefined
     ? {}
     : { base_revision: options.baseRevision };
+}
+
+function shouldMaterializeFieldAfterJsonError(error: unknown): boolean {
+  return (
+    error instanceof ControlRoomApiError &&
+    error.status === 404 &&
+    error.message.toLowerCase().includes("not available")
+  );
+}
+
+function throwIfAborted(signal?: AbortSignal | null): void {
+  if (signal?.aborted) {
+    throw new DOMException("Aborted", "AbortError");
+  }
+}
+
+function delay(ms: number, signal?: AbortSignal | null): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("Aborted", "AbortError"));
+      return;
+    }
+
+    const timeout = globalThis.setTimeout(resolve, ms);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        globalThis.clearTimeout(timeout);
+        reject(new DOMException("Aborted", "AbortError"));
+      },
+      { once: true },
+    );
+  });
 }
 
 interface ControlRoomApiOptions {
@@ -386,6 +422,7 @@ export class ControlRoomApi {
   private readonly maxGetRetries: number;
   private readonly requestIdFactory: () => string;
   private readonly transport: OpenApiV2Transport;
+  private readonly fieldMaterializationRequests = new Map<string, Promise<void>>();
 
   readonly sessions = {
     current: {
@@ -691,20 +728,22 @@ export class ControlRoomApi {
         query: FieldMetaQuery = {},
         options?: RequestOptions,
       ) =>
-        this.requestJson<FieldMetaResource>(
+        this.requestFieldMeta(
+          resolveCanonicalQuantityId(quantityId),
           DATA_FIELD_META_PATH,
-          options,
           {
             path: { quantity_id: resolveCanonicalQuantityId(quantityId) },
             query: fieldMetaQueryParams(query),
           },
+          options,
         ),
       vector: (
         quantityId: string,
         query: FieldVectorQuery = {},
         options?: BinaryRequestOptions,
       ) =>
-        this.requestFieldVector(
+        this.requestFieldVectorOnDemand(
+          resolveCanonicalQuantityId(quantityId),
           DATA_FIELD_VECTOR_PATH,
           { quantity_id: resolveCanonicalQuantityId(quantityId) },
           fieldVectorQueryParams(query),
@@ -1663,6 +1702,23 @@ export class ControlRoomApi {
     return readOpenApiResult<T>(result);
   }
 
+  private async requestFieldMeta(
+    quantityId: string,
+    path: OpenApiV2Path,
+    params: Record<string, unknown>,
+    options: RequestOptions = {},
+  ): Promise<FieldMetaResource> {
+    try {
+      return await this.requestJson<FieldMetaResource>(path, options, params);
+    } catch (error) {
+      if (!shouldMaterializeFieldAfterJsonError(error)) {
+        throw error;
+      }
+      await this.materializeFieldsForQuantity(quantityId, options);
+      return this.retryFieldMetaUntilReady(quantityId, path, params, options);
+    }
+  }
+
   private async postJson<TResponse, TBody>(
     path: OpenApiV2Path,
     body: TBody,
@@ -1998,6 +2054,113 @@ export class ControlRoomApi {
       options,
       pathParams,
       query,
+    );
+  }
+
+  private async requestFieldVectorOnDemand(
+    quantityId: string,
+    path: OpenApiV2Path,
+    pathParams: PathParams,
+    query: QueryParams,
+    options: BinaryRequestOptions = {},
+  ): Promise<BinaryResourceResult<DecodedFieldVector>> {
+    const result = await this.requestFieldVector(path, pathParams, query, options);
+    if (result.status !== "not-applicable") {
+      return result;
+    }
+    await this.materializeFieldsForQuantity(quantityId, options);
+    return this.retryFieldVectorUntilReady(
+      quantityId,
+      path,
+      pathParams,
+      query,
+      options,
+    );
+  }
+
+  private async materializeFieldsForQuantity(
+    quantityId: string,
+    options: RequestOptions = {},
+  ): Promise<void> {
+    if (quantityId.startsWith("analysis:")) {
+      return;
+    }
+    throwIfAborted(options.signal);
+    const key = FIELD_MATERIALIZATION_REQUEST_KEY;
+    const existing = this.fieldMaterializationRequests.get(key);
+    if (existing) {
+      return existing;
+    }
+    const requestedQuantityId = resolveCanonicalQuantityId(quantityId);
+    const request = this.commands
+      .submit(
+        {
+          client_intent_id: `field-on-demand:${requestedQuantityId}:${Date.now()}`,
+          kind: "compute_fields",
+          reason: "field_on_demand",
+          requested_at_unix_ms: Date.now(),
+          target: { kind: "study" },
+        },
+        options,
+      )
+      .then(() => undefined)
+      .finally(() => {
+        this.fieldMaterializationRequests.delete(key);
+      });
+    this.fieldMaterializationRequests.set(key, request);
+    return request;
+  }
+
+  private async retryFieldMetaUntilReady(
+    quantityId: string,
+    path: OpenApiV2Path,
+    params: Record<string, unknown>,
+    options: RequestOptions,
+  ): Promise<FieldMetaResource> {
+    const deadline = Date.now() + FIELD_MATERIALIZATION_TIMEOUT_MS;
+    let lastError: unknown = null;
+    while (Date.now() <= deadline) {
+      throwIfAborted(options.signal);
+      await delay(FIELD_MATERIALIZATION_RETRY_MS, options.signal);
+      try {
+        return await this.requestJson<FieldMetaResource>(path, options, params);
+      } catch (error) {
+        if (!shouldMaterializeFieldAfterJsonError(error)) {
+          throw error;
+        }
+        lastError = error;
+      }
+    }
+    throw lastError ?? new ControlRoomApiError(
+      `Timed out waiting for field metadata materialization for quantity '${quantityId}'`,
+      0,
+    );
+  }
+
+  private async retryFieldVectorUntilReady(
+    quantityId: string,
+    path: OpenApiV2Path,
+    pathParams: PathParams,
+    query: QueryParams,
+    options: BinaryRequestOptions,
+  ): Promise<BinaryResourceResult<DecodedFieldVector>> {
+    const deadline = Date.now() + FIELD_MATERIALIZATION_TIMEOUT_MS;
+    let lastResult: BinaryResourceResult<DecodedFieldVector> | null = null;
+    while (Date.now() <= deadline) {
+      throwIfAborted(options.signal);
+      await delay(FIELD_MATERIALIZATION_RETRY_MS, options.signal);
+      const result = await this.requestFieldVector(path, pathParams, query, options);
+      if (result.status !== "not-applicable") {
+        return result;
+      }
+      lastResult = result;
+    }
+    if (lastResult) {
+      return lastResult;
+    }
+    throw new ControlRoomApiError(
+      `Timed out waiting for field vector materialization for quantity '${quantityId}'`,
+      0,
     );
   }
 

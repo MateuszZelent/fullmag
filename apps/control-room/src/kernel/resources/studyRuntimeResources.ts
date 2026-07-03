@@ -142,10 +142,33 @@ import {
   SESSION_STATUS_RESOURCE_KEY,
   useSessionStatusSelector,
 } from "./useSessionStatus";
+import { emitResourceLoadFailed } from "./resourceLoadFailure";
 import { useResource } from "./useResource";
 
 function ignoreMissingResource<T>(error: unknown): T | null {
   if (error instanceof ControlRoomApiError && error.status === 404) {
+    return null;
+  }
+  throw error;
+}
+
+function ignoreMissingFieldMetaResource<T>({
+  bus,
+  error,
+  resourceKey,
+}: {
+  bus: ReturnType<typeof useKernel>["bus"];
+  error: unknown;
+  resourceKey: string;
+}): T | null {
+  if (error instanceof ControlRoomApiError && error.status === 404) {
+    emitResourceLoadFailed({
+      bus,
+      error,
+      resourceKey,
+      revision: null,
+      situation: "Loading field metadata for the selected quantity",
+    });
     return null;
   }
   throw error;
@@ -1731,7 +1754,7 @@ export function useFieldMetaResource({
   stage_id = null,
   quantityId,
 }: RuntimeResourceOptions & FieldMetaQuery & { quantityId: string }) {
-  const { api } = useKernel();
+  const { api, bus } = useKernel();
   const resolvedQuantityId = useMemo(
     () => normalizeQuantityIdOrDefault(quantityId),
     [quantityId],
@@ -1754,8 +1777,14 @@ export function useFieldMetaResource({
     ({ signal }: { signal: AbortSignal }) =>
       api.data.fields
         .meta(resolvedQuantityId, query, { signal })
-        .catch(ignoreMissingResource<FieldMetaResource>),
-    [api, query, resolvedQuantityId],
+        .catch((error: unknown) =>
+          ignoreMissingFieldMetaResource<FieldMetaResource>({
+            bus,
+            error,
+            resourceKey,
+          }),
+        ),
+    [api, bus, query, resolvedQuantityId, resourceKey],
   );
 
   return useResource<FieldMetaResource | null>({

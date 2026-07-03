@@ -2466,6 +2466,111 @@ async fn field_vector_returns_204_for_known_field_that_is_not_available_yet() {
 }
 
 #[tokio::test]
+async fn field_meta_and_vector_resolve_active_live_preview_field_after_snapshot_apply() {
+    let state = test_app_state_with_live_session().await;
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("live session exists");
+        crate::session::apply_current_live_snapshot(
+            snapshot,
+            CurrentLiveSnapshotRequest {
+                session_id: snapshot.session.session_id.clone(),
+                session: None,
+                session_status: None,
+                metadata: None,
+                mesh_workspace: None,
+                stage_execution: None,
+                run: None,
+                live_state: Some(LiveState {
+                    status: "running".into(),
+                    updated_at_unix_ms: 1_700_000_000_000,
+                    latest_step: StepUpdateView {
+                        step: 10,
+                        time: 1e-9,
+                        dt: 1e-13,
+                        pseudo_time_s: None,
+                        e_ex: 0.0,
+                        e_demag: 0.0,
+                        e_ext: 0.0,
+                        e_ani: 0.0,
+                        e_dmi: 0.0,
+                        e_total: 0.0,
+                        max_dm_dt: 0.0,
+                        max_h_eff: 0.0,
+                        max_h_demag: 0.0,
+                        max_torque_Apm: 0.0,
+                        max_torque_T: 0.0,
+                        wall_time_ns: 100,
+                        grid: [2, 1, 1],
+                        fem_mesh: None,
+                        magnetization: None,
+                        per_object_scalars: Default::default(),
+                        preview_field: Some(LivePreviewField {
+                            config_revision: 4,
+                            quantity: "H_eff".to_string(),
+                            unit: "A/m".to_string(),
+                            spatial_kind: "grid".to_string(),
+                            quantity_domain: "cell".to_string(),
+                            preview_grid: [2, 1, 1],
+                            original_grid: [2, 1, 1],
+                            vector_field_values: vec![1.0, 0.0, 0.0, 0.0, 2.0, 0.0],
+                            x_chosen_size: 2,
+                            y_chosen_size: 1,
+                            applied_x_chosen_size: 2,
+                            applied_y_chosen_size: 1,
+                            applied_layer_stride: 1,
+                            auto_downscaled: false,
+                            auto_downscale_message: None,
+                            active_mask: None,
+                        }),
+                        finished: false,
+                    },
+                }),
+                latest_scalar_row: None,
+                latest_fields: None,
+                preview_fields: None,
+                clear_preview_cache: false,
+                engine_log: None,
+                solver_profile: None,
+                fem_mesh: None,
+            },
+        )
+        .expect("snapshot with active preview field should apply");
+    }
+
+    let app = build_v2_router().with_state(state);
+    let meta = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/H_eff/meta?component=magnitude")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(meta.status(), StatusCode::OK);
+    let meta_json = body_json(meta).await;
+    assert_eq!(meta_json["quantity_id"], "H_eff");
+    assert_eq!(meta_json["stats"]["max"], 2.0);
+
+    let vector = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/H_eff/samples/vector")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(vector.status(), StatusCode::OK);
+    let vector_bytes = body_bytes(vector).await;
+    assert_eq!(&vector_bytes[..4], b"FMVP");
+}
+
+#[tokio::test]
 async fn field_vector_returns_304_when_etag_matches() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -19765,6 +19870,50 @@ async fn field_meta_component_query_reports_scoped_object_stats() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let meta = body_json(response).await;
+    assert_eq!(meta["stats"]["min"], serde_json::json!(10.0));
+    assert_eq!(meta["stats"]["max"], serde_json::json!(13.0));
+    assert_eq!(meta["stats"]["mean"], serde_json::json!(11.5));
+}
+
+#[tokio::test]
+async fn field_meta_component_query_reports_scoped_h_demag_object_stats() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_scoped_fem_mesh_payload());
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "H_demag": {
+                "values": [
+                    [10.0, 10.1, 10.2],
+                    [11.0, 11.1, 11.2],
+                    [12.0, 12.1, 12.2],
+                    [13.0, 13.1, 13.2],
+                    [0.0, 0.1, 0.2],
+                    [1.0, 1.1, 1.2],
+                    [2.0, 2.1, 2.2],
+                    [3.0, 3.1, 3.2]
+                ],
+                "layout": {
+                    "grid_cells": [8, 1, 1]
+                }
+            }
+        }))
+        .expect("scoped H_demag latest_fields should deserialize");
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/H_demag/meta?component=x&scope_kind=object&scope_id=body")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let meta = body_json(response).await;
+    assert_eq!(meta["quantity_id"], "H_demag");
     assert_eq!(meta["stats"]["min"], serde_json::json!(10.0));
     assert_eq!(meta["stats"]["max"], serde_json::json!(13.0));
     assert_eq!(meta["stats"]["mean"], serde_json::json!(11.5));

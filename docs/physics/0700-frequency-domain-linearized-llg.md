@@ -292,6 +292,14 @@ If explicit Floquet pair metadata contains both translation and phase, the
 runtime validates `phase_rad = -k dot translation (mod 2*pi)` before the current
 unsupported solve path. A mismatch is a metadata validation error.
 
+The native FEM production CPU driven-response lane can include dynamic
+demagnetization for legal k=0/open or gamma-equivalent requests by supplying the
+linearized operator with a backend demag-tangent provider `delta_H_demag[delta_m]`.
+This is a matrix-free magnetic tangent operator, not a full nonzero-k
+Bloch/Floquet demag-k operator. The `periodic_airbox_k0` CPU slice additionally
+uses the same provider with scalar-potential diagnostics for the shared-domain
+airbox path.
+
 The native FEM production GPU driven-response lane currently enforces the
 gamma-point, free-boundary, no-demag magnetic slice and the k=0
 static-periodic, no-demag magnetic slice. It supports exchange, Zeeman, uniform
@@ -317,10 +325,11 @@ must not be rerouted through dense validation or CPU response.
 
 ## Demagnetization policy
 
-Static demagnetization at `k = 0` can be included by the current FEM reference
-operator. Nonzero-k dynamic demagnetization for Floquet FEM is not implemented.
-Requests with nonzero-k Floquet and demag enabled must fail with a capability
-error until a mathematically valid dynamic demag-k operator exists.
+Dynamic demagnetization at `k = 0` can be included by the current native FEM CPU
+driven-response operator through a matrix-free backend demag-tangent provider.
+Nonzero-k dynamic demagnetization for Floquet FEM is not implemented. Requests
+with nonzero-k Floquet and demag enabled must fail with a capability error until
+a mathematically valid dynamic demag-k operator exists.
 
 The public `magnetostatic_bc` value for the future nonzero-k FEM path is
 `floquet_airbox`. It is distinct from `periodic_airbox_k0`:

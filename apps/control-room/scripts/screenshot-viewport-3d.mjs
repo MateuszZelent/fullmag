@@ -696,10 +696,10 @@ async function verifyRegionOverlayModeControl(page) {
   await control.waitFor({ state: "visible", timeout: 15_000 });
   const authored = control.getByRole("button", { exact: true, name: "Authored" });
   const realized = control.getByRole("button", { exact: true, name: "Realized" });
-  const off = control.getByRole("button", { exact: true, name: "Off" });
+  const auto = control.getByRole("button", { exact: true, name: "Auto" });
 
-  if ((await off.getAttribute("aria-pressed")) !== "true") {
-    throw new Error("Region overlay mode must default to Off.");
+  if ((await auto.getAttribute("aria-pressed")) !== "true") {
+    throw new Error("Region overlay mode must default to Auto.");
   }
   if (!(await realized.isDisabled())) {
     throw new Error(
@@ -712,7 +712,7 @@ async function verifyRegionOverlayModeControl(page) {
   }
   await verifyFdmFixtureRegionOverlaySelection(page);
   console.log(
-    "Viewport 3D region overlay mode control passed (default=off, authored selectable, realized unavailable without mesh).",
+    "Viewport 3D region overlay mode control passed (default=auto, authored selectable, realized unavailable without mesh).",
   );
 }
 

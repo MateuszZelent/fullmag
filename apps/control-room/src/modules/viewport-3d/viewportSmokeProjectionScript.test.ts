@@ -378,8 +378,8 @@ describe("viewport smoke projection round-trip", () => {
     expect(screenshotScript).toContain("FDM_FIXTURE_REGION_NODE_ID");
     expect(screenshotScript).toContain("ensureExplorerNodeExpanded");
     expect(screenshotScript).toContain("clickCanvasUntilExplorerNodeSelected");
-    expect(screenshotScript).toContain('name: "Off"');
-    expect(screenshotScript).toContain("Region overlay mode must default to Off.");
+    expect(screenshotScript).toContain('name: "Auto"');
+    expect(screenshotScript).toContain("Region overlay mode must default to Auto.");
     expect(screenshotScript).toContain("aria-selected");
     expect(screenshotScript).toContain("Viewport 3D region overlay selection passed");
   });
