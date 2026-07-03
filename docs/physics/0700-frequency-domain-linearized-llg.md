@@ -301,18 +301,20 @@ uses the same provider with scalar-potential diagnostics for the shared-domain
 airbox path.
 
 The native FEM production GPU driven-response lane currently enforces the
-gamma-point, free-boundary, no-demag magnetic slice and the k=0
-static-periodic, no-demag magnetic slice. It supports exchange, Zeeman, uniform
-uniaxial anisotropy, and uniform or nodal Gilbert damping through a CUDA
-tangent operator. Static-periodic response requires complete
+gamma-point/free-boundary magnetic slice and the k=0 static-periodic magnetic
+slice. It supports exchange, Zeeman, uniform uniaxial anisotropy, and uniform
+or nodal Gilbert damping through a CUDA tangent operator; ordinary k=0 dynamic
+demag is supplied by the backend demag-tangent provider and is therefore a
+hybrid GPU/operator-provider path, not a fully device-resident GPU Poisson
+operator. Static-periodic response requires complete
 `mesh.periodic_node_pairs` and boundary-pair translation/tolerance metadata and
 publishes static-periodic diagnostics. A development GPU slice also accepts
 nonzero-k Floquet metadata only for a no-demag projected response with local
-terms and a supplied exchange-edge tangent operator; DMI, dynamic demag,
-magnetostatic periodic constraints, and full periodic exchange-graph assembly
-remain outside this slice. The high-level planner may reach this slice only for
-explicit GPU, magnetic-body, no-demag/no-DMI requests with complete periodic
-pair metadata. The runner treats `FrequencyExcitationIR.field_au_per_m` as the
+terms and a supplied exchange-edge tangent operator; DMI, nonzero-k dynamic
+demag, magnetostatic periodic constraints, and full periodic exchange-graph
+assembly remain outside this slice. The high-level planner may reach this slice
+only for explicit GPU, magnetic-body, no-demag/no-DMI requests with complete
+periodic pair metadata. The runner treats `FrequencyExcitationIR.field_au_per_m` as the
 reference-cell drive amplitude and applies `phase_rad=-k dot translation` to
 paired tangent-drive DOFs before the native solve. The implementation projects
 the complex real/imaginary response block onto the supplied Floquet pair phase

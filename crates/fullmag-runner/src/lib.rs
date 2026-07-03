@@ -3628,6 +3628,23 @@ mod tests {
             "fem/relax/preview.rs must own final cached-preview flushing that includes the active vector field"
         );
         assert!(
+            module.contains("field_materialization_quantity_ids()"),
+            "FEM cached preview refresh must materialize spatial scalar fields such as eden_total"
+        );
+        assert!(
+            !module.contains("&cached_preview_quantities_for(display_selection)"),
+            "FEM cached preview refresh must not use the vector-only preview cache quantity list"
+        );
+        let interactive_display = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/interactive_runtime/display_preview.rs"
+        ))
+        .expect("read interactive_runtime/display_preview.rs");
+        assert!(
+            interactive_display.contains("field_materialization_quantity_ids()"),
+            "interactive FEM mesh preview cache must materialize spatial scalar fields such as eden_total"
+        );
+        assert!(
             module.contains("struct FemCachedPreviewHandoff")
                 && module.contains("request_cached_previews(")
                 && module.contains("snapshot.is_ready()"),

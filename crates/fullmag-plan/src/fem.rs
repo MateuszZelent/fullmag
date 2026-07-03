@@ -3249,11 +3249,6 @@ fn fem_frequency_response_production_slice_rejection_reason(
     if plan.enable_demag != plan.demag_realization.is_some() {
         return Some("frequency-response dynamic demag requires include_demag=true and a resolved Demag energy term");
     }
-    if plan.requested_device == fullmag_ir::ExecutionDevice::Gpu
-        && (plan.enable_demag || plan.demag_realization.is_some())
-    {
-        return Some("dynamic demag is not implemented for production GPU frequency response");
-    }
     match plan.spin_wave_bc.kind() {
         fullmag_ir::SpinWaveBoundaryKindIR::Free => {
             if !plan

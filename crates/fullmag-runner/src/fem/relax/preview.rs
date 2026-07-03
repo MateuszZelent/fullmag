@@ -6,9 +6,9 @@
 use fullmag_ir::FemPlanIR;
 
 use crate::dispatch::{flatten_vectors, FemEngine};
-use crate::interactive_runtime::{cached_preview_quantities_for, display_is_global_scalar};
+use crate::interactive_runtime::display_is_global_scalar;
 use crate::native_fem::{NativeFemBackend, NativeFemFieldSnapshot, NativeFemPreviewSnapshot};
-use crate::quantities::active_fem_preview_quantities;
+use crate::quantities::{active_fem_preview_quantities, field_materialization_quantity_ids};
 use crate::types::{LivePreviewField, LivePreviewRequest, RunError};
 use crate::DisplaySelectionState;
 
@@ -142,11 +142,9 @@ impl FemCachedPreviewHandoff {
 
         let mut completed = self.poll_completed()?.unwrap_or_default();
         if self.pending.is_empty() && self.pending_revision != Some(display_selection.revision) {
-            let quantities = active_fem_preview_quantities(
-                engine,
-                plan,
-                &cached_preview_quantities_for(display_selection),
-            );
+            let materialization_quantities = field_materialization_quantity_ids();
+            let quantities =
+                active_fem_preview_quantities(engine, plan, &materialization_quantities);
             let base_request = display_selection.preview_request();
             for quantity in quantities {
                 let mut request = base_request.clone();
@@ -254,11 +252,8 @@ pub(crate) fn build_fem_cached_preview_fields(
     plan: &FemPlanIR,
     node_count: usize,
 ) -> Option<Vec<LivePreviewField>> {
-    let quantities = active_fem_preview_quantities(
-        engine,
-        plan,
-        &cached_preview_quantities_for(display_selection),
-    );
+    let materialization_quantities = field_materialization_quantity_ids();
+    let quantities = active_fem_preview_quantities(engine, plan, &materialization_quantities);
     if quantities.is_empty() {
         return None;
     }
@@ -293,7 +288,7 @@ pub(crate) fn build_fem_final_cached_preview_fields(
     plan: &FemPlanIR,
     node_count: usize,
 ) -> Option<Vec<LivePreviewField>> {
-    let mut quantity_ids = cached_preview_quantities_for(display_selection);
+    let mut quantity_ids = field_materialization_quantity_ids();
     if !display_is_global_scalar(display_selection) {
         quantity_ids.push(display_selection.selection.quantity.as_str());
     }

@@ -141,7 +141,7 @@ impl GpuInteractiveFemPreviewRuntime {
             };
             let cached_preview_fields = if cached_display_due {
                 let preview_cfg = display_state.preview_request();
-                let quantities = cached_preview_quantities_for(&display_state);
+                let quantities = crate::quantities::field_materialization_quantity_ids();
                 if quantities.is_empty() {
                     None
                 } else {
@@ -215,7 +215,7 @@ impl GpuInteractiveFemPreviewRuntime {
             };
             let cached_preview_fields = if cached_display_due {
                 let preview_cfg = display_state.preview_request();
-                let quantities = cached_preview_quantities_for(&display_state);
+                let quantities = crate::quantities::field_materialization_quantity_ids();
                 if quantities.is_empty() {
                     None
                 } else {

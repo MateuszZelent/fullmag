@@ -907,6 +907,27 @@ def run_validator(
     )
 
 
+def mark_fixture_as_gpu_dynamic_demag(root: Path, *, source: str | None) -> None:
+    diagnostics_path = root / "response" / "diagnostics" / "solver.v1.json"
+    diagnostics = json.loads(diagnostics_path.read_text())
+    diagnostics["operator_terms_included"] = ["exchange", "zeeman", "demag"]
+    if source is None:
+        diagnostics.pop("demag_tangent_operator_source", None)
+    else:
+        diagnostics["demag_tangent_operator_source"] = source
+    diagnostics_path.write_text(json.dumps(diagnostics))
+    (root / "response" / "diagnostics.v1.json").write_text(json.dumps(diagnostics))
+
+    manifest_path = root / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["diagnostics"]["operator_terms_included"] = ["exchange", "zeeman", "demag"]
+    if source is None:
+        manifest["diagnostics"].pop("demag_tangent_operator_source", None)
+    else:
+        manifest["diagnostics"]["demag_tangent_operator_source"] = source
+    manifest_path.write_text(json.dumps(manifest))
+
+
 def write_unavailable_frequency_domain_fixture(root: Path) -> None:
     (root / "response").mkdir(parents=True)
     (root / "frequency_domain").mkdir(parents=True)
@@ -1388,6 +1409,7 @@ def write_periodic_airbox_cpu_demag_solved_fixture(
             "validation_fallback_used": False,
             "periodic_airbox_coupled_block_solver": False,
             "mfem_coupled_block_assembly": False,
+            "dynamic_demag_matrix_form": "magnetic_only",
             "demag_tangent_operator_source": "matrix_free_demag_tangent_provider",
             "demag_tangent_linearity_check": True,
             "demag_tangent_additivity_max_abs_error": 0.0,
@@ -1448,6 +1470,7 @@ def write_periodic_airbox_cpu_demag_solved_fixture(
             "validation_fallback_used": False,
             "periodic_airbox_coupled_block_solver": False,
             "mfem_coupled_block_assembly": False,
+            "dynamic_demag_matrix_form": "magnetic_only",
             "demag_tangent_operator_source": "matrix_free_demag_tangent_provider",
             "demag_tangent_linearity_check": True,
             "demag_tangent_additivity_max_abs_error": 0.0,
@@ -1483,6 +1506,8 @@ def write_periodic_airbox_cpu_demag_solved_fixture(
             "exchange_edge_count": exchange_edge_count,
         }
     )
+    manifest["resolved_execution"]["dynamic_demag_matrix_form"] = "magnetic_only"
+    manifest["capabilities"]["dynamic_demag_matrix_form"] = "magnetic_only"
     manifest_path.write_text(json.dumps(manifest))
 
     for index in range(frequency_point_count):
@@ -1497,6 +1522,7 @@ def write_periodic_airbox_cpu_demag_solved_fixture(
                 "demag_contribution": {
                     "status": "solved",
                     "operator_source": "matrix_free_demag_tangent_provider",
+                    "dynamic_demag_matrix_form": "magnetic_only",
                     "mfem_coupled_block_assembly": False,
                     "delta_phi_complex": None,
                     "h_demag_complex": [[0.0, 0.0], [0.0, 0.0]],
@@ -1507,6 +1533,19 @@ def write_periodic_airbox_cpu_demag_solved_fixture(
 
 
 def add_m5_equilibrium_provenance_fixture(root: Path) -> None:
+    source_root = root / "m5_equilibrium_artifacts"
+    (source_root / "diagnostics").mkdir(parents=True, exist_ok=True)
+    (source_root / "reports").mkdir(parents=True, exist_ok=True)
+    (source_root / "m_final.json").write_text(json.dumps({"m": [[1.0, 0.0, 0.0]]}))
+    (source_root / "diagnostics" / "fem_static_pbc_demag_seams.v1.json").write_text(
+        json.dumps({"schema_version": "fem_static_pbc_demag_seams.v1", "status": "ok"})
+    )
+    (source_root / "reports" / "z_padding_validation.v1.json").write_text(
+        json.dumps({"schema_version": "fem_static_pbc_z_padding_validation.v1", "status": "ok"})
+    )
+    (source_root / "reports" / "supercell_validation.v1.json").write_text(
+        json.dumps({"schema_version": "fem_static_pbc_supercell_validation.v1", "status": "ok"})
+    )
     manifest_path = root / "frequency_domain" / "manifest.v1.json"
     manifest = json.loads(manifest_path.read_text())
     manifest["equilibrium_provenance"] = {
@@ -1514,7 +1553,7 @@ def add_m5_equilibrium_provenance_fixture(root: Path) -> None:
         "acceptance_gate": "M5_static_pbc_demag_equilibrium",
         "accepted": True,
         "source_kind": "m5_static_pbc_demag_equilibrium",
-        "source_artifact_root": ".fullmag/reports/fem-static-pbc-demag-equilibrium-runtime/artifacts",
+        "source_artifact_root": str(source_root),
         "equilibrium_field_path": "m_final.json",
         "seam_diagnostics_path": "diagnostics/fem_static_pbc_demag_seams.v1.json",
         "z_padding_report_path": "reports/z_padding_validation.v1.json",
@@ -1651,16 +1690,22 @@ def convert_periodic_airbox_fixture_to_schur_coupled_block(root: Path) -> None:
         "demag_tangent_additivity_relative_error",
         "demag_tangent_homogeneity_relative_error",
         "block_norms",
-        "exchange_edge_count",
     ]:
         diagnostics.pop(key, None)
+    exchange_edge_count = diagnostics.get("exchange_edge_count", 0)
+    preconditioner_variant = (
+        "graph_demag_coarse"
+        if isinstance(exchange_edge_count, int) and exchange_edge_count > 0
+        else "demag_coarse"
+    )
     diagnostics.update(
         {
             "periodic_airbox_coupled_block_solver": True,
             "dynamic_demag_operator_source": "matrix_free_mfem_demag_phi_consistency_schur_provider",
+            "dynamic_demag_matrix_form": "schur_phi_consistency_provider",
             "coupled_residual_partition_status": "coupled_block",
             "krylov_preconditioner_kind": "mfem_phi_consistency_schur_right",
-            "krylov_preconditioner_variant": "demag_coarse",
+            "krylov_preconditioner_variant": preconditioner_variant,
         }
     )
     diagnostics_path.write_text(json.dumps(diagnostics))
@@ -1674,6 +1719,7 @@ def convert_periodic_airbox_fixture_to_schur_coupled_block(root: Path) -> None:
             "periodic_airbox_coupled_block_solver": True,
             "mfem_coupled_block_assembly": False,
             "dynamic_demag_operator_source": "matrix_free_mfem_demag_phi_consistency_schur_provider",
+            "dynamic_demag_matrix_form": "schur_phi_consistency_provider",
         }
     )
     manifest["capabilities"].update(
@@ -1681,6 +1727,7 @@ def convert_periodic_airbox_fixture_to_schur_coupled_block(root: Path) -> None:
             "periodic_airbox_coupled_block_solver": True,
             "mfem_coupled_block_assembly": False,
             "dynamic_demag_operator_source": "matrix_free_mfem_demag_phi_consistency_schur_provider",
+            "dynamic_demag_matrix_form": "schur_phi_consistency_provider",
         }
     )
     for key in [
@@ -1691,19 +1738,30 @@ def convert_periodic_airbox_fixture_to_schur_coupled_block(root: Path) -> None:
         "demag_tangent_additivity_relative_error",
         "demag_tangent_homogeneity_relative_error",
         "block_norms",
-        "exchange_edge_count",
     ]:
         manifest["diagnostics"].pop(key, None)
     manifest["diagnostics"].update(
         {
             "periodic_airbox_coupled_block_solver": True,
             "dynamic_demag_operator_source": "matrix_free_mfem_demag_phi_consistency_schur_provider",
+            "dynamic_demag_matrix_form": "schur_phi_consistency_provider",
             "coupled_residual_partition_status": "coupled_block",
             "krylov_preconditioner_kind": "mfem_phi_consistency_schur_right",
-            "krylov_preconditioner_variant": "demag_coarse",
+            "krylov_preconditioner_variant": preconditioner_variant,
         }
     )
     manifest_path.write_text(json.dumps(manifest))
+    for point_path in sorted((root / "response" / "frequency_points").glob("frequency_*.json")):
+        point = json.loads(point_path.read_text())
+        point["demag_contribution"].update(
+            {
+                "operator_source": "matrix_free_mfem_demag_phi_consistency_schur_provider",
+                "dynamic_demag_matrix_form": "schur_phi_consistency_provider",
+                "delta_phi_complex": [[0.0, 0.0]],
+                "h_demag_complex": None,
+            }
+        )
+        point_path.write_text(json.dumps(point))
 
 
 def set_frequency_point_response(
@@ -1852,6 +1910,19 @@ def set_krylov_preconditioner_kind(root: Path, *, kind: str) -> None:
     manifest_path.write_text(json.dumps(manifest))
 
 
+def set_krylov_preconditioner_variant(root: Path, *, variant: str) -> None:
+    diagnostics_path = root / "response" / "diagnostics" / "solver.v1.json"
+    diagnostics = json.loads(diagnostics_path.read_text())
+    diagnostics["krylov_preconditioner_variant"] = variant
+    diagnostics_path.write_text(json.dumps(diagnostics))
+    (root / "response" / "diagnostics.v1.json").write_text(json.dumps(diagnostics))
+
+    manifest_path = root / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["diagnostics"]["krylov_preconditioner_variant"] = variant
+    manifest_path.write_text(json.dumps(manifest))
+
+
 def set_manifest_domain_mesh_mode(root: Path, *, mode: str) -> None:
     manifest_path = root / "frequency_domain" / "manifest.v1.json"
     manifest = json.loads(manifest_path.read_text())
@@ -1918,6 +1989,25 @@ def test_validator_accepts_periodic_airbox_cpu_demag_solved_boundary(
     assert result.returncode == 0, result.stderr + result.stdout
 
 
+def test_validator_rejects_periodic_airbox_cpu_demag_without_dynamic_demag_matrix_form(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path)
+    diagnostics_path = tmp_path / "response" / "diagnostics" / "solver.v1.json"
+    diagnostics = json.loads(diagnostics_path.read_text())
+    diagnostics.pop("dynamic_demag_matrix_form", None)
+    diagnostics_path.write_text(json.dumps(diagnostics))
+    (tmp_path / "response" / "diagnostics.v1.json").write_text(json.dumps(diagnostics))
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+    )
+
+    assert result.returncode != 0
+    assert "dynamic_demag_matrix_form" in (result.stderr + result.stdout)
+
+
 def test_validator_rejects_periodic_airbox_cpu_demag_without_preconditioner_variant(
     tmp_path: Path,
 ) -> None:
@@ -1939,6 +2029,108 @@ def test_validator_rejects_periodic_airbox_cpu_demag_without_preconditioner_vari
 
     assert result.returncode != 0
     assert "krylov_preconditioner_variant" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_periodic_airbox_exchange_graph_with_demag_coarse_variant(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path, exchange_edge_count=4)
+    set_krylov_preconditioner_variant(tmp_path, variant="demag_coarse")
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+    )
+
+    assert result.returncode != 0
+    assert "krylov_preconditioner_variant" in (result.stderr + result.stdout)
+    assert "graph_demag_coarse" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_periodic_airbox_no_exchange_with_graph_variant(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path, exchange_edge_count=0)
+    set_krylov_preconditioner_variant(tmp_path, variant="graph_demag_coarse")
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+    )
+
+    assert result.returncode != 0
+    assert "krylov_preconditioner_variant" in (result.stderr + result.stdout)
+    assert "demag_coarse" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_periodic_airbox_schur_exchange_graph_with_demag_coarse_variant(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path, exchange_edge_count=4)
+    convert_periodic_airbox_fixture_to_schur_coupled_block(tmp_path)
+    set_krylov_preconditioner_variant(tmp_path, variant="demag_coarse")
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+    )
+
+    assert result.returncode != 0
+    assert "krylov_preconditioner_variant" in (result.stderr + result.stdout)
+    assert "graph_demag_coarse" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_periodic_airbox_schur_no_exchange_with_graph_variant(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path, exchange_edge_count=0)
+    convert_periodic_airbox_fixture_to_schur_coupled_block(tmp_path)
+    set_krylov_preconditioner_variant(tmp_path, variant="graph_demag_coarse")
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+    )
+
+    assert result.returncode != 0
+    assert "krylov_preconditioner_variant" in (result.stderr + result.stdout)
+    assert "demag_coarse" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_periodic_airbox_cpu_demag_with_iteration_limit_drift(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path)
+    progress_path = tmp_path / "response" / "progress.v1.json"
+    progress = json.loads(progress_path.read_text())
+    progress["native_max_iterations_for_frequency"] = 4
+    progress_json = json.loads(progress["progress_json"])
+    progress_json["native_max_iterations_for_frequency"] = 4
+    progress["progress_json"] = json.dumps(progress_json)
+    progress_path.write_text(json.dumps(progress))
+
+    diagnostics_path = tmp_path / "response" / "diagnostics" / "solver.v1.json"
+    diagnostics = json.loads(diagnostics_path.read_text())
+    diagnostics["max_iterations_for_frequency"] = 4
+    diagnostics["restart_iterations_for_frequency"] = 8
+    diagnostics_path.write_text(json.dumps(diagnostics))
+    (tmp_path / "response" / "diagnostics.v1.json").write_text(json.dumps(diagnostics))
+
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["diagnostics"]["max_iterations_for_frequency"] = 4
+    manifest["diagnostics"]["restart_iterations_for_frequency"] = 8
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+    )
+
+    assert result.returncode != 0
+    assert "restart_iterations_for_frequency must be <=" in (
+        result.stderr + result.stdout
+    )
 
 
 def test_validator_rejects_periodic_airbox_response_without_m5_equilibrium_provenance(
@@ -1969,6 +2161,61 @@ def test_validator_accepts_periodic_airbox_response_with_m5_equilibrium_provenan
     )
 
     assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_rejects_periodic_airbox_response_with_missing_m5_artifact_file(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path)
+    add_m5_equilibrium_provenance_fixture(tmp_path)
+    (tmp_path / "m5_equilibrium_artifacts" / "reports" / "supercell_validation.v1.json").unlink()
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+        require_m5_equilibrium_provenance=True,
+    )
+
+    assert result.returncode != 0
+    assert "supercell_report_path" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_periodic_airbox_response_with_failed_m5_report(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path)
+    add_m5_equilibrium_provenance_fixture(tmp_path)
+    (tmp_path / "m5_equilibrium_artifacts" / "reports" / "supercell_validation.v1.json").write_text(
+        json.dumps({"schema_version": "fem_static_pbc_supercell_validation.v1", "status": "failed"})
+    )
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+        require_m5_equilibrium_provenance=True,
+    )
+
+    assert result.returncode != 0
+    assert "supercell_report_path.status" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_periodic_airbox_response_with_wrong_m5_report_schema(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path)
+    add_m5_equilibrium_provenance_fixture(tmp_path)
+    (tmp_path / "m5_equilibrium_artifacts" / "reports" / "supercell_validation.v1.json").write_text(
+        json.dumps({"schema_version": "fem_static_pbc_z_padding_validation.v1", "status": "ok"})
+    )
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+        require_m5_equilibrium_provenance=True,
+    )
+
+    assert result.returncode != 0
+    assert "supercell_report_path.schema_version" in (result.stderr + result.stdout)
 
 
 def test_validator_rejects_periodic_airbox_solved_boundary_without_progress_demag_mode(
@@ -3297,6 +3544,57 @@ def test_validator_accepts_required_static_periodic_diagnostics(tmp_path: Path) 
     result = run_validator(tmp_path, require_static_periodic=True)
 
     assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_accepts_gpu_dynamic_demag_operator_source(tmp_path: Path) -> None:
+    write_frequency_domain_fixture(
+        tmp_path,
+        execution_lane="production_gpu",
+        manifest_engine="native_fem_mfem_frequency_domain_gpu",
+        sweep_v1_lane_classification="fem_gpu_production",
+    )
+    mark_fixture_as_gpu_dynamic_demag(
+        tmp_path,
+        source="matrix_free_demag_tangent_provider",
+    )
+
+    result = run_validator(tmp_path, require_production_gpu=True)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_rejects_gpu_dynamic_demag_without_operator_source(
+    tmp_path: Path,
+) -> None:
+    write_frequency_domain_fixture(
+        tmp_path,
+        execution_lane="production_gpu",
+        manifest_engine="native_fem_mfem_frequency_domain_gpu",
+        sweep_v1_lane_classification="fem_gpu_production",
+    )
+    mark_fixture_as_gpu_dynamic_demag(tmp_path, source=None)
+
+    result = run_validator(tmp_path, require_production_gpu=True)
+
+    assert result.returncode != 0
+    assert "demag_tangent_operator_source" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_gpu_dynamic_demag_with_none_operator_source(
+    tmp_path: Path,
+) -> None:
+    write_frequency_domain_fixture(
+        tmp_path,
+        execution_lane="production_gpu",
+        manifest_engine="native_fem_mfem_frequency_domain_gpu",
+        sweep_v1_lane_classification="fem_gpu_production",
+    )
+    mark_fixture_as_gpu_dynamic_demag(tmp_path, source="none")
+
+    result = run_validator(tmp_path, require_production_gpu=True)
+
+    assert result.returncode != 0
+    assert "demag_tangent_operator_source" in (result.stderr + result.stdout)
 
 
 def test_validator_accepts_required_floquet_phase_projection(tmp_path: Path) -> None:

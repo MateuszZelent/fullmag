@@ -25,6 +25,10 @@ PERIODIC_AIRBOX_CPU_DEMAG_PRECONDITIONER_VARIANTS = {
     "demag_coarse",
     "block_jacobi",
 }
+GPU_DYNAMIC_DEMAG_TANGENT_OPERATOR_SOURCES = {
+    "explicit_demag_tangent_matrix",
+    "matrix_free_demag_tangent_provider",
+}
 
 
 def load_json(path: Path) -> dict:
@@ -1132,6 +1136,49 @@ def require_progress_demag_mode(progress: dict, manifest: dict) -> None:
         expected_demag_mode,
         "progress.progress_json.demag_mode",
     )
+
+
+def require_gpu_dynamic_demag_operator_source(
+    diagnostics: dict,
+    manifest: dict,
+) -> None:
+    operator_terms_value = diagnostics.get("operator_terms_included")
+    if operator_terms_value is None:
+        return
+    operator_terms = require_string_list(
+        operator_terms_value,
+        "diagnostics.operator_terms_included",
+    )
+    if "demag" not in operator_terms:
+        return
+    source = diagnostics.get("demag_tangent_operator_source")
+    if source not in GPU_DYNAMIC_DEMAG_TANGENT_OPERATOR_SOURCES:
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "diagnostics.demag_tangent_operator_source must identify the GPU dynamic-demag tangent operator when operator_terms_included contains demag"
+        )
+    manifest_diagnostics = manifest.get("diagnostics")
+    if not isinstance(manifest_diagnostics, dict):
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "manifest.diagnostics must be an object"
+        )
+    require_equal(
+        manifest_diagnostics.get("demag_tangent_operator_source"),
+        source,
+        "manifest.diagnostics.demag_tangent_operator_source",
+    )
+    manifest_terms_value = manifest_diagnostics.get("operator_terms_included")
+    if manifest_terms_value is not None:
+        manifest_terms = require_string_list(
+            manifest_terms_value,
+            "manifest.diagnostics.operator_terms_included",
+        )
+        if "demag" not in manifest_terms:
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                "manifest.diagnostics.operator_terms_included must include demag when diagnostics.operator_terms_included includes demag"
+            )
 
 
 def require_progress_json_checkpoint(progress: dict, artifact_name: str = "progress") -> dict:
@@ -2400,6 +2447,12 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
             "invalid frequency-domain runtime artifacts:\n"
             "manifest.resolved_execution must be an object"
         )
+    capabilities = manifest.get("capabilities")
+    if not isinstance(capabilities, dict):
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "manifest.capabilities must be an object"
+        )
     schur_coupled_block = (
         diagnostics.get("periodic_airbox_coupled_block_solver") is True
         or manifest_diagnostics.get("periodic_airbox_coupled_block_solver") is True
@@ -2414,6 +2467,9 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
         "matrix_free_mfem_demag_phi_consistency_schur_provider"
         if schur_coupled_block
         else "matrix_free_demag_tangent_provider"
+    )
+    expected_dynamic_demag_matrix_form = (
+        "schur_phi_consistency_provider" if schur_coupled_block else "magnetic_only"
     )
     expected_residual_partition_status = (
         "coupled_block"
@@ -2445,6 +2501,10 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
             diagnostics.get(expected_operator_field),
             expected_operator_source,
         ),
+        "diagnostics.dynamic_demag_matrix_form": (
+            diagnostics.get("dynamic_demag_matrix_form"),
+            expected_dynamic_demag_matrix_form,
+        ),
         "diagnostics.requested_magnetostatic_bc": (
             diagnostics.get("requested_magnetostatic_bc"),
             "periodic_airbox_k0",
@@ -2464,6 +2524,18 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
         f"manifest.diagnostics.{expected_operator_field}": (
             manifest_diagnostics.get(expected_operator_field),
             expected_operator_source,
+        ),
+        "manifest.diagnostics.dynamic_demag_matrix_form": (
+            manifest_diagnostics.get("dynamic_demag_matrix_form"),
+            expected_dynamic_demag_matrix_form,
+        ),
+        "manifest.resolved_execution.dynamic_demag_matrix_form": (
+            resolved_execution.get("dynamic_demag_matrix_form"),
+            expected_dynamic_demag_matrix_form,
+        ),
+        "manifest.capabilities.dynamic_demag_matrix_form": (
+            capabilities.get("dynamic_demag_matrix_form"),
+            expected_dynamic_demag_matrix_form,
         ),
         "manifest.diagnostics.periodic_airbox_coupled_block_solver": (
             manifest_diagnostics.get("periodic_airbox_coupled_block_solver"),
@@ -2493,28 +2565,27 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
         ),
     }
     require_expected(expected)
+    exchange_edge_count = require_non_negative_integer(
+        diagnostics.get("exchange_edge_count"),
+        "diagnostics.exchange_edge_count",
+    )
+    require_equal(
+        manifest_diagnostics.get("exchange_edge_count"),
+        exchange_edge_count,
+        "manifest.diagnostics.exchange_edge_count",
+    )
+    expected_preconditioner_variant = (
+        "graph_demag_coarse"
+        if exchange_edge_count > 0
+        else "demag_coarse"
+    )
     if schur_coupled_block:
         expected_preconditioner_kind = "mfem_phi_consistency_schur_right"
-        expected_preconditioner_variant = None
     else:
-        exchange_edge_count = require_non_negative_integer(
-            diagnostics.get("exchange_edge_count"),
-            "diagnostics.exchange_edge_count",
-        )
-        require_equal(
-            manifest_diagnostics.get("exchange_edge_count"),
-            exchange_edge_count,
-            "manifest.diagnostics.exchange_edge_count",
-        )
         expected_preconditioner_kind = (
             "mfem_tangent_graph_demag_coarse_right"
             if exchange_edge_count > 0
             else "mfem_tangent_demag_coarse_right"
-        )
-        expected_preconditioner_variant = (
-            "graph_demag_coarse"
-            if exchange_edge_count > 0
-            else "demag_coarse"
         )
     preconditioner_variant = require_non_empty_string(
         diagnostics.get("krylov_preconditioner_variant"),
@@ -2526,12 +2597,11 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
             "diagnostics.krylov_preconditioner_variant must be one of "
             f"{sorted(PERIODIC_AIRBOX_CPU_DEMAG_PRECONDITIONER_VARIANTS)!r}"
         )
-    if expected_preconditioner_variant is not None:
-        require_equal(
-            preconditioner_variant,
-            expected_preconditioner_variant,
-            "diagnostics.krylov_preconditioner_variant",
-        )
+    require_equal(
+        preconditioner_variant,
+        expected_preconditioner_variant,
+        "diagnostics.krylov_preconditioner_variant",
+    )
     require_equal(
         manifest_diagnostics.get("krylov_preconditioner_variant"),
         preconditioner_variant,
@@ -2564,6 +2634,20 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
             raise SystemExit(
                 "invalid frequency-domain runtime artifacts:\n"
                 f"{source_name}.gmres_relative_residual_history must contain at least initial and final residuals"
+            )
+        max_iterations = require_positive_integer(
+            source.get("max_iterations_for_frequency"),
+            f"{source_name}.max_iterations_for_frequency",
+        )
+        restart_iterations = require_positive_integer(
+            source.get("restart_iterations_for_frequency"),
+            f"{source_name}.restart_iterations_for_frequency",
+        )
+        if restart_iterations > max_iterations:
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                f"{source_name}.restart_iterations_for_frequency must be <= "
+                f"{source_name}.max_iterations_for_frequency"
             )
         require_equal(
             source.get("coupled_residual_partition_status"),
@@ -2669,6 +2753,10 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
                     demag_contribution.get("operator_source"),
                     expected_operator_source,
                 ),
+                f"{point_name}.demag_contribution.dynamic_demag_matrix_form": (
+                    demag_contribution.get("dynamic_demag_matrix_form"),
+                    expected_dynamic_demag_matrix_form,
+                ),
                 f"{point_name}.demag_contribution.mfem_coupled_block_assembly": (
                     demag_contribution.get("mfem_coupled_block_assembly"),
                     False,
@@ -2715,6 +2803,33 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
                 )
 
 
+def resolve_provenance_path(source_root: Path, artifact_path: str) -> Path:
+    path = Path(artifact_path)
+    if path.is_absolute():
+        return path
+    return source_root / path
+
+
+def require_m5_source_json_artifact(
+    path: Path,
+    name: str,
+    expected_schema_version: str,
+) -> dict:
+    payload = load_json(path)
+    if not isinstance(payload, dict):
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            f"{name} must be a JSON object"
+        )
+    require_equal(
+        payload.get("schema_version"),
+        expected_schema_version,
+        f"{name}.schema_version",
+    )
+    require_equal(payload.get("status"), "ok", f"{name}.status")
+    return payload
+
+
 def require_m5_equilibrium_provenance_contract(manifest: dict) -> None:
     provenance = manifest.get("equilibrium_provenance")
     if not isinstance(provenance, dict):
@@ -2757,6 +2872,57 @@ def require_m5_equilibrium_provenance_contract(manifest: dict) -> None:
             provenance.get(field_name),
             f"manifest.equilibrium_provenance.{field_name}",
         )
+    source_artifact_root = require_non_empty_string(
+        provenance.get("source_artifact_root"),
+        "manifest.equilibrium_provenance.source_artifact_root",
+    )
+    source_root = Path(source_artifact_root)
+    if not source_root.is_absolute():
+        source_root = Path.cwd() / source_root
+    if not source_root.is_dir():
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "manifest.equilibrium_provenance.source_artifact_root must point to an existing M5 artifact directory"
+        )
+    resolved_paths: dict[str, Path] = {}
+    for field_name in [
+        "equilibrium_field_path",
+        "seam_diagnostics_path",
+        "z_padding_report_path",
+        "supercell_report_path",
+    ]:
+        artifact_path = require_non_empty_string(
+            provenance.get(field_name),
+            f"manifest.equilibrium_provenance.{field_name}",
+        )
+        resolved_path = resolve_provenance_path(source_root, artifact_path)
+        if not resolved_path.is_file():
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                f"manifest.equilibrium_provenance.{field_name} must point to an existing M5 artifact file"
+            )
+        resolved_paths[field_name] = resolved_path
+    equilibrium = load_json(resolved_paths["equilibrium_field_path"])
+    if not isinstance(equilibrium, dict) or "m" not in equilibrium:
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "manifest.equilibrium_provenance.equilibrium_field_path must point to a JSON object with field 'm'"
+        )
+    require_m5_source_json_artifact(
+        resolved_paths["seam_diagnostics_path"],
+        "manifest.equilibrium_provenance.seam_diagnostics_path",
+        "fem_static_pbc_demag_seams.v1",
+    )
+    require_m5_source_json_artifact(
+        resolved_paths["z_padding_report_path"],
+        "manifest.equilibrium_provenance.z_padding_report_path",
+        "fem_static_pbc_z_padding_validation.v1",
+    )
+    require_m5_source_json_artifact(
+        resolved_paths["supercell_report_path"],
+        "manifest.equilibrium_provenance.supercell_report_path",
+        "fem_static_pbc_supercell_validation.v1",
+    )
     axes = require_string_list(
         provenance.get("pbc_axes"),
         "manifest.equilibrium_provenance.pbc_axes",
@@ -3853,6 +4019,17 @@ def main() -> int:
         if require_production_gpu
         else "native_fem_mfem_frequency_domain_cpu"
     )
+    schur_coupled_block = (
+        diagnostics.get("periodic_airbox_coupled_block_solver") is True
+        or manifest.get("diagnostics", {}).get("periodic_airbox_coupled_block_solver") is True
+        or manifest.get("resolved_execution", {}).get("periodic_airbox_coupled_block_solver") is True
+    )
+    expected_solver_model = (
+        "periodic_airbox_mfem_phi_consistency_schur"
+        if schur_coupled_block
+        else "matrix_free_gmres"
+    )
+
     expected = {
         "sweep_v1.schema_version": (
             sweep_v1.get("schema_version"),
@@ -4019,7 +4196,7 @@ def main() -> int:
         ),
         "manifest.resolved_execution.solver_model": (
             manifest.get("resolved_execution", {}).get("solver_model"),
-            "matrix_free_gmres",
+            expected_solver_model,
         ),
         "manifest.resolved_execution.solve_kind": (
             manifest.get("resolved_execution", {}).get("solve_kind"),
@@ -4135,6 +4312,8 @@ def main() -> int:
         require_floquet_periodic_pairs_artifact(root, diagnostics, manifest)
     require_manifest_physics(manifest)
     require_progress_demag_mode(progress, manifest)
+    if require_production_gpu:
+        require_gpu_dynamic_demag_operator_source(diagnostics, manifest)
     require_equal(
         diagnostics.get("phasor_convention"),
         manifest["physics"]["phase_convention"],

@@ -3255,7 +3255,7 @@ void production_cpu_matrix_free_solver_solves_diagonal_harmonic_response()
     check(status == fd::FrequencyDomainStatus::ok, "production CPU matrix-free solve succeeds");
     check(result.completed_frequency_count == 1, "production CPU matrix-free solve completes one frequency");
     check(result.total_iteration_count > 0, "production CPU matrix-free solve reports iterations");
-    check(result.max_iterations_for_frequency <= 4, "diagonal production solve converges inside one restart");
+    check(result.total_iteration_count <= 4, "diagonal production solve converges inside one restart");
     check(relative_residual_l2[0] < 1.0e-12, "production CPU matrix-free residual is small");
     check(result.relative_residual_l2_norm < 1.0e-12, "production CPU result reports small residual");
     check(std::abs(response_real[0] - 0.4) < 1.0e-12, "production CPU response real[0]");
@@ -6288,12 +6288,187 @@ void production_gpu_lane_runs_mfem_no_demag_response_problem()
     check(
         contains(result.diagnostics_json, "\"operator_terms_included\":[\"zeeman\"]"),
         "production GPU MFEM diagnostics report included operator terms");
+    check(
+        contains(result.diagnostics_json, "\"demag_tangent_operator_source\":\"none\""),
+        "production GPU MFEM no-demag diagnostics report demag source");
+    check(
+        contains(result.result_json, "\"demag_tangent_operator_source\":\"none\""),
+        "production GPU MFEM no-demag result reports demag source");
 #else
     check(status == fd::FrequencyDomainStatus::unavailable, "non-CUDA production GPU solve is unavailable");
     check(
         contains(result.diagnostics_json, "\"validation_fallback_used\":false"),
         "non-CUDA production GPU diagnostics reject validation fallback");
 #endif
+    fd::release_driven_frequency_response_result(&result);
+}
+
+void production_gpu_lane_runs_mfem_explicit_demag_response_problem()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double equilibrium[] = {0.0, 0.0, 1.0};
+    fd::TangentFrameNode node{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 1, &node, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "production GPU explicit demag MFEM frame succeeds");
+
+    fd::MfemOperatorContextDescriptor descriptor{};
+    descriptor.node_count = 1;
+    descriptor.full_dof_count = 3;
+    descriptor.tangent_dof_count = 2;
+    descriptor.zeeman_enabled = true;
+    descriptor.demag_kind = fd::FrequencyDomainDemagKind::static_k0;
+    descriptor.demag_enabled = true;
+    descriptor.mfem_mesh_available = true;
+    fd::MfemTangentSpaceLayout layout{};
+    layout.node_count = 1;
+    layout.full_dof_count = 3;
+    layout.tangent_dof_count = 2;
+    layout.tangent_components_per_node = 2;
+    layout.tangent_stride = 2;
+    const double h_ext_a_per_m[] = {0.0, 0.0, 2.0};
+    const double demag_tangent_matrix[] = {
+        0.5, 0.0,
+        0.0, 0.25,
+    };
+    const double drive_real[] = {1.0, 0.0};
+
+    fd::DrivenFrequencyResponseSolveRequest request{};
+    request.solve_request.operator_request.node_count = 1;
+    request.solve_request.operator_request.tangent_dof_count = 2;
+    request.solve_request.operator_request.alpha = 0.0;
+    request.solve_request.operator_request.gamma0 = 1.0;
+    request.solve_request.operator_request.include_zeeman = true;
+    request.solve_request.operator_request.demag_kind = fd::FrequencyDomainDemagKind::static_k0;
+    request.solve_request.operator_request.strict_gpu = true;
+    request.solve_request.frequencies_hz = frequencies_hz;
+    request.solve_request.frequency_count = 1;
+    request.execution_lane = fd::DrivenFrequencyResponseExecutionLane::production_gpu;
+    request.mfem_validation_problem.enabled = true;
+    request.mfem_validation_problem.descriptor = descriptor;
+    request.mfem_validation_problem.layout = layout;
+    request.mfem_validation_problem.nodes = &node;
+    request.mfem_validation_problem.h_ext_a_per_m = h_ext_a_per_m;
+    request.mfem_validation_problem.demag_tangent_matrix_row_major = demag_tangent_matrix;
+    request.mfem_validation_problem.drive_real = drive_real;
+
+    fd::DrivenFrequencyResponseSolveResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_driven_frequency_response(request, &result);
+
+#if FULLMAG_HAS_CUDA_RUNTIME
+    check(status == fd::FrequencyDomainStatus::ok, "production GPU MFEM explicit demag solve succeeds");
+    check(result.completed_frequency_count == 1, "production GPU MFEM explicit demag solve completes frequency");
+    check(
+        contains(result.result_json, "\"requested_execution_lane\":\"production_gpu\""),
+        "production GPU explicit demag result reports requested lane");
+    check(
+        contains(result.result_json, "\"resolved_execution_lane\":\"production_gpu\""),
+        "production GPU explicit demag result reports resolved lane");
+    check(
+        contains(result.diagnostics_json, "\"operator_terms_included\":[\"zeeman\",\"demag\"]"),
+        "production GPU explicit demag diagnostics report included operator terms");
+    check(
+        contains(result.diagnostics_json, "\"demag_tangent_operator_source\":\"explicit_demag_tangent_matrix\""),
+        "production GPU explicit demag diagnostics report demag source");
+    check(
+        contains(result.result_json, "\"demag_tangent_operator_source\":\"explicit_demag_tangent_matrix\""),
+        "production GPU explicit demag result reports demag source");
+    check(
+        contains(result.diagnostics_json, "\"gpu_operator_solver\":true"),
+        "production GPU explicit demag diagnostics report GPU operator solver");
+    check(
+        contains(result.diagnostics_json, "\"validation_fallback_used\":false"),
+        "production GPU explicit demag diagnostics reject validation fallback");
+    check(
+        nearly_equal(
+            extract_json_double(result.result_json, "\"max_abs_response\""),
+            12.0 / 13.0,
+            1.0e-12),
+        "production GPU explicit demag response uses demag tangent");
+#else
+    check(status == fd::FrequencyDomainStatus::unavailable, "non-CUDA production GPU explicit demag solve is unavailable");
+    check(
+        contains(result.diagnostics_json, "\"validation_fallback_used\":false"),
+        "non-CUDA production GPU explicit demag diagnostics reject validation fallback");
+#endif
+    fd::release_driven_frequency_response_result(&result);
+}
+
+void production_gpu_lane_rejects_potential_only_demag_provider()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double equilibrium[] = {0.0, 0.0, 1.0};
+    fd::TangentFrameNode node{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 1, &node, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "production GPU potential-only demag provider frame succeeds");
+
+    fd::MfemOperatorContextDescriptor descriptor{};
+    descriptor.node_count = 1;
+    descriptor.full_dof_count = 3;
+    descriptor.tangent_dof_count = 2;
+    descriptor.zeeman_enabled = true;
+    descriptor.demag_kind = fd::FrequencyDomainDemagKind::static_k0;
+    descriptor.demag_enabled = true;
+    descriptor.mfem_mesh_available = true;
+    fd::MfemTangentSpaceLayout layout{};
+    layout.node_count = 1;
+    layout.full_dof_count = 3;
+    layout.tangent_dof_count = 2;
+    layout.tangent_components_per_node = 2;
+    layout.tangent_stride = 2;
+    const double h_ext_a_per_m[] = {0.0, 0.0, 2.0};
+    const double demag_tangent_matrix[] = {
+        0.5, 0.0,
+        0.0, 0.25,
+    };
+    const double drive_real[] = {1.0, 0.0};
+    DemagTangentCallbackOperator demag_operator{};
+    demag_operator.matrix = demag_tangent_matrix;
+    demag_operator.tangent_dof_count = 2;
+    demag_operator.phi_dof_count = 1;
+
+    fd::DrivenFrequencyResponseSolveRequest request{};
+    request.solve_request.operator_request.node_count = 1;
+    request.solve_request.operator_request.tangent_dof_count = 2;
+    request.solve_request.operator_request.alpha = 0.0;
+    request.solve_request.operator_request.gamma0 = 1.0;
+    request.solve_request.operator_request.include_zeeman = true;
+    request.solve_request.operator_request.demag_kind = fd::FrequencyDomainDemagKind::static_k0;
+    request.solve_request.operator_request.strict_gpu = true;
+    request.solve_request.frequencies_hz = frequencies_hz;
+    request.solve_request.frequency_count = 1;
+    request.execution_lane = fd::DrivenFrequencyResponseExecutionLane::production_gpu;
+    request.mfem_validation_problem.enabled = true;
+    request.mfem_validation_problem.descriptor = descriptor;
+    request.mfem_validation_problem.layout = layout;
+    request.mfem_validation_problem.nodes = &node;
+    request.mfem_validation_problem.h_ext_a_per_m = h_ext_a_per_m;
+    request.mfem_validation_problem.apply_demag_tangent_with_potential =
+        apply_demag_tangent_with_potential_callback;
+    request.mfem_validation_problem.demag_tangent_user_data = &demag_operator;
+    request.mfem_validation_problem.drive_real = drive_real;
+
+    fd::DrivenFrequencyResponseSolveResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_driven_frequency_response(request, &result);
+
+    check(
+        status == fd::FrequencyDomainStatus::unavailable,
+        "production GPU potential-only demag provider is unavailable");
+    check(
+        contains(result.diagnostics_json, "\"unsupported_reason\":\"dynamic_demag_gpu_missing_tangent_provider\""),
+        "production GPU potential-only demag diagnostics report missing tangent provider");
+    check(
+        contains(result.diagnostics_json, "\"validation_fallback_used\":false"),
+        "production GPU potential-only demag diagnostics reject validation fallback");
     fd::release_driven_frequency_response_result(&result);
 }
 
@@ -12826,6 +13001,8 @@ int main()
     driven_response_solver_runs_assembled_mfem_dmi_validation_problem();
     production_cpu_lane_runs_mfem_matrix_free_response_problem();
     production_gpu_lane_runs_mfem_no_demag_response_problem();
+    production_gpu_lane_runs_mfem_explicit_demag_response_problem();
+    production_gpu_lane_rejects_potential_only_demag_provider();
     production_cpu_lane_runs_mfem_matrix_free_explicit_demag_response_problem();
     production_cpu_lane_runs_mfem_matrix_free_demag_callback_response_problem();
     production_cpu_lane_rejects_nonfinite_zeeman_field_before_matrix_free_solve();

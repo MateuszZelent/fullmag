@@ -71,7 +71,12 @@ pub(crate) fn build_cached_mesh_preview_fields(
     observables: &StateObservables,
     mesh: &fullmag_ir::MeshIR,
 ) -> Option<Vec<LivePreviewField>> {
-    let quantities = cached_preview_quantities_for(display_state);
+    let active_quantity = (!display_is_global_scalar(display_state))
+        .then_some(display_state.selection.quantity.as_str());
+    let quantities = crate::quantities::field_materialization_quantity_ids()
+        .into_iter()
+        .filter(|quantity| Some(*quantity) != active_quantity)
+        .collect::<Vec<_>>();
     if quantities.is_empty() {
         return None;
     }

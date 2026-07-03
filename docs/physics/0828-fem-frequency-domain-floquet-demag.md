@@ -156,8 +156,12 @@ matrix-free backend demag tangent provider. The narrow CPU
 provider and may expose provider-side scalar-potential diagnostics, but that
 does not make `delta_phi` an independently assembled coupled unknown. It must be
 described as a qualified driven-response slice, not as an eigenmode solver and
-not as complete `[delta_m, delta_phi]` physics. GPU dynamic demag remains gated
-until a strict GPU dynamic demag operator exists.
+not as complete `[delta_m, delta_phi]` physics. The native GPU driven-response
+path can include ordinary k=0 demag through the backend demag-tangent provider
+while keeping the local/exchange operator on CUDA; this is a hybrid provider
+path and not a strict device-resident GPU Poisson implementation. GPU
+`periodic_airbox_k0`, Floquet-airbox, and nonzero-k demag-k remain gated until
+the corresponding GPU dynamic-demag operators exist.
 
 The target eigenfrequency system reuses the same linearized operators but has no
 external RF drive. In abstract form it is a generalized eigenproblem over the
@@ -253,7 +257,7 @@ magnetic and magnetostatic BC provenance, gauge policy, and either
 operator/preconditioner split when a coupled or Schur-like path is used:
 
 ```text
-matrix_form = coupled_demag_block | schur_phi_consistency_provider | magnetic_only
+dynamic_demag_matrix_form = coupled_demag_block | schur_phi_consistency_provider | magnetic_only
 ksp_type
 pc_type
 magnetic_block_iterations

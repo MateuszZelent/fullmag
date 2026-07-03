@@ -44,7 +44,7 @@ Use this order when documents disagree.
 | `docs/physics/0810-fem-static-pbc-dmi.md` | Static/time-domain DMI PBC seam semantics. | Periodic seam is not a physical free boundary; DMI seam handling must be explicit. |
 | `docs/specs/frequency-domain-artifacts-v2.md` | Canonical v2 artifact family for spectrum, branches, dispersion, modes, response sweep, and periodic pairs. | Reuse `eigen/*.v2`, `response/magnetic_response_sweep.v1.json`, and diagnostic 404 semantics. |
 | `docs/specs/fullmag_magnetoelastic_frequency_patch_specs.md` | Patch-level IR, planner, capability, artifact, UI, API, test, and benchmark contract. | Historical baseline: keep production capability flags separate. Current rollout keeps that separation and promotes only the explicitly gated native FEM production CPU response slice. |
-| `docs/specs/capability-matrix-v0.md` | Current capability status and deferred booleans. | `StudyIR::FrequencyResponse` is partial-production-executable for the native FEM CPU gamma/free-boundary magnetic slice, reference-executable for dense validation artifacts, and unsupported for production GPU, demag, nonzero-k Floquet/Bloch response, and magnetoelastic response. `frequency_domain_capabilities.v1` is the precise UI-gating source. |
+| `docs/specs/capability-matrix-v0.md` | Current capability status and deferred booleans. | `StudyIR::FrequencyResponse` is partial-production-executable for native FEM CPU/GPU gamma/free-boundary and k = 0 static-periodic magnetic slices with ordinary k = 0 dynamic demag through the backend tangent provider, reference-executable for dense validation artifacts, and unsupported for GPU periodic-airbox Poisson, nonzero-k Floquet/Bloch demag, and magnetoelastic response. `frequency_domain_capabilities.v1` is the precise UI-gating source. |
 | `docs/specs/runtime-engine-naming-v0.md` | Current FEM eigen engine names and production/reference labels. | Keep `fem_eigen_*` engine names scoped to modal eigen paths. Do not promote them as response engines. |
 | `docs/specs/resource-first-control-room-api-v2.md` | Resource-first v2 API rules. | Add frequency-domain resources through the typed API/facade/resource-hook layers only. |
 | `docs/engineering/frequency_domain_solver_engineering.md` | Engineering backlog, solve stack, ABI direction, frontend/CLI, tests, benchmarks, release gates. | Use the staged MR path: semantic contract, scalable modal path, then driven response, then mechanics/coupling. |
@@ -314,8 +314,9 @@ Use this sequence before implementing code:
 - The plan uses `eigenmodes` only for the modal eigensystem product.
 - Every historical `apps/web` frontend instruction has a Control Room v2
   translation before implementation.
-- Capability status is promoted only for lanes with executable proof; production
-  CPU/GPU response remains unsupported until the native solver passes its gates.
+- Capability status is promoted only for lanes with executable proof; current
+  native CPU/GPU driven response remains partial-production only for the
+  explicitly verified ordinary k = 0 magnetic/dynamic-demag slices.
 - Every new UI node has a named inspector and a named resource source.
 - Every new backend lane has a managed container-backed `just` verification
   path.

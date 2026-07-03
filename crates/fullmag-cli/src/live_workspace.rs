@@ -779,8 +779,9 @@ impl CurrentLivePublisher {
 mod tests {
     use super::{
         apply_python_progress_event, bootstrap_live_state, merge_pending_publish_payload,
-        CurrentLivePublisher, CurrentLiveScalarRow, CurrentLiveSnapshotPayload,
-        LiveTelemetryPublishGate, LocalLiveWorkspace, LocalLiveWorkspaceState,
+        replace_cached_preview_fields, CurrentLivePublisher, CurrentLiveScalarRow,
+        CurrentLiveSnapshotPayload, LiveTelemetryPublishGate, LocalLiveWorkspace,
+        LocalLiveWorkspaceState,
     };
     use crate::types::{PythonProgressEvent, RunManifest, SessionManifest};
 
@@ -992,6 +993,35 @@ mod tests {
         } else {
             std::env::remove_var("FULLMAG_FEM_STEP_PROFILE");
         }
+    }
+
+    #[test]
+    fn replacing_cached_preview_fields_promotes_them_to_latest_fields() {
+        let workspace = workspace_with_domain_mesh();
+        let mut field = preview_field("eden_total", 3, 42.0);
+        field.unit = "J/m³".to_string();
+        field.spatial_kind = "grid".to_string();
+        field.quantity_domain = "magnetic_only".to_string();
+        field.vector_field_values = vec![42.0];
+
+        workspace.update(|state| {
+            replace_cached_preview_fields(state, vec![field]);
+        });
+
+        let snapshot = workspace.snapshot();
+        let latest = snapshot
+            .latest_fields
+            .0
+            .get("eden_total")
+            .expect("materialized scalar field should be promoted to latest_fields");
+        assert_eq!(latest["unit"], "J/m³");
+        assert_eq!(latest["values"], serde_json::json!([42.0]));
+        assert_eq!(latest["layout"]["grid_cells"], serde_json::json!([1, 1, 1]));
+        assert!(snapshot
+            .preview_fields
+            .to_vec()
+            .iter()
+            .any(|field| field.quantity == "eden_total"));
     }
 
     fn payload_with_live_step(
@@ -1481,9 +1511,33 @@ pub(crate) fn replace_cached_preview_fields(
     if feature_flags().disable_preview_3d {
         return;
     }
+    let fields = fields.into_iter().collect::<Vec<_>>();
+    for field in &fields {
+        promote_preview_field_to_latest_fields(&mut state.latest_fields, field);
+    }
     state.preview_fields.replace_all(fields);
     state.pending_preview_fields = state.preview_fields.clone();
     state.clear_preview_cache = true;
+}
+
+fn promote_preview_field_to_latest_fields(
+    latest_fields: &mut CurrentLiveLatestFields,
+    field: &fullmag_runner::LivePreviewField,
+) {
+    latest_fields.insert(
+        field.quantity.clone(),
+        serde_json::json!({
+            "quantity": field.quantity,
+            "unit": field.unit,
+            "values": field.vector_field_values,
+            "layout": {
+                "grid_cells": field.preview_grid,
+                "original_grid_cells": field.original_grid,
+                "spatial_kind": field.spatial_kind,
+                "quantity_domain": field.quantity_domain,
+            }
+        }),
+    );
 }
 
 pub(crate) fn upsert_cached_preview_field(
@@ -1494,6 +1548,7 @@ pub(crate) fn upsert_cached_preview_field(
     if feature_flags().disable_preview_3d {
         return;
     }
+    promote_preview_field_to_latest_fields(&mut state.latest_fields, field);
     state.preview_fields.insert(field.clone());
     state.pending_preview_fields.insert(field.clone());
 }

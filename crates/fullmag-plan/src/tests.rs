@@ -6397,14 +6397,18 @@ fn fem_frequency_response_rejects_unsupported_production_slice_cases() {
         "runtime_selection".to_string(),
         serde_json::json!({"device": "gpu", "precision": "double"}),
     );
-    let err = plan(&gpu_demag).expect_err("GPU frequency-response demag should stay gated");
-    assert!(
-        err.reasons.iter().any(|reason| {
-            reason.contains("supported frequency-domain slices") && reason.contains("dynamic demag")
-        }),
-        "unexpected GPU demag rejection reasons: {:?}",
-        err.reasons
-    );
+    let planned = plan(&gpu_demag).expect("GPU frequency-response demag should plan");
+    match planned.backend_plan {
+        BackendPlanIR::FemFrequencyResponse(fem) => {
+            assert!(fem.enable_demag);
+            assert_eq!(
+                fem.demag_realization,
+                Some(fullmag_ir::ResolvedFemDemagIR::FredkinKoehler)
+            );
+            assert_eq!(fem.requested_device, fullmag_ir::ExecutionDevice::Gpu);
+        }
+        other => panic!("expected FemFrequencyResponse plan, got {other:?}"),
+    }
 
     let mut shared_domain = fem_frequency_response_mesh_asset_problem();
     let geometry_assets = shared_domain

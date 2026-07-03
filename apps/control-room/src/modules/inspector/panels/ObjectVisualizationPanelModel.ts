@@ -121,6 +121,15 @@ export function formatScalarColorbarValue(value: number): string {
   return Number.isFinite(value) ? Number(value.toPrecision(4)).toString() : "unknown";
 }
 
+export function formatScalarColorbarValueWithUnit(
+  value: number,
+  unit: string | null | undefined,
+): string {
+  const valueLabel = formatScalarColorbarValue(value);
+  const unitLabel = unit?.trim();
+  return unitLabel && unitLabel !== "1" ? `${valueLabel} ${unitLabel}` : valueLabel;
+}
+
 export function surfaceColorSourceFieldMetaComponent(
   surfaceColorSource: SurfaceColorSource,
   activeQuantityId: string,

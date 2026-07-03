@@ -225,6 +225,15 @@ function formatLegendValue(value: number): string {
   return Number.isFinite(value) ? Number(value.toPrecision(4)).toString() : "unknown";
 }
 
+function formatLegendValueWithUnit(
+  value: number,
+  unit: string | null | undefined,
+): string {
+  const valueLabel = formatLegendValue(value);
+  const unitLabel = unit?.trim();
+  return unitLabel && unitLabel !== "1" ? `${valueLabel} ${unitLabel}` : valueLabel;
+}
+
 function resolveStableViewport3DCanvasGlOptions(
   profile: Viewport3DVisualProfile,
 ) {
@@ -289,8 +298,8 @@ export function resolveViewport3DColorbarLegend({
       quantityId,
       unit,
     }),
-    maxLabel: formatLegendValue(range.max),
-    minLabel: formatLegendValue(range.min),
+    maxLabel: formatLegendValueWithUnit(range.max, unit),
+    minLabel: formatLegendValueWithUnit(range.min, unit),
     paletteGradient: viewport3DColorPaletteGradientCss(colorPalette),
   };
 }
@@ -326,8 +335,12 @@ function resolveViewport3DColorbarLegendFromPlan({
     key: plan.renderKey,
     legend: {
       label: `${labelPrefix}${quantityLabel}`,
-      maxLabel: plan.range ? formatLegendValue(plan.range.max) : "pending",
-      minLabel: plan.range ? formatLegendValue(plan.range.min) : "pending",
+      maxLabel: plan.range
+        ? formatLegendValueWithUnit(plan.range.max, unit)
+        : "pending",
+      minLabel: plan.range
+        ? formatLegendValueWithUnit(plan.range.min, unit)
+        : "pending",
       paletteGradient: viewport3DColorPaletteGradientCss(plan.palette),
     },
   };

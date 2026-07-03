@@ -794,6 +794,7 @@ FrequencyDomainStatus solve_production_cpu_driven_response(
     out_result->solver_relative_tolerance = problem.relative_tolerance;
     out_result->right_preconditioner_applied = problem.apply_right_preconditioner != nullptr;
     copy_preconditioner_name(out_result->krylov_preconditioner, problem);
+    out_result->max_iterations_for_frequency = problem.max_iterations;
     out_result->restart_iterations_for_frequency = std::max<std::uint64_t>(
         1,
         std::min(problem.restart_iterations, problem.max_iterations));

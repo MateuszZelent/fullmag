@@ -69,9 +69,10 @@ hole_transition = body.add_region(
     realization_policy="conformal",
 )
 hole_transition.mesh(
-    minimum_element_size=0.15e-9,
-    maximum_element_size=1e-9,
+    minimum_element_size=0.5e-9,
+    maximum_element_size=3e-9,
     transition_distance=10e-9,
+    # growth_rate=1.5,
     order=1,
 )
 

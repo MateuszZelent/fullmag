@@ -35,6 +35,17 @@ SHARED_DOMAIN_STATIC_PERIODIC_RESPONSE = (
     / "examples"
     / "fem_frequency_response_shared_domain_static_periodic_smoke.py"
 )
+GPU_FREE_DEMAG_RESPONSE = (
+    REPO_ROOT / "examples" / "fem_frequency_response_gpu_free_demag_smoke.py"
+)
+CPU_FREE_DEMAG_RESPONSE = (
+    REPO_ROOT / "examples" / "fem_frequency_response_cpu_free_demag_smoke.py"
+)
+CPU_PERIODIC_AIRBOX_DEMAG_RESPONSE = (
+    REPO_ROOT
+    / "examples"
+    / "fem_frequency_response_cpu_periodic_airbox_demag_smoke.py"
+)
 DRIVEN_RESPONSE_SOLVER = (
     REPO_ROOT / "backends" / "fem" / "src" / "frequency_domain" / "driven_response_solver.cpp"
 )
@@ -581,10 +592,10 @@ def test_simple_periodic_antidot_frequency_driven_target_runs_new_plain_script()
     assert "scripts/verify_fem_frequency_domain_runtime_artifacts.py" in target
     assert "--require-production-gpu --require-static-periodic" in target
     assert 'fem_execution="script"' in target
-    assert "native GPU static-periodic no-demag response slice" in target
+    assert "native GPU static-periodic magnetic response slice with ordinary k=0 dynamic demag" in target
     assert "expected gpu" in target
-    assert "env -u FULLMAG_FEM_EXECUTION" in target
-    assert 'FULLMAG_FEM_EXECUTION="$mode"' not in target
+    assert "env -u FULLMAG_FEM_EXECUTION" not in target
+    assert "FULLMAG_FEM_EXECUTION=gpu" in target
     assert "FULLMAG_RELAX_DEVICE=gpu" in target
     assert "FULLMAG_FMR_DEVICE=gpu" in target
     assert "FULLMAG_FDM_EXECUTION=cpu" in target
@@ -609,7 +620,8 @@ def test_periodic_antidot_frequency_driven_example_uses_gpu_transition() -> None
     assert 'study.device("gpu", precision="double")' in example
     assert "frequency_response_dynamic_demag" in example
     assert "study.clear_outputs()" in example
-    assert "include_demag=False" in example
+    assert "include_demag=True" in example
+    assert 'magnetostatic_bc="open"' in example
     assert 'study.stages.change_device("gpu")' in example
 
 
@@ -628,6 +640,42 @@ def test_periodic_airbox_gpu_unsupported_runtime_target_is_artifact_backed() -> 
     assert ".fullmag/reports/frequency-domain-periodic-airbox-gpu-unsupported-runtime/artifacts" in target
     assert "FULLMAG_FEM_EXECUTION=gpu" in target
     assert "FULLMAG_RELAX_DEVICE=gpu" in target
+
+
+def test_cpu_periodic_airbox_demag_smoke_runtime_target_is_artifact_backed() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+
+    suite_start = justfile.find("verify-fem-frequency-domain-runtime-suite:")
+    assert suite_start != -1
+    next_target = justfile.find("\nverify-", suite_start + 1)
+    suite = justfile[suite_start:] if next_target == -1 else justfile[suite_start:next_target]
+    assert "just verify-fem-frequency-domain-cpu-periodic-airbox-demag-smoke-runtime" in suite
+
+    target_start = justfile.find(
+        'verify-fem-frequency-domain-cpu-periodic-airbox-demag-smoke-runtime cpu_threads="auto":'
+    )
+    assert target_start != -1
+    next_target = justfile.find("\nverify-", target_start + 1)
+    target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
+
+    assert "examples/fem_frequency_response_cpu_periodic_airbox_demag_smoke.py" in target
+    assert "--require-periodic-airbox-cpu-demag-solved" in target
+    assert (
+        ".fullmag/reports/frequency-domain-cpu-periodic-airbox-demag-smoke-runtime/artifacts"
+        in target
+    )
+    assert "FULLMAG_FMR_DEVICE=cpu" in target
+
+
+def test_cpu_periodic_airbox_demag_smoke_requests_periodic_airbox_demag() -> None:
+    example = CPU_PERIODIC_AIRBOX_DEMAG_RESPONSE.read_text(encoding="utf-8")
+
+    assert 'study.device("cpu", precision="double")' in example
+    assert 'study.demag(realization="poisson_robin")' in example
+    assert "study.build_domain_mesh()" in example
+    assert "include_demag=True" in example
+    assert 'bc=fm.PeriodicBC(["x_faces"])' in example
+    assert 'magnetostatic_bc="periodic_airbox_k0"' in example
 
 
 def test_periodic_airbox_z_padding_runtime_target_compares_two_airboxes() -> None:
@@ -858,6 +906,41 @@ def test_frequency_domain_runtime_suite_includes_static_periodic_parity_gate() -
     assert "just verify-fem-frequency-domain-gpu-static-periodic-parity-runtime" in target
 
 
+def test_frequency_domain_runtime_suite_includes_gpu_free_demag_gate() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+
+    target_start = justfile.find("verify-fem-frequency-domain-runtime-suite:")
+    assert target_start != -1
+    next_target = justfile.find("\nverify-", target_start + 1)
+    target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
+
+    assert "just verify-fem-frequency-domain-gpu-free-demag-runtime" in target
+
+
+def test_frequency_domain_runtime_suite_includes_free_demag_parity_gate() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+
+    target_start = justfile.find("verify-fem-frequency-domain-runtime-suite:")
+    assert target_start != -1
+    next_target = justfile.find("\nverify-", target_start + 1)
+    target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
+
+    assert "just verify-fem-frequency-domain-free-demag-parity-runtime" in target
+
+
+def test_gpu_free_demag_target_requires_demag_operator_terms() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+
+    target_start = justfile.find("verify-fem-frequency-domain-gpu-free-demag-runtime:")
+    assert target_start != -1
+    next_target = justfile.find("\nverify-", target_start + 1)
+    target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
+
+    assert "examples/fem_frequency_response_gpu_free_demag_smoke.py" in target
+    assert "--require-production-gpu" in target
+    assert '"demag" in d.get("operator_terms_included", [])' in target
+
+
 def test_frequency_domain_runtime_suite_includes_shared_domain_static_periodic_parity_gate() -> None:
     justfile = JUSTFILE.read_text(encoding="utf-8")
 
@@ -898,7 +981,45 @@ def test_shared_domain_static_periodic_smoke_is_no_demag_shared_domain() -> None
     assert "study.build_domain_mesh()" in example
     assert "study.demag(enabled=False)" in example
     assert "include_demag=False" in example
-    assert 'bc=fm.PeriodicBC(["x_faces"])' in example
+
+
+def test_gpu_free_demag_smoke_requests_gpu_demag_provider_path() -> None:
+    example = GPU_FREE_DEMAG_RESPONSE.read_text(encoding="utf-8")
+
+    assert 'study.device("gpu", precision="double")' in example
+    assert 'study.demag(realization="poisson_robin")' in example
+    assert "study.build_domain_mesh()" in example
+    assert "include_demag=True" in example
+    assert 'bc="free"' in example
+    assert "magnetostatic_bc=" not in example
+
+
+def test_free_demag_parity_target_compares_cpu_and_gpu() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+
+    target_start = justfile.find(
+        'verify-fem-frequency-domain-free-demag-parity-runtime cpu_threads="auto":'
+    )
+    assert target_start != -1
+    next_target = justfile.find("\nverify-", target_start + 1)
+    target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
+
+    assert "examples/fem_frequency_response_cpu_free_demag_smoke.py" in target
+    assert "examples/fem_frequency_response_gpu_free_demag_smoke.py" in target
+    assert "frequency-domain-free-demag-parity-runtime/cpu/artifacts" in target
+    assert "frequency-domain-free-demag-parity-runtime/gpu/artifacts" in target
+    assert "--require-production-gpu --compare-reference" in target
+    assert '"demag" in d.get("operator_terms_included", [])' in target
+
+
+def test_cpu_free_demag_smoke_requests_cpu_demag_provider_path() -> None:
+    example = CPU_FREE_DEMAG_RESPONSE.read_text(encoding="utf-8")
+
+    assert 'study.device("cpu", precision="double")' in example
+    assert 'study.demag(realization="poisson_robin")' in example
+    assert "study.build_domain_mesh()" in example
+    assert "include_demag=True" in example
+    assert 'bc="free"' in example
     assert "magnetostatic_bc=" not in example
 
 

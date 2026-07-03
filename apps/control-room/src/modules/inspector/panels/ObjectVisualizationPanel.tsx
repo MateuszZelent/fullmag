@@ -15,6 +15,7 @@ import type {
   FieldMetaResource,
   LiveStatusResource,
 } from "@/kernel/api/apiTypes";
+import { quantityUnitForColorbar } from "@/kernel/api/quantityIds";
 import { useKernel } from "@/kernel/KernelContext";
 import {
   airboxLocalVisualizationPatchFromTargetPatch,
@@ -81,7 +82,7 @@ import {
   colorPickerInputValue,
   displayPassTogglePatch,
   fieldMetaScopeQueryForVisualizationTarget,
-  formatScalarColorbarValue,
+  formatScalarColorbarValueWithUnit,
   geometryScopeVectorBudgetPatch,
   objectVisualizationTargetForMeshPart,
   resolveVisualizationVectorBudgetRange,
@@ -638,10 +639,17 @@ function ScalarColorbarControl({
   }, [fieldMeta.data, rangeIdentity]);
   const visibleMeta = fieldMeta.data ?? cachedRange;
   const stats = visibleMeta?.stats;
+  const unit =
+    visibleMeta?.unit?.trim() ||
+    (visibleMeta?.quantity_id ? quantityUnitForColorbar(visibleMeta.quantity_id) : "");
   const minLabel =
-    typeof stats?.min === "number" ? formatScalarColorbarValue(stats.min) : null;
+    typeof stats?.min === "number"
+      ? formatScalarColorbarValueWithUnit(stats.min, unit)
+      : null;
   const maxLabel =
-    typeof stats?.max === "number" ? formatScalarColorbarValue(stats.max) : null;
+    typeof stats?.max === "number"
+      ? formatScalarColorbarValueWithUnit(stats.max, unit)
+      : null;
   const dataRange =
     minLabel && maxLabel
       ? `${minLabel} to ${maxLabel}`

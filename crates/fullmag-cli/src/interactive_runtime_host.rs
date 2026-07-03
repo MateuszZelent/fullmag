@@ -1129,6 +1129,28 @@ mod tests {
             Some(7)
         );
     }
+
+    #[test]
+    fn idle_preview_refresh_uses_field_materialization_quantities() {
+        let source = include_str!("interactive_runtime_host.rs");
+        let function_body = source
+            .split("\nfn refresh_interactive_preview_fields(")
+            .nth(1)
+            .and_then(|rest| {
+                rest.split("fn snapshot_interactive_preview_payload(")
+                    .next()
+            })
+            .expect("refresh_interactive_preview_fields should be present");
+
+        assert!(
+            function_body.contains("field_materialization_quantity_ids()"),
+            "idle preview refresh replaces the cache, so it must preserve spatial scalar fields such as eden_total"
+        );
+        assert!(
+            !function_body.contains("cached_preview_quantity_ids()"),
+            "idle preview refresh must not rebuild the cache from the vector-only preview list"
+        );
+    }
 }
 
 fn refresh_interactive_preview_fields(
@@ -1140,7 +1162,7 @@ fn refresh_interactive_preview_fields(
     if let Some(previous_final_magnetization) = continuation_magnetization {
         apply_continuation_initial_state(&mut problem, previous_final_magnetization)?;
     }
-    let quantities = fullmag_runner::quantities::cached_preview_quantity_ids();
+    let quantities = fullmag_runner::quantities::field_materialization_quantity_ids();
 
     Ok(fullmag_runner::snapshot_problem_vector_fields(
         &problem,

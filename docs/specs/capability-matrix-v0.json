@@ -247,11 +247,11 @@
         "fdm_cpu_reference": "semantic_only",
         "fdm_gpu_production": "semantic_only",
         "fem_cpu_public": "partial_production_executable",
-        "fem_gpu_public": "semantic_only"
+        "fem_gpu_public": "partial_production_executable"
       },
       "validated_workloads": [],
       "study_product": "driven_response",
-      "notes": "Driven response product only. Frequency Response solves an explicitly defined harmonic system such as (i omega B_alpha - L) q = b at requested frequencies. Audit P0 blocks new production promotion until phasor convention, matrix form, dynamic-demag sign, Ms-correct susceptibility/absorbed-power units, damping convention, and tangent-frame transport are implemented and tested. The native FEM CPU lane is partial-production-executable for the gamma/free-boundary and k=0 static-periodic magnetic slice; this status does not promote modal eigensolve."
+      "notes": "Driven response product only. Frequency Response solves an explicitly defined harmonic system such as (i omega B_alpha - L) q = b at requested frequencies. Audit P0 blocks new production promotion until phasor convention, matrix form, dynamic-demag sign, Ms-correct susceptibility/absorbed-power units, damping convention, and tangent-frame transport are implemented and tested. The native FEM CPU lane is partial-production-executable for the gamma/free-boundary and k=0 static-periodic magnetic slice with dynamic demag via backend tangent provider. The native FEM GPU lane is partial-production-executable for gamma/free-boundary and k=0 static-periodic magnetic/compacted shared-domain slices with ordinary k=0 dynamic demag via a hybrid backend tangent provider; this is not device-resident periodic-airbox Poisson and does not promote modal eigensolve."
     },
     {
       "id": "frequency_response_study",
@@ -260,10 +260,10 @@
         "fdm_cpu_reference": "semantic_only",
         "fdm_gpu_production": "semantic_only",
         "fem_cpu_public": "partial_production_executable",
-        "fem_gpu_public": "semantic_only"
+        "fem_gpu_public": "partial_production_executable"
       },
       "validated_workloads": [],
-      "notes": "First-class public semantics exist in Python API and ProblemIR. The native FEM CPU lane is partial-production-executable for the gamma/free-boundary and k=0 static-periodic magnetic response slice, and the dense FEM response lane remains reference-executable for validation artifacts. Static-periodic response requires mesh.periodic_node_pairs metadata. Audit P0 blocks new production promotion until phasor convention, matrix form, dynamic-demag sign, Ms-correct susceptibility/absorbed-power units, damping convention, and tangent-frame transport are implemented and tested. Production GPU, demag, nonzero-k Floquet/Bloch response, missing periodic pair metadata, magnetoelastic response, and coupled frequency-domain response remain explicitly gated. Runtime capabilities expose broad supports_frequency_response, supports_coupled_magnetoelastic_quasistatic, supports_coupled_magnetoelastic_elastodynamic, supports_frequency_domain_elastodynamics, and supports_coupled_eigenmodes as false; frequency_domain_capabilities.v1 is the precise UI-gating source."
+      "notes": "First-class public semantics exist in Python API and ProblemIR. The native FEM CPU lane is partial-production-executable for the gamma/free-boundary and k=0 static-periodic magnetic response slice, and the dense FEM response lane remains reference-executable for validation artifacts. Static-periodic response requires mesh.periodic_node_pairs metadata. The native FEM GPU lane is partial-production-executable for gamma/free-boundary and k=0 static-periodic magnetic/compacted shared-domain slices with ordinary k=0 dynamic demag via a hybrid backend tangent provider while local/exchange application remains CUDA-backed. This does not implement GPU periodic-airbox Poisson, nonzero-k demag-k, modal eigensolve, missing periodic pair metadata, magnetoelastic response, or coupled frequency-domain response. Runtime capabilities expose broad supports_frequency_response, supports_coupled_magnetoelastic_quasistatic, supports_coupled_magnetoelastic_elastodynamic, supports_frequency_domain_elastodynamics, and supports_coupled_eigenmodes as false; frequency_domain_capabilities.v1 is the precise UI-gating source."
     },
     {
       "id": "composite_free_layer_stno",

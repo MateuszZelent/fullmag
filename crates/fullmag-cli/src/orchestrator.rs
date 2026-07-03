@@ -4069,7 +4069,7 @@ fn refresh_problem_preview_state(
     let preview_request = display_selection.preview_request();
     let preview_field = fullmag_runner::snapshot_problem_preview(&problem, &preview_request)?;
     let cached_fields = if refresh_cache {
-        let cached_quantities = fullmag_runner::quantities::cached_preview_quantity_ids();
+        let cached_quantities = fullmag_runner::quantities::field_materialization_quantity_ids();
         Some(fullmag_runner::snapshot_problem_vector_fields(
             &problem,
             &cached_quantities,
@@ -10208,6 +10208,25 @@ mod tests {
         assert_eq!(
             classify_wait_for_solve_command("display_sync"),
             WaitForSolveCommandAction::Ignore
+        );
+    }
+
+    #[test]
+    fn compute_fields_refresh_uses_field_materialization_quantities() {
+        let source = include_str!("orchestrator.rs");
+        let function_body = source
+            .split("fn refresh_problem_preview_state(")
+            .nth(1)
+            .and_then(|rest| rest.split("fn refresh_problem_energy_state(").next())
+            .expect("refresh_problem_preview_state should be present");
+
+        assert!(
+            function_body.contains("field_materialization_quantity_ids()"),
+            "compute_fields must materialize spatial scalar quantities such as eden_total"
+        );
+        assert!(
+            !function_body.contains("cached_preview_quantity_ids()"),
+            "compute_fields must not use the vector-only preview cache quantity list"
         );
     }
 

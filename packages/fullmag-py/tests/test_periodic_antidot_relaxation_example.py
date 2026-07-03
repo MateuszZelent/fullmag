@@ -153,16 +153,23 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
             payload["ir"]["problem_meta"]["name"],
             "fem_periodic_antidot_relax_exchange_coupled",
         )
-        self.assertEqual(len(payload["stages"]), 1)
+        self.assertEqual(len(payload["stages"]), 2)
         self.assertEqual(payload["stages"][0]["entrypoint_kind"], "flat_relax")
+        self.assertEqual(payload["stages"][1]["entrypoint_kind"], "flat_relax")
 
         study = payload["stages"][0]["ir"]["study"]
         self.assertEqual(study["kind"], "relaxation")
         self.assertEqual(study["algorithm"], "projected_gradient_bb")
         self.assertEqual(study["stop"]["max_steps"], 4000)
-        self.assertEqual(study["stop"]["torque_tolerance_apm"], 5.0e3)
+        self.assertEqual(study["stop"]["torque_tolerance_apm"], 1.0e-4)
         self.assert_study_saves_equilibrium_and_demag_fields(study)
         self.assert_table_logs_pbc_sensitive_quantities(study)
+
+        relax = payload["stages"][1]["ir"]["study"]
+        self.assertEqual(relax["kind"], "relaxation")
+        self.assertEqual(relax["algorithm"], "llg_overdamped")
+        self.assertEqual(relax["stop"]["max_steps"], 100)
+        self.assertEqual(relax["stop"]["torque_tolerance_apm"], 1.0e-4)
 
         metadata = payload["ir"]["problem_meta"]["runtime_metadata"]
         self.assertEqual(metadata["runtime_selection"]["backend"], "fem")
@@ -211,7 +218,7 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
         )
         self.assertEqual(relax["kind"], "relaxation")
         self.assertEqual(relax["algorithm"], "projected_gradient_bb")
-        self.assertEqual(relax["stop"]["torque_tolerance_apm"], 5.0e3)
+        self.assertEqual(relax["stop"]["torque_tolerance_apm"], 5.0e-4)
         self.assert_study_saves_equilibrium_and_demag_fields(relax)
         self.assert_table_logs_pbc_sensitive_quantities(relax)
 
@@ -223,7 +230,7 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
         )
         frequency_response = payload["stages"][2]["ir"]["study"]
         self.assertEqual(frequency_response["kind"], "frequency_response")
-        self.assertEqual(frequency_response["operator"]["include_demag"], False)
+        self.assertEqual(frequency_response["operator"]["include_demag"], True)
         self.assertEqual(frequency_response["magnetostatic_bc"], "open")
         self.assertEqual(frequency_response["equilibrium"], {"kind": "relaxed_initial_state"})
         self.assertEqual(frequency_response["damping_policy"], "include")
@@ -256,6 +263,9 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
         )
 
         metadata = payload["ir"]["problem_meta"]["runtime_metadata"]
+        scenario_metadata = metadata["periodic_antidot_relaxation"]
+        self.assertEqual(scenario_metadata["frequency_response_dynamic_demag"], True)
+        self.assertEqual(scenario_metadata["frequency_response_magnetostatic_bc"], "open")
         self.assert_scenario_metadata(
             metadata,
             scenario="exchange_coupled_frequency_driven",

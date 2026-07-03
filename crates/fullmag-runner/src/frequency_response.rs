@@ -1082,6 +1082,7 @@ fn try_execute_fem_frequency_response_native_production_cpu(
     let periodic_airbox_coupled_block_problem = periodic_airbox_coupled_block_problem(&payload);
     let mut demag_tangent_provider = if payload.requires_native_backend_demag_tangent_provider
         && periodic_airbox_coupled_block_problem.is_none()
+        && !(requested_gpu && payload.requires_periodic_airbox_dynamic_demag)
     {
         Some(NativeBackendDemagTangentProvider::create(plan, &payload)?)
     } else {
@@ -1996,7 +1997,10 @@ fn build_native_production_payload(
             == fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox,
         requires_native_backend_demag_tangent_provider: plan.enable_demag
             && plan.demag_realization.is_some()
-            && plan.requested_device != fullmag_ir::ExecutionDevice::Gpu,
+            && !matches!(
+                plan.magnetostatic_bc,
+                fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox
+            ),
         periodic_airbox_delta_m_tangent_dof_count,
         periodic_airbox_delta_phi_dof_count: if matches!(
             plan.magnetostatic_bc,
@@ -2208,57 +2212,21 @@ fn production_gpu_frequency_response_rejection_reason(
         return None;
     }
     if plan.magnetostatic_bc == fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0 {
-        if plan.domain_mesh_mode != fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir {
-            return Some(
-                "magnetostatic_bc=periodic_airbox_k0 requires a shared-domain airbox mesh",
-            );
-        }
-        if !plan.enable_demag || plan.demag_realization.is_none() {
-            return Some(
-                "magnetostatic_bc=periodic_airbox_k0 requires include_demag=true and a Demag energy term",
-            );
-        }
-        if has_requested_dmi(plan) {
-            return Some("DMI is not implemented for production GPU frequency response");
-        }
-        if has_nonzero_k {
-            return Some(
-                "nonzero-k Floquet/Bloch periodic-airbox dynamic demag is not implemented for production GPU frequency response",
-            );
-        }
-        if !plan.periodic_constraint_sets.iter().any(|constraint| {
-            constraint.unknown_family == fullmag_ir::PeriodicUnknownFamilyIR::MagnetizationDynamic
-                && constraint.domain_scope == fullmag_ir::PeriodicDomainScopeIR::MagneticDomain
-        }) {
-            return Some(
-                "magnetostatic_bc=periodic_airbox_k0 requires a delta_m periodic constraint set",
-            );
-        }
-        if !plan.periodic_constraint_sets.iter().any(|constraint| {
-            constraint.unknown_family
-                == fullmag_ir::PeriodicUnknownFamilyIR::MagnetostaticPotentialDynamic
-                && constraint.domain_scope
-                    == fullmag_ir::PeriodicDomainScopeIR::MagnetostaticDomainWithAir
-        }) {
-            return Some(
-                "magnetostatic_bc=periodic_airbox_k0 requires a delta_phi periodic constraint set",
-            );
-        }
-        return None;
-    }
-    let gpu_shared_domain_no_demag = plan.requested_device == fullmag_ir::ExecutionDevice::Gpu
-        && plan.domain_mesh_mode == fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir
-        && !plan.enable_demag
-        && plan.demag_realization.is_none();
-    if plan.domain_mesh_mode != fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh
-        && !gpu_shared_domain_no_demag
-    {
         return Some(
-            "production GPU frequency response currently supports only magnetic-body meshes without shared-domain airbox elements",
+            "magnetostatic_bc=periodic_airbox_k0 is not implemented for production GPU frequency response; use CPU for periodic-airbox dynamic demag or magnetostatic_bc=open for the current GPU static-periodic magnetic slice",
         );
     }
-    if plan.enable_demag || plan.demag_realization.is_some() {
-        return Some("dynamic demag is not implemented for production GPU frequency response");
+    let gpu_shared_domain_supported = plan.requested_device == fullmag_ir::ExecutionDevice::Gpu
+        && plan.domain_mesh_mode == fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
+    if plan.domain_mesh_mode != fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh
+        && !gpu_shared_domain_supported
+    {
+        return Some(
+            "production GPU frequency response currently supports only magnetic-body meshes or compacted shared-domain magnetic slices",
+        );
+    }
+    if plan.enable_demag != plan.demag_realization.is_some() {
+        return Some("dynamic demag requires include_demag=true and a resolved Demag energy term");
     }
     if has_requested_dmi(plan) {
         return Some("DMI is not implemented for production GPU frequency response");
@@ -4606,10 +4574,20 @@ mod tests {
         demag.enable_demag = true;
         demag.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
         assert!(
-            super::production_gpu_frequency_response_rejection_reason(&demag)
-                .expect("demag must reject on GPU")
-                .contains("dynamic demag")
+            super::production_gpu_frequency_response_rejection_reason(&demag).is_none(),
+            "GPU frequency response should accept magnetic k=0 demag through the backend demag tangent provider"
         );
+        #[cfg(feature = "fem-gpu")]
+        {
+            let payload = super::build_native_production_gpu_payload(&demag)
+                .expect("GPU demag response should build a native payload");
+            assert!(
+                payload.requires_native_backend_demag_tangent_provider,
+                "GPU demag response must provide a backend demag tangent operator"
+            );
+            assert!(!payload.requires_periodic_airbox_dynamic_demag);
+            assert_eq!(payload.periodic_airbox_delta_phi_dof_count, 0);
+        }
 
         let mut dmi = supported.clone();
         dmi.bulk_dmi = Some(2.5e-3);
@@ -4622,16 +4600,18 @@ mod tests {
         let mut periodic_airbox = qualified_periodic_airbox_frequency_response_plan();
         periodic_airbox.requested_device = fullmag_ir::ExecutionDevice::Gpu;
         assert!(
-            super::production_gpu_frequency_response_rejection_reason(&periodic_airbox).is_none(),
-            "forced GPU periodic-airbox dynamic demag should reach the native boundary so it can publish periodic_airbox_dynamic_demag_gpu_unsupported artifacts"
+            super::production_gpu_frequency_response_rejection_reason(&periodic_airbox)
+                .expect(
+                    "forced GPU periodic-airbox dynamic demag should reject before native solve"
+                )
+                .contains("periodic_airbox_k0 is not implemented for production GPU")
         );
         #[cfg(feature = "fem-gpu")]
         {
-            let payload = super::build_native_production_gpu_payload(&periodic_airbox)
-                .expect("forced GPU periodic-airbox request should build native rejection payload");
-            assert!(payload.requires_periodic_airbox_dynamic_demag);
-            assert_eq!(payload.magnetostatic_periodic_constraint_set_count, 1);
-            assert_eq!(payload.periodic_airbox_delta_phi_dof_count, 3);
+            assert!(
+                super::build_native_production_gpu_payload(&periodic_airbox).is_none(),
+                "forced GPU periodic-airbox request must not build a native GPU payload"
+            );
         }
 
         let mut periodic_without_pairs = supported.clone();

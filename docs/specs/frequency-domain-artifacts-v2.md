@@ -601,6 +601,18 @@ bundles may omit this object, but promotion gates using
 - `magnetostatic_bc = "periodic_airbox_k0"`,
 - non-empty `pbc_axes[]`.
 
+`source_artifact_root` must resolve to an existing M5 artifact directory. The
+field paths above must resolve to existing files under that source root unless
+they are absolute paths. A promotion gate must reject metadata-only provenance
+that names an accepted equilibrium but cannot locate the equilibrium field,
+seam diagnostics, z-padding report, and supercell report. The referenced seam,
+z-padding, and supercell JSON artifacts must report `status = "ok"`; a failed
+static-PBC report cannot promote a periodic-airbox frequency-response bundle.
+They must also carry their canonical schema identifiers:
+`fem_static_pbc_demag_seams.v1` for seam diagnostics,
+`fem_static_pbc_z_padding_validation.v1` for z-padding, and
+`fem_static_pbc_supercell_validation.v1` for primitive-vs-supercell acceptance.
+
 The canonical runtime handoff for this block is
 `problem_meta.runtime_metadata["frequency_response_m5_equilibrium_provenance"]`.
 Planner code may copy that object into `FemFrequencyResponsePlanIR`, and the
@@ -1051,6 +1063,15 @@ Required fields for native FEM production response diagnostics:
 - `relative_residual_l2_norm`.
 - `matrix_form`, one of `iomega_B_minus_L`, `K_plus_iomega_G`,
   `coupled_demag_block`, or a documented compatibility value,
+- `dynamic_demag_matrix_form` when dynamic demag is enabled, one of
+  `magnetic_only`, `schur_phi_consistency_provider`,
+  `coupled_demag_block`, or a documented compatibility value. This field
+  describes the demag realization; it does not replace the global harmonic
+  response `matrix_form`,
+- `demag_tangent_operator_source` when a magnetic-only dynamic-demag tangent is
+  supplied to the response operator. Valid current values are `none`,
+  `explicit_demag_tangent_matrix`, and
+  `matrix_free_demag_tangent_provider`,
 - `phasor_convention`,
 - `ksp_type`,
 - `pc_type`,
@@ -1059,10 +1080,12 @@ Required fields for native FEM production response diagnostics:
 
 For native FEM production GPU response, `requested_execution_lane` and
 `resolved_execution_lane` must both be `"production_gpu"` when the GPU solve
-runs. The initial GPU production slice may report only exchange, Zeeman, and
-uniform uniaxial anisotropy in `operator_terms_included[]`; demag, DMI,
-static-periodic projection, and nonzero-k Floquet/Bloch response must not be
-reported as included until those GPU operators are implemented and qualified.
+runs. The ordinary `k=0` free/open GPU response slice may report demag in
+`operator_terms_included[]` only when `demag_tangent_operator_source` is present
+and not `none`; this describes a supplied magnetic-only tangent operator and
+does not imply device-resident periodic-airbox Poisson. DMI and unsupported
+nonzero-k Floquet/Bloch demag response must not be reported as included until
+those GPU operators are implemented and qualified.
 
 Unavailable production GPU responses must still write diagnostics when an
 artifact directory is available. They must preserve

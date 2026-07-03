@@ -70,6 +70,7 @@ __global__ void local_precession_mass_kernel(
     unsigned long long node_count,
     const double *tangent_in,
     const double *alpha_per_node,
+    const double *demag_tangent,
     double alpha,
     double gamma0,
     int zeeman_enabled,
@@ -94,6 +95,11 @@ __global__ void local_precession_mass_kernel(
     const double q1 = tangent_in[dof1];
     double h0 = effective_tangent[dof0];
     double h1 = effective_tangent[dof1];
+
+    if (demag_tangent != nullptr) {
+        h0 += demag_tangent[dof0];
+        h1 += demag_tangent[dof1];
+    }
 
     if (zeeman_enabled) {
         const double h_parallel = dot3_device(h_ext, node.m);
@@ -181,6 +187,7 @@ extern "C" int fullmag_fem_frequency_domain_apply_mfem_gpu_operator(
     const double uniaxial_anisotropy_axis[3],
     double uniaxial_anisotropy_field_a_per_m,
     const double *alpha_per_node,
+    const double *demag_tangent,
     double alpha,
     double gamma0,
     const double *tangent_in,
@@ -214,6 +221,7 @@ extern "C" int fullmag_fem_frequency_domain_apply_mfem_gpu_operator(
     double *d_stiffness = nullptr;
     double *d_mass = nullptr;
     double *d_alpha_per_node = nullptr;
+    double *d_demag_tangent = nullptr;
     double *d_h_ext = nullptr;
     double *d_anisotropy_axis = nullptr;
 
@@ -222,6 +230,7 @@ extern "C" int fullmag_fem_frequency_domain_apply_mfem_gpu_operator(
         allocate_and_copy(&d_edges, exchange_edges, exchange_enabled ? exchange_edge_count : 0, "exchange edges", error_message, error_message_len) &&
         allocate_and_copy(&d_tangent_in, tangent_in, tangent_dof_count, "tangent input", error_message, error_message_len) &&
         allocate_and_copy(&d_alpha_per_node, alpha_per_node, alpha_per_node == nullptr ? 0 : node_count, "alpha field", error_message, error_message_len) &&
+        allocate_and_copy(&d_demag_tangent, demag_tangent, demag_tangent == nullptr ? 0 : tangent_dof_count, "demag tangent", error_message, error_message_len) &&
         allocate_and_copy(&d_h_ext, h_ext_a_per_m, zeeman_enabled ? 3 : 0, "Zeeman field", error_message, error_message_len) &&
         allocate_and_copy(&d_anisotropy_axis, uniaxial_anisotropy_axis, uniaxial_anisotropy_enabled ? 3 : 0, "anisotropy axis", error_message, error_message_len);
     ok = ok &&
@@ -250,6 +259,7 @@ extern "C" int fullmag_fem_frequency_domain_apply_mfem_gpu_operator(
             node_count,
             d_tangent_in,
             d_alpha_per_node,
+            d_demag_tangent,
             alpha,
             gamma0,
             zeeman_enabled,
@@ -284,6 +294,7 @@ extern "C" int fullmag_fem_frequency_domain_apply_mfem_gpu_operator(
     cudaFree(d_stiffness);
     cudaFree(d_mass);
     cudaFree(d_alpha_per_node);
+    cudaFree(d_demag_tangent);
     cudaFree(d_h_ext);
     cudaFree(d_anisotropy_axis);
     return ok ? 0 : 1;
