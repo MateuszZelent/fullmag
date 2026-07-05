@@ -2434,10 +2434,21 @@ fn payload_frequency_solver_policy(
     payload: &BTreeMap<String, Value>,
     default: Option<fullmag_ir::FrequencyResponseSolverPolicyIR>,
 ) -> Result<Option<fullmag_ir::FrequencyResponseSolverPolicyIR>> {
+    let method = match payload_string(payload, "frequency_solver_method") {
+        Some(value) => Some(
+            serde_json::from_value(Value::String(value))
+                .context("invalid frequency_solver_method in study pipeline payload")?,
+        ),
+        None => None,
+    };
     let rtol = payload_f64(payload, "frequency_solver_rtol")?;
     let max_iterations = payload_u64(payload, "frequency_solver_max_iterations")?;
     let restart_iterations = payload_u64(payload, "frequency_solver_restart_iterations")?;
-    if rtol.is_none() && max_iterations.is_none() && restart_iterations.is_none() {
+    if method.is_none()
+        && rtol.is_none()
+        && max_iterations.is_none()
+        && restart_iterations.is_none()
+    {
         return Ok(default);
     }
     if let Some(rtol) = rtol {
@@ -2457,6 +2468,7 @@ fn payload_frequency_solver_policy(
         }
     }
     Ok(Some(fullmag_ir::FrequencyResponseSolverPolicyIR {
+        method,
         rtol,
         max_iterations,
         restart_iterations,
@@ -4453,6 +4465,7 @@ mod tests {
                             "frequency_values_hz": [2.0e9, 2.5e9],
                             "frequency_spin_wave_bc": "periodic",
                             "frequency_magnetostatic_bc": "periodic_airbox_k0",
+                            "frequency_solver_method": "gpu_operator_host_krylov",
                             "frequency_solver_max_iterations": "128",
                             "frequency_solver_restart_iterations": "32",
                             "frequency_solver_rtol": "0.01"
@@ -4480,6 +4493,10 @@ mod tests {
                 let policy = solver_policy
                     .as_ref()
                     .expect("frequency response solver policy should materialize");
+                assert_eq!(
+                    policy.method,
+                    Some(fullmag_ir::FrequencyResponseSolverMethodIR::GpuOperatorHostKrylov)
+                );
                 assert_eq!(policy.rtol, Some(1.0e-2));
                 assert_eq!(policy.max_iterations, Some(128));
                 assert_eq!(policy.restart_iterations, Some(32));

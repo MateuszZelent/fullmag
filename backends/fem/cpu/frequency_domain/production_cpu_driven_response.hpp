@@ -7,6 +7,7 @@
 namespace fullmag::fem::frequency_domain {
 
 constexpr std::uint64_t kProductionCpuGmresResidualHistoryCapacity = 64;
+constexpr std::uint64_t kProductionCpuDrivenResponseDefaultProgressIntervalIterations = 128;
 
 using ProductionCpuFrequencyDomainApply =
     FrequencyDomainStatus (*)(void *user_data, const double *in, double *out, char error_message[128]);
@@ -88,7 +89,8 @@ struct ProductionCpuDrivenResponseProblem {
     double angular_frequency_sign = 1.0;
     ProductionCpuFrequencyDomainBlockProject project_block = nullptr;
     void *project_block_user_data = nullptr;
-    std::uint64_t progress_interval_iterations = 1;
+    std::uint64_t progress_interval_iterations =
+        kProductionCpuDrivenResponseDefaultProgressIntervalIterations;
     ProductionCpuFrequencyDomainRightPreconditioner apply_right_preconditioner = nullptr;
     void *right_preconditioner_user_data = nullptr;
     const char *krylov_preconditioner_name = nullptr;
@@ -129,7 +131,8 @@ struct ProductionCpuDrivenResponseProblem {
         double angular_frequency_sign_in = 1.0,
         ProductionCpuFrequencyDomainBlockProject project_block_in = nullptr,
         void *project_block_user_data_in = nullptr,
-        std::uint64_t progress_interval_iterations_in = 1,
+        std::uint64_t progress_interval_iterations_in =
+            kProductionCpuDrivenResponseDefaultProgressIntervalIterations,
         ProductionCpuFrequencyDomainRightPreconditioner apply_right_preconditioner_in = nullptr,
         void *right_preconditioner_user_data_in = nullptr,
         const char *krylov_preconditioner_name_in = nullptr,
@@ -199,7 +202,8 @@ struct ProductionCpuDrivenResponseProblem {
         double angular_frequency_sign_in = 1.0,
         ProductionCpuFrequencyDomainBlockProject project_block_in = nullptr,
         void *project_block_user_data_in = nullptr,
-        std::uint64_t progress_interval_iterations_in = 1,
+        std::uint64_t progress_interval_iterations_in =
+            kProductionCpuDrivenResponseDefaultProgressIntervalIterations,
         ProductionCpuFrequencyDomainRightPreconditioner apply_right_preconditioner_in = nullptr,
         void *right_preconditioner_user_data_in = nullptr,
         const char *krylov_preconditioner_name_in = nullptr,
@@ -252,7 +256,17 @@ struct ProductionCpuDrivenResponseResult {
     std::uint64_t total_iteration_count = 0;
     std::uint64_t max_iterations_for_frequency = 0;
     std::uint64_t restart_iterations_for_frequency = 0;
-    std::uint64_t progress_interval_iterations = 1;
+    std::uint64_t progress_interval_iterations =
+        kProductionCpuDrivenResponseDefaultProgressIntervalIterations;
+    std::uint64_t operator_apply_count = 0;
+    std::uint64_t stiffness_apply_count = 0;
+    std::uint64_t mass_apply_count = 0;
+    std::uint64_t complex_stiffness_apply_count = 0;
+    std::uint64_t complex_mass_apply_count = 0;
+    std::uint64_t right_preconditioner_apply_count = 0;
+    std::uint64_t gmres_orthogonalization_count = 0;
+    std::uint64_t gmres_restart_count = 0;
+    std::uint64_t progress_callback_count = 0;
     double max_frequency_hz = 0.0;
     double max_abs_response = 0.0;
     double solver_relative_tolerance = 0.0;

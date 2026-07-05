@@ -524,6 +524,12 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
             "frequency_spin_wave_bc": _spin_wave_bc_kind(study.spin_wave_bc),
             "frequency_spin_wave_bc_config": _spin_wave_bc_config(study.spin_wave_bc),
             "frequency_magnetostatic_bc": study.magnetostatic_bc,
+            "frequency_solver_method": (
+                study.solver_policy.method
+                if study.solver_policy is not None
+                and study.solver_policy.method is not None
+                else ""
+            ),
             "frequency_solver_rtol": _text_number(
                 study.solver_policy.rtol if study.solver_policy is not None else None
             ),
@@ -2827,6 +2833,10 @@ def _render_stages(
             if study.magnetostatic_bc != "open":
                 call_parts.append(f"magnetostatic_bc={_py_repr(study.magnetostatic_bc)}")
             if study.solver_policy is not None:
+                if study.solver_policy.method is not None:
+                    call_parts.append(
+                        f"solver_method={_py_repr(study.solver_policy.method)}"
+                    )
                 if study.solver_policy.max_iterations is not None:
                     call_parts.append(
                         f"solver_max_iterations={study.solver_policy.max_iterations}"

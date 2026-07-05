@@ -35,6 +35,15 @@ struct DenseDrivenResponseValidationResult {
     std::uint64_t max_iterations_for_frequency = 0;
     std::uint64_t restart_iterations_for_frequency = 0;
     std::uint64_t progress_interval_iterations = 1;
+    std::uint64_t operator_apply_count = 0;
+    std::uint64_t stiffness_apply_count = 0;
+    std::uint64_t mass_apply_count = 0;
+    std::uint64_t complex_stiffness_apply_count = 0;
+    std::uint64_t complex_mass_apply_count = 0;
+    std::uint64_t right_preconditioner_apply_count = 0;
+    std::uint64_t gmres_orthogonalization_count = 0;
+    std::uint64_t gmres_restart_count = 0;
+    std::uint64_t progress_callback_count = 0;
     double max_frequency_hz = 0.0;
     double max_abs_response = 0.0;
     double solver_relative_tolerance = 0.0;

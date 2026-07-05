@@ -6372,6 +6372,7 @@ fn fem_frequency_response_carries_solver_policy_into_backend_plan() {
     let mut ir = fem_frequency_response_mesh_asset_problem();
     if let fullmag_ir::StudyIR::FrequencyResponse { solver_policy, .. } = &mut ir.study {
         *solver_policy = Some(fullmag_ir::FrequencyResponseSolverPolicyIR {
+            method: Some(fullmag_ir::FrequencyResponseSolverMethodIR::SchurReduced),
             rtol: Some(1.0e-2),
             max_iterations: Some(128),
             restart_iterations: Some(32),
@@ -6385,6 +6386,10 @@ fn fem_frequency_response_carries_solver_policy_into_backend_plan() {
                 .solver_policy
                 .expect("frequency-response solver policy should be preserved");
             assert_eq!(policy.rtol, Some(1.0e-2));
+            assert_eq!(
+                policy.method,
+                Some(fullmag_ir::FrequencyResponseSolverMethodIR::SchurReduced)
+            );
             assert_eq!(policy.max_iterations, Some(128));
             assert_eq!(policy.restart_iterations, Some(32));
         }

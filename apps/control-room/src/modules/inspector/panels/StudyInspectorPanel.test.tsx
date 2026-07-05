@@ -1075,6 +1075,8 @@ describe("StudyInspectorPanel", () => {
     expect(html).toContain("Frequencies");
     expect(html).toContain("Excitation");
     expect(html).toContain("Include demag");
+    expect(html).toContain("Solver method");
+    expect(html).toContain("GPU operator host Krylov");
     expect(html).toContain("k sampling");
     expect(html).toContain("BC");
   });

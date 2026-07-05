@@ -710,8 +710,23 @@ pub enum FrequencyResponseNormalizationIR {
     UnitMaxAmplitude,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FrequencyResponseSolverMethodIR {
+    Auto,
+    DenseReference,
+    CpuSparseDirect,
+    FullCoupledFieldSplit,
+    SchurReduced,
+    ModalReduced,
+    GpuOperatorHostKrylov,
+    GpuDeviceKrylov,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FrequencyResponseSolverPolicyIR {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub method: Option<FrequencyResponseSolverMethodIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rtol: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

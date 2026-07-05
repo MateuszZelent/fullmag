@@ -743,6 +743,19 @@ def test_periodic_airbox_gpu_runtime_target_is_artifact_backed() -> None:
     assert "FULLMAG_FEM_EXECUTION=gpu" in target
     assert "FULLMAG_FMR_DEVICE=gpu" in target
     assert "FULLMAG_RELAX_DEVICE=gpu" in target
+    assert 'FULLMAG_FMR_RESPONSE_RTOL="${FULLMAG_FMR_RESPONSE_RTOL:-1e-3}"' in target
+    assert (
+        'FULLMAG_FMR_RESPONSE_MAX_ITERATIONS="${FULLMAG_FMR_RESPONSE_MAX_ITERATIONS:-8192}"'
+        in target
+    )
+    assert (
+        'FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS="${FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS:-8192}"'
+        in target
+    )
+    assert (
+        'FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL="${FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL:-128}"'
+        in target
+    )
     assert (
         'FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT="${FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT:-auto}"'
         in target
@@ -753,6 +766,10 @@ def test_periodic_airbox_gpu_runtime_target_is_artifact_backed() -> None:
     )
     assert (
         'FULLMAG_FMR_RESPONSE_GRAPH_PRECONDITIONER_SWEEPS="${FULLMAG_FMR_RESPONSE_GRAPH_PRECONDITIONER_SWEEPS:-4}"'
+        in target
+    )
+    assert (
+        'FULLMAG_FMR_RESPONSE_GRAPH_PRECONDITIONER_RELAXATION="${FULLMAG_FMR_RESPONSE_GRAPH_PRECONDITIONER_RELAXATION:-1.0}"'
         in target
     )
 

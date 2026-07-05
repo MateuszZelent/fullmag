@@ -86,6 +86,16 @@ const SUPPORTED_FREQUENCY_MAGNETOSTATIC_BCS = [
   "periodic_airbox_k0",
   "floquet_airbox",
 ] as const;
+const SUPPORTED_FREQUENCY_SOLVER_METHODS = [
+  "auto",
+  "dense_reference",
+  "cpu_sparse_direct",
+  "full_coupled_field_split",
+  "schur_reduced",
+  "modal_reduced",
+  "gpu_operator_host_krylov",
+  "gpu_device_krylov",
+] as const;
 const SPECTRAL_NORMALIZATION_ALIASES: Record<string, string> = {
   max_component: "unit_max_amplitude",
 };
@@ -145,6 +155,7 @@ export interface StudyStageDraft {
   operator: string;
   relaxAlpha: string;
   solver: string;
+  solverMethod: string;
   stageId: string;
   startField: string;
   stopField: string;
@@ -221,6 +232,7 @@ const DEFAULT_RELAX_STAGE_DRAFT: StudyStageDraft = {
   operator: "linearized_llg",
   relaxAlpha: "1",
   solver: "rk23",
+  solverMethod: "auto",
   stageId: "",
   startField: "0, 0, -0.1",
   stopField: "0, 0, 0.1",
@@ -291,6 +303,7 @@ const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
   operator: "linearized_llg",
   relaxAlpha: "",
   solver: "",
+  solverMethod: "auto",
   stageId: "",
   startField: "0, 0, -0.1",
   stopField: "0, 0, 0.1",
@@ -946,6 +959,12 @@ export function validateStudyStageDraft(
     validateOptionalVector3(issues, draft.kVector, "k vector");
     validateOptionalJson(issues, draft.kSampling, "k sampling");
     validateJsonOrString(issues, draft.bc, "BC");
+    validateSupportedText(
+      issues,
+      draft.solverMethod,
+      SUPPORTED_FREQUENCY_SOLVER_METHODS,
+      "Solver method",
+    );
     return issues;
   }
   if (draft.kind === "save_state") {
@@ -2422,6 +2441,13 @@ function spectralDraft(
       kind === "eigenmodes"
         ? scalarText(spectralRecordValue(record, kind, "operator"), base.operator)
         : base.operator,
+    solverMethod:
+      kind === "frequency_response"
+        ? scalarText(
+            spectralRecordValue(record, kind, "solver_method"),
+            base.solverMethod,
+          )
+        : base.solverMethod,
     stageId: stringValue(record?.stage_id ?? record?.id, `stage-${index + 1}`),
     target: scalarText(spectralRecordValue(record, kind, "target"), base.target),
     targetFrequency: scalarText(record?.target_frequency ?? record?.eigen_target_frequency, ""),
@@ -2485,10 +2511,12 @@ function spectralSceneStage(
     stage.eigen_spin_wave_bc = stage.bc;
   } else {
     stage.magnetostatic_bc = requiredText(draft.magnetostaticBc, "open");
+    stage.solver_method = requiredText(draft.solverMethod, "auto");
     stage.frequency_calculation_mode = stage.calculation_mode;
     stage.frequency_include_demag = draft.includeDemag;
     stage.frequency_equilibrium_source = stage.equilibrium_source;
     stage.frequency_magnetostatic_bc = stage.magnetostatic_bc;
+    stage.frequency_solver_method = stage.solver_method;
     stage.frequency_normalization = stage.normalization;
     stage.frequency_damping_policy = stage.damping_policy;
     if (kVector) stage.frequency_k_vector = kVector;

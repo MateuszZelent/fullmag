@@ -4440,6 +4440,7 @@ class ProblemApiTests(unittest.TestCase):
         film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
         study.stages.add_frequency_response(
             frequencies_hz=[2.0e9],
+            solver_method="gpu_operator_host_krylov",
             solver_max_iterations=128,
             solver_restart_iterations=32,
             solver_rtol=1e-2,
@@ -4464,8 +4465,14 @@ class ProblemApiTests(unittest.TestCase):
         policy = loaded.stages[0].problem.study.to_ir()["solver_policy"]
         self.assertEqual(
             policy,
-            {"rtol": 1e-2, "max_iterations": 128, "restart_iterations": 32},
+            {
+                "method": "gpu_operator_host_krylov",
+                "rtol": 1e-2,
+                "max_iterations": 128,
+                "restart_iterations": 32,
+            },
         )
+        self.assertIn('solver_method="gpu_operator_host_krylov"', rewritten)
         self.assertIn("solver_max_iterations=128", rewritten)
         self.assertIn("solver_restart_iterations=32", rewritten)
         self.assertIn("solver_rtol=0.01", rewritten)

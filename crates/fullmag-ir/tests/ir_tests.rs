@@ -2512,6 +2512,7 @@ fn frequency_response_round_trips_as_first_class_study() {
             values_hz: vec![1.0e9, 2.0e9],
         },
         solver_policy: Some(FrequencyResponseSolverPolicyIR {
+            method: Some(FrequencyResponseSolverMethodIR::GpuOperatorHostKrylov),
             rtol: Some(1.0e-2),
             max_iterations: Some(128),
             restart_iterations: Some(32),
@@ -2541,9 +2542,16 @@ fn frequency_response_round_trips_as_first_class_study() {
             assert_eq!(frequencies_hz.values_hz, vec![1.0e9, 2.0e9]);
             assert_eq!(
                 solver_policy
+                    .as_ref()
                     .expect("solver policy should round-trip")
                     .max_iterations,
                 Some(128)
+            );
+            assert_eq!(
+                solver_policy
+                    .expect("solver policy should round-trip")
+                    .method,
+                Some(FrequencyResponseSolverMethodIR::GpuOperatorHostKrylov)
             );
         }
         other => panic!("expected frequency_response study, got {other:?}"),

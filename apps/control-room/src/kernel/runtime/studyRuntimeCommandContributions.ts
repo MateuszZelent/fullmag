@@ -154,6 +154,7 @@ const DEFAULT_FREQUENCY_RESPONSE_STAGE: JsonObject = {
   frequency_include_demag: true,
   frequency_normalization: "unit_l2",
   frequency_observable: "susceptibility_tensor",
+  frequency_solver_method: "auto",
   frequency_spin_wave_bc: "free",
   frequency_values_hz: [1e9],
   include_demag: true,

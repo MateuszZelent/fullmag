@@ -1,7 +1,7 @@
 # Frequency-Domain Solver Physics
 
 Status: physics contract for magnetic and magnetoelastic frequency-domain studies
-Last updated: 2026-06-12
+Last updated: 2026-07-05
 Related docs:
 - `docs/physics/0700-frequency-domain-linearized-llg.md`
 - `docs/physics/0700-shared-magnetoelastic-semantics.md`
@@ -57,6 +57,74 @@ for the harmonic response at requested frequencies.
 `Eigenmodes` must not be described as the frequency-domain solver without the
 word `modal`, and `Frequency Response` must not be described as inheriting the
 modal eigensolver production status.
+
+## Solver Tree Contract
+
+Frequency-domain execution is a solver-planning problem, not one hard-coded
+GMRES path. The physics layer defines the algebraic problem; a separate planner
+selects an operator representation, linear solver family, preconditioner, and
+runtime residency model.
+
+The backend-neutral contract is:
+
+```text
+LinearizedFrequencyProblem
+  -> FrequencySolvePlanner
+  -> FrequencySolvePlan
+  -> one selected solver engine
+```
+
+`FrequencySolvePlan` must preserve, at minimum:
+
+- the public product: `modal_eigen` or `driven_response`,
+- the algebraic form: modal pencil, driven full coupled system, or driven
+  Schur-reduced system,
+- the operator representation: dense, sparse, matrix-free, coupled block, or
+  modal-reduced,
+- the selected engine,
+- the requested and resolved device,
+- vector residency for Krylov state,
+- operator backend,
+- preconditioner backend,
+- validation and fallback policy.
+
+The driven-response solver tree is:
+
+| Engine | Role |
+|---|---|
+| `dense_reference` | Tiny oracle for signs, scaling, residuals, Schur equivalence, and CI fixtures. It is not production execution. |
+| `cpu_sparse_direct` | CPU assembled sparse real-split or complex direct solve per frequency. This is the first missing production fallback and diagnostic baseline after the layout split. |
+| `full_coupled_field_split` | Full block solve for coupled `delta_m` and auxiliary fields such as `delta_phi`; preferred core path for robust periodic-airbox demag. |
+| `schur_reduced` | Matrix-free reduced system used only after full-vs-Schur certification passes. It is a fast path, not the single source of truth. |
+| `modal_reduced` | Reduced-basis or rational/modal sweep path for many-frequency response after modal validation. |
+| `gpu_operator_host_krylov` | Transitional path where Krylov vectors, Arnoldi/orthogonalization, residuals, and restart state live on the host while some operator or preconditioner applications use GPU backends. This must not be described as a device-resident GPU solver. |
+| `gpu_device_krylov` | Future path where Krylov vectors, operator inputs/outputs, preconditioner state, dot/norm/axpy/restart state, and residual estimates are device-resident. |
+
+For magnetic plus magnetostatic periodic-airbox driven response, both block
+forms are part of the physical contract:
+
+```text
+[ A_mm(omega)  A_mphi ] [ delta_m   ] = [ b_m   ]
+[ A_phim       A_phiphi ] [ delta_phi ]   [ b_phi ]
+```
+
+and, when certified,
+
+```text
+S(omega) delta_m = b_m - A_mphi A_phiphi^{-1} b_phi
+S = A_mm - A_mphi A_phiphi^{-1} A_phim
+```
+
+The full coupled residual is the reference residual for the reduced path.
+Schur-reduced execution is eligible only when tiny dense explicit Schur,
+matrix-free Schur action, reconstructed full residual, gauge/nullspace handling,
+and preconditioner-quality diagnostics agree within documented tolerances.
+
+The name `production_gpu` is not precise enough for solver architecture. Runtime
+and artifacts must distinguish `gpu_operator_host_krylov` from
+`gpu_device_krylov`. A run that uses device hypre or a CUDA tangent operator but
+stores Arnoldi bases, Hessenberg matrices, residual vectors, and dot/norm/axpy
+work on the host is `gpu_operator_host_krylov`.
 
 ## Equilibrium Linearization
 

@@ -77,15 +77,32 @@ SUPPORTED_SATURATION_FAILURE_POLICIES = {
     "continue_with_warning",
     "stop_stage",
 }
+SUPPORTED_FREQUENCY_RESPONSE_SOLVER_METHODS = {
+    "auto",
+    "dense_reference",
+    "cpu_sparse_direct",
+    "full_coupled_field_split",
+    "schur_reduced",
+    "modal_reduced",
+    "gpu_operator_host_krylov",
+    "gpu_device_krylov",
+}
 
 
 @dataclass(frozen=True, slots=True)
 class FrequencyResponseSolverPolicy:
+    method: str | None = None
     rtol: float | None = None
     max_iterations: int | None = None
     restart_iterations: int | None = None
 
     def __post_init__(self) -> None:
+        if self.method is not None:
+            method = require_non_empty(self.method, "solver_method")
+            if method not in SUPPORTED_FREQUENCY_RESPONSE_SOLVER_METHODS:
+                supported = ", ".join(sorted(SUPPORTED_FREQUENCY_RESPONSE_SOLVER_METHODS))
+                raise ValueError(f"solver_method must be one of: {supported}")
+            object.__setattr__(self, "method", method)
         if self.rtol is not None:
             rtol = float(self.rtol)
             if not math.isfinite(rtol) or rtol <= 0.0:
@@ -110,6 +127,8 @@ class FrequencyResponseSolverPolicy:
 
     def to_ir(self) -> dict[str, object]:
         policy: dict[str, object] = {}
+        if self.method is not None:
+            policy["method"] = self.method
         if self.rtol is not None:
             policy["rtol"] = self.rtol
         if self.max_iterations is not None:

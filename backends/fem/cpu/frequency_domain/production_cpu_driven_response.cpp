@@ -247,6 +247,7 @@ void make_givens(double a, double b, double &cs, double &sn) noexcept
 
 void publish_progress(
     const ProductionCpuDrivenResponseProblem &problem,
+    ProductionCpuDrivenResponseResult *result,
     std::uint64_t frequency_index,
     std::uint64_t completed_frequency_count,
     std::uint64_t iteration_count,
@@ -257,6 +258,9 @@ void publish_progress(
 {
     if (problem.progress_callback == nullptr) {
         return;
+    }
+    if (result != nullptr) {
+        ++result->progress_callback_count;
     }
     problem.progress_callback(
         problem.progress_user_data,
@@ -272,14 +276,21 @@ void publish_progress(
         });
 }
 
+std::uint64_t effective_progress_interval_iterations(
+    std::uint64_t requested) noexcept
+{
+    return requested > 0 ?
+        requested :
+        kProductionCpuDrivenResponseDefaultProgressIntervalIterations;
+}
+
 bool should_publish_progress(
     const ProductionCpuDrivenResponseProblem &problem,
     std::uint64_t iteration_count,
     bool converged) noexcept
 {
-    const std::uint64_t interval = std::max<std::uint64_t>(
-        1,
-        problem.progress_interval_iterations);
+    const std::uint64_t interval =
+        effective_progress_interval_iterations(problem.progress_interval_iterations);
     return iteration_count == 0 ||
         converged ||
         iteration_count >= problem.max_iterations ||
@@ -314,6 +325,7 @@ void copy_preconditioner_name(
 
 FrequencyDomainStatus apply_right_preconditioner(
     const ProductionCpuDrivenResponseProblem &problem,
+    ProductionCpuDrivenResponseResult *result,
     double omega,
     const double *input,
     std::vector<double> &workspace,
@@ -329,6 +341,9 @@ FrequencyDomainStatus apply_right_preconditioner(
     }
 
     workspace.resize(static_cast<std::size_t>(block_count));
+    if (result != nullptr) {
+        ++result->right_preconditioner_apply_count;
+    }
     const FrequencyDomainStatus status = problem.apply_right_preconditioner(
         problem.right_preconditioner_user_data,
         omega,
@@ -349,6 +364,7 @@ FrequencyDomainStatus apply_right_preconditioner(
 
 FrequencyDomainStatus apply_block_operator(
     const ProductionCpuDrivenResponseProblem &problem,
+    ProductionCpuDrivenResponseResult *result,
     double omega,
     const double *in,
     double *out,
@@ -377,6 +393,9 @@ FrequencyDomainStatus apply_block_operator(
     double *real_out = out;
     double *imag_out = out + n;
 
+    if (result != nullptr) {
+        ++result->operator_apply_count;
+    }
     FrequencyDomainStatus status = FrequencyDomainStatus::ok;
     if (problem.apply_complex_stiffness != nullptr ||
         problem.apply_complex_mass != nullptr) {
@@ -387,6 +406,9 @@ FrequencyDomainStatus apply_block_operator(
         }
         std::vector<double> stiffness_imag(static_cast<std::size_t>(n));
         std::vector<double> mass_imag(static_cast<std::size_t>(n));
+        if (result != nullptr) {
+            ++result->complex_stiffness_apply_count;
+        }
         status = problem.apply_complex_stiffness(
             problem.operator_user_data,
             real_in,
@@ -401,6 +423,9 @@ FrequencyDomainStatus apply_block_operator(
             !all_finite(stiffness_imag.data(), n)) {
             copy_error(error_message, "production CPU frequency response complex stiffness operator produced non-finite values");
             return FrequencyDomainStatus::operator_error;
+        }
+        if (result != nullptr) {
+            ++result->complex_mass_apply_count;
         }
         status = problem.apply_complex_mass(
             problem.operator_user_data,
@@ -422,6 +447,9 @@ FrequencyDomainStatus apply_block_operator(
             imag_out[row] = stiffness_imag[row] - omega * mass_workspace[row];
         }
     } else {
+        if (result != nullptr) {
+            ++result->stiffness_apply_count;
+        }
         status = problem.apply_stiffness(
             problem.operator_user_data,
             real_in,
@@ -433,6 +461,9 @@ FrequencyDomainStatus apply_block_operator(
         if (!all_finite(stiffness_workspace.data(), n)) {
             copy_error(error_message, "production CPU frequency response stiffness operator produced non-finite values");
             return FrequencyDomainStatus::operator_error;
+        }
+        if (result != nullptr) {
+            ++result->mass_apply_count;
         }
         status = problem.apply_mass(
             problem.operator_user_data,
@@ -454,6 +485,9 @@ FrequencyDomainStatus apply_block_operator(
             return FrequencyDomainStatus::operator_error;
         }
 
+        if (result != nullptr) {
+            ++result->stiffness_apply_count;
+        }
         status = problem.apply_stiffness(
             problem.operator_user_data,
             imag_in,
@@ -465,6 +499,9 @@ FrequencyDomainStatus apply_block_operator(
         if (!all_finite(stiffness_workspace.data(), n)) {
             copy_error(error_message, "production CPU frequency response stiffness operator produced non-finite values");
             return FrequencyDomainStatus::operator_error;
+        }
+        if (result != nullptr) {
+            ++result->mass_apply_count;
         }
         status = problem.apply_mass(
             problem.operator_user_data,
@@ -506,6 +543,7 @@ FrequencyDomainStatus apply_block_operator(
 
 FrequencyDomainStatus compute_residual(
     const ProductionCpuDrivenResponseProblem &problem,
+    ProductionCpuDrivenResponseResult *result,
     double omega,
     const std::vector<double> &rhs,
     const std::vector<double> &x,
@@ -527,6 +565,7 @@ FrequencyDomainStatus compute_residual(
     }
     const FrequencyDomainStatus status = apply_block_operator(
         problem,
+        result,
         omega,
         x.data(),
         operator_output.data(),
@@ -546,6 +585,7 @@ FrequencyDomainStatus compute_residual(
 
 FrequencyDomainStatus compute_right_preconditioner_probe(
     const ProductionCpuDrivenResponseProblem &problem,
+    ProductionCpuDrivenResponseResult *result,
     double omega,
     const std::vector<double> &rhs,
     std::vector<double> &preconditioner_workspace,
@@ -566,6 +606,7 @@ FrequencyDomainStatus compute_right_preconditioner_probe(
     }
     const FrequencyDomainStatus preconditioner_status = apply_right_preconditioner(
         problem,
+        result,
         omega,
         rhs.data(),
         preconditioner_workspace,
@@ -576,6 +617,7 @@ FrequencyDomainStatus compute_right_preconditioner_probe(
     }
     const FrequencyDomainStatus operator_status = apply_block_operator(
         problem,
+        result,
         omega,
         preconditioned_rhs.data(),
         operator_output.data(),
@@ -596,6 +638,7 @@ FrequencyDomainStatus compute_right_preconditioner_probe(
 
 FrequencyDomainStatus solve_frequency_gmres(
     const ProductionCpuDrivenResponseProblem &problem,
+    ProductionCpuDrivenResponseResult *result,
     std::uint64_t frequency_index,
     double frequency_hz,
     const std::vector<double> &rhs,
@@ -640,6 +683,7 @@ FrequencyDomainStatus solve_frequency_gmres(
     iteration_count = 0;
     FrequencyDomainStatus status = compute_residual(
         problem,
+        result,
         omega,
         rhs,
         x,
@@ -662,6 +706,7 @@ FrequencyDomainStatus solve_frequency_gmres(
     append_residual_history(relative_residual_history, relative_residual_l2);
     publish_progress(
         problem,
+        result,
         frequency_index,
         frequency_index,
         iteration_count,
@@ -689,6 +734,9 @@ FrequencyDomainStatus solve_frequency_gmres(
             copy_error(error_message, "production CPU frequency response was interrupted");
             return FrequencyDomainStatus::interrupted;
         }
+        if (result != nullptr) {
+            ++result->gmres_restart_count;
+        }
 
         const double beta = residual_l2;
         for (std::uint64_t row = 0; row < block_count; ++row) {
@@ -709,6 +757,7 @@ FrequencyDomainStatus solve_frequency_gmres(
             if (problem.apply_right_preconditioner != nullptr) {
                 status = apply_right_preconditioner(
                     problem,
+                    result,
                     omega,
                     basis.data() + column * block_count,
                     preconditioner_workspace,
@@ -721,6 +770,7 @@ FrequencyDomainStatus solve_frequency_gmres(
             }
             status = apply_block_operator(
                 problem,
+                result,
                 omega,
                 operator_input,
                 w.data(),
@@ -732,6 +782,9 @@ FrequencyDomainStatus solve_frequency_gmres(
                 return status;
             }
             for (std::uint64_t row = 0; row <= column; ++row) {
+                if (result != nullptr) {
+                    ++result->gmres_orthogonalization_count;
+                }
                 h[row * restart + column] =
                     dot(w, basis.data() + row * block_count, block_count);
                 for (std::uint64_t index = 0; index < block_count; ++index) {
@@ -740,6 +793,9 @@ FrequencyDomainStatus solve_frequency_gmres(
                 }
             }
             for (std::uint64_t row = 0; row <= column; ++row) {
+                if (result != nullptr) {
+                    ++result->gmres_orthogonalization_count;
+                }
                 const double correction =
                     dot(w, basis.data() + row * block_count, block_count);
                 h[row * restart + column] += correction;
@@ -789,6 +845,7 @@ FrequencyDomainStatus solve_frequency_gmres(
             if (should_publish_progress(problem, iteration_count, false)) {
                 publish_progress(
                     problem,
+                    result,
                     frequency_index,
                     frequency_index,
                     iteration_count,
@@ -841,6 +898,7 @@ FrequencyDomainStatus solve_frequency_gmres(
 
         status = compute_residual(
             problem,
+            result,
             omega,
             rhs,
             x,
@@ -866,6 +924,7 @@ FrequencyDomainStatus solve_frequency_gmres(
         if (should_publish_progress(problem, iteration_count, recomputed_converged)) {
             publish_progress(
                 problem,
+                result,
                 frequency_index,
                 frequency_index,
                 iteration_count,
@@ -901,6 +960,7 @@ bool pilot_measurement_is_valid(
 
 FrequencyDomainStatus run_right_preconditioner_pilot(
     const ProductionCpuDrivenResponseProblem &problem,
+    ProductionCpuDrivenResponseResult *result,
     std::uint64_t frequency_index,
     double frequency_hz,
     const std::vector<double> &rhs,
@@ -948,6 +1008,7 @@ FrequencyDomainStatus run_right_preconditioner_pilot(
     char pilot_error[128]{};
     const FrequencyDomainStatus status = solve_frequency_gmres(
         pilot_problem,
+        result,
         frequency_index,
         frequency_hz,
         rhs,
@@ -1043,9 +1104,8 @@ FrequencyDomainStatus solve_production_cpu_driven_response(
     out_result->restart_iterations_for_frequency = std::max<std::uint64_t>(
         1,
         std::min(problem.restart_iterations, problem.max_iterations));
-    out_result->progress_interval_iterations = std::max<std::uint64_t>(
-        1,
-        problem.progress_interval_iterations);
+    out_result->progress_interval_iterations =
+        effective_progress_interval_iterations(problem.progress_interval_iterations);
     if (!(std::abs(problem.angular_frequency_sign) == 1.0) ||
         !std::isfinite(problem.angular_frequency_sign)) {
         copy_error(out_result->error_message, "production CPU frequency response has invalid phasor convention sign");
@@ -1106,6 +1166,8 @@ FrequencyDomainStatus solve_production_cpu_driven_response(
 
     out_result->response_dof_count = n;
     ProductionCpuDrivenResponseProblem effective_problem = problem;
+    effective_problem.progress_interval_iterations =
+        out_result->progress_interval_iterations;
     for (std::uint64_t frequency_index = 0;
          frequency_index < problem.frequency_count;
          ++frequency_index) {
@@ -1127,6 +1189,7 @@ FrequencyDomainStatus solve_production_cpu_driven_response(
             const FrequencyDomainStatus probe_status =
                 compute_right_preconditioner_probe(
                     problem,
+                    out_result,
                     omega,
                     rhs,
                     preconditioner_probe_workspace,
@@ -1160,6 +1223,7 @@ FrequencyDomainStatus solve_production_cpu_driven_response(
                     FrequencyDomainStatus pilot_status =
                         run_right_preconditioner_pilot(
                             problem,
+                            out_result,
                             frequency_index,
                             frequency_hz,
                             rhs,
@@ -1179,6 +1243,7 @@ FrequencyDomainStatus solve_production_cpu_driven_response(
                             problem.fallback_krylov_preconditioner_name;
                         pilot_status = run_right_preconditioner_pilot(
                             fallback_problem,
+                            out_result,
                             frequency_index,
                             frequency_hz,
                             rhs,
@@ -1198,6 +1263,7 @@ FrequencyDomainStatus solve_production_cpu_driven_response(
                     unpreconditioned_problem.fallback_krylov_preconditioner_name = nullptr;
                     pilot_status = run_right_preconditioner_pilot(
                         unpreconditioned_problem,
+                        out_result,
                         frequency_index,
                         frequency_hz,
                         rhs,
@@ -1306,6 +1372,7 @@ FrequencyDomainStatus solve_production_cpu_driven_response(
                         const FrequencyDomainStatus fallback_probe_status =
                             compute_right_preconditioner_probe(
                                 fallback_problem,
+                                out_result,
                                 omega,
                                 rhs,
                                 preconditioner_probe_workspace,
@@ -1365,6 +1432,7 @@ FrequencyDomainStatus solve_production_cpu_driven_response(
         std::vector<double> relative_residual_history;
         const FrequencyDomainStatus status = solve_frequency_gmres(
             effective_problem,
+            out_result,
             frequency_index,
             frequency_hz,
             rhs,
@@ -1491,6 +1559,7 @@ FrequencyDomainStatus solve_production_cpu_driven_response(
         ++out_result->completed_frequency_count;
         publish_progress(
             problem,
+            out_result,
             frequency_index,
             out_result->completed_frequency_count,
             iteration_count,

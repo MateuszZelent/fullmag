@@ -9,6 +9,8 @@
 #include "frequency_domain/excitation.hpp"
 #include "frequency_domain/operator_contract.hpp"
 #include "frequency_domain/operator_terms.hpp"
+#include "frequency_domain/planner/frequency_solve_plan.hpp"
+#include "frequency_domain/planner/frequency_solve_planner.hpp"
 #include "frequency_domain/solver_progress.hpp"
 #include "frequency_domain/tangent_frame.hpp"
 #include "frequency_domain/zeeman_operator.hpp"
@@ -1015,6 +1017,133 @@ void periodic_airbox_reduced_response_uses_schur_residual_preconditioner_source_
     check(
         contains(source.c_str(), "solve_error_retry_without_right_preconditioner_improved_residual"),
         "periodic-airbox auto-disable retry must report when an unpreconditioned retry improves a failed solve");
+}
+
+void frequency_solve_plan_names_solver_tree_lanes_without_runtime_side_effects()
+{
+    fd::FrequencySolvePlan plan{};
+
+    check(
+        plan.lane == fd::FrequencyExecutionLane::dense_reference,
+        "default frequency solve plan starts as dense reference");
+    check(
+        plan.operator_representation == fd::FrequencyOperatorRepresentation::dense_tiny,
+        "default frequency solve plan starts with dense tiny representation");
+    check(
+        !plan.use_full_coupled_system,
+        "default frequency solve plan does not silently request full coupled solve");
+    check(
+        !plan.use_schur_reduction,
+        "default frequency solve plan does not silently request Schur reduction");
+    check(
+        !plan.allow_device_resident_krylov,
+        "default frequency solve plan does not silently claim device-resident Krylov");
+    check(
+        std::strcmp(
+            fd::frequency_execution_lane_name(fd::FrequencyExecutionLane::dense_reference),
+            "dense_reference") == 0,
+        "dense reference lane name is canonical");
+    check(
+        std::strcmp(
+            fd::frequency_execution_lane_name(fd::FrequencyExecutionLane::cpu_sparse_direct),
+            "cpu_sparse_direct") == 0,
+        "CPU sparse direct lane name is canonical");
+    check(
+        std::strcmp(
+            fd::frequency_execution_lane_name(fd::FrequencyExecutionLane::full_coupled_field_split),
+            "full_coupled_field_split") == 0,
+        "full coupled field-split lane name is canonical");
+    check(
+        std::strcmp(
+            fd::frequency_execution_lane_name(fd::FrequencyExecutionLane::schur_reduced),
+            "schur_reduced") == 0,
+        "Schur reduced lane name is canonical");
+    check(
+        std::strcmp(
+            fd::frequency_execution_lane_name(fd::FrequencyExecutionLane::modal_reduced),
+            "modal_reduced") == 0,
+        "modal reduced lane name is canonical");
+    check(
+        std::strcmp(
+            fd::frequency_execution_lane_name(fd::FrequencyExecutionLane::gpu_operator_host_krylov),
+            "gpu_operator_host_krylov") == 0,
+        "GPU operator host Krylov lane name is canonical");
+    check(
+        std::strcmp(
+            fd::frequency_execution_lane_name(fd::FrequencyExecutionLane::gpu_device_krylov),
+            "gpu_device_krylov") == 0,
+        "GPU device Krylov lane name is canonical");
+    check(
+        std::strcmp(
+            fd::frequency_operator_representation_name(
+                fd::FrequencyOperatorRepresentation::coupled_block_matnest),
+            "coupled_block_matnest") == 0,
+        "coupled block representation name is canonical");
+    check(
+        std::strcmp(
+            fd::frequency_operator_representation_name(
+                fd::FrequencyOperatorRepresentation::schur_reduced_matrix_free),
+            "schur_reduced_matrix_free") == 0,
+        "Schur reduced matrix-free representation name is canonical");
+}
+
+void frequency_solve_planner_selects_first_real_backend_without_runtime_side_effects()
+{
+    fd::FrequencySolvePlannerInput direct_input{};
+    direct_input.tiny_problem = false;
+    direct_input.single_frequency = true;
+    direct_input.sparse_direct_memory_ok = true;
+
+    const fd::FrequencySolvePlan direct_plan =
+        fd::plan_frequency_response(direct_input);
+
+    check(
+        direct_plan.lane == fd::FrequencyExecutionLane::cpu_sparse_direct,
+        "single-frequency sparse-direct-capable requests select cpu_sparse_direct");
+    check(
+        direct_plan.operator_representation == fd::FrequencyOperatorRepresentation::sparse_csr,
+        "cpu_sparse_direct uses a sparse operator representation");
+    check(
+        direct_plan.linear_solver == fd::FrequencyLinearSolverFamily::sparse_direct,
+        "cpu_sparse_direct uses sparse direct linear solver family");
+    check(
+        !direct_plan.use_schur_reduction,
+        "cpu_sparse_direct does not silently use Schur reduction");
+
+    fd::FrequencySolvePlannerInput gpu_operator_input{};
+    gpu_operator_input.requested_gpu = true;
+    gpu_operator_input.gpu_operator_backend_available = true;
+    gpu_operator_input.device_resident_krylov_available = false;
+
+    const fd::FrequencySolvePlan gpu_operator_plan =
+        fd::plan_frequency_response(gpu_operator_input);
+
+    check(
+        gpu_operator_plan.lane == fd::FrequencyExecutionLane::gpu_operator_host_krylov,
+        "GPU operator-only requests select gpu_operator_host_krylov");
+    check(
+        gpu_operator_plan.allow_gpu_operator_backend,
+        "gpu_operator_host_krylov records GPU operator backend permission");
+    check(
+        !gpu_operator_plan.allow_device_resident_krylov,
+        "gpu_operator_host_krylov does not claim device-resident Krylov");
+
+    fd::FrequencySolvePlannerInput schur_input{};
+    schur_input.periodic_airbox_k0 = true;
+    schur_input.schur_certified = true;
+
+    const fd::FrequencySolvePlan schur_plan =
+        fd::plan_frequency_response(schur_input);
+
+    check(
+        schur_plan.lane == fd::FrequencyExecutionLane::schur_reduced,
+        "certified Schur requests select schur_reduced after full-coupled availability is absent");
+    check(
+        schur_plan.use_schur_reduction,
+        "schur_reduced records Schur reduction");
+    check(
+        schur_plan.require_true_residual_verification,
+        "schur_reduced requires true residual verification");
 }
 
 void driven_response_gamma_floquet_boundary_maps_to_static_periodic_slice()
@@ -14482,6 +14611,8 @@ int main()
     driven_response_solver_accepts_fmr_env_aliases_source_contract();
     periodic_airbox_reduced_response_keeps_block_jacobi_fallback_source_contract();
     periodic_airbox_reduced_response_uses_schur_residual_preconditioner_source_contract();
+    frequency_solve_plan_names_solver_tree_lanes_without_runtime_side_effects();
+    frequency_solve_planner_selects_first_real_backend_without_runtime_side_effects();
     driven_response_gamma_floquet_boundary_maps_to_static_periodic_slice();
     driven_response_floquet_k_metadata_reports_projected_response_slice();
     driven_response_gamma_floquet_k_metadata_keeps_response_available();

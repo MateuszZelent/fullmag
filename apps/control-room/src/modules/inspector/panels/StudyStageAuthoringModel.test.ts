@@ -598,6 +598,7 @@ describe("StudyStageAuthoringModel", () => {
         frequenciesHz: "1e9, 2e9",
         magnetostaticBc: "periodic_airbox_k0",
         observable: "mx",
+        solverMethod: "gpu_operator_host_krylov",
         stageId: "freq-1",
       }),
     ).toMatchObject({
@@ -609,12 +610,14 @@ describe("StudyStageAuthoringModel", () => {
       frequency_excitation_phase_rad: 0.375,
       frequency_magnetostatic_bc: "periodic_airbox_k0",
       frequency_observable: "mx",
+      frequency_solver_method: "gpu_operator_host_krylov",
       frequency_spin_wave_bc: { axes: ["x", "y"], kind: "periodic" },
       frequency_values_hz: [1e9, 2e9],
       frequencies_hz: [1e9, 2e9],
       kind: "frequency_response",
       magnetostatic_bc: "periodic_airbox_k0",
       observable: "mx",
+      solver_method: "gpu_operator_host_krylov",
       stage_id: "freq-1",
     });
 

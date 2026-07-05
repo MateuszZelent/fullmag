@@ -2303,12 +2303,14 @@ def frequency_response_stage(
     k_sampling: object | None = None,
     bc: str | dict[str, object] = "free",
     magnetostatic_bc: str = "open",
+    solver_method: str | None = None,
     solver_rtol: float | None = None,
     solver_max_iterations: int | None = None,
     solver_restart_iterations: int | None = None,
     MAX_ITERATIONS: int | None = None,
 ) -> FrequencyResponseStageSpec:
     solver_policy = _frequency_response_solver_policy(
+        solver_method=solver_method,
         solver_rtol=solver_rtol,
         solver_max_iterations=solver_max_iterations,
         solver_restart_iterations=solver_restart_iterations,
@@ -2334,6 +2336,7 @@ def frequency_response_stage(
 
 def _frequency_response_solver_policy(
     *,
+    solver_method: str | None,
     solver_rtol: float | None,
     solver_max_iterations: int | None,
     solver_restart_iterations: int | None,
@@ -2346,12 +2349,15 @@ def _frequency_response_solver_policy(
             )
         solver_max_iterations = MAX_ITERATIONS
     if (
+        solver_method is None
+        and
         solver_rtol is None
         and solver_max_iterations is None
         and solver_restart_iterations is None
     ):
         return None
     return FrequencyResponseSolverPolicy(
+        method=solver_method,
         rtol=solver_rtol,
         max_iterations=solver_max_iterations,
         restart_iterations=solver_restart_iterations,
@@ -3009,6 +3015,7 @@ class StudyStagesBuilder:
         k_sampling: object | None = None,
         bc: str | dict[str, object] = "free",
         magnetostatic_bc: str = "open",
+        solver_method: str | None = None,
         solver_rtol: float | None = None,
         solver_max_iterations: int | None = None,
         solver_restart_iterations: int | None = None,
@@ -3029,6 +3036,7 @@ class StudyStagesBuilder:
                 k_sampling=k_sampling,
                 bc=bc,
                 magnetostatic_bc=magnetostatic_bc,
+                solver_method=solver_method,
                 solver_rtol=solver_rtol,
                 solver_max_iterations=solver_max_iterations,
                 solver_restart_iterations=solver_restart_iterations,
@@ -4077,6 +4085,7 @@ class StudyBuilder:
         k_sampling: object | None = None,
         bc: str | dict[str, object] = "free",
         magnetostatic_bc: str = "open",
+        solver_method: str | None = None,
         solver_rtol: float | None = None,
         solver_max_iterations: int | None = None,
         solver_restart_iterations: int | None = None,
@@ -4096,6 +4105,7 @@ class StudyBuilder:
             k_sampling=k_sampling,
             bc=bc,
             magnetostatic_bc=magnetostatic_bc,
+            solver_method=solver_method,
             solver_rtol=solver_rtol,
             solver_max_iterations=solver_max_iterations,
             solver_restart_iterations=solver_restart_iterations,
@@ -4118,6 +4128,7 @@ def frequency_response(
     k_sampling: object | None = None,
     bc: str | dict[str, object] = "free",
     magnetostatic_bc: str = "open",
+    solver_method: str | None = None,
     solver_rtol: float | None = None,
     solver_max_iterations: int | None = None,
     solver_restart_iterations: int | None = None,
@@ -4126,6 +4137,7 @@ def frequency_response(
     """Build the problem and queue/run a driven frequency-response analysis."""
     from fullmag.runtime import Simulation
     solver_policy = _frequency_response_solver_policy(
+        solver_method=solver_method,
         solver_rtol=solver_rtol,
         solver_max_iterations=solver_max_iterations,
         solver_restart_iterations=solver_restart_iterations,

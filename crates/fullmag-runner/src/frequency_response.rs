@@ -106,6 +106,95 @@ impl FrequencyResponseSolverEnvGuard {
     }
 }
 
+fn frequency_response_solver_method_name(
+    method: fullmag_ir::FrequencyResponseSolverMethodIR,
+) -> &'static str {
+    match method {
+        fullmag_ir::FrequencyResponseSolverMethodIR::Auto => "auto",
+        fullmag_ir::FrequencyResponseSolverMethodIR::DenseReference => "dense_reference",
+        fullmag_ir::FrequencyResponseSolverMethodIR::CpuSparseDirect => "cpu_sparse_direct",
+        fullmag_ir::FrequencyResponseSolverMethodIR::FullCoupledFieldSplit => {
+            "full_coupled_field_split"
+        }
+        fullmag_ir::FrequencyResponseSolverMethodIR::SchurReduced => "schur_reduced",
+        fullmag_ir::FrequencyResponseSolverMethodIR::ModalReduced => "modal_reduced",
+        fullmag_ir::FrequencyResponseSolverMethodIR::GpuOperatorHostKrylov => {
+            "gpu_operator_host_krylov"
+        }
+        fullmag_ir::FrequencyResponseSolverMethodIR::GpuDeviceKrylov => "gpu_device_krylov",
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn requested_frequency_response_solver_method_name(
+    policy: Option<&fullmag_ir::FrequencyResponseSolverPolicyIR>,
+) -> &'static str {
+    policy
+        .and_then(|policy| policy.method)
+        .map(frequency_response_solver_method_name)
+        .unwrap_or("auto")
+}
+
+#[cfg(feature = "fem-gpu")]
+fn resolved_frequency_response_solver_method_name(
+    requested_gpu: bool,
+    uses_periodic_airbox_schur: bool,
+) -> &'static str {
+    if requested_gpu {
+        "gpu_operator_host_krylov"
+    } else if uses_periodic_airbox_schur {
+        "schur_reduced"
+    } else {
+        "production_cpu_host_gmres"
+    }
+}
+
+fn frequency_response_solver_method_rejection_reason(
+    plan: &fullmag_ir::FemFrequencyResponsePlanIR,
+) -> Option<String> {
+    let Some(method) = plan.solver_policy.as_ref().and_then(|policy| policy.method) else {
+        return None;
+    };
+    if method == fullmag_ir::FrequencyResponseSolverMethodIR::Auto {
+        return None;
+    }
+
+    let requested_gpu = plan.requested_device == fullmag_ir::ExecutionDevice::Gpu;
+    let uses_periodic_airbox_schur = plan.magnetostatic_bc
+        == fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0
+        || plan.magnetostatic_bc == fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox;
+
+    match method {
+        fullmag_ir::FrequencyResponseSolverMethodIR::Auto => None,
+        fullmag_ir::FrequencyResponseSolverMethodIR::GpuOperatorHostKrylov if requested_gpu => None,
+        fullmag_ir::FrequencyResponseSolverMethodIR::SchurReduced if uses_periodic_airbox_schur => {
+            None
+        }
+        fullmag_ir::FrequencyResponseSolverMethodIR::DenseReference
+            if !requested_gpu && !uses_periodic_airbox_schur =>
+        {
+            None
+        }
+        fullmag_ir::FrequencyResponseSolverMethodIR::GpuOperatorHostKrylov => Some(
+            "solver_method=gpu_operator_host_krylov requires requested device gpu".to_string(),
+        ),
+        fullmag_ir::FrequencyResponseSolverMethodIR::SchurReduced => Some(
+            "solver_method=schur_reduced currently requires magnetostatic_bc=periodic_airbox_k0 or floquet_airbox".to_string(),
+        ),
+        fullmag_ir::FrequencyResponseSolverMethodIR::DenseReference => Some(
+            "solver_method=dense_reference is only allowed for non-periodic CPU validation requests"
+                .to_string(),
+        ),
+        fullmag_ir::FrequencyResponseSolverMethodIR::CpuSparseDirect
+        | fullmag_ir::FrequencyResponseSolverMethodIR::FullCoupledFieldSplit
+        | fullmag_ir::FrequencyResponseSolverMethodIR::ModalReduced
+        | fullmag_ir::FrequencyResponseSolverMethodIR::GpuDeviceKrylov => Some(format!(
+            "solver_method={} is part of the frequency solver tree contract but is not implemented in the current runtime",
+            frequency_response_solver_method_name(method)
+        )),
+    }
+}
+
 pub(crate) fn execute_fem_frequency_response_validation(
     plan: &fullmag_ir::FemFrequencyResponsePlanIR,
     output_dir: &Path,
@@ -129,6 +218,11 @@ pub(crate) fn execute_fem_frequency_response_validation(
     {
         return Err(RunError {
             message: "FEM frequency response frequencies must be finite and positive".to_string(),
+        });
+    }
+    if let Some(reason) = frequency_response_solver_method_rejection_reason(plan) {
+        return Err(RunError {
+            message: format!("FEM frequency response solver method is unavailable: {reason}"),
         });
     }
     #[cfg(feature = "fem-gpu")]
@@ -1107,6 +1201,9 @@ fn patch_frequency_response_periodic_airbox_flux_diagnostics(
 fn patch_frequency_response_solver_diagnostics(
     output_dir: &Path,
     demag_solver_policy: Option<&fullmag_ir::FemLinearSolverPolicy>,
+    input_preflight: Option<&serde_json::Value>,
+    requested_solver_method: Option<&str>,
+    resolved_solver_method: Option<&str>,
 ) -> std::io::Result<()> {
     let mut paths = vec![
         output_dir.join("response/diagnostics/solver.v1.json"),
@@ -1135,6 +1232,56 @@ fn patch_frequency_response_solver_diagnostics(
         let mut value: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
         let mut changed = patch_residual_consistency_fields(&mut value);
+        if let Some(input_preflight) = input_preflight {
+            if path.ends_with("response/diagnostics/solver.v1.json")
+                || path.ends_with("response/diagnostics.v1.json")
+            {
+                if let Some(object) = value.as_object_mut() {
+                    object.insert("input_preflight".to_string(), input_preflight.clone());
+                    changed = true;
+                }
+            } else if path.ends_with("frequency_domain/manifest.v1.json") {
+                if let Some(object) = value
+                    .as_object_mut()
+                    .and_then(|object| object.get_mut("diagnostics"))
+                    .and_then(serde_json::Value::as_object_mut)
+                {
+                    object.insert("input_preflight".to_string(), input_preflight.clone());
+                    changed = true;
+                }
+            }
+        }
+        if requested_solver_method.is_some() || resolved_solver_method.is_some() {
+            if path.ends_with("response/diagnostics/solver.v1.json")
+                || path.ends_with("response/diagnostics.v1.json")
+            {
+                if let Some(object) = value.as_object_mut() {
+                    changed |= insert_frequency_response_solver_method_fields(
+                        object,
+                        requested_solver_method,
+                        resolved_solver_method,
+                    );
+                }
+            } else if path.ends_with("frequency_domain/manifest.v1.json") {
+                if let Some(object) = value
+                    .as_object_mut()
+                    .and_then(|object| object.get_mut("diagnostics"))
+                    .and_then(serde_json::Value::as_object_mut)
+                {
+                    changed |= insert_frequency_response_solver_method_fields(
+                        object,
+                        requested_solver_method,
+                        resolved_solver_method,
+                    );
+                }
+            } else if let Some(object) = value.as_object_mut() {
+                changed |= insert_frequency_response_solver_method_fields(
+                    object,
+                    requested_solver_method,
+                    resolved_solver_method,
+                );
+            }
+        }
         if let Some(policy) = demag_solver_policy {
             if path.ends_with("response/diagnostics/solver.v1.json")
                 || path.ends_with("response/diagnostics.v1.json")
@@ -1163,6 +1310,20 @@ fn patch_frequency_response_solver_diagnostics(
     }
     patch_frequency_response_sweep_point_consistency(output_dir)?;
     Ok(())
+}
+
+#[cfg(feature = "fem-gpu")]
+fn write_frequency_response_input_preflight_artifact(
+    output_dir: &Path,
+    input_preflight: &serde_json::Value,
+) -> std::io::Result<()> {
+    let diagnostics_dir = output_dir.join("response/diagnostics");
+    std::fs::create_dir_all(&diagnostics_dir)?;
+    std::fs::write(
+        diagnostics_dir.join("input_preflight.v1.json"),
+        serde_json::to_vec_pretty(input_preflight)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?,
+    )
 }
 
 #[cfg(any(feature = "fem-gpu", test))]
@@ -1310,6 +1471,30 @@ fn patch_residual_consistency_fields(value: &mut serde_json::Value) -> bool {
 }
 
 #[cfg(any(feature = "fem-gpu", test))]
+fn insert_frequency_response_solver_method_fields(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    requested_solver_method: Option<&str>,
+    resolved_solver_method: Option<&str>,
+) -> bool {
+    let mut changed = false;
+    if let Some(method) = requested_solver_method {
+        object.insert(
+            "requested_solver_method".to_string(),
+            serde_json::Value::String(method.to_string()),
+        );
+        changed = true;
+    }
+    if let Some(method) = resolved_solver_method {
+        object.insert(
+            "resolved_solver_method".to_string(),
+            serde_json::Value::String(method.to_string()),
+        );
+        changed = true;
+    }
+    changed
+}
+
+#[cfg(any(feature = "fem-gpu", test))]
 fn insert_demag_solver_policy_fields(
     object: &mut serde_json::Map<String, serde_json::Value>,
     policy: &fullmag_ir::FemLinearSolverPolicy,
@@ -1404,6 +1589,11 @@ fn try_execute_fem_frequency_response_native_production_cpu(
     on_step: &mut Option<&mut dyn FnMut(StepUpdate) -> StepAction>,
 ) -> Result<Option<ExecutedRun>, RunError> {
     let requested_gpu = plan.requested_device == fullmag_ir::ExecutionDevice::Gpu;
+    if plan.solver_policy.as_ref().and_then(|policy| policy.method)
+        == Some(fullmag_ir::FrequencyResponseSolverMethodIR::DenseReference)
+    {
+        return Ok(None);
+    }
     if requested_gpu {
         if let Some(reason) = production_gpu_frequency_response_rejection_reason(plan) {
             return Err(RunError {
@@ -1542,6 +1732,18 @@ fn try_execute_fem_frequency_response_native_production_cpu(
         })
         .to_string()
     });
+    let input_preflight =
+        frequency_response_input_preflight_diagnostics(plan).ok_or_else(|| RunError {
+            message: "failed to build FEM frequency-response input preflight diagnostics"
+                .to_string(),
+        })?;
+    write_frequency_response_input_preflight_artifact(output_dir, &input_preflight).map_err(
+        |err| RunError {
+            message: format!(
+                "failed to write FEM frequency-response input preflight diagnostics: {err}"
+            ),
+        },
+    )?;
     let _solver_env_guard = FrequencyResponseSolverEnvGuard::apply(plan.solver_policy.as_ref());
     write_initial_frequency_response_progress_artifact(
         output_dir,
@@ -1614,6 +1816,15 @@ fn try_execute_fem_frequency_response_native_production_cpu(
     patch_frequency_response_solver_diagnostics(
         output_dir,
         effective_frequency_response_demag_solver_policy.as_ref(),
+        Some(&input_preflight),
+        Some(requested_frequency_response_solver_method_name(
+            plan.solver_policy.as_ref(),
+        )),
+        Some(resolved_frequency_response_solver_method_name(
+            requested_gpu,
+            payload.requires_periodic_airbox_dynamic_demag
+                || payload.requires_floquet_airbox_dynamic_demag,
+        )),
     )
     .map_err(|err| RunError {
         message: format!(
@@ -2723,6 +2934,361 @@ fn build_frequency_response_observable_ms_field(
             .map(|node_index| values[*node_index])
             .collect::<Vec<_>>(),
     ))
+}
+
+#[cfg(feature = "fem-gpu")]
+fn frequency_response_input_preflight_diagnostics(
+    plan: &fullmag_ir::FemFrequencyResponsePlanIR,
+) -> Option<serde_json::Value> {
+    let full_node_count = plan.mesh.nodes.len();
+    let equilibrium_vector_count = plan.equilibrium_magnetization.len();
+    let equilibrium_count_matches_mesh = full_node_count == equilibrium_vector_count;
+    let equilibrium_vectors_are_finite = plan
+        .equilibrium_magnetization
+        .iter()
+        .flatten()
+        .all(|value| value.is_finite());
+    let magnetic_node_indices = frequency_response_magnetic_node_indices(plan)?;
+    let node_index_map = compact_node_index_map(equilibrium_vector_count, &magnetic_node_indices)?;
+    let magnetic_node_count = magnetic_node_indices.len();
+    let airbox_or_zero_m_node_count = equilibrium_vector_count.saturating_sub(magnetic_node_count);
+    let actual_magnetic_node_set = magnetic_node_indices
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let expected_magnetic_node_set = expected_frequency_response_magnetic_node_indices(plan);
+    let expected_magnetic_node_count = expected_magnetic_node_set.as_ref().map(BTreeSet::len);
+    let expected_magnetic_nodes_missing_from_dynamic_slice_count =
+        expected_magnetic_node_set.as_ref().map(|expected| {
+            expected
+                .iter()
+                .filter(|node_index| !actual_magnetic_node_set.contains(node_index))
+                .count()
+        });
+    let unexpected_dynamic_magnetic_node_count =
+        expected_magnetic_node_set.as_ref().map(|expected| {
+            actual_magnetic_node_set
+                .iter()
+                .filter(|node_index| !expected.contains(node_index))
+                .count()
+        });
+    let mut max_m_norm_error = None::<f64>;
+    let mut magnetic_slice_l2_norm_squared = 0.0;
+    let mut full_equilibrium_l2_norm_squared = 0.0;
+    for m in &plan.equilibrium_magnetization {
+        full_equilibrium_l2_norm_squared += dot3(*m, *m);
+    }
+    for node_index in &magnetic_node_indices {
+        let m = plan.equilibrium_magnetization[*node_index];
+        let norm = dot3(m, m).sqrt();
+        magnetic_slice_l2_norm_squared += dot3(m, m);
+        if norm.is_finite() {
+            let error = (norm - 1.0).abs();
+            max_m_norm_error = Some(max_m_norm_error.map_or(error, |current| current.max(error)));
+        }
+    }
+    let active_m_norms_are_unit_length = max_m_norm_error.is_some_and(|error| error <= 1.0e-8);
+
+    let periodic_kind = matches!(
+        frequency_response_effective_spin_wave_bc_kind(plan),
+        fullmag_ir::SpinWaveBoundaryKindIR::Periodic | fullmag_ir::SpinWaveBoundaryKindIR::Floquet
+    );
+    let selected_periodic_pair_ids = selected_frequency_response_periodic_pair_ids(plan);
+    let selected_periodic_pair_set = selected_periodic_pair_ids
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let boundary_pair_metadata = plan
+        .mesh
+        .periodic_boundary_pairs
+        .iter()
+        .filter_map(|pair| {
+            Some((
+                pair.pair_id.as_str(),
+                (pair.translation?, pair.tolerance.unwrap_or(1.0e-9).max(0.0)),
+            ))
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    let mut issues = Vec::<String>::new();
+    let mut warnings = Vec::<String>::new();
+    if !equilibrium_count_matches_mesh {
+        issues.push("equilibrium_vector_count_does_not_match_mesh_node_count".to_string());
+    }
+    if !equilibrium_vectors_are_finite {
+        issues.push("equilibrium_magnetization_contains_non_finite_values".to_string());
+    }
+    if !active_m_norms_are_unit_length {
+        issues.push("active_magnetization_norms_are_not_unit_length".to_string());
+    }
+    if expected_magnetic_nodes_missing_from_dynamic_slice_count.is_some_and(|count| count > 0) {
+        issues.push("expected_magnetic_nodes_missing_from_dynamic_slice".to_string());
+    }
+
+    let mut periodic_selected_node_pair_count = 0usize;
+    let mut periodic_retained_magnetic_pair_count = 0usize;
+    let mut periodic_dropped_pair_count_after_magnetic_compaction = 0usize;
+    let mut periodic_dropped_expected_magnetic_pair_count_after_magnetic_compaction = 0usize;
+    let mut periodic_dropped_nonmagnetic_pair_count_after_magnetic_compaction = 0usize;
+    let mut max_periodic_translation_residual_m = None::<f64>;
+    let mut periodic_translation_residuals_within_tolerance = true;
+    if periodic_kind {
+        if selected_periodic_pair_set.is_empty() {
+            issues.push("periodic_boundary_condition_selected_no_pair_ids".to_string());
+        }
+        for pair in &plan.mesh.periodic_node_pairs {
+            if !selected_periodic_pair_set.contains(pair.pair_id.as_str()) {
+                continue;
+            }
+            periodic_selected_node_pair_count += 1;
+            let node_a = pair.node_a as usize;
+            let node_b = pair.node_b as usize;
+            if node_a >= full_node_count || node_b >= full_node_count || node_a == node_b {
+                periodic_translation_residuals_within_tolerance = false;
+                issues.push("periodic_node_pair_has_invalid_indices".to_string());
+                continue;
+            }
+            if let Some((translation, tolerance)) =
+                boundary_pair_metadata.get(pair.pair_id.as_str()).copied()
+            {
+                let src = plan.mesh.nodes[node_a];
+                let dst = plan.mesh.nodes[node_b];
+                let residual = [
+                    dst[0] - src[0] - translation[0],
+                    dst[1] - src[1] - translation[1],
+                    dst[2] - src[2] - translation[2],
+                ];
+                let residual_norm = (residual[0] * residual[0]
+                    + residual[1] * residual[1]
+                    + residual[2] * residual[2])
+                    .sqrt();
+                if residual_norm.is_finite() {
+                    max_periodic_translation_residual_m = Some(
+                        max_periodic_translation_residual_m
+                            .map_or(residual_norm, |current| current.max(residual_norm)),
+                    );
+                }
+                if !residual_norm.is_finite() || residual_norm > tolerance {
+                    periodic_translation_residuals_within_tolerance = false;
+                }
+            } else {
+                periodic_translation_residuals_within_tolerance = false;
+            }
+            let compact_a = node_index_map.get(node_a).copied().flatten();
+            let compact_b = node_index_map.get(node_b).copied().flatten();
+            if compact_a.is_some() && compact_b.is_some() {
+                periodic_retained_magnetic_pair_count += 1;
+            } else {
+                periodic_dropped_pair_count_after_magnetic_compaction += 1;
+                if let Some(expected_magnetic_node_set) = expected_magnetic_node_set.as_ref() {
+                    if expected_magnetic_node_set.contains(&node_a)
+                        || expected_magnetic_node_set.contains(&node_b)
+                    {
+                        periodic_dropped_expected_magnetic_pair_count_after_magnetic_compaction +=
+                            1;
+                    } else {
+                        periodic_dropped_nonmagnetic_pair_count_after_magnetic_compaction += 1;
+                    }
+                }
+            }
+        }
+        if periodic_selected_node_pair_count == 0 {
+            issues.push("periodic_boundary_condition_matched_no_node_pairs".to_string());
+        }
+        if periodic_retained_magnetic_pair_count == 0 {
+            issues.push("periodic_boundary_condition_retained_no_magnetic_node_pairs".to_string());
+        }
+        if !periodic_translation_residuals_within_tolerance {
+            issues.push("periodic_node_pair_translation_residual_exceeds_tolerance".to_string());
+        }
+        if periodic_dropped_expected_magnetic_pair_count_after_magnetic_compaction > 0 {
+            issues
+                .push("periodic_expected_magnetic_node_pairs_dropped_after_compaction".to_string());
+        } else if periodic_dropped_pair_count_after_magnetic_compaction > 0
+            && expected_magnetic_node_set.is_none()
+        {
+            warnings.push(
+                "periodic_node_pairs_dropped_after_magnetic_compaction; expected for airbox-only pairs, suspicious for magnetic nodes".to_string(),
+            );
+        }
+    }
+
+    let periodic_airbox_required = matches!(
+        plan.magnetostatic_bc,
+        fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0
+            | fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox
+    );
+    let periodic_airbox_delta_phi_node_pair_count = if periodic_airbox_required {
+        let constraint_set = plan.periodic_constraint_sets.iter().find(|constraint| {
+            constraint.unknown_family
+                == fullmag_ir::PeriodicUnknownFamilyIR::MagnetostaticPotentialDynamic
+                && constraint.domain_scope
+                    == fullmag_ir::PeriodicDomainScopeIR::MagnetostaticDomainWithAir
+        });
+        match constraint_set {
+            Some(constraint_set) => plan
+                .mesh
+                .periodic_node_pairs
+                .iter()
+                .filter(|pair| {
+                    constraint_set.pair_ids.is_empty()
+                        || constraint_set.pair_ids.contains(&pair.pair_id)
+                })
+                .count(),
+            None => {
+                issues.push("periodic_airbox_delta_phi_constraint_set_missing".to_string());
+                0
+            }
+        }
+    } else {
+        0
+    };
+    if periodic_airbox_required && periodic_airbox_delta_phi_node_pair_count == 0 {
+        issues.push("periodic_airbox_delta_phi_node_pairs_missing".to_string());
+    }
+    let magnetic_periodic_constraint_set_count = plan
+        .periodic_constraint_sets
+        .iter()
+        .filter(|constraint| {
+            constraint.unknown_family == fullmag_ir::PeriodicUnknownFamilyIR::MagnetizationDynamic
+        })
+        .count();
+    let magnetostatic_periodic_constraint_set_count = plan
+        .periodic_constraint_sets
+        .iter()
+        .filter(|constraint| {
+            constraint.unknown_family
+                == fullmag_ir::PeriodicUnknownFamilyIR::MagnetostaticPotentialDynamic
+        })
+        .count();
+    let periodic_airbox_delta_m_tangent_dof_count = magnetic_node_count * 2;
+    let periodic_airbox_delta_phi_dof_count = if periodic_airbox_required {
+        full_node_count
+    } else {
+        0
+    };
+    let status = if !issues.is_empty() {
+        "failed"
+    } else if !warnings.is_empty() {
+        "warning"
+    } else {
+        "ok"
+    };
+
+    Some(serde_json::json!({
+        "schema_version": "frequency_response_input_preflight.v1",
+        "status": status,
+        "domain_mesh_mode": format!("{:?}", plan.domain_mesh_mode),
+        "magnetostatic_bc": format!("{:?}", plan.magnetostatic_bc),
+        "spin_wave_bc_kind": format!("{:?}", frequency_response_effective_spin_wave_bc_kind(plan)),
+        "full_node_count": full_node_count,
+        "equilibrium_vector_count": equilibrium_vector_count,
+        "magnetic_node_count": magnetic_node_count,
+        "expected_magnetic_node_count": expected_magnetic_node_count,
+        "expected_magnetic_nodes_missing_from_dynamic_slice_count": expected_magnetic_nodes_missing_from_dynamic_slice_count,
+        "unexpected_dynamic_magnetic_node_count": unexpected_dynamic_magnetic_node_count,
+        "airbox_or_zero_m_node_count": airbox_or_zero_m_node_count,
+        "full_equilibrium_l2_norm": full_equilibrium_l2_norm_squared.sqrt(),
+        "magnetic_slice_l2_norm": magnetic_slice_l2_norm_squared.sqrt(),
+        "active_magnetization_norm_max_abs_error": max_m_norm_error,
+        "periodic_selected_boundary_pair_ids": selected_periodic_pair_ids,
+        "periodic_selected_node_pair_count": periodic_selected_node_pair_count,
+        "periodic_retained_magnetic_pair_count": periodic_retained_magnetic_pair_count,
+        "periodic_dropped_pair_count_after_magnetic_compaction": periodic_dropped_pair_count_after_magnetic_compaction,
+        "periodic_dropped_expected_magnetic_pair_count_after_magnetic_compaction": periodic_dropped_expected_magnetic_pair_count_after_magnetic_compaction,
+        "periodic_dropped_nonmagnetic_pair_count_after_magnetic_compaction": periodic_dropped_nonmagnetic_pair_count_after_magnetic_compaction,
+        "periodic_max_translation_residual_m": max_periodic_translation_residual_m,
+        "periodic_airbox_delta_phi_node_pair_count": periodic_airbox_delta_phi_node_pair_count,
+        "periodic_airbox_delta_m_tangent_dof_count": periodic_airbox_delta_m_tangent_dof_count,
+        "periodic_airbox_delta_phi_dof_count": periodic_airbox_delta_phi_dof_count,
+        "magnetic_periodic_constraint_set_count": magnetic_periodic_constraint_set_count,
+        "magnetostatic_periodic_constraint_set_count": magnetostatic_periodic_constraint_set_count,
+        "checks": {
+            "equilibrium_count_matches_mesh": equilibrium_count_matches_mesh,
+            "equilibrium_vectors_are_finite": equilibrium_vectors_are_finite,
+            "active_magnetization_norms_are_unit_length": active_m_norms_are_unit_length,
+            "magnetic_slice_not_empty": magnetic_node_count > 0,
+            "expected_magnetic_nodes_preserved_in_dynamic_slice": expected_magnetic_nodes_missing_from_dynamic_slice_count.is_none_or(|count| count == 0),
+            "periodic_translation_residuals_within_tolerance": periodic_translation_residuals_within_tolerance,
+            "periodic_magnetic_pairs_retained": !periodic_kind || periodic_retained_magnetic_pair_count > 0,
+            "periodic_airbox_delta_phi_pairs_present": !periodic_airbox_required || periodic_airbox_delta_phi_node_pair_count > 0,
+            "periodic_airbox_delta_phi_dofs_cover_full_mesh": !periodic_airbox_required || periodic_airbox_delta_phi_dof_count == full_node_count,
+        },
+        "issues": issues,
+        "warnings": warnings,
+    }))
+}
+
+#[cfg(feature = "fem-gpu")]
+fn selected_frequency_response_periodic_pair_ids(
+    plan: &fullmag_ir::FemFrequencyResponsePlanIR,
+) -> Vec<&str> {
+    let requested_pair_ids = plan.spin_wave_bc.boundary_pair_ids();
+    if requested_pair_ids.is_empty() {
+        plan.mesh
+            .periodic_boundary_pairs
+            .iter()
+            .map(|pair| pair.pair_id.as_str())
+            .collect()
+    } else {
+        requested_pair_ids
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn expected_frequency_response_magnetic_node_indices(
+    plan: &fullmag_ir::FemFrequencyResponsePlanIR,
+) -> Option<BTreeSet<usize>> {
+    let mut nodes = BTreeSet::new();
+    for part in &plan.mesh_parts {
+        if part.role != fullmag_ir::FemMeshPartRole::MagneticObject {
+            continue;
+        }
+        collect_mesh_part_node_indices(part, plan.mesh.nodes.len(), &mut nodes)?;
+    }
+    if !nodes.is_empty() {
+        return Some(nodes);
+    }
+
+    for segment in &plan.object_segments {
+        if segment.object_id == "__air__" {
+            continue;
+        }
+        let start = segment.node_start as usize;
+        let end = start.checked_add(segment.node_count as usize)?;
+        if end > plan.mesh.nodes.len() {
+            return None;
+        }
+        nodes.extend(start..end);
+    }
+    (!nodes.is_empty()).then_some(nodes)
+}
+
+#[cfg(feature = "fem-gpu")]
+fn collect_mesh_part_node_indices(
+    part: &fullmag_ir::FemMeshPartIR,
+    full_node_count: usize,
+    nodes: &mut BTreeSet<usize>,
+) -> Option<()> {
+    if !part.node_indices.is_empty() {
+        for node_index in &part.node_indices {
+            let node_index = *node_index as usize;
+            if node_index >= full_node_count {
+                return None;
+            }
+            nodes.insert(node_index);
+        }
+        return Some(());
+    }
+    if let fullmag_ir::FemMeshPartSelector::NodeRange { start, count } = part.node_selector {
+        let start = start as usize;
+        let end = start.checked_add(count as usize)?;
+        if end > full_node_count {
+            return None;
+        }
+        nodes.extend(start..end);
+    }
+    Some(())
 }
 
 fn production_cpu_frequency_response_rejection_reason(
@@ -4394,8 +4960,20 @@ mod tests {
             print_level: 0,
         };
 
-        patch_frequency_response_solver_diagnostics(&output_dir, Some(&policy))
-            .expect("solver diagnostics should be patched");
+        let input_preflight = serde_json::json!({
+            "schema_version": "frequency_response_input_preflight.v1",
+            "status": "ok",
+            "full_node_count": 3,
+        });
+
+        patch_frequency_response_solver_diagnostics(
+            &output_dir,
+            Some(&policy),
+            Some(&input_preflight),
+            Some("gpu_operator_host_krylov"),
+            Some("gpu_operator_host_krylov"),
+        )
+        .expect("solver diagnostics should be patched");
 
         let diagnostics: serde_json::Value = serde_json::from_slice(
             &std::fs::read(diagnostics_dir.join("solver.v1.json"))
@@ -4413,6 +4991,19 @@ mod tests {
             diagnostics["frequency_response_demag_solver_policy_effective"]["relative_tolerance"],
             2.5e-5
         );
+        assert_eq!(
+            diagnostics["input_preflight"]["schema_version"],
+            "frequency_response_input_preflight.v1"
+        );
+        assert_eq!(diagnostics["input_preflight"]["full_node_count"], 3);
+        assert_eq!(
+            diagnostics["requested_solver_method"],
+            "gpu_operator_host_krylov"
+        );
+        assert_eq!(
+            diagnostics["resolved_solver_method"],
+            "gpu_operator_host_krylov"
+        );
 
         let manifest: serde_json::Value = serde_json::from_slice(
             &std::fs::read(output_dir.join("frequency_domain/manifest.v1.json"))
@@ -4425,6 +5016,14 @@ mod tests {
                 ["max_iterations"],
             700
         );
+        assert_eq!(
+            manifest["diagnostics"]["input_preflight"]["schema_version"],
+            "frequency_response_input_preflight.v1"
+        );
+        assert_eq!(
+            manifest["diagnostics"]["requested_solver_method"],
+            "gpu_operator_host_krylov"
+        );
         let sweep: serde_json::Value = serde_json::from_slice(
             &std::fs::read(output_dir.join("response/magnetic_response_sweep.v2.json"))
                 .expect("sweep should exist"),
@@ -4435,6 +5034,7 @@ mod tests {
                 .expect("point artifact should exist"),
         )
         .expect("point should parse");
+        assert_eq!(point["resolved_solver_method"], "gpu_operator_host_krylov");
         assert_eq!(sweep["points"][0]["m_complex"], point["m_complex"]);
 
         let _ = std::fs::remove_dir_all(output_dir);
@@ -4677,6 +5277,122 @@ mod tests {
             .static_periodic_node_pairs
             .iter()
             .all(|pair| pair.node_a < 3 && pair.node_b < 3));
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn periodic_airbox_input_preflight_records_compaction_and_airbox_pair_quality() {
+        let mut plan = qualified_periodic_airbox_frequency_response_plan();
+        plan.mesh.nodes.push([2.0, 0.0, 0.0]);
+        plan.mesh.nodes.push([3.0, 0.0, 0.0]);
+        plan.equilibrium_magnetization.push([0.0, 0.0, 0.0]);
+        plan.equilibrium_magnetization.push([0.0, 0.0, 0.0]);
+        plan.mesh
+            .periodic_node_pairs
+            .push(fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "x_faces".to_string(),
+                node_a: 3,
+                node_b: 4,
+            });
+        plan.object_segments = vec![
+            fullmag_ir::FemObjectSegmentIR {
+                object_id: "magnetic".to_string(),
+                geometry_id: None,
+                node_start: 0,
+                node_count: 3,
+                element_start: 0,
+                element_count: 0,
+                boundary_face_start: 0,
+                boundary_face_count: 0,
+            },
+            fullmag_ir::FemObjectSegmentIR {
+                object_id: "__air__".to_string(),
+                geometry_id: None,
+                node_start: 3,
+                node_count: 2,
+                element_start: 0,
+                element_count: 0,
+                boundary_face_start: 0,
+                boundary_face_count: 0,
+            },
+        ];
+
+        let diagnostics = super::frequency_response_input_preflight_diagnostics(&plan)
+            .expect("periodic-airbox input preflight should build");
+
+        assert_eq!(
+            diagnostics["schema_version"],
+            "frequency_response_input_preflight.v1"
+        );
+        assert_eq!(diagnostics["status"], "ok");
+        assert_eq!(diagnostics["full_node_count"], 5);
+        assert_eq!(diagnostics["equilibrium_vector_count"], 5);
+        assert_eq!(diagnostics["magnetic_node_count"], 3);
+        assert_eq!(diagnostics["expected_magnetic_node_count"], 3);
+        assert_eq!(
+            diagnostics["expected_magnetic_nodes_missing_from_dynamic_slice_count"],
+            0
+        );
+        assert_eq!(diagnostics["airbox_or_zero_m_node_count"], 2);
+        assert_eq!(diagnostics["periodic_selected_node_pair_count"], 3);
+        assert_eq!(diagnostics["periodic_retained_magnetic_pair_count"], 2);
+        assert_eq!(
+            diagnostics["periodic_dropped_pair_count_after_magnetic_compaction"],
+            1
+        );
+        assert_eq!(
+            diagnostics["periodic_dropped_expected_magnetic_pair_count_after_magnetic_compaction"],
+            0
+        );
+        assert_eq!(
+            diagnostics["periodic_dropped_nonmagnetic_pair_count_after_magnetic_compaction"],
+            1
+        );
+        assert_eq!(diagnostics["periodic_airbox_delta_phi_node_pair_count"], 3);
+        assert_eq!(diagnostics["periodic_airbox_delta_m_tangent_dof_count"], 6);
+        assert_eq!(diagnostics["periodic_airbox_delta_phi_dof_count"], 5);
+        assert_eq!(
+            diagnostics["checks"]["equilibrium_count_matches_mesh"],
+            true
+        );
+        assert_eq!(
+            diagnostics["checks"]["periodic_airbox_delta_phi_pairs_present"],
+            true
+        );
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn periodic_airbox_input_preflight_flags_zeroed_expected_magnetic_node() {
+        let mut plan = qualified_periodic_airbox_frequency_response_plan();
+        plan.object_segments = vec![fullmag_ir::FemObjectSegmentIR {
+            object_id: "magnetic".to_string(),
+            geometry_id: None,
+            node_start: 0,
+            node_count: 3,
+            element_start: 0,
+            element_count: 0,
+            boundary_face_start: 0,
+            boundary_face_count: 0,
+        }];
+        plan.equilibrium_magnetization[1] = [0.0, 0.0, 0.0];
+
+        let diagnostics = super::frequency_response_input_preflight_diagnostics(&plan)
+            .expect("periodic-airbox input preflight should build");
+
+        assert_eq!(diagnostics["status"], "failed");
+        assert_eq!(diagnostics["expected_magnetic_node_count"], 3);
+        assert_eq!(
+            diagnostics["expected_magnetic_nodes_missing_from_dynamic_slice_count"],
+            1
+        );
+        assert_eq!(
+            diagnostics["checks"]["expected_magnetic_nodes_preserved_in_dynamic_slice"],
+            false
+        );
+        assert!(diagnostics["issues"].as_array().is_some_and(|issues| issues
+            .iter()
+            .any(|issue| issue == "expected_magnetic_nodes_missing_from_dynamic_slice")));
     }
 
     #[cfg(feature = "fem-gpu")]
@@ -5793,6 +6509,85 @@ mod tests {
         assert!(!output_dir
             .join("response/magnetic_response_sweep.v1.json")
             .exists());
+        let _ = std::fs::remove_dir_all(output_dir);
+    }
+
+    #[test]
+    fn frequency_response_solver_method_policy_rejects_unimplemented_runtime_engines() {
+        let mut plan = minimal_frequency_response_plan();
+        plan.solver_policy = Some(fullmag_ir::FrequencyResponseSolverPolicyIR {
+            method: Some(fullmag_ir::FrequencyResponseSolverMethodIR::CpuSparseDirect),
+            rtol: None,
+            max_iterations: None,
+            restart_iterations: None,
+        });
+
+        let reason = super::frequency_response_solver_method_rejection_reason(&plan)
+            .expect("cpu_sparse_direct is not implemented yet");
+        assert!(reason.contains("solver_method=cpu_sparse_direct"));
+        assert!(reason.contains("not implemented in the current runtime"));
+
+        plan.solver_policy = Some(fullmag_ir::FrequencyResponseSolverPolicyIR {
+            method: Some(fullmag_ir::FrequencyResponseSolverMethodIR::GpuOperatorHostKrylov),
+            rtol: None,
+            max_iterations: None,
+            restart_iterations: None,
+        });
+        let reason = super::frequency_response_solver_method_rejection_reason(&plan)
+            .expect("GPU operator host Krylov requires requested GPU execution");
+        assert!(reason.contains("requires requested device gpu"));
+
+        plan.solver_policy = Some(fullmag_ir::FrequencyResponseSolverPolicyIR {
+            method: Some(fullmag_ir::FrequencyResponseSolverMethodIR::DenseReference),
+            rtol: None,
+            max_iterations: None,
+            restart_iterations: None,
+        });
+        assert!(super::frequency_response_solver_method_rejection_reason(&plan).is_none());
+    }
+
+    #[test]
+    fn frequency_response_solver_method_policy_accepts_schur_only_for_airbox_slice() {
+        let mut plan = minimal_frequency_response_plan();
+        plan.solver_policy = Some(fullmag_ir::FrequencyResponseSolverPolicyIR {
+            method: Some(fullmag_ir::FrequencyResponseSolverMethodIR::SchurReduced),
+            rtol: None,
+            max_iterations: None,
+            restart_iterations: None,
+        });
+        let reason = super::frequency_response_solver_method_rejection_reason(&plan)
+            .expect("Schur reduced requires an airbox Schur-capable request");
+        assert!(reason.contains("magnetostatic_bc=periodic_airbox_k0"));
+
+        let mut airbox = qualified_periodic_airbox_frequency_response_plan();
+        airbox.solver_policy = Some(fullmag_ir::FrequencyResponseSolverPolicyIR {
+            method: Some(fullmag_ir::FrequencyResponseSolverMethodIR::SchurReduced),
+            rtol: None,
+            max_iterations: None,
+            restart_iterations: None,
+        });
+        assert!(super::frequency_response_solver_method_rejection_reason(&airbox).is_none());
+    }
+
+    #[test]
+    fn frequency_response_execution_rejects_unimplemented_solver_method_before_fallback() {
+        let mut plan = minimal_frequency_response_plan();
+        plan.solver_policy = Some(fullmag_ir::FrequencyResponseSolverPolicyIR {
+            method: Some(fullmag_ir::FrequencyResponseSolverMethodIR::CpuSparseDirect),
+            rtol: None,
+            max_iterations: None,
+            restart_iterations: None,
+        });
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-runner-unimplemented-frequency-solver-method-{}",
+            std::process::id()
+        ));
+
+        let err = super::execute_fem_frequency_response_validation(&plan, &output_dir, None, None)
+            .expect_err("unimplemented frequency solver method should fail before fallback");
+
+        assert!(err.message.contains("solver method is unavailable"));
+        assert!(err.message.contains("cpu_sparse_direct"));
         let _ = std::fs::remove_dir_all(output_dir);
     }
 

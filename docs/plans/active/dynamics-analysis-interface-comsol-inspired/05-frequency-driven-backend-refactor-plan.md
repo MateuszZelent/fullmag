@@ -188,6 +188,125 @@ backends/fem/gpu/cuda/frequency_domain/
 Rust owns orchestration, ABI marshalling, planning, artifacts, and provenance.
 Rust must not become the owner of production FEM weak forms or hot loops.
 
+This is the current ownership map, not the final file layout. The current
+driven-response implementation still concentrates too much policy inside
+`backends/fem/src/frequency_domain/driven_response_solver.cpp` and too much
+orchestration inside `crates/fullmag-runner/src/frequency_response.rs`. The
+next source patch must split those files mechanically without changing runtime
+behavior.
+
+### Target Native Layout
+
+The target layout is:
+
+```text
+backends/fem/include/frequency_domain/
+  algebra/
+    linearized_problem.hpp
+    coupled_block_layout.hpp
+    operator_representation.hpp
+  planner/
+    frequency_solve_plan.hpp
+    frequency_solve_planner.hpp
+  engines/
+    dense_reference.hpp
+    cpu_sparse_direct.hpp
+    full_coupled_field_split.hpp
+    schur_reduced.hpp
+    modal_reduced.hpp
+    gpu_operator_host_krylov.hpp
+    gpu_device_krylov.hpp
+  diagnostics/
+    residual_diagnostics.hpp
+    schur_certification.hpp
+
+backends/fem/src/frequency_domain/
+  algebra/
+  planner/
+  artifacts/
+  diagnostics/
+
+backends/fem/cpu/frequency_domain/
+  engines/
+    dense_reference/
+    sparse_direct/
+    host_krylov/
+    full_coupled_field_split/
+    schur_reduced/
+    modal_reduced/
+  operators/
+  validation/
+
+backends/fem/gpu/cuda/frequency_domain/
+  engines/
+    operator_host_krylov/
+    device_krylov/
+  operators/
+  residency/
+```
+
+The first source-layout patch after this documentation change is allowed to add
+directories, headers, and forwarding wrappers only when the move is
+behavior-preserving. It must not change GMRES, Schur logic, preconditioner
+selection, runtime fallback, artifact schemas, or C ABI semantics.
+
+## FrequencySolvePlanner Contract
+
+Frequency-driven response must move toward a solver tree. The planner owns the
+choice between algebraically valid engines; individual engines own their
+numerics.
+
+```cpp
+struct FrequencySolvePlan {
+    FrequencyExecutionLane lane;
+    OperatorRepresentation operator_representation;
+    LinearSolverFamily linear_solver;
+    PreconditionerFamily preconditioner;
+    bool use_full_coupled_system;
+    bool use_schur_reduction;
+    bool require_true_residual_verification;
+    bool allow_gpu_operator_backend;
+    bool allow_device_resident_krylov;
+};
+```
+
+The planned execution lanes are:
+
+| Lane | Purpose | Promotion condition |
+|---|---|---|
+| `dense_reference` | Tiny dense oracle for signs, scaling, residuals, and full-vs-Schur equivalence. | Already allowed as validation only; never production proof. |
+| `cpu_sparse_direct` | Assembled sparse direct solve per frequency, real-split or complex. | First missing backend to implement after mechanical split; gives the baseline for conditioning and Schur/preconditioner quality. |
+| `full_coupled_field_split` | Full coupled block solve with field-split or Schur preconditioner. | Core production target for `periodic_airbox_k0` once block residual and preconditioner gates pass. |
+| `schur_reduced` | Matrix-free reduced solve. | Allowed only when tiny explicit Schur, matrix-free Schur, reconstructed full residual, and preconditioner-quality gates pass. |
+| `modal_reduced` | Modal/rational/recycling sweep for many frequencies. | Depends on validated modal basis and frequency-band residual correction. |
+| `gpu_operator_host_krylov` | Current transitional GPU-backed operator path with host Krylov state. | Must publish host Krylov residency; useful but not device-resident production GPU. |
+| `gpu_device_krylov` | Future device-resident Krylov path. | Requires device-resident vectors, operator, preconditioner, dot/norm/axpy, restart state, and residual estimates. |
+
+The decision order for the planner is:
+
+```text
+if tiny validation fixture:
+    dense_reference
+else if single_frequency and sparse_direct_memory_ok:
+    cpu_sparse_direct
+else if periodic_airbox_k0 and full coupled blocks are available:
+    full_coupled_field_split
+else if Schur is certified for this operator and preconditioner:
+    schur_reduced
+else if many frequencies and modal basis is validated:
+    modal_reduced
+else if requested GPU but only operator/preconditioner is device-backed:
+    gpu_operator_host_krylov
+else if full device residency is available:
+    gpu_device_krylov
+else:
+    reject or use an explicitly documented CPU fallback only for non-forced requests
+```
+
+The current `production_gpu` terminology is retained only as a compatibility
+surface until runtime schemas are migrated. It must not hide the distinction
+between `gpu_operator_host_krylov` and `gpu_device_krylov`.
+
 ## Cross-Layer Deliverables
 
 ### Physics Notes
@@ -325,6 +444,10 @@ form or the Krylov hot path.
 - Replace diagnostic-only Schur behavior with a production preconditioner plan:
   right preconditioner name, setup telemetry, per-frequency iteration counts,
   residual norms, and failure reasons.
+- Add the `cpu_sparse_direct` baseline before attempting device-resident GPU
+  Krylov. This is the fastest missing backend that can answer whether a stalled
+  GMRES run is caused by conditioning, sign/scaling errors, or the current
+  preconditioner.
 - Reject missing or magnetic-only pair metadata before native solve.
 - Reject `periodic_airbox_k0` when the shared-domain airbox is missing, the
   selected axes do not match `ProblemIR.pbc.axes`, or top/bottom open boundary
@@ -393,6 +516,12 @@ payload is never GPU proof.
 - Route `periodic_airbox_k0` through a GPU demag tangent-with-potential provider
   with `device_hypre_poisson` provenance, scalar-potential diagnostics, and no
   CPU coupled-block substitution.
+- Publish `gpu_operator_host_krylov` when the magnetic operator or demag
+  provider is GPU-backed but GMRES basis vectors, Hessenberg state,
+  orthogonalization, residual workspaces, dot/norm/axpy, and restart logic stay
+  on the host.
+- Publish `gpu_device_krylov` only after those Krylov workspaces and reductions
+  are device-resident.
 - Reject explicit CPU dense/coupled-block payloads when
   `requested_execution_lane="production_gpu"`.
 - Reject GPU `floquet_airbox` unless a GPU matrix-free complex coupled-block
@@ -482,6 +611,29 @@ be described as production demag-k dispersion.
   moves from diagnostic, reference, or partial to production.
 - Keep `docs/specs/frequency-domain-artifacts-v2.md` synchronized whenever new
   demag, scalar-potential, provider, or validation diagnostics become required.
+- Keep `docs/frequency_domain_solver_files.md` synchronized with the current
+  monolith inventory and the target layout so future agents do not confuse a
+  docs-only architecture decision with an already-completed source move.
+
+## Patch Sequencing From 2026-07-05 Audit
+
+1. Documentation-only architecture patch: record `FrequencySolvePlanner`, the
+   solver tree, honest GPU residency names, and the target layout. Do not move
+   code. Status: complete.
+2. Mechanical source split: extract planner/engine descriptors and file
+   boundaries from the current monoliths without changing GMRES, Schur,
+   preconditioner, artifacts, C ABI, or runtime behavior. Status: started with
+   header-only `frequency_domain/planner/frequency_solve_plan.hpp` and
+   `frequency_domain/planner/frequency_solve_planner.hpp`; monolith file moves
+   and runtime integration remain pending.
+3. Implement `cpu_sparse_direct`: assembled sparse direct baseline for driven
+   response, with dense-reference and full-residual comparison tests.
+4. Implement `full_coupled_field_split`: make full coupled residual and
+   block/field-split preconditioner the robust periodic-airbox core.
+5. Promote `schur_reduced` only after certification gates pass against the full
+   coupled oracle.
+6. Add `modal_reduced` and then `gpu_device_krylov` only after their
+   preconditions are proven.
 
 ## Completion Criteria
 

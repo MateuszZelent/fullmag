@@ -2,7 +2,7 @@
 
 - Status: szkic resetu backends-first
 - Właściciele: Fullmag core
-- Ostatnia aktualizacja: 2026-06-03
+- Ostatnia aktualizacja: 2026-07-05
 - Zakres: własność backendów solverów, natywna implementacja kompilowana,
   orkiestracja Rust runnera, bramki walidacyjne i kolejność migracji po
   resecie układu źródeł z 2026-06-03.
@@ -294,6 +294,108 @@ Control room musi pokazywać realne solver telemetry dla eigen: DOF, zakres
 częstotliwości, count, solver family, spectral transform, Krylov/FEAST outer
 iteration, shifted linear-solve iterations, residual, converged-mode count,
 checkpoint/artifact status i stop reason.
+
+## 7.2 Architektura FEM Frequency-Domain Solver Tree
+
+Driven response w domenie częstotliwości nie może docelowo oznaczać jednego
+hostowego GMRES-a z rosnącą liczbą callbacków. Właściwa architektura to
+`FrequencySolvePlanner`, który z jednego kontraktu fizycznego wybiera jedną z
+kilku jawnych realizacji solverowych.
+
+Docelowy przepływ:
+
+```text
+LinearizedFrequencyProblem
+  -> FrequencySolvePlanner
+  -> FrequencySolvePlan
+  -> dense_reference | cpu_sparse_direct | full_coupled_field_split
+     | schur_reduced | modal_reduced | gpu_operator_host_krylov
+     | gpu_device_krylov
+```
+
+`FrequencySolvePlan` jest kontraktem między algebrą problemu i silnikiem
+numerycznym. Musi jawnie mówić:
+
+- czy rozwiązywany jest full coupled block system czy Schur-reduced system,
+- jaka reprezentacja operatora została wybrana,
+- jaka rodzina solvera liniowego została wybrana,
+- jaki preconditioner jest aktywny,
+- gdzie rezydują wektory Krylov i workspaces,
+- czy GPU dotyczy tylko operatora/preconditionera, czy całego Krylov hot loop,
+- jaki fallback jest legalny,
+- jakie certyfikaty walidacyjne są wymagane przed promocją.
+
+Nazwy lane'ów muszą być uczciwe:
+
+| Lane | Znaczenie |
+|---|---|
+| `dense_reference` | mały jawny oracle dense; walidacja, nie produkcja |
+| `cpu_sparse_direct` | złożony sparse real-split/complex solve per frequency; pierwszy brakujący backend diagnostyczny po mechanicznym splitcie |
+| `full_coupled_field_split` | monolityczny blok `delta_m` plus pola pomocnicze, np. `delta_phi`, z field-split/Schur preconditionerem |
+| `schur_reduced` | szybka ścieżka zredukowana, dozwolona dopiero po certyfikacji full-vs-Schur |
+| `modal_reduced` | modal/rational/recycling sweep dla wielu częstotliwości |
+| `gpu_operator_host_krylov` | operator lub preconditioner używa GPU, ale Krylov state, Arnoldi, Hessenberg, residuale i dot/norm/axpy są hostowe |
+| `gpu_device_krylov` | docelowy solver, w którym wektory, Krylov hot loop, operator, preconditioner i redukcje są device-resident |
+
+Obecny kod może nadal publikować starsze `production_cpu` i `production_gpu`
+jako kompatybilne nazwy runtime. Nowe dokumenty, plany, diagnostyka i przyszłe
+artefakty muszą jednak rozróżniać powyższe lane'y, żeby `production_gpu` nie
+ukrywało hostowego Krylov.
+
+Docelowy layout po mechanicznym, behavior-preserving splitcie:
+
+```text
+backends/fem/include/frequency_domain/
+  algebra/
+    linearized_problem.hpp
+    coupled_block_layout.hpp
+    operator_representation.hpp
+  planner/
+    frequency_solve_plan.hpp
+    frequency_solve_planner.hpp
+  engines/
+    dense_reference.hpp
+    cpu_sparse_direct.hpp
+    full_coupled_field_split.hpp
+    schur_reduced.hpp
+    modal_reduced.hpp
+    gpu_operator_host_krylov.hpp
+    gpu_device_krylov.hpp
+  diagnostics/
+    residual_diagnostics.hpp
+    schur_certification.hpp
+
+backends/fem/src/frequency_domain/
+  algebra/
+  planner/
+  artifacts/
+  diagnostics/
+
+backends/fem/cpu/frequency_domain/
+  engines/
+    dense_reference/
+    sparse_direct/
+    host_krylov/
+    full_coupled_field_split/
+    schur_reduced/
+    modal_reduced/
+  operators/
+  validation/
+
+backends/fem/gpu/cuda/frequency_domain/
+  engines/
+    operator_host_krylov/
+    device_krylov/
+  operators/
+  residency/
+```
+
+Ten dokumentacyjny patch nie przenosi plików. Następny patch ma być
+mechanicznym splitem bez zmiany zachowania: wyciągnąć descriptor/plan/engine
+boundaries z monolitów, zachować obecny algorytm GMRES, zachować obecną
+diagnostykę Schura i nie zmieniać CMake/include tree poza tym, co wynika z
+samego splitu. Dopiero kolejny patch powinien zacząć pierwszy brakujący backend:
+`cpu_sparse_direct`.
 
 ## 8. Architektura FDM
 

@@ -2293,6 +2293,29 @@ function SpectralStageDraftFields({
               <option value="full_2x2">Full 2x2</option>
             </FormField>
           ) : null}
+          {draft.kind === "frequency_response" ? (
+            <FormField
+              label="Solver method"
+              type="select"
+              value={draft.solverMethod}
+              onChange={(event) =>
+                onUpdate({ solverMethod: event.target.value })
+              }
+            >
+              <option value="auto">Auto</option>
+              <option value="dense_reference">Dense reference</option>
+              <option value="cpu_sparse_direct">CPU sparse direct</option>
+              <option value="full_coupled_field_split">
+                Full coupled field split
+              </option>
+              <option value="schur_reduced">Schur reduced</option>
+              <option value="modal_reduced">Modal reduced</option>
+              <option value="gpu_operator_host_krylov">
+                GPU operator host Krylov
+              </option>
+              <option value="gpu_device_krylov">GPU device Krylov</option>
+            </FormField>
+          ) : null}
           <FormField
             label="Include demag"
             checked={draft.includeDemag}
