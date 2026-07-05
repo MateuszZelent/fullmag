@@ -18,7 +18,7 @@ struct MfemDmiOperatorDiagnostics {
     char error_message[128] = "";
 };
 
-enum class MfemDmiInteractionKind {
+enum class MfemDmiInteractionKind : std::uint32_t {
     interfacial,
     bulk,
 };

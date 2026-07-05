@@ -17,7 +17,9 @@ import { useResource } from "./useResource";
 interface DataPreviewFieldVectorRequest {
   component: string;
   maxSamples: number;
+  phaseRad?: number | null;
   quantityId: string;
+  view?: string | null;
 }
 
 const dataPreviewFieldVectorCache = new ResourceCache<DecodedFieldVector>({
@@ -27,7 +29,9 @@ const dataPreviewFieldVectorCache = new ResourceCache<DecodedFieldVector>({
 export function resolveDataPreviewFieldVectorResourceKey({
   component,
   maxSamples,
+  phaseRad,
   quantityId,
+  view,
 }: DataPreviewFieldVectorRequest): string {
   const resolvedQuantityId = normalizeQuantityIdOrDefault(quantityId);
   const path = DATA_FIELD_VECTOR_PATH.replace(
@@ -37,6 +41,10 @@ export function resolveDataPreviewFieldVectorResourceKey({
   const params = new URLSearchParams();
   params.set("component", component || "full");
   params.set("max_samples", String(maxSamples));
+  if (view) params.set("view", view);
+  if (phaseRad != null && Number.isFinite(phaseRad)) {
+    params.set("phase_rad", String(phaseRad));
+  }
   return `${path}?${params.toString()}`;
 }
 
@@ -44,7 +52,9 @@ export function useDataPreviewFieldVector({
   component,
   enabled,
   maxSamples,
+  phaseRad,
   quantityId,
+  view,
 }: DataPreviewFieldVectorRequest & { enabled: boolean }) {
   const { api, resources } = useKernel();
   const resolvedQuantityId = useMemo(
@@ -55,17 +65,22 @@ export function useDataPreviewFieldVector({
     () => ({
       component: component || "full",
       max_samples: maxSamples,
+      phase_rad:
+        phaseRad != null && Number.isFinite(phaseRad) ? phaseRad : undefined,
+      view: view ?? undefined,
     }),
-    [component, maxSamples],
+    [component, maxSamples, phaseRad, view],
   );
   const resourceKey = useMemo(
     () =>
       resolveDataPreviewFieldVectorResourceKey({
         component,
         maxSamples,
+        phaseRad,
         quantityId: resolvedQuantityId,
+        view,
       }),
-    [component, maxSamples, resolvedQuantityId],
+    [component, maxSamples, phaseRad, resolvedQuantityId, view],
   );
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>

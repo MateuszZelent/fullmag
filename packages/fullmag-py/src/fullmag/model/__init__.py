@@ -86,7 +86,7 @@ from .structure import (
     RegionMaterialOverride,
     RegionTextureOverride,
 )
-from .study import Eigenmodes, FloquetBC, FrequencyResponse, PeriodicBC, RelaxStop, Relaxation, TableAutosave, TimeEvolution, FieldOrientation, MeasurementAxis, HysteresisAngularVariant, HysteresisAngularFamily, SaturationProbe, HysteresisStorage, MinorLoop, FieldSegment, PiecewiseFieldSchedule, FieldWindow, AdaptiveRefinement, SettleStep, RelaxStep, MinimizeStep, DynamicsSettleStep, SettleBranch, SettlePipeline, SettleTree, Hysteresis
+from .study import Eigenmodes, FloquetBC, FrequencyResponse, FrequencyResponseSolverPolicy, PeriodicBC, RelaxStop, Relaxation, TableAutosave, TimeEvolution, FieldOrientation, MeasurementAxis, HysteresisAngularVariant, HysteresisAngularFamily, SaturationProbe, HysteresisStorage, MinorLoop, FieldSegment, PiecewiseFieldSchedule, FieldWindow, AdaptiveRefinement, SettleStep, RelaxStep, MinimizeStep, DynamicsSettleStep, SettleBranch, SettlePipeline, SettleTree, Hysteresis
 from .eigen import (
     DispersionValidationScenario,
     KPath,
@@ -185,6 +185,7 @@ __all__ = [
     "Sphere",
     "SpinWaveExcitationAnalysis",
     "FrequencyResponse",
+    "FrequencyResponseSolverPolicy",
     "DispersionValidationScenario",
     "KPath",
     "KPoint",

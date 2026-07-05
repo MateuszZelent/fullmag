@@ -5,11 +5,10 @@ import { useCallback, useMemo } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
 import {
+  useMeshRegionQualityResource,
   useMeshRegionMembershipResource,
-  useMeshSharedDomainQualityDataResource,
-  useMeshSharedDomainTopologyResource,
 } from "@/kernel/resources/geometryLifecycleResources";
-import { buildScopedMeshQualityStatistics } from "@/shared/domain/mesh/scopedQualityStatistics";
+import { normalizeMeshQualityStatistics } from "@/shared/domain/mesh/qualityStatistics";
 import { Accordion } from "@/shared/ui/Accordion";
 import { FormField } from "../../primitives/FormField";
 import { InspectorSection } from "../../primitives/InspectorSection";
@@ -41,31 +40,12 @@ export function ObjectRegionMeshPanel({
   const membership = useMeshRegionMembershipResource(model.regionId, {
     enabled: model.mode === "committed" && model.regionId !== "none",
   });
-  const shouldLoadQualityData = Boolean(
-    membership.data?.element_indices.length || membership.data?.mesh_part_ids.length,
-  );
-  const topology = useMeshSharedDomainTopologyResource({
-    enabled: shouldLoadQualityData,
-  });
-  const qualityData = useMeshSharedDomainQualityDataResource({
-    enabled: shouldLoadQualityData,
+  const quality = useMeshRegionQualityResource(model.regionId, {
+    enabled: model.mode === "committed" && model.regionId !== "none",
   });
   const qualityStatistics = useMemo(
-    () =>
-      buildScopedMeshQualityStatistics({
-        elementIndices: membership.data?.element_indices,
-        meshName: membership.data?.mesh_id ?? null,
-        quality: qualityData.data,
-        scopeLabel: `region:${model.regionId}`,
-        topology: topology.data,
-      }),
-    [
-      membership.data?.element_indices,
-      membership.data?.mesh_id,
-      model.regionId,
-      qualityData.data,
-      topology.data,
-    ],
+    () => normalizeMeshQualityStatistics(quality.data?.quality),
+    [quality.data?.quality],
   );
   const hoverSizeDistributionBin = useCallback(
     (bin: MeshSizeDistributionHoverBin | null) => {
@@ -140,7 +120,7 @@ export function ObjectRegionMeshPanel({
         badge={
           qualityStatistics?.elementCount === null ||
           qualityStatistics?.elementCount === undefined
-            ? membership.status
+            ? quality.status
             : qualityStatistics.elementCount.toLocaleString("en-US")
         }
         collapsible

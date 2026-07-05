@@ -69,6 +69,7 @@ import {
   MESHING_OBJECT_REPORT_PATH,
   MESHING_OBJECT_SIZE_FIELD_PATH,
   MESHING_PART_TOPOLOGY_PATH,
+  MESHING_REGION_QUALITY_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MESHING_SHARED_DOMAIN_TOPOLOGY_PATH,
   MESHING_SUMMARY_PATH,
@@ -224,6 +225,7 @@ import type {
   MeshRealizedSizeFieldsResource,
   MeshRegionMembershipListResource,
   MeshRegionMembershipResource,
+  MeshRegionQualityResource,
   MeshSemanticsResource,
   MeshSharedDomainConfigReplaceRequest,
   MeshSharedDomainConfigResource,
@@ -874,6 +876,14 @@ export class ControlRoomApi {
         options,
         {
           path: { object_id: objectId },
+        },
+      ),
+    regionQuality: (regionId: string, options?: RequestOptions) =>
+      this.requestJson<MeshRegionQualityResource>(
+        MESHING_REGION_QUALITY_PATH,
+        options,
+        {
+          path: { region_id: regionId },
         },
       ),
     objectReport: (objectId: string, options?: RequestOptions) =>

@@ -103,9 +103,9 @@ FrequencyDomainStatus apply_mfem_linearized_cpu_operator(
         descriptor.demag_kind != FrequencyDomainDemagKind::none &&
         workspace.demag_tangent == nullptr) {
         if (out_diagnostics != nullptr) {
-            copy_error(out_diagnostics->error_message, "MFEM linearized demag assembly is not implemented");
+            copy_error(out_diagnostics->error_message, "MFEM linearized demag requires assembled dynamic demag tangent payload");
         }
-        return FrequencyDomainStatus::unavailable;
+        return FrequencyDomainStatus::validation_error;
     }
     if (descriptor.exchange_enabled &&
         (workspace.exchange_tangent == nullptr ||
@@ -180,6 +180,7 @@ FrequencyDomainStatus apply_mfem_linearized_cpu_operator(
         const FrequencyDomainStatus status = apply_mfem_exchange_operator(
             descriptor,
             layout,
+            nodes,
             exchange_edges,
             exchange_edge_count,
             tangent_in,

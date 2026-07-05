@@ -1,16 +1,16 @@
-"""FEM GPU k=0 periodic-airbox dynamic-demag unavailable smoke.
+"""FEM GPU k=0 periodic-airbox dynamic-demag provider smoke.
 
-This intentionally requests the future production path: explicit GPU,
-k=0 periodic dynamic magnetization, shared-domain airbox demag, and
-``magnetostatic_bc="periodic_airbox_k0"``. The current backend must publish
-artifact-backed unavailable diagnostics instead of silently falling back to CPU
-or erasing the requested magnetostatic boundary model.
+This requests the production GPU provider path: explicit GPU, k=0 periodic
+dynamic magnetization, shared-domain airbox demag, and
+``magnetostatic_bc="periodic_airbox_k0"``. The backend must keep the requested
+GPU lane and solve through the device-resident periodic-airbox demag provider,
+not through CPU fallback or an explicit dense coupled-block payload.
 """
 
 import fullmag as fm
 
 
-study = fm.study("fem_frequency_response_gpu_periodic_airbox_unsupported_smoke")
+study = fm.study("fem_frequency_response_gpu_periodic_airbox_smoke")
 study.engine("fem")
 study.device("gpu", precision="double")
 study.universe(
@@ -53,11 +53,13 @@ body.mesh.thin_film(
 )
 
 study.b_ext(10e-3, 0.0, 0.0)
+study.pbc(x=True, demag="periodic_airbox_k0")
 study.exchange()
 study.demag(realization="poisson_robin")
 study.build_domain_mesh()
 study.solver(dt=1e-13, g=2.115)
 study.save_response("susceptibility_tensor")
+study.stages.change_device("gpu")
 study.stages.add_frequency_response(
     frequencies_hz=[1.0e9, 2.0e9],
     excitation_field_au_per_m=(0.0, 0.0, 1.0),

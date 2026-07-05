@@ -710,6 +710,16 @@ pub enum FrequencyResponseNormalizationIR {
     UnitMaxAmplitude,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FrequencyResponseSolverPolicyIR {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rtol: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_iterations: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restart_iterations: Option<u64>,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum EigenDampingPolicyIR {
@@ -761,6 +771,8 @@ pub enum StudyIR {
         magnetostatic_bc: MagnetostaticBoundaryConditionIR,
         excitation: FrequencyExcitationIR,
         frequencies_hz: FrequencySweepIR,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        solver_policy: Option<FrequencyResponseSolverPolicyIR>,
         sampling: SamplingIR,
     },
     Hysteresis {

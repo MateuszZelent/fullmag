@@ -31,6 +31,7 @@ bool layout_matches_descriptor(
 FrequencyDomainStatus apply_mfem_exchange_operator(
     const MfemOperatorContextDescriptor &descriptor,
     const MfemTangentSpaceLayout &layout,
+    const TangentFrameNode *nodes,
     const TangentOperatorEdgeBlock *edges,
     std::uint64_t edge_count,
     const double *tangent_in,
@@ -61,15 +62,16 @@ FrequencyDomainStatus apply_mfem_exchange_operator(
         }
         return FrequencyDomainStatus::validation_error;
     }
-    if (tangent_in == nullptr || out_tangent == nullptr) {
+    if (nodes == nullptr || tangent_in == nullptr || out_tangent == nullptr) {
         if (out_diagnostics != nullptr) {
-            copy_error(out_diagnostics->error_message, "MFEM exchange operator requires tangent buffers");
+            copy_error(out_diagnostics->error_message, "MFEM exchange operator requires tangent frames and buffers");
         }
         return FrequencyDomainStatus::validation_error;
     }
 
     TangentEdgeOperatorDiagnostics edge_diagnostics{};
     const FrequencyDomainStatus status = apply_tangent_edge_operator(
+        nodes,
         edges,
         edge_count,
         tangent_in,

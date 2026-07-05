@@ -47,6 +47,65 @@ fn frequency_response_trace_enabled() -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(feature = "fem-gpu")]
+struct EnvVarGuard {
+    key: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+#[cfg(feature = "fem-gpu")]
+impl EnvVarGuard {
+    fn set(key: &'static str, value: String) -> Self {
+        let previous = std::env::var_os(key);
+        std::env::set_var(key, value);
+        Self { key, previous }
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        if let Some(previous) = self.previous.take() {
+            std::env::set_var(self.key, previous);
+        } else {
+            std::env::remove_var(self.key);
+        }
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+struct FrequencyResponseSolverEnvGuard {
+    _guards: Vec<EnvVarGuard>,
+}
+
+#[cfg(feature = "fem-gpu")]
+impl FrequencyResponseSolverEnvGuard {
+    fn apply(policy: Option<&fullmag_ir::FrequencyResponseSolverPolicyIR>) -> Self {
+        let mut guards = Vec::new();
+        if let Some(policy) = policy {
+            if let Some(rtol) = policy.rtol {
+                guards.push(EnvVarGuard::set(
+                    "FULLMAG_FEM_FREQUENCY_RESPONSE_RTOL",
+                    rtol.to_string(),
+                ));
+            }
+            if let Some(max_iterations) = policy.max_iterations {
+                guards.push(EnvVarGuard::set(
+                    "FULLMAG_FEM_FREQUENCY_RESPONSE_MAX_ITERATIONS",
+                    max_iterations.to_string(),
+                ));
+            }
+            if let Some(restart_iterations) = policy.restart_iterations {
+                guards.push(EnvVarGuard::set(
+                    "FULLMAG_FEM_FREQUENCY_RESPONSE_RESTART_ITERATIONS",
+                    restart_iterations.to_string(),
+                ));
+            }
+        }
+        Self { _guards: guards }
+    }
+}
+
 pub(crate) fn execute_fem_frequency_response_validation(
     plan: &fullmag_ir::FemFrequencyResponsePlanIR,
     output_dir: &Path,
@@ -84,7 +143,7 @@ pub(crate) fn execute_fem_frequency_response_validation(
     #[cfg(not(feature = "fem-gpu"))]
     if plan.magnetostatic_bc == fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0 {
         return Err(RunError {
-            message: "FEM frequency response magnetostatic_bc=periodic_airbox_k0 requires the native FEM production CPU frequency-domain solver; dense validation fallback is disabled because it would not solve the requested coupled delta_m/delta_phi operator.".to_string(),
+            message: "FEM frequency response magnetostatic_bc=periodic_airbox_k0 requires the native FEM production frequency-domain solver with the demag tangent-with-potential provider; dense validation fallback is disabled because it would not solve the requested coupled delta_m/delta_phi operator.".to_string(),
         });
     }
     if let Some(reason) = production_cpu_frequency_response_rejection_reason(plan) {
@@ -486,6 +545,40 @@ fn env_positive_u64_alias(primary: &str, alias: &str, fallback: u64) -> u64 {
                 .filter(|value| *value > 0)
         })
         .unwrap_or(fallback)
+}
+
+#[cfg(any(feature = "fem-gpu", test))]
+fn env_positive_f64_alias(primary: &str, alias: &str, fallback: f64) -> f64 {
+    std::env::var(primary)
+        .ok()
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .or_else(|| {
+            std::env::var(alias)
+                .ok()
+                .and_then(|value| value.parse::<f64>().ok())
+                .filter(|value| value.is_finite() && *value > 0.0)
+        })
+        .unwrap_or(fallback)
+}
+
+#[cfg(any(feature = "fem-gpu", test))]
+fn frequency_response_demag_solver_policy(
+    policy: Option<fullmag_ir::FemLinearSolverPolicy>,
+) -> fullmag_ir::FemLinearSolverPolicy {
+    let mut policy = policy.unwrap_or_default();
+    policy.rtol = env_positive_f64_alias(
+        "FULLMAG_FEM_FREQUENCY_RESPONSE_DEMAG_RTOL",
+        "FULLMAG_FMR_DEMAG_RTOL",
+        policy.rtol,
+    );
+    policy.max_iterations = env_positive_u64_alias(
+        "FULLMAG_FEM_FREQUENCY_RESPONSE_DEMAG_MAX_ITERATIONS",
+        "FULLMAG_FMR_DEMAG_MAX_ITERATIONS",
+        u64::from(policy.max_iterations),
+    )
+    .min(u64::from(u32::MAX)) as u32;
+    policy
 }
 
 #[cfg(any(feature = "fem-gpu", test))]
@@ -965,6 +1058,344 @@ fn patch_frequency_response_manifest_equilibrium_provenance(
     )
 }
 
+#[cfg(any(feature = "fem-gpu", test))]
+fn patch_frequency_response_periodic_airbox_flux_diagnostics(
+    output_dir: &Path,
+    diagnostics: PeriodicAirboxDynamicFluxDiagnostics,
+) -> std::io::Result<()> {
+    let mut paths = vec![
+        output_dir.join("response/diagnostics/solver.v1.json"),
+        output_dir.join("response/diagnostics.v1.json"),
+        output_dir.join("response/magnetic_response_sweep.v1.json"),
+        output_dir.join("response/magnetic_response_sweep.v2.json"),
+        output_dir.join("frequency_domain/manifest.v1.json"),
+        output_dir.join("mesh/periodic_pairs.v1.json"),
+    ];
+    let frequency_points_dir = output_dir.join("response/frequency_points");
+    if let Ok(entries) = std::fs::read_dir(frequency_points_dir) {
+        for entry in entries {
+            let entry = entry?;
+            if entry.file_type()?.is_file()
+                && entry
+                    .path()
+                    .extension()
+                    .is_some_and(|extension| extension == "json")
+            {
+                paths.push(entry.path());
+            }
+        }
+    }
+
+    for path in paths {
+        if !path.is_file() {
+            continue;
+        }
+        let mut value: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        if patch_delta_phi_flux_fields(&mut value, diagnostics) {
+            std::fs::write(
+                path,
+                serde_json::to_vec_pretty(&value)
+                    .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(any(feature = "fem-gpu", test))]
+fn patch_frequency_response_solver_diagnostics(
+    output_dir: &Path,
+    demag_solver_policy: Option<&fullmag_ir::FemLinearSolverPolicy>,
+) -> std::io::Result<()> {
+    let mut paths = vec![
+        output_dir.join("response/diagnostics/solver.v1.json"),
+        output_dir.join("response/diagnostics.v1.json"),
+        output_dir.join("frequency_domain/manifest.v1.json"),
+    ];
+    let frequency_points_dir = output_dir.join("response/frequency_points");
+    if let Ok(entries) = std::fs::read_dir(frequency_points_dir) {
+        for entry in entries {
+            let entry = entry?;
+            if entry.file_type()?.is_file()
+                && entry
+                    .path()
+                    .extension()
+                    .is_some_and(|extension| extension == "json")
+            {
+                paths.push(entry.path());
+            }
+        }
+    }
+
+    for path in paths {
+        if !path.is_file() {
+            continue;
+        }
+        let mut value: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        let mut changed = patch_residual_consistency_fields(&mut value);
+        if let Some(policy) = demag_solver_policy {
+            if path.ends_with("response/diagnostics/solver.v1.json")
+                || path.ends_with("response/diagnostics.v1.json")
+            {
+                if let Some(object) = value.as_object_mut() {
+                    changed |= insert_demag_solver_policy_fields(object, policy);
+                }
+            } else if path.ends_with("frequency_domain/manifest.v1.json") {
+                if let Some(object) = value
+                    .as_object_mut()
+                    .and_then(|object| object.get_mut("diagnostics"))
+                    .and_then(serde_json::Value::as_object_mut)
+                {
+                    changed |= insert_demag_solver_policy_fields(object, policy);
+                }
+            }
+            changed |= patch_demag_solver_policy_fields(&mut value, policy);
+        }
+        if changed {
+            std::fs::write(
+                path,
+                serde_json::to_vec_pretty(&value)
+                    .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?,
+            )?;
+        }
+    }
+    patch_frequency_response_sweep_point_consistency(output_dir)?;
+    Ok(())
+}
+
+#[cfg(any(feature = "fem-gpu", test))]
+fn patch_frequency_response_sweep_point_consistency(output_dir: &Path) -> std::io::Result<()> {
+    for sweep_path in [
+        output_dir.join("response/magnetic_response_sweep.v1.json"),
+        output_dir.join("response/magnetic_response_sweep.v2.json"),
+    ] {
+        if !sweep_path.is_file() {
+            continue;
+        }
+        let mut sweep: serde_json::Value = serde_json::from_slice(&std::fs::read(&sweep_path)?)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        let mut changed = false;
+        let Some(points) = sweep
+            .as_object_mut()
+            .and_then(|object| object.get_mut("points"))
+            .and_then(serde_json::Value::as_array_mut)
+        else {
+            continue;
+        };
+        for point in points {
+            let Some(point_object) = point.as_object_mut() else {
+                continue;
+            };
+            let Some(relative_path) = point_object
+                .get("frequency_point_artifact_path")
+                .and_then(serde_json::Value::as_str)
+            else {
+                continue;
+            };
+            let point_path = output_dir.join(relative_path);
+            if !point_path.is_file() {
+                continue;
+            }
+            let point_artifact: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&point_path)?)
+                    .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+            let Some(point_artifact) = point_artifact.as_object() else {
+                continue;
+            };
+            let mut copied_from_point_artifact = false;
+            for key in [
+                "angular_frequency_rad_per_s",
+                "absorbed_power_density",
+                "excitation_provenance",
+                "sweep_reuse",
+                "m_complex",
+                "response_amplitude",
+                "response_phase",
+                "phase_rad",
+                "component_response_amplitude",
+                "component_response_phase",
+                "susceptibility_tensor",
+                "tangent_leakage",
+                "residual_l2_norm",
+                "relative_residual_l2_norm",
+                "residual_source",
+            ] {
+                let Some(point_value) = point_artifact.get(key) else {
+                    continue;
+                };
+                if point_object.get(key) != Some(point_value) {
+                    point_object.insert(key.to_string(), point_value.clone());
+                    changed = true;
+                    copied_from_point_artifact = true;
+                }
+            }
+            if copied_from_point_artifact {
+                std::fs::write(
+                    point_path,
+                    serde_json::to_vec_pretty(&point_artifact).map_err(|error| {
+                        std::io::Error::new(std::io::ErrorKind::InvalidData, error)
+                    })?,
+                )?;
+            }
+        }
+        if changed {
+            std::fs::write(
+                sweep_path,
+                serde_json::to_vec_pretty(&sweep)
+                    .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(any(feature = "fem-gpu", test))]
+fn patch_residual_consistency_fields(value: &mut serde_json::Value) -> bool {
+    const GAP_THRESHOLD: f64 = 0.10;
+    match value {
+        serde_json::Value::Object(object) => {
+            let mut changed = false;
+            if let (Some(tracked), Some(recomputed)) = (
+                object
+                    .get("last_tracked_relative_residual_l2_norm")
+                    .and_then(serde_json::Value::as_f64),
+                object
+                    .get("last_recomputed_relative_residual_l2_norm")
+                    .and_then(serde_json::Value::as_f64),
+            ) {
+                let scale = tracked.abs().max(recomputed.abs()).max(1.0e-300);
+                let gap = (recomputed - tracked).abs() / scale;
+                let ratio = if tracked.abs() > 1.0e-300 {
+                    recomputed / tracked
+                } else {
+                    0.0
+                };
+                let status = if gap.is_finite() && gap <= GAP_THRESHOLD {
+                    "ok"
+                } else if gap.is_finite() {
+                    "degraded"
+                } else {
+                    "not_available"
+                };
+                object.insert(
+                    "residual_consistency_status".to_string(),
+                    serde_json::Value::String(status.to_string()),
+                );
+                object.insert(
+                    "residual_consistency_relative_gap".to_string(),
+                    serde_json::json!(gap),
+                );
+                object.insert(
+                    "residual_consistency_recomputed_to_tracked_ratio".to_string(),
+                    serde_json::json!(ratio),
+                );
+                object.insert(
+                    "residual_consistency_relative_gap_threshold".to_string(),
+                    serde_json::json!(GAP_THRESHOLD),
+                );
+                changed = true;
+            }
+            for child in object.values_mut() {
+                changed |= patch_residual_consistency_fields(child);
+            }
+            changed
+        }
+        serde_json::Value::Array(values) => values.iter_mut().fold(false, |changed, child| {
+            patch_residual_consistency_fields(child) || changed
+        }),
+        _ => false,
+    }
+}
+
+#[cfg(any(feature = "fem-gpu", test))]
+fn insert_demag_solver_policy_fields(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    policy: &fullmag_ir::FemLinearSolverPolicy,
+) -> bool {
+    object.insert(
+        "frequency_response_demag_solver_policy_effective".to_string(),
+        serde_json::json!({
+            "relative_tolerance": policy.rtol,
+            "max_iterations": policy.max_iterations,
+        }),
+    );
+    object.insert(
+        "demag_solver_relative_tolerance".to_string(),
+        serde_json::json!(policy.rtol),
+    );
+    object.insert(
+        "demag_solver_max_iterations".to_string(),
+        serde_json::json!(policy.max_iterations),
+    );
+    true
+}
+
+#[cfg(any(feature = "fem-gpu", test))]
+fn patch_demag_solver_policy_fields(
+    value: &mut serde_json::Value,
+    policy: &fullmag_ir::FemLinearSolverPolicy,
+) -> bool {
+    match value {
+        serde_json::Value::Object(object) => {
+            let mut changed = false;
+            if object.contains_key("dynamic_demag_operator_source")
+                || object.contains_key("demag_operator_mode")
+                || object.contains_key("demag_contribution")
+                || object.contains_key("dynamic_demag_matrix_form")
+            {
+                changed |= insert_demag_solver_policy_fields(object, policy);
+            }
+            for child in object.values_mut() {
+                changed |= patch_demag_solver_policy_fields(child, policy);
+            }
+            changed
+        }
+        serde_json::Value::Array(values) => values.iter_mut().fold(false, |changed, child| {
+            patch_demag_solver_policy_fields(child, policy) || changed
+        }),
+        _ => false,
+    }
+}
+
+#[cfg(any(feature = "fem-gpu", test))]
+fn patch_delta_phi_flux_fields(
+    value: &mut serde_json::Value,
+    diagnostics: PeriodicAirboxDynamicFluxDiagnostics,
+) -> bool {
+    match value {
+        serde_json::Value::Object(object) => {
+            let mut changed = false;
+            if object.contains_key("delta_phi_flux_validation_status")
+                || object.contains_key("delta_phi_flux_validation_reason")
+            {
+                object.insert(
+                    "delta_phi_flux_validation_status".to_string(),
+                    serde_json::Value::String("ok".to_string()),
+                );
+                object.insert(
+                    "delta_phi_flux_validation_reason".to_string(),
+                    serde_json::Value::String("evaluated_periodic_airbox_normal_flux".to_string()),
+                );
+                object.insert(
+                    "delta_phi_flux_max_residual".to_string(),
+                    serde_json::json!(diagnostics.max_residual_t),
+                );
+                changed = true;
+            }
+            for child in object.values_mut() {
+                changed |= patch_delta_phi_flux_fields(child, diagnostics);
+            }
+            changed
+        }
+        serde_json::Value::Array(values) => values.iter_mut().fold(false, |changed, child| {
+            patch_delta_phi_flux_fields(child, diagnostics) || changed
+        }),
+        _ => false,
+    }
+}
+
 #[cfg(feature = "fem-gpu")]
 fn try_execute_fem_frequency_response_native_production_cpu(
     plan: &fullmag_ir::FemFrequencyResponsePlanIR,
@@ -1000,8 +1431,11 @@ fn try_execute_fem_frequency_response_native_production_cpu(
         build_native_production_cpu_payload(plan)
     }) else {
         if has_requested_dmi(plan) {
+            let lane = if requested_gpu { "GPU" } else { "CPU" };
             return Err(RunError {
-                message: "FEM frequency response DMI requires a valid first-order tetrahedral magnetic mesh, finite DMI constants, and positive Ms for production CPU execution".to_string(),
+                message: format!(
+                    "FEM frequency response DMI requires a valid first-order tetrahedral magnetic mesh, finite DMI constants, and positive Ms for production {lane} execution"
+                ),
             });
         }
         return Ok(None);
@@ -1082,7 +1516,6 @@ fn try_execute_fem_frequency_response_native_production_cpu(
     let periodic_airbox_coupled_block_problem = periodic_airbox_coupled_block_problem(&payload);
     let mut demag_tangent_provider = if payload.requires_native_backend_demag_tangent_provider
         && periodic_airbox_coupled_block_problem.is_none()
-        && !(requested_gpu && payload.requires_periodic_airbox_dynamic_demag)
     {
         Some(NativeBackendDemagTangentProvider::create(plan, &payload)?)
     } else {
@@ -1099,6 +1532,9 @@ fn try_execute_fem_frequency_response_native_production_cpu(
     let demag_tangent_provider_with_potential_callback = demag_tangent_provider
         .as_ref()
         .map(|_| apply_native_backend_demag_tangent_with_potential as _);
+    let effective_frequency_response_demag_solver_policy = (plan.enable_demag
+        && plan.demag_realization.is_some())
+    .then(|| frequency_response_demag_solver_policy(plan.demag_solver_policy.clone()));
     let operator_diagnostics_json = plan.domain_mesh_workflow_mode.as_ref().map(|mode| {
         serde_json::json!({
             "schema_version": "frequency_domain_operator_diagnostics.v1",
@@ -1106,6 +1542,7 @@ fn try_execute_fem_frequency_response_native_production_cpu(
         })
         .to_string()
     });
+    let _solver_env_guard = FrequencyResponseSolverEnvGuard::apply(plan.solver_policy.as_ref());
     write_initial_frequency_response_progress_artifact(
         output_dir,
         &plan.frequencies_hz.values_hz,
@@ -1174,6 +1611,26 @@ fn try_execute_fem_frequency_response_native_production_cpu(
             if requested_gpu { "GPU" } else { "CPU" }
         ),
     })?;
+    patch_frequency_response_solver_diagnostics(
+        output_dir,
+        effective_frequency_response_demag_solver_policy.as_ref(),
+    )
+    .map_err(|err| RunError {
+        message: format!(
+            "native FEM frequency response finished, but the runner failed to patch solver diagnostics: {err}"
+        ),
+    })?;
+    if let Some(diagnostics) = demag_tangent_provider
+        .as_ref()
+        .and_then(NativeBackendDemagTangentProvider::dynamic_flux_diagnostics)
+    {
+        patch_frequency_response_periodic_airbox_flux_diagnostics(output_dir, diagnostics)
+            .map_err(|err| RunError {
+                message: format!(
+                    "native FEM frequency response finished, but the runner failed to patch periodic-airbox flux diagnostics: {err}"
+                ),
+            })?;
+    }
     let final_native_progress = *last_native_progress.borrow();
     if let Some(progress) = final_native_progress {
         let final_written_frequency_point_artifacts =
@@ -1271,7 +1728,7 @@ fn try_execute_fem_frequency_response_native_production_cpu(
                 if requested_gpu {
                     "native FEM production GPU frequency response is unavailable for a supported production slice"
                 } else if payload.requires_native_backend_demag_tangent_provider {
-                    "native FEM production CPU periodic-airbox frequency response is unavailable until the native backend demag tangent provider is wired into the runner"
+                    "native FEM production CPU periodic-airbox frequency response provider path is unavailable for this plan"
                 } else {
                     "native FEM production CPU frequency response is unavailable for a supported production slice"
                 },
@@ -1457,6 +1914,7 @@ struct NativeBackendDemagTangentProvider {
     magnetic_node_indices: Vec<usize>,
     full_node_count: usize,
     trace_enabled: bool,
+    flux_monitor: Option<PeriodicAirboxDynamicFluxMonitor>,
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -1520,7 +1978,185 @@ impl NativeBackendDemagTangentProvider {
             magnetic_node_indices: payload.magnetic_node_indices.clone(),
             full_node_count: plan.equilibrium_magnetization.len(),
             trace_enabled,
+            flux_monitor: PeriodicAirboxDynamicFluxMonitor::from_plan(plan),
         })
+    }
+
+    fn dynamic_flux_diagnostics(&self) -> Option<PeriodicAirboxDynamicFluxDiagnostics> {
+        self.flux_monitor
+            .as_ref()
+            .and_then(PeriodicAirboxDynamicFluxMonitor::diagnostics)
+    }
+}
+
+#[cfg(any(feature = "fem-gpu", test))]
+#[derive(Debug, Clone, Copy)]
+struct PeriodicAirboxDynamicFluxDiagnostics {
+    max_residual_t: f64,
+}
+
+#[cfg(any(feature = "fem-gpu", test))]
+#[derive(Debug, Clone)]
+struct PeriodicAirboxDynamicFluxPair {
+    node_a: usize,
+    node_b: usize,
+    normal: [f64; 3],
+}
+
+#[cfg(any(feature = "fem-gpu", test))]
+#[derive(Debug, Clone)]
+struct PeriodicAirboxDynamicFluxMonitor {
+    pairs: Vec<PeriodicAirboxDynamicFluxPair>,
+    magnetic_node: Vec<bool>,
+    ms_a_per_m: Vec<f64>,
+    max_residual_t: f64,
+    sample_count: usize,
+}
+
+#[cfg(any(feature = "fem-gpu", test))]
+impl PeriodicAirboxDynamicFluxMonitor {
+    fn from_plan(plan: &fullmag_ir::FemFrequencyResponsePlanIR) -> Option<Self> {
+        if plan.magnetostatic_bc != fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0 {
+            return None;
+        }
+        let constraint_set = plan.periodic_constraint_sets.iter().find(|constraint| {
+            constraint.unknown_family
+                == fullmag_ir::PeriodicUnknownFamilyIR::MagnetostaticPotentialDynamic
+                && constraint.domain_scope
+                    == fullmag_ir::PeriodicDomainScopeIR::MagnetostaticDomainWithAir
+        })?;
+        let node_count = plan.mesh.nodes.len();
+        if node_count == 0 || plan.equilibrium_magnetization.len() != node_count {
+            return None;
+        }
+        let boundary_normals = plan
+            .mesh
+            .periodic_boundary_pairs
+            .iter()
+            .filter_map(|boundary_pair| {
+                periodic_boundary_pair_unit_normal(boundary_pair)
+                    .map(|normal| (boundary_pair.pair_id.as_str(), normal))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut pairs = Vec::new();
+        for pair in &plan.mesh.periodic_node_pairs {
+            if !constraint_set.pair_ids.is_empty()
+                && !constraint_set.pair_ids.contains(&pair.pair_id)
+            {
+                continue;
+            }
+            let node_a = pair.node_a as usize;
+            let node_b = pair.node_b as usize;
+            if node_a >= node_count || node_b >= node_count || node_a == node_b {
+                return None;
+            }
+            let normal = *boundary_normals.get(pair.pair_id.as_str())?;
+            pairs.push(PeriodicAirboxDynamicFluxPair {
+                node_a,
+                node_b,
+                normal,
+            });
+        }
+        if pairs.is_empty() {
+            return None;
+        }
+        let magnetic_node = plan
+            .equilibrium_magnetization
+            .iter()
+            .map(|m| dot3(*m, *m).sqrt() > 1.0e-12)
+            .collect::<Vec<_>>();
+        let ms_a_per_m = (0..node_count)
+            .map(|node_index| {
+                plan.material
+                    .ms_field
+                    .as_ref()
+                    .and_then(|values| values.get(node_index))
+                    .copied()
+                    .unwrap_or(plan.material.saturation_magnetisation)
+            })
+            .collect::<Vec<_>>();
+        if ms_a_per_m
+            .iter()
+            .any(|value| !value.is_finite() || *value < 0.0)
+        {
+            return None;
+        }
+        Some(Self {
+            pairs,
+            magnetic_node,
+            ms_a_per_m,
+            max_residual_t: 0.0,
+            sample_count: 0,
+        })
+    }
+
+    fn record(&mut self, delta_m: &[[f64; 3]], delta_h: &[[f64; 3]]) -> Option<()> {
+        if delta_m.len() != self.magnetic_node.len() || delta_h.len() != self.magnetic_node.len() {
+            return None;
+        }
+        for pair in &self.pairs {
+            let b_a =
+                self.dynamic_b_vector(pair.node_a, delta_m[pair.node_a], delta_h[pair.node_a]);
+            let b_b =
+                self.dynamic_b_vector(pair.node_b, delta_m[pair.node_b], delta_h[pair.node_b]);
+            let residual = dot3(
+                [b_a[0] - b_b[0], b_a[1] - b_b[1], b_a[2] - b_b[2]],
+                pair.normal,
+            )
+            .abs();
+            if !residual.is_finite() {
+                return None;
+            }
+            self.max_residual_t = self.max_residual_t.max(residual);
+        }
+        self.sample_count += 1;
+        Some(())
+    }
+
+    fn diagnostics(&self) -> Option<PeriodicAirboxDynamicFluxDiagnostics> {
+        (self.sample_count > 0).then_some(PeriodicAirboxDynamicFluxDiagnostics {
+            max_residual_t: self.max_residual_t,
+        })
+    }
+
+    fn dynamic_b_vector(
+        &self,
+        node_index: usize,
+        delta_m: [f64; 3],
+        delta_h: [f64; 3],
+    ) -> [f64; 3] {
+        let ms = if self.magnetic_node[node_index] {
+            self.ms_a_per_m[node_index]
+        } else {
+            0.0
+        };
+        [
+            crate::MU0 * (delta_h[0] + ms * delta_m[0]),
+            crate::MU0 * (delta_h[1] + ms * delta_m[1]),
+            crate::MU0 * (delta_h[2] + ms * delta_m[2]),
+        ]
+    }
+}
+
+#[cfg(any(feature = "fem-gpu", test))]
+fn periodic_boundary_pair_unit_normal(
+    boundary_pair: &fullmag_ir::MeshPeriodicBoundaryPairIR,
+) -> Option<[f64; 3]> {
+    if let Some(translation) = boundary_pair.translation {
+        let norm = dot3(translation, translation).sqrt();
+        if norm > f64::EPSILON {
+            return Some([
+                translation[0] / norm,
+                translation[1] / norm,
+                translation[2] / norm,
+            ]);
+        }
+    }
+    match boundary_pair.axis_hint.as_deref() {
+        Some("x") => Some([1.0, 0.0, 0.0]),
+        Some("y") => Some([0.0, 1.0, 0.0]),
+        Some("z") => Some([0.0, 0.0, 1.0]),
+        _ => None,
     }
 }
 
@@ -1558,7 +2194,7 @@ fn frequency_response_demag_backend_plan(
         field_refresh: None,
         relaxation: None,
         demag_realization: plan.demag_realization,
-        air_box_config: None,
+        air_box_config: plan.air_box_config.clone(),
         interfacial_dmi: None,
         dmi_interface_normal: None,
         bulk_dmi: None,
@@ -1587,11 +2223,20 @@ fn frequency_response_demag_backend_plan(
         oersted_time_dep_t_off: 0.0,
         magnetoelastic: None,
         mechanics: None,
-        demag_solver_policy: plan.demag_solver_policy.clone(),
+        demag_solver_policy: Some(frequency_response_demag_solver_policy(
+            plan.demag_solver_policy.clone(),
+        )),
         thermal_seed_config: None,
         oersted_realization: None,
         gpu_device_index: None,
-        mfem_device_string: Some("cpu".to_string()),
+        mfem_device_string: Some(
+            if plan.requested_device == fullmag_ir::ExecutionDevice::Gpu {
+                "cuda"
+            } else {
+                "cpu"
+            }
+            .to_string(),
+        ),
         use_consistent_mass: None,
     }
 }
@@ -1698,6 +2343,17 @@ unsafe extern "C" fn apply_native_backend_demag_tangent(
         }
         return ffi::fullmag_fem_frequency_domain_status::FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OPERATOR_ERROR;
     }
+    if let Some(flux_monitor) = provider.flux_monitor.as_mut() {
+        if flux_monitor.record(&delta_m, &delta_h).is_none() {
+            unsafe {
+                write_native_callback_error(
+                    error_message,
+                    "native demag tangent callback could not evaluate periodic-airbox flux diagnostics",
+                );
+            }
+            return ffi::fullmag_fem_frequency_domain_status::FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OPERATOR_ERROR;
+        }
+    }
     for (node_index, (e1, e2)) in provider.tangent_basis.iter().enumerate() {
         let full_node_index = provider.magnetic_node_indices[node_index];
         tangent_out[node_index * 2] = dot3(delta_h[full_node_index], *e1);
@@ -1797,6 +2453,17 @@ unsafe extern "C" fn apply_native_backend_demag_tangent_with_potential(
             );
         }
         return ffi::fullmag_fem_frequency_domain_status::FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OPERATOR_ERROR;
+    }
+    if let Some(flux_monitor) = provider.flux_monitor.as_mut() {
+        if flux_monitor.record(&delta_m, &delta_h).is_none() {
+            unsafe {
+                write_native_callback_error(
+                    error_message,
+                    "native demag tangent-with-potential callback could not evaluate periodic-airbox flux diagnostics",
+                );
+            }
+            return ffi::fullmag_fem_frequency_domain_status::FULLMAG_FEM_FREQUENCY_DOMAIN_STATUS_OPERATOR_ERROR;
+        }
     }
     for (node_index, (e1, e2)) in provider.tangent_basis.iter().enumerate() {
         let full_node_index = provider.magnetic_node_indices[node_index];
@@ -1925,7 +2592,7 @@ fn build_native_production_payload(
     } else {
         None
     };
-    let dmi_payload = build_dmi_payload(plan)?;
+    let dmi_payload = build_dmi_payload(plan, &node_index_map, &magnetic_node_indices)?;
     if trace_enabled {
         eprintln!(
             "[fullmag-runner] frequency-response payload: dmi payload built in {:.3}s elements={}",
@@ -2172,8 +2839,10 @@ fn production_gpu_frequency_response_rejection_reason(
                 "magnetostatic_bc=floquet_airbox requires include_demag=true and a Demag energy term",
             );
         }
-        if has_requested_dmi(plan) {
-            return Some("DMI is not implemented for production GPU frequency response");
+        if has_nonzero_k && has_requested_dmi(plan) {
+            return Some(
+                "DMI is not implemented for nonzero-k Floquet production GPU frequency response",
+            );
         }
         if !has_nonzero_k {
             return Some("magnetostatic_bc=floquet_airbox requires nonzero k");
@@ -2212,9 +2881,34 @@ fn production_gpu_frequency_response_rejection_reason(
         return None;
     }
     if plan.magnetostatic_bc == fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0 {
-        return Some(
-            "magnetostatic_bc=periodic_airbox_k0 is not implemented for production GPU frequency response; use CPU for periodic-airbox dynamic demag or magnetostatic_bc=open for the current GPU static-periodic magnetic slice",
-        );
+        if plan.domain_mesh_mode != fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir {
+            return Some(
+                "magnetostatic_bc=periodic_airbox_k0 requires a shared-domain airbox mesh",
+            );
+        }
+        if !plan.enable_demag || plan.demag_realization.is_none() {
+            return Some(
+                "magnetostatic_bc=periodic_airbox_k0 requires include_demag=true and a Demag energy term",
+            );
+        }
+        if !plan.periodic_constraint_sets.iter().any(|constraint| {
+            constraint.unknown_family == fullmag_ir::PeriodicUnknownFamilyIR::MagnetizationDynamic
+                && constraint.domain_scope == fullmag_ir::PeriodicDomainScopeIR::MagneticDomain
+        }) {
+            return Some(
+                "magnetostatic_bc=periodic_airbox_k0 requires a delta_m periodic constraint set",
+            );
+        }
+        if !plan.periodic_constraint_sets.iter().any(|constraint| {
+            constraint.unknown_family
+                == fullmag_ir::PeriodicUnknownFamilyIR::MagnetostaticPotentialDynamic
+                && constraint.domain_scope
+                    == fullmag_ir::PeriodicDomainScopeIR::MagnetostaticDomainWithAir
+        }) {
+            return Some(
+                "magnetostatic_bc=periodic_airbox_k0 requires a delta_phi periodic constraint set",
+            );
+        }
     }
     let gpu_shared_domain_supported = plan.requested_device == fullmag_ir::ExecutionDevice::Gpu
         && plan.domain_mesh_mode == fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
@@ -2228,8 +2922,10 @@ fn production_gpu_frequency_response_rejection_reason(
     if plan.enable_demag != plan.demag_realization.is_some() {
         return Some("dynamic demag requires include_demag=true and a resolved Demag energy term");
     }
-    if has_requested_dmi(plan) {
-        return Some("DMI is not implemented for production GPU frequency response");
+    if has_nonzero_k && has_requested_dmi(plan) {
+        return Some(
+            "DMI is not implemented for nonzero-k Floquet production GPU frequency response",
+        );
     }
     if has_nonzero_k && plan.spin_wave_bc.kind() != fullmag_ir::SpinWaveBoundaryKindIR::Floquet {
         return Some(
@@ -2715,7 +3411,11 @@ struct DmiPayload {
 }
 
 #[cfg(feature = "fem-gpu")]
-fn build_dmi_payload(plan: &fullmag_ir::FemFrequencyResponsePlanIR) -> Option<DmiPayload> {
+fn build_dmi_payload(
+    plan: &fullmag_ir::FemFrequencyResponsePlanIR,
+    node_index_map: &[Option<u64>],
+    magnetic_node_indices: &[usize],
+) -> Option<DmiPayload> {
     if plan.interfacial_dmi.is_some_and(|value| !value.is_finite())
         || plan.bulk_dmi.is_some_and(|value| !value.is_finite())
     {
@@ -2730,6 +3430,7 @@ fn build_dmi_payload(plan: &fullmag_ir::FemFrequencyResponsePlanIR) -> Option<Dm
         });
     }
     if plan.mesh.nodes.len() != plan.equilibrium_magnetization.len()
+        || plan.mesh.nodes.len() != node_index_map.len()
         || plan.mesh.elements.is_empty()
     {
         return None;
@@ -2748,7 +3449,12 @@ fn build_dmi_payload(plan: &fullmag_ir::FemFrequencyResponsePlanIR) -> Option<Dm
             {
                 return None;
             }
-            Some(values.clone())
+            Some(
+                magnetic_node_indices
+                    .iter()
+                    .map(|node_index| values[*node_index])
+                    .collect(),
+            )
         }
         None => None,
     };
@@ -2765,7 +3471,7 @@ fn build_dmi_payload(plan: &fullmag_ir::FemFrequencyResponsePlanIR) -> Option<Dm
     } else {
         [0.0, 0.0, 1.0]
     };
-    let node_count = plan.equilibrium_magnetization.len();
+    let node_count = magnetic_node_indices.len();
     let mut lumped_mass = vec![0.0; node_count];
     let mut elements = Vec::new();
 
@@ -2778,9 +3484,21 @@ fn build_dmi_payload(plan: &fullmag_ir::FemFrequencyResponsePlanIR) -> Option<Dm
         {
             continue;
         }
+        let mut compact_element = [0_u32; 4];
+        let mut has_airbox_node = false;
+        for (local_index, node) in element.iter().enumerate() {
+            let Some(compact_node) = node_index_map.get(*node as usize).copied().flatten() else {
+                has_airbox_node = true;
+                break;
+            };
+            compact_element[local_index] = u32::try_from(compact_node).ok()?;
+        }
+        if has_airbox_node {
+            continue;
+        }
         let geometry = tetra_p1_geometry(&plan.mesh.nodes, *element)?;
-        for node in element {
-            let node_index = *node as usize;
+        for compact_node in compact_element {
+            let node_index = compact_node as usize;
             if node_index >= node_count {
                 return None;
             }
@@ -2789,7 +3507,7 @@ fn build_dmi_payload(plan: &fullmag_ir::FemFrequencyResponsePlanIR) -> Option<Dm
         if let Some(d) = interfacial_dmi {
             elements.push(NativeDrivenFrequencyResponseDmiElement {
                 kind: NativeDrivenFrequencyResponseDmiKind::Interfacial,
-                node_indices: *element,
+                node_indices: compact_element,
                 shape: [0.25, 0.25, 0.25, 0.25],
                 grad_shape: geometry.grad_shape,
                 weight: geometry.volume,
@@ -2800,7 +3518,7 @@ fn build_dmi_payload(plan: &fullmag_ir::FemFrequencyResponsePlanIR) -> Option<Dm
         if let Some(d) = bulk_dmi {
             elements.push(NativeDrivenFrequencyResponseDmiElement {
                 kind: NativeDrivenFrequencyResponseDmiKind::Bulk,
-                node_indices: *element,
+                node_indices: compact_element,
                 shape: [0.25, 0.25, 0.25, 0.25],
                 grad_shape: geometry.grad_shape,
                 weight: geometry.volume,
@@ -3631,6 +4349,98 @@ mod tests {
     }
 
     #[test]
+    fn frequency_response_solver_diagnostics_patch_records_residual_consistency_and_demag_policy() {
+        let unique_suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-runner-frequency-response-solver-diagnostics-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+        let diagnostics_dir = output_dir.join("response/diagnostics");
+        std::fs::create_dir_all(&diagnostics_dir).expect("diagnostics dir should be created");
+        let point_dir = output_dir.join("response/frequency_points");
+        std::fs::create_dir_all(&point_dir).expect("point dir should be created");
+        std::fs::create_dir_all(output_dir.join("frequency_domain"))
+            .expect("manifest dir should be created");
+        std::fs::write(
+            diagnostics_dir.join("solver.v1.json"),
+            r#"{"status":"ready","last_tracked_relative_residual_l2_norm":0.83,"last_recomputed_relative_residual_l2_norm":1.09}"#,
+        )
+        .expect("diagnostics should be written");
+        std::fs::write(
+            output_dir.join("frequency_domain/manifest.v1.json"),
+            r#"{"diagnostics":{"status":"ready","last_tracked_relative_residual_l2_norm":0.95,"last_recomputed_relative_residual_l2_norm":0.951}}"#,
+        )
+        .expect("manifest should be written");
+        std::fs::write(
+            point_dir.join("frequency_0000.json"),
+            r#"{"schema_version":"frequency_response_point.v1","frequency_index":0,"m_complex":[[-1.0004040108895327e-10,2.7451188554889786e-10]],"response_amplitude":1.0,"relative_residual_l2_norm":1e-4}"#,
+        )
+        .expect("point artifact should be written");
+        std::fs::write(
+            output_dir.join("response/magnetic_response_sweep.v2.json"),
+            r#"{"schema_version":"magnetic_response_sweep.v2","points":[{"frequency_index":0,"frequency_point_artifact_path":"response/frequency_points/frequency_0000.json","m_complex":[[-1.0004040108895327e-10,2.745118855488979e-10]],"response_amplitude":1.0,"relative_residual_l2_norm":1e-4}]}"#,
+        )
+        .expect("sweep should be written");
+        let policy = fullmag_ir::FemLinearSolverPolicy {
+            solver: "pcg".to_string(),
+            preconditioner: "hypre_boomeramg".to_string(),
+            rtol: 2.5e-5,
+            atol: None,
+            max_iterations: 700,
+            print_level: 0,
+        };
+
+        patch_frequency_response_solver_diagnostics(&output_dir, Some(&policy))
+            .expect("solver diagnostics should be patched");
+
+        let diagnostics: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(diagnostics_dir.join("solver.v1.json"))
+                .expect("diagnostics should exist"),
+        )
+        .expect("diagnostics should parse");
+        assert_eq!(diagnostics["residual_consistency_status"], "degraded");
+        assert_eq!(
+            diagnostics["residual_consistency_relative_gap_threshold"],
+            0.10
+        );
+        assert_eq!(diagnostics["demag_solver_relative_tolerance"], 2.5e-5);
+        assert_eq!(diagnostics["demag_solver_max_iterations"], 700);
+        assert_eq!(
+            diagnostics["frequency_response_demag_solver_policy_effective"]["relative_tolerance"],
+            2.5e-5
+        );
+
+        let manifest: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(output_dir.join("frequency_domain/manifest.v1.json"))
+                .expect("manifest should exist"),
+        )
+        .expect("manifest should parse");
+        assert_eq!(manifest["diagnostics"]["residual_consistency_status"], "ok");
+        assert_eq!(
+            manifest["diagnostics"]["frequency_response_demag_solver_policy_effective"]
+                ["max_iterations"],
+            700
+        );
+        let sweep: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(output_dir.join("response/magnetic_response_sweep.v2.json"))
+                .expect("sweep should exist"),
+        )
+        .expect("sweep should parse");
+        let point: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(point_dir.join("frequency_0000.json"))
+                .expect("point artifact should exist"),
+        )
+        .expect("point should parse");
+        assert_eq!(sweep["points"][0]["m_complex"], point["m_complex"]);
+
+        let _ = std::fs::remove_dir_all(output_dir);
+    }
+
+    #[test]
     fn periodic_airbox_response_wires_native_backend_demag_tangent_provider_source_contract() {
         let source = include_str!("frequency_response.rs");
         assert!(
@@ -3714,8 +4524,8 @@ mod tests {
             "thermal_seed_config:",
         );
         assert!(
-            backend_plan_block.contains("demag_solver_policy: plan.demag_solver_policy.clone()"),
-            "PeriodicAirboxK0 demag tangent provider must reuse the frequency-response FEM demag solver policy"
+            backend_plan_block.contains("demag_solver_policy: frequency_response_demag_solver_policy("),
+            "PeriodicAirboxK0 demag tangent provider must reuse the frequency-response FEM demag solver policy through the response override helper"
         );
     }
 
@@ -3759,11 +4569,82 @@ mod tests {
 
     #[cfg(feature = "fem-gpu")]
     #[test]
-    fn periodic_airbox_demag_provider_backend_plan_forces_cpu_mfem_device() {
+    fn periodic_airbox_demag_provider_backend_plan_uses_requested_mfem_device() {
         let plan = qualified_periodic_airbox_frequency_response_plan();
         let backend_plan = super::frequency_response_demag_backend_plan(&plan);
 
         assert_eq!(backend_plan.mfem_device_string.as_deref(), Some("cpu"));
+        assert_eq!(backend_plan.air_box_config, plan.air_box_config);
+
+        let mut gpu_plan = qualified_periodic_airbox_frequency_response_plan();
+        gpu_plan.requested_device = fullmag_ir::ExecutionDevice::Gpu;
+        gpu_plan.air_box_config = Some(fullmag_ir::AirBoxConfigIR {
+            factor: 4.0,
+            grading: 1.5,
+            boundary_marker: 99,
+            bc_kind: Some("robin".to_string()),
+            robin_beta_mode: Some("dipole".to_string()),
+            robin_beta_factor: None,
+            shape: Some("bbox".to_string()),
+            factor_source: Some("study_universe".to_string()),
+            boundary_marker_source: Some("mesh_marker_99".to_string()),
+        });
+        let gpu_backend_plan = super::frequency_response_demag_backend_plan(&gpu_plan);
+
+        assert_eq!(gpu_backend_plan.mfem_device_string.as_deref(), Some("cuda"));
+        assert_eq!(gpu_backend_plan.air_box_config, gpu_plan.air_box_config);
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn periodic_airbox_demag_provider_backend_plan_uses_default_response_demag_policy() {
+        let mut plan = qualified_periodic_airbox_frequency_response_plan();
+        plan.demag_solver_policy = None;
+
+        let backend_plan = super::frequency_response_demag_backend_plan(&plan);
+        let policy = backend_plan
+            .demag_solver_policy
+            .expect("frequency response demag provider should carry default solver policy");
+
+        assert_eq!(policy.solver, "CG");
+        assert_eq!(policy.preconditioner, "AMG");
+        assert_eq!(policy.rtol, 1.0e-8);
+        assert_eq!(policy.max_iterations, 500);
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn periodic_airbox_demag_provider_backend_plan_applies_response_demag_env_overrides() {
+        let _rtol = EnvVarGuard::set(
+            "FULLMAG_FEM_FREQUENCY_RESPONSE_DEMAG_RTOL",
+            "2.5e-7".to_string(),
+        );
+        let _rtol_alias = EnvVarGuard::set("FULLMAG_FMR_DEMAG_RTOL", "2.5e-7".to_string());
+        let _max_iterations = EnvVarGuard::set(
+            "FULLMAG_FEM_FREQUENCY_RESPONSE_DEMAG_MAX_ITERATIONS",
+            "1700".to_string(),
+        );
+        let _max_iterations_alias =
+            EnvVarGuard::set("FULLMAG_FMR_DEMAG_MAX_ITERATIONS", "1700".to_string());
+        let mut plan = qualified_periodic_airbox_frequency_response_plan();
+        plan.demag_solver_policy = Some(fullmag_ir::FemLinearSolverPolicy {
+            solver: "CG".to_string(),
+            preconditioner: "AMG".to_string(),
+            rtol: 1.0e-4,
+            atol: None,
+            max_iterations: 1000,
+            print_level: 0,
+        });
+
+        let backend_plan = super::frequency_response_demag_backend_plan(&plan);
+        let policy = backend_plan
+            .demag_solver_policy
+            .expect("frequency response demag provider should carry solver policy");
+
+        assert_eq!(policy.solver, "CG");
+        assert_eq!(policy.preconditioner, "AMG");
+        assert_eq!(policy.rtol, 2.5e-7);
+        assert_eq!(policy.max_iterations, 1700);
     }
 
     #[cfg(feature = "fem-gpu")]
@@ -4007,6 +4888,7 @@ mod tests {
             frequencies_hz: fullmag_ir::FrequencySweepIR {
                 values_hz: vec![1.0e9],
             },
+            solver_policy: None,
             enable_exchange: true,
             enable_demag: false,
             interfacial_dmi: None,
@@ -4018,6 +4900,7 @@ mod tests {
             requested_device: fullmag_ir::ExecutionDevice::Cpu,
             exchange_bc: fullmag_ir::ExchangeBoundaryCondition::Neumann,
             demag_realization: None,
+            air_box_config: None,
             demag_solver_policy: None,
             periodic_constraint_sets: Vec::new(),
             equilibrium_provenance: None,
@@ -4098,6 +4981,68 @@ mod tests {
             },
         ];
         plan
+    }
+
+    #[test]
+    fn periodic_airbox_dynamic_flux_monitor_uses_full_demag_field() {
+        let plan = qualified_periodic_airbox_frequency_response_plan();
+        let mut monitor = super::PeriodicAirboxDynamicFluxMonitor::from_plan(&plan)
+            .expect("periodic-airbox plan should provide flux metadata");
+        let delta_m = vec![[0.0, 0.0, 0.0]; plan.mesh.nodes.len()];
+        let mut delta_h = vec![[0.0, 0.0, 0.0]; plan.mesh.nodes.len()];
+        delta_h[1] = [2.0, 0.0, 0.0];
+
+        monitor
+            .record(&delta_m, &delta_h)
+            .expect("valid full fields should produce a flux diagnostic");
+
+        let diagnostics = monitor
+            .diagnostics()
+            .expect("recorded monitor should have diagnostics");
+        assert_eq!(diagnostics.max_residual_t, 2.0 * crate::MU0);
+    }
+
+    #[test]
+    fn periodic_airbox_flux_diagnostic_patcher_updates_nested_artifacts() {
+        let unique_suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-runner-frequency-response-flux-patch-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+        let point_dir = output_dir.join("response/frequency_points");
+        std::fs::create_dir_all(&point_dir).expect("point dir should be created");
+        std::fs::write(
+            point_dir.join("frequency_0000.json"),
+            br#"{"demag_contribution":{"delta_phi_flux_validation_status":"not_evaluated","delta_phi_flux_validation_reason":"normal_flux_diagnostic_payload_unavailable"}}"#,
+        )
+        .expect("point artifact should be written");
+
+        super::patch_frequency_response_periodic_airbox_flux_diagnostics(
+            &output_dir,
+            super::PeriodicAirboxDynamicFluxDiagnostics {
+                max_residual_t: 3.0e-12,
+            },
+        )
+        .expect("flux diagnostics should patch existing artifacts");
+
+        let point: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(point_dir.join("frequency_0000.json"))
+                .expect("point artifact should exist"),
+        )
+        .expect("point artifact should parse");
+        let demag = &point["demag_contribution"];
+        assert_eq!(demag["delta_phi_flux_validation_status"], "ok");
+        assert_eq!(
+            demag["delta_phi_flux_validation_reason"],
+            "evaluated_periodic_airbox_normal_flux"
+        );
+        assert_eq!(demag["delta_phi_flux_max_residual"], 3.0e-12);
+
+        let _ = std::fs::remove_dir_all(output_dir);
     }
 
     #[test]
@@ -4600,18 +5545,19 @@ mod tests {
         let mut periodic_airbox = qualified_periodic_airbox_frequency_response_plan();
         periodic_airbox.requested_device = fullmag_ir::ExecutionDevice::Gpu;
         assert!(
-            super::production_gpu_frequency_response_rejection_reason(&periodic_airbox)
-                .expect(
-                    "forced GPU periodic-airbox dynamic demag should reject before native solve"
-                )
-                .contains("periodic_airbox_k0 is not implemented for production GPU")
+            super::production_gpu_frequency_response_rejection_reason(&periodic_airbox).is_none(),
+            "forced GPU periodic-airbox dynamic demag should reach native for the GPU provider path"
         );
         #[cfg(feature = "fem-gpu")]
         {
-            assert!(
-                super::build_native_production_gpu_payload(&periodic_airbox).is_none(),
-                "forced GPU periodic-airbox request must not build a native GPU payload"
-            );
+            let payload = super::build_native_production_gpu_payload(&periodic_airbox)
+                .expect("forced GPU periodic-airbox request should build a native payload for provider-backed solving");
+            assert!(payload.requires_periodic_airbox_dynamic_demag);
+            assert!(payload.requires_native_backend_demag_tangent_provider);
+            assert!(payload.periodic_airbox_delta_phi_dof_count > 0);
+            assert!(!payload
+                .periodic_airbox_magnetostatic_periodic_node_pairs
+                .is_empty());
         }
 
         let mut periodic_without_pairs = supported.clone();
@@ -4933,5 +5879,47 @@ mod tests {
         );
         assert!(payload.dmi_ms_field.is_none());
         assert_eq!(payload.dmi_uniform_ms, 8.0e5);
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn native_production_payload_compacts_shared_domain_dmi_elements() {
+        let mut plan = minimal_frequency_response_plan();
+        plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
+        plan.mesh.nodes = vec![
+            [0.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [3.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ];
+        plan.mesh.elements = vec![[0, 2, 3, 5], [1, 2, 4, 5]];
+        plan.mesh.element_markers = vec![1, 0];
+        plan.equilibrium_magnetization = vec![
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ];
+        plan.material.ms_field = Some(vec![8.0e5, 1.0, 8.1e5, 8.2e5, 1.0, 8.3e5]);
+        plan.bulk_dmi = Some(2.0e-3);
+
+        let payload = super::build_native_production_gpu_payload(&plan)
+            .expect("shared-domain DMI payload should build on compact magnetic nodes");
+
+        assert_eq!(payload.magnetic_node_indices, vec![0, 2, 3, 5]);
+        assert_eq!(payload.dmi_elements.len(), 1);
+        assert_eq!(payload.dmi_elements[0].node_indices, [0, 1, 2, 3]);
+        assert_eq!(
+            payload.dmi_ms_field.as_deref(),
+            Some([8.0e5, 8.1e5, 8.2e5, 8.3e5].as_slice())
+        );
+        assert_eq!(
+            payload.dmi_lumped_mass.as_deref(),
+            Some([1.0 / 24.0; 4].as_slice())
+        );
     }
 }

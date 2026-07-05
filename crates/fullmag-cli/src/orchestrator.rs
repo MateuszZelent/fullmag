@@ -1157,6 +1157,64 @@ fn format_stop_reason(completion: Option<&fullmag_ir::StageCompletionIR>) -> Str
     format!("{reason}{metric_desc}")
 }
 
+fn stage_requires_relaxed_frequency_response_equilibrium(stage: &ResolvedScriptStage) -> bool {
+    matches!(
+        &stage.ir.study,
+        StudyIR::FrequencyResponse {
+            equilibrium: fullmag_ir::EquilibriumSourceIR::RelaxedInitialState,
+            ..
+        }
+    )
+}
+
+fn is_unqualified_equilibrium_stop_reason(reason: fullmag_ir::StageStopReason) -> bool {
+    matches!(
+        reason,
+        fullmag_ir::StageStopReason::MaxSteps
+            | fullmag_ir::StageStopReason::MaxPseudotime
+            | fullmag_ir::StageStopReason::MaxPhysicalTime
+            | fullmag_ir::StageStopReason::UserCancelled
+            | fullmag_ir::StageStopReason::BackendError
+    )
+}
+
+fn ensure_frequency_response_relaxed_continuation_is_qualified(
+    stage: &ResolvedScriptStage,
+    completion: Option<&fullmag_ir::StageCompletionIR>,
+) -> Result<()> {
+    if !stage_requires_relaxed_frequency_response_equilibrium(stage) {
+        return Ok(());
+    }
+    let Some(completion) = completion else {
+        return Ok(());
+    };
+    let Some(reason) = completion.reason else {
+        return Ok(());
+    };
+    if !is_unqualified_equilibrium_stop_reason(reason) {
+        return Ok(());
+    }
+
+    let metric_name = completion.metric_name.as_deref().unwrap_or("metric");
+    let metric_value = completion
+        .metric_value
+        .map(|value| format!("{value:.6e}"))
+        .unwrap_or_else(|| "n/a".to_string());
+    let threshold = completion
+        .threshold
+        .map(|value| format!("{value:.6e}"))
+        .unwrap_or_else(|| "n/a".to_string());
+    bail!(
+        "frequency-response stage '{}' requested equilibrium_source='relax', but the previous relaxation stopped before satisfying an equilibrium criterion: status={}, reason={:?}, {}={}, threshold={}; refusing to linearize around an unqualified state",
+        stage.entrypoint_kind,
+        completion.status,
+        reason,
+        metric_name,
+        metric_value,
+        threshold
+    );
+}
+
 #[derive(Clone)]
 struct StageHeartbeatSnapshot {
     latest_update: fullmag_runner::StepUpdate,
@@ -5166,6 +5224,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let mut time_offset = 0.0f64;
     let mut continuation_magnetization: Option<Vec<[f64; 3]>> = None;
     let mut continuation_source: Option<ContinuationSource> = None;
+    let mut continuation_completion: Option<fullmag_ir::StageCompletionIR> = None;
     let mut start_solver_command_id: Option<String> = None;
     let mut paused_stage: Option<PausedInteractiveStage> = None;
 
@@ -5856,6 +5915,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         Ok(loaded_state) => {
                             continuation_magnetization = Some(loaded_state.values.clone());
                             continuation_source = None; // loaded from file — unknown source backend
+                            continuation_completion = None;
                             live_workspace.update(|state| {
                                 state.live_state.updated_at_unix_ms =
                                     unix_time_millis().unwrap_or(0);
@@ -5981,6 +6041,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         );
                     }
                     continuation_source = None;
+                    continuation_completion = None;
                 }
                 WaitForSolveCommandAction::Stop => {
                     eprintln!("[fullmag] aborted by user during wait_for_solve");
@@ -6036,6 +6097,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         );
         if synthetic_action.is_none() {
             if let Some(previous_final_magnetization) = continuation_magnetization.as_deref() {
+                ensure_frequency_response_relaxed_continuation_is_qualified(
+                    &stage,
+                    continuation_completion.as_ref(),
+                )?;
                 // Check for cross-backend FEM→FDM transfer.
                 if let Some(source) = continuation_source.as_ref() {
                     match resample_continuation_if_cross_backend(
@@ -6289,7 +6354,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             }
 
             continuation_magnetization = Some(synthetic_outcome.magnetization);
-            continuation_source = None; // synthetic remesh — inherit unknown source
+            if matches!(action, ResolvedScriptStageAction::LoadState { .. }) {
+                continuation_source = None;
+                continuation_completion = None;
+            }
             live_workspace.push_log("success", synthetic_outcome.message);
             eprintln!(
                 "[fullmag] stage {}/{} ({}) completed (synthetic/mesh)",
@@ -6671,6 +6739,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         }
         aggregated_steps.extend(offset_steps);
         continuation_magnetization = Some(stage_result.final_magnetization.clone());
+        continuation_completion = stage_result.completion.clone();
         continuation_source = Some(match &execution_plan.backend_plan {
             BackendPlanIR::Fem(fem_plan) => ContinuationSource::Fem(fem_plan.mesh.clone()),
             _ => ContinuationSource::Fdm,
@@ -7149,6 +7218,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         }
                         continuation_magnetization = Some(loaded_state.values);
                         continuation_source = None; // loaded from file — unknown source
+                        continuation_completion = None;
                         live_workspace.push_log(
                             "success",
                             format!(
@@ -7221,6 +7291,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     );
                 }
                 continuation_source = None;
+                continuation_completion = None;
                 if let Some(remesh_stage) = remesh_stages.into_iter().next() {
                     interactive_template_ir = remesh_stage.ir;
                     current_plan_summary = interactive_template_ir
@@ -7361,6 +7432,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 current_adaptive_runtime_state.as_ref(),
             );
             if let Some(previous_final_magnetization) = continuation_magnetization.as_deref() {
+                ensure_frequency_response_relaxed_continuation_is_qualified(
+                    &stage,
+                    continuation_completion.as_ref(),
+                )?;
                 if let Some(source) = continuation_source.as_ref() {
                     match resample_continuation_if_cross_backend(
                         previous_final_magnetization,
@@ -7787,6 +7862,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 let last_offset_step = offset_steps.last().cloned();
                 aggregated_steps.extend(offset_steps);
                 continuation_magnetization = Some(stage_result.final_magnetization.clone());
+                continuation_completion = stage_result.completion.clone();
                 continuation_source = Some(match &execution_plan.backend_plan {
                     BackendPlanIR::Fem(fem_plan) => ContinuationSource::Fem(fem_plan.mesh.clone()),
                     _ => ContinuationSource::Fdm,
@@ -7894,6 +7970,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 }
                 aggregated_steps.extend(offset_steps);
                 continuation_magnetization = Some(stage_result.final_magnetization.clone());
+                continuation_completion = stage_result.completion.clone();
                 continuation_source = Some(match &execution_plan.backend_plan {
                     BackendPlanIR::Fem(fem_plan) => ContinuationSource::Fem(fem_plan.mesh.clone()),
                     _ => ContinuationSource::Fdm,
@@ -8178,6 +8255,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 time_offset = last.time;
             }
             aggregated_steps.extend(offset_steps);
+            continuation_completion = stage_result.completion.clone();
             continuation_magnetization = Some(stage_result.final_magnetization);
             continuation_source = Some(match &execution_plan.backend_plan {
                 BackendPlanIR::Fem(fem_plan) => ContinuationSource::Fem(fem_plan.mesh.clone()),
@@ -8548,7 +8626,8 @@ mod tests {
         apply_live_step_update_to_workspace_state, apply_remeshed_problem_snapshot_to_stages,
         apply_stage_heartbeat_progress, attach_initial_magnetization_state_override_metadata,
         classify_wait_for_solve_command, default_domain_region_markers,
-        discard_active_paused_stage_execution, execute_synthetic_stage,
+        discard_active_paused_stage_execution,
+        ensure_frequency_response_relaxed_continuation_is_qualified, execute_synthetic_stage,
         fem_gpu_memory_preflight_message, fem_interactive_dense_ram_estimate,
         fem_live_mesh_payload_and_initial_magnetization, fem_mesh_payload_from_backend_plan,
         format_stage_heartbeat_message, format_stage_progress_line, has_heavy_live_payload,
@@ -8573,10 +8652,13 @@ mod tests {
     };
     use fullmag_ir::{
         BackendPlanIR, BackendPolicyIR, BackendTarget, DiscretizationHintsIR, DynamicsIR,
+        EigenDampingPolicyIR, EigenOperatorConfigIR, EigenOperatorIR, EquilibriumSourceIR,
         ExchangeBoundaryCondition, ExecutionMode, ExecutionPrecision, FdmMaterialIR, FdmPlanIR,
-        FemDomainMeshAssetIR, FemDomainMeshModeIR, FemObjectSegmentIR, FemPlanIR, GeometryAssetsIR,
-        GeometryEntryIR, GeometryIR, GridDimensions, InitialMagnetizationIR, IntegratorChoice,
-        MagnetIR, MaterialIR, MeshIR, ProblemIR, ProblemMeta, RegionIR, SamplingIR, StudyIR,
+        FemDomainMeshAssetIR, FemDomainMeshModeIR, FemObjectSegmentIR, FemPlanIR,
+        FrequencyExcitationIR, FrequencyResponseNormalizationIR, FrequencySweepIR,
+        GeometryAssetsIR, GeometryEntryIR, GeometryIR, GridDimensions, InitialMagnetizationIR,
+        IntegratorChoice, MagnetIR, MagnetostaticBoundaryConditionIR, MaterialIR, MeshIR,
+        ProblemIR, ProblemMeta, RegionIR, SamplingIR, SpinWaveBoundaryConditionIR, StudyIR,
         ValidationProfileIR,
     };
     use fullmag_runner::{LivePreviewField, SequenceStage, StepStats, StepUpdate};
@@ -9902,6 +9984,76 @@ mod tests {
             material_parameter_fields: Vec::new(),
             object_regions: Vec::new(),
         }
+    }
+
+    fn frequency_response_relaxed_stage() -> ResolvedScriptStage {
+        let mut problem = tiny_problem_with_shared_domain_asset();
+        problem.study = StudyIR::FrequencyResponse {
+            dynamics: DynamicsIR::Llg {
+                gyromagnetic_ratio: 2.211e5,
+                integrator: "heun".to_string(),
+                fixed_timestep: Some(1e-13),
+                adaptive_timestep: None,
+                field_refresh: None,
+                mechanics: None,
+            },
+            operator: EigenOperatorConfigIR {
+                kind: EigenOperatorIR::Full2x2,
+                include_demag: true,
+            },
+            equilibrium: EquilibriumSourceIR::RelaxedInitialState,
+            k_sampling: None,
+            normalization: FrequencyResponseNormalizationIR::UnitMaxAmplitude,
+            damping_policy: EigenDampingPolicyIR::Include,
+            spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
+            magnetostatic_bc: MagnetostaticBoundaryConditionIR::PeriodicAirboxK0,
+            excitation: FrequencyExcitationIR {
+                field_au_per_m: [1.0, 0.0, 0.0],
+                phase_rad: 0.0,
+            },
+            frequencies_hz: FrequencySweepIR {
+                values_hz: vec![2.0e9],
+            },
+            solver_policy: None,
+            sampling: SamplingIR {
+                table_autosave: None,
+                outputs: Vec::new(),
+            },
+        };
+        ResolvedScriptStage::solver(problem, 0.0, "flat_frequency_response")
+    }
+
+    fn stage_completion(reason: fullmag_ir::StageStopReason) -> fullmag_ir::StageCompletionIR {
+        fullmag_ir::StageCompletionIR {
+            status: "completed".to_string(),
+            reason: Some(reason),
+            metric_name: Some("max_torque_T".to_string()),
+            metric_value: Some(6.7e-3),
+            threshold: Some(1.0e-4),
+        }
+    }
+
+    #[test]
+    fn frequency_response_rejects_max_steps_relaxation_continuation() {
+        let stage = frequency_response_relaxed_stage();
+        let completion = stage_completion(fullmag_ir::StageStopReason::MaxSteps);
+        let error =
+            ensure_frequency_response_relaxed_continuation_is_qualified(&stage, Some(&completion))
+                .expect_err("max_steps relax continuation must not feed frequency response");
+        let message = error.to_string();
+
+        assert!(message.contains("equilibrium_source='relax'"));
+        assert!(message.contains("MaxSteps"));
+        assert!(message.contains("refusing to linearize"));
+    }
+
+    #[test]
+    fn frequency_response_accepts_torque_relaxation_continuation() {
+        let stage = frequency_response_relaxed_stage();
+        let completion = stage_completion(fullmag_ir::StageStopReason::Torque);
+
+        ensure_frequency_response_relaxed_continuation_is_qualified(&stage, Some(&completion))
+            .expect("torque-qualified relax continuation should feed frequency response");
     }
 
     #[test]

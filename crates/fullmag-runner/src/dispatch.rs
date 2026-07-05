@@ -5447,6 +5447,7 @@ mod tests {
             exchange_bc: plan.exchange_bc,
             spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
             demag_realization: None,
+            air_box_config: None,
             mode_tracking: None,
             dispersion_validation: None,
         }

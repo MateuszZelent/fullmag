@@ -307,6 +307,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::meshing::get_mesh_object_quality),
         )
         .route(
+            "/v2/sessions/current/meshing/meshes/regions/:region_id/quality",
+            get(handlers::meshing::get_mesh_region_quality),
+        )
+        .route(
             "/v2/sessions/current/meshing/meshes/objects/:object_id/report",
             get(handlers::meshing::get_mesh_object_report),
         )

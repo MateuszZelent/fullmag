@@ -2989,6 +2989,7 @@ describe("ControlRoomApi", () => {
     await api.meshing.periodicPairs();
     await api.meshing.objectReport("box");
     await api.meshing.objectQuality("box");
+    await api.meshing.regionQuality("film:core");
 
     expect(seenUrls).toEqual([
       "http://127.0.0.1:8765/v2/sessions/current/model/geometry/capabilities",
@@ -3000,6 +3001,7 @@ describe("ControlRoomApi", () => {
       "http://127.0.0.1:8765/v2/sessions/current/meshing/mesh/periodic_pairs.v1",
       "http://127.0.0.1:8765/v2/sessions/current/meshing/meshes/objects/box/report",
       "http://127.0.0.1:8765/v2/sessions/current/meshing/meshes/objects/box/quality",
+      "http://127.0.0.1:8765/v2/sessions/current/meshing/meshes/regions/film%3Acore/quality",
     ]);
   });
 

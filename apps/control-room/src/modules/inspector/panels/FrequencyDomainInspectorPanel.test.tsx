@@ -3563,6 +3563,8 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Plot selected eigen mode complex magnitude");
     expect(html).toContain("Plot selected eigen mode phase");
     expect(html).toContain("Animate selected eigen mode phase in 3D");
+    expect(html).toContain("Open selected eigen mode data preview");
+    expect(html).toContain("Mode data preview");
     expect(html).not.toMatch(
       /aria-label="Plot selected eigen mode with phase-rotated real display"[^>]*disabled=""/,
     );
@@ -4489,6 +4491,8 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Plot selected eigen mode complex magnitude");
     expect(html).toContain("Plot selected eigen mode phase");
     expect(html).toContain("Animate selected eigen mode phase in 3D");
+    expect(html).toContain("Open selected eigen mode data preview");
+    expect(html).toContain("Mode data preview");
     expect(html).toMatch(
       /<button class="fm-button fm-button--primary fm-button--sm fm-inspector-action-button" aria-label="Plot selected eigen mode with phase-rotated real display"[^>]*><svg[^>]*class="lucide lucide-rotate-cw"/,
     );
@@ -4526,6 +4530,10 @@ describe("FrequencyDomainInspectorPanel", () => {
       resolve(__dirname, "FrequencyDomainInspectorPanel.tsx"),
       "utf8",
     );
+    const dataPreviewSource = readFileSync(
+      resolve(__dirname, "FrequencyDomainModeDataPreviewDialog.tsx"),
+      "utf8",
+    );
     const displayControlsSource = readFileSync(
       resolve(__dirname, "FrequencyDomainModeDisplayControls.tsx"),
       "utf8",
@@ -4545,6 +4553,11 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(source).toContain('"analysis.frequency-domain.set-3d-animation"');
     expect(source).toContain("fieldId: selectedFieldId");
     expect(source).toContain("analysisFieldViewSelectRef.current?.value");
+    expect(dataPreviewSource).toContain("useDataPreviewFieldVector({");
+    expect(dataPreviewSource).toContain("phaseRad: previewPhaseRad");
+    expect(dataPreviewSource).toContain("view: previewView");
+    expect(source).toContain("selectedEigenModePhaseInputRef.current?.value");
+    expect(source).toContain("selectedEigenModeViewSelectRef.current?.value");
     expect(source).toContain("source: selectedFieldOverlaySource");
     expect(source).toContain('"analysis.eigen.set-mode-3d-animation"');
     expect(source).toContain("action === \"animate\"");

@@ -195,19 +195,25 @@ The Inspector is Fullmag's settings and detail surface, equivalent to COMSOL's S
 
 Every Study Setup inspector modifies the draft state of the active stage. Changes are committed to the backend via a canonical stage transaction path when the user clicks "Apply" or "Save".
 
-> **Phase 2 — Backend-Dependent**: All Study Setup inspectors require backend stage transaction schemas that **do not yet exist**. The transaction mappings listed below are target contracts. Frontend forms must not be wired to nonexistent endpoints. Until the backend schemas are implemented, Study Setup nodes may render as read-only informational panels with a "Configuration not yet available" status card.
+> **Backend-dependent transaction rule**: Every Study Setup inspector requires
+> a real backend stage transaction schema and must commit through the canonical
+> model transaction path. If a specific schema is absent, the inspector may
+> render a read-only diagnostic card, but that card is a temporary development
+> state with a removal condition, not the target UX. The backend completion
+> plan for these schemas and for the CPU/GPU frequency-driven solver lives in
+> `05-frequency-driven-backend-refactor-plan.md`.
 
-#### Backend Contract Status
+#### Required Backend Transaction Contracts
 
-| Transaction Mapping | Backend Status | Notes |
+| Transaction Mapping | Required Production Meaning | Temporary State Policy |
 |---|---|---|
-| `stage.study_type` | ❌ Not implemented | No Rust type or OpenAPI path |
-| `stage.solver.eigenfrequency` | ❌ Not implemented | No parameter schema |
-| `stage.solver.frequency_response` | ❌ Not implemented | No sweep coordinate schema |
-| `stage.dependencies.equilibrium_source` | ❌ Not implemented | No dependency commit path |
-| `stage.physics.active_lanes` | ❌ Not implemented | No lane activation schema |
-| `stage.physics.boundary_conditions` | ❌ Not implemented | No boundary commit path |
-| `stage.physics.k_path` | ❌ Not implemented | No k-path commit path |
+| `stage.study_type` | Selects `Eigenmodes` or `FrequencyResponse` without conflating solver products. | Read-only only if no schema is present; must not mutate local UI state as a fake save. |
+| `stage.solver.eigenfrequency` | Persists selected-spectrum/modal parameters and requested eigensolver intent. | Modal settings may be diagnostic until the transaction schema and planner lowering are present. |
+| `stage.solver.frequency_response` | Persists frequency sweep coordinates, driven-response solver policy, and requested frequency-driven product. | Sweep controls may not display Apply/Save until persistence is wired. |
+| `stage.dependencies.equilibrium_source` | Persists `m0` source and equilibrium validity requirements. | A stale or missing equilibrium must block execution rather than run a formally solvable response. |
+| `stage.physics.active_lanes` | Persists active/passive solver lanes and preserves unsupported lane requests in diagnostics. | `inactive` or `unsupported` badges are temporary capability states, not final product behavior. |
+| `stage.physics.boundary_conditions` | Persists spin-wave and magnetostatic boundary intent, including `periodic_airbox_k0` and `floquet_airbox`. | Magnetic PBC must not imply magnetostatic PBC; missing `delta_phi` constraints must reject. |
+| `stage.physics.k_path` | Persists Floquet wavevector and k-path sampling in SI `rad/m`. | k-path authoring must not claim demag-k production until the complex provider exists. |
 
 #### 1. `Dynamics Study Configuration`
 - **Role**: Selects the primary dynamics simulation lane for the active stage.
@@ -511,9 +517,20 @@ The UI must distinguish:
 
 Unsupported states must point to the missing capability: dynamic demag, nonzero-k Floquet, GPU lane, modal production solver, missing field payload, missing equilibrium source, or missing artifact family. Expose explicit capability rejections like:
 - `floquet.nonzero_k.demag_unsupported` when dynamic demag is requested for a Floquet study.
+- `periodic_airbox_k0.production_cpu_not_validated` when a CPU k=0
+  periodic-airbox response bundle is diagnostic, missing scalar-potential seam
+  evidence, or accepted only with solve-error allowances.
+- `periodic_airbox_k0.production_gpu_not_validated` when a GPU k=0
+  periodic-airbox response bundle lacks GPU demag tangent-with-potential
+  provenance, uses a CPU dense/coupled-block payload, or has not passed the
+  managed GPU runtime gate.
 - `coupled.solid_mechanics.unsupported` or `coupled.rf.unsupported` when coupled multiphysics lanes are requested in Study Setup but are not supported by the active backend solver.
 - `frequency_domain.dmi_boundary_condition_uncertain` when DMI is enabled in frequency-domain studies but the backend cannot validate the DMI boundary operator. The COMSOL Micromagnetics Module manual notes that frequency-domain DMI boundary conditions are not yet fully resolved; Fullmag must not provide false certainty.
 - Display a clear "Capability Gated - Solver Not Available" status card in the Inspector when viewing draft configurations for unsupported coupled paths.
+
+These states are diagnostics. They may block an invalid run or explain missing
+artifacts, but they are not the production destination. Each one must map to the
+retirement ledger in `05-frequency-driven-backend-refactor-plan.md`.
 
 ### DMI Frequency-Domain Boundary Warning
 
@@ -528,9 +545,17 @@ If DMI is enabled in a frequency-domain study, boundary-condition support must b
 
 The diagnostic ID is `frequency_domain.dmi_boundary_condition_uncertain`. This is not about blocking research — it is about not providing false certainty.
 
-### Study Setup Phase 2 Lock
+### Study Setup Transaction Lock
 
-Until backend stage transaction schemas exist (`stage.study_type`, `stage.solver.*`, `stage.dependencies.*`, `stage.physics.*`, `stage.physics.boundary_conditions`, `stage.physics.k_path`), Study Setup Inspectors are **informational and read-only**. They must not:
+Until a specific backend stage transaction schema exists
+(`stage.study_type`, `stage.solver.*`, `stage.dependencies.*`,
+`stage.physics.*`, `stage.physics.boundary_conditions`, `stage.physics.k_path`),
+the corresponding Study Setup Inspector is **informational and read-only**.
+This is a temporary safety lock, not an accepted final state. It must be
+removed for each schema as soon as the backend contract, OpenAPI/resource
+surface, generated types, and transaction smoke are implemented.
+
+Read-only locked inspectors must not:
 - Call nonexistent endpoints.
 - Emulate success locally or in draft store.
 - Mutate solver configuration outside canonical transactions.
@@ -544,6 +569,10 @@ Backend transaction schema missing:
   stage.dependencies.equilibrium_source
   stage.physics.k_path
 ```
+
+When the schema exists, the same node must become an editable transaction-backed
+panel. Leaving an informational panel in place after backend support exists is
+a product bug.
 
 ## Performance And Memory Budget
 

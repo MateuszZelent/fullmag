@@ -4697,6 +4697,72 @@ async fn mesh_object_quality_returns_normalized_scope_statistics() {
 }
 
 #[tokio::test]
+async fn mesh_object_quality_fallback_reports_size_distribution() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh_value =
+            serde_json::to_value(sample_fem_mesh_payload()).expect("sample mesh should serialize");
+        mesh_value["per_domain_quality"] = serde_json::json!({
+            "7": {
+                "n_elements": 1,
+                "sicn_min": 0.12,
+                "sicn_max": 0.98,
+                "sicn_mean": 0.72,
+                "sicn_p5": 0.31,
+                "sicn_histogram": [1, 2, 3],
+                "gamma_min": 0.22,
+                "gamma_mean": 0.81,
+                "gamma_histogram": [4, 5, 6],
+                "volume_min": 2.0e-27,
+                "volume_max": 1.0e-25,
+                "volume_mean": 5.0e-26,
+                "volume_std": 1.0e-26,
+                "avg_quality": 0.72
+            }
+        });
+        let mesh =
+            serde_json::from_value(mesh_value).expect("mesh quality payload should deserialize");
+        snapshot.scene_document = Some(sample_scene_document());
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "effective_per_object_targets": {
+                "body": { "marker": 7, "maximum_element_size": 2e-9 }
+            }
+        }));
+        snapshot.mesh_revision = 26;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/objects/body/quality")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 26);
+    assert_eq!(json["quality"]["quality_source"], "per_domain_quality");
+    assert_eq!(json["quality"]["global"]["element_count"], 1);
+    assert_eq!(
+        json["quality"]["global"]["characteristic_size"]["histogram"][0]["count"],
+        1
+    );
+    assert_eq!(
+        json["quality"]["global"]["edge_length"]["histogram"][0]["count"],
+        3
+    );
+    assert_eq!(
+        json["quality"]["global"]["volume"]["histogram"][0]["count"],
+        1
+    );
+}
+
+#[tokio::test]
 async fn mesh_universe_quality_returns_airbox_scope_statistics() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -7158,6 +7224,141 @@ async fn mesh_region_membership_returns_indices_for_mesh_backed_region() {
     assert_eq!(json["element_indices"], serde_json::json!([0]));
     assert_eq!(json["node_indices"], serde_json::json!([0, 1, 2, 3]));
     assert_eq!(json["boundary_face_indices"], serde_json::json!([0]));
+}
+
+#[tokio::test]
+async fn mesh_region_quality_returns_scoped_size_and_quality_distributions() {
+    let artifact_path = std::env::temp_dir().join(format!(
+        "fullmag-region-quality-{}-{}.fmmq",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let mut artifact = Vec::new();
+    artifact.extend_from_slice(b"FMMQ");
+    artifact.push(1);
+    artifact.push(1);
+    artifact.extend_from_slice(&0u16.to_le_bytes());
+    artifact.extend_from_slice(&1u32.to_le_bytes());
+    artifact.extend_from_slice(&0b111u32.to_le_bytes());
+    artifact.extend_from_slice(&0u64.to_le_bytes());
+    artifact.extend_from_slice(&0u64.to_le_bytes());
+    artifact.extend_from_slice(&0.5f64.to_le_bytes());
+    artifact.extend_from_slice(&0.25f64.to_le_bytes());
+    artifact.extend_from_slice(&(1.0f64 / 6.0).to_le_bytes());
+    fs::write(&artifact_path, &artifact).unwrap();
+    let artifact_path_str = artifact_path.to_string_lossy().to_string();
+
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_fem_mesh_payload_with_manifest();
+        mesh.object_segments.push(FemMeshObjectSegment {
+            object_id: "body".to_string(),
+            geometry_id: Some("body_core".to_string()),
+            node_start: 0,
+            node_count: 4,
+            element_start: 0,
+            element_count: 1,
+            boundary_face_start: 0,
+            boundary_face_count: 1,
+        });
+        mesh.mesh_parts.push(FemMeshPartPayload {
+            id: "part:body:core".to_string(),
+            label: "Core".to_string(),
+            role: "magnetic_object".to_string(),
+            object_id: Some("body".to_string()),
+            geometry_id: Some("body_core".to_string()),
+            material_id: Some("mat-body".to_string()),
+            element_start: 0,
+            element_count: 1,
+            boundary_face_start: 0,
+            boundary_face_count: 1,
+            boundary_face_indices: vec![0],
+            node_start: 0,
+            node_count: 4,
+            node_indices: vec![0, 1, 2, 3],
+            surface_faces: vec![[0, 1, 2]],
+            bounds_min: Some([0.25, 0.25, 0.25]),
+            bounds_max: Some([0.75, 0.75, 0.75]),
+        });
+        let mut scene = sample_scene_document();
+        scene.objects[0]
+            .regions
+            .push(fullmag_authoring::SceneObjectRegion {
+                region_id: "body:core".to_string(),
+                owner_object: "body".to_string(),
+                name: "Core".to_string(),
+                shape: fullmag_authoring::SceneRegionShape::Sphere {
+                    center: [0.5, 0.5, 0.5],
+                    radius: 0.25,
+                },
+                frame: fullmag_authoring::SceneRegionFrame::Object,
+                enabled: true,
+                priority: 10,
+                mesh_policy: None,
+                material_overrides: Vec::new(),
+                texture_override: None,
+                material_transition: None,
+                realization_policy: fullmag_authoring::SceneRegionRealizationPolicy::Conformal,
+            });
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.mesh_revision = 41;
+        snapshot.scene_document = Some(scene);
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "quality_data_artifact": {
+                "kind": "fmmq.v1",
+                "schema_version": 1,
+                "path": artifact_path_str,
+                "byte_size": artifact.len(),
+                "element_count": 1,
+                "metrics": ["sicn", "gamma", "volume"]
+            }
+        }));
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/regions/body%3Acore/quality")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 41);
+    assert_eq!(json["region_id"], "body:core");
+    assert_eq!(json["quality"]["quality_source"], "region_membership");
+    assert_eq!(json["quality"]["membership_source"], "mesh_parts");
+    assert_eq!(json["quality"]["global"]["scope_id"], "region:body:core");
+    assert_eq!(json["quality"]["global"]["element_count"], 1);
+    assert_eq!(
+        json["quality"]["global"]["mesh_part_ids"][0],
+        "part:body:core"
+    );
+    assert_eq!(
+        json["quality"]["global"]["characteristic_size"]["histogram"][0]["count"],
+        1
+    );
+    let edge_histogram_count: u64 = json["quality"]["global"]["edge_length"]["histogram"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|bin| bin["count"].as_u64().unwrap())
+        .sum();
+    assert_eq!(edge_histogram_count, 6);
+    assert_eq!(
+        json["quality"]["global"]["volume"]["histogram"][0]["count"],
+        1
+    );
+    assert_eq!(json["quality"]["global"]["sicn"]["min"], 0.5);
+    assert_eq!(json["quality"]["global"]["gamma"]["min"], 0.25);
+    let _ = fs::remove_file(artifact_path);
 }
 
 #[tokio::test]
@@ -23579,6 +23780,7 @@ fn openapi_mesh_read_model_overlap_is_explicitly_transitional() {
         "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/quality",
         "/v2/sessions/current/meshing/meshes/shared-domain/quality/per-element",
         "/v2/sessions/current/meshing/meshes/shared-domain/quality-gates",
+        "/v2/sessions/current/meshing/meshes/regions/{region_id}/quality",
     ] {
         assert!(paths.contains_key(path), "OpenAPI missing `{path}`");
     }
@@ -23589,6 +23791,10 @@ fn openapi_mesh_read_model_overlap_is_explicitly_transitional() {
     assert!(
         schemas.contains_key("MeshQualityGatesResource"),
         "OpenAPI missing MeshQualityGatesResource schema"
+    );
+    assert!(
+        schemas.contains_key("MeshRegionQualityResource"),
+        "OpenAPI missing MeshRegionQualityResource schema"
     );
 }
 

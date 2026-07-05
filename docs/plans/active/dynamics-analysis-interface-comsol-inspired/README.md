@@ -24,10 +24,12 @@ Use this order when a conflict appears:
 2. `docs/physics/0600-fem-eigenmodes-linearized-llg.md`
 3. `docs/specs/frequency-domain-artifacts-v2.md`
 4. `docs/specs/resource-first-control-room-api-v2.md`
-5. `docs/specs/frontend-v2/*`
-6. `docs/plans/active/frequency-domain-fem-masterplan-2026-06-11/*`
-7. this folder
-8. COMSOL manual as external UX reference only
+5. `docs/specs/capability-matrix-v0.md`
+6. `docs/architecture/backend-golden-masterplan.md`
+7. `docs/specs/frontend-v2/*`
+8. `docs/plans/active/frequency-domain-fem-masterplan-2026-06-11/*`
+9. this folder
+10. COMSOL manual as external UX reference only
 
 ## Read Order
 
@@ -35,6 +37,7 @@ Use this order when a conflict appears:
 2. `02-target-interface-contract.md`
 3. `03-schematics.md`
 4. `04-implementation-plan.md`
+5. `05-frequency-driven-backend-refactor-plan.md`
 
 ## COMSOL Lesson In One Sentence
 
@@ -46,6 +49,21 @@ dataset, solution parameter, component, and color/range configuration.
 
 Fullmag should adopt that construction logic while presenting a more direct
 dynamics-analysis workbench.
+
+## Backend Correction
+
+The Control Room plan is valid only when backed by the corrected
+frequency-driven solver plan in `05-frequency-driven-backend-refactor-plan.md`.
+That file is the local backend correction for this folder: it separates the
+CPU and GPU `periodic_airbox_k0` driven-response work, preserves the future
+nonzero-k Floquet demag-k path for dispersion, and treats read-only,
+`unsupported`, `inactive`, `P2`, validation-only, and fallback states as
+temporary development diagnostics with removal criteria.
+
+Frontend checkboxes in `04-implementation-plan.md` do not prove backend
+production readiness. Backend production claims must come from the physics
+notes, capability matrix, native backend contracts, artifacts, and
+container-backed `just` verification gates.
 
 ## Non-Negotiable UI Principles
 
@@ -89,4 +107,3 @@ Any implementation from this plan must include:
 - `pnpm --dir apps/control-room typecheck`,
 - `pnpm --dir apps/control-room lint`,
 - `pnpm --dir apps/control-room test`.
-

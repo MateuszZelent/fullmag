@@ -40,6 +40,53 @@ bool local_block_coefficients_are_finite(const TangentOperatorLocalBlock &block)
         std::isfinite(block.a11);
 }
 
+double local_dot3(const double a[3], const double b[3]) noexcept
+{
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+void accumulate_edge_contribution(
+    const TangentFrameNode *nodes,
+    const TangentOperatorEdgeBlock &edge,
+    const double *tangent_in,
+    double *out_tangent,
+    double &max_abs_output) noexcept
+{
+    const std::uint64_t i0 = edge.node_i * 2;
+    const std::uint64_t j0 = edge.node_j * 2;
+    const double qi0 = tangent_in[i0];
+    const double qi1 = tangent_in[i0 + 1];
+    const double qj0 = tangent_in[j0];
+    const double qj1 = tangent_in[j0 + 1];
+    if (nodes == nullptr) {
+        const double di0 = edge.stiffness * (qi0 - qj0);
+        const double di1 = edge.stiffness * (qi1 - qj1);
+        out_tangent[i0] += di0;
+        out_tangent[i0 + 1] += di1;
+        out_tangent[j0] -= di0;
+        out_tangent[j0 + 1] -= di1;
+    } else {
+        const TangentFrameNode &node_i = nodes[edge.node_i];
+        const TangentFrameNode &node_j = nodes[edge.node_j];
+        const double r00 = local_dot3(node_i.e1, node_j.e1);
+        const double r01 = local_dot3(node_i.e1, node_j.e2);
+        const double r10 = local_dot3(node_i.e2, node_j.e1);
+        const double r11 = local_dot3(node_i.e2, node_j.e2);
+        const double ti_from_j0 = r00 * qj0 + r01 * qj1;
+        const double ti_from_j1 = r10 * qj0 + r11 * qj1;
+        const double tj_from_i0 = r00 * qi0 + r10 * qi1;
+        const double tj_from_i1 = r01 * qi0 + r11 * qi1;
+        out_tangent[i0] += edge.stiffness * (qi0 - ti_from_j0);
+        out_tangent[i0 + 1] += edge.stiffness * (qi1 - ti_from_j1);
+        out_tangent[j0] += edge.stiffness * (qj0 - tj_from_i0);
+        out_tangent[j0 + 1] += edge.stiffness * (qj1 - tj_from_i1);
+    }
+    max_abs_output = std::max(max_abs_output, std::abs(out_tangent[i0]));
+    max_abs_output = std::max(max_abs_output, std::abs(out_tangent[i0 + 1]));
+    max_abs_output = std::max(max_abs_output, std::abs(out_tangent[j0]));
+    max_abs_output = std::max(max_abs_output, std::abs(out_tangent[j0 + 1]));
+}
+
 } // namespace
 
 const char *operator_term_kind_to_string(FrequencyDomainOperatorTermKind kind) noexcept
@@ -215,13 +262,34 @@ FrequencyDomainStatus apply_tangent_edge_operator(
     double *out_tangent,
     TangentEdgeOperatorDiagnostics *out_diagnostics) noexcept
 {
+    return apply_tangent_edge_operator(
+        nullptr,
+        edges,
+        edge_count,
+        tangent_in,
+        shape,
+        out_tangent,
+        out_diagnostics);
+}
+
+FrequencyDomainStatus apply_tangent_edge_operator(
+    const TangentFrameNode *nodes,
+    const TangentOperatorEdgeBlock *edges,
+    std::uint64_t edge_count,
+    const double *tangent_in,
+    TangentWorkspaceShape shape,
+    double *out_tangent,
+    TangentEdgeOperatorDiagnostics *out_diagnostics) noexcept
+{
     if (out_diagnostics != nullptr) {
         *out_diagnostics = TangentEdgeOperatorDiagnostics{};
         out_diagnostics->node_count = shape.node_count;
         out_diagnostics->tangent_dof_count = shape.tangent_dof_count;
         out_diagnostics->edge_count = edge_count;
     }
-    if ((edge_count > 0 && edges == nullptr) || tangent_in == nullptr || out_tangent == nullptr) {
+    if ((edge_count > 0 && edges == nullptr) ||
+        tangent_in == nullptr ||
+        out_tangent == nullptr) {
         if (out_diagnostics != nullptr) {
             copy_error(out_diagnostics->error_message, "edge tangent operator requires non-null buffers");
         }
@@ -275,16 +343,12 @@ FrequencyDomainStatus apply_tangent_edge_operator(
     std::fill(out_tangent, out_tangent + shape.tangent_dof_count, 0.0);
     double max_abs_output = 0.0;
     for (std::uint64_t edge_index = 0; edge_index < edge_count; ++edge_index) {
-        const TangentOperatorEdgeBlock &edge = edges[edge_index];
-        for (std::uint64_t component = 0; component < 2; ++component) {
-            const std::uint64_t dof_i = edge.node_i * 2 + component;
-            const std::uint64_t dof_j = edge.node_j * 2 + component;
-            const double delta = edge.stiffness * (tangent_in[dof_i] - tangent_in[dof_j]);
-            out_tangent[dof_i] += delta;
-            out_tangent[dof_j] -= delta;
-            max_abs_output = std::max(max_abs_output, std::abs(out_tangent[dof_i]));
-            max_abs_output = std::max(max_abs_output, std::abs(out_tangent[dof_j]));
-        }
+        accumulate_edge_contribution(
+            nodes,
+            edges[edge_index],
+            tangent_in,
+            out_tangent,
+            max_abs_output);
     }
 
     if (out_diagnostics != nullptr) {
@@ -294,6 +358,27 @@ FrequencyDomainStatus apply_tangent_edge_operator(
 }
 
 FrequencyDomainStatus apply_tangent_combined_operator(
+    const TangentOperatorLocalBlock *node_blocks,
+    const TangentOperatorEdgeBlock *edges,
+    std::uint64_t edge_count,
+    const double *tangent_in,
+    TangentWorkspaceShape shape,
+    double *out_tangent,
+    TangentCombinedOperatorDiagnostics *out_diagnostics) noexcept
+{
+    return apply_tangent_combined_operator(
+        nullptr,
+        node_blocks,
+        edges,
+        edge_count,
+        tangent_in,
+        shape,
+        out_tangent,
+        out_diagnostics);
+}
+
+FrequencyDomainStatus apply_tangent_combined_operator(
+    const TangentFrameNode *nodes,
     const TangentOperatorLocalBlock *node_blocks,
     const TangentOperatorEdgeBlock *edges,
     std::uint64_t edge_count,
@@ -395,16 +480,12 @@ FrequencyDomainStatus apply_tangent_combined_operator(
     }
 
     for (std::uint64_t edge_index = 0; edge_index < edge_count; ++edge_index) {
-        const TangentOperatorEdgeBlock &edge = edges[edge_index];
-        for (std::uint64_t component = 0; component < 2; ++component) {
-            const std::uint64_t dof_i = edge.node_i * 2 + component;
-            const std::uint64_t dof_j = edge.node_j * 2 + component;
-            const double delta = edge.stiffness * (tangent_in[dof_i] - tangent_in[dof_j]);
-            out_tangent[dof_i] += delta;
-            out_tangent[dof_j] -= delta;
-            max_abs_output = std::max(max_abs_output, std::abs(out_tangent[dof_i]));
-            max_abs_output = std::max(max_abs_output, std::abs(out_tangent[dof_j]));
-        }
+        accumulate_edge_contribution(
+            nodes,
+            edges[edge_index],
+            tangent_in,
+            out_tangent,
+            max_abs_output);
     }
 
     if (out_diagnostics != nullptr) {

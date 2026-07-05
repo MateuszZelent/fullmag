@@ -24,10 +24,14 @@ PERIODIC_AIRBOX_CPU_DEMAG_PRECONDITIONER_VARIANTS = {
     "graph_demag_coarse",
     "demag_coarse",
     "block_jacobi",
+    "none",
 }
 GPU_DYNAMIC_DEMAG_TANGENT_OPERATOR_SOURCES = {
     "explicit_demag_tangent_matrix",
     "matrix_free_demag_tangent_provider",
+}
+GPU_DYNAMIC_DEMAG_OPERATOR_SOURCES = {
+    "matrix_free_mfem_demag_phi_consistency_schur_provider",
 }
 
 
@@ -150,6 +154,17 @@ def require_non_negative_finite_number(value: object, name: str) -> None:
         )
 
 
+def require_positive_finite_number(value: object, name: str) -> float:
+    require_finite_number(value, name)
+    number = float(value)
+    if number <= 0.0:
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            f"{name} must be positive"
+        )
+    return number
+
+
 def require_fraction(value: object, name: str) -> float:
     require_finite_number(value, name)
     fraction = float(value)
@@ -211,6 +226,90 @@ def require_coupled_block_norms(value: object, name: str) -> None:
         require_non_negative_finite_number(
             value.get(field_name),
             f"{name}.{field_name}",
+        )
+
+
+def require_periodic_airbox_delta_phi_seam_diagnostics(
+    source: dict,
+    source_name: str,
+) -> None:
+    require_equal(
+        source.get("delta_phi_phase_validation_status"),
+        "ok",
+        f"{source_name}.delta_phi_phase_validation_status",
+    )
+    require_non_negative_finite_number(
+        source.get("delta_phi_phase_max_residual"),
+        f"{source_name}.delta_phi_phase_max_residual",
+    )
+    phase_residual = float(source.get("delta_phi_phase_max_residual"))
+    if phase_residual > 1.0e-7:
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            f"{source_name}.delta_phi_phase_max_residual exceeds tolerance"
+        )
+    require_equal(
+        source.get("delta_phi_seam_validation_status"),
+        "ok",
+        f"{source_name}.delta_phi_seam_validation_status",
+    )
+    require_non_negative_finite_number(
+        source.get("delta_phi_seam_max_after_offset"),
+        f"{source_name}.delta_phi_seam_max_after_offset",
+    )
+    seam_residual = float(source.get("delta_phi_seam_max_after_offset"))
+    if seam_residual > 1.0e-7:
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            f"{source_name}.delta_phi_seam_max_after_offset exceeds tolerance"
+        )
+    require_finite_number(
+        source.get("delta_phi_seam_best_constant_offset_real"),
+        f"{source_name}.delta_phi_seam_best_constant_offset_real",
+    )
+    require_finite_number(
+        source.get("delta_phi_seam_best_constant_offset_imag"),
+        f"{source_name}.delta_phi_seam_best_constant_offset_imag",
+    )
+    h_status = require_non_empty_string(
+        source.get("h_demag_seam_validation_status"),
+        f"{source_name}.h_demag_seam_validation_status",
+    )
+    if h_status != "ok":
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            f"{source_name}.h_demag_seam_validation_status must be ok"
+        )
+    require_non_empty_string(
+        source.get("h_demag_seam_validation_reason"),
+        f"{source_name}.h_demag_seam_validation_reason",
+    )
+    require_non_negative_finite_number(
+        source.get("h_demag_seam_max_tangent_mismatch"),
+        f"{source_name}.h_demag_seam_max_tangent_mismatch",
+    )
+    flux_status = require_non_empty_string(
+        source.get("delta_phi_flux_validation_status"),
+        f"{source_name}.delta_phi_flux_validation_status",
+    )
+    if flux_status != "ok":
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            f"{source_name}.delta_phi_flux_validation_status must be ok"
+        )
+    require_non_empty_string(
+        source.get("delta_phi_flux_validation_reason"),
+        f"{source_name}.delta_phi_flux_validation_reason",
+    )
+    require_non_negative_finite_number(
+        source.get("delta_phi_flux_max_residual"),
+        f"{source_name}.delta_phi_flux_max_residual",
+    )
+    flux_residual = float(source.get("delta_phi_flux_max_residual"))
+    if flux_residual > 1.0e-7:
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            f"{source_name}.delta_phi_flux_max_residual exceeds tolerance"
         )
 
 
@@ -549,11 +648,19 @@ def require_response_observables(point: dict, point_name: str) -> None:
                 ),
                 f"{point_name}.absorbed_power_density_provenance.normalization": (
                     absorbed_provenance.get("normalization"),
-                    "0.5*mu0*abs(omega)*abs(imag(sum(Ms*response*conj(drive))))/tangent_dof_count",
+                    "0.5*mu0*omega*volume_integral(imag(conj(h_drive)*delta_m*Ms))/magnetic_volume",
+                ),
+                f"{point_name}.absorbed_power_density_provenance.volume_weighted": (
+                    absorbed_provenance.get("volume_weighted"),
+                    True,
                 ),
                 f"{point_name}.absorbed_power_density_provenance.full_power_density": (
                     absorbed_provenance.get("full_power_density"),
                     True,
+                ),
+                f"{point_name}.absorbed_power_density_provenance.absolute_value_applied": (
+                    absorbed_provenance.get("absolute_value_applied"),
+                    False,
                 ),
             }
         )
@@ -563,6 +670,13 @@ def require_response_observables(point: dict, point_name: str) -> None:
                 f"{point_name}.absorbed_power_density_provenance.ms_source must be uniform or per_node_field"
             )
     elif absorbed_kind == "drive_projected_absorption_proxy":
+        has_mu0_ms_factor = absorbed_provenance.get("mu0_ms_factor_applied") is True
+        expected_units = "drive_projected_proxy_not_W_per_m3" if has_mu0_ms_factor else "proxy_not_W_per_m3"
+        expected_normalization = (
+            "0.5*mu0*omega*imag(sum(Ms*response*conj(drive)))/tangent_dof_count"
+            if has_mu0_ms_factor
+            else "0.5*omega*imag(sum(response*conj(drive)))/tangent_dof_count"
+        )
         require_expected(
             {
                 f"{point_name}.absorbed_power_density_provenance.basis": (
@@ -575,26 +689,41 @@ def require_response_observables(point: dict, point_name: str) -> None:
                 ),
                 f"{point_name}.absorbed_power_density_provenance.units": (
                     absorbed_provenance.get("units"),
-                    "proxy_not_W_per_m3",
+                    expected_units,
                 ),
                 f"{point_name}.absorbed_power_density_provenance.requires_mu0_ms_factor": (
                     absorbed_provenance.get("requires_mu0_ms_factor"),
-                    True,
-                ),
-                f"{point_name}.absorbed_power_density_provenance.ms_factor_applied": (
-                    absorbed_provenance.get("ms_factor_applied"),
-                    False,
+                    not has_mu0_ms_factor,
                 ),
                 f"{point_name}.absorbed_power_density_provenance.normalization": (
                     absorbed_provenance.get("normalization"),
-                    "0.5*abs(omega)*abs(imag(sum(response*conj(drive))))/tangent_dof_count",
+                    expected_normalization,
                 ),
                 f"{point_name}.absorbed_power_density_provenance.full_power_density": (
                     absorbed_provenance.get("full_power_density"),
                     False,
                 ),
+                f"{point_name}.absorbed_power_density_provenance.absolute_value_applied": (
+                    absorbed_provenance.get("absolute_value_applied"),
+                    False,
+                ),
             }
         )
+        if has_mu0_ms_factor:
+            if absorbed_provenance.get("ms_source") not in {"uniform", "per_node_field"}:
+                raise SystemExit(
+                    "invalid frequency-domain runtime artifacts:\n"
+                    f"{point_name}.absorbed_power_density_provenance.ms_source must be uniform or per_node_field"
+                )
+        else:
+            require_expected(
+                {
+                    f"{point_name}.absorbed_power_density_provenance.ms_factor_applied": (
+                        absorbed_provenance.get("ms_factor_applied"),
+                        False,
+                    ),
+                }
+            )
     else:
         raise SystemExit(
             "invalid frequency-domain runtime artifacts:\n"
@@ -1151,11 +1280,21 @@ def require_gpu_dynamic_demag_operator_source(
     )
     if "demag" not in operator_terms:
         return
-    source = diagnostics.get("demag_tangent_operator_source")
+    source_field = "demag_tangent_operator_source"
+    source = diagnostics.get(source_field)
     if source not in GPU_DYNAMIC_DEMAG_TANGENT_OPERATOR_SOURCES:
+        source_field = "dynamic_demag_operator_source"
+        source = diagnostics.get(source_field)
+    if (
+        source_field == "demag_tangent_operator_source"
+        and source not in GPU_DYNAMIC_DEMAG_TANGENT_OPERATOR_SOURCES
+    ) or (
+        source_field == "dynamic_demag_operator_source"
+        and source not in GPU_DYNAMIC_DEMAG_OPERATOR_SOURCES
+    ):
         raise SystemExit(
             "invalid frequency-domain runtime artifacts:\n"
-            "diagnostics.demag_tangent_operator_source must identify the GPU dynamic-demag tangent operator when operator_terms_included contains demag"
+            "diagnostics.demag_tangent_operator_source or diagnostics.dynamic_demag_operator_source must identify the GPU dynamic-demag operator when operator_terms_included contains demag"
         )
     manifest_diagnostics = manifest.get("diagnostics")
     if not isinstance(manifest_diagnostics, dict):
@@ -1164,9 +1303,9 @@ def require_gpu_dynamic_demag_operator_source(
             "manifest.diagnostics must be an object"
         )
     require_equal(
-        manifest_diagnostics.get("demag_tangent_operator_source"),
+        manifest_diagnostics.get(source_field),
         source,
-        "manifest.diagnostics.demag_tangent_operator_source",
+        f"manifest.diagnostics.{source_field}",
     )
     manifest_terms_value = manifest_diagnostics.get("operator_terms_included")
     if manifest_terms_value is not None:
@@ -1179,6 +1318,187 @@ def require_gpu_dynamic_demag_operator_source(
                 "invalid frequency-domain runtime artifacts:\n"
                 "manifest.diagnostics.operator_terms_included must include demag when diagnostics.operator_terms_included includes demag"
             )
+
+
+def require_frequency_response_demag_solver_policy(
+    diagnostics: dict,
+    manifest_diagnostics: dict,
+) -> None:
+    diagnostics_policy = diagnostics.get("frequency_response_demag_solver_policy_effective")
+    manifest_policy = manifest_diagnostics.get("frequency_response_demag_solver_policy_effective")
+    if not isinstance(diagnostics_policy, dict):
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "diagnostics.frequency_response_demag_solver_policy_effective must be an object"
+        )
+    require_equal(
+        manifest_policy,
+        diagnostics_policy,
+        "manifest.diagnostics.frequency_response_demag_solver_policy_effective",
+    )
+    rtol = require_positive_finite_number(
+        diagnostics_policy.get("relative_tolerance"),
+        "diagnostics.frequency_response_demag_solver_policy_effective.relative_tolerance",
+    )
+    max_iterations = require_positive_integer(
+        diagnostics_policy.get("max_iterations"),
+        "diagnostics.frequency_response_demag_solver_policy_effective.max_iterations",
+    )
+    for source_name, source in [
+        ("diagnostics", diagnostics),
+        ("manifest.diagnostics", manifest_diagnostics),
+    ]:
+        require_equal(
+            source.get("demag_solver_relative_tolerance"),
+            rtol,
+            f"{source_name}.demag_solver_relative_tolerance",
+        )
+        require_equal(
+            source.get("demag_solver_max_iterations"),
+            max_iterations,
+            f"{source_name}.demag_solver_max_iterations",
+        )
+
+
+def require_residual_consistency_diagnostics(
+    diagnostics: dict,
+    manifest_diagnostics: dict,
+) -> None:
+    for field_name in [
+        "residual_consistency_status",
+        "residual_consistency_relative_gap",
+        "residual_consistency_recomputed_to_tracked_ratio",
+        "residual_consistency_relative_gap_threshold",
+    ]:
+        require_equal(
+            manifest_diagnostics.get(field_name),
+            diagnostics.get(field_name),
+            f"manifest.diagnostics.{field_name}",
+        )
+    status = require_non_empty_string(
+        diagnostics.get("residual_consistency_status"),
+        "diagnostics.residual_consistency_status",
+    )
+    if status not in {"ok", "degraded", "not_available"}:
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "diagnostics.residual_consistency_status must be ok, degraded, or not_available"
+        )
+    gap_value = diagnostics.get("residual_consistency_relative_gap")
+    require_non_negative_finite_number(
+        gap_value,
+        "diagnostics.residual_consistency_relative_gap",
+    )
+    gap = float(gap_value)
+    threshold = require_positive_finite_number(
+        diagnostics.get("residual_consistency_relative_gap_threshold"),
+        "diagnostics.residual_consistency_relative_gap_threshold",
+    )
+    require_finite_number(
+        diagnostics.get("residual_consistency_recomputed_to_tracked_ratio"),
+        "diagnostics.residual_consistency_recomputed_to_tracked_ratio",
+    )
+    if status == "ok" and gap > threshold:
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "diagnostics.residual_consistency_status is ok but the residual gap exceeds the threshold"
+        )
+    if status == "degraded" and gap <= threshold:
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "diagnostics.residual_consistency_status is degraded but the residual gap does not exceed the threshold"
+        )
+
+
+def require_gpu_periodic_airbox_poisson_provenance(
+    diagnostics: dict,
+    manifest: dict,
+) -> None:
+    manifest_diagnostics = manifest.get("diagnostics")
+    resolved_execution = manifest.get("resolved_execution")
+    capabilities = manifest.get("capabilities")
+    if not isinstance(manifest_diagnostics, dict):
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "manifest.diagnostics must be an object"
+        )
+    if not isinstance(resolved_execution, dict):
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "manifest.resolved_execution must be an object"
+        )
+    if not isinstance(capabilities, dict):
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "manifest.capabilities must be an object"
+        )
+    expected = {
+        "diagnostics.uses_gpu_poisson": (
+            diagnostics.get("uses_gpu_poisson"),
+            True,
+        ),
+        "diagnostics.demag_operator_mode": (
+            diagnostics.get("demag_operator_mode"),
+            "device_hypre_poisson",
+        ),
+        "diagnostics.hypre_execution_policy": (
+            diagnostics.get("hypre_execution_policy"),
+            "device",
+        ),
+        "diagnostics.demag_provider_residency": (
+            diagnostics.get("demag_provider_residency"),
+            "gpu",
+        ),
+        "manifest.diagnostics.uses_gpu_poisson": (
+            manifest_diagnostics.get("uses_gpu_poisson"),
+            True,
+        ),
+        "manifest.diagnostics.demag_operator_mode": (
+            manifest_diagnostics.get("demag_operator_mode"),
+            "device_hypre_poisson",
+        ),
+        "manifest.diagnostics.hypre_execution_policy": (
+            manifest_diagnostics.get("hypre_execution_policy"),
+            "device",
+        ),
+        "manifest.diagnostics.demag_provider_residency": (
+            manifest_diagnostics.get("demag_provider_residency"),
+            "gpu",
+        ),
+        "manifest.resolved_execution.uses_gpu_poisson": (
+            resolved_execution.get("uses_gpu_poisson"),
+            True,
+        ),
+        "manifest.resolved_execution.demag_operator_mode": (
+            resolved_execution.get("demag_operator_mode"),
+            "device_hypre_poisson",
+        ),
+        "manifest.resolved_execution.hypre_execution_policy": (
+            resolved_execution.get("hypre_execution_policy"),
+            "device",
+        ),
+        "manifest.resolved_execution.demag_provider_residency": (
+            resolved_execution.get("demag_provider_residency"),
+            "gpu",
+        ),
+        "manifest.capabilities.uses_gpu_poisson": (
+            capabilities.get("uses_gpu_poisson"),
+            True,
+        ),
+        "manifest.capabilities.demag_operator_mode": (
+            capabilities.get("demag_operator_mode"),
+            "device_hypre_poisson",
+        ),
+        "manifest.capabilities.hypre_execution_policy": (
+            capabilities.get("hypre_execution_policy"),
+            "device",
+        ),
+        "manifest.capabilities.demag_provider_residency": (
+            capabilities.get("demag_provider_residency"),
+            "gpu",
+        ),
+    }
+    require_expected(expected)
 
 
 def require_progress_json_checkpoint(progress: dict, artifact_name: str = "progress") -> dict:
@@ -2427,6 +2747,7 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
     *,
     diagnostics: dict,
     manifest: dict,
+    expected_execution_lane: str = "production_cpu",
     require_frequency_point_artifacts: bool = True,
 ) -> None:
     manifest_diagnostics = manifest.get("diagnostics")
@@ -2472,18 +2793,18 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
         "schur_phi_consistency_provider" if schur_coupled_block else "magnetic_only"
     )
     expected_residual_partition_status = (
-        "coupled_block"
+        "magnetic_schur_phi_consistency_provider"
         if schur_coupled_block
         else "magnetic_only_demag_tangent_provider"
     )
     expected = {
         "diagnostics.requested_execution_lane": (
             diagnostics.get("requested_execution_lane"),
-            "production_cpu",
+            expected_execution_lane,
         ),
         "diagnostics.resolved_execution_lane": (
             diagnostics.get("resolved_execution_lane"),
-            "production_cpu",
+            expected_execution_lane,
         ),
         "diagnostics.validation_fallback_used": (
             diagnostics.get("validation_fallback_used"),
@@ -2515,11 +2836,11 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
         ),
         "manifest.resolved_execution.requested_execution_lane": (
             resolved_execution.get("requested_execution_lane"),
-            "production_cpu",
+            expected_execution_lane,
         ),
         "manifest.resolved_execution.resolved_execution_lane": (
             resolved_execution.get("resolved_execution_lane"),
-            "production_cpu",
+            expected_execution_lane,
         ),
         f"manifest.diagnostics.{expected_operator_field}": (
             manifest_diagnostics.get(expected_operator_field),
@@ -2565,6 +2886,20 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
         ),
     }
     require_expected(expected)
+    if expected_execution_lane == "production_gpu":
+        require_gpu_periodic_airbox_poisson_provenance(diagnostics, manifest)
+    require_periodic_airbox_delta_phi_seam_diagnostics(
+        diagnostics,
+        "diagnostics",
+    )
+    require_periodic_airbox_delta_phi_seam_diagnostics(
+        manifest_diagnostics,
+        "manifest.diagnostics",
+    )
+    require_periodic_airbox_delta_phi_seam_diagnostics(
+        physics,
+        "manifest.physics",
+    )
     exchange_edge_count = require_non_negative_integer(
         diagnostics.get("exchange_edge_count"),
         "diagnostics.exchange_edge_count",
@@ -2579,14 +2914,15 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
         if exchange_edge_count > 0
         else "demag_coarse"
     )
-    if schur_coupled_block:
-        expected_preconditioner_kind = "mfem_phi_consistency_schur_right"
-    else:
-        expected_preconditioner_kind = (
-            "mfem_tangent_graph_demag_coarse_right"
-            if exchange_edge_count > 0
-            else "mfem_tangent_demag_coarse_right"
-        )
+    expected_preconditioner_kinds = {
+        "graph_demag_coarse": (
+            "static_periodic_reduced_mfem_schur_residual_right"
+            if schur_coupled_block
+            else "mfem_tangent_graph_demag_coarse_right"
+        ),
+        "demag_coarse": "mfem_tangent_demag_coarse_right",
+        "block_jacobi": "mfem_tangent_block_jacobi_right",
+    }
     preconditioner_variant = require_non_empty_string(
         diagnostics.get("krylov_preconditioner_variant"),
         "diagnostics.krylov_preconditioner_variant",
@@ -2598,33 +2934,270 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
             f"{sorted(PERIODIC_AIRBOX_CPU_DEMAG_PRECONDITIONER_VARIANTS)!r}"
         )
     require_equal(
-        preconditioner_variant,
-        expected_preconditioner_variant,
-        "diagnostics.krylov_preconditioner_variant",
-    )
-    require_equal(
         manifest_diagnostics.get("krylov_preconditioner_variant"),
         preconditioner_variant,
         "manifest.diagnostics.krylov_preconditioner_variant",
     )
+    for field_name in [
+        "krylov_preconditioner_requested_variant",
+        "krylov_preconditioner_initial_variant",
+        "krylov_preconditioner_kind",
+        "krylov_preconditioner_applied",
+        "krylov_preconditioner_setup_status",
+        "graph_preconditioner_relaxation",
+        "right_preconditioner_probe_available",
+        "right_preconditioner_probe_residual_l2_norm",
+        "right_preconditioner_probe_relative_residual_l2_norm",
+        "right_preconditioner_auto_disabled",
+        "right_preconditioner_probe_disable_relative_threshold",
+        "right_preconditioner_auto_disable_reason",
+    ]:
+        require_equal(
+            manifest_diagnostics.get(field_name),
+            diagnostics.get(field_name),
+            f"manifest.diagnostics.{field_name}",
+        )
+    require_frequency_response_demag_solver_policy(diagnostics, manifest_diagnostics)
+    require_residual_consistency_diagnostics(diagnostics, manifest_diagnostics)
+    if preconditioner_variant not in {"none", expected_preconditioner_variant, "block_jacobi"}:
+        require_equal(
+            preconditioner_variant,
+            expected_preconditioner_variant,
+            "diagnostics.krylov_preconditioner_variant",
+        )
     for source_name, source in [
         ("diagnostics", diagnostics),
         ("manifest.diagnostics", manifest_diagnostics),
     ]:
-        require_equal(
-            source.get("krylov_preconditioner_kind"),
-            expected_preconditioner_kind,
-            f"{source_name}.krylov_preconditioner_kind",
+        requested_preconditioner_variant = require_non_empty_string(
+            source.get("krylov_preconditioner_requested_variant"),
+            f"{source_name}.krylov_preconditioner_requested_variant",
         )
-        require_equal(
-            source.get("krylov_preconditioner_applied"),
-            True,
-            f"{source_name}.krylov_preconditioner_applied",
+        if requested_preconditioner_variant not in (
+            PERIODIC_AIRBOX_CPU_DEMAG_PRECONDITIONER_VARIANTS | {"auto"}
+        ):
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                f"{source_name}.krylov_preconditioner_requested_variant must be one of "
+                f"{sorted(PERIODIC_AIRBOX_CPU_DEMAG_PRECONDITIONER_VARIANTS | {'auto'})!r}"
+            )
+        initial_preconditioner_variant = require_non_empty_string(
+            source.get("krylov_preconditioner_initial_variant"),
+            f"{source_name}.krylov_preconditioner_initial_variant",
         )
-        require_equal(
-            source.get("krylov_preconditioner_setup_status"),
-            "ok",
-            f"{source_name}.krylov_preconditioner_setup_status",
+        if initial_preconditioner_variant not in PERIODIC_AIRBOX_CPU_DEMAG_PRECONDITIONER_VARIANTS:
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                f"{source_name}.krylov_preconditioner_initial_variant must be one of "
+                f"{sorted(PERIODIC_AIRBOX_CPU_DEMAG_PRECONDITIONER_VARIANTS)!r}"
+            )
+        auto_disabled_value = source.get("right_preconditioner_auto_disabled")
+        if not isinstance(auto_disabled_value, bool):
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                f"{source_name}.right_preconditioner_auto_disabled must be a boolean"
+            )
+        auto_disabled = auto_disabled_value
+        graph_relaxation_value = source.get("graph_preconditioner_relaxation")
+        require_non_negative_finite_number(
+            graph_relaxation_value,
+            f"{source_name}.graph_preconditioner_relaxation",
+        )
+        graph_relaxation = float(graph_relaxation_value)
+        if initial_preconditioner_variant == "graph_demag_coarse":
+            if not (0.0 < graph_relaxation <= 1.0):
+                raise SystemExit(
+                    "invalid frequency-domain runtime artifacts:\n"
+                    f"{source_name}.graph_preconditioner_relaxation must be in (0, 1] "
+                    "when graph_demag_coarse is configured"
+                )
+        elif graph_relaxation != 0.0:
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                f"{source_name}.graph_preconditioner_relaxation must be 0.0 "
+                "when graph_demag_coarse is not configured"
+            )
+        if preconditioner_variant == "none":
+            require_equal(
+                source.get("krylov_preconditioner_kind"),
+                "none",
+                f"{source_name}.krylov_preconditioner_kind",
+            )
+            require_equal(
+                source.get("krylov_preconditioner_applied"),
+                False,
+                f"{source_name}.krylov_preconditioner_applied",
+            )
+            require_equal(
+                source.get("krylov_preconditioner_setup_status"),
+                "not_configured",
+                f"{source_name}.krylov_preconditioner_setup_status",
+            )
+            if auto_disabled:
+                require_equal(
+                    requested_preconditioner_variant,
+                    "auto",
+                    f"{source_name}.krylov_preconditioner_requested_variant",
+                )
+                require_equal(
+                    initial_preconditioner_variant,
+                    expected_preconditioner_variant,
+                    f"{source_name}.krylov_preconditioner_initial_variant",
+                )
+                require_equal(
+                    source.get("right_preconditioner_probe_available"),
+                    True,
+                    f"{source_name}.right_preconditioner_probe_available",
+                )
+                threshold_value = source.get(
+                    "right_preconditioner_probe_disable_relative_threshold"
+                )
+                require_non_negative_finite_number(
+                    threshold_value,
+                    f"{source_name}.right_preconditioner_probe_disable_relative_threshold",
+                )
+                threshold = float(threshold_value)
+                if threshold <= 0.0:
+                    raise SystemExit(
+                        "invalid frequency-domain runtime artifacts:\n"
+                        f"{source_name}.right_preconditioner_probe_disable_relative_threshold must be positive"
+                    )
+                relative_probe_value = source.get(
+                    "right_preconditioner_probe_relative_residual_l2_norm"
+                )
+                require_non_negative_finite_number(
+                    relative_probe_value,
+                    f"{source_name}.right_preconditioner_probe_relative_residual_l2_norm",
+                )
+                relative_probe = float(relative_probe_value)
+                auto_disable_reason = source.get(
+                    "right_preconditioner_auto_disable_reason"
+                )
+                if (
+                    auto_disable_reason
+                    == "probe_relative_residual_above_threshold"
+                    and relative_probe <= threshold
+                ):
+                    raise SystemExit(
+                        "invalid frequency-domain runtime artifacts:\n"
+                        f"{source_name}.right_preconditioner_probe_relative_residual_l2_norm "
+                        "must exceed the disable threshold when auto fallback is recorded"
+                    )
+                if auto_disable_reason not in {
+                    "probe_relative_residual_above_threshold",
+                    "solve_error_retry_without_right_preconditioner",
+                }:
+                    raise SystemExit(
+                        "invalid frequency-domain runtime artifacts:\n"
+                        f"{source_name}.right_preconditioner_auto_disable_reason must describe "
+                        "the auto fallback trigger"
+                    )
+            else:
+                require_equal(
+                    requested_preconditioner_variant,
+                    "none",
+                    f"{source_name}.krylov_preconditioner_requested_variant",
+                )
+                require_equal(
+                    initial_preconditioner_variant,
+                    "none",
+                    f"{source_name}.krylov_preconditioner_initial_variant",
+                )
+                require_equal(
+                    source.get("right_preconditioner_probe_available"),
+                    False,
+                    f"{source_name}.right_preconditioner_probe_available",
+                )
+        else:
+            selected_after_auto_fallback = (
+                auto_disabled
+                and requested_preconditioner_variant == "auto"
+                and initial_preconditioner_variant == expected_preconditioner_variant
+                and preconditioner_variant == "block_jacobi"
+            )
+            if selected_after_auto_fallback:
+                threshold_value = source.get(
+                    "right_preconditioner_probe_disable_relative_threshold"
+                )
+                require_non_negative_finite_number(
+                    threshold_value,
+                    f"{source_name}.right_preconditioner_probe_disable_relative_threshold",
+                )
+                threshold = float(threshold_value)
+                if threshold <= 0.0:
+                    raise SystemExit(
+                        "invalid frequency-domain runtime artifacts:\n"
+                        f"{source_name}.right_preconditioner_probe_disable_relative_threshold must be positive"
+                    )
+                relative_probe_value = source.get(
+                    "right_preconditioner_probe_relative_residual_l2_norm"
+                )
+                require_non_negative_finite_number(
+                    relative_probe_value,
+                    f"{source_name}.right_preconditioner_probe_relative_residual_l2_norm",
+                )
+                relative_probe = float(relative_probe_value)
+                if relative_probe <= threshold:
+                    raise SystemExit(
+                        "invalid frequency-domain runtime artifacts:\n"
+                        f"{source_name}.right_preconditioner_probe_relative_residual_l2_norm "
+                        "must exceed the disable threshold when auto fallback is recorded"
+                    )
+                require_equal(
+                    source.get("right_preconditioner_auto_disable_reason"),
+                    "probe_relative_residual_above_threshold",
+                    f"{source_name}.right_preconditioner_auto_disable_reason",
+                )
+            else:
+                if preconditioner_variant == "block_jacobi":
+                    raise SystemExit(
+                        "invalid frequency-domain runtime artifacts:\n"
+                        f"{source_name}.krylov_preconditioner_variant=block_jacobi is only valid "
+                        "as an auto fallback after the expected demag preconditioner is disabled"
+                    )
+                require_equal(
+                    initial_preconditioner_variant,
+                    preconditioner_variant,
+                    f"{source_name}.krylov_preconditioner_initial_variant",
+                )
+                if requested_preconditioner_variant not in {"auto", preconditioner_variant}:
+                    raise SystemExit(
+                        "invalid frequency-domain runtime artifacts:\n"
+                        f"{source_name}.krylov_preconditioner_requested_variant must be auto "
+                        "or match the selected concrete preconditioner variant"
+                    )
+                require_equal(
+                    auto_disabled,
+                    False,
+                    f"{source_name}.right_preconditioner_auto_disabled",
+                )
+            require_equal(
+                source.get("krylov_preconditioner_kind"),
+                expected_preconditioner_kinds.get(preconditioner_variant),
+                f"{source_name}.krylov_preconditioner_kind",
+            )
+            require_equal(
+                source.get("krylov_preconditioner_applied"),
+                True,
+                f"{source_name}.krylov_preconditioner_applied",
+            )
+            require_equal(
+                source.get("krylov_preconditioner_setup_status"),
+                "ok",
+                f"{source_name}.krylov_preconditioner_setup_status",
+            )
+            require_equal(
+                source.get("right_preconditioner_probe_available"),
+                True,
+                f"{source_name}.right_preconditioner_probe_available",
+            )
+        require_non_negative_finite_number(
+            source.get("right_preconditioner_probe_residual_l2_norm"),
+            f"{source_name}.right_preconditioner_probe_residual_l2_norm",
+        )
+        require_non_negative_finite_number(
+            source.get("right_preconditioner_probe_relative_residual_l2_norm"),
+            f"{source_name}.right_preconditioner_probe_relative_residual_l2_norm",
         )
         history = require_finite_number_list(
             source.get("gmres_relative_residual_history"),
@@ -2763,6 +3336,31 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
                 ),
             }
         )
+        require_periodic_airbox_delta_phi_seam_diagnostics(
+            demag_contribution,
+            f"{point_name}.demag_contribution",
+        )
+        if expected_execution_lane == "production_gpu":
+            require_expected(
+                {
+                    f"{point_name}.demag_contribution.uses_gpu_poisson": (
+                        demag_contribution.get("uses_gpu_poisson"),
+                        True,
+                    ),
+                    f"{point_name}.demag_contribution.demag_operator_mode": (
+                        demag_contribution.get("demag_operator_mode"),
+                        "device_hypre_poisson",
+                    ),
+                    f"{point_name}.demag_contribution.hypre_execution_policy": (
+                        demag_contribution.get("hypre_execution_policy"),
+                        "device",
+                    ),
+                    f"{point_name}.demag_contribution.demag_provider_residency": (
+                        demag_contribution.get("demag_provider_residency"),
+                        "gpu",
+                    ),
+                }
+            )
         if demag_contribution.get("unsupported_reason") is not None:
             raise SystemExit(
                 "invalid frequency-domain runtime artifacts:\n"
@@ -3212,10 +3810,12 @@ def main() -> int:
     require_periodic_airbox_gpu_unsupported = False
     require_floquet_airbox_gpu_unsupported = False
     require_periodic_airbox_cpu_demag_solved = False
+    require_periodic_airbox_gpu_demag_solved = False
     require_m5_equilibrium_provenance = False
     require_frozen_magnetic_submesh = False
     require_min_frequency_points: int | None = None
     require_response_peak = False
+    require_interior_response_peak = False
     require_field_payloads_for_frequency_points = False
     require_derived_peak_mode = False
     allow_interrupted = False
@@ -3242,6 +3842,9 @@ def main() -> int:
     if "--require-periodic-airbox-cpu-demag-solved" in args:
         require_periodic_airbox_cpu_demag_solved = True
         args.remove("--require-periodic-airbox-cpu-demag-solved")
+    if "--require-periodic-airbox-gpu-demag-solved" in args:
+        require_periodic_airbox_gpu_demag_solved = True
+        args.remove("--require-periodic-airbox-gpu-demag-solved")
     if "--require-m5-equilibrium-provenance" in args:
         require_m5_equilibrium_provenance = True
         args.remove("--require-m5-equilibrium-provenance")
@@ -3271,6 +3874,10 @@ def main() -> int:
     if "--require-response-peak" in args:
         require_response_peak = True
         args.remove("--require-response-peak")
+    if "--require-interior-response-peak" in args:
+        require_interior_response_peak = True
+        require_response_peak = True
+        args.remove("--require-interior-response-peak")
     if "--require-field-payloads-for-frequency-points" in args:
         require_field_payloads_for_frequency_points = True
         args.remove("--require-field-payloads-for-frequency-points")
@@ -3347,6 +3954,16 @@ def main() -> int:
         raise SystemExit(
             "invalid frequency-domain runtime artifacts:\n"
             "periodic-airbox CPU demag solved validation cannot be combined with --require-production-gpu"
+        )
+    if require_periodic_airbox_gpu_demag_solved and not require_production_gpu:
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "periodic-airbox GPU demag solved validation requires --require-production-gpu"
+        )
+    if require_periodic_airbox_gpu_demag_solved and require_periodic_airbox_gpu_unsupported:
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "periodic-airbox GPU solved and unavailable validations are mutually exclusive"
         )
     if airbox_reference is not None and not require_periodic_airbox_cpu_demag_solved:
         raise SystemExit(
@@ -3725,10 +4342,10 @@ def main() -> int:
             "invalid frequency-domain runtime artifacts:\n"
             "Floquet-airbox GPU unavailable boundary was required but manifest.status is not unavailable"
         )
-    if require_periodic_airbox_cpu_demag_solved and unavailable:
+    if (require_periodic_airbox_cpu_demag_solved or require_periodic_airbox_gpu_demag_solved) and unavailable:
         raise SystemExit(
             "invalid frequency-domain runtime artifacts:\n"
-            "periodic-airbox CPU demag solved boundary was required but manifest.status is unavailable"
+            "periodic-airbox demag solved boundary was required but manifest.status is unavailable"
         )
 
     solve_error = manifest.get("status") == "solve_error"
@@ -3859,6 +4476,14 @@ def main() -> int:
                 root,
                 diagnostics=diagnostics,
                 manifest=manifest,
+                require_frequency_point_artifacts=False,
+            )
+        if require_periodic_airbox_gpu_demag_solved:
+            require_periodic_airbox_cpu_demag_solved_boundary(
+                root,
+                diagnostics=diagnostics,
+                manifest=manifest,
+                expected_execution_lane="production_gpu",
                 require_frequency_point_artifacts=False,
             )
             if require_m5_equilibrium_provenance:
@@ -4613,7 +5238,7 @@ def main() -> int:
             "invalid frequency-domain runtime artifacts:\n"
             f"sweep.points length: got {actual_count}, expected {completed_count}"
         )
-    response_peak: tuple[float, float] | None = None
+    response_peak: tuple[int, float, float] | None = None
     for index, point_value in enumerate(sweep_points):
         if not isinstance(point_value, dict):
             raise SystemExit(
@@ -4666,8 +5291,8 @@ def main() -> int:
         frequency_hz = point_value.get("frequency_hz")
         if isinstance(amplitude, (int, float)) and isinstance(frequency_hz, (int, float)):
             amplitude_float = float(amplitude)
-            if response_peak is None or amplitude_float > response_peak[1]:
-                response_peak = (float(frequency_hz), amplitude_float)
+            if response_peak is None or amplitude_float > response_peak[2]:
+                response_peak = (index, float(frequency_hz), amplitude_float)
         require_finite_number(
             point_value.get("absorbed_power_density"),
             f"sweep.points[{index}].absorbed_power_density",
@@ -4789,10 +5414,17 @@ def main() -> int:
                 )
 
     if require_response_peak:
-        if response_peak is None or response_peak[1] <= 0.0:
+        if response_peak is None or response_peak[2] <= 0.0:
             raise SystemExit(
                 "invalid frequency-domain runtime artifacts:\n"
                 "multi-frequency spectrum requires a positive response peak"
+            )
+    if require_interior_response_peak:
+        if response_peak is None or response_peak[0] <= 0 or response_peak[0] >= len(sweep_points) - 1:
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                "refined multi-frequency spectrum requires an interior response peak; "
+                "a boundary peak means the refinement window did not bracket the resonance"
             )
     if require_derived_peak_mode:
         require_derived_peak_mode_artifact(root, sweep)
@@ -4824,7 +5456,7 @@ def main() -> int:
             target_sweep=sweep,
         )
 
-    if require_periodic_airbox_cpu_demag_solved:
+    if require_periodic_airbox_cpu_demag_solved or require_periodic_airbox_gpu_demag_solved:
         progress_json = require_native_frequency_response_progress_observability(
             progress,
             expected_demag_mode=expected_progress_demag_mode(manifest),
@@ -4861,6 +5493,11 @@ def main() -> int:
             root,
             diagnostics=diagnostics,
             manifest=manifest,
+            expected_execution_lane=(
+                "production_gpu"
+                if require_periodic_airbox_gpu_demag_solved
+                else "production_cpu"
+            ),
         )
 
     return 0

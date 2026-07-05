@@ -98,11 +98,20 @@ void append_residual_history(
     std::vector<double> &history,
     double relative_residual) noexcept
 {
-    if (history.size() >= kProductionCpuGmresResidualHistoryCapacity ||
-        !std::isfinite(relative_residual)) {
+    if (!std::isfinite(relative_residual)) {
         return;
     }
     if (!history.empty() && history.back() == relative_residual) {
+        return;
+    }
+    if (history.size() >= kProductionCpuGmresResidualHistoryCapacity) {
+        if (history.size() > 1) {
+            std::move(
+                history.begin() + 2,
+                history.end(),
+                history.begin() + 1);
+            history.back() = relative_residual;
+        }
         return;
     }
     history.push_back(relative_residual);
@@ -277,6 +286,16 @@ bool should_publish_progress(
         iteration_count % interval == 0;
 }
 
+bool gmres_converged(
+    const ProductionCpuDrivenResponseProblem &problem,
+    double residual_l2,
+    double relative_residual_l2) noexcept
+{
+    return relative_residual_l2 <= problem.relative_tolerance ||
+        (problem.absolute_tolerance > 0.0 &&
+         residual_l2 <= problem.absolute_tolerance);
+}
+
 void copy_preconditioner_name(
     char out[64],
     const ProductionCpuDrivenResponseProblem &problem) noexcept
@@ -358,64 +377,114 @@ FrequencyDomainStatus apply_block_operator(
     double *real_out = out;
     double *imag_out = out + n;
 
-    FrequencyDomainStatus status = problem.apply_stiffness(
-        problem.operator_user_data,
-        real_in,
-        stiffness_workspace.data(),
-        error_message);
-    if (status != FrequencyDomainStatus::ok) {
-        return status;
-    }
-    if (!all_finite(stiffness_workspace.data(), n)) {
-        copy_error(error_message, "production CPU frequency response stiffness operator produced non-finite values");
-        return FrequencyDomainStatus::operator_error;
-    }
-    status = problem.apply_mass(
-        problem.operator_user_data,
-        imag_in,
-        mass_workspace.data(),
-        error_message);
-    if (status != FrequencyDomainStatus::ok) {
-        return status;
-    }
-    if (!all_finite(mass_workspace.data(), n)) {
-        copy_error(error_message, "production CPU frequency response mass operator produced non-finite values");
-        return FrequencyDomainStatus::operator_error;
-    }
-    for (std::uint64_t row = 0; row < n; ++row) {
-        real_out[row] = stiffness_workspace[row] + omega * mass_workspace[row];
+    FrequencyDomainStatus status = FrequencyDomainStatus::ok;
+    if (problem.apply_complex_stiffness != nullptr ||
+        problem.apply_complex_mass != nullptr) {
+        if (problem.apply_complex_stiffness == nullptr ||
+            problem.apply_complex_mass == nullptr) {
+            copy_error(error_message, "production CPU frequency response complex operator requires both stiffness and mass callbacks");
+            return FrequencyDomainStatus::validation_error;
+        }
+        std::vector<double> stiffness_imag(static_cast<std::size_t>(n));
+        std::vector<double> mass_imag(static_cast<std::size_t>(n));
+        status = problem.apply_complex_stiffness(
+            problem.operator_user_data,
+            real_in,
+            imag_in,
+            stiffness_workspace.data(),
+            stiffness_imag.data(),
+            error_message);
+        if (status != FrequencyDomainStatus::ok) {
+            return status;
+        }
+        if (!all_finite(stiffness_workspace.data(), n) ||
+            !all_finite(stiffness_imag.data(), n)) {
+            copy_error(error_message, "production CPU frequency response complex stiffness operator produced non-finite values");
+            return FrequencyDomainStatus::operator_error;
+        }
+        status = problem.apply_complex_mass(
+            problem.operator_user_data,
+            real_in,
+            imag_in,
+            mass_workspace.data(),
+            mass_imag.data(),
+            error_message);
+        if (status != FrequencyDomainStatus::ok) {
+            return status;
+        }
+        if (!all_finite(mass_workspace.data(), n) ||
+            !all_finite(mass_imag.data(), n)) {
+            copy_error(error_message, "production CPU frequency response complex mass operator produced non-finite values");
+            return FrequencyDomainStatus::operator_error;
+        }
+        for (std::uint64_t row = 0; row < n; ++row) {
+            real_out[row] = stiffness_workspace[row] + omega * mass_imag[row];
+            imag_out[row] = stiffness_imag[row] - omega * mass_workspace[row];
+        }
+    } else {
+        status = problem.apply_stiffness(
+            problem.operator_user_data,
+            real_in,
+            stiffness_workspace.data(),
+            error_message);
+        if (status != FrequencyDomainStatus::ok) {
+            return status;
+        }
+        if (!all_finite(stiffness_workspace.data(), n)) {
+            copy_error(error_message, "production CPU frequency response stiffness operator produced non-finite values");
+            return FrequencyDomainStatus::operator_error;
+        }
+        status = problem.apply_mass(
+            problem.operator_user_data,
+            imag_in,
+            mass_workspace.data(),
+            error_message);
+        if (status != FrequencyDomainStatus::ok) {
+            return status;
+        }
+        if (!all_finite(mass_workspace.data(), n)) {
+            copy_error(error_message, "production CPU frequency response mass operator produced non-finite values");
+            return FrequencyDomainStatus::operator_error;
+        }
+        for (std::uint64_t row = 0; row < n; ++row) {
+            real_out[row] = stiffness_workspace[row] + omega * mass_workspace[row];
+        }
+        if (!all_finite(real_out, n)) {
+            copy_error(error_message, "production CPU frequency response real block operator produced non-finite values");
+            return FrequencyDomainStatus::operator_error;
+        }
+
+        status = problem.apply_stiffness(
+            problem.operator_user_data,
+            imag_in,
+            stiffness_workspace.data(),
+            error_message);
+        if (status != FrequencyDomainStatus::ok) {
+            return status;
+        }
+        if (!all_finite(stiffness_workspace.data(), n)) {
+            copy_error(error_message, "production CPU frequency response stiffness operator produced non-finite values");
+            return FrequencyDomainStatus::operator_error;
+        }
+        status = problem.apply_mass(
+            problem.operator_user_data,
+            real_in,
+            mass_workspace.data(),
+            error_message);
+        if (status != FrequencyDomainStatus::ok) {
+            return status;
+        }
+        if (!all_finite(mass_workspace.data(), n)) {
+            copy_error(error_message, "production CPU frequency response mass operator produced non-finite values");
+            return FrequencyDomainStatus::operator_error;
+        }
+        for (std::uint64_t row = 0; row < n; ++row) {
+            imag_out[row] = stiffness_workspace[row] - omega * mass_workspace[row];
+        }
     }
     if (!all_finite(real_out, n)) {
         copy_error(error_message, "production CPU frequency response real block operator produced non-finite values");
         return FrequencyDomainStatus::operator_error;
-    }
-
-    status = problem.apply_stiffness(
-        problem.operator_user_data,
-        imag_in,
-        stiffness_workspace.data(),
-        error_message);
-    if (status != FrequencyDomainStatus::ok) {
-        return status;
-    }
-    if (!all_finite(stiffness_workspace.data(), n)) {
-        copy_error(error_message, "production CPU frequency response stiffness operator produced non-finite values");
-        return FrequencyDomainStatus::operator_error;
-    }
-    status = problem.apply_mass(
-        problem.operator_user_data,
-        real_in,
-        mass_workspace.data(),
-        error_message);
-    if (status != FrequencyDomainStatus::ok) {
-        return status;
-    }
-    if (!all_finite(mass_workspace.data(), n)) {
-        copy_error(error_message, "production CPU frequency response mass operator produced non-finite values");
-        return FrequencyDomainStatus::operator_error;
-    }
-    for (std::uint64_t row = 0; row < n; ++row) {
-        imag_out[row] = stiffness_workspace[row] - omega * mass_workspace[row];
     }
     if (!all_finite(imag_out, n)) {
         copy_error(error_message, "production CPU frequency response imaginary block operator produced non-finite values");
@@ -472,6 +541,56 @@ FrequencyDomainStatus compute_residual(
         residual[index] = rhs[index] - operator_output[index];
     }
     residual_l2 = norm2(residual.data(), block_count);
+    return FrequencyDomainStatus::ok;
+}
+
+FrequencyDomainStatus compute_right_preconditioner_probe(
+    const ProductionCpuDrivenResponseProblem &problem,
+    double omega,
+    const std::vector<double> &rhs,
+    std::vector<double> &preconditioner_workspace,
+    std::vector<double> &preconditioned_rhs,
+    std::vector<double> &operator_output,
+    std::vector<double> &stiffness_workspace,
+    std::vector<double> &mass_workspace,
+    std::vector<double> &projection_workspace,
+    double &probe_residual_l2,
+    double &probe_relative_residual_l2,
+    char error_message[128]) noexcept
+{
+    const std::uint64_t block_count = problem.tangent_dof_count * 2;
+    const double rhs_l2 = norm2(rhs.data(), block_count);
+    if (!(rhs_l2 > 0.0) || !std::isfinite(rhs_l2)) {
+        copy_error(error_message, "production CPU frequency response preconditioner probe requires finite RHS");
+        return FrequencyDomainStatus::validation_error;
+    }
+    const FrequencyDomainStatus preconditioner_status = apply_right_preconditioner(
+        problem,
+        omega,
+        rhs.data(),
+        preconditioner_workspace,
+        preconditioned_rhs.data(),
+        error_message);
+    if (preconditioner_status != FrequencyDomainStatus::ok) {
+        return preconditioner_status;
+    }
+    const FrequencyDomainStatus operator_status = apply_block_operator(
+        problem,
+        omega,
+        preconditioned_rhs.data(),
+        operator_output.data(),
+        stiffness_workspace,
+        mass_workspace,
+        projection_workspace,
+        error_message);
+    if (operator_status != FrequencyDomainStatus::ok) {
+        return operator_status;
+    }
+    for (std::uint64_t index = 0; index < block_count; ++index) {
+        operator_output[index] -= rhs[index];
+    }
+    probe_residual_l2 = norm2(operator_output.data(), block_count);
+    probe_relative_residual_l2 = probe_residual_l2 / rhs_l2;
     return FrequencyDomainStatus::ok;
 }
 
@@ -549,8 +668,8 @@ FrequencyDomainStatus solve_frequency_gmres(
         frequency_hz,
         residual_l2,
         relative_residual_l2,
-        relative_residual_l2 <= problem.relative_tolerance);
-    if (relative_residual_l2 <= problem.relative_tolerance) {
+        gmres_converged(problem, residual_l2, relative_residual_l2));
+    if (gmres_converged(problem, residual_l2, relative_residual_l2)) {
         return FrequencyDomainStatus::ok;
     }
 
@@ -666,8 +785,8 @@ FrequencyDomainStatus solve_frequency_gmres(
                 minimum_tracked_relative_residual_iteration = iteration_count;
             }
             const bool tracked_converged =
-                relative_residual_l2 <= problem.relative_tolerance;
-            if (should_publish_progress(problem, iteration_count, tracked_converged)) {
+                gmres_converged(problem, residual_l2, relative_residual_l2);
+            if (should_publish_progress(problem, iteration_count, false)) {
                 publish_progress(
                     problem,
                     frequency_index,
@@ -676,7 +795,7 @@ FrequencyDomainStatus solve_frequency_gmres(
                     frequency_hz,
                     residual_l2,
                     relative_residual_l2,
-                    tracked_converged);
+                    false);
             }
             if (tracked_converged) {
                 converged = true;
@@ -693,7 +812,7 @@ FrequencyDomainStatus solve_frequency_gmres(
             }
             const double diagonal = h[row * restart + row];
             if (!(std::abs(diagonal) > 1.0e-30) || !std::isfinite(diagonal)) {
-                copy_error(error_message, "production CPU GMRES encountered a singular Krylov basis");
+                copy_error(error_message, "production frequency-response GMRES encountered a singular Krylov basis");
                 return FrequencyDomainStatus::solve_error;
             }
             y[row] = sum / diagonal;
@@ -743,7 +862,7 @@ FrequencyDomainStatus solve_frequency_gmres(
             minimum_tracked_relative_residual_iteration = iteration_count;
         }
         const bool recomputed_converged =
-            relative_residual_l2 <= problem.relative_tolerance;
+            gmres_converged(problem, residual_l2, relative_residual_l2);
         if (should_publish_progress(problem, iteration_count, recomputed_converged)) {
             publish_progress(
                 problem,
@@ -760,8 +879,110 @@ FrequencyDomainStatus solve_frequency_gmres(
         }
     }
 
-    copy_error(error_message, "production CPU GMRES frequency response did not converge");
+    copy_error(error_message, "production frequency-response GMRES did not converge");
     return FrequencyDomainStatus::solve_error;
+}
+
+struct RightPreconditionerPilotMeasurement {
+    bool available = false;
+    double residual_l2 = 0.0;
+    double relative_residual_l2 = 0.0;
+};
+
+bool pilot_measurement_is_valid(
+    const RightPreconditionerPilotMeasurement &measurement) noexcept
+{
+    return measurement.available &&
+        std::isfinite(measurement.residual_l2) &&
+        measurement.residual_l2 >= 0.0 &&
+        std::isfinite(measurement.relative_residual_l2) &&
+        measurement.relative_residual_l2 >= 0.0;
+}
+
+FrequencyDomainStatus run_right_preconditioner_pilot(
+    const ProductionCpuDrivenResponseProblem &problem,
+    std::uint64_t frequency_index,
+    double frequency_hz,
+    const std::vector<double> &rhs,
+    std::uint64_t pilot_iterations,
+    RightPreconditionerPilotMeasurement &measurement,
+    char error_message[128]) noexcept
+{
+    measurement = RightPreconditionerPilotMeasurement{};
+    if (pilot_iterations == 0) {
+        return FrequencyDomainStatus::ok;
+    }
+    const std::uint64_t n = problem.tangent_dof_count;
+    const std::uint64_t block_count = n * 2;
+    ProductionCpuDrivenResponseProblem pilot_problem = problem;
+    pilot_problem.max_iterations = pilot_iterations;
+    pilot_problem.restart_iterations = std::max<std::uint64_t>(
+        1,
+        std::min(problem.restart_iterations, pilot_iterations));
+    pilot_problem.progress_callback = nullptr;
+    pilot_problem.progress_user_data = nullptr;
+    pilot_problem.out_response_real = nullptr;
+    pilot_problem.out_response_imag = nullptr;
+    pilot_problem.response_capacity = 0;
+    pilot_problem.out_residual_l2_norm = nullptr;
+    pilot_problem.out_relative_residual_l2_norm = nullptr;
+    pilot_problem.residual_capacity = 0;
+
+    std::vector<double> x(block_count, 0.0);
+    std::vector<double> residual(block_count, 0.0);
+    std::vector<double> operator_output(block_count, 0.0);
+    std::vector<double> stiffness_workspace(n, 0.0);
+    std::vector<double> mass_workspace(n, 0.0);
+    std::vector<double> projection_workspace(block_count, 0.0);
+    double rhs_l2_norm = 0.0;
+    double initial_residual_l2_norm = 0.0;
+    double initial_relative_residual_l2_norm = 0.0;
+    double residual_l2 = 0.0;
+    double relative_residual_l2 = 0.0;
+    double minimum_relative_residual_l2 = 0.0;
+    std::uint64_t minimum_tracked_relative_residual_iteration = 0;
+    double last_tracked_relative_residual_l2 = 0.0;
+    double last_recomputed_relative_residual_l2 = 0.0;
+    std::uint64_t iteration_count = 0;
+    std::vector<double> relative_residual_history;
+    char pilot_error[128]{};
+    const FrequencyDomainStatus status = solve_frequency_gmres(
+        pilot_problem,
+        frequency_index,
+        frequency_hz,
+        rhs,
+        x,
+        residual,
+        operator_output,
+        stiffness_workspace,
+        mass_workspace,
+        projection_workspace,
+        rhs_l2_norm,
+        initial_residual_l2_norm,
+        initial_relative_residual_l2_norm,
+        residual_l2,
+        relative_residual_l2,
+        minimum_relative_residual_l2,
+        minimum_tracked_relative_residual_iteration,
+        last_tracked_relative_residual_l2,
+        last_recomputed_relative_residual_l2,
+        iteration_count,
+        relative_residual_history,
+        pilot_error);
+    if (status != FrequencyDomainStatus::ok &&
+        status != FrequencyDomainStatus::solve_error) {
+        copy_error(error_message, pilot_error);
+        return status;
+    }
+    if (std::isfinite(residual_l2) &&
+        residual_l2 >= 0.0 &&
+        std::isfinite(relative_residual_l2) &&
+        relative_residual_l2 >= 0.0) {
+        measurement.available = true;
+        measurement.residual_l2 = residual_l2;
+        measurement.relative_residual_l2 = relative_residual_l2;
+    }
+    return FrequencyDomainStatus::ok;
 }
 
 } // namespace
@@ -775,24 +996,48 @@ FrequencyDomainStatus solve_production_cpu_driven_response(
     }
     *out_result = ProductionCpuDrivenResponseResult{};
     const std::uint64_t n = problem.tangent_dof_count;
+    const bool has_real_operator =
+        problem.apply_stiffness != nullptr &&
+        problem.apply_mass != nullptr;
+    const bool has_complex_operator =
+        problem.apply_complex_stiffness != nullptr &&
+        problem.apply_complex_mass != nullptr;
     if (n == 0 ||
         problem.frequencies_hz == nullptr ||
         problem.frequency_count == 0 ||
         problem.drive_real == nullptr ||
-        problem.apply_stiffness == nullptr ||
-        problem.apply_mass == nullptr) {
+        (!has_real_operator && !has_complex_operator)) {
         copy_error(out_result->error_message, "production CPU frequency response requires operators, frequencies, and drive");
+        return FrequencyDomainStatus::validation_error;
+    }
+    if ((problem.apply_stiffness != nullptr) != (problem.apply_mass != nullptr) ||
+        (problem.apply_complex_stiffness != nullptr) !=
+            (problem.apply_complex_mass != nullptr)) {
+        copy_error(out_result->error_message, "production CPU frequency response has an incomplete operator callback pair");
         return FrequencyDomainStatus::validation_error;
     }
     if (!(problem.relative_tolerance > 0.0) ||
         !std::isfinite(problem.relative_tolerance) ||
+        problem.absolute_tolerance < 0.0 ||
+        !std::isfinite(problem.absolute_tolerance) ||
         problem.max_iterations == 0 ||
         problem.restart_iterations == 0) {
         copy_error(out_result->error_message, "production CPU frequency response has invalid Krylov solver settings");
         return FrequencyDomainStatus::validation_error;
     }
+    if (problem.auto_disable_harmful_right_preconditioner &&
+        (!(problem.right_preconditioner_probe_disable_relative_threshold > 0.0) ||
+         !std::isfinite(problem.right_preconditioner_probe_disable_relative_threshold))) {
+        copy_error(out_result->error_message, "production CPU frequency response has invalid right-preconditioner probe fallback threshold");
+        return FrequencyDomainStatus::validation_error;
+    }
     out_result->solver_relative_tolerance = problem.relative_tolerance;
+    out_result->solver_absolute_tolerance = problem.absolute_tolerance;
     out_result->right_preconditioner_applied = problem.apply_right_preconditioner != nullptr;
+    out_result->right_preconditioner_probe_disable_relative_threshold =
+        problem.auto_disable_harmful_right_preconditioner ?
+        problem.right_preconditioner_probe_disable_relative_threshold :
+        0.0;
     copy_preconditioner_name(out_result->krylov_preconditioner, problem);
     out_result->max_iterations_for_frequency = problem.max_iterations;
     out_result->restart_iterations_for_frequency = std::max<std::uint64_t>(
@@ -835,6 +1080,8 @@ FrequencyDomainStatus solve_production_cpu_driven_response(
     std::vector<double> stiffness_workspace(n, 0.0);
     std::vector<double> mass_workspace(n, 0.0);
     std::vector<double> projection_workspace(block_count, 0.0);
+    std::vector<double> preconditioner_probe_workspace(block_count, 0.0);
+    std::vector<double> preconditioned_rhs_probe(block_count, 0.0);
     for (std::uint64_t row = 0; row < n; ++row) {
         const double drive_real = problem.drive_real[row];
         const double drive_imag = problem.drive_imag != nullptr ? problem.drive_imag[row] : 0.0;
@@ -858,6 +1105,7 @@ FrequencyDomainStatus solve_production_cpu_driven_response(
     }
 
     out_result->response_dof_count = n;
+    ProductionCpuDrivenResponseProblem effective_problem = problem;
     for (std::uint64_t frequency_index = 0;
          frequency_index < problem.frequency_count;
          ++frequency_index) {
@@ -870,6 +1118,238 @@ FrequencyDomainStatus solve_production_cpu_driven_response(
             problem.cancel_requested(problem.cancel_user_data)) {
             copy_error(out_result->error_message, "production CPU frequency response was interrupted");
             return FrequencyDomainStatus::interrupted;
+        }
+        if (frequency_index == 0 && problem.apply_right_preconditioner != nullptr) {
+            const double omega =
+                problem.angular_frequency_sign * kTwoPi * frequency_hz;
+            double probe_residual_l2 = 0.0;
+            double probe_relative_residual_l2 = 0.0;
+            const FrequencyDomainStatus probe_status =
+                compute_right_preconditioner_probe(
+                    problem,
+                    omega,
+                    rhs,
+                    preconditioner_probe_workspace,
+                    preconditioned_rhs_probe,
+                    operator_output,
+                    stiffness_workspace,
+                    mass_workspace,
+                    projection_workspace,
+                    probe_residual_l2,
+                    probe_relative_residual_l2,
+                    out_result->error_message);
+            if (probe_status != FrequencyDomainStatus::ok) {
+                return probe_status;
+            }
+            out_result->right_preconditioner_probe_available = true;
+            out_result->right_preconditioner_probe_residual_l2_norm =
+                probe_residual_l2;
+            out_result->right_preconditioner_probe_relative_residual_l2_norm =
+                probe_relative_residual_l2;
+            if (problem.auto_disable_harmful_right_preconditioner &&
+                probe_relative_residual_l2 >
+                    problem.right_preconditioner_probe_disable_relative_threshold) {
+                bool selection_resolved_by_pilot = false;
+                const std::uint64_t pilot_iterations = std::min(
+                    problem.right_preconditioner_auto_pilot_iterations,
+                    problem.max_iterations);
+                if (pilot_iterations > 0) {
+                    RightPreconditionerPilotMeasurement primary_pilot{};
+                    RightPreconditionerPilotMeasurement fallback_pilot{};
+                    RightPreconditionerPilotMeasurement unpreconditioned_pilot{};
+                    FrequencyDomainStatus pilot_status =
+                        run_right_preconditioner_pilot(
+                            problem,
+                            frequency_index,
+                            frequency_hz,
+                            rhs,
+                            pilot_iterations,
+                            primary_pilot,
+                            out_result->error_message);
+                    if (pilot_status != FrequencyDomainStatus::ok) {
+                        return pilot_status;
+                    }
+                    ProductionCpuDrivenResponseProblem fallback_problem = problem;
+                    if (problem.fallback_apply_right_preconditioner != nullptr) {
+                        fallback_problem.apply_right_preconditioner =
+                            problem.fallback_apply_right_preconditioner;
+                        fallback_problem.right_preconditioner_user_data =
+                            problem.fallback_right_preconditioner_user_data;
+                        fallback_problem.krylov_preconditioner_name =
+                            problem.fallback_krylov_preconditioner_name;
+                        pilot_status = run_right_preconditioner_pilot(
+                            fallback_problem,
+                            frequency_index,
+                            frequency_hz,
+                            rhs,
+                            pilot_iterations,
+                            fallback_pilot,
+                            out_result->error_message);
+                        if (pilot_status != FrequencyDomainStatus::ok) {
+                            return pilot_status;
+                        }
+                    }
+                    ProductionCpuDrivenResponseProblem unpreconditioned_problem = problem;
+                    unpreconditioned_problem.apply_right_preconditioner = nullptr;
+                    unpreconditioned_problem.right_preconditioner_user_data = nullptr;
+                    unpreconditioned_problem.krylov_preconditioner_name = nullptr;
+                    unpreconditioned_problem.fallback_apply_right_preconditioner = nullptr;
+                    unpreconditioned_problem.fallback_right_preconditioner_user_data = nullptr;
+                    unpreconditioned_problem.fallback_krylov_preconditioner_name = nullptr;
+                    pilot_status = run_right_preconditioner_pilot(
+                        unpreconditioned_problem,
+                        frequency_index,
+                        frequency_hz,
+                        rhs,
+                        pilot_iterations,
+                        unpreconditioned_pilot,
+                        out_result->error_message);
+                    if (pilot_status != FrequencyDomainStatus::ok) {
+                        return pilot_status;
+                    }
+                    out_result->right_preconditioner_pilot_available =
+                        pilot_measurement_is_valid(primary_pilot) ||
+                        pilot_measurement_is_valid(fallback_pilot) ||
+                        pilot_measurement_is_valid(unpreconditioned_pilot);
+                    out_result->right_preconditioner_pilot_iterations = pilot_iterations;
+                    out_result->right_preconditioner_primary_pilot_residual_l2_norm =
+                        primary_pilot.residual_l2;
+                    out_result->right_preconditioner_primary_pilot_relative_residual_l2_norm =
+                        primary_pilot.relative_residual_l2;
+                    out_result->right_preconditioner_fallback_pilot_residual_l2_norm =
+                        fallback_pilot.residual_l2;
+                    out_result->right_preconditioner_fallback_pilot_relative_residual_l2_norm =
+                        fallback_pilot.relative_residual_l2;
+                    out_result->right_preconditioner_unpreconditioned_pilot_residual_l2_norm =
+                        unpreconditioned_pilot.residual_l2;
+                    out_result->right_preconditioner_unpreconditioned_pilot_relative_residual_l2_norm =
+                        unpreconditioned_pilot.relative_residual_l2;
+                    if (out_result->right_preconditioner_pilot_available) {
+                        double best_relative =
+                            std::numeric_limits<double>::infinity();
+                        enum class PilotChoice {
+                            none,
+                            primary,
+                            fallback,
+                            unpreconditioned,
+                        };
+                        PilotChoice best_choice = PilotChoice::none;
+                        if (pilot_measurement_is_valid(primary_pilot) &&
+                            primary_pilot.relative_residual_l2 < best_relative) {
+                            best_relative = primary_pilot.relative_residual_l2;
+                            best_choice = PilotChoice::primary;
+                        }
+                        if (pilot_measurement_is_valid(fallback_pilot) &&
+                            fallback_pilot.relative_residual_l2 < best_relative) {
+                            best_relative = fallback_pilot.relative_residual_l2;
+                            best_choice = PilotChoice::fallback;
+                        }
+                        if (pilot_measurement_is_valid(unpreconditioned_pilot) &&
+                            unpreconditioned_pilot.relative_residual_l2 < best_relative) {
+                            best_relative = unpreconditioned_pilot.relative_residual_l2;
+                            best_choice = PilotChoice::unpreconditioned;
+                        }
+                        selection_resolved_by_pilot = best_choice != PilotChoice::none;
+                        if (best_choice == PilotChoice::primary) {
+                            effective_problem = problem;
+                            out_result->right_preconditioner_applied = true;
+                            out_result->right_preconditioner_auto_disabled = false;
+                            std::strncpy(
+                                out_result->right_preconditioner_auto_disable_reason,
+                                "pilot_kept_primary_despite_probe",
+                                sizeof(out_result->right_preconditioner_auto_disable_reason) - 1);
+                        } else if (best_choice == PilotChoice::fallback) {
+                            effective_problem.apply_right_preconditioner =
+                                fallback_problem.apply_right_preconditioner;
+                            effective_problem.right_preconditioner_user_data =
+                                fallback_problem.right_preconditioner_user_data;
+                            effective_problem.krylov_preconditioner_name =
+                                fallback_problem.krylov_preconditioner_name;
+                            out_result->right_preconditioner_applied = true;
+                            out_result->right_preconditioner_auto_disabled = true;
+                            std::strncpy(
+                                out_result->right_preconditioner_auto_disable_reason,
+                                "pilot_selected_fallback_after_probe",
+                                sizeof(out_result->right_preconditioner_auto_disable_reason) - 1);
+                        } else if (best_choice == PilotChoice::unpreconditioned) {
+                            effective_problem.apply_right_preconditioner = nullptr;
+                            effective_problem.right_preconditioner_user_data = nullptr;
+                            effective_problem.krylov_preconditioner_name = nullptr;
+                            out_result->right_preconditioner_applied = false;
+                            out_result->right_preconditioner_auto_disabled = true;
+                            std::strncpy(
+                                out_result->right_preconditioner_auto_disable_reason,
+                                "pilot_selected_unpreconditioned_after_probe",
+                                sizeof(out_result->right_preconditioner_auto_disable_reason) - 1);
+                        }
+                        out_result->right_preconditioner_auto_disable_reason
+                            [sizeof(out_result->right_preconditioner_auto_disable_reason) - 1] = '\0';
+                        copy_preconditioner_name(
+                            out_result->krylov_preconditioner,
+                            effective_problem);
+                    }
+                }
+                if (!selection_resolved_by_pilot) {
+                    effective_problem.apply_right_preconditioner = nullptr;
+                    effective_problem.right_preconditioner_user_data = nullptr;
+                    effective_problem.krylov_preconditioner_name = nullptr;
+                    if (problem.fallback_apply_right_preconditioner != nullptr) {
+                        ProductionCpuDrivenResponseProblem fallback_problem = problem;
+                        fallback_problem.apply_right_preconditioner =
+                            problem.fallback_apply_right_preconditioner;
+                        fallback_problem.right_preconditioner_user_data =
+                            problem.fallback_right_preconditioner_user_data;
+                        fallback_problem.krylov_preconditioner_name =
+                            problem.fallback_krylov_preconditioner_name;
+                        double fallback_probe_residual_l2 = 0.0;
+                        double fallback_probe_relative_residual_l2 = 0.0;
+                        const FrequencyDomainStatus fallback_probe_status =
+                            compute_right_preconditioner_probe(
+                                fallback_problem,
+                                omega,
+                                rhs,
+                                preconditioner_probe_workspace,
+                                preconditioned_rhs_probe,
+                                operator_output,
+                                stiffness_workspace,
+                                mass_workspace,
+                                projection_workspace,
+                                fallback_probe_residual_l2,
+                                fallback_probe_relative_residual_l2,
+                                out_result->error_message);
+                        if (fallback_probe_status != FrequencyDomainStatus::ok) {
+                            return fallback_probe_status;
+                        }
+                        out_result->right_preconditioner_fallback_probe_available = true;
+                        out_result->right_preconditioner_fallback_probe_residual_l2_norm =
+                            fallback_probe_residual_l2;
+                        out_result->right_preconditioner_fallback_probe_relative_residual_l2_norm =
+                            fallback_probe_relative_residual_l2;
+                        if (fallback_probe_relative_residual_l2 <=
+                            problem.right_preconditioner_probe_disable_relative_threshold) {
+                            effective_problem.apply_right_preconditioner =
+                                fallback_problem.apply_right_preconditioner;
+                            effective_problem.right_preconditioner_user_data =
+                                fallback_problem.right_preconditioner_user_data;
+                            effective_problem.krylov_preconditioner_name =
+                                fallback_problem.krylov_preconditioner_name;
+                        }
+                    }
+                    out_result->right_preconditioner_applied =
+                        effective_problem.apply_right_preconditioner != nullptr;
+                    out_result->right_preconditioner_auto_disabled = true;
+                    std::strncpy(
+                        out_result->right_preconditioner_auto_disable_reason,
+                        "probe_relative_residual_above_threshold",
+                        sizeof(out_result->right_preconditioner_auto_disable_reason) - 1);
+                    out_result
+                        ->right_preconditioner_auto_disable_reason
+                            [sizeof(out_result->right_preconditioner_auto_disable_reason) - 1] = '\0';
+                    copy_preconditioner_name(
+                        out_result->krylov_preconditioner,
+                        effective_problem);
+                }
+            }
         }
 
         double residual_l2 = 0.0;
@@ -884,7 +1364,7 @@ FrequencyDomainStatus solve_production_cpu_driven_response(
         std::uint64_t iteration_count = 0;
         std::vector<double> relative_residual_history;
         const FrequencyDomainStatus status = solve_frequency_gmres(
-            problem,
+            effective_problem,
             frequency_index,
             frequency_hz,
             rhs,
@@ -907,8 +1387,16 @@ FrequencyDomainStatus solve_production_cpu_driven_response(
             relative_residual_history,
             out_result->error_message);
         if (status != FrequencyDomainStatus::ok) {
+            if (status == FrequencyDomainStatus::solve_error &&
+                problem.out_response_real != nullptr) {
+                for (std::uint64_t dof = 0; dof < n; ++dof) {
+                    const std::uint64_t response_index = frequency_index * n + dof;
+                    problem.out_response_real[response_index] = x[dof];
+                    problem.out_response_imag[response_index] = x[dof + n];
+                }
+            }
             record_block_norms(rhs, residual, x, n, *out_result);
-            record_coupled_block_norms(problem, rhs, residual, x, *out_result);
+            record_coupled_block_norms(effective_problem, rhs, residual, x, *out_result);
             copy_residual_history(relative_residual_history, *out_result);
             out_result->total_iteration_count += iteration_count;
             out_result->max_iterations_for_frequency = std::max(

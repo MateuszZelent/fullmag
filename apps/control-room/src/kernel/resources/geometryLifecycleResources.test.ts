@@ -12,6 +12,7 @@ import {
   MESHING_OBJECT_POLICY_PATH,
   MESHING_OBJECT_REPORT_PATH,
   MESHING_OBJECT_TOPOLOGY_PATH,
+  MESHING_REGION_QUALITY_PATH,
   MESHING_UNIVERSE_POLICY_PATH,
   MODEL_OBJECT_INTERACTION_PATH,
   MODEL_GEOMETRY_CAPABILITIES_PATH,
@@ -42,6 +43,7 @@ import {
   resolveMeshRegionMembershipsRevision,
   resolveMeshRegionMembershipsResourceKey,
   resolveMeshRegionMembershipListRevision,
+  resolveMeshRegionQualityResourceKey,
   resolveMeshSharedDomainManifestRevision,
   resolveObjectMeshQualityResourceKey,
   resolveObjectMeshPolicyResourceKey,
@@ -90,6 +92,9 @@ describe("geometry lifecycle resources", () => {
     );
     expect(resolveObjectMeshQualityResourceKey("box 1")).toBe(
       MESHING_OBJECT_QUALITY_PATH.replace("{object_id}", "box%201"),
+    );
+    expect(resolveMeshRegionQualityResourceKey("film:core")).toBe(
+      MESHING_REGION_QUALITY_PATH.replace("{region_id}", "film%3Acore"),
     );
     expect(resolveObjectMeshPolicyResourceKey("box 1")).toBe(
       MESHING_OBJECT_POLICY_PATH.replace("{object_id}", "box%201"),

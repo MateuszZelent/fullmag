@@ -2826,6 +2826,12 @@ pub(crate) fn plan_fem_eigen(
     } else {
         None
     };
+    let air_box_config =
+        build_air_box_config(problem, &mesh, resolved_demag_realization).map_err(|reason| {
+            PlanError {
+                reasons: vec![reason],
+            }
+        })?;
     if !errors.is_empty() {
         return Err(PlanError { reasons: errors });
     }
@@ -2872,6 +2878,7 @@ pub(crate) fn plan_fem_eigen(
         exchange_bc: ExchangeBoundaryCondition::Neumann,
         spin_wave_bc: spin_wave_bc.clone(),
         demag_realization: resolved_demag_realization,
+        air_box_config,
         mode_tracking: mode_tracking.clone(),
         dispersion_validation,
     };
@@ -2936,6 +2943,7 @@ pub(crate) fn plan_fem_frequency_response(
         magnetostatic_bc,
         excitation,
         frequencies_hz,
+        solver_policy,
         sampling,
     } = &problem.study
     else {
@@ -3081,6 +3089,7 @@ pub(crate) fn plan_fem_frequency_response(
         magnetostatic_bc: *magnetostatic_bc,
         excitation: excitation.clone(),
         frequencies_hz: frequencies_hz.clone(),
+        solver_policy: solver_policy.clone(),
         enable_exchange: eigen.enable_exchange,
         enable_demag: eigen.enable_demag,
         interfacial_dmi: eigen.interfacial_dmi,
@@ -3092,6 +3101,7 @@ pub(crate) fn plan_fem_frequency_response(
         requested_device,
         exchange_bc: eigen.exchange_bc,
         demag_realization: eigen.demag_realization,
+        air_box_config: eigen.air_box_config,
         demag_solver_policy: problem
             .backend_policy
             .discretization_hints

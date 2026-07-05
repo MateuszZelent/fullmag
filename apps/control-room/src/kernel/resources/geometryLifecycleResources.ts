@@ -24,6 +24,7 @@ import {
   MESHING_OBJECT_REPORT_PATH,
   MESHING_OBJECT_SIZE_FIELD_PATH,
   MESHING_OBJECT_TOPOLOGY_PATH,
+  MESHING_REGION_QUALITY_PATH,
   MESHING_SUMMARY_PATH,
   MESHING_UNIVERSE_POLICY_PATH,
   MESHING_UNIVERSE_QUALITY_PATH,
@@ -63,6 +64,7 @@ import type {
   MeshRealizedSizeFieldsResource,
   MeshRegionMembershipListResource,
   MeshRegionMembershipResource,
+  MeshRegionQualityResource,
   MeshSemanticsResource,
   MeshSharedDomainConfigResource,
   MeshSharedDomainManifestResource,
@@ -195,6 +197,13 @@ export function resolveObjectMeshQualityResourceKey(objectId: string): string {
   return MESHING_OBJECT_QUALITY_PATH.replace(
     "{object_id}",
     encodeURIComponent(objectId),
+  );
+}
+
+export function resolveMeshRegionQualityResourceKey(regionId: string): string {
+  return MESHING_REGION_QUALITY_PATH.replace(
+    "{region_id}",
+    encodeURIComponent(regionId),
   );
 }
 
@@ -904,6 +913,31 @@ export function useObjectMeshQualityResource(
   );
 
   return useResource<MeshObjectQualityResource | null>({
+    load,
+    resolveRevision: resolveJsonResourceRevision,
+    resourceKey,
+  });
+}
+
+export function useMeshRegionQualityResource(
+  regionId: string | null | undefined,
+  options: ResourceHookOptions = {},
+) {
+  const { api } = useKernel();
+  const enabled = options.enabled !== false && Boolean(regionId);
+  const resourceKey = regionId
+    ? resolveMeshRegionQualityResourceKey(regionId)
+    : MESHING_REGION_QUALITY_PATH;
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) => {
+      if (!regionId) return Promise.resolve(null);
+      return api.meshing.regionQuality(regionId, { signal });
+    },
+    [api, regionId],
+  );
+
+  return useResource<MeshRegionQualityResource | null>({
+    enabled,
     load,
     resolveRevision: resolveJsonResourceRevision,
     resourceKey,

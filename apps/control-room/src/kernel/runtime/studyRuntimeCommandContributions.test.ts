@@ -2604,7 +2604,87 @@ describe("study runtime command contributions", () => {
     );
   });
 
-  it("refreshes runtime command preconditions before submit", async () => {
+  it("refreshes pause, stop, and skip preconditions from the command ledger count", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const cases = [
+      ["study.pause", "pause"],
+      ["study.stop", "stop"],
+      ["study.skip", "skip"],
+    ] as const;
+
+    for (const [commandId, kind] of cases) {
+      const submit = vi.fn(async () => ({
+        accepted: true,
+        command_id: `cmd-${kind}`,
+        error: null,
+      }));
+      const list = vi.fn(async () => ({
+        accepted_count: 0,
+        can_accept_commands: true,
+        commands: [
+          {
+            command_id: "cmd-existing",
+            kind: "solve",
+            status: "completed",
+          },
+        ],
+        completed_count: 1,
+        dispatched_count: 0,
+        failed_count: 0,
+        pending_count: 0,
+        rejected_count: 0,
+        revision: 99,
+        running_count: 0,
+        runtime_controls: [],
+      }));
+      const status = vi.fn(async () => ({
+        revision: 31,
+        runtime_state: "running",
+      }));
+      const execution = vi.fn(async () => ({
+        active_stage_index: 1,
+        revision: 22,
+        runtime_state: "running",
+        stages: [
+          { stage_id: "stage-000" },
+          { stage_id: "stage-001" },
+          { stage_id: "stage-002" },
+        ],
+      }));
+
+      const result = await registry.execute(commandId, {
+        api: {
+          commands: { list, submit },
+          simulation: {
+            solver: { status },
+            stages: { execution },
+          },
+        } as never,
+        resourceData: runtimeResourceData({
+          activeStageIndex: 1,
+          commandCount: 3,
+          runtimeState: "running",
+          stageRevision: 11,
+        }),
+        source: "test",
+      });
+
+      expect(result.status).toBe("completed");
+      expect(submit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind,
+          precondition: {
+            command_revision: 1,
+            runtime_state: "running",
+            stage_execution_revision: 22,
+          },
+          target: { kind: "stage_id", stage_id: "stage-001" },
+        }),
+      );
+    }
+  });
+
+  it("refreshes runtime command preconditions from the command ledger count before submit", async () => {
     const registry = registryWithStudyRuntimeCommands();
     const submit = vi.fn(async () => ({
       accepted: true,
@@ -2659,7 +2739,7 @@ describe("study runtime command contributions", () => {
       expect.objectContaining({
         kind: "solve",
         precondition: {
-          command_revision: 12,
+          command_revision: 0,
           runtime_state: "awaiting_command",
         },
       }),
@@ -2722,7 +2802,7 @@ describe("study runtime command contributions", () => {
       { precondition?: Record<string, unknown> },
     ];
     expect(request.precondition).toEqual({
-      command_revision: 8,
+      command_revision: 0,
       runtime_state: "awaiting_command",
     });
   });

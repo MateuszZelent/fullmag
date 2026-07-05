@@ -1,4 +1,4 @@
-"""Relax a periodic Permalloy antidot unit cell, then run GPU driven response.
+"""Relax a periodic Permalloy antidot unit cell with exchange-coupled repeats.
 
 Geometry:
     - Permalloy film: 200 nm x 200 nm x 10 nm.
@@ -7,19 +7,21 @@ Geometry:
       boundaries touch their periodic neighbours.
     - PBC is intentionally x/y only: this is a 2D film array with open z,
       not a fully 3D-periodic stack.
-    - The relaxation stage uses periodic-airbox demag. The frequency-response
-      stage is the currently executable MFEM GPU static-periodic magnetic
-      slice with ordinary k=0 dynamic demag through the backend tangent
-      provider, not GPU periodic-airbox Poisson.
 
 Run with:
     fullmag --dev -i examples/fem_periodic_antidot_relax_exchange_coupled_frequency_driven.py
-    just run-fem-periodic-antidot-frequency-driven-managed-headless
 """
+
+import math
 
 import fullmag as fm
 
 
+mu0_t_m_per_a = 4.0e-7 * math.pi
+equilibrium_torque_tolerance_t = 5.0e-3
+equilibrium_torque_tolerance_a_per_m = (
+    equilibrium_torque_tolerance_t / mu0_t_m_per_a
+)
 study = fm.study("fem_periodic_antidot_relax_exchange_coupled_frequency_driven")
 
 # Engine and universe
@@ -27,13 +29,13 @@ study.engine("fem")
 study.device("gpu", precision="double")
 study.universe(
     mode="manual",
-    size=(200e-9, 200e-9, 90e-9),
+    size=(200e-9, 200e-9, 400e-9),
     center=(0.0, 0.0, 0.0),
     padding=(0.0, 0.0, 0.0),
 )
 study.universe.mesh(
     minimum_element_size=5e-9,
-    maximum_element_size=20e-9,
+    maximum_element_size=100e-9,
     growth_rate=1.5,
 )
 study.pbc(x=True, y=True, demag="periodic_airbox_k0")
@@ -71,11 +73,13 @@ hole_transition = body.add_region(
     "hole_transition_refinement",
     fm.Cylinder(radius=43e-9, height=10e-9, name="hole_transition_refinement"),
     priority=10,
+    realization_policy="conformal",
 )
 hole_transition.mesh(
-    minimum_element_size=1e-9,
-    maximum_element_size=54e-9,
-    # transition_distance=14e-9,
+    minimum_element_size=0.5e-9,
+    maximum_element_size=3e-9,
+    transition_distance=10e-9,
+    # growth_rate=1.5,
     order=1,
 )
 
@@ -100,11 +104,13 @@ study.runtime_metadata(
         "magnetostatic_pbc": "periodic_airbox_k0",
         "frequency_response_device": "gpu",
         "frequency_response_dynamic_demag": True,
-        "frequency_response_magnetostatic_bc": "open",
+        "frequency_response_magnetostatic_bc": "periodic_airbox_k0",
         "periodic_pair_ids": ["x_faces", "y_faces"],
         "film_size_m": [200e-9, 200e-9, 10e-9],
-        "universe_size_m": [200e-9, 200e-9, 90e-9],
+        "universe_size_m": [200e-9, 200e-9, 400e-9],
         "lateral_air_gap_m": [0.0, 0.0],
+        "equilibrium_torque_tolerance_t": equilibrium_torque_tolerance_t,
+        "equilibrium_torque_tolerance_a_per_m": equilibrium_torque_tolerance_a_per_m,
     },
 )
 
@@ -116,7 +122,7 @@ study.fem_demag_solver(
     solver="CG",
     preconditioner="AMG",
     rtol=1e-4,
-    max_iterations=500,
+    max_iterations=1000,
 )
 study.objects.mesh.defaults(
     algorithm_2d=6,
@@ -145,37 +151,28 @@ study.tableautosave(
 )
 study.save("m", every=10e-12)
 study.save("H_demag", every=10e-12)
-study.save("H_eff", every=10e-12)
+# study.save("H_eff", every=10e-12)
 study.save("demag_phi", every=10e-12)
 
-study.stages.add_relax(
-    algorithm="projected_gradient_bb",
+study.stages.add_minimize(
+    method="bb",
     max_steps=4000,
-    tol=5.0e-4,  # A/m
+    tol=equilibrium_torque_tolerance_a_per_m,
 )
 
-# Current MFEM GPU frequency response supports the static-periodic magnetic
-# slice with ordinary k=0 dynamic demag through the backend tangent provider,
-# but not GPU periodic-airbox Poisson. Keep the already-captured relaxation
-# stage above with periodic-airbox demag outputs, then request the dynamic
-# response with magnetostatic_bc="open".
+# Keep the dynamic frequency-response stage on the same GPU PBC magnetostatic
+# model as relaxation.
 study.clear_outputs()
 study.stages.change_device("gpu")
 
 study.stages.add_frequency_response(
     frequencies_hz=[
         2.0e9,
-        2.5e9,
-        3.0e9,
-        3.5e9,
-        4.0e9,
-        4.5e9,
-        5.0e9,
     ],
     excitation_field_au_per_m=(0.0, 0.0, 1.0),
     include_demag=True,
     equilibrium_source="relax",
     damping_policy="include",
     bc=fm.PeriodicBC(["x_faces", "y_faces"]),
-    magnetostatic_bc="open",
+    magnetostatic_bc="periodic_airbox_k0",
 )

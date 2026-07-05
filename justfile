@@ -129,7 +129,7 @@ verify-fem-frequency-domain-runtime-suite:
     just verify-fem-frequency-domain-cpu-floquet-runtime
     just verify-fem-frequency-domain-gpu-floquet-runtime
     just verify-fem-frequency-domain-cpu-periodic-airbox-demag-smoke-runtime
-    just verify-fem-frequency-domain-periodic-airbox-gpu-unsupported-runtime
+    just verify-fem-frequency-domain-periodic-airbox-gpu-runtime
     just verify-fem-frequency-domain-gpu-floquet-airbox-unsupported-runtime
     just verify-fem-frequency-domain-gpu-floquet-reciprocal-runtime
     just verify-fem-frequency-domain-eigen-runtime
@@ -359,13 +359,41 @@ fem-fmr-periodic-k0-example:
 run-fem-periodic-antidot-frequency-driven-managed-headless fem_execution="script" cpu_threads="auto":
     just ensure-python
     just ensure-managed-fem-runtime
+    if [ -d .fullmag/reports/fem-periodic-antidot-frequency-driven-runtime ]; then docker compose --profile fem-gpu run --rm -e FULLMAG_HOST_UID="$(id -u)" -e FULLMAG_HOST_GID="$(id -g)" fem-gpu bash -lc 'cd /workspace && chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" .fullmag/reports/fem-periodic-antidot-frequency-driven-runtime 2>/dev/null || true'; fi
     rm -rf .fullmag/reports/fem-periodic-antidot-frequency-driven-runtime/artifacts
     mkdir -p .fullmag/reports/fem-periodic-antidot-frequency-driven-runtime
     mode="{{fem_execution}}"; \
-    case "$mode" in script|SCRIPT|auto|AUTO|0|gpu|GPU) mode="gpu" ;; cpu|CPU) echo "unsupported FEM execution mode for periodic-antidot frequency-driven example: this example exercises the native GPU static-periodic magnetic response slice with ordinary k=0 dynamic demag; use the periodic-airbox CPU verifier for periodic-airbox dynamic demag" >&2; exit 2 ;; *) echo "unsupported FEM execution mode: $mode (expected gpu)" >&2; exit 2 ;; esac; \
+    case "$mode" in script|SCRIPT|auto|AUTO|0|gpu|GPU) mode="gpu" ;; cpu|CPU) echo "unsupported FEM execution mode for periodic-antidot frequency-driven example: this example exercises the native GPU periodic-airbox dynamic-demag response slice" >&2; exit 2 ;; *) echo "unsupported FEM execution mode: $mode (expected gpu)" >&2; exit 2 ;; esac; \
     if [ "{{cpu_threads}}" = "auto" ]; then cpu_threads_env=auto; else cpu_threads_env="{{cpu_threads}}"; fi; \
-    env FULLMAG_FEM_EXECUTION=gpu FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FDM_EXECUTION=cpu FULLMAG_RELAX_DEVICE=gpu FULLMAG_FMR_DEVICE=gpu FULLMAG_CPU_THREADS="$cpu_threads_env" FULLMAG_FMR_RESPONSE_RTOL="${FULLMAG_FMR_RESPONSE_RTOL:-1e-3}" FULLMAG_FMR_RESPONSE_MAX_ITERATIONS="${FULLMAG_FMR_RESPONSE_MAX_ITERATIONS:-8192}" FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS="${FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS:-8192}" FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL="${FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL:-128}" '{{gpu_runtime_bin}}' --dev examples/fem_periodic_antidot_relax_exchange_coupled_frequency_driven.py --headless --json --output-dir .fullmag/reports/fem-periodic-antidot-frequency-driven-runtime/artifacts
-    python3 scripts/verify_fem_frequency_domain_runtime_artifacts.py --require-production-gpu --require-static-periodic .fullmag/reports/fem-periodic-antidot-frequency-driven-runtime/artifacts
+    docker compose --profile fem-gpu run --rm \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_FDM_EXECUTION=cpu \
+      -e FULLMAG_FEM_EXECUTION=gpu \
+      -e FULLMAG_RELAX_DEVICE=gpu \
+      -e FULLMAG_FMR_DEVICE=gpu \
+      -e FULLMAG_CPU_THREADS="$cpu_threads_env" \
+      -e FULLMAG_FMR_DEMAG_RTOL="${FULLMAG_FMR_DEMAG_RTOL:-1e-4}" \
+      -e FULLMAG_FMR_DEMAG_MAX_ITERATIONS="${FULLMAG_FMR_DEMAG_MAX_ITERATIONS:-1000}" \
+      -e FULLMAG_FMR_RESPONSE_RTOL="${FULLMAG_FMR_RESPONSE_RTOL:-1e-3}" \
+      -e FULLMAG_FMR_RESPONSE_MAX_ITERATIONS="${FULLMAG_FMR_RESPONSE_MAX_ITERATIONS:-8192}" \
+      -e FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS="${FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS:-8192}" \
+      -e FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL="${FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL:-128}" \
+      -e FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT="${FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT:-auto}" \
+      -e FULLMAG_FMR_RESPONSE_PRECONDITIONER_AUTO_DISABLE_THRESHOLD="${FULLMAG_FMR_RESPONSE_PRECONDITIONER_AUTO_DISABLE_THRESHOLD:-1.0}" \
+      -e FULLMAG_FMR_RESPONSE_PRECONDITIONER_AUTO_PILOT_ITERATIONS="${FULLMAG_FMR_RESPONSE_PRECONDITIONER_AUTO_PILOT_ITERATIONS:-16}" \
+      -e FULLMAG_FMR_RESPONSE_GRAPH_PRECONDITIONER_SWEEPS="${FULLMAG_FMR_RESPONSE_GRAPH_PRECONDITIONER_SWEEPS:-4}" \
+      -e FULLMAG_HOST_UID="$(id -u)" \
+      -e FULLMAG_HOST_GID="$(id -g)" \
+      fem-gpu bash -lc 'cd /workspace && \
+        trap '\''chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" .fullmag/reports/fem-periodic-antidot-frequency-driven-runtime 2>/dev/null || true'\'' EXIT && \
+        rm -rf .fullmag/reports/fem-periodic-antidot-frequency-driven-runtime/artifacts && \
+        .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu \
+          --dev examples/fem_periodic_antidot_relax_exchange_coupled_frequency_driven.py \
+          --headless \
+          --json \
+          --output-dir .fullmag/reports/fem-periodic-antidot-frequency-driven-runtime/artifacts'
+    python3 scripts/verify_fem_frequency_domain_runtime_artifacts.py --require-production-gpu --require-periodic-airbox-gpu-demag-solved .fullmag/reports/fem-periodic-antidot-frequency-driven-runtime/artifacts
 
 run-permalloy-box-fmr-modes:
     just verify-permalloy-box-fmr-modes-runtime
@@ -510,6 +538,7 @@ verify-fem-frequency-domain-periodic-airbox-runtime:
       -e FULLMAG_FMR_RESPONSE_MAX_ITERATIONS="${FULLMAG_FMR_RESPONSE_MAX_ITERATIONS:-8192}" \
       -e FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS="${FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS:-8192}" \
       -e FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL="${FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL:-128}" \
+      -e FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT="${FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT:-auto}" \
       -e FULLMAG_HOST_UID="$(id -u)" \
       -e FULLMAG_HOST_GID="$(id -g)" \
       fem-gpu bash -lc 'cd /workspace && \
@@ -570,6 +599,7 @@ verify-fem-frequency-domain-periodic-airbox-spectrum-runtime:
       -e FULLMAG_FMR_RESPONSE_MAX_ITERATIONS="${FULLMAG_FMR_RESPONSE_MAX_ITERATIONS:-8192}" \
       -e FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS="${FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS:-8192}" \
       -e FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL="${FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL:-128}" \
+      -e FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT="${FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT:-auto}" \
       -e FULLMAG_HOST_UID="$(id -u)" \
       -e FULLMAG_HOST_GID="$(id -g)" \
       fem-gpu bash -lc 'cd /workspace && \
@@ -623,6 +653,7 @@ verify-fem-frequency-domain-periodic-airbox-spectrum-bounded-runtime:
       -e FULLMAG_FMR_RESPONSE_MAX_ITERATIONS="${FULLMAG_FMR_RESPONSE_MAX_ITERATIONS:-512}" \
       -e FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS="${FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS:-512}" \
       -e FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL="${FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL:-128}" \
+      -e FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT="${FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT:-auto}" \
       -e FULLMAG_HOST_UID="$(id -u)" \
       -e FULLMAG_HOST_GID="$(id -g)" \
       fem-gpu bash -lc 'cd /workspace && \
@@ -654,9 +685,10 @@ fem-frequency-response-refinement-env:
 
 verify-fem-frequency-domain-periodic-airbox-refined-spectrum-runtime:
     just ensure-managed-fem-runtime
-    if [ -d .fullmag/reports/frequency-domain-periodic-airbox-refined-spectrum-runtime ]; then docker compose --profile fem-gpu run --rm -e FULLMAG_HOST_UID="$(id -u)" -e FULLMAG_HOST_GID="$(id -g)" fem-gpu bash -lc 'cd /workspace && chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" .fullmag/reports/frequency-domain-periodic-airbox-refined-spectrum-runtime 2>/dev/null || true'; fi
     REFINEMENT_SOURCE_ARTIFACTS="${FULLMAG_FMR_REFINEMENT_SOURCE_ARTIFACTS:-.fullmag/reports/frequency-domain-periodic-airbox-spectrum-runtime/artifacts}" && \
+    python3 scripts/verify_fem_frequency_domain_runtime_artifacts.py --require-periodic-airbox-cpu-demag-solved --require-frozen-magnetic-submesh --require-min-frequency-points 3 --require-response-peak --require-field-payloads-for-frequency-points --require-derived-peak-mode "$REFINEMENT_SOURCE_ARTIFACTS" && \
     REFINED_FREQUENCIES_GHZ="$(python3 scripts/fem_frequency_response_refinement_env.py "$REFINEMENT_SOURCE_ARTIFACTS")" && \
+    if [ -d .fullmag/reports/frequency-domain-periodic-airbox-refined-spectrum-runtime ]; then docker compose --profile fem-gpu run --rm -e FULLMAG_HOST_UID="$(id -u)" -e FULLMAG_HOST_GID="$(id -g)" fem-gpu bash -lc 'cd /workspace && chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" .fullmag/reports/frequency-domain-periodic-airbox-refined-spectrum-runtime 2>/dev/null || true'; fi && \
     rm -rf .fullmag/reports/frequency-domain-periodic-airbox-refined-spectrum-runtime && \
     mkdir -p .fullmag/reports/frequency-domain-periodic-airbox-refined-spectrum-runtime && \
     docker compose --profile fem-gpu run --rm \
@@ -677,6 +709,7 @@ verify-fem-frequency-domain-periodic-airbox-refined-spectrum-runtime:
       -e FULLMAG_FMR_RESPONSE_MAX_ITERATIONS="${FULLMAG_FMR_RESPONSE_MAX_ITERATIONS:-8192}" \
       -e FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS="${FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS:-8192}" \
       -e FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL="${FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL:-128}" \
+      -e FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT="${FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT:-auto}" \
       -e FULLMAG_HOST_UID="$(id -u)" \
       -e FULLMAG_HOST_GID="$(id -g)" \
       fem-gpu bash -lc 'cd /workspace && \
@@ -702,9 +735,9 @@ verify-fem-frequency-domain-periodic-airbox-refined-spectrum-runtime:
         test -f .fullmag/reports/frequency-domain-periodic-airbox-refined-spectrum-runtime/artifacts/response/field_payloads.zarr/frequency_0004/vector_xyz_complex/0.0.0 && \
         test -f .fullmag/reports/frequency-domain-periodic-airbox-refined-spectrum-runtime/artifacts/frequency_domain/manifest.v1.json && \
         test -f .fullmag/reports/frequency-domain-periodic-airbox-refined-spectrum-runtime/artifacts/mesh/periodic_pairs.v1.json && \
-        python3 scripts/verify_fem_frequency_domain_runtime_artifacts.py --require-periodic-airbox-cpu-demag-solved --require-frozen-magnetic-submesh --require-min-frequency-points 5 --require-response-peak --require-field-payloads-for-frequency-points .fullmag/reports/frequency-domain-periodic-airbox-refined-spectrum-runtime/artifacts && \
+        python3 scripts/verify_fem_frequency_domain_runtime_artifacts.py --require-periodic-airbox-cpu-demag-solved --require-frozen-magnetic-submesh --require-min-frequency-points 5 --require-response-peak --require-interior-response-peak --require-field-payloads-for-frequency-points .fullmag/reports/frequency-domain-periodic-airbox-refined-spectrum-runtime/artifacts && \
         python3 scripts/derive_fem_frequency_response_modes.py .fullmag/reports/frequency-domain-periodic-airbox-refined-spectrum-runtime/artifacts && \
-        python3 scripts/verify_fem_frequency_domain_runtime_artifacts.py --require-periodic-airbox-cpu-demag-solved --require-frozen-magnetic-submesh --require-min-frequency-points 5 --require-response-peak --require-field-payloads-for-frequency-points --require-derived-peak-mode .fullmag/reports/frequency-domain-periodic-airbox-refined-spectrum-runtime/artifacts && \
+        python3 scripts/verify_fem_frequency_domain_runtime_artifacts.py --require-periodic-airbox-cpu-demag-solved --require-frozen-magnetic-submesh --require-min-frequency-points 5 --require-response-peak --require-interior-response-peak --require-field-payloads-for-frequency-points --require-derived-peak-mode .fullmag/reports/frequency-domain-periodic-airbox-refined-spectrum-runtime/artifacts && \
         test -f .fullmag/reports/frequency-domain-periodic-airbox-refined-spectrum-runtime/artifacts/response/derived_modes/fmr_peak_mode.v1.json'
 
 verify-fem-frequency-domain-periodic-airbox-z-padding-runtime:
@@ -733,6 +766,7 @@ verify-fem-frequency-domain-periodic-airbox-z-padding-runtime:
       -e FULLMAG_FMR_RESPONSE_MAX_ITERATIONS="${FULLMAG_FMR_RESPONSE_MAX_ITERATIONS:-8192}" \
       -e FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS="${FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS:-8192}" \
       -e FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL="${FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL:-128}" \
+      -e FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT="${FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT:-auto}" \
       -e FULLMAG_HOST_UID="$(id -u)" \
       -e FULLMAG_HOST_GID="$(id -g)" \
       fem-gpu bash -lc 'cd /workspace && \
@@ -801,6 +835,7 @@ verify-fem-frequency-domain-periodic-airbox-supercell-runtime:
       -e FULLMAG_FMR_RESPONSE_MAX_ITERATIONS="${FULLMAG_FMR_RESPONSE_MAX_ITERATIONS:-8192}" \
       -e FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS="${FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS:-8192}" \
       -e FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL="${FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL:-128}" \
+      -e FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT="${FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT:-auto}" \
       -e FULLMAG_HOST_UID="$(id -u)" \
       -e FULLMAG_HOST_GID="$(id -g)" \
       fem-gpu bash -lc 'cd /workspace && \
@@ -862,6 +897,7 @@ verify-fem-frequency-domain-periodic-airbox-supercell-diagnostics-runtime:
       -e FULLMAG_FMR_RESPONSE_MAX_ITERATIONS="${FULLMAG_FMR_RESPONSE_MAX_ITERATIONS:-8}" \
       -e FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS="${FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS:-8}" \
       -e FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL="${FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL:-8}" \
+      -e FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT="${FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT:-auto}" \
       -e FULLMAG_HOST_UID="$(id -u)" \
       -e FULLMAG_HOST_GID="$(id -g)" \
       fem-gpu bash -lc 'cd /workspace && \
@@ -906,36 +942,41 @@ verify-fem-frequency-domain-cpu-periodic-airbox-demag-smoke-runtime cpu_threads=
     env -u FULLMAG_FEM_EXECUTION FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FDM_EXECUTION=cpu FULLMAG_FMR_DEVICE=cpu FULLMAG_CPU_THREADS="$cpu_threads_env" FULLMAG_GMSH_THREADS="${FULLMAG_GMSH_THREADS:-1}" '{{gpu_runtime_bin}}' --dev examples/fem_frequency_response_cpu_periodic_airbox_demag_smoke.py --headless --json --output-dir .fullmag/reports/frequency-domain-cpu-periodic-airbox-demag-smoke-runtime/artifacts
     python3 scripts/verify_fem_frequency_domain_runtime_artifacts.py --require-periodic-airbox-cpu-demag-solved .fullmag/reports/frequency-domain-cpu-periodic-airbox-demag-smoke-runtime/artifacts
 
-verify-fem-frequency-domain-periodic-airbox-gpu-unsupported-runtime:
+verify-fem-frequency-domain-periodic-airbox-gpu-runtime:
     just ensure-managed-fem-runtime
-    if [ -d .fullmag/reports/frequency-domain-periodic-airbox-gpu-unsupported-runtime ]; then docker compose --profile fem-gpu run --rm -e FULLMAG_HOST_UID="$(id -u)" -e FULLMAG_HOST_GID="$(id -g)" fem-gpu bash -lc 'cd /workspace && chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" .fullmag/reports/frequency-domain-periodic-airbox-gpu-unsupported-runtime 2>/dev/null || true'; fi
-    rm -rf .fullmag/reports/frequency-domain-periodic-airbox-gpu-unsupported-runtime
-    mkdir -p .fullmag/reports/frequency-domain-periodic-airbox-gpu-unsupported-runtime
+    if [ -d .fullmag/reports/frequency-domain-periodic-airbox-gpu-runtime ]; then docker compose --profile fem-gpu run --rm -e FULLMAG_HOST_UID="$(id -u)" -e FULLMAG_HOST_GID="$(id -g)" fem-gpu bash -lc 'cd /workspace && chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" .fullmag/reports/frequency-domain-periodic-airbox-gpu-runtime 2>/dev/null || true'; fi
+    rm -rf .fullmag/reports/frequency-domain-periodic-airbox-gpu-runtime
+    mkdir -p .fullmag/reports/frequency-domain-periodic-airbox-gpu-runtime
     docker compose --profile fem-gpu run --rm \
       -e PYTHONPATH=/workspace/packages/fullmag-py/src \
       -e FULLMAG_PYTHON=/usr/bin/python3 \
       -e FULLMAG_FDM_EXECUTION=cpu \
       -e FULLMAG_FEM_EXECUTION=gpu \
+      -e FULLMAG_FMR_DEVICE=gpu \
       -e FULLMAG_RELAX_DEVICE=gpu \
       -e FULLMAG_CPU_THREADS="${FULLMAG_CPU_THREADS:-auto}" \
+      -e FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT="${FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT:-auto}" \
+      -e FULLMAG_FMR_RESPONSE_PRECONDITIONER_AUTO_DISABLE_THRESHOLD="${FULLMAG_FMR_RESPONSE_PRECONDITIONER_AUTO_DISABLE_THRESHOLD:-1.0}" \
+      -e FULLMAG_FMR_RESPONSE_GRAPH_PRECONDITIONER_SWEEPS="${FULLMAG_FMR_RESPONSE_GRAPH_PRECONDITIONER_SWEEPS:-4}" \
       -e FULLMAG_HOST_UID="$(id -u)" \
       -e FULLMAG_HOST_GID="$(id -g)" \
       fem-gpu bash -lc 'cd /workspace && \
-        trap '\''chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" .fullmag/reports/frequency-domain-periodic-airbox-gpu-unsupported-runtime 2>/dev/null || true'\'' EXIT && \
-        rm -rf .fullmag/reports/frequency-domain-periodic-airbox-gpu-unsupported-runtime/artifacts && \
-        set +e; \
+        trap '\''chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" .fullmag/reports/frequency-domain-periodic-airbox-gpu-runtime 2>/dev/null || true'\'' EXIT && \
+        rm -rf .fullmag/reports/frequency-domain-periodic-airbox-gpu-runtime/artifacts && \
         .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu \
-          examples/fem_frequency_response_gpu_periodic_airbox_unsupported_smoke.py \
+          examples/fem_frequency_response_gpu_periodic_airbox_smoke.py \
           --backend fem \
           --headless \
           --json \
-          --output-dir .fullmag/reports/frequency-domain-periodic-airbox-gpu-unsupported-runtime/artifacts; \
-        set -e; \
-        test -f .fullmag/reports/frequency-domain-periodic-airbox-gpu-unsupported-runtime/artifacts/response/progress.v1.json && \
-        test -f .fullmag/reports/frequency-domain-periodic-airbox-gpu-unsupported-runtime/artifacts/response/diagnostics/solver.v1.json && \
-        test -f .fullmag/reports/frequency-domain-periodic-airbox-gpu-unsupported-runtime/artifacts/frequency_domain/manifest.v1.json && \
-        test -f .fullmag/reports/frequency-domain-periodic-airbox-gpu-unsupported-runtime/artifacts/mesh/periodic_pairs.v1.json && \
-        python3 scripts/verify_fem_frequency_domain_runtime_artifacts.py --require-production-gpu --require-periodic-airbox-gpu-unsupported --allow-unavailable .fullmag/reports/frequency-domain-periodic-airbox-gpu-unsupported-runtime/artifacts'
+          --output-dir .fullmag/reports/frequency-domain-periodic-airbox-gpu-runtime/artifacts && \
+        test -f .fullmag/reports/frequency-domain-periodic-airbox-gpu-runtime/artifacts/response/progress.v1.json && \
+        test -f .fullmag/reports/frequency-domain-periodic-airbox-gpu-runtime/artifacts/response/diagnostics/solver.v1.json && \
+        test -f .fullmag/reports/frequency-domain-periodic-airbox-gpu-runtime/artifacts/frequency_domain/manifest.v1.json && \
+        test -f .fullmag/reports/frequency-domain-periodic-airbox-gpu-runtime/artifacts/mesh/periodic_pairs.v1.json && \
+        python3 scripts/verify_fem_frequency_domain_runtime_artifacts.py --require-production-gpu --require-periodic-airbox-gpu-demag-solved .fullmag/reports/frequency-domain-periodic-airbox-gpu-runtime/artifacts'
+
+verify-fem-frequency-domain-periodic-airbox-gpu-unsupported-runtime:
+    just verify-fem-frequency-domain-periodic-airbox-gpu-runtime
 
 verify-fem-frequency-domain-static-periodic-runtime:
     just ensure-managed-fem-runtime

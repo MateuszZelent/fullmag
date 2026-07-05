@@ -12,7 +12,7 @@
 
 namespace fullmag::fem::frequency_domain {
 
-enum class FrequencyDomainStatus {
+enum class FrequencyDomainStatus : std::uint32_t {
     ok,
     unavailable,
     validation_error,
@@ -22,12 +22,12 @@ enum class FrequencyDomainStatus {
     interrupted,
 };
 
-enum class FrequencyDomainStudyKind {
+enum class FrequencyDomainStudyKind : std::uint32_t {
     driven_frequency_response,
     modal_dynamic_matrix,
 };
 
-enum class FrequencyDomainPhaseConvention {
+enum class FrequencyDomainPhaseConvention : std::uint32_t {
     exp_i_omega_t,
     exp_minus_i_omega_t,
 };

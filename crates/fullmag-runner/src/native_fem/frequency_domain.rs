@@ -55,6 +55,16 @@ pub(crate) type NativeFrequencyDomainApplyCallback =
         error_message: *mut c_char,
     ) -> ffi::fullmag_fem_frequency_domain_status;
 #[cfg(feature = "fem-gpu")]
+pub(crate) type NativeFrequencyDomainComplexApplyCallback =
+    unsafe extern "C" fn(
+        user_data: *mut c_void,
+        in_real: *const f64,
+        in_imag: *const f64,
+        out_real: *mut f64,
+        out_imag: *mut f64,
+        error_message: *mut c_char,
+    ) -> ffi::fullmag_fem_frequency_domain_status;
+#[cfg(feature = "fem-gpu")]
 pub(crate) type NativeFrequencyDomainApplyWithPotentialCallback =
     unsafe extern "C" fn(
         user_data: *mut c_void,
@@ -106,6 +116,10 @@ pub(crate) struct NativeDrivenFrequencyResponsePeriodicAirboxCoupledBlockProblem
     pub apply_stiffness: Option<NativeFrequencyDomainApplyCallback>,
     #[cfg(feature = "fem-gpu")]
     pub apply_mass: Option<NativeFrequencyDomainApplyCallback>,
+    #[cfg(feature = "fem-gpu")]
+    pub apply_complex_stiffness: Option<NativeFrequencyDomainComplexApplyCallback>,
+    #[cfg(feature = "fem-gpu")]
+    pub apply_complex_mass: Option<NativeFrequencyDomainComplexApplyCallback>,
     #[cfg(feature = "fem-gpu")]
     pub operator_user_data: *mut c_void,
     pub drive_real: &'a [f64],
@@ -347,6 +361,36 @@ pub(crate) fn solve_native_driven_response_contract(
     #[cfg(feature = "fem-gpu")]
     super::configure_managed_openmpi_environment();
     solve_native_driven_response_contract_impl(request)
+}
+
+#[cfg(feature = "fem-gpu")]
+fn positive_env_f64(primary: &str, alias: &str) -> f64 {
+    std::env::var(primary)
+        .ok()
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .or_else(|| {
+            std::env::var(alias)
+                .ok()
+                .and_then(|value| value.parse::<f64>().ok())
+                .filter(|value| value.is_finite() && *value > 0.0)
+        })
+        .unwrap_or(0.0)
+}
+
+#[cfg(feature = "fem-gpu")]
+fn positive_env_u64(primary: &str, alias: &str) -> u64 {
+    std::env::var(primary)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .or_else(|| {
+            std::env::var(alias)
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .filter(|value| *value > 0)
+        })
+        .unwrap_or(0)
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -646,6 +690,10 @@ fn solve_native_driven_frequency_response_impl(
             .and_then(|problem| problem.apply_stiffness),
         periodic_airbox_coupled_block_apply_mass: periodic_airbox_coupled_block
             .and_then(|problem| problem.apply_mass),
+        periodic_airbox_coupled_block_apply_complex_stiffness: periodic_airbox_coupled_block
+            .and_then(|problem| problem.apply_complex_stiffness),
+        periodic_airbox_coupled_block_apply_complex_mass: periodic_airbox_coupled_block
+            .and_then(|problem| problem.apply_complex_mass),
         periodic_airbox_coupled_block_operator_user_data: periodic_airbox_coupled_block
             .map_or(std::ptr::null_mut(), |problem| problem.operator_user_data),
         periodic_airbox_coupled_block_drive_real: periodic_airbox_coupled_block
@@ -670,13 +718,87 @@ fn solve_native_driven_frequency_response_impl(
             .map_or(0, |values| values.len() as u64),
         mfem_observable_uniform_ms: mfem_operator
             .map_or(0.0, |problem| problem.observable_uniform_ms),
+        abi_version: ffi::FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION,
+        reserved_contract_flags: 0,
+        struct_size: std::mem::size_of::<ffi::fullmag_fem_frequency_domain_driven_response_request>(
+        ) as u64,
+        solver_relative_tolerance: positive_env_f64(
+            "FULLMAG_FEM_FREQUENCY_RESPONSE_RTOL",
+            "FULLMAG_FMR_RESPONSE_RTOL",
+        ),
+        solver_absolute_tolerance: positive_env_f64(
+            "FULLMAG_FEM_FREQUENCY_RESPONSE_ATOL",
+            "FULLMAG_FMR_RESPONSE_ATOL",
+        ),
+        solver_max_iterations: positive_env_u64(
+            "FULLMAG_FEM_FREQUENCY_RESPONSE_MAX_ITERATIONS",
+            "FULLMAG_FMR_RESPONSE_MAX_ITERATIONS",
+        ),
+        solver_restart_iterations: positive_env_u64(
+            "FULLMAG_FEM_FREQUENCY_RESPONSE_RESTART_ITERATIONS",
+            "FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS",
+        ),
+        solver_progress_interval_iterations: positive_env_u64(
+            "FULLMAG_FEM_FREQUENCY_RESPONSE_PROGRESS_INTERVAL",
+            "FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL",
+        ),
+        tiny_validation_stiffness_matrix_value_count: tiny_validation
+            .and_then(|problem| problem.stiffness_matrix_row_major)
+            .map_or(0, |values| values.len() as u64),
+        tiny_validation_mass_matrix_value_count: tiny_validation
+            .and_then(|problem| problem.mass_matrix_row_major)
+            .map_or(0, |values| values.len() as u64),
+        tiny_validation_stiffness_diagonal_value_count: tiny_validation
+            .and_then(|problem| problem.stiffness_diagonal)
+            .map_or(0, |values| values.len() as u64),
+        tiny_validation_mass_diagonal_value_count: tiny_validation
+            .and_then(|problem| problem.mass_diagonal)
+            .map_or(0, |values| values.len() as u64),
+        tiny_validation_drive_real_value_count: tiny_validation
+            .map_or(0, |problem| problem.drive_real.len() as u64),
+        tiny_validation_drive_imag_value_count: tiny_validation
+            .and_then(|problem| problem.drive_imag)
+            .map_or(0, |values| values.len() as u64),
+        mfem_equilibrium_m_value_count: mfem_operator
+            .map_or(0, |problem| (problem.equilibrium_m.len() * 3) as u64),
+        mfem_h_ext_value_count: mfem_operator
+            .map_or(0, |problem| problem.h_ext_a_per_m.len() as u64),
+        mfem_uniaxial_anisotropy_axis_value_count: mfem_operator
+            .and_then(|problem| problem.uniaxial_anisotropy_axis)
+            .map_or(0, |values| values.len() as u64),
+        mfem_alpha_value_count: mfem_operator
+            .and_then(|problem| problem.alpha_per_node)
+            .map_or(0, |values| values.len() as u64),
+        mfem_drive_real_value_count: mfem_operator
+            .map_or(0, |problem| problem.drive_real.len() as u64),
+        mfem_drive_imag_value_count: mfem_operator
+            .and_then(|problem| problem.drive_imag)
+            .map_or(0, |values| values.len() as u64),
+        mfem_dmi_lumped_mass_value_count: mfem_operator
+            .and_then(|problem| problem.dmi_lumped_mass)
+            .map_or(0, |values| values.len() as u64),
+        mfem_dmi_ms_field_value_count: mfem_operator
+            .and_then(|problem| problem.dmi_ms_field)
+            .map_or(0, |values| values.len() as u64),
+        mfem_demag_tangent_matrix_value_count: mfem_operator
+            .and_then(|problem| problem.demag_tangent_matrix_row_major)
+            .map_or(0, |values| values.len() as u64),
+        periodic_airbox_coupled_block_stiffness_matrix_value_count: periodic_airbox_coupled_block
+            .map_or(0, |problem| problem.stiffness_matrix_row_major.len() as u64),
+        periodic_airbox_coupled_block_mass_matrix_value_count: periodic_airbox_coupled_block
+            .map_or(0, |problem| problem.mass_matrix_row_major.len() as u64),
+        periodic_airbox_coupled_block_drive_real_value_count: periodic_airbox_coupled_block
+            .map_or(0, |problem| problem.drive_real.len() as u64),
+        periodic_airbox_coupled_block_drive_imag_value_count: periodic_airbox_coupled_block
+            .and_then(|problem| problem.drive_imag)
+            .map_or(0, |values| values.len() as u64),
     };
     let mfem_apply_demag_tangent_with_potential =
         mfem_operator.and_then(|problem| problem.apply_demag_tangent_with_potential);
     let mut ffi_result = NativeDrivenFrequencyResponseFfiResult::default();
     let rc = unsafe {
         if mfem_apply_demag_tangent_with_potential.is_some() {
-            ffi::fullmag_fem_frequency_domain_solve_driven_response_v9(
+            ffi::fullmag_fem_frequency_domain_solve_driven_response_v10(
                 &ffi_request,
                 mfem_apply_demag_tangent_with_potential,
                 &mut ffi_result.inner,
@@ -2129,9 +2251,9 @@ mod tests {
             output_directory: None,
             write_partial_artifacts: false,
         })
-        .expect("native driven contract should return a structured unavailable result");
+        .expect("native driven contract should return a structured validation result");
 
-        assert_eq!(result.status, NativeFrequencyDomainStatus::Unavailable);
+        assert_eq!(result.status, NativeFrequencyDomainStatus::ValidationError);
         assert!(result
             .diagnostics_json
             .contains("\"operator_diagnostics\":{\"schema_version\":\"frequency_domain_operator_diagnostics.v1\""), "{}", result.diagnostics_json);

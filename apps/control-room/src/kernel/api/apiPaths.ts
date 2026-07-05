@@ -387,6 +387,10 @@ export const MESHING_OBJECT_QUALITY_PATH = openApiV2Path(
   "/v2/sessions/current/meshing/meshes/objects/{object_id}/quality",
 );
 
+export const MESHING_REGION_QUALITY_PATH = openApiV2Path(
+  "/v2/sessions/current/meshing/meshes/regions/{region_id}/quality",
+);
+
 export const MESHING_OBJECT_SIZE_FIELD_PATH = openApiV2Path(
   "/v2/sessions/current/meshing/meshes/objects/{object_id}/size-field",
 );

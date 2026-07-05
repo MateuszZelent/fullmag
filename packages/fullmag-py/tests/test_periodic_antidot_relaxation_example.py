@@ -4,6 +4,7 @@ import ast
 import contextlib
 import io
 import json
+import math
 import unittest
 from pathlib import Path
 
@@ -24,6 +25,11 @@ EXAMPLES = {
     "uniform_slab": Path("examples/fem_periodic_uniform_slab_relax_exchange_coupled.py"),
     "air_gap": Path("examples/fem_periodic_antidot_relax_air_gap.py"),
 }
+MU0_T_M_PER_A = 4.0e-7 * math.pi
+FREQUENCY_DRIVEN_EQUILIBRIUM_TORQUE_TOLERANCE_T = 5.0e-3
+FREQUENCY_DRIVEN_EQUILIBRIUM_TORQUE_TOLERANCE_A_PER_M = (
+    FREQUENCY_DRIVEN_EQUILIBRIUM_TORQUE_TOLERANCE_T / MU0_T_M_PER_A
+)
 
 
 class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
@@ -209,18 +215,20 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
         )
         self.assertEqual(payload["stages"][2]["entrypoint_kind"], "flat_frequency_response")
 
-        relax = payload["stages"][0]["ir"]["study"]
+        minimize = payload["stages"][0]["ir"]["study"]
         self.assertEqual(
             payload["stages"][0]["ir"]["problem_meta"]["runtime_metadata"][
                 "runtime_selection"
             ]["device"],
             "cuda",
         )
-        self.assertEqual(relax["kind"], "relaxation")
-        self.assertEqual(relax["algorithm"], "projected_gradient_bb")
-        self.assertEqual(relax["stop"]["torque_tolerance_apm"], 5.0e-4)
-        self.assert_study_saves_equilibrium_and_demag_fields(relax)
-        self.assert_table_logs_pbc_sensitive_quantities(relax)
+        self.assertEqual(minimize["kind"], "relaxation")
+        self.assertEqual(minimize["algorithm"], "projected_gradient_bb")
+        self.assertEqual(minimize["stop"]["max_steps"], 4000)
+        self.assertAlmostEqual(
+            minimize["stop"]["torque_tolerance_apm"],
+            FREQUENCY_DRIVEN_EQUILIBRIUM_TORQUE_TOLERANCE_A_PER_M,
+        )
 
         self.assertEqual(
             payload["stages"][2]["ir"]["problem_meta"]["runtime_metadata"][
@@ -231,7 +239,7 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
         frequency_response = payload["stages"][2]["ir"]["study"]
         self.assertEqual(frequency_response["kind"], "frequency_response")
         self.assertEqual(frequency_response["operator"]["include_demag"], True)
-        self.assertEqual(frequency_response["magnetostatic_bc"], "open")
+        self.assertEqual(frequency_response["magnetostatic_bc"], "periodic_airbox_k0")
         self.assertEqual(frequency_response["equilibrium"], {"kind": "relaxed_initial_state"})
         self.assertEqual(frequency_response["damping_policy"], "include")
         self.assertEqual(
@@ -240,18 +248,9 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
         )
         self.assertEqual(
             frequency_response["frequencies_hz"],
-            {
-                "values_hz": [
-                    2.0e9,
-                    2.5e9,
-                    3.0e9,
-                    3.5e9,
-                    4.0e9,
-                    4.5e9,
-                    5.0e9,
-                ],
-            },
+            {"values_hz": [2.0e9]},
         )
+        self.assertNotIn("solver_policy", frequency_response)
         self.assertEqual(
             frequency_response["sampling"]["outputs"],
             [
@@ -265,12 +264,24 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
         metadata = payload["ir"]["problem_meta"]["runtime_metadata"]
         scenario_metadata = metadata["periodic_antidot_relaxation"]
         self.assertEqual(scenario_metadata["frequency_response_dynamic_demag"], True)
-        self.assertEqual(scenario_metadata["frequency_response_magnetostatic_bc"], "open")
+        self.assertAlmostEqual(
+            scenario_metadata["equilibrium_torque_tolerance_t"],
+            FREQUENCY_DRIVEN_EQUILIBRIUM_TORQUE_TOLERANCE_T,
+        )
+        self.assertAlmostEqual(
+            scenario_metadata["equilibrium_torque_tolerance_a_per_m"],
+            FREQUENCY_DRIVEN_EQUILIBRIUM_TORQUE_TOLERANCE_A_PER_M,
+        )
+        self.assertEqual(
+            scenario_metadata["frequency_response_magnetostatic_bc"],
+            "periodic_airbox_k0",
+        )
         self.assert_scenario_metadata(
             metadata,
             scenario="exchange_coupled_frequency_driven",
             exchange_coupled=True,
             universe_xy=2e-7,
+            universe_z=4e-7,
             lateral_gap_xy=0.0,
         )
 

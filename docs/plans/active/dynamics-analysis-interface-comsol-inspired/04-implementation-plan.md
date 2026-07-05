@@ -12,11 +12,27 @@
 
 ## Scope
 
-This plan is frontend/control-room only for presentation logic, but explicitly boundaries backend-command and authoring contracts:
+This plan is the Control Room implementation layer. It must be read together
+with `05-frequency-driven-backend-refactor-plan.md`, which owns the corrected
+backend plan for the `FrequencyResponse` solver, `periodic_airbox_k0` demag,
+CPU/GPU execution, and future nonzero-k demag-k/dispersion work.
+
+Frontend work may expose diagnostics and unavailable states, but it must not
+present a read-only placeholder, validation fallback, no-demag smoke,
+unavailable bundle, or local draft mutation as the production solver.
+
+This plan is frontend/control-room only for presentation logic, but explicitly
+boundaries backend-command and authoring contracts:
 1. **Frontend-Only Presentation**: Tree results rendering, ECharts spectrum charts, dispersion plots, complex phase visualization sliders, and WebGL overlays.
 2. **Backend-Command / Authoring Transactions**: Study Setup/Solver Configuration nodes must modify the stage draft and trigger API study transactions using the canonical transaction path. Actions that mutate state or request computation (e.g. `Trigger Field Calculation`, `Update Brillouin Zone Path`) must execute as capability-gated command dispatches to the backend, not as local UI mutations. If a capability (like Floquet dynamic demag or coupled magnon-polarons) is unsupported, the command registry must reject the action with a stable degraded diagnostic.
 
-> **Phase Split**: Tasks are divided into **Phase 1** (frontend presentation using existing resource hooks and artifacts) and **Phase 2** (backend-dependent authoring requiring new stage transaction schemas). Phase 2 tasks are marked with `[P2]` and must not begin until the corresponding backend contract (`stage.study_type`, `stage.solver.*`, `stage.dependencies.*`, `stage.physics.*`, `stage.physics.boundary_conditions`, `stage.physics.k_path`) is implemented in the Rust session API.
+> **Corrected Phase Split**: Earlier `[P2]` labels mean "temporary
+> backend-transaction dependency", not "acceptable final UX". Study Setup
+> surfaces may render read-only diagnostics only while the canonical backend
+> transaction schema is absent. Once a schema exists, the UI must commit through
+> `model.commitTransaction`, preserve requested/resolved solver intent, and
+> remove the read-only placeholder. Backend production sequencing is governed
+> by `05-frequency-driven-backend-refactor-plan.md`.
 
 ## Priority 0: Scientific Invariant Prerequisites
 
@@ -255,3 +271,17 @@ readability.
 - [x] No direct module `fetch()`.
 - [x] No module imports another module's internals.
 - [x] ECharts and viewport resources dispose correctly.
+
+## Backend Readiness Caveat
+
+The checked Control Room items above are UI/readiness claims only. They do not
+mean that `periodic_airbox_k0` driven response, GPU frequency-driven demag,
+nonzero-k Floquet demag-k, Study Setup transactions, or modal dispersion are
+production complete. Those claims require the CPU/GPU backend gates, artifact
+validators, capability-matrix status changes, and managed `just` verification
+listed in `05-frequency-driven-backend-refactor-plan.md`.
+
+Any implementation worker continuing from this file must first identify whether
+the next task is UI presentation, authoring transaction wiring, CPU backend,
+GPU backend, artifact/API, or future dispersion. A task in one layer must not
+be closed with evidence from a different layer.

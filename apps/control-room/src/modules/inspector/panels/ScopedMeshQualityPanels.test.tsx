@@ -108,6 +108,20 @@ const qualityPayload = {
     {
       element_index: 4,
       gamma: 0.03,
+      scope_label: "region:film:core",
+      sicn: 0.05,
+    },
+  ],
+  quality_source: "region_membership",
+};
+
+const objectQualityPayload = {
+  ...qualityPayload,
+  quality_source: "object",
+  worst_elements: [
+    {
+      element_index: 4,
+      gamma: 0.03,
       scope_label: "object:waveguide",
       sicn: 0.05,
     },
@@ -125,6 +139,8 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
     `meshing/objects/${objectId}/quality`,
   resolveObjectMeshReportResourceKey: (objectId: string) =>
     `meshing/objects/${objectId}/report`,
+  resolveMeshRegionQualityResourceKey: (regionId: string) =>
+    `meshing/regions/${regionId}/quality`,
   useMeshSummaryResource: () => ({
     data: {
       effective_airbox_target: {
@@ -184,6 +200,17 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
       realization_warnings: [],
       region_id: "film:core",
       source: "realized_region",
+    },
+    error: null,
+    refetch: vi.fn(),
+    revision: 3,
+    status: "ready",
+  }),
+  useMeshRegionQualityResource: () => ({
+    data: {
+      quality: qualityPayload,
+      region_id: "film:core",
+      revision: 3,
     },
     error: null,
     refetch: vi.fn(),
@@ -293,7 +320,7 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
   useObjectMeshQualityResource: (objectId: string) => ({
     data: {
       object_id: objectId,
-      quality: qualityPayload,
+      quality: objectQualityPayload,
       revision: 3,
     },
     error: null,

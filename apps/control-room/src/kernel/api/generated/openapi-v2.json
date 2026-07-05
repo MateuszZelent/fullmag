@@ -10053,6 +10053,29 @@
         ],
         "type": "object"
       },
+      "MeshRegionQualityResource": {
+        "properties": {
+          "quality": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "region_id": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "region_id"
+        ],
+        "type": "object"
+      },
       "MeshRegionResource": {
         "properties": {
           "bounds_max": {
@@ -23405,6 +23428,40 @@
           },
           "416": {
             "description": "Requested topology byte range is not satisfiable"
+          }
+        },
+        "tags": [
+          "meshing"
+        ]
+      }
+    },
+    "/v2/sessions/current/meshing/meshes/regions/{region_id}/quality": {
+      "get": {
+        "operationId": "meshing_get_sessions_current_meshing_meshes_regions_region_id_quality",
+        "parameters": [
+          {
+            "description": "Authored or realized region id",
+            "in": "path",
+            "name": "region_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeshRegionQualityResource"
+                }
+              }
+            },
+            "description": "Per-region mesh quality"
+          },
+          "404": {
+            "description": "No active workspace, mesh, scene, or region membership"
           }
         },
         "tags": [

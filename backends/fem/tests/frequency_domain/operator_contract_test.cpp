@@ -504,7 +504,7 @@ void driven_response_contract_preserves_operator_diagnostics_json()
     const fd::FrequencyDomainContractResult result =
         fd::solve_driven_response_contract(request);
 
-    check(result.status == fd::FrequencyDomainStatus::unavailable, "driven contract should stay unavailable");
+    check(result.status == fd::FrequencyDomainStatus::validation_error, "legacy driven contract should reject missing operator payload");
     check(
         contains(result.diagnostics_json, "\"operator_diagnostics\":{\"schema_version\":\"frequency_domain_operator_diagnostics.v1\""),
         "driven diagnostics must embed operator diagnostics");

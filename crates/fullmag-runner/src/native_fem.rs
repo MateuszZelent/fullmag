@@ -2045,9 +2045,33 @@ impl NativeFemBackend {
         &mut self,
         delta_m: &[[f64; 3]],
     ) -> Result<(Vec<[f64; 3]>, Vec<f64>), RunError> {
-        let delta_h_demag = self.apply_demag_tangent(delta_m)?;
-        let delta_phi = self.copy_demag_phi(delta_m.len())?;
-        Ok((delta_h_demag, delta_phi))
+        let delta_m_flat = delta_m
+            .iter()
+            .flat_map(|value| value.iter().copied())
+            .collect::<Vec<_>>();
+        let mut out_delta_h_demag = vec![0.0f64; delta_m_flat.len()];
+        let mut out_delta_phi = vec![0.0f64; delta_m.len()];
+        let rc = unsafe {
+            ffi::fullmag_fem_backend_apply_demag_tangent_with_potential_f64(
+                self.handle,
+                delta_m_flat.as_ptr(),
+                delta_m_flat.len() as u64,
+                out_delta_h_demag.as_mut_ptr(),
+                out_delta_h_demag.len() as u64,
+                out_delta_phi.as_mut_ptr(),
+                out_delta_phi.len() as u64,
+            )
+        };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM GPU apply demag tangent with potential failed"));
+        }
+        Ok((
+            out_delta_h_demag
+                .chunks_exact(3)
+                .map(|chunk| [chunk[0], chunk[1], chunk[2]])
+                .collect(),
+            out_delta_phi,
+        ))
     }
 
     pub fn snapshot_step_stats(&mut self, _node_count: usize) -> Result<StepStats, RunError> {
@@ -5927,9 +5951,9 @@ mod tests {
         );
         assert!(
             source.contains("pub fn apply_demag_tangent_with_potential(")
-                && source.contains("let delta_h_demag = self.apply_demag_tangent(delta_m)?")
-                && source.contains("let delta_phi = self.copy_demag_phi(delta_m.len())?"),
-            "Rust native FEM backend wrapper must return H_demag(delta_m) together with the fresh scalar potential"
+                && source.contains("ffi::fullmag_fem_backend_apply_demag_tangent_with_potential_f64(")
+                && !source.contains("let delta_h_demag = self.apply_demag_tangent(delta_m)?"),
+            "Rust native FEM backend wrapper must request H_demag(delta_m) and scalar potential through one coherent native ABI"
         );
     }
 

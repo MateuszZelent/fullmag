@@ -2511,6 +2511,11 @@ fn frequency_response_round_trips_as_first_class_study() {
         frequencies_hz: FrequencySweepIR {
             values_hz: vec![1.0e9, 2.0e9],
         },
+        solver_policy: Some(FrequencyResponseSolverPolicyIR {
+            rtol: Some(1.0e-2),
+            max_iterations: Some(128),
+            restart_iterations: Some(32),
+        }),
         sampling: SamplingIR {
             table_autosave: None,
             outputs: vec![OutputIR::EigenSpectrum {
@@ -2529,10 +2534,17 @@ fn frequency_response_round_trips_as_first_class_study() {
         StudyIR::FrequencyResponse {
             excitation,
             frequencies_hz,
+            solver_policy,
             ..
         } => {
             assert_eq!(excitation.field_au_per_m, [0.0, 0.0, 1.0]);
             assert_eq!(frequencies_hz.values_hz, vec![1.0e9, 2.0e9]);
+            assert_eq!(
+                solver_policy
+                    .expect("solver policy should round-trip")
+                    .max_iterations,
+                Some(128)
+            );
         }
         other => panic!("expected frequency_response study, got {other:?}"),
     }
@@ -2565,6 +2577,7 @@ fn frequency_response_does_not_validate_time_integrator_alias() {
         frequencies_hz: FrequencySweepIR {
             values_hz: vec![1.0e9],
         },
+        solver_policy: None,
         sampling: SamplingIR {
             table_autosave: None,
             outputs: vec![OutputIR::FrequencyResponseOutput {
@@ -2603,6 +2616,7 @@ fn frequency_response_rejects_non_finite_excitation_phase() {
         frequencies_hz: FrequencySweepIR {
             values_hz: vec![1.0e9],
         },
+        solver_policy: None,
         sampling: SamplingIR {
             table_autosave: None,
             outputs: vec![OutputIR::FrequencyResponseOutput {
@@ -2644,6 +2658,7 @@ fn frequency_response_output_is_first_class_sampling_request() {
         frequencies_hz: FrequencySweepIR {
             values_hz: vec![1.0e9],
         },
+        solver_policy: None,
         sampling: SamplingIR {
             table_autosave: None,
             outputs: vec![OutputIR::FrequencyResponseOutput {

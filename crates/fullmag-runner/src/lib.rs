@@ -306,7 +306,7 @@ fn magnetic_gpu_capability_from_availability(
     {
         return capability(
             "partial_production_executable",
-            "native_fem_mfem_frequency_domain_gpu executes the gamma/free magnetic no-demag driven-response slice; static-periodic projection, dynamic demag, DMI, and nonzero-k Floquet remain gated",
+            "native_fem_mfem_frequency_domain_gpu executes gamma/free and k=0 static-periodic driven-response slices with provider-backed dynamic demag and supported P1 DMI; nonzero-k Floquet dynamic demag remains gated",
         );
     }
     capability(
@@ -353,15 +353,15 @@ fn frequency_domain_capability_snapshot_v1() -> FrequencyDomainCapabilitySnapsho
         boundary: FrequencyDomainBoundaryCapabilities {
             static_periodic: capability(
                 "partial_production_executable",
-                "k=0 static-periodic driven response is production-enforced on the native FEM CPU response lane when mesh.periodic_node_pairs metadata is present; nonzero-k Floquet remains unsupported",
+                "k=0 static-periodic driven response is production-enforced on the native FEM response lanes when mesh.periodic_node_pairs metadata is present; nonzero-k no-demag Floquet response is a separate phase-projected slice and Floquet dynamic demag-k remains unsupported",
             ),
             floquet_modal: capability(
                 "semantic_only",
                 "Floquet modal semantics exist, but production operator enforcement is not available",
             ),
             floquet_response: capability(
-                "unsupported",
-                "driven nonzero-k Floquet response is gated until operator and drive assembly enforce phase constraints",
+                "partial_production_executable",
+                "driven nonzero-k Floquet response is executable for the no-demag phase-projected tangent slice; dynamic demag-k remains gated",
             ),
             periodic_pair_diagnostics: capability(
                 "reference_executable",
@@ -410,12 +410,12 @@ fn frequency_domain_capability_snapshot_v1() -> FrequencyDomainCapabilitySnapsho
         response: FrequencyDomainResponseCapabilities {
             magnetic_cpu: capability(
                 "partial_production_executable",
-                "native FEM production CPU response executes the gamma/free-boundary and k=0 static-periodic exchange/Zeeman/uniaxial-anisotropy/interfacial-DMI/bulk-DMI/damping slice; demag, nonzero-k Floquet/Bloch, and missing periodic mesh-pair metadata are rejected before dense validation fallback",
+                "native FEM production CPU response executes gamma/free-boundary, provider-backed dynamic demag, k=0 static-periodic, and no-demag nonzero-k Floquet tangent slices for supported exchange/Zeeman/uniaxial-anisotropy/interfacial-DMI/bulk-DMI/damping payloads; dynamic demag-k and missing periodic mesh-pair metadata are rejected before dense validation fallback",
             ),
             magnetic_gpu: magnetic_gpu_capability_from_availability(&gpu_response),
             frequency_sweep: capability(
                 "partial_production_executable",
-                "production CPU and dense validation lanes emit per-frequency artifacts and progress for supported response slices",
+                "production CPU, production GPU, and dense validation lanes emit per-frequency artifacts and progress for supported response slices",
             ),
             mode_projected: capability("unsupported", unsupported),
             magnetoelastic_quasistatic: capability("unsupported", unsupported),
@@ -2696,6 +2696,7 @@ mod tests {
             frequencies_hz: fullmag_ir::FrequencySweepIR {
                 values_hz: frequencies_hz,
             },
+            solver_policy: None,
             sampling: fullmag_ir::SamplingIR {
                 table_autosave: None,
                 outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
@@ -4517,6 +4518,7 @@ mod tests {
             frequencies_hz: fullmag_ir::FrequencySweepIR {
                 values_hz: vec![1.0e9, 2.0e9],
             },
+            solver_policy: None,
             sampling: fullmag_ir::SamplingIR {
                 table_autosave: None,
                 outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {

@@ -6,10 +6,11 @@
 
 namespace fullmag::fem::frequency_domain {
 
-constexpr std::uint32_t kFrequencyDomainAbiVersion = 9;
+constexpr std::uint32_t kFrequencyDomainAbiVersion = 11;
 
 struct LinearizedOperatorRequest {
     std::uint32_t abi_version = kFrequencyDomainAbiVersion;
+    std::uint32_t struct_size = 0;
     const char *mesh_asset_id = nullptr;
     const char *equilibrium_source_kind = nullptr;
     double gamma_rad_s_T = 0.0;
@@ -38,6 +39,7 @@ struct CsrMatrixView {
 
 struct ModalEigenRequest {
     std::uint32_t abi_version = kFrequencyDomainAbiVersion;
+    std::uint32_t struct_size = 0;
     LinearizedOperatorRequest operator_request{};
     int requested_mode_count = 0;
     const char *target_kind = nullptr;
@@ -81,6 +83,7 @@ struct ModalEigenRequest {
 
 struct DrivenResponseContractRequest {
     std::uint32_t abi_version = kFrequencyDomainAbiVersion;
+    std::uint32_t struct_size = 0;
     LinearizedOperatorRequest operator_request{};
     const double *frequencies_hz = nullptr;
     int frequency_count = 0;

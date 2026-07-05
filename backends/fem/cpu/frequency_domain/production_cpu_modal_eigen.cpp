@@ -943,8 +943,11 @@ void emit_production_contour_progress(
         state.contour_point_count = contour_result.contour_point_count;
         state.linear_iteration = point.linear_iterations;
         state.max_linear_iterations = request.max_linear_iterations;
-        const std::string progress_json = solver_progress_json(state);
-        request.progress_callback(request.progress_user_data, progress_json.c_str());
+        char progress_json[1024];
+        if (solver_progress_json(state, progress_json, sizeof(progress_json)) == 0) {
+            continue;
+        }
+        request.progress_callback(request.progress_user_data, progress_json);
     }
 }
 

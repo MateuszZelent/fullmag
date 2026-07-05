@@ -481,15 +481,17 @@ pub(crate) fn native_availability() -> GpuAvailability {
 pub(crate) fn native_frequency_domain_availability(
     request: FrequencyDomainAvailabilityRequest,
 ) -> FrequencyDomainAvailability {
-    if matches!(
-        request.study_kind,
-        FrequencyDomainStudyKind::FrequencyResponse
-    ) && (request.requires_floquet_boundary
-        || request
-            .floquet_k_vector_rad_per_m
-            .is_some_and(floquet_k_vector_is_nonzero_or_invalid))
+    #[cfg(not(feature = "fem-gpu"))]
     {
-        return frequency_domain_response_floquet_unavailable();
+        if matches!(
+            request.study_kind,
+            FrequencyDomainStudyKind::FrequencyResponse
+        ) && request
+            .floquet_k_vector_rad_per_m
+            .is_some_and(floquet_k_vector_is_nonzero_or_invalid)
+        {
+            return frequency_domain_response_floquet_unavailable();
+        }
     }
 
     #[cfg(feature = "fem-gpu")]
@@ -678,7 +680,7 @@ mod tests {
     }
 
     #[test]
-    fn frequency_domain_availability_fallback_keeps_floquet_metadata_unsupported() {
+    fn frequency_domain_availability_handles_floquet_metadata_by_feature() {
         let availability =
             native_frequency_domain_availability(FrequencyDomainAvailabilityRequest {
                 study_kind: FrequencyDomainStudyKind::FrequencyResponse,
@@ -693,17 +695,30 @@ mod tests {
                 phase_convention: FrequencyDomainPhaseConvention::ExpIOmegaT,
             });
 
-        assert_eq!(availability.status, "unavailable");
         assert_eq!(availability.study_kind, "frequency_response");
-        assert!(!availability.floquet_response_available);
-        assert!(availability.reason.contains("Floquet/Bloch"));
-        assert!(availability.reason.contains("nonzero-k"));
-        assert!(availability
-            .diagnostics_json
-            .contains("\"schema_version\":\"frequency_domain_availability.v1\""));
-        assert!(availability
-            .diagnostics_json
-            .contains("\"unsupported_reason\":\"floquet_bloch_nonzero_k\""));
+        #[cfg(feature = "fem-gpu")]
+        {
+            assert_eq!(availability.status, "ok");
+            assert!(availability.driven_response_available);
+            assert!(availability.floquet_response_available);
+            assert!(availability.reason.is_empty());
+            assert!(availability
+                .diagnostics_json
+                .contains("nonzero_k_floquet_no_demag_phase_projection"));
+        }
+        #[cfg(not(feature = "fem-gpu"))]
+        {
+            assert_eq!(availability.status, "unavailable");
+            assert!(!availability.floquet_response_available);
+            assert!(availability.reason.contains("Floquet/Bloch"));
+            assert!(availability.reason.contains("nonzero-k"));
+            assert!(availability
+                .diagnostics_json
+                .contains("\"schema_version\":\"frequency_domain_availability.v1\""));
+            assert!(availability
+                .diagnostics_json
+                .contains("\"unsupported_reason\":\"floquet_bloch_nonzero_k\""));
+        }
     }
 
     #[test]

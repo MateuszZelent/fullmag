@@ -524,6 +524,21 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
             "frequency_spin_wave_bc": _spin_wave_bc_kind(study.spin_wave_bc),
             "frequency_spin_wave_bc_config": _spin_wave_bc_config(study.spin_wave_bc),
             "frequency_magnetostatic_bc": study.magnetostatic_bc,
+            "frequency_solver_rtol": _text_number(
+                study.solver_policy.rtol if study.solver_policy is not None else None
+            ),
+            "frequency_solver_max_iterations": (
+                str(study.solver_policy.max_iterations)
+                if study.solver_policy is not None
+                and study.solver_policy.max_iterations is not None
+                else ""
+            ),
+            "frequency_solver_restart_iterations": (
+                str(study.solver_policy.restart_iterations)
+                if study.solver_policy is not None
+                and study.solver_policy.restart_iterations is not None
+                else ""
+            ),
         }
     return {
         "kind": "run",
@@ -2811,6 +2826,17 @@ def _render_stages(
                 call_parts.append(f"bc={_render_spin_wave_bc_expr(study.spin_wave_bc)}")
             if study.magnetostatic_bc != "open":
                 call_parts.append(f"magnetostatic_bc={_py_repr(study.magnetostatic_bc)}")
+            if study.solver_policy is not None:
+                if study.solver_policy.max_iterations is not None:
+                    call_parts.append(
+                        f"solver_max_iterations={study.solver_policy.max_iterations}"
+                    )
+                if study.solver_policy.restart_iterations is not None:
+                    call_parts.append(
+                        f"solver_restart_iterations={study.solver_policy.restart_iterations}"
+                    )
+                if study.solver_policy.rtol is not None:
+                    call_parts.append(f"solver_rtol={_py_number(study.solver_policy.rtol)}")
             if study.k_vector is not None:
                 call_parts.append(f"k_vector={study.k_vector!r}")
             if is_study_surface:

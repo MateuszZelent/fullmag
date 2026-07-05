@@ -69,6 +69,7 @@ from fullmag.model.study import (
     MeasurementAxis,
     MinorLoop,
     PiecewiseFieldSchedule,
+    FrequencyResponseSolverPolicy,
     RelaxStop,
     Relaxation,
     SaturationProbe,
@@ -1938,6 +1939,7 @@ class FrequencyResponseStageSpec:
     k_sampling: object | None = None
     bc: str | dict[str, object] = "free"
     magnetostatic_bc: str = "open"
+    solver_policy: FrequencyResponseSolverPolicy | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -2301,7 +2303,17 @@ def frequency_response_stage(
     k_sampling: object | None = None,
     bc: str | dict[str, object] = "free",
     magnetostatic_bc: str = "open",
+    solver_rtol: float | None = None,
+    solver_max_iterations: int | None = None,
+    solver_restart_iterations: int | None = None,
+    MAX_ITERATIONS: int | None = None,
 ) -> FrequencyResponseStageSpec:
+    solver_policy = _frequency_response_solver_policy(
+        solver_rtol=solver_rtol,
+        solver_max_iterations=solver_max_iterations,
+        solver_restart_iterations=solver_restart_iterations,
+        MAX_ITERATIONS=MAX_ITERATIONS,
+    )
     return FrequencyResponseStageSpec(
         frequencies_hz=frequencies_hz,
         excitation_field_au_per_m=excitation_field_au_per_m,
@@ -2316,6 +2328,33 @@ def frequency_response_stage(
         k_sampling=k_sampling,
         bc=bc,
         magnetostatic_bc=magnetostatic_bc,
+        solver_policy=solver_policy,
+    )
+
+
+def _frequency_response_solver_policy(
+    *,
+    solver_rtol: float | None,
+    solver_max_iterations: int | None,
+    solver_restart_iterations: int | None,
+    MAX_ITERATIONS: int | None,
+) -> FrequencyResponseSolverPolicy | None:
+    if MAX_ITERATIONS is not None:
+        if solver_max_iterations is not None and solver_max_iterations != MAX_ITERATIONS:
+            raise ValueError(
+                "MAX_ITERATIONS conflicts with solver_max_iterations; use solver_max_iterations"
+            )
+        solver_max_iterations = MAX_ITERATIONS
+    if (
+        solver_rtol is None
+        and solver_max_iterations is None
+        and solver_restart_iterations is None
+    ):
+        return None
+    return FrequencyResponseSolverPolicy(
+        rtol=solver_rtol,
+        max_iterations=solver_max_iterations,
+        restart_iterations=solver_restart_iterations,
     )
 
 
@@ -2431,6 +2470,7 @@ def _capture_stage(stage_spec: object) -> CapturedStage:
                 frequency_k_sampling=stage_spec.k_sampling,
                 frequency_spin_wave_bc=stage_spec.bc,
                 frequency_magnetostatic_bc=stage_spec.magnetostatic_bc,
+                frequency_solver_policy=stage_spec.solver_policy,
             ),
             entrypoint_kind="flat_frequency_response",
             default_until_seconds=None,
@@ -2969,6 +3009,10 @@ class StudyStagesBuilder:
         k_sampling: object | None = None,
         bc: str | dict[str, object] = "free",
         magnetostatic_bc: str = "open",
+        solver_rtol: float | None = None,
+        solver_max_iterations: int | None = None,
+        solver_restart_iterations: int | None = None,
+        MAX_ITERATIONS: int | None = None,
     ) -> "StudyStagesBuilder":
         return self.add_stage(
             frequency_response_stage(
@@ -2985,6 +3029,10 @@ class StudyStagesBuilder:
                 k_sampling=k_sampling,
                 bc=bc,
                 magnetostatic_bc=magnetostatic_bc,
+                solver_rtol=solver_rtol,
+                solver_max_iterations=solver_max_iterations,
+                solver_restart_iterations=solver_restart_iterations,
+                MAX_ITERATIONS=MAX_ITERATIONS,
             )
         )
 
@@ -4029,6 +4077,10 @@ class StudyBuilder:
         k_sampling: object | None = None,
         bc: str | dict[str, object] = "free",
         magnetostatic_bc: str = "open",
+        solver_rtol: float | None = None,
+        solver_max_iterations: int | None = None,
+        solver_restart_iterations: int | None = None,
+        MAX_ITERATIONS: int | None = None,
     ) -> Any:
         return frequency_response(
             frequencies_hz=frequencies_hz,
@@ -4044,6 +4096,10 @@ class StudyBuilder:
             k_sampling=k_sampling,
             bc=bc,
             magnetostatic_bc=magnetostatic_bc,
+            solver_rtol=solver_rtol,
+            solver_max_iterations=solver_max_iterations,
+            solver_restart_iterations=solver_restart_iterations,
+            MAX_ITERATIONS=MAX_ITERATIONS,
         )
 
 
@@ -4062,9 +4118,19 @@ def frequency_response(
     k_sampling: object | None = None,
     bc: str | dict[str, object] = "free",
     magnetostatic_bc: str = "open",
+    solver_rtol: float | None = None,
+    solver_max_iterations: int | None = None,
+    solver_restart_iterations: int | None = None,
+    MAX_ITERATIONS: int | None = None,
 ) -> Any:
     """Build the problem and queue/run a driven frequency-response analysis."""
     from fullmag.runtime import Simulation
+    solver_policy = _frequency_response_solver_policy(
+        solver_rtol=solver_rtol,
+        solver_max_iterations=solver_max_iterations,
+        solver_restart_iterations=solver_restart_iterations,
+        MAX_ITERATIONS=MAX_ITERATIONS,
+    )
 
     problem = _build_problem(
         study_kind="frequency_response",
@@ -4081,6 +4147,7 @@ def frequency_response(
         frequency_k_sampling=k_sampling,
         frequency_spin_wave_bc=bc,
         frequency_magnetostatic_bc=magnetostatic_bc,
+        frequency_solver_policy=solver_policy,
     )
 
     if _capture_enabled:
@@ -5964,6 +6031,7 @@ def _build_problem(
     frequency_k_sampling: object | None = None,
     frequency_spin_wave_bc: str | dict[str, object] = "free",
     frequency_magnetostatic_bc: str = "open",
+    frequency_solver_policy: FrequencyResponseSolverPolicy | None = None,
     hysteresis_spec: Any = None,
 ) -> Problem:
     """Construct a Problem from the current world state."""
@@ -6138,6 +6206,7 @@ def _build_problem(
             damping_policy=frequency_damping_policy,
             spin_wave_bc=frequency_spin_wave_bc,
             magnetostatic_bc=frequency_magnetostatic_bc,
+            solver_policy=frequency_solver_policy,
             k_sampling=frequency_k_sampling,
             k_vector=frequency_k_vector,
             dynamics=dynamics,

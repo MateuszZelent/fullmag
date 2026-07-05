@@ -781,6 +781,8 @@ pub struct FemEigenPlanIR {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub demag_realization: Option<ResolvedFemDemagIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub air_box_config: Option<AirBoxConfigIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode_tracking: Option<ModeTrackingIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dispersion_validation: Option<FemEigenDispersionValidationIR>,
@@ -818,6 +820,8 @@ pub struct FemFrequencyResponsePlanIR {
     pub magnetostatic_bc: crate::MagnetostaticBoundaryConditionIR,
     pub excitation: FrequencyExcitationIR,
     pub frequencies_hz: FrequencySweepIR,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solver_policy: Option<crate::FrequencyResponseSolverPolicyIR>,
     pub enable_exchange: bool,
     pub enable_demag: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -835,6 +839,8 @@ pub struct FemFrequencyResponsePlanIR {
     pub exchange_bc: ExchangeBoundaryCondition,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub demag_realization: Option<ResolvedFemDemagIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub air_box_config: Option<AirBoxConfigIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub demag_solver_policy: Option<FemLinearSolverPolicy>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

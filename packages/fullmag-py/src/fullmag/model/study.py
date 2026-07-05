@@ -77,6 +77,54 @@ SUPPORTED_SATURATION_FAILURE_POLICIES = {
     "continue_with_warning",
     "stop_stage",
 }
+
+
+@dataclass(frozen=True, slots=True)
+class FrequencyResponseSolverPolicy:
+    rtol: float | None = None
+    max_iterations: int | None = None
+    restart_iterations: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.rtol is not None:
+            rtol = float(self.rtol)
+            if not math.isfinite(rtol) or rtol <= 0.0:
+                raise ValueError("solver_rtol must be finite and positive")
+            object.__setattr__(self, "rtol", rtol)
+        if self.max_iterations is not None:
+            object.__setattr__(
+                self,
+                "max_iterations",
+                _positive_int(self.max_iterations, "solver_max_iterations"),
+            )
+        if self.restart_iterations is not None:
+            restart_iterations = _positive_int(
+                self.restart_iterations,
+                "solver_restart_iterations",
+            )
+            if self.max_iterations is not None and restart_iterations > self.max_iterations:
+                raise ValueError(
+                    "solver_restart_iterations must be <= solver_max_iterations"
+                )
+            object.__setattr__(self, "restart_iterations", restart_iterations)
+
+    def to_ir(self) -> dict[str, object]:
+        policy: dict[str, object] = {}
+        if self.rtol is not None:
+            policy["rtol"] = self.rtol
+        if self.max_iterations is not None:
+            policy["max_iterations"] = self.max_iterations
+        if self.restart_iterations is not None:
+            policy["restart_iterations"] = self.restart_iterations
+        return policy
+
+
+def _positive_int(value: object, field_name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{field_name} must be an integer")
+    if value <= 0:
+        raise ValueError(f"{field_name} must be positive")
+    return value
 SUPPORTED_FIELD_ORIENTATION_PRESETS = {
     "oop_positive",
     "oop_negative",
@@ -737,6 +785,7 @@ class FrequencyResponse:
     damping_policy: str = "ignore"
     spin_wave_bc: SpinWaveBoundarySpec = "free"
     magnetostatic_bc: str = "open"
+    solver_policy: FrequencyResponseSolverPolicy | None = None
     dynamics: LLG = field(default_factory=LLG)
 
     def __post_init__(self) -> None:
@@ -778,6 +827,11 @@ class FrequencyResponse:
             supported = ", ".join(sorted(SUPPORTED_MAGNETOSTATIC_BCS))
             raise ValueError(f"magnetostatic_bc must be one of: {supported}")
         object.__setattr__(self, "magnetostatic_bc", magnetostatic_bc)
+        if self.solver_policy is not None and not isinstance(
+            self.solver_policy,
+            FrequencyResponseSolverPolicy,
+        ):
+            raise TypeError("solver_policy must be FrequencyResponseSolverPolicy")
 
     def to_ir(self) -> dict[str, object]:
         equilibrium: dict[str, object]
@@ -787,7 +841,7 @@ class FrequencyResponse:
             equilibrium = {"kind": "relaxed_initial_state"}
         else:
             equilibrium = {"kind": "provided"}
-        return {
+        ir = {
             "kind": "frequency_response",
             "dynamics": self.dynamics.to_ir(),
             "operator": {
@@ -810,6 +864,9 @@ class FrequencyResponse:
             "frequencies_hz": {"values_hz": list(self.frequencies_hz)},
             "sampling": {"outputs": [output.to_ir() for output in self.outputs]},
         }
+        if self.solver_policy is not None:
+            ir["solver_policy"] = self.solver_policy.to_ir()
+        return ir
 
 
 @dataclass(frozen=True, slots=True)

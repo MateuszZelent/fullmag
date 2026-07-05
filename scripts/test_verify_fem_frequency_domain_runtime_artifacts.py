@@ -13,6 +13,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 VALIDATOR = REPO_ROOT / "scripts" / "verify_fem_frequency_domain_runtime_artifacts.py"
 
 
+def graph_preconditioner_relaxation_for_variant(variant: str) -> float:
+    return 0.05 if variant == "graph_demag_coarse" else 0.0
+
+
 def write_frequency_domain_fixture(
     root: Path,
     *,
@@ -191,7 +195,8 @@ def write_frequency_domain_fixture(
                 "units": "proxy_not_W_per_m3",
                 "requires_mu0_ms_factor": True,
                 "ms_factor_applied": False,
-                "normalization": "0.5*abs(omega)*abs(imag(sum(response*conj(drive))))/tangent_dof_count",
+                "normalization": "0.5*omega*imag(sum(response*conj(drive)))/tangent_dof_count",
+                "absolute_value_applied": False,
                 "full_power_density": False,
             },
             "susceptibility_tensor": [[1.0, 0.0]],
@@ -345,11 +350,12 @@ def write_frequency_domain_fixture(
                     "basis": "local_tangent_drive",
                     "physical_power_density": False,
                     "units": "proxy_not_W_per_m3",
-                "requires_mu0_ms_factor": True,
-                "ms_factor_applied": False,
-                "normalization": "0.5*abs(omega)*abs(imag(sum(response*conj(drive))))/tangent_dof_count",
-                "full_power_density": False,
-            },
+                    "requires_mu0_ms_factor": True,
+                    "ms_factor_applied": False,
+                    "normalization": "0.5*omega*imag(sum(response*conj(drive)))/tangent_dof_count",
+                    "absolute_value_applied": False,
+                    "full_power_density": False,
+                },
                 "susceptibility_tensor": [[1.0, 0.0]],
                 "susceptibility_tensor_provenance": {
                     "kind": "drive_projected_scalar",
@@ -358,11 +364,11 @@ def write_frequency_domain_fixture(
                     "full_tensor": False,
                     "response_quantity": "delta_m_over_h_drive",
                     "response_units": "m/A",
-                "dimensionless_si_susceptibility": False,
-                "requires_ms_for_chi_si": True,
-                "ms_factor_applied": False,
-                "normalization": "sum(response*conj(drive))/sum(abs(drive)^2)",
-            },
+                    "dimensionless_si_susceptibility": False,
+                    "requires_ms_for_chi_si": True,
+                    "ms_factor_applied": False,
+                    "normalization": "sum(response*conj(drive))/sum(abs(drive)^2)",
+                },
                 "tangent_leakage": {
                     "status": "evaluated",
                     "mean_abs_m0_dot_delta_m": 0.0,
@@ -852,6 +858,7 @@ def run_validator(
     airbox_reference: Path | None = None,
     require_min_frequency_points: int | None = None,
     require_response_peak: bool = False,
+    require_interior_response_peak: bool = False,
     require_field_payloads_for_frequency_points: bool = False,
     require_derived_peak_mode: bool = False,
     allow_interrupted: bool = False,
@@ -887,6 +894,8 @@ def run_validator(
         command.extend(["--require-min-frequency-points", str(require_min_frequency_points)])
     if require_response_peak:
         command.append("--require-response-peak")
+    if require_interior_response_peak:
+        command.append("--require-interior-response-peak")
     if require_field_payloads_for_frequency_points:
         command.append("--require-field-payloads-for-frequency-points")
     if require_derived_peak_mode:
@@ -1417,14 +1426,37 @@ def write_periodic_airbox_cpu_demag_solved_fixture(
             "demag_tangent_additivity_relative_error": 0.0,
             "demag_tangent_homogeneity_relative_error": 0.0,
             "krylov_preconditioner_kind": preconditioner_kind,
+            "krylov_preconditioner_requested_variant": "auto",
+            "krylov_preconditioner_initial_variant": preconditioner_variant,
             "krylov_preconditioner_variant": preconditioner_variant,
             "krylov_preconditioner_applied": True,
             "krylov_preconditioner_setup_status": "ok",
+            "graph_preconditioner_relaxation": graph_preconditioner_relaxation_for_variant(
+                preconditioner_variant
+            ),
+            "right_preconditioner_probe_available": True,
+            "right_preconditioner_probe_residual_l2_norm": 0.25,
+            "right_preconditioner_probe_relative_residual_l2_norm": 0.25,
+            "right_preconditioner_auto_disabled": False,
+            "right_preconditioner_probe_disable_relative_threshold": 0.0,
+            "right_preconditioner_auto_disable_reason": "",
+            "frequency_response_demag_solver_policy_effective": {
+                "relative_tolerance": 1.0e-4,
+                "max_iterations": 1000,
+            },
+            "demag_solver_relative_tolerance": 1.0e-4,
+            "demag_solver_max_iterations": 1000,
             "gmres_relative_residual_history": [1.0, 0.5],
             "total_iteration_count": 4,
             "max_iterations_for_frequency": 8,
             "restart_iterations_for_frequency": 8,
             "progress_interval_iterations": 2,
+            "last_tracked_relative_residual_l2_norm": 0.5,
+            "last_recomputed_relative_residual_l2_norm": 0.5,
+            "residual_consistency_status": "ok",
+            "residual_consistency_relative_gap": 0.0,
+            "residual_consistency_recomputed_to_tracked_ratio": 1.0,
+            "residual_consistency_relative_gap_threshold": 0.1,
             "block_norms": {
                 "rhs_real_l2_norm": 1.0,
                 "rhs_imag_l2_norm": 0.0,
@@ -1443,6 +1475,18 @@ def write_periodic_airbox_cpu_demag_solved_fixture(
             "delta_phi_dof_count": 1,
             "magnetostatic_periodic_node_pair_count": 1,
             "exchange_edge_count": exchange_edge_count,
+            "delta_phi_phase_validation_status": "ok",
+            "delta_phi_phase_max_residual": 0.0,
+            "delta_phi_seam_validation_status": "ok",
+            "delta_phi_seam_max_after_offset": 0.0,
+            "delta_phi_seam_best_constant_offset_real": 0.0,
+            "delta_phi_seam_best_constant_offset_imag": 0.0,
+            "h_demag_seam_validation_status": "ok",
+            "h_demag_seam_validation_reason": "evaluated_tangent_periodic_pairs",
+            "h_demag_seam_max_tangent_mismatch": 0.0,
+            "delta_phi_flux_validation_status": "ok",
+            "delta_phi_flux_validation_reason": "evaluated_periodic_airbox_normal_flux",
+            "delta_phi_flux_max_residual": 0.0,
         }
     )
     diagnostics_path.write_text(json.dumps(diagnostics))
@@ -1461,6 +1505,18 @@ def write_periodic_airbox_cpu_demag_solved_fixture(
             "delta_m_tangent_dof_count": 2,
             "delta_phi_dof_count": 1,
             "magnetostatic_periodic_node_pair_count": 1,
+            "delta_phi_phase_validation_status": "ok",
+            "delta_phi_phase_max_residual": 0.0,
+            "delta_phi_seam_validation_status": "ok",
+            "delta_phi_seam_max_after_offset": 0.0,
+            "delta_phi_seam_best_constant_offset_real": 0.0,
+            "delta_phi_seam_best_constant_offset_imag": 0.0,
+            "h_demag_seam_validation_status": "ok",
+            "h_demag_seam_validation_reason": "evaluated_tangent_periodic_pairs",
+            "h_demag_seam_max_tangent_mismatch": 0.0,
+            "delta_phi_flux_validation_status": "ok",
+            "delta_phi_flux_validation_reason": "evaluated_periodic_airbox_normal_flux",
+            "delta_phi_flux_max_residual": 0.0,
         }
     )
     manifest["diagnostics"].update(
@@ -1478,14 +1534,37 @@ def write_periodic_airbox_cpu_demag_solved_fixture(
             "demag_tangent_additivity_relative_error": 0.0,
             "demag_tangent_homogeneity_relative_error": 0.0,
             "krylov_preconditioner_kind": preconditioner_kind,
+            "krylov_preconditioner_requested_variant": "auto",
+            "krylov_preconditioner_initial_variant": preconditioner_variant,
             "krylov_preconditioner_variant": preconditioner_variant,
             "krylov_preconditioner_applied": True,
             "krylov_preconditioner_setup_status": "ok",
+            "graph_preconditioner_relaxation": graph_preconditioner_relaxation_for_variant(
+                preconditioner_variant
+            ),
+            "right_preconditioner_probe_available": True,
+            "right_preconditioner_probe_residual_l2_norm": 0.25,
+            "right_preconditioner_probe_relative_residual_l2_norm": 0.25,
+            "right_preconditioner_auto_disabled": False,
+            "right_preconditioner_probe_disable_relative_threshold": 0.0,
+            "right_preconditioner_auto_disable_reason": "",
+            "frequency_response_demag_solver_policy_effective": {
+                "relative_tolerance": 1.0e-4,
+                "max_iterations": 1000,
+            },
+            "demag_solver_relative_tolerance": 1.0e-4,
+            "demag_solver_max_iterations": 1000,
             "gmres_relative_residual_history": [1.0, 0.5],
             "total_iteration_count": 4,
             "max_iterations_for_frequency": 8,
             "restart_iterations_for_frequency": 8,
             "progress_interval_iterations": 2,
+            "last_tracked_relative_residual_l2_norm": 0.5,
+            "last_recomputed_relative_residual_l2_norm": 0.5,
+            "residual_consistency_status": "ok",
+            "residual_consistency_relative_gap": 0.0,
+            "residual_consistency_recomputed_to_tracked_ratio": 1.0,
+            "residual_consistency_relative_gap_threshold": 0.1,
             "block_norms": {
                 "rhs_real_l2_norm": 1.0,
                 "rhs_imag_l2_norm": 0.0,
@@ -1504,6 +1583,18 @@ def write_periodic_airbox_cpu_demag_solved_fixture(
             "delta_phi_dof_count": 1,
             "magnetostatic_periodic_node_pair_count": 1,
             "exchange_edge_count": exchange_edge_count,
+            "delta_phi_phase_validation_status": "ok",
+            "delta_phi_phase_max_residual": 0.0,
+            "delta_phi_seam_validation_status": "ok",
+            "delta_phi_seam_max_after_offset": 0.0,
+            "delta_phi_seam_best_constant_offset_real": 0.0,
+            "delta_phi_seam_best_constant_offset_imag": 0.0,
+            "h_demag_seam_validation_status": "ok",
+            "h_demag_seam_validation_reason": "evaluated_tangent_periodic_pairs",
+            "h_demag_seam_max_tangent_mismatch": 0.0,
+            "delta_phi_flux_validation_status": "ok",
+            "delta_phi_flux_validation_reason": "evaluated_periodic_airbox_normal_flux",
+            "delta_phi_flux_max_residual": 0.0,
         }
     )
     manifest["resolved_execution"]["dynamic_demag_matrix_form"] = "magnetic_only"
@@ -1524,6 +1615,18 @@ def write_periodic_airbox_cpu_demag_solved_fixture(
                     "operator_source": "matrix_free_demag_tangent_provider",
                     "dynamic_demag_matrix_form": "magnetic_only",
                     "mfem_coupled_block_assembly": False,
+                    "delta_phi_phase_validation_status": "ok",
+                    "delta_phi_phase_max_residual": 0.0,
+                    "delta_phi_seam_validation_status": "ok",
+                    "delta_phi_seam_max_after_offset": 0.0,
+                    "delta_phi_seam_best_constant_offset_real": 0.0,
+                    "delta_phi_seam_best_constant_offset_imag": 0.0,
+                    "h_demag_seam_validation_status": "ok",
+                    "h_demag_seam_validation_reason": "evaluated_tangent_periodic_pairs",
+                    "h_demag_seam_max_tangent_mismatch": 0.0,
+                    "delta_phi_flux_validation_status": "ok",
+                    "delta_phi_flux_validation_reason": "evaluated_periodic_airbox_normal_flux",
+                    "delta_phi_flux_max_residual": 0.0,
                     "delta_phi_complex": None,
                     "h_demag_complex": [[0.0, 0.0], [0.0, 0.0]],
                 },
@@ -1661,7 +1764,12 @@ def write_periodic_airbox_cpu_demag_solve_error_fixture(root: Path) -> None:
             "rhs_l2_norm": 1.0,
             "initial_relative_residual_l2_norm": 1.0,
             "relative_residual_l2_norm": 0.95,
+            "last_tracked_relative_residual_l2_norm": 0.5,
             "last_recomputed_relative_residual_l2_norm": 0.95,
+            "residual_consistency_status": "degraded",
+            "residual_consistency_relative_gap": (0.95 - 0.5) / 0.95,
+            "residual_consistency_recomputed_to_tracked_ratio": 1.9,
+            "residual_consistency_relative_gap_threshold": 0.1,
         }
     )
     diagnostics_path.write_text(json.dumps(diagnostics))
@@ -1698,14 +1806,30 @@ def convert_periodic_airbox_fixture_to_schur_coupled_block(root: Path) -> None:
         if isinstance(exchange_edge_count, int) and exchange_edge_count > 0
         else "demag_coarse"
     )
+    preconditioner_kind = (
+        "static_periodic_reduced_mfem_schur_residual_right"
+        if preconditioner_variant == "graph_demag_coarse"
+        else "mfem_tangent_demag_coarse_right"
+    )
     diagnostics.update(
         {
             "periodic_airbox_coupled_block_solver": True,
             "dynamic_demag_operator_source": "matrix_free_mfem_demag_phi_consistency_schur_provider",
             "dynamic_demag_matrix_form": "schur_phi_consistency_provider",
-            "coupled_residual_partition_status": "coupled_block",
-            "krylov_preconditioner_kind": "mfem_phi_consistency_schur_right",
+            "coupled_residual_partition_status": "magnetic_schur_phi_consistency_provider",
+            "krylov_preconditioner_kind": preconditioner_kind,
+            "krylov_preconditioner_requested_variant": "auto",
+            "krylov_preconditioner_initial_variant": preconditioner_variant,
             "krylov_preconditioner_variant": preconditioner_variant,
+            "graph_preconditioner_relaxation": graph_preconditioner_relaxation_for_variant(
+                preconditioner_variant
+            ),
+            "right_preconditioner_probe_available": True,
+            "right_preconditioner_probe_residual_l2_norm": 0.25,
+            "right_preconditioner_probe_relative_residual_l2_norm": 0.25,
+            "right_preconditioner_auto_disabled": False,
+            "right_preconditioner_probe_disable_relative_threshold": 0.0,
+            "right_preconditioner_auto_disable_reason": "",
         }
     )
     diagnostics_path.write_text(json.dumps(diagnostics))
@@ -1745,9 +1869,20 @@ def convert_periodic_airbox_fixture_to_schur_coupled_block(root: Path) -> None:
             "periodic_airbox_coupled_block_solver": True,
             "dynamic_demag_operator_source": "matrix_free_mfem_demag_phi_consistency_schur_provider",
             "dynamic_demag_matrix_form": "schur_phi_consistency_provider",
-            "coupled_residual_partition_status": "coupled_block",
-            "krylov_preconditioner_kind": "mfem_phi_consistency_schur_right",
+            "coupled_residual_partition_status": "magnetic_schur_phi_consistency_provider",
+            "krylov_preconditioner_kind": preconditioner_kind,
+            "krylov_preconditioner_requested_variant": "auto",
+            "krylov_preconditioner_initial_variant": preconditioner_variant,
             "krylov_preconditioner_variant": preconditioner_variant,
+            "graph_preconditioner_relaxation": graph_preconditioner_relaxation_for_variant(
+                preconditioner_variant
+            ),
+            "right_preconditioner_probe_available": True,
+            "right_preconditioner_probe_residual_l2_norm": 0.25,
+            "right_preconditioner_probe_relative_residual_l2_norm": 0.25,
+            "right_preconditioner_auto_disabled": False,
+            "right_preconditioner_probe_disable_relative_threshold": 0.0,
+            "right_preconditioner_auto_disable_reason": "",
         }
     )
     manifest_path.write_text(json.dumps(manifest))
@@ -1757,8 +1892,20 @@ def convert_periodic_airbox_fixture_to_schur_coupled_block(root: Path) -> None:
             {
                 "operator_source": "matrix_free_mfem_demag_phi_consistency_schur_provider",
                 "dynamic_demag_matrix_form": "schur_phi_consistency_provider",
+                "delta_phi_phase_validation_status": "ok",
+                "delta_phi_phase_max_residual": 0.0,
+                "delta_phi_seam_validation_status": "ok",
+                "delta_phi_seam_max_after_offset": 0.0,
+                "delta_phi_seam_best_constant_offset_real": 0.0,
+                "delta_phi_seam_best_constant_offset_imag": 0.0,
+                "h_demag_seam_validation_status": "ok",
+                "h_demag_seam_validation_reason": "evaluated_tangent_periodic_pairs",
+                "h_demag_seam_max_tangent_mismatch": 0.0,
+                "delta_phi_flux_validation_status": "ok",
+                "delta_phi_flux_validation_reason": "evaluated_periodic_airbox_normal_flux",
+                "delta_phi_flux_max_residual": 0.0,
                 "delta_phi_complex": [[0.0, 0.0]],
-                "h_demag_complex": None,
+                "h_demag_complex": [[0.0, 0.0], [0.0, 0.0]],
             }
         )
         point_path.write_text(json.dumps(point))
@@ -1862,19 +2009,49 @@ def write_derived_peak_mode_fixture(
             "not_an_eigenmode": True,
         }
     if not omit_refinement_recommendation:
+        frequency_hz = [float(sweep_point["frequency_hz"]) for sweep_point in sweep["points"]]
+        if len(frequency_hz) < 2:
+            refinement_recommendation = {
+                "schema_version": "frequency_response_peak_refinement.v1",
+                "strategy": "local_peak_window",
+                "peak_position": "single_point",
+                "recommended_frequency_count": 0,
+                "frequency_spacing_hz": None,
+                "recommended_frequencies_hz": [],
+            }
+        else:
+            peak_frequency = frequency_hz[index]
+            if index == 0:
+                spacing = abs(frequency_hz[1] - frequency_hz[0])
+                start = max(0.0, peak_frequency - 2.0 * spacing)
+                stop = peak_frequency
+                peak_position = "lower_boundary"
+            elif index == len(frequency_hz) - 1:
+                spacing = abs(frequency_hz[-1] - frequency_hz[-2])
+                start = peak_frequency
+                stop = peak_frequency + 2.0 * spacing
+                peak_position = "upper_boundary"
+            else:
+                left_spacing = abs(peak_frequency - frequency_hz[index - 1])
+                right_spacing = abs(frequency_hz[index + 1] - peak_frequency)
+                spacing = min(left_spacing, right_spacing)
+                start = max(0.0, peak_frequency - 0.5 * spacing)
+                stop = peak_frequency + 0.5 * spacing
+                peak_position = "interior"
+            frequency_count = 5
+            step = (stop - start) / float(frequency_count - 1)
+            refinement_recommendation = {
+                "schema_version": "frequency_response_peak_refinement.v1",
+                "strategy": "local_peak_window",
+                "peak_position": peak_position,
+                "recommended_frequency_count": frequency_count,
+                "frequency_spacing_hz": spacing,
+                "recommended_frequencies_hz": [
+                    start + step * step_index for step_index in range(frequency_count)
+                ],
+            }
         payload["refinement_recommendation"] = {
-            "schema_version": "frequency_response_peak_refinement.v1",
-            "strategy": "local_peak_window",
-            "peak_position": "interior",
-            "recommended_frequency_count": 5,
-            "frequency_spacing_hz": 500000000.0,
-            "recommended_frequencies_hz": [
-                2250000000.0,
-                2375000000.0,
-                2500000000.0,
-                2625000000.0,
-                2750000000.0,
-            ],
+            **refinement_recommendation,
         }
     output = root / "response" / "derived_modes" / "fmr_peak_mode.v1.json"
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -1913,13 +2090,162 @@ def set_krylov_preconditioner_kind(root: Path, *, kind: str) -> None:
 def set_krylov_preconditioner_variant(root: Path, *, variant: str) -> None:
     diagnostics_path = root / "response" / "diagnostics" / "solver.v1.json"
     diagnostics = json.loads(diagnostics_path.read_text())
+    diagnostics["krylov_preconditioner_requested_variant"] = variant
+    diagnostics["krylov_preconditioner_initial_variant"] = variant
     diagnostics["krylov_preconditioner_variant"] = variant
+    diagnostics["graph_preconditioner_relaxation"] = (
+        graph_preconditioner_relaxation_for_variant(variant)
+    )
     diagnostics_path.write_text(json.dumps(diagnostics))
     (root / "response" / "diagnostics.v1.json").write_text(json.dumps(diagnostics))
 
     manifest_path = root / "frequency_domain" / "manifest.v1.json"
     manifest = json.loads(manifest_path.read_text())
+    manifest["diagnostics"]["krylov_preconditioner_requested_variant"] = variant
+    manifest["diagnostics"]["krylov_preconditioner_initial_variant"] = variant
     manifest["diagnostics"]["krylov_preconditioner_variant"] = variant
+    manifest["diagnostics"]["graph_preconditioner_relaxation"] = (
+        graph_preconditioner_relaxation_for_variant(variant)
+    )
+    manifest_path.write_text(json.dumps(manifest))
+
+
+def set_krylov_preconditioner_disabled(root: Path) -> None:
+    diagnostics_path = root / "response" / "diagnostics" / "solver.v1.json"
+    diagnostics = json.loads(diagnostics_path.read_text())
+    diagnostics.update(
+        {
+            "krylov_preconditioner_kind": "none",
+            "krylov_preconditioner_requested_variant": "none",
+            "krylov_preconditioner_initial_variant": "none",
+            "krylov_preconditioner_variant": "none",
+            "krylov_preconditioner_applied": False,
+            "krylov_preconditioner_setup_status": "not_configured",
+            "graph_preconditioner_relaxation": 0.0,
+            "right_preconditioner_probe_available": False,
+            "right_preconditioner_probe_residual_l2_norm": 0.0,
+            "right_preconditioner_probe_relative_residual_l2_norm": 0.0,
+            "right_preconditioner_auto_disabled": False,
+            "right_preconditioner_probe_disable_relative_threshold": 0.0,
+            "right_preconditioner_auto_disable_reason": "",
+        }
+    )
+    diagnostics_path.write_text(json.dumps(diagnostics))
+    (root / "response" / "diagnostics.v1.json").write_text(json.dumps(diagnostics))
+
+    manifest_path = root / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["diagnostics"].update(
+        {
+            "krylov_preconditioner_kind": "none",
+            "krylov_preconditioner_requested_variant": "none",
+            "krylov_preconditioner_initial_variant": "none",
+            "krylov_preconditioner_variant": "none",
+            "krylov_preconditioner_applied": False,
+            "krylov_preconditioner_setup_status": "not_configured",
+            "graph_preconditioner_relaxation": 0.0,
+            "right_preconditioner_probe_available": False,
+            "right_preconditioner_probe_residual_l2_norm": 0.0,
+            "right_preconditioner_probe_relative_residual_l2_norm": 0.0,
+            "right_preconditioner_auto_disabled": False,
+            "right_preconditioner_probe_disable_relative_threshold": 0.0,
+            "right_preconditioner_auto_disable_reason": "",
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest))
+
+
+def set_krylov_preconditioner_auto_fallback(
+    root: Path,
+    *,
+    reason: str = "probe_relative_residual_above_threshold",
+) -> None:
+    diagnostics_path = root / "response" / "diagnostics" / "solver.v1.json"
+    diagnostics = json.loads(diagnostics_path.read_text())
+    initial_variant = diagnostics["krylov_preconditioner_initial_variant"]
+    diagnostics.update(
+        {
+            "krylov_preconditioner_kind": "none",
+            "krylov_preconditioner_requested_variant": "auto",
+            "krylov_preconditioner_initial_variant": initial_variant,
+            "krylov_preconditioner_variant": "none",
+            "krylov_preconditioner_applied": False,
+            "krylov_preconditioner_setup_status": "not_configured",
+            "right_preconditioner_probe_available": True,
+            "right_preconditioner_probe_residual_l2_norm": 2.0,
+            "right_preconditioner_probe_relative_residual_l2_norm": 2.0,
+            "right_preconditioner_auto_disabled": True,
+            "right_preconditioner_probe_disable_relative_threshold": 1.0,
+            "right_preconditioner_auto_disable_reason": reason,
+        }
+    )
+    diagnostics_path.write_text(json.dumps(diagnostics))
+    (root / "response" / "diagnostics.v1.json").write_text(json.dumps(diagnostics))
+
+    manifest_path = root / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    initial_variant = manifest["diagnostics"]["krylov_preconditioner_initial_variant"]
+    manifest["diagnostics"].update(
+        {
+            "krylov_preconditioner_kind": "none",
+            "krylov_preconditioner_requested_variant": "auto",
+            "krylov_preconditioner_initial_variant": initial_variant,
+            "krylov_preconditioner_variant": "none",
+            "krylov_preconditioner_applied": False,
+            "krylov_preconditioner_setup_status": "not_configured",
+            "right_preconditioner_probe_available": True,
+            "right_preconditioner_probe_residual_l2_norm": 2.0,
+            "right_preconditioner_probe_relative_residual_l2_norm": 2.0,
+            "right_preconditioner_auto_disabled": True,
+            "right_preconditioner_probe_disable_relative_threshold": 1.0,
+            "right_preconditioner_auto_disable_reason": reason,
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest))
+
+
+def set_krylov_preconditioner_auto_block_jacobi_fallback(root: Path) -> None:
+    diagnostics_path = root / "response" / "diagnostics" / "solver.v1.json"
+    diagnostics = json.loads(diagnostics_path.read_text())
+    initial_variant = diagnostics["krylov_preconditioner_initial_variant"]
+    diagnostics.update(
+        {
+            "krylov_preconditioner_kind": "mfem_tangent_block_jacobi_right",
+            "krylov_preconditioner_requested_variant": "auto",
+            "krylov_preconditioner_initial_variant": initial_variant,
+            "krylov_preconditioner_variant": "block_jacobi",
+            "krylov_preconditioner_applied": True,
+            "krylov_preconditioner_setup_status": "ok",
+            "right_preconditioner_probe_available": True,
+            "right_preconditioner_probe_residual_l2_norm": 2.0,
+            "right_preconditioner_probe_relative_residual_l2_norm": 2.0,
+            "right_preconditioner_auto_disabled": True,
+            "right_preconditioner_probe_disable_relative_threshold": 1.0,
+            "right_preconditioner_auto_disable_reason": "probe_relative_residual_above_threshold",
+        }
+    )
+    diagnostics_path.write_text(json.dumps(diagnostics))
+    (root / "response" / "diagnostics.v1.json").write_text(json.dumps(diagnostics))
+
+    manifest_path = root / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    initial_variant = manifest["diagnostics"]["krylov_preconditioner_initial_variant"]
+    manifest["diagnostics"].update(
+        {
+            "krylov_preconditioner_kind": "mfem_tangent_block_jacobi_right",
+            "krylov_preconditioner_requested_variant": "auto",
+            "krylov_preconditioner_initial_variant": initial_variant,
+            "krylov_preconditioner_variant": "block_jacobi",
+            "krylov_preconditioner_applied": True,
+            "krylov_preconditioner_setup_status": "ok",
+            "right_preconditioner_probe_available": True,
+            "right_preconditioner_probe_residual_l2_norm": 2.0,
+            "right_preconditioner_probe_relative_residual_l2_norm": 2.0,
+            "right_preconditioner_auto_disabled": True,
+            "right_preconditioner_probe_disable_relative_threshold": 1.0,
+            "right_preconditioner_auto_disable_reason": "probe_relative_residual_above_threshold",
+        }
+    )
     manifest_path.write_text(json.dumps(manifest))
 
 
@@ -1989,6 +2315,29 @@ def test_validator_accepts_periodic_airbox_cpu_demag_solved_boundary(
     assert result.returncode == 0, result.stderr + result.stdout
 
 
+def test_validator_rejects_periodic_airbox_cpu_demag_without_flux_validation(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path)
+    diagnostics_path = tmp_path / "response" / "diagnostics" / "solver.v1.json"
+    diagnostics = json.loads(diagnostics_path.read_text())
+    diagnostics["delta_phi_flux_validation_status"] = "not_evaluated"
+    diagnostics["delta_phi_flux_validation_reason"] = (
+        "normal_flux_diagnostic_payload_unavailable"
+    )
+    diagnostics.pop("delta_phi_flux_max_residual", None)
+    diagnostics_path.write_text(json.dumps(diagnostics))
+    (tmp_path / "response" / "diagnostics.v1.json").write_text(json.dumps(diagnostics))
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+    )
+
+    assert result.returncode != 0
+    assert "delta_phi_flux_validation_status" in (result.stderr + result.stdout)
+
+
 def test_validator_rejects_periodic_airbox_cpu_demag_without_dynamic_demag_matrix_form(
     tmp_path: Path,
 ) -> None:
@@ -2029,6 +2378,173 @@ def test_validator_rejects_periodic_airbox_cpu_demag_without_preconditioner_vari
 
     assert result.returncode != 0
     assert "krylov_preconditioner_variant" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_periodic_airbox_cpu_demag_without_preconditioner_probe(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path)
+    diagnostics_path = tmp_path / "response" / "diagnostics" / "solver.v1.json"
+    diagnostics = json.loads(diagnostics_path.read_text())
+    diagnostics.pop("right_preconditioner_probe_available", None)
+    diagnostics_path.write_text(json.dumps(diagnostics))
+    (tmp_path / "response" / "diagnostics.v1.json").write_text(json.dumps(diagnostics))
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["diagnostics"].pop("right_preconditioner_probe_available", None)
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+    )
+
+    assert result.returncode != 0
+    assert "right_preconditioner_probe_available" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_periodic_airbox_cpu_demag_preconditioner_probe_manifest_drift(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path)
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["diagnostics"]["right_preconditioner_probe_relative_residual_l2_norm"] = 0.5
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+    )
+
+    assert result.returncode != 0
+    assert "manifest.diagnostics.right_preconditioner_probe_relative_residual_l2_norm" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_periodic_airbox_cpu_demag_without_demag_solver_policy(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path)
+    diagnostics_path = tmp_path / "response" / "diagnostics" / "solver.v1.json"
+    diagnostics = json.loads(diagnostics_path.read_text())
+    diagnostics.pop("frequency_response_demag_solver_policy_effective", None)
+    diagnostics_path.write_text(json.dumps(diagnostics))
+    (tmp_path / "response" / "diagnostics.v1.json").write_text(json.dumps(diagnostics))
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+    )
+
+    assert result.returncode != 0
+    assert "diagnostics.frequency_response_demag_solver_policy_effective" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_periodic_airbox_cpu_demag_without_residual_consistency(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path)
+    diagnostics_path = tmp_path / "response" / "diagnostics" / "solver.v1.json"
+    diagnostics = json.loads(diagnostics_path.read_text())
+    diagnostics.pop("residual_consistency_status", None)
+    diagnostics_path.write_text(json.dumps(diagnostics))
+    (tmp_path / "response" / "diagnostics.v1.json").write_text(json.dumps(diagnostics))
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+    )
+
+    assert result.returncode != 0
+    assert "manifest.diagnostics.residual_consistency_status" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_accepts_periodic_airbox_cpu_demag_without_preconditioner(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path)
+    set_krylov_preconditioner_disabled(tmp_path)
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_accepts_periodic_airbox_cpu_demag_auto_preconditioner_fallback(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path)
+    set_krylov_preconditioner_auto_fallback(tmp_path)
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_accepts_periodic_airbox_cpu_demag_auto_retry_without_preconditioner(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path)
+    set_krylov_preconditioner_auto_fallback(
+        tmp_path,
+        reason="solve_error_retry_without_right_preconditioner",
+    )
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_accepts_periodic_airbox_cpu_demag_auto_block_jacobi_fallback(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path, exchange_edge_count=4)
+    set_krylov_preconditioner_auto_block_jacobi_fallback(tmp_path)
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_rejects_periodic_airbox_cpu_demag_direct_block_jacobi_variant(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path, exchange_edge_count=4)
+    set_krylov_preconditioner_variant(tmp_path, variant="block_jacobi")
+    set_krylov_preconditioner_kind(
+        tmp_path,
+        kind="mfem_tangent_block_jacobi_right",
+    )
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+    )
+
+    assert result.returncode != 0
+    assert "block_jacobi is only valid as an auto fallback" in (
+        result.stderr + result.stdout
+    )
 
 
 def test_validator_rejects_periodic_airbox_exchange_graph_with_demag_coarse_variant(
@@ -2507,6 +3023,63 @@ def test_validator_rejects_periodic_airbox_spectrum_without_positive_peak(
     assert "positive response peak" in (result.stderr + result.stdout)
 
 
+def test_validator_accepts_periodic_airbox_refined_spectrum_with_interior_peak(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path, frequency_point_count=5)
+    set_manifest_domain_mesh_mode(tmp_path, mode="generated_frozen_magnetic_submesh")
+    for index, amplitude in enumerate([0.5, 1.0, 2.0, 1.2, 0.7]):
+        set_frequency_point_response(
+            tmp_path,
+            index=index,
+            frequency_hz=(2.0 + 0.1 * index) * 1.0e9,
+            response_amplitude=amplitude,
+        )
+    write_derived_peak_mode_fixture(tmp_path, index=2)
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+        require_frozen_magnetic_submesh=True,
+        require_min_frequency_points=5,
+        require_response_peak=True,
+        require_interior_response_peak=True,
+        require_field_payloads_for_frequency_points=True,
+        require_derived_peak_mode=True,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_rejects_periodic_airbox_refined_spectrum_with_boundary_peak(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path, frequency_point_count=5)
+    set_manifest_domain_mesh_mode(tmp_path, mode="generated_frozen_magnetic_submesh")
+    for index, amplitude in enumerate([2.0, 1.0, 0.8, 0.7, 0.6]):
+        set_frequency_point_response(
+            tmp_path,
+            index=index,
+            frequency_hz=(2.0 + 0.1 * index) * 1.0e9,
+            response_amplitude=amplitude,
+        )
+    write_derived_peak_mode_fixture(tmp_path, index=0)
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+        require_frozen_magnetic_submesh=True,
+        require_min_frequency_points=5,
+        require_response_peak=True,
+        require_interior_response_peak=True,
+        require_field_payloads_for_frequency_points=True,
+        require_derived_peak_mode=True,
+    )
+
+    assert result.returncode != 0
+    assert "interior response peak" in (result.stderr + result.stdout)
+
+
 def test_validator_accepts_periodic_airbox_airbox_reference_convergence(
     tmp_path: Path,
 ) -> None:
@@ -2725,14 +3298,14 @@ def test_validator_accepts_bounded_periodic_airbox_schur_solve_error_bundle(
     assert result.returncode == 0, result.stderr + result.stdout
 
 
-def test_validator_rejects_schur_bundle_with_legacy_graph_preconditioner_kind(
+def test_validator_rejects_schur_bundle_with_provider_name_as_preconditioner_kind(
     tmp_path: Path,
 ) -> None:
     write_periodic_airbox_cpu_demag_solve_error_fixture(tmp_path)
     convert_periodic_airbox_fixture_to_schur_coupled_block(tmp_path)
     set_krylov_preconditioner_kind(
         tmp_path,
-        kind="mfem_tangent_graph_demag_coarse_right",
+        kind="mfem_phi_consistency_schur_right",
     )
 
     result = run_validator(
@@ -2744,7 +3317,9 @@ def test_validator_rejects_schur_bundle_with_legacy_graph_preconditioner_kind(
 
     assert result.returncode != 0
     assert "krylov_preconditioner_kind" in (result.stderr + result.stdout)
-    assert "mfem_phi_consistency_schur_right" in (result.stderr + result.stdout)
+    assert "mfem_tangent_demag_coarse_right" in (
+        result.stderr + result.stdout
+    )
 
 
 def test_validator_rejects_solve_error_bundle_without_demag_tangent_relative_linearity(
@@ -3185,16 +3760,17 @@ def set_ms_correct_si_observables(root: Path, *, include_ms_source: bool = True)
             "normalization": "sum(Ms*response*conj(drive))/sum(abs(drive)^2)",
         }
         point["absorbed_power_density_provenance"] = {
-            "kind": "drive_projected_absorbed_power_density",
+            "kind": "drive_projected_absorption_proxy",
             "basis": "local_tangent_drive",
-            "physical_power_density": True,
-            "units": "W/m^3",
+            "physical_power_density": False,
+            "units": "drive_projected_proxy_not_W_per_m3",
             "requires_mu0_ms_factor": False,
             "mu0_ms_factor_applied": True,
-            "normalization": "0.5*mu0*abs(omega)*abs(imag(sum(Ms*response*conj(drive))))/tangent_dof_count",
+            "normalization": "0.5*mu0*omega*imag(sum(Ms*response*conj(drive)))/tangent_dof_count",
             "volume_weighted": False,
             "spatial_reduction": "drive_projected_tangent_dof_average",
-            "full_power_density": True,
+            "absolute_value_applied": False,
+            "full_power_density": False,
         }
         if include_ms_source:
             point["susceptibility_tensor_provenance"]["ms_source"] = "uniform"

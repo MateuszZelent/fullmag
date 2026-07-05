@@ -6,6 +6,10 @@
 #include <string>
 #include <utility>
 
+#ifndef FULLMAG_FEM_WITH_SLEPC
+#define FULLMAG_FEM_WITH_SLEPC 0
+#endif
+
 namespace fullmag::fem::frequency_domain {
 
 namespace {
@@ -30,7 +34,7 @@ constexpr const char *kCpuDrivenResponseDiagnosticsJson =
     "\"dynamic_demag_k_available\":false,"
     "\"gpu_available\":false,"
     "\"execution_lane\":\"native_fem_mfem_frequency_domain_cpu\","
-    "\"scope\":\"gamma_free_or_static_periodic_magnetic_response\"}";
+    "\"scope\":\"gamma_free_or_static_periodic_magnetic_response_with_provider_demag_and_dmi_slices\"}";
 
 constexpr const char *kGpuDrivenResponseDiagnosticsJson =
     "{\"schema_version\":\"frequency_domain_availability.v1\","
@@ -42,7 +46,7 @@ constexpr const char *kGpuDrivenResponseDiagnosticsJson =
     "\"dynamic_demag_k_available\":false,"
     "\"gpu_available\":true,"
     "\"execution_lane\":\"native_fem_mfem_frequency_domain_gpu\","
-    "\"scope\":\"gamma_free_magnetic_response_no_demag\"}";
+    "\"scope\":\"gamma_free_magnetic_response_with_provider_demag_and_dmi_slices\"}";
 
 constexpr const char *kGpuStaticPeriodicDrivenResponseDiagnosticsJson =
     "{\"schema_version\":\"frequency_domain_availability.v1\","
@@ -54,7 +58,53 @@ constexpr const char *kGpuStaticPeriodicDrivenResponseDiagnosticsJson =
     "\"dynamic_demag_k_available\":false,"
     "\"gpu_available\":true,"
     "\"execution_lane\":\"native_fem_mfem_frequency_domain_gpu\","
-    "\"scope\":\"gamma_free_or_static_periodic_magnetic_response_no_demag\"}";
+    "\"scope\":\"gamma_free_or_static_periodic_magnetic_response_with_provider_demag_and_dmi_slices\"}";
+
+constexpr const char *kFloquetProjectedDrivenResponseDiagnosticsJson =
+    "{\"schema_version\":\"frequency_domain_availability.v1\","
+    "\"driven_response_available\":true,"
+    "\"modal_solver_available\":false,"
+    "\"static_periodic_response_available\":false,"
+    "\"floquet_modal_available\":false,"
+    "\"floquet_response_available\":true,"
+    "\"dynamic_demag_k_available\":false,"
+    "\"gpu_available\":false,"
+    "\"scope\":\"nonzero_k_floquet_no_demag_phase_projection\"}";
+
+constexpr const char *kGpuFloquetProjectedDrivenResponseDiagnosticsJson =
+    "{\"schema_version\":\"frequency_domain_availability.v1\","
+    "\"driven_response_available\":true,"
+    "\"modal_solver_available\":false,"
+    "\"static_periodic_response_available\":false,"
+    "\"floquet_modal_available\":false,"
+    "\"floquet_response_available\":true,"
+    "\"dynamic_demag_k_available\":false,"
+    "\"gpu_available\":true,"
+    "\"execution_lane\":\"native_fem_mfem_frequency_domain_gpu\","
+    "\"scope\":\"nonzero_k_floquet_no_demag_phase_projection\"}";
+
+constexpr const char *kCpuModalEigenDiagnosticsJson =
+    "{\"schema_version\":\"frequency_domain_availability.v1\","
+    "\"driven_response_available\":false,"
+    "\"modal_solver_available\":true,"
+    "\"static_periodic_response_available\":false,"
+    "\"floquet_modal_available\":false,"
+    "\"floquet_response_available\":false,"
+    "\"dynamic_demag_k_available\":false,"
+    "\"gpu_available\":false,"
+    "\"execution_lane\":\"native_fem_modal_cpu\","
+    "\"scope\":\"slepc_shift_invert_operator_payload\"}";
+
+constexpr const char *kModalEigenNoSlepcDiagnosticsJson =
+    "{\"schema_version\":\"frequency_domain_availability.v1\","
+    "\"driven_response_available\":false,"
+    "\"modal_solver_available\":false,"
+    "\"static_periodic_response_available\":false,"
+    "\"floquet_modal_available\":false,"
+    "\"floquet_response_available\":false,"
+    "\"dynamic_demag_k_available\":false,"
+    "\"gpu_available\":false,"
+    "\"scope\":\"modal_eigen_requires_slepc\"}";
 
 bool floquet_k_vector_is_nonzero_or_invalid(const double (&k_vector)[3]) noexcept
 {
@@ -274,27 +324,51 @@ FrequencyDomainAvailabilityResult frequency_domain_availability(
         return result;
     }
 
-    if (request.has_floquet_k_vector &&
-        floquet_k_vector_is_nonzero_or_invalid(request.floquet_k_vector_rad_per_m)) {
-        result.error_message =
-            "native FEM frequency-domain Floquet/Bloch nonzero-k metadata is ABI-visible but not implemented for driven response";
-        return result;
-    }
-
     if (request.requires_modal_solver ||
         request.study_kind == FrequencyDomainStudyKind::modal_dynamic_matrix) {
-        result.error_message = "native FEM modal dynamic-matrix solver is not implemented";
+#if FULLMAG_FEM_WITH_SLEPC
+        result.status = FrequencyDomainStatus::ok;
+        result.modal_solver_available = true;
+        result.error_message = "";
+        result.diagnostics_json = kCpuModalEigenDiagnosticsJson;
+#else
+        result.error_message =
+            "native FEM modal dynamic-matrix solver requires PETSc/SLEPc support";
+        result.diagnostics_json = kModalEigenNoSlepcDiagnosticsJson;
+#endif
         return result;
     }
 
-    if (request.requires_floquet_boundary) {
-        result.error_message =
-            "native FEM frequency-domain Floquet/PBC enforcement is not implemented for driven response";
+    if (request.has_floquet_k_vector &&
+        floquet_k_vector_is_nonzero_or_invalid(request.floquet_k_vector_rad_per_m)) {
+        result.status = FrequencyDomainStatus::ok;
+        result.driven_response_available = true;
+        result.floquet_response_available = true;
+        result.error_message = "";
+#if FULLMAG_HAS_CUDA_RUNTIME
+        if (request.requires_gpu) {
+            result.gpu_available = true;
+            result.diagnostics_json = kGpuFloquetProjectedDrivenResponseDiagnosticsJson;
+        } else {
+            result.diagnostics_json = kFloquetProjectedDrivenResponseDiagnosticsJson;
+        }
+#else
+        if (request.requires_gpu && request.strict_device) {
+            result.status = FrequencyDomainStatus::unavailable;
+            result.driven_response_available = false;
+            result.floquet_response_available = false;
+            result.error_message =
+                "native FEM frequency-domain Floquet response GPU slice requires FULLMAG_HAS_CUDA_RUNTIME=1";
+            return result;
+        }
+        result.diagnostics_json = kFloquetProjectedDrivenResponseDiagnosticsJson;
+#endif
         return result;
     }
 
     if (request.requires_gpu && request.strict_device) {
-        if (request.requires_static_periodic_boundary) {
+        if (request.requires_static_periodic_boundary ||
+            request.requires_floquet_boundary) {
 #if FULLMAG_HAS_CUDA_RUNTIME
             result.status = FrequencyDomainStatus::ok;
             result.driven_response_available = true;

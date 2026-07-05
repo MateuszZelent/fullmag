@@ -7,7 +7,7 @@
 
 namespace fullmag::fem::frequency_domain {
 
-enum class FrequencyDomainOperatorTermKind {
+enum class FrequencyDomainOperatorTermKind : std::uint32_t {
     exchange,
     zeeman,
     local_anisotropy,
@@ -17,6 +17,7 @@ enum class FrequencyDomainOperatorTermKind {
 };
 
 struct TangentOperatorLocalBlock {
+    // Row-major 2x2 block mapping local tangent coordinates [u, v].
     FrequencyDomainOperatorTermKind kind = FrequencyDomainOperatorTermKind::zeeman;
     double a00 = 0.0;
     double a01 = 0.0;
@@ -111,7 +112,26 @@ FrequencyDomainStatus apply_tangent_edge_operator(
     double *out_tangent,
     TangentEdgeOperatorDiagnostics *out_diagnostics) noexcept;
 
+FrequencyDomainStatus apply_tangent_edge_operator(
+    const TangentFrameNode *nodes,
+    const TangentOperatorEdgeBlock *edges,
+    std::uint64_t edge_count,
+    const double *tangent_in,
+    TangentWorkspaceShape shape,
+    double *out_tangent,
+    TangentEdgeOperatorDiagnostics *out_diagnostics) noexcept;
+
 FrequencyDomainStatus apply_tangent_combined_operator(
+    const TangentOperatorLocalBlock *node_blocks,
+    const TangentOperatorEdgeBlock *edges,
+    std::uint64_t edge_count,
+    const double *tangent_in,
+    TangentWorkspaceShape shape,
+    double *out_tangent,
+    TangentCombinedOperatorDiagnostics *out_diagnostics) noexcept;
+
+FrequencyDomainStatus apply_tangent_combined_operator(
+    const TangentFrameNode *nodes,
     const TangentOperatorLocalBlock *node_blocks,
     const TangentOperatorEdgeBlock *edges,
     std::uint64_t edge_count,

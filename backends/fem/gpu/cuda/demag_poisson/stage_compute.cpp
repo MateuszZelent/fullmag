@@ -106,10 +106,13 @@ struct GpuDemagPhaseTimer {
 
 } // namespace
 
-bool compute_device_demag_for_device_stage(
+namespace {
+
+bool compute_device_demag_for_device_stage_impl(
     Context &ctx,
     const FemGpuComponentField &m,
     void *raw_stream,
+    bool reset_initial_solution,
     std::string &reason)
 {
 #if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
@@ -181,6 +184,15 @@ bool compute_device_demag_for_device_stage(
         }
     }
 
+    if (reset_initial_solution) {
+        if (!cuda_ok(cudaMemset(
+                gpu.demag_poisson.poisson_solution,
+                0,
+                static_cast<size_t>(gpu.lifecycle.node_count) * sizeof(double)),
+                "cudaMemset GPU Poisson demag initial solution", reason)) {
+            return false;
+        }
+    }
     workspace->b_par->HypreReadWrite();
     workspace->x_par->HypreReadWrite();
     const auto solve_start = FemSteadyClock::now();
@@ -322,6 +334,36 @@ bool compute_device_demag_for_device_stage(
     reason = "strict FEM GPU demag requires MFEM MPI, hypre GPU, and CUDA runtime support";
     return false;
 #endif
+}
+
+} // namespace
+
+bool compute_device_demag_for_device_stage(
+    Context &ctx,
+    const FemGpuComponentField &m,
+    void *raw_stream,
+    std::string &reason)
+{
+    return compute_device_demag_for_device_stage_impl(
+        ctx,
+        m,
+        raw_stream,
+        false,
+        reason);
+}
+
+bool compute_device_demag_for_device_stage_fresh(
+    Context &ctx,
+    const FemGpuComponentField &m,
+    void *raw_stream,
+    std::string &reason)
+{
+    return compute_device_demag_for_device_stage_impl(
+        ctx,
+        m,
+        raw_stream,
+        true,
+        reason);
 }
 
 bool reduce_device_demag_robin_boundary_energy(

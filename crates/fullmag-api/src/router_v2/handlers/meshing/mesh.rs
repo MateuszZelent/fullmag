@@ -35,7 +35,8 @@ use crate::schemas::mesh::{
     MeshPeriodicBoundaryFacePairResource, MeshPeriodicDomainNodePairCountsResource,
     MeshPeriodicPairResource, MeshPeriodicPairsResource, MeshQualityGatesResource,
     MeshRealizedSizeFieldResource, MeshRealizedSizeFieldsPayload, MeshRealizedSizeFieldsResource,
-    MeshRegionResource, MeshSemanticsResource, MeshSharedDomainBuildReportResource,
+    MeshRegionMembershipResource, MeshRegionQualityResource, MeshRegionResource,
+    MeshSemanticsResource, MeshSharedDomainBuildReportResource,
     MeshSharedDomainConfigReplaceRequest, MeshSharedDomainConfigResource,
     MeshSharedDomainManifestResource, MeshSharedDomainQualityResource,
     MeshSharedDomainReportResource, MeshSolverMeshResource, MeshSummaryResource,
@@ -1623,6 +1624,48 @@ pub async fn get_mesh_object_quality(
 
 #[utoipa::path(
     get,
+    path = "/v2/sessions/current/meshing/meshes/regions/{region_id}/quality",
+    params(
+        ("region_id" = String, Path, description = "Authored or realized region id")
+    ),
+    responses(
+        (status = 200, description = "Per-region mesh quality", body = MeshRegionQualityResource),
+        (status = 404, description = "No active workspace, mesh, scene, or region membership"),
+    ),
+    tag = "meshing"
+)]
+pub async fn get_mesh_region_quality(
+    State(state): State<Arc<AppState>>,
+    Path(region_id): Path<String>,
+) -> Result<Json<MeshRegionQualityResource>, ApiError> {
+    let snapshot = current_snapshot(&state).await?;
+    let scene = current_scene_document(&snapshot)?;
+    let mesh = snapshot
+        .fem_mesh
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active FEM mesh"))?;
+    let null_workspace = Value::Null;
+    let mesh_workspace = snapshot.mesh_workspace.as_ref().unwrap_or(&null_workspace);
+    let membership =
+        crate::router_v2::handlers::data::mesh_region_membership::build_mesh_region_membership(
+            scene,
+            mesh,
+            snapshot.mesh_revision,
+            &region_id,
+        )
+        .ok_or_else(|| {
+            ApiError::not_found(format!("mesh region membership '{region_id}' not found"))
+        })?;
+    let quality = region_quality(&snapshot, mesh_workspace, &membership)?;
+    Ok(Json(MeshRegionQualityResource {
+        revision: snapshot.mesh_revision,
+        region_id,
+        quality,
+    }))
+}
+
+#[utoipa::path(
+    get,
     path = "/v2/sessions/current/meshing/meshes/objects/{object_id}/size-field",
     params(
         ("object_id" = String, Path, description = "Canonical scene object id")
@@ -2915,6 +2958,9 @@ fn object_quality(
             })
         })
         .unwrap_or_else(|| json!({}));
+    if let Some(marker) = marker {
+        merge_mesh_scope_size_statistics(&mut quality, snapshot.fem_mesh.as_ref(), marker);
+    }
     merge_quality_field(
         &mut quality,
         "marker",
@@ -2931,6 +2977,160 @@ fn object_quality(
         per_domain_quality.unwrap_or(Value::Null),
     );
     Some(quality)
+}
+
+fn region_quality(
+    snapshot: &SessionStateResponse,
+    mesh_workspace: &Value,
+    membership: &MeshRegionMembershipResource,
+) -> Result<Option<Value>, ApiError> {
+    let Some(mesh) = snapshot.fem_mesh.as_ref() else {
+        return Ok(None);
+    };
+    let element_indices = normalize_membership_element_indices(mesh, &membership.element_indices);
+    let Some(mut global) = mesh_region_size_statistics(mesh, membership, &element_indices) else {
+        return Ok(Some(json!({
+            "quality_source": "region_membership",
+            "membership_source": membership.source.clone(),
+            "realization_method": membership.realization_method.clone(),
+            "global": {
+                "scope_id": format!("region:{}", membership.region_id),
+                "kind": "region",
+                "label": membership.region_id.clone(),
+                "role": "region",
+                "element_count": 0,
+                "warnings": membership.realization_warnings.clone(),
+            }
+        })));
+    };
+
+    if let Some(artifact) = read_mesh_quality_data_artifact(mesh_workspace)? {
+        if let Some(values) =
+            per_element_quality_metric_from_fmmq(&artifact.bytes, CrossSectionQualityMetric::Sicn)?
+        {
+            merge_region_quality_metric(&mut global, "sicn", &element_indices, &values, 0.1)?;
+        }
+        if let Some(values) =
+            per_element_quality_metric_from_fmmq(&artifact.bytes, CrossSectionQualityMetric::Gamma)?
+        {
+            merge_region_quality_metric(&mut global, "gamma", &element_indices, &values, 0.08)?;
+        }
+    }
+
+    Ok(Some(json!({
+        "quality_source": "region_membership",
+        "membership_source": membership.source.clone(),
+        "realization_method": membership.realization_method.clone(),
+        "global": global,
+    })))
+}
+
+fn normalize_membership_element_indices(
+    mesh: &FemMeshPayload,
+    element_indices: &[u32],
+) -> Vec<usize> {
+    let mut indices = BTreeSet::new();
+    for element_index in element_indices {
+        let index = *element_index as usize;
+        if index < mesh.elements.len() {
+            indices.insert(index);
+        }
+    }
+    indices.into_iter().collect()
+}
+
+fn mesh_region_size_statistics(
+    mesh: &FemMeshPayload,
+    membership: &MeshRegionMembershipResource,
+    element_indices: &[usize],
+) -> Option<Value> {
+    let mut volumes = Vec::new();
+    let mut characteristic_sizes = Vec::new();
+    let mut edge_lengths = Vec::new();
+
+    for element_index in element_indices {
+        let Some(element) = mesh.elements.get(*element_index) else {
+            continue;
+        };
+        let Some(tet) = element_nodes(mesh, element) else {
+            continue;
+        };
+        edge_lengths.extend(tet_edge_lengths(tet));
+        let volume = tet_volume(tet).abs();
+        if volume > 0.0 && volume.is_finite() {
+            volumes.push(volume);
+            characteristic_sizes.push((volume * 6.0 * 2.0_f64.sqrt()).cbrt());
+        }
+    }
+
+    if volumes.is_empty() && edge_lengths.is_empty() {
+        return None;
+    }
+
+    Some(json!({
+        "scope_id": format!("region:{}", membership.region_id),
+        "kind": "region",
+        "label": membership.region_id.clone(),
+        "role": "region",
+        "element_count": element_indices.len(),
+        "membership_source": membership.source.clone(),
+        "mesh_part_ids": membership.mesh_part_ids.clone(),
+        "warnings": membership.realization_warnings.clone(),
+        "characteristic_size": distribution_statistics(&characteristic_sizes),
+        "edge_length": distribution_statistics(&edge_lengths),
+        "volume": distribution_statistics(&volumes),
+    }))
+}
+
+fn merge_region_quality_metric(
+    global: &mut Value,
+    key: &str,
+    element_indices: &[usize],
+    values: &[f64],
+    threshold: f64,
+) -> Result<(), ApiError> {
+    let mut samples = Vec::new();
+    for element_index in element_indices {
+        let value = values.get(*element_index).ok_or_else(|| {
+            ApiError::internal(format!(
+                "quality payload is missing value for mesh element {element_index}"
+            ))
+        })?;
+        if value.is_finite() {
+            samples.push(*value);
+        }
+    }
+    if samples.is_empty() {
+        return Ok(());
+    }
+
+    let below_threshold_count = samples.iter().filter(|value| **value < threshold).count();
+    let p05 = percentile_f64(samples.clone(), 0.05);
+    let mut metric = distribution_statistics(&samples);
+    if let Some(metric) = metric.as_object_mut() {
+        metric.insert("threshold".to_string(), json!(threshold));
+        metric.insert("p05".to_string(), json!(p05));
+        metric.insert(
+            "below_threshold_count".to_string(),
+            json!(below_threshold_count),
+        );
+        metric.insert(
+            "below_threshold_fraction".to_string(),
+            json!(below_threshold_count as f64 / samples.len() as f64),
+        );
+    }
+    if let Some(global) = global.as_object_mut() {
+        global.insert(key.to_string(), metric);
+    }
+    Ok(())
+}
+
+fn percentile_f64(mut values: Vec<f64>, quantile: f64) -> f64 {
+    values.sort_by(|left, right| left.total_cmp(right));
+    let index = ((values.len().saturating_sub(1)) as f64 * quantile)
+        .round()
+        .clamp(0.0, values.len().saturating_sub(1) as f64) as usize;
+    values[index]
 }
 
 #[derive(Debug, Clone, Copy, Default)]

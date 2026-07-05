@@ -1953,6 +1953,12 @@ button.fm-mesh-detail-list__item:focus-visible {
   min-width: 76px;
 }
 
+.fm-frequency-domain-visualization-actions
+  .fm-frequency-domain-mode-data-preview-button {
+  flex: 0 0 auto;
+  min-height: 24px;
+}
+
 .fm-frequency-domain-table-empty {
   display: grid;
   min-height: 64px;

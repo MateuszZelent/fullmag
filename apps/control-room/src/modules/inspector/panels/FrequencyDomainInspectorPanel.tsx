@@ -1,7 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useReducer, useRef } from "react";
-import { Activity, CheckCircle2, Play, RotateCw } from "lucide-react";
+import {
+  Activity,
+  CheckCircle2,
+  Info,
+  Play,
+  RotateCw,
+} from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 import {
@@ -72,6 +78,7 @@ import {
   buildFrequencyDomainCalculationModeRows,
   frequencyDomainResourceGroupLabel,
 } from "./frequencyDomainInspectorModel";
+import { FrequencyDomainModeDataPreviewDialog } from "./FrequencyDomainModeDataPreviewDialog";
 import { resolveFrequencyDomainNodeDetail } from "./frequencyDomainNodeDetails";
 import { FieldRow } from "../primitives/FieldRow";
 import { InspectorSection } from "../primitives/InspectorSection";
@@ -437,6 +444,9 @@ type FrequencyDomainInspectorState = {
   commandMessage: string | null;
   draftCalculationMode: string | null;
   selectedEigenBranchId: string | null;
+  selectedModeDataPreviewOpen: boolean;
+  selectedModeDataPreviewPhaseRad: number | null;
+  selectedModeDataPreviewView: string | null;
   selectedFmrPeakKey: string | null;
   selectedSpectrumModeKey: string | null;
 };
@@ -446,6 +456,9 @@ const initialFrequencyDomainInspectorState: FrequencyDomainInspectorState = {
   commandMessage: null,
   draftCalculationMode: null,
   selectedEigenBranchId: null,
+  selectedModeDataPreviewOpen: false,
+  selectedModeDataPreviewPhaseRad: null,
+  selectedModeDataPreviewView: null,
   selectedFmrPeakKey: null,
   selectedSpectrumModeKey: null,
 };
@@ -472,6 +485,9 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
     commandMessage,
     draftCalculationMode,
     selectedEigenBranchId,
+    selectedModeDataPreviewOpen,
+    selectedModeDataPreviewPhaseRad,
+    selectedModeDataPreviewView,
     selectedFmrPeakKey,
     selectedSpectrumModeKey,
   } = inspectorState;
@@ -1206,6 +1222,23 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
       .then((result) => {
         setInspectorState({ commandMessage: result.message ?? result.status });
       });
+  };
+  const openSelectedEigenModeDataPreview = (): void => {
+    if (!selectedEigenModeFieldId) return;
+    const view = normalizeAnalysisFieldView(
+      selectedEigenModeViewSelectRef.current?.value ??
+        selectedFieldMeta?.default_view ??
+        DEFAULT_ANALYSIS_FIELD_VIEW,
+    );
+    const phaseRad =
+      finiteNumber(selectedEigenModePhaseInputRef.current?.value) ??
+      selectedFieldMeta?.default_phase_rad ??
+      0;
+    setInspectorState({
+      selectedModeDataPreviewOpen: true,
+      selectedModeDataPreviewPhaseRad: phaseRad,
+      selectedModeDataPreviewView: view,
+    });
   };
   const plotResponsePoint = (
     point: (typeof responseModel.points)[number],
@@ -2882,7 +2915,31 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
               </Button>
             );
           })}
+          <Button
+            aria-label="Open selected eigen mode data preview"
+            className="fm-frequency-domain-mode-data-preview-button"
+            disabled={!selectedEigenModeFieldId}
+            size="icon"
+            title="Mode data preview"
+            type="button"
+            variant="ghost"
+            onClick={openSelectedEigenModeDataPreview}
+          >
+            <Info aria-hidden="true" size={14} />
+          </Button>
         </div>
+        {selectedModeDataPreviewOpen ? (
+          <FrequencyDomainModeDataPreviewDialog
+            fieldId={selectedEigenModeFieldId}
+            fieldMeta={selectedFieldMeta}
+            onOpenChange={(open) =>
+              setInspectorState({ selectedModeDataPreviewOpen: open })
+            }
+            open={selectedModeDataPreviewOpen}
+            phaseRad={selectedModeDataPreviewPhaseRad}
+            view={selectedModeDataPreviewView}
+          />
+        ) : null}
         <FieldRow
           label="Sample index"
           value={

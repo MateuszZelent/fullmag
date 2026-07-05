@@ -54,12 +54,12 @@ int main()
     request.max_linear_iterations = 256;
 
     FullmagFemFrequencyDomainResult result = fullmag_fem_driven_response_solve(&request);
-    check(result.status == FULLMAG_FEM_FD_UNAVAILABLE,
-          "driven skeleton returns structured unavailable");
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "legacy driven contract rejects missing operator payload");
     check(contains(result.diagnostics_json, "\"study_product\":\"driven_response\""),
           "driven diagnostics preserve study_product");
-    check(contains(result.result_json, "\"status\":\"unavailable\""),
-          "driven result json reports unavailable");
+    check(contains(result.result_json, "\"status\":\"validation_error\""),
+          "driven result json reports validation_error");
     fullmag_fem_frequency_domain_result_destroy(&result);
 
     return 0;

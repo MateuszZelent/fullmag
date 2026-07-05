@@ -1263,7 +1263,7 @@ describe("Viewport3DModule scene wiring", () => {
       "utf8",
     );
     const installCall = source.indexOf("installViewport3DThreeConsolePolicy();");
-    const canvasStart = source.indexOf("<Canvas");
+    const canvasStart = source.indexOf("<Viewport3DCanvas");
 
     expect(source).toContain(
       'import { installViewport3DThreeConsolePolicy } from "./viewport3dThreeConsolePolicy";',
@@ -1318,7 +1318,7 @@ describe("Viewport3DModule scene wiring", () => {
       new URL("./Viewport3DModule.tsx", import.meta.url),
       "utf8",
     );
-    const canvasStart = source.indexOf("<Canvas");
+    const canvasStart = source.indexOf("<Viewport3DCanvas");
     const canvasBlock = source.slice(canvasStart, source.indexOf(">", canvasStart));
 
     expect(canvasBlock).toContain("dpr={canvasDpr}");
@@ -1332,10 +1332,12 @@ describe("Viewport3DModule scene wiring", () => {
       new URL("./Viewport3DModule.tsx", import.meta.url),
       "utf8",
     );
-    const canvasStart = source.indexOf("<Canvas");
+    const canvasStart = source.indexOf("<Viewport3DCanvas");
     const canvasBlock = source.slice(canvasStart, source.indexOf(">", canvasStart));
 
     expect(source).toContain("const canvasCamera = useMemo");
+    expect(source).toContain('import { Viewport3DCanvas } from "./Viewport3DCanvas";');
+    expect(source).not.toContain('import { Canvas, useThree } from "@react-three/fiber";');
     expect(source).toContain("VIEWPORT_3D_CANVAS_GL_NO_ANTIALIAS");
     expect(source).toContain("VIEWPORT_3D_CANVAS_GL_ANTIALIAS");
     expect(source).toContain("VIEWPORT_3D_CANVAS_GL_CAPTURE");

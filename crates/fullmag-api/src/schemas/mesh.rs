@@ -686,6 +686,15 @@ pub struct MeshObjectQualityResource {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct MeshRegionQualityResource {
+    pub revision: u64,
+    pub region_id: String,
+    #[schema(value_type = Object, nullable)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quality: Option<Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct MeshObjectSizeFieldResource {
     pub revision: u64,
     pub object_id: String,

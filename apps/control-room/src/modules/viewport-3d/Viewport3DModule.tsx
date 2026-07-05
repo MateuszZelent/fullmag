@@ -1,6 +1,6 @@
 "use client";
 
-import { Canvas, useThree } from "@react-three/fiber";
+import { useThree } from "@react-three/fiber";
 import {
   useCallback,
   useEffect,
@@ -74,6 +74,7 @@ import type { RegionOverlaySelection } from "./layers/RegionOverlayLayer";
 import type { RegionOverlayMode } from "./regionOverlayMode";
 import { Viewport3DCameraDialog } from "./components/Viewport3DCameraDialog";
 import { Viewport3DSettingsDialog } from "./components/Viewport3DSettingsDialog";
+import { Viewport3DCanvas } from "./Viewport3DCanvas";
 import {
   type Viewport3DPartSelection,
 } from "./viewport3dDomainAdapter";
@@ -140,7 +141,7 @@ import { installViewport3DThreeConsolePolicy } from "./viewport3dThreeConsolePol
 
 type Viewport3DSceneProps = ComponentProps<typeof Viewport3DScene>;
 type Viewport3DCanvasCreatedState = Parameters<
-  NonNullable<ComponentProps<typeof Canvas>["onCreated"]>
+  NonNullable<ComponentProps<typeof Viewport3DCanvas>["onCreated"]>
 >[0];
 
 const VIEWPORT_3D_CANVAS_GL_NO_ANTIALIAS = {
@@ -1561,7 +1562,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
         <span>{diagnostics}</span>
       </div>
       {clientReady && colors ? (
-        <Canvas
+        <Viewport3DCanvas
           camera={canvasCamera}
           className="fm-viewport-3d__canvas"
           dpr={canvasDpr}
@@ -1589,7 +1590,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
             onVisualizationFrameCommitted={onVisualizationFrameCommitted}
             visualProfileId={visualProfile.id}
           />
-        </Canvas>
+        </Viewport3DCanvas>
       ) : (
         <div className="fm-viewport-3d__placeholder">Preparing viewport</div>
       )}

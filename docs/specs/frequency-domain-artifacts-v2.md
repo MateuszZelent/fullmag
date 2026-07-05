@@ -621,6 +621,25 @@ response solve writes the base manifest. This metadata is provenance only: it
 must not enable PBC, select demag, or override the study's requested
 `magnetostatic_bc`.
 
+Promoted `periodic_airbox_k0` driven-response bundles must also expose solved
+dynamic seam diagnostics consistently in `response/diagnostics/solver.v1.json`,
+`frequency_domain/manifest.v1.json`, and every solved frequency-point
+`demag_contribution`:
+
+- `delta_phi_phase_validation_status = "ok"`,
+- `delta_phi_phase_max_residual`,
+- `delta_phi_seam_validation_status = "ok"`,
+- `delta_phi_seam_max_after_offset`,
+- `h_demag_seam_validation_status = "ok"`,
+- `h_demag_seam_max_tangent_mismatch`,
+- `delta_phi_flux_validation_status = "ok"`,
+- `delta_phi_flux_max_residual`.
+
+`delta_phi_flux_validation_status = "not_evaluated"` is allowed only for
+explicit unavailable/diagnostic artifacts. Production acceptance validators must
+reject solved `periodic_airbox_k0` response bundles that lack the normal-flux
+residual.
+
 The manifest must always distinguish the two study products with
 `study_product = "modal_eigen"` or `study_product = "driven_response"`.
 UI labels must use `Eigenmodes` for `modal_eigen` and `Frequency Response` for
@@ -932,23 +951,27 @@ Each point must include:
 - `absorbed_power_density`,
 - `absorbed_power_density_provenance`, including whether the value is a
   physical `W/m^3` power density or a drive-projected proxy. A native response
-  writer with a valid `Ms` contract must set
-  `kind = "drive_projected_absorbed_power_density"`,
-  `basis = "local_tangent_drive"`, `physical_power_density = true`,
-  `units = "W/m^3"`, `requires_mu0_ms_factor = false`,
-  `mu0_ms_factor_applied = true`, `ms_source = "uniform"` or
-  `"per_node_field"`,
-  `normalization = "0.5*mu0*abs(omega)*abs(imag(sum(Ms*response*conj(drive))))/tangent_dof_count"`,
+  writer that has applied `Ms` but has not performed volume integration must
+  still emit the proxy form with
+  `kind = "drive_projected_absorption_proxy"`,
+  `basis = "local_tangent_drive"`, `physical_power_density = false`,
+  `units = "drive_projected_proxy_not_W_per_m3"`,
+  `requires_mu0_ms_factor = false`, `mu0_ms_factor_applied = true`,
+  `ms_source = "uniform"` or `"per_node_field"`,
+  `normalization = "0.5*mu0*omega*imag(sum(Ms*response*conj(drive)))/tangent_dof_count"`,
   `volume_weighted = false`,
-  `spatial_reduction = "drive_projected_tangent_dof_average"`, and
-  `full_power_density = true`. Writers without a valid `Ms` contract may only
-  emit the proxy form with
+  `spatial_reduction = "drive_projected_tangent_dof_average"`,
+  `absolute_value_applied = false`, and `full_power_density = false`.
+  Writers without a valid `Ms` contract may only emit the dimensionless-response
+  proxy form with
   `kind = "drive_projected_absorption_proxy"`,
   `basis = "local_tangent_drive"`, `physical_power_density = false`,
   `units = "proxy_not_W_per_m3"`, `requires_mu0_ms_factor = true`, and
   `ms_factor_applied = false`,
-  `normalization = "0.5*abs(omega)*abs(imag(sum(response*conj(drive))))/tangent_dof_count"`,
-  and `full_power_density = false`,
+  `normalization = "0.5*omega*imag(sum(response*conj(drive)))/tangent_dof_count"`,
+  `absolute_value_applied = false`, and `full_power_density = false`. A value
+  may use `units = "W/m^3"` and `full_power_density = true` only after the
+  writer has a volume-weighted local power-density/integral contract,
 - `residual_l2_norm`,
 - `relative_residual_l2_norm`,
 - `tangent_leakage` diagnostic status,
@@ -1068,6 +1091,76 @@ Required fields for native FEM production response diagnostics:
   `coupled_demag_block`, or a documented compatibility value. This field
   describes the demag realization; it does not replace the global harmonic
   response `matrix_form`,
+- `krylov_preconditioner_variant` for native GMRES response diagnostics, one of
+  `graph_demag_coarse`, `demag_coarse`, `block_jacobi`, `none`, or a
+  documented compatibility value. Periodic-airbox Schur/provider artifacts with
+  an applied preconditioner and exchange graph edges must report
+  `graph_demag_coarse`; Schur/provider artifacts with an applied preconditioner
+  but without exchange graph edges must report `demag_coarse`. `none` means no
+  right preconditioner was applied. This field records the selected
+  right-preconditioner realization and is distinct from the higher-level
+  `krylov_preconditioner_kind`,
+- `krylov_preconditioner_requested_variant`,
+  `krylov_preconditioner_initial_variant`, and
+  `krylov_preconditioner_variant` distinguish requested policy, setup result,
+  and effective GMRES behavior. The important M6 diagnostic case is
+  `requested="auto"`, `initial="graph_demag_coarse"` or `demag_coarse`, and
+  effective `variant="block_jacobi"` or `variant="none"` after probe-based
+  fallback disables a harmful right preconditioner,
+- `krylov_preconditioner_kind` records the concrete native right-preconditioner
+  implementation used for the selected variant. Magnetic-only
+  `graph_demag_coarse` uses `mfem_tangent_graph_demag_coarse_right`; the
+  periodic-airbox Schur/provider reduced magnetic slice uses
+  `static_periodic_reduced_mfem_schur_residual_right` for the same
+  `graph_demag_coarse` variant. This keeps the artifact-level policy variant
+  stable while exposing the actual native implementation boundary,
+- `graph_preconditioner_sweeps` for native Schur/provider diagnostics. When
+  `krylov_preconditioner_variant="graph_demag_coarse"`, this records the
+  bounded number of block-Jacobi graph-correction sweeps used by the right
+  preconditioner. The value is controlled by
+  `FULLMAG_FEM_FREQUENCY_RESPONSE_GRAPH_PRECONDITIONER_SWEEPS` or legacy
+  `FULLMAG_FMR_RESPONSE_GRAPH_PRECONDITIONER_SWEEPS`; current native code clamps
+  it to `[1, 8]`. Non-graph variants may report `0`,
+- `graph_preconditioner_relaxation` for native Schur/provider diagnostics. When
+  `krylov_preconditioner_initial_variant="graph_demag_coarse"`, this records the
+  fixed damping factor applied to the graph off-diagonal exchange correction
+  and to the periodic-airbox Schur/provider residual-correction sweeps before
+  the follow-up block-Jacobi solve. The Schur/provider realization must not use
+  an input-dependent line-search scale as a GMRES right preconditioner. The
+  value is controlled by
+  `FULLMAG_FEM_FREQUENCY_RESPONSE_GRAPH_PRECONDITIONER_RELAXATION` or legacy
+  `FULLMAG_FMR_RESPONSE_GRAPH_PRECONDITIONER_RELAXATION`; current native code
+  clamps it to `(0, 1]` and defaults to `0.05`. Non-graph initial variants must
+  report `0.0`,
+- `right_preconditioner_probe_available`,
+  `right_preconditioner_probe_residual_l2_norm`, and
+  `right_preconditioner_probe_relative_residual_l2_norm` for native
+  right-preconditioned GMRES diagnostics. When available, the probe applies the
+  selected right preconditioner to the first RHS and records
+  `||A M rhs - rhs||_2` and its value relative to `||rhs||_2`; it is a
+  preconditioner-quality diagnostic, not the final solve residual. When
+  `krylov_preconditioner_variant="none"`, `right_preconditioner_probe_available`
+  must be `false` and the residual fields must remain finite non-negative
+  placeholders unless `right_preconditioner_auto_disabled=true`,
+- `right_preconditioner_auto_disabled`,
+  `right_preconditioner_probe_disable_relative_threshold`, and
+  `right_preconditioner_auto_disable_reason` record whether the native GMRES
+  auto policy disabled a right preconditioner after the first-RHS probe or
+  after a bounded unpreconditioned retry succeeds following a preconditioned
+  `solve_error`. The default probe threshold is `1.0`, configurable through
+  `FULLMAG_FEM_FREQUENCY_RESPONSE_PRECONDITIONER_AUTO_DISABLE_THRESHOLD` or
+  `FULLMAG_FMR_RESPONSE_PRECONDITIONER_AUTO_DISABLE_THRESHOLD`; the bounded
+  retry cap is controlled by
+  `FULLMAG_FEM_FREQUENCY_RESPONSE_UNPRECONDITIONED_RETRY_MAX_ITERATIONS` or
+  legacy `FULLMAG_FMR_RESPONSE_UNPRECONDITIONED_RETRY_MAX_ITERATIONS` and
+  defaults to `512`. This is provenance, not a hidden fallback: forced concrete
+  preconditioner variants must not silently resolve to `none`. Current reason
+  strings are `probe_relative_residual_above_threshold`,
+  `solve_error_retry_without_right_preconditioner`, and
+  `solve_error_retry_without_right_preconditioner_improved_residual`. The last
+  value means the retry still returned `solve_error`, but its recomputed
+  relative residual was lower than the preconditioned failure, so artifacts and
+  diagnostics keep the better failed solve while preserving the failure status,
 - `demag_tangent_operator_source` when a magnetic-only dynamic-demag tangent is
   supplied to the response operator. Valid current values are `none`,
   `explicit_demag_tangent_matrix`, and
@@ -1473,6 +1566,12 @@ provenance.not_an_eigenmode = true
 UI and API surfaces may present it as a response peak shape or candidate mode,
 but must not merge it into `eigen/spectrum.v2.json`, branch tracking, modal
 normalization, or eigenfrequency capability claims.
+
+Refined response-spectrum acceptance must only treat this artifact as accepted
+when the selected peak is interior to the sweep. A maximum at the first or last
+frequency point means the response peak is not bracketed by the refinement
+window; it may be reported as diagnostic evidence, but the promotion validator
+must reject it for refined-spectrum acceptance.
 
 ## periodic_pairs.v1.json
 

@@ -6368,6 +6368,31 @@ fn fem_frequency_response_carries_m5_equilibrium_provenance_from_runtime_metadat
 }
 
 #[test]
+fn fem_frequency_response_carries_solver_policy_into_backend_plan() {
+    let mut ir = fem_frequency_response_mesh_asset_problem();
+    if let fullmag_ir::StudyIR::FrequencyResponse { solver_policy, .. } = &mut ir.study {
+        *solver_policy = Some(fullmag_ir::FrequencyResponseSolverPolicyIR {
+            rtol: Some(1.0e-2),
+            max_iterations: Some(128),
+            restart_iterations: Some(32),
+        });
+    }
+
+    let planned = plan(&ir).expect("FEM frequency response with solver policy should plan");
+    match planned.backend_plan {
+        BackendPlanIR::FemFrequencyResponse(fem) => {
+            let policy = fem
+                .solver_policy
+                .expect("frequency-response solver policy should be preserved");
+            assert_eq!(policy.rtol, Some(1.0e-2));
+            assert_eq!(policy.max_iterations, Some(128));
+            assert_eq!(policy.restart_iterations, Some(32));
+        }
+        other => panic!("expected FemFrequencyResponse plan, got {other:?}"),
+    }
+}
+
+#[test]
 fn fem_frequency_response_rejects_unsupported_production_slice_cases() {
     let mut demag = fem_frequency_response_mesh_asset_problem();
     demag.energy_terms = vec![
@@ -7119,6 +7144,7 @@ fn fem_frequency_response_mesh_asset_problem() -> ProblemIR {
         frequencies_hz: fullmag_ir::FrequencySweepIR {
             values_hz: vec![1.0e9, 2.0e9],
         },
+        solver_policy: None,
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
@@ -7233,6 +7259,7 @@ fn fdm_frequency_response_remains_explicitly_not_executable() {
         frequencies_hz: fullmag_ir::FrequencySweepIR {
             values_hz: vec![1.0e9, 2.0e9],
         },
+        solver_policy: None,
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
@@ -7292,6 +7319,7 @@ fn frequency_response_planner_controls_do_not_validate_time_integrator_settings(
         frequencies_hz: fullmag_ir::FrequencySweepIR {
             values_hz: vec![1.0e9, 2.0e9],
         },
+        solver_policy: None,
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
@@ -7346,6 +7374,7 @@ fn frequency_response_planner_controls_ignore_invalid_time_integrator_alias() {
         frequencies_hz: fullmag_ir::FrequencySweepIR {
             values_hz: vec![1.0e9],
         },
+        solver_policy: None,
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {

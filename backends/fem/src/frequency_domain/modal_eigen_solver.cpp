@@ -195,8 +195,11 @@ void emit_contour_progress(
         state.contour_point_count = contour_result.contour_point_count;
         state.linear_iteration = point.linear_iterations;
         state.max_linear_iterations = request.max_linear_iterations;
-        const std::string progress_json = solver_progress_json(state);
-        request.progress_callback(request.progress_user_data, progress_json.c_str());
+        char progress_json[1024];
+        if (solver_progress_json(state, progress_json, sizeof(progress_json)) == 0) {
+            continue;
+        }
+        request.progress_callback(request.progress_user_data, progress_json);
     }
 }
 
@@ -1205,28 +1208,11 @@ FrequencyDomainContractResult solve_driven_response_contract(
             request.operator_request.operator_diagnostics_json);
     }
 
-    FrequencyDomainContractResult result{};
-    result.status = FrequencyDomainStatus::unavailable;
-    result.error_message =
-        "native FEM driven_response ABI v1 skeleton is not implemented yet";
-    result.diagnostics_json =
-        "{\"schema_version\":\"frequency_domain_response_diagnostics.v1\","
-        "\"study_product\":\"driven_response\","
-        "\"status\":\"unavailable\","
-        "\"complete\":false,"
-        "\"execution_lane\":\"production_cpu\","
-        "\"frequency_count\":" +
-        std::to_string(request.frequency_count) +
-        ",\"progress_schema_version\":\"fem_frequency_domain_progress.v1\","
-        "\"unsupported_reason\":\"driven_response_v1_skeleton_not_implemented\"}";
-    result.diagnostics_json = with_operator_diagnostics(
-        result.diagnostics_json,
+    return validation_error_result(
+        "driven_response",
+        "native FEM driven_response legacy contract does not carry the FEM operator payload required for solving; use DrivenFrequencyResponseSolveRequest v10",
+        "legacy_driven_response_contract_without_operator_payload",
         request.operator_request.operator_diagnostics_json);
-    result.result_json =
-        "{\"schema_version\":\"frequency_domain_driven_response_result.v1\","
-        "\"study_product\":\"driven_response\","
-        "\"status\":\"unavailable\"}";
-    return result;
 }
 
 } // namespace fullmag::fem::frequency_domain

@@ -4364,6 +4364,7 @@ mod tests {
                     frequencies_hz: fullmag_ir::FrequencySweepIR {
                         values_hz: vec![1.0e9, 2.0e9],
                     },
+                    solver_policy: None,
                     enable_exchange: fem.enable_exchange,
                     enable_demag: fem.enable_demag,
                     interfacial_dmi: fem.interfacial_dmi,
@@ -4375,6 +4376,7 @@ mod tests {
                     requested_device: fullmag_ir::ExecutionDevice::Cpu,
                     exchange_bc: fem.exchange_bc,
                     demag_realization: fem.demag_realization,
+                    air_box_config: fem.air_box_config,
                     demag_solver_policy: None,
                     periodic_constraint_sets: Vec::new(),
                     equilibrium_provenance: None,
@@ -4515,6 +4517,7 @@ mod tests {
                     frequencies_hz: fullmag_ir::FrequencySweepIR {
                         values_hz: vec![1.0e9],
                     },
+                    solver_policy: None,
                     enable_exchange: fem.enable_exchange,
                     enable_demag: false,
                     interfacial_dmi: fem.interfacial_dmi,
@@ -4526,6 +4529,7 @@ mod tests {
                     requested_device: fullmag_ir::ExecutionDevice::Cpu,
                     exchange_bc: fem.exchange_bc,
                     demag_realization: None,
+                    air_box_config: None,
                     demag_solver_policy: None,
                     periodic_constraint_sets: Vec::new(),
                     equilibrium_provenance: None,

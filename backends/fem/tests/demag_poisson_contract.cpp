@@ -712,6 +712,10 @@ void backend_demag_tangent_abi_uses_fresh_poisson_dispatch() {
     const std::string public_header =
         read_text_file(root.parent_path() / ".." / "native" / "include" / "fullmag_fem.h");
     const std::string api = read_text_file(root / "src" / "api.cpp");
+    const std::string gpu_stage_compute =
+        read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "stage_compute.cpp");
+    const std::string gpu_stage_header =
+        read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "stage_compute.hpp");
     const std::string tangent_plane =
         read_text_file(root / "cpu" / "mfem" / "relaxation" / "tangent_plane_implicit.cpp");
 
@@ -743,6 +747,19 @@ void backend_demag_tangent_abi_uses_fresh_poisson_dispatch() {
             api.find("            delta_m,\n"
                      "            delta_h_demag,") != std::string::npos,
         "backend demag tangent application must pass delta_m directly to the fresh solve");
+    check(
+        gpu_stage_header.find("compute_device_demag_for_device_stage_fresh(") !=
+            std::string::npos,
+        "GPU demag stage API must expose a fresh zero-initial-guess apply for matrix-free frequency-domain operators");
+    check(
+        api.find("compute_device_demag_for_device_stage_fresh(") != std::string::npos,
+        "frequency-domain device demag tangent-with-potential must use the fresh GPU Poisson apply");
+    check(
+        gpu_stage_compute.find("reset_initial_solution") != std::string::npos &&
+            gpu_stage_compute.find("cudaMemset(") != std::string::npos &&
+            gpu_stage_compute.find("gpu.demag_poisson.poisson_solution") !=
+                std::string::npos,
+        "fresh GPU Poisson apply must reset the persistent solution buffer before Hypre Mult");
 }
 
 void demag_robin_boundary_mass_excludes_periodic_seam_markers() {

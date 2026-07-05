@@ -9,19 +9,19 @@ namespace fullmag::fem::frequency_domain {
 struct MfemOperatorContextDescriptor;
 struct EquilibriumStateDiagnostics;
 
-enum class FrequencyDomainBoundaryKind {
+enum class FrequencyDomainBoundaryKind : std::uint32_t {
     open_boundary,
     periodic_zero_phase,
     floquet_bloch,
 };
 
-enum class FrequencyDomainDemagKind {
+enum class FrequencyDomainDemagKind : std::uint32_t {
     none,
     static_k0,
     dynamic_k,
 };
 
-enum class FrequencyDomainExcitationKind {
+enum class FrequencyDomainExcitationKind : std::uint32_t {
     uniform_field,
     field_resource,
     current_torque,
@@ -66,11 +66,24 @@ struct LinearizedLlgOperatorDiagnostics {
 };
 
 struct DrivenFrequencyResponseRequest {
+    // Driven frequency-domain contract:
+    //   delta_m(t) = Re[x(f) * exp(+i omega t)] unless phase_convention says otherwise.
+    //   omega = 2*pi*frequencies_hz.
+    //   For exp(+i omega t), the driven product solves
+    //       (i omega B_alpha - L) x = b
+    //   in tangent coordinates, where x is [u0, v0, u1, v1, ...], L is the
+    //   projected linearized LLG operator, and B_alpha is the mass/gyrotropic
+    //   operator with the selected damping convention. Subproblem drive
+    //   buffers are local tangent RHS vectors consumed as b by the linear
+    //   solver; raw-field-to-LLG conversion must be explicit in the caller
+    //   provenance and validation.
     FrequencyDomainOperatorRequest operator_request{};
     const double *frequencies_hz = nullptr;
     std::uint64_t frequency_count = 0;
     FrequencyDomainExcitationKind excitation_kind = FrequencyDomainExcitationKind::uniform_field;
     bool write_response_fields = false;
+    FrequencyDomainPhaseConvention phase_convention =
+        FrequencyDomainPhaseConvention::exp_i_omega_t;
 };
 
 struct ModalDynamicMatrixRequest {

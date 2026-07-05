@@ -1400,14 +1400,11 @@ async function refreshRuntimeCommandPrecondition(
   }
   if (queueResult.status === "fulfilled") {
     const queue = queueResult.value;
-    const revision =
-      typeof queue?.revision === "number"
-        ? queue.revision
-        : Array.isArray(queue?.commands)
-          ? queue.commands.length
-          : null;
-    if (revision !== null && Number.isFinite(revision)) {
-      precondition.command_revision = revision;
+    const commandRevision = Array.isArray(queue?.commands)
+      ? queue.commands.length
+      : null;
+    if (commandRevision !== null && Number.isFinite(commandRevision)) {
+      precondition.command_revision = commandRevision;
     }
   }
 

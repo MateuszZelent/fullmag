@@ -186,6 +186,8 @@ export type MeshRegionMembershipListResource =
   components["schemas"]["MeshRegionMembershipListResource"];
 export type MeshRegionMembershipResource =
   components["schemas"]["MeshRegionMembershipResource"];
+export type MeshRegionQualityResource =
+  components["schemas"]["MeshRegionQualityResource"];
 export type MeshSemanticsResource =
   components["schemas"]["MeshSemanticsResource"];
 export type MeshSharedDomainConfigResource =

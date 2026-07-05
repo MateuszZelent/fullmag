@@ -787,6 +787,7 @@ impl ProblemIR {
                 k_sampling,
                 excitation,
                 frequencies_hz,
+                solver_policy,
                 ..
             } => {
                 validate_frequency_response_dynamics(dynamics, &mut errors);
@@ -852,6 +853,38 @@ impl ProblemIR {
                         "frequency_response.frequencies_hz.values_hz entries must be finite and > 0"
                             .to_string(),
                     );
+                }
+                if let Some(policy) = solver_policy {
+                    if let Some(rtol) = policy.rtol {
+                        if !rtol.is_finite() || rtol <= 0.0 {
+                            errors.push(
+                                "frequency_response.solver_policy.rtol must be finite and > 0"
+                                    .to_string(),
+                            );
+                        }
+                    }
+                    if let Some(0) = policy.max_iterations {
+                        errors.push(
+                            "frequency_response.solver_policy.max_iterations must be > 0"
+                                .to_string(),
+                        );
+                    }
+                    if let Some(0) = policy.restart_iterations {
+                        errors.push(
+                            "frequency_response.solver_policy.restart_iterations must be > 0"
+                                .to_string(),
+                        );
+                    }
+                    if let (Some(restart), Some(max)) =
+                        (policy.restart_iterations, policy.max_iterations)
+                    {
+                        if restart > max {
+                            errors.push(
+                                "frequency_response.solver_policy.restart_iterations must be <= max_iterations"
+                                    .to_string(),
+                            );
+                        }
+                    }
                 }
                 let has_mode_output = self
                     .study

@@ -20,6 +20,7 @@ struct MfemExchangeOperatorDiagnostics {
 FrequencyDomainStatus apply_mfem_exchange_operator(
     const MfemOperatorContextDescriptor &descriptor,
     const MfemTangentSpaceLayout &layout,
+    const TangentFrameNode *nodes,
     const TangentOperatorEdgeBlock *edges,
     std::uint64_t edge_count,
     const double *tangent_in,

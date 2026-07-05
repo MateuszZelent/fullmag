@@ -427,6 +427,17 @@ pub type fullmag_fem_frequency_domain_apply_callback = Option<
     ) -> fullmag_fem_frequency_domain_status,
 >;
 
+pub type fullmag_fem_frequency_domain_complex_apply_callback = Option<
+    unsafe extern "C" fn(
+        user_data: *mut c_void,
+        in_real: *const f64,
+        in_imag: *const f64,
+        out_real: *mut f64,
+        out_imag: *mut f64,
+        error_message: *mut c_char,
+    ) -> fullmag_fem_frequency_domain_status,
+>;
+
 pub type fullmag_fem_frequency_domain_apply_with_potential_callback = Option<
     unsafe extern "C" fn(
         user_data: *mut c_void,
@@ -652,6 +663,10 @@ pub struct fullmag_fem_frequency_domain_driven_response_request {
     pub periodic_airbox_coupled_block_mass_matrix_row_major: *const f64,
     pub periodic_airbox_coupled_block_apply_stiffness: fullmag_fem_frequency_domain_apply_callback,
     pub periodic_airbox_coupled_block_apply_mass: fullmag_fem_frequency_domain_apply_callback,
+    pub periodic_airbox_coupled_block_apply_complex_stiffness:
+        fullmag_fem_frequency_domain_complex_apply_callback,
+    pub periodic_airbox_coupled_block_apply_complex_mass:
+        fullmag_fem_frequency_domain_complex_apply_callback,
     pub periodic_airbox_coupled_block_operator_user_data: *mut c_void,
     pub periodic_airbox_coupled_block_drive_real: *const f64,
     pub periodic_airbox_coupled_block_drive_imag: *const f64,
@@ -661,6 +676,33 @@ pub struct fullmag_fem_frequency_domain_driven_response_request {
     pub mfem_observable_ms_field: *const f64,
     pub mfem_observable_ms_field_len: u64,
     pub mfem_observable_uniform_ms: f64,
+    pub abi_version: u32,
+    pub reserved_contract_flags: u32,
+    pub struct_size: u64,
+    pub solver_relative_tolerance: f64,
+    pub solver_absolute_tolerance: f64,
+    pub solver_max_iterations: u64,
+    pub solver_restart_iterations: u64,
+    pub solver_progress_interval_iterations: u64,
+    pub tiny_validation_stiffness_matrix_value_count: u64,
+    pub tiny_validation_mass_matrix_value_count: u64,
+    pub tiny_validation_stiffness_diagonal_value_count: u64,
+    pub tiny_validation_mass_diagonal_value_count: u64,
+    pub tiny_validation_drive_real_value_count: u64,
+    pub tiny_validation_drive_imag_value_count: u64,
+    pub mfem_equilibrium_m_value_count: u64,
+    pub mfem_h_ext_value_count: u64,
+    pub mfem_uniaxial_anisotropy_axis_value_count: u64,
+    pub mfem_alpha_value_count: u64,
+    pub mfem_drive_real_value_count: u64,
+    pub mfem_drive_imag_value_count: u64,
+    pub mfem_dmi_lumped_mass_value_count: u64,
+    pub mfem_dmi_ms_field_value_count: u64,
+    pub mfem_demag_tangent_matrix_value_count: u64,
+    pub periodic_airbox_coupled_block_stiffness_matrix_value_count: u64,
+    pub periodic_airbox_coupled_block_mass_matrix_value_count: u64,
+    pub periodic_airbox_coupled_block_drive_real_value_count: u64,
+    pub periodic_airbox_coupled_block_drive_imag_value_count: u64,
 }
 
 #[repr(C)]
@@ -676,7 +718,7 @@ pub struct fullmag_fem_frequency_domain_solve_result {
     pub artifact_manifest_path: *mut c_char,
 }
 
-pub const FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION: u32 = 9;
+pub const FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION: u32 = 11;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -822,6 +864,8 @@ pub struct fullmag_fem_frequency_domain_abi_layout {
     pub dmi_element_size: u64,
     pub dmi_element_normal_offset: u64,
     pub driven_response_request_size: u64,
+    pub driven_response_request_abi_version_offset: u64,
+    pub driven_response_request_struct_size_offset: u64,
     pub driven_response_request_requested_execution_lane_offset: u64,
     pub driven_response_request_progress_callback_offset: u64,
     pub driven_response_request_tiny_validation_drive_imag_offset: u64,
@@ -830,10 +874,20 @@ pub struct fullmag_fem_frequency_domain_abi_layout {
     pub driven_response_request_periodic_airbox_magnetostatic_periodic_node_pairs_offset: u64,
     pub driven_response_request_periodic_airbox_coupled_block_enabled_offset: u64,
     pub driven_response_request_periodic_airbox_coupled_block_apply_stiffness_offset: u64,
+    pub driven_response_request_periodic_airbox_coupled_block_apply_complex_stiffness_offset: u64,
     pub driven_response_request_periodic_airbox_coupled_block_operator_user_data_offset: u64,
     pub driven_response_request_mfem_apply_demag_tangent_offset: u64,
     pub driven_response_request_mfem_demag_tangent_user_data_offset: u64,
     pub driven_response_request_mfem_demag_tangent_matrix_row_major_offset: u64,
+    pub driven_response_request_solver_relative_tolerance_offset: u64,
+    pub driven_response_request_solver_absolute_tolerance_offset: u64,
+    pub driven_response_request_solver_max_iterations_offset: u64,
+    pub driven_response_request_solver_restart_iterations_offset: u64,
+    pub driven_response_request_solver_progress_interval_iterations_offset: u64,
+    pub driven_response_request_tiny_validation_drive_real_value_count_offset: u64,
+    pub driven_response_request_mfem_equilibrium_m_value_count_offset: u64,
+    pub driven_response_request_mfem_drive_real_value_count_offset: u64,
+    pub driven_response_request_periodic_airbox_coupled_block_drive_real_value_count_offset: u64,
     pub solve_result_size: u64,
     pub solve_result_artifact_manifest_path_offset: u64,
 }
@@ -987,6 +1041,12 @@ extern "C" {
             fullmag_fem_frequency_domain_apply_with_potential_callback,
         out_result: *mut fullmag_fem_frequency_domain_solve_result,
     ) -> i32;
+    pub fn fullmag_fem_frequency_domain_solve_driven_response_v10(
+        request: *const fullmag_fem_frequency_domain_driven_response_request,
+        mfem_apply_demag_tangent_with_potential:
+            fullmag_fem_frequency_domain_apply_with_potential_callback,
+        out_result: *mut fullmag_fem_frequency_domain_solve_result,
+    ) -> i32;
     pub fn fullmag_fem_frequency_domain_solve_result_release(
         result: *mut fullmag_fem_frequency_domain_solve_result,
     );
@@ -1086,6 +1146,16 @@ extern "C" {
         delta_m_len: u64,
         out_delta_h_demag_xyz: *mut f64,
         out_len: u64,
+    ) -> i32;
+
+    pub fn fullmag_fem_backend_apply_demag_tangent_with_potential_f64(
+        handle: *mut fullmag_fem_backend,
+        delta_m_xyz: *const f64,
+        delta_m_len: u64,
+        out_delta_h_demag_xyz: *mut f64,
+        out_len: u64,
+        out_delta_phi: *mut f64,
+        out_phi_len: u64,
     ) -> i32;
 
     pub fn fullmag_fem_backend_snapshot_stats(
@@ -1524,6 +1594,14 @@ mod tests {
                 as u64
         );
         assert_eq!(
+            layout
+                .driven_response_request_periodic_airbox_coupled_block_apply_complex_stiffness_offset,
+            std::mem::offset_of!(
+                DrivenRequest,
+                periodic_airbox_coupled_block_apply_complex_stiffness
+            ) as u64
+        );
+        assert_eq!(
             layout.driven_response_request_periodic_airbox_coupled_block_operator_user_data_offset,
             std::mem::offset_of!(
                 DrivenRequest,
@@ -1541,6 +1619,46 @@ mod tests {
         assert_eq!(
             layout.driven_response_request_mfem_demag_tangent_matrix_row_major_offset,
             std::mem::offset_of!(DrivenRequest, mfem_demag_tangent_matrix_row_major) as u64
+        );
+        assert_eq!(
+            layout.driven_response_request_solver_relative_tolerance_offset,
+            std::mem::offset_of!(DrivenRequest, solver_relative_tolerance) as u64
+        );
+        assert_eq!(
+            layout.driven_response_request_solver_absolute_tolerance_offset,
+            std::mem::offset_of!(DrivenRequest, solver_absolute_tolerance) as u64
+        );
+        assert_eq!(
+            layout.driven_response_request_solver_max_iterations_offset,
+            std::mem::offset_of!(DrivenRequest, solver_max_iterations) as u64
+        );
+        assert_eq!(
+            layout.driven_response_request_solver_restart_iterations_offset,
+            std::mem::offset_of!(DrivenRequest, solver_restart_iterations) as u64
+        );
+        assert_eq!(
+            layout.driven_response_request_solver_progress_interval_iterations_offset,
+            std::mem::offset_of!(DrivenRequest, solver_progress_interval_iterations) as u64
+        );
+        assert_eq!(
+            layout.driven_response_request_tiny_validation_drive_real_value_count_offset,
+            std::mem::offset_of!(DrivenRequest, tiny_validation_drive_real_value_count) as u64
+        );
+        assert_eq!(
+            layout.driven_response_request_mfem_equilibrium_m_value_count_offset,
+            std::mem::offset_of!(DrivenRequest, mfem_equilibrium_m_value_count) as u64
+        );
+        assert_eq!(
+            layout.driven_response_request_mfem_drive_real_value_count_offset,
+            std::mem::offset_of!(DrivenRequest, mfem_drive_real_value_count) as u64
+        );
+        assert_eq!(
+            layout
+                .driven_response_request_periodic_airbox_coupled_block_drive_real_value_count_offset,
+            std::mem::offset_of!(
+                DrivenRequest,
+                periodic_airbox_coupled_block_drive_real_value_count
+            ) as u64
         );
         assert_eq!(
             layout.solve_result_size,
@@ -1720,6 +1838,12 @@ mod tests {
             .periodic_airbox_coupled_block_apply_stiffness
             .is_none());
         assert!(request.periodic_airbox_coupled_block_apply_mass.is_none());
+        assert!(request
+            .periodic_airbox_coupled_block_apply_complex_stiffness
+            .is_none());
+        assert!(request
+            .periodic_airbox_coupled_block_apply_complex_mass
+            .is_none());
         assert!(request
             .periodic_airbox_coupled_block_operator_user_data
             .is_null());

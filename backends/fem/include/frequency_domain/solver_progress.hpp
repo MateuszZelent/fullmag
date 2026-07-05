@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <string>
 
 namespace fullmag::fem::frequency_domain {
@@ -15,6 +16,11 @@ struct SolverProgressState {
     int max_linear_iterations = 0;
 };
 
-std::string solver_progress_json(const SolverProgressState &state) noexcept;
+std::size_t solver_progress_json(
+    const SolverProgressState &state,
+    char *out_json,
+    std::size_t out_json_capacity) noexcept;
+
+std::string solver_progress_json(const SolverProgressState &state);
 
 } // namespace fullmag::fem::frequency_domain

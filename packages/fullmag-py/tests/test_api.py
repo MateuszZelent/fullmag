@@ -4429,6 +4429,76 @@ class ProblemApiTests(unittest.TestCase):
             "periodic_airbox_k0",
         )
 
+    def test_frequency_response_solver_policy_round_trips_from_python_stage(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("frequency_response_solver_policy")
+        film = study.geometry(fm.Box(size=(2e-7, 2e-7, 1e-8), name="film"), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+        study.stages.add_frequency_response(
+            frequencies_hz=[2.0e9],
+            solver_max_iterations=128,
+            solver_restart_iterations=32,
+            solver_rtol=1e-2,
+            excitation_field_au_per_m=(0.0, 0.0, 1.0),
+            include_demag=True,
+            equilibrium_source="relax",
+            damping_policy="include",
+            bc=fm.PeriodicBC(["x_faces", "y_faces"]),
+            magnetostatic_bc="open",
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            script_path = Path(tmp_dir) / "frequency_response_solver_policy.py"
+            script_path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(script_path, lightweight_assets=True)
+            rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewrite_path = Path(tmp_dir) / "frequency_response_solver_policy_rewritten.py"
+            rewrite_path.write_text(rewritten, encoding="utf-8")
+            reloaded = fm.load_problem_from_script(rewrite_path, lightweight_assets=True)
+
+        policy = loaded.stages[0].problem.study.to_ir()["solver_policy"]
+        self.assertEqual(
+            policy,
+            {"rtol": 1e-2, "max_iterations": 128, "restart_iterations": 32},
+        )
+        self.assertIn("solver_max_iterations=128", rewritten)
+        self.assertIn("solver_restart_iterations=32", rewritten)
+        self.assertIn("solver_rtol=0.01", rewritten)
+        self.assertEqual(
+            reloaded.stages[0].problem.study.to_ir()["solver_policy"],
+            policy,
+        )
+
+    def test_frequency_response_accepts_uppercase_max_iterations_alias(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("frequency_response_solver_alias")
+        film = study.geometry(fm.Box(size=(2e-7, 2e-7, 1e-8), name="film"), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+        study.stages.add_frequency_response(
+            frequencies_hz=[2.0e9],
+            MAX_ITERATIONS=128,
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            script_path = Path(tmp_dir) / "frequency_response_solver_alias.py"
+            script_path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(script_path, lightweight_assets=True)
+
+        self.assertEqual(
+            loaded.stages[0].problem.study.to_ir()["solver_policy"]["max_iterations"],
+            128,
+        )
+
     def test_study_builder_stage_authoring_captures_without_execution(self) -> None:
         script = """
         import fullmag as fm

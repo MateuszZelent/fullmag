@@ -95,7 +95,7 @@ pub async fn get_mesh_region_memberships(
     }))
 }
 
-fn build_mesh_region_membership(
+pub(crate) fn build_mesh_region_membership(
     scene: &SceneDocument,
     mesh: &FemMeshPayload,
     mesh_revision: u64,

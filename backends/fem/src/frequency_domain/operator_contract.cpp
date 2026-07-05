@@ -36,6 +36,12 @@ bool has_valid_tangent_shape(std::uint64_t node_count, std::uint64_t tangent_dof
         tangent_dof_count == node_count * 2;
 }
 
+bool is_valid_phase_convention(FrequencyDomainPhaseConvention phase_convention) noexcept
+{
+    return phase_convention == FrequencyDomainPhaseConvention::exp_i_omega_t ||
+        phase_convention == FrequencyDomainPhaseConvention::exp_minus_i_omega_t;
+}
+
 } // namespace
 
 FrequencyDomainStatus validate_frequency_domain_operator_request(
@@ -81,12 +87,6 @@ FrequencyDomainStatus validate_frequency_domain_operator_request(
         }
         return FrequencyDomainStatus::unavailable;
     }
-    if (request.strict_gpu) {
-        if (out_diagnostics != nullptr) {
-            copy_error(out_diagnostics->error_message, "frequency-domain FEM GPU operator is not implemented");
-        }
-        return FrequencyDomainStatus::unavailable;
-    }
     return FrequencyDomainStatus::ok;
 }
 
@@ -113,6 +113,12 @@ FrequencyDomainStatus validate_driven_frequency_response_request(
     if (request.frequency_count == 0 || request.frequencies_hz == nullptr) {
         if (out_diagnostics != nullptr) {
             copy_error(out_diagnostics->error_message, "driven response requires at least one frequency");
+        }
+        return FrequencyDomainStatus::validation_error;
+    }
+    if (!is_valid_phase_convention(request.phase_convention)) {
+        if (out_diagnostics != nullptr) {
+            copy_error(out_diagnostics->error_message, "driven response phase convention is unsupported");
         }
         return FrequencyDomainStatus::validation_error;
     }

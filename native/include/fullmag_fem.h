@@ -391,6 +391,15 @@ typedef fullmag_fem_frequency_domain_status (*fullmag_fem_frequency_domain_apply
     char error_message[128]
 );
 
+typedef fullmag_fem_frequency_domain_status (*fullmag_fem_frequency_domain_complex_apply_callback)(
+    void *user_data,
+    const double *in_real,
+    const double *in_imag,
+    double *out_real,
+    double *out_imag,
+    char error_message[128]
+);
+
 typedef fullmag_fem_frequency_domain_status (*fullmag_fem_frequency_domain_apply_with_potential_callback)(
     void *user_data,
     const double *in,
@@ -580,6 +589,8 @@ typedef struct {
     const double *periodic_airbox_coupled_block_mass_matrix_row_major;
     fullmag_fem_frequency_domain_apply_callback periodic_airbox_coupled_block_apply_stiffness;
     fullmag_fem_frequency_domain_apply_callback periodic_airbox_coupled_block_apply_mass;
+    fullmag_fem_frequency_domain_complex_apply_callback periodic_airbox_coupled_block_apply_complex_stiffness;
+    fullmag_fem_frequency_domain_complex_apply_callback periodic_airbox_coupled_block_apply_complex_mass;
     void *periodic_airbox_coupled_block_operator_user_data;
     const double *periodic_airbox_coupled_block_drive_real;
     const double *periodic_airbox_coupled_block_drive_imag;
@@ -589,6 +600,33 @@ typedef struct {
     const double *mfem_observable_ms_field;
     uint64_t mfem_observable_ms_field_len;
     double mfem_observable_uniform_ms;
+    uint32_t abi_version;
+    uint32_t reserved_contract_flags;
+    uint64_t struct_size;
+    double solver_relative_tolerance;
+    double solver_absolute_tolerance;
+    uint64_t solver_max_iterations;
+    uint64_t solver_restart_iterations;
+    uint64_t solver_progress_interval_iterations;
+    uint64_t tiny_validation_stiffness_matrix_value_count;
+    uint64_t tiny_validation_mass_matrix_value_count;
+    uint64_t tiny_validation_stiffness_diagonal_value_count;
+    uint64_t tiny_validation_mass_diagonal_value_count;
+    uint64_t tiny_validation_drive_real_value_count;
+    uint64_t tiny_validation_drive_imag_value_count;
+    uint64_t mfem_equilibrium_m_value_count;
+    uint64_t mfem_h_ext_value_count;
+    uint64_t mfem_uniaxial_anisotropy_axis_value_count;
+    uint64_t mfem_alpha_value_count;
+    uint64_t mfem_drive_real_value_count;
+    uint64_t mfem_drive_imag_value_count;
+    uint64_t mfem_dmi_lumped_mass_value_count;
+    uint64_t mfem_dmi_ms_field_value_count;
+    uint64_t mfem_demag_tangent_matrix_value_count;
+    uint64_t periodic_airbox_coupled_block_stiffness_matrix_value_count;
+    uint64_t periodic_airbox_coupled_block_mass_matrix_value_count;
+    uint64_t periodic_airbox_coupled_block_drive_real_value_count;
+    uint64_t periodic_airbox_coupled_block_drive_imag_value_count;
 } fullmag_fem_frequency_domain_driven_response_request;
 
 typedef struct {
@@ -602,7 +640,7 @@ typedef struct {
     char *artifact_manifest_path;
 } fullmag_fem_frequency_domain_solve_result;
 
-#define FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION 9u
+#define FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION 11u
 
 typedef enum {
     FULLMAG_FEM_FD_OK = 0,
@@ -732,6 +770,8 @@ typedef struct {
     uint64_t dmi_element_size;
     uint64_t dmi_element_normal_offset;
     uint64_t driven_response_request_size;
+    uint64_t driven_response_request_abi_version_offset;
+    uint64_t driven_response_request_struct_size_offset;
     uint64_t driven_response_request_requested_execution_lane_offset;
     uint64_t driven_response_request_progress_callback_offset;
     uint64_t driven_response_request_tiny_validation_drive_imag_offset;
@@ -740,10 +780,20 @@ typedef struct {
     uint64_t driven_response_request_periodic_airbox_magnetostatic_periodic_node_pairs_offset;
     uint64_t driven_response_request_periodic_airbox_coupled_block_enabled_offset;
     uint64_t driven_response_request_periodic_airbox_coupled_block_apply_stiffness_offset;
+    uint64_t driven_response_request_periodic_airbox_coupled_block_apply_complex_stiffness_offset;
     uint64_t driven_response_request_periodic_airbox_coupled_block_operator_user_data_offset;
     uint64_t driven_response_request_mfem_apply_demag_tangent_offset;
     uint64_t driven_response_request_mfem_demag_tangent_user_data_offset;
     uint64_t driven_response_request_mfem_demag_tangent_matrix_row_major_offset;
+    uint64_t driven_response_request_solver_relative_tolerance_offset;
+    uint64_t driven_response_request_solver_absolute_tolerance_offset;
+    uint64_t driven_response_request_solver_max_iterations_offset;
+    uint64_t driven_response_request_solver_restart_iterations_offset;
+    uint64_t driven_response_request_solver_progress_interval_iterations_offset;
+    uint64_t driven_response_request_tiny_validation_drive_real_value_count_offset;
+    uint64_t driven_response_request_mfem_equilibrium_m_value_count_offset;
+    uint64_t driven_response_request_mfem_drive_real_value_count_offset;
+    uint64_t driven_response_request_periodic_airbox_coupled_block_drive_real_value_count_offset;
     uint64_t solve_result_size;
     uint64_t solve_result_artifact_manifest_path_offset;
 } fullmag_fem_frequency_domain_abi_layout;
@@ -867,6 +917,11 @@ int fullmag_fem_frequency_domain_solve_driven_response(
     fullmag_fem_frequency_domain_solve_result *out_result
 );
 int fullmag_fem_frequency_domain_solve_driven_response_v9(
+    const fullmag_fem_frequency_domain_driven_response_request *request,
+    fullmag_fem_frequency_domain_apply_with_potential_callback mfem_apply_demag_tangent_with_potential,
+    fullmag_fem_frequency_domain_solve_result *out_result
+);
+int fullmag_fem_frequency_domain_solve_driven_response_v10(
     const fullmag_fem_frequency_domain_driven_response_request *request,
     fullmag_fem_frequency_domain_apply_with_potential_callback mfem_apply_demag_tangent_with_potential,
     fullmag_fem_frequency_domain_solve_result *out_result
@@ -1013,6 +1068,16 @@ int fullmag_fem_backend_apply_demag_tangent_f64(
     uint64_t delta_m_len,
     double *out_delta_h_demag_xyz,
     uint64_t out_len
+);
+
+int fullmag_fem_backend_apply_demag_tangent_with_potential_f64(
+    fullmag_fem_backend *handle,
+    const double *delta_m_xyz,
+    uint64_t delta_m_len,
+    double *out_delta_h_demag_xyz,
+    uint64_t out_len,
+    double *out_delta_phi,
+    uint64_t out_phi_len
 );
 
 int fullmag_fem_backend_snapshot_stats(

@@ -42,6 +42,17 @@ mode candidates, not eigenmodes. A production modal path must introduce a
 separate `study_product=eigenfrequency` contract over the same tangent LLG,
 PBC/Floquet constraints, and dynamic demag operator.
 
+External solver alignment, 2026-07-04: TetraX's dipolar spin-wave tensor is the
+right implementation warning for Fullmag's future demag-k path. TetraX updates
+the dynamic matrix when `k` changes, modifies the potential solve with `k^2`
+terms, adds complex source terms such as `i k Ms m_z`, and recovers the
+longitudinal field with a k-dependent gradient term. Fullmag must implement the
+same mathematical idea in its own FEM shared-domain airbox architecture:
+`k=0` periodic-airbox demag is a real scalar-potential constrained provider,
+while nonzero-k Floquet demag requires a complex Bloch/Floquet
+`grad_k`/`div_k` operator. Reusing a static k=0 Poisson solve or applying
+Floquet phase only in the viewport is not dynamic demag-k.
+
 ## 2. Physical model
 
 Fullmag stores fields in SI units. The dynamic magnetization perturbation is
@@ -149,7 +160,7 @@ explicitly correct for the dynamic phasor. Reusing a static k=0 solve while
 ignoring `A_mphi`, `A_phim`, or nonzero-k phase is not an implementation of this
 contract.
 
-Current implementation note, 2026-07-03: the native CPU driven-response path can
+Current implementation note, 2026-07-04: the native CPU driven-response path can
 include dynamic demag at k=0 by routing the magnetic GMRES operator through a
 matrix-free backend demag tangent provider. The narrow CPU
 `periodic_airbox_k0` path uses the same idea with a Schur/phi-consistency
@@ -158,10 +169,19 @@ does not make `delta_phi` an independently assembled coupled unknown. It must be
 described as a qualified driven-response slice, not as an eigenmode solver and
 not as complete `[delta_m, delta_phi]` physics. The native GPU driven-response
 path can include ordinary k=0 demag through the backend demag-tangent provider
-while keeping the local/exchange operator on CUDA; this is a hybrid provider
-path and not a strict device-resident GPU Poisson implementation. GPU
-`periodic_airbox_k0`, Floquet-airbox, and nonzero-k demag-k remain gated until
-the corresponding GPU dynamic-demag operators exist.
+while keeping the local/exchange operator on CUDA. The same CUDA magnetic
+operator may include open/gamma and k=0 static-periodic P1 interfacial or bulk
+DMI when the native frequency-domain request carries complete element tangent
+payloads, lumped mass, and positive `Ms`. Static-periodic DMI uses the same k=0
+tangent input/output projection as the other magnetic operators; this does not
+implement nonzero-k Floquet DMI assembly across paired seams. For
+`periodic_airbox_k0`, a GPU request is legal only when
+the backend demag tangent-with-potential provider is created on the GPU demag
+backend (`device_hypre_poisson`) and the artifacts preserve
+`requested_execution_lane="production_gpu"`. It must not silently run a CPU
+coupled block or dense validation solve. Floquet-airbox, nonzero-k Floquet DMI
+assembly, and nonzero-k demag-k remain gated until the corresponding GPU
+dynamic operators exist.
 
 The target eigenfrequency system reuses the same linearized operators but has no
 external RF drive. In abstract form it is a generalized eigenproblem over the
@@ -211,10 +231,57 @@ runtime must reject the study.
 
 ### GPU
 
-GPU support is out of scope until strict GPU periodic Poisson or equivalent
-libCEED/hypre operators exist and pass the same continuity, gauge, convergence,
-and provenance checks. A GPU request must not silently run the CPU coupled block
-or dense validation solver.
+The first GPU `periodic_airbox_k0` implementation is the matrix-free provider
+path: the GMRES solve may remain the host-side frequency-response Krylov
+driver, but operator application calls the GPU demag tangent-with-potential
+backend and reports GPU Poisson provenance. The CUDA magnetic operator owns a
+persistent per-adapter context for static device buffers such as tangent frames,
+exchange edges, nodal damping, Zeeman field, anisotropy axis, and optional P1
+DMI element tangent payloads for open/gamma or k=0 static-periodic magnetic
+slices; each Krylov application uploads only the current
+tangent vector and optional demag tangent payload, then downloads the
+stiffness/mass action. This is not the same as accepting an explicit CPU
+dense/coupled-block payload, and it is not yet a fully device-resident Krylov
+solve. Explicit dense validation and CPU coupled-block payloads remain invalid
+for a requested production GPU lane.
+
+Floquet-airbox and nonzero-k demag-k GPU support remain out of scope until strict
+GPU periodic/Bloch Poisson or equivalent libCEED/hypre operators exist and pass
+the same continuity, gauge, convergence, and provenance checks.
+
+Implementation contract update, 2026-07-04: the driven-response GMRES core and
+native C ABI can now accept a complex matrix-free coupled-block provider for
+`[delta_m, delta_phi]`. This is required for Bloch/Floquet demag because the
+scalar-potential constraints mix real and imaginary components. The legacy real
+matrix-free provider remains valid only for real-valued k=0 operators. A
+`floquet_airbox` request is still not production-complete until a native
+Bloch/Floquet Poisson provider supplies those complex stiffness/mass callbacks
+and passes the validation gates below.
+
+Implementation contract update, 2026-07-05: the `periodic_airbox_k0` reduced
+magnetic Schur solve must not describe a local magnetic block-Jacobi
+preconditioner as a demag-aware production preconditioner. For large
+periodic-airbox response systems, the preconditioner must approximate the same
+matrix-free Schur operator seen by GMRES:
+
+```text
+S(omega) delta_m = L_m(delta_m, delta_H_demag(delta_m))
+                 + i omega B_alpha(delta_m)
+```
+
+where `delta_H_demag(delta_m)` is supplied by the resolved CPU/GPU
+demag-tangent-with-potential provider and the lateral k=0 periodic projection is
+part of the operator. A block-Jacobi preconditioner built only from local
+Zeeman/anisotropy/exchange diagonal terms is a fallback candidate, not a
+production Schur preconditioner. If a graph or demag-coarse variant is selected,
+diagnostics must prove that it changes the effective preconditioner action
+relative to plain block-Jacobi or report that it was disabled. A matrix-free
+Schur residual-correction preconditioner is acceptable as a first production
+step: apply the local magnetic inverse, evaluate the actual reduced Schur
+residual with the resolved demag provider, and apply one or more local
+corrections. This is more expensive per Krylov iteration, but it preserves the
+CPU/GPU demag realization and avoids pretending that local block-Jacobi captures
+the airbox coupling.
 
 ### FDM and hybrid backends
 
@@ -316,9 +383,15 @@ max_pair |partial_n(dst) delta_phi_dst
   magnetic PBC alone is enough.
 - ProblemIR: must carry separate magnetic and magnetostatic constraint sets.
 - Planner: must reject missing airbox lateral pairs, non-open z policy gaps,
-  GPU, and unsupported nonzero-k demag.
+  explicit CPU dense/coupled-block payloads on requested production GPU lanes,
+  and unsupported nonzero-k demag unless a complete coupled-block provider is
+  supplied for that lane.
 - Native CPU: must assemble and solve the coupled `[delta_m, delta_phi]` block.
-- Native GPU: must stay unsupported until periodic Poisson/Floquet operators are
+- Native GPU: may execute only the matrix-free provider path with CUDA magnetic
+  operator application, optional open/gamma or k=0 static-periodic P1 DMI
+  tangent payloads, and GPU demag tangent-with-potential provenance; nonzero-k
+  Floquet DMI assembly, full device-resident periodic/Bloch Poisson, dense
+  coupled-block GPU solves, and nonzero-k demag-k remain gated until
   implemented and verified.
 - Artifacts: must report requested and resolved magnetic and magnetostatic BCs,
   phase convention, gauge policy, and demag contribution.

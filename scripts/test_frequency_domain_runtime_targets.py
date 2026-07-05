@@ -115,6 +115,58 @@ def test_periodic_airbox_fmr_runtime_target_uses_real_antidot_example() -> None:
         'FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL="${FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL:-128}"'
         in target
     )
+    assert (
+        'FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT="${FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT:-auto}"'
+        in target
+    )
+
+
+def test_full_antidot_frequency_driven_target_uses_gpu_solver_controls() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+
+    target_start = justfile.find(
+        "run-fem-periodic-antidot-frequency-driven-managed-headless"
+    )
+    assert target_start != -1
+    next_target = justfile.find("\nrun-permalloy", target_start + 1)
+    target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
+
+    assert "examples/fem_periodic_antidot_relax_exchange_coupled_frequency_driven.py" in target
+    assert "FULLMAG_FEM_EXECUTION=gpu" in target
+    assert "FULLMAG_RELAX_DEVICE=gpu" in target
+    assert "FULLMAG_FMR_DEVICE=gpu" in target
+    assert 'FULLMAG_FMR_DEMAG_RTOL="${FULLMAG_FMR_DEMAG_RTOL:-1e-4}"' in target
+    assert (
+        'FULLMAG_FMR_DEMAG_MAX_ITERATIONS="${FULLMAG_FMR_DEMAG_MAX_ITERATIONS:-1000}"'
+        in target
+    )
+    assert 'FULLMAG_FMR_RESPONSE_RTOL="${FULLMAG_FMR_RESPONSE_RTOL:-1e-3}"' in target
+    assert (
+        'FULLMAG_FMR_RESPONSE_MAX_ITERATIONS="${FULLMAG_FMR_RESPONSE_MAX_ITERATIONS:-8192}"'
+        in target
+    )
+    assert (
+        'FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS="${FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS:-8192}"'
+        in target
+    )
+    assert (
+        'FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT="${FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT:-auto}"'
+        in target
+    )
+    assert (
+        'FULLMAG_FMR_RESPONSE_PRECONDITIONER_AUTO_DISABLE_THRESHOLD="${FULLMAG_FMR_RESPONSE_PRECONDITIONER_AUTO_DISABLE_THRESHOLD:-1.0}"'
+        in target
+    )
+    assert (
+        'FULLMAG_FMR_RESPONSE_PRECONDITIONER_AUTO_PILOT_ITERATIONS="${FULLMAG_FMR_RESPONSE_PRECONDITIONER_AUTO_PILOT_ITERATIONS:-16}"'
+        in target
+    )
+    assert (
+        'FULLMAG_FMR_RESPONSE_GRAPH_PRECONDITIONER_SWEEPS="${FULLMAG_FMR_RESPONSE_GRAPH_PRECONDITIONER_SWEEPS:-4}"'
+        in target
+    )
+    assert "--require-production-gpu" in target
+    assert "--require-periodic-airbox-gpu-demag-solved" in target
 
 
 def test_periodic_airbox_promotion_artifact_target_requires_m5_equilibrium_gate() -> None:
@@ -428,6 +480,10 @@ def test_periodic_airbox_spectrum_runtime_target_uses_multifrequency_gate() -> N
     assert "FULLMAG_FMR_FAST_RUNTIME_MESH=1" in target
     assert "FULLMAG_FMR_FREQUENCIES_GHZ=" in target
     assert "2.5,2.75,3.0" in target
+    assert (
+        'FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT="${FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT:-auto}"'
+        in target
+    )
     assert "--require-periodic-airbox-cpu-demag-solved" in target
     assert "--require-frozen-magnetic-submesh" in target
     assert "--require-min-frequency-points 3" in target
@@ -462,6 +518,10 @@ def test_periodic_airbox_spectrum_bounded_runtime_target_is_diagnostic() -> None
     )
     assert (
         'FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL="${FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL:-128}"'
+        in target
+    )
+    assert (
+        'FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT="${FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT:-auto}"'
         in target
     )
     assert "set +e;" in target
@@ -521,6 +581,7 @@ def test_refined_spectrum_runtime_target_uses_recommended_frequencies() -> None:
     assert "--require-frozen-magnetic-submesh" in target
     assert "--require-min-frequency-points 5" in target
     assert "--require-response-peak" in target
+    assert "--require-interior-response-peak" in target
     assert "--require-field-payloads-for-frequency-points" in target
     assert "--require-derived-peak-mode" in target
 
@@ -543,6 +604,30 @@ def test_refined_spectrum_runtime_reads_recommendation_before_cleaning_output() 
     )
 
     assert read_frequencies < clean_output
+
+
+def test_refined_spectrum_runtime_validates_source_before_refinement() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+
+    target_start = justfile.find(
+        "verify-fem-frequency-domain-periodic-airbox-refined-spectrum-runtime:"
+    )
+    assert target_start != -1
+    next_target = justfile.find("\nverify-", target_start + 1)
+    target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
+
+    source_validation = target.index(
+        'python3 scripts/verify_fem_frequency_domain_runtime_artifacts.py --require-periodic-airbox-cpu-demag-solved --require-frozen-magnetic-submesh --require-min-frequency-points 3 --require-response-peak --require-field-payloads-for-frequency-points --require-derived-peak-mode "$REFINEMENT_SOURCE_ARTIFACTS"'
+    )
+    output_cleanup = target.index(
+        "if [ -d .fullmag/reports/frequency-domain-periodic-airbox-refined-spectrum-runtime ]; then docker compose"
+    )
+    read_frequencies = target.index(
+        'REFINED_FREQUENCIES_GHZ="$(python3 scripts/fem_frequency_response_refinement_env.py "$REFINEMENT_SOURCE_ARTIFACTS")"'
+    )
+
+    assert source_validation < output_cleanup
+    assert source_validation < read_frequencies
 
 
 def test_periodic_k0_example_target_uses_periodic_airbox_response_runtime() -> None:
@@ -590,15 +675,20 @@ def test_simple_periodic_antidot_frequency_driven_target_runs_new_plain_script()
         in target
     )
     assert "scripts/verify_fem_frequency_domain_runtime_artifacts.py" in target
-    assert "--require-production-gpu --require-static-periodic" in target
+    assert "--require-production-gpu --require-periodic-airbox-gpu-demag-solved" in target
     assert 'fem_execution="script"' in target
-    assert "native GPU static-periodic magnetic response slice with ordinary k=0 dynamic demag" in target
+    assert "native GPU periodic-airbox dynamic-demag response slice" in target
     assert "expected gpu" in target
     assert "env -u FULLMAG_FEM_EXECUTION" not in target
     assert "FULLMAG_FEM_EXECUTION=gpu" in target
     assert "FULLMAG_RELAX_DEVICE=gpu" in target
     assert "FULLMAG_FMR_DEVICE=gpu" in target
     assert "FULLMAG_FDM_EXECUTION=cpu" in target
+    assert 'FULLMAG_FMR_DEMAG_RTOL="${FULLMAG_FMR_DEMAG_RTOL:-1e-4}"' in target
+    assert (
+        'FULLMAG_FMR_DEMAG_MAX_ITERATIONS="${FULLMAG_FMR_DEMAG_MAX_ITERATIONS:-1000}"'
+        in target
+    )
     assert 'FULLMAG_FMR_RESPONSE_RTOL="${FULLMAG_FMR_RESPONSE_RTOL:-1e-3}"' in target
     assert (
         'FULLMAG_FMR_RESPONSE_MAX_ITERATIONS="${FULLMAG_FMR_RESPONSE_MAX_ITERATIONS:-8192}"'
@@ -620,26 +710,51 @@ def test_periodic_antidot_frequency_driven_example_uses_gpu_transition() -> None
     assert 'study.device("gpu", precision="double")' in example
     assert "frequency_response_dynamic_demag" in example
     assert "study.clear_outputs()" in example
+    assert "study.stages.add_minimize(" in example
+    assert "method=\"bb\"" in example
+    assert "algorithm=\"llg_overdamped\"" not in example
+    assert "solver=\"rk23\"" not in example
+    assert "equilibrium_torque_tolerance_t = 5.0e-3" in example
+    assert "equilibrium_torque_tolerance_a_per_m" in example
+    assert "rtol=1e-4" in example
+    assert "max_iterations=1000" in example
+    assert "tol=equilibrium_torque_tolerance_a_per_m" in example
     assert "include_demag=True" in example
-    assert 'magnetostatic_bc="open"' in example
+    assert 'magnetostatic_bc="periodic_airbox_k0"' in example
+    assert "solver_rtol=" not in example
+    assert "solver_max_iterations=" not in example
+    assert "solver_restart_iterations=" not in example
     assert 'study.stages.change_device("gpu")' in example
 
 
-def test_periodic_airbox_gpu_unsupported_runtime_target_is_artifact_backed() -> None:
+def test_periodic_airbox_gpu_runtime_target_is_artifact_backed() -> None:
     justfile = JUSTFILE.read_text(encoding="utf-8")
 
-    target_start = justfile.find("verify-fem-frequency-domain-periodic-airbox-gpu-unsupported-runtime:")
+    target_start = justfile.find("verify-fem-frequency-domain-periodic-airbox-gpu-runtime:")
     assert target_start != -1
     next_target = justfile.find("\nverify-", target_start + 1)
     target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
 
-    assert "examples/fem_frequency_response_gpu_periodic_airbox_unsupported_smoke.py" in target
+    assert "examples/fem_frequency_response_gpu_periodic_airbox_smoke.py" in target
     assert "--require-production-gpu" in target
-    assert "--require-periodic-airbox-gpu-unsupported" in target
-    assert "--allow-unavailable" in target
-    assert ".fullmag/reports/frequency-domain-periodic-airbox-gpu-unsupported-runtime/artifacts" in target
+    assert "--require-periodic-airbox-gpu-demag-solved" in target
+    assert "--allow-unavailable" not in target
+    assert ".fullmag/reports/frequency-domain-periodic-airbox-gpu-runtime/artifacts" in target
     assert "FULLMAG_FEM_EXECUTION=gpu" in target
+    assert "FULLMAG_FMR_DEVICE=gpu" in target
     assert "FULLMAG_RELAX_DEVICE=gpu" in target
+    assert (
+        'FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT="${FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT:-auto}"'
+        in target
+    )
+    assert (
+        'FULLMAG_FMR_RESPONSE_PRECONDITIONER_AUTO_DISABLE_THRESHOLD="${FULLMAG_FMR_RESPONSE_PRECONDITIONER_AUTO_DISABLE_THRESHOLD:-1.0}"'
+        in target
+    )
+    assert (
+        'FULLMAG_FMR_RESPONSE_GRAPH_PRECONDITIONER_SWEEPS="${FULLMAG_FMR_RESPONSE_GRAPH_PRECONDITIONER_SWEEPS:-4}"'
+        in target
+    )
 
 
 def test_cpu_periodic_airbox_demag_smoke_runtime_target_is_artifact_backed() -> None:
@@ -697,6 +812,10 @@ def test_periodic_airbox_z_padding_runtime_target_compares_two_airboxes() -> Non
     assert 'FULLMAG_FMR_AIRBOX_REFERENCE_THICKNESS_NM="${FULLMAG_FMR_AIRBOX_REFERENCE_THICKNESS_NM:-120}"' in target
     assert 'FULLMAG_FMR_AIRBOX_CANDIDATE_THICKNESS_NM="${FULLMAG_FMR_AIRBOX_CANDIDATE_THICKNESS_NM:-150}"' in target
     assert "FULLMAG_FMR_MESH_ALGORITHM_3D=" in target
+    assert (
+        'FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT="${FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT:-auto}"'
+        in target
+    )
     assert "--require-periodic-airbox-cpu-demag-solved" in target
     assert "--require-frozen-magnetic-submesh" in target
     assert "--compare-airbox-reference" in target
@@ -744,6 +863,10 @@ def test_periodic_airbox_supercell_runtime_target_generates_unit_and_supercell()
     assert "FULLMAG_FMR_SUPERCELL_REPEAT_X=" in target
     assert "FULLMAG_FMR_SUPERCELL_REPEAT_Y=" in target
     assert "FULLMAG_FMR_SUPERCELL_REPEAT_X=1 FULLMAG_FMR_SUPERCELL_REPEAT_Y=1" in target
+    assert (
+        'FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT="${FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT:-auto}"'
+        in target
+    )
     assert "frequency-domain-periodic-airbox-supercell-runtime/unit/artifacts" in target
     assert "frequency-domain-periodic-airbox-supercell-runtime/supercell/artifacts" in target
     assert "--require-periodic-airbox-cpu-demag-solved" in target
@@ -793,6 +916,10 @@ def test_periodic_airbox_supercell_diagnostics_runtime_target_is_bounded() -> No
     )
     assert (
         'FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL="${FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL:-8}"'
+        in target
+    )
+    assert (
+        'FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT="${FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT:-auto}"'
         in target
     )
     assert "--allow-solve-error" in target
@@ -881,7 +1008,7 @@ def test_frequency_domain_runtime_suite_includes_periodic_airbox_gpu_boundary() 
     next_target = justfile.find("\nverify-", target_start + 1)
     target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
 
-    assert "just verify-fem-frequency-domain-periodic-airbox-gpu-unsupported-runtime" in target
+    assert "just verify-fem-frequency-domain-periodic-airbox-gpu-runtime" in target
 
 
 def test_frequency_domain_runtime_suite_includes_cpu_floquet_gate() -> None:

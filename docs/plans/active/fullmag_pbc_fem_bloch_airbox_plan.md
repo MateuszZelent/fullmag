@@ -2067,8 +2067,9 @@ response/frequency_points/frequency_*.json
   now also write `response/frequency_points/frequency_*.json` metadata. Each
   point records requested/resolved magnetic and magnetostatic BCs and an
   explicit unavailable `demag_contribution` with
-  `periodic_airbox_dynamic_demag_coupled_block_unimplemented`, so the absence of
-  `delta_phi` is provenance, not silence. The manifest also links
+  `periodic_airbox_missing_demag_provider_or_coupled_block`, so a missing
+  demag provider or coupled-block payload is provenance, not silence. The
+  manifest also links
   `mesh/periodic_pairs.v1.json` and records requested/resolved spin-wave BC
   provenance. Real demag values still require the coupled block.
   Progress: solved explicit/matrix-free `periodic_airbox_k0` coupled-block runs

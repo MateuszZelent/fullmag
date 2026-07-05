@@ -1307,6 +1307,10 @@ fn materialize_pipeline_frequency_response(
         .as_ref()
         .map(|current| current.7.values_hz.clone())
         .unwrap_or_else(|| vec![1.0e9]);
+    let default_solver_policy = match &base_ir.study {
+        fullmag_ir::StudyIR::FrequencyResponse { solver_policy, .. } => solver_policy.clone(),
+        _ => None,
+    };
 
     let frequencies_hz =
         payload_f64_array(payload, "frequency_values_hz")?.unwrap_or(default_frequencies);
@@ -1350,6 +1354,7 @@ fn materialize_pipeline_frequency_response(
         frequencies_hz: fullmag_ir::FrequencySweepIR {
             values_hz: frequencies_hz,
         },
+        solver_policy: payload_frequency_solver_policy(payload, default_solver_policy)?,
         sampling: fullmag_ir::SamplingIR {
             table_autosave: sampling.table_autosave,
             outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
@@ -2425,6 +2430,39 @@ fn payload_frequency_magnetostatic_bc(
     }
 }
 
+fn payload_frequency_solver_policy(
+    payload: &BTreeMap<String, Value>,
+    default: Option<fullmag_ir::FrequencyResponseSolverPolicyIR>,
+) -> Result<Option<fullmag_ir::FrequencyResponseSolverPolicyIR>> {
+    let rtol = payload_f64(payload, "frequency_solver_rtol")?;
+    let max_iterations = payload_u64(payload, "frequency_solver_max_iterations")?;
+    let restart_iterations = payload_u64(payload, "frequency_solver_restart_iterations")?;
+    if rtol.is_none() && max_iterations.is_none() && restart_iterations.is_none() {
+        return Ok(default);
+    }
+    if let Some(rtol) = rtol {
+        if !rtol.is_finite() || rtol <= 0.0 {
+            bail!("frequency_solver_rtol must be finite and positive");
+        }
+    }
+    if matches!(max_iterations, Some(0)) {
+        bail!("frequency_solver_max_iterations must be positive");
+    }
+    if matches!(restart_iterations, Some(0)) {
+        bail!("frequency_solver_restart_iterations must be positive");
+    }
+    if let (Some(restart), Some(max)) = (restart_iterations, max_iterations) {
+        if restart > max {
+            bail!("frequency_solver_restart_iterations must be <= frequency_solver_max_iterations");
+        }
+    }
+    Ok(Some(fullmag_ir::FrequencyResponseSolverPolicyIR {
+        rtol,
+        max_iterations,
+        restart_iterations,
+    }))
+}
+
 fn apply_pipeline_set_field(
     problem: &mut ProblemIR,
     payload: &BTreeMap<String, Value>,
@@ -3186,6 +3224,7 @@ mod tests {
             frequencies_hz: fullmag_ir::FrequencySweepIR {
                 values_hz: vec![1.0e9],
             },
+            solver_policy: None,
             enable_exchange: true,
             enable_demag: false,
             interfacial_dmi: None,
@@ -3197,6 +3236,7 @@ mod tests {
             requested_device: fullmag_ir::ExecutionDevice::Cpu,
             exchange_bc: fullmag_ir::ExchangeBoundaryCondition::Neumann,
             demag_realization: None,
+            air_box_config: None,
             demag_solver_policy: None,
             periodic_constraint_sets: Vec::new(),
             equilibrium_provenance: None,
@@ -3626,6 +3666,7 @@ mod tests {
             frequencies_hz: fullmag_ir::FrequencySweepIR {
                 values_hz: vec![1.0e9, 2.0e9],
             },
+            solver_policy: None,
             sampling: fullmag_ir::SamplingIR {
                 table_autosave: None,
                 outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
@@ -3742,6 +3783,7 @@ mod tests {
             frequencies_hz: fullmag_ir::FrequencySweepIR {
                 values_hz: vec![2.0e9, 2.5e9],
             },
+            solver_policy: None,
             sampling: fullmag_ir::SamplingIR {
                 table_autosave: None,
                 outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
@@ -4410,7 +4452,10 @@ mod tests {
                         payload: serde_json::from_value(json!({
                             "frequency_values_hz": [2.0e9, 2.5e9],
                             "frequency_spin_wave_bc": "periodic",
-                            "frequency_magnetostatic_bc": "periodic_airbox_k0"
+                            "frequency_magnetostatic_bc": "periodic_airbox_k0",
+                            "frequency_solver_max_iterations": "128",
+                            "frequency_solver_restart_iterations": "32",
+                            "frequency_solver_rtol": "0.01"
                         }))
                         .expect("payload"),
                     },
@@ -4430,6 +4475,17 @@ mod tests {
                 if *magnetostatic_bc
                     == fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0
         ));
+        match &stages[1].ir.study {
+            fullmag_ir::StudyIR::FrequencyResponse { solver_policy, .. } => {
+                let policy = solver_policy
+                    .as_ref()
+                    .expect("frequency response solver policy should materialize");
+                assert_eq!(policy.rtol, Some(1.0e-2));
+                assert_eq!(policy.max_iterations, Some(128));
+                assert_eq!(policy.restart_iterations, Some(32));
+            }
+            other => panic!("expected frequency response study, got {other:?}"),
+        }
     }
 
     #[test]

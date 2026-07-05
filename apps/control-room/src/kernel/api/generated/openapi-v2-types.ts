@@ -1460,6 +1460,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/meshing/meshes/regions/{region_id}/quality": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["meshing_get_sessions_current_meshing_meshes_regions_region_id_quality"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/meshing/meshes/shared-domain/cross-section": {
         parameters: {
             query?: never;
@@ -5353,6 +5369,12 @@ export interface components {
             realization_warnings?: string[];
             region_id: string;
             source: string;
+        };
+        MeshRegionQualityResource: {
+            quality?: Record<string, never> | null;
+            region_id: string;
+            /** Format: int64 */
+            revision: number;
         };
         MeshRegionResource: {
             bounds_max?: number[] | null;
@@ -10733,6 +10755,36 @@ export interface operations {
             };
             /** @description Requested topology byte range is not satisfiable */
             416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    meshing_get_sessions_current_meshing_meshes_regions_region_id_quality: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Authored or realized region id */
+                region_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Per-region mesh quality */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeshRegionQualityResource"];
+                };
+            };
+            /** @description No active workspace, mesh, scene, or region membership */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
