@@ -11,6 +11,10 @@ namespace fullmag::fem::frequency_domain {
 namespace {
 
 constexpr double kTwoPi = 6.28318530717958647692;
+constexpr double kResidualConsistencyRatioThreshold = 4.0;
+constexpr std::uint64_t kGmresStagnationIterationGate = 256;
+constexpr double kGmresStagnationRelativeResidualRatioThreshold = 0.9;
+constexpr double kGmresStagnationRelativeResidualFloor = 1.0e-2;
 
 void copy_error(char out[128], const char *message) noexcept
 {
@@ -918,6 +922,57 @@ FrequencyDomainStatus solve_frequency_gmres(
         if (relative_residual_l2 < minimum_relative_residual_l2) {
             minimum_relative_residual_l2 = relative_residual_l2;
             minimum_tracked_relative_residual_iteration = iteration_count;
+        }
+        if (std::isfinite(relative_residual_l2) &&
+            relative_residual_l2 > problem.relative_tolerance) {
+            const double tracked_floor = std::max(
+                std::max(last_tracked_relative_residual_l2, problem.relative_tolerance),
+                1.0e-30);
+            const double consistency_ratio = relative_residual_l2 / tracked_floor;
+            if (std::isfinite(consistency_ratio) &&
+                consistency_ratio > kResidualConsistencyRatioThreshold) {
+                if (result != nullptr) {
+                    result->residual_consistency_degraded = true;
+                    result->residual_consistency_ratio =
+                        std::max(
+                            result->residual_consistency_ratio,
+                            consistency_ratio);
+                    if (problem.auto_disable_harmful_right_preconditioner &&
+                        problem.apply_right_preconditioner != nullptr) {
+                        result->right_preconditioner_residual_consistency_degraded = true;
+                        result->right_preconditioner_residual_consistency_ratio =
+                            std::max(
+                                result->right_preconditioner_residual_consistency_ratio,
+                                consistency_ratio);
+                    }
+                }
+                if (problem.apply_right_preconditioner != nullptr) {
+                    copy_error(
+                        error_message,
+                        "production frequency-response GMRES right preconditioner degraded true residual consistency");
+                    return FrequencyDomainStatus::solve_error;
+                }
+            }
+        }
+        if (iteration_count >= kGmresStagnationIterationGate &&
+            initial_relative_residual_l2_norm > 0.0 &&
+            std::isfinite(initial_relative_residual_l2_norm) &&
+            std::isfinite(relative_residual_l2)) {
+            const double stagnation_ratio =
+                relative_residual_l2 / initial_relative_residual_l2_norm;
+            if (std::isfinite(stagnation_ratio) &&
+                stagnation_ratio > kGmresStagnationRelativeResidualRatioThreshold &&
+                relative_residual_l2 > kGmresStagnationRelativeResidualFloor) {
+                if (result != nullptr) {
+                    result->stagnation_detected = true;
+                    result->stagnation_iteration = iteration_count;
+                    result->stagnation_relative_residual_ratio = stagnation_ratio;
+                }
+                copy_error(
+                    error_message,
+                    "production frequency-response GMRES stagnated");
+                return FrequencyDomainStatus::solve_error;
+            }
         }
         const bool recomputed_converged =
             gmres_converged(problem, residual_l2, relative_residual_l2);

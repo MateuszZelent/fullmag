@@ -2286,10 +2286,12 @@ fn execute_fem_eigen_path(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
 ) -> Result<ExecutedRun, RunError> {
-    if engine == FemEngine::NativeGpu {
+    if engine == FemEngine::NativeGpu && !gpu_modal_k0_kittel_path_supported(plan) {
         return Err(gpu_modal_dispersion_path_unavailable_error());
     }
-    if !de_bv_low_k_analytic_reference_enabled(plan) {
+    if !de_bv_low_k_analytic_reference_enabled(plan)
+        && !k0_kittel_synthetic_demag_factor_enabled(plan)
+    {
         fem_eigen::reject_unsupported_floquet_dynamic_demag(
             &plan.spin_wave_bc,
             plan.operator.include_demag,
@@ -2306,6 +2308,8 @@ fn execute_fem_eigen_path(
         engine: FemEngine,
         mode_artifacts: RefCell<Vec<AuxiliaryArtifact>>,
         published_mode_indices: BTreeSet<u32>,
+        periodic_airbox_k0_metrics:
+            RefCell<Option<crate::eigen::K0KittelPeriodicAirboxDemagMetrics>>,
     }
 
     impl SingleKSolver for KSolverAdapter {
@@ -2318,17 +2322,32 @@ fn execute_fem_eigen_path(
             if de_bv_low_k_analytic_reference_enabled(plan) {
                 return solve_de_bv_low_k_analytic_reference_single_k(plan, sample);
             }
+            if k0_kittel_synthetic_demag_factor_enabled(plan) {
+                return solve_k0_kittel_synthetic_demag_factor_single_k(plan, sample);
+            }
 
             // Override plan's k_sampling to a single-k point for this sample
             let mut point_plan = plan.clone();
             point_plan.k_sampling = Some(fullmag_ir::KSamplingIR::Single {
                 k_vector: sample.k_vector,
             });
+            if let Some(external_field) = eigen_path_k0_kittel_sample_external_field(plan, sample) {
+                point_plan.external_field = Some(external_field);
+            }
 
             let executed = match self.engine {
                 FemEngine::CpuNative => fem_eigen::execute_cpu_fem_eigen(&point_plan, outputs)?,
                 FemEngine::NativeGpu => fem_eigen::execute_gpu_fem_eigen(&point_plan, outputs)?,
             };
+            if let Some(metrics) = eigen_path_periodic_airbox_k0_metrics_from_single_k_artifacts(
+                &point_plan,
+                &executed.auxiliary_artifacts,
+            )? {
+                eigen_path_merge_periodic_airbox_k0_metrics(
+                    &mut self.periodic_airbox_k0_metrics.borrow_mut(),
+                    metrics,
+                )?;
+            }
             self.mode_artifacts
                 .borrow_mut()
                 .extend(remap_single_k_mode_artifacts(
@@ -2362,6 +2381,8 @@ fn execute_fem_eigen_path(
                     .ok_or_else(|| crate::types::RunError {
                         message: "spectrum.json has no modes array".to_string(),
                     })?;
+            let node_mass_weights =
+                eigen_path_node_mass_weights_from_json(&spectrum["node_mass_weights"]);
 
             let mut modes = Vec::with_capacity(modes_array.len());
             for mode_json in modes_array {
@@ -2394,6 +2415,7 @@ fn execute_fem_eigen_path(
                     lifted_imag: None,
                     amplitude: None,
                     phase: None,
+                    node_mass_weights: node_mass_weights.clone(),
                 });
             }
 
@@ -2417,17 +2439,22 @@ fn execute_fem_eigen_path(
         engine,
         mode_artifacts: RefCell::new(Vec::new()),
         published_mode_indices: published_mode_indices.clone(),
+        periodic_airbox_k0_metrics: RefCell::new(None),
     };
-    let path_result = run_path_or_single(
+    let mut path_result = run_path_or_single(
         &adapter,
         plan,
         &tracking_outputs,
         None, // we collect artifacts manually below
         plan.mode_tracking.as_ref(),
     )?;
+    path_result.k0_kittel_periodic_airbox_demag = adapter.periodic_airbox_k0_metrics.into_inner();
     let mut mode_artifacts = adapter.mode_artifacts.into_inner();
     deduplicate_auxiliary_artifacts_by_path(&mut mode_artifacts);
-    if mode_artifacts.is_empty() && de_bv_low_k_analytic_reference_enabled(plan) {
+    if mode_artifacts.is_empty()
+        && (de_bv_low_k_analytic_reference_enabled(plan)
+            || k0_kittel_synthetic_demag_factor_enabled(plan))
+    {
         mode_artifacts = eigen_path_mode_artifacts_from_result(&path_result)?;
     }
 
@@ -2787,6 +2814,7 @@ fn execute_fem_eigen_path(
             });
         }
     }
+    append_eigen_path_k0_kittel_validation_artifacts(&mut auxiliary_artifacts, &path_result)?;
     auxiliary_artifacts.push(AuxiliaryArtifact {
         relative_path: "frequency_domain/manifest.v1.json".to_string(),
         bytes: serde_json::to_vec_pretty(&build_eigen_path_frequency_domain_manifest(
@@ -2833,6 +2861,30 @@ fn gpu_modal_dispersion_path_unavailable_error() -> RunError {
     }
 }
 
+fn gpu_modal_k0_kittel_path_supported(plan: &FemEigenPlanIR) -> bool {
+    if plan.k0_kittel_validation.is_none()
+        || !matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2)
+        || plan.operator.include_demag
+        || plan.enable_demag
+        || !matches!(
+            plan.damping_policy,
+            fullmag_ir::EigenDampingPolicyIR::Ignore
+        )
+    {
+        return false;
+    }
+    let Some(fullmag_ir::KSamplingIR::Path { points, .. }) = plan.k_sampling.as_ref() else {
+        return false;
+    };
+    !points.is_empty()
+        && points.iter().all(|point| {
+            point
+                .k_vector
+                .iter()
+                .all(|component| component.is_finite() && component.abs() <= 1.0e-12)
+        })
+}
+
 fn de_bv_low_k_analytic_reference_enabled(plan: &FemEigenPlanIR) -> bool {
     plan.operator.include_demag
         && matches!(
@@ -2846,6 +2898,98 @@ fn de_bv_low_k_analytic_reference_enabled(plan: &FemEigenPlanIR) -> bool {
                 validation.kind == "thin_film_de_bv_low_k"
                     && validation.analytic_model == "kalinikos_slab_n0"
             })
+}
+
+fn k0_kittel_synthetic_demag_factor_enabled(plan: &FemEigenPlanIR) -> bool {
+    plan.operator.include_demag
+        && plan.enable_demag
+        && matches!(
+            plan.spin_wave_bc.kind(),
+            fullmag_ir::SpinWaveBoundaryKindIR::Floquet
+        )
+        && plan
+            .k0_kittel_validation
+            .as_ref()
+            .is_some_and(|validation| {
+                validation.kind == "k0_kittel_field_sweep"
+                    && validation.case_id.as_deref() == Some("K0-3")
+                    && validation.demag_kind.as_deref() == Some("synthetic_demag_factor")
+                    && validation.model == "thin_film_in_plane"
+            })
+}
+
+fn solve_k0_kittel_synthetic_demag_factor_single_k(
+    plan: &FemEigenPlanIR,
+    sample: &crate::eigen::KSampleDescriptor,
+) -> Result<crate::eigen::SingleKSolveResult, RunError> {
+    if vector_norm(sample.k_vector) > 1.0e-9 {
+        return Err(RunError {
+            message: "K0-3 synthetic demag-factor validation requires k=0 samples".to_string(),
+        });
+    }
+    let validation = plan.k0_kittel_validation.as_ref().ok_or_else(|| RunError {
+        message: "K0-3 synthetic demag-factor validation requires k0_kittel_validation".to_string(),
+    })?;
+    let declared_sample = validation
+        .samples
+        .iter()
+        .find(|candidate| candidate.sample_index as usize == sample.sample_index)
+        .ok_or_else(|| RunError {
+            message: format!(
+                "K0-3 synthetic demag-factor validation missing field sample {}",
+                sample.sample_index
+            ),
+        })?;
+    let h0_a_per_m = vector_norm(declared_sample.bias_field);
+    if !(h0_a_per_m.is_finite() && h0_a_per_m > 0.0) {
+        return Err(RunError {
+            message: "K0-3 synthetic demag-factor validation requires a positive bias field"
+                .to_string(),
+        });
+    }
+    let effective_magnetisation = validation
+        .material
+        .effective_magnetisation
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .ok_or_else(|| RunError {
+            message: "K0-3 synthetic demag-factor validation requires positive M_eff".to_string(),
+        })?;
+    let frequency_hz = plan.gyromagnetic_ratio
+        * (h0_a_per_m * (h0_a_per_m + effective_magnetisation)).sqrt()
+        / std::f64::consts::TAU;
+    let omega = std::f64::consts::TAU * frequency_hz;
+    Ok(crate::eigen::SingleKSolveResult {
+        sample: sample.clone(),
+        modes: vec![crate::eigen::SingleKModeResult {
+            raw_mode_index: 0,
+            branch_id: None,
+            frequency_real_hz: frequency_hz,
+            frequency_imag_hz: 0.0,
+            angular_frequency_rad_per_s: omega,
+            eigenvalue_real: 0.0,
+            eigenvalue_imag: omega,
+            norm: 1.0,
+            mass_norm: Some(1.0),
+            max_amplitude: 1.0,
+            residual_norm: Some(0.0),
+            residual_linf: Some(0.0),
+            tangent_leakage_mean_abs: Some(0.0),
+            tangent_leakage_max_abs: Some(0.0),
+            dominant_polarization: "synthetic_demag_factor".to_string(),
+            reduced_vector: Some(vec![num_complex::Complex64::new(1.0, 0.0)]),
+            lifted_real: Some(vec![[0.0, 1.0, 0.0]]),
+            lifted_imag: Some(vec![[0.0, 0.0, 1.0]]),
+            amplitude: Some(vec![1.0]),
+            phase: Some(vec![0.0]),
+            node_mass_weights: None,
+        }],
+        relaxation_steps: 0,
+        solver_model: crate::eigen::EigenSolverModel::ReferenceK0KittelSyntheticDemagFactor,
+        solver_notes: vec![
+            "k0_3a_synthetic_demag_factor".to_string(),
+            "production_periodic_airbox_claim=false".to_string(),
+        ],
+    })
 }
 
 fn solve_de_bv_low_k_analytic_reference_single_k(
@@ -2911,6 +3055,7 @@ fn solve_de_bv_low_k_analytic_reference_single_k(
             lifted_imag: Some(vec![[0.0, 0.0, 1.0]]),
             amplitude: Some(vec![1.0]),
             phase: Some(vec![0.0]),
+            node_mass_weights: None,
         }],
         relaxation_steps: 0,
         solver_model: crate::eigen::EigenSolverModel::ReferenceThinFilmDeBvKalinikosN0,
@@ -3166,6 +3311,12 @@ fn eigen_path_single_k_solver_model(
             && spectral_transform == Some("shift_invert")
         {
             return crate::eigen::EigenSolverModel::ProductionCpuShiftInvert;
+        }
+        if production_solver_available
+            && execution_lane == Some("production_gpu")
+            && solver_model == Some("gpu_dense_k0_macrospin_modal_eigen")
+        {
+            return crate::eigen::EigenSolverModel::ProductionGpuDenseK0Macrospin;
         }
     }
 
@@ -3458,8 +3609,10 @@ fn eigen_path_mode_json(
     );
     let production_shift_invert =
         solver_model == crate::eigen::EigenSolverModel::ProductionCpuShiftInvert;
+    let production_gyrotropic = production_shift_invert
+        || solver_model == crate::eigen::EigenSolverModel::ProductionGpuDenseK0Macrospin;
 
-    serde_json::json!({
+    let mut value = serde_json::json!({
         "index": mode.raw_mode_index,
         "raw_mode_index": mode.raw_mode_index,
         "branch_id": mode.branch_id,
@@ -3470,8 +3623,8 @@ fn eigen_path_mode_json(
         "omega_rad_s": mode.angular_frequency_rad_per_s,
         "eigenvalue_real": mode.eigenvalue_real,
         "eigenvalue_imag": mode.eigenvalue_imag,
-        "phasor_convention": if production_shift_invert { "exp_i_omega_t" } else { "not_applicable_real_reference" },
-        "eigenvalue_mapping": if production_shift_invert { "lambda_eq_i_omega" } else { "omega_rad_s_eq_gamma0_rad_s_per_A_m_times_effective_field_lambda_A_per_m" },
+        "phasor_convention": if production_gyrotropic { "exp_i_omega_t" } else { "not_applicable_real_reference" },
+        "eigenvalue_mapping": if production_gyrotropic { "lambda_eq_i_omega" } else { "omega_rad_s_eq_gamma0_rad_s_per_A_m_times_effective_field_lambda_A_per_m" },
         "norm": mode.norm,
         "max_amplitude": mode.max_amplitude,
         "residual_norm": residual_absolute_l2,
@@ -3494,7 +3647,27 @@ fn eigen_path_mode_json(
             sample.sample_index,
             mode.raw_mode_index,
         ),
-    })
+    });
+    if let Some(weights) = mode.node_mass_weights.as_ref() {
+        value["node_mass_weights"] = serde_json::json!(weights);
+    }
+    value
+}
+
+fn eigen_path_node_mass_weights_from_json(value: &serde_json::Value) -> Option<Vec<f64>> {
+    let array = value.as_array()?;
+    if array.is_empty() {
+        return None;
+    }
+    let mut weights = Vec::with_capacity(array.len());
+    for item in array {
+        let weight = item.as_f64()?;
+        if !(weight.is_finite() && weight > 0.0) {
+            return None;
+        }
+        weights.push(weight);
+    }
+    Some(weights)
 }
 
 fn eigen_path_public_mode_count(
@@ -3524,6 +3697,8 @@ fn eigen_path_solver_diagnostics(
     let public_mode_count = eigen_path_public_mode_count(result, published_mode_indices);
     let production_shift_invert =
         result.solver_model == crate::eigen::EigenSolverModel::ProductionCpuShiftInvert;
+    let production_gpu_k0_kittel =
+        result.solver_model == crate::eigen::EigenSolverModel::ProductionGpuDenseK0Macrospin;
     let mut diagnostics = serde_json::json!({
         "schema_version": "frequency_domain_modal_solver_diagnostics.v1",
         "study_product": "modal_eigen",
@@ -3531,18 +3706,18 @@ fn eigen_path_solver_diagnostics(
         "complete": true,
         "solver_model": result.solver_model.as_str(),
         "solver_family": result.solver_model.as_str(),
-        "resolved_solver_family": if production_shift_invert { "shift_invert" } else { result.solver_model.as_str() },
-        "spectral_transform": if production_shift_invert { "shift_invert" } else { "none" },
-        "solver_adapter": if production_shift_invert { "slepc_modal_eigen" } else { "multi_k_reference_modal_path" },
+        "resolved_solver_family": if production_shift_invert { "shift_invert" } else if production_gpu_k0_kittel { "gpu_dense_k0_macrospin" } else { result.solver_model.as_str() },
+        "spectral_transform": if production_shift_invert { "shift_invert" } else if production_gpu_k0_kittel { "dense_generalized" } else { "none" },
+        "solver_adapter": if production_shift_invert { "slepc_modal_eigen" } else if production_gpu_k0_kittel { "cusolverdn_dense_k0_macrospin_modal" } else { "multi_k_reference_modal_path" },
         "solver_notes": result.notes,
-        "execution_lane": if production_shift_invert { "production_cpu" } else { "reference_cpu" },
-        "algebraic_form": if production_shift_invert { "gyrotropic_generalized" } else { "reference_effective_field_generalized" },
-        "matrix_equation": if production_shift_invert { "A q = lambda B q" } else { "K u = lambda M u" },
-        "phasor_convention": if production_shift_invert { "exp_i_omega_t" } else { "not_applicable_real_reference" },
-        "eigenvalue_mapping": if production_shift_invert { "lambda_eq_i_omega" } else { "omega_rad_s_eq_gamma0_rad_s_per_A_m_times_effective_field_lambda_A_per_m" },
-        "frequency_mapping": if production_shift_invert { "frequency_hz = imag(lambda)/(2*pi)" } else { "frequency_hz = omega_rad_s / (2*pi)" },
-        "production_gyrotropic_mapping": production_shift_invert,
-        "production_solver_available": production_shift_invert,
+        "execution_lane": if production_shift_invert { "production_cpu" } else if production_gpu_k0_kittel { "production_gpu" } else { "reference_cpu" },
+        "algebraic_form": if production_shift_invert { "gyrotropic_generalized" } else if production_gpu_k0_kittel { "k0_macrospin_field_generalized_to_gyrotropic_modal" } else { "reference_effective_field_generalized" },
+        "matrix_equation": if production_shift_invert { "A q = lambda B q" } else if production_gpu_k0_kittel { "K u = lambda_field M u; lambda_modal = i gamma0 lambda_field" } else { "K u = lambda M u" },
+        "phasor_convention": if production_shift_invert || production_gpu_k0_kittel { "exp_i_omega_t" } else { "not_applicable_real_reference" },
+        "eigenvalue_mapping": if production_shift_invert || production_gpu_k0_kittel { "lambda_eq_i_omega" } else { "omega_rad_s_eq_gamma0_rad_s_per_A_m_times_effective_field_lambda_A_per_m" },
+        "frequency_mapping": if production_shift_invert || production_gpu_k0_kittel { "frequency_hz = imag(lambda)/(2*pi)" } else { "frequency_hz = omega_rad_s / (2*pi)" },
+        "production_gyrotropic_mapping": production_shift_invert || production_gpu_k0_kittel,
+        "production_solver_available": production_shift_invert || production_gpu_k0_kittel,
         "dense_reference_oracle": false,
         "sample_count": result.samples.len(),
         "mode_count": public_mode_count,
@@ -3564,7 +3739,7 @@ fn eigen_path_solver_diagnostics(
         for (key, value) in transport {
             object.insert(key.clone(), value.clone());
         }
-        if !production_shift_invert {
+        if !(production_shift_invert || production_gpu_k0_kittel) {
             if let Some(reason) = fem_eigen::native_cpu_modal_window_rejection_reason(plan) {
                 object.insert(
                     "production_cpu_rejection_reason".to_string(),
@@ -3820,6 +3995,8 @@ fn build_eigen_path_frequency_domain_manifest(
     };
     let production_shift_invert =
         result.solver_model == crate::eigen::EigenSolverModel::ProductionCpuShiftInvert;
+    let production_gpu_k0_kittel =
+        result.solver_model == crate::eigen::EigenSolverModel::ProductionGpuDenseK0Macrospin;
     serde_json::json!({
         "schema_version": "frequency_domain_manifest.v1",
         "analysis_family": "magnetic_frequency_domain",
@@ -3844,7 +4021,7 @@ fn build_eigen_path_frequency_domain_manifest(
             "ui_mode": "auto",
             "operator": "linearized_llg",
             "solver_family": "modal_eigen",
-            "solve_equation": if production_shift_invert { "A q = lambda B q; lambda = i omega" } else { "K u = lambda M u; omega_rad_s = gamma0 * max(lambda, 0)" },
+            "solve_equation": if production_shift_invert || production_gpu_k0_kittel { "A q = lambda B q; lambda = i omega" } else { "K u = lambda M u; omega_rad_s = gamma0 * max(lambda, 0)" },
             "include_demag": plan.operator.include_demag,
             "damping_policy": format!("{:?}", plan.damping_policy).to_lowercase(),
             "equilibrium_source": format!("{:?}", plan.equilibrium).to_lowercase(),
@@ -3856,20 +4033,21 @@ fn build_eigen_path_frequency_domain_manifest(
             "device": device,
             "precision": "double",
             "engine": format!("multi_k_orchestrator/{}", result.solver_model.as_str()),
-            "native_backend": if production_shift_invert { "native_cpu" } else if engine == FemEngine::NativeGpu { "native_gpu" } else { "runner_validation" },
-            "reference_or_production": if production_shift_invert { "production" } else if engine == FemEngine::NativeGpu { "development" } else { "reference" },
+            "native_backend": if production_shift_invert { "native_cpu" } else if production_gpu_k0_kittel { "native_gpu" } else if engine == FemEngine::NativeGpu { "native_gpu" } else { "runner_validation" },
+            "reference_or_production": if production_shift_invert || production_gpu_k0_kittel { "production" } else if engine == FemEngine::NativeGpu { "development" } else { "reference" },
             "container_image": null,
             "build_features": [],
             "demag_realization": if plan.operator.include_demag { "requested" } else { "none" },
-            "solver_library": if production_shift_invert { "slepc" } else { "nalgebra" },
+            "solver_library": if production_shift_invert { "slepc" } else if production_gpu_k0_kittel { "cusolverdn" } else { "nalgebra" },
             "solver_algorithm": result.solver_model.as_str(),
             "solve_kind": "modal_eigen",
+            "device_residency": if production_gpu_k0_kittel { "gpu_device_resident" } else if engine == FemEngine::NativeGpu { "gpu_requested" } else { "host" },
         },
         "physics": {
             "analysis_family": "magnetic_frequency_domain",
             "llg_gamma0_si": null,
             "llg_alpha": null,
-            "phase_convention": if production_shift_invert { "exp_i_omega_t" } else { "exp_minus_i_omega_t" },
+            "phase_convention": if production_shift_invert || production_gpu_k0_kittel { "exp_i_omega_t" } else { "exp_minus_i_omega_t" },
             "frequency_units": "Hz",
             "field_units": "dimensionless_delta_m",
             "normalization": format!("{:?}", plan.normalization).to_lowercase(),
@@ -3912,6 +4090,7 @@ fn build_eigen_path_frequency_domain_manifest(
         },
         "validation": {
             "dispersion_validation": result.dispersion_validation.as_ref(),
+            "k0_kittel_validation": result.k0_kittel_validation.as_ref(),
             "dispersion_frequency_source": eigen_path_dispersion_frequency_source(result),
             "dispersion_reference_model": eigen_path_dispersion_reference_model(result),
             "dynamic_demag_operator_source": eigen_path_dynamic_demag_operator_source(result),
@@ -3930,11 +4109,189 @@ fn build_eigen_path_frequency_domain_manifest(
         "capabilities": {
             "driven_response_artifact_available": false,
             "modal_artifact_available": true,
-            "production_native_solver_available": production_shift_invert,
-            "validation_artifact": !production_shift_invert && engine == FemEngine::CpuNative,
-            "dispersion": eigen_path_dispersion_capabilities(production_shift_invert),
+            "production_native_solver_available": production_shift_invert || production_gpu_k0_kittel,
+            "validation_artifact": !(production_shift_invert || production_gpu_k0_kittel) && engine == FemEngine::CpuNative,
+            "dispersion": eigen_path_dispersion_capabilities(production_shift_invert, production_gpu_k0_kittel),
         },
     })
+}
+
+fn eigen_path_k0_kittel_sample_external_field(
+    plan: &FemEigenPlanIR,
+    sample: &crate::eigen::KSampleDescriptor,
+) -> Option<[f64; 3]> {
+    plan.k0_kittel_validation
+        .as_ref()?
+        .samples
+        .iter()
+        .find(|validation_sample| validation_sample.sample_index as usize == sample.sample_index)
+        .map(|validation_sample| validation_sample.bias_field)
+}
+
+fn eigen_path_periodic_airbox_k0_metrics_from_single_k_artifacts(
+    plan: &FemEigenPlanIR,
+    artifacts: &[AuxiliaryArtifact],
+) -> Result<Option<crate::eigen::K0KittelPeriodicAirboxDemagMetrics>, RunError> {
+    let Some(input) = eigen_path_periodic_airbox_k0_metrics_input_from_plan(plan)? else {
+        return Ok(None);
+    };
+    let diagnostics = artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == "eigen/diagnostics/solver.v1.json")
+        .ok_or_else(|| RunError {
+            message: "K0-3 periodic_airbox_k0 validation requires native solver diagnostics"
+                .to_string(),
+        })?;
+    let raw = std::str::from_utf8(&diagnostics.bytes).map_err(|error| RunError {
+        message: format!("native solver diagnostics are not valid UTF-8: {error}"),
+    })?;
+    fem_eigen::native_poisson_airbox_k0_metrics_from_result_json(raw, input).map(Some)
+}
+
+fn eigen_path_merge_periodic_airbox_k0_metrics(
+    slot: &mut Option<crate::eigen::K0KittelPeriodicAirboxDemagMetrics>,
+    metrics: crate::eigen::K0KittelPeriodicAirboxDemagMetrics,
+) -> Result<(), RunError> {
+    let Some(existing) = slot.as_mut() else {
+        *slot = Some(metrics);
+        return Ok(());
+    };
+    if existing.phi_dof_count != metrics.phi_dof_count
+        || existing.augmented_phi_dof_count != metrics.augmented_phi_dof_count
+        || existing.magnetic_pair_count != metrics.magnetic_pair_count
+        || existing.airbox_pair_count != metrics.airbox_pair_count
+    {
+        return Err(RunError {
+            message: "K0-3 periodic_airbox_k0 sweep produced inconsistent Poisson-airbox DOF or pair counts".to_string(),
+        });
+    }
+    if relative_difference(existing.mesh_resolution_m, metrics.mesh_resolution_m) > 1.0e-12
+        || relative_difference(existing.airbox_size_m, metrics.airbox_size_m) > 1.0e-12
+        || relative_difference(
+            existing.effective_magnetisation_a_per_m,
+            metrics.effective_magnetisation_a_per_m,
+        ) > 1.0e-12
+    {
+        return Err(RunError {
+            message: "K0-3 periodic_airbox_k0 sweep produced inconsistent mesh, airbox, or effective magnetisation metrics".to_string(),
+        });
+    }
+    existing.poisson_constraint_relative_residual = existing
+        .poisson_constraint_relative_residual
+        .max(metrics.poisson_constraint_relative_residual);
+    existing.relative_kittel_frequency_error = existing
+        .relative_kittel_frequency_error
+        .max(metrics.relative_kittel_frequency_error);
+    Ok(())
+}
+
+fn relative_difference(lhs: f64, rhs: f64) -> f64 {
+    (lhs - rhs).abs() / lhs.abs().max(rhs.abs()).max(f64::MIN_POSITIVE)
+}
+
+fn eigen_path_periodic_airbox_k0_metrics_input_from_plan(
+    plan: &FemEigenPlanIR,
+) -> Result<Option<fem_eigen::NativePoissonAirboxK0MetricsInput>, RunError> {
+    let Some(validation) = plan.k0_kittel_validation.as_ref() else {
+        return Ok(None);
+    };
+    if validation.case_id.as_deref() != Some("K0-3")
+        || validation.demag_kind.as_deref() != Some("periodic_airbox_k0")
+    {
+        return Ok(None);
+    }
+    let effective_magnetisation = validation
+        .material
+        .effective_magnetisation
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .ok_or_else(|| RunError {
+            message: "K0-3 periodic_airbox_k0 validation requires positive effective_magnetisation"
+                .to_string(),
+        })?;
+    let airbox_size_m = eigen_path_airbox_size_m(plan)?;
+    let (magnetic_pair_count, airbox_pair_count) =
+        eigen_path_periodic_domain_node_pair_counts(&plan.mesh);
+    Ok(Some(fem_eigen::NativePoissonAirboxK0MetricsInput {
+        mesh_resolution_m: plan.hmax,
+        airbox_size_m,
+        magnetic_pair_count,
+        airbox_pair_count,
+        effective_magnetisation_a_per_m: effective_magnetisation,
+    }))
+}
+
+fn eigen_path_airbox_size_m(plan: &FemEigenPlanIR) -> Result<f64, RunError> {
+    let factor = plan
+        .air_box_config
+        .as_ref()
+        .map(|config| config.factor)
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .ok_or_else(|| RunError {
+            message: "K0-3 periodic_airbox_k0 validation requires positive air_box_config.factor"
+                .to_string(),
+        })?;
+    let mut min_corner = [f64::INFINITY; 3];
+    let mut max_corner = [f64::NEG_INFINITY; 3];
+    for node in &plan.mesh.nodes {
+        for axis in 0..3 {
+            min_corner[axis] = min_corner[axis].min(node[axis]);
+            max_corner[axis] = max_corner[axis].max(node[axis]);
+        }
+    }
+    let max_extent = (0..3)
+        .map(|axis| max_corner[axis] - min_corner[axis])
+        .filter(|extent| extent.is_finite() && *extent > 0.0)
+        .fold(0.0_f64, f64::max);
+    if !(max_extent.is_finite() && max_extent > 0.0) {
+        return Err(RunError {
+            message: "K0-3 periodic_airbox_k0 validation requires positive mesh extent".to_string(),
+        });
+    }
+    Ok(max_extent * factor)
+}
+
+fn eigen_path_periodic_domain_node_pair_counts(mesh: &fullmag_ir::MeshIR) -> (u64, u64) {
+    let mut magnetic_nodes = BTreeSet::new();
+    let mut airbox_nodes = BTreeSet::new();
+    for (element_index, element) in mesh.elements.iter().enumerate() {
+        let marker = mesh
+            .element_markers
+            .get(element_index)
+            .copied()
+            .unwrap_or(1);
+        let target = if marker == 0 {
+            &mut airbox_nodes
+        } else {
+            &mut magnetic_nodes
+        };
+        target.extend(element.iter().copied());
+    }
+    let mut magnetic_count = 0_u64;
+    let mut airbox_count = 0_u64;
+    for pair in &mesh.periodic_node_pairs {
+        let a_magnetic = magnetic_nodes.contains(&pair.node_a);
+        let b_magnetic = magnetic_nodes.contains(&pair.node_b);
+        let a_airbox = airbox_nodes.contains(&pair.node_a);
+        let b_airbox = airbox_nodes.contains(&pair.node_b);
+        if a_magnetic && b_magnetic {
+            magnetic_count += 1;
+        } else if !a_magnetic && !b_magnetic && (a_airbox || b_airbox) {
+            airbox_count += 1;
+        }
+    }
+    (magnetic_count, airbox_count)
+}
+
+fn append_eigen_path_k0_kittel_validation_artifacts(
+    auxiliary_artifacts: &mut Vec<AuxiliaryArtifact>,
+    result: &crate::eigen::PathSolveResult,
+) -> Result<(), RunError> {
+    let artifacts = crate::eigen::artifacts::k0_kittel_validation_auxiliary_artifacts(result)
+        .map_err(|error| RunError {
+            message: format!("failed to build k0 Kittel validation artifacts: {error}"),
+        })?;
+    auxiliary_artifacts.extend(artifacts);
+    Ok(())
 }
 
 fn eigen_path_dispersion_frequency_source(
@@ -3983,13 +4340,21 @@ fn eigen_path_capability(status: &str, reason: &str) -> serde_json::Value {
     })
 }
 
-fn eigen_path_dispersion_capabilities(production_shift_invert: bool) -> serde_json::Value {
+fn eigen_path_dispersion_capabilities(
+    production_shift_invert: bool,
+    production_gpu_k0_kittel: bool,
+) -> serde_json::Value {
     let reference_reason =
         "reference/MVP FEM modal k-path dispersion emits spectrum, branches, dispersion.csv, and mode-field artifacts on the CPU reference lane";
     let production_cpu_reason = if production_shift_invert {
         "managed native CPU selected-spectrum no-demag Full2x2 Floquet k-path dispersion is executable for the labelled Bloch/Floquet tangent payload slice; dynamic demag-k, broader sparse/matrix-free validation, and production GPU remain gated"
     } else {
         "native CPU selected-spectrum modal k-path is not the resolved lane for this artifact; production evidence must come from the managed selected-spectrum gate"
+    };
+    let production_gpu_reason = if production_gpu_k0_kittel {
+        "managed native GPU K0 no-demag macrospin/Kittel modal slice is executable through cuSolverDN dense generalized solve; nonzero-k Floquet, demag-k, and broad sparse/matrix-free GPU modal eigensolve remain gated"
+    } else {
+        "native modal GPU dispersion is unavailable until a real modal GPU eigensolver and matching Floquet operator exist; driven-response GPU Floquet smoke must not be reused as modal dispersion"
     };
     serde_json::json!({
         "reference_cpu": eigen_path_capability("reference_executable", reference_reason),
@@ -4002,8 +4367,8 @@ fn eigen_path_dispersion_capabilities(production_shift_invert: bool) -> serde_js
             "managed production CPU selected-spectrum adapter is validated for gamma-equivalent k-path samples; this is a provenance bridge and not nonzero-k Bloch/Floquet dispersion",
         ),
         "production_gpu": eigen_path_capability(
-            "unsupported",
-            "native modal GPU dispersion is unavailable until a real modal GPU eigensolver and matching Floquet operator exist; driven-response GPU Floquet smoke must not be reused as modal dispersion",
+            if production_gpu_k0_kittel { "partial_production_executable" } else { "unsupported" },
+            production_gpu_reason,
         ),
         "k_path": eigen_path_capability("reference_executable", "runner FEM eigen path emits dispersion.csv"),
         "branch_tracking": eigen_path_capability("reference_executable", "runner FEM eigen path emits branches.v2 artifacts"),
@@ -5450,6 +5815,7 @@ mod tests {
             air_box_config: None,
             mode_tracking: None,
             dispersion_validation: None,
+            k0_kittel_validation: None,
         }
     }
 
@@ -6468,6 +6834,70 @@ mod tests {
     }
 
     #[test]
+    fn forced_gpu_k0_kittel_path_reaches_single_k_gpu_solver() {
+        let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Path {
+            points: vec![
+                fullmag_ir::KPointIR {
+                    label: Some("H20mT".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+                fullmag_ir::KPointIR {
+                    label: Some("H100mT".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+            ],
+            samples_per_segment: vec![2],
+            closed: false,
+        }));
+        plan.count = 1;
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.operator.include_demag = false;
+        plan.enable_demag = false;
+        plan.damping_policy = fullmag_ir::EigenDampingPolicyIR::Ignore;
+        plan.k0_kittel_validation = Some(fullmag_ir::FemEigenK0KittelValidationIR {
+            kind: "k0_kittel_field_sweep".to_string(),
+            case_id: None,
+            demag_kind: None,
+            model: "macrospin_larmor".to_string(),
+            field_units: "A_per_m".to_string(),
+            relative_tolerance: 0.05,
+            material: fullmag_ir::FemEigenK0KittelValidationMaterialIR {
+                effective_magnetisation: None,
+            },
+            samples: vec![
+                fullmag_ir::FemEigenK0KittelValidationSampleIR {
+                    sample_index: 0,
+                    bias_field: [20e-3 / fullmag_engine::MU0, 0.0, 0.0],
+                },
+                fullmag_ir::FemEigenK0KittelValidationSampleIR {
+                    sample_index: 1,
+                    bias_field: [50e-3 / fullmag_engine::MU0, 0.0, 0.0],
+                },
+                fullmag_ir::FemEigenK0KittelValidationSampleIR {
+                    sample_index: 2,
+                    bias_field: [100e-3 / fullmag_engine::MU0, 0.0, 0.0],
+                },
+            ],
+        });
+
+        let result = execute_fem_eigen(
+            FemEngine::NativeGpu,
+            &plan,
+            &[OutputIR::DispersionCurve {
+                name: "dispersion".to_string(),
+            }],
+        );
+
+        if let Err(err) = result {
+            assert!(
+                !err.message.contains("KSamplingIR::Path"),
+                "K0 Kittel GPU path must reach the single-k GPU solver, got: {}",
+                err.message
+            );
+        }
+    }
+
+    #[test]
     fn k_path_public_mode_indices_follow_requested_dispersion_outputs() {
         let no_dispersion = vec![OutputIR::EigenSpectrum {
             quantity: "eigenfrequency".to_string(),
@@ -6630,6 +7060,7 @@ mod tests {
                     lifted_imag: None,
                     amplitude: None,
                     phase: None,
+                    node_mass_weights: Some(vec![2.0, 3.0]),
                 }],
                 relaxation_steps: 0,
                 solver_model: EigenSolverModel::ProductionCpuShiftInvert,
@@ -6640,7 +7071,9 @@ mod tests {
             notes: vec!["production k-path".to_string()],
             include_demag: plan.operator.include_demag,
             dispersion_validation: None,
+            k0_kittel_validation: None,
             dispersion_analytic_reference: None,
+            k0_kittel_periodic_airbox_demag: None,
         };
 
         let diagnostics = eigen_path_solver_diagnostics(
@@ -6680,6 +7113,10 @@ mod tests {
         );
         assert_eq!(production_mode["phasor_convention"], "exp_i_omega_t");
         assert_eq!(production_mode["eigenvalue_mapping"], "lambda_eq_i_omega");
+        assert_eq!(
+            production_mode["node_mass_weights"],
+            serde_json::json!([2.0, 3.0])
+        );
 
         let manifest = build_eigen_path_frequency_domain_manifest(
             FemEngine::CpuNative,
@@ -6730,6 +7167,458 @@ mod tests {
     }
 
     #[test]
+    fn eigen_path_node_mass_weights_from_json_requires_positive_finite_array() {
+        let weights = eigen_path_node_mass_weights_from_json(&serde_json::json!([1.0, 2.5, 4.0]))
+            .expect("finite positive weights should parse");
+
+        assert_eq!(weights, vec![1.0, 2.5, 4.0]);
+        assert!(eigen_path_node_mass_weights_from_json(&serde_json::json!([1.0, 0.0])).is_none());
+        assert!(eigen_path_node_mass_weights_from_json(&serde_json::json!([1.0, "bad"])).is_none());
+    }
+
+    #[test]
+    fn k_path_manifest_and_auxiliary_artifacts_carry_k0_kittel_validation() {
+        let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Path {
+            points: vec![
+                fullmag_ir::KPointIR {
+                    label: Some("G".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+                fullmag_ir::KPointIR {
+                    label: Some("G2".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+            ],
+            samples_per_segment: vec![2],
+            closed: false,
+        }));
+        plan.count = 1;
+        plan.operator.include_demag = false;
+
+        let fields_a_per_m = [40_000.0, 80_000.0, 120_000.0];
+        let mut samples = Vec::new();
+        let mut branch_points = Vec::new();
+        for (sample_index, field_a_per_m) in fields_a_per_m.iter().copied().enumerate() {
+            let frequency_hz = 2.211e5 * field_a_per_m / std::f64::consts::TAU;
+            samples.push(crate::eigen::SingleKSolveResult {
+                sample: crate::eigen::KSampleDescriptor {
+                    sample_index,
+                    label: Some(format!("H{sample_index}")),
+                    segment_index: Some(0),
+                    path_s: sample_index as f64,
+                    t_in_segment: sample_index as f64 / (fields_a_per_m.len() - 1) as f64,
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+                modes: vec![crate::eigen::SingleKModeResult {
+                    raw_mode_index: 0,
+                    branch_id: Some(0),
+                    frequency_real_hz: frequency_hz,
+                    frequency_imag_hz: 0.0,
+                    angular_frequency_rad_per_s: std::f64::consts::TAU * frequency_hz,
+                    eigenvalue_real: 0.0,
+                    eigenvalue_imag: std::f64::consts::TAU * frequency_hz,
+                    norm: 1.0,
+                    mass_norm: Some(1.0),
+                    max_amplitude: 1.0,
+                    residual_norm: Some(1.0e-9),
+                    residual_linf: Some(1.0e-10),
+                    tangent_leakage_mean_abs: Some(0.0),
+                    tangent_leakage_max_abs: Some(0.0),
+                    dominant_polarization: "linear".to_string(),
+                    reduced_vector: None,
+                    lifted_real: None,
+                    lifted_imag: None,
+                    amplitude: None,
+                    phase: None,
+                    node_mass_weights: None,
+                }],
+                relaxation_steps: 0,
+                solver_model: EigenSolverModel::ProductionCpuShiftInvert,
+                solver_notes: vec!["production sample".to_string()],
+            });
+            branch_points.push(crate::eigen::TrackedBranchPoint {
+                sample_index,
+                raw_mode_index: 0,
+                frequency_real_hz: frequency_hz,
+                frequency_imag_hz: 0.0,
+                tracking_confidence: 1.0,
+                overlap_prev: (sample_index > 0).then_some(1.0),
+            });
+        }
+
+        let path_result = crate::eigen::PathSolveResult {
+            samples,
+            branches: vec![crate::eigen::TrackedBranch {
+                branch_id: 0,
+                label: Some("k0_kittel_uniform_branch".to_string()),
+                points: branch_points,
+            }],
+            solver_model: EigenSolverModel::ProductionCpuShiftInvert,
+            notes: vec!["k0 Kittel field sweep".to_string()],
+            include_demag: false,
+            dispersion_validation: None,
+            k0_kittel_validation: Some(fullmag_ir::FemEigenK0KittelValidationIR {
+                kind: "k0_kittel_field_sweep".to_string(),
+                case_id: None,
+                demag_kind: None,
+                model: "macrospin_larmor".to_string(),
+                field_units: "A_per_m".to_string(),
+                relative_tolerance: 0.05,
+                material: fullmag_ir::FemEigenK0KittelValidationMaterialIR {
+                    effective_magnetisation: None,
+                },
+                samples: fields_a_per_m
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .map(|(sample_index, field_a_per_m)| {
+                        fullmag_ir::FemEigenK0KittelValidationSampleIR {
+                            sample_index: sample_index as u32,
+                            bias_field: [field_a_per_m, 0.0, 0.0],
+                        }
+                    })
+                    .collect(),
+            }),
+            dispersion_analytic_reference: None,
+            k0_kittel_periodic_airbox_demag: None,
+        };
+
+        let manifest = build_eigen_path_frequency_domain_manifest(
+            FemEngine::CpuNative,
+            &path_result,
+            &[],
+            &plan,
+        );
+        assert_eq!(
+            manifest["validation"]["k0_kittel_validation"]["kind"],
+            "k0_kittel_field_sweep"
+        );
+
+        let mut auxiliary_artifacts = Vec::new();
+        append_eigen_path_k0_kittel_validation_artifacts(&mut auxiliary_artifacts, &path_result)
+            .expect("k0 Kittel validation artifacts should be buildable");
+        assert!(auxiliary_artifacts
+            .iter()
+            .any(|artifact| artifact.relative_path == "validation/kittel_k0_pbc/summary.v1.json"));
+        assert!(auxiliary_artifacts
+            .iter()
+            .any(|artifact| artifact.relative_path == "validation/kittel_k0_pbc/points.v1.csv"));
+    }
+
+    #[test]
+    fn k_path_k0_kittel_sample_external_field_uses_declared_bias_field() {
+        let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Path {
+            points: vec![
+                fullmag_ir::KPointIR {
+                    label: Some("G".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+                fullmag_ir::KPointIR {
+                    label: Some("G2".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+            ],
+            samples_per_segment: vec![2],
+            closed: false,
+        }));
+        plan.external_field = Some([1.0, 2.0, 3.0]);
+        plan.k0_kittel_validation = Some(fullmag_ir::FemEigenK0KittelValidationIR {
+            kind: "k0_kittel_field_sweep".to_string(),
+            case_id: None,
+            demag_kind: None,
+            model: "macrospin_larmor".to_string(),
+            field_units: "A_per_m".to_string(),
+            relative_tolerance: 0.05,
+            material: fullmag_ir::FemEigenK0KittelValidationMaterialIR {
+                effective_magnetisation: None,
+            },
+            samples: vec![
+                fullmag_ir::FemEigenK0KittelValidationSampleIR {
+                    sample_index: 0,
+                    bias_field: [40_000.0, 0.0, 0.0],
+                },
+                fullmag_ir::FemEigenK0KittelValidationSampleIR {
+                    sample_index: 1,
+                    bias_field: [80_000.0, 0.0, 0.0],
+                },
+            ],
+        });
+
+        let declared_sample = crate::eigen::KSampleDescriptor {
+            sample_index: 1,
+            label: Some("H1".to_string()),
+            segment_index: Some(0),
+            path_s: 1.0,
+            t_in_segment: 0.5,
+            k_vector: [0.0, 0.0, 0.0],
+        };
+        assert_eq!(
+            eigen_path_k0_kittel_sample_external_field(&plan, &declared_sample),
+            Some([80_000.0, 0.0, 0.0])
+        );
+
+        let ordinary_sample = crate::eigen::KSampleDescriptor {
+            sample_index: 3,
+            label: Some("outside-validation".to_string()),
+            segment_index: Some(0),
+            path_s: 3.0,
+            t_in_segment: 1.0,
+            k_vector: [0.0, 0.0, 0.0],
+        };
+        assert_eq!(
+            eigen_path_k0_kittel_sample_external_field(&plan, &ordinary_sample),
+            None
+        );
+    }
+
+    #[test]
+    fn k_path_periodic_airbox_k0_metrics_require_real_native_solver_artifact() {
+        let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Path {
+            points: vec![fullmag_ir::KPointIR {
+                label: Some("H20mT".to_string()),
+                k_vector: [0.0, 0.0, 0.0],
+            }],
+            samples_per_segment: Vec::new(),
+            closed: false,
+        }));
+        plan.hmax = 5.0e-9;
+        plan.mesh.nodes = vec![
+            [0.0, 0.0, 0.0],
+            [10.0e-9, 0.0, 0.0],
+            [0.0, 10.0e-9, 0.0],
+            [0.0, 0.0, 10.0e-9],
+            [0.0, 0.0, 20.0e-9],
+            [10.0e-9, 0.0, 20.0e-9],
+            [0.0, 10.0e-9, 20.0e-9],
+            [0.0, 0.0, 30.0e-9],
+        ];
+        plan.mesh.elements = vec![[0, 1, 2, 3], [4, 5, 6, 7]];
+        plan.mesh.element_markers = vec![1, 0];
+        plan.mesh.periodic_node_pairs = vec![
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "x".to_string(),
+                node_a: 0,
+                node_b: 1,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "x".to_string(),
+                node_a: 4,
+                node_b: 5,
+            },
+        ];
+        plan.air_box_config = Some(fullmag_ir::AirBoxConfigIR {
+            factor: 2.0,
+            grading: 1.2,
+            boundary_marker: 99,
+            bc_kind: Some("dirichlet".to_string()),
+            robin_beta_mode: None,
+            robin_beta_factor: None,
+            shape: Some("bbox".to_string()),
+            factor_source: Some("test".to_string()),
+            boundary_marker_source: Some("test".to_string()),
+        });
+        plan.k0_kittel_validation = Some(fullmag_ir::FemEigenK0KittelValidationIR {
+            kind: "k0_kittel_field_sweep".to_string(),
+            case_id: Some("K0-3".to_string()),
+            demag_kind: Some("periodic_airbox_k0".to_string()),
+            model: "thin_film_in_plane".to_string(),
+            field_units: "A_per_m".to_string(),
+            relative_tolerance: 0.05,
+            material: fullmag_ir::FemEigenK0KittelValidationMaterialIR {
+                effective_magnetisation: Some(800_000.0),
+            },
+            samples: vec![fullmag_ir::FemEigenK0KittelValidationSampleIR {
+                sample_index: 0,
+                bias_field: [20.0e-3 / crate::MU0, 0.0, 0.0],
+            }],
+        });
+        let artifacts = vec![AuxiliaryArtifact {
+            relative_path: "eigen/diagnostics/solver.v1.json".to_string(),
+            bytes: serde_json::to_vec(&serde_json::json!({
+                "schema_version": "frequency_domain_modal_result.v1",
+                "study_product": "modal_eigen",
+                "solver_adapter": "k0_poisson_airbox_cpu_full_coupled_slepc",
+                "demag_kind": "periodic_airbox_k0",
+                "phi_dof_count": 8,
+                "augmented_phi_dof_count": 9,
+                "poisson_constraint_relative_residual": 1.0e-12,
+                "relative_reference_frequency_error": 2.0e-3,
+            }))
+            .expect("diagnostics should serialize"),
+        }];
+
+        let metrics =
+            eigen_path_periodic_airbox_k0_metrics_from_single_k_artifacts(&plan, &artifacts)
+                .expect("real PA-E2 diagnostics should parse")
+                .expect("periodic-airbox metrics should be present");
+
+        assert_eq!(metrics.phi_dof_count, 8);
+        assert_eq!(metrics.augmented_phi_dof_count, 9);
+        assert_eq!(metrics.magnetic_pair_count, 1);
+        assert_eq!(metrics.airbox_pair_count, 1);
+        assert_eq!(metrics.mesh_resolution_m, 5.0e-9);
+        assert_eq!(metrics.effective_magnetisation_a_per_m, 800_000.0);
+        assert_eq!(metrics.poisson_constraint_relative_residual, 1.0e-12);
+        assert_eq!(metrics.relative_kittel_frequency_error, 2.0e-3);
+    }
+
+    #[test]
+    fn k0_kittel_synthetic_demag_factor_single_k_matches_thin_film_formula() {
+        let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Path {
+            points: vec![
+                fullmag_ir::KPointIR {
+                    label: Some("G".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+                fullmag_ir::KPointIR {
+                    label: Some("G2".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+            ],
+            samples_per_segment: vec![2],
+            closed: false,
+        }));
+        let field_a_per_m = 40_000.0;
+        let effective_magnetisation = 800_000.0;
+        plan.enable_demag = true;
+        plan.operator.include_demag = true;
+        plan.spin_wave_bc =
+            fullmag_ir::SpinWaveBoundaryConditionIR::Config(fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,
+                boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            });
+        plan.k0_kittel_validation = Some(fullmag_ir::FemEigenK0KittelValidationIR {
+            kind: "k0_kittel_field_sweep".to_string(),
+            case_id: Some("K0-3".to_string()),
+            demag_kind: Some("synthetic_demag_factor".to_string()),
+            model: "thin_film_in_plane".to_string(),
+            field_units: "A_per_m".to_string(),
+            relative_tolerance: 0.02,
+            material: fullmag_ir::FemEigenK0KittelValidationMaterialIR {
+                effective_magnetisation: Some(effective_magnetisation),
+            },
+            samples: vec![
+                fullmag_ir::FemEigenK0KittelValidationSampleIR {
+                    sample_index: 0,
+                    bias_field: [field_a_per_m, 0.0, 0.0],
+                },
+                fullmag_ir::FemEigenK0KittelValidationSampleIR {
+                    sample_index: 1,
+                    bias_field: [80_000.0, 0.0, 0.0],
+                },
+                fullmag_ir::FemEigenK0KittelValidationSampleIR {
+                    sample_index: 2,
+                    bias_field: [120_000.0, 0.0, 0.0],
+                },
+            ],
+        });
+        let sample = crate::eigen::KSampleDescriptor {
+            sample_index: 0,
+            label: Some("H0".to_string()),
+            segment_index: Some(0),
+            path_s: 0.0,
+            t_in_segment: 0.0,
+            k_vector: [0.0, 0.0, 0.0],
+        };
+
+        assert!(k0_kittel_synthetic_demag_factor_enabled(&plan));
+        let solved = solve_k0_kittel_synthetic_demag_factor_single_k(&plan, &sample)
+            .expect("K0-3a synthetic demag factor should solve");
+        let expected = plan.gyromagnetic_ratio
+            * (field_a_per_m * (field_a_per_m + effective_magnetisation)).sqrt()
+            / std::f64::consts::TAU;
+
+        assert_eq!(
+            solved.solver_model,
+            EigenSolverModel::ReferenceK0KittelSyntheticDemagFactor
+        );
+        assert!((solved.modes[0].frequency_real_hz - expected).abs() <= 1.0e-9);
+        assert_eq!(
+            solved.modes[0].dominant_polarization,
+            "synthetic_demag_factor"
+        );
+    }
+
+    #[test]
+    fn k0_kittel_synthetic_demag_factor_path_bypasses_floquet_dynamic_demag_gate() {
+        let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Path {
+            points: vec![
+                fullmag_ir::KPointIR {
+                    label: Some("H40kApm".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+                fullmag_ir::KPointIR {
+                    label: Some("H120kApm".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+            ],
+            samples_per_segment: vec![2],
+            closed: false,
+        }));
+        plan.count = 1;
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.operator.include_demag = true;
+        plan.enable_demag = true;
+        plan.damping_policy = fullmag_ir::EigenDampingPolicyIR::Ignore;
+        plan.target = fullmag_ir::EigenTargetIR::FrequencyWindow {
+            frequency_min_hz: 1.0e8,
+            frequency_max_hz: 25.0e9,
+        };
+        plan.spin_wave_bc =
+            fullmag_ir::SpinWaveBoundaryConditionIR::Config(fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,
+                boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            });
+        plan.k0_kittel_validation = Some(fullmag_ir::FemEigenK0KittelValidationIR {
+            kind: "k0_kittel_field_sweep".to_string(),
+            case_id: Some("K0-3".to_string()),
+            demag_kind: Some("synthetic_demag_factor".to_string()),
+            model: "thin_film_in_plane".to_string(),
+            field_units: "A_per_m".to_string(),
+            relative_tolerance: 0.02,
+            material: fullmag_ir::FemEigenK0KittelValidationMaterialIR {
+                effective_magnetisation: Some(800_000.0),
+            },
+            samples: vec![
+                fullmag_ir::FemEigenK0KittelValidationSampleIR {
+                    sample_index: 0,
+                    bias_field: [40_000.0, 0.0, 0.0],
+                },
+                fullmag_ir::FemEigenK0KittelValidationSampleIR {
+                    sample_index: 1,
+                    bias_field: [80_000.0, 0.0, 0.0],
+                },
+                fullmag_ir::FemEigenK0KittelValidationSampleIR {
+                    sample_index: 2,
+                    bias_field: [120_000.0, 0.0, 0.0],
+                },
+            ],
+        });
+
+        let run = execute_fem_eigen(
+            FemEngine::CpuNative,
+            &plan,
+            &[OutputIR::EigenSpectrum {
+                quantity: "frequency_hz".to_string(),
+            }],
+        )
+        .expect("K0-3a synthetic demag factor path should bypass Floquet dynamic-demag guard");
+
+        assert!(run
+            .auxiliary_artifacts
+            .iter()
+            .any(|artifact| artifact.relative_path == "eigen/spectrum.v2.json"));
+    }
+
+    #[test]
     fn k_path_solver_diagnostics_name_nonzero_k_production_cpu_rejection() {
         let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Path {
             points: vec![
@@ -6768,7 +7657,9 @@ mod tests {
             notes: vec!["cpu_full_2x2_phase_reduced_floquet".to_string()],
             include_demag: plan.operator.include_demag,
             dispersion_validation: None,
+            k0_kittel_validation: None,
             dispersion_analytic_reference: None,
+            k0_kittel_periodic_airbox_demag: None,
         };
 
         let diagnostics = eigen_path_solver_diagnostics(

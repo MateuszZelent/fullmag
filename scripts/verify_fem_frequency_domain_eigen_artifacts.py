@@ -31,6 +31,7 @@ ALLOWED_MODAL_ALGEBRAIC_FORMS = {
     "reference_effective_field_generalized",
     "linearized_llg_generalized",
     "gyrotropic_generalized",
+    "k0_macrospin_field_generalized_to_gyrotropic_modal",
 }
 ALLOWED_TRACKING_SCORE_SUMMARY_SOURCES = {
     "seed_only",
@@ -52,6 +53,15 @@ PRODUCTION_MODAL_K_PATH_SUMMARY_TRACKING_SOURCES = {
 }
 PRODUCTION_MODAL_K_PATH_TRACKING_METHODS = {
     "overlap_hungarian",
+}
+GPU_MODAL_KITTEL_SOLVER_ALGORITHMS = {
+    "gpu_device_krylov_modal_eigen",
+    "gpu_dense_k0_macrospin_modal_eigen",
+}
+GPU_MODAL_KITTEL_CAPABILITY_STATUSES = {
+    "partial_production_executable",
+    "production_executable",
+    "validated",
 }
 
 
@@ -712,6 +722,27 @@ def require_lambda_eq_i_omega_mapping(
     )
 
 
+def require_numeric_field_close(
+    actual_payload: dict,
+    expected_payload: dict,
+    field_name: str,
+    name: str,
+    *,
+    absolute_tolerance: float = 1.0e-6,
+) -> None:
+    actual = require_finite_number(actual_payload.get(field_name), name)
+    expected = require_finite_number(
+        expected_payload.get(field_name),
+        name.replace(" vs ", " expected vs ", 1),
+    )
+    require_close(
+        actual,
+        expected,
+        name,
+        absolute_tolerance=absolute_tolerance,
+    )
+
+
 def require_mode_metadata_matches_summary(
     mode: dict,
     metadata: dict,
@@ -720,6 +751,13 @@ def require_mode_metadata_matches_summary(
     for field_name in [
         "phasor_convention",
         "eigenvalue_mapping",
+    ]:
+        require_equal(
+            metadata.get(field_name),
+            mode.get(field_name),
+            f"{metadata_path}.{field_name} vs mode.{field_name}",
+        )
+    for field_name in [
         "eigenvalue_real",
         "eigenvalue_imag",
         "frequency_imag_hz",
@@ -731,9 +769,10 @@ def require_mode_metadata_matches_summary(
         "gamma0_rad_s_per_A_m",
         "mu0_T_m_per_A",
     ]:
-        require_equal(
-            metadata.get(field_name),
-            mode.get(field_name),
+        require_numeric_field_close(
+            metadata,
+            mode,
+            field_name,
             f"{metadata_path}.{field_name} vs mode.{field_name}",
         )
 
@@ -746,6 +785,13 @@ def require_eigen_summary_mode_matches_spectrum(
     for field_name in [
         "phasor_convention",
         "eigenvalue_mapping",
+    ]:
+        require_equal(
+            mode.get(field_name),
+            spectrum_mode.get(field_name),
+            f"{summary_mode_path}.{field_name} vs mode.{field_name}",
+        )
+    for field_name in [
         "eigenvalue_real",
         "eigenvalue_imag",
         "frequency_real_hz",
@@ -759,9 +805,10 @@ def require_eigen_summary_mode_matches_spectrum(
         "gamma0_rad_s_per_A_m",
         "mu0_T_m_per_A",
     ]:
-        require_equal(
-            mode.get(field_name),
-            spectrum_mode.get(field_name),
+        require_numeric_field_close(
+            mode,
+            spectrum_mode,
+            field_name,
             f"{summary_mode_path}.{field_name} vs mode.{field_name}",
         )
 
@@ -1184,7 +1231,7 @@ def validate_solver_provenance(
         diagnostics.get("spectral_transform"),
         "solver_diagnostics.spectral_transform",
     )
-    if spectral_transform not in {"none", "shift_invert", "contour_integral"}:
+    if spectral_transform not in {"none", "shift_invert", "contour_integral", "dense_generalized"}:
         fail("solver_diagnostics.spectral_transform is invalid")
     if require_reference_full_2x2_floquet:
         require_equal(
@@ -1537,11 +1584,12 @@ def validate_production_modal_k_path_scope(
     requested_execution = manifest.get("requested_execution")
     if not isinstance(requested_execution, dict):
         fail("manifest.requested_execution must be an object for production modal k-path gates")
-    require_equal(
-        requested_execution.get("include_demag"),
-        False,
-        "manifest.requested_execution.include_demag",
-    )
+    if require_production_modal_k_path:
+        require_equal(
+            requested_execution.get("include_demag"),
+            False,
+            "manifest.requested_execution.include_demag",
+        )
     if requested_execution.get("include_dmi") is True:
         fail("manifest.requested_execution.include_dmi must not be true for production modal k-path gates")
     reject_terms_if_present(requested_execution, "manifest.requested_execution")
@@ -1549,11 +1597,12 @@ def validate_production_modal_k_path_scope(
     resolved_execution = manifest.get("resolved_execution")
     if not isinstance(resolved_execution, dict):
         fail("manifest.resolved_execution must be an object for production modal k-path gates")
-    require_equal(
-        resolved_execution.get("demag_realization"),
-        "none",
-        "manifest.resolved_execution.demag_realization",
-    )
+    if require_production_modal_k_path:
+        require_equal(
+            resolved_execution.get("demag_realization"),
+            "none",
+            "manifest.resolved_execution.demag_realization",
+        )
     reject_terms_if_present(resolved_execution, "manifest.resolved_execution")
 
 
@@ -1724,10 +1773,22 @@ def validate_dispersion_k_sampling_path(
                 f"sample(s), got {len(known_samples)}"
             )
         ordered_samples = sorted(known_samples.items(), key=lambda item: item[1][0])
+        segment_pairs = [
+            (control_vectors[index], control_vectors[index + 1])
+            for index in range(len(control_vectors) - 1)
+        ]
+        if closed:
+            segment_pairs.append((control_vectors[-1], control_vectors[0]))
+        degenerate_path = all(
+            vector_distance(start, end) <= 1.0e-12
+            for start, end in segment_pairs
+        )
         path_values = [
             path_s for _sample_index, (path_s, _k_vector, _label) in ordered_samples
         ]
-        if any(next_path <= path for path, next_path in zip(path_values, path_values[1:])):
+        if not degenerate_path and any(
+            next_path <= path for path, next_path in zip(path_values, path_values[1:])
+        ):
             fail(f"{source_name} dispersion path_s values must be strictly increasing")
 
         require_control_sample_match = (
@@ -1776,16 +1837,7 @@ def validate_dispersion_k_sampling_path(
         )
         if not require_endpoint_match:
             continue
-        segment_pairs = [
-            (control_vectors[index], control_vectors[index + 1])
-            for index in range(len(control_vectors) - 1)
-        ]
-        if closed:
-            segment_pairs.append((control_vectors[-1], control_vectors[0]))
-        if all(
-            vector_distance(start, end) <= 1.0e-12
-            for start, end in segment_pairs
-        ):
+        if degenerate_path:
             continue
         total_path_s = sum(vector_distance(start, end) for start, end in segment_pairs)
         final_path_s, final_k_vector, _final_label = ordered_samples[-1][1]
@@ -2017,6 +2069,25 @@ def require_vector3(value: object, name: str) -> tuple[float, float, float]:
     )
 
 
+def require_csv_finite_number(row: dict[str, str], column: str, row_name: str) -> float:
+    try:
+        return require_finite_number(float(row[column]), f"{row_name}.{column}")
+    except KeyError:
+        fail(f"{row_name} missing column {column!r}")
+    except ValueError:
+        fail(f"{row_name}.{column} must be a finite number")
+
+
+def require_csv_non_negative_int(row: dict[str, str], column: str, row_name: str) -> int:
+    try:
+        value = int(row[column])
+    except KeyError:
+        fail(f"{row_name} missing column {column!r}")
+    except ValueError:
+        fail(f"{row_name}.{column} must be a non-negative integer")
+    return require_non_negative_int(value, f"{row_name}.{column}")
+
+
 def validate_exchange_only_analytic_dispersion(
     root: Path,
     known_modes: dict[tuple[int, int], tuple[float, float, float, float]],
@@ -2112,6 +2183,567 @@ def validate_exchange_only_analytic_dispersion(
         fail(
             "exchange-only analytic dispersion max relative error is too large "
             f"for branch {best_branch_id}: got {best_branch_error:.6g}, expected <= 0.25"
+        )
+
+
+def validate_k0_kittel_summary_artifacts(
+    root: Path,
+    tolerance: float,
+    *,
+    require_demag: bool = False,
+) -> None:
+    summary_path = root / "validation/kittel_k0_pbc/summary.v1.json"
+    if not summary_path.exists():
+        return
+    points_path = root / "validation/kittel_k0_pbc/points.v1.csv"
+    require_file(points_path)
+    summary = load_json(summary_path)
+    summary_name = "validation/kittel_k0_pbc/summary.v1.json"
+    require_equal(
+        summary.get("schema_version"),
+        "frequency_domain_kittel_k0_validation.v1",
+        f"{summary_name}.schema_version",
+    )
+    require_equal(summary.get("status"), "passed", f"{summary_name}.status")
+    if require_demag:
+        require_equal(summary.get("case_id"), "K0-3", f"{summary_name}.case_id")
+        require_equal(
+            summary.get("model"),
+            "thin_film_in_plane",
+            f"{summary_name}.model",
+        )
+        demag_kind = require_non_empty_string(summary.get("demag_kind"), f"{summary_name}.demag_kind")
+        if demag_kind not in {"synthetic_demag_factor", "periodic_airbox_k0"}:
+            fail(f"{summary_name}.demag_kind is invalid for K0-3 demag validation")
+        demag = summary.get("demag")
+        if not isinstance(demag, dict):
+            fail(f"{summary_name}.demag must be an object for K0-3 demag validation")
+        require_equal(demag.get("kind"), demag_kind, f"{summary_name}.demag.kind")
+        effective_magnetisation = require_finite_number(
+            demag.get("effective_magnetisation_A_per_m"),
+            f"{summary_name}.demag.effective_magnetisation_A_per_m",
+        )
+        if effective_magnetisation <= 0.0:
+            fail(f"{summary_name}.demag.effective_magnetisation_A_per_m must be positive")
+        if demag_kind == "periodic_airbox_k0":
+            require_equal(
+                demag.get("gauge_policy"),
+                "mean_zero_augmented",
+                f"{summary_name}.demag.gauge_policy",
+            )
+            phi_dof_count = require_non_negative_int(
+                demag.get("phi_dof_count"),
+                f"{summary_name}.demag.phi_dof_count",
+            )
+            if phi_dof_count <= 0:
+                fail(f"{summary_name}.demag.phi_dof_count must be positive")
+            augmented_phi_dof_count = require_non_negative_int(
+                demag.get("augmented_phi_dof_count"),
+                f"{summary_name}.demag.augmented_phi_dof_count",
+            )
+            if augmented_phi_dof_count <= phi_dof_count:
+                fail(
+                    f"{summary_name}.demag.augmented_phi_dof_count must exceed "
+                    f"{summary_name}.demag.phi_dof_count for mean-zero gauge"
+                )
+            poisson_residual = require_finite_number(
+                demag.get("poisson_constraint_relative_residual"),
+                f"{summary_name}.demag.poisson_constraint_relative_residual",
+            )
+            if poisson_residual < 0.0 or poisson_residual > 1.0e-8:
+                fail(
+                    f"{summary_name}.demag.poisson_constraint_relative_residual "
+                    "must be in [0, 1e-8]"
+                )
+            magnetic_pair_count = require_non_negative_int(
+                demag.get("magnetic_pair_count"),
+                f"{summary_name}.demag.magnetic_pair_count",
+            )
+            airbox_pair_count = require_non_negative_int(
+                demag.get("airbox_pair_count"),
+                f"{summary_name}.demag.airbox_pair_count",
+            )
+            if magnetic_pair_count <= 0:
+                fail(f"{summary_name}.demag.magnetic_pair_count must be positive")
+            if airbox_pair_count <= 0:
+                fail(f"{summary_name}.demag.airbox_pair_count must be positive")
+            require_equal(
+                demag.get("production_periodic_airbox_claim"),
+                True,
+                f"{summary_name}.demag.production_periodic_airbox_claim",
+            )
+            validate_k0_kittel_demag_convergence_table(root, tolerance)
+        else:
+            require_equal(
+                demag.get("production_periodic_airbox_claim"),
+                False,
+                f"{summary_name}.demag.production_periodic_airbox_claim",
+            )
+    boundary_condition = require_non_empty_string(
+        summary.get("boundary_condition"),
+        f"{summary_name}.boundary_condition",
+    )
+    if boundary_condition not in {"periodic_k0", "floquet_k0", "gamma_k0"}:
+        fail(f"{summary_name}.boundary_condition is invalid")
+    k_vector = require_vector3(summary.get("k_vector_rad_per_m"), f"{summary_name}.k_vector_rad_per_m")
+    if vector_magnitude(k_vector) > 1.0e-9:
+        fail(f"{summary_name}.k_vector_rad_per_m must be zero for k0 Kittel validation")
+    sweep_point_count = require_non_negative_int(
+        summary.get("sweep_point_count"),
+        f"{summary_name}.sweep_point_count",
+    )
+    if sweep_point_count < 3:
+        fail(f"{summary_name}.sweep_point_count must be at least 3")
+    max_relative_error = require_finite_number(
+        summary.get("max_relative_frequency_error"),
+        f"{summary_name}.max_relative_frequency_error",
+    )
+    median_relative_error = require_finite_number(
+        summary.get("median_relative_frequency_error"),
+        f"{summary_name}.median_relative_frequency_error",
+    )
+    if max_relative_error < 0.0:
+        fail(f"{summary_name}.max_relative_frequency_error must be non-negative")
+    if median_relative_error < 0.0:
+        fail(f"{summary_name}.median_relative_frequency_error must be non-negative")
+    if max_relative_error > tolerance:
+        fail(
+            f"{summary_name}.max_relative_frequency_error is too large: "
+            f"got {max_relative_error:.6g}, expected <= {tolerance:.6g}"
+        )
+    if median_relative_error > max_relative_error:
+        fail(
+            f"{summary_name}.median_relative_frequency_error must be <= "
+            f"{summary_name}.max_relative_frequency_error"
+        )
+
+    reader = csv.DictReader(points_path.read_text().splitlines())
+    required_columns = {
+        "field_index",
+        "H0_A_per_m",
+        "mu0_H0_T",
+        "expected_frequency_hz",
+        "eigen_frequency_hz",
+        "relative_frequency_error",
+        "selected_mode_index",
+        "eigenvalue_real",
+        "eigenvalue_imag",
+        "mode_residual_relative",
+        "uniformity_score",
+        "branch_overlap_previous",
+        "max_m0_dot_delta_m_abs",
+        "max_periodic_seam_mismatch",
+    }
+    missing = required_columns.difference(reader.fieldnames or [])
+    if missing:
+        fail(f"validation/kittel_k0_pbc/points.v1.csv missing columns: {sorted(missing)!r}")
+    if require_demag:
+        demag_missing = {"case_id", "demag_kind"}.difference(reader.fieldnames or [])
+        if demag_missing:
+            fail(
+                "validation/kittel_k0_pbc/points.v1.csv missing K0-3 columns: "
+                f"{sorted(demag_missing)!r}"
+            )
+    rows = list(reader)
+    if len(rows) != sweep_point_count:
+        fail(
+            "validation/kittel_k0_pbc/points.v1.csv row count must match "
+            f"{summary_name}.sweep_point_count: got {len(rows)}, expected {sweep_point_count}"
+        )
+    previous_h0: float | None = None
+    previous_frequency: float | None = None
+    observed_errors: list[float] = []
+    for row_index, row in enumerate(rows):
+        row_name = f"validation/kittel_k0_pbc/points.v1.csv row {row_index}"
+        if require_demag:
+            require_equal(row.get("case_id"), "K0-3", f"{row_name}.case_id")
+            demag_kind = require_non_empty_string(row.get("demag_kind"), f"{row_name}.demag_kind")
+            if demag_kind not in {"synthetic_demag_factor", "periodic_airbox_k0"}:
+                fail(f"{row_name}.demag_kind is invalid for K0-3 demag validation")
+        field_index = require_csv_non_negative_int(row, "field_index", row_name)
+        if field_index != row_index:
+            fail(f"{row_name}.field_index: got {field_index}, expected {row_index}")
+        require_csv_non_negative_int(row, "selected_mode_index", row_name)
+        h0 = require_csv_finite_number(row, "H0_A_per_m", row_name)
+        mu0_h0 = require_csv_finite_number(row, "mu0_H0_T", row_name)
+        expected_hz = require_csv_finite_number(row, "expected_frequency_hz", row_name)
+        eigen_hz = require_csv_finite_number(row, "eigen_frequency_hz", row_name)
+        relative_error = require_csv_finite_number(row, "relative_frequency_error", row_name)
+        require_csv_finite_number(row, "eigenvalue_real", row_name)
+        require_csv_finite_number(row, "eigenvalue_imag", row_name)
+        residual = require_csv_finite_number(row, "mode_residual_relative", row_name)
+        uniformity = require_csv_finite_number(row, "uniformity_score", row_name)
+        overlap = require_csv_finite_number(row, "branch_overlap_previous", row_name)
+        tangent_leakage = require_csv_finite_number(row, "max_m0_dot_delta_m_abs", row_name)
+        seam_mismatch = require_csv_finite_number(row, "max_periodic_seam_mismatch", row_name)
+        if h0 <= 0.0:
+            fail(f"{row_name}.H0_A_per_m must be positive")
+        if mu0_h0 <= 0.0:
+            fail(f"{row_name}.mu0_H0_T must be positive")
+        if expected_hz < 0.0 or eigen_hz < 0.0:
+            fail(f"{row_name} frequencies must be non-negative")
+        if relative_error < 0.0 or relative_error > tolerance:
+            fail(f"{row_name}.relative_frequency_error must be in [0, tolerance]")
+        if residual < 0.0:
+            fail(f"{row_name}.mode_residual_relative must be non-negative")
+        if not 0.0 <= uniformity <= 1.0:
+            fail(f"{row_name}.uniformity_score must be in [0, 1]")
+        if not 0.0 <= overlap <= 1.0:
+            fail(f"{row_name}.branch_overlap_previous must be in [0, 1]")
+        if tangent_leakage < 0.0:
+            fail(f"{row_name}.max_m0_dot_delta_m_abs must be non-negative")
+        if seam_mismatch < 0.0:
+            fail(f"{row_name}.max_periodic_seam_mismatch must be non-negative")
+        if previous_h0 is not None and h0 <= previous_h0:
+            fail("validation/kittel_k0_pbc/points.v1.csv H0_A_per_m must be strictly increasing")
+        if previous_frequency is not None and eigen_hz <= previous_frequency:
+            fail(
+                "validation/kittel_k0_pbc/points.v1.csv eigen_frequency_hz "
+                "must be strictly increasing"
+            )
+        previous_h0 = h0
+        previous_frequency = eigen_hz
+        observed_errors.append(relative_error)
+    observed_max_error = max(observed_errors)
+    if observed_max_error > max_relative_error:
+        fail(
+            f"{summary_name}.max_relative_frequency_error must cover points.v1.csv errors: "
+            f"got {max_relative_error:.6g}, observed {observed_max_error:.6g}"
+        )
+
+
+def validate_k0_kittel_demag_convergence_table(root: Path, tolerance: float) -> None:
+    convergence_path = root / "validation/kittel_k0_pbc/convergence.v1.csv"
+    require_file(convergence_path)
+    reader = csv.DictReader(convergence_path.read_text().splitlines())
+    required_columns = {
+        "case_id",
+        "demag_kind",
+        "mesh_resolution_m",
+        "airbox_size_m",
+        "phi_dof_count",
+        "poisson_residual_relative",
+        "relative_kittel_frequency_error",
+        "effective_magnetisation_A_per_m",
+    }
+    missing = required_columns.difference(reader.fieldnames or [])
+    if missing:
+        fail(f"validation/kittel_k0_pbc/convergence.v1.csv missing columns: {sorted(missing)!r}")
+    rows = list(reader)
+    if not rows:
+        fail("validation/kittel_k0_pbc/convergence.v1.csv must contain at least one row")
+    best_error: float | None = None
+    for row_index, row in enumerate(rows):
+        row_name = f"validation/kittel_k0_pbc/convergence.v1.csv row {row_index}"
+        require_equal(row.get("case_id"), "K0-3", f"{row_name}.case_id")
+        require_equal(row.get("demag_kind"), "periodic_airbox_k0", f"{row_name}.demag_kind")
+        mesh_resolution = require_csv_finite_number(row, "mesh_resolution_m", row_name)
+        airbox_size = require_csv_finite_number(row, "airbox_size_m", row_name)
+        phi_dof_count = require_csv_non_negative_int(row, "phi_dof_count", row_name)
+        poisson_residual = require_csv_finite_number(row, "poisson_residual_relative", row_name)
+        relative_error = require_csv_finite_number(row, "relative_kittel_frequency_error", row_name)
+        effective_magnetisation = require_csv_finite_number(
+            row,
+            "effective_magnetisation_A_per_m",
+            row_name,
+        )
+        if mesh_resolution <= 0.0:
+            fail(f"{row_name}.mesh_resolution_m must be positive")
+        if airbox_size <= 0.0:
+            fail(f"{row_name}.airbox_size_m must be positive")
+        if phi_dof_count <= 0:
+            fail(f"{row_name}.phi_dof_count must be positive")
+        if poisson_residual < 0.0 or poisson_residual > 1.0e-8:
+            fail(f"{row_name}.poisson_residual_relative must be in [0, 1e-8]")
+        if relative_error < 0.0:
+            fail(f"{row_name}.relative_kittel_frequency_error must be non-negative")
+        if effective_magnetisation <= 0.0:
+            fail(f"{row_name}.effective_magnetisation_A_per_m must be positive")
+        best_error = relative_error if best_error is None else min(best_error, relative_error)
+    if best_error is None or best_error > tolerance:
+        fail(
+            "validation/kittel_k0_pbc/convergence.v1.csv best "
+            f"relative_kittel_frequency_error is too large: got {best_error}, "
+            f"expected <= {tolerance:.6g}"
+        )
+
+
+def validate_k0_kittel_field_sweep(
+    root: Path,
+    known_modes: dict[tuple[int, int], tuple[float, float, float, float]],
+    known_samples: dict[int, tuple[float, tuple[float, float, float], str]],
+    branch_ids_by_mode: dict[tuple[int, int], int],
+    *,
+    require_demag: bool = False,
+    require_periodic_airbox_demag: bool = False,
+) -> None:
+    metadata_path = root / "metadata.json"
+    require_file(metadata_path)
+    metadata = load_json(metadata_path)
+    plan = metadata.get("execution_plan", {}).get("backend_plan")
+    if not isinstance(plan, dict):
+        fail("metadata.execution_plan.backend_plan is required for k0 Kittel field sweep")
+    validation = plan.get("k0_kittel_validation")
+    if not isinstance(validation, dict):
+        fail("metadata.execution_plan.backend_plan.k0_kittel_validation is required")
+    model = require_non_empty_string(
+        validation.get("model"),
+        "metadata.execution_plan.backend_plan.k0_kittel_validation.model",
+    )
+    if model not in {"macrospin_larmor", "thin_film_in_plane"}:
+        fail("metadata.execution_plan.backend_plan.k0_kittel_validation.model is invalid")
+    if require_demag:
+        require_equal(
+            validation.get("case_id"),
+            "K0-3",
+            "metadata.execution_plan.backend_plan.k0_kittel_validation.case_id",
+        )
+        demag_kind = require_non_empty_string(
+            validation.get("demag_kind"),
+            "metadata.execution_plan.backend_plan.k0_kittel_validation.demag_kind",
+        )
+        if demag_kind not in {"synthetic_demag_factor", "periodic_airbox_k0"}:
+            fail("metadata.execution_plan.backend_plan.k0_kittel_validation.demag_kind is invalid")
+        if require_periodic_airbox_demag:
+            require_equal(
+                demag_kind,
+                "periodic_airbox_k0",
+                "metadata.execution_plan.backend_plan.k0_kittel_validation.demag_kind",
+            )
+        require_equal(
+            model,
+            "thin_film_in_plane",
+            "metadata.execution_plan.backend_plan.k0_kittel_validation.model",
+        )
+    require_equal(
+        validation.get("field_units"),
+        "A_per_m",
+        "metadata.execution_plan.backend_plan.k0_kittel_validation.field_units",
+    )
+    gamma0 = require_finite_number(
+        plan.get("gyromagnetic_ratio"),
+        "metadata.execution_plan.backend_plan.gyromagnetic_ratio",
+    )
+    if gamma0 <= 0.0:
+        fail("metadata.execution_plan.backend_plan.gyromagnetic_ratio must be positive")
+    tolerance = require_finite_number(
+        validation.get("relative_tolerance", 0.05),
+        "metadata.execution_plan.backend_plan.k0_kittel_validation.relative_tolerance",
+    )
+    if tolerance <= 0.0 or tolerance > 0.25:
+        fail(
+            "metadata.execution_plan.backend_plan.k0_kittel_validation.relative_tolerance "
+            "must be in (0, 0.25]"
+        )
+    material = plan.get("material")
+    if not isinstance(material, dict):
+        fail("metadata.execution_plan.backend_plan.material must be an object")
+    effective_magnetisation = None
+    if model == "thin_film_in_plane":
+        effective_magnetisation = require_finite_number(
+            material.get("effective_magnetisation", material.get("saturation_magnetisation")),
+            "metadata.execution_plan.backend_plan.material.effective_magnetisation",
+        )
+        if effective_magnetisation <= 0.0:
+            fail("metadata.execution_plan.backend_plan.material.effective_magnetisation must be positive")
+
+    sample_specs = require_object_list(
+        validation.get("samples"),
+        "metadata.execution_plan.backend_plan.k0_kittel_validation.samples",
+    )
+    if len(sample_specs) < 3:
+        fail("k0 Kittel field sweep requires at least 3 field samples")
+    expected_by_sample: dict[int, tuple[float, float]] = {}
+    for sample_spec in sample_specs:
+        sample_index = require_non_negative_int(
+            sample_spec.get("sample_index"),
+            "k0 Kittel field sweep sample.sample_index",
+        )
+        bias_field = require_vector3(
+            sample_spec.get("bias_field"),
+            "k0 Kittel field sweep sample.bias_field",
+        )
+        field_magnitude = vector_magnitude(bias_field)
+        if field_magnitude <= 0.0:
+            fail("k0 Kittel field sweep sample.bias_field must be nonzero")
+        sample = known_samples.get(sample_index)
+        if sample is None:
+            fail(f"k0 Kittel field sweep references unknown sample {sample_index}")
+        _path_s, k_vector, _label = sample
+        if vector_magnitude(k_vector) > 1.0e-9:
+            fail("k0 Kittel field sweep requires all spectrum k-vectors to be zero")
+        if model == "macrospin_larmor":
+            expected_hz = gamma0 * field_magnitude / TWO_PI
+        else:
+            assert effective_magnetisation is not None
+            expected_hz = (
+                gamma0
+                * math.sqrt(field_magnitude * (field_magnitude + effective_magnetisation))
+                / TWO_PI
+            )
+        expected_by_sample[sample_index] = (field_magnitude, expected_hz)
+
+    modes_by_branch: dict[int, list[tuple[int, float]]] = {}
+    for mode_key, branch_id in branch_ids_by_mode.items():
+        sample_index, _raw_mode_index = mode_key
+        if sample_index not in expected_by_sample or mode_key not in known_modes:
+            continue
+        frequency_hz, _frequency_real_hz, _frequency_imag_hz, _omega = known_modes[mode_key]
+        modes_by_branch.setdefault(branch_id, []).append((sample_index, frequency_hz))
+
+    best_branch_error: float | None = None
+    best_branch_id: int | None = None
+    for branch_id, branch_modes in modes_by_branch.items():
+        covered_samples = {sample_index for sample_index, _frequency in branch_modes}
+        if set(expected_by_sample) - covered_samples:
+            continue
+        branch_errors = []
+        branch_points = sorted(
+            (
+                expected_by_sample[sample_index][0],
+                frequency_hz,
+                expected_by_sample[sample_index][1],
+            )
+            for sample_index, frequency_hz in branch_modes
+        )
+        for _field_magnitude, frequency_hz, expected_hz in branch_points:
+            branch_errors.append(abs(frequency_hz - expected_hz) / max(abs(expected_hz), 1.0))
+        for left, right in zip(branch_points, branch_points[1:]):
+            if right[1] <= left[1]:
+                fail("k0 Kittel field sweep branch frequency must increase with bias field")
+        branch_error = max(branch_errors)
+        if best_branch_error is None or branch_error < best_branch_error:
+            best_branch_error = branch_error
+            best_branch_id = branch_id
+
+    if best_branch_error is None or best_branch_id is None:
+        fail("k0 Kittel field sweep requires one branch covering all field samples")
+    if best_branch_error > tolerance:
+        fail(
+            "k0 Kittel field sweep max relative error is too large "
+            f"for branch {best_branch_id}: got {best_branch_error:.6g}, expected <= {tolerance:.6g}"
+        )
+    validate_k0_kittel_summary_artifacts(root, tolerance, require_demag=require_demag)
+
+
+def validate_gpu_modal_k0_kittel_provenance(root: Path) -> None:
+    manifest_path = root / "frequency_domain" / "manifest.v1.json"
+    require_file(manifest_path)
+    manifest = load_json(manifest_path)
+    require_equal(
+        manifest.get("study_product"),
+        "modal_eigen",
+        "manifest.study_product",
+    )
+
+    requested = manifest.get("requested_execution")
+    if not isinstance(requested, dict):
+        fail("manifest.requested_execution must be an object for GPU Kittel provenance")
+    require_equal(requested.get("backend"), "fem", "manifest.requested_execution.backend")
+    require_equal(requested.get("device"), "gpu", "manifest.requested_execution.device")
+    require_equal(requested.get("precision"), "double", "manifest.requested_execution.precision")
+    require_equal(
+        requested.get("solver_family"),
+        "modal_eigen",
+        "manifest.requested_execution.solver_family",
+    )
+    require_equal(
+        requested.get("include_demag"),
+        False,
+        "manifest.requested_execution.include_demag",
+    )
+
+    resolved = manifest.get("resolved_execution")
+    if not isinstance(resolved, dict):
+        fail("manifest.resolved_execution must be an object for GPU Kittel provenance")
+    require_equal(resolved.get("backend"), "fem", "manifest.resolved_execution.backend")
+    require_equal(resolved.get("device"), "gpu", "manifest.resolved_execution.device")
+    require_equal(resolved.get("precision"), "double", "manifest.resolved_execution.precision")
+    require_equal(
+        resolved.get("solve_kind"),
+        "modal_eigen",
+        "manifest.resolved_execution.solve_kind",
+    )
+    require_equal(
+        resolved.get("native_backend"),
+        "native_gpu",
+        "manifest.resolved_execution.native_backend",
+    )
+    require_equal(
+        resolved.get("reference_or_production"),
+        "production",
+        "manifest.resolved_execution.reference_or_production",
+    )
+    require_equal(
+        resolved.get("demag_realization"),
+        "none",
+        "manifest.resolved_execution.demag_realization",
+    )
+    solver_algorithm = require_non_empty_string(
+        resolved.get("solver_algorithm"),
+        "manifest.resolved_execution.solver_algorithm",
+    )
+    if solver_algorithm not in GPU_MODAL_KITTEL_SOLVER_ALGORITHMS:
+        fail(
+            "manifest.resolved_execution.solver_algorithm must be a real GPU modal "
+            f"Kittel solver, got {solver_algorithm!r}"
+        )
+    engine = require_non_empty_string(
+        resolved.get("engine"),
+        "manifest.resolved_execution.engine",
+    )
+    if "cpu" in engine.lower():
+        fail("manifest.resolved_execution.engine must not be a CPU modal engine")
+    device_residency = require_non_empty_string(
+        resolved.get("device_residency"),
+        "manifest.resolved_execution.device_residency",
+    )
+    if device_residency not in {"device_resident", "gpu_device_resident"}:
+        fail("manifest.resolved_execution.device_residency must prove GPU residency")
+
+    capabilities = manifest.get("capabilities")
+    if not isinstance(capabilities, dict):
+        fail("manifest.capabilities must be an object for GPU Kittel provenance")
+    dispersion = capabilities.get("dispersion")
+    if not isinstance(dispersion, dict):
+        fail("manifest.capabilities.dispersion must be an object for GPU Kittel provenance")
+    production_gpu = dispersion.get("production_gpu")
+    if not isinstance(production_gpu, dict):
+        fail("manifest.capabilities.dispersion.production_gpu must be an object")
+    gpu_status = require_non_empty_string(
+        production_gpu.get("status"),
+        "manifest.capabilities.dispersion.production_gpu.status",
+    )
+    if gpu_status not in GPU_MODAL_KITTEL_CAPABILITY_STATUSES:
+        fail(
+            "manifest.capabilities.dispersion.production_gpu.status must indicate "
+            f"an executable GPU modal lane, got {gpu_status!r}"
+        )
+
+    summary_path = root / "validation/kittel_k0_pbc/summary.v1.json"
+    require_file(summary_path)
+    summary = load_json(summary_path)
+    solver = summary.get("solver")
+    if not isinstance(solver, dict):
+        fail("validation/kittel_k0_pbc/summary.v1.json.solver must be an object")
+    require_equal(
+        solver.get("backend"),
+        "modal_eigen",
+        "validation/kittel_k0_pbc/summary.v1.json.solver.backend",
+    )
+    require_equal(
+        solver.get("execution_lane"),
+        "production_gpu",
+        "validation/kittel_k0_pbc/summary.v1.json.solver.execution_lane",
+    )
+    summary_algorithm = require_non_empty_string(
+        solver.get("solver_algorithm"),
+        "validation/kittel_k0_pbc/summary.v1.json.solver.solver_algorithm",
+    )
+    if summary_algorithm != solver_algorithm:
+        fail(
+            "validation/kittel_k0_pbc/summary.v1.json.solver.solver_algorithm "
+            "must match manifest.resolved_execution.solver_algorithm"
         )
 
 
@@ -2812,6 +3444,40 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--require-k0-kittel-field-sweep",
+        action="store_true",
+        help=(
+            "require a k=0 uniform-field eigen branch to match the macrospin "
+            "Larmor or in-plane thin-film Kittel formula declared in "
+            "metadata.execution_plan.backend_plan.k0_kittel_validation"
+        ),
+    )
+    parser.add_argument(
+        "--require-k0-kittel-demag",
+        action="store_true",
+        help=(
+            "require the K0-3 thin-film demag Kittel validation contract, "
+            "including case_id=K0-3 and demag_kind metadata in summary/points"
+        ),
+    )
+    parser.add_argument(
+        "--require-k0-kittel-periodic-airbox-demag",
+        action="store_true",
+        help=(
+            "require the K0-3 thin-film demag Kittel validation contract to "
+            "use the real periodic_airbox_k0 Poisson-airbox demag path, not "
+            "the synthetic demag-factor validation slice"
+        ),
+    )
+    parser.add_argument(
+        "--require-gpu-modal-k0-kittel-provenance",
+        action="store_true",
+        help=(
+            "require k0 Kittel artifacts to prove a real FEM modal GPU solve "
+            "instead of CPU fallback or driven-response GPU provenance"
+        ),
+    )
+    parser.add_argument(
         "--require-low-k-de-bv-analytic-dispersion",
         action="store_true",
         help=(
@@ -2825,6 +3491,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
+    if args.require_k0_kittel_periodic_airbox_demag:
+        args.require_k0_kittel_demag = True
+    if args.require_k0_kittel_demag:
+        args.require_k0_kittel_field_sweep = True
     if args.require_production_modal_k_path and args.require_production_gamma_k_path:
         fail(
             "--require-production-modal-k-path and "
@@ -2923,7 +3593,10 @@ def main(argv: list[str] | None = None) -> int:
         require_zarr_mode_fields = True
     elif (
         mode_field_storage_format == "binary_compatibility_exports"
-        and args.require_low_k_de_bv_analytic_dispersion
+        and (
+            args.require_low_k_de_bv_analytic_dispersion
+            or args.require_k0_kittel_demag
+        )
     ):
         require_equal(
             manifest.get("artifacts", {}).get("mode_field_zarr_store_path"),
@@ -2934,7 +3607,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         fail(
             "manifest.artifacts.mode_field_storage_format must be 'zarr'"
-            " or, for low-k DE/BV analytic reference artifacts only,"
+            " or, for low-k DE/BV analytic reference and K0 Kittel demag artifacts only,"
             " 'binary_compatibility_exports'"
         )
 
@@ -3183,6 +3856,17 @@ def main(argv: list[str] | None = None) -> int:
             known_samples,
             branch_ids_by_mode,
         )
+    if args.require_k0_kittel_field_sweep:
+        validate_k0_kittel_field_sweep(
+            root,
+            known_modes,
+            known_samples,
+            branch_ids_by_mode,
+            require_demag=args.require_k0_kittel_demag,
+            require_periodic_airbox_demag=args.require_k0_kittel_periodic_airbox_demag,
+        )
+    if args.require_gpu_modal_k0_kittel_provenance:
+        validate_gpu_modal_k0_kittel_provenance(root)
     if args.require_low_k_de_bv_analytic_dispersion:
         validate_low_k_de_bv_analytic_dispersion(
             root,

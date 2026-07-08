@@ -89,6 +89,11 @@ struct TangentFrequencyMassDiagnostics {
 
 const char *operator_term_kind_to_string(FrequencyDomainOperatorTermKind kind) noexcept;
 
+TangentOperatorLocalBlock project_cartesian_local_operator_to_tangent(
+    const TangentFrameNode &node,
+    FrequencyDomainOperatorTermKind kind,
+    const double cartesian_row_major_3x3[9]) noexcept;
+
 FrequencyDomainStatus apply_tangent_local_operator(
     const TangentOperatorLocalBlock *terms,
     std::uint64_t term_count,

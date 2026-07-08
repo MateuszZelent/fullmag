@@ -141,7 +141,7 @@ describe("resolveViewport3DColorbarLegend", () => {
         range: { max: 0.75, min: -0.25 },
         unit: "1",
       }),
-    ).toEqual({
+    ).toMatchObject({
       label: "m x [1]",
       maxLabel: "0.75",
       minLabel: "-0.25",
@@ -159,7 +159,7 @@ describe("resolveViewport3DColorbarLegend", () => {
         range: { max: 800e3, min: 400e3 },
         unit: "A/m",
       }),
-    ).toEqual({
+    ).toMatchObject({
       label: "mat_ms [A/m]",
       paletteGradient:
         "linear-gradient(90deg, rgb(0, 0, 4), rgb(66, 10, 104), rgb(147, 43, 93), rgb(221, 81, 58), rgb(252, 255, 164))",
@@ -180,6 +180,22 @@ describe("resolveViewport3DColorbarLegend", () => {
       label: "H_demag x [A/m]",
       maxLabel: "1200 A/m",
       minLabel: "-350 A/m",
+    });
+  });
+
+  it("converts viewport colorbar limits to the selected display unit", () => {
+    expect(
+      resolveViewport3DColorbarLegend({
+        colorMode: "x",
+        displayUnit: "mT",
+        quantityId: "H_demag",
+        range: { max: 1_000_000, min: -500_000 },
+        unit: "A/m",
+      }),
+    ).toMatchObject({
+      label: "H_demag x [mT]",
+      maxLabel: "1257 mT",
+      minLabel: "-628.3 mT",
     });
   });
 
@@ -220,7 +236,7 @@ describe("resolveViewport3DColorbarLegend", () => {
         unit: "1",
         vectorColorMode: "orientation",
       }),
-    ).toEqual({
+    ).toMatchObject({
       label: "m x [1]",
       maxLabel: "0.4",
       minLabel: "-0.6",

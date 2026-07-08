@@ -26,6 +26,8 @@ use fullmag_fem_sys as ffi;
 use nalgebra::{DMatrix, DVector};
 use num_complex::Complex64;
 #[cfg(feature = "fem-gpu")]
+use sha2::{Digest, Sha256};
+#[cfg(feature = "fem-gpu")]
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 #[cfg(feature = "fem-gpu")]
@@ -101,8 +103,32 @@ impl FrequencyResponseSolverEnvGuard {
                     restart_iterations.to_string(),
                 ));
             }
+            if let Some(preconditioner) = policy.preconditioner {
+                guards.push(EnvVarGuard::set(
+                    "FULLMAG_FEM_FREQUENCY_RESPONSE_PRECONDITIONER_VARIANT",
+                    frequency_response_preconditioner_name(preconditioner).to_string(),
+                ));
+            }
         }
         Self { _guards: guards }
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+struct FrequencyResponseGpuDemagModeEnvGuard {
+    _guard: Option<EnvVarGuard>,
+}
+
+#[cfg(feature = "fem-gpu")]
+impl FrequencyResponseGpuDemagModeEnvGuard {
+    fn apply() -> Self {
+        let value = std::env::var("FULLMAG_FEM_FREQUENCY_RESPONSE_GPU_DEMAG_MODE")
+            .ok()
+            .map(|raw| raw.trim().to_string())
+            .filter(|trimmed| !trimmed.is_empty());
+        Self {
+            _guard: value.map(|mode| EnvVarGuard::set("FULLMAG_FEM_GPU_DEMAG_MODE", mode)),
+        }
     }
 }
 
@@ -126,6 +152,19 @@ fn frequency_response_solver_method_name(
 }
 
 #[cfg(feature = "fem-gpu")]
+fn frequency_response_preconditioner_name(
+    preconditioner: fullmag_ir::FrequencyResponsePreconditionerIR,
+) -> &'static str {
+    match preconditioner {
+        fullmag_ir::FrequencyResponsePreconditionerIR::Auto => "auto",
+        fullmag_ir::FrequencyResponsePreconditionerIR::GraphDemagCoarse => "graph_demag_coarse",
+        fullmag_ir::FrequencyResponsePreconditionerIR::DemagCoarse => "demag_coarse",
+        fullmag_ir::FrequencyResponsePreconditionerIR::BlockJacobi => "block_jacobi",
+        fullmag_ir::FrequencyResponsePreconditionerIR::None => "none",
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
 fn requested_frequency_response_solver_method_name(
     policy: Option<&fullmag_ir::FrequencyResponseSolverPolicyIR>,
 ) -> &'static str {
@@ -133,6 +172,22 @@ fn requested_frequency_response_solver_method_name(
         .and_then(|policy| policy.method)
         .map(frequency_response_solver_method_name)
         .unwrap_or("auto")
+}
+
+#[cfg(feature = "fem-gpu")]
+fn requested_frequency_response_preconditioner_name(
+    policy: Option<&fullmag_ir::FrequencyResponseSolverPolicyIR>,
+) -> &'static str {
+    policy
+        .and_then(|policy| policy.preconditioner)
+        .map(frequency_response_preconditioner_name)
+        .unwrap_or("auto")
+}
+
+#[derive(Clone, Copy, Default)]
+struct FrequencyResponseProgressMetadata<'a> {
+    solver_method: Option<&'a str>,
+    solver_preconditioner: Option<&'a str>,
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -687,6 +742,7 @@ fn write_frequency_response_progress_artifact(
     frequency_range_hz: Option<(f64, f64)>,
     demag_mode: Option<&str>,
     latest_artifact_manifest_path: Option<&str>,
+    metadata: FrequencyResponseProgressMetadata<'_>,
 ) -> std::io::Result<()> {
     let response_dir = output_dir.join("response");
     std::fs::create_dir_all(&response_dir)?;
@@ -705,6 +761,8 @@ fn write_frequency_response_progress_artifact(
         "partial_artifacts_available": partial_artifacts_available,
         "latest_artifact_manifest_path": latest_artifact_manifest_path,
         "demag_mode": demag_mode,
+        "solver_method": metadata.solver_method,
+        "solver_preconditioner": metadata.solver_preconditioner,
     })
     .to_string();
     let progress_artifact = serde_json::json!({
@@ -722,6 +780,8 @@ fn write_frequency_response_progress_artifact(
         "latest_artifact_manifest_path": latest_artifact_manifest_path,
         "missing_reason": null,
         "demag_mode": demag_mode,
+        "solver_method": metadata.solver_method,
+        "solver_preconditioner": metadata.solver_preconditioner,
         "progress_json": progress_json,
     });
     std::fs::write(
@@ -736,6 +796,7 @@ fn write_native_frequency_response_progress_artifact(
     progress: NativeFrequencyDomainProgress,
     demag_mode: Option<&str>,
     frequency_range_hz: Option<(f64, f64)>,
+    metadata: FrequencyResponseProgressMetadata<'_>,
 ) -> std::io::Result<()> {
     let response_dir = output_dir.join("response");
     std::fs::create_dir_all(&response_dir)?;
@@ -769,6 +830,8 @@ fn write_native_frequency_response_progress_artifact(
         "native_relative_residual_l2_norm": progress.relative_residual_l2_norm,
         "native_converged": progress.converged,
         "demag_mode": demag_mode,
+        "solver_method": metadata.solver_method,
+        "solver_preconditioner": metadata.solver_preconditioner,
     });
     let progress_artifact = serde_json::json!({
         "schema_version": "frequency_domain_sweep_progress.v1",
@@ -792,6 +855,8 @@ fn write_native_frequency_response_progress_artifact(
         "native_relative_residual_l2_norm": progress.relative_residual_l2_norm,
         "native_converged": progress.converged,
         "demag_mode": demag_mode,
+        "solver_method": metadata.solver_method,
+        "solver_preconditioner": metadata.solver_preconditioner,
         "progress_json": progress_json_value.to_string(),
     });
     std::fs::write(
@@ -823,6 +888,7 @@ fn preserve_native_frequency_response_progress_artifact(
     final_status: NativeFrequencyDomainStatus,
     written_frequency_point_artifacts: u64,
     latest_artifact_manifest_path: Option<&str>,
+    metadata: FrequencyResponseProgressMetadata<'_>,
 ) -> std::io::Result<()> {
     let progress_path = output_dir.join("response/progress.v1.json");
     if !progress_path.is_file() {
@@ -831,6 +897,7 @@ fn preserve_native_frequency_response_progress_artifact(
             progress,
             demag_mode,
             frequency_range_hz,
+            metadata,
         )?;
     }
     let mut progress_artifact: serde_json::Value =
@@ -845,6 +912,16 @@ fn preserve_native_frequency_response_progress_artifact(
     let final_progress_status = native_frequency_domain_progress_status(final_status);
     let final_progress_state = native_frequency_domain_progress_state(final_status);
     let final_progress_complete = final_status == NativeFrequencyDomainStatus::Ok;
+    let final_completed_frequency_points = if final_progress_complete {
+        progress.total_frequency_count
+    } else {
+        progress.completed_frequency_count
+    };
+    let final_written_frequency_point_artifacts = if final_progress_complete {
+        progress.total_frequency_count
+    } else {
+        written_frequency_point_artifacts
+    };
     progress_object.insert(
         "status".to_string(),
         serde_json::json!(final_progress_status),
@@ -853,6 +930,14 @@ fn preserve_native_frequency_response_progress_artifact(
     progress_object.insert(
         "complete".to_string(),
         serde_json::json!(final_progress_complete),
+    );
+    progress_object.insert(
+        "total_frequency_points".to_string(),
+        serde_json::json!(progress.total_frequency_count),
+    );
+    progress_object.insert(
+        "completed_frequency_points".to_string(),
+        serde_json::json!(final_completed_frequency_points),
     );
     progress_object.insert(
         "native_frequency_index".to_string(),
@@ -891,6 +976,18 @@ fn preserve_native_frequency_response_progress_artifact(
     if let Some(demag_mode) = demag_mode {
         progress_object.insert("demag_mode".to_string(), serde_json::json!(demag_mode));
     }
+    if let Some(solver_method) = metadata.solver_method {
+        progress_object.insert(
+            "solver_method".to_string(),
+            serde_json::json!(solver_method),
+        );
+    }
+    if let Some(solver_preconditioner) = metadata.solver_preconditioner {
+        progress_object.insert(
+            "solver_preconditioner".to_string(),
+            serde_json::json!(solver_preconditioner),
+        );
+    }
     progress_object
         .entry("current_frequency_hz".to_string())
         .or_insert_with(|| serde_json::json!(progress.frequency_hz));
@@ -900,10 +997,10 @@ fn preserve_native_frequency_response_progress_artifact(
     }
     progress_object.insert(
         "written_frequency_point_artifacts".to_string(),
-        serde_json::json!(written_frequency_point_artifacts),
+        serde_json::json!(final_written_frequency_point_artifacts),
     );
     let partial_artifacts_available =
-        written_frequency_point_artifacts > 0 || latest_artifact_manifest_path.is_some();
+        final_written_frequency_point_artifacts > 0 || latest_artifact_manifest_path.is_some();
     progress_object.insert(
         "partial_artifacts_available".to_string(),
         serde_json::json!(partial_artifacts_available),
@@ -1027,6 +1124,27 @@ fn preserve_native_frequency_response_progress_artifact(
     } else if let Some(existing_demag_mode) = progress_object.get("demag_mode").cloned() {
         progress_json_object.insert("demag_mode".to_string(), existing_demag_mode);
     }
+    if let Some(solver_method) = metadata.solver_method {
+        progress_json_object.insert(
+            "solver_method".to_string(),
+            serde_json::json!(solver_method),
+        );
+    } else if let Some(existing_solver_method) = progress_object.get("solver_method").cloned() {
+        progress_json_object.insert("solver_method".to_string(), existing_solver_method);
+    }
+    if let Some(solver_preconditioner) = metadata.solver_preconditioner {
+        progress_json_object.insert(
+            "solver_preconditioner".to_string(),
+            serde_json::json!(solver_preconditioner),
+        );
+    } else if let Some(existing_solver_preconditioner) =
+        progress_object.get("solver_preconditioner").cloned()
+    {
+        progress_json_object.insert(
+            "solver_preconditioner".to_string(),
+            existing_solver_preconditioner,
+        );
+    }
     progress_object.insert(
         "progress_json".to_string(),
         serde_json::json!(progress_json_value.to_string()),
@@ -1043,6 +1161,7 @@ fn write_initial_frequency_response_progress_artifact(
     output_dir: &Path,
     frequencies_hz: &[f64],
     demag_mode: Option<&str>,
+    metadata: FrequencyResponseProgressMetadata<'_>,
 ) -> std::io::Result<()> {
     write_frequency_response_progress_artifact(
         output_dir,
@@ -1055,6 +1174,7 @@ fn write_initial_frequency_response_progress_artifact(
         frequency_response_range_hz(frequencies_hz),
         demag_mode,
         None,
+        metadata,
     )
 }
 
@@ -1081,6 +1201,7 @@ fn write_interrupted_frequency_response_progress_artifact(
     output_dir: &Path,
     frequencies_hz: &[f64],
     demag_mode: Option<&str>,
+    metadata: FrequencyResponseProgressMetadata<'_>,
 ) -> std::io::Result<()> {
     let written_frequency_point_artifacts =
         interrupted_frequency_response_point_artifact_count(output_dir);
@@ -1095,6 +1216,7 @@ fn write_interrupted_frequency_response_progress_artifact(
         frequency_response_range_hz(frequencies_hz),
         demag_mode,
         None,
+        metadata,
     )
 }
 
@@ -1104,6 +1226,7 @@ fn preserve_interrupted_frequency_response_progress_artifact_if_needed(
     frequencies_hz: &[f64],
     demag_mode: Option<&str>,
     status: NativeFrequencyDomainStatus,
+    metadata: FrequencyResponseProgressMetadata<'_>,
 ) -> std::io::Result<()> {
     let has_legacy_manifest = output_dir.join("response/artifact_manifest.json").is_file();
     let has_frequency_domain_manifest = output_dir
@@ -1117,6 +1240,7 @@ fn preserve_interrupted_frequency_response_progress_artifact_if_needed(
             output_dir,
             frequencies_hz,
             demag_mode,
+            metadata,
         )?;
     }
     Ok(())
@@ -1249,6 +1373,13 @@ fn patch_frequency_response_solver_diagnostics(
                     object.insert("input_preflight".to_string(), input_preflight.clone());
                     changed = true;
                 }
+            } else if let Some(object) = value
+                .as_object_mut()
+                .and_then(|object| object.get_mut("demag_contribution"))
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                object.insert("input_preflight".to_string(), input_preflight.clone());
+                changed = true;
             }
         }
         if requested_solver_method.is_some() || resolved_solver_method.is_some() {
@@ -1661,6 +1792,14 @@ fn try_execute_fem_frequency_response_native_production_cpu(
         payload.requires_periodic_airbox_dynamic_demag,
         payload.requires_floquet_airbox_dynamic_demag,
     );
+    let progress_metadata = FrequencyResponseProgressMetadata {
+        solver_method: Some(requested_frequency_response_solver_method_name(
+            plan.solver_policy.as_ref(),
+        )),
+        solver_preconditioner: Some(requested_frequency_response_preconditioner_name(
+            plan.solver_policy.as_ref(),
+        )),
+    };
     let response_frequency_range_hz = frequency_response_range_hz(&plan.frequencies_hz.values_hz);
     let progress_callback = |progress: NativeFrequencyDomainProgress| {
         *last_native_progress.borrow_mut() = Some(progress);
@@ -1669,6 +1808,7 @@ fn try_execute_fem_frequency_response_native_production_cpu(
             progress,
             demag_mode,
             response_frequency_range_hz,
+            progress_metadata,
         ) {
             eprintln!(
                 "[fullmag-runner] failed to write native FEM frequency-response progress artifact: {err}"
@@ -1704,6 +1844,7 @@ fn try_execute_fem_frequency_response_native_production_cpu(
         })
         .collect::<Vec<_>>();
     let periodic_airbox_coupled_block_problem = periodic_airbox_coupled_block_problem(&payload);
+    let _gpu_demag_mode_env_guard = FrequencyResponseGpuDemagModeEnvGuard::apply();
     let mut demag_tangent_provider = if payload.requires_native_backend_demag_tangent_provider
         && periodic_airbox_coupled_block_problem.is_none()
     {
@@ -1749,6 +1890,7 @@ fn try_execute_fem_frequency_response_native_production_cpu(
         output_dir,
         &plan.frequencies_hz.values_hz,
         demag_mode,
+        progress_metadata,
     )
     .map_err(|err| RunError {
         message: format!("failed to write initial FEM frequency-response progress artifact: {err}"),
@@ -1863,6 +2005,7 @@ fn try_execute_fem_frequency_response_native_production_cpu(
             native_result.status,
             final_written_frequency_point_artifacts,
             final_artifact_manifest_path,
+            progress_metadata,
         )
         .map_err(|err| RunError {
                 message: format!(
@@ -1875,6 +2018,7 @@ fn try_execute_fem_frequency_response_native_production_cpu(
         &plan.frequencies_hz.values_hz,
         demag_mode,
         native_result.status,
+        progress_metadata,
     )
     .map_err(|err| RunError {
         message: format!(
@@ -2375,6 +2519,7 @@ fn periodic_boundary_pair_unit_normal(
 fn frequency_response_demag_backend_plan(
     plan: &fullmag_ir::FemFrequencyResponsePlanIR,
 ) -> fullmag_ir::FemPlanIR {
+    let mfem_device_string = frequency_response_demag_provider_mfem_device(plan).to_string();
     fullmag_ir::FemPlanIR {
         mesh_name: plan.mesh_name.clone(),
         mesh_source: plan.mesh_source.clone(),
@@ -2440,15 +2585,26 @@ fn frequency_response_demag_backend_plan(
         thermal_seed_config: None,
         oersted_realization: None,
         gpu_device_index: None,
-        mfem_device_string: Some(
-            if plan.requested_device == fullmag_ir::ExecutionDevice::Gpu {
-                "cuda"
-            } else {
-                "cpu"
-            }
-            .to_string(),
-        ),
+        mfem_device_string: Some(mfem_device_string),
         use_consistent_mass: None,
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn frequency_response_demag_provider_mfem_device(
+    plan: &fullmag_ir::FemFrequencyResponsePlanIR,
+) -> &'static str {
+    let mode = std::env::var("FULLMAG_FEM_GPU_DEMAG_MODE")
+        .ok()
+        .map(|raw| raw.trim().to_ascii_lowercase())
+        .unwrap_or_default();
+    if matches!(mode.as_str(), "hybrid_cpu_poisson" | "hybrid" | "compat") {
+        return "cpu";
+    }
+    if plan.requested_device == fullmag_ir::ExecutionDevice::Gpu {
+        "cuda"
+    } else {
+        "cpu"
     }
 }
 
@@ -2937,6 +3093,85 @@ fn build_frequency_response_observable_ms_field(
 }
 
 #[cfg(feature = "fem-gpu")]
+fn periodic_pair_map_sha256(
+    tag: &str,
+    pairs: &[(u64, u64)],
+    source_node_count: u64,
+    destination_node_count: u64,
+) -> String {
+    let mut sorted_pairs = pairs.to_vec();
+    sorted_pairs.sort_unstable();
+    let mut payload = String::from("periodic_mesh_certificate_pair_map.v1\n");
+    payload.push_str("schema=periodic_mesh_certificate.v5\n");
+    payload.push_str("tag=");
+    payload.push_str(tag);
+    payload.push('\n');
+    payload.push_str(&format!("source_node_count={source_node_count}"));
+    payload.push_str(&format!(
+        "\ndestination_node_count={destination_node_count}"
+    ));
+    payload.push_str(&format!("\npair_count={}", sorted_pairs.len()));
+    payload.push_str("\npairs=");
+    for (source, destination) in sorted_pairs {
+        payload.push('\n');
+        payload.push_str(&format!("{source}->{destination}"));
+    }
+    payload.push('\n');
+
+    let digest = Sha256::digest(payload.as_bytes());
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        hex.push_str(&format!("{byte:02x}"));
+    }
+    format!("sha256:{hex}")
+}
+
+#[cfg(feature = "fem-gpu")]
+fn periodic_tangent_frame_transfer_blocks_sha256(
+    pairs: &[(u64, u64)],
+    equilibrium_magnetization: &[[f64; 3]],
+) -> Option<(usize, String)> {
+    if pairs.is_empty() {
+        return None;
+    }
+    let mut blocks = Vec::<(u64, u64, [f64; 4])>::with_capacity(pairs.len());
+    for (source, destination) in pairs {
+        let source_m = *equilibrium_magnetization.get(*source as usize)?;
+        let destination_m = *equilibrium_magnetization.get(*destination as usize)?;
+        let (source_e1, source_e2) = tangent_basis(source_m)?;
+        let (destination_e1, destination_e2) = tangent_basis(destination_m)?;
+        blocks.push((
+            *source,
+            *destination,
+            [
+                dot3(destination_e1, source_e1),
+                dot3(destination_e1, source_e2),
+                dot3(destination_e2, source_e1),
+                dot3(destination_e2, source_e2),
+            ],
+        ));
+    }
+    blocks.sort_by_key(|(source, destination, _)| (*source, *destination));
+    let mut payload = String::from("periodic_mesh_certificate_tangent_frame_transfer_blocks.v1\n");
+    payload.push_str("schema=periodic_mesh_certificate.v5\n");
+    payload.push_str(&format!("block_count={}", blocks.len()));
+    for (source, destination, block) in &blocks {
+        payload.push_str(&format!("\n{source}->{destination}:"));
+        for value in block {
+            payload.push_str(&format!("{value:.17e},"));
+        }
+    }
+    payload.push('\n');
+
+    let digest = Sha256::digest(payload.as_bytes());
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        hex.push_str(&format!("{byte:02x}"));
+    }
+    Some((blocks.len(), format!("sha256:{hex}")))
+}
+
+#[cfg(feature = "fem-gpu")]
 fn frequency_response_input_preflight_diagnostics(
     plan: &fullmag_ir::FemFrequencyResponsePlanIR,
 ) -> Option<serde_json::Value> {
@@ -2975,6 +3210,10 @@ fn frequency_response_input_preflight_diagnostics(
     let mut max_m_norm_error = None::<f64>;
     let mut magnetic_slice_l2_norm_squared = 0.0;
     let mut full_equilibrium_l2_norm_squared = 0.0;
+    let magnetic_equilibrium_magnetization = magnetic_node_indices
+        .iter()
+        .map(|node_index| plan.equilibrium_magnetization[*node_index])
+        .collect::<Vec<_>>();
     for m in &plan.equilibrium_magnetization {
         full_equilibrium_l2_norm_squared += dot3(*m, *m);
     }
@@ -3032,6 +3271,7 @@ fn frequency_response_input_preflight_diagnostics(
     let mut periodic_dropped_nonmagnetic_pair_count_after_magnetic_compaction = 0usize;
     let mut max_periodic_translation_residual_m = None::<f64>;
     let mut periodic_translation_residuals_within_tolerance = true;
+    let mut periodic_certificate_magnetic_pairs = Vec::<(u64, u64)>::new();
     if periodic_kind {
         if selected_periodic_pair_set.is_empty() {
             issues.push("periodic_boundary_condition_selected_no_pair_ids".to_string());
@@ -3078,6 +3318,10 @@ fn frequency_response_input_preflight_diagnostics(
             let compact_b = node_index_map.get(node_b).copied().flatten();
             if compact_a.is_some() && compact_b.is_some() {
                 periodic_retained_magnetic_pair_count += 1;
+                periodic_certificate_magnetic_pairs.push((
+                    compact_a.expect("checked compact source") as u64,
+                    compact_b.expect("checked compact destination") as u64,
+                ));
             } else {
                 periodic_dropped_pair_count_after_magnetic_compaction += 1;
                 if let Some(expected_magnetic_node_set) = expected_magnetic_node_set.as_ref() {
@@ -3118,7 +3362,7 @@ fn frequency_response_input_preflight_diagnostics(
         fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0
             | fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox
     );
-    let periodic_airbox_delta_phi_node_pair_count = if periodic_airbox_required {
+    let periodic_airbox_delta_phi_pairs = if periodic_airbox_required {
         let constraint_set = plan.periodic_constraint_sets.iter().find(|constraint| {
             constraint.unknown_family
                 == fullmag_ir::PeriodicUnknownFamilyIR::MagnetostaticPotentialDynamic
@@ -3134,15 +3378,17 @@ fn frequency_response_input_preflight_diagnostics(
                     constraint_set.pair_ids.is_empty()
                         || constraint_set.pair_ids.contains(&pair.pair_id)
                 })
-                .count(),
+                .map(|pair| (u64::from(pair.node_a), u64::from(pair.node_b)))
+                .collect::<Vec<_>>(),
             None => {
                 issues.push("periodic_airbox_delta_phi_constraint_set_missing".to_string());
-                0
+                Vec::new()
             }
         }
     } else {
-        0
+        Vec::new()
     };
+    let periodic_airbox_delta_phi_node_pair_count = periodic_airbox_delta_phi_pairs.len();
     if periodic_airbox_required && periodic_airbox_delta_phi_node_pair_count == 0 {
         issues.push("periodic_airbox_delta_phi_node_pairs_missing".to_string());
     }
@@ -3174,6 +3420,47 @@ fn frequency_response_input_preflight_diagnostics(
     } else {
         "ok"
     };
+    let periodic_mesh_certificate = if periodic_kind || periodic_airbox_required {
+        let magnetic_pair_map_sha256 =
+            (!periodic_certificate_magnetic_pairs.is_empty()).then(|| {
+                periodic_pair_map_sha256(
+                    "magnetic",
+                    &periodic_certificate_magnetic_pairs,
+                    magnetic_node_count as u64,
+                    magnetic_node_count as u64,
+                )
+            });
+        let airbox_pair_map_sha256 = (!periodic_airbox_delta_phi_pairs.is_empty()).then(|| {
+            periodic_pair_map_sha256(
+                "airbox",
+                &periodic_airbox_delta_phi_pairs,
+                full_node_count as u64,
+                full_node_count as u64,
+            )
+        });
+        let tangent_frame_transfer_blocks = periodic_tangent_frame_transfer_blocks_sha256(
+            &periodic_certificate_magnetic_pairs,
+            &magnetic_equilibrium_magnetization,
+        );
+        Some(serde_json::json!({
+            "schema_version": "periodic_mesh_certificate.v5",
+            "artifact_role": "frequency_response_input_preflight_candidate",
+            "magnetic_pair_count": periodic_certificate_magnetic_pairs.len(),
+            "airbox_pair_count": periodic_airbox_delta_phi_pairs.len(),
+            "magnetic_pair_map_sha256": magnetic_pair_map_sha256,
+            "airbox_pair_map_sha256": airbox_pair_map_sha256,
+            "pair_map_hash_canonicalization": "periodic_mesh_certificate_pair_map.v1",
+            "tangent_frame_transfer_required": periodic_kind,
+            "tangent_frame_transfer_artifact_status": "pending_native_certificate_consumption",
+            "tangent_frame_transfer_block_count": tangent_frame_transfer_blocks
+                .as_ref()
+                .map(|(count, _)| *count),
+            "tangent_frame_transfer_blocks_row_major_2x2_sha256":
+                tangent_frame_transfer_blocks.map(|(_, hash)| hash),
+        }))
+    } else {
+        None
+    };
 
     Some(serde_json::json!({
         "schema_version": "frequency_response_input_preflight.v1",
@@ -3203,6 +3490,7 @@ fn frequency_response_input_preflight_diagnostics(
         "periodic_airbox_delta_phi_dof_count": periodic_airbox_delta_phi_dof_count,
         "magnetic_periodic_constraint_set_count": magnetic_periodic_constraint_set_count,
         "magnetostatic_periodic_constraint_set_count": magnetostatic_periodic_constraint_set_count,
+        "periodic_mesh_certificate": periodic_mesh_certificate,
         "checks": {
             "equilibrium_count_matches_mesh": equilibrium_count_matches_mesh,
             "equilibrium_vectors_are_finite": equilibrium_vectors_are_finite,
@@ -4353,6 +4641,34 @@ mod tests {
         &rest[..end]
     }
 
+    fn test_solver_progress_metadata() -> FrequencyResponseProgressMetadata<'static> {
+        FrequencyResponseProgressMetadata {
+            solver_method: Some("gpu_operator_host_krylov"),
+            solver_preconditioner: Some("block_jacobi"),
+        }
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn frequency_response_solver_policy_sets_preconditioner_env() {
+        std::env::remove_var("FULLMAG_FEM_FREQUENCY_RESPONSE_PRECONDITIONER_VARIANT");
+        {
+            let policy = fullmag_ir::FrequencyResponseSolverPolicyIR {
+                method: None,
+                preconditioner: Some(fullmag_ir::FrequencyResponsePreconditionerIR::BlockJacobi),
+                rtol: None,
+                max_iterations: None,
+                restart_iterations: None,
+            };
+            let _guard = FrequencyResponseSolverEnvGuard::apply(Some(&policy));
+            assert_eq!(
+                std::env::var("FULLMAG_FEM_FREQUENCY_RESPONSE_PRECONDITIONER_VARIANT").as_deref(),
+                Ok("block_jacobi")
+            );
+        }
+        assert!(std::env::var("FULLMAG_FEM_FREQUENCY_RESPONSE_PRECONDITIONER_VARIANT").is_err());
+    }
+
     #[test]
     fn native_frequency_response_progress_update_reports_completed_frequency_count() {
         let progress = NativeFrequencyDomainProgress {
@@ -4459,6 +4775,7 @@ mod tests {
             &output_dir,
             &[2.0e9, 3.5e9, 5.0e9],
             Some("periodic_airbox_k0"),
+            FrequencyResponseProgressMetadata::default(),
         )
         .expect("initial frequency-response progress should be written");
 
@@ -4528,6 +4845,7 @@ mod tests {
             },
             Some("periodic_airbox_k0"),
             Some((2.0e9, 5.0e9)),
+            test_solver_progress_metadata(),
         )
         .expect("native frequency-response progress should be written");
 
@@ -4554,6 +4872,8 @@ mod tests {
         assert_eq!(progress["native_relative_residual_l2_norm"], 9.9e-4);
         assert_eq!(progress["native_converged"], false);
         assert_eq!(progress["demag_mode"], "periodic_airbox_k0");
+        assert_eq!(progress["solver_method"], "gpu_operator_host_krylov");
+        assert_eq!(progress["solver_preconditioner"], "block_jacobi");
         let progress_json = progress["progress_json"]
             .as_str()
             .expect("progress_json should be a string");
@@ -4563,6 +4883,8 @@ mod tests {
         assert_eq!(progress_json_value["complete"], false);
         assert!(progress_json.contains("\"state\":\"solving_frequency\""));
         assert!(progress_json.contains("\"demag_mode\":\"periodic_airbox_k0\""));
+        assert!(progress_json.contains("\"solver_method\":\"gpu_operator_host_krylov\""));
+        assert!(progress_json.contains("\"solver_preconditioner\":\"block_jacobi\""));
         assert!(progress_json.contains("\"native_iteration_count\":2807"));
         assert!(progress_json.contains("\"native_max_iterations_for_frequency\""));
         assert!(progress_json.contains("\"native_current_frequency_solve_fraction\""));
@@ -4596,6 +4918,7 @@ mod tests {
             },
             Some("periodic_airbox_k0"),
             Some((2.0e9, 5.0e9)),
+            test_solver_progress_metadata(),
         )
         .expect("live running progress should be written");
         let native_manifest_path = output_dir
@@ -4620,6 +4943,7 @@ mod tests {
             NativeFrequencyDomainStatus::SolveError,
             0,
             Some(native_manifest_path.as_str()),
+            test_solver_progress_metadata(),
         )
         .expect("native frequency-response progress should be preserved");
 
@@ -4684,6 +5008,7 @@ mod tests {
             },
             None,
             Some((2.0e9, 3.0e9)),
+            FrequencyResponseProgressMetadata::default(),
         )
         .expect("native live progress should be written");
 
@@ -4702,8 +5027,9 @@ mod tests {
             None,
             Some((2.0e9, 3.0e9)),
             NativeFrequencyDomainStatus::Ok,
-            1,
+            2,
             Some("frequency_domain/manifest.v1.json"),
+            FrequencyResponseProgressMetadata::default(),
         )
         .expect("native final progress should patch manifest and point artifact count");
 
@@ -4715,7 +5041,8 @@ mod tests {
         assert_eq!(progress["status"], "ready");
         assert_eq!(progress["state"], "completed");
         assert_eq!(progress["complete"], true);
-        assert_eq!(progress["written_frequency_point_artifacts"], 1);
+        assert_eq!(progress["completed_frequency_points"], 2);
+        assert_eq!(progress["written_frequency_point_artifacts"], 2);
         assert_eq!(progress["partial_artifacts_available"], true);
         assert_eq!(
             progress["latest_artifact_manifest_path"],
@@ -4727,7 +5054,8 @@ mod tests {
         assert!(progress_json.contains("\"status\":\"ready\""));
         assert!(progress_json.contains("\"state\":\"completed\""));
         assert!(progress_json.contains("\"complete\":true"));
-        assert!(progress_json.contains("\"written_frequency_point_artifacts\":1"));
+        assert!(progress_json.contains("\"completed_frequency_points\":2"));
+        assert!(progress_json.contains("\"written_frequency_point_artifacts\":2"));
         assert!(progress_json.contains("\"partial_artifacts_available\":true"));
         assert!(progress_json
             .contains("\"latest_artifact_manifest_path\":\"frequency_domain/manifest.v1.json\""));
@@ -4817,6 +5145,7 @@ mod tests {
             &output_dir,
             &[2.0e9, 3.0e9, 4.0e9, 5.0e9, 6.0e9],
             Some("periodic_airbox_k0"),
+            FrequencyResponseProgressMetadata::default(),
         )
         .expect("initial frequency-response progress should be written");
         preserve_interrupted_frequency_response_progress_artifact_if_needed(
@@ -4824,6 +5153,7 @@ mod tests {
             &[2.0e9, 3.0e9, 4.0e9, 5.0e9, 6.0e9],
             Some("periodic_airbox_k0"),
             NativeFrequencyDomainStatus::Interrupted,
+            FrequencyResponseProgressMetadata::default(),
         )
         .expect("interrupted frequency-response progress should be preserved");
 
@@ -4894,6 +5224,7 @@ mod tests {
             &[1.0e9, 2.0e9, 3.0e9, 4.0e9, 5.0e9],
             None,
             NativeFrequencyDomainStatus::Interrupted,
+            FrequencyResponseProgressMetadata::default(),
         )
         .expect("interrupted frequency-response progress should be preserved");
 
@@ -4943,7 +5274,7 @@ mod tests {
         .expect("manifest should be written");
         std::fs::write(
             point_dir.join("frequency_0000.json"),
-            r#"{"schema_version":"frequency_response_point.v1","frequency_index":0,"m_complex":[[-1.0004040108895327e-10,2.7451188554889786e-10]],"response_amplitude":1.0,"relative_residual_l2_norm":1e-4}"#,
+            r#"{"schema_version":"frequency_response_point.v1","frequency_index":0,"m_complex":[[-1.0004040108895327e-10,2.7451188554889786e-10]],"response_amplitude":1.0,"relative_residual_l2_norm":1e-4,"demag_contribution":{"status":"solved"}}"#,
         )
         .expect("point artifact should be written");
         std::fs::write(
@@ -4964,6 +5295,17 @@ mod tests {
             "schema_version": "frequency_response_input_preflight.v1",
             "status": "ok",
             "full_node_count": 3,
+            "periodic_mesh_certificate": {
+                "schema_version": "periodic_mesh_certificate.v5",
+                "artifact_role": "frequency_response_input_preflight_candidate",
+                "magnetic_pair_count": 1,
+                "airbox_pair_count": 1,
+                "magnetic_pair_map_sha256": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "airbox_pair_map_sha256": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+                "pair_map_hash_canonicalization": "periodic_mesh_certificate_pair_map.v1",
+                "tangent_frame_transfer_required": true,
+                "tangent_frame_transfer_artifact_status": "pending_native_certificate_consumption"
+            },
         });
 
         patch_frequency_response_solver_diagnostics(
@@ -5035,6 +5377,11 @@ mod tests {
         )
         .expect("point should parse");
         assert_eq!(point["resolved_solver_method"], "gpu_operator_host_krylov");
+        assert_eq!(
+            point["demag_contribution"]["input_preflight"]["periodic_mesh_certificate"]
+                ["magnetic_pair_map_sha256"],
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        );
         assert_eq!(sweep["points"][0]["m_complex"], point["m_complex"]);
 
         let _ = std::fs::remove_dir_all(output_dir);
@@ -5170,6 +5517,7 @@ mod tests {
     #[cfg(feature = "fem-gpu")]
     #[test]
     fn periodic_airbox_demag_provider_backend_plan_uses_requested_mfem_device() {
+        let _mode = EnvVarGuard::set("FULLMAG_FEM_GPU_DEMAG_MODE", "".to_string());
         let plan = qualified_periodic_airbox_frequency_response_plan();
         let backend_plan = super::frequency_response_demag_backend_plan(&plan);
 
@@ -5193,6 +5541,21 @@ mod tests {
 
         assert_eq!(gpu_backend_plan.mfem_device_string.as_deref(), Some("cuda"));
         assert_eq!(gpu_backend_plan.air_box_config, gpu_plan.air_box_config);
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn periodic_airbox_demag_provider_backend_plan_uses_cpu_for_hybrid_gpu_demag_mode() {
+        let _mode = EnvVarGuard::set(
+            "FULLMAG_FEM_GPU_DEMAG_MODE",
+            "hybrid_cpu_poisson".to_string(),
+        );
+        let mut plan = qualified_periodic_airbox_frequency_response_plan();
+        plan.requested_device = fullmag_ir::ExecutionDevice::Gpu;
+
+        let backend_plan = super::frequency_response_demag_backend_plan(&plan);
+
+        assert_eq!(backend_plan.mfem_device_string.as_deref(), Some("cpu"));
     }
 
     #[cfg(feature = "fem-gpu")]
@@ -5351,6 +5714,49 @@ mod tests {
         assert_eq!(diagnostics["periodic_airbox_delta_phi_node_pair_count"], 3);
         assert_eq!(diagnostics["periodic_airbox_delta_m_tangent_dof_count"], 6);
         assert_eq!(diagnostics["periodic_airbox_delta_phi_dof_count"], 5);
+        assert_eq!(
+            diagnostics["periodic_mesh_certificate"]["schema_version"],
+            "periodic_mesh_certificate.v5"
+        );
+        assert_eq!(
+            diagnostics["periodic_mesh_certificate"]["artifact_role"],
+            "frequency_response_input_preflight_candidate"
+        );
+        assert_eq!(
+            diagnostics["periodic_mesh_certificate"]["magnetic_pair_count"],
+            2
+        );
+        assert_eq!(
+            diagnostics["periodic_mesh_certificate"]["airbox_pair_count"],
+            3
+        );
+        assert_eq!(
+            diagnostics["periodic_mesh_certificate"]["magnetic_pair_map_sha256"]
+                .as_str()
+                .map(|value| value.starts_with("sha256:") && value.len() == 71),
+            Some(true)
+        );
+        assert_eq!(
+            diagnostics["periodic_mesh_certificate"]["airbox_pair_map_sha256"]
+                .as_str()
+                .map(|value| value.starts_with("sha256:") && value.len() == 71),
+            Some(true)
+        );
+        assert_eq!(
+            diagnostics["periodic_mesh_certificate"]["tangent_frame_transfer_required"],
+            true
+        );
+        assert_eq!(
+            diagnostics["periodic_mesh_certificate"]["tangent_frame_transfer_block_count"],
+            2
+        );
+        assert_eq!(
+            diagnostics["periodic_mesh_certificate"]
+                ["tangent_frame_transfer_blocks_row_major_2x2_sha256"]
+                .as_str()
+                .map(|value| value.starts_with("sha256:") && value.len() == 71),
+            Some(true)
+        );
         assert_eq!(
             diagnostics["checks"]["equilibrium_count_matches_mesh"],
             true
@@ -6517,6 +6923,7 @@ mod tests {
         let mut plan = minimal_frequency_response_plan();
         plan.solver_policy = Some(fullmag_ir::FrequencyResponseSolverPolicyIR {
             method: Some(fullmag_ir::FrequencyResponseSolverMethodIR::CpuSparseDirect),
+            preconditioner: None,
             rtol: None,
             max_iterations: None,
             restart_iterations: None,
@@ -6529,6 +6936,7 @@ mod tests {
 
         plan.solver_policy = Some(fullmag_ir::FrequencyResponseSolverPolicyIR {
             method: Some(fullmag_ir::FrequencyResponseSolverMethodIR::GpuOperatorHostKrylov),
+            preconditioner: None,
             rtol: None,
             max_iterations: None,
             restart_iterations: None,
@@ -6539,6 +6947,7 @@ mod tests {
 
         plan.solver_policy = Some(fullmag_ir::FrequencyResponseSolverPolicyIR {
             method: Some(fullmag_ir::FrequencyResponseSolverMethodIR::DenseReference),
+            preconditioner: None,
             rtol: None,
             max_iterations: None,
             restart_iterations: None,
@@ -6551,6 +6960,7 @@ mod tests {
         let mut plan = minimal_frequency_response_plan();
         plan.solver_policy = Some(fullmag_ir::FrequencyResponseSolverPolicyIR {
             method: Some(fullmag_ir::FrequencyResponseSolverMethodIR::SchurReduced),
+            preconditioner: None,
             rtol: None,
             max_iterations: None,
             restart_iterations: None,
@@ -6562,6 +6972,7 @@ mod tests {
         let mut airbox = qualified_periodic_airbox_frequency_response_plan();
         airbox.solver_policy = Some(fullmag_ir::FrequencyResponseSolverPolicyIR {
             method: Some(fullmag_ir::FrequencyResponseSolverMethodIR::SchurReduced),
+            preconditioner: None,
             rtol: None,
             max_iterations: None,
             restart_iterations: None,
@@ -6574,6 +6985,7 @@ mod tests {
         let mut plan = minimal_frequency_response_plan();
         plan.solver_policy = Some(fullmag_ir::FrequencyResponseSolverPolicyIR {
             method: Some(fullmag_ir::FrequencyResponseSolverMethodIR::CpuSparseDirect),
+            preconditioner: None,
             rtol: None,
             max_iterations: None,
             restart_iterations: None,

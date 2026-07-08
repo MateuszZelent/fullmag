@@ -1,4 +1,4 @@
-use fullmag_ir::FemEigenDispersionValidationIR;
+use fullmag_ir::{FemEigenDispersionValidationIR, FemEigenK0KittelValidationIR};
 use num_complex::Complex64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -6,8 +6,10 @@ pub enum EigenSolverModel {
     ReferenceScalarTangent,
     ReferenceFull2x2Tangent,
     ReferenceThinFilmDeBvKalinikosN0,
+    ReferenceK0KittelSyntheticDemagFactor,
     LinearizedLlgTangentPlane,
     ProductionCpuShiftInvert,
+    ProductionGpuDenseK0Macrospin,
 }
 
 impl EigenSolverModel {
@@ -16,8 +18,12 @@ impl EigenSolverModel {
             Self::ReferenceScalarTangent => "reference_scalar_tangent",
             Self::ReferenceFull2x2Tangent => "reference_full_2x2_tangent",
             Self::ReferenceThinFilmDeBvKalinikosN0 => "reference_thin_film_de_bv_kalinikos_n0",
+            Self::ReferenceK0KittelSyntheticDemagFactor => {
+                "reference_k0_kittel_synthetic_demag_factor"
+            }
             Self::LinearizedLlgTangentPlane => "linearized_llg_tangent_plane",
             Self::ProductionCpuShiftInvert => "slepc_multi_shift_invert_production_cpu_dense",
+            Self::ProductionGpuDenseK0Macrospin => "gpu_dense_k0_macrospin_modal_eigen",
         }
     }
 }
@@ -54,6 +60,7 @@ pub struct SingleKModeResult {
     pub lifted_imag: Option<Vec<[f64; 3]>>,
     pub amplitude: Option<Vec<f64>>,
     pub phase: Option<Vec<f64>>,
+    pub node_mass_weights: Option<Vec<f64>>,
 }
 
 impl SingleKModeResult {
@@ -97,6 +104,19 @@ pub struct DispersionAnalyticReferenceContext {
 }
 
 #[derive(Debug, Clone)]
+pub struct K0KittelPeriodicAirboxDemagMetrics {
+    pub mesh_resolution_m: f64,
+    pub airbox_size_m: f64,
+    pub phi_dof_count: u64,
+    pub augmented_phi_dof_count: u64,
+    pub poisson_constraint_relative_residual: f64,
+    pub magnetic_pair_count: u64,
+    pub airbox_pair_count: u64,
+    pub effective_magnetisation_a_per_m: f64,
+    pub relative_kittel_frequency_error: f64,
+}
+
+#[derive(Debug, Clone)]
 pub struct PathSolveResult {
     pub samples: Vec<SingleKSolveResult>,
     pub branches: Vec<TrackedBranch>,
@@ -104,5 +124,7 @@ pub struct PathSolveResult {
     pub notes: Vec<String>,
     pub include_demag: bool,
     pub dispersion_validation: Option<FemEigenDispersionValidationIR>,
+    pub k0_kittel_validation: Option<FemEigenK0KittelValidationIR>,
     pub dispersion_analytic_reference: Option<DispersionAnalyticReferenceContext>,
+    pub k0_kittel_periodic_airbox_demag: Option<K0KittelPeriodicAirboxDemagMetrics>,
 }

@@ -11,7 +11,7 @@
 
 namespace fullmag::fem::frequency_domain {
 
-constexpr std::uint32_t kDrivenFrequencyResponseSolveRequestAbiVersion = 11;
+constexpr std::uint32_t kDrivenFrequencyResponseSolveRequestAbiVersion = 12;
 
 struct DrivenFrequencyResponseSolverOptions {
     // Zero-valued options use the runtime defaults selected by the production
@@ -110,6 +110,14 @@ enum class DrivenFrequencyResponseExecutionLane : std::uint32_t {
     production_gpu,
 };
 
+enum class FrequencyDriveKind : std::uint32_t {
+    dynamic_field_phasor_a_per_m = 1,
+    tangent_rhs = 2,
+    cartesian_torque_phasor = 3,
+    stt_current_phasor = 4,
+    coupled_external_provider = 5,
+};
+
 struct DrivenFrequencyResponseSolveRequest {
     std::uint32_t abi_version = kDrivenFrequencyResponseSolveRequestAbiVersion;
     std::uint32_t reserved_contract_flags = 0;
@@ -131,6 +139,9 @@ struct DrivenFrequencyResponseSolveRequest {
     double floquet_k_vector_rad_per_m[3] = {0.0, 0.0, 0.0};
     FrequencyDomainPhaseConvention phase_convention =
         FrequencyDomainPhaseConvention::exp_i_omega_t;
+    FrequencyDriveKind drive_kind =
+        FrequencyDriveKind::dynamic_field_phasor_a_per_m;
+    bool require_nonzero_rhs = false;
     const FrequencyDomainFloquetPeriodicPair *floquet_periodic_pairs = nullptr;
     std::uint64_t floquet_periodic_pair_count = 0;
     bool requires_periodic_airbox_dynamic_demag = false;

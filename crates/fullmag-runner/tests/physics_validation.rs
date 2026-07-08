@@ -920,6 +920,7 @@ fn fem_eigen_smoke_completes_without_errors() {
         dmi_interface_normal: None,
         mode_tracking: None,
         dispersion_validation: None,
+        k0_kittel_validation: None,
     };
 
     let outputs = vec![
@@ -1108,6 +1109,7 @@ fn macrospin_kittel_frequency_order_of_magnitude() {
         dmi_interface_normal: None,
         mode_tracking: None,
         dispersion_validation: None,
+        k0_kittel_validation: None,
     };
 
     let outputs = vec![OutputIR::EigenSpectrum {
@@ -1180,6 +1182,7 @@ fn fem_eigen_modes_are_non_trivial() {
         dmi_interface_normal: None,
         mode_tracking: None,
         dispersion_validation: None,
+        k0_kittel_validation: None,
     };
 
     let outputs = vec![
@@ -1284,6 +1287,7 @@ fn dense_eigen_exports_relative_residuals() {
         dmi_interface_normal: None,
         mode_tracking: None,
         dispersion_validation: None,
+        k0_kittel_validation: None,
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -1385,6 +1389,7 @@ fn dense_eigen_exports_tangent_leakage() {
         dmi_interface_normal: None,
         mode_tracking: None,
         dispersion_validation: None,
+        k0_kittel_validation: None,
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -1459,6 +1464,7 @@ fn dense_eigen_frequency_units_are_hz_and_rad_s() {
         dmi_interface_normal: None,
         mode_tracking: None,
         dispersion_validation: None,
+        k0_kittel_validation: None,
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -1567,6 +1573,7 @@ fn fem_eigen_frequency_is_stable_across_resolutions() {
             dmi_interface_normal: None,
             mode_tracking: None,
             dispersion_validation: None,
+            k0_kittel_validation: None,
         };
         let outputs = vec![OutputIR::EigenSpectrum {
             quantity: "eigenfrequency".to_string(),
@@ -1651,6 +1658,7 @@ fn fem_eigen_periodic_k_zero_runs_with_periodic_node_pairs() {
         dmi_interface_normal: None,
         mode_tracking: None,
         dispersion_validation: None,
+        k0_kittel_validation: None,
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -1724,6 +1732,7 @@ fn fem_eigen_floquet_runs_with_phase_aware_metadata() {
         dmi_interface_normal: None,
         mode_tracking: None,
         dispersion_validation: None,
+        k0_kittel_validation: None,
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -1803,6 +1812,7 @@ fn fem_eigen_full_2x2_floquet_executes_nonidentity_tangent_frame_transport() {
         dmi_interface_normal: None,
         mode_tracking: None,
         dispersion_validation: None,
+        k0_kittel_validation: None,
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -1927,6 +1937,7 @@ fn fem_eigen_scalar_floquet_still_rejects_nonidentity_tangent_frame_transport() 
         dmi_interface_normal: None,
         mode_tracking: None,
         dispersion_validation: None,
+        k0_kittel_validation: None,
     };
 
     let error = fullmag_runner::run_reference_fem_eigen(
@@ -1988,6 +1999,7 @@ fn fem_eigen_damping_include_emits_nonzero_imaginary_frequency() {
         dmi_interface_normal: None,
         mode_tracking: None,
         dispersion_validation: None,
+        k0_kittel_validation: None,
     };
     let result = fullmag_runner::run_reference_fem_eigen(
         &plan,
@@ -2053,6 +2065,7 @@ fn fem_eigen_surface_anisotropy_runs_and_reports_term() {
         dmi_interface_normal: None,
         mode_tracking: None,
         dispersion_validation: None,
+        k0_kittel_validation: None,
     };
     let result = fullmag_runner::run_reference_fem_eigen(
         &plan,
@@ -2127,6 +2140,7 @@ fn fem_eigen_floquet_exchange_only_is_reciprocal_for_plus_minus_k() {
             dmi_interface_normal: None,
             mode_tracking: None,
             dispersion_validation: None,
+            k0_kittel_validation: None,
         }
     };
 
@@ -2210,6 +2224,7 @@ fn fem_eigen_full_2x2_floquet_exchange_dispersion_matches_analytic() {
             dmi_interface_normal: None,
             mode_tracking: None,
             dispersion_validation: None,
+            k0_kittel_validation: None,
         }
     };
 
@@ -2306,6 +2321,7 @@ fn fem_eigen_floquet_bulk_dmi_is_nonreciprocal_for_plus_minus_k() {
             dmi_interface_normal: None,
             mode_tracking: None,
             dispersion_validation: None,
+            k0_kittel_validation: None,
         }
     };
 
@@ -2394,6 +2410,7 @@ fn fem_eigen_demag_lowers_frequency() {
             dmi_interface_normal: None,
             mode_tracking: None,
             dispersion_validation: None,
+            k0_kittel_validation: None,
         }
     };
 
@@ -2498,6 +2515,7 @@ fn fem_eigen_poisson_robin_demag_runs_on_shared_domain_mesh() {
         dmi_interface_normal: None,
         mode_tracking: None,
         dispersion_validation: None,
+        k0_kittel_validation: None,
     };
 
     let outputs = [OutputIR::EigenSpectrum {
@@ -2575,6 +2593,7 @@ fn eigen_bc_free_baseline() {
         dmi_interface_normal: None,
         mode_tracking: None,
         dispersion_validation: None,
+        k0_kittel_validation: None,
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -2681,6 +2700,7 @@ fn eigen_bc_pinned_higher_frequency() {
             dmi_interface_normal: None,
             mode_tracking: None,
             dispersion_validation: None,
+            k0_kittel_validation: None,
         }
     };
 
@@ -2793,6 +2813,7 @@ fn eigen_bc_periodic_requires_pairs_error() {
         dmi_interface_normal: None,
         mode_tracking: None,
         dispersion_validation: None,
+        k0_kittel_validation: None,
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -2881,6 +2902,7 @@ fn eigen_bc_periodic_k_zero_matches_free() {
             dmi_interface_normal: None,
             mode_tracking: None,
             dispersion_validation: None,
+            k0_kittel_validation: None,
         }
     };
 
@@ -2973,6 +2995,7 @@ fn floquet_k0_equals_periodic() {
             dmi_interface_normal: None,
             mode_tracking: None,
             dispersion_validation: None,
+            k0_kittel_validation: None,
         }
     };
 
@@ -3092,6 +3115,7 @@ fn fem_eigen_path_writes_v2_dispersion_artifacts() {
                 },
             ],
         }),
+        k0_kittel_validation: None,
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -3571,6 +3595,7 @@ fn fem_eigen_path_executes_full_2x2_nonzero_k_floquet_phase_reduction() {
         dmi_interface_normal: None,
         mode_tracking: None,
         dispersion_validation: None,
+        k0_kittel_validation: None,
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -3715,6 +3740,7 @@ fn fem_eigen_path_rejects_floquet_dynamic_demag_before_sample_solves() {
         dmi_interface_normal: None,
         mode_tracking: None,
         dispersion_validation: None,
+        k0_kittel_validation: None,
     };
 
     let error = fullmag_runner::run_reference_fem_eigen(
@@ -3799,6 +3825,7 @@ fn fem_eigen_path_frequency_window_writes_window_diagnostics() {
         dmi_interface_normal: None,
         mode_tracking: Some(fullmag_ir::ModeTrackingIR::default()),
         dispersion_validation: None,
+        k0_kittel_validation: None,
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(
@@ -3898,6 +3925,7 @@ fn fem_eigen_single_k_dispersion_request_writes_v2_dispersion_artifact() {
         dmi_interface_normal: None,
         mode_tracking: None,
         dispersion_validation: None,
+        k0_kittel_validation: None,
     };
 
     let result = fullmag_runner::run_reference_fem_eigen(

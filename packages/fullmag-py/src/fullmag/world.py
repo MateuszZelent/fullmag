@@ -100,7 +100,7 @@ from fullmag.model.problem import (
 )
 from fullmag.model.discretization import FDM, FEM, FemLinearSolverPolicy
 from fullmag.model.geometry import Box, Translate
-from fullmag.model.eigen import serialize_dispersion_validation
+from fullmag.model.eigen import serialize_dispersion_validation, serialize_k0_kittel_validation
 
 _MESH_SIZE_CALIBRATIONS = (
     "general_physics",
@@ -2304,6 +2304,7 @@ def frequency_response_stage(
     bc: str | dict[str, object] = "free",
     magnetostatic_bc: str = "open",
     solver_method: str | None = None,
+    solver_preconditioner: str | None = None,
     solver_rtol: float | None = None,
     solver_max_iterations: int | None = None,
     solver_restart_iterations: int | None = None,
@@ -2311,6 +2312,7 @@ def frequency_response_stage(
 ) -> FrequencyResponseStageSpec:
     solver_policy = _frequency_response_solver_policy(
         solver_method=solver_method,
+        solver_preconditioner=solver_preconditioner,
         solver_rtol=solver_rtol,
         solver_max_iterations=solver_max_iterations,
         solver_restart_iterations=solver_restart_iterations,
@@ -2337,6 +2339,7 @@ def frequency_response_stage(
 def _frequency_response_solver_policy(
     *,
     solver_method: str | None,
+    solver_preconditioner: str | None,
     solver_rtol: float | None,
     solver_max_iterations: int | None,
     solver_restart_iterations: int | None,
@@ -2350,14 +2353,15 @@ def _frequency_response_solver_policy(
         solver_max_iterations = MAX_ITERATIONS
     if (
         solver_method is None
-        and
-        solver_rtol is None
+        and solver_preconditioner is None
+        and solver_rtol is None
         and solver_max_iterations is None
         and solver_restart_iterations is None
     ):
         return None
     return FrequencyResponseSolverPolicy(
         method=solver_method,
+        preconditioner=solver_preconditioner,
         rtol=solver_rtol,
         max_iterations=solver_max_iterations,
         restart_iterations=solver_restart_iterations,
@@ -3016,6 +3020,7 @@ class StudyStagesBuilder:
         bc: str | dict[str, object] = "free",
         magnetostatic_bc: str = "open",
         solver_method: str | None = None,
+        solver_preconditioner: str | None = None,
         solver_rtol: float | None = None,
         solver_max_iterations: int | None = None,
         solver_restart_iterations: int | None = None,
@@ -3037,6 +3042,7 @@ class StudyStagesBuilder:
                 bc=bc,
                 magnetostatic_bc=magnetostatic_bc,
                 solver_method=solver_method,
+                solver_preconditioner=solver_preconditioner,
                 solver_rtol=solver_rtol,
                 solver_max_iterations=solver_max_iterations,
                 solver_restart_iterations=solver_restart_iterations,
@@ -3729,6 +3735,10 @@ class StudyBuilder:
         dispersion_validation(validation)
         return self
 
+    def k0_kittel_validation(self, validation: object) -> "StudyBuilder":
+        k0_kittel_validation(validation)
+        return self
+
     def visualization(
         self,
         active_quantity_id: str | None = None,
@@ -4129,6 +4139,7 @@ def frequency_response(
     bc: str | dict[str, object] = "free",
     magnetostatic_bc: str = "open",
     solver_method: str | None = None,
+    solver_preconditioner: str | None = None,
     solver_rtol: float | None = None,
     solver_max_iterations: int | None = None,
     solver_restart_iterations: int | None = None,
@@ -4138,6 +4149,7 @@ def frequency_response(
     from fullmag.runtime import Simulation
     solver_policy = _frequency_response_solver_policy(
         solver_method=solver_method,
+        solver_preconditioner=solver_preconditioner,
         solver_rtol=solver_rtol,
         solver_max_iterations=solver_max_iterations,
         solver_restart_iterations=solver_restart_iterations,
@@ -4778,6 +4790,14 @@ def dispersion_validation(validation: object) -> None:
     runtime_metadata(
         "dispersion_validation",
         serialize_dispersion_validation(validation),
+    )
+
+
+def k0_kittel_validation(validation: object) -> None:
+    """Attach modal k=0 Kittel field-sweep validation intent."""
+    runtime_metadata(
+        "k0_kittel_validation",
+        serialize_k0_kittel_validation(validation),
     )
 
 

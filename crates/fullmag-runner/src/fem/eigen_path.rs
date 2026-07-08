@@ -82,6 +82,7 @@ impl SingleKSolver for KSolverAdapter {
                 lifted_imag: None,
                 amplitude: None,
                 phase: None,
+                node_mass_weights: None,
             });
         }
 

@@ -24,6 +24,9 @@ EIGEN_FREQUENCY_WINDOW_SMOKE = (
 EIGEN_PRODUCTION_GAMMA_K_PATH_SMOKE = (
     REPO_ROOT / "examples" / "fem_eigenmodes_production_gamma_k_path.py"
 )
+EIGEN_K0_KITTEL_ZEEMAN_NO_DEMAG = (
+    REPO_ROOT / "examples" / "fem_eigen_k0_kittel_zeeman_no_demag.py"
+)
 PERIODIC_K0_SMOKE = REPO_ROOT / "examples" / "fem_fmr_periodic_k0_smoke.py"
 PERIODIC_ANTIDOT_FREQUENCY_DRIVEN = (
     REPO_ROOT
@@ -48,6 +51,9 @@ CPU_PERIODIC_AIRBOX_DEMAG_RESPONSE = (
 )
 DRIVEN_RESPONSE_SOLVER = (
     REPO_ROOT / "backends" / "fem" / "src" / "frequency_domain" / "driven_response_solver.cpp"
+)
+RUNNER_FREQUENCY_RESPONSE = (
+    REPO_ROOT / "crates" / "fullmag-runner" / "src" / "frequency_response.rs"
 )
 PRODUCTION_CPU_DRIVEN_RESPONSE = (
     REPO_ROOT
@@ -80,6 +86,19 @@ def test_production_cpu_frequency_response_defaults_are_not_low_iteration_debug_
     assert "double relative_tolerance = 1.0e-3;" in header
     assert "std::uint64_t max_iterations = 8192;" in header
     assert "std::uint64_t restart_iterations = 8192;" in header
+
+
+def test_frequency_response_preflight_serializes_periodic_certificate_hashes() -> None:
+    source = RUNNER_FREQUENCY_RESPONSE.read_text(encoding="utf-8")
+
+    assert '"schema_version": "periodic_mesh_certificate.v5"' in source
+    assert (
+        '"artifact_role": "frequency_response_input_preflight_candidate"'
+        in source
+    )
+    assert '"magnetic_pair_map_sha256":' in source
+    assert '"airbox_pair_map_sha256":' in source
+    assert '"tangent_frame_transfer_required":' in source
 
 
 def test_periodic_airbox_fmr_runtime_target_uses_real_antidot_example() -> None:
@@ -135,6 +154,15 @@ def test_full_antidot_frequency_driven_target_uses_gpu_solver_controls() -> None
     assert "FULLMAG_FEM_EXECUTION=gpu" in target
     assert "FULLMAG_RELAX_DEVICE=gpu" in target
     assert "FULLMAG_FMR_DEVICE=gpu" in target
+    assert 'FULLMAG_FEM_GPU_DEMAG_MODE="${FULLMAG_FEM_GPU_DEMAG_MODE:-device_hypre_poisson}"' in target
+    assert (
+        'FULLMAG_FEM_FREQUENCY_RESPONSE_GPU_DEMAG_MODE="${FULLMAG_FEM_FREQUENCY_RESPONSE_GPU_DEMAG_MODE:-hybrid_cpu_poisson}"'
+        in target
+    )
+    assert (
+        'FULLMAG_FEM_FREQUENCY_RESPONSE_DELTA_PHI_FLUX_MAX_TOLERANCE_T="${FULLMAG_FEM_FREQUENCY_RESPONSE_DELTA_PHI_FLUX_MAX_TOLERANCE_T:-2e-2}"'
+        in target
+    )
     assert 'FULLMAG_FMR_DEMAG_RTOL="${FULLMAG_FMR_DEMAG_RTOL:-1e-4}"' in target
     assert (
         'FULLMAG_FMR_DEMAG_MAX_ITERATIONS="${FULLMAG_FMR_DEMAG_MAX_ITERATIONS:-1000}"'
@@ -147,6 +175,10 @@ def test_full_antidot_frequency_driven_target_uses_gpu_solver_controls() -> None
     )
     assert (
         'FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS="${FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS:-8192}"'
+        in target
+    )
+    assert (
+        'FULLMAG_FEM_FREQUENCY_RESPONSE_PRECONDITIONER_VARIANT="${FULLMAG_FEM_FREQUENCY_RESPONSE_PRECONDITIONER_VARIANT:-auto}"'
         in target
     )
     assert (
@@ -167,6 +199,19 @@ def test_full_antidot_frequency_driven_target_uses_gpu_solver_controls() -> None
     )
     assert "--require-production-gpu" in target
     assert "--require-periodic-airbox-gpu-demag-solved" in target
+
+
+def test_frequency_response_gpu_demag_mode_is_response_scoped() -> None:
+    source = (
+        REPO_ROOT / "crates" / "fullmag-runner" / "src" / "frequency_response.rs"
+    ).read_text(encoding="utf-8")
+
+    assert "FULLMAG_FEM_FREQUENCY_RESPONSE_GPU_DEMAG_MODE" in source
+    assert "FrequencyResponseGpuDemagModeEnvGuard" in source
+    assert "let _gpu_demag_mode_env_guard =" in source
+    assert source.find("let _gpu_demag_mode_env_guard =") < source.find(
+        "NativeBackendDemagTangentProvider::create"
+    )
 
 
 def test_periodic_airbox_promotion_artifact_target_requires_m5_equilibrium_gate() -> None:
@@ -283,6 +328,30 @@ def test_de_bv_low_k_dispersion_runtime_target_uses_analytic_reference_gate() ->
     assert "--dispersion-png examples/dyspersje.png" in target
     assert "test -f examples/dyspersje.png" in target
     assert "dynamic demag for Floquet periodic FEM is not implemented yet" not in target
+
+
+def test_k0_kittel_runtime_target_uses_no_demag_validation_fixture() -> None:
+    assert EIGEN_K0_KITTEL_ZEEMAN_NO_DEMAG.is_file()
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+
+    target_start = justfile.find(
+        "verify-fem-frequency-domain-eigen-k0-kittel-runtime:"
+    )
+    assert target_start != -1
+    next_target = justfile.find("\nverify-", target_start + 1)
+    target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
+
+    assert "just ensure-managed-fem-runtime" in target
+    assert "examples/fem_eigen_k0_kittel_zeeman_no_demag.py" in target
+    assert ".fullmag/reports/frequency-domain-eigen-k0-kittel-runtime/artifacts" in target
+    assert "eigen/spectrum.v2.json" in target
+    assert "eigen/branches.v2.json" in target
+    assert "eigen/dispersion.csv" in target
+    assert "frequency_domain/manifest.v1.json" in target
+    assert "validation/kittel_k0_pbc/summary.v1.json" in target
+    assert "validation/kittel_k0_pbc/points.v1.csv" in target
+    assert "scripts/verify_fem_frequency_domain_eigen_artifacts.py" in target
+    assert "--require-k0-kittel-field-sweep" in target
 
 
 def test_eigen_frequency_window_runtime_requires_production_shift_invert_validator() -> None:
@@ -668,8 +737,19 @@ def test_simple_periodic_antidot_frequency_driven_target_runs_new_plain_script()
     assert "rm -rf .fullmag/reports/fem-periodic-antidot-frequency-driven-runtime/artifacts" in target
     assert "mkdir -p .fullmag/reports/fem-periodic-antidot-frequency-driven-runtime" in target
     assert "examples/fem_periodic_antidot_relax_exchange_coupled_frequency_driven.py" in target
+    assert "FULLMAG_PERIODIC_ANTIDOT_FREQUENCY_STAGE=relax" in target
+    assert "FULLMAG_PERIODIC_ANTIDOT_FREQUENCY_STAGE=response" in target
+    assert "relax_artifacts/m_final.json" in target
+    assert "scripts/write_fem_magnetic_initial_state_from_shared_domain.py" in target
+    assert "relaxed_magnetic_initial_state.json" in target
+    assert (
+        "FULLMAG_PERIODIC_ANTIDOT_RELAXED_MAGNETIC_STATE=/workspace/.fullmag/reports/fem-periodic-antidot-frequency-driven-runtime/relaxed_magnetic_initial_state.json"
+        in target
+    )
+    assert "--initial-magnetization-state" not in target
     assert "examples/fem_frequency_response_smoke.py" not in target
-    assert "--headless --json" in target
+    assert "--headless" in target
+    assert "--json" in target
     assert (
         "--output-dir .fullmag/reports/fem-periodic-antidot-frequency-driven-runtime/artifacts"
         in target
@@ -684,6 +764,7 @@ def test_simple_periodic_antidot_frequency_driven_target_runs_new_plain_script()
     assert "FULLMAG_RELAX_DEVICE=gpu" in target
     assert "FULLMAG_FMR_DEVICE=gpu" in target
     assert "FULLMAG_FDM_EXECUTION=cpu" in target
+    assert 'FULLMAG_GMSH_THREADS="${FULLMAG_GMSH_THREADS:-1}"' in target
     assert 'FULLMAG_FMR_DEMAG_RTOL="${FULLMAG_FMR_DEMAG_RTOL:-1e-4}"' in target
     assert (
         'FULLMAG_FMR_DEMAG_MAX_ITERATIONS="${FULLMAG_FMR_DEMAG_MAX_ITERATIONS:-1000}"'
@@ -702,6 +783,14 @@ def test_simple_periodic_antidot_frequency_driven_target_runs_new_plain_script()
         'FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL="${FULLMAG_FMR_RESPONSE_PROGRESS_INTERVAL:-128}"'
         in target
     )
+    assert (
+        'FULLMAG_FEM_FREQUENCY_RESPONSE_PRECONDITIONER_VARIANT="${FULLMAG_FEM_FREQUENCY_RESPONSE_PRECONDITIONER_VARIANT:-auto}"'
+        in target
+    )
+    assert (
+        'FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT="${FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT:-auto}"'
+        in target
+    )
 
 
 def test_periodic_antidot_frequency_driven_example_uses_gpu_transition() -> None:
@@ -709,22 +798,36 @@ def test_periodic_antidot_frequency_driven_example_uses_gpu_transition() -> None
 
     assert 'study.device("gpu", precision="double")' in example
     assert "frequency_response_dynamic_demag" in example
+    assert "study.interactive(False)" in example
     assert "study.clear_outputs()" in example
+    assert "FULLMAG_PERIODIC_ANTIDOT_FREQUENCY_STAGE" in example
+    assert "FULLMAG_PERIODIC_ANTIDOT_RELAXED_MAGNETIC_STATE" in example
+    assert "fm.load_magnetization(relaxed_state_path, format=\"json\")" in example
+    assert '"combined", "relax", "response"' in example
     assert "study.stages.add_minimize(" in example
     assert "method=\"bb\"" in example
     assert "algorithm=\"llg_overdamped\"" not in example
     assert "solver=\"rk23\"" not in example
     assert "equilibrium_torque_tolerance_t = 5.0e-3" in example
     assert "equilibrium_torque_tolerance_a_per_m" in example
+    assert "minimum_element_size=0.5e-9" not in example
+    assert "maximum_element_size=3e-9" not in example
     assert "rtol=1e-4" in example
     assert "max_iterations=1000" in example
     assert "tol=equilibrium_torque_tolerance_a_per_m" in example
     assert "include_demag=True" in example
     assert 'magnetostatic_bc="periodic_airbox_k0"' in example
+    assert 'solver_method="gpu_operator_host_krylov"' in example
+    assert 'solver_preconditioner="auto"' in example
+    assert "response_solver_max_iterations = 8192" in example
+    assert "solver_max_iterations=response_solver_max_iterations" in example
+    assert "solver_restart_iterations=response_solver_restart_iterations" in example
+    assert "response_solver_restart_iterations = response_solver_max_iterations" in example
+    assert 'equilibrium_source="relax" if run_stage == "combined" else "provided"' in example
     assert "solver_rtol=" not in example
-    assert "solver_max_iterations=" not in example
-    assert "solver_restart_iterations=" not in example
     assert 'study.stages.change_device("gpu")' in example
+    assert 'study.save("H_demag"' not in example
+    assert 'study.save("demag_phi"' not in example
 
 
 def test_periodic_airbox_gpu_runtime_target_is_artifact_backed() -> None:
@@ -743,6 +846,11 @@ def test_periodic_airbox_gpu_runtime_target_is_artifact_backed() -> None:
     assert "FULLMAG_FEM_EXECUTION=gpu" in target
     assert "FULLMAG_FMR_DEVICE=gpu" in target
     assert "FULLMAG_RELAX_DEVICE=gpu" in target
+    assert 'FULLMAG_FEM_GPU_DEMAG_MODE="${FULLMAG_FEM_GPU_DEMAG_MODE:-device_hypre_poisson}"' in target
+    assert (
+        'FULLMAG_FEM_FREQUENCY_RESPONSE_GPU_DEMAG_MODE="${FULLMAG_FEM_FREQUENCY_RESPONSE_GPU_DEMAG_MODE:-hybrid_cpu_poisson}"'
+        in target
+    )
     assert 'FULLMAG_FMR_RESPONSE_RTOL="${FULLMAG_FMR_RESPONSE_RTOL:-1e-3}"' in target
     assert (
         'FULLMAG_FMR_RESPONSE_MAX_ITERATIONS="${FULLMAG_FMR_RESPONSE_MAX_ITERATIONS:-8192}"'
@@ -762,6 +870,10 @@ def test_periodic_airbox_gpu_runtime_target_is_artifact_backed() -> None:
     )
     assert (
         'FULLMAG_FMR_RESPONSE_PRECONDITIONER_AUTO_DISABLE_THRESHOLD="${FULLMAG_FMR_RESPONSE_PRECONDITIONER_AUTO_DISABLE_THRESHOLD:-1.0}"'
+        in target
+    )
+    assert (
+        'FULLMAG_FMR_RESPONSE_PRECONDITIONER_AUTO_PILOT_ITERATIONS="${FULLMAG_FMR_RESPONSE_PRECONDITIONER_AUTO_PILOT_ITERATIONS:-16}"'
         in target
     )
     assert (

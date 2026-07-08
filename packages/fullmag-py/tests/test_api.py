@@ -4441,6 +4441,7 @@ class ProblemApiTests(unittest.TestCase):
         study.stages.add_frequency_response(
             frequencies_hz=[2.0e9],
             solver_method="gpu_operator_host_krylov",
+            solver_preconditioner="block_jacobi",
             solver_max_iterations=128,
             solver_restart_iterations=32,
             solver_rtol=1e-2,
@@ -4467,12 +4468,14 @@ class ProblemApiTests(unittest.TestCase):
             policy,
             {
                 "method": "gpu_operator_host_krylov",
+                "preconditioner": "block_jacobi",
                 "rtol": 1e-2,
                 "max_iterations": 128,
                 "restart_iterations": 32,
             },
         )
         self.assertIn('solver_method="gpu_operator_host_krylov"', rewritten)
+        self.assertIn('solver_preconditioner="block_jacobi"', rewritten)
         self.assertIn("solver_max_iterations=128", rewritten)
         self.assertIn("solver_restart_iterations=32", rewritten)
         self.assertIn("solver_rtol=0.01", rewritten)
@@ -6001,6 +6004,150 @@ class ProblemApiTests(unittest.TestCase):
                 ],
                 max_k_rad_per_m=4.0e6,
             )
+
+    def test_study_k0_kittel_validation_lowers_to_runtime_metadata(self) -> None:
+        script = """
+        import math
+        import fullmag as fm
+
+        mu0 = 4.0e-7 * math.pi
+
+        study = fm.study("k0_kittel_validation")
+        study.engine("fem")
+        study.device("cpu", precision="double")
+        body = study.geometry(fm.Box(size=(80e-9, 40e-9, 10e-9), name="film"), name="film")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.001
+        body.m = fm.texture.uniform(1, 0, 0)
+        study.save("spectrum")
+        study.k0_kittel_validation(
+            fm.K0KittelFieldSweepValidation(
+                model="thin_film_in_plane",
+                effective_magnetisation=800e3,
+                samples=[
+                    fm.K0KittelFieldSample(0, (20e-3 / mu0, 0.0, 0.0)),
+                    fm.K0KittelFieldSample(1, (50e-3 / mu0, 0.0, 0.0)),
+                    fm.K0KittelFieldSample(2, (100e-3 / mu0, 0.0, 0.0)),
+                ],
+            )
+        )
+        study.stages.add_eigenmodes(
+            count=1,
+            target="frequency_window",
+            frequency_min=1.0e6,
+            frequency_max=5.0e9,
+            operator="full_2x2",
+            include_demag=True,
+            equilibrium_source="provided",
+            k_sampling=fm.KPath(
+                points=[
+                    fm.KPoint("B20mT", (0.0, 0.0, 0.0)),
+                    fm.KPoint("B100mT", (0.0, 0.0, 0.0)),
+                ],
+                samples_per_segment=[2],
+            ),
+            bc="free",
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "k0_kittel_validation.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+
+        metadata = loaded.problem.runtime_metadata["k0_kittel_validation"]
+        self.assertEqual(metadata["kind"], "k0_kittel_field_sweep")
+        self.assertEqual(metadata["model"], "thin_film_in_plane")
+        self.assertEqual(metadata["field_units"], "A_per_m")
+        self.assertEqual(metadata["relative_tolerance"], 0.05)
+        self.assertEqual(metadata["material"]["effective_magnetisation"], 800e3)
+        self.assertEqual(len(metadata["samples"]), 3)
+        self.assertEqual(metadata["samples"][0]["sample_index"], 0)
+        self.assertEqual(metadata["samples"][0]["bias_field"][1:], [0.0, 0.0])
+
+    def test_k0_kittel_validation_rejects_too_few_samples(self) -> None:
+        with self.assertRaisesRegex(ValueError, "at least three"):
+            fm.K0KittelFieldSweepValidation(
+                samples=[
+                    fm.K0KittelFieldSample(0, (1.0, 0.0, 0.0)),
+                    fm.K0KittelFieldSample(1, (2.0, 0.0, 0.0)),
+                ],
+            )
+
+    def test_k0_kittel_validation_accepts_public_periodic_airbox_demag(self) -> None:
+        validation = fm.K0KittelFieldSweepValidation(
+            case_id="K0-3",
+            model="thin_film_in_plane",
+            effective_magnetisation=800e3,
+            demag_kind="periodic_airbox_k0",
+            samples=[
+                fm.K0KittelFieldSample(0, (1.0, 0.0, 0.0)),
+                fm.K0KittelFieldSample(1, (2.0, 0.0, 0.0)),
+                fm.K0KittelFieldSample(2, (3.0, 0.0, 0.0)),
+            ],
+        )
+
+        self.assertEqual(validation.to_ir()["demag_kind"], "periodic_airbox_k0")
+
+    def test_k0_kittel_zeeman_no_demag_example_loads_validation_contract(self) -> None:
+        loaded = fm.load_problem_from_script(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "fem_eigen_k0_kittel_zeeman_no_demag.py",
+            lightweight_assets=True,
+        )
+
+        metadata = loaded.problem.runtime_metadata["k0_kittel_validation"]
+        self.assertEqual(metadata["kind"], "k0_kittel_field_sweep")
+        self.assertEqual(metadata["model"], "macrospin_larmor")
+        self.assertEqual(metadata["field_units"], "A_per_m")
+        self.assertEqual(metadata["material"], {})
+        samples = metadata["samples"]
+        self.assertGreaterEqual(len(samples), 5)
+        for sample in samples:
+            bias_field = sample["bias_field"]
+            self.assertEqual(len(bias_field), 3)
+            self.assertGreater(sum(component * component for component in bias_field), 0.0)
+            self.assertEqual(bias_field[1:], [0.0, 0.0])
+
+    def test_k0_kittel_thinfilm_demag_example_loads_k0_3_contract(self) -> None:
+        loaded = fm.load_problem_from_script(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "fem_eigen_k0_kittel_thinfilm_demag.py",
+            lightweight_assets=True,
+        )
+
+        metadata = loaded.problem.runtime_metadata["k0_kittel_validation"]
+        self.assertEqual(metadata["kind"], "k0_kittel_field_sweep")
+        self.assertEqual(metadata["case_id"], "K0-3")
+        self.assertEqual(metadata["demag_kind"], "synthetic_demag_factor")
+        self.assertEqual(metadata["model"], "thin_film_in_plane")
+        self.assertEqual(metadata["relative_tolerance"], 0.02)
+        self.assertEqual(metadata["material"]["effective_magnetisation"], 800e3)
+        samples = metadata["samples"]
+        self.assertGreaterEqual(len(samples), 5)
+        for sample in samples:
+            bias_field = sample["bias_field"]
+            self.assertEqual(len(bias_field), 3)
+            self.assertGreater(sum(component * component for component in bias_field), 0.0)
+            self.assertEqual(bias_field[1:], [0.0, 0.0])
+
+    def test_k0_kittel_periodic_airbox_example_loads_k0_3b_contract(self) -> None:
+        loaded = fm.load_problem_from_script(
+            Path(__file__).resolve().parents[3]
+            / "examples"
+            / "fem_eigen_k0_kittel_periodic_airbox.py",
+            lightweight_assets=True,
+        )
+
+        metadata = loaded.problem.runtime_metadata["k0_kittel_validation"]
+        self.assertEqual(metadata["kind"], "k0_kittel_field_sweep")
+        self.assertEqual(metadata["case_id"], "K0-3")
+        self.assertEqual(metadata["demag_kind"], "periodic_airbox_k0")
+        self.assertEqual(metadata["model"], "thin_film_in_plane")
+        self.assertEqual(metadata["material"]["effective_magnetisation"], 800e3)
 
     def test_script_rewrite_preserves_windowed_dispersion_k_path(self) -> None:
         loaded = fm.load_problem_from_script(

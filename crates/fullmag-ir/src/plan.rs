@@ -734,6 +734,39 @@ pub struct FemEigenDispersionValidationIR {
     pub scenarios: Vec<FemEigenDispersionValidationScenarioIR>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct FemEigenK0KittelValidationMaterialIR {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_magnetisation: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FemEigenK0KittelValidationSampleIR {
+    pub sample_index: u32,
+    pub bias_field: [f64; 3],
+}
+
+fn default_k0_kittel_relative_tolerance() -> f64 {
+    0.05
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FemEigenK0KittelValidationIR {
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub case_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demag_kind: Option<String>,
+    pub model: String,
+    pub field_units: String,
+    #[serde(default = "default_k0_kittel_relative_tolerance")]
+    pub relative_tolerance: f64,
+    #[serde(default)]
+    pub material: FemEigenK0KittelValidationMaterialIR,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub samples: Vec<FemEigenK0KittelValidationSampleIR>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FemEigenPlanIR {
     pub mesh_name: String,
@@ -786,6 +819,8 @@ pub struct FemEigenPlanIR {
     pub mode_tracking: Option<ModeTrackingIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dispersion_validation: Option<FemEigenDispersionValidationIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub k0_kittel_validation: Option<FemEigenK0KittelValidationIR>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

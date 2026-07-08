@@ -1097,6 +1097,207 @@ def exchange_only_expected_frequency_hz(kx: float) -> float:
     return gamma0 * (h0 + exchange_field) / (2.0 * math.pi)
 
 
+def k0_kittel_expected_frequency_hz(field_a_per_m: float) -> float:
+    gamma0 = 2.211e5
+    effective_magnetisation = 800e3
+    return (
+        gamma0
+        * math.sqrt(field_a_per_m * (field_a_per_m + effective_magnetisation))
+        / (2.0 * math.pi)
+    )
+
+
+def write_k0_kittel_field_sweep_metadata(
+    root: Path,
+    *,
+    demag_kind: str = "synthetic_demag_factor",
+) -> None:
+    metadata = {
+        "execution_plan": {
+            "backend_plan": {
+                "enable_exchange": True,
+                "enable_demag": True,
+                "gyromagnetic_ratio": 2.211e5,
+                "material": {
+                    "saturation_magnetisation": 800e3,
+                    "effective_magnetisation": 800e3,
+                },
+                "operator": {
+                    "kind": "k0_uniform_modal_eigen",
+                    "include_demag": True,
+                },
+                "k0_kittel_validation": {
+                    "case_id": "K0-3",
+                    "demag_kind": demag_kind,
+                    "model": "thin_film_in_plane",
+                    "field_units": "A_per_m",
+                    "relative_tolerance": 0.05,
+                    "samples": [
+                        {"sample_index": 0, "bias_field": [20e-3 / MU0, 0.0, 0.0]},
+                        {"sample_index": 1, "bias_field": [50e-3 / MU0, 0.0, 0.0]},
+                        {"sample_index": 2, "bias_field": [100e-3 / MU0, 0.0, 0.0]},
+                    ],
+                },
+            }
+        }
+    }
+    (root / "metadata.json").write_text(json.dumps(metadata))
+
+
+def write_k0_kittel_summary_and_points(
+    root: Path,
+    fields: tuple[float, ...],
+    frequencies_hz: tuple[float, ...],
+    *,
+    sweep_point_count: int | None = None,
+    case_id: str = "K0-3",
+    demag_kind: str = "synthetic_demag_factor",
+) -> None:
+    validation_dir = root / "validation" / "kittel_k0_pbc"
+    validation_dir.mkdir(parents=True)
+    point_count = len(fields) if sweep_point_count is None else sweep_point_count
+    (validation_dir / "summary.v1.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "frequency_domain_kittel_k0_validation.v1",
+                "status": "passed",
+                "case_id": case_id,
+                "test_id": "kittel_k0_pbc_thinfilm_demag_inplane",
+                "model": "thin_film_in_plane",
+                "phasor_convention": "exp_plus_i_omega_t",
+                "boundary_condition": "periodic_k0",
+                "k_vector_rad_per_m": [0.0, 0.0, 0.0],
+                "demag_kind": demag_kind,
+                "demag": {
+                    "kind": demag_kind,
+                    "effective_magnetisation_A_per_m": 800e3,
+                    "gauge_policy": (
+                        "mean_zero_augmented"
+                        if demag_kind == "periodic_airbox_k0"
+                        else "not_applicable"
+                    ),
+                    "phi_dof_count": 8 if demag_kind == "periodic_airbox_k0" else None,
+                    "augmented_phi_dof_count": 9 if demag_kind == "periodic_airbox_k0" else None,
+                    "poisson_constraint_relative_residual": (
+                        1.0e-12 if demag_kind == "periodic_airbox_k0" else None
+                    ),
+                    "magnetic_pair_count": 4 if demag_kind == "periodic_airbox_k0" else None,
+                    "airbox_pair_count": 6 if demag_kind == "periodic_airbox_k0" else None,
+                    "production_periodic_airbox_claim": demag_kind == "periodic_airbox_k0",
+                },
+                "sweep_point_count": point_count,
+                "max_relative_frequency_error": 0.0,
+                "median_relative_frequency_error": 0.0,
+                "mode_selection": {
+                    "minimum_uniformity_score": 1.0,
+                    "minimum_branch_overlap": 1.0,
+                    "maximum_tangent_leakage": 0.0,
+                },
+                "solver": {
+                    "backend": "modal_eigen",
+                    "execution_lane": "production_cpu",
+                    "requested_mode_count": 2,
+                    "max_eigen_residual_relative": 0.0,
+                },
+            }
+        )
+    )
+    rows = [
+        (
+            case_id,
+            demag_kind,
+            index,
+            field,
+            MU0 * field,
+            frequency,
+            frequency,
+            0.0,
+            0,
+            0.0,
+            2.0 * math.pi * frequency,
+            0.0,
+            1.0,
+            1.0,
+            0.0,
+            0.0,
+        )
+        for index, (field, frequency) in enumerate(zip(fields, frequencies_hz))
+    ]
+    header = (
+        "case_id,demag_kind,field_index,H0_A_per_m,mu0_H0_T,expected_frequency_hz,eigen_frequency_hz,"
+        "relative_frequency_error,selected_mode_index,eigenvalue_real,eigenvalue_imag,"
+        "mode_residual_relative,uniformity_score,branch_overlap_previous,"
+        "max_m0_dot_delta_m_abs,max_periodic_seam_mismatch\n"
+    )
+    body = "".join(",".join(str(value) for value in row) + "\n" for row in rows)
+    (validation_dir / "points.v1.csv").write_text(header + body)
+
+
+def write_k0_kittel_convergence_table(
+    root: Path,
+    *,
+    relative_error: float = 0.0,
+) -> None:
+    validation_dir = root / "validation" / "kittel_k0_pbc"
+    validation_dir.mkdir(parents=True, exist_ok=True)
+    header = (
+        "case_id,demag_kind,mesh_resolution_m,airbox_size_m,phi_dof_count,"
+        "poisson_residual_relative,relative_kittel_frequency_error,"
+        "effective_magnetisation_A_per_m\n"
+    )
+    row = (
+        f"K0-3,periodic_airbox_k0,5e-9,80e-9,8,1e-12,{relative_error},800000.0\n"
+    )
+    (validation_dir / "convergence.v1.csv").write_text(header + row)
+
+
+def mark_gpu_modal_k0_kittel_fixture(root: Path) -> None:
+    manifest_path = root / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["requested_execution"] = {
+        "calculation_mode": "dispersion_modal",
+        "backend": "fem",
+        "device": "gpu",
+        "precision": "double",
+        "execution_mode": "strict",
+        "ui_mode": "auto",
+        "operator": "linearized_llg",
+        "solver_family": "modal_eigen",
+        "solve_equation": "A q = lambda B q; lambda = i omega",
+        "include_demag": False,
+        "damping_policy": "ignore",
+        "equilibrium_source": "provided",
+        "k_sampling": "path",
+        "outputs": ["spectrum", "branches", "dispersion", "mode_fields"],
+    }
+    manifest["resolved_execution"] = {
+        "backend": "fem",
+        "device": "gpu",
+        "precision": "double",
+        "engine": "gpu_dense_k0_macrospin_modal_eigen",
+        "native_backend": "native_gpu",
+        "reference_or_production": "production",
+        "container_image": "fullmag/fem-gpu:local",
+        "build_features": ["cuda", "fem-gpu"],
+        "demag_realization": "none",
+        "solver_library": "cusolverdn",
+        "solver_algorithm": "gpu_dense_k0_macrospin_modal_eigen",
+        "solve_kind": "modal_eigen",
+        "device_residency": "device_resident",
+    }
+    manifest["capabilities"]["dispersion"]["production_gpu"] = {
+        "status": "partial_production_executable",
+        "reason": "GPU modal Kittel fixture uses a real modal GPU lane",
+    }
+    manifest_path.write_text(json.dumps(manifest))
+
+    summary_path = root / "validation" / "kittel_k0_pbc" / "summary.v1.json"
+    summary = json.loads(summary_path.read_text())
+    summary["solver"]["execution_lane"] = "production_gpu"
+    summary["solver"]["solver_algorithm"] = "gpu_dense_k0_macrospin_modal_eigen"
+    summary_path.write_text(json.dumps(summary))
+
+
 def write_exchange_only_dispersion_metadata(root: Path) -> None:
     metadata = {
         "execution_plan": {
@@ -1919,6 +2120,26 @@ def test_validator_rejects_mode_metadata_phasor_drift_from_spectrum(
     assert "mode_0000.json.phasor_convention vs mode.phasor_convention" in (
         result.stderr + result.stdout
     )
+
+
+def test_validator_accepts_mode_metadata_float_roundoff_from_spectrum(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    spectrum_path = tmp_path / "eigen" / "spectrum.v2.json"
+    spectrum = json.loads(spectrum_path.read_text())
+    spectrum["samples"][0]["modes"][0]["eigenvalue_real"] = 222052.04130342422
+    spectrum_path.write_text(json.dumps(spectrum))
+    sync_eigen_summary_mode_from_spectrum(tmp_path)
+
+    mode_path = tmp_path / "eigen" / "modes" / "sample_0000" / "mode_0000.json"
+    mode = json.loads(mode_path.read_text())
+    mode["eigenvalue_real"] = 222052.04130342425
+    mode_path.write_text(json.dumps(mode))
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode == 0, result.stderr + result.stdout
 
 
 def test_validator_rejects_eigen_summary_phasor_drift_from_spectrum(
@@ -3114,7 +3335,7 @@ def test_validator_rejects_gamma_only_when_nonzero_production_modal_k_path_requi
         tmp_path,
         frequencies_hz=(1.0e9, 1.0e9, 1.0e9),
         kx_rad_m=(0.0, 0.0, 0.0),
-        path_s_rad_m=(0.0, 1.0, 2.0),
+        path_s_rad_m=(0.0, 0.0, 0.0),
     )
     mark_production_shift_invert_k_path_fixture(tmp_path)
 
@@ -3135,6 +3356,28 @@ def test_validator_accepts_production_gamma_k_path_provenance(
         path_s_rad_m=(0.0, 1.0, 2.0),
     )
     mark_production_shift_invert_k_path_fixture(tmp_path)
+
+    result = run_validator(tmp_path, "--require-production-gamma-k-path")
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_accepts_production_gamma_k_path_with_k0_demag(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(
+        tmp_path,
+        frequencies_hz=(1.0e9, 1.0e9, 1.0e9),
+        kx_rad_m=(0.0, 0.0, 0.0),
+        path_s_rad_m=(0.0, 0.0, 0.0),
+    )
+    mark_production_shift_invert_k_path_fixture(tmp_path)
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["requested_execution"]["include_demag"] = True
+    manifest["resolved_execution"]["demag_realization"] = "requested"
+    manifest_path.write_text(json.dumps(manifest))
 
     result = run_validator(tmp_path, "--require-production-gamma-k-path")
 
@@ -3300,6 +3543,266 @@ def test_validator_accepts_exchange_only_analytic_reference_dispersion(
     )
 
     assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_accepts_k0_kittel_field_sweep(
+    tmp_path: Path,
+) -> None:
+    fields = (20e-3 / MU0, 50e-3 / MU0, 100e-3 / MU0)
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(
+        tmp_path,
+        frequencies_hz=tuple(k0_kittel_expected_frequency_hz(field) for field in fields),
+        k_vectors_rad_m=((0.0, 0.0, 0.0),) * len(fields),
+    )
+    write_k0_kittel_field_sweep_metadata(tmp_path)
+
+    result = run_validator(tmp_path, "--require-k0-kittel-field-sweep")
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_accepts_k0_kittel_summary_and_points(
+    tmp_path: Path,
+) -> None:
+    fields = (20e-3 / MU0, 50e-3 / MU0, 100e-3 / MU0)
+    frequencies = tuple(k0_kittel_expected_frequency_hz(field) for field in fields)
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(
+        tmp_path,
+        frequencies_hz=frequencies,
+        k_vectors_rad_m=((0.0, 0.0, 0.0),) * len(fields),
+    )
+    write_k0_kittel_field_sweep_metadata(tmp_path)
+    write_k0_kittel_summary_and_points(tmp_path, fields, frequencies)
+
+    result = run_validator(tmp_path, "--require-k0-kittel-field-sweep")
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_accepts_k0_kittel_demag_contract(
+    tmp_path: Path,
+) -> None:
+    fields = (20e-3 / MU0, 50e-3 / MU0, 100e-3 / MU0)
+    frequencies = tuple(k0_kittel_expected_frequency_hz(field) for field in fields)
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(
+        tmp_path,
+        frequencies_hz=frequencies,
+        k_vectors_rad_m=((0.0, 0.0, 0.0),) * len(fields),
+    )
+    write_k0_kittel_field_sweep_metadata(tmp_path)
+    write_k0_kittel_summary_and_points(tmp_path, fields, frequencies)
+
+    result = run_validator(tmp_path, "--require-k0-kittel-demag")
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_accepts_k0_kittel_demag_contract_with_binary_mode_exports(
+    tmp_path: Path,
+) -> None:
+    fields = (20e-3 / MU0, 50e-3 / MU0, 100e-3 / MU0)
+    frequencies = tuple(k0_kittel_expected_frequency_hz(field) for field in fields)
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(
+        tmp_path,
+        frequencies_hz=frequencies,
+        k_vectors_rad_m=((0.0, 0.0, 0.0),) * len(fields),
+    )
+    write_k0_kittel_field_sweep_metadata(tmp_path)
+    write_k0_kittel_summary_and_points(tmp_path, fields, frequencies)
+    make_mode_fields_binary_only(tmp_path)
+
+    result = run_validator(tmp_path, "--require-k0-kittel-demag")
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_rejects_k0_kittel_demag_without_case_id(
+    tmp_path: Path,
+) -> None:
+    fields = (20e-3 / MU0, 50e-3 / MU0, 100e-3 / MU0)
+    frequencies = tuple(k0_kittel_expected_frequency_hz(field) for field in fields)
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(
+        tmp_path,
+        frequencies_hz=frequencies,
+        k_vectors_rad_m=((0.0, 0.0, 0.0),) * len(fields),
+    )
+    write_k0_kittel_field_sweep_metadata(tmp_path)
+    metadata_path = tmp_path / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    del metadata["execution_plan"]["backend_plan"]["k0_kittel_validation"]["case_id"]
+    metadata_path.write_text(json.dumps(metadata))
+    write_k0_kittel_summary_and_points(tmp_path, fields, frequencies)
+
+    result = run_validator(tmp_path, "--require-k0-kittel-demag")
+
+    assert result.returncode != 0
+    assert "k0_kittel_validation.case_id" in (result.stderr + result.stdout)
+
+
+def test_validator_accepts_k0_kittel_periodic_airbox_contract_with_convergence(
+    tmp_path: Path,
+) -> None:
+    fields = (20e-3 / MU0, 50e-3 / MU0, 100e-3 / MU0)
+    frequencies = tuple(k0_kittel_expected_frequency_hz(field) for field in fields)
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(
+        tmp_path,
+        frequencies_hz=frequencies,
+        k_vectors_rad_m=((0.0, 0.0, 0.0),) * len(fields),
+    )
+    write_k0_kittel_field_sweep_metadata(tmp_path, demag_kind="periodic_airbox_k0")
+    write_k0_kittel_summary_and_points(
+        tmp_path,
+        fields,
+        frequencies,
+        demag_kind="periodic_airbox_k0",
+    )
+    write_k0_kittel_convergence_table(tmp_path)
+
+    result = run_validator(tmp_path, "--require-k0-kittel-periodic-airbox-demag")
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_rejects_synthetic_k0_kittel_for_periodic_airbox_gate(
+    tmp_path: Path,
+) -> None:
+    fields = (20e-3 / MU0, 50e-3 / MU0, 100e-3 / MU0)
+    frequencies = tuple(k0_kittel_expected_frequency_hz(field) for field in fields)
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(
+        tmp_path,
+        frequencies_hz=frequencies,
+        k_vectors_rad_m=((0.0, 0.0, 0.0),) * len(fields),
+    )
+    write_k0_kittel_field_sweep_metadata(tmp_path)
+    write_k0_kittel_summary_and_points(tmp_path, fields, frequencies)
+
+    result = run_validator(tmp_path, "--require-k0-kittel-periodic-airbox-demag")
+
+    assert result.returncode != 0
+    assert "periodic_airbox_k0" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_k0_kittel_periodic_airbox_without_convergence(
+    tmp_path: Path,
+) -> None:
+    fields = (20e-3 / MU0, 50e-3 / MU0, 100e-3 / MU0)
+    frequencies = tuple(k0_kittel_expected_frequency_hz(field) for field in fields)
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(
+        tmp_path,
+        frequencies_hz=frequencies,
+        k_vectors_rad_m=((0.0, 0.0, 0.0),) * len(fields),
+    )
+    write_k0_kittel_field_sweep_metadata(tmp_path, demag_kind="periodic_airbox_k0")
+    write_k0_kittel_summary_and_points(
+        tmp_path,
+        fields,
+        frequencies,
+        demag_kind="periodic_airbox_k0",
+    )
+
+    result = run_validator(tmp_path, "--require-k0-kittel-demag")
+
+    assert result.returncode != 0
+    assert "convergence.v1.csv" in (result.stderr + result.stdout)
+
+
+def test_validator_accepts_gpu_modal_k0_kittel_provenance(
+    tmp_path: Path,
+) -> None:
+    fields = (20e-3 / MU0, 50e-3 / MU0, 100e-3 / MU0)
+    frequencies = tuple(k0_kittel_expected_frequency_hz(field) for field in fields)
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(
+        tmp_path,
+        frequencies_hz=frequencies,
+        k_vectors_rad_m=((0.0, 0.0, 0.0),) * len(fields),
+    )
+    write_k0_kittel_field_sweep_metadata(tmp_path)
+    write_k0_kittel_summary_and_points(tmp_path, fields, frequencies)
+    mark_gpu_modal_k0_kittel_fixture(tmp_path)
+
+    result = run_validator(
+        tmp_path,
+        "--require-k0-kittel-field-sweep",
+        "--require-gpu-modal-k0-kittel-provenance",
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_rejects_cpu_k0_kittel_as_gpu_provenance(
+    tmp_path: Path,
+) -> None:
+    fields = (20e-3 / MU0, 50e-3 / MU0, 100e-3 / MU0)
+    frequencies = tuple(k0_kittel_expected_frequency_hz(field) for field in fields)
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(
+        tmp_path,
+        frequencies_hz=frequencies,
+        k_vectors_rad_m=((0.0, 0.0, 0.0),) * len(fields),
+    )
+    write_k0_kittel_field_sweep_metadata(tmp_path)
+    write_k0_kittel_summary_and_points(tmp_path, fields, frequencies)
+
+    result = run_validator(
+        tmp_path,
+        "--require-k0-kittel-field-sweep",
+        "--require-gpu-modal-k0-kittel-provenance",
+    )
+
+    assert result.returncode != 0
+    assert "manifest.requested_execution" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_k0_kittel_summary_point_count_mismatch(
+    tmp_path: Path,
+) -> None:
+    fields = (20e-3 / MU0, 50e-3 / MU0, 100e-3 / MU0)
+    frequencies = tuple(k0_kittel_expected_frequency_hz(field) for field in fields)
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(
+        tmp_path,
+        frequencies_hz=frequencies,
+        k_vectors_rad_m=((0.0, 0.0, 0.0),) * len(fields),
+    )
+    write_k0_kittel_field_sweep_metadata(tmp_path)
+    write_k0_kittel_summary_and_points(
+        tmp_path,
+        fields,
+        frequencies,
+        sweep_point_count=2,
+    )
+
+    result = run_validator(tmp_path, "--require-k0-kittel-field-sweep")
+
+    assert result.returncode != 0
+    assert "kittel_k0_pbc" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_k0_kittel_field_sweep_wrong_scale(
+    tmp_path: Path,
+) -> None:
+    fields = (20e-3 / MU0, 50e-3 / MU0, 100e-3 / MU0)
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(
+        tmp_path,
+        frequencies_hz=tuple(2.0 * k0_kittel_expected_frequency_hz(field) for field in fields),
+        k_vectors_rad_m=((0.0, 0.0, 0.0),) * len(fields),
+    )
+    write_k0_kittel_field_sweep_metadata(tmp_path)
+
+    result = run_validator(tmp_path, "--require-k0-kittel-field-sweep")
+
+    assert result.returncode != 0
+    assert "k0 Kittel field sweep" in (result.stderr + result.stdout)
 
 
 def test_validator_rejects_exchange_only_dispersion_with_wrong_scale(

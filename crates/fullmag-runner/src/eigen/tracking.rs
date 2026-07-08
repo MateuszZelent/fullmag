@@ -243,6 +243,7 @@ mod tests {
             lifted_imag: None,
             amplitude: None,
             phase: None,
+            node_mass_weights: None,
         }
     }
 
@@ -268,6 +269,7 @@ mod tests {
             lifted_imag: None,
             amplitude: None,
             phase: None,
+            node_mass_weights: None,
         }
     }
 
@@ -289,7 +291,9 @@ mod tests {
             notes: Vec::new(),
             include_demag: false,
             dispersion_validation: None,
+            k0_kittel_validation: None,
             dispersion_analytic_reference: None,
+            k0_kittel_periodic_airbox_demag: None,
         };
         let cfg = ModeTrackingIR {
             method: ModeTrackingMethodIR::OverlapGreedy,
@@ -319,7 +323,9 @@ mod tests {
             notes: Vec::new(),
             include_demag: false,
             dispersion_validation: None,
+            k0_kittel_validation: None,
             dispersion_analytic_reference: None,
+            k0_kittel_periodic_airbox_demag: None,
         };
         let cfg = ModeTrackingIR {
             method: ModeTrackingMethodIR::OverlapGreedy,
@@ -349,7 +355,9 @@ mod tests {
             notes: Vec::new(),
             include_demag: false,
             dispersion_validation: None,
+            k0_kittel_validation: None,
             dispersion_analytic_reference: None,
+            k0_kittel_periodic_airbox_demag: None,
         };
         let cfg = ModeTrackingIR {
             method: ModeTrackingMethodIR::OverlapGreedy,

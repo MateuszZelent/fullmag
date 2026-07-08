@@ -723,10 +723,22 @@ pub enum FrequencyResponseSolverMethodIR {
     GpuDeviceKrylov,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FrequencyResponsePreconditionerIR {
+    Auto,
+    GraphDemagCoarse,
+    DemagCoarse,
+    BlockJacobi,
+    None,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FrequencyResponseSolverPolicyIR {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub method: Option<FrequencyResponseSolverMethodIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preconditioner: Option<FrequencyResponsePreconditionerIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rtol: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

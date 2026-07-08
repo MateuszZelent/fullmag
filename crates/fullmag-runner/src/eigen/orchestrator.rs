@@ -92,6 +92,7 @@ pub fn run_path_or_single<S: SingleKSolver>(
         notes,
         include_demag: plan.operator.include_demag,
         dispersion_validation: plan.dispersion_validation.clone(),
+        k0_kittel_validation: plan.k0_kittel_validation.clone(),
         dispersion_analytic_reference: plan.dispersion_validation.as_ref().map(|_| {
             DispersionAnalyticReferenceContext {
                 external_field: plan.external_field.unwrap_or([0.0, 0.0, 0.0]),
@@ -100,6 +101,7 @@ pub fn run_path_or_single<S: SingleKSolver>(
                 gyromagnetic_ratio: plan.gyromagnetic_ratio,
             }
         }),
+        k0_kittel_periodic_airbox_demag: None,
     };
     track_branches(&mut result, mode_tracking);
 
@@ -186,6 +188,7 @@ mod tests {
                     lifted_imag: Some(vec![[0.0, 1.0, 0.0]]),
                     amplitude: Some(vec![1.0]),
                     phase: Some(vec![0.0]),
+                    node_mass_weights: None,
                 }],
                 relaxation_steps: 0,
                 solver_model: EigenSolverModel::ReferenceScalarTangent,
@@ -272,6 +275,7 @@ mod tests {
             air_box_config: None,
             mode_tracking: None,
             dispersion_validation: None,
+            k0_kittel_validation: None,
         }
     }
 
@@ -352,6 +356,7 @@ mod tests {
                     lifted_imag: Some(vec![[0.0, 1.0, 0.0]]),
                     amplitude: Some(vec![1.0]),
                     phase: Some(vec![0.0]),
+                    node_mass_weights: None,
                 }],
                 relaxation_steps: 0,
                 solver_model: self.models[sample.sample_index],

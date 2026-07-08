@@ -472,6 +472,17 @@ pub enum fullmag_fem_frequency_domain_phase_convention {
 }
 
 #[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fem_frequency_domain_drive_kind {
+    FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_UNSPECIFIED = 0,
+    FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_DYNAMIC_FIELD_PHASOR_A_PER_M = 1,
+    FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_TANGENT_RHS = 2,
+    FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_CARTESIAN_TORQUE_PHASOR = 3,
+    FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_STT_CURRENT_PHASOR = 4,
+    FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_COUPLED_EXTERNAL_PROVIDER = 5,
+}
+
+#[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct fullmag_fem_frequency_domain_availability_request {
     pub study_kind: fullmag_fem_frequency_domain_study_kind,
@@ -645,6 +656,8 @@ pub struct fullmag_fem_frequency_domain_driven_response_request {
     pub has_floquet_k_vector: i32,
     pub floquet_k_vector_rad_per_m: [f64; 3],
     pub phase_convention: fullmag_fem_frequency_domain_phase_convention,
+    pub drive_kind: fullmag_fem_frequency_domain_drive_kind,
+    pub require_nonzero_rhs: i32,
     pub mfem_floquet_periodic_pairs: *const fullmag_fem_frequency_domain_floquet_periodic_pair,
     pub mfem_floquet_periodic_pair_count: u64,
     pub requires_periodic_airbox_dynamic_demag: i32,
@@ -807,6 +820,21 @@ pub struct FullmagFemModalEigenRequest {
     pub phase_convention: fullmag_fem_frequency_domain_phase_convention,
     pub mfem_floquet_periodic_pairs: *const fullmag_fem_frequency_domain_floquet_periodic_pair,
     pub mfem_floquet_periodic_pair_count: u64,
+    pub poisson_airbox_block_enabled: i32,
+    pub poisson_airbox_q_dof_count: u64,
+    pub poisson_airbox_phi_dof_count: u64,
+    pub poisson_airbox_a_qq_csr: FullmagFemCsrMatrixView,
+    pub poisson_airbox_a_qphi_csr: FullmagFemCsrMatrixView,
+    pub poisson_airbox_a_phiq_csr: FullmagFemCsrMatrixView,
+    pub poisson_airbox_a_phiphi_csr: FullmagFemCsrMatrixView,
+    pub poisson_airbox_b_qq_csr: FullmagFemCsrMatrixView,
+    pub poisson_airbox_phi_mean_weights: *const f64,
+    pub poisson_airbox_phi_mean_weights_count: u64,
+    pub poisson_airbox_target_frequency_hz: f64,
+    pub poisson_airbox_expected_reference_frequency_hz: f64,
+    pub poisson_airbox_periodic_mesh_certificate_schema: *const c_char,
+    pub poisson_airbox_magnetic_pair_count: u64,
+    pub poisson_airbox_airbox_pair_count: u64,
 }
 
 #[repr(C)]
@@ -870,6 +898,8 @@ pub struct fullmag_fem_frequency_domain_abi_layout {
     pub driven_response_request_progress_callback_offset: u64,
     pub driven_response_request_tiny_validation_drive_imag_offset: u64,
     pub driven_response_request_phase_convention_offset: u64,
+    pub driven_response_request_drive_kind_offset: u64,
+    pub driven_response_request_require_nonzero_rhs_offset: u64,
     pub driven_response_request_mfem_floquet_periodic_pair_count_offset: u64,
     pub driven_response_request_periodic_airbox_magnetostatic_periodic_node_pairs_offset: u64,
     pub driven_response_request_periodic_airbox_coupled_block_enabled_offset: u64,
@@ -1463,6 +1493,25 @@ mod tests {
     }
 
     #[test]
+    fn frequency_domain_drive_kind_abi_discriminants_are_stable() {
+        assert_eq!(
+            fullmag_fem_frequency_domain_drive_kind::FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_UNSPECIFIED
+                as i32,
+            0
+        );
+        assert_eq!(
+            fullmag_fem_frequency_domain_drive_kind::FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_DYNAMIC_FIELD_PHASOR_A_PER_M
+                as i32,
+            1
+        );
+        assert_eq!(
+            fullmag_fem_frequency_domain_drive_kind::FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_TANGENT_RHS
+                as i32,
+            2
+        );
+    }
+
+    #[test]
     fn frequency_domain_runtime_abi_layout_matches_rust_bindings() {
         let mut layout = fullmag_fem_frequency_domain_abi_layout::default();
         let status = unsafe { fullmag_fem_get_frequency_domain_abi_layout(&mut layout) };
@@ -1572,6 +1621,14 @@ mod tests {
         assert_eq!(
             layout.driven_response_request_phase_convention_offset,
             std::mem::offset_of!(DrivenRequest, phase_convention) as u64
+        );
+        assert_eq!(
+            layout.driven_response_request_drive_kind_offset,
+            std::mem::offset_of!(DrivenRequest, drive_kind) as u64
+        );
+        assert_eq!(
+            layout.driven_response_request_require_nonzero_rhs_offset,
+            std::mem::offset_of!(DrivenRequest, require_nonzero_rhs) as u64
         );
         assert_eq!(
             layout.driven_response_request_mfem_floquet_periodic_pair_count_offset,
@@ -1750,6 +1807,44 @@ mod tests {
     }
 
     #[test]
+    fn modal_eigen_request_abi_exposes_poisson_airbox_tail_layout() {
+        type Request = FullmagFemModalEigenRequest;
+        let request = std::mem::MaybeUninit::<Request>::zeroed();
+        let request = unsafe { request.assume_init() };
+
+        assert_eq!(request.poisson_airbox_block_enabled, 0);
+        assert_eq!(request.poisson_airbox_q_dof_count, 0);
+        assert_eq!(request.poisson_airbox_phi_dof_count, 0);
+        assert_eq!(request.poisson_airbox_a_qq_csr.row_count, 0);
+        assert_eq!(request.poisson_airbox_a_qphi_csr.row_count, 0);
+        assert_eq!(request.poisson_airbox_a_phiq_csr.row_count, 0);
+        assert_eq!(request.poisson_airbox_a_phiphi_csr.row_count, 0);
+        assert_eq!(request.poisson_airbox_b_qq_csr.row_count, 0);
+        assert!(request.poisson_airbox_phi_mean_weights.is_null());
+        assert_eq!(request.poisson_airbox_phi_mean_weights_count, 0);
+        assert_eq!(request.poisson_airbox_target_frequency_hz, 0.0);
+        assert_eq!(request.poisson_airbox_expected_reference_frequency_hz, 0.0);
+        assert!(request
+            .poisson_airbox_periodic_mesh_certificate_schema
+            .is_null());
+        assert_eq!(request.poisson_airbox_magnetic_pair_count, 0);
+        assert_eq!(request.poisson_airbox_airbox_pair_count, 0);
+
+        let floquet_pair_count = std::mem::offset_of!(Request, mfem_floquet_periodic_pair_count);
+        let poisson_enabled = std::mem::offset_of!(Request, poisson_airbox_block_enabled);
+        let poisson_a_qq = std::mem::offset_of!(Request, poisson_airbox_a_qq_csr);
+        let poisson_reference =
+            std::mem::offset_of!(Request, poisson_airbox_expected_reference_frequency_hz);
+        let poisson_certificate =
+            std::mem::offset_of!(Request, poisson_airbox_periodic_mesh_certificate_schema);
+
+        assert!(floquet_pair_count < poisson_enabled);
+        assert!(poisson_enabled < poisson_a_qq);
+        assert!(poisson_a_qq < poisson_reference);
+        assert!(poisson_reference < poisson_certificate);
+    }
+
+    #[test]
     fn frequency_domain_driven_response_solve_abi_has_owned_result_boundary() {
         let request =
             std::mem::MaybeUninit::<fullmag_fem_frequency_domain_driven_response_request>::zeroed();
@@ -1806,6 +1901,11 @@ mod tests {
             request.phase_convention,
             fullmag_fem_frequency_domain_phase_convention::FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_I_OMEGA_T
         );
+        assert_eq!(
+            request.drive_kind,
+            fullmag_fem_frequency_domain_drive_kind::FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_UNSPECIFIED
+        );
+        assert_eq!(request.require_nonzero_rhs, 0);
         assert!(request.mfem_floquet_periodic_pairs.is_null());
         assert_eq!(request.mfem_floquet_periodic_pair_count, 0);
         assert_eq!(request.mfem_dmi_uniform_ms, 0.0);
@@ -1877,6 +1977,8 @@ mod tests {
         let has_floquet_k_vector = std::mem::offset_of!(Request, has_floquet_k_vector);
         let floquet_k_vector = std::mem::offset_of!(Request, floquet_k_vector_rad_per_m);
         let phase_convention = std::mem::offset_of!(Request, phase_convention);
+        let drive_kind = std::mem::offset_of!(Request, drive_kind);
+        let require_nonzero_rhs = std::mem::offset_of!(Request, require_nonzero_rhs);
         let floquet_pair_ptr = std::mem::offset_of!(Request, mfem_floquet_periodic_pairs);
         let floquet_pair_count = std::mem::offset_of!(Request, mfem_floquet_periodic_pair_count);
         let airbox_phi_pair_ptr =
@@ -1898,7 +2000,9 @@ mod tests {
         assert!(static_pair_count < has_floquet_k_vector);
         assert!(has_floquet_k_vector < floquet_k_vector);
         assert!(floquet_k_vector < phase_convention);
-        assert!(phase_convention < floquet_pair_ptr);
+        assert!(phase_convention < drive_kind);
+        assert!(drive_kind < require_nonzero_rhs);
+        assert!(require_nonzero_rhs < floquet_pair_ptr);
         assert!(floquet_pair_ptr < floquet_pair_count);
         assert!(floquet_pair_count < airbox_phi_pair_ptr);
         assert!(airbox_phi_pair_ptr < airbox_phi_pair_count);

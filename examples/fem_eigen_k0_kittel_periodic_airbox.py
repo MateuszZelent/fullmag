@@ -1,0 +1,109 @@
+"""FEM k=0 Kittel self-verification fixture with periodic Poisson-airbox demag.
+
+This is the PA-E4b small-film gate for K0-3. It requests a shared-domain
+airbox mesh, periodic k=0 dynamic boundary conditions, and the real
+``periodic_airbox_k0`` Kittel validation contract. The artifact verifier must
+distinguish this from the synthetic demag-factor PA-E4a gate.
+
+Usage:
+    FULLMAG_FEM_EXECUTION=cpu fullmag examples/fem_eigen_k0_kittel_periodic_airbox.py --headless
+"""
+
+import math
+
+import fullmag as fm
+
+
+MU0 = 4.0e-7 * math.pi
+MS = 800e3
+BIAS_FIELDS_T = (0.02, 0.05, 0.10)
+BIAS_FIELDS_A_PER_M = tuple(field_t / MU0 for field_t in BIAS_FIELDS_T)
+N_MODES = 1
+FREQUENCY_MAX_HZ = 25.0e9
+
+
+study = fm.study("fem_eigen_k0_kittel_periodic_airbox")
+study.engine("fem")
+study.device("cpu", precision="double")
+study.universe(
+    mode="manual",
+    size=(40e-9, 20e-9, 50e-9),
+    center=(0.0, 0.0, 0.0),
+    padding=(0.0, 0.0, 0.0),
+)
+study.universe.mesh(
+    minimum_element_size=20e-9,
+    maximum_element_size=40e-9,
+    growth_rate=1.5,
+    grading="linear",
+)
+study.objects.mesh.defaults(
+    periodic_pair_ids=["x_faces"],
+    algorithm_2d=6,
+    algorithm_3d=1,
+    smoothing_steps=1,
+    optimize_iterations=1,
+    size_from_curvature=4,
+    narrow_regions=1,
+)
+
+body = study.geometry(fm.Box(size=(40e-9, 20e-9, 10e-9), name="body"), name="body")
+body.Ms = MS
+body.Aex = 13e-12
+body.alpha = 0.0
+body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+body.mesh.thin_film(
+    minimum_element_size=10e-9,
+    maximum_element_size=20e-9,
+    interface_maximum_element_size=20e-9,
+    edge_thickness=2e-9,
+    edge_transition_distance=4e-9,
+    corner_extent=2e-9,
+    corner_transition_distance=4e-9,
+    layers=1,
+    order=1,
+)
+
+study.pbc(x=True, demag="periodic_airbox_k0")
+study.b_ext(BIAS_FIELDS_T[0], 0.0, 0.0)
+study.exchange()
+study.demag(realization="poisson_robin")
+study.build_domain_mesh()
+
+study.save("spectrum")
+study.save("dispersion")
+study.save("mode", indices=(0,))
+
+study.k0_kittel_validation(
+    fm.K0KittelFieldSweepValidation(
+        case_id="K0-3",
+        demag_kind="periodic_airbox_k0",
+        model="thin_film_in_plane",
+        effective_magnetisation=MS,
+        relative_tolerance=0.05,
+        samples=[
+            fm.K0KittelFieldSample(sample_index, (field_a_per_m, 0.0, 0.0))
+            for sample_index, field_a_per_m in enumerate(BIAS_FIELDS_A_PER_M)
+        ],
+    )
+)
+
+study.stages.add_eigenmodes(
+    count=N_MODES,
+    target="frequency_window",
+    frequency_min=100e6,
+    frequency_max=FREQUENCY_MAX_HZ,
+    operator="full_2x2",
+    include_demag=True,
+    equilibrium_source="provided",
+    normalization="unit_l2",
+    damping_policy="ignore",
+    k_sampling=fm.KPath(
+        points=[
+            fm.KPoint("H20mT", (0.0, 0.0, 0.0)),
+            fm.KPoint("H100mT", (0.0, 0.0, 0.0)),
+        ],
+        samples_per_segment=[len(BIAS_FIELDS_A_PER_M) - 1],
+    ),
+    bc=fm.PeriodicBC(["x_faces"]),
+)

@@ -3074,11 +3074,15 @@ fn fem_backend_without_air_elements_rejects_missing_shared_airbox_mesh() {
                     [1.0, 0.0, 0.0],
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
+                    [-2.0, -2.0, -2.0],
+                    [2.0, -2.0, -2.0],
+                    [-2.0, 2.0, -2.0],
+                    [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
-                element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
-                boundary_markers: vec![1],
+                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                element_markers: vec![1, 0],
+                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                boundary_markers: vec![10, 99],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
                 per_domain_quality: std::collections::HashMap::new(),
@@ -3227,11 +3231,15 @@ fn fem_backend_rejects_requested_shared_domain_without_air_elements() {
                     [1.0, 0.0, 0.0],
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
+                    [-2.0, -2.0, -2.0],
+                    [2.0, -2.0, -2.0],
+                    [-2.0, 2.0, -2.0],
+                    [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
-                element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2]],
-                boundary_markers: vec![1],
+                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                element_markers: vec![1, 0],
+                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                boundary_markers: vec![10, 99],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
                 per_domain_quality: std::collections::HashMap::new(),
@@ -5462,6 +5470,432 @@ fn fem_eigen_backend_with_mesh_asset_plans_successfully() {
 }
 
 #[test]
+fn fem_eigen_carries_k0_kittel_validation_from_runtime_metadata() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fem;
+    ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+        fdm_grid_assets: Vec::new(),
+        fem_mesh_assets: vec![fullmag_ir::FemMeshAssetIR {
+            geometry_name: "strip".to_string(),
+            mesh_source: None,
+            mesh: Some(fullmag_ir::MeshIR {
+                mesh_name: "uniform_layer".to_string(),
+                nodes: vec![
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ],
+                elements: vec![[0, 1, 2, 3]],
+                element_markers: vec![1],
+                boundary_faces: vec![[0, 1, 2]],
+                boundary_markers: vec![1],
+                periodic_boundary_pairs: Vec::new(),
+                periodic_node_pairs: Vec::new(),
+                per_domain_quality: std::collections::HashMap::new(),
+            }),
+        }],
+        fem_domain_mesh_asset: None,
+    });
+    ir.energy_terms = vec![
+        fullmag_ir::EnergyTermIR::Exchange,
+        fullmag_ir::EnergyTermIR::Zeeman { b: [0.1, 0.0, 0.0] },
+    ];
+    ir.study = fullmag_ir::StudyIR::Eigenmodes {
+        dynamics: ir.study.dynamics().clone(),
+        operator: fullmag_ir::EigenOperatorConfigIR {
+            kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+            include_demag: false,
+        },
+        count: 1,
+        target: fullmag_ir::EigenTargetIR::Lowest,
+        equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+        k_sampling: Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [0.0, 0.0, 0.0],
+        }),
+        normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
+        damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
+        spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+        sampling: fullmag_ir::SamplingIR {
+            table_autosave: None,
+            outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
+                quantity: "eigenfrequency".to_string(),
+            }],
+        },
+        mode_tracking: None,
+    };
+    let k0_kittel_validation = serde_json::json!({
+        "kind": "k0_kittel_field_sweep",
+        "model": "thin_film_in_plane",
+        "field_units": "A_per_m",
+        "relative_tolerance": 0.05,
+        "material": {
+            "effective_magnetisation": 800000.0
+        },
+        "samples": [
+            {"sample_index": 0, "bias_field": [40000.0, 0.0, 0.0]},
+            {"sample_index": 1, "bias_field": [80000.0, 0.0, 0.0]},
+            {"sample_index": 2, "bias_field": [120000.0, 0.0, 0.0]}
+        ]
+    });
+    ir.problem_meta.runtime_metadata.insert(
+        "k0_kittel_validation".to_string(),
+        k0_kittel_validation.clone(),
+    );
+
+    let planned = plan(&ir).expect("FEM eigen plan should carry k0 Kittel validation");
+    match planned.backend_plan {
+        BackendPlanIR::FemEigen(fem) => {
+            let planned_validation = serde_json::to_value(&fem.k0_kittel_validation)
+                .expect("k0_kittel_validation should serialize");
+            assert_eq!(planned_validation, serde_json::json!(k0_kittel_validation));
+        }
+        other => panic!("expected FEM eigen plan, got {other:?}"),
+    }
+
+    let mut invalid = ir;
+    invalid.problem_meta.runtime_metadata.insert(
+        "k0_kittel_validation".to_string(),
+        serde_json::json!({
+            "kind": "k0_kittel_field_sweep",
+            "model": "macrospin_larmor",
+            "field_units": "A_per_m",
+            "relative_tolerance": 0.05,
+            "samples": [
+                {"sample_index": 0, "bias_field": [40000.0, 0.0, 0.0]},
+                {"sample_index": 1, "bias_field": [80000.0, 0.0, 0.0]}
+            ]
+        }),
+    );
+    let err =
+        plan(&invalid).expect_err("FEM eigen k0 Kittel validation must require three samples");
+    assert!(err
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("k0_kittel_validation.samples")));
+
+    let mut unsupported_demag_kind = invalid;
+    unsupported_demag_kind
+        .problem_meta
+        .runtime_metadata
+        .insert(
+            "k0_kittel_validation".to_string(),
+            serde_json::json!({
+                "kind": "k0_kittel_field_sweep",
+                "case_id": "K0-3",
+                "demag_kind": "unvalidated_airbox",
+                "model": "thin_film_in_plane",
+                "field_units": "A_per_m",
+                "relative_tolerance": 0.02,
+                "material": {
+                    "effective_magnetisation": 800000.0
+                },
+                "samples": [
+                    {"sample_index": 0, "bias_field": [40000.0, 0.0, 0.0]},
+                    {"sample_index": 1, "bias_field": [80000.0, 0.0, 0.0]},
+                    {"sample_index": 2, "bias_field": [120000.0, 0.0, 0.0]}
+                ]
+            }),
+        );
+    let err = plan(&unsupported_demag_kind).expect_err("unknown K0 Kittel demag_kind must fail");
+    assert!(err
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("demag_kind") && reason.contains("periodic_airbox_k0")));
+}
+
+#[test]
+fn fem_eigen_allows_k0_kittel_synthetic_demag_factor_floquet_path() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fem;
+    ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+        fdm_grid_assets: Vec::new(),
+        fem_mesh_assets: Vec::new(),
+        fem_domain_mesh_asset: Some(fullmag_ir::FemDomainMeshAssetIR {
+            mesh_source: None,
+            mesh: Some(fullmag_ir::MeshIR {
+                mesh_name: "uniform_layer".to_string(),
+                nodes: vec![
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [-2.0, -2.0, -2.0],
+                    [2.0, -2.0, -2.0],
+                    [-2.0, 2.0, -2.0],
+                    [-2.0, -2.0, 2.0],
+                ],
+                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                element_markers: vec![1, 0],
+                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                boundary_markers: vec![10, 99],
+                periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
+                    pair_id: "x_faces".to_string(),
+                    source_marker: None,
+                    destination_marker: None,
+                    marker_a: 10,
+                    marker_b: 11,
+                    translation: Some([1.0, 0.0, 0.0]),
+                    tolerance: None,
+                    axis_hint: None,
+                    orientation: None,
+                    pairing_policy: None,
+                }],
+                periodic_node_pairs: vec![fullmag_ir::MeshPeriodicNodePairIR {
+                    pair_id: "x_faces".to_string(),
+                    node_a: 0,
+                    node_b: 1,
+                }],
+                per_domain_quality: std::collections::HashMap::new(),
+            }),
+            region_markers: vec![fullmag_ir::FemDomainRegionMarkerIR {
+                geometry_name: "strip".to_string(),
+                marker: 1,
+            }],
+            object_region_markers: Vec::new(),
+            build_report: None,
+        }),
+    });
+    ir.energy_terms = vec![
+        fullmag_ir::EnergyTermIR::Exchange,
+        fullmag_ir::EnergyTermIR::Demag {
+            realization: fullmag_ir::RequestedFemDemagIR::default(),
+        },
+        fullmag_ir::EnergyTermIR::Zeeman { b: [0.02, 0.0, 0.0] },
+    ];
+    ir.problem_meta.runtime_metadata.insert(
+        "k0_kittel_validation".to_string(),
+        serde_json::json!({
+            "kind": "k0_kittel_field_sweep",
+            "case_id": "K0-3",
+            "demag_kind": "synthetic_demag_factor",
+            "model": "thin_film_in_plane",
+            "field_units": "A_per_m",
+            "relative_tolerance": 0.02,
+            "material": {
+                "effective_magnetisation": 800000.0
+            },
+            "samples": [
+                {"sample_index": 0, "bias_field": [15915.494309189535, 0.0, 0.0]},
+                {"sample_index": 1, "bias_field": [39788.735772973836, 0.0, 0.0]},
+                {"sample_index": 2, "bias_field": [79577.47154594767, 0.0, 0.0]}
+            ]
+        }),
+    );
+    ir.study = fullmag_ir::StudyIR::Eigenmodes {
+        dynamics: ir.study.dynamics().clone(),
+        operator: fullmag_ir::EigenOperatorConfigIR {
+            kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+            include_demag: true,
+        },
+        count: 1,
+        target: fullmag_ir::EigenTargetIR::FrequencyWindow {
+            frequency_min_hz: 100.0e6,
+            frequency_max_hz: 25.0e9,
+        },
+        equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+        k_sampling: Some(fullmag_ir::KSamplingIR::Path {
+            points: vec![
+                fullmag_ir::KPointIR {
+                    label: Some("H20mT".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+                fullmag_ir::KPointIR {
+                    label: Some("H100mT".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+            ],
+            samples_per_segment: vec![2],
+            closed: false,
+        }),
+        normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
+        damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
+        spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::Config(
+            fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,
+                boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            },
+        ),
+        sampling: fullmag_ir::SamplingIR {
+            table_autosave: None,
+            outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
+                quantity: "eigenfrequency".to_string(),
+            }],
+        },
+        mode_tracking: None,
+    };
+
+    let planned = plan(&ir).expect("K0-3 synthetic demag-factor Floquet field sweep is k=0");
+    match planned.backend_plan {
+        BackendPlanIR::FemEigen(fem) => {
+            assert!(fem.operator.include_demag);
+            assert_eq!(
+                fem.k0_kittel_validation
+                    .as_ref()
+                    .and_then(|validation| validation.demag_kind.as_deref()),
+                Some("synthetic_demag_factor")
+            );
+        }
+        other => panic!("expected FEM eigen plan, got {other:?}"),
+    }
+}
+
+#[test]
+fn fem_eigen_allows_k0_kittel_periodic_airbox_shared_domain_path() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fem;
+    ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+        fdm_grid_assets: Vec::new(),
+        fem_mesh_assets: Vec::new(),
+        fem_domain_mesh_asset: Some(fullmag_ir::FemDomainMeshAssetIR {
+            mesh_source: None,
+            mesh: Some(fullmag_ir::MeshIR {
+                mesh_name: "uniform_layer_airbox".to_string(),
+                nodes: vec![
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [2.0, 0.0, 0.0],
+                    [3.0, 0.0, 0.0],
+                    [2.0, 1.0, 0.0],
+                    [2.0, 0.0, 1.0],
+                ],
+                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                element_markers: vec![1, 0],
+                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                boundary_markers: vec![10, 99],
+                periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
+                    pair_id: "x_faces".to_string(),
+                    source_marker: None,
+                    destination_marker: None,
+                    marker_a: 10,
+                    marker_b: 11,
+                    translation: Some([1.0, 0.0, 0.0]),
+                    tolerance: None,
+                    axis_hint: None,
+                    orientation: None,
+                    pairing_policy: None,
+                }],
+                periodic_node_pairs: vec![
+                    fullmag_ir::MeshPeriodicNodePairIR {
+                        pair_id: "x_faces".to_string(),
+                        node_a: 0,
+                        node_b: 1,
+                    },
+                    fullmag_ir::MeshPeriodicNodePairIR {
+                        pair_id: "x_faces".to_string(),
+                        node_a: 4,
+                        node_b: 5,
+                    },
+                ],
+                per_domain_quality: std::collections::HashMap::new(),
+            }),
+            region_markers: vec![fullmag_ir::FemDomainRegionMarkerIR {
+                geometry_name: "strip".to_string(),
+                marker: 1,
+            }],
+            object_region_markers: Vec::new(),
+            build_report: None,
+        }),
+    });
+    ir.energy_terms = vec![
+        fullmag_ir::EnergyTermIR::Exchange,
+        fullmag_ir::EnergyTermIR::Demag {
+            realization: fullmag_ir::RequestedFemDemagIR::default(),
+        },
+        fullmag_ir::EnergyTermIR::Zeeman { b: [0.02, 0.0, 0.0] },
+    ];
+    ir.problem_meta.runtime_metadata.insert(
+        "k0_kittel_validation".to_string(),
+        serde_json::json!({
+            "kind": "k0_kittel_field_sweep",
+            "case_id": "K0-3",
+            "demag_kind": "periodic_airbox_k0",
+            "model": "thin_film_in_plane",
+            "field_units": "A_per_m",
+            "relative_tolerance": 0.02,
+            "material": {
+                "effective_magnetisation": 800000.0
+            },
+            "samples": [
+                {"sample_index": 0, "bias_field": [15915.494309189535, 0.0, 0.0]},
+                {"sample_index": 1, "bias_field": [39788.735772973836, 0.0, 0.0]},
+                {"sample_index": 2, "bias_field": [79577.47154594767, 0.0, 0.0]}
+            ]
+        }),
+    );
+    ir.study = fullmag_ir::StudyIR::Eigenmodes {
+        dynamics: ir.study.dynamics().clone(),
+        operator: fullmag_ir::EigenOperatorConfigIR {
+            kind: fullmag_ir::EigenOperatorIR::Full2x2,
+            include_demag: true,
+        },
+        count: 1,
+        target: fullmag_ir::EigenTargetIR::FrequencyWindow {
+            frequency_min_hz: 100.0e6,
+            frequency_max_hz: 25.0e9,
+        },
+        equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+        k_sampling: Some(fullmag_ir::KSamplingIR::Path {
+            points: vec![
+                fullmag_ir::KPointIR {
+                    label: Some("H20mT".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+                fullmag_ir::KPointIR {
+                    label: Some("H100mT".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+            ],
+            samples_per_segment: vec![2],
+            closed: false,
+        }),
+        normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
+        damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
+        spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::Config(
+            fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: fullmag_ir::SpinWaveBoundaryKindIR::Periodic,
+                boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            },
+        ),
+        sampling: fullmag_ir::SamplingIR {
+            table_autosave: None,
+            outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
+                quantity: "eigenfrequency".to_string(),
+            }],
+        },
+        mode_tracking: None,
+    };
+
+    let planned = plan(&ir).expect("K0-3 periodic_airbox_k0 should plan with shared-domain airbox");
+    match planned.backend_plan {
+        BackendPlanIR::FemEigen(fem) => {
+            assert_eq!(
+                fem.k0_kittel_validation
+                    .as_ref()
+                    .and_then(|validation| validation.demag_kind.as_deref()),
+                Some("periodic_airbox_k0")
+            );
+            assert_eq!(
+                fem.domain_mesh_mode,
+                fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir
+            );
+            assert!(fem.enable_demag);
+        }
+        other => panic!("expected FEM eigen plan, got {other:?}"),
+    }
+}
+
+#[test]
 fn object_object_exchange_without_coupling_defaults_none() {
     let ir = stacked_two_body_multilayer_problem();
     assert!(
@@ -6373,6 +6807,7 @@ fn fem_frequency_response_carries_solver_policy_into_backend_plan() {
     if let fullmag_ir::StudyIR::FrequencyResponse { solver_policy, .. } = &mut ir.study {
         *solver_policy = Some(fullmag_ir::FrequencyResponseSolverPolicyIR {
             method: Some(fullmag_ir::FrequencyResponseSolverMethodIR::SchurReduced),
+            preconditioner: Some(fullmag_ir::FrequencyResponsePreconditionerIR::BlockJacobi),
             rtol: Some(1.0e-2),
             max_iterations: Some(128),
             restart_iterations: Some(32),
@@ -6389,6 +6824,10 @@ fn fem_frequency_response_carries_solver_policy_into_backend_plan() {
             assert_eq!(
                 policy.method,
                 Some(fullmag_ir::FrequencyResponseSolverMethodIR::SchurReduced)
+            );
+            assert_eq!(
+                policy.preconditioner,
+                Some(fullmag_ir::FrequencyResponsePreconditionerIR::BlockJacobi)
             );
             assert_eq!(policy.max_iterations, Some(128));
             assert_eq!(policy.restart_iterations, Some(32));

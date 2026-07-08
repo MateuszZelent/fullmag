@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace fullmag::fem::frequency_domain {
 
@@ -43,6 +44,16 @@ bool local_block_coefficients_are_finite(const TangentOperatorLocalBlock &block)
 double local_dot3(const double a[3], const double b[3]) noexcept
 {
     return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+void apply_cartesian_row_major_3x3(const double matrix[9], const double vector[3], double out[3]) noexcept
+{
+    for (int row = 0; row < 3; ++row) {
+        out[row] = 0.0;
+        for (int col = 0; col < 3; ++col) {
+            out[row] += matrix[row * 3 + col] * vector[col];
+        }
+    }
 }
 
 void accumulate_edge_contribution(
@@ -106,6 +117,32 @@ const char *operator_term_kind_to_string(FrequencyDomainOperatorTermKind kind) n
         return "demag_nonlocal";
     }
     return "unknown";
+}
+
+TangentOperatorLocalBlock project_cartesian_local_operator_to_tangent(
+    const TangentFrameNode &node,
+    FrequencyDomainOperatorTermKind kind,
+    const double cartesian_row_major_3x3[9]) noexcept
+{
+    TangentOperatorLocalBlock block{};
+    block.kind = kind;
+    if (cartesian_row_major_3x3 == nullptr) {
+        block.a00 = std::numeric_limits<double>::quiet_NaN();
+        block.a01 = std::numeric_limits<double>::quiet_NaN();
+        block.a10 = std::numeric_limits<double>::quiet_NaN();
+        block.a11 = std::numeric_limits<double>::quiet_NaN();
+        return block;
+    }
+
+    double a_e1[3]{};
+    double a_e2[3]{};
+    apply_cartesian_row_major_3x3(cartesian_row_major_3x3, node.e1, a_e1);
+    apply_cartesian_row_major_3x3(cartesian_row_major_3x3, node.e2, a_e2);
+    block.a00 = local_dot3(node.e1, a_e1);
+    block.a01 = local_dot3(node.e1, a_e2);
+    block.a10 = local_dot3(node.e2, a_e1);
+    block.a11 = local_dot3(node.e2, a_e2);
+    return block;
 }
 
 FrequencyDomainStatus apply_tangent_local_operator(

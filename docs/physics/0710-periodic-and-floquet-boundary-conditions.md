@@ -133,6 +133,19 @@ r_dst - r_src ~= translation
 within the pair tolerance. Duplicate source or destination node mappings for the
 same `pair_id` are invalid.
 
+For frequency-domain linearization around an equilibrium texture, paired
+magnetic nodes must also carry the same static direction `m0` within the mesh
+certificate tolerance. A nonzero `m0` seam mismatch is a validation error with
+reject reason `periodic_m0_seam_mismatch`; production operators must not
+silently phase-project dynamic tangent variables across an inconsistent static
+state.
+
+When static demagnetization is part of the linearization handoff, paired
+magnetic nodes must also pass the same-step `H_demag0` seam check in `A/m`.
+The scalar-potential gauge is not inferred from smooth `phi` values: the
+certificate must carry an explicit Poisson gauge policy such as `mean_zero`,
+`pinned_dof`, `not_required`, or `provider_responsibility`.
+
 Runtime artifacts expose the validated pair metadata as:
 
 ```text
@@ -152,6 +165,16 @@ status. For frequency-domain tangent-space runs, it must also expose the
 resolved basis transport policy and frame-transport residuals. The API prefers
 the active FEM mesh snapshot and falls back to the artifact file after a
 completed run.
+
+The native frequency-domain mesh-symmetry certificate is a stricter
+solver-adjacent contract with `schema_version =
+"periodic_mesh_certificate.v5"`. The current certificate-level implementation
+records deterministic, order-independent `fnv1a64:` fingerprints for the
+magnetic and airbox pair maps so solver lanes can detect pair-map drift while
+the data is still in native memory. Serialized long-lived artifacts should
+still graduate to canonical `sha256:` hashes over the fully versioned pair-map
+payload; the certificate fingerprint is not a substitute for that artifact
+hash.
 
 ## Sign Test
 

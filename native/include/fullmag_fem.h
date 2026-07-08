@@ -425,6 +425,15 @@ typedef enum {
     FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_MINUS_I_OMEGA_T = 1,
 } fullmag_fem_frequency_domain_phase_convention;
 
+typedef enum {
+    FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_UNSPECIFIED = 0,
+    FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_DYNAMIC_FIELD_PHASOR_A_PER_M = 1,
+    FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_TANGENT_RHS = 2,
+    FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_CARTESIAN_TORQUE_PHASOR = 3,
+    FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_STT_CURRENT_PHASOR = 4,
+    FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_COUPLED_EXTERNAL_PROVIDER = 5,
+} fullmag_fem_frequency_domain_drive_kind;
+
 typedef struct {
     fullmag_fem_frequency_domain_study_kind study_kind;
     int requires_driven_solver;
@@ -572,6 +581,8 @@ typedef struct {
     int has_floquet_k_vector;
     double floquet_k_vector_rad_per_m[3];
     fullmag_fem_frequency_domain_phase_convention phase_convention;
+    fullmag_fem_frequency_domain_drive_kind drive_kind;
+    int require_nonzero_rhs;
     const fullmag_fem_frequency_domain_floquet_periodic_pair *mfem_floquet_periodic_pairs;
     uint64_t mfem_floquet_periodic_pair_count;
     int requires_periodic_airbox_dynamic_demag;
@@ -720,6 +731,21 @@ typedef struct {
     fullmag_fem_frequency_domain_phase_convention phase_convention;
     const fullmag_fem_frequency_domain_floquet_periodic_pair *mfem_floquet_periodic_pairs;
     uint64_t mfem_floquet_periodic_pair_count;
+    int poisson_airbox_block_enabled;
+    uint64_t poisson_airbox_q_dof_count;
+    uint64_t poisson_airbox_phi_dof_count;
+    FullmagFemCsrMatrixView poisson_airbox_a_qq_csr;
+    FullmagFemCsrMatrixView poisson_airbox_a_qphi_csr;
+    FullmagFemCsrMatrixView poisson_airbox_a_phiq_csr;
+    FullmagFemCsrMatrixView poisson_airbox_a_phiphi_csr;
+    FullmagFemCsrMatrixView poisson_airbox_b_qq_csr;
+    const double *poisson_airbox_phi_mean_weights;
+    uint64_t poisson_airbox_phi_mean_weights_count;
+    double poisson_airbox_target_frequency_hz;
+    double poisson_airbox_expected_reference_frequency_hz;
+    const char *poisson_airbox_periodic_mesh_certificate_schema;
+    uint64_t poisson_airbox_magnetic_pair_count;
+    uint64_t poisson_airbox_airbox_pair_count;
 } FullmagFemModalEigenRequest;
 
 typedef struct {
@@ -776,6 +802,8 @@ typedef struct {
     uint64_t driven_response_request_progress_callback_offset;
     uint64_t driven_response_request_tiny_validation_drive_imag_offset;
     uint64_t driven_response_request_phase_convention_offset;
+    uint64_t driven_response_request_drive_kind_offset;
+    uint64_t driven_response_request_require_nonzero_rhs_offset;
     uint64_t driven_response_request_mfem_floquet_periodic_pair_count_offset;
     uint64_t driven_response_request_periodic_airbox_magnetostatic_periodic_node_pairs_offset;
     uint64_t driven_response_request_periodic_airbox_coupled_block_enabled_offset;

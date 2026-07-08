@@ -655,11 +655,57 @@ verify_primitive_vs_supercell_static_demag_parity
 - Emit tangent-frame diagnostics.
 - Validate `m0 · delta_m` and `|m0|`.
 
+Current implementation evidence, 2026-07-06:
+
+```text
+- RED: just verify-fem-frequency-domain-native-contract failed on missing
+  frequency_domain/linearization_state.hpp after adding the native
+  LinearizationState contract test.
+- Added a minimal native LinearizationState module that consumes an accepted
+  EquilibriumArtifactDescriptor, requires mesh/material/physics/boundary
+  signatures, packs m0/h_eff0/h_demag0, builds per-node tangent frames, emits
+  norm/torque/tangent diagnostics, and rejects unaccepted equilibrium artifacts
+  with an actionable error.
+- GREEN: just verify-fem-frequency-domain-native-contract passed after managed
+  FEM runtime rebuild and native contract execution, covering the first Patch
+  R3 builder slice. Runner artifact consumption, symmetric mesh certificates,
+  and full-coupled demag handoff remain separate open patches.
+```
+
 ### Patch R4 — symmetric mesh certificate
 
 - Build magnetic periodic-pair certificate.
 - Build airbox scalar-potential pair certificate.
 - Enforce strict v1 matched mesh policy for periodic frequency-domain FEM.
+
+Current implementation evidence, 2026-07-06:
+
+```text
+- RED: just verify-fem-frequency-domain-native-contract failed on missing
+  frequency_domain/mesh_symmetry_certificate.hpp after adding the native
+  symmetric mesh certificate contract test.
+- Added a minimal native MeshSymmetryCertificate module that accepts strict
+  matched magnetic and airbox periodic pair maps only when pairs are bijective,
+  coordinates match the declared translation within tolerance, material and
+  region IDs match, and paired tangent-frame transport T_dst^T T_src is within
+  tolerance.
+- Duplicate source/destination pair mappings are rejected with an actionable
+  periodic_mesh_duplicate_node reason.
+- GREEN: just verify-fem-frequency-domain-native-contract passed after managed
+  FEM runtime rebuild and native contract execution, covering the first Patch
+  R4 certificate slice. Full runtime enforcement of the certificate for every
+  periodic/Floquet solve remains an open integration step.
+- RED: just verify-fem-frequency-domain-native-contract failed on missing
+  FrequencySolvePlannerInput::periodic_mesh_symmetry_certified after adding the
+  planner contract that periodic-airbox k=0 must not select full-coupled or
+  Schur lanes without a symmetric mesh certificate.
+- Added periodic_mesh_symmetry_certified to planner inputs/capabilities and
+  made periodic_airbox_k0 return the safe dense/default plan unless that
+  certificate is explicitly present.
+- GREEN: just verify-fem-frequency-domain-native-contract passed after managed
+  FEM runtime rebuild and native contract execution, covering the first planner
+  integration gate for the R4 certificate.
+```
 
 ### Patch R5 — full coupled demag reference path
 

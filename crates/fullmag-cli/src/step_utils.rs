@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use fullmag_engine::fem::MeshTopology;
 use fullmag_engine::fem_solution_transfer::{
-    normalize_unit_vectors, transfer_fem_field_to_grid, GridTransferResult,
+    normalize_unit_vectors, transfer_fem_field_to_grid, transfer_vector_field, GridTransferResult,
 };
 
 use crate::formatting::unix_time_millis;
@@ -2441,10 +2441,18 @@ fn payload_frequency_solver_policy(
         ),
         None => None,
     };
+    let preconditioner = match payload_string(payload, "frequency_solver_preconditioner") {
+        Some(value) => Some(
+            serde_json::from_value(Value::String(value))
+                .context("invalid frequency_solver_preconditioner in study pipeline payload")?,
+        ),
+        None => None,
+    };
     let rtol = payload_f64(payload, "frequency_solver_rtol")?;
     let max_iterations = payload_u64(payload, "frequency_solver_max_iterations")?;
     let restart_iterations = payload_u64(payload, "frequency_solver_restart_iterations")?;
     if method.is_none()
+        && preconditioner.is_none()
         && rtol.is_none()
         && max_iterations.is_none()
         && restart_iterations.is_none()
@@ -2469,6 +2477,7 @@ fn payload_frequency_solver_policy(
     }
     Ok(Some(fullmag_ir::FrequencyResponseSolverPolicyIR {
         method,
+        preconditioner,
         rtol,
         max_iterations,
         restart_iterations,
@@ -2625,6 +2634,33 @@ pub(crate) fn apply_continuation_initial_state(
         .and_then(|assets| assets.fem_domain_mesh_asset.as_ref())
         .and_then(|asset| asset.mesh.as_ref())
         .map(|mesh| mesh.nodes.len());
+    let planned_fem_node_count = if shared_domain_node_count.is_some() {
+        match planned_fem_mesh_node_count(problem) {
+            Ok(node_count) => node_count,
+            Err(_error) if shared_domain_node_count == Some(final_magnetization.len()) => None,
+            Err(error) => return Err(error),
+        }
+    } else {
+        None
+    };
+
+    if planned_fem_node_count == Some(final_magnetization.len()) {
+        let sampled = fullmag_ir::InitialMagnetizationIR::SampledField {
+            values: final_magnetization.to_vec(),
+        };
+        for magnet in &mut problem.magnets {
+            magnet.initial_magnetization = Some(sampled.clone());
+        }
+        return Ok(());
+    }
+
+    if let Some(node_count) = planned_fem_node_count {
+        bail!(
+            "multi-stage shared-domain continuation has {} vectors, but the planned FEM mesh has {} nodes",
+            final_magnetization.len(),
+            node_count
+        );
+    }
 
     if shared_domain_node_count == Some(final_magnetization.len()) {
         let sampled = fullmag_ir::InitialMagnetizationIR::SampledField {
@@ -2650,6 +2686,16 @@ pub(crate) fn apply_continuation_initial_state(
     }
 }
 
+fn planned_fem_mesh_node_count(problem: &ProblemIR) -> Result<Option<usize>> {
+    let plan = fullmag_plan::plan(problem).map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    Ok(match plan.backend_plan {
+        BackendPlanIR::Fem(fem) => Some(fem.mesh.nodes.len()),
+        BackendPlanIR::FemEigen(fem) => Some(fem.mesh.nodes.len()),
+        BackendPlanIR::FemFrequencyResponse(fem) => Some(fem.mesh.nodes.len()),
+        BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Cross-backend magnetization state transfer (FEM → FDM)
 // ---------------------------------------------------------------------------
@@ -2671,10 +2717,13 @@ pub(crate) struct CrossBackendTransferResult {
     pub n_located: usize,
     pub n_outside: usize,
     pub n_total: usize,
+    pub label: &'static str,
+    pub unit_label: &'static str,
 }
 
 /// If the previous stage was FEM and the next stage will be FDM,
-/// resample the continuation magnetization from FEM nodes to FDM cell centers.
+/// resample the continuation magnetization from FEM nodes to the target mesh
+/// or grid.
 ///
 /// Returns `Ok(Some(resampled))` if resampling was performed,
 /// `Ok(None)` if no cross-backend transfer is needed (same backend type),
@@ -2693,55 +2742,98 @@ pub(crate) fn resample_continuation_if_cross_backend(
     let next_plan = fullmag_plan::plan(next_stage_ir)
         .map_err(|e| anyhow::anyhow!("pre-plan for cross-backend transfer failed: {}", e))?;
 
-    let fdm_plan = match &next_plan.backend_plan {
-        BackendPlanIR::Fdm(fdm) => fdm,
+    match &next_plan.backend_plan {
+        BackendPlanIR::Fem(fem) => {
+            if fem_mesh_ir.nodes.len() != continuation_m.len() {
+                bail!(
+                    "FEM → FEM continuation has {} vectors, but source FEM mesh has {} nodes",
+                    continuation_m.len(),
+                    fem_mesh_ir.nodes.len()
+                );
+            }
+            if fem.mesh == *fem_mesh_ir {
+                return Ok(None);
+            }
+            let old_topo = MeshTopology::from_ir(fem_mesh_ir).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to build source mesh topology for FEM state transfer: {}",
+                    e
+                )
+            })?;
+            let new_topo = MeshTopology::from_ir(&fem.mesh).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to build target mesh topology for FEM state transfer: {}",
+                    e
+                )
+            })?;
+            let transfer = transfer_vector_field(&old_topo, continuation_m, &new_topo);
+            let mut values = transfer.values;
+            normalize_unit_vectors(&mut values, 1e-12);
+            Ok(Some(CrossBackendTransferResult {
+                values,
+                n_located: transfer.n_located,
+                n_outside: transfer.n_nearest_fallback,
+                n_total: transfer.n_total,
+                label: "FEM→FEM",
+                unit_label: "nodes",
+            }))
+        }
+        BackendPlanIR::Fdm(fdm_plan) => {
+            // Extract FDM grid parameters.
+            let grid_cells = fdm_plan.grid.cells;
+            let cell_size = fdm_plan.cell_size;
+            let grid_dims = [
+                grid_cells[0] as usize,
+                grid_cells[1] as usize,
+                grid_cells[2] as usize,
+            ];
+
+            // For single-body FDM, the grid is centered at the origin.
+            let grid_origin = [
+                -(grid_cells[0] as f64 * cell_size[0]) * 0.5,
+                -(grid_cells[1] as f64 * cell_size[1]) * 0.5,
+                -(grid_cells[2] as f64 * cell_size[2]) * 0.5,
+            ];
+
+            // Build MeshTopology from the FEM plan's MeshIR.
+            let topo = MeshTopology::from_ir(fem_mesh_ir).map_err(|e| {
+                anyhow::anyhow!("failed to build mesh topology for state transfer: {}", e)
+            })?;
+
+            // Resample FEM node-based magnetization to FDM cell centers.
+            let GridTransferResult {
+                mut values,
+                n_located,
+                n_outside,
+                n_total,
+            } = transfer_fem_field_to_grid(
+                &topo,
+                continuation_m,
+                grid_origin,
+                cell_size,
+                grid_dims,
+            );
+
+            // Post-transfer normalization: P1 interpolation of unit vectors does not
+            // preserve |m| = 1, so we re-normalize.  Zero vectors (cells outside the
+            // magnetic body) are left at zero.
+            normalize_unit_vectors(&mut values, 1e-12);
+
+            Ok(Some(CrossBackendTransferResult {
+                values,
+                n_located,
+                n_outside,
+                n_total,
+                label: "FEM→FDM",
+                unit_label: "cells",
+            }))
+        }
         BackendPlanIR::FdmMultilayer(_) => {
             // Multi-layer FDM continuation from FEM is not yet supported.
             bail!("FEM → FDM-multilayer cross-backend continuation is not yet supported");
         }
-        BackendPlanIR::Fem(_) => return Ok(None), // FEM → FEM: same-backend, use direct continuation
-        _ => return Ok(None),
-    };
-
-    // Extract FDM grid parameters.
-    let grid_cells = fdm_plan.grid.cells;
-    let cell_size = fdm_plan.cell_size;
-    let grid_dims = [
-        grid_cells[0] as usize,
-        grid_cells[1] as usize,
-        grid_cells[2] as usize,
-    ];
-
-    // For single-body FDM, the grid is centered at the origin.
-    let grid_origin = [
-        -(grid_cells[0] as f64 * cell_size[0]) * 0.5,
-        -(grid_cells[1] as f64 * cell_size[1]) * 0.5,
-        -(grid_cells[2] as f64 * cell_size[2]) * 0.5,
-    ];
-
-    // Build MeshTopology from the FEM plan's MeshIR.
-    let topo = MeshTopology::from_ir(fem_mesh_ir)
-        .map_err(|e| anyhow::anyhow!("failed to build mesh topology for state transfer: {}", e))?;
-
-    // Resample FEM node-based magnetization to FDM cell centers.
-    let GridTransferResult {
-        mut values,
-        n_located,
-        n_outside,
-        n_total,
-    } = transfer_fem_field_to_grid(&topo, continuation_m, grid_origin, cell_size, grid_dims);
-
-    // Post-transfer normalization: P1 interpolation of unit vectors does not
-    // preserve |m| = 1, so we re-normalize.  Zero vectors (cells outside the
-    // magnetic body) are left at zero.
-    normalize_unit_vectors(&mut values, 1e-12);
-
-    Ok(Some(CrossBackendTransferResult {
-        values,
-        n_located,
-        n_outside,
-        n_total,
-    }))
+        _ => Ok(None),
+    }
 }
 
 /// Estimate available system RAM in bytes.
@@ -3325,6 +3417,90 @@ mod tests {
 
         apply_continuation_initial_state(&mut problem, &continuation)
             .expect("shared-domain continuation should support multiple magnets");
+
+        for magnet in &problem.magnets {
+            assert!(matches!(
+                magnet.initial_magnetization.as_ref(),
+                Some(fullmag_ir::InitialMagnetizationIR::SampledField { values })
+                    if values == &continuation
+            ));
+        }
+    }
+
+    #[test]
+    fn continuation_initial_state_uses_planned_shared_domain_node_count() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fem;
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            json!({"device": "cuda", "device_index": 0}),
+        );
+        problem
+            .geometry
+            .entries
+            .push(fullmag_ir::GeometryEntryIR::Box {
+                name: "second".to_string(),
+                size: [1.0, 1.0, 1.0],
+            });
+        problem.regions.push(fullmag_ir::RegionIR {
+            name: "second".to_string(),
+            geometry: "second".to_string(),
+        });
+        problem.magnets.push(fullmag_ir::MagnetIR {
+            name: "second".to_string(),
+            region: "second".to_string(),
+            material: "Py".to_string(),
+            initial_magnetization: Some(fullmag_ir::InitialMagnetizationIR::Uniform {
+                value: [0.0, 1.0, 0.0],
+            }),
+        });
+        problem.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+            fdm_grid_assets: vec![],
+            fem_mesh_assets: vec![],
+            fem_domain_mesh_asset: Some(fullmag_ir::FemDomainMeshAssetIR {
+                mesh_source: None,
+                mesh: Some(fullmag_ir::MeshIR {
+                    mesh_name: "touching".to_string(),
+                    nodes: vec![
+                        [0.0, 0.0, 0.0],
+                        [1.0, 0.0, 0.0],
+                        [0.0, 1.0, 0.0],
+                        [0.0, 0.0, 1.0],
+                        [0.0, 0.0, -1.0],
+                    ],
+                    elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+                    element_markers: vec![1, 2],
+                    boundary_faces: vec![[0, 1, 3], [0, 1, 4]],
+                    boundary_markers: vec![10, 20],
+                    periodic_boundary_pairs: Vec::new(),
+                    periodic_node_pairs: Vec::new(),
+                    per_domain_quality: std::collections::HashMap::new(),
+                }),
+                region_markers: vec![
+                    fullmag_ir::FemDomainRegionMarkerIR {
+                        geometry_name: "strip".to_string(),
+                        marker: 1,
+                    },
+                    fullmag_ir::FemDomainRegionMarkerIR {
+                        geometry_name: "second".to_string(),
+                        marker: 2,
+                    },
+                ],
+                object_region_markers: Vec::new(),
+                build_report: None,
+            }),
+        });
+        problem.energy_terms = vec![fullmag_ir::EnergyTermIR::Exchange];
+        let plan = fullmag_plan::plan(&problem).expect("shared-domain problem should plan");
+        let BackendPlanIR::Fem(fem) = plan.backend_plan else {
+            panic!("expected FEM plan");
+        };
+        assert_ne!(fem.mesh.nodes.len(), 5);
+        let continuation = vec![[1.0, 0.0, 0.0]; fem.mesh.nodes.len()];
+
+        apply_continuation_initial_state(&mut problem, &continuation)
+            .expect("continuation should match the planned FEM mesh node count");
+        fullmag_plan::plan(&problem).expect("planned-mesh continuation should replan");
 
         for magnet in &problem.magnets {
             assert!(matches!(
@@ -4466,6 +4642,7 @@ mod tests {
                             "frequency_spin_wave_bc": "periodic",
                             "frequency_magnetostatic_bc": "periodic_airbox_k0",
                             "frequency_solver_method": "gpu_operator_host_krylov",
+                            "frequency_solver_preconditioner": "block_jacobi",
                             "frequency_solver_max_iterations": "128",
                             "frequency_solver_restart_iterations": "32",
                             "frequency_solver_rtol": "0.01"
@@ -4496,6 +4673,10 @@ mod tests {
                 assert_eq!(
                     policy.method,
                     Some(fullmag_ir::FrequencyResponseSolverMethodIR::GpuOperatorHostKrylov)
+                );
+                assert_eq!(
+                    policy.preconditioner,
+                    Some(fullmag_ir::FrequencyResponsePreconditionerIR::BlockJacobi)
                 );
                 assert_eq!(policy.rtol, Some(1.0e-2));
                 assert_eq!(policy.max_iterations, Some(128));
@@ -4967,6 +5148,58 @@ mod tests {
         .expect("FDM target ProblemIR should parse")
     }
 
+    fn fem_target_problem_ir(mesh: fullmag_ir::MeshIR) -> ProblemIR {
+        let mut problem = sample_problem_ir();
+        problem.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fem;
+        problem.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
+            fdm: None,
+            fem: Some(fullmag_ir::FemHintsIR {
+                order: 1,
+                hmax: 25e-9,
+                mesh: None,
+                demag_solver_policy: None,
+            }),
+            hybrid: None,
+        });
+        if let fullmag_ir::StudyIR::TimeEvolution { sampling, .. } = &mut problem.study {
+            sampling.outputs = vec![fullmag_ir::OutputIR::Scalar {
+                name: "E_ex".to_string(),
+                every_seconds: 1e-13,
+            }];
+        }
+        problem.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+            fdm_grid_assets: vec![],
+            fem_mesh_assets: vec![],
+            fem_domain_mesh_asset: Some(fullmag_ir::FemDomainMeshAssetIR {
+                mesh_source: None,
+                mesh: Some(mesh),
+                region_markers: vec![fullmag_ir::FemDomainRegionMarkerIR {
+                    geometry_name: "track".to_string(),
+                    marker: 1,
+                }],
+                object_region_markers: Vec::new(),
+                build_report: None,
+            }),
+        });
+        problem
+    }
+
+    fn small_fem_cube_mesh_with_center_node() -> fullmag_ir::MeshIR {
+        let mut mesh = small_fem_cube_mesh();
+        let s = 100e-9_f64;
+        mesh.nodes.push([0.5 * s, 0.5 * s, 0.5 * s]);
+        mesh.mesh_name = "test_cube_with_center".to_string();
+        mesh
+    }
+
+    fn small_fem_cube_mesh_same_count_shifted() -> fullmag_ir::MeshIR {
+        let mut mesh = small_fem_cube_mesh();
+        let s = 100e-9_f64;
+        mesh.nodes[6] = [0.9 * s, 0.9 * s, 0.9 * s];
+        mesh.mesh_name = "test_cube_shifted".to_string();
+        mesh
+    }
+
     #[test]
     fn test_resample_fem_to_fdm_returns_some_for_cross_backend() {
         let mesh_ir = small_fem_cube_mesh();
@@ -4993,6 +5226,57 @@ mod tests {
                 assert!(v[0] > 0.8, "x component should be ~1.0, got {}", v[0]);
             }
         }
+    }
+
+    #[test]
+    fn test_resample_fem_to_fem_returns_transfer_for_remeshed_target() {
+        let source_mesh = small_fem_cube_mesh();
+        let target_ir = fem_target_problem_ir(small_fem_cube_mesh_with_center_node());
+        let fem_m: Vec<[f64; 3]> = source_mesh
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(index, _)| {
+                if index % 2 == 0 {
+                    [1.0, 0.0, 0.0]
+                } else {
+                    [0.0, 1.0, 0.0]
+                }
+            })
+            .collect();
+        let source = ContinuationSource::Fem(source_mesh);
+
+        let result = resample_continuation_if_cross_backend(&fem_m, &source, &target_ir)
+            .expect("FEM to FEM remesh transfer should succeed");
+
+        let transfer = result.expect("FEM→FEM remesh should transfer to target nodes");
+        assert_eq!(transfer.n_total, 9);
+        assert_eq!(transfer.values.len(), 9);
+        assert!(transfer.n_located > 0);
+        for value in transfer.values {
+            let norm = (value[0] * value[0] + value[1] * value[1] + value[2] * value[2]).sqrt();
+            assert!(
+                (norm - 1.0).abs() < 1e-12,
+                "transferred magnetization should be normalized, got {norm}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_resample_fem_to_fem_transfers_when_mesh_changes_without_node_count_change() {
+        let source_mesh = small_fem_cube_mesh();
+        let target_ir = fem_target_problem_ir(small_fem_cube_mesh_same_count_shifted());
+        let fem_m: Vec<[f64; 3]> = vec![[1.0, 0.0, 0.0]; source_mesh.nodes.len()];
+        let source = ContinuationSource::Fem(source_mesh);
+
+        let result = resample_continuation_if_cross_backend(&fem_m, &source, &target_ir)
+            .expect("FEM to FEM same-count remesh transfer should succeed");
+
+        let transfer =
+            result.expect("changed FEM mesh should transfer even when node count matches");
+        assert_eq!(transfer.n_total, 8);
+        assert_eq!(transfer.values.len(), 8);
+        assert!(transfer.n_located > 0);
     }
 
     #[test]

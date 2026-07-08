@@ -82,7 +82,7 @@ import {
   colorPickerInputValue,
   displayPassTogglePatch,
   fieldMetaScopeQueryForVisualizationTarget,
-  formatScalarColorbarValueWithUnit,
+  formatScalarColorbarValueWithDisplayUnit,
   geometryScopeVectorBudgetPatch,
   objectVisualizationTargetForMeshPart,
   resolveVisualizationVectorBudgetRange,
@@ -93,6 +93,8 @@ import {
   resolveSurfaceColorSourceItems,
   scalarColorPaletteGradientCss,
   scalarColorPalettePatch,
+  scalarColorbarDisplayUnitItems,
+  scalarColorbarSupportsDisplayUnits,
   SCALAR_COLOR_PALETTE_ITEMS,
   shouldShowPrimitiveDisplayToggle,
   shouldLoadObjectVisualizationFieldCatalog,
@@ -114,6 +116,7 @@ import {
   visualizationQuantityItems,
   visualizationResetActionLabel,
   parseRegionVisualizationTargetId,
+  type ScalarColorbarDisplayUnit,
 } from "./ObjectVisualizationPanelModel";
 import { formatCount } from "./MeshResourceView";
 
@@ -627,6 +630,8 @@ function ScalarColorbarControl({
   patch: PatchVisualizationTarget;
   rangeIdentity: string;
 }) {
+  const [displayUnit, setDisplayUnit] =
+    useState<ScalarColorbarDisplayUnit>("");
   const cachedRange = useScalarColorbarRangeCache(rangeIdentity);
   useEffect(() => {
     if (
@@ -642,13 +647,28 @@ function ScalarColorbarControl({
   const unit =
     visibleMeta?.unit?.trim() ||
     (visibleMeta?.quantity_id ? quantityUnitForColorbar(visibleMeta.quantity_id) : "");
+  const supportsDisplayUnitToggle =
+    scalarColorbarSupportsDisplayUnits(unit);
+  const displayUnitItems = scalarColorbarDisplayUnitItems(unit);
+  const effectiveDisplayUnit =
+    displayUnitItems.some((item) => item.value === displayUnit)
+      ? displayUnit
+      : displayUnitItems[0]?.value ?? "";
   const minLabel =
     typeof stats?.min === "number"
-      ? formatScalarColorbarValueWithUnit(stats.min, unit)
+      ? formatScalarColorbarValueWithDisplayUnit(
+          stats.min,
+          unit,
+          effectiveDisplayUnit,
+        )
       : null;
   const maxLabel =
     typeof stats?.max === "number"
-      ? formatScalarColorbarValueWithUnit(stats.max, unit)
+      ? formatScalarColorbarValueWithDisplayUnit(
+          stats.max,
+          unit,
+          effectiveDisplayUnit,
+        )
       : null;
   const dataRange =
     minLabel && maxLabel
@@ -671,6 +691,23 @@ function ScalarColorbarControl({
           </option>
         ))}
       </FormField>
+      {supportsDisplayUnitToggle ? (
+        <FormField
+          disabled={disabled}
+          label="Display unit"
+          type="select"
+          value={effectiveDisplayUnit}
+          onChange={(event) =>
+            setDisplayUnit(event.target.value as ScalarColorbarDisplayUnit)
+          }
+        >
+          {displayUnitItems.map((item) => (
+            <option key={item.value} value={item.value}>
+              {item.label}
+            </option>
+          ))}
+        </FormField>
+      ) : null}
       <div
         className="fm-inspector-colorbar"
         aria-label={

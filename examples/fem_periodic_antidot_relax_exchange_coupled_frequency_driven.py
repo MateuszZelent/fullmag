@@ -13,15 +13,28 @@ Run with:
 """
 
 import math
+import os
 
 import fullmag as fm
 
+
+run_stage = os.environ.get(
+    "FULLMAG_PERIODIC_ANTIDOT_FREQUENCY_STAGE",
+    "combined",
+).strip().lower()
+if run_stage not in {"combined", "relax", "response"}:
+    raise ValueError(
+        "FULLMAG_PERIODIC_ANTIDOT_FREQUENCY_STAGE must be one of: "
+        "combined, relax, response"
+    )
 
 mu0_t_m_per_a = 4.0e-7 * math.pi
 equilibrium_torque_tolerance_t = 5.0e-3
 equilibrium_torque_tolerance_a_per_m = (
     equilibrium_torque_tolerance_t / mu0_t_m_per_a
 )
+response_solver_max_iterations = 8192
+response_solver_restart_iterations = response_solver_max_iterations
 study = fm.study("fem_periodic_antidot_relax_exchange_coupled_frequency_driven")
 
 # Engine and universe
@@ -39,7 +52,7 @@ study.universe.mesh(
     growth_rate=1.5,
 )
 study.pbc(x=True, y=True, demag="periodic_airbox_k0")
-study.interactive(True)
+study.interactive(False)
 
 # Geometry
 film = fm.Box(size=(200e-9, 200e-9, 10e-9), name="periodic_antidot_base")
@@ -50,10 +63,22 @@ body = study.geometry(film - hole, name="periodic_antidot_film")
 body.Ms = 800e3
 body.Aex = 13e-12
 body.alpha = 0.02
-body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+if run_stage == "response":
+    relaxed_state_path = os.environ.get(
+        "FULLMAG_PERIODIC_ANTIDOT_RELAXED_MAGNETIC_STATE",
+        "",
+    ).strip()
+    if not relaxed_state_path:
+        raise ValueError(
+            "FULLMAG_PERIODIC_ANTIDOT_RELAXED_MAGNETIC_STATE is required "
+            "when FULLMAG_PERIODIC_ANTIDOT_FREQUENCY_STAGE=response"
+        )
+    body.m = fm.load_magnetization(relaxed_state_path, format="json")
+else:
+    body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 body.mesh.thin_film(
-    minimum_element_size=3e-9,
-    maximum_element_size=8e-9,
+    minimum_element_size=10e-9,
+    maximum_element_size=20e-9,
     # interface_maximum_element_size=14e-9,
     # interface_thickness=8e-9,
     # transition_distance=20e-9,
@@ -76,9 +101,9 @@ hole_transition = body.add_region(
     realization_policy="conformal",
 )
 hole_transition.mesh(
-    minimum_element_size=0.5e-9,
-    maximum_element_size=3e-9,
-    transition_distance=10e-9,
+    minimum_element_size=10e-9,
+    maximum_element_size=20e-9,
+    transition_distance=20e-9,
     # growth_rate=1.5,
     order=1,
 )
@@ -100,11 +125,13 @@ study.runtime_metadata(
     "periodic_antidot_relaxation",
     {
         "scenario": "exchange_coupled_frequency_driven",
+        "run_stage": run_stage,
         "exchange_coupled_across_periods": True,
         "magnetostatic_pbc": "periodic_airbox_k0",
         "frequency_response_device": "gpu",
         "frequency_response_dynamic_demag": True,
         "frequency_response_magnetostatic_bc": "periodic_airbox_k0",
+        "frequency_response_preconditioner": "auto",
         "periodic_pair_ids": ["x_faces", "y_faces"],
         "film_size_m": [200e-9, 200e-9, 10e-9],
         "universe_size_m": [200e-9, 200e-9, 400e-9],
@@ -143,36 +170,36 @@ study.tableautosave(
         "my",
         "mz",
         "e_ex",
-        "e_demag",
-        "E_total",
-        "max_h_demag",
         "max_torque",
     ],
 )
 study.save("m", every=10e-12)
-study.save("H_demag", every=10e-12)
 # study.save("H_eff", every=10e-12)
-study.save("demag_phi", every=10e-12)
 
-study.stages.add_minimize(
-    method="bb",
-    max_steps=4000,
-    tol=equilibrium_torque_tolerance_a_per_m,
-)
+if run_stage in {"combined", "relax"}:
+    study.stages.add_minimize(
+        method="bb",
+        max_steps=4000,
+        tol=equilibrium_torque_tolerance_a_per_m,
+    )
 
 # Keep the dynamic frequency-response stage on the same GPU PBC magnetostatic
 # model as relaxation.
-study.clear_outputs()
-study.stages.change_device("gpu")
+if run_stage in {"combined", "response"}:
+    study.clear_outputs()
+    if run_stage == "combined":
+        study.stages.change_device("gpu")
 
-study.stages.add_frequency_response(
-    frequencies_hz=[
-        2.0e9,
-    ],
-    excitation_field_au_per_m=(0.0, 0.0, 1.0),
-    include_demag=True,
-    equilibrium_source="relax",
-    damping_policy="include",
-    bc=fm.PeriodicBC(["x_faces", "y_faces"]),
-    magnetostatic_bc="periodic_airbox_k0",
-)
+    study.stages.add_frequency_response(
+        frequencies_hz=[2.0e9],
+        excitation_field_au_per_m=(0.0, 0.0, 1.0),
+        include_demag=True,
+        equilibrium_source="relax" if run_stage == "combined" else "provided",
+        damping_policy="include",
+        bc=fm.PeriodicBC(["x_faces", "y_faces"]),
+        magnetostatic_bc="periodic_airbox_k0",
+        solver_method="gpu_operator_host_krylov",
+        solver_preconditioner="auto",
+        solver_max_iterations=response_solver_max_iterations,
+        solver_restart_iterations=response_solver_restart_iterations,
+    )

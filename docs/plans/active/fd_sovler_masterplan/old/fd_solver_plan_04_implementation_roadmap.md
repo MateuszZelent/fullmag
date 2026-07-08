@@ -105,6 +105,30 @@ Acceptance:
 small macrospin + uniform film test przechodzą z dense reference
 ```
 
+Current implementation evidence, 2026-07-06:
+
+```text
+- RED: just verify-fem-frequency-domain-native-contract failed on
+  "zero physical drive emits warning diagnostic" after adding the tiny driven
+  response contract for dynamic_field_phasor_a_per_m with zero complex RHS and
+  require_nonzero_rhs=false.
+- Added the minimal tiny driven-response zero-drive policy: physical
+  dynamic-field drive with zero projected RHS returns ok, reports
+  max_abs_response=0, emits zero_drive_warning=true, and records
+  zero_drive_policy="zero_response_allowed".
+- The existing tangent_rhs + require_nonzero_rhs=true validation_error test
+  remains the benchmark/debug-mode counterexample.
+- GREEN: just verify-fem-frequency-domain-native-contract passed after managed
+  FEM runtime rebuild and native contract execution.
+- RED: the assembled MFEM validation path initially returned ok for a zero
+  physical drive but omitted the zero-drive diagnostics.
+- Added the same zero physical dynamic-field drive policy to the assembled
+  MFEM validation diagnostics: zero_drive_warning=true and
+  zero_drive_policy="zero_response_allowed" when require_nonzero_rhs=false.
+- GREEN: just verify-fem-frequency-domain-native-contract passed again after
+  managed FEM runtime rebuild and native contract execution.
+```
+
 ---
 
 ## Faza 3 — dense full-coupled magnetostatic oracle

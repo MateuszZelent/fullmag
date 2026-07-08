@@ -79,6 +79,21 @@ struct ModalEigenRequest {
         FrequencyDomainPhaseConvention::exp_i_omega_t;
     const FrequencyDomainFloquetPeriodicPair *floquet_periodic_pairs = nullptr;
     std::uint64_t floquet_periodic_pair_count = 0;
+    int poisson_airbox_block_enabled = 0;
+    std::uint64_t poisson_airbox_q_dof_count = 0;
+    std::uint64_t poisson_airbox_phi_dof_count = 0;
+    CsrMatrixView poisson_airbox_a_qq_csr{};
+    CsrMatrixView poisson_airbox_a_qphi_csr{};
+    CsrMatrixView poisson_airbox_a_phiq_csr{};
+    CsrMatrixView poisson_airbox_a_phiphi_csr{};
+    CsrMatrixView poisson_airbox_b_qq_csr{};
+    const double *poisson_airbox_phi_mean_weights = nullptr;
+    std::uint64_t poisson_airbox_phi_mean_weights_count = 0;
+    double poisson_airbox_target_frequency_hz = 0.0;
+    double poisson_airbox_expected_reference_frequency_hz = 0.0;
+    const char *poisson_airbox_periodic_mesh_certificate_schema = nullptr;
+    std::uint64_t poisson_airbox_magnetic_pair_count = 0;
+    std::uint64_t poisson_airbox_airbox_pair_count = 0;
 };
 
 struct DrivenResponseContractRequest {

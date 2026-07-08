@@ -5,8 +5,13 @@
 #include "frequency_domain/frequency_domain_contract.hpp"
 #include "frequency_domain/anisotropy_operator.hpp"
 #include "frequency_domain/driven_response_solver.hpp"
+#include "frequency_domain/dense_full_coupled_oracle.hpp"
 #include "frequency_domain/equilibrium_state.hpp"
 #include "frequency_domain/excitation.hpp"
+#include "frequency_domain/gpu_device_krylov.hpp"
+#include "frequency_domain/linearization_state.hpp"
+#include "frequency_domain/mesh_symmetry_certificate.hpp"
+#include "frequency_domain/modal_basis.hpp"
 #include "frequency_domain/operator_contract.hpp"
 #include "frequency_domain/operator_terms.hpp"
 #include "frequency_domain/planner/frequency_solve_plan.hpp"
@@ -17,12 +22,16 @@
 #include "fullmag_fem.h"
 #include "cpu/frequency_domain/mfem_exchange_operator.hpp"
 #include "cpu/frequency_domain/mfem_dmi_operator.hpp"
+#include "cpu/frequency_domain/dense_driven_response.hpp"
 #include "cpu/frequency_domain/mfem_driven_response_validation.hpp"
 #include "cpu/frequency_domain/mfem_linearized_operator.hpp"
 #include "cpu/frequency_domain/mfem_operator_context.hpp"
 #include "cpu/frequency_domain/mfem_tangent_space.hpp"
 #include "cpu/frequency_domain/mfem_zeeman_operator.hpp"
+#include "cpu/frequency_domain/modal_response.hpp"
 #include "cpu/frequency_domain/production_cpu_driven_response.hpp"
+#include "cpu/frequency_domain/engines/field_split/full_coupled_field_split_engine.hpp"
+#include "cpu/frequency_domain/engines/sparse_direct/cpu_sparse_direct_engine.hpp"
 
 #include <chrono>
 #include <cstdio>
@@ -163,6 +172,20 @@ struct DemagTangentCallbackOperator {
 
 struct FirstKrylovApplyOnlyOperator {
     std::uint64_t tangent_dof_count = 0;
+    std::uint64_t good_stiffness_call_count = 2;
+    std::uint64_t stiffness_call_count = 0;
+    std::uint64_t mass_call_count = 0;
+    std::uint64_t preconditioner_call_count = 0;
+};
+
+struct OneShotResidualGapOperator {
+    std::uint64_t tangent_dof_count = 0;
+    std::uint64_t settled_stiffness_call = 3;
+    std::uint64_t stiffness_call_count = 0;
+    std::uint64_t mass_call_count = 0;
+};
+
+struct TwoDofSkewProductionOperator {
     std::uint64_t stiffness_call_count = 0;
     std::uint64_t mass_call_count = 0;
 };
@@ -412,7 +435,52 @@ fd::FrequencyDomainStatus apply_first_krylov_stiffness_then_zero(
     }
     ++op->stiffness_call_count;
     for (std::uint64_t index = 0; index < op->tangent_dof_count; ++index) {
-        out[index] = op->stiffness_call_count <= 2 ? in[index] : 0.0;
+        out[index] =
+            op->stiffness_call_count <= op->good_stiffness_call_count ? in[index] : 0.0;
+    }
+    return fd::FrequencyDomainStatus::ok;
+}
+
+fd::FrequencyDomainStatus apply_one_shot_residual_gap_stiffness(
+    void *user_data,
+    const double *in,
+    double *out,
+    char error_message[128])
+{
+    auto *op = static_cast<OneShotResidualGapOperator *>(user_data);
+    if (op == nullptr || in == nullptr || out == nullptr) {
+        std::snprintf(error_message, 128, "missing one-shot residual-gap stiffness operator buffers");
+        return fd::FrequencyDomainStatus::validation_error;
+    }
+    ++op->stiffness_call_count;
+    for (std::uint64_t index = 0; index < op->tangent_dof_count; ++index) {
+        out[index] = op->stiffness_call_count < op->settled_stiffness_call
+            ? in[index]
+            : 2.0 * in[index];
+    }
+    return fd::FrequencyDomainStatus::ok;
+}
+
+fd::FrequencyDomainStatus apply_identity_first_krylov_preconditioner(
+    void *user_data,
+    double omega,
+    const double *in,
+    double *out,
+    std::uint64_t tangent_dof_count,
+    char error_message[128])
+{
+    auto *op = static_cast<FirstKrylovApplyOnlyOperator *>(user_data);
+    if (op == nullptr ||
+        in == nullptr ||
+        out == nullptr ||
+        tangent_dof_count != op->tangent_dof_count) {
+        std::snprintf(error_message, 128, "missing first-Krylov preconditioner buffers");
+        return fd::FrequencyDomainStatus::validation_error;
+    }
+    (void)omega;
+    ++op->preconditioner_call_count;
+    for (std::uint64_t index = 0; index < tangent_dof_count * 2; ++index) {
+        out[index] = in[index];
     }
     return fd::FrequencyDomainStatus::ok;
 }
@@ -432,6 +500,58 @@ fd::FrequencyDomainStatus apply_zero_mass(
     for (std::uint64_t index = 0; index < op->tangent_dof_count; ++index) {
         out[index] = 0.0;
     }
+    return fd::FrequencyDomainStatus::ok;
+}
+
+fd::FrequencyDomainStatus apply_one_shot_zero_mass(
+    void *user_data,
+    const double *in,
+    double *out,
+    char error_message[128])
+{
+    auto *op = static_cast<OneShotResidualGapOperator *>(user_data);
+    if (op == nullptr || in == nullptr || out == nullptr) {
+        std::snprintf(error_message, 128, "missing one-shot residual-gap mass operator buffers");
+        return fd::FrequencyDomainStatus::validation_error;
+    }
+    ++op->mass_call_count;
+    for (std::uint64_t index = 0; index < op->tangent_dof_count; ++index) {
+        out[index] = 0.0;
+    }
+    return fd::FrequencyDomainStatus::ok;
+}
+
+fd::FrequencyDomainStatus apply_two_dof_skew_stiffness(
+    void *user_data,
+    const double *in,
+    double *out,
+    char error_message[128])
+{
+    auto *op = static_cast<TwoDofSkewProductionOperator *>(user_data);
+    if (op == nullptr || in == nullptr || out == nullptr) {
+        std::snprintf(error_message, 128, "missing two-DOF skew stiffness buffers");
+        return fd::FrequencyDomainStatus::validation_error;
+    }
+    ++op->stiffness_call_count;
+    out[0] = -in[1];
+    out[1] = in[0];
+    return fd::FrequencyDomainStatus::ok;
+}
+
+fd::FrequencyDomainStatus apply_two_dof_zero_mass(
+    void *user_data,
+    const double *in,
+    double *out,
+    char error_message[128])
+{
+    auto *op = static_cast<TwoDofSkewProductionOperator *>(user_data);
+    if (op == nullptr || in == nullptr || out == nullptr) {
+        std::snprintf(error_message, 128, "missing two-DOF zero mass buffers");
+        return fd::FrequencyDomainStatus::validation_error;
+    }
+    ++op->mass_call_count;
+    out[0] = 0.0;
+    out[1] = 0.0;
     return fd::FrequencyDomainStatus::ok;
 }
 
@@ -1022,6 +1142,8 @@ void periodic_airbox_reduced_response_uses_schur_residual_preconditioner_source_
 void frequency_solve_plan_names_solver_tree_lanes_without_runtime_side_effects()
 {
     fd::FrequencySolvePlan plan{};
+    fd::FrequencyBackendCapabilities capabilities{};
+    fd::FrequencySolverPolicy policy{};
 
     check(
         plan.lane == fd::FrequencyExecutionLane::dense_reference,
@@ -1038,6 +1160,71 @@ void frequency_solve_plan_names_solver_tree_lanes_without_runtime_side_effects()
     check(
         !plan.allow_device_resident_krylov,
         "default frequency solve plan does not silently claim device-resident Krylov");
+    check(
+        !capabilities.gpu_device_krylov_available,
+        "default backend capabilities do not claim device-resident Krylov");
+    check(
+        !capabilities.schur_certified,
+        "default backend capabilities do not claim Schur certification");
+    check(
+        policy.prefer_existing_host_krylov,
+        "default solver policy preserves current host GMRES fallback");
+    check(
+        !policy.allow_device_resident_krylov,
+        "default solver policy does not allow future GPU device Krylov");
+    check(
+        policy.progress_interval_iterations == 128,
+        "default solver policy keeps throttled progress interval");
+    fd::SchurCertificationState default_certificate{};
+    check(
+        !fd::schur_certification_passes(default_certificate),
+        "default Schur certification state does not certify the fast path");
+    fd::SchurCertificationState good_certificate{};
+    good_certificate.quality_diagnostics_available = true;
+    good_certificate.full_reduced_residual_reconstruction_passed = true;
+    good_certificate.full_reduced_relative_residual_error = 1.0e-12;
+    good_certificate.observed_residual_contraction = 0.25;
+    check(
+        fd::schur_certification_passes(good_certificate),
+        "Schur certification passes when reconstruction and residual-quality thresholds pass");
+    fd::SchurCertificationState bad_certificate = good_certificate;
+    bad_certificate.full_reduced_relative_residual_error = 1.0e-3;
+    check(
+        !fd::schur_certification_passes(bad_certificate),
+        "Schur certification rejects excessive full-vs-reduced residual mismatch");
+    good_certificate.mesh_signature = 17;
+    good_certificate.material_signature = 23;
+    good_certificate.physics_signature = 31;
+    check(
+        fd::schur_certification_passes_for_problem(good_certificate, 17, 23, 31),
+        "Schur certification accepts matching mesh/material/physics signatures");
+    check(
+        !fd::schur_certification_passes_for_problem(good_certificate, 18, 23, 31),
+        "Schur certification invalidates on mesh signature mismatch");
+    check(
+        !fd::schur_certification_passes_for_problem(good_certificate, 17, 24, 31),
+        "Schur certification invalidates on material signature mismatch");
+    check(
+        !fd::schur_certification_passes_for_problem(good_certificate, 17, 23, 32),
+        "Schur certification invalidates on physics signature mismatch");
+    fd::FrequencyBackendCapabilities certified_capabilities{};
+    fd::apply_schur_certification(good_certificate, &certified_capabilities);
+    check(
+        certified_capabilities.schur_certified,
+        "accepted Schur certificate sets backend capability schur_certified");
+    check(
+        certified_capabilities.schur_quality_good,
+        "accepted Schur certificate sets backend capability schur_quality_good");
+    fd::FrequencyBackendCapabilities rejected_capabilities{};
+    rejected_capabilities.schur_certified = true;
+    rejected_capabilities.schur_quality_good = true;
+    fd::apply_schur_certification(bad_certificate, &rejected_capabilities);
+    check(
+        !rejected_capabilities.schur_certified,
+        "rejected Schur certificate clears backend capability schur_certified");
+    check(
+        !rejected_capabilities.schur_quality_good,
+        "rejected Schur certificate clears backend capability schur_quality_good");
     check(
         std::strcmp(
             fd::frequency_execution_lane_name(fd::FrequencyExecutionLane::dense_reference),
@@ -1111,6 +1298,7 @@ void frequency_solve_planner_selects_first_real_backend_without_runtime_side_eff
         "cpu_sparse_direct does not silently use Schur reduction");
 
     fd::FrequencySolvePlannerInput gpu_operator_input{};
+    gpu_operator_input.tiny_problem = false;
     gpu_operator_input.requested_gpu = true;
     gpu_operator_input.gpu_operator_backend_available = true;
     gpu_operator_input.device_resident_krylov_available = false;
@@ -1128,22 +1316,976 @@ void frequency_solve_planner_selects_first_real_backend_without_runtime_side_eff
         !gpu_operator_plan.allow_device_resident_krylov,
         "gpu_operator_host_krylov does not claim device-resident Krylov");
 
+    fd::FrequencySolvePlannerInput premature_device_input{};
+    premature_device_input.tiny_problem = false;
+    premature_device_input.requested_gpu = true;
+    premature_device_input.gpu_operator_backend_available = true;
+    premature_device_input.device_resident_krylov_available = true;
+    premature_device_input.preconditioner_certified = false;
+
+    const fd::FrequencySolvePlan premature_device_plan =
+        fd::plan_frequency_response(premature_device_input);
+
+    check(
+        premature_device_plan.lane == fd::FrequencyExecutionLane::gpu_operator_host_krylov,
+        "GPU device Krylov is gated until preconditioner contraction is certified");
+    check(
+        !premature_device_plan.allow_device_resident_krylov,
+        "uncertified GPU device Krylov request does not claim device-resident Krylov");
+
+    fd::FrequencySolvePlannerInput certified_device_input = premature_device_input;
+    certified_device_input.preconditioner_certified = true;
+
+    const fd::FrequencySolvePlan certified_device_plan =
+        fd::plan_frequency_response(certified_device_input);
+
+    check(
+        certified_device_plan.lane == fd::FrequencyExecutionLane::gpu_device_krylov,
+        "GPU device Krylov can be selected after explicit preconditioner certification");
+    check(
+        certified_device_plan.allow_device_resident_krylov,
+        "certified GPU device Krylov plan records device residency");
+    check(
+        certified_device_plan.require_preconditioner_contraction_certificate,
+        "certified GPU device Krylov plan records the contraction certificate requirement");
+
     fd::FrequencySolvePlannerInput schur_input{};
+    schur_input.tiny_problem = false;
     schur_input.periodic_airbox_k0 = true;
+    schur_input.periodic_mesh_symmetry_certified = true;
     schur_input.schur_certified = true;
 
     const fd::FrequencySolvePlan schur_plan =
         fd::plan_frequency_response(schur_input);
 
     check(
-        schur_plan.lane == fd::FrequencyExecutionLane::schur_reduced,
-        "certified Schur requests select schur_reduced after full-coupled availability is absent");
+        schur_plan.lane != fd::FrequencyExecutionLane::schur_reduced,
+        "certified Schur must not be auto-selected without an explicit Schur request");
     check(
-        schur_plan.use_schur_reduction,
+        !schur_plan.use_schur_reduction,
+        "implicit certified Schur request does not record Schur reduction");
+
+    schur_input.schur_reduced_explicitly_requested = true;
+
+    const fd::FrequencySolvePlan explicit_schur_plan =
+        fd::plan_frequency_response(schur_input);
+
+    check(
+        explicit_schur_plan.lane == fd::FrequencyExecutionLane::schur_reduced,
+        "explicit certified Schur requests select schur_reduced after full-coupled availability is absent");
+    check(
+        explicit_schur_plan.use_schur_reduction,
         "schur_reduced records Schur reduction");
     check(
-        schur_plan.require_true_residual_verification,
+        explicit_schur_plan.require_true_residual_verification,
         "schur_reduced requires true residual verification");
+
+    fd::FrequencySolvePlannerInput uncertified_periodic_input{};
+    uncertified_periodic_input.tiny_problem = false;
+    uncertified_periodic_input.periodic_airbox_k0 = true;
+    uncertified_periodic_input.periodic_mesh_symmetry_certified = true;
+    uncertified_periodic_input.schur_certified = false;
+
+    const fd::FrequencySolvePlan uncertified_periodic_plan =
+        fd::plan_frequency_response(uncertified_periodic_input);
+
+    check(
+        uncertified_periodic_plan.lane != fd::FrequencyExecutionLane::schur_reduced,
+        "uncertified periodic-airbox requests must not select schur_reduced fast path");
+    check(
+        !uncertified_periodic_plan.use_schur_reduction,
+        "uncertified periodic-airbox requests must not enable Schur reduction");
+
+    fd::FrequencySolvePlannerInput uncertified_full_coupled_input =
+        uncertified_periodic_input;
+    uncertified_full_coupled_input.full_coupled_blocks_available = true;
+
+    const fd::FrequencySolvePlan uncertified_full_coupled_plan =
+        fd::plan_frequency_response(uncertified_full_coupled_input);
+
+    check(
+        uncertified_full_coupled_plan.lane == fd::FrequencyExecutionLane::full_coupled_field_split,
+        "uncertified periodic-airbox requests fall back to full_coupled_field_split when full blocks are available");
+    check(
+        uncertified_full_coupled_plan.use_full_coupled_system,
+        "uncertified periodic-airbox full-coupled fallback records full coupled system use");
+    check(
+        !uncertified_full_coupled_plan.use_schur_reduction,
+        "uncertified periodic-airbox full-coupled fallback does not enable Schur reduction");
+
+    fd::FrequencySolvePlannerInput missing_mesh_certificate_input{};
+    missing_mesh_certificate_input.tiny_problem = false;
+    missing_mesh_certificate_input.periodic_airbox_k0 = true;
+    missing_mesh_certificate_input.periodic_mesh_symmetry_certified = false;
+    missing_mesh_certificate_input.full_coupled_blocks_available = true;
+    missing_mesh_certificate_input.schur_certified = true;
+
+    const fd::FrequencySolvePlan missing_mesh_certificate_plan =
+        fd::plan_frequency_response(missing_mesh_certificate_input);
+
+    check(
+        missing_mesh_certificate_plan.lane != fd::FrequencyExecutionLane::full_coupled_field_split,
+        "periodic-airbox requests without mesh symmetry certificate must not select full coupled field-split");
+    check(
+        missing_mesh_certificate_plan.lane != fd::FrequencyExecutionLane::schur_reduced,
+        "periodic-airbox requests without mesh symmetry certificate must not select schur_reduced");
+    check(
+        !missing_mesh_certificate_plan.use_full_coupled_system,
+        "periodic-airbox requests without mesh symmetry certificate must not enable full coupled system");
+    check(
+        !missing_mesh_certificate_plan.use_schur_reduction,
+        "periodic-airbox requests without mesh symmetry certificate must not enable Schur reduction");
+
+    fd::FrequencySolvePlannerInput missing_linearization_input{};
+    missing_linearization_input.tiny_problem = false;
+    missing_linearization_input.relaxed_texture_linearization_required = true;
+    missing_linearization_input.accepted_linearization_state_available = false;
+    missing_linearization_input.periodic_airbox_k0 = true;
+    missing_linearization_input.periodic_mesh_symmetry_certified = true;
+    missing_linearization_input.full_coupled_blocks_available = true;
+    missing_linearization_input.schur_certified = true;
+    missing_linearization_input.requested_gpu = true;
+    missing_linearization_input.gpu_operator_backend_available = true;
+    missing_linearization_input.device_resident_krylov_available = true;
+    missing_linearization_input.preconditioner_certified = true;
+
+    const fd::FrequencySolvePlan missing_linearization_plan =
+        fd::plan_frequency_response(missing_linearization_input);
+
+    check(
+        missing_linearization_plan.rejected,
+        "planner rejects frequency response when relaxed texture requires accepted LinearizationState");
+    check(
+        missing_linearization_plan.require_relaxed_texture_gate,
+        "planner records relaxed texture gate requirement");
+    check(
+        std::strcmp(
+            missing_linearization_plan.rejection_reason,
+            "equilibrium_artifact_missing") == 0,
+        "planner reports exact missing equilibrium artifact rejection reason");
+    check(
+        missing_linearization_plan.lane != fd::FrequencyExecutionLane::full_coupled_field_split,
+        "missing LinearizationState must not select full-coupled field-split");
+    check(
+        missing_linearization_plan.lane != fd::FrequencyExecutionLane::schur_reduced,
+        "missing LinearizationState must not select Schur fast path");
+    check(
+        missing_linearization_plan.lane != fd::FrequencyExecutionLane::gpu_device_krylov,
+        "missing LinearizationState must not select GPU device Krylov");
+
+    fd::FrequencySolvePlannerInput accepted_linearization_input =
+        missing_linearization_input;
+    accepted_linearization_input.accepted_linearization_state_available = true;
+
+    const fd::FrequencySolvePlan accepted_linearization_plan =
+        fd::plan_frequency_response(accepted_linearization_input);
+
+    check(
+        !accepted_linearization_plan.rejected,
+        "accepted LinearizationState allows planner to continue backend selection");
+    check(
+        accepted_linearization_plan.require_relaxed_texture_gate,
+        "accepted LinearizationState keeps relaxed texture gate visible in plan diagnostics");
+    check(
+        accepted_linearization_plan.lane == fd::FrequencyExecutionLane::full_coupled_field_split,
+        "accepted LinearizationState permits full-coupled periodic-airbox selection");
+
+    fd::FrequencyBackendCapabilities existing_capabilities{};
+    existing_capabilities.gpu_operator_backend_available = true;
+    existing_capabilities.gpu_device_krylov_available = false;
+    existing_capabilities.schur_certified = false;
+
+    fd::FrequencySolverPolicy existing_policy{};
+    existing_policy.request_gpu = true;
+    existing_policy.prefer_existing_host_krylov = true;
+    existing_policy.allow_device_resident_krylov = false;
+
+    const fd::FrequencySolvePlan existing_plan =
+        fd::plan_frequency_response(existing_capabilities, existing_policy);
+
+    check(
+        existing_plan.lane == fd::FrequencyExecutionLane::gpu_operator_host_krylov,
+        "capability/policy descriptor planner preserves existing host GMRES path");
+    check(
+        existing_plan.linear_solver == fd::FrequencyLinearSolverFamily::host_gmres,
+        "descriptor planner keeps current host GMRES solver family");
+    check(
+        existing_plan.allow_gpu_operator_backend,
+        "descriptor planner records GPU operator availability");
+    check(
+        !existing_plan.allow_device_resident_krylov,
+        "descriptor planner does not enable device Krylov without policy and capability");
+
+    fd::FrequencyBackendCapabilities uncertified_device_capabilities{};
+    uncertified_device_capabilities.gpu_operator_backend_available = true;
+    uncertified_device_capabilities.gpu_device_krylov_available = true;
+    uncertified_device_capabilities.preconditioner_certified = false;
+
+    fd::FrequencySolverPolicy device_policy{};
+    device_policy.request_gpu = true;
+    device_policy.prefer_existing_host_krylov = false;
+    device_policy.allow_device_resident_krylov = true;
+    device_policy.prefer_sparse_direct_for_single_frequency = false;
+
+    const fd::FrequencySolvePlan uncertified_device_descriptor_plan =
+        fd::plan_frequency_response(uncertified_device_capabilities, device_policy);
+
+    check(
+        uncertified_device_descriptor_plan.lane == fd::FrequencyExecutionLane::gpu_operator_host_krylov,
+        "descriptor planner blocks GPU device Krylov without preconditioner certification");
+    check(
+        !uncertified_device_descriptor_plan.allow_device_resident_krylov,
+        "descriptor planner does not claim device residency without preconditioner certification");
+
+    fd::FrequencyBackendCapabilities certified_device_capabilities =
+        uncertified_device_capabilities;
+    certified_device_capabilities.preconditioner_certified = true;
+
+    const fd::FrequencySolvePlan certified_device_descriptor_plan =
+        fd::plan_frequency_response(certified_device_capabilities, device_policy);
+
+    check(
+        certified_device_descriptor_plan.lane == fd::FrequencyExecutionLane::gpu_device_krylov,
+        "descriptor planner enables GPU device Krylov only after capability, policy, and certification agree");
+    check(
+        certified_device_descriptor_plan.require_preconditioner_contraction_certificate,
+        "descriptor GPU device Krylov plan records preconditioner contraction certificate requirement");
+
+    fd::FrequencyBackendCapabilities linearization_capabilities{};
+    linearization_capabilities.full_coupled_blocks_available = true;
+    linearization_capabilities.periodic_mesh_symmetry_certified = true;
+    linearization_capabilities.accepted_linearization_state_available = false;
+
+    fd::FrequencySolverPolicy linearization_policy{};
+    linearization_policy.validation_mode = false;
+    linearization_policy.require_relaxed_texture_linearization = true;
+    linearization_policy.prefer_sparse_direct_for_single_frequency = false;
+    linearization_policy.prefer_existing_host_krylov = false;
+
+    const fd::FrequencySolvePlan descriptor_missing_linearization_plan =
+        fd::plan_frequency_response(
+            linearization_capabilities,
+            linearization_policy);
+
+    check(
+        descriptor_missing_linearization_plan.rejected,
+        "descriptor planner rejects missing accepted LinearizationState when policy requires it");
+    check(
+        std::strcmp(
+            descriptor_missing_linearization_plan.rejection_reason,
+            "equilibrium_artifact_missing") == 0,
+        "descriptor planner preserves missing equilibrium rejection reason");
+}
+
+void driven_response_diagnostics_publish_honest_krylov_residency()
+{
+    const std::string source =
+        read_text_file("backends/fem/src/frequency_domain/driven_response_solver.cpp");
+
+    check(
+        contains(source.c_str(), "\"krylov_vector_location\":\"host\""),
+        "current driven-response diagnostics must report host Krylov vectors");
+    check(
+        contains(source.c_str(), "\"operator_buffer_location\":\"gpu_if_enabled\""),
+        "current driven-response diagnostics must report GPU-backed operator buffers honestly");
+    check(
+        contains(source.c_str(), "\"preconditioner_buffer_location\":\"host_or_gpu_operator\""),
+        "current driven-response diagnostics must report mixed preconditioner residency honestly");
+    check(
+        contains(source.c_str(), "\"gpu_device_resident_solver\":false"),
+        "current driven-response diagnostics must not claim a device-resident GPU solver");
+}
+
+void gpu_device_krylov_api_names_device_resident_vectors_and_callbacks()
+{
+    double real[3]{};
+    double imag[3]{};
+    fd::DeviceComplexVectorView vector{real, imag, 3};
+    fd::GpuFrequencyOperatorContext context{};
+
+    context.device_operator_data = reinterpret_cast<void *>(0x1);
+    context.stream = reinterpret_cast<void *>(0x2);
+    context.tangent_dof_count = 3;
+
+    fd::ApplyAomegaGpu apply_aomega =
+        [](fd::GpuFrequencyOperatorContext *ctx,
+           double omega_rad_s,
+           fd::DeviceComplexVectorView x,
+           fd::DeviceComplexVectorView y) noexcept -> fd::FrequencyDomainStatus {
+            return ctx != nullptr &&
+                    omega_rad_s > 0.0 &&
+                    x.n == y.n &&
+                    x.real != nullptr &&
+                    y.real != nullptr ?
+                fd::FrequencyDomainStatus::ok :
+                fd::FrequencyDomainStatus::validation_error;
+        };
+    fd::ApplyRightPreconditionerGpu apply_preconditioner =
+        [](fd::GpuFrequencyOperatorContext *ctx,
+           double omega_rad_s,
+           fd::DeviceComplexVectorView r,
+           fd::DeviceComplexVectorView z) noexcept -> fd::FrequencyDomainStatus {
+            return ctx != nullptr &&
+                    omega_rad_s > 0.0 &&
+                    r.n == z.n &&
+                    r.imag != nullptr &&
+                    z.imag != nullptr ?
+                fd::FrequencyDomainStatus::ok :
+                fd::FrequencyDomainStatus::validation_error;
+        };
+
+    check(vector.real == real, "device complex vector keeps device real pointer");
+    check(vector.imag == imag, "device complex vector keeps device imag pointer");
+    check(vector.n == 3, "device complex vector keeps element count");
+    check(
+        context.tangent_dof_count == vector.n,
+        "GPU frequency operator context records tangent DOF count");
+    check(
+        apply_aomega(&context, 1.0, vector, vector) == fd::FrequencyDomainStatus::ok,
+        "GPU apply_Aomega callback type accepts device vector views");
+    check(
+        apply_preconditioner(&context, 1.0, vector, vector) ==
+            fd::FrequencyDomainStatus::ok,
+        "GPU right-preconditioner callback type accepts device vector views");
+}
+
+void gpu_device_krylov_transfer_diagnostics_reject_per_iteration_readback()
+{
+    fd::GpuDeviceKrylovTransferDiagnostics diagnostics{};
+    diagnostics.gpu_device_resident_solver = true;
+    diagnostics.krylov_vector_location = fd::GpuKrylovVectorLocation::device;
+    diagnostics.operator_buffer_location = fd::GpuKrylovBufferLocation::device;
+    diagnostics.preconditioner_buffer_location = fd::GpuKrylovBufferLocation::device;
+    diagnostics.iteration_count = 64;
+    diagnostics.setup_h2d_transfer_count = 3;
+    diagnostics.final_d2h_transfer_count = 1;
+    diagnostics.per_iteration_h2d_transfer_count = 0;
+    diagnostics.per_iteration_d2h_transfer_count = 0;
+
+    check(
+        fd::gpu_device_krylov_residency_contract_passes(diagnostics),
+        "GPU device Krylov diagnostics accept device-resident vectors with no per-iteration transfers");
+
+    fd::GpuDeviceKrylovTransferDiagnostics per_iteration_d2h = diagnostics;
+    per_iteration_d2h.per_iteration_d2h_transfer_count = 1;
+    check(
+        !fd::gpu_device_krylov_residency_contract_passes(per_iteration_d2h),
+        "GPU device Krylov diagnostics reject per-iteration D2H readback");
+
+    fd::GpuDeviceKrylovTransferDiagnostics host_vectors = diagnostics;
+    host_vectors.krylov_vector_location = fd::GpuKrylovVectorLocation::host;
+    check(
+        !fd::gpu_device_krylov_residency_contract_passes(host_vectors),
+        "GPU device Krylov diagnostics reject host Krylov vectors");
+}
+
+fd::GpuFusedAomegaDiagnostics certified_fused_aomega_diagnostics()
+{
+    fd::GpuFusedAomegaDiagnostics diagnostics{};
+    diagnostics.fused_operator = true;
+    diagnostics.stiffness_or_jacobian_term_included = true;
+    diagnostics.gyrotropic_frequency_term_included = true;
+    diagnostics.damping_term_required = true;
+    diagnostics.damping_term_included = true;
+    diagnostics.dynamic_demag_term_required = true;
+    diagnostics.dynamic_demag_term_included = true;
+    diagnostics.operator_input_location = fd::GpuKrylovBufferLocation::device;
+    diagnostics.operator_output_location = fd::GpuKrylovBufferLocation::device;
+    diagnostics.operator_scratch_location = fd::GpuKrylovBufferLocation::device;
+    diagnostics.apply_count = 1;
+    diagnostics.kernel_launch_count = 1;
+    diagnostics.host_side_term_apply_count = 0;
+    diagnostics.per_apply_h2d_transfer_count = 0;
+    diagnostics.per_apply_d2h_transfer_count = 0;
+    diagnostics.omega_rad_s = 2.0;
+    return diagnostics;
+}
+
+void fgmres_device_engine_requires_fused_aomega_device_operator_contract()
+{
+    fd::GpuFusedAomegaDiagnostics diagnostics =
+        certified_fused_aomega_diagnostics();
+    check(
+        fd::gpu_fused_aomega_contract_passes(diagnostics),
+        "fused GPU Aomega contract accepts a device-resident single apply callback with required terms");
+
+    fd::GpuFusedAomegaDiagnostics split_terms = diagnostics;
+    split_terms.fused_operator = false;
+    split_terms.host_side_term_apply_count = 2;
+    check(
+        !fd::gpu_fused_aomega_contract_passes(split_terms),
+        "fused GPU Aomega contract rejects split host-side term application");
+
+    fd::GpuFusedAomegaDiagnostics host_input = diagnostics;
+    host_input.operator_input_location = fd::GpuKrylovBufferLocation::host;
+    check(
+        !fd::gpu_fused_aomega_contract_passes(host_input),
+        "fused GPU Aomega contract rejects host operator input buffers");
+
+    fd::GpuFusedAomegaDiagnostics missing_demag = diagnostics;
+    missing_demag.dynamic_demag_term_included = false;
+    check(
+        !fd::gpu_fused_aomega_contract_passes(missing_demag),
+        "fused GPU Aomega contract rejects missing required dynamic demag term");
+
+    fd::GpuFusedAomegaDiagnostics readback = diagnostics;
+    readback.per_apply_d2h_transfer_count = 1;
+    check(
+        !fd::gpu_fused_aomega_contract_passes(readback),
+        "fused GPU Aomega contract rejects per-apply device-to-host readback");
+
+    double real[2]{};
+    double imag[2]{};
+    fd::DeviceComplexVectorView vector{real, imag, 2};
+    fd::GpuFrequencyOperatorContext context{};
+    context.device_operator_data = reinterpret_cast<void *>(0x1);
+    context.tangent_dof_count = 2;
+
+    fd::GpuDeviceKrylovTransferDiagnostics transfers{};
+    transfers.gpu_device_resident_solver = true;
+    transfers.krylov_vector_location = fd::GpuKrylovVectorLocation::device;
+    transfers.operator_buffer_location = fd::GpuKrylovBufferLocation::device;
+    transfers.preconditioner_buffer_location = fd::GpuKrylovBufferLocation::device;
+    transfers.iteration_count = 256;
+
+    fd::FGMRESDeviceResidualDiagnostics residuals{};
+    residuals.bounded_64_run_available = true;
+    residuals.bounded_256_run_available = true;
+    residuals.iterations_64 = 64;
+    residuals.iterations_256 = 256;
+    residuals.initial_relative_residual_l2_norm = 1.0;
+    residuals.relative_residual_after_64_l2_norm = 2.5e-1;
+    residuals.relative_residual_after_256_l2_norm = 6.0e-2;
+    residuals.cpu_reference_relative_residual_after_64_l2_norm = 2.0e-1;
+    residuals.cpu_reference_relative_residual_after_256_l2_norm = 5.0e-2;
+    residuals.tracked_final_relative_residual_l2_norm = 6.0e-2;
+    residuals.recomputed_final_relative_residual_l2_norm = 6.00000001e-2;
+    residuals.max_tracked_recomputed_relative_mismatch = 1.0e-6;
+    residuals.max_device_to_cpu_residual_ratio = 1.5;
+
+    fd::FGMRESDeviceEngineConfig config{};
+    config.context = &context;
+    config.apply_aomega =
+        [](fd::GpuFrequencyOperatorContext *,
+           double,
+           fd::DeviceComplexVectorView,
+           fd::DeviceComplexVectorView) noexcept -> fd::FrequencyDomainStatus {
+            return fd::FrequencyDomainStatus::ok;
+        };
+    config.apply_right_preconditioner =
+        [](fd::GpuFrequencyOperatorContext *,
+           double,
+           fd::DeviceComplexVectorView,
+           fd::DeviceComplexVectorView) noexcept -> fd::FrequencyDomainStatus {
+            return fd::FrequencyDomainStatus::ok;
+        };
+    config.solution = vector;
+    config.rhs = vector;
+    config.workspace_vector_count = 8;
+    config.max_iterations = 256;
+    config.transfer_diagnostics = transfers;
+    config.residual_diagnostics = residuals;
+    config.fused_aomega_diagnostics = diagnostics;
+
+    fd::FGMRESDeviceEngineState state{};
+    check(
+        fd::validate_fgmres_device_engine_config(config, &state) ==
+            fd::FrequencyDomainStatus::ok,
+        "FGMRES device engine config requires fused Aomega diagnostics");
+    check(
+        state.fused_aomega_contract_passed,
+        "FGMRES device engine state records fused Aomega contract");
+
+    fd::FGMRESDeviceEngineConfig missing_fused_aomega = config;
+    missing_fused_aomega.fused_aomega_diagnostics =
+        fd::GpuFusedAomegaDiagnostics{};
+    check(
+        fd::validate_fgmres_device_engine_config(missing_fused_aomega, &state) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "FGMRES device engine config rejects missing fused Aomega diagnostics");
+}
+
+void fgmres_device_engine_requires_callbacks_workspace_and_residency_contract()
+{
+    double real[2]{};
+    double imag[2]{};
+    fd::DeviceComplexVectorView vector{real, imag, 2};
+    fd::GpuFrequencyOperatorContext context{};
+    context.device_operator_data = reinterpret_cast<void *>(0x1);
+    context.tangent_dof_count = 2;
+
+    fd::ApplyAomegaGpu apply_aomega =
+        [](fd::GpuFrequencyOperatorContext *ctx,
+           double omega_rad_s,
+           fd::DeviceComplexVectorView x,
+           fd::DeviceComplexVectorView y) noexcept -> fd::FrequencyDomainStatus {
+            return ctx != nullptr &&
+                    omega_rad_s > 0.0 &&
+                    x.n == y.n &&
+                    x.real != nullptr &&
+                    x.imag != nullptr &&
+                    y.real != nullptr &&
+                    y.imag != nullptr ?
+                fd::FrequencyDomainStatus::ok :
+                fd::FrequencyDomainStatus::validation_error;
+        };
+    fd::ApplyRightPreconditionerGpu apply_preconditioner =
+        [](fd::GpuFrequencyOperatorContext *ctx,
+           double omega_rad_s,
+           fd::DeviceComplexVectorView r,
+           fd::DeviceComplexVectorView z) noexcept -> fd::FrequencyDomainStatus {
+            return ctx != nullptr &&
+                    omega_rad_s > 0.0 &&
+                    r.n == z.n &&
+                    r.real != nullptr &&
+                    r.imag != nullptr &&
+                    z.real != nullptr &&
+                    z.imag != nullptr ?
+                fd::FrequencyDomainStatus::ok :
+                fd::FrequencyDomainStatus::validation_error;
+        };
+
+    fd::GpuDeviceKrylovTransferDiagnostics diagnostics{};
+    diagnostics.gpu_device_resident_solver = true;
+    diagnostics.krylov_vector_location = fd::GpuKrylovVectorLocation::device;
+    diagnostics.operator_buffer_location = fd::GpuKrylovBufferLocation::device;
+    diagnostics.preconditioner_buffer_location = fd::GpuKrylovBufferLocation::device;
+    diagnostics.iteration_count = 1;
+
+    fd::FGMRESDeviceResidualDiagnostics residuals{};
+    residuals.bounded_64_run_available = true;
+    residuals.bounded_256_run_available = true;
+    residuals.iterations_64 = 64;
+    residuals.iterations_256 = 256;
+    residuals.initial_relative_residual_l2_norm = 1.0;
+    residuals.relative_residual_after_64_l2_norm = 2.5e-1;
+    residuals.relative_residual_after_256_l2_norm = 6.0e-2;
+    residuals.cpu_reference_relative_residual_after_64_l2_norm = 2.0e-1;
+    residuals.cpu_reference_relative_residual_after_256_l2_norm = 5.0e-2;
+    residuals.tracked_final_relative_residual_l2_norm = 6.0e-2;
+    residuals.recomputed_final_relative_residual_l2_norm = 6.00000001e-2;
+    residuals.max_tracked_recomputed_relative_mismatch = 1.0e-6;
+    residuals.max_device_to_cpu_residual_ratio = 1.5;
+
+    fd::FGMRESDeviceEngineConfig config{};
+    config.context = &context;
+    config.apply_aomega = apply_aomega;
+    config.apply_right_preconditioner = apply_preconditioner;
+    config.solution = vector;
+    config.rhs = vector;
+    config.workspace_vector_count = 8;
+    config.max_iterations = 64;
+    config.transfer_diagnostics = diagnostics;
+    config.residual_diagnostics = residuals;
+    config.fused_aomega_diagnostics = certified_fused_aomega_diagnostics();
+
+    fd::FGMRESDeviceEngineState state{};
+    check(
+        fd::validate_fgmres_device_engine_config(config, &state) ==
+            fd::FrequencyDomainStatus::ok,
+        "FGMRES device engine config accepts callbacks, workspace, and residency diagnostics");
+    check(state.ready, "FGMRES device engine state records ready config");
+    check(
+        state.transfer_contract_passed,
+        "FGMRES device engine state records transfer contract");
+    check(
+        fd::probe_fgmres_device_engine_callbacks(config, 2.0, vector, &state) ==
+            fd::FrequencyDomainStatus::ok,
+        "FGMRES device engine probe invokes GPU callbacks on device vector views");
+    check(
+        state.apply_aomega_probe_passed,
+        "FGMRES device engine state records apply_Aomega probe");
+    check(
+        state.right_preconditioner_probe_passed,
+        "FGMRES device engine state records right-preconditioner probe");
+
+    fd::FGMRESDeviceEngineConfig missing_callback = config;
+    missing_callback.apply_aomega = nullptr;
+    check(
+        fd::validate_fgmres_device_engine_config(missing_callback, &state) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "FGMRES device engine config rejects missing apply_Aomega callback");
+
+    fd::FGMRESDeviceEngineConfig insufficient_workspace = config;
+    insufficient_workspace.workspace_vector_count = 2;
+    check(
+        fd::validate_fgmres_device_engine_config(insufficient_workspace, &state) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "FGMRES device engine config rejects insufficient device workspace");
+
+    fd::FGMRESDeviceEngineConfig host_residency = config;
+    host_residency.transfer_diagnostics.krylov_vector_location =
+        fd::GpuKrylovVectorLocation::host;
+    check(
+        fd::validate_fgmres_device_engine_config(host_residency, &state) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "FGMRES device engine config rejects failed residency contract");
+
+    fd::FGMRESDeviceEngineConfig failing_callback = config;
+    failing_callback.apply_aomega =
+        [](fd::GpuFrequencyOperatorContext *,
+           double,
+           fd::DeviceComplexVectorView,
+           fd::DeviceComplexVectorView) noexcept -> fd::FrequencyDomainStatus {
+            return fd::FrequencyDomainStatus::solve_error;
+        };
+    check(
+        fd::probe_fgmres_device_engine_callbacks(failing_callback, 2.0, vector, &state) ==
+            fd::FrequencyDomainStatus::solve_error,
+        "FGMRES device engine probe forwards GPU callback failure");
+}
+
+void fgmres_device_engine_requires_device_algebra_callbacks_for_orthogonalization_contract()
+{
+    double basis_real[8]{};
+    double basis_imag[8]{};
+    double z_basis_real[8]{};
+    double z_basis_imag[8]{};
+    double work_real[2]{};
+    double work_imag[2]{};
+    double hessenberg_real[5]{};
+    double hessenberg_imag[5]{};
+
+    fd::GpuFrequencyOperatorContext context{};
+    context.device_operator_data = reinterpret_cast<void *>(0x1);
+    context.tangent_dof_count = 2;
+
+    fd::DeviceComplexVectorView krylov_basis{basis_real, basis_imag, 8};
+    fd::DeviceComplexVectorView preconditioned_basis{
+        z_basis_real,
+        z_basis_imag,
+        8};
+    fd::DeviceComplexVectorView work_vector{work_real, work_imag, 2};
+    fd::DeviceComplexVectorView hessenberg_column{
+        hessenberg_real,
+        hessenberg_imag,
+        5};
+
+    fd::ApplyFGMRESDeviceOrthogonalizationGpu orthogonalize =
+        [](fd::GpuFrequencyOperatorContext *ctx,
+           fd::DeviceComplexVectorView basis,
+           std::uint64_t basis_vector_count,
+           fd::DeviceComplexVectorView work,
+           fd::DeviceComplexVectorView h_column) noexcept -> fd::FrequencyDomainStatus {
+            return ctx != nullptr &&
+                    ctx->tangent_dof_count > 0 &&
+                    basis_vector_count > 0 &&
+                    basis.n == ctx->tangent_dof_count * basis_vector_count &&
+                    work.n == ctx->tangent_dof_count &&
+                    h_column.n == basis_vector_count + 1 &&
+                    basis.real != nullptr &&
+                    basis.imag != nullptr &&
+                    work.real != nullptr &&
+                    work.imag != nullptr &&
+                    h_column.real != nullptr &&
+                    h_column.imag != nullptr ?
+                fd::FrequencyDomainStatus::ok :
+                fd::FrequencyDomainStatus::validation_error;
+        };
+
+    fd::GpuDeviceKrylovTransferDiagnostics diagnostics{};
+    diagnostics.gpu_device_resident_solver = true;
+    diagnostics.krylov_vector_location = fd::GpuKrylovVectorLocation::device;
+    diagnostics.operator_buffer_location = fd::GpuKrylovBufferLocation::device;
+    diagnostics.preconditioner_buffer_location = fd::GpuKrylovBufferLocation::device;
+    diagnostics.iteration_count = 4;
+
+    fd::FGMRESDeviceAlgebraConfig config{};
+    config.context = &context;
+    config.apply_orthogonalization = orthogonalize;
+    config.krylov_basis = krylov_basis;
+    config.preconditioned_basis = preconditioned_basis;
+    config.work_vector = work_vector;
+    config.hessenberg_column = hessenberg_column;
+    config.restart_dimension = 4;
+    config.transfer_diagnostics = diagnostics;
+
+    fd::FGMRESDeviceAlgebraState state{};
+    check(
+        fd::validate_fgmres_device_algebra_config(config, &state) ==
+            fd::FrequencyDomainStatus::ok,
+        "FGMRES device algebra accepts device bases, Hessenberg column, and orthogonalization callback");
+    check(
+        state.device_orthogonalization_required,
+        "FGMRES device algebra state records device orthogonalization requirement");
+    check(
+        fd::probe_fgmres_device_algebra_callbacks(config, 4, &state) ==
+            fd::FrequencyDomainStatus::ok,
+        "FGMRES device algebra probe invokes orthogonalization on device views");
+    check(
+        state.orthogonalization_probe_passed,
+        "FGMRES device algebra state records orthogonalization probe");
+
+    fd::FGMRESDeviceAlgebraConfig missing_callback = config;
+    missing_callback.apply_orthogonalization = nullptr;
+    check(
+        fd::validate_fgmres_device_algebra_config(missing_callback, &state) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "FGMRES device algebra rejects missing orthogonalization callback");
+
+    fd::FGMRESDeviceAlgebraConfig host_basis = config;
+    host_basis.transfer_diagnostics.krylov_vector_location =
+        fd::GpuKrylovVectorLocation::host;
+    check(
+        fd::validate_fgmres_device_algebra_config(host_basis, &state) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "FGMRES device algebra rejects host Krylov basis residency");
+
+    fd::FGMRESDeviceAlgebraConfig short_hessenberg = config;
+    short_hessenberg.hessenberg_column.n = 4;
+    check(
+        fd::validate_fgmres_device_algebra_config(short_hessenberg, &state) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "FGMRES device algebra rejects missing Hessenberg row for restart column");
+
+    fd::FGMRESDeviceAlgebraConfig failing_callback = config;
+    failing_callback.apply_orthogonalization =
+        [](fd::GpuFrequencyOperatorContext *,
+           fd::DeviceComplexVectorView,
+           std::uint64_t,
+           fd::DeviceComplexVectorView,
+           fd::DeviceComplexVectorView) noexcept -> fd::FrequencyDomainStatus {
+            return fd::FrequencyDomainStatus::solve_error;
+        };
+    check(
+        fd::probe_fgmres_device_algebra_callbacks(failing_callback, 4, &state) ==
+            fd::FrequencyDomainStatus::solve_error,
+        "FGMRES device algebra probe forwards orthogonalization callback failure");
+}
+
+void fgmres_device_engine_requires_bounded_residual_trend_contract()
+{
+    fd::FGMRESDeviceResidualDiagnostics residuals{};
+    residuals.bounded_64_run_available = true;
+    residuals.bounded_256_run_available = true;
+    residuals.iterations_64 = 64;
+    residuals.iterations_256 = 256;
+    residuals.initial_relative_residual_l2_norm = 1.0;
+    residuals.relative_residual_after_64_l2_norm = 2.5e-1;
+    residuals.relative_residual_after_256_l2_norm = 6.0e-2;
+    residuals.cpu_reference_relative_residual_after_64_l2_norm = 2.0e-1;
+    residuals.cpu_reference_relative_residual_after_256_l2_norm = 5.0e-2;
+    residuals.tracked_final_relative_residual_l2_norm = 6.0e-2;
+    residuals.recomputed_final_relative_residual_l2_norm = 6.00000001e-2;
+    residuals.max_tracked_recomputed_relative_mismatch = 1.0e-6;
+    residuals.max_device_to_cpu_residual_ratio = 1.5;
+
+    check(
+        fd::fgmres_device_residual_contract_passes(residuals),
+        "FGMRES device residual contract accepts bounded 64/256 residual decline matching CPU reference");
+
+    fd::FGMRESDeviceResidualDiagnostics stagnant = residuals;
+    stagnant.relative_residual_after_256_l2_norm =
+        stagnant.relative_residual_after_64_l2_norm;
+    check(
+        !fd::fgmres_device_residual_contract_passes(stagnant),
+        "FGMRES device residual contract rejects 256-iteration stagnation");
+
+    fd::FGMRESDeviceResidualDiagnostics mismatched = residuals;
+    mismatched.recomputed_final_relative_residual_l2_norm = 1.0e-1;
+    check(
+        !fd::fgmres_device_residual_contract_passes(mismatched),
+        "FGMRES device residual contract rejects tracked-vs-recomputed residual mismatch");
+
+    fd::FGMRESDeviceResidualDiagnostics worse_than_cpu = residuals;
+    worse_than_cpu.relative_residual_after_256_l2_norm =
+        worse_than_cpu.cpu_reference_relative_residual_after_256_l2_norm * 2.0;
+    check(
+        !fd::fgmres_device_residual_contract_passes(worse_than_cpu),
+        "FGMRES device residual contract rejects a device trend much worse than CPU reference");
+
+    double real[2]{};
+    double imag[2]{};
+    fd::DeviceComplexVectorView vector{real, imag, 2};
+    fd::GpuFrequencyOperatorContext context{};
+    context.device_operator_data = reinterpret_cast<void *>(0x1);
+    context.tangent_dof_count = 2;
+
+    fd::GpuDeviceKrylovTransferDiagnostics transfers{};
+    transfers.gpu_device_resident_solver = true;
+    transfers.krylov_vector_location = fd::GpuKrylovVectorLocation::device;
+    transfers.operator_buffer_location = fd::GpuKrylovBufferLocation::device;
+    transfers.preconditioner_buffer_location = fd::GpuKrylovBufferLocation::device;
+    transfers.iteration_count = 256;
+
+    fd::FGMRESDeviceEngineConfig config{};
+    config.context = &context;
+    config.apply_aomega =
+        [](fd::GpuFrequencyOperatorContext *,
+           double,
+           fd::DeviceComplexVectorView,
+           fd::DeviceComplexVectorView) noexcept -> fd::FrequencyDomainStatus {
+            return fd::FrequencyDomainStatus::ok;
+        };
+    config.apply_right_preconditioner =
+        [](fd::GpuFrequencyOperatorContext *,
+           double,
+           fd::DeviceComplexVectorView,
+           fd::DeviceComplexVectorView) noexcept -> fd::FrequencyDomainStatus {
+            return fd::FrequencyDomainStatus::ok;
+        };
+    config.solution = vector;
+    config.rhs = vector;
+    config.workspace_vector_count = 8;
+    config.max_iterations = 256;
+    config.transfer_diagnostics = transfers;
+    config.residual_diagnostics = residuals;
+    config.fused_aomega_diagnostics = certified_fused_aomega_diagnostics();
+
+    fd::FGMRESDeviceEngineState state{};
+    check(
+        fd::validate_fgmres_device_engine_config(config, &state) ==
+            fd::FrequencyDomainStatus::ok,
+        "FGMRES device engine config requires transfer and residual certification");
+    check(
+        state.residual_contract_passed,
+        "FGMRES device engine state records bounded residual certification");
+
+    fd::FGMRESDeviceEngineConfig missing_residuals = config;
+    missing_residuals.residual_diagnostics =
+        fd::FGMRESDeviceResidualDiagnostics{};
+    check(
+        fd::validate_fgmres_device_engine_config(missing_residuals, &state) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "FGMRES device engine config rejects missing bounded residual certification");
+}
+
+void fgmres_device_engine_requires_owned_device_workspace_contract()
+{
+    double x_real[2]{};
+    double x_imag[2]{};
+    double scratch_real[16]{};
+    double scratch_imag[16]{};
+    double basis_real[8]{};
+    double basis_imag[8]{};
+    double z_basis_real[8]{};
+    double z_basis_imag[8]{};
+    double work_real[2]{};
+    double work_imag[2]{};
+    double hessenberg_real[5]{};
+    double hessenberg_imag[5]{};
+
+    fd::GpuFrequencyOperatorContext context{};
+    context.device_operator_data = reinterpret_cast<void *>(0x1);
+    context.tangent_dof_count = 2;
+
+    fd::GpuDeviceKrylovTransferDiagnostics transfers{};
+    transfers.gpu_device_resident_solver = true;
+    transfers.krylov_vector_location = fd::GpuKrylovVectorLocation::device;
+    transfers.operator_buffer_location = fd::GpuKrylovBufferLocation::device;
+    transfers.preconditioner_buffer_location = fd::GpuKrylovBufferLocation::device;
+    transfers.iteration_count = 256;
+
+    fd::FGMRESDeviceResidualDiagnostics residuals{};
+    residuals.bounded_64_run_available = true;
+    residuals.bounded_256_run_available = true;
+    residuals.iterations_64 = 64;
+    residuals.iterations_256 = 256;
+    residuals.initial_relative_residual_l2_norm = 1.0;
+    residuals.relative_residual_after_64_l2_norm = 2.5e-1;
+    residuals.relative_residual_after_256_l2_norm = 6.0e-2;
+    residuals.cpu_reference_relative_residual_after_64_l2_norm = 2.0e-1;
+    residuals.cpu_reference_relative_residual_after_256_l2_norm = 5.0e-2;
+    residuals.tracked_final_relative_residual_l2_norm = 6.0e-2;
+    residuals.recomputed_final_relative_residual_l2_norm = 6.00000001e-2;
+    residuals.max_tracked_recomputed_relative_mismatch = 1.0e-6;
+    residuals.max_device_to_cpu_residual_ratio = 1.5;
+
+    fd::FGMRESDeviceEngineConfig engine_config{};
+    engine_config.context = &context;
+    engine_config.apply_aomega =
+        [](fd::GpuFrequencyOperatorContext *,
+           double,
+           fd::DeviceComplexVectorView,
+           fd::DeviceComplexVectorView) noexcept -> fd::FrequencyDomainStatus {
+            return fd::FrequencyDomainStatus::ok;
+        };
+    engine_config.apply_right_preconditioner =
+        [](fd::GpuFrequencyOperatorContext *,
+           double,
+           fd::DeviceComplexVectorView,
+           fd::DeviceComplexVectorView) noexcept -> fd::FrequencyDomainStatus {
+            return fd::FrequencyDomainStatus::ok;
+        };
+    engine_config.solution = fd::DeviceComplexVectorView{x_real, x_imag, 2};
+    engine_config.rhs = fd::DeviceComplexVectorView{x_real, x_imag, 2};
+    engine_config.workspace_vector_count = 8;
+    engine_config.max_iterations = 256;
+    engine_config.transfer_diagnostics = transfers;
+    engine_config.residual_diagnostics = residuals;
+    engine_config.fused_aomega_diagnostics =
+        certified_fused_aomega_diagnostics();
+
+    fd::FGMRESDeviceAlgebraConfig algebra_config{};
+    algebra_config.context = &context;
+    algebra_config.apply_orthogonalization =
+        [](fd::GpuFrequencyOperatorContext *,
+           fd::DeviceComplexVectorView,
+           std::uint64_t,
+           fd::DeviceComplexVectorView,
+           fd::DeviceComplexVectorView) noexcept -> fd::FrequencyDomainStatus {
+            return fd::FrequencyDomainStatus::ok;
+        };
+    algebra_config.krylov_basis =
+        fd::DeviceComplexVectorView{basis_real, basis_imag, 8};
+    algebra_config.preconditioned_basis =
+        fd::DeviceComplexVectorView{z_basis_real, z_basis_imag, 8};
+    algebra_config.work_vector =
+        fd::DeviceComplexVectorView{work_real, work_imag, 2};
+    algebra_config.hessenberg_column =
+        fd::DeviceComplexVectorView{hessenberg_real, hessenberg_imag, 5};
+    algebra_config.restart_dimension = 4;
+    algebra_config.transfer_diagnostics = transfers;
+
+    fd::FGMRESDeviceWorkspace workspace{};
+    workspace.owned_by_engine = true;
+    workspace.buffer_location = fd::GpuKrylovBufferLocation::device;
+    workspace.scratch_vectors =
+        fd::DeviceComplexVectorView{scratch_real, scratch_imag, 16};
+    workspace.workspace_vector_count = 8;
+    workspace.restart_dimension = 4;
+
+    fd::FGMRESDeviceEngine engine{};
+    engine.engine_config = engine_config;
+    engine.algebra_config = algebra_config;
+    engine.workspace = workspace;
+
+    fd::FGMRESDeviceEngineReadiness readiness{};
+    check(
+        fd::validate_fgmres_device_engine_readiness(engine, &readiness) ==
+            fd::FrequencyDomainStatus::ok,
+        "FGMRES device engine readiness accepts owned device workspace with matching engine and algebra configs");
+    check(
+        readiness.contract_ready,
+        "FGMRES device engine readiness records contract readiness");
+    check(
+        readiness.workspace_contract_passed,
+        "FGMRES device engine readiness records workspace ownership contract");
+    check(
+        !readiness.production_loop_available,
+        "FGMRES device engine readiness does not claim production loop availability");
+
+    fd::FGMRESDeviceEngine host_workspace = engine;
+    host_workspace.workspace.buffer_location = fd::GpuKrylovBufferLocation::host;
+    check(
+        fd::validate_fgmres_device_engine_readiness(host_workspace, &readiness) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "FGMRES device engine readiness rejects host workspace buffers");
+
+    fd::FGMRESDeviceEngine unowned_workspace = engine;
+    unowned_workspace.workspace.owned_by_engine = false;
+    check(
+        fd::validate_fgmres_device_engine_readiness(unowned_workspace, &readiness) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "FGMRES device engine readiness rejects unowned workspace buffers");
+
+    fd::GpuFrequencyOperatorContext other_context = context;
+    fd::FGMRESDeviceEngine context_mismatch = engine;
+    context_mismatch.algebra_config.context = &other_context;
+    check(
+        fd::validate_fgmres_device_engine_readiness(context_mismatch, &readiness) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "FGMRES device engine readiness rejects engine/algebra context mismatch");
 }
 
 void driven_response_gamma_floquet_boundary_maps_to_static_periodic_slice()
@@ -1494,6 +2636,58 @@ void c_abi_frequency_domain_abi_layout_reports_solver_option_offsets()
         layout.driven_response_request_solver_progress_interval_iterations_offset ==
             offsetof(fullmag_fem_frequency_domain_driven_response_request, solver_progress_interval_iterations),
         "C ABI layout reports solver progress interval offset");
+    check(
+        layout.driven_response_request_drive_kind_offset ==
+            offsetof(fullmag_fem_frequency_domain_driven_response_request, drive_kind),
+        "C ABI layout reports driven response drive kind offset");
+    check(
+        layout.driven_response_request_require_nonzero_rhs_offset ==
+            offsetof(fullmag_fem_frequency_domain_driven_response_request, require_nonzero_rhs),
+        "C ABI layout reports driven response nonzero RHS policy offset");
+}
+
+void driven_response_drive_policy_names_comsol_physical_drive_and_benchmark_rhs()
+{
+    check(
+        static_cast<std::uint32_t>(fd::FrequencyDriveKind::dynamic_field_phasor_a_per_m) == 1u,
+        "native drive kind names COMSOL dynamic field phasor");
+    check(
+        static_cast<std::uint32_t>(fd::FrequencyDriveKind::tangent_rhs) == 2u,
+        "native drive kind names tangent RHS benchmark mode");
+    check(
+        static_cast<std::uint32_t>(FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_DYNAMIC_FIELD_PHASOR_A_PER_M) ==
+            static_cast<std::uint32_t>(fd::FrequencyDriveKind::dynamic_field_phasor_a_per_m),
+        "C ABI drive kind matches native dynamic field discriminant");
+    check(
+        static_cast<std::uint32_t>(FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_TANGENT_RHS) ==
+            static_cast<std::uint32_t>(fd::FrequencyDriveKind::tangent_rhs),
+        "C ABI drive kind matches native tangent RHS discriminant");
+
+    fd::DrivenFrequencyResponseSolveRequest request{};
+    check(
+        request.drive_kind == fd::FrequencyDriveKind::dynamic_field_phasor_a_per_m,
+        "driven response defaults to COMSOL physical dynamic-field drive");
+    check(
+        !request.require_nonzero_rhs,
+        "driven response physical drive does not require nonzero RHS by default");
+    request.drive_kind = fd::FrequencyDriveKind::tangent_rhs;
+    request.require_nonzero_rhs = true;
+    check(
+        request.drive_kind == fd::FrequencyDriveKind::tangent_rhs,
+        "driven response can opt into benchmark tangent RHS drive");
+    check(
+        request.require_nonzero_rhs,
+        "driven response can opt into benchmark nonzero RHS requirement");
+
+    fullmag_fem_frequency_domain_driven_response_request c_request{};
+    c_request.drive_kind = FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_TANGENT_RHS;
+    c_request.require_nonzero_rhs = 1;
+    check(
+        c_request.drive_kind == FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_TANGENT_RHS,
+        "C ABI carries driven response drive kind");
+    check(
+        c_request.require_nonzero_rhs == 1,
+        "C ABI carries driven response nonzero RHS requirement");
 }
 
 void c_abi_rejects_null_arguments()
@@ -1812,6 +3006,332 @@ void tangent_frame_builds_orthonormal_basis_and_projects_vectors()
             std::abs(lifted_delta[4] - 5.0) < 1.0e-12 &&
             std::abs(lifted_delta[5] - 6.0) < 1.0e-12,
         "projection removes normal component for x equilibrium");
+}
+
+void tangent_frame_lifts_and_projects_complex_cartesian_delta_m()
+{
+    const double inv_sqrt3 = 1.0 / std::sqrt(3.0);
+    const double equilibrium[] = {
+        inv_sqrt3, inv_sqrt3, inv_sqrt3,
+        0.0, 0.0, 1.0,
+    };
+    fd::TangentFrameNode nodes[2]{};
+    fd::TangentFrameDiagnostics diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 2, nodes, &diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "complex cartesian tangent frame build succeeds");
+
+    const double tangent_real[] = {1.25, -0.5, 2.0, 3.0};
+    const double tangent_imag[] = {-0.75, 4.0, -1.0, 0.125};
+    double cartesian_real[6]{};
+    double cartesian_imag[6]{};
+    double roundtrip_real[4]{};
+    double roundtrip_imag[4]{};
+    fd::TangentOperatorLocalBlock tangent_operator_blocks[2]{};
+    double tangent_operator_real[4]{};
+    double tangent_operator_imag[4]{};
+    double cartesian_operator_real[6]{};
+    double cartesian_operator_imag[6]{};
+    double projected_operator_real[4]{};
+    double projected_operator_imag[4]{};
+
+    fd::lift_tangent_complex_to_cartesian(
+        nodes,
+        tangent_real,
+        tangent_imag,
+        2,
+        cartesian_real,
+        cartesian_imag);
+    fd::project_cartesian_complex_to_tangent(
+        nodes,
+        cartesian_real,
+        cartesian_imag,
+        2,
+        roundtrip_real,
+        roundtrip_imag);
+
+    for (std::uint64_t node_index = 0; node_index < 2; ++node_index) {
+        const double *m = nodes[node_index].m;
+        const double *delta_re = cartesian_real + node_index * 3;
+        const double *delta_im = cartesian_imag + node_index * 3;
+        check(
+            std::abs(fd::dot3(m, delta_re)) < 1.0e-12,
+            "complex lifted delta_m real part satisfies m0 dot delta_m equals zero");
+        check(
+            std::abs(fd::dot3(m, delta_im)) < 1.0e-12,
+            "complex lifted delta_m imag part satisfies m0 dot delta_m equals zero");
+    }
+    for (std::uint64_t dof = 0; dof < 4; ++dof) {
+        check(
+            std::abs(roundtrip_real[dof] - tangent_real[dof]) < 1.0e-12,
+            "complex cartesian-to-tangent real roundtrip preserves tangent DOF");
+        check(
+            std::abs(roundtrip_imag[dof] - tangent_imag[dof]) < 1.0e-12,
+            "complex cartesian-to-tangent imag roundtrip preserves tangent DOF");
+    }
+
+    const double cartesian_operator[] = {
+        2.0, -0.25, 0.5,
+        1.25, 3.0, 0.75,
+        -0.5, 1.5, -1.5,
+    };
+    for (std::uint64_t node_index = 0; node_index < 2; ++node_index) {
+        tangent_operator_blocks[node_index] =
+            fd::project_cartesian_local_operator_to_tangent(
+                nodes[node_index],
+                fd::FrequencyDomainOperatorTermKind::local_anisotropy,
+                cartesian_operator);
+    }
+    fd::TangentOperatorDiagnostics operator_diagnostics{};
+    check(
+        fd::apply_tangent_nodewise_operator(
+            tangent_operator_blocks,
+            tangent_real,
+            fd::tangent_workspace_shape(2),
+            tangent_operator_real,
+            &operator_diagnostics) == fd::FrequencyDomainStatus::ok,
+        "cartesian-projected tangent operator applies to real part");
+    check(
+        fd::apply_tangent_nodewise_operator(
+            tangent_operator_blocks,
+            tangent_imag,
+            fd::tangent_workspace_shape(2),
+            tangent_operator_imag,
+            &operator_diagnostics) == fd::FrequencyDomainStatus::ok,
+        "cartesian-projected tangent operator applies to imag part");
+    for (std::uint64_t node_index = 0; node_index < 2; ++node_index) {
+        for (int row = 0; row < 3; ++row) {
+            double real_value = 0.0;
+            double imag_value = 0.0;
+            for (int col = 0; col < 3; ++col) {
+                real_value += cartesian_operator[row * 3 + col] *
+                    cartesian_real[node_index * 3 + col];
+                imag_value += cartesian_operator[row * 3 + col] *
+                    cartesian_imag[node_index * 3 + col];
+            }
+            cartesian_operator_real[node_index * 3 + row] = real_value;
+            cartesian_operator_imag[node_index * 3 + row] = imag_value;
+        }
+    }
+    fd::project_cartesian_complex_to_tangent(
+        nodes,
+        cartesian_operator_real,
+        cartesian_operator_imag,
+        2,
+        projected_operator_real,
+        projected_operator_imag);
+    for (std::uint64_t dof = 0; dof < 4; ++dof) {
+        check(
+            std::abs(projected_operator_real[dof] - tangent_operator_real[dof]) < 1.0e-12,
+            "cartesian local operator projection matches tangent operator real part");
+        check(
+            std::abs(projected_operator_imag[dof] - tangent_operator_imag[dof]) < 1.0e-12,
+            "cartesian local operator projection matches tangent operator imag part");
+    }
+}
+
+void dense_full_coupled_oracle_builds_explicit_schur_and_reconstructs_full_residual()
+{
+    const double a_qq[] = {
+        4.0, 1.0,
+        2.0, 3.0,
+    };
+    const double a_qphi[] = {
+        1.5,
+        -0.5,
+    };
+    const double a_phiq[] = {
+        0.25, 2.0,
+    };
+    const double a_phiphi[] = {
+        5.0,
+    };
+    const double b_q[] = {7.0, -1.0};
+    const double b_phi[] = {3.0};
+    const fd::DenseFullCoupledMagnetostaticProblem problem{
+        2,
+        1,
+        a_qq,
+        4,
+        a_qphi,
+        2,
+        a_phiq,
+        2,
+        a_phiphi,
+        1,
+        b_q,
+        2,
+        b_phi,
+        1,
+    };
+
+    double explicit_schur[4]{};
+    double reduced_rhs[2]{};
+    fd::DenseFullCoupledOracleDiagnostics diagnostics{};
+    check(
+        fd::build_dense_explicit_schur(
+            fd::DenseSchurExplicitBuilder{
+                &problem,
+                explicit_schur,
+                4,
+                reduced_rhs,
+                2,
+            },
+            &diagnostics) == fd::FrequencyDomainStatus::ok,
+        "dense full-coupled oracle builds explicit Schur complement");
+    check(diagnostics.q_dof_count == 2, "dense full-coupled oracle records q DOFs");
+    check(diagnostics.phi_dof_count == 1, "dense full-coupled oracle records phi DOFs");
+    check(std::abs(explicit_schur[0] - 3.925) < 1.0e-12, "explicit Schur a00");
+    check(std::abs(explicit_schur[1] - 0.4) < 1.0e-12, "explicit Schur a01");
+    check(std::abs(explicit_schur[2] - 2.025) < 1.0e-12, "explicit Schur a10");
+    check(std::abs(explicit_schur[3] - 3.2) < 1.0e-12, "explicit Schur a11");
+    check(std::abs(reduced_rhs[0] - 6.1) < 1.0e-12, "explicit Schur reduced rhs q0");
+    check(std::abs(reduced_rhs[1] + 0.7) < 1.0e-12, "explicit Schur reduced rhs q1");
+
+    const double q[] = {0.2, -0.4};
+    double matrix_free_schur_apply[2]{};
+    double explicit_schur_apply[2]{};
+    check(
+        fd::apply_dense_full_coupled_schur(
+            problem,
+            q,
+            2,
+            matrix_free_schur_apply,
+            2,
+            &diagnostics) == fd::FrequencyDomainStatus::ok,
+        "dense full-coupled oracle applies Schur without using only the materialized matrix");
+    for (std::uint64_t row = 0; row < 2; ++row) {
+        for (std::uint64_t col = 0; col < 2; ++col) {
+            explicit_schur_apply[row] += explicit_schur[row * 2 + col] * q[col];
+        }
+    }
+    for (std::uint64_t dof = 0; dof < 2; ++dof) {
+        check(
+            std::abs(matrix_free_schur_apply[dof] - explicit_schur_apply[dof]) < 1.0e-12,
+            "dense full-coupled matrix-free Schur apply matches explicit Schur");
+    }
+
+    double reduced_residual[2]{};
+    for (std::uint64_t dof = 0; dof < 2; ++dof) {
+        reduced_residual[dof] = matrix_free_schur_apply[dof] - reduced_rhs[dof];
+    }
+    double reconstructed_phi[1]{};
+    double full_residual_q[2]{};
+    double full_residual_phi[1]{};
+    check(
+        fd::reconstruct_dense_full_residual_from_schur_solution(
+            fd::FullReducedResidualReconstructionTest{
+                &problem,
+                q,
+                2,
+                reduced_residual,
+                2,
+                reconstructed_phi,
+                1,
+                full_residual_q,
+                2,
+                full_residual_phi,
+                1,
+            },
+            &diagnostics) == fd::FrequencyDomainStatus::ok,
+        "dense full-coupled oracle reconstructs full residual from reduced solution");
+    check(std::abs(reconstructed_phi[0] - 0.75) < 1.0e-12, "dense full residual reconstruction solves phi(q)");
+    for (std::uint64_t dof = 0; dof < 2; ++dof) {
+        check(
+            std::abs(full_residual_q[dof] - reduced_residual[dof]) < 1.0e-12,
+            "dense full residual magnetic block matches reduced residual");
+    }
+    check(
+        std::abs(full_residual_phi[0]) < 1.0e-12,
+        "dense full residual reconstruction leaves Poisson block solved");
+}
+
+void dense_full_coupled_oracle_handles_pinned_phi_gauge()
+{
+    const double a_qq[] = {4.0};
+    const double a_qphi[] = {2.0, -2.0};
+    const double a_phiq[] = {1.0, -1.0};
+    const double a_phiphi[] = {
+        1.0, -1.0,
+        -1.0, 1.0,
+    };
+    const double b_q[] = {3.0};
+    const double b_phi[] = {1.0, -1.0};
+    const fd::DenseFullCoupledMagnetostaticProblem problem{
+        1,
+        2,
+        a_qq,
+        1,
+        a_qphi,
+        2,
+        a_phiq,
+        2,
+        a_phiphi,
+        4,
+        b_q,
+        1,
+        b_phi,
+        2,
+        fd::DensePhiGaugePolicy::pin_first_dof,
+    };
+
+    double explicit_schur[1]{};
+    double reduced_rhs[1]{};
+    fd::DenseFullCoupledOracleDiagnostics diagnostics{};
+    check(
+        fd::build_dense_explicit_schur(
+            fd::DenseSchurExplicitBuilder{
+                &problem,
+                explicit_schur,
+                1,
+                reduced_rhs,
+                1,
+            },
+            &diagnostics) == fd::FrequencyDomainStatus::ok,
+        "dense full-coupled oracle supports pinned singular phi gauge");
+    check(std::abs(explicit_schur[0] - 2.0) < 1.0e-12, "pinned gauge explicit Schur value");
+    check(std::abs(reduced_rhs[0] - 1.0) < 1.0e-12, "pinned gauge reduced rhs");
+
+    const double q[] = {0.25};
+    double schur_apply[1]{};
+    check(
+        fd::apply_dense_full_coupled_schur(
+            problem,
+            q,
+            1,
+            schur_apply,
+            1,
+            &diagnostics) == fd::FrequencyDomainStatus::ok,
+        "dense full-coupled oracle applies Schur with pinned phi gauge");
+    check(std::abs(schur_apply[0] - 0.5) < 1.0e-12, "pinned gauge Schur apply");
+
+    const double reduced_residual[] = {schur_apply[0] - reduced_rhs[0]};
+    double phi[2]{};
+    double full_residual_q[1]{};
+    double full_residual_phi[2]{};
+    check(
+        fd::reconstruct_dense_full_residual_from_schur_solution(
+            fd::FullReducedResidualReconstructionTest{
+                &problem,
+                q,
+                1,
+                reduced_residual,
+                1,
+                phi,
+                2,
+                full_residual_q,
+                1,
+                full_residual_phi,
+                2,
+            },
+            &diagnostics) == fd::FrequencyDomainStatus::ok,
+        "dense full-coupled oracle reconstructs residual with pinned phi gauge");
+    check(std::abs(phi[0]) < 1.0e-12, "pinned gauge fixes first phi dof");
+    check(std::abs(phi[1] + 0.75) < 1.0e-12, "pinned gauge reconstructs phi solution");
+    check(std::abs(full_residual_q[0] - reduced_residual[0]) < 1.0e-12, "pinned gauge magnetic residual matches Schur residual");
+    check(std::abs(full_residual_phi[0]) < 1.0e-12, "pinned gauge phi residual row 0");
+    check(std::abs(full_residual_phi[1]) < 1.0e-12, "pinned gauge phi residual row 1");
 }
 
 void tangent_frame_rejects_non_unit_equilibrium()
@@ -3927,6 +5447,84 @@ void driven_response_solver_runs_tiny_dense_validation_problem()
     fd::release_driven_frequency_response_result(&result);
 }
 
+void driven_response_solver_rejects_zero_tangent_rhs_when_required()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double stiffness_diagonal[] = {2.0, 4.0};
+    const double mass_diagonal[] = {1.0, 2.0};
+    const double drive_real[] = {0.0, 0.0};
+    const double drive_imag[] = {0.0, 0.0};
+
+    fd::DrivenFrequencyResponseSolveRequest request{};
+    request.solve_request.operator_request.node_count = 1;
+    request.solve_request.operator_request.tangent_dof_count = 2;
+    request.solve_request.operator_request.alpha = 0.01;
+    request.solve_request.operator_request.gamma0 = 2.211e5;
+    request.solve_request.frequencies_hz = frequencies_hz;
+    request.solve_request.frequency_count = 1;
+    request.drive_kind = fd::FrequencyDriveKind::tangent_rhs;
+    request.require_nonzero_rhs = true;
+    request.tiny_validation_problem.enabled = true;
+    request.tiny_validation_problem.tangent_dof_count = 2;
+    request.tiny_validation_problem.stiffness_diagonal = stiffness_diagonal;
+    request.tiny_validation_problem.mass_diagonal = mass_diagonal;
+    request.tiny_validation_problem.drive_real = drive_real;
+    request.tiny_validation_problem.drive_imag = drive_imag;
+
+    fd::DrivenFrequencyResponseSolveResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_driven_frequency_response(request, &result);
+
+    check(
+        status == fd::FrequencyDomainStatus::validation_error,
+        "required nonzero tangent RHS rejects zero tiny validation drive");
+    check(
+        contains(result.error_message, "nonzero"),
+        "required nonzero tangent RHS rejection names nonzero policy");
+    fd::release_driven_frequency_response_result(&result);
+}
+
+void driven_response_solver_allows_zero_physical_drive_as_zero_response()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double stiffness_diagonal[] = {2.0, 4.0};
+    const double mass_diagonal[] = {1.0, 2.0};
+    const double drive_real[] = {0.0, 0.0};
+    const double drive_imag[] = {0.0, 0.0};
+
+    fd::DrivenFrequencyResponseSolveRequest request{};
+    request.solve_request.operator_request.node_count = 1;
+    request.solve_request.operator_request.tangent_dof_count = 2;
+    request.solve_request.operator_request.alpha = 0.01;
+    request.solve_request.operator_request.gamma0 = 2.211e5;
+    request.solve_request.frequencies_hz = frequencies_hz;
+    request.solve_request.frequency_count = 1;
+    request.drive_kind = fd::FrequencyDriveKind::dynamic_field_phasor_a_per_m;
+    request.require_nonzero_rhs = false;
+    request.tiny_validation_problem.enabled = true;
+    request.tiny_validation_problem.tangent_dof_count = 2;
+    request.tiny_validation_problem.stiffness_diagonal = stiffness_diagonal;
+    request.tiny_validation_problem.mass_diagonal = mass_diagonal;
+    request.tiny_validation_problem.drive_real = drive_real;
+    request.tiny_validation_problem.drive_imag = drive_imag;
+
+    fd::DrivenFrequencyResponseSolveResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_driven_frequency_response(request, &result);
+
+    check(status == fd::FrequencyDomainStatus::ok, "zero physical drive returns ok");
+    check(result.status == fd::FrequencyDomainStatus::ok, "zero physical drive stores ok status");
+    check(result.completed_frequency_count == 1, "zero physical drive completes requested frequency");
+    check(contains(result.result_json, "\"max_abs_response\":0"), "zero physical drive reports zero response");
+    check(contains(result.diagnostics_json, "\"zero_drive_warning\":true"), "zero physical drive emits warning diagnostic");
+    check(
+        contains(result.diagnostics_json, "\"zero_drive_policy\":\"zero_response_allowed\""),
+        "zero physical drive reports allowed zero-response policy");
+    fd::release_driven_frequency_response_result(&result);
+}
+
 void driven_response_solver_preserves_tiny_dense_solve_error_status()
 {
     constexpr double one_over_two_pi_hz = 0.15915494309189535;
@@ -4042,6 +5640,1094 @@ void production_cpu_matrix_free_solver_solves_diagonal_harmonic_response()
     check(std::abs(response_imag[0] - 0.2) < 1.0e-12, "production CPU response imag[0]");
     check(std::abs(response_real[1] - 0.4) < 1.0e-12, "production CPU response real[1]");
     check(std::abs(response_imag[1] - 0.2) < 1.0e-12, "production CPU response imag[1]");
+}
+
+void cpu_sparse_direct_engine_matches_dense_tiny_and_reports_true_residual()
+{
+    const double frequencies_hz[] = {0.25};
+    const double stiffness[] = {
+        3.0, 0.5,
+        -0.25, 2.0,
+    };
+    const double mass[] = {
+        1.0, 0.125,
+        0.25, 0.75,
+    };
+    const double drive_real[] = {1.0, -2.0};
+    const double drive_imag[] = {0.5, 1.25};
+
+    double dense_real[2]{};
+    double dense_imag[2]{};
+    double dense_residual[1]{};
+    double dense_relative_residual[1]{};
+    fd::DenseDrivenResponseValidationResult dense_result{};
+    check(
+        fd::solve_dense_driven_response_validation_problem(
+            fd::DenseDrivenResponseValidationProblem{
+                2,
+                frequencies_hz,
+                1,
+                stiffness,
+                mass,
+                nullptr,
+                nullptr,
+                drive_real,
+                dense_real,
+                dense_imag,
+                2,
+                dense_residual,
+                dense_relative_residual,
+                1,
+                nullptr,
+                nullptr,
+                drive_imag,
+            },
+            &dense_result) == fd::FrequencyDomainStatus::ok,
+        "dense tiny reference solves sparse-direct comparison problem");
+
+    double sparse_real[2]{};
+    double sparse_imag[2]{};
+    fd::CpuSparseDirectSolveResult sparse_result{};
+    check(
+        fd::solve_cpu_sparse_direct_real_split(
+            fd::CpuSparseDirectRealSplitProblem{
+                2,
+                frequencies_hz[0],
+                stiffness,
+                4,
+                mass,
+                4,
+                drive_real,
+                2,
+                drive_imag,
+                2,
+                sparse_real,
+                sparse_imag,
+                2,
+            },
+            &sparse_result) == fd::FrequencyDomainStatus::ok,
+        "CPU sparse/direct real-split engine solves tiny problem");
+    check(
+        std::strcmp(sparse_result.solver_package, "petsc") == 0,
+        "CPU sparse/direct engine uses PETSc when available in managed runtime");
+    check(
+        std::strcmp(sparse_result.linear_solver, "ksppreonly_pclu") == 0,
+        "CPU sparse/direct engine reports PETSc KSPPREONLY/PCLU");
+    check(sparse_result.nnz > 0, "CPU sparse/direct engine reports assembled CSR nnz");
+    check(
+        sparse_result.relative_residual_l2_norm < 1.0e-12,
+        "CPU sparse/direct engine reports true residual");
+    for (std::uint64_t dof = 0; dof < 2; ++dof) {
+        check(
+            std::abs(sparse_real[dof] - dense_real[dof]) < 1.0e-10,
+            "CPU sparse/direct real response matches dense tiny reference");
+        check(
+            std::abs(sparse_imag[dof] - dense_imag[dof]) < 1.0e-10,
+            "CPU sparse/direct imag response matches dense tiny reference");
+    }
+}
+
+void modal_response_diagonal_validation_matches_dense_direct()
+{
+    const double frequencies_hz[] = {0.25, 0.5};
+    const double inv_sqrt2 = 1.0 / std::sqrt(2.0);
+    const double mode_shapes_row_major[] = {
+        inv_sqrt2, inv_sqrt2,
+        inv_sqrt2, -inv_sqrt2,
+    };
+    const double modal_stiffness_diagonal[] = {2.0, 5.0};
+    const double modal_mass_diagonal[] = {1.0, 1.0};
+    double stiffness_matrix[4]{};
+    double mass_matrix[4]{};
+    const double drive_real[] = {3.0, -2.0};
+    const double drive_imag[] = {0.5, 1.0};
+    double dense_real[4]{};
+    double dense_imag[4]{};
+    double modal_real[4]{};
+    double modal_imag[4]{};
+    double sparse_real[2]{};
+    double sparse_imag[2]{};
+    fd::DenseDrivenResponseValidationResult dense_result{};
+    fd::ModalResponseValidationResult modal_result{};
+    fd::CpuSparseDirectSolveResult sparse_result{};
+
+    for (std::uint64_t row = 0; row < 2; ++row) {
+        for (std::uint64_t column = 0; column < 2; ++column) {
+            for (std::uint64_t mode = 0; mode < 2; ++mode) {
+                stiffness_matrix[row * 2 + column] +=
+                    mode_shapes_row_major[row * 2 + mode] *
+                    modal_stiffness_diagonal[mode] *
+                    mode_shapes_row_major[column * 2 + mode];
+                mass_matrix[row * 2 + column] +=
+                    mode_shapes_row_major[row * 2 + mode] *
+                    modal_mass_diagonal[mode] *
+                    mode_shapes_row_major[column * 2 + mode];
+            }
+        }
+    }
+
+    fd::DenseDrivenResponseValidationProblem dense_problem{};
+    dense_problem.tangent_dof_count = 2;
+    dense_problem.frequencies_hz = frequencies_hz;
+    dense_problem.frequency_count = 2;
+    dense_problem.stiffness_matrix_row_major = stiffness_matrix;
+    dense_problem.mass_matrix_row_major = mass_matrix;
+    dense_problem.drive_real = drive_real;
+    dense_problem.drive_imag = drive_imag;
+    dense_problem.out_response_real = dense_real;
+    dense_problem.out_response_imag = dense_imag;
+    dense_problem.response_capacity = 4;
+
+    check(
+        fd::solve_dense_driven_response_validation_problem(dense_problem, &dense_result) ==
+            fd::FrequencyDomainStatus::ok,
+        "dense direct diagonal modal reference succeeds");
+
+    const fd::FrequencyDomainStatus status =
+        fd::solve_modal_response_diagonal_validation_problem(
+            fd::ModalResponseDiagonalValidationProblem{
+                2,
+                2,
+                frequencies_hz,
+                2,
+                mode_shapes_row_major,
+                4,
+                modal_stiffness_diagonal,
+                2,
+                modal_mass_diagonal,
+                2,
+                drive_real,
+                drive_imag,
+                modal_real,
+                modal_imag,
+                4,
+                frequencies_hz,
+                2,
+            },
+            &modal_result);
+
+    check(status == fd::FrequencyDomainStatus::ok, "modal response validation succeeds");
+    check(modal_result.completed_frequency_count == 2, "modal response completes sweep");
+    check(
+        modal_result.sparse_direct_sample_count == 2,
+        "modal response validates every requested sparse/direct sample");
+    check(modal_result.mode_count == 2, "modal response reports mode count");
+    check(modal_result.max_sample_error_l2_norm < 1.0e-12, "modal response reports tiny sample error");
+    check(
+        modal_result.max_sparse_direct_sample_error_l2_norm < 1.0e-10,
+        "modal response reports tiny sparse/direct sample error");
+    check(
+        modal_result.max_sparse_direct_relative_sample_error_l2_norm < 1.0e-10,
+        "modal response reports tiny relative sparse/direct sample error");
+    for (std::size_t index = 0; index < 4; ++index) {
+        check(std::abs(modal_real[index] - dense_real[index]) < 1.0e-12, "modal response real matches dense direct");
+        check(std::abs(modal_imag[index] - dense_imag[index]) < 1.0e-12, "modal response imag matches dense direct");
+    }
+
+    check(
+        fd::solve_cpu_sparse_direct_real_split(
+            fd::CpuSparseDirectRealSplitProblem{
+                2,
+                frequencies_hz[1],
+                stiffness_matrix,
+                4,
+                mass_matrix,
+                4,
+                drive_real,
+                2,
+                drive_imag,
+                2,
+                sparse_real,
+                sparse_imag,
+                2,
+            },
+            &sparse_result) == fd::FrequencyDomainStatus::ok,
+        "CPU sparse/direct modal response sample validation succeeds");
+    check(
+        sparse_result.relative_residual_l2_norm < 1.0e-12,
+        "CPU sparse/direct modal response sample reports true residual");
+    for (std::uint64_t dof = 0; dof < 2; ++dof) {
+        const std::uint64_t modal_index = 2 + dof;
+        check(
+            std::abs(modal_real[modal_index] - sparse_real[dof]) < 1.0e-10,
+            "modal response real matches sparse direct sample");
+        check(
+            std::abs(modal_imag[modal_index] - sparse_imag[dof]) < 1.0e-10,
+            "modal response imag matches sparse direct sample");
+    }
+}
+
+void modal_basis_policy_and_cache_key_cover_required_signatures()
+{
+    check(
+        static_cast<std::uint32_t>(fd::ModalBasisPolicy::use_existing_required) == 1u,
+        "modal basis policy supports requiring an existing modal_eigen artifact");
+    check(
+        static_cast<std::uint32_t>(fd::ModalBasisPolicy::use_existing_or_compute) == 2u,
+        "modal basis policy supports compute fallback when policy allows");
+    check(
+        static_cast<std::uint32_t>(fd::ModalBasisPolicy::force_recompute) == 3u,
+        "modal basis policy supports explicit recompute");
+
+    fd::ModalBasisCacheKey key{};
+    const fd::FrequencyDomainStatus status = fd::build_modal_basis_cache_key(
+        fd::ModalBasisCacheKeyInput{
+            "operator:exchange-demag:v1",
+            "equilibrium:artifact:relax-42",
+            "material:hash:abc",
+            "boundary:pbc-x-open-y",
+            "demag:periodic-airbox-schur",
+            fd::FrequencyDomainPhaseConvention::exp_i_omega_t,
+            1.0e9,
+            2.0e9,
+        },
+        &key);
+
+    check(status == fd::FrequencyDomainStatus::ok, "modal basis cache key builds");
+    check(contains(key.value, "operator=operator:exchange-demag:v1"), "modal basis key includes operator signature");
+    check(contains(key.value, "equilibrium=equilibrium:artifact:relax-42"), "modal basis key includes equilibrium signature");
+    check(contains(key.value, "material=material:hash:abc"), "modal basis key includes material signature");
+    check(contains(key.value, "boundary=boundary:pbc-x-open-y"), "modal basis key includes boundary signature");
+    check(contains(key.value, "demag=demag:periodic-airbox-schur"), "modal basis key includes demag signature");
+    check(contains(key.value, "phase=exp_plus_i_omega_t"), "modal basis key uses canonical plus phase token");
+    check(contains(key.value, "frequency_window_hz=[1000000000,2000000000]"), "modal basis key includes frequency window");
+
+    fd::ModalBasisCacheKey missing_demag_key{};
+    check(
+        fd::build_modal_basis_cache_key(
+            fd::ModalBasisCacheKeyInput{
+                "operator:exchange-demag:v1",
+                "equilibrium:artifact:relax-42",
+                "material:hash:abc",
+                "boundary:pbc-x-open-y",
+                "",
+                fd::FrequencyDomainPhaseConvention::exp_i_omega_t,
+                1.0e9,
+                2.0e9,
+            },
+            &missing_demag_key) == fd::FrequencyDomainStatus::validation_error,
+        "modal basis cache key rejects missing demag signature");
+    check(
+        contains(missing_demag_key.error_message, "demag"),
+        "modal basis cache key missing-signature error names demag");
+}
+
+void modal_basis_completeness_certificate_gates_modal_response_use()
+{
+    fd::ModalBasisCompletenessCertificate certified{};
+    certified.policy = fd::ModalBasisCompletenessPolicy::certified_count;
+    certified.status = fd::ModalBasisCompletenessStatus::certified;
+    certified.certification_method = fd::ModalBasisCompletenessMethod::contour_interval_count;
+    certified.estimated_modes_in_window = 4;
+    certified.certified_modes_in_window = 4;
+    certified.returned_modes = 4;
+    certified.accepted_modes_before_cap = 4;
+    certified.result_truncated = false;
+    certified.max_eigenmode_relative_residual = 1.0e-11;
+    certified.max_allowed_eigenmode_relative_residual = 1.0e-8;
+
+    fd::ModalBasisCompletenessDecision decision{};
+    check(
+        fd::modal_basis_completeness_allows_response(certified, &decision),
+        "certified modal basis completeness allows modal response");
+    check(!decision.additional_modes_may_exist, "certified modal basis says no additional modes may exist");
+    check(contains(decision.reason, "certified"), "certified modal basis decision names certified status");
+
+    fd::ModalBasisCompletenessCertificate best_effort = certified;
+    best_effort.policy = fd::ModalBasisCompletenessPolicy::best_effort;
+    best_effort.status = fd::ModalBasisCompletenessStatus::not_certified;
+    best_effort.certification_method = fd::ModalBasisCompletenessMethod::none;
+    check(
+        !fd::modal_basis_completeness_allows_response(best_effort, &decision),
+        "best-effort unverified modal basis does not allow production modal response");
+    check(decision.additional_modes_may_exist, "best-effort modal basis reports possible missing modes");
+    check(contains(decision.reason, "not_certified"), "best-effort modal basis rejection names status");
+
+    fd::ModalBasisCompletenessCertificate truncated = certified;
+    truncated.status = fd::ModalBasisCompletenessStatus::truncated_by_requested_count;
+    truncated.result_truncated = true;
+    truncated.returned_modes = 2;
+    truncated.accepted_modes_before_cap = 4;
+    check(
+        !fd::modal_basis_completeness_allows_response(truncated, &decision),
+        "truncated modal basis does not allow production modal response");
+    check(decision.additional_modes_may_exist, "truncated modal basis reports possible missing modes");
+    check(contains(decision.reason, "truncated"), "truncated modal basis rejection names truncation");
+}
+
+void accepted_equilibrium_builds_linearization_state_with_tangent_diagnostics()
+{
+    const double m0_x[] = {0.0, 1.0};
+    const double m0_y[] = {0.0, 0.0};
+    const double m0_z[] = {1.0, 0.0};
+    const double h_eff_x[] = {0.0, 2.0};
+    const double h_eff_y[] = {0.0, 0.0};
+    const double h_eff_z[] = {2.0, 0.0};
+    const double h_demag_x[] = {0.0, 0.25};
+    const double h_demag_y[] = {0.0, 0.0};
+    const double h_demag_z[] = {0.25, 0.0};
+
+    fd::EquilibriumArtifactDescriptor artifact{};
+    artifact.equilibrium_id = "eq:accepted";
+    artifact.mesh_snapshot_id = "mesh:v1";
+    artifact.magnetic_mesh_id = "magmesh:v1";
+    artifact.airbox_mesh_id = "airbox:v1";
+    artifact.material_snapshot_id = "mat:v1";
+    artifact.physics_snapshot_id = "physics:v1";
+    artifact.boundary_snapshot_id = "bc:v1";
+    artifact.m0_unit = {m0_x, m0_y, m0_z, 2};
+    artifact.h_eff0_a_per_m = {h_eff_x, h_eff_y, h_eff_z, 2};
+    artifact.h_demag0_a_per_m = {h_demag_x, h_demag_y, h_demag_z, 2};
+    artifact.magnetic_node_count = 2;
+    artifact.airbox_node_count = 2;
+    artifact.accepted_for_linearization = true;
+    artifact.demag_model = "poisson_airbox_dirichlet";
+
+    fd::LinearizationBuildOptions options{};
+    fd::LinearizationStateNative state{};
+    fd::LinearizationDiagnostics diagnostics{};
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            artifact,
+            options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::ok,
+        "accepted equilibrium artifact builds linearization state");
+    check(state.node_count == 2, "linearization state preserves node count");
+    check(state.tangent_frames.size() == 2, "linearization state builds per-node tangent frames");
+    check(state.m0_xyz.size() == 6, "linearization state packs m0 xyz");
+    check(state.h_eff0_xyz.size() == 6, "linearization state packs h_eff0 xyz");
+    check(state.h_demag0_xyz.size() == 6, "linearization state packs h_demag0 xyz");
+    check(state.equilibrium_id == "eq:accepted", "linearization state preserves equilibrium id");
+    check(!state.linearization_signature_hash.empty(), "linearization state emits signature hash");
+    check(diagnostics.static_demag_available, "linearization diagnostics report static demag availability");
+    check(diagnostics.max_m0_norm_error <= options.m0_norm_tolerance, "linearization diagnostics bound m0 norm error");
+    check(
+        diagnostics.max_m0_cross_heff0_relative <=
+            options.equilibrium_torque_relative_tolerance,
+        "linearization diagnostics bound equilibrium torque residual");
+    check(
+        std::fabs(fd::dot3(state.tangent_frames[1].m, state.tangent_frames[1].e1)) < 1.0e-12,
+        "linearization tangent frame e1 is orthogonal to m0");
+    check(
+        std::fabs(fd::dot3(state.tangent_frames[1].m, state.tangent_frames[1].e2)) < 1.0e-12,
+        "linearization tangent frame e2 is orthogonal to m0");
+
+    artifact.accepted_for_linearization = false;
+    fd::LinearizationStateNative rejected_state{};
+    fd::LinearizationDiagnostics rejected_diagnostics{};
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            artifact,
+            options,
+            rejected_state,
+            rejected_diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "unaccepted equilibrium artifact is rejected for linearization");
+    check(
+        contains(rejected_diagnostics.error_message, "accepted"),
+        "unaccepted equilibrium rejection explains accepted artifact requirement");
+}
+
+void linearization_state_reports_v5_reject_reasons_and_signature_mismatches()
+{
+    const double m0_x[] = {0.0};
+    const double m0_y[] = {0.0};
+    const double m0_z[] = {1.0};
+    const double h_parallel_x[] = {0.0};
+    const double h_parallel_y[] = {0.0};
+    const double h_parallel_z[] = {2.0};
+    const double h_torque_x[] = {2.0};
+    const double h_torque_y[] = {0.0};
+    const double h_torque_z[] = {0.0};
+    const double h_demag_x[] = {0.0};
+    const double h_demag_y[] = {0.0};
+    const double h_demag_z[] = {0.25};
+
+    fd::EquilibriumArtifactDescriptor artifact{};
+    artifact.equilibrium_id = "eq:accepted";
+    artifact.mesh_snapshot_id = "mesh:v1";
+    artifact.magnetic_mesh_id = "magmesh:v1";
+    artifact.airbox_mesh_id = "airbox:v1";
+    artifact.material_snapshot_id = "mat:v1";
+    artifact.physics_snapshot_id = "physics:v1";
+    artifact.boundary_snapshot_id = "bc:v1";
+    artifact.m0_unit = {m0_x, m0_y, m0_z, 1};
+    artifact.h_eff0_a_per_m = {h_parallel_x, h_parallel_y, h_parallel_z, 1};
+    artifact.h_demag0_a_per_m = {h_demag_x, h_demag_y, h_demag_z, 1};
+    artifact.magnetic_node_count = 1;
+    artifact.airbox_node_count = 1;
+    artifact.accepted_for_linearization = true;
+    artifact.demag_model = "periodic_airbox_k0";
+
+    fd::LinearizationBuildOptions options{};
+    options.expected_mesh_snapshot_id = "mesh:v1";
+    options.expected_material_snapshot_id = "mat:v1";
+    options.expected_physics_snapshot_id = "physics:v1";
+
+    fd::LinearizationStateNative state{};
+    fd::LinearizationDiagnostics diagnostics{};
+    fd::EquilibriumArtifactDescriptor rejected_artifact = artifact;
+    rejected_artifact.accepted_for_linearization = false;
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            rejected_artifact,
+            options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "linearization builder rejects unaccepted equilibrium artifact");
+    check(
+        std::strcmp(
+            diagnostics.reject_reason,
+            "equilibrium_artifact_not_accepted_for_linearization") == 0,
+        "linearization builder reports exact unaccepted artifact reject reason");
+
+    fd::LinearizationBuildOptions mesh_mismatch_options = options;
+    mesh_mismatch_options.expected_mesh_snapshot_id = "mesh:v2";
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            artifact,
+            mesh_mismatch_options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "linearization builder rejects mesh signature mismatch");
+    check(
+        std::strcmp(diagnostics.reject_reason, "equilibrium_mesh_hash_mismatch") == 0,
+        "linearization builder reports exact mesh mismatch reject reason");
+
+    fd::LinearizationBuildOptions material_mismatch_options = options;
+    material_mismatch_options.expected_material_snapshot_id = "mat:v2";
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            artifact,
+            material_mismatch_options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "linearization builder rejects material signature mismatch");
+    check(
+        std::strcmp(diagnostics.reject_reason, "equilibrium_material_hash_mismatch") == 0,
+        "linearization builder reports exact material mismatch reject reason");
+
+    fd::LinearizationBuildOptions physics_mismatch_options = options;
+    physics_mismatch_options.expected_physics_snapshot_id = "physics:v2";
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            artifact,
+            physics_mismatch_options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "linearization builder rejects physics signature mismatch");
+    check(
+        std::strcmp(diagnostics.reject_reason, "equilibrium_physics_hash_mismatch") == 0,
+        "linearization builder reports exact physics mismatch reject reason");
+
+    fd::EquilibriumArtifactDescriptor missing_static_demag_artifact = artifact;
+    missing_static_demag_artifact.h_demag0_a_per_m = {};
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            missing_static_demag_artifact,
+            options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "linearization builder rejects missing static demag when demag is enabled");
+    check(
+        std::strcmp(
+            diagnostics.reject_reason,
+            "equilibrium_static_demag_required_but_missing") == 0,
+        "linearization builder reports exact static demag reject reason");
+
+    fd::EquilibriumArtifactDescriptor torque_artifact = artifact;
+    torque_artifact.h_eff0_a_per_m = {h_torque_x, h_torque_y, h_torque_z, 1};
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            torque_artifact,
+            options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "linearization builder rejects large equilibrium torque residual");
+    check(
+        std::strcmp(
+            diagnostics.reject_reason,
+            "equilibrium_torque_residual_too_large") == 0,
+        "linearization builder reports exact torque residual reject reason");
+}
+
+void symmetric_mesh_certificate_accepts_bijective_periodic_pairs_and_rejects_duplicates()
+{
+    const double magnetic_source_xyz[] = {0.0, 0.0, 0.0};
+    const double magnetic_destination_xyz[] = {1.0e-6, 0.0, 0.0};
+    const std::uint32_t magnetic_source_materials[] = {7};
+    const std::uint32_t magnetic_destination_materials[] = {7};
+    const std::uint32_t magnetic_source_regions[] = {3};
+    const std::uint32_t magnetic_destination_regions[] = {3};
+    const double airbox_source_xyz[] = {0.0, 0.5e-6, 0.0};
+    const double airbox_destination_xyz[] = {1.0e-6, 0.5e-6, 0.0};
+
+    fd::TangentFrameNode frames[2]{};
+    const double equilibrium[] = {
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+    };
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 2, frames, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "mesh symmetry certificate test builds tangent frames");
+
+    fd::PeriodicNodePair magnetic_pair{};
+    magnetic_pair.source_node = 0;
+    magnetic_pair.destination_node = 0;
+    fd::PeriodicNodePair airbox_pair{};
+    airbox_pair.source_node = 0;
+    airbox_pair.destination_node = 0;
+
+    fd::MeshSymmetryCertificateRequest request{};
+    request.magnetic_source_xyz = magnetic_source_xyz;
+    request.magnetic_destination_xyz = magnetic_destination_xyz;
+    request.magnetic_source_material_ids = magnetic_source_materials;
+    request.magnetic_destination_material_ids = magnetic_destination_materials;
+    request.magnetic_source_region_ids = magnetic_source_regions;
+    request.magnetic_destination_region_ids = magnetic_destination_regions;
+    request.magnetic_source_frame_nodes = frames;
+    request.magnetic_destination_frame_nodes = frames + 1;
+    request.magnetic_source_node_count = 1;
+    request.magnetic_destination_node_count = 1;
+    request.magnetic_pairs = &magnetic_pair;
+    request.magnetic_pair_count = 1;
+    request.airbox_source_xyz = airbox_source_xyz;
+    request.airbox_destination_xyz = airbox_destination_xyz;
+    request.airbox_source_node_count = 1;
+    request.airbox_destination_node_count = 1;
+    request.airbox_pairs = &airbox_pair;
+    request.airbox_pair_count = 1;
+    request.translation_m[0] = 1.0e-6;
+    request.translation_tolerance_m = 1.0e-12;
+    request.frame_transport_tolerance = 1.0e-12;
+
+    fd::MeshSymmetryCertificate certificate{};
+    check(
+        fd::build_mesh_symmetry_certificate(request, certificate) ==
+            fd::FrequencyDomainStatus::ok,
+        "matched periodic magnetic and airbox meshes build symmetry certificate");
+    check(certificate.accepted, "matched periodic mesh certificate is accepted");
+    check(certificate.pair_count == 1, "mesh symmetry certificate records magnetic pair count");
+    check(certificate.airbox_pair_count == 1, "mesh symmetry certificate records airbox pair count");
+    check(
+        certificate.max_translation_residual_m <= request.translation_tolerance_m,
+        "mesh symmetry certificate bounds translation residual");
+    check(
+        certificate.max_frame_transport_error <= request.frame_transport_tolerance,
+        "mesh symmetry certificate bounds frame transport error");
+
+    fd::PeriodicNodePair duplicate_pairs[] = {
+        {0, 0},
+        {1, 0},
+    };
+    double duplicate_source_xyz[] = {
+        0.0, 0.0, 0.0,
+        0.0, 0.25e-6, 0.0,
+    };
+    request.magnetic_source_xyz = duplicate_source_xyz;
+    request.magnetic_source_node_count = 2;
+    request.magnetic_pairs = duplicate_pairs;
+    request.magnetic_pair_count = 2;
+    fd::MeshSymmetryCertificate rejected{};
+    check(
+        fd::build_mesh_symmetry_certificate(request, rejected) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "mesh symmetry certificate rejects duplicate destination nodes");
+    check(!rejected.accepted, "duplicate periodic mesh certificate is not accepted");
+    check(
+        contains(rejected.rejection_reason, "duplicate"),
+        "duplicate periodic mesh rejection names duplicate node");
+}
+
+void symmetric_mesh_certificate_records_nonidentity_tangent_frame_transfer()
+{
+    const double magnetic_source_xyz[] = {0.0, 0.0, 0.0};
+    const double magnetic_destination_xyz[] = {1.0e-6, 0.0, 0.0};
+    const std::uint32_t magnetic_source_materials[] = {7};
+    const std::uint32_t magnetic_destination_materials[] = {7};
+    const std::uint32_t magnetic_source_regions[] = {3};
+    const std::uint32_t magnetic_destination_regions[] = {3};
+
+    fd::TangentFrameNode source_frame{};
+    source_frame.m[0] = 0.0;
+    source_frame.m[1] = 0.0;
+    source_frame.m[2] = 1.0;
+    source_frame.e1[0] = 1.0;
+    source_frame.e1[1] = 0.0;
+    source_frame.e1[2] = 0.0;
+    source_frame.e2[0] = 0.0;
+    source_frame.e2[1] = 1.0;
+    source_frame.e2[2] = 0.0;
+
+    fd::TangentFrameNode destination_frame{};
+    destination_frame.m[0] = 0.0;
+    destination_frame.m[1] = 0.0;
+    destination_frame.m[2] = 1.0;
+    destination_frame.e1[0] = 0.0;
+    destination_frame.e1[1] = 1.0;
+    destination_frame.e1[2] = 0.0;
+    destination_frame.e2[0] = -1.0;
+    destination_frame.e2[1] = 0.0;
+    destination_frame.e2[2] = 0.0;
+
+    fd::PeriodicNodePair magnetic_pair{};
+    magnetic_pair.source_node = 0;
+    magnetic_pair.destination_node = 0;
+
+    fd::MeshSymmetryCertificateRequest request{};
+    request.magnetic_source_xyz = magnetic_source_xyz;
+    request.magnetic_destination_xyz = magnetic_destination_xyz;
+    request.magnetic_source_material_ids = magnetic_source_materials;
+    request.magnetic_destination_material_ids = magnetic_destination_materials;
+    request.magnetic_source_region_ids = magnetic_source_regions;
+    request.magnetic_destination_region_ids = magnetic_destination_regions;
+    request.magnetic_source_frame_nodes = &source_frame;
+    request.magnetic_destination_frame_nodes = &destination_frame;
+    request.magnetic_source_node_count = 1;
+    request.magnetic_destination_node_count = 1;
+    request.magnetic_pairs = &magnetic_pair;
+    request.magnetic_pair_count = 1;
+    request.translation_m[0] = 1.0e-6;
+    request.translation_tolerance_m = 1.0e-12;
+    request.frame_transport_tolerance = 1.0e-12;
+
+    fd::MeshSymmetryCertificate certificate{};
+    check(
+        fd::build_mesh_symmetry_certificate(request, certificate) ==
+            fd::FrequencyDomainStatus::ok,
+        "mesh symmetry certificate accepts nonidentity tangent-frame transfer");
+    check(certificate.accepted, "nonidentity tangent transfer certificate is accepted");
+    check(
+        certificate.tangent_frame_transfer_available,
+        "nonidentity tangent transfer certificate records transfer availability");
+    check(
+        certificate.tangent_frame_transfer_blocks_row_major_2x2.size() == 4,
+        "nonidentity tangent transfer certificate stores one 2x2 transfer block");
+    check(
+        std::abs(certificate.tangent_frame_transfer_blocks_row_major_2x2[0] - 0.0) < 1.0e-12,
+        "tangent transfer block row0 col0");
+    check(
+        std::abs(certificate.tangent_frame_transfer_blocks_row_major_2x2[1] - 1.0) < 1.0e-12,
+        "tangent transfer block row0 col1");
+    check(
+        std::abs(certificate.tangent_frame_transfer_blocks_row_major_2x2[2] + 1.0) < 1.0e-12,
+        "tangent transfer block row1 col0");
+    check(
+        std::abs(certificate.tangent_frame_transfer_blocks_row_major_2x2[3] - 0.0) < 1.0e-12,
+        "tangent transfer block row1 col1");
+}
+
+void symmetric_mesh_certificate_rejects_m0_seam_mismatch()
+{
+    const double magnetic_source_xyz[] = {0.0, 0.0, 0.0};
+    const double magnetic_destination_xyz[] = {1.0e-6, 0.0, 0.0};
+    const std::uint32_t magnetic_source_materials[] = {7};
+    const std::uint32_t magnetic_destination_materials[] = {7};
+    const std::uint32_t magnetic_source_regions[] = {3};
+    const std::uint32_t magnetic_destination_regions[] = {3};
+
+    fd::TangentFrameNode source_frame{};
+    source_frame.m[0] = 0.0;
+    source_frame.m[1] = 0.0;
+    source_frame.m[2] = 1.0;
+    source_frame.e1[0] = 1.0;
+    source_frame.e1[1] = 0.0;
+    source_frame.e1[2] = 0.0;
+    source_frame.e2[0] = 0.0;
+    source_frame.e2[1] = 1.0;
+    source_frame.e2[2] = 0.0;
+
+    fd::TangentFrameNode destination_frame{};
+    destination_frame.m[0] = 0.0;
+    destination_frame.m[1] = 1.0;
+    destination_frame.m[2] = 0.0;
+    destination_frame.e1[0] = 1.0;
+    destination_frame.e1[1] = 0.0;
+    destination_frame.e1[2] = 0.0;
+    destination_frame.e2[0] = 0.0;
+    destination_frame.e2[1] = 0.0;
+    destination_frame.e2[2] = -1.0;
+
+    fd::PeriodicNodePair magnetic_pair{};
+    magnetic_pair.source_node = 0;
+    magnetic_pair.destination_node = 0;
+
+    fd::MeshSymmetryCertificateRequest request{};
+    request.magnetic_source_xyz = magnetic_source_xyz;
+    request.magnetic_destination_xyz = magnetic_destination_xyz;
+    request.magnetic_source_material_ids = magnetic_source_materials;
+    request.magnetic_destination_material_ids = magnetic_destination_materials;
+    request.magnetic_source_region_ids = magnetic_source_regions;
+    request.magnetic_destination_region_ids = magnetic_destination_regions;
+    request.magnetic_source_frame_nodes = &source_frame;
+    request.magnetic_destination_frame_nodes = &destination_frame;
+    request.magnetic_source_node_count = 1;
+    request.magnetic_destination_node_count = 1;
+    request.magnetic_pairs = &magnetic_pair;
+    request.magnetic_pair_count = 1;
+    request.translation_m[0] = 1.0e-6;
+    request.translation_tolerance_m = 1.0e-12;
+    request.frame_transport_tolerance = 1.0e-12;
+
+    fd::MeshSymmetryCertificate certificate{};
+    check(
+        fd::build_mesh_symmetry_certificate(request, certificate) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "mesh symmetry certificate rejects m0 seam mismatch");
+    check(!certificate.accepted, "m0 seam mismatch certificate is not accepted");
+    check(
+        certificate.max_m0_pair_mismatch > request.m0_pair_tolerance,
+        "m0 seam mismatch certificate records mismatch magnitude");
+    check(
+        std::strcmp(certificate.rejection_reason, "periodic_m0_seam_mismatch") == 0,
+        "m0 seam mismatch certificate reports exact rejection reason");
+}
+
+void symmetric_mesh_certificate_checks_static_demag_seam_and_gauge_policy()
+{
+    const double magnetic_source_xyz[] = {0.0, 0.0, 0.0};
+    const double magnetic_destination_xyz[] = {1.0e-6, 0.0, 0.0};
+    const std::uint32_t magnetic_source_materials[] = {7};
+    const std::uint32_t magnetic_destination_materials[] = {7};
+    const std::uint32_t magnetic_source_regions[] = {3};
+    const std::uint32_t magnetic_destination_regions[] = {3};
+    const double h_demag_source[] = {1.0, 2.0, 3.0};
+    const double h_demag_destination[] = {1.0, 2.0, 3.0};
+
+    fd::TangentFrameNode frames[2]{};
+    const double equilibrium[] = {
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+    };
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 2, frames, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "static demag seam certificate test builds tangent frames");
+
+    fd::PeriodicNodePair magnetic_pair{};
+    magnetic_pair.source_node = 0;
+    magnetic_pair.destination_node = 0;
+
+    fd::MeshSymmetryCertificateRequest request{};
+    request.magnetic_source_xyz = magnetic_source_xyz;
+    request.magnetic_destination_xyz = magnetic_destination_xyz;
+    request.magnetic_source_material_ids = magnetic_source_materials;
+    request.magnetic_destination_material_ids = magnetic_destination_materials;
+    request.magnetic_source_region_ids = magnetic_source_regions;
+    request.magnetic_destination_region_ids = magnetic_destination_regions;
+    request.magnetic_source_frame_nodes = frames;
+    request.magnetic_destination_frame_nodes = frames + 1;
+    request.magnetic_source_node_count = 1;
+    request.magnetic_destination_node_count = 1;
+    request.magnetic_pairs = &magnetic_pair;
+    request.magnetic_pair_count = 1;
+    request.translation_m[0] = 1.0e-6;
+    request.translation_tolerance_m = 1.0e-12;
+    request.frame_transport_tolerance = 1.0e-12;
+    request.static_demag_source_a_per_m = h_demag_source;
+    request.static_demag_destination_a_per_m = h_demag_destination;
+    request.require_static_demag_pair_consistency = true;
+    request.static_demag_pair_tolerance_a_per_m = 1.0e-9;
+    request.require_poisson_gauge_policy = true;
+    request.poisson_gauge_policy = fd::MeshSymmetryPoissonGaugePolicy::mean_zero;
+
+    fd::MeshSymmetryCertificate accepted{};
+    check(
+        fd::build_mesh_symmetry_certificate(request, accepted) ==
+            fd::FrequencyDomainStatus::ok,
+        "mesh symmetry certificate accepts matching static demag seam and explicit gauge policy");
+    check(accepted.accepted, "static demag seam certificate is accepted");
+    check(
+        accepted.static_demag_pair_consistency_available,
+        "static demag seam certificate records static demag availability");
+    check(
+        accepted.max_h_demag0_pair_mismatch_a_per_m <=
+            request.static_demag_pair_tolerance_a_per_m,
+        "static demag seam certificate bounds H_demag0 mismatch");
+    check(
+        accepted.poisson_gauge_policy_explicit,
+        "static demag seam certificate records explicit Poisson gauge policy");
+    check(
+        accepted.poisson_gauge_policy == fd::MeshSymmetryPoissonGaugePolicy::mean_zero,
+        "static demag seam certificate records mean-zero Poisson gauge policy");
+
+    const double mismatched_h_demag_destination[] = {1.0, 2.0, 3.01};
+    fd::MeshSymmetryCertificate demag_rejected{};
+    request.static_demag_destination_a_per_m = mismatched_h_demag_destination;
+    check(
+        fd::build_mesh_symmetry_certificate(request, demag_rejected) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "mesh symmetry certificate rejects static demag seam mismatch");
+    check(
+        demag_rejected.max_h_demag0_pair_mismatch_a_per_m >
+            request.static_demag_pair_tolerance_a_per_m,
+        "static demag seam reject records mismatch magnitude");
+    check(
+        std::strcmp(
+            demag_rejected.rejection_reason,
+            "periodic_static_demag_seam_mismatch") == 0,
+        "static demag seam reject reports exact reason");
+
+    fd::MeshSymmetryCertificate gauge_rejected{};
+    request.static_demag_destination_a_per_m = h_demag_destination;
+    request.poisson_gauge_policy = fd::MeshSymmetryPoissonGaugePolicy::unspecified;
+    check(
+        fd::build_mesh_symmetry_certificate(request, gauge_rejected) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "mesh symmetry certificate rejects missing required Poisson gauge policy");
+    check(
+        std::strcmp(
+            gauge_rejected.rejection_reason,
+            "periodic_poisson_gauge_policy_missing") == 0,
+        "missing Poisson gauge policy reject reports exact reason");
+}
+
+void symmetric_mesh_certificate_records_stable_pair_map_fingerprints_and_schema()
+{
+    const double magnetic_source_xyz[] = {
+        0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0,
+    };
+    const double magnetic_destination_xyz[] = {
+        1.0e-6, 0.0, 0.0,
+        1.0e-6, 0.0, 0.0,
+    };
+    const std::uint32_t magnetic_source_materials[] = {7, 7};
+    const std::uint32_t magnetic_destination_materials[] = {7, 7};
+    const std::uint32_t magnetic_source_regions[] = {3, 3};
+    const std::uint32_t magnetic_destination_regions[] = {3, 3};
+
+    fd::TangentFrameNode frames[4]{};
+    const double equilibrium[] = {
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+    };
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 4, frames, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "pair fingerprint certificate test builds tangent frames");
+
+    const double airbox_source_xyz[] = {0.0, 0.0, 0.0};
+    const double airbox_destination_xyz[] = {1.0e-6, 0.0, 0.0};
+    fd::PeriodicNodePair airbox_pair{};
+    airbox_pair.source_node = 0;
+    airbox_pair.destination_node = 0;
+
+    fd::PeriodicNodePair canonical_pairs[] = {{0, 0}, {1, 1}};
+    fd::MeshSymmetryCertificateRequest request{};
+    request.magnetic_source_xyz = magnetic_source_xyz;
+    request.magnetic_destination_xyz = magnetic_destination_xyz;
+    request.magnetic_source_material_ids = magnetic_source_materials;
+    request.magnetic_destination_material_ids = magnetic_destination_materials;
+    request.magnetic_source_region_ids = magnetic_source_regions;
+    request.magnetic_destination_region_ids = magnetic_destination_regions;
+    request.magnetic_source_frame_nodes = frames;
+    request.magnetic_destination_frame_nodes = frames + 2;
+    request.magnetic_source_node_count = 2;
+    request.magnetic_destination_node_count = 2;
+    request.magnetic_pairs = canonical_pairs;
+    request.magnetic_pair_count = 2;
+    request.airbox_source_xyz = airbox_source_xyz;
+    request.airbox_destination_xyz = airbox_destination_xyz;
+    request.airbox_source_node_count = 1;
+    request.airbox_destination_node_count = 1;
+    request.airbox_pairs = &airbox_pair;
+    request.airbox_pair_count = 1;
+    request.translation_m[0] = 1.0e-6;
+    request.translation_tolerance_m = 1.0e-12;
+    request.frame_transport_tolerance = 1.0e-12;
+
+    fd::MeshSymmetryCertificate first{};
+    check(
+        fd::build_mesh_symmetry_certificate(request, first) == fd::FrequencyDomainStatus::ok,
+        "mesh symmetry certificate accepts fingerprint fixture");
+    check(
+        std::strcmp(first.schema_version, "periodic_mesh_certificate.v5") == 0,
+        "mesh symmetry certificate records v5 schema version");
+    check(
+        first.magnetic_pair_map_fingerprint_available,
+        "mesh symmetry certificate records magnetic pair-map fingerprint availability");
+    check(
+        first.airbox_pair_map_fingerprint_available,
+        "mesh symmetry certificate records airbox pair-map fingerprint availability");
+    check(
+        std::strncmp(first.magnetic_pair_map_fingerprint, "fnv1a64:", 8) == 0,
+        "mesh symmetry magnetic pair-map fingerprint names its algorithm");
+    check(
+        std::strncmp(first.airbox_pair_map_fingerprint, "fnv1a64:", 8) == 0,
+        "mesh symmetry airbox pair-map fingerprint names its algorithm");
+    check(
+        first.magnetic_pair_map_sha256_available,
+        "mesh symmetry certificate records magnetic pair-map sha256 availability");
+    check(
+        first.airbox_pair_map_sha256_available,
+        "mesh symmetry certificate records airbox pair-map sha256 availability");
+    check(
+        std::strncmp(first.magnetic_pair_map_sha256, "sha256:", 7) == 0,
+        "mesh symmetry magnetic pair-map sha256 names its algorithm");
+    check(
+        std::strlen(first.magnetic_pair_map_sha256) == 71,
+        "mesh symmetry magnetic pair-map sha256 has a full 64-hex digest");
+    check(
+        std::strncmp(first.airbox_pair_map_sha256, "sha256:", 7) == 0,
+        "mesh symmetry airbox pair-map sha256 names its algorithm");
+
+    fd::MeshSymmetryCertificate second{};
+    check(
+        fd::build_mesh_symmetry_certificate(request, second) == fd::FrequencyDomainStatus::ok,
+        "mesh symmetry certificate rebuilds fingerprint fixture");
+    check(
+        std::strcmp(first.magnetic_pair_map_fingerprint, second.magnetic_pair_map_fingerprint) == 0,
+        "mesh symmetry magnetic pair-map fingerprint is stable across identical builds");
+    check(
+        std::strcmp(first.magnetic_pair_map_sha256, second.magnetic_pair_map_sha256) == 0,
+        "mesh symmetry magnetic pair-map sha256 is stable across identical builds");
+
+    fd::PeriodicNodePair reordered_pairs[] = {{1, 1}, {0, 0}};
+    request.magnetic_pairs = reordered_pairs;
+    fd::MeshSymmetryCertificate reordered{};
+    check(
+        fd::build_mesh_symmetry_certificate(request, reordered) == fd::FrequencyDomainStatus::ok,
+        "mesh symmetry certificate accepts reordered pair map fixture");
+    check(
+        std::strcmp(first.magnetic_pair_map_fingerprint, reordered.magnetic_pair_map_fingerprint) == 0,
+        "mesh symmetry magnetic pair-map fingerprint is independent of input pair order");
+    check(
+        std::strcmp(first.magnetic_pair_map_sha256, reordered.magnetic_pair_map_sha256) == 0,
+        "mesh symmetry magnetic pair-map sha256 is independent of input pair order");
+
+    fd::PeriodicNodePair swapped_pairs[] = {{0, 1}, {1, 0}};
+    request.magnetic_pairs = swapped_pairs;
+    fd::MeshSymmetryCertificate swapped{};
+    check(
+        fd::build_mesh_symmetry_certificate(request, swapped) == fd::FrequencyDomainStatus::ok,
+        "mesh symmetry certificate accepts distinct pair map fixture");
+    check(
+        std::strcmp(first.magnetic_pair_map_fingerprint, swapped.magnetic_pair_map_fingerprint) != 0,
+        "mesh symmetry magnetic pair-map fingerprint changes when mapping changes");
+    check(
+        std::strcmp(first.magnetic_pair_map_sha256, swapped.magnetic_pair_map_sha256) != 0,
+        "mesh symmetry magnetic pair-map sha256 changes when mapping changes");
+}
+
+void full_coupled_field_split_prototype_improves_residual_and_reuses_poisson_setup()
+{
+    const double a_qq[] = {
+        4.0, 0.5,
+        0.25, 3.0,
+    };
+    const double a_qphi[] = {
+        0.5,
+        -0.25,
+    };
+    const double a_phiq[] = {
+        0.75, -0.5,
+    };
+    const double a_phiphi[] = {2.5};
+    const double b_q[] = {1.0, -0.5};
+    const double b_phi[] = {0.25};
+
+    fd::FullCoupledBlockOperator op{
+        2,
+        1,
+        a_qq,
+        4,
+        a_qphi,
+        2,
+        a_phiq,
+        2,
+        a_phiphi,
+        1,
+        b_q,
+        2,
+        b_phi,
+        1,
+    };
+
+    fd::PoissonBlockSolverAdapter poisson_64{};
+    fd::FieldSplitPreconditioner preconditioner_64{};
+    check(
+        fd::initialize_field_split_preconditioner(
+            fd::FieldSplitPreconditionerSetup{&op, &poisson_64},
+            &preconditioner_64) == fd::FrequencyDomainStatus::ok,
+        "field-split preconditioner initializes Poisson block once");
+
+    double q_64[2]{};
+    double phi_64[1]{};
+    fd::FullCoupledFieldSplitSolveResult result_64{};
+    check(
+        fd::solve_full_coupled_field_split(
+            fd::FullCoupledFieldSplitProblem{
+                &op,
+                &preconditioner_64,
+                64,
+                0.1,
+                q_64,
+                phi_64,
+                2,
+                1,
+            },
+            &result_64) == fd::FrequencyDomainStatus::ok,
+        "full-coupled field-split prototype runs a bounded 64-iteration solve");
+    check(result_64.completed_iterations == 64, "64-iteration field-split solve reports its bound");
+    check(result_64.final_relative_residual_l2_norm < result_64.initial_relative_residual_l2_norm,
+          "64-iteration field-split solve improves residual trend");
+    check(
+        result_64.final_relative_residual_l2_norm <
+            result_64.unpreconditioned_reference_final_relative_residual_l2_norm,
+        "64-iteration field-split solve beats unpreconditioned residual baseline");
+    check(
+        result_64.final_phi_residual_l2_norm < result_64.initial_phi_residual_l2_norm,
+        "64-iteration field-split solve reports improving Poisson block residual");
+    check(
+        result_64.final_relative_phi_residual_l2_norm < result_64.initial_relative_phi_residual_l2_norm,
+        "64-iteration field-split solve reports improving relative Poisson block residual");
+    check(result_64.poisson_setup_count == 1, "64-iteration field-split solve reuses Poisson setup");
+    check(
+        result_64.poisson_solve_count >= result_64.completed_iterations,
+        "64-iteration field-split solve reports Poisson applications");
+
+    fd::PoissonBlockSolverAdapter poisson_256{};
+    fd::FieldSplitPreconditioner preconditioner_256{};
+    check(
+        fd::initialize_field_split_preconditioner(
+            fd::FieldSplitPreconditionerSetup{&op, &poisson_256},
+            &preconditioner_256) == fd::FrequencyDomainStatus::ok,
+        "field-split preconditioner initializes Poisson block for the 256-iteration solve");
+
+    double q_256[2]{};
+    double phi_256[1]{};
+    fd::FullCoupledFieldSplitSolveResult result_256{};
+    check(
+        fd::solve_full_coupled_field_split(
+            fd::FullCoupledFieldSplitProblem{
+                &op,
+                &preconditioner_256,
+                256,
+                0.1,
+                q_256,
+                phi_256,
+                2,
+                1,
+            },
+            &result_256) == fd::FrequencyDomainStatus::ok,
+        "full-coupled field-split prototype runs a bounded 256-iteration solve");
+    check(
+        result_256.final_relative_residual_l2_norm < result_64.final_relative_residual_l2_norm,
+        "256-iteration field-split solve improves beyond the 64-iteration residual");
+    check(
+        result_256.final_relative_phi_residual_l2_norm <= result_64.final_relative_phi_residual_l2_norm,
+        "256-iteration field-split solve does not regress relative Poisson block residual");
+    check(result_256.poisson_setup_count == 1, "256-iteration field-split solve does not set up Poisson per iteration");
+    check(
+        result_256.poisson_solve_count >= result_256.completed_iterations,
+        "256-iteration field-split solve reports Poisson reuse applications");
 }
 
 void production_cpu_matrix_free_solver_skips_zero_initial_residual_operator()
@@ -4269,6 +6955,55 @@ void production_cpu_matrix_free_solver_preserves_nonconvergence_diagnostics()
     check(result.rhs_imag_l2_norm == 0.0, "production CPU limited GMRES records zero RHS imaginary block norm");
     check(result.residual_real_l2_norm > 0.0, "production CPU limited GMRES records residual real block norm");
     check(result.response_real_l2_norm > 0.0, "production CPU limited GMRES records response real block norm");
+}
+
+void production_cpu_matrix_free_solver_stops_stagnated_run_at_256_iterations()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double drive_real[] = {1.0, 0.0};
+    double response_real[2]{};
+    double response_imag[2]{};
+    double residual_l2[1]{};
+    double relative_residual_l2[1]{};
+    TwoDofSkewProductionOperator op{};
+
+    fd::ProductionCpuDrivenResponseProblem problem{};
+    problem.tangent_dof_count = 2;
+    problem.frequencies_hz = frequencies_hz;
+    problem.frequency_count = 1;
+    problem.drive_real = drive_real;
+    problem.apply_stiffness = apply_two_dof_skew_stiffness;
+    problem.apply_mass = apply_two_dof_zero_mass;
+    problem.operator_user_data = &op;
+    problem.relative_tolerance = 1.0e-12;
+    problem.max_iterations = 8192;
+    problem.restart_iterations = 1;
+    problem.out_response_real = response_real;
+    problem.out_response_imag = response_imag;
+    problem.response_capacity = 2;
+    problem.out_residual_l2_norm = residual_l2;
+    problem.out_relative_residual_l2_norm = relative_residual_l2;
+    problem.residual_capacity = 1;
+
+    fd::ProductionCpuDrivenResponseResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_production_cpu_driven_response(problem, &result);
+
+    check(status == fd::FrequencyDomainStatus::solve_error, "stagnated GMRES reports solve_error");
+    check(result.completed_frequency_count == 0, "stagnated GMRES completes no frequencies");
+    check(result.total_iteration_count == 256, "stagnated GMRES stops at the v5 256-iteration gate");
+    check(result.stagnation_detected, "stagnated GMRES records stagnation detection");
+    check(result.stagnation_iteration == 256, "stagnated GMRES records stagnation iteration");
+    check(
+        result.stagnation_relative_residual_ratio > 0.9,
+        "stagnated GMRES records residual ratio above the v5 threshold");
+    check(
+        result.relative_residual_l2_norm > 1.0e-2,
+        "stagnated GMRES records residual above the v5 absolute gate");
+    check(
+        contains(result.error_message, "stagnated"),
+        "stagnated GMRES reports stagnated stop reason");
 }
 
 void production_cpu_matrix_free_solver_honors_absolute_tolerance()
@@ -4713,6 +7448,12 @@ void production_cpu_matrix_free_solver_requires_recomputed_residual_for_converge
         result.last_recomputed_relative_residual_l2_norm > 0.5,
         "false Arnoldi convergence records final recomputed residual separately");
     check(
+        result.residual_consistency_degraded,
+        "false Arnoldi convergence records generic residual-consistency degradation");
+    check(
+        result.residual_consistency_ratio > 4.0,
+        "false Arnoldi convergence records generic true/tracked residual ratio");
+    check(
         result.relative_residual_l2_norm > 0.5,
         "false Arnoldi convergence reports large recomputed residual");
     check(
@@ -4721,6 +7462,126 @@ void production_cpu_matrix_free_solver_requires_recomputed_residual_for_converge
     check(
         !progress.saw_converged,
         "false Arnoldi convergence must not publish converged progress before recomputed residual passes");
+}
+
+void production_cpu_matrix_free_solver_restarts_after_unpreconditioned_residual_gap()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double drive_real[] = {1.0};
+    double response_real[1]{};
+    double response_imag[1]{};
+    double residual_l2[1]{};
+    double relative_residual_l2[1]{};
+    OneShotResidualGapOperator op{1};
+
+    fd::ProductionCpuDrivenResponseProblem problem{};
+    problem.tangent_dof_count = 1;
+    problem.frequencies_hz = frequencies_hz;
+    problem.frequency_count = 1;
+    problem.drive_real = drive_real;
+    problem.apply_stiffness = apply_one_shot_residual_gap_stiffness;
+    problem.apply_mass = apply_one_shot_zero_mass;
+    problem.operator_user_data = &op;
+    problem.relative_tolerance = 1.0e-12;
+    problem.max_iterations = 2;
+    problem.restart_iterations = 1;
+    problem.out_response_real = response_real;
+    problem.out_response_imag = response_imag;
+    problem.response_capacity = 1;
+    problem.out_residual_l2_norm = residual_l2;
+    problem.out_relative_residual_l2_norm = relative_residual_l2;
+    problem.residual_capacity = 1;
+
+    fd::ProductionCpuDrivenResponseResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_production_cpu_driven_response(problem, &result);
+
+    check(
+        status == fd::FrequencyDomainStatus::ok,
+        "unpreconditioned GMRES restarts from recomputed residual after residual gap");
+    check(result.completed_frequency_count == 1, "residual-gap restart completes one frequency");
+    check(result.total_iteration_count == 2, "residual-gap restart performs the replacement iteration");
+    check(
+        result.residual_consistency_degraded,
+        "residual-gap restart records residual-consistency degradation");
+    check(
+        result.residual_consistency_ratio > 4.0,
+        "residual-gap restart records true/tracked residual ratio");
+    check(
+        result.last_recomputed_relative_residual_l2_norm < 1.0e-12,
+        "residual-gap restart reports final recomputed residual");
+    check(relative_residual_l2[0] < 1.0e-12, "residual-gap restart output residual is small");
+    check(std::abs(response_real[0] - 0.5) < 1.0e-12, "residual-gap restart response is correct");
+    check(std::abs(response_imag[0]) < 1.0e-12, "residual-gap restart imaginary response is zero");
+}
+
+void production_cpu_matrix_free_solver_flags_right_preconditioner_residual_inconsistency()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double drive_real[] = {1.0};
+    double response_real[1]{};
+    double response_imag[1]{};
+    double residual_l2[1]{};
+    double relative_residual_l2[1]{};
+    FirstKrylovApplyOnlyOperator op{};
+    op.tangent_dof_count = 1;
+    op.good_stiffness_call_count = 4;
+
+    fd::ProductionCpuDrivenResponseProblem problem{};
+    problem.tangent_dof_count = 1;
+    problem.frequencies_hz = frequencies_hz;
+    problem.frequency_count = 1;
+    problem.drive_real = drive_real;
+    problem.apply_stiffness = apply_first_krylov_stiffness_then_zero;
+    problem.apply_mass = apply_zero_mass;
+    problem.operator_user_data = &op;
+    problem.relative_tolerance = 1.0e-6;
+    problem.max_iterations = 2;
+    problem.restart_iterations = 1;
+    problem.out_response_real = response_real;
+    problem.out_response_imag = response_imag;
+    problem.response_capacity = 1;
+    problem.out_residual_l2_norm = residual_l2;
+    problem.out_relative_residual_l2_norm = relative_residual_l2;
+    problem.residual_capacity = 1;
+    problem.apply_right_preconditioner = apply_identity_first_krylov_preconditioner;
+    problem.right_preconditioner_user_data = &op;
+    problem.krylov_preconditioner_name = "identity_first_krylov";
+    problem.auto_disable_harmful_right_preconditioner = true;
+    problem.right_preconditioner_probe_disable_relative_threshold = 1.0;
+
+    fd::ProductionCpuDrivenResponseResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_production_cpu_driven_response(problem, &result);
+
+    check(
+        status == fd::FrequencyDomainStatus::solve_error,
+        "right-preconditioned GMRES flags true/tracked residual inconsistency as solve_error");
+    check(result.completed_frequency_count == 0, "inconsistent right-preconditioned solve completes no frequencies");
+    check(result.right_preconditioner_applied, "inconsistent solve reports right preconditioner was active");
+    check(
+        result.right_preconditioner_probe_available,
+        "inconsistent solve records the primary right-preconditioner probe");
+    check(
+        result.right_preconditioner_probe_relative_residual_l2_norm < 1.0e-12,
+        "inconsistent solve probe passes before runtime residual-consistency degradation");
+    check(
+        result.right_preconditioner_residual_consistency_degraded,
+        "inconsistent solve records degraded residual consistency");
+    check(
+        result.right_preconditioner_residual_consistency_ratio > 4.0,
+        "inconsistent solve records true/tracked residual consistency ratio");
+    check(
+        result.last_tracked_relative_residual_l2_norm < 1.0e-12,
+        "inconsistent solve records small tracked residual before retry trigger");
+    check(
+        result.last_recomputed_relative_residual_l2_norm > 0.5,
+        "inconsistent solve records large recomputed residual before retry trigger");
+    check(
+        contains(result.error_message, "residual consistency"),
+        "inconsistent solve explains residual-consistency failure");
 }
 
 void production_cpu_lane_writes_failure_artifacts_for_nonconverged_gmres()
@@ -4803,6 +7664,18 @@ void production_cpu_lane_writes_failure_artifacts_for_nonconverged_gmres()
     check(
         contains(result.diagnostics_json, "\"total_iteration_count\":1"),
         "limited production CPU GMRES failure diagnostics reports iteration count");
+    check(
+        contains(result.diagnostics_json, "\"stop_reason\":\"max_iterations\""),
+        "limited production CPU GMRES failure diagnostics reports stop reason");
+    check(
+        contains(result.diagnostics_json, "\"stagnation_detected\":false"),
+        "limited production CPU GMRES failure diagnostics reports no stagnation");
+    check(
+        contains(result.diagnostics_json, "\"stagnation_iteration\":0"),
+        "limited production CPU GMRES failure diagnostics reports zero stagnation iteration");
+    check(
+        contains(result.diagnostics_json, "\"stagnation_relative_residual_ratio\":0"),
+        "limited production CPU GMRES failure diagnostics reports zero stagnation ratio");
     check(
         contains(result.diagnostics_json, "\"restart_iterations_for_frequency\":1"),
         "limited production CPU GMRES failure diagnostics reports restart count");
@@ -4900,6 +7773,18 @@ void production_cpu_lane_writes_failure_artifacts_for_nonconverged_gmres()
     check(
         contains(diagnostics.c_str(), "\"restart_iterations_for_frequency\":1"),
         "GMRES failure diagnostics artifact records restart iterations");
+    check(
+        contains(diagnostics.c_str(), "\"stop_reason\":\"max_iterations\""),
+        "GMRES failure diagnostics artifact records stop reason");
+    check(
+        contains(diagnostics.c_str(), "\"stagnation_detected\":false"),
+        "GMRES failure diagnostics artifact records no stagnation");
+    check(
+        contains(diagnostics.c_str(), "\"stagnation_iteration\":0"),
+        "GMRES failure diagnostics artifact records zero stagnation iteration");
+    check(
+        contains(diagnostics.c_str(), "\"stagnation_relative_residual_ratio\":0"),
+        "GMRES failure diagnostics artifact records zero stagnation ratio");
     check(
         contains(diagnostics.c_str(), "\"progress_interval_iterations\":128"),
         "GMRES failure diagnostics artifact records safe default progress interval");
@@ -6721,6 +9606,9 @@ void production_cpu_periodic_airbox_dynamic_demag_solves_mfem_demag_tangent_prov
         contains(solver_diagnostics.c_str(), "\"right_preconditioner_probe_disable_relative_threshold\":1"),
         "periodic-airbox demag tangent-with-potential provider records default auto-disable threshold");
     check(
+        contains(solver_diagnostics.c_str(), "\"schur_preconditioner_quality_status\":"),
+        "periodic-airbox demag tangent-with-potential provider classifies Schur preconditioner quality");
+    check(
         contains(solver_diagnostics.c_str(), "\"coupled_block_norms\":{\"rhs_delta_m_l2_norm\":"),
         "periodic-airbox demag tangent provider solver diagnostics records magnetic split norms");
     check(
@@ -6985,6 +9873,12 @@ void production_cpu_periodic_airbox_dynamic_demag_writes_phi_consistency_artifac
     check(
         contains(manifest.c_str(), "\"coupled_residual_partition_status\":\"magnetic_schur_phi_consistency_provider\""),
         "no-exchange phi-consistency manifest records Schur residual partition");
+    check(
+        contains(manifest.c_str(), "\"phi_gauge_policy\":\"mean_zero\""),
+        "no-exchange phi-consistency manifest records explicit mean-zero phi gauge");
+    check(
+        contains(manifest.c_str(), "\"phi_gauge_constraint_applied\":true"),
+        "no-exchange phi-consistency manifest records applied phi gauge constraint");
 
     char diagnostics_path[256]{};
     char progress_path[256]{};
@@ -7022,6 +9916,12 @@ void production_cpu_periodic_airbox_dynamic_demag_writes_phi_consistency_artifac
         extract_json_double(diagnostics.c_str(), "\"response_delta_phi_l2_norm\"") > 0.0,
         "no-exchange phi-consistency diagnostics records nonzero delta_phi response norm");
     check(
+        contains(diagnostics.c_str(), "\"phi_gauge_policy\":\"mean_zero\""),
+        "no-exchange phi-consistency diagnostics records explicit mean-zero phi gauge");
+    check(
+        contains(diagnostics.c_str(), "\"phi_gauge_constraint_applied\":true"),
+        "no-exchange phi-consistency diagnostics records applied phi gauge constraint");
+    check(
         contains(progress.c_str(), "\"status\":\"ready\""),
         "no-exchange phi-consistency progress records ready artifact status");
     check(
@@ -7044,6 +9944,118 @@ void production_cpu_periodic_airbox_dynamic_demag_writes_phi_consistency_artifac
     check(
         contains(point.c_str(), "\"delta_phi_complex\":[["),
         "no-exchange phi-consistency point records solved delta_phi unknown");
+    check(
+        contains(point.c_str(), "\"phi_gauge_policy\":\"mean_zero\""),
+        "no-exchange phi-consistency point records explicit mean-zero phi gauge");
+    check(
+        contains(point.c_str(), "\"phi_gauge_constraint_applied\":true"),
+        "no-exchange phi-consistency point records applied phi gauge constraint");
+
+    fd::release_driven_frequency_response_result(&result);
+}
+
+void production_cpu_periodic_airbox_dynamic_demag_reports_k0_delta_phi_seam_mismatch_residual()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double equilibrium[] = {
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+    };
+    fd::TangentFrameNode nodes[3]{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 3, nodes, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "production CPU periodic-airbox seam-mismatch frame succeeds");
+
+    fd::MfemOperatorContextDescriptor descriptor{};
+    descriptor.node_count = 3;
+    descriptor.full_dof_count = 9;
+    descriptor.tangent_dof_count = 6;
+    descriptor.demag_kind = fd::FrequencyDomainDemagKind::static_k0;
+    descriptor.demag_enabled = true;
+    descriptor.mfem_mesh_available = true;
+
+    fd::MfemTangentSpaceLayout layout{};
+    layout.node_count = 3;
+    layout.full_dof_count = 9;
+    layout.tangent_dof_count = 6;
+    layout.tangent_components_per_node = 2;
+    layout.tangent_stride = 2;
+
+    const double demag_tangent_matrix[] = {
+        0.5, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.5, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.5, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.5, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.5, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.5,
+    };
+    DemagTangentCallbackOperator demag_operator{
+        demag_tangent_matrix,
+        6,
+        3,
+        0,
+    };
+    const double drive_real[] = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
+    const std::uint64_t magnetostatic_periodic_node_pairs[] = {0, 1, 0, 2};
+    char output_directory[192]{};
+    std::snprintf(
+        output_directory,
+        sizeof(output_directory),
+        "/tmp/fullmag-frequency-domain-periodic-airbox-k0-delta-phi-seam-mismatch-%llu",
+        static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&frequencies_hz)));
+
+    fd::DrivenFrequencyResponseSolveRequest request{};
+    request.solve_request.operator_request.node_count = 3;
+    request.solve_request.operator_request.tangent_dof_count = 6;
+    request.solve_request.operator_request.alpha = 0.0;
+    request.solve_request.operator_request.gamma0 = 1.0;
+    request.solve_request.operator_request.demag_kind = fd::FrequencyDomainDemagKind::static_k0;
+    request.solve_request.frequencies_hz = frequencies_hz;
+    request.solve_request.frequency_count = 1;
+    request.execution_lane = fd::DrivenFrequencyResponseExecutionLane::production_cpu;
+    request.requires_periodic_airbox_dynamic_demag = true;
+    request.magnetic_periodic_constraint_set_count = 1;
+    request.magnetostatic_periodic_constraint_set_count = 1;
+    request.periodic_airbox_delta_m_tangent_dof_count = 6;
+    request.periodic_airbox_delta_phi_dof_count = 3;
+    request.periodic_airbox_magnetostatic_periodic_node_pairs =
+        magnetostatic_periodic_node_pairs;
+    request.periodic_airbox_magnetostatic_periodic_node_pair_count = 2;
+    request.mfem_validation_problem.enabled = true;
+    request.mfem_validation_problem.descriptor = descriptor;
+    request.mfem_validation_problem.layout = layout;
+    request.mfem_validation_problem.nodes = nodes;
+    request.mfem_validation_problem.apply_demag_tangent_with_potential =
+        apply_demag_tangent_with_potential_callback;
+    request.mfem_validation_problem.demag_tangent_user_data = &demag_operator;
+    request.mfem_validation_problem.drive_real = drive_real;
+    request.output_directory = output_directory;
+    request.solve_request.write_response_fields = true;
+    request.write_partial_artifacts = true;
+
+    fd::DrivenFrequencyResponseSolveResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_driven_frequency_response(request, &result);
+
+    check(
+        status == fd::FrequencyDomainStatus::validation_error,
+        "production CPU periodic-airbox rejects k0 delta_phi seam mismatch");
+    check(
+        contains(result.diagnostics_json, "\"validation_error\":\"periodic_airbox_delta_phi_response_validation_error\""),
+        "k0 delta_phi seam mismatch diagnostics name postsolve validation error");
+    check(
+        contains(result.diagnostics_json, "\"delta_phi_seam_validation_status\":\"mismatch\""),
+        "k0 delta_phi seam mismatch diagnostics record seam status");
+    check(
+        extract_json_double(result.diagnostics_json, "\"delta_phi_seam_max_after_offset\"") > 0.0,
+        "k0 delta_phi seam mismatch diagnostics preserve seam residual");
+    check(
+        extract_json_double(result.diagnostics_json, "\"delta_phi_seam_best_constant_offset_real\"") != 0.0,
+        "k0 delta_phi seam mismatch diagnostics preserve best real offset");
 
     fd::release_driven_frequency_response_result(&result);
 }
@@ -7266,6 +10278,18 @@ void production_cpu_periodic_airbox_phi_consistency_solve_error_writes_bounded_a
     check(
         contains(result.result_json, "frequency_domain/manifest.v1.json"),
         "periodic-airbox phi-consistency solve_error result JSON records manifest path");
+    check(
+        contains(result.diagnostics_json, "\"coupled_residual_partition_status\":\"magnetic_schur_phi_consistency_provider\""),
+        "periodic-airbox phi-consistency solve_error direct diagnostics records Schur residual partition");
+    check(
+        contains(result.diagnostics_json, "\"coupled_block_norms\":{\"rhs_delta_m_l2_norm\":"),
+        "periodic-airbox phi-consistency solve_error direct diagnostics records coupled split norms");
+    check(
+        contains(result.diagnostics_json, "\"relative_residual_delta_m_l2_norm\":"),
+        "periodic-airbox phi-consistency solve_error direct diagnostics records magnetic residual share");
+    check(
+        contains(result.diagnostics_json, "\"relative_residual_delta_phi_l2_norm\":"),
+        "periodic-airbox phi-consistency solve_error direct diagnostics records phi residual share");
 
     const std::string manifest = read_text_file(result.artifact_manifest_path);
     check(contains(manifest.c_str(), "\"status\":\"solve_error\""), "phi-consistency solve_error manifest records solve_error");
@@ -7343,6 +10367,18 @@ void production_cpu_periodic_airbox_phi_consistency_solve_error_writes_bounded_a
     check(
         contains(diagnostics.c_str(), "\"total_iteration_count\":1"),
         "phi-consistency solve_error diagnostics records attempted iteration count");
+    check(
+        contains(diagnostics.c_str(), "\"stop_reason\":\"max_iterations\""),
+        "phi-consistency solve_error diagnostics records GMRES stop reason");
+    check(
+        contains(diagnostics.c_str(), "\"stagnation_detected\":false"),
+        "phi-consistency solve_error diagnostics records no stagnation");
+    check(
+        contains(diagnostics.c_str(), "\"stagnation_iteration\":0"),
+        "phi-consistency solve_error diagnostics records zero stagnation iteration");
+    check(
+        contains(diagnostics.c_str(), "\"stagnation_relative_residual_ratio\":0"),
+        "phi-consistency solve_error diagnostics records zero stagnation ratio");
     check(
         contains(diagnostics.c_str(), "\"gmres_relative_residual_history\":["),
         "phi-consistency solve_error diagnostics records GMRES history");
@@ -7545,6 +10581,71 @@ void driven_response_solver_runs_assembled_mfem_validation_problem()
     check(
         contains(result.diagnostics_json, "\"assembled_mfem_operator_solver\":true"),
         "boundary assembled MFEM validation diagnostics reports assembled operator solver");
+    fd::release_driven_frequency_response_result(&result);
+}
+
+void driven_response_solver_allows_zero_physical_drive_in_assembled_mfem_validation()
+{
+    constexpr double one_over_two_pi_hz = 0.15915494309189535;
+    const double frequencies_hz[] = {one_over_two_pi_hz};
+    const double equilibrium[] = {0.0, 0.0, 1.0};
+    fd::TangentFrameNode node{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 1, &node, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "zero-drive assembled MFEM validation frame succeeds");
+
+    fd::MfemOperatorContextDescriptor descriptor{};
+    descriptor.node_count = 1;
+    descriptor.full_dof_count = 3;
+    descriptor.tangent_dof_count = 2;
+    descriptor.zeeman_enabled = true;
+    descriptor.mfem_mesh_available = true;
+    fd::MfemTangentSpaceLayout layout{};
+    layout.node_count = 1;
+    layout.full_dof_count = 3;
+    layout.tangent_dof_count = 2;
+    layout.tangent_components_per_node = 2;
+    layout.tangent_stride = 2;
+    const double h_ext_a_per_m[] = {0.0, 0.0, 2.0};
+    const double drive_real[] = {0.0, 0.0};
+    const double drive_imag[] = {0.0, 0.0};
+
+    fd::DrivenFrequencyResponseSolveRequest request{};
+    request.solve_request.operator_request.node_count = 1;
+    request.solve_request.operator_request.tangent_dof_count = 2;
+    request.solve_request.operator_request.alpha = 0.0;
+    request.solve_request.operator_request.gamma0 = 1.0;
+    request.solve_request.operator_request.include_zeeman = true;
+    request.solve_request.frequencies_hz = frequencies_hz;
+    request.solve_request.frequency_count = 1;
+    request.drive_kind = fd::FrequencyDriveKind::dynamic_field_phasor_a_per_m;
+    request.require_nonzero_rhs = false;
+    request.mfem_validation_problem.enabled = true;
+    request.mfem_validation_problem.descriptor = descriptor;
+    request.mfem_validation_problem.layout = layout;
+    request.mfem_validation_problem.nodes = &node;
+    request.mfem_validation_problem.h_ext_a_per_m = h_ext_a_per_m;
+    request.mfem_validation_problem.drive_real = drive_real;
+    request.mfem_validation_problem.drive_imag = drive_imag;
+
+    fd::DrivenFrequencyResponseSolveResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_driven_frequency_response(request, &result);
+
+    check(status == fd::FrequencyDomainStatus::ok, "zero physical drive assembled MFEM validation returns ok");
+    check(result.status == fd::FrequencyDomainStatus::ok, "zero physical drive assembled MFEM validation stores ok");
+    check(result.completed_frequency_count == 1, "zero physical drive assembled MFEM validation completes frequency");
+    check(
+        contains(result.result_json, "\"max_abs_response\":0"),
+        "zero physical drive assembled MFEM validation reports zero response");
+    check(
+        contains(result.diagnostics_json, "\"zero_drive_warning\":true"),
+        "zero physical drive assembled MFEM validation emits warning diagnostic");
+    check(
+        contains(result.diagnostics_json, "\"zero_drive_policy\":\"zero_response_allowed\""),
+        "zero physical drive assembled MFEM validation reports allowed zero-response policy");
     fd::release_driven_frequency_response_result(&result);
 }
 
@@ -10919,6 +14020,14 @@ void c_abi_production_cpu_lane_runs_mfem_matrix_free_response_problem()
     check(
         contains(periodic_pairs.c_str(), "\"residual_diagnostics\""),
         "C ABI static-periodic artifact records residual diagnostics");
+    check(
+        contains(periodic_pairs.c_str(), "\"pair_map_sha256\":\"sha256:"),
+        "C ABI static-periodic artifact records canonical pair-map sha256");
+    check(
+        contains(
+            periodic_pairs.c_str(),
+            "\"pair_map_hash_canonicalization\":\"periodic_pairs.v1_without_hash_sorted_pairs\""),
+        "C ABI static-periodic artifact records pair-map hash canonicalization");
 
     fullmag_fem_frequency_domain_solve_result_release(&result);
 }
@@ -14566,6 +17675,151 @@ void excitation_projects_uniform_field_into_tangent_space()
     check(std::abs(tangent_drive[3] - 3.0) < 1.0e-12, "excitation node1 e2");
 }
 
+void dynamic_field_drive_projection_applies_llg_torque_sign()
+{
+    const double equilibrium[] = {0.0, 0.0, 1.0};
+    fd::TangentFrameNode node{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 1, &node, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "dynamic drive projection frame build succeeds");
+
+    const double hx_re[] = {2.0};
+    const double hy_re[] = {3.0};
+    const double hz_re[] = {5.0};
+    const double hx_im[] = {7.0};
+    const double hy_im[] = {11.0};
+    const double hz_im[] = {13.0};
+    const double gamma0 = 4.0;
+    double rhs_real[2]{};
+    double rhs_imag[2]{};
+    fd::TangentExcitationDiagnostics diagnostics{};
+
+    const fd::FrequencyDomainStatus status =
+        fd::project_dynamic_field_drive_to_tangent_rhs(
+            &node,
+            1,
+            gamma0,
+            fd::FrequencyDomainPhaseConvention::exp_i_omega_t,
+            fd::DynamicFieldPhasorView{
+                hx_re,
+                hy_re,
+                hz_re,
+                hx_im,
+                hy_im,
+                hz_im,
+                1,
+            },
+            fd::TangentComplexVectorView{rhs_real, rhs_imag, 2},
+            &diagnostics);
+
+    check(status == fd::FrequencyDomainStatus::ok, "dynamic field drive projection succeeds");
+    check(diagnostics.node_count == 1, "dynamic drive projection diagnostics keep node count");
+    check(diagnostics.tangent_dof_count == 2, "dynamic drive projection diagnostics keep tangent DOFs");
+    check(
+        std::abs(rhs_real[0] - gamma0 * hy_re[0]) < 1.0e-12,
+        "dynamic drive real e1 uses -gamma m cross h sign");
+    check(
+        std::abs(rhs_real[1] + gamma0 * hx_re[0]) < 1.0e-12,
+        "dynamic drive real e2 uses -gamma m cross h sign");
+    check(
+        std::abs(rhs_imag[0] - gamma0 * hy_im[0]) < 1.0e-12,
+        "dynamic drive imag e1 uses -gamma m cross h sign");
+    check(
+        std::abs(rhs_imag[1] + gamma0 * hx_im[0]) < 1.0e-12,
+        "dynamic drive imag e2 uses -gamma m cross h sign");
+    check(
+        diagnostics.max_abs_tangent_drive == gamma0 * hy_im[0],
+        "dynamic drive projection diagnostics report max RHS magnitude");
+}
+
+void dynamic_field_drive_projection_accepts_zero_physical_drive_with_warning()
+{
+    const double equilibrium[] = {0.0, 0.0, 1.0};
+    fd::TangentFrameNode node{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 1, &node, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "zero physical drive projection frame build succeeds");
+
+    const double hx_re[] = {0.0};
+    const double hy_re[] = {0.0};
+    const double hz_re[] = {5.0};
+    const double hx_im[] = {0.0};
+    const double hy_im[] = {0.0};
+    const double hz_im[] = {-7.0};
+    double rhs_real[] = {99.0, 99.0};
+    double rhs_imag[] = {99.0, 99.0};
+    fd::TangentExcitationDiagnostics diagnostics{};
+
+    const fd::FrequencyDomainStatus status =
+        fd::project_dynamic_field_drive_to_tangent_rhs(
+            &node,
+            1,
+            4.0,
+            fd::FrequencyDomainPhaseConvention::exp_i_omega_t,
+            fd::DynamicFieldPhasorView{
+                hx_re,
+                hy_re,
+                hz_re,
+                hx_im,
+                hy_im,
+                hz_im,
+                1,
+            },
+            fd::TangentComplexVectorView{rhs_real, rhs_imag, 2},
+            &diagnostics);
+
+    check(status == fd::FrequencyDomainStatus::ok, "zero physical dynamic field drive is accepted");
+    check(diagnostics.zero_drive_warning, "zero physical dynamic field drive reports warning");
+    check(diagnostics.max_abs_tangent_drive == 0.0, "zero physical dynamic field drive diagnostic is zero");
+    check(contains(diagnostics.error_message, "zero"), "zero physical dynamic field drive warning names zero response");
+    check(rhs_real[0] == 0.0 && rhs_real[1] == 0.0, "zero physical dynamic field drive real RHS is zero");
+    check(rhs_imag[0] == 0.0 && rhs_imag[1] == 0.0, "zero physical dynamic field drive imag RHS is zero");
+}
+
+void dynamic_field_drive_projection_treats_missing_imaginary_buffers_as_zero()
+{
+    const double equilibrium[] = {0.0, 0.0, 1.0};
+    fd::TangentFrameNode node{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 1, &node, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "real-only physical drive projection frame build succeeds");
+
+    const double hx_re[] = {2.0};
+    const double hy_re[] = {3.0};
+    const double hz_re[] = {5.0};
+    double rhs_real[2]{};
+    double rhs_imag[] = {99.0, 99.0};
+
+    const fd::FrequencyDomainStatus status =
+        fd::project_dynamic_field_drive_to_tangent_rhs(
+            &node,
+            1,
+            4.0,
+            fd::FrequencyDomainPhaseConvention::exp_i_omega_t,
+            fd::DynamicFieldPhasorView{
+                hx_re,
+                hy_re,
+                hz_re,
+                nullptr,
+                nullptr,
+                nullptr,
+                1,
+            },
+            fd::TangentComplexVectorView{rhs_real, rhs_imag, 2},
+            nullptr);
+
+    check(status == fd::FrequencyDomainStatus::ok, "real-only physical dynamic field drive is accepted");
+    check(std::abs(rhs_real[0] - 12.0) < 1.0e-12, "real-only physical drive real e1");
+    check(std::abs(rhs_real[1] + 8.0) < 1.0e-12, "real-only physical drive real e2");
+    check(rhs_imag[0] == 0.0 && rhs_imag[1] == 0.0, "real-only physical drive missing imaginary buffers project as zero");
+}
+
 void excitation_rejects_zero_tangent_drive()
 {
     const double equilibrium[] = {0.0, 0.0, 1.0};
@@ -14613,6 +17867,14 @@ int main()
     periodic_airbox_reduced_response_uses_schur_residual_preconditioner_source_contract();
     frequency_solve_plan_names_solver_tree_lanes_without_runtime_side_effects();
     frequency_solve_planner_selects_first_real_backend_without_runtime_side_effects();
+    driven_response_diagnostics_publish_honest_krylov_residency();
+    gpu_device_krylov_api_names_device_resident_vectors_and_callbacks();
+    gpu_device_krylov_transfer_diagnostics_reject_per_iteration_readback();
+    fgmres_device_engine_requires_fused_aomega_device_operator_contract();
+    fgmres_device_engine_requires_callbacks_workspace_and_residency_contract();
+    fgmres_device_engine_requires_device_algebra_callbacks_for_orthogonalization_contract();
+    fgmres_device_engine_requires_bounded_residual_trend_contract();
+    fgmres_device_engine_requires_owned_device_workspace_contract();
     driven_response_gamma_floquet_boundary_maps_to_static_periodic_slice();
     driven_response_floquet_k_metadata_reports_projected_response_slice();
     driven_response_gamma_floquet_k_metadata_keeps_response_available();
@@ -14627,11 +17889,15 @@ int main()
     c_abi_frequency_domain_availability_rejects_unknown_study_kind();
     c_abi_frequency_domain_availability_rejects_unknown_phase_convention();
     c_abi_frequency_domain_abi_layout_reports_solver_option_offsets();
+    driven_response_drive_policy_names_comsol_physical_drive_and_benchmark_rhs();
     c_abi_rejects_null_arguments();
     c_abi_reports_frequency_domain_progress();
     c_abi_periodic_airbox_dynamic_demag_solves_matrix_free_coupled_block_provider();
     c_abi_floquet_airbox_dynamic_demag_gpu_accepts_complex_matrix_free_coupled_block();
     tangent_frame_builds_orthonormal_basis_and_projects_vectors();
+    tangent_frame_lifts_and_projects_complex_cartesian_delta_m();
+    dense_full_coupled_oracle_builds_explicit_schur_and_reconstructs_full_residual();
+    dense_full_coupled_oracle_handles_pinned_phi_gauge();
     tangent_frame_rejects_non_unit_equilibrium();
     tangent_operator_applies_local_blocks_and_reports_diagnostics();
     tangent_operator_rejects_unsupported_terms();
@@ -14673,12 +17939,20 @@ int main()
     driven_response_solver_boundary_validates_request_before_unavailable_solve();
     driven_response_solver_runs_tiny_diagonal_validation_problem();
     driven_response_solver_runs_tiny_dense_validation_problem();
+    driven_response_solver_rejects_zero_tangent_rhs_when_required();
+    driven_response_solver_allows_zero_physical_drive_as_zero_response();
     driven_response_solver_preserves_tiny_dense_solve_error_status();
+    cpu_sparse_direct_engine_matches_dense_tiny_and_reports_true_residual();
+    modal_response_diagonal_validation_matches_dense_direct();
+    modal_basis_policy_and_cache_key_cover_required_signatures();
+    modal_basis_completeness_certificate_gates_modal_response_use();
+    full_coupled_field_split_prototype_improves_residual_and_reuses_poisson_setup();
     production_cpu_matrix_free_solver_solves_diagonal_harmonic_response();
     production_cpu_matrix_free_solver_skips_zero_initial_residual_operator();
     production_cpu_matrix_free_solver_solves_complex_drive();
     production_cpu_matrix_free_solver_counts_complex_operator_path();
     production_cpu_matrix_free_solver_preserves_nonconvergence_diagnostics();
+    production_cpu_matrix_free_solver_stops_stagnated_run_at_256_iterations();
     production_cpu_matrix_free_solver_honors_absolute_tolerance();
     production_cpu_matrix_free_solver_uses_right_preconditioner();
     production_cpu_matrix_free_solver_auto_disables_harmful_right_preconditioner();
@@ -14686,6 +17960,8 @@ int main()
     production_cpu_matrix_free_solver_pilot_keeps_useful_right_preconditioner();
     production_cpu_matrix_free_solver_disables_harmful_fallback_preconditioner();
     production_cpu_matrix_free_solver_requires_recomputed_residual_for_convergence();
+    production_cpu_matrix_free_solver_restarts_after_unpreconditioned_residual_gap();
+    production_cpu_matrix_free_solver_flags_right_preconditioner_residual_inconsistency();
     production_cpu_lane_writes_failure_artifacts_for_nonconverged_gmres();
     production_cpu_matrix_free_solver_respects_temporal_phase_convention_sign();
     production_cpu_matrix_free_solver_rejects_invalid_phase_convention_sign();
@@ -14709,11 +17985,13 @@ int main()
     production_cpu_periodic_airbox_dynamic_demag_solves_mfem_demag_tangent_provider();
     production_cpu_periodic_airbox_dynamic_demag_can_force_demag_coarse_preconditioner();
     production_cpu_periodic_airbox_dynamic_demag_writes_phi_consistency_artifacts_without_exchange_graph();
+    production_cpu_periodic_airbox_dynamic_demag_reports_k0_delta_phi_seam_mismatch_residual();
     production_gpu_periodic_airbox_dynamic_demag_solves_mfem_demag_tangent_provider();
     production_cpu_periodic_airbox_phi_consistency_solve_error_writes_bounded_artifacts();
     production_gpu_periodic_airbox_dynamic_demag_rejects_explicit_coupled_block();
     production_cpu_periodic_airbox_dynamic_demag_applies_mean_zero_gauge_for_phi_nullspace();
     driven_response_solver_runs_assembled_mfem_validation_problem();
+    driven_response_solver_allows_zero_physical_drive_in_assembled_mfem_validation();
     driven_response_solver_runs_assembled_mfem_dmi_validation_problem();
     production_cpu_lane_runs_mfem_matrix_free_response_problem();
     production_gpu_lane_runs_mfem_no_demag_response_problem();
@@ -14796,7 +18074,17 @@ int main()
     mfem_driven_response_validation_assembles_linearized_operator_columns();
     equilibrium_state_reports_stationary_residuals();
     equilibrium_state_rejects_large_static_torque();
+    accepted_equilibrium_builds_linearization_state_with_tangent_diagnostics();
+    linearization_state_reports_v5_reject_reasons_and_signature_mismatches();
+    symmetric_mesh_certificate_accepts_bijective_periodic_pairs_and_rejects_duplicates();
+    symmetric_mesh_certificate_records_nonidentity_tangent_frame_transfer();
+    symmetric_mesh_certificate_rejects_m0_seam_mismatch();
+    symmetric_mesh_certificate_checks_static_demag_seam_and_gauge_policy();
+    symmetric_mesh_certificate_records_stable_pair_map_fingerprints_and_schema();
     excitation_projects_uniform_field_into_tangent_space();
+    dynamic_field_drive_projection_applies_llg_torque_sign();
+    dynamic_field_drive_projection_accepts_zero_physical_drive_with_warning();
+    dynamic_field_drive_projection_treats_missing_imaginary_buffers_as_zero();
     excitation_rejects_zero_tangent_drive();
     return 0;
 }

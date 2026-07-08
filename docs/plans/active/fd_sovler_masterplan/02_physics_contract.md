@@ -1,0 +1,198 @@
+---
+title: Frequency-driven solver - COMSOL-aligned physics contract
+version: COMSOL-aligned v5.0 full-read canonical
+date: 2026-07-07
+status: canonical
+source_policy: derived only after full read of all uploaded planning documents and the Micromagnetics Module User's Guide V2.13 PDF
+supersedes:
+  - fd_solver_plan_FULL_PACK_COMSOL_ALIGNED.md
+  - fd_solver_plan_FULL_PACK_COMSOL_ALIGNED_V3.md
+  - fd_solver_plan_00_index.md through fd_solver_plan_11_decision_closures_adr.md old copies
+---
+
+# COMSOL-aligned physics contract
+
+Every backend must solve the same physics.
+
+## 1. Canonical ansatz and equation
+
+```text
+m(r,t) = m0(r) + delta_m(r) exp(+i omega t)
+delta_m << m0
+m0 · delta_m = 0
+H_eff(r,t) = h_eff0(r) + delta_h_eff(r) exp(+i omega t)
+```
+
+Linearized LLG:
+
+```text
+i omega delta_m
+  = - gamma m0 x delta_h_eff
+    - gamma delta_m x h_eff0
+    + i omega alpha m0 x delta_m
+    + linearized torque terms
+```
+
+The canonical phase convention is:
+
+```text
+exp_plus_i_omega_t
+```
+
+## 2. Public and internal unknowns
+
+Public physical unknown:
+
+```text
+delta_m_i = (dmX_i, dmY_i, dmZ_i) in C^3
+m0_i · delta_m_i = 0
+```
+
+Internal tangent unknown:
+
+```text
+T_i = [e1_i, e2_i]
+q_i = (u_i, v_i) in C^2
+delta_m_i = T_i q_i
+```
+
+Public artifacts must expose Cartesian fields. Tangent `u/v` is provenance or internal debug data.
+
+## 3. Dynamic drive
+
+Default user drive is a dynamic external field phasor:
+
+```text
+delta_h in C^3, unit A/m
+```
+
+No user-supplied sinusoid belongs in the value. The solver attaches `exp(+i omega t)`.
+
+Canonical projection into RHS:
+
+```text
+b_cart = - gamma m0 x delta_h
+b_tangent = T^T b_cart
+```
+
+This sign follows from moving the external-drive term to the RHS of the canonical equation. It must be locked by macrospin and dense Cartesian sign tests.
+
+## 4. DriveKind
+
+```cpp
+enum class FrequencyDriveKind : std::uint32_t {
+    dynamic_field_phasor_a_per_m = 1,
+    tangent_rhs = 2,
+    cartesian_torque_phasor = 3,
+    stt_current_phasor = 4,
+    coupled_external_provider = 5,
+};
+```
+
+Rules:
+
+```text
+dynamic_field_phasor_a_per_m: public COMSOL-style drive.
+tangent_rhs: low-level solver/benchmark/debug input.
+cartesian_torque_phasor: physical torque-source input.
+stt_current_phasor: current/STT source.
+coupled_external_provider: source from another physics subsystem.
+```
+
+## 5. Zero-drive policy
+
+```text
+FrequencyResponse + physical drive_kind + zero drive:
+    valid zero response + warning.
+
+SolverBenchmark + tangent_rhs + require_nonzero_rhs=true:
+    validation_error.
+
+Eigenfrequency/modal:
+    no drive required.
+```
+
+## 6. Static linearization state
+
+Frequency-domain solve must use a consistent static state:
+
+```text
+|m0| = 1
+m0 x h_eff0 approximately 0
+```
+
+The equilibrium may be nonuniform and metastable. It still must carry diagnostics:
+
+```text
+max_m0_norm_error
+max_relative_torque_residual
+max_m0_cross_heff0_relative
+energy trend acceptance
+```
+
+## 7. Effective fields
+
+Static:
+
+```text
+h_eff0 = h_exchange0
+       + h_anisotropy0
+       + h_external0
+       + h_DMI0
+       + h_demag0
+       + h_custom0
+```
+
+Dynamic:
+
+```text
+delta_h_eff = delta_h_exchange[delta_m]
+            + delta_h_anisotropy[delta_m]
+            + delta_h_drive
+            + delta_h_DMI[delta_m]
+            + delta_h_demag[delta_m]
+            + delta_h_STT_equivalent[delta_m]
+            + delta_h_custom[delta_m]
+```
+
+Fields are in `A/m` unless a source explicitly declares otherwise with conversion provenance.
+
+## 8. Internal real split
+
+Allowed internal form:
+
+```text
+A(omega) = K - i omega M
+```
+
+Real split:
+
+```text
+[ K       +omega M ] [q_R] = [b_R]
+[ -omega M  K     ] [q_I]   [b_I]
+```
+
+This is not the physics definition. It is an implementation form that must pass phase, drive, damping and macrospin sign gates.
+
+## 9. DMI status
+
+```text
+DMI volume operator: production only after Cartesian/tangent tests.
+DMI frequency-domain boundary terms: experimental/unsupported unless separately certified.
+Only one DMI kind may be active at once.
+```
+
+## 10. Minimal result JSON
+
+```json
+{
+  "physics_contract": "micromagnetics_frequency_domain_v5",
+  "phasor_convention": "exp_plus_i_omega_t",
+  "unknown_physics_representation": "cartesian3_complex_constrained",
+  "unknown_internal_representation": "tangent2_complex",
+  "constraint": "m0_dot_delta_m_zero",
+  "drive_kind": "dynamic_field_phasor_a_per_m",
+  "effective_field_units": "A_per_m",
+  "time_reconstruction": "m(t)=m0+Re(delta_m*exp(+i*omega*t))"
+}
+```

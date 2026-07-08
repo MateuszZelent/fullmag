@@ -88,6 +88,12 @@ LinearizedFrequencyProblem
 - preconditioner backend,
 - validation and fallback policy.
 
+Public frequency-response authoring may request the preconditioner family
+explicitly through solver policy. Current runtime values are `auto`,
+`graph_demag_coarse`, `demag_coarse`, `block_jacobi`, and `none`. Selecting a
+preconditioner is a runtime policy choice; it does not certify Schur
+equivalence or residual contraction by itself.
+
 The driven-response solver tree is:
 
 | Engine | Role |
@@ -119,6 +125,9 @@ The full coupled residual is the reference residual for the reduced path.
 Schur-reduced execution is eligible only when tiny dense explicit Schur,
 matrix-free Schur action, reconstructed full residual, gauge/nullspace handling,
 and preconditioner-quality diagnostics agree within documented tolerances.
+For tiny dense certification, `A_phiphi` may either be directly invertible or
+use an explicit phi gauge such as pinning one potential DOF; silent inversion of
+a singular potential block is not a valid Schur certificate.
 
 The name `production_gpu` is not precise enough for solver architecture. Runtime
 and artifacts must distinguish `gpu_operator_host_krylov` from

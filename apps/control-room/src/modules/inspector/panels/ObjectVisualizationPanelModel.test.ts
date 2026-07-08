@@ -22,6 +22,7 @@ import {
   displayPassTogglePatch,
   fieldMetaScopeQueryForVisualizationTarget,
   formatScalarColorbarValueWithUnit,
+  formatScalarColorbarValueWithDisplayUnit,
   geometryScopeDisplayPatch,
   geometryScopeVectorBudgetPatch,
   quantitySourcePatch,
@@ -216,6 +217,18 @@ describe("ObjectVisualizationPanelModel", () => {
     expect(formatScalarColorbarValueWithUnit(2.5e-4, "J/m³")).toBe("0.00025 J/m³");
     expect(formatScalarColorbarValueWithUnit(0.25, "1")).toBe("0.25");
     expect(formatScalarColorbarValueWithUnit(0.25, "")).toBe("0.25");
+  });
+
+  it("formats A/m magnetic colorbar limits as equivalent tesla values on request", () => {
+    expect(
+      formatScalarColorbarValueWithDisplayUnit(1_000_000, "A/m", "T"),
+    ).toBe("1.257 T");
+    expect(
+      formatScalarColorbarValueWithDisplayUnit(1_000_000, "A/m", "A/m"),
+    ).toBe("1000000 A/m");
+    expect(
+      formatScalarColorbarValueWithDisplayUnit(0.25, "1", "T"),
+    ).toBe("0.25");
   });
 
   it("shows inspector colorbars only for numeric surface color modes", () => {

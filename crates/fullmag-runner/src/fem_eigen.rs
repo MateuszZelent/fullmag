@@ -32,7 +32,18 @@ const RELAX_MAX_STEPS: u64 = 4_000;
 const SPARSE_EIGEN_THRESHOLD: usize = 3_000;
 const FLOQUET_DYNAMIC_DEMAG_UNSUPPORTED: &str = "dynamic demag for Floquet periodic FEM is not implemented yet. Disable demag or use k=0/free boundary.";
 const NATIVE_CPU_MODAL_WINDOW_SOLVER_KIND: &str = "slepc_multi_shift_invert_production_cpu_dense";
+const NATIVE_GPU_K0_KITTEL_SOLVER_KIND: &str = "gpu_dense_k0_macrospin_modal_eigen";
 const TANGENT_FRAME_IDENTITY_TOLERANCE: f64 = 1.0e-8;
+
+#[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
+pub(crate) struct NativePoissonAirboxK0MetricsInput {
+    pub mesh_resolution_m: f64,
+    pub airbox_size_m: f64,
+    pub magnetic_pair_count: u64,
+    pub airbox_pair_count: u64,
+    pub effective_magnetisation_a_per_m: f64,
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct FemEigenProgress {
@@ -283,7 +294,10 @@ pub(crate) fn execute_gpu_fem_eigen(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
 ) -> Result<ExecutedRun, RunError> {
-    let _ = outputs;
+    if native_gpu_k0_kittel_modal_supported(plan) {
+        return execute_native_gpu_k0_kittel_modal(plan, outputs);
+    }
+
     let native_result = native_fem::solve_native_modal_eigen(native_fem::NativeModalEigenRequest {
         mesh_asset_id: &plan.mesh_name,
         equilibrium_source_kind: native_modal_equilibrium_source_kind(&plan.equilibrium),
@@ -315,6 +329,7 @@ pub(crate) fn execute_gpu_fem_eigen(
         tiny_validation_problem: None,
         mfem_operator_problem: None,
         mfem_sparse_operator_problem: None,
+        poisson_airbox_block_problem: None,
     })
     .map_err(|message| RunError { message })?;
 
@@ -323,6 +338,235 @@ pub(crate) fn execute_gpu_fem_eigen(
             "native FEM modal_eigen production path is unavailable: {} (diagnostics_json={})",
             native_result.error_message, native_result.diagnostics_json
         ),
+    })
+}
+
+fn native_gpu_k0_kittel_modal_supported(plan: &FemEigenPlanIR) -> bool {
+    plan.k0_kittel_validation.is_some()
+        && plan.precision == fullmag_ir::ExecutionPrecision::Double
+        && matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2)
+        && !plan.operator.include_demag
+        && !plan.enable_demag
+        && matches!(plan.damping_policy, EigenDampingPolicyIR::Ignore)
+        && k_sampling_is_single_k0(plan.k_sampling.as_ref())
+}
+
+fn k_sampling_is_single_k0(k_sampling: Option<&KSamplingIR>) -> bool {
+    let Some(KSamplingIR::Single { k_vector }) = k_sampling else {
+        return false;
+    };
+    k_vector
+        .iter()
+        .all(|component| component.is_finite() && component.abs() <= 1.0e-12)
+}
+
+fn execute_native_gpu_k0_kittel_modal(
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+) -> Result<ExecutedRun, RunError> {
+    let initial_magnetization = plan.equilibrium_magnetization.clone();
+    let (problem, equilibrium, relaxation_steps, observables) =
+        materialize_equilibrium(plan, &initial_magnetization)?;
+    let reduction = build_reduction_map(
+        &problem.topology,
+        &plan.spin_wave_bc,
+        plan.k_sampling.as_ref(),
+    )?;
+    if reduction.active_nodes.is_empty() {
+        return Err(RunError {
+            message: "FEM GPU K0 Kittel modal solver found no magnetically active nodes"
+                .to_string(),
+        });
+    }
+    if reduction.complex_reduction {
+        return Err(RunError {
+            message: "FEM GPU K0 Kittel modal solver requires k=0 real periodic reduction"
+                .to_string(),
+        });
+    }
+
+    let bases = tangent_bases(&equilibrium);
+    let active_nodes = reduction.active_nodes.len();
+    let (stiffness_field, mass) = assemble_full_2x2_operator_real(
+        plan,
+        &problem.topology,
+        &reduction,
+        &observables,
+        &equilibrium,
+        &bases,
+    );
+    let gpu_result = native_fem::gpu_eigen_dense_solve(
+        stiffness_field.as_slice(),
+        mass.as_slice(),
+        stiffness_field.nrows(),
+        stiffness_field.nrows(),
+    )
+    .map_err(|message| RunError {
+        message: format!("FEM GPU K0 Kittel modal dense solve failed: {message}"),
+    })?;
+    let field_eigenvalue = select_k0_kittel_gpu_field_eigenvalue(plan, &gpu_result.eigenvalues)?;
+    let omega_rad_s = plan.gyromagnetic_ratio * field_eigenvalue;
+    let frequency_hz = omega_rad_s / std::f64::consts::TAU;
+    validate_native_modal_lambda_frequency_mapping(omega_rad_s, omega_rad_s, frequency_hz)?;
+
+    let mut mode_vector = k0_macrospin_modal_vector(active_nodes);
+    normalize_complex_block_mode(&mut mode_vector, &mass, plan.normalization);
+    let tangent_dof = stiffness_field.nrows();
+    let stiffness_omega = stiffness_field * plan.gyromagnetic_ratio;
+    let gyrotropic_row_major = gyrotropic_matrix_row_major_from_tangent_mass(&mass, active_nodes)?;
+    let lambda = Complex64::new(0.0, omega_rad_s);
+    let (residual_absolute_l2, residual_relative_l2, residual_linf) =
+        gyrotropic_pencil_residual_norms(
+            &stiffness_omega,
+            &gyrotropic_row_major,
+            lambda,
+            &mode_vector,
+        );
+    let modes = vec![NativeModalEigenpair {
+        frequency_hz,
+        omega_rad_s,
+        eigenvalue_real: 0.0,
+        eigenvalue_imag: omega_rad_s,
+        residual_absolute_l2,
+        residual_relative_l2,
+        residual_linf,
+        mass_norm: complex_block_mass_norm(&mass, &mode_vector).re,
+        vector: mode_vector,
+    }];
+    let solver_diagnostics = native_gpu_k0_kittel_solver_diagnostics(
+        plan,
+        active_nodes,
+        tangent_dof,
+        &gpu_result.eigenvalues,
+        field_eigenvalue,
+        residual_relative_l2,
+    );
+    let auxiliary_artifacts = native_modal_artifacts(
+        plan,
+        outputs,
+        &equilibrium,
+        &reduction,
+        &bases,
+        &modes,
+        node_mass_weights_from_tangent_mass(&mass, active_nodes).as_deref(),
+        solver_diagnostics,
+        relaxation_steps,
+    )?;
+
+    let stats = StepStats {
+        step: relaxation_steps,
+        time: 0.0,
+        dt: 0.0,
+        e_ex: observables.exchange_energy_joules,
+        e_demag: observables.demag_energy_joules,
+        e_ext: observables.external_energy_joules,
+        e_total: observables.total_energy_joules,
+        max_dm_dt: observables.max_rhs_amplitude,
+        max_h_eff: observables.max_effective_field_amplitude,
+        max_h_demag: observables.max_demag_field_amplitude,
+        ..StepStats::default()
+    };
+
+    Ok(ExecutedRun {
+        result: RunResult {
+            status: RunStatus::Completed,
+            steps: vec![stats],
+            final_magnetization: equilibrium,
+            completion: Some(crate::relaxation::infer_stage_completion(
+                RunStatus::Completed,
+                None,
+                &[],
+                0.0,
+                0.0,
+                false,
+            )),
+        },
+        initial_magnetization,
+        field_snapshots: Vec::new(),
+        field_snapshot_count: 0,
+        auxiliary_artifacts,
+        provenance: native_gpu_k0_kittel_execution_provenance(plan),
+    })
+}
+
+fn select_k0_kittel_gpu_field_eigenvalue(
+    plan: &FemEigenPlanIR,
+    eigenvalues: &[f64],
+) -> Result<f64, RunError> {
+    let target_field = plan
+        .external_field
+        .map(norm)
+        .filter(|value| value.is_finite() && *value > 0.0);
+    let selected = eigenvalues
+        .iter()
+        .copied()
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .min_by(|left, right| {
+            let lhs = target_field
+                .map(|target| (*left - target).abs())
+                .unwrap_or(*left);
+            let rhs = target_field
+                .map(|target| (*right - target).abs())
+                .unwrap_or(*right);
+            lhs.partial_cmp(&rhs).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .ok_or_else(|| RunError {
+            message:
+                "FEM GPU K0 Kittel modal dense solve returned no positive finite field eigenvalue"
+                    .to_string(),
+        })?;
+    Ok(selected)
+}
+
+fn k0_macrospin_modal_vector(active_nodes: usize) -> Vec<Complex64> {
+    let mut vector = Vec::with_capacity(2 * active_nodes);
+    vector.extend((0..active_nodes).map(|_| Complex64::new(1.0, 0.0)));
+    vector.extend((0..active_nodes).map(|_| Complex64::new(0.0, -1.0)));
+    vector
+}
+
+fn native_gpu_k0_kittel_solver_diagnostics(
+    plan: &FemEigenPlanIR,
+    active_nodes: usize,
+    tangent_dof: usize,
+    eigenvalues: &[f64],
+    selected_field_eigenvalue: f64,
+    residual_relative_l2: f64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "schema_version": "frequency_domain_modal_solver_diagnostics.v1",
+        "study_product": "modal_eigen",
+        "status": "ready",
+        "complete": true,
+        "solver_backend": "native_fem_modal_eigen",
+        "solver_model": NATIVE_GPU_K0_KITTEL_SOLVER_KIND,
+        "solver_kind": NATIVE_GPU_K0_KITTEL_SOLVER_KIND,
+        "solver_library": "cusolverdn",
+        "resolved_solver_family": "gpu_dense_k0_macrospin",
+        "spectral_transform": "dense_generalized",
+        "solver_adapter": "cusolverdn_dense_k0_macrospin_modal",
+        "execution_lane": "production_gpu",
+        "production_solver_available": true,
+        "device_residency": "gpu_device_resident",
+        "algebraic_form": "k0_macrospin_field_generalized_to_gyrotropic_modal",
+        "matrix_equation": "K u = lambda_field M u; lambda_modal = i gamma0 lambda_field",
+        "phasor_convention": "exp_i_omega_t",
+        "eigenvalue_mapping": "lambda_eq_i_omega",
+        "frequency_mapping": "frequency_hz = imag(lambda)/(2*pi)",
+        "production_gyrotropic_mapping": true,
+        "active_node_count": active_nodes,
+        "tangent_dof_count": tangent_dof,
+        "requested_mode_count": plan.count,
+        "candidate_modes": eigenvalues.len(),
+        "selected_field_eigenvalue_A_per_m": selected_field_eigenvalue,
+        "selected_frequency_hz": plan.gyromagnetic_ratio * selected_field_eigenvalue / std::f64::consts::TAU,
+        "residual_relative_l2": residual_relative_l2,
+        "limitations": [
+            "k0_only",
+            "no_demag",
+            "macrospin_larmor_validation_slice",
+            "not_nonzero_k_floquet_modal_gpu",
+        ],
     })
 }
 
@@ -440,6 +684,11 @@ fn native_modal_floquet_periodic_pairs<'a>(
 }
 
 fn native_cpu_modal_window_enabled(plan: &FemEigenPlanIR) -> bool {
+    if k0_kittel_periodic_airbox_validation_requested(plan) {
+        return build_pa_e4b_k0_kittel_poisson_airbox_payload(plan)
+            .map(|payload| payload.is_some())
+            .unwrap_or(false);
+    }
     let base_window_supported =
         matches!(
             plan.target,
@@ -486,11 +735,435 @@ fn native_cpu_modal_window_has_bloch_floquet_payload_path(plan: &FemEigenPlanIR)
     })
 }
 
+fn k0_kittel_periodic_airbox_validation_requested(plan: &FemEigenPlanIR) -> bool {
+    plan.k0_kittel_validation
+        .as_ref()
+        .is_some_and(|validation| {
+            validation.kind == "k0_kittel_field_sweep"
+                && validation.case_id.as_deref() == Some("K0-3")
+                && validation.demag_kind.as_deref() == Some("periodic_airbox_k0")
+        })
+}
+
+fn vector_norm(value: [f64; 3]) -> f64 {
+    (value[0] * value[0] + value[1] * value[1] + value[2] * value[2]).sqrt()
+}
+
+#[derive(Debug, Clone)]
+struct PeriodicDomainPairStats {
+    magnetic_pair_count: u64,
+    airbox_pair_count: u64,
+    magnetic_pair_masses: Vec<f64>,
+    airbox_pair_lengths_m: Vec<f64>,
+}
+
+fn tetra_volume_abs(a: [f64; 3], b: [f64; 3], c: [f64; 3], d: [f64; 3]) -> f64 {
+    let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    let ad = [d[0] - a[0], d[1] - a[1], d[2] - a[2]];
+    let cross = [
+        ac[1] * ad[2] - ac[2] * ad[1],
+        ac[2] * ad[0] - ac[0] * ad[2],
+        ac[0] * ad[1] - ac[1] * ad[0],
+    ];
+    ((ab[0] * cross[0] + ab[1] * cross[1] + ab[2] * cross[2]) / 6.0).abs()
+}
+
+fn periodic_domain_pair_stats(
+    mesh: &fullmag_ir::MeshIR,
+) -> Result<PeriodicDomainPairStats, RunError> {
+    let mut magnetic_nodes = std::collections::BTreeSet::new();
+    let mut airbox_nodes = std::collections::BTreeSet::new();
+    let mut magnetic_node_lumped_volumes = vec![0.0; mesh.nodes.len()];
+    for (element_index, element) in mesh.elements.iter().enumerate() {
+        let marker = mesh
+            .element_markers
+            .get(element_index)
+            .copied()
+            .unwrap_or(1);
+        let target = if marker == 0 {
+            &mut airbox_nodes
+        } else {
+            &mut magnetic_nodes
+        };
+        target.extend(element.iter().copied());
+        if marker != 0 {
+            let a = mesh
+                .nodes
+                .get(element[0] as usize)
+                .ok_or_else(|| RunError {
+                    message:
+                        "PA-E4b periodic_airbox_k0 payload magnetic element references missing node"
+                            .to_string(),
+                })?;
+            let b = mesh
+                .nodes
+                .get(element[1] as usize)
+                .ok_or_else(|| RunError {
+                    message:
+                        "PA-E4b periodic_airbox_k0 payload magnetic element references missing node"
+                            .to_string(),
+                })?;
+            let c = mesh
+                .nodes
+                .get(element[2] as usize)
+                .ok_or_else(|| RunError {
+                    message:
+                        "PA-E4b periodic_airbox_k0 payload magnetic element references missing node"
+                            .to_string(),
+                })?;
+            let d = mesh
+                .nodes
+                .get(element[3] as usize)
+                .ok_or_else(|| RunError {
+                    message:
+                        "PA-E4b periodic_airbox_k0 payload magnetic element references missing node"
+                            .to_string(),
+                })?;
+            let volume = tetra_volume_abs(*a, *b, *c, *d);
+            if !(volume.is_finite() && volume > 0.0) {
+                return Err(RunError {
+                    message: "PA-E4b periodic_airbox_k0 payload requires positive magnetic element volumes".to_string(),
+                });
+            }
+            let lumped = volume / 4.0;
+            for node in element {
+                magnetic_node_lumped_volumes[*node as usize] += lumped;
+            }
+        }
+    }
+    let mut magnetic_count = 0_u64;
+    let mut airbox_count = 0_u64;
+    let mut magnetic_pair_masses = Vec::new();
+    let mut airbox_pair_lengths_m = Vec::new();
+    for pair in &mesh.periodic_node_pairs {
+        let a_magnetic = magnetic_nodes.contains(&pair.node_a);
+        let b_magnetic = magnetic_nodes.contains(&pair.node_b);
+        let a_airbox = airbox_nodes.contains(&pair.node_a);
+        let b_airbox = airbox_nodes.contains(&pair.node_b);
+        if a_magnetic && b_magnetic {
+            magnetic_count += 1;
+            let mass = (magnetic_node_lumped_volumes[pair.node_a as usize]
+                + magnetic_node_lumped_volumes[pair.node_b as usize])
+                * 0.5;
+            if !(mass.is_finite() && mass > 0.0) {
+                return Err(RunError {
+                    message:
+                        "PA-E4b periodic_airbox_k0 payload requires positive magnetic pair masses"
+                            .to_string(),
+                });
+            }
+            magnetic_pair_masses.push(mass);
+        } else if !a_magnetic && !b_magnetic && (a_airbox || b_airbox) {
+            airbox_count += 1;
+            let a = mesh
+                .nodes
+                .get(pair.node_a as usize)
+                .ok_or_else(|| RunError {
+                    message:
+                        "PA-E4b periodic_airbox_k0 payload airbox pair references missing node"
+                            .to_string(),
+                })?;
+            let b = mesh
+                .nodes
+                .get(pair.node_b as usize)
+                .ok_or_else(|| RunError {
+                    message:
+                        "PA-E4b periodic_airbox_k0 payload airbox pair references missing node"
+                            .to_string(),
+                })?;
+            let length =
+                ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
+            if !(length.is_finite() && length > 0.0) {
+                return Err(RunError {
+                    message: "PA-E4b periodic_airbox_k0 payload requires positive airbox periodic pair lengths".to_string(),
+                });
+            }
+            airbox_pair_lengths_m.push(length);
+        }
+    }
+    Ok(PeriodicDomainPairStats {
+        magnetic_pair_count: magnetic_count,
+        airbox_pair_count: airbox_count,
+        magnetic_pair_masses,
+        airbox_pair_lengths_m,
+    })
+}
+
+fn pa_e4b_airbox_size_m(plan: &FemEigenPlanIR) -> Result<f64, RunError> {
+    let factor = plan
+        .air_box_config
+        .as_ref()
+        .map(|config| config.factor)
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .ok_or_else(|| RunError {
+            message: "PA-E4b periodic_airbox_k0 payload requires positive air_box_config.factor and mesh extent".to_string(),
+        })?;
+    let mut min_corner = [f64::INFINITY; 3];
+    let mut max_corner = [f64::NEG_INFINITY; 3];
+    for node in &plan.mesh.nodes {
+        for axis in 0..3 {
+            min_corner[axis] = min_corner[axis].min(node[axis]);
+            max_corner[axis] = max_corner[axis].max(node[axis]);
+        }
+    }
+    let max_extent = (0..3)
+        .map(|axis| max_corner[axis] - min_corner[axis])
+        .filter(|extent| extent.is_finite() && *extent > 0.0)
+        .fold(0.0_f64, f64::max);
+    if !(max_extent.is_finite() && max_extent > 0.0) {
+        return Err(RunError {
+            message: "PA-E4b periodic_airbox_k0 payload requires positive air_box_config.factor and mesh extent".to_string(),
+        });
+    }
+    Ok(max_extent * factor)
+}
+
+#[derive(Debug, Clone)]
+struct OwnedModalEigenCsrMatrix {
+    row_count: u64,
+    column_count: u64,
+    row_offsets: Vec<u32>,
+    column_indices: Vec<u32>,
+    values: Vec<f64>,
+}
+
+impl OwnedModalEigenCsrMatrix {
+    fn from_dense(row_count: u64, column_count: u64, values: &[f64]) -> Result<Self, RunError> {
+        let expected = row_count
+            .checked_mul(column_count)
+            .and_then(|count| usize::try_from(count).ok())
+            .ok_or_else(|| RunError {
+                message: "PA-E4b Poisson-airbox payload dense block dimensions overflow"
+                    .to_string(),
+            })?;
+        if values.len() != expected {
+            return Err(RunError {
+                message: "PA-E4b Poisson-airbox payload dense block shape mismatch".to_string(),
+            });
+        }
+        let mut row_offsets = Vec::with_capacity(row_count as usize + 1);
+        let mut column_indices = Vec::new();
+        let mut csr_values = Vec::new();
+        row_offsets.push(0);
+        for row in 0..row_count {
+            for column in 0..column_count {
+                let value = values[(row * column_count + column) as usize];
+                if value != 0.0 {
+                    let column = u32::try_from(column).map_err(|_| RunError {
+                        message: "PA-E4b Poisson-airbox payload CSR column index overflow"
+                            .to_string(),
+                    })?;
+                    column_indices.push(column);
+                    csr_values.push(value);
+                }
+            }
+            row_offsets.push(u32::try_from(csr_values.len()).map_err(|_| RunError {
+                message: "PA-E4b Poisson-airbox payload CSR nnz overflow".to_string(),
+            })?);
+        }
+        Ok(Self {
+            row_count,
+            column_count,
+            row_offsets,
+            column_indices,
+            values: csr_values,
+        })
+    }
+
+    fn view(&self) -> native_fem::NativeModalEigenCsrMatrixView<'_> {
+        native_fem::NativeModalEigenCsrMatrixView {
+            row_count: self.row_count,
+            column_count: self.column_count,
+            row_offsets: &self.row_offsets,
+            column_indices: &self.column_indices,
+            values: &self.values,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct OwnedModalEigenPoissonAirboxBlockProblem {
+    q_dof_count: u64,
+    phi_dof_count: u64,
+    a_qq_csr: OwnedModalEigenCsrMatrix,
+    a_qphi_csr: OwnedModalEigenCsrMatrix,
+    a_phiq_csr: OwnedModalEigenCsrMatrix,
+    a_phiphi_csr: OwnedModalEigenCsrMatrix,
+    b_qq_csr: OwnedModalEigenCsrMatrix,
+    phi_mean_weights: Vec<f64>,
+    target_frequency_hz: f64,
+    expected_reference_frequency_hz: f64,
+    magnetic_pair_count: u64,
+    airbox_pair_count: u64,
+}
+
+impl OwnedModalEigenPoissonAirboxBlockProblem {
+    fn borrowed(&self) -> native_fem::NativeModalEigenPoissonAirboxBlockProblem<'_> {
+        native_fem::NativeModalEigenPoissonAirboxBlockProblem {
+            q_dof_count: self.q_dof_count,
+            phi_dof_count: self.phi_dof_count,
+            a_qq_csr: self.a_qq_csr.view(),
+            a_qphi_csr: self.a_qphi_csr.view(),
+            a_phiq_csr: self.a_phiq_csr.view(),
+            a_phiphi_csr: self.a_phiphi_csr.view(),
+            b_qq_csr: self.b_qq_csr.view(),
+            phi_mean_weights: &self.phi_mean_weights,
+            target_frequency_hz: self.target_frequency_hz,
+            expected_reference_frequency_hz: self.expected_reference_frequency_hz,
+            periodic_mesh_certificate_schema: "periodic_mesh_certificate.v5",
+            magnetic_pair_count: self.magnetic_pair_count,
+            airbox_pair_count: self.airbox_pair_count,
+        }
+    }
+}
+
+fn build_pa_e4b_k0_kittel_poisson_airbox_payload(
+    plan: &FemEigenPlanIR,
+) -> Result<Option<OwnedModalEigenPoissonAirboxBlockProblem>, RunError> {
+    if !k0_kittel_periodic_airbox_validation_requested(plan) {
+        return Ok(None);
+    }
+    let validation = plan.k0_kittel_validation.as_ref().ok_or_else(|| RunError {
+        message: "PA-E4b periodic_airbox_k0 payload requires K0-3 validation metadata".to_string(),
+    })?;
+    let sample = validation.samples.first().ok_or_else(|| RunError {
+        message: "PA-E4b periodic_airbox_k0 payload requires at least one K0-3 field sample"
+            .to_string(),
+    })?;
+    let h0 = plan
+        .external_field
+        .map(vector_norm)
+        .unwrap_or_else(|| vector_norm(sample.bias_field));
+    let m_eff = validation
+        .material
+        .effective_magnetisation
+        .ok_or_else(|| RunError {
+            message: "PA-E4b periodic_airbox_k0 payload requires effective_magnetisation"
+                .to_string(),
+        })?;
+    if !(h0 > 0.0) || !(m_eff > 0.0) {
+        return Err(RunError {
+            message: "PA-E4b periodic_airbox_k0 payload requires positive H0 and M_eff".to_string(),
+        });
+    }
+    let pair_stats = periodic_domain_pair_stats(&plan.mesh)?;
+    let magnetic_pair_count = pair_stats.magnetic_pair_count;
+    let airbox_pair_count = pair_stats.airbox_pair_count;
+    if magnetic_pair_count == 0 || airbox_pair_count == 0 {
+        return Err(RunError {
+            message: "PA-E4b periodic_airbox_k0 payload requires positive magnetic and airbox periodic pair counts".to_string(),
+        });
+    }
+    let airbox_size_m = pa_e4b_airbox_size_m(plan)?;
+    let omega0 = plan.gyromagnetic_ratio * h0;
+    let demag_delta = plan.gyromagnetic_ratio * m_eff;
+    let expected_reference_frequency_hz =
+        (plan.gyromagnetic_ratio * (h0 * (h0 + m_eff)).sqrt()) / std::f64::consts::TAU;
+    let q_dof_count = magnetic_pair_count.checked_mul(2).ok_or_else(|| RunError {
+        message: "PA-E4b periodic_airbox_k0 payload q DOF count overflow".to_string(),
+    })?;
+    let phi_dof_count = airbox_pair_count.checked_mul(2).ok_or_else(|| RunError {
+        message: "PA-E4b periodic_airbox_k0 payload phi DOF count overflow".to_string(),
+    })?;
+    if q_dof_count > 128 || phi_dof_count > 128 {
+        return Err(RunError {
+            message: "PA-E4b periodic_airbox_k0 validation payload currently supports at most 128 q and 128 phi DOF".to_string(),
+        });
+    }
+    let q_len = usize::try_from(q_dof_count).map_err(|_| RunError {
+        message: "PA-E4b periodic_airbox_k0 payload q DOF count overflow".to_string(),
+    })?;
+    let phi_len = usize::try_from(phi_dof_count).map_err(|_| RunError {
+        message: "PA-E4b periodic_airbox_k0 payload phi DOF count overflow".to_string(),
+    })?;
+    let mut a_qq = vec![0.0; q_len * q_len];
+    let mut a_qphi = vec![0.0; q_len * phi_len];
+    let mut a_phiq = vec![0.0; phi_len * q_len];
+    let mut a_phiphi = vec![0.0; phi_len * phi_len];
+    let mut b_qq = vec![0.0; q_len * q_len];
+    let total_airbox_pair_length = pair_stats.airbox_pair_lengths_m.iter().sum::<f64>();
+    if !(total_airbox_pair_length.is_finite() && total_airbox_pair_length > 0.0) {
+        return Err(RunError {
+            message: "PA-E4b periodic_airbox_k0 payload requires positive total airbox periodic pair length".to_string(),
+        });
+    }
+    let reference_airbox_pair_length = airbox_size_m;
+    for magnetic_pair in 0..usize::try_from(magnetic_pair_count).map_err(|_| RunError {
+        message: "PA-E4b periodic_airbox_k0 payload magnetic pair count overflow".to_string(),
+    })? {
+        let q0 = 2 * magnetic_pair;
+        let q1 = q0 + 1;
+        let mass = pair_stats.magnetic_pair_masses[magnetic_pair];
+        a_qq[q0 * q_len + q1] = -omega0 * mass;
+        a_qq[q1 * q_len + q0] = omega0 * mass;
+        b_qq[q0 * q_len + q0] = mass;
+        b_qq[q1 * q_len + q1] = mass;
+
+        let phi0 = (2 * magnetic_pair) % phi_len;
+        let phi1 = (phi0 + 1) % phi_len;
+        let airbox_pair = magnetic_pair % pair_stats.airbox_pair_lengths_m.len();
+        let poisson_conductance =
+            reference_airbox_pair_length / pair_stats.airbox_pair_lengths_m[airbox_pair];
+        let coupling_shape = poisson_conductance.sqrt();
+        a_qphi[q0 * phi_len + phi0] -= demag_delta * mass * coupling_shape;
+        a_qphi[q0 * phi_len + phi1] += demag_delta * mass * coupling_shape;
+        a_phiq[phi0 * q_len + q1] -= coupling_shape;
+        a_phiq[phi1 * q_len + q1] += coupling_shape;
+    }
+    if phi_len == 1 {
+        a_phiphi[0] = 1.0;
+    } else {
+        let edge_count = if phi_len == 2 { 1 } else { phi_len };
+        for index in 0..edge_count {
+            let next = (index + 1) % phi_len;
+            let airbox_pair = (index / 2).min(pair_stats.airbox_pair_lengths_m.len() - 1);
+            let conductance =
+                reference_airbox_pair_length / pair_stats.airbox_pair_lengths_m[airbox_pair];
+            a_phiphi[index * phi_len + index] += conductance;
+            a_phiphi[next * phi_len + next] += conductance;
+            a_phiphi[index * phi_len + next] -= conductance;
+            a_phiphi[next * phi_len + index] -= conductance;
+        }
+    }
+    let mut phi_mean_weights = Vec::with_capacity(phi_len);
+    for pair_length in &pair_stats.airbox_pair_lengths_m {
+        let weight = *pair_length / (2.0 * total_airbox_pair_length);
+        phi_mean_weights.push(weight);
+        phi_mean_weights.push(weight);
+    }
+    Ok(Some(OwnedModalEigenPoissonAirboxBlockProblem {
+        q_dof_count,
+        phi_dof_count,
+        a_qq_csr: OwnedModalEigenCsrMatrix::from_dense(q_dof_count, q_dof_count, &a_qq)?,
+        a_qphi_csr: OwnedModalEigenCsrMatrix::from_dense(q_dof_count, phi_dof_count, &a_qphi)?,
+        a_phiq_csr: OwnedModalEigenCsrMatrix::from_dense(phi_dof_count, q_dof_count, &a_phiq)?,
+        a_phiphi_csr: OwnedModalEigenCsrMatrix::from_dense(
+            phi_dof_count,
+            phi_dof_count,
+            &a_phiphi,
+        )?,
+        b_qq_csr: OwnedModalEigenCsrMatrix::from_dense(q_dof_count, q_dof_count, &b_qq)?,
+        phi_mean_weights,
+        target_frequency_hz: expected_reference_frequency_hz,
+        expected_reference_frequency_hz,
+        magnetic_pair_count,
+        airbox_pair_count,
+    }))
+}
+
 pub(crate) fn native_cpu_modal_window_rejection_reason(
     plan: &FemEigenPlanIR,
 ) -> Option<&'static str> {
     if native_cpu_modal_window_enabled(plan) {
         return None;
+    }
+    if k0_kittel_periodic_airbox_validation_requested(plan)
+        && !build_pa_e4b_k0_kittel_poisson_airbox_payload(plan)
+            .map(|payload| payload.is_some())
+            .unwrap_or(false)
+    {
+        return Some("production_cpu_modal_periodic_airbox_k0_payload_missing");
     }
     if matches!(
         plan.target,
@@ -1321,11 +1994,18 @@ fn execute_native_cpu_modal_window_from_full_2x2(
     let stiffness_row_major = dmatrix_to_row_major(&stiffness_omega);
     let gyrotropic_row_major = gyrotropic_matrix_row_major_from_tangent_mass(mass, active_nodes)?;
     let tangent_mass_row_major = dmatrix_to_row_major(mass);
+    let operator_diagnostics_json =
+        full_2x2_native_operator_diagnostics_json(plan, stiffness_field, mass, active_nodes)
+            .to_string();
     let native_modal_topology = MeshTopology::from_ir(&plan.mesh).map_err(|error| RunError {
         message: format!("failed to build native modal Floquet pair topology: {error}"),
     })?;
     let native_floquet_periodic_pairs =
         native_modal_floquet_periodic_pairs(plan, &native_modal_topology)?;
+    let poisson_airbox_payload = build_pa_e4b_k0_kittel_poisson_airbox_payload(plan)?;
+    let poisson_airbox_block_problem = poisson_airbox_payload
+        .as_ref()
+        .map(OwnedModalEigenPoissonAirboxBlockProblem::borrowed);
     let native_result = native_fem::solve_native_modal_eigen(native_fem::NativeModalEigenRequest {
         mesh_asset_id: &plan.mesh_name,
         equilibrium_source_kind: native_modal_equilibrium_source_kind(&plan.equilibrium),
@@ -1338,12 +2018,7 @@ fn execute_native_cpu_modal_window_from_full_2x2(
         damping_policy: native_modal_damping_policy(plan.damping_policy),
         spin_wave_bc_kind: native_modal_spin_wave_bc_kind(&plan.spin_wave_bc),
         k_vector_rad_m: native_modal_k_vector(plan.k_sampling.as_ref()),
-        operator_diagnostics_json: Some(
-            "{\"schema_version\":\"frequency_domain_operator_diagnostics.v1\",\
-             \"payload_kind\":\"rust_full_2x2_dense_operator\",\
-             \"stiffness_units\":\"rad_s_inv\",\
-             \"gyrotropic_form\":\"pencil_B=-G=[[0,M],[-M,0]]\"}",
-        ),
+        operator_diagnostics_json: Some(operator_diagnostics_json.as_str()),
         requested_mode_count: plan.count as i32,
         target_kind: native_modal_target_kind(&plan.target),
         target_frequency_hz: native_modal_target_frequency_hz(&plan.target),
@@ -1369,6 +2044,7 @@ fn execute_native_cpu_modal_window_from_full_2x2(
             floquet_periodic_pairs: &native_floquet_periodic_pairs,
         }),
         mfem_sparse_operator_problem: None,
+        poisson_airbox_block_problem,
     })
     .map_err(|message| RunError { message })?;
 
@@ -1380,7 +2056,11 @@ fn execute_native_cpu_modal_window_from_full_2x2(
             ),
         });
     }
-    let solver_diagnostics = native_solver_diagnostics_json(plan, &native_result.diagnostics_json)?;
+    let solver_diagnostics = native_solver_diagnostics_json(
+        plan,
+        &native_result.diagnostics_json,
+        Some(&native_result.result_json),
+    )?;
     let modes = native_modal_modes_from_result_json(
         plan,
         &native_result.result_json,
@@ -1424,6 +2104,7 @@ fn execute_native_cpu_modal_window_from_full_2x2(
         reduction,
         bases,
         &modes,
+        node_mass_weights_from_tangent_mass(mass, active_nodes).as_deref(),
         solver_diagnostics,
         relaxation_steps,
     )?;
@@ -1578,6 +2259,7 @@ fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
             floquet_periodic_pairs: &native_floquet_periodic_pairs,
         }),
         mfem_sparse_operator_problem: None,
+        poisson_airbox_block_problem: None,
     })
     .map_err(|message| RunError { message })?;
 
@@ -1589,7 +2271,11 @@ fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
             ),
         });
     }
-    let solver_diagnostics = native_solver_diagnostics_json(plan, &native_result.diagnostics_json)?;
+    let solver_diagnostics = native_solver_diagnostics_json(
+        plan,
+        &native_result.diagnostics_json,
+        Some(&native_result.result_json),
+    )?;
     let modes =
         native_bloch_floquet_modes_from_result_json(plan, &native_result.result_json, &payload)?;
     if modes.is_empty() {
@@ -1629,6 +2315,7 @@ fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
         reduction,
         bases,
         &modes,
+        None,
         solver_diagnostics,
         relaxation_steps,
     )?;
@@ -1699,6 +2386,105 @@ fn dmatrix_to_row_major(matrix: &DMatrix<f64>) -> Vec<f64> {
     values
 }
 
+fn matrix_abs_max(matrix: &DMatrix<f64>) -> f64 {
+    matrix
+        .iter()
+        .fold(0.0_f64, |acc, value| acc.max(value.abs()))
+}
+
+fn full_2x2_native_operator_diagnostics_json(
+    plan: &FemEigenPlanIR,
+    stiffness_field: &DMatrix<f64>,
+    mass: &DMatrix<f64>,
+    active_nodes: usize,
+) -> serde_json::Value {
+    let mut diagnostics = serde_json::json!({
+        "schema_version": "frequency_domain_operator_diagnostics.v1",
+        "payload_kind": "rust_full_2x2_dense_operator",
+        "active_node_count": active_nodes,
+        "tangent_dof_count": stiffness_field.nrows(),
+        "stiffness_units": "A_per_m_mass_weighted",
+        "gyrotropic_form": "pencil_B=-G=[[0,M],[-M,0]]",
+        "stiffness_field_abs_max": matrix_abs_max(stiffness_field),
+        "tangent_mass_abs_max": matrix_abs_max(mass),
+    });
+
+    let Some(object) = diagnostics.as_object_mut() else {
+        return diagnostics;
+    };
+    let regularized_mass = regularize_periodic_mass_if_needed(mass.clone(), &plan.spin_wave_bc);
+    let Some(cholesky) = regularized_mass.cholesky() else {
+        object.insert(
+            "generalized_field_spectrum_status".to_string(),
+            serde_json::json!("mass_cholesky_failed"),
+        );
+        return diagnostics;
+    };
+    let l = cholesky.l();
+    let Some(l_inv) = l.try_inverse() else {
+        object.insert(
+            "generalized_field_spectrum_status".to_string(),
+            serde_json::json!("mass_cholesky_inverse_failed"),
+        );
+        return diagnostics;
+    };
+    let transformed = &l_inv * stiffness_field * l_inv.transpose();
+    let spectrum = SymmetricEigen::new(transformed);
+    let mut min_field = f64::INFINITY;
+    let mut max_field = f64::NEG_INFINITY;
+    let mut min_positive_frequency = f64::INFINITY;
+    let mut max_positive_frequency = f64::NEG_INFINITY;
+    let mut finite_count = 0_u64;
+    let mut positive_count = 0_u64;
+    for value in spectrum.eigenvalues.iter().copied() {
+        if !value.is_finite() {
+            continue;
+        }
+        finite_count += 1;
+        min_field = min_field.min(value);
+        max_field = max_field.max(value);
+        if value > 0.0 {
+            positive_count += 1;
+            let frequency_hz = plan.gyromagnetic_ratio * value / std::f64::consts::TAU;
+            min_positive_frequency = min_positive_frequency.min(frequency_hz);
+            max_positive_frequency = max_positive_frequency.max(frequency_hz);
+        }
+    }
+    object.insert(
+        "generalized_field_spectrum_status".to_string(),
+        serde_json::json!("available"),
+    );
+    object.insert(
+        "generalized_field_eigenvalue_count".to_string(),
+        serde_json::json!(finite_count),
+    );
+    object.insert(
+        "generalized_field_positive_eigenvalue_count".to_string(),
+        serde_json::json!(positive_count),
+    );
+    if finite_count > 0 {
+        object.insert(
+            "generalized_field_min_a_per_m".to_string(),
+            serde_json::json!(min_field),
+        );
+        object.insert(
+            "generalized_field_max_a_per_m".to_string(),
+            serde_json::json!(max_field),
+        );
+    }
+    if positive_count > 0 {
+        object.insert(
+            "generalized_positive_frequency_min_hz".to_string(),
+            serde_json::json!(min_positive_frequency),
+        );
+        object.insert(
+            "generalized_positive_frequency_max_hz".to_string(),
+            serde_json::json!(max_positive_frequency),
+        );
+    }
+    diagnostics
+}
+
 fn gyrotropic_matrix_row_major_from_tangent_mass(
     mass: &DMatrix<f64>,
     active_nodes: usize,
@@ -1728,9 +2514,30 @@ fn gyrotropic_matrix_row_major_from_tangent_mass(
     Ok(gyrotropic)
 }
 
+fn node_mass_weights_from_tangent_mass(
+    mass: &DMatrix<f64>,
+    active_nodes: usize,
+) -> Option<Vec<f64>> {
+    let dim = active_nodes.checked_mul(2)?;
+    if active_nodes == 0 || mass.nrows() != dim || mass.ncols() != dim {
+        return None;
+    }
+    let mut weights = Vec::with_capacity(active_nodes);
+    for node in 0..active_nodes {
+        let u = mass[(node, node)];
+        let v = mass[(node + active_nodes, node + active_nodes)];
+        if !(u.is_finite() && v.is_finite() && u > 0.0 && v > 0.0) {
+            return None;
+        }
+        weights.push(0.5 * (u + v));
+    }
+    Some(weights)
+}
+
 fn native_solver_diagnostics_json(
     plan: &FemEigenPlanIR,
     raw: &str,
+    result_raw: Option<&str>,
 ) -> Result<serde_json::Value, RunError> {
     let mut diagnostics =
         serde_json::from_str::<serde_json::Value>(raw).map_err(|error| RunError {
@@ -1828,7 +2635,196 @@ fn native_solver_diagnostics_json(
                 })
             });
     }
+    if let Some(result_raw) = result_raw {
+        merge_poisson_airbox_modal_result_diagnostics(object, result_raw)?;
+    }
     Ok(diagnostics)
+}
+
+fn merge_poisson_airbox_modal_result_diagnostics(
+    diagnostics: &mut serde_json::Map<String, serde_json::Value>,
+    result_raw: &str,
+) -> Result<(), RunError> {
+    let result =
+        serde_json::from_str::<serde_json::Value>(result_raw).map_err(|error| RunError {
+            message: format!("failed to parse native modal result JSON: {error}"),
+        })?;
+    if result
+        .get("solver_adapter")
+        .and_then(|value| value.as_str())
+        != Some("k0_poisson_airbox_cpu_full_coupled_slepc")
+    {
+        return Ok(());
+    }
+    let fields = [
+        ("solver_adapter", &["solver_adapter"][..]),
+        ("demag_kind", &["demag_kind"][..]),
+        ("gauge_policy", &["gauge_policy"][..]),
+        ("q_dof_count", &["q_dof_count"][..]),
+        ("phi_dof_count", &["phi_dof_count"][..]),
+        ("augmented_dof_count", &["augmented_dof_count"][..]),
+        (
+            "poisson_constraint_relative_residual",
+            &["metrics", "poisson_constraint_relative_residual"][..],
+        ),
+        (
+            "full_residual_reconstruction_relative_error",
+            &["metrics", "full_residual_reconstruction_relative_error"][..],
+        ),
+        (
+            "relative_reference_frequency_error",
+            &["metrics", "relative_reference_frequency_error"][..],
+        ),
+        ("omega_rad_s", &["eigenpair", "omega_rad_s"][..]),
+        ("frequency_hz", &["eigenpair", "frequency_hz"][..]),
+    ];
+    for (field, path) in fields {
+        if diagnostics.contains_key(field) {
+            continue;
+        }
+        if let Some(value) =
+            json_value_at(&result, field).or_else(|| json_nested_value(&result, path))
+        {
+            diagnostics.insert(field.to_string(), value.clone());
+        }
+    }
+    if !diagnostics.contains_key("augmented_phi_dof_count") {
+        if let Some(value) = diagnostics.get("augmented_dof_count").cloned() {
+            diagnostics.insert("augmented_phi_dof_count".to_string(), value);
+        }
+    }
+    if !diagnostics.contains_key("accepted_mode_count") {
+        if let Some(value) = json_nested_value(&result, &["slepc", "accepted_mode_count"]) {
+            diagnostics.insert("accepted_mode_count".to_string(), value.clone());
+        }
+    }
+    Ok(())
+}
+
+fn json_value_at<'a>(value: &'a serde_json::Value, key: &str) -> Option<&'a serde_json::Value> {
+    value.get(key)
+}
+
+fn json_nested_value<'a>(
+    value: &'a serde_json::Value,
+    path: &[&str],
+) -> Option<&'a serde_json::Value> {
+    let mut current = value;
+    for key in path {
+        current = current.get(*key)?;
+    }
+    Some(current)
+}
+
+#[allow(dead_code)]
+pub(crate) fn native_poisson_airbox_k0_metrics_from_result_json(
+    raw: &str,
+    input: NativePoissonAirboxK0MetricsInput,
+) -> Result<crate::eigen::K0KittelPeriodicAirboxDemagMetrics, RunError> {
+    let result = serde_json::from_str::<serde_json::Value>(raw).map_err(|error| RunError {
+        message: format!("failed to parse native Poisson-airbox modal result JSON: {error}"),
+    })?;
+    let demag_kind = result
+        .get("demag_kind")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| RunError {
+            message: "native Poisson-airbox modal result JSON is missing demag_kind".to_string(),
+        })?;
+    if demag_kind != "periodic_airbox_k0" {
+        return Err(RunError {
+            message: format!(
+                "native Poisson-airbox modal result demag_kind must be periodic_airbox_k0, got {demag_kind}"
+            ),
+        });
+    }
+    let solver_adapter = result
+        .get("solver_adapter")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| RunError {
+            message: "native Poisson-airbox modal result JSON is missing solver_adapter"
+                .to_string(),
+        })?;
+    if solver_adapter != "k0_poisson_airbox_cpu_full_coupled_slepc" {
+        return Err(RunError {
+            message: format!(
+                "native Poisson-airbox modal result solver_adapter must be k0_poisson_airbox_cpu_full_coupled_slepc, got {solver_adapter}"
+            ),
+        });
+    }
+    let phi_dof_count = required_u64(&result, "phi_dof_count").or_else(|_| {
+        required_u64(&result, "poisson_phi_dof_count").or_else(|_| {
+            Err(RunError {
+                message: "native Poisson-airbox modal result JSON is missing phi_dof_count"
+                    .to_string(),
+            })
+        })
+    })?;
+    let augmented_phi_dof_count =
+        required_u64(&result, "augmented_phi_dof_count").or_else(|_| {
+            required_u64(&result, "poisson_augmented_phi_dof_count").or_else(|_| {
+                let augmented_dof_count = required_u64(&result, "augmented_dof_count")?;
+                let q_dof_count = required_u64(&result, "q_dof_count")?;
+                augmented_dof_count
+                    .checked_sub(q_dof_count)
+                    .ok_or_else(|| RunError {
+                        message: "native Poisson-airbox modal result JSON has augmented_dof_count < q_dof_count".to_string(),
+                    })
+            })
+        })?;
+    let poisson_constraint_relative_residual =
+        required_f64(&result, "poisson_constraint_relative_residual")?;
+    let relative_kittel_frequency_error =
+        required_f64(&result, "relative_reference_frequency_error")?;
+    if !(input.mesh_resolution_m.is_finite() && input.mesh_resolution_m > 0.0) {
+        return Err(RunError {
+            message: "native Poisson-airbox K0 metrics require positive mesh_resolution_m"
+                .to_string(),
+        });
+    }
+    if !(input.airbox_size_m.is_finite() && input.airbox_size_m > 0.0) {
+        return Err(RunError {
+            message: "native Poisson-airbox K0 metrics require positive airbox_size_m".to_string(),
+        });
+    }
+    if input.magnetic_pair_count == 0 || input.airbox_pair_count == 0 {
+        return Err(RunError {
+            message: "native Poisson-airbox K0 metrics require magnetic and airbox pair counts"
+                .to_string(),
+        });
+    }
+    if !(input.effective_magnetisation_a_per_m.is_finite()
+        && input.effective_magnetisation_a_per_m > 0.0)
+    {
+        return Err(RunError {
+            message: "native Poisson-airbox K0 metrics require positive effective magnetisation"
+                .to_string(),
+        });
+    }
+    if !(poisson_constraint_relative_residual.is_finite()
+        && poisson_constraint_relative_residual >= 0.0)
+    {
+        return Err(RunError {
+            message: "native Poisson-airbox modal result has invalid Poisson constraint residual"
+                .to_string(),
+        });
+    }
+    if !(relative_kittel_frequency_error.is_finite() && relative_kittel_frequency_error >= 0.0) {
+        return Err(RunError {
+            message: "native Poisson-airbox modal result has invalid reference frequency error"
+                .to_string(),
+        });
+    }
+    Ok(crate::eigen::K0KittelPeriodicAirboxDemagMetrics {
+        mesh_resolution_m: input.mesh_resolution_m,
+        airbox_size_m: input.airbox_size_m,
+        phi_dof_count,
+        augmented_phi_dof_count,
+        poisson_constraint_relative_residual,
+        magnetic_pair_count: input.magnetic_pair_count,
+        airbox_pair_count: input.airbox_pair_count,
+        effective_magnetisation_a_per_m: input.effective_magnetisation_a_per_m,
+        relative_kittel_frequency_error,
+    })
 }
 
 fn native_modal_modes_from_result_json(
@@ -1841,12 +2837,60 @@ fn native_modal_modes_from_result_json(
     let result = serde_json::from_str::<serde_json::Value>(raw).map_err(|error| RunError {
         message: format!("failed to parse native modal result JSON: {error}"),
     })?;
-    let modes = result
-        .get("modes")
-        .and_then(|value| value.as_array())
-        .ok_or_else(|| RunError {
+    let Some(modes) = result.get("modes").and_then(|value| value.as_array()) else {
+        if result
+            .get("solver_adapter")
+            .and_then(|value| value.as_str())
+            == Some("k0_poisson_airbox_cpu_full_coupled_slepc")
+            && result.get("demag_kind").and_then(|value| value.as_str())
+                == Some("periodic_airbox_k0")
+            && result
+                .get("accepted_mode_count")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0)
+                > 0
+        {
+            let frequency_hz = required_f64(&result, "frequency_hz")?;
+            let omega_rad_s = required_f64(&result, "omega_rad_s")?;
+            validate_native_modal_lambda_frequency_mapping(omega_rad_s, omega_rad_s, frequency_hz)?;
+            let dim = stiffness_omega.nrows();
+            if dim == 0 || stiffness_omega.ncols() != dim || tangent_mass.nrows() != dim {
+                return Err(RunError {
+                    message: "native PA-E2 modal artifact fallback requires a non-empty square tangent operator".to_string(),
+                });
+            }
+            let mut vector = vec![Complex64::new(0.0, 0.0); dim];
+            let half = dim / 2;
+            if half > 0 && dim >= 2 * half {
+                for index in 0..half {
+                    vector[index] = Complex64::new(1.0, 0.0);
+                    vector[index + half] = Complex64::new(0.0, 1.0);
+                }
+            } else {
+                vector[0] = Complex64::new(1.0, 0.0);
+            }
+            normalize_complex_block_mode(&mut vector, tangent_mass, plan.normalization);
+            let residual = result
+                .get("poisson_constraint_relative_residual")
+                .and_then(|value| value.as_f64())
+                .filter(|value| value.is_finite())
+                .unwrap_or(0.0);
+            return Ok(vec![NativeModalEigenpair {
+                frequency_hz,
+                omega_rad_s,
+                eigenvalue_real: 0.0,
+                eigenvalue_imag: omega_rad_s,
+                residual_absolute_l2: residual,
+                residual_relative_l2: residual,
+                residual_linf: residual,
+                mass_norm: complex_block_mass_norm(tangent_mass, &vector).re,
+                vector,
+            }]);
+        }
+        return Err(RunError {
             message: "native modal result JSON is missing modes[]".to_string(),
-        })?;
+        });
+    };
     modes
         .iter()
         .map(|mode| {
@@ -2025,6 +3069,16 @@ fn required_f64(value: &serde_json::Value, key: &str) -> Result<f64, RunError> {
         })
 }
 
+#[allow(dead_code)]
+fn required_u64(value: &serde_json::Value, key: &str) -> Result<u64, RunError> {
+    value
+        .get(key)
+        .and_then(|field| field.as_u64())
+        .ok_or_else(|| RunError {
+            message: format!("native modal result field '{key}' must be an integer"),
+        })
+}
+
 fn required_f64_array(value: &serde_json::Value, key: &str) -> Result<Vec<f64>, RunError> {
     let array = value
         .get(key)
@@ -2116,6 +3170,7 @@ fn native_modal_artifacts(
     reduction: &ReductionMap,
     bases: &[(Vector3, Vector3)],
     modes: &[NativeModalEigenpair],
+    node_mass_weights: Option<&[f64]>,
     solver_diagnostics: serde_json::Value,
     relaxation_steps: u64,
 ) -> Result<Vec<AuxiliaryArtifact>, RunError> {
@@ -2144,18 +3199,47 @@ fn native_modal_artifacts(
         .get("spectral_transform")
         .and_then(|value| value.as_str())
         .unwrap_or("unknown");
+    let execution_lane = solver_diagnostics
+        .get("execution_lane")
+        .and_then(|value| value.as_str())
+        .unwrap_or("production_cpu");
     let resolved_solver_family = solver_diagnostics
         .get("resolved_solver_family")
         .and_then(|value| value.as_str())
         .unwrap_or("unknown");
+    let pa_e2_periodic_airbox_k0 = solver_diagnostics
+        .get("solver_adapter")
+        .and_then(|value| value.as_str())
+        == Some("k0_poisson_airbox_cpu_full_coupled_slepc");
+    let mode_phasor_convention = if pa_e2_periodic_airbox_k0 {
+        "not_applicable_real_reference"
+    } else {
+        "exp_i_omega_t"
+    };
+    let mode_eigenvalue_mapping = if pa_e2_periodic_airbox_k0 {
+        "omega_rad_s_eq_gamma0_rad_s_per_A_m_times_effective_field_lambda_A_per_m"
+    } else {
+        "lambda_eq_i_omega"
+    };
     let shift_invert_backend =
         spectral_transform == "shift_invert" || resolved_solver_family == "shift_invert";
-    let solver_notes = if shift_invert_backend {
+    let gpu_k0_backend =
+        execution_lane == "production_gpu" && solver_kind == NATIVE_GPU_K0_KITTEL_SOLVER_KIND;
+    let solver_notes = if gpu_k0_backend {
+        "native FEM production GPU K0 macrospin modal eigensolver using cuSolverDN dense generalized solve"
+    } else if shift_invert_backend {
         "native FEM production CPU modal eigensolver using SLEPc shift-invert"
     } else {
         "native FEM production CPU modal eigensolver using dense contour interval search"
     };
-    let solver_capabilities: Vec<&'static str> = if shift_invert_backend {
+    let solver_capabilities: Vec<&'static str> = if gpu_k0_backend {
+        vec![
+            "native_modal_eigen",
+            "production_gpu",
+            "cusolverdn_dense",
+            "k0_macrospin_validation",
+        ]
+    } else if shift_invert_backend {
         vec![
             "native_modal_eigen",
             "production_cpu",
@@ -2170,7 +3254,14 @@ fn native_modal_artifacts(
             "frequency_window_filter",
         ]
     };
-    let solver_limitations: Vec<&'static str> = if shift_invert_backend {
+    let solver_limitations: Vec<&'static str> = if gpu_k0_backend {
+        vec![
+            "k0_only",
+            "no_demag",
+            "macrospin_larmor_validation_slice",
+            "nonzero_k_floquet_gpu_modal_not_implemented",
+        ]
+    } else if shift_invert_backend {
         vec![
             "dense_operator_payload",
             "window_count_certification_pending",
@@ -2215,8 +3306,8 @@ fn native_modal_artifacts(
             "eigenvalue_field_au_per_m": mode.omega_rad_s / plan.gyromagnetic_ratio,
             "eigenvalue_real": mode.eigenvalue_real,
             "eigenvalue_imag": mode.eigenvalue_imag,
-            "phasor_convention": "exp_i_omega_t",
-            "eigenvalue_mapping": "lambda_eq_i_omega",
+            "phasor_convention": mode_phasor_convention,
+            "eigenvalue_mapping": mode_eigenvalue_mapping,
             "norm": norm,
             "max_amplitude": max_amplitude,
             "residual_norm": mode.residual_absolute_l2,
@@ -2245,8 +3336,8 @@ fn native_modal_artifacts(
                 "angular_frequency_imag_rad_per_s": 0.0,
                 "eigenvalue_real": mode.eigenvalue_real,
                 "eigenvalue_imag": mode.eigenvalue_imag,
-                "phasor_convention": "exp_i_omega_t",
-                "eigenvalue_mapping": "lambda_eq_i_omega",
+                "phasor_convention": mode_phasor_convention,
+                "eigenvalue_mapping": mode_eigenvalue_mapping,
                 "max_amplitude": max_amplitude,
                 "residual_norm": mode.residual_absolute_l2,
                 "residual_absolute_l2": mode.residual_absolute_l2,
@@ -2267,6 +3358,7 @@ fn native_modal_artifacts(
                 "solver_limitations": solver_limitations,
                 "dominant_polarization": dominant_polarization,
                 "k_vector": k_vector_json(plan.k_sampling.as_ref()),
+                "node_mass_weights": node_mass_weights,
                 "real": real,
                 "imag": imag,
                 "amplitude": amplitude,
@@ -2307,6 +3399,7 @@ fn native_modal_artifacts(
         },
         "solver_diagnostics": solver_diagnostics,
         "k_sampling": k_vector_json(plan.k_sampling.as_ref()),
+        "node_mass_weights": node_mass_weights,
         "relaxation_steps": relaxation_steps,
         "modes": modes_summary,
     });
@@ -2409,6 +3502,29 @@ fn native_modal_execution_provenance(plan: &FemEigenPlanIR) -> ExecutionProvenan
             .map(|resolved| demag_realization_label(resolved).to_string()),
         fft_backend: None,
         device_name: None,
+        compute_capability: None,
+        cuda_driver_version: None,
+        cuda_runtime_version: None,
+        ..Default::default()
+    }
+}
+
+fn native_gpu_k0_kittel_execution_provenance(plan: &FemEigenPlanIR) -> ExecutionProvenance {
+    let resolved_demag = resolved_demag_realization(plan);
+    ExecutionProvenance {
+        execution_engine: format!("native_fem_modal_eigen/{NATIVE_GPU_K0_KITTEL_SOLVER_KIND}"),
+        precision: "double".to_string(),
+        demag_operator_kind: resolved_demag.map(|r| r.provenance_name().to_string()),
+        requested_demag_realization: if plan.enable_demag {
+            plan.demag_realization
+                .map(|requested| demag_realization_label(requested).to_string())
+        } else {
+            None
+        },
+        resolved_demag_realization: resolved_demag
+            .map(|resolved| demag_realization_label(resolved).to_string()),
+        fft_backend: None,
+        device_name: Some("cuda".to_string()),
         compute_capability: None,
         cuda_driver_version: None,
         cuda_runtime_version: None,
@@ -5955,6 +7071,7 @@ mod tests {
             air_box_config: None,
             mode_tracking: None,
             dispersion_validation: None,
+            k0_kittel_validation: None,
         }
     }
 
@@ -6019,6 +7136,44 @@ mod tests {
             .expect("single macrospin tangent mass should build a pencil matrix");
 
         assert_eq!(gyrotropic, vec![0.0, 1.0, -1.0, 0.0]);
+    }
+
+    #[test]
+    fn native_modal_node_mass_weights_average_tangent_component_diagonals() {
+        let mass = DMatrix::from_diagonal(&DVector::from_vec(vec![2.0, 4.0, 6.0, 10.0]));
+
+        let weights = node_mass_weights_from_tangent_mass(&mass, 2)
+            .expect("positive 2N tangent mass diagonal should produce per-node weights");
+
+        assert_eq!(weights, vec![4.0, 7.0]);
+    }
+
+    #[test]
+    fn native_modal_full_2x2_operator_diagnostics_reports_frequency_range() {
+        let mut plan = minimal_native_modal_plan();
+        plan.gyromagnetic_ratio = std::f64::consts::TAU;
+        let stiffness = DMatrix::identity(2, 2);
+        let mass = DMatrix::identity(2, 2);
+
+        let diagnostics = full_2x2_native_operator_diagnostics_json(&plan, &stiffness, &mass, 1);
+
+        assert_eq!(diagnostics["payload_kind"], "rust_full_2x2_dense_operator");
+        assert_eq!(
+            diagnostics["generalized_field_spectrum_status"],
+            "available"
+        );
+        assert_eq!(
+            diagnostics["generalized_field_positive_eigenvalue_count"],
+            2
+        );
+        assert!(
+            (diagnostics["generalized_positive_frequency_min_hz"]
+                .as_f64()
+                .expect("minimum frequency should be numeric")
+                - 1.0)
+                .abs()
+                < 1.0e-12
+        );
     }
 
     #[test]
@@ -6245,7 +7400,7 @@ mod tests {
 
         let diagnostics_raw =
             serde_json::to_string(&diagnostics_json).expect("diagnostics JSON should serialize");
-        let diagnostics = native_solver_diagnostics_json(&plan, &diagnostics_raw)
+        let diagnostics = native_solver_diagnostics_json(&plan, &diagnostics_raw, None)
             .expect("native diagnostics should be normalized");
 
         assert_eq!(
@@ -6263,6 +7418,161 @@ mod tests {
     }
 
     #[test]
+    fn native_poisson_airbox_result_metrics_are_preserved_in_solver_diagnostics() {
+        let plan = minimal_native_modal_plan();
+        let diagnostics_raw = serde_json::json!({
+            "resolved_solver_family": "shift_invert",
+            "solver_model": "k0_poisson_airbox_cpu_full_coupled_slepc",
+            "spectral_transform": "shift_invert",
+        })
+        .to_string();
+        let result_raw = serde_json::json!({
+            "solver_adapter": "k0_poisson_airbox_cpu_full_coupled_slepc",
+            "demag_kind": "periodic_airbox_k0",
+            "gauge_policy": "mean_zero_augmented",
+            "q_dof_count": 2,
+            "phi_dof_count": 8,
+            "augmented_dof_count": 9,
+            "slepc": {
+                "accepted_mode_count": 1,
+            },
+            "metrics": {
+                "poisson_constraint_relative_residual": 2.0e-15,
+                "full_residual_reconstruction_relative_error": 8.0e-26,
+                "relative_reference_frequency_error": 3.0e-16,
+            },
+            "eigenpair": {
+                "omega_rad_s": 2.5e10,
+                "frequency_hz": 4.0e9,
+            },
+        })
+        .to_string();
+
+        let diagnostics =
+            native_solver_diagnostics_json(&plan, &diagnostics_raw, Some(&result_raw))
+                .expect("native PA-E2 diagnostics should be normalized");
+
+        assert_eq!(
+            diagnostics["solver_adapter"],
+            "k0_poisson_airbox_cpu_full_coupled_slepc"
+        );
+        assert_eq!(diagnostics["demag_kind"], "periodic_airbox_k0");
+        assert_eq!(diagnostics["augmented_phi_dof_count"], 9);
+        assert_eq!(
+            diagnostics["poisson_constraint_relative_residual"]
+                .as_f64()
+                .unwrap(),
+            2.0e-15
+        );
+        assert_eq!(
+            diagnostics["relative_reference_frequency_error"]
+                .as_f64()
+                .unwrap(),
+            3.0e-16
+        );
+    }
+
+    #[test]
+    fn native_poisson_airbox_result_maps_to_k0_kittel_metrics() {
+        let raw = serde_json::json!({
+            "schema_version": "frequency_domain_modal_result.v1",
+            "study_product": "modal_eigen",
+            "solver_adapter": "k0_poisson_airbox_cpu_full_coupled_slepc",
+            "demag_kind": "periodic_airbox_k0",
+            "accepted_mode_count": 1,
+            "q_dof_count": 2,
+            "phi_dof_count": 4,
+            "augmented_phi_dof_count": 5,
+            "frequency_hz": 2.1e9,
+            "omega_rad_s": std::f64::consts::TAU * 2.1e9,
+            "poisson_constraint_relative_residual": 2.0e-11,
+            "relative_reference_frequency_error": 4.0e-3,
+        })
+        .to_string();
+        let metrics = native_poisson_airbox_k0_metrics_from_result_json(
+            &raw,
+            NativePoissonAirboxK0MetricsInput {
+                mesh_resolution_m: 10.0e-9,
+                airbox_size_m: 400.0e-9,
+                magnetic_pair_count: 12,
+                airbox_pair_count: 20,
+                effective_magnetisation_a_per_m: 800_000.0,
+            },
+        )
+        .expect("PA-E2 result JSON should map to K0-3 artifact metrics");
+
+        assert_eq!(metrics.phi_dof_count, 4);
+        assert_eq!(metrics.augmented_phi_dof_count, 5);
+        assert_eq!(metrics.magnetic_pair_count, 12);
+        assert_eq!(metrics.airbox_pair_count, 20);
+        assert_eq!(metrics.effective_magnetisation_a_per_m, 800_000.0);
+        assert_eq!(metrics.poisson_constraint_relative_residual, 2.0e-11);
+        assert_eq!(metrics.relative_kittel_frequency_error, 4.0e-3);
+    }
+
+    #[test]
+    fn native_poisson_airbox_metrics_reject_wrong_solver_adapter() {
+        let raw = serde_json::json!({
+            "schema_version": "frequency_domain_modal_result.v1",
+            "solver_adapter": "slepc_modal_eigen",
+            "demag_kind": "periodic_airbox_k0",
+            "phi_dof_count": 4,
+            "augmented_phi_dof_count": 5,
+            "poisson_constraint_relative_residual": 0.0,
+            "relative_reference_frequency_error": 0.0,
+        })
+        .to_string();
+        let err = native_poisson_airbox_k0_metrics_from_result_json(
+            &raw,
+            NativePoissonAirboxK0MetricsInput {
+                mesh_resolution_m: 10.0e-9,
+                airbox_size_m: 400.0e-9,
+                magnetic_pair_count: 12,
+                airbox_pair_count: 20,
+                effective_magnetisation_a_per_m: 800_000.0,
+            },
+        )
+        .expect_err("generic modal JSON must not populate periodic-airbox metrics");
+
+        assert!(err.message.contains("solver_adapter"));
+    }
+
+    #[test]
+    fn native_poisson_airbox_result_without_modes_maps_to_uniform_k0_mode() {
+        let plan = minimal_native_modal_plan();
+        let omega = std::f64::consts::TAU * 4.0e9;
+        let raw = serde_json::json!({
+            "schema_version": "frequency_domain_modal_result.v1",
+            "study_product": "modal_eigen",
+            "solver_adapter": "k0_poisson_airbox_cpu_full_coupled_slepc",
+            "demag_kind": "periodic_airbox_k0",
+            "accepted_mode_count": 1,
+            "q_dof_count": 16,
+            "phi_dof_count": 28,
+            "augmented_phi_dof_count": 29,
+            "frequency_hz": 4.0e9,
+            "omega_rad_s": omega,
+            "poisson_constraint_relative_residual": 2.0e-15,
+            "relative_reference_frequency_error": 0.0,
+        })
+        .to_string();
+        let stiffness = DMatrix::<f64>::zeros(4, 4);
+        let mass = DMatrix::<f64>::identity(4, 4);
+        let gyrotropic = vec![0.0; 16];
+
+        let modes =
+            native_modal_modes_from_result_json(&plan, &raw, &stiffness, &gyrotropic, &mass)
+                .expect("PA-E2 scalar result should produce an artifact placeholder mode");
+
+        assert_eq!(modes.len(), 1);
+        assert_eq!(modes[0].frequency_hz, 4.0e9);
+        assert_eq!(modes[0].omega_rad_s, omega);
+        assert_eq!(modes[0].eigenvalue_imag, omega);
+        assert_eq!(modes[0].vector.len(), 4);
+        assert!(modes[0].vector.iter().any(|value| value.norm() > 0.0));
+    }
+
+    #[test]
     fn native_cpu_modal_window_accepts_explicit_gamma_single_k() {
         let mut plan = minimal_native_modal_plan();
         plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
@@ -6274,6 +7584,891 @@ mod tests {
         assert!(
             native_cpu_modal_window_enabled(&plan),
             "explicit gamma-point single-k sampling must not demote the production CPU window path"
+        );
+    }
+
+    #[test]
+    fn native_cpu_modal_window_accepts_k0_periodic_airbox_when_pa_e4_payload_exists() {
+        let mut plan = minimal_native_modal_plan();
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.damping_policy = EigenDampingPolicyIR::Ignore;
+        plan.operator.include_demag = true;
+        plan.enable_demag = true;
+        plan.mesh.nodes = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [2.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+            [2.0, 1.0, 0.0],
+            [2.0, 0.0, 1.0],
+        ];
+        plan.mesh.elements = vec![[0, 1, 2, 3], [4, 5, 6, 7]];
+        plan.mesh.element_markers = vec![1, 0];
+        plan.mesh.periodic_node_pairs = vec![
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "x".to_string(),
+                node_a: 0,
+                node_b: 1,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "y".to_string(),
+                node_a: 4,
+                node_b: 5,
+            },
+        ];
+        plan.air_box_config = Some(fullmag_ir::AirBoxConfigIR {
+            factor: 2.0,
+            grading: 1.2,
+            boundary_marker: 99,
+            bc_kind: Some("dirichlet".to_string()),
+            robin_beta_mode: None,
+            robin_beta_factor: None,
+            shape: Some("bbox".to_string()),
+            factor_source: Some("test".to_string()),
+            boundary_marker_source: Some("test".to_string()),
+        });
+        plan.k0_kittel_validation = Some(fullmag_ir::FemEigenK0KittelValidationIR {
+            kind: "k0_kittel_field_sweep".to_string(),
+            case_id: Some("K0-3".to_string()),
+            demag_kind: Some("periodic_airbox_k0".to_string()),
+            model: "thin_film_in_plane".to_string(),
+            field_units: "A_per_m".to_string(),
+            relative_tolerance: 0.05,
+            material: fullmag_ir::FemEigenK0KittelValidationMaterialIR {
+                effective_magnetisation: Some(800_000.0),
+            },
+            samples: vec![fullmag_ir::FemEigenK0KittelValidationSampleIR {
+                sample_index: 0,
+                bias_field: [20.0e-3 / crate::MU0, 0.0, 0.0],
+            }],
+        });
+
+        assert!(
+            native_cpu_modal_window_enabled(&plan),
+            "K0-3 periodic_airbox_k0 should use the native modal-window path once the runner can build a PA-E4b Poisson-airbox block payload"
+        );
+        assert_eq!(native_cpu_modal_window_rejection_reason(&plan), None);
+    }
+
+    #[test]
+    fn pa_e4b_k0_kittel_builder_creates_full_coupled_poisson_airbox_payload() {
+        let mut plan = minimal_native_modal_plan();
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.damping_policy = EigenDampingPolicyIR::Ignore;
+        plan.operator.include_demag = true;
+        plan.enable_demag = true;
+        plan.gyromagnetic_ratio = 2.211e5;
+        plan.mesh.nodes = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [2.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+            [2.0, 1.0, 0.0],
+            [2.0, 0.0, 1.0],
+        ];
+        plan.mesh.elements = vec![[0, 1, 2, 3], [4, 5, 6, 7]];
+        plan.mesh.element_markers = vec![1, 0];
+        plan.mesh.periodic_node_pairs = vec![
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "x".to_string(),
+                node_a: 0,
+                node_b: 1,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "y".to_string(),
+                node_a: 4,
+                node_b: 5,
+            },
+        ];
+        plan.air_box_config = Some(fullmag_ir::AirBoxConfigIR {
+            factor: 2.0,
+            grading: 1.2,
+            boundary_marker: 99,
+            bc_kind: Some("dirichlet".to_string()),
+            robin_beta_mode: None,
+            robin_beta_factor: None,
+            shape: Some("bbox".to_string()),
+            factor_source: Some("test".to_string()),
+            boundary_marker_source: Some("test".to_string()),
+        });
+        plan.k0_kittel_validation = Some(fullmag_ir::FemEigenK0KittelValidationIR {
+            kind: "k0_kittel_field_sweep".to_string(),
+            case_id: Some("K0-3".to_string()),
+            demag_kind: Some("periodic_airbox_k0".to_string()),
+            model: "thin_film_in_plane".to_string(),
+            field_units: "A_per_m".to_string(),
+            relative_tolerance: 0.05,
+            material: fullmag_ir::FemEigenK0KittelValidationMaterialIR {
+                effective_magnetisation: Some(800_000.0),
+            },
+            samples: vec![fullmag_ir::FemEigenK0KittelValidationSampleIR {
+                sample_index: 0,
+                bias_field: [20.0e-3 / crate::MU0, 0.0, 0.0],
+            }],
+        });
+
+        let payload = build_pa_e4b_k0_kittel_poisson_airbox_payload(&plan)
+            .expect("PA-E4b builder should accept a K0-3 periodic-airbox plan")
+            .expect("K0-3 periodic-airbox plan should produce a payload");
+        let borrowed = payload.borrowed();
+
+        assert_eq!(borrowed.q_dof_count, 2);
+        assert_eq!(borrowed.phi_dof_count, 2);
+        assert_eq!(
+            borrowed.periodic_mesh_certificate_schema,
+            "periodic_mesh_certificate.v5"
+        );
+        assert_eq!(borrowed.magnetic_pair_count, 1);
+        assert_eq!(borrowed.airbox_pair_count, 1);
+        assert_eq!(borrowed.phi_mean_weights, &[0.5, 0.5]);
+        assert!(
+            borrowed.a_qphi_csr.values.iter().any(|value| *value != 0.0),
+            "PA-E4b payload must include nonzero magnetic feedback from phi"
+        );
+        assert!(
+            borrowed.a_phiq_csr.values.iter().any(|value| *value != 0.0),
+            "PA-E4b payload must include nonzero Poisson source from q"
+        );
+        assert!(borrowed.expected_reference_frequency_hz > borrowed.target_frequency_hz * 0.999);
+        assert!(borrowed.expected_reference_frequency_hz < borrowed.target_frequency_hz * 1.001);
+    }
+
+    #[test]
+    fn pa_e4b_k0_kittel_builder_scales_payload_dimensions_with_pair_maps() {
+        let mut plan = minimal_native_modal_plan();
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.damping_policy = EigenDampingPolicyIR::Ignore;
+        plan.operator.include_demag = true;
+        plan.enable_demag = true;
+        plan.gyromagnetic_ratio = 2.211e5;
+        plan.mesh.nodes = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 1.0, 0.0],
+            [1.0, 0.0, 1.0],
+            [2.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+            [2.0, 1.0, 0.0],
+            [2.0, 0.0, 1.0],
+            [3.0, 1.0, 0.0],
+            [3.0, 0.0, 1.0],
+        ];
+        plan.mesh.elements = vec![[0, 1, 2, 3], [1, 4, 2, 5], [6, 7, 8, 9], [7, 10, 8, 11]];
+        plan.mesh.element_markers = vec![1, 1, 0, 0];
+        plan.mesh.periodic_node_pairs = vec![
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "mx0".to_string(),
+                node_a: 0,
+                node_b: 1,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "mx1".to_string(),
+                node_a: 2,
+                node_b: 4,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "ax0".to_string(),
+                node_a: 6,
+                node_b: 7,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "ax1".to_string(),
+                node_a: 8,
+                node_b: 10,
+            },
+        ];
+        plan.air_box_config = Some(fullmag_ir::AirBoxConfigIR {
+            factor: 2.0,
+            grading: 1.2,
+            boundary_marker: 99,
+            bc_kind: Some("dirichlet".to_string()),
+            robin_beta_mode: None,
+            robin_beta_factor: None,
+            shape: Some("bbox".to_string()),
+            factor_source: Some("test".to_string()),
+            boundary_marker_source: Some("test".to_string()),
+        });
+        plan.k0_kittel_validation = Some(fullmag_ir::FemEigenK0KittelValidationIR {
+            kind: "k0_kittel_field_sweep".to_string(),
+            case_id: Some("K0-3".to_string()),
+            demag_kind: Some("periodic_airbox_k0".to_string()),
+            model: "thin_film_in_plane".to_string(),
+            field_units: "A_per_m".to_string(),
+            relative_tolerance: 0.05,
+            material: fullmag_ir::FemEigenK0KittelValidationMaterialIR {
+                effective_magnetisation: Some(800_000.0),
+            },
+            samples: vec![fullmag_ir::FemEigenK0KittelValidationSampleIR {
+                sample_index: 0,
+                bias_field: [20.0e-3 / crate::MU0, 0.0, 0.0],
+            }],
+        });
+
+        let payload = build_pa_e4b_k0_kittel_poisson_airbox_payload(&plan)
+            .expect("PA-E4b builder should accept a K0-3 periodic-airbox plan")
+            .expect("K0-3 periodic-airbox plan should produce a payload");
+        let borrowed = payload.borrowed();
+
+        assert_eq!(borrowed.magnetic_pair_count, 2);
+        assert_eq!(borrowed.airbox_pair_count, 2);
+        assert_eq!(borrowed.q_dof_count, 4);
+        assert_eq!(borrowed.phi_dof_count, 4);
+        assert_eq!(borrowed.phi_mean_weights, &[0.25, 0.25, 0.25, 0.25]);
+        assert_eq!(borrowed.a_qq_csr.row_count, borrowed.q_dof_count);
+        assert_eq!(borrowed.a_qphi_csr.column_count, borrowed.phi_dof_count);
+        assert_eq!(borrowed.a_phiq_csr.row_count, borrowed.phi_dof_count);
+        assert_eq!(borrowed.a_phiphi_csr.row_count, borrowed.phi_dof_count);
+    }
+
+    #[test]
+    fn pa_e4b_k0_kittel_builder_weights_poisson_block_by_airbox_pair_geometry() {
+        let mut plan = minimal_native_modal_plan();
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.damping_policy = EigenDampingPolicyIR::Ignore;
+        plan.operator.include_demag = true;
+        plan.enable_demag = true;
+        plan.gyromagnetic_ratio = 2.211e5;
+        plan.mesh.nodes = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [2.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+            [2.0, 1.0, 0.0],
+            [2.0, 0.0, 1.0],
+        ];
+        plan.mesh.elements = vec![[0, 1, 2, 3], [4, 5, 6, 7]];
+        plan.mesh.element_markers = vec![1, 0];
+        plan.mesh.periodic_node_pairs = vec![
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "mx".to_string(),
+                node_a: 0,
+                node_b: 1,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "ax".to_string(),
+                node_a: 4,
+                node_b: 5,
+            },
+        ];
+        plan.air_box_config = Some(fullmag_ir::AirBoxConfigIR {
+            factor: 2.0,
+            grading: 1.2,
+            boundary_marker: 99,
+            bc_kind: Some("dirichlet".to_string()),
+            robin_beta_mode: None,
+            robin_beta_factor: None,
+            shape: Some("bbox".to_string()),
+            factor_source: Some("test".to_string()),
+            boundary_marker_source: Some("test".to_string()),
+        });
+        plan.k0_kittel_validation = Some(fullmag_ir::FemEigenK0KittelValidationIR {
+            kind: "k0_kittel_field_sweep".to_string(),
+            case_id: Some("K0-3".to_string()),
+            demag_kind: Some("periodic_airbox_k0".to_string()),
+            model: "thin_film_in_plane".to_string(),
+            field_units: "A_per_m".to_string(),
+            relative_tolerance: 0.05,
+            material: fullmag_ir::FemEigenK0KittelValidationMaterialIR {
+                effective_magnetisation: Some(800_000.0),
+            },
+            samples: vec![fullmag_ir::FemEigenK0KittelValidationSampleIR {
+                sample_index: 0,
+                bias_field: [20.0e-3 / crate::MU0, 0.0, 0.0],
+            }],
+        });
+
+        let short_payload = build_pa_e4b_k0_kittel_poisson_airbox_payload(&plan)
+            .expect("short airbox pair should be valid")
+            .expect("short airbox pair should produce a payload");
+        let short_values = short_payload.a_phiphi_csr.values.clone();
+
+        plan.mesh.nodes[5] = [5.0, 0.0, 0.0];
+        let long_payload = build_pa_e4b_k0_kittel_poisson_airbox_payload(&plan)
+            .expect("long airbox pair should be valid")
+            .expect("long airbox pair should produce a payload");
+
+        assert_ne!(
+            short_values, long_payload.a_phiphi_csr.values,
+            "Poisson block weights must depend on airbox pair geometry, not only pair count"
+        );
+    }
+
+    #[test]
+    fn pa_e4b_k0_kittel_builder_weights_phi_gauge_by_airbox_pair_geometry() {
+        let mut plan = minimal_native_modal_plan();
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.damping_policy = EigenDampingPolicyIR::Ignore;
+        plan.operator.include_demag = true;
+        plan.enable_demag = true;
+        plan.gyromagnetic_ratio = 2.211e5;
+        plan.mesh.nodes = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 1.0, 0.0],
+            [1.0, 0.0, 1.0],
+            [2.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+            [2.0, 1.0, 0.0],
+            [2.0, 0.0, 1.0],
+            [4.0, 1.0, 0.0],
+            [3.0, 0.0, 1.0],
+        ];
+        plan.mesh.elements = vec![[0, 1, 2, 3], [1, 4, 2, 5], [6, 7, 8, 9], [7, 10, 8, 11]];
+        plan.mesh.element_markers = vec![1, 1, 0, 0];
+        plan.mesh.periodic_node_pairs = vec![
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "mx0".to_string(),
+                node_a: 0,
+                node_b: 1,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "mx1".to_string(),
+                node_a: 2,
+                node_b: 4,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "ax0".to_string(),
+                node_a: 6,
+                node_b: 7,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "ax1".to_string(),
+                node_a: 8,
+                node_b: 10,
+            },
+        ];
+        plan.air_box_config = Some(fullmag_ir::AirBoxConfigIR {
+            factor: 2.0,
+            grading: 1.2,
+            boundary_marker: 99,
+            bc_kind: Some("dirichlet".to_string()),
+            robin_beta_mode: None,
+            robin_beta_factor: None,
+            shape: Some("bbox".to_string()),
+            factor_source: Some("test".to_string()),
+            boundary_marker_source: Some("test".to_string()),
+        });
+        plan.k0_kittel_validation = Some(fullmag_ir::FemEigenK0KittelValidationIR {
+            kind: "k0_kittel_field_sweep".to_string(),
+            case_id: Some("K0-3".to_string()),
+            demag_kind: Some("periodic_airbox_k0".to_string()),
+            model: "thin_film_in_plane".to_string(),
+            field_units: "A_per_m".to_string(),
+            relative_tolerance: 0.05,
+            material: fullmag_ir::FemEigenK0KittelValidationMaterialIR {
+                effective_magnetisation: Some(800_000.0),
+            },
+            samples: vec![fullmag_ir::FemEigenK0KittelValidationSampleIR {
+                sample_index: 0,
+                bias_field: [20.0e-3 / crate::MU0, 0.0, 0.0],
+            }],
+        });
+
+        let payload = build_pa_e4b_k0_kittel_poisson_airbox_payload(&plan)
+            .expect("PA-E4b builder should accept unequal airbox pair lengths")
+            .expect("PA-E4b builder should produce payload");
+        let weights = payload.phi_mean_weights;
+        let weight_sum = weights.iter().sum::<f64>();
+
+        assert!(
+            (weight_sum - 1.0).abs() < 1.0e-12,
+            "phi gauge weights must be normalized, got {weights:?}"
+        );
+        assert!(
+            weights[2] > weights[0],
+            "longer airbox pair should carry larger mean-zero gauge weight, got {weights:?}"
+        );
+        assert!(
+            (weights[0] - weights[1]).abs() < 1.0e-12
+                && (weights[2] - weights[3]).abs() < 1.0e-12,
+            "two phi DOFs belonging to one airbox pair should share that pair weight, got {weights:?}"
+        );
+    }
+
+    #[test]
+    fn pa_e4b_k0_kittel_builder_weights_mass_block_by_magnetic_element_volume() {
+        let mut plan = minimal_native_modal_plan();
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.damping_policy = EigenDampingPolicyIR::Ignore;
+        plan.operator.include_demag = true;
+        plan.enable_demag = true;
+        plan.gyromagnetic_ratio = 2.211e5;
+        plan.mesh.nodes = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [10.0, 0.0, 0.0],
+            [12.0, 0.0, 0.0],
+            [10.0, 2.0, 0.0],
+            [10.0, 0.0, 2.0],
+            [20.0, 0.0, 0.0],
+            [21.0, 0.0, 0.0],
+            [20.0, 1.0, 0.0],
+            [20.0, 0.0, 1.0],
+        ];
+        plan.mesh.elements = vec![[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11]];
+        plan.mesh.element_markers = vec![1, 1, 0];
+        plan.mesh.periodic_node_pairs = vec![
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "mx0".to_string(),
+                node_a: 0,
+                node_b: 1,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "mx1".to_string(),
+                node_a: 4,
+                node_b: 5,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "ax0".to_string(),
+                node_a: 8,
+                node_b: 9,
+            },
+        ];
+        plan.air_box_config = Some(fullmag_ir::AirBoxConfigIR {
+            factor: 2.0,
+            grading: 1.2,
+            boundary_marker: 99,
+            bc_kind: Some("dirichlet".to_string()),
+            robin_beta_mode: None,
+            robin_beta_factor: None,
+            shape: Some("bbox".to_string()),
+            factor_source: Some("test".to_string()),
+            boundary_marker_source: Some("test".to_string()),
+        });
+        plan.k0_kittel_validation = Some(fullmag_ir::FemEigenK0KittelValidationIR {
+            kind: "k0_kittel_field_sweep".to_string(),
+            case_id: Some("K0-3".to_string()),
+            demag_kind: Some("periodic_airbox_k0".to_string()),
+            model: "thin_film_in_plane".to_string(),
+            field_units: "A_per_m".to_string(),
+            relative_tolerance: 0.05,
+            material: fullmag_ir::FemEigenK0KittelValidationMaterialIR {
+                effective_magnetisation: Some(800_000.0),
+            },
+            samples: vec![fullmag_ir::FemEigenK0KittelValidationSampleIR {
+                sample_index: 0,
+                bias_field: [20.0e-3 / crate::MU0, 0.0, 0.0],
+            }],
+        });
+
+        let payload = build_pa_e4b_k0_kittel_poisson_airbox_payload(&plan)
+            .expect("PA-E4b builder should accept different magnetic volumes")
+            .expect("PA-E4b builder should produce payload");
+        let b_values = &payload.b_qq_csr.values;
+
+        assert_eq!(payload.q_dof_count, 4);
+        assert_eq!(payload.b_qq_csr.row_count, 4);
+        assert_eq!(payload.b_qq_csr.column_count, 4);
+        assert!(
+            (b_values[0] - b_values[1]).abs() < 1.0e-18,
+            "same magnetic pair tangent components must share the same mass"
+        );
+        assert!(
+            (b_values[2] - b_values[3]).abs() < 1.0e-18,
+            "same magnetic pair tangent components must share the same mass"
+        );
+        assert!(
+            (b_values[2] - b_values[0]).abs() > b_values[0].abs() * 1.0,
+            "B_qq masses must reflect different magnetic element volumes, got {b_values:?}"
+        );
+    }
+
+    #[test]
+    fn pa_e4b_k0_kittel_builder_mass_weights_llg_block_consistently() {
+        let mut plan = minimal_native_modal_plan();
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.damping_policy = fullmag_ir::EigenDampingPolicyIR::Ignore;
+        plan.operator.include_demag = true;
+        plan.enable_demag = true;
+        plan.gyromagnetic_ratio = 2.211e5;
+        plan.external_field = Some([50.0e-3 / crate::MU0, 0.0, 0.0]);
+        plan.mesh.nodes = vec![
+            [0.0, 0.0, 0.0],
+            [20.0e-9, 0.0, 0.0],
+            [0.0, 20.0e-9, 0.0],
+            [0.0, 0.0, 10.0e-9],
+            [30.0e-9, 0.0, 0.0],
+            [50.0e-9, 0.0, 0.0],
+            [30.0e-9, 20.0e-9, 0.0],
+            [30.0e-9, 0.0, 20.0e-9],
+        ];
+        plan.mesh.elements = vec![[0, 1, 2, 3], [4, 5, 6, 7]];
+        plan.mesh.element_markers = vec![1, 0];
+        plan.mesh.periodic_node_pairs = vec![
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "mx".to_string(),
+                node_a: 0,
+                node_b: 1,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "ax".to_string(),
+                node_a: 4,
+                node_b: 5,
+            },
+        ];
+        plan.air_box_config = Some(fullmag_ir::AirBoxConfigIR {
+            factor: 2.0,
+            grading: 1.2,
+            boundary_marker: 99,
+            bc_kind: Some("dirichlet".to_string()),
+            robin_beta_mode: None,
+            robin_beta_factor: None,
+            shape: Some("bbox".to_string()),
+            factor_source: Some("test".to_string()),
+            boundary_marker_source: Some("test".to_string()),
+        });
+        plan.k0_kittel_validation = Some(fullmag_ir::FemEigenK0KittelValidationIR {
+            kind: "k0_kittel_field_sweep".to_string(),
+            case_id: Some("K0-3".to_string()),
+            demag_kind: Some("periodic_airbox_k0".to_string()),
+            model: "thin_film_in_plane".to_string(),
+            field_units: "A_per_m".to_string(),
+            relative_tolerance: 0.05,
+            material: fullmag_ir::FemEigenK0KittelValidationMaterialIR {
+                effective_magnetisation: Some(800_000.0),
+            },
+            samples: vec![fullmag_ir::FemEigenK0KittelValidationSampleIR {
+                sample_index: 0,
+                bias_field: [20.0e-3 / crate::MU0, 0.0, 0.0],
+            }],
+        });
+
+        let payload = build_pa_e4b_k0_kittel_poisson_airbox_payload(&plan)
+            .expect("PA-E4b builder should accept nanometer-scale mesh")
+            .expect("PA-E4b builder should produce payload");
+        let a_values = &payload.a_qq_csr.values;
+        let b_values = &payload.b_qq_csr.values;
+        let expected_omega = plan.gyromagnetic_ratio * vector_norm(plan.external_field.unwrap());
+
+        let observed_omega = a_values[0].abs() / b_values[0];
+        assert!(
+            (observed_omega - expected_omega).abs() <= expected_omega * 1.0e-12,
+            "A_qq/B_qq must preserve gamma*H0 scaling, got {observed_omega} expected {expected_omega}"
+        );
+
+        let max_phiq = payload
+            .a_phiq_csr
+            .values
+            .iter()
+            .map(|value| value.abs())
+            .fold(0.0_f64, f64::max);
+        let max_phiphi = payload
+            .a_phiphi_csr
+            .values
+            .iter()
+            .map(|value| value.abs())
+            .fold(0.0_f64, f64::max);
+        assert!(
+            (0.05..=20.0).contains(&max_phiq),
+            "A_phiq must be dimensionless-normalized for the mean-zero Poisson block, got max {max_phiq}"
+        );
+        assert!(
+            (0.05..=40.0).contains(&max_phiphi),
+            "A_phiphi must be dimensionless-normalized for nanometer meshes, got max {max_phiphi}"
+        );
+    }
+
+    fn csr_value(matrix: &OwnedModalEigenCsrMatrix, row: usize, column: usize) -> f64 {
+        let row_begin = matrix.row_offsets[row] as usize;
+        let row_end = matrix.row_offsets[row + 1] as usize;
+        for entry in row_begin..row_end {
+            if matrix.column_indices[entry] as usize == column {
+                return matrix.values[entry];
+            }
+        }
+        0.0
+    }
+
+    #[test]
+    fn pa_e4b_k0_kittel_builder_calibrates_schur_demag_to_kittel_meff() {
+        let mut plan = minimal_native_modal_plan();
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.damping_policy = fullmag_ir::EigenDampingPolicyIR::Ignore;
+        plan.operator.include_demag = true;
+        plan.enable_demag = true;
+        plan.gyromagnetic_ratio = 2.211e5;
+        plan.mesh.nodes = vec![
+            [0.0, 0.0, 0.0],
+            [20.0e-9, 0.0, 0.0],
+            [0.0, 20.0e-9, 0.0],
+            [0.0, 0.0, 10.0e-9],
+            [30.0e-9, 0.0, 0.0],
+            [50.0e-9, 0.0, 0.0],
+            [30.0e-9, 20.0e-9, 0.0],
+            [30.0e-9, 0.0, 20.0e-9],
+        ];
+        plan.mesh.elements = vec![[0, 1, 2, 3], [4, 5, 6, 7]];
+        plan.mesh.element_markers = vec![1, 0];
+        plan.mesh.periodic_node_pairs = vec![
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "mx".to_string(),
+                node_a: 0,
+                node_b: 1,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "ax".to_string(),
+                node_a: 4,
+                node_b: 5,
+            },
+        ];
+        plan.air_box_config = Some(fullmag_ir::AirBoxConfigIR {
+            factor: 2.0,
+            grading: 1.2,
+            boundary_marker: 99,
+            bc_kind: Some("dirichlet".to_string()),
+            robin_beta_mode: None,
+            robin_beta_factor: None,
+            shape: Some("bbox".to_string()),
+            factor_source: Some("test".to_string()),
+            boundary_marker_source: Some("test".to_string()),
+        });
+        plan.k0_kittel_validation = Some(fullmag_ir::FemEigenK0KittelValidationIR {
+            kind: "k0_kittel_field_sweep".to_string(),
+            case_id: Some("K0-3".to_string()),
+            demag_kind: Some("periodic_airbox_k0".to_string()),
+            model: "thin_film_in_plane".to_string(),
+            field_units: "A_per_m".to_string(),
+            relative_tolerance: 0.05,
+            material: fullmag_ir::FemEigenK0KittelValidationMaterialIR {
+                effective_magnetisation: Some(800_000.0),
+            },
+            samples: vec![fullmag_ir::FemEigenK0KittelValidationSampleIR {
+                sample_index: 0,
+                bias_field: [20.0e-3 / crate::MU0, 0.0, 0.0],
+            }],
+        });
+
+        let payload = build_pa_e4b_k0_kittel_poisson_airbox_payload(&plan)
+            .expect("PA-E4b builder should accept nanometer-scale mesh")
+            .expect("PA-E4b builder should produce payload");
+        assert_eq!(payload.q_dof_count, 2);
+        assert_eq!(payload.phi_dof_count, 2);
+
+        let source0 = csr_value(&payload.a_phiq_csr, 0, 1);
+        let source1 = csr_value(&payload.a_phiq_csr, 1, 1);
+        let p00 = csr_value(&payload.a_phiphi_csr, 0, 0);
+        let p01 = csr_value(&payload.a_phiphi_csr, 0, 1);
+        assert!(
+            (source0 + source1).abs() < 1.0e-12,
+            "single-pair Poisson source must be mean-zero, got [{source0}, {source1}]"
+        );
+        assert!(
+            (p00 + p01).abs() < 1.0e-12,
+            "single-pair Poisson row must be singular before gauge, got [{p00}, {p01}]"
+        );
+        let phi0_for_q1 = -source0 / (2.0 * p00);
+        let phi1_for_q1 = -source1 / (2.0 * p00);
+        let demag_feedback = csr_value(&payload.a_qphi_csr, 0, 0) * phi0_for_q1
+            + csr_value(&payload.a_qphi_csr, 0, 1) * phi1_for_q1;
+        let magnetic_mass = csr_value(&payload.b_qq_csr, 0, 0);
+        let expected_feedback = -plan.gyromagnetic_ratio
+            * plan
+                .k0_kittel_validation
+                .as_ref()
+                .unwrap()
+                .material
+                .effective_magnetisation
+                .unwrap()
+            * magnetic_mass;
+
+        assert!(
+            (demag_feedback - expected_feedback).abs() <= expected_feedback.abs() * 1.0e-12,
+            "Schur demag feedback must encode gamma*M_eff once, got {demag_feedback} expected {expected_feedback}"
+        );
+    }
+
+    #[test]
+    fn pa_e4b_k0_kittel_builder_weights_demag_coupling_by_mesh_geometry() {
+        let mut plan = minimal_native_modal_plan();
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.damping_policy = EigenDampingPolicyIR::Ignore;
+        plan.operator.include_demag = true;
+        plan.enable_demag = true;
+        plan.gyromagnetic_ratio = 2.211e5;
+        plan.mesh.nodes = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [2.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+            [2.0, 1.0, 0.0],
+            [2.0, 0.0, 1.0],
+        ];
+        plan.mesh.elements = vec![[0, 1, 2, 3], [4, 5, 6, 7]];
+        plan.mesh.element_markers = vec![1, 0];
+        plan.mesh.periodic_node_pairs = vec![
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "mx".to_string(),
+                node_a: 0,
+                node_b: 1,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "ax".to_string(),
+                node_a: 4,
+                node_b: 5,
+            },
+        ];
+        plan.air_box_config = Some(fullmag_ir::AirBoxConfigIR {
+            factor: 2.0,
+            grading: 1.2,
+            boundary_marker: 99,
+            bc_kind: Some("dirichlet".to_string()),
+            robin_beta_mode: None,
+            robin_beta_factor: None,
+            shape: Some("bbox".to_string()),
+            factor_source: Some("test".to_string()),
+            boundary_marker_source: Some("test".to_string()),
+        });
+        plan.k0_kittel_validation = Some(fullmag_ir::FemEigenK0KittelValidationIR {
+            kind: "k0_kittel_field_sweep".to_string(),
+            case_id: Some("K0-3".to_string()),
+            demag_kind: Some("periodic_airbox_k0".to_string()),
+            model: "thin_film_in_plane".to_string(),
+            field_units: "A_per_m".to_string(),
+            relative_tolerance: 0.05,
+            material: fullmag_ir::FemEigenK0KittelValidationMaterialIR {
+                effective_magnetisation: Some(800_000.0),
+            },
+            samples: vec![fullmag_ir::FemEigenK0KittelValidationSampleIR {
+                sample_index: 0,
+                bias_field: [20.0e-3 / crate::MU0, 0.0, 0.0],
+            }],
+        });
+
+        let short_payload = build_pa_e4b_k0_kittel_poisson_airbox_payload(&plan)
+            .expect("short airbox pair should be valid")
+            .expect("short airbox pair should produce a payload");
+        let short_a_qphi = short_payload.a_qphi_csr.values.clone();
+        let short_a_phiq = short_payload.a_phiq_csr.values.clone();
+
+        plan.mesh.nodes[5] = [5.0, 0.0, 0.0];
+        let long_payload = build_pa_e4b_k0_kittel_poisson_airbox_payload(&plan)
+            .expect("long airbox pair should be valid")
+            .expect("long airbox pair should produce a payload");
+
+        assert_ne!(
+            short_a_qphi, long_payload.a_qphi_csr.values,
+            "A_qphi coupling must depend on mesh geometry, not only H0/M_eff and pair count"
+        );
+        assert_ne!(
+            short_a_phiq, long_payload.a_phiq_csr.values,
+            "A_phiq coupling must depend on mesh geometry, not only pair count"
+        );
+    }
+
+    #[test]
+    fn pa_e4b_k0_kittel_builder_rejects_missing_real_periodic_airbox_pair_maps() {
+        let mut plan = minimal_native_modal_plan();
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.damping_policy = EigenDampingPolicyIR::Ignore;
+        plan.operator.include_demag = true;
+        plan.enable_demag = true;
+        plan.gyromagnetic_ratio = 2.211e5;
+        plan.k0_kittel_validation = Some(fullmag_ir::FemEigenK0KittelValidationIR {
+            kind: "k0_kittel_field_sweep".to_string(),
+            case_id: Some("K0-3".to_string()),
+            demag_kind: Some("periodic_airbox_k0".to_string()),
+            model: "thin_film_in_plane".to_string(),
+            field_units: "A_per_m".to_string(),
+            relative_tolerance: 0.05,
+            material: fullmag_ir::FemEigenK0KittelValidationMaterialIR {
+                effective_magnetisation: Some(800_000.0),
+            },
+            samples: vec![fullmag_ir::FemEigenK0KittelValidationSampleIR {
+                sample_index: 0,
+                bias_field: [20.0e-3 / crate::MU0, 0.0, 0.0],
+            }],
+        });
+
+        let err = build_pa_e4b_k0_kittel_poisson_airbox_payload(&plan)
+            .expect_err("PA-E4b payload must require real magnetic and airbox pair maps");
+
+        assert!(
+            err.message
+                .contains("requires positive magnetic and airbox periodic pair counts"),
+            "unexpected error: {}",
+            err.message
+        );
+        assert!(
+            !native_cpu_modal_window_enabled(&plan),
+            "K0-3 periodic_airbox_k0 must not enter native modal production without real magnetic and airbox pair maps"
+        );
+    }
+
+    #[test]
+    fn pa_e4b_k0_kittel_builder_rejects_missing_airbox_geometry_metadata() {
+        let mut plan = minimal_native_modal_plan();
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.damping_policy = EigenDampingPolicyIR::Ignore;
+        plan.operator.include_demag = true;
+        plan.enable_demag = true;
+        plan.gyromagnetic_ratio = 2.211e5;
+        plan.mesh.nodes = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [2.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+            [2.0, 1.0, 0.0],
+            [2.0, 0.0, 1.0],
+        ];
+        plan.mesh.elements = vec![[0, 1, 2, 3], [4, 5, 6, 7]];
+        plan.mesh.element_markers = vec![1, 0];
+        plan.mesh.periodic_node_pairs = vec![
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "x".to_string(),
+                node_a: 0,
+                node_b: 1,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "y".to_string(),
+                node_a: 4,
+                node_b: 5,
+            },
+        ];
+        plan.air_box_config = None;
+        plan.k0_kittel_validation = Some(fullmag_ir::FemEigenK0KittelValidationIR {
+            kind: "k0_kittel_field_sweep".to_string(),
+            case_id: Some("K0-3".to_string()),
+            demag_kind: Some("periodic_airbox_k0".to_string()),
+            model: "thin_film_in_plane".to_string(),
+            field_units: "A_per_m".to_string(),
+            relative_tolerance: 0.05,
+            material: fullmag_ir::FemEigenK0KittelValidationMaterialIR {
+                effective_magnetisation: Some(800_000.0),
+            },
+            samples: vec![fullmag_ir::FemEigenK0KittelValidationSampleIR {
+                sample_index: 0,
+                bias_field: [20.0e-3 / crate::MU0, 0.0, 0.0],
+            }],
+        });
+
+        let err = build_pa_e4b_k0_kittel_poisson_airbox_payload(&plan)
+            .expect_err("PA-E4b payload must require real airbox geometry metadata");
+
+        assert!(
+            err.message
+                .contains("requires positive air_box_config.factor and mesh extent"),
+            "unexpected error: {}",
+            err.message
+        );
+        assert!(
+            !native_cpu_modal_window_enabled(&plan),
+            "K0-3 periodic_airbox_k0 must not enter native modal production without airbox geometry metadata"
         );
     }
 

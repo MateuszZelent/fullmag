@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -851,6 +852,7 @@ def run_validator(
     require_periodic_airbox_gpu_unsupported: bool = False,
     require_floquet_airbox_gpu_unsupported: bool = False,
     require_periodic_airbox_cpu_demag_solved: bool = False,
+    require_accepted_periodic_mesh_certificate: bool = False,
     require_m5_equilibrium_provenance: bool = False,
     require_frozen_magnetic_submesh: bool = False,
     parity_reference: Path | None = None,
@@ -864,6 +866,7 @@ def run_validator(
     allow_interrupted: bool = False,
     allow_unavailable: bool = False,
     allow_solve_error: bool = False,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     command = [sys.executable, str(VALIDATOR)]
     if require_static_periodic:
@@ -878,6 +881,8 @@ def run_validator(
         command.append("--require-floquet-airbox-gpu-unsupported")
     if require_periodic_airbox_cpu_demag_solved:
         command.append("--require-periodic-airbox-cpu-demag-solved")
+    if require_accepted_periodic_mesh_certificate:
+        command.append("--require-accepted-periodic-mesh-certificate")
     if require_m5_equilibrium_provenance:
         command.append("--require-m5-equilibrium-provenance")
     if require_frozen_magnetic_submesh:
@@ -913,7 +918,53 @@ def run_validator(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=False,
+        env={**os.environ, **env} if env is not None else None,
     )
+
+
+def set_periodic_airbox_flux_residual(root: Path, value: float) -> None:
+    diagnostics_path = root / "response" / "diagnostics" / "solver.v1.json"
+    diagnostics = json.loads(diagnostics_path.read_text())
+    diagnostics["delta_phi_flux_max_residual"] = value
+    diagnostics_path.write_text(json.dumps(diagnostics))
+    (root / "response" / "diagnostics.v1.json").write_text(json.dumps(diagnostics))
+
+    manifest_path = root / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["diagnostics"]["delta_phi_flux_max_residual"] = value
+    manifest["physics"]["delta_phi_flux_max_residual"] = value
+    manifest_path.write_text(json.dumps(manifest))
+
+    for point_path in sorted((root / "response" / "frequency_points").glob("frequency_*.json")):
+        point = json.loads(point_path.read_text())
+        point["demag_contribution"]["delta_phi_flux_max_residual"] = value
+        point_path.write_text(json.dumps(point))
+
+
+def mutate_periodic_mesh_certificate_copies(
+    root: Path,
+    field_name: str,
+    value: object,
+) -> None:
+    diagnostics_path = root / "response" / "diagnostics" / "solver.v1.json"
+    diagnostics = json.loads(diagnostics_path.read_text())
+    diagnostics["input_preflight"]["periodic_mesh_certificate"][field_name] = value
+    diagnostics_path.write_text(json.dumps(diagnostics))
+    (root / "response" / "diagnostics.v1.json").write_text(json.dumps(diagnostics))
+
+    manifest_path = root / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["diagnostics"]["input_preflight"]["periodic_mesh_certificate"][
+        field_name
+    ] = value
+    manifest_path.write_text(json.dumps(manifest))
+
+    for point_path in sorted((root / "response" / "frequency_points").glob("frequency_*.json")):
+        point = json.loads(point_path.read_text())
+        point["demag_contribution"]["input_preflight"]["periodic_mesh_certificate"][
+            field_name
+        ] = value
+        point_path.write_text(json.dumps(point))
 
 
 def mark_fixture_as_gpu_dynamic_demag(root: Path, *, source: str | None) -> None:
@@ -1401,6 +1452,24 @@ def write_periodic_airbox_cpu_demag_solved_fixture(
         if exchange_edge_count > 0
         else "demag_coarse"
     )
+    periodic_mesh_certificate = {
+        "schema_version": "periodic_mesh_certificate.v5",
+        "artifact_role": "frequency_response_input_preflight_candidate",
+        "magnetic_pair_count": 1,
+        "airbox_pair_count": 1,
+        "magnetic_pair_map_sha256": "sha256:"
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "airbox_pair_map_sha256": "sha256:"
+        "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+        "pair_map_hash_canonicalization": "periodic_mesh_certificate_pair_map.v1",
+        "tangent_frame_transfer_required": True,
+        "tangent_frame_transfer_artifact_status": "pending_native_certificate_consumption",
+    }
+    input_preflight = {
+        "schema_version": "frequency_response_input_preflight.v1",
+        "status": "ok",
+        "periodic_mesh_certificate": periodic_mesh_certificate,
+    }
     coupled_block_norms = {
         "rhs_delta_m_l2_norm": 1.0,
         "rhs_delta_phi_l2_norm": 0.0,
@@ -1487,6 +1556,7 @@ def write_periodic_airbox_cpu_demag_solved_fixture(
             "delta_phi_flux_validation_status": "ok",
             "delta_phi_flux_validation_reason": "evaluated_periodic_airbox_normal_flux",
             "delta_phi_flux_max_residual": 0.0,
+            "input_preflight": input_preflight,
         }
     )
     diagnostics_path.write_text(json.dumps(diagnostics))
@@ -1595,6 +1665,7 @@ def write_periodic_airbox_cpu_demag_solved_fixture(
             "delta_phi_flux_validation_status": "ok",
             "delta_phi_flux_validation_reason": "evaluated_periodic_airbox_normal_flux",
             "delta_phi_flux_max_residual": 0.0,
+            "input_preflight": input_preflight,
         }
     )
     manifest["resolved_execution"]["dynamic_demag_matrix_form"] = "magnetic_only"
@@ -1615,6 +1686,7 @@ def write_periodic_airbox_cpu_demag_solved_fixture(
                     "operator_source": "matrix_free_demag_tangent_provider",
                     "dynamic_demag_matrix_form": "magnetic_only",
                     "mfem_coupled_block_assembly": False,
+                    "input_preflight": input_preflight,
                     "delta_phi_phase_validation_status": "ok",
                     "delta_phi_phase_max_residual": 0.0,
                     "delta_phi_seam_validation_status": "ok",
@@ -1784,6 +1856,62 @@ def write_periodic_airbox_cpu_demag_solve_error_fixture(root: Path) -> None:
     manifest["diagnostics"].update(diagnostics)
     for section in (manifest, manifest["diagnostics"], manifest["physics"]):
         section["domain_mesh_mode"] = "generated_frozen_magnetic_submesh"
+    manifest_path.write_text(json.dumps(manifest))
+
+
+def convert_solve_error_fixture_to_stagnated_early_stop(root: Path) -> None:
+    progress_path = root / "response" / "progress.v1.json"
+    progress = json.loads(progress_path.read_text())
+    progress.update(
+        {
+            "native_iteration_count": 256,
+            "native_max_iterations_for_frequency": 8192,
+            "native_current_frequency_solve_fraction": 256.0 / 8192.0,
+            "native_residual_l2_norm": 0.95,
+            "native_relative_residual_l2_norm": 0.95,
+        }
+    )
+    progress_json = json.loads(progress["progress_json"])
+    progress_json.update(
+        {
+            "native_iteration_count": 256,
+            "native_max_iterations_for_frequency": 8192,
+            "native_current_frequency_solve_fraction": 256.0 / 8192.0,
+            "native_residual_l2_norm": 0.95,
+            "native_relative_residual_l2_norm": 0.95,
+        }
+    )
+    progress["progress_json"] = json.dumps(progress_json)
+    progress_path.write_text(json.dumps(progress))
+
+    diagnostics_path = root / "response" / "diagnostics" / "solver.v1.json"
+    diagnostics = json.loads(diagnostics_path.read_text())
+    diagnostics.update(
+        {
+            "total_iteration_count": 256,
+            "max_iterations_for_frequency": 8192,
+            "restart_iterations_for_frequency": 512,
+            "progress_interval_iterations": 64,
+            "gmres_relative_residual_history": [1.0, 0.96, 0.95],
+            "initial_relative_residual_l2_norm": 1.0,
+            "relative_residual_l2_norm": 0.95,
+            "last_tracked_relative_residual_l2_norm": 0.95,
+            "last_recomputed_relative_residual_l2_norm": 0.95,
+            "residual_consistency_status": "ok",
+            "residual_consistency_relative_gap": 0.0,
+            "residual_consistency_recomputed_to_tracked_ratio": 1.0,
+            "stop_reason": "stagnated",
+            "stagnation_detected": True,
+            "stagnation_iteration": 256,
+            "stagnation_relative_residual_ratio": 0.95,
+        }
+    )
+    diagnostics_path.write_text(json.dumps(diagnostics))
+    (root / "response" / "diagnostics.v1.json").write_text(json.dumps(diagnostics))
+
+    manifest_path = root / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["diagnostics"].update(diagnostics)
     manifest_path.write_text(json.dumps(manifest))
 
 
@@ -2315,6 +2443,165 @@ def test_validator_accepts_periodic_airbox_cpu_demag_solved_boundary(
     assert result.returncode == 0, result.stderr + result.stdout
 
 
+def test_validator_rejects_periodic_airbox_manifest_certificate_hash_mismatch(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path)
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["diagnostics"]["input_preflight"]["periodic_mesh_certificate"][
+        "magnetic_pair_map_sha256"
+    ] = (
+        "sha256:"
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    )
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+    )
+
+    assert result.returncode != 0
+    assert "periodic_mesh_certificate.magnetic_pair_map_sha256" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_periodic_airbox_frequency_point_certificate_hash_mismatch(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path)
+    point_path = tmp_path / "response" / "frequency_points" / "frequency_0000.json"
+    point = json.loads(point_path.read_text())
+    point["demag_contribution"]["input_preflight"]["periodic_mesh_certificate"][
+        "airbox_pair_map_sha256"
+    ] = (
+        "sha256:"
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    )
+    point_path.write_text(json.dumps(point))
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+    )
+
+    assert result.returncode != 0
+    assert "demag_contribution.input_preflight.periodic_mesh_certificate.airbox_pair_map_sha256" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_periodic_airbox_certificate_zero_magnetic_pairs(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path)
+    mutate_periodic_mesh_certificate_copies(tmp_path, "magnetic_pair_count", 0)
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+    )
+
+    assert result.returncode != 0
+    assert "periodic_mesh_certificate.magnetic_pair_count" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_periodic_airbox_certificate_unknown_transfer_status(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path)
+    mutate_periodic_mesh_certificate_copies(
+        tmp_path,
+        "tangent_frame_transfer_artifact_status",
+        "unknown",
+    )
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+    )
+
+    assert result.returncode != 0
+    assert "periodic_mesh_certificate.tangent_frame_transfer_artifact_status" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_pending_periodic_certificate_when_accepted_required(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path)
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+        require_accepted_periodic_mesh_certificate=True,
+    )
+
+    assert result.returncode != 0
+    assert "tangent_frame_transfer_artifact_status" in (
+        result.stderr + result.stdout
+    )
+    assert "accepted_native_certificate_consumed" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_accepts_consumed_periodic_certificate_when_accepted_required(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path)
+    mutate_periodic_mesh_certificate_copies(
+        tmp_path,
+        "tangent_frame_transfer_artifact_status",
+        "accepted_native_certificate_consumed",
+    )
+    mutate_periodic_mesh_certificate_copies(
+        tmp_path,
+        "tangent_frame_transfer_block_count",
+        1,
+    )
+    mutate_periodic_mesh_certificate_copies(
+        tmp_path,
+        "tangent_frame_transfer_blocks_row_major_2x2_sha256",
+        "sha256:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+    )
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+        require_accepted_periodic_mesh_certificate=True,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_rejects_accepted_periodic_certificate_without_transfer_block_evidence(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path)
+    mutate_periodic_mesh_certificate_copies(
+        tmp_path,
+        "tangent_frame_transfer_artifact_status",
+        "accepted_native_certificate_consumed",
+    )
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+        require_accepted_periodic_mesh_certificate=True,
+    )
+
+    assert result.returncode != 0
+    assert "tangent_frame_transfer_block_count" in (
+        result.stderr + result.stdout
+    )
+
+
 def test_validator_rejects_periodic_airbox_cpu_demag_without_flux_validation(
     tmp_path: Path,
 ) -> None:
@@ -2336,6 +2623,61 @@ def test_validator_rejects_periodic_airbox_cpu_demag_without_flux_validation(
 
     assert result.returncode != 0
     assert "delta_phi_flux_validation_status" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_device_periodic_airbox_flux_residual_above_strict_tolerance(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path)
+    set_periodic_airbox_flux_residual(tmp_path, 8.8e-3)
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+        env={
+            "FULLMAG_FEM_FREQUENCY_RESPONSE_GPU_DEMAG_MODE": "device_hypre_poisson",
+        },
+    )
+
+    assert result.returncode != 0
+    assert "delta_phi_flux_max_residual exceeds tolerance" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_accepts_hybrid_periodic_airbox_flux_residual_below_compatibility_tolerance(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path)
+    set_periodic_airbox_flux_residual(tmp_path, 8.8e-3)
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+        env={
+            "FULLMAG_FEM_FREQUENCY_RESPONSE_GPU_DEMAG_MODE": "hybrid_cpu_poisson",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_accepts_configured_periodic_airbox_flux_residual_tolerance(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path)
+    set_periodic_airbox_flux_residual(tmp_path, 1.5e-2)
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+        env={
+            "FULLMAG_FEM_FREQUENCY_RESPONSE_GPU_DEMAG_MODE": "hybrid_cpu_poisson",
+            "FULLMAG_FEM_FREQUENCY_RESPONSE_DELTA_PHI_FLUX_MAX_TOLERANCE_T": "2e-2",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
 
 
 def test_validator_rejects_periodic_airbox_cpu_demag_without_dynamic_demag_matrix_form(
@@ -2502,6 +2844,23 @@ def test_validator_accepts_periodic_airbox_cpu_demag_auto_retry_without_precondi
     set_krylov_preconditioner_auto_fallback(
         tmp_path,
         reason="solve_error_retry_without_right_preconditioner",
+    )
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_accepts_periodic_airbox_cpu_demag_auto_unpreconditioned_pilot(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path)
+    set_krylov_preconditioner_auto_fallback(
+        tmp_path,
+        reason="pilot_selected_unpreconditioned_after_probe",
     )
 
     result = run_validator(
@@ -3271,6 +3630,22 @@ def test_validator_accepts_bounded_periodic_airbox_solve_error_bundle(
     tmp_path: Path,
 ) -> None:
     write_periodic_airbox_cpu_demag_solve_error_fixture(tmp_path)
+
+    result = run_validator(
+        tmp_path,
+        require_periodic_airbox_cpu_demag_solved=True,
+        require_frozen_magnetic_submesh=True,
+        allow_solve_error=True,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_accepts_stagnated_periodic_airbox_solve_error_before_max_iterations(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solve_error_fixture(tmp_path)
+    convert_solve_error_fixture_to_stagnated_early_stop(tmp_path)
 
     result = run_validator(
         tmp_path,

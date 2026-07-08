@@ -168,6 +168,44 @@ void lift_tangent_to_full(
     }
 }
 
+void project_cartesian_complex_to_tangent(
+    const TangentFrameNode *nodes,
+    const double *cartesian_real_xyz,
+    const double *cartesian_imag_xyz,
+    std::uint64_t node_count,
+    double *out_tangent_real_2,
+    double *out_tangent_imag_2) noexcept
+{
+    if (nodes == nullptr ||
+        cartesian_real_xyz == nullptr ||
+        cartesian_imag_xyz == nullptr ||
+        out_tangent_real_2 == nullptr ||
+        out_tangent_imag_2 == nullptr) {
+        return;
+    }
+    project_full_to_tangent(nodes, cartesian_real_xyz, node_count, out_tangent_real_2);
+    project_full_to_tangent(nodes, cartesian_imag_xyz, node_count, out_tangent_imag_2);
+}
+
+void lift_tangent_complex_to_cartesian(
+    const TangentFrameNode *nodes,
+    const double *tangent_real_2,
+    const double *tangent_imag_2,
+    std::uint64_t node_count,
+    double *out_cartesian_real_xyz,
+    double *out_cartesian_imag_xyz) noexcept
+{
+    if (nodes == nullptr ||
+        tangent_real_2 == nullptr ||
+        tangent_imag_2 == nullptr ||
+        out_cartesian_real_xyz == nullptr ||
+        out_cartesian_imag_xyz == nullptr) {
+        return;
+    }
+    lift_tangent_to_full(nodes, tangent_real_2, node_count, out_cartesian_real_xyz);
+    lift_tangent_to_full(nodes, tangent_imag_2, node_count, out_cartesian_imag_xyz);
+}
+
 TangentProjectionDiagnostics diagnose_tangent_projection(
     const TangentFrameNode *nodes,
     const double *full_xyz,

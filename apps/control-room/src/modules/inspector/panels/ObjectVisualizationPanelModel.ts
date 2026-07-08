@@ -17,6 +17,13 @@ import {
   resolveCanonicalQuantityId,
 } from "@/kernel/api/quantityIds";
 import {
+  displayUnitItemsForSourceUnit,
+  formatDisplayUnitValue,
+  formatValueWithDisplayUnit,
+  formatValueWithUnit,
+  hasDisplayUnitOptions,
+} from "@/shared/domain/physics/displayUnits";
+import {
   renderModePatch,
   surfaceColorSourceToColorMode,
   type SurfaceFieldProjectionMode,
@@ -118,16 +125,36 @@ export function scalarColorPaletteGradientCss(
 }
 
 export function formatScalarColorbarValue(value: number): string {
-  return Number.isFinite(value) ? Number(value.toPrecision(4)).toString() : "unknown";
+  return formatDisplayUnitValue(value);
 }
 
 export function formatScalarColorbarValueWithUnit(
   value: number,
   unit: string | null | undefined,
 ): string {
-  const valueLabel = formatScalarColorbarValue(value);
-  const unitLabel = unit?.trim();
-  return unitLabel && unitLabel !== "1" ? `${valueLabel} ${unitLabel}` : valueLabel;
+  return formatValueWithUnit(value, unit);
+}
+
+export type ScalarColorbarDisplayUnit = string;
+
+export function scalarColorbarDisplayUnitItems(
+  unit: string | null | undefined,
+): Array<{ label: string; value: ScalarColorbarDisplayUnit }> {
+  return displayUnitItemsForSourceUnit(unit);
+}
+
+export function scalarColorbarSupportsDisplayUnits(
+  unit: string | null | undefined,
+): boolean {
+  return hasDisplayUnitOptions(unit);
+}
+
+export function formatScalarColorbarValueWithDisplayUnit(
+  value: number,
+  sourceUnit: string | null | undefined,
+  displayUnit: ScalarColorbarDisplayUnit,
+): string {
+  return formatValueWithDisplayUnit(value, sourceUnit, displayUnit);
 }
 
 export function surfaceColorSourceFieldMetaComponent(

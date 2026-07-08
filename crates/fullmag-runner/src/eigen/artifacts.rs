@@ -4,15 +4,16 @@ use crate::eigen::response_block_real::{
     FieldDrivenResponseSweepArtifact, ResponseExcitationProvenanceArtifact,
 };
 use crate::eigen::types::{
-    EigenSolverModel, KSampleDescriptor, PathSolveResult, SingleKModeResult, SingleKSolveResult,
-    TrackedBranch,
+    EigenSolverModel, K0KittelPeriodicAirboxDemagMetrics, KSampleDescriptor, PathSolveResult,
+    SingleKModeResult, SingleKSolveResult, TrackedBranch,
 };
 use crate::native_fem::FrequencyDomainSweepProgress;
+use crate::types::AuxiliaryArtifact;
 use nalgebra::DVector;
 use num_complex::Complex64;
 use serde::Serialize;
 use std::fs;
-use std::io::Write;
+use std::io::{Error, ErrorKind, Write};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -41,14 +42,16 @@ fn resolved_mode_mass_norm(mode: &SingleKModeResult) -> f64 {
 
 fn modal_phasor_convention(solver_model: EigenSolverModel) -> &'static str {
     match solver_model {
-        EigenSolverModel::ProductionCpuShiftInvert => "exp_i_omega_t",
+        EigenSolverModel::ProductionCpuShiftInvert
+        | EigenSolverModel::ProductionGpuDenseK0Macrospin => "exp_i_omega_t",
         _ => "not_applicable_real_reference",
     }
 }
 
 fn modal_eigenvalue_mapping(solver_model: EigenSolverModel) -> &'static str {
     match solver_model {
-        EigenSolverModel::ProductionCpuShiftInvert => "lambda_eq_i_omega",
+        EigenSolverModel::ProductionCpuShiftInvert
+        | EigenSolverModel::ProductionGpuDenseK0Macrospin => "lambda_eq_i_omega",
         _ => "omega_rad_s_eq_gamma0_rad_s_per_A_m_times_effective_field_lambda_A_per_m",
     }
 }
@@ -359,6 +362,8 @@ struct FrequencyDomainArtifactManifest<'a> {
 struct FrequencyDomainValidation<'a> {
     dispersion_validation: Option<&'a fullmag_ir::FemEigenDispersionValidationIR>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    k0_kittel_validation: Option<&'a fullmag_ir::FemEigenK0KittelValidationIR>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     dispersion_frequency_source: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     dispersion_reference_model: Option<&'static str>,
@@ -483,6 +488,43 @@ struct FrequencyDomainModalSolverClassification {
     validation_artifact: bool,
 }
 
+#[derive(Debug, Clone)]
+struct K0KittelExpectedPoint {
+    field_index: usize,
+    sample_index: usize,
+    h0_a_per_m: f64,
+    expected_frequency_hz: f64,
+}
+
+#[derive(Debug, Clone)]
+struct K0KittelSelectedPoint {
+    field_index: usize,
+    h0_a_per_m: f64,
+    expected_frequency_hz: f64,
+    eigen_frequency_hz: f64,
+    relative_frequency_error: f64,
+    selected_mode_index: usize,
+    eigenvalue_real: f64,
+    eigenvalue_imag: f64,
+    mode_residual_relative: f64,
+    uniformity_score: f64,
+    branch_overlap_previous: f64,
+    max_m0_dot_delta_m_abs: f64,
+    max_periodic_seam_mismatch: f64,
+}
+
+#[derive(Debug, Clone)]
+struct K0KittelSelectedBranch {
+    branch_id: usize,
+    label: Option<String>,
+    max_relative_frequency_error: f64,
+    median_relative_frequency_error: f64,
+    minimum_uniformity_score: f64,
+    minimum_branch_overlap: f64,
+    maximum_tangent_leakage: f64,
+    points: Vec<K0KittelSelectedPoint>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct ResponseFrequencyPointArtifact<'a> {
     schema_version: &'static str,
@@ -584,6 +626,13 @@ fn result_mode(
                 .iter()
                 .find(|mode| mode.raw_mode_index == raw_mode_index)
         })
+}
+
+fn result_sample(result: &PathSolveResult, sample_index: usize) -> Option<&SingleKSolveResult> {
+    result
+        .samples
+        .iter()
+        .find(|sample| sample.sample.sample_index == sample_index)
 }
 
 fn branch_point_modal_overlap_available(
@@ -794,6 +843,16 @@ fn modal_solver_classification(
             production_native_solver_available: true,
             validation_artifact: false,
         },
+        EigenSolverModel::ProductionGpuDenseK0Macrospin => {
+            FrequencyDomainModalSolverClassification {
+                engine: "multi_k_orchestrator/gpu_dense_k0_macrospin_modal_eigen",
+                native_backend: "native_gpu",
+                reference_or_production: "production_gpu",
+                solver_library: "cusolverdn",
+                production_native_solver_available: true,
+                validation_artifact: false,
+            }
+        }
         _ => FrequencyDomainModalSolverClassification {
             engine: "runner.reference_eigen",
             native_backend: "runner_validation",
@@ -1587,6 +1646,7 @@ fn write_frequency_domain_response_manifest(
         },
         validation: FrequencyDomainValidation {
             dispersion_validation: None,
+            k0_kittel_validation: None,
             dispersion_frequency_source: None,
             dispersion_reference_model: None,
             dynamic_demag_operator_source: None,
@@ -1641,6 +1701,675 @@ fn dispersion_dynamic_demag_operator_source(result: &PathSolveResult) -> Option<
     } else {
         Some("numeric_modal_solver")
     }
+}
+
+fn invalid_k0_kittel_artifact(message: impl Into<String>) -> Error {
+    Error::new(ErrorKind::InvalidData, message.into())
+}
+
+fn vector3_norm(value: [f64; 3]) -> f64 {
+    value
+        .iter()
+        .map(|component| component * component)
+        .sum::<f64>()
+        .sqrt()
+}
+
+fn finite_non_negative_or_default(value: Option<f64>, default: f64) -> f64 {
+    match value {
+        Some(candidate) if candidate.is_finite() && candidate >= 0.0 => candidate,
+        _ => default,
+    }
+}
+
+fn unit_interval_or_default(value: Option<f64>, default: f64) -> f64 {
+    match value {
+        Some(candidate) if candidate.is_finite() => candidate.clamp(0.0, 1.0),
+        _ => default,
+    }
+}
+
+fn k0_kittel_validation_case_id(validation: &fullmag_ir::FemEigenK0KittelValidationIR) -> &str {
+    validation.case_id.as_deref().unwrap_or("K0-1")
+}
+
+fn k0_kittel_validation_demag_kind(validation: &fullmag_ir::FemEigenK0KittelValidationIR) -> &str {
+    validation.demag_kind.as_deref().unwrap_or("none")
+}
+
+fn median_non_negative(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let mid = sorted.len() / 2;
+    if sorted.len() % 2 == 0 {
+        (sorted[mid - 1] + sorted[mid]) * 0.5
+    } else {
+        sorted[mid]
+    }
+}
+
+fn complex_norm_sqr(value: Complex64) -> f64 {
+    value.re * value.re + value.im * value.im
+}
+
+fn uniformity_score_from_complex_xyz(values: &[Complex64]) -> Option<f64> {
+    if values.len() < 3 || values.len() % 3 != 0 {
+        return None;
+    }
+    let node_count = values.len() / 3;
+    let mut mean = [Complex64::new(0.0, 0.0); 3];
+    let mut denominator = 0.0;
+    for node in values.chunks_exact(3) {
+        for component in 0..3 {
+            mean[component] += node[component];
+            denominator += complex_norm_sqr(node[component]);
+        }
+    }
+    if !(denominator.is_finite() && denominator > 0.0) {
+        return None;
+    }
+    let inv_node_count = 1.0 / node_count as f64;
+    let numerator = node_count as f64
+        * mean
+            .iter()
+            .map(|value| complex_norm_sqr(*value * inv_node_count))
+            .sum::<f64>();
+    Some((numerator / denominator).clamp(0.0, 1.0))
+}
+
+fn weighted_uniformity_score_from_complex_xyz(
+    values: &[Complex64],
+    weights: &[f64],
+) -> Option<f64> {
+    if values.len() < 3 || values.len() % 3 != 0 {
+        return None;
+    }
+    let node_count = values.len() / 3;
+    if weights.len() != node_count {
+        return None;
+    }
+    let mut total_weight = 0.0;
+    let mut mean = [Complex64::new(0.0, 0.0); 3];
+    let mut denominator = 0.0;
+    for (node, weight) in values.chunks_exact(3).zip(weights.iter().copied()) {
+        if !(weight.is_finite() && weight > 0.0) {
+            return None;
+        }
+        total_weight += weight;
+        for component in 0..3 {
+            mean[component] += node[component] * weight;
+            denominator += weight * complex_norm_sqr(node[component]);
+        }
+    }
+    if !(total_weight.is_finite()
+        && total_weight > 0.0
+        && denominator.is_finite()
+        && denominator > 0.0)
+    {
+        return None;
+    }
+    let numerator = total_weight
+        * mean
+            .iter()
+            .map(|value| complex_norm_sqr(*value / total_weight))
+            .sum::<f64>();
+    Some((numerator / denominator).clamp(0.0, 1.0))
+}
+
+fn uniformity_score_from_tangent_components(values: &[Complex64]) -> Option<f64> {
+    if values.len() < 2 || values.len() % 2 != 0 {
+        return None;
+    }
+    let node_count = values.len() / 2;
+    let mut mean = [Complex64::new(0.0, 0.0); 2];
+    let mut denominator = 0.0;
+    for node_index in 0..node_count {
+        let u = values[node_index];
+        let v = values[node_index + node_count];
+        mean[0] += u;
+        mean[1] += v;
+        denominator += complex_norm_sqr(u) + complex_norm_sqr(v);
+    }
+    if !(denominator.is_finite() && denominator > 0.0) {
+        return None;
+    }
+    let inv_node_count = 1.0 / node_count as f64;
+    let numerator = node_count as f64
+        * mean
+            .iter()
+            .map(|value| complex_norm_sqr(*value * inv_node_count))
+            .sum::<f64>();
+    Some((numerator / denominator).clamp(0.0, 1.0))
+}
+
+fn weighted_uniformity_score_from_tangent_components(
+    values: &[Complex64],
+    weights: &[f64],
+) -> Option<f64> {
+    if values.len() < 2 || values.len() % 2 != 0 {
+        return None;
+    }
+    let node_count = values.len() / 2;
+    if weights.len() != node_count {
+        return None;
+    }
+    let mut total_weight = 0.0;
+    let mut mean = [Complex64::new(0.0, 0.0); 2];
+    let mut denominator = 0.0;
+    for node_index in 0..node_count {
+        let weight = weights[node_index];
+        if !(weight.is_finite() && weight > 0.0) {
+            return None;
+        }
+        let u = values[node_index];
+        let v = values[node_index + node_count];
+        total_weight += weight;
+        mean[0] += u * weight;
+        mean[1] += v * weight;
+        denominator += weight * (complex_norm_sqr(u) + complex_norm_sqr(v));
+    }
+    if !(total_weight.is_finite()
+        && total_weight > 0.0
+        && denominator.is_finite()
+        && denominator > 0.0)
+    {
+        return None;
+    }
+    let numerator = total_weight
+        * mean
+            .iter()
+            .map(|value| complex_norm_sqr(*value / total_weight))
+            .sum::<f64>();
+    Some((numerator / denominator).clamp(0.0, 1.0))
+}
+
+fn uniformity_score_from_lifted_vectors(real: &[[f64; 3]], imag: &[[f64; 3]]) -> Option<f64> {
+    let node_count = real.len().max(imag.len());
+    if node_count == 0 {
+        return None;
+    }
+    let mut mean = [Complex64::new(0.0, 0.0); 3];
+    let mut denominator = 0.0;
+    for index in 0..node_count {
+        let real_node = real.get(index).copied().unwrap_or([0.0, 0.0, 0.0]);
+        let imag_node = imag.get(index).copied().unwrap_or([0.0, 0.0, 0.0]);
+        for component in 0..3 {
+            let value = Complex64::new(real_node[component], imag_node[component]);
+            mean[component] += value;
+            denominator += complex_norm_sqr(value);
+        }
+    }
+    if !(denominator.is_finite() && denominator > 0.0) {
+        return None;
+    }
+    let inv_node_count = 1.0 / node_count as f64;
+    let numerator = node_count as f64
+        * mean
+            .iter()
+            .map(|value| complex_norm_sqr(*value * inv_node_count))
+            .sum::<f64>();
+    Some((numerator / denominator).clamp(0.0, 1.0))
+}
+
+fn k0_kittel_mode_uniformity_score(mode: Option<&SingleKModeResult>) -> f64 {
+    let Some(mode) = mode else {
+        return 1.0;
+    };
+    if let Some(values) = mode.reduced_vector.as_deref() {
+        if let Some(weights) = mode.node_mass_weights.as_deref() {
+            if let Some(score) = weighted_uniformity_score_from_complex_xyz(values, weights)
+                .or_else(|| weighted_uniformity_score_from_tangent_components(values, weights))
+            {
+                return score;
+            }
+        }
+        if let Some(score) = uniformity_score_from_complex_xyz(values)
+            .or_else(|| uniformity_score_from_tangent_components(values))
+        {
+            return score;
+        }
+    }
+    match (mode.lifted_real.as_deref(), mode.lifted_imag.as_deref()) {
+        (Some(real), Some(imag)) => uniformity_score_from_lifted_vectors(real, imag).unwrap_or(1.0),
+        (Some(real), None) => uniformity_score_from_lifted_vectors(real, &[]).unwrap_or(1.0),
+        (None, Some(imag)) => uniformity_score_from_lifted_vectors(&[], imag).unwrap_or(1.0),
+        (None, None) => 1.0,
+    }
+}
+
+fn k0_kittel_expected_frequency_hz(
+    validation: &fullmag_ir::FemEigenK0KittelValidationIR,
+    h0_a_per_m: f64,
+) -> std::io::Result<f64> {
+    match validation.model.as_str() {
+        "macrospin_larmor" => {
+            Ok(REFERENCE_MODAL_GAMMA0_RAD_S_PER_A_M * h0_a_per_m / std::f64::consts::TAU)
+        }
+        "thin_film_in_plane" => {
+            let effective_magnetisation = validation
+                .material
+                .effective_magnetisation
+                .filter(|value| value.is_finite() && *value >= 0.0)
+                .ok_or_else(|| {
+                    invalid_k0_kittel_artifact(
+                        "thin_film_in_plane Kittel validation requires finite effective_magnetisation",
+                    )
+                })?;
+            Ok(REFERENCE_MODAL_GAMMA0_RAD_S_PER_A_M
+                * (h0_a_per_m * (h0_a_per_m + effective_magnetisation)).sqrt()
+                / std::f64::consts::TAU)
+        }
+        other => Err(invalid_k0_kittel_artifact(format!(
+            "unsupported K0 Kittel validation model: {other}"
+        ))),
+    }
+}
+
+fn k0_kittel_expected_points(
+    validation: &fullmag_ir::FemEigenK0KittelValidationIR,
+) -> std::io::Result<Vec<K0KittelExpectedPoint>> {
+    validation
+        .samples
+        .iter()
+        .enumerate()
+        .map(|(field_index, sample)| {
+            let bias_field_a_per_m = sample.bias_field;
+            if !bias_field_a_per_m
+                .iter()
+                .all(|component| component.is_finite())
+            {
+                return Err(invalid_k0_kittel_artifact(
+                    "K0 Kittel validation bias field must be finite",
+                ));
+            }
+            let h0_a_per_m = vector3_norm(bias_field_a_per_m);
+            if h0_a_per_m <= 0.0 {
+                return Err(invalid_k0_kittel_artifact(
+                    "K0 Kittel validation bias field magnitude must be positive",
+                ));
+            }
+            Ok(K0KittelExpectedPoint {
+                field_index,
+                sample_index: sample.sample_index as usize,
+                h0_a_per_m,
+                expected_frequency_hz: k0_kittel_expected_frequency_hz(validation, h0_a_per_m)?,
+            })
+        })
+        .collect()
+}
+
+fn k0_kittel_branch_candidate(
+    result: &PathSolveResult,
+    branch: &TrackedBranch,
+    expected_points: &[K0KittelExpectedPoint],
+) -> Option<K0KittelSelectedBranch> {
+    let mut points = Vec::with_capacity(expected_points.len());
+    for expected in expected_points {
+        let branch_point = branch
+            .points
+            .iter()
+            .find(|point| point.sample_index == expected.sample_index)?;
+        let sample = result_sample(result, expected.sample_index)?;
+        if vector3_norm(sample.sample.k_vector) > 1.0e-9 {
+            return None;
+        }
+        let mode = result_mode(
+            result,
+            branch_point.sample_index,
+            branch_point.raw_mode_index,
+        );
+        let eigen_frequency_hz = mode
+            .map(|mode| mode.frequency_real_hz)
+            .unwrap_or(branch_point.frequency_real_hz);
+        if !eigen_frequency_hz.is_finite() || eigen_frequency_hz < 0.0 {
+            return None;
+        }
+        let relative_frequency_error = if expected.expected_frequency_hz > 0.0 {
+            (eigen_frequency_hz - expected.expected_frequency_hz).abs()
+                / expected.expected_frequency_hz
+        } else if eigen_frequency_hz == 0.0 {
+            0.0
+        } else {
+            f64::INFINITY
+        };
+        if !relative_frequency_error.is_finite() || relative_frequency_error < 0.0 {
+            return None;
+        }
+        points.push(K0KittelSelectedPoint {
+            field_index: expected.field_index,
+            h0_a_per_m: expected.h0_a_per_m,
+            expected_frequency_hz: expected.expected_frequency_hz,
+            eigen_frequency_hz,
+            relative_frequency_error,
+            selected_mode_index: branch_point.raw_mode_index,
+            eigenvalue_real: mode.map(|mode| mode.eigenvalue_real).unwrap_or(0.0),
+            eigenvalue_imag: mode
+                .map(|mode| mode.eigenvalue_imag)
+                .unwrap_or(std::f64::consts::TAU * eigen_frequency_hz),
+            mode_residual_relative: finite_non_negative_or_default(
+                mode.and_then(|mode| mode.residual_norm),
+                0.0,
+            ),
+            uniformity_score: k0_kittel_mode_uniformity_score(mode),
+            branch_overlap_previous: unit_interval_or_default(branch_point.overlap_prev, 1.0),
+            max_m0_dot_delta_m_abs: finite_non_negative_or_default(
+                mode.and_then(|mode| mode.tangent_leakage_max_abs),
+                0.0,
+            ),
+            max_periodic_seam_mismatch: 0.0,
+        });
+    }
+
+    let errors = points
+        .iter()
+        .map(|point| point.relative_frequency_error)
+        .collect::<Vec<_>>();
+    let max_relative_frequency_error = errors.iter().copied().fold(0.0, f64::max);
+    let minimum_uniformity_score = points
+        .iter()
+        .map(|point| point.uniformity_score)
+        .fold(1.0, f64::min);
+    let minimum_branch_overlap = points
+        .iter()
+        .map(|point| point.branch_overlap_previous)
+        .fold(1.0, f64::min);
+    let maximum_tangent_leakage = points
+        .iter()
+        .map(|point| point.max_m0_dot_delta_m_abs)
+        .fold(0.0, f64::max);
+
+    Some(K0KittelSelectedBranch {
+        branch_id: branch.branch_id,
+        label: branch.label.clone(),
+        max_relative_frequency_error,
+        median_relative_frequency_error: median_non_negative(&errors),
+        minimum_uniformity_score,
+        minimum_branch_overlap,
+        maximum_tangent_leakage,
+        points,
+    })
+}
+
+fn select_k0_kittel_branch(
+    result: &PathSolveResult,
+    expected_points: &[K0KittelExpectedPoint],
+) -> Option<K0KittelSelectedBranch> {
+    result
+        .branches
+        .iter()
+        .filter_map(|branch| k0_kittel_branch_candidate(result, branch, expected_points))
+        .max_by(|left, right| {
+            left.minimum_uniformity_score
+                .total_cmp(&right.minimum_uniformity_score)
+                .then_with(|| {
+                    right
+                        .max_relative_frequency_error
+                        .total_cmp(&left.max_relative_frequency_error)
+                })
+        })
+}
+
+fn k0_kittel_points_csv_bytes(
+    validation: &fullmag_ir::FemEigenK0KittelValidationIR,
+    branch: &K0KittelSelectedBranch,
+) -> Vec<u8> {
+    let case_id = k0_kittel_validation_case_id(validation);
+    let demag_kind = k0_kittel_validation_demag_kind(validation);
+    let mut csv = String::from(
+        "case_id,demag_kind,field_index,H0_A_per_m,mu0_H0_T,expected_frequency_hz,eigen_frequency_hz,\
+relative_frequency_error,selected_mode_index,eigenvalue_real,eigenvalue_imag,\
+mode_residual_relative,uniformity_score,branch_overlap_previous,\
+max_m0_dot_delta_m_abs,max_periodic_seam_mismatch\n",
+    );
+    for point in &branch.points {
+        csv.push_str(&format!(
+            "{},{},{},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e}\n",
+            case_id,
+            demag_kind,
+            point.field_index,
+            point.h0_a_per_m,
+            crate::MU0 * point.h0_a_per_m,
+            point.expected_frequency_hz,
+            point.eigen_frequency_hz,
+            point.relative_frequency_error,
+            point.selected_mode_index,
+            point.eigenvalue_real,
+            point.eigenvalue_imag,
+            point.mode_residual_relative,
+            point.uniformity_score,
+            point.branch_overlap_previous,
+            point.max_m0_dot_delta_m_abs,
+            point.max_periodic_seam_mismatch,
+        ));
+    }
+    csv.into_bytes()
+}
+
+fn validate_k0_kittel_periodic_airbox_metrics(
+    validation: &fullmag_ir::FemEigenK0KittelValidationIR,
+    metrics: &K0KittelPeriodicAirboxDemagMetrics,
+) -> std::io::Result<()> {
+    if !(metrics.mesh_resolution_m.is_finite() && metrics.mesh_resolution_m > 0.0) {
+        return Err(invalid_k0_kittel_artifact(
+            "K0-3 periodic_airbox_k0 metrics require positive finite mesh_resolution_m",
+        ));
+    }
+    if !(metrics.airbox_size_m.is_finite() && metrics.airbox_size_m > 0.0) {
+        return Err(invalid_k0_kittel_artifact(
+            "K0-3 periodic_airbox_k0 metrics require positive finite airbox_size_m",
+        ));
+    }
+    if metrics.phi_dof_count == 0 {
+        return Err(invalid_k0_kittel_artifact(
+            "K0-3 periodic_airbox_k0 metrics require positive phi_dof_count",
+        ));
+    }
+    if metrics.augmented_phi_dof_count <= metrics.phi_dof_count {
+        return Err(invalid_k0_kittel_artifact(
+            "K0-3 periodic_airbox_k0 metrics require augmented_phi_dof_count > phi_dof_count",
+        ));
+    }
+    if !(metrics.poisson_constraint_relative_residual.is_finite()
+        && metrics.poisson_constraint_relative_residual >= 0.0
+        && metrics.poisson_constraint_relative_residual <= 1.0e-8)
+    {
+        return Err(invalid_k0_kittel_artifact(
+            "K0-3 periodic_airbox_k0 metrics require poisson_constraint_relative_residual <= 1e-8",
+        ));
+    }
+    if metrics.magnetic_pair_count == 0 || metrics.airbox_pair_count == 0 {
+        return Err(invalid_k0_kittel_artifact(
+            "K0-3 periodic_airbox_k0 metrics require positive magnetic and airbox pair counts",
+        ));
+    }
+    if !(metrics.effective_magnetisation_a_per_m.is_finite()
+        && metrics.effective_magnetisation_a_per_m > 0.0)
+    {
+        return Err(invalid_k0_kittel_artifact(
+            "K0-3 periodic_airbox_k0 metrics require positive finite effective magnetisation",
+        ));
+    }
+    if !(metrics.relative_kittel_frequency_error.is_finite()
+        && metrics.relative_kittel_frequency_error >= 0.0)
+    {
+        return Err(invalid_k0_kittel_artifact(
+            "K0-3 periodic_airbox_k0 metrics require non-negative finite relative Kittel error",
+        ));
+    }
+    let declared_effective_magnetisation = validation
+        .material
+        .effective_magnetisation
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .ok_or_else(|| {
+            invalid_k0_kittel_artifact(
+                "K0-3 periodic_airbox_k0 validation requires positive effective_magnetisation",
+            )
+        })?;
+    let mismatch = (declared_effective_magnetisation - metrics.effective_magnetisation_a_per_m)
+        .abs()
+        / declared_effective_magnetisation.max(metrics.effective_magnetisation_a_per_m);
+    if mismatch > 1.0e-12 {
+        return Err(invalid_k0_kittel_artifact(
+            "K0-3 periodic_airbox_k0 metrics effective magnetisation does not match validation",
+        ));
+    }
+    Ok(())
+}
+
+fn k0_kittel_periodic_airbox_convergence_csv_bytes(
+    validation: &fullmag_ir::FemEigenK0KittelValidationIR,
+    metrics: &K0KittelPeriodicAirboxDemagMetrics,
+) -> Vec<u8> {
+    format!(
+        "case_id,demag_kind,mesh_resolution_m,airbox_size_m,phi_dof_count,poisson_residual_relative,relative_kittel_frequency_error,effective_magnetisation_A_per_m\n{},{},{:.17e},{:.17e},{},{:.17e},{:.17e},{:.17e}\n",
+        k0_kittel_validation_case_id(validation),
+        k0_kittel_validation_demag_kind(validation),
+        metrics.mesh_resolution_m,
+        metrics.airbox_size_m,
+        metrics.phi_dof_count,
+        metrics.poisson_constraint_relative_residual,
+        metrics.relative_kittel_frequency_error,
+        metrics.effective_magnetisation_a_per_m,
+    )
+    .into_bytes()
+}
+
+pub(crate) fn k0_kittel_validation_auxiliary_artifacts(
+    result: &PathSolveResult,
+) -> std::io::Result<Vec<AuxiliaryArtifact>> {
+    let Some(validation) = result.k0_kittel_validation.as_ref() else {
+        return Ok(Vec::new());
+    };
+    let periodic_airbox_metrics = if validation.demag_kind.as_deref() == Some("periodic_airbox_k0")
+    {
+        let metrics = result.k0_kittel_periodic_airbox_demag.as_ref().ok_or_else(|| {
+            invalid_k0_kittel_artifact(
+                "K0-3 periodic_airbox_k0 Kittel artifacts require real PA-E4b FEM-airbox metrics; synthetic or generic modal paths must not emit production periodic-airbox claims",
+            )
+        })?;
+        validate_k0_kittel_periodic_airbox_metrics(validation, metrics)?;
+        Some(metrics)
+    } else {
+        None
+    };
+    let expected_points = k0_kittel_expected_points(validation)?;
+    if expected_points.len() < 3 {
+        return Err(invalid_k0_kittel_artifact(
+            "K0 Kittel validation requires at least three field samples",
+        ));
+    }
+    let selected_branch = select_k0_kittel_branch(result, &expected_points).ok_or_else(|| {
+        invalid_k0_kittel_artifact(
+            "no tracked eigen branch covers all declared K0 Kittel validation samples",
+        )
+    })?;
+
+    let tolerance = validation.relative_tolerance;
+    let status = if tolerance.is_finite()
+        && tolerance >= 0.0
+        && selected_branch.max_relative_frequency_error <= tolerance
+    {
+        "passed"
+    } else {
+        "failed"
+    };
+    let solver_classification = modal_solver_classification(result.solver_model);
+    let max_eigen_residual_relative = selected_branch
+        .points
+        .iter()
+        .map(|point| point.mode_residual_relative)
+        .fold(0.0, f64::max);
+    let demag = if let Some(metrics) = periodic_airbox_metrics {
+        serde_json::json!({
+            "kind": k0_kittel_validation_demag_kind(validation),
+            "effective_magnetisation_A_per_m": metrics.effective_magnetisation_a_per_m,
+            "gauge_policy": "mean_zero_augmented",
+            "phi_dof_count": metrics.phi_dof_count,
+            "augmented_phi_dof_count": metrics.augmented_phi_dof_count,
+            "poisson_constraint_relative_residual": metrics.poisson_constraint_relative_residual,
+            "magnetic_pair_count": metrics.magnetic_pair_count,
+            "airbox_pair_count": metrics.airbox_pair_count,
+            "production_periodic_airbox_claim": true,
+        })
+    } else {
+        serde_json::json!({
+            "kind": k0_kittel_validation_demag_kind(validation),
+            "effective_magnetisation_A_per_m": validation.material.effective_magnetisation,
+            "gauge_policy": "not_applicable",
+            "production_periodic_airbox_claim": false,
+        })
+    };
+    let summary = serde_json::json!({
+        "schema_version": "frequency_domain_kittel_k0_validation.v1",
+        "status": status,
+        "case_id": k0_kittel_validation_case_id(validation),
+        "test_id": if validation.case_id.as_deref() == Some("K0-3") { "kittel_k0_pbc_thinfilm_demag_inplane" } else { "kittel_k0_pbc_zeeman_no_demag" },
+        "model": validation.model.as_str(),
+        "field_units": validation.field_units.as_str(),
+        "boundary_condition": "periodic_k0",
+        "k_vector_rad_per_m": [0.0, 0.0, 0.0],
+        "demag_kind": k0_kittel_validation_demag_kind(validation),
+        "demag": demag,
+        "sweep_point_count": selected_branch.points.len(),
+        "max_relative_frequency_error": selected_branch.max_relative_frequency_error,
+        "median_relative_frequency_error": selected_branch.median_relative_frequency_error,
+        "selected_branch": {
+            "branch_id": selected_branch.branch_id,
+            "label": selected_branch.label.as_deref(),
+        },
+        "mode_selection": {
+            "strategy": "uniformity_score_then_tracked_branch_frequency_error",
+            "minimum_uniformity_score": selected_branch.minimum_uniformity_score,
+            "minimum_branch_overlap": selected_branch.minimum_branch_overlap,
+            "maximum_tangent_leakage": selected_branch.maximum_tangent_leakage,
+        },
+        "solver": {
+            "backend": "modal_eigen",
+            "execution_lane": solver_classification.reference_or_production,
+            "solver_algorithm": result.solver_model.as_str(),
+            "requested_mode_count": result
+                .samples
+                .iter()
+                .map(|sample| sample.modes.len())
+                .max()
+                .unwrap_or(0),
+            "max_eigen_residual_relative": max_eigen_residual_relative,
+        }
+    });
+    let mut artifacts = vec![
+        AuxiliaryArtifact {
+            relative_path: "validation/kittel_k0_pbc/points.v1.csv".to_string(),
+            bytes: k0_kittel_points_csv_bytes(validation, &selected_branch),
+        },
+        AuxiliaryArtifact {
+            relative_path: "validation/kittel_k0_pbc/summary.v1.json".to_string(),
+            bytes: serde_json::to_vec_pretty(&summary).unwrap(),
+        },
+    ];
+    if let Some(metrics) = periodic_airbox_metrics {
+        artifacts.push(AuxiliaryArtifact {
+            relative_path: "validation/kittel_k0_pbc/convergence.v1.csv".to_string(),
+            bytes: k0_kittel_periodic_airbox_convergence_csv_bytes(validation, metrics),
+        });
+    }
+    Ok(artifacts)
+}
+
+fn write_k0_kittel_validation_artifacts(
+    base_dir: &Path,
+    result: &PathSolveResult,
+) -> std::io::Result<()> {
+    for artifact in k0_kittel_validation_auxiliary_artifacts(result)? {
+        let path = base_dir.join(&artifact.relative_path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(path, artifact.bytes)?;
+    }
+    Ok(())
 }
 
 pub fn write_frequency_domain_eigen_manifest(
@@ -1762,6 +2491,7 @@ pub fn write_frequency_domain_eigen_manifest(
         },
         validation: FrequencyDomainValidation {
             dispersion_validation: result.dispersion_validation.as_ref(),
+            k0_kittel_validation: result.k0_kittel_validation.as_ref(),
             dispersion_frequency_source: dispersion_frequency_source(result),
             dispersion_reference_model: dispersion_reference_model(result),
             dynamic_demag_operator_source: dispersion_dynamic_demag_operator_source(result),
@@ -1789,6 +2519,7 @@ pub fn write_frequency_domain_eigen_manifest(
         manifest_dir.join("manifest.v1.json"),
         serde_json::to_vec_pretty(&manifest).unwrap(),
     )?;
+    write_k0_kittel_validation_artifacts(base_dir, result)?;
     Ok(())
 }
 
@@ -2400,6 +3131,7 @@ mod tests {
                     lifted_imag: Some(vec![[0.0, 1.0, 0.0]]),
                     amplitude: Some(vec![1.0]),
                     phase: Some(vec![0.0]),
+                    node_mass_weights: None,
                 }],
                 relaxation_steps: 0,
                 solver_model,
@@ -2421,7 +3153,9 @@ mod tests {
             notes: vec!["single sample".to_string()],
             include_demag: false,
             dispersion_validation: None,
+            k0_kittel_validation: None,
             dispersion_analytic_reference: None,
+            k0_kittel_periodic_airbox_demag: None,
         }
     }
 
@@ -2463,6 +3197,70 @@ mod tests {
             overlap_prev: Some(0.6),
         });
         result.notes = vec!["modal overlap tracking".to_string()];
+        result
+    }
+
+    fn sample_result_with_k0_kittel_sweep() -> PathSolveResult {
+        let mut result =
+            sample_result_with_solver_model(EigenSolverModel::ProductionCpuShiftInvert);
+        let template = result.samples[0].clone();
+        let fields_a_per_m = [40_000.0, 80_000.0, 120_000.0];
+
+        result.samples.clear();
+        result.branches = vec![TrackedBranch {
+            branch_id: 0,
+            label: Some("k0_kittel_uniform_branch".to_string()),
+            points: Vec::new(),
+        }];
+
+        for (sample_index, field_a_per_m) in fields_a_per_m.iter().copied().enumerate() {
+            let frequency_hz =
+                REFERENCE_MODAL_GAMMA0_RAD_S_PER_A_M * field_a_per_m / std::f64::consts::TAU;
+            let mut sample = template.clone();
+            sample.sample.sample_index = sample_index;
+            sample.sample.label = Some(format!("H{sample_index}"));
+            sample.sample.path_s = sample_index as f64;
+            sample.sample.t_in_segment = sample_index as f64 / (fields_a_per_m.len() - 1) as f64;
+            sample.sample.k_vector = [0.0, 0.0, 0.0];
+            sample.modes[0].frequency_real_hz = frequency_hz;
+            sample.modes[0].frequency_imag_hz = 0.0;
+            sample.modes[0].angular_frequency_rad_per_s = std::f64::consts::TAU * frequency_hz;
+            sample.modes[0].eigenvalue_real = 0.0;
+            sample.modes[0].eigenvalue_imag = std::f64::consts::TAU * frequency_hz;
+            result.samples.push(sample);
+            result.branches[0].points.push(TrackedBranchPoint {
+                sample_index,
+                raw_mode_index: 0,
+                frequency_real_hz: frequency_hz,
+                frequency_imag_hz: 0.0,
+                tracking_confidence: 1.0,
+                overlap_prev: (sample_index > 0).then_some(1.0),
+            });
+        }
+
+        result.k0_kittel_validation = Some(fullmag_ir::FemEigenK0KittelValidationIR {
+            kind: "k0_kittel_field_sweep".to_string(),
+            case_id: None,
+            demag_kind: None,
+            model: "macrospin_larmor".to_string(),
+            field_units: "A_per_m".to_string(),
+            relative_tolerance: 0.05,
+            material: fullmag_ir::FemEigenK0KittelValidationMaterialIR {
+                effective_magnetisation: None,
+            },
+            samples: fields_a_per_m
+                .iter()
+                .copied()
+                .enumerate()
+                .map(|(sample_index, field_a_per_m)| {
+                    fullmag_ir::FemEigenK0KittelValidationSampleIR {
+                        sample_index: sample_index as u32,
+                        bias_field: [field_a_per_m, 0.0, 0.0],
+                    }
+                })
+                .collect(),
+        });
+        result.notes = vec!["k0 Kittel field sweep".to_string()];
         result
     }
 
@@ -2773,6 +3571,365 @@ mod tests {
         assert_eq!(
             family_manifest["capabilities"]["validation_artifact"],
             false
+        );
+    }
+
+    #[test]
+    fn eigen_artifacts_write_k0_kittel_summary_and_points() {
+        let temp = TempDirGuard::new("eigen-artifacts-k0-kittel-summary");
+        let result = sample_result_with_k0_kittel_sweep();
+
+        write_path_bundle(&temp.path, &result).expect("path bundle should write");
+        write_branch_bundle(&temp.path, &result).expect("branch bundle should write");
+        write_mode_bundle(&temp.path, &result).expect("mode bundle should write");
+        write_frequency_domain_eigen_manifest(&temp.path, &result)
+            .expect("frequency-domain eigen manifest should write");
+
+        let validation_dir = temp.path.join("validation/kittel_k0_pbc");
+        let summary: Value = serde_json::from_slice(
+            &std::fs::read(validation_dir.join("summary.v1.json"))
+                .expect("Kittel k0 summary should be written"),
+        )
+        .expect("Kittel k0 summary should be valid JSON");
+        assert_eq!(
+            summary["schema_version"],
+            "frequency_domain_kittel_k0_validation.v1"
+        );
+        assert_eq!(summary["status"], "passed");
+        assert_eq!(summary["model"], "macrospin_larmor");
+        assert_eq!(summary["sweep_point_count"], 3);
+        assert!(
+            summary["max_relative_frequency_error"]
+                .as_f64()
+                .expect("max relative error should be numeric")
+                <= 0.05
+        );
+
+        let points_csv = std::fs::read_to_string(validation_dir.join("points.v1.csv"))
+            .expect("Kittel k0 points CSV should be written");
+        let rows = points_csv.lines().collect::<Vec<_>>();
+        assert_eq!(rows.len(), 4);
+        assert!(rows[0].starts_with("case_id,demag_kind,field_index,H0_A_per_m,mu0_H0_T"));
+        assert!(rows[0].contains("relative_frequency_error"));
+    }
+
+    #[test]
+    fn k0_kittel_artifacts_reject_periodic_airbox_without_real_metrics() {
+        let mut result = sample_result_with_k0_kittel_sweep();
+        let validation = result
+            .k0_kittel_validation
+            .as_mut()
+            .expect("fixture should carry K0 Kittel validation");
+        validation.case_id = Some("K0-3".to_string());
+        validation.demag_kind = Some("periodic_airbox_k0".to_string());
+        validation.model = "thin_film_in_plane".to_string();
+        validation.material.effective_magnetisation = Some(800_000.0);
+
+        let err = k0_kittel_validation_auxiliary_artifacts(&result)
+            .expect_err("periodic_airbox_k0 must require real PA-E4b metrics");
+
+        assert!(
+            err.to_string().contains("PA-E4b")
+                && err.to_string().contains("production periodic-airbox")
+        );
+    }
+
+    #[test]
+    fn k0_kittel_artifacts_accept_periodic_airbox_with_real_metrics() {
+        let mut result = sample_result_with_k0_kittel_sweep();
+        let effective_magnetisation = 800_000.0;
+        let fields_a_per_m = [40_000.0, 80_000.0, 120_000.0];
+        let validation = result
+            .k0_kittel_validation
+            .as_mut()
+            .expect("fixture should carry K0 Kittel validation");
+        validation.case_id = Some("K0-3".to_string());
+        validation.demag_kind = Some("periodic_airbox_k0".to_string());
+        validation.model = "thin_film_in_plane".to_string();
+        validation.relative_tolerance = 0.02;
+        validation.material.effective_magnetisation = Some(effective_magnetisation);
+
+        for ((sample, branch_point), field_a_per_m) in result
+            .samples
+            .iter_mut()
+            .zip(
+                result
+                    .branches
+                    .get_mut(0)
+                    .expect("fixture should have a tracked branch")
+                    .points
+                    .iter_mut(),
+            )
+            .zip(fields_a_per_m)
+        {
+            let frequency_hz = REFERENCE_MODAL_GAMMA0_RAD_S_PER_A_M
+                * (field_a_per_m * (field_a_per_m + effective_magnetisation)).sqrt()
+                / std::f64::consts::TAU;
+            sample.modes[0].frequency_real_hz = frequency_hz;
+            sample.modes[0].frequency_imag_hz = 0.0;
+            sample.modes[0].angular_frequency_rad_per_s = std::f64::consts::TAU * frequency_hz;
+            sample.modes[0].eigenvalue_real = 0.0;
+            sample.modes[0].eigenvalue_imag = std::f64::consts::TAU * frequency_hz;
+            branch_point.frequency_real_hz = frequency_hz;
+            branch_point.frequency_imag_hz = 0.0;
+        }
+        result.k0_kittel_periodic_airbox_demag = Some(K0KittelPeriodicAirboxDemagMetrics {
+            mesh_resolution_m: 5.0e-9,
+            airbox_size_m: 80.0e-9,
+            phi_dof_count: 8,
+            augmented_phi_dof_count: 9,
+            poisson_constraint_relative_residual: 1.0e-12,
+            magnetic_pair_count: 4,
+            airbox_pair_count: 6,
+            effective_magnetisation_a_per_m: effective_magnetisation,
+            relative_kittel_frequency_error: 0.0,
+        });
+
+        let artifacts = k0_kittel_validation_auxiliary_artifacts(&result)
+            .expect("periodic_airbox_k0 should accept real PA-E4b metrics");
+        assert!(artifacts
+            .iter()
+            .any(|artifact| artifact.relative_path == "validation/kittel_k0_pbc/points.v1.csv"));
+        assert!(artifacts
+            .iter()
+            .any(|artifact| artifact.relative_path == "validation/kittel_k0_pbc/summary.v1.json"));
+        let convergence = artifacts
+            .iter()
+            .find(|artifact| {
+                artifact.relative_path == "validation/kittel_k0_pbc/convergence.v1.csv"
+            })
+            .expect("periodic_airbox_k0 should emit convergence CSV");
+        let convergence_csv =
+            std::str::from_utf8(&convergence.bytes).expect("convergence should be UTF-8 CSV");
+        assert!(convergence_csv.contains("periodic_airbox_k0"));
+        assert!(convergence_csv.contains("poisson_residual_relative"));
+
+        let summary_artifact = artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == "validation/kittel_k0_pbc/summary.v1.json")
+            .expect("summary should be emitted");
+        let summary: Value =
+            serde_json::from_slice(&summary_artifact.bytes).expect("summary should be valid JSON");
+        assert_eq!(summary["status"], "passed");
+        assert_eq!(summary["case_id"], "K0-3");
+        assert_eq!(summary["demag_kind"], "periodic_airbox_k0");
+        assert_eq!(summary["demag"]["gauge_policy"], "mean_zero_augmented");
+        assert_eq!(summary["demag"]["phi_dof_count"], 8);
+        assert_eq!(summary["demag"]["augmented_phi_dof_count"], 9);
+        assert_eq!(summary["demag"]["magnetic_pair_count"], 4);
+        assert_eq!(summary["demag"]["airbox_pair_count"], 6);
+        assert_eq!(summary["demag"]["production_periodic_airbox_claim"], true);
+        assert!(
+            summary["demag"]["poisson_constraint_relative_residual"]
+                .as_f64()
+                .expect("poisson residual should be numeric")
+                <= 1.0e-8
+        );
+    }
+
+    #[test]
+    fn k0_kittel_selector_prefers_uniform_branch_over_frequency_only_match() {
+        let temp = TempDirGuard::new("eigen-artifacts-k0-kittel-uniform-selector");
+        let mut result = sample_result_with_k0_kittel_sweep();
+
+        result.branches = vec![
+            TrackedBranch {
+                branch_id: 0,
+                label: Some("nonuniform_frequency_match".to_string()),
+                points: Vec::new(),
+            },
+            TrackedBranch {
+                branch_id: 1,
+                label: Some("uniform_kittel_mode".to_string()),
+                points: Vec::new(),
+            },
+        ];
+
+        for sample_result in &mut result.samples {
+            let expected_frequency = sample_result.modes[0].frequency_real_hz;
+            let mut nonuniform = sample_result.modes[0].clone();
+            nonuniform.raw_mode_index = 0;
+            nonuniform.frequency_real_hz = expected_frequency;
+            nonuniform.angular_frequency_rad_per_s = std::f64::consts::TAU * expected_frequency;
+            nonuniform.eigenvalue_imag = std::f64::consts::TAU * expected_frequency;
+            nonuniform.reduced_vector = Some(vec![
+                Complex64::new(1.0, 0.0),
+                Complex64::new(-1.0, 0.0),
+                Complex64::new(1.0, 0.0),
+                Complex64::new(-1.0, 0.0),
+            ]);
+
+            let mut uniform = sample_result.modes[0].clone();
+            uniform.raw_mode_index = 1;
+            uniform.frequency_real_hz = expected_frequency * 1.001;
+            uniform.angular_frequency_rad_per_s = std::f64::consts::TAU * uniform.frequency_real_hz;
+            uniform.eigenvalue_imag = std::f64::consts::TAU * uniform.frequency_real_hz;
+            uniform.reduced_vector = Some(vec![
+                Complex64::new(1.0, 0.0),
+                Complex64::new(1.0, 0.0),
+                Complex64::new(1.0, 0.0),
+                Complex64::new(1.0, 0.0),
+            ]);
+
+            sample_result.modes = vec![nonuniform, uniform];
+            let sample_index = sample_result.sample.sample_index;
+            result.branches[0].points.push(TrackedBranchPoint {
+                sample_index,
+                raw_mode_index: 0,
+                frequency_real_hz: expected_frequency,
+                frequency_imag_hz: 0.0,
+                tracking_confidence: 1.0,
+                overlap_prev: (sample_index > 0).then_some(1.0),
+            });
+            result.branches[1].points.push(TrackedBranchPoint {
+                sample_index,
+                raw_mode_index: 1,
+                frequency_real_hz: expected_frequency * 1.001,
+                frequency_imag_hz: 0.0,
+                tracking_confidence: 1.0,
+                overlap_prev: (sample_index > 0).then_some(1.0),
+            });
+        }
+
+        write_frequency_domain_eigen_manifest(&temp.path, &result)
+            .expect("frequency-domain eigen manifest should write");
+
+        let summary: Value = serde_json::from_slice(
+            &std::fs::read(temp.path.join("validation/kittel_k0_pbc/summary.v1.json"))
+                .expect("Kittel k0 summary should be written"),
+        )
+        .expect("Kittel k0 summary should be valid JSON");
+        assert_eq!(summary["selected_branch"]["branch_id"], 1);
+        assert!(
+            summary["mode_selection"]["minimum_uniformity_score"]
+                .as_f64()
+                .expect("uniformity score should be numeric")
+                > 0.99
+        );
+    }
+
+    #[test]
+    fn k0_kittel_selector_uses_mass_weighted_uniformity_when_weights_are_available() {
+        let temp = TempDirGuard::new("eigen-artifacts-k0-kittel-mass-weighted-selector");
+        let mut result = sample_result_with_k0_kittel_sweep();
+
+        result.branches = vec![
+            TrackedBranch {
+                branch_id: 0,
+                label: Some("unweighted_uniform_only".to_string()),
+                points: Vec::new(),
+            },
+            TrackedBranch {
+                branch_id: 1,
+                label: Some("mass_weighted_uniform".to_string()),
+                points: Vec::new(),
+            },
+        ];
+
+        for sample_result in &mut result.samples {
+            let expected_frequency = sample_result.modes[0].frequency_real_hz;
+            let mass_weights = vec![1000.0, 1.0];
+
+            let mut unweighted_uniform = sample_result.modes[0].clone();
+            unweighted_uniform.raw_mode_index = 0;
+            unweighted_uniform.frequency_real_hz = expected_frequency;
+            unweighted_uniform.angular_frequency_rad_per_s =
+                std::f64::consts::TAU * expected_frequency;
+            unweighted_uniform.eigenvalue_imag = std::f64::consts::TAU * expected_frequency;
+            unweighted_uniform.reduced_vector = Some(vec![
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(1.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+            ]);
+            unweighted_uniform.node_mass_weights = Some(mass_weights.clone());
+
+            let mut mass_weighted_uniform = sample_result.modes[0].clone();
+            mass_weighted_uniform.raw_mode_index = 1;
+            mass_weighted_uniform.frequency_real_hz = expected_frequency * 1.001;
+            mass_weighted_uniform.angular_frequency_rad_per_s =
+                std::f64::consts::TAU * mass_weighted_uniform.frequency_real_hz;
+            mass_weighted_uniform.eigenvalue_imag =
+                std::f64::consts::TAU * mass_weighted_uniform.frequency_real_hz;
+            mass_weighted_uniform.reduced_vector = Some(vec![
+                Complex64::new(1.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(-1.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+            ]);
+            mass_weighted_uniform.node_mass_weights = Some(mass_weights);
+
+            sample_result.modes = vec![unweighted_uniform, mass_weighted_uniform];
+            let sample_index = sample_result.sample.sample_index;
+            result.branches[0].points.push(TrackedBranchPoint {
+                sample_index,
+                raw_mode_index: 0,
+                frequency_real_hz: expected_frequency,
+                frequency_imag_hz: 0.0,
+                tracking_confidence: 1.0,
+                overlap_prev: (sample_index > 0).then_some(1.0),
+            });
+            result.branches[1].points.push(TrackedBranchPoint {
+                sample_index,
+                raw_mode_index: 1,
+                frequency_real_hz: expected_frequency * 1.001,
+                frequency_imag_hz: 0.0,
+                tracking_confidence: 1.0,
+                overlap_prev: (sample_index > 0).then_some(1.0),
+            });
+        }
+
+        write_frequency_domain_eigen_manifest(&temp.path, &result)
+            .expect("frequency-domain eigen manifest should write");
+
+        let summary: Value = serde_json::from_slice(
+            &std::fs::read(temp.path.join("validation/kittel_k0_pbc/summary.v1.json"))
+                .expect("Kittel k0 summary should be written"),
+        )
+        .expect("Kittel k0 summary should be valid JSON");
+        assert_eq!(summary["selected_branch"]["branch_id"], 1);
+    }
+
+    #[test]
+    fn eigen_manifest_carries_k0_kittel_validation_contract() {
+        let temp = TempDirGuard::new("eigen-artifacts-k0-kittel-validation");
+        let result = sample_result_with_k0_kittel_sweep();
+
+        write_frequency_domain_eigen_manifest(&temp.path, &result)
+            .expect("frequency-domain eigen manifest should write");
+
+        let manifest: Value = serde_json::from_slice(
+            &std::fs::read(temp.path.join("frequency_domain/manifest.v1.json"))
+                .expect("frequency-domain eigen manifest should be written"),
+        )
+        .expect("frequency-domain eigen manifest should be valid JSON");
+
+        assert_eq!(
+            manifest["validation"]["k0_kittel_validation"]["kind"],
+            "k0_kittel_field_sweep"
+        );
+        assert_eq!(
+            manifest["validation"]["k0_kittel_validation"]["model"],
+            "macrospin_larmor"
+        );
+        assert_eq!(
+            manifest["validation"]["k0_kittel_validation"]["field_units"],
+            "A_per_m"
+        );
+        assert_eq!(
+            manifest["validation"]["k0_kittel_validation"]["material"]["effective_magnetisation"],
+            Value::Null
+        );
+        assert_eq!(
+            manifest["validation"]["k0_kittel_validation"]["samples"]
+                .as_array()
+                .expect("samples should be an array")
+                .len(),
+            3
         );
     }
 

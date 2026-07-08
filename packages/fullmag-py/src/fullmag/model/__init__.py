@@ -89,6 +89,8 @@ from .structure import (
 from .study import Eigenmodes, FloquetBC, FrequencyResponse, FrequencyResponseSolverPolicy, PeriodicBC, RelaxStop, Relaxation, TableAutosave, TimeEvolution, FieldOrientation, MeasurementAxis, HysteresisAngularVariant, HysteresisAngularFamily, SaturationProbe, HysteresisStorage, MinorLoop, FieldSegment, PiecewiseFieldSchedule, FieldWindow, AdaptiveRefinement, SettleStep, RelaxStep, MinimizeStep, DynamicsSettleStep, SettleBranch, SettlePipeline, SettleTree, Hysteresis
 from .eigen import (
     DispersionValidationScenario,
+    K0KittelFieldSample,
+    K0KittelFieldSweepValidation,
     KPath,
     KPoint,
     ModeTracking,
@@ -187,6 +189,8 @@ __all__ = [
     "FrequencyResponse",
     "FrequencyResponseSolverPolicy",
     "DispersionValidationScenario",
+    "K0KittelFieldSample",
+    "K0KittelFieldSweepValidation",
     "KPath",
     "KPoint",
     "ModeTracking",

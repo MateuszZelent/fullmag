@@ -45,6 +45,13 @@ import {
 } from "@/kernel/visualization/useVisualizationClientAck";
 import { Button } from "@/shared/ui/Button";
 import {
+  displayUnitItemsForSourceUnit,
+  formatDisplayUnitValue,
+  formatValueWithDisplayUnit,
+  hasDisplayUnitOptions,
+  normalizeDisplayUnit,
+} from "@/shared/domain/physics/displayUnits";
+import {
   Dialog,
   DialogClose,
   DialogContent,
@@ -175,16 +182,23 @@ interface MeshQualityRange {
 interface Viewport3DColorbarLegendInput {
   colorMode: string;
   colorPalette?: string | null;
+  displayUnit?: string | null;
   quantityId: string;
   range: MeshQualityRange | null;
   unit?: string | null;
 }
 
 interface Viewport3DColorbarLegend {
+  colorMode?: string;
+  displayUnit?: string;
   label: string;
+  labelPrefix?: string;
   maxLabel: string;
   minLabel: string;
   paletteGradient: string;
+  quantityId?: string;
+  range?: MeshQualityRange | null;
+  sourceUnit?: string | null;
 }
 
 interface Viewport3DScopedColorbarLegend {
@@ -223,16 +237,7 @@ export function notifyMeshTopologyRendered({
 }
 
 function formatLegendValue(value: number): string {
-  return Number.isFinite(value) ? Number(value.toPrecision(4)).toString() : "unknown";
-}
-
-function formatLegendValueWithUnit(
-  value: number,
-  unit: string | null | undefined,
-): string {
-  const valueLabel = formatLegendValue(value);
-  const unitLabel = unit?.trim();
-  return unitLabel && unitLabel !== "1" ? `${valueLabel} ${unitLabel}` : valueLabel;
+  return formatDisplayUnitValue(value);
 }
 
 function resolveStableViewport3DCanvasGlOptions(
@@ -276,6 +281,7 @@ export function resolveViewport3DMeshQualityLegend(
 export function resolveViewport3DColorbarLegend({
   colorMode,
   colorPalette,
+  displayUnit,
   quantityId,
   range,
   unit,
@@ -293,15 +299,23 @@ export function resolveViewport3DColorbarLegend({
     return null;
   }
 
+  const resolvedDisplayUnit = normalizeDisplayUnit(unit, displayUnit);
+  const labelUnit = resolvedDisplayUnit || unit;
   return {
+    colorMode: normalizedMode,
+    displayUnit: resolvedDisplayUnit,
     label: formatViewport3DColorbarQuantityLabel({
       colorMode: normalizedMode,
       quantityId,
-      unit,
+      unit: labelUnit,
     }),
-    maxLabel: formatLegendValueWithUnit(range.max, unit),
-    minLabel: formatLegendValueWithUnit(range.min, unit),
+    labelPrefix: "",
+    maxLabel: formatValueWithDisplayUnit(range.max, unit, resolvedDisplayUnit),
+    minLabel: formatValueWithDisplayUnit(range.min, unit, resolvedDisplayUnit),
     paletteGradient: viewport3DColorPaletteGradientCss(colorPalette),
+    quantityId,
+    range,
+    sourceUnit: unit?.trim() || null,
   };
 }
 
@@ -313,10 +327,12 @@ function resolveViewport3DColorbarLegendFromPlan({
   plan: Viewport3DColorbarPlan;
 }): Viewport3DScopedColorbarLegend {
   const unit = quantityUnitForColorbar(plan.quantityId);
+  const displayUnit = normalizeDisplayUnit(unit, null);
+  const labelUnit = displayUnit || unit;
   const quantityLabel = formatViewport3DColorbarQuantityLabel({
     colorMode: plan.colorMode,
     quantityId: plan.quantityId,
-    unit,
+    unit: labelUnit,
   });
   const targetLabels: string[] = [];
   const seenTargetLabels = new Set<string>();
@@ -335,14 +351,20 @@ function resolveViewport3DColorbarLegendFromPlan({
   return {
     key: plan.renderKey,
     legend: {
+      colorMode: plan.colorMode,
+      displayUnit,
       label: `${labelPrefix}${quantityLabel}`,
+      labelPrefix,
       maxLabel: plan.range
-        ? formatLegendValueWithUnit(plan.range.max, unit)
+        ? formatValueWithDisplayUnit(plan.range.max, unit, displayUnit)
         : "pending",
       minLabel: plan.range
-        ? formatLegendValueWithUnit(plan.range.min, unit)
+        ? formatValueWithDisplayUnit(plan.range.min, unit, displayUnit)
         : "pending",
       paletteGradient: viewport3DColorPaletteGradientCss(plan.palette),
+      quantityId: plan.quantityId,
+      range: plan.range,
+      sourceUnit: unit || null,
     },
   };
 }
@@ -1658,15 +1680,67 @@ const Viewport3DColorbar = memo(function Viewport3DColorbar({
 }: {
   legend: Viewport3DColorbarLegend;
 }) {
+  const [selectedDisplayUnit, setSelectedDisplayUnit] = useState(
+    legend.displayUnit ?? "",
+  );
+  const displayUnitItems = displayUnitItemsForSourceUnit(legend.sourceUnit);
+  const hasUnitOptions =
+    Boolean(legend.range) && hasDisplayUnitOptions(legend.sourceUnit);
+  const effectiveDisplayUnit = hasUnitOptions
+    ? normalizeDisplayUnit(
+        legend.sourceUnit,
+        selectedDisplayUnit || legend.displayUnit,
+      )
+    : "";
+  const label =
+    hasUnitOptions && legend.colorMode && legend.quantityId
+      ? `${legend.labelPrefix ?? ""}${formatViewport3DColorbarQuantityLabel({
+          colorMode: legend.colorMode,
+          quantityId: legend.quantityId,
+          unit: effectiveDisplayUnit,
+        })}`
+      : legend.label;
+  const minLabel =
+    hasUnitOptions && legend.range
+      ? formatValueWithDisplayUnit(
+          legend.range.min,
+          legend.sourceUnit,
+          effectiveDisplayUnit,
+        )
+      : legend.minLabel;
+  const maxLabel =
+    hasUnitOptions && legend.range
+      ? formatValueWithDisplayUnit(
+          legend.range.max,
+          legend.sourceUnit,
+          effectiveDisplayUnit,
+        )
+      : legend.maxLabel;
   return (
     <aside
-      aria-label={`Color range: ${legend.label}, ${legend.minLabel} to ${legend.maxLabel}`}
+      aria-label={`Color range: ${label}, ${minLabel} to ${maxLabel}`}
       className="fm-viewport-3d__colorbar"
     >
-      <div className="fm-viewport-3d__colorbar-header">{legend.label}</div>
+      <div className="fm-viewport-3d__colorbar-header">
+        <span>{label}</span>
+        {hasUnitOptions ? (
+          <select
+            aria-label={`${legend.label} display unit`}
+            className="fm-viewport-3d__colorbar-unit"
+            value={effectiveDisplayUnit}
+            onChange={(event) => setSelectedDisplayUnit(event.target.value)}
+          >
+            {displayUnitItems.map((item) => (
+              <option key={item.value} value={item.value}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+        ) : null}
+      </div>
       <div className="fm-viewport-3d__colorbar-row">
         <span className="fm-viewport-3d__colorbar-limit">
-          {legend.minLabel}
+          {minLabel}
         </span>
         <span
           aria-hidden="true"
@@ -1674,7 +1748,7 @@ const Viewport3DColorbar = memo(function Viewport3DColorbar({
           style={{ background: legend.paletteGradient }}
         />
         <span className="fm-viewport-3d__colorbar-limit">
-          {legend.maxLabel}
+          {maxLabel}
         </span>
       </div>
     </aside>

@@ -1,10 +1,10 @@
 use fullmag_ir::{
     BackendPlanIR, BackendTarget, CommonPlanMeta, DiscretizationHintsIR, DomainFrameIR,
     EnergyTermIR, ExchangeBoundaryCondition, ExecutionPlanIR, ExecutionPrecision,
-    FemEigenDispersionValidationIR, FemEigenPlanIR, FemFrequencyDomainEquilibriumProvenanceIR,
-    FemFrequencyResponsePlanIR, FemMagnetoelasticPlanIR, FemMechanicalModeIR, FemMechanicalPlanIR,
-    FemPlanIR, GeometryEntryIR, MagnetostrictionLawIR, MechanicalLoadIR, OutputPlanIR, ProblemIR,
-    ProvenancePlanIR, TimeDependenceIR, IR_VERSION,
+    FemEigenDispersionValidationIR, FemEigenK0KittelValidationIR, FemEigenPlanIR,
+    FemFrequencyDomainEquilibriumProvenanceIR, FemFrequencyResponsePlanIR, FemMagnetoelasticPlanIR,
+    FemMechanicalModeIR, FemMechanicalPlanIR, FemPlanIR, GeometryEntryIR, MagnetostrictionLawIR,
+    MechanicalLoadIR, OutputPlanIR, ProblemIR, ProvenancePlanIR, TimeDependenceIR, IR_VERSION,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -82,6 +82,110 @@ fn eigen_dispersion_validation(
         })?;
     validate_eigen_dispersion_validation(&validation)?;
     Ok(Some(validation))
+}
+
+fn eigen_k0_kittel_validation(
+    problem: &ProblemIR,
+) -> Result<Option<FemEigenK0KittelValidationIR>, PlanError> {
+    let Some(value) = problem
+        .problem_meta
+        .runtime_metadata
+        .get("k0_kittel_validation")
+    else {
+        return Ok(None);
+    };
+    let validation = serde_json::from_value::<FemEigenK0KittelValidationIR>(value.clone())
+        .map_err(|error| PlanError {
+            reasons: vec![format!(
+                "runtime_metadata.k0_kittel_validation is invalid: {error}"
+            )],
+        })?;
+    validate_eigen_k0_kittel_validation(&validation)?;
+    Ok(Some(validation))
+}
+
+fn validate_eigen_k0_kittel_validation(
+    validation: &FemEigenK0KittelValidationIR,
+) -> Result<(), PlanError> {
+    let mut errors = Vec::new();
+    if validation.kind != "k0_kittel_field_sweep" {
+        errors.push(
+            "runtime_metadata.k0_kittel_validation.kind must be 'k0_kittel_field_sweep'"
+                .to_string(),
+        );
+    }
+    if validation
+        .case_id
+        .as_deref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        errors.push("runtime_metadata.k0_kittel_validation.case_id must be non-empty".to_string());
+    }
+    if let Some(demag_kind) = validation.demag_kind.as_deref() {
+        match demag_kind {
+            "none" | "periodic_airbox_k0" | "synthetic_demag_factor" => {}
+            _ => errors.push(
+                "runtime_metadata.k0_kittel_validation.demag_kind must be 'none', 'periodic_airbox_k0', or 'synthetic_demag_factor'"
+                    .to_string(),
+            ),
+        }
+    }
+    match validation.model.as_str() {
+        "macrospin_larmor" => {}
+        "thin_film_in_plane" => {
+            let effective = validation.material.effective_magnetisation;
+            if !effective.is_some_and(|value| value.is_finite() && value > 0.0) {
+                errors.push(
+                    "runtime_metadata.k0_kittel_validation.material.effective_magnetisation must be finite and positive for thin_film_in_plane"
+                        .to_string(),
+                );
+            }
+        }
+        _ => errors.push(
+            "runtime_metadata.k0_kittel_validation.model must be 'macrospin_larmor' or 'thin_film_in_plane'"
+                .to_string(),
+        ),
+    }
+    if validation.field_units != "A_per_m" {
+        errors.push(
+            "runtime_metadata.k0_kittel_validation.field_units must be 'A_per_m'".to_string(),
+        );
+    }
+    if !(validation.relative_tolerance.is_finite()
+        && validation.relative_tolerance > 0.0
+        && validation.relative_tolerance <= 0.25)
+    {
+        errors.push(
+            "runtime_metadata.k0_kittel_validation.relative_tolerance must be in (0, 0.25]"
+                .to_string(),
+        );
+    }
+    if validation.samples.len() < 3 {
+        errors.push(
+            "runtime_metadata.k0_kittel_validation.samples must contain at least three samples"
+                .to_string(),
+        );
+    }
+    let mut sample_indices = BTreeSet::new();
+    for (index, sample) in validation.samples.iter().enumerate() {
+        if !sample_indices.insert(sample.sample_index) {
+            errors.push(format!(
+                "runtime_metadata.k0_kittel_validation.samples[{index}].sample_index is duplicated"
+            ));
+        }
+        if !sample.bias_field.iter().all(|value| value.is_finite())
+            || vector_norm(sample.bias_field) <= 0.0
+        {
+            errors.push(format!(
+                "runtime_metadata.k0_kittel_validation.samples[{index}].bias_field must be finite and non-zero"
+            ));
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(PlanError { reasons: errors })
+    }
 }
 
 fn validate_eigen_dispersion_validation(
@@ -207,6 +311,34 @@ fn allows_low_k_de_bv_analytic_reference(
     validation.as_ref().is_some_and(|validation| {
         validation.kind == "thin_film_de_bv_low_k"
             && validation.analytic_model == "kalinikos_slab_n0"
+    })
+}
+
+fn k_sampling_is_gamma_only(k_sampling: &Option<fullmag_ir::KSamplingIR>) -> bool {
+    k_sampling.as_ref().is_none_or(|sampling| match sampling {
+        fullmag_ir::KSamplingIR::Single { k_vector } => k_vector
+            .iter()
+            .all(|component| component.is_finite() && component.abs() <= 1.0e-12),
+        fullmag_ir::KSamplingIR::Path { points, .. } => !points.is_empty()
+            && points.iter().all(|point| {
+                point
+                    .k_vector
+                    .iter()
+                    .all(|component| component.is_finite() && component.abs() <= 1.0e-12)
+            }),
+    })
+}
+
+fn allows_k0_kittel_synthetic_demag_factor(
+    validation: &Option<FemEigenK0KittelValidationIR>,
+    k_sampling: &Option<fullmag_ir::KSamplingIR>,
+) -> bool {
+    validation.as_ref().is_some_and(|validation| {
+        validation.kind == "k0_kittel_field_sweep"
+            && validation.case_id.as_deref() == Some("K0-3")
+            && validation.demag_kind.as_deref() == Some("synthetic_demag_factor")
+            && validation.model == "thin_film_in_plane"
+            && k_sampling_is_gamma_only(k_sampling)
     })
 }
 
@@ -2555,12 +2687,20 @@ pub(crate) fn plan_fem_eigen(
             None
         }
     };
+    let k0_kittel_validation = match eigen_k0_kittel_validation(problem) {
+        Ok(validation) => validation,
+        Err(error) => {
+            errors.extend(error.reasons);
+            None
+        }
+    };
     if operator.include_demag
         && matches!(
             spin_wave_bc.kind(),
             fullmag_ir::SpinWaveBoundaryKindIR::Floquet
         )
         && !allows_low_k_de_bv_analytic_reference(&dispersion_validation)
+        && !allows_k0_kittel_synthetic_demag_factor(&k0_kittel_validation, &k_sampling)
     {
         errors.push(
             "dynamic demag for Floquet periodic FEM is not implemented yet. Disable demag or use k=0/free boundary."
@@ -2881,6 +3021,7 @@ pub(crate) fn plan_fem_eigen(
         air_box_config,
         mode_tracking: mode_tracking.clone(),
         dispersion_validation,
+        k0_kittel_validation,
     };
 
     let study_note = format!(

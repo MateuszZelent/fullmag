@@ -6,7 +6,9 @@
 #include <algorithm>
 #include <cerrno>
 #include <cstdarg>
+#include <cctype>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -118,6 +120,69 @@ bool append_format(std::string &out, char error_message[128], const char *format
     return true;
 }
 
+bool production_gpu_frequency_response_uses_hybrid_cpu_poisson() noexcept
+{
+    const char *raw = std::getenv("FULLMAG_FEM_GPU_DEMAG_MODE");
+    if (raw == nullptr) {
+        return false;
+    }
+    std::string mode(raw);
+    mode.erase(
+        mode.begin(),
+        std::find_if(
+            mode.begin(),
+            mode.end(),
+            [](unsigned char ch) { return !std::isspace(ch); }));
+    mode.erase(
+        std::find_if(
+            mode.rbegin(),
+            mode.rend(),
+            [](unsigned char ch) { return !std::isspace(ch); })
+            .base(),
+        mode.end());
+    std::transform(
+        mode.begin(),
+        mode.end(),
+        mode.begin(),
+        [](unsigned char ch) {
+            return static_cast<char>(std::tolower(ch));
+        });
+    return mode == "hybrid_cpu_poisson" ||
+        mode == "hybrid" ||
+        mode == "compat";
+}
+
+const char *frequency_response_uses_gpu_poisson_json(bool production_gpu) noexcept
+{
+    return production_gpu && !production_gpu_frequency_response_uses_hybrid_cpu_poisson()
+        ? "true"
+        : "false";
+}
+
+const char *frequency_response_demag_operator_mode(bool production_gpu) noexcept
+{
+    if (!production_gpu) {
+        return "host_mfem_poisson_provider";
+    }
+    return production_gpu_frequency_response_uses_hybrid_cpu_poisson()
+        ? "hybrid_cpu_poisson"
+        : "device_hypre_poisson";
+}
+
+const char *frequency_response_hypre_execution_policy(bool production_gpu) noexcept
+{
+    return production_gpu && !production_gpu_frequency_response_uses_hybrid_cpu_poisson()
+        ? "device"
+        : "host";
+}
+
+const char *frequency_response_demag_provider_residency(bool production_gpu) noexcept
+{
+    return production_gpu && !production_gpu_frequency_response_uses_hybrid_cpu_poisson()
+        ? "gpu"
+        : "cpu";
+}
+
 std::string escape_json_string(const char *value)
 {
     std::string escaped;
@@ -147,6 +212,225 @@ std::string escape_json_string(const char *value)
         }
     }
     return escaped;
+}
+
+std::uint32_t sha256_rotr(std::uint32_t value, std::uint32_t shift) noexcept
+{
+    return (value >> shift) | (value << (32u - shift));
+}
+
+std::string sha256_hex(const std::string &input)
+{
+    static constexpr std::uint32_t k[64] = {
+        0x428a2f98u, 0x71374491u, 0xb5c0fbcfu, 0xe9b5dba5u,
+        0x3956c25bu, 0x59f111f1u, 0x923f82a4u, 0xab1c5ed5u,
+        0xd807aa98u, 0x12835b01u, 0x243185beu, 0x550c7dc3u,
+        0x72be5d74u, 0x80deb1feu, 0x9bdc06a7u, 0xc19bf174u,
+        0xe49b69c1u, 0xefbe4786u, 0x0fc19dc6u, 0x240ca1ccu,
+        0x2de92c6fu, 0x4a7484aau, 0x5cb0a9dcu, 0x76f988dau,
+        0x983e5152u, 0xa831c66du, 0xb00327c8u, 0xbf597fc7u,
+        0xc6e00bf3u, 0xd5a79147u, 0x06ca6351u, 0x14292967u,
+        0x27b70a85u, 0x2e1b2138u, 0x4d2c6dfcu, 0x53380d13u,
+        0x650a7354u, 0x766a0abbu, 0x81c2c92eu, 0x92722c85u,
+        0xa2bfe8a1u, 0xa81a664bu, 0xc24b8b70u, 0xc76c51a3u,
+        0xd192e819u, 0xd6990624u, 0xf40e3585u, 0x106aa070u,
+        0x19a4c116u, 0x1e376c08u, 0x2748774cu, 0x34b0bcb5u,
+        0x391c0cb3u, 0x4ed8aa4au, 0x5b9cca4fu, 0x682e6ff3u,
+        0x748f82eeu, 0x78a5636fu, 0x84c87814u, 0x8cc70208u,
+        0x90befffau, 0xa4506cebu, 0xbef9a3f7u, 0xc67178f2u,
+    };
+    std::uint32_t h[8] = {
+        0x6a09e667u,
+        0xbb67ae85u,
+        0x3c6ef372u,
+        0xa54ff53au,
+        0x510e527fu,
+        0x9b05688cu,
+        0x1f83d9abu,
+        0x5be0cd19u,
+    };
+
+    std::vector<unsigned char> bytes(input.begin(), input.end());
+    const std::uint64_t bit_length = static_cast<std::uint64_t>(bytes.size()) * 8ull;
+    bytes.push_back(0x80u);
+    while ((bytes.size() % 64u) != 56u) {
+        bytes.push_back(0u);
+    }
+    for (int shift = 56; shift >= 0; shift -= 8) {
+        bytes.push_back(static_cast<unsigned char>((bit_length >> shift) & 0xffu));
+    }
+
+    for (std::size_t chunk = 0; chunk < bytes.size(); chunk += 64u) {
+        std::uint32_t w[64]{};
+        for (std::size_t i = 0; i < 16; ++i) {
+            const std::size_t offset = chunk + i * 4u;
+            w[i] =
+                (static_cast<std::uint32_t>(bytes[offset]) << 24u) |
+                (static_cast<std::uint32_t>(bytes[offset + 1]) << 16u) |
+                (static_cast<std::uint32_t>(bytes[offset + 2]) << 8u) |
+                static_cast<std::uint32_t>(bytes[offset + 3]);
+        }
+        for (std::size_t i = 16; i < 64; ++i) {
+            const std::uint32_t s0 =
+                sha256_rotr(w[i - 15], 7u) ^
+                sha256_rotr(w[i - 15], 18u) ^
+                (w[i - 15] >> 3u);
+            const std::uint32_t s1 =
+                sha256_rotr(w[i - 2], 17u) ^
+                sha256_rotr(w[i - 2], 19u) ^
+                (w[i - 2] >> 10u);
+            w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+        }
+
+        std::uint32_t a = h[0];
+        std::uint32_t b = h[1];
+        std::uint32_t c = h[2];
+        std::uint32_t d = h[3];
+        std::uint32_t e = h[4];
+        std::uint32_t f = h[5];
+        std::uint32_t g = h[6];
+        std::uint32_t hh = h[7];
+        for (std::size_t i = 0; i < 64; ++i) {
+            const std::uint32_t s1 =
+                sha256_rotr(e, 6u) ^ sha256_rotr(e, 11u) ^ sha256_rotr(e, 25u);
+            const std::uint32_t ch = (e & f) ^ ((~e) & g);
+            const std::uint32_t temp1 = hh + s1 + ch + k[i] + w[i];
+            const std::uint32_t s0 =
+                sha256_rotr(a, 2u) ^ sha256_rotr(a, 13u) ^ sha256_rotr(a, 22u);
+            const std::uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
+            const std::uint32_t temp2 = s0 + maj;
+            hh = g;
+            g = f;
+            f = e;
+            e = d + temp1;
+            d = c;
+            c = b;
+            b = a;
+            a = temp1 + temp2;
+        }
+        h[0] += a;
+        h[1] += b;
+        h[2] += c;
+        h[3] += d;
+        h[4] += e;
+        h[5] += f;
+        h[6] += g;
+        h[7] += hh;
+    }
+
+    char word_hex[9]{};
+    std::string hex;
+    hex.reserve(64);
+    for (std::uint32_t word : h) {
+        std::snprintf(word_hex, sizeof(word_hex), "%08x", word);
+        hex += word_hex;
+    }
+    return hex;
+}
+
+std::size_t find_matching_json_object_end(
+    const std::string &json,
+    std::size_t object_start) noexcept
+{
+    bool in_string = false;
+    bool escaped = false;
+    int depth = 0;
+    for (std::size_t cursor = object_start; cursor < json.size(); ++cursor) {
+        const char c = json[cursor];
+        if (in_string) {
+            if (escaped) {
+                escaped = false;
+            } else if (c == '\\') {
+                escaped = true;
+            } else if (c == '"') {
+                in_string = false;
+            }
+            continue;
+        }
+        if (c == '"') {
+            in_string = true;
+        } else if (c == '{') {
+            ++depth;
+        } else if (c == '}') {
+            --depth;
+            if (depth == 0) {
+                return cursor + 1u;
+            }
+        }
+    }
+    return std::string::npos;
+}
+
+bool canonical_periodic_pairs_payload_for_hash(
+    const std::string &json,
+    std::string &out,
+    char error_message[128])
+{
+    static constexpr const char *kPairsKey = "\"pairs\":[";
+    const std::size_t pairs_key = json.find(kPairsKey);
+    if (pairs_key == std::string::npos) {
+        std::snprintf(error_message, 128, "periodic pairs artifact is missing pairs array");
+        return false;
+    }
+    std::vector<std::string> pair_objects;
+    std::size_t cursor = pairs_key + std::strlen(kPairsKey);
+    while (cursor < json.size()) {
+        while (cursor < json.size() && (json[cursor] == ',' || json[cursor] == ' ')) {
+            ++cursor;
+        }
+        if (cursor >= json.size() || json[cursor] == ']') {
+            break;
+        }
+        if (json[cursor] != '{') {
+            std::snprintf(error_message, 128, "periodic pairs artifact has malformed pair object");
+            return false;
+        }
+        const std::size_t object_end = find_matching_json_object_end(json, cursor);
+        if (object_end == std::string::npos) {
+            std::snprintf(error_message, 128, "periodic pairs artifact has unterminated pair object");
+            return false;
+        }
+        pair_objects.push_back(json.substr(cursor, object_end - cursor));
+        cursor = object_end;
+    }
+    std::sort(pair_objects.begin(), pair_objects.end());
+    out = json.substr(0, pairs_key);
+    out += kPairsKey;
+    for (std::size_t i = 0; i < pair_objects.size(); ++i) {
+        if (i > 0) {
+            out += ",";
+        }
+        out += pair_objects[i];
+    }
+    out += "]";
+    return true;
+}
+
+bool annotate_periodic_pairs_artifact_hash(std::string &json, char error_message[128])
+{
+    if (json.empty()) {
+        return true;
+    }
+    if (json.find("\"pair_map_sha256\"") != std::string::npos) {
+        return true;
+    }
+    std::string canonical_payload;
+    if (!canonical_periodic_pairs_payload_for_hash(json, canonical_payload, error_message)) {
+        return false;
+    }
+    static constexpr const char *kSchemaPrefix =
+        "\"schema_version\":\"periodic_pairs.v1\",";
+    const std::size_t insert_pos = json.find(kSchemaPrefix);
+    if (insert_pos == std::string::npos) {
+        std::snprintf(error_message, 128, "periodic pairs artifact is missing schema version");
+        return false;
+    }
+    const std::string digest = sha256_hex(canonical_payload);
+    const std::string field =
+        std::string("\"pair_map_sha256\":\"sha256:") + digest +
+        "\",\"pair_map_hash_canonicalization\":\"periodic_pairs.v1_without_hash_sorted_pairs\",";
+    json.insert(insert_pos + std::strlen(kSchemaPrefix), field);
+    return true;
 }
 
 bool append_sweep_progress_artifact_json(
@@ -406,6 +690,9 @@ const char *status_diagnostics_json(FrequencyDomainStatus status) noexcept
                "\"production_solver_available\":false}";
     }
 }
+
+constexpr const char *kHostKrylovResidencyDiagnosticsJson =
+    R"("krylov_vector_location":"host","operator_buffer_location":"gpu_if_enabled","preconditioner_buffer_location":"host_or_gpu_operator","gpu_device_resident_solver":false,)";
 
 const char *phase_convention_to_string(FrequencyDomainPhaseConvention phase_convention) noexcept
 {
@@ -692,6 +979,21 @@ bool validate_finite_values(
     return true;
 }
 
+bool complex_drive_has_nonzero_rhs(
+    const double *drive_real,
+    const double *drive_imag,
+    std::uint64_t dof_count) noexcept
+{
+    for (std::uint64_t dof = 0; dof < dof_count; ++dof) {
+        const double real = drive_real == nullptr ? 0.0 : drive_real[dof];
+        const double imag = drive_imag == nullptr ? 0.0 : drive_imag[dof];
+        if (real != 0.0 || imag != 0.0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool validate_exactly_one_operator_source(
     bool dense_source,
     bool diagonal_or_real_callback_source,
@@ -838,6 +1140,17 @@ bool validate_driven_response_solve_contract(
                 error_message)) {
             return false;
         }
+        if (request.require_nonzero_rhs &&
+            !complex_drive_has_nonzero_rhs(
+                tiny.drive_real,
+                tiny.drive_imag,
+                tiny.tangent_dof_count)) {
+            std::snprintf(
+                error_message,
+                128,
+                "require_nonzero_rhs requires nonzero tangent RHS");
+            return false;
+        }
         if (!validate_exactly_one_operator_source(
                 tiny.stiffness_matrix_row_major != nullptr,
                 tiny.stiffness_diagonal != nullptr,
@@ -920,6 +1233,17 @@ bool validate_driven_response_solve_contract(
                 error_message)) {
             return false;
         }
+        if (request.require_nonzero_rhs &&
+            !complex_drive_has_nonzero_rhs(
+                mfem.drive_real,
+                mfem.drive_imag,
+                tangent_dof_count)) {
+            std::snprintf(
+                error_message,
+                128,
+                "require_nonzero_rhs requires nonzero tangent RHS");
+            return false;
+        }
         (void)full_dof_count;
     }
 
@@ -988,6 +1312,17 @@ bool validate_driven_response_solve_contract(
                 coupled_dof_count,
                 "periodic airbox drive imag",
                 error_message)) {
+            return false;
+        }
+        if (request.require_nonzero_rhs &&
+            !complex_drive_has_nonzero_rhs(
+                airbox.drive_real,
+                airbox.drive_imag,
+                coupled_dof_count)) {
+            std::snprintf(
+                error_message,
+                128,
+                "require_nonzero_rhs requires nonzero coupled RHS");
             return false;
         }
     }
@@ -1560,7 +1895,19 @@ FrequencyDomainStatus populate_periodic_airbox_phi_gauge_response_diagnostics(
                 delta_phi_dof_count,
                 phase_residual,
                 error_message)) {
-            diagnostics.delta_phi_phase_validation_status = "failed";
+            const bool finite_mismatch =
+                std::isfinite(phase_residual) && phase_residual > 0.0;
+            diagnostics.delta_phi_phase_validation_status =
+                finite_mismatch ? "mismatch" : "failed";
+            diagnostics.delta_phi_phase_max_residual = phase_residual;
+            diagnostics.delta_phi_seam_validation_status =
+                diagnostics.delta_phi_phase_validation_status;
+            diagnostics.delta_phi_seam_max_after_offset = phase_residual;
+            diagnostics.delta_phi_seam_best_constant_offset_real = 0.0;
+            diagnostics.delta_phi_seam_best_constant_offset_imag = 0.0;
+            diagnostics.delta_phi_flux_validation_status = "not_evaluated";
+            diagnostics.delta_phi_flux_validation_reason =
+                "normal_flux_diagnostic_payload_unavailable";
             return FrequencyDomainStatus::validation_error;
         }
         diagnostics.delta_phi_phase_validation_status = "ok";
@@ -1590,8 +1937,21 @@ FrequencyDomainStatus populate_periodic_airbox_phi_gauge_response_diagnostics(
                 seam_offset_real,
                 seam_offset_imag,
                 error_message)) {
-            diagnostics.delta_phi_phase_validation_status = "failed";
-            diagnostics.delta_phi_seam_validation_status = "failed";
+            const bool finite_mismatch =
+                std::isfinite(seam_residual) && seam_residual > 0.0;
+            diagnostics.delta_phi_phase_validation_status =
+                finite_mismatch ? "mismatch" : "failed";
+            diagnostics.delta_phi_phase_max_residual = seam_residual;
+            diagnostics.delta_phi_seam_validation_status =
+                diagnostics.delta_phi_phase_validation_status;
+            diagnostics.delta_phi_seam_max_after_offset = seam_residual;
+            diagnostics.delta_phi_seam_best_constant_offset_real =
+                seam_offset_real;
+            diagnostics.delta_phi_seam_best_constant_offset_imag =
+                seam_offset_imag;
+            diagnostics.delta_phi_flux_validation_status = "not_evaluated";
+            diagnostics.delta_phi_flux_validation_reason =
+                "normal_flux_diagnostic_payload_unavailable";
             return FrequencyDomainStatus::validation_error;
         }
         diagnostics.delta_phi_phase_validation_status = "ok";
@@ -2868,6 +3228,14 @@ void copy_production_cpu_preconditioner_diagnostics(
         source.gmres_orthogonalization_count;
     target.gmres_restart_count = source.gmres_restart_count;
     target.progress_callback_count = source.progress_callback_count;
+    target.residual_consistency_degraded =
+        source.residual_consistency_degraded;
+    target.residual_consistency_ratio =
+        source.residual_consistency_ratio;
+    target.stagnation_detected = source.stagnation_detected;
+    target.stagnation_iteration = source.stagnation_iteration;
+    target.stagnation_relative_residual_ratio =
+        source.stagnation_relative_residual_ratio;
     target.rhs_delta_m_l2_norm = source.rhs_delta_m_l2_norm;
     target.rhs_delta_phi_l2_norm = source.rhs_delta_phi_l2_norm;
     target.residual_delta_m_l2_norm = source.residual_delta_m_l2_norm;
@@ -2927,6 +3295,14 @@ void copy_production_cpu_diagnostics(
         source.last_tracked_relative_residual_l2_norm;
     target.last_recomputed_relative_residual_l2_norm =
         source.last_recomputed_relative_residual_l2_norm;
+    target.residual_consistency_degraded =
+        source.residual_consistency_degraded;
+    target.residual_consistency_ratio =
+        source.residual_consistency_ratio;
+    target.stagnation_detected = source.stagnation_detected;
+    target.stagnation_iteration = source.stagnation_iteration;
+    target.stagnation_relative_residual_ratio =
+        source.stagnation_relative_residual_ratio;
     target.residual_growth_factor = source.residual_growth_factor;
     target.right_preconditioner_probe_available =
         source.right_preconditioner_probe_available;
@@ -2998,6 +3374,86 @@ void copy_production_cpu_diagnostics(
 const char *preconditioner_setup_status(const MfemDrivenResponseValidationResult &result) noexcept
 {
     return result.right_preconditioner_applied ? "ok" : "not_configured";
+}
+
+const char *gmres_stop_reason(
+    bool complete,
+    bool stagnation_detected,
+    bool residual_consistency_degraded,
+    std::uint64_t total_iteration_count,
+    std::uint64_t max_iterations_for_frequency) noexcept
+{
+    if (stagnation_detected) {
+        return "stagnated";
+    }
+    if (residual_consistency_degraded) {
+        return "residual_consistency_degraded";
+    }
+    if (complete) {
+        return "converged";
+    }
+    if (max_iterations_for_frequency > 0 &&
+        total_iteration_count >= max_iterations_for_frequency) {
+        return "max_iterations";
+    }
+    if (total_iteration_count == 0) {
+        return "not_started";
+    }
+    return "solve_error";
+}
+
+std::string gmres_stop_reason_json(
+    const MfemDrivenResponseValidationResult &result,
+    bool complete,
+    char error_message[128])
+{
+    std::string json;
+    if (!append_format(
+            json,
+            error_message,
+            "\"stop_reason\":\"%s\","
+            "\"stagnation_detected\":%s,"
+            "\"stagnation_iteration\":%llu,"
+            "\"stagnation_relative_residual_ratio\":%.17g,",
+            gmres_stop_reason(
+                complete,
+                result.stagnation_detected,
+                result.residual_consistency_degraded,
+                result.total_iteration_count,
+                result.max_iterations_for_frequency),
+            result.stagnation_detected ? "true" : "false",
+            static_cast<unsigned long long>(result.stagnation_iteration),
+            result.stagnation_relative_residual_ratio)) {
+        return "";
+    }
+    return json;
+}
+
+std::string gmres_stop_reason_json(
+    const DenseDrivenResponseValidationResult &result,
+    bool complete,
+    char error_message[128])
+{
+    std::string json;
+    if (!append_format(
+            json,
+            error_message,
+            "\"stop_reason\":\"%s\","
+            "\"stagnation_detected\":%s,"
+            "\"stagnation_iteration\":%llu,"
+            "\"stagnation_relative_residual_ratio\":%.17g,",
+            gmres_stop_reason(
+                complete,
+                result.stagnation_detected,
+                result.residual_consistency_degraded,
+                result.total_iteration_count,
+                result.max_iterations_for_frequency),
+            result.stagnation_detected ? "true" : "false",
+            static_cast<unsigned long long>(result.stagnation_iteration),
+            result.stagnation_relative_residual_ratio)) {
+        return "";
+    }
+    return json;
 }
 
 std::string gmres_relative_residual_history_json(
@@ -3273,6 +3729,32 @@ std::string schur_preconditioner_quality_array_json(
     return json;
 }
 
+const char *schur_preconditioner_quality_status(
+    const MfemPhiConsistencySchurProviderContext &context) noexcept
+{
+    if (!context.schur_preconditioner_quality_available) {
+        return "not_available";
+    }
+    const double eta =
+        context.schur_preconditioner_last_observed_relative_residual_l2_norm;
+    if (!std::isfinite(eta) || eta < 0.0) {
+        return "invalid";
+    }
+    if (eta <= 0.30) {
+        return "good";
+    }
+    if (eta <= 0.70) {
+        return "bounded";
+    }
+    if (eta <= 0.90) {
+        return "weak";
+    }
+    if (eta <= 1.05) {
+        return "not_default";
+    }
+    return "harmful";
+}
+
 std::string schur_preconditioner_quality_json(
     const MfemPhiConsistencySchurProviderContext &context,
     char error_message[128])
@@ -3300,6 +3782,7 @@ std::string schur_preconditioner_quality_json(
             json,
             error_message,
             "\"schur_preconditioner_quality_available\":%s,"
+            "\"schur_preconditioner_quality_status\":\"%s\","
             "\"schur_preconditioner_quality_apply_count\":%llu,"
             "\"schur_preconditioner_quality_captured_apply_index\":%llu,"
             "\"schur_preconditioner_quality_sweep_count\":%llu,"
@@ -3319,6 +3802,7 @@ std::string schur_preconditioner_quality_json(
             "\"schur_preconditioner_sweep_correction_l2_norm\":%s,"
             "\"schur_preconditioner_sweep_correction_operator_l2_norm\":%s,",
             context.schur_preconditioner_quality_available ? "true" : "false",
+            schur_preconditioner_quality_status(context),
             static_cast<unsigned long long>(
                 context.schur_preconditioner_quality_apply_count),
             static_cast<unsigned long long>(
@@ -5278,6 +5762,8 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
             request.mfem_validation_problem.descriptor.node_count * 3;
     const std::string gmres_history_json =
         gmres_relative_residual_history_json(validation_result, error_message);
+    const std::string gmres_stop_json =
+        gmres_stop_reason_json(validation_result, complete, error_message);
     const std::string coupled_block_norms_json =
         coupled_block_norms_diagnostics_json(validation_result, error_message);
     const std::string demag_tangent_linearity_json =
@@ -6097,6 +6583,7 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
         "\"assembled_mfem_operator_solver\":%s,"
         "\"matrix_free_solver\":%s,"
         "%s"
+        "%s"
         "\"demag_tangent_operator_source\":\"%s\","
         "\"demag_tangent_linearity_check\":%s,"
         "\"demag_tangent_additivity_max_abs_error\":%.17g,"
@@ -6143,6 +6630,7 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
         "\"minimum_tracked_relative_residual_iteration\":%llu,"
         "\"last_tracked_relative_residual_l2_norm\":%.17g,"
         "\"last_recomputed_relative_residual_l2_norm\":%.17g,"
+        "%s"
         "\"residual_growth_factor\":%.17g,"
         "\"krylov_preconditioner_kind\":\"%s\","
         "\"krylov_preconditioner_applied\":%s,"
@@ -6199,6 +6687,7 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
         assembled_flag,
         production_lane ? "true" : "false",
         gpu_operator_solver_field,
+        production_lane ? kHostKrylovResidencyDiagnosticsJson : "",
         demag_tangent_operator_source,
         validation_result.demag_tangent_linearity_check ? "true" : "false",
         validation_result.demag_tangent_additivity_max_abs_error,
@@ -6254,6 +6743,7 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
             validation_result.minimum_tracked_relative_residual_iteration),
         validation_result.last_tracked_relative_residual_l2_norm,
         validation_result.last_recomputed_relative_residual_l2_norm,
+        gmres_stop_json.c_str(),
         validation_result.residual_growth_factor,
         validation_result.krylov_preconditioner,
         validation_result.right_preconditioner_applied ? "true" : "false",
@@ -6383,6 +6873,7 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
         "\"dense_block_real_solver\":%s,"
         "\"matrix_free_solver\":%s,"
         "%s"
+        "%s"
         "\"demag_tangent_operator_source\":\"%s\","
         "\"demag_tangent_linearity_check\":%s,"
         "\"demag_tangent_additivity_max_abs_error\":%.17g,"
@@ -6439,6 +6930,7 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
         "\"minimum_tracked_relative_residual_iteration\":%llu,"
         "\"last_tracked_relative_residual_l2_norm\":%.17g,"
         "\"last_recomputed_relative_residual_l2_norm\":%.17g,"
+        "%s"
         "\"residual_growth_factor\":%.17g,"
         "\"max_abs_response\":%.17g,"
         "\"residual_l2_norm\":%.17g,"
@@ -6453,6 +6945,7 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
         dense_flag,
         production_lane ? "true" : "false",
         gpu_operator_solver_field,
+        production_lane ? kHostKrylovResidencyDiagnosticsJson : "",
         demag_tangent_operator_source,
         validation_result.demag_tangent_linearity_check ? "true" : "false",
         validation_result.demag_tangent_additivity_max_abs_error,
@@ -6518,6 +7011,7 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
             validation_result.minimum_tracked_relative_residual_iteration),
         validation_result.last_tracked_relative_residual_l2_norm,
         validation_result.last_recomputed_relative_residual_l2_norm,
+        gmres_stop_json.c_str(),
         validation_result.residual_growth_factor,
         validation_result.max_abs_response,
         validation_result.residual_l2_norm,
@@ -6598,6 +7092,9 @@ FrequencyDomainStatus write_mfem_validation_artifacts(
         return status;
     }
     if (write_periodic_pairs_artifact) {
+        if (!annotate_periodic_pairs_artifact_hash(periodic_pairs_json, error_message)) {
+            return FrequencyDomainStatus::artifact_error;
+        }
         status = write_text_artifact(
             periodic_pairs,
             periodic_pairs_json.c_str(),
@@ -7656,6 +8153,9 @@ FrequencyDomainStatus write_unavailable_response_artifacts(
         return status;
     }
     if (magnetic_periodic) {
+        if (!annotate_periodic_pairs_artifact_hash(periodic_pairs_json, error_message)) {
+            return FrequencyDomainStatus::artifact_error;
+        }
         status = ensure_directory(mesh_dir, error_message);
         if (status != FrequencyDomainStatus::ok) {
             return status;
@@ -7960,11 +8460,14 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
         delta_m_tangent_dof_count);
     const bool production_gpu =
         request.execution_lane == DrivenFrequencyResponseExecutionLane::production_gpu;
-    const char *uses_gpu_poisson = production_gpu ? "true" : "false";
+    const char *uses_gpu_poisson =
+        frequency_response_uses_gpu_poisson_json(production_gpu);
     const char *demag_operator_mode =
-        production_gpu ? "device_hypre_poisson" : "host_mfem_poisson_provider";
-    const char *hypre_execution_policy = production_gpu ? "device" : "host";
-    const char *demag_provider_residency = production_gpu ? "gpu" : "cpu";
+        frequency_response_demag_operator_mode(production_gpu);
+    const char *hypre_execution_policy =
+        frequency_response_hypre_execution_policy(production_gpu);
+    const char *demag_provider_residency =
+        frequency_response_demag_provider_residency(production_gpu);
     const char *requested_execution_lane = execution_lane_to_string(request.execution_lane);
     const char *residual_source = "matrix_free_gmres";
     const char *sweep_solver_model = "matrix_free_gmres";
@@ -8987,6 +9490,9 @@ FrequencyDomainStatus write_periodic_airbox_coupled_block_artifacts(
     if (status != FrequencyDomainStatus::ok) {
         return status;
     }
+    if (!annotate_periodic_pairs_artifact_hash(periodic_pairs_json, error_message)) {
+        return FrequencyDomainStatus::artifact_error;
+    }
     status = write_text_artifact(periodic_pairs, periodic_pairs_json.c_str(), error_message);
     if (status != FrequencyDomainStatus::ok) {
         return status;
@@ -9837,6 +10343,10 @@ FrequencyDomainStatus solve_mfem_production_cpu_problem(
             "\"minimum_tracked_relative_residual_iteration\":%llu,"
             "\"last_tracked_relative_residual_l2_norm\":%.17g,"
             "\"last_recomputed_relative_residual_l2_norm\":%.17g,"
+            "\"stop_reason\":\"%s\","
+            "\"stagnation_detected\":%s,"
+            "\"stagnation_iteration\":%llu,"
+            "\"stagnation_relative_residual_ratio\":%.17g,"
             "\"residual_growth_factor\":%.17g,"
             "\"residual_l2_norm\":%.17g,"
             "\"relative_residual_l2_norm\":%.17g}",
@@ -9888,6 +10398,15 @@ FrequencyDomainStatus solve_mfem_production_cpu_problem(
                 production_result.minimum_tracked_relative_residual_iteration),
             production_result.last_tracked_relative_residual_l2_norm,
             production_result.last_recomputed_relative_residual_l2_norm,
+            gmres_stop_reason(
+                false,
+                production_result.stagnation_detected,
+                production_result.residual_consistency_degraded,
+                production_result.total_iteration_count,
+                production_result.max_iterations_for_frequency),
+            production_result.stagnation_detected ? "true" : "false",
+            static_cast<unsigned long long>(production_result.stagnation_iteration),
+            production_result.stagnation_relative_residual_ratio,
             production_result.residual_growth_factor,
             production_result.residual_l2_norm,
             production_result.relative_residual_l2_norm);
@@ -10716,6 +11235,73 @@ FrequencyDomainStatus solve_tiny_validation_problem(
             "");
         return result.status;
     }
+    if (request.drive_kind == FrequencyDriveKind::dynamic_field_phasor_a_per_m &&
+        !request.require_nonzero_rhs &&
+        !complex_drive_has_nonzero_rhs(
+            problem.drive_real,
+            problem.drive_imag,
+            tangent_dof_count)) {
+        double max_frequency_hz = 0.0;
+        for (std::uint64_t frequency_index = 0;
+             frequency_index < request.solve_request.frequency_count;
+             ++frequency_index) {
+            max_frequency_hz = std::max(
+                max_frequency_hz,
+                request.solve_request.frequencies_hz[frequency_index]);
+        }
+        char diagnostics_json[512]{};
+        char result_json[384]{};
+        const int diagnostics_written = std::snprintf(
+            diagnostics_json,
+            sizeof(diagnostics_json),
+            "{\"schema_version\":\"frequency_domain_response_diagnostics.v1\","
+            "\"solver_engine\":\"native_fem_mfem_driven_response\","
+            "\"status\":\"ok\","
+            "\"complete\":true,"
+            "\"production_solver_available\":false,"
+            "\"tiny_validation_solver\":true,"
+            "\"dense_block_real_solver\":true,"
+            "\"zero_drive_warning\":true,"
+            "\"zero_drive_policy\":\"zero_response_allowed\","
+            "\"completed_frequency_point_count\":%llu,"
+            "\"tangent_dof_count\":%llu}",
+            static_cast<unsigned long long>(request.solve_request.frequency_count),
+            static_cast<unsigned long long>(tangent_dof_count));
+        const int result_written = std::snprintf(
+            result_json,
+            sizeof(result_json),
+            "{\"schema_version\":\"frequency_domain_driven_response_result.v1\","
+            "\"status\":\"ok\","
+            "\"completed_frequency_count\":%llu,"
+            "\"max_frequency_hz\":%.17g,"
+            "\"max_abs_response\":0,"
+            "\"artifact_manifest_path\":\"\"}",
+            static_cast<unsigned long long>(request.solve_request.frequency_count),
+            max_frequency_hz);
+        if (diagnostics_written < 0 ||
+            result_written < 0 ||
+            static_cast<std::size_t>(diagnostics_written) >= sizeof(diagnostics_json) ||
+            static_cast<std::size_t>(result_written) >= sizeof(result_json)) {
+            result.status = FrequencyDomainStatus::artifact_error;
+            assign_result_strings(
+                result,
+                "tiny zero-drive response result JSON exceeded fixed buffer",
+                status_diagnostics_json(FrequencyDomainStatus::artifact_error),
+                status_result_json(FrequencyDomainStatus::artifact_error),
+                "");
+            return result.status;
+        }
+        result.status = FrequencyDomainStatus::ok;
+        result.completed_frequency_count = request.solve_request.frequency_count;
+        result.written_frequency_point_artifacts = 0;
+        assign_result_strings(
+            result,
+            "",
+            diagnostics_json,
+            result_json,
+            "");
+        return result.status;
+    }
 
     DenseDrivenResponseValidationResult validation_result{};
     const FrequencyDomainStatus validation_status = solve_dense_driven_response_validation_problem(
@@ -11367,11 +11953,14 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
         execution_lane_to_string(request.execution_lane);
     const bool production_gpu =
         request.execution_lane == DrivenFrequencyResponseExecutionLane::production_gpu;
-    const char *uses_gpu_poisson = production_gpu ? "true" : "false";
+    const char *uses_gpu_poisson =
+        frequency_response_uses_gpu_poisson_json(production_gpu);
     const char *demag_operator_mode =
-        production_gpu ? "device_hypre_poisson" : "host_mfem_poisson_provider";
-    const char *hypre_execution_policy = production_gpu ? "device" : "host";
-    const char *demag_provider_residency = production_gpu ? "gpu" : "cpu";
+        frequency_response_demag_operator_mode(production_gpu);
+    const char *hypre_execution_policy =
+        frequency_response_hypre_execution_policy(production_gpu);
+    const char *demag_provider_residency =
+        frequency_response_demag_provider_residency(production_gpu);
     if (!problem.enabled ||
         problem.apply_demag_tangent_with_potential == nullptr ||
         problem.drive_real == nullptr ||
@@ -11957,6 +12546,10 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
                 primary_result.right_preconditioner_unpreconditioned_pilot_residual_l2_norm;
             production_result.right_preconditioner_unpreconditioned_pilot_relative_residual_l2_norm =
                 primary_result.right_preconditioner_unpreconditioned_pilot_relative_residual_l2_norm;
+            production_result.right_preconditioner_residual_consistency_degraded =
+                primary_result.right_preconditioner_residual_consistency_degraded;
+            production_result.right_preconditioner_residual_consistency_ratio =
+                primary_result.right_preconditioner_residual_consistency_ratio;
             production_result.right_preconditioner_auto_disabled = true;
             std::snprintf(
                 production_result.right_preconditioner_auto_disable_reason,
@@ -12016,8 +12609,9 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
             validation_result);
 
         PeriodicAirboxPhiGaugeDiagnostics phi_gauge_diagnostics{};
-        phi_gauge_diagnostics.phi_gauge_policy =
-            "matrix_free_provider_responsibility";
+        phi_gauge_diagnostics.phi_nullspace_detected = true;
+        phi_gauge_diagnostics.phi_gauge_constraint_applied = true;
+        phi_gauge_diagnostics.phi_gauge_policy = "mean_zero";
         const char *postsolve_validation_error = nullptr;
         std::string postsolve_validation_message;
         if (diagnostic_frequency_count > 0) {
@@ -12070,6 +12664,11 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
             demag_tangent_linearity_diagnostics_json(
                 validation_result,
                 failure_diagnostics_error);
+        const std::string gmres_stop_json =
+            gmres_stop_reason_json(
+                validation_result,
+                false,
+                failure_diagnostics_error);
         std::string postsolve_validation_extra_json;
         if (postsolve_validation_error != nullptr &&
             !append_format(
@@ -12104,6 +12703,7 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
                 "\"graph_preconditioner_relaxation\":%.17g,"
                 "\"krylov_preconditioner_applied\":%s,"
                 "\"krylov_preconditioner_setup_status\":\"%s\","
+                "%s"
                 "%s"
                 "%s"
                 "%s"
@@ -12154,6 +12754,7 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
                 preconditioner_fallback_json.c_str(),
                 schur_quality_json.c_str(),
                 demag_tangent_linearity_json.c_str(),
+                gmres_stop_json.c_str(),
                 gmres_history_json.c_str(),
                 static_cast<unsigned long long>(production_result.total_iteration_count),
                 static_cast<unsigned long long>(
@@ -12249,6 +12850,10 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
             schur_preconditioner_quality_json(
                 context,
                 failure_diagnostics_error);
+        const std::string direct_coupled_block_norms_json =
+            coupled_block_norms_diagnostics_json(
+                validation_result,
+                failure_diagnostics_error);
         const int diagnostics_written = std::snprintf(
             direct_diagnostics_json,
             sizeof(direct_diagnostics_json),
@@ -12264,12 +12869,24 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
             "\"demag_operator_mode\":\"%s\","
             "\"hypre_execution_policy\":\"%s\","
             "\"demag_provider_residency\":\"%s\","
+            "\"phi_gauge_policy\":\"%s\","
+            "\"phi_gauge_constraint_applied\":%s,"
+            "\"delta_phi_phase_validation_status\":\"%s\","
+            "\"delta_phi_phase_max_residual\":%.17g,"
+            "\"delta_phi_seam_validation_status\":\"%s\","
+            "\"delta_phi_seam_max_after_offset\":%.17g,"
+            "\"delta_phi_seam_best_constant_offset_real\":%.17g,"
+            "\"delta_phi_seam_best_constant_offset_imag\":%.17g,"
+            "\"delta_phi_flux_validation_status\":\"%s\","
+            "\"delta_phi_flux_validation_reason\":\"%s\","
             "\"krylov_preconditioner_requested_variant\":\"%s\","
             "\"krylov_preconditioner_initial_variant\":\"%s\","
             "\"krylov_preconditioner_variant\":\"%s\","
             "\"exchange_edge_count\":%llu,"
             "\"graph_preconditioner_sweeps\":%llu,"
             "\"graph_preconditioner_relaxation\":%.17g,"
+            "%s"
+            "%s"
             "%s"
             "%s"
             "%s"
@@ -12289,6 +12906,16 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
             demag_operator_mode,
             hypre_execution_policy,
             demag_provider_residency,
+            phi_gauge_diagnostics.phi_gauge_policy,
+            phi_gauge_diagnostics.phi_gauge_constraint_applied ? "true" : "false",
+            phi_gauge_diagnostics.delta_phi_phase_validation_status,
+            phi_gauge_diagnostics.delta_phi_phase_max_residual,
+            phi_gauge_diagnostics.delta_phi_seam_validation_status,
+            phi_gauge_diagnostics.delta_phi_seam_max_after_offset,
+            phi_gauge_diagnostics.delta_phi_seam_best_constant_offset_real,
+            phi_gauge_diagnostics.delta_phi_seam_best_constant_offset_imag,
+            phi_gauge_diagnostics.delta_phi_flux_validation_status,
+            phi_gauge_diagnostics.delta_phi_flux_validation_reason,
             requested_preconditioner_variant_name,
             preconditioner_variant,
             resolved_preconditioner_variant,
@@ -12305,6 +12932,8 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
             direct_preconditioner_fallback_json.c_str(),
             direct_schur_quality_json.c_str(),
             demag_tangent_linearity_json.c_str(),
+            gmres_stop_json.c_str(),
+            direct_coupled_block_norms_json.c_str(),
             static_cast<unsigned long long>(production_result.total_iteration_count),
             static_cast<unsigned long long>(
                 production_result.max_iterations_for_frequency),
@@ -12575,7 +13204,7 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
             return result.status;
         }
 
-        char diagnostics_json[1024]{};
+        char diagnostics_json[2048]{};
         char result_json[512]{};
         const int diagnostics_written = std::snprintf(
             diagnostics_json,
@@ -12585,9 +13214,29 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
             "\"complete\":false,"
             "\"validation_error\":\"%s\","
             "\"completed_frequency_point_count\":%llu,"
+            "\"phi_gauge_policy\":\"%s\","
+            "\"phi_gauge_constraint_applied\":%s,"
+            "\"delta_phi_phase_validation_status\":\"%s\","
+            "\"delta_phi_phase_max_residual\":%.17g,"
+            "\"delta_phi_seam_validation_status\":\"%s\","
+            "\"delta_phi_seam_max_after_offset\":%.17g,"
+            "\"delta_phi_seam_best_constant_offset_real\":%.17g,"
+            "\"delta_phi_seam_best_constant_offset_imag\":%.17g,"
+            "\"delta_phi_flux_validation_status\":\"%s\","
+            "\"delta_phi_flux_validation_reason\":\"%s\","
             "\"artifact_manifest_path\":\"%s\"}",
             validation_error,
             static_cast<unsigned long long>(validation_result.completed_frequency_count),
+            diagnostics.phi_gauge_policy,
+            diagnostics.phi_gauge_constraint_applied ? "true" : "false",
+            diagnostics.delta_phi_phase_validation_status,
+            diagnostics.delta_phi_phase_max_residual,
+            diagnostics.delta_phi_seam_validation_status,
+            diagnostics.delta_phi_seam_max_after_offset,
+            diagnostics.delta_phi_seam_best_constant_offset_real,
+            diagnostics.delta_phi_seam_best_constant_offset_imag,
+            diagnostics.delta_phi_flux_validation_status,
+            diagnostics.delta_phi_flux_validation_reason,
             manifest_path);
         const int result_written = std::snprintf(
             result_json,
@@ -12634,8 +13283,9 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
     };
 
     PeriodicAirboxPhiGaugeDiagnostics phi_gauge_diagnostics{};
-    phi_gauge_diagnostics.phi_gauge_policy =
-        "matrix_free_provider_responsibility";
+    phi_gauge_diagnostics.phi_nullspace_detected = true;
+    phi_gauge_diagnostics.phi_gauge_constraint_applied = true;
+    phi_gauge_diagnostics.phi_gauge_policy = "mean_zero";
     const FrequencyDomainStatus phi_diagnostics_status =
         populate_periodic_airbox_phi_gauge_response_diagnostics(
             request,
@@ -13549,6 +14199,17 @@ FrequencyDomainStatus solve_mfem_validation_problem(
             "");
         return result.status;
     }
+    const bool zero_physical_drive =
+        request.drive_kind == FrequencyDriveKind::dynamic_field_phasor_a_per_m &&
+        !request.require_nonzero_rhs &&
+        !complex_drive_has_nonzero_rhs(
+            problem.drive_real,
+            problem.drive_imag,
+            request.solve_request.operator_request.tangent_dof_count);
+    const char *zero_drive_extra_json = zero_physical_drive
+        ? "\"zero_drive_warning\":true,"
+          "\"zero_drive_policy\":\"zero_response_allowed\","
+        : "";
     const int diagnostics_written = std::snprintf(
         diagnostics_json,
         sizeof(diagnostics_json),
@@ -13560,10 +14221,12 @@ FrequencyDomainStatus solve_mfem_validation_problem(
         "\"tiny_validation_solver\":true,"
         "\"dense_block_real_solver\":true,"
         "\"assembled_mfem_operator_solver\":true,"
+        "%s"
         "\"completed_frequency_point_count\":%llu,"
         "\"tangent_dof_count\":%llu,"
         "\"max_abs_stiffness_matrix\":%.17g,"
         "\"max_abs_mass_matrix\":%.17g}",
+        zero_drive_extra_json,
         static_cast<unsigned long long>(validation_result.completed_frequency_count),
         static_cast<unsigned long long>(request.solve_request.operator_request.tangent_dof_count),
         validation_result.max_abs_stiffness_matrix,
@@ -14603,6 +15266,9 @@ FrequencyDomainStatus solve_floquet_nonzero_k_unavailable(
             return status;
         }
         if (floquet_airbox_dynamic_demag) {
+            if (!annotate_periodic_pairs_artifact_hash(periodic_pairs_json, error_message)) {
+                return FrequencyDomainStatus::artifact_error;
+            }
             status = write_text_artifact(periodic_pairs, periodic_pairs_json.c_str(), error_message);
             if (status != FrequencyDomainStatus::ok) {
                 return status;

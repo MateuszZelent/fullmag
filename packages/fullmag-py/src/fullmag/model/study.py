@@ -88,10 +88,19 @@ SUPPORTED_FREQUENCY_RESPONSE_SOLVER_METHODS = {
     "gpu_device_krylov",
 }
 
+SUPPORTED_FREQUENCY_RESPONSE_PRECONDITIONERS = {
+    "auto",
+    "graph_demag_coarse",
+    "demag_coarse",
+    "block_jacobi",
+    "none",
+}
+
 
 @dataclass(frozen=True, slots=True)
 class FrequencyResponseSolverPolicy:
     method: str | None = None
+    preconditioner: str | None = None
     rtol: float | None = None
     max_iterations: int | None = None
     restart_iterations: int | None = None
@@ -103,6 +112,17 @@ class FrequencyResponseSolverPolicy:
                 supported = ", ".join(sorted(SUPPORTED_FREQUENCY_RESPONSE_SOLVER_METHODS))
                 raise ValueError(f"solver_method must be one of: {supported}")
             object.__setattr__(self, "method", method)
+        if self.preconditioner is not None:
+            preconditioner = require_non_empty(
+                self.preconditioner,
+                "solver_preconditioner",
+            )
+            if preconditioner not in SUPPORTED_FREQUENCY_RESPONSE_PRECONDITIONERS:
+                supported = ", ".join(
+                    sorted(SUPPORTED_FREQUENCY_RESPONSE_PRECONDITIONERS)
+                )
+                raise ValueError(f"solver_preconditioner must be one of: {supported}")
+            object.__setattr__(self, "preconditioner", preconditioner)
         if self.rtol is not None:
             rtol = float(self.rtol)
             if not math.isfinite(rtol) or rtol <= 0.0:
@@ -129,6 +149,8 @@ class FrequencyResponseSolverPolicy:
         policy: dict[str, object] = {}
         if self.method is not None:
             policy["method"] = self.method
+        if self.preconditioner is not None:
+            policy["preconditioner"] = self.preconditioner
         if self.rtol is not None:
             policy["rtol"] = self.rtol
         if self.max_iterations is not None:

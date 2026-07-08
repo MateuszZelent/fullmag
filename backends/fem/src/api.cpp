@@ -683,6 +683,35 @@ bool from_abi_frequency_domain_phase_convention(
     return false;
 }
 
+bool from_abi_frequency_domain_drive_kind(
+    fullmag_fem_frequency_domain_drive_kind drive_kind,
+    fullmag::fem::frequency_domain::FrequencyDriveKind *out_drive_kind)
+{
+    namespace fd = fullmag::fem::frequency_domain;
+    if (out_drive_kind == nullptr) {
+        return false;
+    }
+    switch (drive_kind) {
+    case FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_UNSPECIFIED:
+    case FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_DYNAMIC_FIELD_PHASOR_A_PER_M:
+        *out_drive_kind = fd::FrequencyDriveKind::dynamic_field_phasor_a_per_m;
+        return true;
+    case FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_TANGENT_RHS:
+        *out_drive_kind = fd::FrequencyDriveKind::tangent_rhs;
+        return true;
+    case FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_CARTESIAN_TORQUE_PHASOR:
+        *out_drive_kind = fd::FrequencyDriveKind::cartesian_torque_phasor;
+        return true;
+    case FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_STT_CURRENT_PHASOR:
+        *out_drive_kind = fd::FrequencyDriveKind::stt_current_phasor;
+        return true;
+    case FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_COUPLED_EXTERNAL_PROVIDER:
+        *out_drive_kind = fd::FrequencyDriveKind::coupled_external_provider;
+        return true;
+    }
+    return false;
+}
+
 char *duplicate_c_string(const char *value) noexcept
 {
     if (value == nullptr) {
@@ -1239,6 +1268,10 @@ int fullmag_fem_get_frequency_domain_abi_layout(
         offsetof(fullmag_fem_frequency_domain_driven_response_request, tiny_validation_drive_imag);
     out_layout->driven_response_request_phase_convention_offset =
         offsetof(fullmag_fem_frequency_domain_driven_response_request, phase_convention);
+    out_layout->driven_response_request_drive_kind_offset =
+        offsetof(fullmag_fem_frequency_domain_driven_response_request, drive_kind);
+    out_layout->driven_response_request_require_nonzero_rhs_offset =
+        offsetof(fullmag_fem_frequency_domain_driven_response_request, require_nonzero_rhs);
     out_layout->driven_response_request_mfem_floquet_periodic_pair_count_offset =
         offsetof(fullmag_fem_frequency_domain_driven_response_request, mfem_floquet_periodic_pair_count);
     out_layout->driven_response_request_periodic_airbox_magnetostatic_periodic_node_pairs_offset =
@@ -1459,7 +1492,9 @@ static int fullmag_fem_frequency_domain_solve_driven_response_from_c_abi(
         request,
         mfem_apply_demag_tangent_with_potential,
     };
-    native_request.abi_version = request->abi_version;
+    native_request.abi_version = request->abi_version == 0
+        ? 0
+        : fd::kDrivenFrequencyResponseSolveRequestAbiVersion;
     native_request.reserved_contract_flags = request->reserved_contract_flags;
     native_request.struct_size = request->struct_size == 0
         ? 0
@@ -1522,6 +1557,21 @@ static int fullmag_fem_frequency_domain_solve_driven_response_from_c_abi(
         return FULLMAG_FEM_OK;
     }
     native_request.solve_request.phase_convention = native_request.phase_convention;
+    if (!from_abi_frequency_domain_drive_kind(
+            request->drive_kind,
+            &native_request.drive_kind)) {
+        if (!fill_frequency_domain_validation_result(
+                out_result,
+                request->frequency_count,
+                "invalid frequency-domain drive kind")) {
+            fullmag_fem_set_global_error(
+                "failed to allocate invalid frequency-domain drive-kind result");
+            return FULLMAG_FEM_ERR_INTERNAL;
+        }
+        fullmag_fem_clear_global_error();
+        return FULLMAG_FEM_OK;
+    }
+    native_request.require_nonzero_rhs = request->require_nonzero_rhs != 0;
     native_request.floquet_periodic_pair_count =
         request->mfem_floquet_periodic_pair_count;
     if (request->mfem_floquet_periodic_pair_count > 0 &&
@@ -2100,6 +2150,106 @@ FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve(
         native_request.floquet_periodic_pairs =
             modal_floquet_periodic_pairs.data();
     }
+    native_request.poisson_airbox_block_enabled =
+        request->poisson_airbox_block_enabled;
+    native_request.poisson_airbox_q_dof_count =
+        request->poisson_airbox_q_dof_count;
+    native_request.poisson_airbox_phi_dof_count =
+        request->poisson_airbox_phi_dof_count;
+    native_request.poisson_airbox_a_qq_csr.row_count =
+        request->poisson_airbox_a_qq_csr.row_count;
+    native_request.poisson_airbox_a_qq_csr.column_count =
+        request->poisson_airbox_a_qq_csr.column_count;
+    native_request.poisson_airbox_a_qq_csr.row_offsets =
+        request->poisson_airbox_a_qq_csr.row_offsets;
+    native_request.poisson_airbox_a_qq_csr.row_offsets_len =
+        request->poisson_airbox_a_qq_csr.row_offsets_len;
+    native_request.poisson_airbox_a_qq_csr.column_indices =
+        request->poisson_airbox_a_qq_csr.column_indices;
+    native_request.poisson_airbox_a_qq_csr.column_indices_len =
+        request->poisson_airbox_a_qq_csr.column_indices_len;
+    native_request.poisson_airbox_a_qq_csr.values =
+        request->poisson_airbox_a_qq_csr.values;
+    native_request.poisson_airbox_a_qq_csr.values_len =
+        request->poisson_airbox_a_qq_csr.values_len;
+    native_request.poisson_airbox_a_qphi_csr.row_count =
+        request->poisson_airbox_a_qphi_csr.row_count;
+    native_request.poisson_airbox_a_qphi_csr.column_count =
+        request->poisson_airbox_a_qphi_csr.column_count;
+    native_request.poisson_airbox_a_qphi_csr.row_offsets =
+        request->poisson_airbox_a_qphi_csr.row_offsets;
+    native_request.poisson_airbox_a_qphi_csr.row_offsets_len =
+        request->poisson_airbox_a_qphi_csr.row_offsets_len;
+    native_request.poisson_airbox_a_qphi_csr.column_indices =
+        request->poisson_airbox_a_qphi_csr.column_indices;
+    native_request.poisson_airbox_a_qphi_csr.column_indices_len =
+        request->poisson_airbox_a_qphi_csr.column_indices_len;
+    native_request.poisson_airbox_a_qphi_csr.values =
+        request->poisson_airbox_a_qphi_csr.values;
+    native_request.poisson_airbox_a_qphi_csr.values_len =
+        request->poisson_airbox_a_qphi_csr.values_len;
+    native_request.poisson_airbox_a_phiq_csr.row_count =
+        request->poisson_airbox_a_phiq_csr.row_count;
+    native_request.poisson_airbox_a_phiq_csr.column_count =
+        request->poisson_airbox_a_phiq_csr.column_count;
+    native_request.poisson_airbox_a_phiq_csr.row_offsets =
+        request->poisson_airbox_a_phiq_csr.row_offsets;
+    native_request.poisson_airbox_a_phiq_csr.row_offsets_len =
+        request->poisson_airbox_a_phiq_csr.row_offsets_len;
+    native_request.poisson_airbox_a_phiq_csr.column_indices =
+        request->poisson_airbox_a_phiq_csr.column_indices;
+    native_request.poisson_airbox_a_phiq_csr.column_indices_len =
+        request->poisson_airbox_a_phiq_csr.column_indices_len;
+    native_request.poisson_airbox_a_phiq_csr.values =
+        request->poisson_airbox_a_phiq_csr.values;
+    native_request.poisson_airbox_a_phiq_csr.values_len =
+        request->poisson_airbox_a_phiq_csr.values_len;
+    native_request.poisson_airbox_a_phiphi_csr.row_count =
+        request->poisson_airbox_a_phiphi_csr.row_count;
+    native_request.poisson_airbox_a_phiphi_csr.column_count =
+        request->poisson_airbox_a_phiphi_csr.column_count;
+    native_request.poisson_airbox_a_phiphi_csr.row_offsets =
+        request->poisson_airbox_a_phiphi_csr.row_offsets;
+    native_request.poisson_airbox_a_phiphi_csr.row_offsets_len =
+        request->poisson_airbox_a_phiphi_csr.row_offsets_len;
+    native_request.poisson_airbox_a_phiphi_csr.column_indices =
+        request->poisson_airbox_a_phiphi_csr.column_indices;
+    native_request.poisson_airbox_a_phiphi_csr.column_indices_len =
+        request->poisson_airbox_a_phiphi_csr.column_indices_len;
+    native_request.poisson_airbox_a_phiphi_csr.values =
+        request->poisson_airbox_a_phiphi_csr.values;
+    native_request.poisson_airbox_a_phiphi_csr.values_len =
+        request->poisson_airbox_a_phiphi_csr.values_len;
+    native_request.poisson_airbox_b_qq_csr.row_count =
+        request->poisson_airbox_b_qq_csr.row_count;
+    native_request.poisson_airbox_b_qq_csr.column_count =
+        request->poisson_airbox_b_qq_csr.column_count;
+    native_request.poisson_airbox_b_qq_csr.row_offsets =
+        request->poisson_airbox_b_qq_csr.row_offsets;
+    native_request.poisson_airbox_b_qq_csr.row_offsets_len =
+        request->poisson_airbox_b_qq_csr.row_offsets_len;
+    native_request.poisson_airbox_b_qq_csr.column_indices =
+        request->poisson_airbox_b_qq_csr.column_indices;
+    native_request.poisson_airbox_b_qq_csr.column_indices_len =
+        request->poisson_airbox_b_qq_csr.column_indices_len;
+    native_request.poisson_airbox_b_qq_csr.values =
+        request->poisson_airbox_b_qq_csr.values;
+    native_request.poisson_airbox_b_qq_csr.values_len =
+        request->poisson_airbox_b_qq_csr.values_len;
+    native_request.poisson_airbox_phi_mean_weights =
+        request->poisson_airbox_phi_mean_weights;
+    native_request.poisson_airbox_phi_mean_weights_count =
+        request->poisson_airbox_phi_mean_weights_count;
+    native_request.poisson_airbox_target_frequency_hz =
+        request->poisson_airbox_target_frequency_hz;
+    native_request.poisson_airbox_expected_reference_frequency_hz =
+        request->poisson_airbox_expected_reference_frequency_hz;
+    native_request.poisson_airbox_periodic_mesh_certificate_schema =
+        request->poisson_airbox_periodic_mesh_certificate_schema;
+    native_request.poisson_airbox_magnetic_pair_count =
+        request->poisson_airbox_magnetic_pair_count;
+    native_request.poisson_airbox_airbox_pair_count =
+        request->poisson_airbox_airbox_pair_count;
 
     return copy_frequency_domain_contract_result(
         fd::solve_modal_eigen_contract(native_request));

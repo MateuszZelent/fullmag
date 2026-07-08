@@ -530,6 +530,12 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
                 and study.solver_policy.method is not None
                 else ""
             ),
+            "frequency_solver_preconditioner": (
+                study.solver_policy.preconditioner
+                if study.solver_policy is not None
+                and study.solver_policy.preconditioner is not None
+                else ""
+            ),
             "frequency_solver_rtol": _text_number(
                 study.solver_policy.rtol if study.solver_policy is not None else None
             ),
@@ -2836,6 +2842,10 @@ def _render_stages(
                 if study.solver_policy.method is not None:
                     call_parts.append(
                         f"solver_method={_py_repr(study.solver_policy.method)}"
+                    )
+                if study.solver_policy.preconditioner is not None:
+                    call_parts.append(
+                        f"solver_preconditioner={_py_repr(study.solver_policy.preconditioner)}"
                     )
                 if study.solver_policy.max_iterations is not None:
                     call_parts.append(

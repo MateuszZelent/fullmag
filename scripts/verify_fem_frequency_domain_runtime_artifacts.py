@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import sys
 from pathlib import Path
 
@@ -20,11 +21,26 @@ AIRBOX_Z_PADDING_RESPONSE_ABS_TOL = 0.0
 AIRBOX_Z_PADDING_RESPONSE_REL_TOL = 5.0e-2
 AIRBOX_Z_PADDING_FREQUENCY_ABS_TOL = 1.0e-6
 AIRBOX_Z_PADDING_FREQUENCY_REL_TOL = 1.0e-12
+STRICT_DELTA_PHI_FLUX_MAX_TOLERANCE_T = 1.0e-7
+HYBRID_DELTA_PHI_FLUX_MAX_TOLERANCE_T = 1.0e-2
 PERIODIC_AIRBOX_CPU_DEMAG_PRECONDITIONER_VARIANTS = {
     "graph_demag_coarse",
     "demag_coarse",
     "block_jacobi",
     "none",
+}
+PERIODIC_AIRBOX_NONE_AUTO_FALLBACK_REASONS = {
+    "probe_relative_residual_above_threshold",
+    "solve_error_retry_without_right_preconditioner",
+    "pilot_selected_unpreconditioned_after_probe",
+}
+PERIODIC_AIRBOX_PRECONDITIONED_AUTO_FALLBACK_REASONS = {
+    "probe_relative_residual_above_threshold",
+    "pilot_selected_fallback_after_probe",
+}
+PERIODIC_MESH_CERTIFICATE_TRANSFER_STATUSES = {
+    "pending_native_certificate_consumption",
+    "accepted_native_certificate_consumed",
 }
 GPU_DYNAMIC_DEMAG_TANGENT_OPERATOR_SOURCES = {
     "explicit_demag_tangent_matrix",
@@ -33,6 +49,53 @@ GPU_DYNAMIC_DEMAG_TANGENT_OPERATOR_SOURCES = {
 GPU_DYNAMIC_DEMAG_OPERATOR_SOURCES = {
     "matrix_free_mfem_demag_phi_consistency_schur_provider",
 }
+
+
+def expected_gpu_periodic_airbox_poisson_provenance() -> dict[str, object]:
+    mode = os.environ.get(
+        "FULLMAG_FEM_FREQUENCY_RESPONSE_GPU_DEMAG_MODE",
+        os.environ.get("FULLMAG_FEM_GPU_DEMAG_MODE", ""),
+    ).strip().lower()
+    if mode in {"hybrid_cpu_poisson", "hybrid", "compat"}:
+        return {
+            "uses_gpu_poisson": False,
+            "demag_operator_mode": "hybrid_cpu_poisson",
+            "hypre_execution_policy": "host",
+            "demag_provider_residency": "cpu",
+        }
+    return {
+        "uses_gpu_poisson": True,
+        "demag_operator_mode": "device_hypre_poisson",
+        "hypre_execution_policy": "device",
+        "demag_provider_residency": "gpu",
+    }
+
+
+def periodic_airbox_delta_phi_flux_max_tolerance_t() -> float:
+    configured = os.environ.get(
+        "FULLMAG_FEM_FREQUENCY_RESPONSE_DELTA_PHI_FLUX_MAX_TOLERANCE_T"
+    )
+    if configured is not None and configured.strip():
+        try:
+            tolerance = float(configured)
+        except ValueError:
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                "FULLMAG_FEM_FREQUENCY_RESPONSE_DELTA_PHI_FLUX_MAX_TOLERANCE_T must be numeric"
+            ) from None
+        if not math.isfinite(tolerance) or tolerance < 0.0:
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                "FULLMAG_FEM_FREQUENCY_RESPONSE_DELTA_PHI_FLUX_MAX_TOLERANCE_T must be finite and non-negative"
+            )
+        return tolerance
+    mode = os.environ.get(
+        "FULLMAG_FEM_FREQUENCY_RESPONSE_GPU_DEMAG_MODE",
+        os.environ.get("FULLMAG_FEM_GPU_DEMAG_MODE", ""),
+    ).strip().lower()
+    if mode in {"hybrid_cpu_poisson", "hybrid", "compat"}:
+        return HYBRID_DELTA_PHI_FLUX_MAX_TOLERANCE_T
+    return STRICT_DELTA_PHI_FLUX_MAX_TOLERANCE_T
 
 
 def load_json(path: Path) -> dict:
@@ -78,6 +141,262 @@ def require_non_empty_string(value: object, name: str) -> str:
             f"{name} must be a non-empty string"
         )
     return value
+
+
+def require_sha256_token(value: object, name: str) -> str:
+    token = require_non_empty_string(value, name)
+    if len(token) != 71 or not token.startswith("sha256:"):
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            f"{name} must be a canonical sha256: token"
+        )
+    try:
+        int(token[7:], 16)
+    except ValueError:
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            f"{name} must be a canonical sha256: token"
+        ) from None
+    return token
+
+
+def require_periodic_mesh_certificate_consistency(
+    diagnostics: dict,
+    manifest_diagnostics: dict,
+) -> None:
+    diagnostics_preflight = diagnostics.get("input_preflight")
+    if not isinstance(diagnostics_preflight, dict):
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "diagnostics.input_preflight must be an object"
+        )
+    manifest_preflight = manifest_diagnostics.get("input_preflight")
+    if not isinstance(manifest_preflight, dict):
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "manifest.diagnostics.input_preflight must be an object"
+        )
+    require_equal(
+        manifest_preflight.get("schema_version"),
+        diagnostics_preflight.get("schema_version"),
+        "manifest.diagnostics.input_preflight.schema_version",
+    )
+    diagnostics_certificate = diagnostics_preflight.get("periodic_mesh_certificate")
+    if not isinstance(diagnostics_certificate, dict):
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "diagnostics.input_preflight.periodic_mesh_certificate must be an object"
+        )
+    manifest_certificate = manifest_preflight.get("periodic_mesh_certificate")
+    if not isinstance(manifest_certificate, dict):
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "manifest.diagnostics.input_preflight.periodic_mesh_certificate must be an object"
+        )
+    require_periodic_mesh_certificate_semantics(
+        diagnostics_certificate,
+        "diagnostics.input_preflight.periodic_mesh_certificate",
+    )
+    require_periodic_mesh_certificate_semantics(
+        manifest_certificate,
+        "manifest.diagnostics.input_preflight.periodic_mesh_certificate",
+    )
+    for field_name in [
+        "schema_version",
+        "artifact_role",
+        "magnetic_pair_count",
+        "airbox_pair_count",
+        "pair_map_hash_canonicalization",
+        "tangent_frame_transfer_required",
+        "tangent_frame_transfer_artifact_status",
+        "tangent_frame_transfer_block_count",
+        "tangent_frame_transfer_blocks_row_major_2x2_sha256",
+    ]:
+        require_equal(
+            manifest_certificate.get(field_name),
+            diagnostics_certificate.get(field_name),
+            f"manifest.diagnostics.input_preflight.periodic_mesh_certificate.{field_name}",
+        )
+    require_equal(
+        diagnostics_certificate.get("schema_version"),
+        "periodic_mesh_certificate.v5",
+        "diagnostics.input_preflight.periodic_mesh_certificate.schema_version",
+    )
+    require_equal(
+        diagnostics_certificate.get("artifact_role"),
+        "frequency_response_input_preflight_candidate",
+        "diagnostics.input_preflight.periodic_mesh_certificate.artifact_role",
+    )
+    require_equal(
+        diagnostics_certificate.get("pair_map_hash_canonicalization"),
+        "periodic_mesh_certificate_pair_map.v1",
+        "diagnostics.input_preflight.periodic_mesh_certificate.pair_map_hash_canonicalization",
+    )
+    for field_name in [
+        "magnetic_pair_map_sha256",
+        "airbox_pair_map_sha256",
+    ]:
+        diagnostics_hash = require_sha256_token(
+            diagnostics_certificate.get(field_name),
+            f"diagnostics.input_preflight.periodic_mesh_certificate.{field_name}",
+        )
+        manifest_hash = require_sha256_token(
+            manifest_certificate.get(field_name),
+            f"manifest.diagnostics.input_preflight.periodic_mesh_certificate.{field_name}",
+        )
+        require_equal(
+            manifest_hash,
+            diagnostics_hash,
+            f"manifest.diagnostics.input_preflight.periodic_mesh_certificate.{field_name}",
+        )
+
+
+def require_periodic_mesh_certificate_matches_diagnostics(
+    value: object,
+    name: str,
+    diagnostics: dict,
+) -> None:
+    if not isinstance(value, dict):
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            f"{name} must be an object"
+        )
+    diagnostics_preflight = diagnostics.get("input_preflight")
+    if not isinstance(diagnostics_preflight, dict):
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "diagnostics.input_preflight must be an object"
+        )
+    diagnostics_certificate = diagnostics_preflight.get("periodic_mesh_certificate")
+    if not isinstance(diagnostics_certificate, dict):
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "diagnostics.input_preflight.periodic_mesh_certificate must be an object"
+        )
+    certificate = value.get("periodic_mesh_certificate")
+    if not isinstance(certificate, dict):
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            f"{name}.periodic_mesh_certificate must be an object"
+        )
+    require_periodic_mesh_certificate_semantics(
+        certificate,
+        f"{name}.periodic_mesh_certificate",
+    )
+    for field_name in [
+        "schema_version",
+        "artifact_role",
+        "magnetic_pair_count",
+        "airbox_pair_count",
+        "pair_map_hash_canonicalization",
+        "tangent_frame_transfer_required",
+        "tangent_frame_transfer_artifact_status",
+        "tangent_frame_transfer_block_count",
+        "tangent_frame_transfer_blocks_row_major_2x2_sha256",
+    ]:
+        require_equal(
+            certificate.get(field_name),
+            diagnostics_certificate.get(field_name),
+            f"{name}.periodic_mesh_certificate.{field_name}",
+        )
+    for field_name in [
+        "magnetic_pair_map_sha256",
+        "airbox_pair_map_sha256",
+    ]:
+        value_hash = require_sha256_token(
+            certificate.get(field_name),
+            f"{name}.periodic_mesh_certificate.{field_name}",
+        )
+        diagnostics_hash = require_sha256_token(
+            diagnostics_certificate.get(field_name),
+            f"diagnostics.input_preflight.periodic_mesh_certificate.{field_name}",
+        )
+        require_equal(
+            value_hash,
+            diagnostics_hash,
+            f"{name}.periodic_mesh_certificate.{field_name}",
+        )
+
+
+def require_accepted_periodic_mesh_certificate_status(diagnostics: dict) -> None:
+    preflight = diagnostics.get("input_preflight")
+    if not isinstance(preflight, dict):
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "diagnostics.input_preflight must be an object"
+        )
+    certificate = preflight.get("periodic_mesh_certificate")
+    if not isinstance(certificate, dict):
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "diagnostics.input_preflight.periodic_mesh_certificate must be an object"
+        )
+    require_equal(
+        certificate.get("tangent_frame_transfer_artifact_status"),
+        "accepted_native_certificate_consumed",
+        "diagnostics.input_preflight.periodic_mesh_certificate.tangent_frame_transfer_artifact_status",
+    )
+    magnetic_pair_count = require_positive_integer(
+        certificate.get("magnetic_pair_count"),
+        "diagnostics.input_preflight.periodic_mesh_certificate.magnetic_pair_count",
+    )
+    transfer_block_count = require_positive_integer(
+        certificate.get("tangent_frame_transfer_block_count"),
+        "diagnostics.input_preflight.periodic_mesh_certificate.tangent_frame_transfer_block_count",
+    )
+    require_equal(
+        transfer_block_count,
+        magnetic_pair_count,
+        "diagnostics.input_preflight.periodic_mesh_certificate.tangent_frame_transfer_block_count",
+    )
+    require_sha256_token(
+        certificate.get("tangent_frame_transfer_blocks_row_major_2x2_sha256"),
+        "diagnostics.input_preflight.periodic_mesh_certificate.tangent_frame_transfer_blocks_row_major_2x2_sha256",
+    )
+
+
+def require_periodic_mesh_certificate_semantics(
+    certificate: dict,
+    name: str,
+) -> None:
+    require_equal(
+        certificate.get("schema_version"),
+        "periodic_mesh_certificate.v5",
+        f"{name}.schema_version",
+    )
+    require_equal(
+        certificate.get("artifact_role"),
+        "frequency_response_input_preflight_candidate",
+        f"{name}.artifact_role",
+    )
+    require_equal(
+        certificate.get("pair_map_hash_canonicalization"),
+        "periodic_mesh_certificate_pair_map.v1",
+        f"{name}.pair_map_hash_canonicalization",
+    )
+    require_positive_integer(
+        certificate.get("magnetic_pair_count"),
+        f"{name}.magnetic_pair_count",
+    )
+    require_positive_integer(
+        certificate.get("airbox_pair_count"),
+        f"{name}.airbox_pair_count",
+    )
+    if not isinstance(certificate.get("tangent_frame_transfer_required"), bool):
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            f"{name}.tangent_frame_transfer_required must be a boolean"
+        )
+    transfer_status = require_non_empty_string(
+        certificate.get("tangent_frame_transfer_artifact_status"),
+        f"{name}.tangent_frame_transfer_artifact_status",
+    )
+    if transfer_status not in PERIODIC_MESH_CERTIFICATE_TRANSFER_STATUSES:
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            f"{name}.tangent_frame_transfer_artifact_status must be one of "
+            f"{sorted(PERIODIC_MESH_CERTIFICATE_TRANSFER_STATUSES)!r}"
+        )
 
 
 def manifest_completed_frequency_point_count(manifest: dict) -> object:
@@ -306,7 +625,7 @@ def require_periodic_airbox_delta_phi_seam_diagnostics(
         f"{source_name}.delta_phi_flux_max_residual",
     )
     flux_residual = float(source.get("delta_phi_flux_max_residual"))
-    if flux_residual > 1.0e-7:
+    if flux_residual > periodic_airbox_delta_phi_flux_max_tolerance_t():
         raise SystemExit(
             "invalid frequency-domain runtime artifacts:\n"
             f"{source_name}.delta_phi_flux_max_residual exceeds tolerance"
@@ -1414,6 +1733,7 @@ def require_gpu_periodic_airbox_poisson_provenance(
     diagnostics: dict,
     manifest: dict,
 ) -> None:
+    expected_provenance = expected_gpu_periodic_airbox_poisson_provenance()
     manifest_diagnostics = manifest.get("diagnostics")
     resolved_execution = manifest.get("resolved_execution")
     capabilities = manifest.get("capabilities")
@@ -1435,67 +1755,67 @@ def require_gpu_periodic_airbox_poisson_provenance(
     expected = {
         "diagnostics.uses_gpu_poisson": (
             diagnostics.get("uses_gpu_poisson"),
-            True,
+            expected_provenance["uses_gpu_poisson"],
         ),
         "diagnostics.demag_operator_mode": (
             diagnostics.get("demag_operator_mode"),
-            "device_hypre_poisson",
+            expected_provenance["demag_operator_mode"],
         ),
         "diagnostics.hypre_execution_policy": (
             diagnostics.get("hypre_execution_policy"),
-            "device",
+            expected_provenance["hypre_execution_policy"],
         ),
         "diagnostics.demag_provider_residency": (
             diagnostics.get("demag_provider_residency"),
-            "gpu",
+            expected_provenance["demag_provider_residency"],
         ),
         "manifest.diagnostics.uses_gpu_poisson": (
             manifest_diagnostics.get("uses_gpu_poisson"),
-            True,
+            expected_provenance["uses_gpu_poisson"],
         ),
         "manifest.diagnostics.demag_operator_mode": (
             manifest_diagnostics.get("demag_operator_mode"),
-            "device_hypre_poisson",
+            expected_provenance["demag_operator_mode"],
         ),
         "manifest.diagnostics.hypre_execution_policy": (
             manifest_diagnostics.get("hypre_execution_policy"),
-            "device",
+            expected_provenance["hypre_execution_policy"],
         ),
         "manifest.diagnostics.demag_provider_residency": (
             manifest_diagnostics.get("demag_provider_residency"),
-            "gpu",
+            expected_provenance["demag_provider_residency"],
         ),
         "manifest.resolved_execution.uses_gpu_poisson": (
             resolved_execution.get("uses_gpu_poisson"),
-            True,
+            expected_provenance["uses_gpu_poisson"],
         ),
         "manifest.resolved_execution.demag_operator_mode": (
             resolved_execution.get("demag_operator_mode"),
-            "device_hypre_poisson",
+            expected_provenance["demag_operator_mode"],
         ),
         "manifest.resolved_execution.hypre_execution_policy": (
             resolved_execution.get("hypre_execution_policy"),
-            "device",
+            expected_provenance["hypre_execution_policy"],
         ),
         "manifest.resolved_execution.demag_provider_residency": (
             resolved_execution.get("demag_provider_residency"),
-            "gpu",
+            expected_provenance["demag_provider_residency"],
         ),
         "manifest.capabilities.uses_gpu_poisson": (
             capabilities.get("uses_gpu_poisson"),
-            True,
+            expected_provenance["uses_gpu_poisson"],
         ),
         "manifest.capabilities.demag_operator_mode": (
             capabilities.get("demag_operator_mode"),
-            "device_hypre_poisson",
+            expected_provenance["demag_operator_mode"],
         ),
         "manifest.capabilities.hypre_execution_policy": (
             capabilities.get("hypre_execution_policy"),
-            "device",
+            expected_provenance["hypre_execution_policy"],
         ),
         "manifest.capabilities.demag_provider_residency": (
             capabilities.get("demag_provider_residency"),
-            "gpu",
+            expected_provenance["demag_provider_residency"],
         ),
     }
     require_expected(expected)
@@ -2886,6 +3206,7 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
         ),
     }
     require_expected(expected)
+    require_periodic_mesh_certificate_consistency(diagnostics, manifest_diagnostics)
     if expected_execution_lane == "production_gpu":
         require_gpu_periodic_airbox_poisson_provenance(diagnostics, manifest)
     require_periodic_airbox_delta_phi_seam_diagnostics(
@@ -3083,10 +3404,10 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
                         f"{source_name}.right_preconditioner_probe_relative_residual_l2_norm "
                         "must exceed the disable threshold when auto fallback is recorded"
                     )
-                if auto_disable_reason not in {
-                    "probe_relative_residual_above_threshold",
-                    "solve_error_retry_without_right_preconditioner",
-                }:
+                if (
+                    auto_disable_reason
+                    not in PERIODIC_AIRBOX_NONE_AUTO_FALLBACK_REASONS
+                ):
                     raise SystemExit(
                         "invalid frequency-domain runtime artifacts:\n"
                         f"{source_name}.right_preconditioner_auto_disable_reason must describe "
@@ -3143,11 +3464,18 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
                         f"{source_name}.right_preconditioner_probe_relative_residual_l2_norm "
                         "must exceed the disable threshold when auto fallback is recorded"
                     )
-                require_equal(
-                    source.get("right_preconditioner_auto_disable_reason"),
-                    "probe_relative_residual_above_threshold",
-                    f"{source_name}.right_preconditioner_auto_disable_reason",
+                auto_disable_reason = source.get(
+                    "right_preconditioner_auto_disable_reason"
                 )
+                if (
+                    auto_disable_reason
+                    not in PERIODIC_AIRBOX_PRECONDITIONED_AUTO_FALLBACK_REASONS
+                ):
+                    raise SystemExit(
+                        "invalid frequency-domain runtime artifacts:\n"
+                        f"{source_name}.right_preconditioner_auto_disable_reason must describe "
+                        "the auto fallback trigger"
+                    )
             else:
                 if preconditioner_variant == "block_jacobi":
                     raise SystemExit(
@@ -3340,24 +3668,30 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
             demag_contribution,
             f"{point_name}.demag_contribution",
         )
+        require_periodic_mesh_certificate_matches_diagnostics(
+            demag_contribution.get("input_preflight"),
+            f"{point_name}.demag_contribution.input_preflight",
+            diagnostics,
+        )
         if expected_execution_lane == "production_gpu":
+            expected_provenance = expected_gpu_periodic_airbox_poisson_provenance()
             require_expected(
                 {
                     f"{point_name}.demag_contribution.uses_gpu_poisson": (
                         demag_contribution.get("uses_gpu_poisson"),
-                        True,
+                        expected_provenance["uses_gpu_poisson"],
                     ),
                     f"{point_name}.demag_contribution.demag_operator_mode": (
                         demag_contribution.get("demag_operator_mode"),
-                        "device_hypre_poisson",
+                        expected_provenance["demag_operator_mode"],
                     ),
                     f"{point_name}.demag_contribution.hypre_execution_policy": (
                         demag_contribution.get("hypre_execution_policy"),
-                        "device",
+                        expected_provenance["hypre_execution_policy"],
                     ),
                     f"{point_name}.demag_contribution.demag_provider_residency": (
                         demag_contribution.get("demag_provider_residency"),
-                        "gpu",
+                        expected_provenance["demag_provider_residency"],
                     ),
                 }
             )
@@ -3811,6 +4145,7 @@ def main() -> int:
     require_floquet_airbox_gpu_unsupported = False
     require_periodic_airbox_cpu_demag_solved = False
     require_periodic_airbox_gpu_demag_solved = False
+    require_accepted_periodic_mesh_certificate = False
     require_m5_equilibrium_provenance = False
     require_frozen_magnetic_submesh = False
     require_min_frequency_points: int | None = None
@@ -3845,6 +4180,9 @@ def main() -> int:
     if "--require-periodic-airbox-gpu-demag-solved" in args:
         require_periodic_airbox_gpu_demag_solved = True
         args.remove("--require-periodic-airbox-gpu-demag-solved")
+    if "--require-accepted-periodic-mesh-certificate" in args:
+        require_accepted_periodic_mesh_certificate = True
+        args.remove("--require-accepted-periodic-mesh-certificate")
     if "--require-m5-equilibrium-provenance" in args:
         require_m5_equilibrium_provenance = True
         args.remove("--require-m5-equilibrium-provenance")
@@ -3964,6 +4302,14 @@ def main() -> int:
         raise SystemExit(
             "invalid frequency-domain runtime artifacts:\n"
             "periodic-airbox GPU solved and unavailable validations are mutually exclusive"
+        )
+    if require_accepted_periodic_mesh_certificate and not (
+        require_periodic_airbox_cpu_demag_solved
+        or require_periodic_airbox_gpu_demag_solved
+    ):
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            "accepted periodic mesh certificate validation requires a periodic-airbox solved validation"
         )
     if airbox_reference is not None and not require_periodic_airbox_cpu_demag_solved:
         raise SystemExit(
@@ -4426,10 +4772,39 @@ def main() -> int:
             "diagnostics.total_iteration_count",
         )
         if total_iterations < max_iterations:
-            raise SystemExit(
-                "invalid frequency-domain runtime artifacts:\n"
-                "solve_error diagnostics.total_iteration_count must reach max_iterations_for_frequency"
+            require_equal(
+                diagnostics.get("stop_reason"),
+                "stagnated",
+                "diagnostics.stop_reason",
             )
+            require_equal(
+                diagnostics.get("stagnation_detected"),
+                True,
+                "diagnostics.stagnation_detected",
+            )
+            require_equal(
+                diagnostics.get("stagnation_iteration"),
+                total_iterations,
+                "diagnostics.stagnation_iteration",
+            )
+            stagnation_ratio = require_positive_finite_number(
+                diagnostics.get("stagnation_relative_residual_ratio"),
+                "diagnostics.stagnation_relative_residual_ratio",
+            )
+            if stagnation_ratio <= 0.9:
+                raise SystemExit(
+                    "invalid frequency-domain runtime artifacts:\n"
+                    "diagnostics.stagnation_relative_residual_ratio must be > 0.9 for an early stagnated solve_error"
+                )
+            residual = require_positive_finite_number(
+                diagnostics.get("relative_residual_l2_norm"),
+                "diagnostics.relative_residual_l2_norm",
+            )
+            if residual <= 1.0e-2:
+                raise SystemExit(
+                    "invalid frequency-domain runtime artifacts:\n"
+                    "diagnostics.relative_residual_l2_norm must be > 1e-2 for an early stagnated solve_error"
+                )
         for field_name in [
             "solver_relative_tolerance",
             "rhs_l2_norm",
@@ -4488,6 +4863,8 @@ def main() -> int:
             )
             if require_m5_equilibrium_provenance:
                 require_m5_equilibrium_provenance_contract(manifest)
+        if require_accepted_periodic_mesh_certificate:
+            require_accepted_periodic_mesh_certificate_status(diagnostics)
         return 0
 
     if require_frozen_magnetic_submesh:
@@ -5499,6 +5876,8 @@ def main() -> int:
                 else "production_cpu"
             ),
         )
+        if require_accepted_periodic_mesh_certificate:
+            require_accepted_periodic_mesh_certificate_status(diagnostics)
 
     return 0
 

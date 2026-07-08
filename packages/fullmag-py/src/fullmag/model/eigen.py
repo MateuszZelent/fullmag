@@ -21,6 +21,17 @@ SUPPORTED_DISPERSION_VALIDATION_GEOMETRIES = {
     "bv": "backward_volume",
 }
 
+SUPPORTED_K0_KITTEL_MODELS = {
+    "macrospin_larmor",
+    "thin_film_in_plane",
+}
+
+SUPPORTED_K0_KITTEL_DEMAG_KINDS = {
+    "none",
+    "periodic_airbox_k0",
+    "synthetic_demag_factor",
+}
+
 
 def _normalize_vec3(value: Sequence[float], name: str) -> KVector:
     if len(value) != 3:
@@ -216,6 +227,103 @@ class ThinFilmDEBVDispersionValidation:
 
 
 @dataclass(frozen=True, slots=True)
+class K0KittelFieldSample:
+    sample_index: int
+    bias_field: Sequence[float]
+
+    def __post_init__(self) -> None:
+        sample_index = int(self.sample_index)
+        if sample_index < 0:
+            raise ValueError("sample_index must be non-negative")
+        bias_field = _normalize_vec3(self.bias_field, "bias_field")
+        _require_nonzero_vec3(bias_field, "bias_field")
+        object.__setattr__(self, "sample_index", sample_index)
+        object.__setattr__(self, "bias_field", bias_field)
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "sample_index": self.sample_index,
+            "bias_field": list(self.bias_field),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class K0KittelFieldSweepValidation:
+    samples: Sequence[K0KittelFieldSample | Mapping[str, object]]
+    model: str = "macrospin_larmor"
+    effective_magnetisation: float | None = None
+    relative_tolerance: float = 0.05
+    case_id: str | None = None
+    demag_kind: str | None = None
+
+    def __post_init__(self) -> None:
+        model = require_non_empty(self.model, "model")
+        if model not in SUPPORTED_K0_KITTEL_MODELS:
+            supported = ", ".join(sorted(SUPPORTED_K0_KITTEL_MODELS))
+            raise ValueError(f"model must be one of: {supported}")
+        case_id = None if self.case_id is None else require_non_empty(self.case_id, "case_id")
+        demag_kind = None
+        if self.demag_kind is not None:
+            demag_kind = require_non_empty(self.demag_kind, "demag_kind")
+            if demag_kind not in SUPPORTED_K0_KITTEL_DEMAG_KINDS:
+                supported = ", ".join(sorted(SUPPORTED_K0_KITTEL_DEMAG_KINDS))
+                raise ValueError(f"demag_kind must be one of: {supported}")
+        relative_tolerance = require_positive(self.relative_tolerance, "relative_tolerance")
+        if relative_tolerance > 0.25:
+            raise ValueError("relative_tolerance must not exceed 0.25")
+        effective_magnetisation = self.effective_magnetisation
+        if model == "thin_film_in_plane":
+            effective_magnetisation = require_positive(
+                effective_magnetisation,
+                "effective_magnetisation",
+            )
+        elif effective_magnetisation is not None:
+            effective_magnetisation = require_positive(
+                effective_magnetisation,
+                "effective_magnetisation",
+            )
+        samples = tuple(
+            sample
+            if isinstance(sample, K0KittelFieldSample)
+            else K0KittelFieldSample(
+                sample_index=int(sample.get("sample_index")),
+                bias_field=sample.get("bias_field"),  # type: ignore[arg-type]
+            )
+            for sample in self.samples
+        )
+        if len(samples) < 3:
+            raise ValueError("K0KittelFieldSweepValidation requires at least three samples")
+        sample_indices = [sample.sample_index for sample in samples]
+        if len(set(sample_indices)) != len(sample_indices):
+            raise ValueError("sample_index values must be unique")
+
+        object.__setattr__(self, "model", model)
+        object.__setattr__(self, "case_id", case_id)
+        object.__setattr__(self, "demag_kind", demag_kind)
+        object.__setattr__(self, "relative_tolerance", float(relative_tolerance))
+        object.__setattr__(self, "effective_magnetisation", effective_magnetisation)
+        object.__setattr__(self, "samples", samples)
+
+    def to_ir(self) -> dict[str, object]:
+        material: dict[str, object] = {}
+        if self.effective_magnetisation is not None:
+            material["effective_magnetisation"] = self.effective_magnetisation
+        payload: dict[str, object] = {
+            "kind": "k0_kittel_field_sweep",
+            "model": self.model,
+            "field_units": "A_per_m",
+            "relative_tolerance": self.relative_tolerance,
+            "material": material,
+            "samples": [sample.to_ir() for sample in self.samples],
+        }
+        if self.case_id is not None:
+            payload["case_id"] = self.case_id
+        if self.demag_kind is not None:
+            payload["demag_kind"] = self.demag_kind
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
 class ModeTracking:
     method: str = "overlap_hungarian"
     frequency_window_hz: float | None = None
@@ -301,8 +409,26 @@ def serialize_dispersion_validation(value: object) -> dict[str, object]:
     )
 
 
+def serialize_k0_kittel_validation(value: object) -> dict[str, object]:
+    if isinstance(value, K0KittelFieldSweepValidation):
+        return value.to_ir()
+    if isinstance(value, Mapping):
+        return dict(value)
+    to_ir = getattr(value, "to_ir", None)
+    if callable(to_ir):
+        payload = to_ir()
+        if not isinstance(payload, dict):
+            raise ValueError("k0 Kittel validation to_ir() must return a dict")
+        return payload
+    raise ValueError(
+        "k0 Kittel validation must be a dict or an object with to_ir()"
+    )
+
+
 __all__ = [
     "DispersionValidationScenario",
+    "K0KittelFieldSample",
+    "K0KittelFieldSweepValidation",
     "KVector",
     "KPoint",
     "KPath",
@@ -311,5 +437,6 @@ __all__ = [
     "coerce_k_sampling",
     "is_zero_k_vector",
     "serialize_dispersion_validation",
+    "serialize_k0_kittel_validation",
     "serialize_k_sampling",
 ]

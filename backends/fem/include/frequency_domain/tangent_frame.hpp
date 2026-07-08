@@ -53,6 +53,22 @@ void lift_tangent_to_full(
     std::uint64_t node_count,
     double *out_full_xyz) noexcept;
 
+void project_cartesian_complex_to_tangent(
+    const TangentFrameNode *nodes,
+    const double *cartesian_real_xyz,
+    const double *cartesian_imag_xyz,
+    std::uint64_t node_count,
+    double *out_tangent_real_2,
+    double *out_tangent_imag_2) noexcept;
+
+void lift_tangent_complex_to_cartesian(
+    const TangentFrameNode *nodes,
+    const double *tangent_real_2,
+    const double *tangent_imag_2,
+    std::uint64_t node_count,
+    double *out_cartesian_real_xyz,
+    double *out_cartesian_imag_xyz) noexcept;
+
 TangentProjectionDiagnostics diagnose_tangent_projection(
     const TangentFrameNode *nodes,
     const double *full_xyz,

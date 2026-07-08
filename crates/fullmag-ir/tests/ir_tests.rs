@@ -2349,6 +2349,79 @@ fn eigenmodes_with_spectrum_and_mode_outputs_validate() {
 }
 
 #[test]
+fn eigenmodes_k0_kittel_validation_runtime_metadata_deserializes_to_typed_ir() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.problem_meta.runtime_metadata.insert(
+        "k0_kittel_validation".to_string(),
+        serde_json::json!({
+            "kind": "k0_kittel_field_sweep",
+            "model": "thin_film_in_plane",
+            "field_units": "A_per_m",
+            "relative_tolerance": 0.05,
+            "material": {
+                "effective_magnetisation": 800000.0
+            },
+            "samples": [
+                {"sample_index": 0, "bias_field": [15915.494309189535, 0.0, 0.0]},
+                {"sample_index": 1, "bias_field": [39788.73577297384, 0.0, 0.0]},
+                {"sample_index": 2, "bias_field": [79577.47154594767, 0.0, 0.0]}
+            ]
+        }),
+    );
+    let dynamics = ir.study.dynamics().clone();
+    ir.study = StudyIR::Eigenmodes {
+        dynamics,
+        operator: EigenOperatorConfigIR {
+            kind: EigenOperatorIR::Full2x2,
+            include_demag: true,
+        },
+        count: 1,
+        target: EigenTargetIR::FrequencyWindow {
+            frequency_min_hz: 1.0e6,
+            frequency_max_hz: 5.0e9,
+        },
+        equilibrium: EquilibriumSourceIR::Provided,
+        k_sampling: Some(KSamplingIR::Path {
+            points: vec![
+                KPointIR {
+                    label: Some("B20mT".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+                KPointIR {
+                    label: Some("B100mT".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+            ],
+            samples_per_segment: vec![2],
+            closed: false,
+        }),
+        normalization: EigenNormalizationIR::UnitL2,
+        damping_policy: EigenDampingPolicyIR::Ignore,
+        spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
+        sampling: SamplingIR {
+            table_autosave: None,
+            outputs: vec![OutputIR::EigenSpectrum {
+                quantity: "frequency_hz".to_string(),
+            }],
+        },
+        mode_tracking: None,
+    };
+
+    let metadata = ir
+        .problem_meta
+        .runtime_metadata
+        .get("k0_kittel_validation")
+        .expect("runtime metadata should include k0 Kittel validation")
+        .clone();
+    let validation: FemEigenK0KittelValidationIR = serde_json::from_value(metadata)
+        .expect("k0 Kittel validation metadata should deserialize into typed IR");
+    assert_eq!(validation.kind, "k0_kittel_field_sweep");
+    assert_eq!(validation.model, "thin_film_in_plane");
+    assert_eq!(validation.samples.len(), 3);
+    assert_eq!(validation.material.effective_magnetisation, Some(800000.0));
+}
+
+#[test]
 fn eigenmodes_closed_k_path_sample_count_and_segment_length_validate() {
     assert_eq!(
         (KSamplingIR::Path {
@@ -2513,6 +2586,7 @@ fn frequency_response_round_trips_as_first_class_study() {
         },
         solver_policy: Some(FrequencyResponseSolverPolicyIR {
             method: Some(FrequencyResponseSolverMethodIR::GpuOperatorHostKrylov),
+            preconditioner: Some(FrequencyResponsePreconditionerIR::BlockJacobi),
             rtol: Some(1.0e-2),
             max_iterations: Some(128),
             restart_iterations: Some(32),
@@ -2540,18 +2614,17 @@ fn frequency_response_round_trips_as_first_class_study() {
         } => {
             assert_eq!(excitation.field_au_per_m, [0.0, 0.0, 1.0]);
             assert_eq!(frequencies_hz.values_hz, vec![1.0e9, 2.0e9]);
+            let solver_policy = solver_policy
+                .as_ref()
+                .expect("solver policy should round-trip");
+            assert_eq!(solver_policy.max_iterations, Some(128));
             assert_eq!(
-                solver_policy
-                    .as_ref()
-                    .expect("solver policy should round-trip")
-                    .max_iterations,
-                Some(128)
+                solver_policy.method,
+                Some(FrequencyResponseSolverMethodIR::GpuOperatorHostKrylov)
             );
             assert_eq!(
-                solver_policy
-                    .expect("solver policy should round-trip")
-                    .method,
-                Some(FrequencyResponseSolverMethodIR::GpuOperatorHostKrylov)
+                solver_policy.preconditioner,
+                Some(FrequencyResponsePreconditionerIR::BlockJacobi)
             );
         }
         other => panic!("expected frequency_response study, got {other:?}"),

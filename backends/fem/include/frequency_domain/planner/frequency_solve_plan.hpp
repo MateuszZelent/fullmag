@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cmath>
+#include <cstdint>
+
 namespace fullmag::fem::frequency_domain {
 
 enum class FrequencyExecutionLane {
@@ -52,9 +55,97 @@ struct FrequencySolvePlan {
         FrequencyPreconditionerFamily::none;
     bool use_full_coupled_system = false;
     bool use_schur_reduction = false;
+    bool require_relaxed_texture_gate = false;
+    bool require_symmetric_mesh_certificate = false;
     bool require_true_residual_verification = true;
+    bool require_preconditioner_contraction_certificate = false;
     bool allow_gpu_operator_backend = false;
     bool allow_device_resident_krylov = false;
+    bool rejected = false;
+    const char *rejection_reason = "";
+    const char *selection_reason = "";
+    const char *fallback_reason = "";
+};
+
+struct FrequencyBackendCapabilities {
+    bool sparse_direct_available = false;
+    bool sparse_direct_memory_ok = false;
+    bool full_coupled_blocks_available = false;
+    bool accepted_linearization_state_available = false;
+    bool periodic_mesh_symmetry_certified = false;
+    bool schur_certified = false;
+    bool schur_quality_good = false;
+    bool modal_basis_validated = false;
+    bool gpu_operator_backend_available = false;
+    bool gpu_device_krylov_available = false;
+    bool preconditioner_certified = false;
+};
+
+struct SchurCertificationState {
+    bool quality_diagnostics_available = false;
+    bool full_reduced_residual_reconstruction_passed = false;
+    double full_reduced_relative_residual_error = 0.0;
+    double max_full_reduced_relative_residual_error = 1.0e-10;
+    double observed_residual_contraction = 1.0;
+    double max_observed_residual_contraction = 0.95;
+    std::uint64_t mesh_signature = 0;
+    std::uint64_t material_signature = 0;
+    std::uint64_t physics_signature = 0;
+};
+
+inline bool schur_certification_passes(const SchurCertificationState &state)
+{
+    return state.quality_diagnostics_available &&
+        state.full_reduced_residual_reconstruction_passed &&
+        std::isfinite(state.full_reduced_relative_residual_error) &&
+        std::isfinite(state.max_full_reduced_relative_residual_error) &&
+        std::isfinite(state.observed_residual_contraction) &&
+        std::isfinite(state.max_observed_residual_contraction) &&
+        state.full_reduced_relative_residual_error >= 0.0 &&
+        state.max_full_reduced_relative_residual_error > 0.0 &&
+        state.full_reduced_relative_residual_error <=
+            state.max_full_reduced_relative_residual_error &&
+        state.observed_residual_contraction >= 0.0 &&
+        state.max_observed_residual_contraction > 0.0 &&
+        state.observed_residual_contraction <=
+            state.max_observed_residual_contraction;
+}
+
+inline bool schur_certification_passes_for_problem(
+    const SchurCertificationState &state,
+    std::uint64_t mesh_signature,
+    std::uint64_t material_signature,
+    std::uint64_t physics_signature)
+{
+    return schur_certification_passes(state) &&
+        state.mesh_signature == mesh_signature &&
+        state.material_signature == material_signature &&
+        state.physics_signature == physics_signature;
+}
+
+inline void apply_schur_certification(
+    const SchurCertificationState &state,
+    FrequencyBackendCapabilities *capabilities)
+{
+    if (capabilities == nullptr) {
+        return;
+    }
+    const bool certified = schur_certification_passes(state);
+    capabilities->schur_certified = certified;
+    capabilities->schur_quality_good = certified;
+}
+
+struct FrequencySolverPolicy {
+    bool validation_mode = false;
+    bool request_gpu = false;
+    bool require_relaxed_texture_linearization = false;
+    bool prefer_existing_host_krylov = true;
+    bool allow_device_resident_krylov = false;
+    bool prefer_sparse_direct_for_single_frequency = true;
+    bool prefer_modal_for_sweeps = true;
+    bool request_schur_reduced = false;
+    std::uint64_t modal_frequency_count_threshold = 8;
+    std::uint64_t progress_interval_iterations = 128;
 };
 
 inline const char* frequency_execution_lane_name(FrequencyExecutionLane lane)

@@ -3,6 +3,7 @@
 #include "cpu/frequency_domain/contour_interval_solver.hpp"
 #include "cpu/frequency_domain/mode_deduplication.hpp"
 #include "cpu/frequency_domain/mode_filter.hpp"
+#include "cpu/frequency_domain/poisson_airbox_modal_eigen.hpp"
 #include "cpu/frequency_domain/slepc_modal_eigen.hpp"
 #include "cpu/frequency_domain/window_partition.hpp"
 #include "frequency_domain/solver_progress.hpp"
@@ -1185,6 +1186,78 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
     }
     if (request.tiny_validation_enabled != 0) {
         return solve_tiny_validation_modal_problem(request);
+    }
+    if (request.poisson_airbox_block_enabled != 0) {
+        PoissonAirboxEigenBlockProblem problem{};
+        problem.q_dof_count = request.poisson_airbox_q_dof_count;
+        problem.phi_dof_count = request.poisson_airbox_phi_dof_count;
+        problem.A_qq = request.poisson_airbox_a_qq_csr;
+        problem.A_qphi = request.poisson_airbox_a_qphi_csr;
+        problem.A_phiq = request.poisson_airbox_a_phiq_csr;
+        problem.A_phiphi = request.poisson_airbox_a_phiphi_csr;
+        problem.B_qq = request.poisson_airbox_b_qq_csr;
+        problem.phi_mean_weights = request.poisson_airbox_phi_mean_weights;
+        problem.phi_mean_weights_count =
+            request.poisson_airbox_phi_mean_weights_count;
+        problem.target_frequency_hz =
+            request.poisson_airbox_target_frequency_hz;
+        problem.expected_reference_frequency_hz =
+            request.poisson_airbox_expected_reference_frequency_hz;
+        problem.periodic_mesh_certificate_schema =
+            request.poisson_airbox_periodic_mesh_certificate_schema;
+        problem.magnetic_pair_count =
+            request.poisson_airbox_magnetic_pair_count;
+        problem.airbox_pair_count =
+            request.poisson_airbox_airbox_pair_count;
+        problem.residual_tolerance = request.residual_tolerance;
+        problem.requested_mode_count =
+            static_cast<std::uint32_t>(request.requested_mode_count);
+        problem.max_outer_iterations =
+            static_cast<std::uint32_t>(request.max_outer_iterations);
+        problem.max_linear_iterations =
+            static_cast<std::uint32_t>(request.max_linear_iterations);
+
+        PoissonAirboxModalEigenResult poisson_result{};
+        const FrequencyDomainStatus status =
+            solve_poisson_airbox_modal_eigen_cpu_slepc(problem, &poisson_result);
+        const std::uint64_t augmented_phi_dof_count =
+            poisson_result.augmented_dof_count >= poisson_result.q_dof_count
+                ? (poisson_result.augmented_dof_count -
+                   poisson_result.q_dof_count)
+                : 0;
+
+        FrequencyDomainContractResult result{};
+        result.status = status;
+        result.error_message = poisson_result.error_message;
+        result.diagnostics_json = poisson_result.diagnostics_json;
+        result.result_json =
+            "{\"schema_version\":\"frequency_domain_modal_result.v1\","
+            "\"study_product\":\"modal_eigen\","
+            "\"solver_adapter\":\"k0_poisson_airbox_cpu_full_coupled_slepc\","
+            "\"demag_kind\":\"periodic_airbox_k0\","
+            "\"accepted_mode_count\":" +
+            std::to_string(poisson_result.accepted_mode_count) +
+            ",\"q_dof_count\":" +
+            std::to_string(poisson_result.q_dof_count) +
+            ",\"phi_dof_count\":" +
+            std::to_string(poisson_result.phi_dof_count) +
+            ",\"augmented_phi_dof_count\":" +
+            std::to_string(augmented_phi_dof_count) +
+            ",\"frequency_hz\":" +
+            std::to_string(poisson_result.frequency_hz) +
+            ",\"omega_rad_s\":" +
+            std::to_string(poisson_result.omega_rad_s) +
+            ",\"poisson_constraint_relative_residual\":" +
+            std::to_string(poisson_result.poisson_constraint_relative_residual) +
+            ",\"relative_reference_frequency_error\":" +
+            std::to_string(poisson_result.relative_reference_frequency_error) +
+            ",\"periodic_mesh_certificate\":{\"schema_version\":\"periodic_mesh_certificate.v5\",\"magnetic_pair_count\":" +
+            std::to_string(poisson_result.magnetic_pair_count) +
+            ",\"airbox_pair_count\":" +
+            std::to_string(poisson_result.airbox_pair_count) +
+            "}" +
+            "}";
+        return result;
     }
     return production_cpu_modal_eigen_unavailable(request);
 }

@@ -127,8 +127,11 @@ m_anim(r,t) = m0(r) + scale * Re[delta_m(r) exp(i (omega t + phi0))]
   `MeshIR.periodic_node_pairs` plus matching
   `MeshIR.periodic_boundary_pairs[*].translation`, using
   `phase_rad = -k dot translation` for the current
-  `exp_minus_i_k_dot_delta_r` convention. Dynamic demag-k, native GPU modal
-  dispersion, and broader sparse/matrix-free Floquet validation remain gated.
+  `exp_minus_i_k_dot_delta_r` convention. The native GPU modal lane is
+  validated only for the K0 no-demag macrospin/Kittel field sweep through
+  `gpu_dense_k0_macrospin_modal_eigen` and cuSolverDN dense generalized solve;
+  dynamic demag-k, nonzero-k Floquet GPU modal dispersion, and broader
+  sparse/matrix-free Floquet validation remain gated.
 - A gamma-only k-path is a production-adapter proof, not a spin-wave dispersion
   proof: it may verify that multi-k orchestration preserves production CPU
   selected-spectrum provenance and mode-field sample remapping, but it must not
@@ -280,6 +283,26 @@ If the equilibrium is not sufficiently static for the selected study, the
 planner or runner should emit a capability diagnostic or reject the study
 instead of silently exporting misleading eigenfrequencies.
 
+## Driven-response residual stop policy
+
+Production driven-response solvers must report both tracked Krylov residuals
+and recomputed true residuals when available. A tracked GMRES residual alone is
+not enough to publish convergence.
+
+For long production GMRES runs, Fullmag applies the v5 stagnation guard:
+
+```text
+if relres_256 / relres_0 > 0.9 and relres_256 > 1e-2:
+    status = solve_error
+    stop_reason = stagnated
+```
+
+This guard is a runtime safety policy, not a physics tolerance. It prevents
+large periodic-airbox or Schur-reduced workloads from consuming the full
+8192-iteration budget after early residual evidence already shows no useful
+contraction. A stagnated result is an invalid frequency-response solve and must
+not be promoted to a solved production point.
+
 ## Boundary conditions
 
 Periodic and Floquet studies use the convention in
@@ -362,6 +385,17 @@ preserve the physical relation `delta_H_demag = -grad(delta_phi)`. Required
 validation includes a demag energy sign check, an ellipsoid or equivalent
 field-sign oracle, and symmetry of the k=0 demag Hessian.
 
+## Poisson-airbox `k=0` modal eigensolve implementation
+
+The active implementation contract for full-coupled Poisson-airbox `k=0`
+modal eigensolve is:
+
+`docs/plans/active/fd_sovler_masterplan/18_poisson_airbox_eigensolve_cpu_gpu_implementation.md`.
+
+That document is normative for PA-E1 dense full-coupled algebraic oracle and
+staged for CPU sparse/SLEPc, Schur MatShell, Kittel demag validation, and GPU
+parity/runtime.
+
 If the response unknown is dimensionless `delta_m`, response observables must
 include `Ms` where required by SI units:
 
@@ -388,6 +422,10 @@ The minimal validation set for this contract is:
 
 - phase convention roundtrip in IR,
 - macrospin undamped check `omega = gamma0 * H0`,
+- modal/eigen k=0 bias-field sweep for a uniform state must match either the
+  macrospin Larmor law or the in-plane thin-film Kittel formula declared in the
+  run metadata before larger periodic-airbox modal cases can be used as
+  production evidence,
 - macrospin damping sign and linewidth mapping for `exp(i omega t)`,
 - absorbed power positive near resonance for positive Gilbert damping,
 - susceptibility scaling and units with `Ms`,

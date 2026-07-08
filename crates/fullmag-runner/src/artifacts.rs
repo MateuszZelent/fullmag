@@ -2508,6 +2508,12 @@ pub(crate) fn field_layout(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Va
             "n_elements": fem.mesh.elements.len(),
             "mode_count": fem.count,
             "operator": fem.operator,
+            "material": {
+                "saturation_magnetisation": fem.material.saturation_magnetisation,
+                "effective_magnetisation": fem.k0_kittel_validation.as_ref()
+                    .and_then(|validation| validation.material.effective_magnetisation),
+            },
+            "k0_kittel_validation": fem.k0_kittel_validation,
         }),
         BackendPlanIR::FemFrequencyResponse(fem) => serde_json::json!({
             "backend": "fem_frequency_response",

@@ -71,6 +71,11 @@ struct MfemDrivenResponseValidationResult {
     std::uint64_t minimum_tracked_relative_residual_iteration = 0;
     double last_tracked_relative_residual_l2_norm = 0.0;
     double last_recomputed_relative_residual_l2_norm = 0.0;
+    bool residual_consistency_degraded = false;
+    double residual_consistency_ratio = 0.0;
+    bool stagnation_detected = false;
+    std::uint64_t stagnation_iteration = 0;
+    double stagnation_relative_residual_ratio = 0.0;
     double rhs_real_l2_norm = 0.0;
     double rhs_imag_l2_norm = 0.0;
     double residual_real_l2_norm = 0.0;

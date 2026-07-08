@@ -261,6 +261,7 @@ pub(crate) struct NativeModalEigenRequest<'a> {
     pub tiny_validation_problem: Option<NativeModalEigenTinyValidationProblem<'a>>,
     pub mfem_operator_problem: Option<NativeModalEigenMfemOperatorProblem<'a>>,
     pub mfem_sparse_operator_problem: Option<NativeModalEigenSparseOperatorProblem<'a>>,
+    pub poisson_airbox_block_problem: Option<NativeModalEigenPoissonAirboxBlockProblem<'a>>,
 }
 
 #[derive(Debug, Clone)]
@@ -300,6 +301,24 @@ pub(crate) struct NativeModalEigenSparseOperatorProblem<'a> {
     pub stiffness_csr: NativeModalEigenCsrMatrixView<'a>,
     pub gyrotropic_csr: NativeModalEigenCsrMatrixView<'a>,
     pub mass_csr: NativeModalEigenCsrMatrixView<'a>,
+}
+
+#[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
+pub(crate) struct NativeModalEigenPoissonAirboxBlockProblem<'a> {
+    pub q_dof_count: u64,
+    pub phi_dof_count: u64,
+    pub a_qq_csr: NativeModalEigenCsrMatrixView<'a>,
+    pub a_qphi_csr: NativeModalEigenCsrMatrixView<'a>,
+    pub a_phiq_csr: NativeModalEigenCsrMatrixView<'a>,
+    pub a_phiphi_csr: NativeModalEigenCsrMatrixView<'a>,
+    pub b_qq_csr: NativeModalEigenCsrMatrixView<'a>,
+    pub phi_mean_weights: &'a [f64],
+    pub target_frequency_hz: f64,
+    pub expected_reference_frequency_hz: f64,
+    pub periodic_mesh_certificate_schema: &'a str,
+    pub magnetic_pair_count: u64,
+    pub airbox_pair_count: u64,
 }
 
 #[derive(Clone)]
@@ -648,6 +667,9 @@ fn solve_native_driven_frequency_response_impl(
                 .map(|problem| problem.phase_convention)
                 .unwrap_or(FrequencyDomainPhaseConvention::ExpIOmegaT),
         ),
+        drive_kind:
+            ffi::fullmag_fem_frequency_domain_drive_kind::FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_UNSPECIFIED,
+        require_nonzero_rhs: 0,
         mfem_floquet_periodic_pairs: if floquet_periodic_pairs.is_empty() {
             std::ptr::null()
         } else {
@@ -979,6 +1001,13 @@ fn solve_native_modal_eigen_impl(
     let tiny_validation = request.tiny_validation_problem.as_ref();
     let mfem_operator = request.mfem_operator_problem.as_ref();
     let mfem_sparse_operator = request.mfem_sparse_operator_problem.as_ref();
+    let poisson_airbox_block = request.poisson_airbox_block_problem.as_ref();
+    let poisson_airbox_periodic_mesh_certificate_schema = poisson_airbox_block
+        .map(|problem| CString::new(problem.periodic_mesh_certificate_schema.as_bytes()))
+        .transpose()
+        .map_err(|_| {
+            "native FEM modal_eigen Poisson-airbox certificate schema contains NUL".to_string()
+        })?;
     let floquet_k_vector_rad_per_m = request.k_vector_rad_m.and_then(|values| {
         if values.len() == 3 {
             Some([values[0], values[1], values[2]])
@@ -1126,6 +1155,51 @@ fn solve_native_modal_eigen_impl(
             floquet_periodic_pairs.as_ptr()
         },
         mfem_floquet_periodic_pair_count: floquet_periodic_pairs.len() as u64,
+        poisson_airbox_block_enabled: poisson_airbox_block.is_some() as i32,
+        poisson_airbox_q_dof_count: poisson_airbox_block
+            .map(|problem| problem.q_dof_count)
+            .unwrap_or(0),
+        poisson_airbox_phi_dof_count: poisson_airbox_block
+            .map(|problem| problem.phi_dof_count)
+            .unwrap_or(0),
+        poisson_airbox_a_qq_csr: csr_matrix_view_or_zero(
+            poisson_airbox_block.map(|problem| &problem.a_qq_csr),
+        ),
+        poisson_airbox_a_qphi_csr: csr_matrix_view_or_zero(
+            poisson_airbox_block.map(|problem| &problem.a_qphi_csr),
+        ),
+        poisson_airbox_a_phiq_csr: csr_matrix_view_or_zero(
+            poisson_airbox_block.map(|problem| &problem.a_phiq_csr),
+        ),
+        poisson_airbox_a_phiphi_csr: csr_matrix_view_or_zero(
+            poisson_airbox_block.map(|problem| &problem.a_phiphi_csr),
+        ),
+        poisson_airbox_b_qq_csr: csr_matrix_view_or_zero(
+            poisson_airbox_block.map(|problem| &problem.b_qq_csr),
+        ),
+        poisson_airbox_phi_mean_weights: poisson_airbox_block
+            .map(|problem| slice_ptr_or_null(problem.phi_mean_weights))
+            .unwrap_or(std::ptr::null()),
+        poisson_airbox_phi_mean_weights_count: poisson_airbox_block
+            .map(|problem| problem.phi_mean_weights.len() as u64)
+            .unwrap_or(0),
+        poisson_airbox_target_frequency_hz: poisson_airbox_block
+            .map(|problem| problem.target_frequency_hz)
+            .unwrap_or(0.0),
+        poisson_airbox_expected_reference_frequency_hz: poisson_airbox_block
+            .map(|problem| problem.expected_reference_frequency_hz)
+            .unwrap_or(0.0),
+        poisson_airbox_periodic_mesh_certificate_schema:
+            poisson_airbox_periodic_mesh_certificate_schema
+                .as_ref()
+                .map(|value| value.as_ptr())
+                .unwrap_or(std::ptr::null()),
+        poisson_airbox_magnetic_pair_count: poisson_airbox_block
+            .map(|problem| problem.magnetic_pair_count)
+            .unwrap_or(0),
+        poisson_airbox_airbox_pair_count: poisson_airbox_block
+            .map(|problem| problem.airbox_pair_count)
+            .unwrap_or(0),
     };
 
     let mut ffi_result = NativeFrequencyDomainContractFfiResult {
@@ -1596,6 +1670,7 @@ mod tests {
                 tiny_validation_problem: None,
                 mfem_operator_problem: None,
                 mfem_sparse_operator_problem: None,
+                poisson_airbox_block_problem: None,
             })
             .expect_err("native modal contract should require fem-gpu feature");
             assert!(err.contains("fem-gpu"));
@@ -1634,6 +1709,7 @@ mod tests {
                 tiny_validation_problem: None,
                 mfem_operator_problem: None,
                 mfem_sparse_operator_problem: None,
+                poisson_airbox_block_problem: None,
             })
             .expect("native modal contract should return a structured unavailable result");
             assert_eq!(result.status, NativeFrequencyDomainStatus::Unavailable);
@@ -1702,6 +1778,7 @@ mod tests {
             tiny_validation_problem: None,
             mfem_operator_problem: None,
             mfem_sparse_operator_problem: None,
+        poisson_airbox_block_problem: None,
         })
         .expect("native modal contract should return a structured unavailable result");
 
@@ -1770,6 +1847,7 @@ mod tests {
             }),
             mfem_operator_problem: None,
             mfem_sparse_operator_problem: None,
+            poisson_airbox_block_problem: None,
         })
         .expect("native modal validation solve should return a structured result");
 
@@ -1830,6 +1908,7 @@ mod tests {
             }),
             mfem_operator_problem: None,
             mfem_sparse_operator_problem: None,
+            poisson_airbox_block_problem: None,
         })
         .expect("native modal validation cancel should return a structured result");
 
@@ -1886,6 +1965,7 @@ mod tests {
             }),
             mfem_operator_problem: None,
             mfem_sparse_operator_problem: None,
+            poisson_airbox_block_problem: None,
         })
         .expect("native modal frequency-window validation solve should return a result");
 
@@ -2003,6 +2083,7 @@ mod tests {
                 floquet_periodic_pairs: &[],
             }),
             mfem_sparse_operator_problem: None,
+        poisson_airbox_block_problem: None,
         })
         .expect("native modal production payload should return a structured result");
 
@@ -2119,6 +2200,7 @@ mod tests {
                 floquet_periodic_pairs: &[],
             }),
             mfem_sparse_operator_problem: None,
+        poisson_airbox_block_problem: None,
         })
         .expect("native modal shift-invert payload should return a structured result");
 
@@ -2196,6 +2278,7 @@ mod tests {
                 floquet_periodic_pairs: &floquet_pairs,
             }),
             mfem_sparse_operator_problem: None,
+            poisson_airbox_block_problem: None,
         })
         .expect("native modal Floquet payload should return a structured result");
 

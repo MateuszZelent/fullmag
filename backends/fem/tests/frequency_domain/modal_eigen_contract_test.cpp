@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <vector>
 
 namespace {
 
@@ -19,6 +20,51 @@ void check(bool condition, const char *message)
 bool contains(const char *haystack, const char *needle)
 {
     return haystack != nullptr && std::strstr(haystack, needle) != nullptr;
+}
+
+struct CsrOwned {
+    std::uint64_t rows = 0;
+    std::uint64_t columns = 0;
+    std::vector<std::uint32_t> row_offsets{};
+    std::vector<std::uint32_t> column_indices{};
+    std::vector<double> values{};
+
+    FullmagFemCsrMatrixView view() const
+    {
+        return FullmagFemCsrMatrixView{
+            rows,
+            columns,
+            row_offsets.data(),
+            static_cast<std::uint64_t>(row_offsets.size()),
+            column_indices.data(),
+            static_cast<std::uint64_t>(column_indices.size()),
+            values.data(),
+            static_cast<std::uint64_t>(values.size())};
+    }
+};
+
+CsrOwned dense_to_csr(
+    std::uint64_t rows,
+    std::uint64_t columns,
+    const double *row_major_values)
+{
+    CsrOwned csr{};
+    csr.rows = rows;
+    csr.columns = columns;
+    csr.row_offsets.reserve(static_cast<std::size_t>(rows + 1));
+    csr.row_offsets.push_back(0);
+    for (std::uint64_t row = 0; row < rows; ++row) {
+        for (std::uint64_t column = 0; column < columns; ++column) {
+            const double value =
+                row_major_values[static_cast<std::size_t>(row * columns + column)];
+            if (value != 0.0) {
+                csr.column_indices.push_back(static_cast<std::uint32_t>(column));
+                csr.values.push_back(value);
+            }
+        }
+        csr.row_offsets.push_back(static_cast<std::uint32_t>(csr.values.size()));
+    }
+    return csr;
 }
 
 double extract_json_number(const char *json, const char *key)
@@ -564,6 +610,65 @@ void modal_shift_invert_payload_can_be_assembled_from_mfem_operator()
     fullmag_fem_frequency_domain_result_destroy(&result);
 }
 
+void modal_shift_invert_dense_full_2x2_payload_accepts_k0_kittel_macrospin()
+{
+    constexpr double mu0 = 1.25663706212e-6;
+    constexpr double gamma0_rad_s_per_a_m = 2.211e5;
+    constexpr double field_t = 0.02;
+    constexpr double field_a_per_m = field_t / mu0;
+    constexpr double omega_rad_s = gamma0_rad_s_per_a_m * field_a_per_m;
+    constexpr double expected_frequency_hz = omega_rad_s / (2.0 * M_PI);
+    const double stiffness_matrix_row_major[] = {
+        omega_rad_s,
+        0.0,
+        0.0,
+        omega_rad_s,
+    };
+    constexpr double gyrotropic_mass_row_major[] = {
+        0.0,
+        1.0,
+        -1.0,
+        0.0,
+    };
+    constexpr double tangent_mass_row_major[] = {
+        1.0,
+        0.0,
+        0.0,
+        1.0,
+    };
+
+    FullmagFemModalEigenRequest request = base_request();
+    request.target_kind = "frequency_window";
+    request.target_frequency_hz = 2.55e9;
+    request.frequency_min_hz = 100.0e6;
+    request.frequency_max_hz = 5.0e9;
+    request.eigensolver_family = 1;
+    request.mfem_operator_enabled = 1;
+    request.mfem_tangent_dof_count = 2;
+    request.mfem_stiffness_matrix_row_major = stiffness_matrix_row_major;
+    request.mfem_gyrotropic_matrix_row_major = gyrotropic_mass_row_major;
+    request.mfem_mass_matrix_row_major = tangent_mass_row_major;
+    request.operator_request.operator_diagnostics_json =
+        "{\"operator_family\":\"rust_full_2x2_dense_operator\","
+        "\"payload_kind\":\"rust_full_2x2_dense_operator\"}";
+
+    FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
+#if FULLMAG_FEM_WITH_SLEPC
+    check(result.status == FULLMAG_FEM_FD_OK,
+          "full_2x2 Kittel dense payload should solve through production SLEPc path");
+    check(contains(result.result_json, "\"accepted_mode_count\":1"),
+          "full_2x2 Kittel dense payload accepts one positive-frequency mode");
+    const double frequency_hz =
+        extract_json_number(result.result_json, "\"frequency_hz\":");
+    check(std::abs(frequency_hz - expected_frequency_hz) / expected_frequency_hz < 1.0e-10,
+          "full_2x2 Kittel dense payload frequency matches gamma0 H/(2*pi)");
+#else
+    check(result.status == FULLMAG_FEM_FD_UNAVAILABLE,
+          "full_2x2 Kittel dense payload remains unavailable without SLEPc");
+#endif
+    fullmag_fem_frequency_domain_result_destroy(&result);
+}
+
 void modal_shift_invert_sparse_payload_can_be_assembled_from_mfem_operator()
 {
     namespace fd = fullmag::fem::frequency_domain;
@@ -984,6 +1089,90 @@ void modal_nonzero_k_floquet_bloch_payload_with_demag_requires_dynamic_demag_k()
     fullmag_fem_frequency_domain_result_destroy(&result);
 }
 
+void modal_poisson_airbox_tail_payload_reaches_full_coupled_solver()
+{
+    constexpr double omega0 = 6.283185307179586476925286766559 * 2.0e9;
+    const double a_qq[4] = {0.0, -omega0, omega0, 0.0};
+    const double a_qphi[4] = {-1.5e8, 1.5e8, 0.0, 0.0};
+    const double a_phiq[4] = {0.0, -1.0, 0.0, 1.0};
+    const double a_phiphi[4] = {1.0, -1.0, -1.0, 1.0};
+    const double b_qq[4] = {1.0, 0.0, 0.0, 1.0};
+    const double weights[2] = {0.5, 0.5};
+    const CsrOwned A_qq = dense_to_csr(2, 2, a_qq);
+    const CsrOwned A_qphi = dense_to_csr(2, 2, a_qphi);
+    const CsrOwned A_phiq = dense_to_csr(2, 2, a_phiq);
+    const CsrOwned A_phiphi = dense_to_csr(2, 2, a_phiphi);
+    const CsrOwned B_qq = dense_to_csr(2, 2, b_qq);
+
+    FullmagFemModalEigenRequest request = base_request();
+    request.operator_request.include_demag = 1;
+    request.operator_request.demag_realization = "periodic_airbox_k0";
+    request.operator_request.spin_wave_bc_kind = "floquet";
+    request.target_kind = "nearest_frequency";
+    request.target_frequency_hz = 2.0e9;
+    request.frequency_min_hz = 1.0e9;
+    request.frequency_max_hz = 3.0e9;
+    request.residual_tolerance = 1.0e-10;
+    request.poisson_airbox_block_enabled = 1;
+    request.poisson_airbox_q_dof_count = 2;
+    request.poisson_airbox_phi_dof_count = 2;
+    request.poisson_airbox_a_qq_csr = A_qq.view();
+    request.poisson_airbox_a_qphi_csr = A_qphi.view();
+    request.poisson_airbox_a_phiq_csr = A_phiq.view();
+    request.poisson_airbox_a_phiphi_csr = A_phiphi.view();
+    request.poisson_airbox_b_qq_csr = B_qq.view();
+    request.poisson_airbox_phi_mean_weights = weights;
+    request.poisson_airbox_phi_mean_weights_count = 2;
+    request.poisson_airbox_target_frequency_hz = 2.0e9;
+    request.poisson_airbox_expected_reference_frequency_hz = 2.0119012110259213e9;
+    request.poisson_airbox_periodic_mesh_certificate_schema = "periodic_mesh_certificate.v5";
+    request.poisson_airbox_magnetic_pair_count = 1;
+    request.poisson_airbox_airbox_pair_count = 1;
+
+    FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
+#if FULLMAG_FEM_WITH_SLEPC
+    if (result.status != FULLMAG_FEM_FD_OK) {
+        std::fprintf(
+            stderr,
+            "modal Poisson-airbox tail status=%d error=%s diagnostics=%s result=%s\n",
+            static_cast<int>(result.status),
+            result.error_message != nullptr ? result.error_message : "",
+            result.diagnostics_json != nullptr ? result.diagnostics_json : "",
+            result.result_json != nullptr ? result.result_json : "");
+    }
+    check(result.status == FULLMAG_FEM_FD_OK,
+          "modal Poisson-airbox tail payload must solve through full-coupled SLEPc");
+    check(contains(result.diagnostics_json,
+                   "\"solver_adapter\":\"k0_poisson_airbox_cpu_full_coupled_slepc\""),
+          "modal Poisson-airbox tail diagnostics name the full-coupled adapter");
+    check(contains(result.diagnostics_json, "\"demag_kind\":\"periodic_airbox_k0\""),
+          "modal Poisson-airbox tail diagnostics preserve periodic_airbox_k0");
+    check(contains(result.diagnostics_json, "\"gauge_policy\":\"mean_zero_augmented\""),
+          "modal Poisson-airbox tail diagnostics preserve mean-zero gauge");
+    check(contains(result.result_json,
+                   "\"solver_adapter\":\"k0_poisson_airbox_cpu_full_coupled_slepc\""),
+          "modal Poisson-airbox tail result names the full-coupled adapter");
+    check(contains(result.result_json, "\"demag_kind\":\"periodic_airbox_k0\""),
+          "modal Poisson-airbox tail result preserves periodic_airbox_k0");
+    check(contains(result.result_json, "\"phi_dof_count\":2"),
+          "modal Poisson-airbox tail result reports phi DOF count");
+    check(contains(result.result_json, "\"augmented_phi_dof_count\":3"),
+          "modal Poisson-airbox tail result reports augmented phi DOF count");
+    check(contains(result.result_json, "\"poisson_constraint_relative_residual\""),
+          "modal Poisson-airbox tail result reports Poisson residual");
+    check(contains(result.result_json, "\"periodic_mesh_certificate\""),
+          "modal Poisson-airbox tail result reports periodic mesh certificate metadata");
+    check(contains(result.result_json, "\"magnetic_pair_count\":1"),
+          "modal Poisson-airbox tail result reports magnetic pair count");
+    check(contains(result.result_json, "\"airbox_pair_count\":1"),
+          "modal Poisson-airbox tail result reports airbox pair count");
+#else
+    check(result.status == FULLMAG_FEM_FD_UNAVAILABLE,
+          "modal Poisson-airbox tail payload must require SLEPc when unavailable");
+#endif
+    fullmag_fem_frequency_domain_result_destroy(&result);
+}
+
 } // namespace
 
 int main()
@@ -1004,6 +1193,7 @@ int main()
     frequency_window_wide_auto_selects_contour_interval_solver();
     modal_frequency_window_production_payload_contour_accepts_multiple_modes();
     modal_shift_invert_payload_can_be_assembled_from_mfem_operator();
+    modal_shift_invert_dense_full_2x2_payload_accepts_k0_kittel_macrospin();
     modal_shift_invert_sparse_payload_can_be_assembled_from_mfem_operator();
     modal_without_validation_problem_stays_unavailable();
     modal_sparse_validation_error_preserves_explicit_k_vector();
@@ -1012,5 +1202,6 @@ int main()
     modal_nonzero_k_floquet_tail_payload_preserves_periodic_pair_contract();
     modal_nonzero_k_floquet_bloch_payload_reaches_production_solver();
     modal_nonzero_k_floquet_bloch_payload_with_demag_requires_dynamic_demag_k();
+    modal_poisson_airbox_tail_payload_reaches_full_coupled_solver();
     return 0;
 }

@@ -127,6 +127,24 @@ without MFEM must prove:
 - residual consistency for the selected pencil,
 - damping sign and linewidth mapping when damping is included.
 
+## Poisson-airbox `k=0` modal eigensolve implementation
+
+The active implementation contract for full-coupled Poisson-airbox `k=0`
+modal eigensolve is:
+
+`docs/plans/active/fd_sovler_masterplan/18_poisson_airbox_eigensolve_cpu_gpu_implementation.md`.
+
+That document is normative for PA-E1 dense full-coupled algebraic oracle and
+staged for CPU sparse/SLEPc, Schur MatShell, Kittel demag validation, and GPU
+parity/runtime.
+
+The current native GPU modal exception is narrower: the K0 no-demag macrospin
+Kittel field sweep may use `gpu_dense_k0_macrospin_modal_eigen`, where
+cuSolverDN solves the dense generalized field problem and the runner maps the
+positive field eigenvalue to `lambda = i omega`. This does not implement
+nonzero-k Floquet modal GPU, dynamic demag-k, or a broad sparse/matrix-free GPU
+modal eigensolver.
+
 The small-reference implementation uses a dense symmetric reduction:
 
 1. Cholesky factorization of `M`

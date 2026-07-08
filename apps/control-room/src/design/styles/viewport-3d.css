@@ -247,6 +247,10 @@
 }
 
 .fm-viewport-3d__colorbar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--fm-space-2);
   min-width: 0;
   overflow: hidden;
   color: var(--fm-text-secondary);
@@ -254,6 +258,24 @@
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.fm-viewport-3d__colorbar-header > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fm-viewport-3d__colorbar-unit {
+  flex: 0 0 auto;
+  max-width: 5rem;
+  border: 1px solid color-mix(in srgb, var(--fm-border-subtle) 72%, transparent);
+  border-radius: var(--fm-radius-xs);
+  background: color-mix(in srgb, var(--fm-bg-elevated) 88%, transparent);
+  color: var(--fm-text-primary);
+  font: inherit;
+  padding: 0 var(--fm-space-1);
+  pointer-events: auto;
 }
 
 .fm-viewport-3d__colorbar-row {

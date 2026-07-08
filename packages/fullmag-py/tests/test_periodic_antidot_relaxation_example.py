@@ -250,7 +250,15 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
             frequency_response["frequencies_hz"],
             {"values_hz": [2.0e9]},
         )
-        self.assertNotIn("solver_policy", frequency_response)
+        self.assertEqual(
+            frequency_response["solver_policy"],
+            {
+                "method": "gpu_operator_host_krylov",
+                "preconditioner": "block_jacobi",
+                "max_iterations": 8192,
+                "restart_iterations": 512,
+            },
+        )
         self.assertEqual(
             frequency_response["sampling"]["outputs"],
             [
@@ -275,6 +283,10 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
         self.assertEqual(
             scenario_metadata["frequency_response_magnetostatic_bc"],
             "periodic_airbox_k0",
+        )
+        self.assertEqual(
+            scenario_metadata["frequency_response_preconditioner"],
+            "block_jacobi",
         )
         self.assert_scenario_metadata(
             metadata,

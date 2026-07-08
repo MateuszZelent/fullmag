@@ -2292,6 +2292,7 @@ fn apply_stage_transition_metadata(
     record.state_transition_ui_presentation = Some(transition.ui_presentation);
 }
 
+#[cfg(test)]
 fn stage_continues_in_place(stage: &ResolvedScriptStage) -> bool {
     stage
         .incoming_transition
@@ -2299,6 +2300,7 @@ fn stage_continues_in_place(stage: &ResolvedScriptStage) -> bool {
         .is_some_and(|transition| transition.kind == StageTransitionKind::ContinueInPlace)
 }
 
+#[cfg(test)]
 fn stage_allows_sampled_continuation_initial_state(stage: &ResolvedScriptStage) -> bool {
     !stage_continues_in_place(stage)
 }
@@ -6110,15 +6112,22 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     ) {
                         Ok(Some(transfer)) => {
                             eprintln!(
-                                "[fullmag] FEM→FDM state transfer: {}/{} cells located, {} outside",
-                                transfer.n_located, transfer.n_total, transfer.n_outside
+                                "[fullmag] {} state transfer: {}/{} {} interpolated, {} fallback/outside",
+                                transfer.label,
+                                transfer.n_located,
+                                transfer.n_total,
+                                transfer.unit_label,
+                                transfer.n_outside
                             );
                             if let Some(workspace) = Some(&live_workspace) {
                                 workspace.push_log(
                                     "info",
                                     format!(
-                                        "Cross-backend state transfer: {}/{} cells interpolated from FEM mesh",
-                                        transfer.n_located, transfer.n_total
+                                        "State transfer ({}): {}/{} {} interpolated from FEM mesh",
+                                        transfer.label,
+                                        transfer.n_located,
+                                        transfer.n_total,
+                                        transfer.unit_label
                                     ),
                                 );
                             }
@@ -6132,8 +6141,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             )?;
                         }
                         Err(e) => {
-                            eprintln!("[fullmag] cross-backend state transfer failed: {}", e);
-                            bail!("FEM→FDM magnetization state transfer failed: {}", e);
+                            eprintln!("[fullmag] magnetization state transfer failed: {}", e);
+                            bail!("magnetization state transfer failed: {}", e);
                         }
                     }
                 } else {
@@ -7444,14 +7453,21 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     ) {
                         Ok(Some(transfer)) => {
                             eprintln!(
-                                "[fullmag] FEM→FDM state transfer: {}/{} cells located, {} outside",
-                                transfer.n_located, transfer.n_total, transfer.n_outside
+                                "[fullmag] {} state transfer: {}/{} {} interpolated, {} fallback/outside",
+                                transfer.label,
+                                transfer.n_located,
+                                transfer.n_total,
+                                transfer.unit_label,
+                                transfer.n_outside
                             );
                             live_workspace.push_log(
                                 "info",
                                 format!(
-                                    "Cross-backend state transfer: {}/{} cells interpolated from FEM mesh",
-                                    transfer.n_located, transfer.n_total
+                                    "State transfer ({}): {}/{} {} interpolated from FEM mesh",
+                                    transfer.label,
+                                    transfer.n_located,
+                                    transfer.n_total,
+                                    transfer.unit_label
                                 ),
                             );
                             apply_continuation_initial_state(&mut stage.ir, &transfer.values)?;
@@ -7463,8 +7479,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             )?;
                         }
                         Err(e) => {
-                            eprintln!("[fullmag] cross-backend state transfer failed: {}", e);
-                            bail!("FEM→FDM magnetization state transfer failed: {}", e);
+                            eprintln!("[fullmag] magnetization state transfer failed: {}", e);
+                            bail!("magnetization state transfer failed: {}", e);
                         }
                     }
                 } else {

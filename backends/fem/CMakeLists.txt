@@ -132,7 +132,14 @@ set(FEM_SOURCES
     cpu/mfem/runtime/stage_completion.cpp
     cpu/mfem/runtime/state_io.cpp
     cpu/mfem/runtime/step_metrics.cpp
+    cpu/frequency_domain/dense_poisson_airbox_eigen_oracle.cpp
+    cpu/frequency_domain/poisson_airbox_modal_eigen.cpp
+    cpu/frequency_domain/poisson_airbox_schur_matshell.cpp
     cpu/frequency_domain/dense_driven_response.cpp
+    cpu/frequency_domain/modal_response.cpp
+    cpu/frequency_domain/engines/field_split/full_coupled_field_split_engine.cpp
+    cpu/frequency_domain/engines/sparse_direct/assemble_real_split_csr.cpp
+    cpu/frequency_domain/engines/sparse_direct/cpu_sparse_direct_engine.cpp
     cpu/frequency_domain/contour_interval_solver.cpp
     cpu/frequency_domain/contour_quadrature.cpp
     cpu/frequency_domain/mfem_driven_response_validation.cpp
@@ -155,10 +162,13 @@ set(FEM_SOURCES
     cpu/frequency_domain/mode_filter.cpp
     cpu/frequency_domain/window_partition.cpp
     src/frequency_domain/anisotropy_operator.cpp
+    src/frequency_domain/dense_full_coupled_oracle.cpp
     src/frequency_domain/driven_response_solver.cpp
     src/frequency_domain/equilibrium_state.cpp
     src/frequency_domain/excitation.cpp
     src/frequency_domain/frequency_domain_contract.cpp
+    src/frequency_domain/linearization_state.cpp
+    src/frequency_domain/mesh_symmetry_certificate.cpp
     src/frequency_domain/modal_eigen_solver.cpp
     src/frequency_domain/operator_contract.cpp
     src/frequency_domain/operator_terms.cpp
@@ -185,6 +195,7 @@ if(FULLMAG_USE_MFEM_STACK)
     # S11: CUDA fused kernels (LLG RHS, normalize, accumulate)
     if(FULLMAG_ENABLE_CUDA)
         enable_language(CUDA)
+        find_package(CUDAToolkit REQUIRED)
         list(APPEND FEM_SOURCES
             gpu/cuda/exchange/exchange_kernels.cu
             gpu/cuda/fields/vector_field_kernels.cu
@@ -275,9 +286,11 @@ if(FULLMAG_USE_MFEM_STACK)
     target_compile_definitions(fullmag_fem PUBLIC FULLMAG_HAS_MFEM_STACK=1)
     if(FULLMAG_ENABLE_CUDA)
         target_compile_definitions(fullmag_fem PUBLIC FULLMAG_HAS_CUDA_RUNTIME=1)
-        target_link_libraries(fullmag_fem PRIVATE CUDA::cudart)
+        target_compile_definitions(fullmag_fem PUBLIC FULLMAG_HAS_CUSOLVER=1)
+        target_link_libraries(fullmag_fem PRIVATE CUDA::cudart CUDA::cusolver)
     else()
         target_compile_definitions(fullmag_fem PUBLIC FULLMAG_HAS_CUDA_RUNTIME=0)
+        target_compile_definitions(fullmag_fem PUBLIC FULLMAG_HAS_CUSOLVER=0)
     endif()
     if(TARGET MFEM::mfem)
         target_link_libraries(fullmag_fem PRIVATE MFEM::mfem)
@@ -309,6 +322,7 @@ if(FULLMAG_USE_MFEM_STACK)
 else()
     target_compile_definitions(fullmag_fem PUBLIC FULLMAG_HAS_MFEM_STACK=0)
     target_compile_definitions(fullmag_fem PUBLIC FULLMAG_HAS_CUDA_RUNTIME=0)
+    target_compile_definitions(fullmag_fem PUBLIC FULLMAG_HAS_CUSOLVER=0)
     target_compile_definitions(fullmag_fem PUBLIC FULLMAG_FEM_WITH_SLEPC=0)
     fullmag_private_string_define(fullmag_fem FULLMAG_FEM_PETSC_VERSION "")
     fullmag_private_string_define(fullmag_fem FULLMAG_FEM_SLEPC_VERSION "")
@@ -409,6 +423,18 @@ add_fem_source_facade_contract(
 add_fem_source_facade_contract(
     fem_modal_eigen_contract
     tests/frequency_domain/modal_eigen_contract_test.cpp
+)
+add_fem_source_facade_contract(
+    fem_poisson_airbox_eigen_oracle_contract
+    tests/frequency_domain/poisson_airbox_eigen_oracle_test.cpp
+)
+add_fem_source_facade_contract(
+    fem_poisson_airbox_modal_eigen_slepc_contract
+    tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp
+)
+add_fem_source_facade_contract(
+    fem_poisson_airbox_schur_matshell_contract
+    tests/frequency_domain/poisson_airbox_schur_matshell_test.cpp
 )
 add_fem_source_facade_contract(
     fem_driven_response_contract
