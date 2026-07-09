@@ -5575,28 +5575,25 @@ fn fem_eigen_carries_k0_kittel_validation_from_runtime_metadata() {
         .any(|reason| reason.contains("k0_kittel_validation.samples")));
 
     let mut unsupported_demag_kind = invalid;
-    unsupported_demag_kind
-        .problem_meta
-        .runtime_metadata
-        .insert(
-            "k0_kittel_validation".to_string(),
-            serde_json::json!({
-                "kind": "k0_kittel_field_sweep",
-                "case_id": "K0-3",
-                "demag_kind": "unvalidated_airbox",
-                "model": "thin_film_in_plane",
-                "field_units": "A_per_m",
-                "relative_tolerance": 0.02,
-                "material": {
-                    "effective_magnetisation": 800000.0
-                },
-                "samples": [
-                    {"sample_index": 0, "bias_field": [40000.0, 0.0, 0.0]},
-                    {"sample_index": 1, "bias_field": [80000.0, 0.0, 0.0]},
-                    {"sample_index": 2, "bias_field": [120000.0, 0.0, 0.0]}
-                ]
-            }),
-        );
+    unsupported_demag_kind.problem_meta.runtime_metadata.insert(
+        "k0_kittel_validation".to_string(),
+        serde_json::json!({
+            "kind": "k0_kittel_field_sweep",
+            "case_id": "K0-3",
+            "demag_kind": "unvalidated_airbox",
+            "model": "thin_film_in_plane",
+            "field_units": "A_per_m",
+            "relative_tolerance": 0.02,
+            "material": {
+                "effective_magnetisation": 800000.0
+            },
+            "samples": [
+                {"sample_index": 0, "bias_field": [40000.0, 0.0, 0.0]},
+                {"sample_index": 1, "bias_field": [80000.0, 0.0, 0.0]},
+                {"sample_index": 2, "bias_field": [120000.0, 0.0, 0.0]}
+            ]
+        }),
+    );
     let err = plan(&unsupported_demag_kind).expect_err("unknown K0 Kittel demag_kind must fail");
     assert!(err
         .reasons
@@ -5661,7 +5658,9 @@ fn fem_eigen_allows_k0_kittel_synthetic_demag_factor_floquet_path() {
         fullmag_ir::EnergyTermIR::Demag {
             realization: fullmag_ir::RequestedFemDemagIR::default(),
         },
-        fullmag_ir::EnergyTermIR::Zeeman { b: [0.02, 0.0, 0.0] },
+        fullmag_ir::EnergyTermIR::Zeeman {
+            b: [0.02, 0.0, 0.0],
+        },
     ];
     ir.problem_meta.runtime_metadata.insert(
         "k0_kittel_validation".to_string(),
@@ -5808,7 +5807,9 @@ fn fem_eigen_allows_k0_kittel_periodic_airbox_shared_domain_path() {
         fullmag_ir::EnergyTermIR::Demag {
             realization: fullmag_ir::RequestedFemDemagIR::default(),
         },
-        fullmag_ir::EnergyTermIR::Zeeman { b: [0.02, 0.0, 0.0] },
+        fullmag_ir::EnergyTermIR::Zeeman {
+            b: [0.02, 0.0, 0.0],
+        },
     ];
     ir.problem_meta.runtime_metadata.insert(
         "k0_kittel_validation".to_string(),

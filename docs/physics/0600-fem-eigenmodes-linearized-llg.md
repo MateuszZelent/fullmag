@@ -127,6 +127,45 @@ without MFEM must prove:
 - residual consistency for the selected pencil,
 - damping sign and linewidth mapping when damping is included.
 
+## Nonzero-k Floquet dynamic demag-k payload boundary
+
+For a Bloch/Floquet modal problem with nonzero wavevector `k`, the tangent
+operator is partitioned as
+
+```text
+K_total(k) = K_local_and_exchange(k) + K_demag(k).
+```
+
+`K_demag(k)` is the linear dynamic demagnetizing-field contribution evaluated
+at the same Bloch wavevector and represented in the same real block form and
+local tangent basis as `K_local_and_exchange(k)`. Its matrix entries therefore
+carry the same operator units and sign convention as the supplied modal
+stiffness matrix; it is added directly before solving
+`K_total(k) phi = -i omega G phi`.
+
+The narrow native CPU bridge may consume a caller-supplied dense
+`dynamic_demag_k` tangent matrix only when all of the following are true:
+
+- the request is `Full2x2`, nonzero-k, Floquet, and has accepted periodic-pair
+  metadata;
+- the matrix has exactly `tangent_dof_count^2` finite block-real values;
+- the declared payload kind is `dynamic_demag_k_operator`;
+- the base Bloch/Floquet stiffness and the demag matrix share the same tangent
+  DOF ordering, phase convention `exp(i omega t)`, and periodic-pair map.
+
+This is an explicit operator-input contract for native numerical validation.
+It is not a periodic-Poisson implementation, does not construct
+`K_demag(k)` from mesh/airbox data, and does not make dynamic demag-k publicly
+available through Python, `ProblemIR`, planner, API, or the control room.
+Sparse/matrix-free and assembled MFEM dynamic-demag-k operators remain
+deferred until a native periodic magnetostatic realization can provide the
+same operator with solver telemetry and analytical validation.
+
+Validation for this bridge requires a zero-matrix equivalence check, a nonzero
+matrix frequency-shift check against the same dense block-real oracle, shape
+and finite-value rejection tests, and retained explicit capability rejection
+for public nonzero-k Floquet demag requests.
+
 ## Poisson-airbox `k=0` modal eigensolve implementation
 
 The active implementation contract for full-coupled Poisson-airbox `k=0`

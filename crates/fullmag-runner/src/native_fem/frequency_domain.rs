@@ -319,6 +319,17 @@ pub(crate) struct NativeModalEigenPoissonAirboxBlockProblem<'a> {
     pub periodic_mesh_certificate_schema: &'a str,
     pub magnetic_pair_count: u64,
     pub airbox_pair_count: u64,
+    pub shift_invert_action: Option<NativeModalEigenPoissonAirboxShiftInvertAction<'a>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
+pub(crate) struct NativeModalEigenPoissonAirboxShiftInvertAction<'a> {
+    pub sigma_real: f64,
+    pub sigma_imag: f64,
+    pub vector_real: &'a [f64],
+    pub vector_imag: Option<&'a [f64]>,
+    pub use_gpu_hidden_action: bool,
 }
 
 #[derive(Clone)]
@@ -1002,6 +1013,8 @@ fn solve_native_modal_eigen_impl(
     let mfem_operator = request.mfem_operator_problem.as_ref();
     let mfem_sparse_operator = request.mfem_sparse_operator_problem.as_ref();
     let poisson_airbox_block = request.poisson_airbox_block_problem.as_ref();
+    let poisson_airbox_shift_invert_action =
+        poisson_airbox_block.and_then(|problem| problem.shift_invert_action.as_ref());
     let poisson_airbox_periodic_mesh_certificate_schema = poisson_airbox_block
         .map(|problem| CString::new(problem.periodic_mesh_certificate_schema.as_bytes()))
         .transpose()
@@ -1199,6 +1212,26 @@ fn solve_native_modal_eigen_impl(
             .unwrap_or(0),
         poisson_airbox_airbox_pair_count: poisson_airbox_block
             .map(|problem| problem.airbox_pair_count)
+            .unwrap_or(0),
+        poisson_airbox_shift_invert_action_enabled: poisson_airbox_shift_invert_action.is_some()
+            as i32,
+        poisson_airbox_shift_invert_action_device: poisson_airbox_shift_invert_action
+            .map(|action| i32::from(action.use_gpu_hidden_action))
+            .unwrap_or(0),
+        poisson_airbox_shift_sigma_real: poisson_airbox_shift_invert_action
+            .map(|action| action.sigma_real)
+            .unwrap_or(0.0),
+        poisson_airbox_shift_sigma_imag: poisson_airbox_shift_invert_action
+            .map(|action| action.sigma_imag)
+            .unwrap_or(0.0),
+        poisson_airbox_shift_action_vector_real: poisson_airbox_shift_invert_action
+            .map(|action| slice_ptr_or_null(action.vector_real))
+            .unwrap_or(std::ptr::null()),
+        poisson_airbox_shift_action_vector_imag: poisson_airbox_shift_invert_action
+            .and_then(|action| action.vector_imag.map(slice_ptr_or_null))
+            .unwrap_or(std::ptr::null()),
+        poisson_airbox_shift_action_vector_count: poisson_airbox_shift_invert_action
+            .map(|action| action.vector_real.len() as u64)
             .unwrap_or(0),
     };
 

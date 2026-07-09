@@ -20,11 +20,13 @@ PRODUCTION_K_PATH_MAX_RESIDUAL_RELATIVE_L2 = 1.0e-6
 PRODUCTION_K_PATH_MAX_TANGENT_LEAKAGE_ABS = 1.0e-8
 ALLOWED_MODAL_PHASOR_CONVENTIONS = {
     "exp_i_omega_t",
+    "exp_plus_i_omega_t",
     "exp_minus_i_omega_t",
     "not_applicable_real_reference",
 }
 ALLOWED_MODAL_EIGENVALUE_MAPPINGS = {
     "lambda_eq_i_omega",
+    "lambda_imag_positive_frequency",
     "omega_rad_s_eq_gamma0_rad_s_per_A_m_times_effective_field_lambda_A_per_m",
 }
 ALLOWED_MODAL_ALGEBRAIC_FORMS = {
@@ -32,6 +34,7 @@ ALLOWED_MODAL_ALGEBRAIC_FORMS = {
     "linearized_llg_generalized",
     "gyrotropic_generalized",
     "k0_macrospin_field_generalized_to_gyrotropic_modal",
+    "full_coupled_poisson_airbox_augmented_gauge",
 }
 ALLOWED_TRACKING_SCORE_SUMMARY_SOURCES = {
     "seed_only",
@@ -63,6 +66,24 @@ GPU_MODAL_KITTEL_CAPABILITY_STATUSES = {
     "production_executable",
     "validated",
 }
+REFERENCE_FULL_2X2_FLOQUET_REJECTION_CONTRACTS = {
+    "production_cpu_modal_nonzero_k_floquet_operator_missing": {
+        "production_cpu_rejection_scope": "selected_spectrum_nonzero_k_floquet_modal",
+        "required_operator_contract": "bloch_floquet_tangent_operator_with_periodic_pairs",
+        "required_operator_payload_kind": "bloch_floquet_tangent_operator",
+        "modal_periodic_pair_contract_available": False,
+    },
+    "production_cpu_modal_dynamic_demag_k_operator_missing": {
+        "production_cpu_rejection_scope": (
+            "selected_spectrum_nonzero_k_floquet_modal_dynamic_demag"
+        ),
+        "required_operator_contract": "bloch_floquet_tangent_operator_with_dynamic_demag_k",
+        "required_operator_payload_kind": "bloch_floquet_tangent_operator",
+        "required_demag_payload_kind": "dynamic_demag_k_operator",
+        "dynamic_demag_operator_source": "missing_numeric_fem_demag_k",
+        "modal_periodic_pair_contract_available": False,
+    },
+}
 
 
 def fail(message: str) -> None:
@@ -83,10 +104,74 @@ def require_equal(actual: object, expected: object, name: str) -> None:
         fail(f"{name}: got {actual!r}, expected {expected!r}")
 
 
+def validate_reference_full_2x2_floquet_rejection_contract(
+    diagnostics: dict,
+    *,
+    prefix: str,
+    expected_reason: str | None = None,
+) -> str:
+    reason = diagnostics.get("production_cpu_rejection_reason")
+    if expected_reason is not None:
+        require_equal(
+            reason,
+            expected_reason,
+            f"{prefix}.production_cpu_rejection_reason",
+        )
+    if reason not in REFERENCE_FULL_2X2_FLOQUET_REJECTION_CONTRACTS:
+        fail(
+            f"{prefix}.production_cpu_rejection_reason: got {reason!r}, expected one of "
+            f"{sorted(REFERENCE_FULL_2X2_FLOQUET_REJECTION_CONTRACTS)}"
+        )
+    contract = REFERENCE_FULL_2X2_FLOQUET_REJECTION_CONTRACTS[reason]
+    for key, expected in contract.items():
+        require_equal(diagnostics.get(key), expected, f"{prefix}.{key}")
+    return reason
+
+
 def require_non_empty_string(value: object, name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         fail(f"{name} must be a non-empty string")
     return value
+
+
+def require_sha256_token(value: object, name: str) -> str:
+    token = require_non_empty_string(value, name)
+    prefix = "sha256:"
+    if not token.startswith(prefix) or len(token) != len(prefix) + 64:
+        fail(f"{name} must be a sha256:<64 hex chars> token")
+    suffix = token[len(prefix) :]
+    if any(char not in "0123456789abcdef" for char in suffix):
+        fail(f"{name} must use lowercase hex sha256 encoding")
+    return token
+
+
+def validate_periodic_mesh_certificate(
+    certificate: object,
+    *,
+    name: str,
+) -> str:
+    if not isinstance(certificate, dict):
+        fail(f"{name} must be an object")
+    require_equal(
+        certificate.get("schema_version"),
+        "periodic_mesh_certificate.v5",
+        f"{name}.schema_version",
+    )
+    require_equal(
+        certificate.get("certificate_status"),
+        "accepted",
+        f"{name}.certificate_status",
+    )
+    magnetic_pair_count = require_non_negative_int(
+        certificate.get("magnetic_pair_count"),
+        f"{name}.magnetic_pair_count",
+    )
+    if magnetic_pair_count <= 0:
+        fail(f"{name}.magnetic_pair_count must be positive")
+    return require_sha256_token(
+        certificate.get("magnetic_pair_map_sha256"),
+        f"{name}.magnetic_pair_map_sha256",
+    )
 
 
 def require_finite_number(value: object, name: str) -> float:
@@ -1280,29 +1365,23 @@ def validate_solver_provenance(
                 "solver_diagnostics.window_completeness.status",
             )
             require_equal(
+                window_completeness.get("certification_method"),
+                "none",
+                "solver_diagnostics.window_completeness.certification_method",
+            )
+            require_equal(
+                window_completeness.get("additional_modes_may_exist"),
+                True,
+                "solver_diagnostics.window_completeness.additional_modes_may_exist",
+            )
+            require_equal(
                 diagnostics.get("production_solver_available"),
                 False,
                 "solver_diagnostics.production_solver_available",
             )
-            require_equal(
-                diagnostics.get("production_cpu_rejection_reason"),
-                "production_cpu_modal_nonzero_k_floquet_operator_missing",
-                "solver_diagnostics.production_cpu_rejection_reason",
-            )
-            require_equal(
-                diagnostics.get("production_cpu_rejection_scope"),
-                "selected_spectrum_nonzero_k_floquet_modal",
-                "solver_diagnostics.production_cpu_rejection_scope",
-            )
-            require_equal(
-                diagnostics.get("required_operator_contract"),
-                "bloch_floquet_tangent_operator_with_periodic_pairs",
-                "solver_diagnostics.required_operator_contract",
-            )
-            require_equal(
-                diagnostics.get("modal_periodic_pair_contract_available"),
-                False,
-                "solver_diagnostics.modal_periodic_pair_contract_available",
+            validate_reference_full_2x2_floquet_rejection_contract(
+                diagnostics,
+                prefix="solver_diagnostics",
             )
             require_equal(
                 spectral_transform,
@@ -1376,6 +1455,38 @@ def validate_solver_provenance(
                 diagnostics.get("basis_transport_policy"),
                 "tangent_frame_transport",
                 "solver_diagnostics.basis_transport_policy",
+            )
+            operator_diagnostics = diagnostics.get("operator_diagnostics")
+            if not isinstance(operator_diagnostics, dict):
+                fail("solver_diagnostics.operator_diagnostics must be an object")
+            require_equal(
+                operator_diagnostics.get("payload_kind"),
+                "bloch_floquet_tangent_operator",
+                "solver_diagnostics.operator_diagnostics.payload_kind",
+            )
+            if operator_diagnostics.get("demag_payload_kind") is not None:
+                fail(
+                    "solver_diagnostics.operator_diagnostics.demag_payload_kind "
+                    "must be absent for the current no-demag production modal k-path gate"
+                )
+            reject_terms_if_present(
+                operator_diagnostics,
+                "solver_diagnostics.operator_diagnostics",
+            )
+            require_equal(
+                diagnostics.get("modal_periodic_pair_contract_available"),
+                True,
+                "solver_diagnostics.modal_periodic_pair_contract_available",
+            )
+            floquet_periodic_pair_count = require_non_negative_int(
+                diagnostics.get("floquet_periodic_pair_count"),
+                "solver_diagnostics.floquet_periodic_pair_count",
+            )
+            if floquet_periodic_pair_count <= 0:
+                fail("solver_diagnostics.floquet_periodic_pair_count must be positive")
+            validate_periodic_mesh_certificate(
+                diagnostics.get("periodic_mesh_certificate"),
+                name="solver_diagnostics.periodic_mesh_certificate",
             )
             frame_mismatch = require_finite_number(
                 diagnostics.get("floquet_tangent_frame_max_mismatch"),
@@ -1573,6 +1684,105 @@ def reject_terms_if_present(container: dict, name: str) -> None:
         )
 
 
+def reject_driven_response_manifest_payloads(manifest: dict) -> None:
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, dict):
+        fail("manifest.artifacts must be an object for production modal k-path gates")
+    for field_name in [
+        "response_sweep_v1_path",
+        "response_sweep_v2_path",
+        "response_map_v1_path",
+        "response_map_v2_path",
+        "response_diagnostics_v1_path",
+        "response_progress_v1_path",
+        "response_cancel_requested_v1_path",
+    ]:
+        require_equal(
+            artifacts.get(field_name),
+            None,
+            f"manifest.artifacts.{field_name}",
+        )
+    frequency_point_paths = artifacts.get("frequency_point_paths")
+    if frequency_point_paths not in (None, []):
+        fail("manifest.artifacts.frequency_point_paths must be empty for production modal k-path gates")
+
+    resources = manifest.get("resources")
+    if not isinstance(resources, dict):
+        fail("manifest.resources must be an object for production modal k-path gates")
+    for field_name in [
+        "response_sweep_resource_key",
+        "response_map_resource_key",
+        "response_progress_resource_key",
+        "response_cancel_requested_resource_key",
+        "response_diagnostics_resource_key",
+    ]:
+        require_equal(
+            resources.get(field_name),
+            None,
+            f"manifest.resources.{field_name}",
+        )
+    response_field_resources = resources.get("response_field_resources")
+    if response_field_resources not in (None, []):
+        fail("manifest.resources.response_field_resources must be empty for production modal k-path gates")
+
+    capabilities = manifest.get("capabilities")
+    if not isinstance(capabilities, dict):
+        fail("manifest.capabilities must be an object for production modal k-path gates")
+    require_equal(
+        capabilities.get("driven_response_artifact_available"),
+        False,
+        "manifest.capabilities.driven_response_artifact_available",
+    )
+    require_equal(
+        capabilities.get("modal_artifact_available"),
+        True,
+        "manifest.capabilities.modal_artifact_available",
+    )
+
+
+def validate_reference_full_2x2_floquet_manifest_diagnostics(
+    manifest_diagnostics: dict,
+    solver_diagnostics: dict,
+    *,
+    require_reference_full_2x2_floquet: bool,
+) -> None:
+    if not require_reference_full_2x2_floquet:
+        return
+    if (
+        "requested_window_hz" not in solver_diagnostics
+        or solver_diagnostics.get("sample_count", 0) <= 1
+    ):
+        return
+    validate_reference_full_2x2_floquet_rejection_contract(
+        manifest_diagnostics,
+        prefix="manifest.diagnostics",
+        expected_reason=solver_diagnostics.get("production_cpu_rejection_reason"),
+    )
+
+
+def validate_production_modal_k_path_manifest_certificate(
+    manifest_diagnostics: dict,
+    solver_diagnostics: dict,
+    *,
+    require_production_modal_k_path: bool,
+) -> None:
+    if not require_production_modal_k_path:
+        return
+    solver_hash = validate_periodic_mesh_certificate(
+        solver_diagnostics.get("periodic_mesh_certificate"),
+        name="solver_diagnostics.periodic_mesh_certificate",
+    )
+    manifest_hash = validate_periodic_mesh_certificate(
+        manifest_diagnostics.get("periodic_mesh_certificate"),
+        name="manifest.diagnostics.periodic_mesh_certificate",
+    )
+    require_equal(
+        manifest_hash,
+        solver_hash,
+        "manifest.diagnostics.periodic_mesh_certificate.magnetic_pair_map_sha256",
+    )
+
+
 def validate_production_modal_k_path_scope(
     manifest: dict,
     *,
@@ -1581,10 +1791,46 @@ def validate_production_modal_k_path_scope(
 ) -> None:
     if not require_production_modal_k_path and not require_production_gamma_k_path:
         return
+    if require_production_modal_k_path:
+        require_equal(
+            manifest.get("stage_id"),
+            "eigenmodes",
+            "manifest.stage_id",
+        )
     requested_execution = manifest.get("requested_execution")
     if not isinstance(requested_execution, dict):
         fail("manifest.requested_execution must be an object for production modal k-path gates")
     if require_production_modal_k_path:
+        require_equal(
+            requested_execution.get("calculation_mode"),
+            "dispersion_modal",
+            "manifest.requested_execution.calculation_mode",
+        )
+        require_equal(
+            requested_execution.get("backend"),
+            "fem",
+            "manifest.requested_execution.backend",
+        )
+        require_equal(
+            requested_execution.get("device"),
+            "cpu",
+            "manifest.requested_execution.device",
+        )
+        require_equal(
+            requested_execution.get("precision"),
+            "double",
+            "manifest.requested_execution.precision",
+        )
+        require_equal(
+            requested_execution.get("solver_family"),
+            "modal_eigen",
+            "manifest.requested_execution.solver_family",
+        )
+        require_equal(
+            requested_execution.get("solve_equation"),
+            "A q = lambda B q; lambda = i omega",
+            "manifest.requested_execution.solve_equation",
+        )
         require_equal(
             requested_execution.get("include_demag"),
             False,
@@ -1599,10 +1845,51 @@ def validate_production_modal_k_path_scope(
         fail("manifest.resolved_execution must be an object for production modal k-path gates")
     if require_production_modal_k_path:
         require_equal(
+            resolved_execution.get("backend"),
+            "fem",
+            "manifest.resolved_execution.backend",
+        )
+        require_equal(
+            resolved_execution.get("device"),
+            "cpu",
+            "manifest.resolved_execution.device",
+        )
+        require_equal(
+            resolved_execution.get("precision"),
+            "double",
+            "manifest.resolved_execution.precision",
+        )
+        require_equal(
             resolved_execution.get("demag_realization"),
             "none",
             "manifest.resolved_execution.demag_realization",
         )
+        require_equal(
+            resolved_execution.get("native_backend"),
+            "native_cpu",
+            "manifest.resolved_execution.native_backend",
+        )
+        require_equal(
+            resolved_execution.get("reference_or_production"),
+            "production",
+            "manifest.resolved_execution.reference_or_production",
+        )
+        require_equal(
+            resolved_execution.get("solver_library"),
+            "slepc",
+            "manifest.resolved_execution.solver_library",
+        )
+        require_equal(
+            resolved_execution.get("solver_algorithm"),
+            "slepc_multi_shift_invert_production_cpu_dense",
+            "manifest.resolved_execution.solver_algorithm",
+        )
+        require_equal(
+            resolved_execution.get("solve_kind"),
+            "modal_eigen",
+            "manifest.resolved_execution.solve_kind",
+        )
+        reject_driven_response_manifest_payloads(manifest)
     reject_terms_if_present(resolved_execution, "manifest.resolved_execution")
 
 
@@ -2226,6 +2513,49 @@ def validate_k0_kittel_summary_artifacts(
         if effective_magnetisation <= 0.0:
             fail(f"{summary_name}.demag.effective_magnetisation_A_per_m must be positive")
         if demag_kind == "periodic_airbox_k0":
+            eigen_summary = load_json(root / "eigen/metadata/eigen_summary.json")
+            equilibrium_source = eigen_summary.get("equilibrium_source")
+            if not isinstance(equilibrium_source, dict):
+                fail(
+                    "eigen_summary.equilibrium_source must be an object with "
+                    "kind=relaxed_initial_state"
+                )
+            require_equal(
+                equilibrium_source.get("kind"),
+                "relaxed_initial_state",
+                "eigen_summary.equilibrium_source.kind",
+            )
+            relaxation_steps = require_non_negative_int(
+                eigen_summary.get("relaxation_steps"),
+                "eigen_summary.relaxation_steps",
+            )
+            handoff = equilibrium_source.get("handoff")
+            if relaxation_steps <= 0 and handoff != "stage_continuation":
+                fail(
+                    "eigen_summary.relaxation_steps must be positive for periodic_airbox_k0 "
+                    "unless eigen_summary.equilibrium_source.handoff=stage_continuation"
+                )
+            solver_diagnostics = load_json(root / "eigen/diagnostics/solver.v1.json")
+            require_equal(
+                solver_diagnostics.get("solver_adapter"),
+                "k0_poisson_airbox_cpu_full_coupled_slepc",
+                "solver_diagnostics.solver_adapter",
+            )
+            require_equal(
+                solver_diagnostics.get("solver_model"),
+                "k0_poisson_airbox_cpu_full_coupled_slepc",
+                "solver_diagnostics.solver_model",
+            )
+            require_equal(
+                solver_diagnostics.get("resolved_solver_family"),
+                "k0_poisson_airbox_full_coupled",
+                "solver_diagnostics.resolved_solver_family",
+            )
+            require_equal(
+                solver_diagnostics.get("demag_kind"),
+                "periodic_airbox_k0",
+                "solver_diagnostics.demag_kind",
+            )
             require_equal(
                 demag.get("gauge_policy"),
                 "mean_zero_augmented",
@@ -3551,6 +3881,16 @@ def main(argv: list[str] | None = None) -> int:
         require_production_modal_k_path=args.require_production_modal_k_path,
         require_production_gamma_k_path=args.require_production_gamma_k_path,
         require_reference_full_2x2_floquet=args.require_reference_full_2x2_floquet,
+    )
+    validate_reference_full_2x2_floquet_manifest_diagnostics(
+        manifest_diagnostics,
+        solver_diagnostics,
+        require_reference_full_2x2_floquet=args.require_reference_full_2x2_floquet,
+    )
+    validate_production_modal_k_path_manifest_certificate(
+        manifest_diagnostics,
+        solver_diagnostics,
+        require_production_modal_k_path=args.require_production_modal_k_path,
     )
     validate_dispersion_manifest_capabilities(
         manifest,

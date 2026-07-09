@@ -646,6 +646,26 @@ def run_validator(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def run_periodic_airbox_convergence_validator(
+    *roots: Path,
+    max_relative_error: float = 0.05,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts" / "verify_fem_eigen_k0_periodic_airbox_convergence.py"),
+            "--max-relative-error",
+            str(max_relative_error),
+            *(str(root) for root in roots),
+        ],
+        check=False,
+        cwd=REPO_ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+
 def mark_reference_full_2x2_floquet_fixture(root: Path) -> None:
     solver_path = root / "eigen" / "diagnostics" / "solver.v1.json"
     solver = json.loads(solver_path.read_text())
@@ -861,6 +881,15 @@ def expand_reference_floquet_fixture_to_k_path(
     manifest["diagnostics"] = {
         "tracking_score_source": "mixed_modal_overlap_and_frequency_fallback",
         "modal_overlap_available": True,
+        "production_cpu_rejection_reason": (
+            "production_cpu_modal_nonzero_k_floquet_operator_missing"
+        ),
+        "production_cpu_rejection_scope": "selected_spectrum_nonzero_k_floquet_modal",
+        "required_operator_contract": (
+            "bloch_floquet_tangent_operator_with_periodic_pairs"
+        ),
+        "required_operator_payload_kind": "bloch_floquet_tangent_operator",
+        "modal_periodic_pair_contract_available": False,
     }
     (root / "frequency_domain" / "manifest.v1.json").write_text(json.dumps(manifest))
     (root / "eigen" / "dispersion.csv").write_text("\n".join(dispersion_rows))
@@ -905,6 +934,17 @@ def make_mode_fields_binary_only(root: Path) -> None:
 
 
 def mark_production_shift_invert_k_path_fixture(root: Path) -> None:
+    periodic_mesh_certificate = {
+        "schema_version": "periodic_mesh_certificate.v5",
+        "certificate_status": "accepted",
+        "magnetic_pair_count": 1,
+        "magnetic_pair_map_sha256": (
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        ),
+        "pair_map_hash_canonicalization": (
+            "periodic_mesh_certificate_pair_map.v1_schema_role_pair_id_len_sorted_nodes"
+        ),
+    }
     solver_path = root / "eigen" / "diagnostics" / "solver.v1.json"
     solver = json.loads(solver_path.read_text())
     solver.update(
@@ -926,6 +966,12 @@ def mark_production_shift_invert_k_path_fixture(root: Path) -> None:
             "execution_lane": "production_cpu",
             "production_solver_available": True,
             "dense_reference_oracle": False,
+            "operator_diagnostics": {
+                "payload_kind": "bloch_floquet_tangent_operator",
+            },
+            "modal_periodic_pair_contract_available": True,
+            "floquet_periodic_pair_count": 1,
+            "periodic_mesh_certificate": periodic_mesh_certificate,
             "mode_count": 1,
             "requested_mode_count": 1,
             "requested_window_hz": [1.0, 1.0e13],
@@ -966,7 +1012,9 @@ def mark_production_shift_invert_k_path_fixture(root: Path) -> None:
 
     manifest_path = root / "frequency_domain" / "manifest.v1.json"
     manifest = json.loads(manifest_path.read_text())
+    manifest["stage_id"] = "eigenmodes"
     manifest["diagnostics"]["tracking_score_source"] = "modal_overlap_weighted_score"
+    manifest["diagnostics"]["periodic_mesh_certificate"] = periodic_mesh_certificate
     manifest["requested_execution"] = {
         "calculation_mode": "dispersion_modal",
         "backend": "fem",
@@ -1005,6 +1053,8 @@ def mark_production_shift_invert_k_path_fixture(root: Path) -> None:
         "normalization": "unit_l2",
     }
     manifest["capabilities"] = {
+        "driven_response_artifact_available": False,
+        "modal_artifact_available": True,
         "production_native_solver_available": True,
         "validation_artifact": False,
         "dispersion": production_dispersion_capabilities(),
@@ -1237,6 +1287,7 @@ def write_k0_kittel_convergence_table(
     root: Path,
     *,
     relative_error: float = 0.0,
+    mesh_resolution_m: float = 5e-9,
 ) -> None:
     validation_dir = root / "validation" / "kittel_k0_pbc"
     validation_dir.mkdir(parents=True, exist_ok=True)
@@ -1246,9 +1297,43 @@ def write_k0_kittel_convergence_table(
         "effective_magnetisation_A_per_m\n"
     )
     row = (
-        f"K0-3,periodic_airbox_k0,5e-9,80e-9,8,1e-12,{relative_error},800000.0\n"
+        f"K0-3,periodic_airbox_k0,{mesh_resolution_m},80e-9,8,1e-12,{relative_error},800000.0\n"
     )
     (validation_dir / "convergence.v1.csv").write_text(header + row)
+
+
+def mark_poisson_airbox_k0_solver_fixture(root: Path) -> None:
+    solver_path = root / "eigen" / "diagnostics" / "solver.v1.json"
+    solver = json.loads(solver_path.read_text())
+    solver.update(
+        {
+            "solver_adapter": "k0_poisson_airbox_cpu_full_coupled_slepc",
+            "solver_model": "k0_poisson_airbox_cpu_full_coupled_slepc",
+            "resolved_solver_family": "k0_poisson_airbox_full_coupled",
+            "demag_kind": "periodic_airbox_k0",
+            "execution_lane": "production_cpu",
+            "algebraic_form": "full_coupled_poisson_airbox_augmented_gauge",
+            "phasor_convention": "exp_plus_i_omega_t",
+            "eigenvalue_mapping": "lambda_imag_positive_frequency",
+        }
+    )
+    solver_path.write_text(json.dumps(solver))
+
+
+def mark_relaxed_equilibrium_fixture(
+    root: Path,
+    *,
+    steps: int = 4,
+    handoff: str | None = None,
+) -> None:
+    summary_path = root / "eigen" / "metadata" / "eigen_summary.json"
+    summary = json.loads(summary_path.read_text())
+    equilibrium_source = {"kind": "relaxed_initial_state"}
+    if handoff is not None:
+        equilibrium_source["handoff"] = handoff
+    summary["equilibrium_source"] = equilibrium_source
+    summary["relaxation_steps"] = steps
+    summary_path.write_text(json.dumps(summary))
 
 
 def mark_gpu_modal_k0_kittel_fixture(root: Path) -> None:
@@ -2703,6 +2788,7 @@ def test_validator_rejects_reference_full_2x2_floquet_window_without_required_op
             "required_operator_contract": (
                 "bloch_floquet_tangent_operator_with_periodic_pairs"
             ),
+            "required_operator_payload_kind": "bloch_floquet_tangent_operator",
             "modal_periodic_pair_contract_available": False,
             "requested_window_hz": [1.0, 1.0e13],
             "requested_mode_count": 1,
@@ -2743,6 +2829,451 @@ def test_validator_rejects_reference_full_2x2_floquet_window_without_required_op
     assert "required_operator_contract" in (result.stderr + result.stdout)
 
 
+def test_validator_rejects_reference_full_2x2_floquet_window_without_required_operator_payload_kind(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(tmp_path)
+    solver_path = tmp_path / "eigen" / "diagnostics" / "solver.v1.json"
+    solver = json.loads(solver_path.read_text())
+    solver.update(
+        {
+            "production_solver_available": False,
+            "frequency_window_solver_policy": (
+                "reference_k_path_window_filter_not_shift_invert_or_feast"
+            ),
+            "production_cpu_rejection_reason": (
+                "production_cpu_modal_nonzero_k_floquet_operator_missing"
+            ),
+            "production_cpu_rejection_scope": "selected_spectrum_nonzero_k_floquet_modal",
+            "required_operator_contract": (
+                "bloch_floquet_tangent_operator_with_periodic_pairs"
+            ),
+            "required_operator_payload_kind": "bloch_floquet_tangent_operator",
+            "modal_periodic_pair_contract_available": False,
+            "requested_window_hz": [1.0, 1.0e13],
+            "requested_mode_count": 1,
+            "resolved_search_window_hz": [0.0, 1.125e13],
+            "window_completeness": {
+                "policy": "best_effort",
+                "status": "not_certified",
+                "certification_method": "none",
+                "estimated_modes_in_window": 1,
+                "certified_modes_in_window": 0,
+                "additional_modes_may_exist": True,
+            },
+            "subwindows": [
+                {
+                    "index": 0,
+                    "requested_hz": [1.0, 1.0e13],
+                    "search_hz": [0.0, 1.125e13],
+                    "shift_hz": 5.0e12,
+                    "shift_frequency_hz": 5.0e12,
+                    "shift_omega_rad_s": 3.141592653589793e13,
+                    "outer_iterations": 0,
+                    "linear_iterations_total": 0,
+                    "candidate_modes": 1,
+                    "accepted_modes": 1,
+                    "residual_max": 0.0,
+                    "stop_reason": "window_exhausted",
+                }
+            ],
+        }
+    )
+    solver.pop("required_operator_payload_kind", None)
+    solver_path.write_text(json.dumps(solver))
+
+    result = run_validator(tmp_path, "--require-reference-full-2x2-floquet")
+
+    assert result.returncode != 0
+    assert "solver_diagnostics.required_operator_payload_kind" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_reference_full_2x2_floquet_window_with_certification_method(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(tmp_path)
+    solver_path = tmp_path / "eigen" / "diagnostics" / "solver.v1.json"
+    solver = json.loads(solver_path.read_text())
+    solver.update(
+        {
+            "production_solver_available": False,
+            "frequency_window_solver_policy": (
+                "reference_k_path_window_filter_not_shift_invert_or_feast"
+            ),
+            "production_cpu_rejection_reason": (
+                "production_cpu_modal_nonzero_k_floquet_operator_missing"
+            ),
+            "production_cpu_rejection_scope": "selected_spectrum_nonzero_k_floquet_modal",
+            "required_operator_contract": (
+                "bloch_floquet_tangent_operator_with_periodic_pairs"
+            ),
+            "required_operator_payload_kind": "bloch_floquet_tangent_operator",
+            "modal_periodic_pair_contract_available": False,
+            "requested_window_hz": [1.0, 1.0e13],
+            "requested_mode_count": 1,
+            "resolved_search_window_hz": [0.0, 1.125e13],
+            "window_completeness": {
+                "policy": "best_effort",
+                "status": "not_certified",
+                "certification_method": "certified_count",
+                "estimated_modes_in_window": 1,
+                "certified_modes_in_window": 0,
+                "additional_modes_may_exist": True,
+            },
+            "subwindows": [
+                {
+                    "index": 0,
+                    "requested_hz": [1.0, 1.0e13],
+                    "search_hz": [0.0, 1.125e13],
+                    "shift_hz": 5.0e12,
+                    "shift_frequency_hz": 5.0e12,
+                    "shift_omega_rad_s": 3.141592653589793e13,
+                    "outer_iterations": 0,
+                    "linear_iterations_total": 0,
+                    "candidate_modes": 1,
+                    "accepted_modes": 1,
+                    "residual_max": 0.0,
+                    "stop_reason": "window_exhausted",
+                }
+            ],
+        }
+    )
+    solver_path.write_text(json.dumps(solver))
+
+    result = run_validator(tmp_path, "--require-reference-full-2x2-floquet")
+
+    assert result.returncode != 0
+    assert "solver_diagnostics.window_completeness.certification_method" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_reference_full_2x2_floquet_window_with_no_additional_modes_claim(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(tmp_path)
+    solver_path = tmp_path / "eigen" / "diagnostics" / "solver.v1.json"
+    solver = json.loads(solver_path.read_text())
+    solver.update(
+        {
+            "production_solver_available": False,
+            "frequency_window_solver_policy": (
+                "reference_k_path_window_filter_not_shift_invert_or_feast"
+            ),
+            "production_cpu_rejection_reason": (
+                "production_cpu_modal_nonzero_k_floquet_operator_missing"
+            ),
+            "production_cpu_rejection_scope": "selected_spectrum_nonzero_k_floquet_modal",
+            "required_operator_contract": (
+                "bloch_floquet_tangent_operator_with_periodic_pairs"
+            ),
+            "required_operator_payload_kind": "bloch_floquet_tangent_operator",
+            "modal_periodic_pair_contract_available": False,
+            "requested_window_hz": [1.0, 1.0e13],
+            "requested_mode_count": 1,
+            "resolved_search_window_hz": [0.0, 1.125e13],
+            "window_completeness": {
+                "policy": "best_effort",
+                "status": "not_certified",
+                "certification_method": "none",
+                "estimated_modes_in_window": 1,
+                "certified_modes_in_window": 0,
+                "additional_modes_may_exist": False,
+            },
+            "subwindows": [
+                {
+                    "index": 0,
+                    "requested_hz": [1.0, 1.0e13],
+                    "search_hz": [0.0, 1.125e13],
+                    "shift_hz": 5.0e12,
+                    "shift_frequency_hz": 5.0e12,
+                    "shift_omega_rad_s": 3.141592653589793e13,
+                    "outer_iterations": 0,
+                    "linear_iterations_total": 0,
+                    "candidate_modes": 1,
+                    "accepted_modes": 1,
+                    "residual_max": 0.0,
+                    "stop_reason": "window_exhausted",
+                }
+            ],
+        }
+    )
+    solver_path.write_text(json.dumps(solver))
+
+    result = run_validator(tmp_path, "--require-reference-full-2x2-floquet")
+
+    assert result.returncode != 0
+    assert "solver_diagnostics.window_completeness.additional_modes_may_exist" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_reference_full_2x2_floquet_window_without_manifest_rejection_reason(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(tmp_path)
+    solver_path = tmp_path / "eigen" / "diagnostics" / "solver.v1.json"
+    solver = json.loads(solver_path.read_text())
+    solver.update(
+        {
+            "production_solver_available": False,
+            "frequency_window_solver_policy": (
+                "reference_k_path_window_filter_not_shift_invert_or_feast"
+            ),
+            "production_cpu_rejection_reason": (
+                "production_cpu_modal_nonzero_k_floquet_operator_missing"
+            ),
+            "production_cpu_rejection_scope": "selected_spectrum_nonzero_k_floquet_modal",
+            "required_operator_contract": (
+                "bloch_floquet_tangent_operator_with_periodic_pairs"
+            ),
+            "required_operator_payload_kind": "bloch_floquet_tangent_operator",
+            "modal_periodic_pair_contract_available": False,
+            "requested_window_hz": [1.0, 1.0e13],
+            "requested_mode_count": 1,
+            "resolved_search_window_hz": [0.0, 1.125e13],
+            "window_completeness": {
+                "policy": "best_effort",
+                "status": "not_certified",
+                "certification_method": "none",
+                "estimated_modes_in_window": 1,
+                "certified_modes_in_window": 0,
+                "additional_modes_may_exist": True,
+            },
+            "subwindows": [
+                {
+                    "index": 0,
+                    "requested_hz": [1.0, 1.0e13],
+                    "search_hz": [0.0, 1.125e13],
+                    "shift_hz": 5.0e12,
+                    "shift_frequency_hz": 5.0e12,
+                    "shift_omega_rad_s": 3.141592653589793e13,
+                    "outer_iterations": 0,
+                    "linear_iterations_total": 0,
+                    "candidate_modes": 1,
+                    "accepted_modes": 1,
+                    "residual_max": 0.0,
+                    "stop_reason": "window_exhausted",
+                }
+            ],
+        }
+    )
+    solver_path.write_text(json.dumps(solver))
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["diagnostics"].pop("production_cpu_rejection_reason", None)
+    manifest["diagnostics"].pop("production_cpu_rejection_scope", None)
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(tmp_path, "--require-reference-full-2x2-floquet")
+
+    assert result.returncode != 0
+    assert "manifest.diagnostics.production_cpu_rejection_reason" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_reference_full_2x2_floquet_window_without_manifest_required_operator_contract(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(tmp_path)
+    solver_path = tmp_path / "eigen" / "diagnostics" / "solver.v1.json"
+    solver = json.loads(solver_path.read_text())
+    solver.update(
+        {
+            "production_solver_available": False,
+            "frequency_window_solver_policy": (
+                "reference_k_path_window_filter_not_shift_invert_or_feast"
+            ),
+            "production_cpu_rejection_reason": (
+                "production_cpu_modal_nonzero_k_floquet_operator_missing"
+            ),
+            "production_cpu_rejection_scope": "selected_spectrum_nonzero_k_floquet_modal",
+            "required_operator_contract": (
+                "bloch_floquet_tangent_operator_with_periodic_pairs"
+            ),
+            "required_operator_payload_kind": "bloch_floquet_tangent_operator",
+            "modal_periodic_pair_contract_available": False,
+            "requested_window_hz": [1.0, 1.0e13],
+            "requested_mode_count": 1,
+            "resolved_search_window_hz": [0.0, 1.125e13],
+            "window_completeness": {
+                "policy": "best_effort",
+                "status": "not_certified",
+                "certification_method": "none",
+                "estimated_modes_in_window": 1,
+                "certified_modes_in_window": 0,
+                "additional_modes_may_exist": True,
+            },
+            "subwindows": [
+                {
+                    "index": 0,
+                    "requested_hz": [1.0, 1.0e13],
+                    "search_hz": [0.0, 1.125e13],
+                    "shift_hz": 5.0e12,
+                    "shift_frequency_hz": 5.0e12,
+                    "shift_omega_rad_s": 3.141592653589793e13,
+                    "outer_iterations": 0,
+                    "linear_iterations_total": 0,
+                    "candidate_modes": 1,
+                    "accepted_modes": 1,
+                    "residual_max": 0.0,
+                    "stop_reason": "window_exhausted",
+                }
+            ],
+        }
+    )
+    solver_path.write_text(json.dumps(solver))
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["diagnostics"].pop("required_operator_contract", None)
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(tmp_path, "--require-reference-full-2x2-floquet")
+
+    assert result.returncode != 0
+    assert "manifest.diagnostics.required_operator_contract" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_reference_full_2x2_floquet_window_without_manifest_required_operator_payload_kind(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(tmp_path)
+    solver_path = tmp_path / "eigen" / "diagnostics" / "solver.v1.json"
+    solver = json.loads(solver_path.read_text())
+    solver.update(
+        {
+            "production_solver_available": False,
+            "frequency_window_solver_policy": (
+                "reference_k_path_window_filter_not_shift_invert_or_feast"
+            ),
+            "production_cpu_rejection_reason": (
+                "production_cpu_modal_nonzero_k_floquet_operator_missing"
+            ),
+            "production_cpu_rejection_scope": "selected_spectrum_nonzero_k_floquet_modal",
+            "required_operator_contract": (
+                "bloch_floquet_tangent_operator_with_periodic_pairs"
+            ),
+            "required_operator_payload_kind": "bloch_floquet_tangent_operator",
+            "modal_periodic_pair_contract_available": False,
+            "requested_window_hz": [1.0, 1.0e13],
+            "requested_mode_count": 1,
+            "resolved_search_window_hz": [0.0, 1.125e13],
+            "window_completeness": {
+                "policy": "best_effort",
+                "status": "not_certified",
+                "certification_method": "none",
+                "estimated_modes_in_window": 1,
+                "certified_modes_in_window": 0,
+                "additional_modes_may_exist": True,
+            },
+            "subwindows": [
+                {
+                    "index": 0,
+                    "requested_hz": [1.0, 1.0e13],
+                    "search_hz": [0.0, 1.125e13],
+                    "shift_hz": 5.0e12,
+                    "shift_frequency_hz": 5.0e12,
+                    "shift_omega_rad_s": 3.141592653589793e13,
+                    "outer_iterations": 0,
+                    "linear_iterations_total": 0,
+                    "candidate_modes": 1,
+                    "accepted_modes": 1,
+                    "residual_max": 0.0,
+                    "stop_reason": "window_exhausted",
+                }
+            ],
+        }
+    )
+    solver_path.write_text(json.dumps(solver))
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["diagnostics"].pop("required_operator_payload_kind", None)
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(tmp_path, "--require-reference-full-2x2-floquet")
+
+    assert result.returncode != 0
+    assert "manifest.diagnostics.required_operator_payload_kind" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_reference_full_2x2_floquet_window_without_manifest_periodic_pair_contract_flag(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(tmp_path)
+    solver_path = tmp_path / "eigen" / "diagnostics" / "solver.v1.json"
+    solver = json.loads(solver_path.read_text())
+    solver.update(
+        {
+            "production_solver_available": False,
+            "frequency_window_solver_policy": (
+                "reference_k_path_window_filter_not_shift_invert_or_feast"
+            ),
+            "production_cpu_rejection_reason": (
+                "production_cpu_modal_nonzero_k_floquet_operator_missing"
+            ),
+            "production_cpu_rejection_scope": "selected_spectrum_nonzero_k_floquet_modal",
+            "required_operator_contract": (
+                "bloch_floquet_tangent_operator_with_periodic_pairs"
+            ),
+            "required_operator_payload_kind": "bloch_floquet_tangent_operator",
+            "modal_periodic_pair_contract_available": False,
+            "requested_window_hz": [1.0, 1.0e13],
+            "requested_mode_count": 1,
+            "resolved_search_window_hz": [0.0, 1.125e13],
+            "window_completeness": {
+                "policy": "best_effort",
+                "status": "not_certified",
+                "certification_method": "none",
+                "estimated_modes_in_window": 1,
+                "certified_modes_in_window": 0,
+                "additional_modes_may_exist": True,
+            },
+            "subwindows": [
+                {
+                    "index": 0,
+                    "requested_hz": [1.0, 1.0e13],
+                    "search_hz": [0.0, 1.125e13],
+                    "shift_hz": 5.0e12,
+                    "shift_frequency_hz": 5.0e12,
+                    "shift_omega_rad_s": 3.141592653589793e13,
+                    "outer_iterations": 0,
+                    "linear_iterations_total": 0,
+                    "candidate_modes": 1,
+                    "accepted_modes": 1,
+                    "residual_max": 0.0,
+                    "stop_reason": "window_exhausted",
+                }
+            ],
+        }
+    )
+    solver_path.write_text(json.dumps(solver))
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["diagnostics"].pop("modal_periodic_pair_contract_available", None)
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(tmp_path, "--require-reference-full-2x2-floquet")
+
+    assert result.returncode != 0
+    assert "manifest.diagnostics.modal_periodic_pair_contract_available" in (
+        result.stderr + result.stdout
+    )
+
+
 def test_validator_accepts_reference_full_2x2_floquet_window_with_reference_policy(
     tmp_path: Path,
 ) -> None:
@@ -2763,6 +3294,7 @@ def test_validator_accepts_reference_full_2x2_floquet_window_with_reference_poli
             "required_operator_contract": (
                 "bloch_floquet_tangent_operator_with_periodic_pairs"
             ),
+            "required_operator_payload_kind": "bloch_floquet_tangent_operator",
             "modal_periodic_pair_contract_available": False,
             "requested_window_hz": [1.0, 1.0e13],
             "requested_mode_count": 1,
@@ -2798,6 +3330,139 @@ def test_validator_accepts_reference_full_2x2_floquet_window_with_reference_poli
     result = run_validator(tmp_path, "--require-reference-full-2x2-floquet")
 
     assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_accepts_reference_full_2x2_floquet_window_with_dynamic_demag_rejection(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(tmp_path)
+    solver_path = tmp_path / "eigen" / "diagnostics" / "solver.v1.json"
+    solver = json.loads(solver_path.read_text())
+    dynamic_demag_rejection = {
+        "production_cpu_rejection_reason": (
+            "production_cpu_modal_dynamic_demag_k_operator_missing"
+        ),
+        "production_cpu_rejection_scope": (
+            "selected_spectrum_nonzero_k_floquet_modal_dynamic_demag"
+        ),
+        "required_operator_contract": (
+            "bloch_floquet_tangent_operator_with_dynamic_demag_k"
+        ),
+        "required_operator_payload_kind": "bloch_floquet_tangent_operator",
+        "required_demag_payload_kind": "dynamic_demag_k_operator",
+        "dynamic_demag_operator_source": "missing_numeric_fem_demag_k",
+        "modal_periodic_pair_contract_available": False,
+    }
+    solver.update(
+        {
+            "production_solver_available": False,
+            "frequency_window_solver_policy": (
+                "reference_k_path_window_filter_not_shift_invert_or_feast"
+            ),
+            **dynamic_demag_rejection,
+            "requested_window_hz": [1.0, 1.0e13],
+            "requested_mode_count": 1,
+            "resolved_search_window_hz": [0.0, 1.125e13],
+            "window_completeness": {
+                "policy": "best_effort",
+                "status": "not_certified",
+                "certification_method": "none",
+                "estimated_modes_in_window": 1,
+                "certified_modes_in_window": 0,
+                "additional_modes_may_exist": True,
+            },
+            "subwindows": [
+                {
+                    "index": 0,
+                    "requested_hz": [1.0, 1.0e13],
+                    "search_hz": [0.0, 1.125e13],
+                    "shift_hz": 5.0e12,
+                    "shift_frequency_hz": 5.0e12,
+                    "shift_omega_rad_s": 3.141592653589793e13,
+                    "outer_iterations": 0,
+                    "linear_iterations_total": 0,
+                    "candidate_modes": 1,
+                    "accepted_modes": 1,
+                    "residual_max": 0.0,
+                    "stop_reason": "window_exhausted",
+                }
+            ],
+        }
+    )
+    solver_path.write_text(json.dumps(solver))
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["diagnostics"].update(dynamic_demag_rejection)
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(tmp_path, "--require-reference-full-2x2-floquet")
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_rejects_reference_full_2x2_floquet_window_without_dynamic_demag_payload_kind(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(tmp_path)
+    solver_path = tmp_path / "eigen" / "diagnostics" / "solver.v1.json"
+    solver = json.loads(solver_path.read_text())
+    solver.update(
+        {
+            "production_solver_available": False,
+            "frequency_window_solver_policy": (
+                "reference_k_path_window_filter_not_shift_invert_or_feast"
+            ),
+            "production_cpu_rejection_reason": (
+                "production_cpu_modal_dynamic_demag_k_operator_missing"
+            ),
+            "production_cpu_rejection_scope": (
+                "selected_spectrum_nonzero_k_floquet_modal_dynamic_demag"
+            ),
+            "required_operator_contract": (
+                "bloch_floquet_tangent_operator_with_dynamic_demag_k"
+            ),
+            "required_operator_payload_kind": "bloch_floquet_tangent_operator",
+            "dynamic_demag_operator_source": "missing_numeric_fem_demag_k",
+            "modal_periodic_pair_contract_available": False,
+            "requested_window_hz": [1.0, 1.0e13],
+            "requested_mode_count": 1,
+            "resolved_search_window_hz": [0.0, 1.125e13],
+            "window_completeness": {
+                "policy": "best_effort",
+                "status": "not_certified",
+                "certification_method": "none",
+                "estimated_modes_in_window": 1,
+                "certified_modes_in_window": 0,
+                "additional_modes_may_exist": True,
+            },
+            "subwindows": [
+                {
+                    "index": 0,
+                    "requested_hz": [1.0, 1.0e13],
+                    "search_hz": [0.0, 1.125e13],
+                    "shift_hz": 5.0e12,
+                    "shift_frequency_hz": 5.0e12,
+                    "shift_omega_rad_s": 3.141592653589793e13,
+                    "outer_iterations": 0,
+                    "linear_iterations_total": 0,
+                    "candidate_modes": 1,
+                    "accepted_modes": 1,
+                    "residual_max": 0.0,
+                    "stop_reason": "window_exhausted",
+                }
+            ],
+        }
+    )
+    solver_path.write_text(json.dumps(solver))
+
+    result = run_validator(tmp_path, "--require-reference-full-2x2-floquet")
+
+    assert result.returncode != 0
+    assert "solver_diagnostics.required_demag_payload_kind" in (
+        result.stderr + result.stdout
+    )
 
 
 def test_validator_rejects_reference_k_path_when_production_modal_k_path_required(
@@ -2888,6 +3553,23 @@ def test_validator_rejects_production_modal_k_path_without_dispersion_path_metad
     assert "eigen/dispersion/path.json" in (result.stderr + result.stdout)
 
 
+def test_validator_rejects_production_modal_k_path_with_non_eigen_stage_id(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(tmp_path)
+    mark_production_shift_invert_k_path_fixture(tmp_path)
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["stage_id"] = "frequency_response"
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(tmp_path, "--require-production-modal-k-path")
+
+    assert result.returncode != 0
+    assert "manifest.stage_id" in (result.stderr + result.stdout)
+
+
 def test_validator_rejects_production_modal_k_path_without_dispersion_capabilities(
     tmp_path: Path,
 ) -> None:
@@ -2939,6 +3621,253 @@ def test_validator_rejects_production_modal_k_path_with_dynamic_demag_realizatio
 
     assert result.returncode != 0
     assert "manifest.resolved_execution.demag_realization" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_production_modal_k_path_without_native_cpu_backend(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(tmp_path)
+    mark_production_shift_invert_k_path_fixture(tmp_path)
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["resolved_execution"]["native_backend"] = "reference_cpu"
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(tmp_path, "--require-production-modal-k-path")
+
+    assert result.returncode != 0
+    assert "manifest.resolved_execution.native_backend" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_production_modal_k_path_with_gpu_requested_device(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(tmp_path)
+    mark_production_shift_invert_k_path_fixture(tmp_path)
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["requested_execution"]["device"] = "gpu"
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(tmp_path, "--require-production-modal-k-path")
+
+    assert result.returncode != 0
+    assert "manifest.requested_execution.device" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_production_modal_k_path_with_non_fem_requested_backend(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(tmp_path)
+    mark_production_shift_invert_k_path_fixture(tmp_path)
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["requested_execution"]["backend"] = "fdm"
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(tmp_path, "--require-production-modal-k-path")
+
+    assert result.returncode != 0
+    assert "manifest.requested_execution.backend" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_production_modal_k_path_with_gpu_resolved_device(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(tmp_path)
+    mark_production_shift_invert_k_path_fixture(tmp_path)
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["resolved_execution"]["device"] = "gpu"
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(tmp_path, "--require-production-modal-k-path")
+
+    assert result.returncode != 0
+    assert "manifest.resolved_execution.device" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_production_modal_k_path_with_non_fem_resolved_backend(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(tmp_path)
+    mark_production_shift_invert_k_path_fixture(tmp_path)
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["resolved_execution"]["backend"] = "fdm"
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(tmp_path, "--require-production-modal-k-path")
+
+    assert result.returncode != 0
+    assert "manifest.resolved_execution.backend" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_production_modal_k_path_without_slepc_algorithm(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(tmp_path)
+    mark_production_shift_invert_k_path_fixture(tmp_path)
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["resolved_execution"]["solver_algorithm"] = "reference_full_2x2_tangent"
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(tmp_path, "--require-production-modal-k-path")
+
+    assert result.returncode != 0
+    assert "manifest.resolved_execution.solver_algorithm" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_production_modal_k_path_without_modal_solve_kind(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(tmp_path)
+    mark_production_shift_invert_k_path_fixture(tmp_path)
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["resolved_execution"]["solve_kind"] = "driven_response"
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(tmp_path, "--require-production-modal-k-path")
+
+    assert result.returncode != 0
+    assert "manifest.resolved_execution.solve_kind" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_production_modal_k_path_without_modal_solver_family_intent(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(tmp_path)
+    mark_production_shift_invert_k_path_fixture(tmp_path)
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["requested_execution"]["solver_family"] = "driven_response"
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(tmp_path, "--require-production-modal-k-path")
+
+    assert result.returncode != 0
+    assert "manifest.requested_execution.solver_family" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_production_modal_k_path_without_dispersion_modal_calculation_mode(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(tmp_path)
+    mark_production_shift_invert_k_path_fixture(tmp_path)
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["requested_execution"]["calculation_mode"] = "frequency_response"
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(tmp_path, "--require-production-modal-k-path")
+
+    assert result.returncode != 0
+    assert "manifest.requested_execution.calculation_mode" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_production_modal_k_path_without_modal_solve_equation(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(tmp_path)
+    mark_production_shift_invert_k_path_fixture(tmp_path)
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["requested_execution"]["solve_equation"] = "(i omega B - A) q = b"
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(tmp_path, "--require-production-modal-k-path")
+
+    assert result.returncode != 0
+    assert "manifest.requested_execution.solve_equation" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_production_modal_k_path_without_production_resolution(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(tmp_path)
+    mark_production_shift_invert_k_path_fixture(tmp_path)
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["resolved_execution"]["reference_or_production"] = "reference"
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(tmp_path, "--require-production-modal-k-path")
+
+    assert result.returncode != 0
+    assert "manifest.resolved_execution.reference_or_production" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_production_modal_k_path_with_driven_response_artifact(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(tmp_path)
+    mark_production_shift_invert_k_path_fixture(tmp_path)
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["artifacts"]["response_sweep_v1_path"] = "response/sweep.v1.json"
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(tmp_path, "--require-production-modal-k-path")
+
+    assert result.returncode != 0
+    assert "manifest.artifacts.response_sweep_v1_path" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_production_modal_k_path_without_modal_artifact_capability(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(tmp_path)
+    mark_production_shift_invert_k_path_fixture(tmp_path)
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["capabilities"]["modal_artifact_available"] = False
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(tmp_path, "--require-production-modal-k-path")
+
+    assert result.returncode != 0
+    assert "manifest.capabilities.modal_artifact_available" in (
         result.stderr + result.stdout
     )
 
@@ -3106,10 +4035,12 @@ def test_validator_rejects_production_modal_k_path_manifest_tracking_drift(
     mark_production_shift_invert_k_path_fixture(tmp_path)
     manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
     manifest = json.loads(manifest_path.read_text())
+    periodic_mesh_certificate = manifest["diagnostics"]["periodic_mesh_certificate"]
     manifest["diagnostics"] = {
         "tracking_score_source": "frequency_score_fallback",
         "modal_overlap_available": False,
         "modal_overlap_unavailable_reason": "mode_vectors_unavailable",
+        "periodic_mesh_certificate": periodic_mesh_certificate,
     }
     manifest_path.write_text(json.dumps(manifest))
 
@@ -3450,6 +4381,104 @@ def test_validator_rejects_production_modal_k_path_without_transport_policy(
     )
 
 
+def test_validator_rejects_production_modal_k_path_without_bloch_payload(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(tmp_path)
+    mark_production_shift_invert_k_path_fixture(tmp_path)
+    solver_path = tmp_path / "eigen" / "diagnostics" / "solver.v1.json"
+    solver = json.loads(solver_path.read_text())
+    solver.pop("operator_diagnostics", None)
+    solver_path.write_text(json.dumps(solver))
+
+    result = run_validator(tmp_path, "--require-production-modal-k-path")
+
+    assert result.returncode != 0
+    assert "solver_diagnostics.operator_diagnostics" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_production_modal_k_path_without_periodic_pair_contract(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(tmp_path)
+    mark_production_shift_invert_k_path_fixture(tmp_path)
+    solver_path = tmp_path / "eigen" / "diagnostics" / "solver.v1.json"
+    solver = json.loads(solver_path.read_text())
+    solver.pop("modal_periodic_pair_contract_available", None)
+    solver.pop("floquet_periodic_pair_count", None)
+    solver_path.write_text(json.dumps(solver))
+
+    result = run_validator(tmp_path, "--require-production-modal-k-path")
+
+    assert result.returncode != 0
+    assert "solver_diagnostics.modal_periodic_pair_contract_available" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_production_modal_k_path_without_periodic_mesh_certificate(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(tmp_path)
+    mark_production_shift_invert_k_path_fixture(tmp_path)
+    solver_path = tmp_path / "eigen" / "diagnostics" / "solver.v1.json"
+    solver = json.loads(solver_path.read_text())
+    solver.pop("periodic_mesh_certificate", None)
+    solver_path.write_text(json.dumps(solver))
+
+    result = run_validator(tmp_path, "--require-production-modal-k-path")
+
+    assert result.returncode != 0
+    assert "solver_diagnostics.periodic_mesh_certificate" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_production_modal_k_path_manifest_pair_map_hash_drift(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(tmp_path)
+    mark_production_shift_invert_k_path_fixture(tmp_path)
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["diagnostics"]["periodic_mesh_certificate"]["magnetic_pair_map_sha256"] = (
+        "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+    )
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(tmp_path, "--require-production-modal-k-path")
+
+    assert result.returncode != 0
+    assert "manifest.diagnostics.periodic_mesh_certificate.magnetic_pair_map_sha256" in (
+        result.stderr + result.stdout
+    )
+
+
+def test_validator_rejects_production_modal_k_path_with_demag_payload_claim(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(tmp_path)
+    mark_production_shift_invert_k_path_fixture(tmp_path)
+    solver_path = tmp_path / "eigen" / "diagnostics" / "solver.v1.json"
+    solver = json.loads(solver_path.read_text())
+    solver["operator_diagnostics"]["demag_payload_kind"] = "dynamic_demag_k_operator"
+    solver_path.write_text(json.dumps(solver))
+
+    result = run_validator(tmp_path, "--require-production-modal-k-path")
+
+    assert result.returncode != 0
+    assert "solver_diagnostics.operator_diagnostics.demag_payload_kind" in (
+        result.stderr + result.stdout
+    )
+
+
 def test_validator_rejects_reference_full_2x2_floquet_without_transport_policy(
     tmp_path: Path,
 ) -> None:
@@ -3663,10 +4692,219 @@ def test_validator_accepts_k0_kittel_periodic_airbox_contract_with_convergence(
         demag_kind="periodic_airbox_k0",
     )
     write_k0_kittel_convergence_table(tmp_path)
+    mark_poisson_airbox_k0_solver_fixture(tmp_path)
+    mark_relaxed_equilibrium_fixture(tmp_path)
 
     result = run_validator(tmp_path, "--require-k0-kittel-periodic-airbox-demag")
 
     assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_rejects_periodic_airbox_kittel_without_poisson_airbox_solver(
+    tmp_path: Path,
+) -> None:
+    fields = (20e-3 / MU0, 50e-3 / MU0, 100e-3 / MU0)
+    frequencies = tuple(k0_kittel_expected_frequency_hz(field) for field in fields)
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(
+        tmp_path,
+        frequencies_hz=frequencies,
+        k_vectors_rad_m=((0.0, 0.0, 0.0),) * len(fields),
+    )
+    write_k0_kittel_field_sweep_metadata(tmp_path, demag_kind="periodic_airbox_k0")
+    write_k0_kittel_summary_and_points(
+        tmp_path,
+        fields,
+        frequencies,
+        demag_kind="periodic_airbox_k0",
+    )
+    write_k0_kittel_convergence_table(tmp_path)
+    mark_relaxed_equilibrium_fixture(tmp_path)
+
+    result = run_validator(tmp_path, "--require-k0-kittel-periodic-airbox-demag")
+
+    assert result.returncode != 0
+    assert "k0_poisson_airbox_cpu_full_coupled_slepc" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_periodic_airbox_kittel_with_reference_solver_model(
+    tmp_path: Path,
+) -> None:
+    fields = (20e-3 / MU0, 50e-3 / MU0, 100e-3 / MU0)
+    frequencies = tuple(k0_kittel_expected_frequency_hz(field) for field in fields)
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(
+        tmp_path,
+        frequencies_hz=frequencies,
+        k_vectors_rad_m=((0.0, 0.0, 0.0),) * len(fields),
+    )
+    write_k0_kittel_field_sweep_metadata(tmp_path, demag_kind="periodic_airbox_k0")
+    write_k0_kittel_summary_and_points(
+        tmp_path,
+        fields,
+        frequencies,
+        demag_kind="periodic_airbox_k0",
+    )
+    write_k0_kittel_convergence_table(tmp_path)
+    mark_poisson_airbox_k0_solver_fixture(tmp_path)
+    mark_relaxed_equilibrium_fixture(tmp_path)
+    solver_path = tmp_path / "eigen" / "diagnostics" / "solver.v1.json"
+    solver = json.loads(solver_path.read_text())
+    solver["solver_model"] = "reference_full_2x2_tangent"
+    solver_path.write_text(json.dumps(solver))
+
+    result = run_validator(tmp_path, "--require-k0-kittel-periodic-airbox-demag")
+
+    assert result.returncode != 0
+    assert "solver_diagnostics.solver_model" in (result.stderr + result.stdout)
+
+
+def test_validator_rejects_periodic_airbox_kittel_without_relaxed_equilibrium(
+    tmp_path: Path,
+) -> None:
+    fields = (20e-3 / MU0, 50e-3 / MU0, 100e-3 / MU0)
+    frequencies = tuple(k0_kittel_expected_frequency_hz(field) for field in fields)
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(
+        tmp_path,
+        frequencies_hz=frequencies,
+        k_vectors_rad_m=((0.0, 0.0, 0.0),) * len(fields),
+    )
+    write_k0_kittel_field_sweep_metadata(tmp_path, demag_kind="periodic_airbox_k0")
+    write_k0_kittel_summary_and_points(
+        tmp_path,
+        fields,
+        frequencies,
+        demag_kind="periodic_airbox_k0",
+    )
+    write_k0_kittel_convergence_table(tmp_path)
+    mark_poisson_airbox_k0_solver_fixture(tmp_path)
+
+    result = run_validator(tmp_path, "--require-k0-kittel-periodic-airbox-demag")
+
+    assert result.returncode != 0
+    assert "relaxed_initial_state" in (result.stderr + result.stdout)
+
+
+def test_validator_accepts_periodic_airbox_kittel_relaxed_stage_handoff(
+    tmp_path: Path,
+) -> None:
+    fields = (20e-3 / MU0, 50e-3 / MU0, 100e-3 / MU0)
+    frequencies = tuple(k0_kittel_expected_frequency_hz(field) for field in fields)
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(
+        tmp_path,
+        frequencies_hz=frequencies,
+        k_vectors_rad_m=((0.0, 0.0, 0.0),) * len(fields),
+    )
+    write_k0_kittel_field_sweep_metadata(tmp_path, demag_kind="periodic_airbox_k0")
+    write_k0_kittel_summary_and_points(
+        tmp_path,
+        fields,
+        frequencies,
+        demag_kind="periodic_airbox_k0",
+    )
+    write_k0_kittel_convergence_table(tmp_path)
+    mark_poisson_airbox_k0_solver_fixture(tmp_path)
+    mark_relaxed_equilibrium_fixture(tmp_path, steps=0, handoff="stage_continuation")
+
+    result = run_validator(tmp_path, "--require-k0-kittel-periodic-airbox-demag")
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_periodic_airbox_convergence_validator_accepts_two_mesh_resolutions(
+    tmp_path: Path,
+) -> None:
+    roots = [tmp_path / "coarse", tmp_path / "fine"]
+    fields = (20e-3 / MU0, 50e-3 / MU0, 100e-3 / MU0)
+    frequencies = tuple(k0_kittel_expected_frequency_hz(field) for field in fields)
+    for root, mesh_resolution in zip(roots, (20e-9, 10e-9), strict=True):
+        write_eigen_fixture(root)
+        expand_reference_floquet_fixture_to_k_path(
+            root,
+            frequencies_hz=frequencies,
+            k_vectors_rad_m=((0.0, 0.0, 0.0),) * len(fields),
+        )
+        write_k0_kittel_field_sweep_metadata(root, demag_kind="periodic_airbox_k0")
+        write_k0_kittel_summary_and_points(
+            root,
+            fields,
+            frequencies,
+            demag_kind="periodic_airbox_k0",
+        )
+        write_k0_kittel_convergence_table(root, mesh_resolution_m=mesh_resolution)
+        mark_poisson_airbox_k0_solver_fixture(root)
+        mark_relaxed_equilibrium_fixture(root)
+
+    result = run_periodic_airbox_convergence_validator(*roots)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert '"sample_count": 2' in result.stdout
+
+
+def test_periodic_airbox_convergence_validator_rejects_single_mesh_resolution(
+    tmp_path: Path,
+) -> None:
+    roots = [tmp_path / "a", tmp_path / "b"]
+    fields = (20e-3 / MU0, 50e-3 / MU0, 100e-3 / MU0)
+    frequencies = tuple(k0_kittel_expected_frequency_hz(field) for field in fields)
+    for root in roots:
+        write_eigen_fixture(root)
+        expand_reference_floquet_fixture_to_k_path(
+            root,
+            frequencies_hz=frequencies,
+            k_vectors_rad_m=((0.0, 0.0, 0.0),) * len(fields),
+        )
+        write_k0_kittel_field_sweep_metadata(root, demag_kind="periodic_airbox_k0")
+        write_k0_kittel_summary_and_points(
+            root,
+            fields,
+            frequencies,
+            demag_kind="periodic_airbox_k0",
+        )
+        write_k0_kittel_convergence_table(root, mesh_resolution_m=20e-9)
+        mark_poisson_airbox_k0_solver_fixture(root)
+        mark_relaxed_equilibrium_fixture(root)
+
+    result = run_periodic_airbox_convergence_validator(*roots)
+
+    assert result.returncode != 0
+    assert "distinct mesh resolutions" in (result.stderr + result.stdout)
+
+
+def test_periodic_airbox_convergence_validator_rejects_reference_solver_model(
+    tmp_path: Path,
+) -> None:
+    roots = [tmp_path / "coarse", tmp_path / "fine"]
+    fields = (20e-3 / MU0, 50e-3 / MU0, 100e-3 / MU0)
+    frequencies = tuple(k0_kittel_expected_frequency_hz(field) for field in fields)
+    for root, mesh_resolution in zip(roots, (20e-9, 10e-9), strict=True):
+        write_eigen_fixture(root)
+        expand_reference_floquet_fixture_to_k_path(
+            root,
+            frequencies_hz=frequencies,
+            k_vectors_rad_m=((0.0, 0.0, 0.0),) * len(fields),
+        )
+        write_k0_kittel_field_sweep_metadata(root, demag_kind="periodic_airbox_k0")
+        write_k0_kittel_summary_and_points(
+            root,
+            fields,
+            frequencies,
+            demag_kind="periodic_airbox_k0",
+        )
+        write_k0_kittel_convergence_table(root, mesh_resolution_m=mesh_resolution)
+        mark_poisson_airbox_k0_solver_fixture(root)
+        mark_relaxed_equilibrium_fixture(root)
+    solver_path = roots[0] / "eigen" / "diagnostics" / "solver.v1.json"
+    solver = json.loads(solver_path.read_text())
+    solver["solver_model"] = "reference_full_2x2_tangent"
+    solver_path.write_text(json.dumps(solver))
+
+    result = run_periodic_airbox_convergence_validator(*roots)
+
+    assert result.returncode != 0
+    assert "solver_model" in (result.stderr + result.stdout)
 
 
 def test_validator_rejects_synthetic_k0_kittel_for_periodic_airbox_gate(
@@ -3707,6 +4945,8 @@ def test_validator_rejects_k0_kittel_periodic_airbox_without_convergence(
         frequencies,
         demag_kind="periodic_airbox_k0",
     )
+    mark_poisson_airbox_k0_solver_fixture(tmp_path)
+    mark_relaxed_equilibrium_fixture(tmp_path)
 
     result = run_validator(tmp_path, "--require-k0-kittel-demag")
 

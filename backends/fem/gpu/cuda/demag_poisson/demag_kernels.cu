@@ -68,6 +68,20 @@ __global__ void demag_recovery_csr_kernel(
     h_component[row] = value;
 }
 
+__global__ void lift_periodic_reduced_scalar_to_full_kernel(
+    const double *__restrict__ reduced_values,
+    const uint32_t *__restrict__ periodic_reduced_node,
+    double *__restrict__ full_values,
+    int rows)
+{
+    const int row = blockIdx.x * blockDim.x + threadIdx.x;
+    if (row >= rows) {
+        return;
+    }
+    const uint32_t reduced = periodic_reduced_node[row];
+    full_values[row] = reduced_values[reduced];
+}
+
 __global__ void demag_energy_blocks_kernel(
     const double *__restrict__ mx,
     const double *__restrict__ my,
@@ -175,6 +189,21 @@ void fullmag_cuda_demag_recovery_csr(
         u,
         magnetic_node_mask,
         h_component,
+        rows);
+}
+
+void fullmag_cuda_lift_periodic_reduced_scalar_to_full(
+    const double *reduced_values,
+    const uint32_t *periodic_reduced_node,
+    double *full_values,
+    int rows,
+    cudaStream_t stream)
+{
+    const int num_blocks = (rows + kBlockSize - 1) / kBlockSize;
+    lift_periodic_reduced_scalar_to_full_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
+        reduced_values,
+        periodic_reduced_node,
+        full_values,
         rows);
 }
 

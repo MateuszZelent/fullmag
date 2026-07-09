@@ -184,6 +184,41 @@ bool modal_request_has_dynamic_demag_k_operator_payload(
                "\"demag_payload_kind\":\"dynamic_demag_k_operator\"") != nullptr;
 }
 
+const char *modal_request_gated_operator_term(
+    const ModalEigenRequest &request) noexcept
+{
+    const char *diagnostics = request.operator_request.operator_diagnostics_json;
+    if (diagnostics == nullptr ||
+        std::strstr(diagnostics, "\"operator_terms_included\"") == nullptr) {
+        return nullptr;
+    }
+    if (std::strstr(diagnostics, "\"dynamic_demag\"") != nullptr) {
+        return "dynamic_demag";
+    }
+    if (std::strstr(diagnostics, "\"floquet_airbox\"") != nullptr) {
+        return "floquet_airbox";
+    }
+    if (std::strstr(diagnostics, "\"periodic_poisson\"") != nullptr) {
+        return "periodic_poisson";
+    }
+    if (std::strstr(diagnostics, "\"interfacial_dmi\"") != nullptr) {
+        return "interfacial_dmi";
+    }
+    if (std::strstr(diagnostics, "\"bulk_dmi\"") != nullptr) {
+        return "bulk_dmi";
+    }
+    if (std::strstr(diagnostics, "\"dmi\"") != nullptr) {
+        return "dmi";
+    }
+    if (std::strstr(diagnostics, "\"demag\"") != nullptr) {
+        return "demag";
+    }
+    if (std::strstr(diagnostics, "\"magnetoelastic\"") != nullptr) {
+        return "magnetoelastic";
+    }
+    return nullptr;
+}
+
 FrequencyDomainContractResult nonzero_k_floquet_modal_operator_missing(
     const ModalEigenRequest &request) noexcept
 {
@@ -218,6 +253,48 @@ FrequencyDomainContractResult nonzero_k_floquet_modal_operator_missing(
         "\"unsupported_reason\":\"production_cpu_modal_nonzero_k_floquet_operator_missing\","
         "\"required_operator_contract\":\"bloch_floquet_tangent_operator_with_periodic_pairs\","
         "\"required_operator_payload_kind\":\"bloch_floquet_tangent_operator\"}";
+    result.result_json = with_modal_request_diagnostics(result.result_json, request);
+    result.artifact_manifest_path.clear();
+    return result;
+}
+
+FrequencyDomainContractResult nonzero_k_floquet_modal_gated_operator_terms_present(
+    const ModalEigenRequest &request,
+    const char *gated_operator_term) noexcept
+{
+    FrequencyDomainContractResult result{};
+    result.status = FrequencyDomainStatus::unavailable;
+    result.error_message =
+        "native FEM modal_eigen production CPU nonzero-k Floquet operator diagnostics include gated production terms";
+    const std::string term =
+        gated_operator_term == nullptr ? "unknown" : gated_operator_term;
+    result.diagnostics_json =
+        "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\","
+        "\"study_product\":\"modal_eigen\","
+        "\"status\":\"unavailable\","
+        "\"complete\":false,"
+        "\"execution_lane\":\"production_cpu\","
+        "\"solver_adapter_status\":\"unsupported\","
+        "\"unsupported_reason\":\"production_cpu_modal_gated_operator_terms_present\","
+        "\"production_cpu_rejection_reason\":\"production_cpu_modal_gated_operator_terms_present\","
+        "\"production_cpu_rejection_scope\":\"selected_spectrum_nonzero_k_floquet_modal_operator_terms\","
+        "\"required_operator_contract\":\"bloch_floquet_tangent_operator_without_gated_terms\","
+        "\"gated_operator_term\":\"" +
+        escape_json_string(term.c_str()) +
+        "\",\"spectral_transform\":\"shift_invert\","
+        "\"phasor_convention\":\"exp_i_omega_t\"}";
+    result.diagnostics_json =
+        with_modal_request_diagnostics(result.diagnostics_json, request);
+    result.result_json =
+        "{\"schema_version\":\"frequency_domain_modal_result.v1\","
+        "\"study_product\":\"modal_eigen\","
+        "\"status\":\"unavailable\","
+        "\"accepted_mode_count\":0,"
+        "\"unsupported_reason\":\"production_cpu_modal_gated_operator_terms_present\","
+        "\"production_cpu_rejection_reason\":\"production_cpu_modal_gated_operator_terms_present\","
+        "\"required_operator_contract\":\"bloch_floquet_tangent_operator_without_gated_terms\","
+        "\"gated_operator_term\":\"" +
+        escape_json_string(term.c_str()) + "\"}";
     result.result_json = with_modal_request_diagnostics(result.result_json, request);
     result.artifact_manifest_path.clear();
     return result;
@@ -2104,6 +2181,12 @@ FrequencyDomainContractResult production_cpu_modal_eigen_unavailable(
     if (modal_request_is_nonzero_k_floquet(request)) {
         if (!modal_request_has_bloch_floquet_tangent_operator_payload(request)) {
             return nonzero_k_floquet_modal_operator_missing(request);
+        }
+        if (const char *gated_operator_term =
+                modal_request_gated_operator_term(request)) {
+            return nonzero_k_floquet_modal_gated_operator_terms_present(
+                request,
+                gated_operator_term);
         }
         if (request.operator_request.include_demag != 0 &&
             !modal_request_has_dynamic_demag_k_operator_payload(request)) {

@@ -1507,6 +1507,8 @@ void gpu_demag_poisson_is_owned_by_cuda_demag_poisson_module() {
         read_text_file(root / "gpu" / "cuda" / "state" / "gpu_state.cpp");
     const std::string module =
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "poisson.cpp");
+    const std::string demag_kernels =
+        read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "demag_kernels.cu");
     const std::string operators =
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "operators.cpp");
     const std::string hypre_solver =
@@ -1553,8 +1555,12 @@ void gpu_demag_poisson_is_owned_by_cuda_demag_poisson_module() {
         hypre_solver_header.find("GPU CUDA Poisson demag Hypre device solver header") !=
                 std::string::npos &&
             hypre_solver_header.find("bool initialize_demag_poisson_hypre_device_solver(") !=
+                std::string::npos &&
+            hypre_solver_header.find("bool reset_demag_poisson_hypre_device_solver_for_fresh_rhs(") !=
+                std::string::npos &&
+            hypre_solver_header.find("bool set_demag_poisson_hypre_solver_iterative_mode(") !=
                 std::string::npos,
-        "GPU CUDA Poisson demag Hypre solver header must declare solver setup");
+        "GPU CUDA Poisson demag Hypre solver header must declare solver setup, fresh-RHS solver reset, and per-solve initial-guess policy");
     check(
         stage_compute_header.find("GPU CUDA Poisson demag stage compute header") !=
                 std::string::npos &&
@@ -1568,6 +1574,8 @@ void gpu_demag_poisson_is_owned_by_cuda_demag_poisson_module() {
                 std::string::npos &&
             demag_state_header.find("double *poisson_rhs") != std::string::npos &&
             demag_state_header.find("double *poisson_solution") !=
+                std::string::npos &&
+            demag_state_header.find("double *poisson_solution_full") !=
                 std::string::npos &&
             demag_state_header.find("FemGpuComponentField poisson_gradient") !=
                 std::string::npos &&
@@ -1662,8 +1670,14 @@ void gpu_demag_poisson_is_owned_by_cuda_demag_poisson_module() {
                 std::string::npos &&
             hypre_solver.find("void read_demag_poisson_hypre_solver_stats(") !=
                 std::string::npos &&
+            hypre_solver.find("bool set_demag_poisson_hypre_solver_iterative_mode(") !=
+                std::string::npos &&
+            hypre_solver.find("bool reset_demag_poisson_hypre_device_solver_for_fresh_rhs(") !=
+                std::string::npos &&
+            hypre_solver.find("SetZeroInitialIterate()") !=
+                std::string::npos &&
             hypre_solver.find("HypreBoomerAMG") != std::string::npos,
-        "GPU CUDA Poisson demag Hypre solver module must own solver policy setup and iteration stats");
+        "GPU CUDA Poisson demag Hypre solver module must own solver policy setup, fresh-RHS solver reset, MFEM zero-initial initial-guess policy, and iteration stats");
     check(
         hypre_solver.find("HYPRE_SetMemoryLocation(HYPRE_MEMORY_DEVICE)") !=
                 std::string::npos &&
@@ -1703,9 +1717,300 @@ void gpu_demag_poisson_is_owned_by_cuda_demag_poisson_module() {
             stage_compute.find("gpu.poisson_rhs") == std::string::npos,
         "GPU CUDA Poisson demag stage compute must use the Poisson demag device substate");
     check(
+        demag_kernels.find("fullmag_cuda_lift_periodic_reduced_scalar_to_full(") !=
+                std::string::npos &&
+            operators.find("const uint32_t scalar_col = periodic_scalar_column(ctx, col);") !=
+                std::string::npos &&
+            stage_compute.find("poisson_solution_for_recovery") ==
+                std::string::npos &&
+            stage_compute.find(
+                "gpu.demag_poisson.poisson_solution,\n"
+                "        gpu.mesh_regions.magnetic_node_mask,\n"
+                "        gpu.fields.h_demag.x") != std::string::npos &&
+            stage_compute.find(
+                "gpu.demag_poisson.poisson_solution,\n"
+                "        gpu.mesh_regions.magnetic_node_mask,\n"
+                "        gpu.fields.h_demag.y") != std::string::npos &&
+            stage_compute.find(
+                "gpu.demag_poisson.poisson_solution,\n"
+                "        gpu.mesh_regions.magnetic_node_mask,\n"
+                "        gpu.fields.h_demag.z") != std::string::npos,
+        "GPU periodic reduced Poisson demag recovery CSR uses reduced scalar columns, so device recovery must read reduced true-DOF phi; nodal phi lift belongs only to export");
+    check(
+        stage_compute.find("gpu.mesh_regions.magnetic_node_mask,\n        gpu.fields.h_demag.x") !=
+                std::string::npos &&
+            stage_compute.find("gpu.mesh_regions.magnetic_node_mask,\n        gpu.fields.h_demag.y") !=
+                std::string::npos &&
+            stage_compute.find("gpu.mesh_regions.magnetic_node_mask,\n        gpu.fields.h_demag.z") !=
+                std::string::npos &&
+            stage_compute.find("Pass nullptr mask so recovery computes H_demag at all nodes") ==
+                std::string::npos,
+        "GPU Poisson demag recovery must mask non-magnetic nodes before periodic projection to match CPU MFEM recovery");
+    check(
+            stage_compute.find("if (reset_initial_solution)") != std::string::npos &&
+            stage_compute.find("workspace->b_par->HypreWrite();") !=
+                std::string::npos &&
+            stage_compute.find("workspace->x_par->HypreWrite();") !=
+                std::string::npos &&
+            stage_compute.find("cudaMemset(\n                gpu.demag_poisson.poisson_solution") <
+                stage_compute.find("cudaEventRecord(workspace->compute_ready_event, stream)") &&
+            stage_compute.find("workspace->x_par->HypreWrite();") <
+                stage_compute.find("workspace->solver->Mult(*workspace->b_par, *workspace->x_par)") &&
+            stage_compute.find("reset_demag_poisson_hypre_device_solver_for_fresh_rhs(") !=
+                std::string::npos &&
+            stage_compute.find("reset_demag_poisson_hypre_device_solver_for_fresh_rhs(") <
+                stage_compute.find("workspace->solver->Mult(*workspace->b_par, *workspace->x_par)") &&
+            stage_compute.find("reset_demag_poisson_hypre_device_solver_for_fresh_rhs(") <
+                stage_compute.find("set_demag_poisson_hypre_solver_iterative_mode(") &&
+            stage_compute.find("set_demag_poisson_hypre_solver_iterative_mode(") <
+                stage_compute.find("workspace->solver->Mult(*workspace->b_par, *workspace->x_par)") &&
+            stage_compute.find("*workspace->x_par = 0.0") ==
+                std::string::npos &&
+            stage_compute.find("set_demag_poisson_hypre_solver_iterative_mode(") !=
+                std::string::npos &&
+            stage_compute.find("!reset_initial_solution") != std::string::npos,
+        "GPU CUDA Poisson demag fresh solves must publish externally written device buffers with HypreWrite and disable nonzero initial guesses before Mult");
+    check(
+        stage_compute.find("workspace->solver->Mult(*workspace->b_par, *workspace->x_par)") !=
+                std::string::npos &&
+            stage_compute.find("cudaDeviceSynchronize()") != std::string::npos &&
+            stage_compute.find("workspace->solver->Mult(*workspace->b_par, *workspace->x_par)") <
+                stage_compute.find("cudaDeviceSynchronize()") &&
+            stage_compute.find("cudaDeviceSynchronize()") <
+                stage_compute.find("fullmag_cuda_zero_indexed_values(\n        gpu.demag_poisson.poisson_solution"),
+        "GPU CUDA Poisson demag must synchronize after Hypre Mult before reading solution in recovery");
+    check(
+        read_text_file(root / "gpu" / "cuda" / "relaxation" / "pgbb_kernels.cu")
+                .find("periodic_representative_root") != std::string::npos,
+        "GPU static-periodic field projection must resolve representative roots before in-place field copies");
+    check(
         module.find("does not own public DSL semantics, MFEM context construction, RK stage orchestration, exchange, local interaction kernels, or C ABI entrypoints") !=
             std::string::npos,
         "GPU CUDA Poisson demag module must document its non-owning module boundary");
+}
+
+void gpu_frequency_domain_device_poisson_recovers_nodal_phi_from_true_dofs() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string api = read_text_file(root / "src" / "api.cpp");
+
+    const std::size_t fn = api.find("bool apply_device_demag_tangent_with_potential_f64(");
+    check(fn != std::string::npos, "C ABI GPU demag with-potential provider must exist");
+    const std::size_t end = api.find("#ifndef FULLMAG_FEM_WITH_SLEPC", fn);
+    check(end != std::string::npos, "C ABI GPU demag with-potential provider body must be bounded");
+    const std::string body = api.substr(fn, end - fn);
+
+    check(
+        body.find("full_phi.SetSize(static_cast<int>(node_count))") != std::string::npos &&
+            body.find("ctx.mesh.periodic_reduced_node") != std::string::npos &&
+            body.find("full_phi[static_cast<int>(node)] = reduced_phi[static_cast<int>(reduced)]") !=
+                std::string::npos,
+        "GPU demag with-potential provider must lift periodic reduced phi to full nodal phi before exporting phi");
+    check(
+        body.find("gpu_component_upload_aos(") != std::string::npos &&
+            body.find("cudaDeviceSynchronize()") != std::string::npos &&
+            body.find("gpu_component_upload_aos(") <
+                body.find("cudaDeviceSynchronize()") &&
+            body.find("cudaDeviceSynchronize()") <
+                body.find("compute_device_demag_for_device_stage_fresh("),
+        "GPU demag with-potential provider must synchronize the default-stream delta_m upload before launching compute-stream Poisson demag");
+    check(
+        body.find("gf_potential->SetFromTrueDofs(*workspace->x_par)") == std::string::npos,
+        "GPU demag with-potential provider must not pass the periodic reduced Hypre solution directly to SetFromTrueDofs");
+    check(
+        body.find("out_phi_len") != std::string::npos &&
+            body.find("gf_potential->Size()") != std::string::npos &&
+            body.find("audited_host_read(*gf_potential)") != std::string::npos,
+        "GPU demag with-potential provider must export nodal scalar potential from the recovered MFEM GridFunction");
+    check(
+        body.find("missing true-DOF to nodal phi recovery") == std::string::npos,
+        "GPU demag with-potential provider must not reject true-DOF Poisson layout after nodal phi recovery is implemented");
+    check(
+        body.find("poisson_solution,\n        out_delta_phi") == std::string::npos,
+        "GPU demag with-potential provider must not copy the raw true-DOF device Poisson solution as nodal phi");
+}
+
+void gpu_frequency_domain_operator_parity_reports_stiffness_components() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string solver =
+        read_text_file(root / "src" / "frequency_domain" / "driven_response_solver.cpp");
+    const std::string dense_validation =
+        read_text_file(root / "cpu" / "frequency_domain" / "dense_driven_response.hpp");
+
+    check(
+        solver.find("gpu_operator_parity_stiffness_without_demag_relative_l2_error") !=
+                std::string::npos &&
+            solver.find("gpu_operator_parity_demag_stiffness_component_relative_l2_error") !=
+                std::string::npos &&
+            solver.find("gpu_operator_parity_demag_tangent_relative_l2_error") !=
+                std::string::npos,
+        "GPU periodic-airbox operator parity diagnostics must split stiffness into no-demag and demag-component errors and compare demag_tangent buffers");
+    check(
+        solver.find("demag_tangent_provider_parity_available") != std::string::npos &&
+            solver.find("demag_tangent_provider_parity_host_l2_norm") != std::string::npos &&
+            solver.find("demag_tangent_provider_parity_with_potential_l2_norm") !=
+                std::string::npos &&
+            solver.find("demag_tangent_provider_parity_difference_l2_norm") !=
+                std::string::npos &&
+            solver.find("demag_tangent_provider_parity_relative_l2_error") !=
+                std::string::npos,
+        "periodic-airbox diagnostics must report host-vs-with-potential demag provider parity");
+    check(
+        dense_validation.find("demag_tangent_provider_parity_available") !=
+                std::string::npos &&
+            dense_validation.find("demag_tangent_provider_parity_host_l2_norm") !=
+                std::string::npos &&
+            dense_validation.find("demag_tangent_provider_parity_with_potential_l2_norm") !=
+                std::string::npos &&
+            dense_validation.find("demag_tangent_provider_parity_difference_l2_norm") !=
+                std::string::npos &&
+            dense_validation.find("demag_tangent_provider_parity_relative_l2_error") !=
+                std::string::npos,
+        "periodic-airbox DenseDrivenResponseValidationResult must carry host-vs-with-potential demag provider parity into solver artifacts");
+    const std::size_t dense_copy_fn = solver.find(
+        "void copy_demag_tangent_linearity_diagnostics(\n"
+        "    const MfemDrivenResponseValidationResult &source,\n"
+        "    DenseDrivenResponseValidationResult &target) noexcept");
+    check(dense_copy_fn != std::string::npos, "dense demag diagnostic copy function must exist");
+    const std::size_t dense_copy_end =
+        solver.find("void copy_production_cpu_preconditioner_diagnostics", dense_copy_fn);
+    check(dense_copy_end != std::string::npos, "dense demag diagnostic copy function must be bounded");
+    const std::string dense_copy_body =
+        solver.substr(dense_copy_fn, dense_copy_end - dense_copy_fn);
+    check(
+        dense_copy_body.find("target.demag_tangent_provider_parity_available") !=
+                std::string::npos &&
+            dense_copy_body.find("target.demag_tangent_provider_parity_host_l2_norm") !=
+                std::string::npos &&
+            dense_copy_body.find("target.demag_tangent_provider_parity_with_potential_l2_norm") !=
+                std::string::npos &&
+            dense_copy_body.find("target.demag_tangent_provider_parity_difference_l2_norm") !=
+                std::string::npos &&
+            dense_copy_body.find("target.demag_tangent_provider_parity_relative_l2_error") !=
+                std::string::npos,
+        "dense demag diagnostic copy must preserve host-vs-with-potential provider parity");
+    const std::size_t dense_json_fn = solver.find(
+        "std::string demag_tangent_linearity_diagnostics_json(\n"
+        "    const DenseDrivenResponseValidationResult &result");
+    check(dense_json_fn != std::string::npos, "dense demag diagnostic JSON function must exist");
+    const std::size_t mfem_json_fn = solver.find(
+        "std::string demag_tangent_linearity_diagnostics_json(\n"
+        "    const MfemDrivenResponseValidationResult &result",
+        dense_json_fn);
+    check(mfem_json_fn != std::string::npos, "dense demag diagnostic JSON function must be bounded");
+    const std::string dense_json_body =
+        solver.substr(dense_json_fn, mfem_json_fn - dense_json_fn);
+    check(
+        dense_json_body.find("demag_tangent_provider_parity_available") !=
+                std::string::npos &&
+            dense_json_body.find("demag_tangent_provider_parity_host_l2_norm") !=
+                std::string::npos &&
+            dense_json_body.find("demag_tangent_provider_parity_with_potential_l2_norm") !=
+                std::string::npos &&
+            dense_json_body.find("demag_tangent_provider_parity_difference_l2_norm") !=
+                std::string::npos &&
+            dense_json_body.find("demag_tangent_provider_parity_relative_l2_error") !=
+                std::string::npos,
+        "dense demag diagnostic JSON must publish host-vs-with-potential provider parity");
+    check(
+        solver.find("gpu_reduced_complex_operator_parity_relative_l2_error") !=
+                std::string::npos &&
+            solver.find("gpu_reduced_complex_operator_additivity_relative_error") !=
+                std::string::npos &&
+            solver.find("gpu_reduced_complex_operator_immediate_repeat_relative_error") !=
+                std::string::npos &&
+            solver.find("gpu_reduced_complex_operator_repeat_after_b_relative_error") !=
+                std::string::npos &&
+            solver.find("gpu_reduced_complex_operator_repeat_after_sum_relative_error") !=
+                std::string::npos &&
+            solver.find("gpu_reduced_complex_operator_repeat_after_scaled_relative_error") !=
+                std::string::npos &&
+            solver.find("gpu_reduced_complex_operator_homogeneity_relative_error") !=
+                std::string::npos &&
+            solver.find("gpu_reduced_complex_operator_repeat_relative_error") !=
+                std::string::npos &&
+            solver.find("gpu_reduced_complex_real_stiffness_parity_relative_l2_error") !=
+                std::string::npos &&
+            solver.find("gpu_reduced_complex_real_demag_tangent_parity_relative_l2_error") !=
+                std::string::npos &&
+            solver.find("gpu_reduced_complex_real_demag_tangent_homogeneity_relative_l2_error") !=
+                std::string::npos &&
+            solver.find("gpu_reduced_complex_real_demag_phi_parity_relative_l2_error") !=
+                std::string::npos &&
+            solver.find("gpu_reduced_complex_real_demag_phi_homogeneity_relative_l2_error") !=
+                std::string::npos &&
+            solver.find("gpu_reduced_complex_imag_stiffness_parity_relative_l2_error") !=
+                std::string::npos &&
+            solver.find("gpu_reduced_complex_real_mass_parity_relative_l2_error") !=
+                std::string::npos &&
+            solver.find("gpu_reduced_complex_imag_mass_parity_relative_l2_error") !=
+                std::string::npos &&
+            solver.find("gpu_reduced_stiffness_interleaved_repeat_relative_l2_error") !=
+                std::string::npos &&
+            solver.find("gpu_reduced_stiffness_interleaved_repeat_cpu_parity_relative_l2_error") !=
+                std::string::npos &&
+            solver.find("gpu_reduced_mass_interleaved_repeat_relative_l2_error") !=
+                std::string::npos &&
+            solver.find("gpu_reduced_stiffness_homogeneity_relative_l2_error") !=
+                std::string::npos &&
+            solver.find("gpu_reduced_mass_homogeneity_relative_l2_error") !=
+                std::string::npos &&
+            solver.find("gpu_reduced_gmres_formula_operator_parity_relative_l2_error") !=
+                std::string::npos &&
+            solver.find("gpu_reduced_split_vs_gmres_formula_relative_l2_error") !=
+                std::string::npos &&
+            solver.find("gpu_reduced_zero_operator_relative_l2_error") !=
+                std::string::npos,
+        "GPU periodic-airbox diagnostics must probe and component-isolate the actual reduced complex block operator used by GMRES");
+    const std::size_t gpu_mass_only_fn =
+        solver.rfind("FrequencyDomainStatus apply_mfem_production_gpu_mass_only(");
+    check(
+        gpu_mass_only_fn != std::string::npos,
+        "GPU production frequency-domain mass-only adapter must exist");
+    const std::size_t gpu_no_demag_fn =
+        solver.rfind("FrequencyDomainStatus apply_mfem_production_gpu_stiffness_without_demag(");
+    check(
+        gpu_no_demag_fn != std::string::npos && gpu_no_demag_fn > gpu_mass_only_fn,
+        "GPU production frequency-domain no-demag stiffness adapter must follow mass-only adapter");
+    const std::string gpu_mass_only_body =
+        solver.substr(gpu_mass_only_fn, gpu_no_demag_fn - gpu_mass_only_fn);
+    check(
+        gpu_mass_only_body.find("apply_tangent_frequency_mass_operator(") !=
+                std::string::npos &&
+            gpu_mass_only_body.find("fullmag_fem_frequency_domain_apply_mfem_gpu_operator_context(") ==
+                std::string::npos,
+        "GPU production frequency-domain mass-only adapter must be a pure tangent mass operator and must not invoke the full stiffness/demag GPU context");
+    check(
+        solver.find("gpu_operator_parity_probe_unavailable_reason") !=
+            std::string::npos,
+        "GPU periodic-airbox operator parity diagnostics must report why the probe is unavailable");
+    const std::size_t ok_artifact_extra =
+        solver.find("std::string artifact_extra_diagnostics_json;");
+    const std::size_t postsolve_validation_writer =
+        solver.find("auto write_postsolve_validation_error_artifacts", ok_artifact_extra);
+    check(
+        ok_artifact_extra != std::string::npos &&
+            postsolve_validation_writer != std::string::npos,
+        "GPU periodic-airbox ok artifact diagnostics block must be locatable");
+    const std::string ok_artifact_extra_block =
+        solver.substr(ok_artifact_extra, postsolve_validation_writer - ok_artifact_extra);
+    check(
+        ok_artifact_extra_block.find("gpu_operator_parity_json.c_str()") !=
+            std::string::npos,
+        "GPU periodic-airbox ok artifacts must publish operator parity diagnostics in manifest diagnostics");
+    const std::size_t ok_direct_diagnostics =
+        solver.find("const bool diagnostics_written = append_format(", postsolve_validation_writer);
+    const std::size_t ok_result_json =
+        solver.find("const int result_written = std::snprintf(", ok_direct_diagnostics);
+    check(
+        ok_direct_diagnostics != std::string::npos &&
+            ok_result_json != std::string::npos,
+        "GPU periodic-airbox ok direct diagnostics block must be locatable");
+    const std::string ok_direct_diagnostics_block =
+        solver.substr(ok_direct_diagnostics, ok_result_json - ok_direct_diagnostics);
+    check(
+        ok_direct_diagnostics_block.find("gpu_operator_parity_json.c_str()") !=
+            std::string::npos,
+        "GPU periodic-airbox ok solver diagnostics must publish operator parity diagnostics");
 }
 
 
@@ -1722,5 +2027,7 @@ int main() {
     gpu_rk_final_refresh_is_owned_by_cuda_rk_module();
     gpu_rk_stage_schedule_is_owned_by_cuda_rk_module();
     gpu_demag_poisson_is_owned_by_cuda_demag_poisson_module();
+    gpu_frequency_domain_device_poisson_recovers_nodal_phi_from_true_dofs();
+    gpu_frequency_domain_operator_parity_reports_stiffness_components();
     return 0;
 }

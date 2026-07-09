@@ -12,9 +12,28 @@
 #include <complex>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <limits>
 #include <string>
 #include <vector>
+
+#if FULLMAG_HAS_CUDA_RUNTIME
+extern "C" int fullmag_fem_frequency_domain_apply_modal_shift_invert_gpu_action(
+    const fullmag::fem::frequency_domain::PoissonAirboxEigenBlockProblem *problem,
+    double sigma_real,
+    double sigma_imag,
+    const double *v_q_real,
+    const double *v_q_imag,
+    unsigned long long v_q_count,
+    double *out_q_real,
+    double *out_q_imag,
+    unsigned long long out_q_count,
+    char *diagnostics_json,
+    unsigned long long diagnostics_json_len,
+    char *error_message,
+    unsigned long long error_message_len);
+#endif
 
 namespace fullmag::fem::frequency_domain {
 
@@ -107,6 +126,33 @@ bool output_directory_required(int write_partial_artifacts, const char *output_d
 {
     return write_partial_artifacts != 0 &&
            (output_directory == nullptr || output_directory[0] == '\0');
+}
+
+bool write_text_file(
+    const std::filesystem::path &path,
+    const char *text,
+    std::string &error_message) noexcept
+{
+    std::error_code error_code;
+    std::filesystem::create_directories(path.parent_path(), error_code);
+    if (error_code) {
+        error_message = "failed to create modal eigen artifact directory: ";
+        error_message += error_code.message();
+        return false;
+    }
+
+    std::ofstream file(path, std::ios::out | std::ios::trunc);
+    if (!file) {
+        error_message = "failed to open modal eigen artifact for writing";
+        return false;
+    }
+    file << (text != nullptr ? text : "");
+    file << "\n";
+    if (!file) {
+        error_message = "failed to write modal eigen artifact";
+        return false;
+    }
+    return true;
 }
 
 bool cancel_requested(const ModalEigenRequest &request) noexcept
@@ -1216,6 +1262,207 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
             static_cast<std::uint32_t>(request.max_outer_iterations);
         problem.max_linear_iterations =
             static_cast<std::uint32_t>(request.max_linear_iterations);
+
+        if (request.poisson_airbox_shift_invert_action_enabled != 0) {
+            if (request.poisson_airbox_shift_invert_action_device != 0 &&
+                request.poisson_airbox_shift_invert_action_device != 1) {
+                FrequencyDomainContractResult result{};
+                result.status = FrequencyDomainStatus::validation_error;
+                result.error_message =
+                    "Poisson-airbox shift-invert action device must be 0=cpu or 1=gpu_hidden_action";
+                result.diagnostics_json =
+                    "{\"schema_version\":\"frequency_domain_contract_diagnostics.v1\","
+                    "\"study_product\":\"modal_eigen\","
+                    "\"status\":\"validation_error\","
+                    "\"reason\":\"poisson_airbox_shift_invert_action_invalid_device\"}";
+                result.result_json =
+                    "{\"schema_version\":\"frequency_domain_modal_result.v1\","
+                    "\"study_product\":\"modal_eigen\","
+                    "\"status\":\"validation_error\"}";
+                return result;
+            }
+            if (request.poisson_airbox_shift_invert_action_device == 1) {
+                std::vector<double> out_q_real(problem.q_dof_count, 0.0);
+                std::vector<double> out_q_imag(problem.q_dof_count, 0.0);
+                char diagnostics_json[4096]{};
+                char error_message[256]{};
+                FrequencyDomainContractResult result{};
+#if FULLMAG_HAS_CUDA_RUNTIME
+                const int gpu_status =
+                    fullmag_fem_frequency_domain_apply_modal_shift_invert_gpu_action(
+                        &problem,
+                        request.poisson_airbox_shift_sigma_real,
+                        request.poisson_airbox_shift_sigma_imag,
+                        request.poisson_airbox_shift_action_vector_real,
+                        request.poisson_airbox_shift_action_vector_imag,
+                        request.poisson_airbox_shift_action_vector_count,
+                        out_q_real.data(),
+                        out_q_imag.data(),
+                        problem.q_dof_count,
+                        diagnostics_json,
+                        sizeof(diagnostics_json),
+                        error_message,
+                        sizeof(error_message));
+                result.status =
+                    gpu_status == 0 ? FrequencyDomainStatus::ok : FrequencyDomainStatus::solve_error;
+                result.error_message = error_message;
+                result.diagnostics_json = diagnostics_json;
+#else
+                result.status = FrequencyDomainStatus::unavailable;
+                result.error_message =
+                    "PA-G3 GPU modal shift-invert action requires CUDA runtime support";
+                result.diagnostics_json =
+                    "{\"schema_version\":\"gpu_modal_shift_invert_action.v1\","
+                    "\"status\":\"unavailable\","
+                    "\"study_product\":\"modal_eigen\","
+                    "\"lane\":\"gpu_poisson_airbox_k0\","
+                    "\"reason\":\"cuda_runtime_unavailable\","
+                    "\"fallback_used\":false,"
+                    "\"operator_family\":\"full_modal_shift_invert\","
+                    "\"algebraic_action\":\"(A - sigma B)^-1 Bv\","
+                    "\"rhs_family\":\"modal_mass_times_vector\","
+                    "\"full_modal_shift_invert_claim\":false,"
+                    "\"frequency_response_proxy\":false}";
+#endif
+
+                std::string artifact_path_string;
+                if (result.status == FrequencyDomainStatus::ok &&
+                    request.write_partial_artifacts != 0) {
+                    const std::filesystem::path artifact_path =
+                        std::filesystem::path(request.output_directory) /
+                        "eigen" / "diagnostics" /
+                        "gpu_modal_shift_invert_action.v1.json";
+                    std::string artifact_error;
+                    if (!write_text_file(
+                            artifact_path,
+                            result.diagnostics_json.c_str(),
+                            artifact_error)) {
+                        result.status = FrequencyDomainStatus::artifact_error;
+                        result.error_message = artifact_error;
+                        result.diagnostics_json =
+                            "{\"schema_version\":\"frequency_domain_contract_diagnostics.v1\","
+                            "\"study_product\":\"modal_eigen\","
+                            "\"status\":\"artifact_error\","
+                            "\"reason\":\"gpu_modal_shift_invert_action_artifact_write_failed\"}";
+                        result.result_json =
+                            "{\"schema_version\":\"frequency_domain_modal_result.v1\","
+                            "\"study_product\":\"modal_eigen\","
+                            "\"status\":\"artifact_error\"}";
+                        result.artifact_manifest_path.clear();
+                        return result;
+                    }
+                    artifact_path_string = artifact_path.string();
+                    result.artifact_manifest_path = artifact_path_string;
+                }
+
+                const char *status_text =
+                    result.status == FrequencyDomainStatus::ok ? "ok" :
+                    (result.status == FrequencyDomainStatus::artifact_error ?
+                         "artifact_error" :
+                         (result.status == FrequencyDomainStatus::unavailable ?
+                              "unavailable" :
+                              "solve_error"));
+                result.result_json =
+                    "{\"schema_version\":\"frequency_domain_modal_result.v1\","
+                    "\"study_product\":\"modal_eigen\","
+                    "\"status\":\"" +
+                    std::string(status_text) +
+                    "\",\"solver_adapter\":\"gpu_device_dense_modal_shift_invert_action_contract\","
+                    "\"execution_lane\":\"gpu_operator_host_modal_eigen_compatibility\","
+                    "\"demag_kind\":\"periodic_airbox_k0\","
+                    "\"operator_family\":\"full_modal_shift_invert\","
+                    "\"algebraic_action\":\"(A - sigma B)^-1 Bv\","
+                    "\"rhs_family\":\"modal_mass_times_vector\","
+                    "\"full_modal_shift_invert_claim\":" +
+                    std::string(result.status == FrequencyDomainStatus::ok ? "true" : "false") +
+                    ",\"frequency_response_proxy\":false,"
+                    "\"gpu_device_resident_modal_eigensolver\":false,"
+                    "\"artifact_manifest_path\":\"" +
+                    escape_json_string(artifact_path_string.c_str()) +
+                    "\"}";
+                return result;
+            }
+
+            std::vector<double> out_q_real(problem.q_dof_count, 0.0);
+            std::vector<double> out_q_imag(problem.q_dof_count, 0.0);
+            PoissonAirboxModalShiftInvertActionResult action_result{};
+            const FrequencyDomainStatus status =
+                apply_poisson_airbox_modal_shift_invert_action_cpu_reference(
+                    problem,
+                    request.poisson_airbox_shift_sigma_real,
+                    request.poisson_airbox_shift_sigma_imag,
+                    request.poisson_airbox_shift_action_vector_real,
+                    request.poisson_airbox_shift_action_vector_imag,
+                    request.poisson_airbox_shift_action_vector_count,
+                    out_q_real.data(),
+                    out_q_imag.data(),
+                    problem.q_dof_count,
+                    &action_result);
+
+            FrequencyDomainContractResult result{};
+            result.status = status;
+            result.error_message = action_result.error_message;
+            result.diagnostics_json = action_result.diagnostics_json;
+
+            std::string artifact_path_string;
+            if (status == FrequencyDomainStatus::ok &&
+                request.write_partial_artifacts != 0) {
+                const std::filesystem::path artifact_path =
+                    std::filesystem::path(request.output_directory) /
+                    "eigen" / "diagnostics" /
+                    "poisson_airbox_modal_shift_invert_action.v1.json";
+                std::string artifact_error;
+                if (!write_text_file(
+                        artifact_path,
+                        action_result.diagnostics_json,
+                        artifact_error)) {
+                    result.status = FrequencyDomainStatus::artifact_error;
+                    result.error_message = artifact_error;
+                    result.diagnostics_json =
+                        "{\"schema_version\":\"frequency_domain_contract_diagnostics.v1\","
+                        "\"study_product\":\"modal_eigen\","
+                        "\"status\":\"artifact_error\","
+                        "\"reason\":\"poisson_airbox_shift_invert_action_artifact_write_failed\"}";
+                    result.result_json =
+                        "{\"schema_version\":\"frequency_domain_modal_result.v1\","
+                        "\"study_product\":\"modal_eigen\","
+                        "\"status\":\"artifact_error\"}";
+                    result.artifact_manifest_path.clear();
+                    return result;
+                }
+                artifact_path_string = artifact_path.string();
+                result.artifact_manifest_path = artifact_path_string;
+            }
+
+            const char *status_text =
+                result.status == FrequencyDomainStatus::ok ? "ok" :
+                (result.status == FrequencyDomainStatus::artifact_error ?
+                     "artifact_error" :
+                     "validation_error");
+            result.result_json =
+                "{\"schema_version\":\"frequency_domain_modal_result.v1\","
+                "\"study_product\":\"modal_eigen\","
+                "\"status\":\"" +
+                std::string(status_text) +
+                "\",\"solver_adapter\":\"k0_poisson_airbox_cpu_full_coupled_shift_invert_reference\","
+                "\"demag_kind\":\"periodic_airbox_k0\","
+                "\"operator_family\":\"full_modal_shift_invert\","
+                "\"algebraic_action\":\"(A - sigma B)^-1 Bv\","
+                "\"full_modal_shift_invert_claim\":" +
+                std::string(action_result.full_modal_shift_invert_claim ? "true" : "false") +
+                ",\"q_dof_count\":" +
+                std::to_string(action_result.q_dof_count) +
+                ",\"phi_dof_count\":" +
+                std::to_string(action_result.phi_dof_count) +
+                ",\"augmented_dof_count\":" +
+                std::to_string(action_result.augmented_dof_count) +
+                ",\"shifted_system_relative_residual\":" +
+                format_double(action_result.shifted_system_relative_residual) +
+                ",\"artifact_manifest_path\":\"" +
+                escape_json_string(artifact_path_string.c_str()) +
+                "\"}";
+            return result;
+        }
 
         PoissonAirboxModalEigenResult poisson_result{};
         const FrequencyDomainStatus status =

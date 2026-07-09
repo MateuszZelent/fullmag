@@ -23,13 +23,13 @@ study.universe(
     padding=(0.0, 0.0, 0.0),
 )
 study.universe.mesh(maximum_element_size=40e-9)
+study.objects.mesh.defaults(maximum_element_size=40e-9, order=1, periodic_pair_ids=["x_faces"])
 
 body = study.geometry(fm.Box(size=(40e-9, 20e-9, 10e-9), name="body"), name="body")
 body.Ms = 800e3
 body.Aex = 13e-12
 body.alpha = 0.02
 body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
-body.mesh(maximum_element_size=40e-9, order=1)
 
 study.pbc(x=True)
 study.build_domain_mesh()

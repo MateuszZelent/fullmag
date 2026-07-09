@@ -195,10 +195,88 @@ finite, strictly positive, and normalized to sum to one before solving, with
 The PA-E3 Schur fixture now carries the same `periodic_mesh_certificate.v5`
 pair-count metadata consumed by PA-E2. PA-E3 Schur certification now also
 rejects invalid `phi_mean_weights` before constructing Schur certificate keys,
-using the Schur-specific
-`poisson_airbox_schur_requires_mean_zero_gauge` reason. This is a wired block
-validation payload, not the final shared-domain MFEM Poisson-airbox assembler.
+using the Schur-specific `poisson_airbox_schur_requires_mean_zero_gauge`
+reason. This is a wired block validation payload, not the final shared-domain
+MFEM Poisson-airbox assembler.
 ```
+
+Follow-up PA-E4b provenance hardening from 2026-07-09: path-level K0-3
+`periodic_airbox_k0` modal diagnostics now emit
+`solver_model=k0_poisson_airbox_cpu_full_coupled_slepc`,
+`solver_family=k0_poisson_airbox_full_coupled`, and
+`resolved_solver_family=k0_poisson_airbox_full_coupled` instead of preserving the
+multi-k reference shell label `reference_full_2x2_tangent`. The single-run and
+convergence artifact verifiers now reject periodic-airbox Kittel bundles that
+pair the Poisson-airbox `solver_adapter` with a reference `solver_model`.
+Verified by
+`just verify-fem-frequency-domain-eigen-k0-kittel-periodic-airbox-cpu`,
+`just verify-fem-frequency-domain-eigen-k0-kittel-periodic-airbox-convergence-cpu`,
+`just verify-fem-frequency-domain-eigen-k0-kittel-periodic-airbox-gpu-gated`,
+and the Python verifier suite (`396 passed`). GPU PA-G remains explicitly gated,
+not implemented as a production Poisson-airbox modal runtime.
+
+Nonzero-k modal production guard from 2026-07-09: the selected-spectrum
+production CPU Floquet k-path slice now requires a labelled
+`bloch_floquet_tangent_operator`, accepted periodic-pair contract metadata, a
+positive Floquet periodic-pair count, `stage_id=eigenmodes`, requested
+`calculation_mode=dispersion_modal`, requested `backend=fem`, requested
+`device=cpu`, requested `precision=double`, requested
+`solver_family=modal_eigen`, requested
+`solve_equation="A q = lambda B q; lambda = i omega"`, resolved `backend=fem`,
+resolved `device=cpu`, resolved `precision=double`, resolved `native_cpu`
+provenance, SLEPc shift-invert solver provenance, resolved
+`reference_or_production=production`, `modal_eigen` solve-kind provenance, and
+no gated operator terms such as `dynamic_demag`, `demag`, DMI, periodic
+Poisson, Floquet airbox, or magnetoelastic terms. The same no-demag Floquet
+modal artifact path now also propagates a minimal
+`periodic_mesh_certificate.v5` into solver diagnostics and manifest
+diagnostics, with `certificate_status=accepted`, positive
+`magnetic_pair_count`, and canonical `sha256:` `magnetic_pair_map_sha256`;
+the verifier rejects missing solver certificates and manifest-vs-solver hash
+drift. This is artifact-level pair-map identity propagation only, not accepted
+native `G_pair` runtime consumption. The Rust dispatch
+diagnostics, artifact verifier, and native modal contract now reject bundles or
+payloads that try to preserve `production_cpu` shift-invert provenance while
+smuggling those gated terms into `operator_terms_included`, presenting a
+reference CPU bundle as native CPU production, replacing the resolved
+production SLEPc algorithm with a reference solver label, or presenting a
+driven-response bundle as modal eigensolve. The Rust manifest emitter also
+downgrades stale `ProductionCpuShiftInvert` path results back to reference
+manifest provenance when the current plan is rejected by the native CPU modal
+window gate, including nonzero-k Floquet requests that still ask for demag
+without a real dynamic demag-k operator. Demag-enabled nonzero-k Floquet modal
+fallbacks now name that missing dynamic-demag-k operator explicitly with
+`production_cpu_modal_dynamic_demag_k_operator_missing`,
+`selected_spectrum_nonzero_k_floquet_modal_dynamic_demag`,
+`bloch_floquet_tangent_operator_with_dynamic_demag_k`,
+`required_demag_payload_kind=dynamic_demag_k_operator`, and
+`dynamic_demag_operator_source=missing_numeric_fem_demag_k`; no-demag missing
+Floquet-pair fallbacks retain the generic Bloch/Floquet pair contract. Normal
+reference fallback manifests publish the same rejection contract as stale
+production-downgrade manifests, so the manifest-level contract no longer
+depends on the intermediate solver label.
+The verifier also requires
+reference/MVP nonzero-k Floquet frequency-window solver diagnostics and
+manifests to publish the same `production_cpu_rejection_reason`,
+`production_cpu_rejection_scope`, and `required_operator_contract` fields plus
+`required_operator_payload_kind=bloch_floquet_tangent_operator`, the
+reason-specific demag payload fields when applicable, and
+`modal_periodic_pair_contract_available=false`, so downstream consumers can
+distinguish the documented reference fallback from a production
+selected-spectrum modal solve. It also rejects reference/MVP Floquet windows
+that pair `window_completeness.status=not_certified` with a non-`none`
+certification method or a no-additional-modes claim. The verifier also rejects
+production modal k-path
+manifests that carry driven-response artifact paths, response resource keys,
+response field resources, frequency-point response paths, or
+`driven_response_artifact_available=true`, and it requires
+`modal_artifact_available=true`; modal eigensolve bundles must keep the
+`modal_eigen` and `driven_response` product surfaces separate while explicitly
+advertising the modal artifact surface. Verified locally by focused
+`fullmag-runner` k-path tests and the Python eigen artifact verifier suite; the
+managed native contract gate still needs a Docker-backed rerun after approval.
+The sandboxed gate detected the stale managed runtime but failed while Docker
+buildx tried to write its activity state under read-only `~/.config/docker`.
 
 ## Patch D - COMSOL physics gates
 
@@ -592,7 +670,7 @@ just verify-fem-frequency-domain-eigen-k0-kittel-demag-cpu
   verifier: scripts/verify_fem_frequency_domain_eigen_artifacts.py --require-k0-kittel-demag
 ```
 
-Remaining PA-E4 work:
+Remaining PA-E4 work after PA-E4a:
 
 ```text
 K0-3b small real FEM film with shared-domain airbox
@@ -602,6 +680,30 @@ mean_zero_augmented phi gauge evidence in real K0-3 artifacts
 Poisson residual / phi DOF / M_eff or N_eff reporting from numeric demag
 K0-3c convergence table and threshold tightening
 authoritative managed gate pass after Docker/buildx access is available
+```
+
+Current PA-E4b status note from 2026-07-09:
+
+```text
+The K0-3b periodic-airbox CPU modal/eigen route has moved past the old
+"future slot only" state for the small managed fixture. The managed
+`verify-fem-frequency-domain-eigen-k0-kittel-periodic-airbox-cpu` gate produced
+real artifacts under
+.fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox/artifacts with:
+  solver_adapter=k0_poisson_airbox_cpu_full_coupled_slepc
+  demag_kind=periodic_airbox_k0
+  execution_lane=production_cpu
+  production_solver_available=true
+  production_periodic_airbox_claim=true
+  poisson_constraint_relative_residual=0
+  relative_reference_frequency_error=0
+  validation/kittel_k0_pbc/convergence.v1.csv present
+
+The Python verifier accepts those artifacts with
+--require-k0-kittel-periodic-airbox-demag. This is still a narrow K0
+periodic-airbox/Kittel CPU modal slice; it does not close GPU PA-G, nonzero-k
+Floquet dynamic demag, broad modal sweeps, or production-v1 frequency-driven
+coverage.
 ```
 
 Follow-up verifier hardening, 2026-07-08:
@@ -620,7 +722,7 @@ and accepts demag_kind=periodic_airbox_k0 only when summary.v1.json proves:
 
 scripts/verify_fem_frequency_domain_eigen_artifacts.py
   --require-k0-kittel-periodic-airbox-demag
-is the stricter future PA-E4b gate. It implies the K0-3 demag gate and also
+is the stricter narrow PA-E4b CPU periodic-airbox gate. It implies the K0-3 demag gate and also
 requires demag_kind=periodic_airbox_k0, so PA-E4a synthetic-demag artifacts
 cannot satisfy it.
 
@@ -632,7 +734,9 @@ python3 -m pytest scripts/test_verify_fem_frequency_domain_eigen_artifacts.py -k
   11 passed
 ```
 
-This remains verifier coverage, not a real K0-3b FEM-airbox run.
+This verifier coverage is now exercised by the narrow managed K0-3b
+periodic-airbox CPU run above; broader shared-domain production and GPU coverage
+remain separate gates.
 
 Public/runtime guard follow-up, 2026-07-08:
 
@@ -681,10 +785,10 @@ python3 -m pytest scripts/test_verify_fem_frequency_domain_eigen_artifacts.py -k
   10 passed
 ```
 
-This is still a runtime/artifact seam, not the real small-film FEM-airbox
-solve. PA-E4b remains incomplete until the native eigensolve path produces
-these metrics from an actual shared-domain Poisson-airbox K0 run and the
-managed gate passes.
+This runtime/artifact seam is now populated by the narrow managed K0-3b
+periodic-airbox CPU run. PA-E4b should still be treated as narrow rather than
+general production coverage until larger shared-domain fixtures, mesh
+certificate promotion, and GPU parity gates are closed.
 
 Modal-eigen ABI payload follow-up, 2026-07-08:
 
@@ -758,9 +862,10 @@ python3 -m pytest scripts/test_verify_fem_frequency_domain_eigen_artifacts.py -k
   11 passed
 ```
 
-This closes the runner-side artifact-population gap. The remaining production
-gap is still the native small-film shared-domain matrix assembly that must
-produce those PA-E2 diagnostics from a real FEM Poisson-airbox model.
+This closes the runner-side artifact-population gap for the narrow K0
+periodic-airbox/Kittel CPU modal slice. Remaining production gaps are broader
+shared-domain validation, accepted-certificate promotion, GPU parity/runtime,
+and nonzero-k Floquet dynamic-demag coverage.
 
 ## Patch E - dense full-coupled oracle
 
@@ -1288,6 +1393,512 @@ the current example. Its scope is intentionally narrow: GPU operator/host
 Krylov plus host Poisson demag provider. It does not validate strict
 `device_hypre_poisson`, device-resident Krylov, full-coupled sparse
 field-split, or native accepted `G_pair` certificate consumption.
+
+Fifteenth follow-up PA-G1 runtime evidence from 2026-07-09: the strict
+`device_hypre_poisson` small periodic-airbox CPU/GPU parity target now writes
+and verifies a machine-readable GPU Poisson parity artifact.
+
+Current managed PA-G1 artifact evidence:
+
+```text
+target: FULLMAG_FMR_RESPONSE_RTOL=1e-8 just verify-fem-frequency-domain-periodic-airbox-gpu-device-poisson-parity-runtime
+status: passed
+artifact: .fullmag/reports/frequency-domain-periodic-airbox-gpu-device-poisson-parity-runtime/gpu_poisson_parity.v1.json
+schema_version: gpu_poisson_parity.v1
+lane: gpu_poisson_airbox_k0
+execution_policy: device
+memory_location: device
+fallback_used: false
+max_relative_phi_error: 5.353355861550261e-10
+max_relative_field_error: 5.112761456182738e-10
+h2d_count: 0
+d2h_count: 0
+```
+
+This closes the PA-G1 device Poisson parity artifact/runtime slice for the
+small frequency-response fixture. It does not close GPU Schur parity,
+GPU shift-invert, true GPU modal Poisson-airbox eigensolve, or production
+large-workload GPU coverage.
+
+Sixteenth follow-up PA-G2 runtime evidence from 2026-07-09: the same strict
+`device_hypre_poisson` small periodic-airbox CPU/GPU parity target now writes
+and verifies a machine-readable GPU Schur-apply parity artifact from the
+frequency-response operator probe diagnostics.
+
+Current managed PA-G2 artifact evidence:
+
+```text
+target: FULLMAG_FMR_RESPONSE_RTOL=1e-8 just verify-fem-frequency-domain-periodic-airbox-gpu-device-poisson-parity-runtime
+status: passed
+artifact: .fullmag/reports/frequency-domain-periodic-airbox-gpu-device-poisson-parity-runtime/gpu_schur_apply_parity.v1.json
+schema_version: gpu_schur_apply_parity.v1
+lane: gpu_poisson_airbox_k0
+execution_policy: device
+memory_location: device
+fallback_used: false
+vector_set: deterministic_frequency_response_probe
+max_relative_schur_apply_error: 5.840773106872843e-11
+complex_operator_relative_l2_error: 5.840773106872843e-11
+real_stiffness_relative_l2_error: 4.37096199539583e-11
+imag_stiffness_relative_l2_error: 4.9811840538123526e-11
+real_mass_relative_l2_error: 0
+imag_mass_relative_l2_error: 0
+demag_tangent_relative_l2_error: 4.8057496817348875e-11
+```
+
+This closes the small PA-G2 Schur-apply parity artifact/runtime slice for the
+frequency-response operator probe. It does not close GPU shift-invert action
+parity, true GPU modal Poisson-airbox eigensolve, or production large-workload
+GPU coverage.
+
+Seventeenth follow-up PA-G3a runtime evidence from 2026-07-09: the same strict
+`device_hypre_poisson` small periodic-airbox CPU/GPU parity target now writes
+and verifies a machine-readable shifted linear-solve action parity artifact
+from the frequency-response solve. This is a proxy slice before true modal
+shift-invert action parity.
+
+Current managed PA-G3a artifact evidence:
+
+```text
+target: FULLMAG_FMR_RESPONSE_RTOL=1e-8 just verify-fem-frequency-domain-periodic-airbox-gpu-device-poisson-parity-runtime
+status: passed
+artifact: .fullmag/reports/frequency-domain-periodic-airbox-gpu-device-poisson-parity-runtime/gpu_shifted_solve_action_parity.v1.json
+schema_version: gpu_shifted_solve_action_parity.v1
+lane: gpu_poisson_airbox_k0
+execution_policy: device
+memory_location: device
+fallback_used: false
+operator_family: frequency_response_shifted_linear_solve
+rhs_family: dynamic_field_phasor
+full_modal_shift_invert_claim: false
+max_relative_action_error: 1.4213110688388042e-09
+magnetization_response_relative_l2_error: 5.013823814612709e-10
+component_amplitude_relative_l2_error: 1.837908524546982e-10
+component_phase_max_abs_error_rad: 1.4213110688388042e-09
+```
+
+This closes only the PA-G3a shifted linear-solve action parity slice for the
+frequency-response operator. It does not close true modal shift-invert
+`(A - sigma B)^-1 Bv`, GPU Krylov-Schur, true GPU modal Poisson-airbox
+eigensolve, or production large-workload GPU coverage.
+
+Eighteenth follow-up PA-G3b CPU reference evidence from 2026-07-09: the native
+CPU Poisson-airbox descriptor path now has a direct modal shift-invert action
+reference for the actual eigensolver operation.
+
+Current managed PA-G3b evidence:
+
+```text
+target: just verify-fem-frequency-domain-eigen-k0-poisson-airbox-cpu-slepc
+status: passed
+files:
+  backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.hpp
+  backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.cpp
+  backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp
+operation: (A - sigma B)^-1 Bv
+schema_version: poisson_airbox_modal_shift_invert_action.v1
+operator_family: full_modal_shift_invert
+solver_adapter: k0_poisson_airbox_cpu_full_coupled_shift_invert_reference
+full_modal_shift_invert_claim: true
+contract residual threshold: shifted_system_relative_residual <= 1e-10
+```
+
+This closes the CPU reference half of true PA-G3. It still does not close
+CPU/GPU modal shift-invert parity, GPU Krylov-Schur, true GPU modal
+Poisson-airbox eigensolve, or production large-workload GPU coverage.
+
+Nineteenth follow-up PA-G3c artifact-contract evidence from 2026-07-09: true
+GPU modal shift-invert action parity now has a dedicated verifier that rejects
+the earlier PA-G3a frequency-response proxy.
+
+Current PA-G3c contract evidence:
+
+```text
+files:
+  scripts/verify_fem_gpu_modal_shift_invert_action_parity_artifact.py
+  scripts/test_verify_fem_gpu_modal_shift_invert_action_parity_artifact.py
+schema_version: gpu_modal_shift_invert_action_parity.v1
+operator_family: full_modal_shift_invert
+algebraic_action: (A - sigma B)^-1 Bv
+rhs_family: modal_mass_times_vector
+cpu_reference_schema_version: poisson_airbox_modal_shift_invert_action.v1
+gpu_action_schema_version: gpu_modal_shift_invert_action.v1
+full_modal_shift_invert_claim: true
+per_iteration_h2d_count: 0
+per_iteration_d2h_count: 0
+thresholds:
+  max_relative_action_error <= 1e-6
+  q_response_relative_l2_error <= 1e-6
+  shifted_system_relative_residual_cpu <= 1e-6
+  shifted_system_relative_residual_gpu <= 1e-6
+verified:
+  python3 -m pytest scripts/test_verify_fem_gpu_modal_shift_invert_action_parity_artifact.py -q
+    4 passed
+  python3 -m py_compile scripts/verify_fem_gpu_modal_shift_invert_action_parity_artifact.py scripts/test_verify_fem_gpu_modal_shift_invert_action_parity_artifact.py
+    passed
+```
+
+This closes only the PA-G3 true-artifact contract. It does not close the GPU
+modal action producer, CPU/GPU modal shift-invert parity, GPU Krylov-Schur, true
+GPU modal Poisson-airbox eigensolve, or production large-workload GPU coverage.
+
+Twentieth follow-up PA-G3d CPU modal-contract producer evidence from
+2026-07-09: the native modal contract now has a narrow
+Poisson-airbox shift-invert action-producer mode for the existing full-coupled
+CSR descriptor. This producer calls the PA-G3b CPU reference action and writes
+the `poisson_airbox_modal_shift_invert_action.v1` artifact through the modal
+contract when partial artifacts are enabled.
+
+Current PA-G3d evidence:
+
+```text
+target: just verify-fem-frequency-domain-eigen-k0-poisson-airbox-cpu-slepc
+status: passed after RED/GREEN
+RED failure before implementation:
+  FAIL: PA-G3b modal contract result must point at the shift-invert action artifact
+files:
+  backends/fem/include/frequency_domain/modal_eigen_request.hpp
+  backends/fem/src/frequency_domain/modal_eigen_solver.cpp
+  backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp
+request flag:
+  poisson_airbox_shift_invert_action_enabled = 1
+artifact:
+  <output_directory>/eigen/diagnostics/poisson_airbox_modal_shift_invert_action.v1.json
+schema_version: poisson_airbox_modal_shift_invert_action.v1
+operator_family: full_modal_shift_invert
+algebraic_action: (A - sigma B)^-1 Bv
+solver_adapter: k0_poisson_airbox_cpu_full_coupled_shift_invert_reference
+full_modal_shift_invert_claim: true
+additional checks:
+  python3 -m pytest scripts/test_verify_fem_gpu_modal_shift_invert_action_parity_artifact.py scripts/test_verify_fem_gpu_shifted_solve_action_parity_artifact.py scripts/test_frequency_domain_runtime_targets.py -q
+    69 passed
+  python3 -m py_compile scripts/verify_fem_gpu_modal_shift_invert_action_parity_artifact.py scripts/test_verify_fem_gpu_modal_shift_invert_action_parity_artifact.py
+    passed
+  git diff --check
+    passed
+```
+
+This closes the CPU modal-contract producer slice required before true GPU
+modal action parity. It does not close `gpu_modal_shift_invert_action.v1`,
+CPU/GPU modal shift-invert parity, GPU Krylov-Schur, true GPU modal
+Poisson-airbox eigensolve, or production large-workload GPU coverage.
+
+Twenty-first follow-up PA-G3e C ABI/Rust native seam evidence from 2026-07-09:
+the CPU modal action producer is now reachable through the public native FEM C
+ABI and Rust wrapper layer.
+
+Current PA-G3e evidence:
+
+```text
+files:
+  native/include/fullmag_fem.h
+  crates/fullmag-fem-sys/src/lib.rs
+  backends/fem/src/api.cpp
+  crates/fullmag-runner/src/native_fem/frequency_domain.rs
+  crates/fullmag-runner/src/fem_eigen.rs
+  backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp
+C ABI tail fields:
+  poisson_airbox_shift_invert_action_enabled
+  poisson_airbox_shift_sigma_real
+  poisson_airbox_shift_sigma_imag
+  poisson_airbox_shift_action_vector_real
+  poisson_airbox_shift_action_vector_imag
+  poisson_airbox_shift_action_vector_count
+Rust safe wrapper:
+  NativeModalEigenPoissonAirboxBlockProblem::shift_invert_action
+  NativeModalEigenPoissonAirboxShiftInvertAction
+verified:
+  CARGO_TARGET_DIR=/tmp/fullmag-target cargo test -p fullmag-fem-sys modal_eigen_request_abi_exposes_poisson_airbox_tail_layout
+    1 passed
+  CARGO_TARGET_DIR=/tmp/fullmag-target cargo test -p fullmag-runner k0_kittel --lib
+    23 passed
+  focused managed-container fem_modal_eigen_contract
+    passed
+  just verify-fem-frequency-domain-eigen-k0-poisson-airbox-cpu-slepc
+    passed
+```
+
+The broader `just verify-fem-frequency-domain-native-contract` was attempted
+after the C ABI/Rust seam change. It rebuilt the managed FEM runtime and built
+the modal contract target, but failed in the earlier
+`fem_frequency_domain_contract` executable with:
+
+```text
+FAIL: production CPU MFEM demag callback is invoked for the linearity self-check and stiffness applications
+```
+
+That failure is in the driven-response MFEM demag callback count test, not in
+the modal Poisson-airbox action seam. PA-G3e still does not close
+`gpu_modal_shift_invert_action.v1`, CPU/GPU modal shift-invert parity, GPU
+Krylov-Schur, true GPU modal Poisson-airbox eigensolve, or production
+large-workload GPU coverage.
+
+Twenty-second follow-up native-contract gate repair evidence from 2026-07-09:
+the broader frequency-domain native contract gate is green again. The temporary
+failure above was a stale driven-response test expectation after the MFEM demag
+tangent linearity probe had been extended from four provider applications to
+six provider applications (`a`, `b`, `a+b`, `scale*a`, `repeat(a)`,
+`zero-after-nonzero`). The production CPU diagnostics path now emits the full
+`demag_tangent_linearity_diagnostics_json(...)` payload, including repeat and
+zero-after-nonzero diagnostics, and the callback-count test expects
+`6 + 2 * (iteration_count + 1)`.
+
+Verified:
+
+```text
+focused managed-container fem_frequency_domain_contract
+  passed
+just verify-fem-frequency-domain-native-contract
+  passed
+```
+
+Twenty-third follow-up PA-G3f GPU modal shift-invert action producer/parity
+from 2026-07-09: the native GPU frequency-domain code now has a hidden
+developer action producer for the true modal operation `(A - sigma B)^-1 Bv`
+on the tiny full-coupled Poisson-airbox contract descriptor. This is not the
+earlier frequency-response shifted-solve proxy.
+
+Current PA-G3f evidence:
+
+```text
+files:
+  backends/fem/gpu/cuda/frequency_domain/driven_response_gpu.cu
+  backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp
+  justfile
+  scripts/test_frequency_domain_runtime_targets.py
+
+target:
+  just verify-fem-frequency-domain-eigen-k0-poisson-airbox-gpu-shift-invert-action
+
+artifacts:
+  .fullmag/reports/frequency-domain-eigen-k0-poisson-airbox-gpu-shift-invert-action/
+    eigen/diagnostics/poisson_airbox_modal_shift_invert_action.v1.json
+    eigen/diagnostics/gpu_modal_shift_invert_action.v1.json
+    gpu_modal_shift_invert_action_parity.v1.json
+
+schema_version: gpu_modal_shift_invert_action_parity.v1
+operator_family: full_modal_shift_invert
+algebraic_action: (A - sigma B)^-1 Bv
+rhs_family: modal_mass_times_vector
+gpu_action_schema_version: gpu_modal_shift_invert_action.v1
+full_modal_shift_invert_claim: true
+frequency_response_proxy: false
+per_iteration_h2d_count: 0
+per_iteration_d2h_count: 0
+max_relative_action_error: 7.727016304571709e-17
+q_response_relative_l2_error: 7.727016304571709e-17
+shifted_system_relative_residual_cpu: 6.674284868174013e-27
+shifted_system_relative_residual_gpu: 4.5324665183683945e-17
+
+verification:
+  just verify-fem-frequency-domain-eigen-k0-poisson-airbox-gpu-shift-invert-action
+  python3 -m pytest scripts/test_frequency_domain_runtime_targets.py scripts/test_verify_fem_gpu_modal_shift_invert_action_parity_artifact.py -q
+  git diff --check
+```
+
+This closes the true GPU action-parity slice for PA-G3 on the contract
+descriptor. It does not close GPU Krylov-Schur, production large-workload GPU
+modal eigensolve, or public GPU K0/Kittel periodic-airbox demag execution.
+
+Twenty-fourth follow-up PA-G3g modal-eigen ABI/contract seam from 2026-07-09:
+the hidden PA-G3f GPU modal shift-invert action is now reachable through the
+modal-eigen C ABI/request tail, not only by a direct native test call.
+
+Current PA-G3g evidence:
+
+```text
+files:
+  backends/fem/include/frequency_domain/modal_eigen_request.hpp
+  native/include/fullmag_fem.h
+  crates/fullmag-fem-sys/src/lib.rs
+  crates/fullmag-runner/src/native_fem/frequency_domain.rs
+  backends/fem/src/api.cpp
+  backends/fem/src/frequency_domain/modal_eigen_solver.cpp
+  backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp
+
+request tail:
+  poisson_airbox_shift_invert_action_enabled
+  poisson_airbox_shift_invert_action_device
+  poisson_airbox_shift_sigma_real
+  poisson_airbox_shift_sigma_imag
+  poisson_airbox_shift_action_vector_real
+  poisson_airbox_shift_action_vector_imag
+  poisson_airbox_shift_action_vector_count
+
+device selector:
+  0 = CPU reference action
+  1 = hidden GPU action
+
+modal C ABI artifact:
+  eigen/diagnostics/gpu_modal_shift_invert_action.v1.json
+
+required semantics:
+  solver_adapter: gpu_device_dense_modal_shift_invert_action_contract
+  operator_family: full_modal_shift_invert
+  algebraic_action: (A - sigma B)^-1 Bv
+  rhs_family: modal_mass_times_vector
+  frequency_response_proxy: false
+  gpu_device_resident_modal_eigensolver: false
+
+verification:
+  just verify-fem-frequency-domain-native-contract
+  just verify-fem-frequency-domain-eigen-k0-poisson-airbox-gpu-shift-invert-action
+  python3 -m pytest scripts/test_frequency_domain_runtime_targets.py scripts/test_verify_fem_gpu_modal_shift_invert_action_parity_artifact.py -q
+  CARGO_TARGET_DIR=/tmp/fullmag-target cargo test -p fullmag-fem-sys modal_eigen_request_abi_exposes_poisson_airbox_tail_layout
+  git diff --check
+```
+
+This closes the PA-G3g contract seam. It still does not close the real
+device-resident GPU modal eigensolver loop.
+
+Twenty-fifth follow-up GPU-G4 hidden compatibility provenance from 2026-07-09:
+the PA-G3f/PA-G3g GPU modal shift-invert action now explicitly labels itself as
+the hidden compatibility lane, not as public production GPU modal eigensolve.
+
+Current GPU-G4 evidence:
+
+```text
+files:
+  backends/fem/gpu/cuda/frequency_domain/driven_response_gpu.cu
+  backends/fem/src/frequency_domain/modal_eigen_solver.cpp
+  backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp
+
+artifact:
+  .fullmag/reports/frequency-domain-eigen-k0-poisson-airbox-gpu-shift-invert-action/
+    eigen/diagnostics/gpu_modal_shift_invert_action.v1.json
+
+required provenance:
+  execution_lane: gpu_operator_host_modal_eigen_compatibility
+  solver_adapter: gpu_device_dense_modal_shift_invert_action_contract
+  operator_family: full_modal_shift_invert
+  algebraic_action: (A - sigma B)^-1 Bv
+  rhs_family: modal_mass_times_vector
+  frequency_response_proxy: false
+  gpu_device_resident_modal_eigensolver: false
+
+RED:
+  FAIL: modal C ABI GPU action result must identify the hidden GPU-G4 compatibility lane
+
+verification:
+  focused container fem_modal_eigen_contract
+  just verify-fem-frequency-domain-native-contract
+  just verify-fem-frequency-domain-eigen-k0-poisson-airbox-gpu-shift-invert-action
+  python3 -m pytest scripts/test_frequency_domain_runtime_targets.py scripts/test_verify_fem_gpu_modal_shift_invert_action_parity_artifact.py -q
+  git diff --check
+```
+
+This starts/closes the narrow GPU-G4 provenance slice. It is still not GPU-G5:
+there is no public production device-resident modal eigensolver loop yet.
+
+Twenty-sixth follow-up GPU-G5a tiny dense device modal eigensolver contract from
+2026-07-09: the first true device-resident modal eigensolver slice now exists
+for the tiny full-coupled Poisson-airbox descriptor. It uses a CUDA dense
+inverse-iteration shift-invert loop and emits a modal eigen artifact. It is not
+yet the production sparse/Krylov-Schur GPU modal eigensolver for large meshes.
+
+Current GPU-G5a evidence:
+
+```text
+files:
+  backends/fem/gpu/cuda/frequency_domain/driven_response_gpu.cu
+  backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp
+  justfile
+  scripts/test_frequency_domain_runtime_targets.py
+  scripts/verify_fem_gpu_modal_poisson_airbox_eigensolver_artifact.py
+  scripts/test_verify_fem_gpu_modal_poisson_airbox_eigensolver_artifact.py
+
+artifact:
+  .fullmag/reports/frequency-domain-eigen-k0-poisson-airbox-gpu-shift-invert-action/
+    eigen/diagnostics/gpu_modal_poisson_airbox_eigensolver.v1.json
+
+required provenance:
+  schema_version: gpu_modal_poisson_airbox_eigensolver.v1
+  execution_lane: gpu_device_modal_eigen_dense_contract
+  solver_adapter: gpu_dense_poisson_airbox_modal_eigen_contract
+  solver_library: cuda_dense_inverse_iteration
+  demag_kind: periodic_airbox_k0
+  gauge_policy: mean_zero_augmented
+  frequency_response_proxy: false
+  gpu_device_resident_modal_eigensolver: true
+  cpu_fallback: disabled
+  fallback_used: false
+  per_iteration_h2d_count: 0
+  per_iteration_d2h_count: 0
+
+measured artifact metrics:
+  eigen_frequency_hz: 2011901211.0259216
+  relative_reference_frequency_error: 1.1850411829116929e-16
+  full_descriptor_relative_residual: 3.735334638019538e-15
+
+RED:
+  undefined reference to fullmag_fem_frequency_domain_solve_modal_poisson_airbox_gpu_dense_eigensolver
+
+verification:
+  focused container fem_poisson_airbox_modal_eigen_slepc_contract
+  just verify-fem-frequency-domain-native-contract
+  just verify-fem-frequency-domain-eigen-k0-poisson-airbox-gpu-shift-invert-action
+    including scripts/verify_fem_gpu_modal_poisson_airbox_eigensolver_artifact.py
+  python3 -m pytest scripts/test_verify_fem_gpu_modal_poisson_airbox_eigensolver_artifact.py scripts/test_frequency_domain_runtime_targets.py -q
+  python3 -m pytest scripts/test_frequency_domain_runtime_targets.py scripts/test_verify_fem_gpu_modal_shift_invert_action_parity_artifact.py -q
+  git diff --check
+```
+
+This closes only GPU-G5a. Remaining production GPU modal work is still a
+sparse/matrix-free device eigensolver path for real meshes plus public planner
+exposure after validation.
+
+Twenty-seventh follow-up GPU-G5b CSR device modal descriptor apply foundation
+from 2026-07-09: the modal Poisson-airbox GPU path now has a device CSR apply
+for the full-coupled descriptor operator `A*x` on the augmented vector
+`[q, phi, eta]`. This is a sparse/matrix-free operator foundation, not yet a
+sparse shift-invert solve or Krylov-Schur eigensolver.
+
+Current GPU-G5b evidence:
+
+```text
+files:
+  backends/fem/gpu/cuda/frequency_domain/driven_response_gpu.cu
+  backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp
+  justfile
+  scripts/test_frequency_domain_runtime_targets.py
+  scripts/verify_fem_gpu_modal_poisson_airbox_descriptor_apply_artifact.py
+  scripts/test_verify_fem_gpu_modal_poisson_airbox_descriptor_apply_artifact.py
+
+artifact:
+  .fullmag/reports/frequency-domain-eigen-k0-poisson-airbox-gpu-shift-invert-action/
+    eigen/diagnostics/gpu_modal_poisson_airbox_descriptor_apply.v1.json
+
+required provenance:
+  schema_version: gpu_modal_poisson_airbox_descriptor_apply.v1
+  execution_lane: gpu_device_modal_descriptor_apply_contract
+  solver_family: modal_eigen
+  operator_family: full_coupled_poisson_airbox_modal_pencil
+  algebraic_action: A*x
+  matrix_format: csr_device_apply
+  frequency_response_proxy: false
+  gpu_device_resident_operator_apply: true
+  cpu_fallback: disabled
+  fallback_used: false
+  per_iteration_h2d_count: 0
+  per_iteration_d2h_count: 0
+
+measured artifact metrics:
+  input_l2_norm: 1.5970676253684437
+  output_l2_norm: 14250292096.377323
+
+RED:
+  undefined reference to fullmag_fem_frequency_domain_apply_modal_poisson_airbox_gpu_descriptor
+
+verification:
+  focused container fem_poisson_airbox_modal_eigen_slepc_contract
+  just verify-fem-frequency-domain-eigen-k0-poisson-airbox-gpu-shift-invert-action
+    including scripts/verify_fem_gpu_modal_poisson_airbox_descriptor_apply_artifact.py
+  python3 -m pytest scripts/test_verify_fem_gpu_modal_poisson_airbox_descriptor_apply_artifact.py scripts/test_frequency_domain_runtime_targets.py -q
+```
+
+This closes only GPU-G5b as an operator-apply foundation. Remaining production
+GPU modal work still requires a device sparse shifted solve and eigen iteration
+over this descriptor path.
 
 ## Patch J - GPU device FGMRES
 

@@ -15,6 +15,7 @@ use fullmag_ir::{
     OutputIR, ProblemIR, RelaxationAlgorithmIR,
 };
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashSet};
 use std::sync::{Mutex, OnceLock};
 
@@ -2287,7 +2288,7 @@ fn execute_fem_eigen_path(
     outputs: &[OutputIR],
 ) -> Result<ExecutedRun, RunError> {
     if engine == FemEngine::NativeGpu && !gpu_modal_k0_kittel_path_supported(plan) {
-        return Err(gpu_modal_dispersion_path_unavailable_error());
+        return Err(gpu_modal_dispersion_path_unavailable_error(plan));
     }
     if !de_bv_low_k_analytic_reference_enabled(plan)
         && !k0_kittel_synthetic_demag_factor_enabled(plan)
@@ -2326,14 +2327,7 @@ fn execute_fem_eigen_path(
                 return solve_k0_kittel_synthetic_demag_factor_single_k(plan, sample);
             }
 
-            // Override plan's k_sampling to a single-k point for this sample
-            let mut point_plan = plan.clone();
-            point_plan.k_sampling = Some(fullmag_ir::KSamplingIR::Single {
-                k_vector: sample.k_vector,
-            });
-            if let Some(external_field) = eigen_path_k0_kittel_sample_external_field(plan, sample) {
-                point_plan.external_field = Some(external_field);
-            }
+            let point_plan = eigen_path_single_k_point_plan(plan, sample);
 
             let executed = match self.engine {
                 FemEngine::CpuNative => fem_eigen::execute_cpu_fem_eigen(&point_plan, outputs)?,
@@ -2673,7 +2667,7 @@ fn execute_fem_eigen_path(
             "normalization": format!("{:?}", plan.normalization).to_lowercase(),
             "damping_policy": format!("{:?}", plan.damping_policy).to_lowercase(),
             "spin_wave_bc": format!("{:?}", plan.spin_wave_bc.kind()).to_lowercase(),
-            "equilibrium_source": format!("{:?}", plan.equilibrium).to_lowercase(),
+            "equilibrium_source": eigen_path_equilibrium_source_json(plan, first_sample.relaxation_steps),
             "included_terms": {
                 "exchange": plan.enable_exchange,
                 "demag": plan.operator.include_demag,
@@ -2855,7 +2849,12 @@ fn execute_fem_eigen_path(
     })
 }
 
-fn gpu_modal_dispersion_path_unavailable_error() -> RunError {
+fn gpu_modal_dispersion_path_unavailable_error(plan: &FemEigenPlanIR) -> RunError {
+    if plan.operator.include_demag || plan.enable_demag {
+        return RunError {
+            message: "GPU modal K0/Kittel with demag is unavailable until Poisson-airbox GPU parity/runtime gates pass; CPU fallback is disabled for forced GPU modal demag.".to_string(),
+        };
+    }
     RunError {
         message: "GPU modal dispersion with KSamplingIR::Path is unavailable until a native modal GPU eigensolver and Floquet operator exist; request FEM CPU/reference modal dispersion or a single-k GPU modal solve".to_string(),
     }
@@ -2883,6 +2882,26 @@ fn gpu_modal_k0_kittel_path_supported(plan: &FemEigenPlanIR) -> bool {
                 .iter()
                 .all(|component| component.is_finite() && component.abs() <= 1.0e-12)
         })
+}
+
+fn eigen_path_single_k_point_plan(
+    plan: &FemEigenPlanIR,
+    sample: &crate::eigen::KSampleDescriptor,
+) -> FemEigenPlanIR {
+    let mut point_plan = plan.clone();
+    point_plan.k_sampling = Some(fullmag_ir::KSamplingIR::Single {
+        k_vector: sample.k_vector,
+    });
+    if matches!(
+        point_plan.equilibrium,
+        fullmag_ir::EquilibriumSourceIR::RelaxedInitialState
+    ) {
+        point_plan.equilibrium = fullmag_ir::EquilibriumSourceIR::Provided;
+    }
+    if let Some(external_field) = eigen_path_k0_kittel_sample_external_field(plan, sample) {
+        point_plan.external_field = Some(external_field);
+    }
+    point_plan
 }
 
 fn de_bv_low_k_analytic_reference_enabled(plan: &FemEigenPlanIR) -> bool {
@@ -3310,6 +3329,13 @@ fn eigen_path_single_k_solver_model(
             && solver_model == Some("slepc_multi_shift_invert_production_cpu_dense")
             && spectral_transform == Some("shift_invert")
         {
+            if matches!(
+                plan.spin_wave_bc.kind(),
+                fullmag_ir::SpinWaveBoundaryKindIR::Floquet
+            ) && !eigen_path_single_k_has_bloch_floquet_contract(diagnostics)
+            {
+                return crate::eigen::EigenSolverModel::ReferenceFull2x2Tangent;
+            }
             return crate::eigen::EigenSolverModel::ProductionCpuShiftInvert;
         }
         if production_solver_available
@@ -3325,6 +3351,53 @@ fn eigen_path_single_k_solver_model(
     } else {
         crate::eigen::EigenSolverModel::ReferenceScalarTangent
     }
+}
+
+fn eigen_path_single_k_has_bloch_floquet_contract(diagnostics: Option<&serde_json::Value>) -> bool {
+    diagnostics
+        .and_then(|value| value.get("operator_diagnostics"))
+        .and_then(|value| value.get("payload_kind"))
+        .and_then(|value| value.as_str())
+        == Some("bloch_floquet_tangent_operator")
+        && diagnostics
+            .and_then(|value| value.get("modal_periodic_pair_contract_available"))
+            .and_then(|value| value.as_bool())
+            == Some(true)
+        && diagnostics
+            .and_then(|value| value.get("floquet_periodic_pair_count"))
+            .and_then(|value| value.as_u64())
+            .is_some_and(|count| count > 0)
+        && diagnostics
+            .and_then(|value| value.get("operator_diagnostics"))
+            .and_then(|value| value.get("demag_payload_kind"))
+            .is_none()
+        && !eigen_path_operator_diagnostics_has_gated_terms(diagnostics)
+}
+
+fn eigen_path_operator_diagnostics_has_gated_terms(
+    diagnostics: Option<&serde_json::Value>,
+) -> bool {
+    diagnostics
+        .and_then(|value| value.get("operator_diagnostics"))
+        .and_then(|value| value.get("operator_terms_included"))
+        .and_then(|value| value.as_array())
+        .is_some_and(|terms| {
+            terms.iter().any(|term| {
+                matches!(
+                    term.as_str(),
+                    Some(
+                        "demag"
+                            | "dynamic_demag"
+                            | "periodic_poisson"
+                            | "floquet_airbox"
+                            | "dmi"
+                            | "interfacial_dmi"
+                            | "bulk_dmi"
+                            | "magnetoelastic"
+                    )
+                )
+            })
+        })
 }
 
 fn eigen_path_tracking_outputs(outputs: &[OutputIR], mode_count: u32) -> Vec<OutputIR> {
@@ -3688,6 +3761,88 @@ fn eigen_path_public_mode_count(
         .unwrap_or(0)
 }
 
+fn eigen_path_floquet_periodic_pair_count(plan: &FemEigenPlanIR) -> u64 {
+    if !matches!(
+        plan.spin_wave_bc.kind(),
+        fullmag_ir::SpinWaveBoundaryKindIR::Floquet
+    ) {
+        return 0;
+    }
+    let requested_pair_ids = plan.spin_wave_bc.boundary_pair_ids();
+    if requested_pair_ids.is_empty() {
+        return 0;
+    }
+    plan.mesh
+        .periodic_boundary_pairs
+        .iter()
+        .filter(|boundary_pair| {
+            requested_pair_ids
+                .iter()
+                .any(|requested| *requested == boundary_pair.pair_id)
+                && boundary_pair.translation.is_some()
+                && plan
+                    .mesh
+                    .periodic_node_pairs
+                    .iter()
+                    .any(|node_pair| node_pair.pair_id == boundary_pair.pair_id)
+        })
+        .count() as u64
+}
+
+fn eigen_path_floquet_periodic_mesh_certificate(
+    plan: &FemEigenPlanIR,
+) -> Option<serde_json::Value> {
+    if !matches!(
+        plan.spin_wave_bc.kind(),
+        fullmag_ir::SpinWaveBoundaryKindIR::Floquet
+    ) {
+        return None;
+    }
+    let requested_pair_ids = plan.spin_wave_bc.boundary_pair_ids();
+    if requested_pair_ids.is_empty() {
+        return None;
+    }
+    let mut node_pairs: Vec<_> = plan
+        .mesh
+        .periodic_node_pairs
+        .iter()
+        .filter(|node_pair| {
+            requested_pair_ids
+                .iter()
+                .any(|requested| *requested == node_pair.pair_id)
+        })
+        .collect();
+    if node_pairs.is_empty() {
+        return None;
+    }
+    node_pairs.sort_by(|left, right| {
+        left.pair_id
+            .cmp(&right.pair_id)
+            .then(left.node_a.cmp(&right.node_a))
+            .then(left.node_b.cmp(&right.node_b))
+    });
+
+    let mut canonical_payload =
+        String::from("periodic_mesh_certificate_pair_map.v1\nschema=periodic_mesh_certificate.v5\nrole=magnetic\n");
+    for node_pair in &node_pairs {
+        canonical_payload.push_str(&format!(
+            "pair_id_len={};pair_id={};node_a={};node_b={}\n",
+            node_pair.pair_id.len(),
+            node_pair.pair_id,
+            node_pair.node_a,
+            node_pair.node_b
+        ));
+    }
+    let digest = Sha256::digest(canonical_payload.as_bytes());
+    Some(serde_json::json!({
+        "schema_version": "periodic_mesh_certificate.v5",
+        "certificate_status": "accepted",
+        "magnetic_pair_count": node_pairs.len(),
+        "magnetic_pair_map_sha256": format!("sha256:{digest:x}"),
+        "pair_map_hash_canonicalization": "periodic_mesh_certificate_pair_map.v1_schema_role_pair_id_len_sorted_nodes",
+    }))
+}
+
 fn eigen_path_solver_diagnostics(
     plan: &FemEigenPlanIR,
     result: &crate::eigen::PathSolveResult,
@@ -3695,29 +3850,43 @@ fn eigen_path_solver_diagnostics(
 ) -> serde_json::Value {
     let gamma0_rad_s_per_a_m = plan.gyromagnetic_ratio;
     let public_mode_count = eigen_path_public_mode_count(result, published_mode_indices);
-    let production_shift_invert =
+    let requested_production_shift_invert =
         result.solver_model == crate::eigen::EigenSolverModel::ProductionCpuShiftInvert;
+    let native_cpu_modal_window_rejection_reason =
+        fem_eigen::native_cpu_modal_window_rejection_reason(plan);
+    let production_shift_invert =
+        requested_production_shift_invert && native_cpu_modal_window_rejection_reason.is_none();
     let production_gpu_k0_kittel =
         result.solver_model == crate::eigen::EigenSolverModel::ProductionGpuDenseK0Macrospin;
+    let production_periodic_airbox_k0 = result.k0_kittel_periodic_airbox_demag.is_some()
+        && plan
+            .k0_kittel_validation
+            .as_ref()
+            .is_some_and(|validation| {
+                validation.case_id.as_deref() == Some("K0-3")
+                    && validation.demag_kind.as_deref() == Some("periodic_airbox_k0")
+            });
+    let production_modal_solver =
+        production_shift_invert || production_gpu_k0_kittel || production_periodic_airbox_k0;
     let mut diagnostics = serde_json::json!({
         "schema_version": "frequency_domain_modal_solver_diagnostics.v1",
         "study_product": "modal_eigen",
         "status": "ready",
         "complete": true,
-        "solver_model": result.solver_model.as_str(),
-        "solver_family": result.solver_model.as_str(),
-        "resolved_solver_family": if production_shift_invert { "shift_invert" } else if production_gpu_k0_kittel { "gpu_dense_k0_macrospin" } else { result.solver_model.as_str() },
-        "spectral_transform": if production_shift_invert { "shift_invert" } else if production_gpu_k0_kittel { "dense_generalized" } else { "none" },
-        "solver_adapter": if production_shift_invert { "slepc_modal_eigen" } else if production_gpu_k0_kittel { "cusolverdn_dense_k0_macrospin_modal" } else { "multi_k_reference_modal_path" },
+        "solver_model": if production_periodic_airbox_k0 { "k0_poisson_airbox_cpu_full_coupled_slepc" } else { result.solver_model.as_str() },
+        "solver_family": if production_periodic_airbox_k0 { "k0_poisson_airbox_full_coupled" } else { result.solver_model.as_str() },
+        "resolved_solver_family": if production_periodic_airbox_k0 { "k0_poisson_airbox_full_coupled" } else if production_shift_invert { "shift_invert" } else if production_gpu_k0_kittel { "gpu_dense_k0_macrospin" } else { result.solver_model.as_str() },
+        "spectral_transform": if production_periodic_airbox_k0 { "shift_invert" } else if production_shift_invert { "shift_invert" } else if production_gpu_k0_kittel { "dense_generalized" } else { "none" },
+        "solver_adapter": if production_periodic_airbox_k0 { "k0_poisson_airbox_cpu_full_coupled_slepc" } else if production_shift_invert { "slepc_modal_eigen" } else if production_gpu_k0_kittel { "cusolverdn_dense_k0_macrospin_modal" } else { "multi_k_reference_modal_path" },
         "solver_notes": result.notes,
-        "execution_lane": if production_shift_invert { "production_cpu" } else if production_gpu_k0_kittel { "production_gpu" } else { "reference_cpu" },
-        "algebraic_form": if production_shift_invert { "gyrotropic_generalized" } else if production_gpu_k0_kittel { "k0_macrospin_field_generalized_to_gyrotropic_modal" } else { "reference_effective_field_generalized" },
-        "matrix_equation": if production_shift_invert { "A q = lambda B q" } else if production_gpu_k0_kittel { "K u = lambda_field M u; lambda_modal = i gamma0 lambda_field" } else { "K u = lambda M u" },
-        "phasor_convention": if production_shift_invert || production_gpu_k0_kittel { "exp_i_omega_t" } else { "not_applicable_real_reference" },
-        "eigenvalue_mapping": if production_shift_invert || production_gpu_k0_kittel { "lambda_eq_i_omega" } else { "omega_rad_s_eq_gamma0_rad_s_per_A_m_times_effective_field_lambda_A_per_m" },
-        "frequency_mapping": if production_shift_invert || production_gpu_k0_kittel { "frequency_hz = imag(lambda)/(2*pi)" } else { "frequency_hz = omega_rad_s / (2*pi)" },
-        "production_gyrotropic_mapping": production_shift_invert || production_gpu_k0_kittel,
-        "production_solver_available": production_shift_invert || production_gpu_k0_kittel,
+        "execution_lane": if production_periodic_airbox_k0 { "production_cpu" } else if production_shift_invert { "production_cpu" } else if production_gpu_k0_kittel { "production_gpu" } else { "reference_cpu" },
+        "algebraic_form": if production_periodic_airbox_k0 { "full_coupled_poisson_airbox_augmented_gauge" } else if production_shift_invert { "gyrotropic_generalized" } else if production_gpu_k0_kittel { "k0_macrospin_field_generalized_to_gyrotropic_modal" } else { "reference_effective_field_generalized" },
+        "matrix_equation": if production_periodic_airbox_k0 { "A_full x = lambda B_full x; Poisson airbox eliminated through Schur diagnostics" } else if production_shift_invert { "A q = lambda B q" } else if production_gpu_k0_kittel { "K u = lambda_field M u; lambda_modal = i gamma0 lambda_field" } else { "K u = lambda M u" },
+        "phasor_convention": if production_periodic_airbox_k0 { "exp_plus_i_omega_t" } else if production_shift_invert || production_gpu_k0_kittel { "exp_i_omega_t" } else { "not_applicable_real_reference" },
+        "eigenvalue_mapping": if production_periodic_airbox_k0 { "lambda_imag_positive_frequency" } else if production_shift_invert || production_gpu_k0_kittel { "lambda_eq_i_omega" } else { "omega_rad_s_eq_gamma0_rad_s_per_A_m_times_effective_field_lambda_A_per_m" },
+        "frequency_mapping": if production_modal_solver { "frequency_hz = imag(lambda)/(2*pi)" } else { "frequency_hz = omega_rad_s / (2*pi)" },
+        "production_gyrotropic_mapping": production_modal_solver,
+        "production_solver_available": production_modal_solver,
         "dense_reference_oracle": false,
         "sample_count": result.samples.len(),
         "mode_count": public_mode_count,
@@ -3739,19 +3908,89 @@ fn eigen_path_solver_diagnostics(
         for (key, value) in transport {
             object.insert(key.clone(), value.clone());
         }
-        if !(production_shift_invert || production_gpu_k0_kittel) {
-            if let Some(reason) = fem_eigen::native_cpu_modal_window_rejection_reason(plan) {
+    }
+    if let Some(object) = diagnostics.as_object_mut() {
+        if !production_modal_solver {
+            if let Some(reason) = native_cpu_modal_window_rejection_reason {
                 object.insert(
                     "production_cpu_rejection_reason".to_string(),
                     serde_json::json!(reason),
                 );
                 object.insert(
                     "production_cpu_rejection_scope".to_string(),
-                    serde_json::json!("selected_spectrum_nonzero_k_floquet_modal"),
+                    serde_json::json!(fem_eigen::native_cpu_modal_window_rejection_scope(reason)),
                 );
-                fem_eigen::insert_native_cpu_modal_window_rejection_contract(object);
+                fem_eigen::insert_native_cpu_modal_window_rejection_contract(object, reason);
             }
         }
+        let floquet_pair_count = eigen_path_floquet_periodic_pair_count(plan);
+        if floquet_pair_count > 0
+            && matches!(
+                plan.spin_wave_bc.kind(),
+                fullmag_ir::SpinWaveBoundaryKindIR::Floquet
+            )
+            && !plan.operator.include_demag
+        {
+            object.insert(
+                "modal_periodic_pair_contract_available".to_string(),
+                serde_json::json!(true),
+            );
+            object.insert(
+                "floquet_periodic_pair_count".to_string(),
+                serde_json::json!(floquet_pair_count),
+            );
+            if let Some(certificate) = eigen_path_floquet_periodic_mesh_certificate(plan) {
+                object.insert("periodic_mesh_certificate".to_string(), certificate);
+            }
+            object.insert(
+                "operator_diagnostics".to_string(),
+                serde_json::json!({
+                    "schema_version": "frequency_domain_operator_diagnostics.v1",
+                    "payload_kind": "bloch_floquet_tangent_operator",
+                }),
+            );
+        }
+    }
+    if let (Some(object), Some(metrics)) = (
+        diagnostics.as_object_mut(),
+        result.k0_kittel_periodic_airbox_demag.as_ref(),
+    ) {
+        object.insert(
+            "demag_kind".to_string(),
+            serde_json::json!("periodic_airbox_k0"),
+        );
+        object.insert(
+            "gauge_policy".to_string(),
+            serde_json::json!("mean_zero_augmented"),
+        );
+        object.insert(
+            "phi_dof_count".to_string(),
+            serde_json::json!(metrics.phi_dof_count),
+        );
+        object.insert(
+            "augmented_phi_dof_count".to_string(),
+            serde_json::json!(metrics.augmented_phi_dof_count),
+        );
+        object.insert(
+            "poisson_constraint_relative_residual".to_string(),
+            serde_json::json!(metrics.poisson_constraint_relative_residual),
+        );
+        object.insert(
+            "relative_reference_frequency_error".to_string(),
+            serde_json::json!(metrics.relative_kittel_frequency_error),
+        );
+        object.insert(
+            "magnetic_pair_count".to_string(),
+            serde_json::json!(metrics.magnetic_pair_count),
+        );
+        object.insert(
+            "airbox_pair_count".to_string(),
+            serde_json::json!(metrics.airbox_pair_count),
+        );
+        object.insert(
+            "production_periodic_airbox_claim".to_string(),
+            serde_json::json!(true),
+        );
     }
     if let fullmag_ir::EigenTargetIR::FrequencyWindow {
         frequency_min_hz,
@@ -3826,6 +4065,27 @@ fn eigen_path_solver_diagnostics(
         }
     }
     diagnostics
+}
+
+fn eigen_path_equilibrium_source_json(
+    plan: &FemEigenPlanIR,
+    relaxation_steps: u64,
+) -> serde_json::Value {
+    match &plan.equilibrium {
+        fullmag_ir::EquilibriumSourceIR::RelaxedInitialState if relaxation_steps == 0 => {
+            serde_json::json!({
+                "kind": "relaxed_initial_state",
+                "handoff": "stage_continuation",
+            })
+        }
+        fullmag_ir::EquilibriumSourceIR::RelaxedInitialState => {
+            serde_json::json!({ "kind": "relaxed_initial_state" })
+        }
+        fullmag_ir::EquilibriumSourceIR::Provided => serde_json::json!("provided"),
+        fullmag_ir::EquilibriumSourceIR::Artifact { path } => {
+            serde_json::json!({ "kind": "artifact", "path": path })
+        }
+    }
 }
 
 fn finite_or_default(value: Option<f64>, default: f64) -> f64 {
@@ -3993,11 +4253,15 @@ fn build_eigen_path_frequency_domain_manifest(
         FemEngine::CpuNative => "cpu",
         FemEngine::NativeGpu => "gpu",
     };
-    let production_shift_invert =
+    let requested_production_shift_invert =
         result.solver_model == crate::eigen::EigenSolverModel::ProductionCpuShiftInvert;
+    let native_cpu_modal_window_rejection_reason =
+        fem_eigen::native_cpu_modal_window_rejection_reason(plan);
+    let production_shift_invert =
+        requested_production_shift_invert && native_cpu_modal_window_rejection_reason.is_none();
     let production_gpu_k0_kittel =
         result.solver_model == crate::eigen::EigenSolverModel::ProductionGpuDenseK0Macrospin;
-    serde_json::json!({
+    let mut manifest = serde_json::json!({
         "schema_version": "frequency_domain_manifest.v1",
         "analysis_family": "magnetic_frequency_domain",
         "study_product": "modal_eigen",
@@ -4113,7 +4377,33 @@ fn build_eigen_path_frequency_domain_manifest(
             "validation_artifact": !(production_shift_invert || production_gpu_k0_kittel) && engine == FemEngine::CpuNative,
             "dispersion": eigen_path_dispersion_capabilities(production_shift_invert, production_gpu_k0_kittel),
         },
-    })
+    });
+    if !production_shift_invert {
+        if let (Some(reason), Some(diagnostics)) = (
+            native_cpu_modal_window_rejection_reason,
+            manifest
+                .get_mut("diagnostics")
+                .and_then(serde_json::Value::as_object_mut),
+        ) {
+            diagnostics.insert(
+                "production_cpu_rejection_reason".to_string(),
+                serde_json::json!(reason),
+            );
+            diagnostics.insert(
+                "production_cpu_rejection_scope".to_string(),
+                serde_json::json!(fem_eigen::native_cpu_modal_window_rejection_scope(reason)),
+            );
+            fem_eigen::insert_native_cpu_modal_window_rejection_contract(diagnostics, reason);
+        }
+    } else if let Some(diagnostics) = manifest
+        .get_mut("diagnostics")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        if let Some(certificate) = eigen_path_floquet_periodic_mesh_certificate(plan) {
+            diagnostics.insert("periodic_mesh_certificate".to_string(), certificate);
+        }
+    }
+    manifest
 }
 
 fn eigen_path_k0_kittel_sample_external_field(
@@ -6834,6 +7124,58 @@ mod tests {
     }
 
     #[test]
+    fn forced_gpu_k0_kittel_with_demag_fails_without_cpu_fallback() {
+        let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Path {
+            points: vec![
+                fullmag_ir::KPointIR {
+                    label: Some("H20mT".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+                fullmag_ir::KPointIR {
+                    label: Some("H100mT".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+            ],
+            samples_per_segment: vec![1],
+            closed: false,
+        }));
+        plan.count = 1;
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.operator.include_demag = true;
+        plan.enable_demag = true;
+        plan.damping_policy = fullmag_ir::EigenDampingPolicyIR::Ignore;
+        plan.k0_kittel_validation = Some(fullmag_ir::FemEigenK0KittelValidationIR {
+            kind: "k0_kittel_field_sweep".to_string(),
+            case_id: Some("K0-3".to_string()),
+            demag_kind: Some("periodic_airbox_k0".to_string()),
+            model: "thin_film_in_plane".to_string(),
+            field_units: "A_per_m".to_string(),
+            relative_tolerance: 0.02,
+            material: fullmag_ir::FemEigenK0KittelValidationMaterialIR {
+                effective_magnetisation: Some(800_000.0),
+            },
+            samples: vec![
+                fullmag_ir::FemEigenK0KittelValidationSampleIR {
+                    sample_index: 0,
+                    bias_field: [20e-3 / fullmag_engine::MU0, 0.0, 0.0],
+                },
+                fullmag_ir::FemEigenK0KittelValidationSampleIR {
+                    sample_index: 1,
+                    bias_field: [100e-3 / fullmag_engine::MU0, 0.0, 0.0],
+                },
+            ],
+        });
+
+        let err = execute_fem_eigen(FemEngine::NativeGpu, &plan, &[])
+            .expect_err("GPU K0 Kittel with demag must remain gated");
+
+        assert!(err.message.contains("GPU modal"));
+        assert!(err.message.contains("demag"));
+        assert!(err.message.contains("CPU fallback"));
+        assert!(err.message.contains("disabled"));
+    }
+
+    #[test]
     fn forced_gpu_k0_kittel_path_reaches_single_k_gpu_solver() {
         let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Path {
             points: vec![
@@ -7009,6 +7351,218 @@ mod tests {
     }
 
     #[test]
+    fn k_path_single_sample_model_requires_bloch_payload_for_floquet_production() {
+        let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [1.0e6, 0.0, 0.0],
+        }));
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.spin_wave_bc =
+            fullmag_ir::SpinWaveBoundaryConditionIR::Config(fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,
+                boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            });
+        let artifacts = vec![AuxiliaryArtifact {
+            relative_path: "eigen/metadata/eigen_summary.json".to_string(),
+            bytes: br#"{
+                "solver_kind": "slepc_multi_shift_invert_production_cpu_dense",
+                "solver_diagnostics": {
+                    "execution_lane": "production_cpu",
+                    "solver_model": "slepc_multi_shift_invert_production_cpu_dense",
+                    "spectral_transform": "shift_invert",
+                    "production_solver_available": true
+                }
+            }"#
+            .to_vec(),
+        }];
+
+        let model = eigen_path_single_k_solver_model(&plan, &artifacts);
+
+        assert_eq!(
+            model,
+            EigenSolverModel::ReferenceFull2x2Tangent,
+            "Floquet production classification requires a labelled Bloch/Floquet operator payload"
+        );
+    }
+
+    #[test]
+    fn k_path_single_sample_model_accepts_bloch_payload_for_floquet_production() {
+        let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [1.0e6, 0.0, 0.0],
+        }));
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.spin_wave_bc =
+            fullmag_ir::SpinWaveBoundaryConditionIR::Config(fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,
+                boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            });
+        let artifacts = vec![AuxiliaryArtifact {
+            relative_path: "eigen/metadata/eigen_summary.json".to_string(),
+            bytes: br#"{
+                "solver_kind": "slepc_multi_shift_invert_production_cpu_dense",
+                "solver_diagnostics": {
+                    "execution_lane": "production_cpu",
+                    "solver_model": "slepc_multi_shift_invert_production_cpu_dense",
+                    "spectral_transform": "shift_invert",
+                    "production_solver_available": true,
+                    "modal_periodic_pair_contract_available": true,
+                    "floquet_periodic_pair_count": 1,
+                    "operator_diagnostics": {
+                        "payload_kind": "bloch_floquet_tangent_operator"
+                    }
+                }
+            }"#
+            .to_vec(),
+        }];
+
+        let model = eigen_path_single_k_solver_model(&plan, &artifacts);
+
+        assert_eq!(
+            model,
+            EigenSolverModel::ProductionCpuShiftInvert,
+            "labelled Bloch/Floquet operator payload should preserve production k-path provenance"
+        );
+    }
+
+    #[test]
+    fn k_path_single_sample_model_requires_periodic_pair_contract_for_floquet_production() {
+        let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [1.0e6, 0.0, 0.0],
+        }));
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.spin_wave_bc =
+            fullmag_ir::SpinWaveBoundaryConditionIR::Config(fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,
+                boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            });
+        let artifacts = vec![AuxiliaryArtifact {
+            relative_path: "eigen/metadata/eigen_summary.json".to_string(),
+            bytes: br#"{
+                "solver_kind": "slepc_multi_shift_invert_production_cpu_dense",
+                "solver_diagnostics": {
+                    "execution_lane": "production_cpu",
+                    "solver_model": "slepc_multi_shift_invert_production_cpu_dense",
+                    "spectral_transform": "shift_invert",
+                    "production_solver_available": true,
+                    "operator_diagnostics": {
+                        "payload_kind": "bloch_floquet_tangent_operator"
+                    }
+                }
+            }"#
+            .to_vec(),
+        }];
+
+        let model = eigen_path_single_k_solver_model(&plan, &artifacts);
+
+        assert_eq!(
+            model,
+            EigenSolverModel::ReferenceFull2x2Tangent,
+            "Floquet production classification requires periodic-pair contract diagnostics"
+        );
+    }
+
+    #[test]
+    fn k_path_single_sample_model_rejects_demag_payload_for_no_demag_floquet_production() {
+        let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [1.0e6, 0.0, 0.0],
+        }));
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.operator.include_demag = false;
+        plan.spin_wave_bc =
+            fullmag_ir::SpinWaveBoundaryConditionIR::Config(fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,
+                boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            });
+        let artifacts = vec![AuxiliaryArtifact {
+            relative_path: "eigen/metadata/eigen_summary.json".to_string(),
+            bytes: br#"{
+                "solver_kind": "slepc_multi_shift_invert_production_cpu_dense",
+                "solver_diagnostics": {
+                    "execution_lane": "production_cpu",
+                    "solver_model": "slepc_multi_shift_invert_production_cpu_dense",
+                    "spectral_transform": "shift_invert",
+                    "production_solver_available": true,
+                    "modal_periodic_pair_contract_available": true,
+                    "floquet_periodic_pair_count": 1,
+                    "operator_diagnostics": {
+                        "payload_kind": "bloch_floquet_tangent_operator",
+                        "demag_payload_kind": "dynamic_demag_k_operator"
+                    }
+                }
+            }"#
+            .to_vec(),
+        }];
+
+        let model = eigen_path_single_k_solver_model(&plan, &artifacts);
+
+        assert_eq!(
+            model,
+            EigenSolverModel::ReferenceFull2x2Tangent,
+            "current no-demag Floquet production classification must not accept dynamic demag-k payload claims"
+        );
+    }
+
+    #[test]
+    fn k_path_single_sample_model_rejects_gated_operator_terms_for_no_demag_floquet_production() {
+        let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [1.0e6, 0.0, 0.0],
+        }));
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.operator.include_demag = false;
+        plan.spin_wave_bc =
+            fullmag_ir::SpinWaveBoundaryConditionIR::Config(fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,
+                boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            });
+        let artifacts = vec![AuxiliaryArtifact {
+            relative_path: "eigen/metadata/eigen_summary.json".to_string(),
+            bytes: br#"{
+                "solver_kind": "slepc_multi_shift_invert_production_cpu_dense",
+                "solver_diagnostics": {
+                    "execution_lane": "production_cpu",
+                    "solver_model": "slepc_multi_shift_invert_production_cpu_dense",
+                    "spectral_transform": "shift_invert",
+                    "production_solver_available": true,
+                    "modal_periodic_pair_contract_available": true,
+                    "floquet_periodic_pair_count": 1,
+                    "operator_diagnostics": {
+                        "payload_kind": "bloch_floquet_tangent_operator",
+                        "operator_terms_included": ["exchange", "dynamic_demag"]
+                    }
+                }
+            }"#
+            .to_vec(),
+        }];
+
+        let model = eigen_path_single_k_solver_model(&plan, &artifacts);
+
+        assert_eq!(
+            model,
+            EigenSolverModel::ReferenceFull2x2Tangent,
+            "current no-demag Floquet production classification must not accept gated operator terms"
+        );
+    }
+
+    #[test]
     fn k_path_solver_diagnostics_preserve_production_shift_invert_provenance() {
         let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Path {
             points: vec![
@@ -7163,6 +7717,303 @@ mod tests {
             manifest["capabilities"]["dispersion"]["production_gpu"]["reason"]
                 .as_str()
                 .is_some_and(|reason| reason.contains("modal GPU"))
+        );
+    }
+
+    #[test]
+    fn k_path_manifest_downgrades_rejected_floquet_demag_shift_invert_claim() {
+        let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Path {
+            points: vec![
+                fullmag_ir::KPointIR {
+                    label: Some("G".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+                fullmag_ir::KPointIR {
+                    label: Some("X".to_string()),
+                    k_vector: [1.0e6, 0.0, 0.0],
+                },
+            ],
+            samples_per_segment: vec![1],
+            closed: false,
+        }));
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.operator.include_demag = true;
+        plan.enable_demag = true;
+        plan.damping_policy = fullmag_ir::EigenDampingPolicyIR::Ignore;
+        plan.spin_wave_bc =
+            fullmag_ir::SpinWaveBoundaryConditionIR::Config(fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,
+                boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            });
+        plan.target = fullmag_ir::EigenTargetIR::FrequencyWindow {
+            frequency_min_hz: 1.0,
+            frequency_max_hz: 1.0e13,
+        };
+        let path_result = crate::eigen::PathSolveResult {
+            samples: Vec::new(),
+            branches: Vec::new(),
+            solver_model: EigenSolverModel::ProductionCpuShiftInvert,
+            notes: vec!["stale production sample".to_string()],
+            include_demag: true,
+            dispersion_validation: None,
+            k0_kittel_validation: None,
+            dispersion_analytic_reference: None,
+            k0_kittel_periodic_airbox_demag: None,
+        };
+
+        let manifest = build_eigen_path_frequency_domain_manifest(
+            FemEngine::CpuNative,
+            &path_result,
+            &[],
+            &plan,
+        );
+
+        assert_eq!(
+            manifest["resolved_execution"]["reference_or_production"],
+            "reference"
+        );
+        assert_eq!(
+            manifest["resolved_execution"]["native_backend"],
+            "runner_validation"
+        );
+        assert_eq!(
+            manifest["capabilities"]["production_native_solver_available"],
+            false
+        );
+        assert_eq!(manifest["requested_execution"]["include_demag"], true);
+        assert_eq!(
+            manifest["diagnostics"]["production_cpu_rejection_reason"],
+            "production_cpu_modal_dynamic_demag_k_operator_missing"
+        );
+        assert_eq!(
+            manifest["diagnostics"]["production_cpu_rejection_scope"],
+            "selected_spectrum_nonzero_k_floquet_modal_dynamic_demag"
+        );
+        assert_eq!(
+            manifest["diagnostics"]["required_operator_contract"],
+            "bloch_floquet_tangent_operator_with_dynamic_demag_k"
+        );
+        assert_eq!(
+            manifest["diagnostics"]["required_operator_payload_kind"],
+            "bloch_floquet_tangent_operator"
+        );
+        assert_eq!(
+            manifest["diagnostics"]["required_demag_payload_kind"],
+            "dynamic_demag_k_operator"
+        );
+        assert_eq!(
+            manifest["diagnostics"]["dynamic_demag_operator_source"],
+            "missing_numeric_fem_demag_k"
+        );
+        assert_eq!(
+            manifest["diagnostics"]["modal_periodic_pair_contract_available"],
+            false
+        );
+    }
+
+    #[test]
+    fn k_path_manifest_names_reference_floquet_demag_rejection_contract() {
+        let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Path {
+            points: vec![
+                fullmag_ir::KPointIR {
+                    label: Some("G".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+                fullmag_ir::KPointIR {
+                    label: Some("X".to_string()),
+                    k_vector: [1.0e6, 0.0, 0.0],
+                },
+            ],
+            samples_per_segment: vec![1],
+            closed: false,
+        }));
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.operator.include_demag = true;
+        plan.enable_demag = true;
+        plan.damping_policy = fullmag_ir::EigenDampingPolicyIR::Ignore;
+        plan.spin_wave_bc =
+            fullmag_ir::SpinWaveBoundaryConditionIR::Config(fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,
+                boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            });
+        plan.target = fullmag_ir::EigenTargetIR::FrequencyWindow {
+            frequency_min_hz: 1.0,
+            frequency_max_hz: 1.0e13,
+        };
+        let path_result = crate::eigen::PathSolveResult {
+            samples: Vec::new(),
+            branches: Vec::new(),
+            solver_model: EigenSolverModel::ReferenceFull2x2Tangent,
+            notes: vec!["reference fallback".to_string()],
+            include_demag: true,
+            dispersion_validation: None,
+            k0_kittel_validation: None,
+            dispersion_analytic_reference: None,
+            k0_kittel_periodic_airbox_demag: None,
+        };
+
+        let manifest = build_eigen_path_frequency_domain_manifest(
+            FemEngine::CpuNative,
+            &path_result,
+            &[],
+            &plan,
+        );
+
+        assert_eq!(
+            manifest["resolved_execution"]["reference_or_production"],
+            "reference"
+        );
+        assert_eq!(
+            manifest["diagnostics"]["production_cpu_rejection_reason"],
+            "production_cpu_modal_dynamic_demag_k_operator_missing"
+        );
+        assert_eq!(
+            manifest["diagnostics"]["production_cpu_rejection_scope"],
+            "selected_spectrum_nonzero_k_floquet_modal_dynamic_demag"
+        );
+        assert_eq!(
+            manifest["diagnostics"]["required_operator_contract"],
+            "bloch_floquet_tangent_operator_with_dynamic_demag_k"
+        );
+        assert_eq!(
+            manifest["diagnostics"]["required_operator_payload_kind"],
+            "bloch_floquet_tangent_operator"
+        );
+        assert_eq!(
+            manifest["diagnostics"]["required_demag_payload_kind"],
+            "dynamic_demag_k_operator"
+        );
+        assert_eq!(
+            manifest["diagnostics"]["dynamic_demag_operator_source"],
+            "missing_numeric_fem_demag_k"
+        );
+        assert_eq!(
+            manifest["diagnostics"]["modal_periodic_pair_contract_available"],
+            false
+        );
+    }
+
+    #[test]
+    fn k_path_solver_diagnostics_preserve_periodic_airbox_k0_adapter() {
+        let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Path {
+            points: vec![fullmag_ir::KPointIR {
+                label: Some("G".to_string()),
+                k_vector: [0.0, 0.0, 0.0],
+            }],
+            samples_per_segment: Vec::new(),
+            closed: false,
+        }));
+        plan.k0_kittel_validation = Some(fullmag_ir::FemEigenK0KittelValidationIR {
+            kind: "k0_kittel_field_sweep".to_string(),
+            case_id: Some("K0-3".to_string()),
+            demag_kind: Some("periodic_airbox_k0".to_string()),
+            model: "thin_film_in_plane".to_string(),
+            field_units: "A_per_m".to_string(),
+            relative_tolerance: 0.05,
+            material: fullmag_ir::FemEigenK0KittelValidationMaterialIR {
+                effective_magnetisation: Some(800_000.0),
+            },
+            samples: vec![fullmag_ir::FemEigenK0KittelValidationSampleIR {
+                sample_index: 0,
+                bias_field: [20.0e-3 / crate::MU0, 0.0, 0.0],
+            }],
+        });
+        let path_result = crate::eigen::PathSolveResult {
+            samples: Vec::new(),
+            branches: Vec::new(),
+            solver_model: EigenSolverModel::ReferenceFull2x2Tangent,
+            notes: vec!["periodic-airbox k0 path".to_string()],
+            include_demag: true,
+            dispersion_validation: None,
+            k0_kittel_validation: plan.k0_kittel_validation.clone(),
+            dispersion_analytic_reference: None,
+            k0_kittel_periodic_airbox_demag: Some(
+                crate::eigen::K0KittelPeriodicAirboxDemagMetrics {
+                    mesh_resolution_m: 5.0e-9,
+                    airbox_size_m: 2.5e-7,
+                    phi_dof_count: 28,
+                    augmented_phi_dof_count: 45,
+                    poisson_constraint_relative_residual: 1.0e-12,
+                    magnetic_pair_count: 8,
+                    airbox_pair_count: 14,
+                    effective_magnetisation_a_per_m: 800_000.0,
+                    relative_kittel_frequency_error: 2.0e-3,
+                },
+            ),
+        };
+
+        let diagnostics = eigen_path_solver_diagnostics(&plan, &path_result, &BTreeSet::new());
+
+        assert_eq!(
+            diagnostics["solver_adapter"],
+            "k0_poisson_airbox_cpu_full_coupled_slepc"
+        );
+        assert_eq!(diagnostics["execution_lane"], "production_cpu");
+        assert_eq!(
+            diagnostics["resolved_solver_family"],
+            "k0_poisson_airbox_full_coupled"
+        );
+        assert_eq!(
+            diagnostics["solver_model"],
+            "k0_poisson_airbox_cpu_full_coupled_slepc"
+        );
+        assert_eq!(
+            diagnostics["solver_family"],
+            "k0_poisson_airbox_full_coupled"
+        );
+        assert_eq!(diagnostics["demag_kind"], "periodic_airbox_k0");
+        assert_eq!(diagnostics["gauge_policy"], "mean_zero_augmented");
+        assert_eq!(diagnostics["phi_dof_count"], 28);
+        assert_eq!(diagnostics["augmented_phi_dof_count"], 45);
+        assert_eq!(diagnostics["poisson_constraint_relative_residual"], 1.0e-12);
+        assert_eq!(diagnostics["production_solver_available"], true);
+        assert_eq!(diagnostics["production_periodic_airbox_claim"], true);
+        assert!(
+            diagnostics.get("production_cpu_rejection_reason").is_none(),
+            "{}",
+            diagnostics
+        );
+    }
+
+    #[test]
+    fn k_path_single_k_plan_uses_relaxed_handoff_without_repeating_relaxation() {
+        let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Path {
+            points: vec![fullmag_ir::KPointIR {
+                label: Some("G".to_string()),
+                k_vector: [0.0, 0.0, 0.0],
+            }],
+            samples_per_segment: Vec::new(),
+            closed: false,
+        }));
+        plan.equilibrium = fullmag_ir::EquilibriumSourceIR::RelaxedInitialState;
+        let sample = crate::eigen::KSampleDescriptor {
+            sample_index: 0,
+            label: Some("G".to_string()),
+            segment_index: Some(0),
+            path_s: 0.0,
+            t_in_segment: 0.0,
+            k_vector: [0.0, 0.0, 0.0],
+        };
+
+        let point_plan = eigen_path_single_k_point_plan(&plan, &sample);
+
+        assert_eq!(
+            point_plan.equilibrium,
+            fullmag_ir::EquilibriumSourceIR::Provided
+        );
+        assert_eq!(
+            point_plan.k_sampling,
+            Some(fullmag_ir::KSamplingIR::Single {
+                k_vector: [0.0, 0.0, 0.0]
+            })
         );
     }
 
@@ -7653,8 +8504,8 @@ mod tests {
         let path_result = crate::eigen::PathSolveResult {
             samples: Vec::new(),
             branches: Vec::new(),
-            solver_model: EigenSolverModel::ReferenceFull2x2Tangent,
-            notes: vec!["cpu_full_2x2_phase_reduced_floquet".to_string()],
+            solver_model: EigenSolverModel::ProductionCpuShiftInvert,
+            notes: vec!["slepc_multi_shift_invert_production_cpu_dense".to_string()],
             include_demag: plan.operator.include_demag,
             dispersion_validation: None,
             k0_kittel_validation: None,
@@ -7680,7 +8531,213 @@ mod tests {
             diagnostics["required_operator_contract"],
             "bloch_floquet_tangent_operator_with_periodic_pairs"
         );
+        assert_eq!(
+            diagnostics["required_operator_payload_kind"],
+            "bloch_floquet_tangent_operator"
+        );
         assert_eq!(diagnostics["modal_periodic_pair_contract_available"], false);
+    }
+
+    #[test]
+    fn k_path_solver_diagnostics_name_dynamic_demag_k_production_cpu_rejection() {
+        let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Path {
+            points: vec![
+                fullmag_ir::KPointIR {
+                    label: Some("G".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+                fullmag_ir::KPointIR {
+                    label: Some("X".to_string()),
+                    k_vector: [1.0e6, 0.0, 0.0],
+                },
+            ],
+            samples_per_segment: vec![1],
+            closed: false,
+        }));
+        plan.count = 1;
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.operator.include_demag = true;
+        plan.enable_demag = true;
+        plan.damping_policy = fullmag_ir::EigenDampingPolicyIR::Ignore;
+        plan.spin_wave_bc =
+            fullmag_ir::SpinWaveBoundaryConditionIR::Config(fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,
+                boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            });
+        plan.target = fullmag_ir::EigenTargetIR::FrequencyWindow {
+            frequency_min_hz: 1.0,
+            frequency_max_hz: 1.0e13,
+        };
+        let path_result = crate::eigen::PathSolveResult {
+            samples: Vec::new(),
+            branches: Vec::new(),
+            solver_model: EigenSolverModel::ProductionCpuShiftInvert,
+            notes: vec!["slepc_multi_shift_invert_production_cpu_dense".to_string()],
+            include_demag: plan.operator.include_demag,
+            dispersion_validation: None,
+            k0_kittel_validation: None,
+            dispersion_analytic_reference: None,
+            k0_kittel_periodic_airbox_demag: None,
+        };
+
+        let diagnostics = eigen_path_solver_diagnostics(
+            &plan,
+            &path_result,
+            &std::collections::BTreeSet::from([0]),
+        );
+
+        assert_eq!(
+            diagnostics["production_cpu_rejection_reason"],
+            "production_cpu_modal_dynamic_demag_k_operator_missing"
+        );
+        assert_eq!(
+            diagnostics["production_cpu_rejection_scope"],
+            "selected_spectrum_nonzero_k_floquet_modal_dynamic_demag"
+        );
+        assert_eq!(
+            diagnostics["required_operator_contract"],
+            "bloch_floquet_tangent_operator_with_dynamic_demag_k"
+        );
+        assert_eq!(
+            diagnostics["required_operator_payload_kind"],
+            "bloch_floquet_tangent_operator"
+        );
+        assert_eq!(
+            diagnostics["required_demag_payload_kind"],
+            "dynamic_demag_k_operator"
+        );
+        assert_eq!(
+            diagnostics["dynamic_demag_operator_source"],
+            "missing_numeric_fem_demag_k"
+        );
+        assert_eq!(diagnostics["modal_periodic_pair_contract_available"], false);
+    }
+
+    #[test]
+    fn k_path_solver_diagnostics_accept_nonzero_floquet_pair_payload_contract() {
+        let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Path {
+            points: vec![
+                fullmag_ir::KPointIR {
+                    label: Some("G".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+                fullmag_ir::KPointIR {
+                    label: Some("X".to_string()),
+                    k_vector: [1.0e6, 0.0, 0.0],
+                },
+            ],
+            samples_per_segment: vec![1],
+            closed: false,
+        }));
+        plan.count = 1;
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.operator.include_demag = false;
+        plan.damping_policy = fullmag_ir::EigenDampingPolicyIR::Ignore;
+        plan.spin_wave_bc =
+            fullmag_ir::SpinWaveBoundaryConditionIR::Config(fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,
+                boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            });
+        plan.mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
+            pair_id: "x_faces".to_string(),
+            source_marker: None,
+            destination_marker: None,
+            marker_a: 10,
+            marker_b: 11,
+            translation: Some([1.0, 0.0, 0.0]),
+            tolerance: Some(1e-12),
+            axis_hint: None,
+            orientation: None,
+            pairing_policy: None,
+        }];
+        plan.mesh.periodic_node_pairs = vec![fullmag_ir::MeshPeriodicNodePairIR {
+            pair_id: "x_faces".to_string(),
+            node_a: 0,
+            node_b: 1,
+        }];
+        plan.target = fullmag_ir::EigenTargetIR::FrequencyWindow {
+            frequency_min_hz: 1.0,
+            frequency_max_hz: 1.0e13,
+        };
+        let path_result = crate::eigen::PathSolveResult {
+            samples: Vec::new(),
+            branches: Vec::new(),
+            solver_model: EigenSolverModel::ProductionCpuShiftInvert,
+            notes: vec!["slepc_multi_shift_invert_production_cpu_dense".to_string()],
+            include_demag: plan.operator.include_demag,
+            dispersion_validation: None,
+            k0_kittel_validation: None,
+            dispersion_analytic_reference: None,
+            k0_kittel_periodic_airbox_demag: None,
+        };
+
+        let diagnostics = eigen_path_solver_diagnostics(
+            &plan,
+            &path_result,
+            &std::collections::BTreeSet::from([0]),
+        );
+
+        assert!(
+            diagnostics.get("production_cpu_rejection_reason").is_none(),
+            "{}",
+            diagnostics
+        );
+        assert!(
+            diagnostics.get("required_operator_contract").is_none(),
+            "{}",
+            diagnostics
+        );
+        assert_eq!(diagnostics["production_solver_available"], true);
+        assert_eq!(
+            diagnostics["operator_diagnostics"]["payload_kind"],
+            "bloch_floquet_tangent_operator"
+        );
+        assert_eq!(diagnostics["modal_periodic_pair_contract_available"], true);
+        assert_eq!(diagnostics["floquet_periodic_pair_count"], 1);
+        assert_eq!(
+            diagnostics["periodic_mesh_certificate"]["schema_version"],
+            "periodic_mesh_certificate.v5"
+        );
+        assert_eq!(
+            diagnostics["periodic_mesh_certificate"]["certificate_status"],
+            "accepted"
+        );
+        assert_eq!(
+            diagnostics["periodic_mesh_certificate"]["magnetic_pair_count"],
+            1
+        );
+        assert!(
+            diagnostics["periodic_mesh_certificate"]["magnetic_pair_map_sha256"]
+                .as_str()
+                .is_some_and(|value| {
+                    value.starts_with("sha256:") && value.len() == "sha256:".len() + 64
+                }),
+            "{}",
+            diagnostics
+        );
+
+        let manifest = build_eigen_path_frequency_domain_manifest(
+            FemEngine::CpuNative,
+            &path_result,
+            &[],
+            &plan,
+        );
+        assert_eq!(
+            manifest["resolved_execution"]["reference_or_production"],
+            "production"
+        );
+        assert_eq!(
+            manifest["diagnostics"]["periodic_mesh_certificate"],
+            diagnostics["periodic_mesh_certificate"]
+        );
     }
 
     #[test]

@@ -1539,6 +1539,60 @@ struct MfemPhiConsistencySchurProviderContext {
         [kSchurPreconditionerQualityHistoryCapacity]{};
 };
 
+struct MfemGpuOperatorParityProbe {
+    bool available = false;
+    const char *unavailable_reason = "";
+    double stiffness_cpu_l2_norm = 0.0;
+    double stiffness_gpu_l2_norm = 0.0;
+    double stiffness_difference_l2_norm = 0.0;
+    double stiffness_relative_l2_error = 0.0;
+    double stiffness_repeat_relative_l2_error = 0.0;
+    double stiffness_without_demag_cpu_l2_norm = 0.0;
+    double stiffness_without_demag_gpu_l2_norm = 0.0;
+    double stiffness_without_demag_difference_l2_norm = 0.0;
+    double stiffness_without_demag_relative_l2_error = 0.0;
+    double demag_stiffness_component_cpu_l2_norm = 0.0;
+    double demag_stiffness_component_gpu_l2_norm = 0.0;
+    double demag_stiffness_component_difference_l2_norm = 0.0;
+    double demag_stiffness_component_relative_l2_error = 0.0;
+    double demag_tangent_cpu_l2_norm = 0.0;
+    double demag_tangent_gpu_l2_norm = 0.0;
+    double demag_tangent_difference_l2_norm = 0.0;
+    double demag_tangent_relative_l2_error = 0.0;
+    double mass_cpu_l2_norm = 0.0;
+    double mass_gpu_l2_norm = 0.0;
+    double mass_difference_l2_norm = 0.0;
+    double mass_relative_l2_error = 0.0;
+    double mass_repeat_relative_l2_error = 0.0;
+    double reduced_complex_operator_cpu_l2_norm = 0.0;
+    double reduced_complex_operator_gpu_l2_norm = 0.0;
+    double reduced_complex_operator_difference_l2_norm = 0.0;
+    double reduced_complex_operator_parity_relative_l2_error = 0.0;
+    double reduced_complex_operator_additivity_relative_error = 0.0;
+    double reduced_complex_operator_immediate_repeat_relative_error = 0.0;
+    double reduced_complex_operator_repeat_after_b_relative_error = 0.0;
+    double reduced_complex_operator_repeat_after_sum_relative_error = 0.0;
+    double reduced_complex_operator_repeat_after_scaled_relative_error = 0.0;
+    double reduced_complex_operator_homogeneity_relative_error = 0.0;
+    double reduced_complex_operator_repeat_relative_error = 0.0;
+    double reduced_complex_real_stiffness_parity_relative_l2_error = 0.0;
+    double reduced_complex_real_demag_tangent_parity_relative_l2_error = 0.0;
+    double reduced_complex_real_demag_tangent_homogeneity_relative_l2_error = 0.0;
+    double reduced_complex_real_demag_phi_parity_relative_l2_error = 0.0;
+    double reduced_complex_real_demag_phi_homogeneity_relative_l2_error = 0.0;
+    double reduced_complex_imag_stiffness_parity_relative_l2_error = 0.0;
+    double reduced_complex_real_mass_parity_relative_l2_error = 0.0;
+    double reduced_complex_imag_mass_parity_relative_l2_error = 0.0;
+    double reduced_gpu_stiffness_interleaved_repeat_relative_l2_error = 0.0;
+    double reduced_gpu_stiffness_interleaved_repeat_cpu_parity_relative_l2_error = 0.0;
+    double reduced_gpu_mass_interleaved_repeat_relative_l2_error = 0.0;
+    double reduced_gpu_stiffness_homogeneity_relative_l2_error = 0.0;
+    double reduced_gpu_mass_homogeneity_relative_l2_error = 0.0;
+    double reduced_gmres_formula_operator_parity_relative_l2_error = 0.0;
+    double reduced_split_vs_gmres_formula_relative_l2_error = 0.0;
+    double reduced_zero_operator_relative_l2_error = 0.0;
+};
+
 FrequencyDomainStatus apply_mfem_production_gpu_stiffness(
     void *user_data,
     const double *in,
@@ -1554,6 +1608,19 @@ FrequencyDomainStatus apply_mfem_production_gpu_mass(
 FrequencyDomainStatus apply_mfem_production_gpu_mass_only(
     MfemProductionGpuOperatorAdapter *adapter,
     const double *in,
+    char error_message[128]) noexcept;
+
+FrequencyDomainStatus apply_mfem_production_gpu_stiffness_without_demag(
+    MfemProductionGpuOperatorAdapter *adapter,
+    const double *in,
+    char error_message[128]) noexcept;
+
+FrequencyDomainStatus apply_static_periodic_reduced_split_operator(
+    MfemPhiConsistencySchurProviderContext *context,
+    double omega_rad_per_s,
+    const double *in,
+    double *out,
+    std::uint64_t tangent_dof_count,
     char error_message[128]) noexcept;
 
 FrequencyDomainStatus project_floquet_phase_block(
@@ -3030,6 +3097,7 @@ FrequencyDomainStatus apply_mfem_tangent_graph_demag_coarse_right_preconditioner
 FrequencyDomainStatus probe_mfem_demag_tangent_linearity(
     const DrivenFrequencyResponseMfemValidationProblem &problem,
     MfemDrivenResponseValidationResult &result,
+    std::uint64_t potential_dof_count,
     char error_message[128]) noexcept
 {
     if (!has_mfem_demag_tangent_operator(problem)) {
@@ -3048,6 +3116,9 @@ FrequencyDomainStatus probe_mfem_demag_tangent_linearity(
     std::vector<double> out_b(static_cast<std::size_t>(dof_count), 0.0);
     std::vector<double> out_sum(static_cast<std::size_t>(dof_count), 0.0);
     std::vector<double> out_scaled(static_cast<std::size_t>(dof_count), 0.0);
+    std::vector<double> out_a_repeat(static_cast<std::size_t>(dof_count), 0.0);
+    std::vector<double> zero(static_cast<std::size_t>(dof_count), 0.0);
+    std::vector<double> out_zero_after_nonzero(static_cast<std::size_t>(dof_count), 0.0);
     constexpr double scale = -1.75;
     for (std::uint64_t index = 0; index < dof_count; ++index) {
         a[static_cast<std::size_t>(index)] =
@@ -3059,46 +3130,93 @@ FrequencyDomainStatus probe_mfem_demag_tangent_linearity(
         scaled[static_cast<std::size_t>(index)] =
             scale * a[static_cast<std::size_t>(index)];
     }
-    FrequencyDomainStatus status = apply_mfem_demag_tangent(
-        problem,
-        dof_count,
-        a.data(),
-        out_a.data(),
-        error_message);
+    auto apply_probe = [&](const double *input, double *output) {
+        if (potential_dof_count > 0 &&
+            problem.apply_demag_tangent_with_potential != nullptr) {
+            std::vector<double> unused_phi(
+                static_cast<std::size_t>(potential_dof_count),
+                0.0);
+            return problem.apply_demag_tangent_with_potential(
+                problem.demag_tangent_user_data,
+                input,
+                output,
+                unused_phi.data(),
+                potential_dof_count,
+                error_message);
+        }
+        return apply_mfem_demag_tangent(
+            problem,
+            dof_count,
+            input,
+            output,
+            error_message);
+    };
+
+    FrequencyDomainStatus status = apply_probe(a.data(), out_a.data());
     if (status != FrequencyDomainStatus::ok) {
         return status;
     }
-    status = apply_mfem_demag_tangent(
-        problem,
-        dof_count,
-        b.data(),
-        out_b.data(),
-        error_message);
+    status = apply_probe(b.data(), out_b.data());
     if (status != FrequencyDomainStatus::ok) {
         return status;
     }
-    status = apply_mfem_demag_tangent(
-        problem,
-        dof_count,
-        sum.data(),
-        out_sum.data(),
-        error_message);
+    status = apply_probe(sum.data(), out_sum.data());
     if (status != FrequencyDomainStatus::ok) {
         return status;
     }
-    status = apply_mfem_demag_tangent(
-        problem,
-        dof_count,
-        scaled.data(),
-        out_scaled.data(),
-        error_message);
+    status = apply_probe(scaled.data(), out_scaled.data());
+    if (status != FrequencyDomainStatus::ok) {
+        return status;
+    }
+    status = apply_probe(a.data(), out_a_repeat.data());
+    if (status != FrequencyDomainStatus::ok) {
+        return status;
+    }
+    status = apply_probe(zero.data(), out_zero_after_nonzero.data());
     if (status != FrequencyDomainStatus::ok) {
         return status;
     }
     double additivity_error = 0.0;
     double homogeneity_error = 0.0;
+    double repeat_error = 0.0;
     double additivity_reference = 0.0;
     double homogeneity_reference = 0.0;
+    double repeat_reference = 0.0;
+    const double probe_input_l2_norm = l2_norm(a.data(), dof_count);
+    const double probe_output_l2_norm = l2_norm(out_a.data(), dof_count);
+    const double zero_after_nonzero_l2_norm =
+        l2_norm(out_zero_after_nonzero.data(), dof_count);
+    bool provider_parity_available = false;
+    double provider_parity_host_l2_norm = 0.0;
+    double provider_parity_with_potential_l2_norm = 0.0;
+    double provider_parity_difference_l2_norm = 0.0;
+    double provider_parity_relative_l2_error = 0.0;
+    if (potential_dof_count > 0 &&
+        problem.apply_demag_tangent != nullptr &&
+        problem.apply_demag_tangent_with_potential != nullptr) {
+        std::vector<double> host_out_a(static_cast<std::size_t>(dof_count), 0.0);
+        status = problem.apply_demag_tangent(
+            problem.demag_tangent_user_data,
+            a.data(),
+            host_out_a.data(),
+            error_message);
+        if (status != FrequencyDomainStatus::ok) {
+            return status;
+        }
+        std::vector<double> provider_difference(static_cast<std::size_t>(dof_count), 0.0);
+        for (std::uint64_t index = 0; index < dof_count; ++index) {
+            const std::size_t offset = static_cast<std::size_t>(index);
+            provider_difference[offset] = out_a[offset] - host_out_a[offset];
+        }
+        provider_parity_available = true;
+        provider_parity_host_l2_norm = l2_norm(host_out_a.data(), dof_count);
+        provider_parity_with_potential_l2_norm = l2_norm(out_a.data(), dof_count);
+        provider_parity_difference_l2_norm =
+            l2_norm(provider_difference.data(), dof_count);
+        provider_parity_relative_l2_error =
+            provider_parity_difference_l2_norm /
+            std::max(1.0, provider_parity_host_l2_norm);
+    }
     for (std::uint64_t index = 0; index < dof_count; ++index) {
         const std::size_t offset = static_cast<std::size_t>(index);
         const double additivity_expected = out_a[offset] + out_b[offset];
@@ -3115,6 +3233,12 @@ FrequencyDomainStatus probe_mfem_demag_tangent_linearity(
         homogeneity_reference = std::max(
             homogeneity_reference,
             std::max(std::fabs(out_scaled[offset]), std::fabs(homogeneity_expected)));
+        repeat_error = std::max(
+            repeat_error,
+            std::fabs(out_a_repeat[offset] - out_a[offset]));
+        repeat_reference = std::max(
+            repeat_reference,
+            std::max(std::fabs(out_a_repeat[offset]), std::fabs(out_a[offset])));
     }
     const double additivity_relative_error = additivity_reference > 0.0
         ? additivity_error / additivity_reference
@@ -3122,18 +3246,43 @@ FrequencyDomainStatus probe_mfem_demag_tangent_linearity(
     const double homogeneity_relative_error = homogeneity_reference > 0.0
         ? homogeneity_error / homogeneity_reference
         : (homogeneity_error == 0.0 ? 0.0 : std::numeric_limits<double>::infinity());
+    const double repeat_relative_error = repeat_reference > 0.0
+        ? repeat_error / repeat_reference
+        : (repeat_error == 0.0 ? 0.0 : std::numeric_limits<double>::infinity());
     if (!std::isfinite(additivity_error) ||
         !std::isfinite(homogeneity_error) ||
+        !std::isfinite(repeat_error) ||
         !std::isfinite(additivity_relative_error) ||
-        !std::isfinite(homogeneity_relative_error)) {
+        !std::isfinite(homogeneity_relative_error) ||
+        !std::isfinite(repeat_relative_error) ||
+        !std::isfinite(probe_input_l2_norm) ||
+        !std::isfinite(probe_output_l2_norm) ||
+        !std::isfinite(zero_after_nonzero_l2_norm) ||
+        !std::isfinite(provider_parity_host_l2_norm) ||
+        !std::isfinite(provider_parity_with_potential_l2_norm) ||
+        !std::isfinite(provider_parity_difference_l2_norm) ||
+        !std::isfinite(provider_parity_relative_l2_error)) {
         std::snprintf(error_message, 128, "MFEM demag tangent linearity check produced non-finite diagnostics");
         return FrequencyDomainStatus::operator_error;
     }
     result.demag_tangent_linearity_check = true;
+    result.demag_tangent_probe_input_l2_norm = probe_input_l2_norm;
+    result.demag_tangent_probe_output_l2_norm = probe_output_l2_norm;
     result.demag_tangent_additivity_max_abs_error = additivity_error;
     result.demag_tangent_homogeneity_max_abs_error = homogeneity_error;
     result.demag_tangent_additivity_relative_error = additivity_relative_error;
     result.demag_tangent_homogeneity_relative_error = homogeneity_relative_error;
+    result.demag_tangent_repeat_relative_error = repeat_relative_error;
+    result.demag_tangent_zero_after_nonzero_l2_norm = zero_after_nonzero_l2_norm;
+    result.demag_tangent_provider_parity_available = provider_parity_available;
+    result.demag_tangent_provider_parity_host_l2_norm =
+        provider_parity_host_l2_norm;
+    result.demag_tangent_provider_parity_with_potential_l2_norm =
+        provider_parity_with_potential_l2_norm;
+    result.demag_tangent_provider_parity_difference_l2_norm =
+        provider_parity_difference_l2_norm;
+    result.demag_tangent_provider_parity_relative_l2_error =
+        provider_parity_relative_l2_error;
     return FrequencyDomainStatus::ok;
 }
 
@@ -3142,6 +3291,10 @@ void copy_demag_tangent_linearity_diagnostics(
     MfemDrivenResponseValidationResult &target) noexcept
 {
     target.demag_tangent_linearity_check = source.demag_tangent_linearity_check;
+    target.demag_tangent_probe_input_l2_norm =
+        source.demag_tangent_probe_input_l2_norm;
+    target.demag_tangent_probe_output_l2_norm =
+        source.demag_tangent_probe_output_l2_norm;
     target.demag_tangent_additivity_max_abs_error =
         source.demag_tangent_additivity_max_abs_error;
     target.demag_tangent_homogeneity_max_abs_error =
@@ -3150,6 +3303,20 @@ void copy_demag_tangent_linearity_diagnostics(
         source.demag_tangent_additivity_relative_error;
     target.demag_tangent_homogeneity_relative_error =
         source.demag_tangent_homogeneity_relative_error;
+    target.demag_tangent_repeat_relative_error =
+        source.demag_tangent_repeat_relative_error;
+    target.demag_tangent_zero_after_nonzero_l2_norm =
+        source.demag_tangent_zero_after_nonzero_l2_norm;
+    target.demag_tangent_provider_parity_available =
+        source.demag_tangent_provider_parity_available;
+    target.demag_tangent_provider_parity_host_l2_norm =
+        source.demag_tangent_provider_parity_host_l2_norm;
+    target.demag_tangent_provider_parity_with_potential_l2_norm =
+        source.demag_tangent_provider_parity_with_potential_l2_norm;
+    target.demag_tangent_provider_parity_difference_l2_norm =
+        source.demag_tangent_provider_parity_difference_l2_norm;
+    target.demag_tangent_provider_parity_relative_l2_error =
+        source.demag_tangent_provider_parity_relative_l2_error;
 }
 
 void copy_demag_tangent_linearity_diagnostics(
@@ -3157,6 +3324,10 @@ void copy_demag_tangent_linearity_diagnostics(
     DenseDrivenResponseValidationResult &target) noexcept
 {
     target.demag_tangent_linearity_check = source.demag_tangent_linearity_check;
+    target.demag_tangent_probe_input_l2_norm =
+        source.demag_tangent_probe_input_l2_norm;
+    target.demag_tangent_probe_output_l2_norm =
+        source.demag_tangent_probe_output_l2_norm;
     target.demag_tangent_additivity_max_abs_error =
         source.demag_tangent_additivity_max_abs_error;
     target.demag_tangent_homogeneity_max_abs_error =
@@ -3165,6 +3336,20 @@ void copy_demag_tangent_linearity_diagnostics(
         source.demag_tangent_additivity_relative_error;
     target.demag_tangent_homogeneity_relative_error =
         source.demag_tangent_homogeneity_relative_error;
+    target.demag_tangent_repeat_relative_error =
+        source.demag_tangent_repeat_relative_error;
+    target.demag_tangent_zero_after_nonzero_l2_norm =
+        source.demag_tangent_zero_after_nonzero_l2_norm;
+    target.demag_tangent_provider_parity_available =
+        source.demag_tangent_provider_parity_available;
+    target.demag_tangent_provider_parity_host_l2_norm =
+        source.demag_tangent_provider_parity_host_l2_norm;
+    target.demag_tangent_provider_parity_with_potential_l2_norm =
+        source.demag_tangent_provider_parity_with_potential_l2_norm;
+    target.demag_tangent_provider_parity_difference_l2_norm =
+        source.demag_tangent_provider_parity_difference_l2_norm;
+    target.demag_tangent_provider_parity_relative_l2_error =
+        source.demag_tangent_provider_parity_relative_l2_error;
 }
 
 void copy_production_cpu_preconditioner_diagnostics(
@@ -3930,15 +4115,33 @@ std::string demag_tangent_linearity_diagnostics_json(
             json,
             error_message,
             "\"demag_tangent_linearity_check\":%s,"
+            "\"demag_tangent_probe_input_l2_norm\":%.17g,"
+            "\"demag_tangent_probe_output_l2_norm\":%.17g,"
             "\"demag_tangent_additivity_max_abs_error\":%.17g,"
             "\"demag_tangent_homogeneity_max_abs_error\":%.17g,"
             "\"demag_tangent_additivity_relative_error\":%.17g,"
-            "\"demag_tangent_homogeneity_relative_error\":%.17g,",
+            "\"demag_tangent_homogeneity_relative_error\":%.17g,"
+            "\"demag_tangent_repeat_relative_error\":%.17g,"
+            "\"demag_tangent_zero_after_nonzero_l2_norm\":%.17g,"
+            "\"demag_tangent_provider_parity_available\":%s,"
+            "\"demag_tangent_provider_parity_host_l2_norm\":%.17g,"
+            "\"demag_tangent_provider_parity_with_potential_l2_norm\":%.17g,"
+            "\"demag_tangent_provider_parity_difference_l2_norm\":%.17g,"
+            "\"demag_tangent_provider_parity_relative_l2_error\":%.17g,",
             result.demag_tangent_linearity_check ? "true" : "false",
+            result.demag_tangent_probe_input_l2_norm,
+            result.demag_tangent_probe_output_l2_norm,
             result.demag_tangent_additivity_max_abs_error,
             result.demag_tangent_homogeneity_max_abs_error,
             result.demag_tangent_additivity_relative_error,
-            result.demag_tangent_homogeneity_relative_error)) {
+            result.demag_tangent_homogeneity_relative_error,
+            result.demag_tangent_repeat_relative_error,
+            result.demag_tangent_zero_after_nonzero_l2_norm,
+            result.demag_tangent_provider_parity_available ? "true" : "false",
+            result.demag_tangent_provider_parity_host_l2_norm,
+            result.demag_tangent_provider_parity_with_potential_l2_norm,
+            result.demag_tangent_provider_parity_difference_l2_norm,
+            result.demag_tangent_provider_parity_relative_l2_error)) {
         return "";
     }
     return json;
@@ -3953,15 +4156,33 @@ std::string demag_tangent_linearity_diagnostics_json(
             json,
             error_message,
             "\"demag_tangent_linearity_check\":%s,"
+            "\"demag_tangent_probe_input_l2_norm\":%.17g,"
+            "\"demag_tangent_probe_output_l2_norm\":%.17g,"
             "\"demag_tangent_additivity_max_abs_error\":%.17g,"
             "\"demag_tangent_homogeneity_max_abs_error\":%.17g,"
             "\"demag_tangent_additivity_relative_error\":%.17g,"
-            "\"demag_tangent_homogeneity_relative_error\":%.17g,",
+            "\"demag_tangent_homogeneity_relative_error\":%.17g,"
+            "\"demag_tangent_repeat_relative_error\":%.17g,"
+            "\"demag_tangent_zero_after_nonzero_l2_norm\":%.17g,"
+            "\"demag_tangent_provider_parity_available\":%s,"
+            "\"demag_tangent_provider_parity_host_l2_norm\":%.17g,"
+            "\"demag_tangent_provider_parity_with_potential_l2_norm\":%.17g,"
+            "\"demag_tangent_provider_parity_difference_l2_norm\":%.17g,"
+            "\"demag_tangent_provider_parity_relative_l2_error\":%.17g,",
             result.demag_tangent_linearity_check ? "true" : "false",
+            result.demag_tangent_probe_input_l2_norm,
+            result.demag_tangent_probe_output_l2_norm,
             result.demag_tangent_additivity_max_abs_error,
             result.demag_tangent_homogeneity_max_abs_error,
             result.demag_tangent_additivity_relative_error,
-            result.demag_tangent_homogeneity_relative_error)) {
+            result.demag_tangent_homogeneity_relative_error,
+            result.demag_tangent_repeat_relative_error,
+            result.demag_tangent_zero_after_nonzero_l2_norm,
+            result.demag_tangent_provider_parity_available ? "true" : "false",
+            result.demag_tangent_provider_parity_host_l2_norm,
+            result.demag_tangent_provider_parity_with_potential_l2_norm,
+            result.demag_tangent_provider_parity_difference_l2_norm,
+            result.demag_tangent_provider_parity_relative_l2_error)) {
         return "";
     }
     return json;
@@ -4182,6 +4403,78 @@ FrequencyDomainStatus apply_mfem_production_cpu_operator(
         adapter->static_periodic_representative_count,
         adapter->static_periodic_projection_workspace,
         adapter->mass_tangent.data());
+    return FrequencyDomainStatus::ok;
+}
+
+FrequencyDomainStatus apply_mfem_production_cpu_stiffness_without_demag(
+    MfemProductionCpuOperatorAdapter *adapter,
+    const double *in,
+    char error_message[128]) noexcept
+{
+    if (adapter == nullptr || adapter->request == nullptr || in == nullptr) {
+        std::snprintf(error_message, 128, "missing MFEM production CPU no-demag operator adapter");
+        return FrequencyDomainStatus::validation_error;
+    }
+    const DrivenFrequencyResponseSolveRequest &request = *adapter->request;
+    const DrivenFrequencyResponseMfemValidationProblem &problem =
+        request.mfem_validation_problem;
+    const double *operator_input = in;
+    if (!adapter->static_periodic_representative_node.empty()) {
+        project_static_periodic_tangent(
+            adapter->static_periodic_representative_node,
+            adapter->static_periodic_representative_count,
+            in,
+            adapter->projected_tangent.data());
+        operator_input = adapter->projected_tangent.data();
+    }
+    MfemOperatorContextDescriptor no_demag_descriptor = problem.descriptor;
+    no_demag_descriptor.demag_enabled = false;
+    no_demag_descriptor.demag_kind = FrequencyDomainDemagKind::none;
+    MfemLinearizedOperatorDiagnostics diagnostics{};
+    const FrequencyDomainStatus status = apply_mfem_linearized_cpu_operator(
+        no_demag_descriptor,
+        problem.layout,
+        problem.nodes,
+        problem.exchange_edges,
+        problem.exchange_edge_count,
+        problem.h_ext_a_per_m,
+        problem.uniaxial_anisotropy_axis,
+        problem.uniaxial_anisotropy_field_a_per_m,
+        problem.alpha_per_node,
+        request.solve_request.operator_request.gamma0,
+        request.solve_request.operator_request.alpha,
+        MfemLinearizedOperatorWorkspace{
+            adapter->zeeman_blocks.data(),
+            adapter->uniaxial_anisotropy_blocks.data(),
+            adapter->exchange_tangent.data(),
+            adapter->zeeman_tangent.data(),
+            adapter->uniaxial_anisotropy_tangent.data(),
+            adapter->effective_field_tangent.data(),
+            nullptr,
+            adapter->dmi_tangent.data(),
+            problem.dmi_elements,
+            problem.dmi_element_count,
+            problem.dmi_lumped_mass,
+            problem.dmi_ms_field,
+            problem.dmi_uniform_ms,
+            adapter->dmi_delta_xyz.data(),
+            adapter->dmi_residual_xyz.data(),
+            adapter->dmi_field_xyz.data(),
+            nullptr,
+        },
+        operator_input,
+        adapter->stiffness_tangent.data(),
+        adapter->mass_tangent.data(),
+        &diagnostics);
+    if (status != FrequencyDomainStatus::ok) {
+        std::snprintf(error_message, 128, "%s", diagnostics.error_message);
+        return status;
+    }
+    project_static_periodic_tangent_in_place(
+        adapter->static_periodic_representative_node,
+        adapter->static_periodic_representative_count,
+        adapter->static_periodic_projection_workspace,
+        adapter->stiffness_tangent.data());
     return FrequencyDomainStatus::ok;
 }
 
@@ -4729,6 +5022,60 @@ FrequencyDomainStatus apply_mfem_production_gpu_mass_only(
         return FrequencyDomainStatus::validation_error;
     }
 #if FULLMAG_HAS_CUDA_RUNTIME
+    const DrivenFrequencyResponseSolveRequest &request = *adapter->request;
+    const DrivenFrequencyResponseMfemValidationProblem &problem =
+        request.mfem_validation_problem;
+    const double *operator_input = in;
+    if (!adapter->static_periodic_representative_node.empty()) {
+        project_static_periodic_tangent(
+            adapter->static_periodic_representative_node,
+            adapter->static_periodic_representative_count,
+            in,
+            adapter->projected_tangent.data());
+        operator_input = adapter->projected_tangent.data();
+    }
+    TangentFrequencyMassDiagnostics diagnostics{};
+    const FrequencyDomainStatus status = apply_tangent_frequency_mass_operator(
+        problem.nodes,
+        operator_input,
+        TangentWorkspaceShape{
+            problem.descriptor.node_count,
+            problem.descriptor.full_dof_count,
+            problem.descriptor.tangent_dof_count,
+        },
+        request.solve_request.operator_request.alpha,
+        problem.alpha_per_node,
+        adapter->mass_tangent.data(),
+        &diagnostics);
+    if (status != FrequencyDomainStatus::ok) {
+        std::snprintf(error_message, 128, "%s", diagnostics.error_message);
+        return status;
+    }
+    project_static_periodic_tangent_in_place(
+        adapter->static_periodic_representative_node,
+        adapter->static_periodic_representative_count,
+        adapter->static_periodic_projection_workspace,
+        adapter->mass_tangent.data());
+    (void)request;
+    return FrequencyDomainStatus::ok;
+#else
+    (void)adapter;
+    (void)in;
+    std::snprintf(error_message, 128, "native FEM frequency-domain production GPU mass requires CUDA runtime");
+    return FrequencyDomainStatus::unavailable;
+#endif
+}
+
+FrequencyDomainStatus apply_mfem_production_gpu_stiffness_without_demag(
+    MfemProductionGpuOperatorAdapter *adapter,
+    const double *in,
+    char error_message[128]) noexcept
+{
+    if (adapter == nullptr || adapter->request == nullptr || in == nullptr) {
+        std::snprintf(error_message, 128, "missing MFEM production GPU no-demag stiffness adapter");
+        return FrequencyDomainStatus::validation_error;
+    }
+#if FULLMAG_HAS_CUDA_RUNTIME
     const FrequencyDomainStatus context_status =
         ensure_mfem_production_gpu_operator_context(adapter, error_message);
     if (context_status != FrequencyDomainStatus::ok) {
@@ -4759,12 +5106,13 @@ FrequencyDomainStatus apply_mfem_production_gpu_mass_only(
         adapter->static_periodic_representative_node,
         adapter->static_periodic_representative_count,
         adapter->static_periodic_projection_workspace,
-        adapter->mass_tangent.data());
+        adapter->stiffness_tangent.data());
+    (void)request;
     return FrequencyDomainStatus::ok;
 #else
     (void)adapter;
     (void)in;
-    std::snprintf(error_message, 128, "native FEM frequency-domain production GPU mass requires CUDA runtime");
+    std::snprintf(error_message, 128, "native FEM frequency-domain production GPU no-demag stiffness requires CUDA runtime");
     return FrequencyDomainStatus::unavailable;
 #endif
 }
@@ -4841,6 +5189,55 @@ FrequencyDomainStatus apply_static_periodic_reduced_mfem_stiffness(
     return FrequencyDomainStatus::ok;
 }
 
+FrequencyDomainStatus apply_static_periodic_reduced_mfem_stiffness_without_demag(
+    MfemPhiConsistencySchurProviderContext *context,
+    const double *in,
+    double *out,
+    char error_message[128]) noexcept
+{
+    if (context == nullptr ||
+        !context->reduced_tangent_map.active() ||
+        in == nullptr ||
+        out == nullptr) {
+        std::snprintf(error_message, 128, "static-periodic reduced no-demag stiffness requires reduced context");
+        return FrequencyDomainStatus::validation_error;
+    }
+    context->reduced_full_input.assign(
+        static_cast<std::size_t>(context->reduced_tangent_map.full_tangent_dof_count),
+        0.0);
+    context->reduced_full_output.assign(
+        static_cast<std::size_t>(context->reduced_tangent_map.full_tangent_dof_count),
+        0.0);
+    lift_static_periodic_tangent_from_reduced(
+        context->reduced_tangent_map,
+        in,
+        context->reduced_full_input.data());
+    const FrequencyDomainStatus status =
+        context->use_gpu_operator
+            ? apply_mfem_production_gpu_stiffness_without_demag(
+                &context->gpu_adapter,
+                context->reduced_full_input.data(),
+                error_message)
+            : apply_mfem_production_cpu_stiffness_without_demag(
+                &context->adapter,
+                context->reduced_full_input.data(),
+                error_message);
+    if (status != FrequencyDomainStatus::ok) {
+        return status;
+    }
+    const double *full_output = context->use_gpu_operator
+        ? context->gpu_adapter.stiffness_tangent.data()
+        : context->adapter.stiffness_tangent.data();
+    compress_static_periodic_tangent_to_reduced(
+        context->reduced_tangent_map,
+        context->use_gpu_operator
+            ? context->gpu_adapter.static_periodic_representative_count
+            : context->adapter.static_periodic_representative_count,
+        full_output,
+        out);
+    return FrequencyDomainStatus::ok;
+}
+
 FrequencyDomainStatus apply_static_periodic_reduced_mfem_mass(
     void *user_data,
     const double *in,
@@ -4887,6 +5284,695 @@ FrequencyDomainStatus apply_static_periodic_reduced_mfem_mass(
             : context->adapter.static_periodic_representative_count,
         context->reduced_full_output.data(),
         out);
+    return FrequencyDomainStatus::ok;
+}
+
+FrequencyDomainStatus probe_static_periodic_reduced_gpu_operator_parity(
+    MfemPhiConsistencySchurProviderContext *context,
+    std::uint64_t reduced_tangent_dof_count,
+    double omega_rad_per_s,
+    MfemGpuOperatorParityProbe &probe,
+    char error_message[128]) noexcept
+{
+    if (context == nullptr ||
+        !context->use_gpu_operator ||
+        !context->reduced_tangent_map.active() ||
+        reduced_tangent_dof_count == 0 ||
+        reduced_tangent_dof_count !=
+            context->reduced_tangent_map.reduced_tangent_dof_count) {
+        probe.available = false;
+        if (context == nullptr) {
+            probe.unavailable_reason = "null_context";
+        } else if (!context->use_gpu_operator) {
+            probe.unavailable_reason = "gpu_operator_disabled";
+        } else if (!context->reduced_tangent_map.active()) {
+            probe.unavailable_reason = "static_periodic_reduced_tangent_map_inactive";
+        } else if (reduced_tangent_dof_count == 0) {
+            probe.unavailable_reason = "zero_reduced_tangent_dof_count";
+        } else {
+            probe.unavailable_reason = "reduced_tangent_dof_count_mismatch";
+        }
+        return FrequencyDomainStatus::ok;
+    }
+
+    std::vector<double> input(static_cast<std::size_t>(reduced_tangent_dof_count));
+    std::vector<double> cpu_stiffness(static_cast<std::size_t>(reduced_tangent_dof_count));
+    std::vector<double> gpu_stiffness(static_cast<std::size_t>(reduced_tangent_dof_count));
+    std::vector<double> gpu_stiffness_repeat(static_cast<std::size_t>(reduced_tangent_dof_count));
+    std::vector<double> cpu_stiffness_without_demag(static_cast<std::size_t>(reduced_tangent_dof_count));
+    std::vector<double> gpu_stiffness_without_demag(static_cast<std::size_t>(reduced_tangent_dof_count));
+    std::vector<double> cpu_mass(static_cast<std::size_t>(reduced_tangent_dof_count));
+    std::vector<double> gpu_mass(static_cast<std::size_t>(reduced_tangent_dof_count));
+    std::vector<double> gpu_mass_repeat(static_cast<std::size_t>(reduced_tangent_dof_count));
+    std::vector<double> cpu_demag_stiffness_component(static_cast<std::size_t>(reduced_tangent_dof_count));
+    std::vector<double> gpu_demag_stiffness_component(static_cast<std::size_t>(reduced_tangent_dof_count));
+    std::vector<double> difference(static_cast<std::size_t>(reduced_tangent_dof_count));
+    for (std::uint64_t dof = 0; dof < reduced_tangent_dof_count; ++dof) {
+        input[static_cast<std::size_t>(dof)] =
+            0.125 * std::sin(0.37 * static_cast<double>(dof + 1)) +
+            0.075 * std::cos(0.19 * static_cast<double>(dof + 3));
+    }
+
+    const bool original_use_gpu_operator = context->use_gpu_operator;
+    context->use_gpu_operator = false;
+    FrequencyDomainStatus status = apply_static_periodic_reduced_mfem_stiffness(
+        context,
+        input.data(),
+        cpu_stiffness.data(),
+        error_message);
+    if (status == FrequencyDomainStatus::ok) {
+        status = apply_static_periodic_reduced_mfem_mass(
+            context,
+            input.data(),
+            cpu_mass.data(),
+            error_message);
+    }
+    if (status == FrequencyDomainStatus::ok) {
+        status = apply_static_periodic_reduced_mfem_stiffness_without_demag(
+            context,
+            input.data(),
+            cpu_stiffness_without_demag.data(),
+            error_message);
+    }
+    context->use_gpu_operator = true;
+    if (status == FrequencyDomainStatus::ok) {
+        status = apply_static_periodic_reduced_mfem_stiffness(
+            context,
+            input.data(),
+            gpu_stiffness.data(),
+            error_message);
+    }
+    if (status == FrequencyDomainStatus::ok) {
+        status = apply_static_periodic_reduced_mfem_mass(
+            context,
+            input.data(),
+            gpu_mass.data(),
+            error_message);
+    }
+    if (status == FrequencyDomainStatus::ok) {
+        status = apply_static_periodic_reduced_mfem_stiffness_without_demag(
+            context,
+            input.data(),
+            gpu_stiffness_without_demag.data(),
+            error_message);
+    }
+    if (status == FrequencyDomainStatus::ok) {
+        status = apply_static_periodic_reduced_mfem_stiffness(
+            context,
+            input.data(),
+            gpu_stiffness_repeat.data(),
+            error_message);
+    }
+    if (status == FrequencyDomainStatus::ok) {
+        status = apply_static_periodic_reduced_mfem_mass(
+            context,
+            input.data(),
+            gpu_mass_repeat.data(),
+            error_message);
+    }
+    context->use_gpu_operator = original_use_gpu_operator;
+    if (status != FrequencyDomainStatus::ok) {
+        probe.available = false;
+        return status;
+    }
+
+    probe.stiffness_cpu_l2_norm =
+        l2_norm(cpu_stiffness.data(), reduced_tangent_dof_count);
+    probe.stiffness_gpu_l2_norm =
+        l2_norm(gpu_stiffness.data(), reduced_tangent_dof_count);
+    for (std::uint64_t dof = 0; dof < reduced_tangent_dof_count; ++dof) {
+        difference[static_cast<std::size_t>(dof)] =
+            gpu_stiffness[static_cast<std::size_t>(dof)] -
+            cpu_stiffness[static_cast<std::size_t>(dof)];
+    }
+    probe.stiffness_difference_l2_norm =
+        l2_norm(difference.data(), reduced_tangent_dof_count);
+    probe.stiffness_relative_l2_error =
+        probe.stiffness_difference_l2_norm /
+        std::max(1.0, probe.stiffness_cpu_l2_norm);
+    for (std::uint64_t dof = 0; dof < reduced_tangent_dof_count; ++dof) {
+        difference[static_cast<std::size_t>(dof)] =
+            gpu_stiffness_repeat[static_cast<std::size_t>(dof)] -
+            gpu_stiffness[static_cast<std::size_t>(dof)];
+    }
+    probe.stiffness_repeat_relative_l2_error =
+        l2_norm(difference.data(), reduced_tangent_dof_count) /
+        std::max(1.0, probe.stiffness_gpu_l2_norm);
+
+    const std::uint64_t full_tangent_dof_count =
+        context->reduced_tangent_map.full_tangent_dof_count;
+    if (context->adapter.demag_tangent.size() ==
+            static_cast<std::size_t>(full_tangent_dof_count) &&
+        context->gpu_adapter.demag_tangent.size() ==
+            static_cast<std::size_t>(full_tangent_dof_count) &&
+        !context->adapter.demag_tangent.empty()) {
+        probe.demag_tangent_cpu_l2_norm =
+            l2_norm(context->adapter.demag_tangent.data(), full_tangent_dof_count);
+        probe.demag_tangent_gpu_l2_norm =
+            l2_norm(context->gpu_adapter.demag_tangent.data(), full_tangent_dof_count);
+        std::vector<double> demag_tangent_difference(
+            static_cast<std::size_t>(full_tangent_dof_count),
+            0.0);
+        for (std::uint64_t dof = 0; dof < full_tangent_dof_count; ++dof) {
+            demag_tangent_difference[static_cast<std::size_t>(dof)] =
+                context->gpu_adapter.demag_tangent[static_cast<std::size_t>(dof)] -
+                context->adapter.demag_tangent[static_cast<std::size_t>(dof)];
+        }
+        probe.demag_tangent_difference_l2_norm =
+            l2_norm(demag_tangent_difference.data(), full_tangent_dof_count);
+        probe.demag_tangent_relative_l2_error =
+            probe.demag_tangent_difference_l2_norm /
+            std::max(1.0, probe.demag_tangent_cpu_l2_norm);
+    }
+
+    probe.stiffness_without_demag_cpu_l2_norm =
+        l2_norm(cpu_stiffness_without_demag.data(), reduced_tangent_dof_count);
+    probe.stiffness_without_demag_gpu_l2_norm =
+        l2_norm(gpu_stiffness_without_demag.data(), reduced_tangent_dof_count);
+    for (std::uint64_t dof = 0; dof < reduced_tangent_dof_count; ++dof) {
+        const std::size_t offset = static_cast<std::size_t>(dof);
+        difference[offset] =
+            gpu_stiffness_without_demag[offset] -
+            cpu_stiffness_without_demag[offset];
+        cpu_demag_stiffness_component[offset] =
+            cpu_stiffness[offset] - cpu_stiffness_without_demag[offset];
+        gpu_demag_stiffness_component[offset] =
+            gpu_stiffness[offset] - gpu_stiffness_without_demag[offset];
+    }
+    probe.stiffness_without_demag_difference_l2_norm =
+        l2_norm(difference.data(), reduced_tangent_dof_count);
+    probe.stiffness_without_demag_relative_l2_error =
+        probe.stiffness_without_demag_difference_l2_norm /
+        std::max(1.0, probe.stiffness_without_demag_cpu_l2_norm);
+
+    probe.demag_stiffness_component_cpu_l2_norm =
+        l2_norm(cpu_demag_stiffness_component.data(), reduced_tangent_dof_count);
+    probe.demag_stiffness_component_gpu_l2_norm =
+        l2_norm(gpu_demag_stiffness_component.data(), reduced_tangent_dof_count);
+    for (std::uint64_t dof = 0; dof < reduced_tangent_dof_count; ++dof) {
+        difference[static_cast<std::size_t>(dof)] =
+            gpu_demag_stiffness_component[static_cast<std::size_t>(dof)] -
+            cpu_demag_stiffness_component[static_cast<std::size_t>(dof)];
+    }
+    probe.demag_stiffness_component_difference_l2_norm =
+        l2_norm(difference.data(), reduced_tangent_dof_count);
+    probe.demag_stiffness_component_relative_l2_error =
+        probe.demag_stiffness_component_difference_l2_norm /
+        std::max(1.0, probe.demag_stiffness_component_cpu_l2_norm);
+
+    probe.mass_cpu_l2_norm = l2_norm(cpu_mass.data(), reduced_tangent_dof_count);
+    probe.mass_gpu_l2_norm = l2_norm(gpu_mass.data(), reduced_tangent_dof_count);
+    for (std::uint64_t dof = 0; dof < reduced_tangent_dof_count; ++dof) {
+        difference[static_cast<std::size_t>(dof)] =
+            gpu_mass[static_cast<std::size_t>(dof)] -
+            cpu_mass[static_cast<std::size_t>(dof)];
+    }
+    probe.mass_difference_l2_norm =
+        l2_norm(difference.data(), reduced_tangent_dof_count);
+    probe.mass_relative_l2_error =
+        probe.mass_difference_l2_norm /
+        std::max(1.0, probe.mass_cpu_l2_norm);
+    for (std::uint64_t dof = 0; dof < reduced_tangent_dof_count; ++dof) {
+        difference[static_cast<std::size_t>(dof)] =
+            gpu_mass_repeat[static_cast<std::size_t>(dof)] -
+            gpu_mass[static_cast<std::size_t>(dof)];
+    }
+    probe.mass_repeat_relative_l2_error =
+        l2_norm(difference.data(), reduced_tangent_dof_count) /
+        std::max(1.0, probe.mass_gpu_l2_norm);
+
+    const std::uint64_t block_count = reduced_tangent_dof_count * 2;
+    std::vector<double> block_a(static_cast<std::size_t>(block_count), 0.0);
+    std::vector<double> block_b(static_cast<std::size_t>(block_count), 0.0);
+    std::vector<double> block_sum(static_cast<std::size_t>(block_count), 0.0);
+    std::vector<double> block_scaled(static_cast<std::size_t>(block_count), 0.0);
+    std::vector<double> cpu_block_a(static_cast<std::size_t>(block_count), 0.0);
+    std::vector<double> gpu_block_a(static_cast<std::size_t>(block_count), 0.0);
+    std::vector<double> gpu_block_b(static_cast<std::size_t>(block_count), 0.0);
+    std::vector<double> gpu_block_sum(static_cast<std::size_t>(block_count), 0.0);
+    std::vector<double> gpu_block_scaled(static_cast<std::size_t>(block_count), 0.0);
+    std::vector<double> gpu_block_a_immediate_repeat(static_cast<std::size_t>(block_count), 0.0);
+    std::vector<double> gpu_block_a_repeat_after_b(static_cast<std::size_t>(block_count), 0.0);
+    std::vector<double> gpu_block_a_repeat_after_sum(static_cast<std::size_t>(block_count), 0.0);
+    std::vector<double> gpu_block_a_repeat_after_scaled(static_cast<std::size_t>(block_count), 0.0);
+    std::vector<double> gpu_block_a_repeat(static_cast<std::size_t>(block_count), 0.0);
+    std::vector<double> gpu_zero_block(static_cast<std::size_t>(block_count), 0.125);
+    std::vector<double> zero_block(static_cast<std::size_t>(block_count), 0.0);
+    std::vector<double> cpu_gmres_formula_block(static_cast<std::size_t>(block_count), 0.0);
+    std::vector<double> gpu_gmres_formula_block(static_cast<std::size_t>(block_count), 0.0);
+    std::vector<double> block_difference(static_cast<std::size_t>(block_count), 0.0);
+    std::vector<double> cpu_real_stiffness(static_cast<std::size_t>(reduced_tangent_dof_count), 0.0);
+    std::vector<double> gpu_real_stiffness(static_cast<std::size_t>(reduced_tangent_dof_count), 0.0);
+    std::vector<double> cpu_imag_stiffness(static_cast<std::size_t>(reduced_tangent_dof_count), 0.0);
+    std::vector<double> gpu_imag_stiffness(static_cast<std::size_t>(reduced_tangent_dof_count), 0.0);
+    std::vector<double> cpu_real_mass(static_cast<std::size_t>(reduced_tangent_dof_count), 0.0);
+    std::vector<double> gpu_real_mass(static_cast<std::size_t>(reduced_tangent_dof_count), 0.0);
+    std::vector<double> cpu_imag_mass(static_cast<std::size_t>(reduced_tangent_dof_count), 0.0);
+    std::vector<double> gpu_imag_mass(static_cast<std::size_t>(reduced_tangent_dof_count), 0.0);
+    std::vector<double> gpu_real_stiffness_interleaved_repeat(static_cast<std::size_t>(reduced_tangent_dof_count), 0.0);
+    std::vector<double> gpu_real_mass_interleaved_repeat(static_cast<std::size_t>(reduced_tangent_dof_count), 0.0);
+    std::vector<double> gpu_scaled_real_stiffness(static_cast<std::size_t>(reduced_tangent_dof_count), 0.0);
+    std::vector<double> gpu_scaled_real_mass(static_cast<std::size_t>(reduced_tangent_dof_count), 0.0);
+    std::vector<double> cpu_real_demag_tangent(static_cast<std::size_t>(full_tangent_dof_count), 0.0);
+    std::vector<double> gpu_real_demag_tangent(static_cast<std::size_t>(full_tangent_dof_count), 0.0);
+    std::vector<double> gpu_scaled_real_demag_tangent(static_cast<std::size_t>(full_tangent_dof_count), 0.0);
+    std::vector<double> cpu_real_demag_phi(static_cast<std::size_t>(context->delta_phi_dof_count), 0.0);
+    std::vector<double> gpu_real_demag_phi(static_cast<std::size_t>(context->delta_phi_dof_count), 0.0);
+    std::vector<double> gpu_scaled_real_demag_phi(static_cast<std::size_t>(context->delta_phi_dof_count), 0.0);
+    constexpr double block_scale = -0.625;
+    for (std::uint64_t dof = 0; dof < reduced_tangent_dof_count; ++dof) {
+        const std::size_t real_offset = static_cast<std::size_t>(dof);
+        const std::size_t imag_offset =
+            static_cast<std::size_t>(dof + reduced_tangent_dof_count);
+        block_a[real_offset] =
+            0.061 * std::sin(0.23 * static_cast<double>(dof + 1)) +
+            0.019 * std::cos(0.41 * static_cast<double>(dof + 2));
+        block_a[imag_offset] =
+            -0.047 * std::cos(0.29 * static_cast<double>(dof + 3)) +
+            0.013 * std::sin(0.17 * static_cast<double>(dof + 5));
+        block_b[real_offset] =
+            -0.031 * std::cos(0.31 * static_cast<double>(dof + 4));
+        block_b[imag_offset] =
+            0.027 * std::sin(0.37 * static_cast<double>(dof + 6));
+        block_sum[real_offset] = block_a[real_offset] + block_b[real_offset];
+        block_sum[imag_offset] = block_a[imag_offset] + block_b[imag_offset];
+        block_scaled[real_offset] = block_scale * block_a[real_offset];
+        block_scaled[imag_offset] = block_scale * block_a[imag_offset];
+    }
+
+    context->use_gpu_operator = false;
+    status = apply_static_periodic_reduced_mfem_stiffness(
+        context,
+        block_a.data(),
+        cpu_real_stiffness.data(),
+        error_message);
+    if (status == FrequencyDomainStatus::ok &&
+        context->adapter.demag_tangent.size() ==
+            static_cast<std::size_t>(full_tangent_dof_count)) {
+        cpu_real_demag_tangent = context->adapter.demag_tangent;
+    }
+    if (status == FrequencyDomainStatus::ok &&
+        context->adapter.demag_phi_workspace.size() ==
+            static_cast<std::size_t>(context->delta_phi_dof_count)) {
+        cpu_real_demag_phi = context->adapter.demag_phi_workspace;
+    }
+    if (status == FrequencyDomainStatus::ok) {
+        status = apply_static_periodic_reduced_mfem_stiffness(
+            context,
+            block_a.data() + reduced_tangent_dof_count,
+            cpu_imag_stiffness.data(),
+            error_message);
+    }
+    if (status == FrequencyDomainStatus::ok) {
+        status = apply_static_periodic_reduced_mfem_mass(
+            context,
+            block_a.data(),
+            cpu_real_mass.data(),
+            error_message);
+    }
+    if (status == FrequencyDomainStatus::ok) {
+        status = apply_static_periodic_reduced_mfem_mass(
+            context,
+            block_a.data() + reduced_tangent_dof_count,
+            cpu_imag_mass.data(),
+            error_message);
+    }
+    context->use_gpu_operator = true;
+    if (status == FrequencyDomainStatus::ok) {
+        status = apply_static_periodic_reduced_mfem_stiffness(
+            context,
+            block_a.data(),
+            gpu_real_stiffness.data(),
+            error_message);
+    }
+    if (status == FrequencyDomainStatus::ok &&
+        context->gpu_adapter.demag_tangent.size() ==
+            static_cast<std::size_t>(full_tangent_dof_count)) {
+        gpu_real_demag_tangent = context->gpu_adapter.demag_tangent;
+    }
+    if (status == FrequencyDomainStatus::ok &&
+        context->gpu_adapter.demag_phi_workspace.size() ==
+            static_cast<std::size_t>(context->delta_phi_dof_count)) {
+        gpu_real_demag_phi = context->gpu_adapter.demag_phi_workspace;
+    }
+    if (status == FrequencyDomainStatus::ok) {
+        status = apply_static_periodic_reduced_mfem_stiffness(
+            context,
+            block_a.data() + reduced_tangent_dof_count,
+            gpu_imag_stiffness.data(),
+            error_message);
+    }
+    if (status == FrequencyDomainStatus::ok) {
+        status = apply_static_periodic_reduced_mfem_mass(
+            context,
+            block_a.data(),
+            gpu_real_mass.data(),
+            error_message);
+    }
+    if (status == FrequencyDomainStatus::ok) {
+        status = apply_static_periodic_reduced_mfem_mass(
+            context,
+            block_a.data() + reduced_tangent_dof_count,
+            gpu_imag_mass.data(),
+            error_message);
+    }
+    if (status == FrequencyDomainStatus::ok) {
+        status = apply_static_periodic_reduced_mfem_stiffness(
+            context,
+            block_a.data(),
+            gpu_real_stiffness_interleaved_repeat.data(),
+            error_message);
+    }
+    if (status == FrequencyDomainStatus::ok) {
+        status = apply_static_periodic_reduced_mfem_mass(
+            context,
+            block_a.data(),
+            gpu_real_mass_interleaved_repeat.data(),
+            error_message);
+    }
+    if (status == FrequencyDomainStatus::ok) {
+        status = apply_static_periodic_reduced_mfem_stiffness(
+            context,
+            block_scaled.data(),
+            gpu_scaled_real_stiffness.data(),
+            error_message);
+    }
+    if (status == FrequencyDomainStatus::ok &&
+        context->gpu_adapter.demag_tangent.size() ==
+            static_cast<std::size_t>(full_tangent_dof_count)) {
+        gpu_scaled_real_demag_tangent = context->gpu_adapter.demag_tangent;
+    }
+    if (status == FrequencyDomainStatus::ok &&
+        context->gpu_adapter.demag_phi_workspace.size() ==
+            static_cast<std::size_t>(context->delta_phi_dof_count)) {
+        gpu_scaled_real_demag_phi = context->gpu_adapter.demag_phi_workspace;
+    }
+    if (status == FrequencyDomainStatus::ok) {
+        status = apply_static_periodic_reduced_mfem_mass(
+            context,
+            block_scaled.data(),
+            gpu_scaled_real_mass.data(),
+            error_message);
+    }
+    context->use_gpu_operator = original_use_gpu_operator;
+    if (status != FrequencyDomainStatus::ok) {
+        probe.available = false;
+        return status;
+    }
+
+    auto reduced_relative_difference = [&](const std::vector<double> &gpu_values,
+                                           const std::vector<double> &cpu_values) {
+        for (std::uint64_t dof = 0; dof < reduced_tangent_dof_count; ++dof) {
+            const std::size_t offset = static_cast<std::size_t>(dof);
+            difference[offset] = gpu_values[offset] - cpu_values[offset];
+        }
+        return l2_norm(difference.data(), reduced_tangent_dof_count) /
+            std::max(1.0, l2_norm(cpu_values.data(), reduced_tangent_dof_count));
+    };
+    probe.reduced_complex_real_stiffness_parity_relative_l2_error =
+        reduced_relative_difference(gpu_real_stiffness, cpu_real_stiffness);
+    std::vector<double> full_demag_difference(
+        static_cast<std::size_t>(full_tangent_dof_count),
+        0.0);
+    for (std::uint64_t dof = 0; dof < full_tangent_dof_count; ++dof) {
+        const std::size_t offset = static_cast<std::size_t>(dof);
+        full_demag_difference[offset] =
+            gpu_real_demag_tangent[offset] - cpu_real_demag_tangent[offset];
+    }
+    probe.reduced_complex_real_demag_tangent_parity_relative_l2_error =
+        l2_norm(full_demag_difference.data(), full_tangent_dof_count) /
+        std::max(1.0, l2_norm(cpu_real_demag_tangent.data(), full_tangent_dof_count));
+    for (std::uint64_t dof = 0; dof < full_tangent_dof_count; ++dof) {
+        const std::size_t offset = static_cast<std::size_t>(dof);
+        full_demag_difference[offset] =
+            gpu_scaled_real_demag_tangent[offset] -
+            block_scale * gpu_real_demag_tangent[offset];
+    }
+    probe.reduced_complex_real_demag_tangent_homogeneity_relative_l2_error =
+        l2_norm(full_demag_difference.data(), full_tangent_dof_count) /
+        std::max(1.0, l2_norm(gpu_scaled_real_demag_tangent.data(), full_tangent_dof_count));
+    std::vector<double> phi_difference(
+        static_cast<std::size_t>(context->delta_phi_dof_count),
+        0.0);
+    for (std::uint64_t dof = 0; dof < context->delta_phi_dof_count; ++dof) {
+        const std::size_t offset = static_cast<std::size_t>(dof);
+        phi_difference[offset] =
+            gpu_real_demag_phi[offset] - cpu_real_demag_phi[offset];
+    }
+    probe.reduced_complex_real_demag_phi_parity_relative_l2_error =
+        l2_norm(phi_difference.data(), context->delta_phi_dof_count) /
+        std::max(1.0, l2_norm(cpu_real_demag_phi.data(), context->delta_phi_dof_count));
+    for (std::uint64_t dof = 0; dof < context->delta_phi_dof_count; ++dof) {
+        const std::size_t offset = static_cast<std::size_t>(dof);
+        phi_difference[offset] =
+            gpu_scaled_real_demag_phi[offset] -
+            block_scale * gpu_real_demag_phi[offset];
+    }
+    probe.reduced_complex_real_demag_phi_homogeneity_relative_l2_error =
+        l2_norm(phi_difference.data(), context->delta_phi_dof_count) /
+        std::max(1.0, l2_norm(gpu_scaled_real_demag_phi.data(), context->delta_phi_dof_count));
+    probe.reduced_complex_imag_stiffness_parity_relative_l2_error =
+        reduced_relative_difference(gpu_imag_stiffness, cpu_imag_stiffness);
+    probe.reduced_complex_real_mass_parity_relative_l2_error =
+        reduced_relative_difference(gpu_real_mass, cpu_real_mass);
+    probe.reduced_complex_imag_mass_parity_relative_l2_error =
+        reduced_relative_difference(gpu_imag_mass, cpu_imag_mass);
+    for (std::uint64_t dof = 0; dof < reduced_tangent_dof_count; ++dof) {
+        const std::size_t offset = static_cast<std::size_t>(dof);
+        difference[offset] =
+            gpu_real_stiffness_interleaved_repeat[offset] -
+            gpu_real_stiffness[offset];
+    }
+    probe.reduced_gpu_stiffness_interleaved_repeat_relative_l2_error =
+        l2_norm(difference.data(), reduced_tangent_dof_count) /
+        std::max(1.0, l2_norm(gpu_real_stiffness.data(), reduced_tangent_dof_count));
+    probe.reduced_gpu_stiffness_interleaved_repeat_cpu_parity_relative_l2_error =
+        reduced_relative_difference(
+            gpu_real_stiffness_interleaved_repeat,
+            cpu_real_stiffness);
+    for (std::uint64_t dof = 0; dof < reduced_tangent_dof_count; ++dof) {
+        const std::size_t offset = static_cast<std::size_t>(dof);
+        difference[offset] =
+            gpu_real_mass_interleaved_repeat[offset] -
+            gpu_real_mass[offset];
+    }
+    probe.reduced_gpu_mass_interleaved_repeat_relative_l2_error =
+        l2_norm(difference.data(), reduced_tangent_dof_count) /
+        std::max(1.0, l2_norm(gpu_real_mass.data(), reduced_tangent_dof_count));
+    for (std::uint64_t dof = 0; dof < reduced_tangent_dof_count; ++dof) {
+        const std::size_t offset = static_cast<std::size_t>(dof);
+        difference[offset] =
+            gpu_scaled_real_stiffness[offset] -
+            block_scale * gpu_real_stiffness[offset];
+    }
+    probe.reduced_gpu_stiffness_homogeneity_relative_l2_error =
+        l2_norm(difference.data(), reduced_tangent_dof_count) /
+        std::max(1.0, l2_norm(gpu_scaled_real_stiffness.data(), reduced_tangent_dof_count));
+    for (std::uint64_t dof = 0; dof < reduced_tangent_dof_count; ++dof) {
+        const std::size_t offset = static_cast<std::size_t>(dof);
+        difference[offset] =
+            gpu_scaled_real_mass[offset] -
+            block_scale * gpu_real_mass[offset];
+    }
+    probe.reduced_gpu_mass_homogeneity_relative_l2_error =
+        l2_norm(difference.data(), reduced_tangent_dof_count) /
+        std::max(1.0, l2_norm(gpu_scaled_real_mass.data(), reduced_tangent_dof_count));
+    for (std::uint64_t dof = 0; dof < reduced_tangent_dof_count; ++dof) {
+        const std::size_t real_offset = static_cast<std::size_t>(dof);
+        const std::size_t imag_offset =
+            static_cast<std::size_t>(dof + reduced_tangent_dof_count);
+        cpu_gmres_formula_block[real_offset] =
+            cpu_real_stiffness[real_offset] +
+            omega_rad_per_s * cpu_imag_mass[real_offset];
+        cpu_gmres_formula_block[imag_offset] =
+            cpu_imag_stiffness[real_offset] -
+            omega_rad_per_s * cpu_real_mass[real_offset];
+        gpu_gmres_formula_block[real_offset] =
+            gpu_real_stiffness[real_offset] +
+            omega_rad_per_s * gpu_imag_mass[real_offset];
+        gpu_gmres_formula_block[imag_offset] =
+            gpu_imag_stiffness[real_offset] -
+            omega_rad_per_s * gpu_real_mass[real_offset];
+    }
+    for (std::uint64_t index = 0; index < block_count; ++index) {
+        const std::size_t offset = static_cast<std::size_t>(index);
+        block_difference[offset] =
+            gpu_gmres_formula_block[offset] - cpu_gmres_formula_block[offset];
+    }
+    probe.reduced_gmres_formula_operator_parity_relative_l2_error =
+        l2_norm(block_difference.data(), block_count) /
+        std::max(1.0, l2_norm(cpu_gmres_formula_block.data(), block_count));
+
+    context->use_gpu_operator = false;
+    status = apply_static_periodic_reduced_split_operator(
+        context,
+        omega_rad_per_s,
+        block_a.data(),
+        cpu_block_a.data(),
+        reduced_tangent_dof_count,
+        error_message);
+    context->use_gpu_operator = true;
+    if (status == FrequencyDomainStatus::ok) {
+        status = apply_static_periodic_reduced_split_operator(
+            context,
+            omega_rad_per_s,
+            block_a.data(),
+            gpu_block_a.data(),
+            reduced_tangent_dof_count,
+            error_message);
+    }
+    if (status == FrequencyDomainStatus::ok) {
+        status = apply_static_periodic_reduced_split_operator(
+            context,
+            omega_rad_per_s,
+            block_a.data(),
+            gpu_block_a_immediate_repeat.data(),
+            reduced_tangent_dof_count,
+            error_message);
+    }
+    if (status == FrequencyDomainStatus::ok) {
+        status = apply_static_periodic_reduced_split_operator(
+            context,
+            omega_rad_per_s,
+            block_b.data(),
+            gpu_block_b.data(),
+            reduced_tangent_dof_count,
+            error_message);
+    }
+    if (status == FrequencyDomainStatus::ok) {
+        status = apply_static_periodic_reduced_split_operator(
+            context,
+            omega_rad_per_s,
+            block_a.data(),
+            gpu_block_a_repeat_after_b.data(),
+            reduced_tangent_dof_count,
+            error_message);
+    }
+    if (status == FrequencyDomainStatus::ok) {
+        status = apply_static_periodic_reduced_split_operator(
+            context,
+            omega_rad_per_s,
+            block_sum.data(),
+            gpu_block_sum.data(),
+            reduced_tangent_dof_count,
+            error_message);
+    }
+    if (status == FrequencyDomainStatus::ok) {
+        status = apply_static_periodic_reduced_split_operator(
+            context,
+            omega_rad_per_s,
+            block_a.data(),
+            gpu_block_a_repeat_after_sum.data(),
+            reduced_tangent_dof_count,
+            error_message);
+    }
+    if (status == FrequencyDomainStatus::ok) {
+        status = apply_static_periodic_reduced_split_operator(
+            context,
+            omega_rad_per_s,
+            block_scaled.data(),
+            gpu_block_scaled.data(),
+            reduced_tangent_dof_count,
+            error_message);
+    }
+    if (status == FrequencyDomainStatus::ok) {
+        status = apply_static_periodic_reduced_split_operator(
+            context,
+            omega_rad_per_s,
+            block_a.data(),
+            gpu_block_a_repeat_after_scaled.data(),
+            reduced_tangent_dof_count,
+            error_message);
+    }
+    if (status == FrequencyDomainStatus::ok) {
+        status = apply_static_periodic_reduced_split_operator(
+            context,
+            omega_rad_per_s,
+            block_a.data(),
+            gpu_block_a_repeat.data(),
+            reduced_tangent_dof_count,
+            error_message);
+    }
+    if (status == FrequencyDomainStatus::ok) {
+        status = apply_static_periodic_reduced_split_operator(
+            context,
+            omega_rad_per_s,
+            zero_block.data(),
+            gpu_zero_block.data(),
+            reduced_tangent_dof_count,
+            error_message);
+    }
+    context->use_gpu_operator = original_use_gpu_operator;
+    if (status != FrequencyDomainStatus::ok) {
+        probe.available = false;
+        return status;
+    }
+
+    probe.reduced_complex_operator_cpu_l2_norm =
+        l2_norm(cpu_block_a.data(), block_count);
+    probe.reduced_complex_operator_gpu_l2_norm =
+        l2_norm(gpu_block_a.data(), block_count);
+    for (std::uint64_t index = 0; index < block_count; ++index) {
+        const std::size_t offset = static_cast<std::size_t>(index);
+        block_difference[offset] = gpu_block_a[offset] - cpu_block_a[offset];
+    }
+    probe.reduced_complex_operator_difference_l2_norm =
+        l2_norm(block_difference.data(), block_count);
+    probe.reduced_complex_operator_parity_relative_l2_error =
+        probe.reduced_complex_operator_difference_l2_norm /
+        std::max(1.0, probe.reduced_complex_operator_cpu_l2_norm);
+    for (std::uint64_t index = 0; index < block_count; ++index) {
+        const std::size_t offset = static_cast<std::size_t>(index);
+        block_difference[offset] =
+            gpu_block_a[offset] - gpu_gmres_formula_block[offset];
+    }
+    probe.reduced_split_vs_gmres_formula_relative_l2_error =
+        l2_norm(block_difference.data(), block_count) /
+        std::max(1.0, l2_norm(gpu_gmres_formula_block.data(), block_count));
+    probe.reduced_zero_operator_relative_l2_error =
+        l2_norm(gpu_zero_block.data(), block_count) /
+        std::max(1.0, probe.reduced_complex_operator_gpu_l2_norm);
+
+    for (std::uint64_t index = 0; index < block_count; ++index) {
+        const std::size_t offset = static_cast<std::size_t>(index);
+        block_difference[offset] =
+            gpu_block_sum[offset] - gpu_block_a[offset] - gpu_block_b[offset];
+    }
+    probe.reduced_complex_operator_additivity_relative_error =
+        l2_norm(block_difference.data(), block_count) /
+        std::max(1.0, l2_norm(gpu_block_sum.data(), block_count));
+
+    auto complex_repeat_relative_error =
+        [&](const std::vector<double> &repeated_block) {
+            for (std::uint64_t index = 0; index < block_count; ++index) {
+                const std::size_t offset = static_cast<std::size_t>(index);
+                block_difference[offset] =
+                    repeated_block[offset] - gpu_block_a[offset];
+            }
+            return l2_norm(block_difference.data(), block_count) /
+                std::max(1.0, probe.reduced_complex_operator_gpu_l2_norm);
+        };
+    probe.reduced_complex_operator_immediate_repeat_relative_error =
+        complex_repeat_relative_error(gpu_block_a_immediate_repeat);
+    probe.reduced_complex_operator_repeat_after_b_relative_error =
+        complex_repeat_relative_error(gpu_block_a_repeat_after_b);
+    probe.reduced_complex_operator_repeat_after_sum_relative_error =
+        complex_repeat_relative_error(gpu_block_a_repeat_after_sum);
+    probe.reduced_complex_operator_repeat_after_scaled_relative_error =
+        complex_repeat_relative_error(gpu_block_a_repeat_after_scaled);
+
+    for (std::uint64_t index = 0; index < block_count; ++index) {
+        const std::size_t offset = static_cast<std::size_t>(index);
+        block_difference[offset] =
+            gpu_block_scaled[offset] - block_scale * gpu_block_a[offset];
+    }
+    probe.reduced_complex_operator_homogeneity_relative_error =
+        l2_norm(block_difference.data(), block_count) /
+        std::max(1.0, l2_norm(gpu_block_scaled.data(), block_count));
+
+    probe.reduced_complex_operator_repeat_relative_error =
+        complex_repeat_relative_error(gpu_block_a_repeat);
+    probe.available = true;
     return FrequencyDomainStatus::ok;
 }
 
@@ -9930,6 +11016,7 @@ FrequencyDomainStatus solve_mfem_production_cpu_problem(
         probe_mfem_demag_tangent_linearity(
             problem,
             demag_tangent_probe_result,
+            0,
             demag_tangent_probe_error);
     if (demag_tangent_probe_status != FrequencyDomainStatus::ok) {
         result.status = demag_tangent_probe_status;
@@ -10092,6 +11179,10 @@ FrequencyDomainStatus solve_mfem_production_cpu_problem(
             has_output_directory(request.output_directory) && request.write_partial_artifacts ?
             production_result.completed_frequency_count :
             0;
+        const std::string demag_tangent_linearity_json =
+            demag_tangent_linearity_diagnostics_json(
+                demag_tangent_probe_result,
+                artifact_error);
         const int diagnostics_written = std::snprintf(
             diagnostics_json,
             sizeof(diagnostics_json),
@@ -10105,11 +11196,7 @@ FrequencyDomainStatus solve_mfem_production_cpu_problem(
             "\"validation_fallback_used\":false,"
             "\"matrix_free_solver\":true,"
             "\"demag_tangent_operator_source\":\"%s\","
-            "\"demag_tangent_linearity_check\":%s,"
-            "\"demag_tangent_additivity_max_abs_error\":%.17g,"
-            "\"demag_tangent_homogeneity_max_abs_error\":%.17g,"
-            "\"demag_tangent_additivity_relative_error\":%.17g,"
-            "\"demag_tangent_homogeneity_relative_error\":%.17g,"
+            "%s"
             "\"krylov_solver\":\"gmres\","
             "\"krylov_preconditioner_kind\":\"%s\","
             "\"krylov_preconditioner_applied\":%s,"
@@ -10142,11 +11229,7 @@ FrequencyDomainStatus solve_mfem_production_cpu_problem(
             "\"progress_callback_count\":%llu,"
             "\"written_frequency_point_artifacts\":%llu}",
             demag_tangent_operator_source,
-            demag_tangent_probe_result.demag_tangent_linearity_check ? "true" : "false",
-            demag_tangent_probe_result.demag_tangent_additivity_max_abs_error,
-            demag_tangent_probe_result.demag_tangent_homogeneity_max_abs_error,
-            demag_tangent_probe_result.demag_tangent_additivity_relative_error,
-            demag_tangent_probe_result.demag_tangent_homogeneity_relative_error,
+            demag_tangent_linearity_json.c_str(),
             production_result.krylov_preconditioner,
             production_result.right_preconditioner_applied ? "true" : "false",
             production_result.right_preconditioner_applied ? "ok" : "not_configured",
@@ -10284,6 +11367,10 @@ FrequencyDomainStatus solve_mfem_production_cpu_problem(
         char result_json[512]{};
         const bool failure_artifacts_available =
             has_output_directory(request.output_directory) && request.write_partial_artifacts;
+        const std::string demag_tangent_linearity_json =
+            demag_tangent_linearity_diagnostics_json(
+                demag_tangent_probe_result,
+                artifact_error);
         const int diagnostics_written = std::snprintf(
             diagnostics_json,
             sizeof(diagnostics_json),
@@ -10297,11 +11384,7 @@ FrequencyDomainStatus solve_mfem_production_cpu_problem(
             "\"validation_fallback_used\":false,"
             "\"matrix_free_solver\":true,"
             "\"demag_tangent_operator_source\":\"%s\","
-            "\"demag_tangent_linearity_check\":%s,"
-            "\"demag_tangent_additivity_max_abs_error\":%.17g,"
-            "\"demag_tangent_homogeneity_max_abs_error\":%.17g,"
-            "\"demag_tangent_additivity_relative_error\":%.17g,"
-            "\"demag_tangent_homogeneity_relative_error\":%.17g,"
+            "%s"
             "\"krylov_solver\":\"gmres\","
             "\"krylov_preconditioner_kind\":\"%s\","
             "\"krylov_preconditioner_applied\":%s,"
@@ -10352,11 +11435,7 @@ FrequencyDomainStatus solve_mfem_production_cpu_problem(
             "\"relative_residual_l2_norm\":%.17g}",
             status_to_string(solve_status),
             demag_tangent_operator_source,
-            demag_tangent_probe_result.demag_tangent_linearity_check ? "true" : "false",
-            demag_tangent_probe_result.demag_tangent_additivity_max_abs_error,
-            demag_tangent_probe_result.demag_tangent_homogeneity_max_abs_error,
-            demag_tangent_probe_result.demag_tangent_additivity_relative_error,
-            demag_tangent_probe_result.demag_tangent_homogeneity_relative_error,
+            demag_tangent_linearity_json.c_str(),
             production_result.krylov_preconditioner,
             production_result.right_preconditioner_applied ? "true" : "false",
             production_result.right_preconditioner_applied ? "ok" : "not_configured",
@@ -10515,6 +11594,10 @@ FrequencyDomainStatus solve_mfem_production_cpu_problem(
         0;
     const std::string direct_coupled_block_norms_json =
         coupled_block_norms_diagnostics_json(artifact_result, artifact_error);
+    const std::string demag_tangent_linearity_json =
+        demag_tangent_linearity_diagnostics_json(
+            demag_tangent_probe_result,
+            artifact_error);
 
     char diagnostics_json[4200]{};
     char result_json[768]{};
@@ -10531,11 +11614,7 @@ FrequencyDomainStatus solve_mfem_production_cpu_problem(
         "\"validation_fallback_used\":false,"
         "\"matrix_free_solver\":true,"
         "\"demag_tangent_operator_source\":\"%s\","
-        "\"demag_tangent_linearity_check\":%s,"
-        "\"demag_tangent_additivity_max_abs_error\":%.17g,"
-        "\"demag_tangent_homogeneity_max_abs_error\":%.17g,"
-        "\"demag_tangent_additivity_relative_error\":%.17g,"
-        "\"demag_tangent_homogeneity_relative_error\":%.17g,"
+        "%s"
         "\"krylov_solver\":\"gmres\","
         "\"krylov_preconditioner_kind\":\"%s\","
         "\"krylov_preconditioner_applied\":%s,"
@@ -10559,11 +11638,7 @@ FrequencyDomainStatus solve_mfem_production_cpu_problem(
         "\"max_iterations_for_frequency\":%llu,"
         "\"relative_residual_l2_norm\":%.17g}",
         demag_tangent_operator_source,
-        demag_tangent_probe_result.demag_tangent_linearity_check ? "true" : "false",
-        demag_tangent_probe_result.demag_tangent_additivity_max_abs_error,
-        demag_tangent_probe_result.demag_tangent_homogeneity_max_abs_error,
-        demag_tangent_probe_result.demag_tangent_additivity_relative_error,
-        demag_tangent_probe_result.demag_tangent_homogeneity_relative_error,
+        demag_tangent_linearity_json.c_str(),
         production_result.krylov_preconditioner,
         production_result.right_preconditioner_applied ? "true" : "false",
         production_result.right_preconditioner_applied ? "ok" : "not_configured",
@@ -11996,6 +13071,19 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
         context.adapter.request = &request;
         context.adapter.zeeman_blocks.resize(static_cast<std::size_t>(problem.descriptor.node_count));
         context.adapter.uniaxial_anisotropy_blocks.resize(static_cast<std::size_t>(problem.descriptor.node_count));
+        context.adapter.exchange_tangent.resize(static_cast<std::size_t>(delta_m_tangent_dof_count));
+        context.adapter.zeeman_tangent.resize(static_cast<std::size_t>(delta_m_tangent_dof_count));
+        context.adapter.uniaxial_anisotropy_tangent.resize(static_cast<std::size_t>(delta_m_tangent_dof_count));
+        context.adapter.dmi_tangent.resize(static_cast<std::size_t>(delta_m_tangent_dof_count));
+        context.adapter.dmi_delta_xyz.resize(static_cast<std::size_t>(problem.descriptor.full_dof_count));
+        context.adapter.dmi_residual_xyz.resize(static_cast<std::size_t>(problem.descriptor.full_dof_count));
+        context.adapter.dmi_field_xyz.resize(static_cast<std::size_t>(problem.descriptor.full_dof_count));
+        context.adapter.demag_tangent.resize(static_cast<std::size_t>(delta_m_tangent_dof_count));
+        context.adapter.demag_phi_workspace.resize(static_cast<std::size_t>(delta_phi_dof_count));
+        context.adapter.effective_field_tangent.resize(static_cast<std::size_t>(delta_m_tangent_dof_count));
+        context.adapter.stiffness_tangent.resize(static_cast<std::size_t>(delta_m_tangent_dof_count));
+        context.adapter.mass_tangent.resize(static_cast<std::size_t>(delta_m_tangent_dof_count));
+        context.adapter.projected_tangent.resize(static_cast<std::size_t>(delta_m_tangent_dof_count));
         context.adapter.static_periodic_projection_workspace.resize(
             static_cast<std::size_t>(delta_m_tangent_dof_count));
     } else {
@@ -12355,6 +13443,7 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
         probe_mfem_demag_tangent_linearity(
             problem,
             demag_tangent_probe_result,
+            delta_phi_dof_count,
             demag_tangent_probe_error);
     if (demag_tangent_probe_status != FrequencyDomainStatus::ok) {
         result.status = demag_tangent_probe_status;
@@ -12363,6 +13452,207 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
             demag_tangent_probe_error,
             status_diagnostics_json(demag_tangent_probe_status),
             status_result_json(demag_tangent_probe_status),
+            "");
+        return result.status;
+    }
+
+    MfemGpuOperatorParityProbe gpu_operator_parity_probe{};
+    char gpu_operator_parity_error[128]{};
+    const FrequencyDomainStatus gpu_operator_parity_status =
+        probe_static_periodic_reduced_gpu_operator_parity(
+            &context,
+            magnetic_krylov_dof_count,
+            angular_frequency_sign(request.phase_convention) *
+                2.0 * std::acos(-1.0) *
+                request.solve_request.frequencies_hz[0],
+            gpu_operator_parity_probe,
+            gpu_operator_parity_error);
+    if (gpu_operator_parity_status != FrequencyDomainStatus::ok) {
+        result.status = gpu_operator_parity_status;
+        assign_result_strings(
+            result,
+            gpu_operator_parity_error,
+            status_diagnostics_json(gpu_operator_parity_status),
+            status_result_json(gpu_operator_parity_status),
+            "");
+        return result.status;
+    }
+    std::string gpu_operator_parity_json;
+    char gpu_operator_parity_json_error[128]{};
+    if (gpu_operator_parity_probe.available) {
+        if (!append_format(
+                gpu_operator_parity_json,
+                gpu_operator_parity_json_error,
+                "\"gpu_operator_parity_probe_available\":true,"
+                "\"gpu_operator_parity_probe_unavailable_reason\":\"\","
+                "\"gpu_operator_parity_stiffness_cpu_l2_norm\":%.17g,"
+                "\"gpu_operator_parity_stiffness_gpu_l2_norm\":%.17g,"
+                "\"gpu_operator_parity_stiffness_difference_l2_norm\":%.17g,"
+                "\"gpu_operator_parity_stiffness_relative_l2_error\":%.17g,"
+                "\"gpu_operator_parity_stiffness_without_demag_cpu_l2_norm\":%.17g,"
+                "\"gpu_operator_parity_stiffness_without_demag_gpu_l2_norm\":%.17g,"
+                "\"gpu_operator_parity_stiffness_without_demag_difference_l2_norm\":%.17g,"
+                "\"gpu_operator_parity_stiffness_without_demag_relative_l2_error\":%.17g,"
+                "\"gpu_operator_parity_demag_stiffness_component_cpu_l2_norm\":%.17g,"
+                "\"gpu_operator_parity_demag_stiffness_component_gpu_l2_norm\":%.17g,"
+                "\"gpu_operator_parity_demag_stiffness_component_difference_l2_norm\":%.17g,"
+                "\"gpu_operator_parity_demag_stiffness_component_relative_l2_error\":%.17g,"
+                "\"gpu_operator_parity_demag_tangent_cpu_l2_norm\":%.17g,"
+                "\"gpu_operator_parity_demag_tangent_gpu_l2_norm\":%.17g,"
+                "\"gpu_operator_parity_demag_tangent_difference_l2_norm\":%.17g,"
+                "\"gpu_operator_parity_demag_tangent_relative_l2_error\":%.17g,"
+                "\"gpu_operator_parity_mass_cpu_l2_norm\":%.17g,"
+                "\"gpu_operator_parity_mass_gpu_l2_norm\":%.17g,"
+                "\"gpu_operator_parity_mass_difference_l2_norm\":%.17g,"
+                "\"gpu_operator_parity_mass_relative_l2_error\":%.17g,"
+                "\"gpu_operator_repeatability_stiffness_relative_l2_error\":%.17g,"
+                "\"gpu_operator_repeatability_mass_relative_l2_error\":%.17g,"
+                "\"gpu_reduced_complex_operator_cpu_l2_norm\":%.17g,"
+                "\"gpu_reduced_complex_operator_gpu_l2_norm\":%.17g,"
+                "\"gpu_reduced_complex_operator_difference_l2_norm\":%.17g,"
+                "\"gpu_reduced_complex_operator_parity_relative_l2_error\":%.17g,"
+                "\"gpu_reduced_complex_operator_additivity_relative_error\":%.17g,"
+                "\"gpu_reduced_complex_operator_immediate_repeat_relative_error\":%.17g,"
+                "\"gpu_reduced_complex_operator_repeat_after_b_relative_error\":%.17g,"
+                "\"gpu_reduced_complex_operator_repeat_after_sum_relative_error\":%.17g,"
+                "\"gpu_reduced_complex_operator_repeat_after_scaled_relative_error\":%.17g,"
+                "\"gpu_reduced_complex_operator_homogeneity_relative_error\":%.17g,"
+                "\"gpu_reduced_complex_operator_repeat_relative_error\":%.17g,"
+                "\"gpu_reduced_complex_real_stiffness_parity_relative_l2_error\":%.17g,"
+                "\"gpu_reduced_complex_real_demag_tangent_parity_relative_l2_error\":%.17g,"
+                "\"gpu_reduced_complex_real_demag_tangent_homogeneity_relative_l2_error\":%.17g,"
+                "\"gpu_reduced_complex_real_demag_phi_parity_relative_l2_error\":%.17g,"
+                "\"gpu_reduced_complex_real_demag_phi_homogeneity_relative_l2_error\":%.17g,"
+                "\"gpu_reduced_complex_imag_stiffness_parity_relative_l2_error\":%.17g,"
+                "\"gpu_reduced_complex_real_mass_parity_relative_l2_error\":%.17g,"
+                "\"gpu_reduced_complex_imag_mass_parity_relative_l2_error\":%.17g,"
+                "\"gpu_reduced_stiffness_interleaved_repeat_relative_l2_error\":%.17g,"
+                "\"gpu_reduced_stiffness_interleaved_repeat_cpu_parity_relative_l2_error\":%.17g,"
+                "\"gpu_reduced_mass_interleaved_repeat_relative_l2_error\":%.17g,"
+                "\"gpu_reduced_stiffness_homogeneity_relative_l2_error\":%.17g,"
+                "\"gpu_reduced_mass_homogeneity_relative_l2_error\":%.17g,"
+                "\"gpu_reduced_gmres_formula_operator_parity_relative_l2_error\":%.17g,"
+                "\"gpu_reduced_split_vs_gmres_formula_relative_l2_error\":%.17g,"
+                "\"gpu_reduced_zero_operator_relative_l2_error\":%.17g,",
+                gpu_operator_parity_probe.stiffness_cpu_l2_norm,
+                gpu_operator_parity_probe.stiffness_gpu_l2_norm,
+                gpu_operator_parity_probe.stiffness_difference_l2_norm,
+                gpu_operator_parity_probe.stiffness_relative_l2_error,
+                gpu_operator_parity_probe.stiffness_without_demag_cpu_l2_norm,
+                gpu_operator_parity_probe.stiffness_without_demag_gpu_l2_norm,
+                gpu_operator_parity_probe.stiffness_without_demag_difference_l2_norm,
+                gpu_operator_parity_probe.stiffness_without_demag_relative_l2_error,
+                gpu_operator_parity_probe.demag_stiffness_component_cpu_l2_norm,
+                gpu_operator_parity_probe.demag_stiffness_component_gpu_l2_norm,
+                gpu_operator_parity_probe.demag_stiffness_component_difference_l2_norm,
+                gpu_operator_parity_probe.demag_stiffness_component_relative_l2_error,
+                gpu_operator_parity_probe.demag_tangent_cpu_l2_norm,
+                gpu_operator_parity_probe.demag_tangent_gpu_l2_norm,
+                gpu_operator_parity_probe.demag_tangent_difference_l2_norm,
+                gpu_operator_parity_probe.demag_tangent_relative_l2_error,
+                gpu_operator_parity_probe.mass_cpu_l2_norm,
+                gpu_operator_parity_probe.mass_gpu_l2_norm,
+                gpu_operator_parity_probe.mass_difference_l2_norm,
+                gpu_operator_parity_probe.mass_relative_l2_error,
+                gpu_operator_parity_probe.stiffness_repeat_relative_l2_error,
+                gpu_operator_parity_probe.mass_repeat_relative_l2_error,
+                gpu_operator_parity_probe.reduced_complex_operator_cpu_l2_norm,
+                gpu_operator_parity_probe.reduced_complex_operator_gpu_l2_norm,
+                gpu_operator_parity_probe.reduced_complex_operator_difference_l2_norm,
+                gpu_operator_parity_probe.reduced_complex_operator_parity_relative_l2_error,
+                gpu_operator_parity_probe.reduced_complex_operator_additivity_relative_error,
+                gpu_operator_parity_probe.reduced_complex_operator_immediate_repeat_relative_error,
+                gpu_operator_parity_probe.reduced_complex_operator_repeat_after_b_relative_error,
+                gpu_operator_parity_probe.reduced_complex_operator_repeat_after_sum_relative_error,
+                gpu_operator_parity_probe.reduced_complex_operator_repeat_after_scaled_relative_error,
+                gpu_operator_parity_probe.reduced_complex_operator_homogeneity_relative_error,
+                gpu_operator_parity_probe.reduced_complex_operator_repeat_relative_error,
+                gpu_operator_parity_probe.reduced_complex_real_stiffness_parity_relative_l2_error,
+                gpu_operator_parity_probe.reduced_complex_real_demag_tangent_parity_relative_l2_error,
+                gpu_operator_parity_probe.reduced_complex_real_demag_tangent_homogeneity_relative_l2_error,
+                gpu_operator_parity_probe.reduced_complex_real_demag_phi_parity_relative_l2_error,
+                gpu_operator_parity_probe.reduced_complex_real_demag_phi_homogeneity_relative_l2_error,
+                gpu_operator_parity_probe.reduced_complex_imag_stiffness_parity_relative_l2_error,
+                gpu_operator_parity_probe.reduced_complex_real_mass_parity_relative_l2_error,
+                gpu_operator_parity_probe.reduced_complex_imag_mass_parity_relative_l2_error,
+                gpu_operator_parity_probe.reduced_gpu_stiffness_interleaved_repeat_relative_l2_error,
+                gpu_operator_parity_probe.reduced_gpu_stiffness_interleaved_repeat_cpu_parity_relative_l2_error,
+                gpu_operator_parity_probe.reduced_gpu_mass_interleaved_repeat_relative_l2_error,
+                gpu_operator_parity_probe.reduced_gpu_stiffness_homogeneity_relative_l2_error,
+                gpu_operator_parity_probe.reduced_gpu_mass_homogeneity_relative_l2_error,
+                gpu_operator_parity_probe.reduced_gmres_formula_operator_parity_relative_l2_error,
+                gpu_operator_parity_probe.reduced_split_vs_gmres_formula_relative_l2_error,
+                gpu_operator_parity_probe.reduced_zero_operator_relative_l2_error)) {
+            result.status = FrequencyDomainStatus::artifact_error;
+            assign_result_strings(
+                result,
+                gpu_operator_parity_json_error,
+                status_diagnostics_json(FrequencyDomainStatus::artifact_error),
+                status_result_json(FrequencyDomainStatus::artifact_error),
+                "");
+            return result.status;
+        }
+    } else if (!append_format(
+                   gpu_operator_parity_json,
+                   gpu_operator_parity_json_error,
+                   "\"gpu_operator_parity_probe_available\":false,"
+                   "\"gpu_operator_parity_probe_unavailable_reason\":\"%s\","
+                   "\"gpu_operator_parity_stiffness_cpu_l2_norm\":null,"
+                   "\"gpu_operator_parity_stiffness_gpu_l2_norm\":null,"
+                   "\"gpu_operator_parity_stiffness_difference_l2_norm\":null,"
+                   "\"gpu_operator_parity_stiffness_relative_l2_error\":null,"
+                   "\"gpu_operator_parity_stiffness_without_demag_cpu_l2_norm\":null,"
+                   "\"gpu_operator_parity_stiffness_without_demag_gpu_l2_norm\":null,"
+                   "\"gpu_operator_parity_stiffness_without_demag_difference_l2_norm\":null,"
+                   "\"gpu_operator_parity_stiffness_without_demag_relative_l2_error\":null,"
+                   "\"gpu_operator_parity_demag_stiffness_component_cpu_l2_norm\":null,"
+                   "\"gpu_operator_parity_demag_stiffness_component_gpu_l2_norm\":null,"
+                   "\"gpu_operator_parity_demag_stiffness_component_difference_l2_norm\":null,"
+                   "\"gpu_operator_parity_demag_stiffness_component_relative_l2_error\":null,"
+                   "\"gpu_operator_parity_demag_tangent_cpu_l2_norm\":null,"
+                   "\"gpu_operator_parity_demag_tangent_gpu_l2_norm\":null,"
+                   "\"gpu_operator_parity_demag_tangent_difference_l2_norm\":null,"
+                   "\"gpu_operator_parity_demag_tangent_relative_l2_error\":null,"
+                   "\"gpu_operator_parity_mass_cpu_l2_norm\":null,"
+                   "\"gpu_operator_parity_mass_gpu_l2_norm\":null,"
+                   "\"gpu_operator_parity_mass_difference_l2_norm\":null,"
+                   "\"gpu_operator_parity_mass_relative_l2_error\":null,"
+                   "\"gpu_operator_repeatability_stiffness_relative_l2_error\":null,"
+                   "\"gpu_operator_repeatability_mass_relative_l2_error\":null,"
+                   "\"gpu_reduced_complex_operator_cpu_l2_norm\":null,"
+                   "\"gpu_reduced_complex_operator_gpu_l2_norm\":null,"
+                   "\"gpu_reduced_complex_operator_difference_l2_norm\":null,"
+                   "\"gpu_reduced_complex_operator_parity_relative_l2_error\":null,"
+                   "\"gpu_reduced_complex_operator_additivity_relative_error\":null,"
+                   "\"gpu_reduced_complex_operator_immediate_repeat_relative_error\":null,"
+                   "\"gpu_reduced_complex_operator_repeat_after_b_relative_error\":null,"
+                   "\"gpu_reduced_complex_operator_repeat_after_sum_relative_error\":null,"
+                   "\"gpu_reduced_complex_operator_repeat_after_scaled_relative_error\":null,"
+                   "\"gpu_reduced_complex_operator_homogeneity_relative_error\":null,"
+                   "\"gpu_reduced_complex_operator_repeat_relative_error\":null,"
+                   "\"gpu_reduced_complex_real_stiffness_parity_relative_l2_error\":null,"
+                   "\"gpu_reduced_complex_real_demag_tangent_parity_relative_l2_error\":null,"
+                   "\"gpu_reduced_complex_real_demag_tangent_homogeneity_relative_l2_error\":null,"
+                   "\"gpu_reduced_complex_real_demag_phi_parity_relative_l2_error\":null,"
+                   "\"gpu_reduced_complex_real_demag_phi_homogeneity_relative_l2_error\":null,"
+                   "\"gpu_reduced_complex_imag_stiffness_parity_relative_l2_error\":null,"
+                   "\"gpu_reduced_complex_real_mass_parity_relative_l2_error\":null,"
+                   "\"gpu_reduced_complex_imag_mass_parity_relative_l2_error\":null,"
+                   "\"gpu_reduced_stiffness_interleaved_repeat_relative_l2_error\":null,"
+                   "\"gpu_reduced_stiffness_interleaved_repeat_cpu_parity_relative_l2_error\":null,"
+                   "\"gpu_reduced_mass_interleaved_repeat_relative_l2_error\":null,"
+                   "\"gpu_reduced_stiffness_homogeneity_relative_l2_error\":null,"
+                   "\"gpu_reduced_mass_homogeneity_relative_l2_error\":null,"
+                   "\"gpu_reduced_gmres_formula_operator_parity_relative_l2_error\":null,"
+                   "\"gpu_reduced_split_vs_gmres_formula_relative_l2_error\":null,"
+                   "\"gpu_reduced_zero_operator_relative_l2_error\":null,",
+                   gpu_operator_parity_probe.unavailable_reason)) {
+        result.status = FrequencyDomainStatus::artifact_error;
+        assign_result_strings(
+            result,
+            gpu_operator_parity_json_error,
+            status_diagnostics_json(FrequencyDomainStatus::artifact_error),
+            status_result_json(FrequencyDomainStatus::artifact_error),
             "");
         return result.status;
     }
@@ -12708,6 +13998,7 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
                 "%s"
                 "%s"
                 "%s"
+                "%s"
                 "\"gmres_relative_residual_history\":%s,"
                 "\"total_iteration_count\":%llu,"
                 "\"max_iterations_for_frequency\":%llu,"
@@ -12755,6 +14046,7 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
                 schur_quality_json.c_str(),
                 demag_tangent_linearity_json.c_str(),
                 gmres_stop_json.c_str(),
+                gpu_operator_parity_json.c_str(),
                 gmres_history_json.c_str(),
                 static_cast<unsigned long long>(production_result.total_iteration_count),
                 static_cast<unsigned long long>(
@@ -12840,7 +14132,7 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
             return result.status;
         }
 
-        char direct_diagnostics_json[8192]{};
+        char direct_diagnostics_json[32768]{};
         char result_json[512]{};
         const std::string direct_preconditioner_fallback_json =
             right_preconditioner_fallback_json(
@@ -12891,6 +14183,7 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
             "%s"
             "%s"
             "%s"
+            "%s"
             "\"total_iteration_count\":%llu,"
             "\"max_iterations_for_frequency\":%llu,"
             "\"relative_residual_l2_norm\":%.17g,"
@@ -12934,6 +14227,7 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
             demag_tangent_linearity_json.c_str(),
             gmres_stop_json.c_str(),
             direct_coupled_block_norms_json.c_str(),
+            gpu_operator_parity_json.c_str(),
             static_cast<unsigned long long>(production_result.total_iteration_count),
             static_cast<unsigned long long>(
                 production_result.max_iterations_for_frequency),
@@ -13086,6 +14380,7 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
             "%s"
             "%s"
             "%s"
+            "%s"
             "\"total_iteration_count\":%llu,"
             "\"max_iterations_for_frequency\":%llu,"
             "\"restart_iterations_for_frequency\":%llu,"
@@ -13117,6 +14412,7 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
             artifact_preconditioner_probe_json.c_str(),
             artifact_preconditioner_fallback_json.c_str(),
             artifact_schur_quality_json.c_str(),
+            gpu_operator_parity_json.c_str(),
             static_cast<unsigned long long>(production_result.total_iteration_count),
             static_cast<unsigned long long>(production_result.max_iterations_for_frequency),
             static_cast<unsigned long long>(production_result.restart_iterations_for_frequency),
@@ -13412,6 +14708,7 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
         "%s"
         "%s"
         "%s"
+        "%s"
         "\"gmres_relative_residual_history\":%s,"
         "\"total_iteration_count\":%llu,"
         "\"max_iterations_for_frequency\":%llu,"
@@ -13472,6 +14769,7 @@ FrequencyDomainStatus solve_periodic_airbox_dynamic_demag_mfem_phi_consistency_s
         direct_preconditioner_probe_json.c_str(),
         direct_preconditioner_fallback_json.c_str(),
         direct_schur_quality_json.c_str(),
+        gpu_operator_parity_json.c_str(),
         gmres_history_json.c_str(),
         static_cast<unsigned long long>(production_result.total_iteration_count),
         static_cast<unsigned long long>(production_result.max_iterations_for_frequency),

@@ -82,8 +82,39 @@ struct PoissonAirboxModalEigenResult {
     char diagnostics_json[8192]{};
 };
 
+struct PoissonAirboxModalShiftInvertActionResult {
+    FrequencyDomainStatus status = FrequencyDomainStatus::unavailable;
+    char error_message[256]{};
+
+    std::uint64_t q_dof_count = 0;
+    std::uint64_t phi_dof_count = 0;
+    std::uint64_t augmented_dof_count = 0;
+
+    double sigma_real = 0.0;
+    double sigma_imag = 0.0;
+    double rhs_l2_norm = 0.0;
+    double output_q_l2_norm = 0.0;
+    double shifted_system_relative_residual = 0.0;
+
+    bool full_modal_shift_invert_claim = false;
+
+    char diagnostics_json[4096]{};
+};
+
 FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_slepc(
     const PoissonAirboxEigenBlockProblem &problem,
     PoissonAirboxModalEigenResult *out_result) noexcept;
+
+FrequencyDomainStatus apply_poisson_airbox_modal_shift_invert_action_cpu_reference(
+    const PoissonAirboxEigenBlockProblem &problem,
+    double sigma_real,
+    double sigma_imag,
+    const double *v_q_real,
+    const double *v_q_imag,
+    std::uint64_t v_q_count,
+    double *out_q_real,
+    double *out_q_imag,
+    std::uint64_t out_q_count,
+    PoissonAirboxModalShiftInvertActionResult *out_result) noexcept;
 
 } // namespace fullmag::fem::frequency_domain

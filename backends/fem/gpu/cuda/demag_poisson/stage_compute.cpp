@@ -125,7 +125,9 @@ bool compute_device_demag_for_device_stage_impl(
         reason = "strict FEM GPU demag requires ready device_hypre_poisson workspace";
         return false;
     }
-    if (gpu.demag_poisson.poisson_rhs == nullptr || gpu.demag_poisson.poisson_solution == nullptr ||
+    if (gpu.demag_poisson.poisson_rhs == nullptr ||
+        gpu.demag_poisson.poisson_solution == nullptr ||
+        gpu.demag_poisson.poisson_solution_full == nullptr ||
         gpu.fields.h_demag.x == nullptr || gpu.fields.h_demag.y == nullptr || gpu.fields.h_demag.z == nullptr) {
         reason = "strict FEM GPU demag requires device-resident Poisson and H_demag buffers";
         return false;
@@ -175,15 +177,6 @@ bool compute_device_demag_for_device_stage_impl(
         return false;
     }
 
-    if (workspace->compute_ready_event != nullptr) {
-        if (!cuda_ok(cudaEventRecord(workspace->compute_ready_event, stream),
-                "cudaEventRecord GPU demag RHS ready", reason) ||
-            !cuda_ok(cudaStreamWaitEvent(nullptr, workspace->compute_ready_event, 0),
-                "cudaStreamWaitEvent GPU demag default stream wait RHS", reason)) {
-            return false;
-        }
-    }
-
     if (reset_initial_solution) {
         if (!cuda_ok(cudaMemset(
                 gpu.demag_poisson.poisson_solution,
@@ -193,10 +186,45 @@ bool compute_device_demag_for_device_stage_impl(
             return false;
         }
     }
-    workspace->b_par->HypreReadWrite();
-    workspace->x_par->HypreReadWrite();
+    if (workspace->compute_ready_event != nullptr) {
+        if (!cuda_ok(cudaEventRecord(workspace->compute_ready_event, stream),
+                "cudaEventRecord GPU demag solve inputs ready", reason) ||
+            !cuda_ok(cudaStreamWaitEvent(nullptr, workspace->compute_ready_event, 0),
+                "cudaStreamWaitEvent GPU demag default stream wait solve inputs", reason)) {
+            return false;
+        }
+    }
+    // The CUDA RHS kernel writes directly to the raw device pointer wrapped by
+    // HypreParVector. Mark hypre/device memory as current without copying stale
+    // host data back over it.
+    workspace->b_par->HypreWrite();
+    if (reset_initial_solution) {
+        workspace->x_par->HypreWrite();
+    } else {
+        workspace->x_par->HypreReadWrite();
+    }
+    if (reset_initial_solution &&
+        !reset_demag_poisson_hypre_device_solver_for_fresh_rhs(
+            ctx,
+            *workspace,
+            reason)) {
+        return false;
+    }
+    if (!set_demag_poisson_hypre_solver_iterative_mode(
+            ctx,
+            *workspace,
+            !reset_initial_solution,
+            reason)) {
+        return false;
+    }
     const auto solve_start = FemSteadyClock::now();
     workspace->solver->Mult(*workspace->b_par, *workspace->x_par);
+    if (!cuda_ok(
+            cudaDeviceSynchronize(),
+            "cudaDeviceSynchronize GPU demag Hypre solve",
+            reason)) {
+        return false;
+    }
     const uint64_t solver_apply_wall_time_ns = elapsed_ns(solve_start);
     ctx.poisson_demag.last_solver_apply_wall_time_ns = solver_apply_wall_time_ns;
     ctx.poisson_demag.step_solver_apply_wall_time_ns += solver_apply_wall_time_ns;
@@ -233,15 +261,12 @@ bool compute_device_demag_for_device_stage_impl(
         workspace->d_ess_tdofs,
         static_cast<int>(workspace->ess_tdofs.size()),
         stream);
-    // Pass nullptr mask so recovery computes H_demag at all nodes including airbox.
-    // LLG physics at airbox is self-zeroing because M=0 there (dm/dt = M×H = 0).
-    // The energy kernel below still uses magnetic_node_mask for correct energy sums.
     fullmag_cuda_demag_recovery_csr(
         workspace->recovery_x.d_row_offsets,
         workspace->recovery_x.d_col_indices,
         workspace->recovery_x.d_values,
         gpu.demag_poisson.poisson_solution,
-        nullptr,
+        gpu.mesh_regions.magnetic_node_mask,
         gpu.fields.h_demag.x,
         static_cast<int>(workspace->recovery_x.rows),
         stream);
@@ -250,7 +275,7 @@ bool compute_device_demag_for_device_stage_impl(
         workspace->recovery_y.d_col_indices,
         workspace->recovery_y.d_values,
         gpu.demag_poisson.poisson_solution,
-        nullptr,
+        gpu.mesh_regions.magnetic_node_mask,
         gpu.fields.h_demag.y,
         static_cast<int>(workspace->recovery_y.rows),
         stream);
@@ -259,7 +284,7 @@ bool compute_device_demag_for_device_stage_impl(
         workspace->recovery_z.d_col_indices,
         workspace->recovery_z.d_values,
         gpu.demag_poisson.poisson_solution,
-        nullptr,
+        gpu.mesh_regions.magnetic_node_mask,
         gpu.fields.h_demag.z,
         static_cast<int>(workspace->recovery_z.rows),
         stream);

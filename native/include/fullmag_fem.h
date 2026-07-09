@@ -746,6 +746,13 @@ typedef struct {
     const char *poisson_airbox_periodic_mesh_certificate_schema;
     uint64_t poisson_airbox_magnetic_pair_count;
     uint64_t poisson_airbox_airbox_pair_count;
+    int poisson_airbox_shift_invert_action_enabled;
+    int poisson_airbox_shift_invert_action_device;
+    double poisson_airbox_shift_sigma_real;
+    double poisson_airbox_shift_sigma_imag;
+    const double *poisson_airbox_shift_action_vector_real;
+    const double *poisson_airbox_shift_action_vector_imag;
+    uint64_t poisson_airbox_shift_action_vector_count;
 } FullmagFemModalEigenRequest;
 
 typedef struct {

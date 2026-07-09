@@ -11270,11 +11270,17 @@ void production_cpu_lane_runs_mfem_matrix_free_demag_callback_response_problem()
         "\"total_iteration_count\"");
     check(iteration_count > 0, "production CPU MFEM demag callback reports Krylov iterations");
     check(
-        demag_operator.call_count == 4 + 2 * (iteration_count + 1),
-        "production CPU MFEM demag callback is invoked for the linearity self-check and stiffness applications");
+        demag_operator.call_count == 6 + 2 * (iteration_count + 1),
+        "production CPU MFEM demag callback is invoked for the extended linearity self-check and stiffness applications");
     check(
         contains(result.diagnostics_json, "\"matrix_free_solver\":true"),
         "production CPU MFEM demag callback diagnostics report matrix-free solver");
+    check(
+        contains(result.diagnostics_json, "\"demag_tangent_repeat_relative_error\""),
+        "production CPU MFEM demag callback diagnostics report repeat determinism");
+    check(
+        contains(result.diagnostics_json, "\"demag_tangent_zero_after_nonzero_l2_norm\""),
+        "production CPU MFEM demag callback diagnostics report zero-after-nonzero contamination check");
     check(
         contains(result.diagnostics_json, "\"validation_fallback_used\":false"),
         "production CPU MFEM demag callback diagnostics reject validation fallback");

@@ -19,6 +19,17 @@ bool initialize_demag_poisson_hypre_device_solver(
     GpuDemagPoissonWorkspace &workspace,
     std::string &error);
 
+bool reset_demag_poisson_hypre_device_solver_for_fresh_rhs(
+    Context &ctx,
+    GpuDemagPoissonWorkspace &workspace,
+    std::string &error);
+
+bool set_demag_poisson_hypre_solver_iterative_mode(
+    const Context &ctx,
+    GpuDemagPoissonWorkspace &workspace,
+    bool iterative_mode,
+    std::string &error);
+
 void read_demag_poisson_hypre_solver_stats(
     const Context &ctx,
     GpuDemagPoissonWorkspace &workspace,

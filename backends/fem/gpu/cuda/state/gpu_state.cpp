@@ -473,6 +473,7 @@ bool gpu_state_initialize(
     if (allocate_demag_workspace &&
         (!gpu_device_allocate_double(state.demag_poisson.poisson_rhs, node_count, device_bytes, error) ||
             !gpu_device_allocate_double(state.demag_poisson.poisson_solution, node_count, device_bytes, error) ||
+            !gpu_device_allocate_double(state.demag_poisson.poisson_solution_full, node_count, device_bytes, error) ||
             !gpu_device_allocate_component(state.demag_poisson.poisson_gradient, node_count, device_bytes, error))) {
         gpu_state_destroy(state);
         return false;
@@ -515,6 +516,7 @@ void gpu_state_destroy(FemGpuState &state)
     gpu_device_free_u8(state.mesh_geometry.magnetic_element_mask);
     gpu_device_free_double(state.demag_poisson.poisson_rhs);
     gpu_device_free_double(state.demag_poisson.poisson_solution);
+    gpu_device_free_double(state.demag_poisson.poisson_solution_full);
     gpu_device_free_component(state.demag_poisson.poisson_gradient);
     gpu_exchange_reset_legacy_sparse(
         state.lifecycle,

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import sys
@@ -852,6 +853,7 @@ def run_validator(
     require_periodic_airbox_gpu_unsupported: bool = False,
     require_floquet_airbox_gpu_unsupported: bool = False,
     require_periodic_airbox_cpu_demag_solved: bool = False,
+    require_periodic_airbox_gpu_demag_solved: bool = False,
     require_accepted_periodic_mesh_certificate: bool = False,
     require_m5_equilibrium_provenance: bool = False,
     require_frozen_magnetic_submesh: bool = False,
@@ -881,6 +883,8 @@ def run_validator(
         command.append("--require-floquet-airbox-gpu-unsupported")
     if require_periodic_airbox_cpu_demag_solved:
         command.append("--require-periodic-airbox-cpu-demag-solved")
+    if require_periodic_airbox_gpu_demag_solved:
+        command.append("--require-periodic-airbox-gpu-demag-solved")
     if require_accepted_periodic_mesh_certificate:
         command.append("--require-accepted-periodic-mesh-certificate")
     if require_m5_equilibrium_provenance:
@@ -1945,6 +1949,8 @@ def convert_periodic_airbox_fixture_to_schur_coupled_block(root: Path) -> None:
             "dynamic_demag_operator_source": "matrix_free_mfem_demag_phi_consistency_schur_provider",
             "dynamic_demag_matrix_form": "schur_phi_consistency_provider",
             "coupled_residual_partition_status": "magnetic_schur_phi_consistency_provider",
+            "demag_tangent_probe_input_l2_norm": 1.0,
+            "demag_tangent_probe_output_l2_norm": 1.0,
             "krylov_preconditioner_kind": preconditioner_kind,
             "krylov_preconditioner_requested_variant": "auto",
             "krylov_preconditioner_initial_variant": preconditioner_variant,
@@ -1998,6 +2004,8 @@ def convert_periodic_airbox_fixture_to_schur_coupled_block(root: Path) -> None:
             "dynamic_demag_operator_source": "matrix_free_mfem_demag_phi_consistency_schur_provider",
             "dynamic_demag_matrix_form": "schur_phi_consistency_provider",
             "coupled_residual_partition_status": "magnetic_schur_phi_consistency_provider",
+            "demag_tangent_probe_input_l2_norm": 1.0,
+            "demag_tangent_probe_output_l2_norm": 1.0,
             "krylov_preconditioner_kind": preconditioner_kind,
             "krylov_preconditioner_requested_variant": "auto",
             "krylov_preconditioner_initial_variant": preconditioner_variant,
@@ -2037,6 +2045,30 @@ def convert_periodic_airbox_fixture_to_schur_coupled_block(root: Path) -> None:
             }
         )
         point_path.write_text(json.dumps(point))
+
+
+def add_gpu_periodic_airbox_operator_parity_probe_fixture(root: Path) -> None:
+    metrics = {
+        "gpu_operator_parity_probe_available": True,
+        "gpu_reduced_complex_operator_parity_relative_l2_error": 0.0,
+        "gpu_reduced_complex_real_stiffness_parity_relative_l2_error": 0.0,
+        "gpu_reduced_complex_real_demag_tangent_parity_relative_l2_error": 0.0,
+        "gpu_reduced_complex_real_demag_phi_parity_relative_l2_error": 0.0,
+        "gpu_reduced_gmres_formula_operator_parity_relative_l2_error": 0.0,
+        "gpu_reduced_split_vs_gmres_formula_relative_l2_error": 0.0,
+        "gpu_reduced_complex_operator_additivity_relative_error": 0.0,
+        "gpu_reduced_complex_operator_repeat_relative_error": 0.0,
+    }
+    diagnostics_path = root / "response" / "diagnostics" / "solver.v1.json"
+    diagnostics = json.loads(diagnostics_path.read_text())
+    diagnostics.update(metrics)
+    diagnostics_path.write_text(json.dumps(diagnostics))
+    (root / "response" / "diagnostics.v1.json").write_text(json.dumps(diagnostics))
+
+    manifest_path = root / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["diagnostics"].update(metrics)
+    manifest_path.write_text(json.dumps(manifest))
 
 
 def set_frequency_point_response(
@@ -2386,6 +2418,22 @@ def set_manifest_domain_mesh_mode(root: Path, *, mode: str) -> None:
 
 def test_validator_accepts_tangent_field_payload_metadata(tmp_path: Path) -> None:
     write_frequency_domain_fixture(tmp_path)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_accepts_one_ulp_point_sweep_float_drift(tmp_path: Path) -> None:
+    write_frequency_domain_fixture(tmp_path)
+
+    point_path = tmp_path / "response" / "frequency_points" / "frequency_0000.json"
+    point = json.loads(point_path.read_text())
+    point["residual_l2_norm"] = math.nextafter(
+        float(point["residual_l2_norm"]),
+        1.0,
+    )
+    point_path.write_text(json.dumps(point))
 
     result = run_validator(tmp_path)
 
@@ -3721,6 +3769,64 @@ def test_validator_rejects_solve_error_bundle_without_demag_tangent_relative_lin
     assert "demag_tangent_additivity_relative_error" in (result.stderr + result.stdout)
 
 
+def test_validator_rejects_periodic_airbox_gpu_solved_with_zero_demag_probe_output(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solve_error_fixture(tmp_path)
+    convert_periodic_airbox_fixture_to_schur_coupled_block(tmp_path)
+
+    diagnostics_path = tmp_path / "response" / "diagnostics" / "solver.v1.json"
+    diagnostics = json.loads(diagnostics_path.read_text())
+    diagnostics.update(
+        {
+            "requested_execution_lane": "production_gpu",
+            "resolved_execution_lane": "production_gpu",
+            "uses_gpu_poisson": True,
+            "demag_provider_residency": "gpu",
+            "demag_operator_mode": "device_hypre_poisson",
+            "hypre_execution_policy": "device",
+            "demag_tangent_probe_input_l2_norm": 1.0,
+            "demag_tangent_probe_output_l2_norm": 0.0,
+        }
+    )
+    diagnostics_path.write_text(json.dumps(diagnostics))
+    (tmp_path / "response" / "diagnostics.v1.json").write_text(json.dumps(diagnostics))
+
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["diagnostics"].update(diagnostics)
+    manifest["resolved_execution"].update(
+        {
+            "requested_execution_lane": "production_gpu",
+            "resolved_execution_lane": "production_gpu",
+            "lane_classification": "fem_gpu_production",
+            "uses_gpu_poisson": True,
+            "demag_operator_mode": "device_hypre_poisson",
+            "hypre_execution_policy": "device",
+            "demag_provider_residency": "gpu",
+        }
+    )
+    manifest["capabilities"].update(
+        {
+            "uses_gpu_poisson": True,
+            "demag_operator_mode": "device_hypre_poisson",
+            "hypre_execution_policy": "device",
+            "demag_provider_residency": "gpu",
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = run_validator(
+        tmp_path,
+        require_production_gpu=True,
+        require_periodic_airbox_gpu_demag_solved=True,
+        allow_solve_error=True,
+    )
+
+    assert result.returncode != 0
+    assert "demag_tangent_probe_output_l2_norm" in (result.stderr + result.stdout)
+
+
 def test_validator_rejects_solve_error_bundle_without_krylov_preconditioner_kind(
     tmp_path: Path,
 ) -> None:
@@ -4911,6 +5017,136 @@ def test_validator_rejects_static_periodic_gpu_cpu_parity_mismatch(tmp_path: Pat
 
     assert result.returncode != 0
     assert "CPU/GPU parity" in (result.stderr + result.stdout)
+
+
+def test_validator_accepts_configured_static_periodic_gpu_cpu_parity_tolerance(
+    tmp_path: Path,
+) -> None:
+    cpu_root = tmp_path / "cpu"
+    gpu_root = tmp_path / "gpu"
+    write_frequency_domain_fixture(cpu_root, include_static_periodic_diagnostics=True)
+    write_frequency_domain_fixture(
+        gpu_root,
+        include_static_periodic_diagnostics=True,
+        execution_lane="production_gpu",
+        manifest_engine="native_fem_mfem_frequency_domain_gpu",
+        sweep_v1_lane_classification="fem_gpu_production",
+    )
+    point_path = gpu_root / "response" / "frequency_points" / "frequency_0000.json"
+    point = json.loads(point_path.read_text())
+    point["component_response_phase"] = [2.0e-7, 0.0]
+    point_path.write_text(json.dumps(point))
+    sweep_path = gpu_root / "response" / "magnetic_response_sweep.v2.json"
+    sweep = json.loads(sweep_path.read_text())
+    sweep["points"][0]["component_response_phase"] = point["component_response_phase"]
+    sweep_path.write_text(json.dumps(sweep))
+
+    strict_result = run_validator(
+        gpu_root,
+        require_static_periodic=True,
+        require_production_gpu=True,
+        parity_reference=cpu_root,
+    )
+    relaxed_result = run_validator(
+        gpu_root,
+        require_static_periodic=True,
+        require_production_gpu=True,
+        parity_reference=cpu_root,
+        env={"FULLMAG_FEM_FREQUENCY_RESPONSE_CPU_GPU_PARITY_ABS_TOL": "1e-6"},
+    )
+
+    assert strict_result.returncode != 0
+    assert "CPU/GPU parity" in (strict_result.stderr + strict_result.stdout)
+    assert relaxed_result.returncode == 0, relaxed_result.stderr + relaxed_result.stdout
+
+
+def test_validator_requires_gpu_periodic_airbox_operator_parity_probe(
+    tmp_path: Path,
+) -> None:
+    write_periodic_airbox_cpu_demag_solved_fixture(tmp_path)
+    convert_periodic_airbox_fixture_to_schur_coupled_block(tmp_path)
+    manifest_path = tmp_path / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["resolved_execution"].update(
+        {
+            "engine": "native_fem_mfem_frequency_domain_gpu",
+            "requested_execution_lane": "production_gpu",
+            "resolved_execution_lane": "production_gpu",
+            "lane_classification": "fem_gpu_production",
+            "uses_gpu_poisson": True,
+            "demag_operator_mode": "device_hypre_poisson",
+            "hypre_execution_policy": "device",
+            "demag_provider_residency": "gpu",
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest))
+    diagnostics_path = tmp_path / "response" / "diagnostics" / "solver.v1.json"
+    diagnostics = json.loads(diagnostics_path.read_text())
+    diagnostics.update(
+        {
+            "requested_execution_lane": "production_gpu",
+            "resolved_execution_lane": "production_gpu",
+            "uses_gpu_poisson": True,
+            "demag_operator_mode": "device_hypre_poisson",
+            "hypre_execution_policy": "device",
+            "demag_provider_residency": "gpu",
+        }
+    )
+    diagnostics_path.write_text(json.dumps(diagnostics))
+    (tmp_path / "response" / "diagnostics.v1.json").write_text(json.dumps(diagnostics))
+    manifest = json.loads(manifest_path.read_text())
+    manifest["diagnostics"].update(
+        {
+            "requested_execution_lane": "production_gpu",
+            "resolved_execution_lane": "production_gpu",
+            "uses_gpu_poisson": True,
+            "demag_operator_mode": "device_hypre_poisson",
+            "hypre_execution_policy": "device",
+            "demag_provider_residency": "gpu",
+        }
+    )
+    manifest["capabilities"].update(
+        {
+            "uses_gpu_poisson": True,
+            "demag_operator_mode": "device_hypre_poisson",
+            "hypre_execution_policy": "device",
+            "demag_provider_residency": "gpu",
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest))
+    sweep_v1_path = tmp_path / "response" / "magnetic_response_sweep.v1.json"
+    sweep_v1 = json.loads(sweep_v1_path.read_text())
+    sweep_v1["lane_classification"] = "fem_gpu_production"
+    sweep_v1_path.write_text(json.dumps(sweep_v1))
+    for point_path in sorted((tmp_path / "response" / "frequency_points").glob("frequency_*.json")):
+        point = json.loads(point_path.read_text())
+        point["demag_contribution"].update(
+            {
+                "uses_gpu_poisson": True,
+                "demag_operator_mode": "device_hypre_poisson",
+                "hypre_execution_policy": "device",
+                "demag_provider_residency": "gpu",
+            }
+        )
+        point_path.write_text(json.dumps(point))
+
+    missing_result = run_validator(
+        tmp_path,
+        require_production_gpu=True,
+        require_periodic_airbox_gpu_demag_solved=True,
+    )
+    add_gpu_periodic_airbox_operator_parity_probe_fixture(tmp_path)
+    complete_result = run_validator(
+        tmp_path,
+        require_production_gpu=True,
+        require_periodic_airbox_gpu_demag_solved=True,
+    )
+
+    assert missing_result.returncode != 0
+    assert "gpu_operator_parity_probe_available" in (
+        missing_result.stderr + missing_result.stdout
+    )
+    assert complete_result.returncode == 0, complete_result.stderr + complete_result.stdout
 
 
 def test_validator_rejects_missing_static_periodic_mesh_artifact(

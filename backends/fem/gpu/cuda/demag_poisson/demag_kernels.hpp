@@ -37,6 +37,14 @@ void fullmag_cuda_demag_recovery_csr(
     int rows,
     cudaStream_t stream = nullptr);
 
+/// Lift reduced periodic scalar potential to full nodal scalar potential.
+void fullmag_cuda_lift_periodic_reduced_scalar_to_full(
+    const double *reduced_values,
+    const uint32_t *periodic_reduced_node,
+    double *full_values,
+    int rows,
+    cudaStream_t stream = nullptr);
+
 /// Per-block demag energy partials:
 /// -0.5 * mu0 * Ms_i * (m_i . H_demag_i) * lumped_mass_i.
 void fullmag_cuda_demag_energy_blocks(

@@ -114,6 +114,84 @@ void configure_hypre_device_vendor_kernels()
     }
 #endif
 }
+
+bool configure_demag_poisson_hypre_preconditioner(
+    const Context &ctx,
+    GpuDemagPoissonWorkspace &workspace,
+    std::string &error)
+{
+    if (workspace.A_par == nullptr) {
+        error = "GPU Poisson demag Hypre preconditioner requires an initialized operator";
+        return false;
+    }
+    switch (ctx.demag.solver.preconditioner) {
+    case FULLMAG_FEM_PRECONDITIONER_AMG: {
+        auto amg = std::make_unique<mfem::HypreBoomerAMG>(*workspace.A_par);
+        configure_demag_amg(*amg, ctx);
+        workspace.preconditioner = std::move(amg);
+        return true;
+    }
+    case FULLMAG_FEM_PRECONDITIONER_JACOBI:
+        workspace.preconditioner = std::make_unique<mfem::HypreDiagScale>(*workspace.A_par);
+        return true;
+    case FULLMAG_FEM_PRECONDITIONER_NONE: {
+        auto identity = std::make_unique<mfem::HypreIdentity>();
+        identity->SetOperator(*workspace.A_par);
+        workspace.preconditioner = std::move(identity);
+        return true;
+    }
+    default:
+        error = "Unsupported native FEM GPU demag preconditioner enum";
+        return false;
+    }
+}
+
+bool configure_demag_poisson_hypre_solver(
+    const Context &ctx,
+    GpuDemagPoissonWorkspace &workspace,
+    std::string &error)
+{
+    if (workspace.A_par == nullptr || workspace.preconditioner == nullptr) {
+        error = "GPU Poisson demag Hypre solver requires initialized operator and preconditioner";
+        return false;
+    }
+    switch (ctx.demag.solver.solver) {
+    case FULLMAG_FEM_LINEAR_SOLVER_CG: {
+        auto pcg = std::make_unique<mfem::HyprePCG>(fullmag_serial_comm());
+        pcg->iterative_mode = true;
+        pcg->SetTol(ctx.demag.solver.relative_tolerance);
+        if (ctx.demag.solver.has_absolute_tolerance &&
+            ctx.demag.solver.absolute_tolerance > 0.0) {
+            pcg->SetAbsTol(ctx.demag.solver.absolute_tolerance);
+        }
+        pcg->SetMaxIter(static_cast<int>(ctx.demag.solver.max_iterations));
+        pcg->SetPrintLevel(static_cast<int>(ctx.demag.solver.print_level));
+        pcg->SetOperator(*workspace.A_par);
+        pcg->SetPreconditioner(*workspace.preconditioner);
+        workspace.solver = std::move(pcg);
+        return true;
+    }
+    case FULLMAG_FEM_LINEAR_SOLVER_GMRES: {
+        auto gmres = std::make_unique<mfem::HypreGMRES>(fullmag_serial_comm());
+        gmres->iterative_mode = true;
+        gmres->SetTol(ctx.demag.solver.relative_tolerance);
+        if (ctx.demag.solver.has_absolute_tolerance &&
+            ctx.demag.solver.absolute_tolerance > 0.0) {
+            gmres->SetAbsTol(ctx.demag.solver.absolute_tolerance);
+        }
+        gmres->SetMaxIter(static_cast<int>(ctx.demag.solver.max_iterations));
+        gmres->SetKDim(50);
+        gmres->SetPrintLevel(static_cast<int>(ctx.demag.solver.print_level));
+        gmres->SetOperator(*workspace.A_par);
+        gmres->SetPreconditioner(*workspace.preconditioner);
+        workspace.solver = std::move(gmres);
+        return true;
+    }
+    default:
+        error = "Unsupported native FEM GPU demag linear solver enum";
+        return false;
+    }
+}
 #endif
 
 } // namespace
@@ -149,61 +227,11 @@ bool initialize_demag_poisson_hypre_device_solver(
         A_bc);
     workspace.A_par->HypreRead();
 
-    switch (ctx.demag.solver.preconditioner) {
-    case FULLMAG_FEM_PRECONDITIONER_AMG: {
-        auto amg = std::make_unique<mfem::HypreBoomerAMG>(*workspace.A_par);
-        configure_demag_amg(*amg, ctx);
-        workspace.preconditioner = std::move(amg);
-        break;
-    }
-    case FULLMAG_FEM_PRECONDITIONER_JACOBI:
-        workspace.preconditioner = std::make_unique<mfem::HypreDiagScale>(*workspace.A_par);
-        break;
-    case FULLMAG_FEM_PRECONDITIONER_NONE: {
-        auto identity = std::make_unique<mfem::HypreIdentity>();
-        identity->SetOperator(*workspace.A_par);
-        workspace.preconditioner = std::move(identity);
-        break;
-    }
-    default:
-        error = "Unsupported native FEM GPU demag preconditioner enum";
+    if (!configure_demag_poisson_hypre_preconditioner(ctx, workspace, error)) {
         return false;
     }
 
-    switch (ctx.demag.solver.solver) {
-    case FULLMAG_FEM_LINEAR_SOLVER_CG: {
-        auto pcg = std::make_unique<mfem::HyprePCG>(fullmag_serial_comm());
-        pcg->iterative_mode = true;
-        pcg->SetTol(ctx.demag.solver.relative_tolerance);
-        if (ctx.demag.solver.has_absolute_tolerance &&
-            ctx.demag.solver.absolute_tolerance > 0.0) {
-            pcg->SetAbsTol(ctx.demag.solver.absolute_tolerance);
-        }
-        pcg->SetMaxIter(static_cast<int>(ctx.demag.solver.max_iterations));
-        pcg->SetPrintLevel(static_cast<int>(ctx.demag.solver.print_level));
-        pcg->SetOperator(*workspace.A_par);
-        pcg->SetPreconditioner(*workspace.preconditioner);
-        workspace.solver = std::move(pcg);
-        break;
-    }
-    case FULLMAG_FEM_LINEAR_SOLVER_GMRES: {
-        auto gmres = std::make_unique<mfem::HypreGMRES>(fullmag_serial_comm());
-        gmres->iterative_mode = true;
-        gmres->SetTol(ctx.demag.solver.relative_tolerance);
-        if (ctx.demag.solver.has_absolute_tolerance &&
-            ctx.demag.solver.absolute_tolerance > 0.0) {
-            gmres->SetAbsTol(ctx.demag.solver.absolute_tolerance);
-        }
-        gmres->SetMaxIter(static_cast<int>(ctx.demag.solver.max_iterations));
-        gmres->SetKDim(50);
-        gmres->SetPrintLevel(static_cast<int>(ctx.demag.solver.print_level));
-        gmres->SetOperator(*workspace.A_par);
-        gmres->SetPreconditioner(*workspace.preconditioner);
-        workspace.solver = std::move(gmres);
-        break;
-    }
-    default:
-        error = "Unsupported native FEM GPU demag linear solver enum";
+    if (!configure_demag_poisson_hypre_solver(ctx, workspace, error)) {
         return false;
     }
 
@@ -223,6 +251,73 @@ bool initialize_demag_poisson_hypre_device_solver(
 #else
     (void)ctx;
     (void)workspace;
+    error = "strict FEM GPU demag requires MFEM MPI and hypre device solver support";
+    return false;
+#endif
+}
+
+bool reset_demag_poisson_hypre_device_solver_for_fresh_rhs(
+    Context &ctx,
+    GpuDemagPoissonWorkspace &workspace,
+    std::string &error)
+{
+#if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+    if (workspace.A_par == nullptr) {
+        error = "GPU Poisson demag fresh-RHS reset requires an initialized operator";
+        return false;
+    }
+    workspace.solver.reset();
+    workspace.preconditioner.reset();
+    if (!configure_demag_poisson_hypre_preconditioner(ctx, workspace, error)) {
+        return false;
+    }
+    return configure_demag_poisson_hypre_solver(ctx, workspace, error);
+#else
+    (void)ctx;
+    (void)workspace;
+    error = "strict FEM GPU demag requires MFEM MPI and hypre device solver support";
+    return false;
+#endif
+}
+
+bool set_demag_poisson_hypre_solver_iterative_mode(
+    const Context &ctx,
+    GpuDemagPoissonWorkspace &workspace,
+    bool iterative_mode,
+    std::string &error)
+{
+#if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+    if (workspace.solver == nullptr) {
+        error = "GPU Poisson demag Hypre solver is not initialized";
+        return false;
+    }
+    switch (ctx.demag.solver.solver) {
+    case FULLMAG_FEM_LINEAR_SOLVER_CG: {
+        auto *solver = static_cast<mfem::HyprePCG *>(workspace.solver.get());
+        if (iterative_mode) {
+            solver->iterative_mode = true;
+        } else {
+            solver->SetZeroInitialIterate();
+        }
+        return true;
+    }
+    case FULLMAG_FEM_LINEAR_SOLVER_GMRES: {
+        auto *solver = static_cast<mfem::HypreGMRES *>(workspace.solver.get());
+        if (iterative_mode) {
+            solver->iterative_mode = true;
+        } else {
+            solver->SetZeroInitialIterate();
+        }
+        return true;
+    }
+    default:
+        error = "Unsupported native FEM GPU demag linear solver enum";
+        return false;
+    }
+#else
+    (void)ctx;
+    (void)workspace;
+    (void)iterative_mode;
     error = "strict FEM GPU demag requires MFEM MPI and hypre device solver support";
     return false;
 #endif

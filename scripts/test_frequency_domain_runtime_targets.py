@@ -27,6 +27,16 @@ EIGEN_PRODUCTION_GAMMA_K_PATH_SMOKE = (
 EIGEN_K0_KITTEL_ZEEMAN_NO_DEMAG = (
     REPO_ROOT / "examples" / "fem_eigen_k0_kittel_zeeman_no_demag.py"
 )
+EIGEN_K0_KITTEL_PERIODIC_AIRBOX_GPU_GATED = (
+    REPO_ROOT
+    / "examples"
+    / "fem_eigen_k0_kittel_periodic_airbox_gpu_gated.py"
+)
+EIGEN_K0_KITTEL_PERIODIC_AIRBOX = (
+    REPO_ROOT
+    / "examples"
+    / "fem_eigen_k0_kittel_periodic_airbox.py"
+)
 PERIODIC_K0_SMOKE = REPO_ROOT / "examples" / "fem_fmr_periodic_k0_smoke.py"
 PERIODIC_ANTIDOT_FREQUENCY_DRIVEN = (
     REPO_ROOT
@@ -463,6 +473,11 @@ def test_eigen_dispersion_window_example_declares_selected_spectrum_k_path() -> 
     assert 'fm.KPoint("X", (2.0e6, 0.0, 0.0))' in example
     assert 'fm.KPoint("-X", (-2.0e6, 0.0, 0.0))' in example
     assert "samples_per_segment=[1, 1, 1]" in example
+    assert (
+        'study.objects.mesh.defaults(maximum_element_size=40e-9, order=1, periodic_pair_ids=["x_faces"])'
+        in example
+    )
+    assert "body.mesh(" not in example
     assert 'bc=fm.FloquetBC(["x_faces"])' in example
     assert 'study.save("dispersion")' in example
     assert 'study.save("mode", indices=(0,))' in example
@@ -915,6 +930,7 @@ def test_cpu_periodic_airbox_demag_smoke_requests_periodic_airbox_demag() -> Non
     example = CPU_PERIODIC_AIRBOX_DEMAG_RESPONSE.read_text(encoding="utf-8")
 
     assert 'study.device("cpu", precision="double")' in example
+    assert 'study.pbc(x=True, demag="periodic_airbox_k0")' in example
     assert 'study.demag(realization="poisson_robin")' in example
     assert "study.build_domain_mesh()" in example
     assert "include_demag=True" in example
@@ -1118,6 +1134,91 @@ def test_gpu_floquet_airbox_unsupported_runtime_target_is_artifact_backed() -> N
     assert "FULLMAG_FMR_FLOQUET_KX_RAD_PER_M=1000000" in target
 
 
+def test_gpu_periodic_airbox_eigen_demag_gated_target_is_artifact_backed() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+    example = EIGEN_K0_KITTEL_PERIODIC_AIRBOX_GPU_GATED.read_text(encoding="utf-8")
+
+    target_start = justfile.find(
+        "verify-fem-frequency-domain-eigen-k0-kittel-periodic-airbox-gpu-gated:"
+    )
+    assert target_start != -1
+    next_target = justfile.find("\n\n", target_start + 1)
+    target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
+
+    assert "just ensure-managed-fem-runtime" in target
+    assert "examples/fem_eigen_k0_kittel_periodic_airbox_gpu_gated.py" in target
+    assert "frequency-domain-eigen-k0-kittel-periodic-airbox-gpu-gated" in target
+    assert "FULLMAG_FEM_EXECUTION=gpu" in target
+    assert "FULLMAG_RELAX_DEVICE=gpu" in target
+    assert "GPU periodic-airbox modal demag unexpectedly succeeded" in target
+    assert "GPU modal K0/Kittel with demag" in target
+    assert "CPU fallback" in target
+    assert "disabled" in target
+    assert "unsupported_boundary.v1.json" in target
+    assert "verify_fem_gpu_modal_poisson_airbox_unsupported_boundary.py" in target
+    assert "gpu_modal_poisson_airbox_k0" in target
+    assert "gpu_device_resident_modal_eigensolver" in target
+    assert "False" in target
+    assert "cpu_fallback" in target
+    assert "disabled" in target
+    assert "--require-production-gpu" not in target
+    assert 'study.device("gpu", precision="double")' in example
+    assert 'study.pbc(x=True, demag="periodic_airbox_k0")' in example
+    assert "include_demag=True" in example
+
+
+def test_frequency_domain_runtime_suite_includes_gpu_periodic_airbox_eigen_demag_gated_boundary() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+
+    target_start = justfile.find("verify-fem-frequency-domain-runtime-suite:")
+    assert target_start != -1
+    next_target = justfile.find("\nverify-", target_start + 1)
+    target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
+
+    assert (
+        "just verify-fem-frequency-domain-eigen-k0-kittel-periodic-airbox-gpu-gated"
+        in target
+    )
+
+
+def test_periodic_airbox_eigen_convergence_target_runs_two_real_meshes() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+    example = EIGEN_K0_KITTEL_PERIODIC_AIRBOX.read_text(encoding="utf-8")
+
+    target_start = justfile.find(
+        "verify-fem-frequency-domain-eigen-k0-kittel-periodic-airbox-convergence-cpu:"
+    )
+    assert target_start != -1
+    next_target = justfile.find("\n\n", target_start + 1)
+    target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
+
+    assert "just ensure-managed-fem-runtime" in target
+    assert "examples/fem_eigen_k0_kittel_periodic_airbox.py" in target
+    assert "frequency-domain-eigen-k0-kittel-periodic-airbox-convergence/coarse/artifacts" in target
+    assert "frequency-domain-eigen-k0-kittel-periodic-airbox-convergence/fine/artifacts" in target
+    assert "FULLMAG_K0_KITTEL_MAG_HMAX_NM=24" in target
+    assert "FULLMAG_K0_KITTEL_MAG_HMAX_NM=20" in target
+    assert "scripts/verify_fem_eigen_k0_periodic_airbox_convergence.py" in target
+    assert "--require-k0-kittel-periodic-airbox-demag" in target
+    assert "FULLMAG_FEM_EXECUTION=cpu" in target
+    assert "FULLMAG_RELAX_DEVICE=cpu" in target
+    assert "FULLMAG_K0_KITTEL_MAG_HMAX_NM" in example
+
+
+def test_frequency_domain_runtime_suite_includes_periodic_airbox_eigen_convergence_gate() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+
+    target_start = justfile.find("verify-fem-frequency-domain-runtime-suite:")
+    assert target_start != -1
+    next_target = justfile.find("\nverify-", target_start + 1)
+    target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
+
+    assert (
+        "just verify-fem-frequency-domain-eigen-k0-kittel-periodic-airbox-convergence-cpu"
+        in target
+    )
+
+
 def test_frequency_domain_runtime_suite_includes_floquet_airbox_gpu_boundary() -> None:
     justfile = JUSTFILE.read_text(encoding="utf-8")
 
@@ -1138,6 +1239,72 @@ def test_frequency_domain_runtime_suite_includes_periodic_airbox_gpu_boundary() 
     target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
 
     assert "just verify-fem-frequency-domain-periodic-airbox-gpu-runtime" in target
+
+
+def test_periodic_airbox_gpu_device_poisson_parity_target_is_strict_device_backed() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+    example = (REPO_ROOT / "examples" / "fem_frequency_response_gpu_periodic_airbox_smoke.py").read_text(
+        encoding="utf-8"
+    )
+
+    target_start = justfile.find(
+        "verify-fem-frequency-domain-periodic-airbox-gpu-device-poisson-parity-runtime:"
+    )
+    assert target_start != -1
+    next_target = justfile.find("\n\n", target_start + 1)
+    target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
+
+    assert "just ensure-managed-fem-runtime" in target
+    assert "frequency-domain-periodic-airbox-gpu-device-poisson-parity-runtime/cpu/artifacts" in target
+    assert "frequency-domain-periodic-airbox-gpu-device-poisson-parity-runtime/gpu/artifacts" in target
+    assert "examples/fem_frequency_response_cpu_periodic_airbox_demag_smoke.py" in target
+    assert "examples/fem_frequency_response_gpu_periodic_airbox_smoke.py" in target
+    assert "FULLMAG_FEM_FREQUENCY_RESPONSE_GPU_DEMAG_MODE=device_hypre_poisson" in target
+    assert "FULLMAG_FEM_GPU_DEMAG_MODE=device_hypre_poisson" in target
+    assert 'FULLMAG_FMR_DEMAG_RTOL="${FULLMAG_FMR_DEMAG_RTOL:-1e-10}"' in target
+    assert 'FULLMAG_FMR_DEMAG_MAX_ITERATIONS="${FULLMAG_FMR_DEMAG_MAX_ITERATIONS:-2000}"' in target
+    assert "FULLMAG_FMR_RESPONSE_PRECONDITIONER_VARIANT=none" in target
+    assert 'FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS="${FULLMAG_FMR_RESPONSE_RESTART_ITERATIONS:-128}"' in target
+    assert "FULLMAG_FMR_PERIODIC_AIRBOX_GPU_FREQUENCIES_HZ=1.0e9" in target
+    assert "--require-production-gpu" in target
+    assert "--require-periodic-airbox-gpu-demag-solved" in target
+    assert "--compare-reference" in target
+    assert "scripts/write_fem_gpu_poisson_parity_artifact.py" in target
+    assert "scripts/verify_fem_gpu_poisson_parity_artifact.py" in target
+    assert "gpu_poisson_parity.v1.json" in target
+    assert "scripts/write_fem_gpu_schur_apply_parity_artifact.py" in target
+    assert "scripts/verify_fem_gpu_schur_apply_parity_artifact.py" in target
+    assert "gpu_schur_apply_parity.v1.json" in target
+    assert "scripts/write_fem_gpu_shifted_solve_action_parity_artifact.py" in target
+    assert "scripts/verify_fem_gpu_shifted_solve_action_parity_artifact.py" in target
+    assert "gpu_shifted_solve_action_parity.v1.json" in target
+    assert "hybrid_cpu_poisson" not in target
+    assert "FULLMAG_FMR_PERIODIC_AIRBOX_GPU_FREQUENCIES_HZ" in example
+
+
+def test_poisson_airbox_gpu_modal_shift_invert_action_target_is_not_frequency_response_proxy() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+
+    target_start = justfile.find(
+        "verify-fem-frequency-domain-eigen-k0-poisson-airbox-gpu-shift-invert-action:"
+    )
+    assert target_start != -1
+    next_target = justfile.find("\n\n", target_start + 1)
+    target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
+
+    assert "just ensure-managed-fem-runtime" in target
+    assert "FULLMAG_PA_G3F_OUTPUT_DIR" in target
+    assert "fem_poisson_airbox_modal_eigen_slepc_contract" in target
+    assert "gpu_modal_shift_invert_action.v1.json" in target
+    assert "gpu_modal_poisson_airbox_eigensolver.v1.json" in target
+    assert "gpu_modal_poisson_airbox_descriptor_apply.v1.json" in target
+    assert "poisson_airbox_modal_shift_invert_action.v1.json" in target
+    assert "gpu_modal_shift_invert_action_parity.v1.json" in target
+    assert "scripts/verify_fem_gpu_modal_poisson_airbox_descriptor_apply_artifact.py" in target
+    assert "scripts/verify_fem_gpu_modal_poisson_airbox_eigensolver_artifact.py" in target
+    assert "scripts/verify_fem_gpu_modal_shift_invert_action_parity_artifact.py" in target
+    assert "gpu_shifted_solve_action_parity.v1.json" not in target
+    assert "examples/fem_frequency_response_" not in target
 
 
 def test_frequency_domain_runtime_suite_includes_cpu_floquet_gate() -> None:

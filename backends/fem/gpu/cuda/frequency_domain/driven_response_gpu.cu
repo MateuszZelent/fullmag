@@ -1,4 +1,5 @@
 #include "cpu/frequency_domain/mfem_dmi_operator.hpp"
+#include "cpu/frequency_domain/poisson_airbox_modal_eigen.hpp"
 #include "frequency_domain/operator_terms.hpp"
 
 #include <cuda_runtime.h>
@@ -7,12 +8,69 @@
 #include <cstdio>
 #include <cstring>
 #include <new>
+#include <vector>
 
 namespace fd = fullmag::fem::frequency_domain;
 
 namespace {
 
 constexpr int kBlockSize = 256;
+constexpr unsigned long long kMaxModalShiftInvertDenseDofs = 64;
+
+struct GpuComplex {
+    double real;
+    double imag;
+};
+
+__host__ __device__ GpuComplex make_complex(double real, double imag)
+{
+    return GpuComplex{real, imag};
+}
+
+__host__ __device__ GpuComplex operator+(GpuComplex a, GpuComplex b)
+{
+    return make_complex(a.real + b.real, a.imag + b.imag);
+}
+
+__host__ __device__ GpuComplex operator-(GpuComplex a, GpuComplex b)
+{
+    return make_complex(a.real - b.real, a.imag - b.imag);
+}
+
+__host__ __device__ GpuComplex operator*(GpuComplex a, GpuComplex b)
+{
+    return make_complex(
+        a.real * b.real - a.imag * b.imag,
+        a.real * b.imag + a.imag * b.real);
+}
+
+__host__ __device__ GpuComplex operator*(GpuComplex a, double b)
+{
+    return make_complex(a.real * b, a.imag * b);
+}
+
+__host__ __device__ GpuComplex operator/(GpuComplex a, GpuComplex b)
+{
+    const double denominator = b.real * b.real + b.imag * b.imag;
+    return make_complex(
+        (a.real * b.real + a.imag * b.imag) / denominator,
+        (a.imag * b.real - a.real * b.imag) / denominator);
+}
+
+__host__ __device__ double complex_abs2(GpuComplex value)
+{
+    return value.real * value.real + value.imag * value.imag;
+}
+
+__host__ __device__ GpuComplex complex_conj(GpuComplex value)
+{
+    return make_complex(value.real, -value.imag);
+}
+
+__host__ __device__ double complex_abs(GpuComplex value)
+{
+    return sqrt(complex_abs2(value));
+}
 
 __device__ double dot3_device(const double a[3], const double b[3])
 {
@@ -47,7 +105,438 @@ __global__ void zero_tangent_kernel(double *values, unsigned long long count)
     }
 }
 
+__global__ void modal_shift_invert_dense_solve_kernel(
+    GpuComplex *matrix,
+    GpuComplex *rhs,
+    GpuComplex *solution,
+    unsigned long long total_dof_count,
+    int *status)
+{
+    if (threadIdx.x != 0 || blockIdx.x != 0) {
+        return;
+    }
+    if (total_dof_count == 0 || total_dof_count > kMaxModalShiftInvertDenseDofs) {
+        *status = 2;
+        return;
+    }
+    constexpr double kPivotTolerance = 1.0e-300;
+    for (unsigned long long column = 0; column < total_dof_count; ++column) {
+        unsigned long long pivot_row = column;
+        double pivot_norm = complex_abs2(matrix[column * total_dof_count + column]);
+        for (unsigned long long row = column + 1; row < total_dof_count; ++row) {
+            const double candidate_norm = complex_abs2(matrix[row * total_dof_count + column]);
+            if (candidate_norm > pivot_norm) {
+                pivot_norm = candidate_norm;
+                pivot_row = row;
+            }
+        }
+        if (!(pivot_norm > kPivotTolerance)) {
+            *status = 1;
+            return;
+        }
+        if (pivot_row != column) {
+            for (unsigned long long col = 0; col < total_dof_count; ++col) {
+                const GpuComplex tmp = matrix[column * total_dof_count + col];
+                matrix[column * total_dof_count + col] =
+                    matrix[pivot_row * total_dof_count + col];
+                matrix[pivot_row * total_dof_count + col] = tmp;
+            }
+            const GpuComplex tmp_rhs = rhs[column];
+            rhs[column] = rhs[pivot_row];
+            rhs[pivot_row] = tmp_rhs;
+        }
+        for (unsigned long long row = column + 1; row < total_dof_count; ++row) {
+            const GpuComplex factor =
+                matrix[row * total_dof_count + column] /
+                matrix[column * total_dof_count + column];
+            matrix[row * total_dof_count + column] = make_complex(0.0, 0.0);
+            for (unsigned long long col = column + 1; col < total_dof_count; ++col) {
+                matrix[row * total_dof_count + col] =
+                    matrix[row * total_dof_count + col] -
+                    factor * matrix[column * total_dof_count + col];
+            }
+            rhs[row] = rhs[row] - factor * rhs[column];
+        }
+    }
+    for (unsigned long long reverse = 0; reverse < total_dof_count; ++reverse) {
+        const unsigned long long row = total_dof_count - 1 - reverse;
+        GpuComplex value = rhs[row];
+        for (unsigned long long column = row + 1; column < total_dof_count; ++column) {
+            value = value - matrix[row * total_dof_count + column] * solution[column];
+        }
+        solution[row] = value / matrix[row * total_dof_count + row];
+    }
+    *status = 0;
+}
+
+__device__ GpuComplex device_dot_conj_matvec(
+    const GpuComplex *matrix,
+    const GpuComplex *x,
+    const GpuComplex *left,
+    unsigned long long total)
+{
+    GpuComplex result = make_complex(0.0, 0.0);
+    for (unsigned long long row = 0; row < total; ++row) {
+        GpuComplex y = make_complex(0.0, 0.0);
+        for (unsigned long long column = 0; column < total; ++column) {
+            y = y + matrix[row * total + column] * x[column];
+        }
+        result = result + complex_conj(left[row]) * y;
+    }
+    return result;
+}
+
+__device__ double device_matvec_l2_norm(
+    const GpuComplex *matrix,
+    const GpuComplex *x,
+    unsigned long long total)
+{
+    double sum = 0.0;
+    for (unsigned long long row = 0; row < total; ++row) {
+        GpuComplex y = make_complex(0.0, 0.0);
+        for (unsigned long long column = 0; column < total; ++column) {
+            y = y + matrix[row * total + column] * x[column];
+        }
+        sum += complex_abs2(y);
+    }
+    return sqrt(sum);
+}
+
+__device__ GpuComplex device_csr_row_dot(
+    const std::uint32_t *row_offsets,
+    const std::uint32_t *column_indices,
+    const double *values,
+    unsigned long long row,
+    const GpuComplex *x,
+    unsigned long long x_offset)
+{
+    GpuComplex result = make_complex(0.0, 0.0);
+    for (std::uint32_t entry = row_offsets[row]; entry < row_offsets[row + 1]; ++entry) {
+        result = result + x[x_offset + column_indices[entry]] * values[entry];
+    }
+    return result;
+}
+
+__global__ void modal_poisson_airbox_descriptor_apply_kernel(
+    unsigned long long nq,
+    unsigned long long np,
+    const GpuComplex *x,
+    GpuComplex *y,
+    const std::uint32_t *a_qq_row_offsets,
+    const std::uint32_t *a_qq_column_indices,
+    const double *a_qq_values,
+    const std::uint32_t *a_qphi_row_offsets,
+    const std::uint32_t *a_qphi_column_indices,
+    const double *a_qphi_values,
+    const std::uint32_t *a_phiq_row_offsets,
+    const std::uint32_t *a_phiq_column_indices,
+    const double *a_phiq_values,
+    const std::uint32_t *a_phiphi_row_offsets,
+    const std::uint32_t *a_phiphi_column_indices,
+    const double *a_phiphi_values,
+    const double *phi_mean_weights)
+{
+    const unsigned long long total = nq + np + 1ull;
+    const unsigned long long row =
+        static_cast<unsigned long long>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (row >= total) {
+        return;
+    }
+
+    GpuComplex value = make_complex(0.0, 0.0);
+    if (row < nq) {
+        value = value +
+            device_csr_row_dot(
+                a_qq_row_offsets,
+                a_qq_column_indices,
+                a_qq_values,
+                row,
+                x,
+                0);
+        value = value +
+            device_csr_row_dot(
+                a_qphi_row_offsets,
+                a_qphi_column_indices,
+                a_qphi_values,
+                row,
+                x,
+                nq);
+    } else if (row < nq + np) {
+        const unsigned long long phi_row = row - nq;
+        value = value +
+            device_csr_row_dot(
+                a_phiq_row_offsets,
+                a_phiq_column_indices,
+                a_phiq_values,
+                phi_row,
+                x,
+                0);
+        value = value +
+            device_csr_row_dot(
+                a_phiphi_row_offsets,
+                a_phiphi_column_indices,
+                a_phiphi_values,
+                phi_row,
+                x,
+                nq);
+        value = value + x[nq + np] * phi_mean_weights[phi_row];
+    } else {
+        for (unsigned long long phi_row = 0; phi_row < np; ++phi_row) {
+            value = value + x[nq + phi_row] * phi_mean_weights[phi_row];
+        }
+    }
+    y[row] = value;
+}
+
+__global__ void modal_poisson_airbox_shifted_descriptor_apply_kernel(
+    unsigned long long nq,
+    unsigned long long np,
+    GpuComplex sigma,
+    const GpuComplex *x,
+    GpuComplex *y,
+    const std::uint32_t *a_qq_row_offsets,
+    const std::uint32_t *a_qq_column_indices,
+    const double *a_qq_values,
+    const std::uint32_t *a_qphi_row_offsets,
+    const std::uint32_t *a_qphi_column_indices,
+    const double *a_qphi_values,
+    const std::uint32_t *a_phiq_row_offsets,
+    const std::uint32_t *a_phiq_column_indices,
+    const double *a_phiq_values,
+    const std::uint32_t *a_phiphi_row_offsets,
+    const std::uint32_t *a_phiphi_column_indices,
+    const double *a_phiphi_values,
+    const std::uint32_t *b_qq_row_offsets,
+    const std::uint32_t *b_qq_column_indices,
+    const double *b_qq_values,
+    const double *phi_mean_weights)
+{
+    const unsigned long long total = nq + np + 1ull;
+    const unsigned long long row =
+        static_cast<unsigned long long>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (row >= total) {
+        return;
+    }
+
+    GpuComplex value = make_complex(0.0, 0.0);
+    if (row < nq) {
+        value = value +
+            device_csr_row_dot(
+                a_qq_row_offsets,
+                a_qq_column_indices,
+                a_qq_values,
+                row,
+                x,
+                0);
+        value = value +
+            device_csr_row_dot(
+                a_qphi_row_offsets,
+                a_qphi_column_indices,
+                a_qphi_values,
+                row,
+                x,
+                nq);
+        const GpuComplex bx =
+            device_csr_row_dot(
+                b_qq_row_offsets,
+                b_qq_column_indices,
+                b_qq_values,
+                row,
+                x,
+                0);
+        value = value - sigma * bx;
+    } else if (row < nq + np) {
+        const unsigned long long phi_row = row - nq;
+        value = value +
+            device_csr_row_dot(
+                a_phiq_row_offsets,
+                a_phiq_column_indices,
+                a_phiq_values,
+                phi_row,
+                x,
+                0);
+        value = value +
+            device_csr_row_dot(
+                a_phiphi_row_offsets,
+                a_phiphi_column_indices,
+                a_phiphi_values,
+                phi_row,
+                x,
+                nq);
+        value = value + x[nq + np] * phi_mean_weights[phi_row];
+    } else {
+        for (unsigned long long phi_row = 0; phi_row < np; ++phi_row) {
+            value = value + x[nq + phi_row] * phi_mean_weights[phi_row];
+        }
+    }
+    y[row] = value;
+}
+
+__global__ void modal_poisson_airbox_dense_eigensolver_kernel(
+    const GpuComplex *a_matrix,
+    const GpuComplex *b_matrix,
+    const GpuComplex *shifted_matrix,
+    unsigned long long total_dof_count,
+    unsigned long long q_dof_count,
+    unsigned int max_iterations,
+    GpuComplex *out_x,
+    double *out_lambda_real,
+    double *out_lambda_imag,
+    double *out_frequency_hz,
+    double *out_relative_residual,
+    int *status)
+{
+    if (threadIdx.x != 0 || blockIdx.x != 0) {
+        return;
+    }
+    if (total_dof_count == 0 ||
+        total_dof_count > kMaxModalShiftInvertDenseDofs ||
+        q_dof_count == 0 ||
+        q_dof_count > total_dof_count ||
+        max_iterations == 0) {
+        *status = 2;
+        return;
+    }
+
+    constexpr double kPivotTolerance = 1.0e-300;
+    constexpr double kTwoPiDevice = 6.283185307179586476925286766559;
+    GpuComplex q[kMaxModalShiftInvertDenseDofs]{};
+    GpuComplex rhs[kMaxModalShiftInvertDenseDofs]{};
+    GpuComplex solution[kMaxModalShiftInvertDenseDofs]{};
+    GpuComplex work[kMaxModalShiftInvertDenseDofs * kMaxModalShiftInvertDenseDofs]{};
+
+    q[0] = make_complex(1.0, 0.25);
+    if (q_dof_count > 1) {
+        q[1] = make_complex(-0.5, 0.75);
+    }
+    double q_norm2 = 0.0;
+    for (unsigned long long row = 0; row < q_dof_count; ++row) {
+        q_norm2 += complex_abs2(q[row]);
+    }
+    const double inv_initial_norm = 1.0 / sqrt(q_norm2);
+    for (unsigned long long row = 0; row < q_dof_count; ++row) {
+        q[row] = q[row] * inv_initial_norm;
+    }
+
+    for (unsigned int iteration = 0; iteration < max_iterations; ++iteration) {
+        for (unsigned long long index = 0; index < total_dof_count; ++index) {
+            rhs[index] = make_complex(0.0, 0.0);
+            solution[index] = make_complex(0.0, 0.0);
+        }
+        for (unsigned long long row = 0; row < total_dof_count; ++row) {
+            GpuComplex value = make_complex(0.0, 0.0);
+            for (unsigned long long column = 0; column < q_dof_count; ++column) {
+                value = value + b_matrix[row * total_dof_count + column] * q[column];
+            }
+            rhs[row] = value;
+        }
+        for (unsigned long long index = 0; index < total_dof_count * total_dof_count; ++index) {
+            work[index] = shifted_matrix[index];
+        }
+
+        for (unsigned long long column = 0; column < total_dof_count; ++column) {
+            unsigned long long pivot_row = column;
+            double pivot_norm = complex_abs2(work[column * total_dof_count + column]);
+            for (unsigned long long row = column + 1; row < total_dof_count; ++row) {
+                const double candidate_norm =
+                    complex_abs2(work[row * total_dof_count + column]);
+                if (candidate_norm > pivot_norm) {
+                    pivot_norm = candidate_norm;
+                    pivot_row = row;
+                }
+            }
+            if (!(pivot_norm > kPivotTolerance)) {
+                *status = 1;
+                return;
+            }
+            if (pivot_row != column) {
+                for (unsigned long long col = 0; col < total_dof_count; ++col) {
+                    const GpuComplex tmp = work[column * total_dof_count + col];
+                    work[column * total_dof_count + col] =
+                        work[pivot_row * total_dof_count + col];
+                    work[pivot_row * total_dof_count + col] = tmp;
+                }
+                const GpuComplex tmp_rhs = rhs[column];
+                rhs[column] = rhs[pivot_row];
+                rhs[pivot_row] = tmp_rhs;
+            }
+            for (unsigned long long row = column + 1; row < total_dof_count; ++row) {
+                const GpuComplex factor =
+                    work[row * total_dof_count + column] /
+                    work[column * total_dof_count + column];
+                work[row * total_dof_count + column] = make_complex(0.0, 0.0);
+                for (unsigned long long col = column + 1; col < total_dof_count; ++col) {
+                    work[row * total_dof_count + col] =
+                        work[row * total_dof_count + col] -
+                        factor * work[column * total_dof_count + col];
+                }
+                rhs[row] = rhs[row] - factor * rhs[column];
+            }
+        }
+        for (unsigned long long reverse = 0; reverse < total_dof_count; ++reverse) {
+            const unsigned long long row = total_dof_count - 1 - reverse;
+            GpuComplex value = rhs[row];
+            for (unsigned long long column = row + 1; column < total_dof_count; ++column) {
+                value = value - work[row * total_dof_count + column] * solution[column];
+            }
+            solution[row] = value / work[row * total_dof_count + row];
+        }
+
+        double solution_q_norm2 = 0.0;
+        for (unsigned long long row = 0; row < q_dof_count; ++row) {
+            solution_q_norm2 += complex_abs2(solution[row]);
+        }
+        if (!(solution_q_norm2 > 0.0)) {
+            *status = 3;
+            return;
+        }
+        const double inv_q_norm = 1.0 / sqrt(solution_q_norm2);
+        for (unsigned long long row = 0; row < total_dof_count; ++row) {
+            solution[row] = solution[row] * inv_q_norm;
+        }
+        for (unsigned long long row = 0; row < q_dof_count; ++row) {
+            q[row] = solution[row];
+        }
+    }
+
+    const GpuComplex numerator =
+        device_dot_conj_matvec(a_matrix, solution, solution, total_dof_count);
+    const GpuComplex denominator =
+        device_dot_conj_matvec(b_matrix, solution, solution, total_dof_count);
+    if (!(complex_abs2(denominator) > kPivotTolerance)) {
+        *status = 4;
+        return;
+    }
+    const GpuComplex lambda = numerator / denominator;
+    double residual_sum = 0.0;
+    for (unsigned long long row = 0; row < total_dof_count; ++row) {
+        GpuComplex ax = make_complex(0.0, 0.0);
+        GpuComplex bx = make_complex(0.0, 0.0);
+        for (unsigned long long column = 0; column < total_dof_count; ++column) {
+            ax = ax + a_matrix[row * total_dof_count + column] * solution[column];
+            bx = bx + b_matrix[row * total_dof_count + column] * solution[column];
+        }
+        const GpuComplex r = ax - lambda * bx;
+        residual_sum += complex_abs2(r);
+    }
+    const double ax_norm = device_matvec_l2_norm(a_matrix, solution, total_dof_count);
+    const double bx_norm = device_matvec_l2_norm(b_matrix, solution, total_dof_count);
+    const double relative_residual =
+        sqrt(residual_sum) /
+        (ax_norm + complex_abs(lambda) * bx_norm + 1.0e-300);
+
+    for (unsigned long long row = 0; row < total_dof_count; ++row) {
+        out_x[row] = solution[row];
+    }
+    *out_lambda_real = lambda.real;
+    *out_lambda_imag = lambda.imag;
+    *out_frequency_hz = lambda.imag / kTwoPiDevice;
+    *out_relative_residual = relative_residual;
+    *status = 0;
+}
+
 __global__ void exchange_kernel(
+    const fd::TangentFrameNode *nodes,
     const fd::TangentOperatorEdgeBlock *edges,
     unsigned long long edge_count,
     const double *tangent_in,
@@ -59,13 +548,34 @@ __global__ void exchange_kernel(
         return;
     }
     const fd::TangentOperatorEdgeBlock edge = edges[edge_index];
-    for (unsigned long long component = 0; component < 2; ++component) {
-        const unsigned long long dof_i = edge.node_i * 2 + component;
-        const unsigned long long dof_j = edge.node_j * 2 + component;
-        const double delta = edge.stiffness * (tangent_in[dof_i] - tangent_in[dof_j]);
-        frequency_domain_atomic_add_double(&effective_tangent[dof_i], delta);
-        frequency_domain_atomic_add_double(&effective_tangent[dof_j], -delta);
-    }
+    const unsigned long long i0 = edge.node_i * 2;
+    const unsigned long long j0 = edge.node_j * 2;
+    const double qi0 = tangent_in[i0];
+    const double qi1 = tangent_in[i0 + 1];
+    const double qj0 = tangent_in[j0];
+    const double qj1 = tangent_in[j0 + 1];
+    const fd::TangentFrameNode node_i = nodes[edge.node_i];
+    const fd::TangentFrameNode node_j = nodes[edge.node_j];
+    const double r00 = dot3_device(node_i.e1, node_j.e1);
+    const double r01 = dot3_device(node_i.e1, node_j.e2);
+    const double r10 = dot3_device(node_i.e2, node_j.e1);
+    const double r11 = dot3_device(node_i.e2, node_j.e2);
+    const double ti_from_j0 = r00 * qj0 + r01 * qj1;
+    const double ti_from_j1 = r10 * qj0 + r11 * qj1;
+    const double tj_from_i0 = r00 * qi0 + r10 * qi1;
+    const double tj_from_i1 = r01 * qi0 + r11 * qi1;
+    frequency_domain_atomic_add_double(
+        &effective_tangent[i0],
+        edge.stiffness * (qi0 - ti_from_j0));
+    frequency_domain_atomic_add_double(
+        &effective_tangent[i0 + 1],
+        edge.stiffness * (qi1 - ti_from_j1));
+    frequency_domain_atomic_add_double(
+        &effective_tangent[j0],
+        edge.stiffness * (qj0 - tj_from_i0));
+    frequency_domain_atomic_add_double(
+        &effective_tangent[j0 + 1],
+        edge.stiffness * (qj1 - tj_from_i1));
 }
 
 __global__ void local_precession_mass_kernel(
@@ -301,6 +811,75 @@ bool cuda_success(cudaError_t status, const char *operation, char *error_message
             cudaGetErrorString(status));
     }
     return false;
+}
+
+bool csr_shape_valid(const fd::CsrMatrixView &matrix, unsigned long long rows, unsigned long long columns)
+{
+    return matrix.row_count == rows &&
+        matrix.column_count == columns &&
+        matrix.row_offsets != nullptr &&
+        matrix.row_offsets_len == rows + 1 &&
+        matrix.column_indices != nullptr &&
+        matrix.values != nullptr &&
+        matrix.column_indices_len == matrix.values_len;
+}
+
+bool modal_shift_problem_valid(const fd::PoissonAirboxEigenBlockProblem &problem)
+{
+    const unsigned long long nq = problem.q_dof_count;
+    const unsigned long long np = problem.phi_dof_count;
+    return nq > 0 &&
+        np > 0 &&
+        nq + np + 1 <= kMaxModalShiftInvertDenseDofs &&
+        csr_shape_valid(problem.A_qq, nq, nq) &&
+        csr_shape_valid(problem.A_qphi, nq, np) &&
+        csr_shape_valid(problem.A_phiq, np, nq) &&
+        csr_shape_valid(problem.A_phiphi, np, np) &&
+        csr_shape_valid(problem.B_qq, nq, nq) &&
+        problem.phi_mean_weights != nullptr &&
+        problem.phi_mean_weights_count == np;
+}
+
+void add_csr_to_modal_dense(
+    const fd::CsrMatrixView &matrix,
+    unsigned long long row_offset,
+    unsigned long long column_offset,
+    std::vector<GpuComplex> &dense,
+    unsigned long long total)
+{
+    for (unsigned long long row = 0; row < matrix.row_count; ++row) {
+        for (std::uint32_t entry = matrix.row_offsets[row];
+             entry < matrix.row_offsets[row + 1];
+             ++entry) {
+            dense[(row_offset + row) * total + column_offset + matrix.column_indices[entry]].real +=
+                matrix.values[entry];
+        }
+    }
+}
+
+std::vector<GpuComplex> modal_dense_matvec(
+    const std::vector<GpuComplex> &matrix,
+    unsigned long long total,
+    const std::vector<GpuComplex> &x)
+{
+    std::vector<GpuComplex> y(static_cast<std::size_t>(total), make_complex(0.0, 0.0));
+    for (unsigned long long row = 0; row < total; ++row) {
+        GpuComplex value = make_complex(0.0, 0.0);
+        for (unsigned long long column = 0; column < total; ++column) {
+            value = value + matrix[row * total + column] * x[column];
+        }
+        y[row] = value;
+    }
+    return y;
+}
+
+double modal_complex_l2_norm(const std::vector<GpuComplex> &values)
+{
+    double sum = 0.0;
+    for (const GpuComplex value : values) {
+        sum += complex_abs2(value);
+    }
+    return std::sqrt(sum);
 }
 
 template <typename T>
@@ -586,6 +1165,7 @@ extern "C" int fullmag_fem_frequency_domain_apply_mfem_gpu_operator(
     if (ok && exchange_enabled) {
         const int edge_blocks = static_cast<int>((exchange_edge_count + kBlockSize - 1) / kBlockSize);
         exchange_kernel<<<edge_blocks, kBlockSize>>>(
+            d_nodes,
             d_edges,
             exchange_edge_count,
             d_tangent_in,
@@ -801,6 +1381,7 @@ extern "C" int fullmag_fem_frequency_domain_apply_mfem_gpu_operator_context(
     if (ok && context->exchange_enabled) {
         const int edge_blocks = static_cast<int>((context->exchange_edge_count + kBlockSize - 1) / kBlockSize);
         exchange_kernel<<<edge_blocks, kBlockSize>>>(
+            context->d_nodes,
             context->d_edges,
             context->exchange_edge_count,
             context->d_tangent_in,
@@ -885,4 +1466,843 @@ extern "C" void fullmag_fem_frequency_domain_destroy_mfem_gpu_operator_context(
     void *opaque_context)
 {
     destroy_context(static_cast<FrequencyDomainGpuOperatorContext *>(opaque_context));
+}
+
+extern "C" int fullmag_fem_frequency_domain_apply_modal_poisson_airbox_gpu_descriptor(
+    const fd::PoissonAirboxEigenBlockProblem *problem,
+    const double *x_real,
+    const double *x_imag,
+    unsigned long long x_count,
+    double *out_y_real,
+    double *out_y_imag,
+    unsigned long long out_y_count,
+    char *diagnostics_json,
+    unsigned long long diagnostics_json_len,
+    char *error_message,
+    unsigned long long error_message_len)
+{
+    if (diagnostics_json != nullptr && diagnostics_json_len > 0) {
+        diagnostics_json[0] = '\0';
+    }
+    if (problem == nullptr ||
+        !modal_shift_problem_valid(*problem) ||
+        x_real == nullptr ||
+        out_y_real == nullptr ||
+        out_y_imag == nullptr) {
+        if (error_message != nullptr && error_message_len > 0) {
+            std::snprintf(
+                error_message,
+                static_cast<std::size_t>(error_message_len),
+                "invalid GPU-G5b modal Poisson-airbox descriptor apply inputs");
+        }
+        return 1;
+    }
+
+    const unsigned long long nq = problem->q_dof_count;
+    const unsigned long long np = problem->phi_dof_count;
+    const unsigned long long total = nq + np + 1ull;
+    if (x_count != total || out_y_count != total) {
+        if (error_message != nullptr && error_message_len > 0) {
+            std::snprintf(
+                error_message,
+                static_cast<std::size_t>(error_message_len),
+                "GPU-G5b descriptor apply requires full augmented vector length");
+        }
+        return 1;
+    }
+
+    std::vector<GpuComplex> x(static_cast<std::size_t>(total), make_complex(0.0, 0.0));
+    for (unsigned long long index = 0; index < total; ++index) {
+        const double real = x_real[index];
+        const double imag = x_imag == nullptr ? 0.0 : x_imag[index];
+        if (!std::isfinite(real) || !std::isfinite(imag)) {
+            if (error_message != nullptr && error_message_len > 0) {
+                std::snprintf(
+                    error_message,
+                    static_cast<std::size_t>(error_message_len),
+                    "GPU-G5b descriptor apply input vector must be finite");
+            }
+            return 1;
+        }
+        x[index] = make_complex(real, imag);
+    }
+
+    GpuComplex *d_x = nullptr;
+    GpuComplex *d_y = nullptr;
+    std::uint32_t *d_a_qq_rows = nullptr;
+    std::uint32_t *d_a_qq_columns = nullptr;
+    double *d_a_qq_values = nullptr;
+    std::uint32_t *d_a_qphi_rows = nullptr;
+    std::uint32_t *d_a_qphi_columns = nullptr;
+    double *d_a_qphi_values = nullptr;
+    std::uint32_t *d_a_phiq_rows = nullptr;
+    std::uint32_t *d_a_phiq_columns = nullptr;
+    double *d_a_phiq_values = nullptr;
+    std::uint32_t *d_a_phiphi_rows = nullptr;
+    std::uint32_t *d_a_phiphi_columns = nullptr;
+    double *d_a_phiphi_values = nullptr;
+    double *d_phi_mean_weights = nullptr;
+
+    bool ok =
+        allocate_and_copy(&d_x, x.data(), total, "GPU-G5b descriptor input", error_message, error_message_len) &&
+        cuda_success(cudaMalloc(&d_y, sizeof(GpuComplex) * total), "cudaMalloc GPU-G5b descriptor output", error_message, error_message_len) &&
+        cuda_success(cudaMemset(d_y, 0, sizeof(GpuComplex) * total), "cudaMemset GPU-G5b descriptor output", error_message, error_message_len) &&
+        allocate_and_copy(&d_a_qq_rows, problem->A_qq.row_offsets, problem->A_qq.row_offsets_len, "GPU-G5b A_qq row offsets", error_message, error_message_len) &&
+        allocate_and_copy(&d_a_qq_columns, problem->A_qq.column_indices, problem->A_qq.column_indices_len, "GPU-G5b A_qq columns", error_message, error_message_len) &&
+        allocate_and_copy(&d_a_qq_values, problem->A_qq.values, problem->A_qq.values_len, "GPU-G5b A_qq values", error_message, error_message_len) &&
+        allocate_and_copy(&d_a_qphi_rows, problem->A_qphi.row_offsets, problem->A_qphi.row_offsets_len, "GPU-G5b A_qphi row offsets", error_message, error_message_len) &&
+        allocate_and_copy(&d_a_qphi_columns, problem->A_qphi.column_indices, problem->A_qphi.column_indices_len, "GPU-G5b A_qphi columns", error_message, error_message_len) &&
+        allocate_and_copy(&d_a_qphi_values, problem->A_qphi.values, problem->A_qphi.values_len, "GPU-G5b A_qphi values", error_message, error_message_len) &&
+        allocate_and_copy(&d_a_phiq_rows, problem->A_phiq.row_offsets, problem->A_phiq.row_offsets_len, "GPU-G5b A_phiq row offsets", error_message, error_message_len) &&
+        allocate_and_copy(&d_a_phiq_columns, problem->A_phiq.column_indices, problem->A_phiq.column_indices_len, "GPU-G5b A_phiq columns", error_message, error_message_len) &&
+        allocate_and_copy(&d_a_phiq_values, problem->A_phiq.values, problem->A_phiq.values_len, "GPU-G5b A_phiq values", error_message, error_message_len) &&
+        allocate_and_copy(&d_a_phiphi_rows, problem->A_phiphi.row_offsets, problem->A_phiphi.row_offsets_len, "GPU-G5b A_phiphi row offsets", error_message, error_message_len) &&
+        allocate_and_copy(&d_a_phiphi_columns, problem->A_phiphi.column_indices, problem->A_phiphi.column_indices_len, "GPU-G5b A_phiphi columns", error_message, error_message_len) &&
+        allocate_and_copy(&d_a_phiphi_values, problem->A_phiphi.values, problem->A_phiphi.values_len, "GPU-G5b A_phiphi values", error_message, error_message_len) &&
+        allocate_and_copy(&d_phi_mean_weights, problem->phi_mean_weights, problem->phi_mean_weights_count, "GPU-G5b phi mean weights", error_message, error_message_len);
+
+    if (ok) {
+        const unsigned int blocks =
+            static_cast<unsigned int>((total + kBlockSize - 1ull) / kBlockSize);
+        modal_poisson_airbox_descriptor_apply_kernel<<<blocks, kBlockSize>>>(
+            nq,
+            np,
+            d_x,
+            d_y,
+            d_a_qq_rows,
+            d_a_qq_columns,
+            d_a_qq_values,
+            d_a_qphi_rows,
+            d_a_qphi_columns,
+            d_a_qphi_values,
+            d_a_phiq_rows,
+            d_a_phiq_columns,
+            d_a_phiq_values,
+            d_a_phiphi_rows,
+            d_a_phiphi_columns,
+            d_a_phiphi_values,
+            d_phi_mean_weights);
+        ok = cuda_success(cudaGetLastError(), "launch GPU-G5b descriptor apply", error_message, error_message_len) &&
+            cuda_success(cudaDeviceSynchronize(), "synchronize GPU-G5b descriptor apply", error_message, error_message_len);
+    }
+
+    std::vector<GpuComplex> y(static_cast<std::size_t>(total), make_complex(0.0, 0.0));
+    if (ok) {
+        ok = cuda_success(
+            cudaMemcpy(y.data(), d_y, sizeof(GpuComplex) * total, cudaMemcpyDeviceToHost),
+            "cudaMemcpy GPU-G5b descriptor output D2H",
+            error_message,
+            error_message_len);
+    }
+
+    cudaFree(d_x);
+    cudaFree(d_y);
+    cudaFree(d_a_qq_rows);
+    cudaFree(d_a_qq_columns);
+    cudaFree(d_a_qq_values);
+    cudaFree(d_a_qphi_rows);
+    cudaFree(d_a_qphi_columns);
+    cudaFree(d_a_qphi_values);
+    cudaFree(d_a_phiq_rows);
+    cudaFree(d_a_phiq_columns);
+    cudaFree(d_a_phiq_values);
+    cudaFree(d_a_phiphi_rows);
+    cudaFree(d_a_phiphi_columns);
+    cudaFree(d_a_phiphi_values);
+    cudaFree(d_phi_mean_weights);
+
+    if (!ok) {
+        return 1;
+    }
+
+    for (unsigned long long index = 0; index < total; ++index) {
+        out_y_real[index] = y[index].real;
+        out_y_imag[index] = y[index].imag;
+    }
+    const double input_norm = modal_complex_l2_norm(x);
+    const double output_norm = modal_complex_l2_norm(y);
+
+    if (diagnostics_json != nullptr && diagnostics_json_len > 0) {
+        std::snprintf(
+            diagnostics_json,
+            static_cast<std::size_t>(diagnostics_json_len),
+            "{"
+            "\"schema_version\":\"gpu_modal_poisson_airbox_descriptor_apply.v1\","
+            "\"status\":\"ok\","
+            "\"study_product\":\"modal_eigen\","
+            "\"lane\":\"gpu_poisson_airbox_k0\","
+            "\"execution_lane\":\"gpu_device_modal_descriptor_apply_contract\","
+            "\"solver_family\":\"modal_eigen\","
+            "\"operator_family\":\"full_coupled_poisson_airbox_modal_pencil\","
+            "\"algebraic_action\":\"A*x\","
+            "\"matrix_format\":\"csr_device_apply\","
+            "\"demag_kind\":\"%s\","
+            "\"gauge_policy\":\"%s\","
+            "\"phasor_convention\":\"%s\","
+            "\"eigenvalue_convention\":\"%s\","
+            "\"frequency_response_proxy\":false,"
+            "\"gpu_device_resident_operator_apply\":true,"
+            "\"cpu_fallback\":\"disabled\","
+            "\"fallback_used\":false,"
+            "\"setup_h2d_count\":14,"
+            "\"result_d2h_count\":1,"
+            "\"per_iteration_h2d_count\":0,"
+            "\"per_iteration_d2h_count\":0,"
+            "\"q_dof_count\":%llu,"
+            "\"phi_dof_count\":%llu,"
+            "\"augmented_dof_count\":%llu,"
+            "\"metrics\":{"
+            "\"input_l2_norm\":%.17g,"
+            "\"output_l2_norm\":%.17g"
+            "}"
+            "}",
+            problem->demag_kind != nullptr ? problem->demag_kind : "",
+            problem->gauge_policy != nullptr ? problem->gauge_policy : "",
+            problem->phasor_convention != nullptr ? problem->phasor_convention : "",
+            problem->eigenvalue_convention != nullptr ? problem->eigenvalue_convention : "",
+            static_cast<unsigned long long>(nq),
+            static_cast<unsigned long long>(np),
+            static_cast<unsigned long long>(total),
+            input_norm,
+            output_norm);
+    }
+    return 0;
+}
+
+extern "C" int fullmag_fem_frequency_domain_apply_modal_poisson_airbox_gpu_shifted_descriptor(
+    const fd::PoissonAirboxEigenBlockProblem *problem,
+    double sigma_real,
+    double sigma_imag,
+    const double *x_real,
+    const double *x_imag,
+    unsigned long long x_count,
+    double *out_y_real,
+    double *out_y_imag,
+    unsigned long long out_y_count,
+    char *diagnostics_json,
+    unsigned long long diagnostics_json_len,
+    char *error_message,
+    unsigned long long error_message_len)
+{
+    if (diagnostics_json != nullptr && diagnostics_json_len > 0) {
+        diagnostics_json[0] = '\0';
+    }
+    if (problem == nullptr ||
+        !modal_shift_problem_valid(*problem) ||
+        x_real == nullptr ||
+        out_y_real == nullptr ||
+        out_y_imag == nullptr ||
+        !std::isfinite(sigma_real) ||
+        !std::isfinite(sigma_imag)) {
+        if (error_message != nullptr && error_message_len > 0) {
+            std::snprintf(
+                error_message,
+                static_cast<std::size_t>(error_message_len),
+                "invalid GPU-G5c modal Poisson-airbox shifted descriptor apply inputs");
+        }
+        return 1;
+    }
+
+    const unsigned long long nq = problem->q_dof_count;
+    const unsigned long long np = problem->phi_dof_count;
+    const unsigned long long total = nq + np + 1ull;
+    if (x_count != total || out_y_count != total) {
+        if (error_message != nullptr && error_message_len > 0) {
+            std::snprintf(
+                error_message,
+                static_cast<std::size_t>(error_message_len),
+                "GPU-G5c shifted descriptor apply requires full augmented vector length");
+        }
+        return 1;
+    }
+
+    std::vector<GpuComplex> x(static_cast<std::size_t>(total), make_complex(0.0, 0.0));
+    for (unsigned long long index = 0; index < total; ++index) {
+        const double real = x_real[index];
+        const double imag = x_imag == nullptr ? 0.0 : x_imag[index];
+        if (!std::isfinite(real) || !std::isfinite(imag)) {
+            if (error_message != nullptr && error_message_len > 0) {
+                std::snprintf(
+                    error_message,
+                    static_cast<std::size_t>(error_message_len),
+                    "GPU-G5c shifted descriptor apply input vector must be finite");
+            }
+            return 1;
+        }
+        x[index] = make_complex(real, imag);
+    }
+
+    GpuComplex *d_x = nullptr;
+    GpuComplex *d_y = nullptr;
+    std::uint32_t *d_a_qq_rows = nullptr;
+    std::uint32_t *d_a_qq_columns = nullptr;
+    double *d_a_qq_values = nullptr;
+    std::uint32_t *d_a_qphi_rows = nullptr;
+    std::uint32_t *d_a_qphi_columns = nullptr;
+    double *d_a_qphi_values = nullptr;
+    std::uint32_t *d_a_phiq_rows = nullptr;
+    std::uint32_t *d_a_phiq_columns = nullptr;
+    double *d_a_phiq_values = nullptr;
+    std::uint32_t *d_a_phiphi_rows = nullptr;
+    std::uint32_t *d_a_phiphi_columns = nullptr;
+    double *d_a_phiphi_values = nullptr;
+    std::uint32_t *d_b_qq_rows = nullptr;
+    std::uint32_t *d_b_qq_columns = nullptr;
+    double *d_b_qq_values = nullptr;
+    double *d_phi_mean_weights = nullptr;
+
+    bool ok =
+        allocate_and_copy(&d_x, x.data(), total, "GPU-G5c shifted descriptor input", error_message, error_message_len) &&
+        cuda_success(cudaMalloc(&d_y, sizeof(GpuComplex) * total), "cudaMalloc GPU-G5c shifted descriptor output", error_message, error_message_len) &&
+        cuda_success(cudaMemset(d_y, 0, sizeof(GpuComplex) * total), "cudaMemset GPU-G5c shifted descriptor output", error_message, error_message_len) &&
+        allocate_and_copy(&d_a_qq_rows, problem->A_qq.row_offsets, problem->A_qq.row_offsets_len, "GPU-G5c A_qq row offsets", error_message, error_message_len) &&
+        allocate_and_copy(&d_a_qq_columns, problem->A_qq.column_indices, problem->A_qq.column_indices_len, "GPU-G5c A_qq columns", error_message, error_message_len) &&
+        allocate_and_copy(&d_a_qq_values, problem->A_qq.values, problem->A_qq.values_len, "GPU-G5c A_qq values", error_message, error_message_len) &&
+        allocate_and_copy(&d_a_qphi_rows, problem->A_qphi.row_offsets, problem->A_qphi.row_offsets_len, "GPU-G5c A_qphi row offsets", error_message, error_message_len) &&
+        allocate_and_copy(&d_a_qphi_columns, problem->A_qphi.column_indices, problem->A_qphi.column_indices_len, "GPU-G5c A_qphi columns", error_message, error_message_len) &&
+        allocate_and_copy(&d_a_qphi_values, problem->A_qphi.values, problem->A_qphi.values_len, "GPU-G5c A_qphi values", error_message, error_message_len) &&
+        allocate_and_copy(&d_a_phiq_rows, problem->A_phiq.row_offsets, problem->A_phiq.row_offsets_len, "GPU-G5c A_phiq row offsets", error_message, error_message_len) &&
+        allocate_and_copy(&d_a_phiq_columns, problem->A_phiq.column_indices, problem->A_phiq.column_indices_len, "GPU-G5c A_phiq columns", error_message, error_message_len) &&
+        allocate_and_copy(&d_a_phiq_values, problem->A_phiq.values, problem->A_phiq.values_len, "GPU-G5c A_phiq values", error_message, error_message_len) &&
+        allocate_and_copy(&d_a_phiphi_rows, problem->A_phiphi.row_offsets, problem->A_phiphi.row_offsets_len, "GPU-G5c A_phiphi row offsets", error_message, error_message_len) &&
+        allocate_and_copy(&d_a_phiphi_columns, problem->A_phiphi.column_indices, problem->A_phiphi.column_indices_len, "GPU-G5c A_phiphi columns", error_message, error_message_len) &&
+        allocate_and_copy(&d_a_phiphi_values, problem->A_phiphi.values, problem->A_phiphi.values_len, "GPU-G5c A_phiphi values", error_message, error_message_len) &&
+        allocate_and_copy(&d_b_qq_rows, problem->B_qq.row_offsets, problem->B_qq.row_offsets_len, "GPU-G5c B_qq row offsets", error_message, error_message_len) &&
+        allocate_and_copy(&d_b_qq_columns, problem->B_qq.column_indices, problem->B_qq.column_indices_len, "GPU-G5c B_qq columns", error_message, error_message_len) &&
+        allocate_and_copy(&d_b_qq_values, problem->B_qq.values, problem->B_qq.values_len, "GPU-G5c B_qq values", error_message, error_message_len) &&
+        allocate_and_copy(&d_phi_mean_weights, problem->phi_mean_weights, problem->phi_mean_weights_count, "GPU-G5c phi mean weights", error_message, error_message_len);
+
+    if (ok) {
+        const unsigned int blocks =
+            static_cast<unsigned int>((total + kBlockSize - 1ull) / kBlockSize);
+        modal_poisson_airbox_shifted_descriptor_apply_kernel<<<blocks, kBlockSize>>>(
+            nq,
+            np,
+            make_complex(sigma_real, sigma_imag),
+            d_x,
+            d_y,
+            d_a_qq_rows,
+            d_a_qq_columns,
+            d_a_qq_values,
+            d_a_qphi_rows,
+            d_a_qphi_columns,
+            d_a_qphi_values,
+            d_a_phiq_rows,
+            d_a_phiq_columns,
+            d_a_phiq_values,
+            d_a_phiphi_rows,
+            d_a_phiphi_columns,
+            d_a_phiphi_values,
+            d_b_qq_rows,
+            d_b_qq_columns,
+            d_b_qq_values,
+            d_phi_mean_weights);
+        ok = cuda_success(cudaGetLastError(), "launch GPU-G5c shifted descriptor apply", error_message, error_message_len) &&
+            cuda_success(cudaDeviceSynchronize(), "synchronize GPU-G5c shifted descriptor apply", error_message, error_message_len);
+    }
+
+    std::vector<GpuComplex> y(static_cast<std::size_t>(total), make_complex(0.0, 0.0));
+    if (ok) {
+        ok = cuda_success(
+            cudaMemcpy(y.data(), d_y, sizeof(GpuComplex) * total, cudaMemcpyDeviceToHost),
+            "cudaMemcpy GPU-G5c shifted descriptor output D2H",
+            error_message,
+            error_message_len);
+    }
+
+    cudaFree(d_x);
+    cudaFree(d_y);
+    cudaFree(d_a_qq_rows);
+    cudaFree(d_a_qq_columns);
+    cudaFree(d_a_qq_values);
+    cudaFree(d_a_qphi_rows);
+    cudaFree(d_a_qphi_columns);
+    cudaFree(d_a_qphi_values);
+    cudaFree(d_a_phiq_rows);
+    cudaFree(d_a_phiq_columns);
+    cudaFree(d_a_phiq_values);
+    cudaFree(d_a_phiphi_rows);
+    cudaFree(d_a_phiphi_columns);
+    cudaFree(d_a_phiphi_values);
+    cudaFree(d_b_qq_rows);
+    cudaFree(d_b_qq_columns);
+    cudaFree(d_b_qq_values);
+    cudaFree(d_phi_mean_weights);
+
+    if (!ok) {
+        return 1;
+    }
+
+    for (unsigned long long index = 0; index < total; ++index) {
+        out_y_real[index] = y[index].real;
+        out_y_imag[index] = y[index].imag;
+    }
+    const double input_norm = modal_complex_l2_norm(x);
+    const double output_norm = modal_complex_l2_norm(y);
+
+    if (diagnostics_json != nullptr && diagnostics_json_len > 0) {
+        std::snprintf(
+            diagnostics_json,
+            static_cast<std::size_t>(diagnostics_json_len),
+            "{"
+            "\"schema_version\":\"gpu_modal_poisson_airbox_shifted_descriptor_apply.v1\","
+            "\"status\":\"ok\","
+            "\"study_product\":\"modal_eigen\","
+            "\"lane\":\"gpu_poisson_airbox_k0\","
+            "\"execution_lane\":\"gpu_device_modal_shifted_descriptor_apply_contract\","
+            "\"solver_family\":\"modal_eigen\","
+            "\"operator_family\":\"full_coupled_poisson_airbox_modal_pencil\","
+            "\"algebraic_action\":\"(A - sigma B)*x\","
+            "\"matrix_format\":\"csr_device_shifted_apply\","
+            "\"demag_kind\":\"%s\","
+            "\"gauge_policy\":\"%s\","
+            "\"phasor_convention\":\"%s\","
+            "\"eigenvalue_convention\":\"%s\","
+            "\"spectral_transform\":\"shift_invert\","
+            "\"frequency_response_proxy\":false,"
+            "\"gpu_device_resident_shifted_operator_apply\":true,"
+            "\"cpu_fallback\":\"disabled\","
+            "\"fallback_used\":false,"
+            "\"setup_h2d_count\":17,"
+            "\"result_d2h_count\":1,"
+            "\"per_iteration_h2d_count\":0,"
+            "\"per_iteration_d2h_count\":0,"
+            "\"q_dof_count\":%llu,"
+            "\"phi_dof_count\":%llu,"
+            "\"augmented_dof_count\":%llu,"
+            "\"sigma\":{\"real\":%.17g,\"imag\":%.17g},"
+            "\"metrics\":{"
+            "\"input_l2_norm\":%.17g,"
+            "\"output_l2_norm\":%.17g"
+            "}"
+            "}",
+            problem->demag_kind != nullptr ? problem->demag_kind : "",
+            problem->gauge_policy != nullptr ? problem->gauge_policy : "",
+            problem->phasor_convention != nullptr ? problem->phasor_convention : "",
+            problem->eigenvalue_convention != nullptr ? problem->eigenvalue_convention : "",
+            static_cast<unsigned long long>(nq),
+            static_cast<unsigned long long>(np),
+            static_cast<unsigned long long>(total),
+            sigma_real,
+            sigma_imag,
+            input_norm,
+            output_norm);
+    }
+    return 0;
+}
+
+extern "C" int fullmag_fem_frequency_domain_apply_modal_shift_invert_gpu_action(
+    const fd::PoissonAirboxEigenBlockProblem *problem,
+    double sigma_real,
+    double sigma_imag,
+    const double *v_q_real,
+    const double *v_q_imag,
+    unsigned long long v_q_count,
+    double *out_q_real,
+    double *out_q_imag,
+    unsigned long long out_q_count,
+    char *diagnostics_json,
+    unsigned long long diagnostics_json_len,
+    char *error_message,
+    unsigned long long error_message_len)
+{
+    if (diagnostics_json != nullptr && diagnostics_json_len > 0) {
+        diagnostics_json[0] = '\0';
+    }
+    if (problem == nullptr ||
+        !modal_shift_problem_valid(*problem) ||
+        v_q_real == nullptr ||
+        out_q_real == nullptr ||
+        out_q_imag == nullptr ||
+        v_q_count != problem->q_dof_count ||
+        out_q_count != problem->q_dof_count ||
+        !std::isfinite(sigma_real) ||
+        !std::isfinite(sigma_imag)) {
+        if (error_message != nullptr && error_message_len > 0) {
+            std::snprintf(
+                error_message,
+                static_cast<std::size_t>(error_message_len),
+                "invalid PA-G3f GPU modal shift-invert action inputs");
+        }
+        return 1;
+    }
+
+    const unsigned long long nq = problem->q_dof_count;
+    const unsigned long long np = problem->phi_dof_count;
+    const unsigned long long total = nq + np + 1;
+    const GpuComplex sigma = make_complex(sigma_real, sigma_imag);
+
+    std::vector<GpuComplex> matrix(
+        static_cast<std::size_t>(total * total),
+        make_complex(0.0, 0.0));
+    add_csr_to_modal_dense(problem->A_qq, 0, 0, matrix, total);
+    add_csr_to_modal_dense(problem->A_qphi, 0, nq, matrix, total);
+    add_csr_to_modal_dense(problem->A_phiq, nq, 0, matrix, total);
+    add_csr_to_modal_dense(problem->A_phiphi, nq, nq, matrix, total);
+    for (unsigned long long row = 0; row < np; ++row) {
+        matrix[(nq + row) * total + nq + np].real += problem->phi_mean_weights[row];
+        matrix[(nq + np) * total + nq + row].real += problem->phi_mean_weights[row];
+    }
+    for (unsigned long long row = 0; row < problem->B_qq.row_count; ++row) {
+        for (std::uint32_t entry = problem->B_qq.row_offsets[row];
+             entry < problem->B_qq.row_offsets[row + 1];
+             ++entry) {
+            matrix[row * total + problem->B_qq.column_indices[entry]] =
+                matrix[row * total + problem->B_qq.column_indices[entry]] -
+                sigma * problem->B_qq.values[entry];
+        }
+    }
+
+    std::vector<GpuComplex> rhs(static_cast<std::size_t>(total), make_complex(0.0, 0.0));
+    for (unsigned long long row = 0; row < problem->B_qq.row_count; ++row) {
+        GpuComplex value = make_complex(0.0, 0.0);
+        for (std::uint32_t entry = problem->B_qq.row_offsets[row];
+             entry < problem->B_qq.row_offsets[row + 1];
+             ++entry) {
+            const unsigned long long column = problem->B_qq.column_indices[entry];
+            const double input_real = v_q_real[column];
+            const double input_imag = v_q_imag == nullptr ? 0.0 : v_q_imag[column];
+            if (!std::isfinite(input_real) || !std::isfinite(input_imag)) {
+                if (error_message != nullptr && error_message_len > 0) {
+                    std::snprintf(
+                        error_message,
+                        static_cast<std::size_t>(error_message_len),
+                        "PA-G3f GPU modal shift-invert input vector must be finite");
+                }
+                return 1;
+            }
+            value = value + make_complex(input_real, input_imag) * problem->B_qq.values[entry];
+        }
+        rhs[row] = value;
+    }
+    const double rhs_norm = modal_complex_l2_norm(rhs);
+
+    GpuComplex *d_matrix = nullptr;
+    GpuComplex *d_rhs = nullptr;
+    GpuComplex *d_solution = nullptr;
+    int *d_status = nullptr;
+    bool ok =
+        cuda_success(cudaMalloc(&d_matrix, sizeof(GpuComplex) * matrix.size()), "cudaMalloc PA-G3f matrix", error_message, error_message_len) &&
+        cuda_success(cudaMalloc(&d_rhs, sizeof(GpuComplex) * rhs.size()), "cudaMalloc PA-G3f rhs", error_message, error_message_len) &&
+        cuda_success(cudaMalloc(&d_solution, sizeof(GpuComplex) * rhs.size()), "cudaMalloc PA-G3f solution", error_message, error_message_len) &&
+        cuda_success(cudaMalloc(&d_status, sizeof(int)), "cudaMalloc PA-G3f status", error_message, error_message_len) &&
+        cuda_success(cudaMemcpy(d_matrix, matrix.data(), sizeof(GpuComplex) * matrix.size(), cudaMemcpyHostToDevice), "cudaMemcpy PA-G3f matrix H2D", error_message, error_message_len) &&
+        cuda_success(cudaMemcpy(d_rhs, rhs.data(), sizeof(GpuComplex) * rhs.size(), cudaMemcpyHostToDevice), "cudaMemcpy PA-G3f rhs H2D", error_message, error_message_len) &&
+        cuda_success(cudaMemset(d_solution, 0, sizeof(GpuComplex) * rhs.size()), "cudaMemset PA-G3f solution", error_message, error_message_len) &&
+        cuda_success(cudaMemset(d_status, 0, sizeof(int)), "cudaMemset PA-G3f status", error_message, error_message_len);
+
+    if (ok) {
+        modal_shift_invert_dense_solve_kernel<<<1, 1>>>(d_matrix, d_rhs, d_solution, total, d_status);
+        ok = cuda_success(cudaGetLastError(), "launch PA-G3f modal shift-invert solve", error_message, error_message_len) &&
+            cuda_success(cudaDeviceSynchronize(), "synchronize PA-G3f modal shift-invert solve", error_message, error_message_len);
+    }
+
+    int solver_status = 1;
+    std::vector<GpuComplex> solution(static_cast<std::size_t>(total), make_complex(0.0, 0.0));
+    if (ok) {
+        ok =
+            cuda_success(cudaMemcpy(&solver_status, d_status, sizeof(int), cudaMemcpyDeviceToHost), "cudaMemcpy PA-G3f status D2H", error_message, error_message_len) &&
+            cuda_success(cudaMemcpy(solution.data(), d_solution, sizeof(GpuComplex) * solution.size(), cudaMemcpyDeviceToHost), "cudaMemcpy PA-G3f solution D2H", error_message, error_message_len);
+    }
+
+    cudaFree(d_matrix);
+    cudaFree(d_rhs);
+    cudaFree(d_solution);
+    cudaFree(d_status);
+
+    if (!ok) {
+        return 1;
+    }
+    if (solver_status != 0) {
+        if (error_message != nullptr && error_message_len > 0) {
+            std::snprintf(
+                error_message,
+                static_cast<std::size_t>(error_message_len),
+                "PA-G3f GPU modal shift-invert dense solve failed with status %d",
+                solver_status);
+        }
+        return 1;
+    }
+
+    for (unsigned long long row = 0; row < nq; ++row) {
+        out_q_real[row] = solution[row].real;
+        out_q_imag[row] = solution[row].imag;
+    }
+
+    std::vector<GpuComplex> residual = modal_dense_matvec(matrix, total, solution);
+    for (unsigned long long row = 0; row < total; ++row) {
+        residual[row] = residual[row] - rhs[row];
+    }
+    const std::vector<GpuComplex> ax = modal_dense_matvec(matrix, total, solution);
+    const double residual_relative =
+        modal_complex_l2_norm(residual) /
+        (rhs_norm + modal_complex_l2_norm(ax) + 1.0e-300);
+    std::vector<GpuComplex> q(static_cast<std::size_t>(nq), make_complex(0.0, 0.0));
+    for (unsigned long long row = 0; row < nq; ++row) {
+        q[row] = solution[row];
+    }
+    const double output_norm = modal_complex_l2_norm(q);
+
+    if (diagnostics_json != nullptr && diagnostics_json_len > 0) {
+        std::snprintf(
+            diagnostics_json,
+            static_cast<std::size_t>(diagnostics_json_len),
+            "{"
+            "\"schema_version\":\"gpu_modal_shift_invert_action.v1\","
+            "\"status\":\"ok\","
+            "\"study_product\":\"modal_eigen\","
+            "\"lane\":\"gpu_poisson_airbox_k0\","
+            "\"execution_policy\":\"device\","
+            "\"memory_location\":\"device\","
+            "\"fallback_used\":false,"
+            "\"operator_family\":\"full_modal_shift_invert\","
+            "\"algebraic_action\":\"(A - sigma B)^-1 Bv\","
+            "\"rhs_family\":\"modal_mass_times_vector\","
+            "\"solver_adapter\":\"gpu_device_dense_modal_shift_invert_action_contract\","
+            "\"execution_lane\":\"gpu_operator_host_modal_eigen_compatibility\","
+            "\"demag_kind\":\"%s\","
+            "\"gauge_policy\":\"%s\","
+            "\"phasor_convention\":\"%s\","
+            "\"eigenvalue_convention\":\"%s\","
+            "\"full_modal_shift_invert_claim\":true,"
+            "\"frequency_response_proxy\":false,"
+            "\"gpu_device_resident_modal_eigensolver\":false,"
+            "\"per_iteration_h2d_count\":0,"
+            "\"per_iteration_d2h_count\":0,"
+            "\"q_dof_count\":%llu,"
+            "\"phi_dof_count\":%llu,"
+            "\"augmented_dof_count\":%llu,"
+            "\"sigma\":{\"real\":%.17g,\"imag\":%.17g},"
+            "\"metrics\":{"
+            "\"rhs_l2_norm\":%.17g,"
+            "\"output_q_l2_norm\":%.17g,"
+            "\"shifted_system_relative_residual\":%.17g"
+            "}"
+            "}",
+            problem->demag_kind != nullptr ? problem->demag_kind : "",
+            problem->gauge_policy != nullptr ? problem->gauge_policy : "",
+            problem->phasor_convention != nullptr ? problem->phasor_convention : "",
+            problem->eigenvalue_convention != nullptr ? problem->eigenvalue_convention : "",
+            static_cast<unsigned long long>(nq),
+            static_cast<unsigned long long>(np),
+            static_cast<unsigned long long>(total),
+            sigma_real,
+            sigma_imag,
+            rhs_norm,
+            output_norm,
+            residual_relative);
+    }
+    return 0;
+}
+
+extern "C" int fullmag_fem_frequency_domain_solve_modal_poisson_airbox_gpu_dense_eigensolver(
+    const fd::PoissonAirboxEigenBlockProblem *problem,
+    double sigma_real,
+    double sigma_imag,
+    unsigned int max_iterations,
+    double *out_frequency_hz,
+    double *out_relative_residual,
+    char *diagnostics_json,
+    unsigned long long diagnostics_json_len,
+    char *error_message,
+    unsigned long long error_message_len)
+{
+    if (diagnostics_json != nullptr && diagnostics_json_len > 0) {
+        diagnostics_json[0] = '\0';
+    }
+    if (problem == nullptr ||
+        out_frequency_hz == nullptr ||
+        out_relative_residual == nullptr ||
+        !modal_shift_problem_valid(*problem) ||
+        !std::isfinite(sigma_real) ||
+        !std::isfinite(sigma_imag) ||
+        max_iterations == 0) {
+        if (error_message != nullptr && error_message_len > 0) {
+            std::snprintf(
+                error_message,
+                static_cast<std::size_t>(error_message_len),
+                "invalid GPU-G5a modal Poisson-airbox eigensolver inputs");
+        }
+        return 1;
+    }
+
+    const unsigned long long nq = problem->q_dof_count;
+    const unsigned long long np = problem->phi_dof_count;
+    const unsigned long long total = nq + np + 1;
+    const GpuComplex sigma = make_complex(sigma_real, sigma_imag);
+
+    std::vector<GpuComplex> a_matrix(
+        static_cast<std::size_t>(total * total),
+        make_complex(0.0, 0.0));
+    std::vector<GpuComplex> b_matrix(
+        static_cast<std::size_t>(total * total),
+        make_complex(0.0, 0.0));
+    add_csr_to_modal_dense(problem->A_qq, 0, 0, a_matrix, total);
+    add_csr_to_modal_dense(problem->A_qphi, 0, nq, a_matrix, total);
+    add_csr_to_modal_dense(problem->A_phiq, nq, 0, a_matrix, total);
+    add_csr_to_modal_dense(problem->A_phiphi, nq, nq, a_matrix, total);
+    for (unsigned long long row = 0; row < np; ++row) {
+        a_matrix[(nq + row) * total + nq + np].real += problem->phi_mean_weights[row];
+        a_matrix[(nq + np) * total + nq + row].real += problem->phi_mean_weights[row];
+    }
+    add_csr_to_modal_dense(problem->B_qq, 0, 0, b_matrix, total);
+
+    std::vector<GpuComplex> shifted_matrix = a_matrix;
+    for (unsigned long long row = 0; row < total; ++row) {
+        for (unsigned long long column = 0; column < total; ++column) {
+            shifted_matrix[row * total + column] =
+                shifted_matrix[row * total + column] -
+                sigma * b_matrix[row * total + column];
+        }
+    }
+
+    GpuComplex *d_a = nullptr;
+    GpuComplex *d_b = nullptr;
+    GpuComplex *d_shifted = nullptr;
+    GpuComplex *d_x = nullptr;
+    double *d_lambda_real = nullptr;
+    double *d_lambda_imag = nullptr;
+    double *d_frequency_hz = nullptr;
+    double *d_residual = nullptr;
+    int *d_status = nullptr;
+
+    bool ok =
+        cuda_success(cudaMalloc(&d_a, sizeof(GpuComplex) * a_matrix.size()), "cudaMalloc GPU-G5a A", error_message, error_message_len) &&
+        cuda_success(cudaMalloc(&d_b, sizeof(GpuComplex) * b_matrix.size()), "cudaMalloc GPU-G5a B", error_message, error_message_len) &&
+        cuda_success(cudaMalloc(&d_shifted, sizeof(GpuComplex) * shifted_matrix.size()), "cudaMalloc GPU-G5a shifted matrix", error_message, error_message_len) &&
+        cuda_success(cudaMalloc(&d_x, sizeof(GpuComplex) * total), "cudaMalloc GPU-G5a eigenvector", error_message, error_message_len) &&
+        cuda_success(cudaMalloc(&d_lambda_real, sizeof(double)), "cudaMalloc GPU-G5a lambda real", error_message, error_message_len) &&
+        cuda_success(cudaMalloc(&d_lambda_imag, sizeof(double)), "cudaMalloc GPU-G5a lambda imag", error_message, error_message_len) &&
+        cuda_success(cudaMalloc(&d_frequency_hz, sizeof(double)), "cudaMalloc GPU-G5a frequency", error_message, error_message_len) &&
+        cuda_success(cudaMalloc(&d_residual, sizeof(double)), "cudaMalloc GPU-G5a residual", error_message, error_message_len) &&
+        cuda_success(cudaMalloc(&d_status, sizeof(int)), "cudaMalloc GPU-G5a status", error_message, error_message_len) &&
+        cuda_success(cudaMemcpy(d_a, a_matrix.data(), sizeof(GpuComplex) * a_matrix.size(), cudaMemcpyHostToDevice), "cudaMemcpy GPU-G5a A H2D", error_message, error_message_len) &&
+        cuda_success(cudaMemcpy(d_b, b_matrix.data(), sizeof(GpuComplex) * b_matrix.size(), cudaMemcpyHostToDevice), "cudaMemcpy GPU-G5a B H2D", error_message, error_message_len) &&
+        cuda_success(cudaMemcpy(d_shifted, shifted_matrix.data(), sizeof(GpuComplex) * shifted_matrix.size(), cudaMemcpyHostToDevice), "cudaMemcpy GPU-G5a shifted H2D", error_message, error_message_len) &&
+        cuda_success(cudaMemset(d_x, 0, sizeof(GpuComplex) * total), "cudaMemset GPU-G5a eigenvector", error_message, error_message_len) &&
+        cuda_success(cudaMemset(d_status, 0, sizeof(int)), "cudaMemset GPU-G5a status", error_message, error_message_len);
+
+    if (ok) {
+        modal_poisson_airbox_dense_eigensolver_kernel<<<1, 1>>>(
+            d_a,
+            d_b,
+            d_shifted,
+            total,
+            nq,
+            max_iterations,
+            d_x,
+            d_lambda_real,
+            d_lambda_imag,
+            d_frequency_hz,
+            d_residual,
+            d_status);
+        ok = cuda_success(cudaGetLastError(), "launch GPU-G5a modal eigensolver", error_message, error_message_len) &&
+            cuda_success(cudaDeviceSynchronize(), "synchronize GPU-G5a modal eigensolver", error_message, error_message_len);
+    }
+
+    int solver_status = 1;
+    double lambda_real = 0.0;
+    double lambda_imag = 0.0;
+    double frequency_hz = 0.0;
+    double relative_residual = 1.0;
+    if (ok) {
+        ok =
+            cuda_success(cudaMemcpy(&solver_status, d_status, sizeof(int), cudaMemcpyDeviceToHost), "cudaMemcpy GPU-G5a status D2H", error_message, error_message_len) &&
+            cuda_success(cudaMemcpy(&lambda_real, d_lambda_real, sizeof(double), cudaMemcpyDeviceToHost), "cudaMemcpy GPU-G5a lambda real D2H", error_message, error_message_len) &&
+            cuda_success(cudaMemcpy(&lambda_imag, d_lambda_imag, sizeof(double), cudaMemcpyDeviceToHost), "cudaMemcpy GPU-G5a lambda imag D2H", error_message, error_message_len) &&
+            cuda_success(cudaMemcpy(&frequency_hz, d_frequency_hz, sizeof(double), cudaMemcpyDeviceToHost), "cudaMemcpy GPU-G5a frequency D2H", error_message, error_message_len) &&
+            cuda_success(cudaMemcpy(&relative_residual, d_residual, sizeof(double), cudaMemcpyDeviceToHost), "cudaMemcpy GPU-G5a residual D2H", error_message, error_message_len);
+    }
+
+    cudaFree(d_a);
+    cudaFree(d_b);
+    cudaFree(d_shifted);
+    cudaFree(d_x);
+    cudaFree(d_lambda_real);
+    cudaFree(d_lambda_imag);
+    cudaFree(d_frequency_hz);
+    cudaFree(d_residual);
+    cudaFree(d_status);
+
+    if (!ok) {
+        return 1;
+    }
+    if (solver_status != 0) {
+        if (error_message != nullptr && error_message_len > 0) {
+            std::snprintf(
+                error_message,
+                static_cast<std::size_t>(error_message_len),
+                "GPU-G5a dense modal eigensolver failed with status %d",
+                solver_status);
+        }
+        return 1;
+    }
+
+    *out_frequency_hz = frequency_hz;
+    *out_relative_residual = relative_residual;
+    const double relative_reference_frequency_error =
+        problem->expected_reference_frequency_hz > 0.0 ?
+        std::abs(frequency_hz - problem->expected_reference_frequency_hz) /
+            (std::abs(problem->expected_reference_frequency_hz) + 1.0e-300) :
+        0.0;
+
+    if (diagnostics_json != nullptr && diagnostics_json_len > 0) {
+        std::snprintf(
+            diagnostics_json,
+            static_cast<std::size_t>(diagnostics_json_len),
+            "{"
+            "\"schema_version\":\"gpu_modal_poisson_airbox_eigensolver.v1\","
+            "\"status\":\"ok\","
+            "\"study_product\":\"modal_eigen\","
+            "\"lane\":\"gpu_poisson_airbox_k0\","
+            "\"execution_lane\":\"gpu_device_modal_eigen_dense_contract\","
+            "\"solver_adapter\":\"gpu_dense_poisson_airbox_modal_eigen_contract\","
+            "\"solver_family\":\"modal_eigen\","
+            "\"solver_library\":\"cuda_dense_inverse_iteration\","
+            "\"demag_kind\":\"%s\","
+            "\"gauge_policy\":\"%s\","
+            "\"phasor_convention\":\"%s\","
+            "\"eigenvalue_convention\":\"%s\","
+            "\"operator_family\":\"full_coupled_poisson_airbox_modal_pencil\","
+            "\"spectral_transform\":\"shift_invert\","
+            "\"frequency_response_proxy\":false,"
+            "\"gpu_device_resident_modal_eigensolver\":true,"
+            "\"cpu_fallback\":\"disabled\","
+            "\"fallback_used\":false,"
+            "\"per_iteration_h2d_count\":0,"
+            "\"per_iteration_d2h_count\":0,"
+            "\"q_dof_count\":%llu,"
+            "\"phi_dof_count\":%llu,"
+            "\"augmented_dof_count\":%llu,"
+            "\"max_iterations\":%u,"
+            "\"sigma\":{\"real\":%.17g,\"imag\":%.17g},"
+            "\"eigenpair\":{"
+            "\"eigenvalue_real\":%.17g,"
+            "\"eigenvalue_imag\":%.17g,"
+            "\"omega_rad_s\":%.17g,"
+            "\"frequency_hz\":%.17g"
+            "},"
+            "\"metrics\":{"
+            "\"relative_reference_frequency_error\":%.17g,"
+            "\"full_descriptor_relative_residual\":%.17g"
+            "}"
+            "}",
+            problem->demag_kind != nullptr ? problem->demag_kind : "",
+            problem->gauge_policy != nullptr ? problem->gauge_policy : "",
+            problem->phasor_convention != nullptr ? problem->phasor_convention : "",
+            problem->eigenvalue_convention != nullptr ? problem->eigenvalue_convention : "",
+            static_cast<unsigned long long>(nq),
+            static_cast<unsigned long long>(np),
+            static_cast<unsigned long long>(total),
+            max_iterations,
+            sigma_real,
+            sigma_imag,
+            lambda_real,
+            lambda_imag,
+            lambda_imag,
+            frequency_hz,
+            relative_reference_frequency_error,
+            relative_residual);
+    }
+    return 0;
 }

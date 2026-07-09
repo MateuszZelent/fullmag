@@ -707,13 +707,17 @@ fn native_cpu_modal_window_enabled(plan: &FemEigenPlanIR) -> bool {
 }
 
 fn native_cpu_modal_window_has_bloch_floquet_payload_path(plan: &FemEigenPlanIR) -> bool {
-    if !matches!(
-        plan.spin_wave_bc.kind(),
-        fullmag_ir::SpinWaveBoundaryKindIR::Floquet
-    ) || !matches!(
-        plan.k_sampling.as_ref(),
-        Some(fullmag_ir::KSamplingIR::Single { .. })
-    ) {
+    if plan.operator.include_demag
+        || !matches!(
+            plan.spin_wave_bc.kind(),
+            fullmag_ir::SpinWaveBoundaryKindIR::Floquet
+        )
+        || !matches!(
+            plan.k_sampling.as_ref(),
+            Some(fullmag_ir::KSamplingIR::Single { .. })
+                | Some(fullmag_ir::KSamplingIR::Path { .. })
+        )
+    {
         return false;
     }
     let requested_pair_ids = plan.spin_wave_bc.boundary_pair_ids();
@@ -1014,6 +1018,7 @@ impl OwnedModalEigenPoissonAirboxBlockProblem {
             periodic_mesh_certificate_schema: "periodic_mesh_certificate.v5",
             magnetic_pair_count: self.magnetic_pair_count,
             airbox_pair_count: self.airbox_pair_count,
+            shift_invert_action: None,
         }
     }
 }
@@ -1179,22 +1184,49 @@ pub(crate) fn native_cpu_modal_window_rejection_reason(
         )
         && k_sampling_contains_nonzero(plan.k_sampling.as_ref())
     {
+        if plan.operator.include_demag {
+            return Some("production_cpu_modal_dynamic_demag_k_operator_missing");
+        }
         return Some("production_cpu_modal_nonzero_k_floquet_operator_missing");
     }
     None
 }
 
+pub(crate) fn native_cpu_modal_window_rejection_scope(reason: &str) -> &'static str {
+    if reason == "production_cpu_modal_dynamic_demag_k_operator_missing" {
+        return "selected_spectrum_nonzero_k_floquet_modal_dynamic_demag";
+    }
+    "selected_spectrum_nonzero_k_floquet_modal"
+}
+
 pub(crate) fn insert_native_cpu_modal_window_rejection_contract(
     object: &mut serde_json::Map<String, serde_json::Value>,
+    reason: &str,
 ) {
+    let required_operator_contract =
+        if reason == "production_cpu_modal_dynamic_demag_k_operator_missing" {
+            "bloch_floquet_tangent_operator_with_dynamic_demag_k"
+        } else {
+            "bloch_floquet_tangent_operator_with_periodic_pairs"
+        };
     object.insert(
         "required_operator_contract".to_string(),
-        serde_json::json!("bloch_floquet_tangent_operator_with_periodic_pairs"),
+        serde_json::json!(required_operator_contract),
     );
     object.insert(
         "required_operator_payload_kind".to_string(),
         serde_json::json!("bloch_floquet_tangent_operator"),
     );
+    if reason == "production_cpu_modal_dynamic_demag_k_operator_missing" {
+        object.insert(
+            "required_demag_payload_kind".to_string(),
+            serde_json::json!("dynamic_demag_k_operator"),
+        );
+        object.insert(
+            "dynamic_demag_operator_source".to_string(),
+            serde_json::json!("missing_numeric_fem_demag_k"),
+        );
+    }
     object.insert(
         "modal_periodic_pair_contract_available".to_string(),
         serde_json::json!(false),
@@ -2398,9 +2430,14 @@ fn full_2x2_native_operator_diagnostics_json(
     mass: &DMatrix<f64>,
     active_nodes: usize,
 ) -> serde_json::Value {
+    let payload_kind = if native_cpu_modal_window_has_bloch_floquet_payload_path(plan) {
+        "bloch_floquet_tangent_operator"
+    } else {
+        "rust_full_2x2_dense_operator"
+    };
     let mut diagnostics = serde_json::json!({
         "schema_version": "frequency_domain_operator_diagnostics.v1",
-        "payload_kind": "rust_full_2x2_dense_operator",
+        "payload_kind": payload_kind,
         "active_node_count": active_nodes,
         "tangent_dof_count": stiffness_field.nrows(),
         "stiffness_units": "A_per_m_mass_weighted",
@@ -2608,6 +2645,19 @@ fn native_solver_diagnostics_json(
         })
     });
     if matches!(
+        plan.spin_wave_bc.kind(),
+        fullmag_ir::SpinWaveBoundaryKindIR::Floquet
+    ) && object
+        .get("floquet_periodic_pair_count")
+        .and_then(|value| value.as_u64())
+        .is_some_and(|count| count > 0)
+    {
+        object.insert(
+            "modal_periodic_pair_contract_available".to_string(),
+            serde_json::json!(true),
+        );
+    }
+    if matches!(
         plan.target,
         fullmag_ir::EigenTargetIR::FrequencyWindow { .. }
     ) {
@@ -2656,6 +2706,34 @@ fn merge_poisson_airbox_modal_result_diagnostics(
     {
         return Ok(());
     }
+    diagnostics.insert(
+        "solver_model".to_string(),
+        serde_json::json!("k0_poisson_airbox_cpu_full_coupled_slepc"),
+    );
+    diagnostics.insert(
+        "resolved_solver_family".to_string(),
+        serde_json::json!("k0_poisson_airbox_full_coupled"),
+    );
+    diagnostics.insert(
+        "spectral_transform".to_string(),
+        serde_json::json!("shift_invert"),
+    );
+    diagnostics.insert(
+        "algebraic_form".to_string(),
+        serde_json::json!("full_coupled_poisson_airbox_augmented_gauge"),
+    );
+    diagnostics.insert(
+        "matrix_equation".to_string(),
+        serde_json::json!("A_full x = lambda B_full x"),
+    );
+    diagnostics.insert(
+        "phasor_convention".to_string(),
+        serde_json::json!("exp_plus_i_omega_t"),
+    );
+    diagnostics.insert(
+        "eigenvalue_mapping".to_string(),
+        serde_json::json!("lambda_imag_positive_frequency"),
+    );
     let fields = [
         ("solver_adapter", &["solver_adapter"][..]),
         ("demag_kind", &["demag_kind"][..]),
@@ -6100,6 +6178,7 @@ fn write_eigen_v2_bundle(
         "schema_version": "eigen_spectrum.v2",
         "solver_model": summary_payload["solver_kind"],
         "sample_count": 1,
+        "mode_count": spectrum_modes.len(),
         "samples": [{
             "sample_index": 0,
             "label": label,
@@ -6528,9 +6607,9 @@ fn modal_solver_diagnostics_json(
             );
             object.insert(
                 "production_cpu_rejection_scope".to_string(),
-                serde_json::json!("selected_spectrum_nonzero_k_floquet_modal"),
+                serde_json::json!(native_cpu_modal_window_rejection_scope(reason)),
             );
-            insert_native_cpu_modal_window_rejection_contract(object);
+            insert_native_cpu_modal_window_rejection_contract(object, reason);
         }
     }
     diagnostics
@@ -6889,7 +6968,7 @@ fn dispersion_v2_csv(k_sampling: Option<&KSamplingIR>, modes: &serde_json::Value
                 k_vector[2],
                 label,
                 raw_mode_index,
-                "",
+                raw_mode_index,
                 entry["frequency_hz"].as_f64().unwrap_or(0.0),
                 entry["angular_frequency_rad_per_s"].as_f64().unwrap_or(0.0),
                 line_width_hz,
@@ -7177,6 +7256,21 @@ mod tests {
     }
 
     #[test]
+    fn native_modal_full_2x2_operator_diagnostics_labels_floquet_pair_payload() {
+        let mut plan = minimal_native_modal_plan();
+        add_x_floquet_pair_to_plan(&mut plan);
+        let stiffness = DMatrix::identity(2, 2);
+        let mass = DMatrix::identity(2, 2);
+
+        let diagnostics = full_2x2_native_operator_diagnostics_json(&plan, &stiffness, &mass, 1);
+
+        assert_eq!(
+            diagnostics["payload_kind"],
+            "bloch_floquet_tangent_operator"
+        );
+    }
+
+    #[test]
     fn native_modal_lambda_i_omega_macrospin_mapping_has_positive_frequency_residual() {
         let stiffness_omega = DMatrix::identity(2, 2);
         let mass = DMatrix::identity(2, 2);
@@ -7229,7 +7323,7 @@ mod tests {
     fn dispersion_csv_maps_positive_imaginary_frequency_to_fwhm_linewidth() {
         let modes = serde_json::json!([
             {
-                "index": 0,
+                "index": 3,
                 "frequency_hz": 1.0e9,
                 "frequency_imag_hz": 2.5e6,
                 "angular_frequency_rad_per_s": 2.0 * std::f64::consts::PI * 1.0e9,
@@ -7251,12 +7345,14 @@ mod tests {
             .expect("dispersion CSV should include one data row");
         let columns: Vec<&str> = row.split(',').collect();
 
+        assert_eq!(columns[6], "3");
+        assert_eq!(columns[7], "3");
         assert_eq!(columns[10], "5.0000000000000000e6");
         assert_eq!(columns[13], "seed");
-        assert_eq!(columns[14], "analysis:eigen:sample-0000:mode-0000");
+        assert_eq!(columns[14], "analysis:eigen:sample-0000:mode-0003");
         assert_eq!(
             columns[15],
-            "/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0000/samples/vector?view=phase_rotated_real&phase_rad=0"
+            "/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0003/samples/vector?view=phase_rotated_real&phase_rad=0"
         );
     }
 
@@ -7422,7 +7518,7 @@ mod tests {
         let plan = minimal_native_modal_plan();
         let diagnostics_raw = serde_json::json!({
             "resolved_solver_family": "shift_invert",
-            "solver_model": "k0_poisson_airbox_cpu_full_coupled_slepc",
+            "solver_model": "reference_full_2x2_tangent",
             "spectral_transform": "shift_invert",
         })
         .to_string();
@@ -7455,6 +7551,14 @@ mod tests {
         assert_eq!(
             diagnostics["solver_adapter"],
             "k0_poisson_airbox_cpu_full_coupled_slepc"
+        );
+        assert_eq!(
+            diagnostics["solver_model"],
+            "k0_poisson_airbox_cpu_full_coupled_slepc"
+        );
+        assert_eq!(
+            diagnostics["resolved_solver_family"],
+            "k0_poisson_airbox_full_coupled"
         );
         assert_eq!(diagnostics["demag_kind"], "periodic_airbox_k0");
         assert_eq!(diagnostics["augmented_phi_dof_count"], 9);
@@ -8555,6 +8659,71 @@ mod tests {
     }
 
     #[test]
+    fn reference_modal_diagnostics_name_dynamic_demag_k_production_cpu_rejection() {
+        let mut plan = minimal_native_modal_plan();
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.operator.include_demag = true;
+        plan.enable_demag = true;
+        plan.damping_policy = EigenDampingPolicyIR::Ignore;
+        plan.spin_wave_bc =
+            SpinWaveBoundaryConditionIR::Config(fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: SpinWaveBoundaryKindIR::Floquet,
+                boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            });
+        plan.k_sampling = Some(KSamplingIR::Single {
+            k_vector: [1.0e6, 0.0, 0.0],
+        });
+
+        let diagnostics =
+            modal_solver_diagnostics_json(&plan, "cpu_full_2x2_phase_reduced_floquet", 1);
+
+        assert_eq!(
+            native_cpu_modal_window_rejection_reason(&plan),
+            Some("production_cpu_modal_dynamic_demag_k_operator_missing")
+        );
+        assert_eq!(
+            diagnostics
+                .get("production_cpu_rejection_reason")
+                .and_then(|value| value.as_str()),
+            Some("production_cpu_modal_dynamic_demag_k_operator_missing")
+        );
+        assert_eq!(
+            diagnostics
+                .get("production_cpu_rejection_scope")
+                .and_then(|value| value.as_str()),
+            Some("selected_spectrum_nonzero_k_floquet_modal_dynamic_demag")
+        );
+        assert_eq!(
+            diagnostics
+                .get("required_operator_contract")
+                .and_then(|value| value.as_str()),
+            Some("bloch_floquet_tangent_operator_with_dynamic_demag_k")
+        );
+        assert_eq!(
+            diagnostics
+                .get("required_operator_payload_kind")
+                .and_then(|value| value.as_str()),
+            Some("bloch_floquet_tangent_operator")
+        );
+        assert_eq!(
+            diagnostics
+                .get("required_demag_payload_kind")
+                .and_then(|value| value.as_str()),
+            Some("dynamic_demag_k_operator")
+        );
+        assert_eq!(
+            diagnostics
+                .get("dynamic_demag_operator_source")
+                .and_then(|value| value.as_str()),
+            Some("missing_numeric_fem_demag_k")
+        );
+    }
+
+    #[test]
     fn sparse_lowest_without_retained_modes_does_not_raise_window_error() {
         let target = fullmag_ir::EigenTargetIR::Lowest;
 
@@ -8951,6 +9120,18 @@ mod tests {
                 .and_then(|value| value.get("payload_kind"))
                 .and_then(|value| value.as_str()),
             Some("bloch_floquet_tangent_operator")
+        );
+        assert_eq!(
+            diagnostics
+                .get("floquet_periodic_pair_count")
+                .and_then(|value| value.as_u64()),
+            Some(1)
+        );
+        assert_eq!(
+            diagnostics
+                .get("modal_periodic_pair_contract_available")
+                .and_then(|value| value.as_bool()),
+            Some(true)
         );
         assert!(
             diagnostics

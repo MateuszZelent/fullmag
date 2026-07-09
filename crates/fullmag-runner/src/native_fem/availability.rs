@@ -486,11 +486,21 @@ pub(crate) fn native_frequency_domain_availability(
         if matches!(
             request.study_kind,
             FrequencyDomainStudyKind::FrequencyResponse
-        ) && request
-            .floquet_k_vector_rad_per_m
-            .is_some_and(floquet_k_vector_is_nonzero_or_invalid)
+        ) && (request.requires_floquet_boundary
+            || request
+                .floquet_k_vector_rad_per_m
+                .is_some_and(floquet_k_vector_is_nonzero_or_invalid))
         {
             return frequency_domain_response_floquet_unavailable();
+        }
+        if matches!(
+            request.study_kind,
+            FrequencyDomainStudyKind::FrequencyResponse
+        ) && request.requires_driven_solver
+            && !request.requires_gpu
+            && !request.requires_nonzero_k_dynamic_demag
+        {
+            return frequency_domain_response_gamma_available();
         }
     }
 
@@ -602,6 +612,25 @@ fn frequency_domain_response_floquet_unavailable() -> FrequencyDomainAvailabilit
                 .to_string(),
         diagnostics_json:
             "{\"schema_version\":\"frequency_domain_availability.v1\",\"study_kind\":\"frequency_response\",\"status\":\"unavailable\",\"unsupported_reason\":\"floquet_bloch_nonzero_k\"}"
+                .to_string(),
+    }
+}
+
+#[allow(dead_code)]
+fn frequency_domain_response_gamma_available() -> FrequencyDomainAvailability {
+    FrequencyDomainAvailability {
+        status: "ok".to_string(),
+        study_kind: "frequency_response".to_string(),
+        driven_response_available: true,
+        modal_solver_available: false,
+        static_periodic_response_available: true,
+        floquet_modal_available: false,
+        floquet_response_available: false,
+        dynamic_demag_k_available: false,
+        gpu_available: false,
+        reason: String::new(),
+        diagnostics_json:
+            "{\"schema_version\":\"frequency_domain_availability.v1\",\"study_kind\":\"frequency_response\",\"status\":\"ok\",\"supported_reason\":\"gamma_static_periodic_fallback\"}"
                 .to_string(),
     }
 }

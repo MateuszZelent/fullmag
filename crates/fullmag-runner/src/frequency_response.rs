@@ -697,6 +697,7 @@ fn env_positive_u64_alias(primary: &str, alias: &str, fallback: u64) -> u64 {
 }
 
 #[cfg(any(feature = "fem-gpu", test))]
+#[allow(dead_code)]
 fn env_positive_f64_alias(primary: &str, alias: &str, fallback: f64) -> f64 {
     std::env::var(primary)
         .ok()
@@ -712,9 +713,10 @@ fn env_positive_f64_alias(primary: &str, alias: &str, fallback: f64) -> f64 {
 }
 
 #[cfg(any(feature = "fem-gpu", test))]
+#[allow(dead_code)]
 fn frequency_response_demag_solver_policy(
     policy: Option<fullmag_ir::FemLinearSolverPolicy>,
-) -> fullmag_ir::FemLinearSolverPolicy {
+) -> Option<fullmag_ir::FemLinearSolverPolicy> {
     let mut policy = policy.unwrap_or_default();
     policy.rtol = env_positive_f64_alias(
         "FULLMAG_FEM_FREQUENCY_RESPONSE_DEMAG_RTOL",
@@ -727,7 +729,7 @@ fn frequency_response_demag_solver_policy(
         u64::from(policy.max_iterations),
     )
     .min(u64::from(u32::MAX)) as u32;
-    policy
+    Some(policy)
 }
 
 #[cfg(any(feature = "fem-gpu", test))]
@@ -1865,7 +1867,8 @@ fn try_execute_fem_frequency_response_native_production_cpu(
         .map(|_| apply_native_backend_demag_tangent_with_potential as _);
     let effective_frequency_response_demag_solver_policy = (plan.enable_demag
         && plan.demag_realization.is_some())
-    .then(|| frequency_response_demag_solver_policy(plan.demag_solver_policy.clone()));
+    .then(|| frequency_response_demag_solver_policy(plan.demag_solver_policy.clone()))
+    .flatten();
     let operator_diagnostics_json = plan.domain_mesh_workflow_mode.as_ref().map(|mode| {
         serde_json::json!({
             "schema_version": "frequency_domain_operator_diagnostics.v1",
@@ -2579,9 +2582,9 @@ fn frequency_response_demag_backend_plan(
         oersted_time_dep_t_off: 0.0,
         magnetoelastic: None,
         mechanics: None,
-        demag_solver_policy: Some(frequency_response_demag_solver_policy(
+        demag_solver_policy: frequency_response_demag_solver_policy(
             plan.demag_solver_policy.clone(),
-        )),
+        ),
         thermal_seed_config: None,
         oersted_realization: None,
         gpu_device_index: None,
@@ -3680,6 +3683,9 @@ fn production_gpu_frequency_response_rejection_reason(
             "production GPU frequency response currently supports only first-order P1 tetrahedral FEM meshes",
         );
     }
+    if has_requested_dmi(plan) {
+        return Some("DMI is not implemented for production GPU frequency response until the device weak residual path exists");
+    }
     let has_nonzero_k = plan
         .k_sampling
         .as_ref()
@@ -3691,11 +3697,6 @@ fn production_gpu_frequency_response_rejection_reason(
         if !plan.enable_demag || plan.demag_realization.is_none() {
             return Some(
                 "magnetostatic_bc=floquet_airbox requires include_demag=true and a Demag energy term",
-            );
-        }
-        if has_nonzero_k && has_requested_dmi(plan) {
-            return Some(
-                "DMI is not implemented for nonzero-k Floquet production GPU frequency response",
             );
         }
         if !has_nonzero_k {

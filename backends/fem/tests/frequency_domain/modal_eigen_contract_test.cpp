@@ -5,6 +5,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <string>
 #include <vector>
 
 namespace {
@@ -20,6 +23,15 @@ void check(bool condition, const char *message)
 bool contains(const char *haystack, const char *needle)
 {
     return haystack != nullptr && std::strstr(haystack, needle) != nullptr;
+}
+
+std::string read_text(const std::filesystem::path &path)
+{
+    std::ifstream input(path);
+    check(input.good(), "expected modal C ABI artifact file must be readable");
+    return std::string(
+        std::istreambuf_iterator<char>(input),
+        std::istreambuf_iterator<char>());
 }
 
 struct CsrOwned {
@@ -1029,6 +1041,55 @@ void modal_nonzero_k_floquet_bloch_payload_reaches_production_solver()
     fullmag_fem_frequency_domain_result_destroy(&result);
 }
 
+void modal_nonzero_k_floquet_bloch_payload_rejects_gated_operator_terms()
+{
+    constexpr double stiffness_matrix_row_major[] = {1.0, 0.0, 0.0, 1.0};
+    constexpr double gyrotropic_mass_row_major[] = {0.0, -1.0, 1.0, 0.0};
+
+    fullmag_fem_frequency_domain_floquet_periodic_pair pair{};
+    pair.pair_id = "x_periodic_pair_0";
+    pair.node_a = 10;
+    pair.node_b = 20;
+    pair.has_translation = 1;
+    pair.translation_m[0] = 1.0e-6;
+    pair.has_phase = 1;
+    pair.phase_rad = -1.0;
+
+    FullmagFemModalEigenRequest request = base_request();
+    request.target_kind = "frequency_window";
+    request.frequency_min_hz = 0.1;
+    request.frequency_max_hz = 0.2;
+    request.eigensolver_family = 1;
+    request.mfem_operator_enabled = 1;
+    request.mfem_tangent_dof_count = 2;
+    request.mfem_stiffness_matrix_row_major = stiffness_matrix_row_major;
+    request.mfem_gyrotropic_matrix_row_major = gyrotropic_mass_row_major;
+    request.operator_request.operator_diagnostics_json =
+        "{\"operator_family\":\"mfem_linearized_llg\","
+        "\"payload_kind\":\"bloch_floquet_tangent_operator\","
+        "\"operator_terms_included\":[\"exchange\",\"dynamic_demag\"]}";
+    request.operator_request.spin_wave_bc_kind = "floquet";
+    request.has_floquet_k_vector = 1;
+    request.floquet_k_vector_rad_per_m[0] = 1.0e6;
+    request.phase_convention =
+        FULLMAG_FEM_FREQUENCY_DOMAIN_PHASE_EXP_I_OMEGA_T;
+    request.mfem_floquet_periodic_pairs = &pair;
+    request.mfem_floquet_periodic_pair_count = 1;
+
+    FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.status == FULLMAG_FEM_FD_UNAVAILABLE,
+          "nonzero-k Floquet modal payload with gated operator terms must remain unavailable");
+    check(contains(result.diagnostics_json,
+                   "\"production_cpu_rejection_reason\":\"production_cpu_modal_gated_operator_terms_present\""),
+          "nonzero-k Floquet modal diagnostics expose gated operator terms rejection reason");
+    check(contains(result.diagnostics_json, "\"gated_operator_term\":\"dynamic_demag\""),
+          "nonzero-k Floquet modal diagnostics name the gated operator term");
+    check(contains(result.result_json,
+                   "\"production_cpu_rejection_reason\":\"production_cpu_modal_gated_operator_terms_present\""),
+          "nonzero-k Floquet modal result exposes gated operator terms rejection reason");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+}
+
 void modal_nonzero_k_floquet_bloch_payload_with_demag_requires_dynamic_demag_k()
 {
     constexpr double stiffness_matrix_row_major[] = {1.0, 0.0, 0.0, 1.0};
@@ -1056,7 +1117,8 @@ void modal_nonzero_k_floquet_bloch_payload_with_demag_requires_dynamic_demag_k()
     request.operator_request.demag_realization = "floquet_airbox";
     request.operator_request.operator_diagnostics_json =
         "{\"operator_family\":\"mfem_linearized_llg\","
-        "\"payload_kind\":\"bloch_floquet_tangent_operator\"}";
+        "\"payload_kind\":\"bloch_floquet_tangent_operator\","
+        "\"demag_payload_kind\":\"dynamic_demag_k_operator\"}";
     request.operator_request.spin_wave_bc_kind = "floquet";
     request.has_floquet_k_vector = 1;
     request.floquet_k_vector_rad_per_m[0] = 1.0e6;
@@ -1069,8 +1131,8 @@ void modal_nonzero_k_floquet_bloch_payload_with_demag_requires_dynamic_demag_k()
     check(result.status == FULLMAG_FEM_FD_UNAVAILABLE,
           "nonzero-k Floquet modal demag payload must remain unavailable until dynamic demag-k exists");
     check(contains(result.diagnostics_json,
-                   "\"production_cpu_rejection_reason\":\"production_cpu_modal_dynamic_demag_k_operator_missing\""),
-          "nonzero-k Floquet modal demag diagnostics expose the dynamic demag-k rejection reason");
+                   "\"production_cpu_rejection_reason\":\"production_cpu_modal_dynamic_demag_k_payload_missing\""),
+          "nonzero-k Floquet modal demag diagnostics reject a labelled dynamic demag-k payload without matrix data");
     check(contains(result.diagnostics_json,
                    "\"required_operator_contract\":\"bloch_floquet_tangent_operator_with_dynamic_demag_k\""),
           "nonzero-k Floquet modal demag diagnostics name the dynamic demag-k operator contract");
@@ -1078,8 +1140,8 @@ void modal_nonzero_k_floquet_bloch_payload_with_demag_requires_dynamic_demag_k()
                    "\"required_demag_payload_kind\":\"dynamic_demag_k_operator\""),
           "nonzero-k Floquet modal demag diagnostics name the required demag payload kind");
     check(contains(result.diagnostics_json,
-                   "\"dynamic_demag_operator_source\":\"missing_numeric_fem_demag_k\""),
-          "nonzero-k Floquet modal demag diagnostics report missing numeric FEM demag-k source");
+                   "\"dynamic_demag_operator_source\":\"missing_dense_block_real_dynamic_demag_k_matrix\""),
+          "nonzero-k Floquet modal demag diagnostics report missing dense block-real matrix data");
     check(!contains(result.diagnostics_json,
                     "\"production_cpu_rejection_reason\":\"production_cpu_modal_nonzero_k_floquet_operator_missing\""),
           "nonzero-k Floquet modal demag must not be rejected as a generic missing Bloch payload");
@@ -1173,6 +1235,181 @@ void modal_poisson_airbox_tail_payload_reaches_full_coupled_solver()
     fullmag_fem_frequency_domain_result_destroy(&result);
 }
 
+void modal_poisson_airbox_tail_shift_invert_action_writes_artifact()
+{
+    constexpr double omega0 = 6.283185307179586476925286766559 * 2.0e9;
+    const double a_qq[4] = {0.0, -omega0, omega0, 0.0};
+    const double a_qphi[4] = {-1.5e8, 1.5e8, 0.0, 0.0};
+    const double a_phiq[4] = {0.0, -1.0, 0.0, 1.0};
+    const double a_phiphi[4] = {1.0, -1.0, -1.0, 1.0};
+    const double b_qq[4] = {1.0, 0.0, 0.0, 1.0};
+    const double weights[2] = {0.5, 0.5};
+    const CsrOwned A_qq = dense_to_csr(2, 2, a_qq);
+    const CsrOwned A_qphi = dense_to_csr(2, 2, a_qphi);
+    const CsrOwned A_phiq = dense_to_csr(2, 2, a_phiq);
+    const CsrOwned A_phiphi = dense_to_csr(2, 2, a_phiphi);
+    const CsrOwned B_qq = dense_to_csr(2, 2, b_qq);
+    const double v_re[2] = {1.0, -0.5};
+    const double v_im[2] = {0.25, 0.75};
+
+    const std::filesystem::path output_dir =
+        std::filesystem::temp_directory_path() /
+        "fullmag-pa-g3d-modal-cabi-shift-invert-action";
+    std::filesystem::remove_all(output_dir);
+    std::filesystem::create_directories(output_dir);
+    const std::string output_dir_string = output_dir.string();
+
+    FullmagFemModalEigenRequest request = base_request();
+    request.operator_request.include_demag = 1;
+    request.operator_request.demag_realization = "periodic_airbox_k0";
+    request.operator_request.spin_wave_bc_kind = "floquet";
+    request.target_kind = "nearest_frequency";
+    request.target_frequency_hz = 2.0e9;
+    request.residual_tolerance = 1.0e-10;
+    request.output_directory = output_dir_string.c_str();
+    request.write_partial_artifacts = 1;
+    request.poisson_airbox_block_enabled = 1;
+    request.poisson_airbox_q_dof_count = 2;
+    request.poisson_airbox_phi_dof_count = 2;
+    request.poisson_airbox_a_qq_csr = A_qq.view();
+    request.poisson_airbox_a_qphi_csr = A_qphi.view();
+    request.poisson_airbox_a_phiq_csr = A_phiq.view();
+    request.poisson_airbox_a_phiphi_csr = A_phiphi.view();
+    request.poisson_airbox_b_qq_csr = B_qq.view();
+    request.poisson_airbox_phi_mean_weights = weights;
+    request.poisson_airbox_phi_mean_weights_count = 2;
+    request.poisson_airbox_target_frequency_hz = 2.0e9;
+    request.poisson_airbox_expected_reference_frequency_hz = 2.0119012110259213e9;
+    request.poisson_airbox_periodic_mesh_certificate_schema = "periodic_mesh_certificate.v5";
+    request.poisson_airbox_magnetic_pair_count = 1;
+    request.poisson_airbox_airbox_pair_count = 1;
+    request.poisson_airbox_shift_invert_action_enabled = 1;
+    request.poisson_airbox_shift_sigma_real = 0.0;
+    request.poisson_airbox_shift_sigma_imag = 6.283185307179586476925286766559 * 1.25e9;
+    request.poisson_airbox_shift_action_vector_real = v_re;
+    request.poisson_airbox_shift_action_vector_imag = v_im;
+    request.poisson_airbox_shift_action_vector_count = 2;
+
+    FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
+#if FULLMAG_FEM_WITH_SLEPC
+    check(result.status == FULLMAG_FEM_FD_OK,
+          "modal C ABI Poisson-airbox shift-invert action must solve");
+    check(contains(result.artifact_manifest_path,
+                   "poisson_airbox_modal_shift_invert_action.v1.json"),
+          "modal C ABI result must point at the shift-invert action artifact");
+    check(contains(result.result_json, "\"operator_family\":\"full_modal_shift_invert\""),
+          "modal C ABI result must identify full modal shift-invert");
+    const std::filesystem::path artifact_path =
+        output_dir / "eigen" / "diagnostics" /
+        "poisson_airbox_modal_shift_invert_action.v1.json";
+    const std::string artifact = read_text(artifact_path);
+    check(artifact.find("\"schema_version\":\"poisson_airbox_modal_shift_invert_action.v1\"") !=
+              std::string::npos,
+          "modal C ABI action artifact must expose schema version");
+    check(artifact.find("\"full_modal_shift_invert_claim\":true") !=
+              std::string::npos,
+          "modal C ABI action artifact must claim true modal shift-invert");
+#else
+    check(result.status == FULLMAG_FEM_FD_UNAVAILABLE,
+          "modal C ABI Poisson-airbox shift-invert action must require SLEPc when unavailable");
+#endif
+    fullmag_fem_frequency_domain_result_destroy(&result);
+}
+
+void modal_poisson_airbox_tail_gpu_shift_invert_action_writes_artifact()
+{
+    constexpr double omega0 = 6.283185307179586476925286766559 * 2.0e9;
+    const double a_qq[4] = {0.0, -omega0, omega0, 0.0};
+    const double a_qphi[4] = {-1.5e8, 1.5e8, 0.0, 0.0};
+    const double a_phiq[4] = {0.0, -1.0, 0.0, 1.0};
+    const double a_phiphi[4] = {1.0, -1.0, -1.0, 1.0};
+    const double b_qq[4] = {1.0, 0.0, 0.0, 1.0};
+    const double weights[2] = {0.5, 0.5};
+    const CsrOwned A_qq = dense_to_csr(2, 2, a_qq);
+    const CsrOwned A_qphi = dense_to_csr(2, 2, a_qphi);
+    const CsrOwned A_phiq = dense_to_csr(2, 2, a_phiq);
+    const CsrOwned A_phiphi = dense_to_csr(2, 2, a_phiphi);
+    const CsrOwned B_qq = dense_to_csr(2, 2, b_qq);
+    const double v_re[2] = {1.0, -0.5};
+    const double v_im[2] = {0.25, 0.75};
+
+    const std::filesystem::path output_dir =
+        std::filesystem::temp_directory_path() /
+        "fullmag-pa-g3g-modal-cabi-gpu-shift-invert-action";
+    std::filesystem::remove_all(output_dir);
+    std::filesystem::create_directories(output_dir);
+    const std::string output_dir_string = output_dir.string();
+
+    FullmagFemModalEigenRequest request = base_request();
+    request.operator_request.include_demag = 1;
+    request.operator_request.demag_realization = "periodic_airbox_k0";
+    request.operator_request.spin_wave_bc_kind = "floquet";
+    request.target_kind = "nearest_frequency";
+    request.target_frequency_hz = 2.0e9;
+    request.residual_tolerance = 1.0e-10;
+    request.output_directory = output_dir_string.c_str();
+    request.write_partial_artifacts = 1;
+    request.poisson_airbox_block_enabled = 1;
+    request.poisson_airbox_q_dof_count = 2;
+    request.poisson_airbox_phi_dof_count = 2;
+    request.poisson_airbox_a_qq_csr = A_qq.view();
+    request.poisson_airbox_a_qphi_csr = A_qphi.view();
+    request.poisson_airbox_a_phiq_csr = A_phiq.view();
+    request.poisson_airbox_a_phiphi_csr = A_phiphi.view();
+    request.poisson_airbox_b_qq_csr = B_qq.view();
+    request.poisson_airbox_phi_mean_weights = weights;
+    request.poisson_airbox_phi_mean_weights_count = 2;
+    request.poisson_airbox_target_frequency_hz = 2.0e9;
+    request.poisson_airbox_expected_reference_frequency_hz = 2.0119012110259213e9;
+    request.poisson_airbox_periodic_mesh_certificate_schema = "periodic_mesh_certificate.v5";
+    request.poisson_airbox_magnetic_pair_count = 1;
+    request.poisson_airbox_airbox_pair_count = 1;
+    request.poisson_airbox_shift_invert_action_enabled = 1;
+    request.poisson_airbox_shift_invert_action_device = 1;
+    request.poisson_airbox_shift_sigma_real = 0.0;
+    request.poisson_airbox_shift_sigma_imag = 6.283185307179586476925286766559 * 1.25e9;
+    request.poisson_airbox_shift_action_vector_real = v_re;
+    request.poisson_airbox_shift_action_vector_imag = v_im;
+    request.poisson_airbox_shift_action_vector_count = 2;
+
+    FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
+#if FULLMAG_HAS_CUDA_RUNTIME
+    check(result.status == FULLMAG_FEM_FD_OK,
+          "modal C ABI Poisson-airbox GPU shift-invert action must solve when CUDA is enabled");
+    check(contains(result.artifact_manifest_path,
+                   "gpu_modal_shift_invert_action.v1.json"),
+          "modal C ABI result must point at the GPU shift-invert action artifact");
+    check(contains(result.result_json,
+                   "\"solver_adapter\":\"gpu_device_dense_modal_shift_invert_action_contract\""),
+          "modal C ABI GPU action result must identify the GPU hidden action adapter");
+    check(contains(result.result_json,
+                   "\"execution_lane\":\"gpu_operator_host_modal_eigen_compatibility\""),
+          "modal C ABI GPU action result must identify the hidden GPU-G4 compatibility lane");
+    check(contains(result.result_json, "\"frequency_response_proxy\":false"),
+          "modal C ABI GPU action result must reject frequency-response proxy semantics");
+    const std::filesystem::path artifact_path =
+        output_dir / "eigen" / "diagnostics" /
+        "gpu_modal_shift_invert_action.v1.json";
+    const std::string artifact = read_text(artifact_path);
+    check(artifact.find("\"schema_version\":\"gpu_modal_shift_invert_action.v1\"") !=
+              std::string::npos,
+          "modal C ABI GPU action artifact must expose schema version");
+    check(artifact.find("\"rhs_family\":\"modal_mass_times_vector\"") !=
+              std::string::npos,
+          "modal C ABI GPU action artifact must identify Bv RHS semantics");
+    check(artifact.find("\"execution_lane\":\"gpu_operator_host_modal_eigen_compatibility\"") !=
+              std::string::npos,
+          "modal C ABI GPU action artifact must identify the hidden GPU-G4 compatibility lane");
+    check(artifact.find("\"frequency_response_proxy\":false") !=
+              std::string::npos,
+          "modal C ABI GPU action artifact must reject frequency-response proxy semantics");
+#else
+    check(result.status == FULLMAG_FEM_FD_UNAVAILABLE,
+          "modal C ABI Poisson-airbox GPU shift-invert action must require CUDA when unavailable");
+#endif
+    fullmag_fem_frequency_domain_result_destroy(&result);
+}
+
 } // namespace
 
 int main()
@@ -1201,7 +1438,10 @@ int main()
     modal_nonzero_k_floquet_payload_rejects_until_production_operator_exists();
     modal_nonzero_k_floquet_tail_payload_preserves_periodic_pair_contract();
     modal_nonzero_k_floquet_bloch_payload_reaches_production_solver();
+    modal_nonzero_k_floquet_bloch_payload_rejects_gated_operator_terms();
     modal_nonzero_k_floquet_bloch_payload_with_demag_requires_dynamic_demag_k();
     modal_poisson_airbox_tail_payload_reaches_full_coupled_solver();
+    modal_poisson_airbox_tail_shift_invert_action_writes_artifact();
+    modal_poisson_airbox_tail_gpu_shift_invert_action_writes_artifact();
     return 0;
 }

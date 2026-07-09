@@ -319,13 +319,15 @@ fn k_sampling_is_gamma_only(k_sampling: &Option<fullmag_ir::KSamplingIR>) -> boo
         fullmag_ir::KSamplingIR::Single { k_vector } => k_vector
             .iter()
             .all(|component| component.is_finite() && component.abs() <= 1.0e-12),
-        fullmag_ir::KSamplingIR::Path { points, .. } => !points.is_empty()
-            && points.iter().all(|point| {
-                point
-                    .k_vector
-                    .iter()
-                    .all(|component| component.is_finite() && component.abs() <= 1.0e-12)
-            }),
+        fullmag_ir::KSamplingIR::Path { points, .. } => {
+            !points.is_empty()
+                && points.iter().all(|point| {
+                    point
+                        .k_vector
+                        .iter()
+                        .all(|component| component.is_finite() && component.abs() <= 1.0e-12)
+                })
+        }
     })
 }
 
@@ -3407,7 +3409,9 @@ fn fem_frequency_response_production_slice_rejection_reason(
                 .as_ref()
                 .is_none_or(fullmag_ir::KSamplingIR::is_single_gamma)
             {
-                return Some("nonzero-k driven response requires spin_wave_bc=floquet");
+                return Some(
+                    "nonzero-k Floquet/Bloch driven response requires spin_wave_bc=floquet",
+                );
             }
         }
         fullmag_ir::SpinWaveBoundaryKindIR::Periodic => {
@@ -3416,7 +3420,9 @@ fn fem_frequency_response_production_slice_rejection_reason(
                 .as_ref()
                 .is_none_or(fullmag_ir::KSamplingIR::is_single_gamma)
             {
-                return Some("nonzero-k driven response requires spin_wave_bc=floquet");
+                return Some(
+                    "nonzero-k Floquet/Bloch driven response requires spin_wave_bc=floquet",
+                );
             }
             if plan.mesh.periodic_node_pairs.is_empty() {
                 return Some(

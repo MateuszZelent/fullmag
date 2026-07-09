@@ -7,7 +7,19 @@ GPU lane and solve through the device-resident periodic-airbox demag provider,
 not through CPU fallback or an explicit dense coupled-block payload.
 """
 
+import os
+
 import fullmag as fm
+
+
+def _frequencies_hz():
+    raw = os.environ.get("FULLMAG_FMR_PERIODIC_AIRBOX_GPU_FREQUENCIES_HZ")
+    if raw is None or not raw.strip():
+        return [1.0e9, 2.0e9]
+    values = [float(item.strip()) for item in raw.split(",") if item.strip()]
+    if not values:
+        raise ValueError("FULLMAG_FMR_PERIODIC_AIRBOX_GPU_FREQUENCIES_HZ must not be empty")
+    return values
 
 
 study = fm.study("fem_frequency_response_gpu_periodic_airbox_smoke")
@@ -61,7 +73,7 @@ study.solver(dt=1e-13, g=2.115)
 study.save_response("susceptibility_tensor")
 study.stages.change_device("gpu")
 study.stages.add_frequency_response(
-    frequencies_hz=[1.0e9, 2.0e9],
+    frequencies_hz=_frequencies_hz(),
     excitation_field_au_per_m=(0.0, 0.0, 1.0),
     include_demag=True,
     equilibrium_source="provided",

@@ -212,8 +212,16 @@ __global__ void project_static_periodic_field_kernel(
     if (i >= n) {
         return;
     }
-    const uint32_t representative = periodic_representative_nodes[i];
+    uint32_t representative = periodic_representative_nodes[i];
+    int periodic_representative_root_guard = 0;
+    while (representative < static_cast<uint32_t>(n) &&
+           periodic_representative_nodes[representative] != representative &&
+           periodic_representative_root_guard < n) {
+        representative = periodic_representative_nodes[representative];
+        ++periodic_representative_root_guard;
+    }
     if (representative >= static_cast<uint32_t>(n) ||
+        periodic_representative_root_guard >= n ||
         representative == static_cast<uint32_t>(i)) {
         return;
     }

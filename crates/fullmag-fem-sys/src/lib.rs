@@ -835,6 +835,13 @@ pub struct FullmagFemModalEigenRequest {
     pub poisson_airbox_periodic_mesh_certificate_schema: *const c_char,
     pub poisson_airbox_magnetic_pair_count: u64,
     pub poisson_airbox_airbox_pair_count: u64,
+    pub poisson_airbox_shift_invert_action_enabled: i32,
+    pub poisson_airbox_shift_invert_action_device: i32,
+    pub poisson_airbox_shift_sigma_real: f64,
+    pub poisson_airbox_shift_sigma_imag: f64,
+    pub poisson_airbox_shift_action_vector_real: *const f64,
+    pub poisson_airbox_shift_action_vector_imag: *const f64,
+    pub poisson_airbox_shift_action_vector_count: u64,
 }
 
 #[repr(C)]
@@ -1829,6 +1836,13 @@ mod tests {
             .is_null());
         assert_eq!(request.poisson_airbox_magnetic_pair_count, 0);
         assert_eq!(request.poisson_airbox_airbox_pair_count, 0);
+        assert_eq!(request.poisson_airbox_shift_invert_action_enabled, 0);
+        assert_eq!(request.poisson_airbox_shift_invert_action_device, 0);
+        assert_eq!(request.poisson_airbox_shift_sigma_real, 0.0);
+        assert_eq!(request.poisson_airbox_shift_sigma_imag, 0.0);
+        assert!(request.poisson_airbox_shift_action_vector_real.is_null());
+        assert!(request.poisson_airbox_shift_action_vector_imag.is_null());
+        assert_eq!(request.poisson_airbox_shift_action_vector_count, 0);
 
         let floquet_pair_count = std::mem::offset_of!(Request, mfem_floquet_periodic_pair_count);
         let poisson_enabled = std::mem::offset_of!(Request, poisson_airbox_block_enabled);
@@ -1837,11 +1851,22 @@ mod tests {
             std::mem::offset_of!(Request, poisson_airbox_expected_reference_frequency_hz);
         let poisson_certificate =
             std::mem::offset_of!(Request, poisson_airbox_periodic_mesh_certificate_schema);
+        let poisson_pair_count = std::mem::offset_of!(Request, poisson_airbox_airbox_pair_count);
+        let poisson_shift_action =
+            std::mem::offset_of!(Request, poisson_airbox_shift_invert_action_enabled);
+        let poisson_shift_device =
+            std::mem::offset_of!(Request, poisson_airbox_shift_invert_action_device);
+        let poisson_shift_vector_count =
+            std::mem::offset_of!(Request, poisson_airbox_shift_action_vector_count);
 
         assert!(floquet_pair_count < poisson_enabled);
         assert!(poisson_enabled < poisson_a_qq);
         assert!(poisson_a_qq < poisson_reference);
         assert!(poisson_reference < poisson_certificate);
+        assert!(poisson_certificate < poisson_pair_count);
+        assert!(poisson_pair_count < poisson_shift_action);
+        assert!(poisson_shift_action < poisson_shift_device);
+        assert!(poisson_shift_device < poisson_shift_vector_count);
     }
 
     #[test]

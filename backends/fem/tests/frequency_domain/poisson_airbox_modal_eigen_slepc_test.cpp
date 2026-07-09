@@ -5,14 +5,73 @@
 
 #include "cpu/frequency_domain/poisson_airbox_modal_eigen.hpp"
 #include "frequency_domain/dense_poisson_airbox_eigen_oracle.hpp"
+#include "frequency_domain/modal_eigen_solver.hpp"
 
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <string>
 #include <vector>
 
 namespace fd = fullmag::fem::frequency_domain;
+
+extern "C" int fullmag_fem_frequency_domain_apply_modal_shift_invert_gpu_action(
+    const fd::PoissonAirboxEigenBlockProblem *problem,
+    double sigma_real,
+    double sigma_imag,
+    const double *v_q_real,
+    const double *v_q_imag,
+    unsigned long long v_q_count,
+    double *out_q_real,
+    double *out_q_imag,
+    unsigned long long out_q_count,
+    char *diagnostics_json,
+    unsigned long long diagnostics_json_len,
+    char *error_message,
+    unsigned long long error_message_len);
+
+extern "C" int fullmag_fem_frequency_domain_solve_modal_poisson_airbox_gpu_dense_eigensolver(
+    const fd::PoissonAirboxEigenBlockProblem *problem,
+    double sigma_real,
+    double sigma_imag,
+    unsigned int max_iterations,
+    double *out_frequency_hz,
+    double *out_relative_residual,
+    char *diagnostics_json,
+    unsigned long long diagnostics_json_len,
+    char *error_message,
+    unsigned long long error_message_len);
+
+extern "C" int fullmag_fem_frequency_domain_apply_modal_poisson_airbox_gpu_descriptor(
+    const fd::PoissonAirboxEigenBlockProblem *problem,
+    const double *x_real,
+    const double *x_imag,
+    unsigned long long x_count,
+    double *out_y_real,
+    double *out_y_imag,
+    unsigned long long out_y_count,
+    char *diagnostics_json,
+    unsigned long long diagnostics_json_len,
+    char *error_message,
+    unsigned long long error_message_len);
+
+extern "C" int fullmag_fem_frequency_domain_apply_modal_poisson_airbox_gpu_shifted_descriptor(
+    const fd::PoissonAirboxEigenBlockProblem *problem,
+    double sigma_real,
+    double sigma_imag,
+    const double *x_real,
+    const double *x_imag,
+    unsigned long long x_count,
+    double *out_y_real,
+    double *out_y_imag,
+    unsigned long long out_y_count,
+    char *diagnostics_json,
+    unsigned long long diagnostics_json_len,
+    char *error_message,
+    unsigned long long error_message_len);
 
 namespace {
 
@@ -29,6 +88,34 @@ void check(bool condition, const char *message)
 bool contains(const char *haystack, const char *needle)
 {
     return haystack != nullptr && std::strstr(haystack, needle) != nullptr;
+}
+
+std::string read_text(const std::filesystem::path &path)
+{
+    std::ifstream input(path);
+    check(input.good(), "expected artifact file must be readable");
+    return std::string(
+        std::istreambuf_iterator<char>(input),
+        std::istreambuf_iterator<char>());
+}
+
+void write_text(const std::filesystem::path &path, const std::string &text)
+{
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream output(path);
+    check(output.good(), "expected artifact file must be writable");
+    output << text;
+}
+
+double json_number_after(const char *json, const char *key)
+{
+    const char *position = std::strstr(json, key);
+    check(position != nullptr, "expected diagnostics JSON metric key must exist");
+    position += std::strlen(key);
+    char *end = nullptr;
+    const double value = std::strtod(position, &end);
+    check(end != position && std::isfinite(value), "expected diagnostics JSON metric must be finite");
+    return value;
 }
 
 struct CsrOwned {
@@ -184,6 +271,610 @@ void SolvesSparseFullCoupledDescriptorAndMatchesDenseOracle()
         "PA-E2 sparse SLEPc frequency must match the PA-E1 dense oracle");
 }
 
+void AppliesFullCoupledShiftInvertActionReference()
+{
+    TinySparseFixture fixture = make_tiny_full_coupled_fixture();
+    fd::DensePoissonAirboxEigenOracleProblem dense_problem =
+        dense_problem_from_fixture(fixture);
+    check(
+        fd::solve_dense_poisson_airbox_eigen_oracle(
+            dense_problem,
+            &fixture.dense_result) == fd::FrequencyDomainStatus::ok,
+        fixture.dense_result.error_message);
+
+    fd::PoissonAirboxEigenBlockProblem sparse_problem =
+        sparse_problem_from_fixture(fixture);
+    const double sigma_re = 0.0;
+    const double sigma_im = kTwoPi * 1.25e9;
+    const double v_re[2] = {1.0, -0.5};
+    const double v_im[2] = {0.25, 0.75};
+    double out_re[2] = {};
+    double out_im[2] = {};
+    fd::PoissonAirboxModalShiftInvertActionResult result{};
+
+    check(
+        fd::apply_poisson_airbox_modal_shift_invert_action_cpu_reference(
+            sparse_problem,
+            sigma_re,
+            sigma_im,
+            v_re,
+            v_im,
+            2,
+            out_re,
+            out_im,
+            2,
+            &result) == fd::FrequencyDomainStatus::ok,
+        result.error_message);
+
+    const double output_norm =
+        std::sqrt(out_re[0] * out_re[0] + out_im[0] * out_im[0] +
+                  out_re[1] * out_re[1] + out_im[1] * out_im[1]);
+    check(output_norm > 0.0, "PA-G3 CPU reference shift-invert action must produce a nonzero q output");
+    check(
+        result.shifted_system_relative_residual <= 1.0e-10,
+        "PA-G3 CPU reference shift-invert action must solve (A - sigma B)^-1 Bv accurately");
+    check(
+        contains(result.diagnostics_json, "\"operator_family\":\"full_modal_shift_invert\""),
+        "PA-G3 CPU reference diagnostics must identify full modal shift-invert");
+    check(
+        contains(result.diagnostics_json, "\"full_modal_shift_invert_claim\":true"),
+        "PA-G3 CPU reference diagnostics must explicitly claim the modal shift-invert action");
+}
+
+void AppliesGpuFullCoupledShiftInvertActionAndMatchesCpuReference()
+{
+    TinySparseFixture fixture = make_tiny_full_coupled_fixture();
+    fd::DensePoissonAirboxEigenOracleProblem dense_problem =
+        dense_problem_from_fixture(fixture);
+    check(
+        fd::solve_dense_poisson_airbox_eigen_oracle(
+            dense_problem,
+            &fixture.dense_result) == fd::FrequencyDomainStatus::ok,
+        fixture.dense_result.error_message);
+
+    fd::PoissonAirboxEigenBlockProblem sparse_problem =
+        sparse_problem_from_fixture(fixture);
+    const double sigma_re = 0.0;
+    const double sigma_im = kTwoPi * 1.25e9;
+    const double v_re[2] = {1.0, -0.5};
+    const double v_im[2] = {0.25, 0.75};
+    double cpu_re[2] = {};
+    double cpu_im[2] = {};
+    fd::PoissonAirboxModalShiftInvertActionResult cpu_result{};
+    check(
+        fd::apply_poisson_airbox_modal_shift_invert_action_cpu_reference(
+            sparse_problem,
+            sigma_re,
+            sigma_im,
+            v_re,
+            v_im,
+            2,
+            cpu_re,
+            cpu_im,
+            2,
+            &cpu_result) == fd::FrequencyDomainStatus::ok,
+        cpu_result.error_message);
+
+    double gpu_re[2] = {};
+    double gpu_im[2] = {};
+    char diagnostics_json[4096] = {};
+    char error_message[256] = {};
+    check(
+        fullmag_fem_frequency_domain_apply_modal_shift_invert_gpu_action(
+            &sparse_problem,
+            sigma_re,
+            sigma_im,
+            v_re,
+            v_im,
+            2,
+            gpu_re,
+            gpu_im,
+            2,
+            diagnostics_json,
+            sizeof(diagnostics_json),
+            error_message,
+            sizeof(error_message)) == 0,
+        error_message);
+
+    double numerator = 0.0;
+    double denominator = 0.0;
+    for (std::size_t index = 0; index < 2; ++index) {
+        const double dr = gpu_re[index] - cpu_re[index];
+        const double di = gpu_im[index] - cpu_im[index];
+        numerator += dr * dr + di * di;
+        denominator += cpu_re[index] * cpu_re[index] + cpu_im[index] * cpu_im[index];
+    }
+    const double relative_error =
+        std::sqrt(numerator) / (std::sqrt(denominator) + 1.0e-300);
+    check(
+        relative_error <= 1.0e-10,
+        "PA-G3f GPU modal shift-invert action must match the CPU full-coupled reference");
+    check(
+        contains(diagnostics_json, "\"schema_version\":\"gpu_modal_shift_invert_action.v1\""),
+        "PA-G3f GPU action diagnostics must expose the GPU modal action schema");
+    check(
+        contains(diagnostics_json, "\"operator_family\":\"full_modal_shift_invert\""),
+        "PA-G3f GPU action diagnostics must identify full modal shift-invert");
+    check(
+        contains(diagnostics_json, "\"algebraic_action\":\"(A - sigma B)^-1 Bv\""),
+        "PA-G3f GPU action diagnostics must identify the algebraic action");
+    check(
+        contains(diagnostics_json, "\"rhs_family\":\"modal_mass_times_vector\""),
+        "PA-G3f GPU action diagnostics must identify Bv as the RHS family");
+    check(
+        contains(diagnostics_json, "\"full_modal_shift_invert_claim\":true"),
+        "PA-G3f GPU action diagnostics must claim true modal shift-invert");
+    check(
+        contains(diagnostics_json, "\"frequency_response_proxy\":false"),
+        "PA-G3f GPU action diagnostics must explicitly reject the frequency-response proxy path");
+
+    const char *artifact_root_raw = std::getenv("FULLMAG_PA_G3F_OUTPUT_DIR");
+    if (artifact_root_raw != nullptr && artifact_root_raw[0] != '\0') {
+        const std::filesystem::path artifact_root = artifact_root_raw;
+        const std::filesystem::path diagnostics_dir =
+            artifact_root / "eigen" / "diagnostics";
+        const std::filesystem::path cpu_action_path =
+            diagnostics_dir / "poisson_airbox_modal_shift_invert_action.v1.json";
+        const std::filesystem::path gpu_action_path =
+            diagnostics_dir / "gpu_modal_shift_invert_action.v1.json";
+        const std::filesystem::path parity_path =
+            artifact_root / "gpu_modal_shift_invert_action_parity.v1.json";
+        write_text(cpu_action_path, std::string(cpu_result.diagnostics_json) + "\n");
+        write_text(gpu_action_path, std::string(diagnostics_json) + "\n");
+
+        const double gpu_residual = json_number_after(
+            diagnostics_json,
+            "\"shifted_system_relative_residual\":");
+        char parity_json[4096] = {};
+        std::snprintf(
+            parity_json,
+            sizeof(parity_json),
+            "{"
+            "\"schema_version\":\"gpu_modal_shift_invert_action_parity.v1\","
+            "\"lane\":\"gpu_poisson_airbox_k0\","
+            "\"execution_policy\":\"device\","
+            "\"memory_location\":\"device\","
+            "\"fallback_used\":false,"
+            "\"source\":{"
+            "\"cpu_action_artifact\":\"%s\","
+            "\"gpu_action_artifact\":\"%s\""
+            "},"
+            "\"gpu_modal_shift_invert_action_parity\":{"
+            "\"status\":\"passed\","
+            "\"fallback_used\":false,"
+            "\"operator_family\":\"full_modal_shift_invert\","
+            "\"algebraic_action\":\"(A - sigma B)^-1 Bv\","
+            "\"rhs_family\":\"modal_mass_times_vector\","
+            "\"cpu_reference_schema_version\":\"poisson_airbox_modal_shift_invert_action.v1\","
+            "\"gpu_action_schema_version\":\"gpu_modal_shift_invert_action.v1\","
+            "\"full_modal_shift_invert_claim\":true,"
+            "\"per_iteration_h2d_count\":0,"
+            "\"per_iteration_d2h_count\":0,"
+            "\"max_relative_action_error\":%.17g,"
+            "\"q_response_relative_l2_error\":%.17g,"
+            "\"shifted_system_relative_residual_cpu\":%.17g,"
+            "\"shifted_system_relative_residual_gpu\":%.17g"
+            "}"
+            "}\n",
+            cpu_action_path.string().c_str(),
+            gpu_action_path.string().c_str(),
+            relative_error,
+            relative_error,
+            cpu_result.shifted_system_relative_residual,
+            gpu_residual);
+        write_text(parity_path, parity_json);
+    }
+}
+
+void SolvesGpuDensePoissonAirboxModalEigenAndMatchesCpuReference()
+{
+    TinySparseFixture fixture = make_tiny_full_coupled_fixture();
+    fd::DensePoissonAirboxEigenOracleProblem dense_problem =
+        dense_problem_from_fixture(fixture);
+    check(
+        fd::solve_dense_poisson_airbox_eigen_oracle(
+            dense_problem,
+            &fixture.dense_result) == fd::FrequencyDomainStatus::ok,
+        fixture.dense_result.error_message);
+
+    fd::PoissonAirboxEigenBlockProblem sparse_problem =
+        sparse_problem_from_fixture(fixture);
+    check(
+        fd::solve_poisson_airbox_modal_eigen_cpu_slepc(
+            sparse_problem,
+            &fixture.sparse_result) == fd::FrequencyDomainStatus::ok,
+        fixture.sparse_result.error_message);
+
+    double gpu_frequency_hz = 0.0;
+    double gpu_relative_residual = 1.0;
+    char diagnostics_json[4096] = {};
+    char error_message[256] = {};
+    check(
+        fullmag_fem_frequency_domain_solve_modal_poisson_airbox_gpu_dense_eigensolver(
+            &sparse_problem,
+            0.0,
+            kTwoPi * 1.25e9,
+            24,
+            &gpu_frequency_hz,
+            &gpu_relative_residual,
+            diagnostics_json,
+            sizeof(diagnostics_json),
+            error_message,
+            sizeof(error_message)) == 0,
+        error_message);
+
+    const double relative_frequency_error =
+        std::abs(gpu_frequency_hz - fixture.sparse_result.frequency_hz) /
+        (std::abs(fixture.sparse_result.frequency_hz) + 1.0e-300);
+    check(relative_frequency_error <= 1.0e-8,
+          "GPU-G5a dense modal eigensolver frequency must match CPU/SLEPc reference");
+    check(gpu_relative_residual <= 1.0e-8,
+          "GPU-G5a dense modal eigensolver must certify the full descriptor residual");
+    check(
+        contains(diagnostics_json, "\"schema_version\":\"gpu_modal_poisson_airbox_eigensolver.v1\""),
+        "GPU-G5a diagnostics must expose the modal Poisson-airbox eigensolver schema");
+    check(
+        contains(diagnostics_json, "\"solver_adapter\":\"gpu_dense_poisson_airbox_modal_eigen_contract\""),
+        "GPU-G5a diagnostics must identify the dense GPU modal eigensolver adapter");
+    check(
+        contains(diagnostics_json, "\"gpu_device_resident_modal_eigensolver\":true"),
+        "GPU-G5a diagnostics must claim a device-resident modal eigensolver");
+    check(
+        contains(diagnostics_json, "\"frequency_response_proxy\":false"),
+        "GPU-G5a diagnostics must reject frequency-response proxy semantics");
+    check(
+        contains(diagnostics_json, "\"cpu_fallback\":\"disabled\""),
+        "GPU-G5a diagnostics must keep CPU fallback disabled");
+
+    const char *artifact_root_raw = std::getenv("FULLMAG_PA_G3F_OUTPUT_DIR");
+    if (artifact_root_raw != nullptr && artifact_root_raw[0] != '\0') {
+        const std::filesystem::path artifact_root = artifact_root_raw;
+        const std::filesystem::path artifact_path =
+            artifact_root / "eigen" / "diagnostics" /
+            "gpu_modal_poisson_airbox_eigensolver.v1.json";
+        write_text(artifact_path, std::string(diagnostics_json) + "\n");
+    }
+}
+
+void AppliesGpuFullCoupledDescriptorAndMatchesCpuReference()
+{
+    TinySparseFixture fixture = make_tiny_full_coupled_fixture();
+    fd::DensePoissonAirboxEigenOracleProblem dense_problem =
+        dense_problem_from_fixture(fixture);
+    check(
+        fd::solve_dense_poisson_airbox_eigen_oracle(
+            dense_problem,
+            &fixture.dense_result) == fd::FrequencyDomainStatus::ok,
+        fixture.dense_result.error_message);
+
+    fd::PoissonAirboxEigenBlockProblem sparse_problem =
+        sparse_problem_from_fixture(fixture);
+    const double x_re[5] = {1.0, -0.5, 0.25, -0.75, 0.125};
+    const double x_im[5] = {0.2, 0.1, -0.4, 0.6, -0.3};
+
+    const unsigned long long nq = sparse_problem.q_dof_count;
+    const unsigned long long np = sparse_problem.phi_dof_count;
+    const unsigned long long total = nq + np + 1;
+    double cpu_re[5] = {};
+    double cpu_im[5] = {};
+    for (std::uint64_t row = 0; row < sparse_problem.A_qq.row_count; ++row) {
+        for (std::uint32_t entry = sparse_problem.A_qq.row_offsets[row];
+             entry < sparse_problem.A_qq.row_offsets[row + 1];
+             ++entry) {
+            const std::uint64_t column = sparse_problem.A_qq.column_indices[entry];
+            cpu_re[row] += sparse_problem.A_qq.values[entry] * x_re[column];
+            cpu_im[row] += sparse_problem.A_qq.values[entry] * x_im[column];
+        }
+        for (std::uint32_t entry = sparse_problem.A_qphi.row_offsets[row];
+             entry < sparse_problem.A_qphi.row_offsets[row + 1];
+             ++entry) {
+            const std::uint64_t column = nq + sparse_problem.A_qphi.column_indices[entry];
+            cpu_re[row] += sparse_problem.A_qphi.values[entry] * x_re[column];
+            cpu_im[row] += sparse_problem.A_qphi.values[entry] * x_im[column];
+        }
+    }
+    for (std::uint64_t row = 0; row < sparse_problem.A_phiphi.row_count; ++row) {
+        const std::uint64_t output_row = nq + row;
+        for (std::uint32_t entry = sparse_problem.A_phiq.row_offsets[row];
+             entry < sparse_problem.A_phiq.row_offsets[row + 1];
+             ++entry) {
+            const std::uint64_t column = sparse_problem.A_phiq.column_indices[entry];
+            cpu_re[output_row] += sparse_problem.A_phiq.values[entry] * x_re[column];
+            cpu_im[output_row] += sparse_problem.A_phiq.values[entry] * x_im[column];
+        }
+        for (std::uint32_t entry = sparse_problem.A_phiphi.row_offsets[row];
+             entry < sparse_problem.A_phiphi.row_offsets[row + 1];
+             ++entry) {
+            const std::uint64_t column = nq + sparse_problem.A_phiphi.column_indices[entry];
+            cpu_re[output_row] += sparse_problem.A_phiphi.values[entry] * x_re[column];
+            cpu_im[output_row] += sparse_problem.A_phiphi.values[entry] * x_im[column];
+        }
+        cpu_re[output_row] += sparse_problem.phi_mean_weights[row] * x_re[nq + np];
+        cpu_im[output_row] += sparse_problem.phi_mean_weights[row] * x_im[nq + np];
+        cpu_re[nq + np] += sparse_problem.phi_mean_weights[row] * x_re[nq + row];
+        cpu_im[nq + np] += sparse_problem.phi_mean_weights[row] * x_im[nq + row];
+    }
+
+    double gpu_re[5] = {};
+    double gpu_im[5] = {};
+    char diagnostics_json[4096] = {};
+    char error_message[256] = {};
+    check(
+        fullmag_fem_frequency_domain_apply_modal_poisson_airbox_gpu_descriptor(
+            &sparse_problem,
+            x_re,
+            x_im,
+            total,
+            gpu_re,
+            gpu_im,
+            total,
+            diagnostics_json,
+            sizeof(diagnostics_json),
+            error_message,
+            sizeof(error_message)) == 0,
+        error_message);
+
+    double numerator = 0.0;
+    double denominator = 0.0;
+    for (std::size_t index = 0; index < total; ++index) {
+        const double dr = gpu_re[index] - cpu_re[index];
+        const double di = gpu_im[index] - cpu_im[index];
+        numerator += dr * dr + di * di;
+        denominator += cpu_re[index] * cpu_re[index] + cpu_im[index] * cpu_im[index];
+    }
+    const double relative_error =
+        std::sqrt(numerator) / (std::sqrt(denominator) + 1.0e-300);
+    check(
+        relative_error <= 1.0e-12,
+        "GPU-G5b descriptor apply must match CPU full-coupled descriptor Ax");
+    check(
+        contains(diagnostics_json, "\"schema_version\":\"gpu_modal_poisson_airbox_descriptor_apply.v1\""),
+        "GPU-G5b descriptor apply diagnostics must expose its schema");
+    check(
+        contains(diagnostics_json, "\"operator_family\":\"full_coupled_poisson_airbox_modal_pencil\""),
+        "GPU-G5b descriptor apply diagnostics must identify the modal descriptor pencil");
+    check(
+        contains(diagnostics_json, "\"algebraic_action\":\"A*x\""),
+        "GPU-G5b descriptor apply diagnostics must identify descriptor A*x");
+    check(
+        contains(diagnostics_json, "\"matrix_format\":\"csr_device_apply\""),
+        "GPU-G5b descriptor apply diagnostics must identify CSR device apply");
+    check(
+        contains(diagnostics_json, "\"frequency_response_proxy\":false"),
+        "GPU-G5b descriptor apply must reject frequency-response proxy semantics");
+    check(
+        contains(diagnostics_json, "\"gpu_device_resident_operator_apply\":true"),
+        "GPU-G5b descriptor apply must claim device-resident operator apply");
+
+    const char *artifact_root_raw = std::getenv("FULLMAG_PA_G3F_OUTPUT_DIR");
+    if (artifact_root_raw != nullptr && artifact_root_raw[0] != '\0') {
+        const std::filesystem::path artifact_root = artifact_root_raw;
+        const std::filesystem::path artifact_path =
+            artifact_root / "eigen" / "diagnostics" /
+            "gpu_modal_poisson_airbox_descriptor_apply.v1.json";
+        write_text(artifact_path, std::string(diagnostics_json) + "\n");
+    }
+}
+
+void AppliesGpuShiftedFullCoupledDescriptorAndMatchesCpuReference()
+{
+    TinySparseFixture fixture = make_tiny_full_coupled_fixture();
+    fd::DensePoissonAirboxEigenOracleProblem dense_problem =
+        dense_problem_from_fixture(fixture);
+    check(
+        fd::solve_dense_poisson_airbox_eigen_oracle(
+            dense_problem,
+            &fixture.dense_result) == fd::FrequencyDomainStatus::ok,
+        fixture.dense_result.error_message);
+
+    fd::PoissonAirboxEigenBlockProblem sparse_problem =
+        sparse_problem_from_fixture(fixture);
+    const double sigma_re = 0.0;
+    const double sigma_im = kTwoPi * 1.25e9;
+    const double x_re[5] = {1.0, -0.5, 0.25, -0.75, 0.125};
+    const double x_im[5] = {0.2, 0.1, -0.4, 0.6, -0.3};
+
+    const unsigned long long nq = sparse_problem.q_dof_count;
+    const unsigned long long np = sparse_problem.phi_dof_count;
+    const unsigned long long total = nq + np + 1;
+    double cpu_re[5] = {};
+    double cpu_im[5] = {};
+    for (std::uint64_t row = 0; row < sparse_problem.A_qq.row_count; ++row) {
+        for (std::uint32_t entry = sparse_problem.A_qq.row_offsets[row];
+             entry < sparse_problem.A_qq.row_offsets[row + 1];
+             ++entry) {
+            const std::uint64_t column = sparse_problem.A_qq.column_indices[entry];
+            cpu_re[row] += sparse_problem.A_qq.values[entry] * x_re[column];
+            cpu_im[row] += sparse_problem.A_qq.values[entry] * x_im[column];
+        }
+        for (std::uint32_t entry = sparse_problem.A_qphi.row_offsets[row];
+             entry < sparse_problem.A_qphi.row_offsets[row + 1];
+             ++entry) {
+            const std::uint64_t column = nq + sparse_problem.A_qphi.column_indices[entry];
+            cpu_re[row] += sparse_problem.A_qphi.values[entry] * x_re[column];
+            cpu_im[row] += sparse_problem.A_qphi.values[entry] * x_im[column];
+        }
+    }
+    for (std::uint64_t row = 0; row < sparse_problem.A_phiphi.row_count; ++row) {
+        const std::uint64_t output_row = nq + row;
+        for (std::uint32_t entry = sparse_problem.A_phiq.row_offsets[row];
+             entry < sparse_problem.A_phiq.row_offsets[row + 1];
+             ++entry) {
+            const std::uint64_t column = sparse_problem.A_phiq.column_indices[entry];
+            cpu_re[output_row] += sparse_problem.A_phiq.values[entry] * x_re[column];
+            cpu_im[output_row] += sparse_problem.A_phiq.values[entry] * x_im[column];
+        }
+        for (std::uint32_t entry = sparse_problem.A_phiphi.row_offsets[row];
+             entry < sparse_problem.A_phiphi.row_offsets[row + 1];
+             ++entry) {
+            const std::uint64_t column = nq + sparse_problem.A_phiphi.column_indices[entry];
+            cpu_re[output_row] += sparse_problem.A_phiphi.values[entry] * x_re[column];
+            cpu_im[output_row] += sparse_problem.A_phiphi.values[entry] * x_im[column];
+        }
+        cpu_re[output_row] += sparse_problem.phi_mean_weights[row] * x_re[nq + np];
+        cpu_im[output_row] += sparse_problem.phi_mean_weights[row] * x_im[nq + np];
+        cpu_re[nq + np] += sparse_problem.phi_mean_weights[row] * x_re[nq + row];
+        cpu_im[nq + np] += sparse_problem.phi_mean_weights[row] * x_im[nq + row];
+    }
+    for (std::uint64_t row = 0; row < sparse_problem.B_qq.row_count; ++row) {
+        double bx_re = 0.0;
+        double bx_im = 0.0;
+        for (std::uint32_t entry = sparse_problem.B_qq.row_offsets[row];
+             entry < sparse_problem.B_qq.row_offsets[row + 1];
+             ++entry) {
+            const std::uint64_t column = sparse_problem.B_qq.column_indices[entry];
+            bx_re += sparse_problem.B_qq.values[entry] * x_re[column];
+            bx_im += sparse_problem.B_qq.values[entry] * x_im[column];
+        }
+        cpu_re[row] -= sigma_re * bx_re - sigma_im * bx_im;
+        cpu_im[row] -= sigma_re * bx_im + sigma_im * bx_re;
+    }
+
+    double gpu_re[5] = {};
+    double gpu_im[5] = {};
+    char diagnostics_json[4096] = {};
+    char error_message[256] = {};
+    check(
+        fullmag_fem_frequency_domain_apply_modal_poisson_airbox_gpu_shifted_descriptor(
+            &sparse_problem,
+            sigma_re,
+            sigma_im,
+            x_re,
+            x_im,
+            total,
+            gpu_re,
+            gpu_im,
+            total,
+            diagnostics_json,
+            sizeof(diagnostics_json),
+            error_message,
+            sizeof(error_message)) == 0,
+        error_message);
+
+    double numerator = 0.0;
+    double denominator = 0.0;
+    for (std::size_t index = 0; index < total; ++index) {
+        const double dr = gpu_re[index] - cpu_re[index];
+        const double di = gpu_im[index] - cpu_im[index];
+        numerator += dr * dr + di * di;
+        denominator += cpu_re[index] * cpu_re[index] + cpu_im[index] * cpu_im[index];
+    }
+    const double relative_error =
+        std::sqrt(numerator) / (std::sqrt(denominator) + 1.0e-300);
+    check(
+        relative_error <= 1.0e-12,
+        "GPU-G5c shifted descriptor apply must match CPU (A - sigma B)x");
+    check(
+        contains(diagnostics_json, "\"schema_version\":\"gpu_modal_poisson_airbox_shifted_descriptor_apply.v1\""),
+        "GPU-G5c shifted descriptor diagnostics must expose its schema");
+    check(
+        contains(diagnostics_json, "\"algebraic_action\":\"(A - sigma B)*x\""),
+        "GPU-G5c shifted descriptor diagnostics must identify shifted apply");
+    check(
+        contains(diagnostics_json, "\"matrix_format\":\"csr_device_shifted_apply\""),
+        "GPU-G5c shifted descriptor diagnostics must identify CSR shifted device apply");
+    check(
+        contains(diagnostics_json, "\"frequency_response_proxy\":false"),
+        "GPU-G5c shifted descriptor apply must reject frequency-response proxy semantics");
+    check(
+        contains(diagnostics_json, "\"gpu_device_resident_shifted_operator_apply\":true"),
+        "GPU-G5c shifted descriptor apply must claim device-resident shifted operator apply");
+
+    const char *artifact_root_raw = std::getenv("FULLMAG_PA_G3F_OUTPUT_DIR");
+    if (artifact_root_raw != nullptr && artifact_root_raw[0] != '\0') {
+        const std::filesystem::path artifact_root = artifact_root_raw;
+        const std::filesystem::path artifact_path =
+            artifact_root / "eigen" / "diagnostics" /
+            "gpu_modal_poisson_airbox_shifted_descriptor_apply.v1.json";
+        write_text(artifact_path, std::string(diagnostics_json) + "\n");
+    }
+}
+
+void ModalContractWritesShiftInvertActionArtifact()
+{
+    TinySparseFixture fixture = make_tiny_full_coupled_fixture();
+    fd::DensePoissonAirboxEigenOracleProblem dense_problem =
+        dense_problem_from_fixture(fixture);
+    check(
+        fd::solve_dense_poisson_airbox_eigen_oracle(
+            dense_problem,
+            &fixture.dense_result) == fd::FrequencyDomainStatus::ok,
+        fixture.dense_result.error_message);
+
+    fd::ModalEigenRequest request{};
+    request.abi_version = fd::kFrequencyDomainAbiVersion;
+    request.operator_request.abi_version = fd::kFrequencyDomainAbiVersion;
+    request.requested_mode_count = 1;
+    request.target_kind = "nearest_frequency";
+    request.target_frequency_hz = 2.0e9;
+    request.residual_tolerance = 1.0e-10;
+    request.max_outer_iterations = 64;
+    request.max_linear_iterations = 128;
+    const std::filesystem::path output_dir =
+        std::filesystem::temp_directory_path() /
+        "fullmag-pa-g3b-modal-shift-invert-action-contract";
+    std::filesystem::remove_all(output_dir);
+    std::filesystem::create_directories(output_dir);
+    const std::string output_dir_string = output_dir.string();
+    request.output_directory = output_dir_string.c_str();
+    request.write_partial_artifacts = 1;
+    request.poisson_airbox_block_enabled = 1;
+    request.poisson_airbox_q_dof_count = 2;
+    request.poisson_airbox_phi_dof_count = 2;
+    request.poisson_airbox_a_qq_csr = fixture.A_qq.view();
+    request.poisson_airbox_a_qphi_csr = fixture.A_qphi.view();
+    request.poisson_airbox_a_phiq_csr = fixture.A_phiq.view();
+    request.poisson_airbox_a_phiphi_csr = fixture.A_phiphi.view();
+    request.poisson_airbox_b_qq_csr = fixture.B_qq.view();
+    request.poisson_airbox_phi_mean_weights = fixture.weights;
+    request.poisson_airbox_phi_mean_weights_count = 2;
+    request.poisson_airbox_target_frequency_hz = 2.0e9;
+    request.poisson_airbox_expected_reference_frequency_hz =
+        fixture.dense_result.frequency_hz;
+    request.poisson_airbox_periodic_mesh_certificate_schema =
+        "periodic_mesh_certificate.v5";
+    request.poisson_airbox_magnetic_pair_count = 1;
+    request.poisson_airbox_airbox_pair_count = 1;
+    request.poisson_airbox_shift_invert_action_enabled = 1;
+    request.poisson_airbox_shift_sigma_real = 0.0;
+    request.poisson_airbox_shift_sigma_imag = kTwoPi * 1.25e9;
+    const double v_re[2] = {1.0, -0.5};
+    const double v_im[2] = {0.25, 0.75};
+    request.poisson_airbox_shift_action_vector_real = v_re;
+    request.poisson_airbox_shift_action_vector_imag = v_im;
+    request.poisson_airbox_shift_action_vector_count = 2;
+
+    const fd::FrequencyDomainContractResult result =
+        fd::solve_modal_eigen_contract(request);
+
+    check(result.status == fd::FrequencyDomainStatus::ok,
+          result.error_message.c_str());
+    check(
+        result.artifact_manifest_path.find("poisson_airbox_modal_shift_invert_action.v1.json") !=
+            std::string::npos,
+        "PA-G3b modal contract result must point at the shift-invert action artifact");
+    const std::filesystem::path artifact_path =
+        output_dir / "eigen" / "diagnostics" /
+        "poisson_airbox_modal_shift_invert_action.v1.json";
+    const std::string artifact = read_text(artifact_path);
+    check(
+        artifact.find("\"schema_version\":\"poisson_airbox_modal_shift_invert_action.v1\"") !=
+            std::string::npos,
+        "PA-G3b modal action artifact must expose schema version");
+    check(
+        artifact.find("\"operator_family\":\"full_modal_shift_invert\"") !=
+            std::string::npos,
+        "PA-G3b modal action artifact must identify full modal shift-invert");
+    check(
+        artifact.find("\"algebraic_action\":\"(A - sigma B)^-1 Bv\"") !=
+            std::string::npos,
+        "PA-G3b modal action artifact must identify the algebraic action");
+    check(
+        artifact.find("\"full_modal_shift_invert_claim\":true") !=
+            std::string::npos,
+        "PA-G3b modal action artifact must claim true modal shift-invert");
+}
+
 void EmitsSlepcAdapterDiagnostics()
 {
     TinySparseFixture fixture = make_tiny_full_coupled_fixture();
@@ -335,6 +1026,12 @@ void RejectsNegativeMeanZeroGaugeWeights()
 int main()
 {
     SolvesSparseFullCoupledDescriptorAndMatchesDenseOracle();
+    AppliesFullCoupledShiftInvertActionReference();
+    AppliesGpuFullCoupledShiftInvertActionAndMatchesCpuReference();
+    SolvesGpuDensePoissonAirboxModalEigenAndMatchesCpuReference();
+    AppliesGpuFullCoupledDescriptorAndMatchesCpuReference();
+    AppliesGpuShiftedFullCoupledDescriptorAndMatchesCpuReference();
+    ModalContractWritesShiftInvertActionArtifact();
     EmitsSlepcAdapterDiagnostics();
     RejectsSyntheticPaE1DemagKind();
     RejectsMissingPeriodicMeshCertificate();

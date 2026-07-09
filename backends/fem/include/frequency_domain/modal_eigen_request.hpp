@@ -94,6 +94,13 @@ struct ModalEigenRequest {
     const char *poisson_airbox_periodic_mesh_certificate_schema = nullptr;
     std::uint64_t poisson_airbox_magnetic_pair_count = 0;
     std::uint64_t poisson_airbox_airbox_pair_count = 0;
+    int poisson_airbox_shift_invert_action_enabled = 0;
+    int poisson_airbox_shift_invert_action_device = 0;
+    double poisson_airbox_shift_sigma_real = 0.0;
+    double poisson_airbox_shift_sigma_imag = 0.0;
+    const double *poisson_airbox_shift_action_vector_real = nullptr;
+    const double *poisson_airbox_shift_action_vector_imag = nullptr;
+    std::uint64_t poisson_airbox_shift_action_vector_count = 0;
 };
 
 struct DrivenResponseContractRequest {

@@ -419,6 +419,173 @@ std::vector<Complex> csr_matvec(
     return y;
 }
 
+void add_csr_to_dense(
+    const CsrMatrixView &matrix,
+    std::uint64_t row_offset,
+    std::uint64_t column_offset,
+    std::vector<Complex> &dense,
+    std::uint64_t dense_columns)
+{
+    for (std::uint64_t row = 0; row < matrix.row_count; ++row) {
+        for (std::uint32_t entry = matrix.row_offsets[row];
+             entry < matrix.row_offsets[row + 1];
+             ++entry) {
+            dense[static_cast<std::size_t>(
+                (row_offset + row) * dense_columns + column_offset + matrix.column_indices[entry])] +=
+                matrix.values[entry];
+        }
+    }
+}
+
+std::vector<Complex> dense_matvec(
+    const std::vector<Complex> &matrix,
+    std::uint64_t rows,
+    std::uint64_t columns,
+    const std::vector<Complex> &x)
+{
+    std::vector<Complex> y(static_cast<std::size_t>(rows), Complex{});
+    if (x.size() != columns) {
+        return y;
+    }
+    for (std::uint64_t row = 0; row < rows; ++row) {
+        Complex value{};
+        for (std::uint64_t column = 0; column < columns; ++column) {
+            value += matrix[static_cast<std::size_t>(row * columns + column)] *
+                x[static_cast<std::size_t>(column)];
+        }
+        y[static_cast<std::size_t>(row)] = value;
+    }
+    return y;
+}
+
+bool solve_dense_complex_linear_system(
+    std::vector<Complex> matrix,
+    std::vector<Complex> rhs,
+    std::vector<Complex> &solution)
+{
+    const std::size_t n = rhs.size();
+    if (matrix.size() != n * n || n == 0) {
+        return false;
+    }
+    for (std::size_t column = 0; column < n; ++column) {
+        std::size_t pivot = column;
+        double pivot_norm = std::abs(matrix[column * n + column]);
+        for (std::size_t row = column + 1; row < n; ++row) {
+            const double candidate_norm = std::abs(matrix[row * n + column]);
+            if (candidate_norm > pivot_norm) {
+                pivot = row;
+                pivot_norm = candidate_norm;
+            }
+        }
+        if (!(pivot_norm > 0.0) || !std::isfinite(pivot_norm)) {
+            return false;
+        }
+        if (pivot != column) {
+            for (std::size_t k = column; k < n; ++k) {
+                std::swap(matrix[column * n + k], matrix[pivot * n + k]);
+            }
+            std::swap(rhs[column], rhs[pivot]);
+        }
+        const Complex pivot_value = matrix[column * n + column];
+        for (std::size_t row = column + 1; row < n; ++row) {
+            const Complex factor = matrix[row * n + column] / pivot_value;
+            matrix[row * n + column] = Complex{};
+            for (std::size_t k = column + 1; k < n; ++k) {
+                matrix[row * n + k] -= factor * matrix[column * n + k];
+            }
+            rhs[row] -= factor * rhs[column];
+        }
+    }
+    solution.assign(n, Complex{});
+    for (std::size_t reverse = 0; reverse < n; ++reverse) {
+        const std::size_t row = n - 1 - reverse;
+        Complex value = rhs[row];
+        for (std::size_t column = row + 1; column < n; ++column) {
+            value -= matrix[row * n + column] * solution[column];
+        }
+        solution[row] = value / matrix[row * n + row];
+    }
+    return true;
+}
+
+void write_shift_invert_action_diagnostics_json(
+    const PoissonAirboxEigenBlockProblem &problem,
+    const PoissonAirboxModalShiftInvertActionResult &result,
+    const char *status,
+    const char *reason,
+    PoissonAirboxModalShiftInvertActionResult *out) noexcept
+{
+    if (out == nullptr) {
+        return;
+    }
+    std::snprintf(
+        out->diagnostics_json,
+        sizeof(out->diagnostics_json),
+        "{"
+        "\"schema_version\":\"poisson_airbox_modal_shift_invert_action.v1\","
+        "\"status\":\"%s\","
+        "\"reason\":\"%s\","
+        "\"study_product\":\"modal_eigen\","
+        "\"operator_family\":\"full_modal_shift_invert\","
+        "\"algebraic_action\":\"(A - sigma B)^-1 Bv\","
+        "\"solver_adapter\":\"k0_poisson_airbox_cpu_full_coupled_shift_invert_reference\","
+        "\"demag_kind\":\"%s\","
+        "\"gauge_policy\":\"%s\","
+        "\"phasor_convention\":\"%s\","
+        "\"eigenvalue_convention\":\"%s\","
+        "\"full_modal_shift_invert_claim\":%s,"
+        "\"q_dof_count\":%llu,"
+        "\"phi_dof_count\":%llu,"
+        "\"augmented_dof_count\":%llu,"
+        "\"sigma\":{\"real\":%.17g,\"imag\":%.17g},"
+        "\"metrics\":{"
+        "\"rhs_l2_norm\":%.17g,"
+        "\"output_q_l2_norm\":%.17g,"
+        "\"shifted_system_relative_residual\":%.17g"
+        "}"
+        "}",
+        status != nullptr ? status : "unknown",
+        reason != nullptr ? reason : "",
+        problem.demag_kind != nullptr ? problem.demag_kind : "",
+        problem.gauge_policy != nullptr ? problem.gauge_policy : "",
+        problem.phasor_convention != nullptr ? problem.phasor_convention : "",
+        problem.eigenvalue_convention != nullptr ? problem.eigenvalue_convention : "",
+        result.full_modal_shift_invert_claim ? "true" : "false",
+        static_cast<unsigned long long>(result.q_dof_count),
+        static_cast<unsigned long long>(result.phi_dof_count),
+        static_cast<unsigned long long>(result.augmented_dof_count),
+        result.sigma_real,
+        result.sigma_imag,
+        result.rhs_l2_norm,
+        result.output_q_l2_norm,
+        result.shifted_system_relative_residual);
+}
+
+FrequencyDomainStatus fail_shift_invert_action(
+    const PoissonAirboxEigenBlockProblem &problem,
+    PoissonAirboxModalShiftInvertActionResult *result,
+    FrequencyDomainStatus status,
+    const char *message,
+    const char *reason) noexcept
+{
+    if (result != nullptr) {
+        result->status = status;
+        copy_message(result->error_message, sizeof(result->error_message), message);
+        const char *status_json = "failed";
+        if (status == FrequencyDomainStatus::unavailable) {
+            status_json = "unavailable";
+        } else if (status == FrequencyDomainStatus::validation_error) {
+            status_json = "validation_error";
+        } else if (status == FrequencyDomainStatus::operator_error) {
+            status_json = "operator_error";
+        } else if (status == FrequencyDomainStatus::solve_error) {
+            status_json = "solve_error";
+        }
+        write_shift_invert_action_diagnostics_json(problem, *result, status_json, reason, result);
+    }
+    return status;
+}
+
 std::vector<Complex> slice(
     const std::vector<Complex> &values,
     std::uint64_t begin,
@@ -692,6 +859,131 @@ std::vector<Complex> copy_eigenvector(Vec xr, Vec xi, PetscInt size)
 #endif
 
 } // namespace
+
+FrequencyDomainStatus apply_poisson_airbox_modal_shift_invert_action_cpu_reference(
+    const PoissonAirboxEigenBlockProblem &problem,
+    double sigma_real,
+    double sigma_imag,
+    const double *v_q_real,
+    const double *v_q_imag,
+    std::uint64_t v_q_count,
+    double *out_q_real,
+    double *out_q_imag,
+    std::uint64_t out_q_count,
+    PoissonAirboxModalShiftInvertActionResult *out_result) noexcept
+{
+    if (out_result == nullptr) {
+        return FrequencyDomainStatus::validation_error;
+    }
+    *out_result = PoissonAirboxModalShiftInvertActionResult{};
+    out_result->q_dof_count = problem.q_dof_count;
+    out_result->phi_dof_count = problem.phi_dof_count;
+    out_result->augmented_dof_count = problem.q_dof_count + problem.phi_dof_count + 1;
+    out_result->sigma_real = sigma_real;
+    out_result->sigma_imag = sigma_imag;
+
+    PoissonAirboxModalEigenResult validation_result{};
+    FrequencyDomainStatus status = validate_problem(problem, &validation_result);
+    if (status != FrequencyDomainStatus::ok) {
+        return fail_shift_invert_action(
+            problem,
+            out_result,
+            status,
+            validation_result.error_message,
+            "poisson_airbox_shift_invert_action_invalid_problem");
+    }
+    if (v_q_real == nullptr ||
+        out_q_real == nullptr ||
+        out_q_imag == nullptr ||
+        v_q_count != problem.q_dof_count ||
+        out_q_count != problem.q_dof_count ||
+        !std::isfinite(sigma_real) ||
+        !std::isfinite(sigma_imag)) {
+        return fail_shift_invert_action(
+            problem,
+            out_result,
+            FrequencyDomainStatus::validation_error,
+            "PA-G3 shift-invert action requires finite sigma and q-sized complex input/output buffers",
+            "poisson_airbox_shift_invert_action_invalid_buffers");
+    }
+
+    const std::uint64_t nq = problem.q_dof_count;
+    const std::uint64_t np = problem.phi_dof_count;
+    const std::uint64_t total = nq + np + 1;
+    const Complex sigma{sigma_real, sigma_imag};
+
+    std::vector<Complex> v(static_cast<std::size_t>(nq), Complex{});
+    for (std::uint64_t row = 0; row < nq; ++row) {
+        const double real = v_q_real[row];
+        const double imag = v_q_imag != nullptr ? v_q_imag[row] : 0.0;
+        if (!std::isfinite(real) || !std::isfinite(imag)) {
+            return fail_shift_invert_action(
+                problem,
+                out_result,
+                FrequencyDomainStatus::validation_error,
+                "PA-G3 shift-invert action input vector must be finite",
+                "poisson_airbox_shift_invert_action_nonfinite_input");
+        }
+        v[static_cast<std::size_t>(row)] = Complex{real, imag};
+    }
+
+    std::vector<Complex> matrix(static_cast<std::size_t>(total * total), Complex{});
+    add_csr_to_dense(problem.A_qq, 0, 0, matrix, total);
+    add_csr_to_dense(problem.A_qphi, 0, nq, matrix, total);
+    add_csr_to_dense(problem.A_phiq, nq, 0, matrix, total);
+    add_csr_to_dense(problem.A_phiphi, nq, nq, matrix, total);
+    for (std::uint64_t row = 0; row < np; ++row) {
+        matrix[static_cast<std::size_t>((nq + row) * total + nq + np)] +=
+            problem.phi_mean_weights[row];
+        matrix[static_cast<std::size_t>((nq + np) * total + nq + row)] +=
+            problem.phi_mean_weights[row];
+    }
+    for (std::uint64_t row = 0; row < problem.B_qq.row_count; ++row) {
+        for (std::uint32_t entry = problem.B_qq.row_offsets[row];
+             entry < problem.B_qq.row_offsets[row + 1];
+             ++entry) {
+            matrix[static_cast<std::size_t>(row * total + problem.B_qq.column_indices[entry])] -=
+                sigma * problem.B_qq.values[entry];
+        }
+    }
+
+    std::vector<Complex> rhs(static_cast<std::size_t>(total), Complex{});
+    const std::vector<Complex> b_v = csr_matvec(problem.B_qq, v);
+    for (std::uint64_t row = 0; row < nq; ++row) {
+        rhs[static_cast<std::size_t>(row)] = b_v[static_cast<std::size_t>(row)];
+    }
+    out_result->rhs_l2_norm = complex_l2_norm(rhs);
+
+    std::vector<Complex> solution;
+    if (!solve_dense_complex_linear_system(matrix, rhs, solution)) {
+        return fail_shift_invert_action(
+            problem,
+            out_result,
+            FrequencyDomainStatus::solve_error,
+            "PA-G3 shift-invert action failed to solve the shifted full-coupled descriptor system",
+            "poisson_airbox_shift_invert_action_solve_failed");
+    }
+
+    std::vector<Complex> residual = dense_matvec(matrix, total, total, solution);
+    for (std::uint64_t row = 0; row < total; ++row) {
+        residual[static_cast<std::size_t>(row)] -= rhs[static_cast<std::size_t>(row)];
+    }
+    out_result->shifted_system_relative_residual =
+        complex_l2_norm(residual) /
+        (complex_l2_norm(rhs) + complex_l2_norm(dense_matvec(matrix, total, total, solution)) + 1.0e-30);
+
+    std::vector<Complex> q(static_cast<std::size_t>(nq), Complex{});
+    for (std::uint64_t row = 0; row < nq; ++row) {
+        q[static_cast<std::size_t>(row)] = solution[static_cast<std::size_t>(row)];
+        out_q_real[row] = q[static_cast<std::size_t>(row)].real();
+        out_q_imag[row] = q[static_cast<std::size_t>(row)].imag();
+    }
+    out_result->output_q_l2_norm = complex_l2_norm(q);
+    out_result->full_modal_shift_invert_claim = true;
+    out_result->status = FrequencyDomainStatus::ok;
+    write_shift_invert_action_diagnostics_json(problem, *out_result, "ok", "", out_result);
+    return FrequencyDomainStatus::ok;
+}
 
 FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_slepc(
     const PoissonAirboxEigenBlockProblem &problem,

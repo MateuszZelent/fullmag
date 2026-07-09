@@ -10,13 +10,24 @@ Usage:
 """
 
 import math
+import os
 
 import fullmag as fm
 
 
 MU0 = 4.0e-7 * math.pi
 MS = 800e3
-BIAS_FIELDS_T = (0.02, 0.05, 0.10)
+MAG_HMAX_M = float(os.environ.get("FULLMAG_K0_KITTEL_MAG_HMAX_NM", "20.0")) * 1e-9
+MAG_HMIN_M = float(os.environ.get("FULLMAG_K0_KITTEL_MAG_HMIN_NM", "10.0")) * 1e-9
+AIRBOX_HMAX_M = float(os.environ.get("FULLMAG_K0_KITTEL_AIRBOX_HMAX_NM", "40.0")) * 1e-9
+AIRBOX_FACTOR = float(os.environ.get("FULLMAG_K0_KITTEL_AIRBOX_FACTOR", "5.0"))
+BODY_X_M = float(os.environ.get("FULLMAG_K0_KITTEL_BODY_X_NM", "40.0")) * 1e-9
+BODY_Y_M = float(os.environ.get("FULLMAG_K0_KITTEL_BODY_Y_NM", "20.0")) * 1e-9
+BODY_Z_M = float(os.environ.get("FULLMAG_K0_KITTEL_BODY_Z_NM", "10.0")) * 1e-9
+BIAS_FIELDS_T = tuple(
+    1.0e-9 if sample_index == 0 else 0.10 * sample_index / 14.0
+    for sample_index in range(15)
+)
 BIAS_FIELDS_A_PER_M = tuple(field_t / MU0 for field_t in BIAS_FIELDS_T)
 N_MODES = 1
 FREQUENCY_MAX_HZ = 25.0e9
@@ -27,13 +38,13 @@ study.engine("fem")
 study.device("cpu", precision="double")
 study.universe(
     mode="manual",
-    size=(40e-9, 20e-9, 50e-9),
+    size=(BODY_X_M, BODY_Y_M, AIRBOX_FACTOR * BODY_Z_M),
     center=(0.0, 0.0, 0.0),
     padding=(0.0, 0.0, 0.0),
 )
 study.universe.mesh(
-    minimum_element_size=20e-9,
-    maximum_element_size=40e-9,
+    minimum_element_size=MAG_HMAX_M,
+    maximum_element_size=AIRBOX_HMAX_M,
     growth_rate=1.5,
     grading="linear",
 )
@@ -47,15 +58,15 @@ study.objects.mesh.defaults(
     narrow_regions=1,
 )
 
-body = study.geometry(fm.Box(size=(40e-9, 20e-9, 10e-9), name="body"), name="body")
+body = study.geometry(fm.Box(size=(BODY_X_M, BODY_Y_M, BODY_Z_M), name="body"), name="body")
 body.Ms = MS
 body.Aex = 13e-12
 body.alpha = 0.0
 body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 body.mesh.thin_film(
-    minimum_element_size=10e-9,
-    maximum_element_size=20e-9,
-    interface_maximum_element_size=20e-9,
+    minimum_element_size=MAG_HMIN_M,
+    maximum_element_size=MAG_HMAX_M,
+    interface_maximum_element_size=MAG_HMAX_M,
     edge_thickness=2e-9,
     edge_transition_distance=4e-9,
     corner_extent=2e-9,
@@ -88,19 +99,25 @@ study.k0_kittel_validation(
     )
 )
 
+study.stages.add_relax(
+    algorithm="llg_overdamped",
+    max_steps=8,
+    tol=1e-3,
+    relax_alpha=1.0,
+)
 study.stages.add_eigenmodes(
     count=N_MODES,
     target="frequency_window",
-    frequency_min=100e6,
+    frequency_min=1e3,
     frequency_max=FREQUENCY_MAX_HZ,
     operator="full_2x2",
     include_demag=True,
-    equilibrium_source="provided",
+    equilibrium_source="relax",
     normalization="unit_l2",
     damping_policy="ignore",
     k_sampling=fm.KPath(
         points=[
-            fm.KPoint("H20mT", (0.0, 0.0, 0.0)),
+            fm.KPoint("Hnear0", (0.0, 0.0, 0.0)),
             fm.KPoint("H100mT", (0.0, 0.0, 0.0)),
         ],
         samples_per_segment=[len(BIAS_FIELDS_A_PER_M) - 1],

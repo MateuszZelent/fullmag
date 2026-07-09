@@ -18,6 +18,7 @@
 #include "cpu/mfem/runtime/backend_step.hpp"
 #include "cpu/mfem/runtime/eigen_dense.hpp"
 #include "cpu/mfem/runtime/interrupt.hpp"
+#include "cpu/mfem/runtime/mfem_host_access.hpp"
 #include "cpu/mfem/runtime/mfem_device.hpp"
 #include "cpu/mfem/runtime/snapshot.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
@@ -27,6 +28,7 @@
 #include "frequency_domain/modal_eigen_solver.hpp"
 #include "frequency_domain/operator_terms.hpp"
 #include "frequency_domain/tangent_frame.hpp"
+#include "gpu/cuda/demag_poisson/operators.hpp"
 #include "gpu/cuda/demag_poisson/stage_compute.hpp"
 #include "gpu/cuda/integrators/rk/rk.hpp"
 #include "gpu/cuda/runtime/gpu_state_runtime.hpp"
@@ -40,7 +42,6 @@
 
 #include <cmath>
 #include <cstddef>
-#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <new>
@@ -111,6 +112,12 @@ bool apply_device_demag_tangent_with_potential_f64(
         error = "device demag tangent-with-potential delta_m upload failed: " + error;
         return false;
     }
+    const cudaError_t upload_status = cudaDeviceSynchronize();
+    if (upload_status != cudaSuccess) {
+        error = std::string("device demag tangent-with-potential delta_m upload synchronize failed: ") +
+            cudaGetErrorString(upload_status);
+        return false;
+    }
     if (!fullmag::fem::compute_device_demag_for_device_stage_fresh(
             ctx,
             ctx.gpu_state.device.rk.m_stage,
@@ -143,21 +150,64 @@ bool apply_device_demag_tangent_with_potential_f64(
         error = "device demag tangent-with-potential H_demag download returned mismatched length";
         return false;
     }
+    const double *phi_source = nullptr;
+#if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+    auto *workspace = fullmag::fem::workspace_ptr(ctx);
+    if (workspace == nullptr || workspace->x_par == nullptr) {
+        error = "device demag tangent-with-potential requires a solved Hypre true-DOF potential";
+        return false;
+    }
+    auto *gf_potential =
+        static_cast<mfem::GridFunction *>(ctx.poisson_demag.gf_potential);
+    if (gf_potential == nullptr) {
+        error = "device demag tangent-with-potential requires an initialized nodal scalar-potential field";
+        return false;
+    }
+    mfem::Vector full_phi;
+    full_phi.SetSize(static_cast<int>(node_count));
+    const double *reduced_phi = fullmag::fem::audited_host_read(*workspace->x_par);
+    if (ctx.mesh.periodic_reduced_node.size() == static_cast<std::size_t>(node_count) &&
+        ctx.mesh.periodic_reduced_node_count == workspace->rhs.rows) {
+        for (uint64_t node = 0; node < node_count; ++node) {
+            const uint32_t reduced = ctx.mesh.periodic_reduced_node[static_cast<std::size_t>(node)];
+            if (reduced >= ctx.mesh.periodic_reduced_node_count) {
+                error = "device demag tangent-with-potential periodic scalar-potential lift map is invalid";
+                return false;
+            }
+            full_phi[static_cast<int>(node)] = reduced_phi[static_cast<int>(reduced)];
+        }
+    } else if (workspace->rhs.rows == node_count) {
+        for (uint64_t node = 0; node < node_count; ++node) {
+            full_phi[static_cast<int>(node)] = reduced_phi[static_cast<int>(node)];
+        }
+    } else {
+        error = "device demag tangent-with-potential cannot lift scalar potential: "
+            "scalar_rows=" + std::to_string(workspace->rhs.rows) +
+            " periodic_reduced_node_count=" + std::to_string(ctx.mesh.periodic_reduced_node_count) +
+            " mesh_nodes=" + std::to_string(node_count);
+        return false;
+    }
+    gf_potential->SetFromTrueDofs(full_phi);
+    if (gf_potential->Size() != static_cast<int>(out_phi_len)) {
+        error = "device demag tangent-with-potential recovered scalar-potential size mismatch: "
+            "grid_function_size=" + std::to_string(gf_potential->Size()) +
+            " out_phi_len=" + std::to_string(out_phi_len) +
+            " mesh_nodes=" + std::to_string(node_count);
+        return false;
+    }
+    phi_source = fullmag::fem::audited_host_read(*gf_potential);
+#else
+    error = "device demag tangent-with-potential phi recovery requires MFEM MPI true-DOF support";
+    return false;
+#endif
     std::memcpy(
         out_delta_h_demag_xyz,
         delta_h_demag.data(),
         static_cast<std::size_t>(sizeof(double) * expected_vector_len));
-
-    const cudaError_t copy_status = cudaMemcpy(
+    std::memcpy(
         out_delta_phi,
-        ctx.gpu_state.device.demag_poisson.poisson_solution,
-        static_cast<std::size_t>(sizeof(double) * out_phi_len),
-        cudaMemcpyDeviceToHost);
-    if (copy_status != cudaSuccess) {
-        error = std::string("device demag tangent-with-potential phi download failed: ") +
-            cudaGetErrorString(copy_status);
-        return false;
-    }
+        phi_source,
+        static_cast<std::size_t>(sizeof(double) * out_phi_len));
     fullmag::fem::record_device_to_host(
         ctx.transfer_audit.audit,
         static_cast<uint64_t>(sizeof(double) * out_phi_len));
@@ -2250,6 +2300,20 @@ FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve(
         request->poisson_airbox_magnetic_pair_count;
     native_request.poisson_airbox_airbox_pair_count =
         request->poisson_airbox_airbox_pair_count;
+    native_request.poisson_airbox_shift_invert_action_enabled =
+        request->poisson_airbox_shift_invert_action_enabled;
+    native_request.poisson_airbox_shift_invert_action_device =
+        request->poisson_airbox_shift_invert_action_device;
+    native_request.poisson_airbox_shift_sigma_real =
+        request->poisson_airbox_shift_sigma_real;
+    native_request.poisson_airbox_shift_sigma_imag =
+        request->poisson_airbox_shift_sigma_imag;
+    native_request.poisson_airbox_shift_action_vector_real =
+        request->poisson_airbox_shift_action_vector_real;
+    native_request.poisson_airbox_shift_action_vector_imag =
+        request->poisson_airbox_shift_action_vector_imag;
+    native_request.poisson_airbox_shift_action_vector_count =
+        request->poisson_airbox_shift_action_vector_count;
 
     return copy_frequency_domain_contract_result(
         fd::solve_modal_eigen_contract(native_request));

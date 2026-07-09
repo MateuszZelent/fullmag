@@ -16,6 +16,7 @@ namespace fullmag::fem {
 struct FemGpuDemagPoissonDeviceState {
     double *poisson_rhs = nullptr;
     double *poisson_solution = nullptr;
+    double *poisson_solution_full = nullptr;
     FemGpuComponentField poisson_gradient;
     std::vector<double> hybrid_stage_m_xyz;
     std::vector<double> hybrid_demag_xyz;

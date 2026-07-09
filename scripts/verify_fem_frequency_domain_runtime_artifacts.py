@@ -10,8 +10,35 @@ import sys
 from pathlib import Path
 
 MAX_U64 = (1 << 64) - 1
-CPU_GPU_PARITY_ABS_TOL = 1.0e-8
-CPU_GPU_PARITY_REL_TOL = 1.0e-7
+
+
+def nonnegative_float_env(name: str, default: float) -> float:
+    configured = os.environ.get(name)
+    if configured is None or not configured.strip():
+        return default
+    try:
+        value = float(configured)
+    except ValueError:
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            f"{name} must be numeric"
+        ) from None
+    if not math.isfinite(value) or value < 0.0:
+        raise SystemExit(
+            "invalid frequency-domain runtime artifacts:\n"
+            f"{name} must be finite and non-negative"
+        )
+    return value
+
+
+CPU_GPU_PARITY_ABS_TOL = nonnegative_float_env(
+    "FULLMAG_FEM_FREQUENCY_RESPONSE_CPU_GPU_PARITY_ABS_TOL",
+    1.0e-8,
+)
+CPU_GPU_PARITY_REL_TOL = nonnegative_float_env(
+    "FULLMAG_FEM_FREQUENCY_RESPONSE_CPU_GPU_PARITY_REL_TOL",
+    1.0e-7,
+)
 FLOQUET_RECIPROCAL_ABS_TOL = 1.0e-8
 FLOQUET_RECIPROCAL_REL_TOL = 1.0e-7
 FLOQUET_RECIPROCAL_K_ABS_TOL = 1.0e-6
@@ -120,6 +147,23 @@ def require_equal(actual: object, expected: object, name: str) -> None:
             "invalid frequency-domain runtime artifacts:\n"
             f"{name}: got {actual!r}, expected {expected!r}"
         )
+
+
+def json_values_close(actual: object, expected: object) -> bool:
+    if isinstance(actual, bool) or isinstance(expected, bool):
+        return actual == expected
+    if isinstance(actual, (int, float)) and isinstance(expected, (int, float)):
+        return math.isclose(float(actual), float(expected), rel_tol=1.0e-14, abs_tol=1.0e-18)
+    if isinstance(actual, list) and isinstance(expected, list):
+        return len(actual) == len(expected) and all(
+            json_values_close(actual_item, expected_item)
+            for actual_item, expected_item in zip(actual, expected)
+        )
+    if isinstance(actual, dict) and isinstance(expected, dict):
+        return actual.keys() == expected.keys() and all(
+            json_values_close(actual[key], expected[key]) for key in actual.keys()
+        )
+    return actual == expected
 
 
 def require_expected(expected: dict[str, tuple[object, object]]) -> None:
@@ -1821,6 +1865,61 @@ def require_gpu_periodic_airbox_poisson_provenance(
     require_expected(expected)
 
 
+def require_gpu_periodic_airbox_operator_parity_probe(
+    diagnostics: dict,
+    manifest_diagnostics: dict,
+) -> None:
+    require_expected(
+        {
+            "diagnostics.gpu_operator_parity_probe_available": (
+                diagnostics.get("gpu_operator_parity_probe_available"),
+                True,
+            ),
+            "manifest.diagnostics.gpu_operator_parity_probe_available": (
+                manifest_diagnostics.get("gpu_operator_parity_probe_available"),
+                True,
+            ),
+        }
+    )
+    metric_names = [
+        "gpu_reduced_complex_operator_parity_relative_l2_error",
+        "gpu_reduced_complex_real_stiffness_parity_relative_l2_error",
+        "gpu_reduced_complex_real_demag_tangent_parity_relative_l2_error",
+        "gpu_reduced_complex_real_demag_phi_parity_relative_l2_error",
+        "gpu_reduced_gmres_formula_operator_parity_relative_l2_error",
+        "gpu_reduced_split_vs_gmres_formula_relative_l2_error",
+        "gpu_reduced_complex_operator_additivity_relative_error",
+        "gpu_reduced_complex_operator_repeat_relative_error",
+    ]
+    tolerance = max(CPU_GPU_PARITY_ABS_TOL, CPU_GPU_PARITY_REL_TOL)
+    for metric_name in metric_names:
+        raw_value = diagnostics.get(metric_name)
+        raw_manifest_value = manifest_diagnostics.get(metric_name)
+        require_finite_number(
+            raw_value,
+            f"diagnostics.{metric_name}",
+        )
+        require_finite_number(
+            raw_manifest_value,
+            f"manifest.diagnostics.{metric_name}",
+        )
+        value = float(raw_value)
+        manifest_value = float(raw_manifest_value)
+        compare_numeric_value(
+            value,
+            manifest_value,
+            f"manifest.diagnostics.{metric_name}",
+            abs_tol=0.0,
+            rel_tol=0.0,
+        )
+        if abs(value) > tolerance:
+            raise SystemExit(
+                "invalid frequency-domain runtime artifacts:\n"
+                f"diagnostics.{metric_name}={value:.17g} exceeds "
+                f"CPU/GPU parity tolerance {tolerance:.17g}"
+            )
+
+
 def require_progress_json_checkpoint(progress: dict, artifact_name: str = "progress") -> dict:
     raw_progress_json = progress.get("progress_json")
     if not isinstance(raw_progress_json, str) or not raw_progress_json.strip():
@@ -3209,6 +3308,7 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
     require_periodic_mesh_certificate_consistency(diagnostics, manifest_diagnostics)
     if expected_execution_lane == "production_gpu":
         require_gpu_periodic_airbox_poisson_provenance(diagnostics, manifest)
+        require_gpu_periodic_airbox_operator_parity_probe(diagnostics, manifest_diagnostics)
     require_periodic_airbox_delta_phi_seam_diagnostics(
         diagnostics,
         "diagnostics",
@@ -3572,6 +3672,14 @@ def require_periodic_airbox_cpu_demag_solved_boundary(
                 f"{source_name}.coupled_block_norms.relative_residual_delta_phi_l2_norm",
             )
         if schur_coupled_block:
+            require_positive_finite_number(
+                source.get("demag_tangent_probe_input_l2_norm"),
+                f"{source_name}.demag_tangent_probe_input_l2_norm",
+            )
+            require_positive_finite_number(
+                source.get("demag_tangent_probe_output_l2_norm"),
+                f"{source_name}.demag_tangent_probe_output_l2_norm",
+            )
             continue
         require_block_norms(
             source.get("block_norms"),
@@ -5729,7 +5837,10 @@ def main() -> int:
             "relative_residual_l2_norm",
             "residual_source",
         ]:
-            if point_artifact.get(observable_key) != point_value.get(observable_key):
+            if not json_values_close(
+                point_artifact.get(observable_key),
+                point_value.get(observable_key),
+            ):
                 raise SystemExit(
                     "invalid frequency-domain runtime artifacts:\n"
                     f"{expected_point_path}.{observable_key} does not match "
@@ -5806,15 +5917,6 @@ def main() -> int:
     if require_derived_peak_mode:
         require_derived_peak_mode_artifact(root, sweep)
 
-    if parity_reference is not None:
-        require_cpu_gpu_parity_reference(
-            root,
-            parity_reference,
-            target_manifest=manifest,
-            target_diagnostics=diagnostics,
-            target_sweep=sweep,
-        )
-
     if floquet_reciprocal_reference is not None:
         require_floquet_reciprocal_reference(
             root,
@@ -5878,6 +5980,15 @@ def main() -> int:
         )
         if require_accepted_periodic_mesh_certificate:
             require_accepted_periodic_mesh_certificate_status(diagnostics)
+
+    if parity_reference is not None:
+        require_cpu_gpu_parity_reference(
+            root,
+            parity_reference,
+            target_manifest=manifest,
+            target_diagnostics=diagnostics,
+            target_sweep=sweep,
+        )
 
     return 0
 
