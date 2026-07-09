@@ -1,6 +1,6 @@
 # Fullmag Backend LLG Scientific Audit Design
 
-- Status: approved design, awaiting written-spec review
+- Status: approved for execution planning
 - Date: 2026-07-09
 - Baseline at design time: `ae03c37795a6dee315e305798139fdf04dab1377`
 - Scope owner: Fullmag solver and physics documentation
