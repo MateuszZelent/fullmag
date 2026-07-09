@@ -73,6 +73,12 @@ struct PoissonAirboxModalEigenResult {
     double frequency_hz = 0.0;
     double eigen_residual_relative = 0.0;
     double full_residual_reconstruction_relative_error = 0.0;
+    double slepc_reported_backward_error = 0.0;
+    double reconstructed_full_descriptor_backward_error = 0.0;
+    double reconstruction_vs_slepc_ratio = 0.0;
+    double magnetic_block_backward_error = 0.0;
+    double poisson_block_backward_error = 0.0;
+    double gauge_constraint_backward_error = 0.0;
     double poisson_constraint_relative_residual = 0.0;
     double gauge_mean_abs = 0.0;
     double expected_reference_frequency_hz = 0.0;
@@ -84,6 +90,16 @@ struct PoissonAirboxModalEigenResult {
     bool reference_frequency_certified = false;
 
     char diagnostics_json[8192]{};
+};
+
+struct PoissonAirboxModalResidualMetrics {
+    double slepc_reported_backward_error = 0.0;
+    double reconstructed_full_descriptor_backward_error = 0.0;
+    double reconstruction_vs_slepc_ratio = 0.0;
+    double magnetic_block_backward_error = 0.0;
+    double poisson_block_backward_error = 0.0;
+    double gauge_constraint_backward_error = 0.0;
+    double gauge_mean_abs = 0.0;
 };
 
 struct PoissonAirboxModalShiftInvertActionResult {
@@ -107,6 +123,21 @@ struct PoissonAirboxModalShiftInvertActionResult {
 
 FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_slepc(
     const PoissonAirboxEigenBlockProblem &problem,
+    PoissonAirboxModalEigenResult *out_result) noexcept;
+
+FrequencyDomainStatus evaluate_poisson_airbox_modal_residuals(
+    const PoissonAirboxEigenBlockProblem &problem,
+    const double *full_vector_real,
+    const double *full_vector_imag,
+    std::uint64_t full_vector_count,
+    double lambda_real,
+    double lambda_imag,
+    double slepc_reported_backward_error,
+    PoissonAirboxModalResidualMetrics *out_metrics) noexcept;
+
+FrequencyDomainStatus apply_poisson_airbox_modal_residual_certification(
+    const PoissonAirboxModalResidualMetrics &metrics,
+    double residual_tolerance,
     PoissonAirboxModalEigenResult *out_result) noexcept;
 
 FrequencyDomainStatus apply_poisson_airbox_modal_shift_invert_action_cpu_reference(

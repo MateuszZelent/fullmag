@@ -1074,70 +1074,43 @@ r_phi = A_phiq q + A_phiphi phi + c eta
 r_eta = cT phi
 ```
 
-Norm:
+Blockwise backward errors:
 
 ```text
-||r_full|| / (||A_full x|| + |lambda| ||B_full x|| + floor)
+eps_q = ||r_q|| /
+  (||A_qq q|| + ||A_qphi phi|| + |lambda| ||B_qq q|| + floor)
+
+eps_phi = ||r_phi|| /
+  (||A_phiq q|| + ||A_phiphi phi|| + ||c eta|| + floor)
+
+eps_gauge = |cT phi| / (||c|| ||phi|| + floor)
+
+eps_full = max(eps_q, eps_phi, eps_gauge)
 ```
 
-Code fragment:
+Required result and artifact fields:
 
-```cpp
-struct FullResidualBreakdown {
-    double relative_full = 0.0;
-    double relative_q = 0.0;
-    double relative_phi = 0.0;
-    double gauge_abs = 0.0;
-};
-
-FullResidualBreakdown compute_full_descriptor_residual(
-    const ComplexDenseMatrix& A_qq,
-    const ComplexDenseMatrix& A_qphi,
-    const ComplexDenseMatrix& A_phiq,
-    const ComplexDenseMatrix& A_phiphi,
-    const ComplexDenseMatrix& B_qq,
-    const double* phi_weights,
-    Complex lambda,
-    const std::vector<Complex>& q,
-    const std::vector<Complex>& phi,
-    Complex eta)
-{
-    FullResidualBreakdown out{};
-    std::vector<Complex> r_q = matvec(A_qq, q);
-    std::vector<Complex> qphi = matvec(A_qphi, phi);
-    std::vector<Complex> bq = matvec(B_qq, q);
-    for (std::size_t i = 0; i < r_q.size(); ++i) {
-        r_q[i] += qphi[i] - lambda * bq[i];
-    }
-
-    std::vector<Complex> r_phi = matvec(A_phiq, q);
-    std::vector<Complex> pphi = matvec(A_phiphi, phi);
-    for (std::size_t i = 0; i < r_phi.size(); ++i) {
-        r_phi[i] += pphi[i] + phi_weights[i] * eta;
-    }
-    const Complex gauge = weighted_mean(phi, phi_weights);
-
-    const double rq = complex_l2_norm(r_q);
-    const double rp = complex_l2_norm(r_phi);
-    const double rg = std::abs(gauge);
-    const double denom = std::max(1.0e-300,
-        complex_l2_norm(matvec(A_qq, q)) +
-        complex_l2_norm(qphi) +
-        std::abs(lambda) * complex_l2_norm(bq));
-    out.relative_q = rq / denom;
-    out.relative_phi = rp / std::max(1.0e-300, complex_l2_norm(pphi) + complex_l2_norm(r_phi));
-    out.gauge_abs = rg;
-    out.relative_full = std::sqrt(rq*rq + rp*rp + rg*rg) / denom;
-    return out;
-}
+```text
+slepc_reported_backward_error
+reconstructed_full_descriptor_backward_error = eps_full
+reconstruction_vs_slepc_ratio
+magnetic_block_backward_error = eps_q
+poisson_block_backward_error = eps_phi
+gauge_constraint_backward_error = eps_gauge
 ```
+
+The SLEPc value is diagnostic only. It must never replace, cap, or be combined
+with `eps_full` through `min(...)`. A conjugated candidate is valid only as the
+pair `(conj(lambda), conj(x))`; the positive-frequency branch must not test
+`conj(x)` against the unchanged positive `lambda`.
 
 Acceptance:
 
 ```text
-full_residual_reconstruction_relative_error <= 1e-10
-poisson_constraint_relative_residual <= 1e-10
-gauge_mean_abs <= 1e-12 initially
+reconstructed_full_descriptor_backward_error <= tolerance
+magnetic_block_backward_error <= tolerance
+poisson_block_backward_error <= tolerance
+gauge_constraint_backward_error <= tolerance
 ```
 
 ---

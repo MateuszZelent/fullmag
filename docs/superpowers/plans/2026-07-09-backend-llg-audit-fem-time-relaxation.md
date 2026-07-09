@@ -2,17 +2,17 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Audit every non-frequency-domain FEM backend file and its public caller chain for physical, numerical, residency, observable, validation, and maturity defects in statics, relaxation, deterministic LLG, and stochastic LLG.
+**Goal:** Audit every semantically selected FEM time-domain/static/relaxation backend file and its public caller chain for physical, numerical, residency, observable, validation, and maturity defects in statics, relaxation, deterministic LLG, and stochastic LLG.
 
-**Architecture:** Own every `backends/fem/**` path not containing `/frequency_domain/`, then inspect core/material import, CPU/MFEM physics, GPU/CUDA physics, integrators, direct minimizers, ABI/state I/O, and tests as one connected contract. Repository-managed `just` routes provide native evidence; source, public execution, runtime proof, and physics validation remain distinct.
+**Architecture:** Own every path selected as `include` by the frozen semantic `backends/fem` scope ledger, then inspect core/material import, CPU/MFEM physics, GPU/CUDA physics, integrators, direct minimizers, ABI/state I/O, and tests as one connected contract. Repository-managed `just` routes provide native evidence; source, public execution, runtime proof, and physics validation remain distinct.
 
 **Tech Stack:** C++20, MFEM, hypre, libCEED, CUDA, Rust planner/runner/bindings, C ABI, CMake contracts, repository container-backed `just` recipes.
 
 ## Global Constraints
 
 - Audit only: do not edit FEM source, tests, examples, public ABI, planner, runner, capabilities, canonical notes, build scripts, or runtime recipes.
-- Every frozen `backends/fem/**` path without `/frequency_domain/` receives exactly one coverage row, including build, ABI, example, test, compatibility, and generated files.
-- Shared FEM core/API files are owned here even when frequency-domain code calls them; the frequency workstream cites those rows rather than duplicating them.
+- Every frozen backend-universe path receives one semantic scope decision; every selected time-domain/static/relaxation path receives exactly one coverage row, including mixed build/ABI/API, example, test, compatibility, and generated files.
+- Shared non-frequency FEM core/API files are owned here; their coverage rows assess only time-domain, statics, and relaxation consumers.
 - Keep CPU/MFEM and GPU/CUDA realizations separate while judging them against one backend-neutral physics contract.
 - Trace material data as fields, not just scalar defaults; verify conformal element data, nodal data, region masks, nonmagnetic masks, mass weights, and energy weights independently.
 - Conservative fields must satisfy the discrete energy derivative; thermal and spin torques must not enter direct energy minimizers without a documented work functional.
@@ -41,7 +41,7 @@ Run:
 
 ```bash
 test "$(cat .fullmag/audits/2026-07-09-backend-llg/snapshot/head.txt)" = "$(git rev-parse HEAD)"
-rg '^backends/fem/' .fullmag/audits/2026-07-09-backend-llg/snapshot/backend-files.txt | rg -v '/frequency_domain/' > .fullmag/audits/2026-07-09-backend-llg/fem-time/files.txt
+cp .fullmag/audits/2026-07-09-backend-llg/snapshot/backend-files.txt .fullmag/audits/2026-07-09-backend-llg/fem-time/files.txt
 wc -l .fullmag/audits/2026-07-09-backend-llg/fem-time/files.txt
 ```
 
@@ -98,7 +98,7 @@ For mesh/domain, magnetization, active mask, regions, scalar and spatial materia
 
 - [ ] **Step 2: Audit ABI versioning, sizes, and validation**
 
-Check `abi_version`/`struct_size`, enum/range/finite validation, null-plus-length pairs, mesh/index bounds, material array lengths, strict-device requests, unsupported combinations, error handles, stats initialization, and compatibility behavior. Compare time-domain structs with frequency-domain versioning without assigning ownership of frequency files.
+Check time-domain `abi_version`/`struct_size`, enum/range/finite validation, null-plus-length pairs, mesh/index bounds, material array lengths, strict-device requests, unsupported combinations, error handles, stats initialization, and compatibility behavior against the public FEM ABI.
 
 - [ ] **Step 3: Build a material-propagation matrix**
 
@@ -119,7 +119,9 @@ Trace mesh ownership, MFEM spaces/grid functions, GPU resident buffers, coeffici
 **Files:**
 - Read: `backends/fem/cpu/mfem/interactions/**`
 - Read: `backends/fem/cpu/mfem/demag/**`
-- Read: `backends/fem/cpu/mfem/runtime/**`
+- Read: selected paths below `backends/fem/cpu/mfem/runtime/**` listed in
+  `snapshot/backend-files.txt`; explicitly exclude `eigen_dense.cpp` and
+  `eigen_dense.hpp`
 - Read: `backends/fem/cpu/mfem/integrators/**`
 - Create: `.fullmag/audits/2026-07-09-backend-llg/fem-time/cpu-physics-notes.md`
 
@@ -137,7 +139,12 @@ Trace Poisson-airbox, periodic/static variants, FEM/BEM/Fredkin–Koehler, gauge
 
 - [ ] **Step 3: Audit direct and stochastic terms**
 
-For thermal Brown, Slonczewski, Zhang–Li, SOT if present, and Oersted, verify units, gamma/alpha convention, stage-time dependence, masks, current/polarization direction, direct-torque composition, and whether energy/minimizer paths reject nonconservative configurations.
+For thermal Brown, Slonczewski, Zhang–Li, and Oersted, verify units,
+gamma/alpha convention, stage-time dependence, masks, current/polarization
+direction, direct-torque composition, and whether energy/minimizer paths reject
+nonconservative configurations. SOT has no native FEM implementation in this
+scope; inspect only that public FEM requests reject it explicitly and
+truthfully.
 
 - [ ] **Step 4: Audit CPU observables and final-state freshness**
 
@@ -336,7 +343,7 @@ Expected: record exact exit code, resolved CPU/GPU path, integrators/algorithms 
 
 - [ ] **Step 1: Finalize every owned coverage row**
 
-Every row must have `Reviewed=yes`, complete contract/reachability/test/evidence verdicts, finding IDs or `none`, and a meaningful note. Shared files must state which time-domain and frequency consumers were checked.
+Every row must have `Reviewed=yes`, complete contract/reachability/test/evidence verdicts, finding IDs or `none`, and a meaningful note. Shared files must state which in-scope time-domain, statics, and relaxation consumers were checked.
 
 - [ ] **Step 2: Consolidate all mandatory seed checks**
 

@@ -189,6 +189,12 @@ void write_diagnostics_json(
         "},"
         "\"metrics\":{"
         "\"full_residual_reconstruction_relative_error\":%.17g,"
+        "\"slepc_reported_backward_error\":%.17g,"
+        "\"reconstructed_full_descriptor_backward_error\":%.17g,"
+        "\"reconstruction_vs_slepc_ratio\":%.17g,"
+        "\"magnetic_block_backward_error\":%.17g,"
+        "\"poisson_block_backward_error\":%.17g,"
+        "\"gauge_constraint_backward_error\":%.17g,"
         "\"poisson_constraint_relative_residual\":%.17g,"
         "\"gauge_mean_abs\":%.17g,"
         "\"eigen_residual_relative\":%.17g,"
@@ -231,6 +237,12 @@ void write_diagnostics_json(
         result.accepted_mode_count,
         result.outer_iterations,
         result.full_residual_reconstruction_relative_error,
+        result.slepc_reported_backward_error,
+        result.reconstructed_full_descriptor_backward_error,
+        result.reconstruction_vs_slepc_ratio,
+        result.magnetic_block_backward_error,
+        result.poisson_block_backward_error,
+        result.gauge_constraint_backward_error,
         result.poisson_constraint_relative_residual,
         result.gauge_mean_abs,
         result.eigen_residual_relative,
@@ -690,7 +702,9 @@ std::vector<Complex> slice(
 
 struct ResidualMetrics {
     double full_relative = 0.0;
+    double q_relative = 0.0;
     double phi_relative = 0.0;
+    double gauge_relative = 0.0;
     double gauge_abs = 0.0;
 };
 
@@ -705,14 +719,13 @@ ResidualMetrics compute_residual_metrics(
     const std::vector<Complex> phi = slice(full_vector, nq, np);
     const Complex eta = full_vector[static_cast<std::size_t>(nq + np)];
 
-    std::vector<Complex> residual;
-    residual.reserve(static_cast<std::size_t>(nq + np + 1));
-
     std::vector<Complex> a_qq_q = csr_matvec(problem.A_qq, q);
     std::vector<Complex> a_qphi_phi = csr_matvec(problem.A_qphi, phi);
     std::vector<Complex> b_qq_q = csr_matvec(problem.B_qq, q);
+    std::vector<Complex> q_residual;
+    q_residual.reserve(static_cast<std::size_t>(nq));
     for (std::uint64_t row = 0; row < nq; ++row) {
-        residual.push_back(
+        q_residual.push_back(
             a_qq_q[static_cast<std::size_t>(row)] +
             a_qphi_phi[static_cast<std::size_t>(row)] -
             lambda * b_qq_q[static_cast<std::size_t>(row)]);
@@ -727,7 +740,6 @@ ResidualMetrics compute_residual_metrics(
             a_phiq_q[static_cast<std::size_t>(row)] +
             a_phiphi_phi[static_cast<std::size_t>(row)] +
             problem.phi_mean_weights[row] * eta;
-        residual.push_back(value);
         phi_residual.push_back(value);
     }
 
@@ -735,32 +747,25 @@ ResidualMetrics compute_residual_metrics(
     for (std::uint64_t row = 0; row < np; ++row) {
         gauge += problem.phi_mean_weights[row] * phi[static_cast<std::size_t>(row)];
     }
-    residual.push_back(gauge);
-
-    std::vector<Complex> ax_norm_terms;
-    ax_norm_terms.reserve(residual.size());
-    for (std::uint64_t row = 0; row < nq; ++row) {
-        ax_norm_terms.push_back(
-            a_qq_q[static_cast<std::size_t>(row)] +
-            a_qphi_phi[static_cast<std::size_t>(row)]);
-    }
+    long double weight_norm_squared = 0.0L;
     for (std::uint64_t row = 0; row < np; ++row) {
-        ax_norm_terms.push_back(
-            a_phiq_q[static_cast<std::size_t>(row)] +
-            a_phiphi_phi[static_cast<std::size_t>(row)] +
-            problem.phi_mean_weights[row] * eta);
+        const long double weight = problem.phi_mean_weights[row];
+        weight_norm_squared += weight * weight;
     }
-    ax_norm_terms.push_back(gauge);
-
-    const double scale =
-        complex_l2_norm(ax_norm_terms) +
-        std::abs(lambda) * complex_l2_norm(b_qq_q) +
-        1.0e-30;
+    const double weight_norm = std::sqrt(static_cast<double>(weight_norm_squared));
     ResidualMetrics metrics{};
-    metrics.full_relative = complex_l2_norm(residual) / scale;
+    metrics.q_relative = complex_l2_norm(q_residual) /
+        (complex_l2_norm(a_qq_q) + complex_l2_norm(a_qphi_phi) +
+         std::abs(lambda) * complex_l2_norm(b_qq_q) + 1.0e-30);
     metrics.phi_relative = complex_l2_norm(phi_residual) /
-        (complex_l2_norm(a_phiq_q) + complex_l2_norm(a_phiphi_phi) + std::abs(eta) + 1.0e-30);
+        (complex_l2_norm(a_phiq_q) + complex_l2_norm(a_phiphi_phi) +
+         weight_norm * std::abs(eta) + 1.0e-30);
     metrics.gauge_abs = std::abs(gauge);
+    metrics.gauge_relative = metrics.gauge_abs /
+        (weight_norm * complex_l2_norm(phi) + 1.0e-30);
+    metrics.full_relative = std::max(
+        metrics.q_relative,
+        std::max(metrics.phi_relative, metrics.gauge_relative));
     return metrics;
 }
 
@@ -951,6 +956,122 @@ std::vector<Complex> copy_eigenvector(Vec xr, Vec xi, PetscInt size)
 #endif
 
 } // namespace
+
+FrequencyDomainStatus evaluate_poisson_airbox_modal_residuals(
+    const PoissonAirboxEigenBlockProblem &problem,
+    const double *full_vector_real,
+    const double *full_vector_imag,
+    std::uint64_t full_vector_count,
+    double lambda_real,
+    double lambda_imag,
+    double slepc_reported_backward_error,
+    PoissonAirboxModalResidualMetrics *out_metrics) noexcept
+{
+    if (out_metrics == nullptr) {
+        return FrequencyDomainStatus::validation_error;
+    }
+    *out_metrics = PoissonAirboxModalResidualMetrics{};
+    PoissonAirboxModalEigenResult validation_result{};
+    if (validate_problem(problem, &validation_result) != FrequencyDomainStatus::ok) {
+        return FrequencyDomainStatus::validation_error;
+    }
+    const std::uint64_t expected_count = augmented_dof_count_for(problem);
+    if (full_vector_real == nullptr || full_vector_count != expected_count ||
+        !std::isfinite(lambda_real) || !std::isfinite(lambda_imag) ||
+        !std::isfinite(slepc_reported_backward_error) ||
+        slepc_reported_backward_error < 0.0) {
+        return FrequencyDomainStatus::validation_error;
+    }
+    std::vector<Complex> full_vector(static_cast<std::size_t>(full_vector_count));
+    for (std::uint64_t index = 0; index < full_vector_count; ++index) {
+        const double real = full_vector_real[index];
+        const double imag = full_vector_imag != nullptr ? full_vector_imag[index] : 0.0;
+        if (!std::isfinite(real) || !std::isfinite(imag)) {
+            return FrequencyDomainStatus::validation_error;
+        }
+        full_vector[static_cast<std::size_t>(index)] = Complex{real, imag};
+    }
+    const ResidualMetrics residuals = compute_residual_metrics(
+        problem,
+        full_vector,
+        Complex{lambda_real, lambda_imag});
+    out_metrics->slepc_reported_backward_error = slepc_reported_backward_error;
+    out_metrics->reconstructed_full_descriptor_backward_error = residuals.full_relative;
+    if (slepc_reported_backward_error > 0.0) {
+        const long double ratio =
+            static_cast<long double>(residuals.full_relative) /
+            static_cast<long double>(slepc_reported_backward_error);
+        out_metrics->reconstruction_vs_slepc_ratio = static_cast<double>(
+            std::min(
+                ratio,
+                static_cast<long double>(std::numeric_limits<double>::max())));
+    } else {
+        out_metrics->reconstruction_vs_slepc_ratio = residuals.full_relative == 0.0 ?
+            1.0 : std::numeric_limits<double>::max();
+    }
+    out_metrics->magnetic_block_backward_error = residuals.q_relative;
+    out_metrics->poisson_block_backward_error = residuals.phi_relative;
+    out_metrics->gauge_constraint_backward_error = residuals.gauge_relative;
+    out_metrics->gauge_mean_abs = residuals.gauge_abs;
+    if (!std::isfinite(out_metrics->reconstructed_full_descriptor_backward_error) ||
+        !std::isfinite(out_metrics->reconstruction_vs_slepc_ratio) ||
+        !std::isfinite(out_metrics->magnetic_block_backward_error) ||
+        !std::isfinite(out_metrics->poisson_block_backward_error) ||
+        !std::isfinite(out_metrics->gauge_constraint_backward_error) ||
+        !std::isfinite(out_metrics->gauge_mean_abs)) {
+        *out_metrics = PoissonAirboxModalResidualMetrics{};
+        return FrequencyDomainStatus::operator_error;
+    }
+    return FrequencyDomainStatus::ok;
+}
+
+FrequencyDomainStatus apply_poisson_airbox_modal_residual_certification(
+    const PoissonAirboxModalResidualMetrics &metrics,
+    double residual_tolerance,
+    PoissonAirboxModalEigenResult *out_result) noexcept
+{
+    if (out_result == nullptr || !std::isfinite(residual_tolerance) ||
+        !(residual_tolerance > 0.0)) {
+        return FrequencyDomainStatus::validation_error;
+    }
+    const double expected_full = std::max(
+        metrics.magnetic_block_backward_error,
+        std::max(
+            metrics.poisson_block_backward_error,
+            metrics.gauge_constraint_backward_error));
+    if (!std::isfinite(metrics.slepc_reported_backward_error) ||
+        !std::isfinite(metrics.reconstructed_full_descriptor_backward_error) ||
+        !std::isfinite(metrics.reconstruction_vs_slepc_ratio) ||
+        !std::isfinite(metrics.magnetic_block_backward_error) ||
+        !std::isfinite(metrics.poisson_block_backward_error) ||
+        !std::isfinite(metrics.gauge_constraint_backward_error) ||
+        !std::isfinite(metrics.gauge_mean_abs) ||
+        metrics.slepc_reported_backward_error < 0.0 ||
+        metrics.reconstructed_full_descriptor_backward_error < 0.0 ||
+        metrics.magnetic_block_backward_error < 0.0 ||
+        metrics.poisson_block_backward_error < 0.0 ||
+        metrics.gauge_constraint_backward_error < 0.0 ||
+        metrics.reconstructed_full_descriptor_backward_error != expected_full) {
+        return FrequencyDomainStatus::operator_error;
+    }
+    out_result->eigen_residual_relative = metrics.slepc_reported_backward_error;
+    out_result->slepc_reported_backward_error = metrics.slepc_reported_backward_error;
+    out_result->reconstructed_full_descriptor_backward_error =
+        metrics.reconstructed_full_descriptor_backward_error;
+    out_result->reconstruction_vs_slepc_ratio = metrics.reconstruction_vs_slepc_ratio;
+    out_result->magnetic_block_backward_error = metrics.magnetic_block_backward_error;
+    out_result->poisson_block_backward_error = metrics.poisson_block_backward_error;
+    out_result->gauge_constraint_backward_error = metrics.gauge_constraint_backward_error;
+    out_result->full_residual_reconstruction_relative_error =
+        metrics.reconstructed_full_descriptor_backward_error;
+    out_result->poisson_constraint_relative_residual = metrics.poisson_block_backward_error;
+    out_result->gauge_mean_abs = metrics.gauge_mean_abs;
+    out_result->full_residual_certified =
+        metrics.reconstructed_full_descriptor_backward_error <= residual_tolerance;
+    out_result->status = out_result->full_residual_certified ?
+        FrequencyDomainStatus::ok : FrequencyDomainStatus::solve_error;
+    return out_result->status;
+}
 
 FrequencyDomainStatus apply_poisson_airbox_modal_shift_invert_action_cpu_reference(
     const PoissonAirboxEigenBlockProblem &problem,
@@ -1199,7 +1320,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_slepc(
         PetscScalar ki = 0.0;
         PetscReal residual = 0.0;
         if (EPSGetEigenpair(eps, index, &kr, &ki, xr, xi) != 0 ||
-            EPSComputeError(eps, index, EPS_ERROR_RELATIVE, &residual) != 0) {
+            EPSComputeError(eps, index, EPS_ERROR_BACKWARD, &residual) != 0) {
             continue;
         }
         const double lambda_real = petsc_eigenvalue_real_part(kr);
@@ -1244,34 +1365,44 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_slepc(
     out_result->eigenvalue_imag = best_lambda_imag;
     out_result->omega_rad_s = best_lambda_imag;
     out_result->frequency_hz = best_lambda_imag / kTwoPi;
-    out_result->eigen_residual_relative = best_residual;
     out_result->gauge_augmented = true;
 
-    ResidualMetrics residual_metrics = compute_residual_metrics(
-        problem,
-        best_vector,
-        Complex(best_lambda_real, best_lambda_imag));
-#if !defined(PETSC_USE_COMPLEX)
-    std::vector<Complex> conjugated_vector = best_vector;
-    for (Complex &value : conjugated_vector) {
-        value = std::conj(value);
+    std::vector<double> best_vector_real(best_vector.size(), 0.0);
+    std::vector<double> best_vector_imag(best_vector.size(), 0.0);
+    for (std::size_t index = 0; index < best_vector.size(); ++index) {
+        best_vector_real[index] = best_vector[index].real();
+        best_vector_imag[index] = best_vector[index].imag();
     }
-    const ResidualMetrics conjugated_residual_metrics = compute_residual_metrics(
-        problem,
-        conjugated_vector,
-        Complex(best_lambda_real, best_lambda_imag));
-    if (conjugated_residual_metrics.full_relative < residual_metrics.full_relative) {
-        residual_metrics = conjugated_residual_metrics;
+    PoissonAirboxModalResidualMetrics residual_metrics{};
+    if (evaluate_poisson_airbox_modal_residuals(
+            problem,
+            best_vector_real.data(),
+            best_vector_imag.data(),
+            static_cast<std::uint64_t>(best_vector.size()),
+            best_lambda_real,
+            best_lambda_imag,
+            best_residual,
+            &residual_metrics) != FrequencyDomainStatus::ok) {
+        return fail(
+            problem,
+            out_result,
+            FrequencyDomainStatus::operator_error,
+            "PA-E2 failed to evaluate full descriptor residuals",
+            "poisson_airbox_eigen_residual_evaluation_failed");
     }
-#endif
-    out_result->full_residual_reconstruction_relative_error =
-        std::min(residual_metrics.full_relative, best_residual);
-    out_result->poisson_constraint_relative_residual = residual_metrics.phi_relative;
-    out_result->gauge_mean_abs = residual_metrics.gauge_abs;
-    out_result->full_residual_certified =
-        out_result->full_residual_reconstruction_relative_error <=
-            10.0 * problem.residual_tolerance &&
-        residual_metrics.gauge_abs <= 1.0e-12;
+    const FrequencyDomainStatus certification_status =
+        apply_poisson_airbox_modal_residual_certification(
+            residual_metrics,
+            problem.residual_tolerance,
+            out_result);
+    if (certification_status == FrequencyDomainStatus::operator_error) {
+        return fail(
+            problem,
+            out_result,
+            FrequencyDomainStatus::operator_error,
+            "PA-E2 residual metrics are non-finite or internally inconsistent",
+            "poisson_airbox_eigen_invalid_residual_metrics");
+    }
     if (problem.expected_reference_frequency_hz > 0.0) {
         out_result->relative_reference_frequency_error =
             std::abs(out_result->frequency_hz - problem.expected_reference_frequency_hz) /

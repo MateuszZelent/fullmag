@@ -269,11 +269,191 @@ void SolvesSparseFullCoupledDescriptorAndMatchesDenseOracle()
         fixture.sparse_result.full_residual_reconstruction_relative_error <= 1.0e-10,
         "PA-E2 must reconstruct the full descriptor residual from the returned eigenvector");
     check(
+        fixture.sparse_result.slepc_reported_backward_error ==
+            fixture.sparse_result.eigen_residual_relative,
+        "PA-E2 must preserve SLEPc backward error independently");
+    check(
+        fixture.sparse_result.reconstructed_full_descriptor_backward_error ==
+            fixture.sparse_result.full_residual_reconstruction_relative_error,
+        "PA-E2 legacy full residual must alias the reconstructed descriptor error");
+    check(
+        fixture.sparse_result.reconstructed_full_descriptor_backward_error ==
+            std::max(
+                fixture.sparse_result.magnetic_block_backward_error,
+                std::max(
+                    fixture.sparse_result.poisson_block_backward_error,
+                    fixture.sparse_result.gauge_constraint_backward_error)),
+        "PA-E2 reconstructed descriptor error must be the maximum blockwise error");
+    check(
+        contains(
+            fixture.sparse_result.diagnostics_json,
+            "\"slepc_reported_backward_error\""),
+        "PA-E2 diagnostics must publish the independent SLEPc backward error");
+    check(
+        contains(
+            fixture.sparse_result.diagnostics_json,
+            "\"reconstructed_full_descriptor_backward_error\""),
+        "PA-E2 diagnostics must publish the reconstructed descriptor error");
+    check(
+        contains(
+            fixture.sparse_result.diagnostics_json,
+            "\"reconstruction_vs_slepc_ratio\""),
+        "PA-E2 diagnostics must publish reconstruction-to-SLEPc disagreement");
+    check(
         fixture.sparse_result.gauge_mean_abs <= 1.0e-12,
         "PA-E2 eigenvector potential must satisfy the mean-zero gauge");
     check(
         fixture.sparse_result.relative_reference_frequency_error <= 1.0e-10,
         "PA-E2 sparse SLEPc frequency must match the PA-E1 dense oracle");
+}
+
+void ReconstructedResidualCannotBeHiddenBySlepcBackwardError()
+{
+    TinySparseFixture fixture = make_tiny_full_coupled_fixture();
+    fd::PoissonAirboxEigenBlockProblem problem = sparse_problem_from_fixture(fixture);
+    const double vector_real[5] = {1.0, 0.0, 1000.0, -1000.0, 0.0};
+    const double vector_imag[5] = {};
+    fd::PoissonAirboxModalResidualMetrics metrics{};
+
+    check(
+        fd::evaluate_poisson_airbox_modal_residuals(
+            problem,
+            vector_real,
+            vector_imag,
+            5,
+            0.0,
+            kTwoPi * 2.0e9,
+            1.0e-14,
+            &metrics) == fd::FrequencyDomainStatus::ok,
+        "PA-E2 residual evaluator must accept a finite full descriptor vector");
+    check(
+        metrics.slepc_reported_backward_error == 1.0e-14,
+        "PA-E2 residual evaluator must preserve the independent SLEPc error");
+    check(
+        metrics.reconstructed_full_descriptor_backward_error > 1.0e-4,
+        "PA-E2 reconstructed residual must expose a deliberately bad phi block");
+    check(
+        metrics.reconstructed_full_descriptor_backward_error >
+            1.0e6 * metrics.slepc_reported_backward_error,
+        "PA-E2 must not replace a bad reconstructed residual with the SLEPc error");
+    check(
+        metrics.reconstructed_full_descriptor_backward_error ==
+            std::max(
+                metrics.magnetic_block_backward_error,
+                std::max(
+                    metrics.poisson_block_backward_error,
+                    metrics.gauge_constraint_backward_error)),
+        "PA-E2 full certification residual must be the maximum blockwise backward error");
+    check(
+        metrics.reconstruction_vs_slepc_ratio > 1.0e6,
+        "PA-E2 diagnostics must expose disagreement between reconstruction and SLEPc");
+}
+
+void ResidualCertificationRejectsBackendAndReconstructionDisagreement()
+{
+    fd::PoissonAirboxModalResidualMetrics metrics{};
+    metrics.slepc_reported_backward_error = 1.0e-14;
+    metrics.reconstructed_full_descriptor_backward_error = 1.0e-2;
+    metrics.reconstruction_vs_slepc_ratio = 1.0e12;
+    metrics.magnetic_block_backward_error = 1.0e-2;
+    metrics.poisson_block_backward_error = 1.0e-6;
+    metrics.gauge_constraint_backward_error = 1.0e-8;
+    fd::PoissonAirboxModalEigenResult result{};
+
+    check(
+        fd::apply_poisson_airbox_modal_residual_certification(
+            metrics,
+            1.0e-10,
+            &result) == fd::FrequencyDomainStatus::solve_error,
+        "PA-E2 certification must reject a bad reconstruction despite a small SLEPc error");
+    check(
+        result.full_residual_reconstruction_relative_error == 1.0e-2,
+        "PA-E2 certification must not replace the reconstructed residual with min(SLEPc, full)");
+    check(
+        !result.full_residual_certified,
+        "PA-E2 result must keep failed reconstruction certification explicit");
+}
+
+void ConjugatedCandidateRequiresConjugatedEigenvalue()
+{
+    TinySparseFixture fixture = make_tiny_full_coupled_fixture();
+    fd::PoissonAirboxEigenBlockProblem problem = sparse_problem_from_fixture(fixture);
+    const double vector_real[5] = {
+        0.6347055818368641,
+        0.0,
+        0.0,
+        0.0,
+        0.0};
+    const double vector_imag[5] = {
+        0.0,
+        -0.6309510410933259,
+        -0.315475520546663,
+        0.31547552054666295,
+        0.0};
+    double conjugated_imag[5] = {};
+    for (std::size_t index = 0; index < 5; ++index) {
+        conjugated_imag[index] = -vector_imag[index];
+    }
+    constexpr double omega = 12641148128.614883;
+    fd::PoissonAirboxModalResidualMetrics positive{};
+    fd::PoissonAirboxModalResidualMetrics invalid_mixed_pair{};
+    fd::PoissonAirboxModalResidualMetrics conjugated_pair{};
+
+    check(
+        fd::evaluate_poisson_airbox_modal_residuals(
+            problem, vector_real, vector_imag, 5, 0.0, omega, 1.0e-14, &positive) ==
+            fd::FrequencyDomainStatus::ok,
+        "PA-E2 must evaluate the positive-frequency eigenpair");
+    check(
+        fd::evaluate_poisson_airbox_modal_residuals(
+            problem,
+            vector_real,
+            conjugated_imag,
+            5,
+            0.0,
+            omega,
+            1.0e-14,
+            &invalid_mixed_pair) == fd::FrequencyDomainStatus::ok,
+        "PA-E2 must evaluate a deliberately mixed conjugate candidate");
+    check(
+        fd::evaluate_poisson_airbox_modal_residuals(
+            problem,
+            vector_real,
+            conjugated_imag,
+            5,
+            0.0,
+            -omega,
+            1.0e-14,
+            &conjugated_pair) == fd::FrequencyDomainStatus::ok,
+        "PA-E2 must evaluate the fully conjugated eigenpair");
+    check(
+        positive.reconstructed_full_descriptor_backward_error <= 1.0e-12,
+        "PA-E2 positive-frequency analytical eigenpair must satisfy the descriptor");
+    check(
+        invalid_mixed_pair.reconstructed_full_descriptor_backward_error >= 0.9,
+        "PA-E2 must reject conj(x) paired with unchanged positive lambda");
+    check(
+        conjugated_pair.reconstructed_full_descriptor_backward_error <= 1.0e-12,
+        "PA-E2 must accept conjugation only together with conj(lambda)");
+}
+
+void ResidualEvaluatorRejectsNonfiniteComputedMetrics()
+{
+    TinySparseFixture fixture = make_tiny_full_coupled_fixture();
+    fd::PoissonAirboxEigenBlockProblem problem = sparse_problem_from_fixture(fixture);
+    const double vector_real[5] = {1.0e308, -1.0e308, 1.0e308, -1.0e308, 0.0};
+    fd::PoissonAirboxModalResidualMetrics metrics{};
+    check(
+        fd::evaluate_poisson_airbox_modal_residuals(
+            problem,
+            vector_real,
+            nullptr,
+            5,
+            0.0,
+            kTwoPi * 2.0e9,
+            0.0,
+            &metrics) == fd::FrequencyDomainStatus::operator_error,
+        "PA-E2 residual evaluator must reject overflow instead of publishing inf or nan");
 }
 
 void AppliesFullCoupledShiftInvertActionReference()
@@ -1181,6 +1361,10 @@ void RejectsInconsistentProvenanceBeforeSlepcSetup()
 int main()
 {
     SolvesSparseFullCoupledDescriptorAndMatchesDenseOracle();
+    ReconstructedResidualCannotBeHiddenBySlepcBackwardError();
+    ResidualCertificationRejectsBackendAndReconstructionDisagreement();
+    ConjugatedCandidateRequiresConjugatedEigenvalue();
+    ResidualEvaluatorRejectsNonfiniteComputedMetrics();
     AppliesFullCoupledShiftInvertActionReference();
     AppliesGpuFullCoupledShiftInvertActionAndMatchesCpuReference();
     SolvesGpuDensePoissonAirboxModalEigenAndMatchesCpuReference();
