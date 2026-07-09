@@ -17,8 +17,8 @@ when `gamma` is stored in `rad/(s T)`.
 The phasor convention is:
 
 ```text
-m(r,t) = m0(r) + Re[delta_m(r) exp(i omega t)]
-H_eff[m] = H0 + Re[delta_H[delta_m] exp(i omega t)]
+m(r,t) = m0(r) + Re[delta_m(r) exp(+i omega t)]
+H_eff[m] = H0 + Re[delta_H[delta_m] exp(+i omega t)]
 ```
 
 with:
@@ -402,13 +402,15 @@ include `Ms` where required by SI units:
 ```text
 delta_M = Ms * delta_m
 chi = delta_M / h_drive
-p_abs = sgn * 0.5 * mu0 * Ms * omega * Im(conj(h_drive) dot delta_m)
+observable_name = absorbed_by_magnetization
+p_abs = - 0.5 * mu0 * Ms * omega * Im(conj(h_drive) dot delta_m)
 P_abs = integral p_abs dV
 ```
 
-The sign `sgn` is fixed by the phasor convention and the definition of
-absorbed power. The production convention must pass the gate that positive
-Gilbert damping gives positive absorbed power near resonance. A value
+This is the absorbed power delivered to the magnetization for the
+`exp(+i omega t)` convention and interaction energy `-mu0 M dot H_drive`. The
+production convention must pass the gate that positive Gilbert damping gives
+positive absorbed power near resonance. A value
 `delta_m / h_drive` is not dimensionless susceptibility; it has units `m/A`
 and must be labeled as such if exported.
 

@@ -315,6 +315,7 @@ zmienić `phi`, a przez to dynamiczny demag i częstotliwość własną.
 Wprowadzić `PoissonBoundaryPolicy` jako część realnego payloadu:
 
 ```text
+assembly_kind = synthetic_algebraic_oracle | mfem_weak_form_shared_domain
 outer_boundary_kind = robin | dirichlet | pure_neumann
 open_boundary_marker_set
 robin_beta_per_m
@@ -944,6 +945,13 @@ Pole `production_periodic_airbox_claim` może mieć wartość `true` dopiero po
 tym, gdy `synthetic_payload=false`, wszystkie V1-V10 są zielone dla realnego
 assembly, a capability matrix jest zgodna z artifactem.
 
+Dla aktualnego payloadu syntetycznego wymagany jest kontrakt:
+
+```text
+assembly_kind = synthetic_algebraic_oracle
+production_periodic_airbox_claim = false
+```
+
 ## 10. Ostateczna ocena planu 18
 
 Plan 18 ma dobry kierunek architektoniczny: full coupled system jako definicja,
@@ -971,4 +979,3 @@ nie został jeszcze zweryfikowany jako realny Poisson-airbox FEM.
 | CPU SLEPc and residual code | `backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.cpp` |
 | GPU modal contracts | `backends/fem/gpu/cuda/frequency_domain/driven_response_gpu.cu` |
 | Artifact gates | `scripts/verify_fem_frequency_domain_eigen_artifacts.py` and `scripts/verify_fem_eigen_k0_periodic_airbox_convergence.py` |
-

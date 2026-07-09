@@ -353,15 +353,40 @@ A_qphi phi = T^T [ + gamma m0 x (G phi) ]
 
 The exact row/column sign must be pinned by PA-E1 sign-flip tests. Any future FEM assembly must match the PA-E1 sign convention.
 
-### 3.4. Gauge / nullspace
+### 3.4. Scalar domain, provenance, and gauge / nullspace
 
-The scalar potential has a constant nullspace. Production v1 oracle policy is:
+The scalar-potential perturbation lives on the full shared domain
 
 ```text
-gauge_policy = mean_zero_augmented
+D = Omega_m union Omega_air
 ```
 
-with augmented system:
+and the current PA-E1/PA-E4b payload provenance must stay explicit:
+
+```text
+assembly_kind = synthetic_algebraic_oracle
+production_periodic_airbox_claim = false
+```
+
+The first real FEM production candidate changes `assembly_kind` to
+`mfem_weak_form_shared_domain` only after the shared-domain weak form, accepted
+equilibrium provenance, and validation matrix are green.
+
+Gauge policy depends on the outer boundary condition:
+
+```text
+outer_boundary_kind = robin | dirichlet | pure_neumann
+gauge_policy = none | mean_zero_augmented
+```
+
+Robin with positive `beta` and Dirichlet have no scalar-potential nullspace and
+therefore use:
+
+```text
+gauge_policy = none
+```
+
+Only pure Neumann uses the augmented mean-zero system:
 
 ```text
 [ P  c ][phi] = [rhs]
@@ -2511,13 +2536,13 @@ also prove real-airbox evidence:
 
 ```text
 summary.v1.json demag block:
-  gauge_policy = mean_zero_augmented
+  assembly_kind = synthetic_algebraic_oracle
+  gauge_policy = none
   phi_dof_count > 0
-  augmented_phi_dof_count > phi_dof_count
   poisson_constraint_relative_residual <= 1e-8
   magnetic_pair_count > 0
   airbox_pair_count > 0
-  production_periodic_airbox_claim = true
+  production_periodic_airbox_claim = false
 
 validation/kittel_k0_pbc/convergence.v1.csv:
   case_id
@@ -2662,9 +2687,10 @@ just verify-fem-frequency-domain-eigen-k0-kittel-periodic-airbox-cpu
     resolved_solver_family = k0_poisson_airbox_full_coupled
     solver_adapter = k0_poisson_airbox_cpu_full_coupled_slepc
     demag_kind = periodic_airbox_k0
+    assembly_kind = synthetic_algebraic_oracle
     execution_lane = production_cpu
     production_solver_available = true
-    production_periodic_airbox_claim = true
+    production_periodic_airbox_claim = false
     poisson_constraint_relative_residual = 0
     relative_reference_frequency_error = 0
   eigen/metadata/eigen_summary.json:
@@ -2676,8 +2702,10 @@ just verify-fem-frequency-domain-eigen-k0-kittel-periodic-airbox-cpu
 ```
 
 This closes the narrow PA-E4b CPU K0/Kittel periodic-airbox artifact path. It is
-not GPU PA-G, not nonzero-k Floquet dynamic demag, and not broad production-v1
-modal sweep coverage.
+not a real shared-domain FEM assembly, not GPU PA-G, not nonzero-k Floquet
+dynamic demag, and not broad production-v1 modal sweep coverage. Synthetic
+PA-E4b evidence remains an algebraic oracle until `assembly_kind` is promoted
+to `mfem_weak_form_shared_domain` and the capability matrix is updated in lockstep.
 
 Follow-up convergence gate from 2026-07-09:
 
