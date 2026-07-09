@@ -1068,6 +1068,14 @@ void RobinAndDirichletRequireNoGaugeWithoutPayload()
             contains(result.diagnostics_json, "\"production_implication\":false"),
             "PA-E2 synthetic no-gauge provenance must state that it has no production implication");
         check(
+            contains(
+                result.diagnostics_json,
+                "\"algebraic_form\":\"full_coupled_descriptor_no_gauge_unimplemented\""),
+            "PA-E2 no-gauge diagnostics must not claim an augmented-gauge descriptor");
+        check(
+            contains(result.diagnostics_json, "\"augmented_dof_count\":4"),
+            "PA-E2 no-gauge diagnostics must not report a synthetic gauge DOF");
+        check(
             contains(result.diagnostics_json, "poisson_airbox_eigen_gauge_policy_not_implemented"),
             "PA-E2 no-gauge boundaries must fail explicitly before SLEPc setup");
     }
@@ -1142,6 +1150,32 @@ void RejectsUnsupportedBoundaryGaugePairsBeforeSlepcSetup()
     }
 }
 
+void RejectsInconsistentProvenanceBeforeSlepcSetup()
+{
+    TinySparseFixture fixture = make_tiny_full_coupled_fixture();
+    fd::PoissonAirboxEigenBlockProblem problem = sparse_problem_from_fixture(fixture);
+    problem.gauge_reason = "coercive_outer_boundary";
+
+    fd::PoissonAirboxModalEigenResult result{};
+    check(
+        fd::solve_poisson_airbox_modal_eigen_cpu_slepc(problem, &result) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "PA-E2 must reject pure-Neumann provenance with a coercive-boundary reason");
+    check(
+        contains(result.diagnostics_json, "poisson_airbox_eigen_gauge_reason_mismatch"),
+        "PA-E2 gauge-reason mismatch must preserve a pre-SLEPc rejection reason");
+
+    problem = sparse_problem_from_fixture(fixture);
+    problem.assembly_kind = "shared_domain_p1";
+    check(
+        fd::solve_poisson_airbox_modal_eigen_cpu_slepc(problem, &result) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "PA-E2 must reject an unimplemented assembly kind");
+    check(
+        contains(result.diagnostics_json, "poisson_airbox_eigen_unsupported_assembly_kind"),
+        "PA-E2 assembly-kind rejection must preserve a pre-SLEPc reason");
+}
+
 } // namespace
 
 int main()
@@ -1162,5 +1196,6 @@ int main()
     RobinAndDirichletRequireNoGaugeWithoutPayload();
     PureNeumannRequiresMeanZeroGaugeWithWeights();
     RejectsUnsupportedBoundaryGaugePairsBeforeSlepcSetup();
+    RejectsInconsistentProvenanceBeforeSlepcSetup();
     return 0;
 }

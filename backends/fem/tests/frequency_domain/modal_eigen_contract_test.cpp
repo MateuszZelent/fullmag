@@ -1131,7 +1131,7 @@ void modal_nonzero_k_floquet_bloch_payload_with_demag_requires_dynamic_demag_k()
     check(result.status == FULLMAG_FEM_FD_UNAVAILABLE,
           "nonzero-k Floquet modal demag payload must remain unavailable until dynamic demag-k exists");
     check(contains(result.diagnostics_json,
-                   "\"production_cpu_rejection_reason\":\"production_cpu_modal_dynamic_demag_k_payload_missing\""),
+                   "\"production_cpu_rejection_reason\":\"production_cpu_modal_dynamic_demag_k_operator_missing\""),
           "nonzero-k Floquet modal demag diagnostics reject a labelled dynamic demag-k payload without matrix data");
     check(contains(result.diagnostics_json,
                    "\"required_operator_contract\":\"bloch_floquet_tangent_operator_with_dynamic_demag_k\""),
@@ -1140,7 +1140,7 @@ void modal_nonzero_k_floquet_bloch_payload_with_demag_requires_dynamic_demag_k()
                    "\"required_demag_payload_kind\":\"dynamic_demag_k_operator\""),
           "nonzero-k Floquet modal demag diagnostics name the required demag payload kind");
     check(contains(result.diagnostics_json,
-                   "\"dynamic_demag_operator_source\":\"missing_dense_block_real_dynamic_demag_k_matrix\""),
+                   "\"dynamic_demag_operator_source\":\"missing_numeric_fem_demag_k\""),
           "nonzero-k Floquet modal demag diagnostics report missing dense block-real matrix data");
     check(!contains(result.diagnostics_json,
                     "\"production_cpu_rejection_reason\":\"production_cpu_modal_nonzero_k_floquet_operator_missing\""),
@@ -1190,6 +1190,11 @@ void modal_poisson_airbox_tail_payload_reaches_full_coupled_solver()
     request.poisson_airbox_periodic_mesh_certificate_schema = "periodic_mesh_certificate.v5";
     request.poisson_airbox_magnetic_pair_count = 1;
     request.poisson_airbox_airbox_pair_count = 1;
+    request.poisson_airbox_outer_boundary_kind = "pure_neumann";
+    request.poisson_airbox_robin_beta = 0.0;
+    request.poisson_airbox_gauge_policy = "mean_zero_augmented";
+    request.poisson_airbox_gauge_reason = "pure_neumann_nullspace";
+    request.poisson_airbox_assembly_kind = "synthetic_algebraic_oracle";
 
     FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
 #if FULLMAG_FEM_WITH_SLEPC
@@ -1283,6 +1288,11 @@ void modal_poisson_airbox_tail_shift_invert_action_writes_artifact()
     request.poisson_airbox_periodic_mesh_certificate_schema = "periodic_mesh_certificate.v5";
     request.poisson_airbox_magnetic_pair_count = 1;
     request.poisson_airbox_airbox_pair_count = 1;
+    request.poisson_airbox_outer_boundary_kind = "pure_neumann";
+    request.poisson_airbox_robin_beta = 0.0;
+    request.poisson_airbox_gauge_policy = "mean_zero_augmented";
+    request.poisson_airbox_gauge_reason = "pure_neumann_nullspace";
+    request.poisson_airbox_assembly_kind = "synthetic_algebraic_oracle";
     request.poisson_airbox_shift_invert_action_enabled = 1;
     request.poisson_airbox_shift_sigma_real = 0.0;
     request.poisson_airbox_shift_sigma_imag = 6.283185307179586476925286766559 * 1.25e9;
@@ -1364,6 +1374,11 @@ void modal_poisson_airbox_tail_gpu_shift_invert_action_writes_artifact()
     request.poisson_airbox_periodic_mesh_certificate_schema = "periodic_mesh_certificate.v5";
     request.poisson_airbox_magnetic_pair_count = 1;
     request.poisson_airbox_airbox_pair_count = 1;
+    request.poisson_airbox_outer_boundary_kind = "pure_neumann";
+    request.poisson_airbox_robin_beta = 0.0;
+    request.poisson_airbox_gauge_policy = "mean_zero_augmented";
+    request.poisson_airbox_gauge_reason = "pure_neumann_nullspace";
+    request.poisson_airbox_assembly_kind = "synthetic_algebraic_oracle";
     request.poisson_airbox_shift_invert_action_enabled = 1;
     request.poisson_airbox_shift_invert_action_device = 1;
     request.poisson_airbox_shift_sigma_real = 0.0;

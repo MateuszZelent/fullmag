@@ -32,6 +32,25 @@ bool string_equals(const char *actual, const char *expected) noexcept
     return actual != nullptr && expected != nullptr && std::strcmp(actual, expected) == 0;
 }
 
+bool uses_mean_zero_gauge(const PoissonAirboxEigenBlockProblem &problem) noexcept
+{
+    return string_equals(problem.gauge_policy, "mean_zero_augmented");
+}
+
+const char *algebraic_form_for(const PoissonAirboxEigenBlockProblem &problem) noexcept
+{
+    return uses_mean_zero_gauge(problem) ?
+        "full_coupled_descriptor_augmented_gauge" :
+        "full_coupled_descriptor_no_gauge_unimplemented";
+}
+
+std::uint64_t augmented_dof_count_for(
+    const PoissonAirboxEigenBlockProblem &problem) noexcept
+{
+    return problem.q_dof_count + problem.phi_dof_count +
+        (uses_mean_zero_gauge(problem) ? 1U : 0U);
+}
+
 void copy_message(char *destination, std::size_t destination_size, const char *message) noexcept
 {
     if (destination == nullptr || destination_size == 0) {
@@ -144,7 +163,7 @@ void write_diagnostics_json(
         "\"production_implication\":false,"
         "\"phasor_convention\":\"%s\","
         "\"eigenvalue_convention\":\"%s\","
-        "\"algebraic_form\":\"full_coupled_descriptor_augmented_gauge\","
+        "\"algebraic_form\":\"%s\","
         "\"matrix_format\":\"monolithic_seq_aij\","
         "\"periodic_mesh_certificate\":{"
         "\"schema_version\":\"%s\","
@@ -199,6 +218,7 @@ void write_diagnostics_json(
         problem.assembly_kind != nullptr ? problem.assembly_kind : "",
         problem.phasor_convention != nullptr ? problem.phasor_convention : "",
         problem.eigenvalue_convention != nullptr ? problem.eigenvalue_convention : "",
+        algebraic_form_for(problem),
         problem.periodic_mesh_certificate_schema != nullptr ?
             problem.periodic_mesh_certificate_schema : "",
         static_cast<unsigned long long>(result.magnetic_pair_count),
@@ -259,7 +279,7 @@ FrequencyDomainStatus validate_problem(
     *result = PoissonAirboxModalEigenResult{};
     result->q_dof_count = problem.q_dof_count;
     result->phi_dof_count = problem.phi_dof_count;
-    result->augmented_dof_count = problem.q_dof_count + problem.phi_dof_count + 1;
+    result->augmented_dof_count = augmented_dof_count_for(problem);
     result->magnetic_pair_count = problem.magnetic_pair_count;
     result->airbox_pair_count = problem.airbox_pair_count;
     result->expected_reference_frequency_hz = problem.expected_reference_frequency_hz;
@@ -293,14 +313,6 @@ FrequencyDomainStatus validate_problem(
             "PA-E2 Poisson-airbox modal eigensolver requires positive robin_beta only for poisson_robin",
             "poisson_airbox_eigen_invalid_robin_beta");
     }
-    if (problem.gauge_reason == nullptr || problem.gauge_reason[0] == '\0') {
-        return fail(
-            problem,
-            result,
-            FrequencyDomainStatus::validation_error,
-            "PA-E2 Poisson-airbox modal eigensolver requires gauge provenance reason",
-            "poisson_airbox_eigen_missing_gauge_reason");
-    }
     if ((robin || dirichlet) && !string_equals(problem.gauge_policy, "none")) {
         return fail(
             problem,
@@ -316,6 +328,24 @@ FrequencyDomainStatus validate_problem(
             FrequencyDomainStatus::validation_error,
             "PA-E2 Poisson-airbox pure Neumann boundary requires gauge_policy=mean_zero_augmented",
             "poisson_airbox_eigen_boundary_gauge_mismatch");
+    }
+    const char *expected_gauge_reason = pure_neumann ?
+        "pure_neumann_nullspace" : "coercive_outer_boundary";
+    if (!string_equals(problem.gauge_reason, expected_gauge_reason)) {
+        return fail(
+            problem,
+            result,
+            FrequencyDomainStatus::validation_error,
+            "PA-E2 Poisson-airbox modal eigensolver requires boundary-consistent gauge provenance",
+            "poisson_airbox_eigen_gauge_reason_mismatch");
+    }
+    if (!string_equals(problem.assembly_kind, "synthetic_algebraic_oracle")) {
+        return fail(
+            problem,
+            result,
+            FrequencyDomainStatus::validation_error,
+            "PA-E2 Poisson-airbox modal eigensolver currently accepts only synthetic_algebraic_oracle assembly",
+            "poisson_airbox_eigen_unsupported_assembly_kind");
     }
     if ((robin || dirichlet) &&
         (problem.phi_mean_weights != nullptr || problem.phi_mean_weights_count != 0)) {
@@ -940,7 +970,7 @@ FrequencyDomainStatus apply_poisson_airbox_modal_shift_invert_action_cpu_referen
     *out_result = PoissonAirboxModalShiftInvertActionResult{};
     out_result->q_dof_count = problem.q_dof_count;
     out_result->phi_dof_count = problem.phi_dof_count;
-    out_result->augmented_dof_count = problem.q_dof_count + problem.phi_dof_count + 1;
+    out_result->augmented_dof_count = augmented_dof_count_for(problem);
     out_result->sigma_real = sigma_real;
     out_result->sigma_imag = sigma_imag;
 

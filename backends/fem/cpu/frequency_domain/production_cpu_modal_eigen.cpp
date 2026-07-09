@@ -174,16 +174,6 @@ bool modal_request_has_bloch_floquet_tangent_operator_payload(
                "\"payload_kind\":\"bloch_floquet_tangent_operator\"") != nullptr;
 }
 
-bool modal_request_has_dynamic_demag_k_operator_payload(
-    const ModalEigenRequest &request) noexcept
-{
-    const char *diagnostics = request.operator_request.operator_diagnostics_json;
-    return diagnostics != nullptr &&
-           std::strstr(
-               diagnostics,
-               "\"demag_payload_kind\":\"dynamic_demag_k_operator\"") != nullptr;
-}
-
 const char *modal_request_gated_operator_term(
     const ModalEigenRequest &request) noexcept
 {
@@ -2188,8 +2178,7 @@ FrequencyDomainContractResult production_cpu_modal_eigen_unavailable(
                 request,
                 gated_operator_term);
         }
-        if (request.operator_request.include_demag != 0 &&
-            !modal_request_has_dynamic_demag_k_operator_payload(request)) {
+        if (request.operator_request.include_demag != 0) {
             return nonzero_k_floquet_modal_dynamic_demag_k_missing(request);
         }
     }

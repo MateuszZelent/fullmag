@@ -375,8 +375,9 @@ equilibrium provenance, and validation matrix are green.
 Gauge policy depends on the outer boundary condition:
 
 ```text
-outer_boundary_kind = robin | dirichlet | pure_neumann
+outer_boundary_kind = poisson_robin | poisson_dirichlet | pure_neumann
 gauge_policy = none | mean_zero_augmented
+gauge_reason = coercive_outer_boundary | pure_neumann_nullspace
 ```
 
 Robin with positive `beta` and Dirichlet have no scalar-potential nullspace and
@@ -392,6 +393,23 @@ Only pure Neumann uses the augmented mean-zero system:
 [ P  c ][phi] = [rhs]
 [ cT 0 ][eta]   [0  ]
 ```
+
+The tuple is closed and validated before SLEPc setup:
+
+```text
+poisson_robin | poisson_dirichlet
+  -> gauge_policy = none
+  -> gauge_reason = coercive_outer_boundary
+
+pure_neumann
+  -> gauge_policy = mean_zero_augmented
+  -> gauge_reason = pure_neumann_nullspace
+```
+
+Until the real shared-domain weak-form assembler lands, PA-E2 accepts only
+`assembly_kind=synthetic_algebraic_oracle`. A request claiming
+`mfem_weak_form_shared_domain` must be rejected rather than recorded as
+production provenance without the corresponding assembly.
 
 where `c` contains quadrature/lumped weights representing the mean functional.
 
@@ -2537,7 +2555,9 @@ also prove real-airbox evidence:
 ```text
 summary.v1.json demag block:
   assembly_kind = synthetic_algebraic_oracle
-  gauge_policy = none
+  outer_boundary_kind = pure_neumann
+  gauge_policy = mean_zero_augmented
+  gauge_reason = pure_neumann_nullspace
   phi_dof_count > 0
   poisson_constraint_relative_residual <= 1e-8
   magnetic_pair_count > 0

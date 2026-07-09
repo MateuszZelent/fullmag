@@ -387,6 +387,10 @@ max_pair |partial_n(dst) delta_phi_dst
   and unsupported nonzero-k demag unless a complete coupled-block provider is
   supplied for that lane.
 - Native CPU: must assemble and solve the coupled `[delta_m, delta_phi]` block.
+  A diagnostics label such as `demag_payload_kind=dynamic_demag_k_operator` is
+  provenance only; it is not evidence of a numeric operator. Until the modal
+  request carries an assembled matrix or an executable provider with validated
+  dimensions, nonzero-k modal requests with demag must return `unavailable`.
 - Native GPU: may execute only the matrix-free provider path with CUDA magnetic
   operator application, optional open/gamma or k=0 static-periodic P1 DMI
   tangent payloads, and GPU demag tangent-with-potential provenance; nonzero-k

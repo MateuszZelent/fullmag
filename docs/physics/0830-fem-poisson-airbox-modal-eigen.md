@@ -130,11 +130,20 @@ only backend-owned provenance:
 
 ```text
 assembly_kind = mfem_weak_form_shared_domain | synthetic_algebraic_oracle
-outer_boundary_kind = robin | dirichlet | pure_neumann
+outer_boundary_kind = poisson_robin | poisson_dirichlet | pure_neumann
 gauge_policy = none | mean_zero_augmented
+gauge_reason = coercive_outer_boundary | pure_neumann_nullspace
 spectral_scalar_mode = complex | real_split
 sigma_real, sigma_imag_rad_per_s
 ```
+
+The boundary, gauge, and reason form one validated tuple. `poisson_robin` and
+`poisson_dirichlet` require `gauge_policy=none` and
+`gauge_reason=coercive_outer_boundary`; `pure_neumann` requires
+`gauge_policy=mean_zero_augmented`, positive normalized mean weights, and
+`gauge_reason=pure_neumann_nullspace`. The current PA-E2 executable accepts
+only `assembly_kind=synthetic_algebraic_oracle`; the real shared-domain token
+must remain unavailable until its MFEM weak-form assembly exists.
 
 The planner rejects a modal periodic-airbox request if required accepted
 equilibrium fields, shared-airbox periodic certificate or supported BC policy
