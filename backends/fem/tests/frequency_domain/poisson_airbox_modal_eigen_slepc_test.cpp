@@ -231,6 +231,11 @@ fd::PoissonAirboxEigenBlockProblem sparse_problem_from_fixture(
     problem.B_qq = fixture.B_qq.view();
     problem.phi_mean_weights = fixture.weights;
     problem.phi_mean_weights_count = 2;
+    problem.outer_boundary_kind = "pure_neumann";
+    problem.robin_beta = 0.0;
+    problem.gauge_policy = "mean_zero_augmented";
+    problem.gauge_reason = "pure_neumann_nullspace";
+    problem.assembly_kind = "synthetic_algebraic_oracle";
     problem.target_frequency_hz = 2.0e9;
     problem.expected_reference_frequency_hz = fixture.dense_result.frequency_hz;
     problem.periodic_mesh_certificate_schema = "periodic_mesh_certificate.v5";
@@ -843,6 +848,11 @@ void ModalContractWritesShiftInvertActionArtifact()
     request.poisson_airbox_shift_action_vector_real = v_re;
     request.poisson_airbox_shift_action_vector_imag = v_im;
     request.poisson_airbox_shift_action_vector_count = 2;
+    request.poisson_airbox_outer_boundary_kind = "pure_neumann";
+    request.poisson_airbox_robin_beta = 0.0;
+    request.poisson_airbox_gauge_policy = "mean_zero_augmented";
+    request.poisson_airbox_gauge_reason = "pure_neumann_nullspace";
+    request.poisson_airbox_assembly_kind = "synthetic_algebraic_oracle";
 
     const fd::FrequencyDomainContractResult result =
         fd::solve_modal_eigen_contract(request);
@@ -1018,7 +1028,118 @@ void RejectsNegativeMeanZeroGaugeWeights()
         "PA-E2 negative gauge-weight rejection must preserve a specific reason");
     check(
         contains(result.error_message, "positive normalized"),
-        "PA-E2 negative gauge-weight rejection must report positive normalized weights");
+          "PA-E2 negative gauge-weight rejection must report positive normalized weights");
+}
+
+void RobinAndDirichletRequireNoGaugeWithoutPayload()
+{
+    TinySparseFixture fixture = make_tiny_full_coupled_fixture();
+    for (const char *outer_boundary_kind : {"poisson_robin", "poisson_dirichlet"}) {
+        fd::PoissonAirboxEigenBlockProblem problem = sparse_problem_from_fixture(fixture);
+        problem.outer_boundary_kind = outer_boundary_kind;
+        problem.robin_beta =
+            std::strcmp(outer_boundary_kind, "poisson_robin") == 0 ? 1.0 : 0.0;
+        problem.gauge_policy = "none";
+        problem.gauge_reason = "coercive_outer_boundary";
+        problem.assembly_kind = "synthetic_algebraic_oracle";
+        problem.phi_mean_weights = nullptr;
+        problem.phi_mean_weights_count = 0;
+
+        fd::PoissonAirboxModalEigenResult result{};
+        check(
+            fd::solve_poisson_airbox_modal_eigen_cpu_slepc(problem, &result) ==
+                fd::FrequencyDomainStatus::validation_error,
+            "PA-E2 no-gauge outer boundaries must not silently fall back to mean-zero augmentation");
+        const std::string outer_boundary_provenance =
+            "\"outer_boundary_kind\":\"" + std::string(outer_boundary_kind) + "\"";
+        check(
+            contains(result.diagnostics_json, outer_boundary_provenance.c_str()),
+            "PA-E2 no-gauge diagnostic provenance must record the outer boundary kind");
+        check(
+            contains(result.diagnostics_json, "\"gauge_policy\":\"none\""),
+            "PA-E2 Robin/Dirichlet diagnostic provenance must record gauge_policy=none");
+        check(
+            contains(result.diagnostics_json, "\"gauge_reason\":\"coercive_outer_boundary\""),
+            "PA-E2 no-gauge diagnostic provenance must record the gauge reason");
+        check(
+            contains(result.diagnostics_json, "\"assembly_kind\":\"synthetic_algebraic_oracle\""),
+            "PA-E2 no-gauge diagnostic provenance must record the assembly kind");
+        check(
+            contains(result.diagnostics_json, "\"production_implication\":false"),
+            "PA-E2 synthetic no-gauge provenance must state that it has no production implication");
+        check(
+            contains(result.diagnostics_json, "poisson_airbox_eigen_gauge_policy_not_implemented"),
+            "PA-E2 no-gauge boundaries must fail explicitly before SLEPc setup");
+    }
+}
+
+void PureNeumannRequiresMeanZeroGaugeWithWeights()
+{
+    TinySparseFixture fixture = make_tiny_full_coupled_fixture();
+    fd::PoissonAirboxEigenBlockProblem problem = sparse_problem_from_fixture(fixture);
+    problem.outer_boundary_kind = "pure_neumann";
+    problem.robin_beta = 0.0;
+    problem.gauge_policy = "mean_zero_augmented";
+    problem.gauge_reason = "pure_neumann_nullspace";
+    problem.assembly_kind = "synthetic_algebraic_oracle";
+
+    fd::PoissonAirboxModalEigenResult result{};
+    check(
+        fd::solve_poisson_airbox_modal_eigen_cpu_slepc(problem, &result) ==
+            fd::FrequencyDomainStatus::ok,
+        result.error_message);
+    check(
+        contains(result.diagnostics_json, "\"outer_boundary_kind\":\"pure_neumann\""),
+        "PA-E2 pure-Neumann diagnostic provenance must record the outer boundary kind");
+    check(
+        contains(result.diagnostics_json, "\"gauge_policy\":\"mean_zero_augmented\""),
+        "PA-E2 pure-Neumann diagnostic provenance must record the mean-zero gauge");
+    check(
+        contains(result.diagnostics_json, "\"gauge_reason\":\"pure_neumann_nullspace\""),
+        "PA-E2 pure-Neumann diagnostic provenance must record the gauge reason");
+    check(
+        contains(result.diagnostics_json, "\"assembly_kind\":\"synthetic_algebraic_oracle\""),
+        "PA-E2 pure-Neumann diagnostic provenance must record the assembly kind");
+    check(
+        contains(result.diagnostics_json, "\"production_implication\":false"),
+        "PA-E2 synthetic pure-Neumann provenance must state that it has no production implication");
+}
+
+void RejectsUnsupportedBoundaryGaugePairsBeforeSlepcSetup()
+{
+    TinySparseFixture fixture = make_tiny_full_coupled_fixture();
+    const struct {
+        const char *outer_boundary_kind;
+        const char *gauge_policy;
+        const char *gauge_reason;
+    } invalid_cases[] = {
+        {"poisson_robin", "mean_zero_augmented", "pure_neumann_nullspace"},
+        {"poisson_dirichlet", "mean_zero_augmented", "pure_neumann_nullspace"},
+        {"pure_neumann", "none", "coercive_outer_boundary"},
+    };
+
+    for (const auto &invalid_case : invalid_cases) {
+        fd::PoissonAirboxEigenBlockProblem problem = sparse_problem_from_fixture(fixture);
+        problem.outer_boundary_kind = invalid_case.outer_boundary_kind;
+        problem.robin_beta =
+            std::strcmp(invalid_case.outer_boundary_kind, "poisson_robin") == 0 ? 1.0 : 0.0;
+        problem.gauge_policy = invalid_case.gauge_policy;
+        problem.gauge_reason = invalid_case.gauge_reason;
+        problem.assembly_kind = "synthetic_algebraic_oracle";
+        if (std::strcmp(invalid_case.gauge_policy, "none") == 0) {
+            problem.phi_mean_weights = nullptr;
+            problem.phi_mean_weights_count = 0;
+        }
+
+        fd::PoissonAirboxModalEigenResult result{};
+        check(
+            fd::solve_poisson_airbox_modal_eigen_cpu_slepc(problem, &result) ==
+                fd::FrequencyDomainStatus::validation_error,
+            "PA-E2 must reject unsupported Poisson-airbox boundary/gauge combinations");
+        check(
+            contains(result.diagnostics_json, "poisson_airbox_eigen_boundary_gauge_mismatch"),
+            "PA-E2 boundary/gauge mismatch must preserve a pre-SLEPc rejection reason");
+    }
 }
 
 } // namespace
@@ -1038,5 +1159,8 @@ int main()
     RejectsDecoupledDemagBlocks();
     RejectsZeroMeanZeroGaugeWeights();
     RejectsNegativeMeanZeroGaugeWeights();
+    RobinAndDirichletRequireNoGaugeWithoutPayload();
+    PureNeumannRequiresMeanZeroGaugeWithWeights();
+    RejectsUnsupportedBoundaryGaugePairsBeforeSlepcSetup();
     return 0;
 }

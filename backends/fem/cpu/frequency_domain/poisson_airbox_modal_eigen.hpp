@@ -6,7 +6,7 @@
 
 namespace fullmag::fem::frequency_domain {
 
-constexpr std::uint32_t kPoissonAirboxEigenBlockProblemAbiVersion = 1;
+constexpr std::uint32_t kPoissonAirboxEigenBlockProblemAbiVersion = 2;
 
 struct PoissonAirboxEigenBlockProblem {
     std::uint32_t abi_version = kPoissonAirboxEigenBlockProblemAbiVersion;
@@ -31,7 +31,11 @@ struct PoissonAirboxEigenBlockProblem {
     std::uint32_t max_outer_iterations = 64;
     std::uint32_t max_linear_iterations = 128;
 
-    const char *gauge_policy = "mean_zero_augmented";
+    const char *outer_boundary_kind = nullptr;
+    double robin_beta = 0.0;
+    const char *gauge_policy = nullptr;
+    const char *gauge_reason = nullptr;
+    const char *assembly_kind = nullptr;
     const char *demag_kind = "periodic_airbox_k0";
     const char *phasor_convention = "exp_plus_i_omega_t";
     const char *eigenvalue_convention = "lambda_imag_positive_frequency";

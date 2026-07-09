@@ -1000,6 +1000,11 @@ struct OwnedModalEigenPoissonAirboxBlockProblem {
     expected_reference_frequency_hz: f64,
     magnetic_pair_count: u64,
     airbox_pair_count: u64,
+    outer_boundary_kind: &'static str,
+    robin_beta: f64,
+    gauge_policy: &'static str,
+    gauge_reason: &'static str,
+    assembly_kind: &'static str,
 }
 
 impl OwnedModalEigenPoissonAirboxBlockProblem {
@@ -1018,6 +1023,11 @@ impl OwnedModalEigenPoissonAirboxBlockProblem {
             periodic_mesh_certificate_schema: "periodic_mesh_certificate.v5",
             magnetic_pair_count: self.magnetic_pair_count,
             airbox_pair_count: self.airbox_pair_count,
+            outer_boundary_kind: self.outer_boundary_kind,
+            robin_beta: self.robin_beta,
+            gauge_policy: self.gauge_policy,
+            gauge_reason: self.gauge_reason,
+            assembly_kind: self.assembly_kind,
             shift_invert_action: None,
         }
     }
@@ -1154,6 +1164,11 @@ fn build_pa_e4b_k0_kittel_poisson_airbox_payload(
         expected_reference_frequency_hz,
         magnetic_pair_count,
         airbox_pair_count,
+        outer_boundary_kind: "pure_neumann",
+        robin_beta: 0.0,
+        gauge_policy: "mean_zero_augmented",
+        gauge_reason: "pure_neumann_nullspace",
+        assembly_kind: "synthetic_algebraic_oracle",
     }))
 }
 

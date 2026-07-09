@@ -1255,6 +1255,12 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
             request.poisson_airbox_magnetic_pair_count;
         problem.airbox_pair_count =
             request.poisson_airbox_airbox_pair_count;
+        problem.outer_boundary_kind =
+            request.poisson_airbox_outer_boundary_kind;
+        problem.robin_beta = request.poisson_airbox_robin_beta;
+        problem.gauge_policy = request.poisson_airbox_gauge_policy;
+        problem.gauge_reason = request.poisson_airbox_gauge_reason;
+        problem.assembly_kind = request.poisson_airbox_assembly_kind;
         problem.residual_tolerance = request.residual_tolerance;
         problem.requested_mode_count =
             static_cast<std::uint32_t>(request.requested_mode_count);

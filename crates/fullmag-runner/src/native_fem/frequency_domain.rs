@@ -319,6 +319,11 @@ pub(crate) struct NativeModalEigenPoissonAirboxBlockProblem<'a> {
     pub periodic_mesh_certificate_schema: &'a str,
     pub magnetic_pair_count: u64,
     pub airbox_pair_count: u64,
+    pub outer_boundary_kind: &'a str,
+    pub robin_beta: f64,
+    pub gauge_policy: &'a str,
+    pub gauge_reason: &'a str,
+    pub assembly_kind: &'a str,
     pub shift_invert_action: Option<NativeModalEigenPoissonAirboxShiftInvertAction<'a>>,
 }
 
@@ -1021,6 +1026,30 @@ fn solve_native_modal_eigen_impl(
         .map_err(|_| {
             "native FEM modal_eigen Poisson-airbox certificate schema contains NUL".to_string()
         })?;
+    let poisson_airbox_outer_boundary_kind = poisson_airbox_block
+        .map(|problem| CString::new(problem.outer_boundary_kind.as_bytes()))
+        .transpose()
+        .map_err(|_| {
+            "native FEM modal_eigen Poisson-airbox outer boundary kind contains NUL".to_string()
+        })?;
+    let poisson_airbox_gauge_policy = poisson_airbox_block
+        .map(|problem| CString::new(problem.gauge_policy.as_bytes()))
+        .transpose()
+        .map_err(|_| {
+            "native FEM modal_eigen Poisson-airbox gauge policy contains NUL".to_string()
+        })?;
+    let poisson_airbox_gauge_reason = poisson_airbox_block
+        .map(|problem| CString::new(problem.gauge_reason.as_bytes()))
+        .transpose()
+        .map_err(|_| {
+            "native FEM modal_eigen Poisson-airbox gauge reason contains NUL".to_string()
+        })?;
+    let poisson_airbox_assembly_kind = poisson_airbox_block
+        .map(|problem| CString::new(problem.assembly_kind.as_bytes()))
+        .transpose()
+        .map_err(|_| {
+            "native FEM modal_eigen Poisson-airbox assembly kind contains NUL".to_string()
+        })?;
     let floquet_k_vector_rad_per_m = request.k_vector_rad_m.and_then(|values| {
         if values.len() == 3 {
             Some([values[0], values[1], values[2]])
@@ -1233,6 +1262,25 @@ fn solve_native_modal_eigen_impl(
         poisson_airbox_shift_action_vector_count: poisson_airbox_shift_invert_action
             .map(|action| action.vector_real.len() as u64)
             .unwrap_or(0),
+        poisson_airbox_outer_boundary_kind: poisson_airbox_outer_boundary_kind
+            .as_ref()
+            .map(|value| value.as_ptr())
+            .unwrap_or(std::ptr::null()),
+        poisson_airbox_robin_beta: poisson_airbox_block
+            .map(|problem| problem.robin_beta)
+            .unwrap_or(0.0),
+        poisson_airbox_gauge_policy: poisson_airbox_gauge_policy
+            .as_ref()
+            .map(|value| value.as_ptr())
+            .unwrap_or(std::ptr::null()),
+        poisson_airbox_gauge_reason: poisson_airbox_gauge_reason
+            .as_ref()
+            .map(|value| value.as_ptr())
+            .unwrap_or(std::ptr::null()),
+        poisson_airbox_assembly_kind: poisson_airbox_assembly_kind
+            .as_ref()
+            .map(|value| value.as_ptr())
+            .unwrap_or(std::ptr::null()),
     };
 
     let mut ffi_result = NativeFrequencyDomainContractFfiResult {

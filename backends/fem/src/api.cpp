@@ -2314,6 +2314,16 @@ FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve(
         request->poisson_airbox_shift_action_vector_imag;
     native_request.poisson_airbox_shift_action_vector_count =
         request->poisson_airbox_shift_action_vector_count;
+    native_request.poisson_airbox_outer_boundary_kind =
+        request->poisson_airbox_outer_boundary_kind;
+    native_request.poisson_airbox_robin_beta =
+        request->poisson_airbox_robin_beta;
+    native_request.poisson_airbox_gauge_policy =
+        request->poisson_airbox_gauge_policy;
+    native_request.poisson_airbox_gauge_reason =
+        request->poisson_airbox_gauge_reason;
+    native_request.poisson_airbox_assembly_kind =
+        request->poisson_airbox_assembly_kind;
 
     return copy_frequency_domain_contract_result(
         fd::solve_modal_eigen_contract(native_request));

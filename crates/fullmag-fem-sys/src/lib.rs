@@ -731,7 +731,7 @@ pub struct fullmag_fem_frequency_domain_solve_result {
     pub artifact_manifest_path: *mut c_char,
 }
 
-pub const FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION: u32 = 11;
+pub const FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION: u32 = 12;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -842,6 +842,11 @@ pub struct FullmagFemModalEigenRequest {
     pub poisson_airbox_shift_action_vector_real: *const f64,
     pub poisson_airbox_shift_action_vector_imag: *const f64,
     pub poisson_airbox_shift_action_vector_count: u64,
+    pub poisson_airbox_outer_boundary_kind: *const c_char,
+    pub poisson_airbox_robin_beta: f64,
+    pub poisson_airbox_gauge_policy: *const c_char,
+    pub poisson_airbox_gauge_reason: *const c_char,
+    pub poisson_airbox_assembly_kind: *const c_char,
 }
 
 #[repr(C)]
@@ -1843,6 +1848,11 @@ mod tests {
         assert!(request.poisson_airbox_shift_action_vector_real.is_null());
         assert!(request.poisson_airbox_shift_action_vector_imag.is_null());
         assert_eq!(request.poisson_airbox_shift_action_vector_count, 0);
+        assert!(request.poisson_airbox_outer_boundary_kind.is_null());
+        assert_eq!(request.poisson_airbox_robin_beta, 0.0);
+        assert!(request.poisson_airbox_gauge_policy.is_null());
+        assert!(request.poisson_airbox_gauge_reason.is_null());
+        assert!(request.poisson_airbox_assembly_kind.is_null());
 
         let floquet_pair_count = std::mem::offset_of!(Request, mfem_floquet_periodic_pair_count);
         let poisson_enabled = std::mem::offset_of!(Request, poisson_airbox_block_enabled);
@@ -1858,6 +1868,12 @@ mod tests {
             std::mem::offset_of!(Request, poisson_airbox_shift_invert_action_device);
         let poisson_shift_vector_count =
             std::mem::offset_of!(Request, poisson_airbox_shift_action_vector_count);
+        let poisson_outer_boundary_kind =
+            std::mem::offset_of!(Request, poisson_airbox_outer_boundary_kind);
+        let poisson_robin_beta = std::mem::offset_of!(Request, poisson_airbox_robin_beta);
+        let poisson_gauge_policy = std::mem::offset_of!(Request, poisson_airbox_gauge_policy);
+        let poisson_gauge_reason = std::mem::offset_of!(Request, poisson_airbox_gauge_reason);
+        let poisson_assembly_kind = std::mem::offset_of!(Request, poisson_airbox_assembly_kind);
 
         assert!(floquet_pair_count < poisson_enabled);
         assert!(poisson_enabled < poisson_a_qq);
@@ -1867,6 +1883,11 @@ mod tests {
         assert!(poisson_pair_count < poisson_shift_action);
         assert!(poisson_shift_action < poisson_shift_device);
         assert!(poisson_shift_device < poisson_shift_vector_count);
+        assert!(poisson_shift_vector_count < poisson_outer_boundary_kind);
+        assert!(poisson_outer_boundary_kind < poisson_robin_beta);
+        assert!(poisson_robin_beta < poisson_gauge_policy);
+        assert!(poisson_gauge_policy < poisson_gauge_reason);
+        assert!(poisson_gauge_reason < poisson_assembly_kind);
     }
 
     #[test]

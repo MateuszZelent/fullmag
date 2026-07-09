@@ -136,7 +136,12 @@ void write_diagnostics_json(
         "\"test_id\":\"%s\","
         "\"solver_adapter\":\"%s\","
         "\"demag_kind\":\"%s\","
+        "\"outer_boundary_kind\":\"%s\","
+        "\"robin_beta\":%.17g,"
         "\"gauge_policy\":\"%s\","
+        "\"gauge_reason\":\"%s\","
+        "\"assembly_kind\":\"%s\","
+        "\"production_implication\":false,"
         "\"phasor_convention\":\"%s\","
         "\"eigenvalue_convention\":\"%s\","
         "\"algebraic_form\":\"full_coupled_descriptor_augmented_gauge\","
@@ -187,7 +192,11 @@ void write_diagnostics_json(
         problem.test_id != nullptr ? problem.test_id : "",
         problem.solver_adapter != nullptr ? problem.solver_adapter : "",
         problem.demag_kind != nullptr ? problem.demag_kind : "",
+        problem.outer_boundary_kind != nullptr ? problem.outer_boundary_kind : "",
+        problem.robin_beta,
         problem.gauge_policy != nullptr ? problem.gauge_policy : "",
+        problem.gauge_reason != nullptr ? problem.gauge_reason : "",
+        problem.assembly_kind != nullptr ? problem.assembly_kind : "",
         problem.phasor_convention != nullptr ? problem.phasor_convention : "",
         problem.eigenvalue_convention != nullptr ? problem.eigenvalue_convention : "",
         problem.periodic_mesh_certificate_schema != nullptr ?
@@ -261,8 +270,69 @@ FrequencyDomainStatus validate_problem(
             problem,
             result,
             FrequencyDomainStatus::validation_error,
-            "PA-E2 Poisson-airbox modal eigensolver requires ABI version 1",
+            "PA-E2 Poisson-airbox modal eigensolver requires ABI version 2",
             "poisson_airbox_eigen_unsupported_abi");
+    }
+    const bool robin = string_equals(problem.outer_boundary_kind, "poisson_robin");
+    const bool dirichlet = string_equals(problem.outer_boundary_kind, "poisson_dirichlet");
+    const bool pure_neumann = string_equals(problem.outer_boundary_kind, "pure_neumann");
+    if (!robin && !dirichlet && !pure_neumann) {
+        return fail(
+            problem,
+            result,
+            FrequencyDomainStatus::validation_error,
+            "PA-E2 Poisson-airbox modal eigensolver requires a supported outer boundary kind",
+            "poisson_airbox_eigen_unsupported_outer_boundary");
+    }
+    if (!std::isfinite(problem.robin_beta) ||
+        (robin ? !(problem.robin_beta > 0.0) : problem.robin_beta != 0.0)) {
+        return fail(
+            problem,
+            result,
+            FrequencyDomainStatus::validation_error,
+            "PA-E2 Poisson-airbox modal eigensolver requires positive robin_beta only for poisson_robin",
+            "poisson_airbox_eigen_invalid_robin_beta");
+    }
+    if (problem.gauge_reason == nullptr || problem.gauge_reason[0] == '\0') {
+        return fail(
+            problem,
+            result,
+            FrequencyDomainStatus::validation_error,
+            "PA-E2 Poisson-airbox modal eigensolver requires gauge provenance reason",
+            "poisson_airbox_eigen_missing_gauge_reason");
+    }
+    if ((robin || dirichlet) && !string_equals(problem.gauge_policy, "none")) {
+        return fail(
+            problem,
+            result,
+            FrequencyDomainStatus::validation_error,
+            "PA-E2 Poisson-airbox Robin/Dirichlet boundaries require gauge_policy=none",
+            "poisson_airbox_eigen_boundary_gauge_mismatch");
+    }
+    if (pure_neumann && !string_equals(problem.gauge_policy, "mean_zero_augmented")) {
+        return fail(
+            problem,
+            result,
+            FrequencyDomainStatus::validation_error,
+            "PA-E2 Poisson-airbox pure Neumann boundary requires gauge_policy=mean_zero_augmented",
+            "poisson_airbox_eigen_boundary_gauge_mismatch");
+    }
+    if ((robin || dirichlet) &&
+        (problem.phi_mean_weights != nullptr || problem.phi_mean_weights_count != 0)) {
+        return fail(
+            problem,
+            result,
+            FrequencyDomainStatus::validation_error,
+            "PA-E2 Poisson-airbox no-gauge boundary must not carry phi mean weights",
+            "poisson_airbox_eigen_unexpected_phi_mean_weights");
+    }
+    if (robin || dirichlet) {
+        return fail(
+            problem,
+            result,
+            FrequencyDomainStatus::validation_error,
+            "PA-E2 Poisson-airbox gauge_policy=none is not implemented by the augmented SLEPc descriptor",
+            "poisson_airbox_eigen_gauge_policy_not_implemented");
     }
     if (problem.q_dof_count == 0 ||
         problem.phi_dof_count == 0 ||
@@ -317,14 +387,6 @@ FrequencyDomainStatus validate_problem(
             result,
             FrequencyDomainStatus::validation_error,
             "PA-E2 Poisson-airbox modal eigensolver gauge weights must be positive normalized mean-zero weights",
-            "poisson_airbox_eigen_requires_mean_zero_gauge");
-    }
-    if (!string_equals(problem.gauge_policy, "mean_zero_augmented")) {
-        return fail(
-            problem,
-            result,
-            FrequencyDomainStatus::validation_error,
-            "PA-E2 Poisson-airbox modal eigensolver requires gauge_policy=mean_zero_augmented",
             "poisson_airbox_eigen_requires_mean_zero_gauge");
     }
     if (!string_equals(problem.demag_kind, "periodic_airbox_k0")) {

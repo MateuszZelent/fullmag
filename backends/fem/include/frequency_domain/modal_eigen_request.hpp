@@ -6,7 +6,7 @@
 
 namespace fullmag::fem::frequency_domain {
 
-constexpr std::uint32_t kFrequencyDomainAbiVersion = 11;
+constexpr std::uint32_t kFrequencyDomainAbiVersion = 12;
 
 struct LinearizedOperatorRequest {
     std::uint32_t abi_version = kFrequencyDomainAbiVersion;
@@ -101,6 +101,11 @@ struct ModalEigenRequest {
     const double *poisson_airbox_shift_action_vector_real = nullptr;
     const double *poisson_airbox_shift_action_vector_imag = nullptr;
     std::uint64_t poisson_airbox_shift_action_vector_count = 0;
+    const char *poisson_airbox_outer_boundary_kind = nullptr;
+    double poisson_airbox_robin_beta = 0.0;
+    const char *poisson_airbox_gauge_policy = nullptr;
+    const char *poisson_airbox_gauge_reason = nullptr;
+    const char *poisson_airbox_assembly_kind = nullptr;
 };
 
 struct DrivenResponseContractRequest {

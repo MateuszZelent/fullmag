@@ -651,7 +651,7 @@ typedef struct {
     char *artifact_manifest_path;
 } fullmag_fem_frequency_domain_solve_result;
 
-#define FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION 11u
+#define FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION 12u
 
 typedef enum {
     FULLMAG_FEM_FD_OK = 0,
@@ -753,6 +753,11 @@ typedef struct {
     const double *poisson_airbox_shift_action_vector_real;
     const double *poisson_airbox_shift_action_vector_imag;
     uint64_t poisson_airbox_shift_action_vector_count;
+    const char *poisson_airbox_outer_boundary_kind;
+    double poisson_airbox_robin_beta;
+    const char *poisson_airbox_gauge_policy;
+    const char *poisson_airbox_gauge_reason;
+    const char *poisson_airbox_assembly_kind;
 } FullmagFemModalEigenRequest;
 
 typedef struct {
