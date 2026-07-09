@@ -9,7 +9,7 @@ Frequency-domain FEM studies use a complex perturbation around a static
 equilibrium:
 
 ```text
-m(r,t) = m0(r) + Re[delta_m(r) exp(i omega t)]
+m(r,t) = m0(r) + Re[delta_m(r) exp(+i omega t)]
 ```
 
 For a periodic film or antidot lattice, a single unit cell is only physical when

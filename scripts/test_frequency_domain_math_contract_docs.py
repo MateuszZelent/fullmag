@@ -43,6 +43,7 @@ def test_floquet_tangent_frame_transport_and_identity_rejection_are_documented()
     pbc_plan = read(PLAN_ROOT / "04_mesh_periodic_floquet_airbox.md")
     floquet = read(REPO_ROOT / "docs/physics/0828-fem-frequency-domain-floquet-demag.md")
 
+    assert "exp(+i omega t)" in floquet
     assert "q_dst = exp(-i kF · delta_r) T_dst^T R T_src q_src" in pbc_plan
     assert "q_dst = phase * G_pair q_src" in pbc_plan
     assert "duplicate periodic node pairs are rejected" in pbc_plan
