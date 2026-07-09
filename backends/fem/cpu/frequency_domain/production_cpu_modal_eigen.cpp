@@ -2172,14 +2172,14 @@ FrequencyDomainContractResult production_cpu_modal_eigen_unavailable(
         if (!modal_request_has_bloch_floquet_tangent_operator_payload(request)) {
             return nonzero_k_floquet_modal_operator_missing(request);
         }
+        if (request.operator_request.include_demag != 0) {
+            return nonzero_k_floquet_modal_dynamic_demag_k_missing(request);
+        }
         if (const char *gated_operator_term =
                 modal_request_gated_operator_term(request)) {
             return nonzero_k_floquet_modal_gated_operator_terms_present(
                 request,
                 gated_operator_term);
-        }
-        if (request.operator_request.include_demag != 0) {
-            return nonzero_k_floquet_modal_dynamic_demag_k_missing(request);
         }
     }
     const ModalSolverSelection selection = select_modal_solver_for_frequency_window(

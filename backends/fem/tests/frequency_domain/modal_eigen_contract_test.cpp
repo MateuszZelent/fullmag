@@ -1118,7 +1118,8 @@ void modal_nonzero_k_floquet_bloch_payload_with_demag_requires_dynamic_demag_k()
     request.operator_request.operator_diagnostics_json =
         "{\"operator_family\":\"mfem_linearized_llg\","
         "\"payload_kind\":\"bloch_floquet_tangent_operator\","
-        "\"demag_payload_kind\":\"dynamic_demag_k_operator\"}";
+        "\"demag_payload_kind\":\"dynamic_demag_k_operator\","
+        "\"operator_terms_included\":[\"exchange\",\"dynamic_demag\"]}";
     request.operator_request.spin_wave_bc_kind = "floquet";
     request.has_floquet_k_vector = 1;
     request.floquet_k_vector_rad_per_m[0] = 1.0e6;
