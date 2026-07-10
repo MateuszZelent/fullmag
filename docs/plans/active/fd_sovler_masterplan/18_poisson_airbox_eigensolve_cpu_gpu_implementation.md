@@ -1,17 +1,26 @@
 ---
 title: K0 Poisson-airbox modal and driven implementation contract
 version: COMSOL-aligned v5.1 decision-complete
-status: normative target with explicit current implementation boundaries
-role: normative
+status: scoped K0 target contract with explicit current implementation boundaries
+role: scoped_normative_implementation_contract_subordinate_to_plan_20_and_physics_notes
 ---
 
 # K0 Poisson-airbox modal and driven implementation contract
 
 ## 1. Scope and current-vs-target boundary
 
-This chapter defines the implementation contract for FEM `k=0` dynamic demag
-on a shared magnetic-plus-airbox domain for both `modal_eigen` and
-`driven_response`. It consumes, without redefining:
+This chapter is the scoped normative implementation contract for FEM `k=0`
+dynamic demag on a shared magnetic-plus-airbox domain for both `modal_eigen`
+and `driven_response`. The authority order is:
+
+1. physics semantics in `docs/physics/0700-frequency-domain-linearized-llg.md`,
+   `docs/physics/0830-fem-poisson-airbox-modal-eigen.md` and
+   `docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md`;
+2. the active overarching dynamic-solver audit and remediation contract in
+   `20_dynamic_solver_audit_revalidation_and_remediation.md`; and
+3. this chapter for the subordinate K0 Poisson-airbox implementation details.
+
+Within that hierarchy, this chapter consumes, without redefining:
 
 - the phasor, sign, unit, damping and operator dictionary in
   `docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md`;
@@ -23,8 +32,10 @@ on a shared magnetic-plus-airbox domain for both `modal_eigen` and
 - the planner and engine vocabulary in chapters 06 and 08; and
 - backend ownership in `docs/architecture/backend-golden-masterplan.md`.
 
-This is a target implementation contract. It does not promote a capability.
-Implementation, execution and validation remain independent axes.
+This chapter does not supersede plan 20, does not alter the authority of the
+physics notes and is not authority to promote a capability. It is a scoped
+target implementation contract only. Implementation, execution and validation
+remain independent axes.
 
 ### 1.1 Supported target scope
 
@@ -60,11 +71,15 @@ fallback for strict GPU are outside this contract and reject explicitly.
 | Current driven periodic-airbox provider/Schur paths execute for bounded CPU/GPU slices. | They are not the target full coupled `MatNest/PCFIELDSPLIT` solve and do not qualify modal solving. | Cross-check full coupled and Schur driven results on the same P1 blocks and physical RHS. |
 | The CUDA frequency-domain source owns a persistent magnetic operator context and bounded dense/apply probes. | Operator residency or a one-shot dense solve is not device Krylov residency. `production_loop_available=false` remains current device-Krylov truth. | Only `gpu_device_krylov` and `gpu_modal_device_krylov` are scalable GPU solver claims. |
 | No dedicated frequency-domain shared-domain modal assembler exists. | Real K0 Poisson-airbox modal production is not implemented or qualified. | Stages K0-P1 through K0-P7 and K0-G1 through K0-G4 must pass before scoped promotion. |
+| `crates/fullmag-runner/src/fem_eigen.rs::build_pa_e4b_k0_kittel_poisson_airbox_payload` computes `expected_reference_frequency_hz` from the analytical Kittel expression and assigns it to both `target_frequency_hz` and `expected_reference_frequency_hz`. | The analytical answer currently contaminates the synthetic PA-E4b solve request; it is not postsolve-only validation. | K0-P3 removes analytical reference data from descriptor assembly/request construction; only a user-requested target or window may reach the eigensolver. |
+| `backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.cpp` converts that `target_frequency_hz` into the SLEPc target, selects the nearest accepted mode by distance to it, and uses `expected_reference_frequency_hz` for `reference_frequency_certified` pass/fail. | Kittel data currently influences targeting, nearest-mode selection and solver success. | K0-P4 removes analytical-reference selection and pass/fail from the solver. Analytical Kittel comparison is postsolve validation owned by K0-P6 and its independent verifier only. |
 
 Analytical frequencies and demag factors are verifier inputs only. They must
-not enter block assembly, spectral targeting, preconditioning, convergence or
-mode selection. The current `expected_reference_frequency_hz` payload field is
-not solver evidence and must not affect a solved result.
+not enter block assembly, spectral targeting, preconditioning, convergence,
+mode selection or solver pass/fail. The current
+`expected_reference_frequency_hz` payload field is active contamination, not
+solver evidence; K0-P3/P4 remove it from solve construction and acceptance,
+while K0-P6 performs the analytical Kittel comparison after the solve.
 
 ## 2. Mathematical model and FE spaces
 
@@ -196,20 +211,32 @@ to the original physical blocks.
 
 `C_phi_q` and the field recovery used by `A_qphi` share element traversal,
 quadrature points, Jacobians, `Ms`, tangent frames and periodic maps. For every
-test pair `(q,phi)`, the pre-LLG field map must satisfy:
+test pair `(p,phi)`, use the sesquilinear inner product that is conjugate-linear
+in its first argument. The pre-LLG field map must satisfy:
 
 ```text
-<Ms Tq, H_phi(phi)>_Omega_m = -phi^H C_phi_q q
+<Ms T p, H_phi(phi)>_Omega_m = -p^H C_phi_q^H phi
 H_phi(phi) = -grad(phi).
 ```
 
 Equivalently, the mixed magnetostatic energy Hessian uses `mu0 C_phi_q^H`
 before the `-gamma0 m0 x` dynamic projection. The production gate checks this
-identity by element and globally, checks the assembled adjoint action, and
-checks that the demag energy and field sign agree on sphere/ellipsoid oracles.
-`A_qphi` is therefore not asserted to be a raw transpose of `A_phiq`; the
-transpose relation is checked at the energy/field layer before gyrotropic
-projection and with the declared units.
+identity by element and globally. For each element `e` and for the assembled
+global operator it forms
+
+```text
+r_rec,e(p,phi) = <Ms T p,H_phi(phi)>_e + p^H C_phi_q,e^H phi
+eps_rec,e = |r_rec,e| /
+  (|<Ms T p,H_phi(phi)>_e| + |p^H C_phi_q,e^H phi| + eps)
+```
+
+and requires both the maximum element residual and the global residual to meet
+their declared tolerances for deterministic basis vectors and seeded complex
+random pairs. A sign-flip negative control must fail. The gate also checks the
+assembled conjugate-adjoint action and verifies the demag energy and field sign
+on sphere/ellipsoid oracles. `A_qphi` is not asserted to equal `A_phiq^H`
+because the LLG cross-product projection and units are applied after this
+energy/field adjoint identity.
 
 ### 3.4 Common block scaling
 
@@ -347,7 +374,8 @@ algebraic/infinite modes. An accepted modal result must:
    the declared zero-frequency policy;
 5. reconstruct `phi` and `eta` and pass the original full residual; and
 6. satisfy window-completeness and conjugate/positive-branch accounting for the
-   requested count.
+   requested count, where `mode_count` counts physical complex modes rather
+   than duplicated real-split vectors.
 
 Sorting or filtering after a wrongly targeted solve does not certify an
 interior window.
@@ -396,41 +424,85 @@ iterative shifted solve.
 
 ### 6.2 Real PETSc target representation
 
-For complex `A=A_R+i A_I` and `B=B_R+i B_I`, direct realification is:
+For any complex matrix `M=M_R+i M_I`, define only the algebraic realification
+map
 
 ```text
-R(A) = [ A_R  -A_I ]       R(B) = [ B_R  -B_I ]
-       [ A_I   A_R ]              [ B_I   B_R ]
+R(M) = [ M_R  -M_I ]
+       [ M_I   M_R ]
 
-R(A) [x_R;x_I] = lambda R(B) [x_R;x_I].
+J = [ 0  -I ]
+    [ I   0 ]
 ```
 
-A real PETSc scalar cannot represent `sigma=i*omega_target` on this unrotated
-lambda pencil. The production real-scalar representation is the separately
-named rotated real-frequency pencil obtained from `lambda=i omega`:
+Realification maps a fixed complex operator action to real block form; it does
+not turn a generalized eigenproblem with complex `lambda` into a real
+generalized eigensystem. The initial real-PETSc lane is narrower: `alpha=0`,
+admitted conservative K0 operators, and real `omega`. With the Task 2
+dictionary `A=L`, `B=B_alpha`, `lambda=i omega`, and `y=[x_R;x_I]`, its directly
+specified real-frequency pencil is
 
 ```text
-(-i A) x = omega B x
+A x = i omega B x
+R(A) y = omega R(i B) y
 
-R(-i A) = [ A_I   A_R ]
-          [-A_R   A_I ]
-
-R(-i A) [x_R;x_I] = omega R(B) [x_R;x_I].
+R(i B) = J R(B) = R(B) J.
 ```
 
-The complex lambda target and real rotated target are linked exactly:
+For the energy-Hessian notation `A=K` and `B_alpha=-G`, the exact same pencil
+is
+
+```text
+R(K) y = omega R(-i G) y.
+```
+
+Thus a notation that calls the energy gyrotropic operator `G` by the local name
+`B` writes `R(A)y=omega R(-i B)y`; this document keeps `B` reserved for the
+Task 2 dictionary operator `B_alpha=-G` and therefore uses `R(i B)`. The complex
+lambda target and real-frequency target are linked exactly:
 
 ```text
 sigma=i*omega_target
-tau=-i*sigma=omega_target.
+tau=omega_target.
 ```
 
 `EPSSetTarget(tau)` with `EPS_TARGET_MAGNITUDE` is legal only on this named
 `real_frequency_rotated` pencil. Its shift-invert solve uses
-`R(-i A)-tau R(B)`, which is the real representation of the same complex
-shift, not a real-axis approximation to `sigma`. Artifacts record
+`R(A)-tau R(i B)=R(A-i tau B)`, which is the real representation of the same
+complex shift, not a real-axis approximation to `sigma`. Artifacts record
 `spectral_scalar_mode=real_split`, `spectral_pencil_kind=real_frequency_rotated`,
 `sigma_real_per_s=0`, `sigma_imag_rad_per_s=omega_target` and `tau=omega_target`.
+
+Multiplication of `x` by `i` maps `y` to `Jy`. Because the real-frequency
+pencil commutes with this complex structure, `y` and `Jy` are not two physical
+modes. One physical mode is the J-equivalence class
+
+```text
+[y]_J = span_R{y,Jy},
+q = q_R + i q_I.
+```
+
+After the existing positive mass normalization, a simple class receives a
+deterministic representative by choosing the smallest canonical magnetic DOF
+index `j` attaining `max_k |q_k|`, multiplying the reconstructed full complex
+state by `exp(-i arg(q_j))`, and requiring `q_j` to be real and positive within
+tolerance. This rule canonicalizes `y` and `Jy` identically. A candidate with
+zero magnetic norm is not a physical class.
+
+`requested_mode_count` counts these physical J-equivalence classes. A simple
+physical frequency has real eigenspace `span_R{y,Jy}` and therefore real
+multiplicity two. A frequency cluster with physical multiplicity `d` must have
+an even, J-closed real invariant subspace of dimension `2d`; degenerate-cluster
+tests compare frequency multiplicity and subspace projectors, not arbitrary
+solver basis vectors. Acceptance requires J-partner residual parity, canonical
+reconstruction parity, the declared frequency tolerance, and at least the
+requested number of complete physical classes in a certified window.
+
+This rotated real-frequency pencil does not cover Gilbert damping or another
+non-Hermitian case with complex `omega`. Such a spectrum requires a separately
+specified real generalized formulation with its own eigenvalue mapping and
+tests, or a complex PETSc/SLEPc lane. The undamped pencil must not be reused as
+if it represented that spectrum.
 
 ### 6.3 Selected-spectrum execution and acceptance
 
@@ -443,8 +515,9 @@ The CPU algorithm is:
 4. create the complex or `real_frequency_rotated` pencil and exact target;
 5. configure the selected transform, KSP/PC, count, subspace, tolerance and
    maximum iterations;
-6. solve, classify finite modes, map `lambda` and `omega`, filter the positive
-   branch and enforce the requested window/count;
+6. solve, classify finite modes, form complete J-equivalence classes, map
+   `lambda` and `omega`, filter the positive branch and enforce the requested
+   physical window/count;
 7. undo solver scaling, reconstruct scalar/gauge fields and compute every
    original block residual; and
 8. publish converged, rejected and accepted counts plus the exact stop reason.
@@ -685,8 +758,8 @@ not promote until all predecessor gates for its claimed scope pass.
 |---|---|---|---|---|---|---|
 | K0-P1 manufactured scalar Poisson assembly | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.*`; `backends/fem/tests/frequency_domain/` | P1 shared mesh, scalar classes, BC tuple, beta | reduced `P`, Dirichlet map or `c/eta` layout | `manufactured_poisson.v1.json` | `k0_poisson_airbox_requires_shared_domain_mesh`; `k0_poisson_airbox_invalid_boundary_gauge_tuple`; `k0_poisson_airbox_scalar_manufactured_validation_failed` | Robin, Dirichlet and pure-Neumann manufactured solutions converge at P1 order; only Neumann has a gauge. |
 | K0-P2 reciprocal magnetic/scalar coupling | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.*`; `backends/fem/cpu/mfem/` | K0-P1 output, `Ms`, tangent frames, magnetic classes | `C_phi_q`, `A_phiq`, field recovery and `A_qphi` | `validation/k0_poisson_airbox/reciprocity.v1.json` | `k0_poisson_airbox_reciprocity_check_failed` | Element/global adjoint-energy checks, sign-flip negative control and sphere/ellipsoid field-energy checks pass. |
-| K0-P3 real full descriptor assembly | `backends/fem/cpu/frequency_domain/operators/`; `backends/fem/include/frequency_domain/` | accepted linearization, K0-P1/P2, `A_qq`, `B_qq`, scaling | BC-correct sparse `A`, `B`, canonical maps/signatures | `eigen/diagnostics/solver.v1.json#assembly` | `k0_poisson_airbox_unsupported_fe_order`; `k0_poisson_airbox_real_fem_assembly_unavailable`; `k0_poisson_airbox_descriptor_parity_failed` | Random-vector parity against independent element assembly and dense tiny full descriptor passes. |
-| K0-P4 CPU sparse-direct and SLEPc parity | `backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.*`; `backends/fem/cpu/frequency_domain/slepc_modal_eigen.*`; `backends/fem/cpu/frequency_domain/engines/sparse_direct/` | K0-P3 descriptor, complex or rotated-real target, tiny admitted case | direct baseline and selected finite modes | `validation/k0_poisson_airbox/interior_window.v1.json` | `k0_poisson_airbox_real_split_target_unavailable`; `k0_poisson_airbox_cpu_solver_parity_failed`; `k0_poisson_airbox_no_finite_modes` | Complex/real-split and direct/SLEPc mode sets agree; wrong-axis negative control fails. |
+| K0-P3 real full descriptor assembly | `backends/fem/cpu/frequency_domain/operators/`; `backends/fem/include/frequency_domain/` | accepted linearization, K0-P1/P2, `A_qq`, `B_qq`, scaling; no analytical reference | BC-correct sparse `A`, `B`, canonical maps/signatures; production request with analytical Kittel fields removed | `eigen/diagnostics/solver.v1.json#assembly` | `k0_poisson_airbox_unsupported_fe_order`; `k0_poisson_airbox_real_fem_assembly_unavailable`; `k0_poisson_airbox_descriptor_parity_failed` | Random-vector parity against independent element assembly and dense tiny full descriptor passes; changing Kittel metadata cannot change any block, target or signature. |
+| K0-P4 CPU sparse-direct and SLEPc parity | `backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.*`; `backends/fem/cpu/frequency_domain/slepc_modal_eigen.*`; `backends/fem/cpu/frequency_domain/engines/sparse_direct/` | K0-P3 descriptor, user-requested complex or rotated-real target/window, tiny admitted case; no expected frequency | direct baseline and selected finite physical mode classes | `validation/k0_poisson_airbox/interior_window.v1.json` | `k0_poisson_airbox_real_split_target_unavailable`; `k0_poisson_airbox_cpu_solver_parity_failed`; `k0_poisson_airbox_no_finite_modes` | Complex/real-split and direct/SLEPc frequency clusters, physical multiplicities and invariant subspaces agree; wrong-axis negative control fails; analytical Kittel data cannot affect selection or solver pass/fail. |
 | K0-P5 residual and finite-mode certification | `backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.*` | K0-P4 candidates, original unscaled blocks | accepted/rejected modes, reconstructed `phi/eta`, block errors | `eigen/diagnostics/solver.v1.json#residuals`; `eigen/spectrum.v2.json` | `k0_poisson_airbox_interior_window_incomplete`; `k0_poisson_airbox_full_residual_not_certified` | Every accepted mode passes finite classification, branch/window completeness and all original block tolerances. |
 | K0-P6 real-film Kittel convergence | `examples/`; `scripts/verify_fem_frequency_domain_eigen_artifacts.py`; managed `justfile` gate | accepted real equilibria, at least three mesh levels, independent airbox-padding levels, field sweep | solved spectra and independent Kittel comparison | `kittel_convergence.v1.csv` plus equilibrium/mesh/airbox provenance | `k0_poisson_airbox_kittel_convergence_failed` plus any exact predecessor token | Mesh and padding convergence, field sweep, demag sign and managed-runtime evidence pass without analytical data entering the solver. |
 | K0-P7 CPU driven full-coupled/modal cross-check | `backends/fem/cpu/frequency_domain/engines/field_split/`; `backends/fem/cpu/frequency_domain/production_cpu_driven_response.*`; `backends/fem/cpu/frequency_domain/modal_response.*` | same K0-P3 blocks, physical drive, frequency sweep, qualified modal basis when used | full coupled, Schur and qualified reduced responses | `response/diagnostics/solver.v1.json`; `response/frequency-points/{frequency_index}.json` | `k0_poisson_airbox_physical_drive_rhs_invalid`; `k0_poisson_airbox_schur_certificate_invalid`; `k0_poisson_airbox_full_residual_not_certified`; `k0_poisson_airbox_driven_crosscheck_failed` | Full/Schur responses agree on certified samples; resonance agrees with independently qualified modes; original driven residual passes at every point. |
