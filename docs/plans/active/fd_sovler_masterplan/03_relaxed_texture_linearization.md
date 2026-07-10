@@ -34,7 +34,9 @@ relaxation or certified static solve
   -> selected backend
 ```
 
-The target artifact has these required fields:
+The target artifact has a conditional shape selected by the required
+`phi0_requirement` discriminator. The branch in which scalar-potential restart
+or provenance is required is:
 
 ```json
 {
@@ -44,6 +46,7 @@ The target artifact has these required fields:
   "m0": "fields/m0_unit.zarr",
   "h_eff0_a_per_m": "fields/h_eff0_a_per_m.zarr",
   "h_demag0_a_per_m": "fields/h_demag0_a_per_m.zarr",
+  "phi0_requirement": "required_for_restart_or_provenance",
   "phi0_a": "fields/phi_demag0_a.zarr",
   "mesh_signature": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
   "material_signature": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
@@ -61,10 +64,21 @@ producer schema. Reaching a step, iteration, or wall-time limit is not implicit
 acceptance. The artifact records the acceptance tolerances and producer run ID
 in its provenance envelope.
 
-`m0`, `h_eff0_a_per_m`, and `h_demag0_a_per_m` are required. `phi0_a` is
-optional only when the selected static-demag realization does not require the
-potential for restart or provenance. Absence is represented by an explicit
-`not_required_by_resolved_demag_realization` reason, not by an omitted check.
+`m0`, `h_eff0_a_per_m`, and `h_demag0_a_per_m` are required in both branches.
+`phi0_requirement` is also required and has exactly these conditional-schema
+rules:
+
+| `phi0_requirement` | Canonical `phi0_a` shape |
+|---|---|
+| `required_for_restart_or_provenance` | required nonempty artifact reference |
+| `not_required_by_resolved_demag_realization` | field must be absent |
+
+Omission is the sole canonical representation for the not-required branch;
+JSON `null` is invalid in both branches. The selected resolved static-demag
+realization determines the discriminator. Validation rejects a missing or
+unknown discriminator, a discriminator inconsistent with that realization, a
+missing/empty `phi0_a` in the required branch, or any present `phi0_a` in the
+not-required branch.
 
 ## 3. Static-field provenance and comparison
 
@@ -78,13 +92,14 @@ mesh/material/physics/boundary/static-demag signatures
 resolved demag realization and BC/gauge tuple where applicable
 ```
 
-If the builder recomputes `h_eff0`, `h_demag0`, or `phi0`, the recomputation
-must use the same five signatures as the accepted artifact. It records the
-recomputed content hash, implementation identity, comparison norm, comparison
-tolerance, and pass/fail result against the stored field. A passing recomputed
-field may be selected only with explicit `field_source=recomputed_verified`
-provenance. It cannot silently replace the stored field. A signature mismatch,
-missing comparison, or failed comparison invalidates the handoff.
+If the builder recomputes `h_eff0`, `h_demag0`, or conditionally required
+`phi0`, the recomputation must use the same five signatures as the accepted
+artifact. It records the recomputed content hash, implementation identity,
+comparison norm, comparison tolerance, and pass/fail result against the stored
+field. A passing recomputed field may be selected only with explicit
+`field_source=recomputed_verified` provenance. It cannot silently replace the
+stored field. A signature mismatch, missing comparison, or failed comparison
+invalidates the handoff.
 
 Static and dynamic demag remain separate:
 
@@ -111,6 +126,7 @@ checks pass:
   "m0": "fields/m0_unit.zarr",
   "h_eff0_a_per_m": "fields/h_eff0_a_per_m.zarr",
   "h_demag0_a_per_m": "fields/h_demag0_a_per_m.zarr",
+  "phi0_requirement": "required_for_restart_or_provenance",
   "phi0_a": "fields/phi_demag0_a.zarr",
   "mesh_signature": "sha256:...",
   "material_signature": "sha256:...",
@@ -123,10 +139,15 @@ checks pass:
 }
 ```
 
-The `phi0_a` conditional rule is identical to the artifact rule. The periodic
-certificate is required only for a periodic/Floquet request; otherwise its
-explicit value is `not_applicable`. The builder records frame orthogonality,
-handedness, and equilibrium residual diagnostics in the state provenance.
+`LinearizationState.v6` copies `phi0_requirement` from the accepted artifact and
+validates it again against the selected resolved static-demag realization. In
+the required branch, `phi0_a` is a required nonempty reference to the verified
+potential payload. In the not-required branch, `phi0_a` must be absent. JSON
+`null` is invalid, and the builder must not change branches or synthesize a
+not-required reason. The periodic certificate is required only for a
+periodic/Floquet request; otherwise its explicit value is `not_applicable`. The
+builder records frame orthogonality, handedness, and equilibrium residual
+diagnostics in the state provenance.
 
 Required checks are:
 
@@ -172,6 +193,9 @@ equilibrium_required_field_missing
 equilibrium_field_content_hash_mismatch
 equilibrium_static_field_comparison_missing
 equilibrium_static_field_comparison_failed
+equilibrium_phi0_requirement_mismatch
+equilibrium_phi0_required_missing
+equilibrium_phi0_forbidden_present
 equilibrium_m0_norm_error_too_large
 equilibrium_torque_residual_too_large
 equilibrium_periodic_certificate_missing_or_stale
@@ -186,7 +210,8 @@ equilibrium_periodic_certificate_missing_or_stale
 | nested `fields.m0_unit` | top-level `m0` | copy path and verify content hash |
 | nested `fields.h_eff0_a_per_m` | top-level `h_eff0_a_per_m` | copy path, unit, signatures, and field provenance |
 | nested `fields.h_demag0_a_per_m` | top-level `h_demag0_a_per_m` | copy path and bind `static_demag_signature` |
-| nested `fields.phi_demag0` | top-level `phi0_a` | copy with unit `A`, or record the allowed not-required reason |
+| implicit scalar-potential requirement | required `phi0_requirement` discriminator | derive from the resolved static-demag realization or reject migration |
+| nested `fields.phi_demag0` | conditional top-level `phi0_a` | required branch: copy with unit `A`; not-required branch: omit the field; never emit `null` |
 | snapshot and mesh IDs | five canonical signatures | recompute canonical sha256 signatures; IDs alone are insufficient |
 | `max_relative_torque_residual` | `max_m0_cross_h_eff0_relative` | recompute under the v6 normalization; do not rename blindly |
 | implicit static-field reuse | explicit stored/recomputed comparison provenance | compare or reject migration |

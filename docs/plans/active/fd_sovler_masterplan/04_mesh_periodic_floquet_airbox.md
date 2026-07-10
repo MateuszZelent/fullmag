@@ -111,11 +111,12 @@ G'_pair = S_dst^T G_pair S_src
 q'_dst = phase G'_pair q'_src
 ```
 
-The constrained operator must transform by the corresponding block-coordinate
-similarity/congruence. Arbitrary SO(2) frame-gauge rotations must preserve the
-eigenvalue set, original-operator residuals, and reconstructed Cartesian fields
-`T'_i q'_i = T_i q_i` within declared tolerances. Testing only a globally
-constant frame rotation is insufficient.
+The production Bloch operator and the matched-constraint oracle must transform
+by the corresponding block-coordinate similarity/congruence. Arbitrary SO(2)
+frame-gauge rotations must preserve the eigenvalue set, original-operator
+residuals, and reconstructed Cartesian fields `T'_i q'_i = T_i q_i` within
+declared tolerances. Testing only a globally constant frame rotation is
+insufficient.
 
 ## 4. Exact K0 outer-boundary and gauge tuple
 
@@ -136,9 +137,21 @@ Lateral periodic constraints alone do not create a gauge nullspace. Robin and
 Dirichlet open-boundary policies remain coercive after lateral K0 reduction and
 must not receive an eta row or a mean-zero projection.
 
-## 5. Primary nonzero-k operator representation
+## 5. Production nonzero-k operator and matched-mesh oracle
 
-Matched-mesh complex constraints are the target-v6 primary representation for
+The target-v6 production nonzero-k dynamic-demag realization assembles the
+complex Bloch `grad_k`/`div_k` weak forms on the shared magnetic-plus-airbox
+domain. The magnetic source, scalar Poisson block, and potential-to-field
+feedback must all use that k-dependent complex assembly. Reusing the K0
+operator with phase-modified inputs or outputs is forbidden.
+
+The production Bloch differential operators and their complex weak forms use
+the same `exp(-i*k dot R_lattice)` convention as the periodic transfer in
+Section 3. Their k-dependent signs must be derived consistently from that
+negative-phase convention; an opposite-sign assembly is a different contract,
+not an interchangeable implementation.
+
+Matched-mesh complex constraints remain an independent reference/oracle for
 both magnetic tangent unknowns and scalar potential:
 
 ```text
@@ -151,18 +164,21 @@ A_reduced(k) = C(k)^H A_full C(k)
 Every representative-to-member entry in both `C_m(k)` and `C_phi(k)` uses the
 same `exp(-i*k dot R_lattice)` convention, where `R_lattice` is that member's
 lattice translation from its representative. `C_m(k)` additionally applies
-`G_pair`; `C_phi(k)` is phase-only. The same maps reduce every coupled operator
-block, mass block, RHS, and residual reconstruction. Constraint application
-occurs before solving and is part of the operator.
+`G_pair`; `C_phi(k)` is phase-only. The oracle uses the same maps to reduce
+every coupled operator block, mass block, RHS, and residual reconstruction.
+Oracle constraint application occurs before solving and is part of the oracle
+operator.
 
 For a real split, the complex phase is represented by its exact 2x2 real block;
 it is not dropped or approximated as a real periodic constraint.
 
-An envelope backend using Bloch `grad_k`/`div_k` is legal only after automated
-matrix parity on assembled fixtures and action parity on matrix-free fixtures
-against the primary matched-constraint operator over the accepted k domain.
+The production `grad_k`/`div_k` representation and matched-constraint oracle
+may be declared equivalent only after automated matrix parity on assembled
+fixtures and action parity on matrix-free fixtures over the accepted k domain.
 Parity includes magnetic/scalar coupling, signs, BC/gauge handling, residuals,
-and reconstructed Cartesian fields. Passing at K0 alone is insufficient.
+and reconstructed Cartesian fields. Passing at K0 alone is insufficient. Until
+that evidence exists, the oracle is not a production substitute or fallback
+for missing complex Bloch assembly.
 
 Applying phase to a solved K0 field, viewport payload, or exported mode is a
 postsolve projection. Postsolve projection is not an operator and cannot
@@ -180,7 +196,7 @@ the exact outer-boundary/gauge tuple is recorded
 ```
 
 Static `h_demag0`/`phi0` provenance belongs to `EquilibriumArtifact.v6`.
-Dynamic `delta_phi` and `delta_H_demag` belong to the constrained coupled
+Dynamic `delta_phi` and `delta_H_demag` belong to the complex Bloch coupled
 operator. A K0 static Poisson solve, a magnetic-only phase constraint, or a
 postsolve phase projection is not nonzero-k dynamic demag.
 
@@ -195,14 +211,15 @@ postsolve phase projection is not nonzero-k dynamic demag.
 | stored pairwise 2x2 blocks | class-consistent `G_pair` transfers | validate every representative-to-member path |
 | duplicate-pair rejection | corner/edge cycle uniqueness | reject duplicate representatives and path-dependent closure |
 | gauge-policy presence check | exact BC/gauge/eta tuple | rebuild scalar block policy from boundary kind |
-| pairwise phase metadata | `C_m(k)` and `C_phi(k)` operator constraints | assemble both maps with the same negative phase convention |
+| pairwise phase metadata | production complex Bloch `grad_k`/`div_k` plus independent `C_m(k)`/`C_phi(k)` oracle | assemble both representations with the same negative phase convention; require accepted-domain matrix/action parity before equivalence |
 | no frame-gauge certificate | local SO(2) invariance evidence | rerun operator/eigenfield parity under independent frame rotations |
 
 ## 8. Production boundary
 
 This file closes the target documentation contract only. Existing v5 pair-map
 artifacts, candidate certificates, K0 providers, or planner checks do not prove
-target-v6 equivalence-class construction, complex nonzero-k operator
-constraints, frame-gauge invariance, or runtime consumption. Production status
-may advance only after v6 schemas and consumers exist and the required CPU/GPU,
-K0/nonzero-k, modal/driven validation scopes are separately evidenced.
+target-v6 equivalence-class construction, complex Bloch `grad_k`/`div_k`
+assembly, matched-constraint oracle parity, frame-gauge invariance, or runtime
+consumption. Production status may advance only after v6 schemas and consumers
+exist and the required CPU/GPU, K0/nonzero-k, modal/driven validation scopes are
+separately evidenced.
