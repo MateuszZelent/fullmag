@@ -1,6 +1,6 @@
 ---
 title: Independent Kittel postsolve verification contract
-version: COMSOL-aligned v5.1 decision-complete
+version: COMSOL-aligned v5.2 decision-complete
 status: target validation contract with current implementation blockers
 role: validation
 ---
@@ -96,21 +96,23 @@ Robin or Dirichlet truncation belongs only on the open-z exterior. Pure
 Neumann uses the documented mean-zero augmentation. A fully periodic z
 direction is not K0-3.
 
-This list is not the complete `validated_scope`. The fixture instantiates every
-field of Chapter 24's canonical `frequency_domain_validation_scope.v1`,
-including physics, mode, k, separate BC and gauge policies, runtime, device,
-precision, problem-size envelope, bounded geometry and material ranges, and
-immutable fixture and oracle IDs. The resulting canonical object is hashed to
-`scope_id` by Chapter 24. Any canonical field change creates another
-`scope_id`.
+This list is only a human-readable fixture summary. The fixture instantiates
+the closed, typed `frequency_domain_validation_scope.v1` object from Chapter
+24, including its mandatory `SolverScope` tolerances, iteration/restart,
+linear-solver and preconditioner families, transform/target representation,
+residency, precision, block-residual contract and certificate set. The complete
+object also binds physics, problem, runtime, device, material, geometry,
+fixture and oracle fields. Chapter 24 canonicalizes that object and recomputes
+its `scope_id`; any hash-input change creates another readiness cell.
 
 The fixture also records geometry dimensions, material constants, physical
 `Ms`, `gamma`/`gamma0`, bias direction, equilibrium signatures, BC/gauge tuple,
 mesh generator/version, FE order, quadrature, solver request, target/window,
 device, engine and all artifact hashes. An aggregate or convergence artifact
-that covers multiple canonical cells uses explicit `verified_coverage_of`
-scope IDs and proves the bounded relation; it never invents a shorter local
-scope.
+that covers multiple canonical cells uses Chapter 24's typed
+`coverage_rule.v1`, including the subject and covered scope IDs and one
+unambiguous field predicate for every canonical comparison address. It never invents a
+shorter local scope or covers a target broader than its evaluated subject.
 
 ## 5. Field sweep
 
@@ -126,11 +128,12 @@ provenance proves the correct field value and signatures.
 
 A fast CI gate may use a documented subset of at least three positive-bias
 fields. Its artifact records `coverage=fast_ci_subset`, the parent extended
-fixture ID, omitted field indices and
-`verified_coverage_of=[parent_canonical_scope_id]`; the verifier proves the
-subset relation without claiming complete coverage. Fast CI can detect
-regressions but cannot satisfy analytical validation, convergence or
-`production_qualified`.
+fixture ID, omitted field indices and the direct `scope_id` of its own narrower
+`frequency_domain_validation_scope.v1` object. It may record the parent scope
+ID as non-binding provenance, but it must not use a coverage binding whose
+`coverage_rule.v1` names that broader parent as a covered scope: Chapter 24's
+comparator direction rejects that promotion. Fast CI can detect regressions but
+cannot satisfy analytical validation, convergence or `production_qualified`.
 
 A near-zero field is optional. If present, it has a separately declared
 zero-mode/degeneracy policy and is excluded from relative-error denominators
@@ -395,10 +398,31 @@ validation/kittel_k0_pbc/independence_audit.v1.json
 ```
 
 Every immutable solver artifact and postsolve validation artifact above carries
-the Chapter 24 canonical `scope_id`. A multi-level convergence or CPU/GPU
-aggregate may instead carry `verified_coverage_of=[scope_id,...]` with a
-machine-verifiable coverage rule. `validated_scope_id`, fixture names, run
-directories and abbreviated K0-3 tuples are not accepted aliases.
+one `validation_scope_binding.v1` object from Chapter 24:
+
+```text
+schema: validation_scope_binding.v1
+scope_schema: frequency_domain_validation_scope.v1
+exactly one closed variant:
+  kind: direct
+  scope_id: Sha256Id
+or:
+  kind: coverage
+  coverage_rule:
+    schema: coverage_rule.v1
+    relation: exact | subset
+    subject_scope_id: Sha256Id
+    covered_scope_ids: non-empty ordered unique Sha256Id array
+    field_predicates: complete Chapter 24 FieldPredicate array
+```
+
+Exactly one binding variant is legal. The coverage variant is reserved for a
+multi-level convergence or CPU/GPU aggregate whose evaluated subject contains
+every covered target. A subject narrower in fields, mesh/padding interval,
+device, precision, solver configuration or any other canonical dimension
+cannot cover the broader target. `validated_scope_id`, fixture names, run
+directories, abbreviated K0-3 tuples and prose assertions of exact scope are
+not accepted aliases.
 
 `selection.v2.json` contains candidate scores and the frozen selected branch
 without expected frequencies. `points.v2.csv` may add expected frequencies and
@@ -408,7 +432,7 @@ separate and contain raw unique run IDs and signatures.
 Each convergence row contains at least:
 
 ```text
-run_id, solver_artifact_sha256, scope_id or verified_coverage_of
+run_id, solver_artifact_sha256, solver_artifact_scope_id
 field_index, H0_A_per_m
 mesh_level, magnetic_h_m, magnetic_dof_count
 airbox_padding_top_m, airbox_padding_bottom_m, phi_dof_count
@@ -418,13 +442,20 @@ uniform_overlap, branch_overlap_previous
 tangent_leakage_max_abs, periodic_seam_mismatch_max_abs
 ```
 
+`solver_artifact_scope_id` must equal the direct
+`validation_scope_binding.v1.scope_id` in the immutable solver artifact named
+by `solver_artifact_sha256`. A convergence CSV may be an aggregate whose own
+artifact metadata uses a coverage binding, but it cannot replace any raw solve
+row's direct binding with a bare scope ID or coverage-rule hash.
+
 Verifier-enriched rows additionally contain `expected_frequency_hz`,
 `relative_frequency_error` and the fit membership flag. `fit.v2.json` contains
 the complete `M_eff_reference` provenance, fit model/weights/scaling, fitted
 value, `fitted_M_eff_relative_error`, uncertainty/confidence interval,
 covariance/rank/condition number and all rejection reasons. Summary artifacts
-publish `scope_id` or `verified_coverage_of`, fixture/oracle/reference IDs and
-hashes, initial/production tolerance sets, raw row counts, distinct signature
+publish the complete `validation_scope_binding.v1`, fixture/oracle/reference
+IDs and hashes, initial/production tolerance
+sets, raw row counts, distinct signature
 counts, field coverage, observed orders/fits, finest-two deltas, separate
 frequency and fitted-`M_eff` mesh/truncation budgets, fit conditioning and
 uncertainty outcomes, and final gate outcomes.
@@ -503,9 +534,9 @@ gpu_residency when applicable
 ```
 
 `production_qualified` is legal only when every applicable outcome is `pass`,
-the canonical `validated_scope` is complete, every artifact binds its
-`scope_id` or an accepted `verified_coverage_of`, and chapter 24 is complete
-for the same immutable evidence bundle. `fast_ci_subset`, synthetic demag,
+the promotion record's `validated_scope` passes the closed v1 schema and hash
+check, every artifact has an accepted direct or typed coverage binding, and
+chapter 24 is complete for the same immutable evidence bundle. `fast_ci_subset`, synthetic demag,
 absent raw levels, mixed mesh/padding variation, solver-side expected values,
 ill-conditioned/uncertain fits, or analytical-value-based branch selection cap
 the result below production.

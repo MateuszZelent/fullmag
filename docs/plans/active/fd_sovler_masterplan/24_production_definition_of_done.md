@@ -1,6 +1,6 @@
 ---
 title: FEM frequency-domain production definition of done
-version: COMSOL-aligned v5.1 decision-complete
+version: COMSOL-aligned v5.2 decision-complete
 status: normative product promotion contract; no current qualification implied
 role: normative
 ---
@@ -30,55 +30,179 @@ nearby CPU/GPU lane or a narrow K0 macrospin exception cannot stand in for an
 applicable item. This chapter defines gates; it does not claim any current cell
 has passed them.
 
-## 2. Canonical `validated_scope` and `scope_id`
+## 2. `frequency_domain_validation_scope.v1`
 
 Chapter 24 owns the only canonical validation-scope schema. Chapters 09 and 15
 and every validation artifact must use this schema rather than defining a
-shorter local tuple. The schema identifier is
-`frequency_domain_validation_scope.v1`. Empty values, `any`, `all`, unbounded
-wildcards and prose such as "general FEM" are invalid.
+shorter local tuple. `frequency_domain_validation_scope.v1` is the closed JSON
+object defined below: every listed field is required, no additional field is
+allowed, and `null`, an empty identifier, `any`, `all`, an infinity, a NaN and
+an unbounded wildcard are invalid.
 
-| Scope field | Required content |
+### 2.1 Primitive types
+
+| Type | Normative JSON representation |
 |---|---|
-| `study_product` | Exactly `modal_eigen` or `driven_response`; reduced response is a separately named engine scope |
-| `discretization` | `fem` |
-| `physics_scope` | Canonical equation/phasor convention, equilibrium class, dynamic-field convention, damping/nonconservative policy and complete included/excluded interaction set |
-| `mode_scope` | For modal evidence: finite/positive branch policy, mode or cluster class, requested count/window, multiplicity and tracking policy; for driven evidence: explicit `not_applicable` plus response observable/drive scope |
-| `device` | `cpu` or `gpu` |
-| `precision` | `double` or an independently qualified `single` scope |
-| `k_scope` | `k0` or bounded `nonzero_k` domain with units, path/samples and Gamma tolerance |
-| `dynamic_demag_scope` | `none`, `periodic_airbox_k0`, or bounded `floquet_airbox_nonzero_k` |
-| `geometry_scope` | Geometry family plus closed numerical bounds and SI units for every dimension/range, periodic cell and airbox policy; fixture dimensions must lie inside those bounds |
-| `material_scope` | Material classes plus closed numerical bounds and SI units for `Ms`, gamma, exchange, anisotropy, damping and every admitted interaction parameter |
-| `equilibrium_scope` | Uniform/relaxed/nonuniform class, acceptance tolerances and required artifact/signature policy |
-| `boundary_scope` | Magnetic BCs, periodic directions/pairing policy, open directions, scalar outer BC and bounded Robin beta policy |
-| `gauge_scope` | Exact scalar gauge/nullspace policy, augmentation and acceptance tolerances |
-| `fe_scope` | FE spaces/order, quadrature and mesh-quality/refinement envelope |
-| `problem_size_scope` | Magnetic/scalar DOF range and largest qualified memory/runtime case |
-| `operator_scope` | Included local, exchange, DMI, demag and torque linearizations; excluded terms are explicit |
-| `damping_scope` | Alpha range and admitted nonconservative/nonnormal policy |
-| `solver_scope` | Exact engine, scalar representation, target/window/sweep policy, preconditioner and fallback policy |
-| `runtime_scope` | Fullmag build/commit identity, native ABI, PETSc/SLEPc/hypre/libCEED/CUDA versions as applicable, device family, driver/runtime identity and managed execution route |
-| `fixture_ids` | Ordered immutable fixture IDs, versions and content `sha256` hashes used by the evidence |
-| `oracle_ids` | Ordered immutable analytical/numerical oracle IDs, versions and content `sha256` hashes used by the evidence |
+| `Identifier` | Non-empty string matching `^[a-z0-9][a-z0-9._:/+-]*$` |
+| `Sha256Id` | Lowercase string matching `^sha256:[0-9a-f]{64}$` |
+| `PositiveNumber` | Finite JSON number greater than zero |
+| `NonNegativeInteger` | JSON integer greater than or equal to zero |
+| `PositiveInteger` | JSON integer greater than or equal to one |
+| `ClosedInterval` | Closed object `{minimum: finite number, maximum: finite number, unit: Identifier}` with `minimum<=maximum` |
+| `IntegerInterval` | Closed object `{minimum: NonNegativeInteger, maximum: NonNegativeInteger}` with `minimum<=maximum` |
+| `IdentifierSet` | Non-empty JSON array of unique `Identifier` values, sorted by UTF-8 byte order |
+| `IdentityRef` | Closed object `{id: Identifier, version: Identifier, sha256: Sha256Id}` |
 
-Two records that differ in any field are different readiness cells. Evidence
-may be shared only when its own scope explicitly covers both values and all
-other signatures match.
+All physical intervals use the canonical SI unit named by the schema path.
+`IdentifierSet` is a mathematical set; path samples, sweep samples,
+`fixture_ids` and `oracle_ids` are ordered sequences and retain their declared
+order.
+
+### 2.2 Required top-level object
+
+| Field | Type and constraint |
+|---|---|
+| `schema` | Literal string `frequency_domain_validation_scope.v1` |
+| `study_product` | Enum `modal_eigen | driven_response` |
+| `discretization` | Literal string `fem` |
+| `physics_scope` | Closed `PhysicsScope` object from section 2.3 |
+| `problem_scope` | Closed `ProblemScope` object from section 2.4 |
+| `solver_scope` | Closed `SolverScope` object from section 2.5 |
+| `runtime_scope` | Closed `RuntimeScope` object from section 2.6 |
+| `device_scope` | Closed `DeviceScope` object from section 2.6 |
+| `material_scope` | Closed `MaterialScope` object from section 2.7 |
+| `geometry_scope` | Closed `GeometryScope` object from section 2.7 |
+| `fixture_ids` | Non-empty ordered array of unique `IdentityRef` values |
+| `oracle_ids` | Non-empty ordered array of unique `IdentityRef` values |
+
+### 2.3 `PhysicsScope`
+
+| Field | Type and constraint |
+|---|---|
+| `equation_set` | `Identifier` naming the canonical linearized equation contract |
+| `phasor_convention` | `Identifier` naming the time/complex-sign convention |
+| `dynamic_field_convention` | `Identifier` naming the dynamic-field and observable convention |
+| `equilibrium_class` | Enum `uniform | relaxed | nonuniform` |
+| `included_interactions` | `IdentifierSet` containing every admitted interaction |
+| `excluded_interactions` | Sorted unique array of `Identifier`; empty is allowed |
+| `damping_policy` | `Identifier` |
+| `nonconservative_policy` | `Identifier`; use literal `none` when excluded |
+
+An interaction cannot occur in both interaction arrays. Omission is not an
+exclusion declaration.
+
+### 2.4 `ProblemScope`
+
+`ProblemScope` is a closed object containing every field below.
+
+| Field | Type and constraint |
+|---|---|
+| `mode_scope` | Closed object `{kind, branch_policy, class_ids, requested_count, spectral_window_rad_per_s, multiplicity_policy, tracking_policy, response_observable_ids, drive_scope}`. `kind` is `modal | driven`; `class_ids` is `IdentifierSet`; `requested_count` is `IntegerInterval`; `spectral_window_rad_per_s` is `ClosedInterval` with unit `rad_per_s` or literal `not_applicable`; `response_observable_ids` is a sorted unique identifier array; all other members are `Identifier`. Modal uses `response_observable_ids=[]` and `drive_scope=not_applicable`; driven uses `requested_count={minimum:0,maximum:0}`, `branch_policy=not_applicable`, `multiplicity_policy=not_applicable` and `tracking_policy=not_applicable`. |
+| `k_scope` | Closed tagged union. K0 is `{kind:"k0", gamma_tolerance_rad_per_m:PositiveNumber}`. Nonzero-k is `{kind:"nonzero_k", path_id:Identifier, samples_rad_per_m:ordered non-empty array of finite three-number arrays, domain_rad_per_m:ClosedInterval(unit="rad_per_m"), gamma_tolerance_rad_per_m:PositiveNumber}`. |
+| `dynamic_demag_scope` | Enum `none | periodic_airbox_k0 | floquet_airbox_nonzero_k` |
+| `equilibrium_scope` | Closed object `{acceptance_policy:Identifier, torque_tolerance:PositiveNumber, norm_tolerance:PositiveNumber, artifact_policy:Identifier, signature_policy:Identifier}` |
+| `boundary_scope` | Closed object `{magnetic_bc:Identifier, periodic_directions:sorted unique array drawn from [x,y,z], pairing_policy:Identifier, open_directions:sorted unique array drawn from [x,y,z], scalar_outer_bc:Identifier, robin_beta_per_m:ClosedInterval(unit="per_m") or "not_applicable"}`; periodic and open direction sets are disjoint |
+| `gauge_scope` | Closed object `{policy:Identifier, augmentation:Identifier, nullspace_tolerance:PositiveNumber, constraint_tolerance:PositiveNumber}` |
+| `fe_scope` | Closed object `{magnetic_space:Identifier, magnetic_order:PositiveInteger, scalar_space:Identifier, scalar_order:PositiveInteger, quadrature_rule:Identifier, mesh_quality:ClosedInterval(unit="dimensionless"), refinement_policy:Identifier}` |
+| `problem_size_scope` | Closed object `{magnetic_dofs:IntegerInterval, scalar_dofs:IntegerInterval, total_dofs:IntegerInterval, largest_memory_bytes:NonNegativeInteger, largest_runtime_seconds:PositiveNumber}` |
+| `operator_scope` | Closed object `{included_terms:IdentifierSet, excluded_terms:sorted unique identifier array, assembly_kind:Identifier, scalar_representation:Identifier}`; a term cannot occur in both arrays |
+| `damping_scope` | Closed object `{alpha:ClosedInterval(unit="dimensionless"), nonnormal_policy:Identifier}` |
+
+### 2.5 Mandatory `SolverScope`
+
+`solver_scope` is not an engine nickname. It is the closed object below, and
+every field is mandatory for modal and driven artifacts alike.
+
+| Field | Type and constraint |
+|---|---|
+| `engine` | `Identifier` naming the exact production solver engine |
+| `rtol` | `PositiveNumber` less than one |
+| `max_iterations` | `PositiveInteger` |
+| `restart` | `PositiveInteger` not greater than `max_iterations`; direct solvers use `1` |
+| `linear_solver_family` | `Identifier`; use literal `none` only when no linear solve exists |
+| `preconditioner_family` | `Identifier`; use literal `none` only when no preconditioner exists |
+| `spectral_transform` | Closed object `{family:Identifier, shift_rad_per_s:finite number or "not_applicable"}`; `none` is explicit |
+| `target_representation` | Closed object `{family:Identifier, target_rad_per_s:finite number or "not_applicable", window_rad_per_s:ClosedInterval(unit="rad_per_s") or "not_applicable", sweep_hz:ordered array of finite positive numbers}`; modal uses an empty `sweep_hz`, driven uses `target_rad_per_s=not_applicable` |
+| `device_residency` | Closed object `{operator, krylov_vectors, basis, preconditioner}` with each value in `host | device | mixed | not_applicable`, plus `{per_iteration_h2d_max:NonNegativeInteger, per_iteration_d2h_max:NonNegativeInteger, hidden_host_solves_allowed:boolean}` |
+| `precision` | Enum `double | single` |
+| `block_residual_contract` | Closed object `{operator_form:"original_unscaled", norm:"l2", required_blocks:IdentifierSet, aggregation:"max", denominator_policy:Identifier, absolute_scale_floor:PositiveNumber, acceptance_tolerance:PositiveNumber}`. `required_blocks` names every physical and constraint block, including scalar and gauge blocks when present. |
+| `certificate_set` | `IdentifierSet` naming every certificate required for solver acceptance |
+| `fallback_policy` | `Identifier`; strict no-fallback is explicit |
+| `accepted_stop_reasons` | `IdentifierSet` |
+
+Consequently, changing only `rtol`, iteration cap, restart, linear-solver or
+preconditioner family, transform/target representation, residency, precision,
+residual contract or certificate set creates a different readiness cell.
+
+### 2.6 Runtime and device scope
+
+`RuntimeScope` is the closed object
+`{fullmag_commit, build_id, native_abi, dependency_versions, managed_route}`.
+`fullmag_commit` is exactly 40 lowercase hexadecimal characters; `build_id` and
+`managed_route` are `Identifier`; `native_abi` is a `PositiveInteger`; and
+`dependency_versions` is a sorted, non-empty array of closed
+`{name:Identifier, version:Identifier}` objects covering every applicable
+PETSc, SLEPc, hypre, libCEED, CUDA and compiler/runtime dependency.
+
+`DeviceScope` is the closed object
+`{requested, resolved, family, architecture, driver, runtime}`. `requested` is
+`cpu | gpu | auto`, `resolved` is `cpu | gpu`, and the remaining fields are
+`Identifier`; CPU scopes use explicit CPU values rather than `not_applicable`.
+
+### 2.7 Material and geometry scope
+
+`MaterialScope` is the closed object
+`{class_ids:IdentifierSet, region_policy:Identifier, parameter_bounds}`.
+`parameter_bounds` is a non-empty array of closed
+`{name:Identifier, bounds:ClosedInterval}` objects, unique by `name`, and must
+include bounded SI entries for `Ms`, gamma, exchange, anisotropy, damping and
+every parameter used by an included interaction.
+
+`GeometryScope` is the closed object
+`{family:Identifier, dimension_bounds, periodic_cell_policy,
+airbox_policy}`. `dimension_bounds` is a non-empty array of closed
+`{name:Identifier, bounds:ClosedInterval}` objects, unique by `name`, covering
+every fixture dimension and periodic-cell dimension. `periodic_cell_policy` is
+a closed `{directions:sorted unique array drawn from [x,y,z], cell_id:Identifier}`
+object. `airbox_policy` is a closed
+`{kind:Identifier, top_padding_m:ClosedInterval(unit="m") or "not_applicable",
+bottom_padding_m:ClosedInterval(unit="m") or "not_applicable",
+symmetry:Identifier}` object.
+
+### 2.8 Canonical serialization and `scope_id`
+
+The hash input is exactly the complete closed top-level object in section 2.2:
+
+```text
+schema, study_product, discretization
+physics_scope, problem_scope, solver_scope
+runtime_scope, device_scope, material_scope, geometry_scope
+fixture_ids, oracle_ids
+```
+
+Each named object contributes every one of its required nested values. In
+particular, the hash always includes the complete `solver_scope`: engine,
+`rtol`, `max_iterations`, `restart`, `linear_solver_family`,
+`preconditioner_family`, spectral transform, transform target/window/sweep,
+device-residency layout and transfer limits, precision, full original-block
+residual contract, certificate set, fallback policy and accepted stop reasons.
+`scope_id`, artifact paths, timestamps, gate outcomes, metric results,
+promotion state, evidence bindings and coverage rules are not hash inputs.
 
 Canonicalization is deterministic:
 
-1. validate the complete object against
-   `frequency_domain_validation_scope.v1`;
-2. express SI quantities as finite JSON numbers in canonical SI units and
-   preserve the schema-defined order of path samples, fixture IDs and oracle
-   IDs;
-3. serialize the object using RFC 8785 JSON Canonicalization Scheme UTF-8; and
+1. validate the closed object against
+   `frequency_domain_validation_scope.v1`, including every cross-field rule;
+2. reject non-finite numbers and negative zero; encode all quantities in the
+   schema-prescribed SI unit, sort every schema-declared set, reject duplicate
+   set members and preserve only schema-declared ordered sequences;
+3. serialize the validated object as UTF-8 with RFC 8785 JSON Canonicalization
+   Scheme; and
 4. compute `scope_id = "sha256:" + lowercase_hex(SHA-256(serialized_bytes))`.
 
-No artifact path, timestamp, gate outcome, tolerance result or promotion state
-is part of the scope hash. The promotion validator recomputes the hash; a
-caller-supplied `scope_id` is never trusted.
+The validator resolves and revalidates the complete object before recomputing
+the hash. A caller-supplied ID is never trusted. Two objects that differ in any
+hash input are different readiness cells.
 
 ## 3. DoD state and evidence rules
 
@@ -101,7 +225,7 @@ Each `pass` links immutable artifacts and records:
 
 ```text
 gate_id
-scope_id
+validation_scope_binding = validation_scope_binding.v1
 evidence paths and sha256 hashes
 fixture and oracle identities
 metric values
@@ -112,24 +236,96 @@ validation_state before promotion
 open blockers
 ```
 
-Every evidence artifact uses one explicit scope binding:
+Every evidence artifact uses exactly one closed
+`validation_scope_binding.v1` object:
 
 ```text
-scope_id = canonical scope directly evaluated by this artifact
+direct binding = {
+  schema: "validation_scope_binding.v1",
+  scope_schema: "frequency_domain_validation_scope.v1",
+  kind: "direct",
+  scope_id: Sha256Id
+}
+
+coverage binding = {
+  schema: "validation_scope_binding.v1",
+  scope_schema: "frequency_domain_validation_scope.v1",
+  kind: "coverage",
+  coverage_rule: coverage_rule.v1
+}
 ```
 
-or, for a bounded oracle/aggregate that verifies one or more separately hashed
-readiness cells:
+Both objects are closed. A direct binding has no `coverage_rule`; a coverage
+binding has no `scope_id`; no additional field or third kind is legal. The
+direct form means the artifact evaluated the one resolved
+`frequency_domain_validation_scope.v1` object whose recomputed hash is
+`scope_id`. The coverage form is legal only for a bounded oracle or aggregate
+whose evaluated subject scope covers every listed target under section 3.2.
 
-```text
-verified_coverage_of = [canonical scope_id, ...]
-coverage_rule = machine-readable subset/range relation proved by the verifier
-```
+### 3.1 `validation_scope_binding.v1` validation
+
+The artifact validator first validates the closed binding variant and the
+literal `scope_schema`, resolves every referenced scope object, validates it
+against section 2, and recomputes every `scope_id`. It then accepts either one
+direct scope or one `coverage_rule.v1`; a caller cannot substitute a fixture
+name, abbreviated tuple, parent scope ID or independently supplied coverage
+list. A coverage binding is invalid unless its rule is valid under section 3.2.
+
+### 3.2 `coverage_rule.v1`
+
+`coverage_rule.v1` is the following closed JSON object. It is mandatory for a
+`validation_scope_binding.v1` whose `kind` is `coverage`.
+
+| Field | Type and constraint |
+|---|---|
+| `schema` | Literal string `coverage_rule.v1` |
+| `relation` | Enum `exact | subset` |
+| `subject_scope_id` | `Sha256Id` of the canonical scope actually evaluated by the artifact |
+| `covered_scope_ids` | Non-empty ordered array of unique `Sha256Id` |
+| `field_predicates` | Non-empty ordered array of closed `FieldPredicate` objects |
+
+`FieldPredicate` is the closed object
+`{covered_scope_id:Sha256Id, field_path:string, comparator:Comparator}`.
+`field_path` is an RFC 6901 JSON Pointer to one canonical comparison address in
+`frequency_domain_validation_scope.v1`; `covered_scope_id` must occur in
+`covered_scope_ids`; and `Comparator` is exactly one of `equal`, `set_subset`
+or `interval_subset`. A comparison address is one scalar, one complete
+schema-declared `IdentifierSet`, one complete `ClosedInterval` or
+`IntegerInterval`, or one complete schema-declared ordered sequence. Pointers
+to partial containers, array slices, ancestors and wildcards are invalid.
+
+Comparator direction is fixed and cannot be inverted:
+
+- `equal`: the covered target value equals the subject value after canonical
+  type validation;
+- `set_subset`: the covered target set is a subset of the subject set; it is
+  legal only on a complete schema-declared `IdentifierSet`; and
+- `interval_subset`: the covered target closed or integer interval is contained
+  in the subject interval with the same canonical SI unit where applicable,
+  meaning
+  `subject.minimum <= covered.minimum <= covered.maximum <= subject.maximum`.
+
+For every `covered_scope_id`, `field_predicates` contains exactly one predicate
+for every canonical comparison address, with no duplicate or omitted path.
+Identity-bearing fields, ordered arrays, samples, fixture/oracle
+references, product, discretization, runtime, resolved device, precision and
+every non-set/non-interval solver field require `equal`. `relation=exact`
+requires `covered_scope_ids=[subject_scope_id]` and `equal` at every path.
+`relation=subset` requires at least one valid
+`set_subset` or `interval_subset` predicate and equality everywhere else.
+
+The validator resolves the complete subject and covered scope objects,
+recomputes every ID, evaluates all predicates and rejects the rule if any
+covered target is broader than the subject's evaluated domain. Therefore a
+three-field fast-CI subject cannot cover or promote a 15-field target, a K0
+subject cannot cover nonzero-k, and CPU/double evidence cannot cover GPU or
+single precision. Coverage permits reuse only from a scope whose evaluated
+domain contains the target; it never promotes the broader target scope.
 
 An abbreviated tuple, fixture nickname, parent directory or matching runtime
-signature is not a scope binding. Each `verified_coverage_of` target must be
-recomputed from a complete canonical scope and the coverage rule must verify
-all differing bounded fields; otherwise the evidence is stale for that target.
+signature is not a scope binding. Missing scope objects, an untyped prose
+relation, a coverage binding without `coverage_rule.v1`, or an unevaluated
+predicate makes the artifact stale for every listed target.
 
 Evidence from another physical signature, precision, device, product, k scope,
 demag realization or solver engine is stale for this record even if its files
@@ -147,7 +343,7 @@ are newer.
 | DOD-06 Native assembly | Backend-owned real FEM blocks/actions and chapter 09 manufactured/reciprocity/isolation evidence | `assembly_kind` is the production kind; block signs/units/order/scaling pass; analytical expected values cannot affect blocks, target or signatures | `synthetic_algebraic_oracle`, Kittel `demag_delta`, macrocell payload or postsolve phase projection |
 | DOD-07 Solver engine | Exact modal or driven production engine, preconditioner and lifecycle artifacts | Engine converges over the bounded size/window/sweep scope, has correct target representation/restart/stop reasons, and has no undeclared fallback | Dense/apply probe, one successful tiny case, host-Krylov path claimed as device Krylov, or another product's engine |
 | DOD-08 Full residual | Reconstructed original unscaled block residuals for every accepted mode/frequency point | Chapter 09 production tolerance passes for every required block; transformed/backend/tracked residuals remain separate | Solver-library residual alone, capped residual, magnetic-only residual when scalar/gauge blocks apply |
-| DOD-09 Artifacts/OpenAPI/UI | Complete artifacts-v2 bundle, typed OpenAPI/resource exposure and UI state for complete/partial/failed/unavailable outcomes | Cross-artifact hashes, units, revisions, requested/resolved state, canonical `scope_id` or verified `verified_coverage_of`, and resource links agree; UI cannot overstate capability | Abbreviated scope tuple, raw files without resource contract, UI claim inferred from route presence, or JSON carrying heavy payloads outside the data plane |
+| DOD-09 Artifacts/OpenAPI/UI | Complete artifacts-v2 bundle, typed OpenAPI/resource exposure and UI state for complete/partial/failed/unavailable outcomes | Cross-artifact hashes, units, revisions, requested/resolved state, accepted `validation_scope_binding.v1`, and resource links agree; UI cannot overstate capability | Abbreviated scope tuple, untyped coverage claim, raw files without resource contract, UI claim inferred from route presence, or JSON carrying heavy payloads outside the data plane |
 | DOD-10 Analytical validation | Applicable chapter 09 independent physics gate: Larmor/Kittel, ellipsoid, DE/BV, modal/driven resonance or another physics-note oracle | Production tolerance passes after solve and after independent selection; for K0-3, fixture-owned independently provenanced `M_eff_reference`, fitted-`M_eff` agreement, uncertainty and conditioning all pass; oracle inputs never enter assembly/request target/selection/certificate/solver status | Best-fit-only agreement, solver-derived `M_eff_reference`, nearest-expected mode selection, synthetic operator built from the answer, or fast CI subset |
 | DOD-11 Convergence | Raw distinct mesh and truncation sequences plus solver tolerance evidence | At least three levels per applicable dimension; monotonicity/asymptotic fit, observed order where applicable, Richardson/finest-two delta and separate frequency and fitted-`M_eff` budgets pass | Best row only, duplicated synthetic rows, simultaneous mesh/padding changes without independent sequences, or analytical values copied as solved rows |
 | DOD-12 CPU/GPU parity | For GPU: exact qualified CPU oracle and chapter 09 operator/solver/physics parity; for CPU-only: explicit `not_applicable` reason excluding GPU | GPU blocks, modes/responses, residuals and accepted/rejected outcomes pass production tolerances on identical signatures | No-demag macrospin parity used for demag, CPU result copied into GPU artifacts, or precision mismatch |
@@ -214,7 +410,7 @@ The release candidate publishes one record per readiness cell. The schema is
 | `implementation_state` | `executable` |
 | `validation_state_before_promotion` | The actual pre-promotion state |
 | `items.DOD-01` through `items.DOD-14` | `pass`, `fail` or justified `not_applicable` |
-| `item_evidence.DOD-01` through `item_evidence.DOD-14` | Gate IDs, immutable artifact paths/hashes, fixture/oracle IDs, metrics, production tolerances and verifier result for every `pass` |
+| `item_evidence.DOD-01` through `item_evidence.DOD-14` | Gate IDs, one accepted `validation_scope_binding.v1`, immutable artifact paths/hashes, fixture/oracle IDs, metrics, production tolerances and verifier result for every `pass` |
 | `not_applicable_reasons` | One exact scope-derived reason for every `not_applicable` item |
 | `open_blockers` | Empty for promotion |
 | `promotion_decision` | `production_qualified` only after section 7 succeeds; otherwise `blocked` |
@@ -231,8 +427,10 @@ The promotion validator performs these checks in order:
 2. require `implementation_state=executable` for that scope;
 3. resolve item applicability from the exact product/device/k/demag/engine
    tuple;
-4. validate every evidence artifact's `scope_id` or `verified_coverage_of`,
-   fixture/oracle identity, metric and production tolerance;
+4. validate every evidence artifact's complete
+   `validation_scope_binding.v1`, including a directional `coverage_rule.v1`
+   when its kind is `coverage`, fixture/oracle identity, metric and production
+   tolerance;
 5. reject stale or mismatched signatures and evidence from neighboring cells;
 6. require every expected negative control to fail for the intended reason;
 7. require `open_blockers=[]` and no contradiction with current status docs;

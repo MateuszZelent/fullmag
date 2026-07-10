@@ -1,6 +1,6 @@
 ---
 title: FEM frequency-domain validation, certification and benchmark gates
-version: COMSOL-aligned v5.1 decision-complete
+version: COMSOL-aligned v5.2 decision-complete
 status: normative validation contract; no capability promotion implied
 role: validation
 ---
@@ -50,13 +50,32 @@ Analytical values and trusted reference solutions are verifier-side data. They
 must not construct the production operator, choose its target, select a mode,
 set convergence, certify solver success, or alter the artifact under test.
 
-Every artifact named in every gate row below must carry either the canonical
-Chapter 24 `scope_id` that it directly evaluates or an explicit
-`verified_coverage_of` list of canonical scope IDs plus a machine-verifiable
-coverage rule. A fixture nickname, abbreviated readiness tuple, matching path
-or implicit parent scope is invalid. Gate promotion requires the artifact
-validator to recompute every referenced scope ID and reject incomplete,
-wildcard, unbounded or mismatched scope objects.
+Every artifact named in every gate row below includes this mandatory
+`validation_scope_binding.v1` object from Chapter 24:
+
+```text
+schema: validation_scope_binding.v1
+scope_schema: frequency_domain_validation_scope.v1
+exactly one closed variant:
+  kind: direct
+  scope_id: Sha256Id
+or:
+  kind: coverage
+  coverage_rule:
+    schema: coverage_rule.v1
+    relation: exact | subset
+    subject_scope_id: Sha256Id
+    covered_scope_ids: non-empty ordered unique Sha256Id array
+    field_predicates: complete Chapter 24 FieldPredicate array
+```
+
+The direct variant binds the recomputed hash of the one scope evaluated by the
+artifact. The coverage variant is legal only with a complete typed rule; a
+record cannot use both variants. Chapter 24 validates the closed scope and
+coverage schemas, comparator direction and every referenced hash. A fixture
+nickname, abbreviated readiness tuple, matching path, implicit parent scope or
+prose assertion of exact coverage is invalid. In particular, evidence whose
+subject is narrower than a target cannot promote that broader target.
 
 ## 2. Common acceptance and convergence contract
 
@@ -100,7 +119,7 @@ one numerical result under several levels fail the gate.
 |---|---|---|---|---|---|---|---|
 | PHY-1 units, phasor and Larmor | Uniform magnet, positive bias sweep, no demag, no damping, K0 | Closed-form `f=gamma0 H/(2*pi)` evaluated only after branch selection; independent SI-token audit | Maximum/median relative frequency error; `lambda=i*omega`; gamma/mu0 consistency | max `2e-2`; median `1e-2`; mapping/token mismatches `0` | max `5e-3`; median `2e-3`; mapping/token mismatches `0` | `validation/physics/larmor.v1.json`, selected branch rows, solver diagnostics | `modal_eigen/*/k0/demag_none`; driven cells only through PHY-4 |
 | PHY-2 demag sign and energy | Uniformly magnetized sphere and at least two ellipsoids, open boundary | Analytical demag tensor and positive magnetostatic energy, generated outside assembly | Componentwise field error, energy error, sign failures | field/energy `<=3e-2`; sign failures `0` | field/energy `<=1e-2`; sign failures `0` | `validation/physics/demag_ellipsoid.v1.json`, raw mesh/padding rows | K0 demag cells for the evidenced BC/geometry envelope |
-| PHY-3 Kittel thin film | Chapter 15 K0-3 real-film suite | Fixture-owned, independently provenanced, postsolve-only `M_eff_reference`; postsolve Kittel evaluator and fitted `M_eff`; none is a solver/request/selection/certificate input | Maximum/median field-sweep frequency error; `abs(fitted_M_eff-M_eff_reference)/abs(M_eff_reference)`; fitted-parameter uncertainty and scaled-Jacobian conditioning; separate frequency and fitted-`M_eff` mesh/truncation budgets | frequency max `5e-2`, median `2e-2`; fitted `M_eff` relative error `2e-2`; relative standard uncertainty `1e-2`; scaled-Jacobian condition number `1e8`; mesh `2e-2`; truncation `2e-2` | frequency max `2e-2`, median `1e-2`; fitted `M_eff` relative error `5e-3`; relative standard uncertainty `2.5e-3`; scaled-Jacobian condition number `1e6`; mesh `1e-2`; truncation `5e-3` | Chapter 15 fixture/reference provenance, fit, summary, points, selection, independence and convergence artifacts, each bound by `scope_id` or `verified_coverage_of` | `modal_eigen/{cpu,gpu}/k0/periodic_airbox_k0` only after all predecessor gates |
+| PHY-3 Kittel thin film | Chapter 15 K0-3 real-film suite | Fixture-owned, independently provenanced, postsolve-only `M_eff_reference`; postsolve Kittel evaluator and fitted `M_eff`; none is a solver/request/selection/certificate input | Maximum/median field-sweep frequency error; `abs(fitted_M_eff-M_eff_reference)/abs(M_eff_reference)`; fitted-parameter uncertainty and scaled-Jacobian conditioning; separate frequency and fitted-`M_eff` mesh/truncation budgets | frequency max `5e-2`, median `2e-2`; fitted `M_eff` relative error `2e-2`; relative standard uncertainty `1e-2`; scaled-Jacobian condition number `1e8`; mesh `2e-2`; truncation `2e-2` | frequency max `2e-2`, median `1e-2`; fitted `M_eff` relative error `5e-3`; relative standard uncertainty `2.5e-3`; scaled-Jacobian condition number `1e6`; mesh `1e-2`; truncation `5e-3` | Chapter 15 fixture/reference provenance, fit, summary, points, selection, independence and convergence artifacts, each with the required `validation_scope_binding.v1` | `modal_eigen/{cpu,gpu}/k0/periodic_airbox_k0` only after all predecessor gates |
 | PHY-4 modal/driven resonance | Same assembled blocks, physical transverse drive, frequency sweep bracketing independently selected modes | Driven full solve is the modal oracle and modal spectrum is the driven-location oracle; neither selects the other | Resonance-frequency delta, complex observable delta, original residual | frequency `1e-2`; observable `5e-2`; residual `1e-6` | frequency `2e-3`; observable `1e-2`; residual `1e-8` | spectrum, response sweep, point diagnostics and cross-link artifact | Matching modal and driven cells only |
 
 ## 4. Manufactured assembly gates
@@ -178,7 +197,7 @@ qualify as device resident without PERF-1 even when wall time is low.
 
 | Gate | Fixture | Independent oracle | Metric | Initial tolerance | Production tolerance | Required artifacts | Promotable readiness cells |
 |---|---|---|---|---|---|---|---|
-| ART-1 schema and cross-artifact identity | Complete, failed and interrupted modal/driven bundles | Independent schema/resource validator | Missing fields, canonical `scope_id`/`verified_coverage_of` failures, hash/signature mismatches, dangling paths, status contradictions | all counts `0` | all counts `0` | manifest, solver diagnostics, spectra/response, mesh and validation artifacts | All cells |
+| ART-1 schema and cross-artifact identity | Complete, failed and interrupted modal/driven bundles | Independent schema/resource validator | Missing fields, invalid direct/coverage binding, scope or coverage-rule schema failure, hash/signature mismatch, dangling path, status contradiction | all counts `0` | all counts `0` | manifest, solver diagnostics, spectra/response, mesh and validation artifacts | All cells |
 | ART-2 requested/resolved truth | Strict CPU, strict GPU, auto and explicit-fallback fixtures | Planner request compared with runtime and artifact provenance | Hidden fallback, device/precision/engine mismatch, absent rejection token | all counts `0` | all counts `0` | plan, manifest, diagnostics and rejection artifact | All cells; strict GPU mismatch blocks GPU promotion |
 | ART-3 validation isolation | Kittel, DE/BV, manufactured and CPU-reference bundles | Data-flow audit from solver request through postsolve verifier | Analytical/fitted/reference fields present in assembly, target, selection, certificate or solver pass/fail payload | occurrences `0` | occurrences `0` | validation-isolation report and request/artifact schemas | Every analytical-validation cell |
 | ART-4 product/API/UI consistency | Published modal and driven resource bundles | OpenAPI/type/resource validator and browser-facing resource inventory | Missing resource, unit mismatch, stale revision, UI claim beyond artifact state | all counts `0` | all counts `0` | API contract report and artifact resource index | Cells exposed through API/UI |
@@ -200,6 +219,6 @@ existing bounded status. In particular:
   satisfy convergence; and
 - `production_executable` remains distinct from `production_qualified`.
 
-Promotion occurs only when chapter 24 accepts every applicable gate for one
-canonical `scope_id` and complete `validated_scope`, and the
+Promotion occurs only when chapter 24 accepts every applicable
+`validation_scope_binding.v1` for one recomputed canonical `scope_id`, and the
 readiness/capability status is updated by its own owning task.
