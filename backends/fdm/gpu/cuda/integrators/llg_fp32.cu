@@ -273,6 +273,28 @@ __global__ void heun_corrector_fp32_kernel(
 
 static const int BLOCK_SIZE = 256;
 
+double reduce_current_rhs_norm_fp32(Context &ctx) {
+    const int n = static_cast<int>(ctx.cell_count);
+    const int grid = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    const float alpha = static_cast<float>(ctx.alpha);
+    const float gamma_bar = static_cast<float>(ctx.gamma / (1.0 + ctx.alpha * ctx.alpha));
+
+    llg_rhs_fp32_kernel<<<grid, BLOCK_SIZE>>>(
+        static_cast<const float*>(ctx.m.x),
+        static_cast<const float*>(ctx.m.y),
+        static_cast<const float*>(ctx.m.z),
+        static_cast<const float*>(ctx.work.x),
+        static_cast<const float*>(ctx.work.y),
+        static_cast<const float*>(ctx.work.z),
+        static_cast<float*>(ctx.k1.x),
+        static_cast<float*>(ctx.k1.y),
+        static_cast<float*>(ctx.k1.z),
+        n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
+        stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+
+    return reduce_max_norm_fp32(ctx, ctx.k1.x, ctx.k1.y, ctx.k1.z, ctx.cell_count);
+}
+
 void launch_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stats) {
     int n = static_cast<int>(ctx.cell_count);
     int grid = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
@@ -380,14 +402,7 @@ void launch_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         ctx.m.x, ctx.m.y, ctx.m.z,
         ctx.work.x, ctx.work.y, ctx.work.z, ctx.cell_count);
 
-    llg_rhs_fp32_kernel<<<grid, BLOCK_SIZE>>>(
-        (const float*)ctx.m.x, (const float*)ctx.m.y, (const float*)ctx.m.z,
-        (const float*)ctx.work.x, (const float*)ctx.work.y, (const float*)ctx.work.z,
-        (float*)ctx.k1.x, (float*)ctx.k1.y, (float*)ctx.k1.z,
-        n, gamma_bar_f, alpha_f, ctx.disable_precession ? 1 : 0,
-        stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
-
-    double max_dm_dt = reduce_max_norm_fp32(ctx, ctx.k1.x, ctx.k1.y, ctx.k1.z, ctx.cell_count);
+    double max_dm_dt = reduce_current_rhs_norm_fp32(ctx);
 
     ctx.step_count++;
     ctx.current_time += dt;

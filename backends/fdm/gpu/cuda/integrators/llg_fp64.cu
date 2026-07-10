@@ -292,6 +292,28 @@ __global__ void heun_corrector_fp64_kernel(
 
 static const int BLOCK_SIZE = 256;
 
+double reduce_current_rhs_norm_fp64(Context &ctx) {
+    const int n = static_cast<int>(ctx.cell_count);
+    const int grid = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    const double alpha = ctx.alpha;
+    const double gamma_bar = ctx.gamma / (1.0 + alpha * alpha);
+
+    llg_rhs_fp64_kernel<<<grid, BLOCK_SIZE>>>(
+        static_cast<const double*>(ctx.m.x),
+        static_cast<const double*>(ctx.m.y),
+        static_cast<const double*>(ctx.m.z),
+        static_cast<const double*>(ctx.work.x),
+        static_cast<const double*>(ctx.work.y),
+        static_cast<const double*>(ctx.work.z),
+        static_cast<double*>(ctx.k1.x),
+        static_cast<double*>(ctx.k1.y),
+        static_cast<double*>(ctx.k1.z),
+        n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
+        stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+
+    return reduce_max_norm_fp64(ctx, ctx.k1.x, ctx.k1.y, ctx.k1.z, ctx.cell_count);
+}
+
 void launch_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats) {
     int n = static_cast<int>(ctx.cell_count);
     int grid = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
@@ -429,21 +451,8 @@ void launch_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         ctx.m.x, ctx.m.y, ctx.m.z,
         ctx.work.x, ctx.work.y, ctx.work.z, ctx.cell_count);
 
-    // Max |dm/dt| — compute RHS at new state, store in k1 temp
-    llg_rhs_fp64_kernel<<<grid, BLOCK_SIZE>>>(
-        static_cast<const double*>(ctx.m.x),
-        static_cast<const double*>(ctx.m.y),
-        static_cast<const double*>(ctx.m.z),
-        static_cast<const double*>(ctx.work.x),
-        static_cast<const double*>(ctx.work.y),
-        static_cast<const double*>(ctx.work.z),
-        static_cast<double*>(ctx.k1.x),
-        static_cast<double*>(ctx.k1.y),
-        static_cast<double*>(ctx.k1.z),
-        n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
-        stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
-
-    double max_dm_dt = reduce_max_norm_fp64(ctx, ctx.k1.x, ctx.k1.y, ctx.k1.z, ctx.cell_count);
+    // Max |dm/dt| — full accepted-state RHS, including direct torques.
+    double max_dm_dt = reduce_current_rhs_norm_fp64(ctx);
 
     // Update context time
     ctx.step_count++;

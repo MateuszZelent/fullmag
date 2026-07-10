@@ -139,9 +139,43 @@ int main() {
     check(snapshot_stats.step == 1, "snapshot_stats must preserve step metadata");
     check(snapshot_stats.max_effective_field_amplitude > 0.0,
           "snapshot_stats must still compute full diagnostics on demand");
+    check(snapshot_stats.max_torque_Apm > 0.0,
+          "transverse external field snapshot must report nonzero field torque");
+    check(snapshot_stats.max_rhs_amplitude > 0.0,
+          "transverse external field snapshot must report nonzero total RHS");
     fullmag_fdm_backend_destroy(no_stats_handle);
 
-    // 7. Demag-enabled refresh exercises the batched cuFFT workspace/plan path.
+    // 7. Accepted-state snapshot keeps field torque separate from direct torque.
+    fullmag_fdm_plan_desc plan_direct_torque = plan;
+    plan_direct_torque.enable_exchange = 0;
+    plan_direct_torque.enable_demag = 0;
+    plan_direct_torque.stats_mode = FULLMAG_FDM_STATS_NONE;
+    plan_direct_torque.has_sot = 1;
+    plan_direct_torque.sot_je = 1e12;
+    plan_direct_torque.sot_xi_dl = 0.1;
+    plan_direct_torque.sot_sigma[2] = 1.0;
+    plan_direct_torque.sot_thickness = 1e-9;
+
+    fullmag_fdm_backend *direct_torque_handle =
+        fullmag_fdm_backend_create(&plan_direct_torque);
+    check(direct_torque_handle != nullptr, "backend_create for direct torque returned NULL");
+    err = fullmag_fdm_backend_last_error(direct_torque_handle);
+    if (err) {
+        std::fprintf(stderr, "Create error for direct torque: %s\n", err);
+        fullmag_fdm_backend_destroy(direct_torque_handle);
+        return 1;
+    }
+
+    fullmag_fdm_step_stats direct_torque_stats = {};
+    rc = fullmag_fdm_backend_snapshot_stats(direct_torque_handle, &direct_torque_stats);
+    check(rc == FULLMAG_FDM_OK, "snapshot_stats for direct torque failed");
+    check(std::fabs(direct_torque_stats.max_torque_Apm) <= 1e-12,
+          "direct torque must not change field-equilibrium torque");
+    check(direct_torque_stats.max_rhs_amplitude > 0.0,
+          "direct torque must contribute to accepted-state total RHS");
+    fullmag_fdm_backend_destroy(direct_torque_handle);
+
+    // 8. Demag-enabled refresh exercises the batched cuFFT workspace/plan path.
     fullmag_fdm_plan_desc plan_demag = plan;
     plan_demag.enable_exchange = 0;
     plan_demag.enable_demag = 1;
@@ -168,7 +202,7 @@ int main() {
     }
     fullmag_fdm_backend_destroy(demag_handle);
 
-    // 8. Destroy
+    // 9. Destroy
     fullmag_fdm_backend_destroy(handle);
     std::printf("Handle destroyed OK\n");
 

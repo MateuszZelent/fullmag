@@ -102,6 +102,31 @@ void telemetry_has_runtime_owner() {
     check(
         telemetry.find("launch_exchange_energy_fp64") != std::string::npos,
         "gpu/cuda/runtime/telemetry.cu must own energy-reduction wiring");
+    check(
+        telemetry.find("out_stats->max_rhs_amplitude = reduce_current_rhs_norm_fp64(ctx)") !=
+                std::string::npos &&
+            telemetry.find("out_stats->max_rhs_amplitude = reduce_current_rhs_norm_fp32(ctx)") !=
+                std::string::npos,
+        "accepted-state telemetry must publish the full CPU/GPU RHS norm");
+    check(
+        telemetry.find("out_stats->max_torque_Apm = reduce_max_cross_norm_fp64") !=
+                std::string::npos &&
+            telemetry.find("out_stats->max_torque_Apm = reduce_max_cross_norm_fp32") !=
+                std::string::npos,
+        "accepted-state telemetry must keep field torque separate from total RHS");
+
+    const std::string llg_fp64 = read_file(root / "gpu/cuda/integrators/llg_fp64.cu");
+    const std::string llg_fp32 = read_file(root / "gpu/cuda/integrators/llg_fp32.cu");
+    check(
+        llg_fp64.find("double reduce_current_rhs_norm_fp64") != std::string::npos &&
+            llg_fp64.find("stt_params_from_ctx(ctx), sot_params_from_ctx(ctx)") !=
+                std::string::npos,
+        "fp64 accepted-state RHS reduction must include direct torques");
+    check(
+        llg_fp32.find("double reduce_current_rhs_norm_fp32") != std::string::npos &&
+            llg_fp32.find("stt_params_from_ctx(ctx), sot_params_from_ctx(ctx)") !=
+                std::string::npos,
+        "fp32 accepted-state RHS reduction must include direct torques");
 
     const std::string api = read_file(root / "api/c_api.cpp");
     check(

@@ -24,6 +24,8 @@ extern double reduce_cubic_anisotropy_energy_fp64(Context &ctx);
 extern double reduce_cubic_anisotropy_energy_fp32(Context &ctx);
 extern double reduce_dmi_energy_fp64(Context &ctx);
 extern double reduce_dmi_energy_fp32(Context &ctx);
+extern double reduce_current_rhs_norm_fp64(Context &ctx);
+extern double reduce_current_rhs_norm_fp32(Context &ctx);
 extern double reduce_max_norm_fp64(
     Context &ctx,
     const void *vx,
@@ -80,6 +82,7 @@ bool context_fill_current_stats(Context &ctx, fullmag_fdm_step_stats *out_stats)
             ctx.m.x, ctx.m.y, ctx.m.z,
             ctx.work.x, ctx.work.y, ctx.work.z,
             ctx.cell_count);
+        out_stats->max_rhs_amplitude = reduce_current_rhs_norm_fp64(ctx);
     } else {
         out_stats->exchange_energy_joules =
             ctx.enable_exchange ? launch_exchange_energy_fp32(ctx) : 0.0;
@@ -104,6 +107,7 @@ bool context_fill_current_stats(Context &ctx, fullmag_fdm_step_stats *out_stats)
             ctx.m.x, ctx.m.y, ctx.m.z,
             ctx.work.x, ctx.work.y, ctx.work.z,
             ctx.cell_count);
+        out_stats->max_rhs_amplitude = reduce_current_rhs_norm_fp32(ctx);
     }
 
     out_stats->total_energy_joules =
