@@ -9,7 +9,7 @@ use fullmag_ir::FemPlanIR;
 use crate::artifact_pipeline::ArtifactRecorder;
 use crate::dispatch::{apply_native_fem_runtime_contract, fem_poisson_demag_provenance, FemEngine};
 use crate::native_fem::NativeFemBackend;
-use crate::relaxation::{infer_stage_completion, llg_overdamped_uses_pure_damping};
+use crate::relaxation::{resolve_stage_completion, RelaxationCompletionMetrics};
 use crate::schedules::OutputSchedule;
 use crate::types::{
     ExecutedRun, FieldSnapshot, LiveStepConsumer, RunError, RunResult, RunStatus, StepStats,
@@ -188,13 +188,16 @@ pub(crate) fn finalize_native_fem_relaxation(
         .to_string();
         completion
     } else {
-        infer_stage_completion(
+        resolve_stage_completion(
             status,
             plan.relaxation.as_ref(),
-            &steps,
-            plan.gyromagnetic_ratio,
-            plan.material.damping,
-            llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()),
+            RelaxationCompletionMetrics {
+                max_torque_apm: None,
+                accepted_energy_plateau_range_j: None,
+                steps: final_stats.step,
+                relaxation_time_s: Some(final_stats.time),
+                numerical_stagnation: false,
+            },
         )
     };
 

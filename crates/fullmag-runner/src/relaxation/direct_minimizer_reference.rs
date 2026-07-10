@@ -1211,7 +1211,7 @@ mod tests {
     }
 
     #[test]
-    fn relaxation_convergence_uses_apm_reconstructed_from_dm_dt_for_overdamped_llg() {
+    fn relaxation_convergence_uses_exact_apm_torque_for_overdamped_llg() {
         let control = RelaxationControlIR {
             algorithm: RelaxationAlgorithmIR::LlgOverdamped,
             stop: RelaxStopIR {
@@ -1225,9 +1225,8 @@ mod tests {
         let damping = 1.0;
         let expected_torque_apm = 5e-5;
         let stats = StepStats {
-            max_torque_Apm: 0.0,
-            max_dm_dt: expected_torque_apm * gyromagnetic_ratio * damping
-                / (1.0 + damping * damping),
+            max_torque_Apm: expected_torque_apm,
+            max_dm_dt: 123.0,
             ..StepStats::default()
         };
 

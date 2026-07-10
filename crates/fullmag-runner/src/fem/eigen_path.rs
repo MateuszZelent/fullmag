@@ -256,13 +256,10 @@ pub(crate) fn execute_fem_eigen_path(
             status: RunStatus::Completed,
             steps: vec![],
             final_magnetization: plan.equilibrium_magnetization.clone(),
-            completion: Some(crate::relaxation::infer_stage_completion(
+            completion: Some(crate::relaxation::resolve_stage_completion(
                 RunStatus::Completed,
                 None,
-                &[],
-                0.0,
-                0.0,
-                false,
+                crate::relaxation::RelaxationCompletionMetrics::default(),
             )),
         },
         initial_magnetization: plan.equilibrium_magnetization.clone(),

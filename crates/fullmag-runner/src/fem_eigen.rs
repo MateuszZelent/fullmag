@@ -472,13 +472,10 @@ fn execute_native_gpu_k0_kittel_modal(
             status: RunStatus::Completed,
             steps: vec![stats],
             final_magnetization: equilibrium,
-            completion: Some(crate::relaxation::infer_stage_completion(
+            completion: Some(crate::relaxation::resolve_stage_completion(
                 RunStatus::Completed,
                 None,
-                &[],
-                0.0,
-                0.0,
-                false,
+                crate::relaxation::RelaxationCompletionMetrics::default(),
             )),
         },
         initial_magnetization,
@@ -1985,13 +1982,10 @@ fn execute_fem_eigen_inner(
             status: RunStatus::Completed,
             steps: vec![stats],
             final_magnetization: equilibrium.clone(),
-            completion: Some(crate::relaxation::infer_stage_completion(
+            completion: Some(crate::relaxation::resolve_stage_completion(
                 RunStatus::Completed,
                 None,
-                &[],
-                0.0,
-                0.0,
-                false,
+                crate::relaxation::RelaxationCompletionMetrics::default(),
             )),
         },
         initial_magnetization,
@@ -2195,13 +2189,10 @@ fn execute_native_cpu_modal_window_from_full_2x2(
             status: RunStatus::Completed,
             steps: vec![stats],
             final_magnetization: equilibrium,
-            completion: Some(crate::relaxation::infer_stage_completion(
+            completion: Some(crate::relaxation::resolve_stage_completion(
                 RunStatus::Completed,
                 None,
-                &[],
-                0.0,
-                0.0,
-                false,
+                crate::relaxation::RelaxationCompletionMetrics::default(),
             )),
         },
         initial_magnetization,
@@ -2406,13 +2397,10 @@ fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
             status: RunStatus::Completed,
             steps: vec![stats],
             final_magnetization: equilibrium,
-            completion: Some(crate::relaxation::infer_stage_completion(
+            completion: Some(crate::relaxation::resolve_stage_completion(
                 RunStatus::Completed,
                 None,
-                &[],
-                0.0,
-                0.0,
-                false,
+                crate::relaxation::RelaxationCompletionMetrics::default(),
             )),
         },
         initial_magnetization,

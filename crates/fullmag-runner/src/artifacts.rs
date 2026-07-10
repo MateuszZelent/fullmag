@@ -296,9 +296,14 @@ fn fem_cpu_relaxation_qualification_metadata(
             .relaxation
             .as_ref()
             .map(|control| control.algorithm.as_str().to_string()),
+        converged: completion.is_some_and(|entry| entry.converged),
         stop_reason: completion
             .and_then(|entry| entry.reason.as_ref())
             .map(stage_stop_reason_as_str)
+            .map(str::to_string),
+        stop_metric_kind: completion.and_then(|entry| entry.metric),
+        stop_metric_unit: completion
+            .and_then(|entry| entry.metric_unit())
             .map(str::to_string),
         stop_metric_name: completion.and_then(|entry| entry.metric_name.clone()),
         stop_metric_value: completion.and_then(|entry| entry.metric_value),
@@ -517,9 +522,14 @@ fn fem_gpu_relaxation_qualification_metadata(
             hot_loop_control_scalar_host_sync_count: provenance
                 .hot_loop_control_scalar_host_sync_count,
         },
+        converged: completion.is_some_and(|entry| entry.converged),
         stop_reason: completion
             .and_then(|entry| entry.reason.as_ref())
             .map(stage_stop_reason_as_str)
+            .map(str::to_string),
+        stop_metric_kind: completion.and_then(|entry| entry.metric),
+        stop_metric_unit: completion
+            .and_then(|entry| entry.metric_unit())
             .map(str::to_string),
         stop_metric_name: completion.and_then(|entry| entry.metric_name.clone()),
         stop_metric_value: completion.and_then(|entry| entry.metric_value),
@@ -3300,7 +3310,9 @@ mod tests {
                 final_magnetization: vec![[1.0, 0.0, 0.0]; 4],
                 completion: Some(fullmag_ir::StageCompletionIR {
                     status: "completed".to_string(),
+                    converged: true,
                     reason: Some(fullmag_ir::StageStopReason::Torque),
+                    metric: Some(fullmag_ir::StageMetricKind::MaxTorqueApm),
                     metric_name: Some("max_torque_apm".to_string()),
                     metric_value: Some(4.0e-4),
                     threshold: Some(1.0e-3),
@@ -3391,7 +3403,9 @@ mod tests {
                 final_magnetization: vec![[1.0, 0.0, 0.0]; 4],
                 completion: Some(fullmag_ir::StageCompletionIR {
                     status: "completed".to_string(),
+                    converged: false,
                     reason: Some(fullmag_ir::StageStopReason::MaxSteps),
+                    metric: Some(fullmag_ir::StageMetricKind::Steps),
                     metric_name: Some("step".to_string()),
                     metric_value: Some(4.0),
                     threshold: Some(4.0),
@@ -3482,7 +3496,9 @@ mod tests {
                 final_magnetization: vec![[1.0, 0.0, 0.0]; 4],
                 completion: Some(fullmag_ir::StageCompletionIR {
                     status: "completed".to_string(),
+                    converged: false,
                     reason: Some(fullmag_ir::StageStopReason::MaxSteps),
+                    metric: Some(fullmag_ir::StageMetricKind::Steps),
                     metric_name: Some("step".to_string()),
                     metric_value: Some(4.0),
                     threshold: Some(4.0),
@@ -3667,7 +3683,9 @@ mod tests {
                 final_magnetization: vec![[1.0, 0.0, 0.0]; 4],
                 completion: Some(fullmag_ir::StageCompletionIR {
                     status: "completed".to_string(),
+                    converged: false,
                     reason: Some(fullmag_ir::StageStopReason::MaxSteps),
+                    metric: Some(fullmag_ir::StageMetricKind::Steps),
                     metric_name: Some("step".to_string()),
                     metric_value: Some(4.0),
                     threshold: Some(4.0),

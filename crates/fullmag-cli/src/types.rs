@@ -622,6 +622,8 @@ pub(crate) struct CurrentLiveStageExecutionRecord {
     pub completed_at_unix_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<fullmag_ir::StageStopReason>,
+    #[serde(default)]
+    pub converged: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artifact_refs: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -640,6 +642,8 @@ pub(crate) struct CurrentLiveStageExecutionRecord {
     pub state_transfer_operator_kind: Option<StateTransferOperatorKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state_transition_ui_presentation: Option<StageTransitionUiPresentation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metric: Option<fullmag_ir::StageMetricKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metric_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -1,6 +1,8 @@
 //! Shared relaxation stop criteria and stage-completion mapping.
 
-use fullmag_ir::{RelaxationAlgorithmIR, RelaxationControlIR, StageCompletionIR, StageStopReason};
+use fullmag_ir::{
+    RelaxationAlgorithmIR, RelaxationControlIR, StageCompletionIR, StageMetricKind, StageStopReason,
+};
 
 use crate::types::{RunStatus, StepStats};
 
@@ -114,19 +116,11 @@ pub(crate) fn approximate_max_torque(
 
 pub(crate) fn effective_max_torque_apm(
     stats: &StepStats,
-    gyromagnetic_ratio: f64,
-    damping: f64,
-    pure_damping_rhs: bool,
+    _gyromagnetic_ratio: f64,
+    _damping: f64,
+    _pure_damping_rhs: bool,
 ) -> f64 {
-    if stats.max_torque_Apm > 0.0 {
-        return stats.max_torque_Apm;
-    }
-    approximate_max_torque(
-        stats.max_dm_dt,
-        gyromagnetic_ratio,
-        damping,
-        pure_damping_rhs,
-    )
+    stats.max_torque_Apm
 }
 
 pub(crate) fn llg_overdamped_uses_pure_damping(control: Option<&RelaxationControlIR>) -> bool {
@@ -135,27 +129,45 @@ pub(crate) fn llg_overdamped_uses_pure_damping(control: Option<&RelaxationContro
 
 fn stage_completion(
     status: String,
+    converged: bool,
     reason: Option<StageStopReason>,
-    metric_name: Option<String>,
+    metric: Option<StageMetricKind>,
     metric_value: Option<f64>,
     threshold: Option<f64>,
 ) -> StageCompletionIR {
     StageCompletionIR {
         status,
+        converged,
         reason,
-        metric_name,
+        metric,
+        metric_name: metric.map(|kind| {
+            match kind {
+                StageMetricKind::MaxTorqueApm => "max_torque_apm",
+                StageMetricKind::TotalEnergyPlateauRangeJ => "total_energy_plateau_range_J",
+                StageMetricKind::RelaxationTimeS => "relaxation_time_s",
+                StageMetricKind::Steps => "steps",
+                StageMetricKind::NumericalStagnation => "numerical_stagnation",
+            }
+            .to_string()
+        }),
         metric_value,
         threshold,
     }
 }
 
-pub(crate) fn infer_stage_completion(
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct RelaxationCompletionMetrics {
+    pub(crate) max_torque_apm: Option<f64>,
+    pub(crate) accepted_energy_plateau_range_j: Option<EnergyPlateauRangeJ>,
+    pub(crate) steps: u64,
+    pub(crate) relaxation_time_s: Option<f64>,
+    pub(crate) numerical_stagnation: bool,
+}
+
+pub(crate) fn resolve_stage_completion(
     status: RunStatus,
     relaxation: Option<&RelaxationControlIR>,
-    steps: &[StepStats],
-    gyromagnetic_ratio: f64,
-    damping: f64,
-    pure_damping_rhs: bool,
+    metrics: RelaxationCompletionMetrics,
 ) -> StageCompletionIR {
     let status_label = match status {
         RunStatus::Completed => "completed",
@@ -165,75 +177,96 @@ pub(crate) fn infer_stage_completion(
     }
     .to_string();
 
-    if matches!(status, RunStatus::Cancelled) {
+    if status == RunStatus::Failed {
         return stage_completion(
             status_label,
+            false,
+            Some(StageStopReason::BackendError),
+            None,
+            None,
+            None,
+        );
+    }
+    if status == RunStatus::Cancelled {
+        return stage_completion(
+            status_label,
+            false,
             Some(StageStopReason::UserCancelled),
             None,
             None,
             None,
         );
     }
+    if status == RunStatus::Paused {
+        return stage_completion(status_label, false, None, None, None, None);
+    }
 
     let Some(control) = relaxation else {
-        return stage_completion(status_label, None, None, None, None);
-    };
-    let Some(last) = steps.last() else {
-        return stage_completion(status_label, None, None, None, None);
+        return stage_completion(status_label, false, None, None, None, None);
     };
 
-    let max_torque = effective_max_torque_apm(last, gyromagnetic_ratio, damping, pure_damping_rhs);
-    let energy_plateau_range = if steps.len() >= RELAXATION_ENERGY_PLATEAU_WINDOW_STEPS {
-        let mut window = RelaxationEnergyPlateauWindow::default();
-        for step in steps
-            .iter()
-            .skip(steps.len() - RELAXATION_ENERGY_PLATEAU_WINDOW_STEPS)
-        {
-            window.record(step.e_total);
-        }
-        window.range()
-    } else {
-        None
-    };
-
-    if let (Some(threshold), Some(metric_value)) =
-        (control.stop.energy_tolerance_j, energy_plateau_range)
-    {
+    if let (Some(threshold), Some(range)) = (
+        control.stop.energy_tolerance_j,
+        metrics.accepted_energy_plateau_range_j,
+    ) {
         let torque_ok = control
             .stop
             .torque_tolerance_apm
-            .is_none_or(|torque_threshold| max_torque <= torque_threshold);
-        if torque_ok && metric_value.value <= threshold {
+            .is_none_or(|torque_threshold| {
+                metrics
+                    .max_torque_apm
+                    .is_some_and(|value| value.is_finite() && value <= torque_threshold)
+            });
+        if torque_ok && range.value.is_finite() && range.value <= threshold {
             return stage_completion(
                 status_label,
+                true,
                 Some(StageStopReason::Energy),
-                Some("total_energy_plateau_range_J".to_string()),
-                Some(metric_value.value),
+                Some(StageMetricKind::TotalEnergyPlateauRangeJ),
+                Some(range.value),
                 Some(threshold),
             );
         }
     }
 
-    if let Some(threshold) = control.stop.torque_tolerance_apm {
-        if max_torque <= threshold {
+    if let (Some(threshold), Some(max_torque_apm)) =
+        (control.stop.torque_tolerance_apm, metrics.max_torque_apm)
+    {
+        if max_torque_apm.is_finite() && max_torque_apm <= threshold {
             return stage_completion(
                 status_label,
+                true,
                 Some(StageStopReason::Torque),
-                Some("max_torque_apm".to_string()),
-                Some(max_torque),
+                Some(StageMetricKind::MaxTorqueApm),
+                Some(max_torque_apm),
                 Some(threshold),
             );
         }
+    }
+
+    if metrics.numerical_stagnation {
+        return stage_completion(
+            "failed".to_string(),
+            false,
+            Some(StageStopReason::Gradient),
+            Some(StageMetricKind::NumericalStagnation),
+            Some(1.0),
+            Some(0.0),
+        );
     }
 
     if control.algorithm == RelaxationAlgorithmIR::LlgOverdamped {
-        if let Some(threshold) = control.stop.max_relaxation_time_s {
-            if last.time >= threshold {
+        if let (Some(threshold), Some(relaxation_time_s)) = (
+            control.stop.max_relaxation_time_s,
+            metrics.relaxation_time_s,
+        ) {
+            if relaxation_time_s >= threshold {
                 return stage_completion(
                     status_label,
+                    false,
                     Some(StageStopReason::MaxPhysicalTime),
-                    Some("physical_time_s".to_string()),
-                    Some(last.time),
+                    Some(StageMetricKind::RelaxationTimeS),
+                    Some(relaxation_time_s),
                     Some(threshold),
                 );
             }
@@ -241,24 +274,25 @@ pub(crate) fn infer_stage_completion(
     }
 
     if let Some(threshold) = control.stop.max_steps {
-        if last.step >= threshold {
+        if metrics.steps >= threshold {
             return stage_completion(
                 status_label,
+                false,
                 Some(StageStopReason::MaxSteps),
-                Some("steps".to_string()),
-                Some(last.step as f64),
+                Some(StageMetricKind::Steps),
+                Some(metrics.steps as f64),
                 Some(threshold as f64),
             );
         }
     }
 
-    stage_completion(status_label, None, None, None, None)
+    stage_completion(status_label, false, None, None, None, None)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fullmag_ir::RelaxStopIR;
+    use fullmag_ir::{RelaxStopIR, StageMetricKind};
 
     fn direct_minimizer_control(max_steps: u64, relaxation_time_s: f64) -> RelaxationControlIR {
         RelaxationControlIR {
@@ -274,31 +308,139 @@ mod tests {
 
     #[test]
     fn direct_minimizer_stage_completion_ignores_seconds_and_uses_max_steps() {
-        let completion = infer_stage_completion(
+        let completion = resolve_stage_completion(
             RunStatus::Completed,
             Some(&direct_minimizer_control(2, 2.0e-6)),
-            &[
-                StepStats {
-                    step: 1,
-                    time: 1.0e-6,
-                    dt: 7.5e-7,
-                    ..StepStats::default()
-                },
-                StepStats {
-                    step: 2,
-                    time: 3.0e-6,
-                    dt: 1.5e-6,
-                    ..StepStats::default()
-                },
-            ],
-            2.211e5,
-            0.2,
-            false,
+            RelaxationCompletionMetrics {
+                max_torque_apm: None,
+                accepted_energy_plateau_range_j: None,
+                steps: 2,
+                relaxation_time_s: None,
+                numerical_stagnation: false,
+            },
         );
 
         assert_eq!(completion.reason, Some(StageStopReason::MaxSteps));
-        assert_eq!(completion.metric_name.as_deref(), Some("steps"));
+        assert_eq!(completion.metric, Some(StageMetricKind::Steps));
         assert_eq!(completion.metric_value, Some(2.0));
         assert_eq!(completion.threshold, Some(2.0));
+    }
+
+    #[test]
+    fn exact_zero_torque_is_available_and_converged() {
+        let control = RelaxationControlIR {
+            algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
+            stop: RelaxStopIR {
+                torque_tolerance_apm: Some(1.0e-4),
+                energy_tolerance_j: None,
+                max_steps: Some(50_000),
+                max_relaxation_time_s: None,
+            },
+        };
+
+        let completion = resolve_stage_completion(
+            RunStatus::Completed,
+            Some(&control),
+            RelaxationCompletionMetrics {
+                max_torque_apm: Some(0.0),
+                accepted_energy_plateau_range_j: None,
+                steps: 1,
+                relaxation_time_s: None,
+                numerical_stagnation: false,
+            },
+        );
+
+        assert!(completion.converged);
+        assert_eq!(completion.reason, Some(StageStopReason::Torque));
+        assert_eq!(completion.metric, Some(StageMetricKind::MaxTorqueApm));
+        assert_eq!(completion.metric_value, Some(0.0));
+        assert_eq!(completion.metric_unit(), Some("A/m"));
+    }
+
+    #[test]
+    fn sparse_output_rows_do_not_change_completion_reason() {
+        let control = RelaxationControlIR {
+            algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
+            stop: RelaxStopIR {
+                torque_tolerance_apm: Some(1.0e-4),
+                energy_tolerance_j: Some(1.0e-18),
+                max_steps: Some(50_000),
+                max_relaxation_time_s: None,
+            },
+        };
+        let metrics = RelaxationCompletionMetrics {
+            max_torque_apm: Some(0.0),
+            accepted_energy_plateau_range_j: Some(EnergyPlateauRangeJ { value: 0.0 }),
+            steps: 50,
+            relaxation_time_s: None,
+            numerical_stagnation: false,
+        };
+
+        let authoritative = resolve_stage_completion(RunStatus::Completed, Some(&control), metrics);
+        let dense = crate::types::RunResult {
+            status: RunStatus::Completed,
+            steps: (1..=50)
+                .map(|step| StepStats {
+                    step,
+                    e_total: step as f64,
+                    ..StepStats::default()
+                })
+                .collect(),
+            final_magnetization: Vec::new(),
+            completion: Some(authoritative.clone()),
+        };
+        let sparse = crate::types::RunResult {
+            status: RunStatus::Completed,
+            steps: vec![StepStats {
+                step: 50,
+                e_total: 1.0e9,
+                ..StepStats::default()
+            }],
+            final_magnetization: Vec::new(),
+            completion: Some(authoritative),
+        };
+
+        let dense_persisted = serde_json::to_value(dense).expect("dense run must serialize");
+        let sparse_persisted = serde_json::to_value(sparse).expect("sparse run must serialize");
+        assert_ne!(dense_persisted["steps"], sparse_persisted["steps"]);
+        assert_eq!(
+            dense_persisted["completion"],
+            sparse_persisted["completion"]
+        );
+        assert_eq!(dense_persisted["completion"]["reason"], "energy");
+        assert_eq!(dense_persisted["completion"]["converged"], true);
+    }
+
+    #[test]
+    fn max_steps_is_terminal_but_not_converged() {
+        let completion = resolve_stage_completion(
+            RunStatus::Completed,
+            Some(&direct_minimizer_control(2, 2.0e-6)),
+            RelaxationCompletionMetrics {
+                max_torque_apm: None,
+                accepted_energy_plateau_range_j: None,
+                steps: 2,
+                relaxation_time_s: None,
+                numerical_stagnation: false,
+            },
+        );
+
+        assert_eq!(completion.status, "completed");
+        assert_eq!(completion.reason, Some(StageStopReason::MaxSteps));
+        assert!(!completion.converged);
+        assert_eq!(completion.metric, Some(StageMetricKind::Steps));
+    }
+
+    #[test]
+    fn backend_error_is_failed_not_completed() {
+        let completion = resolve_stage_completion(
+            RunStatus::Failed,
+            Some(&direct_minimizer_control(50_000, 2.0e-6)),
+            RelaxationCompletionMetrics::default(),
+        );
+
+        assert_eq!(completion.status, "failed");
+        assert_eq!(completion.reason, Some(StageStopReason::BackendError));
+        assert!(!completion.converged);
     }
 }

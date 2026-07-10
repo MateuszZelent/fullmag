@@ -459,13 +459,16 @@ pub(crate) fn execute_cuda_fdm(
     } else {
         RunStatus::Completed
     };
-    let completion = crate::relaxation::infer_stage_completion(
+    let completion = crate::relaxation::resolve_stage_completion(
         status,
         plan.relaxation.as_ref(),
-        &steps,
-        plan.gyromagnetic_ratio,
-        plan.material.damping,
-        llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()),
+        crate::relaxation::RelaxationCompletionMetrics {
+            max_torque_apm: None,
+            accepted_energy_plateau_range_j: energy_plateau.range(),
+            steps: latest_stats.step,
+            relaxation_time_s: Some(latest_stats.time),
+            numerical_stagnation: false,
+        },
     );
 
     Ok(ExecutedRun {

@@ -2828,13 +2828,10 @@ fn execute_fem_eigen_path(
             status: crate::types::RunStatus::Completed,
             steps: vec![],
             final_magnetization: plan.equilibrium_magnetization.clone(),
-            completion: Some(crate::relaxation::infer_stage_completion(
+            completion: Some(crate::relaxation::resolve_stage_completion(
                 crate::types::RunStatus::Completed,
                 None,
-                &[],
-                0.0,
-                0.0,
-                false,
+                crate::relaxation::RelaxationCompletionMetrics::default(),
             )),
         },
         initial_magnetization: plan.equilibrium_magnetization.clone(),
@@ -4977,13 +4974,16 @@ fn execute_cuda_fdm(
     } else {
         RunStatus::Completed
     };
-    let completion = crate::relaxation::infer_stage_completion(
+    let completion = crate::relaxation::resolve_stage_completion(
         status,
         plan.relaxation.as_ref(),
-        &steps,
-        plan.gyromagnetic_ratio,
-        plan.material.damping,
-        llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()),
+        crate::relaxation::RelaxationCompletionMetrics {
+            max_torque_apm: None,
+            accepted_energy_plateau_range_j: energy_plateau.range(),
+            steps: step_count,
+            relaxation_time_s: None,
+            numerical_stagnation: false,
+        },
     );
 
     Ok(ExecutedRun {

@@ -1167,17 +1167,6 @@ fn stage_requires_relaxed_frequency_response_equilibrium(stage: &ResolvedScriptS
     )
 }
 
-fn is_unqualified_equilibrium_stop_reason(reason: fullmag_ir::StageStopReason) -> bool {
-    matches!(
-        reason,
-        fullmag_ir::StageStopReason::MaxSteps
-            | fullmag_ir::StageStopReason::MaxPseudotime
-            | fullmag_ir::StageStopReason::MaxPhysicalTime
-            | fullmag_ir::StageStopReason::UserCancelled
-            | fullmag_ir::StageStopReason::BackendError
-    )
-}
-
 fn ensure_frequency_response_relaxed_continuation_is_qualified(
     stage: &ResolvedScriptStage,
     completion: Option<&fullmag_ir::StageCompletionIR>,
@@ -1186,14 +1175,16 @@ fn ensure_frequency_response_relaxed_continuation_is_qualified(
         return Ok(());
     }
     let Some(completion) = completion else {
-        return Ok(());
+        bail!(
+            "frequency-response stage '{}' requested equilibrium_source='relax', but the previous relaxation has no authoritative completion record; refusing to linearize around an unqualified state",
+            stage.entrypoint_kind
+        );
     };
-    let Some(reason) = completion.reason else {
-        return Ok(());
-    };
-    if !is_unqualified_equilibrium_stop_reason(reason) {
+    if completion.status == "completed" && completion.converged {
         return Ok(());
     }
+
+    let reason = completion.reason;
 
     let metric_name = completion.metric_name.as_deref().unwrap_or("metric");
     let metric_value = completion
@@ -2218,6 +2209,7 @@ fn scripted_stage_execution_state(
             started_at_unix_ms: None,
             completed_at_unix_ms: None,
             reason: None,
+            converged: false,
             artifact_refs: Vec::new(),
             checkpoint_ref: None,
             loaded_state_ref: None,
@@ -2227,6 +2219,7 @@ fn scripted_stage_execution_state(
             state_transition_reason: None,
             state_transfer_operator_kind: None,
             state_transition_ui_presentation: None,
+            metric: None,
             metric_name: None,
             metric_value: None,
             threshold: None,
@@ -2308,7 +2301,9 @@ fn stage_allows_sampled_continuation_initial_state(stage: &ResolvedScriptStage) 
 fn user_cancelled_stage_completion(status: &str) -> fullmag_ir::StageCompletionIR {
     fullmag_ir::StageCompletionIR {
         status: status.to_string(),
+        converged: false,
         reason: Some(fullmag_ir::StageStopReason::UserCancelled),
+        metric: None,
         metric_name: None,
         metric_value: None,
         threshold: None,
@@ -2324,6 +2319,7 @@ fn stage_record(index: usize, kind: Option<&str>) -> CurrentLiveStageExecutionRe
         started_at_unix_ms: None,
         completed_at_unix_ms: None,
         reason: None,
+        converged: false,
         artifact_refs: Vec::new(),
         checkpoint_ref: None,
         loaded_state_ref: None,
@@ -2333,6 +2329,7 @@ fn stage_record(index: usize, kind: Option<&str>) -> CurrentLiveStageExecutionRe
         state_transition_reason: None,
         state_transfer_operator_kind: None,
         state_transition_ui_presentation: None,
+        metric: None,
         metric_name: None,
         metric_value: None,
         threshold: None,
@@ -2483,6 +2480,7 @@ impl ActiveSequenceState {
                     .map(millis_to_u64)
                     .or(previous.completed_at_unix_ms),
                 reason: completion.and_then(|value| value.reason),
+                converged: completion.is_some_and(|value| value.converged),
                 artifact_refs,
                 checkpoint_ref: previous.checkpoint_ref,
                 loaded_state_ref: previous.loaded_state_ref,
@@ -2492,6 +2490,7 @@ impl ActiveSequenceState {
                 state_transition_reason: previous.state_transition_reason,
                 state_transfer_operator_kind: previous.state_transfer_operator_kind,
                 state_transition_ui_presentation: previous.state_transition_ui_presentation,
+                metric: completion.and_then(|value| value.metric),
                 metric_name: completion.and_then(|value| value.metric_name.clone()),
                 metric_value: completion.and_then(|value| value.metric_value),
                 threshold: completion.and_then(|value| value.threshold),
@@ -7796,7 +7795,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     let failed_ready_at_unix_ms = unix_time_millis().unwrap_or(awaiting_at_unix_ms);
                     let backend_error_completion = fullmag_ir::StageCompletionIR {
                         status: "failed".to_string(),
+                        converged: false,
                         reason: Some(fullmag_ir::StageStopReason::BackendError),
+                        metric: None,
                         metric_name: None,
                         metric_value: None,
                         threshold: None,
@@ -10040,9 +10041,17 @@ mod tests {
     }
 
     fn stage_completion(reason: fullmag_ir::StageStopReason) -> fullmag_ir::StageCompletionIR {
+        let converged = matches!(
+            reason,
+            fullmag_ir::StageStopReason::Torque
+                | fullmag_ir::StageStopReason::Energy
+                | fullmag_ir::StageStopReason::Gradient
+        );
         fullmag_ir::StageCompletionIR {
             status: "completed".to_string(),
+            converged,
             reason: Some(reason),
+            metric: Some(fullmag_ir::StageMetricKind::MaxTorqueApm),
             metric_name: Some("max_torque_T".to_string()),
             metric_value: Some(6.7e-3),
             threshold: Some(1.0e-4),
@@ -10860,7 +10869,9 @@ mod tests {
         state.mark_current_started("cmd-relax", 1_700_000_000_000, None);
         let completion = fullmag_ir::StageCompletionIR {
             status: "completed".into(),
+            converged: true,
             reason: Some(fullmag_ir::StageStopReason::Torque),
+            metric: Some(fullmag_ir::StageMetricKind::MaxTorqueApm),
             metric_name: Some("max_torque_apm".into()),
             metric_value: Some(75.0),
             threshold: Some(80.0),

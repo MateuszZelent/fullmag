@@ -3,21 +3,20 @@
 //! This module wraps the shared convergence logic from `relaxation.rs` and
 //! adds FEM-specific context:
 //!
-//! * torque threshold in A/m (reconstructed from dm/dt when the native backend
-//!   publishes it as a rate, or computed directly from |m × H_eff|)
+//! * exact torque threshold in A/m from |m × H_eff|
 //! * energy plateau detection over a rolling window of 50 steps
 //! * step/pseudotime/physical-time hard limits
 //! * stage-completion inference for FEM log messages
 //!
 //! All thresholds are in SI units as specified in `docs/physics/`.
 
-use fullmag_ir::{RelaxationControlIR, StageCompletionIR};
+use fullmag_ir::RelaxationControlIR;
 
 use crate::relaxation::{
-    infer_stage_completion, relaxation_converged, relaxation_stop_criteria_satisfied,
-    EnergyPlateauRangeJ, RelaxationEnergyPlateauWindow, RELAXATION_ENERGY_PLATEAU_WINDOW_STEPS,
+    relaxation_converged, relaxation_stop_criteria_satisfied, EnergyPlateauRangeJ,
+    RelaxationEnergyPlateauWindow, RELAXATION_ENERGY_PLATEAU_WINDOW_STEPS,
 };
-use crate::types::{RunStatus, StepStats};
+use crate::types::StepStats;
 
 // ── Re-exports ────────────────────────────────────────────────────────────────
 
@@ -63,31 +62,6 @@ pub fn converged_from_stats(
         control,
         stats,
         energy_plateau,
-        gyromagnetic_ratio,
-        damping,
-        pure_damping_rhs,
-    )
-}
-
-// ── Stage-completion inference ────────────────────────────────────────────────
-
-/// Infers a `StageCompletionIR` from the final run status and the collected
-/// step history.
-///
-/// Call this after the FEM loop exits to produce the provenance record that
-/// the session/artifact layer expects.
-pub fn infer_completion(
-    status: RunStatus,
-    control: Option<&RelaxationControlIR>,
-    steps: &[StepStats],
-    gyromagnetic_ratio: f64,
-    damping: f64,
-    pure_damping_rhs: bool,
-) -> StageCompletionIR {
-    infer_stage_completion(
-        status,
-        control,
-        steps,
         gyromagnetic_ratio,
         damping,
         pure_damping_rhs,

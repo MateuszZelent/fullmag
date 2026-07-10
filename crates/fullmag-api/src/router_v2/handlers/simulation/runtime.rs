@@ -198,6 +198,7 @@ pub async fn get_stage_execution(
                     started_at_unix_ms: record.started_at_unix_ms,
                     completed_at_unix_ms: record.completed_at_unix_ms,
                     reason: record.reason.as_ref().map(stage_stop_reason_string),
+                    converged: record.converged,
                     artifact_refs: record.artifact_refs.clone(),
                     checkpoint_ref: record.checkpoint_ref.clone(),
                     loaded_state_ref: record.loaded_state_ref.clone(),
@@ -209,6 +210,8 @@ pub async fn get_stage_execution(
                     state_transition_ui_presentation: record
                         .state_transition_ui_presentation
                         .clone(),
+                    metric_kind: record.metric.map(stage_metric_kind_string),
+                    metric_unit: record.metric.map(|metric| metric.unit().to_string()),
                     metric_name: record.metric_name.clone(),
                     metric_value: record.metric_value,
                     threshold: record.threshold,
@@ -2027,6 +2030,13 @@ fn stage_stop_reason_string(reason: &fullmag_ir::StageStopReason) -> String {
             _ => None,
         })
         .unwrap_or_else(|| format!("{reason:?}"))
+}
+
+fn stage_metric_kind_string(metric: fullmag_ir::StageMetricKind) -> String {
+    serde_json::to_value(metric)
+        .ok()
+        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+        .unwrap_or_else(|| format!("{metric:?}").to_ascii_lowercase())
 }
 
 fn runtime_status_kind(status: &crate::types::RuntimeStatusView) -> String {

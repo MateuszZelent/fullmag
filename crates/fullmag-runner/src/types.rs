@@ -74,8 +74,13 @@ pub struct FemCpuRelaxationQualificationMetadata {
     pub assembly_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relaxation_algorithm: Option<String>,
+    pub converged: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_metric_kind: Option<fullmag_ir::StageMetricKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_metric_unit: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop_metric_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -124,8 +129,13 @@ pub struct FemGpuRelaxationQualificationMetadata {
     pub relaxation_algorithm: Option<String>,
     pub algorithm_policy: FemGpuRelaxationAlgorithmPolicyMetadata,
     pub device_policy: FemGpuRelaxationDevicePolicyMetadata,
+    pub converged: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_metric_kind: Option<fullmag_ir::StageMetricKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_metric_unit: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop_metric_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

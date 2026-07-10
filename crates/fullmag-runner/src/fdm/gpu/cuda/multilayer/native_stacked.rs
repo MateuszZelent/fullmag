@@ -418,13 +418,16 @@ pub(super) fn execute_native_stacked_cuda_multilayer(
     } else {
         RunStatus::Completed
     };
-    let completion = crate::relaxation::infer_stage_completion(
+    let completion = crate::relaxation::resolve_stage_completion(
         status,
         plan.relaxation.as_ref(),
-        &steps,
-        plan.gyromagnetic_ratio,
-        native.combined_plan.material.damping,
-        pure_damping_relax,
+        crate::relaxation::RelaxationCompletionMetrics {
+            max_torque_apm: None,
+            accepted_energy_plateau_range_j: energy_plateau.range(),
+            steps: stats.step,
+            relaxation_time_s: Some(stats.time),
+            numerical_stagnation: false,
+        },
     );
 
     Ok(ExecutedRun {

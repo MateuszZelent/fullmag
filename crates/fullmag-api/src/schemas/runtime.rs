@@ -111,6 +111,7 @@ pub struct StageExecutionRecordResource {
     pub completed_at_unix_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    pub converged: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artifact_refs: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -129,6 +130,10 @@ pub struct StageExecutionRecordResource {
     pub state_transfer_operator_kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state_transition_ui_presentation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metric_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metric_unit: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metric_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

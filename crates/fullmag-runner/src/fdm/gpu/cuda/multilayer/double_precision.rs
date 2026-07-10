@@ -202,13 +202,16 @@ pub(super) fn execute_cuda_assisted_multilayer_double(
     } else {
         RunStatus::Completed
     };
-    let completion = crate::relaxation::infer_stage_completion(
+    let completion = crate::relaxation::resolve_stage_completion(
         status,
         plan.relaxation.as_ref(),
-        &steps,
-        plan.gyromagnetic_ratio,
-        average_damping(&contexts),
-        pure_damping_relax,
+        crate::relaxation::RelaxationCompletionMetrics {
+            max_torque_apm: None,
+            accepted_energy_plateau_range_j: energy_plateau.range(),
+            steps: step_count,
+            relaxation_time_s: Some(latest_stats.time),
+            numerical_stagnation: false,
+        },
     );
 
     Ok(ExecutedRun {

@@ -178,6 +178,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
     )?;
 
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+    let mut completion_metrics = crate::relaxation::RelaxationCompletionMetrics::default();
     let mut cancelled = false;
     let mut paused = false;
     while current_time(&states) < until_seconds {
@@ -247,6 +248,13 @@ pub(crate) fn execute_reference_fdm_multilayer(
         }
 
         let energy_plateau_range = energy_plateau.record(latest_stats.e_total);
+        completion_metrics = crate::relaxation::RelaxationCompletionMetrics {
+            max_torque_apm: Some(latest_stats.max_torque_Apm),
+            accepted_energy_plateau_range_j: energy_plateau_range,
+            steps: step_count,
+            relaxation_time_s: Some(latest_stats.time),
+            numerical_stagnation: false,
+        };
         let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
             latest_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
                 || relaxation_converged(
@@ -304,13 +312,10 @@ pub(crate) fn execute_reference_fdm_multilayer(
     } else {
         RunStatus::Completed
     };
-    let completion = crate::relaxation::infer_stage_completion(
+    let completion = crate::relaxation::resolve_stage_completion(
         status,
         plan.relaxation.as_ref(),
-        &steps,
-        plan.gyromagnetic_ratio,
-        average_damping(&contexts),
-        pure_damping_relax,
+        completion_metrics,
     );
 
     Ok(ExecutedRun {

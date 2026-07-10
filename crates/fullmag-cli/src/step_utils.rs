@@ -513,12 +513,35 @@ fn resolve_relaxation_until_seconds(
     if let Some(until_seconds) = stop.max_relaxation_time_s {
         return until_seconds;
     }
-    let Some(fullmag_ir::DynamicsIR::Llg { fixed_timestep, .. }) = dynamics else {
-        return f64::INFINITY;
-    };
-    match (stop.max_steps, fixed_timestep) {
-        (Some(max_steps), Some(dt)) => max_steps as f64 * dt,
-        _ => f64::INFINITY,
+    let _ = dynamics;
+    f64::INFINITY
+}
+
+#[cfg(test)]
+mod canonical_relaxation_time_tests {
+    use super::*;
+
+    #[test]
+    fn max_steps_does_not_synthesize_a_time_budget() {
+        let dynamics = Some(fullmag_ir::DynamicsIR::Llg {
+            gyromagnetic_ratio: 2.211e5,
+            integrator: "heun".to_string(),
+            fixed_timestep: Some(1.0e-13),
+            adaptive_timestep: None,
+            field_refresh: None,
+            mechanics: None,
+        });
+        let stop = fullmag_ir::RelaxStopIR {
+            torque_tolerance_apm: Some(1.0e-4),
+            energy_tolerance_j: None,
+            max_steps: Some(10),
+            max_relaxation_time_s: None,
+        };
+
+        assert_eq!(
+            resolve_relaxation_until_seconds(&dynamics, &stop),
+            f64::INFINITY
+        );
     }
 }
 

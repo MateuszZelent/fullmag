@@ -7853,7 +7853,9 @@ mod tests {
             final_magnetization: Vec::new(),
             completion: Some(fullmag_ir::StageCompletionIR {
                 status: "completed".to_string(),
+                converged: false,
                 reason: Some(StageStopReason::MaxSteps),
+                metric: Some(fullmag_ir::StageMetricKind::Steps),
                 metric_name: Some("steps".to_string()),
                 metric_value: Some(2.0),
                 threshold: Some(2.0),
@@ -7871,7 +7873,9 @@ mod tests {
             final_magnetization: Vec::new(),
             completion: Some(fullmag_ir::StageCompletionIR {
                 status: "completed".to_string(),
+                converged: true,
                 reason: Some(StageStopReason::Torque),
+                metric: Some(fullmag_ir::StageMetricKind::MaxTorqueApm),
                 metric_name: Some("max_torque_Apm".to_string()),
                 metric_value: Some(1e-6),
                 threshold: Some(1e-5),
@@ -7973,7 +7977,9 @@ mod tests {
         };
         let completion = StageCompletionIR {
             status: "completed".to_string(),
+            converged: false,
             reason: Some(StageStopReason::MaxSteps),
+            metric: Some(fullmag_ir::StageMetricKind::Steps),
             metric_name: Some("steps".to_string()),
             metric_value: Some(200.0),
             threshold: Some(200.0),

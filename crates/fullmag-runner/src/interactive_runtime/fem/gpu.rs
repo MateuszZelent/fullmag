@@ -280,13 +280,16 @@ impl GpuInteractiveFemPreviewRuntime {
         } else {
             RunStatus::Completed
         };
-        let completion = crate::relaxation::infer_stage_completion(
+        let completion = crate::relaxation::resolve_stage_completion(
             status,
             plan.relaxation.as_ref(),
-            &steps,
-            plan.gyromagnetic_ratio,
-            plan.material.damping,
-            pure_damping_relax,
+            crate::relaxation::RelaxationCompletionMetrics {
+                max_torque_apm: None,
+                accepted_energy_plateau_range_j: energy_plateau.range(),
+                steps: current_local_stats.step,
+                relaxation_time_s: Some(current_local_stats.time),
+                numerical_stagnation: false,
+            },
         );
 
         Ok(RunResult {
@@ -500,13 +503,16 @@ impl GpuInteractiveFemPreviewRuntime {
         } else {
             RunStatus::Completed
         };
-        let completion = crate::relaxation::infer_stage_completion(
+        let completion = crate::relaxation::resolve_stage_completion(
             status,
             plan.relaxation.as_ref(),
-            &steps,
-            plan.gyromagnetic_ratio,
-            plan.material.damping,
-            pure_damping_relax,
+            crate::relaxation::RelaxationCompletionMetrics {
+                max_torque_apm: None,
+                accepted_energy_plateau_range_j: energy_plateau.range(),
+                steps: current_local_stats.step,
+                relaxation_time_s: Some(current_local_stats.time),
+                numerical_stagnation: false,
+            },
         );
         Ok(ExecutedRun {
             result: RunResult {

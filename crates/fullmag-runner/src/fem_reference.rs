@@ -1001,13 +1001,16 @@ fn execute_reference_fem_impl(
     } else {
         RunStatus::Completed
     };
-    let completion = crate::relaxation::infer_stage_completion(
+    let completion = crate::relaxation::resolve_stage_completion(
         status,
         plan.relaxation.as_ref(),
-        &steps,
-        plan.gyromagnetic_ratio,
-        plan.material.damping,
-        pure_damping_relax,
+        crate::relaxation::RelaxationCompletionMetrics {
+            max_torque_apm: Some(current_stats.max_torque_Apm),
+            accepted_energy_plateau_range_j: energy_plateau.range(),
+            steps: step_count,
+            relaxation_time_s: Some(state.time_seconds),
+            numerical_stagnation: false,
+        },
     );
 
     Ok(ExecutedRun {

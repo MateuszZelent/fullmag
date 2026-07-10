@@ -390,17 +390,14 @@ pub(crate) fn execute_fem_frequency_response_validation(
                 ..StepStats::default()
             }],
             final_magnetization: plan.equilibrium_magnetization.clone(),
-            completion: Some(crate::relaxation::infer_stage_completion(
+            completion: Some(crate::relaxation::resolve_stage_completion(
                 if interrupted {
                     RunStatus::Cancelled
                 } else {
                     RunStatus::Completed
                 },
                 None,
-                &[],
-                0.0,
-                0.0,
-                false,
+                crate::relaxation::RelaxationCompletionMetrics::default(),
             )),
         },
         initial_magnetization: plan.equilibrium_magnetization.clone(),
@@ -2056,13 +2053,10 @@ fn try_execute_fem_frequency_response_native_production_cpu(
                         ..StepStats::default()
                     }],
                     final_magnetization: plan.equilibrium_magnetization.clone(),
-                    completion: Some(crate::relaxation::infer_stage_completion(
+                    completion: Some(crate::relaxation::resolve_stage_completion(
                         status,
                         None,
-                        &[],
-                        0.0,
-                        0.0,
-                        false,
+                        crate::relaxation::RelaxationCompletionMetrics::default(),
                     )),
                 },
                 initial_magnetization: plan.equilibrium_magnetization.clone(),

@@ -13,7 +13,7 @@ use fullmag_engine::{
 };
 use fullmag_ir::{
     ExecutionPrecision, FdmPlanIR, IntegratorChoice, OutputIR, RelaxationAlgorithmIR,
-    RelaxationControlIR, StageCompletionIR, StageStopReason,
+    RelaxationControlIR, StageCompletionIR,
 };
 
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
@@ -794,6 +794,7 @@ pub(crate) fn execute_reference_fdm(
     };
     let mut direct_minimizer_completion: Option<StageCompletionIR> = None;
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+    let mut completion_metrics = crate::relaxation::RelaxationCompletionMetrics::default();
     let mut last_preview_revision: Option<u64> = None;
     let mut cancelled = false;
     let mut paused = false;
@@ -1136,6 +1137,13 @@ pub(crate) fn execute_reference_fdm(
             }
 
             let energy_plateau_range = energy_plateau.record(latest_stats.e_total);
+            completion_metrics = crate::relaxation::RelaxationCompletionMetrics {
+                max_torque_apm: Some(latest_stats.max_torque_Apm),
+                accepted_energy_plateau_range_j: energy_plateau_range,
+                steps: step_count,
+                relaxation_time_s: Some(state.time_seconds),
+                numerical_stagnation: false,
+            };
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
                 step_count >= control.stop.max_steps.unwrap_or(u64::MAX)
                     || relaxation_converged(
@@ -1167,7 +1175,7 @@ pub(crate) fn execute_reference_fdm(
     )?;
 
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
-    let status = if paused {
+    let mut status = if paused {
         RunStatus::Paused
     } else if cancelled {
         RunStatus::Cancelled
@@ -1175,15 +1183,15 @@ pub(crate) fn execute_reference_fdm(
         RunStatus::Completed
     };
     let completion = direct_minimizer_completion.unwrap_or_else(|| {
-        crate::relaxation::infer_stage_completion(
+        crate::relaxation::resolve_stage_completion(
             status,
             plan.relaxation.as_ref(),
-            &steps,
-            plan.gyromagnetic_ratio,
-            plan.material.damping,
-            pure_damping_relax,
+            completion_metrics,
         )
     });
+    if completion.status == "failed" {
+        status = RunStatus::Failed;
+    }
 
     Ok(ExecutedRun {
         result: RunResult {
@@ -1231,80 +1239,31 @@ fn infer_direct_minimizer_completion(
     control: &RelaxationControlIR,
     converged: bool,
     steps_taken: u64,
-    pseudo_time_s: f64,
+    _pseudo_time_s: f64,
     final_energy_plateau_range_j: Option<f64>,
     final_max_torque: f64,
 ) -> StageCompletionIR {
-    if converged {
-        if let (Some(threshold), Some(metric_value)) = (
-            control.stop.energy_tolerance_j,
-            final_energy_plateau_range_j,
-        ) {
-            let torque_ok = control
-                .stop
-                .torque_tolerance_apm
-                .is_none_or(|torque_threshold| final_max_torque <= torque_threshold);
-            if torque_ok && metric_value <= threshold {
-                return StageCompletionIR {
-                    status: "completed".to_string(),
-                    reason: Some(StageStopReason::Energy),
-                    metric_name: Some("total_energy_plateau_range_J".to_string()),
-                    metric_value: Some(metric_value),
-                    threshold: Some(threshold),
-                };
-            }
-        }
-        if let Some(threshold) = control.stop.torque_tolerance_apm {
-            if final_max_torque <= threshold {
-                return StageCompletionIR {
-                    status: "completed".to_string(),
-                    reason: Some(StageStopReason::Torque),
-                    metric_name: Some("max_torque_apm".to_string()),
-                    metric_value: Some(final_max_torque),
-                    threshold: Some(threshold),
-                };
-            }
-        }
-        return StageCompletionIR {
-            status: "completed".to_string(),
-            reason: Some(StageStopReason::Gradient),
-            metric_name: Some("max_torque_apm".to_string()),
-            metric_value: Some(final_max_torque),
-            threshold: None,
-        };
-    }
-
-    if let Some(threshold) = control.stop.max_steps {
-        if steps_taken >= threshold {
-            return StageCompletionIR {
-                status: "completed".to_string(),
-                reason: Some(StageStopReason::MaxSteps),
-                metric_name: Some("steps".to_string()),
-                metric_value: Some(steps_taken as f64),
-                threshold: Some(threshold as f64),
-            };
-        }
-    }
-
-    if let Some(threshold) = control.stop.max_relaxation_time_s {
-        if pseudo_time_s >= threshold {
-            return StageCompletionIR {
-                status: "completed".to_string(),
-                reason: Some(StageStopReason::MaxPseudotime),
-                metric_name: Some("pseudo_time_s".to_string()),
-                metric_value: Some(pseudo_time_s),
-                threshold: Some(threshold),
-            };
-        }
-    }
-
-    StageCompletionIR {
-        status: "completed".to_string(),
-        reason: Some(StageStopReason::BackendError),
-        metric_name: Some("direct_minimizer_failed_descent".to_string()),
-        metric_value: Some(1.0),
-        threshold: None,
-    }
+    let max_steps_hit = control
+        .stop
+        .max_steps
+        .is_some_and(|limit| steps_taken >= limit);
+    let status = if !converged && !max_steps_hit {
+        RunStatus::Failed
+    } else {
+        RunStatus::Completed
+    };
+    crate::relaxation::resolve_stage_completion(
+        status,
+        Some(control),
+        crate::relaxation::RelaxationCompletionMetrics {
+            max_torque_apm: final_max_torque.is_finite().then_some(final_max_torque),
+            accepted_energy_plateau_range_j: final_energy_plateau_range_j
+                .map(|value| crate::relaxation::EnergyPlateauRangeJ { value }),
+            steps: steps_taken,
+            relaxation_time_s: None,
+            numerical_stagnation: converged,
+        },
+    )
 }
 
 fn record_due_outputs(
@@ -2095,10 +2054,15 @@ mod tests {
             2.0,
         );
 
+        assert_eq!(completion.status, "failed");
+        assert!(!completion.converged);
         assert_eq!(completion.reason, Some(StageStopReason::Gradient));
-        assert_eq!(completion.metric_name.as_deref(), Some("max_torque_apm"));
-        assert_eq!(completion.metric_value, Some(2.0));
-        assert_eq!(completion.threshold, None);
+        assert_eq!(
+            completion.metric_name.as_deref(),
+            Some("numerical_stagnation")
+        );
+        assert_eq!(completion.metric_value, Some(1.0));
+        assert_eq!(completion.threshold, Some(0.0));
     }
 
     #[test]
@@ -2129,11 +2093,10 @@ mod tests {
             2.0,
         );
 
+        assert_eq!(completion.status, "failed");
+        assert!(!completion.converged);
         assert_eq!(completion.reason, Some(StageStopReason::BackendError));
-        assert_eq!(
-            completion.metric_name.as_deref(),
-            Some("direct_minimizer_failed_descent")
-        );
+        assert_eq!(completion.metric_name, None);
     }
 
     struct EnvVarGuard {

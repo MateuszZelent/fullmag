@@ -968,6 +968,8 @@ pub(crate) struct StageExecutionRecord {
     #[serde(default)]
     pub reason: Option<fullmag_ir::StageStopReason>,
     #[serde(default)]
+    pub converged: bool,
+    #[serde(default)]
     pub artifact_refs: Vec<String>,
     #[serde(default)]
     pub checkpoint_ref: Option<String>,
@@ -985,6 +987,8 @@ pub(crate) struct StageExecutionRecord {
     pub state_transfer_operator_kind: Option<String>,
     #[serde(default)]
     pub state_transition_ui_presentation: Option<String>,
+    #[serde(default)]
+    pub metric: Option<fullmag_ir::StageMetricKind>,
     #[serde(default)]
     pub metric_name: Option<String>,
     #[serde(default)]
