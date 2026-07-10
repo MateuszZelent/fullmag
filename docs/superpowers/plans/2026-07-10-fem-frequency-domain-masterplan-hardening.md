@@ -959,6 +959,7 @@ git commit -m "Define frequency-domain production validation gates"
 - Replace: `docs/plans/active/fd_sovler_masterplan/17_eigen_k0_gpu_readiness_audit.md:1-249`.
 - Replace: `docs/plans/active/fd_sovler_masterplan/19_eigensolve_frequency_driven_physics_numerics_audit.md:1-981`.
 - Create: `docs/plans/active/fd_sovler_masterplan/25_frequency_domain_readiness_matrix.json`.
+- Create: `docs/plans/active/fd_sovler_masterplan/25_frequency_domain_readiness_scope_catalog.json`.
 - Consume without editing: `docs/specs/capability-matrix-v0.{md,json}`.
 
 **Interfaces:**
@@ -966,6 +967,11 @@ git commit -m "Define frequency-domain production validation gates"
 - Produces: one current status source for README, capability docs and future UI/provenance.
 
 - [ ] **Step 1: Create readiness schema and cells**
+
+Create the content-addressed `scope_catalog.v1` companion first. Every
+non-null readiness `validated_scope` or `executable_scope` binding must resolve
+through its `scope_catalog_uri` and `scope_catalog_sha256`; the matrix may not
+contain opaque scope hashes.
 
 Use:
 
