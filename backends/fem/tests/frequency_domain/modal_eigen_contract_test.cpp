@@ -1090,7 +1090,7 @@ void modal_nonzero_k_floquet_bloch_payload_rejects_gated_operator_terms()
     fullmag_fem_frequency_domain_result_destroy(&result);
 }
 
-void modal_nonzero_k_floquet_bloch_payload_with_demag_requires_dynamic_demag_k()
+void modal_nonzero_k_floquet_bloch_payload_with_demag_is_unavailable()
 {
     constexpr double stiffness_matrix_row_major[] = {1.0, 0.0, 0.0, 1.0};
     constexpr double gyrotropic_mass_row_major[] = {0.0, -1.0, 1.0, 0.0};
@@ -1118,8 +1118,7 @@ void modal_nonzero_k_floquet_bloch_payload_with_demag_requires_dynamic_demag_k()
     request.operator_request.operator_diagnostics_json =
         "{\"operator_family\":\"mfem_linearized_llg\","
         "\"payload_kind\":\"bloch_floquet_tangent_operator\","
-        "\"demag_payload_kind\":\"dynamic_demag_k_operator\","
-        "\"operator_terms_included\":[\"exchange\",\"dynamic_demag\"]}";
+        "\"demag_payload_kind\":\"dynamic_demag_k_operator\"}";
     request.operator_request.spin_wave_bc_kind = "floquet";
     request.has_floquet_k_vector = 1;
     request.floquet_k_vector_rad_per_m[0] = 1.0e6;
@@ -1133,7 +1132,7 @@ void modal_nonzero_k_floquet_bloch_payload_with_demag_requires_dynamic_demag_k()
           "nonzero-k Floquet modal demag payload must remain unavailable until dynamic demag-k exists");
     check(contains(result.diagnostics_json,
                    "\"production_cpu_rejection_reason\":\"production_cpu_modal_dynamic_demag_k_operator_missing\""),
-          "nonzero-k Floquet modal demag diagnostics reject a labelled dynamic demag-k payload without matrix data");
+          "nonzero-k Floquet modal demag diagnostics reject a labelled dynamic demag-k payload");
     check(contains(result.diagnostics_json,
                    "\"required_operator_contract\":\"bloch_floquet_tangent_operator_with_dynamic_demag_k\""),
           "nonzero-k Floquet modal demag diagnostics name the dynamic demag-k operator contract");
@@ -1143,6 +1142,9 @@ void modal_nonzero_k_floquet_bloch_payload_with_demag_requires_dynamic_demag_k()
     check(contains(result.diagnostics_json,
                    "\"dynamic_demag_operator_source\":\"missing_numeric_fem_demag_k\""),
           "nonzero-k Floquet modal demag diagnostics report missing dense block-real matrix data");
+    check(!contains(result.diagnostics_json,
+                    "\"dynamic_demag_operator_source\":\"provided_numeric_fem_demag_k_pending_full_fe_constraint_grad_k\""),
+          "nonzero-k Floquet modal demag diagnostics must not report an unimplemented payload as provided");
     check(!contains(result.diagnostics_json,
                     "\"production_cpu_rejection_reason\":\"production_cpu_modal_nonzero_k_floquet_operator_missing\""),
           "nonzero-k Floquet modal demag must not be rejected as a generic missing Bloch payload");
@@ -1455,7 +1457,7 @@ int main()
     modal_nonzero_k_floquet_tail_payload_preserves_periodic_pair_contract();
     modal_nonzero_k_floquet_bloch_payload_reaches_production_solver();
     modal_nonzero_k_floquet_bloch_payload_rejects_gated_operator_terms();
-    modal_nonzero_k_floquet_bloch_payload_with_demag_requires_dynamic_demag_k();
+    modal_nonzero_k_floquet_bloch_payload_with_demag_is_unavailable();
     modal_poisson_airbox_tail_payload_reaches_full_coupled_solver();
     modal_poisson_airbox_tail_shift_invert_action_writes_artifact();
     modal_poisson_airbox_tail_gpu_shift_invert_action_writes_artifact();
