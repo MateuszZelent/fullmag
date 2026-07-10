@@ -98,8 +98,8 @@ For a lateral periodic pair with source point `r_src`, destination point
 `r_dst`, and lattice vector:
 
 ```text
-delta_r = r_dst - r_src
-phase = exp(-i k dot delta_r)
+Delta r = r_dst - r_src
+phase = exp(-i k dot Delta r)
 ```
 
 the boundary conditions are:
@@ -113,14 +113,13 @@ For tangent-space magnetic unknowns this condition is enforced on the
 reconstructed vector, not on raw local tangent coordinates:
 
 ```text
-T_dst q_dst = phase * T_src q_src
-q_dst = phase * (T_dst^T R T_src) q_src
+T_dst q_dst = phase Q T_src q_src
+q_dst = phase (T_dst^T Q T_src) q_src
 ```
 
-`R` is the physical vector transformation associated with the periodic map.
-For a pure translation `R=I`, so the special case is
-`q_dst = phase * (T_dst^T T_src) q_src`. The Bloch phase and frame transport
-form one constraint and must pass the same corner/edge cycle certificate.
+`Q` is the physical vector transformation associated with the periodic map;
+`Q = I for a pure translation`. The Bloch phase and frame transport form one
+constraint and must pass the same corner/edge cycle certificate.
 
 The scalar-potential constraint is phase-only because `delta_phi` is a scalar.
 The magnetic block must report whether it used full-vector transport,

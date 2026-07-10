@@ -699,11 +699,35 @@ void SolvesGpuDensePoissonAirboxModalEigenAndMatchesCpuReference()
         contains(diagnostics_json, "\"schema_version\":\"gpu_modal_poisson_airbox_eigensolver.v1\""),
         "GPU-G5a diagnostics must expose the modal Poisson-airbox eigensolver schema");
     check(
-        contains(diagnostics_json, "\"solver_adapter\":\"gpu_dense_poisson_airbox_modal_eigen_contract\""),
-        "GPU-G5a diagnostics must identify the dense GPU modal eigensolver adapter");
+        contains(diagnostics_json, "\"lane\":\"gpu_poisson_airbox_k0_dense_validation\""),
+        "GPU-G5a diagnostics must identify the bounded Poisson-airbox validation lane");
     check(
-        contains(diagnostics_json, "\"gpu_device_resident_modal_eigensolver\":true"),
-        "GPU-G5a diagnostics must claim a device-resident modal eigensolver");
+        contains(diagnostics_json, "\"execution_lane\":\"gpu_dense_modal_validation\""),
+        "GPU-G5a diagnostics must identify the dense modal validation execution lane");
+    check(
+        contains(diagnostics_json, "\"solver_adapter\":\"gpu_dense_poisson_airbox_modal_dense_validation_contract\""),
+        "GPU-G5a diagnostics must identify the bounded dense validation adapter");
+    check(
+        contains(diagnostics_json, "\"operator_storage\":\"device\""),
+        "GPU-G5a diagnostics must report device operator storage");
+    check(
+        contains(diagnostics_json, "\"eigensolver_iteration_location\":\"device\""),
+        "GPU-G5a diagnostics must report device iteration location");
+    check(
+        contains(diagnostics_json, "\"persistent_solver_context\":false"),
+        "GPU-G5a diagnostics must report the non-persistent solver context");
+    check(
+        contains(diagnostics_json, "\"scalable_sparse_or_matrix_free\":false"),
+        "GPU-G5a diagnostics must reject scalable sparse or matrix-free status");
+    check(
+        contains(diagnostics_json, "\"validation_only\":true"),
+        "GPU-G5a diagnostics must report validation-only status");
+    check(
+        contains(diagnostics_json, "\"production_modal_claim\":false"),
+        "GPU-G5a diagnostics must reject a production modal claim");
+    check(
+        contains(diagnostics_json, "\"gpu_device_resident_modal_eigensolver\":false"),
+        "GPU-G5a diagnostics must reject the broad device-resident modal claim");
     check(
         contains(diagnostics_json, "\"frequency_response_proxy\":false"),
         "GPU-G5a diagnostics must reject frequency-response proxy semantics");

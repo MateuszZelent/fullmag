@@ -173,3 +173,120 @@ Total focused result: 178 tests passed, 0 failed; diff whitespace check passed.
 
 - Subject: `Freeze FEM dynamic solver contracts and claims`
 - SHA: recorded in the final handoff because the commit is created after this report
+
+---
+
+## Review-fix follow-up: producer parity and typed notation
+
+### Review findings verified
+
+The three Important findings in `/tmp/fullmag-dynamic-task1-review.md` were
+confirmed against the committed paths:
+
+1. The managed G5a recipe passed the CUDA producer artifact directly to the
+   updated verifier, while the producer and native expectation still emitted
+   and required the old broad device-resident claim.
+2. Notes 0831 and 0828 overloaded `R` as both a translation vector and a
+   physical vector transform, and 0828 omitted the transform from its lifted
+   vector equation.
+3. Note 0831 and its test used the untyped `sigma_real` spelling despite the
+   implementation plan freezing `sigma_real_per_s`.
+
+### Follow-up RED evidence
+
+Documentation assertions were changed first to require
+`sigma_real_per_s`, `phase = exp(-i k dot Delta r)`,
+`T_dst q_dst = phase Q T_src q_src`,
+`q_dst = phase (T_dst^T Q T_src) q_src`, and
+`Q = I for a pure translation`.
+
+```text
+$ python3 -m pytest -q scripts/test_frequency_domain_math_contract_docs.py
+F......                                                                  [100%]
+FAILED test_canonical_fem_dynamic_solver_contract_freezes_algebra_units_and_claims
+AssertionError: assert 'sigma_real_per_s' in canonical contract
+1 failed, 6 passed in 0.08s
+```
+
+The native G5a expectation was changed before the CUDA producer. The first
+sandboxed managed attempt stopped in Docker buildx on its read-only activity
+file and was not counted as RED. The approved repository-managed rerun reached
+the named native assertion:
+
+```text
+$ just verify-fem-frequency-domain-eigen-k0-poisson-airbox-gpu-shift-invert-action
+...
+[100%] Built target fem_poisson_airbox_modal_eigen_slepc_contract
+FAIL: GPU-G5a diagnostics must identify the bounded Poisson-airbox validation lane
+error: recipe `verify-fem-frequency-domain-eigen-k0-poisson-airbox-gpu-shift-invert-action` failed
+```
+
+This proved that the managed algebra gate was broken specifically by producer
+schema drift, not by the numerical kernel or verifier fixture.
+
+### Follow-up implementation
+
+- Changed only the G5a diagnostics JSON in
+  `backends/fem/gpu/cuda/frequency_domain/driven_response_gpu.cu`; allocation,
+  copies, kernel launch, iterations, eigenpair output, and residual calculation
+  are unchanged.
+- The producer and native test now agree on the bounded
+  `gpu_dense_modal_validation` lane, device storage/iteration facts,
+  non-persistent and non-scalable status, `validation_only=true`,
+  `production_modal_claim=false`, and
+  `gpu_device_resident_modal_eigensolver=false`.
+- Broad `gpu_device_resident_modal_eigensolver=true` remains rejected by the
+  Python verifier regression test.
+- Notes 0831 and 0828 now distinguish lattice translation `Delta r` from the
+  physical vector transform `Q`, use the same lifted and tangent equations,
+  and state `Q=I` only for pure translation.
+- Notes 0831 and 0830 plus the documentation test now use
+  `sigma_real_per_s` consistently with `sigma_imag_rad_per_s`.
+
+### Follow-up GREEN evidence
+
+Fresh Python and diff gates after the last source/documentation change:
+
+```text
+$ python3 -m pytest -q scripts/test_frequency_domain_math_contract_docs.py
+.......                                                                  [100%]
+7 passed in 0.03s
+
+$ python3 -m pytest -q scripts/test_verify_fem_frequency_domain_eigen_artifacts.py
+........................................................................ [ 43%]
+........................................................................ [ 87%]
+....................                                                     [100%]
+164 passed in 13.59s
+
+$ python3 -m pytest -q scripts/test_verify_fem_gpu_modal_poisson_airbox_eigensolver_artifact.py
+.......                                                                  [100%]
+7 passed in 0.28s
+
+$ git diff --check
+# exit 0, no output
+```
+
+Authoritative native/runtime gate:
+
+```text
+$ just verify-fem-frequency-domain-eigen-k0-poisson-airbox-gpu-shift-invert-action
+...
+Finished `release` profile [optimized] target(s) in 7m 47s
+{"bundle": "valid", "runtime": "fem-gpu-host"}
+[100%] Built target fem_poisson_airbox_modal_eigen_slepc_contract
+# exit 0
+```
+
+The emitted managed artifact contains the truthful bounded fields and passed
+the descriptor-apply, G5a eigensolver, and shift-invert parity verifiers.
+
+### Follow-up self-review and concerns
+
+- No numerical behavior changed; the CUDA diff is diagnostics JSON only.
+- No capability was promoted; the bounded dense G5a oracle remains
+  validation-only and distinct from persistent/scalable GPU modal solvers.
+- The managed rebuild emitted two pre-existing Rust dead-code warnings in
+  `fullmag-runner`; the required native target and artifact verifiers passed.
+- This follow-up supersedes the earlier report concern that the old G5a
+  producer would remain for a later task. It is now aligned with the Task 1
+  verifier while the broader claim remains fail-closed.

@@ -135,7 +135,7 @@ outer_boundary_kind = poisson_robin | poisson_dirichlet | pure_neumann
 gauge_policy = none | mean_zero_augmented
 gauge_reason = coercive_outer_boundary | pure_neumann_nullspace
 spectral_scalar_mode = complex | real_split
-sigma_real, sigma_imag_rad_per_s
+sigma_real_per_s, sigma_imag_rad_per_s
 ```
 
 The boundary, gauge, and reason form one validated tuple. `poisson_robin` and

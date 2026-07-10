@@ -89,7 +89,7 @@ algebraic realization of this complex contract, not another convention.
 | `omega_rad_s` | complex angular frequency | rad/s |
 | `frequency_hz` | cyclic frequency, `frequency_hz = Re(omega_rad_s) / (2 pi)` | Hz |
 | `lambda` | generalized eigenvalue, `lambda = i omega` | s^-1 |
-| `sigma_real` | real part of a spectral shift | rad/s |
+| `sigma_real_per_s` | real part of a spectral shift | rad/s |
 | `sigma_imag_rad_per_s` | imaginary part of a spectral shift | rad/s |
 | `delta_phi` | magnetic scalar-potential perturbation | A |
 | `beta` | Robin boundary coefficient | 1/m |
@@ -98,7 +98,7 @@ Requests and artifacts must not use an untyped `gamma`, `frequency`, `omega`,
 or `shift`. If both `gamma_rad_s_T` and `gamma0_rad_s_per_A_m` are supplied,
 their `mu0` relation is validated. A target expressed as `frequency_hz` is
 converted once to `omega_rad_s`; for the canonical modal convention the complex
-target is `sigma = i omega_target`, represented by `sigma_real=0` and
+target is `sigma = i omega_target`, represented by `sigma_real_per_s=0` and
 `sigma_imag_rad_per_s=omega_target`.
 
 ### 2.3 Eigenvalue, damping, and alternate-phasor mapping
@@ -197,20 +197,22 @@ case, not an assumed synonym for modal expansion.
 
 ### 3.4 Periodic and Floquet constraints
 
-For a periodic equivalence with lattice translation `R`, both the magnetic and
-scalar-potential fields use `exp(-i k dot R)`. The magnetic tangent constraint
-also transports the physical vector frame:
+For a periodic equivalence, let `Delta r` be the lattice translation and `Q`
+the physical vector transformation associated with the periodic map. Both the
+magnetic and scalar-potential fields use one phase, and the magnetic tangent
+constraint transports the physical vector frame:
 
 ```text
-q_dst = exp(-i k dot R) (T_dst^T R T_src) q_src
-phi_dst = exp(-i k dot R) phi_src.
+phase = exp(-i k dot Delta r)
+T_dst q_dst = phase Q T_src q_src
+q_dst = phase (T_dst^T Q T_src) q_src
+phi_dst = phase phi_src
+Q = I for a pure translation
 ```
 
-Here the middle `R` denotes the physical vector transformation associated with
-the periodic map and is the identity for a pure translation. Constraint
-construction operates on complete corner/edge equivalence classes and checks
-cycle consistency. A phase-only tangent constraint is invalid for varying
-frames.
+Constraint construction operates on complete corner/edge equivalence classes
+and checks cycle consistency. A phase-only tangent constraint is invalid for
+varying frames.
 
 ### 3.5 FEM CPU ownership
 

@@ -27,7 +27,7 @@ def test_canonical_fem_dynamic_solver_contract_freezes_algebra_units_and_claims(
         "gamma0_rad_s_per_A_m",
         "omega_rad_s",
         "frequency_hz = Re(omega_rad_s) / (2 pi)",
-        "sigma_real",
+        "sigma_real_per_s",
         "sigma_imag_rad_per_s",
         "left and right eigenvectors",
         "Petrov-Galerkin",
@@ -35,7 +35,10 @@ def test_canonical_fem_dynamic_solver_contract_freezes_algebra_units_and_claims(
         "poisson_robin, beta > 0 -> gauge_policy=none",
         "poisson_dirichlet -> gauge_policy=none",
         "pure_neumann -> gauge_policy=mean_zero_augmented",
-        "q_dst = exp(-i k dot R) (T_dst^T R T_src) q_src",
+        "phase = exp(-i k dot Delta r)",
+        "T_dst q_dst = phase Q T_src q_src",
+        "q_dst = phase (T_dst^T Q T_src) q_src",
+        "Q = I for a pure translation",
         "gpu_operator_host_krylov",
         "gpu_device_krylov",
         "gpu_dense_modal_validation",
@@ -44,6 +47,9 @@ def test_canonical_fem_dynamic_solver_contract_freezes_algebra_units_and_claims(
         "validation_state",
     ):
         assert required in normalized_contract
+
+    assert "| `sigma_real` |" not in contract
+    assert "sigma_real=0" not in contract
 
 
 def test_modal_gyrotropic_mapping_contract_is_explicit() -> None:
@@ -84,8 +90,10 @@ def test_floquet_tangent_frame_transport_and_identity_rejection_are_documented()
     assert "q_dst = exp(-i kF · delta_r) T_dst^T R T_src q_src" in pbc_plan
     assert "q_dst = phase * G_pair q_src" in pbc_plan
     assert "duplicate periodic node pairs are rejected" in pbc_plan
-    assert "T_dst q_dst = phase * T_src q_src" in floquet
-    assert "q_dst = phase * (T_dst^T T_src) q_src" in floquet
+    assert "phase = exp(-i k dot Delta r)" in floquet
+    assert "T_dst q_dst = phase Q T_src q_src" in floquet
+    assert "q_dst = phase (T_dst^T Q T_src) q_src" in floquet
+    assert "Q = I for a pure translation" in floquet
     assert "The scalar-potential constraint is phase-only" in floquet
     assert "must reject these requests with explicit capability diagnostics" in floquet
 
