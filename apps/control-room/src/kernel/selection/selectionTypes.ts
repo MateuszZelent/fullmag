@@ -35,6 +35,13 @@ type ObjectSelectionKind =
 
 type MeshQualitySelectionMetric = CrossSectionQualityMetric;
 export type RegionVisualizationTargetId = `region:${string}:${string}`;
+export interface VisualizationMeshPartLike {
+  geometry_id?: string | null;
+  id: string;
+  label?: string | null;
+  object_id?: string | null;
+  role?: string | null;
+}
 
 export function visualizationTargetIdForSceneObject(
   objectId: string,
