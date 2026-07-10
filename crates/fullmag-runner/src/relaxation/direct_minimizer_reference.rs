@@ -35,10 +35,14 @@ pub struct RelaxationResult {
     pub last_accepted_step_m_per_a: Option<f64>,
     pub line_search_backtracks: u64,
     pub energy_evaluations: u64,
+    pub field_evaluations: u64,
+    pub rhs_evaluations: u64,
     pub final_energy: f64,
     pub final_energy_plateau_range_j: Option<f64>,
     pub final_max_torque: f64,
     pub converged: bool,
+    pub numerical_stagnation: bool,
+    pub numerical_error: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -238,8 +242,11 @@ fn execute_projected_gradient_bb_soa(
     let mut steps: u64 = 0;
     let mut last_accepted_step_m_per_a = None;
     let mut line_search_backtracks = 0u64;
-    let mut energy_evaluations = 0u64;
+    let mut energy_evaluations = 1u64;
+    let mut field_evaluations = 1u64;
     let mut converged = false;
+    let mut numerical_stagnation = false;
+    let mut numerical_error = false;
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
     while steps < control.stop.max_steps.unwrap_or(u64::MAX) {
         let max_torque = compute_max_torque_soa(&m, &h_eff);
@@ -256,12 +263,16 @@ fn execute_projected_gradient_bb_soa(
         let mut backtracks = 0u32;
         let mut accepted_energy = None;
 
-        let g_norm_sq = global_dot_soa(&g, &g);
-        if g_norm_sq < 1e-30 {
-            converged = true;
+        let g_norm_sq = energy_directional_derivative_soa(problem, &g, &g);
+        if crate::relaxation::direct_minimizer::direct_minimizer_gradient_invalid(g_norm_sq) {
+            numerical_error = true;
             break;
         }
-        let descent_derivative = -energy_directional_derivative_soa(problem, &g, &g);
+        if crate::relaxation::direct_minimizer::direct_minimizer_gradient_degenerate(g_norm_sq) {
+            numerical_stagnation = true;
+            break;
+        }
+        let descent_derivative = -g_norm_sq;
 
         loop {
             scaled_retraction_soa_into(&m, &g, -trial_lambda, &mut m_trial);
@@ -284,6 +295,7 @@ fn execute_projected_gradient_bb_soa(
         };
 
         problem.effective_field_into_soa_ws(&m_trial, ws, &mut h_eff_new);
+        field_evaluations += 1;
         problem.tangent_gradient_from_soa_field_into(&m_trial, &h_eff_new, &mut g_new);
 
         let mut s_dot_s = 0.0;
@@ -366,10 +378,14 @@ fn execute_projected_gradient_bb_soa(
         last_accepted_step_m_per_a,
         line_search_backtracks,
         energy_evaluations,
+        field_evaluations,
+        rhs_evaluations: 0,
         final_energy: energy,
         final_energy_plateau_range_j: energy_plateau.range().map(|range| range.value),
         final_max_torque: final_torque,
         converged,
+        numerical_stagnation,
+        numerical_error,
     }
 }
 
@@ -400,8 +416,11 @@ fn execute_projected_gradient_bb_aos(
     let mut steps: u64 = 0;
     let mut last_accepted_step_m_per_a = None;
     let mut line_search_backtracks = 0u64;
-    let mut energy_evaluations = 0u64;
+    let mut energy_evaluations = 1u64;
+    let mut field_evaluations = 1u64;
     let mut converged = false;
+    let mut numerical_stagnation = false;
+    let mut numerical_error = false;
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
     while steps < control.stop.max_steps.unwrap_or(u64::MAX) {
         let max_torque = compute_max_torque(&m, &h_eff);
@@ -420,12 +439,16 @@ fn execute_projected_gradient_bb_aos(
         let mut accepted_trial = None;
 
         // Descent direction directional derivative for Armijo: g · (-g) = -||g||²
-        let g_norm_sq = global_dot(&g, &g);
-        if g_norm_sq < 1e-30 {
-            converged = true;
+        let g_norm_sq = energy_directional_derivative(problem, &g, &g);
+        if crate::relaxation::direct_minimizer::direct_minimizer_gradient_invalid(g_norm_sq) {
+            numerical_error = true;
             break;
         }
-        let descent_derivative = -energy_directional_derivative(problem, &g, &g);
+        if crate::relaxation::direct_minimizer::direct_minimizer_gradient_degenerate(g_norm_sq) {
+            numerical_stagnation = true;
+            break;
+        }
+        let descent_derivative = -g_norm_sq;
 
         loop {
             let candidate_m = (0..n)
@@ -456,6 +479,7 @@ fn execute_projected_gradient_bb_aos(
 
         // Compute gradient at new point
         let h_eff_new = problem.effective_field_from_vectors_ws(&m_trial, ws);
+        field_evaluations += 1;
         let g_new = ExchangeLlgProblem::tangent_gradient_from_field(&m_trial, &h_eff_new);
 
         // Barzilai–Borwein step selection (Boris-style signedness checks)
@@ -540,10 +564,14 @@ fn execute_projected_gradient_bb_aos(
         last_accepted_step_m_per_a,
         line_search_backtracks,
         energy_evaluations,
+        field_evaluations,
+        rhs_evaluations: 0,
         final_energy: energy,
         final_energy_plateau_range_j: energy_plateau.range().map(|range| range.value),
         final_max_torque: final_torque,
         converged,
+        numerical_stagnation,
+        numerical_error,
     }
 }
 
@@ -596,8 +624,11 @@ fn execute_nonlinear_cg_soa(
     let mut steps: u64 = 0;
     let mut last_accepted_step_m_per_a = None;
     let mut line_search_backtracks = 0u64;
-    let mut energy_evaluations = 0u64;
+    let mut energy_evaluations = 1u64;
+    let mut field_evaluations = 1u64;
     let mut converged = false;
+    let mut numerical_stagnation = false;
+    let mut numerical_error = false;
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
     while steps < control.stop.max_steps.unwrap_or(u64::MAX) {
         let max_torque = compute_max_torque_soa(&m, &h_eff);
@@ -609,8 +640,12 @@ fn execute_nonlinear_cg_soa(
             converged = true;
             break;
         }
-        if g_norm_sq < 1e-30 {
-            converged = true;
+        if crate::relaxation::direct_minimizer::direct_minimizer_gradient_invalid(g_norm_sq) {
+            numerical_error = true;
+            break;
+        }
+        if crate::relaxation::direct_minimizer::direct_minimizer_gradient_degenerate(g_norm_sq) {
+            numerical_stagnation = true;
             break;
         }
 
@@ -651,6 +686,7 @@ fn execute_nonlinear_cg_soa(
         };
 
         problem.effective_field_into_soa_ws(&m_new, ws, &mut h_eff_new);
+        field_evaluations += 1;
         problem.tangent_gradient_from_soa_field_into(&m_new, &h_eff_new, &mut g_new);
         let g_new_norm_sq = energy_directional_derivative_soa(problem, &g_new, &g_new);
 
@@ -716,10 +752,14 @@ fn execute_nonlinear_cg_soa(
         last_accepted_step_m_per_a,
         line_search_backtracks,
         energy_evaluations,
+        field_evaluations,
+        rhs_evaluations: 0,
         final_energy: energy,
         final_energy_plateau_range_j: energy_plateau.range().map(|range| range.value),
         final_max_torque: final_torque,
         converged,
+        numerical_stagnation,
+        numerical_error,
     }
 }
 
@@ -748,8 +788,11 @@ fn execute_nonlinear_cg_aos(
     let mut steps: u64 = 0;
     let mut last_accepted_step_m_per_a = None;
     let mut line_search_backtracks = 0u64;
-    let mut energy_evaluations = 0u64;
+    let mut energy_evaluations = 1u64;
+    let mut field_evaluations = 1u64;
     let mut converged = false;
+    let mut numerical_stagnation = false;
+    let mut numerical_error = false;
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
     while steps < control.stop.max_steps.unwrap_or(u64::MAX) {
         // Check convergence
@@ -762,8 +805,12 @@ fn execute_nonlinear_cg_aos(
             converged = true;
             break;
         }
-        if g_norm_sq < 1e-30 {
-            converged = true;
+        if crate::relaxation::direct_minimizer::direct_minimizer_gradient_invalid(g_norm_sq) {
+            numerical_error = true;
+            break;
+        }
+        if crate::relaxation::direct_minimizer::direct_minimizer_gradient_degenerate(g_norm_sq) {
+            numerical_stagnation = true;
             break;
         }
 
@@ -812,6 +859,7 @@ fn execute_nonlinear_cg_aos(
 
         // New gradient at m_new
         let h_eff_new = problem.effective_field_from_vectors_ws(&m_new, ws);
+        field_evaluations += 1;
         let g_new = ExchangeLlgProblem::tangent_gradient_from_field(&m_new, &h_eff_new);
         let g_new_norm_sq = energy_directional_derivative(problem, &g_new, &g_new);
 
@@ -885,10 +933,14 @@ fn execute_nonlinear_cg_aos(
         last_accepted_step_m_per_a,
         line_search_backtracks,
         energy_evaluations,
+        field_evaluations,
+        rhs_evaluations: 0,
         final_energy: energy,
         final_energy_plateau_range_j: energy_plateau.range().map(|range| range.value),
         final_max_torque: final_torque,
         converged,
+        numerical_stagnation,
+        numerical_error,
     }
 }
 
@@ -996,6 +1048,10 @@ mod tests {
             expected.line_search_backtracks
         );
         assert_eq!(actual.energy_evaluations, expected.energy_evaluations);
+        assert_eq!(actual.field_evaluations, expected.field_evaluations);
+        assert_eq!(actual.rhs_evaluations, expected.rhs_evaluations);
+        assert_eq!(actual.numerical_stagnation, expected.numerical_stagnation);
+        assert_eq!(actual.numerical_error, expected.numerical_error);
         assert_eq!(actual.converged, expected.converged);
         assert!(
             (actual.final_energy - expected.final_energy).abs() <= tolerance,
@@ -1079,6 +1135,12 @@ mod tests {
             (result.final_magnetization[0][0] - initial[0][0]).abs() > 1e-8
                 || (result.final_magnetization[0][2] - initial[0][2]).abs() > 1e-8,
             "macrospin magnetization should change after an accepted BB step"
+        );
+        assert_eq!(result.field_evaluations, result.steps_taken + 1);
+        assert_eq!(result.rhs_evaluations, 0);
+        assert_eq!(
+            result.energy_evaluations,
+            result.steps_taken + result.line_search_backtracks + 1
         );
     }
 

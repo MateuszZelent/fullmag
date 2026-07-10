@@ -4773,6 +4773,7 @@ fn execute_cuda_fdm(
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
     let mut last_preview_revision: Option<u64> = None;
     let mut cancelled = false;
+    let mut numerical_stagnation = false;
     let mut current_stats = backend.snapshot_step_stats(plan.grid.cells)?;
     ensure_single_object_scalars(&mut current_stats, "free");
 
@@ -4791,6 +4792,7 @@ fn execute_cuda_fdm(
         )?;
         latest_stats = outcome.latest_stats;
         cancelled = outcome.cancelled;
+        numerical_stagnation = outcome.numerical_stagnation;
     } else {
         while current_time < until_seconds {
             if let Some(live) = live.as_mut() {
@@ -4985,7 +4987,7 @@ fn execute_cuda_fdm(
             accepted_energy_plateau_range_j: energy_plateau.range(),
             steps: completion_steps,
             relaxation_time_s: completion_time_s,
-            numerical_stagnation: false,
+            numerical_stagnation,
         },
     );
 

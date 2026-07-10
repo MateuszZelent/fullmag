@@ -23,7 +23,6 @@ pub(crate) const ARMIJO_COEFFICIENT: f64 = 1e-4;
 pub(crate) const PROJECTED_GRADIENT_MAX_BACKTRACK: u32 = 20;
 pub(crate) const NONLINEAR_CG_MAX_BACKTRACK: u32 = 30;
 pub(crate) const NONLINEAR_CG_RESTART_INTERVAL: u64 = 50;
-const GRADIENT_NORM_SQ_FLOOR: f64 = 1e-30;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DirectMinimizerAlgorithm {
@@ -110,7 +109,28 @@ pub(crate) fn energy_metric_dot(
 }
 
 pub(crate) fn direct_minimizer_gradient_degenerate(gradient_norm_sq: f64) -> bool {
-    gradient_norm_sq < GRADIENT_NORM_SQ_FLOOR
+    gradient_norm_sq == 0.0
+}
+
+pub(crate) fn direct_minimizer_gradient_invalid(gradient_norm_sq: f64) -> bool {
+    !gradient_norm_sq.is_finite() || gradient_norm_sq < 0.0
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DirectMinimizerEvaluationCounts {
+    pub(crate) energy: u32,
+    pub(crate) field: u32,
+    pub(crate) rhs: u32,
+}
+
+pub(crate) fn snapshot_trial_evaluation_counts(
+    snapshot_trials: u32,
+) -> DirectMinimizerEvaluationCounts {
+    DirectMinimizerEvaluationCounts {
+        energy: snapshot_trials,
+        field: snapshot_trials,
+        rhs: snapshot_trials,
+    }
 }
 
 pub(crate) fn direct_minimizer_step_budget(control: &RelaxationControlIR) -> u64 {
@@ -493,13 +513,26 @@ mod tests {
     }
 
     #[test]
-    fn direct_minimizer_gradient_degenerate_uses_floor() {
-        assert!(direct_minimizer_gradient_degenerate(
-            GRADIENT_NORM_SQ_FLOOR * 0.5
-        ));
-        assert!(!direct_minimizer_gradient_degenerate(
-            GRADIENT_NORM_SQ_FLOOR
-        ));
+    fn direct_minimizer_metric_degeneracy_does_not_depend_on_mesh_sum_scale() {
+        assert!(direct_minimizer_gradient_degenerate(0.0));
+        assert!(!direct_minimizer_gradient_degenerate(-1.0));
+        assert!(!direct_minimizer_gradient_degenerate(f64::NAN));
+        assert!(!direct_minimizer_gradient_degenerate(f64::INFINITY));
+        assert!(direct_minimizer_gradient_invalid(-1.0));
+        assert!(direct_minimizer_gradient_invalid(f64::NAN));
+        assert!(direct_minimizer_gradient_invalid(f64::INFINITY));
+        assert!(!direct_minimizer_gradient_invalid(0.0));
+        assert!(!direct_minimizer_gradient_degenerate(f64::MIN_POSITIVE));
+        assert!(!direct_minimizer_gradient_degenerate(1.0e-40));
+    }
+
+    #[test]
+    fn snapshot_trial_counts_one_field_energy_and_rhs_evaluation() {
+        let counts = snapshot_trial_evaluation_counts(3);
+
+        assert_eq!(counts.energy, 3);
+        assert_eq!(counts.field, 3);
+        assert_eq!(counts.rhs, 3);
     }
 
     #[test]

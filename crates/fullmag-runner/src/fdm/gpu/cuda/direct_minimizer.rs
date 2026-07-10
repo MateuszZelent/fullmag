@@ -11,12 +11,12 @@ use crate::fdm::gpu::cuda::native::NativeFdmBackend;
 use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 use crate::relaxation::direct_minimizer::{
     apply_direct_minimizer_step_metrics, direct_minimizer_gradient_degenerate,
-    direct_minimizer_gradient_norm_sq, direct_minimizer_within_runtime_budget, energy_metric_dot,
+    direct_minimizer_gradient_invalid, direct_minimizer_within_runtime_budget, energy_metric_dot,
     nonlinear_cg_descent_direction_dot, nonlinear_cg_initial_step_size, nonlinear_cg_line_search,
     nonlinear_cg_next_direction, projected_gradient_line_search,
-    projected_gradient_step_size_update, DirectMinimizerAlgorithm, DirectMinimizerControl,
-    DirectMinimizerState, DirectMinimizerTrialEvaluation, NONLINEAR_CG_MAX_BACKTRACK,
-    PROJECTED_GRADIENT_MAX_BACKTRACK,
+    projected_gradient_step_size_update, snapshot_trial_evaluation_counts,
+    DirectMinimizerAlgorithm, DirectMinimizerControl, DirectMinimizerState,
+    DirectMinimizerTrialEvaluation, NONLINEAR_CG_MAX_BACKTRACK, PROJECTED_GRADIENT_MAX_BACKTRACK,
 };
 use crate::relaxation::vector_math::{max_torque_from_field, tangent_gradient_from_field};
 use crate::relaxation::{relaxation_stop_criteria_satisfied, RelaxationEnergyPlateauWindow};
@@ -26,6 +26,7 @@ use crate::types::{LiveStepConsumer, RunError, StepAction, StepStats, StepUpdate
 pub(crate) struct CudaDirectMinimizerOutcome {
     pub(crate) latest_stats: Option<StepStats>,
     pub(crate) cancelled: bool,
+    pub(crate) numerical_stagnation: bool,
 }
 
 fn flatten_vectors(values: &[[f64; 3]]) -> Vec<f64> {
@@ -68,6 +69,7 @@ pub(crate) fn execute_direct_minimizer(
     let control = direct_minimizer.control;
     let mut latest_stats = Some(current_stats.clone());
     let mut cancelled = false;
+    let mut numerical_stagnation = false;
     let mut state = DirectMinimizerState::new(
         backend.copy_m(cell_count)?,
         backend.copy_h_eff(cell_count)?,
@@ -144,8 +146,15 @@ pub(crate) fn execute_direct_minimizer(
         if relaxation_stop_criteria_satisfied(control, None, max_torque) {
             break;
         }
-        let g_norm_sq = direct_minimizer_gradient_norm_sq(&state.gradient);
-        if direct_minimizer_gradient_degenerate(g_norm_sq) {
+        let weighted_gradient_norm_sq =
+            energy_metric_dot(&state.gradient, &state.gradient, &ms_apm, &volumes_m3);
+        if direct_minimizer_gradient_invalid(weighted_gradient_norm_sq) {
+            return Err(RunError {
+                message: "FDM CUDA direct-minimizer gradient metric is invalid".to_string(),
+            });
+        }
+        if direct_minimizer_gradient_degenerate(weighted_gradient_norm_sq) {
+            numerical_stagnation = true;
             break;
         }
 
@@ -153,8 +162,7 @@ pub(crate) fn execute_direct_minimizer(
         let (trial_stats, m_trial, line_search_backtracks, energy_evaluations) =
             match direct_minimizer.algorithm {
                 DirectMinimizerAlgorithm::ProjectedGradientBb => {
-                    let direction_dot_gradient_j_per_step =
-                        -energy_metric_dot(&state.gradient, &state.gradient, &ms_apm, &volumes_m3);
+                    let direction_dot_gradient_j_per_step = -weighted_gradient_norm_sq;
                     let Some(accepted_trial) = projected_gradient_line_search(
                         state.energy_j,
                         direction_dot_gradient_j_per_step,
@@ -163,7 +171,6 @@ pub(crate) fn execute_direct_minimizer(
                         trial_lambda,
                         |trial| {
                             backend.upload_magnetization(trial)?;
-                            backend.refresh_observables()?;
                             let mut stats = backend.snapshot_step_stats(plan.grid.cells)?;
                             ensure_single_object_scalars(&mut stats, "free");
                             Ok::<_, RunError>(DirectMinimizerTrialEvaluation {
@@ -229,7 +236,6 @@ pub(crate) fn execute_direct_minimizer(
                         trial_lambda,
                         |trial| {
                             backend.upload_magnetization(trial)?;
-                            backend.refresh_observables()?;
                             let mut stats = backend.snapshot_step_stats(plan.grid.cells)?;
                             ensure_single_object_scalars(&mut stats, "free");
                             Ok::<_, RunError>(DirectMinimizerTrialEvaluation {
@@ -292,15 +298,23 @@ pub(crate) fn execute_direct_minimizer(
             .per_object_scalars
             .entry("free".to_string())
             .or_default();
+        let evaluation_counts = snapshot_trial_evaluation_counts(energy_evaluations);
         scalar_metrics.insert(
             "line_search_backtracks".to_string(),
             f64::from(line_search_backtracks),
         );
         scalar_metrics.insert(
             "energy_evaluations".to_string(),
-            f64::from(energy_evaluations),
+            f64::from(evaluation_counts.energy),
         );
-        scalar_metrics.insert("rhs_evaluations".to_string(), f64::from(energy_evaluations));
+        scalar_metrics.insert(
+            "field_evaluations".to_string(),
+            f64::from(evaluation_counts.field),
+        );
+        scalar_metrics.insert(
+            "rhs_evaluations".to_string(),
+            f64::from(evaluation_counts.rhs),
+        );
         scalar_metrics.insert("accepted_steps".to_string(), state.accepted_steps as f64);
 
         artifacts.record_scalar(&accepted_stats)?;
@@ -317,5 +331,6 @@ pub(crate) fn execute_direct_minimizer(
     Ok(CudaDirectMinimizerOutcome {
         latest_stats,
         cancelled,
+        numerical_stagnation,
     })
 }

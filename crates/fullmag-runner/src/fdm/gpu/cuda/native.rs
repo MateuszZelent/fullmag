@@ -2045,6 +2045,22 @@ mod tests {
     }
 
     #[test]
+    fn native_fdm_cuda_rejects_heterogeneous_ms_before_ffi() {
+        let mut plan = make_relaxation_precession_test_plan();
+        plan.material.ms_field = Some(vec![7.5e5; plan.initial_magnetization.len()]);
+
+        let error = match NativeFdmBackend::create(&plan) {
+            Ok(_) => panic!("cellwise Ms must remain fail-closed on native FDM CUDA"),
+            Err(error) => error,
+        };
+
+        assert!(error
+            .message
+            .contains("does not yet support cellwise material fields"));
+        assert!(error.message.contains("FDM CPU reference"));
+    }
+
+    #[test]
     fn native_fdm_region_exchange_pairs_reject_invalid_exchange() {
         let mut plan = make_relaxation_precession_test_plan();
         plan.region_mask = vec![1, 2];

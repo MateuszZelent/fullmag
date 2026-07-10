@@ -858,15 +858,18 @@ pub(crate) fn execute_reference_fdm(
             result.energy_evaluations as f64,
         );
         direct_metrics.insert(
-            "rhs_evaluations".to_string(),
-            result.energy_evaluations as f64,
+            "field_evaluations".to_string(),
+            result.field_evaluations as f64,
         );
+        direct_metrics.insert("rhs_evaluations".to_string(), result.rhs_evaluations as f64);
         direct_metrics.insert("accepted_steps".to_string(), result.steps_taken as f64);
         steps.push(final_stats);
         direct_minimizer_completion = Some(infer_direct_minimizer_completion(
             control,
             result.converged,
             result.steps_taken,
+            result.numerical_stagnation,
+            result.numerical_error,
             result.final_energy_plateau_range_j,
             result.final_max_torque,
         ));
@@ -1259,6 +1262,8 @@ fn infer_direct_minimizer_completion(
     control: &RelaxationControlIR,
     converged: bool,
     steps_taken: u64,
+    numerical_stagnation: bool,
+    numerical_error: bool,
     final_energy_plateau_range_j: Option<f64>,
     final_max_torque: f64,
 ) -> StageCompletionIR {
@@ -1266,7 +1271,7 @@ fn infer_direct_minimizer_completion(
         .stop
         .max_steps
         .is_some_and(|limit| steps_taken >= limit);
-    let status = if !converged && !max_steps_hit {
+    let status = if numerical_error || (!converged && !max_steps_hit && !numerical_stagnation) {
         RunStatus::Failed
     } else {
         RunStatus::Completed
@@ -1280,7 +1285,7 @@ fn infer_direct_minimizer_completion(
                 .map(|value| crate::relaxation::EnergyPlateauRangeJ { value }),
             steps: steps_taken,
             relaxation_time_s: None,
-            numerical_stagnation: converged,
+            numerical_stagnation,
         },
     )
 }
@@ -2032,6 +2037,8 @@ mod tests {
             &direct_minimizer_test_control(),
             true,
             2,
+            false,
+            false,
             None,
             5.0e-4,
         );
@@ -2053,7 +2060,8 @@ mod tests {
             },
             ..direct_minimizer_test_control()
         };
-        let completion = infer_direct_minimizer_completion(&control, true, 8, Some(5.0e-19), 2.0);
+        let completion =
+            infer_direct_minimizer_completion(&control, true, 8, false, false, Some(5.0e-19), 2.0);
 
         assert_eq!(completion.reason, Some(StageStopReason::Energy));
         assert_eq!(
@@ -2066,8 +2074,15 @@ mod tests {
 
     #[test]
     fn direct_minimizer_completion_reports_gradient_when_torque_threshold_is_not_met() {
-        let completion =
-            infer_direct_minimizer_completion(&direct_minimizer_test_control(), true, 2, None, 2.0);
+        let completion = infer_direct_minimizer_completion(
+            &direct_minimizer_test_control(),
+            false,
+            2,
+            true,
+            false,
+            None,
+            2.0,
+        );
 
         assert_eq!(completion.status, "failed");
         assert!(!completion.converged);
@@ -2086,6 +2101,8 @@ mod tests {
             &direct_minimizer_test_control(),
             false,
             10,
+            false,
+            false,
             None,
             2.0,
         );
@@ -2102,6 +2119,8 @@ mod tests {
             &direct_minimizer_test_control(),
             false,
             0,
+            false,
+            false,
             None,
             2.0,
         );
@@ -2110,6 +2129,23 @@ mod tests {
         assert!(!completion.converged);
         assert_eq!(completion.reason, Some(StageStopReason::BackendError));
         assert_eq!(completion.metric_name, None);
+    }
+
+    #[test]
+    fn direct_minimizer_nonfinite_gradient_reports_backend_error() {
+        let completion = infer_direct_minimizer_completion(
+            &direct_minimizer_test_control(),
+            false,
+            0,
+            false,
+            true,
+            None,
+            f64::NAN,
+        );
+
+        assert_eq!(completion.status, "failed");
+        assert!(!completion.converged);
+        assert_eq!(completion.reason, Some(StageStopReason::BackendError));
     }
 
     struct EnvVarGuard {
