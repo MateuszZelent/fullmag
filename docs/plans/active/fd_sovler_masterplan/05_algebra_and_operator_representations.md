@@ -12,10 +12,17 @@ supersedes:
 
 # Algebra and operator representations
 
-The normative sign, unit, and operator definitions are
-[`FrequencyOperatorDictionary.v1` in physics note 0831](../../../physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md).
-The equations below are a representation summary of that dictionary, not a
-second convention.
+Current authority is split across
+[physics note 0700](../../../physics/0700-frequency-domain-linearized-llg.md)
+for absorbed power and the existing physics/sign rules,
+[physics note 0830](../../../physics/0830-fem-poisson-airbox-modal-eigen.md)
+for the Poisson modal-eigen contract, and
+[`FrequencyOperatorDictionary.v1` in physics note 0831](../../../physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md)
+for the dynamic-pencil dictionary portions it currently defines. The equations
+below remain normative masterplan requirements. Consolidating the general
+`D_R`/`D_I` split and `p_abs`/`absorbed_by_magnetization` into note 0831 remains
+parallel-plan work; once complete, that note is the target sole dictionary
+authority.
 
 ## 1. Layer separation
 
@@ -74,8 +81,15 @@ D(omega) = D_R + i D_I
 [ D_I   D_R ] [q_I]   [b_I]
 ```
 
-The special case `[K,+omega*M;-omega*M,K]` is valid only with the explicit
-mapping `K=-L` and `M=B`. Backends may not infer that mapping from matrix shape.
+For real `K=-L` and `M=B`, `D=K+i*omega*M`, so the corresponding shortcut is
+
+```text
+[ K        -omega M ] [q_R] = [b_R]
+[ +omega M  K       ] [q_I]   [b_I]
+```
+
+Backends may use this shortcut only with that explicit mapping and may not infer
+it from matrix shape.
 
 ## 4. Full-coupled demag/airbox
 
@@ -185,11 +199,11 @@ p_abs = -0.5*mu0*Ms*omega*Im(conj(h_drive) dot delta_m)
 observable = absorbed_by_magnetization
 ```
 
-These are summaries of the canonical convention in
-[note 0831](../../../physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md),
-with the absorbed-power SI derivation in
-[note 0700](../../../physics/0700-frequency-domain-linearized-llg.md). They are
-not backend-selectable signs. Positive Gilbert damping must yield positive
+The dynamic-pencil and damping portions follow
+[note 0831](../../../physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md).
+The absorbed-power observable and its SI derivation are currently authoritative
+in [note 0700](../../../physics/0700-frequency-domain-linearized-llg.md). These
+are not backend-selectable signs. Positive Gilbert damping must yield positive
 absorbed power near resonance.
 
 ## 9. GPU device representation

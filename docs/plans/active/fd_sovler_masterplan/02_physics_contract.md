@@ -14,10 +14,17 @@ supersedes:
 
 Every backend must solve the same physics.
 
-The sole normative operator and unit dictionary is
-[`FrequencyOperatorDictionary.v1` in physics note 0831](../../../physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md).
-This document summarizes that dictionary; it does not define an alternative
-sign, unit, damping, linewidth, or observable convention.
+Current authority is split across
+[physics note 0700](../../../physics/0700-frequency-domain-linearized-llg.md)
+for absorbed power and the existing physics/sign rules,
+[physics note 0830](../../../physics/0830-fem-poisson-airbox-modal-eigen.md)
+for the Poisson modal-eigen contract, and
+[`FrequencyOperatorDictionary.v1` in physics note 0831](../../../physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md)
+for the dynamic-pencil dictionary portions it currently defines. The equations
+below are normative masterplan requirements and do not define backend-selectable
+conventions. Consolidating the general `D_R`/`D_I` split and
+`p_abs`/`absorbed_by_magnetization` into note 0831 remains parallel-plan work;
+once complete, that note is the target sole dictionary authority.
 
 ## 1. Canonical ansatz and equation
 
@@ -191,9 +198,15 @@ D(omega) = i omega B - L = D_R + i D_I
 [ D_I   D_R ] [q_I]   [b_I]
 ```
 
-The special case `[K,+omega*M;-omega*M,K]` is permitted only after the
-implementation explicitly maps `K=-L` and `M=B`. The real split is an algebraic
-representation, not a second physics convention.
+For real `K=-L` and `M=B`, `D=K+i*omega*M`, so the corresponding shortcut is
+
+```text
+[ K        -omega M ] [q_R] = [b_R]
+[ +omega M  K       ] [q_I]   [b_I]
+```
+
+This shortcut is permitted only with that explicit `K`/`M` mapping. The real
+split is an algebraic representation, not a second physics convention.
 
 For `lambda=lambda_r+i lambda_i`, `omega=-i lambda`. The positive undamped
 branch has `lambda_i>0`, and
@@ -215,10 +228,8 @@ damping_rate_hz = Gamma/(2*pi)
 linewidth_fwhm_hz = Gamma/pi
 ```
 
-The absorbed-power observable is the convention frozen by
-[note 0831](../../../physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md)
-and summarized with its SI derivation in
-[note 0700](../../../physics/0700-frequency-domain-linearized-llg.md):
+The absorbed-power observable and its SI derivation are currently authoritative
+in [note 0700](../../../physics/0700-frequency-domain-linearized-llg.md):
 
 ```text
 p_abs = -0.5*mu0*Ms*omega*Im(conj(h_drive) dot delta_m)
