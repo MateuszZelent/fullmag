@@ -50,9 +50,11 @@ Analytical values and trusted reference solutions are verifier-side data. They
 must not construct the production operator, choose its target, select a mode,
 set convergence, certify solver success, or alter the artifact under test.
 
-Every artifact named in every gate row below includes a mandatory top-level
-`verified_coverage_of` field whose value is this `validation_scope_binding.v1`
-object from Chapter 24:
+Every JSON-object artifact named in every gate row below includes a mandatory
+top-level `verified_coverage_of` field whose value is this
+`validation_scope_binding.v1` object from Chapter 24. CSV, Zarr and other
+non-object artifacts instead require the Chapter 24
+`validation_artifact_manifest.v1` sidecar with the same binding:
 
 ```text
 verified_coverage_of:
@@ -73,16 +75,16 @@ verified_coverage_of:
       field_predicates: complete Chapter 24 FieldPredicate array
 ```
 
-The binding may embed the same `scope_catalog.v1` object instead of using
-`scope_catalog_uri`, but it must still carry `scope_catalog_sha256`. The direct
-variant binds the recomputed hash of the one catalog-resolved scope evaluated
-by the artifact. The coverage variant is legal only with a complete typed rule;
-a record cannot use both variants. Chapter 24 validates the closed scope,
-catalog and coverage schemas, comparator direction, catalog digest and every
-referenced hash. A fixture nickname, abbreviated readiness tuple, matching
-path, implicit parent scope, opaque scope hash or prose assertion of exact
-coverage or exact `validated_scope` is invalid. In particular, evidence whose
-subject is narrower than a target cannot promote that broader target.
+`scope_catalog_uri` and `scope_catalog_sha256` are mandatory in both variants;
+an embedded catalog is not a valid alternative. The direct variant binds the
+recomputed hash of the one catalog-resolved scope evaluated by the artifact.
+The coverage variant is legal only with a complete typed rule; a record cannot
+use both variants. Chapter 24 validates the closed scope, catalog and coverage
+schemas, comparator direction, catalog digest and every referenced hash. A
+fixture nickname, abbreviated readiness tuple, matching path, implicit parent
+scope, opaque scope hash or prose assertion of exact coverage or exact
+`validated_scope` is invalid. In particular, evidence whose subject is narrower
+than a target cannot promote that broader target.
 
 ## 2. Common acceptance and convergence contract
 
@@ -204,7 +206,7 @@ qualify as device resident without PERF-1 even when wall time is low.
 
 | Gate | Fixture | Independent oracle | Metric | Initial tolerance | Production tolerance | Required artifacts | Promotable readiness cells |
 |---|---|---|---|---|---|---|---|
-| ART-1 schema and cross-artifact identity | Complete, failed and interrupted modal/driven bundles | Independent schema/resource validator | Missing fields, invalid direct/coverage binding, scope-catalog digest failure, scope or coverage-rule schema failure, hash/signature mismatch, dangling path, status contradiction | all counts `0` | all counts `0` | manifest, solver diagnostics, spectra/response, mesh and validation artifacts | All cells |
+| ART-1 schema and cross-artifact identity | Complete, failed and interrupted modal/driven bundles | Independent schema/resource validator | Missing fields, invalid direct/coverage binding, missing `validation_artifact_manifest.v1` sidecar for CSV/Zarr/non-object artifacts, scope-catalog digest failure, scope or coverage-rule schema failure, hash/signature mismatch, dangling path, status contradiction | all counts `0` | all counts `0` | manifest, solver diagnostics, spectra/response, mesh and validation artifacts | All cells |
 | ART-2 requested/resolved truth | Strict CPU, strict GPU, auto and explicit-fallback fixtures | Planner request compared with runtime and artifact provenance | Hidden fallback, device/precision/engine mismatch, absent rejection token | all counts `0` | all counts `0` | plan, manifest, diagnostics and rejection artifact | All cells; strict GPU mismatch blocks GPU promotion |
 | ART-3 validation isolation | Kittel, DE/BV, manufactured and CPU-reference bundles | Data-flow audit from solver request through postsolve verifier | Analytical/fitted/reference fields present in assembly, target, selection, certificate or solver pass/fail payload | occurrences `0` | occurrences `0` | validation-isolation report and request/artifact schemas | Every analytical-validation cell |
 | ART-4 product/API/UI consistency | Published modal and driven resource bundles | OpenAPI/type/resource validator and browser-facing resource inventory | Missing resource, unit mismatch, stale revision, UI claim beyond artifact state | all counts `0` | all counts `0` | API contract report and artifact resource index | Cells exposed through API/UI |

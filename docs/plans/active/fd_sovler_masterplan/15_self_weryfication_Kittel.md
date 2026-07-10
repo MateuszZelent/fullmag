@@ -100,22 +100,24 @@ This list is only a human-readable fixture summary. The fixture instantiates
 the closed, typed `frequency_domain_validation_scope.v1` object from Chapter
 24, including its mandatory `SolverScope` tolerances, iteration/restart,
 linear-solver family, preconditioner object, transform/target representation,
-residency, precision, block-residual contract and certificate set. The complete
-object also binds physics, problem, runtime, device, material, geometry,
-fixture and oracle fields. Chapter 24 canonicalizes that object and recomputes
-its `scope_id`; any hash-input change creates another readiness cell.
+residency, precision, block-residual contract and typed certificate
+references. The complete object also binds physics, problem, runtime, device,
+material, geometry, fixture and oracle fields. Chapter 24 canonicalizes that
+object and recomputes its `scope_id`; any hash-input change creates another
+readiness cell.
 
 The fixture also records geometry dimensions, material constants, physical
 `Ms`, `gamma`/`gamma0`, bias direction, equilibrium signatures, BC/gauge tuple,
 mesh generator/version, FE order, quadrature, solver request, target/window,
-device, engine and all artifact hashes. The fixture publishes or embeds a
-Chapter 24 `scope_catalog.v1` containing every canonical scope object named by
-its solver, postsolve, convergence and summary artifacts. An aggregate or
-convergence artifact that covers multiple canonical cells uses Chapter 24's
-typed `coverage_rule.v1`, including the subject and covered scope IDs resolved
-from that catalog and one unambiguous field predicate for every canonical
-comparison address. It never invents a shorter local scope or covers a target
-broader than its evaluated subject.
+device, engine and all artifact hashes. The fixture publishes an external
+content-addressed Chapter 24 `scope_catalog.v1` and records its
+`scope_catalog_uri` plus `scope_catalog_sha256`; that catalog contains every
+canonical scope object named by its solver, postsolve, convergence and summary
+artifacts. An aggregate or convergence artifact that covers multiple canonical
+cells uses Chapter 24's typed `coverage_rule.v1`, including the subject and
+covered scope IDs resolved from that catalog and one unambiguous field
+predicate for every canonical comparison address. It never invents a shorter
+local scope or covers a target broader than its evaluated subject.
 
 ## 5. Field sweep
 
@@ -394,16 +396,26 @@ expected values or Kittel pass/fail decision.
 ```text
 validation/kittel_k0_pbc/selection.v2.json
 validation/kittel_k0_pbc/points.v2.csv
+validation/kittel_k0_pbc/points.v2.csv.validation_manifest.v1.json
 validation/kittel_k0_pbc/mesh_convergence.v2.csv
+validation/kittel_k0_pbc/mesh_convergence.v2.csv.validation_manifest.v1.json
 validation/kittel_k0_pbc/airbox_convergence.v2.csv
+validation/kittel_k0_pbc/airbox_convergence.v2.csv.validation_manifest.v1.json
 validation/kittel_k0_pbc/fit.v2.json
 validation/kittel_k0_pbc/summary.v2.json
 validation/kittel_k0_pbc/independence_audit.v1.json
 ```
 
-Every immutable solver artifact and postsolve validation artifact above carries
-a mandatory top-level `verified_coverage_of` field whose value is one
-`validation_scope_binding.v1` object from Chapter 24:
+The three CSV artifacts require the listed
+`validation_artifact_manifest.v1` sidecars. Each sidecar names the CSV
+`artifact_uri`, CSV `artifact_sha256`, `artifact_kind=csv`, the table schema
+and the same direct or coverage `validation_scope_binding.v1` that a JSON
+object would carry at top level. The sidecar is immutable evidence and is
+validated before any CSV row is consumed.
+
+Every JSON-object immutable solver artifact and postsolve validation artifact
+above carries a mandatory top-level `verified_coverage_of` field whose value is
+one `validation_scope_binding.v1` object from Chapter 24:
 
 ```text
 verified_coverage_of:
@@ -424,21 +436,23 @@ verified_coverage_of:
       field_predicates: complete Chapter 24 FieldPredicate array
 ```
 
-The binding may embed the same `scope_catalog.v1` object instead of using
-`scope_catalog_uri`, but it must still carry `scope_catalog_sha256`. Exactly
-one binding variant is legal. The coverage variant is reserved for a
-multi-level convergence or CPU/GPU aggregate whose evaluated subject contains
-every covered target after the catalog digest and every referenced `scope_id`
-are verified. A subject narrower in fields, mesh/padding interval, device,
-precision, solver configuration or any other canonical dimension cannot cover
-the broader target. `validated_scope_id`, fixture names, run directories,
-abbreviated K0-3 tuples, bare `validated_scope` claims, standalone scope hashes
-and prose assertions of exact scope are not accepted aliases.
+`scope_catalog_uri` and `scope_catalog_sha256` are mandatory in both binding
+variants; an embedded catalog is not a valid alternative. Exactly one binding
+variant is legal. The coverage variant is reserved for a multi-level
+convergence or CPU/GPU aggregate whose evaluated subject contains every covered
+target after the catalog digest and every referenced `scope_id` are verified. A
+subject narrower in fields, mesh/padding interval, device, precision, solver
+configuration or any other canonical dimension cannot cover the broader target.
+`validated_scope_id`, fixture names, run directories, abbreviated K0-3 tuples,
+bare `validated_scope` claims, standalone scope hashes and prose assertions of
+exact scope are not accepted aliases.
 
 `selection.v2.json` contains candidate scores and the frozen selected branch
 without expected frequencies. `points.v2.csv` may add expected frequencies and
-relative errors only after selection. The two convergence CSV files are
-separate and contain raw unique run IDs and signatures.
+relative errors only after selection and only when its sidecar manifest has
+validated the CSV hash and direct scope binding. The two convergence CSV files
+are separate, contain raw unique run IDs and signatures, and carry their
+aggregate coverage binding only through their required sidecar manifests.
 
 Each convergence row contains at least:
 
@@ -455,8 +469,8 @@ tangent_leakage_max_abs, periodic_seam_mismatch_max_abs
 
 `solver_artifact_scope_id` must equal the direct
 `verified_coverage_of.scope_id` in the immutable solver artifact named by
-`solver_artifact_sha256`. A convergence CSV may be an aggregate whose own
-artifact metadata uses a coverage binding, but it cannot replace any raw solve
+`solver_artifact_sha256`. A convergence CSV may be an aggregate whose
+sidecar manifest uses a coverage binding, but it cannot replace any raw solve
 row's direct binding with a bare scope ID or coverage-rule hash.
 
 Verifier-enriched rows additionally contain `expected_frequency_hz`,
@@ -546,8 +560,10 @@ gpu_residency when applicable
 
 `production_qualified` is legal only when every applicable outcome is `pass`,
 the promotion record's `validated_scope` passes the closed v1 schema and hash
-check, every artifact has an accepted `verified_coverage_of` direct or typed
-coverage binding resolved through a verified `scope_catalog.v1`, and
+check, every JSON-object artifact has an accepted top-level
+`verified_coverage_of` direct or typed coverage binding, every CSV/non-object
+artifact has an accepted `validation_artifact_manifest.v1` sidecar, all
+bindings resolve through a verified external `scope_catalog.v1`, and
 chapter 24 is complete for the same immutable evidence bundle. `fast_ci_subset`, synthetic demag,
 absent raw levels, mixed mesh/padding variation, solver-side expected values,
 ill-conditioned/uncertain fits, or analytical-value-based branch selection cap

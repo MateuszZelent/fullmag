@@ -126,13 +126,34 @@ every field is mandatory for modal and driven artifacts alike.
 | `device_residency` | Closed object `{operator, krylov_vectors, basis, preconditioner}` with each value in `host | device | mixed | not_applicable`, plus `{per_iteration_h2d_max:NonNegativeInteger, per_iteration_d2h_max:NonNegativeInteger, hidden_host_solves_allowed:boolean}` |
 | `precision` | Enum `double | single` |
 | `block_residual_contract` | Closed object `{operator_form:"original_unscaled", norm:"l2", required_blocks:IdentifierSet, aggregation:"max", denominator_policy:Identifier, absolute_scale_floor:PositiveNumber, acceptance_tolerance:PositiveNumber}`. `required_blocks` names every physical and constraint block, including scalar and gauge blocks when present. |
-| `certificate_set` | `IdentifierSet` naming every certificate required for solver acceptance |
+| `certificate_references` | Non-empty ordered array of unique closed `CertificateReference` objects naming every certificate required for solver acceptance |
 | `fallback_policy` | `Identifier`; strict no-fallback is explicit |
 | `accepted_stop_reasons` | `IdentifierSet` |
 
 Consequently, changing only `rtol`, iteration cap, restart, linear-solver
 family, preconditioner object, transform/target representation, residency, precision,
-residual contract or certificate set creates a different readiness cell.
+residual contract or certificate references creates a different readiness cell.
+
+`CertificateReference` is the closed object
+`{type, certificate_id, artifact_uri, sha256}`. `type` is the literal
+certificate schema/type consumed by the validator, `certificate_id` is the
+stable ID inside that artifact, `artifact_uri` is an immutable artifact URI and
+`sha256` is the artifact digest. References are unique by
+`{type, certificate_id, artifact_uri, sha256}`. A prose certificate name,
+identifier-only set member or unchecked path is not a certificate reference.
+
+For `type=periodic_mesh_certificate.v6`, the validator loads the referenced
+artifact before hashing the scope and consumes its typed payload. A K0
+periodic-airbox certificate must declare the K0/Gamma policy, periodic
+directions, scalar open-boundary/gauge policy and topology/frame transport
+semantics that match `boundary_scope`, `gauge_scope` and
+`dynamic_demag_scope=periodic_airbox_k0`; it must not carry nonzero-k Floquet
+sample coverage. A nonzero-k Floquet certificate must declare Floquet metadata
+including phase convention, periodic cell/lattice identity, frame/gauge
+transport policy and covered k samples; its covered sample set must contain
+every `problem_scope.k_scope.samples_rad_per_m` entry within
+`gamma_tolerance_rad_per_m`. These typed certificate payloads, not prose names,
+drive section 2.8 reject-before-hash validation.
 
 ### 2.6 Runtime and device scope
 
@@ -185,22 +206,26 @@ policy.
   `problem_scope.mode_scope.kind=driven`.
 - `problem_scope.dynamic_demag_scope=periodic_airbox_k0` requires
   `problem_scope.k_scope.kind=k0`, accepted Gamma-resolved k under the stored
-  `gamma_tolerance_rad_per_m`,
-  `periodic_mesh_certificate.v6` in `solver_scope.certificate_set` with K0
-  periodic policy, and no Floquet/nonzero-k demag certificate claim.
+  `gamma_tolerance_rad_per_m`, a `solver_scope.certificate_references` entry
+  with `type=periodic_mesh_certificate.v6` whose referenced typed certificate
+  declares the K0 periodic-airbox policy matching the stored periodic
+  directions, open-z scalar boundary and gauge policy, and no
+  Floquet/nonzero-k demag certificate reference.
 - `problem_scope.dynamic_demag_scope=floquet_airbox_nonzero_k` requires
   `problem_scope.k_scope.kind=nonzero_k`, a non-Gamma resolved k domain, and a
-  `periodic_mesh_certificate.v6` entry whose Floquet metadata covers every
-  listed k sample.
+  `solver_scope.certificate_references` entry with
+  `type=periodic_mesh_certificate.v6` whose referenced typed certificate
+  declares Floquet metadata and k-sample coverage for every listed k sample.
 - `problem_scope.k_scope.kind=nonzero_k` rejects an all-Gamma sample set and
-  requires `periodic_mesh_certificate.v6` in `solver_scope.certificate_set`.
+  requires a `periodic_mesh_certificate.v6` typed certificate reference with
+  nonzero-k Floquet metadata and k-sample coverage.
   Its compatible dynamic demag values are `none` for no-demag Floquet products
   and `floquet_airbox_nonzero_k` for dynamic-demag products; it cannot use
   `periodic_airbox_k0`.
 - `problem_scope.k_scope.kind=k0` cannot use
   `floquet_airbox_nonzero_k`, cannot carry nonzero-k Floquet samples, and
-  cannot use a Floquet-only certificate as a substitute for the required K0
-  periodic certificate.
+  cannot use a Floquet-only certificate reference as a substitute for the
+  required K0 periodic-airbox certificate reference.
 
 Any contrary product/k/demag/certificate combination is invalid and receives no
 canonical hash. The validator must report the first conflicting field paths so
@@ -222,7 +247,8 @@ particular, the hash always includes the complete `solver_scope`: engine,
 `rtol`, `max_iterations`, `restart`, `linear_solver_family`,
 `preconditioner`, spectral transform, transform target/window/sweep,
 device-residency layout and transfer limits, precision, full original-block
-residual contract, certificate set, fallback policy and accepted stop reasons.
+residual contract, certificate references, fallback policy and accepted stop
+reasons.
 `scope_id`, artifact paths, timestamps, gate outcomes, metric results,
 promotion state, evidence bindings and coverage rules are not hash inputs.
 
@@ -265,10 +291,11 @@ applies section 2.8, canonicalizes it under section 2.9, recomputes its
 semantic scopes under different keys, a map key whose value hashes elsewhere,
 or a catalog digest mismatch invalidates every binding that cites the catalog.
 
-`scope_catalog_uri` is a non-empty artifact URI in the same immutable bundle or
-an absolute content-addressed URI. A binding may instead embed the complete
-catalog in `scope_catalog`, but it must still provide `scope_catalog_sha256`
-and the embedded catalog's digest must match.
+`scope_catalog_uri` is a mandatory non-empty artifact URI in the same immutable
+bundle or an absolute content-addressed URI. Every direct binding, coverage
+binding and promotion record must also carry `scope_catalog_sha256`. The
+catalog is resolved only through this content-addressed external artifact; an
+embedded `scope_catalog` field is invalid in bindings and promotion records.
 
 ## 3. DoD state and evidence rules
 
@@ -302,8 +329,10 @@ validation_state before promotion
 open blockers
 ```
 
-Every evidence artifact has a required top-level `verified_coverage_of` field.
-Its value is exactly one closed `validation_scope_binding.v1` object:
+Every JSON-object evidence artifact has a required top-level
+`verified_coverage_of` field. Non-object artifacts carry the same binding
+through the sidecar defined in section 3.3. The binding value is exactly one
+closed `validation_scope_binding.v1` object:
 
 ```text
 verified_coverage_of = {
@@ -325,10 +354,9 @@ verified_coverage_of = {
 }
 ```
 
-Both objects are closed. A binding has exactly one catalog source: either
-`scope_catalog_uri` plus `scope_catalog_sha256`, or an embedded
-`scope_catalog` plus the same `scope_catalog_sha256`. A direct binding has no
-`coverage_rule`; a coverage binding has no `scope_id`; no additional field or
+Both objects are closed. `scope_catalog_uri` and `scope_catalog_sha256` are
+mandatory in both variants. A direct binding has no `coverage_rule`; a coverage
+binding has no `scope_id`; no additional field, embedded `scope_catalog` or
 third kind is legal. The direct form means the artifact evaluated the one
 catalog-resolved `frequency_domain_validation_scope.v1` object whose recomputed
 hash is `scope_id`. The coverage form is legal only for a bounded oracle or
@@ -339,8 +367,8 @@ section 3.2.
 
 The artifact validator first reads the required `verified_coverage_of` field,
 then validates the closed binding variant and the literal `scope_schema`. It
-loads `scope_catalog_uri` or the embedded `scope_catalog`, verifies
-`scope_catalog_sha256`, validates the catalog under section 2.10, and
+loads `scope_catalog_uri`, verifies `scope_catalog_sha256`, validates the
+catalog under section 2.10, and
 recomputes every catalogued `scope_id` from the complete canonical scope
 object. It then accepts either one direct scope present in that catalog or one
 `coverage_rule.v1` whose `subject_scope_id` and every `covered_scope_id` are
@@ -409,6 +437,47 @@ verified scope catalog, a catalog that does not contain every referenced
 `scope_id`, or an unevaluated predicate makes the artifact stale for every
 listed target.
 
+### 3.3 `validation_artifact_manifest.v1` for non-object artifacts
+
+Artifacts that cannot carry a JSON top-level object with `verified_coverage_of`
+must be paired with an immutable sidecar manifest. CSV files, Zarr stores,
+binary arrays and plain-text tables are invalid evidence without this sidecar.
+JSON object artifacts normally carry `verified_coverage_of` at top level; they
+may not use a sidecar to omit or contradict that top-level binding.
+
+`validation_artifact_manifest.v1` is the closed JSON object:
+
+| Field | Type and constraint |
+|---|---|
+| `schema` | Literal string `validation_artifact_manifest.v1` |
+| `artifact_kind` | Enum `csv | zarr | binary | text | other_non_json` |
+| `artifact_schema` | `Identifier` naming the artifact's content schema or table layout |
+| `artifact_uri` | Immutable URI of the CSV file, Zarr store root or other non-object artifact |
+| `artifact_sha256` | `Sha256Id` for single-file artifacts; must be absent for `artifact_kind=zarr` |
+| `zarr_tree_sha256` | `Sha256Id` of the canonical Zarr tree digest; mandatory for `artifact_kind=zarr` and absent otherwise |
+| `verified_coverage_of` | One complete `validation_scope_binding.v1` object with mandatory `scope_catalog_uri` and `scope_catalog_sha256` |
+
+The sidecar is stored next to the artifact as
+`<artifact-name>.validation_manifest.v1.json`. For a file this appends the
+suffix to the full filename, for example
+`points.v2.csv.validation_manifest.v1.json`; for a Zarr store this appends the
+suffix to the store name, for example `fields.zarr.validation_manifest.v1.json`.
+The promotion record hashes and links the sidecar as evidence in addition to
+the artifact bytes or Zarr tree digest.
+
+Validation order is fixed:
+
+1. locate the sidecar by the deterministic naming rule and verify its own
+   evidence hash from the promotion record;
+2. validate the closed sidecar schema and its artifact kind;
+3. validate `verified_coverage_of`, resolve `scope_catalog_uri`, verify
+   `scope_catalog_sha256` and recompute every referenced scope ID;
+4. hash the target artifact bytes, or the canonical Zarr tree, and compare the
+   digest with the sidecar;
+5. validate the artifact content schema named by `artifact_schema`; and
+6. only then consume rows, arrays or metadata for metrics, coverage or
+   promotion.
+
 Evidence from another physical signature, precision, device, product, k scope,
 demag realization or solver engine is stale for this record even if its files
 are newer.
@@ -425,7 +494,7 @@ are newer.
 | DOD-06 Native assembly | Backend-owned real FEM blocks/actions and chapter 09 manufactured/reciprocity/isolation evidence | `assembly_kind` is the production kind; block signs/units/order/scaling pass; analytical expected values cannot affect blocks, target or signatures | `synthetic_algebraic_oracle`, Kittel `demag_delta`, macrocell payload or postsolve phase projection |
 | DOD-07 Solver engine | Exact modal or driven production engine, preconditioner and lifecycle artifacts | Engine converges over the bounded size/window/sweep scope, has correct target representation/restart/stop reasons, and has no undeclared fallback | Dense/apply probe, one successful tiny case, host-Krylov path claimed as device Krylov, or another product's engine |
 | DOD-08 Full residual | Reconstructed original unscaled block residuals for every accepted mode/frequency point | Chapter 09 production tolerance passes for every required block; transformed/backend/tracked residuals remain separate | Solver-library residual alone, capped residual, magnetic-only residual when scalar/gauge blocks apply |
-| DOD-09 Artifacts/OpenAPI/UI | Complete artifacts-v2 bundle, typed OpenAPI/resource exposure and UI state for complete/partial/failed/unavailable outcomes | Cross-artifact hashes, scope catalog digest, units, revisions, requested/resolved state, accepted `verified_coverage_of` binding, and resource links agree; UI cannot overstate capability | Abbreviated scope tuple, untyped coverage claim, opaque scope hash without a verified catalog, raw files without resource contract, UI claim inferred from route presence, or JSON carrying heavy payloads outside the data plane |
+| DOD-09 Artifacts/OpenAPI/UI | Complete artifacts-v2 bundle, typed OpenAPI/resource exposure and UI state for complete/partial/failed/unavailable outcomes | Cross-artifact hashes, sidecar manifests for CSV/Zarr/non-object evidence, scope catalog digest, units, revisions, requested/resolved state, accepted `verified_coverage_of` binding, and resource links agree; UI cannot overstate capability | Abbreviated scope tuple, untyped coverage claim, opaque scope hash without a verified catalog, CSV/Zarr/raw files without `validation_artifact_manifest.v1`, UI claim inferred from route presence, or JSON carrying heavy payloads outside the data plane |
 | DOD-10 Analytical validation | Applicable chapter 09 independent physics gate: Larmor/Kittel, ellipsoid, DE/BV, modal/driven resonance or another physics-note oracle | Production tolerance passes after solve and after independent selection; for K0-3, fixture-owned independently provenanced `M_eff_reference`, fitted-`M_eff` agreement, uncertainty and conditioning all pass; oracle inputs never enter assembly/request target/selection/certificate/solver status | Best-fit-only agreement, solver-derived `M_eff_reference`, nearest-expected mode selection, synthetic operator built from the answer, or fast CI subset |
 | DOD-11 Convergence | Raw distinct mesh and truncation sequences plus solver tolerance evidence | At least three levels per applicable dimension; monotonicity/asymptotic fit, observed order where applicable, Richardson/finest-two delta and separate frequency and fitted-`M_eff` budgets pass | Best row only, duplicated synthetic rows, simultaneous mesh/padding changes without independent sequences, or analytical values copied as solved rows |
 | DOD-12 CPU/GPU parity | For GPU: exact qualified CPU oracle and chapter 09 operator/solver/physics parity; for CPU-only: explicit `not_applicable` reason excluding GPU | GPU blocks, modes/responses, residuals and accepted/rejected outcomes pass production tolerances on identical signatures | No-demag macrospin parity used for demag, CPU result copied into GPU artifacts, or precision mismatch |
@@ -489,8 +558,8 @@ The release candidate publishes one record per readiness cell. The schema is
 | `scope_schema` | `frequency_domain_validation_scope.v1` |
 | `scope_id` | RFC 8785/SHA-256 identifier computed exactly as section 2 specifies |
 | `validated_scope` | Every canonical field in section 2, with no wildcard or omitted field |
-| `scope_catalog_uri` or embedded `scope_catalog` | `scope_catalog.v1` containing the complete `validated_scope` object and every evidence-referenced scope object |
-| `scope_catalog_sha256` | Digest of the exact catalog bytes or embedded catalog |
+| `scope_catalog_uri` | Content-addressed external `scope_catalog.v1` containing the complete `validated_scope` object and every evidence-referenced scope object |
+| `scope_catalog_sha256` | Digest of the exact external catalog bytes |
 | `implementation_state` | `executable` |
 | `validation_state_before_promotion` | The actual pre-promotion state |
 | `items.DOD-01` through `items.DOD-14` | `pass`, `fail` or justified `not_applicable` |
