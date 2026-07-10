@@ -604,11 +604,11 @@ git commit -m "fix(fdm): execute advertised multilayer integrators"
 - Consumes: exact native stats/completion and resolved native lane.
 - Produces: nonfinite failure, canonical metric IDs, accurate CPU/GPU realization, and aligned artifact validation.
 
-- [ ] **Step 1: Add failing wrapper tests**
+- [x] **Step 1: Add failing wrapper tests**
 
 Assert NaN/Inf/negative native torque returns RunError rather than zero. Assert CPU PG-BB realization differs from CUDA PG-BB realization and native metric ID maps to max_torque_apm.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ~~~bash
 CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-runner native_fem_nonfinite_torque_is_error
@@ -617,26 +617,26 @@ CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-runner native_fem_n
 Expected: output says running 1 test and the current zero substitution fails the
 error expectation. Zero executed tests is not RED evidence.
 
-- [ ] **Step 3: Reject nonfinite native stats**
+- [x] **Step 3: Reject nonfinite native stats**
 
 Use one checked conversion helper for explicit and direct steps. Preserve exact zero. Apply the same policy to energy, adaptive error, gradient, and solver residual where exported.
 
-- [ ] **Step 4: Publish lane-specific realization**
+- [x] **Step 4: Publish lane-specific realization**
 
 Use stable identifiers such as native_mfem_pgbb and native_cuda_pgbb rather than native_mfem_backend_relax_step for every lane. Update artifact validator expectations.
 
-- [ ] **Step 5: Canonicalize completion metrics**
+- [x] **Step 5: Canonicalize completion metrics**
 
 Native C++ emits one metric enum/ID mapping consumed by Rust. Remove casing comparisons distributed across callers.
 
-- [ ] **Step 6: Verify GREEN**
+- [x] **Step 6: Verify GREEN**
 
 ~~~bash
 CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-runner native_fem
 just verify-fem-relaxation-source-contract
 ~~~
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ~~~bash
 git add crates/fullmag-runner backends/fem/cpu/mfem/runtime backends/fem/gpu/cuda/integrators/rk scripts/validate_fem_relaxation_runtime_log.py
