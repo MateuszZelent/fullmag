@@ -771,9 +771,15 @@ git commit -m "Rewrite K0 Poisson-airbox implementation contract"
 
 **Interfaces:**
 - Consumes: Task 6 K0 blocks and Task 3 constraints.
-- Produces: production algorithm for nonzero-k dynamic demag on CPU/GPU.
+- Produces: a production `grad_k`/`div_k` algorithm for nonzero-k dynamic demag
+  on CPU/GPU, plus an independent matched-mesh constraint oracle.
 
-- [ ] **Step 1: Define constraint reduction**
+- [ ] **Step 1: Define the production operator and constraint oracle**
+
+The production dynamic-demag operator is complex Bloch `grad_k`/`div_k`
+assembly, as required by physics note `0828`. Define its block forms,
+material/air-domain semantics and `k` units first. The following matched-mesh
+reduction is a pre-solve oracle, not a replacement production operator:
 
 ```text
 C_m(k): exp(-i*k dot R) plus tangent G_pair
@@ -786,7 +792,8 @@ B_qq(k) = C_m^H B_qq C_m
 ```
 
 Apply Robin only to open-z faces, never periodic cuts. Define k in `rad/m` and
-phase-wrapping tolerance.
+phase-wrapping tolerance. The `grad_k`/`div_k` and constrained forms can be
+called equivalent only after matrix/action parity over the accepted k domain.
 
 - [ ] **Step 2: Define CPU stages**
 
