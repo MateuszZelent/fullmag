@@ -172,7 +172,7 @@ Python DSL / examples
 |---|---|---|
 | Publiczne authoring API | `packages/fullmag-py/src/fullmag/*`, `examples/*` | opis problemu, studies, mesh hints, solver hints |
 | IR i planowanie | `crates/fullmag-ir/*`, `crates/fullmag-plan/*` | typowana semantyka backend-neutral i planowanie capability |
-| Orkiestracja runnera | `crates/fullmag-runner/src/*` | wybór silnika, natywne wywołania, artefakty, preview, proweniencja, wykrywanie managed runtime |
+| Orkiestracja runnera | `crates/fullmag-runner/src/*` | materializacja decyzji kanonicznego plannera, natywne wywołania, artefakty, preview, proweniencja, wykrywanie managed runtime |
 | Numeryka referencyjna Rust | `crates/fullmag-engine/src/*`, wybrane moduły referencyjne runnera | wyłącznie walidacja albo jawne wykonanie referencyjne |
 | Natywny kompilowany rdzeń | `backends/fdm/*`, `backends/fem/*` | produkcyjne kernele, solvery, integracja, natywny stan, runtime CPU/GPU |
 | Poprzednia ścieżka backendów | `native/backends/fdm/*`, `native/backends/fem/*` | historyczna ścieżka sprzed kontrolowanego rename/move, nie osobny backend |
@@ -236,7 +236,8 @@ Fullmag public problem
 
 Runner może zawierać:
 
-- politykę wyboru silnika FEM,
+- materializację pojedynczej decyzji kanonicznego plannera i mapowanie
+  kompatybilności ABI, ale nie ponowny wybór algorytmu numerycznego,
 - rekordy requested/resolved mode,
 - sprawdzanie dostępności natywnego runtime,
 - budowanie deskryptorów ABI,
@@ -261,141 +262,173 @@ i dokumentacja muszą nadal mówić, że implementacja natywnego FEM żyje w
 
 ## 7.1 Architektura FEM Frequency-Domain I Eigenmodes
 
-Produkcyjne eigenmodes dla dużych obiektów FEM nie mogą opierać się na pełnej
-dense diagonalizacji. Dense solver w Rust runnerze jest ścieżką referencyjną i
-walidacyjną dla małych przypadków, nie produkcyjnym odpowiednikiem COMSOL-a.
+Produkcyjne FEM frequency-domain obejmuje dwa różne produkty:
+`modal_eigen` i `driven_response`. Współdzielą kontrakt operatora z
+`docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md`, ale nie
+mogą wzajemnie promować swojej dostępności ani walidacji. W szczególności
+działający driven GPU nie jest dowodem modal GPU.
 
-Docelowy publiczny kontrakt dla dużych struktur to zapytanie spektralne:
+Produkcyjne eigenmodes dla dużych obiektów nie mogą opierać się na pełnej dense
+diagonalizacji. Dense Cartesian i tangent solvery są małymi oracle CPU/double,
+nie produkcyjnym odpowiednikiem solvera wybranego widma. Docelowy publiczny
+kontrakt pozostaje zapytaniem:
 
 ```text
 frequency_min_hz <= f <= frequency_max_hz
 count = maksymalna liczba modów do zwrócenia
 ```
 
-Przykład użytkownika: "znajdź do 20 modów w zakresie 100 MHz..5 GHz". Ten
-kontrakt musi przechodzić przez Python DSL, ProblemIR, planner, runtime,
-artefakty, API i control room bez degradacji do `lowest`.
+Kontrakt przechodzi przez Python DSL, ProblemIR, planner, runtime, artefakty,
+API i control room bez degradacji do `lowest`. Produkcyjna realizacja CPU używa
+MFEM z PETSc/SLEPc: pełny descriptor albo certyfikowany Schur `MatShell`,
+Krylov-Schur/Arnoldi oraz jawny transform spektralny z celem odpowiadającym
+`sigma=i*omega_target`. Shifted systems należą do PETSc/hypre. Produkcyjna
+realizacja GPU używa tych samych kontraktów przez PETSc CUDA vectors,
+device-capable `MatShell`/`MatNest`, hypre device i SLEPc na urządzeniu.
 
-Właścicielem produkcyjnej realizacji jest `backends/fem`:
-
-- PETSc/SLEPc-class sparse lub matrix-free eigensolver dla CPU;
-- Krylov-Schur/Arnoldi/LOBPCG/Jacobi-Davidson dla odpowiednich części widma;
-- shift-invert albo Cayley dla modów wewnętrznych koło częstotliwości celu;
-- FEAST/contour-like interval solve dla okien częstotliwości;
-- PETSc/hypre/MFEM linear solves i preconditionery dla shifted systems;
-- późniejsza osobna realizacja GPU po ustabilizowaniu kontraktu CPU.
-
-Runner może orkiestracyjnie przekazać deskryptor okna, odebrać spectrum/mode
-artifacts, mapować progress i publikować proweniencję. Runner nie może stać się
-produkcyjnym właścicielem solvera wielkoskalowego ani ukrywać fallbacku z
-frequency-window do dense `lowest`.
-
-Control room musi pokazywać realne solver telemetry dla eigen: DOF, zakres
-częstotliwości, count, solver family, spectral transform, Krylov/FEAST outer
-iteration, shifted linear-solve iterations, residual, converged-mode count,
-checkpoint/artifact status i stop reason.
+Runner przekazuje deskryptor okna i pojedynczy wybrany engine, odbiera wyniki,
+mapuje progress oraz publikuje artefakty i proweniencję. Nie może wybierać
+innego solvera, implementować assembly MFEM ani posiadać PETSc/SLEPc/hypre
+state. Control room pokazuje requested/resolved engine, DOF, zakres, count,
+scalar representation, spectral transform, shifted-solve telemetry, pełny
+residual, residency, converged-mode count i stop reason.
 
 ## 7.2 Architektura FEM Frequency-Domain Solver Tree
 
-Driven response w domenie częstotliwości nie może docelowo oznaczać jednego
-hostowego GMRES-a z rosnącą liczbą callbacków. Właściwa architektura to
-`FrequencySolvePlanner`, który z jednego kontraktu fizycznego wybiera jedną z
-kilku jawnych realizacji solverowych.
+### 7.2.1 Docelowe silniki i ABI kompatybilności
 
-Docelowy przepływ:
+Każdy zaakceptowany solve kończy planowanie dokładnie jednym engine:
 
 ```text
-LinearizedFrequencyProblem
-  -> FrequencySolvePlanner
-  -> FrequencySolvePlan
-  -> dense_reference | cpu_sparse_direct | full_coupled_field_split
-     | schur_reduced | modal_reduced | gpu_operator_host_krylov
-     | gpu_device_krylov
+dense_cartesian_reference
+dense_tangent_reference
+cpu_sparse_direct
+cpu_host_krylov
+full_coupled_field_split
+schur_reduced
+modal_reduced
+gpu_operator_host_krylov
+gpu_device_krylov
+gpu_modal_device_krylov
 ```
 
-`FrequencySolvePlan` jest kontraktem między algebrą problemu i silnikiem
-numerycznym. Musi jawnie mówić:
+`validation`, `production_cpu` i `production_gpu` są obecnymi legacy ABI
+lanes, nie nazwami algorytmu. Adapter kompatybilności ogranicza kandydatów
+zgodnie z lane'em, po czym canonical planner publikuje jeden engine i
+`selection_reason`. `production_gpu` nie dowodzi device residency. Obecny
+driven GPU odpowiada `gpu_operator_host_krylov`, dopóki pełny kontrakt nie
+udowodni `gpu_device_krylov`. Wąski dense K0 GPU modal validation nie jest
+ogólnym `gpu_modal_device_krylov`.
 
-- czy rozwiązywany jest full coupled block system czy Schur-reduced system,
-- jaka reprezentacja operatora została wybrana,
-- jaka rodzina solvera liniowego została wybrana,
-- jaki preconditioner jest aktywny,
-- gdzie rezydują wektory Krylov i workspaces,
-- czy GPU dotyczy tylko operatora/preconditionera, czy całego Krylov hot loop,
-- jaki fallback jest legalny,
-- jakie certyfikaty walidacyjne są wymagane przed promocją.
+### 7.2.2 Deterministyczny planner legality-before-heuristics
 
-Nazwy lane'ów muszą być uczciwe:
+`FrequencySolvePlanner` wykonuje kolejno:
 
-| Lane | Znaczenie |
-|---|---|
-| `dense_reference` | mały jawny oracle dense; walidacja, nie produkcja |
-| `cpu_sparse_direct` | złożony sparse real-split/complex solve per frequency; pierwszy brakujący backend diagnostyczny po mechanicznym splitcie |
-| `full_coupled_field_split` | monolityczny blok `delta_m` plus pola pomocnicze, np. `delta_phi`, z field-split/Schur preconditionerem |
-| `schur_reduced` | szybka ścieżka zredukowana, dozwolona dopiero po certyfikacji full-vs-Schur |
-| `modal_reduced` | modal/rational/recycling sweep dla wielu częstotliwości |
-| `gpu_operator_host_krylov` | operator lub preconditioner używa GPU, ale Krylov state, Arnoldi, Hessenberg, residuale i dot/norm/axpy są hostowe |
-| `gpu_device_krylov` | docelowy solver, w którym wektory, Krylov hot loop, operator, preconditioner i redukcje są device-resident |
+1. walidację fizyki, fazy, equilibrium, BC/gauge i certyfikatów mesha;
+2. rozwiązanie jawnie requested device, precision i solver method;
+3. odrzucenie niedostępnych strict requests albo zapis legalnego, jawnego
+   non-strict fallbacku;
+4. zbudowanie kandydatów legalnych dla dokładnego produktu i algebry;
+5. filtrowanie przez certyfikaty keyed by problem signature i limit pamięci;
+6. heurystyki wydajności wyłącznie wśród legalnych kandydatów;
+7. emisję dokładnie jednego engine i jednego powodu wyboru.
 
-Obecny kod może nadal publikować starsze `production_cpu` i `production_gpu`
-jako kompatybilne nazwy runtime. Nowe dokumenty, plany, diagnostyka i przyszłe
-artefakty muszą jednak rozróżniać powyższe lane'y, żeby `production_gpu` nie
-ukrywało hostowego Krylov.
+Strict device, precision i method są twardymi ograniczeniami. Strict GPU nie
+spada na CPU, strict `single` nie staje się `double`, a wymuszony engine nie
+staje się `auto`. Non-strict fallback jest legalny tylko dla identycznego
+kontraktu fizycznego i musi publikować requested/resolved wartości,
+`fallback_used=true` oraz `fallback_reason` przed solve'em.
 
-Docelowy layout po mechanicznym, behavior-preserving splitcie:
+Niezmienne:
+
+```text
+prefer_existing_host_krylov nie zmienia CPU na GPU;
+forced GPU nie może zostać wyprzedzony przez CPU sparse-direct;
+nonzero-k demag nie wybiera operatora K0;
+Schur wymaga certyfikatu keyed by exact problem signature;
+modal-reduced wymaga completeness i niezależnych full/direct sample checks;
+accepted plan zawiera dokładnie jeden engine i selection reason.
+```
+
+### 7.2.3 Kontrakty CPU i GPU
+
+CPU production engines żyją pod `backends/fem/cpu/frequency_domain/`:
+
+- `cpu_sparse_direct`: PETSc AIJ, `KSPPREONLY/PCLU`, pełny true residual;
+- `cpu_host_krylov`: host GMRES/FGMRES dla legalnego assembled/matrix-free
+  operatora;
+- `full_coupled_field_split`: PETSc `MatNest`/`PCFIELDSPLIT` z hypre Poisson;
+- `schur_reduced`: PETSc/SLEPc `MatShell` dopiero po certyfikacji i z
+  rekonstrukcją pełnego residualu;
+- `modal_reduced`: modal/rational/recycling sweep z completeness i sample
+  checks;
+- wybrane widmo modal: pełny descriptor albo certyfikowany Schur przez SLEPc.
+
+GPU production engines żyją pod
+`backends/fem/gpu/cuda/frequency_domain/` i są library-first:
+
+```text
+MFEM/libCEED/CUDA operator apply
+PETSc CUDA vectors and MatShell/MatNest
+hypre device Poisson/shifted preconditioner
+PETSc KSP GMRES/FGMRES for driven response
+SLEPc Krylov-Schur/Arnoldi for modal spectrum
+```
+
+Host orchestration i ograniczone scalar reductions są dozwolone. Claim
+device-resident zabrania per-iteration migracji wektorów lub macierzy H2D/D2H
+oraz hostowego dot/norm/axpy, Arnoldi/Hessenberg i preconditioner state. Custom
+Krylov może powstać dopiero po zapisanym benchmarku/profilerze pokazującym, że
+stos PETSc/SLEPc/hypre/libCEED nie spełnia kontraktu.
+
+`gpu_operator_host_krylov` pozostaje uczciwą osobną nazwą: operator może być
+CUDA, ale vectors, Krylov state, orthogonalization, residual control i redukcje
+są hostowe. Nie wolno raportować go jako `gpu_device_krylov`.
+
+### 7.2.4 Własność źródeł
+
+Docelowy layout:
 
 ```text
 backends/fem/include/frequency_domain/
   algebra/
-    linearized_problem.hpp
-    coupled_block_layout.hpp
-    operator_representation.hpp
   planner/
-    frequency_solve_plan.hpp
-    frequency_solve_planner.hpp
-  engines/
-    dense_reference.hpp
-    cpu_sparse_direct.hpp
-    full_coupled_field_split.hpp
-    schur_reduced.hpp
-    modal_reduced.hpp
-    gpu_operator_host_krylov.hpp
-    gpu_device_krylov.hpp
   diagnostics/
-    residual_diagnostics.hpp
-    schur_certification.hpp
+  certificates/
 
 backends/fem/src/frequency_domain/
-  algebra/
-  planner/
-  artifacts/
-  diagnostics/
+  backend-neutral contracts and shared support only
 
 backends/fem/cpu/frequency_domain/
   engines/
-    dense_reference/
-    sparse_direct/
-    host_krylov/
-    full_coupled_field_split/
-    schur_reduced/
-    modal_reduced/
   operators/
+  preconditioners/
+  modal/
   validation/
 
 backends/fem/gpu/cuda/frequency_domain/
   engines/
-    operator_host_krylov/
-    device_krylov/
   operators/
+  preconditioners/
   residency/
+  modal/
 ```
 
-Ten dokumentacyjny patch nie przenosi plików. Następny patch ma być
-mechanicznym splitem bez zmiany zachowania: wyciągnąć descriptor/plan/engine
-boundaries z monolitów, zachować obecny algorytm GMRES, zachować obecną
-diagnostykę Schura i nie zmieniać CMake/include tree poza tym, co wynika z
-samego splitu. Dopiero kolejny patch powinien zacząć pierwszy brakujący backend:
-`cpu_sparse_direct`.
+Runner jest tylko właścicielem orchestration, ABI, cancellation/progress,
+artefaktów i proweniencji. Nie posiada production MFEM assembly, PETSc/SLEPc
+setup, CPU solver loops ani GPU Krylov state i nie wykonuje drugiego wyboru po
+plannerze.
+
+Stan obecny nie spełnia jeszcze tego targetu. Header planner ma siedem
+zgrubnych lane'ów, nie jest jedyną trasą runtime i obecnie może rozważyć CPU
+sparse-direct przed GPU intent oraz traktować `prefer_existing_host_krylov`
+jako sygnał `requested_gpu`. ABI nadal publikuje trzy legacy lanes. Duży
+`backends/fem/src/frequency_domain/driven_response_solver.cpp` nadal miesza
+routing i numerykę, a runner nadal wykonuje część method rejection/resolution.
+`gpu_device_krylov.hpp` ma kontrakty i probe'y, lecz jawnie raportuje
+`production_loop_available=false`. Te fakty są contract gaps, nie dowodem
+docelowej architektury. Ich naprawa jest późniejszym behavior-preserving
+refaktorem i implementacją, nie częścią tego dokumentacyjnego patcha.
 
 ## 7.3 Workflow pola anteny mikrofalowej
 
