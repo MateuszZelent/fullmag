@@ -263,6 +263,30 @@ describe("ribbon structure", () => {
     expect(target && `part:${target.id}`).toBe("part:part-film");
   });
 
+  it("keeps a selected mesh part scoped to the part before its manifest arrives", () => {
+    expect(
+      resolveRibbonVisualizationTarget({
+        sceneObjectIds: new Set(),
+        selectedMeshPart: null,
+        selection: {
+          kind: "mesh-part",
+          label: "Film mesh",
+          moduleSource: "test",
+          nodeId: "part-film",
+          objectId: "projection-film",
+          ref: {
+            kind: "mesh-part",
+            nodeId: "part-film",
+            objectId: "projection-film",
+            type: "mesh-part",
+            visualizationTargetId: "mesh-part:part-film",
+          },
+        },
+        visualizationState: null,
+      }),
+    ).toMatchObject({ id: "part-film", kind: "part" });
+  });
+
   it("defines visible content and dropdown structure for every ribbon tab", () => {
     for (const tab of RIBBON_TABS) {
       const content = ALL_TAB_CONTENT[tab.id];

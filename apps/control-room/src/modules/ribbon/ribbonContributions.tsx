@@ -96,6 +96,7 @@ import {
   type VisualizationRenderMode,
   type VisualizationTargetKind,
   type VisualizationTargetPatch,
+  type VisualizationTargetRef,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import {
   meshPipelineStatusTone,
@@ -1626,13 +1627,21 @@ export function resolveRibbonVisualizationTarget({
 }: Pick<
   RibbonBuildContext,
   "sceneObjectIds" | "selectedMeshPart" | "selection" | "visualizationState"
->) {
+>): VisualizationTargetRef | null {
   if (selection.ref?.type === "mesh-part" && selectedMeshPart) {
     return resolveVisualizationTargetForMeshPart({
       part: selectedMeshPart,
       sceneObjectIds,
       targetRegistry: visualizationState?.targets,
     });
+  }
+
+  if (selection.ref?.type === "mesh-part") {
+    return {
+      id: selection.ref.nodeId,
+      kind: "part",
+      label: selection.label,
+    };
   }
 
   return resolveVisualizationTargetFromSelection(selection);

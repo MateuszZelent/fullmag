@@ -26,8 +26,8 @@ import {
   geometryScopeDisplayPatch,
   geometryScopeVectorBudgetPatch,
   quantitySourcePatch,
-  objectVisualizationTargetForMeshPart,
   resolveObjectVisualizationPanelTarget,
+  resolveObjectVisualizationPanelSelectionTarget,
   resolveSurfaceColorSourceItems,
   resolveObjectVisualizationPanelTopologyFreshness,
   resolveObjectChildRegionVisualizationTargets,
@@ -386,35 +386,6 @@ describe("ObjectVisualizationPanelModel", () => {
     expect(visualizationResetActionLabel("object")).toBe("Reset display");
   });
 
-  it("maps manifest mesh parts to the same canonical object targets as the viewport", () => {
-    expect(
-      objectVisualizationTargetForMeshPart({
-        id: "part:permalloy_layer",
-        label: "Permalloy layer",
-        object_id: "permalloy_layer",
-      } as MeshPart),
-    ).toEqual({
-      id: "object:permalloy_layer",
-      kind: "object",
-      label: "Permalloy layer",
-    });
-  });
-
-  it("maps geometry-only mesh parts to canonical object targets", () => {
-    expect(
-      objectVisualizationTargetForMeshPart({
-        id: "part:permalloy_layer",
-        geometry_id: "permalloy_layer_geom",
-        label: "Permalloy layer",
-        object_id: null,
-      } as MeshPart),
-    ).toEqual({
-      id: "object:permalloy_layer",
-      kind: "object",
-      label: "Permalloy layer",
-    });
-  });
-
   it("keeps geometry-only parts scoped to the backend registry target", () => {
     expect(
       resolveObjectVisualizationPanelTarget({
@@ -431,6 +402,30 @@ describe("ObjectVisualizationPanelModel", () => {
             parts: [{ scope: "part", scope_id: "part-film" }],
           },
         } as never,
+      }),
+    ).toMatchObject({ id: "part-film", kind: "part" });
+  });
+
+  it("keeps a selected mesh part scoped to the part while its manifest is unavailable", () => {
+    expect(
+      resolveObjectVisualizationPanelSelectionTarget({
+        selectedMeshPart: null,
+        selection: {
+          kind: "mesh-part",
+          label: "Film mesh",
+          nodeId: "part-film",
+          objectId: "projection-film",
+          ref: {
+            kind: "mesh-part",
+            nodeId: "part-film",
+            objectId: "projection-film",
+            type: "mesh-part",
+            visualizationTargetId: "mesh-part:part-film",
+          },
+        } as never,
+        selectionTarget: { id: "object:projection-film", kind: "object" },
+        sceneObjectIds: new Set(),
+        visualizationState: null,
       }),
     ).toMatchObject({ id: "part-film", kind: "part" });
   });

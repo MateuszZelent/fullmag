@@ -8,8 +8,8 @@ import type {
 } from "@/kernel/api/apiTypes";
 import {
   canonicalVisualizationSceneObjectId,
-  visualizationObjectIdForMeshPartLike,
   visualizationTargetIdForSceneObject,
+  type Selection,
 } from "@/kernel/selection/selectionTypes";
 import { resolveVisualizationTargetForMeshPart } from "@/kernel/selection/visualizationTargetResolver";
 import {
@@ -219,23 +219,6 @@ export function fieldMetaScopeQueryForVisualizationTarget(
   }
 }
 
-export function objectVisualizationTargetForMeshPart(
-  part: NonNullable<MeshSharedDomainManifestResource["mesh_parts"]>[number],
-): VisualizationTargetRef {
-  const objectId = visualizationObjectIdForMeshPartLike(part);
-  return objectId
-    ? {
-        id: visualizationTargetIdForSceneObject(objectId),
-        kind: "object",
-        label: part.label,
-      }
-    : {
-        id: part.id,
-        kind: "part",
-        label: part.label,
-      };
-}
-
 export function resolveObjectVisualizationPanelTarget({
   part,
   sceneObjectIds,
@@ -250,6 +233,36 @@ export function resolveObjectVisualizationPanelTarget({
     sceneObjectIds,
     targetRegistry: visualizationState?.targets,
   });
+}
+
+export function resolveObjectVisualizationPanelSelectionTarget({
+  sceneObjectIds,
+  selectedMeshPart,
+  selection,
+  selectionTarget,
+  visualizationState,
+}: {
+  sceneObjectIds: ReadonlySet<string>;
+  selectedMeshPart:
+    | NonNullable<MeshSharedDomainManifestResource["mesh_parts"]>[number]
+    | null;
+  selection: Selection;
+  selectionTarget: VisualizationTargetRef | null;
+  visualizationState: VisualizationStateResource | null | undefined;
+}): VisualizationTargetRef | null {
+  if (selection.ref?.type !== "mesh-part") return selectionTarget;
+  if (selectedMeshPart) {
+    return resolveObjectVisualizationPanelTarget({
+      part: selectedMeshPart,
+      sceneObjectIds,
+      visualizationState,
+    });
+  }
+  return {
+    id: selection.ref.nodeId,
+    kind: "part",
+    label: selection.label,
+  };
 }
 
 const SCALAR_COLOR_PALETTE_STOPS: Record<string, [number, number, number][]> = {

@@ -49,3 +49,24 @@ git diff --check
 All passed. The targeted search for the prior local `targetForMeshPart` helper
 in these consumers returned no matches, which is expected after routing them
 through the canonical resolver.
+
+## Review follow-up: late manifest safety
+
+Reviewer feedback found that an absent or late mesh manifest could make a
+selected mesh part fall through to generic selection resolution, which may use
+the selection's object id. Both the Inspector and Ribbon now retain the safe
+`{ id: selection.ref.nodeId, kind: "part" }` target until the manifest part is
+available, then resolve it through the canonical resolver. The obsolete
+`objectVisualizationTargetForMeshPart` compatibility helper and its unsafe
+`object_id ?? geometry_id` inference were removed.
+
+Review RED:
+
+```bash
+pnpm --dir apps/control-room exec vitest run src/kernel/visualization/ObjectVisualizationController.test.ts src/modules/inspector/panels/ObjectVisualizationPanelModel.test.ts src/modules/ribbon/ribbonStructure.test.ts
+```
+
+Expected failures: absent Inspector resolver and Ribbon resolving the selected
+part as `object:projection-film`.
+
+Review GREEN: the same command passed 3 files and 174 tests.

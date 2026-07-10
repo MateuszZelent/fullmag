@@ -106,6 +106,7 @@ import {
   geometryScopeDisplayPatch,
   quantitySourcePatch,
   resolveObjectVisualizationPanelTarget,
+  resolveObjectVisualizationPanelSelectionTarget,
   regionVisualizationCarrierSupportsFieldMeta,
   regionVisualizationFieldWarning,
   renderModeDisplayPatch,
@@ -1245,14 +1246,20 @@ function useObjectVisualizationPanelState(
   );
   const target = useMemo(
     () =>
-      selectedMeshPart
-        ? resolveObjectVisualizationPanelTarget({
-            part: selectedMeshPart,
-            sceneObjectIds,
-            visualizationState: visualizationState.data,
-          })
-        : selectionTarget,
-    [sceneObjectIds, selectedMeshPart, selectionTarget, visualizationState.data],
+      resolveObjectVisualizationPanelSelectionTarget({
+        sceneObjectIds,
+        selectedMeshPart,
+        selection,
+        selectionTarget,
+        visualizationState: visualizationState.data,
+      }),
+    [
+      sceneObjectIds,
+      selectedMeshPart,
+      selection,
+      selectionTarget,
+      visualizationState.data,
+    ],
   );
   const regionId = useMemo(() => {
     if (target?.kind !== "region") return null;
