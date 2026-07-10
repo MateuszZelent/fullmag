@@ -226,15 +226,17 @@ pub(crate) fn infer_stage_completion(
         }
     }
 
-    if let Some(threshold) = control.stop.max_relaxation_time_s {
-        if last.time >= threshold {
-            return stage_completion(
-                status_label,
-                Some(StageStopReason::MaxPhysicalTime),
-                Some("physical_time_s".to_string()),
-                Some(last.time),
-                Some(threshold),
-            );
+    if control.algorithm == RelaxationAlgorithmIR::LlgOverdamped {
+        if let Some(threshold) = control.stop.max_relaxation_time_s {
+            if last.time >= threshold {
+                return stage_completion(
+                    status_label,
+                    Some(StageStopReason::MaxPhysicalTime),
+                    Some("physical_time_s".to_string()),
+                    Some(last.time),
+                    Some(threshold),
+                );
+            }
         }
     }
 
@@ -258,33 +260,33 @@ mod tests {
     use super::*;
     use fullmag_ir::RelaxStopIR;
 
-    fn control_with_pseudotime(threshold: f64) -> RelaxationControlIR {
+    fn direct_minimizer_control(max_steps: u64, relaxation_time_s: f64) -> RelaxationControlIR {
         RelaxationControlIR {
             algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
             stop: RelaxStopIR {
                 torque_tolerance_apm: None,
                 energy_tolerance_j: None,
-                max_steps: None,
-                max_relaxation_time_s: Some(threshold),
+                max_steps: Some(max_steps),
+                max_relaxation_time_s: Some(relaxation_time_s),
             },
         }
     }
 
     #[test]
-    fn stage_completion_uses_accumulated_dt_for_direct_minimizer_pseudotime() {
+    fn direct_minimizer_stage_completion_ignores_seconds_and_uses_max_steps() {
         let completion = infer_stage_completion(
             RunStatus::Completed,
-            Some(&control_with_pseudotime(2.0e-6)),
+            Some(&direct_minimizer_control(2, 2.0e-6)),
             &[
                 StepStats {
                     step: 1,
-                    time: 0.0,
+                    time: 1.0e-6,
                     dt: 7.5e-7,
                     ..StepStats::default()
                 },
                 StepStats {
                     step: 2,
-                    time: 0.0,
+                    time: 3.0e-6,
                     dt: 1.5e-6,
                     ..StepStats::default()
                 },
@@ -294,9 +296,9 @@ mod tests {
             false,
         );
 
-        assert_eq!(completion.reason, Some(StageStopReason::MaxPseudotime));
-        assert_eq!(completion.metric_name.as_deref(), Some("pseudo_time_s"));
-        assert_eq!(completion.metric_value, Some(2.25e-6));
-        assert_eq!(completion.threshold, Some(2.0e-6));
+        assert_eq!(completion.reason, Some(StageStopReason::MaxSteps));
+        assert_eq!(completion.metric_name.as_deref(), Some("steps"));
+        assert_eq!(completion.metric_value, Some(2.0));
+        assert_eq!(completion.threshold, Some(2.0));
     }
 }

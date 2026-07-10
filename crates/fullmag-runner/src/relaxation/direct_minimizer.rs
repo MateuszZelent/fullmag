@@ -482,20 +482,17 @@ mod tests {
     }
 
     #[test]
-    fn direct_minimizer_runtime_budget_uses_steps_and_pseudotime() {
+    fn direct_minimizer_runtime_budget_ignores_seconds_and_uses_max_steps() {
         let mut bounded = control(RelaxationAlgorithmIR::ProjectedGradientBb);
         bounded.stop.max_steps = Some(4);
         bounded.stop.max_relaxation_time_s = Some(2.0e-6);
         let mut state =
             DirectMinimizerState::new(vec![[1.0, 0.0, 0.0]], vec![[0.0, 1.0, 0.0]], 0.0);
 
+        state.pseudo_time_s = 2.0e-6;
         assert!(direct_minimizer_within_runtime_budget(&state, &bounded));
 
         state.accepted_steps = 4;
-        assert!(!direct_minimizer_within_runtime_budget(&state, &bounded));
-
-        state.accepted_steps = 3;
-        state.pseudo_time_s = 2.0e-6;
         assert!(!direct_minimizer_within_runtime_budget(&state, &bounded));
     }
 
