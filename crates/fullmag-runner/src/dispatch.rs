@@ -5431,8 +5431,12 @@ fn execute_native_fem(
     apply_energy_minimizer_provenance(&mut provenance, plan.relaxation.as_ref());
     crate::fem::relax::llg_overdamped::fill_provenance(&mut provenance, plan);
     if native_relaxation_step.is_some() {
-        provenance.energy_minimizer_realization =
-            Some(crate::relaxation::NATIVE_MFEM_DIRECT_MINIMIZER_REALIZATION.into());
+        provenance.energy_minimizer_realization = plan.relaxation.as_ref().and_then(|control| {
+            crate::relaxation::native_direct_minimizer_realization(
+                control.algorithm,
+                provenance.execution_engine == "fem_native_gpu",
+            ).map(str::to_string)
+        });
     } else if crate::fem::relax::llg_overdamped::uses_pure_damping(plan) {
         provenance.energy_minimizer_realization =
             Some(crate::relaxation::NATIVE_LLG_TIME_INTEGRATOR_REALIZATION.into());
@@ -9136,7 +9140,7 @@ mod tests {
             .expect("execute_fem must surface native initial torque completion");
 
         assert_eq!(completion.reason, Some(fullmag_ir::StageStopReason::Torque));
-        assert_eq!(completion.metric_name.as_deref(), Some("max_torque_Apm"));
+        assert_eq!(completion.metric_name.as_deref(), Some("max_torque_apm"));
         assert!(
             completion.metric_value.unwrap_or(f64::INFINITY)
                 <= completion.threshold.unwrap_or(f64::NEG_INFINITY),

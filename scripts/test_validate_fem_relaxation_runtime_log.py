@@ -49,6 +49,16 @@ def expected_cpu_line_search(algorithm: str) -> str:
     return "native_armijo_backtracking"
 
 
+def expected_realization(engine: str, algorithm: str) -> str:
+    return {
+        ("cpu", "projected_gradient_bb"): "native_mfem_pgbb",
+        ("gpu", "projected_gradient_bb"): "native_cuda_pgbb",
+        ("cpu", "nonlinear_cg"): "native_mfem_nonlinear_cg",
+        ("gpu", "nonlinear_cg"): "native_cuda_nonlinear_cg",
+        ("cpu", "tangent_plane_implicit"): "native_mfem_tpi",
+    }[(engine, algorithm)]
+
+
 def write_artifacts(
     artifact_dir: Path,
     algorithm: str = "nonlinear_cg",
@@ -81,7 +91,7 @@ def write_artifacts(
     energy_minimizer_realization = (
         "native_llg_time_integrator"
         if algorithm == "llg_overdamped"
-        else "native_mfem_backend_relax_step"
+        else expected_realization(engine, algorithm)
     )
     llg_provenance_policy = (
         """
@@ -139,7 +149,7 @@ def write_artifacts(
                     else '"step_update": "alternating_bb1_bb2",'
                 )
             cpu_algorithm_policy = f""""algorithm_policy": {{
-    "realization": "native_mfem_backend_relax_step",
+    "realization": "{expected_realization("cpu", algorithm)}",
     "metric": "fem_lumped_mass_inner_product",
       "preconditioner": "{preconditioner}",
       "linear_solver_policy": "{linear_solver_policy}",
@@ -183,7 +193,7 @@ def write_artifacts(
                 if include_gpu_gradient_policy
                 else ""
             )
-            algorithm_policy = f""""realization": "native_mfem_backend_relax_step",
+            algorithm_policy = f""""realization": "{expected_realization("gpu", algorithm)}",
       "metric": "fem_lumped_mass_inner_product",
       {gradient_policy}
       "line_search": "{line_search}",

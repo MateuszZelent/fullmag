@@ -3383,9 +3383,8 @@ mod tests {
         let provenance = ExecutionProvenance {
             execution_engine: "fem_cpu_native".to_string(),
             precision: "double".to_string(),
-            energy_minimizer_realization: Some(
-                crate::relaxation::NATIVE_MFEM_DIRECT_MINIMIZER_REALIZATION.to_string(),
-            ),
+            resolved_energy_minimizer: Some("nonlinear_cg".to_string()),
+            energy_minimizer_realization: Some("native_mfem_nonlinear_cg".to_string()),
             fem_assembly_mode: Some("legacy_sparse".to_string()),
             fem_gpu_qualification_status: None,
             ..ExecutionProvenance::default()
@@ -3429,12 +3428,28 @@ mod tests {
         assert_eq!(metadata["relaxation_algorithm"], "projected_gradient_bb");
         assert_eq!(
             metadata["algorithm_policy"]["realization"],
-            crate::relaxation::NATIVE_MFEM_DIRECT_MINIMIZER_REALIZATION
+            "native_mfem_pgbb"
         );
         assert_eq!(
             metadata["algorithm_policy"]["metric"],
-            "fem_lumped_mass_inner_product"
+            "mu0_ms_fem_lumped_volume"
         );
+        assert_eq!(metadata["algorithm_policy"]["gradient_units"], "A/m");
+        assert_eq!(
+            metadata["algorithm_policy"]["gradient_metric"],
+            "mu0_ms_fem_lumped_volume"
+        );
+        assert_eq!(metadata["algorithm_policy"]["armijo_derivative_units"], "J");
+        assert_eq!(
+            metadata["algorithm_policy"]["search_direction_units"],
+            "A/m"
+        );
+        assert_eq!(
+            metadata["algorithm_policy"]["line_search_step_units"],
+            "m/A"
+        );
+        assert_eq!(metadata["algorithm_policy"]["armijo_slope_units"], "J A/m");
+        assert_eq!(metadata["algorithm_policy"]["armijo_decrement_units"], "J");
         assert_eq!(
             metadata["algorithm_policy"]["preconditioner"],
             "exchange_plus_mass_tangent_gradient"
@@ -3476,9 +3491,8 @@ mod tests {
         let provenance = ExecutionProvenance {
             execution_engine: "fem_cpu_native".to_string(),
             precision: "double".to_string(),
-            energy_minimizer_realization: Some(
-                crate::relaxation::NATIVE_MFEM_DIRECT_MINIMIZER_REALIZATION.to_string(),
-            ),
+            resolved_energy_minimizer: Some("projected_gradient_bb".to_string()),
+            energy_minimizer_realization: Some("native_mfem_pgbb".to_string()),
             fem_assembly_mode: Some("legacy_sparse".to_string()),
             fem_gpu_qualification_status: None,
             ..ExecutionProvenance::default()
@@ -3590,9 +3604,7 @@ mod tests {
         let provenance = ExecutionProvenance {
             execution_engine: "fem_cpu_native".to_string(),
             precision: "double".to_string(),
-            energy_minimizer_realization: Some(
-                crate::relaxation::NATIVE_MFEM_DIRECT_MINIMIZER_REALIZATION.to_string(),
-            ),
+            energy_minimizer_realization: None,
             fem_assembly_mode: Some("legacy_sparse".to_string()),
             ..ExecutionProvenance::default()
         };
@@ -3653,9 +3665,7 @@ mod tests {
             precision: "double".to_string(),
             requested_energy_minimizer: Some("nonlinear_cg".to_string()),
             resolved_energy_minimizer: Some("nonlinear_cg".to_string()),
-            energy_minimizer_realization: Some(
-                crate::relaxation::NATIVE_MFEM_DIRECT_MINIMIZER_REALIZATION.to_string(),
-            ),
+            energy_minimizer_realization: Some("native_cuda_nonlinear_cg".to_string()),
             fem_execution_mode: Some("all_in_gpu_legacy_sparse".to_string()),
             fem_gpu_qualification_status: Some("production_executable".to_string()),
             fem_exchange_operator_mode: Some("legacy_sparse_gpu".to_string()),

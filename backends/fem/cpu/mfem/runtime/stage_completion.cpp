@@ -161,7 +161,7 @@ bool complete_stage_from_current_stats(
         set_stage_completion(
             ctx,
             FULLMAG_FEM_STAGE_STOP_REASON_TORQUE,
-            "max_torque_Apm",
+            "max_torque_apm",
             stats.max_torque_Apm,
             ctx.stage_completion.relax_stop.torque_tolerance_apm);
         return true;
@@ -235,7 +235,7 @@ void update_stage_completion_from_stats(
         set_stage_completion(
             ctx,
             FULLMAG_FEM_STAGE_STOP_REASON_TORQUE,
-            "max_torque_Apm",
+            "max_torque_apm",
             stats.max_torque_Apm,
             ctx.stage_completion.relax_stop.torque_tolerance_apm);
         return;

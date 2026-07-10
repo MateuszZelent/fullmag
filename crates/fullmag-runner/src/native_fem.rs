@@ -88,6 +88,38 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 #[cfg(feature = "fem-gpu")]
 use std::ptr;
+
+#[cfg(feature = "fem-gpu")]
+fn checked_native_finite(label: &str, value: f64) -> Result<f64, RunError> {
+    if value.is_finite() { Ok(value) } else { Err(RunError { message: format!("native FEM returned non-finite {label}") }) }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn checked_native_nonnegative(label: &str, value: f64) -> Result<f64, RunError> {
+    let value = checked_native_finite(label, value)?;
+    if value >= 0.0 { Ok(value) } else { Err(RunError { message: format!("native FEM returned negative {label}") }) }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn validate_native_step_stats(stats: &ffi::fullmag_fem_step_stats) -> Result<f64, RunError> {
+    for (label, value) in [
+        ("exchange_energy_joules", stats.exchange_energy_joules),
+        ("demag_energy_joules", stats.demag_energy_joules),
+        ("external_energy_joules", stats.external_energy_joules),
+        ("anisotropy_energy_joules", stats.anisotropy_energy_joules),
+        ("dmi_energy_joules", stats.dmi_energy_joules),
+        ("total_energy_joules", stats.total_energy_joules),
+    ] { checked_native_finite(label, value)?; }
+    for (label, value) in [
+        ("max_rhs_amplitude", stats.max_rhs_amplitude),
+        ("max_effective_field_amplitude", stats.max_effective_field_amplitude),
+        ("max_demag_field_amplitude", stats.max_demag_field_amplitude),
+        ("error_estimate", stats.error_estimate),
+        ("demag_linear_residual", stats.demag_linear_residual),
+    ] { checked_native_nonnegative(label, value)?; }
+    checked_native_nonnegative("max_torque_Apm", stats.max_torque_Apm)
+}
+
 #[cfg(feature = "fem-gpu")]
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -1682,11 +1714,7 @@ impl NativeFemBackend {
         }
 
         let relaxation_subphase_wall_time_ns = relaxation_driver_subphase_wall_time_ns(&stats);
-        let torque_apm = if stats.max_torque_Apm.is_finite() && stats.max_torque_Apm >= 0.0 {
-            stats.max_torque_Apm
-        } else {
-            0.0
-        };
+        let torque_apm = validate_native_step_stats(&stats)?;
         let mut step_stats = StepStats {
             step: stats.step,
             time: stats.time_seconds,
@@ -1862,11 +1890,7 @@ impl NativeFemBackend {
         }
 
         let relaxation_subphase_wall_time_ns = relaxation_driver_subphase_wall_time_ns(&stats);
-        let torque_apm = if stats.max_torque_Apm.is_finite() && stats.max_torque_Apm >= 0.0 {
-            stats.max_torque_Apm
-        } else {
-            0.0
-        };
+        let torque_apm = validate_native_step_stats(&stats)?;
         let mut step_stats = StepStats {
             step: stats.step,
             time: stats.time_seconds,
@@ -2137,11 +2161,7 @@ impl NativeFemBackend {
             return Err(self.last_error_or("FEM GPU snapshot_step_stats failed"));
         }
 
-        let torque_apm = if stats.max_torque_Apm.is_finite() && stats.max_torque_Apm >= 0.0 {
-            stats.max_torque_Apm
-        } else {
-            0.0
-        };
+        let torque_apm = validate_native_step_stats(&stats)?;
         let mut step_stats = StepStats {
             step: stats.step,
             time: stats.time_seconds,
@@ -2750,6 +2770,21 @@ fn last_global_error_or(fallback: &str) -> String {
 #[cfg(all(test, feature = "fem-gpu"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_fem_nonfinite_torque_is_error() {
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0] {
+            assert!(checked_native_nonnegative("max_torque_Apm", value).is_err());
+        }
+        assert_eq!(checked_native_nonnegative("max_torque_Apm", 0.0).unwrap(), 0.0);
+    }
+
+    #[test]
+    fn native_fem_completion_uses_canonical_metric_ids() {
+        let source = include_str!("../../../backends/fem/cpu/mfem/runtime/stage_completion.cpp");
+        assert!(!source.contains("\"max_torque_Apm\""));
+        assert!(source.contains("\"max_torque_apm\""));
+    }
     use fullmag_engine::fem::{FemLlgProblem, FemLlgState, MeshTopology};
     use fullmag_engine::{EffectiveFieldTerms, LlgConfig, MaterialParameters, TimeIntegrator};
     use fullmag_ir::{
@@ -3466,7 +3501,7 @@ mod tests {
             );
             assert_eq!(
                 completion.metric_name.as_deref(),
-                Some("max_torque_Apm"),
+                Some("max_torque_apm"),
                 "{algorithm:?} torque metric"
             );
             assert!(

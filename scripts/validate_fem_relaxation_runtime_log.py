@@ -35,6 +35,13 @@ CPU_DIRECT_MINIMIZER_LINE_SEARCH = {
     "nonlinear_cg": "native_armijo_backtracking_pr_plus_restart",
     "tangent_plane_implicit": "native_armijo_backtracking",
 }
+NATIVE_MINIMIZER_REALIZATIONS = {
+    ("cpu", "projected_gradient_bb"): "native_mfem_pgbb",
+    ("gpu", "projected_gradient_bb"): "native_cuda_pgbb",
+    ("cpu", "nonlinear_cg"): "native_mfem_nonlinear_cg",
+    ("gpu", "nonlinear_cg"): "native_cuda_nonlinear_cg",
+    ("cpu", "tangent_plane_implicit"): "native_mfem_tpi",
+}
 LLG_OVERDAMPED_POLICY = {
     "realization": "native_llg_time_integrator",
     "precession_policy": "disabled_pure_damping",
@@ -243,9 +250,10 @@ def validate_cpu_relaxation_qualification(
             qualification.get("algorithm_policy"),
             "fem_cpu_relaxation_qualification must include algorithm_policy for native FEM relaxation",
         )
+        expected_realization = NATIVE_MINIMIZER_REALIZATIONS[("cpu", algorithm)]
         require(
-            policy.get("realization") == "native_mfem_backend_relax_step",
-            "CPU native-relaxation algorithm_policy realization must be native_mfem_backend_relax_step",
+            policy.get("realization") == expected_realization,
+            f"CPU native-relaxation algorithm_policy realization must be {expected_realization}",
         )
         require(
             policy.get("metric") == "fem_lumped_mass_inner_product",
@@ -344,9 +352,10 @@ def validate_gpu_relaxation_qualification(
             "GPU llg_overdamped algorithm_policy must include time_integrator",
         )
     else:
+        expected_realization = NATIVE_MINIMIZER_REALIZATIONS[("gpu", algorithm)]
         require(
-            policy.get("realization") == "native_mfem_backend_relax_step",
-            "GPU direct-minimizer algorithm_policy realization must be native_mfem_backend_relax_step",
+            policy.get("realization") == expected_realization,
+            f"GPU direct-minimizer algorithm_policy realization must be {expected_realization}",
         )
         require(
             policy.get("metric") == "fem_lumped_mass_inner_product",
@@ -481,9 +490,10 @@ def validate_metadata(metadata: dict[str, Any], algorithm: str, engine: str, min
             provenance.get("resolved_energy_minimizer") == algorithm,
             f"metadata resolved_energy_minimizer must be {algorithm}",
         )
+        expected_realization = NATIVE_MINIMIZER_REALIZATIONS[(engine, algorithm)]
         require(
-            provenance.get("energy_minimizer_realization") == "native_mfem_backend_relax_step",
-            "metadata energy_minimizer_realization must be native_mfem_backend_relax_step",
+            provenance.get("energy_minimizer_realization") == expected_realization,
+            f"metadata energy_minimizer_realization must be {expected_realization}",
         )
         if engine == "gpu":
             require(
