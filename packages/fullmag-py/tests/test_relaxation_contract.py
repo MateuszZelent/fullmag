@@ -72,6 +72,16 @@ class RelaxationContractTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "conflicts"):
                     fm.relax_stage(stop=stop, **kwargs)
 
+    def test_flat_facade_rejects_non_integer_max_steps(self):
+        for value in (1.5, True):
+            with self.subTest(value=value):
+                with self.assertRaises(TypeError):
+                    fm.relax_stage(max_steps=value)
+
+    def test_invalid_authored_max_steps_cannot_match_after_coercion(self):
+        with self.assertRaises((TypeError, ValueError)):
+            fm.relax_stage(stop=fm.RelaxStop(max_steps=1), max_steps=1.5)
+
     def test_flat_facade_preserves_explicit_canonical_time_none(self):
         stop = fm.RelaxStop(
             torque_tolerance_apm=None,

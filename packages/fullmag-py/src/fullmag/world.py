@@ -35,7 +35,7 @@ import copy
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Literal, Mapping, Sequence
+from typing import Any, Callable, Literal, Mapping, Sequence, cast
 
 from fullmag._progress import emit_progress
 from fullmag._validation import as_vector3, require_non_empty, require_non_negative, require_positive
@@ -2164,7 +2164,7 @@ def _resolve_flat_relax_stop(
     resolved_max_steps = (
         DEFAULT_RELAXATION_MAX_STEPS
         if max_steps is _RELAX_UNSET
-        else None if max_steps is None else int(max_steps)
+        else RelaxStop(max_steps=cast(int | None, max_steps)).max_steps
     )
     time_values = {
         "max_relaxation_time_s": max_relaxation_time_s,
