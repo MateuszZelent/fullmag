@@ -378,7 +378,9 @@ weight rule is forbidden.
 
 - [ ] **Step 5: Close nonzero-k representation choice**
 
-Declare matched-mesh complex constraints as primary:
+Follow the higher-authority physics notes `0828` and `0830`: the production
+nonzero-k dynamic-demag operator uses complex Bloch `grad_k`/`div_k` assembly.
+Matched-mesh complex constraints remain the independent reference/oracle:
 
 ```text
 q_full = C_m(k) q_reduced
@@ -386,8 +388,9 @@ phi_full = C_phi(k) phi_reduced
 A_reduced(k) = C(k)^H A_full C(k)
 ```
 
-Both fields use `exp(-i*k dot R)`. An envelope `grad_k/div_k` backend is legal
-only after matrix/action parity. Postsolve phase projection is not an operator.
+Both fields use `exp(-i*k dot R)`. The constrained and `grad_k`/`div_k`
+representations may be called equivalent only after matrix/action parity over
+the accepted k domain. Postsolve phase projection is not an operator.
 
 - [ ] **Step 6: Perform text-only review**
 
