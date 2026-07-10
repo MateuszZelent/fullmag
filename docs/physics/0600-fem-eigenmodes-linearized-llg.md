@@ -7,6 +7,11 @@ This note covers the `modal_eigen` study product only. Driven harmonic solves
 belong to the separate `driven_response` product and use `(i omega B - A) q = b`
 rather than the modal generalized eigensystem `A q = lambda B q`.
 
+The canonical backend-neutral `L`/`B_alpha`/`A_omega` dictionary, typed units,
+eigenvalue mapping, residual rules, and truthful CPU/GPU lane names are frozen
+in `0831-fem-dynamic-pencil-modal-response-and-krylov.md`. This note retains the
+public reference workflow and must not redefine that contract.
+
 ## Scope
 
 This note defines the first executable FEM eigenmode workflow in Fullmag.
@@ -171,11 +176,12 @@ for public nonzero-k Floquet demag requests.
 The active implementation contract for full-coupled Poisson-airbox `k=0`
 modal eigensolve is:
 
-`docs/plans/active/fd_sovler_masterplan/18_poisson_airbox_eigensolve_cpu_gpu_implementation.md`.
+`docs/plans/active/fd_sovler_masterplan/20_dynamic_solver_audit_revalidation_and_remediation.md`.
 
-That document is normative for PA-E1 dense full-coupled algebraic oracle and
-staged for CPU sparse/SLEPc, Schur MatShell, Kittel demag validation, and GPU
-parity/runtime.
+The earlier plan 18 remains supporting implementation history for the PA-E1
+dense full-coupled algebraic oracle and staged CPU/GPU work. Synthetic
+Poisson-airbox payloads validate algebra only and cannot carry a production
+periodic-airbox claim.
 
 The current native GPU modal exception is narrower: the K0 no-demag macrospin
 Kittel field sweep may use `gpu_dense_k0_macrospin_modal_eigen`, where
@@ -334,12 +340,16 @@ The control room should show:
 ## Current limitations
 
 - CPU reference path plus transitional sparse LOBPCG for selected real-valued
-  cases; no production SLEPc/FEAST lane yet
+  cases; a native SLEPc selected-spectrum implementation exists, but its
+  real-scalar imaginary-axis target correction and production qualification
+  remain open
 - no residual / orthogonality / tangent leakage diagnostics exported yet
-- production gyrotropic pencil and eigenvalue mapping are not closed until the
-  macrospin and phasor-convention tests above pass
+- the canonical gyrotropic pencil and eigenvalue mapping are documented in
+  note 0831, but executable adapters remain gated until their macrospin,
+  phasor, and original-operator residual tests pass
 - nonzero-k Floquet demag is explicitly rejected until dynamic demag-k exists
-- no native MFEM/libCEED/hypre/SLEPc eigen backend yet
+- real shared-domain MFEM Poisson-airbox modal assembly remains unavailable;
+  the current synthetic algebra oracle and native SLEPc adapter do not prove it
 - interactive preview snapshots are not supported for FEM eigen plans
 
 ## Acceptance expectations for this phase

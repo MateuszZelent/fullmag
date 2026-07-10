@@ -3,6 +3,12 @@
 Status: reference contract
 Applies to: FEM eigen, dispersion, periodic and Floquet studies
 
+The single canonical dynamic-pencil dictionary, typed frequency/shift units,
+original-operator residual, reduced-order projection rules, and CPU/GPU lane
+names are defined in
+`0831-fem-dynamic-pencil-modal-response-and-krylov.md`. The equations below are
+the physical specialization of that contract.
+
 ## Convention
 
 Fullmag uses SI units. Effective fields are stored in `A/m`. The LLG
@@ -390,11 +396,13 @@ field-sign oracle, and symmetry of the k=0 demag Hessian.
 The active implementation contract for full-coupled Poisson-airbox `k=0`
 modal eigensolve is:
 
-`docs/plans/active/fd_sovler_masterplan/18_poisson_airbox_eigensolve_cpu_gpu_implementation.md`.
+`docs/plans/active/fd_sovler_masterplan/20_dynamic_solver_audit_revalidation_and_remediation.md`.
 
-That document is normative for PA-E1 dense full-coupled algebraic oracle and
-staged for CPU sparse/SLEPc, Schur MatShell, Kittel demag validation, and GPU
-parity/runtime.
+The native SLEPc selected-spectrum adapter exists. Its current real-scalar
+real-axis target is not the required `sigma=i omega_target` transformation, and
+real shared-domain MFEM Poisson-airbox modal assembly remains open. The PA-E1
+synthetic dense payload remains an algebra-validation oracle only; plan 18 is
+supporting implementation history, not authority to promote the capability.
 
 If the response unknown is dimensionless `delta_m`, response observables must
 include `Ms` where required by SI units:

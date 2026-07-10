@@ -7,9 +7,10 @@
   - `0700-frequency-domain-linearized-llg.md`
   - `0800-fem-static-pbc-demag.md`
   - `0828-fem-frequency-domain-floquet-demag.md`
+  - `0831-fem-dynamic-pencil-modal-response-and-krylov.md`
   - `0520-fem-robin-airbox-demag-bootstrap-reference.md`
 - Related implementation plan:
-  - `docs/plans/active/fd_sovler_masterplan/18_poisson_airbox_eigensolve_cpu_gpu_implementation.md`
+  - `docs/plans/active/fd_sovler_masterplan/20_dynamic_solver_audit_revalidation_and_remediation.md`
 
 ## 1. Problem statement
 
@@ -140,10 +141,18 @@ sigma_real, sigma_imag_rad_per_s
 The boundary, gauge, and reason form one validated tuple. `poisson_robin` and
 `poisson_dirichlet` require `gauge_policy=none` and
 `gauge_reason=coercive_outer_boundary`; `pure_neumann` requires
-`gauge_policy=mean_zero_augmented`, positive normalized mean weights, and
-`gauge_reason=pure_neumann_nullspace`. The current PA-E2 executable accepts
-only `assembly_kind=synthetic_algebraic_oracle`; the real shared-domain token
-must remain unavailable until its MFEM weak-form assembly exists.
+`gauge_policy=mean_zero_augmented`, normalized quadrature-assembled mean
+weights, and `gauge_reason=pure_neumann_nullspace`. Those weights need not be
+strictly positive at eliminated or inactive scalar DOFs. The current PA-E2
+executable accepts only `assembly_kind=synthetic_algebraic_oracle`; the real
+shared-domain token must remain unavailable until its MFEM weak-form assembly
+exists. The native SLEPc adapter exists, but it does not turn a synthetic
+payload into real assembly and its real-axis spectral targeting remains open.
+
+Any artifact with `assembly_kind=synthetic_algebraic_oracle` must carry
+`production_periodic_airbox_claim=false`. Production-labelled periodic-airbox
+verification requires `assembly_kind=mfem_weak_form_shared_domain` and the
+matching managed assembly and physics evidence.
 
 The planner rejects a modal periodic-airbox request if required accepted
 equilibrium fields, shared-airbox periodic certificate or supported BC policy

@@ -114,8 +114,13 @@ reconstructed vector, not on raw local tangent coordinates:
 
 ```text
 T_dst q_dst = phase * T_src q_src
-q_dst = phase * (T_dst^T T_src) q_src
+q_dst = phase * (T_dst^T R T_src) q_src
 ```
+
+`R` is the physical vector transformation associated with the periodic map.
+For a pure translation `R=I`, so the special case is
+`q_dst = phase * (T_dst^T T_src) q_src`. The Bloch phase and frame transport
+form one constraint and must pass the same corner/edge cycle certificate.
 
 The scalar-potential constraint is phase-only because `delta_phi` is a scalar.
 The magnetic block must report whether it used full-vector transport,
@@ -189,7 +194,8 @@ periodic/Floquet constrained tangent space and, when dynamic demag is enabled,
 the matching scalar-potential airbox space:
 
 ```text
-L(q) = omega B(q)
+L q = lambda B_alpha q
+lambda = i omega
 q = [delta_m, delta_phi]
 ```
 
@@ -288,6 +294,10 @@ the airbox coupling.
 FDM demag periodicity is represented by its convolution kernel, not by an FEM
 scalar-potential airbox. A future hybrid path must declare its own capability
 and artifact model instead of reusing the FEM `floquet_airbox` name.
+
+The shared modal/driven pencil, phase/eigenvalue map, original-operator
+residual, and truthful GPU lane vocabulary are owned by
+`0831-fem-dynamic-pencil-modal-response-and-krylov.md`.
 
 ## 5. API and IR impact
 

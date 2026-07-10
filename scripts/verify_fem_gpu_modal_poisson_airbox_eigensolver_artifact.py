@@ -97,12 +97,12 @@ def validate_payload(payload: dict[str, object]) -> None:
     require_equal(payload, "schema_version", "gpu_modal_poisson_airbox_eigensolver.v1")
     require_equal(payload, "status", "ok")
     require_equal(payload, "study_product", "modal_eigen")
-    require_equal(payload, "lane", "gpu_poisson_airbox_k0")
-    require_equal(payload, "execution_lane", "gpu_device_modal_eigen_dense_contract")
+    require_equal(payload, "lane", "gpu_poisson_airbox_k0_dense_validation")
+    require_equal(payload, "execution_lane", "gpu_dense_modal_validation")
     require_equal(
         payload,
         "solver_adapter",
-        "gpu_dense_poisson_airbox_modal_eigen_contract",
+        "gpu_dense_poisson_airbox_modal_dense_validation_contract",
     )
     require_equal(payload, "solver_family", "modal_eigen")
     require_equal(payload, "solver_library", "cuda_dense_inverse_iteration")
@@ -113,7 +113,13 @@ def validate_payload(payload: dict[str, object]) -> None:
     require_equal(payload, "operator_family", "full_coupled_poisson_airbox_modal_pencil")
     require_equal(payload, "spectral_transform", "shift_invert")
     require_equal(payload, "frequency_response_proxy", False)
-    require_equal(payload, "gpu_device_resident_modal_eigensolver", True)
+    require_equal(payload, "operator_storage", "device")
+    require_equal(payload, "eigensolver_iteration_location", "device")
+    require_equal(payload, "persistent_solver_context", False)
+    require_equal(payload, "scalable_sparse_or_matrix_free", False)
+    require_equal(payload, "validation_only", True)
+    require_equal(payload, "production_modal_claim", False)
+    require_equal(payload, "gpu_device_resident_modal_eigensolver", False)
     require_equal(payload, "cpu_fallback", "disabled")
     require_equal(payload, "fallback_used", False)
     require_zero_integer(payload, "per_iteration_h2d_count")

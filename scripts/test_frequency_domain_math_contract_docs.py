@@ -9,6 +9,43 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def test_canonical_fem_dynamic_solver_contract_freezes_algebra_units_and_claims() -> None:
+    contract_path = (
+        REPO_ROOT
+        / "docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md"
+    )
+    assert contract_path.is_file(), "canonical FEM dynamic-solver note is missing"
+    contract = read(contract_path)
+    normalized_contract = " ".join(contract.split())
+
+    for required in (
+        "L q = lambda B_alpha q",
+        "A_omega = +i omega B_alpha - L",
+        "b = T^T[-gamma0 * (m0 x delta_h)]",
+        "lambda = i omega",
+        "gamma_rad_s_T",
+        "gamma0_rad_s_per_A_m",
+        "omega_rad_s",
+        "frequency_hz = Re(omega_rad_s) / (2 pi)",
+        "sigma_real",
+        "sigma_imag_rad_per_s",
+        "left and right eigenvectors",
+        "Petrov-Galerkin",
+        "original_operator_residual",
+        "poisson_robin, beta > 0 -> gauge_policy=none",
+        "poisson_dirichlet -> gauge_policy=none",
+        "pure_neumann -> gauge_policy=mean_zero_augmented",
+        "q_dst = exp(-i k dot R) (T_dst^T R T_src) q_src",
+        "gpu_operator_host_krylov",
+        "gpu_device_krylov",
+        "gpu_dense_modal_validation",
+        "gpu_dense_k0_macrospin_modal_eigen",
+        "implementation_state",
+        "validation_state",
+    ):
+        assert required in normalized_contract
+
+
 def test_modal_gyrotropic_mapping_contract_is_explicit() -> None:
     plan = read(PLAN_ROOT / "02_physics_contract.md")
 

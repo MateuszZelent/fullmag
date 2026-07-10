@@ -1307,6 +1307,7 @@ def mark_poisson_airbox_k0_solver_fixture(root: Path) -> None:
     solver = json.loads(solver_path.read_text())
     solver.update(
         {
+            "assembly_kind": "mfem_weak_form_shared_domain",
             "solver_adapter": "k0_poisson_airbox_cpu_full_coupled_slepc",
             "solver_model": "k0_poisson_airbox_cpu_full_coupled_slepc",
             "resolved_solver_family": "k0_poisson_airbox_full_coupled",
@@ -4698,6 +4699,38 @@ def test_validator_accepts_k0_kittel_periodic_airbox_contract_with_convergence(
     result = run_validator(tmp_path, "--require-k0-kittel-periodic-airbox-demag")
 
     assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_rejects_synthetic_periodic_airbox_production_claim(
+    tmp_path: Path,
+) -> None:
+    fields = (20e-3 / MU0, 50e-3 / MU0, 100e-3 / MU0)
+    frequencies = tuple(k0_kittel_expected_frequency_hz(field) for field in fields)
+    write_eigen_fixture(tmp_path)
+    expand_reference_floquet_fixture_to_k_path(
+        tmp_path,
+        frequencies_hz=frequencies,
+        k_vectors_rad_m=((0.0, 0.0, 0.0),) * len(fields),
+    )
+    write_k0_kittel_field_sweep_metadata(tmp_path, demag_kind="periodic_airbox_k0")
+    write_k0_kittel_summary_and_points(
+        tmp_path,
+        fields,
+        frequencies,
+        demag_kind="periodic_airbox_k0",
+    )
+    write_k0_kittel_convergence_table(tmp_path)
+    mark_poisson_airbox_k0_solver_fixture(tmp_path)
+    mark_relaxed_equilibrium_fixture(tmp_path)
+    solver_path = tmp_path / "eigen" / "diagnostics" / "solver.v1.json"
+    solver = json.loads(solver_path.read_text())
+    solver["assembly_kind"] = "synthetic_algebraic_oracle"
+    solver_path.write_text(json.dumps(solver))
+
+    result = run_validator(tmp_path, "--require-k0-kittel-periodic-airbox-demag")
+
+    assert result.returncode != 0
+    assert "solver_diagnostics.assembly_kind" in (result.stderr + result.stdout)
 
 
 def test_validator_rejects_periodic_airbox_kittel_without_poisson_airbox_solver(

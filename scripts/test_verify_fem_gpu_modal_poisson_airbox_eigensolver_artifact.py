@@ -22,9 +22,9 @@ def payload(**overrides: object) -> dict[str, object]:
         "schema_version": "gpu_modal_poisson_airbox_eigensolver.v1",
         "status": "ok",
         "study_product": "modal_eigen",
-        "lane": "gpu_poisson_airbox_k0",
-        "execution_lane": "gpu_device_modal_eigen_dense_contract",
-        "solver_adapter": "gpu_dense_poisson_airbox_modal_eigen_contract",
+        "lane": "gpu_poisson_airbox_k0_dense_validation",
+        "execution_lane": "gpu_dense_modal_validation",
+        "solver_adapter": "gpu_dense_poisson_airbox_modal_dense_validation_contract",
         "solver_family": "modal_eigen",
         "solver_library": "cuda_dense_inverse_iteration",
         "demag_kind": "periodic_airbox_k0",
@@ -34,7 +34,13 @@ def payload(**overrides: object) -> dict[str, object]:
         "operator_family": "full_coupled_poisson_airbox_modal_pencil",
         "spectral_transform": "shift_invert",
         "frequency_response_proxy": False,
-        "gpu_device_resident_modal_eigensolver": True,
+        "operator_storage": "device",
+        "eigensolver_iteration_location": "device",
+        "persistent_solver_context": False,
+        "scalable_sparse_or_matrix_free": False,
+        "validation_only": True,
+        "production_modal_claim": False,
+        "gpu_device_resident_modal_eigensolver": False,
         "cpu_fallback": "disabled",
         "fallback_used": False,
         "per_iteration_h2d_count": 0,
@@ -79,6 +85,21 @@ def test_validator_accepts_gpu_modal_poisson_airbox_eigensolver_artifact(
     result = run_validator(artifact)
 
     assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_rejects_broad_device_resident_modal_eigensolver_claim(
+    tmp_path: Path,
+) -> None:
+    artifact = tmp_path / "gpu_modal_poisson_airbox_eigensolver.v1.json"
+    artifact.write_text(
+        json.dumps(payload(gpu_device_resident_modal_eigensolver=True)),
+        encoding="utf-8",
+    )
+
+    result = run_validator(artifact)
+
+    assert result.returncode != 0
+    assert "gpu_device_resident_modal_eigensolver" in (result.stderr + result.stdout)
 
 
 def test_validator_rejects_frequency_response_proxy(tmp_path: Path) -> None:

@@ -2557,6 +2557,11 @@ def validate_k0_kittel_summary_artifacts(
                 "solver_diagnostics.demag_kind",
             )
             require_equal(
+                solver_diagnostics.get("assembly_kind"),
+                "mfem_weak_form_shared_domain",
+                "solver_diagnostics.assembly_kind",
+            )
+            require_equal(
                 demag.get("gauge_policy"),
                 "mean_zero_augmented",
                 f"{summary_name}.demag.gauge_policy",
