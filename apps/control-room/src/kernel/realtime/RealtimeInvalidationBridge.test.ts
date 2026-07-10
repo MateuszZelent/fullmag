@@ -722,6 +722,36 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision(fieldKey)).toBe("generation:8:revision:11");
   });
 
+  it("treats unsafe numeric domain generation IDs as unknown", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const fieldKey = `${DATA_FIELD_VECTOR_PATH.replace(
+      "{quantity_id}",
+      "m",
+    )}?component=full`;
+
+    resources.subscribe(fieldKey, () => {});
+
+    expect(
+      bridge.handleEvent({
+        payload: {
+          changes: [
+            {
+              domain_generation_id: Number.MAX_SAFE_INTEGER + 2,
+              resource: "fields",
+              resource_id: "samples",
+              revision: 11,
+            },
+          ],
+        },
+        type: "resource.batch_changed",
+      }),
+    ).toBe(true);
+
+    expect(resources.getRevision(fieldKey)).toBe(11);
+  });
+
   it("maps quantity-scoped field sample invalidations only to matching field resources", () => {
     const bus = new EventBus<KernelEventMap>();
     const resources = new ResourceInvalidationController(bus);

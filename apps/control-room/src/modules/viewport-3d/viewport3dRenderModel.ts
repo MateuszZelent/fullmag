@@ -779,6 +779,10 @@ export function buildViewport3DFieldRenderModel(
     const partFieldVector =
       resolvedPartFieldVector ??
       (partUsesMagneticOnlyField ? renderFieldVector : null);
+    const partFieldMatchesTopology = fieldVectorMatchesTopology(
+      partFieldVector,
+      topology,
+    );
     const isScopedPartFieldVector = Boolean(
       partFieldVector &&
         partFieldVector !== renderFieldVector &&
@@ -854,7 +858,9 @@ export function buildViewport3DFieldRenderModel(
         if (!colorMode) continue;
         partScalarColorsByMode.set(
           colorMode,
-          explicitPartFieldBuffer &&
+          !partFieldMatchesTopology
+            ? null
+            : explicitPartFieldBuffer &&
             !viewport3DTargetFieldBufferCanServeSurface(
               explicitPartFieldBuffer,
               colorMode,
@@ -911,7 +917,9 @@ export function buildViewport3DFieldRenderModel(
       options.partVectorAnchorModes?.get(partId) ??
       "center";
     const partSegments =
-      isScopedPartFieldVector && !scopedPartFieldNodeIndices
+      !partFieldMatchesTopology
+        ? null
+        : isScopedPartFieldVector && !scopedPartFieldNodeIndices
         ? null
         : explicitPartFieldBuffer &&
       !viewport3DTargetFieldBufferCanServeVectors(

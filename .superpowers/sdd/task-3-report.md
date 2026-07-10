@@ -47,3 +47,30 @@ git diff --check
 - No direct module fetches or generated transport edits were added.
 - `viewport3dDomainAdapter.ts` was inspected but not changed: it adapts FDM/FEM geometry/manifest parts and has no field-buffer admission path. The resolver is used at the render-model, chunked-color, and target-buffer boundaries where field data enters GPU-facing work.
 - Native FEM builds were not run.
+
+## Review follow-up: per-part v3 admission and unsafe generation numbers
+
+- `buildViewport3DFieldRenderModel` now applies
+  `resolveViewport3DFieldDomainCompatibility` to every resolved per-part field
+  before producing scalar colors or vector segments. FMVP v3 fields with a
+  missing or mismatched generation therefore yield null part scalar data and
+  null vector segments.
+- Added the render-model regression for both missing and mismatched v3 part
+  generations, plus a realtime regression showing an unsafe JSON numeric
+  `domain_generation_id` is unknown and leaves the field invalidation revision
+  at the ordinary field revision. Exact string generation tokens remain
+  covered by the existing generation-only invalidation test.
+
+Review RED:
+
+```bash
+pnpm --dir apps/control-room exec vitest run src/modules/viewport-3d/model/viewport3DFieldDomainCompatibility.test.ts src/modules/viewport-3d/viewport3dRenderModel.test.ts src/modules/viewport-3d/model/viewport3DTargetFieldBuffer.test.ts src/modules/viewport-3d/viewport3dDomainAdapter.test.ts src/modules/viewport-3d/build-engine/viewport3dBuildJobKeys.test.ts src/kernel/realtime/RealtimeInvalidationBridge.test.ts
+# 2 expected failures: missing/mismatched v3 part fields produced vector segments
+```
+
+Review GREEN:
+
+```bash
+pnpm --dir apps/control-room exec vitest run src/modules/viewport-3d/model/viewport3DFieldDomainCompatibility.test.ts src/modules/viewport-3d/viewport3dRenderModel.test.ts src/modules/viewport-3d/model/viewport3DTargetFieldBuffer.test.ts src/modules/viewport-3d/viewport3dDomainAdapter.test.ts src/modules/viewport-3d/build-engine/viewport3dBuildJobKeys.test.ts src/kernel/realtime/RealtimeInvalidationBridge.test.ts
+# 6 files passed, 142 tests passed
+```
