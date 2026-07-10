@@ -4689,7 +4689,7 @@ class ProblemApiTests(unittest.TestCase):
         study_ir = loaded.stages[0].problem.study.to_ir()
         self.assertEqual(study_ir["algorithm"], "nonlinear_cg")
         self.assertEqual(study_ir["stop"]["torque_tolerance_apm"], 1e-4)
-        self.assertIsNone(study_ir["dynamics"])
+        self.assertNotIn("dynamics", study_ir)
 
         stage_payload = export_builder_draft(loaded)["stages"][0]
         for field in (

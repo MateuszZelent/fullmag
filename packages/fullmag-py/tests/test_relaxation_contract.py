@@ -36,7 +36,75 @@ class RelaxationContractTests(unittest.TestCase):
             outputs=_outputs(),
         )
         payload = study.to_ir()
-        self.assertIsNone(payload["dynamics"])
+        self.assertNotIn("dynamics", payload)
+
+    def test_flat_facade_rejects_conflicting_stop_scalars(self):
+        cases = (
+            (
+                fm.RelaxStop(torque_tolerance_apm=1e-4),
+                {"tol": 2e-4},
+                "torque_tolerance",
+            ),
+            (
+                fm.RelaxStop(energy_tolerance_j=1e-20),
+                {"energy_tolerance": 2e-20},
+                "energy_tolerance",
+            ),
+            (fm.RelaxStop(max_steps=10), {"max_steps": 20}, "max_steps"),
+            (
+                fm.RelaxStop(max_relaxation_time_s=1e-9),
+                {"max_relaxation_time_s": 2e-9},
+                "max_relaxation_time_s",
+            ),
+            (
+                fm.RelaxStop(max_relaxation_time_s=1e-9),
+                {"max_pseudotime_s": 2e-9},
+                "max_pseudotime_s",
+            ),
+            (
+                fm.RelaxStop(max_relaxation_time_s=1e-9),
+                {"max_physical_time_s": 2e-9},
+                "max_physical_time_s",
+            ),
+        )
+        for stop, kwargs, field in cases:
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(ValueError, "conflicts"):
+                    fm.relax_stage(stop=stop, **kwargs)
+
+    def test_flat_facade_preserves_explicit_canonical_time_none(self):
+        stop = fm.RelaxStop(
+            torque_tolerance_apm=None,
+            energy_tolerance_j=1e-20,
+            max_steps=None,
+            max_relaxation_time_s=None,
+        )
+        spec = fm.relax_stage(stop=stop, max_relaxation_time_s=None)
+        self.assertIsNone(spec.stop.max_relaxation_time_s)
+
+        with self.assertRaisesRegex(ValueError, "max_pseudotime_s conflicts"):
+            fm.relax_stage(stop=stop, max_pseudotime_s=1e-9)
+
+    def test_direct_minimizer_facade_rejects_every_llg_control(self):
+        cases = (
+            {"relax_alpha": 0.5},
+            {"field_refresh": fm.FieldRefreshPolicy(demag_interval_s=1e-12)},
+            {"solver": "rk45"},
+            {"dt": 1e-13},
+            {"max_error": 1e-6},
+            {"dt_min": 1e-15},
+            {"dt_max": 1e-12},
+            {"max_relaxation_time_s": 1e-9},
+            {"max_pseudotime_s": 1e-9},
+            {"max_physical_time_s": 1e-9},
+        )
+        for kwargs in cases:
+            with self.subTest(field=next(iter(kwargs))):
+                with self.assertRaises((TypeError, ValueError)):
+                    fm.relax_stage(algorithm="nonlinear_cg", **kwargs)
+
+        spec = fm.relax_stage(algorithm="nonlinear_cg")
+        self.assertEqual(spec.algorithm, "nonlinear_cg")
 
     def test_legacy_time_alias_serializes_canonically(self):
         stop = fm.RelaxStop(max_pseudotime_s=1e-9)

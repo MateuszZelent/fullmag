@@ -651,13 +651,15 @@ class Relaxation:
         }
         if self._table_autosave is not None:
             sampling["table_autosave"] = self._table_autosave.to_ir()
-        return {
+        payload: dict[str, object] = {
             "kind": "relaxation",
             "algorithm": self.algorithm,
-            "dynamics": self.dynamics.to_ir() if self.dynamics is not None else None,
             "stop": self.stop.to_ir(),
             "sampling": sampling,
         }
+        if self.dynamics is not None:
+            payload["dynamics"] = self.dynamics.to_ir()
+        return payload
 
 
 def _resolve_relax_stop(
