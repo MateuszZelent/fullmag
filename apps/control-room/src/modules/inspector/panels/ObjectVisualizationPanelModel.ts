@@ -4,6 +4,7 @@ import type {
   FieldMetaQuery,
   MeshSharedDomainManifestResource,
   MeshRegionMembershipResource,
+  VisualizationStatePatch,
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
 import {
@@ -26,8 +27,10 @@ import {
   hasDisplayUnitOptions,
 } from "@/shared/domain/physics/displayUnits";
 import {
+  mergeVisualizationStateTargetOverride,
   renderModePatch,
   surfaceColorSourceToColorMode,
+  type ObjectVisualizationController,
   type SurfaceFieldProjectionMode,
   type SurfaceColorSource,
   type VisualizationGeometryScope,
@@ -233,6 +236,42 @@ export function resolveObjectVisualizationPanelTarget({
     sceneObjectIds,
     targetRegistry: visualizationState?.targets,
   });
+}
+
+export function queuePartVectorVisibilityPatch({
+  controller,
+  part,
+  sceneObjectIds,
+  state,
+  sync,
+  visible,
+}: {
+  controller: Pick<ObjectVisualizationController, "patchTargetPending">;
+  part: NonNullable<MeshSharedDomainManifestResource["mesh_parts"]>[number];
+  sceneObjectIds: ReadonlySet<string>;
+  state: VisualizationStateResource;
+  sync: Pick<{ queuePatch: (patch: VisualizationStatePatch) => void }, "queuePatch">;
+  visible: boolean;
+}): VisualizationTargetRef {
+  const target = resolveObjectVisualizationPanelTarget({
+    part,
+    sceneObjectIds,
+    visualizationState: state,
+  });
+  const patch = { vectorsVisible: visible } satisfies VisualizationTargetPatch;
+  sync.queuePatch({
+    overrides: mergeVisualizationStateTargetOverride(
+      state.overrides ?? [],
+      target,
+      patch,
+    ),
+  });
+  controller.patchTargetPending(
+    target,
+    patch,
+    state.revision,
+  );
+  return target;
 }
 
 export function resolveObjectVisualizationPanelSelectionTarget({

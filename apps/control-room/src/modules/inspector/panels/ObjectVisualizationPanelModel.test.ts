@@ -15,6 +15,7 @@ import {
 
 import {
   buildAirboxVectorDiagnostic,
+  queuePartVectorVisibilityPatch,
   buildAirboxVisibilityDiagnostic,
   buildVisualizationVectorBudgetDiagnostic,
   buildVisualizationPanelSections,
@@ -428,6 +429,64 @@ describe("ObjectVisualizationPanelModel", () => {
         visualizationState: null,
       }),
     ).toMatchObject({ id: "part-film", kind: "part" });
+  });
+
+  it("applies a part-vector patch immediately until a newer registry revision acknowledges it", () => {
+    const controller = new ObjectVisualizationController();
+    const queuedPatches: unknown[] = [];
+    const state = {
+      revision: 7,
+      overrides: [],
+      targets: {
+        airbox: {},
+        objects: [],
+        parts: [
+          {
+            scope: "part",
+            scope_id: "part-film",
+            settings: { vectors_visible: true },
+          },
+        ],
+      },
+    } as never;
+
+    const target = queuePartVectorVisibilityPatch({
+      controller,
+      part: { id: "part-film", object_id: "projection-film" } as MeshPart,
+      sceneObjectIds: new Set(["projection-film"]),
+      state,
+      sync: { queuePatch: (patch) => queuedPatches.push(patch) },
+      visible: false,
+    });
+
+    expect(target).toMatchObject({ id: "part-film", kind: "part" });
+    expect(queuedPatches).toEqual([
+      {
+        overrides: [
+          {
+            display: { vectors: { visible: false } },
+            scope: "part",
+            scope_id: "part-film",
+          },
+        ],
+      },
+    ]);
+    expect(
+      resolveTargetVisualization({
+        snapshot: controller.getSnapshot(),
+        target,
+        visualizationState: state,
+      }).settings.vectorsVisible,
+    ).toBe(false);
+
+    controller.acknowledgePendingTargetPatches(8);
+    expect(
+      resolveTargetVisualization({
+        snapshot: controller.getSnapshot(),
+        target,
+        visualizationState: state,
+      }).settings.vectorsVisible,
+    ).toBe(true);
   });
 
   it("builds scalar palette patches for the visualization quantity colormap", () => {

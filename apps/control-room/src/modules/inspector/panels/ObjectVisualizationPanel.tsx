@@ -105,6 +105,7 @@ import {
   surfaceColorSourceFieldMetaComponent,
   geometryScopeDisplayPatch,
   quantitySourcePatch,
+  queuePartVectorVisibilityPatch,
   resolveObjectVisualizationPanelTarget,
   resolveObjectVisualizationPanelSelectionTarget,
   regionVisualizationCarrierSupportsFieldMeta,
@@ -1637,17 +1638,13 @@ function useObjectVisualizationPanelState(
   function onTogglePartVectors(partId: string, visible: boolean) {
     const part = manifest.data?.mesh_parts?.find((p) => p.id === partId);
     if (!part || !visualizationState.data) return;
-    const partTarget = resolveObjectVisualizationPanelTarget({
+    queuePartVectorVisibilityPatch({
+      controller: visualization,
       part,
       sceneObjectIds,
-      visualizationState: visualizationState.data,
-    });
-    visualizationSync.queuePatch({
-      overrides: mergeVisualizationStateTargetOverride(
-        visualizationState.data.overrides ?? [],
-        partTarget,
-        { vectorsVisible: visible },
-      ),
+      state: visualizationState.data,
+      sync: visualizationSync,
+      visible,
     });
   }
 

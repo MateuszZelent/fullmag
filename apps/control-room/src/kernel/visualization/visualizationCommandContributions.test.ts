@@ -140,6 +140,57 @@ describe("visualization target commands", () => {
       });
   });
 
+  it("patches and clears a mesh-part selection as a part even when it has an owning object", async () => {
+    const commands = new CommandRegistry();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    const visualization = new ObjectVisualizationController();
+    for (const command of VISUALIZATION_TARGET_COMMANDS) {
+      commands.register(command);
+    }
+    selection.set(
+      {
+        kind: "mesh-part",
+        label: "Projection film",
+        nodeId: "part-film",
+        objectId: "projection-film",
+        ref: {
+          kind: "mesh-part",
+          nodeId: "part-film",
+          objectId: "projection-film",
+          type: "mesh-part",
+          visualizationTargetId: "mesh-part:part-film",
+        },
+      },
+      "test",
+    );
+
+    const setResult = await commands.execute(
+      "visualization.target.set-vectors-visible",
+      { selection, source: "test", visualization },
+      false,
+    );
+
+    expect(setResult.status).toBe("completed");
+    expect(visualization.getSettings({ id: "part-film", kind: "part" }))
+      .toMatchObject({ vectorsVisible: false });
+    expect(visualization.getSnapshot().overrides).toMatchObject({
+      "part:part-film": { vectorsVisible: false },
+    });
+    expect(visualization.getSnapshot().overrides).not.toHaveProperty(
+      "object:projection-film",
+    );
+
+    const clearResult = await commands.execute(
+      "visualization.target.clear-overrides",
+      { selection, source: "test", visualization },
+    );
+
+    expect(clearResult.status).toBe("completed");
+    expect(visualization.getSnapshot().overrides).not.toHaveProperty(
+      "part:part-film",
+    );
+  });
+
   it("writes selected object target patches to backend-owned visualization overrides when state is available", async () => {
     const commands = new CommandRegistry();
     const selection = new SelectionController(new EventBus<KernelEventMap>());
