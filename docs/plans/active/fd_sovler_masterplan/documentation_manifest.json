@@ -1,136 +1,36 @@
 {
-  "version": "COMSOL-aligned v5.0 full-read canonical",
-  "date": "2026-07-07",
+  "schema_version": "frequency_domain_documentation_manifest.v2",
+  "package_version": "COMSOL-aligned v5.1 decision-complete",
+  "updated_at": "2026-07-10",
   "entrypoint": "00_README_CANONICAL_FULL_READ.md",
   "full_pack": "fd_solver_plan_FULL_PACK_COMSOL_ALIGNED_V5.md",
-  "source_files_read": [
-    {
-      "file": "fd_solver_plan_00_index(2).md",
-      "lines": 213,
-      "chars": 7065,
-      "sha256": "548506fb4218ec53751198ef2205a17c0d215bb53833fe25923994c6637d2e32",
-      "heading_count": 14
-    },
-    {
-      "file": "fd_solver_plan_01_comsol_physics_contract(2).md",
-      "lines": 421,
-      "chars": 9205,
-      "sha256": "72cfaf53b12d1f643dd9a5f60bab0f073ad409695fea51273dd4b18c0b7b4cdb",
-      "heading_count": 24
-    },
-    {
-      "file": "fd_solver_plan_02_algebra_representations(1).md",
-      "lines": 300,
-      "chars": 5686,
-      "sha256": "86f0a2c09b0f06f414b787e1a1d2b0e8568a256f79c87b629549e3b39eb68915",
-      "heading_count": 17
-    },
-    {
-      "file": "fd_solver_plan_03_solver_tree_architecture(2).md",
-      "lines": 253,
-      "chars": 6739,
-      "sha256": "88564843306337049828d791437b5147f45ea96a04503409b5114a27ceaa8787",
-      "heading_count": 10
-    },
-    {
-      "file": "fd_solver_plan_04_implementation_roadmap(1).md",
-      "lines": 357,
-      "chars": 7556,
-      "sha256": "e980fc077831d917b9147f4bced4333b0b32db60fb38dc9bb2a644d3a7d06afc",
-      "heading_count": 12
-    },
-    {
-      "file": "fd_solver_plan_05_api_code_skeletons(2).md",
-      "lines": 444,
-      "chars": 11456,
-      "sha256": "d3104a68d5bda059d0b7e9bbc163e6d04268201a87cb129ce6b36359b572429f",
-      "heading_count": 13
-    },
-    {
-      "file": "fd_solver_plan_06_backend_algorithms(1).md",
-      "lines": 398,
-      "chars": 6170,
-      "sha256": "18d5387a5e03860e292fa6503a897d6dfafd7ffb3f2f6d33dfd9ee8ff08ec840",
-      "heading_count": 47
-    },
-    {
-      "file": "fd_solver_plan_07_validation_benchmarks(2).md",
-      "lines": 349,
-      "chars": 6820,
-      "sha256": "68571b97eefa24e580f5894fa3e92e34c88515169c323a4ca175f44d0771c8df",
-      "heading_count": 32
-    },
-    {
-      "file": "fd_solver_plan_08_patch_queue(1).md",
-      "lines": 609,
-      "chars": 24563,
-      "sha256": "715bde20f99bb553539ceaca3880c67c71980efc97fafe6983b2a0b569a1979b",
-      "heading_count": 13
-    },
-    {
-      "file": "fd_solver_plan_09_sources_and_traceability(1).md",
-      "lines": 238,
-      "chars": 5652,
-      "sha256": "cb1235ab15b0f9d2bca44e41f239b585801c1ec710d7bfc39d896e8f3996ef2c",
-      "heading_count": 17
-    },
-    {
-      "file": "fd_solver_plan_10_relaxed_texture_handoff(1).md",
-      "lines": 738,
-      "chars": 21540,
-      "sha256": "ba9470680758fbc50238c28fb6ad5313a1deab962b011f041c467091a71d62df",
-      "heading_count": 46
-    },
-    {
-      "file": "fd_solver_plan_11_decision_closures_adr(1).md",
-      "lines": 336,
-      "chars": 7586,
-      "sha256": "109e4913a570c2dcfac9b9303679bfd259b27116462cd9e509ad948cbdf55741",
-      "heading_count": 14
-    },
-    {
-      "file": "fd_solver_plan_FULL_PACK_COMSOL_ALIGNED.md",
-      "lines": 3207,
-      "chars": 67762,
-      "sha256": "730569745a9b11d0730543a6857a23f5953e61efc10b02922c4dbce39767783c",
-      "heading_count": 196
-    },
-    {
-      "file": "fd_solver_plan_FULL_PACK_COMSOL_ALIGNED_V3(2).md",
-      "lines": 4321,
-      "chars": 96910,
-      "sha256": "ac1446f3bae78bb4f7646d68b777ec40a5e0215c2feaa61444b02afd5841f25f",
-      "heading_count": 260
-    },
-    {
-      "file": "MicromagneticsModuleUsersGuideV2.13(1).pdf",
-      "pages": 71,
-      "bytes": 14582495,
-      "sha256": "6c212ed2ee9580f2917118c58ed1caafec18488076a3e7bcb3eb15a64b5e49e1",
-      "extracted_text_lines": 1944,
-      "extracted_text_chars": 97886
-    }
+  "full_pack_generated": true,
+  "documents": [
+    {"order": 0, "path": "00_README_CANONICAL_FULL_READ.md", "role": "normative", "include_in_full_pack": true},
+    {"order": 1, "path": "01_full_read_inventory_and_resolution.md", "role": "supporting", "include_in_full_pack": true},
+    {"order": 2, "path": "02_physics_contract.md", "role": "normative", "include_in_full_pack": true},
+    {"order": 3, "path": "03_relaxed_texture_linearization.md", "role": "normative", "include_in_full_pack": true},
+    {"order": 4, "path": "04_mesh_periodic_floquet_airbox.md", "role": "normative", "include_in_full_pack": true},
+    {"order": 5, "path": "05_algebra_and_operator_representations.md", "role": "normative", "include_in_full_pack": true},
+    {"order": 6, "path": "06_solver_tree_planner_and_lanes.md", "role": "normative", "include_in_full_pack": true},
+    {"order": 7, "path": "07_api_abi_artifacts.md", "role": "normative", "include_in_full_pack": true},
+    {"order": 8, "path": "08_backend_algorithms_and_status.md", "role": "normative", "include_in_full_pack": true},
+    {"order": 9, "path": "09_validation_certification_benchmarks.md", "role": "validation", "include_in_full_pack": true},
+    {"order": 10, "path": "10_patch_queue_current_status.md", "role": "implementation_status", "include_in_full_pack": true},
+    {"order": 11, "path": "11_runtime_telemetry_performance.md", "role": "implementation_status", "include_in_full_pack": true},
+    {"order": 12, "path": "12_adr_decisions.md", "role": "normative", "include_in_full_pack": true},
+    {"order": 13, "path": "13_repo_migration_cleanup.md", "role": "supporting", "include_in_full_pack": true},
+    {"order": 14, "path": "14_sources_traceability.md", "role": "supporting", "include_in_full_pack": true},
+    {"order": 15, "path": "15_self_weryfication_Kittel.md", "role": "validation", "include_in_full_pack": true},
+    {"order": 16, "path": "16_implementation_plan_Kittel_D2.md", "role": "normative", "include_in_full_pack": true},
+    {"order": 17, "path": "17_eigen_k0_gpu_readiness_audit.md", "role": "implementation_status", "include_in_full_pack": true},
+    {"order": 18, "path": "18_poisson_airbox_eigensolve_cpu_gpu_implementation.md", "role": "normative", "include_in_full_pack": true},
+    {"order": 19, "path": "19_eigensolve_frequency_driven_physics_numerics_audit.md", "role": "implementation_status", "include_in_full_pack": true},
+    {"order": 20, "path": "20_dynamic_solver_audit_revalidation_and_remediation.md", "role": "implementation_status", "include_in_full_pack": true, "availability": "present; content owned by the parallel remediation plan"},
+    {"order": 23, "path": "23_floquet_airbox_nonzero_k_cpu_gpu_implementation.md", "role": "normative", "include_in_full_pack": true, "availability": "planned; created by Task 7"},
+    {"order": 24, "path": "24_production_definition_of_done.md", "role": "normative", "include_in_full_pack": true, "availability": "planned; created by Task 8"},
+    {"order": 25, "path": "25_frequency_domain_readiness_matrix.json", "role": "implementation_status", "include_in_full_pack": false, "availability": "planned; created by Task 9"}
   ],
-  "canonical_files": [
-    "00_README_CANONICAL_FULL_READ.md",
-    "01_full_read_inventory_and_resolution.md",
-    "02_physics_contract.md",
-    "03_relaxed_texture_linearization.md",
-    "04_mesh_periodic_floquet_airbox.md",
-    "05_algebra_and_operator_representations.md",
-    "06_solver_tree_planner_and_lanes.md",
-    "07_api_abi_artifacts.md",
-    "08_backend_algorithms_and_status.md",
-    "09_validation_certification_benchmarks.md",
-    "10_patch_queue_current_status.md",
-    "11_runtime_telemetry_performance.md",
-    "12_adr_decisions.md",
-    "13_repo_migration_cleanup.md",
-    "14_sources_traceability.md",
-    "15_self_weryfication_Kittel.md",
-    "16_implementation_plan_Kittel_D2.md",
-    "17_eigen_k0_gpu_readiness_audit.md",
-    "18_poisson_airbox_eigensolve_cpu_gpu_implementation.md",
-    "fd_solver_plan_FULL_PACK_COMSOL_ALIGNED_V5.md"
-  ]
+  "historical_roots": ["old/"],
+  "readiness_matrix": "25_frequency_domain_readiness_matrix.json"
 }

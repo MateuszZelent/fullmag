@@ -1,115 +1,58 @@
 ---
-title: Frequency-driven solver - canonical README after full read
-version: COMSOL-aligned v5.0 full-read canonical
-date: 2026-07-07
+title: FEM frequency-domain documentation entrypoint
+version: COMSOL-aligned v5.1 decision-complete
 status: canonical
-source_policy: derived only after full read of all uploaded planning documents and the Micromagnetics Module User's Guide V2.13 PDF
-supersedes:
-  - fd_solver_plan_FULL_PACK_COMSOL_ALIGNED.md
-  - fd_solver_plan_FULL_PACK_COMSOL_ALIGNED_V3.md
-  - fd_solver_plan_00_index.md through fd_solver_plan_11_decision_closures_adr.md old copies
+scope: FEM frequency-domain documentation
 ---
 
-# Frequency-driven solver - canonical README after full read
+# FEM frequency-domain documentation
 
-This directory is the single canonical documentation package for the frequency-driven solver.
-It was regenerated after a full beginning-to-end read of all uploaded planning documents and the Micromagnetics Module User's Guide V2.13 PDF.
+This directory is the canonical FEM frequency-domain masterplan package. Its
+manifest assigns a role to every active document and identifies generated and
+historical material.
 
-## What this package fixes
+## Authority hierarchy
 
-The previous folder mixed several generations:
+1. `docs/physics` defines equations and units.
+2. `docs/architecture` and `docs/specs` define ownership and public architecture.
+3. Masterplan normative documents define implementation order.
+4. Status and readiness documents record current evidence only.
+5. `old/` is historical and never normative.
 
-- the individual v2/v3 files,
-- the older full pack,
-- the v3 full pack whose internal first heading still said `masterplan v2`,
-- a separate relaxed-texture addendum,
-- a separate ADR addendum,
-- a patch queue with newer implementation evidence that was not cleanly reflected in the main plan.
+The generated full pack is a reading convenience. It is not an independent
+authority; the manifest and its included active documents remain authoritative.
 
-This v5 package merges those into one stable structure and makes the patch status explicit.
+## Document roles
 
-## Read order for Codex
+- **normative** documents define required design and implementation order.
+- **validation** documents define certification and benchmark expectations.
+- **implementation_status** documents record source, artifact, or runtime evidence.
+- **supporting** documents provide inventory, migration, and traceability context.
 
-1. `00_README_CANONICAL_FULL_READ.md`
-2. `01_full_read_inventory_and_resolution.md`
-3. `02_physics_contract.md`
-4. `03_relaxed_texture_linearization.md`
-5. `04_mesh_periodic_floquet_airbox.md`
-6. `05_algebra_and_operator_representations.md`
-7. `06_solver_tree_planner_and_lanes.md`
-8. `07_api_abi_artifacts.md`
-9. `08_backend_algorithms_and_status.md`
-10. `09_validation_certification_benchmarks.md`
-11. `10_patch_queue_current_status.md`
-12. `11_runtime_telemetry_performance.md`
-13. `12_adr_decisions.md`
-14. `13_repo_migration_cleanup.md`
-15. `14_sources_traceability.md`
-16. `15_self_weryfication_Kittel.md`
-17. `16_implementation_plan_Kittel_D2.md`
-18. `17_eigen_k0_gpu_readiness_audit.md`
-19. `18_poisson_airbox_eigensolve_cpu_gpu_implementation.md`
-20. `fd_solver_plan_FULL_PACK_COMSOL_ALIGNED_V5.md`
+## Read order for implementers
 
-## Core decision
+1. Read the applicable physics note and architecture/specification document.
+2. Read this entrypoint and `01_full_read_inventory_and_resolution.md`.
+3. Read normative documents in manifest order: `02` through `08`, `12`, `16`,
+   `18`, then planned `23` and `24` when they are created.
+4. Use validation documents `09` and `15` to define acceptance evidence.
+5. Consult implementation-status documents only to establish the current
+   boundary; they do not alter normative requirements.
 
-The final solver is not one monolithic GPU GMRES.
-It is a COMSOL-aligned solver tree:
+## Read order for status auditors
 
-```text
-FrequencyDomainSolver
-├── FrequencySolvePlanner
-├── DenseCartesianReferenceBackend
-├── DenseTangentReferenceBackend
-├── CpuSparseDirectBackend
-├── FullCoupledFieldSplitBackend
-├── SchurReducedBackend
-├── ModalReducedBackend
-└── GpuDeviceKrylovBackend
-```
+1. Read this entrypoint, the manifest, and the applicable physics and
+   architecture/specification documents.
+2. Read status documents `10`, `11`, `17`, `19`, and `20` in manifest order.
+3. Read the planned readiness matrix `25` when it is created; it is linked by
+   the Markdown status chapter rather than duplicated in the full pack.
+4. Validate claims with the named runtime gates and their artifacts.
 
-The public physics contract is:
+FDM is outside this package's scope. Documentation and source inspection do
+not establish production proof; required runtime gates and their evidence do.
 
-```text
-m(r,t) = m0(r) + Re(delta_m(r) exp(+i omega t))
-delta_m(r) in C^3
-m0(r) · delta_m(r) = 0
-```
+## Historical material
 
-The optimized internal representation may be:
-
-```text
-delta_m_i = T_i q_i
-q_i in C^2
-```
-
-## Implementation-state correction after full read
-
-The patch queue is newer than parts of the old full pack. According to the patch queue, several items are no longer purely planned:
-
-```text
-Patch B: lane diagnostics/progress throttling - implemented at contract level.
-Patch C: planner descriptors - implemented as conservative descriptors.
-Patch D: COMSOL physics gates - implemented for drive_kind, zero-drive, drive projection, Cartesian/tangent adapters and local T^T A T projection.
-Patch E: dense full-coupled oracle - implemented at tiny/oracle level.
-Patch F: CPU sparse/direct baseline - implemented as PETSc KSPPREONLY/PCLU path where PETSc is available, with explicit unavailable fallback otherwise.
-Patch G: full-coupled field-split prototype - implemented as dense/oracle-scale prototype.
-Patch H: Schur certification gate - implemented at planner/certificate-signature level.
-Patch I: modal response helper - implemented for validation/helper slices with modal basis policy and sparse/direct sample validation.
-Patch J: GPU device Krylov - only API, residency diagnostics, prerequisites and callback probe exist; runtime FGMRES loop is not implemented.
-```
-
-## Non-negotiable ordering
-
-```text
-1. Accepted equilibrium artifact and LinearizationState.
-2. Symmetric mesh / periodic / Floquet / airbox certificate.
-3. COMSOL phase, drive and Cartesian/tangent gates.
-4. Dense and sparse/direct reference backends.
-5. Full-coupled dynamic demag field-split.
-6. Certified Schur fast path.
-7. Modal sweep acceleration.
-8. True GPU device FGMRES after contraction and residency gates.
-```
-
-Do not treat `production_gpu` as true device Krylov. Until runtime Krylov vectors and operations are device-resident, call it `gpu_operator_host_krylov`.
+The `old/` directory contains frozen source snapshots for superseded documents.
+They may be consulted for provenance but must not define current physics,
+algorithms, implementation order, or implementation status.

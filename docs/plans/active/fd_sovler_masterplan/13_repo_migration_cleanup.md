@@ -1,63 +1,35 @@
 ---
-title: Frequency-driven solver - repo migration and cleanup
-version: COMSOL-aligned v5.0 full-read canonical
-date: 2026-07-07
-status: canonical
-source_policy: derived only after full read of all uploaded planning documents and the Micromagnetics Module User's Guide V2.13 PDF
-supersedes:
-  - fd_solver_plan_FULL_PACK_COMSOL_ALIGNED.md
-  - fd_solver_plan_FULL_PACK_COMSOL_ALIGNED_V3.md
-  - fd_solver_plan_00_index.md through fd_solver_plan_11_decision_closures_adr.md old copies
+title: FEM frequency-domain documentation migration policy
+version: COMSOL-aligned v5.1 decision-complete
+status: supporting
+scope: documentation lifecycle
 ---
 
-# Repo migration and cleanup
+# Documentation migration policy
 
-## 1. Install canonical docs
+## Active-root policy
 
-Recommended path:
+The active masterplan root contains current documents only. Historical diaries,
+superseded plans, and append-only evidence records are forbidden in the active
+root. Preserve those bodies under `old/` with the required historical header.
 
-```text
-docs/frequency_domain_solver_v5/
-```
+## Canonical discovery
 
-Copy all files from this package there.
+Start with `00_README_CANONICAL_FULL_READ.md` and
+`documentation_manifest.json`. Apply the documented authority hierarchy before
+using any document as a design, implementation-order, validation, or status
+source.
 
-## 2. Archive older docs
+## Generated full pack
 
-Move these to archive or delete from active docs:
+`fd_solver_plan_FULL_PACK_COMSOL_ALIGNED_V5.md` is generated from manifest
+entries whose `include_in_full_pack` value is true. It is non-authoritative,
+must not be hand-edited, and cannot override the active source documents or
+the manifest. Historical snapshots, the PDF, the readiness-matrix JSON body,
+and the full pack itself are excluded from generated input.
 
-```text
-fd_solver_plan_FULL_PACK_COMSOL_ALIGNED.md
-fd_solver_plan_FULL_PACK_COMSOL_ALIGNED_V3.md
-fd_solver_plan_00_index.md ... fd_solver_plan_11_decision_closures_adr.md old copies
-frequency_driven_masterplan_comsol_aligned_v2/
-frequency_driven_masterplan_comsol_aligned_v3/
-frequency_driven_masterplan_comsol_aligned_v3_relaxed_texture/
-frequency_driven_masterplan_comsol_aligned_v4_clean/
-```
+## Status handling
 
-Archive path:
-
-```text
-docs/archive/frequency_domain_solver_pre_v5/
-```
-
-Archive README:
-
-```text
-Historical planning files. Do not use for current implementation decisions. Use docs/frequency_domain_solver_v5/00_README_CANONICAL_FULL_READ.md.
-```
-
-## 3. Add pointer in docs index
-
-```markdown
-# Frequency-domain solver
-
-Canonical current documentation:
-
-`docs/frequency_domain_solver_v5/00_README_CANONICAL_FULL_READ.md`
-```
-
-## 4. Full pack policy
-
-`fd_solver_plan_FULL_PACK_COMSOL_ALIGNED_V5.md` is generated from individual v5 files. Do not hand-edit it.
+Status and readiness documents record evidence scope. They cannot promote a
+runtime lane from source inspection alone. Production proof requires the
+applicable runtime gates and their artifacts.
