@@ -57,6 +57,10 @@ import {
   visualizationTargetIdForSceneObject,
 } from "@/kernel/selection/selectionTypes";
 import {
+  resolveVisualizationTargetForMeshPart,
+  visualizationSceneObjectIds,
+} from "@/kernel/selection/visualizationTargetResolver";
+import {
   activeCrossSectionFramePreview,
   crossSectionFramePreviewEquals,
   crossSectionFramePreviewToClip,
@@ -110,7 +114,6 @@ import {
   resolveHysteresisStepViewportTarget,
   resolveViewport3DSelectionBounds,
   targetForFdmDomain,
-  targetForMeshPart,
   type HysteresisReplayGlyphModel,
   type HysteresisReplayMeshCompatibility,
 } from "../model/viewport3DTargets";
@@ -1171,19 +1174,27 @@ export function resolveViewport3DPartVisualizationSettings({
   part,
   regionTarget,
   renderingState,
+  sceneObjectIds,
 }: {
   objectVisualizationSnapshot: ObjectVisualizationSnapshot;
   part: Viewport3DMeshPart;
   regionTarget?: VisualizationTargetRef | null;
   renderingState?: VisualizationStateResource | null;
-}): VisualizationTargetSettings {
-  const objectTarget = targetForMeshPart(part);
+  sceneObjectIds?: ReadonlySet<string>;
+}): VisualizationTargetSettings & { target: VisualizationTargetRef } {
+  const target = resolveVisualizationTargetForMeshPart({
+    part,
+    sceneObjectIds: sceneObjectIds ?? new Set(),
+    targetRegistry: renderingState?.targets,
+  });
   const objectVisualization = resolveTargetVisualization({
     snapshot: objectVisualizationSnapshot,
-    target: objectTarget,
+    target,
     visualizationState: renderingState,
   });
-  if (!regionTarget) return objectVisualization.effectiveSettings;
+  if (!regionTarget) {
+    return { ...objectVisualization.effectiveSettings, target };
+  }
   const regionVisualization = resolveTargetVisualization({
     inheritedSettings: objectVisualization.settings,
     snapshot: objectVisualizationSnapshot,
@@ -1191,9 +1202,9 @@ export function resolveViewport3DPartVisualizationSettings({
     visualizationState: renderingState,
   });
   if (!regionVisualization.override) {
-    return objectVisualization.effectiveSettings;
+    return { ...objectVisualization.effectiveSettings, target };
   }
-  return regionVisualization.effectiveSettings;
+  return { ...regionVisualization.effectiveSettings, target };
 }
 
 export function resolveViewport3DRegionSelectionBounds(
@@ -2224,6 +2235,10 @@ export function useViewport3DSceneModel({
   );
   const domainMeta = useViewport3DDomainMeta();
   const scene = useViewport3DScene();
+  const sceneObjectIds = useMemo(
+    () => visualizationSceneObjectIds(scene.data),
+    [scene.data],
+  );
   const modelRegions = useModelRegionsResource({
     enabled: Boolean(scene.data),
   });
@@ -2582,10 +2597,26 @@ export function useViewport3DSceneModel({
     }
 
     for (const part of femDomain.magneticParts) {
-      pushViewportVisualizationTarget(targets, seen, targetForMeshPart(part));
+      pushViewportVisualizationTarget(
+        targets,
+        seen,
+        resolveVisualizationTargetForMeshPart({
+          part,
+          sceneObjectIds,
+          targetRegistry: renderingState?.targets,
+        }),
+      );
     }
     for (const part of femDomain.airboxParts) {
-      pushViewportVisualizationTarget(targets, seen, targetForMeshPart(part));
+      pushViewportVisualizationTarget(
+        targets,
+        seen,
+        resolveVisualizationTargetForMeshPart({
+          part,
+          sceneObjectIds,
+          targetRegistry: renderingState?.targets,
+        }),
+      );
     }
     for (const region of allRegionOverlays) {
       const objectId = asNonEmptyString(region.owner_object_id);
@@ -2610,6 +2641,8 @@ export function useViewport3DSceneModel({
     primitiveModel.objects,
     regionTargetByPartId,
     allRegionOverlays,
+    renderingState?.targets,
+    sceneObjectIds,
   ]);
   const selectObjectVisualizationSnapshot = useCallback(
     (snapshot: ObjectVisualizationSnapshot) =>
@@ -2669,6 +2702,7 @@ export function useViewport3DSceneModel({
           part,
           regionTarget: regionTargetByPartId.get(part.id),
           renderingState,
+          sceneObjectIds,
         }),
         analysisOverlay?.appearance,
       ),
@@ -2677,6 +2711,7 @@ export function useViewport3DSceneModel({
       objectVisualizationSnapshot,
       regionTargetByPartId,
       renderingState,
+      sceneObjectIds,
     ],
   );
   const getObjectSettings = useCallback(

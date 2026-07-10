@@ -28,7 +28,9 @@ import {
   useMeshSemanticsResource,
   useMeshSharedDomainManifestResource,
   useMeshSummaryResource,
+  useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
+import { visualizationSceneObjectIds } from "@/kernel/selection/visualizationTargetResolver";
 import {
   shouldLoadRuntimeMeshBuild,
   shouldLoadRuntimeMeshManifest,
@@ -172,7 +174,10 @@ export default function RibbonModule({ kernel }: ModuleProps) {
   const needsGeometryResources =
     activeTab === "geometry" || activeTab === "mesh";
   const needsRuntimeResources = ribbonTabNeedsRuntimeResources(activeTab);
-  const needsMeshResources = activeTab === "mesh" || needsRuntimeResources;
+  const needsMeshResources =
+    activeTab === "mesh" ||
+    needsRuntimeResources ||
+    (activeTab === "view" && selection.ref?.type === "mesh-part");
   const needsVisualizationResources = activeTab === "view";
   const visualizationState = useVisualizationStateResource({
     enabled: needsVisualizationResources,
@@ -212,6 +217,22 @@ export default function RibbonModule({ kernel }: ModuleProps) {
   const meshSemantics = useMeshSemanticsResource({
     enabled: needsMeshResources,
   });
+  const scene = useSceneResource({
+    enabled: activeTab === "view" && selection.ref?.type === "mesh-part",
+  });
+  const sceneObjectIds = useMemo(
+    () => visualizationSceneObjectIds(scene.data),
+    [scene.data],
+  );
+  const selectedMeshPart = useMemo(
+    () =>
+      selection.ref?.type === "mesh-part"
+        ? meshManifest.data?.mesh_parts?.find(
+            (part) => part.id === selection.ref?.nodeId,
+          ) ?? null
+        : null,
+    [meshManifest.data?.mesh_parts, selection.ref],
+  );
   const commandQueue = useCommandQueueResource({
     enabled: shouldLoadRuntimeCommandQueue(
       needsRuntimeResources,
@@ -298,6 +319,8 @@ export default function RibbonModule({ kernel }: ModuleProps) {
         meshSummary: meshSummary.data,
         resources: kernel.resources,
         selection,
+        sceneObjectIds,
+        selectedMeshPart,
         sessionStatus: sessionStatusData,
         visualization,
         visualizationSnapshot,
@@ -316,6 +339,8 @@ export default function RibbonModule({ kernel }: ModuleProps) {
       meshSemantics.data,
       meshSummary.data,
       selection,
+      sceneObjectIds,
+      selectedMeshPart,
       sessionStatusData,
       visualization,
       visualizationSnapshot,

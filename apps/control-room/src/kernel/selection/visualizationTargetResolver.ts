@@ -39,6 +39,20 @@ export function resolveVisualizationTargetForMeshPart({
   return partTarget(part);
 }
 
+export function visualizationSceneObjectIds(scene: unknown): ReadonlySet<string> {
+  const sceneRecord = asRecord(scene);
+  const objects = Array.isArray(sceneRecord?.objects) ? sceneRecord.objects : [];
+  const ids = new Set<string>();
+
+  for (const value of objects) {
+    const object = asRecord(value);
+    const id = typeof object?.id === "string" ? object.id.trim() : "";
+    if (id) ids.add(canonicalVisualizationSceneObjectId(id));
+  }
+
+  return ids;
+}
+
 function objectTarget(
   objectId: string,
   label: string | null | undefined,
@@ -56,4 +70,10 @@ function partTarget(part: VisualizationMeshPartLike): VisualizationTargetRef {
     kind: "part",
     label: part.label,
   };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
 }

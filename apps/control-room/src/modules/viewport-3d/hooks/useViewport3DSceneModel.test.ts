@@ -2182,6 +2182,30 @@ describe("useViewport3DSceneModel", () => {
     });
   });
 
+  it("uses the canonical part target when geometry is not a current scene object", () => {
+    const visualization = new ObjectVisualizationController();
+    const renderingState = {
+      targets: {
+        airbox: {},
+        objects: [],
+        parts: [{ scope: "part", scope_id: "part-film" }],
+      },
+    } as never;
+
+    expect(
+      resolveViewport3DPartVisualizationSettings({
+        objectVisualizationSnapshot: visualization.getSnapshot(),
+        part: {
+          geometry_id: "projection-film",
+          id: "part-film",
+          object_id: null,
+        } as never,
+        renderingState,
+        sceneObjectIds: new Set(),
+      }).target,
+    ).toMatchObject({ id: "part-film", kind: "part" });
+  });
+
   it("applies backend region overrides to mesh-backed region parts", () => {
     const visualization = new ObjectVisualizationController();
     const part = {

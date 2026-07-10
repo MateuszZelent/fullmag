@@ -68,6 +68,7 @@ import {
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
+import { visualizationSceneObjectIds } from "@/kernel/selection/visualizationTargetResolver";
 import { useLayoutSelector } from "@/kernel/layout/useLayout";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
@@ -85,7 +86,6 @@ import {
   fieldMetaScopeQueryForVisualizationTarget,
   formatScalarColorbarValueWithDisplayUnit,
   geometryScopeVectorBudgetPatch,
-  objectVisualizationTargetForMeshPart,
   resolveVisualizationVectorBudgetRange,
   resolveObjectVisualizationPanelTopologyFreshness,
   resolveObjectChildRegionVisualizationTargets,
@@ -105,6 +105,7 @@ import {
   surfaceColorSourceFieldMetaComponent,
   geometryScopeDisplayPatch,
   quantitySourcePatch,
+  resolveObjectVisualizationPanelTarget,
   regionVisualizationCarrierSupportsFieldMeta,
   regionVisualizationFieldWarning,
   renderModeDisplayPatch,
@@ -1209,7 +1210,7 @@ function VisualizationOverridesSection({
 function useObjectVisualizationPanelState(
   selection: InspectorPanelProps["selection"],
 ) {
-  const target = resolveVisualizationTargetFromSelection(selection);
+  const selectionTarget = resolveVisualizationTargetFromSelection(selection);
   const { visualizationSync } = useKernel();
   const visualization = useObjectVisualizationController();
   const activeModuleTab = useLayoutSelector((layout) => layout.activeModuleTab);
@@ -1217,7 +1218,7 @@ function useObjectVisualizationPanelState(
   const manifestStatus = useSessionStatusSelector(
     selectObjectVisualizationManifestStatus,
     {
-      enabled: Boolean(target),
+      enabled: Boolean(selectionTarget),
       isEqual: objectVisualizationManifestStatusEquals,
     },
   );
@@ -1226,10 +1227,33 @@ function useObjectVisualizationPanelState(
   const [fieldCatalogRequestedTargetKey, setFieldCatalogRequestedTargetKey] =
     useState<string | null>(null);
   const pending = false;
-  const scene = useSceneResource({ enabled: Boolean(target) });
+  const scene = useSceneResource({ enabled: Boolean(selectionTarget) });
   const manifest = useMeshSharedDomainManifestResource({
-    enabled: shouldLoadRuntimeMeshManifest(Boolean(target), manifestStatus),
+    enabled: shouldLoadRuntimeMeshManifest(Boolean(selectionTarget), manifestStatus),
   });
+  const sceneObjectIds = useMemo(
+    () => visualizationSceneObjectIds(scene.data),
+    [scene.data],
+  );
+  const selectedMeshPart = useMemo(
+    () =>
+      selection.ref?.type === "mesh-part"
+        ? manifest.data?.mesh_parts?.find((part) => part.id === selection.ref?.nodeId) ??
+          null
+        : null,
+    [manifest.data?.mesh_parts, selection.ref],
+  );
+  const target = useMemo(
+    () =>
+      selectedMeshPart
+        ? resolveObjectVisualizationPanelTarget({
+            part: selectedMeshPart,
+            sceneObjectIds,
+            visualizationState: visualizationState.data,
+          })
+        : selectionTarget,
+    [sceneObjectIds, selectedMeshPart, selectionTarget, visualizationState.data],
+  );
   const regionId = useMemo(() => {
     if (target?.kind !== "region") return null;
     const parsed = parseRegionVisualizationTargetId(target.id);
@@ -1265,7 +1289,13 @@ function useObjectVisualizationPanelState(
 
     for (const part of manifest.data?.mesh_parts ?? []) {
       if (part.role === "air" || part.role === "airbox") continue;
-      targets.push(objectVisualizationTargetForMeshPart(part));
+      targets.push(
+        resolveObjectVisualizationPanelTarget({
+          part,
+          sceneObjectIds,
+          visualizationState: visualizationState.data,
+        }),
+      );
     }
 
     if (target?.kind === "object") {
@@ -1276,9 +1306,11 @@ function useObjectVisualizationPanelState(
   }, [
     childRegionTargets,
     manifest.data?.mesh_parts,
+    sceneObjectIds,
     selection.label,
     selection.objectId,
     target,
+    visualizationState.data,
   ]);
   const selectPanelSnapshot = useCallback(
     (snapshot: ObjectVisualizationSnapshot) =>
@@ -1540,7 +1572,11 @@ function useObjectVisualizationPanelState(
     );
     if (magneticParts.length <= 1) return undefined;
     return magneticParts.map((p) => {
-      const partTarget = objectVisualizationTargetForMeshPart(p);
+      const partTarget = resolveObjectVisualizationPanelTarget({
+        part: p,
+        sceneObjectIds,
+        visualizationState: visualizationState.data,
+      });
       const partSettings = resolveTargetVisualization({
         snapshot,
         target: partTarget,
@@ -1588,7 +1624,11 @@ function useObjectVisualizationPanelState(
   function onTogglePartVectors(partId: string, visible: boolean) {
     const part = manifest.data?.mesh_parts?.find((p) => p.id === partId);
     if (!part || !visualizationState.data) return;
-    const partTarget = objectVisualizationTargetForMeshPart(part);
+    const partTarget = resolveObjectVisualizationPanelTarget({
+      part,
+      sceneObjectIds,
+      visualizationState: visualizationState.data,
+    });
     visualizationSync.queuePatch({
       overrides: mergeVisualizationStateTargetOverride(
         visualizationState.data.overrides ?? [],

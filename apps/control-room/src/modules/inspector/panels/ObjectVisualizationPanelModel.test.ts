@@ -27,6 +27,7 @@ import {
   geometryScopeVectorBudgetPatch,
   quantitySourcePatch,
   objectVisualizationTargetForMeshPart,
+  resolveObjectVisualizationPanelTarget,
   resolveSurfaceColorSourceItems,
   resolveObjectVisualizationPanelTopologyFreshness,
   resolveObjectChildRegionVisualizationTargets,
@@ -412,6 +413,26 @@ describe("ObjectVisualizationPanelModel", () => {
       kind: "object",
       label: "Permalloy layer",
     });
+  });
+
+  it("keeps geometry-only parts scoped to the backend registry target", () => {
+    expect(
+      resolveObjectVisualizationPanelTarget({
+        part: {
+          geometry_id: "projection-film",
+          id: "part-film",
+          object_id: null,
+        } as MeshPart,
+        sceneObjectIds: new Set(),
+        visualizationState: {
+          targets: {
+            airbox: {},
+            objects: [],
+            parts: [{ scope: "part", scope_id: "part-film" }],
+          },
+        } as never,
+      }),
+    ).toMatchObject({ id: "part-film", kind: "part" });
   });
 
   it("builds scalar palette patches for the visualization quantity colormap", () => {

@@ -73,7 +73,11 @@ import {
 } from "@/kernel/api/quantityIds";
 import type { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 import type { CommandContext } from "@/kernel/commands/commandTypes";
-import type { Selection } from "@/kernel/selection/selectionTypes";
+import type {
+  Selection,
+  VisualizationMeshPartLike,
+} from "@/kernel/selection/selectionTypes";
+import { resolveVisualizationTargetForMeshPart } from "@/kernel/selection/visualizationTargetResolver";
 import {
   AIRBOX_VISUALIZATION_TARGET,
   DEFAULT_AIRBOX_VISUALIZATION,
@@ -1607,9 +1611,31 @@ export interface RibbonBuildContext {
   resources?: RibbonResourceInvalidator;
   selection: Selection;
   sessionStatus?: RibbonSessionStatus | null;
+  sceneObjectIds?: ReadonlySet<string>;
+  selectedMeshPart?: VisualizationMeshPartLike | null;
   visualization: ObjectVisualizationController;
   visualizationSnapshot: ObjectVisualizationSnapshot;
   visualizationState?: VisualizationStateResource | null;
+}
+
+export function resolveRibbonVisualizationTarget({
+  sceneObjectIds = new Set(),
+  selectedMeshPart,
+  selection,
+  visualizationState,
+}: Pick<
+  RibbonBuildContext,
+  "sceneObjectIds" | "selectedMeshPart" | "selection" | "visualizationState"
+>) {
+  if (selection.ref?.type === "mesh-part" && selectedMeshPart) {
+    return resolveVisualizationTargetForMeshPart({
+      part: selectedMeshPart,
+      sceneObjectIds,
+      targetRegistry: visualizationState?.targets,
+    });
+  }
+
+  return resolveVisualizationTargetFromSelection(selection);
 }
 
 function resultsQuantityCommandInput(quantityId: string) {
@@ -3971,7 +3997,7 @@ function buildSelectedVisualizationGroup(
   context: RibbonBuildContext,
 ): RibbonTabContent["groups"][number] {
   const { selection, visualizationSnapshot } = context;
-  const target = resolveVisualizationTargetFromSelection(selection);
+  const target = resolveRibbonVisualizationTarget(context);
   const inheritedRegionSettings =
     target?.kind === "region" && selection.objectId
       ? resolveTargetVisualization({

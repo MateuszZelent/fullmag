@@ -4,12 +4,14 @@ import type {
   FieldMetaQuery,
   MeshSharedDomainManifestResource,
   MeshRegionMembershipResource,
+  VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
 import {
   canonicalVisualizationSceneObjectId,
   visualizationObjectIdForMeshPartLike,
   visualizationTargetIdForSceneObject,
 } from "@/kernel/selection/selectionTypes";
+import { resolveVisualizationTargetForMeshPart } from "@/kernel/selection/visualizationTargetResolver";
 import {
   isAnalysisFieldQuantityId,
   isMagneticOnlyQuantityId,
@@ -232,6 +234,22 @@ export function objectVisualizationTargetForMeshPart(
         kind: "part",
         label: part.label,
       };
+}
+
+export function resolveObjectVisualizationPanelTarget({
+  part,
+  sceneObjectIds,
+  visualizationState,
+}: {
+  part: NonNullable<MeshSharedDomainManifestResource["mesh_parts"]>[number];
+  sceneObjectIds: ReadonlySet<string>;
+  visualizationState: VisualizationStateResource | null | undefined;
+}): VisualizationTargetRef {
+  return resolveVisualizationTargetForMeshPart({
+    part,
+    sceneObjectIds,
+    targetRegistry: visualizationState?.targets,
+  });
 }
 
 const SCALAR_COLOR_PALETTE_STOPS: Record<string, [number, number, number][]> = {

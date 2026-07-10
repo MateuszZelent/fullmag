@@ -4,8 +4,11 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import { ALL_TAB_CONTENT } from "./ribbonContributions";
-import { buildRibbonTabContent } from "./ribbonContributions";
+import {
+  ALL_TAB_CONTENT,
+  buildRibbonTabContent,
+  resolveRibbonVisualizationTarget,
+} from "./ribbonContributions";
 import {
   RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND,
   RIBBON_COMMANDS,
@@ -225,6 +228,41 @@ function clickableRibbonMenuCommandGaps(
 }
 
 describe("ribbon structure", () => {
+  it("routes selected mesh parts through the canonical visualization target resolver", () => {
+    const target = resolveRibbonVisualizationTarget({
+      sceneObjectIds: new Set(),
+      selectedMeshPart: {
+        geometry_id: "projection-film",
+        id: "part-film",
+        object_id: null,
+      },
+      selection: {
+        kind: "mesh-part",
+        label: "Film mesh",
+        moduleSource: "test",
+        nodeId: "part-film",
+        objectId: "projection-film",
+        ref: {
+          kind: "mesh-part",
+          nodeId: "part-film",
+          objectId: "projection-film",
+          type: "mesh-part",
+          visualizationTargetId: "mesh-part:part-film",
+        },
+      },
+      visualizationState: {
+        targets: {
+          airbox: {},
+          objects: [],
+          parts: [{ scope: "part", scope_id: "part-film" }],
+        },
+      } as never,
+    });
+
+    expect(target).toMatchObject({ id: "part-film", kind: "part" });
+    expect(target && `part:${target.id}`).toBe("part:part-film");
+  });
+
   it("defines visible content and dropdown structure for every ribbon tab", () => {
     for (const tab of RIBBON_TABS) {
       const content = ALL_TAB_CONTENT[tab.id];
