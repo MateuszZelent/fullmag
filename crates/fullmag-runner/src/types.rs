@@ -291,6 +291,12 @@ pub struct StepStats {
     pub e_dmi: f64,
     pub e_total: f64,
     pub max_dm_dt: f64,
+    /// Maximum total dynamic RHS norm in 1/s.
+    ///
+    /// This is distinct from the field-equilibrium residual in
+    /// `max_torque_Apm`; direct torques may contribute here.
+    #[serde(default)]
+    pub max_rhs_norm_per_s: f64,
     pub max_h_eff: f64,
     pub max_h_demag: f64,
     /// Native max |m × H_eff| torque metric in A/m.
@@ -494,6 +500,7 @@ impl Default for StepStats {
             e_dmi: 0.0,
             e_total: 0.0,
             max_dm_dt: 0.0,
+            max_rhs_norm_per_s: 0.0,
             max_h_eff: 0.0,
             max_h_demag: 0.0,
             max_torque_Apm: 0.0,

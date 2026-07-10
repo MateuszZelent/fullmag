@@ -358,7 +358,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                 status,
                 plan.relaxation.as_ref(),
                 crate::relaxation::RelaxationCompletionMetrics {
-                    max_torque_apm: None,
+                    max_torque_apm: Some(current_local_stats.max_torque_Apm),
                     accepted_energy_plateau_range_j: energy_plateau.range(),
                     steps: current_local_stats.step,
                     relaxation_time_s: Some(current_local_stats.time),
@@ -647,7 +647,7 @@ impl CudaInteractiveFdmPreviewRuntime {
             status,
             plan.relaxation.as_ref(),
             crate::relaxation::RelaxationCompletionMetrics {
-                max_torque_apm: None,
+                max_torque_apm: Some(current_local_stats.max_torque_Apm),
                 accepted_energy_plateau_range_j: energy_plateau.range(),
                 steps: current_local_stats.step,
                 relaxation_time_s: Some(current_local_stats.time),

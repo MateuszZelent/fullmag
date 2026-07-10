@@ -12,7 +12,7 @@
 use fullmag_fdm_sys as ffi;
 
 #[cfg(feature = "cuda")]
-use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
+use crate::derived_fields::compute_torque_field;
 #[cfg(feature = "cuda")]
 use crate::preview::{
     build_grid_preview_field_from_flat_plan, plan_grid_preview, resample_grid_mask, GridPreviewPlan,
@@ -20,13 +20,15 @@ use crate::preview::{
 #[cfg(feature = "cuda")]
 use crate::quantities::normalized_quantity_name;
 #[cfg(feature = "cuda")]
-use crate::relaxation::{approximate_max_torque, llg_overdamped_uses_pure_damping};
+use crate::relaxation::llg_overdamped_uses_pure_damping;
 #[cfg(feature = "cuda")]
 use crate::scalar_metrics::single_object_scalars;
+#[cfg(any(feature = "cuda", test))]
+use crate::types::RunError;
 #[cfg(feature = "cuda")]
 use crate::types::StepStats;
 #[cfg(feature = "cuda")]
-use crate::types::{LivePreviewField, LivePreviewRequest, RunError};
+use crate::types::{LivePreviewField, LivePreviewRequest};
 
 #[cfg(feature = "cuda")]
 use std::ffi::c_void;
@@ -47,6 +49,34 @@ pub(crate) fn is_cuda_available() -> bool {
     {
         false
     }
+}
+
+#[cfg(any(feature = "cuda", test))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct NativeStepMetrics {
+    max_torque_apm: f64,
+    max_rhs_norm_per_s: f64,
+}
+
+#[cfg(any(feature = "cuda", test))]
+fn validate_native_step_metrics(
+    max_torque_apm: f64,
+    max_rhs_norm_per_s: f64,
+) -> Result<NativeStepMetrics, RunError> {
+    for (name, value) in [
+        ("max_torque_Apm", max_torque_apm),
+        ("max_rhs_amplitude", max_rhs_norm_per_s),
+    ] {
+        if !value.is_finite() || value < 0.0 {
+            return Err(RunError {
+                message: format!("native FDM {name} must be finite and non-negative, got {value}"),
+            });
+        }
+    }
+    Ok(NativeStepMetrics {
+        max_torque_apm,
+        max_rhs_norm_per_s,
+    })
 }
 
 #[cfg(feature = "cuda")]
@@ -74,7 +104,6 @@ pub(crate) struct NativeFdmBackend {
     handle: *mut ffi::fullmag_fdm_backend,
     precision: fullmag_ir::ExecutionPrecision,
     damping: f64,
-    gyromagnetic_ratio: f64,
     precession_enabled: bool,
 }
 
@@ -401,7 +430,6 @@ impl NativeFdmBackend {
             handle,
             precision: plan.precision,
             damping: first_material.map_or(0.0, |material| material.damping),
-            gyromagnetic_ratio: plan.gyromagnetic_ratio,
             precession_enabled: !llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()),
         })
     }
@@ -877,7 +905,6 @@ impl NativeFdmBackend {
             handle,
             precision: plan.precision,
             damping: plan.material.damping,
-            gyromagnetic_ratio: plan.gyromagnetic_ratio,
             precession_enabled: !llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()),
         })
     }
@@ -934,12 +961,8 @@ impl NativeFdmBackend {
             return Err(self.last_error_or("step failed"));
         }
 
-        let torque_apm = approximate_max_torque(
-            stats.max_rhs_amplitude,
-            self.gyromagnetic_ratio,
-            self.damping,
-            !self.precession_enabled,
-        );
+        let native_metrics =
+            validate_native_step_metrics(stats.max_torque_Apm, stats.max_rhs_amplitude)?;
         let mut step_stats = StepStats {
             step: stats.step,
             time: stats.time_seconds,
@@ -952,8 +975,9 @@ impl NativeFdmBackend {
             max_h_eff: stats.max_effective_field_amplitude,
             max_h_demag: stats.max_demag_field_amplitude,
             max_dm_dt: stats.max_rhs_amplitude,
-            max_torque_Apm: torque_apm,
-            max_torque_T: torque_apm * crate::MU0,
+            max_rhs_norm_per_s: native_metrics.max_rhs_norm_per_s,
+            max_torque_Apm: native_metrics.max_torque_apm,
+            max_torque_T: native_metrics.max_torque_apm * crate::MU0,
             wall_time_ns: stats.wall_time_ns,
             hot_loop_d2h_bytes: stats.hot_loop_d2h_bytes,
             hot_loop_host_sync_count: stats.hot_loop_host_sync_count,
@@ -1582,12 +1606,8 @@ impl NativeFdmBackend {
 
         let cell_count = (grid[0] as usize) * (grid[1] as usize) * (grid[2] as usize);
         let magnetization = self.copy_m(cell_count)?;
-        let effective_field = self.copy_h_eff(cell_count)?;
-        let torque_apm = if stats.max_torque_Apm > 0.0 {
-            stats.max_torque_Apm
-        } else {
-            max_torque_residual_apm_from_field(&magnetization, &effective_field)
-        };
+        let native_metrics =
+            validate_native_step_metrics(stats.max_torque_Apm, stats.max_rhs_amplitude)?;
         let mut step_stats = StepStats {
             step: stats.step,
             time: stats.time_seconds,
@@ -1598,17 +1618,12 @@ impl NativeFdmBackend {
             e_ani: stats.anisotropy_energy_joules + stats.cubic_energy_joules,
             e_dmi: stats.dmi_energy_joules,
             e_total: stats.total_energy_joules,
-            max_dm_dt: max_rhs_norm_from_field(
-                &magnetization,
-                &effective_field,
-                self.damping,
-                self.gyromagnetic_ratio,
-                self.precession_enabled,
-            ),
+            max_dm_dt: native_metrics.max_rhs_norm_per_s,
+            max_rhs_norm_per_s: native_metrics.max_rhs_norm_per_s,
             max_h_eff: stats.max_effective_field_amplitude,
             max_h_demag: stats.max_demag_field_amplitude,
-            max_torque_Apm: torque_apm,
-            max_torque_T: torque_apm * crate::MU0,
+            max_torque_Apm: native_metrics.max_torque_apm,
+            max_torque_T: native_metrics.max_torque_apm * crate::MU0,
             wall_time_ns: stats.wall_time_ns,
             hot_loop_d2h_bytes: stats.hot_loop_d2h_bytes,
             hot_loop_host_sync_count: stats.hot_loop_host_sync_count,
@@ -1906,75 +1921,6 @@ fn flatten_vectors_f32(vectors: &[[f32; 3]]) -> Vec<f32> {
         .iter()
         .flat_map(|vector| vector.iter().copied())
         .collect()
-}
-
-#[cfg(feature = "cuda")]
-fn max_rhs_norm_from_field(
-    magnetization: &[[f64; 3]],
-    effective_field: &[[f64; 3]],
-    damping: f64,
-    gyromagnetic_ratio: f64,
-    precession_enabled: bool,
-) -> f64 {
-    magnetization
-        .iter()
-        .zip(effective_field.iter())
-        .map(|(m, h)| {
-            norm(llg_rhs_from_field(
-                *m,
-                *h,
-                damping,
-                gyromagnetic_ratio,
-                precession_enabled,
-            ))
-        })
-        .fold(0.0, f64::max)
-}
-
-#[cfg(feature = "cuda")]
-fn llg_rhs_from_field(
-    magnetization: [f64; 3],
-    field: [f64; 3],
-    damping: f64,
-    gyromagnetic_ratio: f64,
-    precession_enabled: bool,
-) -> [f64; 3] {
-    let gamma_bar = gyromagnetic_ratio / (1.0 + damping * damping);
-    let precession = cross(magnetization, field);
-    let damping_term = cross(magnetization, precession);
-    let precession_term = if precession_enabled {
-        precession
-    } else {
-        [0.0, 0.0, 0.0]
-    };
-    scale(
-        add(precession_term, scale(damping_term, damping)),
-        -gamma_bar,
-    )
-}
-
-#[cfg(feature = "cuda")]
-fn add(lhs: [f64; 3], rhs: [f64; 3]) -> [f64; 3] {
-    [lhs[0] + rhs[0], lhs[1] + rhs[1], lhs[2] + rhs[2]]
-}
-
-#[cfg(feature = "cuda")]
-fn scale(vector: [f64; 3], factor: f64) -> [f64; 3] {
-    [vector[0] * factor, vector[1] * factor, vector[2] * factor]
-}
-
-#[cfg(feature = "cuda")]
-fn cross(lhs: [f64; 3], rhs: [f64; 3]) -> [f64; 3] {
-    [
-        lhs[1] * rhs[2] - lhs[2] * rhs[1],
-        lhs[2] * rhs[0] - lhs[0] * rhs[2],
-        lhs[0] * rhs[1] - lhs[1] * rhs[0],
-    ]
-}
-
-#[cfg(feature = "cuda")]
-fn norm(vector: [f64; 3]) -> f64 {
-    (vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2]).sqrt()
 }
 
 #[cfg(feature = "cuda")]
@@ -3448,6 +3394,63 @@ mod tests {
             expected_report.max_rhs_amplitude,
             5e-6,
             1e-10,
+        );
+    }
+}
+
+#[cfg(test)]
+mod exact_metric_contract_tests {
+    use super::validate_native_step_metrics;
+
+    #[test]
+    fn fdm_native_exact_torque_value_is_independent_of_rhs_norm() {
+        let metrics = validate_native_step_metrics(7.0, 13.0).expect("valid native metrics");
+
+        assert_eq!(metrics.max_torque_apm, 7.0);
+        assert_eq!(metrics.max_rhs_norm_per_s, 13.0);
+    }
+
+    #[test]
+    fn fdm_native_exact_zero_torque_is_not_replaced_by_nonzero_rhs() {
+        let metrics = validate_native_step_metrics(0.0, 13.0).expect("valid native metrics");
+
+        assert_eq!(metrics.max_torque_apm, 0.0);
+        assert_eq!(metrics.max_rhs_norm_per_s, 13.0);
+    }
+
+    #[test]
+    fn fdm_native_rejects_nonfinite_or_negative_metrics() {
+        for (torque, rhs) in [
+            (f64::NAN, 1.0),
+            (f64::INFINITY, 1.0),
+            (-1.0, 1.0),
+            (1.0, f64::NAN),
+            (1.0, f64::INFINITY),
+            (1.0, -1.0),
+        ] {
+            assert!(validate_native_step_metrics(torque, rhs).is_err());
+        }
+    }
+
+    #[test]
+    fn fdm_native_preserves_exact_torque_instead_of_reconstructing_from_rhs() {
+        let source = include_str!("native.rs");
+        let production_source = source
+            .split("#[cfg(test)]\nmod exact_metric_contract_tests")
+            .next()
+            .expect("production source prefix");
+
+        assert!(
+            production_source.contains("max_torque_Apm: native_metrics.max_torque_apm"),
+            "native CUDA stats must map the exact native torque directly"
+        );
+        assert!(
+            production_source.contains("max_rhs_norm_per_s: native_metrics.max_rhs_norm_per_s"),
+            "native CUDA stats must publish the RHS norm as a separate observable"
+        );
+        assert!(
+            !production_source.contains("approximate_max_torque("),
+            "native CUDA stats must never reconstruct equilibrium torque from RHS"
         );
     }
 }

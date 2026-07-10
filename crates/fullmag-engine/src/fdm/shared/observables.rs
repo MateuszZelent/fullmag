@@ -17,7 +17,9 @@ pub struct StepReport {
     pub total_energy_joules: f64,
     pub max_effective_field_amplitude: f64,
     pub max_demag_field_amplitude: f64,
+    /// Maximum total dynamic RHS norm in 1/s, including direct torques.
     pub max_rhs_amplitude: f64,
+    /// Exact field-equilibrium residual max |m x H_eff| in A/m.
     pub max_torque_Apm: f64,
 }
 
@@ -38,7 +40,9 @@ pub struct EffectiveFieldObservables {
     pub total_energy_joules: f64,
     pub max_effective_field_amplitude: f64,
     pub max_demag_field_amplitude: f64,
+    /// Maximum total dynamic RHS norm in 1/s, including direct torques.
     pub max_rhs_amplitude: f64,
+    /// Exact field-equilibrium residual max |m x H_eff| in A/m.
     pub max_torque_Apm: f64,
 }
 
@@ -54,8 +58,35 @@ pub struct RhsEvaluation {
     pub total_energy_joules: f64,
     pub max_effective_field_amplitude: f64,
     pub max_demag_field_amplitude: f64,
+    /// Maximum total dynamic RHS norm in 1/s, including direct torques.
     pub max_rhs_amplitude: f64,
+    /// Exact field-equilibrium residual max |m x H_eff| in A/m.
     pub max_torque_Apm: f64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RhsEvaluation;
+
+    #[test]
+    fn exact_zero_torque_remains_distinct_from_nonzero_rhs_norm() {
+        let report = RhsEvaluation {
+            exchange_energy_joules: 0.0,
+            demag_energy_joules: 0.0,
+            external_energy_joules: 0.0,
+            anisotropy_energy_joules: 0.0,
+            dmi_energy_joules: 0.0,
+            total_energy_joules: 0.0,
+            max_effective_field_amplitude: 0.0,
+            max_demag_field_amplitude: 0.0,
+            max_rhs_amplitude: 13.0,
+            max_torque_Apm: 0.0,
+        }
+        .into_step_report(1.0, 0.1, false);
+
+        assert_eq!(report.max_torque_Apm, 0.0);
+        assert_eq!(report.max_rhs_amplitude, 13.0);
+    }
 }
 
 impl RhsEvaluation {

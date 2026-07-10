@@ -4958,6 +4958,7 @@ fn execute_cuda_fdm(
 
     let completion_steps = latest_stats.as_ref().map_or(0, |stats| stats.step);
     let completion_time_s = latest_stats.as_ref().map(|stats| stats.time);
+    let completion_max_torque_apm = latest_stats.as_ref().map(|stats| stats.max_torque_Apm);
     record_cuda_final_outputs(
         &backend,
         cell_count,
@@ -4980,7 +4981,7 @@ fn execute_cuda_fdm(
         status,
         plan.relaxation.as_ref(),
         crate::relaxation::RelaxationCompletionMetrics {
-            max_torque_apm: None,
+            max_torque_apm: completion_max_torque_apm,
             accepted_energy_plateau_range_j: energy_plateau.range(),
             steps: completion_steps,
             relaxation_time_s: completion_time_s,
@@ -9502,6 +9503,39 @@ mod tests {
                 && source.contains("magnetization,")
                 && source.contains("let action = (live.on_step)(StepUpdate {"),
             "native FEM direct minimizer must publish live updates after accepted steps"
+        );
+    }
+
+    #[test]
+    fn fdm_cuda_completion_snapshots_use_exact_torque_metrics() {
+        let dispatch = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/dispatch.rs"))
+            .expect("read dispatch.rs");
+        let cuda_single = dispatch
+            .split("#[cfg(feature = \"cuda\")]\nfn execute_cuda_fdm(")
+            .nth(1)
+            .and_then(|source| source.split("#[cfg(feature = \"fem-gpu\")]").next())
+            .expect("active CUDA single-grid execution body");
+        assert!(
+            cuda_single.contains("max_torque_apm: completion_max_torque_apm")
+                && !cuda_single.contains("max_torque_apm: None"),
+            "CUDA single-grid completion must use the latest exact native torque"
+        );
+
+        let multilayer = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/fdm/gpu/cuda/multilayer.rs"
+        ))
+        .expect("read CUDA multilayer implementation");
+        assert_eq!(
+            multilayer
+                .matches("max_torque_apm: Some(final_stats.max_torque_Apm)")
+                .count(),
+            3,
+            "all three active CUDA multilayer lanes must publish exact final torque"
+        );
+        assert!(
+            !multilayer.contains("max_torque_apm: None"),
+            "CUDA multilayer completion must not publish unavailable torque"
         );
     }
 }

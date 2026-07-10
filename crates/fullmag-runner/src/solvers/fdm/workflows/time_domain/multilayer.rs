@@ -21,6 +21,7 @@ pub(crate) fn make_multilayer_step_stats(
         e_dmi: observables.dmi_energy,
         e_total: observables.total_energy,
         max_dm_dt: observables.max_dm_dt,
+        max_rhs_norm_per_s: observables.max_dm_dt,
         max_h_eff: observables.max_h_eff,
         max_h_demag: observables.max_h_demag,
         max_torque_Apm: observables.max_torque_Apm,

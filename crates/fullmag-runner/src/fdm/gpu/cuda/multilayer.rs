@@ -611,7 +611,7 @@ fn execute_cuda_assisted_multilayer_double(
         status,
         plan.relaxation.as_ref(),
         crate::relaxation::RelaxationCompletionMetrics {
-            max_torque_apm: None,
+            max_torque_apm: Some(final_stats.max_torque_Apm),
             accepted_energy_plateau_range_j: energy_plateau.range(),
             steps: final_stats.step,
             relaxation_time_s: Some(final_stats.time),
@@ -844,7 +844,7 @@ fn execute_cuda_assisted_multilayer_single(
         status,
         plan.relaxation.as_ref(),
         crate::relaxation::RelaxationCompletionMetrics {
-            max_torque_apm: None,
+            max_torque_apm: Some(final_stats.max_torque_Apm),
             accepted_energy_plateau_range_j: energy_plateau.range(),
             steps: final_stats.step,
             relaxation_time_s: Some(final_stats.time),
@@ -1329,7 +1329,7 @@ fn execute_native_stacked_cuda_multilayer(
         status,
         plan.relaxation.as_ref(),
         crate::relaxation::RelaxationCompletionMetrics {
-            max_torque_apm: None,
+            max_torque_apm: Some(final_stats.max_torque_Apm),
             accepted_energy_plateau_range_j: energy_plateau.range(),
             steps: final_stats.step,
             relaxation_time_s: Some(final_stats.time),
@@ -3265,6 +3265,7 @@ mod tests {
         assert_eq!(stats.e_demag, observables.demag_energy);
         assert_eq!(stats.e_ani, observables.anisotropy_energy);
         assert_eq!(stats.e_dmi, observables.dmi_energy);
+        assert_eq!(stats.max_rhs_norm_per_s, observables.max_dm_dt);
         assert_eq!(stats.max_torque_Apm, observables.max_torque_Apm);
         assert_eq!(stats.max_torque_T, observables.max_torque_Apm * crate::MU0);
         assert_eq!(stats.per_object_scalars.len(), 2);

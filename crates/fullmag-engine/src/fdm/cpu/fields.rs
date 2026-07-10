@@ -3585,6 +3585,38 @@ mod stt_tests {
     }
 
     #[test]
+    fn direct_torque_changes_rhs_without_changing_field_equilibrium_residual() {
+        let mut problem = one_cell_problem(0.2);
+        problem.terms.exchange = false;
+        problem.terms.demag = false;
+        problem.terms.slonczewski_stt = Some(SlonczewskiSttConfig {
+            current_density_magnitude: 1.0e12,
+            spin_polarization_axis: [0.0, 0.0, 1.0],
+            lambda: 1.0,
+            epsilon_prime: 0.35,
+            degree: 1.0,
+            thickness: 1.0e-9,
+            current_sign: 1.0,
+        });
+        let magnetization = [[1.0, 0.0, 0.0]];
+        let mut workspace = problem.create_workspace();
+        let mut effective_field = [[0.0; 3]];
+        let mut scratch = [[0.0; 3]];
+        let mut rhs = [[0.0; 3]];
+
+        let observables = problem.compute_step_observables_zero_alloc(
+            &magnetization,
+            &mut workspace,
+            &mut effective_field,
+            &mut scratch,
+            &mut rhs,
+        );
+
+        assert_eq!(observables.max_torque_Apm, 0.0);
+        assert!(observables.max_rhs_amplitude > 0.0);
+    }
+
+    #[test]
     fn zhang_li_direct_torque_uses_gilbert_alpha_beta_projection() {
         let problem = ExchangeLlgProblem::new(
             GridShape::new(2, 1, 1).unwrap(),

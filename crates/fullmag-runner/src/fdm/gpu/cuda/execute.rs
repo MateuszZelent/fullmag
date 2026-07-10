@@ -444,7 +444,7 @@ pub(crate) fn execute_cuda_fdm(
     record_cuda_final_outputs(
         &backend,
         cell_count,
-        latest_stats,
+        latest_stats.clone(),
         default_scalar_trace,
         &scalar_schedules,
         &field_schedules,
@@ -463,10 +463,10 @@ pub(crate) fn execute_cuda_fdm(
         status,
         plan.relaxation.as_ref(),
         crate::relaxation::RelaxationCompletionMetrics {
-            max_torque_apm: None,
+            max_torque_apm: latest_stats.as_ref().map(|stats| stats.max_torque_Apm),
             accepted_energy_plateau_range_j: energy_plateau.range(),
-            steps: latest_stats.step,
-            relaxation_time_s: Some(latest_stats.time),
+            steps: latest_stats.as_ref().map_or(0, |stats| stats.step),
+            relaxation_time_s: latest_stats.as_ref().map(|stats| stats.time),
             numerical_stagnation: false,
         },
     );

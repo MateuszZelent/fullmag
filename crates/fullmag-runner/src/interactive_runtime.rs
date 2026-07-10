@@ -2039,7 +2039,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                 status,
                 plan.relaxation.as_ref(),
                 crate::relaxation::RelaxationCompletionMetrics {
-                    max_torque_apm: None,
+                    max_torque_apm: Some(current_local_stats.max_torque_Apm),
                     accepted_energy_plateau_range_j: energy_plateau.range(),
                     steps: current_local_stats.step,
                     relaxation_time_s: Some(current_local_stats.time),
@@ -4463,8 +4463,11 @@ fn make_step_stats(
         e_dmi: observables.dmi_energy,
         e_total: observables.total_energy,
         max_dm_dt: observables.max_dm_dt,
+        max_rhs_norm_per_s: observables.max_dm_dt,
         max_h_eff: observables.max_h_eff,
         max_h_demag: observables.max_h_demag,
+        max_torque_Apm: observables.max_torque_Apm,
+        max_torque_T: observables.max_torque_Apm * crate::MU0,
         wall_time_ns,
         ..StepStats::default()
     };
@@ -4494,6 +4497,7 @@ fn make_step_stats_from_report(
         e_dmi: report.dmi_energy_joules,
         e_total: report.total_energy_joules,
         max_dm_dt: report.max_rhs_amplitude,
+        max_rhs_norm_per_s: report.max_rhs_amplitude,
         max_h_eff: report.max_effective_field_amplitude,
         max_h_demag: report.max_demag_field_amplitude,
         max_torque_Apm: report.max_torque_Apm,
