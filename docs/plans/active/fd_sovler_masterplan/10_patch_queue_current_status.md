@@ -2,7 +2,9 @@
 title: Frequency-domain readiness current status
 date: 2026-07-10
 status: implementation_status
-source_of_truth: 25_frequency_domain_readiness_matrix.json
+source_of_truth:
+  - 25_frequency_domain_readiness_matrix.json
+  - 25_frequency_domain_readiness_scope_catalog.json
 runtime_revalidated_in_this_update: false
 scope:
   - FEM modal_eigen
@@ -34,19 +36,20 @@ Every readiness claim uses independent implementation and validation axes:
 |---|---|---|
 | `implementation_state` | `absent`, `contract_only`, `source_visible`, `executable` | What exists or can run. |
 | `validation_state` | `unvalidated`, `algebra_validated`, `physics_validated`, `production_qualified` | What evidence validates. |
-| `validated_scope` | `null` or Task8-shaped `validation_scope_binding.v1` direct reference | `null` for unvalidated cells; otherwise contains `scope_id`, `scope_catalog_uri` and `scope_catalog_sha256`. |
-| `executable_scope` | object or omitted | Present only when a narrow executable slice exists while `validated_scope=null`. |
+| `validated_scope` | `null` or `readiness_scope_binding.v1` direct reference | `null` for unvalidated cells; otherwise contains semantic `scope_id`, `scope_catalog_uri` and `scope_catalog_sha256`. The full scope resolves in `25_frequency_domain_readiness_scope_catalog.json`. |
+| `executable_scope` | `null` or `readiness_scope_binding.v1` direct reference | Present only when a narrow executable slice exists while `validated_scope=null`; the full executable scope resolves in the same external catalog. |
 
 The cited legacy artifacts do not yet emit `scope_catalog.v1`. Non-null
-`validated_scope` references are readiness projection bindings that future
-runtime artifacts must carry before production promotion. They are not fresh
-runtime revalidation.
+`validated_scope` and `executable_scope` references are readiness projection
+bindings that future runtime artifacts must carry before production promotion.
+They are not fresh runtime revalidation.
 
 All non-null scope references in this matrix use:
 
 ```text
-scope_catalog_uri = urn:fullmag:frequency-domain:readiness-scope-catalog:78df796d6956f9b25856b7cf6639d683b2175281fe7291ee80d270e031039b64
-scope_catalog_sha256 = sha256:78df796d6956f9b25856b7cf6639d683b2175281fe7291ee80d270e031039b64
+scope_catalog_uri = urn:fullmag:frequency-domain:readiness-scope-catalog:6bd14fb083db6474c1e33ccc5b67081ad68ee5bed6cb22db7d93df0aabdc9993
+scope_catalog_sha256 = sha256:6bd14fb083db6474c1e33ccc5b67081ad68ee5bed6cb22db7d93df0aabdc9993
+scope_catalog_path = docs/plans/active/fd_sovler_masterplan/25_frequency_domain_readiness_scope_catalog.json
 scope_catalog_status = readiness_projection_pending_runtime_scope_catalog_v1_emission
 ```
 
@@ -54,24 +57,24 @@ scope_catalog_status = readiness_projection_pending_runtime_scope_catalog_v1_emi
 
 | Cell ID | Implementation | Validation | `validated_scope` | Evidence or executable scope | Production blocker |
 |---|---|---|---|---|---|
-| `modal_cpu_k0_none_macrospin_larmor` | `executable` | `physics_validated` | `sha256:aa92858e9eab88f10e989bf98cf2e6478a2a810d6b8f17a256d714be77a6ce62` | K0-1 no-demag macrospin/Larmor field sweep, CPU dense SLEPc path; precision=`double`. | No K0 dynamic-demag coverage; no production DoD closure for broader modal eigensolve. |
-| `modal_gpu_k0_none_macrospin_larmor` | `executable` | `physics_validated` | `sha256:2a87bce1656c74fe82782b37ce229e6c4af43ef183f7ff6e228a1cac308df372` | K0-1 no-demag macrospin/Larmor field sweep using `gpu_dense_k0_macrospin_modal_eigen`; precision=`double`. | Does not qualify nonzero-k, demag, sparse, matrix-free or persistent GPU modal eigensolve. |
+| `modal_cpu_k0_none_macrospin_larmor` | `executable` | `physics_validated` | `modal_cpu_k0_none_macrospin_larmor.validation` | K0-1 no-demag macrospin/Larmor field sweep, CPU dense SLEPc path; precision=`double`. | No K0 dynamic-demag coverage; no production DoD closure for broader modal eigensolve. |
+| `modal_gpu_k0_none_macrospin_larmor` | `executable` | `physics_validated` | `modal_gpu_k0_none_macrospin_larmor.validation` | K0-1 no-demag macrospin/Larmor field sweep using `gpu_dense_k0_macrospin_modal_eigen`; precision=`double`. | Does not qualify nonzero-k, demag, sparse, matrix-free or persistent GPU modal eigensolve. |
 | `modal_gpu_k0_none_general_modal` | `source_visible` | `unvalidated` | `null` | Source evidence only. | The macrospin slice is not a general GPU modal eigensolver. |
-| `modal_cpu_nonzero_k_none_selected_spectrum` | `executable` | `unvalidated` | `null` | Executable scope: managed native CPU selected-spectrum no-demag Floquet k-path slice with labelled Bloch/Floquet tangent payload and analytic/reciprocal exchange-only gates. | Dynamic demag-k and broad production DoD remain open. |
+| `modal_cpu_nonzero_k_none_selected_spectrum` | `executable` | `unvalidated` | `null` | Executable scope `modal_cpu_nonzero_k_none_selected_spectrum.executable`: managed native CPU selected-spectrum no-demag Floquet k-path slice with labelled Bloch/Floquet tangent payload and analytic/reciprocal exchange-only gates. | Dynamic demag-k and broad production DoD remain open. |
 | `modal_gpu_nonzero_k_none` | `absent` | `unvalidated` | `null` | None. | No nonzero-k Floquet GPU modal operator/eigensolver exists. |
-| `modal_cpu_k0_periodic_airbox_synthetic_oracle` | `executable` | `algebra_validated` | `sha256:2926fade63296f455313334ae6bb7643655d15973cf99c1b323d137641aef3d6` | Tiny synthetic full-descriptor Poisson-airbox fixtures and SLEPc algebra/oracle coverage only; precision=`double`. | Not real shared-domain FEM assembly or K0-3 physics validation. |
+| `modal_cpu_k0_periodic_airbox_synthetic_oracle` | `executable` | `algebra_validated` | `modal_cpu_k0_periodic_airbox_synthetic_oracle.validation` | Tiny synthetic full-descriptor Poisson-airbox fixtures and SLEPc algebra/oracle coverage only; precision=`double`. | Not real shared-domain FEM assembly or K0-3 physics validation. |
 | `modal_cpu_k0_periodic_airbox_real_shared_domain` | `source_visible` | `unvalidated` | `null` | Source evidence only. | Real MFEM weak-form assembly, imaginary-axis target, Kittel independence and convergence remain open. |
 | `modal_gpu_k0_periodic_airbox_dense_probe` | `source_visible` | `unvalidated` | `null` | Target label: `gpu_dense_contract_eigensolver`; current emitted GPU modal validation lane remains `gpu_dense_k0_macrospin_modal_eigen` for the no-demag macrospin cell only. | Target label is not emitted as a production modal artifact; no scalable GPU selected-spectrum eigensolver; no real shared-domain physics qualification. |
 | `modal_gpu_k0_periodic_airbox_scalable` | `absent` | `unvalidated` | `null` | None. | Persistent GPU modal context, Ritz extraction, restart, convergence and transfer audit are missing. |
 | `modal_cpu_nonzero_k_floquet_airbox` | `contract_only` | `unvalidated` | `null` | Contract evidence only. | `missing_numeric_fem_demag_k`; production CPU modal dynamic-demag-k operator unavailable. |
 | `modal_gpu_nonzero_k_floquet_airbox` | `absent` | `unvalidated` | `null` | None. | Nonzero-k GPU modal dynamic-demag operator unavailable. |
-| `driven_cpu_k0_none` | `executable` | `unvalidated` | `null` | Executable scope: bounded gamma/free-boundary and k0 static-periodic no-demag slices. | Needs exact-scope DoD and validation record. |
-| `driven_gpu_k0_none` | `executable` | `unvalidated` | `null` | Executable scope: bounded gamma/free-boundary and k0 static-periodic GPU operator-host Krylov slices; not `gpu_device_krylov`. | No full device-resident Krylov loop; no production qualification record. |
-| `driven_cpu_k0_periodic_airbox` | `executable` | `unvalidated` | `null` | Executable scope: partial periodic_airbox_k0 Schur/provider response artifacts, not full assembled coupled `[delta_m, delta_phi]` production qualification. | Production validation gates are not closed; no fresh runtime revalidation. |
-| `driven_gpu_k0_periodic_airbox_gpu_operator_host_krylov` | `executable` | `unvalidated` | `null` | Executable scope: partial periodic_airbox_k0 GPU operator-host Krylov artifacts with hybrid or host Poisson demag provider. | Hybrid/host Poisson residency and operator-host Krylov do not satisfy strict GPU demag or device-Krylov claims. |
+| `driven_cpu_k0_none` | `executable` | `unvalidated` | `null` | Executable scope `driven_cpu_k0_none.executable`: bounded gamma/free-boundary and k0 static-periodic no-demag slices. | Needs exact-scope DoD and validation record. |
+| `driven_gpu_k0_none` | `executable` | `unvalidated` | `null` | Executable scope `driven_gpu_k0_none.executable`: bounded gamma/free-boundary and k0 static-periodic GPU operator-host Krylov slices; not `gpu_device_krylov`. | No full device-resident Krylov loop; no production qualification record. |
+| `driven_cpu_k0_periodic_airbox` | `executable` | `unvalidated` | `null` | Executable scope `driven_cpu_k0_periodic_airbox.executable`: partial periodic_airbox_k0 Schur/provider response artifacts, not full assembled coupled `[delta_m, delta_phi]` production qualification. | Production validation gates are not closed; no fresh runtime revalidation. |
+| `driven_gpu_k0_periodic_airbox_gpu_operator_host_krylov` | `executable` | `unvalidated` | `null` | Executable scope `driven_gpu_k0_periodic_airbox_operator_host_krylov.executable`: partial periodic_airbox_k0 GPU operator-host Krylov artifacts with hybrid or host Poisson demag provider. | Hybrid/host Poisson residency and operator-host Krylov do not satisfy strict GPU demag or device-Krylov claims. |
 | `driven_gpu_k0_periodic_airbox_gpu_device_krylov` | `source_visible` | `unvalidated` | `null` | Source evidence only. | `production_loop_available=false`; no integrated device Krylov loop; no zero-per-iteration-transfer proof. |
-| `driven_cpu_nonzero_k_none_phase_projection` | `executable` | `unvalidated` | `null` | Executable scope: no-demag/non-DMI Floquet phase-projection response slice with complete pair metadata and Bloch-phased tangent drive. | Not full nonzero-k Floquet assembly; no dynamic demag-k. |
-| `driven_gpu_nonzero_k_none_phase_projection` | `executable` | `unvalidated` | `null` | Executable scope: no-demag/non-DMI Floquet phase-projection response slice; local/exchange CUDA operator support only. | Not full nonzero-k Floquet assembly; no GPU dynamic demag-k; no `gpu_device_krylov` proof. |
+| `driven_cpu_nonzero_k_none_phase_projection` | `executable` | `unvalidated` | `null` | Executable scope `driven_cpu_nonzero_k_none_phase_projection.executable`: no-demag/non-DMI Floquet phase-projection response slice with complete pair metadata and Bloch-phased tangent drive. | Not full nonzero-k Floquet assembly; no dynamic demag-k. |
+| `driven_gpu_nonzero_k_none_phase_projection` | `executable` | `unvalidated` | `null` | Executable scope `driven_gpu_nonzero_k_none_phase_projection.executable`: no-demag/non-DMI Floquet phase-projection response slice; local/exchange CUDA operator support only. | Not full nonzero-k Floquet assembly; no GPU dynamic demag-k; no `gpu_device_krylov` proof. |
 | `driven_cpu_nonzero_k_floquet_airbox` | `contract_only` | `unvalidated` | `null` | Contract evidence only. | `floquet_airbox_dynamic_demag_k_unimplemented`; `missing_numeric_fem_demag_k`. |
 | `driven_gpu_nonzero_k_floquet_airbox` | `absent` | `unvalidated` | `null` | None. | No strict GPU fallback to CPU is allowed. |
 
@@ -129,6 +132,7 @@ Static evidence used:
 
 - `docs/specs/capability-matrix-v0.md`
 - `docs/specs/capability-matrix-v0.json`
+- `docs/plans/active/fd_sovler_masterplan/25_frequency_domain_readiness_scope_catalog.json`
 - `docs/physics/0700-frequency-domain-linearized-llg.md`
 - `docs/physics/0828-fem-frequency-domain-floquet-demag.md`
 - `docs/physics/0830-fem-poisson-airbox-modal-eigen.md`

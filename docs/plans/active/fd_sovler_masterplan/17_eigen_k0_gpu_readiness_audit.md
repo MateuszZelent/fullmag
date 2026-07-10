@@ -13,23 +13,28 @@ with the readiness matrix.
 
 ## Current GPU status
 
-All non-null `validated_scope` references use the readiness projection catalog:
+All non-null `validated_scope` and `executable_scope` references use the
+readiness projection catalog:
 
 ```text
-scope_catalog_uri = urn:fullmag:frequency-domain:readiness-scope-catalog:78df796d6956f9b25856b7cf6639d683b2175281fe7291ee80d270e031039b64
-scope_catalog_sha256 = sha256:78df796d6956f9b25856b7cf6639d683b2175281fe7291ee80d270e031039b64
+scope_catalog_uri = urn:fullmag:frequency-domain:readiness-scope-catalog:6bd14fb083db6474c1e33ccc5b67081ad68ee5bed6cb22db7d93df0aabdc9993
+scope_catalog_sha256 = sha256:6bd14fb083db6474c1e33ccc5b67081ad68ee5bed6cb22db7d93df0aabdc9993
+scope_catalog_path = docs/plans/active/fd_sovler_masterplan/25_frequency_domain_readiness_scope_catalog.json
 ```
 
 | Cell ID | Implementation state | Validation state | `validated_scope` | Evidence or executable scope | Current conclusion |
 |---|---|---|---|---|---|
-| `modal_gpu_k0_none_macrospin_larmor` | `executable` | `physics_validated` | `sha256:2a87bce1656c74fe82782b37ce229e6c4af43ef183f7ff6e228a1cac308df372` | K0-1 no-demag macrospin/Larmor field sweep using `gpu_dense_k0_macrospin_modal_eigen`; precision=`double`. | Real narrow GPU modal slice exists through the current emitted GPU modal validation lane. |
+| `modal_gpu_k0_none_macrospin_larmor` | `executable` | `physics_validated` | `modal_gpu_k0_none_macrospin_larmor.validation` | K0-1 no-demag macrospin/Larmor field sweep using `gpu_dense_k0_macrospin_modal_eigen`; precision=`double`. | Real narrow GPU modal slice exists through the current emitted GPU modal validation lane. |
 | `modal_gpu_k0_none_general_modal` | `source_visible` | `unvalidated` | `null` | Source evidence only. | The macrospin slice does not promote a general GPU modal eigensolver. |
 | `modal_gpu_k0_periodic_airbox_dense_probe` | `source_visible` | `unvalidated` | `null` | Target label: `gpu_dense_contract_eigensolver`; current emitted GPU modal validation lane remains `gpu_dense_k0_macrospin_modal_eigen` for the no-demag macrospin cell only. | The target dense-contract label is not emitted as a production modal artifact and does not validate Poisson-airbox modal physics. |
 | `modal_gpu_k0_periodic_airbox_scalable` | `absent` | `unvalidated` | `null` | None. | No persistent GPU modal selected-spectrum solver exists. |
 | `modal_gpu_nonzero_k_none` | `absent` | `unvalidated` | `null` | None. | Nonzero-k Floquet GPU modal remains unavailable. |
 | `modal_gpu_nonzero_k_floquet_airbox` | `absent` | `unvalidated` | `null` | None. | Dynamic demag-k GPU modal remains unavailable. |
-| `driven_gpu_k0_periodic_airbox_gpu_operator_host_krylov` | `executable` | `unvalidated` | `null` | Executable scope: partial periodic_airbox_k0 GPU operator-host Krylov artifacts with hybrid or host Poisson demag provider. | This is driven response, not modal eigensolve; current reliable lane is `gpu_operator_host_krylov` with host or hybrid Poisson provider. |
+| `driven_gpu_k0_none` | `executable` | `unvalidated` | `null` | Executable scope `driven_gpu_k0_none.executable`: bounded gamma/free-boundary and k0 static-periodic GPU operator-host Krylov slices; not `gpu_device_krylov`. | This is driven response, not modal eigensolve; no full device-resident Krylov loop is proven. |
+| `driven_gpu_k0_periodic_airbox_gpu_operator_host_krylov` | `executable` | `unvalidated` | `null` | Executable scope `driven_gpu_k0_periodic_airbox_operator_host_krylov.executable`: partial periodic_airbox_k0 GPU operator-host Krylov artifacts with hybrid or host Poisson demag provider. | This is driven response, not modal eigensolve; current reliable lane is `gpu_operator_host_krylov` with host or hybrid Poisson provider. |
 | `driven_gpu_k0_periodic_airbox_gpu_device_krylov` | `source_visible` | `unvalidated` | `null` | Source evidence only. | `production_loop_available=false`; no full device Krylov loop. |
+| `driven_gpu_nonzero_k_none_phase_projection` | `executable` | `unvalidated` | `null` | Executable scope `driven_gpu_nonzero_k_none_phase_projection.executable`: no-demag/non-DMI Floquet phase-projection response slice with local/exchange CUDA operator support only. | This is driven response, not modal eigensolve; it does not prove nonzero-k GPU modal or GPU dynamic demag-k. |
+| `driven_gpu_nonzero_k_floquet_airbox` | `absent` | `unvalidated` | `null` | None. | Nonzero-k GPU driven dynamic-demag-k is unavailable; strict GPU fallback to CPU is forbidden. |
 
 ## What is validated
 
@@ -43,7 +48,9 @@ precision = double
 wavevector_scope = k0
 demag_scope = none
 solver_lane = gpu_dense_k0_macrospin_modal_eigen
-validated_scope.scope_id = sha256:2a87bce1656c74fe82782b37ce229e6c4af43ef183f7ff6e228a1cac308df372
+validated_scope.scope_id = modal_gpu_k0_none_macrospin_larmor.validation
+validated_scope.scope_catalog_uri = urn:fullmag:frequency-domain:readiness-scope-catalog:6bd14fb083db6474c1e33ccc5b67081ad68ee5bed6cb22db7d93df0aabdc9993
+validated_scope.scope_catalog_sha256 = sha256:6bd14fb083db6474c1e33ccc5b67081ad68ee5bed6cb22db7d93df0aabdc9993
 ```
 
 Existing static evidence:

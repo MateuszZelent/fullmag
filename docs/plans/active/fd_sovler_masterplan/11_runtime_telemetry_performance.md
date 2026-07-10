@@ -18,22 +18,21 @@ No tests, builds, examples, runtimes or solvers were run for this update.
 
 The existing response-diagnostics root remains canonical. This chapter does
 not introduce a competing root diagnostic schema. Frequency-domain runtime
-telemetry is a named nested object:
+telemetry is a named object directly under that existing response diagnostics
+root:
 
 ```json
 {
   "schema_version": "existing_response_diagnostics_schema",
-  "diagnostics": {
-    "runtime_telemetry": {
-      "schema_version": "frequency_domain_runtime_telemetry.v1",
-      "study_product": "modal_eigen|driven_response",
-      "requested_execution": {},
-      "resolved_execution": {},
-      "implementation_state": "absent|contract_only|source_visible|executable",
-      "validation_state": "unvalidated|algebra_validated|physics_validated|production_qualified",
-      "validated_scope": null,
-      "runtime_revalidated_in_this_update": false
-    }
+  "runtime_telemetry": {
+    "schema_version": "frequency_domain_runtime_telemetry.v1",
+    "study_product": "modal_eigen|driven_response",
+    "requested_execution": {},
+    "resolved_execution": {},
+    "implementation_state": "absent|contract_only|source_visible|executable",
+    "validation_state": "unvalidated|algebra_validated|physics_validated|production_qualified",
+    "validated_scope": null,
+    "runtime_revalidated_in_this_update": false
   }
 }
 ```
@@ -43,12 +42,14 @@ Migration rule:
 1. Existing root diagnostic fields remain readable until their owning artifact
    schema is migrated.
 2. New or rewritten frequency-domain diagnostics write the canonical values
-   under `diagnostics.runtime_telemetry`.
+   under root `runtime_telemetry`.
 3. During migration, duplicate root fields are compatibility mirrors only.
-   If a root mirror and `diagnostics.runtime_telemetry` disagree, the nested
-   field is authoritative and the artifact is degraded.
+   If a root mirror and `runtime_telemetry` disagree, `runtime_telemetry` is
+   authoritative and the artifact is degraded.
 4. No artifact may publish a second root `schema_version` named
    `frequency_domain_runtime_telemetry.v1`.
+5. A response diagnostics artifact that is already the diagnostics root must
+   not add a phantom `diagnostics` wrapper around `runtime_telemetry`.
 
 For GPU, the nested object must distinguish:
 
@@ -179,10 +180,10 @@ Right-preconditioner and Schur-provider diagnostics must include:
   "right_preconditioner_auto_disable_reason": "",
   "right_preconditioner_probe_original_unscaled_relative_residual": 0.0,
   "schur_preconditioner_quality_available": false,
-  "schur_preconditioner_quality_status": "helpful|neutral|harmful|not_available",
-  "schur_preconditioner_initial_original_unscaled_relative_residual": 0.0,
-  "schur_preconditioner_last_original_unscaled_relative_residual": 0.0,
-  "schur_preconditioner_contraction_ratio": 0.0,
+  "schur_preconditioner_quality_status": "helpful|neutral|harmful|not_available|not_applicable",
+  "schur_preconditioner_initial_original_unscaled_relative_residual": null,
+  "schur_preconditioner_last_original_unscaled_relative_residual": null,
+  "schur_preconditioner_contraction_ratio": null,
   "schur_preconditioner_contraction_ratio_threshold": 1.0,
   "schur_preconditioner_quality_apply_count": 0
 }
@@ -193,6 +194,15 @@ Normative interpretation:
 - `schur_preconditioner_contraction_ratio` is
   `last_original_unscaled / initial_original_unscaled`; values greater than
   `schur_preconditioner_contraction_ratio_threshold` are not helpful.
+- If no Schur/preconditioner path applies to the selected lane, publish
+  `schur_preconditioner_quality_status=not_applicable` and set the Schur
+  residuals and contraction ratio to `null`.
+- If a Schur/preconditioner path applies but the quality probe was not emitted,
+  publish `schur_preconditioner_quality_status=not_available` and set the
+  Schur residuals and contraction ratio to `null`.
+- A contraction ratio is defined only when both residuals are finite and the
+  initial original-unscaled residual is positive. Otherwise the ratio is
+  `null` and cannot be used as helpfulness evidence.
 - A preconditioner is `helpful` only when its application lowers the true
   original-unscaled residual under the same original operator.
 - `harmful` or auto-disabled preconditioners are useful diagnostics but not
@@ -210,7 +220,8 @@ Dynamic-demag or Poisson-airbox paths must publish:
   "poisson_setup_count": 0,
   "poisson_solve_count": 0,
   "poisson_operator_apply_count": 0,
-  "poisson_operator_signature": "string",
+  "poisson_operator_signature": null,
+  "poisson_operator_signature_status": "available|not_applicable",
   "poisson_setup_signature_count": 0,
   "poisson_setup_reuse_count": 0,
   "poisson_operator_mode": "none|host_mfem_poisson_provider|hybrid_cpu_poisson|device_hypre_poisson|mfem_weak_form_shared_domain",
@@ -225,7 +236,11 @@ Dynamic-demag or Poisson-airbox paths must publish:
 Invariants:
 
 - `poisson_operator_mode=none` requires setup, solve, apply, signature and
-  reuse counts to be zero.
+  reuse counts to be zero, `poisson_operator_signature=null` and
+  `poisson_operator_signature_status=not_applicable`.
+- `poisson_operator_signature` is a content signature only when a Poisson or
+  dynamic-demag operator exists. The string `"none"` is not a valid
+  no-Poisson signature.
 - For a frequency-invariant operator signature, setup count is exactly one per
   unique `poisson_operator_signature`; additional right-hand sides increase
   solve/apply counts, not setup count.
