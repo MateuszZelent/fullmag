@@ -215,9 +215,10 @@ git commit -m "fix(python): canonicalize relaxation authoring"
 - Modify: crates/fullmag-plan/src/spin_torque.rs
 - Modify: crates/fullmag-plan/src/fdm.rs
 - Modify: crates/fullmag-plan/src/fem.rs
-- Modify: crates/fullmag-runner/src/**/*.rs where StudyIR::Relaxation dynamics is destructured
-- Modify: crates/fullmag-cli/src/**/*.rs where StudyIR::Relaxation dynamics is destructured
-- Modify: crates/fullmag-api/src/**/*.rs where StudyIR::Relaxation dynamics is destructured
+- Modify: crates/fullmag-ir/tests/ir_tests.rs
+- Modify: crates/fullmag-runner/src/lib.rs
+- Modify: crates/fullmag-cli/src/main.rs
+- Modify: crates/fullmag-cli/src/step_utils.rs
 
 **Interfaces:**
 - Consumes: Python canonical IR with optional dynamics and max_relaxation_time_s.
@@ -300,7 +301,13 @@ Expected: relaxation tests pass and every workspace consumer compiles; the pre-e
 - [ ] **Step 8: Commit**
 
 ~~~bash
-git add crates/fullmag-ir crates/fullmag-plan crates/fullmag-runner crates/fullmag-cli crates/fullmag-api
+git add crates/fullmag-ir/src/study.rs crates/fullmag-ir/src/execution.rs \
+  crates/fullmag-ir/src/lib.rs crates/fullmag-ir/src/validation.rs \
+  crates/fullmag-ir/tests/ir_tests.rs crates/fullmag-plan/src/validate.rs \
+  crates/fullmag-plan/src/tests.rs crates/fullmag-plan/src/spin_torque.rs \
+  crates/fullmag-plan/src/fdm.rs crates/fullmag-plan/src/fem.rs \
+  crates/fullmag-runner/src/lib.rs crates/fullmag-cli/src/main.rs \
+  crates/fullmag-cli/src/step_utils.rs
 git commit -m "fix(ir): separate LLG relaxation from minimizers"
 ~~~
 
