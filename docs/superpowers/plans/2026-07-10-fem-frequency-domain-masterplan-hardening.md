@@ -791,9 +791,12 @@ P(k) = C_phi^H P C_phi
 B_qq(k) = C_m^H B_qq C_m
 ```
 
-Apply Robin only to open-z faces, never periodic cuts. Define k in `rad/m` and
-phase-wrapping tolerance. The `grad_k`/`div_k` and constrained forms can be
-called equivalent only after matrix/action parity over the accepted k domain.
+Apply Robin only to open-z faces, never periodic cuts. Define `k` in `rad/m`,
+reciprocal-cell wrapping and Gamma tolerance. Distinguish periodic cell
+amplitudes from physical reconstructions carrying `exp(-i*k dot r)`. The
+`grad_k`/`div_k` and constrained forms require a matching Bloch-enriched
+basis/interpolation map for raw matrix/action parity; otherwise certify only
+bounded convergence and observable parity over the accepted k domain.
 
 - [ ] **Step 2: Define CPU stages**
 
@@ -805,8 +808,10 @@ NK-P4 CPU selected spectrum and driven response
 NK-P5 DE/BV dispersion and K0 limit
 ```
 
-Require `A(k=0)` parity with Task 6 and `f(k)=f(-k)` only without
-nonreciprocal terms.
+Require `A(k=0)` parity with Task 6. A `k <-> -k` gate requires an explicit
+geometry/material/equilibrium/BC symmetry map, cluster/branch matching, and
+transformed drive/observation pair; it is not inferred merely from the
+absence of DMI or another nonreciprocal term.
 
 - [ ] **Step 3: Define GPU stages**
 
