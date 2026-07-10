@@ -1065,7 +1065,13 @@ impl NativeFemBackend {
                     .unwrap_or(0.0),
             },
             relax_stop: {
-                let stop = plan.relaxation.as_ref().map(|control| &control.stop);
+                let relaxation = plan.relaxation.as_ref();
+                let stop = relaxation.map(|control| &control.stop);
+                let llg_relaxation_time_s = relaxation.and_then(|control| {
+                    (control.algorithm == fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped)
+                        .then_some(control.stop.max_relaxation_time_s)
+                        .flatten()
+                });
                 ffi::fullmag_fem_relax_stop {
                     has_torque_tolerance_apm: if stop
                         .and_then(|cfg| cfg.torque_tolerance_apm)
@@ -1091,23 +1097,14 @@ impl NativeFemBackend {
                         0
                     },
                     max_steps: stop.and_then(|cfg| cfg.max_steps).unwrap_or(0),
-                    has_max_pseudotime_s: if stop.and_then(|cfg| cfg.max_pseudotime_s).is_some() {
+                    has_max_pseudotime_s: 0,
+                    max_pseudotime_s: 0.0,
+                    has_max_physical_time_s: if llg_relaxation_time_s.is_some() {
                         1
                     } else {
                         0
                     },
-                    max_pseudotime_s: stop.and_then(|cfg| cfg.max_pseudotime_s).unwrap_or(0.0),
-                    has_max_physical_time_s: if stop
-                        .and_then(|cfg| cfg.max_physical_time_s)
-                        .is_some()
-                    {
-                        1
-                    } else {
-                        0
-                    },
-                    max_physical_time_s: stop
-                        .and_then(|cfg| cfg.max_physical_time_s)
-                        .unwrap_or(0.0),
+                    max_physical_time_s: llg_relaxation_time_s.unwrap_or(0.0),
                 }
             },
             // F-05 fix: enable uniaxial anisotropy when ANY of the relevant
@@ -2927,8 +2924,7 @@ mod tests {
                 torque_tolerance_apm: Some(1e-6),
                 energy_tolerance_j: None,
                 max_steps: Some(10),
-                max_pseudotime_s: None,
-                max_physical_time_s: None,
+                max_relaxation_time_s: None,
             },
         });
 
@@ -3103,8 +3099,7 @@ mod tests {
                 torque_tolerance_apm: None,
                 energy_tolerance_j: None,
                 max_steps: None,
-                max_pseudotime_s: None,
-                max_physical_time_s: None,
+                max_relaxation_time_s: None,
             },
         });
         assert!(!native_fem_precession_enabled(&plan));
@@ -3115,8 +3110,7 @@ mod tests {
                 torque_tolerance_apm: None,
                 energy_tolerance_j: None,
                 max_steps: None,
-                max_pseudotime_s: None,
-                max_physical_time_s: None,
+                max_relaxation_time_s: None,
             },
         });
         assert!(native_fem_precession_enabled(&plan));
@@ -3170,8 +3164,7 @@ mod tests {
                     torque_tolerance_apm: None,
                     energy_tolerance_j: None,
                     max_steps: Some(1),
-                    max_pseudotime_s: None,
-                    max_physical_time_s: None,
+                    max_relaxation_time_s: None,
                 },
             });
 
@@ -3245,8 +3238,7 @@ mod tests {
                     torque_tolerance_apm: None,
                     energy_tolerance_j: None,
                     max_steps: Some(1),
-                    max_pseudotime_s: None,
-                    max_physical_time_s: None,
+                    max_relaxation_time_s: None,
                 },
             });
 
@@ -3332,8 +3324,7 @@ mod tests {
                     torque_tolerance_apm: None,
                     energy_tolerance_j: None,
                     max_steps: Some(1),
-                    max_pseudotime_s: None,
-                    max_physical_time_s: None,
+                    max_relaxation_time_s: None,
                 },
             });
 
@@ -3384,8 +3375,7 @@ mod tests {
                     torque_tolerance_apm: None,
                     energy_tolerance_j: None,
                     max_steps: Some(1),
-                    max_pseudotime_s: None,
-                    max_physical_time_s: None,
+                    max_relaxation_time_s: None,
                 },
             });
 
@@ -3450,8 +3440,7 @@ mod tests {
                     torque_tolerance_apm: Some(1.0e30),
                     energy_tolerance_j: None,
                     max_steps: Some(5),
-                    max_pseudotime_s: None,
-                    max_physical_time_s: None,
+                    max_relaxation_time_s: None,
                 },
             });
 
@@ -3512,8 +3501,7 @@ mod tests {
                     torque_tolerance_apm: None,
                     energy_tolerance_j: None,
                     max_steps: Some(5),
-                    max_pseudotime_s: None,
-                    max_physical_time_s: None,
+                    max_relaxation_time_s: None,
                 },
             });
 
@@ -3575,8 +3563,7 @@ mod tests {
                 torque_tolerance_apm: None,
                 energy_tolerance_j: None,
                 max_steps: Some(1),
-                max_pseudotime_s: None,
-                max_physical_time_s: None,
+                max_relaxation_time_s: None,
             },
         });
 
@@ -3642,8 +3629,7 @@ mod tests {
                 torque_tolerance_apm: None,
                 energy_tolerance_j: None,
                 max_steps: Some(1),
-                max_pseudotime_s: None,
-                max_physical_time_s: None,
+                max_relaxation_time_s: None,
             },
         });
 
@@ -3713,8 +3699,7 @@ mod tests {
                 torque_tolerance_apm: None,
                 energy_tolerance_j: None,
                 max_steps: Some(1),
-                max_pseudotime_s: None,
-                max_physical_time_s: None,
+                max_relaxation_time_s: None,
             },
         });
 
@@ -3779,8 +3764,7 @@ mod tests {
                 torque_tolerance_apm: None,
                 energy_tolerance_j: None,
                 max_steps: Some(1),
-                max_pseudotime_s: None,
-                max_physical_time_s: None,
+                max_relaxation_time_s: None,
             },
         });
 
@@ -4448,8 +4432,7 @@ mod tests {
                 torque_tolerance_apm: None,
                 energy_tolerance_j: None,
                 max_steps: Some(2),
-                max_pseudotime_s: None,
-                max_physical_time_s: None,
+                max_relaxation_time_s: None,
             },
         });
 
@@ -4863,8 +4846,7 @@ mod tests {
                         torque_tolerance_apm: None,
                         energy_tolerance_j: None,
                         max_steps: None,
-                        max_pseudotime_s: None,
-                        max_physical_time_s: None,
+                        max_relaxation_time_s: None,
                     },
                 });
             }
@@ -4953,7 +4935,7 @@ mod tests {
             IntegratorChoice::Rk45,
         ] {
             let mut plan = make_exchange_only_plan();
-            plan.integrator = integrator;
+            plan.integrator = Some(integrator);
             if matches!(integrator, IntegratorChoice::Rk23 | IntegratorChoice::Rk45) {
                 plan = with_adaptive_dt(plan);
             }
@@ -5000,8 +4982,7 @@ mod tests {
                 torque_tolerance_apm: None,
                 energy_tolerance_j: None,
                 max_steps: Some(1),
-                max_pseudotime_s: None,
-                max_physical_time_s: None,
+                max_relaxation_time_s: None,
             },
         });
         let cpu_plan = native_plan_for_device(&plan, "cpu");
@@ -5116,8 +5097,7 @@ mod tests {
                 torque_tolerance_apm: None,
                 energy_tolerance_j: None,
                 max_steps: Some(1),
-                max_pseudotime_s: None,
-                max_physical_time_s: None,
+                max_relaxation_time_s: None,
             },
         });
         let cpu_plan = native_plan_for_device(&plan, "cpu");
@@ -5235,7 +5215,7 @@ mod tests {
 
         for (integrator, expected_first_rhs, expected_second_rhs, expected_second_fsal) in cases {
             let mut plan = make_exchange_only_plan();
-            plan.integrator = integrator;
+            plan.integrator = Some(integrator);
             let mut backend = NativeFemBackend::create(&plan).expect("native fem create");
 
             let first = backend

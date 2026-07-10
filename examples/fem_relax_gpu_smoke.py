@@ -18,6 +18,8 @@ MAX_STEPS = int(os.environ.get("FULLMAG_RELAX_MAX_STEPS", "4"))
 study = fm.study(f"fem_relax_gpu_smoke_{ALGORITHM}")
 study.engine("fem")
 study.device(DEVICE, precision="double")
+if ALGORITHM == "tangent_plane_implicit":
+    study.mode("extended")
 study.universe(
     mode="auto",
     size=(160e-9, 120e-9, 80e-9),

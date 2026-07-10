@@ -2541,7 +2541,7 @@ fn frequency_response_demag_backend_plan(
         gyromagnetic_ratio: plan.gyromagnetic_ratio,
         precision: plan.precision,
         exchange_bc: plan.exchange_bc,
-        integrator: fullmag_ir::IntegratorChoice::Heun,
+        integrator: Some(fullmag_ir::IntegratorChoice::Heun),
         fixed_timestep: Some(1.0e-13),
         adaptive_timestep: None,
         field_refresh: None,

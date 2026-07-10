@@ -1180,7 +1180,26 @@ fn ensure_frequency_response_relaxed_continuation_is_qualified(
             stage.entrypoint_kind
         );
     };
-    if completion.status == "completed" && completion.converged {
+    let coherent_equilibrium_metric = matches!(
+        (completion.reason, completion.metric),
+        (
+            Some(fullmag_ir::StageStopReason::Torque),
+            Some(fullmag_ir::StageMetricKind::MaxTorqueApm)
+        ) | (
+            Some(fullmag_ir::StageStopReason::Energy),
+            Some(fullmag_ir::StageMetricKind::TotalEnergyPlateauRangeJ)
+        )
+    );
+    let threshold_satisfied = matches!(
+        (completion.metric_value, completion.threshold),
+        (Some(value), Some(threshold))
+            if value.is_finite() && threshold.is_finite() && value <= threshold
+    );
+    if completion.status == "completed"
+        && completion.converged
+        && coherent_equilibrium_metric
+        && threshold_satisfied
+    {
         return Ok(());
     }
 
@@ -10052,8 +10071,8 @@ mod tests {
             converged,
             reason: Some(reason),
             metric: Some(fullmag_ir::StageMetricKind::MaxTorqueApm),
-            metric_name: Some("max_torque_T".to_string()),
-            metric_value: Some(6.7e-3),
+            metric_name: Some("max_torque_apm".to_string()),
+            metric_value: Some(6.7e-5),
             threshold: Some(1.0e-4),
         }
     }
@@ -10079,6 +10098,19 @@ mod tests {
 
         ensure_frequency_response_relaxed_continuation_is_qualified(&stage, Some(&completion))
             .expect("torque-qualified relax continuation should feed frequency response");
+    }
+
+    #[test]
+    fn frequency_response_rejects_incoherent_converged_completion() {
+        let stage = frequency_response_relaxed_stage();
+        let mut completion = stage_completion(fullmag_ir::StageStopReason::MaxSteps);
+        completion.converged = true;
+
+        let error =
+            ensure_frequency_response_relaxed_continuation_is_qualified(&stage, Some(&completion))
+                .expect_err("completed+converged max_steps must not qualify equilibrium");
+
+        assert!(error.to_string().contains("refusing to linearize"));
     }
 
     #[test]

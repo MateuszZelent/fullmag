@@ -1,5 +1,5 @@
 use fullmag_fem_sys as ffi;
-use fullmag_ir::{StageCompletionIR, StageStopReason};
+use fullmag_ir::{StageCompletionIR, StageMetricKind, StageStopReason};
 
 use std::ffi::CStr;
 
@@ -170,30 +170,42 @@ pub(crate) fn stage_completion_from_ffi(
         }
     };
 
-    let metric_name = if completion.has_metric_name != 0 {
-        let value = unsafe { CStr::from_ptr(completion.metric_name.as_ptr()) }
-            .to_string_lossy()
-            .to_string();
-        if value.is_empty() {
-            None
-        } else {
-            Some(value)
+    let (status, converged, metric) = match reason {
+        StageStopReason::Torque => ("completed", true, Some(StageMetricKind::MaxTorqueApm)),
+        StageStopReason::Energy => (
+            "completed",
+            true,
+            Some(StageMetricKind::TotalEnergyPlateauRangeJ),
+        ),
+        StageStopReason::MaxSteps => ("completed", false, Some(StageMetricKind::Steps)),
+        StageStopReason::MaxPseudotime | StageStopReason::MaxPhysicalTime => {
+            ("completed", false, Some(StageMetricKind::RelaxationTimeS))
         }
-    } else {
-        None
+        StageStopReason::Gradient => ("failed", false, Some(StageMetricKind::NumericalStagnation)),
+        StageStopReason::UserCancelled => ("cancelled", false, None),
+        StageStopReason::BackendError => ("failed", false, None),
     };
-    let has_metric = metric_name.is_some();
+    let has_metric_value = completion.has_metric_name != 0 && metric.is_some();
+    let metric_name = metric.map(|kind| match kind {
+        StageMetricKind::MaxTorqueApm => "max_torque_apm",
+        StageMetricKind::TotalEnergyPlateauRangeJ => "total_energy_plateau_range_J",
+        StageMetricKind::RelaxationTimeS => "relaxation_time_s",
+        StageMetricKind::Steps => "steps",
+        StageMetricKind::NumericalStagnation => "numerical_stagnation",
+    });
 
     Some(StageCompletionIR {
-        status: "completed".to_string(),
+        status: status.to_string(),
+        converged,
         reason: Some(reason),
-        metric_name,
-        metric_value: if has_metric {
+        metric,
+        metric_name: metric_name.map(str::to_string),
+        metric_value: if has_metric_value {
             Some(completion.metric_value)
         } else {
             None
         },
-        threshold: if has_metric {
+        threshold: if has_metric_value {
             Some(completion.threshold)
         } else {
             None
@@ -226,10 +238,75 @@ mod tests {
         .expect("completion should map when reason is present");
 
         assert_eq!(completion.status, "completed");
+        assert!(completion.converged);
         assert_eq!(completion.reason, Some(StageStopReason::Energy));
-        assert_eq!(completion.metric_name.as_deref(), Some("energy_delta_j"));
+        assert_eq!(
+            completion.metric,
+            Some(fullmag_ir::StageMetricKind::TotalEnergyPlateauRangeJ)
+        );
+        assert_eq!(
+            completion.metric_name.as_deref(),
+            Some("total_energy_plateau_range_J")
+        );
         assert_eq!(completion.metric_value, Some(1.0e-21));
         assert_eq!(completion.threshold, Some(1.0e-20));
+    }
+
+    #[test]
+    fn stage_completion_from_ffi_maps_max_steps_as_non_converged() {
+        let completion = stage_completion_from_ffi(ffi::fullmag_fem_stage_completion {
+            has_reason: 1,
+            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_MAX_STEPS,
+            has_metric_name: 1,
+            metric_name: metric_name("steps"),
+            metric_value: 50_000.0,
+            threshold: 50_000.0,
+        })
+        .expect("max-steps completion should map");
+
+        assert_eq!(completion.status, "completed");
+        assert!(!completion.converged);
+        assert_eq!(completion.metric, Some(fullmag_ir::StageMetricKind::Steps));
+        assert_eq!(completion.metric_name.as_deref(), Some("steps"));
+    }
+
+    #[test]
+    fn stage_completion_from_ffi_maps_backend_error_as_failed() {
+        let completion = stage_completion_from_ffi(ffi::fullmag_fem_stage_completion {
+            has_reason: 1,
+            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+            has_metric_name: 0,
+            metric_name: [0; 64],
+            metric_value: 0.0,
+            threshold: 0.0,
+        })
+        .expect("backend-error completion should map");
+
+        assert_eq!(completion.status, "failed");
+        assert!(!completion.converged);
+        assert_eq!(completion.reason, Some(StageStopReason::BackendError));
+        assert_eq!(completion.metric, None);
+    }
+
+    #[test]
+    fn stage_completion_from_ffi_maps_torque_as_converged() {
+        let completion = stage_completion_from_ffi(ffi::fullmag_fem_stage_completion {
+            has_reason: 1,
+            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_TORQUE,
+            has_metric_name: 1,
+            metric_name: metric_name("max_torque_apm"),
+            metric_value: 0.0,
+            threshold: 1.0e-4,
+        })
+        .expect("torque completion should map");
+
+        assert_eq!(completion.status, "completed");
+        assert!(completion.converged);
+        assert_eq!(
+            completion.metric,
+            Some(fullmag_ir::StageMetricKind::MaxTorqueApm)
+        );
+        assert_eq!(completion.metric_value, Some(0.0));
     }
 
     #[test]
@@ -244,11 +321,16 @@ mod tests {
         })
         .expect("gradient completion should map when reason is present");
 
-        assert_eq!(completion.status, "completed");
+        assert_eq!(completion.status, "failed");
+        assert!(!completion.converged);
         assert_eq!(completion.reason, Some(StageStopReason::Gradient));
         assert_eq!(
+            completion.metric,
+            Some(fullmag_ir::StageMetricKind::NumericalStagnation)
+        );
+        assert_eq!(
             completion.metric_name.as_deref(),
-            Some("tangent_gradient_norm_sq")
+            Some("numerical_stagnation")
         );
         assert_eq!(completion.metric_value, Some(0.0));
         assert_eq!(completion.threshold, Some(1.0e-30));

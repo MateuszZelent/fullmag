@@ -5,7 +5,7 @@
 //! backend owns the actual algorithm step, including tangent gradients, line
 //! search, field refresh, and magnetization updates.
 
-use fullmag_ir::{FemPlanIR, RelaxationControlIR, StageCompletionIR, StageStopReason};
+use fullmag_ir::{FemPlanIR, RelaxationControlIR, StageCompletionIR};
 
 use crate::artifact_pipeline::{apply_artifact_enqueue_metrics, ArtifactRecorder};
 use crate::dispatch::FemEngine;
@@ -13,10 +13,11 @@ use crate::interactive_runtime::{
     cached_display_refresh_due, display_is_global_scalar, display_refresh_due,
 };
 use crate::native_fem::NativeFemBackend;
-use crate::relaxation::direct_minimizer::{
-    direct_minimizer_pseudotime_budget, direct_minimizer_step_budget,
+use crate::relaxation::direct_minimizer::direct_minimizer_step_budget;
+use crate::relaxation::{resolve_stage_completion, RelaxationCompletionMetrics};
+use crate::types::{
+    FemMeshPayload, LiveStepConsumer, RunError, RunStatus, StepAction, StepStats, StepUpdate,
 };
-use crate::types::{FemMeshPayload, LiveStepConsumer, RunError, StepAction, StepStats, StepUpdate};
 
 use super::preview::{FemCachedPreviewHandoff, FemLiveMagnetizationHandoff, FemLivePreviewHandoff};
 use super::scalars::ensure_fem_object_scalars;
@@ -45,15 +46,12 @@ pub(crate) fn execute_direct_minimizer(
     let mut cancelled = false;
     let mut paused = false;
     let mut accepted_steps = 0u64;
-    let mut pseudotime_s = 0.0;
     let mut last_cached_preview_revision = last_preview_revision;
     let mut live_preview_handoff = FemLivePreviewHandoff::default();
     let mut cached_preview_handoff = FemCachedPreviewHandoff::default();
     let mut live_magnetization_handoff = FemLiveMagnetizationHandoff::default();
 
-    while accepted_steps < direct_minimizer_step_budget(control)
-        && pseudotime_s < direct_minimizer_pseudotime_budget(control)
-    {
+    while accepted_steps < direct_minimizer_step_budget(control) {
         if live
             .as_ref()
             .is_some_and(|consumer| consumer.initial_snapshot)
@@ -162,8 +160,6 @@ pub(crate) fn execute_direct_minimizer(
             break;
         };
         accepted_steps += 1;
-        pseudotime_s += direct_minimizer_step_pseudotime_s(accepted_stats.dt);
-        accepted_stats.pseudo_time_s = Some(pseudotime_s);
         ensure_fem_object_scalars(&mut accepted_stats, plan);
 
         let artifact_metrics = artifacts.record_scalar(&accepted_stats)?;
@@ -289,10 +285,17 @@ pub(crate) fn execute_direct_minimizer(
             backend_completion = Some(completion);
             break;
         }
-        if let Some(completion) = infer_runner_pseudotime_completion(control, pseudotime_s) {
-            backend_completion = Some(completion);
-            break;
-        }
+    }
+
+    if backend_completion.is_none() && !cancelled && !paused {
+        backend_completion = Some(resolve_stage_completion(
+            RunStatus::Completed,
+            Some(control),
+            RelaxationCompletionMetrics {
+                steps: accepted_steps,
+                ..RelaxationCompletionMetrics::default()
+            },
+        ));
     }
 
     Ok(DirectMinimizerExecution {
@@ -303,35 +306,8 @@ pub(crate) fn execute_direct_minimizer(
     })
 }
 
-fn direct_minimizer_step_pseudotime_s(dt: f64) -> f64 {
-    if dt.is_finite() && dt > 0.0 {
-        dt
-    } else {
-        0.0
-    }
-}
-
-fn infer_runner_pseudotime_completion(
-    control: &RelaxationControlIR,
-    pseudotime_s: f64,
-) -> Option<StageCompletionIR> {
-    let threshold = control.stop.max_pseudotime_s?;
-    if pseudotime_s < threshold {
-        return None;
-    }
-    Some(StageCompletionIR {
-        status: "completed".to_string(),
-        reason: Some(StageStopReason::MaxPseudotime),
-        metric_name: Some("pseudo_time_s".to_string()),
-        metric_value: Some(pseudotime_s),
-        threshold: Some(threshold),
-    })
-}
-
 #[cfg(test)]
 mod tests {
-    use fullmag_ir::{RelaxStopIR, RelaxationAlgorithmIR, RelaxationControlIR, StageStopReason};
-
     #[test]
     fn direct_minimizer_publishes_live_update_after_accepted_step() {
         let source = include_str!("direct_minimizer.rs");
@@ -347,25 +323,14 @@ mod tests {
     }
 
     #[test]
-    fn direct_minimizer_runner_reports_max_pseudotime() {
-        let control = RelaxationControlIR {
-            algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
-            stop: RelaxStopIR {
-                torque_tolerance_apm: Some(1e-4),
-                energy_tolerance_j: None,
-                max_steps: Some(100),
-                max_pseudotime_s: Some(1e-6),
-                max_physical_time_s: None,
-            },
-        };
+    fn direct_minimizer_is_step_bounded_and_uses_explicit_completion_metrics() {
+        let source = include_str!("direct_minimizer.rs");
 
-        assert!(super::infer_runner_pseudotime_completion(&control, 9.0e-7).is_none());
-        let completion = super::infer_runner_pseudotime_completion(&control, 1.2e-6)
-            .expect("pseudotime threshold should complete the stage");
-
-        assert_eq!(completion.reason, Some(StageStopReason::MaxPseudotime));
-        assert_eq!(completion.metric_name.as_deref(), Some("pseudo_time_s"));
-        assert_eq!(completion.metric_value, Some(1.2e-6));
-        assert_eq!(completion.threshold, Some(1e-6));
+        assert!(!source.contains(concat!("pseudo", "time")));
+        assert!(!source.contains(concat!("max_pseudo", "time_s")));
+        assert!(source.contains("direct_minimizer_step_budget(control)"));
+        assert!(source.contains("RelaxationCompletionMetrics"));
+        assert!(source.contains("resolve_stage_completion"));
+        assert!(source.contains("..RelaxationCompletionMetrics::default()"));
     }
 }

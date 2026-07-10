@@ -4956,6 +4956,8 @@ fn execute_cuda_fdm(
         }
     }
 
+    let completion_steps = latest_stats.as_ref().map_or(0, |stats| stats.step);
+    let completion_time_s = latest_stats.as_ref().map(|stats| stats.time);
     record_cuda_final_outputs(
         &backend,
         cell_count,
@@ -4980,8 +4982,8 @@ fn execute_cuda_fdm(
         crate::relaxation::RelaxationCompletionMetrics {
             max_torque_apm: None,
             accepted_energy_plateau_range_j: energy_plateau.range(),
-            steps: step_count,
-            relaxation_time_s: None,
+            steps: completion_steps,
+            relaxation_time_s: completion_time_s,
             numerical_stagnation: false,
         },
     );
@@ -6315,8 +6317,7 @@ mod tests {
                 torque_tolerance_apm: None,
                 energy_tolerance_j: None,
                 max_steps: None,
-                max_pseudotime_s: None,
-                max_physical_time_s: None,
+                max_relaxation_time_s: None,
             },
         });
         let mut provenance = ExecutionProvenance::default();
@@ -8977,8 +8978,7 @@ mod tests {
                 torque_tolerance_apm: None,
                 energy_tolerance_j: None,
                 max_steps: Some(3),
-                max_pseudotime_s: None,
-                max_physical_time_s: None,
+                max_relaxation_time_s: None,
             },
         }
     }
@@ -9039,8 +9039,7 @@ mod tests {
                 torque_tolerance_apm: None,
                 energy_tolerance_j: None,
                 max_steps: Some(1),
-                max_pseudotime_s: None,
-                max_physical_time_s: None,
+                max_relaxation_time_s: None,
             },
         });
 
@@ -9078,8 +9077,7 @@ mod tests {
                 torque_tolerance_apm: None,
                 energy_tolerance_j: None,
                 max_steps: Some(5),
-                max_pseudotime_s: None,
-                max_physical_time_s: None,
+                max_relaxation_time_s: None,
             },
         });
 
@@ -9123,8 +9121,7 @@ mod tests {
                 torque_tolerance_apm: Some(1.0e30),
                 energy_tolerance_j: None,
                 max_steps: Some(5),
-                max_pseudotime_s: None,
-                max_physical_time_s: None,
+                max_relaxation_time_s: None,
             },
         });
 
