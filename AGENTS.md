@@ -228,6 +228,7 @@ When the user corrects your approach, append a one-line rule here before ending 
 - Quantity availability bugs must be fixed through the canonical quantity catalog, field-store/API facade, and `compute_fields` materialization path globally; do not patch one-off field IDs such as `H_demag`.
 - Viewport performance fixes must preserve the currently enabled visualization quality by default; lower quality, lower glyph density, hidden layers, or simplified topology are explicit fallback modes only after quality-preserving optimization fails.
 - Always resolve abbreviated Git commit IDs with `git rev-parse` before using them in verification assertions; never infer missing hash characters.
+- In a shared dirty worktree, inspect `git diff --cached --name-only` in a separate command before every commit; never chain that inspection and `git commit`, because another process may have staged unrelated files between task steps.
 - Microwave antenna designs with a taper or constriction must use a full 3D conductor/current solve; never promote a translationally invariant 2.5D cross-section as the production model for width variation along current flow.
 
 ---
