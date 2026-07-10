@@ -43,12 +43,11 @@ current reality. They must not be presented as one already-stable target ABI.
 | Version negotiation | Production driven accepts `abi_version` 0, 9 or 12. Modal/compact driven require exact v12. | Every public frequency-domain request/result starts with a common version/size header and follows one compatibility policy. | `contract_gap` |
 | Size negotiation | Production driven accepts `struct_size=0` or exactly `sizeof(current request)`; it does not accept a known shorter prefix. Modal public request has no `struct_size`. | Caller sets the bytes it provides; callee reads only fields whose complete extent is within `struct_size`, requires a documented minimum prefix, defaults absent tail fields, and rejects impossible/interior sizes. | `contract_gap` |
 | Enums | Public enums exist, but several C++ enums rely on declaration order and not every public concept is carried. | Every FFI enum is a fixed `uint32_t` value with `0=unspecified` only where compatibility requires it; unknown values reject. | partial |
-| Booleans | C uses `int`; C++ uses `bool`; Rust normalizes through `i32`. | Public FFI booleans are fixed-width integers and accept only `0` or `1`; C++ `bool` never crosses the ABI. | partial |
+| Booleans | Public fields use C `int` and Rust `i32`. The production-driven adapter currently maps any nonzero `require_nonzero_rhs` value to C++ `true`. | Public FFI booleans use an ABI-defined fixed-width `uint32_t`/integer representation, reject every value except `0` or `1`, and convert to C++ `bool` only after validation. | `contract_gap` |
 | Pointer lengths | Many arrays have counts, including v12 tail value counts. Legacy/compact structs still use `int` lengths and some strict checks are skipped for version/size zero. | Every pointer has an adjacent fixed-width count and one nullability rule; overflow is checked before multiplication. | partial |
 | Requested/resolved execution | Production driven carries broad `requested_execution_lane`; modal carries no device/lane/precision. | Request carries requested device/precision/mode/method; result names one resolved engine, residency and fallback. | `contract_gap` |
 | Device pointers | Current numerical input pointers are host pointers; device work is hidden behind native contexts/callback `user_data`. | Host and device views are different tagged types; address space, owner, stream/context and synchronization contract are explicit. | `contract_gap` |
-| Result lifetime | Native results allocate C strings and provide release/destroy functions. The production driven Rust wrapper uses RAII release. | All wrappers copy or borrow under one documented policy and always call the matching idempotent release exactly once. | partial |
-| Modal Rust result cleanup | The wrapper copies result strings, then clears raw pointers before RAII destruction. | Copy strings, leave native pointers owned by the result guard, and destroy them after the copy. | `contract_gap` |
+| Result lifetime | Native result structs own four allocated C strings. Rust wrappers copy those strings while the guard is alive, then `Drop` invokes the matching native release/destroy function; native cleanup frees all four allocations and zeroes the result. | Preserve this ownership rule across a consolidated result family: copy or borrow under one documented policy and always invoke the matching idempotent cleanup. | implemented |
 | Error contract | Status enums and JSON/string fields exist, but error shape varies by entry point. | One status vocabulary and one diagnostics envelope with stable reason, requested/resolved execution and partial-artifact state. | partial |
 
 ## 4. Target version and size negotiation
@@ -103,7 +102,13 @@ The lane enum is compatibility routing, not engine selection. The target
 engine ID is a string/enum owned by `FrequencySolvePlanner` and returned in
 diagnostics/artifacts.
 
-All ABI boolean fields use one of:
+The current production-driven public field `require_nonzero_rhs` is a C `int`
+and a Rust `i32`. Its C-to-C++ adapter currently evaluates
+`request->require_nonzero_rhs != 0`, so every nonzero value becomes `true`.
+That permissive conversion is a current `contract_gap`.
+
+The target stable ABI uses an FFI-normalized fixed-width `uint32_t` or
+otherwise ABI-defined integer representation with these strict values:
 
 ```text
 0 = false
@@ -111,8 +116,9 @@ All ABI boolean fields use one of:
 other = validation_error
 ```
 
-Rust converts to/from `i32` at the FFI boundary. Native C++ converts to `bool`
-only after validation. Public structs never contain C++ `bool`.
+Rust converts to/from the declared FFI integer at the boundary. Native C++
+validates the raw value first and converts to `bool` only after accepting `0`
+or `1`. Public structs never contain C++ `bool`.
 
 ## 6. Pointer, length and nullability rules
 
@@ -210,9 +216,11 @@ before the guard is dropped.
 released with `fullmag_fem_frequency_domain_result_destroy(&result)`. The
 destroy function is idempotent and clears the struct.
 
-The Rust wrapper must copy the strings while the guard is alive, then allow the
-guard to call destroy. Clearing raw pointers before destroy leaks ownership and
-is a current `contract_gap`.
+The Rust wrapper copies all four strings while its result guard is alive. The
+guard's `Drop` implementation then invokes
+`fullmag_fem_frequency_domain_result_destroy()`, whose native implementation
+deletes all four allocations and zeroes the result. This ownership path is the
+current contract, not a `contract_gap`.
 
 ### Error and callback strings
 
