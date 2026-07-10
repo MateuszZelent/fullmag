@@ -1,4 +1,5 @@
 #include "cpu/frequency_domain/slepc_modal_eigen.hpp"
+#include "frequency_domain/mode_kinematics.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -17,8 +18,6 @@ namespace fullmag::fem::frequency_domain {
 #endif
 
 namespace {
-
-constexpr double kTwoPi = 6.283185307179586476925286766559;
 
 struct SLEPcModeCandidate {
     SLEPcModalAcceptedMode mode{};
@@ -224,7 +223,7 @@ solve_slepc_gyrotropic_modal_eigen_with_matrices(
 
     ST spectral_transform = nullptr;
     const double target_angular_frequency =
-        std::max(0.0, request.target_frequency_hz) * kTwoPi;
+        omega_rad_s_from_frequency_hz(std::max(0.0, request.target_frequency_hz));
     const PetscInt max_iterations =
         request.max_outer_iterations > 0 ? request.max_outer_iterations : PETSC_DEFAULT;
     const PetscInt max_linear_iterations =
@@ -316,14 +315,16 @@ solve_slepc_gyrotropic_modal_eigen_with_matrices(
         }
         const double lambda_real = petsc_eigenvalue_real_part(kr);
         const double lambda_imag = petsc_eigenvalue_imaginary_part(kr, ki);
-        if (lambda_imag <= 0.0) {
+        const ModeKinematics kinematics = map_eigenvalue(
+            {lambda_real, lambda_imag},
+            FrequencyDomainPhaseConvention::exp_i_omega_t);
+        if (!kinematics.finite || kinematics.branch_sign != 1) {
             continue;
         }
         saw_positive_frequency = true;
-        const double frequency_hz = lambda_imag / kTwoPi;
         if (filter_frequency_window &&
-            (frequency_hz < request.frequency_min_hz ||
-             frequency_hz > request.frequency_max_hz)) {
+            (kinematics.frequency_hz < request.frequency_min_hz ||
+             kinematics.frequency_hz > request.frequency_max_hz)) {
             continue;
         }
         saw_frequency_window_candidate = true;
@@ -335,13 +336,14 @@ solve_slepc_gyrotropic_modal_eigen_with_matrices(
         candidate.mode.eigenpair_index = index;
         candidate.mode.lambda_real = lambda_real;
         candidate.mode.lambda_imag = lambda_imag;
-        candidate.mode.frequency_hz = frequency_hz;
+        candidate.mode.frequency_hz = kinematics.frequency_hz;
         candidate.mode.relative_residual = static_cast<double>(relative_residual);
         candidate.mode.mode_vector = copy_slepc_eigenvector(xr, xi, size);
         if (candidate.mode.mode_vector.size() != static_cast<std::size_t>(size)) {
             continue;
         }
-        candidate.target_distance = std::abs(lambda_imag - target_angular_frequency);
+        candidate.target_distance =
+            std::abs(kinematics.omega_rad_s - target_angular_frequency);
         accepted_candidates.push_back(candidate);
     }
 
@@ -424,8 +426,8 @@ SLEPcModalEigenAdapterStatus slepc_modal_eigen_adapter_status() noexcept
         status.linear_tolerance_policy =
             "ksp_rtol=min(0.01*eigen_residual_tolerance,1e-10);ksp_atol=1e-14";
         status.algebraic_form = "gyrotropic_generalized";
-        status.positive_frequency_filter = "imag(lambda) > 0";
-        status.eigenvalue_to_frequency = "frequency_hz = imag(lambda)/(2*pi)";
+        status.positive_frequency_filter = "map_eigenvalue(lambda, exp_i_omega_t).branch_sign == 1";
+        status.eigenvalue_to_frequency = "map_eigenvalue(lambda, phase)";
     } else {
         status.solver_adapter_status = "unavailable";
         status.unavailable_message =

@@ -1,4 +1,5 @@
 #include "cpu/frequency_domain/contour_interval_solver.hpp"
+#include "frequency_domain/mode_kinematics.hpp"
 
 #include <algorithm>
 #include <array>
@@ -228,14 +229,14 @@ bool solve_projected_tiny_modes(
             std::conj(g_phi[1]) * k_phi[1];
         const std::complex<double> lambda_candidate =
             numerator / denominator;
-        if (!std::isfinite(lambda_candidate.real()) ||
-            !std::isfinite(lambda_candidate.imag()) ||
-            !(lambda_candidate.imag() > 0.0)) {
+        const ModeKinematics kinematics = map_eigenvalue(
+            {lambda_candidate.real(), lambda_candidate.imag()},
+            FrequencyDomainPhaseConvention::exp_i_omega_t);
+        if (!kinematics.finite || kinematics.branch_sign != 1) {
             continue;
         }
-        const double omega_rad_s = std::imag(lambda_candidate);
-        const double frequency_hz = omega_rad_s / kTwoPi;
-        if (frequency_hz < frequency_min_hz || frequency_hz > frequency_max_hz) {
+        if (kinematics.frequency_hz < frequency_min_hz ||
+            kinematics.frequency_hz > frequency_max_hz) {
             continue;
         }
 
@@ -254,8 +255,8 @@ bool solve_projected_tiny_modes(
         }
 
         ContourIntervalMode mode{};
-        mode.frequency_hz = frequency_hz;
-        mode.omega_rad_s = omega_rad_s;
+        mode.frequency_hz = kinematics.frequency_hz;
+        mode.omega_rad_s = kinematics.omega_rad_s;
         mode.eigenvalue = lambda_candidate;
         mode.mode[0] = eigenvector[0];
         mode.mode[1] = eigenvector[1];
@@ -923,13 +924,14 @@ bool solve_dense_projected_modes(
         return false;
     }
     for (const std::complex<double> &lambda : eigenvalues) {
-        if (!std::isfinite(lambda.real()) ||
-            !std::isfinite(lambda.imag()) ||
-            !(lambda.imag() > 0.0)) {
+        const ModeKinematics kinematics = map_eigenvalue(
+            {lambda.real(), lambda.imag()},
+            FrequencyDomainPhaseConvention::exp_i_omega_t);
+        if (!kinematics.finite || kinematics.branch_sign != 1) {
             continue;
         }
-        const double frequency_hz = lambda.imag() / kTwoPi;
-        if (frequency_hz < frequency_min_hz || frequency_hz > frequency_max_hz) {
+        if (kinematics.frequency_hz < frequency_min_hz ||
+            kinematics.frequency_hz > frequency_max_hz) {
             continue;
         }
         std::vector<std::complex<double>> reduced_vector;
@@ -966,11 +968,14 @@ bool solve_dense_projected_modes(
                 refined_lambda)) {
             continue;
         }
-        if (!(refined_lambda.imag() > 0.0)) {
+        const ModeKinematics refined_kinematics = map_eigenvalue(
+            {refined_lambda.real(), refined_lambda.imag()},
+            FrequencyDomainPhaseConvention::exp_i_omega_t);
+        if (!refined_kinematics.finite || refined_kinematics.branch_sign != 1) {
             continue;
         }
-        const double refined_frequency_hz = refined_lambda.imag() / kTwoPi;
-        if (refined_frequency_hz < frequency_min_hz || refined_frequency_hz > frequency_max_hz) {
+        if (refined_kinematics.frequency_hz < frequency_min_hz ||
+            refined_kinematics.frequency_hz > frequency_max_hz) {
             continue;
         }
         const double residual =
@@ -984,8 +989,8 @@ bool solve_dense_projected_modes(
             continue;
         }
         ContourIntervalMode mode{};
-        mode.frequency_hz = refined_frequency_hz;
-        mode.omega_rad_s = refined_lambda.imag();
+        mode.frequency_hz = refined_kinematics.frequency_hz;
+        mode.omega_rad_s = refined_kinematics.omega_rad_s;
         mode.eigenvalue = refined_lambda;
         mode.mode_vector = full_vector;
         mode.relative_residual = residual;
@@ -1189,8 +1194,8 @@ std::string contour_interval_diagnostics_json(
 {
     std::string json =
         "\"contour_plane\":\"lambda\","
-        "\"frequency_mapping\":\"f_hz = abs(imag(lambda))/(2*pi)\","
-        "\"positive_frequency_filter\":\"imag(lambda) > 0\","
+        "\"frequency_mapping\":\"map_eigenvalue(lambda, exp_i_omega_t)\","
+        "\"positive_frequency_filter\":\"map_eigenvalue(lambda, exp_i_omega_t).branch_sign == 1\","
         "\"contour_point_count\":" +
         std::to_string(result.contour_point_count) +
         ",\"quadrature_rule\":\"" +
@@ -1241,6 +1246,32 @@ std::string contour_interval_diagnostics_json(
             std::to_string(point.linear_iterations) +
             ",\"linear_solve_converged\":" +
             std::string(point.converged ? "true" : "false") +
+            "}";
+    }
+    json += "],\"modes\":[";
+    for (std::size_t i = 0; i < result.modes.size(); ++i) {
+        const ContourIntervalMode &mode = result.modes[i];
+        const ModeKinematics kinematics = map_eigenvalue(
+            {mode.eigenvalue.real(), mode.eigenvalue.imag()},
+            FrequencyDomainPhaseConvention::exp_i_omega_t);
+        if (i > 0) {
+            json += ",";
+        }
+        json +=
+            "{\"lambda_real_per_s\":" +
+            format_double(kinematics.lambda.real_per_s) +
+            ",\"lambda_imag_rad_per_s\":" +
+            format_double(kinematics.lambda.imag_rad_per_s) +
+            ",\"omega_rad_s\":" +
+            format_double(kinematics.omega_rad_s) +
+            ",\"frequency_hz\":" +
+            format_double(kinematics.frequency_hz) +
+            ",\"decay_rate_per_s\":" +
+            format_double(kinematics.decay_rate_per_s) +
+            ",\"branch_sign\":" +
+            std::to_string(kinematics.branch_sign) +
+            ",\"stable\":" +
+            std::string(kinematics.stable ? "true" : "false") +
             "}";
     }
     json += "]";

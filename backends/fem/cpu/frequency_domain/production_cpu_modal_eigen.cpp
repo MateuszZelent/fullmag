@@ -5,6 +5,7 @@
 #include "cpu/frequency_domain/slepc_modal_eigen.hpp"
 #include "cpu/frequency_domain/spectral_transform.hpp"
 #include "cpu/frequency_domain/window_partition.hpp"
+#include "frequency_domain/mode_kinematics.hpp"
 #include "frequency_domain/solver_progress.hpp"
 
 #include <algorithm>
@@ -20,7 +21,6 @@ namespace fullmag::fem::frequency_domain {
 
 namespace {
 
-constexpr double kTwoPi = 6.283185307179586476925286766559;
 constexpr double kWindowDedupFrequencyRelativeTolerance = 1.0e-8;
 constexpr double kWindowDedupFrequencyAbsoluteToleranceHz = 1.0e-12;
 constexpr double kWindowDedupOverlapThreshold = 0.90;
@@ -87,6 +87,23 @@ std::string format_double(double value) noexcept
         return "0";
     }
     return buffer;
+}
+
+std::string mode_kinematics_json_fields(ComplexEigenvalue lambda)
+{
+    const ModeKinematics kinematics = map_eigenvalue(
+        lambda,
+        FrequencyDomainPhaseConvention::exp_i_omega_t);
+    return
+        "\"frequency_hz\":" + format_double(kinematics.frequency_hz) +
+        ",\"omega_rad_s\":" + format_double(kinematics.omega_rad_s) +
+        ",\"eigenvalue_real\":" + format_double(kinematics.lambda.real_per_s) +
+        ",\"eigenvalue_imag\":" + format_double(kinematics.lambda.imag_rad_per_s) +
+        ",\"lambda_real_per_s\":" + format_double(kinematics.lambda.real_per_s) +
+        ",\"lambda_imag_rad_per_s\":" + format_double(kinematics.lambda.imag_rad_per_s) +
+        ",\"decay_rate_per_s\":" + format_double(kinematics.decay_rate_per_s) +
+        ",\"branch_sign\":" + std::to_string(kinematics.branch_sign) +
+        ",\"stable\":" + std::string(kinematics.stable ? "true" : "false");
 }
 
 std::string operator_k_vector_diagnostics_json(const ModalEigenRequest &request)
@@ -349,14 +366,8 @@ std::string format_slepc_modes_json(
             std::to_string(mode.eigenpair_index) +
             ",\"positive_frequency_pair_index\":" +
             std::to_string(mode.positive_frequency_pair_index) +
-            ",\"frequency_hz\":" +
-            format_double(mode.frequency_hz) +
-            ",\"omega_rad_s\":" +
-            format_double(mode.lambda_imag) +
-            ",\"eigenvalue_real\":" +
-            format_double(mode.lambda_real) +
-            ",\"eigenvalue_imag\":" +
-            format_double(mode.lambda_imag) +
+            "," +
+            mode_kinematics_json_fields({mode.lambda_real, mode.lambda_imag}) +
             ",\"relative_residual\":" +
             format_double(mode.relative_residual) +
             ",\"discarded_negative_frequency_partner\":true,"
@@ -630,7 +641,7 @@ ModalShiftSelection subwindow_shift_selection(const FrequencySubwindow &subwindo
     shift.target_kind = "frequency_window";
     shift.selection_policy = "subwindow_midpoint";
     shift.shift_frequency_hz = subwindow.shift_hz;
-    shift.shift_omega_rad_s = kTwoPi * subwindow.shift_hz;
+    shift.shift_omega_rad_s = omega_rad_s_from_frequency_hz(subwindow.shift_hz);
     return shift;
 }
 
@@ -825,7 +836,7 @@ std::string production_window_diagnostics_json(
             ",\"shift_frequency_hz\":" +
             format_double(subwindow.shift_hz) +
             ",\"shift_omega_rad_s\":" +
-            format_double(kTwoPi * subwindow.shift_hz) +
+            format_double(omega_rad_s_from_frequency_hz(subwindow.shift_hz)) +
             ",\"outer_iterations\":" +
             std::to_string(solve.result.outer_iterations) +
             ",\"linear_iterations_total\":" +
@@ -869,14 +880,9 @@ std::string format_contour_modes_json(
             "{\"mode_index\":" + std::to_string(index) +
             ",\"positive_frequency_pair_index\":" +
             std::to_string(index) +
-            ",\"frequency_hz\":" +
-            format_double(mode.frequency_hz) +
-            ",\"omega_rad_s\":" +
-            format_double(mode.omega_rad_s) +
-            ",\"eigenvalue_real\":" +
-            format_double(std::real(mode.eigenvalue)) +
-            ",\"eigenvalue_imag\":" +
-            format_double(std::imag(mode.eigenvalue)) +
+            "," +
+            mode_kinematics_json_fields(
+                {std::real(mode.eigenvalue), std::imag(mode.eigenvalue)}) +
             ",\"relative_residual\":" +
             format_double(mode.relative_residual) +
             ",\"discarded_negative_frequency_partner\":true,"
@@ -976,7 +982,7 @@ std::string production_contour_window_diagnostics_json(
         ",\"shift_frequency_hz\":" +
         format_double(shift_frequency_hz) +
         ",\"shift_omega_rad_s\":" +
-        format_double(kTwoPi * shift_frequency_hz) +
+        format_double(omega_rad_s_from_frequency_hz(shift_frequency_hz)) +
         ",\"outer_iterations\":" +
         std::to_string(std::max(1, contour_result.quadrature_refinements + 1)) +
         ",\"linear_iterations_total\":" +
@@ -1139,8 +1145,8 @@ FrequencyDomainContractResult solve_dense_production_modal_contour_payload(
         "\"solver_model\":\"contour_interval_production_cpu_dense\","
         "\"solver_family\":\"contour_interval_production_cpu_dense\","
         "\"spectral_transform\":\"contour_integral\","
-        "\"positive_frequency_filter\":\"imag(lambda) > 0\","
-        "\"eigenvalue_to_frequency\":\"frequency_hz = imag(lambda)/(2*pi)\","
+        "\"positive_frequency_filter\":\"map_eigenvalue(lambda, exp_i_omega_t).branch_sign == 1\","
+        "\"eigenvalue_to_frequency\":\"map_eigenvalue(lambda, phase)\","
         "\"conjugate_pair_policy\":\"keep_positive_frequency_partner\","
         "\"stop_reason\":\"" +
         std::string(window_stop_reason) +
@@ -1173,14 +1179,9 @@ FrequencyDomainContractResult solve_dense_production_modal_contour_payload(
         std::string(window_stop_reason) +
         "\",\"accepted_mode_count\":" +
         std::to_string(contour_result.accepted_mode_count) +
-        ",\"frequency_hz\":" +
-        format_double(first_mode.frequency_hz) +
-        ",\"omega_rad_s\":" +
-        format_double(first_mode.omega_rad_s) +
-        ",\"eigenvalue_real\":" +
-        format_double(std::real(first_mode.eigenvalue)) +
-        ",\"eigenvalue_imag\":" +
-        format_double(std::imag(first_mode.eigenvalue)) +
+        "," +
+        mode_kinematics_json_fields(
+            {std::real(first_mode.eigenvalue), std::imag(first_mode.eigenvalue)}) +
         ",\"relative_residual\":" +
         format_double(first_mode.relative_residual) +
         ",\"window_completeness\":\"" +
@@ -1444,8 +1445,8 @@ FrequencyDomainContractResult solve_dense_production_modal_window_payload(
         "\"stop_reason\":\"" +
         std::string(window_stop_reason) +
         "\","
-        "\"positive_frequency_filter\":\"imag(lambda) > 0\","
-        "\"eigenvalue_to_frequency\":\"frequency_hz = imag(lambda)/(2*pi)\","
+        "\"positive_frequency_filter\":\"map_eigenvalue(lambda, exp_i_omega_t).branch_sign == 1\","
+        "\"eigenvalue_to_frequency\":\"map_eigenvalue(lambda, phase)\","
         "\"conjugate_pair_policy\":\"keep_positive_frequency_partner\","
         "\"requested_mode_count\":" +
         std::to_string(request.requested_mode_count) +
@@ -1481,14 +1482,8 @@ FrequencyDomainContractResult solve_dense_production_modal_window_payload(
         std::string(window_stop_reason) +
         "\",\"accepted_mode_count\":" +
         std::to_string(accepted_modes.size()) +
-        ",\"frequency_hz\":" +
-        format_double(first_mode.frequency_hz) +
-        ",\"omega_rad_s\":" +
-        format_double(first_mode.lambda_imag) +
-        ",\"eigenvalue_real\":" +
-        format_double(first_mode.lambda_real) +
-        ",\"eigenvalue_imag\":" +
-        format_double(first_mode.lambda_imag) +
+        "," +
+        mode_kinematics_json_fields({first_mode.lambda_real, first_mode.lambda_imag}) +
         ",\"relative_residual\":" +
         format_double(first_mode.relative_residual) +
         ",\"window_completeness\":\"" +
@@ -1636,8 +1631,8 @@ FrequencyDomainContractResult solve_dense_production_modal_payload(
         std::string(slepc_result.factorization_package) +
         "\",\"nullspace_policy\":\"" +
         std::string(slepc_result.nullspace_policy) +
-        "\",\"positive_frequency_filter\":\"imag(lambda) > 0\","
-        "\"eigenvalue_to_frequency\":\"frequency_hz = imag(lambda)/(2*pi)\","
+        "\",\"positive_frequency_filter\":\"map_eigenvalue(lambda, exp_i_omega_t).branch_sign == 1\","
+        "\"eigenvalue_to_frequency\":\"map_eigenvalue(lambda, phase)\","
         "\"conjugate_pair_policy\":\"keep_positive_frequency_partner\","
         "\"requested_mode_count\":" +
         std::to_string(request.requested_mode_count) +
@@ -1670,14 +1665,8 @@ FrequencyDomainContractResult solve_dense_production_modal_payload(
         "\",\"accepted_mode_count\":" +
         std::to_string(slepc_result.accepted_mode_count) +
         ","
-        "\"frequency_hz\":" +
-        format_double(slepc_result.frequency_hz) +
-        ",\"omega_rad_s\":" +
-        format_double(slepc_result.lambda_imag) +
-        ",\"eigenvalue_real\":" +
-        format_double(slepc_result.lambda_real) +
-        ",\"eigenvalue_imag\":" +
-        format_double(slepc_result.lambda_imag) +
+        + mode_kinematics_json_fields(
+            {slepc_result.lambda_real, slepc_result.lambda_imag}) +
         ",\"relative_residual\":" +
         format_double(slepc_result.relative_residual) +
         ",\"shift_frequency_hz\":" +
@@ -1834,8 +1823,8 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
         std::string(slepc_result.factorization_package) +
         "\",\"nullspace_policy\":\"" +
         std::string(slepc_result.nullspace_policy) +
-        "\",\"positive_frequency_filter\":\"imag(lambda) > 0\","
-        "\"eigenvalue_to_frequency\":\"frequency_hz = imag(lambda)/(2*pi)\","
+        "\",\"positive_frequency_filter\":\"map_eigenvalue(lambda, exp_i_omega_t).branch_sign == 1\","
+        "\"eigenvalue_to_frequency\":\"map_eigenvalue(lambda, phase)\","
         "\"conjugate_pair_policy\":\"keep_positive_frequency_partner\","
         "\"requested_mode_count\":" +
         std::to_string(request.requested_mode_count) +
@@ -1866,14 +1855,9 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
         std::string(selection.family) +
         "\",\"accepted_mode_count\":" +
         std::to_string(slepc_result.accepted_mode_count) +
-        ",\"frequency_hz\":" +
-        format_double(slepc_result.frequency_hz) +
-        ",\"omega_rad_s\":" +
-        format_double(slepc_result.lambda_imag) +
-        ",\"eigenvalue_real\":" +
-        format_double(slepc_result.lambda_real) +
-        ",\"eigenvalue_imag\":" +
-        format_double(slepc_result.lambda_imag) +
+        "," +
+        mode_kinematics_json_fields(
+            {slepc_result.lambda_real, slepc_result.lambda_imag}) +
         ",\"relative_residual\":" +
         format_double(slepc_result.relative_residual) +
         ",\"shift_frequency_hz\":" +
@@ -2098,8 +2082,8 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
         "\"stop_reason\":\"" +
         std::string(window_stop_reason) +
         "\","
-        "\"positive_frequency_filter\":\"imag(lambda) > 0\","
-        "\"eigenvalue_to_frequency\":\"frequency_hz = imag(lambda)/(2*pi)\","
+        "\"positive_frequency_filter\":\"map_eigenvalue(lambda, exp_i_omega_t).branch_sign == 1\","
+        "\"eigenvalue_to_frequency\":\"map_eigenvalue(lambda, phase)\","
         "\"conjugate_pair_policy\":\"keep_positive_frequency_partner\","
         "\"requested_mode_count\":" +
         std::to_string(request.requested_mode_count) +
@@ -2135,14 +2119,8 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
         std::string(window_stop_reason) +
         "\",\"accepted_mode_count\":" +
         std::to_string(accepted_modes.size()) +
-        ",\"frequency_hz\":" +
-        format_double(first_mode.frequency_hz) +
-        ",\"omega_rad_s\":" +
-        format_double(first_mode.lambda_imag) +
-        ",\"eigenvalue_real\":" +
-        format_double(first_mode.lambda_real) +
-        ",\"eigenvalue_imag\":" +
-        format_double(first_mode.lambda_imag) +
+        "," +
+        mode_kinematics_json_fields({first_mode.lambda_real, first_mode.lambda_imag}) +
         ",\"relative_residual\":" +
         format_double(first_mode.relative_residual) +
         ",\"window_completeness\":\"" +

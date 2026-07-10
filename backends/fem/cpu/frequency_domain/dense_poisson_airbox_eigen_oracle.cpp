@@ -1,4 +1,5 @@
 #include "frequency_domain/dense_poisson_airbox_eigen_oracle.hpp"
+#include "frequency_domain/mode_kinematics.hpp"
 
 #include <algorithm>
 #include <array>
@@ -15,8 +16,6 @@ namespace {
 
 using Complex = std::complex<double>;
 
-constexpr double kPi = 3.141592653589793238462643383279502884;
-constexpr double kTwoPi = 2.0 * kPi;
 constexpr std::uint64_t kMaxDenseOracleDofCount = 64;
 
 struct ComplexDenseMatrix {
@@ -117,6 +116,9 @@ void write_diagnostics_json(
     if (out == nullptr) {
         return;
     }
+    const ModeKinematics kinematics = map_eigenvalue(
+        {result.eigenvalue_real, result.eigenvalue_imag},
+        FrequencyDomainPhaseConvention::exp_i_omega_t);
     std::snprintf(
         out->diagnostics_json,
         sizeof(out->diagnostics_json),
@@ -147,8 +149,13 @@ void write_diagnostics_json(
         "\"eigenpair\":{"
         "\"eigenvalue_real\":%.17g,"
         "\"eigenvalue_imag\":%.17g,"
+        "\"lambda_real_per_s\":%.17g,"
+        "\"lambda_imag_rad_per_s\":%.17g,"
         "\"omega_rad_s\":%.17g,"
         "\"frequency_hz\":%.17g,"
+        "\"decay_rate_per_s\":%.17g,"
+        "\"branch_sign\":%d,"
+        "\"stable\":%s,"
         "\"positive_frequency_branch_found\":%s"
         "},"
         "\"certification\":{"
@@ -175,8 +182,13 @@ void write_diagnostics_json(
         result.relative_frequency_error,
         result.eigenvalue_real,
         result.eigenvalue_imag,
-        result.omega_rad_s,
-        result.frequency_hz,
+        kinematics.lambda.real_per_s,
+        kinematics.lambda.imag_rad_per_s,
+        kinematics.omega_rad_s,
+        kinematics.frequency_hz,
+        kinematics.decay_rate_per_s,
+        kinematics.branch_sign,
+        result.positive_frequency_branch_found && kinematics.stable ? "true" : "false",
         result.positive_frequency_branch_found ? "true" : "false",
         result.schur_certified ? "true" : "false",
         result.full_residual_certified ? "true" : "false");
@@ -651,12 +663,16 @@ EigenPair2x2 solve_tiny_positive_frequency_eigen(
         return out;
     }
     int best = -1;
-    double best_imag = -std::numeric_limits<double>::infinity();
+    double best_omega_rad_s = -std::numeric_limits<double>::infinity();
     for (int index = 0; index < 2; ++index) {
-        const double imag = std::imag(lambda[index]);
-        if (imag > 0.0 && imag > best_imag) {
+        const ModeKinematics kinematics = map_eigenvalue(
+            {lambda[index].real(), lambda[index].imag()},
+            FrequencyDomainPhaseConvention::exp_i_omega_t);
+        if (kinematics.finite &&
+            kinematics.branch_sign == 1 &&
+            kinematics.omega_rad_s > best_omega_rad_s) {
             best = index;
-            best_imag = imag;
+            best_omega_rad_s = kinematics.omega_rad_s;
         }
     }
     if (best < 0) {
@@ -822,8 +838,11 @@ FrequencyDomainStatus solve_dense_poisson_airbox_eigen_oracle(
     out_result->positive_frequency_branch_found = true;
     out_result->eigenvalue_real = eigen.lambda.real();
     out_result->eigenvalue_imag = eigen.lambda.imag();
-    out_result->omega_rad_s = eigen.lambda.imag();
-    out_result->frequency_hz = eigen.lambda.imag() / kTwoPi;
+    const ModeKinematics selected_kinematics = map_eigenvalue(
+        {eigen.lambda.real(), eigen.lambda.imag()},
+        FrequencyDomainPhaseConvention::exp_i_omega_t);
+    out_result->omega_rad_s = selected_kinematics.omega_rad_s;
+    out_result->frequency_hz = selected_kinematics.frequency_hz;
     out_result->eigen_residual_relative =
         eigen_residual_relative(schur, b_qq, eigen.lambda, eigen.q);
 

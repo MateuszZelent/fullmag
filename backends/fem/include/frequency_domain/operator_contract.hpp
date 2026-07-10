@@ -1,6 +1,7 @@
 #pragma once
 
 #include "frequency_domain/frequency_domain_contract.hpp"
+#include "frequency_domain/mode_kinematics.hpp"
 
 #include <cstdint>
 
@@ -38,6 +39,13 @@ struct FrequencyDomainOperatorRequest {
     bool include_zeeman = false;
     bool strict_gpu = false;
 };
+
+inline DynamicPencilMetadata dynamic_pencil_metadata_from_legacy_operator_request(
+    const FrequencyDomainOperatorRequest &request,
+    FrequencyDomainPhaseConvention phase_convention) noexcept
+{
+    return dynamic_pencil_metadata_from_legacy_gamma0(request.gamma0, phase_convention);
+}
 
 struct FrequencyDomainOperatorValidationDiagnostics {
     std::uint64_t node_count = 0;

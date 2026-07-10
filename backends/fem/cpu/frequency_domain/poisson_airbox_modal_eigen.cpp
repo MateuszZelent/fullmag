@@ -1,4 +1,5 @@
 #include "cpu/frequency_domain/poisson_airbox_modal_eigen.hpp"
+#include "frequency_domain/mode_kinematics.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -24,7 +25,6 @@ namespace {
 
 using Complex = std::complex<double>;
 
-constexpr double kTwoPi = 6.283185307179586476925286766559;
 constexpr std::uint64_t kMaxPaE2DofCount = 128;
 
 bool string_equals(const char *actual, const char *expected) noexcept
@@ -144,6 +144,9 @@ void write_diagnostics_json(
     if (out == nullptr) {
         return;
     }
+    const ModeKinematics kinematics = map_eigenvalue(
+        {result.eigenvalue_real, result.eigenvalue_imag},
+        FrequencyDomainPhaseConvention::exp_i_omega_t);
     std::snprintf(
         out->diagnostics_json,
         sizeof(out->diagnostics_json),
@@ -203,8 +206,13 @@ void write_diagnostics_json(
         "\"eigenpair\":{"
         "\"eigenvalue_real\":%.17g,"
         "\"eigenvalue_imag\":%.17g,"
+        "\"lambda_real_per_s\":%.17g,"
+        "\"lambda_imag_rad_per_s\":%.17g,"
         "\"omega_rad_s\":%.17g,"
         "\"frequency_hz\":%.17g,"
+        "\"decay_rate_per_s\":%.17g,"
+        "\"branch_sign\":%d,"
+        "\"stable\":%s,"
         "\"positive_frequency_branch_found\":%s"
         "},"
         "\"certification\":{"
@@ -249,8 +257,13 @@ void write_diagnostics_json(
         result.relative_reference_frequency_error,
         result.eigenvalue_real,
         result.eigenvalue_imag,
-        result.omega_rad_s,
-        result.frequency_hz,
+        kinematics.lambda.real_per_s,
+        kinematics.lambda.imag_rad_per_s,
+        kinematics.omega_rad_s,
+        kinematics.frequency_hz,
+        kinematics.decay_rate_per_s,
+        kinematics.branch_sign,
+        result.positive_frequency_branch_found && kinematics.stable ? "true" : "false",
         result.positive_frequency_branch_found ? "true" : "false",
         result.full_residual_certified ? "true" : "false",
         result.reference_frequency_certified ? "true" : "false");
@@ -1256,7 +1269,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_slepc(
     const PetscInt max_linear = problem.max_linear_iterations > 0 ?
         static_cast<PetscInt>(problem.max_linear_iterations) :
         PETSC_DEFAULT;
-    const double target_omega = std::max(0.0, problem.target_frequency_hz) * kTwoPi;
+    const double target_omega =
+        omega_rad_s_from_frequency_hz(std::max(0.0, problem.target_frequency_hz));
     bool configured =
         EPSCreate(PETSC_COMM_SELF, &eps) == 0 &&
         EPSSetOperators(eps, A, B) == 0 &&
@@ -1325,7 +1339,10 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_slepc(
         }
         const double lambda_real = petsc_eigenvalue_real_part(kr);
         const double lambda_imag = petsc_eigenvalue_imaginary_part(kr, ki);
-        if (lambda_imag <= 0.0 || !std::isfinite(lambda_real) || !std::isfinite(lambda_imag)) {
+        const ModeKinematics kinematics = map_eigenvalue(
+            {lambda_real, lambda_imag},
+            FrequencyDomainPhaseConvention::exp_i_omega_t);
+        if (!kinematics.finite || kinematics.branch_sign != 1) {
             continue;
         }
         saw_positive = true;
@@ -1336,7 +1353,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_slepc(
         if (vector.size() != static_cast<std::size_t>(total)) {
             continue;
         }
-        const double target_distance = std::abs(lambda_imag - target_omega);
+        const double target_distance = std::abs(kinematics.omega_rad_s - target_omega);
         if (target_distance < best_target_distance) {
             best_target_distance = target_distance;
             best_vector = std::move(vector);
@@ -1363,8 +1380,11 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_slepc(
     out_result->positive_frequency_branch_found = true;
     out_result->eigenvalue_real = best_lambda_real;
     out_result->eigenvalue_imag = best_lambda_imag;
-    out_result->omega_rad_s = best_lambda_imag;
-    out_result->frequency_hz = best_lambda_imag / kTwoPi;
+    const ModeKinematics selected_kinematics = map_eigenvalue(
+        {best_lambda_real, best_lambda_imag},
+        FrequencyDomainPhaseConvention::exp_i_omega_t);
+    out_result->omega_rad_s = selected_kinematics.omega_rad_s;
+    out_result->frequency_hz = selected_kinematics.frequency_hz;
     out_result->gauge_augmented = true;
 
     std::vector<double> best_vector_real(best_vector.size(), 0.0);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "frequency_domain/frequency_domain_contract.hpp"
+#include "frequency_domain/mode_kinematics.hpp"
 
 #include <cstdint>
 
@@ -25,6 +26,16 @@ struct LinearizedOperatorRequest {
     int k_vector_len = 0;
     const char *operator_diagnostics_json = nullptr;
 };
+
+inline DynamicPencilMetadata dynamic_pencil_metadata_from_legacy_operator_request(
+    const LinearizedOperatorRequest &request,
+    FrequencyDomainPhaseConvention phase_convention) noexcept
+{
+    return dynamic_pencil_metadata_from_legacy_gamma_mu0(
+        request.gamma_rad_s_T,
+        request.mu0_T_m_A,
+        phase_convention);
+}
 
 struct CsrMatrixView {
     std::uint64_t row_count = 0;

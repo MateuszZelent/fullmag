@@ -1,4 +1,5 @@
 #include "cpu/frequency_domain/poisson_airbox_schur_matshell.hpp"
+#include "frequency_domain/mode_kinematics.hpp"
 
 #include <algorithm>
 #include <array>
@@ -25,7 +26,6 @@ namespace {
 
 using Complex = std::complex<double>;
 
-constexpr double kTwoPi = 6.283185307179586476925286766559;
 constexpr std::uint64_t kFnvOffset = 1469598103934665603ULL;
 constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
 
@@ -416,11 +416,16 @@ EigenPair2x2 solve_tiny_positive_frequency_eigen(
         return out;
     }
     int best = -1;
-    double best_imag = -std::numeric_limits<double>::infinity();
+    double best_omega_rad_s = -std::numeric_limits<double>::infinity();
     for (int index = 0; index < 2; ++index) {
-        if (std::imag(lambda[index]) > 0.0 && std::imag(lambda[index]) > best_imag) {
+        const ModeKinematics kinematics = map_eigenvalue(
+            {lambda[index].real(), lambda[index].imag()},
+            FrequencyDomainPhaseConvention::exp_i_omega_t);
+        if (kinematics.finite &&
+            kinematics.branch_sign == 1 &&
+            kinematics.omega_rad_s > best_omega_rad_s) {
             best = index;
-            best_imag = std::imag(lambda[index]);
+            best_omega_rad_s = kinematics.omega_rad_s;
         }
     }
     if (best < 0) {
@@ -596,11 +601,15 @@ void write_diagnostics_json(
     const PoissonAirboxSchurMatShellCertificationResult &result,
     const char *status,
     const char *reason,
-    PoissonAirboxSchurMatShellCertificationResult *out) noexcept
+    PoissonAirboxSchurMatShellCertificationResult *out,
+    ComplexEigenvalue lambda = {}) noexcept
 {
     if (out == nullptr) {
         return;
     }
+    const ModeKinematics kinematics = map_eigenvalue(
+        lambda,
+        FrequencyDomainPhaseConvention::exp_i_omega_t);
     std::snprintf(
         out->diagnostics_json,
         sizeof(out->diagnostics_json),
@@ -629,6 +638,13 @@ void write_diagnostics_json(
         "\"full_sparse_reference_relative_frequency_error\":%.17g"
         "},"
         "\"eigenpair\":{"
+        "\"lambda_real_per_s\":%.17g,"
+        "\"lambda_imag_rad_per_s\":%.17g,"
+        "\"omega_rad_s\":%.17g,"
+        "\"frequency_hz\":%.17g,"
+        "\"decay_rate_per_s\":%.17g,"
+        "\"branch_sign\":%d,"
+        "\"stable\":%s,"
         "\"schur_frequency_hz\":%.17g,"
         "\"full_sparse_reference_frequency_hz\":%.17g"
         "},"
@@ -654,6 +670,13 @@ void write_diagnostics_json(
         result.poisson_constraint_relative_residual,
         result.gauge_mean_abs,
         result.full_sparse_reference_relative_frequency_error,
+        kinematics.lambda.real_per_s,
+        kinematics.lambda.imag_rad_per_s,
+        kinematics.omega_rad_s,
+        kinematics.frequency_hz,
+        kinematics.decay_rate_per_s,
+        kinematics.branch_sign,
+        kinematics.finite && kinematics.branch_sign != 0 && kinematics.stable ? "true" : "false",
         result.schur_frequency_hz,
         result.full_sparse_reference_frequency_hz,
         result.schur_certified ? "true" : "false",
@@ -983,7 +1006,10 @@ bool solve_schur_matshell_slepc(
         EPSSetType(eps, EPSKRYLOVSCHUR) != 0 ||
         EPSSetDimensions(eps, requested, PETSC_DEFAULT, PETSC_DEFAULT) != 0 ||
         EPSSetWhichEigenpairs(eps, EPS_TARGET_MAGNITUDE) != 0 ||
-        EPSSetTarget(eps, static_cast<PetscScalar>(std::max(0.0, problem.target_frequency_hz) * kTwoPi)) != 0 ||
+        EPSSetTarget(
+            eps,
+            static_cast<PetscScalar>(omega_rad_s_from_frequency_hz(
+                std::max(0.0, problem.target_frequency_hz)))) != 0 ||
         EPSSetTolerances(
             eps,
             static_cast<PetscReal>(problem.residual_tolerance),
@@ -1004,7 +1030,8 @@ bool solve_schur_matshell_slepc(
     }
     bool found = false;
     double best_target_distance = std::numeric_limits<double>::infinity();
-    const double target_omega = std::max(0.0, problem.target_frequency_hz) * kTwoPi;
+    const double target_omega =
+        omega_rad_s_from_frequency_hz(std::max(0.0, problem.target_frequency_hz));
     for (PetscInt index = 0; index < converged; ++index) {
         PetscScalar kr = 0.0;
         PetscScalar ki = 0.0;
@@ -1015,13 +1042,15 @@ bool solve_schur_matshell_slepc(
         }
         const double lambda_real = petsc_eigenvalue_real_part(kr);
         const double lambda_imag = petsc_eigenvalue_imaginary_part(kr, ki);
-        if (lambda_imag <= 0.0 ||
-            !std::isfinite(lambda_real) ||
-            !std::isfinite(lambda_imag) ||
+        const ModeKinematics kinematics = map_eigenvalue(
+            {lambda_real, lambda_imag},
+            FrequencyDomainPhaseConvention::exp_i_omega_t);
+        if (!kinematics.finite ||
+            kinematics.branch_sign != 1 ||
             static_cast<double>(residual) > problem.residual_tolerance) {
             continue;
         }
-        const double target_distance = std::abs(lambda_imag - target_omega);
+        const double target_distance = std::abs(kinematics.omega_rad_s - target_omega);
         if (target_distance < best_target_distance) {
             std::vector<Complex> vector = copy_eigenvector(xr, xi, n);
             if (vector.size() != static_cast<std::size_t>(n)) {
@@ -1239,7 +1268,10 @@ FrequencyDomainStatus certify_poisson_airbox_schur_matshell_cpu(
             "schur_matshell_slepc_explicit_mismatch");
     }
 
-    out_result->schur_frequency_hz = lambda.imag() / kTwoPi;
+    const ModeKinematics selected_kinematics = map_eigenvalue(
+        {lambda.real(), lambda.imag()},
+        FrequencyDomainPhaseConvention::exp_i_omega_t);
+    out_result->schur_frequency_hz = selected_kinematics.frequency_hz;
     out_result->schur_eigen_residual_relative =
         eigen_residual_relative(direct_schur, b_qq, lambda, q);
     if (eps_residual > out_result->schur_eigen_residual_relative) {
@@ -1300,7 +1332,8 @@ FrequencyDomainStatus certify_poisson_airbox_schur_matshell_cpu(
         *out_result,
         all_ok ? "ok" : "failed",
         all_ok ? "" : "pa_e3_schur_matshell_certification_failed",
-        out_result);
+        out_result,
+        {lambda.real(), lambda.imag()});
     return out_result->status;
 #endif
 }

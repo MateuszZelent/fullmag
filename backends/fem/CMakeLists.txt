@@ -169,6 +169,7 @@ set(FEM_SOURCES
     src/frequency_domain/frequency_domain_contract.cpp
     src/frequency_domain/linearization_state.cpp
     src/frequency_domain/mesh_symmetry_certificate.cpp
+    src/frequency_domain/mode_kinematics.cpp
     src/frequency_domain/modal_eigen_solver.cpp
     src/frequency_domain/operator_contract.cpp
     src/frequency_domain/operator_terms.cpp
@@ -419,6 +420,10 @@ add_fem_source_facade_contract(
 add_fem_source_facade_contract(
     fem_frequency_domain_checked_extent_contract
     tests/frequency_domain/checked_extent_test.cpp
+)
+add_fem_source_facade_contract(
+    fem_mode_kinematics_contract
+    tests/frequency_domain/mode_kinematics_test.cpp
 )
 add_fem_source_facade_contract(
     fem_operator_contract

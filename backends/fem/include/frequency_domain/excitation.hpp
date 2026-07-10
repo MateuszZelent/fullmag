@@ -1,6 +1,7 @@
 #pragma once
 
 #include "frequency_domain/frequency_domain_contract.hpp"
+#include "frequency_domain/mode_kinematics.hpp"
 #include "frequency_domain/tangent_frame.hpp"
 
 #include <cstdint>
@@ -32,6 +33,15 @@ struct TangentComplexVectorView {
     std::uint64_t tangent_dof_count = 0;
 };
 
+inline DynamicPencilMetadata dynamic_pencil_metadata_from_legacy_excitation_gamma0(
+    double gamma0_m_per_a_s,
+    FrequencyDomainPhaseConvention phase_convention) noexcept
+{
+    return dynamic_pencil_metadata_from_legacy_gamma0(
+        gamma0_m_per_a_s,
+        phase_convention);
+}
+
 FrequencyDomainStatus build_uniform_field_tangent_excitation(
     const TangentFrameNode *nodes,
     std::uint64_t node_count,
@@ -42,7 +52,7 @@ FrequencyDomainStatus build_uniform_field_tangent_excitation(
 FrequencyDomainStatus project_dynamic_field_drive_to_tangent_rhs(
     const TangentFrameNode *nodes,
     std::uint64_t node_count,
-    double gamma0,
+    double gamma0_m_per_a_s,
     FrequencyDomainPhaseConvention convention,
     const DynamicFieldPhasorView &drive,
     TangentComplexVectorView out_rhs,
