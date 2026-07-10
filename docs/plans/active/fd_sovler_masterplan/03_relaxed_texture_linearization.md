@@ -1,130 +1,201 @@
 ---
 title: Frequency-driven solver - relaxed texture linearization
-version: COMSOL-aligned v5.0 full-read canonical
-date: 2026-07-07
-status: canonical
-source_policy: derived only after full read of all uploaded planning documents and the Micromagnetics Module User's Guide V2.13 PDF
-supersedes:
-  - fd_solver_plan_FULL_PACK_COMSOL_ALIGNED.md
-  - fd_solver_plan_FULL_PACK_COMSOL_ALIGNED_V3.md
-  - fd_solver_plan_00_index.md through fd_solver_plan_11_decision_closures_adr.md old copies
+version: target v6 contract over current v5 runtime
+date: 2026-07-10
+status: normative target; v6 runtime schema and consumers not yet implemented
 ---
 
 # Relaxed texture handoff and LinearizationState
 
-## 1. Decision
+## 1. Authority and target status
 
-Frequency-domain analysis around a nonlinear magnetic state must consume an accepted equilibrium artifact. It must not build hidden equilibrium state inside the driven or modal solver.
+This chapter consumes `FrequencyOperatorDictionary.v1` from
+[physics note 0831](../../../physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md).
+It defines the target `EquilibriumArtifact.v6` and `LinearizationState.v6`
+documentation contracts. It does not claim that the target-v6 schemas,
+materializers, builder, planner consumers, or runtime consumers exist.
+
+The current executable contract remains v5 until every producer and consumer
+has migrated and the corresponding runtime evidence has been accepted. A v5
+artifact must not be relabelled as v6 without explicit migration and validation.
+
+## 2. Accepted equilibrium is a hard input
+
+Frequency-domain analysis around a nonlinear magnetic state consumes an
+accepted equilibrium artifact. Driven and modal solvers must not relax,
+reconstruct, or silently substitute equilibrium state.
 
 ```text
-relaxation/static demag
-  -> accepted EquilibriumArtifact
-  -> LinearizationState builder
-  -> tangent frames and mesh certificates
-  -> planner
-  -> backend
+relaxation or certified static solve
+  -> accepted EquilibriumArtifact.v6
+  -> LinearizationState.v6 builder
+  -> tangent frames and periodic mesh certificate
+  -> FrequencySolvePlanner
+  -> selected backend
 ```
 
-## 2. Required EquilibriumArtifact
+The target artifact has these required fields:
 
 ```json
 {
-  "schema_version": "frequency_domain_equilibrium.v5",
+  "schema_version": "EquilibriumArtifact.v6",
   "accepted_for_linearization": true,
-  "equilibrium_id": "sha256:...",
-  "mesh_snapshot_id": "sha256:...",
-  "magnetic_mesh_id": "sha256:...",
-  "airbox_mesh_id": "sha256:...",
-  "material_snapshot_id": "sha256:...",
-  "physics_snapshot_id": "sha256:...",
-  "boundary_snapshot_id": "sha256:...",
-  "demag_model": "periodic_airbox_k0",
-  "fields": {
-    "m0_unit": "fields/m0_unit.zarr",
-    "h_eff0_a_per_m": "fields/h_eff0.zarr",
-    "h_demag0_a_per_m": "fields/h_demag0.zarr",
-    "phi_demag0": "fields/phi_demag0.zarr"
-  },
-  "diagnostics": {
-    "max_m0_norm_error": 0.0,
-    "max_relative_torque_residual": 0.0,
-    "max_magnetic_seam_mismatch": 0.0,
-    "max_static_demag_seam_mismatch": 0.0
-  }
+  "stop_reason": "torque_tolerance",
+  "m0": "fields/m0_unit.zarr",
+  "h_eff0_a_per_m": "fields/h_eff0_a_per_m.zarr",
+  "h_demag0_a_per_m": "fields/h_demag0_a_per_m.zarr",
+  "phi0_a": "fields/phi_demag0_a.zarr",
+  "mesh_signature": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "material_signature": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "physics_signature": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "boundary_signature": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "static_demag_signature": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "max_m0_norm_error": 0.0,
+  "max_m0_cross_h_eff0_relative": 0.0
 }
 ```
 
-## 3. Required builder checks
+`accepted_for_linearization=true` is valid only when `stop_reason` is an
+accepted convergence or independently certified equilibrium reason under the
+producer schema. Reaching a step, iteration, or wall-time limit is not implicit
+acceptance. The artifact records the acceptance tolerances and producer run ID
+in its provenance envelope.
+
+`m0`, `h_eff0_a_per_m`, and `h_demag0_a_per_m` are required. `phi0_a` is
+optional only when the selected static-demag realization does not require the
+potential for restart or provenance. Absence is represented by an explicit
+`not_required_by_resolved_demag_realization` reason, not by an omitted check.
+
+## 3. Static-field provenance and comparison
+
+Every stored static field carries:
 
 ```text
-artifact.accepted_for_linearization == true
-mesh/material/physics/boundary signatures match requested frequency problem
-m0 exists and has the same node ordering as the magnetic mesh
-h_eff0 exists or is recomputed and compared
-h_demag0 exists if demag/airbox is enabled
-phi0 exists if the airbox scalar-potential path requires it
-periodic pair maps exist when periodic/Floquet is requested
+field role and SI unit
+content sha256
+producer run and implementation identity
+mesh/material/physics/boundary/static-demag signatures
+resolved demag realization and BC/gauge tuple where applicable
 ```
 
-Reject reasons must be exact:
+If the builder recomputes `h_eff0`, `h_demag0`, or `phi0`, the recomputation
+must use the same five signatures as the accepted artifact. It records the
+recomputed content hash, implementation identity, comparison norm, comparison
+tolerance, and pass/fail result against the stored field. A passing recomputed
+field may be selected only with explicit `field_source=recomputed_verified`
+provenance. It cannot silently replace the stored field. A signature mismatch,
+missing comparison, or failed comparison invalidates the handoff.
+
+Static and dynamic demag remain separate:
+
+```text
+static:  m0 -> h_demag0, phi0 -> component of h_eff0
+dynamic: delta_m -> delta_h_demag[delta_m], delta_phi -> operator block
+```
+
+The static term enters the dictionary contribution
+`-gamma0 * (delta_m x h_eff0)`. Dynamic demag is assembled or applied by the
+linearized operator and is never recovered from static-field provenance.
+
+## 4. LinearizationState.v6
+
+The builder emits an immutable state only after all acceptance and identity
+checks pass:
+
+```json
+{
+  "schema_version": "LinearizationState.v6",
+  "source_equilibrium_artifact": "sha256:...",
+  "operator_dictionary": "FrequencyOperatorDictionary.v1",
+  "accepted_for_frequency_operator": true,
+  "m0": "fields/m0_unit.zarr",
+  "h_eff0_a_per_m": "fields/h_eff0_a_per_m.zarr",
+  "h_demag0_a_per_m": "fields/h_demag0_a_per_m.zarr",
+  "phi0_a": "fields/phi_demag0_a.zarr",
+  "mesh_signature": "sha256:...",
+  "material_signature": "sha256:...",
+  "physics_signature": "sha256:...",
+  "boundary_signature": "sha256:...",
+  "static_demag_signature": "sha256:...",
+  "static_field_provenance": "sha256:...",
+  "tangent_frame_policy": "sha256:...",
+  "periodic_mesh_certificate": "sha256:..."
+}
+```
+
+The `phi0_a` conditional rule is identical to the artifact rule. The periodic
+certificate is required only for a periodic/Floquet request; otherwise its
+explicit value is `not_applicable`. The builder records frame orthogonality,
+handedness, and equilibrium residual diagnostics in the state provenance.
+
+Required checks are:
+
+```text
+accepted_for_linearization is true and stop_reason is acceptable
+all required field payloads exist and their content hashes verify
+mesh/material/physics/boundary/static-demag signatures match the request
+m0 ordering matches the magnetic FE space and max_m0_norm_error passes
+max_m0_cross_h_eff0_relative passes the declared acceptance tolerance
+stored or recomputed static fields satisfy the provenance comparison policy
+periodic_mesh_certificate.v6 is accepted when periodic/Floquet is requested
+```
+
+## 5. Invalidation and reject reasons
+
+The state key covers the source artifact digest, all five signatures, required
+field content hashes, static-field provenance, tangent-frame policy, and the
+periodic certificate identity. Any covered input change creates a new state;
+cache reuse under an old state ID is forbidden.
+
+| Change | Required result |
+|---|---|
+| magnetic or airbox mesh/topology/FE ordering | invalidate fields, frames, periodic certificate, and state |
+| material coefficients or region assignment | invalidate static fields and state |
+| enabled physics, parameters, or static external field | invalidate static fields and state |
+| static boundary or periodic policy | invalidate static fields, certificate, and state |
+| static demag realization, assembly, BC/gauge, or solver-defining policy | invalidate static-demag fields and state |
+| `m0` or required static-field content | invalidate state and rebuild from a newly accepted artifact |
+| drive, output selection, or frequency window only | retain state if no covered signature changes |
+
+Machine-readable rejection uses exact reasons:
 
 ```text
 equilibrium_artifact_missing
 equilibrium_artifact_not_accepted_for_linearization
+equilibrium_stop_reason_not_accepted
 equilibrium_mesh_hash_mismatch
 equilibrium_material_hash_mismatch
 equilibrium_physics_hash_mismatch
-equilibrium_static_demag_required_but_missing
+equilibrium_boundary_hash_mismatch
+equilibrium_static_demag_hash_mismatch
+equilibrium_required_field_missing
+equilibrium_field_content_hash_mismatch
+equilibrium_static_field_comparison_missing
+equilibrium_static_field_comparison_failed
+equilibrium_m0_norm_error_too_large
 equilibrium_torque_residual_too_large
+equilibrium_periodic_certificate_missing_or_stale
 ```
 
-## 4. Tangent frames for skyrmions and other textures
+## 6. Current-v5 to target-v6 migration
 
-For every node:
+| Current v5 | Target v6 | Migration rule |
+|---|---|---|
+| `frequency_domain_equilibrium.v5` | `EquilibriumArtifact.v6` | create a new artifact; do not change the version token in place |
+| `accepted_for_linearization` | same field plus `stop_reason` | recover an accepted producer reason or reject migration |
+| nested `fields.m0_unit` | top-level `m0` | copy path and verify content hash |
+| nested `fields.h_eff0_a_per_m` | top-level `h_eff0_a_per_m` | copy path, unit, signatures, and field provenance |
+| nested `fields.h_demag0_a_per_m` | top-level `h_demag0_a_per_m` | copy path and bind `static_demag_signature` |
+| nested `fields.phi_demag0` | top-level `phi0_a` | copy with unit `A`, or record the allowed not-required reason |
+| snapshot and mesh IDs | five canonical signatures | recompute canonical sha256 signatures; IDs alone are insufficient |
+| `max_relative_torque_residual` | `max_m0_cross_h_eff0_relative` | recompute under the v6 normalization; do not rename blindly |
+| implicit static-field reuse | explicit stored/recomputed comparison provenance | compare or reject migration |
+| v5 builder output | `LinearizationState.v6` | rebuild after all v6 checks; no wrapper-only conversion |
 
-```text
-m0_i normalized
-T_i = [e1_i, e2_i]
-e1_i · m0_i = 0
-e2_i = m0_i x e1_i
-delta_m_i = T_i q_i
-```
+## 7. Production boundary
 
-The builder records:
-
-```text
-tangent_frame_gauge_policy
-tangent_frame_smoothing_policy
-max_frame_orthogonality_error
-max_frame_handedness_error
-tangent_frame_policy_hash
-```
-
-## 5. Static vs dynamic demag
-
-Static demag:
-
-```text
-source: m0
-output: h_demag0, phi0
-role: component of h_eff0
-appears in -gamma delta_m x h_eff0
-```
-
-Dynamic demag:
-
-```text
-source: delta_m
-output: delta_h_demag[delta_m], delta_phi
-role: linear operator or coupled block
-```
-
-These two must never be conflated.
-
-## 6. Current status after full read
-
-The old docs clearly define this as P0. Native contracts now include a planner-level gate: when relaxed texture linearization is required and no accepted `LinearizationState` is available, the planner rejects fast/backend lane selection with `equilibrium_artifact_missing`. This is verified by `just verify-fem-frequency-domain-native-contract` on 2026-07-07.
-
-The `LinearizationState` builder now also reports v5 machine-readable reject reasons for unaccepted equilibrium artifacts, missing required static demag, excessive static torque residual, and mesh/material/physics signature mismatches against the requested frequency-domain problem. This builder-level contract is verified by the same native gate on 2026-07-07.
-
-This does not yet prove complete accepted equilibrium artifact ingestion or end-to-end runtime handoff. Treat artifact materialization from relaxation outputs and frequency-domain runtime consumption as the remaining P0 implementation gap.
+This file closes the target documentation contract only. Current v5 planner and
+builder checks are not evidence of target-v6 artifact materialization,
+migration, ingestion, or runtime consumption. Production status may advance
+only after the v6 schemas, all producers and consumers, rejection paths, and
+managed validation evidence exist.
