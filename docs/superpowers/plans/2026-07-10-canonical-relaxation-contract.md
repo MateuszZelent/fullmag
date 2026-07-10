@@ -732,11 +732,11 @@ git commit -m "fix(fem): correct minimizer operator units"
 - Consumes: typed IR algorithm, capability, completion, and metric.
 - Produces: typed relax command/resource schema and generated TypeScript.
 
-- [ ] **Step 1: Add failing API schema tests**
+- [x] **Step 1: Add failing API schema tests**
 
 Assert OpenAPI contains enums for relaxation algorithm, stage stop reason, and stage metric kind; Relax command contains max_relaxation_time_s and algorithm-appropriate controls; stage metric contains unit and converged.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ~~~bash
 CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-api openapi_relaxation_contract_is_typed
@@ -745,15 +745,15 @@ CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-api openapi_relaxat
 Expected: output says running 1 test and the missing typed schema fails the
 assertion. Zero executed tests is not RED evidence.
 
-- [ ] **Step 3: Replace ambiguous strings and max_torque**
+- [x] **Step 3: Replace ambiguous strings and max_torque**
 
 Use typed schema wrappers. Keep max_torque_Apm and max_torque_T explicit. Deprecate ambiguous max_torque and ensure tables/status never assign it conflicting units.
 
-- [ ] **Step 4: Align converged semantics**
+- [x] **Step 4: Align converged semantics**
 
 Set converged from completion.converged, not latest.finished. Preserve terminal status independently.
 
-- [ ] **Step 5: Regenerate frontend API**
+- [x] **Step 5: Regenerate frontend API**
 
 ~~~bash
 pnpm --dir apps/control-room generate:api
@@ -762,14 +762,14 @@ git diff --check
 
 Expected: generated TS includes typed relaxation and metric contracts.
 
-- [ ] **Step 6: Verify GREEN**
+- [x] **Step 6: Verify GREEN**
 
 ~~~bash
 CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-api
 pnpm --dir apps/control-room check:api-hygiene
 ~~~
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ~~~bash
 git add crates/fullmag-api apps/control-room/src/kernel/api/generated
