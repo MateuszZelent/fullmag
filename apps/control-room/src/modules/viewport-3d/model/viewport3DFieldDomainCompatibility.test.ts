@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveViewport3DFieldDomainCompatibility } from "./viewport3DFieldDomainCompatibility";
+import {
+  resolveViewport3DFieldDomainCompatibility,
+  resolveViewport3DFieldVectorForDomain,
+  safeViewport3DDomainGenerationId,
+} from "./viewport3DFieldDomainCompatibility";
 
 describe("resolveViewport3DFieldDomainCompatibility", () => {
   const domain = {
@@ -80,5 +84,28 @@ describe("resolveViewport3DFieldDomainCompatibility", () => {
         },
       }),
     ).toMatchObject({ status: "degraded", reason: "fmvp-v2-legacy" });
+  });
+
+  it("does not pass an FMVP v3 field into a different FDM generation", () => {
+    const field = {
+      domainGenerationId: "generation-a",
+      formatVersion: 3,
+      indexing: "full_domain",
+      meshTopologyHash: null,
+      meshTopologyRevision: null,
+      pointCount: 4,
+    } as never;
+
+    expect(
+      resolveViewport3DFieldVectorForDomain({
+        domain: { ...domain, domainGenerationId: "generation-b" },
+        fieldVector: field,
+      }),
+    ).toBeNull();
+  });
+
+  it("treats unsafe numeric domain generations as unknown", () => {
+    expect(safeViewport3DDomainGenerationId(43)).toBe("43");
+    expect(safeViewport3DDomainGenerationId(9007199254741001)).toBeNull();
   });
 });

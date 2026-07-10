@@ -20,6 +20,27 @@ export type Viewport3DFieldDomainCompatibility =
       status: "mismatch";
     };
 
+export function safeViewport3DDomainGenerationId(value: unknown): string | null {
+  if (typeof value === "string") return value;
+  return typeof value === "number" && Number.isSafeInteger(value)
+    ? String(value)
+    : null;
+}
+
+export function resolveViewport3DFieldVectorForDomain({
+  domain,
+  fieldVector,
+}: {
+  domain: Viewport3DFieldDomainIdentity;
+  fieldVector: DecodedFieldVector | null;
+}): DecodedFieldVector | null {
+  if (!fieldVector) return null;
+  return resolveViewport3DFieldDomainCompatibility({ domain, field: fieldVector })
+    .status === "mismatch"
+    ? null
+    : fieldVector;
+}
+
 export function resolveViewport3DFieldDomainCompatibility({
   domain,
   field,

@@ -146,6 +146,10 @@ import {
   type Viewport3DTargetFieldBuffer,
 } from "../model/viewport3DTargetFieldBuffer";
 import {
+  resolveViewport3DFieldVectorForDomain,
+  safeViewport3DDomainGenerationId,
+} from "../model/viewport3DFieldDomainCompatibility";
+import {
   useFdmCuboidBuildResult,
   type FdmCuboidInstanceModel,
 } from "../layers/FdmCuboidLayer";
@@ -3315,7 +3319,7 @@ export function useViewport3DSceneModel({
         : null,
     [analysisComplexFieldVector.data, analysisComplexProjectionEnabled],
   );
-  const fdmFieldVector =
+  const fdmCandidateFieldVector =
     sameViewport3DQuantityId(fdmSettings.activeQuantityId, primaryFieldQuantityId)
       ? committedFieldVector
       : targetQuantityFieldVectors.data
@@ -3326,6 +3330,18 @@ export function useViewport3DSceneModel({
             targetId: "fdm-domain",
           })?.fieldVector ?? null
         : null;
+  const fdmDomainGenerationId = safeViewport3DDomainGenerationId(
+    domainMeta.data?.generation_id,
+  );
+  const fdmFieldVector = resolveViewport3DFieldVectorForDomain({
+    domain: {
+      domainGenerationId: fdmDomainGenerationId,
+      meshTopologyHash: null,
+      meshTopologyRevision: null,
+      pointCount: fdmDomain?.totalCells ?? 0,
+    },
+    fieldVector: fdmCandidateFieldVector,
+  });
   const fdmFieldRevision =
     sameViewport3DQuantityId(fdmSettings.activeQuantityId, primaryFieldQuantityId)
       ? fieldVector.payloadRevision ?? fieldVector.revision
@@ -3365,10 +3381,7 @@ export function useViewport3DSceneModel({
         algorithmVersion: 1,
         component: fdmVectorsVisible ? "full" : null,
         domainId: domainMeta.data?.domain_id ?? "shared-domain",
-        domainGenerationId:
-          domainMeta.data?.generation_id == null
-            ? null
-            : String(domainMeta.data.generation_id),
+        domainGenerationId: fdmDomainGenerationId,
         fieldRevision: fdmBuildFieldRevision,
         quantityId: resolveCanonicalQuantityId(fdmSettings.activeQuantityId),
         samplingRevision: fdmBuildSamplingRevision,

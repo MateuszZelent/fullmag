@@ -575,6 +575,8 @@ describe("useViewport3DSceneModel", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
 
     expect(source).toContain("const fdmFieldVector =");
+    expect(source).toContain("resolveViewport3DFieldVectorForDomain({");
+    expect(source).toContain("safeViewport3DDomainGenerationId(");
     expect(source).toContain(
       "resolveViewport3DTargetQuantityFieldVectorForTarget({",
     );
