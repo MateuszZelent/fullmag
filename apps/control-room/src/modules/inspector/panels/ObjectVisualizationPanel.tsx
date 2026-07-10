@@ -1211,7 +1211,7 @@ function VisualizationOverridesSection({
 function useObjectVisualizationPanelState(
   selection: InspectorPanelProps["selection"],
 ) {
-  const selectionTarget = resolveVisualizationTargetFromSelection(selection);
+  const target = resolveVisualizationTargetFromSelection(selection);
   const { visualizationSync } = useKernel();
   const visualization = useObjectVisualizationController();
   const activeModuleTab = useLayoutSelector((layout) => layout.activeModuleTab);
@@ -1219,7 +1219,7 @@ function useObjectVisualizationPanelState(
   const manifestStatus = useSessionStatusSelector(
     selectObjectVisualizationManifestStatus,
     {
-      enabled: Boolean(selectionTarget),
+      enabled: Boolean(target),
       isEqual: objectVisualizationManifestStatusEquals,
     },
   );
@@ -1228,9 +1228,9 @@ function useObjectVisualizationPanelState(
   const [fieldCatalogRequestedTargetKey, setFieldCatalogRequestedTargetKey] =
     useState<string | null>(null);
   const pending = false;
-  const scene = useSceneResource({ enabled: Boolean(selectionTarget) });
+  const scene = useSceneResource({ enabled: Boolean(target) });
   const manifest = useMeshSharedDomainManifestResource({
-    enabled: shouldLoadRuntimeMeshManifest(Boolean(selectionTarget), manifestStatus),
+    enabled: shouldLoadRuntimeMeshManifest(Boolean(target), manifestStatus),
   });
   const sceneObjectIds = useMemo(
     () => visualizationSceneObjectIds(scene.data),
@@ -1244,48 +1244,48 @@ function useObjectVisualizationPanelState(
         : null,
     [manifest.data?.mesh_parts, selection.ref],
   );
-  const target = useMemo(
+  const resolvedTarget = useMemo(
     () =>
       resolveObjectVisualizationPanelSelectionTarget({
         sceneObjectIds,
         selectedMeshPart,
         selection,
-        selectionTarget,
+        selectionTarget: target,
         visualizationState: visualizationState.data,
       }),
     [
       sceneObjectIds,
       selectedMeshPart,
       selection,
-      selectionTarget,
+      target,
       visualizationState.data,
     ],
   );
   const regionId = useMemo(() => {
-    if (target?.kind !== "region") return null;
-    const parsed = parseRegionVisualizationTargetId(target.id);
+    if (resolvedTarget?.kind !== "region") return null;
+    const parsed = parseRegionVisualizationTargetId(resolvedTarget.id);
     return parsed?.regionId ?? null;
-  }, [target]);
+  }, [resolvedTarget]);
   const regionMemberships = useMeshRegionMembershipsResource(
     regionId ? [regionId] : [],
     { enabled: Boolean(regionId) }
   );
   const childRegionTargets = useMemo(
     () =>
-      target?.kind === "object"
+      resolvedTarget?.kind === "object"
         ? resolveObjectChildRegionVisualizationTargets({
             manifestRegions: manifest.data?.regions,
             objectId: selection.objectId,
             scene: scene.data,
           })
         : [],
-    [manifest.data?.regions, scene.data, selection.objectId, target?.kind],
+    [manifest.data?.regions, resolvedTarget?.kind, scene.data, selection.objectId],
   );
   const visualizationTargets = useMemo(() => {
     const targets: VisualizationTargetRef[] = [];
-    if (target) {
-      targets.push(target);
-      if (target.kind === "region" && selection.objectId) {
+    if (resolvedTarget) {
+      targets.push(resolvedTarget);
+      if (resolvedTarget.kind === "region" && selection.objectId) {
         targets.push({
           id: visualizationTargetIdForSceneObject(selection.objectId),
           kind: "object",
@@ -1305,7 +1305,7 @@ function useObjectVisualizationPanelState(
       );
     }
 
-    if (target?.kind === "object") {
+    if (resolvedTarget?.kind === "object") {
       targets.push(...childRegionTargets);
     }
 
@@ -1316,7 +1316,7 @@ function useObjectVisualizationPanelState(
     sceneObjectIds,
     selection.label,
     selection.objectId,
-    target,
+    resolvedTarget,
     visualizationState.data,
   ]);
   const selectPanelSnapshot = useCallback(
@@ -1328,7 +1328,7 @@ function useObjectVisualizationPanelState(
     isEqual: objectVisualizationPanelSnapshotEquals,
   });
   const inheritedSettings =
-    target?.kind === "region" && selection.objectId
+    resolvedTarget?.kind === "region" && selection.objectId
       ? resolveTargetVisualization({
           snapshot,
           target: {
@@ -1339,11 +1339,11 @@ function useObjectVisualizationPanelState(
           visualizationState: visualizationState.data,
         }).settings
       : undefined;
-  const targetVisualization = target
+  const targetVisualization = resolvedTarget
     ? resolveTargetVisualization({
         inheritedSettings,
         snapshot,
-        target,
+        target: resolvedTarget,
         visualizationState: visualizationState.data,
       })
     : null;
@@ -1354,14 +1354,16 @@ function useObjectVisualizationPanelState(
     (childTarget) => snapshot.overrides[visualizationTargetKey(childTarget)],
   ).length;
   const panelSettings = settings;
-  const targetKey = target ? visualizationTargetKey(target) : null;
+  const targetKey = resolvedTarget
+    ? visualizationTargetKey(resolvedTarget)
+    : null;
   const fieldCatalogRequested =
     targetKey !== null && fieldCatalogRequestedTargetKey === targetKey;
   const fieldCatalog = useFieldCatalogResource({
     enabled: shouldLoadObjectVisualizationFieldCatalog({
       requested: fieldCatalogRequested,
       surfaceColorSource: settings?.surfaceColorSource,
-      targetActive: Boolean(target),
+      targetActive: Boolean(resolvedTarget),
       vectorsVisible: Boolean(settings?.vectorsVisible),
     }),
   });
@@ -1370,11 +1372,11 @@ function useObjectVisualizationPanelState(
       part.role === "air" || part.role === "airbox" ? [part.id] : [],
     ) ?? [];
   const vectorDomain = visualizationState.data?.layers?.vectors?.domain ?? "auto";
-  const topologyFreshness = target
+  const topologyFreshness = resolvedTarget
     ? resolveObjectVisualizationPanelTopologyFreshness({
         manifest: manifest.data,
         scene: scene.data,
-        targetKind: target.kind,
+        targetKind: resolvedTarget.kind,
       })
     : null;
   const renderResolution = settings && effectiveSettings
@@ -1391,18 +1393,22 @@ function useObjectVisualizationPanelState(
       })
     : [];
   const passControlsDisabled = pending;
-  const primitiveDisplayToggleVisible = target
-    ? shouldShowPrimitiveDisplayToggle(activeModuleTab, target.kind, topologyFreshness)
+  const primitiveDisplayToggleVisible = resolvedTarget
+    ? shouldShowPrimitiveDisplayToggle(
+        activeModuleTab,
+        resolvedTarget.kind,
+        topologyFreshness,
+      )
     : false;
   const revision = targetVisualization?.revision ?? snapshot.version;
 
   async function patch(patchValue: VisualizationTargetPatch): Promise<void> {
-    if (!target) return;
+    if (!resolvedTarget) return;
     const patchTargets =
-      target.kind === "object" && patchChildRegions && childRegionTargets.length > 0
-        ? [target, ...childRegionTargets]
-        : [target];
-    if (target.kind === "airbox") {
+      resolvedTarget.kind === "object" && patchChildRegions && childRegionTargets.length > 0
+        ? [resolvedTarget, ...childRegionTargets]
+        : [resolvedTarget];
+    if (resolvedTarget.kind === "airbox") {
       const localPatch =
         airboxLocalVisualizationPatchFromTargetPatch(patchValue);
       const statePatch = airboxVisualizationStatePatchFromTargetPatch(
@@ -1410,7 +1416,7 @@ function useObjectVisualizationPanelState(
         visualizationState.data?.overrides,
       );
       if (Object.keys(localPatch).length > 0) {
-        visualization.patchTarget(target, localPatch);
+        visualization.patchTarget(resolvedTarget, localPatch);
       }
       if (!hasVisualizationStatePatch(statePatch)) {
         setFeedback(null);
@@ -1462,29 +1468,29 @@ function useObjectVisualizationPanelState(
   }
 
   async function resetTarget(): Promise<void> {
-    if (!target) return;
-    if (target.kind === "airbox") {
+    if (!resolvedTarget) return;
+    if (resolvedTarget.kind === "airbox") {
       visualizationSync.queuePatch(
         airboxVisualizationStatePatchFromTargetPatch(
           DEFAULT_AIRBOX_VISUALIZATION,
         ),
       );
-      visualization.clearTarget(target);
+      visualization.clearTarget(resolvedTarget);
       setFeedback(null);
       return;
     }
 
     if (!visualizationState.data) {
-      visualization.clearTarget(target);
+      visualization.clearTarget(resolvedTarget);
       return;
     }
 
     visualizationSync.queuePatch({
       overrides: (visualizationState.data.overrides ?? []).filter(
-        (entry) => !visualizationStateOverrideMatchesTarget(entry, target),
+        (entry) => !visualizationStateOverrideMatchesTarget(entry, resolvedTarget),
       ),
     });
-    visualization.clearTarget(target);
+    visualization.clearTarget(resolvedTarget);
     setFeedback(null);
   }
 
@@ -1604,7 +1610,7 @@ function useObjectVisualizationPanelState(
   const regionCarrier = resolveRegionVisualizationCarrier({
     manifestRegions: manifest.data?.regions,
     memberships: regionMemberships.data,
-    target,
+    target: resolvedTarget,
   });
   const vectorBudgetRanges = {
     full: resolveVisualizationVectorBudgetRange({
@@ -1612,14 +1618,14 @@ function useObjectVisualizationPanelState(
       manifestRegions: manifest.data?.regions,
       memberships: regionMemberships.data,
       meshParts: manifest.data?.mesh_parts,
-      target,
+      target: resolvedTarget,
     }),
     surface: resolveVisualizationVectorBudgetRange({
       geometryScope: "surface",
       manifestRegions: manifest.data?.regions,
       memberships: regionMemberships.data,
       meshParts: manifest.data?.mesh_parts,
-      target,
+      target: resolvedTarget,
     }),
   } satisfies Record<
     VisualizationGeometryScope,
@@ -1670,7 +1676,7 @@ function useObjectVisualizationPanelState(
     revision,
     sectionDisabled,
     settings: panelSettings,
-    target,
+    target: resolvedTarget,
     setPatchChildRegions,
     primitiveDisplayToggleVisible,
     vectorDomain,
