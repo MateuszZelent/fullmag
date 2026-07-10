@@ -454,9 +454,12 @@ describe("ObjectVisualizationPanelModel", () => {
     });
   });
 
-  it("does not force region visualization through mesh topology safety mode", () => {
-    const scene = { objects: [{ id: "film", tags: ["mesh:dirty"] }], revision: 2 };
-    const staleManifest = { source_scene_revision: 1 };
+  it("uses the shared freshness resolver for region visualization", () => {
+    const scene = { objects: [{ id: "film", tags: ["mesh:ready"] }], revision: 12 };
+    const staleManifest = {
+      mesh_parts: [{ object_id: "film" }],
+      source_scene_revision: 11,
+    };
 
     expect(
       resolveObjectVisualizationPanelTopologyFreshness({
@@ -464,7 +467,7 @@ describe("ObjectVisualizationPanelModel", () => {
         scene,
         targetKind: "region",
       }),
-    ).toBeNull();
+    ).toBe("stale");
     expect(
       resolveObjectVisualizationPanelTopologyFreshness({
         manifest: staleManifest,

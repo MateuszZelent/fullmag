@@ -28,11 +28,10 @@ export function resolveVisualizationTopologyFreshness(
     return "unknown";
   }
 
-  const cleanTopologyCoverage =
-    !sceneHasDirtyGeometry(sceneRecord) &&
-    manifestCoversVisibleSceneObjects(sceneRecord, manifestRecord);
-
   if (sourceSceneRevision === null) {
+    const cleanTopologyCoverage =
+      !sceneHasDirtyGeometry(sceneRecord) &&
+      manifestCoversVisibleSceneObjects(sceneRecord, manifestRecord);
     if (sceneHasDirtyGeometry(sceneRecord)) {
       return "unknown";
     }
@@ -42,15 +41,7 @@ export function resolveVisualizationTopologyFreshness(
     return cleanTopologyCoverage ? "current" : "unknown";
   }
 
-  if (sceneRevision === sourceSceneRevision) {
-    return "current";
-  }
-
-  if (sceneHasKnownObjects(sceneRecord) && !sceneHasDirtyGeometry(sceneRecord)) {
-    return "current";
-  }
-
-  return "stale";
+  return sceneRevision === sourceSceneRevision ? "current" : "stale";
 }
 
 export function isVisualizationTopologyCurrent(

@@ -3,6 +3,15 @@ import { describe, expect, it } from "vitest";
 import { resolveVisualizationTopologyFreshness } from "./visualizationDisplayResolution";
 
 describe("resolveVisualizationTopologyFreshness", () => {
+  it("treats explicit manifest provenance mismatch as stale before coverage heuristics", () => {
+    expect(
+      resolveVisualizationTopologyFreshness(
+        { revision: 12, objects: [{ id: "film", tags: ["mesh:ready"] }] },
+        { source_scene_revision: 11, mesh_parts: [{ object_id: "film" }] },
+      ),
+    ).toBe("stale");
+  });
+
   it("treats primitive-only scenes without manifest coverage as unknown topology", () => {
     expect(
       resolveVisualizationTopologyFreshness(

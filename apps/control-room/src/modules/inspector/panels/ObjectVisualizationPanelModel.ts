@@ -272,15 +272,11 @@ const SCALAR_COLOR_PALETTE_STOPS: Record<string, [number, number, number][]> = {
 export function resolveObjectVisualizationPanelTopologyFreshness({
   manifest,
   scene,
-  targetKind,
 }: {
   manifest: unknown;
   scene: unknown;
   targetKind: VisualizationTargetKind;
 }): VisualizationTopologyFreshness | null {
-  if (targetKind === "region") {
-    return null;
-  }
   return scene && manifest
     ? resolveVisualizationTopologyFreshness(scene, manifest)
     : null;
