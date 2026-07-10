@@ -1281,6 +1281,8 @@ fn solve_native_modal_eigen_impl(
             .as_ref()
             .map(|value| value.as_ptr())
             .unwrap_or(std::ptr::null()),
+        dynamic_demag_k_tangent_matrix_row_major: std::ptr::null(),
+        dynamic_demag_k_tangent_matrix_value_count: 0,
     };
 
     let mut ffi_result = NativeFrequencyDomainContractFfiResult {
