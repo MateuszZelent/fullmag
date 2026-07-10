@@ -330,7 +330,7 @@ git commit -m "fix(ir): separate LLG relaxation from minimizers"
 - Consumes: canonical stop controls and exact backend metrics.
 - Produces: typed StageMetricKind/unit, authoritative StageCompletionIR, independent converged/terminal state, and artifact persistence.
 
-- [ ] **Step 1: Add failing runtime tests**
+- [x] **Step 1: Add failing runtime tests**
 
 Cover:
 
@@ -351,7 +351,7 @@ fn backend_error_is_failed_not_completed() { /* status failed */ }
 fn max_steps_does_not_synthesize_a_time_budget() { /* infinity/no separate cap */ }
 ~~~
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ~~~bash
 CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-runner exact_zero_torque_is_available_and_converged
@@ -360,7 +360,7 @@ CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-runner exact_zero_t
 Expected: output says running 1 test and the current >0 sentinel or inferred
 completion violates the assertion. Zero executed tests is not RED evidence.
 
-- [ ] **Step 3: Add typed metric vocabulary**
+- [x] **Step 3: Add typed metric vocabulary**
 
 Introduce a serde enum and unit mapping:
 
@@ -387,19 +387,19 @@ impl StageMetricKind {
 
 StageCompletionIR carries typed metric, value, threshold, converged, and status.
 
-- [ ] **Step 4: Remove sampled-row inference**
+- [x] **Step 4: Remove sampled-row inference**
 
 Execution loops/native completion pass their accepted-step energy window, exact torque, step count, and relaxation time directly. Delete or restrict infer_stage_completion so it cannot reconstruct a relax stop from artifacts.
 
-- [ ] **Step 5: Remove synthetic time and false completion**
+- [x] **Step 5: Remove synthetic time and false completion**
 
 resolve_script_until_seconds must not derive max_steps * dt. Direct minimizers have no time cap. Map line-search failure, nonfinite state, and backend error to failed completion.
 
-- [ ] **Step 6: Persist generic completion**
+- [x] **Step 6: Persist generic completion**
 
 Write completion and metric unit to metadata for FDM and FEM, and require frequency-response continuation to see an explicitly converged equilibrium reason.
 
-- [ ] **Step 7: Verify GREEN**
+- [x] **Step 7: Verify GREEN**
 
 ~~~bash
 CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-runner relaxation
@@ -409,7 +409,7 @@ CARGO_TARGET_DIR=.fullmag/codex-target cargo check --workspace
 
 Expected: focused completion tests pass.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ~~~bash
 git add crates/fullmag-ir crates/fullmag-runner crates/fullmag-cli crates/fullmag-api
