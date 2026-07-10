@@ -4,7 +4,22 @@
   "updated_at": "2026-07-10",
   "entrypoint": "00_README_CANONICAL_FULL_READ.md",
   "full_pack": "fd_solver_plan_FULL_PACK_COMSOL_ALIGNED_V5.md",
-  "full_pack_generated": true,
+  "full_pack_generated": false,
+  "full_pack_status": "stale_disabled",
+  "full_pack_regeneration": {
+    "owner_task": 10,
+    "condition": "All manifest-declared canonical full-pack inputs are present, transitional documents are promoted after their rewrite tasks, and the manifest is complete."
+  },
+  "production_claim_schema": {
+    "required_fields": ["implementation_state", "validation_state", "validated_scope"],
+    "implementation_state": ["absent", "contract_only", "source_visible", "executable"],
+    "validation_state": ["unvalidated", "algebra_validated", "physics_validated", "production_qualified"],
+    "validated_scope": {"type": "string", "min_length": 1},
+    "rules": [
+      "production_executable does not imply production_qualified",
+      "A narrow validated scope cannot promote a broader capability"
+    ]
+  },
   "documents": [
     {"order": 0, "path": "00_README_CANONICAL_FULL_READ.md", "role": "normative", "include_in_full_pack": true},
     {"order": 1, "path": "01_full_read_inventory_and_resolution.md", "role": "supporting", "include_in_full_pack": true},
@@ -14,7 +29,7 @@
     {"order": 5, "path": "05_algebra_and_operator_representations.md", "role": "normative", "include_in_full_pack": true},
     {"order": 6, "path": "06_solver_tree_planner_and_lanes.md", "role": "normative", "include_in_full_pack": true},
     {"order": 7, "path": "07_api_abi_artifacts.md", "role": "normative", "include_in_full_pack": true},
-    {"order": 8, "path": "08_backend_algorithms_and_status.md", "role": "normative", "include_in_full_pack": true},
+    {"order": 8, "path": "08_backend_algorithms_and_status.md", "role": "implementation_status", "target_role": "normative", "include_in_full_pack": true, "availability": "present; transitional dated evidence is not normative", "promotion": {"owner_task": 5, "condition": "Promote only after Task 5 rewrites the active body without dated append-only evidence."}},
     {"order": 9, "path": "09_validation_certification_benchmarks.md", "role": "validation", "include_in_full_pack": true},
     {"order": 10, "path": "10_patch_queue_current_status.md", "role": "implementation_status", "include_in_full_pack": true},
     {"order": 11, "path": "11_runtime_telemetry_performance.md", "role": "implementation_status", "include_in_full_pack": true},
@@ -22,9 +37,9 @@
     {"order": 13, "path": "13_repo_migration_cleanup.md", "role": "supporting", "include_in_full_pack": true},
     {"order": 14, "path": "14_sources_traceability.md", "role": "supporting", "include_in_full_pack": true},
     {"order": 15, "path": "15_self_weryfication_Kittel.md", "role": "validation", "include_in_full_pack": true},
-    {"order": 16, "path": "16_implementation_plan_Kittel_D2.md", "role": "normative", "include_in_full_pack": true},
+    {"order": 16, "path": "16_implementation_plan_Kittel_D2.md", "role": "implementation_status", "target_role": "normative", "include_in_full_pack": true, "availability": "present; transitional dated evidence is not normative", "promotion": {"owner_task": 4, "condition": "Promote only after Task 4 rewrites the active body without dated append-only evidence."}},
     {"order": 17, "path": "17_eigen_k0_gpu_readiness_audit.md", "role": "implementation_status", "include_in_full_pack": true},
-    {"order": 18, "path": "18_poisson_airbox_eigensolve_cpu_gpu_implementation.md", "role": "normative", "include_in_full_pack": true},
+    {"order": 18, "path": "18_poisson_airbox_eigensolve_cpu_gpu_implementation.md", "role": "implementation_status", "target_role": "normative", "include_in_full_pack": true, "availability": "present; transitional dated evidence is not normative", "promotion": {"owner_task": 6, "condition": "Promote only after Task 6 rewrites the active body without dated append-only evidence."}},
     {"order": 19, "path": "19_eigensolve_frequency_driven_physics_numerics_audit.md", "role": "implementation_status", "include_in_full_pack": true},
     {"order": 20, "path": "20_dynamic_solver_audit_revalidation_and_remediation.md", "role": "implementation_status", "include_in_full_pack": true, "availability": "present; content owned by the parallel remediation plan"},
     {"order": 23, "path": "23_floquet_airbox_nonzero_k_cpu_gpu_implementation.md", "role": "normative", "include_in_full_pack": true, "availability": "planned; created by Task 7"},
