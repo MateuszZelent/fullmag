@@ -3383,7 +3383,7 @@ export function useViewport3DSceneModel({
   const fdmBuildGroupKey = fdmInstanceModelEnabled
     ? `fdm-cuboid:session=current:domain=${domainMeta.data?.domain_id ?? "shared-domain"}`
     : null;
-  const fdmBuildResult = useFdmCuboidBuildResult({
+  const fdmBuildState = useFdmCuboidBuildResult({
     buildKey: fdmBuildKey,
     domain: fdmDomain,
     enabled: fdmInstanceModelEnabled,
@@ -3398,6 +3398,7 @@ export function useViewport3DSceneModel({
     voxelMagnitudeThreshold: fdmVoxelMagnitudeThreshold,
     voxelTopography: fdmVoxelTopography,
   });
+  const fdmBuildResult = fdmBuildState?.result ?? undefined;
   const fdmInstanceModel: FdmCuboidInstanceModel | null | undefined =
     fdmBuildResult?.model;
   const fdmVectorSegments = fdmBuildResult?.vectorSegments ?? null;
@@ -3507,6 +3508,7 @@ export function useViewport3DSceneModel({
   const selectedLabel = selection.label ?? "No selection";
   const status =
     topology.error?.message ??
+    fdmBuildState?.error?.message ??
     (renderingState?.clip?.enabled ? clipCrossSection.error?.message : null) ??
     (meshQualityOverlayVisible ? meshQualityData.error?.message : null) ??
     fieldVector.error?.message ??
@@ -3579,6 +3581,15 @@ export function useViewport3DSceneModel({
       revision: fieldVector.revision,
       status: fieldVector.status,
     }),
+    {
+      error: fdmBuildState?.error?.message ?? null,
+      id: "fdm-cuboid-build",
+      revision: fdmBuildState?.buildKey ?? null,
+      status:
+        fdmBuildState?.status === "pending"
+          ? "loading"
+          : fdmBuildState?.status ?? "idle",
+    },
     resolveViewport3DResourceFrameState({
       dataAvailable: Boolean(magneticPartFieldVectors.data?.size),
       error: magneticPartFieldVectors.error?.message,

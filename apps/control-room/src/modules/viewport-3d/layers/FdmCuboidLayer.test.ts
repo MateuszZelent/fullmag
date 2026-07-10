@@ -266,6 +266,7 @@ describe("FdmCuboidLayer model", () => {
     );
     expect(sceneModelSource).toContain("fdmInstanceModel: fdmInstanceModel");
     expect(sceneModelSource).toContain("fdmVectorSegments");
+    expect(sceneModelSource).toContain("fdmBuildState?.error?.message");
     expect(sceneModelSource).not.toContain("buildFdmCuboidInstanceModel(");
     expect(sceneModelSource).not.toContain("const fdmSurfaceInstanceModel");
     expect(sceneSource).toContain("fdmInstanceModel: FdmCuboidInstanceModel | null | undefined");
@@ -275,6 +276,9 @@ describe("FdmCuboidLayer model", () => {
     expect(layerSource).toContain("instanceModel?: FdmCuboidInstanceModel | null");
     expect(layerSource).toContain("const model = instanceModel ?? null");
     expect(layerSource).not.toContain("instanceModel !== undefined");
+    expect(layerSource).toContain("resolveFdmCuboidBuildState");
+    expect(layerSource).toContain('status: "pending"');
+    expect(layerSource).toContain("store.getSnapshot().buildKey !== buildKey");
   });
 
   it("uses unlit materials for FDM cell surfaces", () => {
