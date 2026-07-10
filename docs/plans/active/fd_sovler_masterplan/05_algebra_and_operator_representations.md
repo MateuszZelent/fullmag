@@ -193,17 +193,24 @@ completeness certificate
 omega_complex = omega_r + i Gamma
 exp(i omega_complex t) = exp(i omega_r t - Gamma t)
 Gamma > 0 for decay
+```
+
+The dynamic-pencil definition and decay direction follow
+[note 0831](../../../physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md),
+which currently requires artifacts to carry the damping-rate and linewidth
+mapping but does not define the exact formulas.
+
+```text
 damping_rate_hz = Gamma/(2*pi)
 linewidth_fwhm_hz = Gamma/pi
 p_abs = -0.5*mu0*Ms*omega*Im(conj(h_drive) dot delta_m)
 observable = absorbed_by_magnetization
 ```
 
-The dynamic-pencil and damping portions follow
-[note 0831](../../../physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md).
-The absorbed-power observable and its SI derivation are currently authoritative
-in [note 0700](../../../physics/0700-frequency-domain-linearized-llg.md). These
-are not backend-selectable signs. Positive Gilbert damping must yield positive
+The exact damping-rate and FWHM-linewidth formulas, absorbed-power observable,
+and absorbed-power formula are currently authoritative in
+[note 0700](../../../physics/0700-frequency-domain-linearized-llg.md). These are
+not backend-selectable signs. Positive Gilbert damping must yield positive
 absorbed power near resonance.
 
 ## 9. GPU device representation

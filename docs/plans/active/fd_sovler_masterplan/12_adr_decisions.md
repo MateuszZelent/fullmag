@@ -123,12 +123,23 @@ lambda = i omega
 driven operator = i omega B - L
 drive = T^T[-gamma0 (m0 x delta_h_drive)]
 energy-Hessian mapping at alpha=0: L=K, B=-G, K phi=-i omega G phi
+```
+
+These operator and sign definitions are the current
+[`FrequencyOperatorDictionary.v1` in physics note 0831](../../../physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md).
+Modal, driven, reduced, CPU, GPU, and real-split adapters consume this
+dictionary. They may not define local sign conventions.
+
+The absorbed-power contract remains separately authoritative in
+[physics note 0700](../../../physics/0700-frequency-domain-linearized-llg.md):
+
+```text
 absorbed-power observable = absorbed_by_magnetization
 p_abs = -0.5*mu0*Ms*omega*Im(conj(h_drive) dot delta_m)
 ```
 
-Modal, driven, reduced, CPU, GPU, and real-split adapters consume this one
-dictionary. They may not define local sign conventions.
+The parallel plan may consolidate this observable and formula into note 0831
+later, at which point note 0831 becomes the target sole dictionary authority.
 
 ## ADR-016 - Poisson boundary and gauge tuple
 
