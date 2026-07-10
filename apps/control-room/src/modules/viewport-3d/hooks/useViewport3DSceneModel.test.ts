@@ -176,6 +176,9 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("topology: fieldCompatibleTopologyRenderModel");
     expect(source).toContain("topologyModel: topologyRenderModelForGeometry");
     expect(source).toContain("Boolean(fieldCompatibleTopologyRenderModel) &&");
+    expect(source).toContain(
+      "useViewport3DMeshQualityData(\n    Boolean(fieldCompatibleTopologyRenderModel && meshQualityOverlayVisible),\n  )",
+    );
   });
 
   it("wraps primary field payloads as target field buffers without mixing legacy maps", () => {

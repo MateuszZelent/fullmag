@@ -2362,7 +2362,7 @@ export function useViewport3DSceneModel({
     selection.ref?.type === "mesh-quality-element";
   const meshQualityMetric = resolveSelectionMeshQualityMetric(selection);
   const meshQualityData = useViewport3DMeshQualityData(
-    Boolean(topologyRenderModelForGeometry && meshQualityOverlayVisible),
+    Boolean(fieldCompatibleTopologyRenderModel && meshQualityOverlayVisible),
   );
   const meshQualityColors = useMemo(
     () =>
