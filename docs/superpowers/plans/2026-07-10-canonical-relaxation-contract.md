@@ -664,7 +664,7 @@ git commit -m "fix(fem): validate relaxation telemetry and provenance"
 - Consumes: MFEM Ms mass form, raw A stiffness, nodal materials/weights, tangent frames.
 - Produces: dimensionally valid preconditioner operator and manufactured TPI rejection/qualification gate.
 
-- [ ] **Step 1: Add an explicit-matrix failing oracle**
+- [x] **Step 1: Add an explicit-matrix failing oracle**
 
 Assemble a one-tetrahedron mass matrix M_Ms and exchange stiffness K_A, choose lambda, and assert:
 
@@ -675,7 +675,7 @@ expected.Add(lambda * (2.0 / kMu0), K_A);
 
 Apply both expected and production operators to the same tangent vector. Add a heterogeneous Ms case and local-anisotropy curvature case.
 
-- [ ] **Step 2: Verify RED in the managed container**
+- [x] **Step 2: Verify RED in the managed container**
 
 Add the target to the existing container-backed source-contract recipe, then run:
 
@@ -685,15 +685,15 @@ just verify-fem-time-domain-native-contract
 
 Expected: relaxation_operator_contract fails because production uses lambda*K_A or volume-only local curvature.
 
-- [ ] **Step 3: Repair PG-BB/NCG preconditioner scale**
+- [x] **Step 3: Repair PG-BB/NCG preconditioner scale**
 
 Build M_Ms + lambda*(2/mu0)*K_A and keep RHS/solution units consistent. Derive clamp units from lambda; remove dimensionless naming and absolute floors that mix units.
 
-- [ ] **Step 4: Disable TPI in strict production**
+- [x] **Step 4: Disable TPI in strict production**
 
 Keep source available for development, but planner/native dispatch rejects strict production before executing it. Extended CPU execution remains explicitly development-only.
 
-- [ ] **Step 5: Repair or quarantine incomplete TPI blocks**
+- [x] **Step 5: Repair or quarantine incomplete TPI blocks**
 
 Use Ms-weighted local curvature and the same energy Hessian convention for implemented blocks. Any block without a passing manufactured action test stays disabled and is named in the diagnostic.
 
@@ -707,7 +707,7 @@ just verify-fem-relaxation-convergence
 
 Expected: operator oracle passes; strict TPI is rejected/omitted as documented; production algorithms pass.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ~~~bash
 git add backends/fem/cpu/mfem/relaxation backends/fem/src/relaxation_numerics.hpp backends/fem/tests backends/fem/CMakeLists.txt justfile
