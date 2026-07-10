@@ -1,15 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import type {
-  FdmCuboidBuildRequest,
-  FdmCuboidBuildResult,
-} from "./fdmCuboidBuildModel";
 import {
+  createFdmCuboidBuildStateController,
   resolveFdmCuboidBuildState,
   type FdmCuboidBuildSnapshot,
 } from "./fdmCuboidBuildState";
+import type { FdmCuboidBuildResult } from "./fdmCuboidBuildModel";
 
-const requestA = {} as FdmCuboidBuildRequest;
 const resultA = {} as FdmCuboidBuildResult;
 
 describe("resolveFdmCuboidBuildState", () => {
@@ -20,7 +17,6 @@ describe("resolveFdmCuboidBuildState", () => {
         snapshot: {
           buildKey: "A",
           error: null,
-          request: requestA,
           result: resultA,
           status: "ready",
         },
@@ -28,34 +24,47 @@ describe("resolveFdmCuboidBuildState", () => {
     ).toEqual({ buildKey: "B", error: null, result: null, status: "pending" });
   });
 
-  it("keeps an old completion pending after the current key advances", () => {
-    const lateCompletion: FdmCuboidBuildSnapshot = {
-      buildKey: "A",
-      error: null,
-      request: requestA,
-      result: resultA,
-      status: "ready",
-    };
+  it("keeps B pending when A resolves after B begins", () => {
+    const controller = createFdmCuboidBuildStateController();
 
-    expect(
-      resolveFdmCuboidBuildState({ currentBuildKey: "B", snapshot: lateCompletion }),
-    ).toEqual({ buildKey: "B", error: null, result: null, status: "pending" });
+    controller.begin("A");
+    controller.begin("B");
+    controller.resolve("A", resultA);
+
+    expect(controller.getSnapshot()).toEqual({
+      buildKey: "B",
+      error: null,
+      result: null,
+      status: "pending",
+    });
+  });
+
+  it("suppresses an abort rejection for the current build key", () => {
+    const controller = createFdmCuboidBuildStateController();
+
+    controller.begin("B");
+    controller.reject("B", new DOMException("aborted", "AbortError"));
+
+    expect(controller.getSnapshot()).toEqual({
+      buildKey: "B",
+      error: null,
+      result: null,
+      status: "pending",
+    });
   });
 
   it("exposes a non-abort rejection for the current build key without a result", () => {
     const error = new Error("worker unavailable");
+    const controller = createFdmCuboidBuildStateController();
 
-    expect(
-      resolveFdmCuboidBuildState({
-        currentBuildKey: "B",
-        snapshot: {
-          buildKey: "B",
-          error,
-          request: requestA,
-          result: null,
-          status: "error",
-        },
-      }),
-    ).toEqual({ buildKey: "B", error, result: null, status: "error" });
+    controller.begin("B");
+    controller.reject("B", error);
+
+    expect(controller.getSnapshot()).toEqual({
+      buildKey: "B",
+      error,
+      result: null,
+      status: "error",
+    });
   });
 });

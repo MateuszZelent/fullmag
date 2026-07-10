@@ -277,8 +277,11 @@ describe("FdmCuboidLayer model", () => {
     expect(layerSource).toContain("const model = instanceModel ?? null");
     expect(layerSource).not.toContain("instanceModel !== undefined");
     expect(layerSource).toContain("resolveFdmCuboidBuildState");
-    expect(layerSource).toContain('status: "pending"');
-    expect(layerSource).toContain("store.getSnapshot().buildKey !== buildKey");
+    expect(layerSource).toContain("createFdmCuboidBuildStateController");
+    expect(layerSource).toContain("store.begin(buildKey)");
+    expect(layerSource).toContain("store.resolve(buildKey, result)");
+    expect(layerSource).toContain("store.reject(buildKey, error)");
+    expect(layerSource).toContain("() => EMPTY_FDM_CUBOID_BUILD_SNAPSHOT");
   });
 
   it("uses unlit materials for FDM cell surfaces", () => {

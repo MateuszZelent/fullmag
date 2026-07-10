@@ -65,8 +65,9 @@ import {
 } from "./fdmCuboidBuildModel";
 import { buildViewport3DFdmCuboidOffMainThread } from "./fdmCuboidBuildScheduler";
 import {
+  createFdmCuboidBuildStateController,
+  EMPTY_FDM_CUBOID_BUILD_SNAPSHOT,
   resolveFdmCuboidBuildState,
-  type FdmCuboidBuildSnapshot,
   type FdmCuboidBuildState,
 } from "./fdmCuboidBuildState";
 
@@ -480,20 +481,6 @@ function useFdmCuboidColorUpload({
   ]);
 }
 
-interface FdmCuboidBuildStore {
-  readonly getSnapshot: () => FdmCuboidBuildSnapshot;
-  readonly publish: (snapshot: FdmCuboidBuildSnapshot) => void;
-  readonly subscribe: (listener: () => void) => () => void;
-}
-
-const EMPTY_FDM_CUBOID_BUILD_SNAPSHOT: FdmCuboidBuildSnapshot = {
-  buildKey: null,
-  error: null,
-  request: null,
-  result: null,
-  status: "idle",
-};
-
 export interface FdmCuboidAsyncBuildInput {
   buildKey: string | null;
   domain: FdmGridRenderDomain | null;
@@ -525,7 +512,7 @@ export function useFdmCuboidBuildResult({
   voxelMagnitudeThreshold,
   voxelTopography,
 }: FdmCuboidAsyncBuildInput): FdmCuboidBuildState | undefined {
-  const store = useMemo(() => createFdmCuboidBuildStore(), []);
+  const store = useMemo(() => createFdmCuboidBuildStateController(), []);
   const request = useMemo<FdmCuboidBuildRequest | null>(
     () =>
       enabled && domain
@@ -557,22 +544,15 @@ export function useFdmCuboidBuildResult({
   const snapshot = useSyncExternalStore(
     store.subscribe,
     store.getSnapshot,
-    store.getSnapshot,
+    () => EMPTY_FDM_CUBOID_BUILD_SNAPSHOT,
   );
 
   useEffect(() => {
     if (!request || !buildKey) {
-      store.publish(EMPTY_FDM_CUBOID_BUILD_SNAPSHOT);
       return;
     }
 
-    store.publish({
-      buildKey,
-      error: null,
-      request,
-      result: null,
-      status: "pending",
-    });
+    store.begin(buildKey);
     const abortController = new AbortController();
     void buildViewport3DFdmCuboidOffMainThread(request, {
       buildKey,
@@ -582,35 +562,12 @@ export function useFdmCuboidBuildResult({
       signal: abortController.signal,
     })
       .then((result) => {
-        if (
-          abortController.signal.aborted ||
-          store.getSnapshot().buildKey !== buildKey
-        ) {
-          return;
-        }
-        store.publish({
-          buildKey,
-          error: null,
-          request,
-          result,
-          status: "ready",
-        });
+        if (abortController.signal.aborted) return;
+        store.resolve(buildKey, result);
       })
       .catch((error: unknown) => {
-        if (
-          abortController.signal.aborted ||
-          isFdmCuboidBuildAbortError(error) ||
-          store.getSnapshot().buildKey !== buildKey
-        ) {
-          return;
-        }
-        store.publish({
-          buildKey,
-          error: error instanceof Error ? error : new Error(String(error)),
-          request,
-          result: null,
-          status: "error",
-        });
+        if (abortController.signal.aborted) return;
+        store.reject(buildKey, error);
       });
 
     return () => {
@@ -623,30 +580,6 @@ export function useFdmCuboidBuildResult({
     currentBuildKey: buildKey,
     snapshot,
   });
-}
-
-function createFdmCuboidBuildStore(): FdmCuboidBuildStore {
-  let snapshot = EMPTY_FDM_CUBOID_BUILD_SNAPSHOT;
-  const listeners = new Set<() => void>();
-  return {
-    getSnapshot: () => snapshot,
-    publish: (nextSnapshot) => {
-      if (snapshot === nextSnapshot) return;
-      snapshot = nextSnapshot;
-      for (const listener of listeners) listener();
-    },
-    subscribe: (listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-  };
-}
-
-function isFdmCuboidBuildAbortError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    (error.name === "AbortError" || error.message === "FDM cuboid build aborted")
-  );
 }
 
 export const FdmCuboidLayer = memo(function FdmCuboidLayer({
