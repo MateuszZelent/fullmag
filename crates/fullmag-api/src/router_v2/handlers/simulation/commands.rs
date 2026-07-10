@@ -21,7 +21,7 @@ use fullmag_ir::{
     GeometryEntryIR, InitialMagnetizationIR, MagnetIR, MaterialIR, ObjectRegionIR, RegionIR,
 };
 
-const MU0_T_PER_APM: f64 = 4.0 * std::f64::consts::PI * 1.0e-7;
+use crate::schemas::relaxation::MU0_T_PER_APM;
 
 #[utoipa::path(
     post,
@@ -47,6 +47,7 @@ pub(crate) async fn submit_structured_command_impl(
     headers: &HeaderMap,
     mut req: StructuredCommandRequest,
 ) -> Result<CommandResponse, ApiError> {
+    validate_relax_command_controls(&req)?;
     if let Some((scene, realization)) = validate_authoring_gate_for_command(&state, &req).await? {
         attach_geometry_realization_to_mesh_request(&mut req, &scene, &realization)?;
     }
@@ -58,6 +59,119 @@ pub(crate) async fn submit_structured_command_impl(
     let command = command_from_structured(req, command_id, now);
     validate_runtime_command_contract(&state, &command).await?;
     enqueue_session_command_impl(state, headers, command).await
+}
+
+fn validate_relax_command_controls(req: &StructuredCommandRequest) -> Result<(), ApiError> {
+    let StructuredCommandRequest::Relax {
+        until_seconds,
+        max_relaxation_time_s,
+        max_steps,
+        torque_tolerance_apm,
+        torque_tolerance_t,
+        torque_tolerance,
+        energy_tolerance,
+        energy_tolerance_j,
+        relax_algorithm,
+        relax_alpha,
+        fixed_timestep,
+        max_error,
+        ..
+    } = req
+    else {
+        return Ok(());
+    };
+
+    for (name, value) in [
+        ("torque_tolerance_apm", *torque_tolerance_apm),
+        ("torque_tolerance_T", *torque_tolerance_t),
+        ("torque_tolerance", *torque_tolerance),
+        ("energy_tolerance_j", *energy_tolerance_j),
+        ("energy_tolerance", *energy_tolerance),
+        ("max_relaxation_time_s", *max_relaxation_time_s),
+        ("until_seconds", *until_seconds),
+        ("relax_alpha", *relax_alpha),
+        ("fixed_timestep", *fixed_timestep),
+        ("max_error", *max_error),
+    ] {
+        if value.is_some_and(|value| !value.is_finite() || value <= 0.0) {
+            return Err(ApiError::bad_request(format!(
+                "{name} must be finite and greater than zero"
+            )));
+        }
+    }
+    if max_steps.is_some_and(|value| value == 0) {
+        return Err(ApiError::bad_request("max_steps must be greater than zero"));
+    }
+
+    let torque_tolerance_t_apm = torque_tolerance_t.map(|value| value / MU0_T_PER_APM);
+    if torque_tolerance_t_apm.is_some_and(|value| !value.is_finite()) {
+        return Err(ApiError::bad_request(
+            "torque_tolerance_T does not convert to a finite A/m value",
+        ));
+    }
+    let torque_values_apm = [
+        *torque_tolerance_apm,
+        *torque_tolerance,
+        torque_tolerance_t_apm,
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    if torque_values_apm
+        .windows(2)
+        .any(|pair| !physically_equal(pair[0], pair[1]))
+    {
+        return Err(ApiError::bad_request(
+            "torque_tolerance_apm, torque_tolerance_T, and deprecated torque_tolerance conflict",
+        ));
+    }
+
+    if until_seconds.is_some()
+        && max_relaxation_time_s.is_some()
+        && !physically_equal(
+            until_seconds.unwrap_or_default(),
+            max_relaxation_time_s.unwrap_or_default(),
+        )
+    {
+        return Err(ApiError::bad_request(
+            "max_relaxation_time_s conflicts with deprecated until_seconds",
+        ));
+    }
+    if energy_tolerance.is_some()
+        && energy_tolerance_j.is_some()
+        && !physically_equal(
+            energy_tolerance.unwrap_or_default(),
+            energy_tolerance_j.unwrap_or_default(),
+        )
+    {
+        return Err(ApiError::bad_request(
+            "energy_tolerance_j conflicts with deprecated energy_tolerance",
+        ));
+    }
+
+    let is_llg = relax_algorithm.as_ref().is_none_or(|algorithm| {
+        matches!(
+            algorithm,
+            crate::schemas::relaxation::RelaxationAlgorithm::LlgOverdamped
+        )
+    });
+    if !is_llg
+        && (until_seconds.is_some()
+            || max_relaxation_time_s.is_some()
+            || relax_alpha.is_some()
+            || fixed_timestep.is_some()
+            || max_error.is_some())
+    {
+        return Err(ApiError::bad_request(
+            "max_relaxation_time_s, relax_alpha, fixed_timestep, and max_error are valid only for llg_overdamped relaxation",
+        ));
+    }
+    Ok(())
+}
+
+fn physically_equal(left: f64, right: f64) -> bool {
+    let scale = left.abs().max(right.abs()).max(f64::MIN_POSITIVE);
+    (left - right).abs() <= 16.0 * f64::EPSILON * scale
 }
 
 async fn validate_runtime_command_contract(
@@ -971,11 +1085,13 @@ fn command_from_structured(
         StructuredCommandRequest::Relax {
             intent,
             until_seconds,
+            max_relaxation_time_s,
             max_steps,
             torque_tolerance_apm,
             torque_tolerance_t,
             torque_tolerance,
             energy_tolerance,
+            energy_tolerance_j,
             relax_algorithm,
             relax_alpha,
             fixed_timestep,
@@ -987,13 +1103,13 @@ fn command_from_structured(
                 intent,
                 RuntimeCommandTarget::Run { run_id: None },
             );
-            command.until_seconds = until_seconds;
+            command.until_seconds = max_relaxation_time_s.or(until_seconds);
             command.max_steps = max_steps;
             command.torque_tolerance = torque_tolerance_apm
                 .or(torque_tolerance)
                 .or_else(|| torque_tolerance_t.map(|value| value / MU0_T_PER_APM));
-            command.energy_tolerance = energy_tolerance;
-            command.relax_algorithm = relax_algorithm;
+            command.energy_tolerance = energy_tolerance_j.or(energy_tolerance);
+            command.relax_algorithm = relax_algorithm.map(|algorithm| algorithm.as_str().into());
             command.relax_alpha = relax_alpha;
             command.fixed_timestep = fixed_timestep;
             command.max_error = max_error;

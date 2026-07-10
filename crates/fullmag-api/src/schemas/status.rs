@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use crate::schemas::relaxation::RelaxationAlgorithm;
+
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy)]
 pub enum DisplayViewMode {
     #[serde(rename = "2d")]
@@ -66,11 +68,15 @@ pub struct SolverSummary {
     /// idle | running | paused | finished | error
     pub state: String,
     pub algorithm: Option<String>,
+    pub relaxation_algorithm: Option<RelaxationAlgorithm>,
     pub dt: Option<f64>,
     #[serde(rename = "max_torque_T")]
     pub max_torque_t: Option<f64>,
     #[serde(rename = "max_torque_Apm")]
     pub max_torque_apm: Option<f64>,
+    pub max_rhs_norm_per_s: Option<f64>,
+    /// Deprecated ambiguous alias. When present it is in A/m.
+    #[schema(deprecated)]
     pub max_torque: Option<f64>,
     pub converged: Option<bool>,
 }

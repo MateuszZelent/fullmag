@@ -463,7 +463,7 @@ fn resolve_table_columns(columns: Option<&str>) -> Vec<String> {
             }
         }
     } else {
-        resolved.extend(["t", "mx", "my", "mz", "e_total", "max_torque"].map(str::to_string));
+        resolved.extend(["t", "mx", "my", "mz", "e_total", "max_torque_Apm"].map(str::to_string));
     }
     resolved
 }
@@ -549,6 +549,15 @@ fn table_column_meta(column: &str) -> Option<TableColumnMeta> {
             Some("max"),
             "float",
         ),
+        "max_rhs_norm_per_s" => (
+            "max_rhs_norm_per_s",
+            "max RHS norm",
+            "1/s",
+            "rate",
+            None,
+            Some("max"),
+            "float",
+        ),
         "max_h_eff" => (
             "max_h_eff",
             "max H eff",
@@ -567,7 +576,7 @@ fn table_column_meta(column: &str) -> Option<TableColumnMeta> {
             Some("max"),
             "float",
         ),
-        "max_torque" => (
+        "max_torque" | "max_torque_Apm" => (
             "max_torque_Apm",
             "max torque",
             "A/m",
@@ -615,10 +624,10 @@ fn table_column_value(row: &ScalarRow, column: &str) -> Option<f64> {
         "e_ani" => row.e_ani,
         "e_dmi" => row.e_dmi,
         "e_total" => row.e_total,
-        "max_dm_dt" => row.max_dm_dt,
+        "max_dm_dt" | "max_rhs_norm_per_s" => row.max_dm_dt,
         "max_h_eff" => row.max_h_eff,
         "max_h_demag" => row.max_h_demag,
-        "max_torque" => row.max_torque_Apm,
+        "max_torque" | "max_torque_Apm" => row.max_torque_Apm,
         "max_torque_T" => row.max_torque_T,
         _ => return None,
     })

@@ -23,6 +23,10 @@ use crate::schemas::hysteresis::{
     HysteresisSettleTraceEntrySchema, HysteresisStagePlanSchema, HysteresisStageSaturationSchema,
     HysteresisStorageEstimateSchema,
 };
+use crate::schemas::relaxation::{
+    canonical_torque_apm, torque_t_from_apm, RelaxationAlgorithm, StageMetricKind, StageMetricUnit,
+    StageStopReason,
+};
 use crate::schemas::runtime::{
     CommandDetailResource, CommandDiagnosticReferenceResource, CommandExecutionReadbackResource,
     CommandQueueStatusResource, CommandResourceInvalidationResource, CommandStatusResource,
@@ -197,7 +201,7 @@ pub async fn get_stage_execution(
                     command_id: record.command_id.clone(),
                     started_at_unix_ms: record.started_at_unix_ms,
                     completed_at_unix_ms: record.completed_at_unix_ms,
-                    reason: record.reason.as_ref().map(stage_stop_reason_string),
+                    reason: record.reason.clone().map(StageStopReason::from),
                     converged: record.converged,
                     artifact_refs: record.artifact_refs.clone(),
                     checkpoint_ref: record.checkpoint_ref.clone(),
@@ -210,8 +214,8 @@ pub async fn get_stage_execution(
                     state_transition_ui_presentation: record
                         .state_transition_ui_presentation
                         .clone(),
-                    metric_kind: record.metric.map(stage_metric_kind_string),
-                    metric_unit: record.metric.map(|metric| metric.unit().to_string()),
+                    metric_kind: record.metric.map(StageMetricKind::from),
+                    metric_unit: record.metric.map(StageMetricUnit::from),
                     metric_name: record.metric_name.clone(),
                     metric_value: record.metric_value,
                     threshold: record.threshold,
@@ -1187,6 +1191,8 @@ pub async fn get_solver_status(
         warnings.drain(0..warnings.len() - 8);
     }
 
+    let stage_completion = current_stage_completion(snapshot);
+    let max_torque_apm = latest.and_then(|value| canonical_torque_apm(value.max_torque_Apm));
     Ok(Json(SolverStatusResource {
         revision: snapshot.state_version,
         runtime_state: runtime_status.code.clone(),
@@ -1204,6 +1210,18 @@ pub async fn get_solver_status(
             snapshot.metadata.as_ref(),
             &["execution_plan", "backend_plan", "kind"],
         ),
+        relaxation_algorithm: metadata_string(
+            snapshot.metadata.as_ref(),
+            &["relaxation_algorithm"],
+        )
+        .or_else(|| {
+            metadata_string(
+                snapshot.metadata.as_ref(),
+                &["execution_plan", "backend_plan", "relax_algorithm"],
+            )
+        })
+        .as_deref()
+        .and_then(RelaxationAlgorithm::parse),
         integrator: metadata_string(
             snapshot.metadata.as_ref(),
             &["execution_plan", "backend_plan", "integrator"],
@@ -1221,10 +1239,11 @@ pub async fn get_solver_status(
             .live_state
             .as_ref()
             .map(|value| value.updated_at_unix_ms.min(u64::MAX as u128) as u64),
-        max_torque_t: latest.map(|value| value.max_torque_T),
-        max_torque_apm: latest.map(|value| value.max_torque_Apm),
-        max_torque: latest.map(|value| value.max_torque_T),
-        converged: latest.map(|value| value.finished),
+        max_torque_t: max_torque_apm.and_then(torque_t_from_apm),
+        max_torque_apm,
+        max_rhs_norm_per_s: latest.map(|value| value.max_dm_dt),
+        max_torque: max_torque_apm,
+        converged: stage_completion.map(|value| value.converged),
         last_error: snapshot
             .engine_log
             .iter()
@@ -1706,14 +1725,20 @@ pub async fn get_command_detail(
             .map(command_completion_state_string),
         error: record.error.clone(),
         until_seconds: record.command.until_seconds,
+        max_relaxation_time_s: record.command.until_seconds,
         max_steps: record.command.max_steps,
         torque_tolerance_apm: record.command.torque_tolerance,
         torque_tolerance: record.command.torque_tolerance,
         energy_tolerance: record.command.energy_tolerance,
+        energy_tolerance_j: record.command.energy_tolerance,
         integrator: record.command.integrator.clone(),
         fixed_timestep: record.command.fixed_timestep,
         max_error: record.command.max_error,
-        relax_algorithm: record.command.relax_algorithm.clone(),
+        relax_algorithm: record
+            .command
+            .relax_algorithm
+            .as_deref()
+            .and_then(RelaxationAlgorithm::parse),
         relax_alpha: record.command.relax_alpha,
         mesh_target: record.command.mesh_target.clone(),
         mesh_reason: record.command.mesh_reason.clone(),
@@ -2003,6 +2028,25 @@ fn metadata_string(metadata: Option<&Value>, path: &[&str]) -> Option<String> {
     current.as_str().map(ToOwned::to_owned)
 }
 
+fn current_stage_completion(snapshot: &SessionStateResponse) -> Option<&StageExecutionRecord> {
+    let execution = snapshot.stage_execution.as_ref()?;
+    execution
+        .active_stage_index
+        .and_then(|index| execution.stages.get(index))
+        .or_else(|| {
+            execution.stages.iter().rev().find(|record| {
+                matches!(
+                    record.status,
+                    crate::types::StageLifecycleState::Skipped
+                        | crate::types::StageLifecycleState::Completed
+                        | crate::types::StageLifecycleState::Cancelled
+                        | crate::types::StageLifecycleState::Stopped
+                        | crate::types::StageLifecycleState::Failed
+                )
+            })
+        })
+}
+
 fn material_field_plan_warnings(metadata: Option<&Value>) -> Vec<String> {
     metadata
         .and_then(|value| value.get("execution_plan"))
@@ -2016,27 +2060,6 @@ fn material_field_plan_warnings(metadata: Option<&Value>) -> Vec<String> {
         .filter_map(Value::as_str)
         .map(ToOwned::to_owned)
         .collect()
-}
-
-fn stage_stop_reason_string(reason: &fullmag_ir::StageStopReason) -> String {
-    serde_json::to_value(reason)
-        .ok()
-        .and_then(|value| match value {
-            Value::String(value) => Some(value),
-            Value::Object(map) => map
-                .get("kind")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned),
-            _ => None,
-        })
-        .unwrap_or_else(|| format!("{reason:?}"))
-}
-
-fn stage_metric_kind_string(metric: fullmag_ir::StageMetricKind) -> String {
-    serde_json::to_value(metric)
-        .ok()
-        .and_then(|value| value.as_str().map(ToOwned::to_owned))
-        .unwrap_or_else(|| format!("{metric:?}").to_ascii_lowercase())
 }
 
 fn runtime_status_kind(status: &crate::types::RuntimeStatusView) -> String {

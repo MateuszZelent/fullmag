@@ -10,6 +10,7 @@ pub mod logs;
 pub mod mesh;
 pub mod quantities;
 pub mod realtime;
+pub mod relaxation;
 pub mod runtime;
 pub mod scalars;
 pub mod status;

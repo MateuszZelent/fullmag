@@ -3,6 +3,7 @@ use serde_json::Value;
 use utoipa::ToSchema;
 
 use crate::schemas::diagnostics::SolverProfileCommandConfig;
+use crate::schemas::relaxation::RelaxationAlgorithm;
 use crate::types::MeshCommandTarget;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
@@ -76,6 +77,8 @@ pub enum StructuredCommandRequest {
         #[serde(skip_serializing_if = "Option::is_none")]
         until_seconds: Option<f64>,
         #[serde(skip_serializing_if = "Option::is_none")]
+        max_relaxation_time_s: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         max_steps: Option<u64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         torque_tolerance_apm: Option<f64>,
@@ -86,7 +89,9 @@ pub enum StructuredCommandRequest {
         #[serde(skip_serializing_if = "Option::is_none")]
         energy_tolerance: Option<f64>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        relax_algorithm: Option<String>,
+        energy_tolerance_j: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        relax_algorithm: Option<RelaxationAlgorithm>,
         #[serde(skip_serializing_if = "Option::is_none")]
         relax_alpha: Option<f64>,
         #[serde(skip_serializing_if = "Option::is_none")]

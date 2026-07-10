@@ -925,7 +925,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 max_h_eff: 11.0,
                 max_h_demag: 12.0,
                 max_torque_Apm: 13.0,
-                max_torque_T: 14.0,
+                max_torque_T: 13.0 * 4.0 * std::f64::consts::PI * 1.0e-7,
                 wall_time_ns: 100,
                 grid: [4, 4, 1],
                 fem_mesh: None,
@@ -955,7 +955,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 max_h_eff: 11.0,
                 max_h_demag: 12.0,
                 max_torque_Apm: 13.0,
-                max_torque_T: 14.0,
+                max_torque_T: 13.0 * 4.0 * std::f64::consts::PI * 1.0e-7,
             },
             ScalarRow {
                 step: 42,
@@ -976,7 +976,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 max_h_eff: 11.0,
                 max_h_demag: 12.0,
                 max_torque_Apm: 13.0,
-                max_torque_T: 14.0,
+                max_torque_T: 13.0 * 4.0 * std::f64::consts::PI * 1.0e-7,
             },
         ];
         snapshot.stage_execution = Some(StageExecutionState {
@@ -1035,7 +1035,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                     state_transfer_operator_kind: Some("checkpoint_load".into()),
                     state_transition_ui_presentation: Some("boundary_bar".into()),
                     metric_name: Some("max_torque_T".into()),
-                    metric_value: Some(14.0),
+                    metric_value: Some(13.0 * 4.0 * std::f64::consts::PI * 1.0e-7),
                     threshold: Some(1.0e-4),
                     progress_percent: Some(35.0),
                     progress_label: Some("solving".into()),
@@ -1412,7 +1412,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
                 max_h_eff: 11.0,
                 max_h_demag: 12.0,
                 max_torque_Apm: 13.0,
-                max_torque_T: 14.0,
+                max_torque_T: 13.0 * 4.0 * std::f64::consts::PI * 1.0e-7,
                 wall_time_ns: 100,
                 grid: [2, 1, 1],
                 fem_mesh: None,
@@ -1892,6 +1892,30 @@ async fn status_returns_200_with_live_session() {
     assert!(json["capabilities"].is_object());
     assert!(json["energies"].is_object());
     assert!(json["metrics"].is_object());
+}
+
+#[tokio::test]
+async fn status_exposes_typed_relaxation_algorithm_from_canonical_metadata() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata = Some(serde_json::json!({
+            "relaxation_algorithm": "nonlinear_cg"
+        }));
+    }
+    let response = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["solver"]["relaxation_algorithm"], "nonlinear_cg");
 }
 
 #[tokio::test]
@@ -11819,6 +11843,64 @@ async fn commands_endpoint_converts_relax_torque_tolerance_t_to_apm() {
 }
 
 #[tokio::test]
+async fn relax_command_rejects_non_positive_physical_controls() {
+    let invalid_bodies = [
+        serde_json::json!({"kind": "relax", "torque_tolerance_apm": 0.0}),
+        serde_json::json!({"kind": "relax", "torque_tolerance_T": -1.0}),
+        serde_json::json!({"kind": "relax", "torque_tolerance": 0.0}),
+        serde_json::json!({"kind": "relax", "energy_tolerance_j": -1.0}),
+        serde_json::json!({"kind": "relax", "energy_tolerance": 0.0}),
+        serde_json::json!({"kind": "relax", "max_steps": 0}),
+        serde_json::json!({"kind": "relax", "max_relaxation_time_s": 0.0}),
+        serde_json::json!({"kind": "relax", "until_seconds": -1.0}),
+        serde_json::json!({"kind": "relax", "relax_alpha": 0.0}),
+        serde_json::json!({"kind": "relax", "fixed_timestep": -1.0}),
+        serde_json::json!({"kind": "relax", "max_error": 0.0}),
+    ];
+
+    for body in invalid_bodies {
+        let response = build_v2_router()
+            .with_state(test_app_state_with_live_session().await)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v2/sessions/current/simulation/commands")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "body={body}");
+    }
+}
+
+#[tokio::test]
+async fn relax_command_rejects_physically_conflicting_torque_aliases() {
+    let response = build_v2_router()
+        .with_state(test_app_state_with_live_session().await)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "relax",
+                        "torque_tolerance_apm": 1.0e-16,
+                        "torque_tolerance_T": 2.0e-16 * 4.0 * std::f64::consts::PI * 1.0e-7
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn commands_endpoint_enqueues_compute_fields_command() {
     let state = test_app_state_with_live_session().await;
     let app = build_v2_router().with_state(state.clone());
@@ -12980,6 +13062,36 @@ async fn command_detail_endpoint_exposes_stage_state_linkage() {
     assert_eq!(json["terminal_at_unix_ms"], 1_700_000_001_000u64);
     assert_eq!(json["torque_tolerance_apm"], 7.5);
     assert_eq!(json["torque_tolerance"], 7.5);
+    assert_eq!(json["relax_algorithm"], "llg_overdamped");
+}
+
+#[tokio::test]
+async fn relax_command_rejects_llg_only_controls_for_direct_minimizer() {
+    let app = build_v2_router().with_state(test_app_state_with_live_session().await);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "relax",
+                        "relax_algorithm": "projected_gradient_bb",
+                        "max_relaxation_time_s": 1.0
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let json = body_json(response).await;
+    assert!(json["error"]
+        .as_str()
+        .is_some_and(|message| message.contains("valid only for llg_overdamped")));
 }
 
 #[tokio::test]
@@ -15120,15 +15232,128 @@ async fn solver_status_endpoint_returns_detailed_read_model() {
     assert_eq!(json["integrator"], "rk45");
     assert_eq!(json["step_index"], 42);
     assert_eq!(json["last_step_updated_at_unix_ms"], 1_700_000_000_123u64);
-    assert_eq!(json["max_torque_T"], 14.0);
+    let expected_torque_t = 13.0 * 4.0 * std::f64::consts::PI * 1.0e-7;
+    assert_eq!(json["max_torque_T"], expected_torque_t);
     assert_eq!(json["max_torque_Apm"], 13.0);
-    assert_eq!(json["max_torque"], 14.0);
+    assert_eq!(json["max_rhs_norm_per_s"], 10.0);
+    assert_eq!(json["max_torque"], 13.0);
+    assert_eq!(json["converged"], false);
     assert_eq!(json["last_error"], "latest runtime error");
     assert!(json["warnings"]
         .as_array()
         .is_some_and(|warnings| warnings.iter().any(|warning| {
             warning == "sharp Aex in region 'film:core' uses projected approximation"
         })));
+}
+
+#[tokio::test]
+async fn status_summary_derives_tesla_torque_from_authoritative_apm_value() {
+    let response = test_router_with_runtime_read_models()
+        .await
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    let expected_torque_t = 13.0 * 4.0 * std::f64::consts::PI * 1.0e-7;
+    assert_eq!(json["solver"]["max_torque_Apm"], 13.0);
+    assert_eq!(json["solver"]["max_torque_T"], expected_torque_t);
+}
+
+#[tokio::test]
+async fn solver_status_does_not_infer_convergence_from_finished_sample() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.live_state = Some(LiveState {
+            status: "finished".into(),
+            updated_at_unix_ms: 1_700_000_000_123,
+            latest_step: StepUpdateView {
+                step: 50_000,
+                time: 0.0,
+                dt: 0.0,
+                pseudo_time_s: None,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 2.0,
+                max_h_eff: 3.0,
+                max_h_demag: 4.0,
+                max_torque_Apm: 5.0,
+                max_torque_T: 6.0,
+                wall_time_ns: 1,
+                grid: [1, 1, 1],
+                fem_mesh: None,
+                magnetization: None,
+                per_object_scalars: Default::default(),
+                preview_field: None,
+                finished: true,
+            },
+        });
+        snapshot.stage_execution = Some(StageExecutionState {
+            total_stages: 1,
+            completed_stage_indexes: vec![0],
+            stages: vec![StageExecutionRecord {
+                stage_id: Some("stage-relax".into()),
+                kind: Some("relax".into()),
+                status: StageLifecycleState::Completed,
+                command_id: None,
+                started_at_unix_ms: None,
+                completed_at_unix_ms: None,
+                reason: Some(fullmag_ir::StageStopReason::MaxSteps),
+                converged: false,
+                artifact_refs: Vec::new(),
+                checkpoint_ref: None,
+                loaded_state_ref: None,
+                resume_from_checkpoint_ref: None,
+                state_transition: None,
+                state_transition_kind: None,
+                state_transition_reason: None,
+                state_transfer_operator_kind: None,
+                state_transition_ui_presentation: None,
+                metric: Some(fullmag_ir::StageMetricKind::Steps),
+                metric_name: Some("steps".into()),
+                metric_value: Some(50_000.0),
+                threshold: Some(50_000.0),
+                progress_percent: None,
+                progress_label: None,
+                progress_detail: None,
+                last_progress_unix_ms: None,
+                current_field_m_t: None,
+                current_point_index: None,
+                current_settle_step_index: None,
+                current_settle_step_kind: None,
+                current_settle_step_method: None,
+            }],
+            stage_statuses: vec![StageLifecycleState::Completed],
+            active_stage_index: None,
+            active_stage_kind: None,
+            runtime_state: RuntimeLifecycleState::Completed,
+        });
+    }
+
+    let response = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/solver/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["converged"], false);
 }
 
 #[tokio::test]
@@ -23452,6 +23677,64 @@ fn openapi_contains_fem_cpu_relaxation_qualification_contract() {
         assert!(
             components.contains_key(schema),
             "OpenAPI missing {schema} schema"
+        );
+    }
+}
+
+#[test]
+fn openapi_relaxation_contract_is_typed() {
+    let openapi = crate::openapi_v2::openapi_json();
+    let schemas = openapi
+        .get("components")
+        .and_then(|component| component.get("schemas"))
+        .and_then(|schemas| schemas.as_object())
+        .expect("OpenAPI schemas must be present");
+
+    for schema in [
+        "RelaxationAlgorithm",
+        "StageStopReason",
+        "StageMetricKind",
+        "StageMetricUnit",
+    ] {
+        assert!(schemas.contains_key(schema), "OpenAPI missing {schema}");
+    }
+
+    let command_schema = schemas
+        .get("StructuredCommandRequest")
+        .expect("StructuredCommandRequest schema missing")
+        .to_string();
+    assert!(command_schema.contains("max_relaxation_time_s"));
+    assert!(command_schema.contains("energy_tolerance_j"));
+    assert!(command_schema.contains("RelaxationAlgorithm"));
+
+    let stage_schema = schemas
+        .get("StageExecutionRecordResource")
+        .expect("StageExecutionRecordResource schema missing")
+        .to_string();
+    assert!(stage_schema.contains("StageStopReason"));
+    assert!(stage_schema.contains("StageMetricKind"));
+    assert!(stage_schema.contains("StageMetricUnit"));
+    assert!(stage_schema.contains("converged"));
+
+    let solver_schema = schemas
+        .get("SolverStatusResource")
+        .expect("SolverStatusResource schema missing")
+        .to_string();
+    assert!(solver_schema.contains("max_rhs_norm_per_s"));
+    assert!(solver_schema.contains("max_torque_Apm"));
+    assert!(solver_schema.contains("max_torque_T"));
+
+    for schema_name in ["SolverStatusResource", "SolverSummary"] {
+        let deprecated = schemas
+            .get(schema_name)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(|properties| properties.get("max_torque"))
+            .and_then(|property| property.get("deprecated"))
+            .and_then(|deprecated| deprecated.as_bool());
+        assert_eq!(
+            deprecated,
+            Some(true),
+            "{schema_name}.max_torque must be formally deprecated"
         );
     }
 }

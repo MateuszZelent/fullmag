@@ -358,6 +358,7 @@ describe("FooterTelemetry", () => {
       stage_statuses: ["running"],
       stages: [
         {
+          converged: false,
           index: 0,
           kind: "flat_frequency_response",
           label: "Frequency response",
@@ -458,6 +459,7 @@ describe("FooterTelemetry", () => {
       stage_statuses: ["running"],
       stages: [
         {
+          converged: false,
           index: 0,
           kind: "flat_frequency_response",
           label: "Frequency response",
@@ -545,6 +547,7 @@ describe("FooterTelemetry", () => {
       stage_statuses: ["running"],
       stages: [
         {
+          converged: false,
           index: 0,
           kind: "flat_frequency_response",
           label: "Frequency response",
@@ -620,6 +623,7 @@ describe("FooterTelemetry", () => {
       stage_statuses: ["running"],
       stages: [
         {
+          converged: false,
           index: 0,
           kind: "flat_frequency_response",
           label: "Frequency response",
@@ -713,6 +717,7 @@ describe("FooterTelemetry", () => {
       stage_statuses: ["running"],
       stages: [
         {
+          converged: false,
           index: 0,
           kind: "flat_eigenmodes",
           label: "Eigenmodes",

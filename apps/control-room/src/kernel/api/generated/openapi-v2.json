@@ -1334,6 +1334,13 @@
               "null"
             ]
           },
+          "energy_tolerance_j": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
           "error": {
             "type": [
               "string",
@@ -1363,6 +1370,13 @@
             ]
           },
           "max_error": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "max_relaxation_time_s": {
             "format": "double",
             "type": [
               "number",
@@ -1410,9 +1424,13 @@
             ]
           },
           "relax_algorithm": {
-            "type": [
-              "string",
-              "null"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RelaxationAlgorithm"
+              }
             ]
           },
           "relax_alpha": {
@@ -3149,6 +3167,9 @@
           "benchmark_gate_version": {
             "type": "string"
           },
+          "converged": {
+            "type": "boolean"
+          },
           "demag_policy": {
             "$ref": "#/components/schemas/FemCpuRelaxationDemagPolicyMetadata"
           },
@@ -3179,9 +3200,13 @@
             "type": "array"
           },
           "relaxation_algorithm": {
-            "type": [
-              "string",
-              "null"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RelaxationAlgorithm"
+              }
             ]
           },
           "schema_version": {
@@ -3190,10 +3215,30 @@
           "solver_mesh_signature": {
             "type": "string"
           },
+          "stop_metric_kind": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StageMetricKind"
+              }
+            ]
+          },
           "stop_metric_name": {
             "type": [
               "string",
               "null"
+            ]
+          },
+          "stop_metric_unit": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StageMetricUnit"
+              }
             ]
           },
           "stop_metric_value": {
@@ -3204,9 +3249,13 @@
             ]
           },
           "stop_reason": {
-            "type": [
-              "string",
-              "null"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StageStopReason"
+              }
             ]
           },
           "stop_threshold": {
@@ -3223,6 +3272,7 @@
           "physics_terms",
           "solver_mesh_signature",
           "demag_policy",
+          "converged",
           "final_energy_terms_j",
           "final_torque_apm",
           "final_torque_t",
@@ -12019,6 +12069,15 @@
         ],
         "type": "object"
       },
+      "RelaxationAlgorithm": {
+        "enum": [
+          "llg_overdamped",
+          "projected_gradient_bb",
+          "nonlinear_cg",
+          "tangent_plane_implicit"
+        ],
+        "type": "string"
+      },
       "ResolvedFallbackResource": {
         "properties": {
           "fallback_engine": {
@@ -15254,6 +15313,7 @@
             ]
           },
           "algorithm": {
+            "description": "Generic resolved solver realization (for example a frequency-domain engine).",
             "type": [
               "string",
               "null"
@@ -15298,7 +15358,17 @@
               "null"
             ]
           },
+          "max_rhs_norm_per_s": {
+            "description": "Maximum total dynamic RHS norm in 1/s. This is not an equilibrium torque.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
           "max_torque": {
+            "deprecated": true,
+            "description": "Deprecated ambiguous alias. When present it is always in A/m and equals\n`max_torque_Apm`.",
             "format": "double",
             "type": [
               "number",
@@ -15324,6 +15394,16 @@
             "type": [
               "number",
               "null"
+            ]
+          },
+          "relaxation_algorithm": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RelaxationAlgorithm"
+              }
             ]
           },
           "revision": {
@@ -15410,7 +15490,16 @@
               "null"
             ]
           },
+          "max_rhs_norm_per_s": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
           "max_torque": {
+            "deprecated": true,
+            "description": "Deprecated ambiguous alias. When present it is in A/m.",
             "format": "double",
             "type": [
               "number",
@@ -15429,6 +15518,16 @@
             "type": [
               "number",
               "null"
+            ]
+          },
+          "relaxation_algorithm": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RelaxationAlgorithm"
+              }
             ]
           },
           "state": {
@@ -15474,6 +15573,9 @@
               "integer",
               "null"
             ]
+          },
+          "converged": {
+            "type": "boolean"
           },
           "current_field_mT": {
             "format": "double",
@@ -15541,10 +15643,30 @@
               "null"
             ]
           },
+          "metric_kind": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StageMetricKind"
+              }
+            ]
+          },
           "metric_name": {
             "type": [
               "string",
               "null"
+            ]
+          },
+          "metric_unit": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StageMetricUnit"
+              }
             ]
           },
           "metric_value": {
@@ -15574,9 +15696,13 @@
             ]
           },
           "reason": {
-            "type": [
-              "string",
-              "null"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StageStopReason"
+              }
             ]
           },
           "resume_from_checkpoint_ref": {
@@ -15640,7 +15766,8 @@
         "required": [
           "stage_id",
           "index",
-          "status"
+          "status",
+          "converged"
         ],
         "type": "object"
       },
@@ -15703,6 +15830,38 @@
           "stages"
         ],
         "type": "object"
+      },
+      "StageMetricKind": {
+        "enum": [
+          "max_torque_apm",
+          "total_energy_plateau_range_j",
+          "relaxation_time_s",
+          "steps",
+          "numerical_stagnation"
+        ],
+        "type": "string"
+      },
+      "StageMetricUnit": {
+        "enum": [
+          "A/m",
+          "J",
+          "s",
+          "1"
+        ],
+        "type": "string"
+      },
+      "StageStopReason": {
+        "enum": [
+          "torque",
+          "energy",
+          "max_steps",
+          "max_pseudotime",
+          "max_physical_time",
+          "user_cancelled",
+          "backend_error",
+          "gradient"
+        ],
+        "type": "string"
       },
       "StructuredCommandRequest": {
         "oneOf": [
@@ -15774,6 +15933,13 @@
                       "null"
                     ]
                   },
+                  "energy_tolerance_j": {
+                    "format": "double",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
                   "fixed_timestep": {
                     "format": "double",
                     "type": [
@@ -15782,6 +15948,13 @@
                     ]
                   },
                   "max_error": {
+                    "format": "double",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "max_relaxation_time_s": {
                     "format": "double",
                     "type": [
                       "number",
@@ -15797,9 +15970,13 @@
                     ]
                   },
                   "relax_algorithm": {
-                    "type": [
-                      "string",
-                      "null"
+                    "oneOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "$ref": "#/components/schemas/RelaxationAlgorithm"
+                      }
                     ]
                   },
                   "relax_alpha": {

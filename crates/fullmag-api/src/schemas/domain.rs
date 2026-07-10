@@ -3,6 +3,9 @@ use std::collections::HashMap;
 use utoipa::ToSchema;
 
 use crate::field_slice::SlicePlane;
+use crate::schemas::relaxation::{
+    RelaxationAlgorithm, StageMetricKind, StageMetricUnit, StageStopReason,
+};
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct DomainMeta {
@@ -54,11 +57,11 @@ pub struct FemCpuRelaxationQualificationMetadata {
     pub solver_mesh_signature: String,
     pub demag_policy: FemCpuRelaxationDemagPolicyMetadata,
     pub assembly_mode: Option<String>,
-    pub relaxation_algorithm: Option<String>,
+    pub relaxation_algorithm: Option<RelaxationAlgorithm>,
     pub converged: bool,
-    pub stop_reason: Option<String>,
-    pub stop_metric_kind: Option<String>,
-    pub stop_metric_unit: Option<String>,
+    pub stop_reason: Option<StageStopReason>,
+    pub stop_metric_kind: Option<StageMetricKind>,
+    pub stop_metric_unit: Option<StageMetricUnit>,
     pub stop_metric_name: Option<String>,
     pub stop_metric_value: Option<f64>,
     pub stop_threshold: Option<f64>,

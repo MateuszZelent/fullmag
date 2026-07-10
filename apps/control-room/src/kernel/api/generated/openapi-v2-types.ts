@@ -3134,6 +3134,8 @@ export interface components {
             dispatched_at_unix_ms?: number | null;
             /** Format: double */
             energy_tolerance?: number | null;
+            /** Format: double */
+            energy_tolerance_j?: number | null;
             error?: string | null;
             /** Format: double */
             fixed_timestep?: number | null;
@@ -3142,13 +3144,15 @@ export interface components {
             loaded_state_ref?: string | null;
             /** Format: double */
             max_error?: number | null;
+            /** Format: double */
+            max_relaxation_time_s?: number | null;
             /** Format: int64 */
             max_steps?: number | null;
             mesh_reason?: string | null;
             mesh_target?: null | components["schemas"]["MeshCommandTarget"];
             precondition?: null | components["schemas"]["RuntimeCommandPrecondition"];
             reason?: string | null;
-            relax_algorithm?: string | null;
+            relax_algorithm?: null | components["schemas"]["RelaxationAlgorithm"];
             /** Format: double */
             relax_alpha?: number | null;
             request_id?: string | null;
@@ -3579,6 +3583,7 @@ export interface components {
         FemCpuRelaxationQualificationMetadata: {
             assembly_mode?: string | null;
             benchmark_gate_version: string;
+            converged: boolean;
             demag_policy: components["schemas"]["FemCpuRelaxationDemagPolicyMetadata"];
             /** Format: int64 */
             executed_steps: number;
@@ -3590,13 +3595,15 @@ export interface components {
             /** Format: double */
             norm_defect: number;
             physics_terms: string[];
-            relaxation_algorithm?: string | null;
+            relaxation_algorithm?: null | components["schemas"]["RelaxationAlgorithm"];
             schema_version: string;
             solver_mesh_signature: string;
+            stop_metric_kind?: null | components["schemas"]["StageMetricKind"];
             stop_metric_name?: string | null;
+            stop_metric_unit?: null | components["schemas"]["StageMetricUnit"];
             /** Format: double */
             stop_metric_value?: number | null;
-            stop_reason?: string | null;
+            stop_reason?: null | components["schemas"]["StageStopReason"];
             /** Format: double */
             stop_threshold?: number | null;
         };
@@ -5855,6 +5862,8 @@ export interface components {
             source_object_ids: string[];
             texture_override?: null | components["schemas"]["SceneTextureOverride"];
         };
+        /** @enum {string} */
+        RelaxationAlgorithm: "llg_overdamped" | "projected_gradient_bb" | "nonlinear_cg" | "tangent_plane_implicit";
         ResolvedFallbackResource: {
             fallback_engine: string;
             message: string;
@@ -6689,6 +6698,7 @@ export interface components {
         SolverStatusResource: {
             /** Format: double */
             active_runtime_seconds?: number | null;
+            /** @description Generic resolved solver realization (for example a frequency-domain engine). */
             algorithm?: string | null;
             can_accept_commands: boolean;
             converged?: boolean | null;
@@ -6699,7 +6709,17 @@ export interface components {
             last_error?: string | null;
             /** Format: int64 */
             last_step_updated_at_unix_ms?: number | null;
-            /** Format: double */
+            /**
+             * Format: double
+             * @description Maximum total dynamic RHS norm in 1/s. This is not an equilibrium torque.
+             */
+            max_rhs_norm_per_s?: number | null;
+            /**
+             * Format: double
+             * @deprecated
+             * @description Deprecated ambiguous alias. When present it is always in A/m and equals
+             *     `max_torque_Apm`.
+             */
             max_torque?: number | null;
             /** Format: double */
             max_torque_Apm?: number | null;
@@ -6707,6 +6727,7 @@ export interface components {
             max_torque_T?: number | null;
             /** Format: double */
             pseudo_time_seconds?: number | null;
+            relaxation_algorithm?: null | components["schemas"]["RelaxationAlgorithm"];
             /** Format: int64 */
             revision: number;
             run_id?: string | null;
@@ -6727,11 +6748,18 @@ export interface components {
             /** Format: double */
             dt?: number | null;
             /** Format: double */
+            max_rhs_norm_per_s?: number | null;
+            /**
+             * Format: double
+             * @deprecated
+             * @description Deprecated ambiguous alias. When present it is in A/m.
+             */
             max_torque?: number | null;
             /** Format: double */
             max_torque_Apm?: number | null;
             /** Format: double */
             max_torque_T?: number | null;
+            relaxation_algorithm?: null | components["schemas"]["RelaxationAlgorithm"];
             /** @description idle | running | paused | finished | error */
             state: string;
         };
@@ -6742,6 +6770,7 @@ export interface components {
             command_id?: string | null;
             /** Format: int64 */
             completed_at_unix_ms?: number | null;
+            converged: boolean;
             /** Format: double */
             current_field_mT?: number | null;
             /** Format: int32 */
@@ -6757,14 +6786,16 @@ export interface components {
             /** Format: int64 */
             last_progress_unix_ms?: number | null;
             loaded_state_ref?: string | null;
+            metric_kind?: null | components["schemas"]["StageMetricKind"];
             metric_name?: string | null;
+            metric_unit?: null | components["schemas"]["StageMetricUnit"];
             /** Format: double */
             metric_value?: number | null;
             progress_detail?: string | null;
             progress_label?: string | null;
             /** Format: double */
             progress_percent?: number | null;
-            reason?: string | null;
+            reason?: null | components["schemas"]["StageStopReason"];
             resume_from_checkpoint_ref?: string | null;
             stage_id: string;
             /** Format: int64 */
@@ -6791,6 +6822,12 @@ export interface components {
             /** Format: int32 */
             total_stages: number;
         };
+        /** @enum {string} */
+        StageMetricKind: "max_torque_apm" | "total_energy_plateau_range_j" | "relaxation_time_s" | "steps" | "numerical_stagnation";
+        /** @enum {string} */
+        StageMetricUnit: "A/m" | "J" | "s" | "1";
+        /** @enum {string} */
+        StageStopReason: "torque" | "energy" | "max_steps" | "max_pseudotime" | "max_physical_time" | "user_cancelled" | "backend_error" | "gradient";
         StructuredCommandRequest: (components["schemas"]["RuntimeCommandIntent"] & {
             /** Format: double */
             fixed_timestep?: number | null;
@@ -6806,12 +6843,16 @@ export interface components {
             /** Format: double */
             energy_tolerance?: number | null;
             /** Format: double */
+            energy_tolerance_j?: number | null;
+            /** Format: double */
             fixed_timestep?: number | null;
             /** Format: double */
             max_error?: number | null;
+            /** Format: double */
+            max_relaxation_time_s?: number | null;
             /** Format: int64 */
             max_steps?: number | null;
-            relax_algorithm?: string | null;
+            relax_algorithm?: null | components["schemas"]["RelaxationAlgorithm"];
             /** Format: double */
             relax_alpha?: number | null;
             /** Format: double */

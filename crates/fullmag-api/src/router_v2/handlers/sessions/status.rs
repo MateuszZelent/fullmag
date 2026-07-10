@@ -9,6 +9,7 @@ use serde_json::Value;
 use crate::error::ApiError;
 use crate::router_v2::handlers::data::field_resolution::live_magnetization_available;
 use crate::router_v2::handlers::visualization::display::build_display_selection_response;
+use crate::schemas::relaxation::{canonical_torque_apm, torque_t_from_apm, RelaxationAlgorithm};
 use crate::schemas::status::*;
 use crate::session::command_ledger_revisions;
 use crate::types::{
@@ -95,17 +96,37 @@ pub(crate) fn build_live_status(
 
     let ls = snapshot.live_state.as_ref();
     let latest = ls.map(|l| &l.latest_step);
+    let max_torque_apm = latest.and_then(|step| canonical_torque_apm(step.max_torque_Apm));
+    let completion = snapshot.stage_execution.as_ref().and_then(|execution| {
+        execution
+            .active_stage_index
+            .and_then(|index| execution.stages.get(index))
+            .or_else(|| {
+                execution.stages.iter().rev().find(|record| {
+                    matches!(
+                        record.status,
+                        crate::types::StageLifecycleState::Skipped
+                            | crate::types::StageLifecycleState::Completed
+                            | crate::types::StageLifecycleState::Cancelled
+                            | crate::types::StageLifecycleState::Stopped
+                            | crate::types::StageLifecycleState::Failed
+                    )
+                })
+            })
+    });
 
     let solver = SolverSummary {
         state: ls
             .map(|l| l.status.clone())
             .unwrap_or_else(|| "idle".into()),
         algorithm: None,
+        relaxation_algorithm: relaxation_algorithm_from_metadata(snapshot.metadata.as_ref()),
         dt: latest.map(|s| s.dt),
-        max_torque_t: latest.map(|s| s.max_torque_T),
-        max_torque_apm: latest.map(|s| s.max_torque_Apm),
-        max_torque: latest.map(|s| s.max_torque_T),
-        converged: latest.map(|s| s.finished),
+        max_torque_t: max_torque_apm.and_then(torque_t_from_apm),
+        max_torque_apm,
+        max_rhs_norm_per_s: latest.map(|s| s.max_dm_dt),
+        max_torque: max_torque_apm,
+        converged: completion.map(|record| record.converged),
     };
 
     let display = build_display_selection_response(&display_sel, &display_presentation);
@@ -217,6 +238,20 @@ pub(crate) fn build_live_status(
         energies,
         metrics,
     }
+}
+
+fn relaxation_algorithm_from_metadata(metadata: Option<&Value>) -> Option<RelaxationAlgorithm> {
+    metadata
+        .and_then(|value| value.get("relaxation_algorithm"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            metadata
+                .and_then(|value| value.get("execution_plan"))
+                .and_then(|value| value.get("backend_plan"))
+                .and_then(|value| value.get("relax_algorithm"))
+                .and_then(Value::as_str)
+        })
+        .and_then(RelaxationAlgorithm::parse)
 }
 
 pub(crate) fn topology_revision(snapshot: &SessionStateResponse, domain_generation_id: u64) -> u64 {

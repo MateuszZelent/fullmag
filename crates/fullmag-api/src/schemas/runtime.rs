@@ -2,6 +2,9 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::schemas::commands::{RuntimeCommandPrecondition, RuntimeCommandTarget};
+use crate::schemas::relaxation::{
+    RelaxationAlgorithm, StageMetricKind, StageMetricUnit, StageStopReason,
+};
 use crate::types::MeshCommandTarget;
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -110,7 +113,7 @@ pub struct StageExecutionRecordResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completed_at_unix_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
+    pub reason: Option<StageStopReason>,
     pub converged: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artifact_refs: Vec<String>,
@@ -131,9 +134,9 @@ pub struct StageExecutionRecordResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state_transition_ui_presentation: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub metric_kind: Option<String>,
+    pub metric_kind: Option<StageMetricKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub metric_unit: Option<String>,
+    pub metric_unit: Option<StageMetricUnit>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metric_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -174,7 +177,10 @@ pub struct SolverStatusResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stage_kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Generic resolved solver realization (for example a frequency-domain engine).
     pub algorithm: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relaxation_algorithm: Option<RelaxationAlgorithm>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub integrator: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -195,6 +201,12 @@ pub struct SolverStatusResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "max_torque_Apm")]
     pub max_torque_apm: Option<f64>,
+    /// Maximum total dynamic RHS norm in 1/s. This is not an equilibrium torque.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_rhs_norm_per_s: Option<f64>,
+    /// Deprecated ambiguous alias. When present it is always in A/m and equals
+    /// `max_torque_Apm`.
+    #[schema(deprecated)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_torque: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -396,6 +408,8 @@ pub struct CommandDetailResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub until_seconds: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_relaxation_time_s: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_steps: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub torque_tolerance_apm: Option<f64>,
@@ -404,13 +418,15 @@ pub struct CommandDetailResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub energy_tolerance: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub energy_tolerance_j: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub integrator: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fixed_timestep: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_error: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub relax_algorithm: Option<String>,
+    pub relax_algorithm: Option<RelaxationAlgorithm>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub relax_alpha: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
