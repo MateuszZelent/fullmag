@@ -64,8 +64,6 @@ fn make_plan(enable_demag: bool, precision: ExecutionPrecision) -> FdmMultilayer
                 torque_tolerance_apm: Some(1e-4),
                 energy_tolerance_j: None,
                 max_steps: Some(10),
-                max_pseudotime_s: None,
-                max_physical_time_s: None,
             },
         }),
         planner_summary: fullmag_ir::FdmMultilayerSummaryIR {
@@ -227,7 +225,7 @@ fn staged_v2_cuda_allows_fixed_step_rk23_but_rejects_rk45() {
     let native = resolve_cuda_multilayer_execution_shape(&plan)
         .expect("native stacked RK45 should be a valid CUDA multilayer execution shape")
         .expect("plan should use native single-grid fast path");
-    assert_eq!(native.combined_plan.integrator, IntegratorChoice::Rk45);
+    assert_eq!(native.combined_plan.integrator, Some(IntegratorChoice::Rk45));
 
     let mut assisted = make_assisted_plan(false, ExecutionPrecision::Double);
     assisted.integrator = IntegratorChoice::Rk23;

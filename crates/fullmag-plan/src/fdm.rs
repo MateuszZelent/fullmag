@@ -1731,14 +1731,19 @@ pub(crate) fn plan_fdm_multilayer(
     if !native_cuda_lane && requested_auto_integrator {
         integrator = Some(IntegratorChoice::Heun);
     }
-    if !native_cuda_lane && integrator != Some(IntegratorChoice::Heun) {
+    if !native_cuda_lane
+        && !matches!(
+            integrator,
+            Some(IntegratorChoice::Heun | IntegratorChoice::Rk4 | IntegratorChoice::Rk23)
+        )
+    {
         let lane = if runtime_requests_cuda(problem) {
             "staged CUDA"
         } else {
             "staged CPU"
         };
         errors.push(format!(
-            "the {lane} multilayer FDM runner supports only the 'heun' integrator; non-Heun integrators require the native single-grid-compatible CUDA lane"
+            "the {lane} multilayer FDM runner supports only fixed-step 'heun', 'rk4', and 'rk23' integrators; rk45 and abm3 require the native single-grid-compatible CUDA lane"
         ));
     }
     if !native_cuda_lane && adaptive_timestep.is_some() {

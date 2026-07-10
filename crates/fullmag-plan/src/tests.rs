@@ -5235,17 +5235,18 @@ fn stacked_two_body_multilayer_problem_with_dmi() -> ProblemIR {
 }
 
 #[test]
-fn staged_multilayer_rejects_non_heun_integrators() {
+fn staged_multilayer_reaches_rk4_and_rejects_rk45() {
     let mut cpu = stacked_two_body_multilayer_problem();
     let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &mut cpu.study else {
         panic!("bootstrap study should be time evolution");
     };
     let fullmag_ir::DynamicsIR::Llg { integrator, .. } = dynamics;
     *integrator = "rk4".to_string();
-    let err = plan(&cpu).expect_err("staged CPU multilayer supports only Heun");
-    assert!(err.reasons.iter().any(|reason| {
-        reason.contains("staged") && reason.contains("multilayer") && reason.contains("heun")
-    }));
+    let planned = plan(&cpu).expect("staged CPU multilayer must reach RK4");
+    let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
+        panic!("expected multilayer plan");
+    };
+    assert_eq!(multilayer.integrator, IntegratorChoice::Rk4);
 
     let mut cuda = cpu;
     let mut second_material = cuda.materials[0].clone();
@@ -5257,10 +5258,64 @@ fn staged_multilayer_rejects_non_heun_integrators() {
         "runtime_selection".to_string(),
         serde_json::json!({"device": "cuda"}),
     );
-    let err = plan(&cuda).expect_err("non-native staged CUDA multilayer supports only Heun");
+    let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &mut cuda.study else {
+        panic!("bootstrap study should be time evolution");
+    };
+    let fullmag_ir::DynamicsIR::Llg { integrator, .. } = dynamics;
+    *integrator = "rk45".to_string();
+    let err = plan(&cuda).expect_err("non-native staged CUDA multilayer rejects RK45");
     assert!(err.reasons.iter().any(|reason| {
-        reason.contains("staged") && reason.contains("CUDA") && reason.contains("heun")
+        reason.contains("staged") && reason.contains("CUDA") && reason.contains("rk23")
     }));
+}
+
+#[test]
+fn staged_multilayer_rejects_abm3() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &mut ir.study else {
+        panic!("bootstrap study should be time evolution");
+    };
+    let fullmag_ir::DynamicsIR::Llg { integrator, .. } = dynamics;
+    *integrator = "abm3".to_string();
+
+    let err = plan(&ir).expect_err("staged CPU multilayer must reject ABM3");
+    assert!(err.reasons.iter().any(|reason| {
+        reason.contains("staged CPU") && reason.contains("abm3") && reason.contains("rk23")
+    }));
+}
+
+#[test]
+fn staged_multilayer_rejects_adaptive_rk23() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &mut ir.study else {
+        panic!("bootstrap study should be time evolution");
+    };
+    let fullmag_ir::DynamicsIR::Llg {
+        integrator,
+        fixed_timestep,
+        adaptive_timestep,
+        ..
+    } = dynamics;
+    *integrator = "rk23".to_string();
+    *fixed_timestep = None;
+    *adaptive_timestep = Some(fullmag_ir::AdaptiveTimeStepIR {
+        atol: 1.0e-6,
+        rtol: 1.0e-4,
+        dt_initial: Some(1.0e-13),
+        dt_min: 1.0e-16,
+        dt_max: Some(1.0e-11),
+        safety: 0.9,
+        growth_limit: 2.0,
+        shrink_limit: 0.2,
+        max_spin_rotation: None,
+        norm_tolerance: None,
+    });
+
+    let err = plan(&ir).expect_err("staged CPU multilayer must reject adaptive RK23");
+    assert!(err
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("multilayer") && reason.contains("adaptive_timestep")));
 }
 
 #[test]
@@ -5489,17 +5544,13 @@ fn stacked_two_body_problem_lowers_to_multilayer_plan() {
         *integrator = "rk23".to_string();
         *fixed_timestep = Some(1e-13);
     }
-    let err = plan(&ir)
-        .expect_err("heterogeneous staged CUDA multilayer must reject non-Heun integrators");
-    assert!(
-        err.reasons.iter().any(|reason| {
-            reason.contains("staged CUDA")
-                && reason.contains("only the 'heun' integrator")
-                && reason.contains("native single-grid-compatible CUDA lane")
-        }),
-        "unexpected planner errors: {:?}",
-        err.reasons
-    );
+    let staged = plan(&ir).expect("heterogeneous staged CUDA multilayer RK23 should lower");
+    match staged.backend_plan {
+        BackendPlanIR::FdmMultilayer(multilayer) => {
+            assert_eq!(multilayer.integrator, fullmag_ir::IntegratorChoice::Rk23);
+        }
+        other => panic!("expected FDM multilayer plan, got {other:?}"),
+    }
 }
 
 #[test]

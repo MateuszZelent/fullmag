@@ -474,6 +474,7 @@ fn execute_cuda_assisted_multilayer_double(
             demag_runtime.as_ref(),
             native_demag.as_mut(),
             dt_step,
+            plan.integrator,
         )?;
         let wall_time_ns = wall_start.elapsed().as_nanos() as u64;
         step_count += 1;
@@ -707,6 +708,7 @@ fn execute_cuda_assisted_multilayer_single(
             demag_runtime.as_ref(),
             native_demag.as_mut(),
             dt_step,
+            plan.integrator,
         )?;
         let wall_time_ns = wall_start.elapsed().as_nanos() as u64;
         step_count += 1;
@@ -1713,49 +1715,23 @@ fn step_multilayer_cuda(
     demag_runtime: Option<&MultilayerDemagRuntime>,
     mut native_demag: Option<&mut NativeMultilayerDemagOperator>,
     dt: f64,
+    integrator: IntegratorChoice,
 ) -> Result<(), RunError> {
     let m0 = states
         .iter()
         .map(|state| state.magnetization().to_vec())
         .collect::<Vec<_>>();
-    let k1 = llg_rhs_multilayer_cuda(
-        contexts,
-        gpu_contexts,
-        &m0,
-        demag_runtime,
-        native_demag.as_mut().map(|operator| &mut **operator),
-    )?;
-    let predicted = m0
-        .iter()
-        .zip(k1.iter())
-        .map(|(layer_m, layer_k)| {
-            layer_m
-                .iter()
-                .zip(layer_k.iter())
-                .map(|(m, k)| normalized(add(*m, scale(*k, dt))))
-                .collect::<Result<Vec<_>, _>>()
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|message| RunError { message })?;
-    let k2 = llg_rhs_multilayer_cuda(
-        contexts,
-        gpu_contexts,
-        &predicted,
-        demag_runtime,
-        native_demag.as_mut().map(|operator| &mut **operator),
-    )?;
-    let corrected = m0
-        .iter()
-        .zip(k1.iter().zip(k2.iter()))
-        .map(|(layer_m, (layer_k1, layer_k2))| {
-            layer_m
-                .iter()
-                .zip(layer_k1.iter().zip(layer_k2.iter()))
-                .map(|(m, (rhs1, rhs2))| normalized(add(*m, scale(add(*rhs1, *rhs2), 0.5 * dt))))
-                .collect::<Result<Vec<_>, _>>()
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|message| RunError { message })?;
+    let corrected = crate::fdm::multilayer::explicit_rk_step(&m0, dt, integrator, |m| {
+        llg_rhs_multilayer_cuda(
+            contexts,
+            gpu_contexts,
+            m,
+            demag_runtime,
+            native_demag.as_mut().map(|operator| &mut **operator),
+        )
+        .map_err(|error| error.message)
+    })
+    .map_err(|message| RunError { message })?;
 
     for (state, new_layer) in states.iter_mut().zip(corrected.into_iter()) {
         state
@@ -2055,58 +2031,106 @@ fn step_multilayer_cuda_single(
     demag_runtime: Option<&MultilayerDemagRuntimeF32>,
     mut native_demag: Option<&mut NativeMultilayerDemagOperator>,
     dt: f64,
+    integrator: IntegratorChoice,
 ) -> Result<(), RunError> {
     let m0 = states
         .iter()
         .map(|state| state.magnetization.clone())
         .collect::<Vec<_>>();
-    let k1 = llg_rhs_multilayer_cuda_single(
-        contexts,
-        gpu_contexts,
-        &m0,
-        demag_runtime,
-        native_demag.as_mut().map(|operator| &mut **operator),
-    )?;
-    let dt_f32 = dt as f32;
-    let predicted = m0
-        .iter()
-        .zip(k1.iter())
-        .map(|(layer_m, layer_k)| {
-            layer_m
-                .iter()
-                .zip(layer_k.iter())
-                .map(|(m, k)| normalized_f32(add_f32(*m, scale_f32(*k, dt_f32))))
-                .collect::<Result<Vec<_>, _>>()
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|message| RunError { message })?;
-    let k2 = llg_rhs_multilayer_cuda_single(
-        contexts,
-        gpu_contexts,
-        &predicted,
-        demag_runtime,
-        native_demag.as_mut().map(|operator| &mut **operator),
-    )?;
-    let corrected = m0
-        .iter()
-        .zip(k1.iter().zip(k2.iter()))
-        .map(|(layer_m, (layer_k1, layer_k2))| {
-            layer_m
-                .iter()
-                .zip(layer_k1.iter().zip(layer_k2.iter()))
-                .map(|(m, (rhs1, rhs2))| {
-                    normalized_f32(add_f32(*m, scale_f32(add_f32(*rhs1, *rhs2), 0.5 * dt_f32)))
-                })
-                .collect::<Result<Vec<_>, _>>()
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|message| RunError { message })?;
+    let corrected = explicit_rk_step_single(&m0, dt as f32, integrator, |m| {
+        llg_rhs_multilayer_cuda_single(
+            contexts,
+            gpu_contexts,
+            m,
+            demag_runtime,
+            native_demag.as_mut().map(|operator| &mut **operator),
+        )
+    })?;
 
     for (state, new_layer) in states.iter_mut().zip(corrected.into_iter()) {
         state.magnetization = new_layer;
         state.time_seconds += dt;
     }
     Ok(())
+}
+
+fn explicit_rk_step_single<F>(
+    initial: &[Vec<[f32; 3]>],
+    dt: f32,
+    integrator: IntegratorChoice,
+    mut rhs: F,
+) -> Result<Vec<Vec<[f32; 3]>>, RunError>
+where
+    F: FnMut(&[Vec<[f32; 3]>]) -> Result<Vec<Vec<[f32; 3]>>, RunError>,
+{
+    let k1 = rhs(initial)?;
+    match integrator {
+        IntegratorChoice::Heun => {
+            let y2 = combine_normalized_single(initial, &[(&k1, dt)])?;
+            let k2 = rhs(&y2)?;
+            combine_normalized_single(initial, &[(&k1, 0.5 * dt), (&k2, 0.5 * dt)])
+        }
+        IntegratorChoice::Rk4 => {
+            let y2 = combine_normalized_single(initial, &[(&k1, 0.5 * dt)])?;
+            let k2 = rhs(&y2)?;
+            let y3 = combine_normalized_single(initial, &[(&k2, 0.5 * dt)])?;
+            let k3 = rhs(&y3)?;
+            let y4 = combine_normalized_single(initial, &[(&k3, dt)])?;
+            let k4 = rhs(&y4)?;
+            combine_normalized_single(
+                initial,
+                &[
+                    (&k1, dt / 6.0),
+                    (&k2, dt / 3.0),
+                    (&k3, dt / 3.0),
+                    (&k4, dt / 6.0),
+                ],
+            )
+        }
+        IntegratorChoice::Rk23 => {
+            let y2 = combine_normalized_single(initial, &[(&k1, 0.5 * dt)])?;
+            let k2 = rhs(&y2)?;
+            let y3 = combine_normalized_single(initial, &[(&k2, 0.75 * dt)])?;
+            let k3 = rhs(&y3)?;
+            combine_normalized_single(
+                initial,
+                &[
+                    (&k1, 2.0 * dt / 9.0),
+                    (&k2, dt / 3.0),
+                    (&k3, 4.0 * dt / 9.0),
+                ],
+            )
+        }
+        unsupported => Err(RunError {
+            message: format!("staged multilayer explicit RK does not implement {unsupported:?}"),
+        }),
+    }
+}
+
+fn combine_normalized_single(
+    initial: &[Vec<[f32; 3]>],
+    increments: &[(&[Vec<[f32; 3]>], f32)],
+) -> Result<Vec<Vec<[f32; 3]>>, RunError> {
+    initial
+        .iter()
+        .enumerate()
+        .map(|(layer_index, layer)| {
+            layer
+                .iter()
+                .enumerate()
+                .map(|(cell_index, m)| {
+                    let mut value = *m;
+                    for (stage, coefficient) in increments {
+                        for component in 0..3 {
+                            value[component] +=
+                                coefficient * stage[layer_index][cell_index][component];
+                        }
+                    }
+                    normalized_f32(value).map_err(|message| RunError { message })
+                })
+                .collect()
+        })
+        .collect()
 }
 
 fn llg_rhs_multilayer_cuda_single(
@@ -2777,17 +2801,6 @@ fn max_norm_f32(values: &[[f32; 3]]) -> f64 {
         .fold(0.0, f64::max)
 }
 
-fn normalized(v: [f64; 3]) -> Result<[f64; 3], String> {
-    let length = norm(v);
-    if length <= 1e-30 {
-        if v == [0.0, 0.0, 0.0] {
-            return Ok(v);
-        }
-        return Err("magnetization vector collapsed to zero during multilayer step".to_string());
-    }
-    Ok([v[0] / length, v[1] / length, v[2] / length])
-}
-
 fn normalized_f32(v: [f32; 3]) -> Result<[f32; 3], String> {
     let length = norm_f32(v);
     if length <= 1e-20 {
@@ -2852,6 +2865,59 @@ mod tests {
     use crate::fdm::cpu::multilayer_reference;
     use fullmag_ir::{RelaxationAlgorithmIR, RelaxationControlIR};
 
+    fn manufactured_rhs_single(
+        state: &[Vec<[f32; 3]>],
+    ) -> Result<Vec<Vec<[f32; 3]>>, RunError> {
+        Ok(state
+            .iter()
+            .map(|layer| {
+                layer
+                    .iter()
+                    .map(|m| [m[1] + 0.25 * m[0], -0.5 * m[0] + m[2], m[0] - 0.2 * m[2]])
+                    .collect()
+            })
+            .collect())
+    }
+
+    #[test]
+    fn staged_single_precision_executes_requested_tableau() {
+        let initial = vec![vec![[1.0_f32, 0.0, 0.0]]];
+        let heun = explicit_rk_step_single(
+            &initial,
+            0.2,
+            IntegratorChoice::Heun,
+            manufactured_rhs_single,
+        )
+        .expect("Heun step");
+        let rk4 = explicit_rk_step_single(
+            &initial,
+            0.2,
+            IntegratorChoice::Rk4,
+            manufactured_rhs_single,
+        )
+        .expect("RK4 step");
+        let rk23 = explicit_rk_step_single(
+            &initial,
+            0.2,
+            IntegratorChoice::Rk23,
+            manufactured_rhs_single,
+        )
+        .expect("RK23 step");
+
+        for (actual, expected) in [
+            (&heun, [0.98021667, -0.07564913, 0.18290020]),
+            (&rk4, [0.98012969, -0.07565319, 0.18336407]),
+            (&rk23, [0.98013383, -0.07563269, 0.18335039]),
+        ] {
+            for component in 0..3 {
+                assert!((actual[0][0][component] - expected[component]).abs() < 2.0e-6);
+            }
+        }
+        assert_ne!(heun, rk4);
+        assert_ne!(heun, rk23);
+        assert_ne!(rk4, rk23);
+    }
+
     fn make_plan(enable_demag: bool, precision: ExecutionPrecision) -> FdmMultilayerPlanIR {
         FdmMultilayerPlanIR {
             mode: "two_d_stack".to_string(),
@@ -2914,8 +2980,7 @@ mod tests {
                     torque_tolerance_apm: Some(1e-4),
                     energy_tolerance_j: None,
                     max_steps: Some(10),
-                    max_pseudotime_s: None,
-                    max_physical_time_s: None,
+                    max_relaxation_time_s: None,
                 },
             }),
             planner_summary: fullmag_ir::FdmMultilayerSummaryIR {
@@ -3095,7 +3160,7 @@ mod tests {
         let native = resolve_cuda_multilayer_execution_shape(&plan)
             .expect("native stacked RK45 should be a valid CUDA multilayer execution shape")
             .expect("plan should use native single-grid fast path");
-        assert_eq!(native.combined_plan.integrator, IntegratorChoice::Rk45);
+        assert_eq!(native.combined_plan.integrator, Some(IntegratorChoice::Rk45));
 
         let mut assisted = make_assisted_plan(false, ExecutionPrecision::Double);
         assisted.integrator = IntegratorChoice::Rk23;

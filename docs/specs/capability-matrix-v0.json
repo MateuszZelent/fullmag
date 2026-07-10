@@ -18,6 +18,22 @@
   ],
   "features": [
     {
+      "id": "fdm_multilayer_fixed_explicit_rk",
+      "label": "FDM multilayer fixed-step explicit RK",
+      "lanes": {
+        "fdm_cpu_reference": "reference_executable",
+        "fdm_gpu_production": "production_executable",
+        "fem_cpu_public": "unsupported",
+        "fem_gpu_public": "unsupported"
+      },
+      "validated_workloads": [
+        "fixed-step Heun",
+        "fixed-step classical RK4",
+        "fixed-step Bogacki-Shampine RK23"
+      ],
+      "notes": "Staged CPU and CUDA multilayer runners execute the requested fixed-step tableau. Adaptive stepping, staged RK45, and staged ABM3 reject explicitly; native single-grid-compatible CUDA stacks retain their separately qualified integrators."
+    },
+    {
       "id": "slonczewski_stt",
       "label": "SlonczewskiSTT",
       "lanes": {

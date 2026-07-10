@@ -184,7 +184,13 @@ pub(crate) fn execute_reference_fdm_multilayer(
     while current_time(&states) < until_seconds {
         let dt_step = dt.min(until_seconds - current_time(&states));
         let wall_start = Instant::now();
-        step_multilayer(&contexts, &mut states, demag_runtime.as_ref(), dt_step)?;
+        step_multilayer(
+            &contexts,
+            &mut states,
+            demag_runtime.as_ref(),
+            dt_step,
+            plan.integrator,
+        )?;
         let wall_time_ns = wall_start.elapsed().as_nanos() as u64;
         step_count += 1;
 
@@ -672,37 +678,16 @@ fn step_multilayer(
     states: &mut [ExchangeLlgState],
     demag_runtime: Option<&MultilayerDemagRuntime>,
     dt: f64,
+    integrator: IntegratorChoice,
 ) -> Result<(), RunError> {
     let m0 = states
         .iter()
         .map(|state| state.magnetization().to_vec())
         .collect::<Vec<_>>();
-    let k1 = llg_rhs_multilayer(contexts, &m0, demag_runtime)?;
-    let predicted = m0
-        .iter()
-        .zip(k1.iter())
-        .map(|(layer_m, layer_k)| {
-            layer_m
-                .iter()
-                .zip(layer_k.iter())
-                .map(|(m, k)| normalized(add(*m, scale(*k, dt))))
-                .collect::<Result<Vec<_>, _>>()
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|message| RunError { message })?;
-    let k2 = llg_rhs_multilayer(contexts, &predicted, demag_runtime)?;
-    let corrected = m0
-        .iter()
-        .zip(k1.iter().zip(k2.iter()))
-        .map(|(layer_m, (layer_k1, layer_k2))| {
-            layer_m
-                .iter()
-                .zip(layer_k1.iter().zip(layer_k2.iter()))
-                .map(|(m, (k1, k2))| normalized(add(*m, scale(add(*k1, *k2), 0.5 * dt))))
-                .collect::<Result<Vec<_>, _>>()
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|message| RunError { message })?;
+    let corrected = crate::fdm::multilayer::explicit_rk_step(&m0, dt, integrator, |m| {
+        llg_rhs_multilayer(contexts, m, demag_runtime).map_err(|error| error.message)
+    })
+    .map_err(|message| RunError { message })?;
 
     for (state, new_layer) in states.iter_mut().zip(corrected.into_iter()) {
         state
@@ -919,17 +904,6 @@ fn norm(v: [f64; 3]) -> f64 {
 
 fn max_norm(values: &[[f64; 3]]) -> f64 {
     values.iter().map(|value| norm(*value)).fold(0.0, f64::max)
-}
-
-fn normalized(v: [f64; 3]) -> Result<[f64; 3], String> {
-    let length = norm(v);
-    if length <= 1e-30 {
-        if v == [0.0, 0.0, 0.0] {
-            return Ok(v);
-        }
-        return Err("magnetization vector collapsed to zero during multilayer step".to_string());
-    }
-    Ok([v[0] / length, v[1] / length, v[2] / length])
 }
 
 #[cfg(test)]
