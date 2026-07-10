@@ -492,7 +492,7 @@ git commit -m "fix(fdm): preserve exact relaxation torque"
 - Consumes: cell volumes, Ms values, tangent gradient, trial energy.
 - Produces: joule-valued directional derivative, weighted BB/PR+ products, truthful step diagnostics, and CPU/CUDA parity.
 
-- [ ] **Step 1: Add a failing SI Armijo oracle**
+- [x] **Step 1: Add a failing SI Armijo oracle**
 
 Create a heterogeneous two-cell test with different Ms and volumes. Compute:
 
@@ -504,7 +504,7 @@ let slope_j_per_step = MU0 * cells.iter().map(|c|
 
 Assert the accepted/rejected decision changes when the physical weighting is applied and is invariant under equivalent mesh-volume redistribution.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ~~~bash
 CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-runner cuda_direct_minimizer_armijo_uses_joule_slope
@@ -513,25 +513,25 @@ CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-runner cuda_direct_
 Expected: output says running 1 test and the unweighted shared helper accepts or
 rejects the wrong trial. Zero executed tests is not RED evidence.
 
-- [ ] **Step 3: Replace unweighted helper inputs**
+- [x] **Step 3: Replace unweighted helper inputs**
 
 Line-search helpers accept direction_dot_gradient_j_per_step rather than raw norm squared. BB1/BB2 and PR+ use the same physical weight vector. Keep lambda in m/A and publish accepted_step_m_per_A.
 
-- [ ] **Step 4: Remove pseudo-time accumulation**
+- [x] **Step 4: Remove pseudo-time accumulation**
 
 Delete lambda-to-seconds accumulation and max_pseudotime checks. Preserve accepted step, backtracks, RHS evaluations, and accepted step count as diagnostics.
 
-- [ ] **Step 5: Add CPU/CUDA macrospin and heterogeneous parity**
+- [x] **Step 5: Add CPU/CUDA macrospin and heterogeneous parity**
 
 Compare monotone accepted energy, final exact torque, final magnetization, and stop reason. Do not require identical lambda history.
 
-- [ ] **Step 6: Verify GREEN**
+- [x] **Step 6: Verify GREEN**
 
 ~~~bash
 CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-runner direct_minimizer
 ~~~
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ~~~bash
 git add crates/fullmag-runner/src/relaxation crates/fullmag-runner/src/fdm/gpu/cuda
