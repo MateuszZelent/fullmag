@@ -188,6 +188,9 @@ function selectObjectVisualizationPanelSnapshot(
 ): ObjectVisualizationSnapshot {
   const defaults: ObjectVisualizationSnapshot["defaults"] = {};
   const overrides: ObjectVisualizationSnapshot["overrides"] = {};
+  const pendingOverrides: NonNullable<
+    ObjectVisualizationSnapshot["pendingOverrides"]
+  > = {};
 
   for (const target of targets) {
     const defaultPatch = snapshot.defaults[target.kind];
@@ -199,11 +202,18 @@ function selectObjectVisualizationPanelSnapshot(
     if (override) {
       overrides[visualizationTargetKey(target)] = override;
     }
+    const pendingOverride = snapshot.pendingOverrides?.[
+      visualizationTargetKey(target)
+    ];
+    if (pendingOverride) {
+      pendingOverrides[visualizationTargetKey(target)] = pendingOverride;
+    }
   }
 
   return {
     defaults,
     overrides,
+    pendingOverrides,
     version: snapshot.version,
   };
 }
@@ -224,6 +234,21 @@ function objectVisualizationPanelSnapshotEquals(
   ]);
   for (const key of overrideKeys) {
     if (!visualizationTargetPatchEquals(previous.overrides[key], next.overrides[key])) {
+      return false;
+    }
+  }
+
+  const pendingOverrideKeys = new Set([
+    ...Object.keys(previous.pendingOverrides ?? {}),
+    ...Object.keys(next.pendingOverrides ?? {}),
+  ]);
+  for (const key of pendingOverrideKeys) {
+    const previousPending = previous.pendingOverrides?.[key];
+    const nextPending = next.pendingOverrides?.[key];
+    if (
+      previousPending?.baseRevision !== nextPending?.baseRevision ||
+      !visualizationTargetPatchEquals(previousPending?.patch, nextPending?.patch)
+    ) {
       return false;
     }
   }
@@ -1334,10 +1359,14 @@ function useObjectVisualizationPanelState(
         overrides,
       });
     }
-    // Keep the patch locally for immediate inspector/ribbon feedback until the
-    // revision-driven resource refetch lands.
+    // Keep the patch locally only until a newer visualization-state revision
+    // acknowledges the queued remote transaction.
     for (const patchTarget of patchTargets) {
-      visualization.patchTarget(patchTarget, patchValue);
+      visualization.patchTargetPending(
+        patchTarget,
+        patchValue,
+        visualizationState.rawData?.revision ?? visualizationState.data.revision,
+      );
     }
     setFeedback(null);
   }

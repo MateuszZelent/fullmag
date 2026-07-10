@@ -46,6 +46,11 @@ describe("ObjectVisualizationPanel performance contracts", () => {
     expect(panelSource).not.toContain("useObjectVisualizationRegistry()");
   });
 
+  it("uses a revision-bounded local target patch while remote visualization state is pending", () => {
+    expect(panelSource).toContain("visualization.patchTargetPending(");
+    expect(panelSource).toContain("visualizationState.rawData?.revision");
+  });
+
   it("renders target quantity selection inside the visualization inspector", () => {
     expect(panelSource).toContain("VisualizationQuantitySection");
     expect(panelSource).toContain('label="Quantity source"');

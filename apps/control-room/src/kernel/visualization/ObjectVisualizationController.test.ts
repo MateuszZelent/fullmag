@@ -816,6 +816,67 @@ describe("ObjectVisualizationController", () => {
       shaderVisible: false,
       wireframeVisible: true,
     });
+
+  });
+
+  it("lets a pending target patch win only until a newer registry revision acknowledges it", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "free-layer", kind: "object" as const };
+    controller.patchDefaults("object", {
+      surfaceProjectionMode: "raw_nodal",
+      wireframeVisible: false,
+    });
+    controller.patchTarget(target, { wireframeVisible: false });
+    controller.patchTargetPending(target, { shaderVisible: false }, 14);
+
+    const stateAtPendingRevision = {
+      revision: 14,
+      targets: {
+        airbox: {} as never,
+        objects: [
+          {
+            scope: "object",
+            scope_id: "free-layer",
+            settings: {
+              surface_projection_mode: "thickness_average_z",
+              surface_visible: true,
+              wireframe_visible: true,
+            } as never,
+          },
+        ],
+        parts: [],
+      },
+    };
+
+    expect(
+      resolveTargetVisualization({
+        snapshot: controller.getSnapshot(),
+        target,
+        visualizationState: stateAtPendingRevision as never,
+      }).settings,
+    ).toMatchObject({
+      shaderVisible: false,
+      surfaceProjectionMode: "thickness_average_z",
+      wireframeVisible: true,
+    });
+
+    expect(
+      resolveTargetVisualization({
+        snapshot: controller.getSnapshot(),
+        target,
+        visualizationState: {
+          ...stateAtPendingRevision,
+          revision: 15,
+        } as never,
+      }).settings,
+    ).toMatchObject({
+      shaderVisible: true,
+      surfaceProjectionMode: "thickness_average_z",
+      wireframeVisible: true,
+    });
+
+    controller.acknowledgePendingTargetPatches(15);
+    expect(controller.getSnapshot().pendingOverrides).toEqual({});
   });
 
   it("keeps primitive fallback disabled by default even when visualization state has a primitive layer", () => {

@@ -88,7 +88,13 @@ export type VisualizationStoredTargetPatch = Omit<
 export interface ObjectVisualizationSnapshot {
   defaults: Partial<Record<VisualizationTargetKind, VisualizationStoredTargetPatch>>;
   overrides: Record<string, VisualizationStoredTargetPatch>;
+  pendingOverrides?: Record<string, PendingVisualizationTargetPatch>;
   version: number;
+}
+
+export interface PendingVisualizationTargetPatch {
+  baseRevision: number;
+  patch: VisualizationStoredTargetPatch;
 }
 
 export interface ResolvedTargetVisualization {
@@ -221,6 +227,10 @@ export class ObjectVisualizationController {
   >();
   private readonly listeners = new Set<ObjectVisualizationListener>();
   private readonly overrides = new Map<string, VisualizationStoredTargetPatch>();
+  private readonly pendingOverrides = new Map<
+    string,
+    PendingVisualizationTargetPatch
+  >();
   private snapshot: ObjectVisualizationSnapshot = {
     defaults: {},
     overrides: {},
@@ -236,7 +246,10 @@ export class ObjectVisualizationController {
   }
 
   clearTarget(target: VisualizationTargetRef): void {
-    if (!this.overrides.delete(visualizationTargetKey(target))) {
+    const key = visualizationTargetKey(target);
+    const clearedOverride = this.overrides.delete(key);
+    const clearedPendingOverride = this.pendingOverrides.delete(key);
+    if (!clearedOverride && !clearedPendingOverride) {
       return;
     }
 
@@ -281,6 +294,44 @@ export class ObjectVisualizationController {
     this.bump();
   }
 
+  patchTargetPending(
+    target: VisualizationTargetRef,
+    patch: VisualizationTargetPatch,
+    baseRevision: number,
+  ): void {
+    const key = visualizationTargetKey(target);
+    const current = this.pendingOverrides.get(key);
+    const nextPatch = normalizePatch({
+      ...(current?.patch ?? {}),
+      ...patch,
+    });
+    const next: PendingVisualizationTargetPatch = {
+      baseRevision,
+      patch: nextPatch,
+    };
+
+    if (
+      current?.baseRevision === next.baseRevision &&
+      samePatch(current.patch, next.patch)
+    ) {
+      return;
+    }
+
+    this.pendingOverrides.set(key, next);
+    this.bump();
+  }
+
+  acknowledgePendingTargetPatches(revision: number): void {
+    let changed = false;
+    for (const [key, pending] of this.pendingOverrides) {
+      if (revision > pending.baseRevision) {
+        this.pendingOverrides.delete(key);
+        changed = true;
+      }
+    }
+    if (changed) this.bump();
+  }
+
   patchDefaults(
     kind: VisualizationTargetKind,
     patch: VisualizationTargetPatch,
@@ -308,6 +359,7 @@ export class ObjectVisualizationController {
     this.snapshot = {
       defaults: Object.fromEntries(this.defaults),
       overrides: Object.fromEntries(this.overrides),
+      pendingOverrides: Object.fromEntries(this.pendingOverrides),
       version: this.snapshot.version + 1,
     };
     for (const listener of this.listeners) {
@@ -439,7 +491,9 @@ export function resolveTargetVisualization({
           defaultVisualizationSettings(target.kind),
         )
       : null) ?? resolveVisualizationBaseSettings(target.kind, visualizationState);
-  const localOverride = snapshot.overrides[visualizationTargetKey(target)] ?? null;
+  const localOverride = registryEntry
+    ? resolvePendingTargetPatch(snapshot, target, visualizationState?.revision)
+    : snapshot.overrides[visualizationTargetKey(target)] ?? null;
   const backendOverride = resolveVisualizationStateTargetOverride(
     visualizationState,
     target,
@@ -447,11 +501,13 @@ export function resolveTargetVisualization({
   const inheritedDefaultSettings =
     target.kind === "region" ? inheritedSettings : inheritedSettings ?? baseSettings;
   const settings = normalizeVisualizationSettings({
-    ...resolveDefaultVisualizationSettings(
-      snapshot,
-      target.kind,
-      inheritedDefaultSettings,
-    ),
+    ...(registryEntry
+      ? baseSettings
+      : resolveDefaultVisualizationSettings(
+          snapshot,
+          target.kind,
+          inheritedDefaultSettings,
+        )),
     ...(registryEntry ? {} : (backendOverride ?? {})),
     ...(localOverride ?? {}),
   });
@@ -472,6 +528,18 @@ export function resolveTargetVisualization({
         : `${snapshot.version}:${visualizationState.revision}`,
     settings,
   };
+}
+
+function resolvePendingTargetPatch(
+  snapshot: ObjectVisualizationSnapshot,
+  target: VisualizationTargetRef,
+  revision: number | undefined,
+): VisualizationStoredTargetPatch | null {
+  const pending = snapshot.pendingOverrides?.[visualizationTargetKey(target)];
+  if (!pending || revision === undefined || revision > pending.baseRevision) {
+    return null;
+  }
+  return pending.patch;
 }
 
 export function resolveEffectiveTargetRegistryEntry(

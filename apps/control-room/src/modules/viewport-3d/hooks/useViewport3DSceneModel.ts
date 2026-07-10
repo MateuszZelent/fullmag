@@ -1979,6 +1979,9 @@ function selectViewport3DObjectVisualizationSnapshot(
 ): ObjectVisualizationSnapshot {
   const defaults: ObjectVisualizationSnapshot["defaults"] = {};
   const overrides: ObjectVisualizationSnapshot["overrides"] = {};
+  const pendingOverrides: NonNullable<
+    ObjectVisualizationSnapshot["pendingOverrides"]
+  > = {};
 
   for (const kind of VIEWPORT_3D_VISUALIZATION_TARGET_KINDS) {
     const defaultPatch = snapshot.defaults[kind];
@@ -1993,9 +1996,13 @@ function selectViewport3DObjectVisualizationSnapshot(
     if (override) {
       overrides[key] = override;
     }
+    const pendingOverride = snapshot.pendingOverrides?.[key];
+    if (pendingOverride) {
+      pendingOverrides[key] = pendingOverride;
+    }
   }
 
-  return { defaults, overrides, version: snapshot.version };
+  return { defaults, overrides, pendingOverrides, version: snapshot.version };
 }
 
 function viewport3DObjectVisualizationSnapshotEquals(
@@ -2014,6 +2021,21 @@ function viewport3DObjectVisualizationSnapshotEquals(
   ]);
   for (const key of overrideKeys) {
     if (!visualizationTargetPatchEquals(previous.overrides[key], next.overrides[key])) {
+      return false;
+    }
+  }
+
+  const pendingOverrideKeys = new Set([
+    ...Object.keys(previous.pendingOverrides ?? {}),
+    ...Object.keys(next.pendingOverrides ?? {}),
+  ]);
+  for (const key of pendingOverrideKeys) {
+    const previousPending = previous.pendingOverrides?.[key];
+    const nextPending = next.pendingOverrides?.[key];
+    if (
+      previousPending?.baseRevision !== nextPending?.baseRevision ||
+      !visualizationTargetPatchEquals(previousPending?.patch, nextPending?.patch)
+    ) {
       return false;
     }
   }

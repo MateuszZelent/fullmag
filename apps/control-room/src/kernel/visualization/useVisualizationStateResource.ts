@@ -18,7 +18,7 @@ export function resolveVisualizationStateRevision(
 export function useVisualizationStateResource({
   enabled = true,
 }: { enabled?: boolean } = {}) {
-  const { api, cameraRegistry, visualizationSync } = useKernel();
+  const { api, cameraRegistry, visualization, visualizationSync } = useKernel();
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) => api.visualization.state({ signal }),
     [api],
@@ -39,7 +39,10 @@ export function useVisualizationStateResource({
   useEffect(() => {
     visualizationSync.observeRemoteState(resource.data);
     cameraRegistry.observeRemoteState(resource.data);
-  }, [cameraRegistry, resource.data, visualizationSync]);
+    if (resource.data) {
+      visualization.acknowledgePendingTargetPatches(resource.data.revision);
+    }
+  }, [cameraRegistry, resource.data, visualization, visualizationSync]);
 
   const optimisticData = visualizationSync.applyOptimisticState(resource.data);
 
