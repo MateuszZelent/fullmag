@@ -1978,6 +1978,9 @@ function selectViewport3DObjectVisualizationSnapshot(
   targets: readonly VisualizationTargetRef[],
 ): ObjectVisualizationSnapshot {
   const defaults: ObjectVisualizationSnapshot["defaults"] = {};
+  const localRenderOverrides: NonNullable<
+    ObjectVisualizationSnapshot["localRenderOverrides"]
+  > = {};
   const overrides: ObjectVisualizationSnapshot["overrides"] = {};
   const pendingOverrides: NonNullable<
     ObjectVisualizationSnapshot["pendingOverrides"]
@@ -1996,13 +1999,23 @@ function selectViewport3DObjectVisualizationSnapshot(
     if (override) {
       overrides[key] = override;
     }
+    const localRenderOverride = snapshot.localRenderOverrides?.[key];
+    if (localRenderOverride) {
+      localRenderOverrides[key] = localRenderOverride;
+    }
     const pendingOverride = snapshot.pendingOverrides?.[key];
     if (pendingOverride) {
       pendingOverrides[key] = pendingOverride;
     }
   }
 
-  return { defaults, overrides, pendingOverrides, version: snapshot.version };
+  return {
+    defaults,
+    localRenderOverrides,
+    overrides,
+    pendingOverrides,
+    version: snapshot.version,
+  };
 }
 
 function viewport3DObjectVisualizationSnapshotEquals(
@@ -2021,6 +2034,21 @@ function viewport3DObjectVisualizationSnapshotEquals(
   ]);
   for (const key of overrideKeys) {
     if (!visualizationTargetPatchEquals(previous.overrides[key], next.overrides[key])) {
+      return false;
+    }
+  }
+
+  const localRenderOverrideKeys = new Set([
+    ...Object.keys(previous.localRenderOverrides ?? {}),
+    ...Object.keys(next.localRenderOverrides ?? {}),
+  ]);
+  for (const key of localRenderOverrideKeys) {
+    if (
+      !visualizationTargetPatchEquals(
+        previous.localRenderOverrides?.[key],
+        next.localRenderOverrides?.[key],
+      )
+    ) {
       return false;
     }
   }

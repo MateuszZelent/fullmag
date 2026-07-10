@@ -84,9 +84,17 @@ export type VisualizationStoredTargetPatch = Omit<
   VisualizationTargetPatch,
   "renderMode"
 >;
+export type LocalRenderingTargetPatch = Pick<
+  VisualizationTargetPatch,
+  | "primitiveVisible"
+  | "vectorCenteringEnabled"
+  | "vectorSurfaceOffsetEnabled"
+  | "vectorSurfaceOffsetScale"
+>;
 
 export interface ObjectVisualizationSnapshot {
   defaults: Partial<Record<VisualizationTargetKind, VisualizationStoredTargetPatch>>;
+  localRenderOverrides?: Record<string, LocalRenderingTargetPatch>;
   overrides: Record<string, VisualizationStoredTargetPatch>;
   pendingOverrides?: Record<string, PendingVisualizationTargetPatch>;
   version: number;
@@ -226,6 +234,10 @@ export class ObjectVisualizationController {
     VisualizationStoredTargetPatch
   >();
   private readonly listeners = new Set<ObjectVisualizationListener>();
+  private readonly localRenderOverrides = new Map<
+    string,
+    LocalRenderingTargetPatch
+  >();
   private readonly overrides = new Map<string, VisualizationStoredTargetPatch>();
   private readonly pendingOverrides = new Map<
     string,
@@ -247,9 +259,10 @@ export class ObjectVisualizationController {
 
   clearTarget(target: VisualizationTargetRef): void {
     const key = visualizationTargetKey(target);
+    const clearedLocalRenderOverride = this.localRenderOverrides.delete(key);
     const clearedOverride = this.overrides.delete(key);
     const clearedPendingOverride = this.pendingOverrides.delete(key);
-    if (!clearedOverride && !clearedPendingOverride) {
+    if (!clearedLocalRenderOverride && !clearedOverride && !clearedPendingOverride) {
       return;
     }
 
@@ -332,6 +345,22 @@ export class ObjectVisualizationController {
     if (changed) this.bump();
   }
 
+  patchLocalRenderTarget(
+    target: VisualizationTargetRef,
+    patch: LocalRenderingTargetPatch,
+  ): void {
+    const key = visualizationTargetKey(target);
+    const current = this.localRenderOverrides.get(key) ?? {};
+    const next: LocalRenderingTargetPatch = {
+      ...current,
+      ...patch,
+    };
+    if (samePatch(current, next)) return;
+
+    this.localRenderOverrides.set(key, next);
+    this.bump();
+  }
+
   patchDefaults(
     kind: VisualizationTargetKind,
     patch: VisualizationTargetPatch,
@@ -358,6 +387,7 @@ export class ObjectVisualizationController {
   private bump(): void {
     this.snapshot = {
       defaults: Object.fromEntries(this.defaults),
+      localRenderOverrides: Object.fromEntries(this.localRenderOverrides),
       overrides: Object.fromEntries(this.overrides),
       pendingOverrides: Object.fromEntries(this.pendingOverrides),
       version: this.snapshot.version + 1,
@@ -494,6 +524,9 @@ export function resolveTargetVisualization({
   const localOverride = registryEntry
     ? resolvePendingTargetPatch(snapshot, target, visualizationState?.revision)
     : snapshot.overrides[visualizationTargetKey(target)] ?? null;
+  const localRenderOverride = snapshot.localRenderOverrides?.[
+    visualizationTargetKey(target)
+  ] ?? null;
   const backendOverride = resolveVisualizationStateTargetOverride(
     visualizationState,
     target,
@@ -510,6 +543,7 @@ export function resolveTargetVisualization({
         )),
     ...(registryEntry ? {} : (backendOverride ?? {})),
     ...(localOverride ?? {}),
+    ...(localRenderOverride ?? {}),
   });
 
   return {

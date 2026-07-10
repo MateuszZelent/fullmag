@@ -51,6 +51,11 @@ describe("ObjectVisualizationPanel performance contracts", () => {
     expect(panelSource).toContain("visualizationState.rawData?.revision");
   });
 
+  it("keeps client-only rendering preferences out of pending backend transactions", () => {
+    expect(panelSource).toContain("visualization.patchLocalRenderTarget(");
+    expect(panelSource).toContain("localRenderPatch");
+  });
+
   it("renders target quantity selection inside the visualization inspector", () => {
     expect(panelSource).toContain("VisualizationQuantitySection");
     expect(panelSource).toContain('label="Quantity source"');

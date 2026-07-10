@@ -879,6 +879,45 @@ describe("ObjectVisualizationController", () => {
     expect(controller.getSnapshot().pendingOverrides).toEqual({});
   });
 
+  it("keeps client-only target rendering preferences outside pending registry patches", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "free-layer", kind: "object" as const };
+    controller.patchLocalRenderTarget(target, {
+      primitiveVisible: true,
+      vectorCenteringEnabled: false,
+    });
+
+    const resolved = resolveTargetVisualization({
+      snapshot: controller.getSnapshot(),
+      target,
+      visualizationState: {
+        revision: 20,
+        targets: {
+          airbox: {} as never,
+          objects: [
+            {
+              scope: "object",
+              scope_id: "free-layer",
+              settings: {
+                surface_projection_mode: "thickness_average_z",
+                surface_visible: true,
+              } as never,
+            },
+          ],
+          parts: [],
+        },
+      } as never,
+    });
+
+    expect(resolved.settings).toMatchObject({
+      primitiveVisible: true,
+      surfaceProjectionMode: "thickness_average_z",
+      shaderVisible: true,
+      vectorCenteringEnabled: false,
+    });
+    expect(controller.getSnapshot().pendingOverrides).toEqual({});
+  });
+
   it("keeps primitive fallback disabled by default even when visualization state has a primitive layer", () => {
     expect(
       resolveGlobalObjectVisualizationSettings({

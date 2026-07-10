@@ -28,6 +28,7 @@ import {
   resolveVisualizationTargetFromSelection,
   visualizationStateOverrideMatchesTarget,
   visualizationTargetKey,
+  type LocalRenderingTargetPatch,
   type ObjectVisualizationSnapshot,
   type VisualizationGeometryScope,
   type VisualizationRenderMode,
@@ -187,6 +188,9 @@ function selectObjectVisualizationPanelSnapshot(
   targets: readonly VisualizationTargetRef[],
 ): ObjectVisualizationSnapshot {
   const defaults: ObjectVisualizationSnapshot["defaults"] = {};
+  const localRenderOverrides: NonNullable<
+    ObjectVisualizationSnapshot["localRenderOverrides"]
+  > = {};
   const overrides: ObjectVisualizationSnapshot["overrides"] = {};
   const pendingOverrides: NonNullable<
     ObjectVisualizationSnapshot["pendingOverrides"]
@@ -202,6 +206,12 @@ function selectObjectVisualizationPanelSnapshot(
     if (override) {
       overrides[visualizationTargetKey(target)] = override;
     }
+    const localRenderOverride = snapshot.localRenderOverrides?.[
+      visualizationTargetKey(target)
+    ];
+    if (localRenderOverride) {
+      localRenderOverrides[visualizationTargetKey(target)] = localRenderOverride;
+    }
     const pendingOverride = snapshot.pendingOverrides?.[
       visualizationTargetKey(target)
     ];
@@ -212,6 +222,7 @@ function selectObjectVisualizationPanelSnapshot(
 
   return {
     defaults,
+    localRenderOverrides,
     overrides,
     pendingOverrides,
     version: snapshot.version,
@@ -234,6 +245,21 @@ function objectVisualizationPanelSnapshotEquals(
   ]);
   for (const key of overrideKeys) {
     if (!visualizationTargetPatchEquals(previous.overrides[key], next.overrides[key])) {
+      return false;
+    }
+  }
+
+  const localRenderOverrideKeys = new Set([
+    ...Object.keys(previous.localRenderOverrides ?? {}),
+    ...Object.keys(next.localRenderOverrides ?? {}),
+  ]);
+  for (const key of localRenderOverrideKeys) {
+    if (
+      !visualizationTargetPatchEquals(
+        previous.localRenderOverrides?.[key],
+        next.localRenderOverrides?.[key],
+      )
+    ) {
       return false;
     }
   }
@@ -309,6 +335,25 @@ function remoteVisualizationTargetPatch(
   delete remotePatch.vectorSurfaceOffsetScale;
   delete remotePatch.primitiveVisible;
   return remotePatch;
+}
+
+function localRenderingTargetPatch(
+  patch: VisualizationTargetPatch,
+): LocalRenderingTargetPatch {
+  return {
+    ...(patch.primitiveVisible === undefined
+      ? {}
+      : { primitiveVisible: patch.primitiveVisible }),
+    ...(patch.vectorCenteringEnabled === undefined
+      ? {}
+      : { vectorCenteringEnabled: patch.vectorCenteringEnabled }),
+    ...(patch.vectorSurfaceOffsetEnabled === undefined
+      ? {}
+      : { vectorSurfaceOffsetEnabled: patch.vectorSurfaceOffsetEnabled }),
+    ...(patch.vectorSurfaceOffsetScale === undefined
+      ? {}
+      : { vectorSurfaceOffsetScale: patch.vectorSurfaceOffsetScale }),
+  };
 }
 
 function VisualizationDisplayPassesSection({
@@ -1346,6 +1391,12 @@ function useObjectVisualizationPanelState(
     }
 
     const remotePatch = remoteVisualizationTargetPatch(patchValue);
+    const localRenderPatch = localRenderingTargetPatch(patchValue);
+    if (Object.keys(localRenderPatch).length > 0) {
+      for (const patchTarget of patchTargets) {
+        visualization.patchLocalRenderTarget(patchTarget, localRenderPatch);
+      }
+    }
     if (Object.keys(remotePatch).length > 0) {
       let overrides = visualizationState.data.overrides ?? [];
       for (const patchTarget of patchTargets) {
@@ -1358,15 +1409,15 @@ function useObjectVisualizationPanelState(
       visualizationSync.queuePatch({
         overrides,
       });
-    }
-    // Keep the patch locally only until a newer visualization-state revision
-    // acknowledges the queued remote transaction.
-    for (const patchTarget of patchTargets) {
-      visualization.patchTargetPending(
-        patchTarget,
-        patchValue,
-        visualizationState.rawData?.revision ?? visualizationState.data.revision,
-      );
+      // Keep the remote patch locally only until a newer visualization-state
+      // revision acknowledges the queued backend transaction.
+      for (const patchTarget of patchTargets) {
+        visualization.patchTargetPending(
+          patchTarget,
+          remotePatch,
+          visualizationState.rawData?.revision ?? visualizationState.data.revision,
+        );
+      }
     }
     setFeedback(null);
   }
