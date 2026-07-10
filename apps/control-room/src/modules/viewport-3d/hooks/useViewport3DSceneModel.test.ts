@@ -161,6 +161,23 @@ describe("useViewport3DSceneModel", () => {
     expect(regionOverlayBlock).toContain("meshBackedRegionKeys");
   });
 
+  it("keeps stale topology geometry separate from every field-dependent model path", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+
+    expect(source).toContain(
+      "const topologyRenderModelForGeometry = topologyRenderable ? topologyRenderModel : null;",
+    );
+    expect(source).toContain(
+      "const fieldCompatibleTopologyRenderModel = topologyCurrent ? topologyRenderModel : null;",
+    );
+    expect(source).toContain(
+      "topologyRenderModel: fieldCompatibleTopologyRenderModel",
+    );
+    expect(source).toContain("topology: fieldCompatibleTopologyRenderModel");
+    expect(source).toContain("topologyModel: topologyRenderModelForGeometry");
+    expect(source).toContain("Boolean(fieldCompatibleTopologyRenderModel) &&");
+  });
+
   it("wraps primary field payloads as target field buffers without mixing legacy maps", () => {
     const primaryVector = fieldVectorFixture({ quantityId: "m" });
     const scopedVector = fieldVectorFixture({ pointCount: 2, quantityId: "m" });

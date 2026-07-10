@@ -3,7 +3,7 @@ import type { VisualizationTargetSettings } from "./ObjectVisualizationControlle
 export type VisualizationTopologyFreshness = "current" | "stale" | "unknown";
 
 interface VisualizationRenderDegradation {
-  code: "topology-provenance-unknown";
+  code: "topology-provenance-unknown" | "topology-stale";
   message: string;
 }
 
@@ -90,7 +90,7 @@ export function resolveVisualizationRenderResolution({
   settings: VisualizationTargetSettings;
   topologyFreshness?: VisualizationTopologyFreshness | null;
 }): VisualizationRenderResolution {
-  if (!topologyFreshness || isVisualizationTopologyRenderable(topologyFreshness)) {
+  if (!topologyFreshness || topologyFreshness === "current") {
     return {
       degradedReasons: [],
       finalSettings: effectiveSettings,
@@ -101,8 +101,14 @@ export function resolveVisualizationRenderResolution({
   return {
     degradedReasons: [
       {
-        code: "topology-provenance-unknown",
-        message: "Mesh provenance is unknown; rendering an edge-only safety view.",
+        code:
+          topologyFreshness === "stale"
+            ? "topology-stale"
+            : "topology-provenance-unknown",
+        message:
+          topologyFreshness === "stale"
+            ? "Mesh topology is stale; rendering an edge-only ghost view."
+            : "Mesh provenance is unknown; rendering an edge-only safety view.",
       },
     ],
     finalSettings: resolveTopologyConstrainedVisualizationSettings(

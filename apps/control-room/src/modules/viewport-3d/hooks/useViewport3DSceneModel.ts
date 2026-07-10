@@ -2340,7 +2340,8 @@ export function useViewport3DSceneModel({
     () => [...femDomain.magneticParts, ...membershipRegionOverlays.ownerParts],
     [femDomain.magneticParts, membershipRegionOverlays.ownerParts],
   );
-  const currentTopologyRenderModel = topologyRenderable ? topologyRenderModel : null;
+  const topologyRenderModelForGeometry = topologyRenderable ? topologyRenderModel : null;
+  const fieldCompatibleTopologyRenderModel = topologyCurrent ? topologyRenderModel : null;
   const clipCrossSectionQuery = useMemo(() => {
     const query = resolveCrossSectionQueryFromVisualizationState(renderingState);
     return {
@@ -2361,7 +2362,7 @@ export function useViewport3DSceneModel({
     selection.ref?.type === "mesh-quality-element";
   const meshQualityMetric = resolveSelectionMeshQualityMetric(selection);
   const meshQualityData = useViewport3DMeshQualityData(
-    Boolean(currentTopologyRenderModel && meshQualityOverlayVisible),
+    Boolean(topologyRenderModelForGeometry && meshQualityOverlayVisible),
   );
   const meshQualityColors = useMemo(
     () =>
@@ -2394,7 +2395,7 @@ export function useViewport3DSceneModel({
             () =>
               buildViewport3DMeshSizeHighlightModel(
                 topology.data,
-                currentTopologyRenderModel,
+                topologyRenderModelForGeometry,
                 femDomain,
                 meshSizeHighlight,
                 meshSizeHighlightSelection
@@ -2404,7 +2405,7 @@ export function useViewport3DSceneModel({
           )
         : null,
     [
-      currentTopologyRenderModel,
+      topologyRenderModelForGeometry,
       femDomain,
       meshSizeHighlight,
       meshSizeHighlightSelection,
@@ -2651,9 +2652,9 @@ export function useViewport3DSceneModel({
   );
   const airboxFieldVectorParts = useMemo(
     () =>
-      currentTopologyRenderModel?.airboxParts.map((partModel) => partModel.part) ??
+      fieldCompatibleTopologyRenderModel?.airboxParts.map((partModel) => partModel.part) ??
       EMPTY_AIRBOX_FIELD_VECTOR_PARTS,
-    [currentTopologyRenderModel],
+    [fieldCompatibleTopologyRenderModel],
   );
   const airboxFieldQuery = useMemo(
     () =>
@@ -2709,12 +2710,12 @@ export function useViewport3DSceneModel({
       resolveViewport3DScopedPartVectorFieldDemandPlan({
         getPartSettings: (part) => getPartSettings(part as Viewport3DMeshPart),
         maxVectorGlyphs: maxInteractiveVectorGlyphs,
-        magneticParts: currentTopologyRenderModel?.magneticParts ?? [],
+        magneticParts: fieldCompatibleTopologyRenderModel?.magneticParts ?? [],
         selectedSnapshotQuery,
         vectorDomain,
       }),
     [
-      currentTopologyRenderModel?.magneticParts,
+      fieldCompatibleTopologyRenderModel?.magneticParts,
       getPartSettings,
       maxInteractiveVectorGlyphs,
       selectedSnapshotQuery,
@@ -2727,7 +2728,7 @@ export function useViewport3DSceneModel({
     [magneticPartFieldQueries],
   );
   const targetQuantityFieldDemandPlan = useMemo(() => {
-    if (!currentTopologyRenderModel) {
+    if (!fieldCompatibleTopologyRenderModel) {
       return {
         demands: [],
         requests: new Map<string, Viewport3DFieldResourceRequest>(),
@@ -2737,13 +2738,13 @@ export function useViewport3DSceneModel({
       fdmSettings,
       getPartSettings: (part) => getPartSettings(part as Viewport3DMeshPart),
       magneticPartScopedFieldIds,
-      magneticParts: currentTopologyRenderModel.magneticParts,
+      magneticParts: fieldCompatibleTopologyRenderModel.magneticParts,
       maxVectorGlyphs: maxInteractiveVectorGlyphs,
       primaryFieldQuantityId,
       selectedSnapshotQuery,
     });
   }, [
-    currentTopologyRenderModel,
+    fieldCompatibleTopologyRenderModel,
     fdmSettings,
     getPartSettings,
     magneticPartScopedFieldIds,
@@ -2777,7 +2778,7 @@ export function useViewport3DSceneModel({
     getPartSettings,
     maxVectorGlyphs: maxInteractiveVectorGlyphs,
     scalarColorPalette,
-    topologyRenderModel: currentTopologyRenderModel,
+    topologyRenderModel: fieldCompatibleTopologyRenderModel,
     vectorColorMode,
     vectorDomain,
   });
@@ -2794,7 +2795,7 @@ export function useViewport3DSceneModel({
   );
   const primaryFieldRenderOptions = useMemo(
     () =>
-      currentTopologyRenderModel
+      fieldCompatibleTopologyRenderModel
         ? limitViewport3DFieldRenderVectorBudgets(
             {
               ...resolveViewport3DPrimaryFieldRenderOptions({
@@ -2802,7 +2803,7 @@ export function useViewport3DSceneModel({
                 analysisOverlayActive: Boolean(analysisOverlay),
                 fieldRenderOptions,
                 getPartSettings,
-                magneticParts: currentTopologyRenderModel.magneticParts,
+                magneticParts: fieldCompatibleTopologyRenderModel.magneticParts,
                 quantityId: primaryFieldQuantityId,
                 vectorDomain,
               }),
@@ -2811,7 +2812,7 @@ export function useViewport3DSceneModel({
                 analysisOverlay?.query.phase_rad ??
                 null,
             },
-            currentTopologyRenderModel,
+            fieldCompatibleTopologyRenderModel,
             maxInteractiveVectorGlyphs,
           )
         : {
@@ -2823,7 +2824,7 @@ export function useViewport3DSceneModel({
           },
     [
       analysisOverlay,
-      currentTopologyRenderModel,
+      fieldCompatibleTopologyRenderModel,
       fieldRenderOptions,
       getPartSettings,
       maxInteractiveVectorGlyphs,
@@ -2833,14 +2834,14 @@ export function useViewport3DSceneModel({
   );
   const primaryFieldVectorBudgetExclusions = useMemo(() => {
     const excludedPartIds = new Set<string>();
-    for (const partModel of currentTopologyRenderModel?.airboxParts ?? []) {
+    for (const partModel of fieldCompatibleTopologyRenderModel?.airboxParts ?? []) {
       excludedPartIds.add(partModel.part.id);
     }
     for (const partId of magneticPartScopedFieldIds) {
       excludedPartIds.add(partId);
     }
     if (!analysisOverlay) {
-      for (const partModel of currentTopologyRenderModel?.magneticParts ?? []) {
+      for (const partModel of fieldCompatibleTopologyRenderModel?.magneticParts ?? []) {
         const settings = getPartSettings(partModel.part);
         if (!sameViewport3DQuantityId(settings.activeQuantityId, primaryFieldQuantityId)) {
           excludedPartIds.add(partModel.part.id);
@@ -2850,8 +2851,8 @@ export function useViewport3DSceneModel({
     return excludedPartIds;
   }, [
     analysisOverlay,
-    currentTopologyRenderModel?.airboxParts,
-    currentTopologyRenderModel?.magneticParts,
+    fieldCompatibleTopologyRenderModel?.airboxParts,
+    fieldCompatibleTopologyRenderModel?.magneticParts,
     getPartSettings,
     magneticPartScopedFieldIds,
     primaryFieldQuantityId,
@@ -2869,11 +2870,11 @@ export function useViewport3DSceneModel({
       resolveViewport3DPartScalarRangeRequests({
         fieldRenderOptions: primaryFieldRenderOptions,
         getPartSettings,
-        magneticParts: currentTopologyRenderModel?.magneticParts ?? [],
+        magneticParts: fieldCompatibleTopologyRenderModel?.magneticParts ?? [],
         selectedSnapshotQuery,
       }),
     [
-      currentTopologyRenderModel?.magneticParts,
+      fieldCompatibleTopologyRenderModel?.magneticParts,
       getPartSettings,
       primaryFieldRenderOptions,
       selectedSnapshotQuery,
@@ -2904,7 +2905,7 @@ export function useViewport3DSceneModel({
           targetQuantityFieldRevision:
             targetQuantityFieldVectors.payloadRevision ?? null,
           targetQuantityFieldVectors: targetQuantityFieldVectors.data,
-          topology: currentTopologyRenderModel,
+          topology: fieldCompatibleTopologyRenderModel,
           topologyRevision:
             topology.revision == null ? null : String(topology.revision),
         });
@@ -2934,7 +2935,7 @@ export function useViewport3DSceneModel({
       airboxSettings.airboxSyntheticVectorsEnabled,
       airboxSettings.activeQuantityId,
       airboxQuantityCompatible,
-      currentTopologyRenderModel,
+      fieldCompatibleTopologyRenderModel,
       getPartSettings,
       magneticPartFieldVectors.data,
       magneticPartFieldVectors.payloadRevision,
@@ -2980,14 +2981,15 @@ export function useViewport3DSceneModel({
   const fdmInstanceModelNeedsFieldVector =
     fdmVoxelMagnitudeThreshold > 0 || fdmTopographyEnabled;
   const primaryFieldVectorEnabled =
-    Boolean(analysisOverlay) ||
-    resolveViewport3DPrimaryFieldVectorEnabled({
-      fdmInstanceModelNeedsFieldVector,
-      fdmSurfaceColorMode,
-      fdmVectorsVisible,
-      fieldRenderOptions: primaryFieldDataOptions,
-      selectedSnapshotId,
-    });
+    Boolean(fieldCompatibleTopologyRenderModel) &&
+    (Boolean(analysisOverlay) ||
+      resolveViewport3DPrimaryFieldVectorEnabled({
+        fdmInstanceModelNeedsFieldVector,
+        fdmSurfaceColorMode,
+        fdmVectorsVisible,
+        fieldRenderOptions: primaryFieldDataOptions,
+        selectedSnapshotId,
+      }));
   const primaryFieldDemandPlan = useMemo(
     () => {
       if (analysisOverlay) {
@@ -3101,10 +3103,10 @@ export function useViewport3DSceneModel({
     () =>
       resolveHysteresisReplayMeshCompatibility(
         hysteresisReplayTarget,
-        currentTopologyRenderModel,
+        fieldCompatibleTopologyRenderModel,
       ),
     [
-      currentTopologyRenderModel,
+      fieldCompatibleTopologyRenderModel,
       hysteresisReplayTarget,
     ],
   );
@@ -3260,13 +3262,13 @@ export function useViewport3DSceneModel({
         getPartSettings,
         primaryFieldQuantityId,
         primaryFieldRequest,
-        topology: currentTopologyRenderModel,
+        topology: fieldCompatibleTopologyRenderModel,
         topologyRevision:
           topology.revision == null ? null : String(topology.revision),
       }),
     [
       committedFieldVector,
-      currentTopologyRenderModel,
+      fieldCompatibleTopologyRenderModel,
       getPartSettings,
       primaryFieldQuantityId,
       primaryFieldRequest,
@@ -3400,7 +3402,7 @@ export function useViewport3DSceneModel({
     targetRenderPlans:
       fieldRenderOptionsWithPrimaryTargetBuffers.targetRenderPlans,
     targetVisualizationRevision: renderingState?.revision ?? null,
-    topology: currentTopologyRenderModel,
+    topology: fieldCompatibleTopologyRenderModel,
     topologyRevision: topology.revision,
   });
   const fieldRenderModelBuildOptions = useMemo(
@@ -3409,12 +3411,12 @@ export function useViewport3DSceneModel({
         complexFieldVector: analysisComplexField,
         fieldRenderOptions: fieldRenderOptionsWithPrimaryTargetBuffers,
         fieldVector: committedFieldVector,
-        topology: currentTopologyRenderModel,
+        topology: fieldCompatibleTopologyRenderModel,
       }),
     [
       analysisComplexField,
       committedFieldVector,
-      currentTopologyRenderModel,
+      fieldCompatibleTopologyRenderModel,
       fieldRenderOptionsWithPrimaryTargetBuffers,
     ],
   );
@@ -3423,7 +3425,7 @@ export function useViewport3DSceneModel({
       "fullmag.viewport3d.buildViewport3DFieldRenderModel",
       () =>
         buildViewport3DFieldRenderModel(
-          currentTopologyRenderModel,
+          fieldCompatibleTopologyRenderModel,
           committedFieldVector,
           vectorScale,
           {
@@ -3452,7 +3454,7 @@ export function useViewport3DSceneModel({
     chunkedScalarColors.colors,
     chunkedScalarColors.colorsByPartAndMode,
     committedFieldVector,
-    currentTopologyRenderModel,
+    fieldCompatibleTopologyRenderModel,
     analysisComplexField,
     fieldRenderModelBuildOptions,
     fieldScalarRangesByMode,
@@ -3681,11 +3683,11 @@ export function useViewport3DSceneModel({
     selectionBounds,
     scalarColorPalette,
     status,
-    renderedMeshRevision: currentTopologyRenderModel?.meshRevision ?? null,
+    renderedMeshRevision: topologyRenderModelForGeometry?.meshRevision ?? null,
     topology: topology.data,
     topologyRevision: topology.revision,
     topologyFreshness,
-    topologyModel: topologyRenderModel,
+    topologyModel: topologyRenderModelForGeometry,
     vectorColorMode,
     vectorScale: fdmVectorScale,
     vectorStyle,

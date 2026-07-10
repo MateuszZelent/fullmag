@@ -33,7 +33,7 @@ import { useViewport3DScalarColorUpload } from "../hooks/useViewport3DScalarColo
 import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
 import { createViewport3DIndexedPointGeometry } from "../viewport3dPointGeometry";
 import {
-  isViewport3DTopologyRenderable,
+  isViewport3DTopologyCurrent,
   resolveUnavailableTopologyVisualizationSettings,
   type Viewport3DTopologyFreshness,
 } from "../viewport3dTopologyStaleness";
@@ -756,7 +756,7 @@ export function resolveAirboxTopologyVisualizationSettings(
   settings: VisualizationTargetSettings,
   topologyFreshness: Viewport3DTopologyFreshness,
 ): VisualizationTargetSettings {
-  if (isViewport3DTopologyRenderable(topologyFreshness)) {
+  if (isViewport3DTopologyCurrent(topologyFreshness)) {
     return settings;
   }
 
