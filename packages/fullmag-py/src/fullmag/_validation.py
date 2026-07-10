@@ -14,9 +14,12 @@ def require_non_empty(value: str, field_name: str) -> str:
 
 
 def require_positive(value: float, field_name: str) -> float:
-    if value <= 0.0:
+    numeric = float(value)
+    if not math.isfinite(numeric):
+        raise ValueError(f"{field_name} must be finite and positive")
+    if numeric <= 0.0:
         raise ValueError(f"{field_name} must be positive")
-    return value
+    return numeric
 
 
 def require_finite(value: float, field_name: str) -> float:

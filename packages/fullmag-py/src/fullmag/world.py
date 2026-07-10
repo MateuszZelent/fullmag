@@ -77,6 +77,8 @@ from fullmag.model.study import (
     SettleTree,
     TableAutosave,
     TimeEvolution,
+    DEFAULT_RELAXATION_MAX_STEPS,
+    DEFAULT_RELAXATION_TORQUE_TOLERANCE_APM,
 )
 from fullmag.model.structure import (
     Ferromagnet,
@@ -1872,7 +1874,7 @@ class _WorldState:
 _state = _WorldState()
 _capture_enabled = False
 _capture_skip_geometry_assets = False
-_RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM = 1e-4
+_RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM = DEFAULT_RELAXATION_TORQUE_TOLERANCE_APM
 
 
 @dataclass(frozen=True, slots=True)
@@ -1886,9 +1888,10 @@ class CapturedStage:
 @dataclass(frozen=True, slots=True)
 class RelaxStageSpec:
     tol: float = _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM
-    max_steps: int = 50_000
+    max_steps: int = DEFAULT_RELAXATION_MAX_STEPS
     algorithm: str = "llg_overdamped"
     energy_tolerance: float | None = None
+    max_relaxation_time_s: float | None = None
     max_pseudotime_s: float | None = None
     max_physical_time_s: float | None = None
     relax_alpha: float | None = 1.0
@@ -2143,57 +2146,42 @@ def _resolve_flat_relax_stop(
     tol: float,
     energy_tolerance: float | None,
     max_steps: int,
+    max_relaxation_time_s: float | None,
     max_pseudotime_s: float | None,
     max_physical_time_s: float | None,
-) -> tuple[RelaxStop | None, float, float | None, int, float | None, float | None]:
+) -> tuple[RelaxStop | None, float | None, float | None, int | None, float | None]:
     if stop is None:
-        return (
-            None,
-            tol,
-            energy_tolerance,
-            max_steps,
-            max_pseudotime_s,
-            max_physical_time_s,
+        time_kwargs: dict[str, float] = {}
+        if max_relaxation_time_s is not None:
+            time_kwargs["max_relaxation_time_s"] = max_relaxation_time_s
+        if max_pseudotime_s is not None:
+            time_kwargs["max_pseudotime_s"] = max_pseudotime_s
+        if max_physical_time_s is not None:
+            time_kwargs["max_physical_time_s"] = max_physical_time_s
+        resolved_stop = RelaxStop(
+            torque_tolerance_apm=tol,
+            energy_tolerance_j=energy_tolerance,
+            max_steps=max_steps,
+            **time_kwargs,
         )
-    resolved_stop = RelaxStop(
-        torque_tolerance_apm=(
-            stop.torque_tolerance_apm
-            if stop.torque_tolerance_apm is not None
-            else tol
-        ),
-        energy_tolerance_j=(
-            stop.energy_tolerance_j
-            if stop.energy_tolerance_j is not None
-            else energy_tolerance
-        ),
-        max_steps=stop.max_steps if stop.max_steps is not None else max_steps,
-        max_pseudotime_s=(
-            stop.max_pseudotime_s
-            if stop.max_pseudotime_s is not None
-            else max_pseudotime_s
-        ),
-        max_physical_time_s=(
-            stop.max_physical_time_s
-            if stop.max_physical_time_s is not None
-            else max_physical_time_s
-        ),
-    )
+    else:
+        resolved_stop = stop
     return (
         resolved_stop,
-        resolved_stop.torque_tolerance_apm or tol,
+        resolved_stop.torque_tolerance_apm,
         resolved_stop.energy_tolerance_j,
-        resolved_stop.max_steps or max_steps,
-        resolved_stop.max_pseudotime_s,
-        resolved_stop.max_physical_time_s,
+        resolved_stop.max_steps,
+        resolved_stop.max_relaxation_time_s,
     )
 
 
 def relax_stage(
     *,
     tol: float = _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM,
-    max_steps: int = 50_000,
+    max_steps: int = DEFAULT_RELAXATION_MAX_STEPS,
     algorithm: str = "llg_overdamped",
     energy_tolerance: float | None = None,
+    max_relaxation_time_s: float | None = None,
     max_pseudotime_s: float | None = None,
     max_physical_time_s: float | None = None,
     relax_alpha: float | None = 1.0,
@@ -2210,13 +2198,13 @@ def relax_stage(
         tol,
         energy_tolerance,
         max_steps,
-        max_pseudotime_s,
-        max_physical_time_s,
+        max_relaxation_time_s,
     ) = _resolve_flat_relax_stop(
         stop=stop,
         tol=tol,
         energy_tolerance=energy_tolerance,
         max_steps=max_steps,
+        max_relaxation_time_s=max_relaxation_time_s,
         max_pseudotime_s=max_pseudotime_s,
         max_physical_time_s=max_physical_time_s,
     )
@@ -2234,6 +2222,7 @@ def relax_stage(
         max_steps=max_steps,
         algorithm=algorithm,
         energy_tolerance=energy_tolerance,
+        max_relaxation_time_s=max_relaxation_time_s,
         max_pseudotime_s=max_pseudotime_s,
         max_physical_time_s=max_physical_time_s,
         relax_alpha=relax_alpha,
@@ -2408,12 +2397,13 @@ def _relax_problem_from_spec(spec: RelaxStageSpec) -> Problem:
         relax_torque_tolerance=spec.tol,
         relax_energy_tolerance=spec.energy_tolerance,
         relax_max_steps=spec.max_steps,
+        relax_max_relaxation_time_s=spec.max_relaxation_time_s,
         relax_max_pseudotime_s=spec.max_pseudotime_s,
         relax_max_physical_time_s=spec.max_physical_time_s,
         relax_stop=spec.stop,
         relax_dynamics=relax_dynamics,
     )
-    if spec.relax_alpha is None:
+    if spec.algorithm != "llg_overdamped" or spec.relax_alpha is None:
         return problem
 
     import dataclasses
@@ -2914,9 +2904,10 @@ class StudyStagesBuilder:
         self,
         *,
         tol: float = _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM,
-        max_steps: int = 50_000,
+        max_steps: int = DEFAULT_RELAXATION_MAX_STEPS,
         algorithm: str = "llg_overdamped",
         energy_tolerance: float | None = None,
+        max_relaxation_time_s: float | None = None,
         max_pseudotime_s: float | None = None,
         max_physical_time_s: float | None = None,
         relax_alpha: float | None = 1.0,
@@ -2934,6 +2925,7 @@ class StudyStagesBuilder:
                 max_steps=max_steps,
                 algorithm=algorithm,
                 energy_tolerance=energy_tolerance,
+                max_relaxation_time_s=max_relaxation_time_s,
                 max_pseudotime_s=max_pseudotime_s,
                 max_physical_time_s=max_physical_time_s,
                 relax_alpha=relax_alpha,
@@ -4000,9 +3992,10 @@ class StudyBuilder:
         self,
         *,
         tol: float = _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM,
-        max_steps: int = 50_000,
+        max_steps: int = DEFAULT_RELAXATION_MAX_STEPS,
         algorithm: str = "llg_overdamped",
         energy_tolerance: float | None = None,
+        max_relaxation_time_s: float | None = None,
         max_pseudotime_s: float | None = None,
         max_physical_time_s: float | None = None,
         relax_alpha: float | None = 1.0,
@@ -4019,6 +4012,7 @@ class StudyBuilder:
             max_steps=max_steps,
             algorithm=algorithm,
             energy_tolerance=energy_tolerance,
+            max_relaxation_time_s=max_relaxation_time_s,
             max_pseudotime_s=max_pseudotime_s,
             max_physical_time_s=max_physical_time_s,
             relax_alpha=relax_alpha,
@@ -6029,9 +6023,10 @@ def _build_problem(
     *,
     study_kind: str = "time_evolution",
     relax_algorithm: str = "llg_overdamped",
-    relax_torque_tolerance: float = 1e-6,
+    relax_torque_tolerance: float = DEFAULT_RELAXATION_TORQUE_TOLERANCE_APM,
     relax_energy_tolerance: float | None = None,
-    relax_max_steps: int = 50_000,
+    relax_max_steps: int = DEFAULT_RELAXATION_MAX_STEPS,
+    relax_max_relaxation_time_s: float | None = None,
     relax_max_pseudotime_s: float | None = None,
     relax_max_physical_time_s: float | None = None,
     relax_stop: RelaxStop | None = None,
@@ -6186,6 +6181,19 @@ def _build_problem(
     ]
 
     if study_kind == "relaxation":
+        relax_kwargs: dict[str, object] = {}
+        if relax_stop is None:
+            relax_kwargs = {
+                "torque_tolerance": relax_torque_tolerance,
+                "energy_tolerance": relax_energy_tolerance,
+                "max_steps": relax_max_steps,
+            }
+            if relax_max_relaxation_time_s is not None:
+                relax_kwargs["max_relaxation_time_s"] = relax_max_relaxation_time_s
+            if relax_max_pseudotime_s is not None:
+                relax_kwargs["max_pseudotime_s"] = relax_max_pseudotime_s
+            if relax_max_physical_time_s is not None:
+                relax_kwargs["max_physical_time_s"] = relax_max_physical_time_s
         study = Relaxation(
             outputs=td_outputs or [
                 SaveField(field="m", every=1e-12),
@@ -6193,13 +6201,9 @@ def _build_problem(
             ],
             algorithm=relax_algorithm,
             stop=relax_stop,
-            torque_tolerance=relax_torque_tolerance,
-            energy_tolerance=relax_energy_tolerance,
-            max_steps=relax_max_steps,
-            max_pseudotime_s=relax_max_pseudotime_s,
-            max_physical_time_s=relax_max_physical_time_s,
-            dynamics=relax_dynamics or dynamics,
+            dynamics=relax_dynamics,
             table_autosave=s._table_autosave,
+            **relax_kwargs,
         )
     elif study_kind == "eigenmodes":
         if not eigen_outputs:
@@ -6461,9 +6465,10 @@ def RunWhile(
 def relax(
     *,
     tol: float = _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM,
-    max_steps: int = 50_000,
+    max_steps: int = DEFAULT_RELAXATION_MAX_STEPS,
     algorithm: str = "llg_overdamped",
     energy_tolerance: float | None = None,
+    max_relaxation_time_s: float | None = None,
     max_pseudotime_s: float | None = None,
     max_physical_time_s: float | None = None,
     relax_alpha: float | None = 1.0,
@@ -6513,13 +6518,13 @@ def relax(
         tol,
         energy_tolerance,
         max_steps,
-        max_pseudotime_s,
-        max_physical_time_s,
+        max_relaxation_time_s,
     ) = _resolve_flat_relax_stop(
         stop=stop,
         tol=tol,
         energy_tolerance=energy_tolerance,
         max_steps=max_steps,
+        max_relaxation_time_s=max_relaxation_time_s,
         max_pseudotime_s=max_pseudotime_s,
         max_physical_time_s=max_physical_time_s,
     )
@@ -6540,6 +6545,7 @@ def relax(
         relax_torque_tolerance=tol,
         relax_energy_tolerance=energy_tolerance,
         relax_max_steps=max_steps,
+        relax_max_relaxation_time_s=max_relaxation_time_s,
         relax_max_pseudotime_s=max_pseudotime_s,
         relax_max_physical_time_s=max_physical_time_s,
         relax_stop=stop,
@@ -6548,7 +6554,7 @@ def relax(
 
     # Override damping for relaxation (does not affect subsequent fm.run()
     # calls because _build_problem() constructs a fresh Problem each time).
-    if relax_alpha is not None:
+    if algorithm == "llg_overdamped" and relax_alpha is not None:
         import dataclasses
         new_magnets = [
             dataclasses.replace(
@@ -6579,10 +6585,8 @@ def relax(
 
 
 def _relaxation_default_until_seconds(study: Relaxation) -> float:
-    if study.max_physical_time_s is not None:
-        return study.max_physical_time_s
-    if study.max_pseudotime_s is not None:
-        return study.max_pseudotime_s
+    if study.stop.max_relaxation_time_s is not None:
+        return study.stop.max_relaxation_time_s
     return float("inf")
 
 

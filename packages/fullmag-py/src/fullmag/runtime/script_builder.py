@@ -56,6 +56,8 @@ from fullmag.model.outputs import (
 )
 from fullmag.model.problem import Problem
 from fullmag.model.study import (
+    DEFAULT_RELAXATION_MAX_STEPS,
+    DEFAULT_RELAXATION_TORQUE_TOLERANCE_APM,
     DEFAULT_TABLE_AUTOSAVE_QUANTITIES,
     Eigenmodes,
     FrequencyResponse,
@@ -101,17 +103,22 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
             ),
             "relax_algorithm": relax_stage.algorithm if relax_stage is not None else "llg_overdamped",
             "torque_tolerance": _text_number(
-                relax_stage.torque_tolerance if relax_stage is not None else 1e-6
+                relax_stage.torque_tolerance
+                if relax_stage is not None
+                else DEFAULT_RELAXATION_TORQUE_TOLERANCE_APM
             ),
             "energy_tolerance": _text_number(
                 relax_stage.energy_tolerance if relax_stage is not None else None
             ),
-            "max_relax_steps": str(relax_stage.max_steps if relax_stage is not None else 5000),
-            "max_pseudotime_s": _text_number(
-                relax_stage.max_pseudotime_s if relax_stage is not None else None
+            "max_relax_steps": str(
+                relax_stage.max_steps
+                if relax_stage is not None
+                else DEFAULT_RELAXATION_MAX_STEPS
             ),
-            "max_physical_time_s": _text_number(
-                relax_stage.max_physical_time_s if relax_stage is not None else None
+            "max_relaxation_time_s": _text_number(
+                relax_stage.stop.max_relaxation_time_s
+                if relax_stage is not None
+                else None
             ),
         },
         "mesh": _export_global_mesh_state(base_problem),
@@ -455,26 +462,33 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
             **study.to_ir(),
             "entrypoint_kind": stage.entrypoint_kind,
         }
-    dynamics = study.dynamics
     if isinstance(study, Relaxation):
-        return {
+        payload = {
             "kind": "relax",
             "entrypoint_kind": stage.entrypoint_kind,
-            "integrator": dynamics.integrator,
-            "fixed_timestep": _text_number(dynamics.fixed_timestep),
-            "demag_interval_s": _text_number(
-                dynamics.field_refresh.demag_interval_s
-                if dynamics.field_refresh is not None
-                else None
-            ),
             "until_seconds": "",
             "relax_algorithm": study.algorithm,
             "torque_tolerance": _text_number(study.torque_tolerance),
             "energy_tolerance": _text_number(study.energy_tolerance),
             "max_steps": str(study.max_steps),
-            "max_pseudotime_s": _text_number(study.max_pseudotime_s),
-            "max_physical_time_s": _text_number(study.max_physical_time_s),
         }
+        if study.dynamics is not None:
+            payload.update(
+                {
+                    "integrator": study.dynamics.integrator,
+                    "fixed_timestep": _text_number(study.dynamics.fixed_timestep),
+                    "demag_interval_s": _text_number(
+                        study.dynamics.field_refresh.demag_interval_s
+                        if study.dynamics.field_refresh is not None
+                        else None
+                    ),
+                    "max_relaxation_time_s": _text_number(
+                        study.stop.max_relaxation_time_s
+                    ),
+                }
+            )
+        return payload
+    dynamics = study.dynamics
     if isinstance(study, Eigenmodes):
         return {
             "kind": "eigenmodes",
@@ -2598,6 +2612,8 @@ def _render_solver(
     if problem.study is None:
         return ["# Solver (not configured)"]
     dynamics = problem.study.dynamics
+    if dynamics is None:
+        return []
     return ["# Solver", _render_solver_call(dynamics, solver_override, surface=surface)]
 
 
@@ -2734,15 +2750,19 @@ def _render_stages(
                 f"study.stages.add_hysteresis_sweep({', '.join(_render_hysteresis_stage_args(study))})"
             )
             continue
-        dynamics_signature = stage.problem.study.dynamics.to_ir()
+        stage_dynamics = stage.problem.study.dynamics
+        dynamics_signature = (
+            stage_dynamics.to_ir() if stage_dynamics is not None else None
+        )
         if previous_dynamics_signature is not None and dynamics_signature != previous_dynamics_signature:
-            lines.append(
-                _render_solver_call(
-                    stage.problem.study.dynamics,
-                    solver_override,
-                    surface=surface,
+            if stage_dynamics is not None:
+                lines.append(
+                    _render_solver_call(
+                        stage_dynamics,
+                        solver_override,
+                        surface=surface,
+                    )
                 )
-            )
         previous_dynamics_signature = dynamics_signature
 
         if isinstance(study, Eigenmodes):
@@ -2872,14 +2892,13 @@ def _render_stages(
                 or _override_string(relax_override, "algorithm", study.algorithm)
                 or study.algorithm
             )
-            relax_solver = (
-                _override_string(stage_override, "integrator", None)
-                or study.dynamics.integrator
-            )
+            relax_solver = _override_string(stage_override, "integrator", None)
+            if study.dynamics is not None:
+                relax_solver = relax_solver or study.dynamics.integrator
             relax_fixed_timestep = _override_number(
                 stage_override,
                 "fixed_timestep",
-                study.dynamics.fixed_timestep,
+                study.dynamics.fixed_timestep if study.dynamics is not None else None,
             )
             torque_tolerance = _override_number(
                 stage_override,
@@ -2904,42 +2923,39 @@ def _render_stages(
                 "max_steps",
                 _override_int(relax_override, "max_steps", study.max_steps),
             )
-            max_pseudotime_s = _override_number(
+            max_relaxation_time_s = _override_number(
                 stage_override,
-                "max_pseudotime_s",
-                _override_number(relax_override, "max_pseudotime_s", study.max_pseudotime_s),
-            )
-            max_physical_time_s = _override_number(
-                stage_override,
-                "max_physical_time_s",
-                _override_number(relax_override, "max_physical_time_s", study.max_physical_time_s),
+                "max_relaxation_time_s",
+                _override_number(
+                    relax_override,
+                    "max_relaxation_time_s",
+                    study.stop.max_relaxation_time_s,
+                ),
             )
             call_parts = [f"algorithm={_py_repr(algorithm)}"]
             needs_stop_object = (
                 torque_tolerance is None
                 or max_steps is None
-                or max_pseudotime_s is not None
-                or max_physical_time_s is not None
+                or max_relaxation_time_s is not None
             )
             if needs_stop_object:
                 stop_parts: list[str] = []
-                if torque_tolerance is not None:
-                    stop_parts.append(
-                        f"torque_tolerance_apm={_py_number(torque_tolerance)}"
-                    )
+                stop_parts.append(
+                    "torque_tolerance_apm=None"
+                    if torque_tolerance is None
+                    else f"torque_tolerance_apm={_py_number(torque_tolerance)}"
+                )
                 if energy_tolerance is not None:
                     stop_parts.append(
                         f"energy_tolerance_j={_py_number(energy_tolerance)}"
                     )
-                if max_steps is not None:
-                    stop_parts.append(f"max_steps={max_steps}")
-                if max_pseudotime_s is not None:
+                stop_parts.append(
+                    "max_steps=None" if max_steps is None else f"max_steps={max_steps}"
+                )
+                if max_relaxation_time_s is not None:
                     stop_parts.append(
-                        f"max_pseudotime_s={_py_number(max_pseudotime_s)}"
-                    )
-                if max_physical_time_s is not None:
-                    stop_parts.append(
-                        f"max_physical_time_s={_py_number(max_physical_time_s)}"
+                        "max_relaxation_time_s="
+                        f"{_py_number(max_relaxation_time_s)}"
                     )
                 call_parts.append(f"stop=fm.RelaxStop({', '.join(stop_parts)})")
             else:
@@ -2954,7 +2970,7 @@ def _render_stages(
                     call_parts.append(f"solver={_py_repr(relax_solver)}")
                 if relax_fixed_timestep is not None:
                     call_parts.append(f"dt={_py_number(relax_fixed_timestep)}")
-                if study.dynamics.adaptive_timestep is not None:
+                if study.dynamics is not None and study.dynamics.adaptive_timestep is not None:
                     adaptive_timestep = study.dynamics.adaptive_timestep
                     if adaptive_timestep.atol != DEFAULT_ADAPTIVE_ATOL:
                         call_parts.append(f"max_error={_py_number(adaptive_timestep.atol)}")

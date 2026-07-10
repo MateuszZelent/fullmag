@@ -30,6 +30,8 @@ SUPPORTED_RELAXATION_ALGORITHMS = {
     "nonlinear_cg",
     "tangent_plane_implicit",
 }
+DEFAULT_RELAXATION_TORQUE_TOLERANCE_APM = 1e-4
+DEFAULT_RELAXATION_MAX_STEPS = 50_000
 DIRECT_MINIMIZER_RELAXATION_ALGORITHMS = {
     "projected_gradient_bb",
     "nonlinear_cg",
@@ -458,31 +460,60 @@ class TimeEvolution:
         )
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class RelaxStop:
-    torque_tolerance_apm: float | None = 1e-4
+    torque_tolerance_apm: float | None = DEFAULT_RELAXATION_TORQUE_TOLERANCE_APM
     energy_tolerance_j: float | None = None
-    max_steps: int | None = 50_000
-    max_pseudotime_s: float | None = None
-    max_physical_time_s: float | None = None
+    max_steps: int | None = DEFAULT_RELAXATION_MAX_STEPS
+    max_relaxation_time_s: float | None = None
+
+    def __init__(
+        self,
+        torque_tolerance_apm: float | None = DEFAULT_RELAXATION_TORQUE_TOLERANCE_APM,
+        energy_tolerance_j: float | None = None,
+        max_steps: int | None = DEFAULT_RELAXATION_MAX_STEPS,
+        max_relaxation_time_s: object = _UNSET,
+        *,
+        max_pseudotime_s: object = _UNSET,
+        max_physical_time_s: object = _UNSET,
+    ) -> None:
+        time_values = [
+            ("max_relaxation_time_s", max_relaxation_time_s),
+            ("max_pseudotime_s", max_pseudotime_s),
+            ("max_physical_time_s", max_physical_time_s),
+        ]
+        supplied = [(name, value) for name, value in time_values if value is not _UNSET]
+        if supplied:
+            resolved_time = None if supplied[0][1] is None else float(supplied[0][1])
+            for name, value in supplied[1:]:
+                candidate = None if value is None else float(value)
+                if candidate != resolved_time:
+                    raise ValueError(
+                        f"{name} conflicts with {supplied[0][0]}"
+                    )
+        else:
+            resolved_time = None
+
+        object.__setattr__(self, "torque_tolerance_apm", torque_tolerance_apm)
+        object.__setattr__(self, "energy_tolerance_j", energy_tolerance_j)
+        object.__setattr__(self, "max_steps", max_steps)
+        object.__setattr__(self, "max_relaxation_time_s", resolved_time)
+        self.__post_init__()
 
     def __post_init__(self) -> None:
         if self.torque_tolerance_apm is not None:
             require_positive(self.torque_tolerance_apm, "torque_tolerance_apm")
         if self.energy_tolerance_j is not None:
             require_positive(self.energy_tolerance_j, "energy_tolerance_j")
-        if self.max_steps is not None and self.max_steps <= 0:
-            raise ValueError("max_steps must be positive")
-        if self.max_pseudotime_s is not None:
-            require_positive(self.max_pseudotime_s, "max_pseudotime_s")
-        if self.max_physical_time_s is not None:
-            require_positive(self.max_physical_time_s, "max_physical_time_s")
+        if self.max_steps is not None:
+            object.__setattr__(self, "max_steps", _positive_int(self.max_steps, "max_steps"))
+        if self.max_relaxation_time_s is not None:
+            require_positive(self.max_relaxation_time_s, "max_relaxation_time_s")
         if (
             self.torque_tolerance_apm is None
             and self.energy_tolerance_j is None
             and self.max_steps is None
-            and self.max_pseudotime_s is None
-            and self.max_physical_time_s is None
+            and self.max_relaxation_time_s is None
         ):
             raise ValueError("RelaxStop requires at least one stop criterion")
 
@@ -494,10 +525,8 @@ class RelaxStop:
             payload["energy_tolerance_j"] = self.energy_tolerance_j
         if self.max_steps is not None:
             payload["max_steps"] = self.max_steps
-        if self.max_pseudotime_s is not None:
-            payload["max_pseudotime_s"] = self.max_pseudotime_s
-        if self.max_physical_time_s is not None:
-            payload["max_physical_time_s"] = self.max_physical_time_s
+        if self.max_relaxation_time_s is not None:
+            payload["max_relaxation_time_s"] = self.max_relaxation_time_s
         return payload
 
 
@@ -538,16 +567,16 @@ class Relaxation:
         Canonical stop contract for relaxation. Legacy scalar arguments
         (``torque_tolerance``, ``energy_tolerance``, ``max_steps``) remain
         supported as compatibility aliases and lower into ``RelaxStop``.
-    dynamics : LLG, default ``LLG()``
-        LLG parameters (damping, gyromagnetic ratio).  Used by the
-        ``"llg_overdamped"`` algorithm and for material parameter specification
-        in all algorithms.
+    dynamics : LLG, optional
+        LLG parameters used only by ``"llg_overdamped"``. When omitted for
+        that algorithm, canonical ``LLG(integrator="auto")`` dynamics are
+        supplied. Direct minimizers reject this field.
     """
 
     outputs: Sequence[TimeOutputSpec]
     algorithm: str = "llg_overdamped"
     stop: RelaxStop = field(default_factory=RelaxStop)
-    dynamics: LLG = field(default_factory=LLG)
+    dynamics: LLG | None = None
     _table_autosave: TableAutosave | None = field(default=None, repr=False)
     torque_tolerance: float | None = field(init=False)
     energy_tolerance: float | None = field(init=False)
@@ -561,9 +590,10 @@ class Relaxation:
         torque_tolerance: object = _UNSET,
         energy_tolerance: object = _UNSET,
         max_steps: object = _UNSET,
+        max_relaxation_time_s: object = _UNSET,
         max_pseudotime_s: object = _UNSET,
         max_physical_time_s: object = _UNSET,
-        dynamics: LLG = LLG(),
+        dynamics: LLG | None = None,
         table_autosave: TableAutosave | None = None,
     ) -> None:
         object.__setattr__(self, "outputs", outputs)
@@ -576,6 +606,7 @@ class Relaxation:
                 torque_tolerance=torque_tolerance,
                 energy_tolerance=energy_tolerance,
                 max_steps=max_steps,
+                max_relaxation_time_s=max_relaxation_time_s,
                 max_pseudotime_s=max_pseudotime_s,
                 max_physical_time_s=max_physical_time_s,
             ),
@@ -587,20 +618,31 @@ class Relaxation:
         object.__setattr__(self, "max_steps", self.stop.max_steps)
         self.__post_init__()
 
-    @property
-    def max_pseudotime_s(self) -> float | None:
-        return self.stop.max_pseudotime_s
-
-    @property
-    def max_physical_time_s(self) -> float | None:
-        return self.stop.max_physical_time_s
-
     def __post_init__(self) -> None:
         if not self.outputs:
             raise ValueError("Relaxation requires at least one output")
         if self.algorithm not in SUPPORTED_RELAXATION_ALGORITHMS:
             supported = ", ".join(sorted(SUPPORTED_RELAXATION_ALGORITHMS))
             raise ValueError(f"algorithm must be one of: {supported}")
+        is_llg = self.algorithm == "llg_overdamped"
+        if is_llg and self.dynamics is None:
+            object.__setattr__(self, "dynamics", LLG(integrator="auto"))
+        if not is_llg and self.dynamics is not None:
+            raise ValueError(
+                f"relaxation algorithm {self.algorithm!r} does not accept dynamics"
+            )
+        if not is_llg and self.stop.max_relaxation_time_s is not None:
+            raise ValueError(
+                "max_relaxation_time_s is valid only for algorithm='llg_overdamped'"
+            )
+
+    @property
+    def max_pseudotime_s(self) -> float | None:
+        return self.stop.max_relaxation_time_s
+
+    @property
+    def max_physical_time_s(self) -> float | None:
+        return self.stop.max_relaxation_time_s
 
     def to_ir(self) -> dict[str, object]:
         """Serialize to ProblemIR-compatible dictionary."""
@@ -612,7 +654,7 @@ class Relaxation:
         return {
             "kind": "relaxation",
             "algorithm": self.algorithm,
-            "dynamics": self.dynamics.to_ir(),
+            "dynamics": self.dynamics.to_ir() if self.dynamics is not None else None,
             "stop": self.stop.to_ir(),
             "sampling": sampling,
         }
@@ -624,6 +666,7 @@ def _resolve_relax_stop(
     torque_tolerance: object,
     energy_tolerance: object,
     max_steps: object,
+    max_relaxation_time_s: object,
     max_pseudotime_s: object,
     max_physical_time_s: object,
 ) -> RelaxStop:
@@ -640,25 +683,31 @@ def _resolve_relax_stop(
     alias_torque = maybe_float(torque_tolerance)
     alias_energy = maybe_float(energy_tolerance)
     alias_max_steps = maybe_int(max_steps)
-    alias_max_pseudotime = maybe_float(max_pseudotime_s)
-    alias_max_physical_time = maybe_float(max_physical_time_s)
+    time_kwargs = {
+        "max_relaxation_time_s": max_relaxation_time_s,
+        "max_pseudotime_s": max_pseudotime_s,
+        "max_physical_time_s": max_physical_time_s,
+    }
 
     if stop is None:
         return RelaxStop(
-            torque_tolerance_apm=1e-4 if torque_tolerance is _UNSET else alias_torque,
+            torque_tolerance_apm=(
+                DEFAULT_RELAXATION_TORQUE_TOLERANCE_APM
+                if torque_tolerance is _UNSET
+                else alias_torque
+            ),
             energy_tolerance_j=alias_energy,
-            max_steps=50_000 if max_steps is _UNSET else alias_max_steps,
-            max_pseudotime_s=alias_max_pseudotime,
-            max_physical_time_s=alias_max_physical_time,
+            max_steps=(
+                DEFAULT_RELAXATION_MAX_STEPS if max_steps is _UNSET else alias_max_steps
+            ),
+            **{name: value for name, value in time_kwargs.items() if value is not _UNSET},
         )
 
     resolved_torque = stop.torque_tolerance_apm
     resolved_energy = stop.energy_tolerance_j
     resolved_max_steps = stop.max_steps
-    resolved_max_pseudotime = stop.max_pseudotime_s
-    resolved_max_physical_time = stop.max_physical_time_s
 
-    if alias_torque is not None:
+    if torque_tolerance is not _UNSET:
         if resolved_torque is not None and resolved_torque != alias_torque:
             raise ValueError("torque_tolerance conflicts with stop.torque_tolerance_apm")
         resolved_torque = alias_torque
@@ -666,31 +715,26 @@ def _resolve_relax_stop(
         if resolved_energy is not None and resolved_energy != alias_energy:
             raise ValueError("energy_tolerance conflicts with stop.energy_tolerance_j")
         resolved_energy = alias_energy
-    if alias_max_steps is not None:
+    if max_steps is not _UNSET:
         if resolved_max_steps is not None and resolved_max_steps != alias_max_steps:
             raise ValueError("max_steps conflicts with stop.max_steps")
         resolved_max_steps = alias_max_steps
-    if max_pseudotime_s is not _UNSET:
-        if (
-            resolved_max_pseudotime is not None
-            and resolved_max_pseudotime != alias_max_pseudotime
-        ):
-            raise ValueError("max_pseudotime_s conflicts with stop.max_pseudotime_s")
-        resolved_max_pseudotime = alias_max_pseudotime
-    if max_physical_time_s is not _UNSET:
-        if (
-            resolved_max_physical_time is not None
-            and resolved_max_physical_time != alias_max_physical_time
-        ):
-            raise ValueError("max_physical_time_s conflicts with stop.max_physical_time_s")
-        resolved_max_physical_time = alias_max_physical_time
+    supplied_times = [
+        (name, value)
+        for name, value in time_kwargs.items()
+        if value is not _UNSET
+    ]
+    resolved_time = stop.max_relaxation_time_s
+    for name, value in supplied_times:
+        candidate = None if value is None else float(value)
+        if candidate != resolved_time:
+            raise ValueError(f"{name} conflicts with stop.max_relaxation_time_s")
 
     return RelaxStop(
         torque_tolerance_apm=resolved_torque,
         energy_tolerance_j=resolved_energy,
         max_steps=resolved_max_steps,
-        max_pseudotime_s=resolved_max_pseudotime,
-        max_physical_time_s=resolved_max_physical_time,
+        max_relaxation_time_s=resolved_time,
     )
 
 

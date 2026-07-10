@@ -4689,6 +4689,34 @@ class ProblemApiTests(unittest.TestCase):
         study_ir = loaded.stages[0].problem.study.to_ir()
         self.assertEqual(study_ir["algorithm"], "nonlinear_cg")
         self.assertEqual(study_ir["stop"]["torque_tolerance_apm"], 1e-4)
+        self.assertIsNone(study_ir["dynamics"])
+
+        stage_payload = export_builder_draft(loaded)["stages"][0]
+        for field in (
+            "integrator",
+            "fixed_timestep",
+            "demag_interval_s",
+            "max_relaxation_time_s",
+            "max_pseudotime_s",
+            "max_physical_time_s",
+        ):
+            self.assertNotIn(field, stage_payload)
+
+        rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+        stage_line = next(
+            line for line in rewritten.splitlines() if "stages.add_relax(" in line
+        )
+        for field in (
+            "solver=",
+            "dt=",
+            "max_error=",
+            "dt_min=",
+            "dt_max=",
+            "relax_alpha=",
+            "max_pseudotime_s=",
+            "max_physical_time_s=",
+        ):
+            self.assertNotIn(field, stage_line)
 
     def test_study_stage_builder_add_hysteresis_branch_materializes_relax_stages(self) -> None:
         script = """
@@ -6343,8 +6371,7 @@ class ProblemApiTests(unittest.TestCase):
                 algorithm="llg_overdamped",
                 stop=fm.RelaxStop(
                     torque_tolerance_apm=1e-3,
-                    max_pseudotime_s=4e-12,
-                    max_physical_time_s=6e-12,
+                    max_relaxation_time_s=4e-12,
                 ),
                 dynamics=fm.LLG(
                     fixed_timestep=2e-13,
@@ -6356,8 +6383,9 @@ class ProblemApiTests(unittest.TestCase):
 
         ir = problem.to_ir()
         self.assertEqual(ir["study"]["stop"]["torque_tolerance_apm"], 1e-3)
-        self.assertEqual(ir["study"]["stop"]["max_pseudotime_s"], 4e-12)
-        self.assertEqual(ir["study"]["stop"]["max_physical_time_s"], 6e-12)
+        self.assertEqual(ir["study"]["stop"]["max_relaxation_time_s"], 4e-12)
+        self.assertNotIn("max_pseudotime_s", ir["study"]["stop"])
+        self.assertNotIn("max_physical_time_s", ir["study"]["stop"])
         self.assertEqual(
             ir["study"]["dynamics"]["field_refresh"]["demag_interval_s"],
             8e-13,
@@ -6393,7 +6421,7 @@ class ProblemApiTests(unittest.TestCase):
         rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
         self.assertIn("fm.solver(dt=2e-13, demag_interval_s=8e-13)", rewritten)
         self.assertIn(
-            'fm.relax(algorithm="llg_overdamped", stop=fm.RelaxStop(torque_tolerance_apm=1e-05, max_steps=50000, max_pseudotime_s=4e-12))',
+            'fm.relax(algorithm="llg_overdamped", stop=fm.RelaxStop(torque_tolerance_apm=1e-05, max_steps=50000, max_relaxation_time_s=4e-12))',
             rewritten,
         )
 
