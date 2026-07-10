@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   createFdmCuboidBuildStateController,
   resolveFdmCuboidBuildState,
-  type FdmCuboidBuildSnapshot,
 } from "./fdmCuboidBuildState";
 import type { FdmCuboidBuildResult } from "./fdmCuboidBuildModel";
 
