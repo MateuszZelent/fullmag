@@ -384,6 +384,26 @@ describe("viewport smoke projection round-trip", () => {
     expect(screenshotScript).toContain("Viewport 3D region overlay selection passed");
   });
 
+  it("publishes the current scene and a complete generated-shape target registry for projection screenshots", () => {
+    const screenshotScript = readFileSync(screenshotScriptUrl, "utf8");
+
+    expect(screenshotScript).toContain('scope: "part"');
+    expect(screenshotScript).toContain('scope_id: "part-film"');
+    expect(screenshotScript).toContain('source: "mesh_part"');
+    expect(screenshotScript).toContain('object_id: "projection-film"');
+  });
+
+  it("rejects a projection screenshot gate with no pixel difference for any mode pair", () => {
+    const screenshotScript = readFileSync(screenshotScriptUrl, "utf8");
+
+    expect(screenshotScript).toContain(
+      "if (!rawToSurface.changed || !surfaceToThickness.changed || !rawToThickness.changed)",
+    );
+    expect(screenshotScript).toContain(
+      "Top/bottom projection fixture did not visually distinguish all projection modes.",
+    );
+  });
+
   it("keeps the memory churn fixture isolated from live realtime websocket events", () => {
     const memoryChurnScript = readFileSync(memoryChurnScriptUrl, "utf8");
 

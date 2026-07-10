@@ -1503,25 +1503,28 @@ function topBottomProjectionVisualizationStateFixture(projectionMode, revision =
     slice_mode: "xy",
     targets: {
       airbox: {
-        id: "airbox",
         label: "Airbox",
-        parts: [],
+        scope: "airbox",
+        scope_id: "airbox",
+        settings: topBottomProjectionTargetSettings(projectionMode),
         source: "airbox",
       },
-      objects: [],
+      objects: [
+        {
+          label: "Projection film",
+          scope: "object",
+          scope_id: "projection-film",
+          settings: topBottomProjectionTargetSettings(projectionMode),
+          source: "scene_object",
+        },
+      ],
       parts: [
         {
-          id: "part-film",
           label: "Top/bottom film",
-          settings: {
-            surface_color_source: "orientation",
-            surface_projection_mode: projectionMode,
-            surface_visible: true,
-            vector_budget: 0,
-            vectors_visible: false,
-            visible: true,
-            wireframe_visible: false,
-          },
+          scope: "part",
+          scope_id: "part-film",
+          settings: topBottomProjectionTargetSettings(projectionMode),
+          source: "mesh_part",
         },
       ],
     },
@@ -1546,9 +1549,44 @@ function topBottomProjectionVisualizationStateFixture(projectionMode, revision =
   };
 }
 
+function topBottomProjectionTargetSettings(projectionMode) {
+  return {
+    active_quantity_id: "m",
+    bounds_visible: false,
+    geometry_scope: "surface",
+    opacity: 1,
+    point_color: "#ffffff",
+    points_visible: false,
+    render_mode: "surface",
+    scalar_color_palette: "viridis",
+    surface_color_source: "orientation",
+    surface_mono_color: "#ffffff",
+    surface_projection_mode: projectionMode,
+    surface_visible: true,
+    vector_alpha: 1,
+    vector_budget: 0,
+    vector_color_mode: "orientation",
+    vector_length_scale: 1,
+    vector_mono_color: "#ffffff",
+    vector_thickness: 1,
+    vectors_visible: false,
+    viewport_colorbar_visible: true,
+    visible: true,
+    wireframe_color: "#ffffff",
+    wireframe_opacity: 1,
+    wireframe_visible: false,
+  };
+}
+
 function topBottomProjectionSceneFixture() {
   return {
-    objects: [],
+    objects: [
+      {
+        id: "projection-film",
+        transform: { translation: [0, 0, 0] },
+        visible: true,
+      },
+    ],
     revision: 1,
     schema_version: 2,
   };
@@ -1591,6 +1629,7 @@ function topBottomProjectionSharedDomainManifestFixture() {
         node_count: 8,
         node_indices: [0, 1, 2, 3, 4, 5, 6, 7],
         node_start: 0,
+        object_id: "projection-film",
         role: "magnetic",
         surface_faces: surfaceFaces,
       },
