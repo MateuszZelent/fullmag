@@ -213,6 +213,9 @@ git commit -m "fix(python): canonicalize relaxation authoring"
 - Modify: crates/fullmag-plan/src/spin_torque.rs
 - Modify: crates/fullmag-plan/src/fdm.rs
 - Modify: crates/fullmag-plan/src/fem.rs
+- Modify: crates/fullmag-runner/src/**/*.rs where StudyIR::Relaxation dynamics is destructured
+- Modify: crates/fullmag-cli/src/**/*.rs where StudyIR::Relaxation dynamics is destructured
+- Modify: crates/fullmag-api/src/**/*.rs where StudyIR::Relaxation dynamics is destructured
 
 **Interfaces:**
 - Consumes: Python canonical IR with optional dynamics and max_relaxation_time_s.
@@ -263,6 +266,11 @@ Relaxation {
 
 RelaxStopIR owns max_relaxation_time_s. Legacy aliases deserialize through an explicit compatibility helper, not duplicate canonical fields.
 
+Update every Rust consumer of StudyIR::Relaxation in the same change so the
+workspace never contains a committed IR shape that downstream crates cannot
+compile. Mechanical consumers must handle None explicitly; they must not
+manufacture direct-minimizer dynamics during the compatibility edit.
+
 - [ ] **Step 4: Remove direct-minimizer default integrators**
 
 Replace RelaxationAlgorithmIR::default_integrator with an LLG-only resolver returning Option<IntegratorChoice>, and make planned_study_controls set integrator/fixed/adaptive controls only for LLG.
@@ -280,14 +288,15 @@ Strict TPI rejects. Extended automatic TPI resolves only to CPU/MFEM with an exp
 ~~~bash
 CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-ir
 CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-plan
+CARGO_TARGET_DIR=.fullmag/codex-target cargo check --workspace
 ~~~
 
-Expected: relaxation tests pass; the pre-existing unrelated frequency-domain baseline failure is either still isolated or separately repaired by its owner.
+Expected: relaxation tests pass and every workspace consumer compiles; the pre-existing unrelated frequency-domain baseline failure is either still isolated or separately repaired by its owner.
 
 - [ ] **Step 8: Commit**
 
 ~~~bash
-git add crates/fullmag-ir crates/fullmag-plan
+git add crates/fullmag-ir crates/fullmag-plan crates/fullmag-runner crates/fullmag-cli crates/fullmag-api
 git commit -m "fix(ir): separate LLG relaxation from minimizers"
 ~~~
 
@@ -303,6 +312,8 @@ git commit -m "fix(ir): separate LLG relaxation from minimizers"
 - Modify: crates/fullmag-runner/src/artifacts.rs
 - Modify: crates/fullmag-cli/src/orchestrator.rs
 - Modify: crates/fullmag-cli/src/step_utils.rs
+- Modify: crates/fullmag-api/src/schemas/runtime.rs
+- Modify: crates/fullmag-api/src/router_v2/handlers/simulation/runtime.rs
 
 **Interfaces:**
 - Consumes: canonical stop controls and exact backend metrics.
@@ -381,6 +392,7 @@ Write completion and metric unit to metadata for FDM and FEM, and require freque
 ~~~bash
 CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-runner relaxation
 CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-cli relaxation
+CARGO_TARGET_DIR=.fullmag/codex-target cargo check --workspace
 ~~~
 
 Expected: focused completion tests pass.
