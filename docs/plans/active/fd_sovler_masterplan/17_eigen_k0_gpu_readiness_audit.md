@@ -6,34 +6,44 @@
 - Runtime revalidated in this update: `false`
 - Historical audit: `old/17_eigen_k0_gpu_readiness_audit_legacy_2026-07-10.md`
 
-This file records current GPU modal truth only. The old before/after audit is
+This file is a strict GPU-focused projection of
+`25_frequency_domain_readiness_matrix.json`. The old before/after audit is
 archived under `old/` and must not be used as current status when it conflicts
 with the readiness matrix.
 
 ## Current GPU status
 
-| Scope | Implementation state | Validation state | Validated scope | Current conclusion |
-|---|---|---|---|---|
-| `modal_eigen/gpu/k0/none`, macrospin | `executable` | `physics_validated` | K0-1 no-demag macrospin/Larmor field sweep | Real narrow GPU modal slice exists through `gpu_dense_k0_macrospin_modal_eigen`. |
-| `modal_eigen/gpu/k0/none`, general | `source_visible` | `unvalidated` | none | The macrospin slice does not promote a general GPU modal eigensolver. |
-| `modal_eigen/gpu/k0/periodic_airbox_k0`, dense/apply probe | `executable` | `algebra_validated` | bounded one-shot dense/apply fixtures | Useful contract evidence, not production physics. |
-| `modal_eigen/gpu/k0/periodic_airbox_k0`, scalable modal | `absent` | `unvalidated` | none | No persistent GPU modal selected-spectrum solver exists. |
-| `modal_eigen/gpu/nonzero_k/none` | `absent` | `unvalidated` | none | Nonzero-k Floquet GPU modal remains unavailable. |
-| `modal_eigen/gpu/nonzero_k/floquet_airbox_nonzero_k` | `absent` | `unvalidated` | none | Dynamic demag-k GPU modal remains unavailable. |
-| `driven_response/gpu/k0/periodic_airbox_k0` | `executable` | `unvalidated` | existing partial executable Schur/provider artifacts only | This is driven response, not modal eigensolve; current reliable lane is `gpu_operator_host_krylov` with host or hybrid Poisson provider. |
-| `driven_response/gpu/*/gpu_device_krylov` | `source_visible` | `unvalidated` | none | `production_loop_available=false`; no full device Krylov loop. |
+All non-null `validated_scope` references use the readiness projection catalog:
+
+```text
+scope_catalog_uri = urn:fullmag:frequency-domain:readiness-scope-catalog:78df796d6956f9b25856b7cf6639d683b2175281fe7291ee80d270e031039b64
+scope_catalog_sha256 = sha256:78df796d6956f9b25856b7cf6639d683b2175281fe7291ee80d270e031039b64
+```
+
+| Cell ID | Implementation state | Validation state | `validated_scope` | Evidence or executable scope | Current conclusion |
+|---|---|---|---|---|---|
+| `modal_gpu_k0_none_macrospin_larmor` | `executable` | `physics_validated` | `sha256:2a87bce1656c74fe82782b37ce229e6c4af43ef183f7ff6e228a1cac308df372` | K0-1 no-demag macrospin/Larmor field sweep using `gpu_dense_k0_macrospin_modal_eigen`; precision=`double`. | Real narrow GPU modal slice exists through the current emitted GPU modal validation lane. |
+| `modal_gpu_k0_none_general_modal` | `source_visible` | `unvalidated` | `null` | Source evidence only. | The macrospin slice does not promote a general GPU modal eigensolver. |
+| `modal_gpu_k0_periodic_airbox_dense_probe` | `source_visible` | `unvalidated` | `null` | Target label: `gpu_dense_contract_eigensolver`; current emitted GPU modal validation lane remains `gpu_dense_k0_macrospin_modal_eigen` for the no-demag macrospin cell only. | The target dense-contract label is not emitted as a production modal artifact and does not validate Poisson-airbox modal physics. |
+| `modal_gpu_k0_periodic_airbox_scalable` | `absent` | `unvalidated` | `null` | None. | No persistent GPU modal selected-spectrum solver exists. |
+| `modal_gpu_nonzero_k_none` | `absent` | `unvalidated` | `null` | None. | Nonzero-k Floquet GPU modal remains unavailable. |
+| `modal_gpu_nonzero_k_floquet_airbox` | `absent` | `unvalidated` | `null` | None. | Dynamic demag-k GPU modal remains unavailable. |
+| `driven_gpu_k0_periodic_airbox_gpu_operator_host_krylov` | `executable` | `unvalidated` | `null` | Executable scope: partial periodic_airbox_k0 GPU operator-host Krylov artifacts with hybrid or host Poisson demag provider. | This is driven response, not modal eigensolve; current reliable lane is `gpu_operator_host_krylov` with host or hybrid Poisson provider. |
+| `driven_gpu_k0_periodic_airbox_gpu_device_krylov` | `source_visible` | `unvalidated` | `null` | Source evidence only. | `production_loop_available=false`; no full device Krylov loop. |
 
 ## What is validated
 
-The validated GPU modal slice is:
+The only GPU modal cell with `validation_state=physics_validated` is:
 
 ```text
+cell_id = modal_gpu_k0_none_macrospin_larmor
 study_product = modal_eigen
 device = gpu
+precision = double
 wavevector_scope = k0
 demag_scope = none
-solver = gpu_dense_k0_macrospin_modal_eigen
-validated_scope = macrospin_larmor_field_sweep
+solver_lane = gpu_dense_k0_macrospin_modal_eigen
+validated_scope.scope_id = sha256:2a87bce1656c74fe82782b37ce229e6c4af43ef183f7ff6e228a1cac308df372
 ```
 
 Existing static evidence:
@@ -50,14 +60,30 @@ the no-demag macrospin field sweep. They do not prove:
 - nonzero-k Floquet modal dispersion on GPU;
 - dynamic demag-k;
 - DMI or damping modal qualification;
-- broad sparse/matrix-free selected-spectrum GPU modal execution.
+- broad sparse/matrix-free selected-spectrum GPU modal execution;
+- Task8 runtime `scope_catalog.v1` emission.
 
 ## What is not production qualified
 
 ### GPU K0 Poisson-airbox modal
 
-Current GPU Poisson-airbox modal evidence is limited to dense/apply contract
-fixtures and one-shot algebraic probes. It does not include:
+`modal_gpu_k0_periodic_airbox_dense_probe` is source-visible and unvalidated in
+the current matrix. The target label remains:
+
+```text
+target_solver_label = gpu_dense_contract_eigensolver
+implementation_state = source_visible
+validation_state = unvalidated
+validated_scope = null
+```
+
+That target must not be described as emitted until a runtime artifact actually
+publishes the label with Task8 scope binding and the telemetry required by
+chapter 11. The current emitted GPU modal validation lane is
+`gpu_dense_k0_macrospin_modal_eigen`, and it is scoped only to the no-demag
+macrospin cell.
+
+GPU K0 Poisson-airbox production qualification still requires:
 
 - persistent GPU modal context;
 - full selected-spectrum Krylov-Schur or Arnoldi loop;
@@ -67,15 +93,6 @@ fixtures and one-shot algebraic probes. It does not include:
 - CPU/GPU parity for real Poisson-airbox blocks;
 - mesh and airbox convergence;
 - K0-3 Kittel independence.
-
-The correct status is therefore:
-
-```text
-implementation_state = executable only for dense/apply algebra probes
-validation_state = algebra_validated
-validated_scope = bounded one-shot GPU fixture
-production_qualified = false
-```
 
 ### GPU nonzero-k modal
 
@@ -92,7 +109,7 @@ zero per-iteration host transfers. Current status remains:
 ```text
 implementation_state = source_visible
 validation_state = unvalidated
-validated_scope = none
+validated_scope = null
 ```
 
 ## Required promotion gates
@@ -105,12 +122,13 @@ cell being promoted:
 2. persistent device context for blocks, vectors, basis and preconditioner;
 3. scalable selected-spectrum solver with restart, convergence and Ritz
    extraction;
-4. original descriptor residual and finite-mode certification;
+4. reconstructed original-unscaled descriptor residual and finite-mode
+   certification;
 5. transfer audit showing no per-iteration H2D/D2H;
 6. CPU/GPU parity on real assembled blocks;
 7. validation matrix gates for the exact `validated_scope`;
 8. artifact fields with requested/resolved execution, implementation state,
-   validation state and validated scope.
+   validation state, Task8 scope binding and evidence scope.
 
 Until those gates pass, only the narrow K0 no-demag macrospin GPU modal cell is
-`physics_validated`.
+`physics_validated`, and only for precision=`double`.

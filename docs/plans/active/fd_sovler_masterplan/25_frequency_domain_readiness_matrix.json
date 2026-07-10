@@ -16,7 +16,16 @@
       "physics_validated",
       "production_qualified"
     ],
-    "validated_scope": "Exact bounded evidence scope. Use 'none' when no validation exists."
+    "validated_scope": "null when validation_state is unvalidated; otherwise a Task8-shaped validation_scope_binding.v1 direct reference containing scope_id, scope_catalog_uri and scope_catalog_sha256.",
+    "executable_scope": "Present only when a narrow executable slice exists while validated_scope is null."
+  },
+  "scope_reference_policy": {
+    "scope_schema": "frequency_domain_validation_scope.v1",
+    "binding_schema": "validation_scope_binding.v1",
+    "scope_catalog_status": "readiness_projection_pending_runtime_scope_catalog_v1_emission",
+    "current_artifact_limit": "The legacy artifacts cited by this matrix do not yet emit Task8 scope_catalog.v1 bindings. A non-null validated_scope is the immutable readiness projection reference that future runtime artifacts must bind before production promotion; it is not fresh runtime revalidation in this update.",
+    "unvalidated_rule": "Cells with validation_state=unvalidated must use validated_scope=null and may describe executable source/runtime evidence only through executable_scope and evidence.",
+    "gpu_macrospin_precision_rule": "GPU macrospin evidence is scoped to precision=double only."
   },
   "capability_matrix_integration": {
     "consumed_without_editing": [
@@ -30,17 +39,39 @@
       "Keep broad runtime booleans such as supports_frequency_response=false separate from precise frequency_domain_capabilities.v1 and the narrow executable slices listed here."
     ]
   },
+  "scope_catalog_reference": {
+    "scope_catalog_uri": "urn:fullmag:frequency-domain:readiness-scope-catalog:78df796d6956f9b25856b7cf6639d683b2175281fe7291ee80d270e031039b64",
+    "scope_catalog_sha256": "sha256:78df796d6956f9b25856b7cf6639d683b2175281fe7291ee80d270e031039b64",
+    "status": "readiness_projection_only"
+  },
   "cells": [
     {
       "cell_id": "modal_cpu_k0_none_macrospin_larmor",
       "study_product": "modal_eigen",
       "device": "cpu",
+      "precision": "double",
       "wavevector_scope": "k0",
       "demag_scope": "none",
       "scope_variant": "macrospin_larmor_field_sweep",
       "implementation_state": "executable",
       "validation_state": "physics_validated",
-      "validated_scope": "K0-1 no-demag macrospin/Larmor field sweep, five positive bias fields, CPU dense SLEPc path; not demag, damping, shared-domain Poisson-airbox, or production DoD coverage.",
+      "validated_scope": {
+        "schema": "validation_scope_binding.v1",
+        "scope_schema": "frequency_domain_validation_scope.v1",
+        "kind": "direct",
+        "scope_id": "sha256:aa92858e9eab88f10e989bf98cf2e6478a2a810d6b8f17a256d714be77a6ce62",
+        "scope_catalog_uri": "urn:fullmag:frequency-domain:readiness-scope-catalog:78df796d6956f9b25856b7cf6639d683b2175281fe7291ee80d270e031039b64",
+        "scope_catalog_sha256": "sha256:78df796d6956f9b25856b7cf6639d683b2175281fe7291ee80d270e031039b64"
+      },
+      "validation_evidence_scope": {
+        "scope_label": "K0-1 no-demag macrospin/Larmor field sweep, CPU dense SLEPc path",
+        "precision": "double",
+        "evidence": [
+          ".fullmag/reports/frequency-domain-eigen-k0-kittel-runtime/artifacts/validation/kittel_k0_pbc/summary.v1.json",
+          ".fullmag/reports/frequency-domain-eigen-k0-kittel-runtime/artifacts/eigen/diagnostics/solver.v1.json",
+          ".superpowers/sdd/fd-masterplan-task-8-report.md"
+        ]
+      },
       "product_status": "validated",
       "evidence": [
         ".fullmag/reports/frequency-domain-eigen-k0-kittel-runtime/artifacts/validation/kittel_k0_pbc/summary.v1.json",
@@ -56,12 +87,30 @@
       "cell_id": "modal_gpu_k0_none_macrospin_larmor",
       "study_product": "modal_eigen",
       "device": "gpu",
+      "precision": "double",
       "wavevector_scope": "k0",
       "demag_scope": "none",
       "scope_variant": "macrospin_larmor_field_sweep",
       "implementation_state": "executable",
       "validation_state": "physics_validated",
-      "validated_scope": "K0-1 no-demag macrospin/Larmor field sweep using gpu_dense_k0_macrospin_modal_eigen and cuSolverDN dense generalized solve; not broad GPU modal Krylov.",
+      "validated_scope": {
+        "schema": "validation_scope_binding.v1",
+        "scope_schema": "frequency_domain_validation_scope.v1",
+        "kind": "direct",
+        "scope_id": "sha256:2a87bce1656c74fe82782b37ce229e6c4af43ef183f7ff6e228a1cac308df372",
+        "scope_catalog_uri": "urn:fullmag:frequency-domain:readiness-scope-catalog:78df796d6956f9b25856b7cf6639d683b2175281fe7291ee80d270e031039b64",
+        "scope_catalog_sha256": "sha256:78df796d6956f9b25856b7cf6639d683b2175281fe7291ee80d270e031039b64"
+      },
+      "validation_evidence_scope": {
+        "scope_label": "K0-1 no-demag macrospin/Larmor field sweep using gpu_dense_k0_macrospin_modal_eigen and cuSolverDN dense generalized solve",
+        "precision": "double",
+        "solver_lane": "gpu_dense_k0_macrospin_modal_eigen",
+        "evidence": [
+          ".fullmag/reports/frequency-domain-eigen-k0-kittel-gpu-runtime/artifacts/validation/kittel_k0_pbc/summary.v1.json",
+          ".fullmag/reports/frequency-domain-eigen-k0-kittel-gpu-runtime/artifacts/eigen/diagnostics/solver.v1.json",
+          ".fullmag/reports/frequency-domain-eigen-k0-kittel-cpu-gpu-comparison-summary.v1.json"
+        ]
+      },
       "product_status": "validated",
       "evidence": [
         ".fullmag/reports/frequency-domain-eigen-k0-kittel-gpu-runtime/artifacts/validation/kittel_k0_pbc/summary.v1.json",
@@ -82,7 +131,7 @@
       "scope_variant": "general_k0_no_demag_modal",
       "implementation_state": "source_visible",
       "validation_state": "unvalidated",
-      "validated_scope": "none",
+      "validated_scope": null,
       "product_status": "source_visible",
       "evidence": [
         "crates/fullmag-runner/src/fem_eigen.rs",
@@ -102,8 +151,15 @@
       "scope_variant": "bloch_floquet_tangent_payload_no_demag",
       "implementation_state": "executable",
       "validation_state": "unvalidated",
-      "validated_scope": "none",
-      "executable_scope": "Managed native CPU selected-spectrum no-demag Floquet k-path slice with labelled Bloch/Floquet tangent payload and analytic/reciprocal exchange-only gates; no dynamic demag-k, DMI, or broad production DoD.",
+      "validated_scope": null,
+      "executable_scope": {
+        "scope_label": "Managed native CPU selected-spectrum no-demag Floquet k-path slice with labelled Bloch/Floquet tangent payload and analytic/reciprocal exchange-only gates",
+        "evidence": [
+          "docs/specs/capability-matrix-v0.md",
+          ".superpowers/sdd/fd-masterplan-task-7-report.md",
+          "docs/plans/active/fd_sovler_masterplan/23_floquet_airbox_nonzero_k_cpu_gpu_implementation.md"
+        ]
+      },
       "product_status": "partial_production_executable",
       "evidence": [
         "docs/specs/capability-matrix-v0.md",
@@ -124,7 +180,7 @@
       "scope_variant": "floquet_modal_gpu",
       "implementation_state": "absent",
       "validation_state": "unvalidated",
-      "validated_scope": "none",
+      "validated_scope": null,
       "product_status": "unsupported",
       "evidence": [
         "docs/specs/capability-matrix-v0.md",
@@ -139,12 +195,29 @@
       "cell_id": "modal_cpu_k0_periodic_airbox_synthetic_oracle",
       "study_product": "modal_eigen",
       "device": "cpu",
+      "precision": "double",
       "wavevector_scope": "k0",
       "demag_scope": "periodic_airbox_k0",
       "scope_variant": "synthetic_algebraic_oracle",
       "implementation_state": "executable",
       "validation_state": "algebra_validated",
-      "validated_scope": "Tiny synthetic full-descriptor Poisson-airbox fixtures and SLEPc algebra/oracle coverage only.",
+      "validated_scope": {
+        "schema": "validation_scope_binding.v1",
+        "scope_schema": "frequency_domain_validation_scope.v1",
+        "kind": "direct",
+        "scope_id": "sha256:2926fade63296f455313334ae6bb7643655d15973cf99c1b323d137641aef3d6",
+        "scope_catalog_uri": "urn:fullmag:frequency-domain:readiness-scope-catalog:78df796d6956f9b25856b7cf6639d683b2175281fe7291ee80d270e031039b64",
+        "scope_catalog_sha256": "sha256:78df796d6956f9b25856b7cf6639d683b2175281fe7291ee80d270e031039b64"
+      },
+      "validation_evidence_scope": {
+        "scope_label": "Tiny synthetic full-descriptor Poisson-airbox fixtures and SLEPc algebra/oracle coverage only",
+        "precision": "double",
+        "evidence": [
+          "backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.cpp",
+          "docs/physics/0830-fem-poisson-airbox-modal-eigen.md",
+          ".superpowers/sdd/fd-masterplan-task-6-report.md"
+        ]
+      },
       "product_status": "source_visible",
       "evidence": [
         "backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.cpp",
@@ -165,7 +238,7 @@
       "scope_variant": "mfem_weak_form_shared_domain",
       "implementation_state": "source_visible",
       "validation_state": "unvalidated",
-      "validated_scope": "none",
+      "validated_scope": null,
       "product_status": "source_visible",
       "evidence": [
         "docs/physics/0830-fem-poisson-airbox-modal-eigen.md",
@@ -182,19 +255,23 @@
       "cell_id": "modal_gpu_k0_periodic_airbox_dense_probe",
       "study_product": "modal_eigen",
       "device": "gpu",
+      "precision": "double",
       "wavevector_scope": "k0",
       "demag_scope": "periodic_airbox_k0",
-      "scope_variant": "dense_or_apply_probe",
-      "implementation_state": "executable",
-      "validation_state": "algebra_validated",
-      "validated_scope": "Bounded one-shot dense/apply GPU Poisson-airbox contract fixtures; not persistent modal Krylov or production physics.",
+      "scope_variant": "gpu_dense_contract_eigensolver_target",
+      "implementation_state": "source_visible",
+      "validation_state": "unvalidated",
+      "validated_scope": null,
+      "target_solver_label": "gpu_dense_contract_eigensolver",
+      "current_visible_lane": "gpu_dense_k0_macrospin_modal_eigen is the current emitted GPU modal validation lane, and it applies only to modal_gpu_k0_none_macrospin_larmor.",
       "product_status": "source_visible",
       "evidence": [
         "backends/fem/gpu/cuda/frequency_domain/driven_response_gpu.cu",
-        "backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp",
+        "docs/plans/active/fd_sovler_masterplan/17_eigen_k0_gpu_readiness_audit.md",
         "docs/specs/capability-matrix-v0.md"
       ],
       "open_blockers": [
+        "The target gpu_dense_contract_eigensolver label is not emitted as a production modal artifact.",
         "No scalable GPU selected-spectrum eigensolver.",
         "No real shared-domain periodic-airbox physics qualification."
       ]
@@ -208,7 +285,7 @@
       "scope_variant": "persistent_gpu_modal_device_krylov",
       "implementation_state": "absent",
       "validation_state": "unvalidated",
-      "validated_scope": "none",
+      "validated_scope": null,
       "product_status": "unsupported",
       "evidence": [
         "docs/plans/active/fd_sovler_masterplan/17_eigen_k0_gpu_readiness_audit.md",
@@ -227,7 +304,7 @@
       "scope_variant": "dynamic_demag_k",
       "implementation_state": "contract_only",
       "validation_state": "unvalidated",
-      "validated_scope": "none",
+      "validated_scope": null,
       "product_status": "unsupported",
       "evidence": [
         "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp",
@@ -248,7 +325,7 @@
       "scope_variant": "dynamic_demag_k",
       "implementation_state": "absent",
       "validation_state": "unvalidated",
-      "validated_scope": "none",
+      "validated_scope": null,
       "product_status": "unsupported",
       "evidence": [
         "docs/specs/capability-matrix-v0.md",
@@ -268,8 +345,15 @@
       "scope_variant": "gamma_or_static_periodic_no_demag",
       "implementation_state": "executable",
       "validation_state": "unvalidated",
-      "validated_scope": "none",
-      "executable_scope": "Executable bounded gamma/free-boundary and k0 static-periodic no-demag slices; production DoD and full physics validation are not closed.",
+      "validated_scope": null,
+      "executable_scope": {
+        "scope_label": "Executable bounded gamma/free-boundary and k0 static-periodic no-demag slices; production DoD and full physics validation are not closed.",
+        "evidence": [
+          "docs/specs/capability-matrix-v0.md",
+          "crates/fullmag-runner/src/frequency_response.rs",
+          "backends/fem/src/frequency_domain/driven_response_solver.cpp"
+        ]
+      },
       "product_status": "partial_production_executable",
       "evidence": [
         "docs/specs/capability-matrix-v0.md",
@@ -289,8 +373,15 @@
       "scope_variant": "gpu_operator_host_krylov_no_demag",
       "implementation_state": "executable",
       "validation_state": "unvalidated",
-      "validated_scope": "none",
-      "executable_scope": "Executable bounded gamma/free-boundary and k0 static-periodic GPU operator-host Krylov slices; not gpu_device_krylov.",
+      "validated_scope": null,
+      "executable_scope": {
+        "scope_label": "Executable bounded gamma/free-boundary and k0 static-periodic GPU operator-host Krylov slices; not gpu_device_krylov.",
+        "evidence": [
+          "docs/specs/capability-matrix-v0.md",
+          "crates/fullmag-runner/src/frequency_response.rs",
+          "backends/fem/src/frequency_domain/driven_response_solver.cpp"
+        ]
+      },
       "product_status": "partial_production_executable",
       "evidence": [
         "docs/specs/capability-matrix-v0.md",
@@ -311,8 +402,14 @@
       "scope_variant": "schur_phi_consistency_provider",
       "implementation_state": "executable",
       "validation_state": "unvalidated",
-      "validated_scope": "none",
-      "executable_scope": "Existing partial executable periodic_airbox_k0 Schur/provider response artifacts; not full assembled coupled [delta_m, delta_phi] production qualification.",
+      "validated_scope": null,
+      "executable_scope": {
+        "scope_label": "Existing partial executable periodic_airbox_k0 Schur/provider response artifacts; not full assembled coupled [delta_m, delta_phi] production qualification.",
+        "evidence": [
+          ".fullmag/reports/frequency-domain-periodic-airbox-runtime/artifacts/response/diagnostics/solver.v1.json",
+          "docs/specs/capability-matrix-v0.md"
+        ]
+      },
       "product_status": "partial_production_executable",
       "evidence": [
         ".fullmag/reports/frequency-domain-periodic-airbox-runtime/artifacts/response/diagnostics/solver.v1.json",
@@ -332,8 +429,15 @@
       "scope_variant": "gpu_operator_host_krylov_hybrid_cpu_poisson",
       "implementation_state": "executable",
       "validation_state": "unvalidated",
-      "validated_scope": "none",
-      "executable_scope": "Existing partial executable periodic_airbox_k0 GPU operator-host Krylov artifacts with hybrid or host Poisson demag provider; not strict GPU Poisson or device-resident Krylov.",
+      "validated_scope": null,
+      "executable_scope": {
+        "scope_label": "Existing partial executable periodic_airbox_k0 GPU operator-host Krylov artifacts with hybrid or host Poisson demag provider; not strict GPU Poisson or device-resident Krylov.",
+        "evidence": [
+          ".fullmag/reports/frequency-domain-periodic-airbox-gpu-runtime/artifacts/response/diagnostics/solver.v1.json",
+          ".fullmag/reports/fem-periodic-antidot-frequency-driven-runtime/artifacts/response/diagnostics/solver.v1.json",
+          "docs/specs/capability-matrix-v0.md"
+        ]
+      },
       "product_status": "partial_production_executable",
       "evidence": [
         ".fullmag/reports/frequency-domain-periodic-airbox-gpu-runtime/artifacts/response/diagnostics/solver.v1.json",
@@ -355,7 +459,7 @@
       "scope_variant": "gpu_device_krylov",
       "implementation_state": "source_visible",
       "validation_state": "unvalidated",
-      "validated_scope": "none",
+      "validated_scope": null,
       "product_status": "source_visible",
       "evidence": [
         "backends/fem/include/frequency_domain/gpu_device_krylov.hpp",
@@ -376,8 +480,14 @@
       "scope_variant": "floquet_phase_projection_no_demag",
       "implementation_state": "executable",
       "validation_state": "unvalidated",
-      "validated_scope": "none",
-      "executable_scope": "Narrow no-demag/non-DMI Floquet phase-projection response slice with complete pair metadata and Bloch-phased tangent drive.",
+      "validated_scope": null,
+      "executable_scope": {
+        "scope_label": "Narrow no-demag/non-DMI Floquet phase-projection response slice with complete pair metadata and Bloch-phased tangent drive.",
+        "evidence": [
+          "docs/specs/capability-matrix-v0.md",
+          "backends/fem/src/frequency_domain/driven_response_solver.cpp"
+        ]
+      },
       "product_status": "partial_production_executable",
       "evidence": [
         "docs/specs/capability-matrix-v0.md",
@@ -397,8 +507,14 @@
       "scope_variant": "floquet_phase_projection_no_demag",
       "implementation_state": "executable",
       "validation_state": "unvalidated",
-      "validated_scope": "none",
-      "executable_scope": "Narrow no-demag/non-DMI Floquet phase-projection response slice; local/exchange CUDA operator support only.",
+      "validated_scope": null,
+      "executable_scope": {
+        "scope_label": "Narrow no-demag/non-DMI Floquet phase-projection response slice; local/exchange CUDA operator support only.",
+        "evidence": [
+          "docs/specs/capability-matrix-v0.md",
+          "backends/fem/src/frequency_domain/driven_response_solver.cpp"
+        ]
+      },
       "product_status": "partial_production_executable",
       "evidence": [
         "docs/specs/capability-matrix-v0.md",
@@ -419,7 +535,7 @@
       "scope_variant": "dynamic_demag_k",
       "implementation_state": "contract_only",
       "validation_state": "unvalidated",
-      "validated_scope": "none",
+      "validated_scope": null,
       "product_status": "unsupported",
       "evidence": [
         "docs/physics/0828-fem-frequency-domain-floquet-demag.md",
@@ -439,7 +555,7 @@
       "scope_variant": "dynamic_demag_k",
       "implementation_state": "absent",
       "validation_state": "unvalidated",
-      "validated_scope": "none",
+      "validated_scope": null,
       "product_status": "unsupported",
       "evidence": [
         "docs/physics/0828-fem-frequency-domain-floquet-demag.md",
