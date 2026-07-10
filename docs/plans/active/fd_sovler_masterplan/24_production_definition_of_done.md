@@ -156,20 +156,57 @@ PETSc, SLEPc, hypre, libCEED, CUDA and compiler/runtime dependency.
 `parameter_bounds` is a non-empty array of closed
 `{name:Identifier, bounds:ClosedInterval}` objects, unique by `name`, and must
 include bounded SI entries for `Ms`, gamma, exchange, anisotropy, damping and
-every parameter used by an included interaction.
+every parameter used by an included interaction. After uniqueness validation,
+canonicalization sorts `parameter_bounds` by `name` before serialization.
 
 `GeometryScope` is the closed object
 `{family:Identifier, dimension_bounds, periodic_cell_policy,
 airbox_policy}`. `dimension_bounds` is a non-empty array of closed
 `{name:Identifier, bounds:ClosedInterval}` objects, unique by `name`, covering
-every fixture dimension and periodic-cell dimension. `periodic_cell_policy` is
-a closed `{directions:sorted unique array drawn from [x,y,z], cell_id:Identifier}`
+every fixture dimension and periodic-cell dimension. After uniqueness
+validation, canonicalization sorts `dimension_bounds` by `name` before
+serialization. `periodic_cell_policy` is a closed
+`{directions:sorted unique array drawn from [x,y,z], cell_id:Identifier}`
 object. `airbox_policy` is a closed
 `{kind:Identifier, top_padding_m:ClosedInterval(unit="m") or "not_applicable",
 bottom_padding_m:ClosedInterval(unit="m") or "not_applicable",
 symmetry:Identifier}` object.
 
-### 2.8 Canonical serialization and `scope_id`
+### 2.8 Reject-before-hash cross-field rules
+
+The validator rejects contradictory objects before canonical serialization and
+before any `scope_id` is computed. These rules are part of
+`frequency_domain_validation_scope.v1` validation, not post-hash promotion
+policy.
+
+- `study_product=modal_eigen` requires
+  `problem_scope.mode_scope.kind=modal`.
+- `study_product=driven_response` requires
+  `problem_scope.mode_scope.kind=driven`.
+- `problem_scope.dynamic_demag_scope=periodic_airbox_k0` requires
+  `problem_scope.k_scope.kind=k0`, accepted Gamma-resolved k under the stored
+  `gamma_tolerance_rad_per_m`,
+  `periodic_mesh_certificate.v6` in `solver_scope.certificate_set` with K0
+  periodic policy, and no Floquet/nonzero-k demag certificate claim.
+- `problem_scope.dynamic_demag_scope=floquet_airbox_nonzero_k` requires
+  `problem_scope.k_scope.kind=nonzero_k`, a non-Gamma resolved k domain, and a
+  `periodic_mesh_certificate.v6` entry whose Floquet metadata covers every
+  listed k sample.
+- `problem_scope.k_scope.kind=nonzero_k` rejects an all-Gamma sample set and
+  requires `periodic_mesh_certificate.v6` in `solver_scope.certificate_set`.
+  Its compatible dynamic demag values are `none` for no-demag Floquet products
+  and `floquet_airbox_nonzero_k` for dynamic-demag products; it cannot use
+  `periodic_airbox_k0`.
+- `problem_scope.k_scope.kind=k0` cannot use
+  `floquet_airbox_nonzero_k`, cannot carry nonzero-k Floquet samples, and
+  cannot use a Floquet-only certificate as a substitute for the required K0
+  periodic certificate.
+
+Any contrary product/k/demag/certificate combination is invalid and receives no
+canonical hash. The validator must report the first conflicting field paths so
+the artifact is rejected rather than silently reclassified.
+
+### 2.9 Canonical serialization and `scope_id`
 
 The hash input is exactly the complete closed top-level object in section 2.2:
 
@@ -195,7 +232,9 @@ Canonicalization is deterministic:
    `frequency_domain_validation_scope.v1`, including every cross-field rule;
 2. reject non-finite numbers and negative zero; encode all quantities in the
    schema-prescribed SI unit, sort every schema-declared set, reject duplicate
-   set members and preserve only schema-declared ordered sequences;
+   set members, sort `material_scope.parameter_bounds` and
+   `geometry_scope.dimension_bounds` by `name` after proving `name`
+   uniqueness, and preserve only schema-declared ordered sequences;
 3. serialize the validated object as UTF-8 with RFC 8785 JSON Canonicalization
    Scheme; and
 4. compute `scope_id = "sha256:" + lowercase_hex(SHA-256(serialized_bytes))`.
@@ -203,6 +242,33 @@ Canonicalization is deterministic:
 The validator resolves and revalidates the complete object before recomputing
 the hash. A caller-supplied ID is never trusted. Two objects that differ in any
 hash input are different readiness cells.
+
+### 2.10 `scope_catalog.v1`
+
+Coverage cannot rely on an opaque hash alone. Every direct or coverage binding
+resolves through a content-addressed `scope_catalog.v1` artifact that maps each
+`scope_id` used by the binding to the complete canonical scope object.
+
+`scope_catalog.v1` is the closed JSON object:
+
+| Field | Type and constraint |
+|---|---|
+| `schema` | Literal string `scope_catalog.v1` |
+| `scope_schema` | Literal string `frequency_domain_validation_scope.v1` |
+| `scopes` | Non-empty closed map whose property names are `Sha256Id` values and whose values are complete `frequency_domain_validation_scope.v1` objects |
+
+The catalog digest is computed as
+`scope_catalog_sha256 = "sha256:" + lowercase_hex(SHA-256(RFC8785(scope_catalog.v1)))`.
+For each `scopes` entry, the validator validates the complete scope object,
+applies section 2.8, canonicalizes it under section 2.9, recomputes its
+`scope_id`, and requires the recomputed ID to equal the map key. Duplicate
+semantic scopes under different keys, a map key whose value hashes elsewhere,
+or a catalog digest mismatch invalidates every binding that cites the catalog.
+
+`scope_catalog_uri` is a non-empty artifact URI in the same immutable bundle or
+an absolute content-addressed URI. A binding may instead embed the complete
+catalog in `scope_catalog`, but it must still provide `scope_catalog_sha256`
+and the embedded catalog's digest must match.
 
 ## 3. DoD state and evidence rules
 
@@ -244,34 +310,44 @@ verified_coverage_of = {
   schema: "validation_scope_binding.v1",
   scope_schema: "frequency_domain_validation_scope.v1",
   kind: "direct",
-  scope_id: Sha256Id
+  scope_id: Sha256Id,
+  scope_catalog_uri: string,
+  scope_catalog_sha256: Sha256Id
 }
 
 verified_coverage_of = {
   schema: "validation_scope_binding.v1",
   scope_schema: "frequency_domain_validation_scope.v1",
   kind: "coverage",
+  scope_catalog_uri: string,
+  scope_catalog_sha256: Sha256Id,
   coverage_rule: coverage_rule.v1
 }
 ```
 
-Both objects are closed. A direct binding has no `coverage_rule`; a coverage
-binding has no `scope_id`; no additional field or third kind is legal. The
-direct form means the artifact evaluated the one resolved
-`frequency_domain_validation_scope.v1` object whose recomputed hash is
-`scope_id`. The coverage form is legal only for a bounded oracle or aggregate
-whose evaluated subject scope covers every listed target under section 3.2.
+Both objects are closed. A binding has exactly one catalog source: either
+`scope_catalog_uri` plus `scope_catalog_sha256`, or an embedded
+`scope_catalog` plus the same `scope_catalog_sha256`. A direct binding has no
+`coverage_rule`; a coverage binding has no `scope_id`; no additional field or
+third kind is legal. The direct form means the artifact evaluated the one
+catalog-resolved `frequency_domain_validation_scope.v1` object whose recomputed
+hash is `scope_id`. The coverage form is legal only for a bounded oracle or
+aggregate whose evaluated subject scope covers every listed target under
+section 3.2.
 
 ### 3.1 `verified_coverage_of` and `validation_scope_binding.v1` validation
 
 The artifact validator first reads the required `verified_coverage_of` field,
-then validates the closed binding variant and the literal `scope_schema`,
-resolves every referenced scope object, validates it against section 2, and
-recomputes every `scope_id`. It then accepts either one direct scope or one
-`coverage_rule.v1`; a caller cannot substitute a fixture name, abbreviated
-tuple, parent scope ID, prose `validated_scope` claim or independently supplied
-coverage list. A coverage binding is invalid unless its rule is valid under
-section 3.2.
+then validates the closed binding variant and the literal `scope_schema`. It
+loads `scope_catalog_uri` or the embedded `scope_catalog`, verifies
+`scope_catalog_sha256`, validates the catalog under section 2.10, and
+recomputes every catalogued `scope_id` from the complete canonical scope
+object. It then accepts either one direct scope present in that catalog or one
+`coverage_rule.v1` whose `subject_scope_id` and every `covered_scope_id` are
+present in the same verified catalog. A caller cannot substitute a fixture
+name, abbreviated tuple, parent scope ID, prose `validated_scope` claim,
+standalone hash or independently supplied coverage list. A coverage binding is
+invalid unless its rule is valid under section 3.2.
 
 ### 3.2 `coverage_rule.v1`
 
@@ -317,18 +393,21 @@ requires `covered_scope_ids=[subject_scope_id]` and `equal` at every path.
 `relation=subset` requires at least one valid
 `set_subset` or `interval_subset` predicate and equality everywhere else.
 
-The validator resolves the complete subject and covered scope objects,
-recomputes every ID, evaluates all predicates and rejects the rule if any
-covered target is broader than the subject's evaluated domain. Therefore a
-three-field fast-CI subject cannot cover or promote a 15-field target, a K0
-subject cannot cover nonzero-k, and CPU/double evidence cannot cover GPU or
-single precision. Coverage permits reuse only from a scope whose evaluated
-domain contains the target; it never promotes the broader target scope.
+The validator resolves the complete subject and covered scope objects from the
+verified `scope_catalog.v1`, recomputes every ID, evaluates all predicates and
+rejects the rule if any covered target is broader than the subject's evaluated
+domain. Therefore a three-field fast-CI subject cannot cover or promote a
+15-field target, a K0 subject cannot cover nonzero-k, and CPU/double evidence
+cannot cover GPU or single precision. Coverage permits reuse only from a scope
+whose evaluated domain contains the target; it never promotes the broader
+target scope.
 
 An abbreviated tuple, fixture nickname, parent directory or matching runtime
 signature is not a scope binding. Missing scope objects, an untyped prose
-relation, a coverage binding without `coverage_rule.v1`, or an unevaluated
-predicate makes the artifact stale for every listed target.
+relation, a coverage binding without `coverage_rule.v1`, a binding without a
+verified scope catalog, a catalog that does not contain every referenced
+`scope_id`, or an unevaluated predicate makes the artifact stale for every
+listed target.
 
 Evidence from another physical signature, precision, device, product, k scope,
 demag realization or solver engine is stale for this record even if its files
@@ -346,7 +425,7 @@ are newer.
 | DOD-06 Native assembly | Backend-owned real FEM blocks/actions and chapter 09 manufactured/reciprocity/isolation evidence | `assembly_kind` is the production kind; block signs/units/order/scaling pass; analytical expected values cannot affect blocks, target or signatures | `synthetic_algebraic_oracle`, Kittel `demag_delta`, macrocell payload or postsolve phase projection |
 | DOD-07 Solver engine | Exact modal or driven production engine, preconditioner and lifecycle artifacts | Engine converges over the bounded size/window/sweep scope, has correct target representation/restart/stop reasons, and has no undeclared fallback | Dense/apply probe, one successful tiny case, host-Krylov path claimed as device Krylov, or another product's engine |
 | DOD-08 Full residual | Reconstructed original unscaled block residuals for every accepted mode/frequency point | Chapter 09 production tolerance passes for every required block; transformed/backend/tracked residuals remain separate | Solver-library residual alone, capped residual, magnetic-only residual when scalar/gauge blocks apply |
-| DOD-09 Artifacts/OpenAPI/UI | Complete artifacts-v2 bundle, typed OpenAPI/resource exposure and UI state for complete/partial/failed/unavailable outcomes | Cross-artifact hashes, units, revisions, requested/resolved state, accepted `verified_coverage_of` binding, and resource links agree; UI cannot overstate capability | Abbreviated scope tuple, untyped coverage claim, raw files without resource contract, UI claim inferred from route presence, or JSON carrying heavy payloads outside the data plane |
+| DOD-09 Artifacts/OpenAPI/UI | Complete artifacts-v2 bundle, typed OpenAPI/resource exposure and UI state for complete/partial/failed/unavailable outcomes | Cross-artifact hashes, scope catalog digest, units, revisions, requested/resolved state, accepted `verified_coverage_of` binding, and resource links agree; UI cannot overstate capability | Abbreviated scope tuple, untyped coverage claim, opaque scope hash without a verified catalog, raw files without resource contract, UI claim inferred from route presence, or JSON carrying heavy payloads outside the data plane |
 | DOD-10 Analytical validation | Applicable chapter 09 independent physics gate: Larmor/Kittel, ellipsoid, DE/BV, modal/driven resonance or another physics-note oracle | Production tolerance passes after solve and after independent selection; for K0-3, fixture-owned independently provenanced `M_eff_reference`, fitted-`M_eff` agreement, uncertainty and conditioning all pass; oracle inputs never enter assembly/request target/selection/certificate/solver status | Best-fit-only agreement, solver-derived `M_eff_reference`, nearest-expected mode selection, synthetic operator built from the answer, or fast CI subset |
 | DOD-11 Convergence | Raw distinct mesh and truncation sequences plus solver tolerance evidence | At least three levels per applicable dimension; monotonicity/asymptotic fit, observed order where applicable, Richardson/finest-two delta and separate frequency and fitted-`M_eff` budgets pass | Best row only, duplicated synthetic rows, simultaneous mesh/padding changes without independent sequences, or analytical values copied as solved rows |
 | DOD-12 CPU/GPU parity | For GPU: exact qualified CPU oracle and chapter 09 operator/solver/physics parity; for CPU-only: explicit `not_applicable` reason excluding GPU | GPU blocks, modes/responses, residuals and accepted/rejected outcomes pass production tolerances on identical signatures | No-demag macrospin parity used for demag, CPU result copied into GPU artifacts, or precision mismatch |
@@ -410,6 +489,8 @@ The release candidate publishes one record per readiness cell. The schema is
 | `scope_schema` | `frequency_domain_validation_scope.v1` |
 | `scope_id` | RFC 8785/SHA-256 identifier computed exactly as section 2 specifies |
 | `validated_scope` | Every canonical field in section 2, with no wildcard or omitted field |
+| `scope_catalog_uri` or embedded `scope_catalog` | `scope_catalog.v1` containing the complete `validated_scope` object and every evidence-referenced scope object |
+| `scope_catalog_sha256` | Digest of the exact catalog bytes or embedded catalog |
 | `implementation_state` | `executable` |
 | `validation_state_before_promotion` | The actual pre-promotion state |
 | `items.DOD-01` through `items.DOD-14` | `pass`, `fail` or justified `not_applicable` |
@@ -418,22 +499,24 @@ The release candidate publishes one record per readiness cell. The schema is
 | `open_blockers` | Empty for promotion |
 | `promotion_decision` | `production_qualified` only after section 7 succeeds; otherwise `blocked` |
 
-The record validator recomputes `scope_id` and validates every direct or
-coverage binding. A record that omits a canonical scope field, evidence hash or
-coverage proof is invalid rather than partially complete.
+The record validator recomputes `scope_id`, verifies the scope catalog digest,
+and validates every direct or coverage binding against catalog-resolved scope
+objects. A record that omits a canonical scope field, evidence hash, catalog
+entry or coverage proof is invalid rather than partially complete.
 
 ## 7. Promotion algorithm
 
 The promotion validator performs these checks in order:
 
-1. validate, RFC 8785-canonicalize and hash the complete `validated_scope`;
+1. validate, RFC 8785-canonicalize and hash the complete `validated_scope`,
+   after applying all reject-before-hash rules;
 2. require `implementation_state=executable` for that scope;
 3. resolve item applicability from the exact product/device/k/demag/engine
    tuple;
 4. validate every evidence artifact's complete `verified_coverage_of` binding,
-   including a directional `coverage_rule.v1`
-   when its kind is `coverage`, fixture/oracle identity, metric and production
-   tolerance;
+   including its `scope_catalog.v1` digest, every catalogued scope hash, and a
+   directional `coverage_rule.v1` when its kind is `coverage`, fixture/oracle
+   identity, metric and production tolerance;
 5. reject stale or mismatched signatures and evidence from neighboring cells;
 6. require every expected negative control to fail for the intended reason;
 7. require `open_blockers=[]` and no contradiction with current status docs;
