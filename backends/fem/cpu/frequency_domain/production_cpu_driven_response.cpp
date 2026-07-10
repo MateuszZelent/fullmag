@@ -1,5 +1,7 @@
 #include "cpu/frequency_domain/production_cpu_driven_response.hpp"
 
+#include "frequency_domain/checked_extent.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -82,19 +84,6 @@ bool all_zero(const double *values, std::uint64_t count) noexcept
             return false;
         }
     }
-    return true;
-}
-
-bool checked_mul_u64(
-    std::uint64_t lhs,
-    std::uint64_t rhs,
-    std::uint64_t &out) noexcept
-{
-    if (lhs != 0 &&
-        rhs > std::numeric_limits<std::uint64_t>::max() / lhs) {
-        return false;
-    }
-    out = lhs * rhs;
     return true;
 }
 
@@ -199,17 +188,29 @@ FrequencyDomainStatus project_block_vector(
     double *output,
     char error_message[128]) noexcept
 {
+    std::uint64_t block_count = 0;
+    std::size_t block_bytes = 0;
+    if (!checked_mul_u64(problem.tangent_dof_count, 2, block_count) ||
+        checked_bytes_limited(
+            block_count,
+            sizeof(double),
+            kMaxFrequencyDomainWorkspaceBytes,
+            block_bytes) != CheckedExtentStatus::ok) {
+        copy_error(error_message, "production CPU frequency response block extent is invalid");
+        return FrequencyDomainStatus::validation_error;
+    }
     if (problem.project_block == nullptr) {
         if (output != input) {
-            std::memcpy(
-                output,
-                input,
-                static_cast<std::size_t>(problem.tangent_dof_count * 2 * sizeof(double)));
+            std::memcpy(output, input, block_bytes);
         }
         return FrequencyDomainStatus::ok;
     }
-    const std::uint64_t block_count = problem.tangent_dof_count * 2;
-    workspace.resize(static_cast<std::size_t>(block_count));
+    std::size_t block_size = 0;
+    if (!checked_to_size_t(block_count, block_size)) {
+        copy_error(error_message, "production CPU frequency response block extent is not addressable");
+        return FrequencyDomainStatus::validation_error;
+    }
+    workspace.resize(block_size);
     const FrequencyDomainStatus status = problem.project_block(
         problem.project_block_user_data,
         input,
@@ -223,10 +224,7 @@ FrequencyDomainStatus project_block_vector(
         copy_error(error_message, "production CPU frequency response block projector produced non-finite values");
         return FrequencyDomainStatus::operator_error;
     }
-    std::memcpy(
-        output,
-        workspace.data(),
-        static_cast<std::size_t>(block_count * sizeof(double)));
+    std::memcpy(output, workspace.data(), block_bytes);
     return FrequencyDomainStatus::ok;
 }
 
@@ -336,15 +334,27 @@ FrequencyDomainStatus apply_right_preconditioner(
     double *output,
     char error_message[128]) noexcept
 {
-    const std::uint64_t block_count = problem.tangent_dof_count * 2;
+    std::uint64_t block_count = 0;
+    std::size_t block_size = 0;
+    std::size_t block_bytes = 0;
+    if (!checked_mul_u64(problem.tangent_dof_count, 2, block_count) ||
+        !checked_to_size_t(block_count, block_size) ||
+        checked_bytes_limited(
+            block_count,
+            sizeof(double),
+            kMaxFrequencyDomainWorkspaceBytes,
+            block_bytes) != CheckedExtentStatus::ok) {
+        copy_error(error_message, "production CPU frequency response preconditioner extent is invalid");
+        return FrequencyDomainStatus::validation_error;
+    }
     if (problem.apply_right_preconditioner == nullptr) {
         if (output != input) {
-            std::memcpy(output, input, static_cast<std::size_t>(block_count * sizeof(double)));
+            std::memcpy(output, input, block_bytes);
         }
         return FrequencyDomainStatus::ok;
     }
 
-    workspace.resize(static_cast<std::size_t>(block_count));
+    workspace.resize(block_size);
     if (result != nullptr) {
         ++result->right_preconditioner_apply_count;
     }
@@ -362,7 +372,7 @@ FrequencyDomainStatus apply_right_preconditioner(
         copy_error(error_message, "production CPU frequency response right preconditioner produced non-finite values");
         return FrequencyDomainStatus::operator_error;
     }
-    std::memcpy(output, workspace.data(), static_cast<std::size_t>(block_count * sizeof(double)));
+    std::memcpy(output, workspace.data(), block_bytes);
     return FrequencyDomainStatus::ok;
 }
 
@@ -378,9 +388,24 @@ FrequencyDomainStatus apply_block_operator(
     char error_message[128]) noexcept
 {
     const std::uint64_t n = problem.tangent_dof_count;
+    std::uint64_t block_count = 0;
+    std::size_t n_size = 0;
+    std::size_t block_size = 0;
+    std::size_t block_bytes = 0;
+    if (!checked_mul_u64(n, 2, block_count) ||
+        !checked_to_size_t(n, n_size) ||
+        !checked_to_size_t(block_count, block_size) ||
+        checked_bytes_limited(
+            block_count,
+            sizeof(double),
+            kMaxFrequencyDomainWorkspaceBytes,
+            block_bytes) != CheckedExtentStatus::ok) {
+        copy_error(error_message, "production CPU frequency response operator extent is invalid");
+        return FrequencyDomainStatus::validation_error;
+    }
     const double *operator_input = in;
     if (problem.project_block != nullptr) {
-        projection_workspace.resize(static_cast<std::size_t>(n * 2));
+        projection_workspace.resize(block_size);
         const FrequencyDomainStatus projection_status = project_block_vector(
             problem,
             in,
@@ -408,8 +433,8 @@ FrequencyDomainStatus apply_block_operator(
             copy_error(error_message, "production CPU frequency response complex operator requires both stiffness and mass callbacks");
             return FrequencyDomainStatus::validation_error;
         }
-        std::vector<double> stiffness_imag(static_cast<std::size_t>(n));
-        std::vector<double> mass_imag(static_cast<std::size_t>(n));
+        std::vector<double> stiffness_imag(n_size);
+        std::vector<double> mass_imag(n_size);
         if (result != nullptr) {
             ++result->complex_stiffness_apply_count;
         }
@@ -559,7 +584,11 @@ FrequencyDomainStatus compute_residual(
     double &residual_l2,
     char error_message[128]) noexcept
 {
-    const std::uint64_t block_count = problem.tangent_dof_count * 2;
+    std::uint64_t block_count = 0;
+    if (!checked_mul_u64(problem.tangent_dof_count, 2, block_count)) {
+        copy_error(error_message, "production CPU frequency response residual extent overflows");
+        return FrequencyDomainStatus::validation_error;
+    }
     if (all_zero(x.data(), block_count)) {
         for (std::uint64_t index = 0; index < block_count; ++index) {
             residual[index] = rhs[index];
@@ -602,7 +631,11 @@ FrequencyDomainStatus compute_right_preconditioner_probe(
     double &probe_relative_residual_l2,
     char error_message[128]) noexcept
 {
-    const std::uint64_t block_count = problem.tangent_dof_count * 2;
+    std::uint64_t block_count = 0;
+    if (!checked_mul_u64(problem.tangent_dof_count, 2, block_count)) {
+        copy_error(error_message, "production CPU frequency response probe extent overflows");
+        return FrequencyDomainStatus::validation_error;
+    }
     const double rhs_l2 = norm2(rhs.data(), block_count);
     if (!(rhs_l2 > 0.0) || !std::isfinite(rhs_l2)) {
         copy_error(error_message, "production CPU frequency response preconditioner probe requires finite RHS");
@@ -666,10 +699,59 @@ FrequencyDomainStatus solve_frequency_gmres(
     char error_message[128]) noexcept
 {
     const std::uint64_t n = problem.tangent_dof_count;
-    const std::uint64_t block_count = n * 2;
     const std::uint64_t restart = std::max<std::uint64_t>(
         1,
         std::min(problem.restart_iterations, problem.max_iterations));
+    std::uint64_t block_count = 0;
+    std::uint64_t restart_plus_one = 0;
+    std::uint64_t basis_count = 0;
+    std::uint64_t preconditioned_basis_count = 0;
+    std::uint64_t hessenberg_count = 0;
+    if (!checked_mul_u64(n, 2, block_count) ||
+        !checked_add_u64(restart, 1, restart_plus_one) ||
+        !checked_mul_u64(restart_plus_one, block_count, basis_count) ||
+        !checked_mul_u64(restart, block_count, preconditioned_basis_count) ||
+        !checked_mul_u64(restart_plus_one, restart, hessenberg_count)) {
+        copy_error(error_message, "production CPU frequency response Krylov extent overflows");
+        return FrequencyDomainStatus::validation_error;
+    }
+    if (restart > kMaxFrequencyDomainKrylovRestartDimension) {
+        copy_error(error_message, "production CPU frequency response Krylov restart exceeds configured workspace limit");
+        return FrequencyDomainStatus::validation_error;
+    }
+    std::size_t block_size = 0;
+    std::size_t restart_size = 0;
+    std::size_t restart_plus_one_size = 0;
+    std::size_t basis_size = 0;
+    std::size_t preconditioned_basis_size = 0;
+    std::size_t hessenberg_size = 0;
+    std::size_t basis_bytes = 0;
+    std::size_t preconditioned_basis_bytes = 0;
+    std::size_t hessenberg_bytes = 0;
+    if (!checked_to_size_t(block_count, block_size) ||
+        !checked_to_size_t(restart, restart_size) ||
+        !checked_to_size_t(restart_plus_one, restart_plus_one_size) ||
+        !checked_to_size_t(basis_count, basis_size) ||
+        !checked_to_size_t(preconditioned_basis_count, preconditioned_basis_size) ||
+        !checked_to_size_t(hessenberg_count, hessenberg_size) ||
+        checked_bytes_limited(
+            basis_count,
+            sizeof(double),
+            kMaxFrequencyDomainWorkspaceBytes,
+            basis_bytes) != CheckedExtentStatus::ok ||
+        checked_bytes_limited(
+            preconditioned_basis_count,
+            sizeof(double),
+            kMaxFrequencyDomainWorkspaceBytes,
+            preconditioned_basis_bytes) != CheckedExtentStatus::ok ||
+        checked_bytes_limited(
+            hessenberg_count,
+            sizeof(double),
+            kMaxFrequencyDomainWorkspaceBytes,
+            hessenberg_bytes) != CheckedExtentStatus::ok) {
+        copy_error(error_message, "production CPU frequency response Krylov workspace exceeds configured limit");
+        return FrequencyDomainStatus::validation_error;
+    }
     const double omega = problem.angular_frequency_sign * kTwoPi * frequency_hz;
     const double rhs_l2 = norm2(rhs.data(), block_count);
     rhs_l2_norm = rhs_l2;
@@ -722,15 +804,15 @@ FrequencyDomainStatus solve_frequency_gmres(
         return FrequencyDomainStatus::ok;
     }
 
-    std::vector<double> basis((restart + 1) * block_count, 0.0);
-    std::vector<double> preconditioned_basis(restart * block_count, 0.0);
-    std::vector<double> h((restart + 1) * restart, 0.0);
-    std::vector<double> cs(restart, 0.0);
-    std::vector<double> sn(restart, 0.0);
-    std::vector<double> g(restart + 1, 0.0);
-    std::vector<double> y(restart, 0.0);
-    std::vector<double> w(block_count, 0.0);
-    std::vector<double> preconditioner_workspace(block_count, 0.0);
+    std::vector<double> basis(basis_size, 0.0);
+    std::vector<double> preconditioned_basis(preconditioned_basis_size, 0.0);
+    std::vector<double> h(hessenberg_size, 0.0);
+    std::vector<double> cs(restart_size, 0.0);
+    std::vector<double> sn(restart_size, 0.0);
+    std::vector<double> g(restart_plus_one_size, 0.0);
+    std::vector<double> y(restart_size, 0.0);
+    std::vector<double> w(block_size, 0.0);
+    std::vector<double> preconditioner_workspace(block_size, 0.0);
 
     while (iteration_count < problem.max_iterations) {
         if (problem.cancel_requested != nullptr &&
@@ -1028,7 +1110,21 @@ FrequencyDomainStatus run_right_preconditioner_pilot(
         return FrequencyDomainStatus::ok;
     }
     const std::uint64_t n = problem.tangent_dof_count;
-    const std::uint64_t block_count = n * 2;
+    std::uint64_t block_count = 0;
+    std::size_t n_size = 0;
+    std::size_t block_size = 0;
+    std::size_t block_bytes = 0;
+    if (!checked_mul_u64(n, 2, block_count) ||
+        !checked_to_size_t(n, n_size) ||
+        !checked_to_size_t(block_count, block_size) ||
+        checked_bytes_limited(
+            block_count,
+            sizeof(double),
+            kMaxFrequencyDomainWorkspaceBytes,
+            block_bytes) != CheckedExtentStatus::ok) {
+        copy_error(error_message, "production CPU frequency response pilot extent is invalid");
+        return FrequencyDomainStatus::validation_error;
+    }
     ProductionCpuDrivenResponseProblem pilot_problem = problem;
     pilot_problem.max_iterations = pilot_iterations;
     pilot_problem.restart_iterations = std::max<std::uint64_t>(
@@ -1043,12 +1139,12 @@ FrequencyDomainStatus run_right_preconditioner_pilot(
     pilot_problem.out_relative_residual_l2_norm = nullptr;
     pilot_problem.residual_capacity = 0;
 
-    std::vector<double> x(block_count, 0.0);
-    std::vector<double> residual(block_count, 0.0);
-    std::vector<double> operator_output(block_count, 0.0);
-    std::vector<double> stiffness_workspace(n, 0.0);
-    std::vector<double> mass_workspace(n, 0.0);
-    std::vector<double> projection_workspace(block_count, 0.0);
+    std::vector<double> x(block_size, 0.0);
+    std::vector<double> residual(block_size, 0.0);
+    std::vector<double> operator_output(block_size, 0.0);
+    std::vector<double> stiffness_workspace(n_size, 0.0);
+    std::vector<double> mass_workspace(n_size, 0.0);
+    std::vector<double> projection_workspace(block_size, 0.0);
     double rhs_l2_norm = 0.0;
     double initial_residual_l2_norm = 0.0;
     double initial_relative_residual_l2_norm = 0.0;
@@ -1159,6 +1255,11 @@ FrequencyDomainStatus solve_production_cpu_driven_response(
     out_result->restart_iterations_for_frequency = std::max<std::uint64_t>(
         1,
         std::min(problem.restart_iterations, problem.max_iterations));
+    if (out_result->restart_iterations_for_frequency >
+        kMaxFrequencyDomainKrylovRestartDimension) {
+        copy_error(out_result->error_message, "production CPU frequency response Krylov restart exceeds configured workspace limit");
+        return FrequencyDomainStatus::validation_error;
+    }
     out_result->progress_interval_iterations =
         effective_progress_interval_iterations(problem.progress_interval_iterations);
     if (!(std::abs(problem.angular_frequency_sign) == 1.0) ||
@@ -1171,6 +1272,19 @@ FrequencyDomainStatus solve_production_cpu_driven_response(
     if (!checked_mul_u64(n, problem.frequency_count, response_value_count) ||
         !checked_mul_u64(n, 2, block_count)) {
         copy_error(out_result->error_message, "production CPU frequency response problem size overflows");
+        return FrequencyDomainStatus::validation_error;
+    }
+    std::size_t n_size = 0;
+    std::size_t block_size = 0;
+    std::size_t block_bytes = 0;
+    if (!checked_to_size_t(n, n_size) ||
+        !checked_to_size_t(block_count, block_size) ||
+        checked_bytes_limited(
+            block_count,
+            sizeof(double),
+            kMaxFrequencyDomainWorkspaceBytes,
+            block_bytes) != CheckedExtentStatus::ok) {
+        copy_error(out_result->error_message, "production CPU frequency response workspace exceeds configured limit");
         return FrequencyDomainStatus::validation_error;
     }
     if ((problem.out_response_real != nullptr || problem.out_response_imag != nullptr) &&
@@ -1188,15 +1302,15 @@ FrequencyDomainStatus solve_production_cpu_driven_response(
         return FrequencyDomainStatus::validation_error;
     }
 
-    std::vector<double> rhs(block_count, 0.0);
-    std::vector<double> x(block_count, 0.0);
-    std::vector<double> residual(block_count, 0.0);
-    std::vector<double> operator_output(block_count, 0.0);
-    std::vector<double> stiffness_workspace(n, 0.0);
-    std::vector<double> mass_workspace(n, 0.0);
-    std::vector<double> projection_workspace(block_count, 0.0);
-    std::vector<double> preconditioner_probe_workspace(block_count, 0.0);
-    std::vector<double> preconditioned_rhs_probe(block_count, 0.0);
+    std::vector<double> rhs(block_size, 0.0);
+    std::vector<double> x(block_size, 0.0);
+    std::vector<double> residual(block_size, 0.0);
+    std::vector<double> operator_output(block_size, 0.0);
+    std::vector<double> stiffness_workspace(n_size, 0.0);
+    std::vector<double> mass_workspace(n_size, 0.0);
+    std::vector<double> projection_workspace(block_size, 0.0);
+    std::vector<double> preconditioner_probe_workspace(block_size, 0.0);
+    std::vector<double> preconditioned_rhs_probe(block_size, 0.0);
     for (std::uint64_t row = 0; row < n; ++row) {
         const double drive_real = problem.drive_real[row];
         const double drive_imag = problem.drive_imag != nullptr ? problem.drive_imag[row] : 0.0;
@@ -1226,6 +1340,17 @@ FrequencyDomainStatus solve_production_cpu_driven_response(
     for (std::uint64_t frequency_index = 0;
          frequency_index < problem.frequency_count;
          ++frequency_index) {
+        std::uint64_t response_offset = 0;
+        std::uint64_t response_end = 0;
+        if (!checked_mul_u64(frequency_index, n, response_offset) ||
+            !checked_offset_extent(
+                response_offset,
+                n,
+                response_value_count,
+                response_end)) {
+            copy_error(out_result->error_message, "production CPU frequency response output extent is invalid");
+            return FrequencyDomainStatus::validation_error;
+        }
         const double frequency_hz = problem.frequencies_hz[frequency_index];
         if (!(frequency_hz > 0.0) || !std::isfinite(frequency_hz)) {
             copy_error(out_result->error_message, "production CPU frequency response has invalid frequency");
@@ -1513,7 +1638,7 @@ FrequencyDomainStatus solve_production_cpu_driven_response(
             if (status == FrequencyDomainStatus::solve_error &&
                 problem.out_response_real != nullptr) {
                 for (std::uint64_t dof = 0; dof < n; ++dof) {
-                    const std::uint64_t response_index = frequency_index * n + dof;
+                    const std::uint64_t response_index = response_offset + dof;
                     problem.out_response_real[response_index] = x[dof];
                     problem.out_response_imag[response_index] = x[dof + n];
                 }
@@ -1561,7 +1686,7 @@ FrequencyDomainStatus solve_production_cpu_driven_response(
 
         if (problem.out_response_real != nullptr) {
             for (std::uint64_t dof = 0; dof < n; ++dof) {
-                const std::uint64_t response_index = frequency_index * n + dof;
+                const std::uint64_t response_index = response_offset + dof;
                 problem.out_response_real[response_index] = x[dof];
                 problem.out_response_imag[response_index] = x[dof + n];
             }

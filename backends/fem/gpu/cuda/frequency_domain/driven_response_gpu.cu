@@ -1,5 +1,6 @@
 #include "cpu/frequency_domain/mfem_dmi_operator.hpp"
 #include "cpu/frequency_domain/poisson_airbox_modal_eigen.hpp"
+#include "frequency_domain/checked_extent.hpp"
 #include "frequency_domain/operator_terms.hpp"
 
 #include <cuda_runtime.h>
@@ -905,11 +906,29 @@ bool allocate_and_copy(
         }
         return false;
     }
-    if (!cuda_success(cudaMalloc(device_ptr, sizeof(T) * count), "cudaMalloc frequency-domain buffer", error_message, error_message_len)) {
+    std::size_t byte_count = 0;
+    const fd::CheckedExtentStatus extent_status = fd::checked_bytes_limited(
+        count,
+        sizeof(T),
+        fd::kMaxFrequencyDomainWorkspaceBytes,
+        byte_count);
+    if (extent_status != fd::CheckedExtentStatus::ok) {
+        if (error_message != nullptr && error_message_len > 0) {
+            std::snprintf(
+                error_message,
+                static_cast<std::size_t>(error_message_len),
+                extent_status == fd::CheckedExtentStatus::arithmetic_overflow ?
+                    "frequency-domain %s byte count overflows" :
+                    "frequency-domain %s exceeds configured workspace limit",
+                name);
+        }
+        return false;
+    }
+    if (!cuda_success(cudaMalloc(device_ptr, byte_count), "cudaMalloc frequency-domain buffer", error_message, error_message_len)) {
         return false;
     }
     return cuda_success(
-        cudaMemcpy(*device_ptr, host_ptr, sizeof(T) * count, cudaMemcpyHostToDevice),
+        cudaMemcpy(*device_ptr, host_ptr, byte_count, cudaMemcpyHostToDevice),
         "cudaMemcpy frequency-domain host-to-device",
         error_message,
         error_message_len);
@@ -927,7 +946,25 @@ bool allocate_device_buffer(
     if (count == 0) {
         return true;
     }
-    if (!cuda_success(cudaMalloc(device_ptr, sizeof(T) * count), name, error_message, error_message_len)) {
+    std::size_t byte_count = 0;
+    const fd::CheckedExtentStatus extent_status = fd::checked_bytes_limited(
+        count,
+        sizeof(T),
+        fd::kMaxFrequencyDomainWorkspaceBytes,
+        byte_count);
+    if (extent_status != fd::CheckedExtentStatus::ok) {
+        if (error_message != nullptr && error_message_len > 0) {
+            std::snprintf(
+                error_message,
+                static_cast<std::size_t>(error_message_len),
+                extent_status == fd::CheckedExtentStatus::arithmetic_overflow ?
+                    "%s byte count overflows" :
+                    "%s exceeds configured workspace limit",
+                name);
+        }
+        return false;
+    }
+    if (!cuda_success(cudaMalloc(device_ptr, byte_count), name, error_message, error_message_len)) {
         return false;
     }
     return true;
@@ -1115,8 +1152,37 @@ extern "C" int fullmag_fem_frequency_domain_apply_mfem_gpu_operator(
     char *error_message,
     unsigned long long error_message_len)
 {
+    std::uint64_t expected_tangent_dof_count = 0;
+    std::size_t tangent_bytes = 0;
+    std::uint32_t dof_blocks = 0;
+    std::uint32_t node_blocks = 0;
+    std::uint32_t edge_blocks = 0;
+    const bool extents_valid =
+        fd::checked_mul_u64(node_count, 2, expected_tangent_dof_count) &&
+        fd::checked_bytes_limited(
+            tangent_dof_count,
+            sizeof(double),
+            fd::kMaxFrequencyDomainWorkspaceBytes,
+            tangent_bytes) == fd::CheckedExtentStatus::ok &&
+        fd::checked_cuda_grid_u32(
+            tangent_dof_count,
+            kBlockSize,
+            fd::kMaxFrequencyDomainCudaGridBlocks,
+            dof_blocks) == fd::CheckedExtentStatus::ok &&
+        fd::checked_cuda_grid_u32(
+            node_count,
+            kBlockSize,
+            fd::kMaxFrequencyDomainCudaGridBlocks,
+            node_blocks) == fd::CheckedExtentStatus::ok &&
+        (!exchange_enabled ||
+         fd::checked_cuda_grid_u32(
+             exchange_edge_count,
+             kBlockSize,
+             fd::kMaxFrequencyDomainCudaGridBlocks,
+             edge_blocks) == fd::CheckedExtentStatus::ok);
     if (node_count == 0 ||
-        tangent_dof_count != node_count * 2 ||
+        !extents_valid ||
+        tangent_dof_count != expected_tangent_dof_count ||
         nodes == nullptr ||
         tangent_in == nullptr ||
         out_stiffness == nullptr ||
@@ -1153,17 +1219,15 @@ extern "C" int fullmag_fem_frequency_domain_apply_mfem_gpu_operator(
         allocate_and_copy(&d_h_ext, h_ext_a_per_m, zeeman_enabled ? 3 : 0, "Zeeman field", error_message, error_message_len) &&
         allocate_and_copy(&d_anisotropy_axis, uniaxial_anisotropy_axis, uniaxial_anisotropy_enabled ? 3 : 0, "anisotropy axis", error_message, error_message_len);
     ok = ok &&
-        cuda_success(cudaMalloc(&d_effective, sizeof(double) * tangent_dof_count), "cudaMalloc effective tangent", error_message, error_message_len) &&
-        cuda_success(cudaMalloc(&d_stiffness, sizeof(double) * tangent_dof_count), "cudaMalloc stiffness tangent", error_message, error_message_len) &&
-        cuda_success(cudaMalloc(&d_mass, sizeof(double) * tangent_dof_count), "cudaMalloc mass tangent", error_message, error_message_len);
+        allocate_device_buffer(&d_effective, tangent_dof_count, "cudaMalloc effective tangent", error_message, error_message_len) &&
+        allocate_device_buffer(&d_stiffness, tangent_dof_count, "cudaMalloc stiffness tangent", error_message, error_message_len) &&
+        allocate_device_buffer(&d_mass, tangent_dof_count, "cudaMalloc mass tangent", error_message, error_message_len);
 
     if (ok) {
-        const int dof_blocks = static_cast<int>((tangent_dof_count + kBlockSize - 1) / kBlockSize);
         zero_tangent_kernel<<<dof_blocks, kBlockSize>>>(d_effective, tangent_dof_count);
         ok = cuda_success(cudaGetLastError(), "launch frequency-domain zero tangent", error_message, error_message_len);
     }
     if (ok && exchange_enabled) {
-        const int edge_blocks = static_cast<int>((exchange_edge_count + kBlockSize - 1) / kBlockSize);
         exchange_kernel<<<edge_blocks, kBlockSize>>>(
             d_nodes,
             d_edges,
@@ -1173,7 +1237,6 @@ extern "C" int fullmag_fem_frequency_domain_apply_mfem_gpu_operator(
         ok = cuda_success(cudaGetLastError(), "launch frequency-domain exchange operator", error_message, error_message_len);
     }
     if (ok) {
-        const int node_blocks = static_cast<int>((node_count + kBlockSize - 1) / kBlockSize);
         local_precession_mass_kernel<<<node_blocks, kBlockSize>>>(
             d_nodes,
             node_count,
@@ -1196,12 +1259,12 @@ extern "C" int fullmag_fem_frequency_domain_apply_mfem_gpu_operator(
     if (ok) {
         ok =
             cuda_success(
-                cudaMemcpy(out_stiffness, d_stiffness, sizeof(double) * tangent_dof_count, cudaMemcpyDeviceToHost),
+                cudaMemcpy(out_stiffness, d_stiffness, tangent_bytes, cudaMemcpyDeviceToHost),
                 "cudaMemcpy frequency-domain stiffness device-to-host",
                 error_message,
                 error_message_len) &&
             cuda_success(
-                cudaMemcpy(out_mass, d_mass, sizeof(double) * tangent_dof_count, cudaMemcpyDeviceToHost),
+                cudaMemcpy(out_mass, d_mass, tangent_bytes, cudaMemcpyDeviceToHost),
                 "cudaMemcpy frequency-domain mass device-to-host",
                 error_message,
                 error_message_len);
@@ -1255,8 +1318,46 @@ extern "C" int fullmag_fem_frequency_domain_create_mfem_gpu_operator_context(
         return 1;
     }
     *out_context = nullptr;
+    std::uint64_t expected_tangent_dof_count = 0;
+    std::uint64_t dmi_full_dof_count = 0;
+    std::size_t node_bytes = 0;
+    std::size_t tangent_bytes = 0;
+    std::size_t exchange_bytes = 0;
+    std::size_t dmi_element_bytes = 0;
+    std::size_t dmi_node_bytes = 0;
+    const bool extents_valid =
+        fd::checked_mul_u64(node_count, 2, expected_tangent_dof_count) &&
+        fd::checked_bytes_limited(
+            node_count,
+            sizeof(fd::TangentFrameNode),
+            fd::kMaxFrequencyDomainWorkspaceBytes,
+            node_bytes) == fd::CheckedExtentStatus::ok &&
+        fd::checked_bytes_limited(
+            tangent_dof_count,
+            sizeof(double),
+            fd::kMaxFrequencyDomainWorkspaceBytes,
+            tangent_bytes) == fd::CheckedExtentStatus::ok &&
+        (!exchange_enabled ||
+         fd::checked_bytes_limited(
+             exchange_edge_count,
+             sizeof(fd::TangentOperatorEdgeBlock),
+             fd::kMaxFrequencyDomainWorkspaceBytes,
+             exchange_bytes) == fd::CheckedExtentStatus::ok) &&
+        (!dmi_enabled ||
+         (fd::checked_mul_u64(node_count, 3, dmi_full_dof_count) &&
+          fd::checked_bytes_limited(
+              dmi_element_count,
+              sizeof(fd::MfemDmiElementTangentData),
+              fd::kMaxFrequencyDomainWorkspaceBytes,
+              dmi_element_bytes) == fd::CheckedExtentStatus::ok &&
+          fd::checked_bytes_limited(
+              node_count,
+              sizeof(double),
+              fd::kMaxFrequencyDomainWorkspaceBytes,
+              dmi_node_bytes) == fd::CheckedExtentStatus::ok));
     if (node_count == 0 ||
-        tangent_dof_count != node_count * 2 ||
+        !extents_valid ||
+        tangent_dof_count != expected_tangent_dof_count ||
         nodes == nullptr ||
         (exchange_enabled && (exchange_edges == nullptr || exchange_edge_count == 0)) ||
         (zeeman_enabled && h_ext_a_per_m == nullptr) ||
@@ -1319,8 +1420,8 @@ extern "C" int fullmag_fem_frequency_domain_create_mfem_gpu_operator_context(
         allocate_device_buffer(&context->d_stiffness, tangent_dof_count, "cudaMalloc frequency-domain stiffness tangent", error_message, error_message_len) &&
         allocate_device_buffer(&context->d_mass, tangent_dof_count, "cudaMalloc frequency-domain mass tangent", error_message, error_message_len) &&
         allocate_device_buffer(&context->d_demag_tangent, tangent_dof_count, "cudaMalloc frequency-domain demag tangent", error_message, error_message_len) &&
-        allocate_device_buffer(&context->d_dmi_delta_xyz, dmi_enabled ? node_count * 3ull : 0, "cudaMalloc frequency-domain DMI delta", error_message, error_message_len) &&
-        allocate_device_buffer(&context->d_dmi_residual_xyz, dmi_enabled ? node_count * 3ull : 0, "cudaMalloc frequency-domain DMI residual", error_message, error_message_len);
+        allocate_device_buffer(&context->d_dmi_delta_xyz, dmi_enabled ? dmi_full_dof_count : 0, "cudaMalloc frequency-domain DMI delta", error_message, error_message_len) &&
+        allocate_device_buffer(&context->d_dmi_residual_xyz, dmi_enabled ? dmi_full_dof_count : 0, "cudaMalloc frequency-domain DMI residual", error_message, error_message_len);
     if (!ok) {
         destroy_context(context);
         return 1;
@@ -1353,11 +1454,62 @@ extern "C" int fullmag_fem_frequency_domain_apply_mfem_gpu_operator_context(
         return 1;
     }
 
+    std::size_t tangent_bytes = 0;
+    std::uint64_t full_dof_count = 0;
+    std::uint32_t dof_blocks = 0;
+    std::uint32_t node_blocks = 0;
+    std::uint32_t edge_blocks = 0;
+    std::uint32_t full_dof_blocks = 0;
+    std::uint32_t element_blocks = 0;
+    const bool extents_valid =
+        fd::checked_bytes_limited(
+            context->tangent_dof_count,
+            sizeof(double),
+            fd::kMaxFrequencyDomainWorkspaceBytes,
+            tangent_bytes) == fd::CheckedExtentStatus::ok &&
+        fd::checked_cuda_grid_u32(
+            context->tangent_dof_count,
+            kBlockSize,
+            fd::kMaxFrequencyDomainCudaGridBlocks,
+            dof_blocks) == fd::CheckedExtentStatus::ok &&
+        fd::checked_cuda_grid_u32(
+            context->node_count,
+            kBlockSize,
+            fd::kMaxFrequencyDomainCudaGridBlocks,
+            node_blocks) == fd::CheckedExtentStatus::ok &&
+        (!context->exchange_enabled ||
+         fd::checked_cuda_grid_u32(
+             context->exchange_edge_count,
+             kBlockSize,
+             fd::kMaxFrequencyDomainCudaGridBlocks,
+             edge_blocks) == fd::CheckedExtentStatus::ok) &&
+        (!context->dmi_enabled ||
+         (fd::checked_mul_u64(context->node_count, 3, full_dof_count) &&
+          fd::checked_cuda_grid_u32(
+              full_dof_count,
+              kBlockSize,
+              fd::kMaxFrequencyDomainCudaGridBlocks,
+              full_dof_blocks) == fd::CheckedExtentStatus::ok &&
+          fd::checked_cuda_grid_u32(
+              context->dmi_element_count,
+              kBlockSize,
+              fd::kMaxFrequencyDomainCudaGridBlocks,
+              element_blocks) == fd::CheckedExtentStatus::ok));
+    if (!extents_valid) {
+        if (error_message != nullptr && error_message_len > 0) {
+            std::snprintf(
+                error_message,
+                static_cast<std::size_t>(error_message_len),
+                "production GPU frequency-domain context extent is invalid");
+        }
+        return 1;
+    }
+
     bool ok = cuda_success(
         cudaMemcpy(
             context->d_tangent_in,
             tangent_in,
-            sizeof(double) * context->tangent_dof_count,
+            tangent_bytes,
             cudaMemcpyHostToDevice),
         "cudaMemcpy frequency-domain tangent input host-to-device",
         error_message,
@@ -1367,19 +1519,17 @@ extern "C" int fullmag_fem_frequency_domain_apply_mfem_gpu_operator_context(
             cudaMemcpy(
                 context->d_demag_tangent,
                 demag_tangent,
-                sizeof(double) * context->tangent_dof_count,
+                tangent_bytes,
                 cudaMemcpyHostToDevice),
             "cudaMemcpy frequency-domain demag tangent host-to-device",
             error_message,
             error_message_len);
     }
     if (ok) {
-        const int dof_blocks = static_cast<int>((context->tangent_dof_count + kBlockSize - 1) / kBlockSize);
         zero_tangent_kernel<<<dof_blocks, kBlockSize>>>(context->d_effective, context->tangent_dof_count);
         ok = cuda_success(cudaGetLastError(), "launch frequency-domain zero tangent", error_message, error_message_len);
     }
     if (ok && context->exchange_enabled) {
-        const int edge_blocks = static_cast<int>((context->exchange_edge_count + kBlockSize - 1) / kBlockSize);
         exchange_kernel<<<edge_blocks, kBlockSize>>>(
             context->d_nodes,
             context->d_edges,
@@ -1389,9 +1539,7 @@ extern "C" int fullmag_fem_frequency_domain_apply_mfem_gpu_operator_context(
         ok = cuda_success(cudaGetLastError(), "launch frequency-domain exchange operator", error_message, error_message_len);
     }
     if (ok && context->dmi_enabled) {
-        const int node_blocks = static_cast<int>((context->node_count + kBlockSize - 1) / kBlockSize);
-        const unsigned long long full_dof_count = context->node_count * 3ull;
-        zero_tangent_kernel<<<static_cast<int>((full_dof_count + kBlockSize - 1) / kBlockSize), kBlockSize>>>(
+        zero_tangent_kernel<<<full_dof_blocks, kBlockSize>>>(
             context->d_dmi_residual_xyz,
             full_dof_count);
         ok = cuda_success(cudaGetLastError(), "launch frequency-domain DMI residual zero", error_message, error_message_len);
@@ -1404,7 +1552,6 @@ extern "C" int fullmag_fem_frequency_domain_apply_mfem_gpu_operator_context(
             ok = cuda_success(cudaGetLastError(), "launch frequency-domain DMI tangent lift", error_message, error_message_len);
         }
         if (ok) {
-            const int element_blocks = static_cast<int>((context->dmi_element_count + kBlockSize - 1) / kBlockSize);
             dmi_element_tangent_kernel<<<element_blocks, kBlockSize>>>(
                 context->d_dmi_elements,
                 context->dmi_element_count,
@@ -1426,7 +1573,6 @@ extern "C" int fullmag_fem_frequency_domain_apply_mfem_gpu_operator_context(
         }
     }
     if (ok) {
-        const int node_blocks = static_cast<int>((context->node_count + kBlockSize - 1) / kBlockSize);
         local_precession_mass_kernel<<<node_blocks, kBlockSize>>>(
             context->d_nodes,
             context->node_count,
@@ -1449,12 +1595,12 @@ extern "C" int fullmag_fem_frequency_domain_apply_mfem_gpu_operator_context(
     if (ok) {
         ok =
             cuda_success(
-                cudaMemcpy(out_stiffness, context->d_stiffness, sizeof(double) * context->tangent_dof_count, cudaMemcpyDeviceToHost),
+                cudaMemcpy(out_stiffness, context->d_stiffness, tangent_bytes, cudaMemcpyDeviceToHost),
                 "cudaMemcpy frequency-domain stiffness device-to-host",
                 error_message,
                 error_message_len) &&
             cuda_success(
-                cudaMemcpy(out_mass, context->d_mass, sizeof(double) * context->tangent_dof_count, cudaMemcpyDeviceToHost),
+                cudaMemcpy(out_mass, context->d_mass, tangent_bytes, cudaMemcpyDeviceToHost),
                 "cudaMemcpy frequency-domain mass device-to-host",
                 error_message,
                 error_message_len);

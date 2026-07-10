@@ -1,5 +1,6 @@
 #pragma once
 
+#include "frequency_domain/checked_extent.hpp"
 #include "frequency_domain/frequency_domain_contract.hpp"
 
 #include <cmath>
@@ -293,6 +294,7 @@ inline bool device_complex_vector_view_valid(
     return view.real != nullptr &&
         view.imag != nullptr &&
         view.n == expected_size &&
+        view.n <= kMaxFrequencyDomainWorkspaceBytes / sizeof(double) &&
         view.n > 0;
 }
 
@@ -307,7 +309,13 @@ inline bool device_complex_vector_basis_view_valid(
         view.imag == nullptr) {
         return false;
     }
-    return view.n == expected_vector_size * vector_count;
+    std::uint64_t expected_extent = 0;
+    return checked_mul_u64_limited(
+               expected_vector_size,
+               vector_count,
+               kMaxFrequencyDomainWorkspaceBytes / sizeof(double),
+               expected_extent) == CheckedExtentStatus::ok &&
+        view.n == expected_extent;
 }
 
 inline FrequencyDomainStatus validate_fgmres_device_engine_config(
@@ -355,7 +363,13 @@ inline FrequencyDomainStatus validate_fgmres_device_algebra_config(
         return FrequencyDomainStatus::validation_error;
     }
     *out_state = FGMRESDeviceAlgebraState{};
-    if (config.context == nullptr ||
+    std::uint64_t hessenberg_column_count = 0;
+    if (!checked_add_u64(
+            config.restart_dimension,
+            1,
+            hessenberg_column_count) ||
+        config.restart_dimension > kMaxFrequencyDomainKrylovRestartDimension ||
+        config.context == nullptr ||
         config.context->tangent_dof_count == 0 ||
         config.apply_orthogonalization == nullptr ||
         config.restart_dimension == 0 ||
@@ -372,7 +386,7 @@ inline FrequencyDomainStatus validate_fgmres_device_algebra_config(
             config.context->tangent_dof_count) ||
         !device_complex_vector_view_valid(
             config.hessenberg_column,
-            config.restart_dimension + 1) ||
+            hessenberg_column_count) ||
         !gpu_device_krylov_residency_contract_passes(
             config.transfer_diagnostics)) {
         return FrequencyDomainStatus::validation_error;
@@ -480,9 +494,14 @@ inline FrequencyDomainStatus probe_fgmres_device_algebra_callbacks(
     if (status != FrequencyDomainStatus::ok) {
         return status;
     }
-    if (basis_vector_count == 0 ||
+    std::uint64_t required_hessenberg_count = 0;
+    if (!checked_add_u64(
+            basis_vector_count,
+            1,
+            required_hessenberg_count) ||
+        basis_vector_count == 0 ||
         basis_vector_count > config.restart_dimension ||
-        config.hessenberg_column.n < basis_vector_count + 1) {
+        config.hessenberg_column.n < required_hessenberg_count) {
         *out_state = FGMRESDeviceAlgebraState{};
         return FrequencyDomainStatus::validation_error;
     }

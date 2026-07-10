@@ -417,6 +417,10 @@ add_fem_source_facade_contract(
     tests/frequency_domain/frequency_domain_contract.cpp
 )
 add_fem_source_facade_contract(
+    fem_frequency_domain_checked_extent_contract
+    tests/frequency_domain/checked_extent_test.cpp
+)
+add_fem_source_facade_contract(
     fem_operator_contract
     tests/frequency_domain/operator_contract_test.cpp
 )

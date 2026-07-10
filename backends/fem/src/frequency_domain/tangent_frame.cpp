@@ -1,5 +1,7 @@
 #include "frequency_domain/tangent_frame.hpp"
 
+#include "frequency_domain/checked_extent.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -54,8 +56,11 @@ TangentWorkspaceShape tangent_workspace_shape(std::uint64_t node_count) noexcept
 {
     TangentWorkspaceShape shape{};
     shape.node_count = node_count;
-    shape.full_dof_count = node_count * 3;
-    shape.tangent_dof_count = node_count * 2;
+    if (!checked_mul_u64(node_count, 3, shape.full_dof_count) ||
+        !checked_mul_u64(node_count, 2, shape.tangent_dof_count)) {
+        shape.full_dof_count = 0;
+        shape.tangent_dof_count = 0;
+    }
     return shape;
 }
 
