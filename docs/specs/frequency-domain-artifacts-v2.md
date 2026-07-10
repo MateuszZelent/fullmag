@@ -57,6 +57,293 @@ floating-point arrays.
 Legacy artifacts may remain readable, but new dispersion UI and API surfaces
 must prefer the v2 family.
 
+## Mandatory manifest hardening envelope
+
+This section defines the target provenance envelope shared by modal eigen and
+driven response. It extends the semantics discovered through
+`frequency_domain/manifest.v1.json`; it does not claim that all current writers,
+OpenAPI resources or UI inspectors already emit or consume these fields.
+Missing current links are `contract_gap` until the producer, validator, API and
+UI move together.
+
+### Contract versions and readiness
+
+Every newly promoted manifest must include:
+
+```json
+{
+  "physics_contract_version": "micromagnetics_frequency_domain_v5",
+  "operator_dictionary_version": "FrequencyOperatorDictionary.v1",
+  "implementation_state": "executable",
+  "validation_state": "unvalidated",
+  "validated_scope": "exact bounded product/k/demag/device/precision/engine scope"
+}
+```
+
+The allowed readiness values are the capability-matrix vocabulary:
+
+```text
+implementation_state = absent | contract_only | source_visible | executable
+validation_state = unvalidated | algebra_validated | physics_validated | production_qualified
+validated_scope = non-empty bounded workload description
+```
+
+`implementation_state=executable` does not imply a validation state.
+`validation_state=production_qualified` is invalid without an exact
+`validated_scope` and accepted evidence for that same scope. Modal and driven
+response never inherit readiness from one another. K0 does not qualify
+nonzero-k; no-demag does not qualify dynamic demag; CPU does not qualify GPU;
+an operator-on-GPU/host-Krylov run does not qualify device-resident Krylov.
+
+Current manifests use `physics`, `requested_execution`, `resolved_execution`,
+`diagnostics` and capability snapshots, but do not consistently carry the
+three readiness fields or the two version fields. That is a current
+`contract_gap`; readers must not infer them from a solver name.
+
+### Requested and resolved execution
+
+Both objects are required. Fields not applicable to one product use an explicit
+`not_applicable` value only where the schema permits it; they are not silently
+omitted when needed to distinguish intent from execution.
+
+```json
+{
+  "requested_execution": {
+    "backend": "fem",
+    "device": "cpu",
+    "precision": "double",
+    "execution_mode": "strict",
+    "study_product": "modal_eigen",
+    "solver_method": "auto",
+    "preconditioner": "not_applicable",
+    "include_demag": true,
+    "magnetostatic_bc": "periodic_airbox_k0"
+  },
+  "resolved_execution": {
+    "backend": "fem",
+    "device": "cpu",
+    "precision": "double",
+    "engine": "cpu_sparse_direct",
+    "implementation_id": "k0_poisson_airbox_cpu_full_coupled_slepc",
+    "solver_library": "SLEPc/PETSc",
+    "operator_residency": "host",
+    "vector_residency": "host",
+    "krylov_residency": "host",
+    "preconditioner_residency": "host",
+    "fallback_used": false,
+    "fallback_reason": null
+  }
+}
+```
+
+The example demonstrates shape only; an artifact may use these values only when
+the executing path produced them. Current ABI lanes `validation`,
+`production_cpu`, and `production_gpu` remain compatibility fields and may be
+included as `requested_execution_lane`/`resolved_execution_lane`. They do not
+replace `resolved_execution.engine` and do not prove residency.
+
+Fallback rules:
+
+- strict device, precision or explicit solver method cannot fallback;
+- `fallback_used=true` requires `fallback_reason`, `fallback_from_engine` and
+  `fallback_to_engine`;
+- validation/reference, CPU, K0, open-boundary, no-demag, synthetic assembly,
+  analytic demag and postsolve phase projection cannot replace a different
+  requested physical operator;
+- unavailable strict execution preserves the requested object and publishes
+  `resolved_execution.status = "unavailable"` plus `unsupported_reason`.
+
+Current driven diagnostics expose `validation_fallback_used` and broad lane
+fields. Current modal manifests may hardcode CPU/double request data. A writer
+must not promote these compatibility values into the hardened envelope without
+the original plan and actual engine evidence.
+
+### Assembly, phase and identity hashes
+
+Every manifest that claims a numeric FEM solve must include:
+
+```json
+{
+  "assembly_kind": "mfem_weak_form_shared_domain",
+  "phase_convention": "exp_i_omega_t",
+  "phase_constraint_sha256": "sha256:...",
+  "equilibrium_artifact_sha256": "sha256:...",
+  "linearization_state_sha256": "sha256:...",
+  "periodic_mesh_certificate_sha256": "sha256:..."
+}
+```
+
+`phase_constraint_sha256` hashes the canonical phase convention, k sample,
+magnetic/scalar equivalence classes, translations and tangent-frame transforms
+used by the solved operator. For a nonperiodic solve it is the hash of an
+explicit `not_applicable` phase-constraint descriptor. Hashes identify content,
+not filesystem paths or display labels.
+
+`equilibrium_artifact_sha256` and `linearization_state_sha256` are required for
+both products under the target v6 handoff. The periodic certificate hash is
+required for periodic/Floquet solves and is the hash of an accepted
+`periodic_mesh_certificate.v6`; nonperiodic solves publish an explicit
+`not_applicable` value under the schema. Current v5 IDs, pair-map fingerprints,
+and `equilibrium_provenance` paths are not substitutes. Target-v6 production
+consumption is currently a `contract_gap`.
+
+Allowed `assembly_kind` values include at least:
+
+```text
+mfem_weak_form_shared_domain
+synthetic_algebraic_oracle
+reference_dense_tangent
+reference_dense_cartesian
+```
+
+An artifact with `assembly_kind=synthetic_algebraic_oracle` is limited to
+`validation_state=algebra_validated` and must publish
+`production_periodic_airbox_claim=false`. It cannot qualify real mesh,
+airbox, Poisson, modal or driven physics.
+
+### Boundary and gauge tuple
+
+When magnetostatic scalar potential is present, the manifest and solver
+diagnostics include one identical object:
+
+```json
+{
+  "boundary_gauge": {
+    "magnetostatic_bc": "periodic_airbox_k0",
+    "outer_boundary_kind": "poisson_robin",
+    "robin_beta": 1.0,
+    "robin_beta_unit": "1/m",
+    "gauge_policy": "none",
+    "gauge_reason": "coercive_outer_boundary",
+    "eta_row_present": false
+  }
+}
+```
+
+Only these K0 outer-boundary/gauge combinations are valid:
+
+```text
+poisson_robin(beta>0) -> gauge_policy=none,
+                          gauge_reason=coercive_outer_boundary,
+                          eta_row_present=false
+poisson_dirichlet     -> gauge_policy=none,
+                          gauge_reason=coercive_outer_boundary,
+                          eta_row_present=false
+pure_neumann          -> gauge_policy=mean_zero_augmented,
+                          gauge_reason=pure_neumann_nullspace,
+                          eta_row_present=true
+```
+
+The object is absent only when no scalar magnetostatic block exists. A current
+diagnostic containing individual `gauge_policy`, `outer_boundary_kind` or
+`robin_beta` fields is partial evidence; cross-artifact tuple identity remains
+a `contract_gap` until validators compare the complete object.
+
+### Spectral scalar mode and shift
+
+Modal selected-spectrum diagnostics and the manifest include:
+
+```json
+{
+  "spectral": {
+    "spectral_transform": "shift_invert",
+    "spectral_scalar_mode": "real_split",
+    "sigma_real_per_s": 0.0,
+    "sigma_imag_rad_per_s": 6283185307.179586
+  }
+}
+```
+
+Allowed `spectral_scalar_mode` values are `complex` and `real_split`. For the
+canonical `lambda=i*omega` mapping, a target frequency uses
+`sigma_real_per_s=0` and `sigma_imag_rad_per_s=omega_target`. A real PETSc
+scalar build must use `real_split`; publishing a real-axis shift for the
+imaginary eigenvalue spectrum is invalid.
+
+Current diagnostics may expose `spectral_transform`, `shift_frequency_hz`,
+`poisson_airbox_shift_sigma_real`, `poisson_airbox_shift_sigma_imag`, or
+solver-specific shift labels. The canonical scalar-mode and sigma fields are a
+`contract_gap` until writers derive and validators cross-check them.
+
+### Full block residual certification
+
+Poisson-airbox modal and coupled driven solves certify the original full
+operator after reconstructing all eliminated/reduced fields:
+
+```json
+{
+  "block_residuals": {
+    "eps_q": 0.0,
+    "eps_phi": 0.0,
+    "eps_gauge": 0.0,
+    "eps_full": 0.0,
+    "backend_reported_residual": 0.0,
+    "certification_tolerance": 1e-8,
+    "certified": true
+  }
+}
+```
+
+All epsilon values are dimensionless. `eps_full` must equal
+`max(eps_q,eps_phi,eps_gauge)`; when no gauge row exists, `eps_gauge=0` and the
+tuple declares `eta_row_present=false`. A backend residual is diagnostic only
+and cannot cap or replace reconstructed block errors.
+
+Current Poisson modal diagnostics use
+`magnetic_block_backward_error`, `poisson_block_backward_error`,
+`gauge_constraint_backward_error`,
+`reconstructed_full_descriptor_backward_error`, and
+`slepc_reported_backward_error`. These map conceptually to the target fields,
+but the writer/validator must prove identical normalization before translating
+them. Until then, the canonical `block_residuals` object is `contract_gap`.
+
+Magnetic-only solves publish a product-appropriate original-operator residual
+object rather than a fabricated phi/gauge block.
+
+### Device residency and transfer audit
+
+`resolved_execution` includes the four residency fields above and, for GPU
+claims, a transfer summary:
+
+```json
+{
+  "device_transfer_audit": {
+    "hot_loop_h2d_bytes": 0,
+    "hot_loop_d2h_bytes": 0,
+    "hot_loop_host_sync_count": 0,
+    "control_scalar_d2h_bytes": 0,
+    "device_resident_claim": false
+  }
+}
+```
+
+`gpu_operator_host_krylov` sets `operator_residency=device` and
+`krylov_residency=host`; it must set `device_resident_claim=false`.
+`gpu_device_krylov` or target `gpu_modal_device_krylov` may set the claim true
+only after transfer-audit and preconditioner-residency gates pass. Existing
+`gpu_device_resident_krylov`, `device_residency` or transfer counters remain
+current evidence but must agree with the hardened object.
+
+### Artifact/API/UI consistency
+
+The same envelope is inspectable through the result manifest resource and
+dedicated solver/operator views. OpenAPI must type the hardened fields; a
+generic `payload: Value` is not sufficient for durable client guarantees.
+Control Room consumes them through `ControlRoomApi.analysis.frequencyDomain`
+and resource hooks, then exposes:
+
+- requested versus resolved backend/device/precision/engine,
+- implementation and validation state plus exact validated scope,
+- assembly and operator dictionary,
+- phase, equilibrium, linearization and periodic-certificate identities,
+- BC/gauge and spectral shift tuples,
+- block residual certification,
+- residency, transfer audit, fallback and unsupported reason.
+
+Missing optional artifacts still return diagnostic `404`. A malformed or
+contradictory hardened envelope is not optional: resource publication must fail
+with a diagnostic error rather than provide an empty plot or partial success.
+
 ## spectrum.v2.json
 
 Required fields:
@@ -519,7 +806,10 @@ The dense reference oracle summary must include:
 ## frequency_domain/manifest.v1.json
 
 The manifest is the entry point for UI and post-processing discovery. Modal
-eigen manifests must include:
+eigen and driven-response manifests must first satisfy the mandatory manifest
+hardening envelope above. Current writers that omit hardened fields remain
+readable only at their existing implementation/validation scope and cannot be
+promoted. Modal eigen manifests must additionally include:
 
 - `schema_version = "frequency_domain_manifest.v1"`,
 - `analysis_family = "magnetic_frequency_domain"`,
@@ -560,7 +850,7 @@ The current production nonzero-k modal k-path acceptance gate requires
 modal GPU dispersion as unavailable. The gamma-only bridge remains separate
 from the nonzero-k Bloch/Floquet production lane.
 
-Driven response manifests must include:
+Driven response manifests must additionally include:
 
 - `schema_version = "frequency_domain_manifest.v1"`,
 - `analysis_family = "magnetic_frequency_domain"`,
