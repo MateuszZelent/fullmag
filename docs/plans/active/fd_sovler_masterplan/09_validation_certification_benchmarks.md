@@ -21,7 +21,7 @@ artifacts**, and **promotable readiness cells**. A result may promote only the
 exact cells named by its accepted artifact bundle. Passing a nearby synthetic,
 CPU, K0, no-demag, modal, or tiny case cannot promote another cell.
 
-A readiness cell is the exact tuple:
+A readiness cell can be summarized for human review by these dimensions:
 
 ```text
 study_product
@@ -37,15 +37,26 @@ damping/nonconservative policy
 solver engine, preconditioner and target/sweep policy
 ```
 
-The artifact records this tuple as `validated_scope`. `initial` means the gate
-is usable during implementation. `production` means it is eligible to satisfy
-chapter 24 for that exact scope. Production tolerances supersede initial
-tolerances; a fixture-specific physics note may tighten them but may not loosen
-them silently.
+This list is deliberately abbreviated and is not the canonical
+`validated_scope`. Chapter 24 section 2 exclusively defines the complete scope,
+its deterministic `scope_id`, and its required physics/mode/k/BC/gauge/runtime,
+device, precision, problem-size, bounded geometry/material, fixture and oracle
+fields. `initial` means a gate is usable during implementation. `production`
+means it is eligible to satisfy chapter 24 for the canonical scope bound to the
+artifact. Production tolerances supersede initial tolerances; a
+fixture-specific physics note may tighten them but may not loosen them silently.
 
 Analytical values and trusted reference solutions are verifier-side data. They
 must not construct the production operator, choose its target, select a mode,
 set convergence, certify solver success, or alter the artifact under test.
+
+Every artifact named in every gate row below must carry either the canonical
+Chapter 24 `scope_id` that it directly evaluates or an explicit
+`verified_coverage_of` list of canonical scope IDs plus a machine-verifiable
+coverage rule. A fixture nickname, abbreviated readiness tuple, matching path
+or implicit parent scope is invalid. Gate promotion requires the artifact
+validator to recompute every referenced scope ID and reject incomplete,
+wildcard, unbounded or mismatched scope objects.
 
 ## 2. Common acceptance and convergence contract
 
@@ -89,7 +100,7 @@ one numerical result under several levels fail the gate.
 |---|---|---|---|---|---|---|---|
 | PHY-1 units, phasor and Larmor | Uniform magnet, positive bias sweep, no demag, no damping, K0 | Closed-form `f=gamma0 H/(2*pi)` evaluated only after branch selection; independent SI-token audit | Maximum/median relative frequency error; `lambda=i*omega`; gamma/mu0 consistency | max `2e-2`; median `1e-2`; mapping/token mismatches `0` | max `5e-3`; median `2e-3`; mapping/token mismatches `0` | `validation/physics/larmor.v1.json`, selected branch rows, solver diagnostics | `modal_eigen/*/k0/demag_none`; driven cells only through PHY-4 |
 | PHY-2 demag sign and energy | Uniformly magnetized sphere and at least two ellipsoids, open boundary | Analytical demag tensor and positive magnetostatic energy, generated outside assembly | Componentwise field error, energy error, sign failures | field/energy `<=3e-2`; sign failures `0` | field/energy `<=1e-2`; sign failures `0` | `validation/physics/demag_ellipsoid.v1.json`, raw mesh/padding rows | K0 demag cells for the evidenced BC/geometry envelope |
-| PHY-3 Kittel thin film | Chapter 15 K0-3 real-film suite | Postsolve Kittel evaluator and postsolve fitted `M_eff`; neither is a solver input | Field-sweep error plus separate mesh and truncation budgets | max Kittel `5e-2`; mesh `2e-2`; truncation `2e-2` | max Kittel `2e-2`; mesh `1e-2`; truncation `5e-3` | Chapter 15 Kittel summary, points and convergence artifacts | `modal_eigen/{cpu,gpu}/k0/periodic_airbox_k0` only after all predecessor gates |
+| PHY-3 Kittel thin film | Chapter 15 K0-3 real-film suite | Fixture-owned, independently provenanced, postsolve-only `M_eff_reference`; postsolve Kittel evaluator and fitted `M_eff`; none is a solver/request/selection/certificate input | Maximum/median field-sweep frequency error; `abs(fitted_M_eff-M_eff_reference)/abs(M_eff_reference)`; fitted-parameter uncertainty and scaled-Jacobian conditioning; separate frequency and fitted-`M_eff` mesh/truncation budgets | frequency max `5e-2`, median `2e-2`; fitted `M_eff` relative error `2e-2`; relative standard uncertainty `1e-2`; scaled-Jacobian condition number `1e8`; mesh `2e-2`; truncation `2e-2` | frequency max `2e-2`, median `1e-2`; fitted `M_eff` relative error `5e-3`; relative standard uncertainty `2.5e-3`; scaled-Jacobian condition number `1e6`; mesh `1e-2`; truncation `5e-3` | Chapter 15 fixture/reference provenance, fit, summary, points, selection, independence and convergence artifacts, each bound by `scope_id` or `verified_coverage_of` | `modal_eigen/{cpu,gpu}/k0/periodic_airbox_k0` only after all predecessor gates |
 | PHY-4 modal/driven resonance | Same assembled blocks, physical transverse drive, frequency sweep bracketing independently selected modes | Driven full solve is the modal oracle and modal spectrum is the driven-location oracle; neither selects the other | Resonance-frequency delta, complex observable delta, original residual | frequency `1e-2`; observable `5e-2`; residual `1e-6` | frequency `2e-3`; observable `1e-2`; residual `1e-8` | spectrum, response sweep, point diagnostics and cross-link artifact | Matching modal and driven cells only |
 
 ## 4. Manufactured assembly gates
@@ -167,11 +178,11 @@ qualify as device resident without PERF-1 even when wall time is low.
 
 | Gate | Fixture | Independent oracle | Metric | Initial tolerance | Production tolerance | Required artifacts | Promotable readiness cells |
 |---|---|---|---|---|---|---|---|
-| ART-1 schema and cross-artifact identity | Complete, failed and interrupted modal/driven bundles | Independent schema/resource validator | Missing fields, hash/signature mismatches, dangling paths, status contradictions | all counts `0` | all counts `0` | manifest, solver diagnostics, spectra/response, mesh and validation artifacts | All cells |
+| ART-1 schema and cross-artifact identity | Complete, failed and interrupted modal/driven bundles | Independent schema/resource validator | Missing fields, canonical `scope_id`/`verified_coverage_of` failures, hash/signature mismatches, dangling paths, status contradictions | all counts `0` | all counts `0` | manifest, solver diagnostics, spectra/response, mesh and validation artifacts | All cells |
 | ART-2 requested/resolved truth | Strict CPU, strict GPU, auto and explicit-fallback fixtures | Planner request compared with runtime and artifact provenance | Hidden fallback, device/precision/engine mismatch, absent rejection token | all counts `0` | all counts `0` | plan, manifest, diagnostics and rejection artifact | All cells; strict GPU mismatch blocks GPU promotion |
 | ART-3 validation isolation | Kittel, DE/BV, manufactured and CPU-reference bundles | Data-flow audit from solver request through postsolve verifier | Analytical/fitted/reference fields present in assembly, target, selection, certificate or solver pass/fail payload | occurrences `0` | occurrences `0` | validation-isolation report and request/artifact schemas | Every analytical-validation cell |
 | ART-4 product/API/UI consistency | Published modal and driven resource bundles | OpenAPI/type/resource validator and browser-facing resource inventory | Missing resource, unit mismatch, stale revision, UI claim beyond artifact state | all counts `0` | all counts `0` | API contract report and artifact resource index | Cells exposed through API/UI |
-| ART-5 promotion record | Candidate exact-scope release bundle | Chapter 24 machine-readable checklist validator | Missing applicable item, empty/wildcard `validated_scope`, stale evidence, unresolved blocker | all counts `0` | all counts `0` | production DoD record linked to immutable evidence | Only the exact recorded readiness cell |
+| ART-5 promotion record | Candidate canonical-scope release bundle | Chapter 24 machine-readable checklist validator | Missing applicable item, invalid canonical scope/hash/coverage binding, empty/wildcard `validated_scope`, stale evidence, unresolved blocker | all counts `0` | all counts `0` | production DoD record linked to immutable evidence | Only the canonical recorded readiness cell |
 
 ## 12. Promotion boundaries and current truth
 
@@ -190,5 +201,5 @@ existing bounded status. In particular:
 - `production_executable` remains distinct from `production_qualified`.
 
 Promotion occurs only when chapter 24 accepts every applicable gate for one
-exact `validated_scope` and the readiness/capability status is updated by its
-own owning task.
+canonical `scope_id` and complete `validated_scope`, and the
+readiness/capability status is updated by its own owning task.

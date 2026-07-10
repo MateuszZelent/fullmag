@@ -27,11 +27,13 @@ solve first -> freeze raw artifacts -> select branch without Kittel values
 ```
 
 The expected Kittel frequency and fitted `M_eff` are verifier outputs only.
-They are forbidden from assembly, target construction, preconditioning, mode
-selection, solver convergence, solver certificate and solver pass/fail paths.
-A Kittel-specific `demag_delta` is also forbidden from those paths. Physical
-material `Ms` remains a legitimate assembly input; a Kittel-derived or fitted
-`M_eff` is not a substitute for it.
+The fixture-owned `M_eff_reference` is a verifier input with independent
+provenance, loaded only after the raw branch is selected and frozen. All three
+are forbidden from assembly, request target/window construction,
+preconditioning, mode selection, solver convergence, solver certificate and
+solver pass/fail paths. A Kittel-specific `demag_delta` is also forbidden from
+those paths. Physical material `Ms` remains a legitimate assembly input; a
+Kittel reference or fitted `M_eff` is not a substitute for it.
 
 ## 2. Current blockers and required runtime removal
 
@@ -67,9 +69,9 @@ K0-1 and K0-2 cannot substitute for K0-3. A synthetic demag factor may be an
 algebra oracle but cannot satisfy K0-3 or carry a production periodic-airbox
 claim.
 
-## 4. Exact K0-3 fixture
+## 4. K0-3 fixture constraints and canonical scope binding
 
-Each production candidate records the following immutable scope:
+Each production candidate records the following immutable K0-3 constraints:
 
 ```text
 study_product = modal_eigen
@@ -94,11 +96,21 @@ Robin or Dirichlet truncation belongs only on the open-z exterior. Pure
 Neumann uses the documented mean-zero augmentation. A fully periodic z
 direction is not K0-3.
 
-The fixture records geometry dimensions, material constants, physical `Ms`,
-`gamma`/`gamma0`, bias direction, equilibrium signatures, BC/gauge tuple,
+This list is not the complete `validated_scope`. The fixture instantiates every
+field of Chapter 24's canonical `frequency_domain_validation_scope.v1`,
+including physics, mode, k, separate BC and gauge policies, runtime, device,
+precision, problem-size envelope, bounded geometry and material ranges, and
+immutable fixture and oracle IDs. The resulting canonical object is hashed to
+`scope_id` by Chapter 24. Any canonical field change creates another
+`scope_id`.
+
+The fixture also records geometry dimensions, material constants, physical
+`Ms`, `gamma`/`gamma0`, bias direction, equilibrium signatures, BC/gauge tuple,
 mesh generator/version, FE order, quadrature, solver request, target/window,
-device, engine and all artifact hashes. Any change creates another
-`validated_scope`.
+device, engine and all artifact hashes. An aggregate or convergence artifact
+that covers multiple canonical cells uses explicit `verified_coverage_of`
+scope IDs and proves the bounded relation; it never invents a shorter local
+scope.
 
 ## 5. Field sweep
 
@@ -114,8 +126,11 @@ provenance proves the correct field value and signatures.
 
 A fast CI gate may use a documented subset of at least three positive-bias
 fields. Its artifact records `coverage=fast_ci_subset`, the parent extended
-fixture ID and omitted field indices. Fast CI can detect regressions but cannot
-satisfy analytical validation, convergence or `production_qualified`.
+fixture ID, omitted field indices and
+`verified_coverage_of=[parent_canonical_scope_id]`; the verifier proves the
+subset relation without claiming complete coverage. Fast CI can detect
+regressions but cannot satisfy analytical validation, convergence or
+`production_qualified`.
 
 A near-zero field is optional. If present, it has a separately declared
 zero-mode/degeneracy policy and is excluded from relative-error denominators
@@ -192,7 +207,7 @@ branch can be reproduced without analytical values.
 ## 8. Postsolve Kittel evaluation
 
 Only after the selected branch and solver artifacts are immutable does the
-verifier evaluate:
+verifier load `M_eff_reference` and evaluate:
 
 ```text
 K0-1: f_expected(H) = gamma0 H / (2*pi)
@@ -201,15 +216,83 @@ K0-3 in-plane thin-film form:
 f_expected(H) = gamma0 sqrt((H+H_k1)(H+H_k2+M_eff_reference)) / (2*pi)
 ```
 
+`M_eff_reference` is owned by the immutable validation fixture, not by the
+solver request or production material object. Its provenance record is frozen
+before solving and contains:
+
+```text
+reference_id and oracle_id
+source kind, URI/version and content sha256
+derivation identifier and exact formula
+independently measured or published SI inputs and their uncertainties
+M_eff_reference_A_per_m and standard_uncertainty_A_per_m
+fixture_id, fixture_sha256 and applicable bounded material/geometry range
+```
+
+The reference may use independently specified fixture quantities such as
+`Ms_reference-Hk_perp_reference`; it must not be inferred from solved
+frequencies, selected modes, assembled matrices, mesh/truncation results or a
+fit to the artifact under test. The physical `Ms` supplied to assembly remains
+a separate physics input even when both values trace to the same independently
+versioned material characterization. The reference record is available only to
+the postsolve verifier and is included in the canonical `oracle_ids`; changing
+it changes `scope_id`.
+
 The exact admitted analytical form, anisotropy fields, units and validity
 limits are recorded by the validation fixture. The verifier emits expected
 frequency rows; the solver does not consume them.
 
-The verifier may fit `M_eff` from the frozen solved branch. The fit reports
-estimate, uncertainty, covariance/conditioning, residuals, included field
-indices and model form. Fitted `M_eff` is a verifier output only. It cannot be
-written back into material input, reused as a Kittel demag delta, or used to
-rerun, retarget, reselect or retroactively certify the solver.
+The verifier fits `M_eff` from the frozen solved branch using the fixture-fixed
+model, field indices, weights and parameter bounds. It reports estimate,
+standard uncertainty, confidence interval, covariance, rank, dimensionless
+scaled-Jacobian condition number, residuals and included field indices. Fitted
+`M_eff` is a verifier output only. It cannot be written back into material
+input, reused as a Kittel demag delta, or used to rerun, retarget, reselect or
+retroactively certify the solver.
+
+The primary agreement metric is
+
+```text
+fitted_M_eff_relative_error =
+  abs(fitted_M_eff_A_per_m - M_eff_reference_A_per_m) /
+  abs(M_eff_reference_A_per_m)
+```
+
+`M_eff_reference_A_per_m` must be finite, nonzero and inside the fixture's
+predeclared physical range. Initial acceptance requires
+`fitted_M_eff_relative_error<=2e-2`; production requires `<=5e-3`. These are
+the existing 2% initial and 0.5% production K0-3 fit limits and remain separate
+from the frequency, mesh and airbox-truncation budgets.
+
+The fit is rejected, irrespective of agreement, when the scaled Jacobian is
+rank deficient, the covariance/uncertainty is absent or non-finite, a fitted
+parameter is pinned to an undeclared bound, or the fit uses fewer than the
+fixture-declared positive-field indices. It is also rejected when either staged
+diagnostic exceeds its limit:
+
+| Fit diagnostic | Initial | Production |
+|---|---:|---:|
+| `fitted_M_eff_standard_uncertainty / abs(M_eff_reference)` | `1e-2` | `2.5e-3` |
+| dimensionless scaled-Jacobian condition number | `1e8` | `1e6` |
+
+Parameter scaling and weights are fixture-fixed before solving and are emitted
+with the fit, so conditioning cannot be improved post hoc by rescaling or
+dropping inconvenient fields.
+
+The postsolve verifier executes in this order:
+
+1. recompute the canonical `scope_id` and validate the immutable solver hashes;
+2. reproduce and freeze `selection.v2.json` without loading expected
+   frequencies or `M_eff_reference`;
+3. load and validate the fixture-owned reference and oracle provenance;
+4. evaluate expected-frequency rows for the already selected branch;
+5. fit `M_eff` using only the predeclared model, fields, weights, scaling and
+   bounds;
+6. reject rank, covariance, uncertainty, conditioning, bound or field-coverage
+   failures before evaluating agreement;
+7. evaluate frequency, fitted-`M_eff`, mesh and truncation thresholds; and
+8. emit validation outcomes without modifying the request, selection, solver
+   artifact or solver certificate.
 
 For K0-3, compare both the prescribed analytical reference and the fitted
 curve. A good fit alone cannot pass if the fitted value is physically wrong;
@@ -270,6 +353,9 @@ Acceptance budgets are separate:
 | Aggregate fitted `M_eff` mesh delta | `2e-2` | `1e-2` |
 | Aggregate fitted `M_eff` truncation delta | `2e-2` | `5e-3` |
 | Maximum postsolve Kittel frequency error | `5e-2` | `2e-2` |
+| Fitted `M_eff` relative error against fixture reference | `2e-2` | `5e-3` |
+| Fitted `M_eff` relative standard uncertainty | `1e-2` | `2.5e-3` |
+| Fitted `M_eff` scaled-Jacobian condition number | `1e8` | `1e6` |
 | Poisson original constraint residual | `1e-6` | `1e-8` |
 
 If the last three levels are not monotone, the verifier must demonstrate a
@@ -308,6 +394,12 @@ validation/kittel_k0_pbc/summary.v2.json
 validation/kittel_k0_pbc/independence_audit.v1.json
 ```
 
+Every immutable solver artifact and postsolve validation artifact above carries
+the Chapter 24 canonical `scope_id`. A multi-level convergence or CPU/GPU
+aggregate may instead carry `verified_coverage_of=[scope_id,...]` with a
+machine-verifiable coverage rule. `validated_scope_id`, fixture names, run
+directories and abbreviated K0-3 tuples are not accepted aliases.
+
 `selection.v2.json` contains candidate scores and the frozen selected branch
 without expected frequencies. `points.v2.csv` may add expected frequencies and
 relative errors only after selection. The two convergence CSV files are
@@ -316,7 +408,7 @@ separate and contain raw unique run IDs and signatures.
 Each convergence row contains at least:
 
 ```text
-run_id, solver_artifact_sha256, validated_scope_id
+run_id, solver_artifact_sha256, scope_id or verified_coverage_of
 field_index, H0_A_per_m
 mesh_level, magnetic_h_m, magnetic_dof_count
 airbox_padding_top_m, airbox_padding_bottom_m, phi_dof_count
@@ -327,10 +419,39 @@ tangent_leakage_max_abs, periodic_seam_mismatch_max_abs
 ```
 
 Verifier-enriched rows additionally contain `expected_frequency_hz`,
-`relative_frequency_error` and the fit membership flag. Summary artifacts
-publish initial/production tolerance sets, raw row counts, distinct signature
+`relative_frequency_error` and the fit membership flag. `fit.v2.json` contains
+the complete `M_eff_reference` provenance, fit model/weights/scaling, fitted
+value, `fitted_M_eff_relative_error`, uncertainty/confidence interval,
+covariance/rank/condition number and all rejection reasons. Summary artifacts
+publish `scope_id` or `verified_coverage_of`, fixture/oracle/reference IDs and
+hashes, initial/production tolerance sets, raw row counts, distinct signature
 counts, field coverage, observed orders/fits, finest-two deltas, separate
-mesh/truncation budgets and final gate outcomes.
+frequency and fitted-`M_eff` mesh/truncation budgets, fit conditioning and
+uncertainty outcomes, and final gate outcomes.
+
+`fit.v2.json` and `summary.v2.json` expose these exact fit fields:
+
+```text
+M_eff_reference_A_per_m
+M_eff_reference_standard_uncertainty_A_per_m
+M_eff_reference_id
+M_eff_reference_oracle_id
+M_eff_reference_source_sha256
+fitted_M_eff_A_per_m
+fitted_M_eff_standard_uncertainty_A_per_m
+fitted_M_eff_relative_error
+fitted_M_eff_scaled_jacobian_condition_number
+fitted_M_eff_covariance_rank
+fitted_M_eff_initial_threshold
+fitted_M_eff_production_threshold
+fitted_M_eff_uncertainty_initial_threshold
+fitted_M_eff_uncertainty_production_threshold
+fitted_M_eff_condition_initial_threshold
+fitted_M_eff_condition_production_threshold
+fitted_M_eff_agreement_outcome
+fitted_M_eff_uncertainty_outcome
+fitted_M_eff_conditioning_outcome
+```
 
 ## 11. CPU/GPU parity and residency
 
@@ -375,15 +496,19 @@ mesh_convergence
 airbox_truncation_convergence
 kittel_frequency_agreement
 fitted_M_eff_agreement
+fitted_M_eff_uncertainty
+fitted_M_eff_conditioning
 cpu_gpu_parity when applicable
 gpu_residency when applicable
 ```
 
 `production_qualified` is legal only when every applicable outcome is `pass`,
-the exact `validated_scope` is non-empty, and chapter 24 is complete for the
-same immutable evidence bundle. `fast_ci_subset`, synthetic demag, absent raw
-levels, mixed mesh/padding variation, solver-side expected values, or
-analytical-value-based branch selection cap the result below production.
+the canonical `validated_scope` is complete, every artifact binds its
+`scope_id` or an accepted `verified_coverage_of`, and chapter 24 is complete
+for the same immutable evidence bundle. `fast_ci_subset`, synthetic demag,
+absent raw levels, mixed mesh/padding variation, solver-side expected values,
+ill-conditioned/uncertain fits, or analytical-value-based branch selection cap
+the result below production.
 
 The current contamination listed in section 2 blocks K0-3 production
 qualification until the specified runtime removal work is implemented and an
