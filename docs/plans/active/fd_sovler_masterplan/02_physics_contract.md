@@ -14,23 +14,32 @@ supersedes:
 
 Every backend must solve the same physics.
 
+The sole normative operator and unit dictionary is
+[`FrequencyOperatorDictionary.v1` in physics note 0831](../../../physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md).
+This document summarizes that dictionary; it does not define an alternative
+sign, unit, damping, linewidth, or observable convention.
+
 ## 1. Canonical ansatz and equation
 
 ```text
-m(r,t) = m0(r) + delta_m(r) exp(+i omega t)
+m(r,t) = m0(r) + Re(delta_m(r) exp(+i omega t))
 delta_m << m0
 m0 · delta_m = 0
-H_eff(r,t) = h_eff0(r) + delta_h_eff(r) exp(+i omega t)
+H_eff(r,t) = h_eff0(r) + Re(delta_h_eff(r) exp(+i omega t))
+gamma0 = mu0 * abs(gamma)
 ```
+
+All effective fields and drive phasors are in `A/m`. Here `gamma` is the
+gyromagnetic ratio magnitude in `rad/(s T)` and `gamma0` is the coefficient for
+`A/m` fields, in `rad s^-1 per (A/m)`.
 
 Linearized LLG:
 
 ```text
 i omega delta_m
-  = - gamma m0 x delta_h_eff
-    - gamma delta_m x h_eff0
+  = - gamma0 [m0 x delta_h_eff[delta_m] + delta_m x h_eff0]
     + i omega alpha m0 x delta_m
-    + linearized torque terms
+    + tau_lin[delta_m]
 ```
 
 The canonical phase convention is:
@@ -71,7 +80,7 @@ No user-supplied sinusoid belongs in the value. The solver attaches `exp(+i omeg
 Canonical projection into RHS:
 
 ```text
-b_cart = - gamma m0 x delta_h
+b_cart = - gamma0 (m0 x delta_h)
 b_tangent = T^T b_cart
 ```
 
@@ -146,35 +155,80 @@ h_eff0 = h_exchange0
 Dynamic:
 
 ```text
-delta_h_eff = delta_h_exchange[delta_m]
-            + delta_h_anisotropy[delta_m]
-            + delta_h_drive
-            + delta_h_DMI[delta_m]
-            + delta_h_demag[delta_m]
-            + delta_h_STT_equivalent[delta_m]
-            + delta_h_custom[delta_m]
+delta_h_eff[delta_m] = delta_h_exchange[delta_m]
+                         + delta_h_anisotropy[delta_m]
+                         + delta_h_DMI[delta_m]
+                         + delta_h_demag[delta_m]
+                         + delta_h_custom[delta_m]
+delta_h_total = delta_h_eff[delta_m] + delta_h_drive
 ```
+
+Linearized non-field torques belong to `tau_lin[delta_m]`; the external field
+drive appears once, in the canonical RHS.
 
 Fields are in `A/m` unless a source explicitly declares otherwise with conversion provenance.
 
-## 8. Internal real split
+## 8. Modal, driven, and internal real-split contract
 
-Allowed internal form:
-
-```text
-A(omega) = K - i omega M
-```
-
-Real split:
+The canonical modal and driven equations are:
 
 ```text
-[ K       +omega M ] [q_R] = [b_R]
-[ -omega M  K     ] [q_I]   [b_I]
+L q = lambda B q
+lambda = i omega
+(i omega B - L) q = b
+b = T^T[-gamma0 (m0 x delta_h_drive)]
 ```
 
-This is not the physics definition. It is an implementation form that must pass phase, drive, damping and macrospin sign gates.
+`B` denotes the damping-aware `B_alpha` of note 0831. In the physical
+energy-Hessian form, `L=K` and `B=-G` for `alpha=0`, so the modal equation is
+`K phi = -i omega G phi`.
 
-## 9. DMI status
+For the general complex driven operator,
+
+```text
+D(omega) = i omega B - L = D_R + i D_I
+[ D_R  -D_I ] [q_R] = [b_R]
+[ D_I   D_R ] [q_I]   [b_I]
+```
+
+The special case `[K,+omega*M;-omega*M,K]` is permitted only after the
+implementation explicitly maps `K=-L` and `M=B`. The real split is an algebraic
+representation, not a second physics convention.
+
+For `lambda=lambda_r+i lambda_i`, `omega=-i lambda`. The positive undamped
+branch has `lambda_i>0`, and
+`frequency_hz=Re(omega)/(2*pi)=lambda_i/(2*pi)`. A requested angular-frequency
+target maps to `sigma=i*omega_target`. A real PETSc/SLEPc build must encode that
+complex target through the explicit real-split transformed pencil; passing a
+real `EPSSetTarget(omega_target)` is forbidden unless a separately named
+real-frequency pencil and its mapping have been derived.
+
+## 9. Damping, linewidth, and absorbed power
+
+For the canonical phasor convention:
+
+```text
+omega_complex = omega_r + i Gamma
+exp(i omega_complex t) = exp(i omega_r t - Gamma t)
+Gamma > 0 for decay
+damping_rate_hz = Gamma/(2*pi)
+linewidth_fwhm_hz = Gamma/pi
+```
+
+The absorbed-power observable is the convention frozen by
+[note 0831](../../../physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md)
+and summarized with its SI derivation in
+[note 0700](../../../physics/0700-frequency-domain-linearized-llg.md):
+
+```text
+p_abs = -0.5*mu0*Ms*omega*Im(conj(h_drive) dot delta_m)
+observable = absorbed_by_magnetization
+```
+
+`delta_m` is dimensionless, so `Ms` is required. Positive Gilbert damping must
+produce positive absorbed power near resonance.
+
+## 10. DMI status
 
 ```text
 DMI volume operator: production only after Cartesian/tangent tests.
@@ -182,7 +236,7 @@ DMI frequency-domain boundary terms: experimental/unsupported unless separately 
 Only one DMI kind may be active at once.
 ```
 
-## 10. Minimal result JSON
+## 11. Minimal result JSON
 
 ```json
 {
@@ -193,6 +247,9 @@ Only one DMI kind may be active at once.
   "constraint": "m0_dot_delta_m_zero",
   "drive_kind": "dynamic_field_phasor_a_per_m",
   "effective_field_units": "A_per_m",
+  "operator_dictionary": "FrequencyOperatorDictionary.v1",
+  "eigenvalue_mapping": "lambda=i*omega",
+  "absorbed_power_observable": "absorbed_by_magnetization",
   "time_reconstruction": "m(t)=m0+Re(delta_m*exp(+i*omega*t))"
 }
 ```

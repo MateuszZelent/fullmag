@@ -102,3 +102,95 @@ strict matched mesh for periodic/Floquet FEM v1.
 ```text
 volume DMI after tests; frequency-domain DMI boundary terms experimental unless certified.
 ```
+
+## ADR-014 - Gyromagnetic coefficient and field units
+
+```text
+effective fields and drive phasors = A/m
+gamma = abs(gyromagnetic ratio) only when explicitly typed in rad/(s T)
+gamma0 = mu0 * abs(gamma), in rad s^-1 per (A/m)
+all A/m-field LLG and drive equations use gamma0
+```
+
+Authority: [`FrequencyOperatorDictionary.v1` in physics note 0831](../../../physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md).
+
+## ADR-015 - Canonical sign and eigenvalue dictionary
+
+```text
+phasor = exp(+i omega t)
+L q = lambda B q
+lambda = i omega
+driven operator = i omega B - L
+drive = T^T[-gamma0 (m0 x delta_h_drive)]
+energy-Hessian mapping at alpha=0: L=K, B=-G, K phi=-i omega G phi
+absorbed-power observable = absorbed_by_magnetization
+p_abs = -0.5*mu0*Ms*omega*Im(conj(h_drive) dot delta_m)
+```
+
+Modal, driven, reduced, CPU, GPU, and real-split adapters consume this one
+dictionary. They may not define local sign conventions.
+
+## ADR-016 - Poisson boundary and gauge tuple
+
+```text
+poisson_robin with beta>0 -> gauge_policy=none,
+                               gauge_reason=coercive_outer_boundary
+poisson_dirichlet -> gauge_policy=none,
+                     gauge_reason=coercive_outer_boundary
+pure_neumann -> gauge_policy=mean_zero_augmented,
+                gauge_reason=pure_neumann_nullspace
+```
+
+The tuple includes `outer_boundary_kind`, `gauge_policy`, and `gauge_reason`.
+Mean-zero weights come from the active scalar FE quadrature. Periodic lateral
+constraints do not imply a constant nullspace when the open boundary is
+coercive. Authority:
+[physics note 0830](../../../physics/0830-fem-poisson-airbox-modal-eigen.md).
+
+## ADR-017 - Spectral target in real PETSc/SLEPc
+
+```text
+lambda = lambda_r + i lambda_i
+omega = -i lambda
+positive undamped branch: lambda_i > 0
+frequency_hz = lambda_i/(2*pi)
+sigma = i*omega_target
+```
+
+A real PETSc/SLEPc build must use the explicit real-split transformed pencil to
+represent `sigma`. A real `EPSSetTarget(omega_target)` on the original
+`lambda=i omega` spectrum is forbidden unless a separately named
+real-frequency pencil and its mapping are derived and documented.
+
+## ADR-018 - Original-operator blockwise residual
+
+Modal Poisson-airbox acceptance uses the reconstructed descriptor residuals:
+
+```text
+r_q     = A_qq q + A_qphi phi - lambda B_qq q
+r_phi   = A_phiq q + P phi + c eta
+r_gauge = c^T phi
+eps_q = ||r_q|| / (||A_qq q|| + ||A_qphi phi|| + |lambda| ||B_qq q|| + eps)
+eps_phi = ||r_phi|| / (||A_phiq q|| + ||P phi|| + ||c eta|| + eps)
+eps_gauge = |r_gauge| / (||c|| ||phi|| + eps)
+eps_full = max(eps_q, eps_phi, eps_gauge)
+```
+
+The accepted residual is dimensionless and blockwise scaled as specified by
+notes 0830 and 0831. A transformed-, reduced-, preconditioned-, or
+backend-reported residual is diagnostic only and cannot replace or cap it.
+
+## ADR-019 - Damping and non-Hermitian modal policy
+
+```text
+omega_complex = omega_r + i Gamma
+Gamma > 0 means decay for exp(+i omega t)
+damping_rate_hz = Gamma/(2*pi)
+linewidth_fwhm_hz = Gamma/pi
+```
+
+Gilbert damping or nonconservative torque makes the pencil non-Hermitian.
+Hermitian-only eigensolvers are then forbidden. Direct modal response requires
+left and right eigenvectors, declared normalization, biorthogonality and
+conditioning diagnostics. A Petrov-Galerkin or rational Krylov alternative
+must report the original-operator residual and retain a full-solver fallback.

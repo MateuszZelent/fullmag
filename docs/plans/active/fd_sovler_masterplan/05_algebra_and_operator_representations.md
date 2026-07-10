@@ -12,12 +12,17 @@ supersedes:
 
 # Algebra and operator representations
 
+The normative sign, unit, and operator definitions are
+[`FrequencyOperatorDictionary.v1` in physics note 0831](../../../physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md).
+The equations below are a representation summary of that dictionary, not a
+second convention.
+
 ## 1. Layer separation
 
 ```text
-Physics:       Cartesian delta_m, constraint m0·delta_m=0
+Physics:       Cartesian delta_m, constraint m0·delta_m=0, fields in A/m
 Adapter:       delta_m = T q
-Algebra:       A(omega)x=b
+Algebra:       D(omega)q=(i omega B-L)q=b
 Representation: dense/sparse/full-coupled/Schur/modal/GPU
 Engine:        backend-specific solve
 ```
@@ -47,13 +52,30 @@ q in C^(2N)
 delta_m = T q
 ```
 
-Internal real-split convention:
+Canonical modal and driven forms:
 
 ```text
-A_real(omega) = [K, +omega M; -omega M, K]
+L q = lambda B q
+lambda = i omega
+D(omega) q = (i omega B - L) q = b
+b = T^T[-gamma0 (m0 x delta_h_drive)]
+gamma0 = mu0 * abs(gamma)
 ```
 
-must be linked to the COMSOL phase contract by tests.
+Here fields are in `A/m`, `gamma` is explicitly typed in `rad/(s T)`, and
+`gamma0` is in `rad s^-1 per (A/m)`. For `L=K` in the physical energy-Hessian
+form, `B=-G` at `alpha=0`, giving `K phi=-i omega G phi`.
+
+The general real split is:
+
+```text
+D(omega) = D_R + i D_I
+[ D_R  -D_I ] [q_R] = [b_R]
+[ D_I   D_R ] [q_I]   [b_I]
+```
+
+The special case `[K,+omega*M;-omega*M,K]` is valid only with the explicit
+mapping `K=-L` and `M=B`. Backends may not infer that mapping from matrix shape.
 
 ## 4. Full-coupled demag/airbox
 
@@ -72,6 +94,22 @@ Poisson/gauge/nullspace diagnostics
 field-split preconditioner
 Schur certification
 ```
+
+For the Poisson-airbox descriptor, the accepted residual is reconstructed on
+the original blocks:
+
+```text
+r_q     = A_qq q + A_qphi phi - lambda B_qq q
+r_phi   = A_phiq q + P phi + c eta
+r_gauge = c^T phi
+eps_full = max(eps_q, eps_phi, eps_gauge)
+```
+
+The boundary/gauge tuple follows
+[note 0830](../../../physics/0830-fem-poisson-airbox-modal-eigen.md): Robin with
+`beta>0` and Dirichlet use no gauge; pure Neumann uses the quadrature-assembled
+mean-zero augmentation. A lateral periodic constraint does not create a gauge
+nullspace when the open boundary is coercive.
 
 ## 5. Schur reduced
 
@@ -100,6 +138,28 @@ Frequency sweeps should use modal or reduced-basis response when certified:
 x(omega) ≈ V c(omega)
 ```
 
+The spectral mapping is:
+
+```text
+lambda = lambda_r + i lambda_i
+omega = -i lambda
+positive undamped branch: lambda_i > 0
+frequency_hz = Re(omega)/(2*pi) = lambda_i/(2*pi)
+sigma = i*omega_target
+```
+
+For real PETSc/SLEPc, `sigma` must be represented by the explicit real-split
+transformed pencil. A real `EPSSetTarget(omega_target)` on the original
+imaginary-eigenvalue spectrum is forbidden unless a separately named
+real-frequency pencil is derived and its mapping is published.
+
+Gilbert damping and nonconservative torques make the pencil non-Hermitian.
+Those paths must not use Hermitian-only solvers or right-eigenvector-only modal
+projection. Direct modal response requires left and right eigenvectors,
+declared normalization, biorthogonality and conditioning diagnostics; otherwise
+use a residual-certified Petrov-Galerkin/rational Krylov model or the full
+solver.
+
 Basis provenance must include:
 
 ```text
@@ -113,7 +173,26 @@ frequency window
 completeness certificate
 ```
 
-## 8. GPU device representation
+## 8. Damping and response observables
+
+```text
+omega_complex = omega_r + i Gamma
+exp(i omega_complex t) = exp(i omega_r t - Gamma t)
+Gamma > 0 for decay
+damping_rate_hz = Gamma/(2*pi)
+linewidth_fwhm_hz = Gamma/pi
+p_abs = -0.5*mu0*Ms*omega*Im(conj(h_drive) dot delta_m)
+observable = absorbed_by_magnetization
+```
+
+These are summaries of the canonical convention in
+[note 0831](../../../physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md),
+with the absorbed-power SI derivation in
+[note 0700](../../../physics/0700-frequency-domain-linearized-llg.md). They are
+not backend-selectable signs. Positive Gilbert damping must yield positive
+absorbed power near resonance.
+
+## 9. GPU device representation
 
 `gpu_device_krylov` requires device residency for:
 
