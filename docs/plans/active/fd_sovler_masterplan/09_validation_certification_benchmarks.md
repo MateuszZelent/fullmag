@@ -1,376 +1,194 @@
 ---
-title: Frequency-driven solver - validation, certification and benchmarks
-version: COMSOL-aligned v5.0 full-read canonical
-date: 2026-07-07
-status: canonical
-source_policy: derived only after full read of all uploaded planning documents and the Micromagnetics Module User's Guide V2.13 PDF
-supersedes:
-  - fd_solver_plan_FULL_PACK_COMSOL_ALIGNED.md
-  - fd_solver_plan_FULL_PACK_COMSOL_ALIGNED_V3.md
-  - fd_solver_plan_00_index.md through fd_solver_plan_11_decision_closures_adr.md old copies
+title: FEM frequency-domain validation, certification and benchmark gates
+version: COMSOL-aligned v5.1 decision-complete
+status: normative validation contract; no capability promotion implied
+role: validation
 ---
 
-# Validation, certification and benchmarks
+# Validation, certification and benchmark gates
 
-## 1. Physics gates
+## 1. Scope and promotion rule
 
-```text
-G1 phase convention and chirality under exp(+i omega t)
-G2 dynamic-field drive projection: b = -gamma T^T(m0 x delta_h)
-G3 Cartesian/tangent roundtrip and m0·delta_m constraint
-G4 zero-drive policy
-G5 relaxed equilibrium consistency
-G6 periodic/Floquet tangent-transfer
-G7 DMI status gate
-```
+This chapter defines independent acceptance gates for FEM frequency-domain
+`modal_eigen` and `driven_response`. It consumes the K0 Poisson-airbox
+algorithms in chapter 18, the nonzero-k Floquet-airbox algorithms in chapter
+23, and the physics contracts in notes 0700, 0830 and 0831. It does not record
+dated evidence and does not claim that any gate has run.
 
-## 2. Algebra gates
+Each gate has seven mandatory fields: **fixture**, **independent oracle**,
+**metric**, **initial tolerance**, **production tolerance**, **required
+artifacts**, and **promotable readiness cells**. A result may promote only the
+exact cells named by its accepted artifact bundle. Passing a nearby synthetic,
+CPU, K0, no-demag, modal, or tiny case cannot promote another cell.
 
-```text
-A1 real split equals complex form
-A2 full-coupled vs Schur explicit apply
-A3 full residual reconstruction from Schur solution
-A4 sparse/direct vs dense tiny
-A5 modal response vs dense/sparse sample points
-```
-
-## 3. Schur thresholds
+A readiness cell is the exact tuple:
 
 ```text
-tiny dense:     <= 1e-10
-CPU matrix-free <= 1e-8
-GPU/HYPRE       <= 1e-6 initially
+study_product
+device
+precision
+k_scope and sampled k domain
+dynamic_demag_scope
+geometry/material/equilibrium class
+boundary/gauge tuple
+FE order and mesh/DOF envelope
+operator and interaction set
+damping/nonconservative policy
+solver engine, preconditioner and target/sweep policy
 ```
 
-Runtime quality:
+The artifact records this tuple as `validated_scope`. `initial` means the gate
+is usable during implementation. `production` means it is eligible to satisfy
+chapter 24 for that exact scope. Production tolerances supersede initial
+tolerances; a fixture-specific physics note may tighten them but may not loosen
+them silently.
+
+Analytical values and trusted reference solutions are verifier-side data. They
+must not construct the production operator, choose its target, select a mode,
+set convergence, certify solver success, or alter the artifact under test.
+
+## 2. Common acceptance and convergence contract
+
+All numerical comparisons use double precision unless the cell explicitly
+states another qualified precision. Relative errors use a declared scale and
+an absolute floor stored in the artifact. Matrix/action comparisons use
 
 ```text
-eta = ||r - A P^-1 r|| / ||r||
+eps_action = ||y_test-y_oracle||_2 /
+  max(||y_oracle||_2, absolute_scale_floor).
 ```
+
+Modal and driven acceptance uses the reconstructed original, unscaled operator:
 
 ```text
-eta <= 0.30: good
-0.30-0.70: bounded run only unless pilot confirms
-0.70-0.90: weak, not default
->0.90: do not choose by default
->1.05: harmful, auto-disable unless forced debug
+eps_modal = max(eps_q, eps_phi, eps_gauge)
+eps_driven = max(eps_q, eps_phi, eps_gauge)
 ```
 
-## 4. Stagnation policy
+Library, transformed, preconditioned and tracked residuals remain separate
+diagnostics. None may cap or replace the original-operator residual.
 
-Do not run long 8192 solves when 64/256 show no contraction:
+Every convergence artifact must contain raw, distinct solve rows. It must
+identify the varied parameter, hold all other declared parameters fixed, and
+include at least three levels. Acceptance requires one of:
 
-```text
-if relres_256 / relres_0 > 0.9 and relres_256 > 1e-2:
-    status = solve_error
-    stop_reason = stagnated
-```
+1. monotone entry into the asymptotic regime followed by a finest-two delta;
+2. a documented asymptotic fit with residual and confidence diagnostics when
+   strict monotonicity is not expected; or
+3. Richardson extrapolation when a stable observed order is available.
 
-## 5. Benchmark matrix
+Where an order is applicable, publish `observed_order`. Always publish the raw
+levels, `finest_two_relative_delta`, any `richardson_extrapolated_value`, and
+the fit residual. Mesh error and airbox/truncation error have separate budgets.
+Duplicated synthetic rows, relabelled copies of one solve, or rows that reuse
+one numerical result under several levels fail the gate.
 
-| Case | Purpose | Required backends |
-|---|---|---|
-| macrospin | phase/drive/damping | dense Cartesian/tangent |
-| macrospin/Kittel k0 field sweep | eigen k=0 field scaling and thin-film FMR | modal eigen artifact verifier |
-| standing spin waves | exchange/eigen | modal + sparse sample |
-| skyrmion small | nonuniform m0 | relaxed texture + tangent gates |
-| thin-film demag small | full vs Schur | full-coupled + Schur + sparse |
-| periodic antidot small | PBC/Floquet/demag | mesh certificate + full-coupled |
-| periodic antidot large | production | full-coupled/Schur/GPU when certified |
-| wide sweep | speed | modal-reduced + sparse/direct samples |
+## 3. Physics gates
 
-## 6. Current status after full read
+| Gate | Fixture | Independent oracle | Metric | Initial tolerance | Production tolerance | Required artifacts | Promotable readiness cells |
+|---|---|---|---|---|---|---|---|
+| PHY-1 units, phasor and Larmor | Uniform magnet, positive bias sweep, no demag, no damping, K0 | Closed-form `f=gamma0 H/(2*pi)` evaluated only after branch selection; independent SI-token audit | Maximum/median relative frequency error; `lambda=i*omega`; gamma/mu0 consistency | max `2e-2`; median `1e-2`; mapping/token mismatches `0` | max `5e-3`; median `2e-3`; mapping/token mismatches `0` | `validation/physics/larmor.v1.json`, selected branch rows, solver diagnostics | `modal_eigen/*/k0/demag_none`; driven cells only through PHY-4 |
+| PHY-2 demag sign and energy | Uniformly magnetized sphere and at least two ellipsoids, open boundary | Analytical demag tensor and positive magnetostatic energy, generated outside assembly | Componentwise field error, energy error, sign failures | field/energy `<=3e-2`; sign failures `0` | field/energy `<=1e-2`; sign failures `0` | `validation/physics/demag_ellipsoid.v1.json`, raw mesh/padding rows | K0 demag cells for the evidenced BC/geometry envelope |
+| PHY-3 Kittel thin film | Chapter 15 K0-3 real-film suite | Postsolve Kittel evaluator and postsolve fitted `M_eff`; neither is a solver input | Field-sweep error plus separate mesh and truncation budgets | max Kittel `5e-2`; mesh `2e-2`; truncation `2e-2` | max Kittel `2e-2`; mesh `1e-2`; truncation `5e-3` | Chapter 15 Kittel summary, points and convergence artifacts | `modal_eigen/{cpu,gpu}/k0/periodic_airbox_k0` only after all predecessor gates |
+| PHY-4 modal/driven resonance | Same assembled blocks, physical transverse drive, frequency sweep bracketing independently selected modes | Driven full solve is the modal oracle and modal spectrum is the driven-location oracle; neither selects the other | Resonance-frequency delta, complex observable delta, original residual | frequency `1e-2`; observable `5e-2`; residual `1e-6` | frequency `2e-3`; observable `1e-2`; residual `1e-8` | spectrum, response sweep, point diagnostics and cross-link artifact | Matching modal and driven cells only |
 
-Patch queue reports many native contract gates already green for Patch D-J slices. The G5 relaxed-equilibrium gate now has native coverage for the missing accepted `LinearizationState` planner case and for builder-level v5 reject reasons/signature mismatches, verified by `just verify-fem-frequency-domain-native-contract` on 2026-07-07.
+## 4. Manufactured assembly gates
 
-The modal/eigen k0 validation path now has a dedicated artifact-level Kittel
-gate: `scripts/verify_fem_frequency_domain_eigen_artifacts.py
---require-k0-kittel-field-sweep`. It requires a zero-k branch over at least
-three bias-field samples and checks either the macrospin Larmor law or the
-in-plane thin-film Kittel formula declared in
-`metadata.execution_plan.backend_plan.k0_kittel_validation`. This is the first
-promotion gate before using larger periodic antidot or periodic-airbox modal
-cases as evidence.
+| Gate | Fixture | Independent oracle | Metric | Initial tolerance | Production tolerance | Required artifacts | Promotable readiness cells |
+|---|---|---|---|---|---|---|---|
+| ASM-1 scalar Poisson BC/gauge | Manufactured P1 potential/source on Robin, Dirichlet and pure-Neumann shared domains | Symbolic potential differentiated outside the FEM assembler | L2/H1 error, observed order, boundary residual, gauge residual | L2 order `>=1.7`; H1 order `>=0.8`; residuals `<=1e-7` | L2 order `>=1.9`; H1 order `>=0.95`; residuals `<=1e-9` | `validation/k0_poisson_airbox/manufactured_poisson.v1.json`, raw levels | K0 modal/driven demag cells for each passed BC/gauge tuple |
+| ASM-2 magnetic/scalar reciprocity | Deterministic element fixtures plus sphere/ellipsoid assembled meshes | Separate element quadrature implementation and energy variation identity | Element/global adjoint-energy relative error; sign-negative-control outcome | `<=1e-9`; negative control must fail | `<=1e-11`; negative control must fail | `validation/k0_poisson_airbox/reciprocity.v1.json` | K0 demag cells using the evidenced material/quadrature order |
+| ASM-3 full descriptor assembly | Tiny real shared-domain P1 cases for every BC/gauge tuple | Independently assembled dense descriptor and seeded random-vector actions | Per-block/action error; ordering/signature mismatch count | action `<=1e-9`; mismatch count `0` | action `<=1e-11`; mismatch count `0` | assembly section of solver diagnostics and `descriptor_parity.v1.json` | Exact K0 modal/driven CPU cells; GPU only after GPU parity |
+| ASM-4 analytical-input isolation | Same physical problem solved with absent, perturbed and nonsensical Kittel verifier metadata | Hash/action invariance oracle; solver request inspection | Changes in blocks, target/window, preconditioner, selected spectrum before verifier, certificate or solve status | all changes `0` | all changes `0` | `validation/k0_poisson_airbox/analytical_isolation.v1.json` | Every Kittel-dependent promotion cell; failure blocks all production qualification |
 
-PA-E1 dense Poisson-airbox modal-eigen oracle evidence from 2026-07-08:
-`just verify-fem-frequency-domain-eigen-k0-poisson-airbox-dense-oracle`
-passed through the managed FEM runtime route. The gate builds and runs
-`fem_poisson_airbox_eigen_oracle_contract`, which verifies the synthetic dense
-full-coupled algebra for `k=0`: mean-zero augmented Poisson gauge,
-matrix-free Schur apply vs explicit Schur, full descriptor residual
-reconstruction, positive-frequency branch selection using
-`frequency_hz = imag(lambda)/(2*pi)`, synthetic demag-factor Kittel-like
-frequency, sign-flip negative detection, explicit rejection of production
-`demag_kind=periodic_airbox_k0` claims in PA-E1, and
-`poisson_airbox_eigen_oracle.v1` diagnostics JSON. This closes the PA-E1
-algebraic oracle gate only; real MFEM sparse/SLEPc Poisson-airbox eigensolve,
-Schur MatShell, K0-3 thin-film demag validation, and GPU modal parity remain
-separate later gates.
+## 5. Algebra parity gates
 
-PA-E2 CPU sparse/full-coupled SLEPc modal-eigen evidence from 2026-07-08:
-`just verify-fem-frequency-domain-eigen-k0-poisson-airbox-cpu-slepc`
-passed through the managed FEM runtime route. The gate builds and runs
-`fem_poisson_airbox_modal_eigen_slepc_contract`, which verifies the internal
-`PoissonAirboxEigenBlockProblem` path: monolithic SeqAIJ assembly of the full
-augmented descriptor pencil, mean-zero augmented Poisson gauge, SLEPc
-Krylov-Schur shift-invert with PCLU/pivoting factorization, positive-frequency
-branch selection, full descriptor residual reconstruction from the returned
-eigenvector, gauge residual, rejection of PA-E1 synthetic demag kinds, and
-frequency agreement against the PA-E1 dense oracle. The broader
-`just verify-fem-frequency-domain-native-contract` also passed after PA-E2.
-This closes the PA-E2 tiny sparse/full-coupled SLEPc gate only; Schur
-MatShell, K0-3 thin-film demag validation, real FEM-airbox mesh extraction,
-and GPU modal parity remain separate later gates.
+| Gate | Fixture | Independent oracle | Metric | Initial tolerance | Production tolerance | Required artifacts | Promotable readiness cells |
+|---|---|---|---|---|---|---|---|
+| ALG-1 operator dictionary | Seeded complex tangent vectors over admitted local/exchange/demag blocks | Direct application of note 0831's `L`, `B_alpha` and `i*omega*B_alpha-L` dictionary | Modal/driven action relative error and sign/unit mismatch count | action `<=1e-9`; mismatches `0` | action `<=1e-11`; mismatches `0` | `validation/algebra/operator_dictionary.v1.json` | All exact operator-set cells |
+| ALG-2 complex/real split | Multi-mode interior-window descriptor with known complex representation | Complex arithmetic path versus named `real_frequency_rotated` realization | Action error, frequency-cluster error, invariant-subspace sine, J-closure | action `1e-9`; cluster/subspace `1e-7`; J failures `0` | action `1e-11`; cluster/subspace `1e-9`; J failures `0` | `validation/k0_poisson_airbox/interior_window.v1.json` | CPU modal cells using the passed scalar representation |
+| ALG-3 full/Schur parity | Same descriptor and exact-signature Schur certificate | Full descriptor direct solve | Modal cluster, driven complex response and reconstructed full residual | modal `1e-6`; response `1e-5`; residual `1e-6` | modal `1e-8`; response `1e-7`; residual `1e-8` | `validation/algebra/full_schur_parity.v1.json` and certificate | Only Schur-engine cells with the exact certificate signature |
+| ALG-4 dense/sparse/action parity | Bounded deterministic descriptors with multiple sparsity patterns | Dense oracle assembled independently from sparse and MatShell paths | Matrix/action error and accepted/rejected outcome equality | `<=1e-9`; outcome mismatches `0` | `<=1e-11`; outcome mismatches `0` | `validation/algebra/dense_sparse_action.v1.json` | Exact CPU engines; no physical promotion without physics gates |
 
-PA-E2/PA-E4b runner-output seam evidence from 2026-07-08:
-the C++ modal-eigen result JSON now includes the Poisson-airbox DOF counters
-and residual fields needed by K0-3 artifacts:
-`q_dof_count`, `phi_dof_count`, `augmented_phi_dof_count`,
-`poisson_constraint_relative_residual`, and
-`relative_reference_frequency_error`. The runner has a focused parser that maps
-only `solver_adapter=k0_poisson_airbox_cpu_full_coupled_slepc` plus
-`demag_kind=periodic_airbox_k0` into
-`K0KittelPeriodicAirboxDemagMetrics`, rejecting generic modal JSON. Verified
-by `CARGO_TARGET_DIR=/tmp/fullmag-target cargo test -p fullmag-runner
-native_poisson_airbox`, `just
-verify-fem-frequency-domain-eigen-k0-poisson-airbox-cpu-slepc`, and `just
-verify-fem-frequency-domain-native-contract`. This is still a data-contract
-bridge, not K0-3 real thin-film validation; real FEM-airbox mesh extraction and
-small-film matrix assembly remain open.
+## 6. Modal gates
 
-PA-E3 CPU Schur MatShell evidence from 2026-07-08:
-`just verify-fem-frequency-domain-eigen-k0-poisson-airbox-schur-matshell`
-passed through the managed FEM runtime route after rebuilding the managed
-runtime bundle. The gate builds and runs
-`fem_poisson_airbox_schur_matshell_contract`, which verifies the internal
-`certify_poisson_airbox_schur_matshell_cpu` path: PETSc MatShell creation,
-matrix-free Schur apply
-`S(q) = A_qq q + A_qphi phi(q)`, reuse of the same mean-zero augmented Poisson
-setup, Schur-specific rejection of invalid `phi_mean_weights` before Schur
-certificate key construction with
-`poisson_airbox_schur_requires_mean_zero_gauge`, sampled MatShell-vs-explicit Schur agreement, full sparse PA-E2
-reference frequency agreement, full descriptor residual reconstruction, Schur
-certificate key emission with mesh/material/m0/h_eff0/static_demag/boundary/k/
-gauge/operator signatures, and planner policy requiring an explicit
-`schur_reduced` request in addition to an accepted certificate. The broader
-`just verify-fem-frequency-domain-native-contract` also passed after PA-E3.
-This closes the PA-E3 tiny Schur MatShell certification gate only; K0-3
-thin-film demag validation, real FEM-airbox mesh extraction, public Python/API/
-IR exposure, and GPU modal parity/runtime remain separate later gates.
+| Gate | Fixture | Independent oracle | Metric | Initial tolerance | Production tolerance | Required artifacts | Promotable readiness cells |
+|---|---|---|---|---|---|---|---|
+| MOD-1 finite-mode and full residual | Descriptors containing finite, algebraic, zero and rejected modes | Direct dense finite-spectrum classification plus original block action | Classification mismatch, `eps_full`, positive-branch/mapping mismatch | mismatches `0`; `eps_full<=1e-6` | mismatches `0`; `eps_full<=1e-8` | spectrum and solver diagnostics with all block residuals | Exact modal cells |
+| MOD-2 interior-window completeness | At least three positive modes around a nonzero interior target and a wrong-axis negative control | Dense full spectrum outside the production selection path | Missing/extra physical classes, multiplicity/subspace error, negative-control outcome | missing/extra `0`; subspace `<=1e-6`; negative control fails | missing/extra `0`; subspace `<=1e-8`; negative control fails | `validation/k0_poisson_airbox/interior_window.v1.json` | Exact modal target/window/engine cells |
+| MOD-3 shape-first branch tracking | Field or k sweep with crossings and a uniform branch | Mass-inner-product Hungarian/cluster tracker using exported modes; no analytical frequency | Uniform overlap, previous-point overlap, tangent leakage, seam mismatch, branch gaps | uniform `>=0.85`; overlap `>=0.70`; leakage/seam `<=1e-6`; gaps `0` | uniform `>=0.95`; overlap `>=0.85`; leakage/seam `<=1e-8`; gaps `0` | `eigen/branches.v2.json`, mode metadata/fields and selection audit | Exact modal sweep/path cells, including chapter 15 Kittel |
+| MOD-4 damped/nonnormal spectrum | Small damped or nonconservative problem with left/right vectors | Independent dense QZ or direct response oracle | Eigenvalue cluster, biorthogonality, damping sign, response reconstruction | cluster/biorthogonality `1e-6`; sign failures `0`; response `1e-4` | `1e-8`; sign failures `0`; response `1e-6` | damped spectrum, left/right metadata and response cross-check | Only exact damped/nonconservative cells |
 
-G6 now has certificate-level native coverage for bijective periodic pair maps, duplicate-pair rejection, schema marker `periodic_mesh_certificate.v5`, stable order-independent `fnv1a64:` magnetic/airbox pair-map fingerprints, canonical `sha256:` magnetic/airbox pair-map hashes, explicit nonidentity tangent-frame transfer storage as row-major `G_pair` 2x2 blocks, rejection of inconsistent paired equilibrium directions with `periodic_m0_seam_mismatch`, optional same-step `H_demag0` seam rejection with `periodic_static_demag_seam_mismatch`, and required Poisson gauge policy rejection with `periodic_poisson_gauge_policy_missing`. The full certificate-level pair-map, `G_pair`, seam/gauge, fingerprint, and `sha256:` hash slice passed `just verify-fem-frequency-domain-native-contract` after a managed runtime rebuild on 2026-07-07.
+## 7. Driven gates
 
-Runtime artifact integration has begun: `response/diagnostics/input_preflight.v1.json`
-now includes a `periodic_mesh_certificate.v5` preflight candidate section with
-canonical `sha256:` magnetic and airbox pair-map hashes for the actual
-frequency-response lane input. The remaining gap is production integration and
-larger-case validation, especially complete relaxed texture handoff, native
-runtime consumption of periodic/Floquet `G_pair`, propagation of the accepted
-seam/gauge/fingerprint/hash certificate beyond preflight into every solver-lane
-artifact, full-coupled FEM field-split, certified Schur on real periodic-airbox
-workloads, and true runtime device FGMRES.
+| Gate | Fixture | Independent oracle | Metric | Initial tolerance | Production tolerance | Required artifacts | Promotable readiness cells |
+|---|---|---|---|---|---|---|---|
+| DRV-1 physical RHS and original residual | Nonzero transverse RF drive plus zero-RHS negative/degenerate case | Direct projected RHS from `T^T[-gamma0(m0 x delta_h)]` and direct operator action | RHS action error, `eps_full`, stop-reason mismatch | RHS `1e-9`; residual `1e-6`; mismatches `0` | RHS `1e-11`; residual `1e-8`; mismatches `0` | response diagnostics and per-frequency artifacts | Exact driven engine/drive cells |
+| DRV-2 full/field-split/Schur | Same blocks and sweep through all admitted CPU engines | Sparse-direct full solve on bounded samples | Complex field/observable delta, residual and accepted/rejected equality | field/observable `1e-4`; residual `1e-6`; mismatches `0` | `1e-6`; residual `1e-8`; mismatches `0` | `validation/response/engine_parity.v1.json` | Each engine independently, only over sampled size/frequency envelope |
+| DRV-3 reduced response | Resonant and off-resonant sweep with omitted-mode negative control | Full coupled solve not used to construct the reduced basis | Observable/field error, original residual, enrichment/fallback outcome | error `1e-2`; residual `1e-5`; negative control rejects/enriches | error `2e-3`; residual `1e-7`; negative control rejects/enriches | basis certificate, response sweep and reduction audit | Exact ROM method/window/operator cells only |
 
-Follow-up evidence from 2026-07-08: the runtime artifact verifier now requires
-periodic-airbox solved bundles to carry a consistent
-`input_preflight.periodic_mesh_certificate` snapshot in both
-`response/diagnostics/solver.v1.json` and
-`frequency_domain/manifest.v1.json`. It validates the v5 schema marker,
-canonical pair-map hash token format, and exact magnetic/airbox pair-map hash
-agreement between the two artifact surfaces. This closes a verifier-level
-propagation check for the certificate hashes; it still does not mean the native
-solver consumes accepted `G_pair` transfer blocks.
+## 8. Periodic and Floquet gates
 
-Second follow-up evidence from 2026-07-08: frequency-point artifacts now carry
-the same `input_preflight.periodic_mesh_certificate` snapshot inside
-`response/frequency_points/frequency_XXXX.json` under
-`demag_contribution.input_preflight`. The verifier rejects a frequency-point
-bundle when its magnetic or airbox pair-map hash differs from
-`response/diagnostics/solver.v1.json`. The refreshed managed
-`just run-fem-periodic-antidot-frequency-driven-managed-headless` target passed
-with `GMRES=2006/8192`, `relative_residual_l2_norm=9.994399206910052e-4`, and
-matching certificate hashes in solver diagnostics, manifest diagnostics, and
-`frequency_0000.json`. This extends hash propagation into per-frequency
-demag-result artifacts; accepted native `G_pair` consumption remains open.
+| Gate | Fixture | Independent oracle | Metric | Initial tolerance | Production tolerance | Required artifacts | Promotable readiness cells |
+|---|---|---|---|---|---|---|---|
+| PBC-1 equivalence classes and frame transport | Corner/edge-rich periodic mesh with varying tangent frames | Independent graph closure and Cartesian reconstruction | Missing/duplicate members, cycle phase/frame residual, orientation/topology mismatch | counts `0`; phase `<=1e-10` rad; frame `<=1e-9` | counts `0`; phase `<=1e-12` rad; frame `<=1e-11` | periodic mesh certificate and pair/class artifacts | Exact periodic K0/nonzero-k cells using that topology |
+| PBC-2 K0 reduction parity | Same primitive cell through chapter 18 and chapter 23 at Gamma | Direct equality of assembled K0 blocks/actions after explicit permutation | Per-block/action error, gauge transition mismatch, spectrum/response delta | action `1e-9`; observable `1e-6`; mismatches `0` | action `1e-11`; observable `1e-8`; mismatches `0` | `validation/floquet/k0_limit.v1.json` | Nonzero-k cells only after their matching K0 cell passes |
+| PBC-3 manufactured Bloch Poisson | Complex manufactured potential/source at axial and oblique signed k | Independent matched-mesh `C_phi(k)^H P C_phi(k)` oracle or separate refinement sequence | L2/H1 order, phase/flux/seam error, sign-negative-control outcome | L2 `>=1.7`; H1 `>=0.8`; seam/flux `<=1e-6`; negative control fails | L2 `>=1.9`; H1 `>=0.95`; seam/flux `<=1e-8`; negative control fails | `validation/floquet/manufactured_poisson.v1.json`, raw levels | Nonzero-k demag cells for the exact k/BC domain |
+| PBC-4 production/oracle operator parity | Signed axial/oblique k samples with all five Task 7 blocks | Independent `C_m(k)`/`C_phi(k)` reduction when matching basis exists; otherwise independent three-level sequence | Raw action error or bounded convergence/observable error; demag sign | raw `1e-8` or convergence `5e-2`; sign failures `0` | raw `1e-10` or convergence `2e-2`; sign failures `0` | Floquet parity certificate with declared comparison mode | Exact nonzero-k operator-set cells |
+| PBC-5 DE/BV dispersion and symmetry | Signed DE/BV k paths, K0 endpoint, declared symmetry-map cases | Postsolve analytical/semi-analytical limits and transformed symmetry pairs | Branch/cluster error, K0 limit, transformed `k<->-k` error | `<=5e-2`; K0 `<=1e-2`; symmetry `<=1e-3` | `<=2e-2`; K0 `<=2e-3`; symmetry `<=1e-5` | dispersion, branches, mode fields, symmetry-map and convergence artifacts | Exact modal nonzero-k cells; driven cells need matched response evidence |
 
-Third follow-up evidence from 2026-07-08: the verifier now rejects
-periodic-airbox certificate snapshots that are internally nonsensical even when
-all artifact copies agree. The solved-bundle checks require positive magnetic
-and airbox pair counts, canonical `periodic_mesh_certificate.v5` schema,
-canonical pair-map hash token format, boolean
-`tangent_frame_transfer_required`, and a known
-`tangent_frame_transfer_artifact_status` value. Focused tests cover both
-`magnetic_pair_count=0` and an unknown transfer status.
+## 9. CPU/GPU parity gates
 
-Fourth follow-up evidence from 2026-07-08: the runtime artifact verifier now
-honors the v5 bounded-run stagnation policy. `--allow-solve-error` no longer
-requires a failed GMRES bundle to reach `max_iterations_for_frequency` when the
-solver reports `stop_reason=stagnated`, `stagnation_detected=true`, matching
-`stagnation_iteration`, `stagnation_relative_residual_ratio > 0.9`, and
-`relative_residual_l2_norm > 1e-2`. Focused tests cover an early
-`total_iteration_count=256` / `max_iterations_for_frequency=8192` periodic
-airbox solve-error bundle and the existing bounded solve-error rejection cases.
+| Gate | Fixture | Independent oracle | Metric | Initial tolerance | Production tolerance | Required artifacts | Promotable readiness cells |
+|---|---|---|---|---|---|---|---|
+| GPU-1 block and operator apply | Identical CPU/GPU problem signatures and seeded vectors over each qualified block | Qualified CPU double path | Per-block/action and reconstructed-field relative error | `<=1e-8` | `<=1e-10` | `validation/cpu_gpu/operator_parity.v1.json` | GPU cells for the exact operator/k/demag scope |
+| GPU-2 scalar and shifted solves | Identical Poisson and shifted systems with repeated solves | Qualified CPU residual-certified solve | Solution/action error, contraction, original residual and setup reuse | solution `1e-7`; residual `1e-6`; reuse failures `0` | solution `1e-9`; residual `1e-8`; reuse failures `0` | scalar/shifted parity plus transfer audit | GPU solver/preconditioner cells only |
+| GPU-3 modal parity | Exact CPU/GPU modal bundles including degeneracies | Qualified CPU cluster/subspace result | Frequency cluster, invariant-subspace sine, residual/outcome mismatch | cluster/subspace `1e-6`; residual `1e-6`; mismatches `0` | cluster/subspace `1e-8`; residual `1e-8`; mismatches `0` | `validation/k0_poisson_airbox/cpu_gpu_parity.v1.json` or Floquet equivalent | Exact GPU modal cells |
+| GPU-4 driven parity | Exact CPU/GPU complex sweeps | Qualified CPU full response | Complex field/observable error, residual and stop-reason mismatch | error `1e-5`; residual `1e-6`; mismatches `0` | error `1e-7`; residual `1e-8`; mismatches `0` | response CPU/GPU parity and point diagnostics | Exact GPU driven cells |
 
-Fifth follow-up evidence from 2026-07-08: the verifier now has an explicit
-future promotion gate,
-`--require-accepted-periodic-mesh-certificate`. This flag requires solved or
-bounded solve-error periodic-airbox bundles to report
-`input_preflight.periodic_mesh_certificate.tangent_frame_transfer_artifact_status`
-as `accepted_native_certificate_consumed` and also requires
-`tangent_frame_transfer_block_count == magnetic_pair_count` plus a canonical
-`tangent_frame_transfer_blocks_row_major_2x2_sha256` token. The default
-solved-bundle verifier still accepts the current
-`pending_native_certificate_consumption` compatibility state, so this does not
-claim that the present solver consumes `G_pair`; it creates a concrete artifact
-gate for the implementation that will.
+CPU/GPU parity never promotes CPU evidence into GPU residency. Single precision
+requires its own error budget and physics qualification; double-precision
+parity cannot promote a single-precision cell.
 
-Sixth follow-up evidence from 2026-07-08: the Rust frequency-response input
-preflight candidate now derives deterministic tangent-frame transfer-block
-evidence from the compact magnetic periodic pairs and relaxed `m0` slice. The
-candidate certificate publishes `tangent_frame_transfer_block_count` and
-`tangent_frame_transfer_blocks_row_major_2x2_sha256` when the C++-compatible
-tangent frames can be built from unit `m0`. The certificate status remains
-`pending_native_certificate_consumption`, so this is transfer-block provenance,
-not accepted solver-lane consumption.
+## 10. Performance and residency gates
 
-Seventh follow-up evidence from 2026-07-08: K0-3 thin-film demag Kittel
-validation now has a first synthetic-demag managed runtime gate. The verifier
-flag `--require-k0-kittel-demag` requires `case_id=K0-3`, model
-`thin_film_in_plane`, supported demag-kind metadata, and matching K0-3 metadata
-in `validation/kittel_k0_pbc/summary.v1.json` and `points.v1.csv`. The
-implemented runtime slice is explicitly `demag_kind=synthetic_demag_factor`
-with `production_periodic_airbox_claim=false`; it validates branch/artifact
-plumbing against `sqrt(H0(H0+M_eff))` but does not claim real periodic-airbox
-Poisson demag. `just verify-fem-frequency-domain-eigen-k0-kittel-demag-cpu`
-now passes through the managed FEM runtime route. The slice also hardens
-planner and runner gates so gamma-only K0-3 `synthetic_demag_factor` Floquet
-field sweeps can execute while ordinary Floquet dynamic demag remains rejected.
-The verifier accepts `binary_compatibility_exports` mode-field metadata for
-this synthetic K0-3 artifact class as well as zarr-backed mode fields.
+| Gate | Fixture | Independent oracle | Metric | Initial tolerance | Production tolerance | Required artifacts | Promotable readiness cells |
+|---|---|---|---|---|---|---|---|
+| PERF-1 GPU hot-loop residency | At least one restart and enough iterations to exercise operator and preconditioner reuse | Transfer counters plus profiler/runtime trace from an independent instrumentation layer | Per-iteration H2D/D2H transfers, hidden host solve count, hot-loop buffer locations | all forbidden counts `0`; all hot-loop buffers `device` | same, with no waiver | `gpu_transfer_audit.v1.json` and trace summary | GPU modal or driven cells only; probes cannot satisfy it |
+| PERF-2 persistent setup and memory | Repeated k/frequency/target solves within one unchanged signature, plus signature-change invalidation | Allocation tracker and context-key audit | Rebuild count, leaked bytes, peak device/host bytes, invalid reuse | unchanged-signature rebuilds `0`; leaks `0`; peak within declared initial envelope | same; peak `<=1.05` of accepted release baseline | context lifecycle and memory artifact | Exact persistent GPU engine cells |
+| PERF-3 runtime envelope | Checked-in small, medium and largest-qualified workloads with fixed hardware/software identity | Previous accepted release baseline and CPU reference where applicable | Median and p95 wall time, setup/solve split, iterations, throughput | p95 `<=1.25` baseline or explicitly lower provisional ceiling | p95 `<=1.10` accepted baseline; no unexplained iteration regression | benchmark manifest, raw samples and environment identity | Exact engine/size/hardware envelope only |
+| PERF-4 bounded scaling | At least three distinct DOF levels without duplicated rows | Complexity fit and memory accounting independent of solver success | Observed time/memory slope and out-of-memory boundary | finite fit; no superlinear memory beyond declared algorithm | fitted slope within declared engine model plus `10%`; no leak or hidden dense allocation | raw scaling table and fit artifact | Exact size envelope, not larger unmeasured problems |
 
-Eighth follow-up evidence from 2026-07-08: the PA-E2 Poisson-airbox modal
-eigensolver now consumes minimal periodic-mesh certificate metadata at the
-native descriptor and C ABI boundary. The accepted schema token is
-`periodic_mesh_certificate.v5`; magnetic and airbox pair counts must be
-positive; missing metadata is rejected with
-`poisson_airbox_eigen_requires_periodic_mesh_certificate`; and diagnostics
-record the consumed schema and pair counts. Verified gates:
-`just verify-fem-frequency-domain-eigen-k0-poisson-airbox-cpu-slepc`,
-`just verify-fem-frequency-domain-native-contract`, the focused Rust ABI layout
-test, and the focused Rust runner native-Poisson-airbox tests. This gate proves
-certificate plumbing, not final real-mesh full-coupled Poisson assembly.
+Performance gates are not correctness substitutes. A slower but bounded CPU
+cell may qualify if it meets its declared product envelope; a GPU cell cannot
+qualify as device resident without PERF-1 even when wall time is low.
 
-Ninth follow-up evidence from 2026-07-08: PA-E2 now has a negative native gate
-against decoupled demag blocks. A valid-shape CSR descriptor with zero
-`A_qphi` and zero `A_phiq` entries is rejected with
-`poisson_airbox_eigen_requires_full_coupled_blocks`; the passing fixture still
-requires nonzero q-phi and phi-q coupling and full residual reconstruction.
-This prevents reporting a no-demag eigenproblem as `periodic_airbox_k0`.
+## 11. Artifact and provenance gates
 
-Tenth follow-up evidence from 2026-07-08: the Rust runner now guards the
-modal-window dispatch boundary by requiring a structured PA-E4b payload for
-K0-3 validation requests that ask for `demag_kind=periodic_airbox_k0`. A first
-macrocell/Kittel payload builder now constructs nonzero `A_qphi` and `A_phiq`
-CSR blocks, attaches `poisson_airbox_block_problem` to
-`NativeModalEigenRequest`, and keeps ordinary gamma/Floquet native modal-window
-eligibility unchanged. The builder requires positive magnetic and airbox
-periodic pair counts derived from mesh element markers and periodic node pairs,
-so a K0-3 request without real pair maps is rejected instead of being promoted
-with synthetic counts. It also requires positive airbox geometry metadata:
-`air_box_config.factor` and mesh extent must both be positive. Payload
-dimensions now scale with real pair-map counts (`q=2*magnetic_pairs`,
-`phi=2*airbox_pairs`) instead of remaining fixed at the toy `2/2` size. This
-payload also weights `A_phiphi` by airbox periodic-pair geometry, so the
-Poisson block is no longer identical for equal-count but different-length
-airbox maps. `B_qq` also uses lumped magnetic element volumes, so the magnetic
-mass block is no longer a unit diagonal for unequal magnetic cell volumes.
-Eleventh follow-up evidence from 2026-07-08: the same PA-E4b runner payload
-now weights `A_qphi/A_phiq` by a mesh-derived coupling scale using magnetic
-pair lumped mass divided by the associated airbox periodic-pair length, rather
-than constant `demag_delta` and unit Poisson-source entries. A focused Rust test
-first failed on unchanged coupling values for different airbox lengths and now
-passes. This narrows the validation payload toward geometry-sensitive coupling;
-it is still not the final shared-domain MFEM Poisson-airbox weak-form
-assembler.
-Twelfth follow-up evidence from 2026-07-08: PA-E4b runner gauge weights now
-come from airbox geometry instead of a uniform `1/phi_dof_count` vector. Each
-airbox periodic-pair length contributes a normalized weight split across that
-pair's two phi DOFs. A focused Rust test first failed on equal weights for
-unequal airbox-pair lengths and now passes, proving the mean-zero augmented
-gauge row receives geometry-sensitive weights from the runner payload.
-Thirteenth follow-up evidence from 2026-07-08: native PA-E1/PA-E2 gauge
-validation now requires `phi_mean_weights` to be finite, strictly positive, and
-normalized to sum to one before the Poisson-airbox solve is attempted. The
-dense oracle gate first failed on negative weights, then passed after explicit
-validation was added. The CPU SLEPc gate also passes with zero/negative
-gauge-weight rejection cases, and the Schur MatShell fixture now carries the
-same periodic mesh certificate metadata required by the PA-E2 sparse reference.
-This is a wired block validation payload, not the final shared-domain MFEM
-Poisson-airbox assembler.
+| Gate | Fixture | Independent oracle | Metric | Initial tolerance | Production tolerance | Required artifacts | Promotable readiness cells |
+|---|---|---|---|---|---|---|---|
+| ART-1 schema and cross-artifact identity | Complete, failed and interrupted modal/driven bundles | Independent schema/resource validator | Missing fields, hash/signature mismatches, dangling paths, status contradictions | all counts `0` | all counts `0` | manifest, solver diagnostics, spectra/response, mesh and validation artifacts | All cells |
+| ART-2 requested/resolved truth | Strict CPU, strict GPU, auto and explicit-fallback fixtures | Planner request compared with runtime and artifact provenance | Hidden fallback, device/precision/engine mismatch, absent rejection token | all counts `0` | all counts `0` | plan, manifest, diagnostics and rejection artifact | All cells; strict GPU mismatch blocks GPU promotion |
+| ART-3 validation isolation | Kittel, DE/BV, manufactured and CPU-reference bundles | Data-flow audit from solver request through postsolve verifier | Analytical/fitted/reference fields present in assembly, target, selection, certificate or solver pass/fail payload | occurrences `0` | occurrences `0` | validation-isolation report and request/artifact schemas | Every analytical-validation cell |
+| ART-4 product/API/UI consistency | Published modal and driven resource bundles | OpenAPI/type/resource validator and browser-facing resource inventory | Missing resource, unit mismatch, stale revision, UI claim beyond artifact state | all counts `0` | all counts `0` | API contract report and artifact resource index | Cells exposed through API/UI |
+| ART-5 promotion record | Candidate exact-scope release bundle | Chapter 24 machine-readable checklist validator | Missing applicable item, empty/wildcard `validated_scope`, stale evidence, unresolved blocker | all counts `0` | all counts `0` | production DoD record linked to immutable evidence | Only the exact recorded readiness cell |
 
-Eighth follow-up evidence from 2026-07-08: the same K0-3 verifier now rejects
-real periodic-airbox claims unless they include real-airbox evidence, and it
-now has a stricter `--require-k0-kittel-periodic-airbox-demag` gate for the
-future PA-E4b production path. `--require-k0-kittel-demag` remains the shared
-K0-3 demag gate and may validate the PA-E4a synthetic-demag slice. The stricter
-periodic-airbox flag requires `demag_kind=periodic_airbox_k0`; synthetic K0-3
-artifacts fail that gate. When `demag_kind=periodic_airbox_k0`,
-`summary.v1.json` must report
-`gauge_policy=mean_zero_augmented`, positive `phi_dof_count`, an augmented
-phi size larger than the physical phi dofs, a Poisson constraint residual not
-exceeding `1e-8`, positive magnetic and airbox pair counts, and
-`production_periodic_airbox_claim=true`. It must also include
-`validation/kittel_k0_pbc/convergence.v1.csv` with mesh resolution, airbox
-size, phi dof count, Poisson residual, Kittel frequency error, and effective
-magnetisation. Focused verifier tests for K0 Kittel now pass 10 selected
-cases, and the periodic-airbox focused pair now passes 2 selected cases:
-acceptance with convergence and synthetic-artifact rejection. This is still
-verifier hardening; the real K0-3b FEM film/shared-airbox run remains to be
-produced.
+## 12. Promotion boundaries and current truth
 
-Ninth follow-up evidence from 2026-07-08: the runner artifact path now has a
-positive internal contract for future real PA-E4b metrics. `PathSolveResult`
-carries optional `K0KittelPeriodicAirboxDemagMetrics`, and
-`demag_kind=periodic_airbox_k0` Kittel artifacts are accepted only when those
-metrics prove positive mesh/airbox scales, positive physical and augmented phi
-dofs, Poisson residual `<= 1e-8`, positive magnetic and airbox pair counts,
-positive effective magnetisation matching the Kittel metadata, and
-non-negative relative Kittel frequency error. When accepted, the writer emits
-`summary.v1.json`, `points.v1.csv`, and `convergence.v1.csv` under
-`validation/kittel_k0_pbc`. Focused runner tests cover both rejection without
-metrics and acceptance with real-metrics-shaped input. This is still not the
-real FEM film/shared-airbox solve; it is the artifact seam the solver must now
-populate.
+The matrices above are requirements, not evidence that they pass. Current
+source-visible helpers, synthetic descriptors, old managed artifacts, tiny
+dense GPU exceptions and partial driven-response lanes retain only their
+existing bounded status. In particular:
 
-Tenth follow-up evidence from 2026-07-08: the PA-E2 full-coupled
-Poisson-airbox eigensolve is no longer reachable only through a direct C++
-helper test. `FullmagFemModalEigenRequest` now exposes a Poisson-airbox block
-payload with CSR `A_qq`, `A_qphi`, `A_phiq`, `A_phiphi`, `B_qq`, q/phi dof
-counts, mean-zero gauge weights, and target/reference frequency. The C++ API
-bridge maps this payload into `ModalEigenRequest`, and
-`solve_modal_eigen_contract` dispatches it to
-`solve_poisson_airbox_modal_eigen_cpu_slepc`. The managed
-`just verify-fem-frequency-domain-native-contract` gate passed with a
-`fem_modal_eigen_contract` test proving the public C ABI path reaches the
-full-coupled SLEPc adapter and reports `periodic_airbox_k0` plus
-`mean_zero_augmented`. This validates the ABI seam; real small-film matrix
-assembly and K0-3 artifact metrics are still pending.
+- `synthetic_algebraic_oracle` can satisfy algebra gates but cannot promote
+  real shared-domain Poisson-airbox physics;
+- a no-demag K0 macrospin GPU result cannot promote GPU Poisson-airbox modal,
+  nonzero-k Floquet, or driven-response cells;
+- operator/apply probes cannot satisfy a solver or residency gate;
+- a best observed convergence row without raw independent levels cannot
+  satisfy convergence; and
+- `production_executable` remains distinct from `production_qualified`.
 
-Eleventh follow-up evidence from 2026-07-08: the runner multi-k K0 Kittel path
-now consumes native PA-E2 diagnostics when a real `periodic_airbox_k0` single-k
-solve emits them. It maps only
-`solver_adapter=k0_poisson_airbox_cpu_full_coupled_slepc` diagnostics into
-`K0KittelPeriodicAirboxDemagMetrics`, derives mesh/airbox/pair-count/M_eff
-metadata from the FEM eigen plan, rejects missing or inconsistent metadata, and
-aggregates the worst Poisson residual / Kittel error across the sweep. Focused
-checks passed:
-
-```text
-CARGO_TARGET_DIR=/tmp/fullmag-target cargo test -p fullmag-runner k0_kittel
-  11 passed
-
-python3 -m pytest scripts/test_verify_fem_frequency_domain_eigen_artifacts.py -k 'k0_kittel'
-  11 passed
-```
-
-This proves the artifact path is connected; it does not yet prove real
-small-film shared-domain matrix assembly.
+Promotion occurs only when chapter 24 accepts every applicable gate for one
+exact `validated_scope` and the readiness/capability status is updated by its
+own owning task.
