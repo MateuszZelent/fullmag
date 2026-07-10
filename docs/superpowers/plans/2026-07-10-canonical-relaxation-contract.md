@@ -224,7 +224,7 @@ git commit -m "fix(python): canonicalize relaxation authoring"
 - Consumes: Python canonical IR with optional dynamics and max_relaxation_time_s.
 - Produces: validated StudyIR::Relaxation, no direct-minimizer integrator, conservative legality, and truthful lane capability.
 
-- [ ] **Step 1: Add failing IR/planner tests**
+- [x] **Step 1: Add failing IR/planner tests**
 
 Add tests named:
 
@@ -245,7 +245,7 @@ fn relaxation_rejects_zhang_li_slonczewski_sot_and_thermal() { /* one subcase ea
 fn strict_planner_rejects_tpi_and_extended_cpu_marks_development() { /* requested/resolved */ }
 ~~~
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ~~~bash
 CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-plan direct_minimizer_rejects_dynamics_and_relaxation_time
@@ -255,7 +255,7 @@ Expected: output says running 1 test, then compile failure for the missing
 canonical fields or assertion failure because current planner resolves an
 integrator. Zero executed tests is not RED evidence.
 
-- [ ] **Step 3: Change the IR shape**
+- [x] **Step 3: Change the IR shape**
 
 Use:
 
@@ -276,19 +276,19 @@ workspace never contains a committed IR shape that downstream crates cannot
 compile. Mechanical consumers must handle None explicitly; they must not
 manufacture direct-minimizer dynamics during the compatibility edit.
 
-- [ ] **Step 4: Remove direct-minimizer default integrators**
+- [x] **Step 4: Remove direct-minimizer default integrators**
 
 Replace RelaxationAlgorithmIR::default_integrator with an LLG-only resolver returning Option<IntegratorChoice>, and make planned_study_controls set integrator/fixed/adaptive controls only for LLG.
 
-- [ ] **Step 5: Add conservative-legality validation**
+- [x] **Step 5: Add conservative-legality validation**
 
 Return stable planner diagnostics for each direct torque, thermal noise, time-dependent source, and unpaired Oersted field-energy lane. Apply the rule to all relaxation algorithms.
 
-- [ ] **Step 6: Make capability resolution truthful**
+- [x] **Step 6: Make capability resolution truthful**
 
 Strict TPI rejects. Extended automatic TPI resolves only to CPU/MFEM with an explicit development fallback reason. Forced GPU rejects. Multilayer integrator support matches actual runtime support.
 
-- [ ] **Step 7: Verify GREEN**
+- [x] **Step 7: Verify GREEN**
 
 ~~~bash
 CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-ir
@@ -298,7 +298,7 @@ CARGO_TARGET_DIR=.fullmag/codex-target cargo check --workspace
 
 Expected: relaxation tests pass and every workspace consumer compiles; the pre-existing unrelated frequency-domain baseline failure is either still isolated or separately repaired by its owner.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ~~~bash
 git add crates/fullmag-ir/src/study.rs crates/fullmag-ir/src/execution.rs \
