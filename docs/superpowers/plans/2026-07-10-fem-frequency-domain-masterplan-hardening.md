@@ -27,6 +27,16 @@
 - Canonical phasor convention is `exp(+i*omega*t)` and canonical modal mapping is `lambda = i*omega`.
 - The v1 production Poisson-airbox topology is x/y periodic and open in z. Fully periodic 3D `k=0` demag is outside scope until a macroscopic-field convention is accepted.
 - The generated full pack is never edited as an independent source of truth.
+- Parallel plan `2026-07-10-fem-dynamic-solver-remediation.md` owns
+  `docs/physics/0700-frequency-domain-linearized-llg.md`,
+  `0828-fem-frequency-domain-floquet-demag.md`,
+  `0830-fem-poisson-airbox-modal-eigen.md`,
+  `0831-fem-dynamic-pencil-modal-response-and-krylov.md`, and
+  `docs/specs/capability-matrix-v0.{md,json}`. This documentation plan consumes
+  those files and must not overwrite their concurrent edits.
+- Preserve and classify the parallel status document
+  `20_dynamic_solver_audit_revalidation_and_remediation.md`; this plan owns new
+  active-root numbers 23 through 25.
 
 ---
 
@@ -34,12 +44,12 @@
 
 ### Canonical Physics And Architecture
 
-- Modify `docs/physics/0700-frequency-domain-linearized-llg.md`: common modal/driven LLG contract, phasor, damping and observables.
-- Modify `docs/physics/0828-fem-frequency-domain-floquet-demag.md`: nonzero-k magnetic/scalar-potential Floquet semantics.
-- Modify `docs/physics/0830-fem-poisson-airbox-modal-eigen.md`: K0 descriptor, BC/gauge and residual semantics.
-- Create `docs/physics/0831-fem-frequency-domain-operator-signs-and-scaling.md`: single operator sign/unit/scaling dictionary.
+- Consume `docs/physics/0700-frequency-domain-linearized-llg.md`: common modal/driven LLG contract, phasor, damping and observables.
+- Consume `docs/physics/0828-fem-frequency-domain-floquet-demag.md`: nonzero-k magnetic/scalar-potential Floquet semantics.
+- Consume `docs/physics/0830-fem-poisson-airbox-modal-eigen.md`: K0 descriptor, BC/gauge and residual semantics.
+- Consume `docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md`: single operator sign/unit/scaling dictionary owned by the parallel remediation plan.
 - Modify `docs/architecture/backend-golden-masterplan.md`: CPU/GPU solver ownership.
-- Modify `docs/specs/capability-matrix-v0.md`: scoped readiness references.
+- Consume `docs/specs/capability-matrix-v0.{md,json}`: capability status owned by the parallel remediation plan.
 - Modify `docs/specs/frequency-domain-artifacts-v2.md`: modal/driven artifact contract.
 
 ### Canonical Active Masterplan
@@ -51,9 +61,10 @@
 - Replace `17_eigen_k0_gpu_readiness_audit.md`.
 - Replace `18_poisson_airbox_eigensolve_cpu_gpu_implementation.md`.
 - Replace `19_eigensolve_frequency_driven_physics_numerics_audit.md`.
-- Create `20_floquet_airbox_nonzero_k_cpu_gpu_implementation.md`.
-- Create `21_production_definition_of_done.md`.
-- Create `22_frequency_domain_readiness_matrix.json`.
+- Preserve and classify `20_dynamic_solver_audit_revalidation_and_remediation.md`.
+- Create `23_floquet_airbox_nonzero_k_cpu_gpu_implementation.md`.
+- Create `24_production_definition_of_done.md`.
+- Create `25_frequency_domain_readiness_matrix.json`.
 - Modify `documentation_manifest.json`.
 - Regenerate `fd_solver_plan_FULL_PACK_COMSOL_ALIGNED_V5.md`.
 
@@ -117,7 +128,7 @@ Use:
   "full_pack_generated": true,
   "documents": [],
   "historical_roots": ["old/"],
-  "readiness_matrix": "22_frequency_domain_readiness_matrix.json"
+  "readiness_matrix": "25_frequency_domain_readiness_matrix.json"
 }
 ```
 
@@ -130,9 +141,9 @@ chapter links it instead of duplicating its body.
 Classify:
 
 ```text
-normative: 00, 02-08, 12, 16, 18, 20, 21
+normative: 00, 02-08, 12, 16, 18, 23, 24
 validation: 09, 15
-implementation_status: 10, 11, 17, 19, 22
+implementation_status: 10, 11, 17, 19, 20, 25
 supporting: 01, 13, 14
 ```
 
@@ -178,20 +189,21 @@ git commit -m "Separate canonical frequency docs from history"
 ### Task 2: Close The Physics, Sign And Unit Contract
 
 **Files:**
-- Modify: `docs/physics/0700-frequency-domain-linearized-llg.md:1-460`.
-- Modify: `docs/physics/0830-fem-poisson-airbox-modal-eigen.md:1-185`.
-- Create: `docs/physics/0831-fem-frequency-domain-operator-signs-and-scaling.md`.
+- Consume without editing: `docs/physics/0700-frequency-domain-linearized-llg.md`.
+- Consume without editing: `docs/physics/0830-fem-poisson-airbox-modal-eigen.md`.
+- Consume without editing: `docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md` from the parallel remediation plan.
 - Modify: `docs/plans/active/fd_sovler_masterplan/02_physics_contract.md:1-198`.
 - Modify: `docs/plans/active/fd_sovler_masterplan/05_algebra_and_operator_representations.md:1-128`.
 - Modify: `docs/plans/active/fd_sovler_masterplan/12_adr_decisions.md:1-104`.
 
 **Interfaces:**
 - Consumes: `exp(+i*omega*t)` and fields in `A/m`.
-- Produces: `FrequencyOperatorDictionary.v1` used by every later task.
+- Produces: masterplan summaries and ADRs aligned to the parallel plan's
+  `FrequencyOperatorDictionary.v1`.
 
-- [ ] **Step 1: Add the normative dictionary**
+- [ ] **Step 1: Consume the normative dictionary**
 
-Create note 0831 with:
+Confirm the parallel-owned note 0831 defines:
 
 ```text
 gamma0 = mu0 * abs(gamma)
@@ -208,7 +220,8 @@ K phi = -i omega G phi
 B = -G when L=K is the physical energy-Hessian form
 ```
 
-Define units for every symbol. Define the general real split:
+The masterplan must link that note as the authority for units and the general
+real split:
 
 ```text
 D(omega) = i*omega*B - L = D_R + i D_I
@@ -217,7 +230,7 @@ D(omega) = i*omega*B - L = D_R + i D_I
 
 Do not reuse `[K,+omega*M;-omega*M,K]` without mapping `K/M` to `-L/B`.
 
-- [ ] **Step 2: Close damping and observables**
+- [ ] **Step 2: Mirror damping and observables without redefining them**
 
 Specify:
 
@@ -231,14 +244,13 @@ p_abs = -0.5*mu0*Ms*omega*Im(conj(h_drive) dot delta_m)
 observable = absorbed_by_magnetization
 ```
 
-Alpha-zero may use a symmetric/Hamiltonian method only after the assembled
-form proves the required property. Damping/nonconservative torque uses a
-non-Hermitian solver and left vectors when projection needs biorthogonality.
+`02` and `05` summarize these rules and link note 0831. They must not introduce
+a competing sign or linewidth convention.
 
 - [ ] **Step 3: Correct gamma tokens**
 
-Replace undefined `gamma` on `A/m` fields with `gamma0` in active normative
-equations. Preserve `gamma` only when explicitly defined in `rad/(s*T)`.
+Replace undefined `gamma` on `A/m` fields with `gamma0` in active masterplan
+equations only. Preserve `gamma` only when explicitly defined in `rad/(s*T)`.
 
 - [ ] **Step 4: Close branch and spectral-target mapping**
 
@@ -251,9 +263,10 @@ positive undamped branch: lambda_i > 0
 frequency_hz = Re(omega)/(2*pi) = lambda_i/(2*pi)
 ```
 
-For real PETSc, document the explicit real-split representation of
-`sigma=i*omega_target`. Forbid a real `EPSSetTarget(omega_target)` unless a
-separately named real-frequency pencil is derived.
+The masterplan links the parallel physics note's explicit real-split
+representation of `sigma=i*omega_target` and forbids a real
+`EPSSetTarget(omega_target)` unless a separately named real-frequency pencil
+is derived.
 
 - [ ] **Step 5: Align masterplan algebra and ADRs**
 
@@ -263,8 +276,8 @@ real-PETSc target, blockwise residual and non-Hermitian damping policy.
 - [ ] **Step 6: Perform text-only review**
 
 ```bash
-rg -n --glob '*.md' --glob '!old/**' '\- gamma |\-gamma |b = -gamma ' docs/plans/active/fd_sovler_masterplan docs/physics/0700-frequency-domain-linearized-llg.md docs/physics/0830-fem-poisson-airbox-modal-eigen.md docs/physics/0831-fem-frequency-domain-operator-signs-and-scaling.md
-rg -n 'lambda = i omega|sigma=i\*omega_target|absorbed_by_magnetization' docs/physics/0831-fem-frequency-domain-operator-signs-and-scaling.md
+rg -n --glob '*.md' --glob '!old/**' '\- gamma |\-gamma |b = -gamma ' docs/plans/active/fd_sovler_masterplan docs/physics/0700-frequency-domain-linearized-llg.md docs/physics/0830-fem-poisson-airbox-modal-eigen.md docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md
+rg -n 'lambda = i omega|sigma=i\*omega_target|absorbed_by_magnetization' docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md
 ```
 
 Expected: no undefined `gamma` and one complete sign mapping.
@@ -272,7 +285,7 @@ Expected: no undefined `gamma` and one complete sign mapping.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add docs/physics/0700-frequency-domain-linearized-llg.md docs/physics/0830-fem-poisson-airbox-modal-eigen.md docs/physics/0831-fem-frequency-domain-operator-signs-and-scaling.md docs/plans/active/fd_sovler_masterplan/02_physics_contract.md docs/plans/active/fd_sovler_masterplan/05_algebra_and_operator_representations.md docs/plans/active/fd_sovler_masterplan/12_adr_decisions.md
+git add docs/plans/active/fd_sovler_masterplan/02_physics_contract.md docs/plans/active/fd_sovler_masterplan/05_algebra_and_operator_representations.md docs/plans/active/fd_sovler_masterplan/12_adr_decisions.md
 git commit -m "Close frequency-domain sign and unit contracts"
 ```
 
@@ -283,8 +296,8 @@ git commit -m "Close frequency-domain sign and unit contracts"
 **Files:**
 - Modify: `docs/plans/active/fd_sovler_masterplan/03_relaxed_texture_linearization.md:1-130`.
 - Modify: `docs/plans/active/fd_sovler_masterplan/04_mesh_periodic_floquet_airbox.md:1-107`.
-- Modify: `docs/physics/0828-fem-frequency-domain-floquet-demag.md:1-414`.
-- Modify: `docs/physics/0830-fem-poisson-airbox-modal-eigen.md:1-185`.
+- Consume without editing: `docs/physics/0828-fem-frequency-domain-floquet-demag.md`.
+- Consume without editing: `docs/physics/0830-fem-poisson-airbox-modal-eigen.md`.
 
 **Interfaces:**
 - Consumes: `FrequencyOperatorDictionary.v1` from Task 2.
@@ -388,7 +401,7 @@ share one phase convention.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add docs/plans/active/fd_sovler_masterplan/03_relaxed_texture_linearization.md docs/plans/active/fd_sovler_masterplan/04_mesh_periodic_floquet_airbox.md docs/physics/0828-fem-frequency-domain-floquet-demag.md docs/physics/0830-fem-poisson-airbox-modal-eigen.md
+git add docs/plans/active/fd_sovler_masterplan/03_relaxed_texture_linearization.md docs/plans/active/fd_sovler_masterplan/04_mesh_periodic_floquet_airbox.md
 git commit -m "Close equilibrium and Floquet mesh contracts"
 ```
 
@@ -750,8 +763,8 @@ git commit -m "Rewrite K0 Poisson-airbox implementation contract"
 ### Task 7: Add The Nonzero-K Floquet-Airbox Implementation Contract
 
 **Files:**
-- Create: `docs/plans/active/fd_sovler_masterplan/20_floquet_airbox_nonzero_k_cpu_gpu_implementation.md`.
-- Modify: `docs/physics/0828-fem-frequency-domain-floquet-demag.md`.
+- Create: `docs/plans/active/fd_sovler_masterplan/23_floquet_airbox_nonzero_k_cpu_gpu_implementation.md`.
+- Consume without editing: `docs/physics/0828-fem-frequency-domain-floquet-demag.md`.
 
 **Interfaces:**
 - Consumes: Task 6 K0 blocks and Task 3 constraints.
@@ -812,8 +825,8 @@ No fallback to K0, open boundaries, synthetic operators or CPU for strict GPU.
 - [ ] **Step 5: Perform text-only review**
 
 ```bash
-rg -n 'C_m\(k\)|C_phi\(k\)|A_qphi\(k\)|P\(k\)|rad/m|open-z' docs/plans/active/fd_sovler_masterplan/20_floquet_airbox_nonzero_k_cpu_gpu_implementation.md
-rg -n 'postsolve phase projection|fallback|missing_numeric_fem_demag_k' docs/plans/active/fd_sovler_masterplan/20_floquet_airbox_nonzero_k_cpu_gpu_implementation.md
+rg -n 'C_m\(k\)|C_phi\(k\)|A_qphi\(k\)|P\(k\)|rad/m|open-z' docs/plans/active/fd_sovler_masterplan/23_floquet_airbox_nonzero_k_cpu_gpu_implementation.md
+rg -n 'postsolve phase projection|fallback|missing_numeric_fem_demag_k' docs/plans/active/fd_sovler_masterplan/23_floquet_airbox_nonzero_k_cpu_gpu_implementation.md
 ```
 
 Expected: magnetic/scalar blocks share one phase and fail explicitly when absent.
@@ -821,7 +834,7 @@ Expected: magnetic/scalar blocks share one phase and fail explicitly when absent
 - [ ] **Step 6: Commit**
 
 ```bash
-git add docs/plans/active/fd_sovler_masterplan/20_floquet_airbox_nonzero_k_cpu_gpu_implementation.md docs/physics/0828-fem-frequency-domain-floquet-demag.md
+git add docs/plans/active/fd_sovler_masterplan/23_floquet_airbox_nonzero_k_cpu_gpu_implementation.md
 git commit -m "Specify nonzero-k Floquet-airbox implementation"
 ```
 
@@ -832,7 +845,7 @@ git commit -m "Specify nonzero-k Floquet-airbox implementation"
 **Files:**
 - Replace: `docs/plans/active/fd_sovler_masterplan/09_validation_certification_benchmarks.md:1-376`.
 - Modify: `docs/plans/active/fd_sovler_masterplan/15_self_weryfication_Kittel.md:1-1221`.
-- Create: `docs/plans/active/fd_sovler_masterplan/21_production_definition_of_done.md`.
+- Create: `docs/plans/active/fd_sovler_masterplan/24_production_definition_of_done.md`.
 
 **Interfaces:**
 - Consumes: Tasks 6-7 algorithms.
@@ -908,7 +921,7 @@ release regression
 
 ```bash
 rg -n 'expected.*builder|demag_delta.*Kittel|nearest expected frequency' docs/plans/active/fd_sovler_masterplan/15_self_weryfication_Kittel.md
-rg -n 'three mesh|airbox.padding|15 field|independent oracle|validated_scope' docs/plans/active/fd_sovler_masterplan/09_validation_certification_benchmarks.md docs/plans/active/fd_sovler_masterplan/15_self_weryfication_Kittel.md docs/plans/active/fd_sovler_masterplan/21_production_definition_of_done.md
+rg -n 'three mesh|airbox.padding|15 field|independent oracle|validated_scope' docs/plans/active/fd_sovler_masterplan/09_validation_certification_benchmarks.md docs/plans/active/fd_sovler_masterplan/15_self_weryfication_Kittel.md docs/plans/active/fd_sovler_masterplan/24_production_definition_of_done.md
 ```
 
 Expected: analytical expectations cannot leak into assembly; scope/convergence
@@ -917,7 +930,7 @@ promotion rules are explicit.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add docs/plans/active/fd_sovler_masterplan/09_validation_certification_benchmarks.md docs/plans/active/fd_sovler_masterplan/15_self_weryfication_Kittel.md docs/plans/active/fd_sovler_masterplan/21_production_definition_of_done.md
+git add docs/plans/active/fd_sovler_masterplan/09_validation_certification_benchmarks.md docs/plans/active/fd_sovler_masterplan/15_self_weryfication_Kittel.md docs/plans/active/fd_sovler_masterplan/24_production_definition_of_done.md
 git commit -m "Define frequency-domain production validation gates"
 ```
 
@@ -930,8 +943,8 @@ git commit -m "Define frequency-domain production validation gates"
 - Replace: `docs/plans/active/fd_sovler_masterplan/11_runtime_telemetry_performance.md:1-426`.
 - Replace: `docs/plans/active/fd_sovler_masterplan/17_eigen_k0_gpu_readiness_audit.md:1-249`.
 - Replace: `docs/plans/active/fd_sovler_masterplan/19_eigensolve_frequency_driven_physics_numerics_audit.md:1-981`.
-- Create: `docs/plans/active/fd_sovler_masterplan/22_frequency_domain_readiness_matrix.json`.
-- Modify: `docs/specs/capability-matrix-v0.md:1-180`.
+- Create: `docs/plans/active/fd_sovler_masterplan/25_frequency_domain_readiness_matrix.json`.
+- Consume without editing: `docs/specs/capability-matrix-v0.{md,json}`.
 
 **Interfaces:**
 - Consumes: Task 8 production gates.
@@ -1032,17 +1045,19 @@ device-residency claim rules
 partial/interrupted artifacts
 ```
 
-- [ ] **Step 6: Align capability matrix**
+- [ ] **Step 6: Record capability-matrix integration requirements**
 
-Fix the heading that calls six statuses a "Four-state status vocabulary".
-Link detailed FD truth to readiness JSON. Explain any coarse
-`supports_frequency_response=false` boolean that coexists with a narrow
-executable slice; do not leave an unexplained contradiction.
+In `10` and `19`, record that the parallel remediation plan owns correction of
+the heading that calls six statuses a "Four-state status vocabulary" and owns
+links from the capability matrix to readiness JSON. This plan must not edit the
+matrix concurrently. Its own readiness/status text must still explain any
+coarse `supports_frequency_response=false` boolean that coexists with a narrow
+executable slice.
 
 - [ ] **Step 7: Perform text-only review**
 
 ```bash
-rg -n 'no real path|slice closed|unsupported.*validated|Four-state' docs/plans/active/fd_sovler_masterplan/10_patch_queue_current_status.md docs/plans/active/fd_sovler_masterplan/17_eigen_k0_gpu_readiness_audit.md docs/specs/capability-matrix-v0.md
+rg -n 'no real path|slice closed|unsupported.*validated|Four-state' docs/plans/active/fd_sovler_masterplan/10_patch_queue_current_status.md docs/plans/active/fd_sovler_masterplan/17_eigen_k0_gpu_readiness_audit.md
 rg -n 'F-0[1-9]|F-1[0-9]|F-2[0-2]' docs/plans/active/fd_sovler_masterplan/19_eigensolve_frequency_driven_physics_numerics_audit.md
 ```
 
@@ -1051,7 +1066,7 @@ Expected: all findings have state and current status has no timeline contradicti
 - [ ] **Step 8: Commit**
 
 ```bash
-git add docs/plans/active/fd_sovler_masterplan/10_patch_queue_current_status.md docs/plans/active/fd_sovler_masterplan/11_runtime_telemetry_performance.md docs/plans/active/fd_sovler_masterplan/17_eigen_k0_gpu_readiness_audit.md docs/plans/active/fd_sovler_masterplan/19_eigensolve_frequency_driven_physics_numerics_audit.md docs/plans/active/fd_sovler_masterplan/22_frequency_domain_readiness_matrix.json docs/specs/capability-matrix-v0.md
+git add docs/plans/active/fd_sovler_masterplan/10_patch_queue_current_status.md docs/plans/active/fd_sovler_masterplan/11_runtime_telemetry_performance.md docs/plans/active/fd_sovler_masterplan/17_eigen_k0_gpu_readiness_audit.md docs/plans/active/fd_sovler_masterplan/19_eigensolve_frequency_driven_physics_numerics_audit.md docs/plans/active/fd_sovler_masterplan/25_frequency_domain_readiness_matrix.json
 git commit -m "Make frequency-domain readiness claims scope-aware"
 ```
 
