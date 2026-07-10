@@ -56,5 +56,6 @@ Recommended filenames:
 - `0870-fem-bem-demag-open-boundary.md`
 - `0880-active-effective-field-terms.md`
 - `0900-native-fem-operator-contracts-and-validation.md`
+- `0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md`
 
 The numbering is semantic, not bureaucratic.

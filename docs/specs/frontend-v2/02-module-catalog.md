@@ -71,12 +71,21 @@ Authoring modules never mutate local-only physics state. They submit semantic tr
 |---|---|---|---|
 | `viewport-3d` | `viewport-main` | 3D scene, mesh, field, glyph, overlay, selection visualization. | Mesh/topology/field binary resources. |
 | `cross-section-image` | `viewport-main` | Server-rendered mesh cross-section preview and PNG export. | Meshing cross-section image resource plus FMCS/FMQS statistics resources. |
+| `field-map` | `viewport-main` | Interactive scientific heatmaps, contours, probes, arrows, slices, and projections for revisioned scalar/vector fields such as antenna `J_charge`, `H_ant_basis`, `H_ant`, and `h_perp`. | Field slice/projection metadata plus binary scalar, arrow, empty-mask, and optional server PNG resources. |
 | `analysis-plots` | `viewport-main`, `panel-bottom` | Scalar histories, energies, convergence, profiles, and analysis series. | Scalar and analysis resources through a chart adapter. |
 | `viewport-2d` | disabled after replacement | Legacy live WebGL slices, projections, probes, line profiles, and mesh cross-sections. | Removed from default registration once `cross-section-image` is active. |
 | `legend-scale` | `viewport-main` overlay | Quantity legend, units, range, stale/degraded status. | Visualization state and field stats. |
 | `view-controls` | `ribbon`, `viewport-main` overlay | Camera, layer, quantity, clip, selection, display controls. | Command registry and visualization resource. |
 
 Viewport modules consume domain-neutral render models. FDM/FEM interpretation belongs to adapters.
+
+`field-map` is the canonical interactive 2D surface for microwave-antenna field
+inspection. It does not resurrect the removed live R3F `viewport-2d`: it uses a
+demand-driven chart/raster renderer, mounts only while its center tab is
+active, and reads the standard field data plane through `ControlRoomApi` and
+resource hooks. Source k-spectrum and spin-wave `S(k,omega)` remain analysis
+products consumed by `analysis-plots`; a source heatmap must not be labeled as
+the magnetization response.
 
 `viewport-main` is a tabbed center surface when more than one visualization module targets it. The active tab is the only mounted heavy surface. Inactive `viewport-3d` must not keep WebGL, field-vector hooks, topology hooks, render-model builders, or client acknowledgement effects active.
 

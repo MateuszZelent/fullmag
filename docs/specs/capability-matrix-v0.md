@@ -22,7 +22,7 @@ The broader Markdown tables below remain a wider repository snapshot during the
 status-model migration, but the JSON slice above wins if there is any conflict
 for STT / STNO roadmap items.
 
-## Four-state status vocabulary
+## Product-facing status vocabulary
 
 Every product-facing feature should be described with one of these statuses:
 
@@ -136,6 +136,39 @@ Runtime capability payloads expose five separate deferred booleans for this scop
 
 The frequency-domain UI may expose the diagnostic readiness labels `periodic_airbox_k0.production_cpu_not_validated` and `periodic_airbox_k0.production_gpu_not_validated` only as temporary rejection/degraded-state reasons. They mean that the requested k=0 periodic-airbox driven response lacks the matching managed production proof for that lane; they must not be converted into user-selectable execution modes or treated as successful capability states.
 
+## Microwave antenna field-basis slice
+
+The canonical target is defined by
+`docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md`
+and ADR 0017. Capability is split between layout authoring, field-solve
+execution, field-basis consumption, and analysis. Source visibility in one
+part does not promote the others.
+
+| Capability | FDM CPU reference | FDM GPU production | FEM CPU public | FEM GPU public | Current truth |
+|---|---|---|---|---|---|
+| `RegionalFieldDrive` / `prescribed_zeeman_mask` compatibility | `reference_executable` | `unsupported` with explicit rejection/fallback | `source_visible` only | `unsupported` | FDM CPU consumes the materialized mask. FEM planning can produce nodal data, but current native FEM execution has no qualifying consumption proof. |
+| variable-width 3D microstrip/CPW layout | `unsupported` | `unsupported` | `unsupported` | `unsupported` | Current constant-width antenna structs and box preview do not encode ordered width/gap stations or explicit return conductors. |
+| `StudyIR::AntennaFieldSolve(model="quasistatic_conduction_biot_savart_3d")` | `unsupported` | `unsupported` | `unsupported` | `unsupported` | Initial target is native FEM CPU/MFEM H1 conduction plus adaptive 3D Biot-Savart. Current `mqs_2p5d_az` is an infinite-strip approximation and does not satisfy this row. |
+| `SolvedAntennaDrive` consumption | `unsupported` | `unsupported` | `unsupported` | `unsupported` | Each lane is promoted independently after artifact compatibility, stale rejection, waveform, `H_ant`, and LLG parity gates pass. |
+| source `W_H(k)` | `semantic_only` | `semantic_only` | `semantic_only` | `semantic_only` | `SpinWaveExcitationAnalysis(method="source_k_profile")` authoring exists, but the resource-backed vector spectrum is not executable. |
+| local `W_H(u,k)` | `unsupported` | `unsupported` | `unsupported` | `unsupported` | Requires the new variable-width layout and windowed local-spectrum analysis contract. |
+| response `S_m(k,omega)` | `unsupported` | `unsupported` | `unsupported` | `unsupported` | Requires a new artifact-backed time-domain magnetization analysis resource. It must not be inferred from the source spectrum. |
+
+Promotion order is fixed:
+
+1. typed layout/port/stage/drive semantics;
+2. native FEM CPU field solve with managed-runtime analytical and convergence
+   evidence;
+3. FDM CPU reference and FEM CPU field-basis consumption;
+4. CUDA FDM and native FEM GPU consumption after double-precision parity;
+5. source-spectrum and dynamic-response analysis products;
+6. publication-aligned variable-width CPW benchmark.
+
+An FDM downstream request may use an FEM CPU field-solve artifact only as
+explicit cross-discretization state transfer. The field-solve and downstream
+requested/resolved execution records remain separate. Forced unsupported
+field-solve lanes fail; they do not silently choose another device.
+
 ## Current execution policy
 
 - `strict` means backend-neutral semantics only.
@@ -211,6 +244,10 @@ The frequency-domain UI may expose the diagnostic readiness labels `periodic_air
 | `Demag` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM, validation pending for full FEM GPU demag) | FDM uses Newell tensor FFT. Executable FEM includes Poisson airbox (`poisson_robin` / `poisson_dirichlet`) on the MFEM/libCEED/hypre CPU lane and strict MFEM/libCEED/CUDA GPU lane. Strict FEM GPU demag mode is `device_hypre_poisson`: RHS, hypre solve, warm-start, recovery `H_demag`, and demag energy stay device-resident, with `uses_gpu_poisson=true`, `hypre_execution_policy=device`, and no hot-loop demag field/magnetization round-trip. `hybrid_cpu_poisson` is only an explicit compatibility/debug mode and must not be silently selected for `study.device("gpu")`. Initial strict GPU scope is P1, double precision, shared-domain airbox Dirichlet/Robin. High-order and Fredkin-Koehler GPU demag remain gated. The static/time-domain k=0 periodic demag slice has ordinary managed CPU/GPU periodic-antidot relaxation evidence for seam continuity and device-Poisson provenance, but remains below validated production until strict M5 z-padding and primitive-vs-supercell reports pass for the same workload; it may execute only when `ProblemIR.pbc.demag="periodic_airbox_k0"`, the mesh carries `periodic_node_pairs`, `periodic_boundary_pairs`, periodic axes that match `ProblemIR.pbc.axes`, a shared-domain airbox, at least one open axis, and accepted `periodic_pairs.v1` diagnostics proving shared-airbox coverage, magnetic coverage where the magnetic body crosses the selected seam, and opposed-normal boundary-face pairs; selected periodic axes may include `z` for non-fully-periodic cells, while the current antidot qualification fixture remains the film-specific `x/y` periodic, open-`z` case. A historical managed 3x3 primitive-vs-periodic-supercell artifact `.fullmag/reports/fem-demag-periodic-airbox-validation-supercell-pbc/periodic_airbox_validation.csv` passed with `2.4167958871934916e-3` relative energy error against the `2.0e-2` tolerance and zero primitive `H_demag`/`phi` seam mismatch for its fixture; this is supporting evidence for the reduced Poisson path, not current M5 antidot acceptance. Strict GPU k=0 static periodic demag has source-contract support and ordinary managed periodic-antidot GPU gate evidence proving `uses_cuda_kernels=true`, `uses_gpu_poisson=true`, `demag_operator_mode="device_hypre_poisson"`, and zero accepted `H_demag`/normal-flux seam mismatch for `exchange_coupled` and `air_gap`; it must still not be reported as validated production until strict M5 z-padding and primitive-vs-supercell evidence pass. Fully periodic 3D, dynamic frequency-response demag, nonzero-k Floquet magnetostatics, and broader GPU periodic demag remain gated. The public nonzero-k Floquet demag request is `magnetostatic_bc=floquet_airbox`; it is accepted as IR/DSL intent but must fail capability planning until a validated Bloch/Floquet demag-k operator exists. Executable FEM also includes the initial body-only `fredkin_koehler` FEM/BEM open-boundary path in the native MFEM CPU subsystem. Poisson requires a shared-domain mesh with air; `fredkin_koehler` must not require or allocate an airbox and uses the magnetic body boundary surface instead. The Fredkin-Koehler implementation is dense-reference/validation-scale until analytic and cross-model qualification are complete. Native FEM demag exposes an explicit backend-hint `FemLinearSolverPolicy` authoring contract (`CG/GMRES`, `AMG/JACOBI/NONE`, tolerances, iteration cap) while keeping `Demag()` physics-first. For explicit native `poisson_robin`, the managed runtime resolves directly to `hypre_pcg_boomeramg`; live session views preserve requested CPU threads, resolved Rayon threads, and requested/effective OpenMP threads when the native runtime reports them. |
 | `InterfacialDMI` / `BulkDMI` | ✅ exec | planned | planned | **public-executable** (FDM); **under-qualification** (FEM frequency response CPU/GPU open-gamma and k=0 static-periodic slices) | CPU FDM computes DMI field/energy in the reference lane and exposes `H_dmi` as a derived snapshot/preview observable. Public multilayer FDM carries global DMI constants through CPU reference observables/RHS, CUDA-assisted local effective fields, native stacked single-grid plans, native stacked scalar/field reporting, and staged multilayer v2 explicit-RK RHS for fixed-step Heun/RK4/RK23; staged multilayer handles expose per-layer `H_DMI` copy endpoints for those global constants. The FEM driven frequency-response CPU and GPU lanes have P1 tetrahedral tangent DMI payloads for open/gamma and k=0 static-periodic magnetic slices: CPU uses the native MFEM weak-residual operator and GPU uses the native CUDA weak-residual tangent operator inside the frequency-domain context. This remains under managed-runtime qualification and does not imply demag, nonzero-k Floquet DMI assembly, or spatial DMI field output for frequency response. Per-layer/per-cell DMI fields remain deferred. |
 | `Zeeman` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Public API authors `B`; planner normalizes to `H_ext` in A/m for CPU FDM and CPU FEM |
+| `RegionalFieldDrive` / prescribed antenna mask | CPU reference executable; CUDA unsupported | source-visible planning only; native CPU/GPU consumption unqualified | planned | **mixed current status** | Separate MuMax-style source. It is not a conductor field solve and must not be used as a hidden fallback for `SolvedAntennaDrive`. |
+| Variable-width 3D microstrip/CPW layout | planned | planned | planned | **planned** | Ordered width/gap stations along current flow, explicit signal/return conductors, and rigid 3D placement; the current constant-width preview does not qualify. |
+| `AntennaFieldSolve` Tier 1 | artifact consumer planned | CPU solver planned; GPU unsupported | explicit state transfer planned | **planned** | Native FEM CPU owns the first H1 conduction plus adaptive 3D Biot-Savart solve. `mqs_2p5d_az` does not qualify. |
+| `SolvedAntennaDrive` | planned | planned | planned | **planned** | Immutable per-ampere basis multiplied by canonical waveform; lane promotion requires stale-artifact rejection and field/LLG parity. |
 | `ThermalNoise` | ✅ exec | planned | planned | **public-executable** (single-grid FDM) | CPU/GPU single-grid FDM execute Brown thermal noise where configured. Public multilayer FDM rejects thermal noise explicitly until staged CPU/GPU multilayer RHS coverage exists, rather than dropping it from `FdmMultilayerPlanIR`. |
 | `Magnetoelastic` | planned | planned | planned | **internal-reference** | Small-strain magnetoelastic coupling (B1/B2 cubic, λ_s isotropic); prescribed-strain H_mel wired into H_eff; see `docs/physics/0700-shared-magnetoelastic-semantics.md` |
 | `LLG` (Heun) | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Heun stepper in `fullmag-engine` |

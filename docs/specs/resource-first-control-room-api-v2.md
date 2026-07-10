@@ -261,6 +261,83 @@ Hysteresis workflows expose endpoints for planning, execution progress, points d
 | `/v2/sessions/current/analysis/hysteresis/{stage_id}/steps/{point_id}` | `GET` | Read detailed result summary for a single point and its snapshot ref |
 | `/v2/sessions/current/analysis/hysteresis/{stage_id}/steps/{point_id}/settle-trace` | `GET` | Read step-by-step trace of solver algorithms run for relaxation of this point |
 
+### Microwave antenna field-basis resources
+
+The canonical antenna workflow is defined by physics note 0950 and ADR 0017.
+It keeps authoring, stage lifecycle, field solutions, numerical fields, and
+analysis products in their existing resource families.
+
+Single-owner rules:
+
+| Resource | Owns |
+|---|---|
+| `model/scene` | canonical antenna layouts, port modes, solved drives, regional drives, and study-stage authoring |
+| `model/antennas` and `model/field-drives` | typed projections and semantic mutations over the same scene revision; not independent stores |
+| `simulation/stages/execution` | full `AntennaFieldSolve` stage state in the common stage tree |
+| `simulation/stages/{stage_id}/antenna-field-solve/*` | antenna-specific plan, progress, and diagnostics |
+| `data/antenna-field-solutions/{solution_id}` | immutable solution manifest, signatures, provenance, and links to heavy fields |
+| `data/fields` | `V_electric`, `J_charge`, `H_ant_basis`, instantaneous `H_ant`, and derived `h_perp` field resources |
+| `analysis/antenna-excitation/{solution_id}/*` | source and local k-spectrum products |
+| `analysis/spin-wave-response/{run_id}/*` | time-domain magnetization response products such as the dynamic structure factor |
+
+Typed model projections:
+
+```text
+GET    /v2/sessions/current/model/antennas
+POST   /v2/sessions/current/model/antennas
+PATCH  /v2/sessions/current/model/antennas/{antenna_id}
+DELETE /v2/sessions/current/model/antennas/{antenna_id}
+GET    /v2/sessions/current/model/field-drives
+POST   /v2/sessions/current/model/field-drives
+PATCH  /v2/sessions/current/model/field-drives/{drive_id}
+DELETE /v2/sessions/current/model/field-drives/{drive_id}
+```
+
+Every model mutation uses `base_revision` and returns the new
+`scene_revision`. New control-room code does not rewrite the loose
+`current_modules.modules` array through a raw merge patch.
+
+An antenna field solve is submitted through the existing simulation command
+route with `kind="solve"` and a stage target. The API does not add a separate
+antenna command family.
+
+Stage details:
+
+```text
+GET /v2/sessions/current/simulation/stages/{stage_id}/antenna-field-solve/plan
+GET /v2/sessions/current/simulation/stages/{stage_id}/antenna-field-solve/progress
+GET /v2/sessions/current/simulation/stages/{stage_id}/antenna-field-solve/diagnostics
+```
+
+Solution and analysis resources:
+
+```text
+GET /v2/sessions/current/data/antenna-field-solutions
+GET /v2/sessions/current/data/antenna-field-solutions/{solution_id}
+GET /v2/sessions/current/data/antenna-field-solutions/{solution_id}/projections
+GET /v2/sessions/current/analysis/antenna-excitation/{solution_id}/source-spectrum
+GET /v2/sessions/current/analysis/antenna-excitation/{solution_id}/local-k-spectrum
+GET /v2/sessions/current/analysis/spin-wave-response/{run_id}/dynamic-structure-factor
+```
+
+Heavy conductor, field, and spectrum arrays stay out of JSON manifests and
+status. V/J/H fields use the existing field vector, slice, and projection data
+plane. Large source-spectrum and k-omega matrices use a versioned tiled raster
+codec with thin JSON axis/unit metadata. The existing
+`projection/profile` remains a depth profile through one raster pixel and is
+not reused as an arbitrary spatial line cut; line cuts are revisioned analysis
+products under `analysis/field-line-cuts`.
+
+Every field advertises a `domain_ref`: V and J live on conductor topology,
+field bases may live on an antenna inspection grid, and LLG projections live
+on a concrete magnetic target topology. Matching point counts do not make
+different domains compatible.
+
+The websocket announces exact command lifecycle and changed resource
+revisions. Geometry, port, mesh, and target changes may invalidate solution
+resources. A waveform-only edit invalidates model/drive state but does not
+advance the antenna field-solution or field-basis revision.
+
 ## 4. Scoped data access
 
 Mesh and field resources must support scoped fetching so the frontend does not need to download the

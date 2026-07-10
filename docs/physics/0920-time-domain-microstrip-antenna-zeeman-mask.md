@@ -21,6 +21,12 @@
   - `docs/physics/0840-oersted-from-current-solution-and-fem-prescribed-current-transport.md`
   - `docs/physics/0850-native-fem-stt-and-generalized-oersted-from-prescribed-current.md`
   - `docs/physics/0870-active-observable-and-energy-availability.md`
+  - `docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md`
+
+> Scope boundary: this note remains the canonical contract for the simplified
+> MuMax-style prescribed regional field. It is not the conductor-backed
+> variable-width microstrip/CPW solver. The latter is defined by physics note
+> 0950 and ADR 0017 as a separate staged field-basis workflow.
 
 ## 1. Problem statement
 
@@ -1031,7 +1037,9 @@ quantity metadata must expose sampling location.
 
 ## 12. Deferred work
 
-1. True microwave antenna field calculation.
+1. Conductor-backed variable-width microstrip/CPW field calculation is defined
+   by note 0950 and remains unimplemented; it is no longer an unspecified
+   extension of this regional-mask model.
 2. Biot-Savart/Oersted field for arbitrary microstrip current in FDM.
 3. Conductivity/contact/impedance models.
 4. Full arbitrary expression language before parser parity is proven.

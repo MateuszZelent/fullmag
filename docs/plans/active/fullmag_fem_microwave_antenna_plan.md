@@ -1,6 +1,18 @@
 
 # Fullmag — precyzyjny plan implementacji modułu FEM dla pola od anten mikrofalowych nad falowodem magnonicznym
 
+> **Status: superseded historical plan.** The 2.5D-first recommendation below
+> cannot represent a CPW or microstrip whose width changes along current flow,
+> including a central constriction. Do not execute this file as the active
+> implementation plan. The canonical target is now:
+>
+> - `docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md`;
+> - `docs/adr/0017-staged-antenna-field-basis-workflow.md`;
+> - `docs/superpowers/specs/2026-07-10-microwave-antenna-field-basis-design.md`.
+>
+> References to `native/backends/*`, `apps/web`, and the proposed 2.5D
+> production milestones are retained only to document the previous direction.
+
 **Repozytorium docelowe:** `MateuszZelent/fullmag`  
 **Zakres planu:** fizyka + dyskretyzacja FEM + CPU/GPU + integracja z `ProblemIR`, plannerem, backendem FEM, UI/control room i mode builderem  
 **Cel funkcjonalny:** móc w modelu 3D umieścić nad falowodem magnetycznym antenę mikrofalową typu **microstrip** lub **CPW**, policzyć jej rozkład pola w przybliżeniu magnetoquasistatycznym, wizualizować go w 2D i 3D, pokazywać rozkład amplitudy pola w falowodzie, a następnie wyznaczać **profil pobudzenia fal spinowych** i efektywny profil **wektora falowego** wzbudzania.
@@ -1940,4 +1952,3 @@ ale także:
 - szybki wykres `sinc(k w / 2) * exp(-|k|h)` jako analytic guide.
 
 To jest mały koszt, a gigantycznie zwiększa wartość interpretacyjną.
-

@@ -167,6 +167,7 @@ export const CORE_MODULES = [
   explorerManifest,
   viewport3dManifest,
   crossSectionImageManifest,
+  fieldMapManifest,
   analysisPlotsManifest,
   inspectorManifest,
   consoleManifest,

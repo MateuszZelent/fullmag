@@ -188,6 +188,15 @@ Newly committed objects render in primitive display immediately after `model/sce
 
 Field, scalar, and vector layers never attach to primitive fallback geometry. They attach only to current solver topology and published field resources.
 
+Variable-width antenna layouts follow the same intent-versus-realization rule.
+Before conductor meshing, the viewport renders a procedural loft from ordered
+width/gap stations and the antenna rigid transform. It may show signal/return
+parts, terminal-face overlays, and current-direction arrows. After a successful
+`AntennaFieldSolve`, the user may inspect realized conductor topology and attach
+`V_electric` or `J_charge` only to that topology. `H_ant_basis` attaches to its
+declared field-sampling domain or a compatible magnetic target projection, not
+to the procedural antenna loft.
+
 ## 10. Tests and Profiling
 
 Required verification:

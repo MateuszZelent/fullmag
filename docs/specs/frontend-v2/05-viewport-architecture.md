@@ -9,6 +9,7 @@ Frontend v2 has one viewport slot family and multiple viewport modules:
 
 - `viewport-3d` for WebGL/Three.js 3D scene rendering;
 - `cross-section-image` for server-rendered mesh cross-section verification and PNG export;
+- `field-map` for interactive field slices, projections, contours, probes, and heatmaps;
 - `analysis-plots` for scalar and analysis plots in center tabs or docks;
 - `view-controls` for layer, camera, quantity, clipping, and display commands.
 
@@ -42,6 +43,13 @@ flowchart TD
 ```
 
 The renderer receives render models, not API payloads.
+
+`field-map` uses the same revisioned field resources but has an independent 2D
+renderer lifecycle. It may consume binary scalar rasters, arrow payloads,
+empty masks, and server-rendered PNG exports. It must not borrow Three.js
+buffers or keep `viewport-3d` mounted. Arbitrary line cuts and k-space products
+come from `analysis` resources rather than client-side filtering of a full FEM
+field.
 
 ## 4. Viewport State Split
 

@@ -397,6 +397,54 @@ diagnostykę Schura i nie zmieniać CMake/include tree poza tym, co wynika z
 samego splitu. Dopiero kolejny patch powinien zacząć pierwszy brakujący backend:
 `cpu_sparse_direct`.
 
+## 7.3 Workflow pola anteny mikrofalowej
+
+Kanoniczny kontrakt fizyczny dla anten microstrip/CPW z profilem zmiennym
+wzdłuż przepływu prądu definiuje
+`docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md`.
+
+Pierwszy produkcyjny `AntennaFieldSolve` jest workflow natywnego FEM CPU:
+
+```text
+backends/fem/cpu/mfem/workflows/antenna_field_solve
+  -> siatka przewodników i markery terminali
+  -> H1: div(sigma grad V) = 0
+  -> normalizowane J per 1 A
+  -> adaptacyjny trójwymiarowy Biot-Savart
+  -> antenna_field_solution.v1
+  -> projekcje na targety FDM/FEM
+```
+
+Reguły własności:
+
+1. Numeryka przewodnictwa, normalizacji prądu, kwadratury Biota-Savarta i
+   projekcji targetu żyje w `backends/fem`, nie w Rust runnerze.
+2. `crates/fullmag-runner` orkiestruje ABI, cache, artefakty, progress i
+   proweniencję. Obecne przybliżenie w `antenna_fields.rs` jest ścieżką
+   kompatybilności `legacy_infinite_strip_biot_savart`, a nie fundamentem
+   nowego solvera.
+3. Field solve i późniejszy LLG mają osobne requested/resolved execution.
+   Precompute FEM CPU dla LLG FDM jest jawnym transferem stanu między
+   dyskretyzacjami, nigdy ukrytym hybrydowym wywołaniem.
+4. FDM CPU reference jest oracle konsumpcji gotowej mapy, nie właścicielem
+   produkcyjnego solve'u geometrii przewodnika.
+5. Produkcyjna konsumpcja CUDA FDM żyje pod
+   `backends/fdm/gpu/cuda/interactions/antenna_drive`.
+6. Konsumpcja FEM CPU/GPU żyje w osobnych właścicielach
+   `backends/fem/cpu/mfem/interactions/antenna_drive` i
+   `backends/fem/gpu/cuda/interactions/antenna_drive`.
+7. Mapa pola per 1 A pozostaje rezydentna podczas LLG; host readback jest
+   dozwolony tylko w kadencji output/diagnostics.
+8. Harmonic MQS i full-wave Maxwell są osobnymi przyszłymi rodzinami solverów.
+   Nie wolno promować Tier 1 na podstawie dostępności częstotliwościowego
+   solvera LLG ani odwrotnie.
+
+Minimalna drabina walidacji obejmuje analityczny przewód, bilans terminali CPW,
+trzy poziomy zbieżności siatki i kwadratury, położenie peaków widma k,
+FDM/FEM transfer oraz parity CPU/GPU w double. Build i runtime proof natywnego
+FEM używa container-backed `just`; docelowe skupione recipes to
+`verify-fem-antenna-field-runtime` i `verify-fem-antenna-drive-runtime`.
+
 ## 8. Architektura FDM
 
 FDM ma dwie różne role, które muszą pozostać jawne:

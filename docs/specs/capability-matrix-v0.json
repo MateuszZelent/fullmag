@@ -1,9 +1,12 @@
 {
   "schema_version": "capability_matrix.v0",
-  "updated_at": "2026-05-20",
+  "updated_at": "2026-07-10",
   "status_vocabulary": {
+    "unsupported": "The current lane has no legal executable realization for this feature.",
+    "source_visible": "Source or planner scaffolding exists, but the lane is not a legal public executable path.",
     "semantic_only": "Canonical API and IR semantics exist, but the public executable path does not run this feature yet.",
     "reference_executable": "Executable on the trusted reference lane used for correctness and validation.",
+    "partial_production_executable": "Executable only for the explicitly documented bounded production workload.",
     "production_executable": "Executable on the intended production lane.",
     "validated": "Executable and benchmarked with explicit regression coverage for the documented workload."
   },
@@ -312,6 +315,90 @@
       },
       "validated_workloads": [],
       "notes": "Phase 8 roadmap item."
+    },
+    {
+      "id": "regional_field_drive",
+      "label": "RegionalFieldDrive / prescribed_zeeman_mask compatibility",
+      "lanes": {
+        "fdm_cpu_reference": "reference_executable",
+        "fdm_gpu_production": "unsupported",
+        "fem_cpu_public": "source_visible",
+        "fem_gpu_public": "unsupported"
+      },
+      "validated_workloads": [],
+      "notes": "The current prescribed_zeeman_mask path executes on CPU-reference FDM. CUDA FDM rejects or explicitly falls back. FEM planning can materialize nodal masks, but current native FEM time evolution does not yet prove consumption, so FEM remains non-executable. The target canonical name is RegionalFieldDrive; the existing payload remains a compatibility form."
+    },
+    {
+      "id": "antenna_variable_width_layout",
+      "label": "Variable-width 3D microstrip and CPW layout",
+      "lanes": {
+        "fdm_cpu_reference": "unsupported",
+        "fdm_gpu_production": "unsupported",
+        "fem_cpu_public": "unsupported",
+        "fem_gpu_public": "unsupported"
+      },
+      "validated_workloads": [],
+      "notes": "Target semantics are ordered width/gap stations along a straight local current axis with a rigid 3D transform and explicit return conductors. The current constant-width preview types do not satisfy this capability."
+    },
+    {
+      "id": "antenna_field_solve_quasistatic_conduction_biot_savart_3d",
+      "label": "StudyIR::AntennaFieldSolve quasistatic_conduction_biot_savart_3d",
+      "lanes": {
+        "fdm_cpu_reference": "unsupported",
+        "fdm_gpu_production": "unsupported",
+        "fem_cpu_public": "unsupported",
+        "fem_gpu_public": "unsupported"
+      },
+      "validated_workloads": [],
+      "notes": "Planned Tier 1 field solve from docs/physics/0950. Initial production candidate is native FEM CPU/MFEM H1 conduction plus adaptive three-dimensional Biot-Savart evaluation. The current mqs_2p5d_az infinite-strip approximation does not satisfy this capability."
+    },
+    {
+      "id": "solved_antenna_field_basis_drive",
+      "label": "SolvedAntennaDrive field-basis consumption",
+      "lanes": {
+        "fdm_cpu_reference": "unsupported",
+        "fdm_gpu_production": "unsupported",
+        "fem_cpu_public": "unsupported",
+        "fem_gpu_public": "unsupported"
+      },
+      "validated_workloads": [],
+      "notes": "Planned artifact-backed H_ant(r,t)=I(t)H_1A(r) contract. Promotion is independent for FDM CPU reference, CUDA FDM, native FEM CPU, and native FEM GPU and requires stale-artifact rejection plus waveform parity."
+    },
+    {
+      "id": "antenna_source_k_spectrum",
+      "label": "Antenna source k-spectrum",
+      "lanes": {
+        "fdm_cpu_reference": "semantic_only",
+        "fdm_gpu_production": "semantic_only",
+        "fem_cpu_public": "semantic_only",
+        "fem_gpu_public": "semantic_only"
+      },
+      "validated_workloads": [],
+      "notes": "SpinWaveExcitationAnalysis(method=source_k_profile) authoring exists, but the resource-backed vector source-spectrum workflow is not executable. It must preserve field components and must not be labeled as the magnetization response."
+    },
+    {
+      "id": "antenna_local_k_spectrum",
+      "label": "Antenna local constriction spectrum W_H(u,k)",
+      "lanes": {
+        "fdm_cpu_reference": "unsupported",
+        "fdm_gpu_production": "unsupported",
+        "fem_cpu_public": "unsupported",
+        "fem_gpu_public": "unsupported"
+      },
+      "validated_workloads": [],
+      "notes": "Planned windowed spatial spectrum for variable-width antennas. No canonical executable or semantic implementation exists yet."
+    },
+    {
+      "id": "spin_wave_dynamic_structure_factor",
+      "label": "Time-domain spin-wave dynamic structure factor S_m(k,omega)",
+      "lanes": {
+        "fdm_cpu_reference": "unsupported",
+        "fdm_gpu_production": "unsupported",
+        "fem_cpu_public": "unsupported",
+        "fem_gpu_public": "unsupported"
+      },
+      "validated_workloads": [],
+      "notes": "Planned artifact-backed FFT of m(r,t)-m0(r). It is a response product and remains separate from the antenna source spectrum."
     }
   ]
 }

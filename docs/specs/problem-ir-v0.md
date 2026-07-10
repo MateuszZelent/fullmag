@@ -16,6 +16,8 @@ The source of truth is the serialized object graph, not Python source text.
 - `MaterialIR`
 - `MagnetIR`
 - `EnergyTermsIR`
+- `AntennaLayoutIR` collection
+- `FieldDriveIR` collection
 - `StudyIR`
 - `BackendPolicyIR`
 - `ValidationProfileIR`
@@ -192,6 +194,49 @@ Defined but not yet public-executable:
 - `projected_gradient_bb`
 - `nonlinear_cg`
 - `tangent_plane_implicit`
+
+### Planned staged antenna-field extension
+
+Physics note 0950 and ADR 0017 define the canonical extension for a
+variable-width three-dimensional microstrip/CPW. It adds these semantic types:
+
+- `AntennaLayoutIR`: straight local current axis, rigid 3D transform,
+  conductor thickness/conductivity, ordered width stations, named conductor
+  parts, and explicit port modes;
+- `AntennaPortModeIR`: terminal selectors and signed current weights whose sum
+  is zero, normalized to 1 A;
+- `StudyIR::AntennaFieldSolve`: field model, conductor-mesh policy,
+  field-sampling domain, magnetic target references, solver policy, and named
+  outputs;
+- `SolvedAntennaDriveIR`: reference to an earlier stage output, port mode, peak
+  current, canonical waveform, time origin, and active stages;
+- `RegionalFieldDriveIR`: prescribed region, field amplitude/direction,
+  spatial profile, waveform, time origin, and active stages.
+
+These types replace the current design pressure to keep adding optional fields
+to `CurrentModuleIR::AntennaFieldSource`. Existing constant-width antenna and
+`prescribed_zeeman_mask` payloads remain compatibility inputs and normalize to
+the new types. Existing `mqs_2p5d_az` input remains readable but lowers only to
+the explicitly named `legacy_infinite_strip_biot_savart` compatibility
+realization.
+
+`ProblemIR` keeps one singular `study: StudyIR`. Multi-stage identity and
+ordering remain owned by `StudyPipelineDocument`: add
+`StudyPrimitiveStageKind::AntennaFieldSolve`, and let the primitive node id be
+the `stage_id` used by downstream `StageOutputRefIR`. Before a downstream
+`ProblemIR` reaches backend planning, orchestration resolves that reference to
+a concrete `antenna_field_solution.v1` manifest id and content hash.
+
+Validation requires monotone complete width stations, positive dimensions and
+conductivity, explicit return conductors, terminal selectors that resolve to
+nonempty faces, zero-sum current weights, unique ids, and an acyclic stage
+reference to an earlier compatible field-solve output. Normalization may expand
+symmetric CPW shorthand and constant-width layouts; it may not invent a missing
+return path.
+
+The shared IR does not carry MFEM finite-element spaces, CUDA buffers,
+Biot-Savart work arrays, artifact paths, or target node/cell ordering. Those
+belong to execution plans, native descriptors, and artifact provenance.
 
 ## `DynamicsIR::Llg` parameter policy
 

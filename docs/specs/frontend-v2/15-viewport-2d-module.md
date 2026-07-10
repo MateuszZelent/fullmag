@@ -9,6 +9,8 @@ module registry. It was replaced by tabbed center surfaces:
 
 - `cross-section-image` for server-rendered FEM mesh cross-section PNG preview
   and export;
+- `field-map` for interactive revisioned field slices and projections without a
+  second browser WebGL scene;
 - `analysis-plots` for scalar histories and analysis charts;
 - `viewport-3d` for the single live WebGL/R3F 3D scene.
 
@@ -65,6 +67,21 @@ Plot modules must separate:
 
 They must not depend on `viewport-3d` internals or reuse 3D renderer buffers.
 
+## 3.1 Field Map Surface
+
+`field-map` is a separate active-only center module for CST-like scientific
+field inspection. It consumes existing `data/fields/{field_id}/samples/slice`
+and `data/fields/{field_id}/projection` metadata and binary payloads through the
+typed API facade and resource hooks. It supports heatmap, contours, sparse
+arrows, probe, outlines, empty-mask state, and export without reconstructing a
+second field from geometry.
+
+The renderer instance is created once per mount, updates only for resource
+revision or user-control changes, resizes through an observer, and is disposed
+on unmount. Source k-spectrum and spin-wave dynamic-structure-factor products
+are read from `analysis` resources and rendered by `analysis-plots`; they are
+not inferred from a scalar magnitude image.
+
 ## 4. Draft Cross-Section Flow
 
 The View ribbon or Inspector creates an editable cross-section draft. While the
@@ -85,5 +102,11 @@ Required tests:
   `cross-section-image`;
 - the typed API exposes the cross-section PNG endpoint as a binary resource;
 - object URLs created by the image surface are revoked on replacement/unmount;
+- `field-map` reads slice/projection resources only through `ControlRoomApi`
+  and resource hooks, preserves ETag/query identity, and handles empty masks;
+- the field-map renderer is created once, remains idle without changed
+  revisions or controls, resizes by observer, and is disposed on tab switch;
+- switching between `viewport-3d`, `field-map`, and `analysis-plots` mounts only
+  the active heavy surface and keeps memory growth bounded;
 - browser smoke confirms the workflow produces a PNG preview and does not mount
   the removed live 2D viewport.

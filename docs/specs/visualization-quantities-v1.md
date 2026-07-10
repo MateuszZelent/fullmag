@@ -74,6 +74,7 @@ Each quantity belongs to one of these kinds:
 - `H_demag`
 - `H_ext`
 - `H_eff`
+- `H_ant`
 - later:
   - `H_dmi`
   - `H_ani`
@@ -276,6 +277,40 @@ Add:
 Add:
 
 - `dm_dt`
+
+### When staged microwave-antenna field bases become executable
+
+Add or publish:
+
+- `H_ant`
+  - canonical instantaneous summed antenna field;
+  - unit `A/m`;
+  - frozen id from ADR 0004;
+  - full inspection domain or concrete magnetic target projection;
+- `H_ant_basis`
+  - one named port-mode field normalized per ampere;
+  - unit `A/m/A`;
+  - field-sampling or target-projection domain;
+- `J_charge`
+  - solved charge-current density;
+  - unit `A/m^2`;
+  - conductor topology only;
+- `V_electric`
+  - gauge-dependent electric potential;
+  - unit `V`;
+  - conductor topology only;
+- `h_perp`
+  - field transverse to a named equilibrium magnetization;
+  - unit `A/m`;
+  - magnetic target only.
+
+Every field declares `domain_ref`, topology identity, location, source solution,
+port mode, normalization, and revision. The browser must not attach conductor
+fields to magnetic topology or infer compatibility from equal point counts.
+
+The UI may display `mu0 * H_ant` or `mu0 * H_ant_basis` in T/mT or T/A as a
+declared unit transform. This is not a new `B_ext` quantity and does not change
+the stored canonical field.
 
 ## 9. API contract
 
