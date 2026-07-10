@@ -26,14 +26,19 @@ additional diagnostics and cannot replace the full residual.
 Status rows use three independent fields:
 
 ```text
-implementation_state: absent | source_visible | executable | partial_production_executable
-validation_state: unvalidated | algebra_validated | runtime_evidenced | scope_validated
-validated_scope: exact problem, device, precision, algebra and runtime boundary
+implementation_state: absent | contract_only | source_visible | executable
+validation_state: unvalidated | algebra_validated | physics_validated | production_qualified
+validated_scope: non-empty bounded workload and evidence description
 ```
 
-`production_executable` is not equivalent to `production_qualified`. This
-documentation task inspected source and current parallel documentation only;
-it did not rerun any runtime evidence.
+`product_status` is a separate compatibility label from the capability matrix,
+not an implementation or validation axis. In particular,
+`partial_production_executable` means executable only for the explicitly
+documented bounded product workload; it does not imply `physics_validated` or
+`production_qualified`. Runtime evidence is recorded in `validated_scope` or a
+status note and is not itself a validation state. This documentation task
+inspected source and current parallel documentation only; it did not rerun any
+runtime evidence.
 
 ## 2. Common P1 shared-domain assembly contract
 
@@ -70,11 +75,11 @@ operator; it may not reuse a K0 matrix.
 
 Current status:
 
-| Engine/slice | implementation_state | validation_state | validated_scope |
-|---|---|---|---|
-| Cartesian dense reference | `source_visible` | `unvalidated` | No distinct end-to-end target engine token is proven by current planner/ABI. |
-| Tangent dense reference | `executable` | `scope_validated` | Tiny CPU/double modal and block-real driven reference fixtures only; not large-object production. |
-| PETSc AIJ sparse direct helper | `source_visible` | `algebra_validated` | Isolated dense-input-to-AIJ real-split helper using `KSPPREONLY/PCLU` and true-residual recomputation; current production dispatch does not select it as an end-to-end engine. |
+| Engine/slice | implementation_state | validation_state | product_status | validated_scope |
+|---|---|---|---|---|
+| Cartesian dense reference | `source_visible` | `unvalidated` | Not separately classified. | No validated scope: no distinct end-to-end target engine token is proven by current planner/ABI. |
+| Tangent dense reference | `executable` | `algebra_validated` | `reference_executable` | Tiny CPU/double modal and block-real driven algebra fixtures only; not large-object or production physics validation. |
+| PETSc AIJ sparse direct helper | `source_visible` | `algebra_validated` | Not separately classified. | Isolated dense-input-to-AIJ real-split helper using `KSPPREONLY/PCLU` and true-residual recomputation; current production dispatch does not select it as an end-to-end engine. |
 
 ## 4. CPU selected-spectrum modal engines
 
@@ -113,10 +118,10 @@ accept a mode.
 
 Current status:
 
-| Slice | implementation_state | validation_state | validated_scope |
-|---|---|---|---|
-| CPU SLEPc selected spectrum | `partial_production_executable` | `runtime_evidenced` | No production-qualified scope. Current evidence is limited to selected-spectrum CPU no-demag/Full2x2 Floquet and gamma-equivalent slices plus tiny/macrospin adapters. Real shared-domain dynamic-demag qualification and the target imaginary-axis transform remain open. |
-| Poisson-airbox Schur `MatShell` | `source_visible` | `algebra_validated` | Synthetic/algebraic K0 certificate fixtures with reconstructed full and Poisson residuals. This is not real shared-domain P1 production assembly. |
+| Slice | implementation_state | validation_state | product_status | validated_scope |
+|---|---|---|---|---|
+| CPU SLEPc selected spectrum | `executable` | `unvalidated` | `partial_production_executable` | No validated scope for the target engine. Managed runtime evidence is limited to selected-spectrum CPU no-demag/Full2x2 Floquet and gamma-equivalent slices plus tiny/macrospin adapters; real shared-domain dynamic-demag qualification and the target imaginary-axis transform remain open. |
+| Poisson-airbox Schur `MatShell` | `source_visible` | `algebra_validated` | Not separately classified. | Synthetic/algebraic K0 certificate fixtures with reconstructed full and Poisson residuals. This is not real shared-domain P1 production assembly. |
 
 ## 5. CPU driven Krylov engines
 
@@ -151,11 +156,11 @@ coupled engine and must record the fallback before solve execution.
 
 Current status:
 
-| Engine/slice | implementation_state | validation_state | validated_scope |
-|---|---|---|---|
-| `cpu_host_krylov` compatibility path | `partial_production_executable` | `runtime_evidenced` | No production-qualified scope. Current evidence covers only the listed gamma/free-boundary, k0 static-periodic, no-demag nonzero-k phase-projection and narrow K0 periodic-airbox provider slices. It is a custom host GMRES path, not the target PETSc engine for every algebra. |
-| Full-coupled field-split helper | `source_visible` | `algebra_validated` | Bounded dense prototype with a cached dense scalar-block inverse and iterative residual diagnostics; no production PETSc `MatNest/PCFIELDSPLIT` integration. |
-| Driven Schur/provider paths | `partial_production_executable` | `runtime_evidenced` | No production-qualified scope. Narrow K0 periodic-airbox matrix-free provider/Schur response evidence only. It does not prove general full assembly, nonzero-k demag-k or selected-spectrum modal support. |
+| Engine/slice | implementation_state | validation_state | product_status | validated_scope |
+|---|---|---|---|---|
+| `cpu_host_krylov` compatibility path | `executable` | `unvalidated` | `partial_production_executable` | No validated scope for the target PETSc engine. Managed runtime evidence covers only the listed gamma/free-boundary, k0 static-periodic, no-demag nonzero-k phase-projection and narrow K0 periodic-airbox provider slices; the current implementation is a custom host GMRES path. |
+| Full-coupled field-split helper | `source_visible` | `algebra_validated` | Not separately classified. | Bounded dense prototype with a cached dense scalar-block inverse and iterative residual diagnostics; no production PETSc `MatNest/PCFIELDSPLIT` integration. |
+| Driven Schur/provider paths | `executable` | `unvalidated` | `partial_production_executable` | No validated scope. Managed runtime evidence is limited to narrow K0 periodic-airbox matrix-free provider/Schur response and does not prove general full assembly, nonzero-k demag-k or selected-spectrum modal support. |
 
 ## 6. Modal, rational and recycling sweep engine
 
@@ -175,9 +180,9 @@ silently continues with an uncertified basis.
 
 Current status:
 
-| implementation_state | validation_state | validated_scope |
-|---|---|---|
-| `source_visible` | `algebra_validated` | Diagonal validation helper, completeness-policy types and sparse-direct sample hooks. No integrated production modal/rational/recycling sweep engine. |
+| implementation_state | validation_state | product_status | validated_scope |
+|---|---|---|---|
+| `source_visible` | `algebra_validated` | Not separately classified. | Diagonal validation helper, completeness-policy types and sparse-direct sample hooks. No integrated production modal/rational/recycling sweep engine. |
 
 ## 7. GPU library-first engines
 
@@ -219,13 +224,14 @@ on host. Host/device vector movement at operator callback boundaries is legal
 for this engine only when reported. It must never set
 `gpu_device_resident_solver=true`.
 
-| Engine/slice | implementation_state | validation_state | validated_scope |
-|---|---|---|---|
-| `gpu_operator_host_krylov` driven compatibility path | `partial_production_executable` | `runtime_evidenced` | No production-qualified scope. Current evidence covers narrow gamma/free-boundary, k0 static-periodic, no-demag nonzero-k phase-projection and K0 periodic-airbox provider slices. The source reports host Krylov residency; it is not `gpu_device_krylov`. |
-| GPU persistent operator context | `executable` | `runtime_evidenced` | No production-qualified engine scope. Static device buffers and CUDA local/exchange/DMI operator application exist for supported driven slices; this proves operator residency only. |
-| `gpu_device_krylov` contract skeleton | `source_visible` | `unvalidated` | Descriptor, callback, transfer and residual gates exist, but `production_loop_available=false`; no PETSc device KSP engine is integrated. |
-| Narrow K0 GPU modal exceptions | `executable` | `scope_validated` | Dense K0 no-demag macrospin/Kittel and bounded dense Poisson algebra fixtures only, with explicit non-scalable/validation labels. They do not implement general `gpu_modal_device_krylov`. |
-| `gpu_modal_device_krylov` | `absent` | `unvalidated` | No general PETSc/SLEPc device-resident modal engine for real shared-domain meshes, dynamic demag or nonzero-k Floquet. |
+| Engine/slice | implementation_state | validation_state | product_status | validated_scope |
+|---|---|---|---|---|
+| `gpu_operator_host_krylov` driven compatibility path | `executable` | `unvalidated` | `partial_production_executable` | No validated scope for a device Krylov engine. Managed runtime evidence covers narrow gamma/free-boundary, k0 static-periodic, no-demag nonzero-k phase-projection and K0 periodic-airbox provider slices; the source reports host Krylov residency. |
+| GPU persistent operator context | `executable` | `unvalidated` | Not separately classified. | No validated engine scope. Runtime evidence covers static device buffers and CUDA local/exchange/DMI operator application for supported driven slices and proves operator residency only. |
+| `gpu_device_krylov` contract skeleton | `source_visible` | `unvalidated` | Not separately classified. | No validated scope: descriptor, callback, transfer and residual gates exist, but `production_loop_available=false`; no PETSc device KSP engine is integrated. |
+| Narrow K0 GPU macrospin modal exception | `executable` | `physics_validated` | `partial_production_executable` | Managed K0 no-demag macrospin/Kittel modal fixture on GPU/double only; non-scalable and not general `gpu_modal_device_krylov`. |
+| GPU Poisson-airbox dense G5a oracle | `executable` | `algebra_validated` | Not separately classified. | Bounded one-thread dense GPU synthetic full-descriptor fixture only; it does not validate real shared-domain Poisson physics or implement general `gpu_modal_device_krylov`. |
+| `gpu_modal_device_krylov` | `absent` | `unvalidated` | Not separately classified. | No validated scope: no general PETSc/SLEPc device-resident modal engine for real shared-domain meshes, dynamic demag or nonzero-k Floquet exists. |
 
 Nonzero-k numerical FEM dynamic demag remains a contract gap. Neither a K0
 operator nor a no-demag phase-projection slice may satisfy that request.
