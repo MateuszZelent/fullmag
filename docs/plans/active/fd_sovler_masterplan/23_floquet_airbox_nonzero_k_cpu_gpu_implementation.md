@@ -1,6 +1,6 @@
 ---
 title: Nonzero-k Floquet-airbox CPU/GPU implementation contract
-version: target v6 decision-complete
+version: target v7 decision-complete
 status: normative target with explicit current implementation boundaries
 role: scoped_normative_implementation_contract
 ---
@@ -33,7 +33,7 @@ an exact scope along independent implementation and validation axes.
 ```text
 discretization = fem
 product = modal_eigen | driven_response
-k != (0,0,0), canonicalized in the lateral reciprocal cell
+k classification = resolved non-Gamma under Section 3's dimensionless tolerance
 k unit = rad/m
 spin_wave_bc = floquet
 magnetostatic_bc = floquet_airbox
@@ -75,9 +75,14 @@ K0 field.
 Matched-mesh `C_m(k)` and `C_phi(k)` constraints are an independently
 assembled pre-solve oracle. They are required to certify the production
 operator over a bounded accepted k domain, but they are not the production
-operator, solver, preconditioner or fallback. Equivalence is established only
-by matrix parity for assembled fixtures and action parity for matrix-free
-fixtures over that domain. K0-only agreement is insufficient.
+operator, solver, preconditioner or fallback. Raw matrix/action parity is
+required only when the oracle and production spaces are connected by the
+matching Bloch-enriched basis/interpolation map specified in Section 6. An
+ordinary P1 seam-constraint reduction and a periodic-P1 shifted-gradient
+discretization generally span different finite-dimensional fields between
+nodes; without that matching map, the gate is refinement convergence and
+physical-observable parity over the bounded accepted k domain. K0-only
+agreement is insufficient in either comparison mode.
 
 ## 2. Current status and canonical status axes
 
@@ -115,18 +120,49 @@ bounded k, mesh, material, BC, product, device and precision envelope.
 
 ### 3.1 Canonical k representation
 
-`k` is a finite Cartesian vector in `rad/m`. The planner stores both requested
-and resolved vectors and the reciprocal-lattice shift used to map the request
-to the declared first Brillouin cell. For this x/y-periodic, open-z contract:
+`k_requested` is a finite Cartesian vector in `rad/m`. Let `a_1,a_2` be the
+declared oriented lateral primitive vectors and let `b_1,b_2` be the reciprocal
+basis satisfying `a_i dot b_j = 2*pi delta_ij`. Decompose the lateral request as
 
 ```text
-k = (kx, ky, 0) rad/m
-kz = 0 exactly after unit conversion and canonicalization
+k_requested,lateral = xi_requested,1 b_1 + xi_requested,2 b_2
 ```
 
-An exactly Gamma-equivalent resolved vector belongs to the K0 contract in
-chapter 18 and is resolved there before a nonzero-k engine is selected. This
-is deterministic request classification, not runtime fallback. Once a
+The decomposition is solved from the declared basis, not component-wise in the
+Cartesian axes. Canonicalization uses the half-open reciprocal cell
+`[-1/2,1/2)` in each fractional coordinate:
+
+```text
+n_i = floor(xi_requested,i + 1/2)
+xi_resolved,i = xi_requested,i - n_i
+G_wrap = n_1 b_1 + n_2 b_2
+k_resolved,lateral = k_requested,lateral - G_wrap
+```
+
+Thus a positive half-cell tie `xi=+1/2` is represented as `-1/2` with the
+reciprocal shift incremented, while `xi=-1/2` remains included. The equivalent
+phase convention is half-open `[-pi,pi)`: `+pi` is canonicalized to `-pi`, and
+`-pi` remains `-pi`. This tie policy is part of the operator signature.
+
+The planner stores `k_requested`, `xi_requested`, `G_wrap`, `xi_resolved` and
+`k_resolved`; canonicalization never overwrites requested intent. For this
+x/y-periodic, open-z contract define
+
+```text
+L_ref = max(norm(a_1),norm(a_2))
+kz_measure = abs(k_requested dot e_z) L_ref
+kz_tolerance_dimensionless = 1.0e-12
+gamma_measure = max(abs(xi_resolved,1),abs(xi_resolved,2))
+gamma_tolerance_fractional = 1.0e-12
+```
+
+If `kz_measure` exceeds its tolerance, the separate validation family in
+Section 11 rejects the request; otherwise resolved `k_z` is canonicalized to
+zero. If `gamma_measure <= gamma_tolerance_fractional`, the resolved vector is
+canonicalized to exact Gamma and belongs to chapter 18's K0 contract before a
+nonzero-k engine is selected. Otherwise it is nonzero-k. No planner or runtime
+branch uses an exact magnitude or component comparison to classify Gamma.
+This is deterministic request classification, not runtime fallback. Once a
 nonzero-k plan is accepted, it must not snap, clamp or replan to K0.
 
 The accepted k domain is part of the operator-parity and production
@@ -134,8 +170,10 @@ qualification certificate. It records:
 
 ```text
 primitive lattice vectors and reciprocal basis
-requested and resolved k bounds or explicit sample set in rad/m
-reciprocal-cell boundary inclusion policy
+requested/resolved Cartesian and fractional k bounds or explicit sample set
+half-open reciprocal-cell and pi/-pi tie policy
+Gamma and k_z dimensionless tolerances
+reciprocal shift G_wrap
 mesh and FE-order signature
 material, equilibrium and tangent-frame signatures
 outer-boundary and scalar-space signature
@@ -150,17 +188,21 @@ executable there.
 For every lattice translation `R`, compute in double precision:
 
 ```text
-theta_raw = k dot R
-theta = remainder(theta_raw, 2*pi) in (-pi, pi]
+theta_raw = k_resolved dot R
+theta = theta_raw - 2*pi*floor((theta_raw+pi)/(2*pi)) in [-pi,pi)
 phase = exp(-i*theta)
 phase_wrap_tolerance_rad = 1.0e-10
 ```
 
+The `+pi -> -pi` tie rule is the same rule used for reciprocal fractional
+coordinates. Implementations must correct only final-roundoff excursions at an
+endpoint back into `[-pi,pi)`; they may not choose the opposite representative.
+
 Path and corner phases agree only when
-`abs(remainder(theta_a-theta_b,2*pi)) <= phase_wrap_tolerance_rad`. The mesh
-certificate is admissible at a requested k only when its translation
+`abs(wrap_to_half_open_pi(theta_a-theta_b)) <= phase_wrap_tolerance_rad`. The mesh
+certificate is admissible at a resolved k only when its translation
 uncertainty satisfies
-`norm(k)*translation_residual_max_m <= phase_wrap_tolerance_rad/4`; numerical
+`norm(k_resolved)*translation_residual_max_m <= phase_wrap_tolerance_rad/4`; numerical
 phase evaluation and cycle closure consume the remaining tolerance. The
 corresponding complex-phase check uses
 `abs(phase_a-phase_b) <= 2*sin(phase_wrap_tolerance_rad/2)` plus double-roundoff
@@ -191,19 +233,34 @@ scalar phase-only constraints.
 
 Let `Omega_m` be the magnetic region and
 `D=Omega_m union Omega_air` the conformal shared magnetostatic domain. The
-unknowns are:
+production unknowns are periodic cell amplitudes, while physical Bloch fields
+carry the phase explicitly:
 
 ```text
-delta_m = T q             on Omega_m, q in C^(2 N_m)
-delta_phi                 on D,       phi in C^(N_phi)
-delta_M = Ms delta_m      on Omega_m
-delta_H_demag = -grad_k(delta_phi) on Omega_m
+q_cell in C^(2 N_m), phi_cell in C^(N_phi)
+delta_m_cell = T q_cell                 on Omega_m
+delta_M_cell = Ms delta_m_cell          on Omega_m
 
-div_k(grad_k(delta_phi)) = div_k(delta_M) on Omega_m
-div_k(grad_k(delta_phi)) = 0              on Omega_air
+q_phys(r) = exp(-i*k_resolved dot r) q_cell(r)
+delta_m_phys(r) = exp(-i*k_resolved dot r) delta_m_cell(r)
+phi_phys(r) = exp(-i*k_resolved dot r) phi_cell(r)
+delta_M_phys(r) = exp(-i*k_resolved dot r) delta_M_cell(r)
+
+grad(phi_phys) = exp(-i*k_resolved dot r) grad_k(phi_cell)
+delta_H_demag,phys = -exp(-i*k_resolved dot r) grad_k(phi_cell)
+j_n,phys = n dot grad(phi_phys)
+         = exp(-i*k_resolved dot r) n dot grad_k(phi_cell)
+
+div_k(grad_k(phi_cell)) = div_k(delta_M_cell) on Omega_m
+div_k(grad_k(phi_cell)) = 0                   on Omega_air
 ```
 
-`q` and magnetic test functions do not exist in `Omega_air`. The air region
+Here `grad_k=grad-i*k_resolved` and `div_k=div-i*k_resolved dot`. This is the
+phase/sign convention of physics note 0828. In particular, the flux used for a
+physical seam check is `n dot grad_k(phi_cell)` with the reconstructed Bloch
+factor; raw `n dot grad(phi_cell)` is not the physical flux.
+
+`q_cell` and magnetic test functions do not exist in `Omega_air`. The air region
 contributes to the scalar Poisson block, its open-z boundary term and field
 reconstruction, but has no `Ms delta_m` source. `Ms`, equilibrium, materials,
 region maps and tangent frames come from one accepted linearization signature;
@@ -226,18 +283,18 @@ P(k) phi = C_phi_q(k) q
 ```
 
 This is the weak form of the canonical magnetostatic relation with
-`delta_H_demag=-grad_k(delta_phi)`. The signs are identical to chapter 18 at
-K0. Multiplying a complete scalar row by a documented nonzero scale is legal
-only when residual reconstruction maps back to these original signs and
-units.
+`delta_H_demag,phys=-exp(-i*k dot r)grad_k(phi_cell)`. The signs are identical
+to chapter 18 at K0. Multiplying a complete scalar row by a documented nonzero
+scale is legal only when residual reconstruction maps back to these original
+signs and units.
 
 The potential-to-magnetic coupling is assembled from the same element
 geometry, quadrature, `Ms`, tangent frames and phase convention:
 
 ```text
-p^H A_qphi(k) phi
+p^H A_qphi(k) phi_cell
   = int_Omega_m v_h dot
-    [-gamma0 m0 x (-grad_k(delta_phi_h))] dV
+    [-gamma0 m0 x (-grad_k(phi_cell,h))] dV
 ```
 
 The pre-LLG field/source pair must pass the complex adjoint-energy identity
@@ -257,7 +314,7 @@ B(k) = [B_qq(k)  0]
 
 modal:  A(k) x = lambda B(k) x, lambda = i omega
 driven: (i omega B(k)-A(k)) x = [b_q,b_phi]
-x = [q,phi]
+x_cell = [q_cell,phi_cell]
 ```
 
 `A_qq(k)` contains every admitted non-demag tangent derivative assembled with
@@ -265,7 +322,8 @@ the same Bloch convention, including k-dependent exchange and any explicitly
 qualified nonreciprocal term. Dynamic demag is represented only by
 `A_qphi(k)`, `A_phiq(k)` and `P(k)` and is not duplicated in `A_qq(k)`.
 `B_qq(k)` uses the accepted tangent mass/gyrotropic contract and matching
-periodic reduction.
+periodic reduction. Later block formulas may abbreviate `q_cell,phi_cell` as
+`q,phi`; no such abbreviation changes them into physical fields.
 
 For pure Neumann open-z faces at resolved nonzero lateral k, the `|k|^2` part
 of `P(k)` removes the constant-potential nullspace; no gauge row is added. The
@@ -342,7 +400,9 @@ agreement does not satisfy this gate.
 ### 6.1 Oracle maps
 
 The oracle is built independently from the complete equivalence classes on an
-unreduced matched mesh. For each representative-to-member translation `R`:
+unreduced matched mesh. Its ordinary P1 coefficients are samples of the
+physical Bloch fields, not the periodic production amplitudes. For each
+representative-to-member translation `R`:
 
 ```text
 C_m(k): exp(-i*k dot R) plus tangent G_pair
@@ -379,6 +439,24 @@ with the same mathematical names come from direct `grad_k`/`div_k` assembly.
 Their construction paths, signatures and hashes remain separate so a shared
 bug cannot pass as independent parity.
 
+Raw algebra comparison is legal only when the certificate declares matching
+Bloch-enriched maps `J_m(k),J_phi(k)` from production cell-amplitude
+coefficients to oracle physical-field coefficients and proves basis-function
+and quadrature-point identity, not merely nodal interpolation:
+
+```text
+x_oracle = J(k) x_cell
+J(k) = block_diag(J_m(k),J_phi(k))
+A_production(k) = J(k)^H A_oracle(k) J(k)
+B_production(k) = J(k)^H B_oracle(k) J(k)
+```
+
+The transformed equalities include canonical ordering, eliminated DOFs, row
+scaling and adjoint convention. A map that multiplies only nodal values by
+`exp(-i*k dot r)` does not establish this identity for ordinary P1 functions
+inside an element. When no matching Bloch-enriched map exists, raw matrix and
+action entries between the two discretizations are not an acceptance gate.
+
 ### 6.2 Pre-solve equivalence certificate
 
 Before a production scope is promoted, the oracle and production assembler
@@ -391,13 +469,22 @@ block scaling, precision, phase convention, phase tolerance,
 accepted k domain, production assembler identity and oracle identity
 ```
 
-The certificate contains, at each required k sample:
+The certificate declares exactly one cross-form comparison mode:
 
-- block dimensions, sparsity signatures and matrix parity for bounded
-  assembled fixtures;
-- seeded basis/random-vector action parity for all five blocks and the full
-  modal/driven action;
-- magnetic source, scalar potential and recovered Cartesian demag-field parity;
+- `matching_bloch_basis_raw_parity`: record `J_m(k),J_phi(k)` identities and
+  errors for every transformed block and seeded full action; or
+- `ordinary_p1_refinement_observable_parity`: record a minimum of three nested
+  mesh levels, each discretization's independent convergence rate and their
+  converged physical-observable differences over the bounded k samples.
+
+Both modes contain, at each required k sample:
+
+- block dimensions, basis/interpolation signatures and comparison-mode
+  eligibility;
+- magnetic source, scalar potential, physical normal flux and reconstructed
+  Cartesian demag-field comparisons;
+- modal eigenvalue-cluster/invariant-subspace or driven transformed-observable
+  comparisons, as applicable;
 - Robin/Dirichlet/pure-Neumann policy and K0-limit parity;
 - original unscaled `eps_q`, `eps_phi` and `eps_full` parity; and
 - independent negative controls for phase sign, coupling sign, missing
@@ -409,10 +496,15 @@ by policy and the DE/BV points used for physics qualification. Adaptive or
 continuous-domain claims additionally require a declared interpolation/error
 bound; finite sample success alone qualifies only the sampled set.
 
-The production and constrained forms may be called equivalent only after this
-matrix/action parity passes over the accepted k domain. The certificate may be
+The production and constrained forms may be called raw-algebra equivalent only
+in `matching_bloch_basis_raw_parity` mode after the transformed matrix/action
+checks pass over the accepted k domain. In
+`ordinary_p1_refinement_observable_parity` mode they may be called convergent
+physical oracles only after both refinement sequences and bounded observable
+comparisons pass; raw equality must not be claimed. The certificate may be
 cached only under its exact key. A changed k domain, mesh, material, boundary,
-phase policy, assembler or oracle invalidates it before the next solve.
+phase policy, comparison mode, assembler or oracle invalidates it before the
+next solve.
 
 ### 6.3 Oracle boundary
 
@@ -449,16 +541,57 @@ For driven response, form the residual directly from
 denominator. Backend, transformed, preconditioned, Schur and tracked Krylov
 residuals are diagnostics only and cannot cap or replace `eps_full`.
 
-Accepted solutions also satisfy the physical seam checks reconstructed on the
+Accepted production cell amplitudes first satisfy periodic cell checks on the
 matched mesh:
 
 ```text
-max_pair norm(delta_m_dst - phase R_orient delta_m_src) <= eps_dm
-max_pair norm(q_dst - phase G_pair q_src) <= eps_q_pair
-max_pair abs(delta_phi_dst - phase delta_phi_src) <= eps_phi_pair
-max_pair abs(partial_n(dst)delta_phi_dst
-             + phase partial_n(src)delta_phi_src) <= eps_flux
+max_pair norm(q_cell,dst - G_pair q_cell,src) <= eps_q_cell_pair
+max_pair abs(phi_cell,dst - phi_cell,src) <= eps_phi_cell_pair
+max_pair abs(n_dst dot grad_k(phi_cell)_dst
+             + n_src dot grad_k(phi_cell)_src) <= eps_flux_cell
 ```
+
+The reconstructed physical fields, and the ordinary-P1 seam oracle directly,
+satisfy the Bloch checks:
+
+```text
+phase = exp(-i*k_resolved dot R)
+max_pair norm(delta_m_phys,dst
+              - phase R_orient delta_m_phys,src) <= eps_dm_phys
+max_pair norm(q_phys,dst - phase G_pair q_phys,src) <= eps_q_phys_pair
+max_pair abs(phi_phys,dst - phase phi_phys,src) <= eps_phi_phys_pair
+max_pair abs(n_dst dot grad(phi_phys)_dst
+             + phase n_src dot grad(phi_phys)_src) <= eps_flux_phys
+```
+
+For production reconstruction the final line is evaluated from
+`exp(-i*k_resolved dot r) n dot grad_k(phi_cell)`. The phase must not be applied
+a second time to `grad_k(phi_cell)`, and `grad(phi_cell)` cannot replace it.
+
+### 7.1 Qualified k <-> -k gates
+
+No reciprocal equality follows merely from the absence of DMI. A `k <-> -k`
+gate exists only when the fixture declares a map `S` that sends the complete
+`+k` physical problem to the `-k` problem and the validator proves equality,
+under that map, of the geometry, material tensors, equilibrium, tangent-frame,
+interaction and open-z/Floquet boundary signatures. The declaration states
+whether `S` is linear or anti-linear and includes every required vector,
+pseudovector, orientation and complex-conjugation transformation.
+
+Modal comparisons match frequency clusters and invariant subspaces first, then
+track branches continuously; index-by-index eigenvalue sorting is not a
+reciprocity test. Driven comparisons use transformed pairs
+`b_- = S_drive b_+` and `ell_- = S_observe ell_+` and compare
+`ell_-^H x_-` with the symmetry-predicted transform of `ell_+^H x_+`. Reusing
+an untransformed drive or observation is not a valid gate.
+
+The simple reciprocal fixture is exchange-only with a declared symmetry map.
+Any fixture with local anisotropy, dipolar coupling, interfaces, texture,
+external bias, DMI or another term must either provide and certify its complete
+problem-specific symmetry map or make no `+k/-k` equality claim. Without a
+qualified map, signed-k branches and driven observables are validated
+independently; expected nonreciprocity may be checked, but reciprocity is not
+assumed.
 
 Modal acceptance additionally uses chapter 18's finite-mode, branch, window,
 normalization and completeness rules. Driven acceptance uses the same physical
@@ -506,13 +639,15 @@ explicitly admitted nonreciprocal magnetic term in `A_qq(k)`, with matching
 `B_qq(k)`. Build the independent `C_m(k)` oracle action from the same physical
 problem but a separate assembly path.
 
-**Gate:** matrix/action parity at K0, `+k`, `-k`, axial and oblique samples;
-independent local SO(2) tangent-frame rotations preserve spectra and
-reconstructed Cartesian fields. Without DMI, asymmetric interfaces or another
-declared nonreciprocal term, selected frequencies and driven observables obey
-`f(k)=f(-k)` and response reciprocity within tolerance. With a qualified
-nonreciprocal term, the expected signed asymmetry is required and reciprocal
-symmetry is not asserted.
+**Gate:** raw matrix/action parity at K0 and at `+k`, `-k`, axial and oblique
+samples only when the Section 6 matching Bloch-enriched map exists; otherwise
+both discretizations pass bounded refinement and physical-observable parity.
+Independent local SO(2) tangent-frame rotations preserve spectra and
+reconstructed Cartesian fields. The simple `f(k)=f(-k)` and response gate is
+exchange-only and consumes the declared Section 7.1 symmetry map, cluster or
+branch matching and transformed drive/observation pair. Additional terms may
+use a reciprocal gate only with their own complete qualified symmetry map;
+absence of DMI alone is insufficient.
 
 ### NK-P2: scalar Poisson manufactured Bloch solution
 
@@ -538,11 +673,14 @@ the production complex Bloch differential forms; combine them with
 `A_qq(k)`/`B_qq(k)` into the full descriptor and driven operator. Build all
 five oracle-reduced blocks independently.
 
-**Gate:** complex adjoint-energy and demag sign checks pass; every block and
-the full modal/driven action pass accepted-domain matrix/action parity;
-reconstructed Cartesian `delta_H_demag` agrees; a sign-flip negative control
-fails. A payload kind, diagnostics label or phase metadata without executable
-numeric blocks fails with `missing_numeric_fem_demag_k`.
+**Gate:** complex adjoint-energy and demag sign checks pass. With a matching
+Bloch-enriched map, every transformed block and the full modal/driven action
+pass accepted-domain raw parity. Without it, ordinary-P1 oracle and production
+sequences pass refinement and bounded physical-observable parity instead.
+Reconstructed Cartesian `delta_H_demag` and physical normal flux agree; a
+sign-flip negative control fails. A payload kind, diagnostics label or phase
+metadata without executable numeric blocks fails with
+`missing_numeric_fem_demag_k`.
 
 ### NK-P4: CPU selected spectrum and driven response
 
@@ -572,9 +710,12 @@ references are postsolve verifier inputs.
 
 **Gate:** mesh and airbox-padding convergence, demag field/energy sign,
 selected modal/driven agreement, DE and BV branch behavior, exact `A(k=0)`
-parity and the `k -> 0` spectrum/response limit pass. Require `f(k)=f(-k)` only
-when all nonreciprocal terms and structural asymmetries are disabled; otherwise
-validate the expected signed nonreciprocity rather than forcing symmetry.
+parity and the `k -> 0` spectrum/response limit pass. Any `k <-> -k` equality
+uses Section 7.1's declared complete symmetry map, signature equality,
+cluster/branch matching and transformed drive/observation pairs. Absence of DMI
+or another named nonreciprocal term is not sufficient. Without the map,
+validate signed branches independently and, where specified, the expected
+nonreciprocity rather than forcing symmetry.
 
 CPU promotion is bounded to the products, k domain, materials, BCs and solver
 engines evidenced by NK-P1 through NK-P5. Passing one product does not promote
@@ -654,31 +795,65 @@ GPU scopes promote independently.
 
 ## 11. Exact rejection reasons and precedence
 
-The planner validates in the order below and emits one primary exact token.
-Supporting diagnostics may list additional failures but may not replace the
-primary reason.
+The six tokens below are the target absent-operator/capability vocabulary after
+a request has passed the separate input-validation family. They do not cover
+malformed units, unsupported `k_z`, invalid BCs, incompatible meshes or
+unsupported FE order. The planner emits one target canonical primary token;
+supporting diagnostics and compatibility aliases may not replace it.
 
 | Order | Exact token | Trigger | Native status | Fallback |
 |---|---|---|---|---|
-| 1 | `missing_floquet_pair_equivalence_classes` | complete accepted magnetic or scalar representative classes, lateral airbox coverage or cycle certificate is absent | `validation_error` | none |
+| 1 | `missing_floquet_pair_equivalence_classes` | a valid matched-mesh request reaches capability resolution but complete accepted magnetic or scalar representative classes, lateral airbox coverage or cycle certificate support is absent | `unavailable` | none |
 | 2 | `missing_floquet_magnetic_constraint_operator` | `C_m(k)` or its adjoint cannot be built with the required phase and `G_pair`, or dimensions/signature disagree | `unavailable` | none |
 | 3 | `missing_floquet_scalar_constraint_operator` | `C_phi(k)` or its adjoint cannot be built over the full scalar airbox space with the same phase convention | `unavailable` | none |
 | 4 | `missing_numeric_fem_demag_k` | a legal nonzero-k demag request lacks executable numeric production `grad_k`/`div_k` blocks/actions; labels, K0 providers and postsolve projection do not count | `unavailable` | none |
-| 5a | `nonzero_k_gpu_modal_operator_unavailable` | strict GPU `modal_eigen` lacks any required device production block, scalar/shifted solve, persistent modal Krylov state or exact parity certificate | `unavailable` | none; never CPU |
-| 5b | `nonzero_k_gpu_driven_operator_unavailable` | strict GPU `driven_response` lacks any required device production block, scalar/shifted solve, persistent driven Krylov state or exact parity certificate | `unavailable` | none; never CPU |
+| 5a | `nonzero_k_gpu_modal_operator_unavailable` | strict GPU `modal_eigen` lacks any required device production block, scalar/shifted solve, persistent modal Krylov state or applicable Section 6 certificate | `unavailable` | none; never CPU |
+| 5b | `nonzero_k_gpu_driven_operator_unavailable` | strict GPU `driven_response` lacks any required device production block, scalar/shifted solve, persistent driven Krylov state or applicable Section 6 certificate | `unavailable` | none; never CPU |
 
-Malformed k units/components, invalid open-z BC, contradictory phase cycles or
-signature mismatches are `validation_error` diagnostics under the first
-applicable input/certificate failure and reject before operator selection.
-Numeric assembly/action failures after a legal plan use `operator_error` with
-`missing_numeric_fem_demag_k` as the primary capability token when no valid
-numeric demag-k operator remains. Krylov convergence or original-residual
-failure is `solve_error`; it is never converted into a capability fallback.
+Before this table, request validation uses a separate exact family:
+
+| Validation token | Trigger |
+|---|---|
+| `invalid_floquet_k_units` | k is not finite or cannot be converted unambiguously to `rad/m` |
+| `unsupported_floquet_kz` | Section 3's dimensionless `kz_measure` exceeds its tolerance |
+| `invalid_floquet_open_z_boundary_condition` | open direction, Robin/Dirichlet/Neumann tuple, beta unit/sign or facet ownership is invalid |
+| `invalid_floquet_periodic_mesh` | declared lattice, matched-face topology, orientation, cycle closure or magnetic/airbox coverage is internally invalid |
+| `unsupported_floquet_fe_order` | magnetic or scalar FE order is outside this P1 contract |
+
+These return `validation_error` and reject before capability/operator
+selection. They are not aliases of the six absent-operator reasons. Numeric
+assembly/action failure after a legal capability plan returns `operator_error`;
+if no executable numeric demag-k operator remains, its canonical capability
+reason is `missing_numeric_fem_demag_k`. Krylov convergence or
+original-residual failure is `solve_error`; it is never converted into a
+capability fallback.
 
 For strict GPU, the two product-specific GPU tokens take precedence only after
 the shared topology, constraint-oracle and numeric production-demag-k
 prerequisites exist. This prevents a GPU token from hiding a missing common
 physics operator.
+
+### 11.1 Current-to-target compatibility migration
+
+The current native vocabulary remains visible during consumer migration, but
+it is not the target primary-reason contract:
+
+| Current product path | Current emitted fields | Target canonical primary | Compatibility behavior |
+|---|---|---|---|
+| CPU modal nonzero-k with demag | `unsupported_reason=production_cpu_modal_dynamic_demag_k_operator_missing`; `dynamic_demag_operator_source=missing_numeric_fem_demag_k` | `missing_numeric_fem_demag_k` while the common numeric operator is absent | retain the current primary as a compatibility alias and retain the source-detail field |
+| CPU driven Floquet-airbox demag-k | `unsupported_reason=floquet_airbox_dynamic_demag_k_unimplemented` | `missing_numeric_fem_demag_k` while the common numeric operator is absent | retain the current unsupported reason as a compatibility alias |
+| strict GPU driven Floquet-airbox demag-k | `unsupported_reason=floquet_airbox_dynamic_demag_gpu_unsupported` | `missing_numeric_fem_demag_k` until the common operator exists; then `nonzero_k_gpu_driven_operator_unavailable` while only the device realization is absent | retain the current unsupported reason as a compatibility alias in both phases |
+
+The target envelope emits `primary_rejection_token=<canonical token>` and
+`compatibility_aliases=[...]`. Existing legacy fields may continue to carry
+their current values until their consumers migrate, but new consumers key on
+`primary_rejection_token`. The same precedence applies to strict GPU modal:
+`missing_numeric_fem_demag_k` while the common operator is absent, then
+`nonzero_k_gpu_modal_operator_unavailable` when only the device modal
+realization is absent. The other three shared target tokens are emitted at
+their corresponding capability-resolution stage with any superseded spelling
+listed only as an alias. Removing aliases requires an explicit schema/version
+cutover; this documentation change does not change native code.
 
 ## 12. Required artifacts and provenance
 
@@ -687,11 +862,11 @@ primary rejection token. A successful scope publishes at least:
 
 | Area | Required fields or evidence |
 |---|---|
-| Intent | product, requested/resolved k in `rad/m`, requested/resolved device, precision, method and strictness |
-| Phase | `exp(-i*k dot R)`, reciprocal-cell mapping, primitive/reciprocal basis, phase-wrap tolerance and accepted k domain |
+| Intent | product, immutable requested k and canonical resolved k in `rad/m`, requested/resolved fractional coordinates, reciprocal shift, requested/resolved device, precision, method and strictness |
+| Phase | `exp(-i*k dot R)`, half-open reciprocal-cell mapping, pi/-pi tie convention, primitive/reciprocal basis, Gamma/kz/phase tolerances and accepted k domain |
 | Inputs | equilibrium, mesh, material, physics, tangent-frame, magnetic-class and scalar-class hashes |
 | Production assembly | `assembly_kind=mfem_complex_bloch_grad_div_shared_domain`, FE order, quadrature, canonical maps/orderings, all block/scaling hashes |
-| Oracle | `C_m(k)`/`C_phi(k)` identities, independent oracle identity, parity-certificate key, sampled k set and matrix/action errors |
+| Oracle | `C_m(k)`/`C_phi(k)` identities, independent oracle identity, comparison mode, optional matching `J_m(k)`/`J_phi(k)` identities, parity-certificate key, sampled k/refinement set and raw-parity or convergence/observable errors |
 | BC | open direction, open-z facets, boundary kind, `beta` in `1/m`, gauge policy/reason and eliminated DOFs |
 | Modal | pencil/scalar kind, target/window/count, transform, KSP/PC, finite/converged/rejected/accepted counts and completeness |
 | Driven | physical drive and projected-RHS provenance, frequency, KSP/PC/restart and stop reason |
@@ -746,18 +921,23 @@ An exact nonzero-k Floquet-airbox scope is complete only when all applicable
 conditions hold:
 
 1. The request has accepted complete magnetic and scalar equivalence classes,
-   canonical k in `rad/m`, one phase convention and a valid open-z BC tuple.
+   immutable requested k plus deterministically wrapped resolved k in `rad/m`,
+   dimensionless Gamma/kz classification, one phase convention and a valid
+   open-z BC tuple.
 2. Backend-owned production assembly emits numeric complex Bloch
    `grad_k`/`div_k` blocks with the signs, domains and SI units in Section 4.
 3. The independent matched-mesh oracle builds both `C_m(k)` and `C_phi(k)` and
-   passes matrix/action parity over the complete accepted k domain.
+   either passes transformed raw matrix/action parity through a certified
+   matching Bloch-enriched map or passes ordinary-P1 refinement and bounded
+   physical-observable parity over the accepted k domain.
 4. Robin is applied only on open-z faces, pure-Neumann nonzero-k coercivity and
    the K0 gauge transition are certified, and exact `A(k=0)` parity holds.
 5. Every modal mode or driven point passes original unscaled block residuals,
    physical seam/flux checks and product-specific acceptance. A postsolve phase
    projection contributes no operator evidence.
 6. NK-P1 through NK-P5 pass for each promoted CPU product, including DE/BV,
-   K0-limit and correctly conditional `f(k)=f(-k)` validation.
+   K0-limit and only symmetry-qualified `k <-> -k` validation with matched
+   clusters/branches and transformed drive/observation pairs.
 7. NK-G1 through NK-G4 pass for each promoted GPU product, including persistent
    device Krylov and zero per-iteration transfers. Strict GPU never falls back
    to CPU.
