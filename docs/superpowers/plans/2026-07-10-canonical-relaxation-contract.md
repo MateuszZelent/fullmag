@@ -190,7 +190,9 @@ PYTHONPATH=packages/fullmag-py/src:packages/fullmag-py/tests python3 -m unittest
 PYTHONPATH=packages/fullmag-py/src python3 -m unittest discover -s packages/fullmag-py/tests -p 'test_*.py'
 ~~~
 
-Expected: all Python tests pass.
+Expected: focused relaxation tests pass. In the full discovery run, no new
+failure appears; the four recorded unrelated frequency/example baseline
+failures either remain equivalent or have been separately fixed by their owner.
 
 - [ ] **Step 7: Commit**
 
@@ -245,10 +247,12 @@ fn strict_planner_rejects_tpi_and_extended_cpu_marks_development() { /* requeste
 - [ ] **Step 2: Verify RED**
 
 ~~~bash
-CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-plan direct_minimizer_rejects_dynamics_and_relaxation_time -- --exact
+CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-plan direct_minimizer_rejects_dynamics_and_relaxation_time
 ~~~
 
-Expected: compile failure for the missing canonical fields or assertion failure because current planner resolves an integrator.
+Expected: output says running 1 test, then compile failure for the missing
+canonical fields or assertion failure because current planner resolves an
+integrator. Zero executed tests is not RED evidence.
 
 - [ ] **Step 3: Change the IR shape**
 
@@ -343,10 +347,11 @@ fn max_steps_does_not_synthesize_a_time_budget() { /* infinity/no separate cap *
 - [ ] **Step 2: Verify RED**
 
 ~~~bash
-CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-runner exact_zero_torque_is_available_and_converged -- --exact
+CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-runner exact_zero_torque_is_available_and_converged
 ~~~
 
-Expected: current >0 sentinel or inferred completion violates the assertion.
+Expected: output says running 1 test and the current >0 sentinel or inferred
+completion violates the assertion. Zero executed tests is not RED evidence.
 
 - [ ] **Step 3: Add typed metric vocabulary**
 
@@ -400,7 +405,7 @@ Expected: focused completion tests pass.
 - [ ] **Step 8: Commit**
 
 ~~~bash
-git add crates/fullmag-ir crates/fullmag-runner crates/fullmag-cli
+git add crates/fullmag-ir crates/fullmag-runner crates/fullmag-cli crates/fullmag-api
 git commit -m "fix(runtime): make relaxation completion authoritative"
 ~~~
 
@@ -429,10 +434,11 @@ Use a native stats fixture where max_torque_Apm=7 and max_rhs_amplitude maps to 
 - [ ] **Step 2: Verify RED**
 
 ~~~bash
-CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-runner fdm_native_preserves_exact_torque -- --exact
+CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-runner fdm_native_preserves_exact_torque
 ~~~
 
-Expected: current wrapper returns the reconstructed value.
+Expected: output says running 1 test and the current wrapper returns the
+reconstructed value. Zero executed tests is not RED evidence.
 
 - [ ] **Step 3: Map exact native telemetry directly**
 
@@ -494,10 +500,11 @@ Assert the accepted/rejected decision changes when the physical weighting is app
 - [ ] **Step 2: Verify RED**
 
 ~~~bash
-CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-runner cuda_direct_minimizer_armijo_uses_joule_slope -- --exact
+CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-runner cuda_direct_minimizer_armijo_uses_joule_slope
 ~~~
 
-Expected: unweighted shared helper accepts or rejects the wrong trial.
+Expected: output says running 1 test and the unweighted shared helper accepts or
+rejects the wrong trial. Zero executed tests is not RED evidence.
 
 - [ ] **Step 3: Replace unweighted helper inputs**
 
@@ -547,10 +554,11 @@ For a deterministic manufactured RHS, assert distinct expected one-step results 
 - [ ] **Step 2: Verify RED**
 
 ~~~bash
-CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-runner multilayer_rk4_executes_rk4_tableau -- --exact
+CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-runner multilayer_rk4_executes_rk4_tableau
 ~~~
 
-Expected: current result equals Heun and fails the RK4 expectation.
+Expected: output says running 1 test and the current result equals Heun and
+fails the RK4 expectation. Zero executed tests is not RED evidence.
 
 - [ ] **Step 3: Implement supported tableaus or narrow capability**
 
@@ -596,8 +604,11 @@ Assert NaN/Inf/negative native torque returns RunError rather than zero. Assert 
 - [ ] **Step 2: Verify RED**
 
 ~~~bash
-CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-runner native_fem_nonfinite_torque_is_error -- --exact
+CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-runner native_fem_nonfinite_torque_is_error
 ~~~
+
+Expected: output says running 1 test and the current zero substitution fails the
+error expectation. Zero executed tests is not RED evidence.
 
 - [ ] **Step 3: Reject nonfinite native stats**
 
@@ -721,8 +732,11 @@ Assert OpenAPI contains enums for relaxation algorithm, stage stop reason, and s
 - [ ] **Step 2: Verify RED**
 
 ~~~bash
-CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-api openapi_relaxation_contract_is_typed -- --exact
+CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-api openapi_relaxation_contract_is_typed
 ~~~
+
+Expected: output says running 1 test and the missing typed schema fails the
+assertion. Zero executed tests is not RED evidence.
 
 - [ ] **Step 3: Replace ambiguous strings and max_torque**
 
@@ -864,6 +878,8 @@ git commit -m "fix(control-room): align relaxation inspector contract"
 - Modify: docs/specs/capability-matrix-v0.md
 - Modify: docs/specs/capability-matrix-v0.json
 - Modify: docs/specs/resource-first-control-room-api-v2.md
+- Create: scripts/check_relaxation_contract_docs.py
+- Create: scripts/test_check_relaxation_contract_docs.py
 
 **Interfaces:**
 - Consumes: verified current implementation and generated API.
@@ -871,7 +887,10 @@ git commit -m "fix(control-room): align relaxation inspector contract"
 
 - [ ] **Step 1: Add a documentation contract scan**
 
-Create or extend a repository test that rejects:
+Create scripts/check_relaxation_contract_docs.py with a pure
+check_relaxation_contract_docs(repo_root: Path) -> list[str] function and a CLI
+that exits nonzero while printing every stale claim. Create unittest coverage
+in scripts/test_check_relaxation_contract_docs.py. The checker rejects:
 
 - direct-minimizer lambda described as dimensionless or seconds;
 - default torque other than 1e-4 A/m;
@@ -881,7 +900,15 @@ Create or extend a repository test that rejects:
 
 - [ ] **Step 2: Verify RED**
 
-Run the documentation/source contract and confirm it identifies current conflicting lines in 0500/0510/0530/capability matrix.
+Run:
+
+~~~bash
+python3 -m unittest -v scripts.test_check_relaxation_contract_docs
+python3 scripts/check_relaxation_contract_docs.py
+~~~
+
+Expected: the unit test passes and the CLI fails while identifying current
+conflicting lines in 0500/0510/0530/capability matrix.
 
 - [ ] **Step 3: Update docs from verified implementation**
 
@@ -891,15 +918,17 @@ Preserve historical context only when labeled. Link all three older notes to 058
 
 ~~~bash
 git diff --check -- docs
+python3 -m unittest -v scripts.test_check_relaxation_contract_docs
+python3 scripts/check_relaxation_contract_docs.py
 rg -n 'lambda.*dimensionless|line-search.*pseudo.?time.*s|1e-6 A/m|7\.9.*A/m' docs/physics/0500-fdm-relaxation-algorithms.md docs/physics/0510-fem-relaxation-algorithms-mfem-gpu.md docs/physics/0530-shared-relaxation-stop-and-field-refresh-semantics.md
 ~~~
 
-Expected: no stale canonical claims.
+Expected: unit test and CLI pass and no stale canonical claims remain.
 
 - [ ] **Step 5: Commit**
 
 ~~~bash
-git add docs/physics docs/architecture/backend-golden-masterplan.md docs/specs
+git add docs/physics docs/architecture/backend-golden-masterplan.md docs/specs scripts/check_relaxation_contract_docs.py scripts/test_check_relaxation_contract_docs.py
 git commit -m "docs: reconcile relaxation capability and units"
 ~~~
 
