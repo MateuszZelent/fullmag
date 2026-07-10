@@ -128,8 +128,8 @@ pub fn stop_summary(control: &RelaxationControlIR) -> String {
     if let Some(s) = control.stop.max_steps {
         parts.push(format!("max_steps = {}", s));
     }
-    if let Some(t) = control.stop.max_pseudotime_s {
-        parts.push(format!("max_pseudotime = {:.3e} s", t));
+    if let Some(t) = control.stop.max_relaxation_time_s {
+        parts.push(format!("max_relaxation_time = {:.3e} s", t));
     }
     if parts.is_empty() {
         "no stop criteria (runs until cancelled)".to_string()

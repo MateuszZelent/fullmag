@@ -7,7 +7,7 @@ use crate::{
     RelaxationControlIR, RequestedFemDemagIR, ResolvedFemDemagIR, SpinWaveBoundaryConditionIR,
     TimeDependenceIR,
 };
-use serde::{Deserialize, Serialize};
+use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RfDriveIR {
@@ -313,7 +313,7 @@ pub struct FieldRefreshPolicyIR {
     pub demag_interval_s: Option<f64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct RelaxStopIR {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub torque_tolerance_apm: Option<f64>,
@@ -322,9 +322,56 @@ pub struct RelaxStopIR {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_steps: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_pseudotime_s: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_physical_time_s: Option<f64>,
+    pub max_relaxation_time_s: Option<f64>,
+}
+
+#[derive(Deserialize)]
+struct RelaxStopIRCompat {
+    #[serde(default)]
+    torque_tolerance_apm: Option<f64>,
+    #[serde(default)]
+    energy_tolerance_j: Option<f64>,
+    #[serde(default)]
+    max_steps: Option<u64>,
+    #[serde(default)]
+    max_relaxation_time_s: Option<f64>,
+    #[serde(default)]
+    max_pseudotime_s: Option<f64>,
+    #[serde(default)]
+    max_physical_time_s: Option<f64>,
+}
+
+impl<'de> Deserialize<'de> for RelaxStopIR {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let compat = RelaxStopIRCompat::deserialize(deserializer)?;
+        if compat.max_relaxation_time_s.is_some()
+            && (compat.max_pseudotime_s.is_some() || compat.max_physical_time_s.is_some())
+        {
+            return Err(D::Error::custom(
+                "max_relaxation_time_s conflicts with legacy max_pseudotime_s/max_physical_time_s",
+            ));
+        }
+        if compat.max_pseudotime_s.is_some()
+            && compat.max_physical_time_s.is_some()
+            && compat.max_pseudotime_s != compat.max_physical_time_s
+        {
+            return Err(D::Error::custom(
+                "legacy max_pseudotime_s and max_physical_time_s conflict",
+            ));
+        }
+        Ok(Self {
+            torque_tolerance_apm: compat.torque_tolerance_apm,
+            energy_tolerance_j: compat.energy_tolerance_j,
+            max_steps: compat.max_steps,
+            max_relaxation_time_s: compat
+                .max_relaxation_time_s
+                .or(compat.max_physical_time_s)
+                .or(compat.max_pseudotime_s),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -763,7 +810,8 @@ pub enum StudyIR {
     },
     Relaxation {
         algorithm: RelaxationAlgorithmIR,
-        dynamics: DynamicsIR,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dynamics: Option<DynamicsIR>,
         stop: RelaxStopIR,
         sampling: SamplingIR,
     },
@@ -860,12 +908,17 @@ fn get_default_dynamics() -> &'static DynamicsIR {
 
 impl StudyIR {
     pub fn dynamics(&self) -> &DynamicsIR {
+        self.optional_dynamics()
+            .expect("this study does not define LLG dynamics")
+    }
+
+    pub fn optional_dynamics(&self) -> Option<&DynamicsIR> {
         match self {
             StudyIR::TimeEvolution { dynamics, .. }
-            | StudyIR::Relaxation { dynamics, .. }
             | StudyIR::Eigenmodes { dynamics, .. }
-            | StudyIR::FrequencyResponse { dynamics, .. } => dynamics,
-            StudyIR::Hysteresis { .. } => get_default_dynamics(),
+            | StudyIR::FrequencyResponse { dynamics, .. } => Some(dynamics),
+            StudyIR::Relaxation { dynamics, .. } => dynamics.as_ref(),
+            StudyIR::Hysteresis { .. } => Some(get_default_dynamics()),
         }
     }
 

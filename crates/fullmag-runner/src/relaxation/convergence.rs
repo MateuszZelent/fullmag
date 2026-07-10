@@ -183,7 +183,6 @@ pub(crate) fn infer_stage_completion(
     };
 
     let max_torque = effective_max_torque_apm(last, gyromagnetic_ratio, damping, pure_damping_rhs);
-    let pseudo_time_s = steps.iter().map(|step| step.dt.max(0.0)).sum::<f64>();
     let energy_plateau_range = if steps.len() >= RELAXATION_ENERGY_PLATEAU_WINDOW_STEPS {
         let mut window = RelaxationEnergyPlateauWindow::default();
         for step in steps
@@ -227,25 +226,13 @@ pub(crate) fn infer_stage_completion(
         }
     }
 
-    if let Some(threshold) = control.stop.max_physical_time_s {
+    if let Some(threshold) = control.stop.max_relaxation_time_s {
         if last.time >= threshold {
             return stage_completion(
                 status_label,
                 Some(StageStopReason::MaxPhysicalTime),
                 Some("physical_time_s".to_string()),
                 Some(last.time),
-                Some(threshold),
-            );
-        }
-    }
-
-    if let Some(threshold) = control.stop.max_pseudotime_s {
-        if pseudo_time_s >= threshold {
-            return stage_completion(
-                status_label,
-                Some(StageStopReason::MaxPseudotime),
-                Some("pseudo_time_s".to_string()),
-                Some(pseudo_time_s),
                 Some(threshold),
             );
         }

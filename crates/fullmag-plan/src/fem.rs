@@ -450,11 +450,16 @@ fn axis_set_label(axes: &BTreeSet<usize>) -> String {
 fn study_mechanics(problem: &ProblemIR) -> Option<&fullmag_ir::MechanicsIR> {
     match &problem.study {
         fullmag_ir::StudyIR::TimeEvolution { dynamics, .. }
-        | fullmag_ir::StudyIR::Relaxation { dynamics, .. }
         | fullmag_ir::StudyIR::Eigenmodes { dynamics, .. }
         | fullmag_ir::StudyIR::FrequencyResponse { dynamics, .. } => match dynamics {
             fullmag_ir::DynamicsIR::Llg { mechanics, .. } => mechanics.as_ref(),
         },
+        fullmag_ir::StudyIR::Relaxation { dynamics, .. } => {
+            dynamics.as_ref().and_then(|dynamics| {
+                let fullmag_ir::DynamicsIR::Llg { mechanics, .. } = dynamics;
+                mechanics.as_ref()
+            })
+        }
         fullmag_ir::StudyIR::Hysteresis { .. } => None,
     }
 }
@@ -1857,9 +1862,9 @@ pub(crate) fn plan_fem(
     }
 
     let controls = planned_study_controls(problem, resolved_backend, &mut errors);
-    let integrator = controls
-        .integrator
-        .expect("FEM time-domain plan requires a time integrator");
+    // The legacy backend plan field remains concrete; native direct minimizers
+    // select their algorithm independently and ignore this non-applicable value.
+    let integrator = controls.integrator.unwrap_or_default();
     let fixed_timestep = controls.fixed_timestep;
     let gyromagnetic_ratio = controls.gyromagnetic_ratio;
     let relaxation = controls.relaxation;
@@ -2377,6 +2382,14 @@ pub(crate) fn plan_fem(
         "Executable time-domain FEM requires the native MFEM/libCEED/hypre backend; the Rust FEM baseline remains internal-only for preview and validation helpers"
             .to_string(),
     ];
+    if fem_plan.relaxation.as_ref().is_some_and(|control| {
+        control.algorithm == fullmag_ir::RelaxationAlgorithmIR::TangentPlaneImplicit
+    }) {
+        provenance_notes.push(
+            "tangent_plane_implicit resolved to the CPU/MFEM development lane; this fallback is not production-qualified"
+                .to_string(),
+        );
+    }
     if let Some(note) = universe_note {
         provenance_notes.push(note);
     }

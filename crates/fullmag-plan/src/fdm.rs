@@ -591,9 +591,8 @@ pub(crate) fn plan_fdm(
     };
 
     let controls = planned_study_controls(problem, resolved_backend, &mut errors);
-    let integrator = controls
-        .integrator
-        .expect("FDM time-domain plan requires a time integrator");
+    // The legacy backend plan field remains concrete; direct minimizers ignore it.
+    let integrator = controls.integrator.unwrap_or_default();
     let fixed_timestep = controls.fixed_timestep;
     let gyromagnetic_ratio = controls.gyromagnetic_ratio;
     let relaxation = controls.relaxation;
@@ -1682,9 +1681,9 @@ pub(crate) fn plan_fdm_multilayer(
     let estimated_kernel_bytes = padded_len * 6 * 16 * estimated_unique_kernels as u64;
 
     let controls = planned_study_controls(problem, resolved_backend, &mut errors);
-    let integrator = controls
-        .integrator
-        .expect("FDM multilayer plan requires a time integrator");
+    // The legacy backend plan field remains concrete; direct minimizers are
+    // rejected on multilayer FDM before execution and do not consume it.
+    let integrator = controls.integrator.unwrap_or_default();
     let fixed_timestep = controls.fixed_timestep;
     let gyromagnetic_ratio = controls.gyromagnetic_ratio;
     let relaxation = controls.relaxation;

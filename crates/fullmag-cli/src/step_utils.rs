@@ -507,13 +507,15 @@ pub(crate) fn resolve_script_until_seconds(
 }
 
 fn resolve_relaxation_until_seconds(
-    dynamics: &fullmag_ir::DynamicsIR,
+    dynamics: &Option<fullmag_ir::DynamicsIR>,
     stop: &fullmag_ir::RelaxStopIR,
 ) -> f64 {
-    if let Some(until_seconds) = stop.max_physical_time_s.or(stop.max_pseudotime_s) {
+    if let Some(until_seconds) = stop.max_relaxation_time_s {
         return until_seconds;
     }
-    let fullmag_ir::DynamicsIR::Llg { fixed_timestep, .. } = dynamics;
+    let Some(fullmag_ir::DynamicsIR::Llg { fixed_timestep, .. }) = dynamics else {
+        return f64::INFINITY;
+    };
     match (stop.max_steps, fixed_timestep) {
         (Some(max_steps), Some(dt)) => max_steps as f64 * dt,
         _ => f64::INFINITY,
@@ -1127,10 +1129,12 @@ fn materialize_pipeline_relax(
     let entrypoint_kind = payload_string(payload, "entrypoint_kind")
         .unwrap_or_else(|| "study_pipeline_relax".to_string());
     ir.problem_meta.entrypoint_kind = entrypoint_kind.clone();
+    let algorithm = payload_relaxation_algorithm(payload)?
+        .unwrap_or(fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped);
     ir.study = fullmag_ir::StudyIR::Relaxation {
-        algorithm: payload_relaxation_algorithm(payload)?
-            .unwrap_or(fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped),
-        dynamics,
+        algorithm,
+        dynamics: (algorithm == fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped)
+            .then_some(dynamics),
         stop: payload_relax_stop(payload, true)?,
         sampling,
     };
@@ -1592,6 +1596,7 @@ fn hysteresis_settle_stop(
         "energy_tolerance_j",
         "energy_tolerance",
         "max_steps",
+        "max_relaxation_time_s",
         "max_pseudotime_s",
         "max_physical_time_s",
     ] {
@@ -1634,15 +1639,9 @@ fn inject_relax_stop_payload(
     if let Some(value) = stop.max_steps {
         payload.insert("max_steps".to_string(), Value::String(value.to_string()));
     }
-    if let Some(value) = stop.max_pseudotime_s {
+    if let Some(value) = stop.max_relaxation_time_s {
         payload.insert(
-            "max_pseudotime_s".to_string(),
-            Value::String(value.to_string()),
-        );
-    }
-    if let Some(value) = stop.max_physical_time_s {
-        payload.insert(
-            "max_physical_time_s".to_string(),
+            "max_relaxation_time_s".to_string(),
             Value::String(value.to_string()),
         );
     }
@@ -2191,12 +2190,25 @@ fn payload_relax_stop(
     let energy_tolerance_j =
         payload_f64(payload, "energy_tolerance_j")?.or(payload_f64(payload, "energy_tolerance")?);
     let max_steps = payload_u64(payload, "max_steps")?;
+    let max_relaxation_time_s = payload_f64(payload, "max_relaxation_time_s")?;
     let max_pseudotime_s = payload_f64(payload, "max_pseudotime_s")?;
     let max_physical_time_s = payload_f64(payload, "max_physical_time_s")?;
+    if max_relaxation_time_s.is_some()
+        && (max_pseudotime_s.is_some() || max_physical_time_s.is_some())
+    {
+        bail!("max_relaxation_time_s conflicts with legacy max_pseudotime_s/max_physical_time_s");
+    }
+    if max_pseudotime_s.is_some()
+        && max_physical_time_s.is_some()
+        && max_pseudotime_s != max_physical_time_s
+    {
+        bail!("legacy max_pseudotime_s and max_physical_time_s conflict");
+    }
 
     let any_explicit = torque_tolerance_apm.is_some()
         || energy_tolerance_j.is_some()
         || max_steps.is_some()
+        || max_relaxation_time_s.is_some()
         || max_pseudotime_s.is_some()
         || max_physical_time_s.is_some();
 
@@ -2212,8 +2224,9 @@ fn payload_relax_stop(
         } else {
             max_steps
         },
-        max_pseudotime_s,
-        max_physical_time_s,
+        max_relaxation_time_s: max_relaxation_time_s
+            .or(max_physical_time_s)
+            .or(max_pseudotime_s),
     })
 }
 
@@ -3007,8 +3020,7 @@ pub(crate) fn build_interactive_command_stage(
                 torque_tolerance_apm: Some(command.torque_tolerance.unwrap_or(1e-4)),
                 energy_tolerance_j: command.energy_tolerance,
                 max_steps: Some(command.max_steps.unwrap_or(50_000)),
-                max_pseudotime_s: None,
-                max_physical_time_s: None,
+                max_relaxation_time_s: None,
             };
 
             // Default relax_alpha = 1.0 for optimal overdamped convergence
@@ -3027,12 +3039,17 @@ pub(crate) fn build_interactive_command_stage(
             ir.problem_meta.entrypoint_kind = "interactive_relax".to_string();
             ir.study = fullmag_ir::StudyIR::Relaxation {
                 algorithm,
-                dynamics: dynamics.clone(),
+                dynamics: (algorithm == fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped)
+                    .then(|| dynamics.clone()),
                 stop: stop.clone(),
                 sampling,
             };
 
-            let until_seconds = resolve_relaxation_until_seconds(&dynamics, &stop);
+            let until_seconds = resolve_relaxation_until_seconds(
+                &(algorithm == fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped)
+                    .then_some(dynamics),
+                &stop,
+            );
 
             Ok(Some(ResolvedScriptStage::solver(
                 ir,
@@ -3805,13 +3822,12 @@ mod tests {
         relax_ir.problem_meta.entrypoint_kind = "flat_relax".to_string();
         relax_ir.study = fullmag_ir::StudyIR::Relaxation {
             algorithm: fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped,
-            dynamics: dynamics.clone(),
+            dynamics: Some(dynamics.clone()),
             stop: fullmag_ir::RelaxStopIR {
                 torque_tolerance_apm: Some(1e-4),
                 energy_tolerance_j: None,
                 max_steps: Some(10),
-                max_pseudotime_s: None,
-                max_physical_time_s: None,
+                max_relaxation_time_s: None,
             },
             sampling: sampling.clone(),
         };
@@ -3927,13 +3943,12 @@ mod tests {
         relax_ir.problem_meta.entrypoint_kind = "flat_relax".to_string();
         relax_ir.study = fullmag_ir::StudyIR::Relaxation {
             algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
-            dynamics: dynamics.clone(),
+            dynamics: None,
             stop: fullmag_ir::RelaxStopIR {
                 torque_tolerance_apm: Some(5.0e3),
                 energy_tolerance_j: None,
                 max_steps: Some(25),
-                max_pseudotime_s: None,
-                max_physical_time_s: None,
+                max_relaxation_time_s: None,
             },
             sampling: sampling.clone(),
         };
@@ -4825,7 +4840,7 @@ mod tests {
                 stop: fullmag_ir::RelaxStopIR {
                     torque_tolerance_apm: Some(torque_tolerance_apm),
                     max_steps: Some(40),
-                    max_physical_time_s: Some(max_physical_time_s),
+                    max_relaxation_time_s: Some(max_physical_time_s),
                     ..
                 },
                 ..
@@ -5418,13 +5433,12 @@ mod tests {
         let mut relax_ir = base.clone();
         relax_ir.study = fullmag_ir::StudyIR::Relaxation {
             algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
-            dynamics: dynamics.clone(),
+            dynamics: None,
             stop: fullmag_ir::RelaxStopIR {
                 torque_tolerance_apm: Some(1e-4),
                 energy_tolerance_j: None,
                 max_steps: Some(25),
-                max_pseudotime_s: None,
-                max_physical_time_s: None,
+                max_relaxation_time_s: None,
             },
             sampling: sampling.clone(),
         };

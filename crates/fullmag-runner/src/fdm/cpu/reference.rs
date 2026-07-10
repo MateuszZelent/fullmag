@@ -1286,7 +1286,7 @@ fn infer_direct_minimizer_completion(
         }
     }
 
-    if let Some(threshold) = control.stop.max_pseudotime_s {
+    if let Some(threshold) = control.stop.max_relaxation_time_s {
         if pseudo_time_s >= threshold {
             return StageCompletionIR {
                 status: "completed".to_string(),

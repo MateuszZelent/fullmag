@@ -875,11 +875,14 @@ pub(crate) fn validate_magnetoelastic(problem: &ProblemIR, errors: &mut Vec<Stri
 
     let mechanics = match &problem.study {
         crate::StudyIR::TimeEvolution { dynamics, .. }
-        | crate::StudyIR::Relaxation { dynamics, .. }
         | crate::StudyIR::Eigenmodes { dynamics, .. }
         | crate::StudyIR::FrequencyResponse { dynamics, .. } => match dynamics {
             DynamicsIR::Llg { mechanics, .. } => mechanics.as_ref(),
         },
+        crate::StudyIR::Relaxation { dynamics, .. } => dynamics.as_ref().and_then(|dynamics| {
+            let DynamicsIR::Llg { mechanics, .. } = dynamics;
+            mechanics.as_ref()
+        }),
         crate::StudyIR::Hysteresis { .. } => None,
     };
     if mechanics.is_some() && !has_magnetoelastic {

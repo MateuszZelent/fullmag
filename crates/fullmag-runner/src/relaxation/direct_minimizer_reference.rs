@@ -237,7 +237,7 @@ fn execute_projected_gradient_bb_soa(
     let mut pseudo_time_s = 0.0;
     let mut converged = false;
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
-    let max_pseudotime_s = control.stop.max_pseudotime_s.unwrap_or(f64::INFINITY);
+    let max_pseudotime_s = f64::INFINITY;
 
     while steps < control.stop.max_steps.unwrap_or(u64::MAX) && pseudo_time_s < max_pseudotime_s {
         let max_torque = compute_max_torque_soa(&m, &h_eff);
@@ -395,7 +395,7 @@ fn execute_projected_gradient_bb_aos(
     let mut pseudo_time_s = 0.0;
     let mut converged = false;
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
-    let max_pseudotime_s = control.stop.max_pseudotime_s.unwrap_or(f64::INFINITY);
+    let max_pseudotime_s = f64::INFINITY;
 
     while steps < control.stop.max_steps.unwrap_or(u64::MAX) && pseudo_time_s < max_pseudotime_s {
         let max_torque = compute_max_torque(&m, &h_eff);
@@ -592,7 +592,7 @@ fn execute_nonlinear_cg_soa(
     let mut pseudo_time_s = 0.0;
     let mut converged = false;
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
-    let max_pseudotime_s = control.stop.max_pseudotime_s.unwrap_or(f64::INFINITY);
+    let max_pseudotime_s = f64::INFINITY;
 
     while steps < control.stop.max_steps.unwrap_or(u64::MAX) && pseudo_time_s < max_pseudotime_s {
         let max_torque = compute_max_torque_soa(&m, &h_eff);
@@ -738,7 +738,7 @@ fn execute_nonlinear_cg_aos(
     let mut pseudo_time_s = 0.0;
     let mut converged = false;
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
-    let max_pseudotime_s = control.stop.max_pseudotime_s.unwrap_or(f64::INFINITY);
+    let max_pseudotime_s = f64::INFINITY;
 
     while steps < control.stop.max_steps.unwrap_or(u64::MAX) && pseudo_time_s < max_pseudotime_s {
         // Check convergence

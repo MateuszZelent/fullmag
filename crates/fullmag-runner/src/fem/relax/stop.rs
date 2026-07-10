@@ -118,27 +118,17 @@ pub fn over_max_steps(control: &RelaxationControlIR, current_step: u64) -> bool 
         .is_some_and(|limit| current_step >= limit)
 }
 
-/// Returns `true` if the stage has exceeded its maximum pseudotime budget.
-pub fn over_max_pseudotime(control: &RelaxationControlIR, current_time_s: f64) -> bool {
+/// Returns `true` if the LLG relaxation stage has exceeded its time budget.
+pub fn over_max_relaxation_time(control: &RelaxationControlIR, current_time_s: f64) -> bool {
     control
         .stop
-        .max_pseudotime_s
-        .is_some_and(|limit| current_time_s >= limit)
-}
-
-/// Returns `true` if the stage has exceeded its maximum physical-time budget.
-pub fn over_max_physical_time(control: &RelaxationControlIR, current_time_s: f64) -> bool {
-    control
-        .stop
-        .max_physical_time_s
+        .max_relaxation_time_s
         .is_some_and(|limit| current_time_s >= limit)
 }
 
 /// Returns `true` if any hard time/step limit has been reached.
 pub fn hard_limit_reached(control: &RelaxationControlIR, step: u64, time_s: f64) -> bool {
-    over_max_steps(control, step)
-        || over_max_pseudotime(control, time_s)
-        || over_max_physical_time(control, time_s)
+    over_max_steps(control, step) || over_max_relaxation_time(control, time_s)
 }
 
 // ── Convergence diagnostics ───────────────────────────────────────────────────
@@ -208,7 +198,7 @@ impl ConvergenceDiagnostic {
             steps,
             max_steps: control.stop.max_steps,
             pseudotime_s,
-            max_pseudotime_s: control.stop.max_pseudotime_s,
+            max_pseudotime_s: control.stop.max_relaxation_time_s,
             converged,
         }
     }

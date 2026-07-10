@@ -4419,13 +4419,12 @@ fn llg_overdamped_relaxation_lowers_to_relaxation_control() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.study = fullmag_ir::StudyIR::Relaxation {
         algorithm: fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped,
-        dynamics: ir.study.dynamics().clone(),
+        dynamics: Some(ir.study.dynamics().clone()),
         stop: fullmag_ir::RelaxStopIR {
             torque_tolerance_apm: Some(1e-3),
             energy_tolerance_j: Some(1e-12),
             max_steps: Some(250),
-            max_pseudotime_s: None,
-            max_physical_time_s: None,
+            max_relaxation_time_s: None,
         },
         sampling: ir.study.sampling().clone(),
     };
@@ -4450,13 +4449,12 @@ fn projected_gradient_bb_is_now_plannable() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.study = fullmag_ir::StudyIR::Relaxation {
         algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
-        dynamics: ir.study.dynamics().clone(),
+        dynamics: None,
         stop: fullmag_ir::RelaxStopIR {
             torque_tolerance_apm: Some(1e-3),
             energy_tolerance_j: None,
             max_steps: Some(250),
-            max_pseudotime_s: None,
-            max_physical_time_s: None,
+            max_relaxation_time_s: None,
         },
         sampling: ir.study.sampling().clone(),
     };
@@ -4479,13 +4477,12 @@ fn nonlinear_cg_is_now_plannable() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.study = fullmag_ir::StudyIR::Relaxation {
         algorithm: fullmag_ir::RelaxationAlgorithmIR::NonlinearCg,
-        dynamics: ir.study.dynamics().clone(),
+        dynamics: None,
         stop: fullmag_ir::RelaxStopIR {
             torque_tolerance_apm: Some(1e-3),
             energy_tolerance_j: None,
             max_steps: Some(250),
-            max_pseudotime_s: None,
-            max_physical_time_s: None,
+            max_relaxation_time_s: None,
         },
         sampling: ir.study.sampling().clone(),
     };
@@ -4504,17 +4501,16 @@ fn nonlinear_cg_is_now_plannable() {
 }
 
 #[test]
-fn direct_minimizer_rejects_physical_time_stop_budget() {
+fn direct_minimizer_rejects_relaxation_time_stop_budget() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.study = fullmag_ir::StudyIR::Relaxation {
         algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
-        dynamics: ir.study.dynamics().clone(),
+        dynamics: None,
         stop: fullmag_ir::RelaxStopIR {
             torque_tolerance_apm: Some(1e-3),
             energy_tolerance_j: None,
             max_steps: Some(250),
-            max_pseudotime_s: None,
-            max_physical_time_s: Some(1e-9),
+            max_relaxation_time_s: Some(1e-9),
         },
         sampling: ir.study.sampling().clone(),
     };
@@ -4523,9 +4519,220 @@ fn direct_minimizer_rejects_physical_time_stop_budget() {
     assert!(err.reasons.iter().any(|reason| {
         reason.contains("projected_gradient_bb")
             && reason.contains("direct minimizer")
-            && reason.contains("max_physical_time_s")
-            && reason.contains("max_pseudotime_s")
-            && reason.contains("llg_overdamped")
+            && reason.contains("max_relaxation_time_s")
+    }));
+}
+
+#[test]
+fn direct_minimizer_rejects_dynamics_and_relaxation_time() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study = fullmag_ir::StudyIR::Relaxation {
+        algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+        dynamics: Some(ir.study.dynamics().clone()),
+        stop: fullmag_ir::RelaxStopIR {
+            torque_tolerance_apm: Some(1e-3),
+            energy_tolerance_j: None,
+            max_steps: Some(250),
+            max_relaxation_time_s: Some(1e-9),
+        },
+        sampling: ir.study.sampling().clone(),
+    };
+
+    let err = plan(&ir).expect_err("direct minimizers reject LLG dynamics and time budgets");
+    assert!(
+        err.reasons
+            .iter()
+            .any(|reason| reason.contains("dynamics") && reason.contains("direct minimizer")),
+        "missing direct-minimizer dynamics rejection: {:?}",
+        err.reasons
+    );
+    assert!(
+        err.reasons.iter().any(|reason| {
+            reason.contains("max_relaxation_time_s") && reason.contains("direct minimizer")
+        }),
+        "missing direct-minimizer relaxation-time rejection: {:?}",
+        err.reasons
+    );
+}
+
+#[test]
+fn direct_minimizer_resolves_no_integrator() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study = fullmag_ir::StudyIR::Relaxation {
+        algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+        dynamics: None,
+        stop: fullmag_ir::RelaxStopIR {
+            torque_tolerance_apm: Some(1e-3),
+            energy_tolerance_j: None,
+            max_steps: Some(250),
+            max_relaxation_time_s: None,
+        },
+        sampling: ir.study.sampling().clone(),
+    };
+
+    let mut errors = Vec::new();
+    let planned = validate::planned_study_controls(&ir, BackendTarget::Fdm, &mut errors);
+    assert!(errors.is_empty(), "unexpected planner errors: {errors:?}");
+    assert_eq!(planned.integrator, None);
+    assert_eq!(planned.fixed_timestep, None);
+    assert_eq!(planned.adaptive_timestep, None);
+}
+
+#[test]
+fn relaxation_rejects_zhang_li_slonczewski_sot_and_thermal() {
+    let relaxation = |ir: &mut ProblemIR| {
+        ir.study = fullmag_ir::StudyIR::Relaxation {
+            algorithm: fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped,
+            dynamics: Some(ir.study.dynamics().clone()),
+            stop: fullmag_ir::RelaxStopIR {
+                torque_tolerance_apm: Some(1e-3),
+                energy_tolerance_j: None,
+                max_steps: Some(250),
+                max_relaxation_time_s: None,
+            },
+            sampling: ir.study.sampling().clone(),
+        };
+    };
+
+    let cases = vec![
+        (
+            fullmag_ir::SpinTorqueModuleIR::ZhangLi {
+                current_density: Some([1e10, 0.0, 0.0]),
+                current_source: None,
+                degree: 0.5,
+                beta: 0.1,
+            },
+            "zhang_li",
+        ),
+        (
+            fullmag_ir::SpinTorqueModuleIR::Slonczewski {
+                current_density: Some([0.0, 0.0, 1e10]),
+                current_source: None,
+                degree: 0.5,
+                spin_polarization: [0.0, 0.0, 1.0],
+                lambda_asymmetry: 1.0,
+                epsilon_prime: 0.0,
+                free_layer_thickness_m: Some(1e-9),
+                fixed_layer_position: Some("top".to_string()),
+            },
+            "slonczewski",
+        ),
+        (
+            fullmag_ir::SpinTorqueModuleIR::SpinOrbitTorque {
+                charge_current_density_a_per_m2: Some(1e10),
+                current_source: None,
+                damping_like_efficiency: 0.1,
+                field_like_efficiency: 0.0,
+                spin_polarization: [0.0, 1.0, 0.0],
+                ferromagnet_thickness_m: 1e-9,
+            },
+            "spin_orbit_torque",
+        ),
+    ];
+    for (module, expected) in cases {
+        let mut ir = ProblemIR::bootstrap_example();
+        relaxation(&mut ir);
+        ir.spin_torque_modules = vec![module];
+        let err = plan(&ir).expect_err("direct torque must be rejected during relaxation");
+        assert!(
+            err.reasons
+                .iter()
+                .any(|reason| reason.contains(expected)
+                    && reason.contains("conservative equilibrium")),
+            "missing {expected} relaxation diagnostic: {:?}",
+            err.reasons
+        );
+    }
+
+    let mut thermal = ProblemIR::bootstrap_example();
+    relaxation(&mut thermal);
+    thermal.temperature = Some(300.0);
+    let err = plan(&thermal).expect_err("thermal relaxation must be rejected");
+    assert!(err.reasons.iter().any(|reason| {
+        reason.contains("thermal noise") && reason.contains("conservative equilibrium")
+    }));
+}
+
+#[test]
+fn relaxation_rejects_time_dependent_and_unpaired_oersted_sources() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study = fullmag_ir::StudyIR::Relaxation {
+        algorithm: fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped,
+        dynamics: Some(ir.study.dynamics().clone()),
+        stop: fullmag_ir::RelaxStopIR {
+            torque_tolerance_apm: Some(1e-3),
+            energy_tolerance_j: None,
+            max_steps: Some(250),
+            max_relaxation_time_s: None,
+        },
+        sampling: ir.study.sampling().clone(),
+    };
+    ir.energy_terms.push(EnergyTermIR::OerstedCylinder {
+        current: 1.0,
+        radius: 5e-9,
+        center: [0.0, 0.0, 0.0],
+        axis: [0.0, 0.0, 1.0],
+        time_dependence: Some(fullmag_ir::TimeDependenceIR::Sinusoidal {
+            frequency_hz: 1e9,
+            phase_rad: 0.0,
+            offset: 0.0,
+        }),
+    });
+
+    let err = plan(&ir).expect_err("relaxation must reject time-dependent and unpaired Oersted");
+    assert!(err.reasons.iter().any(|reason| {
+        reason.contains("time-dependent Oersted") && reason.contains("conservative equilibrium")
+    }));
+    assert!(err
+        .reasons
+        .iter()
+        .any(|reason| { reason.contains("Oersted") && reason.contains("field-energy parity") }));
+}
+
+#[test]
+fn strict_planner_rejects_tpi_and_extended_cpu_marks_development() {
+    let mut strict = ProblemIR::bootstrap_example();
+    strict.backend_policy.requested_backend = BackendTarget::Fem;
+    attach_unit_fem_domain_mesh(&mut strict);
+    strict.study = fullmag_ir::StudyIR::Relaxation {
+        algorithm: fullmag_ir::RelaxationAlgorithmIR::TangentPlaneImplicit,
+        dynamics: None,
+        stop: fullmag_ir::RelaxStopIR {
+            torque_tolerance_apm: Some(1e-3),
+            energy_tolerance_j: None,
+            max_steps: Some(250),
+            max_relaxation_time_s: None,
+        },
+        sampling: strict.study.sampling().clone(),
+    };
+    let err = plan(&strict).expect_err("strict TPI planning must reject development capability");
+    assert!(err.reasons.iter().any(|reason| {
+        reason.contains("tangent_plane_implicit")
+            && reason.contains("development-only")
+            && reason.contains("strict")
+    }));
+
+    let mut extended = strict.clone();
+    extended.backend_policy.requested_backend = BackendTarget::Auto;
+    extended.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Extended;
+    let planned = plan(&extended).expect("extended automatic TPI should resolve to CPU/MFEM");
+    assert_eq!(planned.common.requested_backend, BackendTarget::Auto);
+    assert_eq!(planned.common.resolved_backend, BackendTarget::Fem);
+    assert!(planned.provenance.notes.iter().any(|note| {
+        note.contains("tangent_plane_implicit")
+            && note.contains("development")
+            && note.contains("CPU/MFEM")
+    }));
+
+    extended.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "gpu"}),
+    );
+    let err = plan(&extended).expect_err("forced GPU TPI must reject");
+    assert!(err.reasons.iter().any(|reason| {
+        reason.contains("tangent_plane_implicit")
+            && reason.contains("GPU")
+            && reason.contains("unsupported")
     }));
 }
 
@@ -4533,16 +4740,16 @@ fn direct_minimizer_rejects_physical_time_stop_budget() {
 fn tangent_plane_implicit_is_now_plannable_for_fem() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.backend_policy.requested_backend = BackendTarget::Fem;
+    ir.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Extended;
     attach_unit_fem_domain_mesh(&mut ir);
     ir.study = fullmag_ir::StudyIR::Relaxation {
         algorithm: fullmag_ir::RelaxationAlgorithmIR::TangentPlaneImplicit,
-        dynamics: ir.study.dynamics().clone(),
+        dynamics: None,
         stop: fullmag_ir::RelaxStopIR {
             torque_tolerance_apm: Some(1e-3),
             energy_tolerance_j: None,
             max_steps: Some(250),
-            max_pseudotime_s: None,
-            max_physical_time_s: None,
+            max_relaxation_time_s: None,
         },
         sampling: ir.study.sampling().clone(),
     };
@@ -4566,13 +4773,12 @@ fn tangent_plane_implicit_is_rejected_for_fdm() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.study = fullmag_ir::StudyIR::Relaxation {
         algorithm: fullmag_ir::RelaxationAlgorithmIR::TangentPlaneImplicit,
-        dynamics: ir.study.dynamics().clone(),
+        dynamics: None,
         stop: fullmag_ir::RelaxStopIR {
             torque_tolerance_apm: Some(1e-3),
             energy_tolerance_j: None,
             max_steps: Some(250),
-            max_pseudotime_s: None,
-            max_physical_time_s: None,
+            max_relaxation_time_s: None,
         },
         sampling: ir.study.sampling().clone(),
     };
@@ -4582,8 +4788,7 @@ fn tangent_plane_implicit_is_rejected_for_fdm() {
         reason.contains("tangent_plane_implicit")
             && reason.contains("FEM-only")
             && reason.contains("backend='fem'")
-            && reason.contains("under development")
-            && reason.contains("not production-qualified")
+            && reason.contains("extended")
     }));
 }
 

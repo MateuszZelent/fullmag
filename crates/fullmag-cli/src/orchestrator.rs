@@ -271,7 +271,7 @@ fn torque_display_mode(problem: &ProblemIR) -> Option<TorqueDisplayMode> {
             algorithm,
             ..
         } => (
-            match dynamics {
+            match dynamics.as_ref()? {
                 DynamicsIR::Llg {
                     gyromagnetic_ratio, ..
                 } => *gyromagnetic_ratio,

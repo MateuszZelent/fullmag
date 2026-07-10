@@ -2361,8 +2361,7 @@ fn settle_step_relaxation_control(step: &SettleStepIR) -> Result<RelaxationContr
                 torque_tolerance_apm: Some(*torque_tolerance),
                 energy_tolerance_j: None,
                 max_steps: Some(*max_steps as u64),
-                max_pseudotime_s: *max_pseudotime_s,
-                max_physical_time_s: *max_physical_time_s,
+                max_relaxation_time_s: max_physical_time_s.or(*max_pseudotime_s),
             },
         },
         SettleStepIR::Minimize {
@@ -2379,8 +2378,7 @@ fn settle_step_relaxation_control(step: &SettleStepIR) -> Result<RelaxationContr
                 torque_tolerance_apm: Some(*torque_tolerance),
                 energy_tolerance_j: Some(*energy_tolerance),
                 max_steps: Some(*max_steps as u64),
-                max_pseudotime_s: *max_pseudotime_s,
-                max_physical_time_s: *max_physical_time_s,
+                max_relaxation_time_s: max_physical_time_s.or(*max_pseudotime_s),
             },
         },
         SettleStepIR::DynamicsSettle {
@@ -2395,8 +2393,7 @@ fn settle_step_relaxation_control(step: &SettleStepIR) -> Result<RelaxationContr
                 torque_tolerance_apm: None,
                 energy_tolerance_j: None,
                 max_steps: Some(*max_steps as u64),
-                max_pseudotime_s: *max_pseudotime_s,
-                max_physical_time_s: *max_physical_time_s,
+                max_relaxation_time_s: max_physical_time_s.or(*max_pseudotime_s),
             },
         },
     };
@@ -2406,11 +2403,11 @@ fn settle_step_relaxation_control(step: &SettleStepIR) -> Result<RelaxationContr
 
 fn reject_direct_minimizer_physical_time(control: &RelaxationControlIR) -> Result<(), RunError> {
     if relaxation_algorithm_is_direct_minimizer(control.algorithm)
-        && control.stop.max_physical_time_s.is_some()
+        && control.stop.max_relaxation_time_s.is_some()
     {
         return Err(RunError {
             message: format!(
-                "hysteresis settle method '{}' is a direct minimizer and does not advance physical time; max_physical_time_s is unsupported for this method. Use max_pseudotime_s or method='llg_overdamped' for physical-time relaxation.",
+                "hysteresis settle method '{}' is a direct minimizer and does not accept a seconds-valued relaxation-time budget; use max_steps or method='llg_overdamped'",
                 control.algorithm.as_str()
             ),
         });

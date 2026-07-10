@@ -300,17 +300,14 @@ impl RelaxationAlgorithmIR {
         }
     }
 
-    /// Physics-optimal default integrator for each relaxation algorithm.
+    /// Default integrator for the LLG relaxation family.
     ///
-    /// - `LlgOverdamped` / `ProjectedGradientBb` / `NonlinearCg` → RK23
-    ///   (mumax3 Relax pattern: cheap 3rd-order adaptive, fast overdamped convergence)
-    /// - `TangentPlaneImplicit` → Heun (FEM implicit; Heun for explicit sub-steps)
-    pub fn default_integrator(self) -> IntegratorChoice {
+    /// Direct minimizers do not integrate dynamics and therefore resolve no
+    /// time integrator.
+    pub fn default_integrator(self) -> Option<IntegratorChoice> {
         match self {
-            Self::LlgOverdamped | Self::ProjectedGradientBb | Self::NonlinearCg => {
-                IntegratorChoice::Rk23
-            }
-            Self::TangentPlaneImplicit => IntegratorChoice::Heun,
+            Self::LlgOverdamped => Some(IntegratorChoice::Rk23),
+            Self::ProjectedGradientBb | Self::NonlinearCg | Self::TangentPlaneImplicit => None,
         }
     }
 }

@@ -9,6 +9,15 @@ use std::collections::BTreeSet;
 use crate::util::runtime_requests_cuda;
 
 pub(crate) fn resolve_auto_backend(problem: &ProblemIR) -> BackendTarget {
+    if matches!(
+        problem.study,
+        fullmag_ir::StudyIR::Relaxation {
+            algorithm: RelaxationAlgorithmIR::TangentPlaneImplicit,
+            ..
+        }
+    ) {
+        return BackendTarget::Fem;
+    }
     let hints = problem.backend_policy.discretization_hints.as_ref();
     let has_fdm = hints.and_then(|value| value.fdm.as_ref()).is_some()
         || problem
@@ -292,13 +301,23 @@ pub(crate) fn planned_study_controls(
     resolved_backend: BackendTarget,
     errors: &mut Vec<String>,
 ) -> PlannedStudyControls {
-    let uses_time_integrator =
-        !matches!(problem.study, fullmag_ir::StudyIR::FrequencyResponse { .. });
+    validate_conservative_relaxation(problem, errors);
+    let uses_time_integrator = matches!(
+        problem.study,
+        fullmag_ir::StudyIR::TimeEvolution { .. }
+            | fullmag_ir::StudyIR::Eigenmodes { .. }
+            | fullmag_ir::StudyIR::Hysteresis { .. }
+            | fullmag_ir::StudyIR::Relaxation {
+                algorithm: RelaxationAlgorithmIR::LlgOverdamped,
+                ..
+            }
+    );
+    let dynamics = problem.study.optional_dynamics();
 
     // Parse user-specified integrator string → Option<IntegratorChoice>.
     // "auto" resolves to None, which triggers per-study-kind default selection.
     let user_integrator = if uses_time_integrator {
-        match problem.study.dynamics() {
+        match dynamics.expect("validated time-integrating study must define dynamics") {
             fullmag_ir::DynamicsIR::Llg { integrator, .. } => match integrator.as_str() {
                 "heun" => Some(IntegratorChoice::Heun),
                 "rk4" => Some(IntegratorChoice::Rk4),
@@ -323,41 +342,30 @@ pub(crate) fn planned_study_controls(
     // TimeEvolution → RK45 (mumax3's default: Dormand-Prince, 5th-order adaptive).
     // Relaxation    → algorithm.default_integrator() (e.g. LlgOverdamped→RK23).
     let integrator = if uses_time_integrator {
-        Some(match user_integrator {
-            Some(choice) => choice,
-            None => match &problem.study {
-                fullmag_ir::StudyIR::TimeEvolution { .. } => IntegratorChoice::Rk45,
-                fullmag_ir::StudyIR::Relaxation { algorithm, .. } => algorithm.default_integrator(),
-                fullmag_ir::StudyIR::Eigenmodes { .. } => IntegratorChoice::Heun,
-                fullmag_ir::StudyIR::FrequencyResponse { .. } => unreachable!(
-                    "frequency response is a direct harmonic solve and has no time integrator"
-                ),
-                fullmag_ir::StudyIR::Hysteresis { .. } => IntegratorChoice::Heun,
-            },
+        user_integrator.or_else(|| match &problem.study {
+            fullmag_ir::StudyIR::TimeEvolution { .. } => Some(IntegratorChoice::Rk45),
+            fullmag_ir::StudyIR::Relaxation { algorithm, .. } => algorithm.default_integrator(),
+            fullmag_ir::StudyIR::Eigenmodes { .. } => Some(IntegratorChoice::Heun),
+            fullmag_ir::StudyIR::FrequencyResponse { .. } => unreachable!(
+                "frequency response is a direct harmonic solve and has no time integrator"
+            ),
+            fullmag_ir::StudyIR::Hysteresis { .. } => Some(IntegratorChoice::Heun),
         })
     } else {
         None
     };
 
-    let fixed_timestep = match problem.study.dynamics() {
+    let fixed_timestep = dynamics.and_then(|dynamics| match dynamics {
         fullmag_ir::DynamicsIR::Llg { fixed_timestep, .. } => *fixed_timestep,
-    };
+    });
 
-    let gyromagnetic_ratio = match problem.study.dynamics() {
+    let gyromagnetic_ratio = dynamics.map_or(2.211e5, |dynamics| match dynamics {
         fullmag_ir::DynamicsIR::Llg {
             gyromagnetic_ratio, ..
         } => *gyromagnetic_ratio,
-    };
+    });
 
     let relaxation = problem.study.relaxation().map(|control| {
-        if is_direct_relaxation_minimizer(control.algorithm)
-            && control.stop.max_physical_time_s.is_some()
-        {
-            errors.push(format!(
-                "relaxation algorithm '{}' is a direct minimizer and does not advance physical time; max_physical_time_s is unsupported for this algorithm. Use max_pseudotime_s or algorithm='llg_overdamped' for physical-time relaxation.",
-                control.algorithm.as_str()
-            ));
-        }
         match resolved_backend {
             BackendTarget::Fem => {
                 if control.algorithm != RelaxationAlgorithmIR::LlgOverdamped
@@ -373,10 +381,7 @@ pub(crate) fn planned_study_controls(
             }
             BackendTarget::Fdm => {
                 if control.algorithm == RelaxationAlgorithmIR::TangentPlaneImplicit {
-                    errors.push(
-                        "relaxation algorithm 'tangent_plane_implicit' is FEM-only and under development in the current public runner; it is not production-qualified. Request backend='fem' only for development-scale native MFEM tangent-plane implicit checks"
-                            .to_string(),
-                    );
+                    errors.push("relaxation algorithm 'tangent_plane_implicit' is FEM-only; request backend='fem' with execution_mode='extended' for the CPU/MFEM development lane".to_string());
                 } else if control.algorithm != RelaxationAlgorithmIR::LlgOverdamped
                     && control.algorithm != RelaxationAlgorithmIR::ProjectedGradientBb
                     && control.algorithm != RelaxationAlgorithmIR::NonlinearCg
@@ -389,18 +394,25 @@ pub(crate) fn planned_study_controls(
             }
             _ => {}
         }
+        if control.algorithm == RelaxationAlgorithmIR::TangentPlaneImplicit {
+            if problem.validation_profile.execution_mode == fullmag_ir::ExecutionMode::Strict {
+                errors.push("relaxation algorithm 'tangent_plane_implicit' is development-only and is rejected in execution_mode='strict'".to_string());
+            } else if crate::util::runtime_requests_cuda(problem) {
+                errors.push("relaxation algorithm 'tangent_plane_implicit' has no GPU implementation; forced GPU execution is unsupported, use the CPU/MFEM development lane".to_string());
+            }
+        }
         control
     });
 
-    let adaptive_timestep = match problem.study.dynamics() {
+    let adaptive_timestep = dynamics.and_then(|dynamics| match dynamics {
         fullmag_ir::DynamicsIR::Llg {
             adaptive_timestep, ..
         } => adaptive_timestep.clone(),
-    };
+    });
 
-    let field_refresh = match problem.study.dynamics() {
+    let field_refresh = dynamics.and_then(|dynamics| match dynamics {
         fullmag_ir::DynamicsIR::Llg { field_refresh, .. } => field_refresh.clone(),
-    };
+    });
 
     // Validate adaptive/fixed exclusivity and integrator compatibility.
     if uses_time_integrator && adaptive_timestep.is_some() && fixed_timestep.is_some() {
@@ -429,13 +441,84 @@ pub(crate) fn planned_study_controls(
     }
 }
 
-fn is_direct_relaxation_minimizer(algorithm: RelaxationAlgorithmIR) -> bool {
-    matches!(
-        algorithm,
-        RelaxationAlgorithmIR::ProjectedGradientBb
-            | RelaxationAlgorithmIR::NonlinearCg
-            | RelaxationAlgorithmIR::TangentPlaneImplicit
-    )
+fn validate_conservative_relaxation(problem: &ProblemIR, errors: &mut Vec<String>) {
+    if !matches!(problem.study, fullmag_ir::StudyIR::Relaxation { .. }) {
+        return;
+    }
+    for module in &problem.spin_torque_modules {
+        let name = match module {
+            fullmag_ir::SpinTorqueModuleIR::ZhangLi { .. } => "zhang_li",
+            fullmag_ir::SpinTorqueModuleIR::Slonczewski { .. } => "slonczewski",
+            fullmag_ir::SpinTorqueModuleIR::SpinOrbitTorque { .. } => "spin_orbit_torque",
+            fullmag_ir::SpinTorqueModuleIR::InterfaceCpp { .. } => "interface_cpp",
+            fullmag_ir::SpinTorqueModuleIR::DriftDiffusion { .. } => "drift_diffusion",
+        };
+        errors.push(format!(
+            "relaxation is a conservative equilibrium workflow and rejects nonconservative {name} torque"
+        ));
+    }
+    if problem.current_density.is_some()
+        || problem.stt_degree.is_some()
+        || problem.stt_beta.is_some()
+        || problem.stt_spin_polarization.is_some()
+    {
+        errors.push(
+            "relaxation is a conservative equilibrium workflow and rejects legacy direct spin torque fields"
+                .to_string(),
+        );
+    }
+    if problem
+        .temperature
+        .is_some_and(|temperature| temperature > 0.0)
+    {
+        errors.push(
+            "relaxation is a conservative equilibrium workflow and rejects stochastic thermal noise"
+                .to_string(),
+        );
+    }
+    for term in &problem.energy_terms {
+        match term {
+            fullmag_ir::EnergyTermIR::OerstedCylinder { time_dependence, .. } => {
+                if time_dependence
+                    .as_ref()
+                    .is_some_and(|dependence| !matches!(dependence, fullmag_ir::TimeDependenceIR::Constant))
+                {
+                    errors.push(
+                        "relaxation rejects time-dependent Oersted sources in a conservative equilibrium workflow"
+                            .to_string(),
+                    );
+                }
+                errors.push(
+                    "relaxation rejects Oersted fields until identical field-energy parity is validated for the selected lane"
+                        .to_string(),
+                );
+            }
+            fullmag_ir::EnergyTermIR::OerstedField { .. } => errors.push(
+                "relaxation rejects Oersted fields until identical field-energy parity is validated for the selected lane"
+                    .to_string(),
+            ),
+            _ => {}
+        }
+    }
+    for module in &problem.current_modules {
+        if let fullmag_ir::CurrentModuleIR::AntennaFieldSource {
+            drive, waveform, ..
+        } = module
+        {
+            let time_dependent = waveform
+                .as_ref()
+                .or_else(|| drive.as_ref().and_then(|drive| drive.waveform.as_ref()))
+                .is_some_and(|dependence| {
+                    !matches!(dependence, fullmag_ir::TimeDependenceIR::Constant)
+                });
+            if time_dependent {
+                errors.push(
+                    "relaxation rejects time-dependent external-field sources in a conservative equilibrium workflow"
+                        .to_string(),
+                );
+            }
+        }
+    }
 }
 
 pub(crate) fn validate_executable_outputs(

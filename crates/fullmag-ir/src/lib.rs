@@ -624,38 +624,67 @@ impl ProblemIR {
                     }
                 }
             }
-            StudyIR::Relaxation { dynamics, stop, .. } => {
-                validate_study_dynamics(dynamics, &mut errors);
-                if stop.torque_tolerance_apm.is_some_and(|value| value <= 0.0) {
-                    errors
-                        .push("relaxation.stop.torque_tolerance_apm must be positive".to_string());
+            StudyIR::Relaxation {
+                algorithm,
+                dynamics,
+                stop,
+                ..
+            } => {
+                match (algorithm, dynamics) {
+                    (RelaxationAlgorithmIR::LlgOverdamped, Some(dynamics)) => {
+                        validate_study_dynamics(dynamics, &mut errors);
+                    }
+                    (RelaxationAlgorithmIR::LlgOverdamped, None) => errors.push(
+                        "relaxation algorithm 'llg_overdamped' requires dynamics".to_string(),
+                    ),
+                    (_, Some(_)) => errors.push(format!(
+                        "relaxation algorithm '{}' is a direct minimizer and requires dynamics=None",
+                        algorithm.as_str()
+                    )),
+                    (_, None) => {}
                 }
-                if stop.energy_tolerance_j.is_some_and(|value| value <= 0.0) {
+                if stop
+                    .torque_tolerance_apm
+                    .is_some_and(|value| !value.is_finite() || value <= 0.0)
+                {
                     errors.push(
-                        "relaxation.stop.energy_tolerance_j must be positive when provided"
+                        "relaxation.stop.torque_tolerance_apm must be finite and positive"
+                            .to_string(),
+                    );
+                }
+                if stop
+                    .energy_tolerance_j
+                    .is_some_and(|value| !value.is_finite() || value <= 0.0)
+                {
+                    errors.push(
+                        "relaxation.stop.energy_tolerance_j must be finite and positive when provided"
                             .to_string(),
                     );
                 }
                 if stop.max_steps.is_some_and(|value| value == 0) {
                     errors.push("relaxation.stop.max_steps must be > 0".to_string());
                 }
-                if stop.max_pseudotime_s.is_some_and(|value| value <= 0.0) {
+                if stop
+                    .max_relaxation_time_s
+                    .is_some_and(|value| !value.is_finite() || value <= 0.0)
+                {
                     errors.push(
-                        "relaxation.stop.max_pseudotime_s must be positive when provided"
+                        "relaxation.stop.max_relaxation_time_s must be finite and positive when provided"
                             .to_string(),
                     );
                 }
-                if stop.max_physical_time_s.is_some_and(|value| value <= 0.0) {
-                    errors.push(
-                        "relaxation.stop.max_physical_time_s must be positive when provided"
-                            .to_string(),
-                    );
+                if *algorithm != RelaxationAlgorithmIR::LlgOverdamped
+                    && stop.max_relaxation_time_s.is_some()
+                {
+                    errors.push(format!(
+                        "relaxation algorithm '{}' is a direct minimizer and does not accept max_relaxation_time_s",
+                        algorithm.as_str()
+                    ));
                 }
                 if stop.torque_tolerance_apm.is_none()
                     && stop.energy_tolerance_j.is_none()
                     && stop.max_steps.is_none()
-                    && stop.max_pseudotime_s.is_none()
-                    && stop.max_physical_time_s.is_none()
+                    && stop.max_relaxation_time_s.is_none()
                 {
                     errors.push("relaxation.stop requires at least one stop criterion".to_string());
                 }

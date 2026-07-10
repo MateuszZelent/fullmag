@@ -102,7 +102,8 @@ pub(crate) fn direct_minimizer_step_budget(control: &RelaxationControlIR) -> u64
 }
 
 pub(crate) fn direct_minimizer_pseudotime_budget(control: &RelaxationControlIR) -> f64 {
-    control.stop.max_pseudotime_s.unwrap_or(f64::INFINITY)
+    let _ = control;
+    f64::INFINITY
 }
 
 pub(crate) fn direct_minimizer_within_runtime_budget(

@@ -3729,8 +3729,7 @@ fn materialize_equilibrium(
                 torque_tolerance_apm: Some(1e-5),
                 energy_tolerance_j: Some(1e-12),
                 max_steps: Some(RELAX_MAX_STEPS),
-                max_pseudotime_s: None,
-                max_physical_time_s: None,
+                max_relaxation_time_s: None,
             },
         };
         let mut energy_plateau = RelaxationEnergyPlateauWindow::default();

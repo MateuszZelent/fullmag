@@ -101,6 +101,81 @@ fn bootstrap_example_validates() {
 }
 
 #[test]
+fn direct_minimizer_rejects_dynamics_and_relaxation_time() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study = StudyIR::Relaxation {
+        algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
+        dynamics: Some(ir.study.dynamics().clone()),
+        stop: RelaxStopIR {
+            torque_tolerance_apm: Some(1e-4),
+            energy_tolerance_j: None,
+            max_steps: Some(50_000),
+            max_relaxation_time_s: Some(1e-9),
+        },
+        sampling: ir.study.sampling().clone(),
+    };
+
+    let errors = ir
+        .validate()
+        .expect_err("direct minimizers reject LLG dynamics and seconds-valued time budgets");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("direct minimizer") && error.contains("dynamics=None")));
+    assert!(errors.iter().any(|error| {
+        error.contains("direct minimizer") && error.contains("max_relaxation_time_s")
+    }));
+}
+
+#[test]
+fn llg_relaxation_requires_dynamics() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study = StudyIR::Relaxation {
+        algorithm: RelaxationAlgorithmIR::LlgOverdamped,
+        dynamics: None,
+        stop: RelaxStopIR {
+            torque_tolerance_apm: Some(1e-4),
+            energy_tolerance_j: None,
+            max_steps: Some(50_000),
+            max_relaxation_time_s: None,
+        },
+        sampling: ir.study.sampling().clone(),
+    };
+
+    let errors = ir
+        .validate()
+        .expect_err("LLG relaxation requires explicit LLG dynamics");
+    assert!(errors
+        .iter()
+        .any(|error| { error.contains("llg_overdamped") && error.contains("requires dynamics") }));
+}
+
+#[test]
+fn legacy_relaxation_time_alias_deserializes_canonically() {
+    let stop: RelaxStopIR = serde_json::from_value(serde_json::json!({
+        "torque_tolerance_apm": 1e-4,
+        "max_steps": 50_000,
+        "max_physical_time_s": 1e-9
+    }))
+    .expect("legacy relaxation time alias should deserialize");
+    assert_eq!(stop.max_relaxation_time_s, Some(1e-9));
+
+    let serialized = serde_json::to_value(stop).expect("canonical stop should serialize");
+    assert_eq!(serialized["max_relaxation_time_s"], serde_json::json!(1e-9));
+    assert!(serialized.get("max_physical_time_s").is_none());
+    assert!(serialized.get("max_pseudotime_s").is_none());
+}
+
+#[test]
+fn conflicting_relaxation_time_aliases_are_rejected() {
+    let error = serde_json::from_value::<RelaxStopIR>(serde_json::json!({
+        "max_relaxation_time_s": 1e-9,
+        "max_physical_time_s": 2e-9
+    }))
+    .expect_err("canonical and legacy relaxation times must not conflict");
+    assert!(error.to_string().contains("conflicts"));
+}
+
+#[test]
 fn hysteresis_validation_accepts_field_unit_provenance() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.study = StudyIR::Hysteresis {
