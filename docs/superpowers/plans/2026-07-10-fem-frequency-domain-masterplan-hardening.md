@@ -1221,7 +1221,8 @@ F-01 through F-22 appear in audit 19
 full pack matches manifest order
 ```
 
-Use this complete implementation shape:
+Use this standard-library implementation shape, updated for the final Task 8
+and Task 9 scope contracts:
 
 ```python
 from __future__ import annotations
@@ -1357,6 +1358,19 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+```
+
+The checker must use the final readiness representation, not the obsolete
+string-only sketch above:
+
+```text
+manifest readiness_matrix and readiness_scope_catalog are required strings
+readiness validated_scope is null or a scope binding object
+every non-null validated_scope/executable_scope has scope_id,
+scope_catalog_uri and scope_catalog_sha256
+scope catalog digest matches its exact committed bytes
+every binding resolves to an entry and every entry validates its scope_id
+against the catalog's canonical scope representation
 ```
 
 Do not add/run tests in this text-only pass.
