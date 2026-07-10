@@ -434,11 +434,11 @@ git commit -m "fix(runtime): make relaxation completion authoritative"
 - Consumes: native/engine exact field residual and typed runtime metric.
 - Produces: exact zero-safe max_torque_Apm and separate max_rhs_norm_per_s on every FDM path.
 
-- [ ] **Step 1: Add failing exact-torque tests**
+- [x] **Step 1: Add failing exact-torque tests**
 
 Use a native stats fixture where max_torque_Apm=7 and max_rhs_amplitude maps to a different number; assert the Rust StepStats preserves 7. Add a parallel-state fixture with exact zero and nonzero synthetic RHS to prove zero is not replaced.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ~~~bash
 CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-runner fdm_native_preserves_exact_torque
@@ -447,7 +447,7 @@ CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-runner fdm_native_p
 Expected: output says running 1 test and the current wrapper returns the
 reconstructed value. Zero executed tests is not RED evidence.
 
-- [ ] **Step 3: Map exact native telemetry directly**
+- [x] **Step 3: Map exact native telemetry directly**
 
 Set:
 
@@ -459,18 +459,18 @@ max_rhs_norm_per_s: stats.max_rhs_amplitude,
 
 Reject nonfinite or negative native metrics. Remove approximate torque from stop paths.
 
-- [ ] **Step 4: Align CPU and multilayer observables**
+- [x] **Step 4: Align CPU and multilayer observables**
 
 Publish exact field torque from accepted H_eff and total RHS norm independently. Do not include direct torques in max_torque_Apm.
 
-- [ ] **Step 5: Verify GREEN**
+- [x] **Step 5: Verify GREEN**
 
 ~~~bash
 CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-runner fdm_native
 CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-engine torque
 ~~~
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ~~~bash
 git add crates/fullmag-runner/src/fdm crates/fullmag-runner/src/types.rs crates/fullmag-engine/src/fdm
