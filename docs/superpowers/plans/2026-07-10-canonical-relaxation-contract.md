@@ -554,11 +554,11 @@ git commit -m "fix(fdm): use physical CUDA minimizer metric"
 - Consumes: requested IntegratorChoice and multilayer RHS.
 - Produces: real requested tableau execution or explicit rejection.
 
-- [ ] **Step 1: Add one-step tableau tests**
+- [x] **Step 1: Add one-step tableau tests**
 
 For a deterministic manufactured RHS, assert distinct expected one-step results for Heun, RK4, and RK23. Add planner tests that every advertised method reaches its implementation.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ~~~bash
 CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-runner multilayer_rk4_executes_rk4_tableau
@@ -567,18 +567,18 @@ CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-runner multilayer_r
 Expected: output says running 1 test and the current result equals Heun and
 fails the RK4 expectation. Zero executed tests is not RED evidence.
 
-- [ ] **Step 3: Implement supported tableaus or narrow capability**
+- [x] **Step 3: Implement supported tableaus or narrow capability**
 
 Prefer the shared FDM integrator tableau/stage machinery. If an implementation cannot be completed and qualified in this change, reject that method in planner/capability rather than route it through Heun.
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 ~~~bash
 CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-runner multilayer
 CARGO_TARGET_DIR=.fullmag/codex-target cargo test -p fullmag-plan multilayer
 ~~~
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ~~~bash
 git add crates/fullmag-runner/src/fdm crates/fullmag-plan/src/fdm.rs docs/specs/capability-matrix-v0.md docs/specs/capability-matrix-v0.json
