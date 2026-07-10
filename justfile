@@ -87,6 +87,10 @@ verify-fem-relaxation-source-contract:
     docker compose --profile fem-gpu run --rm \
       fem-gpu bash -lc 'cd /workspace && cmake --build native/build --target fem_relaxation_source_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_relaxation_source_contract'
 
+verify-fem-time-domain-native-contract:
+    docker compose --profile fem-gpu run --rm \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_stt_contract fem_cuda_tetra_gradient_contract fem_relaxation_source_contract fem_relaxation_energy_derivative_contract fem_relaxation_operator_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_stt_contract && native/build/backends/fem/fem_cuda_tetra_gradient_contract && native/build/backends/fem/fem_relaxation_source_contract && native/build/backends/fem/fem_relaxation_energy_derivative_contract && native/build/backends/fem/fem_relaxation_operator_contract'
+
 verify-fem-exchange-runtime:
     just ensure-managed-fem-runtime
     docker compose --profile fem-gpu run --rm \

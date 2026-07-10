@@ -61,6 +61,8 @@ void c_abi_exposes_native_relaxation_step() {
         read_text_file(root / "cpu" / "mfem" / "runtime" / "backend_step.cpp");
     const std::string gpu_nonlinear_cg =
         read_text_file(root / "gpu" / "cuda" / "relaxation" / "nonlinear_cg.cpp");
+    const std::string gpu_projected_gradient =
+        read_text_file(root / "gpu" / "cuda" / "relaxation" / "pgbb.cpp");
     const std::string relaxation_step =
         read_text_file(root / "cpu" / "mfem" / "relaxation" / "relaxation_step.cpp");
     const std::string projected_gradient =
@@ -200,6 +202,16 @@ void c_abi_exposes_native_relaxation_step() {
             relaxation_math.find("HypreBoomerAMG") != std::string::npos &&
             relaxation_math.find("HyprePCG") != std::string::npos,
         "native FEM direct minimizers must share a cached exchange-plus-mass Hypre-capable preconditioner");
+    check(
+        relaxation_math.find("out_stats.dt_seconds = accepted_step_size") ==
+                std::string::npos &&
+            relaxation_math.find("out_stats.dt_seconds = 0.0") !=
+                std::string::npos,
+        "native FEM direct minimizers must not publish their m/A line-search step as seconds");
+    check(
+        gpu_projected_gradient.find("dt_seconds = trial_step") == std::string::npos &&
+            gpu_nonlinear_cg.find("dt_seconds = trial_step") == std::string::npos,
+        "native CUDA FEM direct minimizers must not publish their m/A line-search step as seconds");
     check(
         mfem_context.find("relaxation::destroy_exchange_mass_preconditioner_cache(ctx)") !=
             std::string::npos,

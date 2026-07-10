@@ -849,7 +849,7 @@ int gpu_relax_projected_gradient_bb_step(
 
     out_stats.step = ctx.state.step_count;
     out_stats.time_seconds = 0.0;
-    out_stats.dt_seconds = trial_step;
+    out_stats.dt_seconds = 0.0;
     out_stats.rejected_attempts = backtracks;
     out_stats.rhs_evaluations = backtracks + 2u;
     if (!gpu_rk_finalize_step_stats_control_readback(ctx, out_stats, reason)) {
@@ -862,7 +862,7 @@ int gpu_relax_projected_gradient_bb_step(
     }
     out_stats.step = ctx.state.step_count;
     out_stats.time_seconds = 0.0;
-    out_stats.dt_seconds = trial_step;
+    out_stats.dt_seconds = 0.0;
     out_stats.max_rhs_amplitude = 0.0;
     out_stats.rejected_attempts = backtracks;
     out_stats.rhs_evaluations = backtracks + 2u;

@@ -18,6 +18,7 @@
 #include "cpu/mfem/runtime/snapshot.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
 #include "fem_common.hpp"
+#include "src/relaxation_operator_units.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>
@@ -428,7 +429,13 @@ bool add_local_anisotropy_tangent_hessian(
                 }
                 const double curvature =
                     (row == col ? mdoth : 0.0) - j_tangent;
-                const double value = implicit_weight * mass * curvature;
+                const double ms = scalar_field_value(
+                    ctx.material_fields.Ms_field,
+                    node,
+                    ctx.material_fields.material.saturation_magnetisation);
+                const double value =
+                    relaxation::local_field_curvature_operator_entry(
+                        implicit_weight, ms, mass, curvature);
                 if (std::isfinite(value) && value != 0.0) {
                     op.Add(
                         2 * static_cast<int>(node) + static_cast<int>(row),
@@ -477,7 +484,12 @@ bool add_local_zeeman_tangent_curvature(
             ctx.zeeman.h_ext_xyz[base + 2u],
         };
         const double curvature = dot_array3(m, h_ext);
-        const double value = implicit_weight * mass * curvature;
+        const double ms = scalar_field_value(
+            ctx.material_fields.Ms_field,
+            node,
+            ctx.material_fields.material.saturation_magnetisation);
+        const double value = relaxation::local_field_curvature_operator_entry(
+            implicit_weight, ms, mass, curvature);
         if (!std::isfinite(value) || value == 0.0) {
             continue;
         }
@@ -562,7 +574,10 @@ std::unique_ptr<mfem::SparseMatrix> assemble_tangent_plane_operator(
             continue;
         }
         add_scalar_row(i, mass, 1.0);
-        add_scalar_row(i, exchange, implicit_weight);
+        add_scalar_row(
+            i,
+            exchange,
+            relaxation::exchange_hessian_scale_from_step_m_per_a(implicit_weight));
     }
     const bool has_local_anisotropy =
         add_local_anisotropy_tangent_hessian(ctx, frames, m_xyz, implicit_weight, *op);

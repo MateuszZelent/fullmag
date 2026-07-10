@@ -8,6 +8,7 @@
 #include "cpu/mfem/runtime/snapshot.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
 #include "cpu/mfem/runtime/state_io.hpp"
+#include "src/relaxation_operator_units.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>
@@ -181,7 +182,8 @@ mfem::SparseMatrix &cached_exchange_mass_preconditioner(
     }
     destroy_exchange_mass_preconditioner_cache(ctx);
     cache.exchange_mass_preconditioner =
-        assemble_exchange_mass_preconditioner(mass, exchange, exchange_weight).release();
+        assemble_exchange_mass_preconditioner_for_step(
+            mass, exchange, exchange_weight).release();
     cache.exchange_mass_preconditioner_mass = &mass;
     cache.exchange_mass_preconditioner_exchange = &exchange;
     cache.exchange_mass_preconditioner_weight = exchange_weight;
@@ -408,6 +410,19 @@ bool solve_scalar_spd_system(
 #endif
 
 } // namespace
+#if FULLMAG_HAS_MFEM_STACK
+std::unique_ptr<mfem::SparseMatrix> assemble_exchange_mass_preconditioner_for_step(
+    mfem::SparseMatrix &mass_ms,
+    mfem::SparseMatrix &exchange_stiffness_a,
+    double step_m_per_a)
+{
+    return assemble_exchange_mass_preconditioner(
+        mass_ms,
+        exchange_stiffness_a,
+        exchange_hessian_scale_from_step_m_per_a(step_m_per_a));
+}
+#endif
+
 
 double dot_fields(
     const std::vector<double> &a,
@@ -538,7 +553,7 @@ bool exchange_mass_preconditioned_gradient(
     Context &ctx,
     const std::vector<double> &m_xyz,
     const std::vector<double> &gradient_xyz,
-    double exchange_weight,
+    double step_m_per_a,
     std::vector<double> &preconditioned_gradient_xyz,
     std::string &error,
     uint64_t *preconditioner_wall_time_ns,
@@ -570,15 +585,15 @@ bool exchange_mass_preconditioned_gradient(
         error = "direct FEM relaxation preconditioner mass-gradient RHS produced non-finite values";
         return false;
     }
-    const double weight = std::clamp(
-        exchange_weight,
-        kDirectMinimizerPreconditionerFloor,
-        kDirectMinimizerPreconditionerCeiling);
+    const double bounded_step_m_per_a = std::clamp(
+        step_m_per_a,
+        kDirectMinimizerPreconditionerMinimumStepMPerA,
+        kDirectMinimizerPreconditionerMaximumStepMPerA);
     mfem::SparseMatrix &op = cached_exchange_mass_preconditioner(
         ctx,
         mass_form->SpMat(),
         exchange_form->SpMat(),
-        weight,
+        bounded_step_m_per_a,
         preconditioner_cache_hits,
         preconditioner_cache_misses);
 
@@ -611,7 +626,7 @@ bool exchange_mass_preconditioned_gradient(
     (void)ctx;
     (void)m_xyz;
     (void)gradient_xyz;
-    (void)exchange_weight;
+    (void)step_m_per_a;
     (void)preconditioned_gradient_xyz;
     (void)preconditioner_wall_time_ns;
     (void)preconditioner_cache_hits;
@@ -1143,7 +1158,7 @@ void finish_accepted_relaxation_step(
     out_stats = trial_stats;
     out_stats.step = ctx.state.step_count;
     out_stats.time_seconds = 0.0;
-    out_stats.dt_seconds = accepted_step_size;
+    out_stats.dt_seconds = 0.0;
     out_stats.max_rhs_amplitude = 0.0;
     out_stats.wall_time_ns = accumulated_stats.wall_time_ns;
     out_stats.exchange_wall_time_ns = accumulated_stats.exchange_wall_time_ns;
@@ -1198,6 +1213,7 @@ void finish_accepted_relaxation_step(
     ctx.relaxation.cached_current_stats.demag_solver_setup_wall_time_ns = 0;
     ctx.relaxation.cached_current_stats.demag_solver_apply_wall_time_ns = 0;
     ctx.relaxation.cached_current_stats.demag_solver_setup_reused = 0;
+    (void)accepted_step_size;
     ctx.relaxation.cached_current_stats.demag_recover_wall_time_ns = 0;
     ctx.relaxation.cached_current_stats.demag_energy_wall_time_ns = 0;
     ctx.relaxation.cached_current_stats.rhs_wall_time_ns = 0;

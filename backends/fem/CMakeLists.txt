@@ -414,6 +414,26 @@ add_fem_source_facade_contract(
     tests/relaxation_source_contract.cpp
 )
 add_fem_source_facade_contract(
+    fem_relaxation_energy_derivative_contract
+    tests/relaxation_energy_derivative_contract.cpp
+)
+add_fem_source_facade_contract(
+    fem_relaxation_operator_contract
+    tests/relaxation_operator_contract.cpp
+)
+if(FULLMAG_USE_MFEM_STACK)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_relaxation_operator_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_relaxation_operator_contract PRIVATE mfem)
+    endif()
+endif()
+if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA)
+    target_link_libraries(fem_relaxation_energy_derivative_contract PRIVATE CUDA::cudart)
+    target_link_libraries(fem_relaxation_operator_contract PRIVATE CUDA::cudart)
+endif()
+
+add_fem_source_facade_contract(
     fem_frequency_domain_contract
     tests/frequency_domain/frequency_domain_contract.cpp
 )

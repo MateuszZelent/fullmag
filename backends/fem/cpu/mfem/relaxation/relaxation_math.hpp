@@ -4,6 +4,11 @@
 
 #include <string>
 #include <vector>
+#include <memory>
+
+#if FULLMAG_HAS_MFEM_STACK
+namespace mfem { class SparseMatrix; }
+#endif
 
 namespace fullmag::fem {
 
@@ -21,8 +26,15 @@ inline constexpr uint32_t kProjectedGradientMaxBacktracks = 20;
 inline constexpr uint32_t kNonlinearCgMaxBacktracks = 30;
 inline constexpr uint32_t kTangentPlaneImplicitMaxBacktracks = 24;
 inline constexpr uint64_t kNonlinearCgRestartInterval = 50;
-inline constexpr double kDirectMinimizerPreconditionerFloor = 1.0e-12;
-inline constexpr double kDirectMinimizerPreconditionerCeiling = 1.0e-6;
+inline constexpr double kDirectMinimizerPreconditionerMinimumStepMPerA = 1.0e-12;
+inline constexpr double kDirectMinimizerPreconditionerMaximumStepMPerA = 1.0e-6;
+
+#if FULLMAG_HAS_MFEM_STACK
+std::unique_ptr<mfem::SparseMatrix> assemble_exchange_mass_preconditioner_for_step(
+    mfem::SparseMatrix &mass_ms,
+    mfem::SparseMatrix &exchange_stiffness_a,
+    double step_m_per_a);
+#endif
 
 double dot_fields(
     const std::vector<double> &a,
@@ -56,7 +68,7 @@ bool exchange_mass_preconditioned_gradient(
     Context &ctx,
     const std::vector<double> &m_xyz,
     const std::vector<double> &gradient_xyz,
-    double exchange_weight,
+    double step_m_per_a,
     std::vector<double> &preconditioned_gradient_xyz,
     std::string &error,
     uint64_t *preconditioner_wall_time_ns,

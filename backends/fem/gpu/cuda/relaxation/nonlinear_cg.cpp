@@ -1132,7 +1132,7 @@ int gpu_relax_nonlinear_cg_step(
 
     out_stats.step = ctx.state.step_count;
     out_stats.time_seconds = 0.0;
-    out_stats.dt_seconds = trial_step;
+    out_stats.dt_seconds = 0.0;
     out_stats.rejected_attempts = backtracks;
     out_stats.rhs_evaluations = backtracks + 2u;
     double ncg_tail_scalars[kNcgScalarTailCount] = {0.0, 0.0};
@@ -1177,7 +1177,7 @@ int gpu_relax_nonlinear_cg_step(
         accepted_gradient_norm_sq > kGradientFloor;
     out_stats.step = ctx.state.step_count;
     out_stats.time_seconds = 0.0;
-    out_stats.dt_seconds = trial_step;
+    out_stats.dt_seconds = 0.0;
     out_stats.max_rhs_amplitude = 0.0;
     out_stats.rejected_attempts = backtracks;
     out_stats.rhs_evaluations = backtracks + 2u;
