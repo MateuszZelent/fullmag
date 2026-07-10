@@ -116,6 +116,10 @@ type ResolvedTargetSettingsResource = NonNullable<
   NonNullable<VisualizationStateResource["targets"]>["airbox"]
 >["settings"];
 
+type EffectiveTargetRegistryEntry = NonNullable<
+  NonNullable<VisualizationStateResource["targets"]>["airbox"]
+>;
+
 type ObjectVisualizationListener = () => void;
 
 export const AIRBOX_VISUALIZATION_TARGET: VisualizationTargetRef = {
@@ -424,10 +428,17 @@ export function resolveTargetVisualization({
   target: VisualizationTargetRef;
   visualizationState?: VisualizationStateResource | null;
 }): ResolvedTargetVisualization {
-  const baseSettings = resolveVisualizationBaseSettings(
-    target.kind,
+  const registryEntry = resolveEffectiveTargetRegistryEntry(
     visualizationState,
+    target,
   );
+  const baseSettings =
+    (registryEntry
+      ? visualizationSettingsFromResolvedTarget(
+          registryEntry.settings,
+          defaultVisualizationSettings(target.kind),
+        )
+      : null) ?? resolveVisualizationBaseSettings(target.kind, visualizationState);
   const localOverride = snapshot.overrides[visualizationTargetKey(target)] ?? null;
   const backendOverride = resolveVisualizationStateTargetOverride(
     visualizationState,
@@ -441,7 +452,7 @@ export function resolveTargetVisualization({
       target.kind,
       inheritedDefaultSettings,
     ),
-    ...(backendOverride ?? {}),
+    ...(registryEntry ? {} : (backendOverride ?? {})),
     ...(localOverride ?? {}),
   });
 
@@ -461,6 +472,28 @@ export function resolveTargetVisualization({
         : `${snapshot.version}:${visualizationState.revision}`,
     settings,
   };
+}
+
+export function resolveEffectiveTargetRegistryEntry(
+  state: VisualizationStateResource | null | undefined,
+  target: VisualizationTargetRef,
+): EffectiveTargetRegistryEntry | null {
+  const registry = state?.targets;
+  if (!registry || target.kind === "region") return null;
+
+  const entries: readonly EffectiveTargetRegistryEntry[] =
+    target.kind === "airbox"
+      ? [registry.airbox]
+      : target.kind === "object"
+        ? registry.objects
+        : registry.parts;
+  const scopeId = visualizationStateScopeIdForTarget(target);
+
+  return (
+    entries.find(
+      (entry) => entry.scope === target.kind && entry.scope_id === scopeId,
+    ) ?? null
+  );
 }
 
 function resolveVisualizationStateTargetOverride(
@@ -997,48 +1030,47 @@ export function resolveAirboxVisualizationSettingsFromState(
 
 function visualizationSettingsFromResolvedTarget(
   settings: ResolvedTargetSettingsResource | null | undefined,
+  defaultSettings = DEFAULT_AIRBOX_VISUALIZATION,
 ): VisualizationTargetSettings | null {
   if (!settings) return null;
 
   return normalizeVisualizationSettings({
-    ...DEFAULT_AIRBOX_VISUALIZATION,
+    ...defaultSettings,
     activeQuantityId:
       normalizeQuantityIdOrDefault(
         settings.active_quantity_id,
-        DEFAULT_AIRBOX_VISUALIZATION.activeQuantityId,
+        defaultSettings.activeQuantityId,
       ),
     boundsVisible: settings.bounds_visible,
     geometryScope: settings.geometry_scope,
     opacityPercent: layerOpacityToPercent(settings.opacity),
     pointsVisible: settings.points_visible,
     pointColor:
-      settings.point_color ?? DEFAULT_AIRBOX_VISUALIZATION.pointColor,
+      settings.point_color ?? defaultSettings.pointColor,
     renderMode: settings.render_mode,
     shaderMonoColor:
-      settings.surface_mono_color ?? DEFAULT_AIRBOX_VISUALIZATION.shaderMonoColor,
+      settings.surface_mono_color ?? defaultSettings.shaderMonoColor,
     shaderVisible: settings.surface_visible,
     scalarColorPalette:
       settings.scalar_color_palette ??
-      DEFAULT_AIRBOX_VISUALIZATION.scalarColorPalette,
+      defaultSettings.scalarColorPalette,
     surfaceColorSource: settings.surface_color_source,
     surfaceProjectionMode: settings.surface_projection_mode ?? "raw_nodal",
     vectorAlphaPercent: layerOpacityToPercent(settings.vector_alpha),
     vectorBudget: Math.max(
       0,
-      Math.floor(
-        settings.vector_budget ?? DEFAULT_AIRBOX_VISUALIZATION.vectorBudget,
-      ),
+      Math.floor(settings.vector_budget ?? defaultSettings.vectorBudget),
     ),
     vectorColorMode: settings.vector_color_mode,
     vectorLengthScale:
-      settings.vector_length_scale ?? DEFAULT_AIRBOX_VISUALIZATION.vectorLengthScale,
+      settings.vector_length_scale ?? defaultSettings.vectorLengthScale,
     vectorMonoColor:
-      settings.vector_mono_color ?? DEFAULT_AIRBOX_VISUALIZATION.vectorMonoColor,
+      settings.vector_mono_color ?? defaultSettings.vectorMonoColor,
     vectorThickness: settings.vector_thickness,
     vectorsVisible: settings.vectors_visible,
     visible: settings.visible,
     wireframeColor:
-      settings.wireframe_color ?? DEFAULT_AIRBOX_VISUALIZATION.wireframeColor,
+      settings.wireframe_color ?? defaultSettings.wireframeColor,
     wireframeOpacityPercent: layerOpacityToPercent(settings.wireframe_opacity),
     wireframeVisible: settings.wireframe_visible,
   });

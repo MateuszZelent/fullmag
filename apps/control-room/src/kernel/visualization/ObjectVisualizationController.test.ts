@@ -696,6 +696,128 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
+  it("uses the effective object registry settings instead of global visualization defaults", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "free-layer", kind: "object" as const };
+
+    const resolved = resolveTargetVisualization({
+      snapshot: controller.getSnapshot(),
+      target,
+      visualizationState: {
+        revision: 14,
+        overrides: [
+          {
+            scope: "object",
+            scope_id: "free-layer",
+            style: { surface_projection_mode: "raw_nodal" },
+          },
+        ],
+        targets: {
+          airbox: {} as never,
+          objects: [
+            {
+                label: "Free layer",
+                scope: "object",
+                scope_id: "free-layer",
+                settings: {
+                  active_quantity_id: "m",
+                  bounds_visible: false,
+                  geometry_scope: "surface",
+                  opacity: 1,
+                  point_color: "#ffffff",
+                  points_visible: false,
+                  render_mode: "surface",
+                  scalar_color_palette: "viridis",
+                  surface_color_source: "orientation",
+                  surface_mono_color: "#ffffff",
+                  surface_projection_mode: "thickness_average_z",
+                  surface_visible: true,
+                  vector_alpha: 1,
+                  vector_budget: 1200,
+                  vector_color_mode: "orientation",
+                  vector_length_scale: 1,
+                  vector_mono_color: "#ffffff",
+                  vector_thickness: 1,
+                  vectors_visible: false,
+                  viewport_colorbar_visible: false,
+                  visible: true,
+                  wireframe_color: "#ffffff",
+                  wireframe_opacity: 1,
+                  wireframe_visible: false,
+                },
+                source: "scene_object",
+            },
+          ],
+          parts: [],
+        },
+      } as never,
+    });
+
+    expect(resolved.effectiveSettings).toMatchObject({
+      surfaceProjectionMode: "thickness_average_z",
+      wireframeVisible: false,
+    });
+    expect(resolved.override).toMatchObject({
+      surfaceProjectionMode: "raw_nodal",
+    });
+  });
+
+  it("uses the effective mesh-part registry settings instead of object defaults", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "part-film", kind: "part" as const };
+
+    expect(
+      resolveTargetVisualization({
+        snapshot: controller.getSnapshot(),
+        target,
+        visualizationState: {
+          revision: 15,
+          targets: {
+            airbox: {} as never,
+            objects: [],
+            parts: [
+              {
+                label: "Film mesh part",
+                scope: "part",
+                scope_id: "part-film",
+                settings: {
+                  active_quantity_id: "m",
+                  bounds_visible: false,
+                  geometry_scope: "surface",
+                  opacity: 1,
+                  point_color: "#ffffff",
+                  points_visible: false,
+                  render_mode: "wireframe",
+                  scalar_color_palette: "viridis",
+                  surface_color_source: "orientation",
+                  surface_mono_color: "#ffffff",
+                  surface_projection_mode: "raw_nodal",
+                  surface_visible: false,
+                  vector_alpha: 1,
+                  vector_budget: 1200,
+                  vector_color_mode: "orientation",
+                  vector_length_scale: 1,
+                  vector_mono_color: "#ffffff",
+                  vector_thickness: 1,
+                  vectors_visible: false,
+                  viewport_colorbar_visible: false,
+                  visible: true,
+                  wireframe_color: "#ffffff",
+                  wireframe_opacity: 1,
+                  wireframe_visible: true,
+                },
+                source: "mesh_part",
+              },
+            ],
+          },
+        } as never,
+      }).effectiveSettings,
+    ).toMatchObject({
+      shaderVisible: false,
+      wireframeVisible: true,
+    });
+  });
+
   it("keeps primitive fallback disabled by default even when visualization state has a primitive layer", () => {
     expect(
       resolveGlobalObjectVisualizationSettings({
