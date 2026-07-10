@@ -687,6 +687,29 @@ mod realtime_change_tests {
     }
 
     #[test]
+    fn realtime_changes_since_refreshes_field_samples_when_only_domain_generation_changes() {
+        let previous = revisions();
+        let mut current_revisions = previous.clone();
+        current_revisions.domain_generation_id += 1;
+        let state = CurrentLiveRealtimeState {
+            session_id: "session-1".to_string(),
+            run_id: Some("run-1".to_string()),
+            revisions: current_revisions,
+            mesh_resource_fetches: Vec::new(),
+        };
+
+        let changes = current_live_realtime_changes_since(&state, Some(&previous));
+
+        assert!(changes.iter().any(|change| {
+            matches!(change.resource, RealtimeResourceName::Fields)
+                && change.resource_id.as_deref() == Some("samples")
+                && change.revision == previous.field_revision
+                && change.domain_generation_id
+                    == Some(previous.domain_generation_id + 1)
+        }));
+    }
+
+    #[test]
     fn realtime_changes_since_does_not_refresh_field_vectors_when_only_snapshot_counter_changes() {
         // Scenario: fields_revision stays the same but some other revision changed.
         // The field-samples change should NOT appear in the diff.

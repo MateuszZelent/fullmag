@@ -39,6 +39,7 @@ import {
   viewport3DTargetFieldBufferMatchesQuantity,
   type Viewport3DTargetFieldBuffer,
 } from "./model/viewport3DTargetFieldBuffer";
+import { resolveViewport3DFieldDomainCompatibility } from "./model/viewport3DFieldDomainCompatibility";
 import {
   buildPartSurfaceIndices as buildPartSurfaceIndicesUncached,
   buildPartSurfaceIndicesWithSupplemental as buildPartSurfaceIndicesWithSupplementalUncached,
@@ -164,6 +165,7 @@ export interface Viewport3DTargetFieldBufferSource {
   fieldRevision: string | null;
   indexing?: Viewport3DTargetFieldBuffer["indexing"];
   meshTopologyHash?: string | null;
+  domainGenerationId?: string | null;
   nodeIndexCount?: number | null;
   pointCount: number;
   quantityId: string;
@@ -1129,6 +1131,7 @@ function targetFieldBufferSource(
     fieldRevision: buffer.fieldRevision,
     indexing: buffer.indexing,
     meshTopologyHash: buffer.meshTopologyHash,
+    domainGenerationId: buffer.domainGenerationId,
     nodeIndexCount: buffer.nodeIndices?.length ?? null,
     pointCount: buffer.pointCount,
     quantityId: buffer.quantityId,
@@ -1266,6 +1269,7 @@ function buildVectorGlyphBuildReference({
     algorithmVersion: 1,
     component: "full",
     domainId,
+    domainGenerationId: fieldVector.domainGenerationId ?? topology.meshGenerationId,
     fieldRevision,
     quantityId,
     samplingRevision,
@@ -1802,24 +1806,15 @@ function fieldVectorMatchesTopology(
   topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
 ): boolean {
   if (!fieldVector) return false;
-  const fieldHash = fieldVector.meshTopologyHash ?? null;
-  if (
-    fieldHash !== null &&
-    topology.meshTopologyHash !== null &&
-    fieldHash !== topology.meshTopologyHash
-  ) {
-    return false;
-  }
-  const fieldTopologyRevision = fieldVector.meshTopologyRevision ?? null;
-  const topologyRevision = revisionToString(topology.meshRevision);
-  if (
-    fieldTopologyRevision !== null &&
-    topologyRevision !== null &&
-    fieldTopologyRevision !== topologyRevision
-  ) {
-    return false;
-  }
-  return true;
+  return resolveViewport3DFieldDomainCompatibility({
+      domain: {
+        domainGenerationId: topology.meshGenerationId,
+        meshTopologyHash: topology.meshTopologyHash,
+        meshTopologyRevision: revisionToString(topology.meshRevision),
+        pointCount: topology.nodeCount,
+      },
+    field: fieldVector,
+  }).status !== "mismatch";
 }
 
 function buildCachedFullVectorSegments(

@@ -329,6 +329,27 @@ describe("viewport3DTargetFieldBuffer", () => {
     ).toBe(true);
   });
 
+  it("does not expose FMVP v3 fields without a current domain generation", () => {
+    const buffer = buildViewport3DTargetFieldBuffer({
+      fieldVector: vectorFixture({
+        domainGenerationId: "43",
+        formatVersion: 3,
+        indexing: "full_domain",
+        meshTopologyHash: "hash-1",
+        meshTopologyRevision: "topology-1",
+      }),
+      query: { component: "full", scope_kind: "full" },
+      targetIds: ["part-a"],
+    });
+
+    expect(buffer.domainCompatibility).toMatchObject({
+      reason: "domain-generation-unknown",
+      status: "mismatch",
+    });
+    expect(viewport3DTargetFieldBufferCanServeSurface(buffer, "x")).toBe(false);
+    expect(viewport3DTargetFieldBufferCanServeVectors(buffer)).toBe(false);
+  });
+
   it("treats synthetic airbox payloads as vector-capable render fallbacks", () => {
     const buffer = buildViewport3DTargetFieldBuffer({
       fieldVector: vectorFixture({ quantityId: "H_eff" }),

@@ -418,7 +418,11 @@ export function mergeViewport3DPrimaryTargetFieldBuffers({
   topology:
     | Pick<
         Viewport3DTopologyRenderModel<Viewport3DMeshPart>,
-        "magneticParts"
+        | "magneticParts"
+        | "meshGenerationId"
+        | "meshRevision"
+        | "meshTopologyHash"
+        | "nodeCount"
       >
     | null;
   topologyRevision?: string | null;
@@ -461,6 +465,12 @@ export function mergeViewport3DPrimaryTargetFieldBuffers({
         }),
         fieldRevision,
         fieldVector,
+        domain: {
+          domainGenerationId: topology.meshGenerationId,
+          meshTopologyHash: topology.meshTopologyHash,
+          meshTopologyRevision: topology.meshRevision == null ? null : String(topology.meshRevision),
+          pointCount: topology.nodeCount,
+        },
         query: primaryFieldRequest.query,
         targetIds: [partId],
         topologyRevision,
@@ -557,7 +567,12 @@ export function resolveViewport3DResolvedPartFieldBuffers({
   topology:
     | Pick<
         Viewport3DTopologyRenderModel<Viewport3DMeshPart>,
-        "airboxParts" | "magneticParts" | "nodeCount"
+        | "airboxParts"
+        | "magneticParts"
+        | "meshGenerationId"
+        | "meshRevision"
+        | "meshTopologyHash"
+        | "nodeCount"
       >
     | null
     | undefined;
@@ -591,6 +606,15 @@ export function resolveViewport3DResolvedPartFieldBuffers({
         consumers: request.consumers ?? [],
         fieldRevision: fieldRevision == null ? null : String(fieldRevision),
         fieldVector,
+        domain: topology
+          ? {
+              domainGenerationId: topology.meshGenerationId,
+              meshTopologyHash: topology.meshTopologyHash,
+              meshTopologyRevision:
+                topology.meshRevision == null ? null : String(topology.meshRevision),
+              pointCount: topology.nodeCount,
+            }
+          : undefined,
         query: request.query,
         targetIds: [partId],
         topologyRevision: resolvedTopologyRevision,
@@ -674,6 +698,13 @@ export function resolveViewport3DResolvedPartFieldBuffers({
         partId,
         buildViewport3DTargetFieldBuffer({
           fieldVector,
+          domain: {
+            domainGenerationId: topology.meshGenerationId,
+            meshTopologyHash: topology.meshTopologyHash,
+            meshTopologyRevision:
+              topology.meshRevision == null ? null : String(topology.meshRevision),
+            pointCount: topology.nodeCount,
+          },
           query: {
             component: "full",
             scope_id: partId,
@@ -3334,6 +3365,10 @@ export function useViewport3DSceneModel({
         algorithmVersion: 1,
         component: fdmVectorsVisible ? "full" : null,
         domainId: domainMeta.data?.domain_id ?? "shared-domain",
+        domainGenerationId:
+          domainMeta.data?.generation_id == null
+            ? null
+            : String(domainMeta.data.generation_id),
         fieldRevision: fdmBuildFieldRevision,
         quantityId: resolveCanonicalQuantityId(fdmSettings.activeQuantityId),
         samplingRevision: fdmBuildSamplingRevision,

@@ -63,6 +63,7 @@ interface RealtimeResourceEvent {
 
 interface RealtimeBatchChange {
   broad?: boolean;
+  domain_generation_id?: string | null;
   quantity_ids?: string[];
   resource?: string;
   resource_id?: string;
@@ -188,6 +189,7 @@ function realtimeBatchChange(change: unknown): RealtimeBatchChange | null {
 
   return {
     broad: record.broad === true,
+    domain_generation_id: realtimeDomainGenerationId(record.domain_generation_id),
     quantity_ids: Array.isArray(record.quantity_ids)
       ? record.quantity_ids.filter((value): value is string => typeof value === "string")
       : undefined,
@@ -200,6 +202,19 @@ function realtimeBatchChange(change: unknown): RealtimeBatchChange | null {
         : undefined,
     revision,
   };
+}
+
+function realtimeDomainGenerationId(value: unknown): string | null {
+  if (typeof value === "string") return value;
+  return typeof value === "number" && Number.isSafeInteger(value)
+    ? String(value)
+    : null;
+}
+
+function fieldSamplesInvalidationRevision(change: RealtimeBatchChange): ResourceRevision {
+  return change.domain_generation_id === null || change.domain_generation_id === undefined
+    ? change.revision
+    : `generation:${change.domain_generation_id}:revision:${change.revision}`;
 }
 
 function resourceFamilyPrefix(pathWithObjectId: string): string {
@@ -371,13 +386,14 @@ export class RealtimeInvalidationBridge {
           );
         }
         if (fieldSampleChange) {
+          const fieldSampleRevision = fieldSamplesInvalidationRevision(change);
           if (change.broad || !change.quantity_ids?.length) {
-            this.queuePrefixInvalidation(DATA_FIELDS_PATH, change.revision);
+            this.queuePrefixInvalidation(DATA_FIELDS_PATH, fieldSampleRevision);
           } else {
             for (const quantityId of change.quantity_ids) {
               this.queueFieldSampleQuantityInvalidation(
                 quantityId,
-                change.revision,
+                fieldSampleRevision,
               );
             }
           }
