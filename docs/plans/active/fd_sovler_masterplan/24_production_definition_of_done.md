@@ -120,7 +120,7 @@ every field is mandatory for modal and driven artifacts alike.
 | `max_iterations` | `PositiveInteger` |
 | `restart` | `PositiveInteger` not greater than `max_iterations`; direct solvers use `1` |
 | `linear_solver_family` | `Identifier`; use literal `none` only when no linear solve exists |
-| `preconditioner_family` | `Identifier`; use literal `none` only when no preconditioner exists |
+| `preconditioner` | Closed object `{family:Identifier, variant:Identifier, setup_policy:Identifier, reuse_policy:Identifier}`. Use `family=none` only when no preconditioner exists, and then every other member must also be `none`. |
 | `spectral_transform` | Closed object `{family:Identifier, shift_rad_per_s:finite number or "not_applicable"}`; `none` is explicit |
 | `target_representation` | Closed object `{family:Identifier, target_rad_per_s:finite number or "not_applicable", window_rad_per_s:ClosedInterval(unit="rad_per_s") or "not_applicable", sweep_hz:ordered array of finite positive numbers}`; modal uses an empty `sweep_hz`, driven uses `target_rad_per_s=not_applicable` |
 | `device_residency` | Closed object `{operator, krylov_vectors, basis, preconditioner}` with each value in `host | device | mixed | not_applicable`, plus `{per_iteration_h2d_max:NonNegativeInteger, per_iteration_d2h_max:NonNegativeInteger, hidden_host_solves_allowed:boolean}` |
@@ -130,8 +130,8 @@ every field is mandatory for modal and driven artifacts alike.
 | `fallback_policy` | `Identifier`; strict no-fallback is explicit |
 | `accepted_stop_reasons` | `IdentifierSet` |
 
-Consequently, changing only `rtol`, iteration cap, restart, linear-solver or
-preconditioner family, transform/target representation, residency, precision,
+Consequently, changing only `rtol`, iteration cap, restart, linear-solver
+family, preconditioner object, transform/target representation, residency, precision,
 residual contract or certificate set creates a different readiness cell.
 
 ### 2.6 Runtime and device scope
@@ -183,7 +183,7 @@ fixture_ids, oracle_ids
 Each named object contributes every one of its required nested values. In
 particular, the hash always includes the complete `solver_scope`: engine,
 `rtol`, `max_iterations`, `restart`, `linear_solver_family`,
-`preconditioner_family`, spectral transform, transform target/window/sweep,
+`preconditioner`, spectral transform, transform target/window/sweep,
 device-residency layout and transfer limits, precision, full original-block
 residual contract, certificate set, fallback policy and accepted stop reasons.
 `scope_id`, artifact paths, timestamps, gate outcomes, metric results,
@@ -225,7 +225,7 @@ Each `pass` links immutable artifacts and records:
 
 ```text
 gate_id
-validation_scope_binding = validation_scope_binding.v1
+verified_coverage_of = validation_scope_binding.v1
 evidence paths and sha256 hashes
 fixture and oracle identities
 metric values
@@ -236,18 +236,18 @@ validation_state before promotion
 open blockers
 ```
 
-Every evidence artifact uses exactly one closed
-`validation_scope_binding.v1` object:
+Every evidence artifact has a required top-level `verified_coverage_of` field.
+Its value is exactly one closed `validation_scope_binding.v1` object:
 
 ```text
-direct binding = {
+verified_coverage_of = {
   schema: "validation_scope_binding.v1",
   scope_schema: "frequency_domain_validation_scope.v1",
   kind: "direct",
   scope_id: Sha256Id
 }
 
-coverage binding = {
+verified_coverage_of = {
   schema: "validation_scope_binding.v1",
   scope_schema: "frequency_domain_validation_scope.v1",
   kind: "coverage",
@@ -262,19 +262,22 @@ direct form means the artifact evaluated the one resolved
 `scope_id`. The coverage form is legal only for a bounded oracle or aggregate
 whose evaluated subject scope covers every listed target under section 3.2.
 
-### 3.1 `validation_scope_binding.v1` validation
+### 3.1 `verified_coverage_of` and `validation_scope_binding.v1` validation
 
-The artifact validator first validates the closed binding variant and the
-literal `scope_schema`, resolves every referenced scope object, validates it
-against section 2, and recomputes every `scope_id`. It then accepts either one
-direct scope or one `coverage_rule.v1`; a caller cannot substitute a fixture
-name, abbreviated tuple, parent scope ID or independently supplied coverage
-list. A coverage binding is invalid unless its rule is valid under section 3.2.
+The artifact validator first reads the required `verified_coverage_of` field,
+then validates the closed binding variant and the literal `scope_schema`,
+resolves every referenced scope object, validates it against section 2, and
+recomputes every `scope_id`. It then accepts either one direct scope or one
+`coverage_rule.v1`; a caller cannot substitute a fixture name, abbreviated
+tuple, parent scope ID, prose `validated_scope` claim or independently supplied
+coverage list. A coverage binding is invalid unless its rule is valid under
+section 3.2.
 
 ### 3.2 `coverage_rule.v1`
 
-`coverage_rule.v1` is the following closed JSON object. It is mandatory for a
-`validation_scope_binding.v1` whose `kind` is `coverage`.
+`coverage_rule.v1` is the following closed JSON object. It is mandatory for
+`verified_coverage_of` when its `validation_scope_binding.v1.kind` is
+`coverage`.
 
 | Field | Type and constraint |
 |---|---|
@@ -343,7 +346,7 @@ are newer.
 | DOD-06 Native assembly | Backend-owned real FEM blocks/actions and chapter 09 manufactured/reciprocity/isolation evidence | `assembly_kind` is the production kind; block signs/units/order/scaling pass; analytical expected values cannot affect blocks, target or signatures | `synthetic_algebraic_oracle`, Kittel `demag_delta`, macrocell payload or postsolve phase projection |
 | DOD-07 Solver engine | Exact modal or driven production engine, preconditioner and lifecycle artifacts | Engine converges over the bounded size/window/sweep scope, has correct target representation/restart/stop reasons, and has no undeclared fallback | Dense/apply probe, one successful tiny case, host-Krylov path claimed as device Krylov, or another product's engine |
 | DOD-08 Full residual | Reconstructed original unscaled block residuals for every accepted mode/frequency point | Chapter 09 production tolerance passes for every required block; transformed/backend/tracked residuals remain separate | Solver-library residual alone, capped residual, magnetic-only residual when scalar/gauge blocks apply |
-| DOD-09 Artifacts/OpenAPI/UI | Complete artifacts-v2 bundle, typed OpenAPI/resource exposure and UI state for complete/partial/failed/unavailable outcomes | Cross-artifact hashes, units, revisions, requested/resolved state, accepted `validation_scope_binding.v1`, and resource links agree; UI cannot overstate capability | Abbreviated scope tuple, untyped coverage claim, raw files without resource contract, UI claim inferred from route presence, or JSON carrying heavy payloads outside the data plane |
+| DOD-09 Artifacts/OpenAPI/UI | Complete artifacts-v2 bundle, typed OpenAPI/resource exposure and UI state for complete/partial/failed/unavailable outcomes | Cross-artifact hashes, units, revisions, requested/resolved state, accepted `verified_coverage_of` binding, and resource links agree; UI cannot overstate capability | Abbreviated scope tuple, untyped coverage claim, raw files without resource contract, UI claim inferred from route presence, or JSON carrying heavy payloads outside the data plane |
 | DOD-10 Analytical validation | Applicable chapter 09 independent physics gate: Larmor/Kittel, ellipsoid, DE/BV, modal/driven resonance or another physics-note oracle | Production tolerance passes after solve and after independent selection; for K0-3, fixture-owned independently provenanced `M_eff_reference`, fitted-`M_eff` agreement, uncertainty and conditioning all pass; oracle inputs never enter assembly/request target/selection/certificate/solver status | Best-fit-only agreement, solver-derived `M_eff_reference`, nearest-expected mode selection, synthetic operator built from the answer, or fast CI subset |
 | DOD-11 Convergence | Raw distinct mesh and truncation sequences plus solver tolerance evidence | At least three levels per applicable dimension; monotonicity/asymptotic fit, observed order where applicable, Richardson/finest-two delta and separate frequency and fitted-`M_eff` budgets pass | Best row only, duplicated synthetic rows, simultaneous mesh/padding changes without independent sequences, or analytical values copied as solved rows |
 | DOD-12 CPU/GPU parity | For GPU: exact qualified CPU oracle and chapter 09 operator/solver/physics parity; for CPU-only: explicit `not_applicable` reason excluding GPU | GPU blocks, modes/responses, residuals and accepted/rejected outcomes pass production tolerances on identical signatures | No-demag macrospin parity used for demag, CPU result copied into GPU artifacts, or precision mismatch |
@@ -410,7 +413,7 @@ The release candidate publishes one record per readiness cell. The schema is
 | `implementation_state` | `executable` |
 | `validation_state_before_promotion` | The actual pre-promotion state |
 | `items.DOD-01` through `items.DOD-14` | `pass`, `fail` or justified `not_applicable` |
-| `item_evidence.DOD-01` through `item_evidence.DOD-14` | Gate IDs, one accepted `validation_scope_binding.v1`, immutable artifact paths/hashes, fixture/oracle IDs, metrics, production tolerances and verifier result for every `pass` |
+| `item_evidence.DOD-01` through `item_evidence.DOD-14` | Gate IDs, one accepted `verified_coverage_of` binding, immutable artifact paths/hashes, fixture/oracle IDs, metrics, production tolerances and verifier result for every `pass` |
 | `not_applicable_reasons` | One exact scope-derived reason for every `not_applicable` item |
 | `open_blockers` | Empty for promotion |
 | `promotion_decision` | `production_qualified` only after section 7 succeeds; otherwise `blocked` |
@@ -427,8 +430,8 @@ The promotion validator performs these checks in order:
 2. require `implementation_state=executable` for that scope;
 3. resolve item applicability from the exact product/device/k/demag/engine
    tuple;
-4. validate every evidence artifact's complete
-   `validation_scope_binding.v1`, including a directional `coverage_rule.v1`
+4. validate every evidence artifact's complete `verified_coverage_of` binding,
+   including a directional `coverage_rule.v1`
    when its kind is `coverage`, fixture/oracle identity, metric and production
    tolerance;
 5. reject stale or mismatched signatures and evidence from neighboring cells;

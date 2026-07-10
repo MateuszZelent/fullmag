@@ -99,7 +99,7 @@ direction is not K0-3.
 This list is only a human-readable fixture summary. The fixture instantiates
 the closed, typed `frequency_domain_validation_scope.v1` object from Chapter
 24, including its mandatory `SolverScope` tolerances, iteration/restart,
-linear-solver and preconditioner families, transform/target representation,
+linear-solver family, preconditioner object, transform/target representation,
 residency, precision, block-residual contract and certificate set. The complete
 object also binds physics, problem, runtime, device, material, geometry,
 fixture and oracle fields. Chapter 24 canonicalizes that object and recomputes
@@ -398,22 +398,24 @@ validation/kittel_k0_pbc/independence_audit.v1.json
 ```
 
 Every immutable solver artifact and postsolve validation artifact above carries
-one `validation_scope_binding.v1` object from Chapter 24:
+a mandatory top-level `verified_coverage_of` field whose value is one
+`validation_scope_binding.v1` object from Chapter 24:
 
 ```text
-schema: validation_scope_binding.v1
-scope_schema: frequency_domain_validation_scope.v1
-exactly one closed variant:
-  kind: direct
-  scope_id: Sha256Id
-or:
-  kind: coverage
-  coverage_rule:
-    schema: coverage_rule.v1
-    relation: exact | subset
-    subject_scope_id: Sha256Id
-    covered_scope_ids: non-empty ordered unique Sha256Id array
-    field_predicates: complete Chapter 24 FieldPredicate array
+verified_coverage_of:
+  schema: validation_scope_binding.v1
+  scope_schema: frequency_domain_validation_scope.v1
+  exactly one closed variant:
+    kind: direct
+    scope_id: Sha256Id
+  or:
+    kind: coverage
+    coverage_rule:
+      schema: coverage_rule.v1
+      relation: exact | subset
+      subject_scope_id: Sha256Id
+      covered_scope_ids: non-empty ordered unique Sha256Id array
+      field_predicates: complete Chapter 24 FieldPredicate array
 ```
 
 Exactly one binding variant is legal. The coverage variant is reserved for a
@@ -421,8 +423,8 @@ multi-level convergence or CPU/GPU aggregate whose evaluated subject contains
 every covered target. A subject narrower in fields, mesh/padding interval,
 device, precision, solver configuration or any other canonical dimension
 cannot cover the broader target. `validated_scope_id`, fixture names, run
-directories, abbreviated K0-3 tuples and prose assertions of exact scope are
-not accepted aliases.
+directories, abbreviated K0-3 tuples, bare `validated_scope` claims and prose
+assertions of exact scope are not accepted aliases.
 
 `selection.v2.json` contains candidate scores and the frozen selected branch
 without expected frequencies. `points.v2.csv` may add expected frequencies and
@@ -443,8 +445,8 @@ tangent_leakage_max_abs, periodic_seam_mismatch_max_abs
 ```
 
 `solver_artifact_scope_id` must equal the direct
-`validation_scope_binding.v1.scope_id` in the immutable solver artifact named
-by `solver_artifact_sha256`. A convergence CSV may be an aggregate whose own
+`verified_coverage_of.scope_id` in the immutable solver artifact named by
+`solver_artifact_sha256`. A convergence CSV may be an aggregate whose own
 artifact metadata uses a coverage binding, but it cannot replace any raw solve
 row's direct binding with a bare scope ID or coverage-rule hash.
 
@@ -453,7 +455,7 @@ Verifier-enriched rows additionally contain `expected_frequency_hz`,
 the complete `M_eff_reference` provenance, fit model/weights/scaling, fitted
 value, `fitted_M_eff_relative_error`, uncertainty/confidence interval,
 covariance/rank/condition number and all rejection reasons. Summary artifacts
-publish the complete `validation_scope_binding.v1`, fixture/oracle/reference
+publish the complete `verified_coverage_of` binding, fixture/oracle/reference
 IDs and hashes, initial/production tolerance
 sets, raw row counts, distinct signature
 counts, field coverage, observed orders/fits, finest-two deltas, separate
@@ -535,7 +537,8 @@ gpu_residency when applicable
 
 `production_qualified` is legal only when every applicable outcome is `pass`,
 the promotion record's `validated_scope` passes the closed v1 schema and hash
-check, every artifact has an accepted direct or typed coverage binding, and
+check, every artifact has an accepted `verified_coverage_of` direct or typed
+coverage binding, and
 chapter 24 is complete for the same immutable evidence bundle. `fast_ci_subset`, synthetic demag,
 absent raw levels, mixed mesh/padding variation, solver-side expected values,
 ill-conditioned/uncertain fits, or analytical-value-based branch selection cap
