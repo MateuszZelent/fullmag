@@ -7,7 +7,11 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <limits>
+#include <sys/resource.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 namespace fd = fullmag::fem::frequency_domain;
 
@@ -30,6 +34,26 @@ fd::FrequencyDomainStatus count_apply_calls(
     auto *call_count = static_cast<std::uint64_t *>(user_data);
     ++(*call_count);
     return fd::FrequencyDomainStatus::operator_error;
+}
+
+template <typename Function>
+bool child_exits_successfully(Function function)
+{
+    const pid_t pid = fork();
+    if (pid < 0) {
+        return false;
+    }
+    if (pid == 0) {
+        const rlimit no_core{0, 0};
+        setrlimit(RLIMIT_CORE, &no_core);
+        alarm(2);
+        _exit(function() ? 0 : 1);
+    }
+
+    int status = 0;
+    return waitpid(pid, &status, 0) == pid &&
+        WIFEXITED(status) &&
+        WEXITSTATUS(status) == 0;
 }
 
 void overflowing_device_basis_extent_is_rejected()
@@ -187,6 +211,141 @@ void checked_node_dense_and_row_layouts_cover_boundaries()
         "overflowing tangent workspace shape must fail closed");
 }
 
+void active_tangent_paths_reject_oversized_extents_before_buffer_access()
+{
+    const std::uint64_t oversized_node_count =
+        fd::kMaxFrequencyDomainWorkspaceBytes / sizeof(fd::TangentFrameNode) + 1;
+    check(
+        child_exits_successfully([&]() {
+            const double equilibrium_xyz[3] = {0.0, 0.0, 1.0};
+            fd::TangentFrameNode out_node{};
+            fd::TangentFrameDiagnostics diagnostics{};
+            return fd::build_tangent_frame(
+                       equilibrium_xyz,
+                       oversized_node_count,
+                       &out_node,
+                       &diagnostics) == fd::FrequencyDomainStatus::validation_error &&
+                std::strstr(diagnostics.error_message, "extent") != nullptr;
+        }),
+        "active tangent-frame build must reject oversized extents before buffer access");
+
+    check(
+        child_exits_successfully([&]() {
+            const fd::TangentFrameNode node{};
+            const double full_xyz[3] = {1.0, 0.0, 0.0};
+            double tangent[2] = {17.0, 19.0};
+            fd::project_full_to_tangent(
+                &node,
+                full_xyz,
+                oversized_node_count,
+                tangent);
+            return tangent[0] == 17.0 && tangent[1] == 19.0;
+        }),
+        "active tangent projection must reject oversized extents before buffer access");
+
+    check(
+        child_exits_successfully([&]() {
+            const fd::TangentFrameNode node{};
+            const double tangent[2] = {1.0, 0.0};
+            double full_xyz[3] = {17.0, 19.0, 23.0};
+            fd::lift_tangent_to_full(
+                &node,
+                tangent,
+                oversized_node_count,
+                full_xyz);
+            return full_xyz[0] == 17.0 &&
+                full_xyz[1] == 19.0 &&
+                full_xyz[2] == 23.0;
+        }),
+        "active tangent lift must reject oversized extents before buffer access");
+
+    check(
+        child_exits_successfully([&]() {
+            const fd::TangentFrameNode node{};
+            const double full_xyz[3] = {1.0, 0.0, 0.0};
+            const fd::TangentProjectionDiagnostics diagnostics =
+                fd::diagnose_tangent_projection(
+                    &node,
+                    full_xyz,
+                    oversized_node_count);
+            return diagnostics.node_count == oversized_node_count &&
+                diagnostics.max_normal_component_abs == 0.0 &&
+                diagnostics.max_roundtrip_error == 0.0;
+        }),
+        "active tangent diagnostics must reject oversized extents before buffer access");
+
+    check(
+        child_exits_successfully([&]() {
+            const fd::TangentFrameNode node{};
+            const double full_xyz[3] = {1.0, 0.0, 0.0};
+            double tangent_real[2] = {17.0, 19.0};
+            double tangent_imag[2] = {23.0, 29.0};
+            fd::project_cartesian_complex_to_tangent(
+                &node,
+                full_xyz,
+                full_xyz,
+                oversized_node_count,
+                tangent_real,
+                tangent_imag);
+            return tangent_real[0] == 17.0 && tangent_real[1] == 19.0 &&
+                tangent_imag[0] == 23.0 && tangent_imag[1] == 29.0;
+        }),
+        "active complex tangent projection must reject oversized extents before buffer access");
+
+    check(
+        child_exits_successfully([&]() {
+            const fd::TangentFrameNode node{};
+            const double tangent[2] = {1.0, 0.0};
+            double full_real[3] = {17.0, 19.0, 23.0};
+            double full_imag[3] = {29.0, 31.0, 37.0};
+            fd::lift_tangent_complex_to_cartesian(
+                &node,
+                tangent,
+                tangent,
+                oversized_node_count,
+                full_real,
+                full_imag);
+            return full_real[0] == 17.0 &&
+                full_real[1] == 19.0 &&
+                full_real[2] == 23.0 &&
+                full_imag[0] == 29.0 &&
+                full_imag[1] == 31.0 &&
+                full_imag[2] == 37.0;
+        }),
+        "active complex tangent lift must reject oversized extents before buffer access");
+}
+
+void active_tangent_paths_preserve_legal_small_layouts()
+{
+    const double equilibrium_xyz[3] = {0.0, 0.0, 1.0};
+    fd::TangentFrameNode node{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(
+            equilibrium_xyz,
+            1,
+            &node,
+            &frame_diagnostics) == fd::FrequencyDomainStatus::ok,
+        "legal tangent-frame build must remain accepted");
+
+    const double full_xyz[3] = {1.0, 0.0, 0.0};
+    double tangent[2] = {0.0, 0.0};
+    fd::project_full_to_tangent(&node, full_xyz, 1, tangent);
+    check(tangent[0] == 1.0 && tangent[1] == 0.0,
+          "legal tangent projection must remain unchanged");
+
+    double lifted[3] = {0.0, 0.0, 0.0};
+    fd::lift_tangent_to_full(&node, tangent, 1, lifted);
+    check(lifted[0] == 1.0 && lifted[1] == 0.0 && lifted[2] == 0.0,
+          "legal tangent lift must remain unchanged");
+
+    const fd::TangentProjectionDiagnostics projection_diagnostics =
+        fd::diagnose_tangent_projection(&node, full_xyz, 1);
+    check(projection_diagnostics.max_normal_component_abs == 0.0 &&
+              projection_diagnostics.max_roundtrip_error == 0.0,
+          "legal tangent diagnostics must remain unchanged");
+}
+
 void checked_cuda_grid_conversion_and_policy_caps_are_distinct()
 {
     std::uint32_t blocks = 0;
@@ -244,6 +403,59 @@ void production_cpu_rejects_extents_before_callbacks_or_allocation()
     check(call_count == 0, "CPU restart beyond policy cap must reject before callbacks");
 }
 
+void production_cpu_rejects_caller_owned_array_bytes_before_callbacks()
+{
+    double frequencies_hz[2] = {1.0, 2.0};
+    double drive[2] = {1.0, 0.0};
+    double response = 0.0;
+    double residual = 0.0;
+    std::uint64_t call_count = 0;
+    fd::ProductionCpuDrivenResponseProblem problem{};
+    problem.tangent_dof_count = 1;
+    problem.frequencies_hz = frequencies_hz;
+    problem.frequency_count = std::numeric_limits<std::uint64_t>::max();
+    problem.drive_real = drive;
+    problem.apply_stiffness = count_apply_calls;
+    problem.apply_mass = count_apply_calls;
+    problem.operator_user_data = &call_count;
+    problem.max_iterations = 1;
+    problem.restart_iterations = 1;
+    problem.out_response_real = &response;
+    problem.out_response_imag = &response;
+    problem.response_capacity = std::numeric_limits<std::uint64_t>::max();
+    problem.out_residual_l2_norm = &residual;
+    problem.out_relative_residual_l2_norm = &residual;
+    problem.residual_capacity = std::numeric_limits<std::uint64_t>::max();
+    fd::ProductionCpuDrivenResponseResult result{};
+
+    check(
+        fd::solve_production_cpu_driven_response(problem, &result) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "CPU caller-owned byte overflow must return validation error");
+    check(call_count == 0,
+          "CPU caller-owned byte overflow must reject before callbacks");
+
+    call_count = 0;
+    problem.tangent_dof_count = 2;
+    problem.frequency_count =
+        fd::kMaxFrequencyDomainWorkspaceBytes / sizeof(double);
+    std::uint64_t response_value_count = 0;
+    check(fd::checked_mul_u64(
+              problem.tangent_dof_count,
+              problem.frequency_count,
+              response_value_count),
+          "response policy test product must fit uint64");
+    problem.response_capacity = response_value_count;
+    problem.residual_capacity = problem.frequency_count;
+
+    check(
+        fd::solve_production_cpu_driven_response(problem, &result) ==
+            fd::FrequencyDomainStatus::validation_error,
+        "CPU optional response bytes beyond policy must return validation error");
+    check(call_count == 0,
+          "CPU optional response bytes beyond policy must reject before callbacks");
+}
+
 } // namespace
 
 int main()
@@ -256,7 +468,10 @@ int main()
     checked_offset_plus_extent_rejects_wrap_and_capacity_overrun();
     checked_krylov_layouts_cover_restart_plus_one_and_v_z_h();
     checked_node_dense_and_row_layouts_cover_boundaries();
+    active_tangent_paths_reject_oversized_extents_before_buffer_access();
+    active_tangent_paths_preserve_legal_small_layouts();
     checked_cuda_grid_conversion_and_policy_caps_are_distinct();
     production_cpu_rejects_extents_before_callbacks_or_allocation();
+    production_cpu_rejects_caller_owned_array_bytes_before_callbacks();
     return 0;
 }

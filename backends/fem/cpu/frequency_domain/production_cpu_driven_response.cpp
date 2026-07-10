@@ -1274,6 +1274,50 @@ FrequencyDomainStatus solve_production_cpu_driven_response(
         copy_error(out_result->error_message, "production CPU frequency response problem size overflows");
         return FrequencyDomainStatus::validation_error;
     }
+    std::size_t caller_array_bytes = 0;
+    const CheckedExtentStatus drive_extent_status = checked_bytes_limited(
+        n,
+        sizeof(double),
+        kMaxFrequencyDomainWorkspaceBytes,
+        caller_array_bytes);
+    const CheckedExtentStatus frequency_extent_status = checked_bytes_limited(
+        problem.frequency_count,
+        sizeof(double),
+        kMaxFrequencyDomainWorkspaceBytes,
+        caller_array_bytes);
+    const bool has_response_outputs =
+        problem.out_response_real != nullptr || problem.out_response_imag != nullptr;
+    const CheckedExtentStatus response_extent_status = has_response_outputs
+        ? checked_bytes_limited(
+              response_value_count,
+              sizeof(double),
+              kMaxFrequencyDomainWorkspaceBytes,
+              caller_array_bytes)
+        : CheckedExtentStatus::ok;
+    const bool has_residual_outputs =
+        problem.out_residual_l2_norm != nullptr ||
+        problem.out_relative_residual_l2_norm != nullptr;
+    const CheckedExtentStatus residual_extent_status = has_residual_outputs
+        ? checked_bytes_limited(
+              problem.frequency_count,
+              sizeof(double),
+              kMaxFrequencyDomainWorkspaceBytes,
+              caller_array_bytes)
+        : CheckedExtentStatus::ok;
+    if (drive_extent_status == CheckedExtentStatus::arithmetic_overflow ||
+        frequency_extent_status == CheckedExtentStatus::arithmetic_overflow ||
+        response_extent_status == CheckedExtentStatus::arithmetic_overflow ||
+        residual_extent_status == CheckedExtentStatus::arithmetic_overflow) {
+        copy_error(out_result->error_message, "production CPU frequency response caller-owned array byte extent overflows");
+        return FrequencyDomainStatus::validation_error;
+    }
+    if (drive_extent_status != CheckedExtentStatus::ok ||
+        frequency_extent_status != CheckedExtentStatus::ok ||
+        response_extent_status != CheckedExtentStatus::ok ||
+        residual_extent_status != CheckedExtentStatus::ok) {
+        copy_error(out_result->error_message, "production CPU frequency response caller-owned array exceeds configured workspace limit");
+        return FrequencyDomainStatus::validation_error;
+    }
     std::size_t n_size = 0;
     std::size_t block_size = 0;
     std::size_t block_bytes = 0;

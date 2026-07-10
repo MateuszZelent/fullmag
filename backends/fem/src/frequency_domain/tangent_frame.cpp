@@ -5,12 +5,91 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace fullmag::fem::frequency_domain {
 
 namespace {
 
 constexpr double kUnitTolerance = 1.0e-8;
+
+CheckedExtentStatus combine_extent_status(
+    CheckedExtentStatus lhs,
+    CheckedExtentStatus rhs) noexcept
+{
+    if (lhs == CheckedExtentStatus::arithmetic_overflow ||
+        rhs == CheckedExtentStatus::arithmetic_overflow) {
+        return CheckedExtentStatus::arithmetic_overflow;
+    }
+    if (lhs == CheckedExtentStatus::invalid_argument ||
+        rhs == CheckedExtentStatus::invalid_argument) {
+        return CheckedExtentStatus::invalid_argument;
+    }
+    if (lhs == CheckedExtentStatus::policy_limit_exceeded ||
+        rhs == CheckedExtentStatus::policy_limit_exceeded) {
+        return CheckedExtentStatus::policy_limit_exceeded;
+    }
+    return CheckedExtentStatus::ok;
+}
+
+CheckedExtentStatus preflight_tangent_extents(
+    std::uint64_t node_count,
+    std::uint64_t &full_dof_count,
+    std::uint64_t &tangent_dof_count) noexcept
+{
+    full_dof_count = 0;
+    tangent_dof_count = 0;
+    std::size_t node_bytes = 0;
+    std::size_t full_bytes = 0;
+    std::size_t tangent_bytes = 0;
+    CheckedExtentStatus status = checked_bytes_limited(
+        node_count,
+        sizeof(TangentFrameNode),
+        kMaxFrequencyDomainWorkspaceBytes,
+        node_bytes);
+    const CheckedExtentStatus full_count_status = checked_mul_u64_limited(
+        node_count,
+        3,
+        std::numeric_limits<std::uint64_t>::max(),
+        full_dof_count);
+    const CheckedExtentStatus tangent_count_status = checked_mul_u64_limited(
+        node_count,
+        2,
+        std::numeric_limits<std::uint64_t>::max(),
+        tangent_dof_count);
+    status = combine_extent_status(status, full_count_status);
+    status = combine_extent_status(status, tangent_count_status);
+    if (full_count_status == CheckedExtentStatus::ok) {
+        status = combine_extent_status(
+            status,
+            checked_bytes_limited(
+                full_dof_count,
+                sizeof(double),
+                kMaxFrequencyDomainWorkspaceBytes,
+                full_bytes));
+    }
+    if (tangent_count_status == CheckedExtentStatus::ok) {
+        status = combine_extent_status(
+            status,
+            checked_bytes_limited(
+                tangent_dof_count,
+                sizeof(double),
+                kMaxFrequencyDomainWorkspaceBytes,
+                tangent_bytes));
+    }
+    if (status != CheckedExtentStatus::ok) {
+        full_dof_count = 0;
+        tangent_dof_count = 0;
+    }
+    return status;
+}
+
+const char *tangent_extent_error(CheckedExtentStatus status) noexcept
+{
+    return status == CheckedExtentStatus::arithmetic_overflow
+        ? "tangent frame extent arithmetic overflows"
+        : "tangent frame extent exceeds configured workspace limit";
+}
 
 double norm3(const double v[3]) noexcept
 {
@@ -56,11 +135,10 @@ TangentWorkspaceShape tangent_workspace_shape(std::uint64_t node_count) noexcept
 {
     TangentWorkspaceShape shape{};
     shape.node_count = node_count;
-    if (!checked_mul_u64(node_count, 3, shape.full_dof_count) ||
-        !checked_mul_u64(node_count, 2, shape.tangent_dof_count)) {
-        shape.full_dof_count = 0;
-        shape.tangent_dof_count = 0;
-    }
+    preflight_tangent_extents(
+        node_count,
+        shape.full_dof_count,
+        shape.tangent_dof_count);
     return shape;
 }
 
@@ -73,6 +151,20 @@ FrequencyDomainStatus build_tangent_frame(
     if (out_diagnostics != nullptr) {
         *out_diagnostics = TangentFrameDiagnostics{};
         out_diagnostics->node_count = node_count;
+    }
+    std::uint64_t full_dof_count = 0;
+    std::uint64_t tangent_dof_count = 0;
+    const CheckedExtentStatus extent_status = preflight_tangent_extents(
+        node_count,
+        full_dof_count,
+        tangent_dof_count);
+    if (extent_status != CheckedExtentStatus::ok) {
+        if (out_diagnostics != nullptr) {
+            copy_error(
+                out_diagnostics->error_message,
+                tangent_extent_error(extent_status));
+        }
+        return FrequencyDomainStatus::validation_error;
     }
     if ((node_count > 0 && equilibrium_xyz == nullptr) || out_nodes == nullptr) {
         if (out_diagnostics != nullptr) {
@@ -144,6 +236,14 @@ void project_full_to_tangent(
     std::uint64_t node_count,
     double *out_tangent_2) noexcept
 {
+    std::uint64_t full_dof_count = 0;
+    std::uint64_t tangent_dof_count = 0;
+    if (preflight_tangent_extents(
+            node_count,
+            full_dof_count,
+            tangent_dof_count) != CheckedExtentStatus::ok) {
+        return;
+    }
     if (nodes == nullptr || full_xyz == nullptr || out_tangent_2 == nullptr) {
         return;
     }
@@ -160,6 +260,14 @@ void lift_tangent_to_full(
     std::uint64_t node_count,
     double *out_full_xyz) noexcept
 {
+    std::uint64_t full_dof_count = 0;
+    std::uint64_t tangent_dof_count = 0;
+    if (preflight_tangent_extents(
+            node_count,
+            full_dof_count,
+            tangent_dof_count) != CheckedExtentStatus::ok) {
+        return;
+    }
     if (nodes == nullptr || tangent_2 == nullptr || out_full_xyz == nullptr) {
         return;
     }
@@ -181,6 +289,14 @@ void project_cartesian_complex_to_tangent(
     double *out_tangent_real_2,
     double *out_tangent_imag_2) noexcept
 {
+    std::uint64_t full_dof_count = 0;
+    std::uint64_t tangent_dof_count = 0;
+    if (preflight_tangent_extents(
+            node_count,
+            full_dof_count,
+            tangent_dof_count) != CheckedExtentStatus::ok) {
+        return;
+    }
     if (nodes == nullptr ||
         cartesian_real_xyz == nullptr ||
         cartesian_imag_xyz == nullptr ||
@@ -200,6 +316,14 @@ void lift_tangent_complex_to_cartesian(
     double *out_cartesian_real_xyz,
     double *out_cartesian_imag_xyz) noexcept
 {
+    std::uint64_t full_dof_count = 0;
+    std::uint64_t tangent_dof_count = 0;
+    if (preflight_tangent_extents(
+            node_count,
+            full_dof_count,
+            tangent_dof_count) != CheckedExtentStatus::ok) {
+        return;
+    }
     if (nodes == nullptr ||
         tangent_real_2 == nullptr ||
         tangent_imag_2 == nullptr ||
@@ -218,6 +342,14 @@ TangentProjectionDiagnostics diagnose_tangent_projection(
 {
     TangentProjectionDiagnostics diagnostics{};
     diagnostics.node_count = node_count;
+    std::uint64_t full_dof_count = 0;
+    std::uint64_t tangent_dof_count = 0;
+    if (preflight_tangent_extents(
+            node_count,
+            full_dof_count,
+            tangent_dof_count) != CheckedExtentStatus::ok) {
+        return diagnostics;
+    }
     if (nodes == nullptr || full_xyz == nullptr) {
         return diagnostics;
     }
