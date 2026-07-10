@@ -419,8 +419,7 @@ mod tests {
                 torque_tolerance_apm: None,
                 energy_tolerance_j: None,
                 max_steps: None,
-                max_pseudotime_s: None,
-                max_physical_time_s: None,
+                max_relaxation_time_s: None,
             },
         }
     }
@@ -486,7 +485,7 @@ mod tests {
     fn direct_minimizer_runtime_budget_uses_steps_and_pseudotime() {
         let mut bounded = control(RelaxationAlgorithmIR::ProjectedGradientBb);
         bounded.stop.max_steps = Some(4);
-        bounded.stop.max_pseudotime_s = Some(2.0e-6);
+        bounded.stop.max_relaxation_time_s = Some(2.0e-6);
         let mut state =
             DirectMinimizerState::new(vec![[1.0, 0.0, 0.0]], vec![[0.0, 1.0, 0.0]], 0.0);
 

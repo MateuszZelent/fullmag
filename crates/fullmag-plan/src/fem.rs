@@ -1862,9 +1862,7 @@ pub(crate) fn plan_fem(
     }
 
     let controls = planned_study_controls(problem, resolved_backend, &mut errors);
-    // The legacy backend plan field remains concrete; native direct minimizers
-    // select their algorithm independently and ignore this non-applicable value.
-    let integrator = controls.integrator.unwrap_or_default();
+    let integrator = controls.integrator;
     let fixed_timestep = controls.fixed_timestep;
     let gyromagnetic_ratio = controls.gyromagnetic_ratio;
     let relaxation = controls.relaxation;

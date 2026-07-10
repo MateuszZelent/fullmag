@@ -16,8 +16,10 @@ pub(crate) struct InitialStateDiagnostic {
     pub warnings: Vec<String>,
 }
 
-fn integrator_for_plan(integrator: IntegratorChoice) -> TimeIntegrator {
-    match integrator {
+fn integrator_for_plan(integrator: Option<IntegratorChoice>) -> TimeIntegrator {
+    // Direct-minimizer diagnostics reuse the LLG field evaluator without
+    // publishing or resolving a time integrator for the plan itself.
+    match integrator.unwrap_or(IntegratorChoice::Heun) {
         IntegratorChoice::Heun => TimeIntegrator::Heun,
         IntegratorChoice::Rk4 => TimeIntegrator::RK4,
         IntegratorChoice::Rk23 => TimeIntegrator::RK23,

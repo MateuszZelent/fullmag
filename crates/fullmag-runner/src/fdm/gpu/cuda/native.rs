@@ -440,7 +440,12 @@ impl NativeFdmBackend {
             }
         };
 
-        let integrator = match plan.integrator {
+        // The native descriptor retains an ABI-only slot that direct
+        // minimizers do not consume.
+        let integrator = match plan
+            .integrator
+            .unwrap_or(fullmag_ir::IntegratorChoice::Heun)
+        {
             fullmag_ir::IntegratorChoice::Heun => {
                 ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_HEUN
             }
@@ -2135,7 +2140,7 @@ mod tests {
             gyromagnetic_ratio: 2.211e5,
             precision,
             exchange_bc: ExchangeBoundaryCondition::Neumann,
-            integrator: IntegratorChoice::Heun,
+            integrator: Some(IntegratorChoice::Heun),
             fixed_timestep: Some(2.5e-13),
             adaptive_timestep: None,
             field_refresh: None,
@@ -2222,7 +2227,7 @@ mod tests {
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
             exchange_bc: ExchangeBoundaryCondition::Neumann,
-            integrator: IntegratorChoice::Heun,
+            integrator: Some(IntegratorChoice::Heun),
             fixed_timestep: Some(2.0e-13),
             adaptive_timestep: None,
             field_refresh: None,
@@ -2291,7 +2296,7 @@ mod tests {
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
             exchange_bc: ExchangeBoundaryCondition::Neumann,
-            integrator: IntegratorChoice::Rk23,
+            integrator: Some(IntegratorChoice::Rk23),
             fixed_timestep: Some(1e-15),
             adaptive_timestep: None,
             field_refresh: None,
@@ -2511,7 +2516,7 @@ mod tests {
             plan.material.damping,
         )
         .expect("material");
-        let integrator = match plan.integrator {
+        let integrator = match plan.integrator.unwrap_or(IntegratorChoice::Heun) {
             fullmag_ir::IntegratorChoice::Heun => TimeIntegrator::Heun,
             fullmag_ir::IntegratorChoice::Rk4 => TimeIntegrator::RK4,
             fullmag_ir::IntegratorChoice::Rk23 => TimeIntegrator::RK23,

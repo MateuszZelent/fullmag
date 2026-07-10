@@ -591,8 +591,7 @@ pub(crate) fn plan_fdm(
     };
 
     let controls = planned_study_controls(problem, resolved_backend, &mut errors);
-    // The legacy backend plan field remains concrete; direct minimizers ignore it.
-    let integrator = controls.integrator.unwrap_or_default();
+    let integrator = controls.integrator;
     let fixed_timestep = controls.fixed_timestep;
     let gyromagnetic_ratio = controls.gyromagnetic_ratio;
     let relaxation = controls.relaxation;
@@ -1681,19 +1680,12 @@ pub(crate) fn plan_fdm_multilayer(
     let estimated_kernel_bytes = padded_len * 6 * 16 * estimated_unique_kernels as u64;
 
     let controls = planned_study_controls(problem, resolved_backend, &mut errors);
-    // The legacy backend plan field remains concrete; direct minimizers are
-    // rejected on multilayer FDM before execution and do not consume it.
-    let integrator = controls.integrator.unwrap_or_default();
+    let mut integrator = controls.integrator;
     let fixed_timestep = controls.fixed_timestep;
     let gyromagnetic_ratio = controls.gyromagnetic_ratio;
     let relaxation = controls.relaxation;
     let adaptive_timestep = controls.adaptive_timestep;
     let field_refresh = controls.field_refresh;
-    if adaptive_timestep.is_some() {
-        errors.push(
-            "the public multilayer FDM runner does not yet support adaptive_timestep".to_string(),
-        );
-    }
     if relaxation
         .as_ref()
         .is_some_and(|control| control.algorithm != RelaxationAlgorithmIR::LlgOverdamped)
@@ -1730,15 +1722,28 @@ pub(crate) fn plan_fdm_multilayer(
             },
         })
         .collect::<Vec<_>>();
-    if runtime_requests_cuda(problem)
-        && !matches!(
-            integrator,
-            IntegratorChoice::Heun | IntegratorChoice::Rk4 | IntegratorChoice::Rk23
-        )
-        && !fdm_multilayer_cuda_native_single_grid_eligible(&layers)
-    {
+    let native_cuda_lane =
+        runtime_requests_cuda(problem) && fdm_multilayer_cuda_native_single_grid_eligible(&layers);
+    let requested_auto_integrator = problem.study.optional_dynamics().is_some_and(|dynamics| {
+        let fullmag_ir::DynamicsIR::Llg { integrator, .. } = dynamics;
+        integrator == "auto"
+    });
+    if !native_cuda_lane && requested_auto_integrator {
+        integrator = Some(IntegratorChoice::Heun);
+    }
+    if !native_cuda_lane && integrator != Some(IntegratorChoice::Heun) {
+        let lane = if runtime_requests_cuda(problem) {
+            "staged CUDA"
+        } else {
+            "staged CPU"
+        };
+        errors.push(format!(
+            "the {lane} multilayer FDM runner supports only the 'heun' integrator; non-Heun integrators require the native single-grid-compatible CUDA lane"
+        ));
+    }
+    if !native_cuda_lane && adaptive_timestep.is_some() {
         errors.push(
-            "the public staged v2 CUDA multilayer FDM runner currently supports only 'heun', 'rk4', and fixed-step 'rk23' integrators; RK45/ABM3 are executable only for native single-grid-compatible multilayer stacks"
+            "the staged CPU/CUDA multilayer FDM runner does not support adaptive_timestep"
                 .to_string(),
         );
     }
@@ -1759,7 +1764,7 @@ pub(crate) fn plan_fdm_multilayer(
         precision: problem.backend_policy.execution_precision,
         exchange_bc: ExchangeBoundaryCondition::Neumann,
         periodicity: problem.pbc.clone(),
-        integrator,
+        integrator: integrator.expect("validated multilayer FDM studies require LLG dynamics"),
         fixed_timestep,
         field_refresh,
         relaxation,

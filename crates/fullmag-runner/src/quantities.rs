@@ -399,7 +399,7 @@ mod tests {
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
             exchange_bc: ExchangeBoundaryCondition::Neumann,
-            integrator: IntegratorChoice::Heun,
+            integrator: Some(IntegratorChoice::Heun),
             fixed_timestep: Some(1.0e-13),
             adaptive_timestep: None,
             field_refresh: None,

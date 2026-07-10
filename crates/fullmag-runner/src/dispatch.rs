@@ -5389,8 +5389,8 @@ fn execute_native_fem(
         compute_capability: Some(device_info.compute_capability.clone()),
         cuda_driver_version: Some(device_info.driver_version),
         cuda_runtime_version: Some(device_info.runtime_version),
-        requested_integrator: Some(format!("{:?}", plan.integrator)),
-        resolved_integrator: Some(format!("{:?}", plan.integrator)),
+        requested_integrator: plan.integrator.map(|integrator| format!("{integrator:?}")),
+        resolved_integrator: plan.integrator.map(|integrator| format!("{integrator:?}")),
         requested_demag_realization: plan
             .demag_realization
             .map(|r| r.provenance_name().to_string()),
@@ -6023,7 +6023,7 @@ mod tests {
             gyromagnetic_ratio: 2.211e5,
             precision: fullmag_ir::ExecutionPrecision::Double,
             exchange_bc: fullmag_ir::ExchangeBoundaryCondition::Neumann,
-            integrator: fullmag_ir::IntegratorChoice::Heun,
+            integrator: Some(fullmag_ir::IntegratorChoice::Heun),
             fixed_timestep: Some(1e-13),
             adaptive_timestep: None,
             field_refresh: None,

@@ -292,7 +292,7 @@ pub(crate) fn build_problem_and_state(
     .map_err(|e| RunError {
         message: format!("Material: {}", e),
     })?;
-    let integrator = match plan.integrator {
+    let integrator = match plan.integrator.unwrap_or(IntegratorChoice::Heun) {
         IntegratorChoice::Heun => TimeIntegrator::Heun,
         IntegratorChoice::Rk4 => TimeIntegrator::RK4,
         IntegratorChoice::Rk23 => TimeIntegrator::RK23,
@@ -482,8 +482,8 @@ pub(crate) fn execution_provenance(plan: &FemPlanIR) -> ExecutionProvenance {
         compute_capability: None,
         cuda_driver_version: None,
         cuda_runtime_version: None,
-        requested_integrator: Some(format!("{:?}", plan.integrator)),
-        resolved_integrator: Some(format!("{:?}", plan.integrator)),
+        requested_integrator: plan.integrator.map(|integrator| format!("{integrator:?}")),
+        resolved_integrator: plan.integrator.map(|integrator| format!("{integrator:?}")),
         requested_demag_realization: plan
             .demag_realization
             .map(|r| r.provenance_name().to_string()),
@@ -1545,7 +1545,7 @@ mod tests {
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
             exchange_bc: ExchangeBoundaryCondition::Neumann,
-            integrator: IntegratorChoice::Heun,
+            integrator: Some(IntegratorChoice::Heun),
             fixed_timestep: Some(1e-13),
             adaptive_timestep: None,
             field_refresh: None,
@@ -1724,7 +1724,7 @@ mod tests {
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
             exchange_bc: ExchangeBoundaryCondition::Neumann,
-            integrator: IntegratorChoice::Heun,
+            integrator: Some(IntegratorChoice::Heun),
             fixed_timestep: Some(1e-13),
             adaptive_timestep: None,
             field_refresh: None,
@@ -1909,7 +1909,7 @@ mod tests {
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
             exchange_bc: ExchangeBoundaryCondition::Neumann,
-            integrator: IntegratorChoice::Heun,
+            integrator: Some(IntegratorChoice::Heun),
             fixed_timestep: Some(1e-13),
             adaptive_timestep: None,
             field_refresh: None,
@@ -2205,8 +2205,7 @@ mod tests {
                     torque_tolerance_apm: Some(1e-6),
                     energy_tolerance_j: None,
                     max_steps: Some(1000),
-                    max_pseudotime_s: None,
-                    max_physical_time_s: None,
+                    max_relaxation_time_s: None,
                 },
             }),
             ..make_test_plan(false)

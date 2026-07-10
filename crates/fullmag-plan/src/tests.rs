@@ -4579,6 +4579,34 @@ fn direct_minimizer_resolves_no_integrator() {
 }
 
 #[test]
+fn direct_minimizer_final_plan_has_no_integrator() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study = fullmag_ir::StudyIR::Relaxation {
+        algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+        dynamics: None,
+        stop: fullmag_ir::RelaxStopIR {
+            torque_tolerance_apm: Some(1e-3),
+            energy_tolerance_j: None,
+            max_steps: Some(250),
+            max_relaxation_time_s: None,
+        },
+        sampling: ir.study.sampling().clone(),
+    };
+
+    let planned = plan(&ir).expect("direct minimizer should plan");
+    let BackendPlanIR::Fdm(fdm) = planned.backend_plan else {
+        panic!("expected FDM plan");
+    };
+    let serialized = serde_json::to_value(fdm).expect("FDM plan should serialize");
+    assert!(
+        serialized
+            .get("integrator")
+            .is_none_or(serde_json::Value::is_null),
+        "direct-minimizer final plans must not manufacture an integrator: {serialized}"
+    );
+}
+
+#[test]
 fn relaxation_rejects_zhang_li_slonczewski_sot_and_thermal() {
     let relaxation = |ir: &mut ProblemIR| {
         ir.study = fullmag_ir::StudyIR::Relaxation {
@@ -5207,6 +5235,55 @@ fn stacked_two_body_multilayer_problem_with_dmi() -> ProblemIR {
 }
 
 #[test]
+fn staged_multilayer_rejects_non_heun_integrators() {
+    let mut cpu = stacked_two_body_multilayer_problem();
+    let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &mut cpu.study else {
+        panic!("bootstrap study should be time evolution");
+    };
+    let fullmag_ir::DynamicsIR::Llg { integrator, .. } = dynamics;
+    *integrator = "rk4".to_string();
+    let err = plan(&cpu).expect_err("staged CPU multilayer supports only Heun");
+    assert!(err.reasons.iter().any(|reason| {
+        reason.contains("staged") && reason.contains("multilayer") && reason.contains("heun")
+    }));
+
+    let mut cuda = cpu;
+    let mut second_material = cuda.materials[0].clone();
+    second_material.name = "Py2".to_string();
+    second_material.damping = 0.02;
+    cuda.materials.push(second_material);
+    cuda.magnets[1].material = "Py2".to_string();
+    cuda.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cuda"}),
+    );
+    let err = plan(&cuda).expect_err("non-native staged CUDA multilayer supports only Heun");
+    assert!(err.reasons.iter().any(|reason| {
+        reason.contains("staged") && reason.contains("CUDA") && reason.contains("heun")
+    }));
+}
+
+#[test]
+fn native_cuda_multilayer_keeps_supported_non_heun_integrators() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &mut ir.study else {
+        panic!("bootstrap study should be time evolution");
+    };
+    let fullmag_ir::DynamicsIR::Llg { integrator, .. } = dynamics;
+    *integrator = "rk4".to_string();
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cuda"}),
+    );
+
+    let planned = plan(&ir).expect("native single-grid-compatible CUDA supports RK4");
+    let BackendPlanIR::FdmMultilayer(plan) = planned.backend_plan else {
+        panic!("expected multilayer plan");
+    };
+    assert_eq!(plan.integrator, IntegratorChoice::Rk4);
+}
+
+#[test]
 fn multilayer_planner_rejects_thermal_noise_until_rhs_coverage_exists() {
     let mut ir = stacked_two_body_multilayer_problem();
     ir.temperature = Some(300.0);
@@ -5321,6 +5398,10 @@ fn multilayer_planner_rejects_oersted_until_rhs_coverage_exists() {
 #[test]
 fn stacked_two_body_problem_lowers_to_multilayer_plan() {
     let mut ir = stacked_two_body_multilayer_problem_with_dmi();
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cuda"}),
+    );
     if let fullmag_ir::StudyIR::TimeEvolution {
         dynamics:
             fullmag_ir::DynamicsIR::Llg {
@@ -5379,18 +5460,6 @@ fn stacked_two_body_problem_lowers_to_multilayer_plan() {
         *integrator = "rk45".to_string();
         *fixed_timestep = Some(1e-13);
     }
-    let cpu_plan = plan(&ir).expect("fixed-step CPU multilayer RK45 should lower");
-    match cpu_plan.backend_plan {
-        BackendPlanIR::FdmMultilayer(multilayer) => {
-            assert_eq!(multilayer.integrator, fullmag_ir::IntegratorChoice::Rk45);
-        }
-        other => panic!("expected FDM multilayer plan, got {other:?}"),
-    }
-
-    ir.problem_meta.runtime_metadata.insert(
-        "runtime_selection".to_string(),
-        serde_json::json!({ "device": "cuda" }),
-    );
     let cuda_plan = plan(&ir).expect("native-stacked CUDA multilayer RK45 should lower");
     match cuda_plan.backend_plan {
         BackendPlanIR::FdmMultilayer(multilayer) => {
@@ -5420,26 +5489,13 @@ fn stacked_two_body_problem_lowers_to_multilayer_plan() {
         *integrator = "rk23".to_string();
         *fixed_timestep = Some(1e-13);
     }
-    let staged_rk23 =
-        plan(&ir).expect("heterogeneous CUDA multilayer fixed-step RK23 should lower");
-    match staged_rk23.backend_plan {
-        BackendPlanIR::FdmMultilayer(multilayer) => {
-            assert_eq!(multilayer.integrator, fullmag_ir::IntegratorChoice::Rk23);
-            assert_eq!(multilayer.fixed_timestep, Some(1e-13));
-        }
-        other => panic!("expected FDM multilayer plan, got {other:?}"),
-    }
-    if let fullmag_ir::StudyIR::TimeEvolution {
-        dynamics: fullmag_ir::DynamicsIR::Llg { integrator, .. },
-        ..
-    } = &mut ir.study
-    {
-        *integrator = "rk45".to_string();
-    }
-    let err = plan(&ir).expect_err("heterogeneous CUDA multilayer RK45 should remain unsupported");
+    let err = plan(&ir)
+        .expect_err("heterogeneous staged CUDA multilayer must reject non-Heun integrators");
     assert!(
         err.reasons.iter().any(|reason| {
-            reason.contains("staged v2") && reason.contains("'heun', 'rk4', and fixed-step 'rk23'")
+            reason.contains("staged CUDA")
+                && reason.contains("only the 'heun' integrator")
+                && reason.contains("native single-grid-compatible CUDA lane")
         }),
         "unexpected planner errors: {:?}",
         err.reasons

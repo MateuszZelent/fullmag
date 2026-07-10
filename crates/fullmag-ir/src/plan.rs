@@ -101,7 +101,8 @@ pub struct FdmPlanIR {
     /// See `docs/physics/0600-periodic-boundary-conditions.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub periodicity: Option<FdmPeriodicityIR>,
-    pub integrator: IntegratorChoice,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integrator: Option<IntegratorChoice>,
     pub fixed_timestep: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adaptive_timestep: Option<AdaptiveTimeStepIR>,
@@ -545,7 +546,8 @@ pub struct FemPlanIR {
     pub gyromagnetic_ratio: f64,
     pub precision: ExecutionPrecision,
     pub exchange_bc: ExchangeBoundaryCondition,
-    pub integrator: IntegratorChoice,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integrator: Option<IntegratorChoice>,
     pub fixed_timestep: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adaptive_timestep: Option<AdaptiveTimeStepIR>,

@@ -918,8 +918,59 @@ fn hysteresis_validation_rejects_direct_minimizer_physical_time_budget() {
         error.contains("settle_pipeline.steps[0].max_physical_time_s")
             && error.contains("projected_gradient_bb")
             && error.contains("direct minimizer")
-            && error.contains("max_pseudotime_s")
-            && error.contains("llg_overdamped")
+            && error.contains("max_steps")
+    }));
+
+    let StudyIR::Hysteresis {
+        settle_pipeline: Some(SettlePipelineIR::Sequence { steps }),
+        ..
+    } = &mut ir.study
+    else {
+        panic!("expected hysteresis settle pipeline");
+    };
+    let SettleStepIR::Minimize {
+        max_pseudotime_s,
+        max_physical_time_s,
+        ..
+    } = &mut steps[0]
+    else {
+        panic!("expected minimize settle step");
+    };
+    *max_pseudotime_s = Some(1e-9);
+    *max_physical_time_s = None;
+    let errors = ir
+        .validate()
+        .expect_err("direct minimizer settle steps must reject legacy pseudotime");
+    assert!(errors.iter().any(|error| {
+        error.contains("settle_pipeline.steps[0].max_pseudotime_s")
+            && error.contains("projected_gradient_bb")
+            && error.contains("direct minimizer")
+    }));
+
+    let StudyIR::Hysteresis {
+        settle_pipeline: Some(SettlePipelineIR::Sequence { steps }),
+        ..
+    } = &mut ir.study
+    else {
+        unreachable!();
+    };
+    let SettleStepIR::Minimize {
+        max_pseudotime_s,
+        max_physical_time_s,
+        ..
+    } = &mut steps[0]
+    else {
+        unreachable!();
+    };
+    *max_pseudotime_s = Some(1e-9);
+    *max_physical_time_s = Some(2e-9);
+    let errors = ir
+        .validate()
+        .expect_err("conflicting legacy settle time aliases must reject deterministically");
+    assert!(errors.iter().any(|error| {
+        error.contains("max_pseudotime_s")
+            && error.contains("max_physical_time_s")
+            && error.contains("conflict")
     }));
 }
 
@@ -2316,7 +2367,7 @@ fn execution_plan_ir_serializes() {
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
             exchange_bc: ExchangeBoundaryCondition::Neumann,
-            integrator: IntegratorChoice::Heun,
+            integrator: Some(IntegratorChoice::Heun),
             fixed_timestep: Some(1e-13),
             adaptive_timestep: None,
             relaxation: None,

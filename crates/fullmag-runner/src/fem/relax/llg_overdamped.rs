@@ -79,7 +79,12 @@ pub fn recommended_integrator(damping: f64) -> IntegratorChoice {
 /// fields (integrator, dt policy, precession flag) are recorded correctly.
 pub fn fill_provenance(provenance: &mut ExecutionProvenance, plan: &FemPlanIR) {
     let pure_damping = uses_pure_damping(plan);
-    let integrator_label = match plan.integrator {
+    let Some(integrator) = plan.integrator else {
+        provenance.requested_integrator = None;
+        provenance.resolved_integrator = None;
+        return;
+    };
+    let integrator_label = match integrator {
         IntegratorChoice::Heun => "heun",
         IntegratorChoice::Rk4 => "rk4",
         IntegratorChoice::Rk23 => "rk23",

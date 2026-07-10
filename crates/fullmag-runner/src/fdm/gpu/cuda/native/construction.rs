@@ -302,7 +302,12 @@ impl NativeFdmBackend {
             }
         };
 
-        let integrator = match plan.integrator {
+        // The native descriptor retains an ABI-only slot that direct
+        // minimizers do not consume.
+        let integrator = match plan
+            .integrator
+            .unwrap_or(fullmag_ir::IntegratorChoice::Heun)
+        {
             fullmag_ir::IntegratorChoice::Heun => {
                 ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_HEUN
             }

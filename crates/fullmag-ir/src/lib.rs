@@ -2246,6 +2246,7 @@ fn validate_settle_step(step: &SettleStepIR, idx: usize, errors: &mut Vec<String
             );
             validate_settle_direct_minimizer_physical_time(
                 method,
+                *max_pseudotime_s,
                 *max_physical_time_s,
                 idx,
                 errors,
@@ -2303,6 +2304,7 @@ fn validate_settle_step(step: &SettleStepIR, idx: usize, errors: &mut Vec<String
             );
             validate_settle_direct_minimizer_physical_time(
                 method,
+                *max_pseudotime_s,
                 *max_physical_time_s,
                 idx,
                 errors,
@@ -2378,6 +2380,15 @@ fn validate_settle_time_controls(
     idx: usize,
     errors: &mut Vec<String>,
 ) {
+    if max_pseudotime_s.is_some()
+        && max_physical_time_s.is_some()
+        && max_pseudotime_s != max_physical_time_s
+    {
+        errors.push(format!(
+            "study.stages[].hysteresis.settle_pipeline.steps[{}].max_pseudotime_s conflicts with max_physical_time_s",
+            idx
+        ));
+    }
     if let Some(value) = timestep_s {
         if !value.is_finite() || value <= 0.0 {
             errors.push(format!(
@@ -2406,6 +2417,7 @@ fn validate_settle_time_controls(
 
 fn validate_settle_direct_minimizer_physical_time(
     method: &str,
+    max_pseudotime_s: Option<f64>,
     max_physical_time_s: Option<f64>,
     idx: usize,
     errors: &mut Vec<String>,
@@ -2413,9 +2425,16 @@ fn validate_settle_direct_minimizer_physical_time(
     let Some(algorithm) = direct_minimizer_relaxation_method(method) else {
         return;
     };
+    if max_pseudotime_s.is_some() {
+        errors.push(format!(
+            "study.stages[].hysteresis.settle_pipeline.steps[{}].max_pseudotime_s is unsupported for direct minimizer '{}'; direct minimizers accept max_steps, not seconds-valued aliases",
+            idx,
+            algorithm
+        ));
+    }
     if max_physical_time_s.is_some() {
         errors.push(format!(
-            "study.stages[].hysteresis.settle_pipeline.steps[{}].max_physical_time_s is unsupported for direct minimizer '{}'; direct minimizers do not advance physical time. Use max_pseudotime_s or method='llg_overdamped' for physical-time relaxation.",
+            "study.stages[].hysteresis.settle_pipeline.steps[{}].max_physical_time_s is unsupported for direct minimizer '{}'; direct minimizers accept max_steps, not seconds-valued aliases",
             idx,
             algorithm
         ));

@@ -2355,15 +2355,22 @@ fn settle_step_relaxation_control(step: &SettleStepIR) -> Result<RelaxationContr
             max_pseudotime_s,
             max_physical_time_s,
             ..
-        } => RelaxationControlIR {
-            algorithm: settle_relaxation_algorithm(method)?,
-            stop: RelaxStopIR {
-                torque_tolerance_apm: Some(*torque_tolerance),
-                energy_tolerance_j: None,
-                max_steps: Some(*max_steps as u64),
-                max_relaxation_time_s: max_physical_time_s.or(*max_pseudotime_s),
-            },
-        },
+        } => {
+            let algorithm = settle_relaxation_algorithm(method)?;
+            RelaxationControlIR {
+                algorithm,
+                stop: RelaxStopIR {
+                    torque_tolerance_apm: Some(*torque_tolerance),
+                    energy_tolerance_j: None,
+                    max_steps: Some(*max_steps as u64),
+                    max_relaxation_time_s: resolve_settle_relaxation_time(
+                        algorithm,
+                        *max_pseudotime_s,
+                        *max_physical_time_s,
+                    )?,
+                },
+            }
+        }
         SettleStepIR::Minimize {
             method,
             torque_tolerance,
@@ -2372,47 +2379,78 @@ fn settle_step_relaxation_control(step: &SettleStepIR) -> Result<RelaxationContr
             max_pseudotime_s,
             max_physical_time_s,
             ..
-        } => RelaxationControlIR {
-            algorithm: settle_minimize_algorithm(method)?,
-            stop: RelaxStopIR {
-                torque_tolerance_apm: Some(*torque_tolerance),
-                energy_tolerance_j: Some(*energy_tolerance),
-                max_steps: Some(*max_steps as u64),
-                max_relaxation_time_s: max_physical_time_s.or(*max_pseudotime_s),
-            },
-        },
+        } => {
+            let algorithm = settle_minimize_algorithm(method)?;
+            RelaxationControlIR {
+                algorithm,
+                stop: RelaxStopIR {
+                    torque_tolerance_apm: Some(*torque_tolerance),
+                    energy_tolerance_j: Some(*energy_tolerance),
+                    max_steps: Some(*max_steps as u64),
+                    max_relaxation_time_s: resolve_settle_relaxation_time(
+                        algorithm,
+                        *max_pseudotime_s,
+                        *max_physical_time_s,
+                    )?,
+                },
+            }
+        }
         SettleStepIR::DynamicsSettle {
             method,
             max_steps,
             max_pseudotime_s,
             max_physical_time_s,
             ..
-        } => RelaxationControlIR {
-            algorithm: settle_dynamics_algorithm(method)?,
-            stop: RelaxStopIR {
-                torque_tolerance_apm: None,
-                energy_tolerance_j: None,
-                max_steps: Some(*max_steps as u64),
-                max_relaxation_time_s: max_physical_time_s.or(*max_pseudotime_s),
-            },
-        },
+        } => {
+            let algorithm = settle_dynamics_algorithm(method)?;
+            RelaxationControlIR {
+                algorithm,
+                stop: RelaxStopIR {
+                    torque_tolerance_apm: None,
+                    energy_tolerance_j: None,
+                    max_steps: Some(*max_steps as u64),
+                    max_relaxation_time_s: resolve_settle_relaxation_time(
+                        algorithm,
+                        *max_pseudotime_s,
+                        *max_physical_time_s,
+                    )?,
+                },
+            }
+        }
     };
-    reject_direct_minimizer_physical_time(&control)?;
     Ok(control)
 }
 
-fn reject_direct_minimizer_physical_time(control: &RelaxationControlIR) -> Result<(), RunError> {
-    if relaxation_algorithm_is_direct_minimizer(control.algorithm)
-        && control.stop.max_relaxation_time_s.is_some()
+fn resolve_settle_relaxation_time(
+    algorithm: RelaxationAlgorithmIR,
+    max_pseudotime_s: Option<f64>,
+    max_physical_time_s: Option<f64>,
+) -> Result<Option<f64>, RunError> {
+    if max_pseudotime_s.is_some()
+        && max_physical_time_s.is_some()
+        && max_pseudotime_s != max_physical_time_s
     {
         return Err(RunError {
+            message: "hysteresis settle max_pseudotime_s conflicts with max_physical_time_s"
+                .to_string(),
+        });
+    }
+    if relaxation_algorithm_is_direct_minimizer(algorithm) {
+        let alias = if max_pseudotime_s.is_some() {
+            "max_pseudotime_s"
+        } else if max_physical_time_s.is_some() {
+            "max_physical_time_s"
+        } else {
+            return Ok(None);
+        };
+        return Err(RunError {
             message: format!(
-                "hysteresis settle method '{}' is a direct minimizer and does not accept a seconds-valued relaxation-time budget; use max_steps or method='llg_overdamped'",
-                control.algorithm.as_str()
+                "hysteresis settle method '{}' is a direct minimizer and rejects seconds-valued alias {alias}; use max_steps",
+                algorithm.as_str()
             ),
         });
     }
-    Ok(())
+    Ok(max_physical_time_s.or(max_pseudotime_s))
 }
 
 fn relaxation_algorithm_is_direct_minimizer(algorithm: RelaxationAlgorithmIR) -> bool {
@@ -6203,7 +6241,7 @@ mod tests {
             gyromagnetic_ratio: 2.211e5,
             precision: fullmag_ir::ExecutionPrecision::Double,
             exchange_bc: fullmag_ir::ExchangeBoundaryCondition::Neumann,
-            integrator: fullmag_ir::IntegratorChoice::Heun,
+            integrator: Some(fullmag_ir::IntegratorChoice::Heun),
             fixed_timestep: Some(1.0e-13),
             adaptive_timestep: None,
             field_refresh: None,
@@ -8152,8 +8190,41 @@ mod tests {
         assert!(err.message.contains("projected_gradient_bb"));
         assert!(err.message.contains("direct minimizer"));
         assert!(err.message.contains("max_physical_time_s"));
+
+        let mut pseudotime_step = step.clone();
+        let SettleStepIR::Minimize {
+            max_pseudotime_s,
+            max_physical_time_s,
+            ..
+        } = &mut pseudotime_step
+        else {
+            unreachable!();
+        };
+        *max_pseudotime_s = Some(1e-9);
+        *max_physical_time_s = None;
+        let err = settle_step_relaxation_control(&pseudotime_step)
+            .expect_err("direct minimizer settle steps must reject legacy pseudotime");
         assert!(err.message.contains("max_pseudotime_s"));
-        assert!(err.message.contains("llg_overdamped"));
+
+        let conflicting_step = SettleStepIR::Relax {
+            method: "llg_overdamped".to_string(),
+            alpha: 1.0,
+            torque_tolerance: 1e-5,
+            max_steps: 100,
+            applies_to: None,
+            stop_criteria: None,
+            timestep_s: None,
+            max_pseudotime_s: Some(1e-9),
+            max_physical_time_s: Some(2e-9),
+            on_non_convergence: "continue_with_warning".to_string(),
+            retry_timestep_scale: None,
+            retry_max_attempts: None,
+        };
+        let err = settle_step_relaxation_control(&conflicting_step)
+            .expect_err("conflicting legacy aliases must reject deterministically");
+        assert!(err.message.contains("max_pseudotime_s"));
+        assert!(err.message.contains("max_physical_time_s"));
+        assert!(err.message.contains("conflicts"));
 
         let tpi_step = SettleStepIR::Minimize {
             method: "tangent_plane_implicit".to_string(),

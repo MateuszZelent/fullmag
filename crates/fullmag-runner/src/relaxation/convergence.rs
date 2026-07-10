@@ -265,8 +265,7 @@ mod tests {
                 torque_tolerance_apm: None,
                 energy_tolerance_j: None,
                 max_steps: None,
-                max_pseudotime_s: Some(threshold),
-                max_physical_time_s: None,
+                max_relaxation_time_s: Some(threshold),
             },
         }
     }

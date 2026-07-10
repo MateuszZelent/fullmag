@@ -1091,13 +1091,82 @@ fn normalize_stage_sampling(ir: &mut ProblemIR) {
     }
 }
 
+fn required_study_dynamics(
+    study: &fullmag_ir::StudyIR,
+    context: &str,
+) -> Result<fullmag_ir::DynamicsIR> {
+    study
+        .optional_dynamics()
+        .cloned()
+        .with_context(|| format!("{context} requires explicit LLG dynamics"))
+}
+
+fn payload_field_is_set(payload: &BTreeMap<String, Value>, field: &str) -> bool {
+    payload.get(field).is_some_and(|value| match value {
+        Value::Null => false,
+        Value::String(value) => !value.trim().is_empty(),
+        _ => true,
+    })
+}
+
+fn reject_direct_minimizer_llg_payload(
+    algorithm: fullmag_ir::RelaxationAlgorithmIR,
+    payload: &BTreeMap<String, Value>,
+) -> Result<()> {
+    if algorithm == fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped {
+        return Ok(());
+    }
+    let rejected = ["integrator", "fixed_timestep", "max_error", "relax_alpha"]
+        .into_iter()
+        .filter(|field| payload_field_is_set(payload, field))
+        .collect::<Vec<_>>();
+    if !rejected.is_empty() {
+        bail!(
+            "relaxation algorithm '{}' is a direct minimizer and rejects LLG-only controls: {}",
+            algorithm.as_str(),
+            rejected.join(", ")
+        );
+    }
+    Ok(())
+}
+
+fn reject_direct_minimizer_llg_command(
+    algorithm: fullmag_ir::RelaxationAlgorithmIR,
+    command: &crate::types::SessionCommand,
+) -> Result<()> {
+    if algorithm == fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped {
+        return Ok(());
+    }
+    let mut rejected = Vec::new();
+    if command.integrator.is_some() {
+        rejected.push("integrator");
+    }
+    if command.fixed_timestep.is_some() {
+        rejected.push("fixed_timestep");
+    }
+    if command.max_error.is_some() {
+        rejected.push("max_error");
+    }
+    if command.relax_alpha.is_some() {
+        rejected.push("relax_alpha");
+    }
+    if !rejected.is_empty() {
+        bail!(
+            "relaxation algorithm '{}' is a direct minimizer and rejects LLG-only controls: {}",
+            algorithm.as_str(),
+            rejected.join(", ")
+        );
+    }
+    Ok(())
+}
+
 fn materialize_pipeline_run(
     base_ir: &ProblemIR,
     payload: &BTreeMap<String, Value>,
     default_until_seconds: Option<f64>,
 ) -> Result<ResolvedScriptStage> {
     let mut ir = base_ir.clone();
-    let mut dynamics = ir.study.dynamics().clone();
+    let mut dynamics = required_study_dynamics(&ir.study, "run pipeline stage")?;
     apply_dynamics_overrides(&mut dynamics, payload)?;
     let sampling = time_domain_sampling_from(ir.study.sampling());
     let entrypoint_kind = payload_string(payload, "entrypoint_kind")
@@ -1123,18 +1192,23 @@ fn materialize_pipeline_relax(
     payload: &BTreeMap<String, Value>,
 ) -> Result<ResolvedScriptStage> {
     let mut ir = base_ir.clone();
-    let mut dynamics = ir.study.dynamics().clone();
-    apply_dynamics_overrides(&mut dynamics, payload)?;
     let sampling = time_domain_sampling_from(ir.study.sampling());
     let entrypoint_kind = payload_string(payload, "entrypoint_kind")
         .unwrap_or_else(|| "study_pipeline_relax".to_string());
     ir.problem_meta.entrypoint_kind = entrypoint_kind.clone();
     let algorithm = payload_relaxation_algorithm(payload)?
         .unwrap_or(fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped);
+    reject_direct_minimizer_llg_payload(algorithm, payload)?;
+    let dynamics = if algorithm == fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped {
+        let mut dynamics = required_study_dynamics(&ir.study, "LLG relaxation pipeline stage")?;
+        apply_dynamics_overrides(&mut dynamics, payload)?;
+        Some(dynamics)
+    } else {
+        None
+    };
     ir.study = fullmag_ir::StudyIR::Relaxation {
         algorithm,
-        dynamics: (algorithm == fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped)
-            .then_some(dynamics),
+        dynamics,
         stop: payload_relax_stop(payload, true)?,
         sampling,
     };
@@ -1151,7 +1225,7 @@ fn materialize_pipeline_eigenmodes(
     payload: &BTreeMap<String, Value>,
 ) -> Result<ResolvedScriptStage> {
     let mut ir = base_ir.clone();
-    let mut dynamics = ir.study.dynamics().clone();
+    let mut dynamics = required_study_dynamics(&ir.study, "eigenmodes pipeline stage")?;
     apply_dynamics_overrides(&mut dynamics, payload)?;
     let sampling = ir.study.sampling().clone();
     let entrypoint_kind = payload_string(payload, "entrypoint_kind")
@@ -1240,7 +1314,7 @@ fn materialize_pipeline_frequency_response(
     payload: &BTreeMap<String, Value>,
 ) -> Result<ResolvedScriptStage> {
     let mut ir = base_ir.clone();
-    let mut dynamics = ir.study.dynamics().clone();
+    let mut dynamics = required_study_dynamics(&ir.study, "frequency-response pipeline stage")?;
     apply_dynamics_overrides(&mut dynamics, payload)?;
     let sampling = ir.study.sampling().clone();
     let entrypoint_kind = payload_string(payload, "entrypoint_kind")
@@ -2923,7 +2997,7 @@ pub(crate) fn build_interactive_command_stage(
             }
 
             let mut ir = base_problem.clone();
-            let mut dynamics = ir.study.dynamics().clone();
+            let mut dynamics = required_study_dynamics(&ir.study, "interactive run command")?;
             let fullmag_ir::DynamicsIR::Llg {
                 ref mut integrator,
                 ref mut fixed_timestep,
@@ -2958,62 +3032,69 @@ pub(crate) fn build_interactive_command_stage(
         }
         "relax" => {
             let mut ir = base_problem.clone();
-            let mut dynamics = ir.study.dynamics().clone();
-            let fullmag_ir::DynamicsIR::Llg {
-                ref mut integrator,
-                ref mut fixed_timestep,
-                ref mut adaptive_timestep,
-                ..
-            } = dynamics;
-            if let Some(ref int_str) = command.integrator {
-                if let Ok(parsed_integrator) = serde_json::from_value(serde_json::json!(int_str)) {
-                    *integrator = parsed_integrator;
-                } else {
-                    eprintln!(
-                        "[fullmag] warning: failed to parse integrator '{}'",
-                        int_str
-                    );
+            let algorithm = match command.relax_algorithm.as_deref() {
+                Some(value) => serde_json::from_value(serde_json::json!(value))
+                    .context("invalid relax_algorithm in SessionCommand")?,
+                None => fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped,
+            };
+            reject_direct_minimizer_llg_command(algorithm, command)?;
+            let mut dynamics = if algorithm == fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped {
+                Some(required_study_dynamics(
+                    &ir.study,
+                    "interactive LLG relaxation command",
+                )?)
+            } else {
+                None
+            };
+            if let Some(dynamics) = dynamics.as_mut() {
+                let fullmag_ir::DynamicsIR::Llg {
+                    integrator,
+                    fixed_timestep,
+                    adaptive_timestep,
+                    ..
+                } = dynamics;
+                if let Some(ref int_str) = command.integrator {
+                    *integrator = serde_json::from_value(serde_json::json!(int_str))
+                        .with_context(|| format!("invalid integrator '{int_str}'"))?;
                 }
-            }
-            if let Some(ft) = command.fixed_timestep {
-                *fixed_timestep = Some(ft);
-                *adaptive_timestep = None;
-            } else if let Some(atol) = command.max_error {
-                *fixed_timestep = None;
-                *adaptive_timestep = Some(fullmag_ir::AdaptiveTimeStepIR {
-                    atol,
-                    rtol: 1e-3,
-                    dt_initial: None,
-                    dt_min: 1e-15,
-                    dt_max: None,
-                    safety: 0.9,
-                    growth_limit: 2.0,
-                    shrink_limit: 0.2,
-                    max_spin_rotation: None,
-                    norm_tolerance: None,
-                });
-            } else if command.integrator.as_deref() == Some("rk45")
-                || command.integrator.as_deref() == Some("rk23")
-            {
-                *fixed_timestep = None;
-            }
-            // Ensure that adaptive integrators always have a valid adaptive_timestep
-            // (either from command.max_error above or inherited from base_problem).
-            // If neither fixed_timestep nor adaptive_timestep is set, use defaults.
-            let is_adaptive_integrator = matches!(integrator.as_str(), "rk23" | "rk45");
-            if fixed_timestep.is_none() && adaptive_timestep.is_none() && is_adaptive_integrator {
-                *adaptive_timestep = Some(fullmag_ir::AdaptiveTimeStepIR {
-                    atol: 1e-6,
-                    rtol: 1e-3,
-                    dt_initial: None,
-                    dt_min: 1e-15,
-                    dt_max: None,
-                    safety: 0.9,
-                    growth_limit: 2.0,
-                    shrink_limit: 0.2,
-                    max_spin_rotation: None,
-                    norm_tolerance: None,
-                });
+                if let Some(ft) = command.fixed_timestep {
+                    *fixed_timestep = Some(ft);
+                    *adaptive_timestep = None;
+                } else if let Some(atol) = command.max_error {
+                    *fixed_timestep = None;
+                    *adaptive_timestep = Some(fullmag_ir::AdaptiveTimeStepIR {
+                        atol,
+                        rtol: 1e-3,
+                        dt_initial: None,
+                        dt_min: 1e-15,
+                        dt_max: None,
+                        safety: 0.9,
+                        growth_limit: 2.0,
+                        shrink_limit: 0.2,
+                        max_spin_rotation: None,
+                        norm_tolerance: None,
+                    });
+                } else if command.integrator.as_deref() == Some("rk45")
+                    || command.integrator.as_deref() == Some("rk23")
+                {
+                    *fixed_timestep = None;
+                }
+                let is_adaptive_integrator = matches!(integrator.as_str(), "rk23" | "rk45");
+                if fixed_timestep.is_none() && adaptive_timestep.is_none() && is_adaptive_integrator
+                {
+                    *adaptive_timestep = Some(fullmag_ir::AdaptiveTimeStepIR {
+                        atol: 1e-6,
+                        rtol: 1e-3,
+                        dt_initial: None,
+                        dt_min: 1e-15,
+                        dt_max: None,
+                        safety: 0.9,
+                        growth_limit: 2.0,
+                        shrink_limit: 0.2,
+                        max_spin_rotation: None,
+                        norm_tolerance: None,
+                    });
+                }
             }
             let sampling = ir.study.sampling().clone();
             let stop = fullmag_ir::RelaxStopIR {
@@ -3025,31 +3106,22 @@ pub(crate) fn build_interactive_command_stage(
 
             // Default relax_alpha = 1.0 for optimal overdamped convergence
             // (user can still override to any value via command.relax_alpha)
-            let effective_alpha = command.relax_alpha.unwrap_or(1.0);
-            for mat in &mut ir.materials {
-                mat.damping = effective_alpha;
+            if algorithm == fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped {
+                let effective_alpha = command.relax_alpha.unwrap_or(1.0);
+                for mat in &mut ir.materials {
+                    mat.damping = effective_alpha;
+                }
             }
-
-            let algorithm = command
-                .relax_algorithm
-                .as_deref()
-                .and_then(|s| serde_json::from_value(serde_json::json!(s)).ok())
-                .unwrap_or(fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped);
 
             ir.problem_meta.entrypoint_kind = "interactive_relax".to_string();
             ir.study = fullmag_ir::StudyIR::Relaxation {
                 algorithm,
-                dynamics: (algorithm == fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped)
-                    .then(|| dynamics.clone()),
+                dynamics: dynamics.clone(),
                 stop: stop.clone(),
                 sampling,
             };
 
-            let until_seconds = resolve_relaxation_until_seconds(
-                &(algorithm == fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped)
-                    .then_some(dynamics),
-                &stop,
-            );
+            let until_seconds = resolve_relaxation_until_seconds(&dynamics, &stop);
 
             Ok(Some(ResolvedScriptStage::solver(
                 ir,
@@ -4124,6 +4196,108 @@ mod tests {
         assert_eq!(stages.len(), 1);
         assert_eq!(stages[0].entrypoint_kind, "pipeline_relax");
         assert!(stages[0].until_seconds.is_infinite());
+    }
+
+    #[test]
+    fn materialize_pipeline_direct_minimizer_does_not_require_base_dynamics() {
+        let mut base = sample_problem_ir();
+        let sampling = base.study.sampling().clone();
+        base.study = fullmag_ir::StudyIR::Relaxation {
+            algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+            dynamics: None,
+            stop: fullmag_ir::RelaxStopIR {
+                torque_tolerance_apm: Some(1e-4),
+                energy_tolerance_j: None,
+                max_steps: Some(50_000),
+                max_relaxation_time_s: None,
+            },
+            sampling,
+        };
+        let payload = serde_json::from_value(json!({
+            "relax_algorithm": "projected_gradient_bb",
+            "max_steps": 25
+        }))
+        .expect("payload");
+
+        let stage = materialize_pipeline_relax(&base, &payload)
+            .expect("valid direct-minimizer pipeline stage must not panic");
+        assert!(matches!(
+            stage.ir.study,
+            fullmag_ir::StudyIR::Relaxation {
+                algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+                dynamics: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn materialize_pipeline_direct_minimizer_rejects_llg_only_controls() {
+        let base = sample_problem_ir();
+        let payload = serde_json::from_value(json!({
+            "relax_algorithm": "projected_gradient_bb",
+            "integrator": "rk23",
+            "fixed_timestep": 1e-13,
+            "max_error": 1e-5,
+            "relax_alpha": 0.5
+        }))
+        .expect("payload");
+
+        let error = materialize_pipeline_relax(&base, &payload)
+            .expect_err("direct minimizer must reject LLG-only controls");
+        let message = error.to_string();
+        for field in ["integrator", "fixed_timestep", "max_error", "relax_alpha"] {
+            assert!(
+                message.contains(field),
+                "missing rejected field {field}: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn session_command_direct_minimizer_rejects_llg_only_controls() {
+        let base_problem = sample_problem_ir();
+        let command = crate::types::SessionCommand {
+            seq: 1,
+            command_id: "cmd-direct-minimizer".to_string(),
+            kind: "relax".to_string(),
+            created_at_unix_ms: 0,
+            target: None,
+            reason: None,
+            precondition: None,
+            client_intent_id: None,
+            requested_at_unix_ms: None,
+            until_seconds: None,
+            max_steps: Some(20),
+            torque_tolerance: Some(1e-4),
+            energy_tolerance: None,
+            integrator: Some("rk23".to_string()),
+            fixed_timestep: Some(1e-13),
+            max_error: Some(1e-5),
+            relax_algorithm: Some("projected_gradient_bb".to_string()),
+            relax_alpha: Some(0.5),
+            mesh_options: None,
+            mesh_target: None,
+            mesh_reason: None,
+            state_path: None,
+            state_format: None,
+            state_dataset: None,
+            state_sample_index: None,
+            display_selection: None,
+            preview_config: None,
+            stages: None,
+            profile: None,
+        };
+
+        let error = build_interactive_command_stage(&base_problem, &command)
+            .expect_err("direct minimizer SessionCommand must reject LLG-only controls");
+        let message = error.to_string();
+        for field in ["integrator", "fixed_timestep", "max_error", "relax_alpha"] {
+            assert!(
+                message.contains(field),
+                "missing rejected field {field}: {message}"
+            );
+        }
     }
 
     #[test]

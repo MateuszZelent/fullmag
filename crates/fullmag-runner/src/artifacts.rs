@@ -2694,7 +2694,7 @@ mod tests {
                 precision: ExecutionPrecision::Double,
                 exchange_bc: ExchangeBoundaryCondition::Neumann,
                 periodicity: None,
-                integrator: IntegratorChoice::Heun,
+                integrator: Some(IntegratorChoice::Heun),
                 fixed_timestep: Some(1e-13),
                 field_refresh: None,
                 relaxation: None,
@@ -2797,7 +2797,7 @@ mod tests {
                 gyromagnetic_ratio: 2.211e5,
                 precision: ExecutionPrecision::Double,
                 exchange_bc: ExchangeBoundaryCondition::Neumann,
-                integrator: IntegratorChoice::Heun,
+                integrator: Some(IntegratorChoice::Heun),
                 fixed_timestep: Some(1e-13),
                 adaptive_timestep: None,
                 field_refresh: None,
@@ -3267,8 +3267,7 @@ mod tests {
                     torque_tolerance_apm: Some(1.0e-3),
                     energy_tolerance_j: None,
                     max_steps: Some(100),
-                    max_pseudotime_s: None,
-                    max_physical_time_s: None,
+                    max_relaxation_time_s: None,
                 },
             });
         }
@@ -3365,8 +3364,7 @@ mod tests {
                     torque_tolerance_apm: Some(1.0e-3),
                     energy_tolerance_j: None,
                     max_steps: Some(10),
-                    max_pseudotime_s: None,
-                    max_physical_time_s: None,
+                    max_relaxation_time_s: None,
                 },
             });
         }
@@ -3457,8 +3455,7 @@ mod tests {
                     torque_tolerance_apm: Some(1.0e-3),
                     energy_tolerance_j: None,
                     max_steps: Some(10),
-                    max_pseudotime_s: None,
-                    max_physical_time_s: None,
+                    max_relaxation_time_s: None,
                 },
             });
         }
@@ -3527,8 +3524,7 @@ mod tests {
                     torque_tolerance_apm: Some(1.0e-3),
                     energy_tolerance_j: None,
                     max_steps: Some(10),
-                    max_pseudotime_s: None,
-                    max_physical_time_s: None,
+                    max_relaxation_time_s: None,
                 },
             });
             fem.domain_mesh_mode = FemDomainMeshModeIR::SharedDomainMeshWithAir;
@@ -3632,8 +3628,7 @@ mod tests {
                     torque_tolerance_apm: Some(1.0e-3),
                     energy_tolerance_j: None,
                     max_steps: Some(4),
-                    max_pseudotime_s: None,
-                    max_physical_time_s: None,
+                    max_relaxation_time_s: None,
                 },
             });
         }
@@ -3751,8 +3746,7 @@ mod tests {
                     torque_tolerance_apm: Some(1.0e-3),
                     energy_tolerance_j: None,
                     max_steps: Some(4),
-                    max_pseudotime_s: None,
-                    max_physical_time_s: None,
+                    max_relaxation_time_s: None,
                 },
             });
         }

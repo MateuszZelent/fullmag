@@ -930,7 +930,12 @@ impl NativeFemBackend {
             fe_order: plan.fe_order,
             hmax: plan.hmax,
             precision,
-            integrator: match plan.integrator {
+            // The native descriptor remains layout-compatible across algorithm
+            // families; direct minimizers ignore this ABI-only slot.
+            integrator: match plan
+                .integrator
+                .unwrap_or(fullmag_ir::IntegratorChoice::Heun)
+            {
                 fullmag_ir::IntegratorChoice::Heun => {
                     ffi::fullmag_fem_integrator::FULLMAG_FEM_INTEGRATOR_HEUN
                 }
@@ -2867,7 +2872,7 @@ mod tests {
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
             exchange_bc: ExchangeBoundaryCondition::Neumann,
-            integrator: IntegratorChoice::Heun,
+            integrator: Some(IntegratorChoice::Heun),
             fixed_timestep: Some(1e-13),
             adaptive_timestep: None,
             field_refresh: None,
@@ -4194,7 +4199,7 @@ mod tests {
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
             exchange_bc: ExchangeBoundaryCondition::Neumann,
-            integrator: IntegratorChoice::Heun,
+            integrator: Some(IntegratorChoice::Heun),
             fixed_timestep: Some(2.5e-13),
             adaptive_timestep: None,
             field_refresh: None,

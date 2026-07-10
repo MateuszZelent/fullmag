@@ -996,8 +996,7 @@ mod tests {
                     torque_tolerance_apm: Some(1e-4),
                     energy_tolerance_j: None,
                     max_steps: Some(10),
-                    max_pseudotime_s: None,
-                    max_physical_time_s: None,
+                    max_relaxation_time_s: None,
                 },
             }),
             planner_summary: fullmag_ir::FdmMultilayerSummaryIR {

@@ -896,8 +896,7 @@ mod tests {
                 torque_tolerance_apm,
                 energy_tolerance_j,
                 max_steps: None,
-                max_pseudotime_s: None,
-                max_physical_time_s: None,
+                max_relaxation_time_s: None,
             },
         }
     }
@@ -909,8 +908,7 @@ mod tests {
                 torque_tolerance_apm: None,
                 energy_tolerance_j: None,
                 max_steps: Some(4),
-                max_pseudotime_s: None,
-                max_physical_time_s: None,
+                max_relaxation_time_s: None,
             },
         }
     }
@@ -1043,8 +1041,7 @@ mod tests {
                 torque_tolerance_apm: Some(5e-4),
                 energy_tolerance_j: Some(1e-24),
                 max_steps: Some(10),
-                max_pseudotime_s: None,
-                max_physical_time_s: None,
+                max_relaxation_time_s: None,
             },
         };
         let mut ws = problem.create_workspace();
@@ -1082,8 +1079,8 @@ mod tests {
         let mut provenance = ExecutionProvenance {
             execution_engine: "fem_cpu_native".to_string(),
             precision: "double".to_string(),
-            requested_integrator: Some("Heun".to_string()),
-            resolved_integrator: Some("Heun".to_string()),
+            requested_integrator: None,
+            resolved_integrator: None,
             ..ExecutionProvenance::default()
         };
 
@@ -1199,8 +1196,7 @@ mod tests {
                 torque_tolerance_apm: None,
                 energy_tolerance_j: None,
                 max_steps: Some(10),
-                max_pseudotime_s: None,
-                max_physical_time_s: None,
+                max_relaxation_time_s: None,
             },
         };
 
@@ -1222,8 +1218,7 @@ mod tests {
                 torque_tolerance_apm: Some(1e-4),
                 energy_tolerance_j: None,
                 max_steps: None,
-                max_pseudotime_s: None,
-                max_physical_time_s: None,
+                max_relaxation_time_s: None,
             },
         };
         let gyromagnetic_ratio = 2.211e5;

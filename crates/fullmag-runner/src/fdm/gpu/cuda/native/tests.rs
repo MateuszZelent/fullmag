@@ -55,7 +55,7 @@ fn make_masked_test_plan(enable_demag: bool, precision: ExecutionPrecision) -> F
         gyromagnetic_ratio: 2.211e5,
         precision,
         exchange_bc: ExchangeBoundaryCondition::Neumann,
-        integrator: IntegratorChoice::Heun,
+        integrator: Some(IntegratorChoice::Heun),
         fixed_timestep: Some(2.5e-13),
         adaptive_timestep: None,
         field_refresh: None,
@@ -139,7 +139,7 @@ fn make_thin_film_demag_plan() -> FdmPlanIR {
         gyromagnetic_ratio: 2.211e5,
         precision: ExecutionPrecision::Double,
         exchange_bc: ExchangeBoundaryCondition::Neumann,
-        integrator: IntegratorChoice::Heun,
+        integrator: Some(IntegratorChoice::Heun),
         fixed_timestep: Some(2.0e-13),
         adaptive_timestep: None,
         field_refresh: None,
@@ -205,7 +205,7 @@ fn make_relaxation_precession_test_plan() -> FdmPlanIR {
         gyromagnetic_ratio: 2.211e5,
         precision: ExecutionPrecision::Double,
         exchange_bc: ExchangeBoundaryCondition::Neumann,
-        integrator: IntegratorChoice::Rk23,
+        integrator: Some(IntegratorChoice::Rk23),
         fixed_timestep: Some(1e-15),
         adaptive_timestep: None,
         field_refresh: None,
@@ -422,7 +422,7 @@ fn cpu_reference_single_step(
         plan.material.damping,
     )
     .expect("material");
-    let integrator = match plan.integrator {
+    let integrator = match plan.integrator.unwrap_or(IntegratorChoice::Heun) {
         fullmag_ir::IntegratorChoice::Heun => TimeIntegrator::Heun,
         fullmag_ir::IntegratorChoice::Rk4 => TimeIntegrator::RK4,
         fullmag_ir::IntegratorChoice::Rk23 => TimeIntegrator::RK23,

@@ -463,7 +463,7 @@ pub(crate) fn build_snapshot_problem_and_state(
     .map_err(|e| RunError {
         message: format!("Material: {}", e),
     })?;
-    let integrator = match plan.integrator {
+    let integrator = match plan.integrator.unwrap_or(IntegratorChoice::Heun) {
         IntegratorChoice::Heun => TimeIntegrator::Heun,
         IntegratorChoice::Rk4 => TimeIntegrator::RK4,
         IntegratorChoice::Rk23 => TimeIntegrator::RK23,
@@ -625,7 +625,7 @@ pub(crate) fn execute_reference_fdm(
         message: format!("Material: {}", e),
     })?;
 
-    let integrator = match plan.integrator {
+    let integrator = match plan.integrator.unwrap_or(IntegratorChoice::Heun) {
         IntegratorChoice::Heun => TimeIntegrator::Heun,
         IntegratorChoice::Rk4 => TimeIntegrator::RK4,
         IntegratorChoice::Rk23 => TimeIntegrator::RK23,
@@ -1989,7 +1989,7 @@ mod tests {
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
             exchange_bc: ExchangeBoundaryCondition::Neumann,
-            integrator: IntegratorChoice::Heun,
+            integrator: Some(IntegratorChoice::Heun),
             fixed_timestep: Some(1e-14),
             adaptive_timestep: None,
             relaxation: None,
@@ -2039,8 +2039,7 @@ mod tests {
                 torque_tolerance_apm: Some(1.0e-3),
                 energy_tolerance_j: None,
                 max_steps: Some(10),
-                max_pseudotime_s: Some(1.0e-6),
-                max_physical_time_s: None,
+                max_relaxation_time_s: Some(1.0e-6),
             },
         }
     }
@@ -2069,8 +2068,7 @@ mod tests {
                 torque_tolerance_apm: None,
                 energy_tolerance_j: Some(1.0e-18),
                 max_steps: Some(10),
-                max_pseudotime_s: None,
-                max_physical_time_s: None,
+                max_relaxation_time_s: None,
             },
             ..direct_minimizer_test_control()
         };
@@ -2178,7 +2176,7 @@ mod tests {
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
             exchange_bc: ExchangeBoundaryCondition::Neumann,
-            integrator: IntegratorChoice::Rk23,
+            integrator: Some(IntegratorChoice::Rk23),
             fixed_timestep: Some(1e-15),
             adaptive_timestep: None,
             field_refresh: None,
@@ -2188,8 +2186,7 @@ mod tests {
                     torque_tolerance_apm: Some(1e-6),
                     energy_tolerance_j: None,
                     max_steps: Some(10),
-                    max_pseudotime_s: None,
-                    max_physical_time_s: None,
+                    max_relaxation_time_s: None,
                 },
             }),
             enable_exchange: false,
@@ -4276,8 +4273,7 @@ mod tests {
                     torque_tolerance_apm: Some(1e-6),
                     energy_tolerance_j: None,
                     max_steps: Some(1000),
-                    max_pseudotime_s: None,
-                    max_physical_time_s: None,
+                    max_relaxation_time_s: None,
                 },
             }),
             ..make_test_plan()
@@ -4322,8 +4318,7 @@ mod tests {
                     torque_tolerance_apm: Some(1e-6),
                     energy_tolerance_j: None,
                     max_steps: Some(1000),
-                    max_pseudotime_s: None,
-                    max_physical_time_s: None,
+                    max_relaxation_time_s: None,
                 },
             }),
             ..make_test_plan()
@@ -4344,8 +4339,7 @@ mod tests {
                     torque_tolerance_apm: Some(1e-6),
                     energy_tolerance_j: None,
                     max_steps: Some(1000),
-                    max_pseudotime_s: None,
-                    max_physical_time_s: None,
+                    max_relaxation_time_s: None,
                 },
             }),
             ..make_test_plan()
@@ -4378,8 +4372,7 @@ mod tests {
                     torque_tolerance_apm: Some(1e-6),
                     energy_tolerance_j: None,
                     max_steps: Some(1000),
-                    max_pseudotime_s: None,
-                    max_physical_time_s: None,
+                    max_relaxation_time_s: None,
                 },
             }),
             ..make_test_plan()
@@ -4402,8 +4395,7 @@ mod tests {
                     torque_tolerance_apm: Some(1e-6),
                     energy_tolerance_j: None,
                     max_steps: Some(5000),
-                    max_pseudotime_s: None,
-                    max_physical_time_s: None,
+                    max_relaxation_time_s: None,
                 },
             }),
             ..make_test_plan()
@@ -4436,8 +4428,7 @@ mod tests {
                     torque_tolerance_apm: Some(1e-6),
                     energy_tolerance_j: None,
                     max_steps: Some(5000),
-                    max_pseudotime_s: None,
-                    max_physical_time_s: None,
+                    max_relaxation_time_s: None,
                 },
             }),
             ..make_test_plan()
@@ -4481,8 +4472,7 @@ mod tests {
                         torque_tolerance_apm: Some(1e-4),
                         energy_tolerance_j: None,
                         max_steps: Some(2000),
-                        max_pseudotime_s: None,
-                        max_physical_time_s: None,
+                        max_relaxation_time_s: None,
                     },
                 }),
                 ..base.clone()
