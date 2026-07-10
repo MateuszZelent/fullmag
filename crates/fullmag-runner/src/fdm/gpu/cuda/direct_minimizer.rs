@@ -11,7 +11,7 @@ use crate::fdm::gpu::cuda::native::NativeFdmBackend;
 use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 use crate::relaxation::direct_minimizer::{
     apply_direct_minimizer_step_metrics, direct_minimizer_gradient_degenerate,
-    direct_minimizer_gradient_norm_sq, direct_minimizer_within_runtime_budget,
+    direct_minimizer_gradient_norm_sq, direct_minimizer_within_runtime_budget, energy_metric_dot,
     nonlinear_cg_descent_direction_dot, nonlinear_cg_initial_step_size, nonlinear_cg_line_search,
     nonlinear_cg_next_direction, projected_gradient_line_search,
     projected_gradient_step_size_update, DirectMinimizerAlgorithm, DirectMinimizerControl,
@@ -73,6 +73,25 @@ pub(crate) fn execute_direct_minimizer(
         backend.copy_h_eff(cell_count)?,
         current_stats.e_total,
     );
+    let ms_apm = plan
+        .material
+        .ms_field
+        .clone()
+        .unwrap_or_else(|| vec![plan.material.saturation_magnetisation; cell_count]);
+    let cell_volume_m3 = plan.cell_size.iter().product::<f64>();
+    let volumes_m3 = (0..cell_count)
+        .map(|index| {
+            if plan
+                .active_mask
+                .as_ref()
+                .is_none_or(|mask| mask.get(index).copied().unwrap_or(false))
+            {
+                cell_volume_m3
+            } else {
+                0.0
+            }
+        })
+        .collect::<Vec<_>>();
 
     while direct_minimizer_within_runtime_budget(&state, control) {
         if let Some(live) = live.as_mut() {
@@ -131,113 +150,134 @@ pub(crate) fn execute_direct_minimizer(
         }
 
         let mut trial_lambda = state.step_size;
-        let (trial_stats, m_trial) = match direct_minimizer.algorithm {
-            DirectMinimizerAlgorithm::ProjectedGradientBb => {
-                let Some(accepted_trial) = projected_gradient_line_search(
-                    state.energy_j,
-                    g_norm_sq,
-                    &state.magnetization,
-                    &state.gradient,
-                    trial_lambda,
-                    |trial| {
-                        backend.upload_magnetization(trial)?;
-                        backend.refresh_observables()?;
-                        let mut stats = backend.snapshot_step_stats(plan.grid.cells)?;
-                        ensure_single_object_scalars(&mut stats, "free");
-                        Ok::<_, RunError>(DirectMinimizerTrialEvaluation {
-                            energy_j: stats.e_total,
-                            stats,
-                        })
-                    },
-                )?
-                else {
-                    return Err(restore_previous_state_after_failed_line_search(
-                        backend,
+        let (trial_stats, m_trial, line_search_backtracks, energy_evaluations) =
+            match direct_minimizer.algorithm {
+                DirectMinimizerAlgorithm::ProjectedGradientBb => {
+                    let direction_dot_gradient_j_per_step =
+                        -energy_metric_dot(&state.gradient, &state.gradient, &ms_apm, &volumes_m3);
+                    let Some(accepted_trial) = projected_gradient_line_search(
+                        state.energy_j,
+                        direction_dot_gradient_j_per_step,
                         &state.magnetization,
-                        "projected-gradient BB",
-                        PROJECTED_GRADIENT_MAX_BACKTRACK,
-                    )?);
-                };
-                trial_lambda = accepted_trial.step_size;
-                let trial_stats = accepted_trial.stats;
-                let m_trial = accepted_trial.magnetization;
+                        &state.gradient,
+                        trial_lambda,
+                        |trial| {
+                            backend.upload_magnetization(trial)?;
+                            backend.refresh_observables()?;
+                            let mut stats = backend.snapshot_step_stats(plan.grid.cells)?;
+                            ensure_single_object_scalars(&mut stats, "free");
+                            Ok::<_, RunError>(DirectMinimizerTrialEvaluation {
+                                energy_j: stats.e_total,
+                                stats,
+                            })
+                        },
+                    )?
+                    else {
+                        return Err(restore_previous_state_after_failed_line_search(
+                            backend,
+                            &state.magnetization,
+                            "projected-gradient BB",
+                            PROJECTED_GRADIENT_MAX_BACKTRACK,
+                        )?);
+                    };
+                    trial_lambda = accepted_trial.step_size;
+                    let line_search_backtracks = accepted_trial.backtracks;
+                    let energy_evaluations = accepted_trial.energy_evaluations;
+                    let trial_stats = accepted_trial.stats;
+                    let m_trial = accepted_trial.magnetization;
 
-                let h_eff_new = backend.copy_h_eff(cell_count)?;
-                let g_new = tangent_gradient_from_field(&m_trial, &h_eff_new);
+                    let h_eff_new = backend.copy_h_eff(cell_count)?;
+                    let g_new = tangent_gradient_from_field(&m_trial, &h_eff_new);
 
-                let step_size_update = projected_gradient_step_size_update(
-                    &state.magnetization,
-                    &m_trial,
-                    &state.gradient,
-                    &g_new,
-                    state.use_bb1,
-                    state.reset_consecutive,
-                );
-                state.step_size = step_size_update.step_size;
-                state.use_bb1 = step_size_update.use_bb1;
-                state.reset_consecutive = step_size_update.reset_consecutive;
-
-                state.h_eff = h_eff_new;
-                state.gradient = g_new;
-                (trial_stats, m_trial)
-            }
-            DirectMinimizerAlgorithm::NonlinearCg => {
-                let p_dot_g = nonlinear_cg_descent_direction_dot(
-                    &mut state.search_direction,
-                    &state.gradient,
-                );
-                trial_lambda = nonlinear_cg_initial_step_size(&state.search_direction);
-
-                let Some(accepted_trial) = nonlinear_cg_line_search(
-                    state.energy_j,
-                    p_dot_g,
-                    &state.magnetization,
-                    &state.search_direction,
-                    trial_lambda,
-                    |trial| {
-                        backend.upload_magnetization(trial)?;
-                        backend.refresh_observables()?;
-                        let mut stats = backend.snapshot_step_stats(plan.grid.cells)?;
-                        ensure_single_object_scalars(&mut stats, "free");
-                        Ok::<_, RunError>(DirectMinimizerTrialEvaluation {
-                            energy_j: stats.e_total,
-                            stats,
-                        })
-                    },
-                )?
-                else {
-                    return Err(restore_previous_state_after_failed_line_search(
-                        backend,
+                    let step_size_update = projected_gradient_step_size_update(
                         &state.magnetization,
-                        "nonlinear-CG",
-                        NONLINEAR_CG_MAX_BACKTRACK,
-                    )?);
-                };
-                trial_lambda = accepted_trial.step_size;
-                let trial_stats = accepted_trial.stats;
-                let m_trial = accepted_trial.magnetization;
+                        &m_trial,
+                        &state.gradient,
+                        &g_new,
+                        &ms_apm,
+                        &volumes_m3,
+                        state.use_bb1,
+                        state.reset_consecutive,
+                    );
+                    state.step_size = step_size_update.step_size;
+                    state.use_bb1 = step_size_update.use_bb1;
+                    state.reset_consecutive = step_size_update.reset_consecutive;
 
-                let h_eff_new = backend.copy_h_eff(cell_count)?;
-                let g_new = tangent_gradient_from_field(&m_trial, &h_eff_new);
-                state.search_direction = nonlinear_cg_next_direction(
-                    &m_trial,
-                    &state.gradient,
-                    &g_new,
-                    &state.search_direction,
-                    g_norm_sq,
-                    state.accepted_steps + 1,
-                );
-                state.h_eff = h_eff_new;
-                state.gradient = g_new;
-                state.step_size = trial_lambda;
-                (trial_stats, m_trial)
-            }
-        };
+                    state.h_eff = h_eff_new;
+                    state.gradient = g_new;
+                    (
+                        trial_stats,
+                        m_trial,
+                        line_search_backtracks,
+                        energy_evaluations,
+                    )
+                }
+                DirectMinimizerAlgorithm::NonlinearCg => {
+                    let p_dot_g = nonlinear_cg_descent_direction_dot(
+                        &mut state.search_direction,
+                        &state.gradient,
+                        &ms_apm,
+                        &volumes_m3,
+                    );
+                    trial_lambda = nonlinear_cg_initial_step_size(&state.search_direction);
+
+                    let Some(accepted_trial) = nonlinear_cg_line_search(
+                        state.energy_j,
+                        p_dot_g,
+                        &state.magnetization,
+                        &state.search_direction,
+                        trial_lambda,
+                        |trial| {
+                            backend.upload_magnetization(trial)?;
+                            backend.refresh_observables()?;
+                            let mut stats = backend.snapshot_step_stats(plan.grid.cells)?;
+                            ensure_single_object_scalars(&mut stats, "free");
+                            Ok::<_, RunError>(DirectMinimizerTrialEvaluation {
+                                energy_j: stats.e_total,
+                                stats,
+                            })
+                        },
+                    )?
+                    else {
+                        return Err(restore_previous_state_after_failed_line_search(
+                            backend,
+                            &state.magnetization,
+                            "nonlinear-CG",
+                            NONLINEAR_CG_MAX_BACKTRACK,
+                        )?);
+                    };
+                    trial_lambda = accepted_trial.step_size;
+                    let line_search_backtracks = accepted_trial.backtracks;
+                    let energy_evaluations = accepted_trial.energy_evaluations;
+                    let trial_stats = accepted_trial.stats;
+                    let m_trial = accepted_trial.magnetization;
+
+                    let h_eff_new = backend.copy_h_eff(cell_count)?;
+                    let g_new = tangent_gradient_from_field(&m_trial, &h_eff_new);
+                    state.search_direction = nonlinear_cg_next_direction(
+                        &m_trial,
+                        &state.gradient,
+                        &g_new,
+                        &state.search_direction,
+                        &ms_apm,
+                        &volumes_m3,
+                        state.accepted_steps + 1,
+                    );
+                    state.h_eff = h_eff_new;
+                    state.gradient = g_new;
+                    state.step_size = trial_lambda;
+                    (
+                        trial_stats,
+                        m_trial,
+                        line_search_backtracks,
+                        energy_evaluations,
+                    )
+                }
+            };
 
         state.magnetization = m_trial;
         state.energy_j = trial_stats.e_total;
         state.accepted_steps += 1;
-        state.pseudo_time_s += trial_lambda.max(0.0);
 
         let mut accepted_stats = trial_stats.clone();
         let torque_apm = apply_direct_minimizer_step_metrics(
@@ -247,8 +287,21 @@ pub(crate) fn execute_direct_minimizer(
             &state.magnetization,
             &state.h_eff,
         );
-        accepted_stats.pseudo_time_s = Some(state.pseudo_time_s);
         ensure_single_object_scalars(&mut accepted_stats, "free");
+        let scalar_metrics = accepted_stats
+            .per_object_scalars
+            .entry("free".to_string())
+            .or_default();
+        scalar_metrics.insert(
+            "line_search_backtracks".to_string(),
+            f64::from(line_search_backtracks),
+        );
+        scalar_metrics.insert(
+            "energy_evaluations".to_string(),
+            f64::from(energy_evaluations),
+        );
+        scalar_metrics.insert("rhs_evaluations".to_string(), f64::from(energy_evaluations));
+        scalar_metrics.insert("accepted_steps".to_string(), state.accepted_steps as f64);
 
         artifacts.record_scalar(&accepted_stats)?;
         steps.push(accepted_stats.clone());

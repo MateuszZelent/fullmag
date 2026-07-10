@@ -24,7 +24,6 @@ pub(crate) const PROJECTED_GRADIENT_MAX_BACKTRACK: u32 = 20;
 pub(crate) const NONLINEAR_CG_MAX_BACKTRACK: u32 = 30;
 pub(crate) const NONLINEAR_CG_RESTART_INTERVAL: u64 = 50;
 const GRADIENT_NORM_SQ_FLOOR: f64 = 1e-30;
-const BB_CURVATURE_SCALE: f64 = 1e-6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DirectMinimizerAlgorithm {
@@ -49,7 +48,6 @@ pub(crate) struct DirectMinimizerState {
     pub(crate) use_bb1: bool,
     pub(crate) reset_consecutive: u64,
     pub(crate) accepted_steps: u64,
-    pub(crate) pseudo_time_s: f64,
 }
 
 impl DirectMinimizerState {
@@ -66,7 +64,6 @@ impl DirectMinimizerState {
             use_bb1: true,
             reset_consecutive: 0,
             accepted_steps: 0,
-            pseudo_time_s: 0.0,
         }
     }
 }
@@ -93,6 +90,25 @@ pub(crate) fn direct_minimizer_gradient_norm_sq(gradient: &[[f64; 3]]) -> f64 {
     global_dot_vec3(gradient, gradient)
 }
 
+pub(crate) fn energy_metric_dot(
+    a: &[[f64; 3]],
+    b: &[[f64; 3]],
+    ms_apm: &[f64],
+    volumes_m3: &[f64],
+) -> f64 {
+    assert_eq!(a.len(), b.len());
+    assert_eq!(a.len(), ms_apm.len());
+    assert_eq!(a.len(), volumes_m3.len());
+    a.iter()
+        .zip(b)
+        .zip(ms_apm)
+        .zip(volumes_m3)
+        .map(|(((ai, bi), ms), volume)| {
+            MU0 * ms * volume * crate::relaxation::vector_math::dot_vec3(*ai, *bi)
+        })
+        .sum()
+}
+
 pub(crate) fn direct_minimizer_gradient_degenerate(gradient_norm_sq: f64) -> bool {
     gradient_norm_sq < GRADIENT_NORM_SQ_FLOOR
 }
@@ -101,17 +117,11 @@ pub(crate) fn direct_minimizer_step_budget(control: &RelaxationControlIR) -> u64
     control.stop.max_steps.unwrap_or(u64::MAX)
 }
 
-pub(crate) fn direct_minimizer_pseudotime_budget(control: &RelaxationControlIR) -> f64 {
-    let _ = control;
-    f64::INFINITY
-}
-
 pub(crate) fn direct_minimizer_within_runtime_budget(
     state: &DirectMinimizerState,
     control: &RelaxationControlIR,
 ) -> bool {
     state.accepted_steps < direct_minimizer_step_budget(control)
-        && state.pseudo_time_s < direct_minimizer_pseudotime_budget(control)
 }
 
 pub(crate) fn fallback_reset_step_size(reset_consecutive: u64) -> f64 {
@@ -147,9 +157,12 @@ pub(crate) fn projected_gradient_armijo_accepts(
     previous_energy_j: f64,
     trial_energy_j: f64,
     step_size: f64,
-    gradient_norm_sq: f64,
+    direction_dot_gradient_j_per_step: f64,
 ) -> bool {
-    trial_energy_j <= previous_energy_j - ARMIJO_COEFFICIENT * step_size * gradient_norm_sq
+    direction_dot_gradient_j_per_step < 0.0
+        && trial_energy_j
+            <= previous_energy_j
+                + ARMIJO_COEFFICIENT * step_size * direction_dot_gradient_j_per_step
 }
 
 pub(crate) fn nonlinear_cg_armijo_accepts(
@@ -187,11 +200,13 @@ pub(crate) struct DirectMinimizerAcceptedTrial<T> {
     pub(crate) stats: T,
     pub(crate) magnetization: Vec<[f64; 3]>,
     pub(crate) step_size: f64,
+    pub(crate) backtracks: u32,
+    pub(crate) energy_evaluations: u32,
 }
 
 pub(crate) fn projected_gradient_line_search<T, E, F>(
     previous_energy_j: f64,
-    gradient_norm_sq: f64,
+    direction_dot_gradient_j_per_step: f64,
     magnetization: &[[f64; 3]],
     gradient: &[[f64; 3]],
     initial_step_size: f64,
@@ -210,12 +225,14 @@ where
             previous_energy_j,
             evaluation.energy_j,
             trial_step_size,
-            gradient_norm_sq,
+            direction_dot_gradient_j_per_step,
         ) {
             return Ok(Some(DirectMinimizerAcceptedTrial {
                 stats: evaluation.stats,
                 magnetization: trial,
                 step_size: trial_step_size,
+                backtracks,
+                energy_evaluations: backtracks + 1,
             }));
         }
         if direct_minimizer_backtrack_exhausted(
@@ -255,6 +272,8 @@ where
                 stats: evaluation.stats,
                 magnetization: trial,
                 step_size: trial_step_size,
+                backtracks,
+                energy_evaluations: backtracks + 1,
             }));
         }
         if direct_minimizer_backtrack_exhausted(DirectMinimizerAlgorithm::NonlinearCg, backtracks) {
@@ -277,30 +296,32 @@ pub(crate) fn projected_gradient_step_size_update(
     trial_m: &[[f64; 3]],
     previous_gradient: &[[f64; 3]],
     trial_gradient: &[[f64; 3]],
+    ms_apm: &[f64],
+    volumes_m3: &[f64],
     use_bb1: bool,
     reset_consecutive: u64,
 ) -> ProjectedGradientStepSizeUpdate {
     let s: Vec<[f64; 3]> = previous_m
         .iter()
         .zip(trial_m.iter())
-        .map(|(previous, trial)| scale_vec3(sub_vec3(*trial, *previous), BB_CURVATURE_SCALE))
+        .map(|(previous, trial)| sub_vec3(*trial, *previous))
         .collect();
     let y: Vec<[f64; 3]> = previous_gradient
         .iter()
         .zip(trial_gradient.iter())
-        .map(|(previous, trial)| scale_vec3(sub_vec3(*trial, *previous), BB_CURVATURE_SCALE))
+        .map(|(previous, trial)| sub_vec3(*trial, *previous))
         .collect();
-    let s_dot_s = global_dot_vec3(&s, &s);
-    let s_dot_y = global_dot_vec3(&s, &y);
-    let y_dot_y = global_dot_vec3(&y, &y);
+    let s_dot_s = energy_metric_dot(&s, &s, ms_apm, volumes_m3);
+    let s_dot_y = energy_metric_dot(&s, &y, ms_apm, volumes_m3);
+    let y_dot_y = energy_metric_dot(&y, &y, ms_apm, volumes_m3);
 
     let (step_size, bb_ok) = if use_bb1 {
-        if s_dot_y > 1e-30 {
+        if s_dot_y.is_finite() && s_dot_y > 0.0 {
             (
                 (s_dot_s / s_dot_y).clamp(MIN_STEP_SIZE, MAX_STEP_SIZE),
                 true,
             )
-        } else if s_dot_y * y_dot_y > 0.0 && y_dot_y.abs() > 1e-30 {
+        } else if s_dot_y.is_finite() && s_dot_y > 0.0 && y_dot_y.is_finite() && y_dot_y > 0.0 {
             (
                 (s_dot_y / y_dot_y).clamp(MIN_STEP_SIZE, MAX_STEP_SIZE),
                 true,
@@ -308,12 +329,12 @@ pub(crate) fn projected_gradient_step_size_update(
         } else {
             (fallback_reset_step_size(reset_consecutive + 1), false)
         }
-    } else if s_dot_y * y_dot_y > 0.0 && y_dot_y.abs() > 1e-30 {
+    } else if s_dot_y.is_finite() && s_dot_y > 0.0 && y_dot_y.is_finite() && y_dot_y > 0.0 {
         (
             (s_dot_y / y_dot_y).clamp(MIN_STEP_SIZE, MAX_STEP_SIZE),
             true,
         )
-    } else if s_dot_y > 1e-30 {
+    } else if s_dot_y.is_finite() && s_dot_y > 0.0 {
         (
             (s_dot_s / s_dot_y).clamp(MIN_STEP_SIZE, MAX_STEP_SIZE),
             true,
@@ -341,11 +362,13 @@ pub(crate) fn nonlinear_cg_initial_step_size(direction: &[[f64; 3]]) -> f64 {
 pub(crate) fn nonlinear_cg_descent_direction_dot(
     direction: &mut Vec<[f64; 3]>,
     gradient: &[[f64; 3]],
+    ms_apm: &[f64],
+    volumes_m3: &[f64],
 ) -> f64 {
-    let mut direction_dot_gradient = global_dot_vec3(direction, gradient);
+    let mut direction_dot_gradient = energy_metric_dot(direction, gradient, ms_apm, volumes_m3);
     if direction_dot_gradient >= 0.0 {
         *direction = initial_search_direction(gradient);
-        direction_dot_gradient = global_dot_vec3(direction, gradient);
+        direction_dot_gradient = energy_metric_dot(direction, gradient, ms_apm, volumes_m3);
     }
     direction_dot_gradient
 }
@@ -355,7 +378,8 @@ pub(crate) fn nonlinear_cg_next_direction(
     previous_gradient: &[[f64; 3]],
     trial_gradient: &[[f64; 3]],
     previous_direction: &[[f64; 3]],
-    previous_gradient_norm_sq: f64,
+    ms_apm: &[f64],
+    volumes_m3: &[f64],
     accepted_step: u64,
 ) -> Vec<[f64; 3]> {
     let previous_gradient_transported = project_tangent(trial_m, previous_gradient);
@@ -364,8 +388,11 @@ pub(crate) fn nonlinear_cg_next_direction(
         .zip(previous_gradient_transported.iter())
         .map(|(trial, transported)| sub_vec3(*trial, *transported))
         .collect();
-    let mut beta = if previous_gradient_norm_sq > 1e-30 {
-        (global_dot_vec3(trial_gradient, &y_pr) / previous_gradient_norm_sq).max(0.0)
+    let previous_gradient_norm_sq =
+        energy_metric_dot(previous_gradient, previous_gradient, ms_apm, volumes_m3);
+    let mut beta = if previous_gradient_norm_sq.is_finite() && previous_gradient_norm_sq > 0.0 {
+        (energy_metric_dot(trial_gradient, &y_pr, ms_apm, volumes_m3) / previous_gradient_norm_sq)
+            .max(0.0)
     } else {
         0.0
     };
@@ -380,7 +407,7 @@ pub(crate) fn nonlinear_cg_next_direction(
             add_vec3(scale_vec3(*gradient, -1.0), scale_vec3(*transported, beta))
         })
         .collect();
-    if global_dot_vec3(&next_direction, trial_gradient) >= 0.0 {
+    if energy_metric_dot(&next_direction, trial_gradient, ms_apm, volumes_m3) >= 0.0 {
         next_direction = initial_search_direction(trial_gradient);
     }
     next_direction
@@ -396,7 +423,8 @@ pub(crate) fn apply_direct_minimizer_step_metrics(
     let torque_apm = max_torque_from_field(magnetization, h_eff);
     stats.step = accepted_step;
     stats.time = 0.0;
-    stats.dt = accepted_step_size;
+    stats.dt = 0.0;
+    stats.pseudo_time_s = None;
     stats.max_dm_dt = 0.0;
     stats.max_torque_Apm = torque_apm;
     stats.max_torque_T = torque_apm * MU0;
@@ -404,6 +432,11 @@ pub(crate) fn apply_direct_minimizer_step_metrics(
         .iter()
         .map(|h| (h[0] * h[0] + h[1] * h[1] + h[2] * h[2]).sqrt())
         .fold(0.0, f64::max);
+    stats
+        .per_object_scalars
+        .entry("free".to_string())
+        .or_default()
+        .insert("accepted_step_m_per_A".to_string(), accepted_step_size);
     torque_apm
 }
 
@@ -489,7 +522,6 @@ mod tests {
         let mut state =
             DirectMinimizerState::new(vec![[1.0, 0.0, 0.0]], vec![[0.0, 1.0, 0.0]], 0.0);
 
-        state.pseudo_time_s = 2.0e-6;
         assert!(direct_minimizer_within_runtime_budget(&state, &bounded));
 
         state.accepted_steps = 4;
@@ -516,7 +548,6 @@ mod tests {
         assert!(state.use_bb1);
         assert_eq!(state.reset_consecutive, 0);
         assert_eq!(state.accepted_steps, 0);
-        assert_eq!(state.pseudo_time_s, 0.0);
     }
 
     #[test]
@@ -526,6 +557,8 @@ mod tests {
             &[[2.0, 0.0, 0.0]],
             &[[0.0, 0.0, 0.0]],
             &[[2.0, 0.0, 0.0]],
+            &[1.0],
+            &[1.0],
             true,
             3,
         );
@@ -542,6 +575,8 @@ mod tests {
             &[[1.0, 0.0, 0.0]],
             &[[2.0, 0.0, 0.0]],
             &[[2.0, 0.0, 0.0]],
+            &[1.0],
+            &[1.0],
             true,
             2,
         );
@@ -570,8 +605,48 @@ mod tests {
 
     #[test]
     fn projected_gradient_armijo_accepts_sufficient_energy_decrease() {
-        assert!(projected_gradient_armijo_accepts(10.0, 9.999, 1.0, 1.0));
-        assert!(!projected_gradient_armijo_accepts(10.0, 10.0, 1.0, 1.0));
+        assert!(projected_gradient_armijo_accepts(10.0, 9.999, 1.0, -1.0));
+        assert!(!projected_gradient_armijo_accepts(10.0, 10.0, 1.0, -1.0));
+    }
+
+    #[test]
+    fn cuda_direct_minimizer_armijo_uses_joule_slope() {
+        let ms_apm = [8.0e5, 2.0e5];
+        let volumes_m3 = [1.0e-24, 4.0e-24];
+        let direction_apm = [[-1.0e6, 0.0, 0.0], [-2.0e6, 0.0, 0.0]];
+        let gradient_apm = [[1.0e6, 0.0, 0.0], [1.0e6, 0.0, 0.0]];
+        let slope_j_per_step =
+            energy_metric_dot(&direction_apm, &gradient_apm, &ms_apm, &volumes_m3);
+        let previous_energy_j = 1.0e-18;
+        let step_size_m_per_a = 1.0e-6;
+        let required_decrease_j = -ARMIJO_COEFFICIENT * step_size_m_per_a * slope_j_per_step;
+        let insufficient_trial_energy_j = previous_energy_j - 0.5 * required_decrease_j;
+
+        assert!(slope_j_per_step < 0.0);
+        assert!(!projected_gradient_armijo_accepts(
+            previous_energy_j,
+            insufficient_trial_energy_j,
+            step_size_m_per_a,
+            slope_j_per_step,
+        ));
+    }
+
+    #[test]
+    fn energy_metric_is_invariant_under_equivalent_volume_redistribution() {
+        let coarse = energy_metric_dot(
+            &[[-2.0, 1.0, 0.0], [1.0, -3.0, 0.0]],
+            &[[4.0, 2.0, 0.0], [-2.0, 5.0, 0.0]],
+            &[8.0e5, 3.0e5],
+            &[6.0e-24, 2.0e-24],
+        );
+        let redistributed = energy_metric_dot(
+            &[[-2.0, 1.0, 0.0], [-2.0, 1.0, 0.0], [1.0, -3.0, 0.0]],
+            &[[4.0, 2.0, 0.0], [4.0, 2.0, 0.0], [-2.0, 5.0, 0.0]],
+            &[8.0e5, 8.0e5, 3.0e5],
+            &[2.0e-24, 4.0e-24, 2.0e-24],
+        );
+
+        assert!((coarse - redistributed).abs() <= coarse.abs() * 1.0e-15);
     }
 
     #[test]
@@ -611,7 +686,7 @@ mod tests {
 
         let accepted = projected_gradient_line_search(
             10.0,
-            1.0,
+            -1.0,
             &[[1.0, 0.0, 0.0]],
             &[[0.0, -2.0, 0.0]],
             0.5,
@@ -644,7 +719,7 @@ mod tests {
 
         let accepted = projected_gradient_line_search(
             10.0,
-            1.0,
+            -1.0,
             &[[1.0, 0.0, 0.0]],
             &[[0.0, -2.0, 0.0]],
             0.5,
@@ -733,9 +808,9 @@ mod tests {
         let mut direction = vec![[-1.0, 0.0, 0.0]];
 
         let direction_dot_gradient =
-            nonlinear_cg_descent_direction_dot(&mut direction, &[[2.0, 0.0, 0.0]]);
+            nonlinear_cg_descent_direction_dot(&mut direction, &[[2.0, 0.0, 0.0]], &[1.0], &[1.0]);
 
-        assert_eq!(direction_dot_gradient, -2.0);
+        assert_eq!(direction_dot_gradient, -2.0 * MU0);
         assert_eq!(direction, vec![[-1.0, 0.0, 0.0]]);
     }
 
@@ -744,9 +819,9 @@ mod tests {
         let mut direction = vec![[1.0, 0.0, 0.0]];
 
         let direction_dot_gradient =
-            nonlinear_cg_descent_direction_dot(&mut direction, &[[2.0, 0.0, 0.0]]);
+            nonlinear_cg_descent_direction_dot(&mut direction, &[[2.0, 0.0, 0.0]], &[1.0], &[1.0]);
 
-        assert_eq!(direction_dot_gradient, -4.0);
+        assert_eq!(direction_dot_gradient, -4.0 * MU0);
         assert_eq!(direction, vec![[-2.0, -0.0, -0.0]]);
     }
 
@@ -757,11 +832,45 @@ mod tests {
             &[[0.0, 0.0, 0.0]],
             &[[0.0, 2.0, 0.0]],
             &[[0.0, 5.0, 0.0]],
-            1.0,
+            &[1.0],
+            &[1.0],
             NONLINEAR_CG_RESTART_INTERVAL,
         );
 
         assert_eq!(direction, vec![[-0.0, -2.0, -0.0]]);
+    }
+
+    #[test]
+    fn projected_gradient_bb_products_use_energy_metric_weights() {
+        let update = projected_gradient_step_size_update(
+            &[[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+            &[[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+            &[[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+            &[[2_000.0, 0.0, 0.0], [4_000.0, 0.0, 0.0]],
+            &[1.0, 10.0],
+            &[1.0, 1.0],
+            true,
+            0,
+        );
+
+        assert!((update.step_size - 11.0 / 42_000.0).abs() < 1.0e-15);
+    }
+
+    #[test]
+    fn nonlinear_cg_pr_plus_uses_energy_metric_weights() {
+        let direction = nonlinear_cg_next_direction(
+            &[[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]],
+            &[[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+            &[[2.0, 0.0, 0.0], [3.0, 0.0, 0.0]],
+            &[[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
+            &[1.0, 10.0],
+            &[1.0, 1.0],
+            1,
+        );
+        let expected_beta = 62.0 / 11.0;
+
+        assert!((direction[0][1] - expected_beta).abs() < 1.0e-12);
+        assert!((direction[1][1] - expected_beta).abs() < 1.0e-12);
     }
 
     #[test]
@@ -782,10 +891,15 @@ mod tests {
         assert_eq!(torque, 5.0);
         assert_eq!(stats.step, 42);
         assert_eq!(stats.time, 0.0);
-        assert_eq!(stats.dt, 3e-6);
+        assert_eq!(stats.dt, 0.0);
+        assert_eq!(stats.pseudo_time_s, None);
         assert_eq!(stats.max_dm_dt, 0.0);
         assert_eq!(stats.max_torque_Apm, 5.0);
         assert_eq!(stats.max_torque_T, 5.0 * MU0);
         assert_eq!(stats.max_h_eff, 5.0);
+        assert_eq!(
+            stats.per_object_scalars["free"]["accepted_step_m_per_A"],
+            3e-6
+        );
     }
 }

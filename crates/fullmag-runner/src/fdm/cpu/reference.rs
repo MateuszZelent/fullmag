@@ -837,17 +837,36 @@ pub(crate) fn execute_reference_fdm(
         let mut final_stats = make_step_stats(
             step_count,
             state.time_seconds,
-            result.pseudo_time_s,
+            0.0,
             wall_elapsed,
             &observables,
         );
-        final_stats.pseudo_time_s = Some(result.pseudo_time_s);
+        final_stats.pseudo_time_s = None;
+        let direct_metrics = final_stats
+            .per_object_scalars
+            .entry("free".to_string())
+            .or_default();
+        if let Some(step_size) = result.last_accepted_step_m_per_a {
+            direct_metrics.insert("accepted_step_m_per_A".to_string(), step_size);
+        }
+        direct_metrics.insert(
+            "line_search_backtracks".to_string(),
+            result.line_search_backtracks as f64,
+        );
+        direct_metrics.insert(
+            "energy_evaluations".to_string(),
+            result.energy_evaluations as f64,
+        );
+        direct_metrics.insert(
+            "rhs_evaluations".to_string(),
+            result.energy_evaluations as f64,
+        );
+        direct_metrics.insert("accepted_steps".to_string(), result.steps_taken as f64);
         steps.push(final_stats);
         direct_minimizer_completion = Some(infer_direct_minimizer_completion(
             control,
             result.converged,
             result.steps_taken,
-            result.pseudo_time_s,
             result.final_energy_plateau_range_j,
             result.final_max_torque,
         ));
@@ -1240,7 +1259,6 @@ fn infer_direct_minimizer_completion(
     control: &RelaxationControlIR,
     converged: bool,
     steps_taken: u64,
-    _pseudo_time_s: f64,
     final_energy_plateau_range_j: Option<f64>,
     final_max_torque: f64,
 ) -> StageCompletionIR {
@@ -2014,7 +2032,6 @@ mod tests {
             &direct_minimizer_test_control(),
             true,
             2,
-            2.0e-7,
             None,
             5.0e-4,
         );
@@ -2036,8 +2053,7 @@ mod tests {
             },
             ..direct_minimizer_test_control()
         };
-        let completion =
-            infer_direct_minimizer_completion(&control, true, 8, 8.0e-7, Some(5.0e-19), 2.0);
+        let completion = infer_direct_minimizer_completion(&control, true, 8, Some(5.0e-19), 2.0);
 
         assert_eq!(completion.reason, Some(StageStopReason::Energy));
         assert_eq!(
@@ -2050,14 +2066,8 @@ mod tests {
 
     #[test]
     fn direct_minimizer_completion_reports_gradient_when_torque_threshold_is_not_met() {
-        let completion = infer_direct_minimizer_completion(
-            &direct_minimizer_test_control(),
-            true,
-            2,
-            2.0e-7,
-            None,
-            2.0,
-        );
+        let completion =
+            infer_direct_minimizer_completion(&direct_minimizer_test_control(), true, 2, None, 2.0);
 
         assert_eq!(completion.status, "failed");
         assert!(!completion.converged);
@@ -2076,7 +2086,6 @@ mod tests {
             &direct_minimizer_test_control(),
             false,
             10,
-            2.0e-7,
             None,
             2.0,
         );
@@ -2093,7 +2102,6 @@ mod tests {
             &direct_minimizer_test_control(),
             false,
             0,
-            0.0,
             None,
             2.0,
         );

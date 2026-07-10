@@ -32,7 +32,9 @@ use crate::types::StepStats;
 pub struct RelaxationResult {
     pub final_magnetization: Vec<Vector3>,
     pub steps_taken: u64,
-    pub pseudo_time_s: f64,
+    pub last_accepted_step_m_per_a: Option<f64>,
+    pub line_search_backtracks: u64,
+    pub energy_evaluations: u64,
     pub final_energy: f64,
     pub final_energy_plateau_range_j: Option<f64>,
     pub final_max_torque: f64,
@@ -234,12 +236,12 @@ fn execute_projected_gradient_bb_soa(
     let mut reset_consecutive: u64 = 0;
 
     let mut steps: u64 = 0;
-    let mut pseudo_time_s = 0.0;
+    let mut last_accepted_step_m_per_a = None;
+    let mut line_search_backtracks = 0u64;
+    let mut energy_evaluations = 0u64;
     let mut converged = false;
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
-    let max_pseudotime_s = f64::INFINITY;
-
-    while steps < control.stop.max_steps.unwrap_or(u64::MAX) && pseudo_time_s < max_pseudotime_s {
+    while steps < control.stop.max_steps.unwrap_or(u64::MAX) {
         let max_torque = compute_max_torque_soa(&m, &h_eff);
         if control
             .stop
@@ -265,6 +267,7 @@ fn execute_projected_gradient_bb_soa(
             scaled_retraction_soa_into(&m, &g, -trial_lambda, &mut m_trial);
             let candidate_energy =
                 problem.total_energy_from_soa_ws(&m_trial, ws, &mut energy_scratch);
+            energy_evaluations += 1;
             if candidate_energy <= energy + c_armijo * trial_lambda * descent_derivative {
                 accepted_energy = Some(candidate_energy);
                 break;
@@ -274,6 +277,7 @@ fn execute_projected_gradient_bb_soa(
             }
             trial_lambda *= 0.5;
             backtracks += 1;
+            line_search_backtracks += 1;
         }
         let Some(e_trial) = accepted_energy else {
             break;
@@ -282,37 +286,37 @@ fn execute_projected_gradient_bb_soa(
         problem.effective_field_into_soa_ws(&m_trial, ws, &mut h_eff_new);
         problem.tangent_gradient_from_soa_field_into(&m_trial, &h_eff_new, &mut g_new);
 
-        let scale_factor = 1e-6;
         let mut s_dot_s = 0.0;
         let mut s_dot_y = 0.0;
         let mut y_dot_y = 0.0;
         for i in 0..n {
-            let sx = (m_trial.x[i] - m.x[i]) * scale_factor;
-            let sy = (m_trial.y[i] - m.y[i]) * scale_factor;
-            let sz = (m_trial.z[i] - m.z[i]) * scale_factor;
-            let yx = (g_new.x[i] - g.x[i]) * scale_factor;
-            let yy = (g_new.y[i] - g.y[i]) * scale_factor;
-            let yz = (g_new.z[i] - g.z[i]) * scale_factor;
-            s_dot_s += sx * sx + sy * sy + sz * sz;
-            s_dot_y += sx * yx + sy * yy + sz * yz;
-            y_dot_y += yx * yx + yy * yy + yz * yz;
+            let sx = m_trial.x[i] - m.x[i];
+            let sy = m_trial.y[i] - m.y[i];
+            let sz = m_trial.z[i] - m.z[i];
+            let yx = g_new.x[i] - g.x[i];
+            let yy = g_new.y[i] - g.y[i];
+            let yz = g_new.z[i] - g.z[i];
+            let weight = MU0 * problem.ms_at(i) * problem.cell_size.volume();
+            s_dot_s += weight * (sx * sx + sy * sy + sz * sz);
+            s_dot_y += weight * (sx * yx + sy * yy + sz * yz);
+            y_dot_y += weight * (yx * yx + yy * yy + yz * yz);
         }
 
         let bb_ok;
         if use_bb1 {
-            if s_dot_y > 1e-30 {
+            if s_dot_y.is_finite() && s_dot_y > 0.0 {
                 lambda = (s_dot_s / s_dot_y).clamp(lambda_min, lambda_max);
                 bb_ok = true;
-            } else if s_dot_y * y_dot_y > 0.0 && y_dot_y.abs() > 1e-30 {
+            } else if s_dot_y.is_finite() && s_dot_y > 0.0 && y_dot_y.is_finite() && y_dot_y > 0.0 {
                 lambda = (s_dot_y / y_dot_y).clamp(lambda_min, lambda_max);
                 bb_ok = true;
             } else {
                 bb_ok = false;
             }
-        } else if s_dot_y * y_dot_y > 0.0 && y_dot_y.abs() > 1e-30 {
+        } else if s_dot_y.is_finite() && s_dot_y > 0.0 && y_dot_y.is_finite() && y_dot_y > 0.0 {
             lambda = (s_dot_y / y_dot_y).clamp(lambda_min, lambda_max);
             bb_ok = true;
-        } else if s_dot_y > 1e-30 {
+        } else if s_dot_y.is_finite() && s_dot_y > 0.0 {
             lambda = (s_dot_s / s_dot_y).clamp(lambda_min, lambda_max);
             bb_ok = true;
         } else {
@@ -337,7 +341,7 @@ fn execute_projected_gradient_bb_soa(
         g.copy_from(&g_new);
         energy = e_trial;
         steps += 1;
-        pseudo_time_s += trial_lambda.max(0.0);
+        last_accepted_step_m_per_a = Some(trial_lambda);
 
         let energy_plateau_range = energy_plateau.record(energy);
         let max_torque = compute_max_torque_soa(&m, &h_eff);
@@ -359,7 +363,9 @@ fn execute_projected_gradient_bb_soa(
     RelaxationResult {
         final_magnetization: m.gather_to_aos(),
         steps_taken: steps,
-        pseudo_time_s,
+        last_accepted_step_m_per_a,
+        line_search_backtracks,
+        energy_evaluations,
         final_energy: energy,
         final_energy_plateau_range_j: energy_plateau.range().map(|range| range.value),
         final_max_torque: final_torque,
@@ -392,12 +398,12 @@ fn execute_projected_gradient_bb_aos(
     let mut reset_consecutive: u64 = 0; // Boris-style reset counter
 
     let mut steps: u64 = 0;
-    let mut pseudo_time_s = 0.0;
+    let mut last_accepted_step_m_per_a = None;
+    let mut line_search_backtracks = 0u64;
+    let mut energy_evaluations = 0u64;
     let mut converged = false;
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
-    let max_pseudotime_s = f64::INFINITY;
-
-    while steps < control.stop.max_steps.unwrap_or(u64::MAX) && pseudo_time_s < max_pseudotime_s {
+    while steps < control.stop.max_steps.unwrap_or(u64::MAX) {
         let max_torque = compute_max_torque(&m, &h_eff);
         if control
             .stop
@@ -429,6 +435,7 @@ fn execute_projected_gradient_bb_aos(
                 .collect::<Vec<_>>();
 
             let candidate_energy = problem.total_energy_from_vectors_ws(&candidate_m, ws);
+            energy_evaluations += 1;
 
             // Armijo sufficient decrease in joules, using dE/dlambda for the
             // field-scaled tangent gradient.
@@ -441,6 +448,7 @@ fn execute_projected_gradient_bb_aos(
             }
             trial_lambda *= 0.5;
             backtracks += 1;
+            line_search_backtracks += 1;
         }
         let Some((m_trial, e_trial)) = accepted_trial else {
             break;
@@ -452,27 +460,22 @@ fn execute_projected_gradient_bb_aos(
 
         // Barzilai–Borwein step selection (Boris-style signedness checks)
         // Divide by 1e6 for numerical stability on large meshes (cancels in ratio)
-        let scale_factor = 1e-6;
-        let s: Vec<Vector3> = (0..n)
-            .map(|i| scale(sub(m_trial[i], m[i]), scale_factor))
-            .collect();
-        let y: Vec<Vector3> = (0..n)
-            .map(|i| scale(sub(g_new[i], g[i]), scale_factor))
-            .collect();
+        let s: Vec<Vector3> = (0..n).map(|i| sub(m_trial[i], m[i])).collect();
+        let y: Vec<Vector3> = (0..n).map(|i| sub(g_new[i], g[i])).collect();
 
-        let s_dot_s = global_dot(&s, &s);
-        let s_dot_y = global_dot(&s, &y);
-        let y_dot_y = global_dot(&y, &y);
+        let s_dot_s = energy_directional_derivative(problem, &s, &s);
+        let s_dot_y = energy_directional_derivative(problem, &s, &y);
+        let y_dot_y = energy_directional_derivative(problem, &y, &y);
 
         // Boris-style: check that the quotient is positive (meaningful curvature)
         // BB1: λ = s·s / s·y  (only if s·s * s·y > 0, i.e. s·y > 0 since s·s >= 0)
         // BB2: λ = s·y / y·y  (only if s·y * y·y > 0, i.e. same sign)
         let bb_ok;
         if use_bb1 {
-            if s_dot_y > 1e-30 {
+            if s_dot_y.is_finite() && s_dot_y > 0.0 {
                 lambda = (s_dot_s / s_dot_y).clamp(lambda_min, lambda_max);
                 bb_ok = true;
-            } else if s_dot_y * y_dot_y > 0.0 && y_dot_y.abs() > 1e-30 {
+            } else if s_dot_y.is_finite() && s_dot_y > 0.0 && y_dot_y.is_finite() && y_dot_y > 0.0 {
                 // Fallback to BB2
                 lambda = (s_dot_y / y_dot_y).clamp(lambda_min, lambda_max);
                 bb_ok = true;
@@ -480,10 +483,10 @@ fn execute_projected_gradient_bb_aos(
                 bb_ok = false;
             }
         } else {
-            if s_dot_y * y_dot_y > 0.0 && y_dot_y.abs() > 1e-30 {
+            if s_dot_y.is_finite() && s_dot_y > 0.0 && y_dot_y.is_finite() && y_dot_y > 0.0 {
                 lambda = (s_dot_y / y_dot_y).clamp(lambda_min, lambda_max);
                 bb_ok = true;
-            } else if s_dot_y > 1e-30 {
+            } else if s_dot_y.is_finite() && s_dot_y > 0.0 {
                 // Fallback to BB1
                 lambda = (s_dot_s / s_dot_y).clamp(lambda_min, lambda_max);
                 bb_ok = true;
@@ -511,7 +514,7 @@ fn execute_projected_gradient_bb_aos(
         g = g_new;
         energy = e_trial;
         steps += 1;
-        pseudo_time_s += trial_lambda.max(0.0);
+        last_accepted_step_m_per_a = Some(trial_lambda);
 
         let energy_plateau_range = energy_plateau.record(energy);
         let max_torque = compute_max_torque(&m, &h_eff);
@@ -534,7 +537,9 @@ fn execute_projected_gradient_bb_aos(
     RelaxationResult {
         final_magnetization: m,
         steps_taken: steps,
-        pseudo_time_s,
+        last_accepted_step_m_per_a,
+        line_search_backtracks,
+        energy_evaluations,
         final_energy: energy,
         final_energy_plateau_range_j: energy_plateau.range().map(|range| range.value),
         final_max_torque: final_torque,
@@ -582,19 +587,19 @@ fn execute_nonlinear_cg_soa(
     let mut energy = problem.total_energy_from_soa_ws(&m, ws, &mut energy_scratch);
 
     copy_scaled_soa_into(&g, -1.0, &mut p);
-    let mut g_norm_sq = global_dot_soa(&g, &g);
+    let mut g_norm_sq = energy_directional_derivative_soa(problem, &g, &g);
 
     let max_backtrack: u32 = 30;
     let c_armijo: f64 = 1e-4;
     let restart_interval: u64 = 50;
 
     let mut steps: u64 = 0;
-    let mut pseudo_time_s = 0.0;
+    let mut last_accepted_step_m_per_a = None;
+    let mut line_search_backtracks = 0u64;
+    let mut energy_evaluations = 0u64;
     let mut converged = false;
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
-    let max_pseudotime_s = f64::INFINITY;
-
-    while steps < control.stop.max_steps.unwrap_or(u64::MAX) && pseudo_time_s < max_pseudotime_s {
+    while steps < control.stop.max_steps.unwrap_or(u64::MAX) {
         let max_torque = compute_max_torque_soa(&m, &h_eff);
         if control
             .stop
@@ -609,7 +614,7 @@ fn execute_nonlinear_cg_soa(
             break;
         }
 
-        let p_dot_g = global_dot_soa(&p, &g);
+        let p_dot_g = energy_directional_derivative_soa(problem, &p, &g);
         if p_dot_g >= 0.0 {
             copy_scaled_soa_into(&g, -1.0, &mut p);
         }
@@ -629,6 +634,7 @@ fn execute_nonlinear_cg_soa(
             scaled_retraction_soa_into(&m, &p, lambda, &mut m_new);
             let candidate_energy =
                 problem.total_energy_from_soa_ws(&m_new, ws, &mut energy_scratch);
+            energy_evaluations += 1;
             if candidate_energy <= energy + c_armijo * lambda * directional_derivative {
                 accepted_energy = Some(candidate_energy);
                 break;
@@ -638,6 +644,7 @@ fn execute_nonlinear_cg_soa(
             }
             lambda *= 0.5;
             backtracks += 1;
+            line_search_backtracks += 1;
         }
         let Some(e_new) = accepted_energy else {
             break;
@@ -645,16 +652,18 @@ fn execute_nonlinear_cg_soa(
 
         problem.effective_field_into_soa_ws(&m_new, ws, &mut h_eff_new);
         problem.tangent_gradient_from_soa_field_into(&m_new, &h_eff_new, &mut g_new);
-        let g_new_norm_sq = global_dot_soa(&g_new, &g_new);
+        let g_new_norm_sq = energy_directional_derivative_soa(problem, &g_new, &g_new);
 
         project_tangent_soa_into(&m_new, &g, &mut transported);
         let mut numerator = 0.0;
         for i in 0..n {
-            numerator += g_new.x[i] * (g_new.x[i] - transported.x[i])
-                + g_new.y[i] * (g_new.y[i] - transported.y[i])
-                + g_new.z[i] * (g_new.z[i] - transported.z[i]);
+            let weight = MU0 * problem.ms_at(i) * problem.cell_size.volume();
+            numerator += weight
+                * (g_new.x[i] * (g_new.x[i] - transported.x[i])
+                    + g_new.y[i] * (g_new.y[i] - transported.y[i])
+                    + g_new.z[i] * (g_new.z[i] - transported.z[i]));
         }
-        let beta = if g_norm_sq > 1e-30 {
+        let beta = if g_norm_sq.is_finite() && g_norm_sq > 0.0 {
             (numerator / g_norm_sq).max(0.0)
         } else {
             0.0
@@ -671,7 +680,7 @@ fn execute_nonlinear_cg_soa(
             p_new.y[i] = -g_new.y[i] + beta * transported.y[i];
             p_new.z[i] = -g_new.z[i] + beta * transported.z[i];
         }
-        if global_dot_soa(&p_new, &g_new) >= 0.0 {
+        if energy_directional_derivative_soa(problem, &p_new, &g_new) >= 0.0 {
             copy_scaled_soa_into(&g_new, -1.0, &mut p_new);
         }
 
@@ -682,7 +691,7 @@ fn execute_nonlinear_cg_soa(
         p.copy_from(&p_new);
         energy = e_new;
         steps += 1;
-        pseudo_time_s += lambda.max(0.0);
+        last_accepted_step_m_per_a = Some(lambda);
 
         let energy_plateau_range = energy_plateau.record(energy);
         let max_torque = compute_max_torque_soa(&m, &h_eff);
@@ -704,7 +713,9 @@ fn execute_nonlinear_cg_soa(
     RelaxationResult {
         final_magnetization: m.gather_to_aos(),
         steps_taken: steps,
-        pseudo_time_s,
+        last_accepted_step_m_per_a,
+        line_search_backtracks,
+        energy_evaluations,
         final_energy: energy,
         final_energy_plateau_range_j: energy_plateau.range().map(|range| range.value),
         final_max_torque: final_torque,
@@ -728,19 +739,19 @@ fn execute_nonlinear_cg_aos(
 
     // Initial search direction: p = -g
     let mut p: Vec<Vector3> = g.iter().map(|gi| scale(*gi, -1.0)).collect();
-    let mut g_norm_sq = global_dot(&g, &g);
+    let mut g_norm_sq = energy_directional_derivative(problem, &g, &g);
 
     let max_backtrack: u32 = 30;
     let c_armijo: f64 = 1e-4;
     let restart_interval: u64 = 50; // force CG restart every N steps
 
     let mut steps: u64 = 0;
-    let mut pseudo_time_s = 0.0;
+    let mut last_accepted_step_m_per_a = None;
+    let mut line_search_backtracks = 0u64;
+    let mut energy_evaluations = 0u64;
     let mut converged = false;
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
-    let max_pseudotime_s = f64::INFINITY;
-
-    while steps < control.stop.max_steps.unwrap_or(u64::MAX) && pseudo_time_s < max_pseudotime_s {
+    while steps < control.stop.max_steps.unwrap_or(u64::MAX) {
         // Check convergence
         let max_torque = compute_max_torque(&m, &h_eff);
         if control
@@ -757,7 +768,7 @@ fn execute_nonlinear_cg_aos(
         }
 
         // Backtracking line search along p
-        let p_dot_g = global_dot(&p, &g);
+        let p_dot_g = energy_directional_derivative(problem, &p, &g);
         if p_dot_g >= 0.0 {
             // p is not a descent direction — restart to steepest descent
             p = g.iter().map(|gi| scale(*gi, -1.0)).collect();
@@ -781,6 +792,7 @@ fn execute_nonlinear_cg_aos(
                 .collect::<Vec<_>>();
 
             let candidate_energy = problem.total_energy_from_vectors_ws(&candidate_m, ws);
+            energy_evaluations += 1;
 
             // Armijo condition
             if candidate_energy <= energy + c_armijo * lambda * directional_derivative {
@@ -792,6 +804,7 @@ fn execute_nonlinear_cg_aos(
             }
             lambda *= 0.5;
             backtracks += 1;
+            line_search_backtracks += 1;
         }
         let Some((m_new, e_new)) = accepted_trial else {
             break;
@@ -800,14 +813,15 @@ fn execute_nonlinear_cg_aos(
         // New gradient at m_new
         let h_eff_new = problem.effective_field_from_vectors_ws(&m_new, ws);
         let g_new = ExchangeLlgProblem::tangent_gradient_from_field(&m_new, &h_eff_new);
-        let g_new_norm_sq = global_dot(&g_new, &g_new);
+        let g_new_norm_sq = energy_directional_derivative(problem, &g_new, &g_new);
 
         // Transport old gradient to tangent space at m_new
         let g_old_transported = project_tangent(&m_new, &g);
 
         // Polak–Ribière+ coefficient
-        let beta = if g_norm_sq > 1e-30 {
-            let numerator = global_dot(
+        let beta = if g_norm_sq.is_finite() && g_norm_sq > 0.0 {
+            let numerator = energy_directional_derivative(
+                problem,
                 &g_new,
                 &(0..n)
                     .map(|i| sub(g_new[i], g_old_transported[i]))
@@ -834,7 +848,7 @@ fn execute_nonlinear_cg_aos(
             .collect();
 
         // Ensure descent direction
-        if global_dot(&p_new, &g_new) >= 0.0 {
+        if energy_directional_derivative(problem, &p_new, &g_new) >= 0.0 {
             p_new = g_new.iter().map(|gi| scale(*gi, -1.0)).collect();
         }
 
@@ -846,7 +860,7 @@ fn execute_nonlinear_cg_aos(
         p = p_new;
         energy = e_new;
         steps += 1;
-        pseudo_time_s += lambda.max(0.0);
+        last_accepted_step_m_per_a = Some(lambda);
 
         let energy_plateau_range = energy_plateau.record(energy);
         let max_torque = compute_max_torque(&m, &h_eff);
@@ -868,7 +882,9 @@ fn execute_nonlinear_cg_aos(
     RelaxationResult {
         final_magnetization: m,
         steps_taken: steps,
-        pseudo_time_s,
+        last_accepted_step_m_per_a,
+        line_search_backtracks,
+        energy_evaluations,
         final_energy: energy,
         final_energy_plateau_range_j: energy_plateau.range().map(|range| range.value),
         final_max_torque: final_torque,
@@ -967,12 +983,19 @@ mod tests {
         tolerance: f64,
     ) {
         assert_eq!(actual.steps_taken, expected.steps_taken);
-        assert!(
-            (actual.pseudo_time_s - expected.pseudo_time_s).abs() <= tolerance,
-            "pseudo-time differs: actual={}, expected={}",
-            actual.pseudo_time_s,
-            expected.pseudo_time_s
+        match (
+            actual.last_accepted_step_m_per_a,
+            expected.last_accepted_step_m_per_a,
+        ) {
+            (Some(actual), Some(expected)) => assert!((actual - expected).abs() <= tolerance),
+            (None, None) => {}
+            values => panic!("accepted-step presence differs: {values:?}"),
+        }
+        assert_eq!(
+            actual.line_search_backtracks,
+            expected.line_search_backtracks
         );
+        assert_eq!(actual.energy_evaluations, expected.energy_evaluations);
         assert_eq!(actual.converged, expected.converged);
         assert!(
             (actual.final_energy - expected.final_energy).abs() <= tolerance,
