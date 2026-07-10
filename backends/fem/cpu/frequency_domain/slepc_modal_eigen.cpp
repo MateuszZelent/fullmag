@@ -317,8 +317,10 @@ solve_slepc_gyrotropic_modal_eigen_with_matrices(
         const double lambda_imag = petsc_eigenvalue_imaginary_part(kr, ki);
         const ModeKinematics kinematics = map_eigenvalue(
             {lambda_real, lambda_imag},
-            FrequencyDomainPhaseConvention::exp_i_omega_t);
-        if (!kinematics.finite || kinematics.branch_sign != 1) {
+            request.phase_convention);
+        if (!select_positive_frequency_mode(
+                kinematics,
+                ZeroFrequencyModePolicy::exclude)) {
             continue;
         }
         saw_positive_frequency = true;
@@ -426,7 +428,8 @@ SLEPcModalEigenAdapterStatus slepc_modal_eigen_adapter_status() noexcept
         status.linear_tolerance_policy =
             "ksp_rtol=min(0.01*eigen_residual_tolerance,1e-10);ksp_atol=1e-14";
         status.algebraic_form = "gyrotropic_generalized";
-        status.positive_frequency_filter = "map_eigenvalue(lambda, exp_i_omega_t).branch_sign == 1";
+        status.positive_frequency_filter =
+            "select_positive_frequency_mode(map_eigenvalue(lambda, exp_i_omega_t), exclude_zero_frequency)";
         status.eigenvalue_to_frequency = "map_eigenvalue(lambda, phase)";
     } else {
         status.solver_adapter_status = "unavailable";

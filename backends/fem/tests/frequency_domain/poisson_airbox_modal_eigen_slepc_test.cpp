@@ -1013,6 +1013,8 @@ void ModalContractWritesShiftInvertActionArtifact()
     fd::ModalEigenRequest request{};
     request.abi_version = fd::kFrequencyDomainAbiVersion;
     request.operator_request.abi_version = fd::kFrequencyDomainAbiVersion;
+    request.operator_request.gamma_rad_s_T = 1.76085963023e11;
+    request.operator_request.mu0_T_m_A = 1.25663706212e-6;
     request.requested_mode_count = 1;
     request.target_kind = "nearest_frequency";
     request.target_frequency_hz = 2.0e9;

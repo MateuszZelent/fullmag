@@ -421,8 +421,9 @@ EigenPair2x2 solve_tiny_positive_frequency_eigen(
         const ModeKinematics kinematics = map_eigenvalue(
             {lambda[index].real(), lambda[index].imag()},
             FrequencyDomainPhaseConvention::exp_i_omega_t);
-        if (kinematics.finite &&
-            kinematics.branch_sign == 1 &&
+        if (select_positive_frequency_mode(
+                kinematics,
+                ZeroFrequencyModePolicy::exclude) &&
             kinematics.omega_rad_s > best_omega_rad_s) {
             best = index;
             best_omega_rad_s = kinematics.omega_rad_s;
@@ -602,7 +603,9 @@ void write_diagnostics_json(
     const char *status,
     const char *reason,
     PoissonAirboxSchurMatShellCertificationResult *out,
-    ComplexEigenvalue lambda = {}) noexcept
+    ComplexEigenvalue lambda = {},
+    bool eigenpair_found = false,
+    bool eigenpair_accepted = false) noexcept
 {
     if (out == nullptr) {
         return;
@@ -622,6 +625,7 @@ void write_diagnostics_json(
         "\"solver_adapter\":\"k0_poisson_airbox_cpu_schur_matshell_slepc\","
         "\"demag_kind\":\"%s\","
         "\"gauge_policy\":\"%s\","
+        "\"zero_frequency_mode_policy\":\"exclude_zero_frequency\","
         "\"algebraic_form\":\"schur_reduced_matrix_free_mean_zero_poisson\","
         "\"reference_adapter\":\"k0_poisson_airbox_cpu_full_coupled_slepc\","
         "\"created_petsc_matshell\":%s,"
@@ -644,7 +648,11 @@ void write_diagnostics_json(
         "\"frequency_hz\":%.17g,"
         "\"decay_rate_per_s\":%.17g,"
         "\"branch_sign\":%d,"
+        "\"finite\":%s,"
         "\"stable\":%s,"
+        "\"zero_frequency_mode\":%s,"
+        "\"eigenpair_found\":%s,"
+        "\"eigenpair_accepted\":%s,"
         "\"schur_frequency_hz\":%.17g,"
         "\"full_sparse_reference_frequency_hz\":%.17g"
         "},"
@@ -676,7 +684,11 @@ void write_diagnostics_json(
         kinematics.frequency_hz,
         kinematics.decay_rate_per_s,
         kinematics.branch_sign,
-        kinematics.finite && kinematics.branch_sign != 0 && kinematics.stable ? "true" : "false",
+        kinematics.finite ? "true" : "false",
+        kinematics.stable ? "true" : "false",
+        kinematics.zero_frequency_mode ? "true" : "false",
+        eigenpair_found ? "true" : "false",
+        eigenpair_accepted ? "true" : "false",
         result.schur_frequency_hz,
         result.full_sparse_reference_frequency_hz,
         result.schur_certified ? "true" : "false",
@@ -1045,8 +1057,9 @@ bool solve_schur_matshell_slepc(
         const ModeKinematics kinematics = map_eigenvalue(
             {lambda_real, lambda_imag},
             FrequencyDomainPhaseConvention::exp_i_omega_t);
-        if (!kinematics.finite ||
-            kinematics.branch_sign != 1 ||
+        if (!select_positive_frequency_mode(
+                kinematics,
+                ZeroFrequencyModePolicy::exclude) ||
             static_cast<double>(residual) > problem.residual_tolerance) {
             continue;
         }
@@ -1333,7 +1346,9 @@ FrequencyDomainStatus certify_poisson_airbox_schur_matshell_cpu(
         all_ok ? "ok" : "failed",
         all_ok ? "" : "pa_e3_schur_matshell_certification_failed",
         out_result,
-        {lambda.real(), lambda.imag()});
+        {lambda.real(), lambda.imag()},
+        true,
+        true);
     return out_result->status;
 #endif
 }

@@ -166,6 +166,7 @@ void write_diagnostics_json(
         "\"production_implication\":false,"
         "\"phasor_convention\":\"%s\","
         "\"eigenvalue_convention\":\"%s\","
+        "\"zero_frequency_mode_policy\":\"exclude_zero_frequency\","
         "\"algebraic_form\":\"%s\","
         "\"matrix_format\":\"monolithic_seq_aij\","
         "\"periodic_mesh_certificate\":{"
@@ -212,7 +213,11 @@ void write_diagnostics_json(
         "\"frequency_hz\":%.17g,"
         "\"decay_rate_per_s\":%.17g,"
         "\"branch_sign\":%d,"
+        "\"finite\":%s,"
         "\"stable\":%s,"
+        "\"zero_frequency_mode\":%s,"
+        "\"eigenpair_found\":%s,"
+        "\"eigenpair_accepted\":%s,"
         "\"positive_frequency_branch_found\":%s"
         "},"
         "\"certification\":{"
@@ -263,7 +268,11 @@ void write_diagnostics_json(
         kinematics.frequency_hz,
         kinematics.decay_rate_per_s,
         kinematics.branch_sign,
-        result.positive_frequency_branch_found && kinematics.stable ? "true" : "false",
+        kinematics.finite ? "true" : "false",
+        kinematics.stable ? "true" : "false",
+        kinematics.zero_frequency_mode ? "true" : "false",
+        result.converged_eigenpair_count > 0 ? "true" : "false",
+        result.accepted_mode_count > 0 ? "true" : "false",
         result.positive_frequency_branch_found ? "true" : "false",
         result.full_residual_certified ? "true" : "false",
         result.reference_frequency_certified ? "true" : "false");
@@ -1342,7 +1351,9 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_slepc(
         const ModeKinematics kinematics = map_eigenvalue(
             {lambda_real, lambda_imag},
             FrequencyDomainPhaseConvention::exp_i_omega_t);
-        if (!kinematics.finite || kinematics.branch_sign != 1) {
+        if (!select_positive_frequency_mode(
+                kinematics,
+                ZeroFrequencyModePolicy::exclude)) {
             continue;
         }
         saw_positive = true;

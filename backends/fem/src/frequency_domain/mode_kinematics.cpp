@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include <limits>
 
 namespace fullmag::fem::frequency_domain {
 
@@ -128,26 +127,33 @@ ModeKinematics map_eigenvalue(
     ComplexEigenvalue lambda,
     FrequencyDomainPhaseConvention phase) noexcept
 {
+    return map_eigenvalue(lambda, phase, ModeKinematicsPolicy{});
+}
+
+ModeKinematics map_eigenvalue(
+    ComplexEigenvalue lambda,
+    FrequencyDomainPhaseConvention phase,
+    ModeKinematicsPolicy policy) noexcept
+{
     ModeKinematics result{};
     result.lambda = lambda;
     if (!std::isfinite(lambda.real_per_s) ||
         !std::isfinite(lambda.imag_rad_per_s) ||
-        !phase_convention_valid(phase)) {
+        !phase_convention_valid(phase) ||
+        !(policy.zero_frequency_tolerance_rad_per_s >= 0.0) ||
+        !std::isfinite(policy.zero_frequency_tolerance_rad_per_s)) {
         return result;
     }
 
     const double phase_sign =
         phase == FrequencyDomainPhaseConvention::exp_i_omega_t ? 1.0 : -1.0;
     const double signed_omega_rad_s = phase_sign * lambda.imag_rad_per_s;
-    const double zero_scale = std::max(
-        {1.0, std::abs(lambda.real_per_s), std::abs(lambda.imag_rad_per_s)});
-    const double zero_tolerance =
-        64.0 * std::numeric_limits<double>::epsilon() * zero_scale;
 
     result.finite = true;
     result.decay_rate_per_s = -lambda.real_per_s;
     result.stable = lambda.real_per_s <= 0.0;
-    if (std::abs(signed_omega_rad_s) <= zero_tolerance) {
+    if (std::abs(signed_omega_rad_s) <=
+        policy.zero_frequency_tolerance_rad_per_s) {
         result.zero_frequency_mode = true;
         return result;
     }
@@ -156,6 +162,20 @@ ModeKinematics map_eigenvalue(
     result.frequency_hz = frequency_hz_from_omega_rad_s(signed_omega_rad_s);
     result.branch_sign = signed_omega_rad_s > 0.0 ? 1 : -1;
     return result;
+}
+
+bool select_positive_frequency_mode(
+    const ModeKinematics &kinematics,
+    ZeroFrequencyModePolicy zero_frequency_policy) noexcept
+{
+    if (!kinematics.finite) {
+        return false;
+    }
+    if (kinematics.branch_sign == 1) {
+        return true;
+    }
+    return zero_frequency_policy == ZeroFrequencyModePolicy::include &&
+        kinematics.zero_frequency_mode;
 }
 
 } // namespace fullmag::fem::frequency_domain

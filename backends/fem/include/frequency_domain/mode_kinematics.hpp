@@ -7,6 +7,7 @@
 namespace fullmag::fem::frequency_domain {
 
 constexpr double kGammaConsistencyRelativeTolerance = 1.0e-12;
+constexpr double kDefaultZeroFrequencyToleranceRadPerS = 1.0e-9;
 
 struct DynamicPencilMetadata {
     double gamma_abs_rad_per_s_t = 0.0;
@@ -33,6 +34,16 @@ struct ModeKinematics {
     bool zero_frequency_mode = false;
 };
 
+struct ModeKinematicsPolicy {
+    double zero_frequency_tolerance_rad_per_s =
+        kDefaultZeroFrequencyToleranceRadPerS;
+};
+
+enum class ZeroFrequencyModePolicy {
+    exclude,
+    include,
+};
+
 FrequencyDomainStatus canonicalize_dynamic_pencil_metadata(
     const DynamicPencilMetadata &metadata,
     DynamicPencilMetadata *out_metadata,
@@ -54,5 +65,14 @@ double frequency_hz_from_omega_rad_s(double omega_rad_s) noexcept;
 ModeKinematics map_eigenvalue(
     ComplexEigenvalue lambda,
     FrequencyDomainPhaseConvention phase) noexcept;
+
+ModeKinematics map_eigenvalue(
+    ComplexEigenvalue lambda,
+    FrequencyDomainPhaseConvention phase,
+    ModeKinematicsPolicy policy) noexcept;
+
+bool select_positive_frequency_mode(
+    const ModeKinematics &kinematics,
+    ZeroFrequencyModePolicy zero_frequency_policy) noexcept;
 
 } // namespace fullmag::fem::frequency_domain

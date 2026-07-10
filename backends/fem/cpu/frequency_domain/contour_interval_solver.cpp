@@ -232,7 +232,9 @@ bool solve_projected_tiny_modes(
         const ModeKinematics kinematics = map_eigenvalue(
             {lambda_candidate.real(), lambda_candidate.imag()},
             FrequencyDomainPhaseConvention::exp_i_omega_t);
-        if (!kinematics.finite || kinematics.branch_sign != 1) {
+        if (!select_positive_frequency_mode(
+                kinematics,
+                ZeroFrequencyModePolicy::exclude)) {
             continue;
         }
         if (kinematics.frequency_hz < frequency_min_hz ||
@@ -927,7 +929,9 @@ bool solve_dense_projected_modes(
         const ModeKinematics kinematics = map_eigenvalue(
             {lambda.real(), lambda.imag()},
             FrequencyDomainPhaseConvention::exp_i_omega_t);
-        if (!kinematics.finite || kinematics.branch_sign != 1) {
+        if (!select_positive_frequency_mode(
+                kinematics,
+                ZeroFrequencyModePolicy::exclude)) {
             continue;
         }
         if (kinematics.frequency_hz < frequency_min_hz ||
@@ -971,7 +975,9 @@ bool solve_dense_projected_modes(
         const ModeKinematics refined_kinematics = map_eigenvalue(
             {refined_lambda.real(), refined_lambda.imag()},
             FrequencyDomainPhaseConvention::exp_i_omega_t);
-        if (!refined_kinematics.finite || refined_kinematics.branch_sign != 1) {
+        if (!select_positive_frequency_mode(
+                refined_kinematics,
+                ZeroFrequencyModePolicy::exclude)) {
             continue;
         }
         if (refined_kinematics.frequency_hz < frequency_min_hz ||
@@ -1195,7 +1201,8 @@ std::string contour_interval_diagnostics_json(
     std::string json =
         "\"contour_plane\":\"lambda\","
         "\"frequency_mapping\":\"map_eigenvalue(lambda, exp_i_omega_t)\","
-        "\"positive_frequency_filter\":\"map_eigenvalue(lambda, exp_i_omega_t).branch_sign == 1\","
+        "\"positive_frequency_filter\":\"select_positive_frequency_mode(map_eigenvalue(lambda, exp_i_omega_t), exclude_zero_frequency)\","
+        "\"zero_frequency_mode_policy\":\"exclude_zero_frequency\","
         "\"contour_point_count\":" +
         std::to_string(result.contour_point_count) +
         ",\"quadrature_rule\":\"" +

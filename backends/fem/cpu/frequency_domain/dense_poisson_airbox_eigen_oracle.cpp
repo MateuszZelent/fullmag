@@ -133,6 +133,7 @@ void write_diagnostics_json(
         "\"eigenvalue_convention\":\"%s\","
         "\"demag_kind\":\"%s\","
         "\"gauge_policy\":\"%s\","
+        "\"zero_frequency_mode_policy\":\"exclude_zero_frequency\","
         "\"alpha\":0.0,"
         "\"k_vector_rad_per_m\":[0.0,0.0,0.0],"
         "\"q_dof_count\":%llu,"
@@ -155,7 +156,11 @@ void write_diagnostics_json(
         "\"frequency_hz\":%.17g,"
         "\"decay_rate_per_s\":%.17g,"
         "\"branch_sign\":%d,"
+        "\"finite\":%s,"
         "\"stable\":%s,"
+        "\"zero_frequency_mode\":%s,"
+        "\"eigenpair_found\":%s,"
+        "\"eigenpair_accepted\":%s,"
         "\"positive_frequency_branch_found\":%s"
         "},"
         "\"certification\":{"
@@ -188,7 +193,11 @@ void write_diagnostics_json(
         kinematics.frequency_hz,
         kinematics.decay_rate_per_s,
         kinematics.branch_sign,
-        result.positive_frequency_branch_found && kinematics.stable ? "true" : "false",
+        kinematics.finite ? "true" : "false",
+        kinematics.stable ? "true" : "false",
+        kinematics.zero_frequency_mode ? "true" : "false",
+        result.positive_frequency_branch_found ? "true" : "false",
+        result.positive_frequency_branch_found ? "true" : "false",
         result.positive_frequency_branch_found ? "true" : "false",
         result.schur_certified ? "true" : "false",
         result.full_residual_certified ? "true" : "false");
@@ -668,8 +677,9 @@ EigenPair2x2 solve_tiny_positive_frequency_eigen(
         const ModeKinematics kinematics = map_eigenvalue(
             {lambda[index].real(), lambda[index].imag()},
             FrequencyDomainPhaseConvention::exp_i_omega_t);
-        if (kinematics.finite &&
-            kinematics.branch_sign == 1 &&
+        if (select_positive_frequency_mode(
+                kinematics,
+                ZeroFrequencyModePolicy::exclude) &&
             kinematics.omega_rad_s > best_omega_rad_s) {
             best = index;
             best_omega_rad_s = kinematics.omega_rad_s;

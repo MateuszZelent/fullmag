@@ -52,6 +52,7 @@ struct FrequencyDomainOperatorValidationDiagnostics {
     std::uint64_t tangent_dof_count = 0;
     double alpha = 0.0;
     double gamma0 = 0.0;
+    double gamma0_m_per_a_s = 0.0;
     char error_message[128] = "";
 };
 

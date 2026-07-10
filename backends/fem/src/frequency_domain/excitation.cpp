@@ -79,7 +79,7 @@ FrequencyDomainStatus build_uniform_field_tangent_excitation(
 FrequencyDomainStatus project_dynamic_field_drive_to_tangent_rhs(
     const TangentFrameNode *nodes,
     std::uint64_t node_count,
-    double gamma0,
+    double gamma0_m_per_a_s,
     FrequencyDomainPhaseConvention convention,
     const DynamicFieldPhasorView &drive,
     TangentComplexVectorView out_rhs,
@@ -90,12 +90,21 @@ FrequencyDomainStatus project_dynamic_field_drive_to_tangent_rhs(
         out_diagnostics->node_count = node_count;
         out_diagnostics->tangent_dof_count = node_count * 2;
     }
-    if (convention != FrequencyDomainPhaseConvention::exp_i_omega_t &&
-        convention != FrequencyDomainPhaseConvention::exp_minus_i_omega_t) {
+    DynamicPencilMetadata canonical_metadata{};
+    char metadata_error[128]{};
+    const FrequencyDomainStatus metadata_status =
+        canonicalize_dynamic_pencil_metadata(
+            dynamic_pencil_metadata_from_legacy_excitation_gamma0(
+                gamma0_m_per_a_s,
+                convention),
+            &canonical_metadata,
+            metadata_error,
+            sizeof(metadata_error));
+    if (metadata_status != FrequencyDomainStatus::ok) {
         if (out_diagnostics != nullptr) {
-            copy_error(out_diagnostics->error_message, "dynamic drive projection requires a supported phase convention");
+            copy_error(out_diagnostics->error_message, metadata_error);
         }
-        return FrequencyDomainStatus::validation_error;
+        return metadata_status;
     }
     if ((node_count > 0 && nodes == nullptr) ||
         drive.node_count != node_count ||
@@ -104,8 +113,7 @@ FrequencyDomainStatus project_dynamic_field_drive_to_tangent_rhs(
         drive.hz_re == nullptr ||
         out_rhs.real == nullptr ||
         out_rhs.imag == nullptr ||
-        out_rhs.tangent_dof_count != node_count * 2 ||
-        !std::isfinite(gamma0)) {
+        out_rhs.tangent_dof_count != node_count * 2) {
         if (out_diagnostics != nullptr) {
             copy_error(out_diagnostics->error_message, "dynamic drive projection requires matching finite buffers");
         }
@@ -131,8 +139,8 @@ FrequencyDomainStatus project_dynamic_field_drive_to_tangent_rhs(
         cross3(node.m, drive_im, torque_im);
 
         for (int axis = 0; axis < 3; ++axis) {
-            torque_re[axis] *= -gamma0;
-            torque_im[axis] *= -gamma0;
+            torque_re[axis] *= -canonical_metadata.gamma0_m_per_a_s;
+            torque_im[axis] *= -canonical_metadata.gamma0_m_per_a_s;
         }
 
         const std::uint64_t tangent_offset = node_index * 2;

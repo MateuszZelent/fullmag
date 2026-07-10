@@ -68,11 +68,25 @@ FrequencyDomainStatus validate_frequency_domain_operator_request(
         }
         return FrequencyDomainStatus::validation_error;
     }
-    if (!(request.gamma0 > 0.0) || !std::isfinite(request.gamma0)) {
+    DynamicPencilMetadata canonical_metadata{};
+    char metadata_error[128]{};
+    const FrequencyDomainStatus metadata_status =
+        canonicalize_dynamic_pencil_metadata(
+            dynamic_pencil_metadata_from_legacy_operator_request(
+                request,
+                FrequencyDomainPhaseConvention::exp_i_omega_t),
+            &canonical_metadata,
+            metadata_error,
+            sizeof(metadata_error));
+    if (metadata_status != FrequencyDomainStatus::ok) {
         if (out_diagnostics != nullptr) {
-            copy_error(out_diagnostics->error_message, "operator request gamma0 must be finite and positive");
+            copy_error(out_diagnostics->error_message, metadata_error);
         }
-        return FrequencyDomainStatus::validation_error;
+        return metadata_status;
+    }
+    if (out_diagnostics != nullptr) {
+        out_diagnostics->gamma0_m_per_a_s =
+            canonical_metadata.gamma0_m_per_a_s;
     }
     if (request.demag_kind == FrequencyDomainDemagKind::dynamic_k) {
         if (out_diagnostics != nullptr) {

@@ -191,6 +191,38 @@ bool modal_request_has_bloch_floquet_tangent_operator_payload(
                "\"payload_kind\":\"bloch_floquet_tangent_operator\"") != nullptr;
 }
 
+bool modal_request_has_dynamic_demag_k_operator_payload(
+    const ModalEigenRequest &request) noexcept
+{
+    const char *diagnostics = request.operator_request.operator_diagnostics_json;
+    const std::uint64_t tangent_dof_count = request.mfem_tangent_dof_count;
+    if (diagnostics == nullptr ||
+        std::strstr(
+            diagnostics,
+            "\"demag_payload_kind\":\"dynamic_demag_k_operator\"") == nullptr ||
+        request.mfem_operator_enabled == 0 ||
+        request.mfem_sparse_operator_enabled != 0 ||
+        tangent_dof_count == 0 ||
+        tangent_dof_count >
+            std::numeric_limits<std::uint64_t>::max() / tangent_dof_count ||
+        request.mfem_stiffness_matrix_row_major == nullptr ||
+        request.mfem_gyrotropic_matrix_row_major == nullptr ||
+        request.dynamic_demag_k_tangent_matrix_row_major == nullptr ||
+        request.dynamic_demag_k_tangent_matrix_value_count !=
+            tangent_dof_count * tangent_dof_count) {
+        return false;
+    }
+
+    for (std::uint64_t index = 0;
+         index < request.dynamic_demag_k_tangent_matrix_value_count;
+         ++index) {
+        if (!std::isfinite(request.dynamic_demag_k_tangent_matrix_row_major[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 const char *modal_request_gated_operator_term(
     const ModalEigenRequest &request) noexcept
 {
@@ -313,7 +345,7 @@ FrequencyDomainContractResult nonzero_k_floquet_modal_dynamic_demag_k_missing(
     FrequencyDomainContractResult result{};
     result.status = FrequencyDomainStatus::unavailable;
     result.error_message =
-        "native FEM modal_eigen production CPU nonzero-k Floquet dynamic demag-k operator is not implemented yet";
+        "native FEM modal_eigen production CPU nonzero-k Floquet dynamic demag-k requires a finite dense block-real tangent matrix";
     result.diagnostics_json =
         "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\","
         "\"study_product\":\"modal_eigen\","
@@ -1145,7 +1177,8 @@ FrequencyDomainContractResult solve_dense_production_modal_contour_payload(
         "\"solver_model\":\"contour_interval_production_cpu_dense\","
         "\"solver_family\":\"contour_interval_production_cpu_dense\","
         "\"spectral_transform\":\"contour_integral\","
-        "\"positive_frequency_filter\":\"map_eigenvalue(lambda, exp_i_omega_t).branch_sign == 1\","
+        "\"positive_frequency_filter\":\"select_positive_frequency_mode(map_eigenvalue(lambda, exp_i_omega_t), exclude_zero_frequency)\","
+        "\"zero_frequency_mode_policy\":\"exclude_zero_frequency\","
         "\"eigenvalue_to_frequency\":\"map_eigenvalue(lambda, phase)\","
         "\"conjugate_pair_policy\":\"keep_positive_frequency_partner\","
         "\"stop_reason\":\"" +
@@ -1445,7 +1478,8 @@ FrequencyDomainContractResult solve_dense_production_modal_window_payload(
         "\"stop_reason\":\"" +
         std::string(window_stop_reason) +
         "\","
-        "\"positive_frequency_filter\":\"map_eigenvalue(lambda, exp_i_omega_t).branch_sign == 1\","
+        "\"positive_frequency_filter\":\"select_positive_frequency_mode(map_eigenvalue(lambda, exp_i_omega_t), exclude_zero_frequency)\","
+        "\"zero_frequency_mode_policy\":\"exclude_zero_frequency\","
         "\"eigenvalue_to_frequency\":\"map_eigenvalue(lambda, phase)\","
         "\"conjugate_pair_policy\":\"keep_positive_frequency_partner\","
         "\"requested_mode_count\":" +
@@ -1631,7 +1665,8 @@ FrequencyDomainContractResult solve_dense_production_modal_payload(
         std::string(slepc_result.factorization_package) +
         "\",\"nullspace_policy\":\"" +
         std::string(slepc_result.nullspace_policy) +
-        "\",\"positive_frequency_filter\":\"map_eigenvalue(lambda, exp_i_omega_t).branch_sign == 1\","
+        "\",\"positive_frequency_filter\":\"select_positive_frequency_mode(map_eigenvalue(lambda, exp_i_omega_t), exclude_zero_frequency)\","
+        "\"zero_frequency_mode_policy\":\"exclude_zero_frequency\","
         "\"eigenvalue_to_frequency\":\"map_eigenvalue(lambda, phase)\","
         "\"conjugate_pair_policy\":\"keep_positive_frequency_partner\","
         "\"requested_mode_count\":" +
@@ -1823,7 +1858,8 @@ FrequencyDomainContractResult solve_sparse_production_modal_payload(
         std::string(slepc_result.factorization_package) +
         "\",\"nullspace_policy\":\"" +
         std::string(slepc_result.nullspace_policy) +
-        "\",\"positive_frequency_filter\":\"map_eigenvalue(lambda, exp_i_omega_t).branch_sign == 1\","
+        "\",\"positive_frequency_filter\":\"select_positive_frequency_mode(map_eigenvalue(lambda, exp_i_omega_t), exclude_zero_frequency)\","
+        "\"zero_frequency_mode_policy\":\"exclude_zero_frequency\","
         "\"eigenvalue_to_frequency\":\"map_eigenvalue(lambda, phase)\","
         "\"conjugate_pair_policy\":\"keep_positive_frequency_partner\","
         "\"requested_mode_count\":" +
@@ -2082,7 +2118,8 @@ FrequencyDomainContractResult solve_sparse_production_modal_window_payload(
         "\"stop_reason\":\"" +
         std::string(window_stop_reason) +
         "\","
-        "\"positive_frequency_filter\":\"map_eigenvalue(lambda, exp_i_omega_t).branch_sign == 1\","
+        "\"positive_frequency_filter\":\"select_positive_frequency_mode(map_eigenvalue(lambda, exp_i_omega_t), exclude_zero_frequency)\","
+        "\"zero_frequency_mode_policy\":\"exclude_zero_frequency\","
         "\"eigenvalue_to_frequency\":\"map_eigenvalue(lambda, phase)\","
         "\"conjugate_pair_policy\":\"keep_positive_frequency_partner\","
         "\"requested_mode_count\":" +
@@ -2146,12 +2183,16 @@ FrequencyDomainContractResult production_cpu_modal_eigen_unavailable(
 {
     FrequencyDomainContractResult result{};
     result.status = FrequencyDomainStatus::unavailable;
+    ModalEigenRequest effective_request = request;
+    std::vector<double> dense_stiffness_with_dynamic_demag_k;
     if (modal_request_is_nonzero_k_floquet(request)) {
         if (!modal_request_has_bloch_floquet_tangent_operator_payload(request)) {
             return nonzero_k_floquet_modal_operator_missing(request);
         }
         if (request.operator_request.include_demag != 0) {
-            return nonzero_k_floquet_modal_dynamic_demag_k_missing(request);
+            if (!modal_request_has_dynamic_demag_k_operator_payload(request)) {
+                return nonzero_k_floquet_modal_dynamic_demag_k_missing(request);
+            }
         }
         if (const char *gated_operator_term =
                 modal_request_gated_operator_term(request)) {
@@ -2159,11 +2200,24 @@ FrequencyDomainContractResult production_cpu_modal_eigen_unavailable(
                 request,
                 gated_operator_term);
         }
+        if (request.operator_request.include_demag != 0) {
+            const std::size_t matrix_value_count = static_cast<std::size_t>(
+                request.dynamic_demag_k_tangent_matrix_value_count);
+            dense_stiffness_with_dynamic_demag_k.assign(
+                request.mfem_stiffness_matrix_row_major,
+                request.mfem_stiffness_matrix_row_major + matrix_value_count);
+            for (std::size_t index = 0; index < matrix_value_count; ++index) {
+                dense_stiffness_with_dynamic_demag_k[index] +=
+                    request.dynamic_demag_k_tangent_matrix_row_major[index];
+            }
+            effective_request.mfem_stiffness_matrix_row_major =
+                dense_stiffness_with_dynamic_demag_k.data();
+        }
     }
     const ModalSolverSelection selection = select_modal_solver_for_frequency_window(
-        request.frequency_min_hz,
-        request.frequency_max_hz,
-        request.eigensolver_family);
+        effective_request.frequency_min_hz,
+        effective_request.frequency_max_hz,
+        effective_request.eigensolver_family);
     const bool contour_interval =
         std::strcmp(selection.family, "contour_interval") == 0;
     const char *spectral_transform =
@@ -2171,27 +2225,27 @@ FrequencyDomainContractResult production_cpu_modal_eigen_unavailable(
     const char *solver_model =
         contour_interval ? "contour_interval" : "slepc_shift_invert_production_cpu";
     const ModalShiftSelection shift = select_modal_shift(
-        request.target_kind,
-        request.target_frequency_hz,
-        request.frequency_min_hz,
-        request.frequency_max_hz);
+        effective_request.target_kind,
+        effective_request.target_frequency_hz,
+        effective_request.frequency_min_hz,
+        effective_request.frequency_max_hz);
     const SLEPcModalEigenAdapterStatus adapter =
         slepc_modal_eigen_adapter_status();
-    if (has_sparse_modal_payload(request)) {
-        if (!csr_matrix_view_is_consistent(request.mfem_sparse_stiffness_csr) ||
-            !csr_matrix_view_is_consistent(request.mfem_sparse_gyrotropic_csr) ||
-            !csr_matrix_view_is_consistent(request.mfem_sparse_mass_csr) ||
-            !sparse_modal_payload_shapes_match(request)) {
+    if (has_sparse_modal_payload(effective_request)) {
+        if (!csr_matrix_view_is_consistent(effective_request.mfem_sparse_stiffness_csr) ||
+            !csr_matrix_view_is_consistent(effective_request.mfem_sparse_gyrotropic_csr) ||
+            !csr_matrix_view_is_consistent(effective_request.mfem_sparse_mass_csr) ||
+            !sparse_modal_payload_shapes_match(effective_request)) {
             return sparse_payload_validation_error(
-                request,
+                effective_request,
                 "native FEM modal sparse CSR operator payload is malformed",
                 "invalid_sparse_csr_payload");
         }
         if (!contour_interval && adapter.slepc_available) {
-            return solve_sparse_production_modal_payload(request, selection, shift);
+            return solve_sparse_production_modal_payload(effective_request, selection, shift);
         }
         return sparse_payload_solver_pending_result(
-            request,
+            effective_request,
             selection,
             shift,
             adapter,
@@ -2199,13 +2253,13 @@ FrequencyDomainContractResult production_cpu_modal_eigen_unavailable(
     }
     if (!contour_interval &&
         adapter.slepc_available &&
-        has_dense_modal_payload(request)) {
-        return solve_dense_production_modal_payload(request, selection, shift);
+        has_dense_modal_payload(effective_request)) {
+        return solve_dense_production_modal_payload(effective_request, selection, shift);
     }
     if (contour_interval &&
         adapter.slepc_available &&
-        has_dense_modal_payload(request)) {
-        return solve_dense_production_modal_contour_payload(request, selection);
+        has_dense_modal_payload(effective_request)) {
+        return solve_dense_production_modal_contour_payload(effective_request, selection);
     }
     const char *solver_adapter_status = adapter.solver_adapter_status;
     const char *unsupported_reason = adapter.unsupported_reason;
@@ -2284,7 +2338,8 @@ FrequencyDomainContractResult production_cpu_modal_eigen_unavailable(
             std::string(adapter.linear_tolerance_policy) +
             "\",\"positive_frequency_filter\":\"" +
             std::string(adapter.positive_frequency_filter) +
-            "\",\"eigenvalue_to_frequency\":\"" +
+            "\",\"zero_frequency_mode_policy\":\"exclude_zero_frequency\""
+            ",\"eigenvalue_to_frequency\":\"" +
             std::string(adapter.eigenvalue_to_frequency) + "\"";
     }
     result.diagnostics_json += "}";

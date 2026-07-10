@@ -145,6 +145,11 @@ fd::PoissonAirboxEigenBlockProblem sparse_problem_from_fixture(
     problem.B_qq = fixture.B_qq.view();
     problem.phi_mean_weights = fixture.weights;
     problem.phi_mean_weights_count = 2;
+    problem.outer_boundary_kind = "pure_neumann";
+    problem.robin_beta = 0.0;
+    problem.gauge_policy = "mean_zero_augmented";
+    problem.gauge_reason = "pure_neumann_nullspace";
+    problem.assembly_kind = "synthetic_algebraic_oracle";
     problem.target_frequency_hz = 2.0e9;
     problem.expected_reference_frequency_hz = fixture.dense_result.frequency_hz;
     problem.periodic_mesh_certificate_schema = "periodic_mesh_certificate.v5";

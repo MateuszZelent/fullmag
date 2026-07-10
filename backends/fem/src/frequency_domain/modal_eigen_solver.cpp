@@ -661,6 +661,7 @@ FrequencyDomainContractResult slepc_tiny_validation_result(
     slepc_request.residual_tolerance = request.residual_tolerance;
     slepc_request.max_outer_iterations = request.max_outer_iterations;
     slepc_request.max_linear_iterations = request.max_linear_iterations;
+    slepc_request.phase_convention = request.phase_convention;
 
     const SLEPcTinyGyrotropicModalEigenResult slepc_result =
         solve_slepc_tiny_gyrotropic_modal_eigen(slepc_request);
@@ -714,8 +715,10 @@ FrequencyDomainContractResult slepc_tiny_validation_result(
         std::to_string(slepc_result.ksp_max_iterations) +
         ",\"ksp_final_residual\":" +
         format_double(slepc_result.ksp_final_residual) +
-        ",\"positive_frequency_filter\":\"imag(lambda) > 0\","
-        "\"eigenvalue_to_frequency\":\"frequency_hz = imag(lambda)/(2*pi)\","
+        ",\"positive_frequency_filter\":\"select_positive_frequency_mode(map_eigenvalue(lambda, phase_convention), exclude_zero_frequency)\","
+        "\"zero_frequency_mode_policy\":\"exclude_zero_frequency\","
+        "\"eigenvalue_representation\":\"canonical_complex_lambda\","
+        "\"eigenvalue_to_frequency\":\"map_eigenvalue(lambda, phase_convention).frequency_hz\","
         "\"conjugate_pair_policy\":\"keep_positive_frequency_partner\","
         "\"requested_mode_count\":" +
         std::to_string(request.requested_mode_count) +
@@ -754,14 +757,19 @@ FrequencyDomainContractResult slepc_tiny_validation_result(
         std::string(status) +
         "\",\"solver_adapter\":\"" +
         std::string(slepc_result.solver_adapter) +
-        "\",\"accepted_mode_count\":" +
+        "\",\"eigenvalue_representation\":\"canonical_complex_lambda\","
+        "\"eigenvalue_to_frequency\":\"map_eigenvalue(lambda, phase_convention).frequency_hz\","
+        "\"accepted_mode_count\":" +
         std::to_string(slepc_result.accepted_mode_count);
     if (slepc_result.ok) {
+        const ModeKinematics kinematics = map_eigenvalue(
+            {slepc_result.lambda_real, slepc_result.lambda_imag},
+            request.phase_convention);
         result.result_json +=
             ",\"frequency_hz\":" +
-            format_double(slepc_result.frequency_hz) +
+            format_double(kinematics.frequency_hz) +
             ",\"omega_rad_s\":" +
-            format_double(slepc_result.lambda_imag) +
+            format_double(kinematics.omega_rad_s) +
             ",\"eigenvalue_real\":" +
             format_double(slepc_result.lambda_real) +
             ",\"eigenvalue_imag\":" +
@@ -910,8 +918,18 @@ FrequencyDomainContractResult solve_tiny_validation_modal_problem(
         (-coeff_linear - sqrt_discriminant) / (2.0 * det_g),
         (-coeff_linear + sqrt_discriminant) / (2.0 * det_g),
     };
-    constexpr double kTwoPi = 2.0 * 3.14159265358979323846264338327950288;
     const double shift_frequency_hz = target_shift_frequency_hz(request);
+    const bool canonical_complex_lambda_representation =
+        request.tiny_validation_stiffness_matrix_row_major != nullptr ||
+        request.tiny_validation_mass_matrix_row_major != nullptr;
+    const char *const eigenvalue_representation =
+        canonical_complex_lambda_representation ?
+            "canonical_complex_lambda" :
+            "legacy_real_angular_frequency_diagonal";
+    const char *const eigenvalue_to_frequency =
+        canonical_complex_lambda_representation ?
+            "map_eigenvalue(lambda, phase_convention).frequency_hz" :
+            "legacy_real_angular_frequency_to_canonical_lambda_then_map_eigenvalue";
     std::complex<double> chosen_lambda(
         std::numeric_limits<double>::quiet_NaN(),
         std::numeric_limits<double>::quiet_NaN());
@@ -924,14 +942,24 @@ FrequencyDomainContractResult solve_tiny_validation_modal_problem(
             !std::isfinite(lambda_candidate.imag())) {
             continue;
         }
-        double omega_candidate = std::imag(lambda_candidate);
-        if (std::abs(omega_candidate) <= 1.0e-15) {
-            omega_candidate = std::real(lambda_candidate);
-        }
-        if (!std::isfinite(omega_candidate) || omega_candidate <= 0.0) {
+        const ComplexEigenvalue canonical_lambda =
+            canonical_complex_lambda_representation ?
+                ComplexEigenvalue{std::real(lambda_candidate), std::imag(lambda_candidate)} :
+                ComplexEigenvalue{
+                    0.0,
+                    request.phase_convention == FrequencyDomainPhaseConvention::exp_i_omega_t ?
+                        std::real(lambda_candidate) :
+                        -std::real(lambda_candidate)};
+        const ModeKinematics kinematics = map_eigenvalue(
+            canonical_lambda,
+            request.phase_convention);
+        if (!select_positive_frequency_mode(
+                kinematics,
+                ZeroFrequencyModePolicy::exclude)) {
             continue;
         }
-        const double frequency_hz = omega_candidate / kTwoPi;
+        const double omega_candidate = kinematics.omega_rad_s;
+        const double frequency_hz = kinematics.frequency_hz;
         ++candidate_mode_count;
         const char *target_kind = request.target_kind != nullptr ? request.target_kind : "";
         bool in_target = true;
@@ -962,6 +990,11 @@ FrequencyDomainContractResult solve_tiny_validation_modal_problem(
             "\"complete\":false,"
             "\"execution_lane\":\"validation\","
             "\"tiny_validation_solver\":true,"
+            "\"eigenvalue_representation\":\"" +
+            std::string(eigenvalue_representation) + "\","
+            "\"zero_frequency_mode_policy\":\"exclude_zero_frequency\","
+            "\"eigenvalue_to_frequency\":\"" +
+            std::string(eigenvalue_to_frequency) + "\","
             "\"stop_reason\":null}";
         result.diagnostics_json = with_operator_diagnostics(
             result.diagnostics_json,
@@ -970,6 +1003,8 @@ FrequencyDomainContractResult solve_tiny_validation_modal_problem(
             "{\"schema_version\":\"frequency_domain_modal_result.v1\","
             "\"study_product\":\"modal_eigen\","
             "\"status\":\"solve_error\","
+            "\"eigenvalue_representation\":\"" +
+            std::string(eigenvalue_representation) + "\","
             "\"accepted_mode_count\":0}";
         return result;
     }
@@ -1159,8 +1194,12 @@ FrequencyDomainContractResult solve_tiny_validation_modal_problem(
         "\"algebraic_form\":\"first_order_complex\","
         "\"solver_family\":\"analytic_validation_shift_target\","
         "\"slepc_problem_type\":\"validation_not_slepc\","
-        "\"positive_frequency_filter\":\"imag(lambda) > 0\","
-        "\"eigenvalue_to_frequency\":\"frequency_hz = abs(imag(lambda))/(2*pi)\","
+        "\"positive_frequency_filter\":\"select_positive_frequency_mode(map_eigenvalue(lambda, phase_convention), exclude_zero_frequency)\","
+        "\"zero_frequency_mode_policy\":\"exclude_zero_frequency\","
+        "\"eigenvalue_representation\":\"" +
+        std::string(eigenvalue_representation) + "\","
+        "\"eigenvalue_to_frequency\":\"" +
+        std::string(eigenvalue_to_frequency) + "\","
         "\"conjugate_pair_policy\":\"keep_positive_frequency_partner\","
         "\"requested_mode_count\":" +
         std::to_string(request.requested_mode_count) +
@@ -1186,6 +1225,8 @@ FrequencyDomainContractResult solve_tiny_validation_modal_problem(
         "{\"schema_version\":\"frequency_domain_modal_result.v1\","
         "\"study_product\":\"modal_eigen\","
         "\"status\":\"ok\","
+        "\"eigenvalue_representation\":\"" +
+        std::string(eigenvalue_representation) + "\","
         "\"accepted_mode_count\":" +
         std::to_string(accepted_mode_count) + ","
         "\"frequency_hz\":" +
@@ -1221,6 +1262,24 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
             "modal_eigen",
             "native FEM modal_eigen request uses an unsupported ABI version",
             "unsupported_abi_version",
+            request.operator_request.operator_diagnostics_json);
+    }
+    DynamicPencilMetadata canonical_metadata{};
+    char metadata_error[128]{};
+    if (canonicalize_dynamic_pencil_metadata(
+            dynamic_pencil_metadata_from_legacy_operator_request(
+                request.operator_request,
+                request.phase_convention),
+            &canonical_metadata,
+            metadata_error,
+            sizeof(metadata_error)) != FrequencyDomainStatus::ok) {
+        const std::string message =
+            "native FEM modal_eigen dynamic pencil metadata is invalid: " +
+            std::string(metadata_error);
+        return validation_error_result(
+            "modal_eigen",
+            message.c_str(),
+            "invalid_dynamic_pencil_metadata",
             request.operator_request.operator_diagnostics_json);
     }
     if (output_directory_required(request.write_partial_artifacts, request.output_directory)) {
