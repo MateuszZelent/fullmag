@@ -29,6 +29,8 @@ const MAX_HEAP_GROWTH_BYTES = 25 * 1024 * 1024;
 const QUANTITY_SWITCH_TIMEOUT_MS = 20_000;
 const injectDroppedPublication =
   process.env.CONTROL_ROOM_AUDIT_INJECT_DROPPED_PUBLICATION === "1";
+const injectBlankScene = process.env.CONTROL_ROOM_AUDIT_INJECT_BLANK_SCENE === "1";
+const injectListenerLeak = process.env.CONTROL_ROOM_AUDIT_INJECT_LISTENER_LEAK === "1";
 
 async function loadPlaywright() {
   try {
@@ -149,6 +151,16 @@ try {
     heapBytes: await readJsHeapBytes(cdp),
   };
 
+  await page.locator('[data-action-id="ws-2d"]').click();
+  await page.locator(".fm-viewport-3d canvas").waitFor({ state: "detached", timeout: 10_000 });
+  const unmountedBaselineRuntime = await readViewportAuditRuntime(page);
+  await page.locator('[data-action-id="viewport-3d.open"]').click();
+  await canvas.waitFor({ state: "visible", timeout: 10_000 });
+  await waitForDiagnostics(viewport);
+  if (injectListenerLeak) {
+    await page.evaluate(() => window.__FULLMAG_CONTROL_ROOM_AUDIT__?.injectViewportAuditListenerLeak());
+  }
+
   auditActive = true;
   for (const [index, quantity] of QUANTITY_SEQUENCE.entries()) {
     if (index % 12 === 0) {
@@ -173,6 +185,7 @@ try {
     fixture.visualizationState.revision += 1;
     fixture.status.resources.visualization_state_revision =
       fixture.visualizationState.revision;
+    const beforePublicationGpu = await readBrowserAuditCounters(page);
     await page.evaluate(async ({ state, drop }) => {
       const hook = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
       if (!hook) throw new Error("Fullmag browser audit hook is not installed.");
@@ -180,7 +193,13 @@ try {
       await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
       await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
     }, { drop: injectDroppedPublication && index === 0, state: fixture.visualizationState });
-    await assertPublicationRendered(viewport, quantity, fixture.visualizationState.revision);
+    await assertPublicationRendered(
+      page,
+      viewport,
+      quantity,
+      fixture.visualizationState.revision,
+      beforePublicationGpu,
+    );
   }
   auditActive = false;
   await page.waitForTimeout(500);
@@ -231,6 +250,11 @@ try {
 
   const idle = await verifyViewportIdle(page, 5_000);
   const fidelity = await assertCanvasHasFidelity(page);
+  if (injectBlankScene) {
+    await clearViewportCanvas(page);
+    await assertCanvasHasFidelity(page);
+  }
+  const shaderSignatures = await collectStableShaderSignatures(page, fixture, viewport);
   await page.screenshot({ path: path.join(auditArtifactsDirectory, "settled-3d.png") });
   const gpuAfterStress = await readBrowserAuditCounters(page);
   const baselineLiveBuffers =
@@ -265,13 +289,15 @@ try {
       `Viewport unmount retained ${unmountedLiveBuffers} WebGL buffers; allowed 4 instrumentation/runtime buffers.`,
     );
   }
-  assertViewportRuntimeReleased(afterUnmountRuntime, baseline.runtime);
+  assertViewportRuntimeReleased(afterUnmountRuntime, unmountedBaselineRuntime);
   await page.screenshot({ path: path.join(auditArtifactsDirectory, "after-unmount.png") });
   await writeAuditArtifact({
     after,
     afterUnmount,
     afterUnmountRuntime,
     baseline,
+    unmountedBaselineRuntime,
+    shaderSignatures,
     fixtureRequests,
     gpuAfterStress,
     idle,
@@ -322,11 +348,14 @@ async function assertCanvasHasFidelity(page) {
     context.drawImage(bitmap, 0, 0);
     const pixels = context.getImageData(0, 0, bitmap.width, bitmap.height).data;
     let varied = 0;
+    let signature = 2166136261;
     const stride = Math.max(1, Math.floor(Math.min(bitmap.width, bitmap.height) / 64));
     const reference = [pixels[0], pixels[1], pixels[2]];
     for (let y = 0; y < bitmap.height; y += stride) {
       for (let x = 0; x < bitmap.width; x += stride) {
         const offset = (y * bitmap.width + x) * 4;
+        signature ^= pixels[offset] ^ pixels[offset + 1] ^ pixels[offset + 2] ^ pixels[offset + 3];
+        signature = Math.imul(signature, 16777619);
         if (
           Math.abs(pixels[offset] - reference[0]) > 8 ||
           Math.abs(pixels[offset + 1] - reference[1]) > 8 ||
@@ -334,7 +363,7 @@ async function assertCanvasHasFidelity(page) {
         ) varied += 1;
       }
     }
-    return { height: bitmap.height, varied, width: bitmap.width };
+    return { height: bitmap.height, signature: String(signature >>> 0), varied, width: bitmap.width };
   }, screenshot.toString("base64"));
   if (!sample || sample.varied === 0) {
     throw new Error("Viewport fidelity gate detected a blank or uniform WebGL drawing buffer.");
@@ -342,31 +371,21 @@ async function assertCanvasHasFidelity(page) {
   return sample;
 }
 
-async function assertPublicationRendered(viewport, quantityId, revision) {
+async function assertPublicationRendered(page, viewport, quantityId, revision, beforeGpu) {
   await waitForCondition(
     async () => {
       const diagnostics = await readDiagnostics(viewport);
-      return diagnostics.raw.includes(`q:${quantityId}`);
+      const runtime = await readViewportAuditRuntime(page);
+      const gpu = await readBrowserAuditCounters(page);
+      return (
+        diagnostics.raw.includes(`q:${quantityId}`) &&
+        String(runtime.visualizationRevision) === String(revision) &&
+        (gpu.frames > beforeGpu.frames || gpu.drawCalls > beforeGpu.drawCalls)
+      );
     },
     2_000,
     `Audit publication r${revision} (${quantityId}) was not observed by the mounted viewport.`,
   );
-}
-
-function assertViewportRuntimeReleased(afterUnmountRuntime, baselineRuntime) {
-  const { resources, workers } = afterUnmountRuntime;
-  if (workers.workers !== 0 || workers.timers !== 0 || workers.jobs !== 0) {
-    throw new Error(`Viewport worker runtime survived unmount: ${JSON.stringify(workers)}.`);
-  }
-  if (resources.listenerCount > baselineRuntime.resources.listenerCount) {
-    throw new Error(
-      `Viewport resource subscriptions grew after unmount: baseline=${baselineRuntime.resources.listenerCount}, after=${resources.listenerCount}.`,
-    );
-  }
-}
-
-async function readBrowserAuditCounters(page) {
-  return page.evaluate(() => ({ ...(window.__FM_VIEWPORT_BROWSER_AUDIT__ ?? {}) }));
 }
 
 async function readViewportAuditRuntime(page) {
@@ -375,6 +394,62 @@ async function readViewportAuditRuntime(page) {
     if (!hook) throw new Error("Fullmag browser audit hook is not installed.");
     return hook.readViewportAuditRuntime();
   });
+}
+
+async function clearViewportCanvas(page) {
+  await page.evaluate(() => {
+    const canvas = document.querySelector(".fm-viewport-3d canvas");
+    if (!(canvas instanceof HTMLCanvasElement)) throw new Error("Viewport canvas is missing.");
+    const gl = canvas.getContext("webgl2") ?? canvas.getContext("webgl");
+    if (!gl) throw new Error("Viewport WebGL context is missing.");
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.finish();
+  });
+}
+
+async function collectStableShaderSignatures(page, fixture, viewport) {
+  const modes = [
+    { colorMode: "magnitude", component: "magnitude", id: "scalar" },
+    { colorMode: "orientation", component: "magnitude", id: "orientation" },
+    { colorMode: "magnitude", component: "x", id: "component" },
+  ];
+  const signatures = {};
+  for (const mode of modes) {
+    fixture.visualizationState = applyPatch(fixture.visualizationState, {
+      field_component: mode.component,
+      quantity: { field_component: mode.component },
+      vector_style: { color_mode: mode.colorMode },
+    });
+    fixture.visualizationState.revision += 1;
+    fixture.status.resources.visualization_state_revision = fixture.visualizationState.revision;
+    const before = await readBrowserAuditCounters(page);
+    await page.evaluate((state) => window.__FULLMAG_CONTROL_ROOM_AUDIT__?.publishVisualizationState(state), fixture.visualizationState);
+    await assertPublicationRendered(page, viewport, "m", fixture.visualizationState.revision, before);
+    const first = await assertCanvasHasFidelity(page);
+    const second = await assertCanvasHasFidelity(page);
+    if (first.signature !== second.signature) {
+      throw new Error(`Shader visual signature for ${mode.id} was not repeatable.`);
+    }
+    signatures[mode.id] = first.signature;
+  }
+  return signatures;
+}
+
+function assertViewportRuntimeReleased(afterUnmountRuntime, baselineRuntime) {
+  const { resources, workers } = afterUnmountRuntime;
+  if (workers.workers !== 0 || workers.timers !== 0 || workers.jobs !== 0) {
+    throw new Error(`Viewport worker runtime survived unmount: ${JSON.stringify(workers)}.`);
+  }
+  if (resources.listenerCount !== baselineRuntime.resources.listenerCount) {
+    throw new Error(
+      `Viewport resource subscriptions did not return to the pre-3D baseline: baseline=${baselineRuntime.resources.listenerCount}, after=${resources.listenerCount}.`,
+    );
+  }
+}
+
+async function readBrowserAuditCounters(page) {
+  return page.evaluate(() => ({ ...(window.__FM_VIEWPORT_BROWSER_AUDIT__ ?? {}) }));
 }
 
 async function verifyViewportIdle(page, observeMs) {

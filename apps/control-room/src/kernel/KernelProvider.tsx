@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, type ReactNode } from "react";
 
 import { SESSION_EVENTS_WS_PATH, VISUALIZATION_STATE_PATH } from "./api/apiPaths";
 import type {
+  ResourceRevision,
   VisualizationStatePatch,
   VisualizationStateResource,
 } from "./api/apiTypes";
@@ -361,8 +362,10 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
         publishVisualizationState: (state: VisualizationStateResource) => void;
         readViewportAuditRuntime: () => {
           resources: ReturnType<typeof sharedResourceRuntimeStore.stats>;
+          visualizationRevision: ResourceRevision | null;
           workers: ReturnType<typeof getViewport3DWorkerRuntimeSnapshot>;
         };
+        injectViewportAuditListenerLeak: () => void;
       };
     };
     const browserConfig = auditWindow.__FULLMAG_CONFIG__;
@@ -457,8 +460,15 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
       },
       readViewportAuditRuntime: () => ({
         resources: sharedResourceRuntimeStore.stats(),
+        visualizationRevision: sharedResourceRuntimeStore.getSnapshot(
+          VISUALIZATION_STATE_PATH,
+        ).revision,
         workers: getViewport3DWorkerRuntimeSnapshot(),
       }),
+      injectViewportAuditListenerLeak: () => {
+        // Deliberately retained only when an audit asks for a negative control.
+        sharedResourceRuntimeStore.subscribe(VISUALIZATION_STATE_PATH, () => {});
+      },
     };
     auditWindow.__FULLMAG_CONTROL_ROOM_AUDIT__ = auditApi;
     return () => {
