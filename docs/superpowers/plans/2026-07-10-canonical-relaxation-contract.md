@@ -892,7 +892,7 @@ git commit -m "fix(control-room): align relaxation inspector contract"
 - Consumes: verified current implementation and generated API.
 - Produces: no contradictory defaults, units, capability, or maturity claims.
 
-- [ ] **Step 1: Add a documentation contract scan**
+- [x] **Step 1: Add a documentation contract scan**
 
 Create scripts/check_relaxation_contract_docs.py with a pure
 check_relaxation_contract_docs(repo_root: Path) -> list[str] function and a CLI
@@ -905,7 +905,7 @@ in scripts/test_check_relaxation_contract_docs.py. The checker rejects:
 - max_torque described without A/m/T distinction;
 - direct minimizers described as using RK.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run:
 
@@ -917,11 +917,11 @@ python3 scripts/check_relaxation_contract_docs.py
 Expected: the unit test passes and the CLI fails while identifying current
 conflicting lines in 0500/0510/0530/capability matrix.
 
-- [ ] **Step 3: Update docs from verified implementation**
+- [x] **Step 3: Update docs from verified implementation**
 
 Preserve historical context only when labeled. Link all three older notes to 0580 as canonical where they retain backend-specific detail.
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 ~~~bash
 git diff --check -- docs
@@ -932,7 +932,7 @@ rg -n 'lambda.*dimensionless|line-search.*pseudo.?time.*s|1e-6 A/m|7\.9.*A/m' do
 
 Expected: unit test and CLI pass and no stale canonical claims remain.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ~~~bash
 git add docs/physics docs/architecture/backend-golden-masterplan.md docs/specs scripts/check_relaxation_contract_docs.py scripts/test_check_relaxation_contract_docs.py
