@@ -168,8 +168,9 @@ describe("useViewport3DSceneModel", () => {
       "const topologyRenderModelForGeometry = topologyRenderable ? topologyRenderModel : null;",
     );
     expect(source).toContain(
-      "const fieldCompatibleTopologyRenderModel = topologyCurrent ? topologyRenderModel : null;",
+      "const fieldCompatibleTopologyRenderModel = topologyCurrent\n    ? fieldTopologyRenderModel\n    : null;",
     );
+    expect(source).toContain("femDomain.fieldCapableMagneticParts ?? femDomain.magneticParts");
     expect(source).toContain(
       "topologyRenderModel: fieldCompatibleTopologyRenderModel",
     );

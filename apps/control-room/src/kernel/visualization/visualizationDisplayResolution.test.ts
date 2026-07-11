@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  resolveManifestRenderableCarrierKind,
   resolveVisualizationRenderResolution,
   resolveVisualizationTopologyFreshness,
 } from "./visualizationDisplayResolution";
@@ -73,6 +74,21 @@ describe("resolveVisualizationTopologyFreshness", () => {
           revision: 1,
           mesh_parts: [{ id: "part-1", object_id: "film" }],
         },
+      ),
+    ).toBe("current");
+  });
+
+  it("recognizes object segments as explicit degraded manifest carriers", () => {
+    expect(
+      resolveManifestRenderableCarrierKind({
+        meshPartCount: 0,
+        objectSegmentCount: 1,
+      }),
+    ).toBe("object-segments");
+    expect(
+      resolveVisualizationTopologyFreshness(
+        { revision: 3, objects: [{ id: "film", visible: true }] },
+        { revision: 1, object_segments: [{ object_id: "film" }] },
       ),
     ).toBe("current");
   });

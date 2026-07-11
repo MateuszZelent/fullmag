@@ -70,6 +70,7 @@ import {
 import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
 import { visualizationSceneObjectIds } from "@/kernel/selection/visualizationTargetResolver";
 import { useLayoutSelector } from "@/kernel/layout/useLayout";
+import { manifestRenderableCarriers } from "@/modules/viewport-3d/viewport3dDomainAdapter";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
@@ -1240,10 +1241,11 @@ function useObjectVisualizationPanelState(
   const selectedMeshPart = useMemo(
     () =>
       selection.ref?.type === "mesh-part"
-        ? manifest.data?.mesh_parts?.find((part) => part.id === selection.ref?.nodeId) ??
-          null
+        ? manifestRenderableCarriers(manifest.data).find(
+            (part) => part.id === selection.ref?.nodeId,
+          ) ?? null
         : null,
-    [manifest.data?.mesh_parts, selection.ref],
+    [manifest.data, selection.ref],
   );
   const resolvedTarget = useMemo(
     () =>

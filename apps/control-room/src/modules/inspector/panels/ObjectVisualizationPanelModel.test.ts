@@ -431,6 +431,36 @@ describe("ObjectVisualizationPanelModel", () => {
     ).toMatchObject({ id: "part-film", kind: "part" });
   });
 
+  it("maps a selected degraded object-segment carrier back to its object target", () => {
+    expect(
+      resolveObjectVisualizationPanelSelectionTarget({
+        selectedMeshPart: {
+          carrierKind: "object-segment",
+          fieldCapable: false,
+          id: "segment:projection-film:0",
+          label: "projection-film",
+          object_id: "projection-film",
+          role: "magnetic",
+        } as never,
+        selection: {
+          kind: "mesh-part",
+          label: "Projection film fallback",
+          nodeId: "segment:projection-film:0",
+          objectId: "projection-film",
+          ref: {
+            kind: "mesh-part",
+            nodeId: "segment:projection-film:0",
+            objectId: "projection-film",
+            type: "mesh-part",
+          },
+        } as never,
+        selectionTarget: { id: "segment:projection-film:0", kind: "part" },
+        sceneObjectIds: new Set(["projection-film"]),
+        visualizationState: null,
+      }),
+    ).toMatchObject({ id: "object:projection-film", kind: "object" });
+  });
+
   it("applies a part-vector patch immediately until a newer registry revision acknowledges it", () => {
     const controller = new ObjectVisualizationController();
     const queuedPatches: unknown[] = [];

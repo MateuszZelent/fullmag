@@ -2301,6 +2301,41 @@ export function useViewport3DSceneModel({
       topologyIndexState,
     ],
   );
+  const fieldTopologyRenderModel = useMemo(
+    () =>
+      measureViewport3DModelBuild(
+        "fullmag.viewport3d.buildViewport3DFieldTopologyRenderModel",
+        () =>
+          buildViewport3DTopologyRenderModel(
+            topology.data,
+            femDomain.fieldCapableMagneticParts ?? femDomain.magneticParts,
+            femDomain.fieldCapableAirboxParts ?? femDomain.airboxParts,
+            femDomain.magneticSurfacePartsByPartId,
+            {
+              meshGenerationId: sharedDomainManifest.data?.generation_id ?? null,
+              meshRevision: sharedDomainManifest.data?.revision ?? null,
+              meshTopologyHash: sharedDomainTopologyFingerprint,
+            },
+            {
+              topologyIndexBundle: topologyIndexBundle.bundle,
+              topologyIndexState,
+            },
+          ),
+      ),
+    [
+      femDomain.fieldCapableAirboxParts,
+      femDomain.fieldCapableMagneticParts,
+      femDomain.airboxParts,
+      femDomain.magneticParts,
+      femDomain.magneticSurfacePartsByPartId,
+      sharedDomainManifest.data?.generation_id,
+      sharedDomainManifest.data?.revision,
+      sharedDomainTopologyFingerprint,
+      topology.data,
+      topologyIndexBundle.bundle,
+      topologyIndexState,
+    ],
+  );
   const primitiveModel = useMemo(
     () =>
       buildViewport3DPrimitiveRenderModel(
@@ -2439,7 +2474,9 @@ export function useViewport3DSceneModel({
     [femDomain.magneticParts, membershipRegionOverlays.ownerParts],
   );
   const topologyRenderModelForGeometry = topologyRenderable ? topologyRenderModel : null;
-  const fieldCompatibleTopologyRenderModel = topologyCurrent ? topologyRenderModel : null;
+  const fieldCompatibleTopologyRenderModel = topologyCurrent
+    ? fieldTopologyRenderModel
+    : null;
   const clipCrossSectionQuery = useMemo(() => {
     const query = resolveCrossSectionQueryFromVisualizationState(renderingState);
     return {
@@ -3653,6 +3690,9 @@ export function useViewport3DSceneModel({
     dataPlaneIssues,
     fieldDemandDiagnostics,
     fieldRevision: fieldVector.payloadRevision ?? fieldVector.revision,
+    manifestCarrierDegradedCount:
+      femDomain.renderCarrierDiagnostics?.degradedCarrierCount,
+    manifestCarrierKind: femDomain.renderCarrierDiagnostics?.kind,
     objectCount: femDomain.objectPartIds.size,
     pipelineDiagnostics: buildPipelineDiagnostics,
     quantityId: primaryFieldQuantityId,

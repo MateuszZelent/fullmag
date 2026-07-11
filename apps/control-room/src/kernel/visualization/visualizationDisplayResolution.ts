@@ -2,6 +2,12 @@ import type { VisualizationTargetSettings } from "./ObjectVisualizationControlle
 
 export type VisualizationTopologyFreshness = "current" | "stale" | "unknown";
 
+export type ManifestRenderableCarrierKind =
+  | "mesh-parts"
+  | "mixed"
+  | "object-segments"
+  | "unavailable";
+
 interface VisualizationRenderDegradation {
   code: "topology-provenance-unknown" | "topology-stale";
   message: string;
@@ -169,8 +175,22 @@ function manifestCoversVisibleSceneObjects(
   }
 
   const manifestObjectIds = new Set<string>();
+  const meshParts = Array.isArray(manifest?.mesh_parts)
+    ? manifest.mesh_parts
+    : [];
+  const objectSegments = Array.isArray(manifest?.object_segments)
+    ? manifest.object_segments
+    : [];
+  if (
+    resolveManifestRenderableCarrierKind({
+      meshPartCount: meshParts.length,
+      objectSegmentCount: objectSegments.length,
+    }) === "unavailable"
+  ) {
+    return false;
+  }
 
-  for (const collection of [manifest?.object_segments, manifest?.mesh_parts]) {
+  for (const collection of [objectSegments, meshParts]) {
     if (!Array.isArray(collection)) continue;
     for (const value of collection) {
       const objectId = asRecord(value)?.object_id;
@@ -181,4 +201,17 @@ function manifestCoversVisibleSceneObjects(
   }
 
   return visibleSceneObjectIds.every((objectId) => manifestObjectIds.has(objectId));
+}
+
+export function resolveManifestRenderableCarrierKind({
+  meshPartCount,
+  objectSegmentCount,
+}: {
+  meshPartCount: number;
+  objectSegmentCount: number;
+}): ManifestRenderableCarrierKind {
+  if (meshPartCount > 0 && objectSegmentCount > 0) return "mixed";
+  if (meshPartCount > 0) return "mesh-parts";
+  if (objectSegmentCount > 0) return "object-segments";
+  return "unavailable";
 }

@@ -62,6 +62,8 @@ export interface Viewport3DDiagnosticsInput {
   fieldDemandDiagnostics?: readonly Viewport3DFieldDemandDiagnosticSummary[];
   fieldRevision: string | number | null;
   objectCount: number;
+  manifestCarrierDegradedCount?: number;
+  manifestCarrierKind?: string | null;
   pipelineDiagnostics?: readonly Viewport3DPipelineDiagnosticSummary[];
   quantityId: string;
   surfaceColorStatus?: string | null;
@@ -398,6 +400,11 @@ export function buildViewport3DDiagnostics(
     ...formatDataPlaneIssues(input.dataPlaneIssues),
     ...formatPipelineDiagnostics(input.pipelineDiagnostics),
     ...formatBuildFallbackDiagnostics(input.buildFallbacks),
+    ...(input.manifestCarrierKind
+      ? [
+          `carrier:${input.manifestCarrierKind}/${input.manifestCarrierDegradedCount ?? 0}`,
+        ]
+      : []),
     `obj:${input.objectCount}`,
     `air:${input.airboxPartCount}`,
     `geo:${input.tracker.geometries}`,

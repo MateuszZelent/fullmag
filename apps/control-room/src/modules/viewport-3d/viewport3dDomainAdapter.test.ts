@@ -144,6 +144,68 @@ describe("viewport3dDomainAdapter", () => {
     expect(domain.objectPartIds.get("object-1_geom")).toEqual(["part-magnet"]);
   });
 
+  it("normalizes segment-only manifests into degraded render carriers", () => {
+    const manifest = manifestFixture();
+    manifest.mesh_parts = [];
+    manifest.object_segments = [
+      {
+        boundary_face_count: 4,
+        boundary_face_start: 2,
+        element_count: 12,
+        element_start: 8,
+        geometry_id: "object-1_geom",
+        node_count: 8,
+        node_start: 6,
+        object_id: "object-1",
+      },
+    ];
+
+    const domain = adaptFemSharedDomainManifest(manifest);
+
+    expect(domain.magneticParts).toMatchObject([
+      {
+        carrierKind: "object-segment",
+        fieldCapable: false,
+        id: "segment:object-1:0",
+        object_id: "object-1",
+        role: "magnetic",
+      },
+    ]);
+    expect(domain.objectPartIds.get("object-1")).toEqual([
+      "segment:object-1:0",
+    ]);
+    expect(domain.partsById.get("segment:object-1:0")).toMatchObject({
+      carrierKind: "object-segment",
+      fieldCapable: false,
+    });
+  });
+
+  it("prefers mesh parts over duplicate object-segment fallback carriers", () => {
+    const manifest = manifestFixture();
+    manifest.object_segments = [
+      {
+        boundary_face_count: 4,
+        boundary_face_start: 2,
+        element_count: 12,
+        element_start: 8,
+        geometry_id: "object-1_geom",
+        node_count: 8,
+        node_start: 6,
+        object_id: "object-1",
+      },
+    ];
+
+    const domain = adaptFemSharedDomainManifest(manifest);
+
+    expect(domain.magneticParts.map((part) => part.id)).toEqual(["part-magnet"]);
+    expect(domain.objectPartIds.get("object-1")).toEqual(["part-magnet"]);
+    expect(domain.renderCarrierDiagnostics).toEqual({
+      degradedCarrierCount: 0,
+      kind: "mesh-parts",
+      renderableCarrierCount: 2,
+    });
+  });
+
   it("keeps helper boundary parts out of renderable FEM part lists", () => {
     const domain = adaptFemSharedDomainManifest(manifestFixture());
 
