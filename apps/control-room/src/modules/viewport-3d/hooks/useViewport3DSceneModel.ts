@@ -1170,6 +1170,35 @@ export function resolveViewport3DRegionTargetByPartId(
   return targets;
 }
 
+export function resolveViewport3DRegionTargetsForMembershipOwnerParts({
+  manifestRegions,
+  ownerParts,
+  regions,
+}: {
+  manifestRegions: MeshSharedDomainManifestResource["regions"] | null | undefined;
+  ownerParts: readonly RegionMeshOverlayOwnerPart[];
+  regions: readonly RegionOverlayInput[];
+}): Map<string, VisualizationTargetRef> {
+  const targets = resolveViewport3DRegionTargetByPartId(manifestRegions);
+  const regionsById = new Map<string, RegionOverlayInput>();
+  for (const region of regions) {
+    const regionId = asNonEmptyString(region.region_id);
+    if (regionId) regionsById.set(regionId, region);
+  }
+
+  for (const part of ownerParts) {
+    if (!part.id || !part.object_id) continue;
+    const regionId = decodeURIComponent(part.id.substring("membership:".length));
+    const label = regionsById.get(regionId)?.name ?? regionId;
+    targets.set(part.id, {
+      id: visualizationTargetIdForSceneObject(part.object_id, regionId),
+      kind: "region",
+      label,
+    });
+  }
+  return targets;
+}
+
 export function resolveViewport3DPartVisualizationSettings({
   objectVisualizationSnapshot,
   part,
@@ -2454,20 +2483,15 @@ export function useViewport3DSceneModel({
         : { ownerParts: [], regions: [] },
     [allRegionOverlays, regionMemberships.data, topologyCurrent],
   );
-  const regionTargetByPartId = useMemo(() => {
-    const targets = resolveViewport3DRegionTargetByPartId(sharedDomainManifest.data?.regions);
-    for (const part of membershipRegionOverlays.ownerParts) {
-      if (!part.id || !part.object_id) continue;
-      const regionId = decodeURIComponent(part.id.substring("membership:".length));
-      const label = allRegionOverlays.find((r) => r.region_id === regionId)?.name ?? regionId;
-      targets.set(part.id, {
-        id: visualizationTargetIdForSceneObject(part.object_id, regionId),
-        kind: "region",
-        label,
-      });
-    }
-    return targets;
-  }, [sharedDomainManifest.data?.regions, membershipRegionOverlays.ownerParts, allRegionOverlays]);
+  const regionTargetByPartId = useMemo(
+    () =>
+      resolveViewport3DRegionTargetsForMembershipOwnerParts({
+        manifestRegions: sharedDomainManifest.data?.regions,
+        ownerParts: membershipRegionOverlays.ownerParts,
+        regions: allRegionOverlays,
+      }),
+    [sharedDomainManifest.data?.regions, membershipRegionOverlays.ownerParts, allRegionOverlays],
+  );
   const meshRegionOverlays = useMemo(
     () => {
       if (!topologyCurrent) return [];

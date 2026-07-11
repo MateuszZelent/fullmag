@@ -42,6 +42,7 @@ import {
   resolveViewport3DRegionSelectionBounds,
   resolveViewport3DRegionSelectionScope,
   resolveViewport3DRegionTargetByPartId,
+  resolveViewport3DRegionTargetsForMembershipOwnerParts,
   resolveViewport3DResourceFrameState,
   resolveViewport3DSceneCameraView,
   resolveViewport3DAirboxFieldVectorDemandPlan,
@@ -2117,6 +2118,69 @@ describe("useViewport3DSceneModel", () => {
         object_id: "film",
       },
     ]);
+  });
+
+  it("indexes membership regions once while preserving carrier and target ordering", () => {
+    let regionIdReads = 0;
+    const regionCount = 240;
+    const ownerCount = 240;
+    const regions = Array.from({ length: regionCount }, (_, index) => {
+      const regionId = `film:r${index}`;
+      return {
+        get region_id() {
+          regionIdReads += 1;
+          return regionId;
+        },
+        name: `Region ${index}`,
+        owner_object_id: "film",
+      };
+    });
+    const ownerParts = Array.from({ length: ownerCount }, (_, index) => ({
+      id: `membership:${encodeURIComponent(`film:r${index}`)}`,
+      object_id: "film",
+    }));
+
+    const targets = resolveViewport3DRegionTargetsForMembershipOwnerParts({
+      manifestRegions: [
+        {
+          mesh_part_ids: ["mesh-backed-first"],
+          name: "Mesh-backed first",
+          source_object_ids: ["film"],
+          source_region_candidate_id: "film:mesh-backed-first",
+        },
+      ] as never,
+      ownerParts: ownerParts as never,
+      regions: regions as never,
+    });
+
+    expect(Array.from(targets.entries()).slice(0, 3)).toEqual([
+      [
+        "mesh-backed-first",
+        {
+          id: "region:film:film%3Amesh-backed-first",
+          kind: "region",
+          label: "Mesh-backed first",
+        },
+      ],
+      [
+        "membership:film%3Ar0",
+        {
+          id: "region:film:film%3Ar0",
+          kind: "region",
+          label: "Region 0",
+        },
+      ],
+      [
+        "membership:film%3Ar1",
+        {
+          id: "region:film:film%3Ar1",
+          kind: "region",
+          label: "Region 1",
+        },
+      ],
+    ]);
+    expect(targets.size).toBe(regionCount + 1);
+    expect(regionIdReads).toBeLessThanOrEqual(regionCount + 1);
   });
 
   it("requests memberships for all non-mesh-backed authored region overlays", () => {

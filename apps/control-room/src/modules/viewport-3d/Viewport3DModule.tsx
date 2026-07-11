@@ -173,6 +173,63 @@ const VIEWPORT_3D_CANVAS_GL_CAPTURE = {
   preserveDrawingBuffer: true,
 };
 
+interface Viewport3DPointerHoldEventTarget {
+  addEventListener(
+    type: "pointerup" | "pointercancel",
+    listener: EventListener,
+    options?: boolean | AddEventListenerOptions,
+  ): void;
+  removeEventListener(
+    type: "pointerup" | "pointercancel",
+    listener: EventListener,
+    options?: boolean | EventListenerOptions,
+  ): void;
+}
+
+export interface Viewport3DPointerHoldLifecycle {
+  begin(): void;
+  dispose(): void;
+  end(): void;
+}
+
+export function createViewport3DPointerHoldLifecycle({
+  onBegin,
+  onEnd,
+  target,
+}: {
+  onBegin: () => void;
+  onEnd: () => void;
+  target: Viewport3DPointerHoldEventTarget;
+}): Viewport3DPointerHoldLifecycle {
+  let active = false;
+  let terminalListenersInstalled = false;
+  const removeTerminalListeners = () => {
+    if (!terminalListenersInstalled) return;
+    terminalListenersInstalled = false;
+    target.removeEventListener("pointerup", end, true);
+    target.removeEventListener("pointercancel", end, true);
+  };
+  const end = () => {
+    removeTerminalListeners();
+    if (!active) return;
+    active = false;
+    onEnd();
+  };
+
+  return {
+    begin() {
+      if (active) return;
+      active = true;
+      onBegin();
+      target.addEventListener("pointerup", end, true);
+      target.addEventListener("pointercancel", end, true);
+      terminalListenersInstalled = true;
+    },
+    dispose: end,
+    end,
+  };
+}
+
 installViewport3DThreeConsolePolicy();
 
 interface MeshQualityRange {
@@ -1216,36 +1273,32 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   const [orbitDebugCommitRevision, setOrbitDebugCommitRevision] = useState(0);
   const [dismissedResourceIssueKey, setDismissedResourceIssueKey] =
     useState<string | null>(null);
-  const fieldUpdatePointerHoldRef = useRef(false);
+  const fieldUpdatePointerHoldLifecycleRef =
+    useRef<Viewport3DPointerHoldLifecycle | null>(null);
   const releaseFieldUpdatePointerHold = useCallback(() => {
-    if (!fieldUpdatePointerHoldRef.current) return;
-    fieldUpdatePointerHoldRef.current = false;
-    endViewport3DFieldUpdateHold();
+    fieldUpdatePointerHoldLifecycleRef.current?.end();
   }, []);
   const holdFieldUpdatesForPointerGesture = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
       if (event.button < 0 || event.button > 2) return;
-      if (!fieldUpdatePointerHoldRef.current) {
-        fieldUpdatePointerHoldRef.current = true;
-        beginViewport3DFieldUpdateHold();
+      fieldUpdatePointerHoldLifecycleRef.current?.begin();
+    },
+    [],
+  );
+  useEffect(() => {
+    const lifecycle = createViewport3DPointerHoldLifecycle({
+      onBegin: beginViewport3DFieldUpdateHold,
+      onEnd: endViewport3DFieldUpdateHold,
+      target: window,
+    });
+    fieldUpdatePointerHoldLifecycleRef.current = lifecycle;
+    return () => {
+      lifecycle.dispose();
+      if (fieldUpdatePointerHoldLifecycleRef.current === lifecycle) {
+        fieldUpdatePointerHoldLifecycleRef.current = null;
       }
-      window.addEventListener("pointerup", releaseFieldUpdatePointerHold, {
-        capture: true,
-        once: true,
-      });
-      window.addEventListener("pointercancel", releaseFieldUpdatePointerHold, {
-        capture: true,
-        once: true,
-      });
-    },
-    [releaseFieldUpdatePointerHold],
-  );
-  useEffect(
-    () => () => {
-      releaseFieldUpdatePointerHold();
-    },
-    [releaseFieldUpdatePointerHold],
-  );
+    };
+  }, []);
   const [inspectHover, setInspectHover] =
     useState<Viewport3DInspectHover | null>(null);
   const lastRenderedMeshRevision = useRef<number | string | null>(null);
