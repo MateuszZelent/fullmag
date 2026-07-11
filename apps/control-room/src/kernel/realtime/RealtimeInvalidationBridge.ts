@@ -116,7 +116,7 @@ interface RealtimeInvalidationBridgeOptions {
 export interface FieldInvalidationTelemetry {
   broadInvalidations: number;
   exactInvalidations: number;
-  refetches: number;
+  invalidatedResourceKeys: number;
 }
 
 function boundedIncrement(value: number, amount = 1): number {
@@ -357,6 +357,7 @@ export class RealtimeInvalidationBridge {
   private flushCancel: (() => void) | null = null;
   private pendingFetches = new Map<string, ResourceRevision>();
   private pendingMatchers: Array<{
+    fieldInvalidation?: "broad" | "exact";
     predicate: (resourceKey: string) => boolean;
     revision: ResourceRevision;
   }> = [];
@@ -365,7 +366,7 @@ export class RealtimeInvalidationBridge {
   private fieldInvalidationTelemetry: FieldInvalidationTelemetry = {
     broadInvalidations: 0,
     exactInvalidations: 0,
-    refetches: 0,
+    invalidatedResourceKeys: 0,
   };
 
   constructor(
@@ -430,7 +431,7 @@ export class RealtimeInvalidationBridge {
             ? parseCanonicalFieldVectorResourceKey(change.recommended_fetch)
             : null;
           if (exactFieldResource) {
-            this.recordFieldInvalidation("exact", 1);
+            this.recordFieldInvalidation("exact");
             this.queueExactFieldSampleInvalidation(
               exactFieldResource,
               fieldSampleRevision,
@@ -439,10 +440,10 @@ export class RealtimeInvalidationBridge {
               this.queueMagnetizationFieldDependents(fieldSampleRevision);
             }
           } else if (change.broad || !change.quantity_ids?.length) {
-            this.recordFieldInvalidation("broad", 1);
+            this.recordFieldInvalidation("broad");
             this.queuePrefixInvalidation(DATA_FIELDS_PATH, fieldSampleRevision);
           } else {
-            this.recordFieldInvalidation("broad", change.quantity_ids.length);
+            this.recordFieldInvalidation("broad");
             for (const quantityId of change.quantity_ids) {
               this.queueFieldSampleQuantityInvalidation(
                 quantityId,
@@ -551,10 +552,7 @@ export class RealtimeInvalidationBridge {
     );
   }
 
-  private recordFieldInvalidation(
-    kind: "broad" | "exact",
-    refetches: number,
-  ): void {
+  private recordFieldInvalidation(kind: "broad" | "exact"): void {
     this.fieldInvalidationTelemetry = {
       broadInvalidations:
         kind === "broad"
@@ -564,7 +562,7 @@ export class RealtimeInvalidationBridge {
         kind === "exact"
           ? boundedIncrement(this.fieldInvalidationTelemetry.exactInvalidations)
           : this.fieldInvalidationTelemetry.exactInvalidations,
-      refetches: boundedIncrement(this.fieldInvalidationTelemetry.refetches, refetches),
+      invalidatedResourceKeys: this.fieldInvalidationTelemetry.invalidatedResourceKeys,
     };
   }
 
@@ -587,6 +585,7 @@ export class RealtimeInvalidationBridge {
     this.queueMatchingInvalidation(
       (resourceKey) => resourceKey.includes(quantityPrefix),
       revision,
+      "broad",
     );
     if (canonicalQuantityId === "m") {
       this.queueMagnetizationFieldDependents(revision);
@@ -608,14 +607,15 @@ export class RealtimeInvalidationBridge {
       return exactFieldQueriesFromResourceKey(subscribedKey).some((candidate) =>
         canonicalFieldVectorQueriesEqual(candidate, fieldQuery),
       );
-    }, revision);
+    }, revision, "exact");
   }
 
   private queueMatchingInvalidation(
     predicate: (resourceKey: string) => boolean,
     revision: ResourceRevision,
+    fieldInvalidation?: "broad" | "exact",
   ): void {
-    this.pendingMatchers.push({ predicate, revision });
+    this.pendingMatchers.push({ fieldInvalidation, predicate, revision });
   }
 
   private scheduleFlush(): void {
@@ -656,7 +656,19 @@ export class RealtimeInvalidationBridge {
       this.resources.invalidatePrefix(resourceKey, revision);
     }
     for (const matcher of pendingMatchers) {
-      this.resources.invalidateMatching(matcher.predicate, matcher.revision);
+      const invalidated = this.resources.invalidateMatching(
+        matcher.predicate,
+        matcher.revision,
+      );
+      if (matcher.fieldInvalidation) {
+        this.fieldInvalidationTelemetry = {
+          ...this.fieldInvalidationTelemetry,
+          invalidatedResourceKeys: boundedIncrement(
+            this.fieldInvalidationTelemetry.invalidatedResourceKeys,
+            invalidated,
+          ),
+        };
+      }
     }
 
     if (statusRevision !== null) {

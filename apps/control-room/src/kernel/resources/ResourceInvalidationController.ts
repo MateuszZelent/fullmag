@@ -58,7 +58,7 @@ export class ResourceInvalidationController {
   invalidatePrefix(
     resourcePrefix: ResourceKey,
     revision: ResourceRevision,
-  ): void {
+  ): number {
     const current = this.prefixRevisions.get(resourcePrefix);
     if (current !== revision && !isOlderNumericRevision(revision, current)) {
       const revisionOrder = ++this.sequence;
@@ -66,25 +66,33 @@ export class ResourceInvalidationController {
       this.prefixRevisionOrders.set(resourcePrefix, revisionOrder);
     }
 
+    let invalidated = 0;
     for (const resourceKey of this.listeners.keys()) {
       if (
         resourceKey !== resourcePrefix &&
         resourceKey.startsWith(resourcePrefix)
       ) {
+        const before = this.getRevision(resourceKey);
         this.invalidate(resourceKey, revision);
+        if (this.getRevision(resourceKey) !== before) invalidated += 1;
       }
     }
+    return invalidated;
   }
 
   invalidateMatching(
     predicate: (resourceKey: ResourceKey) => boolean,
     revision: ResourceRevision,
-  ): void {
+  ): number {
+    let invalidated = 0;
     for (const resourceKey of this.listeners.keys()) {
       if (predicate(resourceKey)) {
+        const before = this.getRevision(resourceKey);
         this.invalidate(resourceKey, revision);
+        if (this.getRevision(resourceKey) !== before) invalidated += 1;
       }
     }
+    return invalidated;
   }
 
   subscribe(resourceKey: ResourceKey, listener: ResourceListener): () => void {

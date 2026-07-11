@@ -797,6 +797,11 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision(mCollectionKey)).toBe(12);
     expect(resources.getRevision(hEffFieldKey)).toBeNull();
     expect(resources.getRevision(hEffCollectionKey)).toBeNull();
+    expect(bridge.getFieldInvalidationTelemetry()).toEqual({
+      broadInvalidations: 1,
+      exactInvalidations: 0,
+      invalidatedResourceKeys: 2,
+    });
   });
 
   it("uses an exact recommended field fetch before the quantity fallback", () => {
@@ -862,7 +867,7 @@ describe("RealtimeInvalidationBridge", () => {
     expect(bridge.getFieldInvalidationTelemetry()).toEqual({
       broadInvalidations: 0,
       exactInvalidations: 1,
-      refetches: 1,
+      invalidatedResourceKeys: 3,
     });
   });
 
