@@ -4,6 +4,7 @@ import { Info, RotateCcw } from "lucide-react";
 import React, {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -127,6 +128,7 @@ import {
   type ScalarColorbarDisplayUnit,
 } from "./ObjectVisualizationPanelModel";
 import { formatCount } from "./MeshResourceView";
+import { nextVisualizationRadioValue } from "./ObjectVisualizationPanelAccessibility";
 
 const RENDER_MODES: Array<{
   label: string;
@@ -460,18 +462,76 @@ function VisualizationDisplayPassesSection({
         <ToggleButton
           active={displaySettings.visible}
           disabled={pending}
+          disabledDescription={pending ? "Saving display changes." : undefined}
           label="Visible"
           onClick={handleVisibleClick}
         />
-        <ToggleButton active={displaySettings.shaderVisible} disabled={passControlsDisabled} label="Surface" onClick={() => void patch(surfaceDisplayPassPatch(settings))} />
-        <ToggleButton active={displaySettings.wireframeVisible} disabled={passControlsDisabled} label="Wireframe" onClick={() => void patch(displayPassTogglePatch(settings, "wireframeVisible"))} />
-        <ToggleButton active={displaySettings.boundsVisible} disabled={passControlsDisabled} label="Frame" onClick={() => void patch(displayPassTogglePatch(settings, "boundsVisible"))} />
-        <ToggleButton active={displaySettings.pointsVisible} disabled={passControlsDisabled} label="Points" onClick={() => void patch(displayPassTogglePatch(settings, "pointsVisible"))} />
-        <ToggleButton active={displaySettings.vectorsVisible} disabled={passControlsDisabled} label="Vectors" onClick={() => void patch(displayPassTogglePatch(settings, "vectorsVisible"))} />
+        <ToggleButton
+          active={displaySettings.shaderVisible}
+          disabled={passControlsDisabled}
+          disabledDescription={displayControlDisabledDescription(
+            passControlsDisabled,
+            settings.visible,
+            pending,
+          )}
+          label="Surface"
+          onClick={() => void patch(surfaceDisplayPassPatch(settings))}
+        />
+        <ToggleButton
+          active={displaySettings.wireframeVisible}
+          disabled={passControlsDisabled}
+          disabledDescription={displayControlDisabledDescription(
+            passControlsDisabled,
+            settings.visible,
+            pending,
+          )}
+          label="Wireframe"
+          onClick={() =>
+            void patch(displayPassTogglePatch(settings, "wireframeVisible"))
+          }
+        />
+        <ToggleButton
+          active={displaySettings.boundsVisible}
+          disabled={passControlsDisabled}
+          disabledDescription={displayControlDisabledDescription(
+            passControlsDisabled,
+            settings.visible,
+            pending,
+          )}
+          label="Frame"
+          onClick={() => void patch(displayPassTogglePatch(settings, "boundsVisible"))}
+        />
+        <ToggleButton
+          active={displaySettings.pointsVisible}
+          disabled={passControlsDisabled}
+          disabledDescription={displayControlDisabledDescription(
+            passControlsDisabled,
+            settings.visible,
+            pending,
+          )}
+          label="Points"
+          onClick={() => void patch(displayPassTogglePatch(settings, "pointsVisible"))}
+        />
+        <ToggleButton
+          active={displaySettings.vectorsVisible}
+          disabled={passControlsDisabled}
+          disabledDescription={displayControlDisabledDescription(
+            passControlsDisabled,
+            settings.visible,
+            pending,
+          )}
+          label="Vectors"
+          onClick={() => void patch(displayPassTogglePatch(settings, "vectorsVisible"))}
+        />
         {primitiveDisplayToggleVisible ? (
           <ToggleButton
             active={Boolean(displaySettings.primitiveVisible)}
             disabled={passControlsDisabled}
+            disabledDescription={displayControlDisabledDescription(
+              passControlsDisabled,
+              settings.visible,
+              pending,
+            )}
             label="Primitive"
             onClick={() =>
               void patch(displayPassTogglePatch(settings, "primitiveVisible"))
@@ -538,28 +598,24 @@ function VisualizationDisplayPassesSection({
 function VisualizationRenderModeSection({
   displaySettings,
   passControlsDisabled,
+  pending,
   patch,
 }: {
   displaySettings: VisualizationTargetSettings;
   passControlsDisabled: boolean;
+  pending: boolean;
   patch: PatchVisualizationTarget;
 }) {
   return (
     <InspectorSection title="Render Mode">
-      <fieldset className="fm-visualization-segments" aria-label="Render mode">
-        {RENDER_MODES.map((mode) => (
-          <Button
-            key={mode.value}
-            size="sm"
-            type="button"
-            disabled={passControlsDisabled}
-            variant={displaySettings.visible && displaySettings.renderMode === mode.value ? "primary" : "secondary"}
-            onClick={() => void patch(renderModeDisplayPatch(mode.value))}
-          >
-            {mode.label}
-          </Button>
-        ))}
-      </fieldset>
+      <VisualizationRadioGroup
+        disabled={passControlsDisabled}
+        disabledDescription={displayControlDisabledDescription(passControlsDisabled, displaySettings.visible, pending)}
+        items={RENDER_MODES}
+        label="Render mode"
+        value={displaySettings.renderMode}
+        onValueChange={(value) => void patch(renderModeDisplayPatch(value))}
+      />
     </InspectorSection>
   );
 }
@@ -994,24 +1050,23 @@ function VisualizationVectorsSection({
     requestedBudget: vectorBudgetValue,
     vectorBudgetRange,
   });
+  const vectorsDisabled = pending || sectionDisabled("vectors");
 
   return (
     <InspectorSection title="Vectors">
       <ViewportPreferenceScopeNote />
-      <fieldset className="fm-visualization-segments" aria-label="Vector coloring">
-        {VISUALIZATION_COLOR_MODE_ITEMS.map((mode) => (
-          <Button
-            key={mode.value}
-            size="sm"
-            type="button"
-            disabled={pending || sectionDisabled("vectors")}
-            variant={settings.vectorColorMode === mode.value ? "primary" : "secondary"}
-            onClick={() => void patch({ vectorColorMode: mode.value })}
-          >
-            {mode.label}
-          </Button>
-        ))}
-      </fieldset>
+      <VisualizationRadioGroup
+        disabled={vectorsDisabled}
+        disabledDescription={sectionControlDisabledDescription({
+          disabled: vectorsDisabled,
+          pending,
+          requiredPass: "Vectors",
+        })}
+        items={VISUALIZATION_COLOR_MODE_ITEMS}
+        label="Vector coloring"
+        value={settings.vectorColorMode}
+        onValueChange={(value) => void patch({ vectorColorMode: value })}
+      />
       <ColorField disabled={pending || sectionDisabled("vectors")} label="Vector mono color" value={settings.vectorMonoColor} onChange={(value) => patchColor("vectorMonoColor", value)} />
       <NumberField disabled={pending || sectionDisabled("vectors")} label="Vector alpha" max={100} min={0} step={1} unit="%" value={settings.vectorAlphaPercent} onChange={(value) => patchNumber("vectorAlphaPercent", value)} />
       <NumberField disabled={pending || sectionDisabled("vectors")} label="Vector thickness" max={8} min={0.1} step={0.1} value={settings.vectorThickness} onChange={(value) => patchNumber("vectorThickness", value)} />
@@ -1033,7 +1088,12 @@ function VisualizationVectorsSection({
         {targetKind === "airbox" ? (
           <ToggleButton
             active={settings.airboxSyntheticVectorsEnabled}
-            disabled={pending || sectionDisabled("vectors")}
+            disabled={vectorsDisabled}
+            disabledDescription={sectionControlDisabledDescription({
+              disabled: vectorsDisabled,
+              pending,
+              requiredPass: "Vectors",
+            })}
             label="Dev fallback +Z"
             onClick={() =>
               void patch({
@@ -1046,7 +1106,12 @@ function VisualizationVectorsSection({
         ) : null}
         <ToggleButton
           active={settings.vectorCenteringEnabled}
-          disabled={pending || sectionDisabled("vectors")}
+          disabled={vectorsDisabled}
+          disabledDescription={sectionControlDisabledDescription({
+            disabled: vectorsDisabled,
+            pending,
+            requiredPass: "Vectors",
+          })}
           label="Centered arrows"
           onClick={() =>
             void patch({
@@ -1056,7 +1121,12 @@ function VisualizationVectorsSection({
         />
         <ToggleButton
           active={settings.vectorSurfaceOffsetEnabled}
-          disabled={pending || sectionDisabled("vectors")}
+          disabled={vectorsDisabled}
+          disabledDescription={sectionControlDisabledDescription({
+            disabled: vectorsDisabled,
+            pending,
+            requiredPass: "Vectors",
+          })}
           label="Lift above surface"
           onClick={() =>
             void patch({
@@ -1069,31 +1139,28 @@ function VisualizationVectorsSection({
       {settings.vectorSurfaceOffsetEnabled ? (
         <NumberField disabled={pending || sectionDisabled("vectors")} label="Extra surface gap" max={1} min={0} step={0.01} value={settings.vectorSurfaceOffsetScale} onChange={(value) => patchNumber("vectorSurfaceOffsetScale", value)} />
       ) : null}
-      <fieldset className="fm-visualization-segments" aria-label="Arrow extent">
-        {GEOMETRY_SCOPES.map((scope) => (
-          <Button
-            key={scope.value}
-            size="sm"
-            type="button"
-            disabled={pending || sectionDisabled("vectors")}
-            variant={settings.geometryScope === scope.value ? "primary" : "secondary"}
-            onClick={() =>
-              void patch(
-                geometryScopeVectorBudgetPatch({
-                  currentRange:
-                    vectorBudgetRanges[settings.geometryScope] ??
-                    vectorBudgetRange,
-                  geometryScope: scope.value,
-                  nextRange: vectorBudgetRanges[scope.value],
-                  settings,
-                }),
-              )
-            }
-          >
-            {scope.label}
-          </Button>
-        ))}
-      </fieldset>
+      <VisualizationRadioGroup
+        disabled={vectorsDisabled}
+        disabledDescription={sectionControlDisabledDescription({
+          disabled: vectorsDisabled,
+          pending,
+          requiredPass: "Vectors",
+        })}
+        items={GEOMETRY_SCOPES}
+        label="Arrow extent"
+        value={settings.geometryScope}
+        onValueChange={(value) =>
+          void patch(
+            geometryScopeVectorBudgetPatch({
+              currentRange:
+                vectorBudgetRanges[settings.geometryScope] ?? vectorBudgetRange,
+              geometryScope: value,
+              nextRange: vectorBudgetRanges[value],
+              settings,
+            }),
+          )
+        }
+      />
       {meshParts && meshParts.length > 1 && onTogglePartVectors && (
         <fieldset className="fm-visualization-part-toggles" aria-label="Object target vector visibility">
           <span className="fm-visualization-part-toggles__label">Object surfaces</span>
@@ -1127,12 +1194,14 @@ function ViewportPreferenceScopeNote() {
 
 function VisualizationGeometryScopeSection({
   passControlsDisabled,
+  pending,
   patch,
   settings,
   vectorBudgetRange,
   vectorBudgetRanges,
 }: {
   passControlsDisabled: boolean;
+  pending: boolean;
   patch: PatchVisualizationTarget;
   settings: VisualizationTargetSettings;
   vectorBudgetRange: VisualizationVectorBudgetRange;
@@ -1143,32 +1212,25 @@ function VisualizationGeometryScopeSection({
 }) {
   return (
     <InspectorSection title="Geometry Scope">
-      <fieldset className="fm-visualization-segments" aria-label="Geometry scope">
-        {GEOMETRY_SCOPES.map((scope) => (
-          <Button
-            key={scope.value}
-            size="sm"
-            type="button"
-            disabled={passControlsDisabled}
-            variant={settings.visible && settings.geometryScope === scope.value ? "primary" : "secondary"}
-            onClick={() =>
-              void patch({
-                ...geometryScopeDisplayPatch(settings, scope.value),
-                ...geometryScopeVectorBudgetPatch({
-                  currentRange:
-                    vectorBudgetRanges[settings.geometryScope] ??
-                    vectorBudgetRange,
-                  geometryScope: scope.value,
-                  nextRange: vectorBudgetRanges[scope.value],
-                  settings,
-                }),
-              })
-            }
-          >
-            {scope.label}
-          </Button>
-        ))}
-      </fieldset>
+      <VisualizationRadioGroup
+        disabled={passControlsDisabled}
+        disabledDescription={displayControlDisabledDescription(passControlsDisabled, settings.visible, pending)}
+        items={GEOMETRY_SCOPES}
+        label="Geometry scope"
+        value={settings.geometryScope}
+        onValueChange={(value) =>
+          void patch({
+            ...geometryScopeDisplayPatch(settings, value),
+            ...geometryScopeVectorBudgetPatch({
+              currentRange:
+                vectorBudgetRanges[settings.geometryScope] ?? vectorBudgetRange,
+              geometryScope: value,
+              nextRange: vectorBudgetRanges[value],
+              settings,
+            }),
+          })
+        }
+      />
     </InspectorSection>
   );
 }
@@ -1843,6 +1905,7 @@ function ObjectVisualizationPanelView({
       <VisualizationRenderModeSection
         displaySettings={displaySettings}
         passControlsDisabled={passControlsDisabled}
+        pending={pending}
         patch={patch}
       />
       <VisualizationQuantitySection
@@ -1891,6 +1954,7 @@ function ObjectVisualizationPanelView({
       />
       <VisualizationGeometryScopeSection
         passControlsDisabled={passControlsDisabled}
+        pending={pending}
         patch={patch}
         settings={settings}
         vectorBudgetRange={vectorBudgetRange}
@@ -1910,7 +1974,7 @@ function ObjectVisualizationPanelView({
   );
 }
 
-function ColorField({
+export function ColorField({
   disabled,
   label,
   onChange,
@@ -1938,6 +2002,7 @@ function ColorField({
         <input
           className="fm-visualization-color-field__value"
           disabled={disabled}
+          aria-label={`${label} value`}
           type="text"
           value={value}
           onChange={(event) => onChange(event.target.value)}
@@ -2048,28 +2113,136 @@ function NumberField({
   );
 }
 
-function ToggleButton({
+function displayControlDisabledDescription(
+  disabled: boolean,
+  visible: boolean,
+  pending = false,
+): string | undefined {
+  if (!disabled) return undefined;
+  if (pending) return "Saving display changes.";
+  if (!visible) return "Enable Visible to change display passes.";
+  return "This display control is currently unavailable.";
+}
+
+function sectionControlDisabledDescription({
+  disabled,
+  pending,
+  requiredPass,
+}: {
+  disabled: boolean;
+  pending: boolean;
+  requiredPass: string;
+}): string | undefined {
+  if (!disabled) return undefined;
+  if (pending) return "Saving display changes.";
+  return `Enable the ${requiredPass} display pass to change its effective settings.`;
+}
+
+export function VisualizationToggleButton({
   active,
   disabled = false,
+  disabledDescription,
   label,
   onClick,
 }: {
   active: boolean;
   disabled?: boolean;
+  disabledDescription?: string;
   label: string;
   onClick: () => void;
 }) {
+  const descriptionId = useId();
   return (
-    <Button
-      className="fm-visualization-toggle"
-      data-active={active}
-      disabled={disabled}
-      size="sm"
-      type="button"
-      variant={active ? "primary" : "secondary"}
-      onClick={onClick}
+    <>
+      <Button
+        aria-describedby={disabledDescription ? descriptionId : undefined}
+        aria-pressed={active}
+        className="fm-visualization-toggle"
+        data-active={active}
+        disabled={disabled}
+        size="sm"
+        type="button"
+        variant={active ? "primary" : "secondary"}
+        onClick={onClick}
+      >
+        {label}
+      </Button>
+      {disabledDescription ? (
+        <span className="fm-visually-hidden" id={descriptionId}>
+          {disabledDescription}
+        </span>
+      ) : null}
+    </>
+  );
+}
+
+const ToggleButton = VisualizationToggleButton;
+
+type VisualizationRadioItem<T extends string> = {
+  label: string;
+  value: T;
+};
+
+export function VisualizationRadioGroup<T extends string>({
+  disabled = false,
+  disabledDescription,
+  items,
+  label,
+  onValueChange,
+  value,
+}: {
+  disabled?: boolean;
+  disabledDescription?: string;
+  items: readonly VisualizationRadioItem<T>[];
+  label: string;
+  onValueChange: (value: T) => void;
+  value: T;
+}) {
+  const descriptionId = useId();
+  const values = items.map((item) => item.value);
+
+  return (
+    <div
+      aria-describedby={disabledDescription ? descriptionId : undefined}
+      aria-label={label}
+      className="fm-visualization-segments"
+      role="radiogroup"
     >
-      {label}
-    </Button>
+      {items.map((item) => {
+        const checked = value === item.value;
+        return (
+          <Button
+            key={item.value}
+            aria-checked={checked}
+            aria-describedby={disabledDescription ? descriptionId : undefined}
+            disabled={disabled}
+            role="radio"
+            size="sm"
+            tabIndex={checked ? 0 : -1}
+            type="button"
+            variant={checked ? "primary" : "secondary"}
+            onClick={() => onValueChange(item.value)}
+            onKeyDown={(event) => {
+              const nextValue = nextVisualizationRadioValue(values, value, event.key);
+              if (nextValue === value) return;
+              event.preventDefault();
+              onValueChange(nextValue);
+              const nextRadio = event.currentTarget.parentElement?.querySelector<HTMLElement>(
+                `[role="radio"][data-visualization-radio-value="${nextValue}"]`,
+              );
+              nextRadio?.focus();
+            }}
+            data-visualization-radio-value={item.value}
+          >
+            {item.label}
+          </Button>
+        );
+      })}
+      {disabledDescription ? (
+        <span className="fm-visually-hidden" id={descriptionId}>
+          {disabledDescription}
+        </span>
+      ) : null}
+    </div>
   );
 }
