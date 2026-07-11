@@ -2,8 +2,11 @@
 
 import { useEffect, useMemo, useRef, type ReactNode } from "react";
 
-import { SESSION_EVENTS_WS_PATH } from "./api/apiPaths";
-import type { VisualizationStatePatch } from "./api/apiTypes";
+import { SESSION_EVENTS_WS_PATH, VISUALIZATION_STATE_PATH } from "./api/apiPaths";
+import type {
+  VisualizationStatePatch,
+  VisualizationStateResource,
+} from "./api/apiTypes";
 import {
   createBinaryDecodeScheduler,
   type BinaryDecodeDiagnosticEvent,
@@ -48,6 +51,7 @@ import { RealtimeClient } from "./realtime/RealtimeClient";
 import { RealtimeInvalidationBridge } from "./realtime/RealtimeInvalidationBridge";
 import { useSimulationStartupOverlayVisibility } from "./layout/SimulationStartupOverlay";
 import { ResourceInvalidationController } from "./resources/ResourceInvalidationController";
+import { sharedResourceRuntimeStore } from "./resources/ResourceRuntimeStore";
 import {
   createViewport3DInactiveResourcePauseController,
 } from "./resources/inactiveViewportResourcePolicy";
@@ -353,6 +357,7 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
         flushVisualization: () => Promise<void>;
         setActiveViewportModule: (moduleId: "viewport-2d" | "viewport-3d") => void;
         patchVisualization: (patch: VisualizationStatePatch) => Promise<void>;
+        publishVisualizationState: (state: VisualizationStateResource) => void;
       };
     };
     const browserConfig = auditWindow.__FULLMAG_CONFIG__;
@@ -437,6 +442,13 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
       patchVisualization: async (patch: VisualizationStatePatch) => {
         kernel.visualizationSync.queuePatch(patch);
         await kernel.visualizationSync.flushNow();
+      },
+      publishVisualizationState: (state: VisualizationStateResource) => {
+        sharedResourceRuntimeStore.updateData(
+          VISUALIZATION_STATE_PATH,
+          state,
+          state.revision,
+        );
       },
     };
     auditWindow.__FULLMAG_CONTROL_ROOM_AUDIT__ = auditApi;

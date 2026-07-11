@@ -15,7 +15,10 @@ const apiBase =
   process.env.NEXT_PUBLIC_API_URL ??
   "http://localhost:8081";
 
-const FIELD_GRID = [96, 64, 4];
+// The gate measures ownership/lifecycle across many real WebGL uploads, not
+// throughput at production field sizes. Keep the fixture dense enough to
+// exercise every pass while bounded enough for 120 rendered transitions in CI.
+const FIELD_GRID = [24, 16, 2];
 const QUANTITY_SEQUENCE = Array.from(
   { length: 120 },
   (_, index) => ["m", "H_eff", "H_demag", "H_ex"][index % 4],
@@ -138,32 +141,41 @@ try {
   auditLog("reading baseline diagnostics");
   const baseline = {
     diagnostics: await readDiagnostics(viewport),
+    gpu: await readBrowserAuditCounters(page),
     heapBytes: await readJsHeapBytes(cdp),
   };
 
   auditActive = true;
   for (const [index, quantity] of QUANTITY_SEQUENCE.entries()) {
-    auditLog("switching cached quantity", quantity);
-    await page.evaluate((nextQuantity) => {
+    if (index % 12 === 0) {
+      auditLog("switching cached quantity batch", `${index + 1}-${index + 12}`);
+    }
+    fixture.visualizationState = applyPatch(fixture.visualizationState, {
+      active_quantity_id: quantity,
+      field_component: index % 2 === 0 ? "x" : "magnitude",
+      layers: {
+        points: { visible: index % 3 === 0 },
+        vectors: { visible: index % 4 !== 0 },
+        wireframe: { visible: index % 5 !== 0 },
+      },
+      quantity: {
+        active_quantity_id: quantity,
+        field_component: index % 2 === 0 ? "x" : "magnitude",
+      },
+      vector_style: {
+        color_mode: index % 2 === 0 ? "magnitude" : "orientation",
+      },
+    });
+    fixture.visualizationState.revision += 1;
+    fixture.status.resources.visualization_state_revision =
+      fixture.visualizationState.revision;
+    await page.evaluate(async (state) => {
       const hook = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
       if (!hook) throw new Error("Fullmag browser audit hook is not installed.");
-      hook.queueGlobalQuantity(nextQuantity);
-    }, quantity);
-    if ((index + 1) % 12 === 0) {
-      await flushQueuedVisualization(page, fixture, quantity);
-      await patchVisualization(page, fixture, {
-        field_component: index % 24 === 0 ? "x" : "magnitude",
-        layers: {
-          points: { visible: index % 24 === 0 },
-          vectors: { visible: index % 36 !== 0 },
-          wireframe: { visible: index % 48 !== 0 },
-        },
-        vector_style: {
-          color_mode: index % 24 === 0 ? "magnitude" : "orientation",
-        },
-      });
-    }
-    await page.waitForTimeout(16);
+      hook.publishVisualizationState(state);
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
+    }, fixture.visualizationState);
   }
   auditActive = false;
   await page.waitForTimeout(500);
@@ -215,15 +227,36 @@ try {
   const idle = await verifyViewportIdle(page, 5_000);
   await page.screenshot({ path: path.join(auditArtifactsDirectory, "settled-3d.png") });
   const gpuAfterStress = await readBrowserAuditCounters(page);
+  const baselineLiveBuffers =
+    baseline.gpu.buffersCreated - baseline.gpu.buffersDeleted;
+  const stressLiveBuffers =
+    gpuAfterStress.buffersCreated - gpuAfterStress.buffersDeleted;
+  const createdDuringStress =
+    gpuAfterStress.buffersCreated - baseline.gpu.buffersCreated;
+  if (createdDuringStress < QUANTITY_SEQUENCE.length) {
+    throw new Error(
+      `GPU lifecycle gate did not observe every rendered transition: created ${createdDuringStress} buffers for ${QUANTITY_SEQUENCE.length} switches.`,
+    );
+  }
+  if (stressLiveBuffers > baselineLiveBuffers + 16) {
+    throw new Error(
+      `Live WebGL buffers did not return to a post-warmup plateau: baseline=${baselineLiveBuffers}, after=${stressLiveBuffers}.`,
+    );
+  }
 
-  await page.evaluate(() => {
-    window.__FULLMAG_CONTROL_ROOM_AUDIT__?.setActiveViewportModule("viewport-2d");
-  });
+  await page.locator('[data-action-id="ws-2d"]').click();
   await page.locator(".fm-viewport-3d canvas").waitFor({ state: "detached", timeout: 10_000 });
   await page.waitForTimeout(300);
   const afterUnmount = await readBrowserAuditCounters(page);
   if (afterUnmount.buffersDeleted < gpuAfterStress.buffersDeleted) {
     throw new Error("WebGL buffer delete counter regressed after viewport unmount.");
+  }
+  const unmountedLiveBuffers =
+    afterUnmount.buffersCreated - afterUnmount.buffersDeleted;
+  if (unmountedLiveBuffers > 4) {
+    throw new Error(
+      `Viewport unmount retained ${unmountedLiveBuffers} WebGL buffers; allowed 4 instrumentation/runtime buffers.`,
+    );
   }
   await page.screenshot({ path: path.join(auditArtifactsDirectory, "after-unmount.png") });
   await writeAuditArtifact({
@@ -261,35 +294,6 @@ try {
   auditActive = false;
   await browser.close();
   await managedRuntime?.stop();
-}
-
-async function patchVisualization(page, fixture, patch) {
-  const previousPatchCount = fixture.patchCount;
-  await page.evaluate(async (nextPatch) => {
-    const hook = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
-    if (!hook) throw new Error("Fullmag browser audit hook is not installed.");
-    await hook.patchVisualization(nextPatch);
-  }, patch);
-  await waitForCondition(
-    () => fixture.patchCount > previousPatchCount,
-    5_000,
-    "Timed out waiting for audit visualization patch.",
-  );
-  await page.waitForTimeout(80);
-}
-
-async function flushQueuedVisualization(page, fixture, expectedQuantity) {
-  const previousPatchCount = fixture.patchCount;
-  await page.evaluate(async () => {
-    const hook = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
-    if (!hook) throw new Error("Fullmag browser audit hook is not installed.");
-    await hook.flushVisualization();
-  });
-  await waitForCondition(
-    () => fixture.patchCount > previousPatchCount && currentFixtureQuantity(fixture) === expectedQuantity,
-    5_000,
-    "Timed out waiting for queued audit visualization changes to persist.",
-  );
 }
 
 async function readBrowserAuditCounters(page) {
