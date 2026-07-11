@@ -4,6 +4,7 @@ import type {
 } from "@/kernel/api/apiTypes";
 import { visualizationObjectIdForMeshPartLike } from "@/kernel/selection/selectionTypes";
 import {
+  manifestCarrierOwnershipAliases,
   resolveManifestRenderableCarrierKind,
   type ManifestRenderableCarrierKind,
 } from "@/kernel/visualization/visualizationDisplayResolution";
@@ -203,8 +204,7 @@ export function manifestRenderableCarriers(
   }));
   const meshOwnership = new Set<string>();
   for (const part of meshParts) {
-    addCarrierOwnershipAlias(meshOwnership, part.object_id);
-    addCarrierOwnershipAlias(meshOwnership, part.geometry_id);
+    for (const alias of manifestCarrierOwnershipAliases(part)) meshOwnership.add(alias);
   }
   const segments = (manifest?.object_segments ?? []).flatMap((segment, index) =>
     carrierOwnershipAliases(segment).some((alias) => meshOwnership.has(alias))
@@ -253,23 +253,7 @@ function objectSegmentCarrier(
 function carrierOwnershipAliases(
   carrier: Pick<ObjectSegment, "geometry_id" | "object_id">,
 ): string[] {
-  const aliases = new Set<string>();
-  addCarrierOwnershipAlias(aliases, carrier.object_id);
-  addCarrierOwnershipAlias(aliases, carrier.geometry_id);
-  return [...aliases];
-}
-
-function addCarrierOwnershipAlias(
-  aliases: Set<string>,
-  objectId: string | null | undefined,
-): void {
-  if (!objectId) return;
-  aliases.add(objectId);
-  if (objectId.endsWith("_geom")) {
-    aliases.add(objectId.slice(0, -5));
-  } else {
-    aliases.add(`${objectId}_geom`);
-  }
+  return manifestCarrierOwnershipAliases(carrier);
 }
 
 function addObjectPartAlias(

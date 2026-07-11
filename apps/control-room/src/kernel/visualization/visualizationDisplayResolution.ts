@@ -217,9 +217,11 @@ export function resolveManifestRenderableCarrierKind({
   if (meshParts || objectSegments) {
     meshPartCount = meshParts?.length ?? 0;
     objectSegmentCount = (objectSegments ?? []).filter((segment) => {
-      const segmentObjectId = asRecord(segment)?.object_id;
-      return !meshParts?.some(
-        (part) => asRecord(part)?.object_id === segmentObjectId,
+      const segmentAliases = manifestCarrierOwnershipAliases(segment);
+      return !meshParts?.some((part) =>
+        manifestCarrierOwnershipAliases(part).some((alias) =>
+          segmentAliases.includes(alias),
+        ),
       );
     }).length;
   }
@@ -227,4 +229,15 @@ export function resolveManifestRenderableCarrierKind({
   if (meshPartCount > 0) return "mesh-parts";
   if (objectSegmentCount > 0) return "object-segments";
   return "unavailable";
+}
+
+export function manifestCarrierOwnershipAliases(value: unknown): string[] {
+  const record = asRecord(value);
+  const aliases = new Set<string>();
+  for (const candidate of [record?.object_id, record?.geometry_id]) {
+    if (typeof candidate !== "string" || !candidate) continue;
+    aliases.add(candidate);
+    aliases.add(candidate.endsWith("_geom") ? candidate.slice(0, -5) : `${candidate}_geom`);
+  }
+  return [...aliases];
 }

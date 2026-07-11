@@ -96,7 +96,7 @@ describe("resolveVisualizationTopologyFreshness", () => {
   it("does not classify a segment duplicated by a mesh part as mixed", () => {
     expect(
       resolveManifestRenderableCarrierKind({
-        meshParts: [{ object_id: "film" }],
+        meshParts: [{ geometry_id: "film_geom" }],
         objectSegments: [{ object_id: "film" }],
       }),
     ).toBe("mesh-parts");
