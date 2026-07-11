@@ -264,6 +264,7 @@ function useRegionMeshOverlayGeometryUpload({
 
     const abortController = new AbortController();
     let uploadedGeometry: BufferGeometry | null = null;
+    let previousGeometry: BufferGeometry | null = null;
     const estimatedBytes = model.positions.byteLength + indices.byteLength;
     const chunks: Viewport3DGpuUploadChunk[] = [
       {
@@ -281,7 +282,7 @@ function useRegionMeshOverlayGeometryUpload({
             releaseGeometry(uploadedGeometry);
             return;
           }
-          store.publish(null);
+          store.publish(previousGeometry);
           releaseGeometry(uploadedGeometry);
         },
       },
@@ -294,13 +295,13 @@ function useRegionMeshOverlayGeometryUpload({
       lane: "region-overlay",
       onVisible: () => {
         if (!uploadedGeometry) return;
-        const previousGeometry = store.getSnapshot().geometry;
+        previousGeometry = store.getSnapshot().geometry;
         store.publish(uploadedGeometry);
+        tracker.recordDirtyFrame(dirtyReason);
+        invalidate();
         if (previousGeometry !== uploadedGeometry) {
           releaseGeometry(previousGeometry);
         }
-        tracker.recordDirtyFrame(dirtyReason);
-        invalidate();
       },
       signal: abortController.signal,
       targetRevision: uploadKey,

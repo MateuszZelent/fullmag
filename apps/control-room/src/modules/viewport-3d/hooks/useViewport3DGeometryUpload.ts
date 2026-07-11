@@ -86,6 +86,7 @@ export function useViewport3DGeometryUpload({
 
     const abortController = new AbortController();
     let uploadedGeometry: BufferGeometry | null = null;
+    let previousGeometry: BufferGeometry | null = null;
 
     uploadManager.enqueue({
       chunks: [
@@ -97,9 +98,12 @@ export function useViewport3DGeometryUpload({
             uploadedGeometry = next ? tracker.track("geometry", next) : null;
           },
           rollback: () => {
-            if (store.getSnapshot().geometry === uploadedGeometry) {
-              store.publish(null);
+            const visibleGeometry = store.getSnapshot().geometry;
+            if (visibleGeometry !== uploadedGeometry) {
+              releaseGeometry(uploadedGeometry);
+              return;
             }
+            store.publish(previousGeometry);
             releaseGeometry(uploadedGeometry);
           },
         },
@@ -109,13 +113,13 @@ export function useViewport3DGeometryUpload({
       lane,
       onVisible: () => {
         if (!uploadedGeometry) return;
-        const previousGeometry = store.getSnapshot().geometry;
+        previousGeometry = store.getSnapshot().geometry;
         store.publish(uploadedGeometry);
+        tracker.recordDirtyFrame(dirtyReason);
+        invalidate();
         if (previousGeometry !== uploadedGeometry) {
           releaseGeometry(previousGeometry);
         }
-        tracker.recordDirtyFrame(dirtyReason);
-        invalidate();
       },
       signal: abortController.signal,
       targetRevision: targetRevision ?? null,
