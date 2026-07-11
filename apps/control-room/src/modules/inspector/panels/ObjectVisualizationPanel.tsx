@@ -128,7 +128,10 @@ import {
   type ScalarColorbarDisplayUnit,
 } from "./ObjectVisualizationPanelModel";
 import { formatCount } from "./MeshResourceView";
-import { nextVisualizationRadioValue } from "./ObjectVisualizationPanelAccessibility";
+import {
+  nextVisualizationRadioValue,
+  visualizationSectionDisabledDescription,
+} from "./ObjectVisualizationPanelAccessibility";
 
 const RENDER_MODES: Array<{
   label: string;
@@ -1057,10 +1060,12 @@ function VisualizationVectorsSection({
       <ViewportPreferenceScopeNote />
       <VisualizationRadioGroup
         disabled={vectorsDisabled}
-        disabledDescription={sectionControlDisabledDescription({
+        disabledDescription={visualizationSectionDisabledDescription({
           disabled: vectorsDisabled,
           pending,
           requiredPass: "Vectors",
+          requiredPassEnabled: settings.vectorsVisible,
+          targetVisible: settings.visible,
         })}
         items={VISUALIZATION_COLOR_MODE_ITEMS}
         label="Vector coloring"
@@ -1089,10 +1094,12 @@ function VisualizationVectorsSection({
           <ToggleButton
             active={settings.airboxSyntheticVectorsEnabled}
             disabled={vectorsDisabled}
-            disabledDescription={sectionControlDisabledDescription({
+            disabledDescription={visualizationSectionDisabledDescription({
               disabled: vectorsDisabled,
               pending,
               requiredPass: "Vectors",
+              requiredPassEnabled: settings.vectorsVisible,
+              targetVisible: settings.visible,
             })}
             label="Dev fallback +Z"
             onClick={() =>
@@ -1107,10 +1114,12 @@ function VisualizationVectorsSection({
         <ToggleButton
           active={settings.vectorCenteringEnabled}
           disabled={vectorsDisabled}
-          disabledDescription={sectionControlDisabledDescription({
+          disabledDescription={visualizationSectionDisabledDescription({
             disabled: vectorsDisabled,
             pending,
             requiredPass: "Vectors",
+            requiredPassEnabled: settings.vectorsVisible,
+            targetVisible: settings.visible,
           })}
           label="Centered arrows"
           onClick={() =>
@@ -1122,10 +1131,12 @@ function VisualizationVectorsSection({
         <ToggleButton
           active={settings.vectorSurfaceOffsetEnabled}
           disabled={vectorsDisabled}
-          disabledDescription={sectionControlDisabledDescription({
+          disabledDescription={visualizationSectionDisabledDescription({
             disabled: vectorsDisabled,
             pending,
             requiredPass: "Vectors",
+            requiredPassEnabled: settings.vectorsVisible,
+            targetVisible: settings.visible,
           })}
           label="Lift above surface"
           onClick={() =>
@@ -1141,10 +1152,12 @@ function VisualizationVectorsSection({
       ) : null}
       <VisualizationRadioGroup
         disabled={vectorsDisabled}
-        disabledDescription={sectionControlDisabledDescription({
+        disabledDescription={visualizationSectionDisabledDescription({
           disabled: vectorsDisabled,
           pending,
           requiredPass: "Vectors",
+          requiredPassEnabled: settings.vectorsVisible,
+          targetVisible: settings.visible,
         })}
         items={GEOMETRY_SCOPES}
         label="Arrow extent"
@@ -2122,20 +2135,6 @@ function displayControlDisabledDescription(
   if (pending) return "Saving display changes.";
   if (!visible) return "Enable Visible to change display passes.";
   return "This display control is currently unavailable.";
-}
-
-function sectionControlDisabledDescription({
-  disabled,
-  pending,
-  requiredPass,
-}: {
-  disabled: boolean;
-  pending: boolean;
-  requiredPass: string;
-}): string | undefined {
-  if (!disabled) return undefined;
-  if (pending) return "Saving display changes.";
-  return `Enable the ${requiredPass} display pass to change its effective settings.`;
 }
 
 export function VisualizationToggleButton({

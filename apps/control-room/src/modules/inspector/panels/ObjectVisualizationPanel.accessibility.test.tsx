@@ -6,7 +6,10 @@ import {
   VisualizationRadioGroup,
   VisualizationToggleButton,
 } from "./ObjectVisualizationPanel";
-import { nextVisualizationRadioValue } from "./ObjectVisualizationPanelAccessibility";
+import {
+  nextVisualizationRadioValue,
+  visualizationSectionDisabledDescription,
+} from "./ObjectVisualizationPanelAccessibility";
 
 describe("ObjectVisualizationPanel accessibility controls", () => {
   it("exposes Surface, Wireframe, Points, and Vectors as pressed toggles", () => {
@@ -41,6 +44,28 @@ describe("ObjectVisualizationPanel accessibility controls", () => {
     expect(html).toContain("disabled");
     expect(html).toContain("aria-describedby");
     expect(html).toContain("Enable Visible to change display passes.");
+  });
+
+  it("announces Visible before Vectors when a hidden target disables vector controls", () => {
+    expect(
+      visualizationSectionDisabledDescription({
+        disabled: true,
+        pending: false,
+        requiredPass: "Vectors",
+        requiredPassEnabled: true,
+        targetVisible: false,
+      }),
+    ).toBe("Enable Visible to change display passes.");
+
+    expect(
+      visualizationSectionDisabledDescription({
+        disabled: true,
+        pending: false,
+        requiredPass: "Vectors",
+        requiredPassEnabled: false,
+        targetVisible: true,
+      }),
+    ).toBe("Enable the Vectors display pass to change its effective settings.");
   });
 
   it("renders projection and color choices as labelled radio groups", () => {

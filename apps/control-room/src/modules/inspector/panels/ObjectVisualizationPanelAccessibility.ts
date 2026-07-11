@@ -19,3 +19,25 @@ export function nextVisualizationRadioValue<T extends string>(
     values[(currentIndex + offset + values.length) % values.length] ?? currentValue
   );
 }
+
+export function visualizationSectionDisabledDescription({
+  disabled,
+  pending,
+  requiredPass,
+  requiredPassEnabled,
+  targetVisible,
+}: {
+  disabled: boolean;
+  pending: boolean;
+  requiredPass: string;
+  requiredPassEnabled: boolean;
+  targetVisible: boolean;
+}): string | undefined {
+  if (!disabled) return undefined;
+  if (pending) return "Saving display changes.";
+  if (!targetVisible) return "Enable Visible to change display passes.";
+  if (!requiredPassEnabled) {
+    return `Enable the ${requiredPass} display pass to change its effective settings.`;
+  }
+  return "This display control is currently unavailable.";
+}
