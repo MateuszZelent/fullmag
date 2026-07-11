@@ -804,6 +804,33 @@ describe("RealtimeInvalidationBridge", () => {
     });
   });
 
+  it("counts every subscribed field resource for broad sample invalidation", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const keys = [
+      `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?component=full`,
+      `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=x`,
+      `${DATA_FIELDS_PATH}#viewport-3d:field-collection`,
+    ];
+    for (const key of keys) resources.subscribe(key, () => {});
+
+    bridge.handleEvent({
+      payload: {
+        changes: [
+          { resource: "fields", resource_id: "samples", revision: 13 },
+        ],
+      },
+      type: "resource.batch_changed",
+    });
+
+    expect(bridge.getFieldInvalidationTelemetry()).toEqual({
+      broadInvalidations: 1,
+      exactInvalidations: 0,
+      invalidatedResourceKeys: keys.length,
+    });
+  });
+
   it("uses an exact recommended field fetch before the quantity fallback", () => {
     const bus = new EventBus<KernelEventMap>();
     const resources = new ResourceInvalidationController(bus);

@@ -361,7 +361,10 @@ export class RealtimeInvalidationBridge {
     predicate: (resourceKey: string) => boolean;
     revision: ResourceRevision;
   }> = [];
-  private pendingPrefixes = new Map<string, ResourceRevision>();
+  private pendingPrefixes = new Map<
+    string,
+    { fieldInvalidation?: "broad" | "exact"; revision: ResourceRevision }
+  >();
   private pendingStatusRevision: ResourceRevision | null = null;
   private fieldInvalidationTelemetry: FieldInvalidationTelemetry = {
     broadInvalidations: 0,
@@ -441,7 +444,11 @@ export class RealtimeInvalidationBridge {
             }
           } else if (change.broad || !change.quantity_ids?.length) {
             this.recordFieldInvalidation("broad");
-            this.queuePrefixInvalidation(DATA_FIELDS_PATH, fieldSampleRevision);
+            this.queuePrefixInvalidation(
+              DATA_FIELDS_PATH,
+              fieldSampleRevision,
+              "broad",
+            );
           } else {
             this.recordFieldInvalidation("broad");
             for (const quantityId of change.quantity_ids) {
@@ -569,11 +576,13 @@ export class RealtimeInvalidationBridge {
   private queuePrefixInvalidation(
     resourceKey: string,
     revision: ResourceRevision,
+    fieldInvalidation?: "broad" | "exact",
   ): void {
-    this.pendingPrefixes.set(
-      resourceKey,
-      latestRevision(this.pendingPrefixes.get(resourceKey) ?? null, revision),
-    );
+    const pending = this.pendingPrefixes.get(resourceKey);
+    this.pendingPrefixes.set(resourceKey, {
+      fieldInvalidation: pending?.fieldInvalidation ?? fieldInvalidation,
+      revision: latestRevision(pending?.revision ?? null, revision),
+    });
   }
 
   private queueFieldSampleQuantityInvalidation(
@@ -636,7 +645,7 @@ export class RealtimeInvalidationBridge {
     const pendingMatchers = this.pendingMatchers;
     let statusRevision = this.pendingStatusRevision;
     this.pendingFetches = new Map<string, ResourceRevision>();
-    this.pendingPrefixes = new Map<string, ResourceRevision>();
+    this.pendingPrefixes = new Map();
     this.pendingMatchers = [];
     this.pendingStatusRevision = null;
 
@@ -652,8 +661,20 @@ export class RealtimeInvalidationBridge {
         statusRevision = latestRevision(statusRevision, dependentStatusRevision);
       }
     }
-    for (const [resourceKey, revision] of pendingPrefixes) {
-      this.resources.invalidatePrefix(resourceKey, revision);
+    for (const [resourceKey, pending] of pendingPrefixes) {
+      const invalidated = this.resources.invalidatePrefix(
+        resourceKey,
+        pending.revision,
+      );
+      if (pending.fieldInvalidation) {
+        this.fieldInvalidationTelemetry = {
+          ...this.fieldInvalidationTelemetry,
+          invalidatedResourceKeys: boundedIncrement(
+            this.fieldInvalidationTelemetry.invalidatedResourceKeys,
+            invalidated,
+          ),
+        };
+      }
     }
     for (const matcher of pendingMatchers) {
       const invalidated = this.resources.invalidateMatching(

@@ -72,9 +72,9 @@ export class ResourceInvalidationController {
         resourceKey !== resourcePrefix &&
         resourceKey.startsWith(resourcePrefix)
       ) {
-        const before = this.getRevision(resourceKey);
+        const current = this.revisions.get(resourceKey);
         this.invalidate(resourceKey, revision);
-        if (this.getRevision(resourceKey) !== before) invalidated += 1;
+        if (this.revisions.get(resourceKey) !== current) invalidated += 1;
       }
     }
     return invalidated;
@@ -87,9 +87,9 @@ export class ResourceInvalidationController {
     let invalidated = 0;
     for (const resourceKey of this.listeners.keys()) {
       if (predicate(resourceKey)) {
-        const before = this.getRevision(resourceKey);
+        const current = this.revisions.get(resourceKey);
         this.invalidate(resourceKey, revision);
-        if (this.getRevision(resourceKey) !== before) invalidated += 1;
+        if (this.revisions.get(resourceKey) !== current) invalidated += 1;
       }
     }
     return invalidated;
