@@ -138,7 +138,7 @@ run_repo_hygiene_gate
 run_gate \
   "frontend-legacy-transport" \
   "Frontend Legacy Transport Gate" \
-  'useCurrentLiveStream|fetchBootstrap|fetchPoll|currentLiveApiClient|/v1/live/current/bootstrap|/v1/live/current/poll|/v1/live/current/preview/' \
+  'useCurrentLiveStream|fetchBootstrap|fetchPoll|currentLiveApiClient|/v1/live/current/bootstrap|/v1/live/current/poll|/preview/' \
   "$ALLOWLIST_DIR/frontend-legacy-transport.allowlist" \
   "$FRONTEND_DIR/app" \
   "$FRONTEND_DIR/src"
@@ -192,7 +192,7 @@ run_gate \
 run_gate \
   "frontend-direct-fetch" \
   "Frontend Direct Fetch Gate" \
-  'fetch\s*\(' \
+  '\bfetch\s*\(' \
   "$ALLOWLIST_DIR/frontend-direct-fetch.allowlist" \
   "$FRONTEND_DIR/app" \
   "$FRONTEND_DIR/src"
