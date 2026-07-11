@@ -13,6 +13,7 @@ import type {
 export interface Viewport3DBuildScheduler {
   abortObsolete: (scope: Viewport3DBuildAbortScope) => void;
   dispose: () => void;
+  getPendingJobCount: () => number;
   schedule: <TResult>(
     request: Viewport3DBuildRequest,
     runner: Viewport3DBuildRunner<TResult>,
@@ -347,6 +348,7 @@ export function createViewport3DBuildScheduler(
   return {
     abortObsolete,
     dispose,
+    getPendingJobCount: () => jobsByKey.size,
     schedule,
   };
 }

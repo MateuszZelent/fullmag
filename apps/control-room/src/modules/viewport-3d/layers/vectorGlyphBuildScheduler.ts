@@ -140,13 +140,22 @@ async function executeVectorGlyphBuild(
   return buildViewport3DVectorGlyphs(request);
 }
 
-export function disposeVectorGlyphBuildWorkerForTests(): void {
+export function disposeVectorGlyphBuildWorker(): void {
   vectorGlyphBuildJobScheduler?.dispose();
   vectorGlyphBuildJobScheduler = undefined;
   vectorGlyphWorkerClient?.dispose();
   vectorGlyphWorkerClient = undefined;
   vectorGlyphWorkerFallbackReason = undefined;
 }
+
+/** @deprecated Use disposeVectorGlyphBuildWorker. */
+export const disposeVectorGlyphBuildWorkerForTests =
+  disposeVectorGlyphBuildWorker;
+
+export function getVectorGlyphWorkerRuntimeCounts(): { timers: number; workers: number } {
+  return vectorGlyphWorkerClient?.getRuntimeCounts() ?? { timers: 0, workers: 0 };
+}
+export function getVectorGlyphPendingJobCount(): number { return vectorGlyphBuildJobScheduler?.getPendingJobCount() ?? 0; }
 
 function getVectorGlyphBuildJobScheduler(): ReturnType<
   typeof createViewport3DBuildScheduler
@@ -280,6 +289,13 @@ class VectorGlyphWorkerClient {
     if (vectorGlyphWorkerClient === this) {
       vectorGlyphWorkerClient = undefined;
     }
+  }
+
+  getRuntimeCounts(): { timers: number; workers: number } {
+    return {
+      timers: this.idleTimeoutId === null ? 0 : 1,
+      workers: this.disposed ? 0 : this.workers.size,
+    };
   }
 
   private readonly handleMessage = (

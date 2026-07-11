@@ -104,6 +104,7 @@ import {
   useViewport3DResourceCounts,
   useViewport3DResourceTracker,
 } from "./viewport3dDiagnostics";
+import { useViewport3DWorkerRuntime } from "./viewport3dWorkerRuntime";
 import { createViewport3DEventManager } from "./viewport3dEventManager";
 import {
   formatViewport3DInspectComponents,
@@ -981,6 +982,12 @@ export default function Viewport3DModule({
   });
   const { select, clear } = useSelectionActions(moduleId);
   const tracker = useViewport3DResourceTracker();
+  const reportWorkerRuntimeCounts = useCallback(
+    (counts: Parameters<typeof tracker.setWorkerRuntimeCounts>[0]) =>
+      tracker.setWorkerRuntimeCounts(counts),
+    [tracker],
+  );
+  useViewport3DWorkerRuntime(reportWorkerRuntimeCounts);
   const resourceCounts = useViewport3DResourceCounts(tracker);
   const commandState = useViewport3DCommandState();
   const meshSizeHighlight = useMeshSizeHistogramHighlight(kernel.bus);

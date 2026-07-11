@@ -47,6 +47,9 @@ export interface Viewport3DResourceCounts {
   renderTargets: number;
   textures: number;
   workers: number;
+  workerRuntimeJobs?: number;
+  workerRuntimeTimers?: number;
+  workerRuntimeWorkers?: number;
   contextLosses: number;
   contextRestores: number;
 }
@@ -116,6 +119,9 @@ const EMPTY_COUNTS: Viewport3DResourceCounts = {
   renderTargets: 0,
   textures: 0,
   workers: 0,
+  workerRuntimeJobs: 0,
+  workerRuntimeTimers: 0,
+  workerRuntimeWorkers: 0,
 };
 
 export class Viewport3DResourceTracker {
@@ -134,6 +140,20 @@ export class Viewport3DResourceTracker {
 
   getLedgerSnapshot(): Viewport3DResourceLedgerEntry[] {
     return Array.from(this.ledgerEntries.values()).map((entry) => ({ ...entry }));
+  }
+
+  setWorkerRuntimeCounts(counts: {
+    jobs: number;
+    timers: number;
+    workers: number;
+  }): void {
+    this.counts = {
+      ...this.counts,
+      workerRuntimeJobs: counts.jobs,
+      workerRuntimeTimers: counts.timers,
+      workerRuntimeWorkers: counts.workers,
+    };
+    this.notify();
   }
 
   recordCanvasReady(detail: Record<string, unknown> = {}): void {
