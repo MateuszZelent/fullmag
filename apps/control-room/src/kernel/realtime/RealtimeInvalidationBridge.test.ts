@@ -875,8 +875,18 @@ describe("RealtimeInvalidationBridge", () => {
         changes: [
           {
             quantity_ids: ["H_eff"],
-            recommended_fetch:
-              "/v2/sessions/current/data/fields/H_eff/samples/vector?view=phase_rotated_real&stage_id=stage-1&scope_kind=object&scope_id=object%3Afilm&snapshot_id=snapshot-1&phase_rad=1.5&max_samples=1200&component=x",
+            recommended_fetch: serializeCanonicalFieldVectorResourceKey(
+              canonicalFieldVectorQuery("H_eff", {
+                component: "x",
+                max_samples: 1200,
+                phase_rad: 1.5,
+                scope_id: "object:film",
+                scope_kind: "object",
+                snapshot_id: "snapshot-1",
+                stage_id: "stage-1",
+                view: "phase_rotated_real",
+              }),
+            ),
             resource: "fields",
             resource_id: "samples",
             revision: 14,
@@ -912,8 +922,12 @@ describe("RealtimeInvalidationBridge", () => {
       payload: {
         changes: [
           {
-            recommended_fetch:
-              "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full",
+            recommended_fetch: serializeCanonicalFieldVectorResourceKey(
+              canonicalFieldVectorQuery("m", {
+                component: "full",
+                scope_kind: "full",
+              }),
+            ),
             resource: "fields",
             resource_id: "samples",
             revision: 15,
