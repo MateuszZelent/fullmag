@@ -356,6 +356,13 @@ describe("ObjectVisualizationController", () => {
   it("resets airbox layers and removes its quantity and style override atomically", () => {
     expect(
       resetAirboxVisualizationState({
+        layers: {
+          airbox: {
+            bounds: { opacity: 0.2, visible: true },
+            points: { opacity: 0.3, visible: true },
+            surface: { opacity: 0.4, visible: false },
+          },
+        },
         overrides: [
           {
             scope: "airbox",
@@ -373,10 +380,10 @@ describe("ObjectVisualizationController", () => {
     ).toMatchObject({
       layers: {
         airbox: {
-          bounds: { visible: false },
+          bounds: { opacity: 1, visible: false },
           opacity: 0.28,
-          points: { visible: false },
-          surface: { visible: true },
+          points: { opacity: 1, visible: false },
+          surface: { opacity: 1, visible: true },
           vectors: { density: 1200, domain: "airbox_only", visible: false },
           visible: true,
           wireframe: { opacity: 1, visible: false },

@@ -1849,10 +1849,10 @@ describe("ribbon structure", () => {
       {
         layers: {
           airbox: {
-            bounds: { visible: false },
+            bounds: { opacity: 1, visible: false },
             opacity: 0.28,
-            points: { visible: false },
-            surface: { visible: true },
+            points: { opacity: 1, visible: false },
+            surface: { opacity: 1, visible: true },
             vectors: { density: 1200, domain: "airbox_only", visible: false },
             visible: true,
             wireframe: { opacity: 1, visible: false },

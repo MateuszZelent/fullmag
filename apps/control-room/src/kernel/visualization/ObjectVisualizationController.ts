@@ -1310,10 +1310,10 @@ export function resetAirboxVisualizationState(
   return {
     layers: {
       airbox: {
-        bounds: { visible: DEFAULT_AIRBOX_VISUALIZATION.boundsVisible },
+        bounds: { opacity: 1, visible: DEFAULT_AIRBOX_VISUALIZATION.boundsVisible },
         opacity: DEFAULT_AIRBOX_VISUALIZATION.opacityPercent / 100,
-        points: { visible: DEFAULT_AIRBOX_VISUALIZATION.pointsVisible },
-        surface: { visible: DEFAULT_AIRBOX_VISUALIZATION.shaderVisible },
+        points: { opacity: 1, visible: DEFAULT_AIRBOX_VISUALIZATION.pointsVisible },
+        surface: { opacity: 1, visible: DEFAULT_AIRBOX_VISUALIZATION.shaderVisible },
         vectors: {
           density: DEFAULT_AIRBOX_VISUALIZATION.vectorBudget,
           domain: "airbox_only",

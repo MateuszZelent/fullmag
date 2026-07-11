@@ -19,3 +19,10 @@
 - GREEN: `pnpm --dir apps/control-room exec vitest run src/kernel/visualization/ObjectVisualizationController.test.ts src/modules/ribbon/ribbonStructure.test.ts` — 128 tests passed.
 - `pnpm --dir apps/control-room typecheck` passed.
 - Focused ESLint over changed files passed with no warnings.
+
+## Review follow-up
+
+- Reset now explicitly restores `opacity: 1` for `layers.airbox.bounds`,
+  `layers.airbox.points`, and `layers.airbox.surface`, not only their visibility.
+- The controller regression starts from non-default 0.2/0.3/0.4 basic-layer
+  opacities and proves the single reset PATCH clears each value.
