@@ -307,26 +307,35 @@ try {
 }
 
 async function assertCanvasHasFidelity(page) {
-  const sample = await page.evaluate(() => {
-    const canvas = document.querySelector(".fm-viewport-3d canvas");
-    if (!(canvas instanceof HTMLCanvasElement)) return null;
-    const gl = canvas.getContext("webgl2") ?? canvas.getContext("webgl");
-    if (!gl || gl.isContextLost()) return null;
-    const width = gl.drawingBufferWidth;
-    const height = gl.drawingBufferHeight;
-    if (width <= 0 || height <= 0) return null;
-    const pixels = new Uint8Array(width * height * 4);
-    gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+  const canvas = page.locator(".fm-viewport-3d canvas");
+  const box = await canvas.boundingBox();
+  if (!box || box.width <= 0 || box.height <= 0) {
+    throw new Error("Viewport fidelity gate could not measure the WebGL canvas.");
+  }
+  const screenshot = await page.screenshot({ clip: box });
+  const sample = await page.evaluate(async (encodedPng) => {
+    const response = await fetch(`data:image/png;base64,${encodedPng}`);
+    const bitmap = await createImageBitmap(await response.blob());
+    const target = new OffscreenCanvas(bitmap.width, bitmap.height);
+    const context = target.getContext("2d");
+    if (!context) return null;
+    context.drawImage(bitmap, 0, 0);
+    const pixels = context.getImageData(0, 0, bitmap.width, bitmap.height).data;
     let varied = 0;
-    for (let offset = 4; offset < pixels.length; offset += 4) {
-      if (
-        Math.abs(pixels[offset] - pixels[0]) > 8 ||
-        Math.abs(pixels[offset + 1] - pixels[1]) > 8 ||
-        Math.abs(pixels[offset + 2] - pixels[2]) > 8
-      ) varied += 1;
+    const stride = Math.max(1, Math.floor(Math.min(bitmap.width, bitmap.height) / 64));
+    const reference = [pixels[0], pixels[1], pixels[2]];
+    for (let y = 0; y < bitmap.height; y += stride) {
+      for (let x = 0; x < bitmap.width; x += stride) {
+        const offset = (y * bitmap.width + x) * 4;
+        if (
+          Math.abs(pixels[offset] - reference[0]) > 8 ||
+          Math.abs(pixels[offset + 1] - reference[1]) > 8 ||
+          Math.abs(pixels[offset + 2] - reference[2]) > 8
+        ) varied += 1;
+      }
     }
-    return { height, varied, width };
-  });
+    return { height: bitmap.height, varied, width: bitmap.width };
+  }, screenshot.toString("base64"));
   if (!sample || sample.varied === 0) {
     throw new Error("Viewport fidelity gate detected a blank or uniform WebGL drawing buffer.");
   }
@@ -358,6 +367,14 @@ function assertViewportRuntimeReleased(afterUnmountRuntime, baselineRuntime) {
 
 async function readBrowserAuditCounters(page) {
   return page.evaluate(() => ({ ...(window.__FM_VIEWPORT_BROWSER_AUDIT__ ?? {}) }));
+}
+
+async function readViewportAuditRuntime(page) {
+  return page.evaluate(() => {
+    const hook = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
+    if (!hook) throw new Error("Fullmag browser audit hook is not installed.");
+    return hook.readViewportAuditRuntime();
+  });
 }
 
 async function verifyViewportIdle(page, observeMs) {
