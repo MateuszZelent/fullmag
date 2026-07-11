@@ -1,4 +1,13 @@
-const url = process.env.CONTROL_ROOM_URL ?? "http://localhost:3100/workspace";
+import { mkdir, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import path from "node:path";
+
+const configuredUrl = process.env.CONTROL_ROOM_URL ?? null;
+const auditPort = Number(process.env.CONTROL_ROOM_AUDIT_PORT ?? 3103);
+const auditArtifactsDirectory = path.resolve(
+  process.env.CONTROL_ROOM_AUDIT_ARTIFACTS_DIR ??
+    ".artifacts/viewport-3d-browser-audit",
+);
 const apiBase =
   process.env.CONTROL_ROOM_API_BASE_URL ??
   process.env.NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL ??
@@ -7,32 +16,10 @@ const apiBase =
   "http://localhost:8081";
 
 const FIELD_GRID = [96, 64, 4];
-const QUANTITY_SEQUENCE = [
-  "m",
-  "H_eff",
-  "H_demag",
-  "H_ex",
-  "m",
-  "H_eff",
-  "H_demag",
-  "H_ex",
-  "m",
-  "H_eff",
-  "H_demag",
-  "H_ex",
-  "m",
-  "H_eff",
-  "H_demag",
-  "H_ex",
-  "m",
-  "H_eff",
-  "H_demag",
-  "H_ex",
-  "m",
-  "H_eff",
-  "H_demag",
-  "H_ex",
-];
+const QUANTITY_SEQUENCE = Array.from(
+  { length: 120 },
+  (_, index) => ["m", "H_eff", "H_demag", "H_ex"][index % 4],
+);
 const WARM_QUANTITIES = ["m", "H_eff", "H_demag", "H_ex"];
 const MAX_HEAP_GROWTH_BYTES = 25 * 1024 * 1024;
 const QUANTITY_SWITCH_TIMEOUT_MS = 20_000;
@@ -57,6 +44,8 @@ if (!playwright?.chromium) {
   process.exit(2);
 }
 
+const managedRuntime = configuredUrl ? null : await startAuditRuntime();
+const url = configuredUrl ?? `http://localhost:${auditPort}/workspace`;
 const browser = await playwright.chromium.launch({
   args: ["--js-flags=--expose-gc"],
 });
@@ -75,6 +64,7 @@ const fixture = createFdmFixture();
 let auditActive = false;
 
 await installFdmFixtureApi(page, fixture, fixtureRequests);
+await installBrowserAuditInstrumentation(page);
 await page.addInitScript(({ baseUrl }) => {
   window.__FULLMAG_CONFIG__ = {
     ...(window.__FULLMAG_CONFIG__ ?? {}),
@@ -119,6 +109,7 @@ page.on("request", (request) => {
 });
 
 try {
+  await mkdir(auditArtifactsDirectory, { recursive: true });
   auditLog("goto", url);
   await page.goto(url, { waitUntil: "domcontentloaded" });
   const viewport = page.locator(".fm-viewport-3d");
@@ -134,7 +125,9 @@ try {
     await withTimeout(
       setGlobalQuantity(page, fixture, fixtureRequests, quantity, {
         allowExistingFieldRequest: true,
-        requireFieldRequest: true,
+        // The production-like no-session fixture may already have the selected
+        // field in its browser resource cache during bootstrap.
+        requireFieldRequest: false,
       }),
       QUANTITY_SWITCH_TIMEOUT_MS,
       `Timed out warming viewport quantity ${quantity}.`,
@@ -149,13 +142,28 @@ try {
   };
 
   auditActive = true;
-  for (const quantity of QUANTITY_SEQUENCE) {
+  for (const [index, quantity] of QUANTITY_SEQUENCE.entries()) {
     auditLog("switching cached quantity", quantity);
-    await withTimeout(
-      setGlobalQuantity(page, fixture, fixtureRequests, quantity),
-      QUANTITY_SWITCH_TIMEOUT_MS,
-      `Timed out switching viewport quantity ${quantity}.`,
-    );
+    await page.evaluate((nextQuantity) => {
+      const hook = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
+      if (!hook) throw new Error("Fullmag browser audit hook is not installed.");
+      hook.queueGlobalQuantity(nextQuantity);
+    }, quantity);
+    if ((index + 1) % 12 === 0) {
+      await flushQueuedVisualization(page, fixture, quantity);
+      await patchVisualization(page, fixture, {
+        field_component: index % 24 === 0 ? "x" : "magnitude",
+        layers: {
+          points: { visible: index % 24 === 0 },
+          vectors: { visible: index % 36 !== 0 },
+          wireframe: { visible: index % 48 !== 0 },
+        },
+        vector_style: {
+          color_mode: index % 24 === 0 ? "magnitude" : "orientation",
+        },
+      });
+    }
+    await page.waitForTimeout(16);
   }
   auditActive = false;
   await page.waitForTimeout(500);
@@ -204,6 +212,31 @@ try {
     throw new Error(`Browser console/network errors:\n${errors.join("\n")}`);
   }
 
+  const idle = await verifyViewportIdle(page, 5_000);
+  await page.screenshot({ path: path.join(auditArtifactsDirectory, "settled-3d.png") });
+  const gpuAfterStress = await readBrowserAuditCounters(page);
+
+  await page.evaluate(() => {
+    window.__FULLMAG_CONTROL_ROOM_AUDIT__?.setActiveViewportModule("viewport-2d");
+  });
+  await page.locator(".fm-viewport-3d canvas").waitFor({ state: "detached", timeout: 10_000 });
+  await page.waitForTimeout(300);
+  const afterUnmount = await readBrowserAuditCounters(page);
+  if (afterUnmount.buffersDeleted < gpuAfterStress.buffersDeleted) {
+    throw new Error("WebGL buffer delete counter regressed after viewport unmount.");
+  }
+  await page.screenshot({ path: path.join(auditArtifactsDirectory, "after-unmount.png") });
+  await writeAuditArtifact({
+    after,
+    afterUnmount,
+    baseline,
+    fixtureRequests,
+    gpuAfterStress,
+    idle,
+    topologyRequests,
+    url,
+  });
+
   console.log(
     "Viewport 3D memory-churn audit passed:",
     `switches=${QUANTITY_SEQUENCE.length}`,
@@ -213,6 +246,8 @@ try {
     `frames=${baseline.diagnostics.frames}->${after.diagnostics.frames}`,
     `fieldRequests=${fieldRequests.length}`,
     `fixtureRequests=${fixtureRequests.length}`,
+    `gpuBuffers=${gpuAfterStress.buffersCreated}/${gpuAfterStress.buffersDeleted}`,
+    `gpuUploaded=${formatBytes(gpuAfterStress.bufferBytesUploaded)}`,
   );
 } catch (error) {
   await reportAuditFailure(page, fixture, {
@@ -225,6 +260,174 @@ try {
 } finally {
   auditActive = false;
   await browser.close();
+  await managedRuntime?.stop();
+}
+
+async function patchVisualization(page, fixture, patch) {
+  const previousPatchCount = fixture.patchCount;
+  await page.evaluate(async (nextPatch) => {
+    const hook = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
+    if (!hook) throw new Error("Fullmag browser audit hook is not installed.");
+    await hook.patchVisualization(nextPatch);
+  }, patch);
+  await waitForCondition(
+    () => fixture.patchCount > previousPatchCount,
+    5_000,
+    "Timed out waiting for audit visualization patch.",
+  );
+  await page.waitForTimeout(80);
+}
+
+async function flushQueuedVisualization(page, fixture, expectedQuantity) {
+  const previousPatchCount = fixture.patchCount;
+  await page.evaluate(async () => {
+    const hook = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
+    if (!hook) throw new Error("Fullmag browser audit hook is not installed.");
+    await hook.flushVisualization();
+  });
+  await waitForCondition(
+    () => fixture.patchCount > previousPatchCount && currentFixtureQuantity(fixture) === expectedQuantity,
+    5_000,
+    "Timed out waiting for queued audit visualization changes to persist.",
+  );
+}
+
+async function readBrowserAuditCounters(page) {
+  return page.evaluate(() => ({ ...(window.__FM_VIEWPORT_BROWSER_AUDIT__ ?? {}) }));
+}
+
+async function verifyViewportIdle(page, observeMs) {
+  await page.waitForTimeout(500);
+  const before = await readBrowserAuditCounters(page);
+  await page.waitForTimeout(observeMs);
+  const after = await readBrowserAuditCounters(page);
+  const deltas = Object.fromEntries(
+    Object.keys(after).map((key) => [key, Number(after[key]) - Number(before[key])]),
+  );
+  for (const metric of ["frames", "drawCalls"]) {
+    if (deltas[metric] !== 0) {
+      throw new Error(`Viewport rendered during ${observeMs}ms idle window: ${metric} +${deltas[metric]}.`);
+    }
+  }
+  return { after, before, deltas, observeMs };
+}
+
+async function writeAuditArtifact(payload) {
+  await mkdir(auditArtifactsDirectory, { recursive: true });
+  await writeFile(
+    path.join(auditArtifactsDirectory, "metrics.json"),
+    `${JSON.stringify(payload, null, 2)}\n`,
+  );
+}
+
+async function startAuditRuntime() {
+  await runPnpm(["run", "build:audit:webpack"], {
+    NEXT_PUBLIC_AUDIT_BUILD: "1",
+  });
+  const child = spawn("pnpm", ["exec", "next", "start", "--port", String(auditPort)], {
+    cwd: process.cwd(),
+    env: { ...process.env, NEXT_PUBLIC_AUDIT_BUILD: "1" },
+    stdio: "pipe",
+  });
+  const output = [];
+  child.stdout.on("data", (chunk) => output.push(String(chunk)));
+  child.stderr.on("data", (chunk) => output.push(String(chunk)));
+  const serverUrl = `http://localhost:${auditPort}/workspace`;
+  try {
+    await waitForHttp(serverUrl, 30_000);
+  } catch (error) {
+    child.kill("SIGTERM");
+    throw new Error(`Audit server did not become ready: ${error.message}\n${output.join("")}`);
+  }
+  return {
+    async stop() {
+      if (child.exitCode === null) {
+        child.kill("SIGTERM");
+        await new Promise((resolve) => child.once("exit", resolve));
+      }
+    },
+  };
+}
+
+async function runPnpm(args, extraEnvironment) {
+  await new Promise((resolve, reject) => {
+    const child = spawn("pnpm", args, {
+      cwd: process.cwd(),
+      env: { ...process.env, ...extraEnvironment },
+      stdio: "inherit",
+    });
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      if (code === 0) resolve(undefined);
+      else reject(new Error(`pnpm ${args.join(" ")} exited with ${code ?? "signal"}.`));
+    });
+  });
+}
+
+async function waitForHttp(targetUrl, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(targetUrl, { redirect: "manual" });
+      if (response.status < 500) return;
+    } catch {
+      // The process is still binding its port.
+    }
+    await sleep(200);
+  }
+  throw new Error(`Timed out waiting for ${targetUrl}.`);
+}
+
+async function installBrowserAuditInstrumentation(page) {
+  await page.addInitScript(() => {
+    const counters = {
+      bufferBytesUploaded: 0,
+      buffersCreated: 0,
+      buffersDeleted: 0,
+      drawCalls: 0,
+      frames: 0,
+    };
+    window.__FM_VIEWPORT_BROWSER_AUDIT__ = counters;
+
+    const originalRaf = window.requestAnimationFrame.bind(window);
+    window.requestAnimationFrame = (callback) =>
+      originalRaf((timestamp) => {
+        counters.frames += 1;
+        callback(timestamp);
+      });
+
+    const originalGetContext = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function (...args) {
+      const context = originalGetContext.apply(this, args);
+      if (!context || !["webgl", "webgl2", "experimental-webgl"].includes(String(args[0]))) {
+        return context;
+      }
+      const gl = context;
+      if (gl.__fullmagAuditWrapped) return gl;
+      gl.__fullmagAuditWrapped = true;
+      for (const name of ["createBuffer", "deleteBuffer", "drawArrays", "drawElements", "drawArraysInstanced", "drawElementsInstanced"]) {
+        const original = gl[name];
+        if (typeof original !== "function") continue;
+        gl[name] = function (...methodArgs) {
+          if (name === "createBuffer") counters.buffersCreated += 1;
+          if (name === "deleteBuffer") counters.buffersDeleted += 1;
+          if (name.startsWith("draw")) counters.drawCalls += 1;
+          return original.apply(this, methodArgs);
+        };
+      }
+      for (const name of ["bufferData", "bufferSubData"]) {
+        const original = gl[name];
+        if (typeof original !== "function") continue;
+        gl[name] = function (...methodArgs) {
+          const data = methodArgs[1];
+          if (typeof data === "number") counters.bufferBytesUploaded += data;
+          else if (data && typeof data.byteLength === "number") counters.bufferBytesUploaded += data.byteLength;
+          return original.apply(this, methodArgs);
+        };
+      }
+      return gl;
+    };
+  });
 }
 
 async function installFdmFixtureApi(page, fixture, requests) {

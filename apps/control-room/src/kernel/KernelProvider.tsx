@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, type ReactNode } from "react";
 
 import { SESSION_EVENTS_WS_PATH } from "./api/apiPaths";
+import type { VisualizationStatePatch } from "./api/apiTypes";
 import {
   createBinaryDecodeScheduler,
   type BinaryDecodeDiagnosticEvent,
@@ -323,7 +324,10 @@ function CameraRegistrySyncConnector({ kernel }: { kernel: KernelApi }) {
 
 function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
   useEffect(() => {
-    if (process.env.NODE_ENV === "production") return;
+    // The browser driver is compiled only into the explicitly named audit
+    // artifact. Ordinary production bundles never install this mutable hook.
+    const auditBuild = process.env.NEXT_PUBLIC_AUDIT_BUILD === "1";
+    if (process.env.NODE_ENV === "production" && !auditBuild) return;
     const auditWindow = window as Window & {
       __FULLMAG_CONFIG__?: {
         allowMissingSessionSmoke?: boolean;
@@ -345,6 +349,10 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
           stageId?: string | null;
         }) => Promise<void>;
         setGlobalQuantity: (quantityId: string) => Promise<void>;
+        queueGlobalQuantity: (quantityId: string) => void;
+        flushVisualization: () => Promise<void>;
+        setActiveViewportModule: (moduleId: "viewport-2d" | "viewport-3d") => void;
+        patchVisualization: (patch: VisualizationStatePatch) => Promise<void>;
       };
     };
     const browserConfig = auditWindow.__FULLMAG_CONFIG__;
@@ -411,11 +419,23 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
         );
       },
       setGlobalQuantity: async (quantityId: string) => {
+        auditApi.queueGlobalQuantity(quantityId);
+        await kernel.visualizationSync.flushNow();
+      },
+      queueGlobalQuantity: (quantityId: string) => {
         const activeQuantityId = normalizeQuantityIdOrDefault(quantityId);
         kernel.visualizationSync.queuePatch({
           active_quantity_id: activeQuantityId,
           quantity: { active_quantity_id: activeQuantityId },
         });
+      },
+      flushVisualization: () => kernel.visualizationSync.flushNow(),
+      setActiveViewportModule: (moduleId: "viewport-2d" | "viewport-3d") => {
+        kernel.layout.setActiveViewportMainModule(moduleId);
+        kernel.layout.setFocusedSlot("viewport-main");
+      },
+      patchVisualization: async (patch: VisualizationStatePatch) => {
+        kernel.visualizationSync.queuePatch(patch);
         await kernel.visualizationSync.flushNow();
       },
     };

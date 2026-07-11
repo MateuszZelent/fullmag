@@ -117,6 +117,12 @@ describe("KernelProvider performance contracts", () => {
     expect(kernelProviderSource).toContain("kernel.layout.setFocusedSlot(\"viewport-main\")");
   });
 
+  it("keeps the browser audit hook out of ordinary production builds", () => {
+    expect(kernelProviderSource).toContain("NEXT_PUBLIC_AUDIT_BUILD");
+    expect(kernelProviderSource).toContain("process.env.NODE_ENV === \"production\" && !auditBuild");
+    expect(kernelProviderSource).toContain("setActiveViewportMainModule");
+  });
+
   it("pauses viewport-3d-only resource hooks when a non-3D center tab is active", () => {
     expect(kernelProviderSource).toContain(
       "createViewport3DInactiveResourcePauseController",

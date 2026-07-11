@@ -15,6 +15,7 @@
     "audit:viewport-3d-profile-switch": "node scripts/audit-viewport-3d-profile-switch.mjs",
     "build": "next build",
     "build:webpack": "next build --webpack",
+    "build:audit:webpack": "NEXT_PUBLIC_AUDIT_BUILD=1 next build --webpack",
     "check:architecture-hygiene": "node scripts/check-architecture-hygiene.mjs",
     "check:api-hygiene": "node scripts/check-api-hygiene.mjs",
     "generate:api": "pnpm run generate:openapi-v2 && pnpm run generate:api-v2-types && pnpm run generate:api-v2-client",
