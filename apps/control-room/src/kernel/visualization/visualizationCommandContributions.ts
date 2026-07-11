@@ -418,8 +418,8 @@ export const VISUALIZATION_TARGET_COMMANDS: CommandContribution[] = [
     group: "visualization",
     category: "visualization",
     scope: "selection",
-    disabledReason: targetCommandDisabledReason,
-    isEnabled: targetCommandEnabled,
+    disabledReason: targetPassCommandDisabledReason,
+    isEnabled: targetPassCommandEnabled,
     run: (context) => {
       const value = stringPayload(context);
       return value

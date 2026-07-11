@@ -76,3 +76,28 @@ This is frontend-only. `GET /v2/sessions/current/visualization/state` remains
 the authoritative state snapshot; the command guard reads that existing
 resource when present, while websocket semantics remain invalidation-only.
 No endpoint, generated OpenAPI type, transport, facade, hook, or codec changed.
+
+## Review follow-up
+
+Review identified that `visualization.target.set-geometry-scope` still used the
+base target-availability guard. Added a RED regression for a hidden target,
+then changed that command to `targetPassCommandEnabled` and
+`targetPassCommandDisabledReason`. The test asserts both `isEnabled === false`
+and rejected execution for the shortcut path, while `Visible` remains enabled.
+
+Follow-up verification:
+
+```text
+pnpm --dir apps/control-room exec vitest run \
+  src/kernel/visualization/visualizationCommandContributions.test.ts
+
+1 file passed, 7 tests passed.
+
+pnpm --dir apps/control-room typecheck
+passed.
+
+pnpm --dir apps/control-room exec eslint \
+  src/kernel/visualization/visualizationCommandContributions.ts \
+  src/kernel/visualization/visualizationCommandContributions.test.ts
+passed with no output.
+```

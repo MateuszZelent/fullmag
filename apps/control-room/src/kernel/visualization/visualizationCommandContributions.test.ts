@@ -82,8 +82,24 @@ describe("visualization target commands", () => {
         false,
       ),
     ).toMatchObject({ status: "failed" });
+    expect(
+      commands.get("visualization.target.set-geometry-scope")?.isEnabled?.(
+        hiddenContext,
+      ),
+    ).toBe(false);
+    expect(
+      await commands.execute(
+        "visualization.target.set-geometry-scope",
+        hiddenContext,
+        "surface",
+      ),
+    ).toMatchObject({ status: "failed" });
     expect(visualization.getSettings({ id: "object:free-layer", kind: "object" }))
-      .toMatchObject({ visible: false, wireframeVisible: true });
+      .toMatchObject({
+        geometryScope: "surface",
+        visible: false,
+        wireframeVisible: true,
+      });
     expect(
       commands.get("visualization.target.set-visible")?.isEnabled?.(hiddenContext),
     ).toBe(true);
