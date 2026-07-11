@@ -22,6 +22,7 @@ import {
 } from "./ObjectVisualizationController";
 
 function selectedTarget(context: CommandContext) {
+  if (context.visualizationTarget) return context.visualizationTarget;
   const selection = context.selection?.get();
   return selection ? resolveVisualizationTargetFromSelection(selection) : null;
 }

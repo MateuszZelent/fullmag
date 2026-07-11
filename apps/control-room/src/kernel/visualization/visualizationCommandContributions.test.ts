@@ -166,7 +166,12 @@ describe("visualization target commands", () => {
 
     const setResult = await commands.execute(
       "visualization.target.set-vectors-visible",
-      { selection, source: "test", visualization },
+      {
+        selection,
+        source: "test",
+        visualization,
+        visualizationTarget: { id: "part-film", kind: "part" },
+      },
       false,
     );
 
@@ -182,7 +187,12 @@ describe("visualization target commands", () => {
 
     const clearResult = await commands.execute(
       "visualization.target.clear-overrides",
-      { selection, source: "test", visualization },
+      {
+        selection,
+        source: "test",
+        visualization,
+        visualizationTarget: { id: "part-film", kind: "part" },
+      },
     );
 
     expect(clearResult.status).toBe("completed");

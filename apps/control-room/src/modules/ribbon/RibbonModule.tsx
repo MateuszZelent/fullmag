@@ -71,7 +71,10 @@ import {
   DialogTitle,
 } from "@/shared/ui/Dialog";
 
-import { buildRibbonTabContent } from "./ribbonContributions";
+import {
+  buildRibbonTabContent,
+  resolveRibbonVisualizationTarget,
+} from "./ribbonContributions";
 import {
   RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
   type ApplyGlobalQuantityInput,
@@ -258,6 +261,17 @@ export default function RibbonModule({ kernel }: ModuleProps) {
     () => kernel.commands.getVersion(),
   );
 
+  const visualizationTarget = useMemo(
+    () =>
+      resolveRibbonVisualizationTarget({
+        sceneObjectIds,
+        selectedMeshPart,
+        selection,
+        visualizationState: visualizationState.data,
+      }),
+    [sceneObjectIds, selectedMeshPart, selection, visualizationState.data],
+  );
+
   const commandContext = useMemo(
     () =>
       createCommandContext("ribbon", kernel, {
@@ -286,6 +300,7 @@ export default function RibbonModule({ kernel }: ModuleProps) {
           [VISUALIZATION_STATE_PATH]: visualizationState.data,
         },
         sourceDetail: activeTab,
+        visualizationTarget,
       }),
     [
       activeTab,
@@ -303,6 +318,7 @@ export default function RibbonModule({ kernel }: ModuleProps) {
       solverStatus.data,
       stageExecution.data,
       visualizationState.data,
+      visualizationTarget,
     ],
   );
 

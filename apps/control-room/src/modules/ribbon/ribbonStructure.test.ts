@@ -287,6 +287,40 @@ describe("ribbon structure", () => {
     ).toMatchObject({ id: "part-film", kind: "part" });
   });
 
+  it("preserves canonical object ownership and scene-validated geometry aliases for selected mesh parts", () => {
+    const selection = {
+      kind: "mesh-part",
+      label: "Film mesh",
+      moduleSource: "test",
+      nodeId: "part-film",
+      objectId: "projection-film",
+      ref: {
+        kind: "mesh-part" as const,
+        nodeId: "part-film",
+        objectId: "projection-film",
+        type: "mesh-part" as const,
+        visualizationTargetId: "mesh-part:part-film" as const,
+      },
+    };
+
+    expect(
+      resolveRibbonVisualizationTarget({
+        sceneObjectIds: new Set(["projection-film"]),
+        selectedMeshPart: { id: "part-film", object_id: "projection-film" },
+        selection,
+        visualizationState: { targets: { airbox: {}, objects: [], parts: [] } } as never,
+      }),
+    ).toMatchObject({ id: "object:projection-film", kind: "object" });
+    expect(
+      resolveRibbonVisualizationTarget({
+        sceneObjectIds: new Set(["projection-film"]),
+        selectedMeshPart: { geometry_id: "projection-film", id: "part-film", object_id: null },
+        selection,
+        visualizationState: { targets: { airbox: {}, objects: [], parts: [] } } as never,
+      }),
+    ).toMatchObject({ id: "object:projection-film", kind: "object" });
+  });
+
   it("defines visible content and dropdown structure for every ribbon tab", () => {
     for (const tab of RIBBON_TABS) {
       const content = ALL_TAB_CONTENT[tab.id];

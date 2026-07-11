@@ -401,6 +401,26 @@ describe("ObjectVisualizationController", () => {
       kind: "region",
       label: "Core region",
     });
+
+    expect(
+      resolveVisualizationTargetFromSelection({
+        kind: "mesh-part",
+        label: "Film mesh",
+        nodeId: "part-film",
+        objectId: "projection-film",
+        ref: {
+          kind: "mesh-part",
+          nodeId: "part-film",
+          objectId: "projection-film",
+          type: "mesh-part",
+          visualizationTargetId: "mesh-part:part-film",
+        },
+      }),
+    ).toEqual({
+      id: "object:projection-film",
+      kind: "object",
+      label: "Film mesh",
+    });
   });
 
   it("patches and clears target overrides without storing resource data", () => {

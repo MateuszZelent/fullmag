@@ -2136,6 +2136,8 @@ function ribbonCommandContext(context: RibbonBuildContext): CommandContext {
     resources: (base.resources ?? context.resources) as CommandContext["resources"],
     selection,
     visualization: base.visualization ?? context.visualization,
+    visualizationTarget:
+      base.visualizationTarget ?? resolveRibbonVisualizationTarget(context),
   };
 }
 

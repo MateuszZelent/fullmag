@@ -31,6 +31,23 @@ describe("resolveVisualizationTargetForMeshPart", () => {
     ).toMatchObject({ id: "object:projection-film", kind: "object" });
   });
 
+  it("maps an explicitly owned part to its object when the registry does not classify it as a part", () => {
+    expect(
+      resolveVisualizationTargetForMeshPart({
+        part: {
+          id: "part-film",
+          object_id: "projection-film",
+        },
+        sceneObjectIds: new Set(["projection-film"]),
+        targetRegistry: {
+          airbox: {} as never,
+          objects: [],
+          parts: [],
+        },
+      }),
+    ).toMatchObject({ id: "object:projection-film", kind: "object" });
+  });
+
   it("honors a backend-classified part target before explicit object ownership", () => {
     expect(
       resolveVisualizationTargetForMeshPart({

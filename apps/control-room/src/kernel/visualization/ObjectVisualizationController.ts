@@ -1380,14 +1380,6 @@ export function resolveVisualizationTargetFromSelection(
     };
   }
 
-  if (selection.ref?.type === "mesh-part") {
-    return {
-      id: selection.ref.nodeId,
-      kind: "part",
-      label: selection.label,
-    };
-  }
-
   if (selection.objectId) {
     return {
       id:
