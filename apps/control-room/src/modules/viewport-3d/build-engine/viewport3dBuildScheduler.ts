@@ -9,6 +9,7 @@ import type {
   Viewport3DBuildScheduleOptions,
   Viewport3DBuildState,
 } from "./viewport3dBuildEngineTypes";
+import { notifyViewport3DWorkerRuntimeChange } from "../viewport3dWorkerRuntimeEvents";
 
 export interface Viewport3DBuildScheduler {
   abortObsolete: (scope: Viewport3DBuildAbortScope) => void;
@@ -134,6 +135,7 @@ export function createViewport3DBuildScheduler(
       });
     }
     jobsByKey.set(request.key, job);
+    notifyViewport3DWorkerRuntimeChange();
     publishJobState(job, "queued");
     queueForLane(request.lane).push(job);
     drainLane(request.lane);
@@ -156,6 +158,7 @@ export function createViewport3DBuildScheduler(
       abortJob(job, false);
     }
     queuesByLane.clear();
+    notifyViewport3DWorkerRuntimeChange();
   }
 
   function drainLane(lane: Viewport3DBuildLane): void {
@@ -218,6 +221,7 @@ export function createViewport3DBuildScheduler(
       recordTerminalDiagnostic(job, "ready", false);
       job.resolve(result);
     }
+    notifyViewport3DWorkerRuntimeChange();
     drainLane(job.lane);
   }
 
@@ -233,6 +237,7 @@ export function createViewport3DBuildScheduler(
     publishJobState(job, "aborted");
     recordTerminalDiagnostic(job, "aborted", obsolete);
     job.reject(createViewport3DBuildAbortError());
+    notifyViewport3DWorkerRuntimeChange();
     drainLane(job.lane);
   }
 

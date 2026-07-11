@@ -51,4 +51,26 @@ describe("Viewport3DWorkerRuntime", () => {
     lease.release();
     expect(secondDispose).toHaveBeenCalledTimes(1);
   });
+
+  it("publishes live scheduler counts to subscribers", () => {
+    let jobs = 0;
+    const runtime = createViewport3DWorkerRuntime([
+      {
+        dispose: vi.fn(),
+        getCounts: () => ({ timers: 2, workers: 1 }),
+        getPendingJobCount: () => jobs,
+        id: "topology-index",
+      },
+    ]);
+    const snapshots: unknown[] = [];
+    const unsubscribe = runtime.subscribe(() => snapshots.push(runtime.getSnapshot()));
+
+    jobs = 1;
+    runtime.notify();
+
+    expect(snapshots).toEqual([
+      expect.objectContaining({ jobs: 1, timers: 2, workers: 1 }),
+    ]);
+    unsubscribe();
+  });
 });

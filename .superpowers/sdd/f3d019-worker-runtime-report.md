@@ -12,6 +12,13 @@ the viewport resource tracker. The runtime test exercises every lane, verifies
 that the first release preserves them while another viewport is mounted, and
 that a fresh runtime can mount after final disposal.
 
+Follow-up review fix: scheduler lifecycle changes now notify the runtime while
+jobs are queued, completed, aborted, or disposed, so tracker values are live
+rather than mount/unmount snapshots. The compact diagnostics string includes
+`worker-runtime:workers/timers/jobs`. A production regression test creates all
+five worker clients, disposes them while their jobs are pending, and verifies
+controlled `AbortError` rejection, `terminate()`, and listener removal.
+
 Verification:
 
 - `pnpm --dir apps/control-room exec vitest run src/modules/viewport-3d/viewport3dWorkerRuntime.test.ts src/modules/viewport-3d/viewport3dTopologyIndexScheduler.test.ts src/modules/viewport-3d/viewport3dColorTransformScheduler.test.ts src/modules/viewport-3d/region-overlays/viewport3dRegionOverlayBuildScheduler.test.ts src/modules/viewport-3d/layers/vectorGlyphBuildScheduler.test.ts`

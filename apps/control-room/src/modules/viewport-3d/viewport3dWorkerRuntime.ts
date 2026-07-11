@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { subscribeViewport3DWorkerRuntimeChanges } from "./viewport3dWorkerRuntimeEvents";
 
 import {
   disposeViewport3DRegionOverlayBuildWorker,
@@ -50,6 +51,8 @@ export interface Viewport3DWorkerRuntimeLease {
 export interface Viewport3DWorkerRuntime {
   readonly acquire: () => Viewport3DWorkerRuntimeLease;
   readonly getSnapshot: () => Viewport3DWorkerRuntimeSnapshot;
+  readonly notify: () => void;
+  readonly subscribe: (listener: () => void) => () => void;
 }
 
 const WORKER_RUNTIME_LANES: readonly Viewport3DWorkerRuntimeLane[] = [
@@ -92,11 +95,17 @@ export function createViewport3DWorkerRuntime(
 ): Viewport3DWorkerRuntime {
   let activeLeases = 0;
   let disposed = false;
+  const listeners = new Set<() => void>();
+
+  function notify(): void {
+    for (const listener of listeners) listener();
+  }
 
   function dispose(): void {
     if (disposed) return;
     disposed = true;
     for (const lane of lanes) lane.dispose();
+    notify();
   }
 
   return {
@@ -105,6 +114,7 @@ export function createViewport3DWorkerRuntime(
         throw new Error("Viewport 3D worker runtime has been disposed.");
       }
       activeLeases += 1;
+      notify();
       let released = false;
       return {
         release(): void {
@@ -112,6 +122,7 @@ export function createViewport3DWorkerRuntime(
           released = true;
           activeLeases = Math.max(activeLeases - 1, 0);
           if (activeLeases === 0) dispose();
+          else notify();
         },
       };
     },
@@ -124,6 +135,11 @@ export function createViewport3DWorkerRuntime(
         timers: laneCounts.reduce((total, counts) => total + counts.timers, 0),
         workers: laneCounts.reduce((total, counts) => total + counts.workers, 0),
       };
+    },
+    notify,
+    subscribe(listener): () => void {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
     },
   };
 }
@@ -141,10 +157,18 @@ export function useViewport3DWorkerRuntime(
 ): void {
   useEffect(() => {
     const lease = acquireViewport3DWorkerRuntime();
-    onSnapshot?.(getViewport3DWorkerRuntimeSnapshot());
+    const runtime = sharedRuntime;
+    const publish = () => onSnapshot?.(getViewport3DWorkerRuntimeSnapshot());
+    publish();
+    const unsubscribeRuntime = runtime?.subscribe(publish) ?? (() => undefined);
+    const unsubscribeSchedulers = subscribeViewport3DWorkerRuntimeChanges(() => {
+      runtime?.notify();
+    });
     return () => {
+      unsubscribeSchedulers();
+      unsubscribeRuntime();
       lease.release();
-      onSnapshot?.(getViewport3DWorkerRuntimeSnapshot());
+      publish();
     };
   }, [onSnapshot]);
 }

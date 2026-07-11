@@ -403,6 +403,7 @@ export function buildViewport3DDiagnostics(
     `geo:${input.tracker.geometries}`,
     `cache:${formatBytes(input.cache.byteLength)}`,
     `glyph-cache:${input.tracker.glyphCacheEntries ?? 0}/${formatBytes(input.tracker.glyphCacheBytes ?? 0)}/${formatBytes(input.tracker.glyphCacheRetainedBytes ?? 0)}`,
+    `worker-runtime:${input.tracker.workerRuntimeWorkers ?? 0}/${input.tracker.workerRuntimeTimers ?? 0}/${input.tracker.workerRuntimeJobs ?? 0}`,
     `frames:${input.tracker.frames}`,
   ].join(" ");
 }
