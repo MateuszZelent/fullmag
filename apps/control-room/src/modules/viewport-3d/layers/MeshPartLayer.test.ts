@@ -171,6 +171,7 @@ describe("MeshPartLayer", () => {
     expect(uploadEffect).toContain("clearCurrentGeometry();");
     expect(uploadSource).toContain("if (store.getSnapshot().geometry !== uploadedGeometry)");
     expect(uploadSource).not.toContain("if (store.getSnapshot().geometry === uploadedGeometry)");
+    expect(uploadSource).toContain("try {\n              store.publish(previousGeometry);\n            } finally {\n              releaseGeometry(uploadedGeometry);");
     expect(uploadEffect).not.toContain("useEffect(() => {\n    store.publish(null);");
   });
 

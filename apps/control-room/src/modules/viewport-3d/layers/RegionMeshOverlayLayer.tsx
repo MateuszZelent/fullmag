@@ -282,8 +282,11 @@ function useRegionMeshOverlayGeometryUpload({
             releaseGeometry(uploadedGeometry);
             return;
           }
-          store.publish(previousGeometry);
-          releaseGeometry(uploadedGeometry);
+          try {
+            store.publish(previousGeometry);
+          } finally {
+            releaseGeometry(uploadedGeometry);
+          }
         },
       },
     ];

@@ -103,8 +103,11 @@ export function useViewport3DGeometryUpload({
               releaseGeometry(uploadedGeometry);
               return;
             }
-            store.publish(previousGeometry);
-            releaseGeometry(uploadedGeometry);
+            try {
+              store.publish(previousGeometry);
+            } finally {
+              releaseGeometry(uploadedGeometry);
+            }
           },
         },
       ],
