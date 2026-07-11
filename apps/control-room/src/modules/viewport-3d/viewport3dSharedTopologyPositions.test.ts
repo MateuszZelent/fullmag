@@ -43,4 +43,25 @@ describe("attachViewport3DSharedTopologyPosition", () => {
     expect(replacement.getAttribute("position")).not.toBe(firstAttribute);
     replacement.dispose();
   });
+
+  it.each([1, 10, 100])(
+    "keeps full-topology position storage constant for %i FEM parts across surface, wireframe, points, bounds, and fallback passes",
+    (partCount) => {
+      const positions = new Float32Array(3 * 64);
+      const geometries = Array.from({ length: partCount * 5 }, () => new BufferGeometry());
+      for (const geometry of geometries) {
+        attachViewport3DSharedTopologyPosition(geometry, positions);
+      }
+
+      const attributes = new Set(geometries.map((geometry) => geometry.getAttribute("position")));
+      const uploadedPositionBytes = [...attributes].reduce(
+        (total, attribute) => total + attribute.array.byteLength,
+        0,
+      );
+      expect(attributes.size).toBe(1);
+      expect(uploadedPositionBytes).toBe(positions.byteLength);
+
+      geometries.forEach((geometry) => geometry.dispose());
+    },
+  );
 });

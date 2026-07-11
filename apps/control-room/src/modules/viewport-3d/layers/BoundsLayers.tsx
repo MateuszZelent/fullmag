@@ -32,6 +32,7 @@ import { useViewport3DGeometryUpload } from "../hooks/useViewport3DGeometryUploa
 import { useViewport3DScalarColorUpload } from "../hooks/useViewport3DScalarColorUpload";
 import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
 import { createViewport3DIndexedPointGeometry } from "../viewport3dPointGeometry";
+import { attachViewport3DSharedTopologyPosition } from "../viewport3dSharedTopologyPositions";
 import {
   isViewport3DTopologyCurrent,
   resolveUnavailableTopologyVisualizationSettings,
@@ -224,7 +225,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
   const createSurfaceGeometry = useCallback(() => {
     if (!surfaceIndices?.length) return null;
     const next = new BufferGeometry();
-    next.setAttribute("position", new BufferAttribute(topologyModel.positions, 3));
+    attachViewport3DSharedTopologyPosition(next, topologyModel.positions);
     next.setIndex(new BufferAttribute(surfaceIndices, 1));
     return next;
   }, [surfaceIndices, topologyModel.positions]);

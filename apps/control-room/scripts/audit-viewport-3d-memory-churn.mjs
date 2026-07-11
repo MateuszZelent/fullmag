@@ -1,9 +1,10 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
+import { createServer } from "node:net";
 import path from "node:path";
 
 const configuredUrl = process.env.CONTROL_ROOM_URL ?? null;
-const auditPort = Number(process.env.CONTROL_ROOM_AUDIT_PORT ?? 3103);
+const requestedAuditPort = Number(process.env.CONTROL_ROOM_AUDIT_PORT ?? 0);
 const auditArtifactsDirectory = path.resolve(
   process.env.CONTROL_ROOM_AUDIT_ARTIFACTS_DIR ??
     ".artifacts/viewport-3d-browser-audit",
@@ -26,6 +27,8 @@ const QUANTITY_SEQUENCE = Array.from(
 const WARM_QUANTITIES = ["m", "H_eff", "H_demag", "H_ex"];
 const MAX_HEAP_GROWTH_BYTES = 25 * 1024 * 1024;
 const QUANTITY_SWITCH_TIMEOUT_MS = 20_000;
+const injectDroppedPublication =
+  process.env.CONTROL_ROOM_AUDIT_INJECT_DROPPED_PUBLICATION === "1";
 
 async function loadPlaywright() {
   try {
@@ -48,7 +51,7 @@ if (!playwright?.chromium) {
 }
 
 const managedRuntime = configuredUrl ? null : await startAuditRuntime();
-const url = configuredUrl ?? `http://localhost:${auditPort}/workspace`;
+const url = configuredUrl ?? managedRuntime.url;
 const browser = await playwright.chromium.launch({
   args: ["--js-flags=--expose-gc"],
 });
@@ -142,6 +145,7 @@ try {
   const baseline = {
     diagnostics: await readDiagnostics(viewport),
     gpu: await readBrowserAuditCounters(page),
+    runtime: await readViewportAuditRuntime(page),
     heapBytes: await readJsHeapBytes(cdp),
   };
 
@@ -169,13 +173,14 @@ try {
     fixture.visualizationState.revision += 1;
     fixture.status.resources.visualization_state_revision =
       fixture.visualizationState.revision;
-    await page.evaluate(async (state) => {
+    await page.evaluate(async ({ state, drop }) => {
       const hook = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
       if (!hook) throw new Error("Fullmag browser audit hook is not installed.");
-      hook.publishVisualizationState(state);
+      if (!drop) hook.publishVisualizationState(state);
       await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
       await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
-    }, fixture.visualizationState);
+    }, { drop: injectDroppedPublication && index === 0, state: fixture.visualizationState });
+    await assertPublicationRendered(viewport, quantity, fixture.visualizationState.revision);
   }
   auditActive = false;
   await page.waitForTimeout(500);
@@ -225,6 +230,7 @@ try {
   }
 
   const idle = await verifyViewportIdle(page, 5_000);
+  const fidelity = await assertCanvasHasFidelity(page);
   await page.screenshot({ path: path.join(auditArtifactsDirectory, "settled-3d.png") });
   const gpuAfterStress = await readBrowserAuditCounters(page);
   const baselineLiveBuffers =
@@ -248,6 +254,7 @@ try {
   await page.locator(".fm-viewport-3d canvas").waitFor({ state: "detached", timeout: 10_000 });
   await page.waitForTimeout(300);
   const afterUnmount = await readBrowserAuditCounters(page);
+  const afterUnmountRuntime = await readViewportAuditRuntime(page);
   if (afterUnmount.buffersDeleted < gpuAfterStress.buffersDeleted) {
     throw new Error("WebGL buffer delete counter regressed after viewport unmount.");
   }
@@ -258,14 +265,17 @@ try {
       `Viewport unmount retained ${unmountedLiveBuffers} WebGL buffers; allowed 4 instrumentation/runtime buffers.`,
     );
   }
+  assertViewportRuntimeReleased(afterUnmountRuntime, baseline.runtime);
   await page.screenshot({ path: path.join(auditArtifactsDirectory, "after-unmount.png") });
   await writeAuditArtifact({
     after,
     afterUnmount,
+    afterUnmountRuntime,
     baseline,
     fixtureRequests,
     gpuAfterStress,
     idle,
+    fidelity,
     topologyRequests,
     url,
   });
@@ -294,6 +304,56 @@ try {
   auditActive = false;
   await browser.close();
   await managedRuntime?.stop();
+}
+
+async function assertCanvasHasFidelity(page) {
+  const sample = await page.evaluate(() => {
+    const canvas = document.querySelector(".fm-viewport-3d canvas");
+    if (!(canvas instanceof HTMLCanvasElement)) return null;
+    const gl = canvas.getContext("webgl2") ?? canvas.getContext("webgl");
+    if (!gl || gl.isContextLost()) return null;
+    const width = gl.drawingBufferWidth;
+    const height = gl.drawingBufferHeight;
+    if (width <= 0 || height <= 0) return null;
+    const pixels = new Uint8Array(width * height * 4);
+    gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    let varied = 0;
+    for (let offset = 4; offset < pixels.length; offset += 4) {
+      if (
+        Math.abs(pixels[offset] - pixels[0]) > 8 ||
+        Math.abs(pixels[offset + 1] - pixels[1]) > 8 ||
+        Math.abs(pixels[offset + 2] - pixels[2]) > 8
+      ) varied += 1;
+    }
+    return { height, varied, width };
+  });
+  if (!sample || sample.varied === 0) {
+    throw new Error("Viewport fidelity gate detected a blank or uniform WebGL drawing buffer.");
+  }
+  return sample;
+}
+
+async function assertPublicationRendered(viewport, quantityId, revision) {
+  await waitForCondition(
+    async () => {
+      const diagnostics = await readDiagnostics(viewport);
+      return diagnostics.raw.includes(`q:${quantityId}`);
+    },
+    2_000,
+    `Audit publication r${revision} (${quantityId}) was not observed by the mounted viewport.`,
+  );
+}
+
+function assertViewportRuntimeReleased(afterUnmountRuntime, baselineRuntime) {
+  const { resources, workers } = afterUnmountRuntime;
+  if (workers.workers !== 0 || workers.timers !== 0 || workers.jobs !== 0) {
+    throw new Error(`Viewport worker runtime survived unmount: ${JSON.stringify(workers)}.`);
+  }
+  if (resources.listenerCount > baselineRuntime.resources.listenerCount) {
+    throw new Error(
+      `Viewport resource subscriptions grew after unmount: baseline=${baselineRuntime.resources.listenerCount}, after=${resources.listenerCount}.`,
+    );
+  }
 }
 
 async function readBrowserAuditCounters(page) {
@@ -328,7 +388,8 @@ async function startAuditRuntime() {
   await runPnpm(["run", "build:audit:webpack"], {
     NEXT_PUBLIC_AUDIT_BUILD: "1",
   });
-  const child = spawn("pnpm", ["exec", "next", "start", "--port", String(auditPort)], {
+  const port = await reserveAuditPort(requestedAuditPort);
+  const child = spawn("pnpm", ["exec", "next", "start", "--port", String(port)], {
     cwd: process.cwd(),
     env: { ...process.env, NEXT_PUBLIC_AUDIT_BUILD: "1" },
     stdio: "pipe",
@@ -336,14 +397,15 @@ async function startAuditRuntime() {
   const output = [];
   child.stdout.on("data", (chunk) => output.push(String(chunk)));
   child.stderr.on("data", (chunk) => output.push(String(chunk)));
-  const serverUrl = `http://localhost:${auditPort}/workspace`;
+  const serverUrl = `http://localhost:${port}/workspace`;
   try {
-    await waitForHttp(serverUrl, 30_000);
+    await waitForHttp(serverUrl, 30_000, child);
   } catch (error) {
     child.kill("SIGTERM");
     throw new Error(`Audit server did not become ready: ${error.message}\n${output.join("")}`);
   }
   return {
+    url: serverUrl,
     async stop() {
       if (child.exitCode === null) {
         child.kill("SIGTERM");
@@ -351,6 +413,18 @@ async function startAuditRuntime() {
       }
     },
   };
+}
+
+async function reserveAuditPort(requestedPort) {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(requestedPort, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : null;
+      server.close((error) => (error ? reject(error) : resolve(port)));
+    });
+  });
 }
 
 async function runPnpm(args, extraEnvironment) {
@@ -368,9 +442,12 @@ async function runPnpm(args, extraEnvironment) {
   });
 }
 
-async function waitForHttp(targetUrl, timeoutMs) {
+async function waitForHttp(targetUrl, timeoutMs, child) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    if (child?.exitCode !== null && child?.exitCode !== undefined) {
+      throw new Error(`Audit server exited before readiness with code ${child.exitCode}.`);
+    }
     try {
       const response = await fetch(targetUrl, { redirect: "manual" });
       if (response.status < 500) return;
@@ -652,7 +729,7 @@ async function setAuditStep(page, step) {
 async function waitForCondition(check, timeoutMs, message) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (check()) return;
+    if (await check()) return;
     await sleep(50);
   }
   throw new Error(message);

@@ -52,6 +52,7 @@ import { RealtimeInvalidationBridge } from "./realtime/RealtimeInvalidationBridg
 import { useSimulationStartupOverlayVisibility } from "./layout/SimulationStartupOverlay";
 import { ResourceInvalidationController } from "./resources/ResourceInvalidationController";
 import { sharedResourceRuntimeStore } from "./resources/ResourceRuntimeStore";
+import { getViewport3DWorkerRuntimeSnapshot } from "../modules/viewport-3d/viewport3dWorkerRuntime";
 import {
   createViewport3DInactiveResourcePauseController,
 } from "./resources/inactiveViewportResourcePolicy";
@@ -358,6 +359,10 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
         setActiveViewportModule: (moduleId: "viewport-2d" | "viewport-3d") => void;
         patchVisualization: (patch: VisualizationStatePatch) => Promise<void>;
         publishVisualizationState: (state: VisualizationStateResource) => void;
+        readViewportAuditRuntime: () => {
+          resources: ReturnType<typeof sharedResourceRuntimeStore.stats>;
+          workers: ReturnType<typeof getViewport3DWorkerRuntimeSnapshot>;
+        };
       };
     };
     const browserConfig = auditWindow.__FULLMAG_CONFIG__;
@@ -450,6 +455,10 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
           state.revision,
         );
       },
+      readViewportAuditRuntime: () => ({
+        resources: sharedResourceRuntimeStore.stats(),
+        workers: getViewport3DWorkerRuntimeSnapshot(),
+      }),
     };
     auditWindow.__FULLMAG_CONTROL_ROOM_AUDIT__ = auditApi;
     return () => {
