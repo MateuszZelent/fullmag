@@ -21,6 +21,8 @@ This task does not create a global visualization registry.
 - Region and airbox selections prove their scoped carrier sets.
 - Object, region, and airbox vector commands prove their patch scope matches the
   selected panel target.
+- Multi-carrier region and airbox rows expose `Target: <canonical target id>`;
+  the visible label is derived from the same selected target as the command.
 
 ## Verification
 

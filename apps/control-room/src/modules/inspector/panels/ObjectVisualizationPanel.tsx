@@ -108,7 +108,7 @@ import {
   quantitySourcePatch,
   queueTargetVectorVisibilityPatch,
   resolveObjectVisualizationPanelTarget,
-  resolveSelectedTargetVectorMeshParts,
+  resolveSelectedTargetVectorMeshPartRows,
   resolveObjectVisualizationPanelSelectionTarget,
   regionVisualizationCarrierSupportsFieldMeta,
   regionVisualizationFieldWarning,
@@ -945,6 +945,7 @@ function VisualizationVectorsSection({
   vectorBudgetRanges,
 }: {
   meshParts?: ReadonlyArray<{
+    actionTargetLabel: string;
     id: string;
     label: string;
     vectorsVisible: boolean;
@@ -1090,6 +1091,9 @@ function VisualizationVectorsSection({
                 onChange={(e) => onTogglePartVectors(e.target.checked)}
               />
               <span>{part.label}</span>
+              <span className="fm-visualization-part-toggle__target">
+                {part.actionTargetLabel}
+              </span>
             </label>
           ))}
         </fieldset>
@@ -1585,19 +1589,17 @@ function useObjectVisualizationPanelState(
   // Build arrow visibility rows from carriers of the selected visualization target.
   const vectorMeshParts = (() => {
     if (!resolvedTarget) return undefined;
-    const scopedParts = resolveSelectedTargetVectorMeshParts({
+    const scopedPartRows = resolveSelectedTargetVectorMeshPartRows({
       manifestRegions: manifest.data?.regions,
       meshParts: manifest.data?.mesh_parts,
       sceneObjectIds,
       target: resolvedTarget,
       visualizationState: visualizationState.data,
     });
-    if (scopedParts.length <= 1) return undefined;
-    return scopedParts.map((p) => {
+    if (scopedPartRows.length <= 1) return undefined;
+    return scopedPartRows.map((part) => {
       return {
-        id: p.id,
-        label: p.label,
-        objectId: p.object_id ?? null,
+        ...part,
         vectorsVisible: settings?.vectorsVisible ?? false,
       };
     });

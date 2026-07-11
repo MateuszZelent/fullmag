@@ -332,6 +332,28 @@ export function resolveSelectedTargetVectorMeshParts({
   });
 }
 
+export function visualizationVectorSurfaceActionTargetLabel(
+  target: VisualizationTargetRef,
+): string {
+  return `Target: ${target.id}`;
+}
+
+export function resolveSelectedTargetVectorMeshPartRows(input: {
+  manifestRegions: readonly MeshRegion[] | null | undefined;
+  meshParts: readonly MeshPart[] | null | undefined;
+  sceneObjectIds: ReadonlySet<string>;
+  target: VisualizationTargetRef | null | undefined;
+  visualizationState: VisualizationStateResource | null | undefined;
+}): Array<{ actionTargetLabel: string; id: string; label: string }> {
+  if (!input.target) return [];
+  const actionTargetLabel = visualizationVectorSurfaceActionTargetLabel(input.target);
+  return resolveSelectedTargetVectorMeshParts(input).map((part) => ({
+    actionTargetLabel,
+    id: part.id,
+    label: part.label,
+  }));
+}
+
 export function resolveObjectVisualizationPanelSelectionTarget({
   sceneObjectIds,
   selectedMeshPart,

@@ -98,6 +98,12 @@ describe("ObjectVisualizationPanel performance contracts", () => {
     expect(panelSource).not.toContain("Per-part vector visibility");
   });
 
+  it("shows the canonical selected target beside every surface-vector action", () => {
+    expect(panelSource).toContain("resolveSelectedTargetVectorMeshPartRows");
+    expect(panelSource).toContain("fm-visualization-part-toggle__target");
+    expect(panelSource).toContain("part.actionTargetLabel");
+  });
+
   it("renders scalar colormap controls in the visualization inspector", () => {
     expect(panelSource).toContain("resolveSurfaceColorSourceItems(settings.activeQuantityId)");
     expect(panelSource).toContain("ScalarColorbarControl");

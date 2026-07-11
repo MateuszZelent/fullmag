@@ -29,7 +29,9 @@ import {
   geometryScopeVectorBudgetPatch,
   quantitySourcePatch,
   resolveObjectVisualizationPanelTarget,
+  resolveSelectedTargetVectorMeshPartRows,
   resolveSelectedTargetVectorMeshParts,
+  visualizationVectorSurfaceActionTargetLabel,
   resolveObjectVisualizationPanelSelectionTarget,
   resolveSurfaceColorSourceItems,
   resolveObjectVisualizationPanelTopologyFreshness,
@@ -59,6 +61,13 @@ import {
 type MeshPart = NonNullable<MeshSharedDomainManifestResource["mesh_parts"]>[number];
 
 describe("ObjectVisualizationPanelModel", () => {
+  it.each([
+    [{ id: "region:object-a:shell", kind: "region" } as const, "Target: region:object-a:shell"],
+    [{ id: "airbox", kind: "airbox" } as const, "Target: airbox"],
+  ])("labels every scoped surface row with its canonical action target", (target, label) => {
+    expect(visualizationVectorSurfaceActionTargetLabel(target)).toBe(label);
+  });
+
   it("limits object surface rows to the selected object target", () => {
     const meshParts = [
       { id: "part-a", label: "Object A", object_id: "object-a", role: "magnetic" },
@@ -114,6 +123,38 @@ describe("ObjectVisualizationPanelModel", () => {
         visualizationState: null,
       }).map((part) => part.id),
     ).toEqual(["part-air"]);
+  });
+
+  it("labels every multi-carrier region and airbox row with its selected target", () => {
+    const regionRows = resolveSelectedTargetVectorMeshPartRows({
+      meshParts: [
+        { id: "part-region-a", label: "Region A", object_id: "object-a", role: "magnetic" },
+        { id: "part-region-b", label: "Region B", object_id: "object-a", role: "magnetic" },
+      ] as MeshPart[],
+      manifestRegions: [{ mesh_part_ids: ["part-region-a", "part-region-b"], source_object_ids: ["object-a"], source_region_candidate_id: "shell" }] as never,
+      sceneObjectIds: new Set(["object-a"]),
+      target: { id: "region:object-a:shell", kind: "region" },
+      visualizationState: null,
+    });
+    const airboxRows = resolveSelectedTargetVectorMeshPartRows({
+      meshParts: [
+        { id: "part-air-a", label: "Air A", role: "air" },
+        { id: "part-air-b", label: "Air B", role: "airbox" },
+      ] as MeshPart[],
+      manifestRegions: [],
+      sceneObjectIds: new Set(),
+      target: { id: "airbox", kind: "airbox" },
+      visualizationState: null,
+    });
+
+    expect(regionRows.map((row) => row.actionTargetLabel)).toEqual([
+      "Target: region:object-a:shell",
+      "Target: region:object-a:shell",
+    ]);
+    expect(airboxRows.map((row) => row.actionTargetLabel)).toEqual([
+      "Target: airbox",
+      "Target: airbox",
+    ]);
   });
 
   it("patches the selected region target instead of a listed mesh-part carrier", () => {
