@@ -258,6 +258,28 @@ export function queuePartVectorVisibilityPatch({
     sceneObjectIds,
     visualizationState: state,
   });
+  return queueTargetVectorVisibilityPatch({
+    controller,
+    state,
+    sync,
+    target,
+    visible,
+  });
+}
+
+export function queueTargetVectorVisibilityPatch({
+  controller,
+  state,
+  sync,
+  target,
+  visible,
+}: {
+  controller: Pick<ObjectVisualizationController, "patchTargetPending">;
+  state: VisualizationStateResource;
+  sync: Pick<{ queuePatch: (patch: VisualizationStatePatch) => void }, "queuePatch">;
+  target: VisualizationTargetRef;
+  visible: boolean;
+}): VisualizationTargetRef {
   const patch = { vectorsVisible: visible } satisfies VisualizationTargetPatch;
   sync.queuePatch({
     overrides: mergeVisualizationStateTargetOverride(
@@ -266,12 +288,48 @@ export function queuePartVectorVisibilityPatch({
       patch,
     ),
   });
-  controller.patchTargetPending(
-    target,
-    patch,
-    state.revision,
-  );
+  controller.patchTargetPending(target, patch, state.revision);
   return target;
+}
+
+export function resolveSelectedTargetVectorMeshParts({
+  manifestRegions,
+  meshParts,
+  sceneObjectIds,
+  target,
+  visualizationState,
+}: {
+  manifestRegions: readonly MeshRegion[] | null | undefined;
+  meshParts: readonly MeshPart[] | null | undefined;
+  sceneObjectIds: ReadonlySet<string>;
+  target: VisualizationTargetRef | null | undefined;
+  visualizationState: VisualizationStateResource | null | undefined;
+}): MeshPart[] {
+  if (!target || !meshParts?.length) return [];
+
+  if (target.kind === "airbox") {
+    return meshParts.filter((part) => part.role === "air" || part.role === "airbox");
+  }
+
+  if (target.kind === "region") {
+    const carrier = resolveRegionVisualizationCarrier({
+      manifestRegions,
+      target,
+    });
+    if (carrier?.kind !== "mesh-parts") return [];
+    const carrierIds = new Set(carrier.partIds);
+    return meshParts.filter((part) => carrierIds.has(part.id));
+  }
+
+  return meshParts.filter((part) => {
+    if (part.role === "air" || part.role === "airbox") return false;
+    const partTarget = resolveObjectVisualizationPanelTarget({
+      part,
+      sceneObjectIds,
+      visualizationState,
+    });
+    return partTarget.kind === target.kind && partTarget.id === target.id;
+  });
 }
 
 export function resolveObjectVisualizationPanelSelectionTarget({

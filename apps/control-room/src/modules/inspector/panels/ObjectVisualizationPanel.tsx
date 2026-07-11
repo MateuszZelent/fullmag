@@ -106,8 +106,9 @@ import {
   surfaceColorSourceFieldMetaComponent,
   geometryScopeDisplayPatch,
   quantitySourcePatch,
-  queuePartVectorVisibilityPatch,
+  queueTargetVectorVisibilityPatch,
   resolveObjectVisualizationPanelTarget,
+  resolveSelectedTargetVectorMeshParts,
   resolveObjectVisualizationPanelSelectionTarget,
   regionVisualizationCarrierSupportsFieldMeta,
   regionVisualizationFieldWarning,
@@ -948,7 +949,7 @@ function VisualizationVectorsSection({
     label: string;
     vectorsVisible: boolean;
   }>;
-  onTogglePartVectors?: (partId: string, visible: boolean) => void;
+  onTogglePartVectors?: (visible: boolean) => void;
   patch: PatchVisualizationTarget;
   patchColor: (field: "vectorMonoColor", value: string) => void;
   patchNumber: (
@@ -1086,7 +1087,7 @@ function VisualizationVectorsSection({
                 type="checkbox"
                 checked={part.vectorsVisible}
                 disabled={pending || sectionDisabled("vectors")}
-                onChange={(e) => onTogglePartVectors(part.id, e.target.checked)}
+                onChange={(e) => onTogglePartVectors(e.target.checked)}
               />
               <span>{part.label}</span>
             </label>
@@ -1581,31 +1582,23 @@ function useObjectVisualizationPanelState(
     void patch({ wireframeOpacityPercent: value });
   }
 
-  // Build object-target arrow visibility rows from manifest parts.
+  // Build arrow visibility rows from carriers of the selected visualization target.
   const vectorMeshParts = (() => {
-    const parts = manifest.data?.mesh_parts;
-    if (!parts || parts.length === 0) return undefined;
-    // Filter to magnetic parts only (exclude airbox).
-    const magneticParts = parts.filter(
-      (p) => p.role !== "air" && p.role !== "airbox",
-    );
-    if (magneticParts.length <= 1) return undefined;
-    return magneticParts.map((p) => {
-      const partTarget = resolveObjectVisualizationPanelTarget({
-        part: p,
-        sceneObjectIds,
-        visualizationState: visualizationState.data,
-      });
-      const partSettings = resolveTargetVisualization({
-        snapshot,
-        target: partTarget,
-        visualizationState: visualizationState.data,
-      }).settings;
+    if (!resolvedTarget) return undefined;
+    const scopedParts = resolveSelectedTargetVectorMeshParts({
+      manifestRegions: manifest.data?.regions,
+      meshParts: manifest.data?.mesh_parts,
+      sceneObjectIds,
+      target: resolvedTarget,
+      visualizationState: visualizationState.data,
+    });
+    if (scopedParts.length <= 1) return undefined;
+    return scopedParts.map((p) => {
       return {
         id: p.id,
         label: p.label,
         objectId: p.object_id ?? null,
-        vectorsVisible: partSettings.vectorsVisible,
+        vectorsVisible: settings?.vectorsVisible ?? false,
       };
     });
   })();
@@ -1640,15 +1633,13 @@ function useObjectVisualizationPanelState(
   const vectorBudgetRange =
     vectorBudgetRanges[settings?.geometryScope ?? "full"];
 
-  function onTogglePartVectors(partId: string, visible: boolean) {
-    const part = manifest.data?.mesh_parts?.find((p) => p.id === partId);
-    if (!part || !visualizationState.data) return;
-    queuePartVectorVisibilityPatch({
+  function onTogglePartVectors(visible: boolean) {
+    if (!resolvedTarget || !visualizationState.data) return;
+    queueTargetVectorVisibilityPatch({
       controller: visualization,
-      part,
-      sceneObjectIds,
       state: visualizationState.data,
       sync: visualizationSync,
+      target: resolvedTarget,
       visible,
     });
   }

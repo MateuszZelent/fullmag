@@ -16,6 +16,7 @@ import {
 import {
   buildAirboxVectorDiagnostic,
   queuePartVectorVisibilityPatch,
+  queueTargetVectorVisibilityPatch,
   buildAirboxVisibilityDiagnostic,
   buildVisualizationVectorBudgetDiagnostic,
   buildVisualizationPanelSections,
@@ -28,6 +29,7 @@ import {
   geometryScopeVectorBudgetPatch,
   quantitySourcePatch,
   resolveObjectVisualizationPanelTarget,
+  resolveSelectedTargetVectorMeshParts,
   resolveObjectVisualizationPanelSelectionTarget,
   resolveSurfaceColorSourceItems,
   resolveObjectVisualizationPanelTopologyFreshness,
@@ -57,6 +59,118 @@ import {
 type MeshPart = NonNullable<MeshSharedDomainManifestResource["mesh_parts"]>[number];
 
 describe("ObjectVisualizationPanelModel", () => {
+  it("limits object surface rows to the selected object target", () => {
+    const meshParts = [
+      { id: "part-a", label: "Object A", object_id: "object-a", role: "magnetic" },
+      { id: "part-b", label: "Object B", object_id: "object-b", role: "magnetic" },
+    ] as MeshPart[];
+
+    expect(
+      resolveSelectedTargetVectorMeshParts({
+        meshParts,
+        manifestRegions: [],
+        sceneObjectIds: new Set(["object-a", "object-b"]),
+        target: { id: "object:object-a", kind: "object" },
+        visualizationState: null,
+      }).map((part) => part.id),
+    ).toEqual(["part-a"]);
+  });
+
+  it("uses only manifest region mesh-part carriers for a selected region", () => {
+    const meshParts = [
+      { id: "part-region", label: "Region", object_id: "object-a", role: "magnetic" },
+      { id: "part-other", label: "Other", object_id: "object-a", role: "magnetic" },
+    ] as MeshPart[];
+
+    expect(
+      resolveSelectedTargetVectorMeshParts({
+        meshParts,
+        manifestRegions: [
+          {
+            mesh_part_ids: ["part-region"],
+            source_object_ids: ["object-a"],
+            source_region_candidate_id: "shell",
+          },
+        ] as never,
+        sceneObjectIds: new Set(["object-a"]),
+        target: { id: "region:object-a:shell", kind: "region" },
+        visualizationState: null,
+      }).map((part) => part.id),
+    ).toEqual(["part-region"]);
+  });
+
+  it("uses only air carriers for a selected airbox", () => {
+    const meshParts = [
+      { id: "part-air", label: "Air", role: "air" },
+      { id: "part-a", label: "Object A", object_id: "object-a", role: "magnetic" },
+    ] as MeshPart[];
+
+    expect(
+      resolveSelectedTargetVectorMeshParts({
+        meshParts,
+        manifestRegions: [],
+        sceneObjectIds: new Set(["object-a"]),
+        target: { id: "airbox", kind: "airbox" },
+        visualizationState: null,
+      }).map((part) => part.id),
+    ).toEqual(["part-air"]);
+  });
+
+  it("patches the selected region target instead of a listed mesh-part carrier", () => {
+    const queuedPatches: unknown[] = [];
+    const controller = new ObjectVisualizationController();
+    const state = { revision: 7, overrides: [], targets: { airbox: {}, objects: [], parts: [] } } as never;
+    const target = { id: "region:object-a:shell", kind: "region" } as const;
+
+    expect(
+      queueTargetVectorVisibilityPatch({
+        controller,
+        state,
+        sync: { queuePatch: (patch) => queuedPatches.push(patch) },
+        target,
+        visible: false,
+      }),
+    ).toEqual(target);
+    expect(queuedPatches).toEqual([
+      {
+        overrides: [
+          {
+            display: { vectors: { visible: false } },
+            scope: "region",
+            scope_id: "region:object-a:shell",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it.each([
+    { scopeId: "object-a", target: { id: "object:object-a", kind: "object" } as const },
+    { scopeId: "region:object-a:shell", target: { id: "region:object-a:shell", kind: "region" } as const },
+    { scopeId: "airbox", target: { id: "airbox", kind: "airbox" } as const },
+  ])("keeps vector actions on the selected $target.kind target", ({ scopeId, target }) => {
+    const queuedPatches: unknown[] = [];
+    const controller = new ObjectVisualizationController();
+    const state = { revision: 7, overrides: [], targets: { airbox: {}, objects: [], parts: [] } } as never;
+
+    expect(
+      queueTargetVectorVisibilityPatch({
+        controller,
+        state,
+        sync: { queuePatch: (patch) => queuedPatches.push(patch) },
+        target,
+        visible: false,
+      }),
+    ).toEqual(target);
+    expect(queuedPatches[0]).toMatchObject({
+      overrides: [
+        expect.objectContaining({
+          scope: target.kind,
+          scope_id: scopeId,
+        }),
+      ],
+    });
+  });
   it("exposes the surface color source options used by Surface Coloring", () => {
     expect(SURFACE_COLOR_SOURCE_ITEMS.map((item) => item.value)).toEqual([
       "solid",
