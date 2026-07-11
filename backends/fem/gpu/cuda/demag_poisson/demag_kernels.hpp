@@ -73,5 +73,18 @@ void fullmag_cuda_demag_robin_boundary_energy_blocks(
     int rows,
     cudaStream_t stream = nullptr);
 
+/// Per-block polarized Poisson-Robin boundary-energy increment and absolute terms.
+void fullmag_cuda_demag_robin_boundary_difference_blocks(
+    const uint32_t *csr_row_offsets,
+    const uint32_t *csr_col_indices,
+    const double *csr_values,
+    const double *current_u,
+    const double *trial_u,
+    double coefficient,
+    double *block_delta,
+    double *block_absolute,
+    int rows,
+    cudaStream_t stream = nullptr);
+
 } // namespace fullmag::fem
 #endif

@@ -144,6 +144,41 @@ __global__ void demag_robin_boundary_energy_blocks_kernel(
     }
 }
 
+__global__ void demag_robin_boundary_difference_blocks_kernel(
+    const uint32_t *__restrict__ csr_row_offsets,
+    const uint32_t *__restrict__ csr_col_indices,
+    const double *__restrict__ csr_values,
+    const double *__restrict__ current_u,
+    const double *__restrict__ trial_u,
+    double coefficient,
+    double *__restrict__ block_delta,
+    double *__restrict__ block_absolute,
+    int rows)
+{
+    const int row = blockIdx.x * blockDim.x + threadIdx.x;
+    double delta = 0.0;
+    if (row < rows) {
+        double matrix_sum_u = 0.0;
+        const uint32_t begin = csr_row_offsets[row];
+        const uint32_t end = csr_row_offsets[row + 1];
+        for (uint32_t cursor = begin; cursor < end; ++cursor) {
+            const uint32_t column = csr_col_indices[cursor];
+            matrix_sum_u += csr_values[cursor] * (current_u[column] + trial_u[column]);
+        }
+        delta = 0.5 * coefficient * (trial_u[row] - current_u[row]) * matrix_sum_u;
+    }
+    typedef cub::BlockReduce<double, 256> BlockReduce;
+    __shared__ typename BlockReduce::TempStorage delta_storage;
+    __shared__ typename BlockReduce::TempStorage absolute_storage;
+    const double reduced_delta = BlockReduce(delta_storage).Sum(delta);
+    __syncthreads();
+    const double reduced_absolute = BlockReduce(absolute_storage).Sum(fabs(delta));
+    if (threadIdx.x == 0) {
+        block_delta[blockIdx.x] = reduced_delta;
+        block_absolute[blockIdx.x] = reduced_absolute;
+    }
+}
+
 void fullmag_cuda_demag_rhs_csr(
     const uint32_t *csr_row_offsets,
     const uint32_t *csr_col_indices,
@@ -254,6 +289,31 @@ void fullmag_cuda_demag_robin_boundary_energy_blocks(
         u,
         coefficient,
         block_sums,
+        rows);
+}
+
+void fullmag_cuda_demag_robin_boundary_difference_blocks(
+    const uint32_t *csr_row_offsets,
+    const uint32_t *csr_col_indices,
+    const double *csr_values,
+    const double *current_u,
+    const double *trial_u,
+    double coefficient,
+    double *block_delta,
+    double *block_absolute,
+    int rows,
+    cudaStream_t stream)
+{
+    const int blocks = (rows + kBlockSize - 1) / kBlockSize;
+    demag_robin_boundary_difference_blocks_kernel<<<blocks, kBlockSize, 0, stream>>>(
+        csr_row_offsets,
+        csr_col_indices,
+        csr_values,
+        current_u,
+        trial_u,
+        coefficient,
+        block_delta,
+        block_absolute,
         rows);
 }
 

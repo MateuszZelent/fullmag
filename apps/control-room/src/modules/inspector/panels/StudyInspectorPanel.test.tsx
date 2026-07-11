@@ -572,10 +572,8 @@ describe("StudyInspectorPanel", () => {
       />,
     );
 
-    expect(html).toContain('value="projected_gradient_bb" disabled=""');
-    expect(html).toContain(
-      "Projected gradient BB is not qualified for FEM demag relaxation. Use nonlinear CG or disable demag.",
-    );
+    expect(html).toContain('value="projected_gradient_bb"');
+    expect(html).not.toContain('value="projected_gradient_bb" disabled=""');
   });
 
   it("shows runtime progress labels on stage pipeline progress bars", () => {

@@ -46,4 +46,19 @@ relaxation::EnergyDifference demag_poisson_energy_difference_from_endpoint_field
     const std::vector<double> &current_h_demag_xyz,
     const std::vector<double> &trial_h_demag_xyz);
 
+/*
+ * Polarized Robin boundary-form increment. `current_boundary_product` and
+ * `trial_boundary_product` are M_Gamma u_0 and M_Gamma u_1 respectively;
+ * coefficient is mu0 * beta. This keeps the quadratic boundary energy out of
+ * endpoint-total subtraction:
+ *
+ *   Delta E_Gamma = 0.5 coefficient (u_1-u_0)^T M_Gamma (u_1+u_0).
+ */
+relaxation::EnergyDifference robin_boundary_energy_difference_from_endpoint_products(
+    double coefficient,
+    const std::vector<double> &current_u,
+    const std::vector<double> &trial_u,
+    const std::vector<double> &current_boundary_product,
+    const std::vector<double> &trial_boundary_product);
+
 } // namespace fullmag::fem

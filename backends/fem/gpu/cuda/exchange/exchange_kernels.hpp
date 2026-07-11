@@ -67,5 +67,15 @@ void fullmag_cuda_legacy_sparse_exchange_energy_blocks(
     int rows,
     cudaStream_t stream = nullptr);
 
+void fullmag_cuda_legacy_sparse_exchange_difference_blocks(
+    const uint32_t *csr_row_offsets,
+    const uint32_t *csr_col_indices,
+    const double *csr_values,
+    const double *current_mx, const double *current_my, const double *current_mz,
+    const double *trial_mx, const double *trial_my, const double *trial_mz,
+    double *block_delta,
+    int rows,
+    cudaStream_t stream = nullptr);
+
 } // namespace fullmag::fem
 #endif

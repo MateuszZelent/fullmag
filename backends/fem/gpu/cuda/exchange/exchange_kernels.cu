@@ -86,6 +86,33 @@ __global__ void legacy_sparse_exchange_energy_blocks_kernel(
     }
 }
 
+__global__ void legacy_sparse_exchange_difference_blocks_kernel(
+    const uint32_t *rows, const uint32_t *cols, const double *values,
+    const double *m0x, const double *m0y, const double *m0z,
+    const double *m1x, const double *m1y, const double *m1z,
+    double *block_sums, int n)
+{
+    const int row = blockIdx.x * blockDim.x + threadIdx.x;
+    double local = 0.0;
+    if (row < n) {
+        double ksumx = 0.0, ksumy = 0.0, ksumz = 0.0;
+        for (uint32_t p = rows[row]; p < rows[row + 1]; ++p) {
+            const uint32_t col = cols[p];
+            const double a = values[p];
+            ksumx += a * (m0x[col] + m1x[col]);
+            ksumy += a * (m0y[col] + m1y[col]);
+            ksumz += a * (m0z[col] + m1z[col]);
+        }
+        local = (m1x[row] - m0x[row]) * ksumx +
+            (m1y[row] - m0y[row]) * ksumy +
+            (m1z[row] - m0z[row]) * ksumz;
+    }
+    typedef cub::BlockReduce<double, 256> BlockReduce;
+    __shared__ typename BlockReduce::TempStorage storage;
+    const double sum = BlockReduce(storage).Sum(local);
+    if (threadIdx.x == 0) block_sums[blockIdx.x] = sum;
+}
+
 __global__ void periodic_legacy_sparse_exchange_kernel(
     const uint32_t *__restrict__ csr_row_offsets,
     const uint32_t *__restrict__ csr_col_indices,
@@ -216,6 +243,16 @@ void fullmag_cuda_legacy_sparse_exchange_energy_blocks(
         mz,
         block_sums,
         rows);
+}
+
+void fullmag_cuda_legacy_sparse_exchange_difference_blocks(
+    const uint32_t *rows, const uint32_t *cols, const double *values,
+    const double *m0x, const double *m0y, const double *m0z,
+    const double *m1x, const double *m1y, const double *m1z,
+    double *blocks, int n, cudaStream_t stream)
+{
+    legacy_sparse_exchange_difference_blocks_kernel<<<(n + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
+        rows, cols, values, m0x, m0y, m0z, m1x, m1y, m1z, blocks, n);
 }
 
 } // namespace fullmag::fem

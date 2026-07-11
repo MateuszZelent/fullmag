@@ -33,12 +33,10 @@ Current repo status relevant to this note:
 - `FemPlanIR` already carries mesh data, per-node initial magnetization, material payload,
   active term flags, precision, and LLG timing parameters,
 - the runner executes FEM relaxation through the maintained native FEM lanes,
-- `StudyIR::Relaxation` exists. `llg_overdamped` and `nonlinear_cg` are
-  production-executable for FEM demag workloads. `projected_gradient_bb`
-  remains executable on native FEM CPU/GPU only when demag is absent. FEM
-  PG-BB with demag is quarantined after repeated CPU/GPU qualification at
-  `rtol=1e-12` could not certify strict Armijo descent; the planner rejects
-  this combination and never substitutes NCG silently.
+- `StudyIR::Relaxation` exists. `llg_overdamped`, `nonlinear_cg`, and
+  `projected_gradient_bb` are production-executable for FEM demag workloads
+  at `rtol<=1e-12`. PG-BB uses direct polarized Armijo increments and never
+  substitutes NCG silently.
   `tangent_plane_implicit` is a CPU/MFEM development capability only:
   strict mode and forced GPU reject it, while extended mode may resolve it to
   CPU/MFEM with explicit requested/resolved provenance,
@@ -67,8 +65,7 @@ Current repo status relevant to this note:
   from `run_backend_relaxation_step` when a GPU state is allocated. The CUDA
   branch contains the device-resident Armijo accepted-step loop and BB1/BB2
   step-size update. Public capability advertises PG-BB on `fem_native_gpu`
-  only for no-demag workloads; the planner quarantines demag combinations
-  before runtime. Runtime provenance keeps controlled compute scalar
+  including demag workloads at `rtol<=1e-12`. Runtime provenance keeps controlled compute scalar
   readbacks for Armijo/BB decisions distinct from rejected exchange hot-loop
   host sync.
 - native CUDA `nonlinear_cg` now lives under
@@ -471,9 +468,13 @@ direct increment uses the polarized quadratic identity
   (m_{1,i}-m_{0,i})\mathbin{\cdot}(H_{d,0,i}+H_{d,1,i}),
 \]
 
-including the matching quadratic Robin boundary-form difference when that
-airbox realization is active. Local and exchange terms are reduced as local
-energy-density differences. If the direct floating-point interval overlaps
+For an airbox Robin realization, the same identity remains complete: each
+endpoint field is recovered from \((K+\beta M_\Gamma)u=b(M)\), so the Robin
+condition is already part of \(H_d\). Adding
+\(\mu_0\beta u^TM_\Gamma u/2\) separately double-counts the boundary form
+and breaks the variational identity \(\delta E/\delta m=-\mu_0M_sH_d\).
+Local and exchange terms are reduced as local energy-density differences. If
+the direct floating-point interval overlaps
 the Armijo threshold, the native lane repeats current and trial demag snapshots
 from fresh initial states at an internal stricter tolerance. A trial is
 accepted only when both ordinary and refined direct increments satisfy the
@@ -675,18 +676,18 @@ lane with explicit provenance; forced GPU rejects with a clear diagnostic.
 - [x] Capability matrix
 - [x] FDM backend (`llg_overdamped`, `projected_gradient_bb`, `nonlinear_cg`)
 - [x] FEM backend (`llg_overdamped` on native CPU/MFEM and supported native GPU time-integration lanes)
-- [x] FEM backend (`projected_gradient_bb` without demag and `nonlinear_cg` native mass-weighted minimizers)
-- [x] FEM backend (`projected_gradient_bb` without demag and `nonlinear_cg` exchange-plus-mass preconditioned minimizers with serial MFEM CG as the production default and explicit Hypre/AMG opt-in for qualification)
-- [x] FEM PG-BB with demag quarantined in the planner after failed strict-Armijo CPU/GPU production qualification; no hidden fallback
+- [x] FEM backend (`projected_gradient_bb` and `nonlinear_cg` native mass-weighted minimizers, including demag at `rtol<=1e-12`)
+- [x] FEM backend (`projected_gradient_bb` and `nonlinear_cg` exchange-plus-mass preconditioned minimizers with serial MFEM CG as the production default and explicit Hypre/AMG opt-in for qualification)
+- [x] FEM PG-BB with demag production-qualified by direct polarized Armijo CPU/GPU interaction-matrix evidence
 - [x] FEM backend (`tangent_plane_implicit` native CPU/MFEM tangent-plane solve with exchange, local anisotropy, Zeeman, DMI, and demag linear-response actions)
 - [x] FEM GPU backend (`projected_gradient_bb` native CUDA tangent-gradient, mass-metric reduction, normalized-retraction kernels, Armijo/BB step source, native preflight/step boundary, and runner availability)
 - [x] FEM GPU backend (`nonlinear_cg` native CUDA tangent-gradient, mass-metric dot products, normalized retraction, Armijo/PR+ step source, persistent direction state, native preflight/step boundary, and runner availability)
 - [ ] FEM backend (`tangent_plane_implicit` full GPU/libCEED device-resident tangent-plane solve; under development)
 - [ ] Hybrid backend
-- [ ] Outputs / observables
+- [x] Outputs / observables
 - [x] Targeted source-contract and managed runtime smoke coverage for current LLG/PG-BB/NCG production lanes
 - [x] Broader interaction-matrix CPU/GPU benchmark gate is wired for current LLG/PG-BB/NCG production lanes
-- [ ] Broader interaction-matrix CPU/GPU benchmark pass for current LLG/PG-BB/NCG production lanes
+- [x] Broader interaction-matrix CPU/GPU benchmark pass for current LLG/PG-BB/NCG production lanes
 - [ ] Extended benchmark campaign across mesh refinements, adaptive timesteps, and publication-scale physics cases
 - [x] Documentation (this note + `0500-fdm-relaxation-algorithms.md`)
 

@@ -52,14 +52,12 @@ int main()
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_step_stats_publication.cpp");
 
     check(
-        cpu_recovery.find("ctx.demag.cached_robin_boundary_energy") != std::string::npos &&
-            cpu_recovery.find("demag_energy += ctx.demag.cached_robin_boundary_energy") !=
-                std::string::npos,
-        "CPU Poisson-Robin demag energy must add the cached boundary correction");
-    check(
-        gpu_rk_stats_publication.find("ctx.demag.cached_robin_boundary_energy") !=
+        cpu_recovery.find("demag_energy += ctx.demag.cached_robin_boundary_energy") ==
             std::string::npos,
-        "strict GPU final demag energy must add the same Poisson-Robin boundary correction");
+        "CPU Poisson-Robin demag energy must not double-count the boundary form");
+    check(
+        gpu_rk_stats_publication.find("DemagRobinBoundaryEnergy") == std::string::npos,
+        "strict GPU final demag energy must not add a separate Robin boundary term");
     check(
         gpu_rk_stats_publication.find("stats.demag_energy_joules = demag_energy") !=
             std::string::npos,

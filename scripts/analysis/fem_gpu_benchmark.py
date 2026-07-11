@@ -203,10 +203,10 @@ DEFAULT_CPU_GPU_TORQUE_ATOL_APM = 1e-9
 DEFAULT_CPU_GPU_TORQUE_ATOL_T = 1e-15
 DEFAULT_CPU_GPU_MAX_STEP_DELTA = 0
 MIN_CONVERGED_DEMAG_POLICIES_FOR_BEST = 2
-DEFAULT_GPU_CONTROL_READBACK_BASE = 2
+DEFAULT_GPU_CONTROL_READBACK_BASE = 3
 DEFAULT_GPU_CONTROL_READBACK_PER_STEP = 4
 DEFAULT_GPU_LLG_CONTROL_READBACK_PER_STEP = 0
-DEFAULT_GPU_PGBB_CONTROL_READBACK_PER_STEP = 4
+DEFAULT_GPU_PGBB_CONTROL_READBACK_PER_STEP = 11
 DEFAULT_GPU_NCG_CONTROL_READBACK_PER_STEP = 4
 DEFAULT_GPU_CONTROL_READBACK_PER_REJECTED_ATTEMPT = 2
 DEFAULT_DEMAG_AMG_RELAX_TYPE = 18
@@ -1094,12 +1094,6 @@ def relaxation_algorithms_for_scenario(
     interactions = set(
         interaction_contract_for_scenario(canonical_scenario).get("interactions", [])
     )
-    if "demag" in interactions:
-        return [
-            algorithm
-            for algorithm in relaxation_algorithms
-            if algorithm != "projected_gradient_bb"
-        ]
     return relaxation_algorithms
 
 
@@ -3001,6 +2995,8 @@ def gpu_control_readback_budget_failures(
                 0,
                 total_rhs_evals - 2 * max(0, executed_steps),
             )
+            if algorithm == "projected_gradient_bb":
+                additional_attempt_budget *= 3
         allowed = (
             algorithm_base
             + algorithm_per_step * max(0, executed_steps)

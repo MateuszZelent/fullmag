@@ -96,6 +96,50 @@ __device__ void block_reduce_triple_sum(
     sum_z = shared_z[0];
 }
 
+__global__ void direct_energy_difference_kernel(
+    const double *current_mx, const double *current_my, const double *current_mz,
+    const double *trial_mx, const double *trial_my, const double *trial_mz,
+    const double *current_hx, const double *current_hy, const double *current_hz,
+    const double *trial_hx, const double *trial_hy, const double *trial_hz,
+    const double *h_ext_x, const double *h_ext_y, const double *h_ext_z,
+    const double *ms, const double *ku, const double *ku2,
+    const double *axis_x, const double *axis_y, const double *axis_z,
+    const double *lumped_mass, const uint8_t *mask,
+    double uniform_ku, double uniform_ku2, bool use_ku_field, bool use_ku2_field,
+    double *block_delta, double *block_absolute, int n)
+{
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    double delta = 0.0;
+    if (i < n && active_node(mask, i)) {
+        const double dx = trial_mx[i] - current_mx[i];
+        const double dy = trial_my[i] - current_my[i];
+        const double dz = trial_mz[i] - current_mz[i];
+        const double volume = lumped_mass[i];
+        const double demag = -0.5 * kMu0 * ms[i] * volume *
+            (dx * (current_hx[i] + trial_hx[i]) +
+             dy * (current_hy[i] + trial_hy[i]) +
+             dz * (current_hz[i] + trial_hz[i]));
+        const double zeeman = -kMu0 * ms[i] * volume *
+            (dx * h_ext_x[i] + dy * h_ext_y[i] + dz * h_ext_z[i]);
+        const double q0 = current_mx[i] * axis_x[i] + current_my[i] * axis_y[i] + current_mz[i] * axis_z[i];
+        const double q1 = trial_mx[i] * axis_x[i] + trial_my[i] * axis_y[i] + trial_mz[i] * axis_z[i];
+        const double q0sq = q0 * q0;
+        const double q1sq = q1 * q1;
+        const double ku_i = use_ku_field ? ku[i] : uniform_ku;
+        const double ku2_i = use_ku2_field ? ku2[i] : uniform_ku2;
+        const double anisotropy = volume *
+            (-ku_i * (q1sq - q0sq) - ku2_i * (q1sq * q1sq - q0sq * q0sq));
+        delta = demag + zeeman + anisotropy;
+    }
+    double sum_delta = 0.0;
+    double sum_absolute = 0.0;
+    block_reduce_pair_sum(delta, fabs(delta), sum_delta, sum_absolute);
+    if (threadIdx.x == 0) {
+        block_delta[blockIdx.x] = sum_delta;
+        block_absolute[blockIdx.x] = sum_absolute;
+    }
+}
+
 __global__ void tangent_gradient_norm_kernel(
     const double *mx,
     const double *my,
@@ -861,6 +905,28 @@ void fullmag_cuda_relax_project_static_periodic_field(
         z,
         periodic_representative_nodes,
         n);
+}
+
+void fullmag_cuda_relax_direct_energy_difference_blocks(
+    const double *current_mx, const double *current_my, const double *current_mz,
+    const double *trial_mx, const double *trial_my, const double *trial_mz,
+    const double *current_h_demag_x, const double *current_h_demag_y, const double *current_h_demag_z,
+    const double *trial_h_demag_x, const double *trial_h_demag_y, const double *trial_h_demag_z,
+    const double *h_ext_x, const double *h_ext_y, const double *h_ext_z,
+    const double *ms, const double *ku, const double *ku2,
+    const double *axis_x, const double *axis_y, const double *axis_z,
+    const double *lumped_mass, const uint8_t *magnetic_node_mask,
+    double uniform_ku, double uniform_ku2, bool use_ku_field, bool use_ku2_field,
+    double *block_delta_energy, double *block_absolute_terms, int n, cudaStream_t stream)
+{
+    const int blocks = (n + kBlockSize - 1) / kBlockSize;
+    direct_energy_difference_kernel<<<blocks, kBlockSize, 0, stream>>>(
+        current_mx, current_my, current_mz, trial_mx, trial_my, trial_mz,
+        current_h_demag_x, current_h_demag_y, current_h_demag_z,
+        trial_h_demag_x, trial_h_demag_y, trial_h_demag_z,
+        h_ext_x, h_ext_y, h_ext_z, ms, ku, ku2, axis_x, axis_y, axis_z,
+        lumped_mass, magnetic_node_mask, uniform_ku, uniform_ku2, use_ku_field, use_ku2_field,
+        block_delta_energy, block_absolute_terms, n);
 }
 
 void fullmag_cuda_relax_bb_curvature_blocks(

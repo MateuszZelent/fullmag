@@ -10,6 +10,9 @@
 #include "context.hpp"
 #include "fem_common.hpp"
 
+#include <cmath>
+#include <limits>
+
 #include <array>
 #include <cmath>
 #include <limits>
@@ -217,6 +220,45 @@ double uniaxial_anisotropy_energy_from_element_quadrature_material(
         }
     }
     return energy_j;
+}
+
+relaxation::EnergyDifference uniaxial_anisotropy_energy_difference(
+    const Context &ctx,
+    const std::vector<double> &current_m_xyz,
+    const std::vector<double> &trial_m_xyz)
+{
+    relaxation::EnergyDifference result;
+    if (current_m_xyz.empty() || current_m_xyz.size() % 3u != 0u ||
+        trial_m_xyz.size() != current_m_xyz.size()) {
+        result.delta_joules = result.absolute_term_sum_joules =
+            result.roundoff_bound_joules = std::numeric_limits<double>::quiet_NaN();
+        return result;
+    }
+    const size_t nodes = current_m_xyz.size() / 3u;
+    if (!ctx.anisotropy.uniaxial_enabled ||
+        ctx.integration_weights.mfem_lumped_mass.size() < nodes) {
+        return result;
+    }
+    const bool axis_field = !ctx.anisotropy.uniaxial_axis_x_field.empty() &&
+        !ctx.anisotropy.uniaxial_axis_y_field.empty() &&
+        !ctx.anisotropy.uniaxial_axis_z_field.empty();
+    for (size_t node = 0; node < nodes; ++node) {
+        if (!ctx.mesh.magnetic_node_mask.empty() && ctx.mesh.magnetic_node_mask[node] == 0u) continue;
+        const double ku1 = ctx.material_fields.Ku_field.empty() ? ctx.anisotropy.uniaxial_Ku : ctx.material_fields.Ku_field[node];
+        const double ku2 = ctx.material_fields.Ku2_field.empty() ? ctx.anisotropy.uniaxial_Ku2 : ctx.material_fields.Ku2_field[node];
+        const double ux = axis_field ? ctx.anisotropy.uniaxial_axis_x_field[node] : ctx.anisotropy.uniaxial_axis[0];
+        const double uy = axis_field ? ctx.anisotropy.uniaxial_axis_y_field[node] : ctx.anisotropy.uniaxial_axis[1];
+        const double uz = axis_field ? ctx.anisotropy.uniaxial_axis_z_field[node] : ctx.anisotropy.uniaxial_axis[2];
+        const size_t base = 3u * node;
+        const double q0 = current_m_xyz[base]*ux + current_m_xyz[base+1u]*uy + current_m_xyz[base+2u]*uz;
+        const double q1 = trial_m_xyz[base]*ux + trial_m_xyz[base+1u]*uy + trial_m_xyz[base+2u]*uz;
+        const double term = ctx.integration_weights.mfem_lumped_mass[node] *
+            (-ku1 * (q1*q1 - q0*q0) - ku2 * (q1*q1*q1*q1 - q0*q0*q0*q0));
+        result.delta_joules += term;
+        result.absolute_term_sum_joules += std::abs(term);
+    }
+    result.roundoff_bound_joules = relaxation::reduction_roundoff_bound(nodes) * result.absolute_term_sum_joules;
+    return result;
 }
 
 } // namespace fullmag::fem

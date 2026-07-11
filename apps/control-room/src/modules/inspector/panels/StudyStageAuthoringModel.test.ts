@@ -202,15 +202,9 @@ describe("StudyStageAuthoringModel", () => {
       device: "gpu",
       mode: "strict",
     };
-    expect(validateStudyStageDraft(draft, execution)).toContainEqual({
-      message:
-        "Projected gradient BB is not qualified for FEM demag relaxation. Use nonlinear CG or disable demag.",
-      severity: "error",
-    });
     expect(
       relaxationAlgorithmAvailability("projected_gradient_bb", {
         ...execution,
-        demagEnabled: false,
       }),
     ).toEqual({ reason: null, supported: true });
   });

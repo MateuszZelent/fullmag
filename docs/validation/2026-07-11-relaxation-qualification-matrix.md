@@ -21,17 +21,17 @@ relaxation audit. The canonical physics definition is
 - FEM demag line searches use deterministic fresh Poisson initial states.
   NCG and development-only TPI resolve missing demag solver tolerance to
   `rtol=1e-12`; explicitly looser policies reject before runtime.
-- FEM PG-BB with demag is not production-qualified. Repeated CPU/GPU tests could
-  not certify strict Armijo descent after many accepted steps, so the planner
-  rejects this combination without fallback and recommends FEM NCG. FEM PG-BB
-  without demag remains executable.
+- FEM PG-BB with demag is production-qualified after direct, polarized Armijo
+  increments for demag, exchange, uniaxial/cubic anisotropy, and DMI. The
+  managed CPU/GPU interaction-matrix benchmark is the promotion evidence; no
+  endpoint-total subtraction or hidden algorithm fallback remains.
 
 ## Algorithm and lane matrix
 
 | Algorithm | FDM CPU | FDM CUDA | FEM CPU | FEM CUDA | Time semantics | Production status |
 |---|---|---|---|---|---|---|
 | `llg_overdamped` | qualified | qualified | qualified | qualified | requested explicit RK tableau and physical `dt`, seconds | production |
-| `projected_gradient_bb` | qualified | qualified for supported material payloads | qualified without demag | qualified without demag | Armijo/BB step in `m/A`, time and `dt` absent | production with explicit FEM-demag quarantine |
+| `projected_gradient_bb` | qualified | qualified for supported material payloads | qualified, including demag at `rtol<=1e-12` | qualified, including demag at `rtol<=1e-12` | Armijo/BB step in `m/A`, time and `dt` absent | production |
 | `nonlinear_cg` | qualified | qualified for supported material payloads | qualified, including demag at `rtol<=1e-12` | qualified, including demag at `rtol<=1e-12` | Armijo/PR+ step in `m/A`, time and `dt` absent | production |
 | `tangent_plane_implicit` | unsupported | unsupported | development-only in `extended` mode | unsupported | implicit minimizer step in `m/A`, time and `dt` absent | development-only, fail-closed elsewhere |
 
@@ -44,7 +44,7 @@ CPU execution, another minimizer, or a looser physical model.
 | Surface | Verified contract |
 |---|---|
 | Python DSL | finite SI validation, canonical defaults, algorithm-specific dynamics, symmetric script export/import |
-| ProblemIR and planner | typed algorithm/stop fields, conservative legality, explicit requested/resolved execution, TPI gating, FEM PG-BB demag quarantine |
+| ProblemIR and planner | typed algorithm/stop fields, conservative legality, explicit requested/resolved execution, TPI gating, FEM PG-BB demag `rtol<=1e-12` policy |
 | Native runtime | authoritative completion, exact torque telemetry, separate RHS norm, zero-time direct minimizers, deterministic demag energy oracle |
 | OpenAPI v2 | typed algorithms, stop reasons, metric kinds and units; canonical fields plus formal deprecated aliases |
 | Control Room | algorithm-specific Inspector fields, fixed/adaptive controls, exact `A/m`/`T` display, capability-gated TPI, no torque-unit fallback |
@@ -52,7 +52,7 @@ CPU execution, another minimizer, or a looser physical model.
 ## Final evidence
 
 - Managed runtime rebuild: PASS; bundle validated and promoted.
-- Production FEM benchmark: PASS, `54/54` rows, `0` failures, CPU and GPU,
+- Production FEM benchmark: PASS, including PG-BB FEM CPU/GPU demag, uniaxial, cubic, and DMI cases,
   `39` comparison pairs, required coverage `21/21`.
 - Managed native source/operator/energy-derivative contracts: PASS, including
   demag directional derivative.

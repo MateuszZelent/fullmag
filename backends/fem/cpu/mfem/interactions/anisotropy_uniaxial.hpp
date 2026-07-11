@@ -1,5 +1,7 @@
 #pragma once
 
+#include "src/relaxation_numerics.hpp"
+
 #include <array>
 #include <vector>
 
@@ -29,6 +31,11 @@ void compute_uniaxial_anisotropy_field(
     const std::vector<double> &m_xyz,
     std::vector<double> &h_ani_xyz,
     double *anisotropy_energy);
+
+relaxation::EnergyDifference uniaxial_anisotropy_energy_difference(
+    const Context &ctx,
+    const std::vector<double> &current_m_xyz,
+    const std::vector<double> &trial_m_xyz);
 
 /*
  * Integrate E_u for a sharp DG0 material topology, P1 m and existing P1

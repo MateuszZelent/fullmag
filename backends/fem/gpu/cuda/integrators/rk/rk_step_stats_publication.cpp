@@ -27,20 +27,12 @@ void gpu_rk_publish_final_step_stats(
 
     const double max_rhs = scalar(GpuFinalScalarSlot::MaxRhs);
     const double exchange_energy = scalar(GpuFinalScalarSlot::ExchangeEnergy);
-    double demag_robin_boundary_energy = 0.0;
-#if FULLMAG_HAS_MFEM_STACK
-    if (ctx.demag.enabled &&
-        ctx.demag.realization == FULLMAG_FEM_DEMAG_AIRBOX_ROBIN &&
-        ctx.poisson_demag.robin_effective_beta > 0.0) {
-        demag_robin_boundary_energy = scalar(GpuFinalScalarSlot::DemagRobinBoundaryEnergy);
-    }
-#endif // FULLMAG_HAS_MFEM_STACK
     if (ctx.demag.enabled) {
-        ctx.demag.cached_robin_boundary_energy = demag_robin_boundary_energy;
+        ctx.demag.cached_robin_boundary_energy = 0.0;
     }
     const double demag_energy =
         ctx.demag.enabled
-            ? scalar(GpuFinalScalarSlot::DemagEnergy) + ctx.demag.cached_robin_boundary_energy
+            ? scalar(GpuFinalScalarSlot::DemagEnergy)
             : 0.0;
     const double external_energy =
         ctx.zeeman.has_external_field ? scalar(GpuFinalScalarSlot::ExternalEnergy) : 0.0;

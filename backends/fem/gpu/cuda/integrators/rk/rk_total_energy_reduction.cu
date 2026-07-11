@@ -31,7 +31,6 @@ bool cuda_ok(cudaError_t rc, const char *operation, std::string &reason)
 __global__ void total_energy_scalar_kernel(
     const double *scalars,
     bool demag_enabled,
-    bool robin_boundary_enabled,
     bool external_enabled,
     bool uniaxial_enabled,
     bool cubic_enabled,
@@ -43,9 +42,6 @@ __global__ void total_energy_scalar_kernel(
     double demag_energy = 0.0;
     if (demag_enabled) {
         demag_energy = scalars[static_cast<int>(GpuFinalScalarSlot::DemagEnergy)];
-        if (robin_boundary_enabled) {
-            demag_energy += scalars[static_cast<int>(GpuFinalScalarSlot::DemagRobinBoundaryEnergy)];
-        }
     }
     const double total =
         scalars[static_cast<int>(GpuFinalScalarSlot::ExchangeEnergy)] +
@@ -73,17 +69,9 @@ bool gpu_rk_reduce_total_energy_scalar(
         return false;
     }
 
-    bool robin_boundary_enabled = false;
-#if FULLMAG_HAS_MFEM_STACK
-    robin_boundary_enabled =
-        ctx.demag.enabled &&
-        ctx.demag.realization == FULLMAG_FEM_DEMAG_AIRBOX_ROBIN &&
-        ctx.poisson_demag.robin_effective_beta > 0.0;
-#endif
     total_energy_scalar_kernel<<<1, 1, 0, stream>>>(
         gpu.reductions.scalar_result,
         ctx.demag.enabled,
-        robin_boundary_enabled,
         ctx.zeeman.has_external_field,
         ctx.anisotropy.uniaxial_enabled,
         ctx.anisotropy.cubic_enabled,

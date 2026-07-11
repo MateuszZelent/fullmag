@@ -4494,17 +4494,20 @@ fn fem_demag_direct_minimizer_resolves_missing_solver_policy_to_armijo_accuracy(
 }
 
 #[test]
-fn fem_demag_projected_gradient_bb_is_quarantined_until_armijo_is_qualified() {
-    let error = plan(&fem_demag_relaxation_policy_ir(
+fn fem_demag_projected_gradient_bb_resolves_strict_armijo_policy() {
+    let planned = plan(&fem_demag_relaxation_policy_ir(
         fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
     ))
-    .expect_err("FEM PG-BB with demag must remain unavailable after production qualification failure");
-    assert!(error.reasons.iter().any(|reason| {
-        reason.contains("projected_gradient_bb")
-            && reason.contains("demag")
-            && reason.contains("production qualification")
-            && reason.contains("nonlinear_cg")
-            && reason.contains("no hidden fallback")
+    .expect("FEM PG-BB with qualified demag must plan successfully");
+    let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+        panic!("expected FEM plan");
+    };
+    assert_eq!(
+        fem.demag_solver_policy.expect("resolved demag policy").rtol,
+        1.0e-12
+    );
+    assert!(planned.provenance.notes.iter().any(|note| {
+        note.contains("projected_gradient_bb") && note.contains("resolved_rtol=1.000000e-12")
     }));
 }
 

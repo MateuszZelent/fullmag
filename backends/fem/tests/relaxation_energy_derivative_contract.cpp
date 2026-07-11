@@ -4,6 +4,7 @@
 
 #include "context.hpp"
 #include "cpu/mfem/interactions/demag_poisson_energy.hpp"
+#include "cpu/mfem/interactions/anisotropy_uniaxial.hpp"
 #include "cpu/mfem/interactions/zeeman_energy.hpp"
 #include "cpu/mfem/relaxation/relaxation_math.hpp"
 #include "fem_common.hpp"
@@ -612,6 +613,25 @@ void direct_armijo_difference_resolves_sub_ulp_total_energy_decrement()
             ArmijoDifferenceDecision::Refine,
         "an Armijo threshold inside the direct-difference uncertainty interval must request refinement");
 
+    const EnergyDifference refined = {
+        -9.0e-35,
+        1.0e-34,
+        1.0e-35,
+    };
+    check(
+        strict_armijo_difference_refinement_accepts(
+            ambiguous, refined, -5.0e-35),
+        "an ambiguous ordinary difference may pass only when its nominal decrement and an independently refined difference both satisfy Armijo");
+    const EnergyDifference refined_rejection = {
+        -4.0e-35,
+        1.0e-34,
+        1.0e-35,
+    };
+    check(
+        !strict_armijo_difference_refinement_accepts(
+            ambiguous, refined_rejection, -5.0e-35),
+        "a refinement that does not resolve strict Armijo must reject the trial");
+
     const EnergyDifference uphill = {
         1.0e-34,
         1.0e-34,
@@ -654,6 +674,32 @@ void polarized_demag_energy_difference_uses_endpoint_fields()
         "polarized demag difference must expose an absolute term sum for roundoff bounds");
 }
 
+void polarized_robin_boundary_energy_difference_uses_endpoint_potentials()
+{
+    const std::vector<double> current_u = {1.0, -2.0};
+    const std::vector<double> trial_u = {1.5, -1.0};
+    // M_Gamma = [[2, 1], [1, 3]].
+    const std::vector<double> current_boundary_product = {0.0, -5.0};
+    const std::vector<double> trial_boundary_product = {2.0, -1.5};
+    constexpr double coefficient = 3.0;
+    const auto difference =
+        fullmag::fem::robin_boundary_energy_difference_from_endpoint_products(
+            coefficient,
+            current_u,
+            trial_u,
+            current_boundary_product,
+            trial_boundary_product);
+    const double current_energy = 0.5 * coefficient * 10.0;
+    const double trial_energy = 0.5 * coefficient * 4.5;
+    check(
+        std::abs(difference.delta_joules - (trial_energy - current_energy)) < 1.0e-14,
+        "polarized Robin boundary increment must equal the endpoint quadratic-energy difference");
+    check(
+        difference.absolute_term_sum_joules > std::abs(difference.delta_joules) &&
+            difference.roundoff_bound_joules > 0.0,
+        "Robin increment must retain a cancellation-aware absolute-term sum and roundoff bound");
+}
+
 void direct_zeeman_energy_difference_avoids_endpoint_total_subtraction()
 {
     fullmag::fem::Context ctx;
@@ -673,6 +719,29 @@ void direct_zeeman_energy_difference_avoids_endpoint_total_subtraction()
     check(
         std::abs(difference.delta_joules - expected) <= 1.0e-45,
         "direct Zeeman difference must evaluate the nodal magnetization increment before reduction");
+}
+
+void direct_uniaxial_energy_difference_uses_local_density_difference()
+{
+    fullmag::fem::Context ctx;
+    ctx.mesh.magnetic_node_mask = {1u};
+    ctx.integration_weights.mfem_lumped_mass = {4.0e-27};
+    ctx.anisotropy.uniaxial_enabled = true;
+    ctx.anisotropy.uniaxial_Ku = 2.0e5;
+    ctx.anisotropy.uniaxial_Ku2 = 3.0e4;
+    ctx.anisotropy.uniaxial_axis = {0.0, 0.0, 1.0};
+    const std::vector<double> current_m = {0.6, 0.0, 0.8};
+    const std::vector<double> trial_m = {0.6, 0.0, 0.8 - 2.0e-12};
+    const auto difference = fullmag::fem::uniaxial_anisotropy_energy_difference(
+        ctx, current_m, trial_m);
+    const double q0 = current_m[2];
+    const double q1 = trial_m[2];
+    const double expected = 4.0e-27 *
+        (-2.0e5 * (q1 * q1 - q0 * q0) -
+         3.0e4 * (q1 * q1 * q1 * q1 - q0 * q0 * q0 * q0));
+    check(
+        std::abs(difference.delta_joules - expected) <= 1.0e-45,
+        "direct uniaxial difference must subtract local energy densities before reduction");
 }
 
 void transported_bb_secant_lives_in_the_accepted_tangent_space()
@@ -1106,7 +1175,9 @@ int main()
     strict_monotone_energy_scale_sweep();
     direct_armijo_difference_resolves_sub_ulp_total_energy_decrement();
     polarized_demag_energy_difference_uses_endpoint_fields();
+    polarized_robin_boundary_energy_difference_uses_endpoint_potentials();
     direct_zeeman_energy_difference_avoids_endpoint_total_subtraction();
+    direct_uniaxial_energy_difference_uses_local_density_difference();
     transported_bb_secant_lives_in_the_accepted_tangent_space();
     std::vector<std::string> failed_interactions;
     for (Interaction interaction : {

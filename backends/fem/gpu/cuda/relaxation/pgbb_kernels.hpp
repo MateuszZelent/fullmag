@@ -78,6 +78,37 @@ void fullmag_cuda_relax_project_static_periodic_field(
     int n,
     cudaStream_t stream = nullptr);
 
+void fullmag_cuda_relax_direct_energy_difference_blocks(
+    const double *current_mx,
+    const double *current_my,
+    const double *current_mz,
+    const double *trial_mx,
+    const double *trial_my,
+    const double *trial_mz,
+    const double *current_h_demag_x,
+    const double *current_h_demag_y,
+    const double *current_h_demag_z,
+    const double *trial_h_demag_x,
+    const double *trial_h_demag_y,
+    const double *trial_h_demag_z,
+    const double *h_ext_x,
+    const double *h_ext_y,
+    const double *h_ext_z,
+    const double *ms,
+    const double *ku,
+    const double *ku2,
+    const double *axis_x,
+    const double *axis_y,
+    const double *axis_z,
+    const double *lumped_mass,
+    const uint8_t *magnetic_node_mask,
+    double uniform_ku, double uniform_ku2,
+    bool use_ku_field, bool use_ku2_field,
+    double *block_delta_energy,
+    double *block_absolute_terms,
+    int n,
+    cudaStream_t stream = nullptr);
+
 void fullmag_cuda_relax_bb_curvature_blocks(
     const double *previous_mx,
     const double *previous_my,

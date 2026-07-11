@@ -1816,7 +1816,7 @@ def test_gpu_ncg_control_readback_budget_covers_conditional_direction_read() -> 
     )
 
 
-def test_gpu_pgbb_control_readback_budget_matches_four_sync_structure() -> None:
+def test_gpu_pgbb_control_readback_budget_matches_direct_difference_sync_structure() -> None:
     benchmark = load_benchmark_module()
     row = {
         "backend": "fem_gpu",
@@ -1826,7 +1826,7 @@ def test_gpu_pgbb_control_readback_budget_matches_four_sync_structure() -> None:
         "executed_steps": 1,
         "total_rhs_evals": 2,
         "rejected_attempts": 0,
-        "hot_loop_control_scalar_host_sync_count": 4,
+        "hot_loop_control_scalar_host_sync_count": 8,
     }
     common = {
         "base": 0,
@@ -1836,16 +1836,16 @@ def test_gpu_pgbb_control_readback_budget_matches_four_sync_structure() -> None:
         "per_rejected_attempt": 2,
     }
 
-    assert benchmark.DEFAULT_GPU_PGBB_CONTROL_READBACK_PER_STEP == 4
+    assert benchmark.DEFAULT_GPU_PGBB_CONTROL_READBACK_PER_STEP == 8
     assert benchmark.gpu_control_readback_budget_failures(
-        [row], pgbb_per_step=4, **common
+        [row], pgbb_per_step=8, **common
     ) == []
     assert benchmark.gpu_control_readback_budget_failures(
-        [row], pgbb_per_step=3, **common
+        [row], pgbb_per_step=7, **common
     )
     assert benchmark.gpu_control_readback_budget_failures(
-        [{**row, "hot_loop_control_scalar_host_sync_count": 5}],
-        pgbb_per_step=4,
+        [{**row, "hot_loop_control_scalar_host_sync_count": 9}],
+        pgbb_per_step=8,
         **common,
     )
 
@@ -1915,7 +1915,7 @@ def main() -> int:
         test_llg_consistency_still_rejects_numeric_mismatch,
         test_stt_oersted_has_no_relaxation_consistency_manifest,
         test_gpu_ncg_control_readback_budget_covers_conditional_direction_read,
-        test_gpu_pgbb_control_readback_budget_matches_four_sync_structure,
+        test_gpu_pgbb_control_readback_budget_matches_direct_difference_sync_structure,
         test_direct_minimizer_benchmark_uses_qualified_demag_tolerance,
         test_fem_pgbb_demag_is_excluded_from_production_manifest,
         test_cpu_gpu_consistency_preflight_reports_unavailable_native_fem_gpu,

@@ -548,48 +548,50 @@ void c_abi_exposes_native_relaxation_step() {
             projected_gradient.find("restore_after_failed_line_search(") !=
                 std::string::npos,
         "native FEM projected-gradient BB must reject exhausted Armijo searches and restore the previous state");
-    check(
-        projected_gradient.find("retry_projected_gradient_bb_line_search_with_reset(") !=
-                std::string::npos &&
-            projected_gradient.find(
-                "retry_projected_gradient_bb_line_search_with_raw_gradient_restart(") !=
-                std::string::npos &&
-            projected_gradient.find("raw_direction = relaxation::project_tangent(") !=
-                std::string::npos &&
-            projected_gradient.find(
-                "relaxation::negative_field(previous_gradient));") !=
-                std::string::npos &&
-            projected_gradient.find(
-                "direction_dot_gradient = relaxation::energy_weighted_dot_fields(") !=
-                std::string::npos &&
-            projected_gradient.find("kProjectedGradientArmijoRecoveryCycles") !=
-                std::string::npos &&
-            projected_gradient.find("accept_monotone_recovery_step(") !=
-                std::string::npos &&
-            projected_gradient.find("strict_monotone_energy_accept(") !=
-                std::string::npos &&
-            projected_gradient.find("trial_step = restart_step;") !=
-                std::string::npos &&
-            projected_gradient.find("reset_consecutive") <
-                projected_gradient.find("restore_after_failed_line_search("),
-        "native FEM projected-gradient BB must attempt bounded preconditioned and raw-gradient Armijo recovery with fresh restart steps and strict monotone fallback before failing the step");
+    const auto pgbb_main_start =
+        projected_gradient.find("int run_projected_gradient_bb_step(");
     const auto pgbb_main_backtracks =
-        projected_gradient.find("uint32_t backtracks = 0;");
+        pgbb_main_start == std::string::npos
+            ? std::string::npos
+            : projected_gradient.find("uint32_t backtracks = 0;", pgbb_main_start);
     const auto pgbb_first_armijo =
         pgbb_main_backtracks == std::string::npos
             ? std::string::npos
             : projected_gradient.find("bool armijo = false", pgbb_main_backtracks);
+    const auto pgbb_backtrack_limit =
+        pgbb_first_armijo == std::string::npos
+            ? std::string::npos
+            : projected_gradient.find(
+                  "if (backtracks >= relaxation::kProjectedGradientMaxBacktracks)",
+                  pgbb_first_armijo);
+    const auto pgbb_monotone_escape =
+        pgbb_first_armijo == std::string::npos
+            ? std::string::npos
+            : projected_gradient.find(
+                  "strict_armijo_difference_decision(\n                direct_difference, 0.0)",
+                  pgbb_first_armijo);
     check(
         projected_gradient.find("kLineSearchEnergyNoiseFloorJ") == std::string::npos &&
-            projected_gradient.find("kLineSearchEnergyNoiseRelative") == std::string::npos &&
-            projected_gradient.find("accept_monotone_line_search_step(") !=
-                std::string::npos &&
+        projected_gradient.find("kLineSearchEnergyNoiseRelative") == std::string::npos &&
             pgbb_first_armijo != std::string::npos &&
-            projected_gradient.find("accept_monotone_line_search_step(", pgbb_first_armijo) <
+            projected_gradient.find("pgbb_direct_energy_difference(", pgbb_main_backtracks) <
+            pgbb_backtrack_limit != std::string::npos &&
+            projected_gradient.find(
+                "if (backtracks >= relaxation::kProjectedGradientMaxBacktracks)",
+                pgbb_first_armijo) &&
+            projected_gradient.find("strict_armijo_difference_decision(", pgbb_first_armijo) <
                 projected_gradient.find(
                     "if (backtracks >= relaxation::kProjectedGradientMaxBacktracks)",
-                    pgbb_first_armijo),
-        "native FEM projected-gradient BB must accept exactly nonincreasing line-search trials before exhausting Armijo backtracks");
+                    pgbb_first_armijo) &&
+            projected_gradient.find(
+                "pgbb_refined_armijo_accepts(",
+                pgbb_first_armijo) <
+                projected_gradient.find(
+                    "if (backtracks >= relaxation::kProjectedGradientMaxBacktracks)",
+                    pgbb_first_armijo) &&
+            (pgbb_monotone_escape == std::string::npos ||
+                pgbb_monotone_escape > pgbb_backtrack_limit),
+        "native FEM projected-gradient BB must decide strict Armijo only from its direct energy difference before exhausting backtracks");
     check(
         projected_gradient.find("format_projected_gradient_bb_scalar(") !=
                 std::string::npos &&
@@ -1138,34 +1140,39 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
             pgbb_source.find("gpu_relax_restore_previous_magnetization(") !=
                 std::string::npos,
         "native FEM GPU projected-gradient BB must reject exhausted Armijo searches and restore the previous device state");
-    check(
-        pgbb_source.find("gpu_relax_retry_pgbb_line_search_with_reset(") !=
-                std::string::npos &&
-            pgbb_source.find(
-                "gpu_relax_retry_pgbb_line_search_with_raw_gradient_restart(") !=
-                std::string::npos &&
-            pgbb_source.find("3u * kMaxBacktracks") != std::string::npos &&
-            pgbb_source.find("kArmijoRecoveryCycles") != std::string::npos &&
-            pgbb_source.find("gpu_relax_accept_monotone_recovery_step(") !=
-                std::string::npos &&
-            pgbb_source.find("strict_monotone_energy_accept(current_energy, trial_energy)") !=
-                std::string::npos &&
-            pgbb_source.find("trial_step = restart_step;") !=
-                std::string::npos &&
-            pgbb_source.find("reset_consecutive") <
-                pgbb_source.find("GPU projected-gradient BB failed Armijo line search"),
-        "native FEM GPU projected-gradient BB must attempt bounded reset and raw-gradient Armijo recovery with fresh restart steps and strict monotone fallback before failing the device step");
+    const auto pgbb_main_start =
+        pgbb_source.find("int gpu_relax_projected_gradient_bb_step(");
     const auto pgbb_first_armijo =
-        pgbb_source.find("const bool armijo =", pgbb_source.find("while (true)"));
+        pgbb_main_start == std::string::npos
+            ? std::string::npos
+            : pgbb_source.find("const auto armijo_decision =", pgbb_main_start);
+    const auto pgbb_backtrack_limit =
+        pgbb_first_armijo == std::string::npos
+            ? std::string::npos
+            : pgbb_source.find("if (backtracks >= kMaxBacktracks)", pgbb_first_armijo);
+    const auto pgbb_monotone_escape =
+        pgbb_first_armijo == std::string::npos
+            ? std::string::npos
+            : pgbb_source.find(
+                  "strict_armijo_difference_decision(\n                direct_difference, 0.0)",
+                  pgbb_first_armijo);
     check(
-        pgbb_source.find("gpu_relax_accept_monotone_line_search_step(") !=
-                std::string::npos &&
             pgbb_first_armijo != std::string::npos &&
             pgbb_source.find(
-                "gpu_relax_accept_monotone_line_search_step(",
+                "fullmag_cuda_relax_direct_energy_difference_blocks(",
+                pgbb_source.find("while (true)")) <
+                pgbb_backtrack_limit != std::string::npos &&
+            pgbb_source.find(
+                "strict_armijo_difference_decision(",
                 pgbb_first_armijo) <
-                pgbb_source.find("if (backtracks >= kMaxBacktracks)", pgbb_first_armijo),
-        "native FEM GPU projected-gradient BB must accept exactly nonincreasing line-search trials before exhausting Armijo backtracks");
+                pgbb_source.find("if (backtracks >= kMaxBacktracks)", pgbb_first_armijo) &&
+            pgbb_source.find(
+                "gpu_relax_pgbb_refined_armijo_accepts(",
+                pgbb_first_armijo) <
+                pgbb_source.find("if (backtracks >= kMaxBacktracks)", pgbb_first_armijo) &&
+            (pgbb_monotone_escape == std::string::npos ||
+                pgbb_monotone_escape > pgbb_backtrack_limit),
+        "native FEM GPU projected-gradient BB must decide strict Armijo only from its direct energy difference before exhausting backtracks");
     check(
         pgbb_source.find("current_energy_j=") != std::string::npos &&
             pgbb_source.find("last_trial_energy_j=") != std::string::npos &&

@@ -34,4 +34,11 @@ bool reduce_device_demag_robin_boundary_energy(
     void *stream,
     std::string &reason);
 
+bool reduce_device_demag_robin_boundary_difference(
+    Context &ctx,
+    double *delta_result,
+    double *absolute_result,
+    void *stream,
+    std::string &reason);
+
 } // namespace fullmag::fem

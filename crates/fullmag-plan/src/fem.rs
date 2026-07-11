@@ -2002,19 +2002,6 @@ pub(crate) fn plan_fem(
         return Err(PlanError { reasons: errors });
     }
 
-    if enable_demag
-        && relaxation.as_ref().is_some_and(|control| {
-            control.algorithm == fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
-        })
-    {
-        return Err(PlanError {
-            reasons: vec![
-                "FEM projected_gradient_bb with demag is unavailable: repeated CPU/GPU production qualification could not certify strict Armijo descent even with deterministic fresh demag solves, rtol=1e-12, and raw-gradient recovery; use nonlinear_cg for FEM demag relaxation. This capability is rejected with no hidden fallback."
-                    .to_string(),
-            ],
-        });
-    }
-
     let requested_demag_solver_policy = fem_hints.demag_solver_policy.clone();
     let mut demag_solver_policy = requested_demag_solver_policy.clone();
     let mut direct_minimizer_demag_policy_note = None;

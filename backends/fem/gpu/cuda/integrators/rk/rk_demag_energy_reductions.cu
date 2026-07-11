@@ -1,8 +1,8 @@
 /*
  * GPU CUDA RK demag final energy reductions source contract.
  *
- * This source owns final demag energy validation, kernel launch, Robin
- * boundary reduction, and scalar reduction for the device-resident RK stats
+ * This source owns final demag energy validation, kernel launch, and scalar
+ * reduction for the device-resident RK stats
  * path. It does not own generic final energy orchestration, scalar readback,
  * stats publication, or C ABI entrypoints.
  */
@@ -11,7 +11,6 @@
 
 #include "context.hpp"
 #include "gpu/cuda/demag_poisson/demag_kernels.hpp"
-#include "gpu/cuda/demag_poisson/stage_compute.hpp"
 #include "gpu/cuda/integrators/rk/rk_step_stats.hpp"
 #include "gpu/cuda/reductions/reduction_kernels.hpp"
 
@@ -83,17 +82,6 @@ bool gpu_rk_reduce_final_demag_energy_terms(
         stream);
     if (!cuda_launch_ok("launch GPU RK demag energy reduction", reason)) {
         return false;
-    }
-
-    if (ctx.demag.realization == FULLMAG_FEM_DEMAG_AIRBOX_ROBIN &&
-        ctx.poisson_demag.robin_effective_beta > 0.0) {
-        if (!reduce_device_demag_robin_boundary_energy(
-                ctx,
-                gpu_rk_final_scalar_result(gpu, GpuFinalScalarSlot::DemagRobinBoundaryEnergy),
-                stream,
-                reason)) {
-            return false;
-        }
     }
 
     return true;

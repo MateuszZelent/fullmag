@@ -448,4 +448,71 @@ bool reduce_device_demag_robin_boundary_energy(
 #endif
 }
 
+bool reduce_device_demag_robin_boundary_difference(
+    Context &ctx,
+    double *delta_result,
+    double *absolute_result,
+    void *raw_stream,
+    std::string &reason)
+{
+#if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+    auto *workspace = workspace_ptr(ctx);
+    auto &gpu = ctx.gpu_state.device;
+    if (workspace == nullptr ||
+        workspace->robin_boundary_mass.rows == 0 ||
+        workspace->robin_boundary_mass.d_row_offsets == nullptr ||
+        workspace->robin_boundary_mass.d_col_indices == nullptr ||
+        workspace->robin_boundary_mass.d_values == nullptr ||
+        gpu.demag_poisson.poisson_solution_full == nullptr ||
+        gpu.demag_poisson.poisson_solution == nullptr ||
+        gpu.reductions.scalar_workspace == nullptr ||
+        gpu.rk.k[1].x == nullptr ||
+        gpu.reductions.temp_storage == nullptr ||
+        delta_result == nullptr || absolute_result == nullptr) {
+        reason = "GPU Poisson-Robin demag difference requires endpoint potentials, boundary mass, and reduction buffers";
+        return false;
+    }
+    cudaStream_t stream = reinterpret_cast<cudaStream_t>(raw_stream);
+    const int rows = static_cast<int>(workspace->robin_boundary_mass.rows);
+    fullmag_cuda_demag_robin_boundary_difference_blocks(
+        workspace->robin_boundary_mass.d_row_offsets,
+        workspace->robin_boundary_mass.d_col_indices,
+        workspace->robin_boundary_mass.d_values,
+        gpu.demag_poisson.poisson_solution_full,
+        gpu.demag_poisson.poisson_solution,
+        kMu0 * ctx.poisson_demag.robin_effective_beta,
+        gpu.reductions.scalar_workspace,
+        gpu.rk.k[1].x,
+        rows,
+        stream);
+    if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson-Robin demag boundary difference blocks", reason)) {
+        return false;
+    }
+    const int blocks = std::max(1, (rows + kDemagCudaBlockSize - 1) / kDemagCudaBlockSize);
+    size_t reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
+    fullmag_cuda_device_sum(
+        gpu.reductions.scalar_workspace,
+        blocks,
+        delta_result,
+        gpu.reductions.temp_storage,
+        reduce_bytes,
+        stream);
+    fullmag_cuda_device_sum(
+        gpu.rk.k[1].x,
+        blocks,
+        absolute_result,
+        gpu.reductions.temp_storage,
+        reduce_bytes,
+        stream);
+    return cuda_ok(cudaGetLastError(), "launch GPU Poisson-Robin demag boundary difference reductions", reason);
+#else
+    (void)ctx;
+    (void)delta_result;
+    (void)absolute_result;
+    (void)raw_stream;
+    reason = "strict FEM GPU demag requires MFEM MPI, hypre GPU, and CUDA runtime support";
+    return false;
+#endif
+}
+
 } // namespace fullmag::fem

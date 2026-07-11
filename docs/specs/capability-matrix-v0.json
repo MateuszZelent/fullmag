@@ -52,11 +52,11 @@
       "lanes": {
         "fdm_cpu_reference": "reference_executable",
         "fdm_gpu_production": "production_executable",
-        "fem_cpu_public": "partial_production_executable",
-        "fem_gpu_public": "partial_production_executable"
+        "fem_cpu_public": "production_executable",
+        "fem_gpu_public": "production_executable"
       },
       "validated_workloads": [],
-      "notes": "Direct minimization uses the physical mu0 Ms V energy metric and an m/A line-search step. It owns no dynamics, RK, dt, physical time, or pseudo-time. FDM CPU/CUDA remain executable. FEM CPU/GPU PG-BB with demag is quarantined after repeated production qualification could not certify strict Armijo descent; the planner rejects it with no hidden fallback and directs FEM demag relaxation to nonlinear_cg. FEM PG-BB without demag remains executable. Unsupported heterogeneous cellwise FDM CUDA material payloads reject rather than degrade silently."
+      "notes": "Direct minimization uses the physical mu0 Ms V energy metric and an m/A line-search step. It owns no dynamics, RK, dt, physical time, or pseudo-time. FDM CPU/CUDA remain executable. FEM CPU/GPU PG-BB including demag is production-qualified at rtol<=1e-12 through direct polarized Armijo increments, with no hidden fallback. Unsupported heterogeneous cellwise FDM CUDA material payloads reject rather than degrade silently."
     },
     {
       "id": "relaxation_nonlinear_cg",

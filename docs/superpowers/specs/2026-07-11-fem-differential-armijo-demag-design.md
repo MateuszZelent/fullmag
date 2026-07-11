@@ -72,9 +72,10 @@ polarized increment directly:
 \]
 
 This is the discrete quadratic-energy identity for a self-adjoint demag
-operator. Robin airbox boundary energy is included as the corresponding
-quadratic boundary-form difference, not as a difference of cached scalar
-totals. CPU and GPU must use the same convention, magnetic-node mask, `Ms`,
+operator. Robin airbox boundary conditions are already contained in endpoint
+fields recovered from \((K+\beta M_\Gamma)u=b(M)\); adding a separate
+quadratic boundary-form difference would double-count that contribution. CPU
+and GPU must use the same convention, magnetic-node mask, `Ms`,
 lumped mass, and deterministic reduction contract.
 
 ## Uncertainty and refinement
@@ -132,7 +133,7 @@ PG-BB in provenance; NCG is not a fallback.
 ## Completeness checklist
 
 - [ ] CPU and CUDA use direct energy increments rather than endpoint total subtraction.
-- [ ] Demag polarization and Robin boundary forms share one documented sign/unit convention.
+- [ ] Demag polarization uses the same Robin-conditioned endpoint fields on CPU and GPU, with no duplicate boundary energy.
 - [ ] Ambiguity has bounded refinement and fail-closed behavior.
 - [ ] No algorithm/device/precision/demag fallback is introduced.
 - [ ] Planner and UI quarantine is removed only after managed CPU/GPU qualification.

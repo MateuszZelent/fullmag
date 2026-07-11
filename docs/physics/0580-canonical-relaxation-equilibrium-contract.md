@@ -234,7 +234,8 @@ linear Poisson demag operator,
 (H_{d,0,i}+H_{d,1,i}),
 \]
 
-with the matching Robin boundary-form increment where applicable. This keeps
+with the Robin boundary condition already represented by both endpoint fields;
+no separate boundary-form increment is added. This keeps
 the Armijo condition in joules while avoiding cancellation against a large
 constant energy offset. If the resulting numerical interval overlaps the
 threshold, a bounded internal fresh-solve refinement may resolve the decision;
@@ -370,14 +371,13 @@ realizations.
 - Every demag energy compared by a direct-minimizer line search is evaluated
   from the same deterministic zero initial Poisson iterate. Rejected trials
   must not contaminate the accepted-state energy through solver warm starts.
-- FEM NCG and development-only TPI with demag require a qualified linear-solver
+- FEM PG-BB, NCG, and development-only TPI with demag require a qualified linear-solver
   relative tolerance no looser than `1e-12` in double precision. A missing policy
   resolves to `1e-12`; an explicitly looser policy is rejected before runtime.
   This algorithm-specific requirement does not change the `1e-8` default used
   by LLG dynamics.
-- FEM PG-BB with demag is not production-qualified and is rejected by the
-  planner without fallback; FEM PG-BB remains executable for conservative
-  workloads without demag, and FEM demag relaxation uses NCG.
+- FEM PG-BB with demag is production-qualified through direct polarized
+  Armijo increments on CPU/MFEM and GPU/CUDA; no fallback is used.
 - PG-BB/NCG preconditioners and TPI operators use dimensionally compatible mass,
   stiffness, and local-curvature blocks.
 - Native nonfinite torque, energy, gradient, error estimate, or solver residual
@@ -620,22 +620,22 @@ run through their repository-owned commands.
 
 ## 6. Completeness checklist
 
-- [ ] Python API and canonical defaults
-- [ ] ProblemIR algorithm/dynamics split and migration
-- [ ] Planner legality and capability matrix
-- [ ] FDM CPU exact torque and completion
-- [ ] FDM CUDA exact torque and physical direct minimizers
-- [ ] FDM multilayer integrator truthfulness
-- [ ] FEM CPU PG-BB/NCG operator and metric correctness
-- [ ] FEM GPU PG-BB/NCG metric and provenance correctness
-- [ ] FEM TPI disabled or fully qualified
-- [ ] Conservative/nonconservative legality
-- [ ] Runtime stop/completion ownership
-- [ ] OpenAPI and generated frontend types
-- [ ] Control Room inspector and round-trip
-- [ ] Artifacts and provenance
-- [ ] Analytical and cross-backend tests
-- [ ] Managed runtime verification
+- [x] Python API and canonical defaults
+- [x] ProblemIR algorithm/dynamics split and migration
+- [x] Planner legality and capability matrix
+- [x] FDM CPU exact torque and completion
+- [x] FDM CUDA exact torque and physical direct minimizers
+- [x] FDM multilayer integrator truthfulness
+- [x] FEM CPU PG-BB/NCG operator and metric correctness
+- [x] FEM GPU PG-BB/NCG metric and provenance correctness
+- [x] FEM TPI disabled or fully qualified
+- [x] Conservative/nonconservative legality
+- [x] Runtime stop/completion ownership
+- [x] OpenAPI and generated frontend types
+- [x] Control Room inspector and round-trip
+- [x] Artifacts and provenance
+- [x] Analytical and cross-backend tests
+- [x] Managed runtime verification
 - [x] Canonical physics contract
 
 ## 7. Known limits and deferred work

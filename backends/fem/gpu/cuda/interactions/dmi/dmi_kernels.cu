@@ -204,6 +204,45 @@ __global__ void dmi_element_residual_kernel(
     }
 }
 
+__global__ void dmi_energy_difference_kernel(
+    const double *nodes_xyz, const uint32_t *elements, const uint8_t *magnetic_mask,
+    const double *m0x, const double *m0y, const double *m0z,
+    const double *m1x, const double *m1y, const double *m1z,
+    const double *d_field, double *delta_out, double uniform_d,
+    double nx, double ny, double nz, bool use_d_field, bool bulk_mode, int element_count)
+{
+    const int e = blockIdx.x * blockDim.x + threadIdx.x;
+    if (e >= element_count) return;
+    if (magnetic_mask != nullptr && magnetic_mask[e] == 0u) return;
+    const size_t base = static_cast<size_t>(e) * 4u;
+    const uint32_t nodes[4] = {elements[base], elements[base + 1u], elements[base + 2u], elements[base + 3u]};
+    double grads[4][3], volume = 0.0;
+    if (!dmi_tetra_gradients_device(nodes_xyz, nodes[0], nodes[1], nodes[2], nodes[3], grads, volume)) return;
+    double d = uniform_d;
+    if (use_d_field && d_field != nullptr) { d = 0.25 * (d_field[nodes[0]] + d_field[nodes[1]] + d_field[nodes[2]] + d_field[nodes[3]]); }
+    double s[3] = {}, q[3] = {}, gs[3][3] = {}, gq[3][3] = {};
+    for (int local = 0; local < 4; ++local) {
+        const uint32_t node = nodes[local];
+        const double a[3] = {m1x[node] + m0x[node], m1y[node] + m0y[node], m1z[node] + m0z[node]};
+        const double b[3] = {m1x[node] - m0x[node], m1y[node] - m0y[node], m1z[node] - m0z[node]};
+        for (int c = 0; c < 3; ++c) for (int dir = 0; dir < 3; ++dir) { gs[c][dir] += a[c] * grads[local][dir]; gq[c][dir] += b[c] * grads[local][dir]; }
+        for (int c = 0; c < 3; ++c) { s[c] += 0.25 * a[c]; q[c] += 0.25 * b[c]; }
+    }
+    const double divs = gs[0][0] + gs[1][1] + gs[2][2];
+    const double divq = gq[0][0] + gq[1][1] + gq[2][2];
+    const double snd = s[0]*nx + s[1]*ny + s[2]*nz;
+    const double qnd = q[0]*nx + q[1]*ny + q[2]*nz;
+    const double gs_n[3] = {nx*gs[0][0]+ny*gs[1][0]+nz*gs[2][0], nx*gs[0][1]+ny*gs[1][1]+nz*gs[2][1], nx*gs[0][2]+ny*gs[1][2]+nz*gs[2][2]};
+    const double gq_n[3] = {nx*gq[0][0]+ny*gq[1][0]+nz*gq[2][0], nx*gq[0][1]+ny*gq[1][1]+nz*gq[2][1], nx*gq[0][2]+ny*gq[1][2]+nz*gq[2][2]};
+    if (bulk_mode) {
+        const double curls[3] = {gs[2][1]-gs[1][2], gs[0][2]-gs[2][0], gs[1][0]-gs[0][1]};
+        const double curlq[3] = {gq[2][1]-gq[1][2], gq[0][2]-gq[2][0], gq[1][0]-gq[0][1]};
+        dmi_atomic_add_double(delta_out, 0.5 * d * volume * (s[0]*curlq[0]+s[1]*curlq[1]+s[2]*curlq[2] + q[0]*curls[0]+q[1]*curls[1]+q[2]*curls[2]));
+    } else {
+        dmi_atomic_add_double(delta_out, 0.5 * d * volume * (snd*divq + qnd*divs - (s[0]*gq_n[0]+s[1]*gq_n[1]+s[2]*gq_n[2]) - (q[0]*gs_n[0]+q[1]*gs_n[1]+q[2]*gs_n[2])));
+    }
+}
+
 __global__ void dmi_project_field_kernel(
     const double *__restrict__ residual_x,
     const double *__restrict__ residual_y,
@@ -316,6 +355,19 @@ void fullmag_cuda_dmi_field_energy(
         h_dmi_z,
         uniform_ms,
         node_count);
+}
+
+void fullmag_cuda_dmi_energy_difference(
+    const double *nodes_xyz, const uint32_t *elements, const uint8_t *magnetic_element_mask,
+    const double *m0x, const double *m0y, const double *m0z,
+    const double *m1x, const double *m1y, const double *m1z,
+    const double *d_field, double *element_delta,
+    double uniform_d, double nx, double ny, double nz,
+    bool use_d_field, bool bulk_mode, int element_count, cudaStream_t stream)
+{
+    dmi_energy_difference_kernel<<<(element_count + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
+        nodes_xyz, elements, magnetic_element_mask, m0x, m0y, m0z, m1x, m1y, m1z,
+        d_field, element_delta, uniform_d, nx, ny, nz, use_d_field, bulk_mode, element_count);
 }
 
 } // namespace fullmag::fem

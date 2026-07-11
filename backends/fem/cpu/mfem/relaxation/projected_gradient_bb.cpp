@@ -9,6 +9,9 @@
 #include "cpu/mfem/relaxation/projected_gradient_bb.hpp"
 
 #include "context.hpp"
+#include "cpu/mfem/interactions/anisotropy_uniaxial.hpp"
+#include "cpu/mfem/interactions/demag_poisson_energy.hpp"
+#include "cpu/mfem/interactions/zeeman_energy.hpp"
 #include "cpu/mfem/relaxation/relaxation_math.hpp"
 #include "cpu/mfem/runtime/snapshot.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
@@ -28,22 +31,103 @@ namespace fullmag::fem {
 
 namespace {
 
-constexpr uint32_t kProjectedGradientArmijoRecoveryCycles = 1;
-
-bool accept_monotone_line_search_step(
-    const fullmag_fem_step_stats &current,
-    const fullmag_fem_step_stats &trial)
+relaxation::EnergyDifference pgbb_direct_energy_difference(
+    const Context &ctx,
+    const std::vector<double> &previous_m,
+    const std::vector<double> &trial_m,
+    const std::vector<double> &previous_h_demag,
+    const fullmag_fem_step_stats &current_stats,
+    const fullmag_fem_step_stats &trial_stats)
 {
-    return relaxation::strict_monotone_energy_accept(
-        current.total_energy_joules,
-        trial.total_energy_joules);
+    const auto demag = demag_poisson_energy_difference_from_endpoint_fields(
+        ctx, previous_m, trial_m, previous_h_demag, ctx.demag.h_xyz);
+    const auto zeeman = zeeman_energy_difference_from_field(ctx, previous_m, trial_m);
+    const auto uniaxial = uniaxial_anisotropy_energy_difference(ctx, previous_m, trial_m);
+    relaxation::EnergyDifference result;
+    if (!std::isfinite(demag.delta_joules) || !std::isfinite(zeeman.delta_joules) ||
+        !std::isfinite(uniaxial.delta_joules)) {
+        result.delta_joules = result.absolute_term_sum_joules =
+            result.roundoff_bound_joules = std::numeric_limits<double>::quiet_NaN();
+        return result;
+    }
+    const double residual =
+        (trial_stats.exchange_energy_joules - current_stats.exchange_energy_joules) +
+        (trial_stats.dmi_energy_joules - current_stats.dmi_energy_joules) +
+        (trial_stats.magnetoelastic_energy_joules - current_stats.magnetoelastic_energy_joules) +
+        (trial_stats.anisotropy_energy_joules - current_stats.anisotropy_energy_joules -
+            uniaxial.delta_joules);
+    result.delta_joules = demag.delta_joules + zeeman.delta_joules +
+        uniaxial.delta_joules + residual;
+    result.absolute_term_sum_joules = demag.absolute_term_sum_joules + zeeman.absolute_term_sum_joules +
+        uniaxial.absolute_term_sum_joules +
+        std::abs(residual);
+    result.roundoff_bound_joules = demag.roundoff_bound_joules + zeeman.roundoff_bound_joules +
+        uniaxial.roundoff_bound_joules +
+        relaxation::reduction_roundoff_bound(4u) * std::abs(residual);
+    return result;
 }
 
-bool accept_monotone_recovery_step(
-    const fullmag_fem_step_stats &current,
-    const fullmag_fem_step_stats &trial)
+bool pgbb_refined_armijo_accepts(
+    Context &ctx,
+    const std::vector<double> &previous_m,
+    const std::vector<double> &trial_m,
+    const relaxation::EnergyDifference &ordinary_difference,
+    double armijo_rhs_joules,
+    fullmag_fem_step_stats &profile_stats,
+    std::string &error)
 {
-    return accept_monotone_line_search_step(current, trial);
+    if (!ctx.demag.enabled) {
+        return false;
+    }
+    const fullmag_fem_solver_config ordinary_solver = ctx.demag.solver;
+    const double ordinary_rtol = ordinary_solver.relative_tolerance;
+    const double refinement_floor = 16.0 * std::numeric_limits<double>::epsilon();
+    const double refined_rtol = std::max(refinement_floor, ordinary_rtol * 0.1);
+    if (!std::isfinite(ordinary_rtol) || !std::isfinite(refined_rtol) ||
+        ordinary_rtol <= refined_rtol) {
+        return false;
+    }
+
+    ctx.demag.solver.relative_tolerance = refined_rtol;
+    fullmag_fem_step_stats refined_current_stats{};
+    fullmag_fem_step_stats refined_trial_stats{};
+    std::vector<double> refined_previous_h_demag;
+    const int current_status = relaxation::upload_and_snapshot(
+        ctx,
+        previous_m,
+        refined_current_stats,
+        "projected-gradient BB",
+        "Armijo refinement current",
+        error);
+    if (current_status == FULLMAG_FEM_OK) {
+        refined_previous_h_demag = ctx.demag.h_xyz;
+    }
+    const int trial_status = current_status == FULLMAG_FEM_OK
+        ? relaxation::upload_and_snapshot(
+              ctx,
+              trial_m,
+              refined_trial_stats,
+              "projected-gradient BB",
+              "Armijo refinement trial",
+              error)
+        : current_status;
+    ctx.demag.solver = ordinary_solver;
+    if (trial_status != FULLMAG_FEM_OK) {
+        return false;
+    }
+    relaxation::accumulate_relaxation_profile_sample(profile_stats, refined_current_stats);
+    relaxation::accumulate_relaxation_profile_sample(profile_stats, refined_trial_stats);
+    const auto refined_difference = pgbb_direct_energy_difference(
+        ctx,
+        previous_m,
+        trial_m,
+        refined_previous_h_demag,
+        refined_current_stats,
+        refined_trial_stats);
+    return relaxation::strict_armijo_difference_refinement_accepts(
+        ordinary_difference,
+        refined_difference,
+        armijo_rhs_joules);
 }
 
 std::string format_projected_gradient_bb_scalar(double value)
@@ -136,179 +220,6 @@ void update_bb_step_size(
     state.use_bb1 = !state.use_bb1;
 }
 
-bool retry_projected_gradient_bb_line_search_with_reset(
-    Context &ctx,
-    const std::vector<double> &previous_m,
-    const std::vector<double> &descent_direction,
-    const fullmag_fem_step_stats &current_stats,
-    double direction_dot_gradient,
-    double &trial_step,
-    fullmag_fem_step_stats &profile_stats,
-    fullmag_fem_step_stats &trial_stats,
-    std::vector<double> &trial_m,
-    uint32_t &backtracks,
-    int &failure_status,
-    std::string &error)
-{
-    for (uint32_t recovery_cycle = 0;
-         recovery_cycle < kProjectedGradientArmijoRecoveryCycles;
-         ++recovery_cycle) {
-        ctx.relaxation.reset_consecutive += 1;
-        const double restart_step = std::clamp(
-            relaxation::kDefaultStepSize /
-                static_cast<double>(ctx.relaxation.reset_consecutive + 1u),
-            relaxation::kMinStepSize,
-            relaxation::kMaxStepSize);
-        trial_step = restart_step;
-
-        while (true) {
-            {
-                ScopedPhaseTimer timer(&profile_stats.relaxation_retraction_wall_time_ns);
-                relaxation::retracted_step_into(
-                    ctx,
-                    previous_m,
-                    descent_direction,
-                    trial_step,
-                    trial_m);
-            }
-            const int status = relaxation::upload_and_snapshot(
-                ctx,
-                trial_m,
-                trial_stats,
-                "projected-gradient BB",
-                "recovery trial",
-                error);
-            if (status != FULLMAG_FEM_OK) {
-                const std::string trial_error = error;
-                failure_status = relaxation::restore_previous_relaxation_state(
-                    ctx,
-                    previous_m,
-                    "projected-gradient BB",
-                    "failed recovery trial snapshot",
-                    status,
-                    trial_error,
-                    error);
-                return false;
-            }
-            relaxation::accumulate_relaxation_profile_sample(profile_stats, trial_stats);
-            bool armijo = false;
-            {
-                ScopedPhaseTimer timer(&profile_stats.relaxation_line_search_wall_time_ns);
-                armijo =
-                    trial_stats.total_energy_joules <=
-                    current_stats.total_energy_joules +
-                        relaxation::kArmijoCoefficient * trial_step *
-                            direction_dot_gradient;
-            }
-            if (armijo) {
-                return true;
-            }
-            if (accept_monotone_recovery_step(current_stats, trial_stats)) {
-                return true;
-            }
-            if (backtracks >=
-                2u * relaxation::kProjectedGradientMaxBacktracks) {
-                break;
-            }
-            trial_step *= 0.5;
-            backtracks += 1;
-        }
-    }
-    return false;
-}
-
-bool retry_projected_gradient_bb_line_search_with_raw_gradient_restart(
-    Context &ctx,
-    const std::vector<double> &previous_m,
-    const std::vector<double> &previous_gradient,
-    const fullmag_fem_step_stats &current_stats,
-    std::vector<double> &raw_direction,
-    double &direction_dot_gradient,
-    double &trial_step,
-    fullmag_fem_step_stats &profile_stats,
-    fullmag_fem_step_stats &trial_stats,
-    std::vector<double> &trial_m,
-    uint32_t &backtracks,
-    int &failure_status,
-    std::string &error)
-{
-    {
-        ScopedPhaseTimer timer(&profile_stats.relaxation_gradient_wall_time_ns);
-        raw_direction = relaxation::project_tangent(
-            ctx,
-            previous_m,
-            relaxation::negative_field(previous_gradient));
-    }
-    {
-        ScopedPhaseTimer timer(&profile_stats.relaxation_metric_wall_time_ns);
-        direction_dot_gradient = relaxation::energy_weighted_dot_fields(
-            ctx,
-            raw_direction,
-            previous_gradient);
-    }
-    if (!std::isfinite(direction_dot_gradient) || direction_dot_gradient >= 0.0) {
-        error =
-            "projected-gradient BB raw-gradient recovery produced a non-finite or non-descent direction";
-        failure_status = FULLMAG_FEM_ERR_INTERNAL;
-        return false;
-    }
-    trial_step = relaxation::initial_step_from_volume_norm_sq(
-        relaxation::metric_dot_fields(ctx, raw_direction, raw_direction),
-        relaxation::kDefaultStepSize,
-        relaxation::kMinStepSize,
-        relaxation::kMaxStepSize);
-
-    while (true) {
-        {
-            ScopedPhaseTimer timer(&profile_stats.relaxation_retraction_wall_time_ns);
-            relaxation::retracted_step_into(
-                ctx,
-                previous_m,
-                raw_direction,
-                trial_step,
-                trial_m);
-        }
-        const int status = relaxation::upload_and_snapshot(
-            ctx,
-            trial_m,
-            trial_stats,
-            "projected-gradient BB",
-            "raw-gradient recovery trial",
-            error);
-        if (status != FULLMAG_FEM_OK) {
-            const std::string trial_error = error;
-            failure_status = relaxation::restore_previous_relaxation_state(
-                ctx,
-                previous_m,
-                "projected-gradient BB",
-                "failed raw-gradient recovery trial snapshot",
-                status,
-                trial_error,
-                error);
-            return false;
-        }
-        relaxation::accumulate_relaxation_profile_sample(profile_stats, trial_stats);
-        bool armijo = false;
-        {
-            ScopedPhaseTimer timer(&profile_stats.relaxation_line_search_wall_time_ns);
-            armijo =
-                trial_stats.total_energy_joules <=
-                current_stats.total_energy_joules +
-                    relaxation::kArmijoCoefficient * trial_step *
-                        direction_dot_gradient;
-        }
-        if (armijo || accept_monotone_recovery_step(current_stats, trial_stats)) {
-            return true;
-        }
-        if (backtracks >= 3u * relaxation::kProjectedGradientMaxBacktracks) {
-            break;
-        }
-        trial_step *= 0.5;
-        backtracks += 1;
-    }
-    return false;
-}
-
 } // namespace
 
 int run_projected_gradient_bb_step(
@@ -355,9 +266,11 @@ int run_projected_gradient_bb_step(
     }
 
     std::vector<double> previous_m;
+    std::vector<double> previous_h_demag;
     {
         ScopedPhaseTimer timer(&profile_stats.relaxation_state_copy_wall_time_ns);
         previous_m = ctx.state.m_xyz;
+        previous_h_demag = ctx.demag.h_xyz;
     }
     std::vector<double> previous_gradient;
     double g_norm_sq = 0.0;
@@ -459,19 +372,32 @@ int run_projected_gradient_bb_step(
                 error);
         }
         relaxation::accumulate_relaxation_profile_sample(profile_stats, trial_stats);
+        const auto direct_difference = pgbb_direct_energy_difference(
+            ctx,
+            previous_m,
+            trial_m,
+            previous_h_demag,
+            current_stats,
+            trial_stats);
+        const double armijo_rhs =
+            relaxation::kArmijoCoefficient * trial_step * direction_dot_gradient;
         bool armijo = false;
         {
             ScopedPhaseTimer timer(&profile_stats.relaxation_line_search_wall_time_ns);
-            armijo =
-                trial_stats.total_energy_joules <=
-                current_stats.total_energy_joules +
-                    relaxation::kArmijoCoefficient * trial_step * direction_dot_gradient;
+            const auto decision = relaxation::strict_armijo_difference_decision(
+                direct_difference, armijo_rhs);
+            armijo = decision == relaxation::ArmijoDifferenceDecision::Accept ||
+                (decision == relaxation::ArmijoDifferenceDecision::Refine &&
+                    pgbb_refined_armijo_accepts(
+                        ctx,
+                        previous_m,
+                        trial_m,
+                        direct_difference,
+                        armijo_rhs,
+                        profile_stats,
+                        error));
         }
         if (armijo) {
-            line_search_accepted = true;
-            break;
-        }
-        if (accept_monotone_line_search_step(current_stats, trial_stats)) {
             line_search_accepted = true;
             break;
         }
@@ -480,41 +406,6 @@ int run_projected_gradient_bb_step(
         }
         trial_step *= 0.5;
         backtracks += 1;
-    }
-    if (!line_search_accepted) {
-        if (retry_projected_gradient_bb_line_search_with_reset(
-                ctx,
-                previous_m,
-                descent_direction,
-                current_stats,
-                direction_dot_gradient,
-                trial_step,
-                profile_stats,
-                trial_stats,
-                trial_m,
-                backtracks,
-                status,
-                error)) {
-            line_search_accepted = true;
-        }
-    }
-    if (!line_search_accepted && status == FULLMAG_FEM_OK) {
-        if (retry_projected_gradient_bb_line_search_with_raw_gradient_restart(
-                ctx,
-                previous_m,
-                previous_gradient,
-                current_stats,
-                descent_direction,
-                direction_dot_gradient,
-                trial_step,
-                profile_stats,
-                trial_stats,
-                trial_m,
-                backtracks,
-                status,
-                error)) {
-            line_search_accepted = true;
-        }
     }
     if (status != FULLMAG_FEM_OK) {
         return status;

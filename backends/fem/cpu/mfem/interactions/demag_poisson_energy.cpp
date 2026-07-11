@@ -63,8 +63,7 @@ double demag_poisson_cached_energy_from_field(
     const std::vector<double> &h_demag_xyz,
     int energy_threads)
 {
-    return demag_poisson_energy_from_field(ctx, m_xyz, h_demag_xyz, energy_threads) +
-           ctx.demag.cached_robin_boundary_energy;
+    return demag_poisson_energy_from_field(ctx, m_xyz, h_demag_xyz, energy_threads);
 }
 
 relaxation::EnergyDifference demag_poisson_energy_difference_from_endpoint_fields(
@@ -112,6 +111,39 @@ relaxation::EnergyDifference demag_poisson_energy_difference_from_endpoint_field
         }
     }
     result.roundoff_bound_joules = relaxation::reduction_roundoff_bound(field_size) *
+        result.absolute_term_sum_joules;
+    return result;
+}
+
+relaxation::EnergyDifference robin_boundary_energy_difference_from_endpoint_products(
+    double coefficient,
+    const std::vector<double> &current_u,
+    const std::vector<double> &trial_u,
+    const std::vector<double> &current_boundary_product,
+    const std::vector<double> &trial_boundary_product)
+{
+    relaxation::EnergyDifference result;
+    if (!std::isfinite(coefficient) || coefficient < 0.0 || current_u.empty() ||
+        trial_u.size() != current_u.size() ||
+        current_boundary_product.size() != current_u.size() ||
+        trial_boundary_product.size() != current_u.size()) {
+        result.delta_joules = result.absolute_term_sum_joules =
+            result.roundoff_bound_joules = std::numeric_limits<double>::quiet_NaN();
+        return result;
+    }
+    for (size_t i = 0; i < current_u.size(); ++i) {
+        const double term = 0.5 * coefficient * (trial_u[i] - current_u[i]) *
+            (trial_boundary_product[i] + current_boundary_product[i]);
+        if (!std::isfinite(term)) {
+            result.delta_joules = result.absolute_term_sum_joules =
+                result.roundoff_bound_joules = std::numeric_limits<double>::quiet_NaN();
+            return result;
+        }
+        result.delta_joules += term;
+        result.absolute_term_sum_joules += std::abs(term);
+    }
+    result.roundoff_bound_joules =
+        relaxation::reduction_roundoff_bound(current_u.size()) *
         result.absolute_term_sum_joules;
     return result;
 }

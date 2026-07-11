@@ -104,6 +104,19 @@ inline ArmijoDifferenceDecision strict_armijo_difference_decision(
     return ArmijoDifferenceDecision::Refine;
 }
 
+inline bool strict_armijo_difference_refinement_accepts(
+    const EnergyDifference &ordinary_difference,
+    const EnergyDifference &refined_difference,
+    double armijo_rhs_joules)
+{
+    return std::isfinite(ordinary_difference.delta_joules) &&
+        std::isfinite(armijo_rhs_joules) &&
+        ordinary_difference.delta_joules <= armijo_rhs_joules &&
+        strict_armijo_difference_decision(
+            refined_difference,
+            armijo_rhs_joules) == ArmijoDifferenceDecision::Accept;
+}
+
 struct BbStepDecision {
     double step_size = 0.0;
     uint64_t reset_consecutive = 0;

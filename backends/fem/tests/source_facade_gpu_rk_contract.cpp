@@ -807,8 +807,6 @@ void gpu_rk_step_stats_is_owned_by_cuda_rk_module() {
     check(
         demag_energy_source.find("#include \"gpu/cuda/integrators/rk/rk_demag_energy_reductions.hpp\"") !=
                 std::string::npos &&
-            demag_energy_source.find("#include \"gpu/cuda/demag_poisson/stage_compute.hpp\"") !=
-                std::string::npos &&
             demag_energy_source.find("#include \"gpu/cuda/integrators/rk/rk_step_stats.hpp\"") !=
                 std::string::npos &&
             demag_energy_source.find("GPU CUDA RK demag final energy reductions source contract") !=
@@ -817,27 +815,17 @@ void gpu_rk_step_stats_is_owned_by_cuda_rk_module() {
                 std::string::npos &&
             demag_energy_source.find("ctx.demag.enabled") !=
                 std::string::npos &&
-            demag_energy_source.find("ctx.demag.realization == FULLMAG_FEM_DEMAG_AIRBOX_ROBIN") !=
-                std::string::npos &&
-            demag_energy_source.find("reduce_device_demag_robin_boundary_energy(") !=
-                std::string::npos &&
             demag_energy_source.find("GpuFinalScalarSlot::DemagEnergy") !=
-                std::string::npos &&
-            demag_energy_source.find("GpuFinalScalarSlot::DemagRobinBoundaryEnergy") !=
                 std::string::npos &&
             demag_energy_source.find("GPU RK demag energy requires device-resident Ms, lumped mass, and H_demag") !=
                 std::string::npos,
-        "GPU CUDA RK demag final energy reductions source must own demag energy validation, Robin boundary reduction, kernel launch, and scalar slots");
+        "GPU CUDA RK demag final energy reductions source must own demag energy validation, kernel launch, and scalar slot");
     check(
         energy_source.find("fullmag_cuda_demag_energy_blocks(") ==
                 std::string::npos &&
             energy_source.find("GpuFinalScalarSlot::DemagEnergy") ==
                 std::string::npos &&
-            energy_source.find("GpuFinalScalarSlot::DemagRobinBoundaryEnergy") ==
-                std::string::npos &&
             energy_source.find("GPU RK demag energy requires device-resident Ms, lumped mass, and H_demag") ==
-                std::string::npos &&
-            energy_source.find("reduce_device_demag_robin_boundary_energy(") ==
                 std::string::npos,
         "GPU CUDA RK final energy reductions source must delegate demag energy internals");
     check(

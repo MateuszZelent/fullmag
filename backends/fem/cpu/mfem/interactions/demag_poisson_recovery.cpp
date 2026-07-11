@@ -373,21 +373,11 @@ bool recover_demag_poisson_field(
         h_demag_xyz,
         recover_threads);
 
-    // Robin BC correction: E_bdr = (mu0/2) * beta * integral_Gamma u^2 dS.
+    // The physical demag functional is -mu0/2 integral M.H_demag.  For a
+    // Robin solve H_demag already depends on (K + beta B)^-1, so this value
+    // includes the boundary condition.  Adding beta*u^T*B*u again would
+    // double-count the boundary contribution and break dE/dm = -mu0*M_s*H.
     ctx.demag.cached_robin_boundary_energy = 0.0;
-    if (ctx.demag.realization == 2 /* AIRBOX_ROBIN */ &&
-        ctx.poisson_demag.robin_effective_beta > 0.0 &&
-        ctx.poisson_demag.robin_boundary_mass != nullptr) {
-        auto *bdr_mass =
-            static_cast<mfem::BilinearForm *>(ctx.poisson_demag.robin_boundary_mass);
-        mfem::Vector &robin_boundary_tmp =
-            demag_recovery_workspace->robin_boundary_tmp;
-        robin_boundary_tmp.SetSize(gf_u.Size());
-        bdr_mass->SpMat().Mult(gf_u, robin_boundary_tmp);
-        ctx.demag.cached_robin_boundary_energy =
-            0.5 * kMu0 * ctx.poisson_demag.robin_effective_beta * (gf_u * robin_boundary_tmp);
-        demag_energy += ctx.demag.cached_robin_boundary_energy;
-    }
     if (energy_wall_time_ns != nullptr) {
         *energy_wall_time_ns += elapsed_ns(energy_wall_start);
     }

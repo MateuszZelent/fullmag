@@ -32,7 +32,7 @@
 **Interfaces:**
 - Produces canonical `DeltaE <= c1 lambda p_dot_g` and polarized Poisson-demag `DeltaE_demag` equations.
 
-- [ ] Add the direct-increment Armijo and Poisson polarization equations, including Robin boundary-form ownership and `J` units.
+- [ ] Add the direct-increment Armijo and Poisson polarization equations, documenting that Robin is represented through the endpoint fields and `J` units.
 - [ ] State that a normal trial has no extra solve; an overlapping numerical interval permits one bounded internal refinement and otherwise fails closed.
 - [ ] Run `python3 scripts/test_validate_fem_relaxation_runtime_log.py`; expect exit `0`.
 
