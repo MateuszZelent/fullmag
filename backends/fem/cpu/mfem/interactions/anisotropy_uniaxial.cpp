@@ -12,6 +12,7 @@
 
 #include <array>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -60,6 +61,18 @@ void require_p1_aos3(const std::vector<double> &values, std::size_t nodes, const
         if (!std::isfinite(value)) {
             throw std::invalid_argument(std::string(name) + " contains NaN/Inf");
         }
+    }
+}
+
+void require_unit_axis(const std::array<double, 3> &axis) {
+    for (double component : axis) {
+        if (!std::isfinite(component)) {
+            throw std::invalid_argument("uniaxial axis contains NaN/Inf");
+        }
+    }
+    const double norm = std::hypot(axis[0], axis[1], axis[2]);
+    if (std::fabs(norm - 1.0) > 128.0 * std::numeric_limits<double>::epsilon()) {
+        throw std::invalid_argument("uniaxial axis must have unit Euclidean norm");
     }
 }
 
@@ -170,11 +183,7 @@ double uniaxial_anisotropy_energy_from_element_quadrature_material(
     require_p1_aos3(m_xyz, nodes, "P1 magnetization");
     require_p1_scalar(ku1_j_per_m3, nodes, "P1 Ku1");
     require_p1_scalar(ku2_j_per_m3, nodes, "P1 Ku2");
-    for (double component : axis) {
-        if (!std::isfinite(component)) {
-            throw std::invalid_argument("uniaxial axis contains NaN/Inf");
-        }
-    }
+    require_unit_axis(axis);
 
     double energy_j = 0.0;
     for (std::size_t ordinal = 0; ordinal < material.element_count(); ++ordinal) {

@@ -449,6 +449,55 @@ plan wiring.  A directional test evaluates `E_u(m + eps p)` and
 the separately integrated derivative.  Its tolerance is an absolute
 termwise roundoff envelope, including quadrature accumulation and central
 subtraction; cancellation in the final energy cannot shrink that bound.
+The helper is a public-internal contract boundary, so it independently
+rejects a non-finite axis and an axis whose Euclidean norm differs from one by
+more than `128 * epsilon_double`. The native plan path normalizes a supplied
+finite non-zero axis before it reaches the helper; this narrow tolerance only
+admits the unavoidable rounding of that normalization, and never silently
+rescales a direct helper call. For the quartic term the exact central
+difference remainder is `4 eps^2 q d^3`, where `q = m_h . u` and
+`d = p_h . u`; its absolute bound must therefore include `abs(q)`. The
+contract oracle proves degree-five exactness independently from the production
+Duffy nodes and weights by integrating barycentric monomials with
+`integral_T lambda_0^a0 ... lambda_3^a3 dV = 6 V_T product(ai!) /
+(sum(ai)+3)!`.
+
+For cubic anisotropy, the matching CPU element-quadrature energy helper uses a
+single directly supplied, unit orthonormal crystal frame `(c1,c2,c3)`, with
+`c3 = c1 x c2`, and P1 nodal `Kc1_h`, `Kc2_h`, and `Kc3_h` in `J/m^3`:
+
+```text
+sigma_h = m1_h^2 m2_h^2 + m2_h^2 m3_h^2 + m1_h^2 m3_h^2
+E_c = sum_e integral_{Omega_e} [ Kc1_h sigma_h
+                                + Kc2_h m1_h^2 m2_h^2 m3_h^2
+                                + Kc3_h sigma_h^2 ] dV.               [J]
+```
+
+Here `mi_h = m_h . ci`; `m_h` and each `Kc*_h` are P1.  The three integrands
+have physical polynomial degrees five, seven, and nine, respectively.  The
+helper uses a tensor-product Duffy Gauss-Legendre rule of orders `(6,6,5)`.
+With the Duffy Jacobian, its one-dimensional exactness degrees `(11,11,9)`
+cover every coordinate power of an arbitrary total-degree-nine tetrahedral
+polynomial, including the Jacobian powers; this is not a barycentre or
+lumped-mass approximation.  Sharp `Ms_e` is validated through the same
+ordered `ElementQuadratureMaterial` map but does not enter this conservative
+energy density.  The later field must use the same `mu0 Ms_e` mass projection:
+
+```text
+M_Ms H_c = - (1 / mu0) dE_c/dm.
+```
+
+This is a CPU-only energy/directional-derivative oracle with no `Context`,
+MFEM state, CUDA state, or public-plan wiring, and it does not lift the
+fail-closed `Ms_element_field` policy. It rejects non-finite axes, norms
+different from one by more than `128 * epsilon_double`, and nonorthogonal
+`c1`, `c2` under that same absolute tolerance; it never silently normalizes a
+direct helper call. The two-tetra contract independently integrates the
+degree-nine polynomial in barycentric monomials and compares a central
+directional derivative to a separately differentiated polynomial. Its
+tolerance is a termwise absolute roundoff envelope plus the independently
+evaluated central-difference truncation, so inter-element cancellation cannot
+weaken the oracle.
 
 The backend-neutral accessor owns no `Context`, MFEM object, CUDA allocation,
 or physics owner. It accepts ordered tetra topology, positive volumes, and

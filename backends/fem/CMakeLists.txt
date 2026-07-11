@@ -788,6 +788,17 @@ target_include_directories(fem_uniaxial_element_quadrature_contract PRIVATE
 )
 add_test(NAME fem_uniaxial_element_quadrature_contract COMMAND fem_uniaxial_element_quadrature_contract)
 
+add_executable(
+    fem_cubic_element_quadrature_contract
+    tests/fem_cubic_element_quadrature_contract.cpp
+)
+target_link_libraries(fem_cubic_element_quadrature_contract PRIVATE fullmag_fem)
+target_include_directories(fem_cubic_element_quadrature_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_cubic_element_quadrature_contract COMMAND fem_cubic_element_quadrature_contract)
+
 add_executable(fem_field_buffers_contract tests/fem_field_buffers_contract.cpp)
 target_link_libraries(fem_field_buffers_contract PRIVATE fullmag_fem)
 target_include_directories(fem_field_buffers_contract PRIVATE

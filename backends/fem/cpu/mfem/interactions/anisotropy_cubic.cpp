@@ -6,10 +6,124 @@
  */
 #include "cpu/mfem/interactions/anisotropy_cubic.hpp"
 
+#include "core/fem_element_quadrature_material.hpp"
 #include "context.hpp"
 #include "fem_common.hpp"
 
+#include <array>
+#include <cmath>
+#include <limits>
+#include <stdexcept>
+#include <string>
+
 namespace fullmag::fem {
+namespace {
+
+constexpr std::array<double, 6> kGl6Nodes = {
+    0.033765242898423986093849222753002,
+    0.169395306766867743169300202490047,
+    0.380690406958401545684749139159645,
+    0.619309593041598454315250860840355,
+    0.830604693233132256830699797509953,
+    0.966234757101576013906150777246998,
+};
+constexpr std::array<double, 6> kGl6Weights = {
+    0.085662246189585172520148071086366,
+    0.180380786524069303784916756918858,
+    0.233956967286345523694935171994776,
+    0.233956967286345523694935171994776,
+    0.180380786524069303784916756918858,
+    0.085662246189585172520148071086366,
+};
+constexpr std::array<double, 5> kGl5Nodes = {
+    0.046910077030668003601186560850304,
+    0.230765344947158454481842789649895,
+    0.5,
+    0.769234655052841545518157210350105,
+    0.953089922969331996398813439149696,
+};
+constexpr std::array<double, 5> kGl5Weights = {
+    0.118463442528094543757132020359959,
+    0.239314335249683234020645757417819,
+    0.284444444444444444444444444444444,
+    0.239314335249683234020645757417819,
+    0.118463442528094543757132020359959,
+};
+
+void require_p1_scalar(const std::vector<double> &values, std::size_t nodes, const char *name) {
+    if (values.size() != nodes) {
+        throw std::invalid_argument(std::string(name) + " must have one value per P1 node");
+    }
+    for (double value : values) {
+        if (!std::isfinite(value)) {
+            throw std::invalid_argument(std::string(name) + " contains NaN/Inf");
+        }
+    }
+}
+
+void require_p1_aos3(const std::vector<double> &values, std::size_t nodes, const char *name) {
+    if (values.size() != 3u * nodes) {
+        throw std::invalid_argument(std::string(name) + " must have three values per P1 node");
+    }
+    for (double value : values) {
+        if (!std::isfinite(value)) {
+            throw std::invalid_argument(std::string(name) + " contains NaN/Inf");
+        }
+    }
+}
+
+void require_orthonormal_crystal_axes(
+    const std::array<double, 3> &axis1,
+    const std::array<double, 3> &axis2)
+{
+    for (double component : axis1) {
+        if (!std::isfinite(component)) {
+            throw std::invalid_argument("cubic axis1 contains NaN/Inf");
+        }
+    }
+    for (double component : axis2) {
+        if (!std::isfinite(component)) {
+            throw std::invalid_argument("cubic axis2 contains NaN/Inf");
+        }
+    }
+    constexpr double tolerance = 128.0 * std::numeric_limits<double>::epsilon();
+    const double norm1 = std::hypot(axis1[0], axis1[1], axis1[2]);
+    const double norm2 = std::hypot(axis2[0], axis2[1], axis2[2]);
+    const double dot = axis1[0] * axis2[0] + axis1[1] * axis2[1] + axis1[2] * axis2[2];
+    if (std::fabs(norm1 - 1.0) > tolerance || std::fabs(norm2 - 1.0) > tolerance ||
+        std::fabs(dot) > tolerance) {
+        throw std::invalid_argument("cubic axes must be a unit orthonormal crystal frame");
+    }
+}
+
+double interpolate_scalar(
+    const std::vector<double> &values,
+    const P1TetrahedronMaterialTopology &element,
+    const std::array<double, 4> &shape)
+{
+    double result = 0.0;
+    for (std::size_t local = 0; local < 4u; ++local) {
+        result += shape[local] * values[static_cast<std::size_t>(element.node_ids[local])];
+    }
+    return result;
+}
+
+double interpolate_m_projection(
+    const std::vector<double> &m_xyz,
+    const std::array<double, 3> &axis,
+    const P1TetrahedronMaterialTopology &element,
+    const std::array<double, 4> &shape)
+{
+    double result = 0.0;
+    for (std::size_t local = 0; local < 4u; ++local) {
+        const std::size_t base = static_cast<std::size_t>(element.node_ids[local]) * 3u;
+        result += shape[local] *
+            (m_xyz[base] * axis[0] + m_xyz[base + 1u] * axis[1] + m_xyz[base + 2u] * axis[2]);
+    }
+    return result;
+}
+
+} // namespace
 
 void compute_cubic_anisotropy_field(
     const Context &ctx,
@@ -98,6 +212,69 @@ void compute_cubic_anisotropy_field(
     if (cubic_energy != nullptr) {
         *cubic_energy = energy;
     }
+}
+
+double cubic_anisotropy_energy_from_element_quadrature_material(
+    const ElementQuadratureMaterial &material,
+    const std::vector<double> &m_xyz,
+    const std::vector<double> &kc1_j_per_m3,
+    const std::vector<double> &kc2_j_per_m3,
+    const std::vector<double> &kc3_j_per_m3,
+    const std::array<double, 3> &axis1,
+    const std::array<double, 3> &axis2)
+{
+    const std::size_t nodes = material.node_count();
+    require_p1_aos3(m_xyz, nodes, "P1 magnetization");
+    require_p1_scalar(kc1_j_per_m3, nodes, "P1 Kc1");
+    require_p1_scalar(kc2_j_per_m3, nodes, "P1 Kc2");
+    require_p1_scalar(kc3_j_per_m3, nodes, "P1 Kc3");
+    require_orthonormal_crystal_axes(axis1, axis2);
+    const std::array<double, 3> axis3 = {
+        axis1[1] * axis2[2] - axis1[2] * axis2[1],
+        axis1[2] * axis2[0] - axis1[0] * axis2[2],
+        axis1[0] * axis2[1] - axis1[1] * axis2[0],
+    };
+
+    double energy_j = 0.0;
+    for (std::size_t ordinal = 0; ordinal < material.element_count(); ++ordinal) {
+        const P1TetrahedronMaterialTopology &element = material.element_topology(ordinal);
+        // Ms is not part of this conservative density, but retain the same
+        // sharp map validation required by the later mu0-Ms field projection.
+        if (!(material.ms_a_per_m(ordinal) > 0.0)) {
+            throw std::logic_error("element-quadrature material lost positive DG0 Ms");
+        }
+        for (std::size_t ir = 0; ir < kGl6Nodes.size(); ++ir) {
+            const double r = kGl6Nodes[ir];
+            for (std::size_t is = 0; is < kGl6Nodes.size(); ++is) {
+                const double s = kGl6Nodes[is];
+                for (std::size_t it = 0; it < kGl5Nodes.size(); ++it) {
+                    const double t = kGl5Nodes[it];
+                    const std::array<double, 4> shape = {
+                        (1.0 - r) * (1.0 - s) * (1.0 - t),
+                        r,
+                        (1.0 - r) * s,
+                        (1.0 - r) * (1.0 - s) * t,
+                    };
+                    const double weight = 6.0 * element.volume_m3 *
+                        kGl6Weights[ir] * kGl6Weights[is] * kGl5Weights[it] *
+                        (1.0 - r) * (1.0 - r) * (1.0 - s);
+                    const double m1 = interpolate_m_projection(m_xyz, axis1, element, shape);
+                    const double m2 = interpolate_m_projection(m_xyz, axis2, element, shape);
+                    const double m3 = interpolate_m_projection(m_xyz, axis3, element, shape);
+                    const double m1sq = m1 * m1;
+                    const double m2sq = m2 * m2;
+                    const double m3sq = m3 * m3;
+                    const double sigma = m1sq * m2sq + m2sq * m3sq + m1sq * m3sq;
+                    const double density =
+                        interpolate_scalar(kc1_j_per_m3, element, shape) * sigma +
+                        interpolate_scalar(kc2_j_per_m3, element, shape) * m1sq * m2sq * m3sq +
+                        interpolate_scalar(kc3_j_per_m3, element, shape) * sigma * sigma;
+                    energy_j += weight * density;
+                }
+            }
+        }
+    }
+    return energy_j;
 }
 
 } // namespace fullmag::fem

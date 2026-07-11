@@ -49,6 +49,27 @@ The module evaluates nodal field contributions and integrates the energy with
 the available nodal lumped weights. Uniform `K1`, `K2`, `K3`, and `Ms` are used
 unless the matching per-node fields are populated.
 
+### Deferred sharp-material energy oracle
+
+The fail-closed standard FEM plan does not yet admit `Ms_element_field`: every
+active owner must first consume the same element/quadrature map.  The internal
+CPU `cubic_anisotropy_energy_from_element_quadrature_material` helper is one
+such unwired owner. It accepts P1 nodal `m`, `Kc1`, `Kc2`, and `Kc3` together
+with the ordered `ElementQuadratureMaterial` topology.  The conservative
+energy is the one above, in joules; `Ms_e` is validated from that topology but
+does not occur in the density. The future field realization must obey
+`M_Ms H_c = -(1/mu0) dE_c/dm` using the same sharp map.
+
+For P1 inputs, the `Kc1`, `Kc2`, and `Kc3` integrands have total degrees 5, 7,
+and 9. The helper consequently uses a Duffy tensor Gauss-Legendre rule of
+orders `(6, 6, 5)`, exact for all degree-nine tetrahedral polynomials after
+the Duffy Jacobian. It requires a finite unit-orthonormal direct frame `c1`,
+`c2` (and derives `c3 = c1 x c2`); it does not silently renormalize axes.
+The two-tetra contract verifies energy and a separately derived directional
+derivative by analytic barycentric-monomial integration. This is not Context,
+public API, CPU runtime-field, or GPU wiring and does not claim capability
+validation.
+
 ## Ograniczenia capability
 
 - Current production target: P1 native FEM CPU.

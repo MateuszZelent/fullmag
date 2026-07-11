@@ -1,10 +1,12 @@
 #pragma once
 
+#include <array>
 #include <vector>
 
 namespace fullmag::fem {
 
 struct Context;
+class ElementQuadratureMaterial;
 
 /*
  * Compute the cubic anisotropy effective field for the native FEM CPU path.
@@ -26,5 +28,27 @@ void compute_cubic_anisotropy_field(
     const std::vector<double> &m_xyz,
     std::vector<double> &h_cub_xyz,
     double *cubic_energy);
+
+/*
+ * Exact-degree element-quadrature energy oracle for P1 cubic material fields.
+ *
+ * This internal CPU helper evaluates
+ *
+ *   integral [ Kc1_h sigma + Kc2_h m1^2 m2^2 m3^2 + Kc3_h sigma^2 ] dV,
+ *
+ * on the ordered tetrahedral topology held by `material`, where every Kc
+ * coefficient and every component of m is P1.  Kc1/Kc2/Kc3 are in J/m^3 and
+ * the returned energy is in J.  It validates a directly supplied, unit
+ * orthonormal crystal frame; it does not normalize or wire sharp material
+ * maps into Context or the public plan.
+ */
+double cubic_anisotropy_energy_from_element_quadrature_material(
+    const ElementQuadratureMaterial &material,
+    const std::vector<double> &m_xyz,
+    const std::vector<double> &kc1_j_per_m3,
+    const std::vector<double> &kc2_j_per_m3,
+    const std::vector<double> &kc3_j_per_m3,
+    const std::array<double, 3> &axis1,
+    const std::array<double, 3> &axis2);
 
 } // namespace fullmag::fem
