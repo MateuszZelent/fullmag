@@ -765,7 +765,7 @@ function checkObjectVisualizationPanelNumberFieldCommitBoundary() {
   const numberField = blockBetween(
     source,
     "function NumberField",
-    "function ToggleButton",
+    "function displayControlDisabledDescription",
   );
   const wireframeSection = blockBetween(
     source,
