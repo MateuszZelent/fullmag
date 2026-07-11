@@ -6,6 +6,7 @@ import type {
   VisualizationStateResource,
 } from "../api/apiTypes";
 import { CommandRegistry } from "../commands/CommandRegistry";
+import { createCommandContext } from "../commands/commandContext";
 import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
 import { SelectionController } from "../selection/SelectionController";
@@ -196,6 +197,50 @@ describe("visualization target commands", () => {
     );
 
     expect(clearResult.status).toBe("completed");
+    expect(visualization.getSnapshot().overrides).not.toHaveProperty(
+      "part:part-film",
+    );
+  });
+
+  it("uses a Ribbon-provided canonical target after createCommandContext", async () => {
+    const commands = new CommandRegistry();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    const visualization = new ObjectVisualizationController();
+    for (const command of VISUALIZATION_TARGET_COMMANDS) {
+      commands.register(command);
+    }
+    selection.set(
+      {
+        kind: "mesh-part",
+        label: "Film mesh",
+        nodeId: "part-film",
+        objectId: null,
+        ref: {
+          kind: "mesh-part",
+          nodeId: "part-film",
+          objectId: null,
+          type: "mesh-part",
+          visualizationTargetId: "mesh-part:part-film",
+        },
+      },
+      "test",
+    );
+
+    const context = createCommandContext(
+      "ribbon",
+      { selection, visualization } as never,
+      { visualizationTarget: { id: "object:projection-film", kind: "object" } },
+    );
+    const result = await commands.execute(
+      "visualization.target.set-vectors-visible",
+      context,
+      false,
+    );
+
+    expect(result.status).toBe("completed");
+    expect(visualization.getSnapshot().overrides).toMatchObject({
+      "object:projection-film": { vectorsVisible: false },
+    });
     expect(visualization.getSnapshot().overrides).not.toHaveProperty(
       "part:part-film",
     );

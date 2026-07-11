@@ -41,6 +41,12 @@ the generic selection resolver unchanged and gives commands an optional
 only after applying the canonical resolver; without a manifest it still passes
 the deliberate part-scoped fallback.
 
+A follow-up review found that `createCommandContext` discarded the Ribbon's
+resolved target. It now propagates the optional `visualizationTarget` field.
+The command regression creates a real Ribbon command context for a
+geometry-only selection, executes `visualization.target.set-vectors-visible`,
+and proves that the object target displayed by the Ribbon receives the patch.
+
 Focused regressions cover all target branches:
 
 - a matching `targets.parts` entry wins;
@@ -58,7 +64,7 @@ pnpm --dir apps/control-room exec eslint src/kernel/visualization/ObjectVisualiz
 git diff --check
 ```
 
-Result: 132 focused tests passed; TypeScript, targeted ESLint, and whitespace
+Result: 133 focused tests passed; TypeScript, targeted ESLint, and whitespace
 validation passed.
 
 ## Implementation

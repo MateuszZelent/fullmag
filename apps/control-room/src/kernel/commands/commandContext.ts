@@ -21,5 +21,6 @@ export function createCommandContext(
     sourceDetail: patch.sourceDetail,
     visualization: kernel.visualization,
     visualizationSync: kernel.visualizationSync,
+    visualizationTarget: patch.visualizationTarget,
   };
 }
