@@ -861,7 +861,7 @@ function VisualizationQuantitySection({
   return (
     <InspectorSection title="Quantity Source">
       <FormField
-        disabled={pending}
+        disabled={pending || !settings.visible}
         label="Quantity source"
         type="select"
         value={settings.activeQuantityId}
@@ -1154,7 +1154,7 @@ function VisualizationOpacitySection({
   return (
     <InspectorSection title="Opacity">
       <NumberField
-        disabled={false}
+        disabled={!settings.visible}
         label="Opacity"
         max={100}
         min={0}
@@ -1393,7 +1393,7 @@ function useObjectVisualizationPanelState(
         settings,
       })
     : [];
-  const passControlsDisabled = pending;
+  const passControlsDisabled = pending || !settings?.visible;
   const primitiveDisplayToggleVisible = resolvedTarget
     ? shouldShowPrimitiveDisplayToggle(
         activeModuleTab,

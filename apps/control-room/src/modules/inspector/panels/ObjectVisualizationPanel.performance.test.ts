@@ -56,6 +56,14 @@ describe("ObjectVisualizationPanel performance contracts", () => {
     expect(panelSource).toContain("localRenderPatch");
   });
 
+  it("disables every pass control while a target is hidden but preserves Visible and reset", () => {
+    expect(panelSource).toContain("const passControlsDisabled = pending || !settings?.visible;");
+    expect(panelSource).toContain("label=\"Visible\"");
+    expect(panelSource).toContain("disabled={pending}");
+    expect(panelSource).toContain("resetLabel={visualizationResetActionLabel(target.kind)}");
+    expect(panelSource).toContain("disabled={pending}");
+  });
+
   it("renders target quantity selection inside the visualization inspector", () => {
     expect(panelSource).toContain("VisualizationQuantitySection");
     expect(panelSource).toContain('label="Quantity source"');

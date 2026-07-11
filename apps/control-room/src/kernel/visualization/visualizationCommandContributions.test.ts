@@ -31,7 +31,6 @@ describe("visualization target commands", () => {
       },
       "test",
     );
-
     const result = await commands.execute(
       "visualization.target.set-vectors-visible",
       {
@@ -47,6 +46,47 @@ describe("visualization target commands", () => {
       .toMatchObject({
         vectorsVisible: true,
       });
+  });
+
+  it("does not let command palette or shortcut commands change passes on a hidden target", async () => {
+    const commands = new CommandRegistry();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    const visualization = new ObjectVisualizationController();
+    for (const command of VISUALIZATION_TARGET_COMMANDS) {
+      commands.register(command);
+    }
+    selection.set(
+      {
+        kind: "object.visualization",
+        label: "Free layer",
+        nodeId: "model:object:free-layer:visualization",
+        objectId: "free-layer",
+      },
+      "test",
+    );
+    visualization.patchTarget(
+      { id: "object:free-layer", kind: "object" },
+      { visible: false, wireframeVisible: true },
+    );
+
+    const hiddenContext = { selection, source: "shortcut" as const, visualization };
+    expect(
+      commands.get("visualization.target.set-wireframe-visible")?.isEnabled?.(
+        hiddenContext,
+      ),
+    ).toBe(false);
+    expect(
+      await commands.execute(
+        "visualization.target.set-wireframe-visible",
+        hiddenContext,
+        false,
+      ),
+    ).toMatchObject({ status: "failed" });
+    expect(visualization.getSettings({ id: "object:free-layer", kind: "object" }))
+      .toMatchObject({ visible: false, wireframeVisible: true });
+    expect(
+      commands.get("visualization.target.set-visible")?.isEnabled?.(hiddenContext),
+    ).toBe(true);
   });
 
   it("patches the selected region target without changing its parent object", async () => {
@@ -72,6 +112,10 @@ describe("visualization target commands", () => {
         },
       },
       "test",
+    );
+    visualization.patchTarget(
+      { id: "region:free-layer:region%3Acore", kind: "region" },
+      { visible: true },
     );
 
     const result = await commands.execute(

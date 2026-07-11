@@ -782,7 +782,6 @@ export function surfaceDisplayPassPatch(
 
   return {
     ...renderModePatch("surface"),
-    visible: true,
   };
 }
 
@@ -791,7 +790,6 @@ export function renderModeDisplayPatch(
 ): VisualizationTargetPatch {
   return {
     ...renderModePatch(renderMode),
-    visible: true,
   };
 }
 
@@ -804,10 +802,8 @@ export function displayPassTogglePatch(
     | "vectorsVisible"
     | "wireframeVisible",
 ): VisualizationTargetPatch {
-  const nextVisible = !settings[field];
   return {
-    [field]: nextVisible,
-    ...(nextVisible ? { visible: true } : {}),
+    [field]: !settings[field],
   };
 }
 
@@ -826,7 +822,6 @@ export function geometryScopeDisplayPatch(
   return {
     ...renderModePatch("surface+edges"),
     geometryScope,
-    visible: true,
   };
 }
 
@@ -1301,7 +1296,7 @@ export function buildVisualizationPanelSections({
 
   return [
     {
-      disabled: false,
+      disabled: passDisabled,
       fields: [
         { id: "visible", kind: "toggle", label: "Visible" },
         { id: "shaderVisible", kind: "toggle", label: "Surface" },
@@ -1314,7 +1309,7 @@ export function buildVisualizationPanelSections({
       title: "Display Passes",
     },
     {
-      disabled: false,
+      disabled: passDisabled,
       fields: [
         { id: "activeQuantityId", kind: "mode", label: "Quantity source" },
       ],
@@ -1373,7 +1368,7 @@ export function buildVisualizationPanelSections({
       title: "Geometry Scope",
     },
     {
-      disabled: false,
+      disabled: passDisabled,
       fields: [{ id: "opacityPercent", kind: "number", label: "Opacity" }],
       id: "opacity",
       title: "Opacity",

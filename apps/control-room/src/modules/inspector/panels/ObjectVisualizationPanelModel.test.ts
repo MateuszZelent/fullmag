@@ -629,7 +629,7 @@ describe("ObjectVisualizationPanelModel", () => {
     ).toEqual({ shaderVisible: false });
   });
 
-  it("turns hidden target pass toggles into visible renderable passes", () => {
+  it("preserves a hidden target while computing pass-only patches", () => {
     const hiddenRegionSettings = {
       ...DEFAULT_OBJECT_VISUALIZATION,
       boundsVisible: false,
@@ -643,24 +643,40 @@ describe("ObjectVisualizationPanelModel", () => {
 
     expect(surfaceDisplayPassPatch(hiddenRegionSettings)).toMatchObject({
       shaderVisible: true,
-      visible: true,
     });
+    expect(surfaceDisplayPassPatch(hiddenRegionSettings)).not.toHaveProperty("visible");
     expect(
       displayPassTogglePatch(hiddenRegionSettings, "wireframeVisible"),
-    ).toEqual({
-      visible: true,
-      wireframeVisible: true,
-    });
+    ).toEqual({ wireframeVisible: true });
     expect(
       displayPassTogglePatch(hiddenRegionSettings, "boundsVisible"),
-    ).toEqual({
-      boundsVisible: true,
-      visible: true,
-    });
+    ).toEqual({ boundsVisible: true });
     expect(renderModeDisplayPatch("points")).toMatchObject({
       pointsVisible: true,
-      visible: true,
     });
+    expect(renderModeDisplayPatch("points")).not.toHaveProperty("visible");
+  });
+
+  it("restores configured passes after a hidden target becomes visible", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "object:free-layer", kind: "object" as const };
+    controller.patchTarget(target, {
+      visible: false,
+      wireframeVisible: true,
+    });
+
+    const hidden = resolveTargetVisualization({
+      snapshot: controller.getSnapshot(),
+      target,
+    });
+    expect(hidden.settings).toMatchObject({ visible: false, wireframeVisible: true });
+    expect(hidden.effectiveSettings.wireframeVisible).toBe(false);
+
+    controller.patchTarget(target, { visible: true });
+    expect(
+      resolveTargetVisualization({ snapshot: controller.getSnapshot(), target })
+        .effectiveSettings,
+    ).toMatchObject({ visible: true, wireframeVisible: true });
   });
 
   it("turns Full geometry scope into a visible volume-mesh pass when only the surface is active", () => {

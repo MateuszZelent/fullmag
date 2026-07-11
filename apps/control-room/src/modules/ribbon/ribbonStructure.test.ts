@@ -817,6 +817,34 @@ describe("ribbon structure", () => {
       });
   });
 
+  it("disables selected pass controls but keeps Visible and Clear available for a hidden target", () => {
+    const visualization = new ObjectVisualizationController();
+    visualization.patchTarget(
+      { id: "object:free-layer", kind: "object" },
+      { visible: false, wireframeVisible: true },
+    );
+    const content = buildRibbonTabContent("view", {
+      selection: {
+        kind: "object.visualization",
+        label: "Free layer",
+        moduleSource: "test",
+        nodeId: "model:object:free-layer:visualization",
+        objectId: "free-layer",
+        ref: null,
+      },
+      visualization,
+      visualizationSnapshot: visualization.getSnapshot(),
+    });
+    const renderAction = content?.groups
+      .find((group) => group.id === "view-selected-display")
+      ?.actions.find((action) => action.id === "view-selected-render");
+    const node = (id: string) => renderAction?.menu?.find((entry) => entry.id === id);
+
+    expect(node("selected:visible")).toMatchObject({ disabled: false, checked: false });
+    expect(node("selected:wireframe")).toMatchObject({ disabled: true, checked: false });
+    expect(node("selected:clear")).toMatchObject({ disabled: false });
+  });
+
   it("lets the selected surface color picker switch the target to solid coloring", async () => {
     const visualization = new ObjectVisualizationController();
     const content = buildRibbonTabContent("view", {
@@ -1135,6 +1163,14 @@ describe("ribbon structure", () => {
         ),
       },
     };
+    context.visualization.patchTarget(
+      {
+        id: visualizationTargetIdForSceneObject("free-layer", "region:core"),
+        kind: "region",
+      },
+      { visible: true },
+    );
+    context.visualizationSnapshot = context.visualization.getSnapshot();
     const content = buildRibbonTabContent("view", {
       ...context,
       selection,
@@ -1205,6 +1241,14 @@ describe("ribbon structure", () => {
         ),
       },
     };
+    context.visualization.patchTarget(
+      {
+        id: visualizationTargetIdForSceneObject("free-layer", "region:core"),
+        kind: "region",
+      },
+      { visible: true },
+    );
+    context.visualizationSnapshot = context.visualization.getSnapshot();
     const content = buildRibbonTabContent("view", {
       ...context,
       selection,
@@ -1993,7 +2037,7 @@ describe("ribbon structure", () => {
 
     const commandContext = { ...context, selection };
     await runRibbonNode(visibleNode, true, commandContext);
-    await runRibbonNode(frameNode, true, commandContext);
+    expect(frameNode).toMatchObject({ disabled: true });
 
     expect(patches).toEqual([
       {
@@ -2006,23 +2050,11 @@ describe("ribbon structure", () => {
           },
         },
       },
-      {
-        layers: {
-          airbox: {
-            bounds: {
-              visible: true,
-            },
-          },
-        },
-      },
     ]);
     expect(context.visualization.getSettings(AIRBOX_VISUALIZATION_TARGET))
       .toMatchObject({ boundsVisible: false });
     await vi.waitFor(() =>
-      expect(invalidations).toEqual([
-        [VISUALIZATION_STATE_PATH, 41],
-        [VISUALIZATION_STATE_PATH, 42],
-      ]),
+      expect(invalidations).toEqual([[VISUALIZATION_STATE_PATH, 41]]),
     );
   });
 

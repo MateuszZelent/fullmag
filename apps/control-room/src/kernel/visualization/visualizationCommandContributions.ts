@@ -11,6 +11,7 @@ import {
   hasVisualizationStatePatch,
   mergeVisualizationStateTargetOverride,
   renderModePatch,
+  resolveTargetVisualization,
   resolveVisualizationTargetFromSelection,
   visualizationStateOverrideMatchesTarget,
   type SurfaceColorSource,
@@ -35,6 +36,25 @@ function targetCommandDisabledReason(context: CommandContext): string | null {
   if (!context.visualization) return "Visualization registry is unavailable.";
   if (!selectedTarget(context)) return "Select an object, mesh part, or airbox.";
   return null;
+}
+
+function targetPassCommandEnabled(context: CommandContext): boolean {
+  const target = selectedTarget(context);
+  const visualization = context.visualization;
+  if (!target || !visualization) return false;
+  return resolveTargetVisualization({
+    snapshot: visualization.getSnapshot(),
+    target,
+    visualizationState: visualizationStateFromContext(context),
+  }).settings.visible;
+}
+
+function targetPassCommandDisabledReason(context: CommandContext): string | null {
+  const unavailableReason = targetCommandDisabledReason(context);
+  if (unavailableReason) return unavailableReason;
+  return targetPassCommandEnabled(context)
+    ? null
+    : "Show the selected target before changing its display passes or style.";
 }
 
 async function patchSelectedTarget(
@@ -176,6 +196,7 @@ function boolPatchCommand(
     | "visible"
     | "wireframeVisible"
   >,
+  options: { passOnly?: boolean } = {},
 ): CommandContribution {
   return {
     id,
@@ -183,8 +204,10 @@ function boolPatchCommand(
     group: "visualization",
     category: "visualization",
     scope: "selection",
-    disabledReason: targetCommandDisabledReason,
-    isEnabled: targetCommandEnabled,
+    disabledReason: options.passOnly
+      ? targetPassCommandDisabledReason
+      : targetCommandDisabledReason,
+    isEnabled: options.passOnly ? targetPassCommandEnabled : targetCommandEnabled,
     run: (context) => {
       const value = booleanPayload(context);
       return value === null
@@ -213,8 +236,8 @@ function numberPatchCommand(
     group: "visualization",
     category: "visualization",
     scope: "selection",
-    disabledReason: targetCommandDisabledReason,
-    isEnabled: targetCommandEnabled,
+    disabledReason: targetPassCommandDisabledReason,
+    isEnabled: targetPassCommandEnabled,
     run: (context) => {
       const value = numberPayload(context);
       return value === null
@@ -240,8 +263,8 @@ function stringPatchCommand(
     group: "visualization",
     category: "visualization",
     scope: "selection",
-    disabledReason: targetCommandDisabledReason,
-    isEnabled: targetCommandEnabled,
+    disabledReason: targetPassCommandDisabledReason,
+    isEnabled: targetPassCommandEnabled,
     run: (context) => {
       const value = stringPayload(context);
       return value === null
@@ -266,26 +289,31 @@ export const VISUALIZATION_TARGET_COMMANDS: CommandContribution[] = [
     "visualization.target.set-surface-visible",
     "Set selected target surface visibility",
     "shaderVisible",
+    { passOnly: true },
   ),
   boolPatchCommand(
     "visualization.target.set-vectors-visible",
     "Set selected target vector visibility",
     "vectorsVisible",
+    { passOnly: true },
   ),
   boolPatchCommand(
     "visualization.target.set-wireframe-visible",
     "Set selected target wireframe visibility",
     "wireframeVisible",
+    { passOnly: true },
   ),
   boolPatchCommand(
     "visualization.target.set-bounds-visible",
     "Set selected target frame visibility",
     "boundsVisible",
+    { passOnly: true },
   ),
   boolPatchCommand(
     "visualization.target.set-points-visible",
     "Set selected target point visibility",
     "pointsVisible",
+    { passOnly: true },
   ),
   numberPatchCommand(
     "visualization.target.set-opacity-percent",
@@ -333,8 +361,8 @@ export const VISUALIZATION_TARGET_COMMANDS: CommandContribution[] = [
     group: "visualization",
     category: "visualization",
     scope: "selection",
-    disabledReason: targetCommandDisabledReason,
-    isEnabled: targetCommandEnabled,
+    disabledReason: targetPassCommandDisabledReason,
+    isEnabled: targetPassCommandEnabled,
     run: (context) => {
       const value = stringPayload(context);
       if (!value) return invalidPayload("visualization.target.set-surface-color-source");
@@ -355,8 +383,8 @@ export const VISUALIZATION_TARGET_COMMANDS: CommandContribution[] = [
     group: "visualization",
     category: "visualization",
     scope: "selection",
-    disabledReason: targetCommandDisabledReason,
-    isEnabled: targetCommandEnabled,
+    disabledReason: targetPassCommandDisabledReason,
+    isEnabled: targetPassCommandEnabled,
     run: (context) => {
       const value = stringPayload(context);
       return value
@@ -372,8 +400,8 @@ export const VISUALIZATION_TARGET_COMMANDS: CommandContribution[] = [
     group: "visualization",
     category: "visualization",
     scope: "selection",
-    disabledReason: targetCommandDisabledReason,
-    isEnabled: targetCommandEnabled,
+    disabledReason: targetPassCommandDisabledReason,
+    isEnabled: targetPassCommandEnabled,
     run: (context) => {
       const value = stringPayload(context);
       return value
