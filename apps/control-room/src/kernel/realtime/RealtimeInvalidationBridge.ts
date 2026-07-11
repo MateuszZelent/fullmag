@@ -113,6 +113,16 @@ interface RealtimeInvalidationBridgeOptions {
   ) => boolean;
 }
 
+export interface FieldInvalidationTelemetry {
+  broadInvalidations: number;
+  exactInvalidations: number;
+  refetches: number;
+}
+
+function boundedIncrement(value: number, amount = 1): number {
+  return Math.min(Number.MAX_SAFE_INTEGER, value + amount);
+}
+
 function isRealtimeResourceEvent(event: unknown): event is RealtimeResourceEvent {
   if (!event || typeof event !== "object") {
     return false;
@@ -222,13 +232,19 @@ function fieldSamplesInvalidationRevision(change: RealtimeBatchChange): Resource
     : `generation:${change.domain_generation_id}:revision:${change.revision}`;
 }
 
-function exactFieldQueryFromResourceKey(
+function exactFieldQueriesFromResourceKey(
   resourceKey: string,
-): CanonicalFieldVectorQuery | null {
-  const fieldPathIndex = resourceKey.lastIndexOf(`${DATA_FIELDS_PATH}/`);
-  return fieldPathIndex < 0
-    ? null
-    : parseCanonicalFieldVectorResourceKey(resourceKey.slice(fieldPathIndex));
+): CanonicalFieldVectorQuery[] {
+  return resourceKey
+    .split("|")
+    .flatMap((segment) => {
+      const fieldPathIndex = segment.indexOf(`${DATA_FIELDS_PATH}/`);
+      if (fieldPathIndex < 0) return [];
+      const query = parseCanonicalFieldVectorResourceKey(
+        segment.slice(fieldPathIndex),
+      );
+      return query ? [query] : [];
+    });
 }
 
 function resourceFamilyPrefix(pathWithObjectId: string): string {
@@ -346,11 +362,20 @@ export class RealtimeInvalidationBridge {
   }> = [];
   private pendingPrefixes = new Map<string, ResourceRevision>();
   private pendingStatusRevision: ResourceRevision | null = null;
+  private fieldInvalidationTelemetry: FieldInvalidationTelemetry = {
+    broadInvalidations: 0,
+    exactInvalidations: 0,
+    refetches: 0,
+  };
 
   constructor(
     private readonly resources: ResourceInvalidationController,
     private readonly options: RealtimeInvalidationBridgeOptions = {},
   ) {}
+
+  getFieldInvalidationTelemetry(): FieldInvalidationTelemetry {
+    return { ...this.fieldInvalidationTelemetry };
+  }
 
   handleEvent(event: unknown): boolean {
     const sessionHandled = this.handleSessionEnvelope(event);
@@ -405,13 +430,19 @@ export class RealtimeInvalidationBridge {
             ? parseCanonicalFieldVectorResourceKey(change.recommended_fetch)
             : null;
           if (exactFieldResource) {
+            this.recordFieldInvalidation("exact", 1);
             this.queueExactFieldSampleInvalidation(
               exactFieldResource,
               fieldSampleRevision,
             );
+            if (exactFieldResource.quantityId === "m") {
+              this.queueMagnetizationFieldDependents(fieldSampleRevision);
+            }
           } else if (change.broad || !change.quantity_ids?.length) {
+            this.recordFieldInvalidation("broad", 1);
             this.queuePrefixInvalidation(DATA_FIELDS_PATH, fieldSampleRevision);
           } else {
+            this.recordFieldInvalidation("broad", change.quantity_ids.length);
             for (const quantityId of change.quantity_ids) {
               this.queueFieldSampleQuantityInvalidation(
                 quantityId,
@@ -520,6 +551,23 @@ export class RealtimeInvalidationBridge {
     );
   }
 
+  private recordFieldInvalidation(
+    kind: "broad" | "exact",
+    refetches: number,
+  ): void {
+    this.fieldInvalidationTelemetry = {
+      broadInvalidations:
+        kind === "broad"
+          ? boundedIncrement(this.fieldInvalidationTelemetry.broadInvalidations)
+          : this.fieldInvalidationTelemetry.broadInvalidations,
+      exactInvalidations:
+        kind === "exact"
+          ? boundedIncrement(this.fieldInvalidationTelemetry.exactInvalidations)
+          : this.fieldInvalidationTelemetry.exactInvalidations,
+      refetches: boundedIncrement(this.fieldInvalidationTelemetry.refetches, refetches),
+    };
+  }
+
   private queuePrefixInvalidation(
     resourceKey: string,
     revision: ResourceRevision,
@@ -541,11 +589,15 @@ export class RealtimeInvalidationBridge {
       revision,
     );
     if (canonicalQuantityId === "m") {
-      this.queuePrefixInvalidation(
-        resourceFamilyPrefix(ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH),
-        revision,
-      );
+      this.queueMagnetizationFieldDependents(revision);
     }
+  }
+
+  private queueMagnetizationFieldDependents(revision: ResourceRevision): void {
+    this.queuePrefixInvalidation(
+      resourceFamilyPrefix(ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH),
+      revision,
+    );
   }
 
   private queueExactFieldSampleInvalidation(
@@ -553,8 +605,9 @@ export class RealtimeInvalidationBridge {
     revision: ResourceRevision,
   ): void {
     this.queueMatchingInvalidation((subscribedKey) => {
-      const candidate = exactFieldQueryFromResourceKey(subscribedKey);
-      return candidate !== null && canonicalFieldVectorQueriesEqual(candidate, fieldQuery);
+      return exactFieldQueriesFromResourceKey(subscribedKey).some((candidate) =>
+        canonicalFieldVectorQueriesEqual(candidate, fieldQuery),
+      );
     }, revision);
   }
 

@@ -830,11 +830,13 @@ describe("RealtimeInvalidationBridge", () => {
       }),
     );
     const exactCollectionKey = `${DATA_FIELDS_PATH}#viewport-3d:quantity-field-vectors:${exactKey}`;
+    const aggregateCollectionKey = `${DATA_FIELDS_PATH}#viewport-3d:quantity-field-vectors:${otherObjectKey}|${exactKey}|${otherComponentKey}`;
 
     resources.subscribe(exactKey, () => {});
     resources.subscribe(otherObjectKey, () => {});
     resources.subscribe(otherComponentKey, () => {});
     resources.subscribe(exactCollectionKey, () => {});
+    resources.subscribe(aggregateCollectionKey, () => {});
 
     bridge.handleEvent({
       payload: {
@@ -854,8 +856,42 @@ describe("RealtimeInvalidationBridge", () => {
 
     expect(resources.getRevision(exactKey)).toBe(14);
     expect(resources.getRevision(exactCollectionKey)).toBe(14);
+    expect(resources.getRevision(aggregateCollectionKey)).toBe(14);
     expect(resources.getRevision(otherObjectKey)).toBeNull();
     expect(resources.getRevision(otherComponentKey)).toBeNull();
+    expect(bridge.getFieldInvalidationTelemetry()).toEqual({
+      broadInvalidations: 0,
+      exactInvalidations: 1,
+      refetches: 1,
+    });
+  });
+
+  it("keeps topological-charge dependents current for exact magnetization events", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const topologicalChargeKey = ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH.replace(
+      "{object_id}",
+      "film",
+    );
+    resources.subscribe(topologicalChargeKey, () => {});
+
+    bridge.handleEvent({
+      payload: {
+        changes: [
+          {
+            recommended_fetch:
+              "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full",
+            resource: "fields",
+            resource_id: "samples",
+            revision: 15,
+          },
+        ],
+      },
+      type: "resource.batch_changed",
+    });
+
+    expect(resources.getRevision(topologicalChargeKey)).toBe(15);
   });
 
   it("refreshes component field metadata when matching quantity samples change", () => {
