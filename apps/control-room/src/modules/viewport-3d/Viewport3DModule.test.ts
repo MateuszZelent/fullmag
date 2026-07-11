@@ -140,8 +140,8 @@ describe("createViewport3DPointerHoldLifecycle", () => {
       addEventListener: vi.fn(
         (type: string, listener: EventListener) => listeners.set(type, listener),
       ),
-      dispatch(type: "pointercancel" | "pointerup") {
-        listeners.get(type)?.(new Event(type));
+      dispatch(type: "pointercancel" | "pointerup", pointerId: number) {
+        listeners.get(type)?.({ pointerId } as PointerEvent);
       },
       removeEventListener: vi.fn(
         (type: string, listener: EventListener) => {
@@ -161,8 +161,8 @@ describe("createViewport3DPointerHoldLifecycle", () => {
       target,
     });
 
-    hold.begin();
-    target.dispatch("pointerup");
+    hold.begin(1);
+    target.dispatch("pointerup", 1);
     hold.dispose();
 
     expect(onBegin).toHaveBeenCalledOnce();
@@ -189,8 +189,8 @@ describe("createViewport3DPointerHoldLifecycle", () => {
       target,
     });
 
-    hold.begin();
-    target.dispatch("pointercancel");
+    hold.begin(1);
+    target.dispatch("pointercancel", 1);
     hold.dispose();
 
     expect(onEnd).toHaveBeenCalledOnce();
@@ -206,12 +206,36 @@ describe("createViewport3DPointerHoldLifecycle", () => {
       target,
     });
 
-    hold.begin();
-    hold.begin();
+    hold.begin(1);
+    hold.begin(1);
     hold.dispose();
 
     expect(onEnd).toHaveBeenCalledOnce();
     expect(target.addEventListener).toHaveBeenCalledTimes(2);
+    expect(target.removeEventListener).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the hold until the last active pointer ends", () => {
+    const target = createPointerEventTarget();
+    const onBegin = vi.fn();
+    const onEnd = vi.fn();
+    const hold = createViewport3DPointerHoldLifecycle({
+      onBegin,
+      onEnd,
+      target,
+    });
+
+    hold.begin(11);
+    hold.begin(22);
+    target.dispatch("pointerup", 11);
+
+    expect(onBegin).toHaveBeenCalledOnce();
+    expect(onEnd).not.toHaveBeenCalled();
+    expect(target.removeEventListener).not.toHaveBeenCalled();
+
+    target.dispatch("pointercancel", 22);
+
+    expect(onEnd).toHaveBeenCalledOnce();
     expect(target.removeEventListener).toHaveBeenCalledTimes(2);
   });
 });

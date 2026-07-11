@@ -187,9 +187,9 @@ interface Viewport3DPointerHoldEventTarget {
 }
 
 export interface Viewport3DPointerHoldLifecycle {
-  begin(): void;
+  begin(pointerId: number): void;
   dispose(): void;
-  end(): void;
+  end(pointerId: number): void;
 }
 
 export function createViewport3DPointerHoldLifecycle({
@@ -201,31 +201,41 @@ export function createViewport3DPointerHoldLifecycle({
   onEnd: () => void;
   target: Viewport3DPointerHoldEventTarget;
 }): Viewport3DPointerHoldLifecycle {
-  let active = false;
+  const activePointerIds = new Set<number>();
   let terminalListenersInstalled = false;
   const removeTerminalListeners = () => {
     if (!terminalListenersInstalled) return;
     terminalListenersInstalled = false;
-    target.removeEventListener("pointerup", end, true);
-    target.removeEventListener("pointercancel", end, true);
+    target.removeEventListener("pointerup", handleTerminalEvent, true);
+    target.removeEventListener("pointercancel", handleTerminalEvent, true);
   };
-  const end = () => {
+  const end = (pointerId: number) => {
+    if (!activePointerIds.delete(pointerId) || activePointerIds.size > 0) return;
     removeTerminalListeners();
-    if (!active) return;
-    active = false;
     onEnd();
+  };
+  const handleTerminalEvent: EventListener = (event) => {
+    const pointerId = (event as PointerEvent).pointerId;
+    if (Number.isInteger(pointerId)) end(pointerId);
   };
 
   return {
-    begin() {
-      if (active) return;
-      active = true;
+    begin(pointerId) {
+      if (activePointerIds.has(pointerId)) return;
+      const wasEmpty = activePointerIds.size === 0;
+      activePointerIds.add(pointerId);
+      if (!wasEmpty) return;
       onBegin();
-      target.addEventListener("pointerup", end, true);
-      target.addEventListener("pointercancel", end, true);
+      target.addEventListener("pointerup", handleTerminalEvent, true);
+      target.addEventListener("pointercancel", handleTerminalEvent, true);
       terminalListenersInstalled = true;
     },
-    dispose: end,
+    dispose() {
+      if (activePointerIds.size === 0) return;
+      activePointerIds.clear();
+      removeTerminalListeners();
+      onEnd();
+    },
     end,
   };
 }
@@ -1275,13 +1285,13 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     useState<string | null>(null);
   const fieldUpdatePointerHoldLifecycleRef =
     useRef<Viewport3DPointerHoldLifecycle | null>(null);
-  const releaseFieldUpdatePointerHold = useCallback(() => {
-    fieldUpdatePointerHoldLifecycleRef.current?.end();
+  const releaseFieldUpdatePointerHold = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    fieldUpdatePointerHoldLifecycleRef.current?.end(event.pointerId);
   }, []);
   const holdFieldUpdatesForPointerGesture = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
       if (event.button < 0 || event.button > 2) return;
-      fieldUpdatePointerHoldLifecycleRef.current?.begin();
+      fieldUpdatePointerHoldLifecycleRef.current?.begin(event.pointerId);
     },
     [],
   );
