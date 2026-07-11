@@ -426,7 +426,34 @@ FrequencyDomainStatus apply_block_operator(
         ++result->operator_apply_count;
     }
     FrequencyDomainStatus status = FrequencyDomainStatus::ok;
-    if (problem.apply_complex_stiffness != nullptr ||
+    if (problem.linearized_dynamic_pencil != nullptr) {
+        const FrequencyDomainPhaseConvention phase =
+            problem.angular_frequency_sign > 0.0
+            ? FrequencyDomainPhaseConvention::exp_i_omega_t
+            : FrequencyDomainPhaseConvention::exp_minus_i_omega_t;
+        // The output halves are L workspaces until the final two pointwise
+        // combinations.  This preserves the matrix-free/no-hot-allocation
+        // contract while the pencil owns the only Aomega equation.
+        status = problem.linearized_dynamic_pencil->apply_Aomega_real_split(
+            std::fabs(omega),
+            phase,
+            real_in,
+            imag_in,
+            real_out,
+            imag_out,
+            real_out,
+            imag_out,
+            stiffness_workspace.data(),
+            mass_workspace.data(),
+            error_message);
+        if (status != FrequencyDomainStatus::ok) {
+            return status;
+        }
+        if (result != nullptr) {
+            result->stiffness_apply_count += 2;
+            result->mass_apply_count += 2;
+        }
+    } else if (problem.apply_complex_stiffness != nullptr ||
         problem.apply_complex_mass != nullptr) {
         if (problem.apply_complex_stiffness == nullptr ||
             problem.apply_complex_mass == nullptr) {

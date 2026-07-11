@@ -3,6 +3,8 @@
 #include "fullmag_fem.h"
 
 #include "context.hpp"
+#include "cpu/mfem/interactions/demag_poisson_energy.hpp"
+#include "cpu/mfem/interactions/zeeman_energy.hpp"
 #include "cpu/mfem/relaxation/relaxation_math.hpp"
 #include "fem_common.hpp"
 #include "src/relaxation_numerics.hpp"
@@ -577,6 +579,147 @@ void strict_monotone_energy_scale_sweep()
     }
 }
 
+void direct_armijo_difference_resolves_sub_ulp_total_energy_decrement()
+{
+    using fullmag::fem::relaxation::ArmijoDifferenceDecision;
+    using fullmag::fem::relaxation::EnergyDifference;
+    using fullmag::fem::relaxation::strict_armijo_difference_decision;
+
+    const double current_total_energy = -2.0e-17;
+    const double direct_delta_energy = -1.0e-34;
+    const double trial_total_energy = current_total_energy + direct_delta_energy;
+    check(
+        trial_total_energy == current_total_energy,
+        "manufactured Armijo fixture must hide its physical decrement in endpoint total-energy binary64 rounding");
+
+    const EnergyDifference resolved = {
+        direct_delta_energy,
+        std::abs(direct_delta_energy),
+        0.0,
+    };
+    check(
+        strict_armijo_difference_decision(resolved, -5.0e-35) ==
+            ArmijoDifferenceDecision::Accept,
+        "direct Armijo difference must accept a resolved descending sub-ULP endpoint decrement");
+
+    const EnergyDifference ambiguous = {
+        -8.0e-35,
+        1.0e-34,
+        4.0e-35,
+    };
+    check(
+        strict_armijo_difference_decision(ambiguous, -5.0e-35) ==
+            ArmijoDifferenceDecision::Refine,
+        "an Armijo threshold inside the direct-difference uncertainty interval must request refinement");
+
+    const EnergyDifference uphill = {
+        1.0e-34,
+        1.0e-34,
+        0.0,
+    };
+    check(
+        strict_armijo_difference_decision(uphill, -5.0e-35) ==
+            ArmijoDifferenceDecision::Reject,
+        "direct Armijo difference must reject a resolved uphill trial");
+}
+
+void polarized_demag_energy_difference_uses_endpoint_fields()
+{
+    fullmag::fem::Context ctx;
+    ctx.mesh.magnetic_node_mask = {1u, 0u};
+    ctx.integration_weights.mfem_lumped_mass = {2.0e-27, 9.0e-27};
+    ctx.material_fields.Ms_field = {4.0e5, 7.0e5};
+    const std::vector<double> current_m = {1.0, 0.0, 0.0, 1.0e6, -2.0e6, 3.0e6};
+    const std::vector<double> trial_m = {1.0 - 2.0e-12, 3.0e-12, -5.0e-12,
+                                         -4.0e6, 5.0e6, -6.0e6};
+    const std::vector<double> current_h = {-3.0e4, 2.0e4, 1.0e4,
+                                            8.0e9, -9.0e9, 1.0e10};
+    const std::vector<double> trial_h = {-3.0e4 + 7.0e-8, 2.0e4 - 11.0e-8,
+                                          1.0e4 + 13.0e-8,
+                                          -1.0e10, 2.0e10, -3.0e10};
+    const auto difference = fullmag::fem::demag_poisson_energy_difference_from_endpoint_fields(
+        ctx, current_m, trial_m, current_h, trial_h);
+    const double dx = trial_m[0] - current_m[0];
+    const double dy = trial_m[1] - current_m[1];
+    const double dz = trial_m[2] - current_m[2];
+    const double expected = -0.5 * fullmag::fem::kMu0 * 4.0e5 * 2.0e-27 *
+        (dx * (current_h[0] + trial_h[0]) +
+         dy * (current_h[1] + trial_h[1]) +
+         dz * (current_h[2] + trial_h[2]));
+    check(
+        std::abs(difference.delta_joules - expected) <= 1.0e-45,
+        "polarized demag difference must use only active endpoint fields with -0.5 mu0 Ms V");
+    check(
+        difference.absolute_term_sum_joules >= std::abs(expected),
+        "polarized demag difference must expose an absolute term sum for roundoff bounds");
+}
+
+void direct_zeeman_energy_difference_avoids_endpoint_total_subtraction()
+{
+    fullmag::fem::Context ctx;
+    ctx.mesh.magnetic_node_mask = {1u};
+    ctx.integration_weights.mfem_lumped_mass = {3.0e-27};
+    ctx.material_fields.Ms_field = {8.0e5};
+    ctx.zeeman.has_external_field = true;
+    ctx.zeeman.h_ext_xyz = {2.0e5, -3.0e5, 5.0e5};
+    const std::vector<double> current_m = {1.0, 0.0, 0.0};
+    const std::vector<double> trial_m = {1.0 - 2.0e-12, 3.0e-12, -5.0e-12};
+    const auto difference =
+        fullmag::fem::zeeman_energy_difference_from_field(ctx, current_m, trial_m);
+    const double expected = -fullmag::fem::kMu0 * 8.0e5 * 3.0e-27 *
+        ((trial_m[0] - current_m[0]) * 2.0e5 +
+         (trial_m[1] - current_m[1]) * -3.0e5 +
+         (trial_m[2] - current_m[2]) * 5.0e5);
+    check(
+        std::abs(difference.delta_joules - expected) <= 1.0e-45,
+        "direct Zeeman difference must evaluate the nodal magnetization increment before reduction");
+}
+
+void transported_bb_secant_lives_in_the_accepted_tangent_space()
+{
+    fullmag::fem::Context ctx;
+    ctx.mesh.magnetic_node_mask = {1u};
+    const double inv_sqrt_two = 1.0 / std::sqrt(2.0);
+    const std::vector<double> previous_m = {1.0, 0.0, 0.0};
+    const std::vector<double> accepted_m = {inv_sqrt_two, inv_sqrt_two, 0.0};
+    const std::vector<double> previous_g = {0.0, 2.0, 1.0};
+    const std::vector<double> accepted_g = {
+        -3.0 * inv_sqrt_two, 3.0 * inv_sqrt_two, 1.0};
+    std::vector<double> transported_s;
+    std::vector<double> transported_y;
+
+    check(
+        fullmag::fem::relaxation::transported_bb_secant(
+            ctx,
+            previous_m,
+            accepted_m,
+            previous_g,
+            accepted_g,
+            transported_s,
+            transported_y),
+        "transported BB secant must accept a conforming nodal-sphere state");
+
+    const auto dot = [](const std::vector<double> &a, const std::vector<double> &b) {
+        return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    };
+    const std::vector<double> ambient_s = {
+        accepted_m[0] - previous_m[0],
+        accepted_m[1] - previous_m[1],
+        accepted_m[2] - previous_m[2],
+    };
+    check(
+        std::abs(dot(accepted_m, ambient_s)) > 1.0e-3,
+        "manufactured state must distinguish ambient and accepted-tangent BB steps");
+    check(
+        std::abs(dot(accepted_m, transported_s)) <=
+            32.0 * std::numeric_limits<double>::epsilon(),
+        "transported BB step must be tangent at the accepted magnetization");
+    check(
+        std::abs(dot(accepted_m, transported_y)) <=
+            64.0 * std::numeric_limits<double>::epsilon(),
+        "transported BB gradient difference must be tangent at the accepted magnetization");
+}
+
 #if FULLMAG_HAS_CUDA_RUNTIME
 void check_cuda(cudaError_t status, const char *message)
 {
@@ -619,9 +762,10 @@ void cuda_heterogeneous_nodal_ms_pgbb_ncg_calibration()
     const std::vector<double> previous_x = {1.0, 0.0, 0.0};
     const std::vector<double> previous_y = {0.0, 1.0, 0.0};
     const std::vector<double> previous_z = {0.0, 0.0, 1.0};
-    const std::vector<double> trial_x = {0.8, 0.1, 1.0e6};
-    const std::vector<double> trial_y = {0.2, 0.9, -1.0e6};
-    const std::vector<double> trial_z = {0.1, 0.3, 5.0e5};
+    const double inv_sqrt_two = 1.0 / std::sqrt(2.0);
+    const std::vector<double> trial_x = {inv_sqrt_two, 0.0, 1.0e6};
+    const std::vector<double> trial_y = {inv_sqrt_two, inv_sqrt_two, -1.0e6};
+    const std::vector<double> trial_z = {0.0, inv_sqrt_two, 5.0e5};
     const std::vector<double> previous_gx = {2.0, -1.0, 1.0e12};
     const std::vector<double> previous_gy = {-3.0, 4.0, -2.0e12};
     const std::vector<double> previous_gz = {1.0, 2.0, 3.0e12};
@@ -668,15 +812,33 @@ void cuda_heterogeneous_nodal_ms_pgbb_ncg_calibration()
             continue;
         }
         const double weight = fullmag::fem::kMu0 * ms[node] * volume[node];
-        const std::array<double, 3> s = {
-            trial_x[node] - previous_x[node],
-            trial_y[node] - previous_y[node],
-            trial_z[node] - previous_z[node],
+        const std::array<double, 3> accepted_m = {
+            trial_x[node], trial_y[node], trial_z[node]};
+        const std::array<double, 3> raw_s = {
+            accepted_m[0] - previous_x[node],
+            accepted_m[1] - previous_y[node],
+            accepted_m[2] - previous_z[node],
         };
+        const double m_dot_raw_s =
+            accepted_m[0] * raw_s[0] +
+            accepted_m[1] * raw_s[1] +
+            accepted_m[2] * raw_s[2];
+        const std::array<double, 3> s = {
+            raw_s[0] - m_dot_raw_s * accepted_m[0],
+            raw_s[1] - m_dot_raw_s * accepted_m[1],
+            raw_s[2] - m_dot_raw_s * accepted_m[2],
+        };
+        const double m_dot_previous_g =
+            accepted_m[0] * previous_gx[node] +
+            accepted_m[1] * previous_gy[node] +
+            accepted_m[2] * previous_gz[node];
         const std::array<double, 3> y = {
-            trial_gx[node] - previous_gx[node],
-            trial_gy[node] - previous_gy[node],
-            trial_gz[node] - previous_gz[node],
+            trial_gx[node] -
+                (previous_gx[node] - m_dot_previous_g * accepted_m[0]),
+            trial_gy[node] -
+                (previous_gy[node] - m_dot_previous_g * accepted_m[1]),
+            trial_gz[node] -
+                (previous_gz[node] - m_dot_previous_g * accepted_m[2]),
         };
         expected_ss += weight * (s[0] * s[0] + s[1] * s[1] + s[2] * s[2]);
         expected_sy += weight * (s[0] * y[0] + s[1] * y[1] + s[2] * y[2]);
@@ -942,6 +1104,10 @@ int main()
     cpu_energy_weight_uses_nodal_ms_and_uniform_fallback();
     dimension_aware_reduction_guards_are_scale_relative();
     strict_monotone_energy_scale_sweep();
+    direct_armijo_difference_resolves_sub_ulp_total_energy_decrement();
+    polarized_demag_energy_difference_uses_endpoint_fields();
+    direct_zeeman_energy_difference_avoids_endpoint_total_subtraction();
+    transported_bb_secant_lives_in_the_accepted_tangent_space();
     std::vector<std::string> failed_interactions;
     for (Interaction interaction : {
              Interaction::Exchange,

@@ -80,6 +80,14 @@ struct ModalEigenRequest {
     const double *mfem_stiffness_matrix_row_major = nullptr;
     const double *mfem_gyrotropic_matrix_row_major = nullptr;
     const double *mfem_mass_matrix_row_major = nullptr;
+    // Immutable MFEM magnetic-JVP dependency descriptor supplied by the
+    // payload owner.  This is consumed only by magnetic modal routes; Poisson
+    // descriptor blocks intentionally have a separate identity.
+    const char *mfem_linearized_pencil_dependency_digest = nullptr;
+    // Canonical gamma0 used when the MFEM payload materialized L and B_alpha.
+    // A positive value takes precedence over the legacy gamma/mu0 request
+    // representation while reconstructing the payload pencil identity.
+    double mfem_linearized_pencil_gamma0_m_per_a_s = 0.0;
     int mfem_sparse_operator_enabled = 0;
     CsrMatrixView mfem_sparse_stiffness_csr{};
     CsrMatrixView mfem_sparse_gyrotropic_csr{};
@@ -117,6 +125,8 @@ struct ModalEigenRequest {
     const char *poisson_airbox_gauge_policy = nullptr;
     const char *poisson_airbox_gauge_reason = nullptr;
     const char *poisson_airbox_assembly_kind = nullptr;
+    const double *dynamic_demag_k_tangent_matrix_row_major = nullptr;
+    std::uint64_t dynamic_demag_k_tangent_matrix_value_count = 0;
 };
 
 struct DrivenResponseContractRequest {

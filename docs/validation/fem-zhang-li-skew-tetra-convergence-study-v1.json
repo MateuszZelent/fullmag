@@ -1,0 +1,10 @@
+{
+  "schema": "fem_zhang_li_skew_tetra_convergence_study.v1",
+  "identity": "fem_td_zhang_li_skew_tet_affine_convergence_study_2026-07-10_v1",
+  "canonical_issue": "FEM-TD-PHY-STT-001",
+  "method": "Independent managed CPU study: three fixed-final-time Heun dt levels and three P1 mesh levels; observed order is Richardson log2 of successive volume-averaged m_final differences.",
+  "observed_dt_order": 2.0000679517167614,
+  "observed_mesh_order": 1.8064680026687565,
+  "status": "frozen_reference_only",
+  "artifact_scope": "The values are historical study observations, not the acceptance workload result and not a capability promotion."
+}

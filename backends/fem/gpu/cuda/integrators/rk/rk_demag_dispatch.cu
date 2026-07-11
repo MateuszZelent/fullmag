@@ -12,6 +12,7 @@
 
 #include "context.hpp"
 #include "cpu/mfem/interactions/demag.hpp"
+#include "cpu/mfem/interactions/demag_poisson_hypre.hpp"
 #include "gpu/cuda/demag_poisson/stage_compute.hpp"
 #include "gpu/cuda/integrators/rk/rk_component_copy.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
@@ -29,7 +30,8 @@ bool gpu_rk_compute_hybrid_cpu_demag_for_device_stage(
     Context &ctx,
     const FemGpuComponentField &m,
     cudaStream_t stream,
-    std::string &reason)
+    std::string &reason,
+    bool fresh_initial_guess)
 {
     if (!ctx.demag.enabled) {
         return true;
@@ -50,6 +52,9 @@ bool gpu_rk_compute_hybrid_cpu_demag_for_device_stage(
         return false;
     }
     double demag_energy = 0.0;
+    if (fresh_initial_guess) {
+        reset_demag_poisson_hypre_initial_guess(ctx);
+    }
     if (!compute_demag_field_for_magnetization(
             ctx,
             gpu.demag_poisson.hybrid_stage_m_xyz,
@@ -86,9 +91,26 @@ bool gpu_rk_compute_demag_for_device_stage(
         return true;
     }
     if (ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_HYBRID_CPU_POISSON) {
-        return gpu_rk_compute_hybrid_cpu_demag_for_device_stage(ctx, m, stream, reason);
+        return gpu_rk_compute_hybrid_cpu_demag_for_device_stage(
+            ctx, m, stream, reason, false);
     }
     return compute_device_demag_for_device_stage(ctx, m, stream, reason);
+}
+
+bool gpu_rk_compute_demag_for_device_stage_fresh(
+    Context &ctx,
+    const FemGpuComponentField &m,
+    cudaStream_t stream,
+    std::string &reason)
+{
+    if (!ctx.demag.enabled) {
+        return true;
+    }
+    if (ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_HYBRID_CPU_POISSON) {
+        return gpu_rk_compute_hybrid_cpu_demag_for_device_stage(
+            ctx, m, stream, reason, true);
+    }
+    return compute_device_demag_for_device_stage_fresh(ctx, m, stream, reason);
 }
 
 } // namespace fullmag::fem

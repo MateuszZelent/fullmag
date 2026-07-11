@@ -13,6 +13,7 @@ use fullmag_ir::{
 };
 use nalgebra::{DMatrix, DVector, SymmetricEigen};
 use num_complex::Complex64;
+use sha2::{Digest, Sha256};
 
 use crate::native_fem;
 use crate::relaxation::{relaxation_converged, RelaxationEnergyPlateauWindow};
@@ -174,6 +175,12 @@ struct NativeBlochFloquetDensePayload {
     gyrotropic_row_major: Vec<f64>,
     tangent_mass: DMatrix<f64>,
     physical_mass: Vec<Vec<Complex64>>,
+}
+
+#[derive(Debug, Clone)]
+struct NativeModalMagneticPencilPayload {
+    dependency_digest: String,
+    gamma0_m_per_a_s: f64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2043,6 +2050,13 @@ fn execute_native_cpu_modal_window_from_full_2x2(
     })?;
     let native_floquet_periodic_pairs =
         native_modal_floquet_periodic_pairs(plan, &native_modal_topology)?;
+    let magnetic_pencil = native_modal_magnetic_pencil_payload(
+        plan,
+        &stiffness_row_major,
+        &gyrotropic_row_major,
+        &tangent_mass_row_major,
+        &native_floquet_periodic_pairs,
+    );
     let poisson_airbox_payload = build_pa_e4b_k0_kittel_poisson_airbox_payload(plan)?;
     let poisson_airbox_block_problem = poisson_airbox_payload
         .as_ref()
@@ -2076,14 +2090,14 @@ fn execute_native_cpu_modal_window_from_full_2x2(
         cancel_requested: None,
         progress_callback: None,
         tiny_validation_problem: None,
-        mfem_operator_problem: Some(native_fem::NativeModalEigenMfemOperatorProblem {
-            tangent_dof_count: stiffness_omega.nrows() as u64,
-            stiffness_matrix_row_major: Some(&stiffness_row_major),
-            gyrotropic_matrix_row_major: Some(&gyrotropic_row_major),
-            mass_matrix_row_major: Some(&tangent_mass_row_major),
-            phase_convention: native_fem::FrequencyDomainPhaseConvention::ExpIOmegaT,
-            floquet_periodic_pairs: &native_floquet_periodic_pairs,
-        }),
+        mfem_operator_problem: Some(native_modal_mfem_operator_problem(
+            stiffness_omega.nrows() as u64,
+            &stiffness_row_major,
+            &gyrotropic_row_major,
+            &tangent_mass_row_major,
+            &magnetic_pencil,
+            &native_floquet_periodic_pairs,
+        )),
         mfem_sparse_operator_problem: None,
         poisson_airbox_block_problem,
     })
@@ -2253,6 +2267,13 @@ fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
     })?;
     let native_floquet_periodic_pairs =
         native_modal_floquet_periodic_pairs(plan, &native_modal_topology)?;
+    let magnetic_pencil = native_modal_magnetic_pencil_payload(
+        plan,
+        &stiffness_row_major,
+        &payload.gyrotropic_row_major,
+        &tangent_mass_row_major,
+        &native_floquet_periodic_pairs,
+    );
     let native_result = native_fem::solve_native_modal_eigen(native_fem::NativeModalEigenRequest {
         mesh_asset_id: &plan.mesh_name,
         equilibrium_source_kind: native_modal_equilibrium_source_kind(&plan.equilibrium),
@@ -2288,14 +2309,14 @@ fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
         cancel_requested: None,
         progress_callback: None,
         tiny_validation_problem: None,
-        mfem_operator_problem: Some(native_fem::NativeModalEigenMfemOperatorProblem {
-            tangent_dof_count: payload.stiffness.nrows() as u64,
-            stiffness_matrix_row_major: Some(&stiffness_row_major),
-            gyrotropic_matrix_row_major: Some(&payload.gyrotropic_row_major),
-            mass_matrix_row_major: Some(&tangent_mass_row_major),
-            phase_convention: native_fem::FrequencyDomainPhaseConvention::ExpIOmegaT,
-            floquet_periodic_pairs: &native_floquet_periodic_pairs,
-        }),
+        mfem_operator_problem: Some(native_modal_mfem_operator_problem(
+            payload.stiffness.nrows() as u64,
+            &stiffness_row_major,
+            &payload.gyrotropic_row_major,
+            &tangent_mass_row_major,
+            &magnetic_pencil,
+            &native_floquet_periodic_pairs,
+        )),
         mfem_sparse_operator_problem: None,
         poisson_airbox_block_problem: None,
     })
@@ -2425,6 +2446,139 @@ fn matrix_abs_max(matrix: &DMatrix<f64>) -> f64 {
     matrix
         .iter()
         .fold(0.0_f64, |acc, value| acc.max(value.abs()))
+}
+
+// Byte-for-byte Rust implementation of the native CanonicalDigestBuilder
+// protocol. Keep field tags and normalized IEEE-754 encoding in lockstep with
+// backends/fem/src/frequency_domain/canonical_digest.cpp.
+struct CanonicalDigestBuilder {
+    payload: Vec<u8>,
+}
+
+impl CanonicalDigestBuilder {
+    fn new(schema: &str) -> Self {
+        let mut digest = Self {
+            payload: Vec::new(),
+        };
+        digest.add_string("schema", schema);
+        digest
+    }
+
+    fn add_field(&mut self, name: &str, field_type: u8, value: &[u8]) {
+        self.payload
+            .extend_from_slice(&(name.len() as u64).to_be_bytes());
+        self.payload.extend_from_slice(name.as_bytes());
+        self.payload.push(field_type);
+        self.payload
+            .extend_from_slice(&(value.len() as u64).to_be_bytes());
+        self.payload.extend_from_slice(value);
+    }
+
+    fn add_string(&mut self, name: &str, value: &str) {
+        self.add_field(name, 1, value.as_bytes());
+    }
+
+    fn add_u64(&mut self, name: &str, value: u64) {
+        self.add_field(name, 2, &value.to_be_bytes());
+    }
+
+    fn add_bytes(&mut self, name: &str, value: &[u8]) {
+        self.add_field(name, 3, value);
+    }
+
+    fn add_double(&mut self, name: &str, value: f64) {
+        let normalized_bits = if value == 0.0 {
+            0
+        } else if value.is_nan() {
+            0x7ff8_0000_0000_0000
+        } else {
+            value.to_bits()
+        };
+        self.add_field(name, 4, &normalized_bits.to_be_bytes());
+    }
+
+    fn add_double_slice(&mut self, name: &str, values: &[f64]) {
+        self.add_u64(&format!("{name}.count"), values.len() as u64);
+        for (index, value) in values.iter().enumerate() {
+            self.add_double(&format!("{name}[{index}]"), *value);
+        }
+    }
+
+    fn sha256_hex(self) -> String {
+        format!("{:x}", Sha256::digest(self.payload))
+    }
+}
+
+fn native_modal_magnetic_pencil_payload(
+    plan: &FemEigenPlanIR,
+    stiffness_matrix_row_major: &[f64],
+    gyrotropic_matrix_row_major: &[f64],
+    mass_matrix_row_major: &[f64],
+    floquet_periodic_pairs: &[native_fem::NativeModalEigenFloquetPeriodicPair<'_>],
+) -> NativeModalMagneticPencilPayload {
+    let mut digest =
+        CanonicalDigestBuilder::new("fullmag:native-modal-magnetic-payload-dependency:v1");
+    digest.add_double_slice("stiffness_matrix_row_major", stiffness_matrix_row_major);
+    digest.add_double_slice("gyrotropic_matrix_row_major", gyrotropic_matrix_row_major);
+    digest.add_double_slice("mass_matrix_row_major", mass_matrix_row_major);
+    digest.add_double_slice("gamma0_m_per_a_s", &[plan.gyromagnetic_ratio]);
+    digest.add_double_slice("alpha", &[plan.material.damping]);
+    digest.add_u64("include_exchange", u64::from(plan.enable_exchange));
+    digest.add_u64("include_demag", u64::from(plan.enable_demag));
+    digest.add_string(
+        "demag_realization",
+        resolved_demag_realization(plan)
+            .map(|value| value.provenance_name())
+            .unwrap_or("none"),
+    );
+    digest.add_bytes(
+        "spin_wave_bc",
+        &serde_json::to_vec(&plan.spin_wave_bc)
+            .expect("spin-wave boundary condition must serialize for native modal digest"),
+    );
+    digest.add_bytes(
+        "k_sampling",
+        &serde_json::to_vec(&plan.k_sampling)
+            .expect("k sampling must serialize for native modal digest"),
+    );
+    for (index, pair) in floquet_periodic_pairs.iter().enumerate() {
+        let prefix = format!("floquet_pair[{index}]");
+        digest.add_string(&format!("{prefix}.id"), pair.pair_id.unwrap_or(""));
+        digest.add_u64(&format!("{prefix}.node_a"), pair.node_a);
+        digest.add_u64(&format!("{prefix}.node_b"), pair.node_b);
+        let translation_m: &[f64] = match &pair.translation_m {
+            Some(value) => value,
+            None => &[],
+        };
+        digest.add_double_slice(&format!("{prefix}.translation_m"), translation_m);
+        let phase_rad = pair.phase_rad.map_or_else(Vec::new, |value| vec![value]);
+        digest.add_double_slice(&format!("{prefix}.phase_rad"), &phase_rad);
+    }
+
+    NativeModalMagneticPencilPayload {
+        dependency_digest: digest.sha256_hex(),
+        gamma0_m_per_a_s: plan.gyromagnetic_ratio,
+    }
+}
+
+fn native_modal_mfem_operator_problem<'a>(
+    tangent_dof_count: u64,
+    stiffness_matrix_row_major: &'a [f64],
+    gyrotropic_matrix_row_major: &'a [f64],
+    mass_matrix_row_major: &'a [f64],
+    pencil: &'a NativeModalMagneticPencilPayload,
+    floquet_periodic_pairs: &'a [native_fem::NativeModalEigenFloquetPeriodicPair<'a>],
+) -> native_fem::NativeModalEigenMfemOperatorProblem<'a> {
+    native_fem::NativeModalEigenMfemOperatorProblem {
+        tangent_dof_count,
+        stiffness_matrix_row_major: Some(stiffness_matrix_row_major),
+        gyrotropic_matrix_row_major: Some(gyrotropic_matrix_row_major),
+        mass_matrix_row_major: Some(mass_matrix_row_major),
+        linearized_pencil_dependency_digest: Some(pencil.dependency_digest.as_str()),
+        linearized_pencil_gamma0_m_per_a_s: pencil.gamma0_m_per_a_s,
+        phase_convention: native_fem::FrequencyDomainPhaseConvention::ExpIOmegaT,
+        floquet_periodic_pairs,
+    }
 }
 
 fn full_2x2_native_operator_diagnostics_json(
@@ -7217,6 +7371,57 @@ mod tests {
             .expect("single macrospin tangent mass should build a pencil matrix");
 
         assert_eq!(gyrotropic, vec![0.0, 1.0, -1.0, 0.0]);
+    }
+
+    #[test]
+    fn native_modal_magnetic_pencil_request_carries_payload_digest_and_canonical_gamma0() {
+        let mut plan = minimal_native_modal_plan();
+        plan.gyromagnetic_ratio = 1.987_654e5;
+        let stiffness = vec![2.0, 0.0, 0.0, 3.0];
+        let gyrotropic = vec![0.0, 1.0, -1.0, 0.0];
+        let mass = vec![1.0, 0.0, 0.0, 1.0];
+
+        let pencil =
+            native_modal_magnetic_pencil_payload(&plan, &stiffness, &gyrotropic, &mass, &[]);
+        let request =
+            native_modal_mfem_operator_problem(2, &stiffness, &gyrotropic, &mass, &pencil, &[]);
+
+        assert!(!pencil.dependency_digest.is_empty());
+        assert_eq!(
+            request.linearized_pencil_dependency_digest,
+            Some(pencil.dependency_digest.as_str())
+        );
+        assert_eq!(
+            request.linearized_pencil_gamma0_m_per_a_s,
+            plan.gyromagnetic_ratio
+        );
+
+        let changed_stiffness = vec![2.5, 0.0, 0.0, 3.0];
+        assert_ne!(
+            pencil.dependency_digest,
+            native_modal_magnetic_pencil_payload(
+                &plan,
+                &changed_stiffness,
+                &gyrotropic,
+                &mass,
+                &[],
+            )
+            .dependency_digest
+        );
+    }
+
+    #[test]
+    fn native_modal_provenance_uses_the_native_canonical_digest_known_vector() {
+        let mut digest = CanonicalDigestBuilder::new("mfem_linearized_jvp_dependencies.v2");
+        digest.add_string("label", "cross-language");
+        digest.add_u64("count", 7);
+        digest.add_double("negative_zero", -0.0);
+        digest.add_double("nan", f64::NAN);
+        digest.add_bytes("bytes", &[0x01, 0x02, 0xfe]);
+        assert_eq!(
+            digest.sha256_hex(),
+            "1167f46ac77502f652f4fc5464070023419244dbd654d907970bd73e504afcbc"
+        );
     }
 
     #[test]

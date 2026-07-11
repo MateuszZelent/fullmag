@@ -95,19 +95,23 @@ pub(crate) fn live_magnetization_values(
     })
 }
 
-fn fem_magnetic_node_count(mesh: &FemMeshPayload) -> Option<usize> {
+pub(crate) fn fem_magnetic_node_indices(mesh: &FemMeshPayload) -> Option<Vec<u32>> {
     let mut active = vec![false; mesh.nodes.len()];
 
     if mark_magnetic_mesh_parts(mesh, &mut active) {
-        return count_active_nodes(&active);
+        return active_node_indices(&active);
     }
     if mark_magnetic_object_segments(mesh, &mut active) {
-        return count_active_nodes(&active);
+        return active_node_indices(&active);
     }
     if mark_nonzero_marker_elements(mesh, &mut active) {
-        return count_active_nodes(&active);
+        return active_node_indices(&active);
     }
     None
+}
+
+fn fem_magnetic_node_count(mesh: &FemMeshPayload) -> Option<usize> {
+    fem_magnetic_node_indices(mesh).map(|indices| indices.len())
 }
 
 fn mark_magnetic_mesh_parts(mesh: &FemMeshPayload, active: &mut [bool]) -> bool {
@@ -183,9 +187,13 @@ fn mark_node_range(active: &mut [bool], start: usize, count: usize) {
     }
 }
 
-fn count_active_nodes(active: &[bool]) -> Option<usize> {
-    let count = active.iter().filter(|value| **value).count();
-    (count > 0).then_some(count)
+fn active_node_indices(active: &[bool]) -> Option<Vec<u32>> {
+    let indices = active
+        .iter()
+        .enumerate()
+        .filter_map(|(index, value)| value.then_some(index as u32))
+        .collect::<Vec<_>>();
+    (!indices.is_empty()).then_some(indices)
 }
 
 pub(super) fn extract_fdm_field(

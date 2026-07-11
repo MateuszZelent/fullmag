@@ -14,6 +14,7 @@ import fullmag as fm
 ALGORITHM = os.environ.get("FULLMAG_RELAX_ALGORITHM") or "projected_gradient_bb"
 DEVICE = os.environ.get("FULLMAG_RELAX_DEVICE") or "gpu"
 MAX_STEPS = int(os.environ.get("FULLMAG_RELAX_MAX_STEPS", "4"))
+ENABLE_DEMAG = os.environ.get("FULLMAG_RELAX_ENABLE_DEMAG", "1") == "1"
 
 study = fm.study(f"fem_relax_gpu_smoke_{ALGORITHM}")
 study.engine("fem")
@@ -36,6 +37,8 @@ body.m = fm.texture.random(seed=7)
 body.mesh(maximum_element_size=40e-9, order=1)
 
 study.build_domain_mesh()
+if not ENABLE_DEMAG:
+    study.demag(enabled=False)
 study.b_ext(0.0, 0.0, 0.02)
 study.solver(dt=1e-13)
 

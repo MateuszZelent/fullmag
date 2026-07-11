@@ -19,9 +19,9 @@ historical material.
 4. Status and readiness documents record current evidence only.
 5. `old/` is historical and never normative.
 
-The V5 full pack is currently a disabled stale generated snapshot. It is not
-an independent authority; use this README and the manifest until Task 10
-regenerates it after every manifest-declared canonical input is complete.
+The V5 full pack is a deterministic generated projection of manifest-declared
+Markdown inputs. It is not an independent authority; update source documents
+and regenerate it through the declared Task 10 tooling when those inputs change.
 
 ## Document roles
 
@@ -38,9 +38,10 @@ bodies before promotion.
 
 ## Production-claim schema
 
-Every production claim must include a non-empty `validated_scope` and exactly
-one `implementation_state` from `absent`, `contract_only`, `source_visible`,
-or `executable`, plus one `validation_state` from `unvalidated`,
+Every production claim must include `validated_scope` as `null` when
+unvalidated or as a content-addressed readiness-scope binding when validated,
+plus exactly one `implementation_state` from `absent`, `contract_only`,
+`source_visible`, or `executable`, and one `validation_state` from `unvalidated`,
 `algebra_validated`, `physics_validated`, or `production_qualified`.
 `production_executable` does not imply `production_qualified`, and a narrow
 validated scope cannot promote a broader capability. The manifest is the
@@ -62,8 +63,8 @@ machine-readable definition of this schema.
    architecture/specification documents.
 2. Read implementation-status documents `08`, `10`, `11`, `16`, `17`, `18`,
    `19`, and `20` in manifest order.
-3. Read the planned readiness matrix `25` when it is created; it is linked by
-   the Markdown status chapter rather than duplicated in the full pack.
+3. Read the readiness matrix and content-addressed scope catalog `25`; they are
+   linked by the Markdown status chapter rather than duplicated in the full pack.
 4. Validate claims with the named runtime gates and their artifacts.
 
 FDM is outside this package's scope. Documentation and source inspection do

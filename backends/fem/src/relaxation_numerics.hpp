@@ -66,6 +66,44 @@ inline bool strict_monotone_energy_accept(double current_energy, double trial_en
         trial_energy <= current_energy;
 }
 
+struct EnergyDifference {
+    double delta_joules = 0.0;
+    double absolute_term_sum_joules = 0.0;
+    double roundoff_bound_joules = 0.0;
+};
+
+enum class ArmijoDifferenceDecision {
+    Accept,
+    Reject,
+    Refine,
+};
+
+inline ArmijoDifferenceDecision strict_armijo_difference_decision(
+    const EnergyDifference &difference,
+    double armijo_rhs_joules)
+{
+    if (!std::isfinite(difference.delta_joules) ||
+        !std::isfinite(difference.absolute_term_sum_joules) ||
+        !std::isfinite(difference.roundoff_bound_joules) ||
+        !std::isfinite(armijo_rhs_joules) ||
+        difference.absolute_term_sum_joules < 0.0 ||
+        difference.roundoff_bound_joules < 0.0) {
+        return ArmijoDifferenceDecision::Reject;
+    }
+    const double upper = difference.delta_joules + difference.roundoff_bound_joules;
+    const double lower = difference.delta_joules - difference.roundoff_bound_joules;
+    if (!std::isfinite(upper) || !std::isfinite(lower)) {
+        return ArmijoDifferenceDecision::Reject;
+    }
+    if (upper <= armijo_rhs_joules) {
+        return ArmijoDifferenceDecision::Accept;
+    }
+    if (lower > armijo_rhs_joules) {
+        return ArmijoDifferenceDecision::Reject;
+    }
+    return ArmijoDifferenceDecision::Refine;
+}
+
 struct BbStepDecision {
     double step_size = 0.0;
     uint64_t reset_consecutive = 0;

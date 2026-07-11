@@ -4132,6 +4132,10 @@ fn print_script_summary(summary: &ScriptRunSummary) {
     );
 }
 
+fn cumulative_rhs_evals(steps: &[fullmag_runner::StepStats]) -> u64 {
+    steps.iter().map(|step| u64::from(step.rhs_evals)).sum()
+}
+
 fn refresh_problem_preview_state(
     base_problem: &ProblemIR,
     continuation_magnetization: Option<&[[f64; 3]]>,
@@ -8482,6 +8486,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             .last()
             .map(|step| step.relaxation_preconditioner_cache_misses),
         rhs_evals: aggregated_steps.last().map(|step| step.rhs_evals),
+        total_rhs_evals: cumulative_rhs_evals(&aggregated_steps),
         demag_solves: aggregated_steps.last().map(|step| step.demag_solves),
         eigen_mode_count,
         eigen_lowest_frequency_hz,
@@ -8661,7 +8666,7 @@ mod tests {
         apply_current_fem_overrides, apply_initial_magnetization_state_override,
         apply_live_step_update_to_workspace_state, apply_remeshed_problem_snapshot_to_stages,
         apply_stage_heartbeat_progress, attach_initial_magnetization_state_override_metadata,
-        classify_wait_for_solve_command, default_domain_region_markers,
+        classify_wait_for_solve_command, cumulative_rhs_evals, default_domain_region_markers,
         discard_active_paused_stage_execution,
         ensure_frequency_response_relaxed_continuation_is_qualified, execute_synthetic_stage,
         fem_gpu_memory_preflight_message, fem_interactive_dense_ram_estimate,
@@ -8678,6 +8683,22 @@ mod tests {
         SceneProblemPatch, WaitForSolveCommandAction, FEM_FREQUENCY_RESPONSE_PROGRESS_KEY,
         LIVE_PROGRESS_PUBLISH_INTERVAL,
     };
+
+    #[test]
+    fn cumulative_rhs_evals_sums_all_step_records() {
+        let steps = vec![
+            fullmag_runner::StepStats {
+                rhs_evals: 3,
+                ..fullmag_runner::StepStats::default()
+            },
+            fullmag_runner::StepStats {
+                rhs_evals: 9,
+                ..fullmag_runner::StepStats::default()
+            },
+        ];
+
+        assert_eq!(cumulative_rhs_evals(&steps), 12);
+    }
     use crate::args::ScriptCli;
     use crate::live_workspace::bootstrap_live_state;
     use crate::types::{

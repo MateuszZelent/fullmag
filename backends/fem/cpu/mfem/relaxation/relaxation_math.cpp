@@ -1,6 +1,7 @@
 #include "cpu/mfem/relaxation/relaxation_math.hpp"
 
 #include "context.hpp"
+#include "cpu/mfem/interactions/demag_poisson_hypre.hpp"
 #include "fem_common.hpp"
 #include "cpu/mfem/runtime/mfem_host_access.hpp"
 #include "cpu/mfem/runtime/mpi_init.hpp"
@@ -8,6 +9,7 @@
 #include "cpu/mfem/runtime/snapshot.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
 #include "cpu/mfem/runtime/state_io.hpp"
+#include "src/relaxation_numerics.hpp"
 #include "src/relaxation_operator_units.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
@@ -410,6 +412,7 @@ bool solve_scalar_spd_system(
 #endif
 
 } // namespace
+
 #if FULLMAG_HAS_MFEM_STACK
 std::unique_ptr<mfem::SparseMatrix> assemble_exchange_mass_preconditioner_for_step(
     mfem::SparseMatrix &mass_ms,
@@ -422,7 +425,6 @@ std::unique_ptr<mfem::SparseMatrix> assemble_exchange_mass_preconditioner_for_st
         exchange_hessian_scale_from_step_m_per_a(step_m_per_a));
 }
 #endif
-
 
 double dot_fields(
     const std::vector<double> &a,
@@ -482,6 +484,53 @@ double metric_gradient_norm_sq(
     return metric_dot_fields(ctx, gradient, gradient);
 }
 
+EnergyWeightedDotResult energy_weighted_dot_fields_with_absolute_term_sum(
+    const Context &ctx,
+    const std::vector<double> &a,
+    const std::vector<double> &b)
+{
+    if (a.size() != b.size() || a.size() % 3u != 0u) {
+        return {invalid_metric_value(), invalid_metric_value()};
+    }
+    const size_t nodes = a.size() / 3u;
+    if (ctx.integration_weights.mfem_lumped_mass.size() != nodes ||
+        (!ctx.mesh.magnetic_node_mask.empty() &&
+         ctx.mesh.magnetic_node_mask.size() != nodes)) {
+        return {invalid_metric_value(), invalid_metric_value()};
+    }
+
+    EnergyWeightedDotResult result;
+    for (size_t node = 0; node < nodes; ++node) {
+        if (!magnetic_node(ctx, node)) {
+            continue;
+        }
+        const double mass = ctx.integration_weights.mfem_lumped_mass[node];
+        const double ms = scalar_field_value(
+            ctx.material_fields.Ms_field,
+            node,
+            ctx.material_fields.material.saturation_magnetisation);
+        if (!std::isfinite(mass) || mass <= 0.0 || !std::isfinite(ms) || ms <= 0.0) {
+            return {invalid_metric_value(), invalid_metric_value()};
+        }
+        const size_t base = node * 3u;
+        const double energy_weight = kMu0 * ms * mass;
+        result.value += energy_weight * dot3(a, b, base);
+        for (size_t component = 0; component < 3u; ++component) {
+            result.absolute_term_sum +=
+                std::abs(energy_weight * a[base + component] * b[base + component]);
+        }
+    }
+    return result;
+}
+
+double energy_weighted_dot_fields(
+    const Context &ctx,
+    const std::vector<double> &a,
+    const std::vector<double> &b)
+{
+    return energy_weighted_dot_fields_with_absolute_term_sum(ctx, a, b).value;
+}
+
 void tangent_gradient_from_field(
     const Context &ctx,
     const std::vector<double> &m_xyz,
@@ -538,6 +587,46 @@ std::vector<double> project_tangent(
         }
     }
     return projected;
+}
+
+bool transported_bb_secant(
+    const Context &ctx,
+    const std::vector<double> &previous_m,
+    const std::vector<double> &accepted_m,
+    const std::vector<double> &previous_gradient,
+    const std::vector<double> &accepted_gradient,
+    std::vector<double> &transported_step,
+    std::vector<double> &transported_gradient_difference)
+{
+    const size_t size = accepted_m.size();
+    if (size == 0u || size % 3u != 0u || previous_m.size() != size ||
+        previous_gradient.size() != size || accepted_gradient.size() != size) {
+        transported_step.clear();
+        transported_gradient_difference.clear();
+        return false;
+    }
+
+    std::vector<double> ambient_step(size, 0.0);
+    for (size_t i = 0; i < size; ++i) {
+        ambient_step[i] = accepted_m[i] - previous_m[i];
+    }
+    transported_step = project_tangent(ctx, accepted_m, ambient_step);
+    const std::vector<double> transported_previous_gradient =
+        project_tangent(ctx, accepted_m, previous_gradient);
+    transported_gradient_difference.assign(size, 0.0);
+    for (size_t i = 0; i < size; ++i) {
+        transported_gradient_difference[i] =
+            accepted_gradient[i] - transported_previous_gradient[i];
+    }
+
+    const auto finite = [](const std::vector<double> &field) {
+        return std::all_of(
+            field.begin(),
+            field.end(),
+            [](double value) { return std::isfinite(value); });
+    };
+    return finite(transported_step) &&
+        finite(transported_gradient_difference);
 }
 
 std::vector<double> negative_field(const std::vector<double> &field_xyz)
@@ -913,6 +1002,7 @@ int upload_and_snapshot(
         }
     }
     stats.relaxation_state_upload_wall_time_ns += state_upload_wall_time_ns;
+    reset_demag_poisson_hypre_initial_guess(ctx);
     if (!context_snapshot_stats_mfem(ctx, stats, error)) {
         return FULLMAG_FEM_ERR_UNAVAILABLE;
     }
@@ -930,6 +1020,37 @@ int upload_and_snapshot(
 #else
     (void)ctx;
     (void)m_xyz;
+    (void)stats;
+    (void)algorithm_name;
+    (void)snapshot_name;
+    error = "native FEM relaxation snapshot requires FULLMAG_USE_MFEM_STACK=ON";
+    return FULLMAG_FEM_ERR_UNAVAILABLE;
+#endif
+}
+
+int fresh_line_search_snapshot(
+    Context &ctx,
+    fullmag_fem_step_stats &stats,
+    const char *algorithm_name,
+    const char *snapshot_name,
+    std::string &error)
+{
+#if FULLMAG_HAS_MFEM_STACK
+    reset_demag_poisson_hypre_initial_guess(ctx);
+    if (!context_snapshot_stats_mfem(ctx, stats, error)) {
+        return FULLMAG_FEM_ERR_UNAVAILABLE;
+    }
+    if (!validate_relaxation_state_fields(ctx, algorithm_name, error) ||
+        !validate_relaxation_step_energy(
+            stats,
+            algorithm_name,
+            snapshot_name,
+            error)) {
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
+    return FULLMAG_FEM_OK;
+#else
+    (void)ctx;
     (void)stats;
     (void)algorithm_name;
     (void)snapshot_name;
@@ -1151,6 +1272,7 @@ void finish_accepted_relaxation_step(
     fullmag_fem_step_stats &out_stats,
     double accepted_step_size)
 {
+    (void)accepted_step_size;
     ctx.relaxation.accepted_steps += 1;
     ctx.state.step_count += 1;
     ctx.state.current_time = 0.0;
@@ -1213,7 +1335,6 @@ void finish_accepted_relaxation_step(
     ctx.relaxation.cached_current_stats.demag_solver_setup_wall_time_ns = 0;
     ctx.relaxation.cached_current_stats.demag_solver_apply_wall_time_ns = 0;
     ctx.relaxation.cached_current_stats.demag_solver_setup_reused = 0;
-    (void)accepted_step_size;
     ctx.relaxation.cached_current_stats.demag_recover_wall_time_ns = 0;
     ctx.relaxation.cached_current_stats.demag_energy_wall_time_ns = 0;
     ctx.relaxation.cached_current_stats.rhs_wall_time_ns = 0;
@@ -1246,13 +1367,13 @@ void publish_accepted_gradient_completion(
     double accepted_gradient_norm_sq)
 {
     if (std::isfinite(accepted_gradient_norm_sq) &&
-        accepted_gradient_norm_sq <= kGradientFloor) {
+        accepted_gradient_norm_sq == 0.0) {
         set_stage_completion(
             ctx,
             FULLMAG_FEM_STAGE_STOP_REASON_GRADIENT,
             "tangent_gradient_norm_sq",
             accepted_gradient_norm_sq,
-            kGradientFloor);
+            0.0);
     }
 }
 
@@ -1270,7 +1391,7 @@ void finish_degenerate_gradient_relaxation_step(
         FULLMAG_FEM_STAGE_STOP_REASON_GRADIENT,
         "tangent_gradient_norm_sq",
         gradient_norm_sq,
-        kGradientFloor);
+        0.0);
 }
 
 } // namespace fullmag::fem::relaxation

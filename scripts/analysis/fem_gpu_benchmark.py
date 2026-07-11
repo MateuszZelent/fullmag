@@ -192,6 +192,7 @@ ENERGY_MINIMIZER_RELAXATION_ALGORITHMS = {
     "nonlinear_cg",
     "tangent_plane_implicit",
 }
+MAX_DIRECT_MINIMIZER_DEMAG_RTOL = 1.0e-12
 DEFAULT_BACKENDS = ["cpu", "gpu"]
 DEFAULT_MAX_PERFORMANCE_REGRESSION_PERCENT = 10.0
 DEFAULT_CPU_GPU_ENERGY_RTOL = 1e-6
@@ -205,8 +206,8 @@ MIN_CONVERGED_DEMAG_POLICIES_FOR_BEST = 2
 DEFAULT_GPU_CONTROL_READBACK_BASE = 2
 DEFAULT_GPU_CONTROL_READBACK_PER_STEP = 4
 DEFAULT_GPU_LLG_CONTROL_READBACK_PER_STEP = 0
-DEFAULT_GPU_PGBB_CONTROL_READBACK_PER_STEP = 3
-DEFAULT_GPU_NCG_CONTROL_READBACK_PER_STEP = 2
+DEFAULT_GPU_PGBB_CONTROL_READBACK_PER_STEP = 4
+DEFAULT_GPU_NCG_CONTROL_READBACK_PER_STEP = 4
 DEFAULT_GPU_CONTROL_READBACK_PER_REJECTED_ATTEMPT = 2
 DEFAULT_DEMAG_AMG_RELAX_TYPE = 18
 DEFAULT_DEMAG_AMG_COARSENING = 8
@@ -753,7 +754,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--gpu-control-readback-per-rejected-attempt",
         type=nonnegative_int_arg,
         default=DEFAULT_GPU_CONTROL_READBACK_PER_REJECTED_ATTEMPT,
-        help="Allowed FEM GPU hot-loop control-scalar readbacks per rejected attempt",
+        help=(
+            "Allowed FEM GPU hot-loop control-scalar readbacks per rejected "
+            "non-direct-minimizer attempt; direct minimizer trials are derived "
+            "from cumulative rhs_evals"
+        ),
     )
     parser.add_argument(
         "--cpu-gpu-summary-output",
@@ -1085,16 +1090,30 @@ def relaxation_algorithms_for_scenario(
 ) -> list[str]:
     canonical_scenario = canonical_consistency_scenario(scenario)
     if canonical_scenario in NONCONSERVATIVE_RELAXATION_SCENARIOS:
+        return []
+    interactions = set(
+        interaction_contract_for_scenario(canonical_scenario).get("interactions", [])
+    )
+    if "demag" in interactions:
         return [
             algorithm
             for algorithm in relaxation_algorithms
-            if algorithm not in ENERGY_MINIMIZER_RELAXATION_ALGORITHMS
+            if algorithm != "projected_gradient_bb"
         ]
     return relaxation_algorithms
 
 
 def is_direct_minimizer_relaxation_algorithm(algorithm: object) -> bool:
     return str(algorithm or "") in ENERGY_MINIMIZER_RELAXATION_ALGORITHMS
+
+
+def qualified_demag_rtol_for_relaxation_algorithm(
+    algorithm: object,
+    requested_rtol: float,
+) -> float:
+    if is_direct_minimizer_relaxation_algorithm(algorithm):
+        return min(requested_rtol, MAX_DIRECT_MINIMIZER_DEMAG_RTOL)
+    return requested_rtol
 
 
 def required_backends_for_relaxation_algorithm(algorithm: str | None) -> list[str]:
@@ -2252,6 +2271,7 @@ def run_backend(
                 ),
                 "snapshot_wall_time_ms": ns_to_ms(payload.get("snapshot_wall_time_ns")),
                 "rhs_evals": payload.get("rhs_evals"),
+                "total_rhs_evals": payload.get("total_rhs_evals"),
                 "demag_solves": payload.get("demag_solves"),
                 "execution_engine": provenance.get("execution_engine"),
                 "fem_assembly_mode": provenance.get("fem_assembly_mode")
@@ -2961,6 +2981,7 @@ def gpu_control_readback_budget_failures(
         algorithm = row.get("relaxation_algorithm")
         algorithm_base = base
         algorithm_per_step = per_step
+        additional_attempt_budget = per_rejected_attempt * max(0, rejected_attempts)
         if algorithm == "llg_overdamped":
             algorithm_base = 0
             algorithm_per_step = llg_per_step
@@ -2968,10 +2989,22 @@ def gpu_control_readback_budget_failures(
             algorithm_per_step = pgbb_per_step
         elif algorithm == "nonlinear_cg":
             algorithm_per_step = ncg_per_step
+        if algorithm in {"projected_gradient_bb", "nonlinear_cg"}:
+            total_rhs_evals = as_int(row.get("total_rhs_evals"))
+            if total_rhs_evals is None:
+                failures.append(
+                    f"case={case} fem_gpu direct-minimizer control-readback budget "
+                    "missing total_rhs_evals"
+                )
+                continue
+            additional_attempt_budget = max(
+                0,
+                total_rhs_evals - 2 * max(0, executed_steps),
+            )
         allowed = (
             algorithm_base
             + algorithm_per_step * max(0, executed_steps)
-            + per_rejected_attempt * max(0, rejected_attempts)
+            + additional_attempt_budget
         )
         if control_sync > allowed:
             failures.append(
@@ -2980,6 +3013,8 @@ def gpu_control_readback_budget_failures(
                 f"(relaxation_algorithm={algorithm or 'missing'}, "
                 f"base={algorithm_base}, per_step={algorithm_per_step}, "
                 f"executed_steps={executed_steps}, "
+                f"additional_attempt_budget={additional_attempt_budget}, "
+                f"total_rhs_evals={row.get('total_rhs_evals')!r}, "
                 f"per_rejected_attempt={per_rejected_attempt}, rejected_attempts={rejected_attempts})"
             )
     return failures
@@ -5244,8 +5279,12 @@ def main() -> None:
             if warmup_scenario in BOX500_AIRBOX_SCENARIO_ALIASES
             else [None]
         )
-        warmup_relaxation_algorithm = warmup_relaxation_algorithms[0]
-        if relaxation_algorithm_supported_on_backend(
+        warmup_relaxation_algorithm = (
+            warmup_relaxation_algorithms[0]
+            if warmup_relaxation_algorithms
+            else None
+        )
+        if warmup_relaxation_algorithms and relaxation_algorithm_supported_on_backend(
             warmup_relaxation_algorithm,
             "fem_gpu",
         ):
@@ -5254,7 +5293,10 @@ def main() -> None:
                 demag_solvers,
                 demag_preconditioners,
             )[0]
-            warmup_rtol = demag_rtols[0]
+            warmup_rtol = qualified_demag_rtol_for_relaxation_algorithm(
+                warmup_relaxation_algorithm,
+                demag_rtols[0],
+            )
             warmup_amg_profile = demag_amg_profiles_for_preconditioner(
                 warmup_preconditioner,
                 demag_amg_profiles,
@@ -5345,6 +5387,12 @@ def main() -> None:
                                 demag_preconditioners,
                             )
                             for demag_rtol in demag_rtols:
+                                qualified_demag_rtol = (
+                                    qualified_demag_rtol_for_relaxation_algorithm(
+                                        relaxation_algorithm,
+                                        demag_rtol,
+                                    )
+                                )
                                 for demag_solver, demag_preconditioner in demag_policy_pairs:
                                     for demag_amg_profile in demag_amg_profiles_for_preconditioner(
                                         demag_preconditioner,
@@ -5352,12 +5400,12 @@ def main() -> None:
                                     ):
                                         relaxation_label = relaxation_algorithm or "none"
                                         print(
-                                            f"    scenario={scenario} relaxation_algorithm={relaxation_label} integrator={integrator} timestep_policy={timestep_policy} thread_count={thread_spec.label}:{thread_spec.env_value} demag_policy={demag_solver}/{demag_preconditioner} demag_rtol={demag_rtol!r} demag_amg_profile={demag_amg_profile}"
+                                            f"    scenario={scenario} relaxation_algorithm={relaxation_label} integrator={integrator} timestep_policy={timestep_policy} thread_count={thread_spec.label}:{thread_spec.env_value} demag_policy={demag_solver}/{demag_preconditioner} demag_rtol={qualified_demag_rtol!r} demag_amg_profile={demag_amg_profile}"
                                         )
                                         demag_env = demag_policy_env(
                                             demag_solver,
                                             demag_preconditioner,
-                                            demag_rtol,
+                                            qualified_demag_rtol,
                                             demag_amg_profile,
                                             args,
                                         )

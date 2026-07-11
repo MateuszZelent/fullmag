@@ -37,6 +37,7 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
     ? validateStudyStageDraft(draft, {
         algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
         backend: model.requested.backend,
+        demagEnabled: state.globalDraft.demagEnabled,
         device: model.requested.device,
         mode: model.requested.mode,
       })
@@ -56,6 +57,7 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
       state.authoringFeedbackScope === "stages" ? state.authoringFeedback : null,
     draft,
     draftIndex: selectedIndex,
+    demagEnabled: state.globalDraft.demagEnabled,
     onCommit: () => void commitStageDrafts(),
     onUpdateDraft: (patch: Partial<(typeof state.stageDrafts)[number]>) =>
       dispatch({ type: "updateStageDraft", index: selectedIndex, patch }),

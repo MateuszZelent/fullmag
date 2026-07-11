@@ -7,7 +7,10 @@
  */
 
 #include "context.hpp"
+#include "core/fem_context_builder.hpp"
 #include "core/fem_material_fields.hpp"
+#include "cpu/mfem/runtime/mfem_context.hpp"
+#include "gpu/cuda/state/gpu_state.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -73,6 +76,10 @@ void material_field_helpers_are_owned_by_core_module() {
     check(
         material_fields.find("bool validate_material_fields(") != std::string::npos,
         "Material field validation helper must be defined in core/fem_material_fields.cpp");
+    check(
+        material_fields.find("bool validate_elementwise_ms_runtime_support(") !=
+            std::string::npos,
+        "Elementwise Ms runtime legality must be defined in core/fem_material_fields.cpp");
     check(
         material_fields.find("FEM material-fields core source contract") != std::string::npos,
         "FemMaterialFields source file must document its source contract");
@@ -209,10 +216,264 @@ void material_plan_import_and_validation_contract() {
         "gamma validation error should mention gamma_mu0 convention");
 }
 
+void elementwise_material_runtime_support_distinguishes_a_from_ms() {
+    fullmag::fem::Context ctx;
+    std::string error;
+
+    ctx.material_fields.A_element_field = {8e-12, 13e-12};
+    ctx.exchange.enabled = true;
+    ctx.mfem_device.device_string_override = "cpu";
+    check(
+        fullmag::fem::validate_elementwise_ms_runtime_support(ctx, error),
+        "elementwise A must remain legal for exchange-only CPU execution");
+
+    ctx.mfem_device.device_string_override = "cuda";
+    check(
+        !fullmag::fem::validate_elementwise_ms_runtime_support(ctx, error),
+        "GPU lane must reject elementwise A before state upload");
+    check(
+        error.find("A_element_field") != std::string::npos &&
+            error.find("GPU material-state upload") != std::string::npos &&
+            error.find("resolved device 'gpu'") != std::string::npos,
+        "GPU elementwise A rejection must name field, first unsupported lane, and device");
+
+    ctx.mfem_device.device_string_override = "cpu";
+    ctx.zeeman.has_external_field = true;
+    check(
+        fullmag::fem::validate_elementwise_ms_runtime_support(ctx, error),
+        "CPU Zeeman must remain legal with elementwise A and exchange enabled");
+
+    ctx.zeeman.has_external_field = false;
+    ctx.exchange.enabled = false;
+    check(
+        !fullmag::fem::validate_elementwise_ms_runtime_support(ctx, error),
+        "CPU must reject elementwise A when exchange is disabled");
+    check(
+        error.find("A_element_field") != std::string::npos &&
+            error.find("exchange-disabled plan") != std::string::npos &&
+            error.find("resolved device 'cpu'") != std::string::npos,
+        "CPU no-exchange elementwise-A rejection must name field, plan state, and device");
+
+    ctx.material_fields.Ms_element_field = {700e3, 1.1e6};
+    ctx.exchange.enabled = true;
+    ctx.mfem_device.device_string_override = "cuda";
+    check(
+        !fullmag::fem::validate_elementwise_ms_runtime_support(ctx, error),
+        "GPU lane must reject elementwise Ms before state upload");
+    check(
+        error.find("Ms_element_field") != std::string::npos &&
+            error.find("GPU material-state upload") != std::string::npos &&
+            error.find("resolved device 'gpu'") != std::string::npos,
+        "GPU elementwise Ms rejection must name field, first unsupported owner, and device");
+
+    ctx.mfem_device.device_string_override = "cpu";
+    check(
+        !fullmag::fem::validate_elementwise_ms_runtime_support(ctx, error),
+        "CPU exchange-only handle must reject elementwise Ms before a later relaxation metric can consume it");
+    check(
+        error.find("Ms_element_field") != std::string::npos &&
+            error.find("native FEM handle lifecycle fallback") != std::string::npos &&
+            error.find("resolved device 'cpu'") != std::string::npos,
+        "CPU elementwise Ms rejection must name field, lifecycle fallback, and device");
+
+    ctx.exchange.enabled = false;
+    check(
+        !fullmag::fem::validate_elementwise_ms_runtime_support(ctx, error),
+        "CPU must reject elementwise Ms when exchange is disabled");
+    check(
+        error.find("Ms_element_field") != std::string::npos &&
+            error.find("native FEM handle lifecycle fallback") != std::string::npos &&
+            error.find("resolved device 'cpu'") != std::string::npos,
+        "CPU no-exchange elementwise-Ms rejection must name field, lifecycle fallback, and device");
+}
+
+fullmag_fem_plan_desc elementwise_material_context_plan(bool include_ms, bool include_a) {
+    static const double nodes[] = {
+        0.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+        0.0, 0.0, 1.0,
+        0.0, 0.0, -1.0,
+    };
+    // Two conformal tetrahedra share the face (0, 1, 2).  Their distinct
+    // element-owned Ms and A values must never be smeared at those nodes.
+    static const uint32_t elements[] = {0u, 1u, 2u, 3u, 0u, 2u, 1u, 4u};
+    static const double initial_m[] = {
+        1.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+    };
+    static const double element_ms[] = {700e3, 1.1e6};
+    static const double element_a[] = {8e-12, 13e-12};
+
+    fullmag_fem_plan_desc plan{};
+    plan.mesh.nodes_xyz = nodes;
+    plan.mesh.n_nodes = 5;
+    plan.mesh.elements = elements;
+    plan.mesh.n_elements = 2;
+    plan.material.saturation_magnetisation = 800e3;
+    plan.material.exchange_stiffness = 13e-12;
+    plan.material.damping = 0.1;
+    plan.material.gyromagnetic_ratio = 2.211e5;
+    if (include_ms) {
+        plan.ms_element_field = element_ms;
+        plan.ms_element_field_len = 2;
+    }
+    if (include_a) {
+        plan.a_element_field = element_a;
+        plan.a_element_field_len = 2;
+    }
+    plan.fe_order = 1;
+    plan.hmax = 1.0;
+    plan.dt_seconds = 1e-13;
+    plan.precision = FULLMAG_FEM_PRECISION_DOUBLE;
+    plan.integrator = FULLMAG_FEM_INTEGRATOR_HEUN;
+    plan.enable_exchange = 1;
+    plan.demag_realization = FULLMAG_FEM_DEMAG_AIRBOX_ROBIN;
+    plan.initial_magnetization_xyz = initial_m;
+    plan.initial_magnetization_len = 15;
+    plan.mfem_device_string = "cpu";
+    return plan;
+}
+
+void elementwise_material_context_builder_fails_closed_before_backend_initialization() {
+    static const double oersted_field[] = {
+        1.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+    };
+    static const double uniform_strain[] = {0.01, 0.0, 0.0, 0.0, 0.0, 0.0};
+
+    struct Reproducer {
+        const char *name;
+        bool include_ms;
+        bool include_a;
+        bool expect_accept;
+        const char *field;
+        const char *unsupported_term;
+        const char *device;
+        void (*configure)(fullmag_fem_plan_desc &);
+    };
+    const Reproducer reproducers[] = {
+        {"CPU Ms Zeeman", true, false, false, "Ms_element_field", "Zeeman", "cpu", [](fullmag_fem_plan_desc &plan) {
+             plan.has_external_field = 1;
+             plan.external_field_am[2] = 1.0;
+         }},
+        {"CPU Ms demag", true, false, false, "Ms_element_field", "demag", "cpu", [](fullmag_fem_plan_desc &plan) {
+             plan.enable_demag = 1;
+         }},
+        {"CPU Ms uniaxial anisotropy", true, false, false, "Ms_element_field", "uniaxial anisotropy", "cpu", [](fullmag_fem_plan_desc &plan) {
+             plan.has_uniaxial_anisotropy = 1;
+             plan.uniaxial_anisotropy_constant = 1.0e5;
+             plan.anisotropy_axis[2] = 1.0;
+         }},
+        {"CPU Ms cubic anisotropy", true, false, false, "Ms_element_field", "cubic anisotropy", "cpu", [](fullmag_fem_plan_desc &plan) {
+             plan.has_cubic_anisotropy = 1;
+             plan.cubic_kc1 = 1.0e5;
+             plan.cubic_axis1[0] = 1.0;
+             plan.cubic_axis2[1] = 1.0;
+         }},
+        {"CPU Ms interfacial DMI", true, false, false, "Ms_element_field", "interfacial DMI", "cpu", [](fullmag_fem_plan_desc &plan) {
+             plan.has_interfacial_dmi = 1;
+             plan.dmi_constant = 1.0e-3;
+             plan.dmi_interface_normal[2] = 1.0;
+         }},
+        {"CPU Ms bulk DMI", true, false, false, "Ms_element_field", "bulk DMI", "cpu", [](fullmag_fem_plan_desc &plan) {
+             plan.has_bulk_dmi = 1;
+             plan.bulk_dmi_constant = 1.0e-3;
+         }},
+        {"CPU Ms thermal", true, false, false, "Ms_element_field", "thermal Brown", "cpu", [](fullmag_fem_plan_desc &plan) {
+             plan.temperature = 300.0;
+             plan.thermal_seed = 1;
+         }},
+        {"CPU Ms Zhang-Li STT", true, false, false, "Ms_element_field", "Zhang-Li STT", "cpu", [](fullmag_fem_plan_desc &plan) {
+             plan.has_zhang_li_stt = 1;
+             plan.stt_current_density_am2[0] = 1.0e11;
+             plan.stt_degree = 0.5;
+             plan.stt_beta = 0.1;
+         }},
+        {"CPU Ms Slonczewski STT", true, false, false, "Ms_element_field", "Slonczewski STT", "cpu", [](fullmag_fem_plan_desc &plan) {
+             plan.has_slonczewski_stt = 1;
+             plan.stt_current_density_am2[0] = 1.0e11;
+             plan.stt_degree = 0.5;
+             plan.stt_beta = 0.1;
+             plan.stt_spin_polarization[2] = 1.0;
+             plan.stt_lambda = 1.0;
+             plan.stt_epsilon_prime = 0.0;
+             plan.stt_free_layer_thickness = 1.0e-9;
+             plan.stt_current_sign = 1.0;
+         }},
+        {"CPU Ms Oersted", true, false, false, "Ms_element_field", "Oersted", "cpu", [](fullmag_fem_plan_desc &plan) {
+             plan.oersted_field_xyz = oersted_field;
+             plan.oersted_field_len = 15;
+         }},
+        {"CPU Ms magnetoelastic", true, false, false, "Ms_element_field", "magnetoelastic", "cpu", [](fullmag_fem_plan_desc &plan) {
+             plan.has_magnetoelastic = 1;
+             plan.mel_b1 = 1.0e6;
+             plan.mel_b2 = 0.0;
+             plan.mel_uniform_strain = 1;
+             plan.mel_strain_voigt = uniform_strain;
+             plan.mel_strain_len = 6;
+         }},
+        {"CPU Ms exchange-disabled", true, false, false, "Ms_element_field", "native FEM handle lifecycle fallback", "cpu", [](fullmag_fem_plan_desc &plan) {
+             plan.enable_exchange = 0;
+         }},
+        {"CUDA Ms GPU", true, false, false, "Ms_element_field", "GPU material-state upload", "gpu", [](fullmag_fem_plan_desc &plan) {
+             plan.mfem_device_string = "cuda";
+         }},
+        {"CPU A Zeeman", false, true, true, "", "", "cpu", [](fullmag_fem_plan_desc &plan) {
+             plan.has_external_field = 1;
+             plan.external_field_am[2] = 1.0;
+         }},
+        {"CPU A exchange-disabled", false, true, false, "A_element_field", "exchange-disabled plan", "cpu", [](fullmag_fem_plan_desc &plan) {
+             plan.enable_exchange = 0;
+         }},
+        {"CUDA A GPU", false, true, false, "A_element_field", "GPU material-state upload", "gpu", [](fullmag_fem_plan_desc &plan) {
+             plan.mfem_device_string = "cuda";
+         }},
+    };
+
+    for (const Reproducer &reproducer : reproducers) {
+        fullmag::fem::Context ctx;
+        std::string error;
+        fullmag_fem_plan_desc plan = elementwise_material_context_plan(
+            reproducer.include_ms,
+            reproducer.include_a);
+        reproducer.configure(plan);
+        const bool built = fullmag::fem::build_context_from_plan(ctx, plan, error);
+        check(
+            built == reproducer.expect_accept,
+            "Context builder must match the elementwise material legality table");
+        if (reproducer.expect_accept) {
+#if FULLMAG_HAS_MFEM_STACK
+            fullmag::fem::context_destroy_mfem(ctx);
+#endif
+            fullmag::fem::gpu_state_destroy(ctx.gpu_state.device);
+            continue;
+        }
+        check(
+            error.find(reproducer.field) != std::string::npos &&
+                error.find(reproducer.unsupported_term) != std::string::npos &&
+                error.find(std::string("resolved device '") + reproducer.device + "'") != std::string::npos,
+            "Context-builder elementwise-material rejection must name field, first unsupported term, and resolved device");
+        check(
+            !ctx.mfem_context.ready && ctx.mfem_context.mesh == nullptr &&
+                !ctx.gpu_state.device.lifecycle.allocated,
+            "elementwise-material rejection must occur before MFEM or GPU backend initialization");
+    }
+}
+
 } // namespace
 
 int main() {
     material_field_helpers_are_owned_by_core_module();
     material_plan_import_and_validation_contract();
+    elementwise_material_runtime_support_distinguishes_a_from_ms();
+    elementwise_material_context_builder_fails_closed_before_backend_initialization();
     return 0;
 }

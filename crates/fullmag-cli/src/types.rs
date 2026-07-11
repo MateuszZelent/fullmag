@@ -84,6 +84,7 @@ pub(crate) struct ScriptRunSummary {
     pub relaxation_preconditioner_cache_hits: Option<u32>,
     pub relaxation_preconditioner_cache_misses: Option<u32>,
     pub rhs_evals: Option<u32>,
+    pub total_rhs_evals: u64,
     pub demag_solves: Option<u32>,
     /// Number of eigenmode frequencies found (FEM eigen only).
     pub eigen_mode_count: Option<usize>,

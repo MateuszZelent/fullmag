@@ -362,6 +362,88 @@ revisions. Geometry, port, mesh, and target changes may invalidate solution
 resources. A waveform-only edit invalidates model/drive state but does not
 advance the antenna field-solution or field-basis revision.
 
+### Planar topological-charge analysis resource
+
+The canonical physical and numerical contract is
+`docs/physics/0940-topological-charge-observable.md`. The browser resource is:
+
+```text
+GET /v2/sessions/current/analysis/extensions/objects/{object_id}/topological-charge
+```
+
+This is an object-scoped analysis resource over materialized magnetization and
+mesh/domain resources. It is not an object metric, visualization state, shader
+output, or authoring mutation.
+
+The production query is typed and closed:
+
+| Parameter | Values | Rule |
+|---|---|---|
+| `plane` | `auto`, `xy`, `xz`, `yz` | `auto` resolves the thinnest magnetic-object extent; ties use `xy`, then `xz`, then `yz`; the response returns requested and resolved plane plus the canonical ordered support frame |
+| `support` | `midplane`, `layer_profile` | `midplane` is the default; profile evaluation is explicit |
+| `profile_samples` | `auto` or integer `3..257` | optional; legal only for `layer_profile`; omission resolves to `auto` for a profile; ignored parameters are a `400`, not a silent fallback |
+| `snapshot_id` | canonical snapshot id | selects the same magnetization snapshot as the field data-plane resolver |
+| `stage_id` | canonical stage id | optional scope validation for `snapshot_id` |
+| `method` | `berg_luescher_oriented_triangles_v2` | the only production method in this resource version |
+
+`quantity_id` is not user-selectable in the production contract: this
+observable consumes canonical `m`. A future dimensional-`M` method needs a
+separate versioned normalization contract.
+
+`stage_id` without `snapshot_id` is a `400`. With no snapshot id, the source is
+the captured current materialized `m` revision. The endpoint never substitutes
+a preview field or an arbitrary latest persisted snapshot.
+
+The response is versioned as `topological_charge.v2` and separates:
+
+- computation `status` from scientific `trust`;
+- requested support from resolved support and ordered frame;
+- scalar charge from the full physical-coordinate layer profile;
+- integral validity from nearest-integer qualification;
+- source provenance from cache identity.
+
+Scientific `status` is one of `ready`, `no_current_magnetization`,
+`empty_support`, `invalid_magnetization`, `degenerate_support`,
+`under_resolved`, `unsupported_geometry`, or `unsupported_discretization`.
+`idle`, `loading`, `stale`, and `error` belong to the frontend resource
+lifecycle, not to this successful HTTP payload. Invalid queries return `400`,
+missing object/snapshot/stage identities return `404`, provenance races return
+`409`, and unexpected failures return `500`.
+
+Status and trust precedence follow physics note 0940 exactly. In particular,
+`under_resolved` retains a diagnostic charge with
+`trust=diagnostic_resolution`; missing, invalid, empty, degenerate, and
+unsupported results have no charge and use `trust=unavailable`.
+
+The response must include object id, requested/resolved plane and support,
+ordered axes and normal, field revision and storage domain, field-node mapping
+identity, mesh revision and generation, domain generation, scene revision,
+snapshot/stage identity, discretization and FEM order, method version, resource
+revision digest, actual computation timestamp, support topology diagnostics,
+boundary diagnostics, resolution diagnostics, warnings, and every requested
+profile sample with `coordinate_m` and `integration_weight_m`.
+
+`nearest_integer` and `integer_error` are present only when `trust=qualified`.
+The resource does not expose `polarity`; polarity and vorticity require their
+own texture classifiers.
+
+Only planar FDM supports and tetrahedral FEM P1 supports are legal. Curved
+surfaces, high-order FEM, full 3D topological flux, and Hopf index return typed
+unsupported status. The backend must not use global FDM data for an object
+request, match compact FEM fields by array length, use arbitrary coplanar tetra
+faces as an implicit layer, or use renderer/preview topology as a production
+support.
+
+The cache lookup precedes support construction and computation. Cache identity
+includes object, field, mesh, domain, scene, exact current-or-snapshot source
+identity, requested and resolved support, and method version. The live-session
+read lock is released before cache lookup and numerical work.
+
+HTTP v2 remains authoritative. Both exact `m` sample changes and broad field
+sample invalidations invalidate this analysis family. Mesh, domain, object
+scope, and snapshot changes do the same. WebSocket events carry only invalidation
+identity and revision; they never carry `Q`, profiles, or support triangles.
+
 ## 4. Scoped data access
 
 Mesh and field resources must support scoped fetching so the frontend does not need to download the

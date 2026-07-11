@@ -1,23 +1,31 @@
 {
-  "schema_version": "frequency_domain_documentation_manifest.v2",
-  "package_version": "COMSOL-aligned v5.1 decision-complete",
+  "schema_version": "frequency_domain_documentation_manifest.v3",
+  "package_version": "COMSOL-aligned v5.1 deterministic static contract",
   "updated_at": "2026-07-10",
   "entrypoint": "00_README_CANONICAL_FULL_READ.md",
   "full_pack": "fd_solver_plan_FULL_PACK_COMSOL_ALIGNED_V5.md",
-  "full_pack_generated": false,
-  "full_pack_status": "stale_disabled",
+  "full_pack_generated": true,
+  "full_pack_status": "deterministic_manifest_order",
   "full_pack_regeneration": {
     "owner_task": 10,
-    "condition": "All manifest-declared canonical full-pack inputs are present, transitional documents are promoted after their rewrite tasks, and the manifest is complete."
+    "condition": "Run scripts/build_fd_solver_masterplan_full_pack.py --check to detect drift and --write only when intentionally regenerating the declared full_pack output."
   },
   "production_claim_schema": {
     "required_fields": ["implementation_state", "validation_state", "validated_scope"],
     "implementation_state": ["absent", "contract_only", "source_visible", "executable"],
     "validation_state": ["unvalidated", "algebra_validated", "physics_validated", "production_qualified"],
-    "validated_scope": {"type": "string", "min_length": 1},
+    "validated_scope": {"one_of": ["null", "readiness_scope_binding.v1"]},
+    "executable_scope": {"one_of": ["null", "readiness_scope_binding.v1"]},
+    "readiness_scope_binding.v1": {
+      "required_fields": ["scope_id", "scope_catalog_uri", "scope_catalog_sha256"],
+      "scope_catalog_uri": "urn:fullmag:frequency-domain:readiness-scope-catalog:<sha256>",
+      "scope_catalog_sha256": "sha256:<exact UTF-8 catalog bytes>"
+    },
     "rules": [
       "production_executable does not imply production_qualified",
-      "A narrow validated scope cannot promote a broader capability"
+      "A narrow validated scope cannot promote a broader capability",
+      "validation_state=unvalidated requires validated_scope=null",
+      "executable narrow evidence is represented through executable_scope and does not promote validation_state"
     ]
   },
   "documents": [
@@ -37,15 +45,17 @@
     {"order": 13, "path": "13_repo_migration_cleanup.md", "role": "supporting", "include_in_full_pack": true},
     {"order": 14, "path": "14_sources_traceability.md", "role": "supporting", "include_in_full_pack": true},
     {"order": 15, "path": "15_self_weryfication_Kittel.md", "role": "validation", "include_in_full_pack": true},
-    {"order": 16, "path": "16_implementation_plan_Kittel_D2.md", "role": "implementation_status", "target_role": "normative", "include_in_full_pack": true, "availability": "present; transitional dated evidence is not normative", "promotion": {"owner_task": 4, "condition": "Promote only after Task 4 rewrites the active body without dated append-only evidence."}},
+    {"order": 16, "path": "16_end_to_end_fem_frequency_domain_implementation.md", "role": "implementation_status", "target_role": "normative", "include_in_full_pack": true, "availability": "present; end-to-end implementation traceability without runtime revalidation in this package"},
     {"order": 17, "path": "17_eigen_k0_gpu_readiness_audit.md", "role": "implementation_status", "include_in_full_pack": true},
     {"order": 18, "path": "18_poisson_airbox_eigensolve_cpu_gpu_implementation.md", "role": "implementation_status", "target_role": "normative", "include_in_full_pack": true, "availability": "present; transitional dated evidence is not normative", "promotion": {"owner_task": 6, "condition": "Promote only after Task 6 rewrites the active body without dated append-only evidence."}},
     {"order": 19, "path": "19_eigensolve_frequency_driven_physics_numerics_audit.md", "role": "implementation_status", "include_in_full_pack": true},
     {"order": 20, "path": "20_dynamic_solver_audit_revalidation_and_remediation.md", "role": "implementation_status", "include_in_full_pack": true, "availability": "present; content owned by the parallel remediation plan"},
     {"order": 23, "path": "23_floquet_airbox_nonzero_k_cpu_gpu_implementation.md", "role": "normative", "include_in_full_pack": true, "availability": "planned; created by Task 7"},
     {"order": 24, "path": "24_production_definition_of_done.md", "role": "normative", "include_in_full_pack": true, "availability": "planned; created by Task 8"},
-    {"order": 25, "path": "25_frequency_domain_readiness_matrix.json", "role": "implementation_status", "include_in_full_pack": false, "availability": "planned; created by Task 9"}
+    {"order": 25, "path": "25_frequency_domain_readiness_matrix.json", "role": "implementation_status", "include_in_full_pack": false, "availability": "consume-only readiness matrix created by Task 9"},
+    {"order": 26, "path": "25_frequency_domain_readiness_scope_catalog.json", "role": "implementation_status", "include_in_full_pack": false, "availability": "consume-only readiness scope catalog created by Task 9"}
   ],
   "historical_roots": ["old/"],
-  "readiness_matrix": "25_frequency_domain_readiness_matrix.json"
+  "readiness_matrix": "25_frequency_domain_readiness_matrix.json",
+  "readiness_scope_catalog": "25_frequency_domain_readiness_scope_catalog.json"
 }

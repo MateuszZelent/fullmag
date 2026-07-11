@@ -2096,6 +2096,10 @@ FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve(
         request->mfem_gyrotropic_matrix_row_major;
     native_request.mfem_mass_matrix_row_major =
         request->mfem_mass_matrix_row_major;
+    native_request.mfem_linearized_pencil_dependency_digest =
+        request->mfem_linearized_pencil_dependency_digest;
+    native_request.mfem_linearized_pencil_gamma0_m_per_a_s =
+        request->mfem_linearized_pencil_gamma0_m_per_a_s;
     native_request.mfem_sparse_operator_enabled =
         request->mfem_sparse_operator_enabled;
     native_request.mfem_sparse_stiffness_csr.row_count =
@@ -2324,6 +2328,10 @@ FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve(
         request->poisson_airbox_gauge_reason;
     native_request.poisson_airbox_assembly_kind =
         request->poisson_airbox_assembly_kind;
+    native_request.dynamic_demag_k_tangent_matrix_row_major =
+        request->dynamic_demag_k_tangent_matrix_row_major;
+    native_request.dynamic_demag_k_tangent_matrix_value_count =
+        request->dynamic_demag_k_tangent_matrix_value_count;
 
     return copy_frequency_domain_contract_result(
         fd::solve_modal_eigen_contract(native_request));

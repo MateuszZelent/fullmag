@@ -185,6 +185,35 @@ describe("StudyStageAuthoringModel", () => {
       supported: false,
     });
   });
+
+  it("rejects FEM projected-gradient BB when demag is enabled", () => {
+    const draft = {
+      ...createDefaultStudyStageDraft("relax", 0),
+      algorithm: "projected_gradient_bb",
+    };
+    const execution = {
+      algorithmsAvailable: [
+        "llg_overdamped",
+        "projected_gradient_bb",
+        "nonlinear_cg",
+      ],
+      backend: "fem",
+      demagEnabled: true,
+      device: "gpu",
+      mode: "strict",
+    };
+    expect(validateStudyStageDraft(draft, execution)).toContainEqual({
+      message:
+        "Projected gradient BB is not qualified for FEM demag relaxation. Use nonlinear CG or disable demag.",
+      severity: "error",
+    });
+    expect(
+      relaxationAlgorithmAvailability("projected_gradient_bb", {
+        ...execution,
+        demagEnabled: false,
+      }),
+    ).toEqual({ reason: null, supported: true });
+  });
   it("creates an editable relax draft from a canonical scene stage", () => {
     expect(
       createStudyStageDraft(

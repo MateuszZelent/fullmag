@@ -103,7 +103,8 @@ bool gpu_rk_accumulate_effective_field_for_magnetization(
     cudaStream_t stream,
     int n,
     const char *label,
-    std::string &reason)
+    std::string &reason,
+    bool fresh_demag_initial_guess = false)
 {
     auto &timings = ctx.gpu_state.rk_phase_timings;
     GpuRkPhaseTimer exchange_timer;
@@ -126,7 +127,10 @@ bool gpu_rk_accumulate_effective_field_for_magnetization(
     if (!gpu_rk_compute_dmi_field_contributions(ctx, m, stream, n, reason)) {
         return false;
     }
-    if (!gpu_rk_compute_demag_for_device_stage(ctx, m, stream, reason)) {
+    const bool demag_ok = fresh_demag_initial_guess
+        ? gpu_rk_compute_demag_for_device_stage_fresh(ctx, m, stream, reason)
+        : gpu_rk_compute_demag_for_device_stage(ctx, m, stream, reason);
+    if (!demag_ok) {
         return false;
     }
     if (!gpu_rk_compute_local_field_contributions(ctx, m, stream, n, reason)) {
@@ -147,6 +151,18 @@ bool gpu_rk_compute_effective_field_for_magnetization(
 {
     return gpu_rk_accumulate_effective_field_for_magnetization(
         ctx, m, stream, n, label, reason);
+}
+
+bool gpu_rk_compute_effective_field_for_magnetization_fresh_demag(
+    Context &ctx,
+    const FemGpuComponentField &m,
+    cudaStream_t stream,
+    int n,
+    const char *label,
+    std::string &reason)
+{
+    return gpu_rk_accumulate_effective_field_for_magnetization(
+        ctx, m, stream, n, label, reason, true);
 }
 
 bool gpu_rk_compute_rhs_for_magnetization(

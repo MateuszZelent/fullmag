@@ -16,6 +16,7 @@ set(FEM_PUBLIC_HEADERS
 set(FEM_SOURCES
     core/fem_field_buffers.cpp
     core/fem_context_builder.cpp
+    core/fem_element_quadrature_material.cpp
     core/fem_material_fields.cpp
     core/fem_mesh.cpp
     core/fem_plan_fields.cpp
@@ -133,6 +134,7 @@ set(FEM_SOURCES
     cpu/mfem/runtime/state_io.cpp
     cpu/mfem/runtime/step_metrics.cpp
     cpu/frequency_domain/dense_poisson_airbox_eigen_oracle.cpp
+    cpu/frequency_domain/floquet_bloch_scalar.cpp
     cpu/frequency_domain/poisson_airbox_modal_eigen.cpp
     cpu/frequency_domain/poisson_airbox_schur_matshell.cpp
     cpu/frequency_domain/dense_driven_response.cpp
@@ -162,12 +164,14 @@ set(FEM_SOURCES
     cpu/frequency_domain/mode_filter.cpp
     cpu/frequency_domain/window_partition.cpp
     src/frequency_domain/anisotropy_operator.cpp
+    src/frequency_domain/canonical_digest.cpp
     src/frequency_domain/dense_full_coupled_oracle.cpp
     src/frequency_domain/driven_response_solver.cpp
     src/frequency_domain/equilibrium_state.cpp
     src/frequency_domain/excitation.cpp
     src/frequency_domain/frequency_domain_contract.cpp
     src/frequency_domain/linearization_state.cpp
+    src/frequency_domain/linearized_dynamic_pencil.cpp
     src/frequency_domain/mesh_symmetry_certificate.cpp
     src/frequency_domain/mode_kinematics.cpp
     src/frequency_domain/modal_eigen_solver.cpp
@@ -357,6 +361,14 @@ target_include_directories(fem_gpu_rk_plan PRIVATE
 add_test(NAME fem_gpu_rk_plan COMMAND fem_gpu_rk_plan)
 
 add_executable(fem_cuda_tetra_gradient_contract tests/cuda_tetra_gradient_contract.cpp)
+target_link_libraries(fem_cuda_tetra_gradient_contract PRIVATE fullmag_fem)
+if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA)
+    target_link_libraries(fem_cuda_tetra_gradient_contract PRIVATE CUDA::cudart)
+endif()
+target_include_directories(fem_cuda_tetra_gradient_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
 add_test(NAME fem_cuda_tetra_gradient_contract COMMAND fem_cuda_tetra_gradient_contract)
 
 add_executable(fem_cuda_demag_robin_energy_contract tests/cuda_demag_robin_energy_contract.cpp)
@@ -432,7 +444,6 @@ if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA)
     target_link_libraries(fem_relaxation_energy_derivative_contract PRIVATE CUDA::cudart)
     target_link_libraries(fem_relaxation_operator_contract PRIVATE CUDA::cudart)
 endif()
-
 add_fem_source_facade_contract(
     fem_frequency_domain_contract
     tests/frequency_domain/frequency_domain_contract.cpp
@@ -444,6 +455,10 @@ add_fem_source_facade_contract(
 add_fem_source_facade_contract(
     fem_mode_kinematics_contract
     tests/frequency_domain/mode_kinematics_test.cpp
+)
+add_fem_source_facade_contract(
+    fem_linearized_dynamic_pencil_contract
+    tests/frequency_domain/linearized_dynamic_pencil_test.cpp
 )
 add_fem_source_facade_contract(
     fem_operator_contract
@@ -465,6 +480,20 @@ add_fem_source_facade_contract(
     fem_poisson_airbox_schur_matshell_contract
     tests/frequency_domain/poisson_airbox_schur_matshell_test.cpp
 )
+add_fem_source_facade_contract(
+    fem_floquet_bloch_scalar_contract
+    tests/frequency_domain/floquet_bloch_scalar_test.cpp
+)
+if(FULLMAG_USE_MFEM_STACK)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_floquet_bloch_scalar_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_floquet_bloch_scalar_contract PRIVATE mfem)
+    endif()
+endif()
+if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA)
+    target_link_libraries(fem_floquet_bloch_scalar_contract PRIVATE CUDA::cudart)
+endif()
 add_fem_source_facade_contract(
     fem_driven_response_contract
     tests/frequency_domain/driven_response_contract_test.cpp
@@ -725,6 +754,39 @@ target_include_directories(fem_material_fields_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 add_test(NAME fem_material_fields_contract COMMAND fem_material_fields_contract)
+
+add_executable(
+    fem_element_quadrature_material_contract
+    tests/fem_element_quadrature_material_contract.cpp
+)
+target_link_libraries(fem_element_quadrature_material_contract PRIVATE fullmag_fem)
+target_include_directories(fem_element_quadrature_material_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_element_quadrature_material_contract COMMAND fem_element_quadrature_material_contract)
+
+add_executable(
+    fem_zeeman_element_quadrature_contract
+    tests/fem_zeeman_element_quadrature_contract.cpp
+)
+target_link_libraries(fem_zeeman_element_quadrature_contract PRIVATE fullmag_fem)
+target_include_directories(fem_zeeman_element_quadrature_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_zeeman_element_quadrature_contract COMMAND fem_zeeman_element_quadrature_contract)
+
+add_executable(
+    fem_uniaxial_element_quadrature_contract
+    tests/fem_uniaxial_element_quadrature_contract.cpp
+)
+target_link_libraries(fem_uniaxial_element_quadrature_contract PRIVATE fullmag_fem)
+target_include_directories(fem_uniaxial_element_quadrature_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_uniaxial_element_quadrature_contract COMMAND fem_uniaxial_element_quadrature_contract)
 
 add_executable(fem_field_buffers_contract tests/fem_field_buffers_contract.cpp)
 target_link_libraries(fem_field_buffers_contract PRIVATE fullmag_fem)

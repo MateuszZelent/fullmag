@@ -5,6 +5,7 @@ pub mod fields;
 pub mod material_fields;
 pub mod mesh_region_membership;
 pub mod quantities;
+pub(crate) mod resolved_vector_field;
 pub mod scalars;
 pub mod tables;
 

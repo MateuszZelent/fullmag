@@ -527,6 +527,8 @@ reproduce the same pencil with no hidden registry.
 - Modify: `backends/fem/cpu/frequency_domain/mfem_dmi_operator.cpp`
 - Modify: `backends/fem/cpu/frequency_domain/mfem_exchange_operator.cpp`
 - Modify: `backends/fem/gpu/cuda/frequency_domain/driven_response_gpu.cu`
+- Modify: `backends/fem/include/frequency_domain/driven_response_solver.hpp`
+- Modify: `backends/fem/src/frequency_domain/driven_response_solver.cpp`
 - Create: `backends/fem/tests/frequency_domain/operator_term_linearization_contract_test.cpp`
 - Modify surgically: `backends/fem/CMakeLists.txt`, `justfile`
 
@@ -542,6 +544,13 @@ reproduce the same pencil with no hidden registry.
 - [ ] Separate static demag state, dynamic tangent action and Poisson potential
   provenance.
 - [ ] Emit per-term enabled state, digest, action norm and parity error.
+- [ ] Implement `absorbed_by_magnetization` as a separate physical driven
+  observable from Cartesian `delta_m`, physical field phasor, active `Ms` and
+  volume/mass weights: `p_abs = -0.5*mu0*Ms*omega*Im(conj(h_drive) dot
+  delta_m)` for `exp(+i omega t)`. Preserve the existing
+  `drive_projected_absorption_proxy` unchanged and explicitly nonphysical; it
+  must never be relabelled as W/m^3. Add damped-macrospin sign and CPU/GPU
+  parity cases before physical-power promotion.
 - [ ] Add/run `just verify-fem-frequency-domain-term-linearization-parity` and
   the main native gate.
 
@@ -653,6 +662,13 @@ semantics; no Hessenberg residual alone certifies success.
   and provenance-bound qualification certificate.
 - [ ] Static validation must not inspect run counters/residuals; certificates
   bind operator/preconditioner/frequency/device/build/run identities.
+- [ ] Carry the Chapter 11 hot-loop telemetry through the typed run result and
+  qualification certificate: `hot_loop_h2d_bytes`, `hot_loop_d2h_bytes`,
+  `hot_loop_host_allocated_bytes`, `hot_loop_device_allocated_bytes`,
+  `hot_loop_allocation_count`, `workspace_reuse_count` and
+  `workspace_rebuild_count`. The existing transfer counts alone are not a
+  residency proof; a production-loop certificate requires all hot-loop
+  transfer/allocation counters to be zero and no workspace rebuild.
 - [ ] Use const input/mutable output views, checked layout, engine-owned probe
   buffers, exact frequency identity, pointer/alias/device checks, canaries,
   input checksum, finite output and stream-synchronized async status.
@@ -836,7 +852,9 @@ the separate cuSolverDN K0 macrospin scope remains unchanged.
   replacement and engine-generated telemetry.
 - [ ] Keep vector/operator/preconditioner state on device. Bounded scalar
   control readbacks are recorded separately; no vector H2D/D2H per iteration
-  and no hidden CPU fallback.
+  and no hidden CPU fallback. Emit the Task 15 byte/allocation/reuse telemetry
+  from the engine itself, with setup allocations outside the hot loop; do not
+  infer zero allocations from transfer counts.
 - [ ] Reuse the canonical pencil, term descriptors, frequency identity,
   checked workspace layout and safe callback contracts.
 - [ ] Set `production_loop_available=true` only after Compute Sanitizer,
@@ -898,6 +916,8 @@ leaks into public physics fields.
 - Modify: `crates/fullmag-runner/src/native_fem/eigen.rs`
 - Modify: `crates/fullmag-runner/src/native_fem/frequency_domain.rs`
 - Modify: `crates/fullmag-runner/src/native_fem/tests/plan_contracts.rs`
+- Modify: `crates/fullmag-runner/src/frequency_response.rs`
+- Modify: `packages/fullmag-py/src/fullmag/model/outputs.py`
 - Modify: `crates/fullmag-api/src/router_v2/handlers/analysis/frequency_domain.rs`
 - Modify: `docs/specs/capability-matrix-v0.md`
 - Modify: `docs/specs/capability-matrix-v0.json`
@@ -922,6 +942,11 @@ leaks into public physics fields.
 - [ ] Keep API v2 resource-first: expose the versioned manifest/artifact
   fields from the central handler; do not add direct component endpoints or
   duplicate physics interpretation.
+- [ ] Publish physical `absorbed_by_magnetization` only when Task 11 provides
+  Cartesian field, `Ms`, quadrature and phase provenance. Artifacts must
+  record quantity kind, SI `W/m^3` or integrated `W` units, phasor convention,
+  and formula version. Continue exposing the legacy drive-projected proxy only
+  with `physical_power_density=false`; do not silently replace or relabel it.
 - [ ] Update both capability sources and runtime manifest cells only from the
   fresh managed artifacts produced by Tasks 18-20. Preserve explicit gated
   combinations and the narrow cuSolverDN macrospin exception.

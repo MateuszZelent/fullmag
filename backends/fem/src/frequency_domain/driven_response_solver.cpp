@@ -2,6 +2,8 @@
 
 #include "cpu/frequency_domain/dense_driven_response.hpp"
 #include "cpu/frequency_domain/production_cpu_driven_response.hpp"
+#include "frequency_domain/canonical_digest.hpp"
+#include "frequency_domain/linearized_dynamic_pencil.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -4567,6 +4569,67 @@ FrequencyDomainStatus apply_mfem_production_cpu_mass(
         out,
         adapter->mass_tangent.data(),
         static_cast<std::size_t>(adapter->request->solve_request.operator_request.tangent_dof_count * sizeof(double)));
+    return FrequencyDomainStatus::ok;
+}
+
+// The legacy JVP exposes RHS terms S and M used as S + i*omega*M.
+// Canonical Aomega=i*omega*B_alpha-L is identical iff L=-S and B_alpha=-M.
+// Keeping this conversion at the adapter boundary prevents a second equation
+// in the driven solver and preserves the established MFEM fixtures.
+FrequencyDomainStatus apply_mfem_production_cpu_canonical_l(
+    void *user_data,
+    const double *in,
+    double *out,
+    char error_message[128]) noexcept
+{
+    const FrequencyDomainStatus status =
+        apply_mfem_production_cpu_stiffness(user_data, in, out, error_message);
+    if (status == FrequencyDomainStatus::ok) {
+        const auto *adapter = static_cast<const MfemProductionCpuOperatorAdapter *>(user_data);
+        const std::uint64_t n = adapter->request->solve_request.operator_request.tangent_dof_count;
+        for (std::uint64_t i = 0; i < n; ++i) out[i] = -out[i];
+    }
+    return status;
+}
+
+FrequencyDomainStatus apply_mfem_production_cpu_canonical_b_alpha(
+    void *user_data,
+    const double *in,
+    double *out,
+    char error_message[128]) noexcept
+{
+    const FrequencyDomainStatus status =
+        apply_mfem_production_cpu_mass(user_data, in, out, error_message);
+    if (status == FrequencyDomainStatus::ok) {
+        const auto *adapter = static_cast<const MfemProductionCpuOperatorAdapter *>(user_data);
+        const std::uint64_t n = adapter->request->solve_request.operator_request.tangent_dof_count;
+        for (std::uint64_t i = 0; i < n; ++i) out[i] = -out[i];
+    }
+    return status;
+}
+
+FrequencyDomainStatus apply_mfem_production_cpu_canonical_pencil(
+    void *user_data,
+    const double *in,
+    double *out_l,
+    double *out_b_alpha,
+    char error_message[128]) noexcept
+{
+    auto *adapter = static_cast<MfemProductionCpuOperatorAdapter *>(user_data);
+    if (out_l == nullptr || out_b_alpha == nullptr) {
+        std::snprintf(error_message, 128, "missing MFEM canonical pencil output");
+        return FrequencyDomainStatus::validation_error;
+    }
+    const FrequencyDomainStatus status =
+        apply_mfem_production_cpu_operator(adapter, in, error_message);
+    if (status != FrequencyDomainStatus::ok) {
+        return status;
+    }
+    const std::uint64_t n = adapter->request->solve_request.operator_request.tangent_dof_count;
+    for (std::uint64_t i = 0; i < n; ++i) {
+        out_l[i] = -adapter->stiffness_tangent[i];
+        out_b_alpha[i] = -adapter->mass_tangent[i];
+    }
     return FrequencyDomainStatus::ok;
 }
 
@@ -11045,9 +11108,48 @@ FrequencyDomainStatus solve_mfem_production_cpu_problem(
         return result.status;
     }
 
+    const std::string mfem_dependency_digest =
+        mfem_linearized_pencil_dependency_digest(
+            MfemLinearizedPencilDependency{
+                problem.descriptor, problem.layout, problem.nodes,
+                problem.exchange_edges, problem.exchange_edge_count,
+                problem.h_ext_a_per_m, problem.h_ext_value_count,
+                problem.uniaxial_anisotropy_axis,
+                problem.uniaxial_anisotropy_axis_value_count,
+                problem.uniaxial_anisotropy_field_a_per_m,
+                problem.alpha_per_node, problem.alpha_value_count,
+                request.solve_request.operator_request.gamma0,
+                request.solve_request.operator_request.alpha,
+                problem.dmi_elements, problem.dmi_element_count,
+                problem.dmi_lumped_mass, problem.dmi_lumped_mass_value_count,
+                problem.dmi_ms_field, problem.dmi_ms_field_value_count,
+                problem.dmi_uniform_ms,
+                problem.demag_tangent_matrix_row_major,
+                problem.demag_tangent_matrix_value_count,
+                demag_tangent_operator_source,
+                problem.static_periodic_node_pairs,
+                problem.static_periodic_node_pair_count,
+                periodic_airbox_dynamic_demag,
+            });
+    const LinearizedDynamicPencil mfem_pencil =
+        LinearizedDynamicPencil::from_real_callbacks(
+            dynamic_pencil_metadata_from_legacy_gamma0(
+                request.solve_request.operator_request.gamma0,
+                request.phase_convention),
+            tangent_dof_count,
+            LinearizedDynamicPencilRealCallbacks{
+                &adapter,
+                apply_mfem_production_cpu_canonical_l,
+                apply_mfem_production_cpu_canonical_b_alpha,
+                nullptr,
+                nullptr,
+                apply_mfem_production_cpu_canonical_pencil,
+            },
+            mfem_dependency_digest,
+            "mfem_linearized_cpu_jvp.v1");
+
     ProductionCpuDrivenResponseResult production_result{};
-    const FrequencyDomainStatus solve_status = solve_production_cpu_driven_response(
-        ProductionCpuDrivenResponseProblem{
+    ProductionCpuDrivenResponseProblem production_problem{
             tangent_dof_count,
             request.solve_request.frequencies_hz,
             request.solve_request.frequency_count,
@@ -11106,8 +11208,10 @@ FrequencyDomainStatus solve_mfem_production_cpu_problem(
                 ? "magnetic_only_demag_tangent_provider"
                 : nullptr,
             solver_absolute_tolerance,
-        },
-        &production_result);
+        };
+    production_problem.linearized_dynamic_pencil = &mfem_pencil;
+    const FrequencyDomainStatus solve_status =
+        solve_production_cpu_driven_response(production_problem, &production_result);
     DrivenFrequencyResponseSolveRequest artifact_request = request;
     artifact_request.mfem_validation_problem.drive_real = drive_real;
     artifact_request.mfem_validation_problem.drive_imag = drive_imag;
@@ -11195,6 +11299,7 @@ FrequencyDomainStatus solve_mfem_production_cpu_problem(
             "\"production_solver_available\":true,"
             "\"validation_fallback_used\":false,"
             "\"matrix_free_solver\":true,"
+            "\"linearized_dynamic_pencil_digest\":\"%s\","
             "\"demag_tangent_operator_source\":\"%s\","
             "%s"
             "\"krylov_solver\":\"gmres\","
@@ -11228,6 +11333,7 @@ FrequencyDomainStatus solve_mfem_production_cpu_problem(
             "\"gmres_restart_count\":%llu,"
             "\"progress_callback_count\":%llu,"
             "\"written_frequency_point_artifacts\":%llu}",
+            mfem_pencil.digest().c_str(),
             demag_tangent_operator_source,
             demag_tangent_linearity_json.c_str(),
             production_result.krylov_preconditioner,
@@ -11383,6 +11489,7 @@ FrequencyDomainStatus solve_mfem_production_cpu_problem(
             "\"production_solver_available\":true,"
             "\"validation_fallback_used\":false,"
             "\"matrix_free_solver\":true,"
+            "\"linearized_dynamic_pencil_digest\":\"%s\","
             "\"demag_tangent_operator_source\":\"%s\","
             "%s"
             "\"krylov_solver\":\"gmres\","
@@ -11434,6 +11541,7 @@ FrequencyDomainStatus solve_mfem_production_cpu_problem(
             "\"residual_l2_norm\":%.17g,"
             "\"relative_residual_l2_norm\":%.17g}",
             status_to_string(solve_status),
+            mfem_pencil.digest().c_str(),
             demag_tangent_operator_source,
             demag_tangent_linearity_json.c_str(),
             production_result.krylov_preconditioner,
@@ -11613,6 +11721,7 @@ FrequencyDomainStatus solve_mfem_production_cpu_problem(
         "\"production_solver_available\":true,"
         "\"validation_fallback_used\":false,"
         "\"matrix_free_solver\":true,"
+        "\"linearized_dynamic_pencil_digest\":\"%s\","
         "\"demag_tangent_operator_source\":\"%s\","
         "%s"
         "\"krylov_solver\":\"gmres\","
@@ -11637,6 +11746,7 @@ FrequencyDomainStatus solve_mfem_production_cpu_problem(
         "\"total_iteration_count\":%llu,"
         "\"max_iterations_for_frequency\":%llu,"
         "\"relative_residual_l2_norm\":%.17g}",
+        mfem_pencil.digest().c_str(),
         demag_tangent_operator_source,
         demag_tangent_linearity_json.c_str(),
         production_result.krylov_preconditioner,

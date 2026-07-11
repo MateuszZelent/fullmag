@@ -4,12 +4,15 @@
 from __future__ import annotations
 
 import subprocess
+import hashlib
+import json
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HELPER = REPO_ROOT / "scripts" / "lib" / "runtime_bundle_copy.sh"
 EXPORT_SCRIPT = REPO_ROOT / "scripts" / "export_fem_gpu_runtime.sh"
+VALIDATOR = REPO_ROOT / "scripts" / "validate_managed_fem_runtime_bundle.py"
 
 
 def run_bash(script: str) -> subprocess.CompletedProcess[str]:
@@ -196,17 +199,16 @@ def test_export_script_restores_runtime_bundle_to_host_owner() -> None:
 
     assert 'FULLMAG_HOST_UID="$(id -u)"' in script
     assert 'FULLMAG_HOST_GID="$(id -g)"' in script
-    assert 'chmod -R u+rwX,go+rwX "${RUNTIME_ROOT}"' in script
     assert 'chown "${FULLMAG_HOST_UID}:${FULLMAG_HOST_GID}" .fullmag .fullmag/runtimes' in script
     assert 'chown -R "${FULLMAG_HOST_UID}:${FULLMAG_HOST_GID}"' in script
     assert 'chmod u+rwx,go+rx,go-w .fullmag .fullmag/runtimes' in script
-    assert 'chmod -R u+rwX,go+rX,go-w .fullmag/runtimes/fem-gpu-host' in script
+    assert 'chmod -R u+rwX,go+rX,go-w ${runtime_root}' in script
     assert 'stat -c "%u:%g" .fullmag/runtimes/fem-gpu-host' not in script
 
 
 def test_export_script_serializes_runtime_bundle_mutation_with_flock() -> None:
     script = EXPORT_SCRIPT.read_text(encoding="utf-8")
-    lock_index = script.find('RUNTIME_LOCK="${RUNTIME_ROOT}/.export.lock"')
+    lock_index = script.find('RUNTIME_LOCK="${RUNTIME_PARENT}/.fem-gpu-host.export.lock"')
     flock_index = script.find('flock 9')
     compose_index = script.find("docker compose --profile fem-gpu build fem-gpu")
 
@@ -214,6 +216,70 @@ def test_export_script_serializes_runtime_bundle_mutation_with_flock() -> None:
     assert flock_index != -1
     assert compose_index != -1
     assert lock_index < flock_index < compose_index
+
+
+def test_export_script_publishes_only_a_validated_staging_bundle() -> None:
+    script = EXPORT_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'STAGING_ROOT="${RUNTIME_ROOT}.staging.$$"' in script
+    assert 'FULLMAG_RUNTIME_EXPORT_STAGING=".fullmag/runtimes/$(basename "${STAGING_ROOT}")"' in script
+    assert 'publish_runtime_bundle() {' in script
+    assert 'python3 scripts/validate_managed_fem_runtime_bundle.py --runtime-root "${STAGING_ROOT}"' in script
+    assert 'mv "${RUNTIME_ROOT}" "${backup_root}"' in script
+    assert 'mv "${STAGING_ROOT}" "${RUNTIME_ROOT}"' in script
+    assert 'rm -f "${RUNTIME_ROOT}/manifest.json"' in script
+    assert 'trap cleanup_failed_export EXIT' in script
+
+
+def test_managed_runtime_validator_requires_api_binary_hash() -> None:
+    validator = (REPO_ROOT / "scripts" / "validate_managed_fem_runtime_bundle.py").read_text(
+        encoding="utf-8"
+    )
+    exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'for name in ("launcher", "worker", "api"):' in validator
+    assert '"api_sha256"' in exporter
+
+
+def test_managed_runtime_validator_rejects_missing_or_mismatched_api(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime"
+    bin_dir = runtime / "bin"
+    bin_dir.mkdir(parents=True)
+    files = {
+        "launcher": bin_dir / "fullmag-fem-gpu",
+        "worker": bin_dir / "fullmag-fem-gpu-bin",
+        "api": bin_dir / "fullmag-api",
+    }
+    for path in files.values():
+        path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        path.chmod(0o755)
+    manifest = {
+        "runtime": "fem-gpu-host",
+        "binaries": {name: str(path.relative_to(runtime)) for name, path in files.items()},
+        "integrity": {
+            f"{name}_sha256": hashlib.sha256(path.read_bytes()).hexdigest()
+            for name, path in files.items()
+        },
+    }
+    (runtime / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    valid = subprocess.run(
+        ["python3", str(VALIDATOR), "--runtime-root", str(runtime)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert valid.returncode == 0, valid.stderr
+
+    files["api"].write_text("tampered\n", encoding="utf-8")
+    invalid = subprocess.run(
+        ["python3", str(VALIDATOR), "--runtime-root", str(runtime)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert invalid.returncode != 0
+    assert "api hash mismatch" in invalid.stderr
 
 
 def test_export_script_replaces_existing_runtime_binaries_before_copying() -> None:

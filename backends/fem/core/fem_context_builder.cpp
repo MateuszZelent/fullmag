@@ -70,6 +70,8 @@ bool build_context_from_plan(
         return false;
     }
 
+    initialize_mfem_device_plan_fields(ctx, plan);
+
     if (!validate_material_fields(ctx, error)) {
         return false;
     }
@@ -102,7 +104,9 @@ bool build_context_from_plan(
 
     initialize_magnetoelastic_plan_fields(ctx, plan);
 
-    initialize_mfem_device_plan_fields(ctx, plan);
+    if (!validate_elementwise_ms_runtime_support(ctx, error)) {
+        return false;
+    }
 
     if (!validate_periodic_plan_compatibility(ctx, error)) {
         return false;

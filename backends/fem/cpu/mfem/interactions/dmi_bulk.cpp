@@ -67,7 +67,9 @@ bool compute_bulk_dmi_field(
         exchange_input = &dmi_workspace->projected_m_xyz;
     }
 
-    unpack_aos_to_existing_components(*exchange_input, ctx.mfem_context.m_x, ctx.mfem_context.m_y, ctx.mfem_context.m_z);
+    if (!refresh_dmi_grid_functions_from_magnetization(ctx, *exchange_input, error)) {
+        return false;
+    }
 
     auto *gf_mx = static_cast<mfem::GridFunction *>(ctx.mfem_context.gf_mx);
     auto *gf_my = static_cast<mfem::GridFunction *>(ctx.mfem_context.gf_my);

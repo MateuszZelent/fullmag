@@ -432,6 +432,29 @@ mod tests {
     }
 
     #[test]
+    fn numerical_stagnation_overrides_local_completed_status_with_failed_completion() {
+        let completion = resolve_stage_completion(
+            RunStatus::Completed,
+            Some(&direct_minimizer_control(50_000, 2.0e-6)),
+            RelaxationCompletionMetrics {
+                max_torque_apm: Some(1.0),
+                accepted_energy_plateau_range_j: None,
+                steps: 3,
+                relaxation_time_s: None,
+                numerical_stagnation: true,
+            },
+        );
+
+        assert_eq!(completion.status, "failed");
+        assert!(!completion.converged);
+        assert_eq!(completion.reason, Some(StageStopReason::Gradient));
+        assert_eq!(
+            completion.metric,
+            Some(StageMetricKind::NumericalStagnation)
+        );
+    }
+
+    #[test]
     fn backend_error_is_failed_not_completed() {
         let completion = resolve_stage_completion(
             RunStatus::Failed,

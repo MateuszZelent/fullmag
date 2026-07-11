@@ -9,6 +9,8 @@
 #include "cpu/mfem/interactions/dmi_workspace.hpp"
 
 #include "context.hpp"
+#include "cpu/mfem/runtime/aos_field.hpp"
+#include "cpu/mfem/runtime/mfem_host_access.hpp"
 
 #include <algorithm>
 
@@ -74,6 +76,43 @@ DmiElementWorkspace *dmi_element_workspace(Context &ctx) {
         ctx.dmi.workspace = workspace;
     }
     return workspace;
+}
+
+bool refresh_dmi_grid_functions_from_magnetization(
+    Context &ctx,
+    const std::vector<double> &m_xyz,
+    std::string &error)
+{
+    auto *gf_mx = static_cast<mfem::GridFunction *>(ctx.mfem_context.gf_mx);
+    auto *gf_my = static_cast<mfem::GridFunction *>(ctx.mfem_context.gf_my);
+    auto *gf_mz = static_cast<mfem::GridFunction *>(ctx.mfem_context.gf_mz);
+    if (gf_mx == nullptr || gf_my == nullptr || gf_mz == nullptr) {
+        error = "DMI magnetization refresh requires initialized MFEM grid functions";
+        return false;
+    }
+    const size_t nodes = static_cast<size_t>(ctx.mesh.n_nodes);
+    if (m_xyz.size() != 3u * nodes ||
+        gf_mx->Size() != static_cast<int>(nodes) ||
+        gf_my->Size() != static_cast<int>(nodes) ||
+        gf_mz->Size() != static_cast<int>(nodes)) {
+        error = "DMI magnetization refresh field size does not match MFEM space";
+        return false;
+    }
+
+    unpack_aos_to_existing_components(
+        m_xyz,
+        ctx.mfem_context.m_x,
+        ctx.mfem_context.m_y,
+        ctx.mfem_context.m_z);
+    double *mx = audited_host_write(*gf_mx);
+    double *my = audited_host_write(*gf_my);
+    double *mz = audited_host_write(*gf_mz);
+    for (size_t node = 0; node < nodes; ++node) {
+        mx[node] = ctx.mfem_context.m_x[node];
+        my[node] = ctx.mfem_context.m_y[node];
+        mz[node] = ctx.mfem_context.m_z[node];
+    }
+    return true;
 }
 #endif
 

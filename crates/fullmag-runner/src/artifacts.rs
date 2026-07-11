@@ -332,6 +332,7 @@ fn fem_cpu_relaxation_algorithm_policy_metadata(
     provenance: &crate::types::ExecutionProvenance,
 ) -> Option<FemCpuRelaxationAlgorithmPolicyMetadata> {
     let control = fem.relaxation.as_ref()?;
+    let derivative_contract = fem_energy_weighted_armijo_contract(control, provenance);
     let gpu_status = provenance
         .fem_gpu_qualification_status
         .clone()
@@ -343,7 +344,21 @@ fn fem_cpu_relaxation_algorithm_policy_metadata(
                 time_integrator: None,
                 precession_policy: None,
                 rhs_policy: None,
-                metric: Some("fem_lumped_mass_inner_product".to_string()),
+                metric: derivative_contract.map(|contract| contract.metric.to_string()),
+                gradient_metric: derivative_contract
+                    .map(|contract| contract.gradient_metric.to_string()),
+                gradient_units: derivative_contract
+                    .map(|contract| contract.gradient_units.to_string()),
+                search_direction_units: derivative_contract
+                    .map(|contract| contract.search_direction_units.to_string()),
+                line_search_step_units: derivative_contract
+                    .map(|contract| contract.line_search_step_units.to_string()),
+                armijo_slope_units: derivative_contract
+                    .map(|contract| contract.armijo_slope_units.to_string()),
+                armijo_decrement_units: derivative_contract
+                    .map(|contract| contract.armijo_decrement_units.to_string()),
+                armijo_derivative_units: derivative_contract
+                    .map(|contract| contract.armijo_derivative_units.to_string()),
                 line_search: Some("native_armijo_backtracking_bb1_bb2".to_string()),
                 preconditioner: Some("exchange_plus_mass_tangent_gradient".to_string()),
                 linear_solver_policy: Some(
@@ -362,7 +377,21 @@ fn fem_cpu_relaxation_algorithm_policy_metadata(
                 time_integrator: None,
                 precession_policy: None,
                 rhs_policy: None,
-                metric: Some("fem_lumped_mass_inner_product".to_string()),
+                metric: derivative_contract.map(|contract| contract.metric.to_string()),
+                gradient_metric: derivative_contract
+                    .map(|contract| contract.gradient_metric.to_string()),
+                gradient_units: derivative_contract
+                    .map(|contract| contract.gradient_units.to_string()),
+                search_direction_units: derivative_contract
+                    .map(|contract| contract.search_direction_units.to_string()),
+                line_search_step_units: derivative_contract
+                    .map(|contract| contract.line_search_step_units.to_string()),
+                armijo_slope_units: derivative_contract
+                    .map(|contract| contract.armijo_slope_units.to_string()),
+                armijo_decrement_units: derivative_contract
+                    .map(|contract| contract.armijo_decrement_units.to_string()),
+                armijo_derivative_units: derivative_contract
+                    .map(|contract| contract.armijo_derivative_units.to_string()),
                 line_search: Some("native_armijo_backtracking_pr_plus_restart".to_string()),
                 preconditioner: Some("exchange_plus_mass_tangent_gradient".to_string()),
                 linear_solver_policy: Some(
@@ -381,7 +410,21 @@ fn fem_cpu_relaxation_algorithm_policy_metadata(
                 time_integrator: None,
                 precession_policy: None,
                 rhs_policy: None,
-                metric: Some("fem_lumped_mass_inner_product".to_string()),
+                metric: derivative_contract.map(|contract| contract.metric.to_string()),
+                gradient_metric: derivative_contract
+                    .map(|contract| contract.gradient_metric.to_string()),
+                gradient_units: derivative_contract
+                    .map(|contract| contract.gradient_units.to_string()),
+                search_direction_units: derivative_contract
+                    .map(|contract| contract.search_direction_units.to_string()),
+                line_search_step_units: derivative_contract
+                    .map(|contract| contract.line_search_step_units.to_string()),
+                armijo_slope_units: derivative_contract
+                    .map(|contract| contract.armijo_slope_units.to_string()),
+                armijo_decrement_units: derivative_contract
+                    .map(|contract| contract.armijo_decrement_units.to_string()),
+                armijo_derivative_units: derivative_contract
+                    .map(|contract| contract.armijo_derivative_units.to_string()),
                 line_search: Some("native_armijo_backtracking".to_string()),
                 preconditioner: Some(
                     "native_tangent_plane_linear_solve_preconditioner".to_string(),
@@ -407,6 +450,13 @@ fn fem_cpu_relaxation_algorithm_policy_metadata(
                 precession_policy: Some("disabled_pure_damping".to_string()),
                 rhs_policy: Some("llg_overdamped_rhs".to_string()),
                 metric: None,
+                gradient_metric: None,
+                gradient_units: None,
+                search_direction_units: None,
+                line_search_step_units: None,
+                armijo_slope_units: None,
+                armijo_decrement_units: None,
+                armijo_derivative_units: None,
                 line_search: None,
                 preconditioner: None,
                 linear_solver_policy: None,
@@ -417,6 +467,48 @@ fn fem_cpu_relaxation_algorithm_policy_metadata(
             })
         }
     }
+}
+
+#[derive(Clone, Copy)]
+struct FemEnergyWeightedArmijoContract {
+    metric: &'static str,
+    gradient_metric: &'static str,
+    gradient_units: &'static str,
+    search_direction_units: &'static str,
+    line_search_step_units: &'static str,
+    armijo_slope_units: &'static str,
+    armijo_decrement_units: &'static str,
+    armijo_derivative_units: &'static str,
+}
+
+fn fem_energy_weighted_armijo_contract(
+    control: &fullmag_ir::RelaxationControlIR,
+    provenance: &crate::types::ExecutionProvenance,
+) -> Option<FemEnergyWeightedArmijoContract> {
+    if !matches!(
+        control.algorithm,
+        fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
+            | fullmag_ir::RelaxationAlgorithmIR::NonlinearCg
+            | fullmag_ir::RelaxationAlgorithmIR::TangentPlaneImplicit
+    ) || provenance.resolved_energy_minimizer.as_deref() != Some(control.algorithm.as_str())
+        || provenance.energy_minimizer_realization.as_deref()
+            != crate::relaxation::native_direct_minimizer_realization(
+                control.algorithm,
+                provenance.execution_engine == "fem_native_gpu",
+            )
+    {
+        return None;
+    }
+    Some(FemEnergyWeightedArmijoContract {
+        metric: "mu0_ms_fem_lumped_volume",
+        gradient_metric: "mu0_ms_fem_lumped_volume",
+        gradient_units: "A/m",
+        search_direction_units: "A/m",
+        line_search_step_units: "m/A",
+        armijo_slope_units: "J A/m",
+        armijo_decrement_units: "J",
+        armijo_derivative_units: "J",
+    })
 }
 
 fn default_fem_relaxation_gpu_status(algorithm: fullmag_ir::RelaxationAlgorithmIR) -> &'static str {
@@ -442,6 +534,7 @@ fn fem_gpu_relaxation_qualification_metadata(
     let Some(control) = fem.relaxation.as_ref() else {
         return serde_json::Value::Null;
     };
+    let derivative_contract = fem_energy_weighted_armijo_contract(control, provenance);
     let (
         realization,
         time_integrator,
@@ -471,7 +564,7 @@ fn fem_gpu_relaxation_qualification_metadata(
             None,
             None,
             None,
-            Some("fem_lumped_mass_inner_product".to_string()),
+            derivative_contract.map(|contract| contract.metric.to_string()),
             Some("device_tangent_gradient".to_string()),
             Some("native_armijo_backtracking_bb1_bb2".to_string()),
             None,
@@ -482,7 +575,7 @@ fn fem_gpu_relaxation_qualification_metadata(
             None,
             None,
             None,
-            Some("fem_lumped_mass_inner_product".to_string()),
+            derivative_contract.map(|contract| contract.metric.to_string()),
             Some("device_tangent_gradient".to_string()),
             Some("native_armijo_backtracking_pr_plus_restart".to_string()),
             Some("polak_ribiere_plus_projected_restart".to_string()),
@@ -504,6 +597,19 @@ fn fem_gpu_relaxation_qualification_metadata(
             precession_policy,
             rhs_policy,
             metric,
+            gradient_metric: derivative_contract
+                .map(|contract| contract.gradient_metric.to_string()),
+            gradient_units: derivative_contract.map(|contract| contract.gradient_units.to_string()),
+            search_direction_units: derivative_contract
+                .map(|contract| contract.search_direction_units.to_string()),
+            line_search_step_units: derivative_contract
+                .map(|contract| contract.line_search_step_units.to_string()),
+            armijo_slope_units: derivative_contract
+                .map(|contract| contract.armijo_slope_units.to_string()),
+            armijo_decrement_units: derivative_contract
+                .map(|contract| contract.armijo_decrement_units.to_string()),
+            armijo_derivative_units: derivative_contract
+                .map(|contract| contract.armijo_derivative_units.to_string()),
             gradient_policy,
             line_search,
             direction_update,
@@ -2607,7 +2713,7 @@ mod tests {
                 gyromagnetic_ratio: 2.211e5,
                 precision: ExecutionPrecision::Double,
                 exchange_bc: ExchangeBoundaryCondition::Neumann,
-                integrator: IntegratorChoice::Heun,
+                integrator: Some(IntegratorChoice::Heun),
                 fixed_timestep: Some(1e-13),
                 adaptive_timestep: None,
                 field_refresh: None,
@@ -2704,7 +2810,7 @@ mod tests {
                 precision: ExecutionPrecision::Double,
                 exchange_bc: ExchangeBoundaryCondition::Neumann,
                 periodicity: None,
-                integrator: Some(IntegratorChoice::Heun),
+                integrator: IntegratorChoice::Heun,
                 fixed_timestep: Some(1e-13),
                 field_refresh: None,
                 relaxation: None,
@@ -3383,8 +3489,8 @@ mod tests {
         let provenance = ExecutionProvenance {
             execution_engine: "fem_cpu_native".to_string(),
             precision: "double".to_string(),
-            resolved_energy_minimizer: Some("nonlinear_cg".to_string()),
-            energy_minimizer_realization: Some("native_mfem_nonlinear_cg".to_string()),
+            resolved_energy_minimizer: Some("projected_gradient_bb".to_string()),
+            energy_minimizer_realization: Some("native_mfem_pgbb".to_string()),
             fem_assembly_mode: Some("legacy_sparse".to_string()),
             fem_gpu_qualification_status: None,
             ..ExecutionProvenance::default()
@@ -3472,6 +3578,123 @@ mod tests {
             policy.linear_solver_policy.as_deref(),
             Some("serial MFEM CG production default; HyprePCG/BoomerAMG explicit opt-in")
         );
+
+        let requested_only = ExecutionProvenance {
+            requested_energy_minimizer: Some("projected_gradient_bb".to_string()),
+            resolved_energy_minimizer: None,
+            ..provenance.clone()
+        };
+        let unresolved_metadata = fem_cpu_relaxation_qualification_metadata(
+            &plan,
+            &requested_only,
+            &demag_runtime,
+            &executed,
+        );
+        assert!(unresolved_metadata["algorithm_policy"]["metric"].is_null());
+        assert!(unresolved_metadata["algorithm_policy"]["gradient_metric"].is_null());
+        assert!(unresolved_metadata["algorithm_policy"]["armijo_derivative_units"].is_null());
+        assert!(unresolved_metadata["algorithm_policy"]["gradient_units"].is_null());
+        assert!(unresolved_metadata["algorithm_policy"]["armijo_slope_units"].is_null());
+
+        let bogus_realization = ExecutionProvenance {
+            energy_minimizer_realization: Some("bogus_native_realization".to_string()),
+            ..provenance.clone()
+        };
+        let bogus_metadata = fem_cpu_relaxation_qualification_metadata(
+            &plan,
+            &bogus_realization,
+            &demag_runtime,
+            &executed,
+        );
+        assert!(bogus_metadata["algorithm_policy"]["metric"].is_null());
+        assert!(bogus_metadata["algorithm_policy"]["gradient_metric"].is_null());
+        assert!(bogus_metadata["algorithm_policy"]["armijo_derivative_units"].is_null());
+    }
+
+    #[test]
+    fn fem_cpu_relaxation_qualification_metadata_reports_tpi_energy_weighted_armijo_contract() {
+        let mut plan = test_fem_execution_plan();
+        if let BackendPlanIR::Fem(fem) = &mut plan.backend_plan {
+            fem.relaxation = Some(fullmag_ir::RelaxationControlIR {
+                algorithm: fullmag_ir::RelaxationAlgorithmIR::TangentPlaneImplicit,
+                stop: fullmag_ir::RelaxStopIR {
+                    torque_tolerance_apm: Some(1.0e-3),
+                    energy_tolerance_j: None,
+                    max_steps: Some(4),
+                    max_relaxation_time_s: None,
+                },
+            });
+        }
+        let provenance = ExecutionProvenance {
+            execution_engine: "fem_cpu_native".to_string(),
+            precision: "double".to_string(),
+            requested_energy_minimizer: Some("tangent_plane_implicit".to_string()),
+            resolved_energy_minimizer: Some("tangent_plane_implicit".to_string()),
+            energy_minimizer_realization: Some("native_mfem_tpi".to_string()),
+            fem_assembly_mode: Some("legacy_sparse".to_string()),
+            ..ExecutionProvenance::default()
+        };
+        let executed = ExecutedRun {
+            result: RunResult {
+                status: RunStatus::Completed,
+                steps: vec![StepStats {
+                    step: 4,
+                    e_total: 1.0,
+                    max_torque_Apm: 2.0e-4,
+                    ..StepStats::default()
+                }],
+                final_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+                completion: None,
+            },
+            initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+            field_snapshots: Vec::new(),
+            field_snapshot_count: 0,
+            auxiliary_artifacts: Vec::new(),
+            provenance: provenance.clone(),
+        };
+        let demag_runtime = demag_runtime_metadata(&plan, &provenance, &executed.result.steps);
+        let metadata = fem_cpu_relaxation_qualification_metadata(
+            &plan,
+            &provenance,
+            &demag_runtime,
+            &executed,
+        );
+        let policy = &metadata["algorithm_policy"];
+        assert_eq!(policy["metric"], "mu0_ms_fem_lumped_volume");
+        assert_eq!(policy["gradient_metric"], "mu0_ms_fem_lumped_volume");
+        assert_eq!(policy["gradient_units"], "A/m");
+        assert_eq!(policy["search_direction_units"], "A/m");
+        assert_eq!(policy["line_search_step_units"], "m/A");
+        assert_eq!(policy["armijo_slope_units"], "J A/m");
+        assert_eq!(policy["armijo_decrement_units"], "J");
+        assert_eq!(policy["armijo_derivative_units"], "J");
+
+        let requested_only = ExecutionProvenance {
+            resolved_energy_minimizer: None,
+            ..provenance.clone()
+        };
+        let unresolved = fem_cpu_relaxation_qualification_metadata(
+            &plan,
+            &requested_only,
+            &demag_runtime,
+            &executed,
+        );
+        assert!(unresolved["algorithm_policy"]["metric"].is_null());
+        assert!(unresolved["algorithm_policy"]["armijo_derivative_units"].is_null());
+
+        let bogus_realization = ExecutionProvenance {
+            energy_minimizer_realization: Some("bogus_native_realization".to_string()),
+            ..provenance
+        };
+        let bogus = fem_cpu_relaxation_qualification_metadata(
+            &plan,
+            &bogus_realization,
+            &demag_runtime,
+            &executed,
+        );
+        assert!(bogus["algorithm_policy"]["metric"].is_null());
+        assert!(bogus["algorithm_policy"]["gradient_metric"].is_null());
+        assert!(bogus["algorithm_policy"]["armijo_derivative_units"].is_null());
     }
 
     #[test]
@@ -3491,8 +3714,8 @@ mod tests {
         let provenance = ExecutionProvenance {
             execution_engine: "fem_cpu_native".to_string(),
             precision: "double".to_string(),
-            resolved_energy_minimizer: Some("projected_gradient_bb".to_string()),
-            energy_minimizer_realization: Some("native_mfem_pgbb".to_string()),
+            resolved_energy_minimizer: Some("nonlinear_cg".to_string()),
+            energy_minimizer_realization: Some("native_mfem_nonlinear_cg".to_string()),
             fem_assembly_mode: Some("legacy_sparse".to_string()),
             fem_gpu_qualification_status: None,
             ..ExecutionProvenance::default()
@@ -3705,7 +3928,7 @@ mod tests {
             field_snapshots: Vec::new(),
             field_snapshot_count: 0,
             auxiliary_artifacts: Vec::new(),
-            provenance,
+            provenance: provenance.clone(),
         };
         let unique_suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -3735,7 +3958,24 @@ mod tests {
         );
         assert_eq!(
             qualification["algorithm_policy"]["metric"],
-            "fem_lumped_mass_inner_product"
+            "mu0_ms_fem_lumped_volume"
+        );
+        assert_eq!(qualification["algorithm_policy"]["gradient_units"], "A/m");
+        assert_eq!(
+            qualification["algorithm_policy"]["search_direction_units"],
+            "A/m"
+        );
+        assert_eq!(
+            qualification["algorithm_policy"]["line_search_step_units"],
+            "m/A"
+        );
+        assert_eq!(
+            qualification["algorithm_policy"]["armijo_slope_units"],
+            "J A/m"
+        );
+        assert_eq!(
+            qualification["algorithm_policy"]["armijo_decrement_units"],
+            "J"
         );
         assert_eq!(
             qualification["algorithm_policy"]["gradient_policy"],
@@ -3757,6 +3997,14 @@ mod tests {
         assert_eq!(qualification["final_energy_terms_j"]["E_demag"], 2.0);
         assert_eq!(qualification["final_energy_terms_j"]["E_total"], 3.0);
         assert_eq!(qualification["final_torque_apm"], 2.0e-4);
+        let bogus_realization = ExecutionProvenance {
+            energy_minimizer_realization: Some("bogus_native_realization".to_string()),
+            ..provenance
+        };
+        let bogus = fem_gpu_relaxation_qualification_metadata(&plan, &bogus_realization, &executed);
+        assert!(bogus["algorithm_policy"]["metric"].is_null());
+        assert!(bogus["algorithm_policy"]["gradient_metric"].is_null());
+        assert!(bogus["algorithm_policy"]["armijo_derivative_units"].is_null());
         assert_eq!(qualification["norm_defect"], 0.0);
 
         fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");

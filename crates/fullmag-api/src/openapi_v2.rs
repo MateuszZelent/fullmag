@@ -661,3 +661,63 @@ fn sanitize_operation_token(value: &str) -> String {
     }
     out.trim_matches('_').to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::openapi_json;
+
+    #[test]
+    fn openapi_topological_charge_v2_is_closed_and_versioned() {
+        let document = openapi_json();
+        let operation = &document["paths"]
+            ["/v2/sessions/current/analysis/extensions/objects/{object_id}/topological-charge"]
+            ["get"];
+        let parameters = operation["parameters"]
+            .as_array()
+            .expect("topological-charge parameters array");
+        let plane = parameters
+            .iter()
+            .find(|parameter| parameter["name"] == "plane")
+            .expect("topological-charge plane parameter");
+
+        assert_eq!(
+            plane["schema"]["enum"],
+            serde_json::json!(["auto", "xy", "xz", "yz"])
+        );
+        assert!(
+            !parameters
+                .iter()
+                .any(|parameter| parameter["name"] == "quantity_id"),
+            "the production resource is fixed to canonical magnetization m"
+        );
+
+        let status_schema = &document["components"]["schemas"]["TopologicalChargeStatus"];
+        assert_eq!(
+            status_schema["enum"],
+            serde_json::json!([
+                "ready",
+                "no_current_magnetization",
+                "empty_support",
+                "invalid_magnetization",
+                "degenerate_support",
+                "under_resolved",
+                "unsupported_geometry",
+                "unsupported_discretization"
+            ])
+        );
+        assert!(
+            !status_schema.to_string().contains("\"stale\""),
+            "stale is a frontend resource lifecycle state, not scientific status"
+        );
+
+        let resource = &document["components"]["schemas"]["TopologicalChargeResourceV2"];
+        assert!(
+            resource["properties"].get("polarity").is_none(),
+            "charge sign is not core polarity"
+        );
+        assert_eq!(
+            resource["properties"]["schema_version"]["example"],
+            serde_json::json!("topological_charge.v2")
+        );
+    }
+}

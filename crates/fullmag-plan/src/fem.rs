@@ -35,6 +35,130 @@ const CUBIC_AXIS_ORTHOGONALITY_DOT_TOL: f64 = 1e-3;
 const CUBIC_AXIS_ORTHOGONALITY_CROSS_MIN_NORM: f64 = 1e-6;
 const CUBIC_AXIS_VALIDATION_ERROR: &str =
     "cubic anisotropy axes must be finite, normalized and mutually orthogonal";
+const FEM_DIRECT_MINIMIZER_DEMAG_RTOL_MAX: f64 = 1.0e-12;
+
+fn is_direct_relaxation_minimizer(algorithm: fullmag_ir::RelaxationAlgorithmIR) -> bool {
+    matches!(
+        algorithm,
+        fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
+            | fullmag_ir::RelaxationAlgorithmIR::NonlinearCg
+            | fullmag_ir::RelaxationAlgorithmIR::TangentPlaneImplicit
+    )
+}
+
+fn fem_plan_has_uniaxial_anisotropy(plan: &FemPlanIR) -> bool {
+    plan.material.uniaxial_anisotropy.is_some()
+        || plan.material.uniaxial_anisotropy_k2.is_some()
+        || plan.material.ku_field.is_some()
+        || plan.material.ku2_field.is_some()
+}
+
+fn fem_plan_has_cubic_anisotropy(plan: &FemPlanIR) -> bool {
+    plan.material.cubic_anisotropy_kc1.is_some()
+        || plan.material.cubic_anisotropy_kc2.is_some()
+        || plan.material.cubic_anisotropy_kc3.is_some()
+        || plan.material.kc1_field.is_some()
+        || plan.material.kc2_field.is_some()
+        || plan.material.kc3_field.is_some()
+}
+
+fn fem_plan_has_slonczewski_stt(plan: &FemPlanIR) -> bool {
+    plan.current_density.is_some()
+        && plan.stt_degree.is_some()
+        && plan.stt_spin_polarization.is_some()
+        && plan.stt_lambda.is_some()
+}
+
+fn fem_plan_has_zhang_li_stt(plan: &FemPlanIR) -> bool {
+    plan.current_density.is_some()
+        && plan.stt_degree.is_some()
+        && !fem_plan_has_slonczewski_stt(plan)
+}
+
+fn first_elementwise_ms_cpu_owner(plan: &FemPlanIR) -> &'static str {
+    // This is intentionally the same precedence as the native Context
+    // diagnostic. It follows the ABI enable predicates, not merely authored
+    // energy terms, so planner rejection names the runtime owner that would
+    // first require the unavailable element/quadrature material accessor.
+    if plan.external_field.is_some() {
+        return "Zeeman interaction";
+    }
+    if plan.enable_demag {
+        return "demag interaction";
+    }
+    if fem_plan_has_uniaxial_anisotropy(plan) {
+        return "uniaxial anisotropy";
+    }
+    if fem_plan_has_cubic_anisotropy(plan) {
+        return "cubic anisotropy";
+    }
+    if plan.interfacial_dmi.is_some() || plan.dind_field.is_some() {
+        return "interfacial DMI";
+    }
+    if plan.bulk_dmi.is_some() || plan.dbulk_field.is_some() {
+        return "bulk DMI";
+    }
+    if plan
+        .temperature
+        .is_some_and(|temperature| temperature > 0.0)
+    {
+        return "thermal Brown interaction";
+    }
+    if fem_plan_has_zhang_li_stt(plan) {
+        return "Zhang-Li STT";
+    }
+    if fem_plan_has_slonczewski_stt(plan) {
+        return "Slonczewski STT";
+    }
+    if plan.has_oersted_cylinder
+        || plan
+            .oersted_field_xyz
+            .as_ref()
+            .is_some_and(|field| !field.is_empty())
+    {
+        return "Oersted interaction";
+    }
+    if plan.magnetoelastic.is_some() {
+        return "magnetoelastic interaction";
+    }
+    "native FEM handle lifecycle fallback"
+}
+
+pub(crate) fn elementwise_material_legality_error(
+    fem_plan: &FemPlanIR,
+    gpu: bool,
+) -> Option<String> {
+    let device = if gpu { "gpu" } else { "cpu" };
+
+    if fem_plan.ms_element_field.is_some() {
+        let owner = if gpu {
+            "GPU material-state upload"
+        } else {
+            first_elementwise_ms_cpu_owner(fem_plan)
+        };
+        return Some(format!(
+            "Ms_element_field is unsupported for {owner} on resolved device '{device}': this runtime has no common element/quadrature material accessor"
+        ));
+    }
+
+    if gpu {
+        let field = if fem_plan.a_element_field.is_some() {
+            Some("A_element_field")
+        } else {
+            None
+        }?;
+        return Some(format!(
+            "{field} is unsupported for GPU material-state upload on resolved device '{device}': this runtime has no common element/quadrature material accessor"
+        ));
+    }
+
+    if fem_plan.a_element_field.is_some() && !fem_plan.enable_exchange {
+        return Some(format!(
+            "A_element_field is unsupported for exchange-disabled plan on resolved device '{device}': this runtime has no exchange weak form to consume the sharp coefficient"
+        ));
+    }
+    None
+}
 
 fn domain_mesh_workflow_mode(problem: &ProblemIR) -> Option<String> {
     mesh_workflow_metadata(problem)
@@ -1878,6 +2002,62 @@ pub(crate) fn plan_fem(
         return Err(PlanError { reasons: errors });
     }
 
+    if enable_demag
+        && relaxation.as_ref().is_some_and(|control| {
+            control.algorithm == fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
+        })
+    {
+        return Err(PlanError {
+            reasons: vec![
+                "FEM projected_gradient_bb with demag is unavailable: repeated CPU/GPU production qualification could not certify strict Armijo descent even with deterministic fresh demag solves, rtol=1e-12, and raw-gradient recovery; use nonlinear_cg for FEM demag relaxation. This capability is rejected with no hidden fallback."
+                    .to_string(),
+            ],
+        });
+    }
+
+    let requested_demag_solver_policy = fem_hints.demag_solver_policy.clone();
+    let mut demag_solver_policy = requested_demag_solver_policy.clone();
+    let mut direct_minimizer_demag_policy_note = None;
+    if enable_demag
+        && relaxation
+            .as_ref()
+            .is_some_and(|control| is_direct_relaxation_minimizer(control.algorithm))
+    {
+        let algorithm = relaxation
+            .as_ref()
+            .expect("checked direct-minimizer relaxation")
+            .algorithm;
+        match demag_solver_policy.as_mut() {
+            Some(policy) if policy.rtol > FEM_DIRECT_MINIMIZER_DEMAG_RTOL_MAX => {
+                return Err(PlanError {
+                    reasons: vec![format!(
+                        "FEM {} with demag requires demag_solver_policy.rtol <= 1e-12 for strict Armijo energy resolution; requested rtol={:.6e}",
+                        algorithm.as_str(),
+                        policy.rtol,
+                    )],
+                });
+            }
+            Some(policy) => {
+                direct_minimizer_demag_policy_note = Some(format!(
+                    "FEM direct-minimizer demag solver policy: algorithm={} requested_rtol={:.6e} resolved_rtol={:.6e}",
+                    algorithm.as_str(),
+                    policy.rtol,
+                    policy.rtol,
+                ));
+            }
+            None => {
+                let mut policy = fullmag_ir::FemLinearSolverPolicy::default();
+                policy.rtol = FEM_DIRECT_MINIMIZER_DEMAG_RTOL_MAX;
+                direct_minimizer_demag_policy_note = Some(format!(
+                    "FEM direct-minimizer demag solver policy: algorithm={} requested=default resolved_rtol={:.6e}",
+                    algorithm.as_str(),
+                    policy.rtol,
+                ));
+                demag_solver_policy = Some(policy);
+            }
+        }
+    }
+
     let (magnetoelastic, mechanics) = resolve_fem_magnetoelastic_plan(problem)?
         .map(|(magnetoelastic, mechanics)| (Some(magnetoelastic), Some(mechanics)))
         .unwrap_or((None, None));
@@ -1885,14 +2065,6 @@ pub(crate) fn plan_fem(
         resolve_current_transports(problem, CurrentTransportExecutableLane::Fem)?;
     let spin_torque =
         resolve_legacy_spin_torque(problem, SpinTorqueExecutableLane::Fem, &current_transports)?;
-
-    if has_heterogeneous_materials && !runtime_requests_cuda(problem) {
-        return Err(PlanError {
-            reasons: vec![
-                "heterogeneous multi-body FEM materials currently require the native GPU FEM path; request a CUDA runtime or keep identical material coefficients on CPU".to_string(),
-            ],
-        });
-    }
 
     let base_material =
         selected_material.expect("validation should have caught missing FEM material");
@@ -2256,12 +2428,7 @@ pub(crate) fn plan_fem(
         oersted_time_dep_t_off: 0.0,
         magnetoelastic,
         mechanics,
-        demag_solver_policy: problem
-            .backend_policy
-            .discretization_hints
-            .as_ref()
-            .and_then(|hints| hints.fem.as_ref())
-            .and_then(|fem| fem.demag_solver_policy.clone()),
+        demag_solver_policy,
         thermal_seed_config: None,
         oersted_realization: None,
         gpu_device_index: None,
@@ -2335,6 +2502,14 @@ pub(crate) fn plan_fem(
         }
     }
 
+    if let Some(reason) =
+        elementwise_material_legality_error(&fem_plan, runtime_requests_cuda(problem))
+    {
+        return Err(PlanError {
+            reasons: vec![reason],
+        });
+    }
+
     let study_note = if let Some(control) = fem_plan.relaxation.as_ref() {
         format!(
             "study: relaxation algorithm={} torque_tolerance={} energy_tolerance={} max_steps={}",
@@ -2387,6 +2562,9 @@ pub(crate) fn plan_fem(
             "tangent_plane_implicit resolved to the CPU/MFEM development lane; this fallback is not production-qualified"
                 .to_string(),
         );
+    }
+    if let Some(note) = direct_minimizer_demag_policy_note {
+        provenance_notes.push(note);
     }
     if let Some(note) = universe_note {
         provenance_notes.push(note);

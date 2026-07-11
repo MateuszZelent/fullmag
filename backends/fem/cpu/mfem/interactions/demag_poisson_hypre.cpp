@@ -130,6 +130,30 @@ bool demag_poisson_hypre_has_warm_start(const Context &ctx)
 #endif
 }
 
+void reset_demag_poisson_hypre_initial_guess(Context &ctx)
+{
+#ifdef MFEM_USE_MPI
+    auto *workspace =
+        static_cast<PoissonHypreWorkspace *>(ctx.poisson_demag.hypre_workspace);
+    if (workspace != nullptr) {
+        workspace->x_par = 0.0;
+        workspace->x_par_contains_solution = true;
+    }
+    auto *potential =
+        static_cast<mfem::GridFunction *>(ctx.poisson_demag.gf_potential);
+    if (potential != nullptr) {
+        *potential = 0.0;
+    }
+    auto *solution =
+        static_cast<mfem::Vector *>(ctx.poisson_demag.solution_vec);
+    if (solution != nullptr) {
+        *solution = 0.0;
+    }
+#else
+    (void)ctx;
+#endif
+}
+
 void destroy_demag_poisson_hypre_workspace(Context &ctx)
 {
 #ifdef MFEM_USE_MPI

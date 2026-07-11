@@ -811,6 +811,8 @@ pub struct FullmagFemModalEigenRequest {
     pub mfem_stiffness_matrix_row_major: *const f64,
     pub mfem_gyrotropic_matrix_row_major: *const f64,
     pub mfem_mass_matrix_row_major: *const f64,
+    pub mfem_linearized_pencil_dependency_digest: *const c_char,
+    pub mfem_linearized_pencil_gamma0_m_per_a_s: f64,
     pub mfem_sparse_operator_enabled: i32,
     pub mfem_sparse_stiffness_csr: FullmagFemCsrMatrixView,
     pub mfem_sparse_gyrotropic_csr: FullmagFemCsrMatrixView,
@@ -847,6 +849,8 @@ pub struct FullmagFemModalEigenRequest {
     pub poisson_airbox_gauge_policy: *const c_char,
     pub poisson_airbox_gauge_reason: *const c_char,
     pub poisson_airbox_assembly_kind: *const c_char,
+    pub dynamic_demag_k_tangent_matrix_row_major: *const f64,
+    pub dynamic_demag_k_tangent_matrix_value_count: u64,
 }
 
 #[repr(C)]
@@ -1853,8 +1857,16 @@ mod tests {
         assert!(request.poisson_airbox_gauge_policy.is_null());
         assert!(request.poisson_airbox_gauge_reason.is_null());
         assert!(request.poisson_airbox_assembly_kind.is_null());
+        assert!(request.mfem_linearized_pencil_dependency_digest.is_null());
+        assert_eq!(request.mfem_linearized_pencil_gamma0_m_per_a_s, 0.0);
+        assert!(request.dynamic_demag_k_tangent_matrix_row_major.is_null());
+        assert_eq!(request.dynamic_demag_k_tangent_matrix_value_count, 0);
 
         let floquet_pair_count = std::mem::offset_of!(Request, mfem_floquet_periodic_pair_count);
+        let magnetic_pencil_dependency =
+            std::mem::offset_of!(Request, mfem_linearized_pencil_dependency_digest);
+        let magnetic_pencil_gamma0 =
+            std::mem::offset_of!(Request, mfem_linearized_pencil_gamma0_m_per_a_s);
         let poisson_enabled = std::mem::offset_of!(Request, poisson_airbox_block_enabled);
         let poisson_a_qq = std::mem::offset_of!(Request, poisson_airbox_a_qq_csr);
         let poisson_reference =
@@ -1874,8 +1886,14 @@ mod tests {
         let poisson_gauge_policy = std::mem::offset_of!(Request, poisson_airbox_gauge_policy);
         let poisson_gauge_reason = std::mem::offset_of!(Request, poisson_airbox_gauge_reason);
         let poisson_assembly_kind = std::mem::offset_of!(Request, poisson_airbox_assembly_kind);
+        let dynamic_demag_k_matrix =
+            std::mem::offset_of!(Request, dynamic_demag_k_tangent_matrix_row_major);
+        let dynamic_demag_k_count =
+            std::mem::offset_of!(Request, dynamic_demag_k_tangent_matrix_value_count);
 
         assert!(floquet_pair_count < poisson_enabled);
+        assert!(magnetic_pencil_dependency < magnetic_pencil_gamma0);
+        assert!(magnetic_pencil_gamma0 < floquet_pair_count);
         assert!(poisson_enabled < poisson_a_qq);
         assert!(poisson_a_qq < poisson_reference);
         assert!(poisson_reference < poisson_certificate);
@@ -1888,6 +1906,8 @@ mod tests {
         assert!(poisson_robin_beta < poisson_gauge_policy);
         assert!(poisson_gauge_policy < poisson_gauge_reason);
         assert!(poisson_gauge_reason < poisson_assembly_kind);
+        assert!(poisson_assembly_kind < dynamic_demag_k_matrix);
+        assert!(dynamic_demag_k_matrix < dynamic_demag_k_count);
     }
 
     #[test]

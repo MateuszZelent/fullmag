@@ -145,11 +145,7 @@ fn resolve_native_fem_plan_dt_seconds(plan: &fullmag_ir::FemPlanIR) -> Result<f6
     {
         return Ok(dt);
     }
-    if plan
-        .relaxation
-        .as_ref()
-        .is_some_and(|control| crate::fem::relax::algorithm::is_direct_minimizer(control.algorithm))
-    {
+    if crate::fem::relax::algorithm::native_step_control(plan.relaxation.as_ref()).is_some() {
         return Ok(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
     }
     Err(RunError {
@@ -2967,6 +2963,29 @@ mod tests {
             resolve_native_fem_plan_dt_seconds(&plan).expect("direct minimizer seed dt"),
             crate::DEFAULT_ADAPTIVE_DT_INITIAL
         );
+    }
+
+    #[test]
+    fn native_fem_tangent_plane_without_solver_timestep_uses_internal_abi_seed() {
+        let mut plan = make_test_plan();
+        plan.fixed_timestep = None;
+        plan.adaptive_timestep = None;
+        plan.relaxation = Some(RelaxationControlIR {
+            algorithm: RelaxationAlgorithmIR::TangentPlaneImplicit,
+            stop: RelaxStopIR {
+                torque_tolerance_apm: Some(1e-6),
+                energy_tolerance_j: None,
+                max_steps: Some(10),
+                max_relaxation_time_s: None,
+            },
+        });
+
+        assert_eq!(
+            resolve_native_fem_plan_dt_seconds(&plan).expect("TPI internal ABI seed"),
+            crate::DEFAULT_ADAPTIVE_DT_INITIAL
+        );
+        assert_eq!(plan.fixed_timestep, None);
+        assert_eq!(plan.adaptive_timestep, None);
     }
 
     #[test]

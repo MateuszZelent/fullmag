@@ -1,7 +1,10 @@
 #include "cpu/frequency_domain/mfem_modal_operator_payload.hpp"
+#include "frequency_domain/canonical_digest.hpp"
+#include "frequency_domain/linearized_dynamic_pencil.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <complex>
 #include <cstring>
 #include <limits>
 #include <vector>
@@ -150,6 +153,16 @@ FrequencyDomainStatus assemble_mfem_modal_dense_operator_payload(
             "MFEM modal dense payload requires tangent frame, lumped mass, and output matrices");
         return FrequencyDomainStatus::validation_error;
     }
+    if (problem.descriptor.demag_enabled &&
+        problem.descriptor.demag_kind != FrequencyDomainDemagKind::none &&
+        (problem.demag_tangent_matrix_row_major == nullptr ||
+            problem.demag_tangent_matrix_value_count != matrix_entry_count)) {
+        copy_text(
+            out_result->error_message,
+            sizeof(out_result->error_message),
+            "MFEM modal dense payload requires a square dynamic-demag tangent matrix");
+        return FrequencyDomainStatus::validation_error;
+    }
 
     std::fill(
         problem.out_dynamic_matrix_row_major,
@@ -175,6 +188,7 @@ FrequencyDomainStatus assemble_mfem_modal_dense_operator_payload(
     std::vector<double> zeeman_workspace(static_cast<std::size_t>(tangent_dof_count), 0.0);
     std::vector<double> anisotropy_workspace(static_cast<std::size_t>(tangent_dof_count), 0.0);
     std::vector<double> effective_field_workspace(static_cast<std::size_t>(tangent_dof_count), 0.0);
+    std::vector<double> demag_workspace(static_cast<std::size_t>(tangent_dof_count), 0.0);
     std::vector<double> dmi_workspace(static_cast<std::size_t>(tangent_dof_count), 0.0);
     std::vector<double> dmi_delta_xyz(static_cast<std::size_t>(problem.descriptor.node_count * 3), 0.0);
     std::vector<double> dmi_residual_xyz(static_cast<std::size_t>(problem.descriptor.node_count * 3), 0.0);
@@ -185,9 +199,20 @@ FrequencyDomainStatus assemble_mfem_modal_dense_operator_payload(
         std::fill(dynamic_column.begin(), dynamic_column.end(), 0.0);
         std::fill(dynamic_mass_column.begin(), dynamic_mass_column.end(), 0.0);
         basis[static_cast<std::size_t>(column)] = 1.0;
+        if (problem.descriptor.demag_enabled &&
+            problem.descriptor.demag_kind != FrequencyDomainDemagKind::none) {
+            for (std::uint64_t row = 0; row < tangent_dof_count; ++row) {
+                double value = 0.0;
+                for (std::uint64_t input = 0; input < tangent_dof_count; ++input) {
+                    value += problem.demag_tangent_matrix_row_major[
+                        row * tangent_dof_count + input] * basis[static_cast<std::size_t>(input)];
+                }
+                demag_workspace[static_cast<std::size_t>(row)] = value;
+            }
+        }
 
         MfemLinearizedOperatorDiagnostics operator_diagnostics{};
-        const FrequencyDomainStatus operator_status = apply_mfem_linearized_cpu_operator(
+        const FrequencyDomainStatus operator_status = apply_mfem_linearized_cpu_pencil(
             problem.descriptor,
             problem.layout,
             problem.nodes,
@@ -216,6 +241,10 @@ FrequencyDomainStatus assemble_mfem_modal_dense_operator_payload(
                 dmi_delta_xyz.data(),
                 dmi_residual_xyz.data(),
                 dmi_field_xyz.data(),
+                problem.descriptor.demag_enabled &&
+                    problem.descriptor.demag_kind != FrequencyDomainDemagKind::none ?
+                    demag_workspace.data() :
+                    nullptr,
             },
             basis.data(),
             dynamic_column.data(),
@@ -230,8 +259,10 @@ FrequencyDomainStatus assemble_mfem_modal_dense_operator_payload(
         }
 
         for (std::uint64_t row = 0; row < tangent_dof_count; ++row) {
-            const double dynamic_value = dynamic_column[static_cast<std::size_t>(row)];
-            const double mass_value = dynamic_mass_column[static_cast<std::size_t>(row)];
+            // Preserve the public legacy S/M payload while materializing it
+            // from the canonical L/B_alpha JVP action.
+            const double dynamic_value = -dynamic_column[static_cast<std::size_t>(row)];
+            const double mass_value = -dynamic_mass_column[static_cast<std::size_t>(row)];
             const double tangent_mass_value = row == column ?
                 problem.tangent_lumped_mass[static_cast<std::size_t>(
                     column / problem.layout.tangent_stride)] :
@@ -254,6 +285,60 @@ FrequencyDomainStatus assemble_mfem_modal_dense_operator_payload(
         }
         out_result->assembled_column_count = column + 1;
     }
+
+    // The dense modal payload is a materialization of the same canonical
+    // pencil used by the matrix-free driven JVP: legacy RHS S,M map to
+    // L=-S and B_alpha=-M, preserving S q=lambda M q.
+    std::vector<std::complex<double>> l(matrix_entry_count);
+    std::vector<std::complex<double>> b_alpha(matrix_entry_count);
+    for (std::uint64_t index = 0; index < matrix_entry_count; ++index) {
+        l[index] = {-problem.out_dynamic_matrix_row_major[index], 0.0};
+        b_alpha[index] = {-problem.out_dynamic_mass_matrix_row_major[index], 0.0};
+    }
+    const std::string dependency_digest = mfem_linearized_pencil_dependency_digest(
+        MfemLinearizedPencilDependency{
+            problem.descriptor, problem.layout, problem.nodes,
+            problem.exchange_edges, problem.exchange_edge_count,
+            problem.h_ext_a_per_m, problem.h_ext_a_per_m == nullptr ? 0u : UINT64_C(3),
+            problem.uniaxial_anisotropy_axis,
+            problem.uniaxial_anisotropy_axis == nullptr ? 0u : UINT64_C(3),
+            problem.uniaxial_anisotropy_field_a_per_m,
+            problem.alpha_per_node,
+            problem.alpha_per_node == nullptr ? 0 : problem.descriptor.node_count,
+            problem.gamma0, problem.alpha,
+            problem.dmi_elements, problem.dmi_element_count,
+            problem.dmi_lumped_mass,
+            problem.dmi_lumped_mass == nullptr ? 0 : problem.descriptor.node_count,
+            problem.dmi_ms_field,
+            problem.dmi_ms_field == nullptr ? 0 : problem.descriptor.node_count,
+            problem.dmi_uniform_ms,
+            problem.demag_tangent_matrix_row_major,
+            problem.demag_tangent_matrix_value_count,
+            problem.demag_provider_signature,
+            problem.static_periodic_node_pairs,
+            problem.static_periodic_node_pair_count,
+            problem.periodic_airbox,
+        });
+    DynamicPencilMetadata canonical_metadata{};
+    char metadata_error[128]{};
+    if (canonicalize_dynamic_pencil_metadata(
+            dynamic_pencil_metadata_from_legacy_gamma0(
+                problem.gamma0, FrequencyDomainPhaseConvention::exp_i_omega_t),
+            &canonical_metadata,
+            metadata_error,
+            sizeof(metadata_error)) != FrequencyDomainStatus::ok) {
+        copy_text(out_result->error_message, sizeof(out_result->error_message), metadata_error);
+        return FrequencyDomainStatus::validation_error;
+    }
+    const LinearizedDynamicPencil pencil = LinearizedDynamicPencil::from_dense_row_major(
+        canonical_metadata,
+        tangent_dof_count,
+        std::move(l),
+        std::move(b_alpha),
+        dependency_digest);
+    copy_text(out_result->operator_digest, sizeof(out_result->operator_digest), pencil.digest().c_str());
+    copy_text(out_result->dependency_digest, sizeof(out_result->dependency_digest), dependency_digest.c_str());
+    out_result->linearized_pencil_gamma0_m_per_a_s = canonical_metadata.gamma0_m_per_a_s;
 
     return FrequencyDomainStatus::ok;
 }
@@ -314,6 +399,10 @@ FrequencyDomainStatus assemble_mfem_modal_sparse_operator_payload(
     out_result->max_abs_dynamic_matrix = dense_result.max_abs_dynamic_matrix;
     out_result->max_abs_dynamic_mass_matrix = dense_result.max_abs_dynamic_mass_matrix;
     out_result->max_abs_tangent_mass_matrix = dense_result.max_abs_tangent_mass_matrix;
+    out_result->linearized_pencil_gamma0_m_per_a_s =
+        dense_result.linearized_pencil_gamma0_m_per_a_s;
+    copy_text(out_result->operator_digest, sizeof(out_result->operator_digest), dense_result.operator_digest);
+    copy_text(out_result->dependency_digest, sizeof(out_result->dependency_digest), dense_result.dependency_digest);
     out_result->dynamic_matrix_nnz = count_dense_csr_entries(
         dynamic_matrix.data(),
         tangent_dof_count,

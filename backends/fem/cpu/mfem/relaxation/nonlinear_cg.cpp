@@ -14,6 +14,7 @@
 #include "cpu/mfem/runtime/stage_completion.hpp"
 #include "cpu/mfem/runtime/state_io.hpp"
 #include "fem_common.hpp"
+#include "src/relaxation_numerics.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -25,42 +26,25 @@ namespace fullmag::fem {
 namespace {
 
 constexpr uint32_t kNonlinearCgArmijoRecoveryCycles = 1;
-constexpr double kLineSearchEnergyNoiseFloorJ = 1.0e-23;
-constexpr double kLineSearchEnergyNoiseRelative = 1.0e-12;
-
-double line_search_energy_tolerance(
-    const fullmag_fem_step_stats &current,
-    const fullmag_fem_step_stats &trial)
-{
-    return std::max(
-        kLineSearchEnergyNoiseFloorJ,
-        kLineSearchEnergyNoiseRelative *
-            std::max(
-                std::abs(current.total_energy_joules),
-                std::abs(trial.total_energy_joules)));
-}
 
 bool accept_monotone_recovery_step(
     const fullmag_fem_step_stats &current,
     const fullmag_fem_step_stats &trial)
 {
-    return std::isfinite(current.total_energy_joules) &&
-        std::isfinite(trial.total_energy_joules) &&
-        trial.total_energy_joules <=
-            current.total_energy_joules +
-                line_search_energy_tolerance(current, trial);
+    return relaxation::strict_monotone_energy_accept(
+        current.total_energy_joules,
+        trial.total_energy_joules);
 }
 
 double initial_step_size(
     const Context &ctx,
     const std::vector<double> &direction)
 {
-    const double norm =
-        std::sqrt(relaxation::metric_dot_fields(ctx, direction, direction));
-    if (norm > 0.0) {
-        return std::min(relaxation::kDefaultStepSize, 1.0 / norm);
-    }
-    return relaxation::kDefaultStepSize;
+    return relaxation::initial_step_from_volume_norm_sq(
+        relaxation::metric_dot_fields(ctx, direction, direction),
+        relaxation::kDefaultStepSize,
+        relaxation::kMinStepSize,
+        relaxation::kMaxStepSize);
 }
 
 bool ensure_descent_direction(
@@ -78,15 +62,15 @@ bool ensure_descent_direction(
     }
 
     direction_dot_gradient =
-        relaxation::metric_dot_fields(ctx, direction, gradient);
+        relaxation::energy_weighted_dot_fields(ctx, direction, gradient);
     if (!std::isfinite(direction_dot_gradient) || direction_dot_gradient >= 0.0) {
         direction = relaxation::negative_field(preconditioned_gradient);
         direction_dot_gradient =
-            relaxation::metric_dot_fields(ctx, direction, gradient);
+            relaxation::energy_weighted_dot_fields(ctx, direction, gradient);
         if (!std::isfinite(direction_dot_gradient) || direction_dot_gradient >= 0.0) {
             direction = relaxation::negative_field(gradient);
             direction_dot_gradient =
-                relaxation::metric_dot_fields(ctx, direction, gradient);
+                relaxation::energy_weighted_dot_fields(ctx, direction, gradient);
         }
     }
     return std::isfinite(direction_dot_gradient) && direction_dot_gradient < 0.0;
@@ -205,7 +189,7 @@ bool retry_nonlinear_cg_line_search_with_raw_gradient_restart(
     }
     {
         ScopedPhaseTimer timer(&profile_stats.relaxation_metric_wall_time_ns);
-        p_dot_g = relaxation::metric_dot_fields(ctx, direction, previous_gradient);
+        p_dot_g = relaxation::energy_weighted_dot_fields(ctx, direction, previous_gradient);
     }
     if (!std::isfinite(p_dot_g) || p_dot_g >= 0.0) {
         error =
@@ -286,16 +270,20 @@ std::vector<double> next_direction_pr_plus(
     }
 
     double beta = 0.0;
-    const double previous_preconditioned_norm =
-        relaxation::metric_dot_fields(
+    const relaxation::EnergyWeightedDotResult previous_preconditioned_product =
+        relaxation::energy_weighted_dot_fields_with_absolute_term_sum(
             ctx,
             previous_gradient,
             previous_preconditioned_gradient);
-    if (previous_preconditioned_norm > relaxation::kGradientFloor) {
+    const double pr_plus_numerator =
+        relaxation::energy_weighted_dot_fields(ctx, trial_gradient, z_pr);
+    if (relaxation::positive_signed_reduction_resolved(
+            previous_preconditioned_product.value,
+            previous_preconditioned_product.absolute_term_sum,
+            trial_gradient.size())) {
         beta = std::max(
             0.0,
-            relaxation::metric_dot_fields(ctx, trial_gradient, z_pr) /
-                previous_preconditioned_norm);
+            pr_plus_numerator / previous_preconditioned_product.value);
     }
     if (accepted_step % relaxation::kNonlinearCgRestartInterval == 0u) {
         beta = 0.0;
@@ -307,10 +295,10 @@ std::vector<double> next_direction_pr_plus(
     for (size_t i = 0; i < trial_gradient.size(); ++i) {
         next[i] = -trial_preconditioned_gradient[i] + beta * direction_transported[i];
     }
-    double next_dot_gradient = relaxation::metric_dot_fields(ctx, next, trial_gradient);
+    double next_dot_gradient = relaxation::energy_weighted_dot_fields(ctx, next, trial_gradient);
     if (!std::isfinite(next_dot_gradient) || next_dot_gradient >= 0.0) {
         next = relaxation::negative_field(trial_preconditioned_gradient);
-        next_dot_gradient = relaxation::metric_dot_fields(ctx, next, trial_gradient);
+        next_dot_gradient = relaxation::energy_weighted_dot_fields(ctx, next, trial_gradient);
         if (!std::isfinite(next_dot_gradient) || next_dot_gradient >= 0.0) {
             next = relaxation::negative_field(trial_gradient);
         }
@@ -333,9 +321,14 @@ int run_nonlinear_cg_step(
     }
 
     fullmag_fem_step_stats current_stats{};
-    if (!relaxation::take_cached_current_stats(ctx, current_stats) &&
-        !context_snapshot_stats_mfem(ctx, current_stats, error)) {
-        return FULLMAG_FEM_ERR_UNAVAILABLE;
+    const int current_snapshot_status = relaxation::fresh_line_search_snapshot(
+        ctx,
+        current_stats,
+        "nonlinear-CG",
+        "current",
+        error);
+    if (current_snapshot_status != FULLMAG_FEM_OK) {
+        return current_snapshot_status;
     }
     if (!relaxation::validate_relaxation_state_fields(
             ctx,
@@ -384,7 +377,7 @@ int run_nonlinear_cg_step(
     if (!current_gradient_valid) {
         return FULLMAG_FEM_ERR_INTERNAL;
     }
-    if (g_norm_sq <= relaxation::kGradientFloor) {
+    if (g_norm_sq == 0.0) {
         relaxation::finish_degenerate_gradient_relaxation_step(
             ctx,
             current_stats,

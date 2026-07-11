@@ -204,10 +204,22 @@ export function relaxationAlgorithmAvailability(
   execution: {
     algorithmsAvailable?: readonly string[];
     backend: string;
+    demagEnabled?: boolean;
     device: string;
     mode: string;
   },
 ): { reason: string | null; supported: boolean } {
+  if (
+    algorithm === "projected_gradient_bb" &&
+    execution.backend === "fem" &&
+    execution.demagEnabled === true
+  ) {
+    return {
+      reason:
+        "Projected gradient BB is not qualified for FEM demag relaxation. Use nonlinear CG or disable demag.",
+      supported: false,
+    };
+  }
   if (
     execution.algorithmsAvailable !== undefined &&
     !execution.algorithmsAvailable.includes(algorithm)
@@ -993,6 +1005,7 @@ export function validateStudyStageDraft(
   execution?: {
     algorithmsAvailable?: readonly string[];
     backend: string;
+    demagEnabled?: boolean;
     device: string;
     mode: string;
   },

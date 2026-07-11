@@ -1,0 +1,13 @@
+{
+  "mesh_name": "zhang_li_skew_tetra_v1",
+  "nodes": [
+    [-1e-8, -5e-9, -5e-9],
+    [ 1e-8, -5e-9, -5e-9],
+    [ 0.0,  5e-9, -5e-9],
+    [-1e-8, -5e-9,  5e-9]
+  ],
+  "elements": [[0, 1, 2, 3]],
+  "element_markers": [1],
+  "boundary_faces": [[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]],
+  "boundary_markers": [1, 1, 1, 1]
+}

@@ -467,11 +467,6 @@ fn compute_fem_topological_charge(
     requested_method: &str,
 ) -> Option<ComputedTopologicalCharge> {
     if let Some(result) =
-        compute_fem_layered_topological_charge(summary, mesh, object_id, requested_plane)
-    {
-        return Some(result);
-    }
-    if let Some(result) =
         compute_fem_plane_cut_topological_charge(summary, mesh, object_id, requested_plane)
     {
         return Some(result);
@@ -628,11 +623,16 @@ fn compute_fem_plane_cut_topological_charge(
         return None;
     }
 
-    let mut result = compute_topological_charge_triangles(TopologicalChargeTriangleInput {
-        samples: &samples,
-        triangles: &triangles,
-    })
+    let strict_result = crate::analysis::topological_charge::compute_oriented_charge(
+        crate::analysis::topological_charge::OrientedChargeInput::new(&samples, &triangles),
+    )
     .ok()?;
+    let mut result = crate::analysis::topological_charge::TopologicalChargeResult {
+        charge: strict_result.charge,
+        sample_count: strict_result.quality.total_vertex_count,
+        valid_sample_count: strict_result.quality.valid_vertex_count,
+        warnings: Vec::new(),
+    };
     if degenerate_triangle_count > 0 {
         result.warnings.push(
             crate::analysis::topological_charge::TopologicalChargeWarning {

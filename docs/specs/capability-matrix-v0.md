@@ -199,9 +199,10 @@ field-solve lanes fail; they do not silently choose another device.
   CPU probe. A non-forced GPU request may resolve to `fem_cpu_native` only for
   a capability whose explicit planner policy permits that degradation and only
   when `native_fem_cpu_available=true`; this is not a generic fallback rule.
-- The production FEM relaxation set is `llg_overdamped`,
-  `projected_gradient_bb`, and `nonlinear_cg`. PG-BB and NCG execute on both
-  `fem_cpu_native` and `fem_native_gpu`.
+- The production FEM relaxation set is `llg_overdamped` and `nonlinear_cg` for
+  demag workloads. PG-BB remains executable on FEM CPU/GPU only without demag;
+  FEM PG-BB with demag is rejected after strict-Armijo production qualification
+  failed on both lanes. There is no hidden PG-BB-to-NCG fallback.
 - `tangent_plane_implicit` is CPU/MFEM development-only. Strict mode rejects
   TPI, and every forced GPU TPI request rejects. Extended automatic selection
   may resolve TPI only to the CPU/MFEM development lane with explicit warning
@@ -250,7 +251,7 @@ field-solve lanes fail; they do not silently choose another device.
 | `Magnetoelastic` | planned | planned | planned | **internal-reference** | Small-strain magnetoelastic coupling (B1/B2 cubic, λ_s isotropic); prescribed-strain H_mel wired into H_eff; see `docs/physics/0700-shared-magnetoelastic-semantics.md` |
 | `LLG` (Heun) | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Heun stepper in `fullmag-engine` |
 | `Relaxation(llg_overdamped)` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Shared `StudyIR::Relaxation` with `RelaxStop` and structured execution-owned completion. This is the only relaxation algorithm that owns `dynamics`, RK, `dt`, and a stage-local relaxation clock. |
-| `Relaxation(projected_gradient_bb)` | ✅ exec | ✅ exec on `fem_cpu_native` and `fem_native_gpu` | **planned** | **public-executable** (FDM CPU/reference/CUDA; native FEM CPU/MFEM/CUDA) | Direct minimization with the physical `mu0 Ms V` energy metric, norm-preserving retraction, and native Armijo/BB control. Its accepted line-search step is in `m/A`; it owns no RK, `dt`, physical time, or pseudo-time. Heterogeneous cellwise FDM CUDA material fields remain fail-closed where that lane does not support them. |
+| `Relaxation(projected_gradient_bb)` | ✅ exec | ✅ exec without demag; FEM CPU/GPU with demag rejected | **planned** | **public-executable** (FDM CPU/reference/CUDA; native FEM CPU/MFEM/CUDA without demag) | Direct minimization with the physical `mu0 Ms V` energy metric, norm-preserving retraction, and native Armijo/BB control. Its accepted line-search step is in `m/A`; it owns no RK, `dt`, physical time, or pseudo-time. FEM demag PG-BB is quarantined because repeated CPU/GPU qualification at `rtol=1e-12` could not certify strict Armijo descent; use FEM NCG. No hidden fallback is permitted. Heterogeneous cellwise FDM CUDA material fields remain fail-closed where that lane does not support them. |
 | `Relaxation(nonlinear_cg)` | ✅ exec | ✅ exec on `fem_cpu_native` and `fem_native_gpu` | **planned** | **public-executable** (FDM CPU/reference/CUDA; native FEM CPU/MFEM/CUDA) | PR+ direct minimization uses the same physical energy metric, retraction, and Armijo units as PG-BB. Its accepted line-search step is in `m/A`; it owns no RK or time controls. |
 | `Relaxation(tangent_plane_implicit)` | unsupported in strict production | CPU/MFEM development-only in extended mode; forced GPU unsupported | **planned** | **under-development** (native FEM CPU/MFEM only) | Strict mode rejects TPI. Extended mode may resolve it only to the CPU/MFEM development lane with explicit requested/resolved provenance and warning. Forced GPU rejects; no hidden GPU-to-CPU fallback or GPU capability claim is permitted. |
 

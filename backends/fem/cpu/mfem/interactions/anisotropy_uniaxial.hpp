@@ -1,10 +1,12 @@
 #pragma once
 
+#include <array>
 #include <vector>
 
 namespace fullmag::fem {
 
 struct Context;
+class ElementQuadratureMaterial;
 
 /*
  * Compute the uniaxial anisotropy effective field for the native FEM CPU path.
@@ -27,5 +29,17 @@ void compute_uniaxial_anisotropy_field(
     const std::vector<double> &m_xyz,
     std::vector<double> &h_ani_xyz,
     double *anisotropy_energy);
+
+/*
+ * Integrate E_u for a sharp DG0 material topology, P1 m and existing P1
+ * Ku1/Ku2 fields.  This pure CPU owner is intentionally not wired through
+ * Context while public sharp-Ms plans remain fail-closed.
+ */
+double uniaxial_anisotropy_energy_from_element_quadrature_material(
+    const ElementQuadratureMaterial &material,
+    const std::vector<double> &m_xyz,
+    const std::vector<double> &ku1_j_per_m3,
+    const std::vector<double> &ku2_j_per_m3,
+    const std::array<double, 3> &axis);
 
 } // namespace fullmag::fem

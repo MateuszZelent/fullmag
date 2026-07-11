@@ -1,5 +1,6 @@
 #pragma once
 
+#include <string>
 #include <vector>
 
 #if FULLMAG_HAS_MFEM_STACK
@@ -48,6 +49,11 @@ struct DmiElementWorkspace {
 };
 
 DmiElementWorkspace *dmi_element_workspace(Context &ctx);
+
+bool refresh_dmi_grid_functions_from_magnetization(
+    Context &ctx,
+    const std::vector<double> &m_xyz,
+    std::string &error);
 #endif
 
 void destroy_dmi_workspace(Context &ctx);

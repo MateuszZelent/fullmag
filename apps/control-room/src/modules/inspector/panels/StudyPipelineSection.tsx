@@ -118,6 +118,7 @@ export function StudyPipelineSection({
   authoringBusy,
   authoringFeedback,
   commandDisabledReason,
+  demagEnabled = false,
   draft,
   draftIndex,
   drafts,
@@ -140,6 +141,7 @@ export function StudyPipelineSection({
     message: string;
   } | null;
   commandDisabledReason: StudyCommandDisabledReason;
+  demagEnabled?: boolean;
   draft: StudyStageDraft | null;
   draftIndex: number;
   drafts: StudyStageDraft[];
@@ -158,6 +160,7 @@ export function StudyPipelineSection({
     ? validateStudyStageDraft(draft, {
         algorithmsAvailable,
         backend: model.requested.backend,
+        demagEnabled,
         device: model.requested.device,
         mode: model.requested.mode,
       })
@@ -183,6 +186,7 @@ export function StudyPipelineSection({
       {showDraftEditor && draft ? (
         <StudyStageDraftEditor
           draft={draft}
+          demagEnabled={demagEnabled}
           algorithmsAvailable={algorithmsAvailable}
           index={draftIndex}
           requestedBackend={model.requested.backend}
@@ -414,6 +418,7 @@ function StageCard({
 export function StudyStageDraftEditor({
   algorithmsAvailable,
   draft,
+  demagEnabled = false,
   index,
   onUpdate,
   requestedBackend = "auto",
@@ -423,6 +428,7 @@ export function StudyStageDraftEditor({
   view = "overview",
 }: {
   draft: StudyStageDraft;
+  demagEnabled?: boolean;
   algorithmsAvailable?: readonly string[];
   index: number;
   onUpdate: (patch: Partial<StudyStageDraft>) => void;
@@ -501,6 +507,7 @@ export function StudyStageDraftEditor({
         <RelaxStageDraftFields
           algorithmsAvailable={algorithmsAvailable}
           draft={draft}
+          demagEnabled={demagEnabled}
           onUpdate={onUpdate}
           requestedBackend={requestedBackend}
           requestedDevice={requestedDevice}
@@ -1884,12 +1891,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function RelaxStageDraftFields({
   algorithmsAvailable,
   draft,
+  demagEnabled,
   onUpdate,
   requestedBackend,
   requestedDevice,
   requestedMode,
 }: {
   draft: StudyStageDraft;
+  demagEnabled: boolean;
   algorithmsAvailable?: readonly string[];
   onUpdate: (patch: Partial<StudyStageDraft>) => void;
   requestedBackend: string;
@@ -1904,6 +1913,7 @@ function RelaxStageDraftFields({
     relaxationAlgorithmAvailability(value, {
       algorithmsAvailable,
       backend: requestedBackend,
+      demagEnabled,
       device: requestedDevice,
       mode: requestedMode,
     });
@@ -1937,7 +1947,10 @@ function RelaxStageDraftFields({
           LLG overdamped{algorithmSupported("llg_overdamped") ? "" : " (not advertised by active session)"}
         </option>
         <option value="projected_gradient_bb" disabled={!algorithmSupported("projected_gradient_bb")}>
-          Projected gradient BB{algorithmSupported("projected_gradient_bb") ? "" : " (not advertised by active session)"}
+          Projected gradient BB
+          {algorithmSupported("projected_gradient_bb")
+            ? ""
+            : ` — ${availability("projected_gradient_bb").reason}`}
         </option>
         <option value="nonlinear_cg" disabled={!algorithmSupported("nonlinear_cg")}>
           Nonlinear CG{algorithmSupported("nonlinear_cg") ? "" : " (not advertised by active session)"}

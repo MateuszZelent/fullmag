@@ -148,9 +148,19 @@ def write_artifacts(
                     if algorithm == "nonlinear_cg"
                     else '"step_update": "alternating_bb1_bb2",'
                 )
+            derivative_contract = (
+                '"metric": "mu0_ms_fem_lumped_volume",\n'
+                '      "gradient_metric": "mu0_ms_fem_lumped_volume",\n'
+                '      "gradient_units": "A/m",\n'
+                '      "search_direction_units": "A/m",\n'
+                '      "line_search_step_units": "m/A",\n'
+                '      "armijo_slope_units": "J A/m",\n'
+                '      "armijo_decrement_units": "J",'
+                '\n      "armijo_derivative_units": "J",'
+            )
             cpu_algorithm_policy = f""""algorithm_policy": {{
     "realization": "{expected_realization("cpu", algorithm)}",
-    "metric": "fem_lumped_mass_inner_product",
+      {derivative_contract}
       "preconditioner": "{preconditioner}",
       "linear_solver_policy": "{linear_solver_policy}",
       "line_search": "{line_search}",
@@ -194,7 +204,14 @@ def write_artifacts(
                 else ""
             )
             algorithm_policy = f""""realization": "{expected_realization("gpu", algorithm)}",
-      "metric": "fem_lumped_mass_inner_product",
+      "metric": "mu0_ms_fem_lumped_volume",
+      "gradient_metric": "mu0_ms_fem_lumped_volume",
+      "gradient_units": "A/m",
+      "search_direction_units": "A/m",
+      "line_search_step_units": "m/A",
+      "armijo_slope_units": "J A/m",
+      "armijo_decrement_units": "J",
+      "armijo_derivative_units": "J",
       {gradient_policy}
       "line_search": "{line_search}",
       {direction_policy}
@@ -359,6 +376,7 @@ def valid_gpu_log(algorithm: str = "nonlinear_cg") -> str:
 
 
 def valid_cpu_log(algorithm: str = "nonlinear_cg") -> str:
+    mode = "extended" if algorithm == "tangent_plane_implicit" else "strict"
     return f"""
 [fullmag-runner] live FEM engine: resolved_engine_id=fem_cpu_native fallback=None
 info: native FEM backend active: engine=fem_cpu_native
@@ -366,7 +384,7 @@ info: native FEM backend active: engine=fem_cpu_native
   "problem_name": "fem_relax_gpu_smoke_{algorithm}",
   "status": "completed",
   "backend": "fem",
-  "mode": "strict",
+  "mode": "{mode}",
   "precision": "double",
   "total_steps": 4,
   "final_time": 0.0,
@@ -396,6 +414,31 @@ def test_accepts_completed_native_cpu_tpi_log() -> None:
     )
     assert result.returncode == 0, result.stderr
     assert "validated cpu tangent_plane_implicit" in result.stdout
+
+
+def test_rejects_native_cpu_tpi_in_strict_mode() -> None:
+    log_text = valid_cpu_log("tangent_plane_implicit").replace(
+        '"mode": "extended"',
+        '"mode": "strict"',
+    )
+    result = run_validator(
+        log_text,
+        algorithm="tangent_plane_implicit",
+        engine="cpu",
+    )
+    assert result.returncode != 0
+    assert "mode" in result.stderr
+
+
+def test_rejects_production_relaxation_algorithms_in_extended_mode() -> None:
+    for algorithm in ("llg_overdamped", "projected_gradient_bb", "nonlinear_cg"):
+        log_text = valid_cpu_log(algorithm).replace(
+            '"mode": "strict"',
+            '"mode": "extended"',
+        )
+        result = run_validator(log_text, algorithm=algorithm, engine="cpu")
+        assert result.returncode != 0, algorithm
+        assert "mode" in result.stderr, (algorithm, result.stderr)
 
 
 def test_rejects_failed_status() -> None:
@@ -1486,7 +1529,7 @@ def test_pass_fail_summary_includes_gate_and_group_failure_reasons() -> None:
     assert "solver_mesh_signature=mesh-a failed 1 benchmark checks" in summary["failures"][1]
 
 
-def test_stt_oersted_consistency_cases_exclude_direct_minimizers() -> None:
+def test_stt_oersted_consistency_cases_exclude_all_relaxation_algorithms() -> None:
     benchmark = load_benchmark_module()
     algorithms = [
         "llg_overdamped",
@@ -1507,9 +1550,10 @@ def test_stt_oersted_consistency_cases_exclude_direct_minimizers() -> None:
         max_step_delta=0,
     )
 
-    assert [manifest["relaxation_algorithm"] for manifest in manifests] == [
-        "llg_overdamped"
-    ]
+    assert benchmark.relaxation_algorithms_for_scenario(
+        "box500_airbox_stt_oersted", algorithms
+    ) == []
+    assert manifests == []
 
 
 def test_direct_minimizer_consistency_requires_coverage_not_identical_trajectory() -> None:
@@ -1631,7 +1675,7 @@ def test_llg_consistency_still_rejects_numeric_mismatch() -> None:
     assert any("final_torque_apm mismatch" in failure for failure in failures)
 
 
-def test_stt_oersted_llg_consistency_allows_small_energy_noise_only() -> None:
+def test_stt_oersted_has_no_relaxation_consistency_manifest() -> None:
     benchmark = load_benchmark_module()
     manifests = benchmark.cpu_gpu_case_manifests(
         scenarios=["box500_airbox_stt_oersted"],
@@ -1645,58 +1689,7 @@ def test_stt_oersted_llg_consistency_allows_small_energy_noise_only() -> None:
         torque_atol_t=1.0e-15,
         max_step_delta=0,
     )
-    cpu_row = {
-        "backend": "fem_cpu",
-        "scenario": "box500_airbox_stt_oersted",
-        "reported_relaxation_algorithm": "llg_overdamped",
-        "relaxation_algorithm": "llg_overdamped",
-        "integrator": "heun",
-        "timestep_policy": "fixed",
-        "dt_s": 1.0e-13,
-        "steps": 32,
-        "status": "ok",
-        "solver_mesh_signature": "mesh-a",
-        "execution_engine": "fem_cpu_native",
-        "fem_execution_mode": "cpu_native",
-        "mfem_device": "cpu",
-        "uses_cuda_kernels": False,
-        "executed_steps": 32,
-        "final_e_total_j": -2.251999e-19,
-        "final_e_ex_j": 1.248527e-26,
-        "final_e_ext_j": -2.251999e-19,
-        "final_torque_apm": 2.0e4,
-        "final_torque_t": 2.5e-2,
-    }
-    gpu_row = {
-        **cpu_row,
-        "backend": "fem_gpu",
-        "execution_engine": "fem_native_gpu",
-        "fem_execution_mode": "all_in_gpu_legacy_sparse",
-        "mfem_device": "cuda",
-        "uses_cuda_kernels": True,
-        "final_e_total_j": -2.252011e-19,
-        "final_e_ex_j": 1.248245e-26,
-        "final_e_ext_j": -2.252011e-19,
-    }
-
-    failures = benchmark.cpu_gpu_consistency_failures(
-        [cpu_row, gpu_row],
-        case_manifests=manifests,
-        require_gpu_strict_residency=False,
-    )
-    assert failures == []
-
-    gpu_row_with_torque_mismatch = {
-        **gpu_row,
-        "final_torque_apm": 1.0e3,
-        "final_torque_t": 1.25e-3,
-    }
-    torque_failures = benchmark.cpu_gpu_consistency_failures(
-        [cpu_row, gpu_row_with_torque_mismatch],
-        case_manifests=manifests,
-        require_gpu_strict_residency=False,
-    )
-    assert any("final_torque_apm mismatch" in failure for failure in torque_failures)
+    assert manifests == []
 
 
 def test_cpu_gpu_consistency_preflight_reports_unavailable_native_fem_gpu() -> None:
@@ -1790,6 +1783,102 @@ exit 0
         assert (preserved_log_dir / "gpu_llg_overdamped.log").exists()
 
 
+def test_gpu_ncg_control_readback_budget_covers_conditional_direction_read() -> None:
+    benchmark = load_benchmark_module()
+    row = {
+        "backend": "fem_gpu",
+        "status": "ok",
+        "scenario": "box500_airbox_exchange_demag_anis_uniaxial",
+        "relaxation_algorithm": "nonlinear_cg",
+        "executed_steps": 32,
+        "total_rhs_evals": 385,
+        "rejected_attempts": 321,
+        "hot_loop_control_scalar_host_sync_count": 423,
+    }
+    common = {
+        "base": 2,
+        "per_step": 4,
+        "llg_per_step": 0,
+        "pgbb_per_step": 3,
+        "per_rejected_attempt": 2,
+    }
+
+    assert benchmark.gpu_control_readback_budget_failures(
+        [row], ncg_per_step=4, **common
+    ) == []
+    assert benchmark.gpu_control_readback_budget_failures(
+        [row], ncg_per_step=3, **common
+    )
+    assert benchmark.gpu_control_readback_budget_failures(
+        [{**row, "hot_loop_control_scalar_host_sync_count": 452}],
+        ncg_per_step=4,
+        **common,
+    )
+
+
+def test_gpu_pgbb_control_readback_budget_matches_four_sync_structure() -> None:
+    benchmark = load_benchmark_module()
+    row = {
+        "backend": "fem_gpu",
+        "status": "ok",
+        "scenario": "box500_airbox_exchange_demag",
+        "relaxation_algorithm": "projected_gradient_bb",
+        "executed_steps": 1,
+        "total_rhs_evals": 2,
+        "rejected_attempts": 0,
+        "hot_loop_control_scalar_host_sync_count": 4,
+    }
+    common = {
+        "base": 0,
+        "per_step": 4,
+        "llg_per_step": 0,
+        "ncg_per_step": 3,
+        "per_rejected_attempt": 2,
+    }
+
+    assert benchmark.DEFAULT_GPU_PGBB_CONTROL_READBACK_PER_STEP == 4
+    assert benchmark.gpu_control_readback_budget_failures(
+        [row], pgbb_per_step=4, **common
+    ) == []
+    assert benchmark.gpu_control_readback_budget_failures(
+        [row], pgbb_per_step=3, **common
+    )
+    assert benchmark.gpu_control_readback_budget_failures(
+        [{**row, "hot_loop_control_scalar_host_sync_count": 5}],
+        pgbb_per_step=4,
+        **common,
+    )
+
+
+def test_direct_minimizer_benchmark_uses_qualified_demag_tolerance() -> None:
+    benchmark = load_benchmark_module()
+    for algorithm in (
+        "projected_gradient_bb",
+        "nonlinear_cg",
+        "tangent_plane_implicit",
+    ):
+        assert benchmark.qualified_demag_rtol_for_relaxation_algorithm(
+            algorithm, 1.0e-8
+        ) == 1.0e-12
+        assert benchmark.qualified_demag_rtol_for_relaxation_algorithm(
+            algorithm, 1.0e-13
+        ) == 1.0e-13
+    assert benchmark.qualified_demag_rtol_for_relaxation_algorithm(
+        "llg_overdamped", 1.0e-8
+    ) == 1.0e-8
+
+
+def test_fem_pgbb_demag_is_excluded_from_production_manifest() -> None:
+    benchmark = load_benchmark_module()
+    algorithms = ["llg_overdamped", "projected_gradient_bb", "nonlinear_cg"]
+    assert benchmark.relaxation_algorithms_for_scenario(
+        "box500_airbox_exchange_demag", algorithms
+    ) == ["llg_overdamped", "nonlinear_cg"]
+    assert benchmark.relaxation_algorithms_for_scenario(
+        "box500_airbox_exchange_zeeman", algorithms
+    ) == algorithms
+
+
 def main() -> int:
     failures = 0
     for test in [
@@ -1821,10 +1910,14 @@ def main() -> int:
         test_runtime_gate_and_physics_note_promote_cpu_tpi_without_gpu_claim,
         test_cpu_gpu_consistency_smoke_covers_active_relaxation_algorithms,
         test_cpu_gpu_consistency_coverage_is_per_relaxation_algorithm,
-        test_stt_oersted_consistency_cases_exclude_direct_minimizers,
+        test_stt_oersted_consistency_cases_exclude_all_relaxation_algorithms,
         test_direct_minimizer_consistency_requires_coverage_not_identical_trajectory,
         test_llg_consistency_still_rejects_numeric_mismatch,
-        test_stt_oersted_llg_consistency_allows_small_energy_noise_only,
+        test_stt_oersted_has_no_relaxation_consistency_manifest,
+        test_gpu_ncg_control_readback_budget_covers_conditional_direction_read,
+        test_gpu_pgbb_control_readback_budget_matches_four_sync_structure,
+        test_direct_minimizer_benchmark_uses_qualified_demag_tolerance,
+        test_fem_pgbb_demag_is_excluded_from_production_manifest,
         test_cpu_gpu_consistency_preflight_reports_unavailable_native_fem_gpu,
         test_runtime_gate_can_preserve_logs_for_audit,
     ]:

@@ -33,13 +33,18 @@ Current repo status relevant to this note:
 - `FemPlanIR` already carries mesh data, per-node initial magnetization, material payload,
   active term flags, precision, and LLG timing parameters,
 - the runner executes FEM relaxation through the maintained native FEM lanes,
-- `StudyIR::Relaxation` exists. `llg_overdamped`, `projected_gradient_bb`, and
-  `nonlinear_cg` are production-executable in their documented native FEM
-  lanes. `tangent_plane_implicit` is a CPU/MFEM development capability only:
+- `StudyIR::Relaxation` exists. `llg_overdamped` and `nonlinear_cg` are
+  production-executable for FEM demag workloads. `projected_gradient_bb`
+  remains executable on native FEM CPU/GPU only when demag is absent. FEM
+  PG-BB with demag is quarantined after repeated CPU/GPU qualification at
+  `rtol=1e-12` could not certify strict Armijo descent; the planner rejects
+  this combination and never substitutes NCG silently.
+  `tangent_plane_implicit` is a CPU/MFEM development capability only:
   strict mode and forced GPU reject it, while extended mode may resolve it to
   CPU/MFEM with explicit requested/resolved provenance,
-- native CPU/MFEM owns executable FEM `projected_gradient_bb` and
-  `nonlinear_cg` steps through the `fullmag_fem_backend_relax_step` ABI, using
+- native CPU/MFEM owns executable FEM `projected_gradient_bb` without demag and
+  FEM `nonlinear_cg` with or without demag through the
+  `fullmag_fem_backend_relax_step` ABI, using
   tangent gradients, Armijo line search, sphere retraction, FEM lumped-mass
   inner products, and exchange-plus-mass preconditioned gradient directions
   with serial MFEM CG as the production default. HyprePCG/BoomerAMG remains an
@@ -61,8 +66,9 @@ Current repo status relevant to this note:
   `pgbb.cpp` also owns the native GPU PG-BB preflight/step boundary reached
   from `run_backend_relaxation_step` when a GPU state is allocated. The CUDA
   branch contains the device-resident Armijo accepted-step loop and BB1/BB2
-  step-size update. Public runner capability now advertises PG-BB on
-  `fem_native_gpu`; runtime provenance keeps controlled compute scalar
+  step-size update. Public capability advertises PG-BB on `fem_native_gpu`
+  only for no-demag workloads; the planner quarantines demag combinations
+  before runtime. Runtime provenance keeps controlled compute scalar
   readbacks for Armijo/BB decisions distinct from rejected exchange hot-loop
   host sync.
 - native CUDA `nonlinear_cg` now lives under
@@ -158,10 +164,13 @@ field torque from it.
 | Symbol | Meaning | Unit |
 |---|---|---|
 | `u` | FE DOF vector for magnetization | 1 |
-| `G(u)` | assembled energy residual | — |
-| `M` | vector mass operator | — |
-| `g(u)` | FE gradient after mass projection | A/m-equivalent |
-| `\tau` | torque residual | A/m-equivalent |
+| `G(u)` | assembled energy residual | implementation-dependent residual scale |
+| `M` | vector mass operator | m^3 |
+| `g(u)` | tangent field gradient `-P_m H_eff` | A/m |
+| `p` | production PG-BB/NCG search direction | A/m |
+| `q` | dimensionless tangent direction used by the derivative oracle | 1 |
+| `\lambda` | production line-search step in `R(m + \lambda p)` | m/A |
+| `\tau` | torque residual `m x H_eff` | A/m |
 
 ### 2.4 Assumptions and approximations
 
@@ -196,6 +205,11 @@ and no synthetic `dt`.
 Canonical authoring defaults must also remain aligned across Python and UI.
 For `Relaxation`, the public defaults are `torque_tolerance=1e-4 A/m` and
 `max_steps=50000`; Python, generated API, UI, and script export share them.
+The `dynamics` payload is algorithm-specific: `llg_overdamped` requires it,
+while the direct minimizers `projected_gradient_bb` and `nonlinear_cg` must
+omit it. Those minimizers own their native search direction and line search;
+rejecting an incompatible `dynamics` payload in Python authoring occurs before
+ProblemIR construction and is not evidence about native convergence.
 
 Pros:
 
@@ -224,13 +238,60 @@ u^{trial} = u - \lambda g_T,
 
 then retract to the nodal sphere constraint.
 
-Use BB step-length formulas with line search exactly as in FDM, but with FE-aware inner products:
+Use BB step-length formulas with line search and the physical FEM energy
+weight. For nodal vectors `a` and `b`, define
 
 \[
-\langle a,b\rangle_M = a^\top M a
+\langle a,b\rangle_E = \mu_0\sum_i M_{s,i}V_i a_i\mathbin{\cdot}b_i.
+\]
+The admissible FEM state is a product of nodal spheres, so successive tangent
+gradients must first be compared in the accepted tangent space. With the
+normalization retraction, both lanes use projection transport
+`P_m(v)=v-(m dot v)m` and form
+
+\[
+\widetilde{s}_k=P_{m_k}(m_k-m_{k-1}),
+\qquad
+\widetilde{y}_k=g_k-P_{m_k}g_{k-1}.
 \]
 
-or a lumped approximation thereof.
+The weighted products of `s_tilde` and `y_tilde` have units `J m/A`, `J`, and
+`J A/m` for `ss`, `sy`, and `yy`, respectively, so both BB1 `ss/sy` and BB2
+`sy/yy` have the required `m/A` step unit. The CUDA and CPU reductions
+accumulate the unscaled physical products. An ambient `g_k-g_{k-1}` or chord
+`m_k-m_{k-1}` is not a production BB secant after a retracted step. A shared
+absolute floor is forbidden because no single number can have all three
+units. For `N=3 n_m` active scalar terms, both lanes instead bound reduction
+roundoff with
+
+\[
+\gamma_N = \frac{N\epsilon_{64}}{1-N\epsilon_{64}}.
+\]
+
+Positive curvature is numerically resolved only when
+`sy > gamma_N sqrt(ss yy)`. The square-root scale has units `J`, matching
+`sy`; `ss` and `yy` must also be finite and nonnegative. This one guard is
+sufficient for both BB quotients because `yy` is a nonnegative sum. The
+previous common `1e-6` factor is removed: while it cancelled algebraically in
+exact quotients, it changed the meaning of any absolute denominator test.
+
+The production seed and clamp remain `lambda_0=1e-6 m/A` and
+`lambda in [1e-15, 1e-3] m/A`. They do not require numerical recalibration:
+removing a common factor from both vectors leaves `ss/sy` and `sy/yy`
+scale-equivalent apart from roundoff, and the reset divides `lambda_0` only by
+a dimensionless failure count. These values are algorithmic step controls,
+not dimensionless curvature tolerances.
+
+`cuda_heterogeneous_nodal_ms_pgbb_ncg_calibration` is the named native
+calibration workload for this step policy. Its three-entry realized FEM metric
+has two active nodes with `Ms={4e5,9e5} A/m` and one masked node containing
+large but finite sentinel values. It compares CUDA PG-BB `ss/sy/yy` and the
+production CUDA NCG gradient, denominator, numerator, PR+ direction, and
+descent product with independent CPU `mu0 Ms_i V_i` arithmetic over active
+nodes only. This proves that heterogeneous nodal weights and magnetic-node
+mask semantics enter the adaptive BB/PR products consistently while the seed
+and clamps retain their `m/A` units. It does not claim discontinuous
+sharp-element `Ms` support; that remains owned by `FEM-TD-PHY-MAT-001`.
 
 This is a clean first direct-minimization method for FEM.
 
@@ -371,6 +432,11 @@ airbox CPU/GPU consistency preset across exchange, Zeeman, demag, anisotropy,
 DMI, and STT/Oersted scenario families for the current production algorithms.
 It requires per-algorithm CPU/GPU pairs for the active production algorithms
 and strict managed FEM runtime availability.
+The benchmark authoring path must preserve that same algorithm-specific
+contract: it passes `dynamics` only for `llg_overdamped` and constructs PGBB or
+NCG without `dynamics`. A matrix row rejected by this authoring validation has
+not reached the managed native runtime and cannot be counted as an Armijo,
+energy-monotonicity, or CPU/GPU physics result.
 
 Current FEM caveat: `projected_gradient_bb` and `nonlinear_cg` use FEM
 lumped-mass inner products and native Armijo line search on both maintained
@@ -385,17 +451,154 @@ native CPU/MFEM lane through a global tangent-plane `mass + step * exchange`
 solve; it includes local anisotropy, Zeeman curvature, DMI weak-residual
 action, and demag fresh-solve linear response in the implicit operator, but is
 not yet a GPU/libCEED-resident tangent-plane solver.
-Both CPU/MFEM and CUDA direct-minimizer Armijo loops allow a bounded
-noise-level monotone acceptance window when the trial energy is indistinguishable
-from the current energy at the simulation's joule scale. The guard is a
-finite-precision safeguard, not a physical energy tolerance: it uses
-`max(1e-23 J, 1e-12 * max(|E_current|, |E_trial|))` and still requires finite
-energies.
+Both CPU/MFEM and CUDA direct-minimizer Armijo loops require the sufficient
+decrease inequality. The comparison is evaluated as the directly reduced
+increment `Delta E = E_trial - E_current`, rather than by comparing two
+published total-energy scalars. This avoids losing a physical decrement near
+`1e-31 J` while the total energy contains an unrelated `1e-17 J` offset. A
+bounded recovery may accept a finite trial only when `Delta E <= 0` under the
+same direct-increment oracle; it never accepts a representable energy
+increase. This intentionally removes the former
+`max(1e-23 J, 1e-12 max(|E_current|,|E_trial|))` window, whose absolute branch
+was scale dependent and whose relative branch still changed the physical
+monotonicity contract.
+
+For Poisson demag, with endpoint fields from deterministic fresh solves, the
+direct increment uses the polarized quadratic identity
+
+\[
+\Delta E_d=-\frac{\mu_0}{2}\sum_i M_{s,i}V_i
+  (m_{1,i}-m_{0,i})\mathbin{\cdot}(H_{d,0,i}+H_{d,1,i}),
+\]
+
+including the matching quadratic Robin boundary-form difference when that
+airbox realization is active. Local and exchange terms are reduced as local
+energy-density differences. If the direct floating-point interval overlaps
+the Armijo threshold, the native lane repeats current and trial demag snapshots
+from fresh initial states at an internal stricter tolerance. A trial is
+accepted only when both ordinary and refined direct increments satisfy the
+unchanged strict inequality; unresolved ambiguity fails closed and restores
+the accepted state. No user-visible noise tolerance, algorithm substitution,
+or device fallback is permitted.
 CPU/MFEM relaxation qualification artifacts carry an `algorithm_policy` block
 with the resolved native realization, FEM mass metric, line-search policy, and
 preconditioner/linear-solver contract. They intentionally do not report an
 actual per-step Hypre-vs-serial preconditioner selection until the native ABI
 exports that runtime measurement.
+
+### 4.1 Energy derivative metric for direct minimizers
+
+The field tangent gradient is intentionally retained as
+
+\[
+g_i=-P_{m_i}H_{\mathrm{eff},i},
+\]
+
+with units `A/m`. Its lumped-volume norm is a solver and stop-control
+quantity; it is not an energy derivative and therefore remains independent of
+the Armijo product. Production PG-BB/NCG directions `p` also have units
+`A/m`, and the trial state is `R(m + lambda p)` with `lambda` in `m/A`.
+For nodal lumped volumes `V_i`, the physical line-search slope is
+
+\[
+\frac{dE(R(m+\lambda p))}{d\lambda}\bigg|_{\lambda=0}
+=-\mu_0\sum_i M_{s,i}V_i H_{\mathrm{eff},i}\mathbin{\cdot}p_i
+=\mu_0\sum_i M_{s,i}V_i g_i\mathbin{\cdot}p_i,
+\]
+
+with units `J A/m`. The Armijo decrement `lambda * phi'(0)` is in joules.
+For the derivative-matrix oracle, the perturbation direction `q` and sweep
+parameter `epsilon` are dimensionless; the corresponding
+`mu0 * sum(Ms_i V_i g_i . q_i)` is therefore directly in joules and is
+compared with a retracted central difference in joules.
+
+CPU/MFEM PG-BB, NCG, and TPI, plus CUDA PG-BB/NCG, use this nodal
+`mu0 * Ms_i * V_i` weighted product for descent checks and the Armijo
+right-hand side. `Ms_i` is
+the per-node field when supplied, otherwise the material fallback; nonmagnetic
+nodes contribute zero.  The same geometry is used for BB/PR+ curvature where
+an energy-weighted product is required. For PR+, numerator and denominator
+both have units `J A/m`, so `beta` is dimensionless. It must not replace the
+RMS/max field-or-torque stopping metrics, whose `A/m` semantics are deliberately
+mesh-extent independent.
+
+CPU PR+ uses the preconditioned signed denominator
+`d=sum_i mu0 Ms_i V_i g_i.z_i`. Its forward-error scale is the independently
+accumulated `S_d=sum_i mu0 Ms_i V_i |g_i.z_i|`, never the PR numerator.
+Positive curvature is resolved only when `d > gamma_N S_d`. CUDA NCG is
+unpreconditioned, so its denominator is the nonnegative square sum
+`sum_i mu0 Ms_i V_i |g_i|^2`; its absolute-term sum is the denominator itself
+and the derived roundoff check reduces to exact positivity for finite
+`gamma_N < 1`. The PR numerator is not used as a denominator-roundoff proxy.
+
+The lumped-volume tangent-gradient norm has units `A^2 m` and is likewise a
+nonnegative sum. Consequently `norm > gamma_N norm` reduces to exact
+positivity: zero is the only dimensionally justified degenerate norm, while a
+negative or non-finite result is an error. No joule label or joule-valued
+absolute floor is used for that stop diagnostic.
+
+### 4.2 Directional-derivative oracle tolerance
+
+The native interaction matrix uses a retracted central difference
+`D_h=(E(+h)-E(-h))/(2h)`. Its acceptance bound contains no fixed joule
+constant. At each sweep point it is derived from:
+
+- double-precision subtraction roundoff,
+  `8 epsilon_64 max(|E(+h)|,|E(-h)|)/h`;
+- the central-difference/retraction truncation estimate from the sweep,
+  `|D_h-D_2h|/3`;
+- analytic weighted-sum roundoff. The independent analytic oracle accumulates
+  each scalar product before any vector-component cancellation,
+  `S_D=sum_i sum_c |mu0 Ms_i V_i H_(i,c) q_(i,c)|`, and uses `gamma_N S_D`, not
+  `gamma_N |D_analytic|`, because cancellation can make the latter arbitrarily
+  smaller than the forward error. The qualification output retains the field
+  name `absolute_term_sum_j` and reports
+  `absolute_term_granularity=scalar_component` to make this reduction
+  convention explicit.
+
+At least one sweep point must satisfy `|D_h-D_analytic|` against the sum of
+those three bounds. Independently, successive Richardson estimates must
+contract by at least a factor of two after accounting for their energy
+subtraction roundoff. This is weaker than the ideal factor of four for a
+second-order central difference, but still proves convergence rather than
+merely checking finiteness. The sweep
+`h={2e-3,...,6.25e-5}` brackets the observed second-order region for the
+four-node P1 qualification tetrahedron without tuning an interaction-specific
+absolute tolerance. Demag additionally requires the reported linear-solve
+relative residual to satisfy its configured `1e-10` limit. That dimensionless
+solver gate remains separate because a residual cannot be converted to joules
+without an operator-condition bound.
+
+The CPU and CUDA NCG initial-step heuristic deliberately retains the existing
+lumped-volume scaling convention; it is not presented as an energy derivative
+and both lanes use the same convention. The trajectory and iteration count are
+not public compatibility contracts.
+
+Qualification artifacts for a runtime-resolved energy-weighted Armijo
+algorithm record `metric = "mu0_ms_fem_lumped_volume"`,
+`gradient_metric = "mu0_ms_fem_lumped_volume"`, `gradient_units = "A/m"`,
+`search_direction_units = "A/m"`, `line_search_step_units = "m/A"`,
+`armijo_slope_units = "J A/m"`, and `armijo_decrement_units = "J"`.
+This applies to CPU TPI as well as PGBB/NCG because TPI's line search uses the
+same energy-weighted slope and retraction units.
+
+The audit compatibility field `armijo_derivative_units = "J"` names the
+dimensionless-direction derivative oracle
+`dE(R(m + epsilon q))/d epsilon`, not the production derivative with respect
+to `lambda`. It is retained for migration from the audit schema while the
+additional `armijo_slope_units = "J A/m"`,
+`line_search_step_units = "m/A"`, and `armijo_decrement_units = "J"` fields
+state the rigorous production convention. Thus `gradient_metric` is a stable
+schema alias of `metric`, not a second numerical product. Requested but
+unrealized algorithms, and payloads whose realization is absent or differs
+from the exact `native_mfem_backend_relax_step` identifier, do not receive any
+of those resolved-runtime claims.
+Old payloads that omit the new optional fields remain readable; consumers must
+not infer the new convention from omission and should rerun the workload when
+resolved provenance is required.
+
+Public final-state and total-energy meanings remain unchanged. This is valid for nodal material fields. Discontinuous
+element `Ms` requires the separate material-interface qualification work.
 
 ### 4.2 ProblemIR representation
 
@@ -472,8 +675,9 @@ lane with explicit provenance; forced GPU rejects with a clear diagnostic.
 - [x] Capability matrix
 - [x] FDM backend (`llg_overdamped`, `projected_gradient_bb`, `nonlinear_cg`)
 - [x] FEM backend (`llg_overdamped` on native CPU/MFEM and supported native GPU time-integration lanes)
-- [x] FEM backend (`projected_gradient_bb`, `nonlinear_cg` native mass-weighted minimizers)
-- [x] FEM backend (`projected_gradient_bb`, `nonlinear_cg` exchange-plus-mass preconditioned minimizers with serial MFEM CG as the production default and explicit Hypre/AMG opt-in for qualification)
+- [x] FEM backend (`projected_gradient_bb` without demag and `nonlinear_cg` native mass-weighted minimizers)
+- [x] FEM backend (`projected_gradient_bb` without demag and `nonlinear_cg` exchange-plus-mass preconditioned minimizers with serial MFEM CG as the production default and explicit Hypre/AMG opt-in for qualification)
+- [x] FEM PG-BB with demag quarantined in the planner after failed strict-Armijo CPU/GPU production qualification; no hidden fallback
 - [x] FEM backend (`tangent_plane_implicit` native CPU/MFEM tangent-plane solve with exchange, local anisotropy, Zeeman, DMI, and demag linear-response actions)
 - [x] FEM GPU backend (`projected_gradient_bb` native CUDA tangent-gradient, mass-metric reduction, normalized-retraction kernels, Armijo/BB step source, native preflight/step boundary, and runner availability)
 - [x] FEM GPU backend (`nonlinear_cg` native CUDA tangent-gradient, mass-metric dot products, normalized retraction, Armijo/PR+ step source, persistent direction state, native preflight/step boundary, and runner availability)

@@ -1,4 +1,5 @@
 #include "cpu/frequency_domain/mfem_modal_operator_payload.hpp"
+#include "frequency_domain/linearized_dynamic_pencil.hpp"
 #include "fullmag_fem.h"
 
 #include <cmath>
@@ -556,12 +557,12 @@ void modal_shift_invert_payload_can_be_assembled_from_mfem_operator()
           "MFEM modal payload reports first-order complex algebraic form");
     check(std::abs(payload_result.max_abs_tangent_mass_matrix - 2.0) < 1.0e-12,
           "MFEM modal payload reports tangent mass matrix scale");
-    check(std::abs(stiffness_matrix_row_major[0]) < 1.0e-12,
-          "MFEM modal payload dynamic matrix k00");
     check(std::abs(stiffness_matrix_row_major[1] + 1.0) < 1.0e-12,
           "MFEM modal payload dynamic matrix k01");
     check(std::abs(stiffness_matrix_row_major[2] - 1.0) < 1.0e-12,
           "MFEM modal payload dynamic matrix k10");
+    check(std::abs(stiffness_matrix_row_major[0]) < 1.0e-12,
+          "MFEM modal payload dynamic matrix k00");
     check(std::abs(stiffness_matrix_row_major[3]) < 1.0e-12,
           "MFEM modal payload dynamic matrix k11");
     check(std::abs(dynamic_mass_matrix_row_major[0] - 1.0) < 1.0e-12,
@@ -580,6 +581,29 @@ void modal_shift_invert_payload_can_be_assembled_from_mfem_operator()
           "MFEM modal payload tangent mass matrix mt10");
     check(std::abs(tangent_mass_matrix_row_major[3] - 2.0) < 1.0e-12,
           "MFEM modal payload tangent mass matrix mt11");
+    check(std::abs(payload_result.linearized_pencil_gamma0_m_per_a_s - 1.0) < 1.0e-12,
+          "MFEM modal payload publishes canonical pencil gamma0 metadata");
+    const fd::MfemLinearizedPencilDependency shared_dependency{
+        descriptor, layout, &node, nullptr, 0, h_ext_a_per_m, 3,
+        nullptr, 0, 0.0, nullptr, 0, 1.0, 0.0,
+        nullptr, 0, nullptr, 0, nullptr, 0, 0.0,
+        nullptr, 0, nullptr, nullptr, 0, false,
+    };
+    const std::string driven_dependency_digest =
+        fd::mfem_linearized_pencil_dependency_digest(shared_dependency);
+    const auto true_residual_pencil = fd::LinearizedDynamicPencil::from_real_callbacks(
+        fd::dynamic_pencil_metadata_from_legacy_gamma0(
+            1.0, fd::FrequencyDomainPhaseConvention::exp_i_omega_t),
+        2,
+        {},
+        driven_dependency_digest,
+        "mfem_linearized_cpu_jvp.v1");
+    check(std::strcmp(payload_result.dependency_digest, driven_dependency_digest.c_str()) == 0,
+          "modal payload and driven operator share dynamic-demag and static-periodic provenance");
+    check(true_residual_pencil.dependency_digest() == driven_dependency_digest,
+          "true residual provenance uses the driven dependency digest");
+    check(std::strcmp(payload_result.operator_digest, true_residual_pencil.digest().c_str()) == 0,
+          "one MFEM dependency fixture gives modal and true-residual paths one canonical pencil identity");
 
     FullmagFemModalEigenRequest request = base_request();
     request.target_kind = "frequency_window";
@@ -591,6 +615,9 @@ void modal_shift_invert_payload_can_be_assembled_from_mfem_operator()
     request.mfem_stiffness_matrix_row_major = stiffness_matrix_row_major;
     request.mfem_gyrotropic_matrix_row_major = dynamic_mass_matrix_row_major;
     request.mfem_mass_matrix_row_major = tangent_mass_matrix_row_major;
+    request.mfem_linearized_pencil_dependency_digest = payload_result.dependency_digest;
+    request.mfem_linearized_pencil_gamma0_m_per_a_s =
+        payload_result.linearized_pencil_gamma0_m_per_a_s;
     request.operator_request.operator_diagnostics_json =
         "{\"operator_family\":\"mfem_linearized_llg\",\"payload_kind\":\"dense_linearized_mfem_operator\"}";
     constexpr double k_vector_rad_m[] = {0.0, 0.0, 0.0};
@@ -603,6 +630,12 @@ void modal_shift_invert_payload_can_be_assembled_from_mfem_operator()
           "MFEM-assembled modal payload should solve through production SLEPc path");
     check(contains(result.diagnostics_json, "\"execution_lane\":\"production_cpu\""),
           "MFEM-assembled modal payload diagnostics report production lane");
+    check(contains(result.diagnostics_json, payload_result.operator_digest),
+          "magnetic modal route publishes the payload's canonical pencil digest");
+    check(contains(
+              result.diagnostics_json,
+              "\"linearized_dynamic_pencil_gamma0_m_per_a_s\":1"),
+          "magnetic modal route reports payload-sourced canonical pencil metadata");
     check(contains(result.diagnostics_json, "\"solver_family\":\"slepc_multi_shift_invert_production_cpu_dense\""),
           "MFEM-assembled modal payload diagnostics report production multi-shift SLEPc family");
     check(contains(result.diagnostics_json, "\"solver_model\":\"slepc_multi_shift_invert_production_cpu_dense\""),
@@ -620,6 +653,87 @@ void modal_shift_invert_payload_can_be_assembled_from_mfem_operator()
     check(contains(result.diagnostics_json, "\"k_vector_rad_m\":[0,0,0]"),
           "MFEM-assembled modal payload diagnostics preserve explicit k-vector");
     fullmag_fem_frequency_domain_result_destroy(&result);
+}
+
+void modal_dynamic_demag_materialization_preserves_legacy_s_sign()
+{
+    namespace fd = fullmag::fem::frequency_domain;
+
+    const double equilibrium[] = {0.0, 0.0, 1.0};
+    fd::TangentFrameNode node{};
+    fd::TangentFrameDiagnostics frame_diagnostics{};
+    check(
+        fd::build_tangent_frame(equilibrium, 1, &node, &frame_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "dynamic-demag modal payload tangent frame succeeds");
+
+    fd::MfemOperatorContextDescriptor descriptor{};
+    descriptor.node_count = 1;
+    descriptor.full_dof_count = 3;
+    descriptor.tangent_dof_count = 2;
+    descriptor.demag_enabled = true;
+    descriptor.demag_kind = fd::FrequencyDomainDemagKind::static_k0;
+    descriptor.mfem_mesh_available = true;
+
+    fd::MfemTangentSpaceLayout layout{};
+    fd::MfemTangentSpaceDiagnostics layout_diagnostics{};
+    check(
+        fd::build_mfem_tangent_space_layout(descriptor, &layout, &layout_diagnostics) ==
+            fd::FrequencyDomainStatus::ok,
+        "dynamic-demag modal payload tangent layout succeeds");
+
+    const double tangent_lumped_mass[] = {1.0};
+    // For H_demag = D e_j, legacy S(:, j) = (H_demag[1], -H_demag[0]), while
+    // the canonical JVP is L=-S. With D=[[2,5],[7,11]], legacy S is
+    // [[7,11],[-2,-5]], proving both tangent basis columns are materialized.
+    const double demag_tangent_matrix_row_major[] = {2.0, 5.0, 7.0, 11.0};
+    double stiffness_matrix_row_major[4]{};
+    double dynamic_mass_matrix_row_major[4]{};
+    double tangent_mass_matrix_row_major[4]{};
+    fd::MfemModalDenseOperatorPayloadResult payload_result{};
+    const fd::FrequencyDomainStatus payload_status =
+        fd::assemble_mfem_modal_dense_operator_payload(
+            fd::MfemModalDenseOperatorPayloadProblem{
+                descriptor,
+                layout,
+                &node,
+                nullptr,
+                0,
+                nullptr,
+                nullptr,
+                0.0,
+                nullptr,
+                tangent_lumped_mass,
+                1.0,
+                0.0,
+                stiffness_matrix_row_major,
+                dynamic_mass_matrix_row_major,
+                tangent_mass_matrix_row_major,
+                4,
+                nullptr,
+                0,
+                nullptr,
+                nullptr,
+                0.0,
+                demag_tangent_matrix_row_major,
+                4,
+                "dynamic_demag_provider.v1",
+                nullptr,
+                0,
+                false,
+            },
+            &payload_result);
+
+    check(payload_status == fd::FrequencyDomainStatus::ok,
+          "dynamic-demag modal dense payload assembly succeeds");
+    check(std::abs(stiffness_matrix_row_major[0] - 7.0) < 1.0e-12,
+          "dynamic-demag legacy S materializes column-zero first entry");
+    check(std::abs(stiffness_matrix_row_major[1] - 11.0) < 1.0e-12,
+          "dynamic-demag legacy S materializes column-one first entry");
+    check(std::abs(stiffness_matrix_row_major[2] + 2.0) < 1.0e-12,
+          "dynamic-demag legacy S materializes column-zero second entry");
+    check(std::abs(stiffness_matrix_row_major[3] + 5.0) < 1.0e-12,
+          "dynamic-demag legacy S materializes column-one second entry");
 }
 
 void modal_shift_invert_dense_full_2x2_payload_accepts_k0_kittel_macrospin()
@@ -1448,6 +1562,7 @@ int main()
     frequency_window_wide_auto_selects_contour_interval_solver();
     modal_frequency_window_production_payload_contour_accepts_multiple_modes();
     modal_shift_invert_payload_can_be_assembled_from_mfem_operator();
+    modal_dynamic_demag_materialization_preserves_legacy_s_sign();
     modal_shift_invert_dense_full_2x2_payload_accepts_k0_kittel_macrospin();
     modal_shift_invert_sparse_payload_can_be_assembled_from_mfem_operator();
     modal_without_validation_problem_stays_unavailable();

@@ -2,16 +2,27 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RUNTIME_ROOT="${REPO_ROOT}/.fullmag/runtimes/fem-gpu-host"
-
-mkdir -p "${RUNTIME_ROOT}/bin" "${RUNTIME_ROOT}/lib" "${RUNTIME_ROOT}/include"
-RUNTIME_LOCK="${RUNTIME_ROOT}/.export.lock"
+RUNTIME_PARENT="${REPO_ROOT}/.fullmag/runtimes"
+RUNTIME_ROOT="${RUNTIME_PARENT}/fem-gpu-host"
+STAGING_ROOT="${RUNTIME_ROOT}.staging.$$"
+RUNTIME_LOCK="${RUNTIME_PARENT}/.fem-gpu-host.export.lock"
+mkdir -p "${RUNTIME_PARENT}"
 exec 9>"${RUNTIME_LOCK}"
 if ! flock -n 9; then
   echo "[export_fem_gpu_runtime] waiting for existing runtime export to finish"
   flock 9
 fi
-chmod -R u+rwX,go+rwX "${RUNTIME_ROOT}"
+
+cleanup_failed_export() {
+  local status="$?"
+  rm -rf -- "${STAGING_ROOT}"
+  if [ "${status}" -ne 0 ] && [ -d "${RUNTIME_ROOT}" ] && \
+    ! python3 scripts/validate_managed_fem_runtime_bundle.py --runtime-root "${RUNTIME_ROOT}" >/dev/null 2>&1; then
+    rm -f "${RUNTIME_ROOT}/manifest.json"
+  fi
+  exit "${status}"
+}
+trap cleanup_failed_export EXIT
 
 cd "${REPO_ROOT}"
 #rm -rf target/* target/.* 2>/dev/null || true
@@ -26,13 +37,15 @@ docker compose --profile fem-gpu run --rm -T \
   -e FULLMAG_FEM_RUNTIME_CARGO_JOBS="${FULLMAG_FEM_RUNTIME_CARGO_JOBS}" \
   -e FULLMAG_HOST_UID="${FULLMAG_HOST_UID}" \
   -e FULLMAG_HOST_GID="${FULLMAG_HOST_GID}" \
+  -e FULLMAG_RUNTIME_EXPORT_STAGING=".fullmag/runtimes/$(basename "${STAGING_ROOT}")" \
   fem-gpu bash -lc '
 set -euo pipefail
+runtime_root="${FULLMAG_RUNTIME_EXPORT_STAGING:?missing managed FEM runtime staging directory}"
 echo "[export_fem_gpu_runtime] preparing runtime bundle directories"
-mkdir -p .fullmag/runtimes/fem-gpu-host/bin .fullmag/runtimes/fem-gpu-host/lib .fullmag/runtimes/fem-gpu-host/include
+mkdir -p ${runtime_root}/bin ${runtime_root}/lib ${runtime_root}/include
 source scripts/lib/runtime_bundle_copy.sh
 clear_runtime_bundle_contents() {
-  local runtime_root=".fullmag/runtimes/fem-gpu-host"
+  local runtime_root="${runtime_root}"
   mkdir -p "$runtime_root/bin" "$runtime_root/lib" "$runtime_root/include"
   find "$runtime_root/bin" "$runtime_root/lib" \
     -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
@@ -61,16 +74,16 @@ copy_runtime_binary() {
   local src="$1"
   local dest="$2"
   rm -rf -- "$dest"
-  cp -aT --remove-destination "$src" "$dest"
+  cp --remove-destination "$src" "$dest"
   chmod 755 "$dest"
 }
-copy_runtime_binary target/release/fullmag .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu-bin
-copy_runtime_binary target/release/fullmag-api .fullmag/runtimes/fem-gpu-host/bin/fullmag-api
+copy_runtime_binary target/release/fullmag ${runtime_root}/bin/fullmag-fem-gpu-bin
+copy_runtime_binary target/release/fullmag-api ${runtime_root}/bin/fullmag-api
 if [ ! -f target/release/lib_fullmag_core.so ]; then
   echo "[export_fem_gpu_runtime] failed to locate PyO3 module: target/release/lib_fullmag_core.so" >&2
   exit 1
 fi
-install -m 755 target/release/lib_fullmag_core.so .fullmag/runtimes/fem-gpu-host/_fullmag_core.so
+install -m 755 target/release/lib_fullmag_core.so ${runtime_root}/_fullmag_core.so
 latest_native_lib_dir() {
   local pattern="$1"
   local selected
@@ -96,7 +109,7 @@ copy_library_group_entry_replace() {
 copy_native_library_group() {
   local source_dir="$1"
   local stem="$2"
-  local dest_dir=".fullmag/runtimes/fem-gpu-host/lib"
+  local dest_dir="${runtime_root}/lib"
   local resolved_name=""
   find "$dest_dir" -maxdepth 1 -name "${stem}.so*" -exec rm -f -- {} +
   for src in "$source_dir"/"${stem}".so*; do
@@ -138,7 +151,7 @@ copy_pkg_library_group() {
   local resolved
   local source_dir
   local resolved_name
-  local dest_dir=".fullmag/runtimes/fem-gpu-host/lib"
+  local dest_dir="${runtime_root}/lib"
   resolved="$(resolve_pkg_library_path "$pkg" "$stem")"
   if [ -z "$resolved" ]; then
     echo "[export_fem_gpu_runtime] failed to resolve $pkg library group for $stem" >&2
@@ -153,7 +166,7 @@ copy_pkg_library_group() {
 }
 copy_shared_library_dependency_closure() {
   local initial_lib="$1"
-  local dest_dir=".fullmag/runtimes/fem-gpu-host/lib"
+  local dest_dir="${runtime_root}/lib"
   local pending=("$initial_lib")
   local visited=" "
   local skip_system_runtime_regex="/(ld-linux|ld64|libc|libdl|libm|libpthread|libresolv|librt|libutil|libgcc_s|libstdc\+\+)\.so"
@@ -225,52 +238,52 @@ slepc_pkgconfig_dir="$(pkg-config --variable=pcfiledir SLEPc)"
 echo "[export_fem_gpu_runtime] bundling PETSc/SLEPc shared libraries"
 copy_pkg_library_group PETSc libpetsc_real
 copy_pkg_library_group SLEPc libslepc_real
-copy_shared_library_dependency_closure .fullmag/runtimes/fem-gpu-host/lib/libpetsc_real.so
-copy_shared_library_dependency_closure .fullmag/runtimes/fem-gpu-host/lib/libslepc_real.so
+copy_shared_library_dependency_closure ${runtime_root}/lib/libpetsc_real.so
+copy_shared_library_dependency_closure ${runtime_root}/lib/libslepc_real.so
 for dep_entry in /opt/fullmag-deps/lib/*; do
   dep_name="$(basename "$dep_entry")"
-  dep_dest=".fullmag/runtimes/fem-gpu-host/lib/$dep_name"
+  dep_dest="${runtime_root}/lib/$dep_name"
   rm -rf "$dep_dest"
   if [ -d "$dep_entry" ] && [ ! -L "$dep_entry" ]; then
     mkdir -p "$dep_dest"
     cp -a "$dep_entry"/. "$dep_dest"/
   else
-    copy_runtime_entry_replace "$dep_entry" .fullmag/runtimes/fem-gpu-host/lib
+    copy_runtime_entry_replace "$dep_entry" ${runtime_root}/lib
   fi
 done
 echo "[export_fem_gpu_runtime] bundling MFEM/libCEED/Hypre host headers"
-cp -R /opt/fullmag-deps/include/. .fullmag/runtimes/fem-gpu-host/include/
+cp -R /opt/fullmag-deps/include/. ${runtime_root}/include/
 echo "[export_fem_gpu_runtime] bundling PETSc/SLEPc headers"
-rm -rf .fullmag/runtimes/fem-gpu-host/include/petsc .fullmag/runtimes/fem-gpu-host/include/slepc
-mkdir -p .fullmag/runtimes/fem-gpu-host/include/petsc .fullmag/runtimes/fem-gpu-host/include/slepc
-copy_pkg_include_dirs PETSc .fullmag/runtimes/fem-gpu-host/include/petsc
-copy_pkg_include_dirs SLEPc .fullmag/runtimes/fem-gpu-host/include/slepc
+rm -rf ${runtime_root}/include/petsc ${runtime_root}/include/slepc
+mkdir -p ${runtime_root}/include/petsc ${runtime_root}/include/slepc
+copy_pkg_include_dirs PETSc ${runtime_root}/include/petsc
+copy_pkg_include_dirs SLEPc ${runtime_root}/include/slepc
 echo "[export_fem_gpu_runtime] bundling OpenMPI headers referenced by MFEM"
-rm -rf .fullmag/runtimes/fem-gpu-host/include/openmpi
-mkdir -p .fullmag/runtimes/fem-gpu-host/include/openmpi
-cp -a /usr/lib/x86_64-linux-gnu/openmpi/include/. .fullmag/runtimes/fem-gpu-host/include/openmpi/
+rm -rf ${runtime_root}/include/openmpi
+mkdir -p ${runtime_root}/include/openmpi
+cp -a /usr/lib/x86_64-linux-gnu/openmpi/include/. ${runtime_root}/include/openmpi/
 echo "[export_fem_gpu_runtime] bundling CUDA headers included by MFEM"
-cp -a /usr/local/cuda-12.4/targets/x86_64-linux/include/. .fullmag/runtimes/fem-gpu-host/include/
+cp -a /usr/local/cuda-12.4/targets/x86_64-linux/include/. ${runtime_root}/include/
 echo "[export_fem_gpu_runtime] bundling CUDA shared libraries referenced by MFEMTargets"
 for cuda_lib in \
   /usr/local/cuda-12.4/targets/x86_64-linux/lib/libcurand.so* \
   /usr/local/cuda-12.4/targets/x86_64-linux/lib/libcublas.so* \
   /usr/local/cuda-12.4/targets/x86_64-linux/lib/libcusparse.so*; do
   if [ -e "$cuda_lib" ]; then
-    copy_runtime_entry_replace "$cuda_lib" .fullmag/runtimes/fem-gpu-host/lib
+    copy_runtime_entry_replace "$cuda_lib" ${runtime_root}/lib
   fi
 done
 echo "[export_fem_gpu_runtime] relocating MFEM CMake package metadata"
 perl -0pi -e "s#/usr/lib/x86_64-linux-gnu/openmpi/include/openmpi#\\\${PACKAGE_PREFIX_DIR}/include/openmpi/openmpi#g; s#/usr/lib/x86_64-linux-gnu/openmpi/include#\\\${PACKAGE_PREFIX_DIR}/include/openmpi#g; s#/opt/fullmag-deps/include#\\\${PACKAGE_PREFIX_DIR}/include#g" \
-  .fullmag/runtimes/fem-gpu-host/lib/cmake/mfem/MFEMConfig.cmake
+  ${runtime_root}/lib/cmake/mfem/MFEMConfig.cmake
 perl -0pi -e "s#/usr/lib/x86_64-linux-gnu/openmpi/include/openmpi#\\\${_IMPORT_PREFIX}/include/openmpi/openmpi#g; s#/usr/lib/x86_64-linux-gnu/openmpi/include#\\\${_IMPORT_PREFIX}/include/openmpi#g; s#/opt/fullmag-deps/include#\\\${_IMPORT_PREFIX}/include#g; s#/opt/fullmag-deps/lib/libHYPRE.so#\\\${_IMPORT_PREFIX}/lib/libHYPRE.so#g; s#/opt/fullmag-deps/lib/libceed.so#\\\${_IMPORT_PREFIX}/lib/libceed.so#g; s#/usr/lib/x86_64-linux-gnu/openmpi/lib/libmpi_cxx.so#\\\${_IMPORT_PREFIX}/lib/libmpi_cxx.so.40#g; s#/usr/lib/x86_64-linux-gnu/openmpi/lib/libmpi.so#\\\${_IMPORT_PREFIX}/lib/libmpi.so.40#g; s#/usr/local/cuda-12.4/targets/x86_64-linux/lib/libcurand.so#\\\${_IMPORT_PREFIX}/lib/libcurand.so#g; s#/usr/local/cuda-12.4/targets/x86_64-linux/lib/libcublas.so#\\\${_IMPORT_PREFIX}/lib/libcublas.so#g; s#/usr/local/cuda-12.4/targets/x86_64-linux/lib/libcusparse.so#\\\${_IMPORT_PREFIX}/lib/libcusparse.so#g" \
-  .fullmag/runtimes/fem-gpu-host/lib/cmake/mfem/MFEMTargets.cmake
+  ${runtime_root}/lib/cmake/mfem/MFEMTargets.cmake
 echo "[export_fem_gpu_runtime] bundling PETSc/SLEPc CMake find modules"
-mkdir -p .fullmag/runtimes/fem-gpu-host/lib/cmake/fullmag-frequency-domain
+mkdir -p ${runtime_root}/lib/cmake/fullmag-frequency-domain
 cp -a backends/fem/cmake/FindPETSc.cmake \
-  .fullmag/runtimes/fem-gpu-host/lib/cmake/fullmag-frequency-domain/FindPETSc.cmake
+  ${runtime_root}/lib/cmake/fullmag-frequency-domain/FindPETSc.cmake
 cp -a backends/fem/cmake/FindSLEPc.cmake \
-  .fullmag/runtimes/fem-gpu-host/lib/cmake/fullmag-frequency-domain/FindSLEPc.cmake
+  ${runtime_root}/lib/cmake/fullmag-frequency-domain/FindSLEPc.cmake
 # Bundle OpenMPI runtime libs so the exported host runtime does not depend
 # on host-installed libmpi/libopen-rte variants.
 shopt -s nullglob
@@ -286,33 +299,33 @@ for lib_glob in \
   /usr/lib/x86_64-linux-gnu/libevent*.so* \
   /usr/lib/x86_64-linux-gnu/openmpi/lib/*.so*; do
   for lib in $lib_glob; do
-    copy_runtime_entry_replace "$lib" .fullmag/runtimes/fem-gpu-host/lib
+    copy_runtime_entry_replace "$lib" ${runtime_root}/lib
   done
 done
 shopt -u nullglob
 echo "[export_fem_gpu_runtime] bundling OpenMPI/PMIx runtime components"
 if [ -x /usr/bin/orted ]; then
-  copy_runtime_entry_replace /usr/bin/orted .fullmag/runtimes/fem-gpu-host/openmpi/bin
+  copy_runtime_entry_replace /usr/bin/orted ${runtime_root}/openmpi/bin
 fi
 if [ -d /usr/lib/x86_64-linux-gnu/pmix2/lib ]; then
-  mkdir -p .fullmag/runtimes/fem-gpu-host/lib/pmix2
+  mkdir -p ${runtime_root}/lib/pmix2
   cp -a /usr/lib/x86_64-linux-gnu/pmix2/lib \
-    .fullmag/runtimes/fem-gpu-host/lib/pmix2/
+    ${runtime_root}/lib/pmix2/
 fi
 if [ -d /usr/lib/x86_64-linux-gnu/pmix2/share ]; then
-  mkdir -p .fullmag/runtimes/fem-gpu-host/lib/pmix2
+  mkdir -p ${runtime_root}/lib/pmix2
   cp -a /usr/lib/x86_64-linux-gnu/pmix2/share \
-    .fullmag/runtimes/fem-gpu-host/lib/pmix2/
+    ${runtime_root}/lib/pmix2/
 fi
 if [ -d /usr/lib/x86_64-linux-gnu/openmpi/lib/openmpi3 ]; then
-  mkdir -p .fullmag/runtimes/fem-gpu-host/openmpi/lib
+  mkdir -p ${runtime_root}/openmpi/lib
   cp -a /usr/lib/x86_64-linux-gnu/openmpi/lib/openmpi3 \
-    .fullmag/runtimes/fem-gpu-host/openmpi/lib/
+    ${runtime_root}/openmpi/lib/
 fi
 if [ -d /usr/share/openmpi ]; then
-  mkdir -p .fullmag/runtimes/fem-gpu-host/openmpi/share
+  mkdir -p ${runtime_root}/openmpi/share
   cp -a /usr/share/openmpi \
-    .fullmag/runtimes/fem-gpu-host/openmpi/share/
+    ${runtime_root}/openmpi/share/
 fi
 require_exported_path() {
   local path="$1"
@@ -322,19 +335,19 @@ require_exported_path() {
     exit 1
   fi
 }
-require_exported_path .fullmag/runtimes/fem-gpu-host/openmpi/share/openmpi/help-mpi-runtime.txt "OpenMPI help data"
-require_exported_path .fullmag/runtimes/fem-gpu-host/openmpi/share/openmpi/help-opal-runtime.txt "OpenMPI OPAL help data"
-require_exported_path .fullmag/runtimes/fem-gpu-host/openmpi/lib/openmpi3/mca_ess_singleton.so "OpenMPI singleton ESS component"
-require_exported_path .fullmag/runtimes/fem-gpu-host/openmpi/lib/openmpi3/mca_plm_isolated.so "OpenMPI isolated PLM component"
-require_exported_path .fullmag/runtimes/fem-gpu-host/openmpi/lib/openmpi3/mca_pmix_isolated.so "OpenMPI isolated PMIx component"
-require_exported_path .fullmag/runtimes/fem-gpu-host/openmpi/lib/openmpi3/mca_btl_self.so "OpenMPI self BTL component"
-require_exported_path .fullmag/runtimes/fem-gpu-host/lib/pmix2/lib/pmix/mca_pcompress_zlib.so "PMIx compression component"
-require_exported_path .fullmag/runtimes/fem-gpu-host/lib/pmix2/share/pmix/help-pmix-runtime.txt "PMIx help data"
-require_exported_path .fullmag/runtimes/fem-gpu-host/lib/libpetsc_real.so "PETSc shared library"
-require_exported_path .fullmag/runtimes/fem-gpu-host/lib/libslepc_real.so "SLEPc shared library"
-require_exported_path .fullmag/runtimes/fem-gpu-host/_fullmag_core.so "PyO3 _fullmag_core module"
-require_exported_path .fullmag/runtimes/fem-gpu-host/lib/cmake/fullmag-frequency-domain/FindPETSc.cmake "PETSc CMake find module"
-require_exported_path .fullmag/runtimes/fem-gpu-host/lib/cmake/fullmag-frequency-domain/FindSLEPc.cmake "SLEPc CMake find module"
+require_exported_path ${runtime_root}/openmpi/share/openmpi/help-mpi-runtime.txt "OpenMPI help data"
+require_exported_path ${runtime_root}/openmpi/share/openmpi/help-opal-runtime.txt "OpenMPI OPAL help data"
+require_exported_path ${runtime_root}/openmpi/lib/openmpi3/mca_ess_singleton.so "OpenMPI singleton ESS component"
+require_exported_path ${runtime_root}/openmpi/lib/openmpi3/mca_plm_isolated.so "OpenMPI isolated PLM component"
+require_exported_path ${runtime_root}/openmpi/lib/openmpi3/mca_pmix_isolated.so "OpenMPI isolated PMIx component"
+require_exported_path ${runtime_root}/openmpi/lib/openmpi3/mca_btl_self.so "OpenMPI self BTL component"
+require_exported_path ${runtime_root}/lib/pmix2/lib/pmix/mca_pcompress_zlib.so "PMIx compression component"
+require_exported_path ${runtime_root}/lib/pmix2/share/pmix/help-pmix-runtime.txt "PMIx help data"
+require_exported_path ${runtime_root}/lib/libpetsc_real.so "PETSc shared library"
+require_exported_path ${runtime_root}/lib/libslepc_real.so "SLEPc shared library"
+require_exported_path ${runtime_root}/_fullmag_core.so "PyO3 _fullmag_core module"
+require_exported_path ${runtime_root}/lib/cmake/fullmag-frequency-domain/FindPETSc.cmake "PETSc CMake find module"
+require_exported_path ${runtime_root}/lib/cmake/fullmag-frequency-domain/FindSLEPc.cmake "SLEPc CMake find module"
 export PETSC_VERSION="$petsc_version"
 export SLEPC_VERSION="$slepc_version"
 export PETSC_PKGCONFIG_DIR="$petsc_pkgconfig_dir"
@@ -344,7 +357,7 @@ import json
 import os
 from pathlib import Path
 
-runtime = Path(".fullmag/runtimes/fem-gpu-host")
+runtime = Path("${runtime_root}")
 payload = {
     "petsc_available": True,
     "slepc_available": True,
@@ -372,13 +385,13 @@ payload = {
 )
 PY
 chown "${FULLMAG_HOST_UID}:${FULLMAG_HOST_GID}" .fullmag .fullmag/runtimes
-chown -R "${FULLMAG_HOST_UID}:${FULLMAG_HOST_GID}" .fullmag/runtimes/fem-gpu-host
+chown -R "${FULLMAG_HOST_UID}:${FULLMAG_HOST_GID}" ${runtime_root}
 chmod u+rwx,go+rx,go-w .fullmag .fullmag/runtimes
-chmod -R u+rwX,go+rX,go-w .fullmag/runtimes/fem-gpu-host
+chmod -R u+rwX,go+rX,go-w ${runtime_root}
 echo "[export_fem_gpu_runtime] container-side export complete"
 ' < /dev/null
 
-cat > "${RUNTIME_ROOT}/bin/fullmag-fem-gpu" <<'EOF'
+cat > "${STAGING_ROOT}/bin/fullmag-fem-gpu" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -480,14 +493,13 @@ export FULLMAG_FDM_GPU_INDEX="${FULLMAG_FDM_GPU_INDEX:-${FULLMAG_FEM_GPU_INDEX}}
 exec "${SELF_DIR}/fullmag-fem-gpu-bin" "$@"
 EOF
 
-chmod +x "${RUNTIME_ROOT}/bin/fullmag-fem-gpu"
+chmod +x "${STAGING_ROOT}/bin/fullmag-fem-gpu"
 
 docker_image_id="$(docker image inspect fullmag/fem-gpu:local --format '{{.Id}}' 2>/dev/null || true)"
 created_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-export RUNTIME_ROOT
 export docker_image_id
 export created_at
-python3 - <<'PY'
+RUNTIME_ROOT="${STAGING_ROOT}" python3 - <<'PY'
 import json
 import os
 from pathlib import Path
@@ -507,6 +519,17 @@ manifest = {
         "worker": "bin/fullmag-fem-gpu-bin",
         "api": "bin/fullmag-api",
     },
+    "integrity": {
+        "launcher_sha256": __import__("hashlib").sha256(
+            (runtime_root / "bin/fullmag-fem-gpu").read_bytes()
+        ).hexdigest(),
+        "worker_sha256": __import__("hashlib").sha256(
+            (runtime_root / "bin/fullmag-fem-gpu-bin").read_bytes()
+        ).hexdigest(),
+        "api_sha256": __import__("hashlib").sha256(
+            (runtime_root / "bin/fullmag-api").read_bytes()
+        ).hexdigest(),
+    },
     "python_modules": {
         "_fullmag_core": "_fullmag_core.so",
     },
@@ -518,7 +541,9 @@ manifest = {
 )
 PY
 
-cat > "${RUNTIME_ROOT}/README.md" <<EOF
+python3 scripts/validate_managed_fem_runtime_bundle.py --runtime-root "${STAGING_ROOT}"
+
+cat > "${STAGING_ROOT}/README.md" <<EOF
 # Managed FEM host runtime bundle
 
 This directory contains a host-usable managed FEM runtime bundle exported from the \`fem-gpu\`
@@ -531,14 +556,30 @@ The bundle supports both:
 Run directly with:
 
 \`\`\`bash
-${RUNTIME_ROOT}/bin/fullmag-fem-gpu examples/py_layer_hole_relax_150nm.py --until 1e-13 --backend fem
+${STAGING_ROOT}/bin/fullmag-fem-gpu examples/py_layer_hole_relax_150nm.py --until 1e-13 --backend fem
 \`\`\`
 
 This bundle is not yet automatically resolved by the host launcher. It is a staging artifact for
 the future launcher-owned managed-runtime flow.
 EOF
 
-echo "Exported FEM GPU host runtime bundle:"
-echo "  ${RUNTIME_ROOT}"
-echo "Main executable:"
-echo "  ${RUNTIME_ROOT}/bin/fullmag-fem-gpu"
+publish_runtime_bundle() {
+  local backup_root="${RUNTIME_ROOT}.previous.$$"
+  python3 scripts/validate_managed_fem_runtime_bundle.py --runtime-root "${STAGING_ROOT}"
+  rm -rf -- "${backup_root}"
+  if [ -e "${RUNTIME_ROOT}" ]; then
+    mv "${RUNTIME_ROOT}" "${backup_root}"
+  fi
+  if ! mv "${STAGING_ROOT}" "${RUNTIME_ROOT}"; then
+    if [ -e "${backup_root}" ]; then
+      mv "${backup_root}" "${RUNTIME_ROOT}"
+    fi
+    return 1
+  fi
+  rm -rf -- "${backup_root}"
+}
+
+publish_runtime_bundle
+trap - EXIT
+echo "Exported FEM GPU host runtime bundle: ${RUNTIME_ROOT}"
+echo "Main executable: ${RUNTIME_ROOT}/bin/fullmag-fem-gpu"

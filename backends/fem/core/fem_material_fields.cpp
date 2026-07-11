@@ -85,6 +85,48 @@ bool validate_field_values(
     return true;
 }
 
+const char *first_elementwise_ms_cpu_owner(const Context &ctx)
+{
+    // Keep this order aligned with the plan import order and the effective
+    // field/RHS owners. A native handle can later enter direct relaxation, so
+    // a plan with no active owner still cannot accept discontinuous Ms without
+    // a common quadrature accessor.
+    if (ctx.zeeman.has_external_field) {
+        return "Zeeman interaction";
+    }
+    if (ctx.demag.enabled) {
+        return "demag interaction";
+    }
+    if (ctx.anisotropy.uniaxial_enabled) {
+        return "uniaxial anisotropy";
+    }
+    if (ctx.anisotropy.cubic_enabled) {
+        return "cubic anisotropy";
+    }
+    if (ctx.dmi.interfacial_enabled) {
+        return "interfacial DMI";
+    }
+    if (ctx.dmi.bulk_enabled) {
+        return "bulk DMI";
+    }
+    if (ctx.thermal_brown.temperature > 0.0) {
+        return "thermal Brown interaction";
+    }
+    if (ctx.stt.zhang_li_enabled) {
+        return "Zhang-Li STT";
+    }
+    if (ctx.stt.slonczewski_enabled) {
+        return "Slonczewski STT";
+    }
+    if (ctx.oersted.has_cylinder || ctx.oersted.has_explicit_field) {
+        return "Oersted interaction";
+    }
+    if (ctx.magnetoelastic.enabled) {
+        return "magnetoelastic interaction";
+    }
+    return "native FEM handle lifecycle fallback";
+}
+
 } // namespace
 
 void initialize_material_plan_fields(Context &ctx, const fullmag_fem_plan_desc &plan) {
@@ -177,6 +219,42 @@ bool validate_material_fields(const Context &ctx, std::string &error) {
     if (!std::isfinite(ctx.material_fields.material.gyromagnetic_ratio) ||
         ctx.material_fields.material.gyromagnetic_ratio <= 0.0) {
         error = "material.gyromagnetic_ratio must be finite and > 0; native FEM expects gamma_mu0 in m/(A s), not gamma in rad/(T s)";
+        return false;
+    }
+    return true;
+}
+
+bool validate_elementwise_ms_runtime_support(const Context &ctx, std::string &error) {
+    const bool has_ms = !ctx.material_fields.Ms_element_field.empty();
+    const bool has_a = !ctx.material_fields.A_element_field.empty();
+    if (!has_ms && !has_a) {
+        return true;
+    }
+
+    const bool gpu = mfem_device_requests_gpu(ctx);
+    const char *device = gpu ? "gpu" : "cpu";
+    if (has_ms) {
+        const char *owner = gpu ? "GPU material-state upload" :
+            first_elementwise_ms_cpu_owner(ctx);
+        error = std::string("Ms_element_field") + " is unsupported for " + owner +
+            " on resolved device '" +
+            device +
+            "': this runtime has no common element/quadrature material accessor";
+        return false;
+    }
+
+    // A_e enters only the exchange weak form.  Unlike Ms_e it is not read by
+    // the local-field, torque, thermal, or observable owners above.
+    if (has_a && gpu) {
+        error = std::string("A_element_field") + " is unsupported for GPU material-state upload" +
+            " on resolved device '" + device +
+            "': this runtime has no common element/quadrature material accessor";
+        return false;
+    }
+    if (has_a && !ctx.exchange.enabled) {
+        error = std::string("A_element_field") + " is unsupported for exchange-disabled plan" +
+            " on resolved device '" + device +
+            "': this runtime has no exchange weak form to consume the sharp coefficient";
         return false;
     }
     return true;

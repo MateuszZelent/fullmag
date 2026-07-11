@@ -151,6 +151,61 @@ Object selections expose required authoring panels:
 
 The inspector may show material and texture assets, but they are secondary resources owned by object context in the workspace. A standalone top-level Materials branch in the Model explorer is not the canonical navigation path.
 
+## 7.3 Object topological-charge extension
+
+The selected-object topological-charge extension is a read-only analysis panel
+backed by
+`GET /v2/sessions/current/analysis/extensions/objects/{object_id}/topological-charge`.
+Its scientific contract is
+`docs/physics/0940-topological-charge-observable.md`.
+
+Availability rules:
+
+- the selection is a committed magnetic object;
+- the object has current materialized `m` or the panel explains
+  `no_current_magnetization`;
+- FDM requests have an object mask and FEM requests have an object-scoped P1
+  tetrahedral mesh plus explicit field-node mapping;
+- high-order FEM and nonplanar supports remain visible only as typed unsupported
+  explanations, never as runnable-looking `ready` rows.
+
+Panel controls and defaults:
+
+- evaluation mode defaults to `on_demand`; `continuous` is explicit;
+- plane control is `auto|xy|xz|yz`;
+- support control is `midplane|layer_profile`;
+- profile sample count is visible only for `layer_profile`;
+- snapshot and stage controls appear only when snapshot resources exist;
+- the Compute command remains available in on-demand mode and continuous mode
+  may also be manually refreshed.
+
+The result view shows:
+
+- computation status and scientific trust as separate concepts;
+- `Q` and integer qualification only when allowed by the resource;
+- the resolved ordered `(u,v,n)` support frame and physical cut coordinate;
+- a bounded table containing every profile sample, `coordinate_m`, and
+  `integration_weight_m`;
+- topology, boundary, edge-angle, valid-triangle, field, mesh, domain, snapshot,
+  method, cache, and timestamp provenance;
+- every warning in deterministic severity order;
+- equations and symbol definitions rendered as accessible MathML or normal
+  prose, never raw LaTeX text.
+
+The Explorer child status is derived from the same resource snapshot and may be
+`idle`, `loading`, `ready`, `under-resolved`, `stale`, `unsupported`, or
+`error`. Here `idle`, `loading`, `stale`, and `error` are hook lifecycle states;
+they must not be read from or written into the scientific payload status.
+Enabling an extension must not hardcode `ready`. Activation is
+session/workspace UI state owned by the kernel and is cleared or re-keyed when
+the active session changes. It is not a module-global mutable singleton and is
+not serialized into Python or `ProblemIR`.
+
+The Inspector must not import Explorer internals or an analysis-plots module.
+Explorer, Inspector, and optional analysis surfaces communicate through kernel
+selection, resource hooks, and commands. The extension must not mutate viewport
+quantity, layers, colorbar, camera, or render-loop state.
+
 ## 8. Tests
 
 Required tests:
@@ -163,3 +218,8 @@ Required tests:
 - successful commit refreshes from resource revision.
 - visualization panel edits update the same target registry observed by the View ribbon and viewport.
 - new-object create flow keeps draft state isolated before commit, selects the committed object after refresh, and marks the object primitive-only or mesh-stale until mesh resources catch up.
+- topological-charge activation is session-scoped and produces an Explorer child whose status follows the resource;
+- topological-charge panel defaults to on-demand and sends the exact plane, support, profile, snapshot, stage, and method query;
+- topological-charge panel renders every scientific computation/trust state and every resource lifecycle/error state, every warning, orientation, SI coordinates, full profile rows, and provenance;
+- unsupported object, missing field, high-order FEM, stale provenance, transport error, and invalidated on-demand result remain visibly distinct;
+- enabling or refreshing topological charge does not change visualization state or mount another viewport.

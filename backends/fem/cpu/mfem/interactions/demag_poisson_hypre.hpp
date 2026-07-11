@@ -24,6 +24,10 @@ struct Context;
  */
 bool demag_poisson_hypre_has_warm_start(const Context &ctx);
 
+// Reset the Poisson iterate to the same zero state before an energy line-search
+// evaluation. This makes the approximate demag energy history-independent.
+void reset_demag_poisson_hypre_initial_guess(Context &ctx);
+
 bool solve_demag_poisson_hypre(
     Context &ctx,
     const mfem::Vector &rhs,

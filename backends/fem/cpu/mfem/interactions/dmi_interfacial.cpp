@@ -60,7 +60,9 @@ bool compute_interfacial_dmi_field(
 
     auto *dmi_workspace = dmi_element_workspace(ctx);
 
-    unpack_aos_to_existing_components(m_xyz, ctx.mfem_context.m_x, ctx.mfem_context.m_y, ctx.mfem_context.m_z);
+    if (!refresh_dmi_grid_functions_from_magnetization(ctx, m_xyz, error)) {
+        return false;
+    }
 
     auto *gf_mx = static_cast<mfem::GridFunction *>(ctx.mfem_context.gf_mx);
     auto *gf_my = static_cast<mfem::GridFunction *>(ctx.mfem_context.gf_my);

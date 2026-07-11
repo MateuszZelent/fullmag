@@ -47,6 +47,16 @@ LLG_OVERDAMPED_POLICY = {
     "precession_policy": "disabled_pure_damping",
     "rhs_policy": "llg_overdamped_rhs",
 }
+ENERGY_WEIGHTED_ARMIJO_CONTRACT = {
+    "metric": "mu0_ms_fem_lumped_volume",
+    "gradient_metric": "mu0_ms_fem_lumped_volume",
+    "gradient_units": "A/m",
+    "search_direction_units": "A/m",
+    "line_search_step_units": "m/A",
+    "armijo_slope_units": "J A/m",
+    "armijo_decrement_units": "J",
+    "armijo_derivative_units": "J",
+}
 MAX_MAGNETIZATION_NORM_DEFECT = 1.0e-9
 MIN_RELATIVE_ENERGY_DECREASE = 1.0e-3
 MAX_FINAL_TORQUE_GROWTH_FACTOR = 1.25
@@ -66,6 +76,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("log_path", type=Path)
     parser.add_argument("--engine", required=True, choices=sorted(SUPPORTED_ENGINES))
     parser.add_argument("--algorithm", required=True, choices=sorted(SUPPORTED_ALGORITHMS))
+    parser.add_argument(
+        "--demag",
+        choices=("enabled", "disabled"),
+        default="enabled",
+        help="Expected demag realization for this qualification case.",
+    )
     parser.add_argument("--min-steps", type=int, default=2)
     parser.add_argument(
         "--min-relative-energy-decrease",
@@ -156,7 +172,11 @@ def validate_text_markers(text: str, engine: str) -> None:
 def validate_summary(summary: dict[str, Any], algorithm: str, min_steps: int) -> None:
     require(summary.get("status") == "completed", f"unexpected status: {summary.get('status')!r}")
     require(summary.get("backend") == "fem", f"unexpected backend: {summary.get('backend')!r}")
-    require(summary.get("mode") == "strict", f"unexpected mode: {summary.get('mode')!r}")
+    expected_mode = "extended" if algorithm == "tangent_plane_implicit" else "strict"
+    require(
+        summary.get("mode") == expected_mode,
+        f"unexpected mode for {algorithm}: expected {expected_mode!r}, got {summary.get('mode')!r}",
+    )
     require(summary.get("precision") == "double", f"unexpected precision: {summary.get('precision')!r}")
     problem_name = summary.get("problem_name")
     require(
@@ -255,9 +275,10 @@ def validate_cpu_relaxation_qualification(
             policy.get("realization") == expected_realization,
             f"CPU native-relaxation algorithm_policy realization must be {expected_realization}",
         )
+        expected_metric = ENERGY_WEIGHTED_ARMIJO_CONTRACT["metric"]
         require(
-            policy.get("metric") == "fem_lumped_mass_inner_product",
-            "CPU native-relaxation algorithm_policy metric must be fem_lumped_mass_inner_product",
+            policy.get("metric") == expected_metric,
+            f"CPU native-relaxation algorithm_policy metric must be {expected_metric}",
         )
         expected_line_search = CPU_DIRECT_MINIMIZER_LINE_SEARCH[algorithm]
         require(
@@ -265,6 +286,11 @@ def validate_cpu_relaxation_qualification(
             "CPU native-relaxation algorithm_policy line_search must be "
             f"{expected_line_search}, got {policy.get('line_search')!r}",
         )
+        for key, expected in ENERGY_WEIGHTED_ARMIJO_CONTRACT.items():
+            require(
+                policy.get(key) == expected,
+                f"CPU energy-weighted Armijo algorithm_policy {key} must be {expected}",
+            )
         if algorithm in DIRECT_MINIMIZERS:
             require(
                 policy.get("preconditioner") == "exchange_plus_mass_tangent_gradient",
@@ -317,6 +343,7 @@ def validate_gpu_relaxation_qualification(
     provenance: dict[str, Any],
     algorithm: str,
     min_steps: int,
+    demag_enabled: bool,
 ) -> None:
     qualification = require_json_object(
         metadata.get("fem_gpu_relaxation_qualification"),
@@ -357,10 +384,11 @@ def validate_gpu_relaxation_qualification(
             policy.get("realization") == expected_realization,
             f"GPU direct-minimizer algorithm_policy realization must be {expected_realization}",
         )
-        require(
-            policy.get("metric") == "fem_lumped_mass_inner_product",
-            "GPU direct-minimizer algorithm_policy metric must be fem_lumped_mass_inner_product",
-        )
+        for key, expected in ENERGY_WEIGHTED_ARMIJO_CONTRACT.items():
+            require(
+                policy.get(key) == expected,
+                f"GPU direct-minimizer algorithm_policy {key} must be {expected}",
+            )
         require(
             policy.get("gradient_policy") == "device_tangent_gradient",
             "GPU direct-minimizer algorithm_policy gradient_policy must be device_tangent_gradient",
@@ -406,17 +434,19 @@ def validate_gpu_relaxation_qualification(
         device_policy.get("exchange_operator_mode") == "legacy_sparse_gpu",
         "GPU direct-minimizer device_policy exchange_operator_mode must be legacy_sparse_gpu",
     )
+    expected_demag_mode = "device_hypre_poisson" if demag_enabled else "none"
     require(
-        device_policy.get("demag_operator_mode") == "device_hypre_poisson",
-        "GPU direct-minimizer device_policy demag_operator_mode must be device_hypre_poisson",
+        device_policy.get("demag_operator_mode") == expected_demag_mode,
+        "GPU direct-minimizer device_policy demag_operator_mode must be "
+        f"{expected_demag_mode}",
     )
     require(
         device_policy.get("uses_cuda_kernels") is True,
         "GPU direct-minimizer device_policy must report uses_cuda_kernels=true",
     )
     require(
-        device_policy.get("uses_gpu_poisson") is True,
-        "GPU direct-minimizer device_policy must report uses_gpu_poisson=true",
+        device_policy.get("uses_gpu_poisson") is demag_enabled,
+        "GPU direct-minimizer device_policy uses_gpu_poisson must match demag state",
     )
     require(
         device_policy.get("hot_loop_exchange_host_sync_count") == 0,
@@ -447,7 +477,13 @@ def validate_gpu_relaxation_qualification(
         )
 
 
-def validate_metadata(metadata: dict[str, Any], algorithm: str, engine: str, min_steps: int) -> None:
+def validate_metadata(
+    metadata: dict[str, Any],
+    algorithm: str,
+    engine: str,
+    min_steps: int,
+    demag_enabled: bool,
+) -> None:
     require(metadata.get("status") == "completed", "metadata status must be completed")
     require(
         metadata.get("problem_name") == f"fem_relax_gpu_smoke_{algorithm}",
@@ -472,7 +508,10 @@ def validate_metadata(metadata: dict[str, Any], algorithm: str, engine: str, min
     )
     if engine == "gpu":
         require(provenance.get("uses_cuda_kernels") is True, "metadata must report uses_cuda_kernels=true")
-        require(provenance.get("uses_gpu_poisson") is True, "metadata must report uses_gpu_poisson=true")
+        require(
+            provenance.get("uses_gpu_poisson") is demag_enabled,
+            "metadata uses_gpu_poisson must match expected demag state",
+        )
         require(
             provenance.get("hot_loop_exchange_host_sync_count") == 0,
             "metadata must report zero hot-loop exchange host syncs",
@@ -500,7 +539,9 @@ def validate_metadata(metadata: dict[str, Any], algorithm: str, engine: str, min
                 provenance.get("fem_gpu_qualification_status") == "production_executable",
                 "metadata fem_gpu_qualification_status must be production_executable",
             )
-            validate_gpu_relaxation_qualification(metadata, provenance, algorithm, min_steps)
+            validate_gpu_relaxation_qualification(
+                metadata, provenance, algorithm, min_steps, demag_enabled
+            )
     elif algorithm == "llg_overdamped":
         require(
             provenance.get("requested_energy_minimizer") == "llg_overdamped",
@@ -523,7 +564,9 @@ def validate_metadata(metadata: dict[str, Any], algorithm: str, engine: str, min
                 provenance.get("fem_gpu_qualification_status") == "production_executable",
                 "metadata fem_gpu_qualification_status must be production_executable",
             )
-            validate_gpu_relaxation_qualification(metadata, provenance, algorithm, min_steps)
+            validate_gpu_relaxation_qualification(
+                metadata, provenance, algorithm, min_steps, demag_enabled
+            )
 
 
 def load_scalar_rows(artifact_dir: Path) -> list[dict[str, str]]:
@@ -619,7 +662,13 @@ def main() -> int:
         summary = load_last_json_object(text)
         validate_summary(summary, args.algorithm, args.min_steps)
         artifact_dir = resolve_artifact_dir(summary, args.log_path)
-        validate_metadata(load_metadata(artifact_dir), args.algorithm, args.engine, args.min_steps)
+        validate_metadata(
+            load_metadata(artifact_dir),
+            args.algorithm,
+            args.engine,
+            args.min_steps,
+            args.demag == "enabled",
+        )
         validate_scalars(
             load_scalar_rows(artifact_dir),
             summary,

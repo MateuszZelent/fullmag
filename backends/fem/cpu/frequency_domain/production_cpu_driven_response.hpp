@@ -1,6 +1,7 @@
 #pragma once
 
 #include "frequency_domain/frequency_domain_contract.hpp"
+#include "frequency_domain/linearized_dynamic_pencil.hpp"
 
 #include <cstdint>
 
@@ -103,6 +104,9 @@ struct ProductionCpuDrivenResponseProblem {
     bool auto_disable_harmful_right_preconditioner = false;
     double right_preconditioner_probe_disable_relative_threshold = 1.0;
     std::uint64_t right_preconditioner_auto_pilot_iterations = 0;
+    // Optional canonical reference action.  When present, GMRES and every
+    // recomputed residual consume this same Aomega owner.
+    const LinearizedDynamicPencil *linearized_dynamic_pencil = nullptr;
 
     ProductionCpuDrivenResponseProblem() = default;
 

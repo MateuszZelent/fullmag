@@ -17,6 +17,20 @@ use crate::types::{
     CurrentWorkspaceSelection, DisplayPresentationState, SessionStateResponse,
 };
 
+const RELAXATION_ALGORITHMS_AVAILABLE: [&str; 4] = [
+    "llg_overdamped",
+    "projected_gradient_bb",
+    "nonlinear_cg",
+    "tangent_plane_implicit",
+];
+
+fn relaxation_algorithms_available() -> Vec<String> {
+    RELAXATION_ALGORITHMS_AVAILABLE
+        .iter()
+        .map(|algorithm| (*algorithm).to_string())
+        .collect()
+}
+
 #[utoipa::path(
     get,
     path = "/v2/sessions/current/status",
@@ -192,7 +206,7 @@ pub(crate) fn build_live_status(
         gpu_telemetry: true,
         preview_2d: true,
         preview_3d: true,
-        algorithms_available: Vec::new(),
+        algorithms_available: relaxation_algorithms_available(),
     };
 
     let energies = EnergySummary {
@@ -533,4 +547,22 @@ fn instantaneous_steps_per_second(
     }
     let avg_ns = total_ns as f64 / window.len() as f64;
     Some(1.0e9 / avg_ns)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::relaxation_algorithms_available;
+
+    #[test]
+    fn session_status_advertises_production_relaxation_algorithms() {
+        assert_eq!(
+            relaxation_algorithms_available(),
+            vec![
+                "llg_overdamped".to_string(),
+                "projected_gradient_bb".to_string(),
+                "nonlinear_cg".to_string(),
+                "tangent_plane_implicit".to_string(),
+            ]
+        );
+    }
 }

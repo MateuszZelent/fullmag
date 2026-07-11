@@ -7,6 +7,7 @@
 #include "cpu/frequency_domain/slepc_modal_eigen.hpp"
 #include "cpu/frequency_domain/window_partition.hpp"
 #include "frequency_domain/solver_progress.hpp"
+#include "frequency_domain/linearized_dynamic_pencil.hpp"
 
 #include <cmath>
 #include <complex>
@@ -91,6 +92,67 @@ std::string with_operator_diagnostics(
     }
     diagnostics_json += "}";
     return diagnostics_json;
+}
+
+std::string format_double(double value) noexcept;
+
+DynamicPencilMetadata magnetic_pencil_metadata(
+    const ModalEigenRequest &request) noexcept
+{
+    if (request.mfem_linearized_pencil_gamma0_m_per_a_s > 0.0) {
+        return dynamic_pencil_metadata_from_legacy_gamma0(
+            request.mfem_linearized_pencil_gamma0_m_per_a_s,
+            request.phase_convention);
+    }
+    return dynamic_pencil_metadata_from_legacy_operator_request(
+        request.operator_request, request.phase_convention);
+}
+
+std::string with_magnetic_pencil_digest(
+    std::string json,
+    const ModalEigenRequest &request,
+    const char *field_name)
+{
+    if (!request.mfem_operator_enabled ||
+        request.mfem_stiffness_matrix_row_major == nullptr ||
+        request.mfem_gyrotropic_matrix_row_major == nullptr ||
+        request.mfem_tangent_dof_count == 0 ||
+        request.mfem_linearized_pencil_dependency_digest == nullptr ||
+        json.empty() || json.back() != '}') {
+        return json;
+    }
+    const std::uint64_t entry_count =
+        request.mfem_tangent_dof_count * request.mfem_tangent_dof_count;
+    std::vector<std::complex<double>> l(entry_count), b_alpha(entry_count);
+    for (std::uint64_t i = 0; i < entry_count; ++i) {
+        l[i] = {-request.mfem_stiffness_matrix_row_major[i], 0.0};
+        b_alpha[i] = {-request.mfem_gyrotropic_matrix_row_major[i], 0.0};
+    }
+    DynamicPencilMetadata canonical_metadata{};
+    char metadata_error[128]{};
+    const DynamicPencilMetadata request_metadata =
+        request.poisson_airbox_block_enabled != 0
+        ? dynamic_pencil_metadata_from_legacy_operator_request(
+              request.operator_request, request.phase_convention)
+        : magnetic_pencil_metadata(request);
+    if (canonicalize_dynamic_pencil_metadata(
+            request_metadata,
+            &canonical_metadata,
+            metadata_error,
+            sizeof(metadata_error)) != FrequencyDomainStatus::ok) {
+        return json;
+    }
+    const LinearizedDynamicPencil pencil = LinearizedDynamicPencil::from_dense_row_major(
+        canonical_metadata,
+        request.mfem_tangent_dof_count, std::move(l), std::move(b_alpha),
+        request.mfem_linearized_pencil_dependency_digest);
+    json.pop_back();
+    json += ",\"" + std::string(field_name) + "\":\"" + pencil.digest() + "\",";
+    json += "\"linearized_dynamic_pencil_dependency_digest\":\"" +
+        pencil.dependency_digest() + "\",";
+    json += "\"linearized_dynamic_pencil_gamma0_m_per_a_s\":" +
+        format_double(canonical_metadata.gamma0_m_per_a_s) + "}";
+    return json;
 }
 
 FrequencyDomainContractResult validation_error_result(
@@ -1267,9 +1329,7 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
     DynamicPencilMetadata canonical_metadata{};
     char metadata_error[128]{};
     if (canonicalize_dynamic_pencil_metadata(
-            dynamic_pencil_metadata_from_legacy_operator_request(
-                request.operator_request,
-                request.phase_convention),
+            magnetic_pencil_metadata(request),
             &canonical_metadata,
             metadata_error,
             sizeof(metadata_error)) != FrequencyDomainStatus::ok) {
@@ -1571,7 +1631,14 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
             "}";
         return result;
     }
-    return production_cpu_modal_eigen_unavailable(request);
+    FrequencyDomainContractResult result = production_cpu_modal_eigen_unavailable(request);
+    // Magnetic MFEM payloads consume and publish this pencil identity.  The
+    // descriptor-Poisson branch above returns before this point deliberately.
+    result.diagnostics_json = with_magnetic_pencil_digest(
+        std::move(result.diagnostics_json), request, "linearized_dynamic_pencil_digest");
+    result.result_json = with_magnetic_pencil_digest(
+        std::move(result.result_json), request, "linearized_dynamic_pencil_digest");
+    return result;
 }
 
 FrequencyDomainContractResult solve_driven_response_contract(

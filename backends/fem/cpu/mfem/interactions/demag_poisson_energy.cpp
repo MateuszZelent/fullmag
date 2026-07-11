@@ -12,6 +12,8 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cmath>
+#include <limits>
 
 namespace fullmag::fem {
 
@@ -63,6 +65,55 @@ double demag_poisson_cached_energy_from_field(
 {
     return demag_poisson_energy_from_field(ctx, m_xyz, h_demag_xyz, energy_threads) +
            ctx.demag.cached_robin_boundary_energy;
+}
+
+relaxation::EnergyDifference demag_poisson_energy_difference_from_endpoint_fields(
+    const Context &ctx,
+    const std::vector<double> &current_m_xyz,
+    const std::vector<double> &trial_m_xyz,
+    const std::vector<double> &current_h_demag_xyz,
+    const std::vector<double> &trial_h_demag_xyz)
+{
+    relaxation::EnergyDifference result;
+    const size_t field_size = current_m_xyz.size();
+    if (field_size == 0u || field_size % 3u != 0u ||
+        trial_m_xyz.size() != field_size ||
+        current_h_demag_xyz.size() != field_size ||
+        trial_h_demag_xyz.size() != field_size) {
+        result.delta_joules = std::numeric_limits<double>::quiet_NaN();
+        result.absolute_term_sum_joules = std::numeric_limits<double>::quiet_NaN();
+        result.roundoff_bound_joules = std::numeric_limits<double>::quiet_NaN();
+        return result;
+    }
+    const size_t nodes = field_size / 3u;
+    if (ctx.integration_weights.mfem_lumped_mass.size() < nodes) {
+        result.delta_joules = std::numeric_limits<double>::quiet_NaN();
+        result.absolute_term_sum_joules = std::numeric_limits<double>::quiet_NaN();
+        result.roundoff_bound_joules = std::numeric_limits<double>::quiet_NaN();
+        return result;
+    }
+    for (size_t node = 0; node < nodes; ++node) {
+        if (!ctx.mesh.magnetic_node_mask.empty() && ctx.mesh.magnetic_node_mask[node] == 0u) {
+            continue;
+        }
+        const double ms = scalar_field_value(
+            ctx.material_fields.Ms_field,
+            node,
+            ctx.material_fields.material.saturation_magnetisation);
+        const double weight = -0.5 * kMu0 * ms *
+            ctx.integration_weights.mfem_lumped_mass[node];
+        const size_t base = 3u * node;
+        for (size_t component = 0; component < 3u; ++component) {
+            const double term = weight *
+                (trial_m_xyz[base + component] - current_m_xyz[base + component]) *
+                (trial_h_demag_xyz[base + component] + current_h_demag_xyz[base + component]);
+            result.delta_joules += term;
+            result.absolute_term_sum_joules += std::abs(term);
+        }
+    }
+    result.roundoff_bound_joules = relaxation::reduction_roundoff_bound(field_size) *
+        result.absolute_term_sum_joules;
+    return result;
 }
 
 } // namespace fullmag::fem

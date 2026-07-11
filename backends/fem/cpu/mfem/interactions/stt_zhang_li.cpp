@@ -90,9 +90,9 @@ bool tetrahedron_gradients(
     const double a21 = -(d1[0] * d2[2] - d1[2] * d2[0]) * inv_det;
     const double a22 =  (d1[0] * d2[1] - d1[1] * d2[0]) * inv_det;
 
-    grads[1] = {a00, a10, a20};
-    grads[2] = {a01, a11, a21};
-    grads[3] = {a02, a12, a22};
+    grads[1] = {a00, a01, a02};
+    grads[2] = {a10, a11, a12};
+    grads[3] = {a20, a21, a22};
     grads[0] = scale3(add3(add3(grads[1], grads[2]), grads[3]), -1.0);
     return true;
 }

@@ -41,6 +41,7 @@ export interface StageInspectorFrameProps {
   } | null;
   draft: StudyStageDraft | null;
   draftIndex: number;
+  demagEnabled?: boolean;
   expectedKind: string;
   kindLabel: string;
   onCommit: () => void;
@@ -62,6 +63,7 @@ export function StageInspectorFrame({
   authoringFeedback,
   draft,
   draftIndex,
+  demagEnabled = false,
   expectedKind,
   kindLabel,
   onCommit,
@@ -142,6 +144,7 @@ export function StageInspectorFrame({
         {draft && isExpectedDraft ? (
           <StudyStageDraftEditor
             algorithmsAvailable={algorithmsAvailable}
+            demagEnabled={demagEnabled}
             draft={draft}
             index={draftIndex}
             requestedBackend={requestedBackend}

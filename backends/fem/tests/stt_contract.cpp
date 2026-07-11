@@ -7,6 +7,7 @@
 
 #include "context.hpp"
 #include "cpu/mfem/interactions/stt.hpp"
+#include "tetra_geometry_oracle.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -575,6 +576,76 @@ void zhang_li_rhs_uses_tetra_gradient_and_nodal_projection() {
     check_near(rhs[5], u_x, u_x * 1e-12, "Zhang-Li node1 rhs z");
 }
 
+void zhang_li_skew_tetra_affine_rhs_matches_analytic_gradient() {
+    auto ctx = make_zhang_li_context();
+    ctx.mesh.nodes_xyz = {
+        0.0, 0.0, 0.0,
+        2.0, 0.0, 0.0,
+        1.0, 1.0, 0.0,
+        0.0, 0.0, 1.0,
+    };
+
+    const std::array<fullmag::fem::test::Vec3, 4> points = {{
+        {0.0, 0.0, 0.0}, {2.0, 0.0, 0.0}, {1.0, 1.0, 0.0}, {0.0, 0.0, 1.0},
+    }};
+    std::array<fullmag::fem::test::Vec3, 4> gradients{};
+    check(fullmag::fem::test::p1_tetra_gradients(points, gradients), "skew tetra oracle geometry is nondegenerate");
+    const std::array<fullmag::fem::test::Vec3, 4> expected_gradients = {{
+        {-0.5, -0.5, -1.0}, {0.5, -0.5, 0.0}, {0.0, 1.0, 0.0}, {0.0, 0.0, 1.0},
+    }};
+    for (size_t node = 0; node < gradients.size(); ++node) {
+        for (size_t direction = 0; direction < 3; ++direction) {
+            check_near(gradients[node][direction], expected_gradients[node][direction], 1e-15, "skew tetra P1 gradient");
+        }
+    }
+    for (size_t direction = 0; direction < 3; ++direction) {
+        double sum = 0.0;
+        for (const auto &gradient : gradients) {
+            sum += gradient[direction];
+        }
+        check_near(sum, 0.0, 1e-15, "skew tetra P1 gradients sum to zero");
+    }
+
+    const double u_x =
+        (ctx.stt.degree * kBohrMagnetonTest * ctx.stt.current_density_am2[0]) /
+        (kElectronChargeTest * ctx.material_fields.material.saturation_magnetisation);
+    const std::vector<double> mx = {
+        1.0, 0.0, 0.0,
+        1.0, 0.0, 2.0,
+        1.0, 0.0, 1.0,
+        1.0, 0.0, 0.0,
+    };
+    std::vector<double> rhs(12u, 0.0);
+
+    fullmag::fem::add_zhang_li_stt_rhs_aos(ctx, mx, rhs);
+
+    const fullmag::fem::test::Vec3 affine_mz_gradient = {1.0, 0.0, 0.0};
+    check_near(
+        affine_mz_gradient[0],
+        0.0 * gradients[0][0] + 2.0 * gradients[1][0] + 1.0 * gradients[2][0] + 0.0 * gradients[3][0],
+        1e-15,
+        "skew tetra affine m_z derivative x");
+
+    for (size_t node = 0; node < 4; ++node) {
+        const double mz = mx[node * 3u + 2u];
+        check_near(rhs[node * 3u + 0u], -mz * u_x, std::max(std::abs(mz * u_x) * 1e-12, 1e-24), "Zhang-Li skew-tetra affine rhs x");
+        check_near(rhs[node * 3u + 1u], 0.0, 1e-24, "Zhang-Li skew-tetra affine rhs y");
+        check_near(rhs[node * 3u + 2u], u_x, u_x * 1e-12, "Zhang-Li skew-tetra affine rhs z");
+    }
+
+    const std::vector<double> my = {
+        1.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+        1.0, 0.0, 1.0,
+        1.0, 0.0, 0.0,
+    };
+    std::fill(rhs.begin(), rhs.end(), 0.0);
+    fullmag::fem::add_zhang_li_stt_rhs_aos(ctx, my, rhs);
+    for (double value : rhs) {
+        check_near(value, 0.0, 1e-24, "Zhang-Li skew-tetra transverse affine rhs");
+    }
+}
+
 void zhang_li_current_direction_reverses_rhs() {
     auto forward = make_zhang_li_context();
     auto reverse = make_zhang_li_context();
@@ -713,6 +784,7 @@ int main() {
     slonczewski_direct_torque_matches_effective_field_form_with_gilbert_damping();
     slonczewski_skips_nonmagnetic_nodes();
     zhang_li_rhs_uses_tetra_gradient_and_nodal_projection();
+    zhang_li_skew_tetra_affine_rhs_matches_analytic_gradient();
     zhang_li_rhs_uses_gilbert_alpha_beta_projection();
     zhang_li_current_direction_reverses_rhs();
     zhang_li_adds_torque_without_scaling_existing_rhs();

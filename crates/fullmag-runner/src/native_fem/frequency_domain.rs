@@ -281,6 +281,8 @@ pub(crate) struct NativeModalEigenMfemOperatorProblem<'a> {
     pub stiffness_matrix_row_major: Option<&'a [f64]>,
     pub gyrotropic_matrix_row_major: Option<&'a [f64]>,
     pub mass_matrix_row_major: Option<&'a [f64]>,
+    pub linearized_pencil_dependency_digest: Option<&'a str>,
+    pub linearized_pencil_gamma0_m_per_a_s: f64,
     pub phase_convention: FrequencyDomainPhaseConvention,
     pub floquet_periodic_pairs: &'a [NativeModalEigenFloquetPeriodicPair<'a>],
 }
@@ -1016,6 +1018,12 @@ fn solve_native_modal_eigen_impl(
     };
     let tiny_validation = request.tiny_validation_problem.as_ref();
     let mfem_operator = request.mfem_operator_problem.as_ref();
+    // Keep the CString alive until the native modal FFI call returns below.
+    let mfem_linearized_pencil_dependency_digest = mfem_operator
+        .and_then(|problem| problem.linearized_pencil_dependency_digest)
+        .map(CString::new)
+        .transpose()
+        .map_err(|_| "native FEM modal_eigen MFEM dependency digest contains NUL".to_string())?;
     let mfem_sparse_operator = request.mfem_sparse_operator_problem.as_ref();
     let poisson_airbox_block = request.poisson_airbox_block_problem.as_ref();
     let poisson_airbox_shift_invert_action =
@@ -1174,6 +1182,12 @@ fn solve_native_modal_eigen_impl(
         mfem_mass_matrix_row_major: mfem_operator
             .and_then(|problem| problem.mass_matrix_row_major)
             .map_or(std::ptr::null(), slice_ptr_or_null),
+        mfem_linearized_pencil_dependency_digest: mfem_linearized_pencil_dependency_digest
+            .as_ref()
+            .map_or(std::ptr::null(), |value| value.as_ptr()),
+        mfem_linearized_pencil_gamma0_m_per_a_s: mfem_operator
+            .map(|problem| problem.linearized_pencil_gamma0_m_per_a_s)
+            .unwrap_or(0.0),
         mfem_sparse_operator_enabled: mfem_sparse_operator.is_some() as i32,
         mfem_sparse_stiffness_csr: csr_matrix_view_or_zero(
             mfem_sparse_operator.map(|problem| &problem.stiffness_csr),
@@ -2100,7 +2114,7 @@ mod tests {
 
     #[cfg(feature = "fem-gpu")]
     #[test]
-    fn frequency_window_mfem_payload_reaches_production_contour_bridge() {
+    fn frequency_window_mfem_payload_passes_dependency_digest_and_gamma_through_ffi() {
         use std::cell::RefCell;
 
         let stiffness_matrix_row_major = [
@@ -2162,6 +2176,8 @@ mod tests {
                 stiffness_matrix_row_major: Some(&stiffness_matrix_row_major),
                 gyrotropic_matrix_row_major: Some(&gyrotropic_mass_row_major),
                 mass_matrix_row_major: Some(&mass_matrix_row_major),
+                linearized_pencil_dependency_digest: Some("modal-payload-dependency-v1"),
+                linearized_pencil_gamma0_m_per_a_s: 1.0,
                 phase_convention: FrequencyDomainPhaseConvention::ExpIOmegaT,
                 floquet_periodic_pairs: &[],
             }),
@@ -2182,6 +2198,20 @@ mod tests {
             result
                 .diagnostics_json
                 .contains("\"mfem_operator_payload\":\"dense_gyrotropic_matrix\""),
+            "{}",
+            result.diagnostics_json
+        );
+        assert!(
+            result.diagnostics_json.contains(
+                "\"linearized_dynamic_pencil_dependency_digest\":\"modal-payload-dependency-v1\""
+            ),
+            "{}",
+            result.diagnostics_json
+        );
+        assert!(
+            result
+                .diagnostics_json
+                .contains("\"linearized_dynamic_pencil_gamma0_m_per_a_s\":1"),
             "{}",
             result.diagnostics_json
         );
@@ -2279,6 +2309,8 @@ mod tests {
                 stiffness_matrix_row_major: Some(&stiffness_matrix_row_major),
                 gyrotropic_matrix_row_major: Some(&gyrotropic_mass_row_major),
                 mass_matrix_row_major: Some(&mass_matrix_row_major),
+                linearized_pencil_dependency_digest: None,
+                linearized_pencil_gamma0_m_per_a_s: 0.0,
                 phase_convention: FrequencyDomainPhaseConvention::ExpIOmegaT,
                 floquet_periodic_pairs: &[],
             }),
@@ -2357,6 +2389,8 @@ mod tests {
                 stiffness_matrix_row_major: Some(&stiffness_matrix_row_major),
                 gyrotropic_matrix_row_major: Some(&gyrotropic_mass_row_major),
                 mass_matrix_row_major: None,
+                linearized_pencil_dependency_digest: None,
+                linearized_pencil_gamma0_m_per_a_s: 0.0,
                 phase_convention: FrequencyDomainPhaseConvention::ExpIOmegaT,
                 floquet_periodic_pairs: &floquet_pairs,
             }),

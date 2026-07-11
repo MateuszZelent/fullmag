@@ -56,11 +56,17 @@ for engine in $engines; do
         fi
         echo "[verify_fem_relaxation_runtime] running FEM $engine smoke: $algorithm"
         log_path="$log_dir/${engine}_${algorithm}.log"
+        enable_demag=1
+        if [ "$algorithm" = "projected_gradient_bb" ]; then
+            enable_demag=0
+        fi
         FULLMAG_RELAX_ALGORITHM="$algorithm" FULLMAG_RELAX_DEVICE="$engine" \
+            FULLMAG_RELAX_ENABLE_DEMAG="$enable_demag" \
             just fem-managed-container-headless "$engine" "$script" 2>&1 | tee "$log_path"
         python3 scripts/validate_fem_relaxation_runtime_log.py \
             --engine "$engine" \
             --algorithm "$algorithm" \
+            --demag "$([ "$enable_demag" = "1" ] && echo enabled || echo disabled)" \
             --min-steps "$min_steps" \
             --min-relative-energy-decrease "$min_relative_energy_decrease" \
             --max-final-torque-growth-factor "$max_torque_growth" \

@@ -24,5 +24,11 @@ bool gpu_rk_compute_demag_for_device_stage(
     cudaStream_t stream,
     std::string &reason);
 
+bool gpu_rk_compute_demag_for_device_stage_fresh(
+    Context &ctx,
+    const FemGpuComponentField &m,
+    cudaStream_t stream,
+    std::string &reason);
+
 } // namespace fullmag::fem
 #endif

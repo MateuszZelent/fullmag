@@ -96,7 +96,7 @@ fn canonical_quantity_id(requested: &str) -> Cow<'_, str> {
         .unwrap_or_else(|_| Cow::Borrowed(requested))
 }
 
-fn persisted_hysteresis_magnetization_values(
+pub(crate) fn persisted_hysteresis_magnetization_values(
     snapshot: &SessionStateResponse,
     snapshot_id: &str,
 ) -> Result<(Vec<f64>, [u32; 3]), ApiError> {
@@ -148,7 +148,7 @@ fn persisted_hysteresis_magnetization_values(
     Ok((values, grid))
 }
 
-async fn validate_hysteresis_snapshot_stage_scope(
+pub(crate) async fn validate_hysteresis_snapshot_stage_scope(
     state: &Arc<AppState>,
     stage_id: Option<&str>,
     snapshot_id: &str,

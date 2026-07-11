@@ -191,6 +191,23 @@ metric. For nodal weights `V_i`,
 =\mu_0\sum_i M_{s,i}V_i\,\mathbf a_i\cdot\mathbf b_i.
 \]
 
+The BB secant is defined in the accepted tangent space rather than by
+subtracting ambient vectors from consecutive nodal spheres. With the
+normalization retraction, the canonical transport is
+
+\[
+P_{\mathbf m_k}\mathbf v=
+\mathbf v-(\mathbf m_k\cdot\mathbf v)\mathbf m_k,
+\qquad
+\widetilde{\mathbf s}_k=P_{\mathbf m_k}(\mathbf m_k-\mathbf m_{k-1}),
+\qquad
+\widetilde{\mathbf y}_k=\mathbf g_k-P_{\mathbf m_k}\mathbf g_{k-1}.
+\]
+
+BB1 and BB2 use `s_tilde` and `y_tilde` in the energy metric. This transport
+does not change the public algorithm name, accepted-state retraction, or the
+`m/A` step unit.
+
 The Armijo slope
 
 \[
@@ -199,6 +216,31 @@ The Armijo slope
 
 has units `J A/m`, so `lambda * phi'(0)` is in joules. A line search that
 compares joules with an unweighted vector dot product is dimensionally invalid.
+
+For FEM direct minimizers, sufficient decrease is evaluated from a direct
+energy increment, not from subtraction of independently published endpoint
+totals:
+
+\[
+\Delta E=E(m_1)-E(m_0)
+\le c_1\lambda\langle g,p\rangle_E.
+\]
+
+Every interaction contributes its local difference before reduction. For the
+linear Poisson demag operator,
+
+\[
+\Delta E_d=-\frac{\mu_0}{2}\sum_iM_{s,i}V_i(m_{1,i}-m_{0,i})\cdot
+(H_{d,0,i}+H_{d,1,i}),
+\]
+
+with the matching Robin boundary-form increment where applicable. This keeps
+the Armijo condition in joules while avoiding cancellation against a large
+constant energy offset. If the resulting numerical interval overlaps the
+threshold, a bounded internal fresh-solve refinement may resolve the decision;
+both ordinary and refined values must satisfy strict Armijo. An unresolved
+interval is a rejected trial, never an accepted energy increase or convergence
+claim.
 
 #### 2.3.3 Nonlinear conjugate gradient
 
@@ -325,6 +367,17 @@ CPU/MFEM and GPU/CUDA share the physical contract but own separate runtime
 realizations.
 
 - Energy directional derivatives use the realized `mu0 Ms_i V_i` metric.
+- Every demag energy compared by a direct-minimizer line search is evaluated
+  from the same deterministic zero initial Poisson iterate. Rejected trials
+  must not contaminate the accepted-state energy through solver warm starts.
+- FEM NCG and development-only TPI with demag require a qualified linear-solver
+  relative tolerance no looser than `1e-12` in double precision. A missing policy
+  resolves to `1e-12`; an explicitly looser policy is rejected before runtime.
+  This algorithm-specific requirement does not change the `1e-8` default used
+  by LLG dynamics.
+- FEM PG-BB with demag is not production-qualified and is rejected by the
+  planner without fallback; FEM PG-BB remains executable for conservative
+  workloads without demag, and FEM demag relaxation uses NCG.
 - PG-BB/NCG preconditioners and TPI operators use dimensionally compatible mass,
   stiffness, and local-curvature blocks.
 - Native nonfinite torque, energy, gradient, error estimate, or solver residual

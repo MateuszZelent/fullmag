@@ -1,10 +1,13 @@
 #pragma once
 
+#include "src/relaxation_numerics.hpp"
+
 #include <vector>
 
 namespace fullmag::fem {
 
 struct Context;
+class ElementQuadratureMaterial;
 
 /*
  * Compute Zeeman energy from the current H_ext buffer.
@@ -22,5 +25,21 @@ struct Context;
 double zeeman_energy_from_field(
     const Context &ctx,
     const std::vector<double> &m_xyz);
+
+relaxation::EnergyDifference zeeman_energy_difference_from_field(
+    const Context &ctx,
+    const std::vector<double> &current_m_xyz,
+    const std::vector<double> &trial_m_xyz);
+
+/*
+ * Integrate Zeeman energy for a supplied sharp DG0 material map and P1 nodal
+ * AOS-3 magnetization/external-field fields.  The map is explicit because the
+ * public plan/runtime still rejects Ms_element_field until all material owners
+ * can consume the same quadrature contract.
+ */
+double zeeman_energy_from_element_quadrature_material(
+    const ElementQuadratureMaterial &material,
+    const std::vector<double> &m_xyz,
+    const std::vector<double> &h_ext_xyz);
 
 } // namespace fullmag::fem

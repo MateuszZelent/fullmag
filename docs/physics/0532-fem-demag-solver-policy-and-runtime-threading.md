@@ -238,15 +238,14 @@ Update 2026-06-05 GPU control-readback budget: the production FEM relaxation
 benchmark now gates FEM GPU hot-loop control-scalar readbacks separately from
 compute host/device transfers. Strict GPU RK still requires zero compute
 readbacks; direct minimizers (`projected_gradient_bb`, `nonlinear_cg`) are
-temporarily allowed a bounded control-readback budget of `base + per_step *
-executed_steps + per_rejected_attempt * rejected_attempts` until their
-line-search/curvature decisions move fully device-side. This is a performance
+temporarily allowed a bounded control-readback budget until their line-search
+and curvature decisions move fully device-side. This is a performance
 regression gate only; it does not change solver physics, units, demag boundary
 conditions, or CPU/GPU parity tolerances.
 
 Update 2026-06-05 algorithm-specific control budgets: the production gate now
 uses algorithm-specific per-step limits instead of only the global fallback:
-`llg_overdamped = 0`, `projected_gradient_bb = 3`, and `nonlinear_cg = 2`.
+`llg_overdamped = 0`, `projected_gradient_bb = 4`, and `nonlinear_cg = 3`.
 This prevents projected-gradient BB from regressing up to the looser nonlinear
 CG budget while preserving the current verified direct-minimizer behavior.
 Nonlinear CG reaches the same per-step budget by batching current energy,
@@ -263,6 +262,28 @@ control readback. The next direction beta is computed from those reduced values
 on the GPU, then the same final control readback validates the accepted
 gradient norm and PR+ numerator on the host. This removes the standalone
 accepted-gradient/PR+ synchronization without dropping the rollback checks.
+
+Update 2026-07-10 cumulative line-search accounting: the four PG-BB control
+phases per accepted step are the batched current energy/gradient metrics, the
+first Armijo trial energy, accepted BB curvature, and final observable stats.
+The three nonlinear-CG phases are the batched current energy/gradient/direction
+metrics, the first Armijo trial energy, and the accepted final-stats/PR+ batch.
+Every further Armijo trial adds exactly one energy-scalar synchronization. The
+benchmark therefore publishes `total_rhs_evals`, the sum over all returned step
+records, without changing the existing last-step `rhs_evals`. Native direct
+minimizers define each step's `rhs_evals` as `2 + backtracks`, so their exact
+gate is
+
+`base + per_step * executed_steps + max(0, total_rhs_evals - 2 * executed_steps)`.
+
+This uses executed work rather than the last step's rejection count. Missing
+cumulative telemetry fails closed when the production control-readback gate is
+requested; old benchmark payloads remain readable when that gate is not used.
+When nonlinear-CG enters forced Armijo recovery, the CUDA direction kernel
+writes the exact restart `p = -g`. The host therefore reuses the already
+validated `p dot g = -||g||_E^2` and `||p||_V^2 = ||g||_V^2` scalars instead of
+re-reducing and synchronizing them. This keeps each additional recovery trial
+represented by its energy evaluation in `total_rhs_evals`.
 
 Update 2026-06-05 direct-minimizer effective-field path: GPU
 `projected_gradient_bb` and `nonlinear_cg` now call the device-resident

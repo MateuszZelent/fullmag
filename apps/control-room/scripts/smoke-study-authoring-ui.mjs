@@ -234,6 +234,10 @@ try {
   });
 
   const inspector = page.locator(".fm-inspector");
+  const demagEnabled = inspector.getByLabel("Demag enabled");
+  if (!(await demagEnabled.isChecked())) {
+    await demagEnabled.check();
+  }
   await page.locator('[data-node-id="model:study:stages:stage:relax-1"]').click();
   const algorithm = inspector.getByLabel("Algorithm");
   await inspector.getByLabel("Integrator").waitFor({ state: "visible" });
@@ -242,7 +246,14 @@ try {
   if ((await tpiOption.count()) > 0 && !(await tpiOption.isDisabled())) {
     throw new Error("TPI must be unavailable for the strict-mode fixture.");
   }
-  for (const directAlgorithm of ["projected_gradient_bb", "nonlinear_cg"]) {
+  const pgbbOption = algorithm.locator('option[value="projected_gradient_bb"]');
+  if (!(await pgbbOption.isDisabled())) {
+    throw new Error("FEM demag projected-gradient BB must be unavailable.");
+  }
+  if (!(await pgbbOption.textContent())?.includes("not qualified for FEM demag")) {
+    throw new Error("FEM demag projected-gradient BB must explain its quarantine.");
+  }
+  for (const directAlgorithm of ["nonlinear_cg"]) {
     await algorithm.selectOption(directAlgorithm);
     if (await inspector.getByLabel("Integrator").isVisible()) {
       throw new Error(`${directAlgorithm} exposed LLG-only integrator controls.`);

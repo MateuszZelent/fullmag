@@ -77,6 +77,14 @@ void c_abi_exposes_native_relaxation_step() {
         read_text_file(root / "cpu" / "mfem" / "runtime" / "mfem_context.cpp");
     const std::string demag =
         read_text_file(root / "cpu" / "mfem" / "interactions" / "demag.cpp");
+    const std::string demag_hypre =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_hypre.cpp");
+    const std::string dmi_workspace =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "dmi_workspace.cpp");
+    const std::string dmi_interfacial =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "dmi_interfacial.cpp");
+    const std::string dmi_bulk =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "dmi_bulk.cpp");
     const auto upload_snapshot_start =
         relaxation_math.find("int upload_and_snapshot(");
     const auto upload_snapshot_end =
@@ -97,6 +105,19 @@ void c_abi_exposes_native_relaxation_step() {
         upload_and_snapshot.find("validate_relaxation_state_fields(ctx, algorithm_name, error)");
     const auto upload_energy_validation =
         upload_and_snapshot.find("validate_relaxation_step_energy(");
+    check(
+        dmi_workspace.find("bool refresh_dmi_grid_functions_from_magnetization(") !=
+                std::string::npos &&
+            dmi_workspace.find("audited_host_write(*gf_mx)") != std::string::npos &&
+            dmi_workspace.find("audited_host_write(*gf_my)") != std::string::npos &&
+            dmi_workspace.find("audited_host_write(*gf_mz)") != std::string::npos &&
+            dmi_interfacial.find(
+                "refresh_dmi_grid_functions_from_magnetization(ctx, m_xyz, error)") !=
+                std::string::npos &&
+            dmi_bulk.find(
+                "refresh_dmi_grid_functions_from_magnetization(ctx, *exchange_input, error)") !=
+                std::string::npos,
+        "native FEM DMI field and energy owners must refresh MFEM grid functions from every trial magnetization before derivative evaluation");
     const auto tangent_gradient_start =
         relaxation_math.find("void tangent_gradient_from_field(");
     const auto tangent_gradient_end =
@@ -186,10 +207,10 @@ void c_abi_exposes_native_relaxation_step() {
         relaxation_step.find("run_nonlinear_cg_step(") != std::string::npos,
         "relaxation_step.cpp must route nonlinear CG to the native algorithm module");
     check(
-        projected_gradient.find("metric_dot_fields(") != std::string::npos &&
+        projected_gradient.find("energy_weighted_dot_fields(") != std::string::npos &&
             projected_gradient.find("validate_tangent_gradient_field(") !=
                 std::string::npos,
-        "native FEM projected-gradient BB must use the FEM mass metric through shared gradient validation and descent products");
+        "native FEM projected-gradient BB must use the energy-weighted FEM product through shared gradient validation and descent products");
     check(
         relaxation_math.find("exchange_mass_preconditioned_gradient(") !=
                 std::string::npos &&
@@ -301,6 +322,21 @@ void c_abi_exposes_native_relaxation_step() {
                 std::string::npos,
         "native FEM CPU direct minimizers must reject non-finite snapshot energies before Armijo or completion checks");
     check(
+        demag_hypre.find("void reset_demag_poisson_hypre_initial_guess(Context &ctx)") !=
+                std::string::npos &&
+            demag_hypre.find("workspace->x_par = 0.0") != std::string::npos &&
+            demag_hypre.find("workspace->x_par_contains_solution = true") !=
+                std::string::npos &&
+            relaxation_math.find("reset_demag_poisson_hypre_initial_guess(ctx);") !=
+                std::string::npos &&
+            projected_gradient.find("fresh_line_search_snapshot(") !=
+                std::string::npos &&
+            nonlinear_cg.find("fresh_line_search_snapshot(") !=
+                std::string::npos &&
+            tangent_plane.find("fresh_line_search_snapshot(") !=
+                std::string::npos,
+        "native FEM CPU Armijo current/trial energies must use the same history-independent zero-start demag oracle");
+    check(
         relaxation_math.find("kMagnetizationUnitNormTolerance") !=
                 std::string::npos &&
             relaxation_math.find("dot3(ctx.state.m_xyz, ctx.state.m_xyz, base)") !=
@@ -379,7 +415,7 @@ void c_abi_exposes_native_relaxation_step() {
                 std::string::npos &&
             relaxation_math.find("publish_accepted_gradient_completion(") !=
                 std::string::npos &&
-            relaxation_math.find("accepted_gradient_norm_sq <= kGradientFloor") !=
+            relaxation_math.find("accepted_gradient_norm_sq == 0.0") !=
                 std::string::npos &&
             relaxation_math.find("FULLMAG_FEM_STAGE_STOP_REASON_GRADIENT") !=
                 std::string::npos &&
@@ -423,23 +459,29 @@ void c_abi_exposes_native_relaxation_step() {
                 std::string::npos,
         "native FEM CPU direct minimizers must cache accepted current stats without carrying old solve timings into the next step");
     check(
-        projected_gradient.find("relaxation::take_cached_current_stats(ctx, current_stats)") !=
+        projected_gradient.find("relaxation::fresh_line_search_snapshot(") !=
                 std::string::npos &&
-            nonlinear_cg.find("relaxation::take_cached_current_stats(ctx, current_stats)") !=
+            nonlinear_cg.find("relaxation::fresh_line_search_snapshot(") !=
                 std::string::npos &&
-            tangent_plane.find("relaxation::take_cached_current_stats(ctx, current_stats)") !=
+            tangent_plane.find("relaxation::fresh_line_search_snapshot(") !=
                 std::string::npos,
-        "all native FEM CPU direct minimizers must reuse accepted current stats before recomputing a fresh current snapshot");
+        "all native FEM CPU direct minimizers must recompute current energy with the same fresh demag oracle used by Armijo trials");
     check(
         projected_gradient.find("validate_tangent_gradient_field(") !=
                 std::string::npos &&
             projected_gradient.find("validate_tangent_gradient_field(") <
-                projected_gradient.find("g_norm_sq <= relaxation::kGradientFloor"),
+            projected_gradient.find("g_norm_sq == 0.0"),
         "native FEM projected-gradient BB must reject invalid tangent-gradient vectors before gradient-completion classification");
     const auto pgbb_accepted_gradient_failure =
         projected_gradient.find("accepted-gradient validation failure");
     const auto pgbb_update_bb =
         projected_gradient.rfind("update_bb_step_size(");
+    check(
+        projected_gradient.find("relaxation::transported_bb_secant(") !=
+                std::string::npos &&
+            projected_gradient.find("relaxation::bb_step_decision(") !=
+                std::string::npos,
+        "native FEM CPU projected-gradient BB must transport its secant pair before the shared candidate, clamp, and reset policy");
     check(
         projected_gradient.find("\"accepted\"") != std::string::npos &&
             pgbb_accepted_gradient_failure != std::string::npos &&
@@ -467,6 +509,16 @@ void c_abi_exposes_native_relaxation_step() {
                 std::string::npos &&
             projected_gradient.find("direction_dot_gradient") != std::string::npos,
         "native FEM projected-gradient BB must use the preconditioned descent direction in Armijo");
+    check(
+        projected_gradient.find("descent_direction = relaxation::negative_field(previous_gradient);") !=
+                std::string::npos &&
+            projected_gradient.find(
+                "relaxation::energy_weighted_dot_fields(\n                ctx,\n                descent_direction,\n                previous_gradient)",
+                projected_gradient.find("descent_direction = relaxation::negative_field(previous_gradient);")) !=
+                std::string::npos &&
+            projected_gradient.find("direction_dot_gradient = -g_norm_sq;") ==
+                std::string::npos,
+        "native FEM projected-gradient BB raw-gradient fallback must recompute the energy-weighted Armijo slope instead of reusing the volume stop norm");
     check(
         projected_gradient.find("!std::isfinite(direction_dot_gradient)") !=
                 std::string::npos &&
@@ -499,17 +551,28 @@ void c_abi_exposes_native_relaxation_step() {
     check(
         projected_gradient.find("retry_projected_gradient_bb_line_search_with_reset(") !=
                 std::string::npos &&
+            projected_gradient.find(
+                "retry_projected_gradient_bb_line_search_with_raw_gradient_restart(") !=
+                std::string::npos &&
+            projected_gradient.find("raw_direction = relaxation::project_tangent(") !=
+                std::string::npos &&
+            projected_gradient.find(
+                "relaxation::negative_field(previous_gradient));") !=
+                std::string::npos &&
+            projected_gradient.find(
+                "direction_dot_gradient = relaxation::energy_weighted_dot_fields(") !=
+                std::string::npos &&
             projected_gradient.find("kProjectedGradientArmijoRecoveryCycles") !=
                 std::string::npos &&
             projected_gradient.find("accept_monotone_recovery_step(") !=
                 std::string::npos &&
-            projected_gradient.find("line_search_energy_tolerance(") !=
+            projected_gradient.find("strict_monotone_energy_accept(") !=
                 std::string::npos &&
             projected_gradient.find("trial_step = restart_step;") !=
                 std::string::npos &&
             projected_gradient.find("reset_consecutive") <
                 projected_gradient.find("restore_after_failed_line_search("),
-        "native FEM projected-gradient BB must attempt a bounded Armijo recovery with reset step-size policy, fresh restart step, and noise-tolerant monotone fallback before failing the step");
+        "native FEM projected-gradient BB must attempt bounded preconditioned and raw-gradient Armijo recovery with fresh restart steps and strict monotone fallback before failing the step");
     const auto pgbb_main_backtracks =
         projected_gradient.find("uint32_t backtracks = 0;");
     const auto pgbb_first_armijo =
@@ -517,10 +580,8 @@ void c_abi_exposes_native_relaxation_step() {
             ? std::string::npos
             : projected_gradient.find("bool armijo = false", pgbb_main_backtracks);
     check(
-        projected_gradient.find("constexpr double kLineSearchEnergyNoiseFloorJ = 1.0e-23") !=
-                std::string::npos &&
-            projected_gradient.find("constexpr double kLineSearchEnergyNoiseRelative = 1.0e-12") !=
-                std::string::npos &&
+        projected_gradient.find("kLineSearchEnergyNoiseFloorJ") == std::string::npos &&
+            projected_gradient.find("kLineSearchEnergyNoiseRelative") == std::string::npos &&
             projected_gradient.find("accept_monotone_line_search_step(") !=
                 std::string::npos &&
             pgbb_first_armijo != std::string::npos &&
@@ -528,7 +589,7 @@ void c_abi_exposes_native_relaxation_step() {
                 projected_gradient.find(
                     "if (backtracks >= relaxation::kProjectedGradientMaxBacktracks)",
                     pgbb_first_armijo),
-        "native FEM projected-gradient BB must accept noise-level monotone line-search trials before exhausting Armijo backtracks");
+        "native FEM projected-gradient BB must accept exactly nonincreasing line-search trials before exhausting Armijo backtracks");
     check(
         projected_gradient.find("format_projected_gradient_bb_scalar(") !=
                 std::string::npos &&
@@ -544,15 +605,40 @@ void c_abi_exposes_native_relaxation_step() {
         nonlinear_cg.find("not implemented yet") == std::string::npos,
         "native FEM nonlinear CG must not be an unavailable stub");
     check(
-        nonlinear_cg.find("metric_dot_fields(") != std::string::npos &&
+        nonlinear_cg.find("energy_weighted_dot_fields(") != std::string::npos &&
+            nonlinear_cg.find("energy_weighted_dot_fields_with_absolute_term_sum(") !=
+                std::string::npos &&
+            nonlinear_cg.find("previous_preconditioned_product.absolute_term_sum") !=
+                std::string::npos &&
             nonlinear_cg.find("validate_tangent_gradient_field(") !=
                 std::string::npos,
-        "native FEM nonlinear CG must use the FEM mass metric through shared gradient validation and PR+ products");
+        "native FEM nonlinear CG must use the actual absolute-term sum as its signed PR+ denominator error scale");
+    check(
+        nonlinear_cg.find(
+            "p_dot_g = relaxation::energy_weighted_dot_fields(ctx, direction, previous_gradient);") !=
+            std::string::npos,
+        "native FEM nonlinear CG raw-gradient recovery must use the energy-weighted Armijo slope");
+    const auto ncg_initial_step = nonlinear_cg.find("double initial_step_size(");
+    const auto ncg_ensure_descent = nonlinear_cg.find("bool ensure_descent_direction(");
+    const std::string ncg_initial_step_block =
+        ncg_initial_step == std::string::npos ||
+                ncg_ensure_descent == std::string::npos ||
+                ncg_initial_step >= ncg_ensure_descent
+            ? std::string{}
+            : nonlinear_cg.substr(
+                  ncg_initial_step,
+                  ncg_ensure_descent - ncg_initial_step);
+    check(
+        ncg_initial_step_block.find("relaxation::metric_dot_fields(ctx, direction, direction)") !=
+                std::string::npos &&
+            ncg_initial_step_block.find("energy_weighted_dot_fields") ==
+                std::string::npos,
+        "native FEM CPU nonlinear-CG initial direction scaling must retain the same lumped-volume norm used by the CUDA lane");
     check(
         nonlinear_cg.find("validate_tangent_gradient_field(") !=
                 std::string::npos &&
             nonlinear_cg.find("validate_tangent_gradient_field(") <
-                nonlinear_cg.find("g_norm_sq <= relaxation::kGradientFloor"),
+                nonlinear_cg.find("g_norm_sq == 0.0"),
         "native FEM nonlinear CG must reject invalid tangent-gradient vectors before gradient-completion classification");
     check(
         nonlinear_cg.find("\"accepted\"") != std::string::npos &&
@@ -646,9 +732,9 @@ void c_abi_exposes_native_relaxation_step() {
                 std::string::npos &&
             nonlinear_cg.find("kNonlinearCgArmijoRecoveryCycles") !=
                 std::string::npos &&
-            nonlinear_cg.find("kLineSearchEnergyNoiseFloorJ") !=
+            nonlinear_cg.find("kLineSearchEnergyNoiseFloorJ") ==
                 std::string::npos &&
-            nonlinear_cg.find("line_search_energy_tolerance(") !=
+            nonlinear_cg.find("strict_monotone_energy_accept(") !=
                 std::string::npos &&
             nonlinear_cg.find("accept_monotone_recovery_step(") !=
                 std::string::npos &&
@@ -666,15 +752,20 @@ void c_abi_exposes_native_relaxation_step() {
         tangent_plane.find("not implemented yet") == std::string::npos,
         "native FEM tangent-plane implicit relaxation must not be an unavailable stub");
     check(
-        tangent_plane.find("metric_dot_fields(") != std::string::npos &&
+        tangent_plane.find("energy_weighted_dot_fields(") != std::string::npos &&
             tangent_plane.find("validate_tangent_gradient_field(") !=
                 std::string::npos,
-        "native FEM tangent-plane implicit relaxation must use the FEM mass metric through shared gradient validation and tangent products");
+        "native FEM tangent-plane implicit relaxation must use the energy-weighted FEM product through shared gradient validation and tangent products");
+    check(
+        tangent_plane.find(
+            "direction_dot_gradient =\n                relaxation::energy_weighted_dot_fields(ctx, direction, gradient);") !=
+            std::string::npos,
+        "native FEM tangent-plane implicit relaxation must use the energy-weighted Armijo slope at its production caller");
     check(
         tangent_plane.find("validate_tangent_gradient_field(") !=
                 std::string::npos &&
             tangent_plane.find("validate_tangent_gradient_field(") <
-                tangent_plane.find("g_norm_sq <= relaxation::kGradientFloor"),
+                tangent_plane.find("g_norm_sq == 0.0"),
         "native FEM tangent-plane implicit relaxation must reject invalid tangent-gradient vectors before gradient-completion classification");
     check(
         tangent_plane.find("assemble_tangent_plane_operator(") != std::string::npos &&
@@ -862,6 +953,12 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
         read_text_file(relaxation_root / "pgbb.hpp");
     const std::string pgbb_source =
         read_text_file(relaxation_root / "pgbb.cpp");
+    const std::string gpu_rk_demag_dispatch =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" /
+                       "rk_demag_dispatch.cu");
+    const std::string gpu_rk_rhs_runtime =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" /
+                       "rk_rhs_runtime.cu");
     const std::string scalar_readback_header =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" /
                        "rk_scalar_readback.hpp");
@@ -930,7 +1027,7 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
     check(
         pgbb_source.find("gpu_relax_compute_effective_field_and_energy(") !=
                 std::string::npos &&
-            pgbb_source.find("gpu_rk_compute_effective_field_for_magnetization(") !=
+            pgbb_source.find("gpu_rk_compute_effective_field_for_magnetization_fresh_demag(") !=
                 std::string::npos &&
             pgbb_source.find("gpu_rk_compute_rhs_for_magnetization(") ==
                 std::string::npos &&
@@ -939,6 +1036,14 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
             pgbb_source.find("kArmijoCoefficient") != std::string::npos &&
             pgbb_source.find("trial_energy <=") != std::string::npos,
         "native FEM GPU projected-gradient BB must own a device-resident Armijo accepted-step loop");
+    check(
+        gpu_rk_rhs_runtime.find(
+            "gpu_rk_compute_demag_for_device_stage_fresh(ctx, m, stream, reason)") !=
+                std::string::npos &&
+            gpu_rk_demag_dispatch.find(
+                "compute_device_demag_for_device_stage_fresh(ctx, m, stream, reason)") !=
+                std::string::npos,
+        "native FEM GPU Armijo energy evaluations must route through the zero-start device demag solve");
     check(
         scalar_readback_header.find("gpu_rk_read_control_scalar_result(") !=
                 std::string::npos &&
@@ -968,17 +1073,18 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
                 std::string::npos &&
             pgbb_source.find("constexpr double kArmijoCoefficient = 1.0e-4") !=
                 std::string::npos &&
-            pgbb_source.find("constexpr double kGradientFloor = 1.0e-30") !=
+            pgbb_source.find("kGradientFloor") == std::string::npos &&
+            pgbb_source.find("kBbCurvatureScale") == std::string::npos &&
+            pgbb_source.find("relaxation::bb_step_decision(") !=
                 std::string::npos &&
-            pgbb_source.find("constexpr double kBbCurvatureScale = 1.0e-6") !=
-                std::string::npos &&
-            pgbb_source.find("constexpr double kLineSearchEnergyNoiseFloorJ = 1.0e-23") !=
-                std::string::npos &&
-            pgbb_source.find("constexpr double kLineSearchEnergyNoiseRelative = 1.0e-12") !=
-                std::string::npos &&
+            pgbb_source.find("kLineSearchEnergyNoiseFloorJ") == std::string::npos &&
+            pgbb_source.find("kLineSearchEnergyNoiseRelative") == std::string::npos &&
             pgbb_source.find("constexpr uint32_t kMaxBacktracks = 20") !=
                 std::string::npos,
-        "native FEM GPU projected-gradient BB must keep CPU-compatible BB/Armijo constants until parity proof intentionally changes them");
+        "native FEM GPU projected-gradient BB must use the shared dimension-aware BB guard and keep CPU-compatible step/Armijo constants");
+    check(
+        pgbb_source.find("relaxation::bb_step_decision(") != std::string::npos,
+        "native FEM CUDA projected-gradient BB must use the shared candidate, clamp, and reset policy");
     check(
         pgbb_source.find("double trial_step = kDefaultStepSize") !=
                 std::string::npos &&
@@ -1035,16 +1141,20 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
     check(
         pgbb_source.find("gpu_relax_retry_pgbb_line_search_with_reset(") !=
                 std::string::npos &&
+            pgbb_source.find(
+                "gpu_relax_retry_pgbb_line_search_with_raw_gradient_restart(") !=
+                std::string::npos &&
+            pgbb_source.find("3u * kMaxBacktracks") != std::string::npos &&
             pgbb_source.find("kArmijoRecoveryCycles") != std::string::npos &&
             pgbb_source.find("gpu_relax_accept_monotone_recovery_step(") !=
                 std::string::npos &&
-            pgbb_source.find("line_search_energy_tolerance(current_energy, trial_energy)") !=
+            pgbb_source.find("strict_monotone_energy_accept(current_energy, trial_energy)") !=
                 std::string::npos &&
             pgbb_source.find("trial_step = restart_step;") !=
                 std::string::npos &&
             pgbb_source.find("reset_consecutive") <
                 pgbb_source.find("GPU projected-gradient BB failed Armijo line search"),
-        "native FEM GPU projected-gradient BB must attempt bounded Armijo recovery with reset step-size policy, fresh restart step, and noise-tolerant monotone fallback before failing the device step");
+        "native FEM GPU projected-gradient BB must attempt bounded reset and raw-gradient Armijo recovery with fresh restart steps and strict monotone fallback before failing the device step");
     const auto pgbb_first_armijo =
         pgbb_source.find("const bool armijo =", pgbb_source.find("while (true)"));
     check(
@@ -1055,7 +1165,7 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
                 "gpu_relax_accept_monotone_line_search_step(",
                 pgbb_first_armijo) <
                 pgbb_source.find("if (backtracks >= kMaxBacktracks)", pgbb_first_armijo),
-        "native FEM GPU projected-gradient BB must accept noise-level monotone line-search trials before exhausting Armijo backtracks");
+        "native FEM GPU projected-gradient BB must accept exactly nonincreasing line-search trials before exhausting Armijo backtracks");
     check(
         pgbb_source.find("current_energy_j=") != std::string::npos &&
             pgbb_source.find("last_trial_energy_j=") != std::string::npos &&
@@ -1092,7 +1202,7 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
                 std::string::npos,
         "native FEM GPU projected-gradient BB must publish gradient-converged stop state through the runtime stage-completion owner");
     const auto pgbb_degenerate_gradient =
-        pgbb_source.find("if (gradient_norm_sq <= kGradientFloor)");
+        pgbb_source.find("if (gradient_norm_sq == 0.0)");
     const auto pgbb_degenerate_finalize =
         pgbb_degenerate_gradient == std::string::npos
             ? std::string::npos
@@ -1226,7 +1336,27 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
     check(
         kernels_header.find("fullmag_cuda_relax_bb_curvature_blocks(") !=
                 std::string::npos &&
+            kernels_header.find(
+                "const double *ms,\n    const double *lumped_mass",
+                kernels_header.find("fullmag_cuda_relax_bb_curvature_blocks(")) !=
+                std::string::npos &&
             kernels_source.find("bb_curvature_kernel") !=
+                std::string::npos &&
+            kernels_source.find(
+                "const double energy_weight = kMu0 * ms[i] * node_weight(lumped_mass, i);",
+                kernels_source.find("__global__ void bb_curvature_kernel(")) !=
+                std::string::npos &&
+            kernels_source.find(
+                "const double m_dot_raw_s =",
+                kernels_source.find("__global__ void bb_curvature_kernel(")) !=
+                std::string::npos &&
+            kernels_source.find(
+                "const double m_dot_previous_g =",
+                kernels_source.find("__global__ void bb_curvature_kernel(")) !=
+                std::string::npos &&
+            kernels_source.find(
+                "const double transported_previous_gx =",
+                kernels_source.find("__global__ void bb_curvature_kernel(")) !=
                 std::string::npos &&
             kernels_source.find("block_s_dot_s[blockIdx.x]") !=
                 std::string::npos &&
@@ -1234,7 +1364,7 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
                 std::string::npos &&
             kernels_source.find("block_y_dot_y[blockIdx.x]") !=
                 std::string::npos,
-        "native FEM GPU projected-gradient BB must expose device BB curvature reduction kernels");
+        "native FEM GPU projected-gradient BB must transport its secant pair into the accepted tangent space before device curvature reduction");
     check(
         runner_algorithm.find("ProjectedGradientBb, FemEngineKind::NativeGpu) => true") !=
                 std::string::npos &&
@@ -1257,6 +1387,8 @@ void gpu_relaxation_ncg_direction_state_is_device_persistent() {
         read_text_file(relaxation_root / "nonlinear_cg.hpp");
     const std::string ncg_source =
         read_text_file(relaxation_root / "nonlinear_cg.cpp");
+    const std::string relaxation_numerics =
+        read_text_file(root / "src" / "relaxation_numerics.hpp");
     const std::string scalar_readback_header =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" /
                        "rk_scalar_readback.hpp");
@@ -1317,7 +1449,7 @@ void gpu_relaxation_ncg_direction_state_is_device_persistent() {
     check(
         ncg_source.find("gpu_relax_compute_effective_field_and_energy(") !=
                 std::string::npos &&
-            ncg_source.find("gpu_rk_compute_effective_field_for_magnetization(") !=
+            ncg_source.find("gpu_rk_compute_effective_field_for_magnetization_fresh_demag(") !=
                 std::string::npos &&
             ncg_source.find("gpu_rk_compute_rhs_for_magnetization(") ==
                 std::string::npos &&
@@ -1361,7 +1493,9 @@ void gpu_relaxation_ncg_direction_state_is_device_persistent() {
                 std::string::npos &&
             ncg_source.find("current energy/gradient/direction scalars device->host") !=
                 std::string::npos &&
-            ncg_source.find("double scalars[4]") != std::string::npos &&
+            ncg_source.find("double scalars[5]") != std::string::npos &&
+            ncg_source.find("gradient_energy_norm_sq = scalars[2]") !=
+                std::string::npos &&
             ncg_source.find("reset_descent_direction") != std::string::npos &&
             ncg_source.find("gpu_relax_prepare_descent_direction(") !=
                 std::string::npos &&
@@ -1369,9 +1503,11 @@ void gpu_relaxation_ncg_direction_state_is_device_persistent() {
                 std::string::npos &&
             ncg_source.find("reset direction scalars device->host") ==
                 std::string::npos,
-        "native FEM GPU nonlinear-CG must batch current energy, gradient norm, and descent-direction scalars while keeping reset fallback device-side");
+        "native FEM GPU nonlinear-CG must batch current energy, volume and energy gradient norms, and descent-direction scalars while keeping reset fallback device-side");
     check(
-        ncg_source.find("kNcgScalarTailCount = 2") != std::string::npos &&
+        ncg_source.find("kNcgScalarTailCount = 3") != std::string::npos &&
+            ncg_source.find("kNcgPreviousGradientEnergyNormTailSlot") !=
+                std::string::npos &&
             ncg_source.find("fullmag_cuda_relax_ncg_update_direction_from_reduced_pr_plus(") !=
                 std::string::npos &&
             ncg_source.find("gpu_rk_finalize_step_stats_control_readback_with_scalar_tail(") !=
@@ -1379,6 +1515,8 @@ void gpu_relaxation_ncg_direction_state_is_device_persistent() {
             ncg_source.find("accepted gradient/PR+ scalars device->host") ==
                 std::string::npos &&
             ncg_source.find("accepted-step gradient validation failure") !=
+                std::string::npos &&
+            ncg_source.find("accepted-step PR+ denominator validation failure") !=
                 std::string::npos &&
             ncg_source.find("accepted-step PR+ validation failure") !=
                 std::string::npos,
@@ -1392,23 +1530,48 @@ void gpu_relaxation_ncg_direction_state_is_device_persistent() {
                 std::string::npos &&
             ncg_source.find("constexpr double kArmijoCoefficient = 1.0e-4") !=
                 std::string::npos &&
-            ncg_source.find("constexpr double kGradientFloor = 1.0e-30") !=
-                std::string::npos &&
-            ncg_source.find("constexpr double kLineSearchEnergyNoiseFloorJ = 1.0e-23") !=
-                std::string::npos &&
-            ncg_source.find("constexpr double kLineSearchEnergyNoiseRelative = 1.0e-12") !=
-                std::string::npos &&
+            ncg_source.find("kGradientFloor") == std::string::npos &&
+            ncg_source.find("reduction_roundoff_bound(") != std::string::npos &&
+            ncg_source.find("kLineSearchEnergyNoiseFloorJ") == std::string::npos &&
+            ncg_source.find("kLineSearchEnergyNoiseRelative") == std::string::npos &&
             ncg_source.find("constexpr uint32_t kMaxBacktracks = 30") !=
                 std::string::npos &&
             ncg_source.find("constexpr uint64_t kRestartInterval = 50") !=
                 std::string::npos,
-        "native FEM GPU nonlinear-CG must keep explicit Armijo/gradient/restart constants until parity proof intentionally changes them");
+        "native FEM GPU nonlinear-CG must use the shared scale-relative PR+ guard and keep explicit Armijo/restart constants");
+    check(
+        ncg_source.find("relaxation::initial_step_from_volume_norm_sq(") !=
+                std::string::npos,
+        "native FEM CUDA nonlinear-CG must use the shared initial-step clamp policy");
+    check(
+        relaxation_numerics.find("reduction_roundoff_bound(") != std::string::npos &&
+            relaxation_numerics.find("positive_bb_curvature_resolved(") != std::string::npos &&
+            relaxation_numerics.find("positive_signed_reduction_resolved(") !=
+                std::string::npos &&
+            relaxation_numerics.find("positive_nonnegative_reduction_resolved(") !=
+                std::string::npos &&
+            relaxation_numerics.find("strict_monotone_energy_accept(") !=
+                std::string::npos &&
+            relaxation_numerics.find("std::numeric_limits<double>::epsilon()") !=
+                std::string::npos,
+        "native FEM CPU and GPU direct minimizers must share scale-relative double-precision reduction guards");
+    check(
+        kernels_source.find(
+            "relative_roundoff_bound * previous_gradient_energy_norm_sq") !=
+                std::string::npos &&
+            kernels_source.find("fabs(pr_plus_numerator)") == std::string::npos,
+        "native FEM GPU nonlinear-CG must guard its nonnegative square-sum denominator independently of the signed PR numerator");
     check(
         ncg_source.find("gpu.mesh_metrics.lumped_mass == nullptr") !=
                 std::string::npos &&
             ncg_source.find("GPU nonlinear-CG requires a device FEM lumped-mass metric") !=
                 std::string::npos,
         "native FEM GPU nonlinear-CG preflight must require the device FEM lumped-mass metric");
+    check(
+        ncg_source.find("gpu.materials.ms == nullptr") != std::string::npos &&
+            ncg_source.find("GPU nonlinear-CG requires a device nodal saturation-magnetisation field") !=
+                std::string::npos,
+        "native FEM GPU nonlinear-CG preflight must require the nodal Ms field used by energy products");
     check(
         ncg_source.find("gpu.mesh_regions.magnetic_node_mask == nullptr") !=
                 std::string::npos &&
@@ -1429,13 +1592,23 @@ void gpu_relaxation_ncg_direction_state_is_device_persistent() {
             ncg_source.find("kArmijoRecoveryCycles") != std::string::npos &&
             ncg_source.find("gpu_relax_accept_monotone_recovery_step(") !=
                 std::string::npos &&
-            ncg_source.find("line_search_energy_tolerance(current_energy, trial_energy)") !=
+            ncg_source.find("strict_monotone_energy_accept(current_energy, trial_energy)") !=
                 std::string::npos &&
             ncg_source.find("trial_step = restart_step;") !=
                 std::string::npos &&
             ncg_source.find("gpu.relaxation.nonlinear_cg_direction_valid = false") <
                 ncg_source.find("GPU nonlinear-CG failed Armijo line search"),
-        "native FEM GPU nonlinear-CG must attempt bounded Armijo recovery with restarted descent direction, fresh restart step, and noise-tolerant monotone fallback before failing the device step");
+        "native FEM GPU nonlinear-CG must attempt bounded Armijo recovery with restarted descent direction, fresh restart step, and strict monotone fallback before failing the device step");
+    check(
+        ncg_source.find("const bool reuse_gradient_scalars =") !=
+                std::string::npos &&
+            ncg_source.find("p_dot_g = -gradient_energy_norm_sq;") !=
+                std::string::npos &&
+            ncg_source.find("direction_norm_sq = gradient_norm_sq;") !=
+                std::string::npos &&
+            ncg_source.find("if (!reuse_gradient_scalars &&") !=
+                std::string::npos,
+        "native FEM GPU nonlinear-CG forced restart must reuse current gradient scalars instead of adding a host control readback");
     check(
         ncg_source.find("current_energy_j=") != std::string::npos &&
             ncg_source.find("last_trial_energy_j=") != std::string::npos &&
@@ -1485,7 +1658,7 @@ void gpu_relaxation_ncg_direction_state_is_device_persistent() {
                 std::string::npos,
         "native FEM GPU nonlinear-CG must publish gradient-converged stop state through the runtime stage-completion owner");
     const auto ncg_degenerate_gradient =
-        ncg_source.rfind("if (gradient_norm_sq <= kGradientFloor)");
+        ncg_source.rfind("if (gradient_norm_sq == 0.0)");
     const auto ncg_degenerate_finalize =
         ncg_degenerate_gradient == std::string::npos
             ? std::string::npos
@@ -1530,6 +1703,10 @@ void gpu_relaxation_ncg_direction_state_is_device_persistent() {
                 std::string::npos &&
             kernels_source.find("block_gradient_norm_sq[blockIdx.x]") !=
                 std::string::npos &&
+            kernels_source.find("block_gradient_energy_norm_sq[blockIdx.x]") !=
+                std::string::npos &&
+            kernels_source.find("block_previous_energy_norm_sq[blockIdx.x]") !=
+                std::string::npos &&
             kernels_source.find("block_p_dot_g[blockIdx.x]") !=
                 std::string::npos &&
             kernels_source.find("block_direction_norm_sq[blockIdx.x]") !=
@@ -1539,8 +1716,10 @@ void gpu_relaxation_ncg_direction_state_is_device_persistent() {
             kernels_source.find("ncg_update_direction_kernel") !=
                 std::string::npos &&
             kernels_source.find("ncg_reset_direction_if_not_descent_kernel") !=
+                std::string::npos &&
+            kernels_source.find("kMu0 * ms[i] * node_weight(lumped_mass, i)") !=
                 std::string::npos,
-        "native FEM GPU nonlinear-CG must expose device kernels for descent preparation, PR+ numerator reduction, and next-direction update");
+        "native FEM GPU nonlinear-CG must expose separate volume stop norms and nodal-Ms energy products for descent, PR+, and next-direction update");
     check(
         relaxation_state.find("GPU CUDA relaxation device-state module header") !=
                 std::string::npos &&

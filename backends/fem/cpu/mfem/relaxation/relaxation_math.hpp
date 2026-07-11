@@ -20,8 +20,6 @@ inline constexpr double kDefaultStepSize = 1.0e-6;
 inline constexpr double kMinStepSize = 1.0e-15;
 inline constexpr double kMaxStepSize = 1.0e-3;
 inline constexpr double kArmijoCoefficient = 1.0e-4;
-inline constexpr double kGradientFloor = 1.0e-30;
-inline constexpr double kBbCurvatureScale = 1.0e-6;
 inline constexpr uint32_t kProjectedGradientMaxBacktracks = 20;
 inline constexpr uint32_t kNonlinearCgMaxBacktracks = 30;
 inline constexpr uint32_t kTangentPlaneImplicitMaxBacktracks = 24;
@@ -47,6 +45,22 @@ double metric_dot_fields(
     const std::vector<double> &a,
     const std::vector<double> &b);
 
+struct EnergyWeightedDotResult {
+    double value = 0.0;
+    double absolute_term_sum = 0.0;
+};
+
+// Energy-weighted metric: units depend on the units of a and b.
+double energy_weighted_dot_fields(
+    const Context &ctx,
+    const std::vector<double> &a,
+    const std::vector<double> &b);
+
+EnergyWeightedDotResult energy_weighted_dot_fields_with_absolute_term_sum(
+    const Context &ctx,
+    const std::vector<double> &a,
+    const std::vector<double> &b);
+
 double metric_gradient_norm_sq(
     const Context &ctx,
     const std::vector<double> &gradient);
@@ -61,6 +75,15 @@ std::vector<double> project_tangent(
     const Context &ctx,
     const std::vector<double> &m_xyz,
     const std::vector<double> &vector_xyz);
+
+bool transported_bb_secant(
+    const Context &ctx,
+    const std::vector<double> &previous_m,
+    const std::vector<double> &accepted_m,
+    const std::vector<double> &previous_gradient,
+    const std::vector<double> &accepted_gradient,
+    std::vector<double> &transported_step,
+    std::vector<double> &transported_gradient_difference);
 
 std::vector<double> negative_field(const std::vector<double> &field_xyz);
 
@@ -124,6 +147,13 @@ int ensure_cpu_mfem_relaxation_lane(
 int upload_and_snapshot(
     Context &ctx,
     const std::vector<double> &m_xyz,
+    fullmag_fem_step_stats &stats,
+    const char *algorithm_name,
+    const char *snapshot_name,
+    std::string &error);
+
+int fresh_line_search_snapshot(
+    Context &ctx,
     fullmag_fem_step_stats &stats,
     const char *algorithm_name,
     const char *snapshot_name,

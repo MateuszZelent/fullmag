@@ -50,4 +50,14 @@ void copy_plan_material_fields(Context &ctx, const fullmag_fem_plan_desc &plan);
 
 bool validate_material_fields(const Context &ctx, std::string &error);
 
+/*
+ * Reject every elementwise Ms coefficient when the resolved native handle
+ * cannot provide a common element/quadrature accessor to all later LLG,
+ * relaxation, field, energy, and observable calls.
+ * Elementwise A belongs only to the exchange weak form, so CPU permits it
+ * with other interactions while exchange remains enabled; GPU rejects it
+ * until it has an element-coefficient upload path.
+ */
+bool validate_elementwise_ms_runtime_support(const Context &ctx, std::string &error);
+
 } // namespace fullmag::fem

@@ -722,6 +722,8 @@ typedef struct {
     const double *mfem_stiffness_matrix_row_major;
     const double *mfem_gyrotropic_matrix_row_major;
     const double *mfem_mass_matrix_row_major;
+    const char *mfem_linearized_pencil_dependency_digest;
+    double mfem_linearized_pencil_gamma0_m_per_a_s;
     int mfem_sparse_operator_enabled;
     FullmagFemCsrMatrixView mfem_sparse_stiffness_csr;
     FullmagFemCsrMatrixView mfem_sparse_gyrotropic_csr;
@@ -758,6 +760,8 @@ typedef struct {
     const char *poisson_airbox_gauge_policy;
     const char *poisson_airbox_gauge_reason;
     const char *poisson_airbox_assembly_kind;
+    const double *dynamic_demag_k_tangent_matrix_row_major;
+    uint64_t dynamic_demag_k_tangent_matrix_value_count;
 } FullmagFemModalEigenRequest;
 
 typedef struct {

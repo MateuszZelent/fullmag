@@ -18,6 +18,7 @@
 #include "cpu/mfem/runtime/snapshot.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
 #include "fem_common.hpp"
+#include "src/relaxation_numerics.hpp"
 #include "src/relaxation_operator_units.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
@@ -1212,9 +1213,14 @@ int run_tangent_plane_implicit_step(
     }
 
     fullmag_fem_step_stats current_stats{};
-    if (!relaxation::take_cached_current_stats(ctx, current_stats) &&
-        !context_snapshot_stats_mfem(ctx, current_stats, error)) {
-        return FULLMAG_FEM_ERR_UNAVAILABLE;
+    const int current_snapshot_status = relaxation::fresh_line_search_snapshot(
+        ctx,
+        current_stats,
+        "tangent-plane implicit",
+        "current",
+        error);
+    if (current_snapshot_status != FULLMAG_FEM_OK) {
+        return current_snapshot_status;
     }
     if (!relaxation::validate_relaxation_state_fields(
             ctx,
@@ -1263,7 +1269,7 @@ int run_tangent_plane_implicit_step(
     if (!current_gradient_valid) {
         return FULLMAG_FEM_ERR_INTERNAL;
     }
-    if (g_norm_sq <= relaxation::kGradientFloor) {
+    if (g_norm_sq == 0.0) {
         relaxation::finish_degenerate_gradient_relaxation_step(
             ctx,
             current_stats,
@@ -1294,7 +1300,7 @@ int run_tangent_plane_implicit_step(
         {
             ScopedPhaseTimer timer(&profile_stats.relaxation_metric_wall_time_ns);
             direction_dot_gradient =
-                relaxation::metric_dot_fields(ctx, direction, gradient);
+                relaxation::energy_weighted_dot_fields(ctx, direction, gradient);
         }
         if (!std::isfinite(direction_dot_gradient) ||
             direction_dot_gradient >= 0.0) {

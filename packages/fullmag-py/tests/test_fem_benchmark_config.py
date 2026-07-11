@@ -2183,6 +2183,46 @@ def test_benchmark_build_can_request_adaptive_timestep():
     assert dynamics.adaptive_timestep.dt_initial == 1e-13
 
 
+@pytest.mark.parametrize("algorithm", ["projected_gradient_bb", "nonlinear_cg"])
+def test_benchmark_direct_minimizers_omit_dynamics(monkeypatch, algorithm):
+    bench = load_benchmark_module()
+    monkeypatch.setenv("FULLMAG_BENCH_RELAX_ALGORITHM", algorithm)
+    relaxation_kwargs = []
+    relaxation = bench.fm.Relaxation
+
+    def capture_relaxation(**kwargs):
+        relaxation_kwargs.append(kwargs)
+        return relaxation(**kwargs)
+
+    monkeypatch.setattr(bench.fm, "Relaxation", capture_relaxation)
+
+    problem = bench.build(
+        dt=1e-13,
+        steps=4,
+        scenario="box500_airbox_exchange_demag",
+        integrator="heun",
+    )
+
+    assert problem.study.algorithm == algorithm
+    assert problem.study.dynamics is None
+    assert "dynamics" not in relaxation_kwargs[0]
+
+
+def test_benchmark_llg_relaxation_keeps_dynamics(monkeypatch):
+    bench = load_benchmark_module()
+    monkeypatch.setenv("FULLMAG_BENCH_RELAX_ALGORITHM", "llg_overdamped")
+
+    problem = bench.build(
+        dt=1e-13,
+        steps=4,
+        scenario="box500_airbox_exchange_demag",
+        integrator="heun",
+    )
+
+    assert problem.study.algorithm == "llg_overdamped"
+    assert problem.study.dynamics.integrator == "heun"
+
+
 def test_analysis_benchmark_accepts_timestep_policy_axis():
     bench = load_analysis_benchmark_module()
 
@@ -2250,6 +2290,51 @@ def test_emit_summary_includes_integrator(capsys):
     assert payload["error_estimate"] == 0.25
     assert payload["dt_suggested_s"] == 2e-13
     assert payload["rhs_evals"] == 5
+
+
+def test_emit_summary_accumulates_direct_minimizer_line_search_work(capsys):
+    bench = load_benchmark_module()
+
+    class Step:
+        time = 2e-13
+        e_total = 1.0
+        e_ex = 0.25
+        e_demag = 0.0
+        wall_time_ns = 10
+        exchange_wall_time_ns = 2
+        demag_wall_time_ns = 0
+        rhs_wall_time_ns = 3
+        extra_energy_wall_time_ns = 1
+        snapshot_wall_time_ns = 0
+        demag_solves = 0
+        rejected_attempts = 0
+        fsal_reused = False
+        max_dm_dt = 4.0
+        max_h_eff = 5.0
+        max_h_demag = 0.0
+        e_ani = 0.0
+        e_dmi = 0.0
+
+        def __init__(self, rhs_evals):
+            self.rhs_evals = rhs_evals
+
+    class Value:
+        value = "fem"
+
+    class Result:
+        status = "ok"
+        backend = Value()
+        mode = Value()
+        precision = Value()
+        steps = [Step(3), Step(9)]
+
+    mesh_path = REPO_ROOT / "examples" / "assets" / "box_40x20x10_coarse.mesh.json"
+
+    bench.emit_summary(Result(), mesh_path, 2, 2e-13, "exchange_demag", "heun")
+
+    payload = json.loads(capsys.readouterr().out.strip().split("=", 1)[1])
+    assert payload["rhs_evals"] == 9
+    assert payload["total_rhs_evals"] == 12
 
 
 def test_emit_summary_includes_demag_phase_timing_fields(capsys):
@@ -4090,8 +4175,9 @@ def test_gpu_control_readback_budget_allows_current_direct_minimizer_contract():
             "dt_s": 1e-13,
             "steps": 2,
             "executed_steps": 2,
+            "total_rhs_evals": 5,
             "rejected_attempts": "",
-            "hot_loop_control_scalar_host_sync_count": 8,
+            "hot_loop_control_scalar_host_sync_count": 11,
         },
         {
             "backend": "fem_gpu",
@@ -4104,8 +4190,9 @@ def test_gpu_control_readback_budget_allows_current_direct_minimizer_contract():
             "dt_s": 1e-13,
             "steps": 2,
             "executed_steps": 2,
+            "total_rhs_evals": 9,
             "rejected_attempts": "",
-            "hot_loop_control_scalar_host_sync_count": 8,
+            "hot_loop_control_scalar_host_sync_count": 13,
         },
     ]
 
@@ -4114,7 +4201,7 @@ def test_gpu_control_readback_budget_allows_current_direct_minimizer_contract():
         base=2,
         per_step=4,
         llg_per_step=0,
-        pgbb_per_step=3,
+        pgbb_per_step=4,
         ncg_per_step=3,
         per_rejected_attempt=2,
     )
@@ -4136,8 +4223,9 @@ def test_gpu_control_readback_budget_rejects_algorithm_specific_counter_growth()
             "dt_s": 1e-13,
             "steps": 2,
             "executed_steps": 2,
+            "total_rhs_evals": 9,
             "rejected_attempts": "",
-            "hot_loop_control_scalar_host_sync_count": 9,
+            "hot_loop_control_scalar_host_sync_count": 14,
         },
         {
             "backend": "fem_gpu",
@@ -4150,8 +4238,9 @@ def test_gpu_control_readback_budget_rejects_algorithm_specific_counter_growth()
             "dt_s": 1e-13,
             "steps": 2,
             "executed_steps": 2,
+            "total_rhs_evals": 5,
             "rejected_attempts": "",
-            "hot_loop_control_scalar_host_sync_count": 9,
+            "hot_loop_control_scalar_host_sync_count": 12,
         },
         {
             "backend": "fem_gpu",
@@ -4174,15 +4263,42 @@ def test_gpu_control_readback_budget_rejects_algorithm_specific_counter_growth()
         base=2,
         per_step=4,
         llg_per_step=0,
-        pgbb_per_step=3,
+        pgbb_per_step=4,
         ncg_per_step=3,
         per_rejected_attempt=2,
     )
 
     assert len(failures) == 3
-    assert any("hot_loop_control_scalar_host_sync_count=9 > 8" in failure for failure in failures)
-    assert any("hot_loop_control_scalar_host_sync_count=9 > 8" in failure for failure in failures)
+    assert any("hot_loop_control_scalar_host_sync_count=14 > 13" in failure for failure in failures)
+    assert any("hot_loop_control_scalar_host_sync_count=12 > 11" in failure for failure in failures)
     assert any("hot_loop_control_scalar_host_sync_count=1 > 0" in failure for failure in failures)
+
+
+def test_gpu_control_readback_budget_requires_cumulative_direct_minimizer_work():
+    bench = load_analysis_benchmark_module()
+    rows = [
+        {
+            "backend": "fem_gpu",
+            "status": "ok",
+            "relaxation_algorithm": "nonlinear_cg",
+            "executed_steps": 2,
+            "rhs_evals": 2,
+            "hot_loop_control_scalar_host_sync_count": 8,
+        }
+    ]
+
+    failures = bench.gpu_control_readback_budget_failures(
+        rows,
+        base=2,
+        per_step=4,
+        llg_per_step=0,
+        pgbb_per_step=4,
+        ncg_per_step=3,
+        per_rejected_attempt=2,
+    )
+
+    assert len(failures) == 1
+    assert "missing total_rhs_evals" in failures[0]
 
 
 def test_gpu_phase_timing_failures_require_positive_executed_llg_phase_timings():
@@ -11419,11 +11535,11 @@ def test_relaxation_consistency_smoke_passes_benchmark_env_into_container():
         in justfile_text
     )
     assert (
-        '-e FULLMAG_BENCH_GPU_PGBB_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_PGBB_CONTROL_READBACK_PER_STEP:-3}"'
+        '-e FULLMAG_BENCH_GPU_PGBB_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_PGBB_CONTROL_READBACK_PER_STEP:-4}"'
         in justfile_text
     )
     assert (
-        '-e FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP:-2}"'
+        '-e FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP:-3}"'
         in justfile_text
     )
     assert (

@@ -28,6 +28,12 @@ struct MfemModalDenseOperatorPayloadProblem {
     const double *dmi_lumped_mass = nullptr;
     const double *dmi_ms_field = nullptr;
     double dmi_uniform_ms = 0.0;
+    const double *demag_tangent_matrix_row_major = nullptr;
+    std::uint64_t demag_tangent_matrix_value_count = 0;
+    const char *demag_provider_signature = nullptr;
+    const std::uint64_t *static_periodic_node_pairs = nullptr;
+    std::uint64_t static_periodic_node_pair_count = 0;
+    bool periodic_airbox = false;
 };
 
 struct MfemModalDenseOperatorPayloadResult {
@@ -39,6 +45,9 @@ struct MfemModalDenseOperatorPayloadResult {
     double max_abs_tangent_mass_matrix = 0.0;
     char payload_kind[64] = "";
     char algebraic_form[64] = "";
+    double linearized_pencil_gamma0_m_per_a_s = 0.0;
+    char operator_digest[65] = "";
+    char dependency_digest[65] = "";
     char error_message[128] = "";
 };
 
@@ -71,6 +80,9 @@ struct MfemModalSparseOperatorPayloadResult {
     double max_abs_tangent_mass_matrix = 0.0;
     char payload_kind[64] = "";
     char algebraic_form[64] = "";
+    double linearized_pencil_gamma0_m_per_a_s = 0.0;
+    char operator_digest[65] = "";
+    char dependency_digest[65] = "";
     char error_message[128] = "";
 };
 

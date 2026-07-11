@@ -1,8 +1,17 @@
 # Object Extensions + Topological Charge - plan implementacji
 
-Data: 2026-06-26  
-Status: IMPLEMENTED v1 - kod, testy i lekki smoke dodane 2026-06-26  
-Zakres: Control Room object inspector, runtime analysis resources, mesh/field data path
+- Data: 2026-06-26
+- Status: SUPERSEDED 2026-07-11 - v1 jest niekwalifikowane produkcyjnie
+- Zakres: Control Room object inspector, runtime analysis resources, mesh/field data path
+
+> Ten dokument zachowuje historyczny plan v1 i nie jest instrukcją dalszej
+> implementacji. Kanoniczna fizyka znajduje się w
+> `docs/physics/0940-topological-charge-observable.md`. Zastępujący plan
+> produkcyjny znajduje się w
+> `docs/superpowers/plans/2026-07-11-planar-topological-charge-production.md`.
+> W szczególności nie wolno dalej implementować opisanych niżej założeń o
+> dowolnej ścianie FEM, pochodnej `polarity`, globalnym FDM ani niejawnych
+> fallbackach preview.
 
 > Dla agentow implementujacych: przed dotykaniem kodu uzyj `superpowers:subagent-driven-development` albo `superpowers:executing-plans`. To jest plan produkcyjny, nie lista luźnych pomyslow. Kazda faza ma zostawic dzialajacy, testowalny stan.
 

@@ -3641,9 +3641,12 @@ fn fem_backend_multibody_merges_disjoint_mesh_assets() {
 }
 
 #[test]
-fn fem_backend_multibody_rejects_incompatible_material_law() {
+fn fem_backend_multibody_rejects_incompatible_cubic_anisotropy_axes() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.backend_policy.requested_backend = BackendTarget::Fem;
+    ir.materials[0].cubic_anisotropy_kc1 = Some(1.0e5);
+    ir.materials[0].cubic_anisotropy_axis1 = Some([1.0, 0.0, 0.0]);
+    ir.materials[0].cubic_anisotropy_axis2 = Some([0.0, 1.0, 0.0]);
     ir.materials.push(fullmag_ir::MaterialIR {
         name: "Co".to_string(),
         saturation_magnetisation: 1.1e6,
@@ -3652,11 +3655,11 @@ fn fem_backend_multibody_rejects_incompatible_material_law() {
         uniaxial_anisotropy: None,
         anisotropy_axis: None,
         uniaxial_anisotropy_k2: None,
-        cubic_anisotropy_kc1: None,
+        cubic_anisotropy_kc1: Some(1.0e5),
         cubic_anisotropy_kc2: None,
         cubic_anisotropy_kc3: None,
-        cubic_anisotropy_axis1: None,
-        cubic_anisotropy_axis2: None,
+        cubic_anisotropy_axis1: Some([0.0, 1.0, 0.0]),
+        cubic_anisotropy_axis2: Some([1.0, 0.0, 0.0]),
         ms_field: None,
         a_field: None,
         alpha_field: None,
@@ -3733,11 +3736,13 @@ fn fem_backend_multibody_rejects_incompatible_material_law() {
         fem_domain_mesh_asset: None,
     });
 
-    let error = plan(&ir).expect_err("heterogeneous multi-body FEM materials should fail on CPU");
+    let error = plan(&ir).expect_err(
+        "multi-body FEM must reject cubic anisotropy with incompatible crystallographic axes",
+    );
     assert!(error
         .reasons
         .iter()
-        .any(|reason| reason.contains("native GPU FEM path")));
+        .any(|reason| reason.contains("shared anisotropy axes/material-law shape")));
 }
 
 #[test]
@@ -4442,6 +4447,121 @@ fn llg_overdamped_relaxation_lowers_to_relaxation_control() {
         }
         _ => panic!("expected FDM plan"),
     }
+}
+
+fn fem_demag_relaxation_policy_ir(algorithm: fullmag_ir::RelaxationAlgorithmIR) -> ProblemIR {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fem;
+    ir.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Extended;
+    attach_unit_fem_domain_mesh(&mut ir);
+    ir.energy_terms.push(fullmag_ir::EnergyTermIR::Demag {
+        realization: fullmag_ir::RequestedFemDemagIR::FredkinKoehler,
+    });
+    ir.study = fullmag_ir::StudyIR::Relaxation {
+        algorithm,
+        dynamics: (algorithm == fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped)
+            .then(|| ir.study.dynamics().clone()),
+        stop: fullmag_ir::RelaxStopIR {
+            torque_tolerance_apm: Some(1e-3),
+            energy_tolerance_j: None,
+            max_steps: Some(10),
+            max_relaxation_time_s: None,
+        },
+        sampling: ir.study.sampling().clone(),
+    };
+    ir
+}
+
+#[test]
+fn fem_demag_direct_minimizer_resolves_missing_solver_policy_to_armijo_accuracy() {
+    for algorithm in [
+        fullmag_ir::RelaxationAlgorithmIR::NonlinearCg,
+        fullmag_ir::RelaxationAlgorithmIR::TangentPlaneImplicit,
+    ] {
+        let planned = plan(&fem_demag_relaxation_policy_ir(algorithm))
+            .expect("missing FEM demag policy must resolve for a direct minimizer");
+        let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+            panic!("expected FEM plan");
+        };
+        let policy = fem
+            .demag_solver_policy
+            .expect("direct minimizer must carry its resolved demag policy");
+        assert_eq!(policy.rtol, 1.0e-12, "algorithm={algorithm:?}");
+        assert!(planned.provenance.notes.iter().any(|note| {
+            note.contains("requested=default") && note.contains("resolved_rtol=1.000000e-12")
+        }));
+    }
+}
+
+#[test]
+fn fem_demag_projected_gradient_bb_is_quarantined_until_armijo_is_qualified() {
+    let error = plan(&fem_demag_relaxation_policy_ir(
+        fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+    ))
+    .expect_err("FEM PG-BB with demag must remain unavailable after production qualification failure");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("projected_gradient_bb")
+            && reason.contains("demag")
+            && reason.contains("production qualification")
+            && reason.contains("nonlinear_cg")
+            && reason.contains("no hidden fallback")
+    }));
+}
+
+#[test]
+fn fem_demag_direct_minimizer_rejects_explicit_solver_policy_too_loose_for_armijo() {
+    let mut ir =
+        fem_demag_relaxation_policy_ir(fullmag_ir::RelaxationAlgorithmIR::NonlinearCg);
+    ir.backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fem.as_mut())
+        .expect("FEM hints")
+        .demag_solver_policy = Some(fullmag_ir::FemLinearSolverPolicy {
+        rtol: 1.0e-8,
+        ..Default::default()
+    });
+
+    let error = plan(&ir).expect_err("loose explicit demag policy must fail before runtime");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("nonlinear_cg")
+            && reason.contains("demag_solver_policy.rtol")
+            && reason.contains("1e-12")
+            && reason.contains("strict Armijo")
+    }));
+}
+
+#[test]
+fn fem_demag_llg_keeps_global_missing_and_explicit_solver_policy_semantics() {
+    let missing = plan(&fem_demag_relaxation_policy_ir(
+        fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped,
+    ))
+    .expect("LLG FEM demag default remains valid");
+    let BackendPlanIR::Fem(missing_fem) = missing.backend_plan else {
+        panic!("expected FEM plan");
+    };
+    assert!(missing_fem.demag_solver_policy.is_none());
+
+    let mut explicit_ir =
+        fem_demag_relaxation_policy_ir(fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped);
+    explicit_ir
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fem.as_mut())
+        .expect("FEM hints")
+        .demag_solver_policy = Some(fullmag_ir::FemLinearSolverPolicy::default());
+    let explicit = plan(&explicit_ir).expect("explicit global LLG demag policy remains valid");
+    let BackendPlanIR::Fem(explicit_fem) = explicit.backend_plan else {
+        panic!("expected FEM plan");
+    };
+    assert_eq!(
+        explicit_fem
+            .demag_solver_policy
+            .expect("explicit policy")
+            .rtol,
+        1.0e-8
+    );
 }
 
 #[test]
@@ -9006,6 +9126,248 @@ fn fem_minimal_test_ir() -> ProblemIR {
 }
 
 #[test]
+fn fem_planner_elementwise_material_legality_distinguishes_a_from_ms() {
+    let planned = plan(&fem_minimal_test_ir()).expect("baseline FEM plan must be legal");
+    let BackendPlanIR::Fem(base) = planned.backend_plan else {
+        panic!("expected FEM plan");
+    };
+
+    struct Case {
+        name: &'static str,
+        include_ms: bool,
+        include_a: bool,
+        gpu: bool,
+        configure: fn(&mut FemPlanIR),
+        expected: Option<(&'static str, &'static str, &'static str)>,
+    }
+
+    let cases = [
+        Case {
+            name: "CPU Ms Zeeman",
+            include_ms: true,
+            include_a: false,
+            gpu: false,
+            configure: |fem| fem.external_field = Some([1.0, 0.0, 0.0]),
+            expected: Some(("Ms_element_field", "Zeeman interaction", "cpu")),
+        },
+        Case {
+            name: "CPU Ms demag",
+            include_ms: true,
+            include_a: false,
+            gpu: false,
+            configure: |fem| fem.enable_demag = true,
+            expected: Some(("Ms_element_field", "demag interaction", "cpu")),
+        },
+        Case {
+            name: "CPU Ms uniaxial anisotropy",
+            include_ms: true,
+            include_a: false,
+            gpu: false,
+            configure: |fem| fem.material.uniaxial_anisotropy = Some(1.0e5),
+            expected: Some(("Ms_element_field", "uniaxial anisotropy", "cpu")),
+        },
+        Case {
+            name: "CPU Ms cubic anisotropy",
+            include_ms: true,
+            include_a: false,
+            gpu: false,
+            configure: |fem| fem.material.cubic_anisotropy_kc1 = Some(1.0e5),
+            expected: Some(("Ms_element_field", "cubic anisotropy", "cpu")),
+        },
+        Case {
+            name: "CPU Ms interfacial DMI",
+            include_ms: true,
+            include_a: false,
+            gpu: false,
+            configure: |fem| fem.interfacial_dmi = Some(1.0e-3),
+            expected: Some(("Ms_element_field", "interfacial DMI", "cpu")),
+        },
+        Case {
+            name: "CPU Ms bulk DMI",
+            include_ms: true,
+            include_a: false,
+            gpu: false,
+            configure: |fem| fem.bulk_dmi = Some(1.0e-3),
+            expected: Some(("Ms_element_field", "bulk DMI", "cpu")),
+        },
+        Case {
+            name: "CPU Ms thermal Brown",
+            include_ms: true,
+            include_a: false,
+            gpu: false,
+            configure: |fem| fem.temperature = Some(300.0),
+            expected: Some(("Ms_element_field", "thermal Brown interaction", "cpu")),
+        },
+        Case {
+            name: "CPU Ms Zhang-Li STT",
+            include_ms: true,
+            include_a: false,
+            gpu: false,
+            configure: |fem| {
+                fem.current_density = Some([1.0e11, 0.0, 0.0]);
+                fem.stt_degree = Some(0.5);
+            },
+            expected: Some(("Ms_element_field", "Zhang-Li STT", "cpu")),
+        },
+        Case {
+            name: "CPU Ms Slonczewski STT",
+            include_ms: true,
+            include_a: false,
+            gpu: false,
+            configure: |fem| {
+                fem.current_density = Some([1.0e11, 0.0, 0.0]);
+                fem.stt_degree = Some(0.5);
+                fem.stt_spin_polarization = Some([0.0, 0.0, 1.0]);
+                fem.stt_lambda = Some(1.0);
+            },
+            expected: Some(("Ms_element_field", "Slonczewski STT", "cpu")),
+        },
+        Case {
+            name: "CPU Ms Oersted",
+            include_ms: true,
+            include_a: false,
+            gpu: false,
+            configure: |fem| fem.has_oersted_cylinder = true,
+            expected: Some(("Ms_element_field", "Oersted interaction", "cpu")),
+        },
+        Case {
+            name: "CPU Ms magnetoelastic",
+            include_ms: true,
+            include_a: false,
+            gpu: false,
+            configure: |fem| {
+                fem.magnetoelastic = Some(fullmag_ir::FemMagnetoelasticPlanIR {
+                    b1: 1.0e6,
+                    b2: 0.0,
+                    prescribed_strain: Some([0.0; 6]),
+                });
+            },
+            expected: Some(("Ms_element_field", "magnetoelastic interaction", "cpu")),
+        },
+        Case {
+            name: "CPU Ms lifecycle fallback",
+            include_ms: true,
+            include_a: false,
+            gpu: false,
+            configure: |fem| fem.enable_exchange = false,
+            expected: Some((
+                "Ms_element_field",
+                "native FEM handle lifecycle fallback",
+                "cpu",
+            )),
+        },
+        Case {
+            name: "GPU Ms upload precedes active owners",
+            include_ms: true,
+            include_a: false,
+            gpu: true,
+            configure: |fem| {
+                fem.external_field = Some([1.0, 0.0, 0.0]);
+                fem.enable_demag = true;
+            },
+            expected: Some((
+                "Ms_element_field",
+                "GPU material-state upload",
+                "gpu",
+            )),
+        },
+        Case {
+            name: "CPU A Zeeman",
+            include_ms: false,
+            include_a: true,
+            gpu: false,
+            configure: |fem| fem.external_field = Some([1.0, 0.0, 0.0]),
+            expected: None,
+        },
+        Case {
+            name: "CPU A exchange-disabled",
+            include_ms: false,
+            include_a: true,
+            gpu: false,
+            configure: |fem| fem.enable_exchange = false,
+            expected: Some(("A_element_field", "exchange-disabled plan", "cpu")),
+        },
+        Case {
+            name: "GPU A",
+            include_ms: false,
+            include_a: true,
+            gpu: true,
+            configure: |_| {},
+            expected: Some(("A_element_field", "GPU material-state upload", "gpu")),
+        },
+        Case {
+            name: "CPU Ms reusable handle",
+            include_ms: true,
+            include_a: false,
+            gpu: false,
+            configure: |_| {},
+            expected: Some((
+                "Ms_element_field",
+                "native FEM handle lifecycle fallback",
+                "cpu",
+            )),
+        },
+        Case {
+            name: "CPU Ms relaxation metric",
+            include_ms: true,
+            include_a: false,
+            gpu: false,
+            configure: |fem| fem.relaxation = Some(fullmag_ir::RelaxationControlIR {
+                algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+                stop: fullmag_ir::RelaxStopIR {
+                    torque_tolerance_apm: Some(1e-3),
+                    energy_tolerance_j: None,
+                    max_steps: Some(1),
+                    max_relaxation_time_s: None,
+                },
+            }),
+            expected: Some((
+                "Ms_element_field",
+                "native FEM handle lifecycle fallback",
+                "cpu",
+            )),
+        },
+    ];
+
+    for case in cases {
+        let mut fem = base.clone();
+        fem.ms_element_field = case.include_ms.then_some(vec![0.8e6]);
+        fem.a_element_field = case.include_a.then_some(vec![13e-12]);
+        (case.configure)(&mut fem);
+
+        match (
+            case.expected,
+            crate::fem::elementwise_material_legality_error(&fem, case.gpu),
+        ) {
+            (None, None) => {}
+            (Some((field, term, device)), Some(error)) => {
+                assert!(
+                    error.contains(field)
+                        && error.contains(term)
+                        && error.contains(&format!("resolved device '{device}'")),
+                    "{} returned unexpected planner error: {error}",
+                    case.name
+                );
+                if field == "Ms_element_field" {
+                    assert_eq!(
+                        error,
+                        format!(
+                            "Ms_element_field is unsupported for {term} on resolved device '{device}': this runtime has no common element/quadrature material accessor"
+                        ),
+                        "{} must preserve the native elementwise-Ms diagnostic convention",
+                        case.name
+                    );
+                }
+            }
+            (expected, actual) => panic!(
+                "{} expected planner legality {:?}, got {:?}",
+                case.name, expected, actual
+            ),
+        }
+    }
+}
+
+#[test]
 fn fdm_linear_ms_field_plans_cell_sampling() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.material_parameter_fields
@@ -9370,8 +9732,10 @@ fn fem_sharp_aex_region_requires_conformal_in_strict() {
 }
 
 #[test]
-fn fem_sharp_aex_conformal_region_lowers_to_element_coefficient_field() {
+fn fem_sharp_conformal_ms_is_rejected_before_gpu_backend_creation() {
     let mut ir = fem_minimal_test_ir();
+    ir.materials[0].saturation_magnetisation = 0.7e6;
+    ir.materials[0].exchange_stiffness = 8e-12;
     let region = fullmag_ir::ObjectRegionIR {
         region_id: "strip:conformal_defect".to_string(),
         owner_object: "strip".to_string(),
@@ -9388,7 +9752,7 @@ fn fem_sharp_aex_conformal_region_lowers_to_element_coefficient_field() {
             fullmag_ir::RegionMaterialOverrideIR {
                 parameter: fullmag_ir::MaterialParameterNameIR::Aex,
                 value: fullmag_ir::MaterialParameterFieldIR::Constant {
-                    value: serde_json::json!(5e-12),
+                    value: serde_json::json!(13e-12),
                     unit: Some("J/m".to_string()),
                 },
                 priority: 20,
@@ -9397,7 +9761,7 @@ fn fem_sharp_aex_conformal_region_lowers_to_element_coefficient_field() {
             fullmag_ir::RegionMaterialOverrideIR {
                 parameter: fullmag_ir::MaterialParameterNameIR::Ms,
                 value: fullmag_ir::MaterialParameterFieldIR::Constant {
-                    value: serde_json::json!(700e3),
+                    value: serde_json::json!(1.1e6),
                     unit: Some("A/m".to_string()),
                 },
                 priority: 20,
@@ -9413,18 +9777,16 @@ fn fem_sharp_aex_conformal_region_lowers_to_element_coefficient_field() {
         if let Some(domain_asset) = assets.fem_domain_mesh_asset.as_mut() {
             if let Some(mesh) = domain_asset.mesh.as_mut() {
                 mesh.nodes = vec![
+                    [0.0, 0.0, 0.0],
                     [1.0, 0.0, 0.0],
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
-                    [1.0, 1.0, 1.0],
-                    [0.0, 0.0, 0.0],
-                    [0.05, 0.0, 0.0],
-                    [0.0, 0.05, 0.0],
-                    [0.0, 0.0, 0.05],
+                    [0.0, 0.0, -1.0],
                 ];
-                mesh.elements = vec![[0, 1, 2, 3], [4, 5, 6, 7]];
+                // The two region markers meet at the shared face (0, 1, 2).
+                mesh.elements = vec![[0, 2, 1, 4], [0, 1, 2, 3]];
                 mesh.element_markers = vec![1, 2];
-                mesh.boundary_faces = vec![[0, 1, 2], [4, 5, 6]];
+                mesh.boundary_faces = vec![[0, 1, 3], [0, 2, 4]];
                 mesh.boundary_markers = vec![1, 2];
             }
             domain_asset
@@ -9437,29 +9799,180 @@ fn fem_sharp_aex_conformal_region_lowers_to_element_coefficient_field() {
     }
     ir.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Strict;
 
-    let planned = plan(&ir).expect("strict conformal sharp Aex should lower to element fields");
-    let BackendPlanIR::Fem(fem) = &planned.backend_plan else {
-        panic!("expected FEM plan");
-    };
-    assert!(
-        fem.material.a_field.is_none(),
-        "sharp conformal Aex must not be represented as a projected nodal field"
+    let err = plan(&ir).expect_err(
+        "sharp conformal Ms must be rejected before a reusable CPU native handle is created",
     );
-    let a_element_field = fem
-        .a_element_field
-        .as_ref()
-        .expect("expected conformal Aex element coefficient field");
-    assert_eq!(a_element_field.len(), 2);
-    assert_eq!(a_element_field[0], fem.material.exchange_stiffness);
-    assert_eq!(a_element_field[1], 5e-12);
-    let ms_element_field = fem
-        .ms_element_field
-        .as_ref()
-        .expect("expected conformal Ms element coefficient field");
-    assert_eq!(ms_element_field.len(), 2);
-    assert_eq!(ms_element_field[0], fem.material.saturation_magnetisation);
-    assert_eq!(ms_element_field[1], 700e3);
-    assert_eq!(fem.use_consistent_mass, Some(true));
+    assert!(
+        err.reasons.iter().any(|reason| {
+            reason.contains("Ms_element_field")
+                && reason.contains("native FEM handle lifecycle")
+                && reason.contains("resolved device 'cpu'")
+        }),
+        "unexpected planner errors: {:?}",
+        err.reasons
+    );
+
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "gpu"}),
+    );
+    let err = plan(&ir)
+        .expect_err("sharp conformal Ms must be rejected before a reusable GPU native handle is created");
+    assert!(
+        err.reasons.iter().any(|reason| {
+            reason.contains("Ms_element_field")
+                && reason.contains("GPU material-state upload")
+                && reason.contains("resolved device 'gpu'")
+        }),
+        "unexpected planner errors: {:?}",
+        err.reasons
+    );
+
+}
+
+#[test]
+fn fem_cpu_relaxation_rejects_heterogeneous_conformal_ms_before_native_create() {
+    let mut ir = fem_minimal_test_ir();
+    ir.materials.push(fullmag_ir::MaterialIR {
+        name: "Co".to_string(),
+        saturation_magnetisation: 1.1e6,
+        exchange_stiffness: 13e-12,
+        damping: 0.02,
+        uniaxial_anisotropy: None,
+        anisotropy_axis: None,
+        uniaxial_anisotropy_k2: None,
+        cubic_anisotropy_kc1: None,
+        cubic_anisotropy_kc2: None,
+        cubic_anisotropy_kc3: None,
+        cubic_anisotropy_axis1: None,
+        cubic_anisotropy_axis2: None,
+        ms_field: None,
+        a_field: None,
+        alpha_field: None,
+        ku_field: None,
+        ku2_field: None,
+        kc1_field: None,
+        kc2_field: None,
+        kc3_field: None,
+        interfacial_dmi: None,
+        bulk_dmi: None,
+        dind_field: None,
+        dbulk_field: None,
+    });
+    ir.geometry.entries.push(GeometryEntryIR::Box {
+        name: "second".to_string(),
+        size: [1.0, 1.0, 1.0],
+    });
+    ir.regions.push(fullmag_ir::RegionIR {
+        name: "second".to_string(),
+        geometry: "second".to_string(),
+    });
+    ir.magnets.push(fullmag_ir::MagnetIR {
+        name: "second".to_string(),
+        region: "second".to_string(),
+        material: "Co".to_string(),
+        initial_magnetization: None,
+    });
+    ir.object_regions.push(fullmag_ir::ObjectRegionIR {
+        region_id: "second:conformal_material".to_string(),
+        owner_object: "second".to_string(),
+        name: "conformal_material".to_string(),
+        shape: fullmag_ir::RegionShapeIR::Box {
+            size: [1.0, 1.0, 1.0],
+            center: [0.0, 0.0, 0.0],
+        },
+        frame: fullmag_ir::RegionFrameIR::Object,
+        enabled: true,
+        priority: 1,
+        mesh_policy: None,
+        material_overrides: vec![
+            fullmag_ir::RegionMaterialOverrideIR {
+                parameter: fullmag_ir::MaterialParameterNameIR::Ms,
+                value: fullmag_ir::MaterialParameterFieldIR::Constant {
+                    value: serde_json::json!(1.2e6),
+                    unit: Some("A/m".to_string()),
+                },
+                priority: 1,
+                conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+            },
+            fullmag_ir::RegionMaterialOverrideIR {
+                parameter: fullmag_ir::MaterialParameterNameIR::Aex,
+                value: fullmag_ir::MaterialParameterFieldIR::Constant {
+                    value: serde_json::json!(15e-12),
+                    unit: Some("J/m".to_string()),
+                },
+                priority: 1,
+                conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+            },
+        ],
+        texture_override: None,
+        material_transition: Some(fullmag_ir::MaterialTransitionSpecIR::Sharp),
+        realization_policy: fullmag_ir::RegionRealizationPolicyIR::Conformal,
+    });
+    let domain_asset = ir
+        .geometry_assets
+        .as_mut()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+        .expect("shared-domain test needs an inline mesh");
+    let mesh = domain_asset
+        .mesh
+        .as_mut()
+        .expect("shared-domain mesh is inline");
+    mesh.nodes.extend([
+        [0.0, 0.0, 2.0],
+        [1.0, 0.0, 2.0],
+        [0.0, 1.0, 2.0],
+        [0.0, 0.0, 3.0],
+        [0.0, 0.0, 4.0],
+        [1.0, 0.0, 4.0],
+        [0.0, 1.0, 4.0],
+        [0.0, 0.0, 5.0],
+    ]);
+    mesh.elements.push([4, 5, 6, 7]);
+    mesh.element_markers.push(2);
+    mesh.boundary_faces.push([4, 5, 6]);
+    mesh.boundary_markers.push(2);
+    mesh.elements.push([8, 9, 10, 11]);
+    mesh.element_markers.push(3);
+    mesh.boundary_faces.push([8, 9, 10]);
+    mesh.boundary_markers.push(3);
+    domain_asset
+        .region_markers
+        .push(fullmag_ir::FemDomainRegionMarkerIR {
+            geometry_name: "second".to_string(),
+            marker: 2,
+        });
+    domain_asset
+        .object_region_markers
+        .push(fullmag_ir::FemDomainRegionMarkerIR {
+            geometry_name: "second:conformal_material".to_string(),
+            marker: 3,
+        });
+    ir.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Strict;
+
+    ir.study = fullmag_ir::StudyIR::Relaxation {
+        algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+        dynamics: None,
+        stop: fullmag_ir::RelaxStopIR {
+            torque_tolerance_apm: Some(1e-3),
+            energy_tolerance_j: None,
+            max_steps: Some(1),
+            max_relaxation_time_s: None,
+        },
+        sampling: ir.study.sampling().clone(),
+    };
+    let error = plan(&ir).expect_err(
+        "public CPU relaxation payload must reject elementwise Ms before native create",
+    );
+    assert!(
+        error.reasons.iter().any(|reason| {
+            reason.contains("Ms_element_field")
+                && reason.contains("native FEM handle lifecycle")
+                && reason.contains("resolved device 'cpu'")
+        }),
+        "unexpected planner errors: {:?}",
+        error.reasons
+    );
 }
 
 #[test]

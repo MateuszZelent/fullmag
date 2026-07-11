@@ -107,6 +107,20 @@ pub struct FemCpuRelaxationAlgorithmPolicyMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metric: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gradient_metric: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gradient_units: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search_direction_units: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_search_step_units: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub armijo_slope_units: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub armijo_decrement_units: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub armijo_derivative_units: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_search: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preconditioner: Option<String>,
@@ -161,6 +175,20 @@ pub struct FemGpuRelaxationAlgorithmPolicyMetadata {
     pub rhs_policy: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metric: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gradient_metric: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gradient_units: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search_direction_units: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_search_step_units: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub armijo_slope_units: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub armijo_decrement_units: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub armijo_derivative_units: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gradient_policy: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

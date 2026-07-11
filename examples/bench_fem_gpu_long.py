@@ -390,23 +390,26 @@ def build(
             "mesh_workflow": mesh_workflow,
         }
 
-    study = (
-        fm.Relaxation(
-            algorithm=env_relaxation_algorithm(),
+    if scenario_uses_relaxation(scenario):
+        relaxation_algorithm = env_relaxation_algorithm()
+        relaxation_kwargs = {}
+        if relaxation_algorithm == "llg_overdamped":
+            relaxation_kwargs["dynamics"] = dynamics
+        study = fm.Relaxation(
+            algorithm=relaxation_algorithm,
             torque_tolerance=env_float(
                 "FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE",
                 DEFAULT_RELAX_TORQUE_TOLERANCE,
             ),
             max_steps=steps,
+            outputs=[fm.SaveScalar("E_total", every=dt * steps)],
+            **relaxation_kwargs,
+        )
+    else:
+        study = fm.TimeEvolution(
             dynamics=dynamics,
             outputs=[fm.SaveScalar("E_total", every=dt * steps)],
         )
-        if scenario_uses_relaxation(scenario)
-        else fm.TimeEvolution(
-            dynamics=dynamics,
-            outputs=[fm.SaveScalar("E_total", every=dt * steps)],
-        )
-    )
 
     return fm.Problem(
         name=f"bench_fem_gpu_long_{scenario}",
@@ -439,6 +442,9 @@ def emit_summary(
     timestep_policy: str = "fixed",
 ) -> None:
     final = result.steps[-1] if result.steps else None
+    total_rhs_evals = sum(
+        max(0, int(getattr(step, "rhs_evals", 0) or 0)) for step in result.steps
+    )
     summary = {
         "status": result.status,
         "backend": result.backend.value,
@@ -511,6 +517,7 @@ def emit_summary(
         ),
         "snapshot_wall_time_ns": final.snapshot_wall_time_ns if final is not None else None,
         "rhs_evals": final.rhs_evals if final is not None else None,
+        "total_rhs_evals": total_rhs_evals,
         "demag_solves": final.demag_solves if final is not None else None,
         "rejected_attempts": final.rejected_attempts if final is not None else None,
         "fsal_reused": final.fsal_reused if final is not None else None,

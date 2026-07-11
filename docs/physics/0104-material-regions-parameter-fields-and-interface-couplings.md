@@ -286,6 +286,206 @@ If conformal split is requested but mesh quality or degenerate tetrahedron gates
 fail, the solver must not silently continue with projected sharp jumps. The run
 is blocked unless the user explicitly switches to projection mode.
 
+### 3.2.1 FEM-TD-PHY-MAT-001: sharp element coefficients in executable time domain
+
+For a conformal P1 mesh, a piecewise-constant `A_e` is a valid exchange weak
+form coefficient in `J/m`: `E_ex = sum_e integral_{Omega_e} A_e grad m : grad
+m dV`. A piecewise-constant `Ms_e` in `A/m` also has a well-defined exchange
+projection through `M_Ms`, but it is not a node value. It must be read at the
+same element/quadrature point by every dependent term: Zeeman and demag source
+and energy, DMI normalization, anisotropy conversion, `mu0 Ms` relaxation
+metric, thermal variance, Zhang-Li and Slonczewski torque, observables, and
+CPU/GPU uploads. Replacing a sharp `Ms_e` by a shared-node average is forbidden:
+it smears the interface and changes with mesh connectivity and numbering.
+
+The current standard FEM time-domain/static/relaxation runtime implements
+elementwise `A_e` in the CPU exchange form only. That ownership is sufficient
+for `A_e` to coexist with Zeeman, demag, anisotropy, DMI, thermal/STT, Oersted,
+and magnetoelastic terms: none reads `A_e`. A CPU plan rejects `A_e` only when
+exchange is disabled, because then no exchange weak form consumes the sharp
+coefficient. GPU rejects `A_e` before backend construction because it has no
+element-coefficient upload path.
+
+By contrast, GPU state upload and every listed dependent owner accept nodal
+`Ms` or a scalar fallback, not element/quadrature `Ms_e`. A native Context is
+also a reusable handle: after create, its public calls may execute LLG,
+relaxation (whose metric contains `mu0 Ms`), field/energy queries, or
+observables. Create cannot infer which later call will be selected. Therefore
+the standard runtime rejects every elementwise `Ms_e` request on CPU and GPU
+before backend construction. The diagnostic names `Ms_element_field`, the
+resolved device, and the first active CPU owner in this fixed order: Zeeman,
+demag, uniaxial or cubic anisotropy, interfacial or bulk DMI, thermal Brown,
+Zhang-Li or Slonczewski STT, Oersted, then magnetoelastic. GPU reports its
+first unavailable owner as `GPU material-state upload`. With no active CPU
+owner, the explicit `native FEM handle lifecycle fallback` records that later
+LLG, relaxation, field, energy, or observable calls could still select an
+unsupported nodal/scalar `Ms` consumer. The rejection does not reinterpret a
+sharp coefficient as a scalar or shared-node average.
+
+This does not change the authored `ProblemIR` representation. Requested sharp
+conformal material intent remains distinct from resolved execution: rejected
+plans produce no backend, no fields, no energy/statistics artifact, and no
+claim of a resolved heterogeneous material lane. The deferred full correction
+is one backend-neutral element/quadrature material accessor shared by CPU and
+GPU, followed by two-tetra analytic field/energy tests and CPU/GPU parity on
+the same element IDs.
+
+#### 3.2.2 Normative deferred element-quadrature material contract
+
+This subsection specifies the one material realization which the deferred full
+implementation must use. It is a contract for the standard FEM time-domain,
+static, and relaxation lanes; it does not claim that the current fail-closed
+runtime has enabled the realization.
+
+For a conformal tetrahedral mesh `T_h`, sharp coefficients are DG0 maps:
+
+```text
+Ms_h|Omega_e = Ms_e > 0                 [A/m]
+A_h |Omega_e = A_e >= 0                 [J/m]
+```
+
+Here `e` is the realized element ordinal. A non-empty map contains one ordered
+P1 tetra connectivity tuple `(n0,n1,n2,n3)` with four distinct global node IDs
+in range and one positive physical volume `V_e [m^3]` for every element. Input
+with duplicate IDs is malformed rather than a degenerate quadrature shortcut.
+Two tetrahedra sharing a face retain separate volume coefficients; the common
+reduced magnetization is P1 and continuous, and its shared vertices do not own
+material values. `A_e=0` has one canonical representation: a supplied IEEE-754
+`-0.0` is normalized to `+0.0` before storage and digesting.
+
+The canonical P1 integration rule is deterministic and independent of CPU/GPU
+thread decomposition:
+
+```text
+integral_Omega_e Ms_e q(x) dV = Ms_e V_e q(c_e)       for P1 q,
+integral_Omega_e Ms_e phi_i phi_j dV
+  = Ms_e V_e / 20 * (2 if i=j else 1)                 for P1 basis functions.
+```
+
+The second identity is the exact consistent P1 tetra mass rule. It defines the
+coefficient-weighted mass operator, rather than post-hoc division of an
+unweighted projection:
+
+```text
+(M_Ms)_ij = sum_e integral_Omega_e Ms_e phi_i phi_j dV,
+M_Ms H_ex = -(2 / mu0) K_A m.
+```
+
+For a P1 scalar proxy `u` and a piecewise constant field proxy `h_e`, the
+Zeeman energy contract is
+
+```text
+E_Z = -mu0 sum_e Ms_e V_e h_e * (u_n0+u_n1+u_n2+u_n3)/4.                [J]
+```
+
+The vector form replaces the scalar product by `H_e dot m(c_e)`. This is a
+material-integration oracle, not permission to approximate arbitrary fields by
+a barycentre value. A term with a higher-degree integrand needs an explicit
+deterministic quadrature of sufficient order and records that order.
+
+For the executable CPU Zeeman owner, both the reduced magnetization and the
+already-resolved external field are P1 nodal fields.  Their dot product is
+therefore quadratic, so the sharp DG0 material realization is the exact
+consistent-mass rule, not the preceding P1 proxy:
+
+```text
+E_Z,h = -mu0 sum_e Ms_e V_e / 20
+          sum_{a,b=0..3} (2 if a=b else 1)
+          m_{n_a} . H_ext,{n_b}                                      [J].
+```
+
+Here `mu0 [N/A^2]`, `Ms_e [A/m]`, `V_e [m^3]`, and both `m` and `H_ext`
+are dimensionless and `A/m`, respectively.  The energy is negative when the
+magnetization aligns with the applied field.  For a P1 tangent/probe direction
+`p`, the same discrete mass operator gives the residual/projection identity
+
+```text
+d/d epsilon E_Z,h(m + epsilon p)|_{epsilon=0}
+  = -mu0 sum_e Ms_e V_e / 20
+      sum_{a,b=0..3} (2 if a=b else 1) p_{n_a} . H_ext,{n_b}.
+```
+
+The owner may use this identity for an unnormalised directional-derivative
+oracle.  A constrained LLG or relaxation projection must apply its tangent
+projection separately; it must not replace `Ms_e` by a shared-node average.
+For the central-difference check, the floating-point tolerance is derived
+from the sum of absolute individual P1 mass contributions before their signed
+accumulation. It includes per-term and accumulation rounding, multiplication
+by `mu0`, central subtraction, and division by `2 epsilon`. Scaling the bound
+by the final `|E(m+epsilon p)|+|E(m-epsilon p)|` is invalid because opposite
+element contributions can cancel while their rounding errors do not.
+The backend-neutral `ElementQuadratureMaterial` exposes this weighted mass
+bilinear and the CPU Zeeman owner consumes it through its dedicated
+element-quadrature entry point.  That entry point is intentionally not wired
+to public `Ms_element_field` plan creation while the other material consumers
+remain unavailable, so the fail-closed planner/runtime policy stays unchanged.
+
+For uniaxial anisotropy with a constant unit easy axis `u`, the first CPU
+element-quadrature owner uses the existing P1 nodal `Ku1` and `Ku2` fields:
+
+```text
+E_u = - sum_e integral_{Omega_e} [ Ku1_h (m_h.u)^2
+                                  + Ku2_h (m_h.u)^4 ] dV.              [J]
+```
+
+`Ku1_h`, `Ku2_h`, and every component of `m_h` are P1.  Consequently the
+`Ku1` integrand has polynomial degree three and the `Ku2` integrand has
+degree five.  The owner uses a tensor-product Duffy rule with Gauss-Legendre
+orders `(4,4,3)`: after the tetrahedral Jacobian, those orders integrate every
+degree-five physical polynomial exactly.  This is the required order, not a
+barycentre approximation.  `Ms_e` does not occur in this conservative
+energy, but the owner accepts the same `ElementQuadratureMaterial` topology
+and validates its element ordinal for every integral.  The corresponding
+effective field must later be projected using the same `mu0 Ms_e` mass form:
+
+```text
+M_Ms H_u = - (1 / mu0) dE_u/dm.
+```
+
+That field projection is deliberately deferred: the present helper is an
+energy-and-directional-derivative oracle only and has no `Context` or public
+plan wiring.  A directional test evaluates `E_u(m + eps p)` and
+`E_u(m - eps p)` with the same rule and compares the central difference to
+the separately integrated derivative.  Its tolerance is an absolute
+termwise roundoff envelope, including quadrature accumulation and central
+subtraction; cancellation in the final energy cannot shrink that bound.
+
+The backend-neutral accessor owns no `Context`, MFEM object, CUDA allocation,
+or physics owner. It accepts ordered tetra topology, positive volumes, and
+parallel `Ms_e`/`A_e` arrays; exposes direct per-element lookup and the exact
+P1 mass bilinear; and publishes a canonical element-map digest. The digest is
+a versioned bytewise hash of element ordinal, four global node IDs, volume and
+DG0 values. CPU and GPU must receive the same digest and reject a mismatch
+before consuming a map. The digest is provenance/transfer validation only; it
+must never choose a coefficient at a node.
+
+Required per-term policy after wiring the deferred accessor:
+
+| Owner | Required sharp-material read |
+| --- | --- |
+| exchange residual and energy | `A_e` at element quadrature and `M_Ms` for field projection |
+| Zeeman, demag source/energy, anisotropy, DMI | `Ms_e` and used material coefficients at owner quadrature |
+| relaxation metric and line search | `mu0 Ms_e` through the same element mass integration |
+| thermal Brown variance | local `Ms_e`, element volume/mass realization and recorded order |
+| Zhang-Li and Slonczewski torque | local `Ms_e` and term coefficients at owner quadrature |
+| observables and statistics | the same `Ms_e` mass weighting, never node-count/shared-node averaging |
+
+CPU may wrap this contract in MFEM coefficients/integration objects and GPU may
+upload arrays and use CUDA kernels. Neither lane may construct a nodal
+projection for a sharp map. A supplied map with unsupported owners remains
+rejected before backend construction. A supplied map that is omitted,
+malformed, non-positive in active material, has inconsistent extent, or has a
+digest mismatch is rejected fail-closed; scalar and supplied nodal payload
+compatibility is unchanged.
+
+When executable, resolved provenance must state
+`material_realization=element_quadrature`, quadrature/mass order, element-map
+digest, resolved CPU/GPU lane, and every consuming owner. Older artifacts lack
+the required comparability. Evidence still deferred beyond this pure contract:
+two-tetra field/energy oracle, per-owner directional derivatives, and CPU/GPU
+parity on the same map. This section does not lift the current fail-closed
+policy.
+
 Contact/interface discovery is a realization step, not an authoring shortcut.
 FDM resolves contact from object/region masks and cell adjacency on one grid.
 FEM resolves contact from boundary/domain markers in the shared-domain mesh. If

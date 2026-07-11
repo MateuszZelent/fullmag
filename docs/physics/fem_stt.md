@@ -1,11 +1,11 @@
 # FEM Spin-Transfer Torque
 
 - Status: native FEM CPU/GPU module contract
-- Last updated: 2026-05-30
-- Implementation: `native/backends/fem/cpu/mfem/interactions/stt.hpp/.cpp`,
-  `native/backends/fem/cpu/mfem/interactions/stt_slonczewski.hpp/.cpp`,
-  `native/backends/fem/cpu/mfem/interactions/stt_zhang_li.hpp/.cpp`
-- Test: `native/backends/fem/tests/stt_contract.cpp`
+- Last updated: 2026-07-10
+- Implementation: `backends/fem/cpu/mfem/interactions/stt.hpp/.cpp`,
+  `backends/fem/cpu/mfem/interactions/stt_slonczewski.hpp/.cpp`,
+  `backends/fem/cpu/mfem/interactions/stt_zhang_li.hpp/.cpp`
+- Test: `backends/fem/tests/stt_contract.cpp`
 - Shared sign reference: `docs/physics/stt_sign_conventions.md`
 
 ## Pole / torque
@@ -136,6 +136,17 @@ projects the element contribution back to nodes with lumped P1 weights. The
 hot path uses `SttWorkspace`/`ZhangLiSttWorkspace` so stage evaluation can add
 the normalized Zhang-Li contribution without allocating a full temporary RHS.
 
+For the affine tetrahedron map `x = p0 + J xi`, where the columns of `J` are
+`p1-p0`, `p2-p0`, and `p3-p0`, the P1 gradients are the rows of `J^-1`:
+`grad N1 = row_0(J^-1)`, `grad N2 = row_1(J^-1)`, and
+`grad N3 = row_2(J^-1)`, with `grad N0 = -(grad N1 + grad N2 + grad N3)`.
+This is a geometry contract, not a current-sign convention. On the skew tetra
+`p0=(0,0,0)`, `p1=(2,0,0)`, `p2=(1,1,0)`, `p3=(0,0,1)`, it gives
+`grad N1=(0.5,-0.5,0)`. Consequently an affine `m_z=x` and a drift along
+`+x` have `(u.grad)m_z=u_x`; an affine `m_z=y` has zero directional derivative.
+The CPU and CUDA implementations are distinct runtime realizations but use
+this same map, SI units, and torque equation.
+
 ## Ograniczenia capability
 
 - Only one executable STT family is accepted by native FEM plan validation at a
@@ -144,7 +155,10 @@ the normalized Zhang-Li contribution without allocating a full temporary RHS.
   planner/API path is expanded.
 - Drift-diffusion spin accumulation and current-transport-coupled STT remain
   deferred.
-- GPU parity is not claimed by this module.
+- `FEM-TD-PHY-STT-001` has managed CPU/GPU parity evidence only for the named
+  skew-tetra Zhang-Li workload. It does not promote any STT capability to
+  `validated`, and it does not establish parity for other geometries, solvers,
+  boundary conditions, or interaction combinations.
 
 ## Testy
 
@@ -158,6 +172,24 @@ Current gate:
   ownership outside flat `Context`, reusable RK hot-path STT workspace
   ownership, top-level source-contract docstrings for the aggregate,
   Slonczewski and Zhang-Li sources, and combined `max_rhs` updates.
+- `fem_stt_contract` also evaluates the independent skew-tetra affine oracle
+  above. Its `1e-12` relative bound follows from double-precision direct
+  arithmetic (with `1e-24` absolute floor for zero expectations), not from a
+  trajectory-fit threshold. `fem_cuda_tetra_gradient_contract` executes the
+  CUDA Zhang-Li wrapper on that same tetrahedron, checks its analytic local
+  RHS and current reversal, then compares a ten-step CPU/CUDA operator loop.
+  That native contract uses explicit Euler followed by per-node renormalization
+  on both sides; it tests the Zhang-Li operators, not the public integrator.
+  The separately named managed fixture is the public fixed-step Heun workload;
+  its frozen CPU/GPU comparison uses `rtol=2e-9` and `atol=1e-11`, established
+  before validating that ten-step run. A separately versioned, managed
+  CPU three-level Richardson study at fixed final physical time records
+  observed orders `p_dt=2.0000679517167614` and
+  `p_mesh=1.8064680026687565`; its conservative frozen acceptance floors are
+  `p_dt >= 2.0` and `p_mesh >= 1.8`. The validator never recomputes these
+  thresholds from the workload under test. See
+  `docs/validation/fem-zhang-li-skew-tetra-convergence-study-v1.json` and
+  `docs/validation/fem-zhang-li-skew-tetra-runtime-v1.json`.
 
 Required before production qualification:
 

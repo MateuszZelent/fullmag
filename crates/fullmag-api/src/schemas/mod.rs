@@ -1,3 +1,4 @@
+pub mod analysis_extensions;
 pub mod authoring;
 pub mod commands;
 pub mod common;

@@ -548,6 +548,36 @@ describe("StudyInspectorPanel", () => {
     expect(html).not.toContain("Tangent-plane implicit");
   });
 
+  it("renders FEM demag projected-gradient BB as disabled with its reason", () => {
+    const draft = {
+      ...createDefaultStudyStageDraft("relax", 0),
+      algorithm: "projected_gradient_bb",
+    };
+    const html = renderToStaticMarkup(
+      <StudyStageDraftEditor
+        algorithmsAvailable={[
+          "llg_overdamped",
+          "projected_gradient_bb",
+          "nonlinear_cg",
+          "tangent_plane_implicit",
+        ]}
+        demagEnabled
+        draft={draft}
+        index={0}
+        onUpdate={() => undefined}
+        requestedBackend="fem"
+        requestedDevice="gpu"
+        requestedMode="strict"
+        validation={[]}
+      />,
+    );
+
+    expect(html).toContain('value="projected_gradient_bb" disabled=""');
+    expect(html).toContain(
+      "Projected gradient BB is not qualified for FEM demag relaxation. Use nonlinear CG or disable demag.",
+    );
+  });
+
   it("shows runtime progress labels on stage pipeline progress bars", () => {
     const draft = createDefaultStudyStageDraft("frequency_response", 0);
     const html = renderToStaticMarkup(

@@ -628,7 +628,13 @@ export function useStudyInspectorPanelController(
         "Command is unavailable.";
   const commitStageDrafts = async () => {
     const issues = state.stageDrafts.flatMap((draft, index) =>
-      validateStudyStageDraft(draft).map((issue) => ({
+      validateStudyStageDraft(draft, {
+        algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
+        backend: model.requested.backend,
+        demagEnabled: state.globalDraft.demagEnabled,
+        device: model.requested.device,
+        mode: model.requested.mode,
+      }).map((issue) => ({
         ...issue,
         message: `Stage ${index + 1}: ${issue.message}`,
       })),
@@ -853,6 +859,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
               : null
           }
           commandDisabledReason={commandDisabledReason}
+          demagEnabled={state.globalDraft.demagEnabled}
           draft={state.stageDrafts[state.selectedDraftIndex] ?? null}
           draftIndex={state.selectedDraftIndex}
           drafts={state.stageDrafts}

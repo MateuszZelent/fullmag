@@ -194,8 +194,11 @@ minimizers. `RelaxStopIR` carries `torque_tolerance_apm`,
 Current public-executable production relaxation subset:
 
 - `llg_overdamped` on documented FDM and FEM lanes,
-- `projected_gradient_bb` and `nonlinear_cg` on documented FDM and FEM
-  CPU/GPU lanes.
+- `projected_gradient_bb` on documented FDM CPU/GPU lanes and FEM CPU/GPU
+  lanes without demag. FEM PG-BB with demag is planner-rejected after failed
+  strict-Armijo production qualification; there is no hidden fallback.
+- `nonlinear_cg` on documented FDM and FEM CPU/GPU lanes, including qualified
+  FEM demag execution with the algorithm-specific solver policy.
 
 Development-only:
 
