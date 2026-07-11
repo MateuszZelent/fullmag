@@ -10,6 +10,7 @@ import {
   airboxVisualizationStatePatchFromTargetPatch,
   hasVisualizationStatePatch,
   mergeVisualizationStateTargetOverride,
+  removeTargetOverrideField,
   renderModePatch,
   resolveTargetVisualization,
   resolveVisualizationTargetFromSelection,
@@ -135,6 +136,22 @@ async function clearTargetOverrideResource(
     overrides: (state.overrides ?? []).filter(
       (entry) => !visualizationStateOverrideMatchesTarget(entry, target),
     ),
+  });
+  return true;
+}
+
+async function removeTargetOverrideFieldResource(
+  context: CommandContext,
+  target: VisualizationTargetRef,
+  field: keyof VisualizationTargetPatch,
+): Promise<boolean> {
+  const state = visualizationStateFromContext(context);
+  if ((!context.visualizationSync && (!context.api || !context.resources)) || !state) {
+    return false;
+  }
+
+  await patchVisualizationState(context, {
+    overrides: removeTargetOverrideField(state.overrides ?? [], target, field),
   });
   return true;
 }
@@ -363,10 +380,29 @@ export const VISUALIZATION_TARGET_COMMANDS: CommandContribution[] = [
     scope: "selection",
     disabledReason: targetPassCommandDisabledReason,
     isEnabled: targetPassCommandEnabled,
-    run: (context) => {
+    run: async (context) => {
       const value = stringPayload(context);
       if (!value) return invalidPayload("visualization.target.set-surface-color-source");
       if (value === "inherit") {
+        const target = selectedTarget(context);
+        const visualization = context.visualization;
+        if (!target || !visualization) {
+          return {
+            status: "failed" as const,
+            message: targetCommandDisabledReason(context) ?? "Target unavailable.",
+          };
+        }
+        if (
+          target.kind !== "airbox" &&
+          (await removeTargetOverrideFieldResource(
+            context,
+            target,
+            "surfaceColorSource",
+          ))
+        ) {
+          visualization.removeTargetOverrideField(target, "surfaceColorSource");
+          return { status: "completed" as const };
+        }
         return patchSelectedTarget(context, {
           shaderColorMode: undefined,
           surfaceColorSource: undefined,

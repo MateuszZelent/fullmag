@@ -159,6 +159,52 @@ describe("visualization target commands", () => {
       });
   });
 
+  it("removes the serialized surface color override when Inherited is selected", async () => {
+    const commands = new CommandRegistry();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    const visualization = new ObjectVisualizationController();
+    const queuedPatches: VisualizationStatePatch[] = [];
+    for (const command of VISUALIZATION_TARGET_COMMANDS) {
+      commands.register(command);
+    }
+    selection.set(
+      {
+        kind: "object.visualization",
+        label: "Free layer",
+        nodeId: "model:object:free-layer:visualization",
+        objectId: "free-layer",
+      },
+      "test",
+    );
+
+    const result = await commands.execute(
+      "visualization.target.set-surface-color-source",
+      {
+        selection,
+        source: "test",
+        visualization,
+        visualizationSync: {
+          queuePatch: (patch: VisualizationStatePatch) => queuedPatches.push(patch),
+        } as never,
+        resourceData: {
+          [VISUALIZATION_STATE_PATH]: {
+            overrides: [
+              {
+                scope: "object",
+                scope_id: "free-layer",
+                style: { surface_color_source: "component_x" },
+              },
+            ],
+          } as VisualizationStateResource,
+        },
+      },
+      "inherit",
+    );
+
+    expect(result.status).toBe("completed");
+    expect(queuedPatches).toEqual([{ overrides: [] }]);
+  });
+
   it("clears selected object overrides through the command registry", async () => {
     const commands = new CommandRegistry();
     const selection = new SelectionController(new EventBus<KernelEventMap>());

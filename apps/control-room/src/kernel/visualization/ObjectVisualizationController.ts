@@ -269,6 +269,37 @@ export class ObjectVisualizationController {
     this.bump();
   }
 
+  removeTargetOverrideField(
+    target: VisualizationTargetRef,
+    field: keyof VisualizationTargetPatch,
+  ): void {
+    const key = visualizationTargetKey(target);
+    const override = this.overrides.get(key);
+    const pending = this.pendingOverrides.get(key);
+    const nextOverride = override
+      ? removeStoredTargetPatchField(override, field)
+      : undefined;
+    const nextPendingPatch = pending
+      ? removeStoredTargetPatchField(pending.patch, field)
+      : undefined;
+    const changed =
+      (override !== undefined && !samePatch(override, nextOverride ?? {})) ||
+      (pending !== undefined && !samePatch(pending.patch, nextPendingPatch ?? {}));
+    if (!changed) return;
+
+    if (nextOverride && Object.keys(nextOverride).length > 0) {
+      this.overrides.set(key, nextOverride);
+    } else {
+      this.overrides.delete(key);
+    }
+    if (pending && nextPendingPatch && Object.keys(nextPendingPatch).length > 0) {
+      this.pendingOverrides.set(key, { ...pending, patch: nextPendingPatch });
+    } else if (pending) {
+      this.pendingOverrides.delete(key);
+    }
+    this.bump();
+  }
+
   getDefaultSettings(
     kind: VisualizationTargetKind,
     baseSettings?: VisualizationTargetSettings,
@@ -857,6 +888,144 @@ export function mergeVisualizationStateTargetOverride(
     (entry) => !visualizationStateOverrideMatchesTarget(entry, target),
   );
   return [...rest.map(normalizeVisualizationStateOverride), merged];
+}
+
+/**
+ * Remove one semantic target setting from the serialized override that owns it.
+ * `undefined` cannot express deletion in a PATCH record: it is stripped before
+ * serialization and an existing backend value would survive the merge.
+ */
+export function removeTargetOverrideField(
+  overrides: readonly VisualizationStateResource["overrides"][number][],
+  target: VisualizationTargetRef,
+  field: keyof VisualizationTargetPatch,
+): VisualizationStateResource["overrides"] {
+  return overrides.flatMap((entry) => {
+    if (!visualizationStateOverrideMatchesTarget(entry, target)) {
+      return [normalizeVisualizationStateOverride(entry)];
+    }
+    const next = removeSerializedOverrideField(entry, field);
+    return isVisualizationStateOverrideEmpty(next) ? [] : [next];
+  });
+}
+
+function removeSerializedOverrideField(
+  entry: VisualizationStateResource["overrides"][number],
+  field: keyof VisualizationTargetPatch,
+): VisualizationStateResource["overrides"][number] {
+  const display = { ...(entry.display ?? {}) };
+  const style = { ...(entry.style ?? {}) };
+  let quantity = entry.quantity;
+  let visible = entry.visible;
+
+  switch (field) {
+    case "activeQuantityId":
+      quantity = undefined;
+      break;
+    case "boundsVisible":
+      delete display.bounds;
+      break;
+    case "geometryScope":
+      delete display.geometry_scope;
+      break;
+    case "opacityPercent":
+      delete display.opacity;
+      break;
+    case "pointsVisible":
+      delete display.points;
+      break;
+    case "shaderVisible":
+      delete display.surface;
+      break;
+    case "vectorsVisible":
+      delete display.vectors;
+      break;
+    case "visible":
+      delete display.visible;
+      visible = undefined;
+      break;
+    case "wireframeOpacityPercent":
+      if (display.wireframe) {
+        const wireframe = { ...display.wireframe };
+        delete wireframe.opacity;
+        if (Object.keys(wireframe).length === 0) delete display.wireframe;
+        else display.wireframe = wireframe;
+      }
+      break;
+    case "wireframeVisible":
+      if (display.wireframe) {
+        const wireframe = { ...display.wireframe };
+        delete wireframe.visible;
+        if (Object.keys(wireframe).length === 0) delete display.wireframe;
+        else display.wireframe = wireframe;
+      }
+      break;
+    case "pointColor":
+      delete style.point_color;
+      break;
+    case "scalarColorPalette":
+      delete style.scalar_color_palette;
+      break;
+    case "shaderColorMode":
+    case "surfaceColorSource":
+      delete style.surface_color_source;
+      break;
+    case "shaderMonoColor":
+      delete style.surface_mono_color;
+      break;
+    case "surfaceProjectionMode":
+      delete style.surface_projection_mode;
+      break;
+    case "vectorAlphaPercent":
+      delete style.vector_alpha;
+      break;
+    case "vectorBudget":
+      delete style.vector_budget;
+      break;
+    case "vectorColorMode":
+      delete style.vector_color_mode;
+      break;
+    case "vectorLengthScale":
+      delete style.vector_length_scale;
+      break;
+    case "vectorMonoColor":
+      delete style.vector_mono_color;
+      break;
+    case "vectorThickness":
+      delete style.vector_thickness;
+      break;
+    case "viewportColorbarVisible":
+      delete style.viewport_colorbar_visible;
+      break;
+    // Local-only settings are never serialized in a target override.
+    case "airboxSyntheticVectorsEnabled":
+    case "primitiveVisible":
+    case "renderMode":
+    case "vectorCenteringEnabled":
+    case "vectorSurfaceOffsetEnabled":
+    case "vectorSurfaceOffsetScale":
+      break;
+  }
+
+  return {
+    scope: entry.scope,
+    scope_id: entry.scope_id,
+    ...(visible === undefined ? {} : { visible }),
+    ...(Object.keys(display).length === 0 ? {} : { display }),
+    ...(Object.keys(style).length === 0 ? {} : { style }),
+    ...(quantity?.active_quantity_id ? { quantity } : {}),
+  };
+}
+
+function isVisualizationStateOverrideEmpty(
+  entry: VisualizationStateResource["overrides"][number],
+): boolean {
+  return (
+    entry.visible === undefined &&
+    !entry.display &&
+    !entry.style &&
+    !entry.quantity
+  );
 }
 
 export function visualizationStateOverrideMatchesTarget(
@@ -1490,6 +1659,19 @@ function normalizePatch(
     }
   }
   return normalized;
+}
+
+function removeStoredTargetPatchField(
+  patch: VisualizationStoredTargetPatch,
+  field: keyof VisualizationTargetPatch,
+): VisualizationStoredTargetPatch {
+  const next = { ...patch };
+  delete next[field as keyof VisualizationStoredTargetPatch];
+  if (field === "surfaceColorSource" || field === "shaderColorMode") {
+    delete next.surfaceColorSource;
+    delete next.shaderColorMode;
+  }
+  return next;
 }
 
 function normalizeVisualizationSettings(

@@ -8,6 +8,7 @@ import {
   DEFAULT_OBJECT_VISUALIZATION,
   ObjectVisualizationController,
   mergeVisualizationStateTargetOverride,
+  removeTargetOverrideField,
   renderModePatch,
   resolveAirboxVisualizationSettingsFromState,
   resetAirboxVisualizationState,
@@ -1423,6 +1424,90 @@ describe("ObjectVisualizationController", () => {
           surface_color_source: "solid",
           surface_mono_color: "#00ffaa",
         },
+      },
+    ]);
+  });
+
+  it("removes an inherited surface color override and prunes the empty target entry", () => {
+    expect(
+      removeTargetOverrideField(
+        [
+          {
+            scope: "region",
+            scope_id: "region:free-layer:core",
+            style: { surface_color_source: "component_x" },
+          },
+        ],
+        { id: "region:free-layer:core", kind: "region" },
+        "surfaceColorSource",
+      ),
+    ).toEqual([]);
+  });
+
+  it("returns to the owner style after inherited deletion and a resource reload", () => {
+    const target = { id: "region:free-layer:core", kind: "region" as const };
+    const overrides = removeTargetOverrideField(
+      [
+        {
+          scope: "region",
+          scope_id: target.id,
+          style: { surface_color_source: "component_x" },
+        },
+      ],
+      target,
+      "surfaceColorSource",
+    );
+
+    expect(
+      resolveTargetVisualization({
+        inheritedSettings: {
+          ...DEFAULT_OBJECT_VISUALIZATION,
+          surfaceColorSource: "orientation",
+        },
+        snapshot: new ObjectVisualizationController().getSnapshot(),
+        target,
+        visualizationState: { overrides } as never,
+      }).settings.surfaceColorSource,
+    ).toBe("orientation");
+  });
+
+  it("removes only the inherited local field without clearing local render preferences", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "object:free-layer", kind: "object" as const };
+    controller.patchTarget(target, { surfaceColorSource: "component_x" });
+    controller.patchLocalRenderTarget(target, { primitiveVisible: true });
+
+    controller.removeTargetOverrideField(target, "surfaceColorSource");
+
+    expect(controller.getSnapshot().overrides).not.toHaveProperty("object:free-layer");
+    expect(controller.getSnapshot().localRenderOverrides).toMatchObject({
+      "object:free-layer": { primitiveVisible: true },
+    });
+  });
+
+  it("removes only the inherited field and preserves other serialized override fields", () => {
+    expect(
+      removeTargetOverrideField(
+        [
+          {
+            scope: "object",
+            scope_id: "free-layer",
+            display: { wireframe: { visible: false } },
+            style: {
+              surface_color_source: "component_x",
+              surface_mono_color: "#ffffff",
+            },
+          },
+        ],
+        { id: "object:free-layer", kind: "object" },
+        "shaderColorMode",
+      ),
+    ).toEqual([
+      {
+        scope: "object",
+        scope_id: "free-layer",
+        display: { wireframe: { visible: false } },
+        style: { surface_mono_color: "#ffffff" },
       },
     ]);
   });

@@ -90,6 +90,8 @@ import {
   resolveVisualizationVectorBudgetRange,
   resolveObjectVisualizationPanelTopologyFreshness,
   resolveObjectChildRegionVisualizationTargets,
+  resolveChildRegionOverrideTargetIds,
+  removeOwnerChildRegionVisualizationOverrides,
   resolveRegionVisualizationCarrier,
   resolveVisualizationRenderResolution,
   resolveSurfaceColorSourceItems,
@@ -1358,9 +1360,11 @@ function useObjectVisualizationPanelState(
   const settings = targetVisualization?.settings ?? null;
   const effectiveSettings = targetVisualization?.effectiveSettings ?? null;
   const hasTargetOverride = Boolean(targetVisualization?.override);
-  const childRegionOverrideCount = childRegionTargets.filter(
-    (childTarget) => snapshot.overrides[visualizationTargetKey(childTarget)],
-  ).length;
+  const childRegionOverrideCount = resolveChildRegionOverrideTargetIds({
+    backendOverrides: visualizationState.data?.overrides ?? [],
+    childTargets: childRegionTargets,
+    snapshot,
+  }).size;
   const panelSettings = settings;
   const targetKey = resolvedTarget
     ? visualizationTargetKey(resolvedTarget)
@@ -1515,12 +1519,10 @@ function useObjectVisualizationPanelState(
     }
 
     visualizationSync.queuePatch({
-      overrides: (visualizationState.data.overrides ?? []).filter(
-        (entry) =>
-          !childRegionTargets.some((childTarget) =>
-            visualizationStateOverrideMatchesTarget(entry, childTarget),
-          ),
-      ),
+      overrides: removeOwnerChildRegionVisualizationOverrides({
+        objectId: selection.objectId ?? "",
+        overrides: visualizationState.data.overrides ?? [],
+      }),
     });
     for (const childTarget of childRegionTargets) {
       visualization.clearTarget(childTarget);

@@ -28,6 +28,9 @@ import {
 } from "@/shared/domain/physics/displayUnits";
 import {
   mergeVisualizationStateTargetOverride,
+  visualizationStateOverrideMatchesTarget,
+  visualizationTargetKey,
+  type ObjectVisualizationSnapshot,
   renderModePatch,
   surfaceColorSourceToColorMode,
   type ObjectVisualizationController,
@@ -1049,6 +1052,55 @@ export function resolveObjectChildRegionVisualizationTargets({
   }
 
   return targets;
+}
+
+/** The Inspector must combine canonical backend state with only live local overlays. */
+export function resolveChildRegionOverrideTargetIds({
+  backendOverrides,
+  childTargets,
+  snapshot,
+}: {
+  backendOverrides: readonly VisualizationStateResource["overrides"][number][];
+  childTargets: readonly VisualizationTargetRef[];
+  snapshot: Pick<ObjectVisualizationSnapshot, "overrides"> &
+    Partial<Pick<ObjectVisualizationSnapshot, "pendingOverrides">>;
+}): Set<string> {
+  const ids = new Set<string>();
+  for (const target of childTargets) {
+    const key = target.id;
+    if (
+      backendOverrides.some((entry) =>
+        visualizationStateOverrideMatchesTarget(entry, target),
+      ) ||
+      Boolean(snapshot.overrides[visualizationTargetKey(target)]) ||
+      Boolean(snapshot.pendingOverrides?.[visualizationTargetKey(target)])
+    ) {
+      ids.add(key);
+    }
+  }
+  return ids;
+}
+
+/**
+ * A reset is one replacement list. Restrict deletion by the encoded owner id
+ * rather than by whichever region list happened to be loaded in this render.
+ */
+export function removeOwnerChildRegionVisualizationOverrides({
+  objectId,
+  overrides,
+}: {
+  objectId: string;
+  overrides: readonly VisualizationStateResource["overrides"][number][];
+}): VisualizationStateResource["overrides"] {
+  const canonicalOwner = canonicalVisualizationSceneObjectId(objectId);
+  return overrides.filter((entry) => {
+    if (entry.scope !== "region") return true;
+    const parsed = parseRegionVisualizationTargetId(entry.scope_id);
+    return (
+      !parsed ||
+      canonicalVisualizationSceneObjectId(parsed.objectId) !== canonicalOwner
+    );
+  });
 }
 
 function decodeSafe(value: string): string {

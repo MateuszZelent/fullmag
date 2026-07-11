@@ -36,6 +36,8 @@ import {
   resolveSurfaceColorSourceItems,
   resolveObjectVisualizationPanelTopologyFreshness,
   resolveObjectChildRegionVisualizationTargets,
+  resolveChildRegionOverrideTargetIds,
+  removeOwnerChildRegionVisualizationOverrides,
   resolveRegionVisualizationCarrier,
   scalarColorPalettePatch,
   resolveVisualizationVectorBudgetRange,
@@ -61,6 +63,65 @@ import {
 type MeshPart = NonNullable<MeshSharedDomainManifestResource["mesh_parts"]>[number];
 
 describe("ObjectVisualizationPanelModel", () => {
+  it("counts backend-only child region overrides after reload", () => {
+    const childTargets = [
+      { id: "region:object-a:core", kind: "region" as const },
+      { id: "region:object-a:shell", kind: "region" as const },
+    ];
+
+    expect(
+      resolveChildRegionOverrideTargetIds({
+        backendOverrides: [
+          {
+            scope: "region",
+            scope_id: "region:object-a:core",
+            style: { surface_color_source: "component_x" },
+          },
+        ],
+        childTargets,
+        snapshot: { overrides: {} },
+      }),
+    ).toEqual(new Set(["region:object-a:core"]));
+  });
+
+  it("deduplicates backend and pending child region overrides", () => {
+    const childTargets = [{ id: "region:object-a:core", kind: "region" as const }];
+
+    expect(
+      resolveChildRegionOverrideTargetIds({
+        backendOverrides: [
+          {
+            scope: "region",
+            scope_id: "region:object-a:core",
+            display: { vectors: { visible: false } },
+          },
+        ],
+        childTargets,
+        snapshot: {
+          overrides: {},
+          pendingOverrides: {
+            "region:object-a:core": { baseRevision: 4, patch: { vectorsVisible: false } },
+          },
+        },
+      }),
+    ).toEqual(new Set(["region:object-a:core"]));
+  });
+
+  it("resets only region overrides owned by the current object", () => {
+    expect(
+      removeOwnerChildRegionVisualizationOverrides({
+        objectId: "object-a",
+        overrides: [
+          { scope: "region", scope_id: "region:object-a:core" },
+          { scope: "region", scope_id: "region:object-b:core" },
+          { scope: "object", scope_id: "object-a" },
+        ],
+      }),
+    ).toEqual([
+      { scope: "region", scope_id: "region:object-b:core" },
+      { scope: "object", scope_id: "object-a" },
+    ]);
+  });
   it.each([
     [{ id: "region:object-a:shell", kind: "region" } as const, "Target: region:object-a:shell"],
     [{ id: "airbox", kind: "airbox" } as const, "Target: airbox"],
