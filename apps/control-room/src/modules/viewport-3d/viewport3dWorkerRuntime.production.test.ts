@@ -5,6 +5,8 @@ import { buildViewport3DFdmCuboidOffMainThread, disposeViewport3DFdmCuboidBuildW
 import { buildViewport3DRegionOverlaysOffMainThread, disposeViewport3DRegionOverlayBuildWorker } from "./region-overlays/viewport3dRegionOverlayBuildScheduler";
 import { buildVertexScalarColorsOffMainThread, disposeViewport3DColorTransformWorker } from "./viewport3dColorTransformScheduler";
 import { buildViewport3DTopologyIndicesOffMainThread, disposeViewport3DTopologyIndexWorker } from "./viewport3dTopologyIndexScheduler";
+import { acquireViewport3DWorkerRuntime, getViewport3DWorkerRuntimeSnapshot } from "./viewport3dWorkerRuntime";
+import { subscribeViewport3DWorkerRuntimeChanges } from "./viewport3dWorkerRuntimeEvents";
 
 class PendingWorker {
   static instances: PendingWorker[] = [];
@@ -37,5 +39,22 @@ describe("viewport 3D production worker disposers", () => {
     const results = await Promise.all(pending);
     expect(results.every((error) => error instanceof Error && error.name === "AbortError")).toBe(true);
     expect(PendingWorker.instances.every((worker) => worker.terminate.mock.calls.length === 1 && Array.from(worker.listeners.values()).every((listeners) => listeners.size === 0))).toBe(true);
+  });
+
+  it("publishes live worker and job counts after a lane starts and clears them on final lease release", async () => {
+    vi.stubGlobal("Worker", PendingWorker);
+    const snapshots: Array<{ jobs: number; workers: number }> = [];
+    const unsubscribe = subscribeViewport3DWorkerRuntimeChanges(() => {
+      const snapshot = getViewport3DWorkerRuntimeSnapshot();
+      snapshots.push({ jobs: snapshot.jobs, workers: snapshot.workers });
+    });
+    const lease = acquireViewport3DWorkerRuntime();
+    const pending = buildViewport3DTopologyIndicesOffMainThread({ airboxParts: [], magneticParts: [], topology: { boundaryFaces: new Uint32Array(), indices: new Uint32Array(), nodeCount: 0 } }, { buildKey: "runtime:live-count" }).catch((error: unknown) => error);
+
+    expect(snapshots).toContainEqual({ jobs: 1, workers: 1 });
+    lease.release();
+    await expect(pending).resolves.toMatchObject({ name: "AbortError" });
+    expect(getViewport3DWorkerRuntimeSnapshot()).toMatchObject({ jobs: 0, timers: 0, workers: 0 });
+    unsubscribe();
   });
 });

@@ -19,6 +19,11 @@ rather than mount/unmount snapshots. The compact diagnostics string includes
 five worker clients, disposes them while their jobs are pending, and verifies
 controlled `AbortError` rejection, `terminate()`, and listener removal.
 
+Final review fix: build scheduler notification now occurs after synchronous
+runner/worker creation as well as queue/terminal transitions. The production
+lease test observes `jobs=1, workers=1` for an active topology lane, then
+releases the final runtime lease and observes zero jobs, timers, and workers.
+
 Verification:
 
 - `pnpm --dir apps/control-room exec vitest run src/modules/viewport-3d/viewport3dWorkerRuntime.test.ts src/modules/viewport-3d/viewport3dTopologyIndexScheduler.test.ts src/modules/viewport-3d/viewport3dColorTransformScheduler.test.ts src/modules/viewport-3d/region-overlays/viewport3dRegionOverlayBuildScheduler.test.ts src/modules/viewport-3d/layers/vectorGlyphBuildScheduler.test.ts`

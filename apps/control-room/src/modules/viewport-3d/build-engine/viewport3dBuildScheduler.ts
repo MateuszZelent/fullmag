@@ -195,6 +195,9 @@ export function createViewport3DBuildScheduler(
       completeJob(job, error, undefined);
       return;
     }
+    // Worker-backed runners create their client synchronously. Publish only
+    // after that creation so diagnostics never report a queued job as workerless.
+    notifyViewport3DWorkerRuntimeChange();
     Promise.resolve(result).then(
       (value) => completeJob(job, null, value),
       (error) => completeJob(job, error, undefined),
