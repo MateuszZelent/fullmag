@@ -1208,114 +1208,75 @@ export function airboxVisualizationStatePatchFromTargetPatch(
   patch: VisualizationTargetPatch,
   currentOverrides?: VisualizationStateResource["overrides"],
 ): VisualizationStatePatch {
+  const normalized = normalizePatch(patch);
   const hasExplicitDrawablePass =
-    patch.boundsVisible !== undefined ||
-    patch.pointsVisible !== undefined ||
-    patch.shaderVisible !== undefined ||
-    patch.vectorsVisible !== undefined ||
-    patch.wireframeVisible !== undefined;
+    normalized.boundsVisible !== undefined ||
+    normalized.pointsVisible !== undefined ||
+    normalized.shaderVisible !== undefined ||
+    normalized.vectorsVisible !== undefined ||
+    normalized.wireframeVisible !== undefined;
   const shouldEnableDefaultSurface =
-    patch.visible === true && !hasExplicitDrawablePass;
+    normalized.visible === true && !hasExplicitDrawablePass;
   const vectors =
-    patch.vectorsVisible === undefined && patch.vectorBudget === undefined
+    normalized.vectorsVisible === undefined && normalized.vectorBudget === undefined
       ? {}
       : {
           vectors: {
             domain: "airbox_only" as const,
-            ...(patch.vectorBudget === undefined
+            ...(normalized.vectorBudget === undefined
               ? {}
-              : { density: Math.max(0, Math.floor(patch.vectorBudget)) }),
-            ...(patch.vectorsVisible === undefined
+              : { density: normalized.vectorBudget }),
+            ...(normalized.vectorsVisible === undefined
               ? {}
-              : { visible: patch.vectorsVisible }),
+              : { visible: normalized.vectorsVisible }),
           },
         };
   const airbox: NonNullable<
     NonNullable<VisualizationStatePatch["layers"]>["airbox"]
   > = {
-    ...(patch.boundsVisible === undefined
+    ...(normalized.boundsVisible === undefined
       ? {}
-      : { bounds: { visible: patch.boundsVisible } }),
-    ...(patch.opacityPercent === undefined
+      : { bounds: { visible: normalized.boundsVisible } }),
+    ...(normalized.opacityPercent === undefined
       ? {}
-      : { opacity: clampOpacity(patch.opacityPercent) / 100 }),
-    ...(patch.pointsVisible === undefined
+      : { opacity: normalized.opacityPercent / 100 }),
+    ...(normalized.pointsVisible === undefined
       ? {}
-      : { points: { visible: patch.pointsVisible } }),
-    ...(patch.shaderVisible === undefined
+      : { points: { visible: normalized.pointsVisible } }),
+    ...(normalized.shaderVisible === undefined
       ? shouldEnableDefaultSurface
         ? { surface: { visible: true } }
         : {}
-      : { surface: { visible: patch.shaderVisible } }),
+      : { surface: { visible: normalized.shaderVisible } }),
     ...vectors,
-    ...(patch.visible === undefined ? {} : { visible: patch.visible }),
-    ...(patch.wireframeVisible === undefined
+    ...(normalized.visible === undefined ? {} : { visible: normalized.visible }),
+    ...(normalized.wireframeOpacityPercent === undefined &&
+    normalized.wireframeVisible === undefined
       ? {}
-      : { wireframe: { visible: patch.wireframeVisible } }),
+      : {
+          wireframe: {
+            ...(normalized.wireframeOpacityPercent === undefined
+              ? {}
+              : { opacity: normalized.wireframeOpacityPercent / 100 }),
+            ...(normalized.wireframeVisible === undefined
+              ? {}
+              : { visible: normalized.wireframeVisible }),
+          },
+        }),
   };
   const statePatch: VisualizationStatePatch = {
     ...(Object.keys(airbox).length > 0 ? { layers: { airbox } } : {}),
   };
-  const hasAirboxOverride =
-    currentOverrides?.some(
-      (entry) => entry.scope === "airbox" && entry.scope_id === "airbox",
-    ) ?? false;
-  const displayOverridePatch: VisualizationTargetPatch = hasAirboxOverride
-    ? {
-        ...(patch.boundsVisible === undefined
-          ? {}
-          : { boundsVisible: patch.boundsVisible }),
-        ...(patch.opacityPercent === undefined
-          ? {}
-          : { opacityPercent: patch.opacityPercent }),
-        ...(patch.pointsVisible === undefined
-          ? {}
-          : { pointsVisible: patch.pointsVisible }),
-        ...(patch.shaderVisible === undefined
-          ? shouldEnableDefaultSurface
-            ? { shaderVisible: true }
-            : {}
-          : { shaderVisible: patch.shaderVisible }),
-        ...(patch.vectorsVisible === undefined
-          ? {}
-          : { vectorsVisible: patch.vectorsVisible }),
-        ...(patch.visible === undefined ? {} : { visible: patch.visible }),
-        ...(patch.wireframeVisible === undefined
-          ? {}
-          : { wireframeVisible: patch.wireframeVisible }),
-      }
-    : {};
-  const targetPatch: VisualizationTargetPatch = {
-    ...displayOverridePatch,
-    ...(patch.activeQuantityId === undefined
-      ? {}
-      : { activeQuantityId: patch.activeQuantityId }),
-    ...(patch.geometryScope === undefined
-      ? {}
-      : { geometryScope: patch.geometryScope }),
-    ...(patch.scalarColorPalette === undefined
-      ? {}
-      : { scalarColorPalette: patch.scalarColorPalette }),
-    ...(patch.surfaceColorSource === undefined
-      ? {}
-      : { surfaceColorSource: patch.surfaceColorSource }),
-    ...(patch.viewportColorbarVisible === undefined
-      ? {}
-      : { viewportColorbarVisible: patch.viewportColorbarVisible }),
-    ...(patch.vectorLengthScale === undefined
-      ? {}
-      : { vectorLengthScale: patch.vectorLengthScale }),
-    ...(patch.vectorThickness === undefined
-      ? {}
-      : { vectorThickness: patch.vectorThickness }),
-  };
-  return currentOverrides && Object.keys(targetPatch).length > 0
+  const remotePatch = shouldEnableDefaultSurface
+    ? { ...normalized, shaderVisible: true }
+    : normalized;
+  return Object.keys(remotePatch).length > 0
     ? {
         ...statePatch,
         overrides: mergeVisualizationStateTargetOverride(
-          currentOverrides,
+          currentOverrides ?? [],
           AIRBOX_VISUALIZATION_TARGET,
-          targetPatch,
+          remotePatch,
         ),
       }
     : statePatch;
@@ -1325,63 +1286,49 @@ export function airboxLocalVisualizationPatchFromTargetPatch(
   patch: VisualizationTargetPatch,
 ): VisualizationTargetPatch {
   return {
-    ...(patch.activeQuantityId === undefined
-      ? {}
-      : { activeQuantityId: patch.activeQuantityId }),
     ...(patch.airboxSyntheticVectorsEnabled === undefined
       ? {}
       : { airboxSyntheticVectorsEnabled: patch.airboxSyntheticVectorsEnabled }),
-    ...(patch.geometryScope === undefined
+    ...(patch.primitiveVisible === undefined
       ? {}
-      : { geometryScope: patch.geometryScope }),
-    ...(patch.shaderColorMode === undefined
-      ? {}
-      : { shaderColorMode: patch.shaderColorMode }),
-    ...(patch.scalarColorPalette === undefined
-      ? {}
-      : { scalarColorPalette: patch.scalarColorPalette }),
-    ...(patch.pointColor === undefined
-      ? {}
-      : { pointColor: patch.pointColor }),
-    ...(patch.shaderMonoColor === undefined
-      ? {}
-      : { shaderMonoColor: patch.shaderMonoColor }),
-    ...(patch.surfaceColorSource === undefined
-      ? {}
-      : { surfaceColorSource: patch.surfaceColorSource }),
-    ...(patch.viewportColorbarVisible === undefined
-      ? {}
-      : { viewportColorbarVisible: patch.viewportColorbarVisible }),
-    ...(patch.vectorAlphaPercent === undefined
-      ? {}
-      : { vectorAlphaPercent: patch.vectorAlphaPercent }),
+      : { primitiveVisible: patch.primitiveVisible }),
     ...(patch.vectorCenteringEnabled === undefined
       ? {}
       : { vectorCenteringEnabled: patch.vectorCenteringEnabled }),
-    ...(patch.vectorColorMode === undefined
-      ? {}
-      : { vectorColorMode: patch.vectorColorMode }),
-    ...(patch.vectorMonoColor === undefined
-      ? {}
-      : { vectorMonoColor: patch.vectorMonoColor }),
-    ...(patch.vectorLengthScale === undefined
-      ? {}
-      : { vectorLengthScale: patch.vectorLengthScale }),
-    ...(patch.vectorThickness === undefined
-      ? {}
-      : { vectorThickness: patch.vectorThickness }),
     ...(patch.vectorSurfaceOffsetEnabled === undefined
       ? {}
       : { vectorSurfaceOffsetEnabled: patch.vectorSurfaceOffsetEnabled }),
     ...(patch.vectorSurfaceOffsetScale === undefined
       ? {}
       : { vectorSurfaceOffsetScale: patch.vectorSurfaceOffsetScale }),
-    ...(patch.wireframeColor === undefined
-      ? {}
-      : { wireframeColor: patch.wireframeColor }),
-    ...(patch.wireframeOpacityPercent === undefined
-      ? {}
-      : { wireframeOpacityPercent: patch.wireframeOpacityPercent }),
+  };
+}
+
+export function resetAirboxVisualizationState(
+  currentState: Pick<VisualizationStateResource, "overrides">,
+): VisualizationStatePatch {
+  return {
+    layers: {
+      airbox: {
+        bounds: { visible: DEFAULT_AIRBOX_VISUALIZATION.boundsVisible },
+        opacity: DEFAULT_AIRBOX_VISUALIZATION.opacityPercent / 100,
+        points: { visible: DEFAULT_AIRBOX_VISUALIZATION.pointsVisible },
+        surface: { visible: DEFAULT_AIRBOX_VISUALIZATION.shaderVisible },
+        vectors: {
+          density: DEFAULT_AIRBOX_VISUALIZATION.vectorBudget,
+          domain: "airbox_only",
+          visible: DEFAULT_AIRBOX_VISUALIZATION.vectorsVisible,
+        },
+        visible: DEFAULT_AIRBOX_VISUALIZATION.visible,
+        wireframe: {
+          opacity: DEFAULT_AIRBOX_VISUALIZATION.wireframeOpacityPercent / 100,
+          visible: DEFAULT_AIRBOX_VISUALIZATION.wireframeVisible,
+        },
+      },
+    },
+    overrides: (currentState.overrides ?? []).filter(
+      (entry) => !visualizationStateOverrideMatchesTarget(entry, AIRBOX_VISUALIZATION_TARGET),
+    ),
   };
 }
 

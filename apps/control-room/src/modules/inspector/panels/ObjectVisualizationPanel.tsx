@@ -20,11 +20,11 @@ import { useKernel } from "@/kernel/KernelContext";
 import {
   airboxLocalVisualizationPatchFromTargetPatch,
   airboxVisualizationStatePatchFromTargetPatch,
-  DEFAULT_AIRBOX_VISUALIZATION,
   displayLabelForVisualizationTarget,
   hasVisualizationStatePatch,
   mergeVisualizationStateTargetOverride,
   resolveTargetVisualization,
+  resetAirboxVisualizationState,
   resolveVisualizationTargetFromSelection,
   visualizationStateOverrideMatchesTarget,
   visualizationTargetKey,
@@ -1425,6 +1425,11 @@ function useObjectVisualizationPanelState(
       }
 
       visualizationSync.queuePatch(statePatch);
+      visualization.patchTargetPending(
+        resolvedTarget,
+        patchValue,
+        visualizationState.rawData?.revision ?? visualizationState.data?.revision ?? 0,
+      );
       setFeedback(null);
       return;
     }
@@ -1472,9 +1477,7 @@ function useObjectVisualizationPanelState(
     if (!resolvedTarget) return;
     if (resolvedTarget.kind === "airbox") {
       visualizationSync.queuePatch(
-        airboxVisualizationStatePatchFromTargetPatch(
-          DEFAULT_AIRBOX_VISUALIZATION,
-        ),
+        resetAirboxVisualizationState(visualizationState.data ?? { overrides: [] }),
       );
       visualization.clearTarget(resolvedTarget);
       setFeedback(null);

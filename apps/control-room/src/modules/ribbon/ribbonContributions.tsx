@@ -3601,8 +3601,6 @@ function buildAirboxAction(
   context: RibbonBuildContext,
 ): RibbonTabContent["groups"][number]["actions"][number] {
   const { commandContext, visualizationSnapshot } = context;
-  const vectorLayer = context.visualizationState?.layers?.airbox?.vectors;
-  const vectorStyle = context.visualizationState?.vector_style;
   const targetVisualization = resolveTargetVisualization({
     snapshot: visualizationSnapshot,
     target: AIRBOX_VISUALIZATION_TARGET,
@@ -3748,22 +3746,13 @@ function buildAirboxAction(
             type: "slider",
             id: "airbox:vectors-density",
             label: "Density / Every N",
-            value: vectorLayer?.density ?? 128,
+            value: settings.vectorBudget,
             min: 8,
             max: 4096,
             step: 8,
-            commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+            commandId: RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
             commandInput: (value: number) =>
-              visualizationStateCommandInput({
-                layers: {
-                  airbox: {
-                    vectors: {
-                      density: value,
-                      domain: "airbox_only",
-                    },
-                  },
-                },
-              }),
+              visualizationAirboxCommandInput({ vectorBudget: value }),
           },
           {
             type: "slider",
@@ -3793,15 +3782,13 @@ function buildAirboxAction(
             type: "slider",
             id: "airbox:vectors-alpha",
             label: "Alpha",
-            value: vectorStyle?.alpha ?? 0.9,
+            value: settings.vectorAlphaPercent / 100,
             min: 0,
             max: 1,
             step: 0.05,
-            commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+            commandId: RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
             commandInput: (value: number) =>
-              visualizationStateCommandInput({
-                vector_style: { alpha: value },
-              }),
+              visualizationAirboxCommandInput({ vectorAlphaPercent: value * 100 }),
           },
         ],
       },
@@ -3814,20 +3801,22 @@ function buildAirboxAction(
             type: "radio-group",
             id: "airbox:vector-coloring",
             label: "Vector colors",
-            value: vectorStyle?.color_mode ?? "orientation",
+            value: settings.vectorColorMode,
             items: VECTOR_COLOR_ITEMS,
-            commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+            commandId: RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
             commandInput: (value: string) =>
-              visualizationStateCommandInput({
-                vector_style: { color_mode: value as VectorColorModePatch },
+              visualizationAirboxCommandInput({
+                vectorColorMode: value as VisualizationColorMode,
               }),
           },
           {
             type: "color",
             id: "airbox:vector-mono-color",
             label: "Monochrome vector color",
-            value: vectorStyle?.mono_color ?? "var(--fm-accent)",
-            disabled: true,
+            value: settings.vectorMonoColor,
+            commandId: RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
+            commandInput: (value: string) =>
+              visualizationAirboxCommandInput({ vectorMonoColor: value }),
           },
         ],
       },

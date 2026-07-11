@@ -15,6 +15,7 @@ import {
   RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
   RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
   RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND,
+  RIBBON_VISUALIZATION_RESET_AIRBOX_COMMAND,
   visualizationTargetCommandInput,
 } from "./ribbonCommands";
 import {
@@ -1656,50 +1657,21 @@ describe("ribbon structure", () => {
     await runRibbonNode(pointColorNode, "#66eeff", commandContext);
     await runRibbonNode(visibleNode, false, commandContext);
 
-    expect(context.visualization.getSettings(AIRBOX_VISUALIZATION_TARGET))
-      .toMatchObject({
-        shaderColorMode: "x",
-        surfaceColorSource: "component_x",
-        vectorThickness: 2.4,
-        pointColor: "#66eeff",
-        wireframeColor: "#ffffff",
-      });
-    expect(patches).toEqual([
-      {
-        overrides: [
-          {
-            scope: "airbox",
-            scope_id: "airbox",
-            style: {
-              surface_color_source: "component_x",
-            },
-          },
-        ],
-      },
-      {
-        overrides: [
-          {
-            scope: "airbox",
-            scope_id: "airbox",
-            style: {
-              vector_thickness: 2.4,
-            },
-          },
-        ],
-      },
-      {
-        layers: {
-          airbox: {
-            visible: false,
-          },
-        },
-      },
+    expect(patches).toHaveLength(5);
+    expect(patches).toMatchObject([
+      { overrides: [{ style: { surface_color_source: "component_x" } }] },
+      { overrides: [{ style: { vector_thickness: 2.4 } }] },
+      { overrides: [{ style: { wireframe_color: "#ffffff" } }] },
+      { overrides: [{ style: { point_color: "#66eeff" } }] },
+      { layers: { airbox: { visible: false } } },
     ]);
     await vi.waitFor(() =>
       expect(invalidations).toEqual([
         [VISUALIZATION_STATE_PATH, 41],
         [VISUALIZATION_STATE_PATH, 42],
         [VISUALIZATION_STATE_PATH, 43],
+        [VISUALIZATION_STATE_PATH, 44],
+        [VISUALIZATION_STATE_PATH, 45],
       ]),
     );
   });
@@ -1800,9 +1772,7 @@ describe("ribbon structure", () => {
     await runRibbonNode(visibleNode, false, context);
     await runRibbonNode(vectorsNode, true, context);
 
-    expect(context.visualization.getSettings(AIRBOX_VISUALIZATION_TARGET))
-      .toMatchObject({ geometryScope: "surface" });
-    expect(patches).toEqual([
+    expect(patches).toMatchObject([
       {
         overrides: [
           {
@@ -1839,6 +1809,64 @@ describe("ribbon structure", () => {
         [VISUALIZATION_STATE_PATH, 43],
       ]),
     );
+  });
+
+  it("resets airbox layers and removes its override through the ribbon command", async () => {
+    const { context, patches } = createVisualizationRibbonContext({
+      overrides: [
+        {
+          scope: "airbox",
+          scope_id: "airbox",
+          quantity: { active_quantity_id: "H_eff" },
+          style: { vector_alpha: 0.4 },
+        },
+        {
+          scope: "object",
+          scope_id: "film",
+          quantity: { active_quantity_id: "m" },
+        },
+      ],
+      revision: 7,
+    });
+    const content = buildRibbonTabContent("view", context);
+    const airboxAction = content?.groups
+      .find((group) => group.id === "view-global-display")
+      ?.actions.find((action) => action.id === "view-airbox");
+    const resetNode = airboxAction?.menu?.find(
+      (node) => node.type === "item" && node.id === "airbox:reset",
+    );
+
+    expect(resetNode).toMatchObject({
+      commandId: RIBBON_VISUALIZATION_RESET_AIRBOX_COMMAND,
+    });
+    if (resetNode?.type !== "item") {
+      throw new Error("Expected airbox reset control");
+    }
+
+    await runRibbonNode(resetNode, undefined, context.commandContext);
+
+    expect(patches).toEqual([
+      {
+        layers: {
+          airbox: {
+            bounds: { visible: false },
+            opacity: 0.28,
+            points: { visible: false },
+            surface: { visible: true },
+            vectors: { density: 1200, domain: "airbox_only", visible: false },
+            visible: true,
+            wireframe: { opacity: 1, visible: false },
+          },
+        },
+        overrides: [
+          {
+            scope: "object",
+            scope_id: "film",
+            quantity: { active_quantity_id: "m" },
+          },
+        ],
+      },
+    ]);
   });
 
   it("patches airbox vector controls through canonical visualization state", async () => {
@@ -1923,8 +1951,6 @@ describe("ribbon structure", () => {
     await runRibbonNode(thicknessNode, 1.6, context);
     await runRibbonNode(coloringNode, "x", context);
 
-    expect(context.visualization.getSettings(AIRBOX_VISUALIZATION_TARGET))
-      .toMatchObject({ geometryScope: "surface" });
     expect(patches).toHaveLength(5);
     expect(patches[0]).toMatchObject({
       overrides: [
@@ -1937,7 +1963,7 @@ describe("ribbon structure", () => {
         },
       ],
     });
-    expect(patches[1]).toEqual({
+    expect(patches[1]).toMatchObject({
       layers: {
         airbox: {
           vectors: {
@@ -1973,8 +1999,14 @@ describe("ribbon structure", () => {
       ],
     });
     expect(patches[3]).not.toHaveProperty("vector_style");
-    expect(patches[4]).toEqual({
-      vector_style: { color_mode: "x" },
+    expect(patches[4]).toMatchObject({
+      overrides: [
+        {
+          scope: "airbox",
+          scope_id: "airbox",
+          style: { vector_color_mode: "x" },
+        },
+      ],
     });
   });
 
@@ -2040,7 +2072,7 @@ describe("ribbon structure", () => {
     await runRibbonNode(visibleNode, true, commandContext);
     expect(frameNode).toMatchObject({ disabled: true });
 
-    expect(patches).toEqual([
+    expect(patches).toMatchObject([
       {
         layers: {
           airbox: {

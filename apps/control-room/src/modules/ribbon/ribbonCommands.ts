@@ -20,9 +20,9 @@ import {
   AIRBOX_VISUALIZATION_TARGET,
   airboxLocalVisualizationPatchFromTargetPatch,
   airboxVisualizationStatePatchFromTargetPatch,
-  DEFAULT_AIRBOX_VISUALIZATION,
   hasVisualizationStatePatch,
   mergeVisualizationStateTargetOverride,
+  resetAirboxVisualizationState,
   visualizationStateOverrideMatchesTarget,
   visualizationStatePatchFromDefaultTargetPatch,
   type VisualizationTargetKind,
@@ -323,7 +323,9 @@ async function resetAirboxVisualizationFromCommand(
   if (context.visualizationSync || context.api) {
     await patchVisualizationState(
       context,
-      airboxVisualizationStatePatchFromTargetPatch(DEFAULT_AIRBOX_VISUALIZATION),
+      resetAirboxVisualizationState(
+        visualizationStateFromContext(context) ?? { overrides: [] },
+      ),
     );
   }
   context.visualization?.clearTarget(AIRBOX_VISUALIZATION_TARGET);
@@ -449,6 +451,14 @@ async function patchAirboxVisualization(
     return { status: "completed" };
   }
 
+  const revision = state?.revision;
+  if (typeof revision === "number") {
+    context.visualization?.patchTargetPending(
+      AIRBOX_VISUALIZATION_TARGET,
+      patch,
+      revision,
+    );
+  }
   await patchVisualizationState(context, statePatch);
   return { status: "completed" };
 }

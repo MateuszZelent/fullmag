@@ -10,6 +10,7 @@ import {
   mergeVisualizationStateTargetOverride,
   renderModePatch,
   resolveAirboxVisualizationSettingsFromState,
+  resetAirboxVisualizationState,
   resolveEffectiveVisualizationSettings,
   resolveGlobalObjectVisualizationSettings,
   resolveTargetVisualization,
@@ -260,21 +261,80 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
-  it("keeps local-only airbox style fields out of backend visualization patches", () => {
+  it("serializes every backend-supported airbox property through one canonical patch", () => {
     expect(
       airboxVisualizationStatePatchFromTargetPatch({
+        activeQuantityId: "h_eff",
+        boundsVisible: true,
+        geometryScope: "surface",
+        opacityPercent: 44,
         shaderColorMode: "monochrome",
         shaderMonoColor: "#ffffff",
         surfaceColorSource: "solid",
+        surfaceProjectionMode: "surface_faces",
+        viewportColorbarVisible: true,
+        pointsVisible: true,
         vectorAlphaPercent: 44,
+        vectorBudget: 256,
         vectorColorMode: "magnitude",
+        vectorLengthScale: 1.5,
+        vectorMonoColor: "#66aaff",
         vectorThickness: 2,
+        vectorsVisible: true,
         pointColor: "#66eeff",
+        scalarColorPalette: "inferno",
         wireframeColor: "#888888",
         wireframeOpacityPercent: 75,
-        airboxSyntheticVectorsEnabled: true,
-      }),
-    ).toEqual({});
+        wireframeVisible: true,
+        shaderVisible: true,
+        visible: true,
+      }, []),
+    ).toMatchObject({
+      layers: {
+        airbox: {
+          bounds: { visible: true },
+          opacity: 0.44,
+          points: { visible: true },
+          surface: { visible: true },
+          vectors: { density: 256, domain: "airbox_only", visible: true },
+          visible: true,
+          wireframe: { opacity: 0.75, visible: true },
+        },
+      },
+      overrides: [
+        {
+          scope: "airbox",
+          scope_id: "airbox",
+          display: {
+            bounds: { visible: true },
+            geometry_scope: "surface",
+            opacity: 0.44,
+            points: { visible: true },
+            surface: { visible: true },
+            vectors: { visible: true },
+            visible: true,
+            wireframe: { opacity: 0.75, visible: true },
+          },
+          quantity: { active_quantity_id: "H_eff" },
+          style: {
+            point_color: "#66eeff",
+            scalar_color_palette: "inferno",
+            surface_color_source: "solid",
+            surface_mono_color: "#ffffff",
+            surface_projection_mode: "surface_faces",
+            vector_alpha: 0.44,
+            vector_budget: 256,
+            vector_color_mode: "magnitude",
+            vector_length_scale: 1.5,
+            vector_mono_color: "#66aaff",
+            vector_thickness: 2,
+            viewport_colorbar_visible: true,
+            wireframe_color: "#888888",
+          },
+          visible: true,
+        },
+      ],
+    });
     expect(
       airboxLocalVisualizationPatchFromTargetPatch({
         shaderColorMode: "monochrome",
@@ -290,15 +350,45 @@ describe("ObjectVisualizationController", () => {
       }),
     ).toEqual({
       airboxSyntheticVectorsEnabled: true,
-      shaderColorMode: "monochrome",
-      shaderMonoColor: "#ffffff",
-      surfaceColorSource: "solid",
-      vectorAlphaPercent: 44,
-      vectorColorMode: "magnitude",
-      vectorThickness: 2,
-      pointColor: "#66eeff",
-      wireframeColor: "#888888",
-      wireframeOpacityPercent: 75,
+    });
+  });
+
+  it("resets airbox layers and removes its quantity and style override atomically", () => {
+    expect(
+      resetAirboxVisualizationState({
+        overrides: [
+          {
+            scope: "airbox",
+            scope_id: "airbox",
+            quantity: { active_quantity_id: "H_eff" },
+            style: { vector_alpha: 0.4 },
+          },
+          {
+            scope: "object",
+            scope_id: "film",
+            quantity: { active_quantity_id: "m" },
+          },
+        ],
+      } as never),
+    ).toMatchObject({
+      layers: {
+        airbox: {
+          bounds: { visible: false },
+          opacity: 0.28,
+          points: { visible: false },
+          surface: { visible: true },
+          vectors: { density: 1200, domain: "airbox_only", visible: false },
+          visible: true,
+          wireframe: { opacity: 1, visible: false },
+        },
+      },
+      overrides: [
+        {
+          scope: "object",
+          scope_id: "film",
+          quantity: { active_quantity_id: "m" },
+        },
+      ],
     });
   });
 
@@ -326,13 +416,14 @@ describe("ObjectVisualizationController", () => {
     expect(patch).not.toHaveProperty("vector_style");
   });
 
-  it("keeps airbox vector length in local optimistic patches", () => {
+  it("keeps only renderer-local airbox switches in local optimistic patches", () => {
     expect(
       airboxLocalVisualizationPatchFromTargetPatch({
         vectorLengthScale: 2,
+        vectorCenteringEnabled: false,
       }),
     ).toEqual({
-      vectorLengthScale: 2,
+      vectorCenteringEnabled: false,
     });
   });
 
@@ -1281,7 +1372,7 @@ describe("ObjectVisualizationController", () => {
       airboxVisualizationStatePatchFromTargetPatch({
         vectorBudget: 0,
       }),
-    ).toEqual({
+    ).toMatchObject({
       layers: {
         airbox: {
           vectors: {
@@ -1503,14 +1594,12 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
-  it("keeps airbox quantity target patches addressable locally and remotely", () => {
+  it("keeps airbox quantity target patches remotely addressable", () => {
     expect(
       airboxLocalVisualizationPatchFromTargetPatch({
         activeQuantityId: "h_eff",
       }),
-    ).toEqual({
-      activeQuantityId: "h_eff",
-    });
+    ).toEqual({});
 
     expect(
       airboxVisualizationStatePatchFromTargetPatch(
@@ -1708,7 +1797,7 @@ describe("ObjectVisualizationController", () => {
         visible: false,
         wireframeVisible: false,
       }),
-    ).toEqual({
+    ).toMatchObject({
       layers: {
         airbox: {
           bounds: { visible: true },
@@ -1741,9 +1830,13 @@ describe("ObjectVisualizationController", () => {
       },
       overrides: [
         {
+          display: {
+            vectors: { visible: true },
+          },
           scope: "airbox",
           scope_id: "airbox",
           style: {
+            vector_budget: 64,
             vector_length_scale: 2.25,
             vector_thickness: 1.5,
           },
@@ -1757,7 +1850,7 @@ describe("ObjectVisualizationController", () => {
       airboxVisualizationStatePatchFromTargetPatch({
         visible: true,
       }),
-    ).toEqual({
+    ).toMatchObject({
       layers: {
         airbox: {
           surface: { visible: true },
@@ -1773,7 +1866,7 @@ describe("ObjectVisualizationController", () => {
         shaderVisible: true,
         visible: true,
       }),
-    ).toEqual({
+    ).toMatchObject({
       layers: {
         airbox: {
           surface: { visible: true },
@@ -1783,12 +1876,20 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
-  it("keeps only unsupported airbox target fields out of backend state patches", () => {
+  it("keeps only renderer-local airbox fields out of backend state patches", () => {
     expect(
       airboxVisualizationStatePatchFromTargetPatch({
         geometryScope: "full",
       }),
-    ).toEqual({});
+    ).toMatchObject({
+      overrides: [
+        {
+          scope: "airbox",
+          scope_id: "airbox",
+          display: { geometry_scope: "full" },
+        },
+      ],
+    });
     expect(
       airboxLocalVisualizationPatchFromTargetPatch({
         boundsVisible: true,
@@ -1798,7 +1899,7 @@ describe("ObjectVisualizationController", () => {
         visible: false,
         wireframeVisible: false,
       }),
-    ).toEqual({ geometryScope: "full", vectorLengthScale: 2 });
+    ).toEqual({});
   });
 
   it("builds backend global visualization state patches from default target patches", () => {
