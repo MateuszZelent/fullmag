@@ -92,4 +92,13 @@ describe("resolveVisualizationTopologyFreshness", () => {
       ),
     ).toBe("current");
   });
+
+  it("does not classify a segment duplicated by a mesh part as mixed", () => {
+    expect(
+      resolveManifestRenderableCarrierKind({
+        meshParts: [{ object_id: "film" }],
+        objectSegments: [{ object_id: "film" }],
+      }),
+    ).toBe("mesh-parts");
+  });
 });

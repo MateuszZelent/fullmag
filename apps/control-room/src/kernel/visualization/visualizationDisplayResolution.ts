@@ -183,8 +183,8 @@ function manifestCoversVisibleSceneObjects(
     : [];
   if (
     resolveManifestRenderableCarrierKind({
-      meshPartCount: meshParts.length,
-      objectSegmentCount: objectSegments.length,
+      meshParts,
+      objectSegments,
     }) === "unavailable"
   ) {
     return false;
@@ -204,12 +204,25 @@ function manifestCoversVisibleSceneObjects(
 }
 
 export function resolveManifestRenderableCarrierKind({
-  meshPartCount,
-  objectSegmentCount,
+  meshPartCount = 0,
+  meshParts,
+  objectSegmentCount = 0,
+  objectSegments,
 }: {
-  meshPartCount: number;
-  objectSegmentCount: number;
+  meshPartCount?: number;
+  meshParts?: readonly unknown[];
+  objectSegmentCount?: number;
+  objectSegments?: readonly unknown[];
 }): ManifestRenderableCarrierKind {
+  if (meshParts || objectSegments) {
+    meshPartCount = meshParts?.length ?? 0;
+    objectSegmentCount = (objectSegments ?? []).filter((segment) => {
+      const segmentObjectId = asRecord(segment)?.object_id;
+      return !meshParts?.some(
+        (part) => asRecord(part)?.object_id === segmentObjectId,
+      );
+    }).length;
+  }
   if (meshPartCount > 0 && objectSegmentCount > 0) return "mixed";
   if (meshPartCount > 0) return "mesh-parts";
   if (objectSegmentCount > 0) return "object-segments";
