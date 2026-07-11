@@ -602,7 +602,7 @@ function Viewport3DProjectionStack({
   perspectiveCameraRef: RefObject<ThreePerspectiveCamera | null>;
 }) {
   return (
-    <VectorGlyphDerivedBufferCacheProvider tracker={tracker}>
+    <>
       <OrthographicCamera
         key="viewport-3d-orthographic-camera"
         ref={orthographicCameraRef}
@@ -632,7 +632,7 @@ function Viewport3DProjectionStack({
         resetCameraRevision={resetCameraRevision}
         tracker={tracker}
       />
-    </VectorGlyphDerivedBufferCacheProvider>
+    </>
   );
 }
 
@@ -1315,7 +1315,7 @@ export function Viewport3DScene({
   ]);
 
   return (
-    <>
+    <VectorGlyphDerivedBufferCacheProvider tracker={tracker}>
       <color attach="background" args={[colors.background]} />
       <Viewport3DLightingRig profileId={visualProfileId} />
       {viewport3DCanvasLifecycleProbeEnabledFromBrowserConfig() ? (
@@ -1417,6 +1417,6 @@ export function Viewport3DScene({
         tracker={tracker}
         viewCubeVisible={viewCubeVisible}
       />
-    </>
+    </VectorGlyphDerivedBufferCacheProvider>
   );
 }

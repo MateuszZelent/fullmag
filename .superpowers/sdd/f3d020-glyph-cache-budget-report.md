@@ -27,6 +27,13 @@ after the last viewport lease releases. The tracker receives the live aggregate
 `glyphCacheEntries`, `glyphCacheBytes`, and `glyphCacheRetainedBytes`, and the
 compact viewport diagnostics prints them as `glyph-cache`.
 
+## Review correction: provider boundary
+
+The provider must wrap the entire `Viewport3DScene`, not the projection-camera
+stack. `VectorFieldLayer` consumers mount below `Viewport3DModelLayerStack`, a
+sibling of the projection stack. A renderer-tree regression test now requires
+the provider to begin before and end after that model stack.
+
 ## Tests
 
 - RED: the new cache tests failed before implementation because the cache had
@@ -44,3 +51,5 @@ compact viewport diagnostics prints them as `glyph-cache`.
 - Focused ESLint for the four changed source/test files with zero warnings — passed.
 - Review correction verification: 32 focused tests (including shared-runtime
   leasing and tracker diagnostics), TypeScript, and focused ESLint — passed.
+- Provider-boundary correction verification: 45 focused cache/vector/scene
+  tests, TypeScript, and focused ESLint — passed.
