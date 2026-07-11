@@ -51,9 +51,10 @@ describe("ObjectVisualizationPanel performance contracts", () => {
     expect(panelSource).toContain("visualizationState.rawData?.revision");
   });
 
-  it("keeps client-only rendering preferences out of pending backend transactions", () => {
-    expect(panelSource).toContain("visualization.patchLocalRenderTarget(");
-    expect(panelSource).toContain("localRenderPatch");
+  it("labels and keeps viewport-only rendering preferences out of pending backend transactions", () => {
+    expect(panelSource).toContain("visualization.patchViewportPreferences(");
+    expect(panelSource).toContain("viewportPreferencesPatch");
+    expect(panelSource).toContain("This viewport only");
   });
 
   it("disables every pass control while a target is hidden but preserves Visible and reset", () => {
@@ -89,7 +90,7 @@ describe("ObjectVisualizationPanel performance contracts", () => {
   it("renders the airbox synthetic vector developer toggle locally", () => {
     expect(panelSource).toContain('label="Dev fallback +Z"');
     expect(panelSource).toContain("airboxSyntheticVectorsEnabled");
-    expect(panelSource).toContain("delete remotePatch.airboxSyntheticVectorsEnabled");
+    expect(panelSource).toContain("visualization.patchViewportPreferences(resolvedTarget, localPatch)");
   });
 
   it("does not promise per-part persistence for object-owned surface vector toggles", () => {

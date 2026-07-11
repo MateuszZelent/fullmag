@@ -84,17 +84,25 @@ export type VisualizationStoredTargetPatch = Omit<
   VisualizationTargetPatch,
   "renderMode"
 >;
-export type LocalRenderingTargetPatch = Pick<
-  VisualizationTargetPatch,
-  | "primitiveVisible"
-  | "vectorCenteringEnabled"
-  | "vectorSurfaceOffsetEnabled"
-  | "vectorSurfaceOffsetScale"
->;
+/**
+ * Client-owned rendering choices. They deliberately live outside the canonical
+ * visualization target override contract: a second viewport must not receive
+ * them through HTTP/realtime or mistake them for a backend acknowledgement.
+ */
+export interface ViewportTargetRenderingPreferences {
+  airboxSyntheticVectorsEnabled?: boolean;
+  primitiveVisible?: boolean;
+  vectorCenteringEnabled?: boolean;
+  vectorSurfaceOffsetEnabled?: boolean;
+  vectorSurfaceOffsetScale?: number;
+}
 
 export interface ObjectVisualizationSnapshot {
   defaults: Partial<Record<VisualizationTargetKind, VisualizationStoredTargetPatch>>;
-  localRenderOverrides?: Record<string, LocalRenderingTargetPatch>;
+  viewportPreferenceDefaults?: Partial<
+    Record<VisualizationTargetKind, ViewportTargetRenderingPreferences>
+  >;
+  viewportPreferences?: Record<string, ViewportTargetRenderingPreferences>;
   overrides: Record<string, VisualizationStoredTargetPatch>;
   pendingOverrides?: Record<string, PendingVisualizationTargetPatch>;
   version: number;
@@ -234,9 +242,13 @@ export class ObjectVisualizationController {
     VisualizationStoredTargetPatch
   >();
   private readonly listeners = new Set<ObjectVisualizationListener>();
-  private readonly localRenderOverrides = new Map<
+  private readonly viewportPreferenceDefaults = new Map<
+    VisualizationTargetKind,
+    ViewportTargetRenderingPreferences
+  >();
+  private readonly viewportPreferences = new Map<
     string,
-    LocalRenderingTargetPatch
+    ViewportTargetRenderingPreferences
   >();
   private readonly overrides = new Map<string, VisualizationStoredTargetPatch>();
   private readonly pendingOverrides = new Map<
@@ -259,10 +271,10 @@ export class ObjectVisualizationController {
 
   clearTarget(target: VisualizationTargetRef): void {
     const key = visualizationTargetKey(target);
-    const clearedLocalRenderOverride = this.localRenderOverrides.delete(key);
+    const clearedViewportPreference = this.viewportPreferences.delete(key);
     const clearedOverride = this.overrides.delete(key);
     const clearedPendingOverride = this.pendingOverrides.delete(key);
-    if (!clearedLocalRenderOverride && !clearedOverride && !clearedPendingOverride) {
+    if (!clearedViewportPreference && !clearedOverride && !clearedPendingOverride) {
       return;
     }
 
@@ -304,11 +316,10 @@ export class ObjectVisualizationController {
     kind: VisualizationTargetKind,
     baseSettings?: VisualizationTargetSettings,
   ): VisualizationTargetSettings {
-    return resolveDefaultVisualizationSettings(
-      this.snapshot,
-      kind,
-      baseSettings,
-    );
+    return normalizeVisualizationSettings({
+      ...resolveDefaultVisualizationSettings(this.snapshot, kind, baseSettings),
+      ...(this.snapshot.viewportPreferenceDefaults?.[kind] ?? {}),
+    });
   }
 
   getSettings(target: VisualizationTargetRef): VisualizationTargetSettings {
@@ -376,19 +387,34 @@ export class ObjectVisualizationController {
     if (changed) this.bump();
   }
 
-  patchLocalRenderTarget(
+  patchViewportPreferences(
     target: VisualizationTargetRef,
-    patch: LocalRenderingTargetPatch,
+    patch: ViewportTargetRenderingPreferences,
   ): void {
     const key = visualizationTargetKey(target);
-    const current = this.localRenderOverrides.get(key) ?? {};
-    const next: LocalRenderingTargetPatch = {
+    const current = this.viewportPreferences.get(key) ?? {};
+    const next = normalizeViewportTargetRenderingPreferences({
       ...current,
       ...patch,
-    };
+    });
     if (samePatch(current, next)) return;
 
-    this.localRenderOverrides.set(key, next);
+    this.viewportPreferences.set(key, next);
+    this.bump();
+  }
+
+  patchViewportPreferenceDefaults(
+    kind: VisualizationTargetKind,
+    patch: ViewportTargetRenderingPreferences,
+  ): void {
+    const current = this.viewportPreferenceDefaults.get(kind) ?? {};
+    const next = normalizeViewportTargetRenderingPreferences({
+      ...current,
+      ...patch,
+    });
+    if (samePatch(current, next)) return;
+
+    this.viewportPreferenceDefaults.set(kind, next);
     this.bump();
   }
 
@@ -418,7 +444,8 @@ export class ObjectVisualizationController {
   private bump(): void {
     this.snapshot = {
       defaults: Object.fromEntries(this.defaults),
-      localRenderOverrides: Object.fromEntries(this.localRenderOverrides),
+      viewportPreferenceDefaults: Object.fromEntries(this.viewportPreferenceDefaults),
+      viewportPreferences: Object.fromEntries(this.viewportPreferences),
       overrides: Object.fromEntries(this.overrides),
       pendingOverrides: Object.fromEntries(this.pendingOverrides),
       version: this.snapshot.version + 1,
@@ -577,9 +604,11 @@ export function resolveTargetVisualization({
   const localOverride = registryEntry
     ? resolvePendingTargetPatch(snapshot, target, visualizationState?.revision)
     : snapshot.overrides[visualizationTargetKey(target)] ?? null;
-  const localRenderOverride = snapshot.localRenderOverrides?.[
+  const viewportPreferences = snapshot.viewportPreferences?.[
     visualizationTargetKey(target)
   ] ?? null;
+  const viewportPreferenceDefaults =
+    snapshot.viewportPreferenceDefaults?.[target.kind] ?? null;
   const backendOverride = resolveVisualizationStateTargetOverride(
     visualizationState,
     target,
@@ -600,7 +629,8 @@ export function resolveTargetVisualization({
         )),
     ...(registryEntry ? {} : (backendOverride ?? {})),
     ...(localOverride ?? {}),
-    ...(localRenderOverride ?? {}),
+    ...(viewportPreferenceDefaults ?? {}),
+    ...(viewportPreferences ?? {}),
   });
 
   return {
@@ -1451,9 +1481,9 @@ export function airboxVisualizationStatePatchFromTargetPatch(
     : statePatch;
 }
 
-export function airboxLocalVisualizationPatchFromTargetPatch(
+export function viewportRenderingPreferencesFromTargetPatch(
   patch: VisualizationTargetPatch,
-): VisualizationTargetPatch {
+): ViewportTargetRenderingPreferences {
   return {
     ...(patch.airboxSyntheticVectorsEnabled === undefined
       ? {}
@@ -1471,6 +1501,24 @@ export function airboxLocalVisualizationPatchFromTargetPatch(
       ? {}
       : { vectorSurfaceOffsetScale: patch.vectorSurfaceOffsetScale }),
   };
+}
+
+export function persistentVisualizationTargetPatch(
+  patch: VisualizationTargetPatch,
+): VisualizationTargetPatch {
+  const persistent = { ...patch };
+  delete persistent.airboxSyntheticVectorsEnabled;
+  delete persistent.primitiveVisible;
+  delete persistent.vectorCenteringEnabled;
+  delete persistent.vectorSurfaceOffsetEnabled;
+  delete persistent.vectorSurfaceOffsetScale;
+  return persistent;
+}
+
+export function airboxLocalVisualizationPatchFromTargetPatch(
+  patch: VisualizationTargetPatch,
+): ViewportTargetRenderingPreferences {
+  return viewportRenderingPreferencesFromTargetPatch(patch);
 }
 
 export function resetAirboxVisualizationState(
@@ -1659,6 +1707,36 @@ function normalizePatch(
     }
   }
   return normalized;
+}
+
+function normalizeViewportTargetRenderingPreferences(
+  preferences: ViewportTargetRenderingPreferences,
+): ViewportTargetRenderingPreferences {
+  return {
+    ...(preferences.airboxSyntheticVectorsEnabled === undefined
+      ? {}
+      : {
+          airboxSyntheticVectorsEnabled:
+            preferences.airboxSyntheticVectorsEnabled,
+        }),
+    ...(preferences.primitiveVisible === undefined
+      ? {}
+      : { primitiveVisible: preferences.primitiveVisible }),
+    ...(preferences.vectorCenteringEnabled === undefined
+      ? {}
+      : { vectorCenteringEnabled: preferences.vectorCenteringEnabled }),
+    ...(preferences.vectorSurfaceOffsetEnabled === undefined
+      ? {}
+      : { vectorSurfaceOffsetEnabled: preferences.vectorSurfaceOffsetEnabled }),
+    ...(preferences.vectorSurfaceOffsetScale === undefined
+      ? {}
+      : {
+          vectorSurfaceOffsetScale: Math.max(
+            0,
+            Math.min(1, preferences.vectorSurfaceOffsetScale),
+          ),
+        }),
+  };
 }
 
 function removeStoredTargetPatchField(

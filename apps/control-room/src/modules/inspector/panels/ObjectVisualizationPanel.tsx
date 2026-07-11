@@ -23,12 +23,12 @@ import {
   displayLabelForVisualizationTarget,
   hasVisualizationStatePatch,
   mergeVisualizationStateTargetOverride,
+  persistentVisualizationTargetPatch,
   resolveTargetVisualization,
   resetAirboxVisualizationState,
   resolveVisualizationTargetFromSelection,
   visualizationStateOverrideMatchesTarget,
   visualizationTargetKey,
-  type LocalRenderingTargetPatch,
   type ObjectVisualizationSnapshot,
   type VisualizationGeometryScope,
   type VisualizationRenderMode,
@@ -195,8 +195,11 @@ function selectObjectVisualizationPanelSnapshot(
   targets: readonly VisualizationTargetRef[],
 ): ObjectVisualizationSnapshot {
   const defaults: ObjectVisualizationSnapshot["defaults"] = {};
-  const localRenderOverrides: NonNullable<
-    ObjectVisualizationSnapshot["localRenderOverrides"]
+  const viewportPreferenceDefaults: NonNullable<
+    ObjectVisualizationSnapshot["viewportPreferenceDefaults"]
+  > = {};
+  const viewportPreferences: NonNullable<
+    ObjectVisualizationSnapshot["viewportPreferences"]
   > = {};
   const overrides: ObjectVisualizationSnapshot["overrides"] = {};
   const pendingOverrides: NonNullable<
@@ -208,16 +211,21 @@ function selectObjectVisualizationPanelSnapshot(
     if (defaultPatch) {
       defaults[target.kind] = defaultPatch;
     }
+    const viewportPreferenceDefault =
+      snapshot.viewportPreferenceDefaults?.[target.kind];
+    if (viewportPreferenceDefault) {
+      viewportPreferenceDefaults[target.kind] = viewportPreferenceDefault;
+    }
 
     const override = snapshot.overrides[visualizationTargetKey(target)];
     if (override) {
       overrides[visualizationTargetKey(target)] = override;
     }
-    const localRenderOverride = snapshot.localRenderOverrides?.[
+    const viewportPreference = snapshot.viewportPreferences?.[
       visualizationTargetKey(target)
     ];
-    if (localRenderOverride) {
-      localRenderOverrides[visualizationTargetKey(target)] = localRenderOverride;
+    if (viewportPreference) {
+      viewportPreferences[visualizationTargetKey(target)] = viewportPreference;
     }
     const pendingOverride = snapshot.pendingOverrides?.[
       visualizationTargetKey(target)
@@ -229,7 +237,8 @@ function selectObjectVisualizationPanelSnapshot(
 
   return {
     defaults,
-    localRenderOverrides,
+    viewportPreferenceDefaults,
+    viewportPreferences,
     overrides,
     pendingOverrides,
     version: snapshot.version,
@@ -244,6 +253,14 @@ function objectVisualizationPanelSnapshotEquals(
     if (!visualizationTargetPatchEquals(previous.defaults[kind], next.defaults[kind])) {
       return false;
     }
+    if (
+      !visualizationTargetPatchEquals(
+        previous.viewportPreferenceDefaults?.[kind],
+        next.viewportPreferenceDefaults?.[kind],
+      )
+    ) {
+      return false;
+    }
   }
 
   const overrideKeys = new Set([
@@ -256,15 +273,15 @@ function objectVisualizationPanelSnapshotEquals(
     }
   }
 
-  const localRenderOverrideKeys = new Set([
-    ...Object.keys(previous.localRenderOverrides ?? {}),
-    ...Object.keys(next.localRenderOverrides ?? {}),
+  const viewportPreferenceKeys = new Set([
+    ...Object.keys(previous.viewportPreferences ?? {}),
+    ...Object.keys(next.viewportPreferences ?? {}),
   ]);
-  for (const key of localRenderOverrideKeys) {
+  for (const key of viewportPreferenceKeys) {
     if (
       !visualizationTargetPatchEquals(
-        previous.localRenderOverrides?.[key],
-        next.localRenderOverrides?.[key],
+        previous.viewportPreferences?.[key],
+        next.viewportPreferences?.[key],
       )
     ) {
       return false;
@@ -332,21 +349,15 @@ type SectionDisabled = (
   id: ReturnType<typeof buildVisualizationPanelSections>[number]["id"],
 ) => boolean;
 
-function remoteVisualizationTargetPatch(
+function viewportRenderingPreferencesPatch(
   patch: VisualizationTargetPatch,
-): VisualizationTargetPatch {
-  const remotePatch = { ...patch };
-  delete remotePatch.airboxSyntheticVectorsEnabled;
-  delete remotePatch.vectorCenteringEnabled;
-  delete remotePatch.vectorSurfaceOffsetEnabled;
-  delete remotePatch.vectorSurfaceOffsetScale;
-  delete remotePatch.primitiveVisible;
-  return remotePatch;
-}
-
-function localRenderingTargetPatch(
-  patch: VisualizationTargetPatch,
-): LocalRenderingTargetPatch {
+): Pick<
+  VisualizationTargetPatch,
+  | "primitiveVisible"
+  | "vectorCenteringEnabled"
+  | "vectorSurfaceOffsetEnabled"
+  | "vectorSurfaceOffsetScale"
+> {
   return {
     ...(patch.primitiveVisible === undefined
       ? {}
@@ -468,6 +479,7 @@ function VisualizationDisplayPassesSection({
           />
         ) : null}
       </div>
+      {primitiveDisplayToggleVisible ? <ViewportPreferenceScopeNote /> : null}
       <Dialog
         open={
           airboxDiagnosticOpen &&
@@ -985,6 +997,7 @@ function VisualizationVectorsSection({
 
   return (
     <InspectorSection title="Vectors">
+      <ViewportPreferenceScopeNote />
       <fieldset className="fm-visualization-segments" aria-label="Vector coloring">
         {VISUALIZATION_COLOR_MODE_ITEMS.map((mode) => (
           <Button
@@ -1101,6 +1114,14 @@ function VisualizationVectorsSection({
         </fieldset>
       )}
     </InspectorSection>
+  );
+}
+
+function ViewportPreferenceScopeNote() {
+  return (
+    <p className="fm-visualization-scope-note" role="note">
+      This viewport only — not saved to the simulation or shared with other clients.
+    </p>
   );
 }
 
@@ -1429,7 +1450,7 @@ function useObjectVisualizationPanelState(
         visualizationState.data?.overrides,
       );
       if (Object.keys(localPatch).length > 0) {
-        visualization.patchTarget(resolvedTarget, localPatch);
+        visualization.patchViewportPreferences(resolvedTarget, localPatch);
       }
       if (!hasVisualizationStatePatch(statePatch)) {
         setFeedback(null);
@@ -1439,7 +1460,7 @@ function useObjectVisualizationPanelState(
       visualizationSync.queuePatch(statePatch);
       visualization.patchTargetPending(
         resolvedTarget,
-        patchValue,
+        persistentVisualizationTargetPatch(patchValue),
         visualizationState.rawData?.revision ?? visualizationState.data?.revision ?? 0,
       );
       setFeedback(null);
@@ -1447,17 +1468,27 @@ function useObjectVisualizationPanelState(
     }
 
     if (!visualizationState.data) {
+      const viewportPreferencesPatch = viewportRenderingPreferencesPatch(patchValue);
+      const persistentPatch = persistentVisualizationTargetPatch(patchValue);
       for (const patchTarget of patchTargets) {
-        visualization.patchTarget(patchTarget, patchValue);
+        if (Object.keys(viewportPreferencesPatch).length > 0) {
+          visualization.patchViewportPreferences(
+            patchTarget,
+            viewportPreferencesPatch,
+          );
+        }
+        if (Object.keys(persistentPatch).length > 0) {
+          visualization.patchTarget(patchTarget, persistentPatch);
+        }
       }
       return;
     }
 
-    const remotePatch = remoteVisualizationTargetPatch(patchValue);
-    const localRenderPatch = localRenderingTargetPatch(patchValue);
-    if (Object.keys(localRenderPatch).length > 0) {
+    const remotePatch = persistentVisualizationTargetPatch(patchValue);
+    const viewportPreferencesPatch = viewportRenderingPreferencesPatch(patchValue);
+    if (Object.keys(viewportPreferencesPatch).length > 0) {
       for (const patchTarget of patchTargets) {
-        visualization.patchLocalRenderTarget(patchTarget, localRenderPatch);
+        visualization.patchViewportPreferences(patchTarget, viewportPreferencesPatch);
       }
     }
     if (Object.keys(remotePatch).length > 0) {

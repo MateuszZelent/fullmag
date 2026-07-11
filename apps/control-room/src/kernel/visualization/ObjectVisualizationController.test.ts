@@ -1059,7 +1059,7 @@ describe("ObjectVisualizationController", () => {
   it("keeps client-only target rendering preferences outside pending registry patches", () => {
     const controller = new ObjectVisualizationController();
     const target = { id: "free-layer", kind: "object" as const };
-    controller.patchLocalRenderTarget(target, {
+    controller.patchViewportPreferences(target, {
       primitiveVisible: true,
       vectorCenteringEnabled: false,
     });
@@ -1475,12 +1475,12 @@ describe("ObjectVisualizationController", () => {
     const controller = new ObjectVisualizationController();
     const target = { id: "object:free-layer", kind: "object" as const };
     controller.patchTarget(target, { surfaceColorSource: "component_x" });
-    controller.patchLocalRenderTarget(target, { primitiveVisible: true });
+    controller.patchViewportPreferences(target, { primitiveVisible: true });
 
     controller.removeTargetOverrideField(target, "surfaceColorSource");
 
     expect(controller.getSnapshot().overrides).not.toHaveProperty("object:free-layer");
-    expect(controller.getSnapshot().localRenderOverrides).toMatchObject({
+    expect(controller.getSnapshot().viewportPreferences).toMatchObject({
       "object:free-layer": { primitiveVisible: true },
     });
   });
@@ -1992,6 +1992,77 @@ describe("ObjectVisualizationController", () => {
         wireframeVisible: false,
       }),
     ).toEqual({});
+  });
+
+  it("owns renderer-only controls in viewport preferences without serializing them as target overrides", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "object:free-layer", kind: "object" as const };
+
+    controller.patchViewportPreferences(target, {
+      primitiveVisible: true,
+      vectorCenteringEnabled: false,
+      vectorSurfaceOffsetEnabled: true,
+      vectorSurfaceOffsetScale: 0.3,
+    });
+
+    expect(controller.getSnapshot()).toMatchObject({
+      overrides: {},
+      viewportPreferences: {
+        "object:free-layer": {
+          primitiveVisible: true,
+          vectorCenteringEnabled: false,
+          vectorSurfaceOffsetEnabled: true,
+          vectorSurfaceOffsetScale: 0.3,
+        },
+      },
+    });
+    expect(
+      resolveTargetVisualization({
+        snapshot: controller.getSnapshot(),
+        target,
+      }).settings,
+    ).toMatchObject({
+      primitiveVisible: true,
+      vectorCenteringEnabled: false,
+      vectorSurfaceOffsetEnabled: true,
+      vectorSurfaceOffsetScale: 0.3,
+    });
+  });
+
+  it("does not carry viewport preferences across controller reloads or clients while server settings remain shared", () => {
+    const target = { id: "object:free-layer", kind: "object" as const };
+    const firstViewport = new ObjectVisualizationController();
+    const secondViewport = new ObjectVisualizationController();
+    const serverState = {
+      revision: 7,
+      overrides: [
+        {
+          scope: "object",
+          scope_id: "object:free-layer",
+          display: { visible: false },
+        },
+      ],
+    } as never;
+
+    firstViewport.patchViewportPreferences(target, {
+      primitiveVisible: true,
+      vectorCenteringEnabled: false,
+    });
+
+    expect(
+      resolveTargetVisualization({
+        snapshot: firstViewport.getSnapshot(),
+        target,
+        visualizationState: serverState,
+      }).settings,
+    ).toMatchObject({ primitiveVisible: true, vectorCenteringEnabled: false, visible: false });
+    expect(
+      resolveTargetVisualization({
+        snapshot: secondViewport.getSnapshot(),
+        target,
+        visualizationState: serverState,
+      }).settings,
+    ).toMatchObject({ primitiveVisible: false, vectorCenteringEnabled: true, visible: false });
   });
 
   it("builds backend global visualization state patches from default target patches", () => {

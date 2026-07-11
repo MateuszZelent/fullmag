@@ -22,6 +22,7 @@ import {
   airboxVisualizationStatePatchFromTargetPatch,
   hasVisualizationStatePatch,
   mergeVisualizationStateTargetOverride,
+  persistentVisualizationTargetPatch,
   resetAirboxVisualizationState,
   visualizationStateOverrideMatchesTarget,
   visualizationStatePatchFromDefaultTargetPatch,
@@ -262,10 +263,17 @@ async function patchVisualizationDefaultsFromCommand(
     };
   }
 
+  const localPatch = airboxLocalVisualizationPatchFromTargetPatch(input.patch);
+  const persistentPatch = persistentVisualizationTargetPatch(input.patch);
   for (const kind of input.targetKinds) {
-    context.visualization.patchDefaults(kind, input.patch);
+    if (Object.keys(localPatch).length > 0) {
+      context.visualization.patchViewportPreferenceDefaults(kind, localPatch);
+    }
+    if (Object.keys(persistentPatch).length > 0) {
+      context.visualization.patchDefaults(kind, persistentPatch);
+    }
   }
-  const statePatch = visualizationStatePatchFromDefaultTargetPatch(input.patch);
+  const statePatch = visualizationStatePatchFromDefaultTargetPatch(persistentPatch);
   if (
     (context.visualizationSync || context.api) &&
     hasVisualizationStatePatch(statePatch)
@@ -287,8 +295,16 @@ async function patchVisualizationTargetFromCommand(
     return patchAirboxVisualization(context, input.patch);
   }
 
-  if (!(await patchTargetOverrideResource(context, input.target, input.patch))) {
-    context.visualization.patchTarget(input.target, input.patch);
+  const localPatch = airboxLocalVisualizationPatchFromTargetPatch(input.patch);
+  if (Object.keys(localPatch).length > 0) {
+    context.visualization.patchViewportPreferences(input.target, localPatch);
+  }
+  const persistentPatch = persistentVisualizationTargetPatch(input.patch);
+  if (
+    Object.keys(persistentPatch).length > 0 &&
+    !(await patchTargetOverrideResource(context, input.target, persistentPatch))
+  ) {
+    context.visualization.patchTarget(input.target, persistentPatch);
   }
   return { status: "completed" };
 }
@@ -434,7 +450,10 @@ async function patchAirboxVisualization(
 ): Promise<CommandResult> {
   const localPatch = airboxLocalVisualizationPatchFromTargetPatch(patch);
   if (Object.keys(localPatch).length > 0) {
-    context.visualization?.patchTarget(AIRBOX_VISUALIZATION_TARGET, localPatch);
+    context.visualization?.patchViewportPreferences(
+      AIRBOX_VISUALIZATION_TARGET,
+      localPatch,
+    );
   }
 
   const state = visualizationStateFromContext(context);
@@ -447,7 +466,10 @@ async function patchAirboxVisualization(
   }
 
   if (!context.visualizationSync && !context.api) {
-    context.visualization?.patchTarget(AIRBOX_VISUALIZATION_TARGET, patch);
+    context.visualization?.patchTarget(
+      AIRBOX_VISUALIZATION_TARGET,
+      persistentVisualizationTargetPatch(patch),
+    );
     return { status: "completed" };
   }
 

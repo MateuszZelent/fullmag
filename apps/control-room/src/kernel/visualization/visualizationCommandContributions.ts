@@ -10,10 +10,12 @@ import {
   airboxVisualizationStatePatchFromTargetPatch,
   hasVisualizationStatePatch,
   mergeVisualizationStateTargetOverride,
+  persistentVisualizationTargetPatch,
   removeTargetOverrideField,
   renderModePatch,
   resolveTargetVisualization,
   resolveVisualizationTargetFromSelection,
+  viewportRenderingPreferencesFromTargetPatch,
   visualizationStateOverrideMatchesTarget,
   type SurfaceColorSource,
   type VisualizationColorMode,
@@ -72,8 +74,16 @@ async function patchSelectedTarget(
   }
 
   if (target.kind !== "airbox") {
-    if (!(await patchTargetOverrideResource(context, target, patch))) {
-      visualization.patchTarget(target, patch);
+    const viewportPreferences = viewportRenderingPreferencesFromTargetPatch(patch);
+    if (Object.keys(viewportPreferences).length > 0) {
+      visualization.patchViewportPreferences(target, viewportPreferences);
+    }
+    const persistentPatch = persistentVisualizationTargetPatch(patch);
+    if (
+      Object.keys(persistentPatch).length > 0 &&
+      !(await patchTargetOverrideResource(context, target, persistentPatch))
+    ) {
+      visualization.patchTarget(target, persistentPatch);
     }
     return { status: "completed" as const };
   }
@@ -85,7 +95,7 @@ async function patchSelectedTarget(
     state ? state.overrides ?? [] : undefined,
   );
   if (Object.keys(localPatch).length > 0) {
-    visualization.patchTarget(target, localPatch);
+    visualization.patchViewportPreferences(target, localPatch);
   }
   if (!hasVisualizationStatePatch(statePatch)) {
     return { status: "completed" as const };

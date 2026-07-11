@@ -2711,6 +2711,16 @@ describe("ribbon structure", () => {
       vectorCenteringEnabled: false,
       vectorSurfaceOffsetEnabled: true,
     });
+    expect(context.visualization.getSnapshot().viewportPreferenceDefaults).toEqual({
+      object: {
+        vectorCenteringEnabled: false,
+        vectorSurfaceOffsetEnabled: true,
+      },
+      part: {
+        vectorCenteringEnabled: false,
+        vectorSurfaceOffsetEnabled: true,
+      },
+    });
   });
 
   it("patches canonical visualization state from global Mesh View controls", async () => {

@@ -1987,8 +1987,11 @@ function selectViewport3DObjectVisualizationSnapshot(
   targets: readonly VisualizationTargetRef[],
 ): ObjectVisualizationSnapshot {
   const defaults: ObjectVisualizationSnapshot["defaults"] = {};
-  const localRenderOverrides: NonNullable<
-    ObjectVisualizationSnapshot["localRenderOverrides"]
+  const viewportPreferenceDefaults: NonNullable<
+    ObjectVisualizationSnapshot["viewportPreferenceDefaults"]
+  > = {};
+  const viewportPreferences: NonNullable<
+    ObjectVisualizationSnapshot["viewportPreferences"]
   > = {};
   const overrides: ObjectVisualizationSnapshot["overrides"] = {};
   const pendingOverrides: NonNullable<
@@ -2000,6 +2003,11 @@ function selectViewport3DObjectVisualizationSnapshot(
     if (defaultPatch) {
       defaults[kind] = defaultPatch;
     }
+    const viewportPreferenceDefault =
+      snapshot.viewportPreferenceDefaults?.[kind];
+    if (viewportPreferenceDefault) {
+      viewportPreferenceDefaults[kind] = viewportPreferenceDefault;
+    }
   }
 
   for (const target of targets) {
@@ -2008,9 +2016,9 @@ function selectViewport3DObjectVisualizationSnapshot(
     if (override) {
       overrides[key] = override;
     }
-    const localRenderOverride = snapshot.localRenderOverrides?.[key];
-    if (localRenderOverride) {
-      localRenderOverrides[key] = localRenderOverride;
+    const viewportPreference = snapshot.viewportPreferences?.[key];
+    if (viewportPreference) {
+      viewportPreferences[key] = viewportPreference;
     }
     const pendingOverride = snapshot.pendingOverrides?.[key];
     if (pendingOverride) {
@@ -2020,7 +2028,8 @@ function selectViewport3DObjectVisualizationSnapshot(
 
   return {
     defaults,
-    localRenderOverrides,
+    viewportPreferenceDefaults,
+    viewportPreferences,
     overrides,
     pendingOverrides,
     version: snapshot.version,
@@ -2035,6 +2044,14 @@ function viewport3DObjectVisualizationSnapshotEquals(
     if (!visualizationTargetPatchEquals(previous.defaults[kind], next.defaults[kind])) {
       return false;
     }
+    if (
+      !visualizationTargetPatchEquals(
+        previous.viewportPreferenceDefaults?.[kind],
+        next.viewportPreferenceDefaults?.[kind],
+      )
+    ) {
+      return false;
+    }
   }
 
   const overrideKeys = new Set([
@@ -2047,15 +2064,15 @@ function viewport3DObjectVisualizationSnapshotEquals(
     }
   }
 
-  const localRenderOverrideKeys = new Set([
-    ...Object.keys(previous.localRenderOverrides ?? {}),
-    ...Object.keys(next.localRenderOverrides ?? {}),
+  const viewportPreferenceKeys = new Set([
+    ...Object.keys(previous.viewportPreferences ?? {}),
+    ...Object.keys(next.viewportPreferences ?? {}),
   ]);
-  for (const key of localRenderOverrideKeys) {
+  for (const key of viewportPreferenceKeys) {
     if (
       !visualizationTargetPatchEquals(
-        previous.localRenderOverrides?.[key],
-        next.localRenderOverrides?.[key],
+        previous.viewportPreferences?.[key],
+        next.viewportPreferences?.[key],
       )
     ) {
       return false;
