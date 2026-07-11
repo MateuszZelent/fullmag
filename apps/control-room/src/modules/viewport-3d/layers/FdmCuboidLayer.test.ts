@@ -8,9 +8,12 @@ import { memoryBudgetRegistry } from "@/kernel/performance/MemoryBudgetRegistry"
 import type { FdmGridRenderDomain } from "../viewport3dDomainAdapter";
 import {
   FDM_CUBOID_UPLOAD_BATCH_SIZE,
+  buildFdmPointPositions,
   buildFdmCuboidInstanceModel,
   buildFdmCuboidUploadBatches,
   buildFdmVectorSegments,
+  hasAnyEffectiveFdmPass,
+  resolveFdmCuboidPassPlan,
   resolveFdmVectorGlyphScale,
 } from "./FdmCuboidLayer";
 
@@ -65,6 +68,135 @@ const viewport3DSceneModelPath = join(
 );
 
 describe("FdmCuboidLayer model", () => {
+  it("keeps every independently enabled FDM pass renderable", () => {
+    expect(
+      hasAnyEffectiveFdmPass({
+        boundsVisible: false,
+        pointsVisible: false,
+        shaderVisible: true,
+        vectorsVisible: false,
+        wireframeVisible: false,
+      }),
+    ).toBe(true);
+    expect(
+      hasAnyEffectiveFdmPass({
+        boundsVisible: false,
+        pointsVisible: false,
+        shaderVisible: false,
+        vectorsVisible: false,
+        wireframeVisible: true,
+      }),
+    ).toBe(true);
+    expect(
+      hasAnyEffectiveFdmPass({
+        boundsVisible: false,
+        pointsVisible: true,
+        shaderVisible: false,
+        vectorsVisible: false,
+        wireframeVisible: false,
+      }),
+    ).toBe(true);
+    expect(
+      hasAnyEffectiveFdmPass({
+        boundsVisible: false,
+        pointsVisible: false,
+        shaderVisible: false,
+        vectorsVisible: true,
+        wireframeVisible: false,
+      }),
+    ).toBe(true);
+    expect(
+      hasAnyEffectiveFdmPass({
+        boundsVisible: true,
+        pointsVisible: false,
+        shaderVisible: false,
+        vectorsVisible: false,
+        wireframeVisible: false,
+      }),
+    ).toBe(true);
+    expect(
+      hasAnyEffectiveFdmPass({
+        boundsVisible: false,
+        pointsVisible: false,
+        shaderVisible: false,
+        vectorsVisible: false,
+        wireframeVisible: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not request cuboid surface instances for points-only or vectors-only passes", () => {
+    const pointsOnly = resolveFdmCuboidPassPlan({
+      boundsVisible: false,
+      pointsVisible: true,
+      shaderVisible: false,
+      vectorsVisible: false,
+      wireframeVisible: false,
+    });
+    const vectorsOnly = resolveFdmCuboidPassPlan({
+      boundsVisible: false,
+      pointsVisible: false,
+      shaderVisible: false,
+      vectorsVisible: true,
+      wireframeVisible: false,
+    });
+    const allOff = resolveFdmCuboidPassPlan({
+      boundsVisible: false,
+      pointsVisible: false,
+      shaderVisible: false,
+      vectorsVisible: false,
+      wireframeVisible: false,
+    });
+
+    expect(pointsOnly).toMatchObject({
+      hasAnyEffectivePass: true,
+      needsCellModel: true,
+      needsPointGeometry: true,
+      needsSurfaceInstances: false,
+      needsVectors: false,
+    });
+    expect(vectorsOnly).toMatchObject({
+      hasAnyEffectivePass: true,
+      needsCellModel: true,
+      needsPointGeometry: false,
+      needsSurfaceInstances: false,
+      needsVectors: true,
+    });
+    expect(allOff).toMatchObject({
+      hasAnyEffectivePass: false,
+      needsCellModel: false,
+      needsSurfaceInstances: false,
+    });
+  });
+
+  it("builds bounded FDM point positions from cell centers for the selected geometry scope", () => {
+    const model = buildFdmCuboidInstanceModel(
+      domainFixture({
+        displayCellBudget: 8,
+        displayCellCount: 8,
+        shape: [2, 2, 2],
+        stride: 1,
+        totalCells: 8,
+      }),
+    );
+
+    expect(buildFdmPointPositions(model, "full")).toHaveLength(8 * 3);
+    expect(buildFdmPointPositions(model, "surface")).toHaveLength(8 * 3);
+    expect(buildFdmPointPositions(null, "full")).toBeNull();
+
+    const interiorModel = buildFdmCuboidInstanceModel(
+      domainFixture({
+        displayCellBudget: 27,
+        displayCellCount: 27,
+        shape: [3, 3, 3],
+        stride: 1,
+        totalCells: 27,
+      }),
+    );
+    expect(buildFdmPointPositions(interiorModel, "full")).toHaveLength(27 * 3);
+    expect(buildFdmPointPositions(interiorModel, "surface")).toHaveLength(26 * 3);
+  });
+
   it("samples FDM cells from grid shape, origin and spacing", () => {
     const model = buildFdmCuboidInstanceModel(domainFixture());
 

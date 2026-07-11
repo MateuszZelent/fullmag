@@ -156,6 +156,7 @@ import {
   useFdmCuboidBuildResult,
   type FdmCuboidInstanceModel,
 } from "../layers/FdmCuboidLayer";
+import { resolveFdmCuboidPassPlan } from "../layers/fdmCuboidPasses";
 import { buildViewport3DFdmCuboidJobKey } from "../build-engine/viewport3dBuildJobKeys";
 import { Viewport3DScene } from "../layers/Viewport3DScene";
 import { buildClipPlaneIntersectionMarkerBuffers } from "../layers/clipPlaneModel";
@@ -3093,10 +3094,12 @@ export function useViewport3DSceneModel({
   const fdmVectorsVisible = Boolean(
     fdmDomain && fdmSettings.visible && fdmSettings.vectorsVisible,
   );
+  const fdmPassPlan = resolveFdmCuboidPassPlan(fdmSettings);
+  const fdmPointsVisible = Boolean(
+    fdmDomain && fdmSettings.visible && fdmSettings.pointsVisible,
+  );
   const fdmInstanceModelEnabled = Boolean(
-    fdmDomain &&
-      fdmSettings.visible &&
-      (fdmSettings.shaderVisible || fdmSettings.wireframeVisible || fdmVectorsVisible),
+    fdmDomain && fdmSettings.visible && fdmPassPlan.needsCellModel,
   );
   const fdmInstanceModelNeedsFieldVector =
     fdmVoxelMagnitudeThreshold > 0 || fdmTopographyEnabled;
@@ -3459,6 +3462,7 @@ export function useViewport3DSceneModel({
     `fill=${visualProfile.voxelFillRatio}`,
     `threshold=${fdmVoxelMagnitudeThreshold}`,
     `topography=${fdmVoxelTopography.enabled}:${fdmVoxelTopography.component}:${fdmVoxelTopography.amplitudeCells}`,
+    `points=${fdmPointsVisible}:${fdmSettings.geometryScope}`,
     `vectors=${fdmVectorsVisible}:${fdmMaxVectorGlyphs}:${fdmVectorScale}:${fdmVectorAnchorMode}`,
   ].join("|");
   const fdmBuildKey = fdmInstanceModelEnabled
