@@ -143,6 +143,10 @@ describe("VectorFieldLayer performance contracts", () => {
       "if (!retainedVisibleBuild) return undefined;",
     );
     expect(buildHookSource).toContain("cache.evictStaleRevisions");
+    expect(buildHookSource).toContain("VECTOR_GLYPH_DERIVED_CACHE_MAX_BYTES");
+    expect(buildHookSource).toContain("VECTOR_GLYPH_DERIVED_CACHE_MAX_ENTRIES");
+    expect(buildHookSource).toContain("cache.evictInactiveGroups");
+    expect(buildHookSource).toContain("cache.dispose()");
     expect(buildHookSource).toContain("retainedBuildRef.current.release()");
     expect(buildHookSource).toContain("stale-compatible");
     expect(buildHookSource).toContain("stale-physical");

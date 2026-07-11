@@ -45,6 +45,8 @@ const DEFAULT_SHAFT_RADIUS_RATIO = 0.08;
 
 const VECTOR_GLYPH_UPLOAD_BATCH_SIZE = 256;
 const VECTOR_GLYPH_UPLOAD_FRAME_BUDGET_MS = 3;
+const VECTOR_GLYPH_DERIVED_CACHE_MAX_BYTES = 64 * 1024 * 1024;
+const VECTOR_GLYPH_DERIVED_CACHE_MAX_ENTRIES = 12;
 const VECTOR_GLYPH_BUILD_MEASURE =
   "fullmag.viewport3d.buildVectorGlyphInstances";
 const VECTOR_GLYPH_COLOR_UPLOAD_MEASURE =
@@ -487,13 +489,18 @@ function useVectorGlyphBuild({
 }): VectorGlyphBuildResult | null {
   const store = useMemo(() => createVectorGlyphBuildStore(), []);
   const cache = useMemo(
-    () => createViewport3DDerivedBufferCache<VectorGlyphBuildResult>(),
+    () =>
+      createViewport3DDerivedBufferCache<VectorGlyphBuildResult>({
+        maxBytes: VECTOR_GLYPH_DERIVED_CACHE_MAX_BYTES,
+        maxEntries: VECTOR_GLYPH_DERIVED_CACHE_MAX_ENTRIES,
+      }),
     [],
   );
   const retainedBuildRef =
     useRef<Viewport3DDerivedBufferRetainHandle<VectorGlyphBuildResult> | null>(
       null,
     );
+  const activeGroupKey = buildReference?.groupKey ?? null;
   const request = useMemo<VectorGlyphBuildRequest | null>(
     () =>
       segments
@@ -559,6 +566,23 @@ function useVectorGlyphBuild({
       }
     };
   }, [buildKey, buildReference, cache, invalidate, request, store, tracker]);
+
+  useEffect(
+    () => () => {
+      retainedBuildRef.current?.release();
+      retainedBuildRef.current = null;
+      cache.dispose();
+    },
+    [cache],
+  );
+
+  useEffect(() => {
+    if (!activeGroupKey) return;
+    cache.evictInactiveGroups({
+      activeGroupKey,
+      lane: "vector-glyph",
+    });
+  }, [activeGroupKey, cache]);
 
   let visibleCacheKey: string | null = null;
   let visibleResult: VectorGlyphBuildResult | null = null;
