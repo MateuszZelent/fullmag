@@ -39,3 +39,10 @@ override, so this change requires no backend or OpenAPI contract change.
 The controller test verifies that an HTTP-backed persistent `visible` setting is
 shared by two client controllers, while a local primitive/centering preference is
 visible only in the initiating controller and disappears on controller reload.
+
+## Reviewer follow-up
+
+The airbox Ribbon path now passes only `persistentVisualizationTargetPatch(patch)`
+to `patchTargetPending`. A mixed `{ vectorCenteringEnabled: false, visible: false
+}` regression proves centering remains local to `viewportPreferences`; the pending
+overlay and backend patch contain only `visible`.

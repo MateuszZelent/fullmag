@@ -477,7 +477,7 @@ async function patchAirboxVisualization(
   if (typeof revision === "number") {
     context.visualization?.patchTargetPending(
       AIRBOX_VISUALIZATION_TARGET,
-      patch,
+      persistentVisualizationTargetPatch(patch),
       revision,
     );
   }

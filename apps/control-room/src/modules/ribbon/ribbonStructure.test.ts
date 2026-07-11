@@ -1676,6 +1676,30 @@ describe("ribbon structure", () => {
     );
   });
 
+  it("keeps mixed local airbox controls out of pending backend overlays", async () => {
+    const { context, patches } = createVisualizationRibbonContext({ revision: 7 });
+    const result = await context.commands.execute(
+      RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND,
+      context.commandContext,
+      visualizationTargetCommandInput(AIRBOX_VISUALIZATION_TARGET, {
+        vectorCenteringEnabled: false,
+        visible: false,
+      }),
+    );
+
+    expect(result).toMatchObject({ status: "completed" });
+    expect(context.visualization.getSnapshot()).toMatchObject({
+      pendingOverrides: {
+        airbox: { baseRevision: 7, patch: { visible: false } },
+      },
+      viewportPreferences: {
+        airbox: { vectorCenteringEnabled: false },
+      },
+    });
+    expect(patches).toMatchObject([{ layers: { airbox: { visible: false } } }]);
+    expect(JSON.stringify(patches)).not.toContain("vectorCenteringEnabled");
+  });
+
   it("wires the global Airbox ribbon menu to the airbox visualization target", async () => {
     const visualization = new ObjectVisualizationController();
     const content = buildRibbonTabContent("view", {
