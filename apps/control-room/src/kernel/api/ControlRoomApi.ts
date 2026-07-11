@@ -134,6 +134,10 @@ import {
   VISUALIZATION_CLIENT_ACKS_PATH,
   VISUALIZATION_STATE_PATH,
 } from "./apiPaths";
+import {
+  canonicalFieldVectorQuery,
+  canonicalFieldVectorQueryParams,
+} from "./fieldQueryIdentity";
 import { resolveCanonicalQuantityId } from "./quantityIds";
 import type {
   BinaryRequestOptions,
@@ -2543,19 +2547,7 @@ function fieldMetaQueryParams(query: FieldMetaQuery): QueryParams {
 }
 
 function fieldVectorQueryParams(query: FieldVectorQuery): QueryParams {
-  return {
-    component: query.component ?? undefined,
-    max_samples: query.max_samples ?? undefined,
-    phase_rad: query.phase_rad ?? undefined,
-    scope_id: normalizeFieldMetaScopeId(
-      query.scope_kind,
-      query.scope_id,
-    ) ?? undefined,
-    scope_kind: query.scope_kind ?? undefined,
-    snapshot_id: query.snapshot_id ?? undefined,
-    stage_id: query.stage_id ?? undefined,
-    view: query.view ?? undefined,
-  };
+  return canonicalFieldVectorQueryParams(canonicalFieldVectorQuery("m", query));
 }
 
 function topologicalChargeQueryParams(

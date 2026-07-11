@@ -49,6 +49,11 @@ import {
   VISUALIZATION_STATE_PATH,
 } from "../api/apiPaths";
 import { resolveCanonicalQuantityId } from "../api/quantityIds";
+import {
+  type CanonicalFieldVectorQuery,
+  canonicalFieldVectorQueriesEqual,
+  parseCanonicalFieldVectorResourceKey,
+} from "../api/fieldQueryIdentity";
 import type { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 
 const SESSION_STATUS_RESOURCE_KEY = "session:status";
@@ -215,6 +220,15 @@ function fieldSamplesInvalidationRevision(change: RealtimeBatchChange): Resource
   return change.domain_generation_id === null || change.domain_generation_id === undefined
     ? change.revision
     : `generation:${change.domain_generation_id}:revision:${change.revision}`;
+}
+
+function exactFieldQueryFromResourceKey(
+  resourceKey: string,
+): CanonicalFieldVectorQuery | null {
+  const fieldPathIndex = resourceKey.lastIndexOf(`${DATA_FIELDS_PATH}/`);
+  return fieldPathIndex < 0
+    ? null
+    : parseCanonicalFieldVectorResourceKey(resourceKey.slice(fieldPathIndex));
 }
 
 function resourceFamilyPrefix(pathWithObjectId: string): string {
@@ -387,7 +401,15 @@ export class RealtimeInvalidationBridge {
         }
         if (fieldSampleChange) {
           const fieldSampleRevision = fieldSamplesInvalidationRevision(change);
-          if (change.broad || !change.quantity_ids?.length) {
+          const exactFieldResource = change.recommended_fetch
+            ? parseCanonicalFieldVectorResourceKey(change.recommended_fetch)
+            : null;
+          if (exactFieldResource) {
+            this.queueExactFieldSampleInvalidation(
+              exactFieldResource,
+              fieldSampleRevision,
+            );
+          } else if (change.broad || !change.quantity_ids?.length) {
             this.queuePrefixInvalidation(DATA_FIELDS_PATH, fieldSampleRevision);
           } else {
             for (const quantityId of change.quantity_ids) {
@@ -524,6 +546,16 @@ export class RealtimeInvalidationBridge {
         revision,
       );
     }
+  }
+
+  private queueExactFieldSampleInvalidation(
+    fieldQuery: CanonicalFieldVectorQuery,
+    revision: ResourceRevision,
+  ): void {
+    this.queueMatchingInvalidation((subscribedKey) => {
+      const candidate = exactFieldQueryFromResourceKey(subscribedKey);
+      return candidate !== null && canonicalFieldVectorQueriesEqual(candidate, fieldQuery);
+    }, revision);
   }
 
   private queueMatchingInvalidation(

@@ -3,6 +3,10 @@ import { describe, expect, it } from "vitest";
 import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
 import {
+  canonicalFieldVectorQuery,
+  serializeCanonicalFieldVectorResourceKey,
+} from "../api/fieldQueryIdentity";
+import {
   ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
   DATA_FIELDS_PATH,
@@ -793,6 +797,65 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision(mCollectionKey)).toBe(12);
     expect(resources.getRevision(hEffFieldKey)).toBeNull();
     expect(resources.getRevision(hEffCollectionKey)).toBeNull();
+  });
+
+  it("uses an exact recommended field fetch before the quantity fallback", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const exactKey = serializeCanonicalFieldVectorResourceKey(
+      canonicalFieldVectorQuery("H_eff", {
+        component: "x",
+        max_samples: 1200,
+        phase_rad: 1.5,
+        scope_id: "film",
+        scope_kind: "object",
+        snapshot_id: "snapshot-1",
+        stage_id: "stage-1",
+        view: "phase_rotated_real",
+      }),
+    );
+    const otherObjectKey = serializeCanonicalFieldVectorResourceKey(
+      canonicalFieldVectorQuery("H_eff", {
+        component: "x",
+        scope_id: "bar",
+        scope_kind: "object",
+      }),
+    );
+    const otherComponentKey = serializeCanonicalFieldVectorResourceKey(
+      canonicalFieldVectorQuery("H_eff", {
+        component: "y",
+        scope_id: "film",
+        scope_kind: "object",
+      }),
+    );
+    const exactCollectionKey = `${DATA_FIELDS_PATH}#viewport-3d:quantity-field-vectors:${exactKey}`;
+
+    resources.subscribe(exactKey, () => {});
+    resources.subscribe(otherObjectKey, () => {});
+    resources.subscribe(otherComponentKey, () => {});
+    resources.subscribe(exactCollectionKey, () => {});
+
+    bridge.handleEvent({
+      payload: {
+        changes: [
+          {
+            quantity_ids: ["H_eff"],
+            recommended_fetch:
+              "/v2/sessions/current/data/fields/H_eff/samples/vector?view=phase_rotated_real&stage_id=stage-1&scope_kind=object&scope_id=object%3Afilm&snapshot_id=snapshot-1&phase_rad=1.5&max_samples=1200&component=x",
+            resource: "fields",
+            resource_id: "samples",
+            revision: 14,
+          },
+        ],
+      },
+      type: "resource.batch_changed",
+    });
+
+    expect(resources.getRevision(exactKey)).toBe(14);
+    expect(resources.getRevision(exactCollectionKey)).toBe(14);
+    expect(resources.getRevision(otherObjectKey)).toBeNull();
+    expect(resources.getRevision(otherComponentKey)).toBeNull();
   });
 
   it("refreshes component field metadata when matching quantity samples change", () => {

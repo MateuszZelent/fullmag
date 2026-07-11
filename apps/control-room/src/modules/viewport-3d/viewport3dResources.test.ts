@@ -180,7 +180,7 @@ describe("viewport3dResources", () => {
       `${DATA_FIELD_VECTOR_PATH.replace(
         "{quantity_id}",
         "analysis%3Afrequency-response%3Afrequency-0003",
-      )}?component=full&view=phase_rotated_real&phase_rad=1.25`,
+      )}?component=full&phase_rad=1.25&view=phase_rotated_real`,
     );
   });
 
@@ -198,7 +198,7 @@ describe("viewport3dResources", () => {
       `${DATA_FIELD_VECTOR_PATH.replace(
         "{quantity_id}",
         "analysis%3Aeigen%3Asample-0000%3Amode-0002",
-      )}?component=full&view=phase_rotated_real&phase_rad=0.5`,
+      )}?component=full&phase_rad=0.5&view=phase_rotated_real`,
     );
   });
 
@@ -527,7 +527,7 @@ describe("viewport3dResources", () => {
           "component=x&quantity=H_eff&scope_id=part:a&scope_kind=part",
           {
             consumers: ["part:a:surface"],
-            key: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=x&scope_id=part%3Aa&scope_kind=part`,
+            key: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=x&scope_id=a&scope_kind=part`,
             quantityId: "H_eff",
             query: {
               component: "x",
@@ -542,7 +542,7 @@ describe("viewport3dResources", () => {
           "component=x&quantity=H_eff&scope_id=part:b&scope_kind=part",
           {
             consumers: ["part:b:surface"],
-            key: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=x&scope_id=part%3Ab&scope_kind=part`,
+            key: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=x&scope_id=b&scope_kind=part`,
             quantityId: "H_eff",
             query: {
               component: "x",
