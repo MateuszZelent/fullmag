@@ -797,7 +797,7 @@ git commit -m "feat(api): type relaxation runtime contract"
 - Consumes: generated typed API/capability/defaults and canonical scene/script shape.
 - Produces: algorithm-conditional drafts, capability-gated choices, exact units, and truthful completion UI.
 
-- [ ] **Step 1: Replace contract-drift tests with failing canonical assertions**
+- [x] **Step 1: Replace contract-drift tests with failing canonical assertions**
 
 Add assertions:
 
@@ -823,7 +823,7 @@ it("removes LLG-only fields when changing to a direct minimizer", () => {
 
 Also test no Euler option, capability-hidden TPI, canonical demag_interval_s round-trip, explicit failure rendering, and max_torque_apm unit formatting.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ~~~bash
 pnpm --dir apps/control-room exec vitest run src/modules/inspector/panels/StudyStageAuthoringModel.test.ts src/modules/inspector/panels/StudyInspectorPanelModel.test.ts src/kernel/runtime/studyRuntimeCommandContributions.test.ts
@@ -831,19 +831,19 @@ pnpm --dir apps/control-room exec vitest run src/modules/inspector/panels/StudyS
 
 Expected: current 1e-6/7.96 A/m defaults, unconditional fields, or metric casing fails.
 
-- [ ] **Step 3: Use one canonical draft shape**
+- [x] **Step 3: Use one canonical draft shape**
 
 Represent maxRelaxationTime only for LLG. On algorithm change, clear inapplicable fields transactionally. Serialize canonical torque_tolerance_apm, energy_tolerance_j, max_steps, max_relaxation_time_s, integrator/fixed/adaptive fields, and demag_interval_s.
 
-- [ ] **Step 4: Gate algorithm and integrator controls**
+- [x] **Step 4: Gate algorithm and integrator controls**
 
 Read runtime capability through the existing resource hook/domain adapter. Do not branch into separate FDM/FEM panels. Remove Euler. Unsupported options show the backend reason and cannot be submitted.
 
-- [ ] **Step 5: Render exact runtime truth**
+- [x] **Step 5: Render exact runtime truth**
 
 Display A/m and T torque pair, energy plateau J, accepted step m/A, steps, terminal status, converged, stop reason, fallback/development warning, and failed backend diagnostics distinctly.
 
-- [ ] **Step 6: Verify focused and full frontend gates**
+- [x] **Step 6: Verify focused and full frontend gates**
 
 ~~~bash
 pnpm --dir apps/control-room typecheck
@@ -854,7 +854,7 @@ pnpm --dir apps/control-room check:api-hygiene
 
 Expected: zero TypeScript errors, zero lint warnings, and all tests pass.
 
-- [ ] **Step 7: Browser smoke**
+- [x] **Step 7: Browser smoke**
 
 Run the repository Control Room launcher and Playwright/browser smoke. Verify:
 
@@ -864,7 +864,7 @@ Run the repository Control Room launcher and Playwright/browser smoke. Verify:
 4. submitted JSON is canonical.
 5. completed and failed stages show correct torque units and reasons.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ~~~bash
 git add apps/control-room
