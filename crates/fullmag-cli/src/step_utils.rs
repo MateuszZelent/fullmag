@@ -3789,16 +3789,21 @@ mod tests {
         assert!((stages[0].until_seconds - 5e-12).abs() < 1e-24);
         assert_eq!(stages[1].entrypoint_kind, "pipeline_relax");
         assert!(matches!(
-            stages[1].ir.study,
+            &stages[1].ir.study,
             fullmag_ir::StudyIR::Relaxation {
                 stop: fullmag_ir::RelaxStopIR {
                     max_steps: Some(25),
                     ..
                 },
+                dynamics: Some(fullmag_ir::DynamicsIR::Llg {
+                    integrator,
+                    fixed_timestep: Some(fixed_timestep),
+                    ..
+                }),
                 ..
-            }
+            } if integrator == "rk45" && (*fixed_timestep - 2e-13).abs() < 1e-24
         ));
-        assert!((stages[1].until_seconds - (25.0 * 2e-13)).abs() < 1e-24);
+        assert!(stages[1].until_seconds.is_infinite());
     }
 
     #[test]
@@ -4245,13 +4250,14 @@ mod tests {
         let stage = materialize_pipeline_relax(&base, &payload)
             .expect("valid direct-minimizer pipeline stage must not panic");
         assert!(matches!(
-            stage.ir.study,
+            &stage.ir.study,
             fullmag_ir::StudyIR::Relaxation {
                 algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
                 dynamics: None,
                 ..
             }
         ));
+        assert!(stage.until_seconds.is_infinite());
     }
 
     #[test]
@@ -4489,7 +4495,7 @@ mod tests {
     }
 
     #[test]
-    fn build_interactive_relax_prefers_fixed_timestep_over_adaptive_seed() {
+    fn build_interactive_relax_fixed_timestep_does_not_synthesize_time_budget() {
         let base_problem = sample_problem_ir_with_adaptive_relax_dt(4e-16);
         let command = crate::types::SessionCommand {
             seq: 1,
@@ -4528,7 +4534,17 @@ mod tests {
             .expect("relax command should materialize a stage");
 
         assert_eq!(stage.entrypoint_kind, "interactive_relax");
-        assert!((stage.until_seconds - (20.0 * 6e-13)).abs() < 1e-24);
+        assert!(stage.until_seconds.is_infinite());
+        assert!(matches!(
+            &stage.ir.study,
+            fullmag_ir::StudyIR::Relaxation {
+                dynamics: Some(fullmag_ir::DynamicsIR::Llg {
+                    fixed_timestep: Some(fixed_timestep),
+                    ..
+                }),
+                ..
+            } if (*fixed_timestep - 6e-13).abs() < 1e-24
+        ));
     }
 
     #[test]

@@ -2786,9 +2786,11 @@ mod tests {
         let pgbb = row("Relaxation(projected_gradient_bb)");
         assert!(pgbb.contains("fem_cpu_native"), "{pgbb}");
         assert!(pgbb.contains("fem_native_gpu"), "{pgbb}");
-        assert!(pgbb.contains("fullmag_fem_backend_relax_step"), "{pgbb}");
-        assert!(pgbb.contains("native CUDA"), "{pgbb}");
-        assert!(pgbb.contains("transfer-audit"), "{pgbb}");
+        assert!(pgbb.contains("native FEM CPU/MFEM/CUDA"), "{pgbb}");
+        assert!(pgbb.contains("mu0 Ms V"), "{pgbb}");
+        assert!(pgbb.contains("m/A"), "{pgbb}");
+        assert!(pgbb.contains("owns no RK"), "{pgbb}");
+        assert!(!pgbb.contains("fullmag_fem_backend_relax_step"), "{pgbb}");
         assert!(
             !pgbb.contains("fem_gpu_relaxation_algorithm_cpu_only"),
             "{pgbb}"
@@ -2802,8 +2804,11 @@ mod tests {
         let ncg = row("Relaxation(nonlinear_cg)");
         assert!(ncg.contains("fem_cpu_native"), "{ncg}");
         assert!(ncg.contains("fem_native_gpu"), "{ncg}");
-        assert!(ncg.contains("fullmag_fem_backend_relax_step"), "{ncg}");
-        assert!(ncg.contains("HyprePCG/BoomerAMG"), "{ncg}");
+        assert!(ncg.contains("native FEM CPU/MFEM/CUDA"), "{ncg}");
+        assert!(ncg.contains("same physical energy metric"), "{ncg}");
+        assert!(ncg.contains("m/A"), "{ncg}");
+        assert!(ncg.contains("owns no RK"), "{ncg}");
+        assert!(!ncg.contains("fullmag_fem_backend_relax_step"), "{ncg}");
         assert!(
             !ncg.contains("fem_gpu_relaxation_algorithm_cpu_only"),
             "{ncg}"
@@ -2815,25 +2820,15 @@ mod tests {
         );
 
         let tpi = row("Relaxation(tangent_plane_implicit)");
-        assert!(tpi.contains("fem_cpu_native"), "{tpi}");
-        assert!(tpi.contains("native CPU/MFEM implementation path"), "{tpi}");
-        assert!(tpi.contains("demag fresh-solve linear response"), "{tpi}");
+        assert!(tpi.contains("CPU/MFEM development-only"), "{tpi}");
         assert!(
-            tpi.contains("**under-development** (native FEM CPU/MFEM and FEM GPU/libCEED)"),
+            tpi.contains("**under-development** (native FEM CPU/MFEM only)"),
             "{tpi}"
         );
-        assert!(
-            tpi.contains("fem_gpu_relaxation_algorithm_cpu_only"),
-            "{tpi}"
-        );
-        assert!(
-            !tpi.contains("execution deferred") && !tpi.contains("planned | planned"),
-            "{tpi}"
-        );
-        assert!(
-            !tpi.contains("**public-executable** (native FEM CPU/MFEM)"),
-            "{tpi}"
-        );
+        assert!(tpi.contains("Strict mode rejects TPI"), "{tpi}");
+        assert!(tpi.contains("Forced GPU rejects"), "{tpi}");
+        assert!(tpi.contains("no hidden GPU-to-CPU fallback"), "{tpi}");
+        assert!(!tpi.contains("FEM GPU/libCEED"), "{tpi}");
     }
 
     #[test]
