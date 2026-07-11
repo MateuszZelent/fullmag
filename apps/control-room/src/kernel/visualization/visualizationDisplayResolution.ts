@@ -193,9 +193,8 @@ function manifestCoversVisibleSceneObjects(
   for (const collection of [objectSegments, meshParts]) {
     if (!Array.isArray(collection)) continue;
     for (const value of collection) {
-      const objectId = asRecord(value)?.object_id;
-      if (typeof objectId === "string" && objectId.length > 0) {
-        manifestObjectIds.add(objectId);
+      for (const alias of manifestCarrierOwnershipAliases(value)) {
+        manifestObjectIds.add(alias);
       }
     }
   }

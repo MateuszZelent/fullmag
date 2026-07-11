@@ -101,4 +101,13 @@ describe("resolveVisualizationTopologyFreshness", () => {
       }),
     ).toBe("mesh-parts");
   });
+
+  it("covers a visible object through a mesh-part geometry alias", () => {
+    expect(
+      resolveVisualizationTopologyFreshness(
+        { revision: 3, objects: [{ id: "film", visible: true }] },
+        { revision: 1, mesh_parts: [{ geometry_id: "film_geom" }] },
+      ),
+    ).toBe("current");
+  });
 });
