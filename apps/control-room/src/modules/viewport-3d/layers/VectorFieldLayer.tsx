@@ -23,7 +23,6 @@ import {
 
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
-import { createViewport3DDerivedBufferCache } from "../build-engine/cache/viewport3dDerivedBufferCache";
 import type { Viewport3DDerivedBufferRetainHandle } from "../build-engine/cache/viewport3dDerivedBufferCache";
 import { createViewport3DGpuUploadManager } from "../build-engine/gpu/viewport3dGpuUploadManager";
 import type { Viewport3DGpuUploadChunk } from "../build-engine/gpu/viewport3dGpuUploadTypes";
@@ -37,6 +36,7 @@ import {
 } from "./vectorGlyphBuildScheduler";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import { RENDER_POLICIES } from "./viewport3DRenderPolicy";
+import { useVectorGlyphDerivedBufferCache } from "./vectorGlyphDerivedBufferRuntime";
 
 const UNIT_Y = new Vector3(0, 1, 0);
 // V1-matched proportions for better visual quality.
@@ -45,8 +45,6 @@ const DEFAULT_SHAFT_RADIUS_RATIO = 0.08;
 
 const VECTOR_GLYPH_UPLOAD_BATCH_SIZE = 256;
 const VECTOR_GLYPH_UPLOAD_FRAME_BUDGET_MS = 3;
-const VECTOR_GLYPH_DERIVED_CACHE_MAX_BYTES = 64 * 1024 * 1024;
-const VECTOR_GLYPH_DERIVED_CACHE_MAX_ENTRIES = 12;
 const VECTOR_GLYPH_BUILD_MEASURE =
   "fullmag.viewport3d.buildVectorGlyphInstances";
 const VECTOR_GLYPH_COLOR_UPLOAD_MEASURE =
@@ -488,14 +486,7 @@ function useVectorGlyphBuild({
   tracker: Viewport3DResourceTracker;
 }): VectorGlyphBuildResult | null {
   const store = useMemo(() => createVectorGlyphBuildStore(), []);
-  const cache = useMemo(
-    () =>
-      createViewport3DDerivedBufferCache<VectorGlyphBuildResult>({
-        maxBytes: VECTOR_GLYPH_DERIVED_CACHE_MAX_BYTES,
-        maxEntries: VECTOR_GLYPH_DERIVED_CACHE_MAX_ENTRIES,
-      }),
-    [],
-  );
+  const cache = useVectorGlyphDerivedBufferCache();
   const retainedBuildRef =
     useRef<Viewport3DDerivedBufferRetainHandle<VectorGlyphBuildResult> | null>(
       null,
@@ -566,15 +557,6 @@ function useVectorGlyphBuild({
       }
     };
   }, [buildKey, buildReference, cache, invalidate, request, store, tracker]);
-
-  useEffect(
-    () => () => {
-      retainedBuildRef.current?.release();
-      retainedBuildRef.current = null;
-      cache.dispose();
-    },
-    [cache],
-  );
 
   useEffect(() => {
     if (!activeGroupKey) return;

@@ -11,6 +11,8 @@ import {
 } from "@/kernel/performance/diagnostic-recorder/diagnosticRecorderTypes";
 import type { ResourceCacheStats } from "@/kernel/resources/ResourceCache";
 
+import type { Viewport3DDerivedBufferCacheSnapshot } from "./build-engine/cache/viewport3dDerivedBufferCache";
+
 import type { Viewport3DFieldDemandDiagnosticSummary } from "./model/viewport3DFieldDataPlan";
 import type { Viewport3DTargetDiagnosticSummary } from "./model/viewport3DTargetDiagnostics";
 import {
@@ -38,6 +40,9 @@ export interface Viewport3DResourceCounts {
   dirtyReason: string | null;
   frames: number;
   geometries: number;
+  glyphCacheBytes?: number;
+  glyphCacheEntries?: number;
+  glyphCacheRetainedBytes?: number;
   materials: number;
   renderTargets: number;
   textures: number;
@@ -104,6 +109,9 @@ const EMPTY_COUNTS: Viewport3DResourceCounts = {
   dirtyReason: null,
   frames: 0,
   geometries: 0,
+  glyphCacheBytes: 0,
+  glyphCacheEntries: 0,
+  glyphCacheRetainedBytes: 0,
   materials: 0,
   renderTargets: 0,
   textures: 0,
@@ -177,6 +185,25 @@ export class Viewport3DResourceTracker {
       dirtyReason: reason,
       frames: this.counts.frames + 1,
     };
+  }
+
+  recordGlyphDerivedBufferCache(
+    snapshot: Viewport3DDerivedBufferCacheSnapshot<unknown>,
+  ): void {
+    const next = {
+      glyphCacheBytes: snapshot.estimatedBytes,
+      glyphCacheEntries: snapshot.entryCount,
+      glyphCacheRetainedBytes: snapshot.retainedBytes,
+    };
+    if (
+      this.counts.glyphCacheBytes === next.glyphCacheBytes &&
+      this.counts.glyphCacheEntries === next.glyphCacheEntries &&
+      this.counts.glyphCacheRetainedBytes === next.glyphCacheRetainedBytes
+    ) {
+      return;
+    }
+    this.counts = { ...this.counts, ...next };
+    this.notify();
   }
 
   consumeDirtyReasonCounts(): Viewport3DDirtyReasonCounts {
@@ -355,6 +382,7 @@ export function buildViewport3DDiagnostics(
     `air:${input.airboxPartCount}`,
     `geo:${input.tracker.geometries}`,
     `cache:${formatBytes(input.cache.byteLength)}`,
+    `glyph-cache:${input.tracker.glyphCacheEntries ?? 0}/${formatBytes(input.tracker.glyphCacheBytes ?? 0)}/${formatBytes(input.tracker.glyphCacheRetainedBytes ?? 0)}`,
     `frames:${input.tracker.frames}`,
   ].join(" ");
 }

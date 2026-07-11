@@ -109,6 +109,7 @@ import {
 import { PostProcessingLayer } from "./PostProcessingLayer";
 import { PrimitiveObjectLayer } from "./PrimitiveObjectLayer";
 import { FdmCuboidLayer, type FdmCuboidInstanceModel } from "./FdmCuboidLayer";
+import { VectorGlyphDerivedBufferCacheProvider } from "./vectorGlyphDerivedBufferRuntime";
 import { HysteresisReplayGlyphLayer } from "./HysteresisReplayGlyphLayer";
 import { Viewport3DLightingRig } from "./Viewport3DLightingRig";
 import { ClipPlaneFramePreviewLayer, ClipPlaneLayer } from "./ClipPlaneLayer";
@@ -601,7 +602,7 @@ function Viewport3DProjectionStack({
   perspectiveCameraRef: RefObject<ThreePerspectiveCamera | null>;
 }) {
   return (
-    <>
+    <VectorGlyphDerivedBufferCacheProvider tracker={tracker}>
       <OrthographicCamera
         key="viewport-3d-orthographic-camera"
         ref={orthographicCameraRef}
@@ -631,7 +632,7 @@ function Viewport3DProjectionStack({
         resetCameraRevision={resetCameraRevision}
         tracker={tracker}
       />
-    </>
+    </VectorGlyphDerivedBufferCacheProvider>
   );
 }
 

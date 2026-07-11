@@ -51,7 +51,7 @@ interface Viewport3DDerivedBufferResolveResult<TBuffer> {
   readonly targetRevision: string | null;
 }
 
-interface Viewport3DDerivedBufferCacheSnapshot<TBuffer> {
+export interface Viewport3DDerivedBufferCacheSnapshot<TBuffer> {
   readonly entries: readonly Viewport3DDerivedBufferCacheEntry<TBuffer>[];
   readonly entryCount: number;
   readonly estimatedBytes: number;
@@ -99,6 +99,7 @@ export interface Viewport3DDerivedBufferCache<TBuffer> {
   readonly tryRetain: (
     key: Viewport3DBuildJobKey,
   ) => Viewport3DDerivedBufferRetainHandle<TBuffer> | null;
+  readonly subscribe: (listener: () => void) => () => void;
 }
 
 interface MutableViewport3DDerivedBufferCacheEntry<TBuffer> {
@@ -128,6 +129,7 @@ export function createViewport3DDerivedBufferCache<TBuffer>({
     Viewport3DBuildJobKey,
     MutableViewport3DDerivedBufferCacheEntry<TBuffer>
   >();
+  const listeners = new Set<() => void>();
 
   function putReady(input: Viewport3DDerivedBufferPutInput<TBuffer>): void {
     const previous = entries.get(input.key);
@@ -146,6 +148,7 @@ export function createViewport3DDerivedBufferCache<TBuffer>({
       topologyRevision: normalizeRevision(input.topologyRevision),
     });
     evictToBudget();
+    notify();
   }
 
   function get(
@@ -154,6 +157,7 @@ export function createViewport3DDerivedBufferCache<TBuffer>({
     const entry = entries.get(key);
     if (!entry) return null;
     entry.lastUsedAtMs = now();
+    notify();
     return freezeEntry(entry);
   }
 
@@ -222,6 +226,7 @@ export function createViewport3DDerivedBufferCache<TBuffer>({
         entry.refCount = Math.max(0, entry.refCount - 1);
         entry.lastUsedAtMs = now();
         evictToBudget();
+        notify();
       },
     };
   }
@@ -229,7 +234,9 @@ export function createViewport3DDerivedBufferCache<TBuffer>({
   function deleteEntry(key: Viewport3DBuildJobKey): boolean {
     const entry = entries.get(key);
     if (!entry || entry.refCount > 0) return false;
-    return entries.delete(key);
+    const deleted = entries.delete(key);
+    if (deleted) notify();
+    return deleted;
   }
 
   function evictToMaxBytes(maxBytes: number): Viewport3DBuildJobKey[] {
@@ -329,6 +336,16 @@ export function createViewport3DDerivedBufferCache<TBuffer>({
 
   function dispose(): void {
     entries.clear();
+    notify();
+  }
+
+  function subscribe(listener: () => void): () => void {
+    listeners.add(listener);
+    return () => listeners.delete(listener);
+  }
+
+  function notify(): void {
+    for (const listener of listeners) listener();
   }
 
   function latestMatchingEntry(
@@ -356,6 +373,7 @@ export function createViewport3DDerivedBufferCache<TBuffer>({
     putReady,
     resolveVisible,
     retain,
+    subscribe,
     tryRetain,
   };
 }

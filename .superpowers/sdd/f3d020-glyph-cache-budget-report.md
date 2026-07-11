@@ -13,8 +13,19 @@ default visual style.
 - The cache now supports inactive-group cleanup and `dispose()` for lifecycle
   owners. Its snapshot remains the diagnostic surface and exposes
   `entryCount`, `estimatedBytes`, and `retainedBytes`.
-- `VectorFieldLayer` sets a 64 MiB / 12-entry budget, removes inactive target
-  or quantity groups, and releases/disposes the cache on unmount.
+- `VectorFieldLayer` removes inactive target or quantity groups from the shared
+  cache. The viewport runtime sets its 64 MiB / 12-entry budget and disposes it
+  on the final viewport release.
+
+## Review correction: viewport-wide ownership
+
+The initial limit was owned by each `VectorFieldLayer`, which would multiply
+the effective budget for many mesh parts. The final ownership is instead one
+`VectorGlyphDerivedBufferRuntime` in the `Viewport3DScene` provider. Every
+vector consumer obtains that same cache; its lease count disposes the cache only
+after the last viewport lease releases. The tracker receives the live aggregate
+`glyphCacheEntries`, `glyphCacheBytes`, and `glyphCacheRetainedBytes`, and the
+compact viewport diagnostics prints them as `glyph-cache`.
 
 ## Tests
 
@@ -31,3 +42,5 @@ default visual style.
 - `pnpm --dir apps/control-room exec vitest run src/modules/viewport-3d/build-engine/cache/viewport3dDerivedBufferCache.test.ts src/modules/viewport-3d/layers/VectorFieldLayer.test.ts` — 20 passed.
 - `pnpm --dir apps/control-room typecheck` — passed.
 - Focused ESLint for the four changed source/test files with zero warnings — passed.
+- Review correction verification: 32 focused tests (including shared-runtime
+  leasing and tracker diagnostics), TypeScript, and focused ESLint — passed.
