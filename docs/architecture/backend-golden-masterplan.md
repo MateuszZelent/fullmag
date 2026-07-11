@@ -478,6 +478,35 @@ FDM/FEM transfer oraz parity CPU/GPU w double. Build i runtime proof natywnego
 FEM używa container-backed `just`; docelowe skupione recipes to
 `verify-fem-antenna-field-runtime` i `verify-fem-antenna-drive-runtime`.
 
+## 7.4 Własność Workflow Relaksacji
+
+Kanoniczny kontrakt równowagi jest zdefiniowany w
+`docs/physics/0580-canonical-relaxation-equilibrium-contract.md`. Wszystkie
+lane'y publikują dokładny residual zaakceptowanego stanu
+`max_torque_Apm = max |m x H_eff|` w `A/m`; `max_torque_T` jest równoważną
+reprezentacją w `T`, a `max_rhs_norm_per_s` osobną wielkością dynamiczną w
+`1/s`. Runner nie rekonstruuje torque z RHS i nie wnioskuje zakończenia z
+próbkowanych artefaktów.
+
+Własność algorytmów pozostaje rozdzielona:
+
+- `llg_overdamped` używa właściwego dla lane'u LLG/RK i jako jedyny posiada
+  `dynamics`, `dt` oraz lokalny zegar relaksacji w sekundach;
+- PG-BB i NCG FDM mają osobne realizacje CPU/reference i CUDA, ale wspólny
+  fizyczny metric `mu0 Ms V`; ich krok line search ma jednostkę `m/A` i nie
+  jest czasem;
+- PG-BB i NCG FEM są własnością `backends/fem/cpu/mfem/relaxation` oraz
+  `backends/fem/gpu/cuda/relaxation`; runner ogranicza się do ABI,
+  requested/resolved provenance, telemetrii i artefaktów;
+- TPI jest wyłącznie rozwojową realizacją CPU/MFEM. Tryb `strict` i wymuszony
+  GPU odrzucają request; `extended` może rozwiązać go do CPU/MFEM z jawną
+  diagnostyką. Nie istnieje ukryty fallback GPU->CPU.
+
+Domyślne publiczne parametry to `1e-4 A/m` oraz `50000` kroków. Osiągnięcie
+budżetu kroków/czasu kończy stage bez zbieżności; stagnacja numeryczna kończy
+go jako failed/non-converged. Status, reason, metric kind/value/unit i próg są
+własnością wykonania i muszą przejść bez reinterpretacji przez IR, API i UI.
+
 ## 8. Architektura FDM
 
 FDM ma dwie różne role, które muszą pozostać jawne:

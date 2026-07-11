@@ -46,3 +46,29 @@ Golden fixtures must cover at least:
 - per-object mesh configuration semantics,
 - multi-stage execution intent,
 - migration read cases for supported previous versions.
+
+## 7. Relaxation Compatibility
+
+Canonical writers emit `StudyIR::Relaxation` with `algorithm`, algorithm-specific
+optional `dynamics`, `stop: RelaxStopIR`, and `sampling`. `dynamics` is required
+only for `llg_overdamped`; direct minimizers reject it. Compatibility aliases
+for scalar torque/energy/max-step fields and the historical
+`max_pseudotime_s`/`max_physical_time_s` Python spellings may be read and
+normalized to `RelaxStopIR.max_relaxation_time_s`, but canonical writers emit
+only the current shape. That time limit is legal only for `llg_overdamped`.
+
+Defaults are semantic and cross-surface: `torque_tolerance_apm=1e-4` in `A/m`
+and `max_steps=50000`. A direct-minimizer line-search step has unit `m/A` and
+must never be migrated into `dt`, seconds, physical time, or pseudo-time.
+
+Persisted completion payloads preserve execution-owned `status`, `converged`,
+stop reason, typed metric/value/unit, and threshold. Readers must not infer
+convergence from a terminal-looking artifact, a final sample, nonzero time, or
+the presence of `max_torque_T`. `max_torque_Apm` is the canonical accepted-state
+field residual in `A/m`; `max_torque_T` is the equivalent value in `T`, and
+`max_rhs_norm_per_s` remains a separate dynamic observable in `1/s`.
+
+`tangent_plane_implicit` remains a CPU/MFEM development-only identifier.
+Strict mode and forced GPU reject it. Extended mode may resolve it only to the
+CPU/MFEM development lane with explicit requested/resolved provenance; no
+hidden GPU-to-CPU fallback is a compatible interpretation.

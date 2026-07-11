@@ -3,7 +3,7 @@
 
 - Status: implemented
 - Owners: Fullmag core
-- Last updated: 2026-04-15
+- Last updated: 2026-07-11
 - Related ADRs:
   - `docs/adr/0001-physics-first-python-api.md`
 - Related specs:
@@ -16,6 +16,11 @@
   - `docs/physics/0480-fdm-higher-order-and-adaptive-time-integrators.md`
   - `docs/physics/0530-shared-relaxation-stop-and-field-refresh-semantics.md`
   - `docs/physics/0510-fem-relaxation-algorithms-mfem-gpu.md`
+  - `docs/physics/0580-canonical-relaxation-equilibrium-contract.md`
+
+The cross-layer equilibrium, legality, observable, and completion contract is
+canonical in `0580`. This note retains FDM algorithm detail; any conflicting
+historical statement here is superseded by `0580`.
 
 ## 1. Problem statement
 
@@ -130,7 +135,7 @@ angular error.
 | $\boldsymbol{g}_i$ | Tangent-space energy gradient at cell $i$ | A/m |
 | $\boldsymbol{\tau}_i$ | Torque residual at cell $i$ | A/m |
 | $\tau_{\max}$ | Maximum torque over all cells | A/m |
-| $\lambda$ | Step length (pseudo-time step or line-search parameter) | dimensionless |
+| $\lambda$ | PG-BB/NCG line-search step in $\mathcal R(m+\lambda p)$ | m/A |
 | $\boldsymbol{s}_n = \boldsymbol{m}_n - \boldsymbol{m}_{n-1}$ | Magnetization difference between consecutive iterates | 1 |
 | $\boldsymbol{y}_n = \boldsymbol{g}_n - \boldsymbol{g}_{n-1}$ | Gradient difference between consecutive iterates | A/m |
 | $\alpha$ | Gilbert damping parameter | 1 |
@@ -184,42 +189,27 @@ Public API semantics for this path are intentionally mumax-like:
    Direct minimizers (`projected_gradient_bb`, `nonlinear_cg`) reject
    `solver`/`dt`/`max_error` as non-applicable controls.
 
-Fullmag currently still uses the runner's pseudo-time and output cadence during
-`llg_overdamped` relaxation, so reported stage time is an execution-control
-quantity rather than a physically meaningful evolution time.
+Fullmag uses a stage-local relaxation clock and output cadence during
+`llg_overdamped`; reported stage time is an execution-control quantity rather
+than a physically meaningful switching time.
 
-For stage materialization and interactive control, the pseudo-time budget must
-be derived consistently as
+Only `llg_overdamped` owns RK integration, `dt`, and a stage-local relaxation
+clock in seconds. The clock is an execution coordinate, not physical switching
+time, and it does not advance a later `TimeEvolution` stage. PG-BB and NCG own
+neither RK nor physical/pseudo time; their accepted step is `lambda` in `m/A`.
 
-$$
-t_{\mathrm{budget}} = N_{\mathrm{steps}} \, \Delta t_{\mathrm{seed}},
-$$
-
-where $\Delta t_{\mathrm{seed}}$ is taken from:
-
-1. `fixed_timestep` when present,
-2. otherwise `adaptive_timestep.dt_initial` when present,
-3. otherwise the fallback seed `1\times10^{-13}\,\mathrm{s}`.
-
-This seed-time rule is only a runtime-control convention. It must not be
-confused with a physical stopping criterion, and it must not override the
-canonical convergence test based on torque and optional 50-step energy plateau.
-
-**Convergence criterion**: the runner monitors the approximate maximum torque
-derived from the pure-damping right-hand side:
+**Convergence criterion**: every FDM relaxation lane computes the accepted-state
+field residual directly,
 
 $$
-\tau_{\max}
-\approx
-\frac{1 + \alpha^2}{\gamma \alpha}
-\max_i \left\|\frac{d\boldsymbol{m}_i}{dt}\right\|.
+\tau_{\max}=\max_i\lVert m_i\times H_{\mathrm{eff},i}\rVert.
 $$
 
-This estimate is exact for the continuous pure-damping LLG form above. The
-discrete-time integrator still introduces the usual $O(\Delta t)$ step error.
-Here $\gamma$ is the reduced `gamma_mu0` in `m/(A s)`; using the electron
-gyromagnetic ratio in `rad/(T s)` would make the reconstructed torque wrong by
-the missing $\mu_0$ factor.
+The published `max_torque_Apm` value is in `A/m`, including exact zero.
+`max_torque_T = mu0 * max_torque_Apm` is the equivalent induction form in `T`.
+`max_rhs_norm_per_s = max |dm/dt|` is a separate dynamic observable in `1/s`;
+it can include direct torques and is never a convergence substitute for the
+accepted-state field residual.
 
 Shared product semantics for stop contracts and demag refresh cadence now live
 in `0530-shared-relaxation-stop-and-field-refresh-semantics.md`. The FDM note
@@ -264,14 +254,16 @@ Barzilai–Borwein (BB) method [Barzilai & Borwein, 1988].
     $$
 
 2.  **Check convergence**: if $\tau_{\max} \le \epsilon_\tau$, stop.
-    Also check $\|\boldsymbol{g}\|^2 < 10^{-30}$ as a gradient-floor guard.
+    An exact degenerate gradient reduction is numerical stagnation, not
+    physical convergence; it produces an explicit failed/non-converged stop.
 
 3.  **Armijo backtracking line search**: starting from $\lambda_{\mathrm{trial}} = \lambda$, find $\lambda_k$ such that
 
     $$
     E\!\left[\mathcal{R}_{\boldsymbol{m}}(-\lambda_k \boldsymbol{g})\right]
     \le
-    E[\boldsymbol{m}] - c_1 \lambda_k \|\boldsymbol{g}\|^2,
+    E[\boldsymbol{m}] - c_1 \lambda_k
+    \langle\boldsymbol{g},\boldsymbol{g}\rangle_E,
     $$
 
     where $c_1 = 10^{-4}$ (Armijo parameter).
@@ -282,7 +274,8 @@ Barzilai–Borwein (BB) method [Barzilai & Borwein, 1988].
     terms use the same cell-centered centered-derivative reduction as the native
     CUDA scalar stats contract. Oersted remains a field observable in the
     current public contract and does not publish a separate conservative scalar
-    energy term for direct-minimizer line search.
+    energy term for direct-minimizer line search; relaxation therefore rejects
+    it rather than minimizing an energy that omits the active field.
 
     For LLG time-stepping, full CPU step reports publish anisotropy and DMI
     scalar terms alongside exchange, demag, external and total energy.
@@ -347,9 +340,8 @@ Barzilai–Borwein (BB) method [Barzilai & Borwein, 1988].
     \boldsymbol{y}_n = \boldsymbol{g}^{(n+1)} - \boldsymbol{g}^{(n)}.
     $$
 
-    To improve numerical stability on large meshes (following Boris), both
-    differences are scaled by $10^{-6}$ before computing the inner products —
-    this cancels in the BB quotients.
+    Products use the physical discrete-energy metric
+    $\langle a,b\rangle_E=\mu_0\sum_i M_{s,i}V_i a_i\cdot b_i$.
 
     The two BB formulas are:
 
@@ -403,7 +395,9 @@ direction, achieving superlinear convergence near minima.
 
 1.  **Compute tangent gradient** $\boldsymbol{g}_n$ as in Algorithm B.
 
-2.  **Check convergence**: $\tau_{\max} \le \epsilon_\tau$ or $\|\boldsymbol{g}\|^2 < 10^{-30}$.
+2.  **Check convergence**: $\tau_{\max} \le \epsilon_\tau$. An exact
+    degenerate gradient reduction is reported as numerical stagnation rather
+    than convergence.
 
 3.  **Ensure descent direction**: if $\langle \boldsymbol{p}_n, \boldsymbol{g}_n \rangle \ge 0$, reset to steepest descent:
     $\boldsymbol{p}_n \leftarrow -\boldsymbol{g}_n$.
@@ -498,8 +492,9 @@ implementations of the torque check):
 | Energy tolerance | $\max(E)-\min(E) \le \epsilon_E$ over the last 50 accepted relaxation steps | Optional | None |
 | Max iterations | $n \ge n_{\max}$ | Yes (hard cap) | 50000 |
 
-For LLG overdamped, the torque is estimated from the RHS norm (see §3.1.1).
-For BB and NCG, the torque is computed directly as $\|\boldsymbol{m}_i \times \boldsymbol{H}_{\mathrm{eff},i}\|$.
+For all three algorithms, torque is computed directly as
+$\|\boldsymbol{m}_i \times \boldsymbol{H}_{\mathrm{eff},i}\|$ from the fresh
+accepted-state field. RHS norm is reported separately for dynamic diagnostics.
 
 #### 3.1.6 Implementation parameters
 
@@ -514,8 +509,7 @@ expose them via `RelaxationControlIR`.
 | $\lambda_{\max}$ | $10^{-3}$ | — | Ceiling for BB step |
 | $c_1$ (Armijo parameter) | $10^{-4}$ | $10^{-4}$ | Standard value [Nocedal & Wright] |
 | Max backtracks | 20 | 30 | NCG gets more attempts due to CG direction quality |
-| Gradient floor | $10^{-30}$ | $10^{-30}$ | Numerical zero |
-| BB scaling factor | $10^{-6}$ | — | Prevents overflow in accumulated inner products |
+| Degenerate gradient | exact zero | exact zero | Numerical stagnation, not convergence |
 | Restart interval | — | 50 | Prevents CG direction drift |
 | BB alternation | BB1 ↔ BB2 per iteration | — | [Barzilai & Borwein, 1988] |
 
@@ -567,7 +561,8 @@ Available algorithm strings:
 - `"llg_overdamped"` — Algorithm A
 - `"projected_gradient_bb"` — Algorithm B
 - `"nonlinear_cg"` — Algorithm C
-- `"tangent_plane_implicit"` — FEM-only, not yet executable
+- `"tangent_plane_implicit"` — FEM CPU/MFEM development-only in extended mode;
+  strict mode and forced GPU reject it
 
 ### 4.2 ProblemIR representation
 
@@ -585,13 +580,14 @@ The relaxation study is represented as:
 ```rust
 StudyIR::Relaxation {
     algorithm: RelaxationAlgorithmIR,
-    dynamics: DynamicsIR,
-    torque_tolerance: f64,
-    energy_tolerance: Option<f64>,
-    max_steps: u64,
+    dynamics: Option<DynamicsIR>,
+    stop: RelaxStopIR,
     sampling: SamplingIR,
 }
 ```
+
+`dynamics` is required only for `llg_overdamped` and forbidden for direct
+minimizers. Canonical `RelaxStopIR` defaults are `1e-4 A/m` and `50000` steps.
 
 ### 4.3 Planner and capability-matrix impact
 
@@ -599,7 +595,8 @@ The planner gate (`fullmag-plan/src/lib.rs`) allows:
 - `LlgOverdamped` → all FDM backends
 - `ProjectedGradientBb` → all FDM backends
 - `NonlinearCg` → all FDM backends
-- `TangentPlaneImplicit` → **rejected** (FEM-only, not yet implemented)
+- `TangentPlaneImplicit` → rejected on every FDM lane; extended FEM may resolve
+  only to the CPU/MFEM development lane, while strict and forced GPU reject
 
 The runner (`fullmag-runner/src/fdm/cpu/reference.rs`) dispatches:
 - LLG overdamped → existing Heun time-stepping loop

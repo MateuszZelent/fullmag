@@ -1,8 +1,8 @@
 # Shared relaxation stop and field-refresh semantics
 
-- Status: draft
+- Status: implemented backend-specific detail; canonical equilibrium contract in 0580
 - Owners: Fullmag core
-- Last updated: 2026-06-12
+- Last updated: 2026-07-11
 - Related ADRs:
   - `docs/adr/0001-physics-first-python-api.md`
 - Related specs:
@@ -12,6 +12,12 @@
 - Related physics notes:
   - `docs/physics/0500-fdm-relaxation-algorithms.md`
   - `docs/physics/0510-fem-relaxation-algorithms-mfem-gpu.md`
+  - `docs/physics/0580-canonical-relaxation-equilibrium-contract.md`
+
+The cross-layer equilibrium, legality, observable, and completion contract is
+canonical in `0580`. This note retains field-refresh and backend stop detail;
+any conflicting historical pseudo-time or torque statement is superseded by
+`0580`.
 
 ## 1. Problem statement
 
@@ -51,24 +57,23 @@ the execution control explicit.
 | $\tau_{\max}$ | max torque residual $\max_i \lVert \mathbf{m}_i \times \mathbf{H}_{\mathrm{eff},i} \rVert$ | A/m |
 | $\Delta E_{50}$ | total-energy range across the last 50 accepted relax steps, $\max(E)-\min(E)$ | J |
 | $N_{\max}$ | hard iteration cap | 1 |
-| $t_{\mathrm{pseudo,max}}$ | pseudo-time budget used by relax scheduling | s |
-| $t_{\mathrm{phys,max}}$ | physical-time budget for true time-based relax workflows | s |
+| $t_{\mathrm{relax,max}}$ | stage-local execution-time budget for `llg_overdamped` | s |
 | $\Delta t_{\mathrm{demag}}$ | maximum allowed interval between demag refreshes | s |
 
 ### 2.3 Assumptions and approximations
 
-1. The stop contract is shared across FDM and FEM, even when one backend uses a
-   more approximate internal torque estimator than another.
+1. The stop contract is shared across FDM and FEM. Every backend publishes the
+   exact fresh accepted-state field residual; approximate torque reconstruction
+   is not a convergence path.
 2. `demag_interval_s` is an execution-policy control, not a new physical
    observable.
 3. Fullmag public and IR units remain SI-clean. Any ps display is UI-only.
-4. If neither `max_pseudotime_s` nor `max_physical_time_s` is provided, the
-   relax stage is not implicitly time-bounded. `max_steps` remains an iteration
-   cap only and must not be converted into a synthetic pseudo-time budget.
-   Direct minimizers (`projected_gradient_bb`, `nonlinear_cg`, and
-   `tangent_plane_implicit`) do not advance physical time; their accepted line
-   search step size is recorded as pseudo-time. A physical-time budget is valid
-   only for true time-integrated relaxation such as `llg_overdamped`.
+4. `max_relaxation_time_s` is valid only for `llg_overdamped`. Its clock is a
+   stage-local execution coordinate and does not advance a later physical
+   timeline. Direct minimizers (`projected_gradient_bb`, `nonlinear_cg`, and
+   `tangent_plane_implicit`) own neither physical nor pseudo time. Their
+   accepted line-search step has unit `m/A`; runtime reports zero stage time,
+   no synthetic `dt`, and never converts `max_steps` into a time budget.
 5. `energy_tolerance_j` is a stagnation / plateau criterion, not a proof of a
    zero-torque state. Backends that publish `reason=energy` must evaluate it over
    a fixed accepted-step window of 50 total-energy samples. A single small
@@ -104,13 +109,12 @@ the execution control explicit.
 ### 3.3 CPU/GPU/backend interpretation
 
 - CPU and GPU backends must preserve the same stop reasons.
-- A backend may internally use native torque metrics, but the published metric
-  name and threshold must match the shared contract.
+- Every backend computes `max_torque_Apm = max |m x H_eff|` in `A/m` directly
+  from the fresh accepted state. Exact zero is valid. `max_torque_T = mu0 *
+  max_torque_Apm` is the same residual in `T`; neither value is mechanical
+  torque. `max_rhs_norm_per_s = max |dm/dt|` is separate and has unit `1/s`.
 - `llg_overdamped` remains the public meaning of “precession disabled during
   relaxation”; no backend-specific boolean alias is introduced.
-- `gyromagnetic_ratio` used by the fallback torque reconstruction is the
-  reduced `gamma_mu0` in `m/(A s)` (typical value `2.211e5`), not the electron
-  gyromagnetic ratio in `rad/(T s)`.
 - The native energy stop metric is `total_energy_plateau_range_J`, computed as
   `max(E)-min(E)` over the last 50 accepted relax steps. If a torque tolerance is
   configured, the energy plateau only completes the stage when torque is also
@@ -127,12 +131,12 @@ Add:
 
 - `FieldRefreshPolicy(demag_interval_s=...)`
 - `LLG(field_refresh=FieldRefreshPolicy(...))`
-- `RelaxStop(torque_tolerance_apm=..., energy_tolerance_j=..., max_steps=..., max_pseudotime_s=..., max_physical_time_s=...)`
+- `RelaxStop(torque_tolerance_apm=..., energy_tolerance_j=..., max_steps=..., max_relaxation_time_s=...)`
 - `Relaxation(stop=RelaxStop(...))`
 
 Existing scalar relax arguments remain supported as compatibility aliases and
-lower into `RelaxStop`. Their default torque tolerance is the same as
-`RelaxStop()`: `1e-4 A/m`.
+lower into `RelaxStop`. Canonical defaults are `1e-4 A/m` and `50000` steps.
+The relaxation-time member is legal only with `llg_overdamped`.
 
 ### 4.2 ProblemIR representation
 
@@ -150,12 +154,12 @@ scalar fields spread across layers.
 
 - Planner materialization must preserve `field_refresh` and `stop` into
   backend plans.
-- Absence of a time stop in `RelaxStop` must remain semantically unbounded
-  across Python, CLI, planner, runner, and UI. No layer may silently inject a
-  fallback like `dt_initial * max_steps`.
-- Planner must reject `max_physical_time_s` for direct minimizers because those
-  algorithms do not carry physical time. Users must choose `max_pseudotime_s`
-  for direct minimizers or `llg_overdamped` for physical-time relaxation.
+- Absence of a time stop in `RelaxStop` remains semantically unbounded across
+  Python, CLI, planner, runner, and UI. No layer injects `dt_initial * max_steps`.
+- Planner rejects `max_relaxation_time_s` and every `dynamics` payload for
+  direct minimizers. Only `llg_overdamped` owns those controls.
+- Strict mode and forced GPU reject `tangent_plane_implicit`; extended mode may
+  resolve it only to the CPU/MFEM development lane with visible provenance.
 - Capability language remains shared; no UI-only relaxation semantics are
   permitted.
 - The capability matrix must describe this as shared executable relaxation
@@ -164,7 +168,11 @@ scalar fields spread across layers.
 
 ## 5. Runtime, session, and provenance impact
 
-- Every relax stage must terminate with an explicit stop reason.
+- Every relax stage terminates with authoritative execution-owned `status`,
+  `converged`, `reason`, metric kind/value/unit, threshold, step count, and
+  optional algorithm-specific diagnostics. Reaching an iteration/time budget
+  is completed but not converged; numerical stagnation is failed and not
+  converged. Sampled artifacts never infer terminal state.
 - Session/live state carries structured per-stage completion metadata.
 - Control-room logs must expose both requested execution intent and resolved
   refresh policy.

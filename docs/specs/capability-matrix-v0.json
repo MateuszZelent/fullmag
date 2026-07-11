@@ -6,6 +6,7 @@
     "source_visible": "Source or planner scaffolding exists, but the lane is not a legal public executable path.",
     "semantic_only": "Canonical API and IR semantics exist, but the public executable path does not run this feature yet.",
     "reference_executable": "Executable on the trusted reference lane used for correctness and validation.",
+    "development_executable": "Executable only in an explicitly selected development mode; not production-qualified.",
     "partial_production_executable": "Executable only for the explicitly documented bounded production workload.",
     "production_executable": "Executable on the intended production lane.",
     "validated": "Executable and benchmarked with explicit regression coverage for the documented workload."
@@ -32,6 +33,54 @@
         "fixed-step Bogacki-Shampine RK23"
       ],
       "notes": "Staged CPU and CUDA multilayer runners execute the requested fixed-step tableau. Adaptive stepping, staged RK45, and staged ABM3 reject explicitly; native single-grid-compatible CUDA stacks retain their separately qualified integrators."
+    },
+    {
+      "id": "relaxation_llg_overdamped",
+      "label": "Relaxation(llg_overdamped)",
+      "lanes": {
+        "fdm_cpu_reference": "reference_executable",
+        "fdm_gpu_production": "production_executable",
+        "fem_cpu_public": "production_executable",
+        "fem_gpu_public": "production_executable"
+      },
+      "validated_workloads": [],
+      "notes": "Only overdamped LLG owns dynamics, an RK integrator, dt, and a stage-local relaxation clock. Canonical defaults are 1e-4 A/m and 50000 steps. Execution publishes exact accepted-state max_torque_Apm, auxiliary max_torque_T, separate max_rhs_norm_per_s, and authoritative completion."
+    },
+    {
+      "id": "relaxation_projected_gradient_bb",
+      "label": "Relaxation(projected_gradient_bb)",
+      "lanes": {
+        "fdm_cpu_reference": "reference_executable",
+        "fdm_gpu_production": "production_executable",
+        "fem_cpu_public": "production_executable",
+        "fem_gpu_public": "production_executable"
+      },
+      "validated_workloads": [],
+      "notes": "Direct minimization uses the physical mu0 Ms V energy metric and an m/A line-search step. It owns no dynamics, RK, dt, physical time, or pseudo-time. Unsupported heterogeneous cellwise FDM CUDA material payloads reject rather than degrade silently."
+    },
+    {
+      "id": "relaxation_nonlinear_cg",
+      "label": "Relaxation(nonlinear_cg)",
+      "lanes": {
+        "fdm_cpu_reference": "reference_executable",
+        "fdm_gpu_production": "production_executable",
+        "fem_cpu_public": "production_executable",
+        "fem_gpu_public": "production_executable"
+      },
+      "validated_workloads": [],
+      "notes": "PR+ direct minimization uses the same physical energy metric, m/A line-search step, retraction, and Armijo units as PG-BB. It owns no RK or time controls."
+    },
+    {
+      "id": "relaxation_tangent_plane_implicit",
+      "label": "Relaxation(tangent_plane_implicit)",
+      "lanes": {
+        "fdm_cpu_reference": "unsupported",
+        "fdm_gpu_production": "unsupported",
+        "fem_cpu_public": "development_executable",
+        "fem_gpu_public": "unsupported"
+      },
+      "validated_workloads": [],
+      "notes": "TPI is CPU/MFEM development-only, not production-qualified. Strict mode and forced GPU reject. Extended mode may resolve only to CPU/MFEM with explicit requested/resolved provenance and warning. It owns no RK or time controls."
     },
     {
       "id": "slonczewski_stt",

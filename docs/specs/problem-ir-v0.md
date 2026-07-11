@@ -68,7 +68,8 @@ Current public-executable FDM lowering supports:
 
 - `Box` geometry,
 - `LLG(heun)`,
-- `Relaxation(llg_overdamped)` with torque/energy/max-step stopping,
+- `Relaxation` with algorithm-specific dynamics, canonical `RelaxStopIR`, and
+  execution-owned completion semantics,
 - `Exchange`, `Demag`, and `Zeeman` in executable combinations,
 - canonical field outputs `m`, `H_ex`, `H_demag`, `H_ext`, `H_eff`,
 - canonical scalar outputs `E_ex`, `E_demag`, `E_ext`, `E_total`, `time`, `step`, `solver_dt`,
@@ -179,21 +180,36 @@ Current variants:
   - `sampling: SamplingIR`
 - `Relaxation`
   - `algorithm`
-  - `dynamics: DynamicsIR`
-  - `torque_tolerance`
-  - `energy_tolerance`
-  - `max_steps`
+  - `dynamics: Option<DynamicsIR>`
+  - `stop: RelaxStopIR`
   - `sampling: SamplingIR`
 
-Current executable relaxation subset:
+`dynamics` is required for `llg_overdamped` and forbidden for the direct
+minimizers. `RelaxStopIR` carries `torque_tolerance_apm`,
+`energy_tolerance_j`, `max_steps`, and the LLG-only
+`max_relaxation_time_s`. Canonical authoring defaults are `1e-4 A/m` and
+`50000` steps. A PG-BB/NCG/TPI line-search step has unit `m/A`; it is not RK,
+`dt`, physical time, or pseudo-time.
 
-- `algorithm = "llg_overdamped"`
+Current public-executable production relaxation subset:
 
-Defined but not yet public-executable:
+- `llg_overdamped` on documented FDM and FEM lanes,
+- `projected_gradient_bb` and `nonlinear_cg` on documented FDM and FEM
+  CPU/GPU lanes.
 
-- `projected_gradient_bb`
-- `nonlinear_cg`
-- `tangent_plane_implicit`
+Development-only:
+
+- `tangent_plane_implicit`: extended mode may resolve only to the CPU/MFEM
+  development lane with visible requested/resolved provenance; strict mode and
+  forced GPU reject.
+
+Relaxation completion is represented by `StageCompletionIR`: execution owns
+`status`, `converged`, `reason`, metric kind/name/value/unit, and threshold.
+`max_torque_apm` is the accepted-state `max |m x H_eff|` in `A/m`;
+`max_torque_T` is its equivalent induction value in `T`, while
+`max_rhs_norm_per_s` is a separate dynamic observable in `1/s`. Exact zero is
+valid, budget exhaustion is completed but non-converged, and numerical
+stagnation is failed/non-converged. Artifact sampling never infers completion.
 
 ### Planned staged antenna-field extension
 

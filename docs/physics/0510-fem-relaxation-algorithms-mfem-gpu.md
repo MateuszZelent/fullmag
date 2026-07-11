@@ -3,7 +3,7 @@
 
 - Status: production-executable for LLG/PG-BB/NCG; TPI under development
 - Owners: Fullmag core
-- Last updated: 2026-06-04
+- Last updated: 2026-07-11
 - Related ADRs:
   - `docs/adr/0001-physics-first-python-api.md`
 - Related specs:
@@ -16,6 +16,11 @@
   - `docs/physics/0490-fem-higher-order-and-adaptive-time-integrators-mfem-gpu.md`
   - `docs/physics/0530-shared-relaxation-stop-and-field-refresh-semantics.md`
   - `docs/physics/0500-fdm-relaxation-algorithms.md`
+  - `docs/physics/0580-canonical-relaxation-equilibrium-contract.md`
+
+The cross-layer equilibrium, legality, observable, and completion contract is
+canonical in `0580`. This note retains FEM implementation and qualification
+detail; any conflicting historical statement here is superseded by `0580`.
 
 ## 1. Problem statement
 
@@ -28,12 +33,11 @@ Current repo status relevant to this note:
 - `FemPlanIR` already carries mesh data, per-node initial magnetization, material payload,
   active term flags, precision, and LLG timing parameters,
 - the runner executes FEM relaxation through the maintained native FEM lanes,
-- `StudyIR::Relaxation` exists and four FEM relaxation algorithms are
-  production-executable in maintained runtime lanes: `llg_overdamped`,
-  `projected_gradient_bb`, `nonlinear_cg`, and `tangent_plane_implicit` on
-  CPU/MFEM (see `0500-fdm-relaxation-algorithms.md` for the shared stop
-  semantics). TPI GPU/libCEED remains under development and is deliberately
-  excluded from the GPU runtime gate,
+- `StudyIR::Relaxation` exists. `llg_overdamped`, `projected_gradient_bb`, and
+  `nonlinear_cg` are production-executable in their documented native FEM
+  lanes. `tangent_plane_implicit` is a CPU/MFEM development capability only:
+  strict mode and forced GPU reject it, while extended mode may resolve it to
+  CPU/MFEM with explicit requested/resolved provenance,
 - native CPU/MFEM owns executable FEM `projected_gradient_bb` and
   `nonlinear_cg` steps through the `fullmag_fem_backend_relax_step` ABI, using
   tangent gradients, Armijo line search, sphere retraction, FEM lumped-mass
@@ -41,12 +45,13 @@ Current repo status relevant to this note:
   with serial MFEM CG as the production default. HyprePCG/BoomerAMG remains an
   explicit opt-in qualification path via
   `FULLMAG_FEM_DIRECT_MINIMIZER_PRECONDITIONER_SOLVER=hypre`,
-- native CPU/MFEM carries the production-executable FEM
+- native CPU/MFEM carries the development FEM
   `tangent_plane_implicit` path through the same ABI; it solves a global tangent-plane linear system with
   `mass + step * exchange` plus local uniaxial/cubic anisotropy, Zeeman tangent
   curvature, and matrix-free DMI weak-residual and demag fresh-solve actions,
-  while other time-dependent supplied terms remain explicit from the current
-  native snapshot,
+  while nonconservative torques, stochastic fields, time-dependent terms, and
+  interactions without matched field/energy realizations are rejected before
+  every relaxation algorithm,
 - GPU/libCEED residual kernels, broader preconditioning policy, and
   full-device-resident tangent-plane solves are under development, not
   runner-owned fallback paths.
@@ -66,11 +71,12 @@ Current repo status relevant to this note:
   accepted-step loop, persistent search-direction state, PR+ update, rollback,
   and the native GPU NCG preflight/step boundary reached from
   `run_backend_relaxation_step` when a GPU state is allocated.
-- runner capability checks keep only `tangent_plane_implicit` on the CPU/MFEM
-  lane. In automatic runtime selection, TPI falls back to the CPU/MFEM lane with
-  explicit provenance; forced GPU selection remains a clear under-development
-  error while its full GPU/libCEED device-resident tangent-plane solve is under
-  development.
+- runner capability checks keep `tangent_plane_implicit` CPU/MFEM
+  development-only. Strict mode and every forced GPU request reject. Only
+  extended automatic selection may resolve TPI to the CPU/MFEM development
+  lane, with explicit warning and requested/resolved provenance; no hidden
+  GPU-to-CPU fallback is legal while the full GPU/libCEED device-resident
+  tangent-plane solve remains under development.
 
 Shared stop/refresh semantics now live in
 `0530-shared-relaxation-stop-and-field-refresh-semantics.md`. This note focuses
@@ -141,8 +147,11 @@ For shared product semantics with the current FDM runner, the public
 `max |m × H_eff|`. A derived `max_torque_T = μ0 * max_torque_Apm` observable may
 still be surfaced for mumax-style comparability, but it is auxiliary and must
 not replace the canonical stop threshold.
-The fallback `dm/dt` → torque reconstruction uses the reduced `gamma_mu0` in
-`m/(A s)`, so the expected scale is about `2.211e5`, not `1.76e11`.
+The accepted-state field reduction publishes exact `max_torque_Apm` in `A/m`,
+including exact zero. `max_torque_T = mu0 * max_torque_Apm` is the equivalent
+induction residual in `T`, not mechanical torque. `max_rhs_norm_per_s` is the
+separate `max |dm/dt|` dynamic observable in `1/s`; no stop path reconstructs
+field torque from it.
 
 ### 2.3 Symbols and SI units
 
@@ -179,27 +188,14 @@ See:
 This is the easiest baseline because it reuses the dynamic RHS machinery.
 Use adaptive DOPRI54 or similar once explicit RK support exists.
 
-When a relaxation stage needs a pseudo-time execution budget for scheduling,
-preview cadence, or stage materialization, that budget should be seeded from
-the same rule as FDM:
-
-1. `fixed_timestep` when explicitly provided,
-2. otherwise `adaptive_timestep.dt_initial` when explicitly provided by the
-   authoring surface,
-3. otherwise fallback `1e-13 s`.
-
-This pseudo-time is a runtime-control quantity only; convergence remains driven
-by torque and optional energy criteria rather than physical simulation time.
-
-Current authoring note: the embedded Python DSL currently serializes omitted
-adaptive seeds as `dt_initial = dt_min`. The CLI/runtime layer must therefore
-interpret `dt_initial == dt_min` as "no explicit seed supplied" for relaxation
-pseudo-time budgeting, rather than as a request to use the minimum adaptive
-step as the whole stage budget.
+Only `llg_overdamped` owns an RK integrator, `dt`, and a stage-local relaxation
+clock in seconds. PG-BB, NCG, and TPI own no RK or physical/pseudo time; their
+accepted line-search step is in `m/A`. Direct minimizers report zero stage time
+and no synthetic `dt`.
 
 Canonical authoring defaults must also remain aligned across Python and UI.
-For `Relaxation`, the public default `torque_tolerance` is `1e-4 A/m`; UI and
-script-builder defaults are product debt if they diverge from that value.
+For `Relaxation`, the public defaults are `torque_tolerance=1e-4 A/m` and
+`max_steps=50000`; Python, generated API, UI, and script export share them.
 
 Pros:
 
@@ -464,9 +460,9 @@ and nonlinear CG:
   hidden device-host synchronization beyond scalar convergence decisions.
 
 The tangent-plane implicit GPU/libCEED solve is under development and remains
-outside the active GPU solver set for now. Automatic FEM GPU selection falls
-back to the under-development CPU/MFEM TPI path; forced GPU TPI selection fails
-with a clear under-development diagnostic.
+outside the active GPU solver set. Strict mode rejects TPI. Extended automatic
+selection may resolve the requested GPU/auto intent to the CPU/MFEM development
+lane with explicit provenance; forced GPU rejects with a clear diagnostic.
 
 ## 6. Completeness checklist
 

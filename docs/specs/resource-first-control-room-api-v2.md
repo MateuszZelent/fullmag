@@ -120,7 +120,7 @@ or short dashboard summaries, but must not copy full read-model payloads from an
 | `model/geometry/*` | geometry capability, validation, realization, and diagnostic projections derived from the current scene |
 | `simulation/runs/current` and `simulation/runs/{run_id}` | run metadata, requested/resolved execution, artifact location, run-level totals |
 | `simulation/stages/execution` | full stage tree and stage state |
-| `simulation/solver/status` | live solver state: runtime state, step, dt, torque, convergence, warnings |
+| `simulation/solver/status` | live solver state: runtime state, algorithm, step, algorithm-appropriate `dt`, exact torque, separate RHS norm, convergence, stop reason/metric/unit, warnings |
 | `simulation/solver/energies/*` | current and historical energy samples |
 | `data/tables/default/rows` | table-shaped scalar history for ECharts windows, including `cursor`, `from_row`/`to_row`, `from_t`/`to_t`, `limit`, `target_points`, `decimation`, and `include_tail` query identity; JSON rows are the control-plane/debug view, while `rows.bin` is the production data-plane payload for chart values |
 | `data/scalars` | compatibility projection of the default scalar table, not a second scalar-history owner |
@@ -135,6 +135,30 @@ or short dashboard summaries, but must not copy full read-model payloads from an
 | `meshing/meshes/shared-domain/manifest` | mesh identity, mesh provenance, object segments, mesh parts, and tree/selection metadata |
 | `meshing/meshes/*/quality`, `meshing/meshes/*/quality/per-element`, `meshing/meshes/*/report`, and `meshing/meshes/*/size-field` | detailed shared-domain, object-scoped, and airbox-scoped quality summaries, binary per-element quality data, reports, and realized size-field diagnostics |
 | `visualization/client-acks` | latest client-side acknowledgement per browser viewport for observed visualization-state revisions |
+
+### Relaxation solver contract
+
+The simulation resources expose one algorithm-specific relaxation contract:
+
+- defaults are `torque_tolerance_apm=1e-4` (`A/m`) and `max_steps=50000`;
+- only `llg_overdamped` carries integrator, `dt`, damping override, and
+  `max_relaxation_time_s`; PG-BB/NCG hide and reject those fields, and their
+  accepted line-search step has unit `m/A`;
+- `tangent_plane_implicit` is unavailable in strict mode and on forced GPU;
+  extended mode may show the CPU/MFEM development resolution and warning;
+- `max_torque_Apm` is the exact fresh accepted-state `max |m x H_eff|` in
+  `A/m`; `max_torque_T` is its equivalent in `T`, while
+  `max_rhs_norm_per_s` is separate and has unit `1/s`;
+- stage execution owns `status`, `converged`, reason, typed metric/value/unit,
+  threshold, and diagnostics. Budget exhaustion is completed/non-converged;
+  numerical stagnation is failed/non-converged. Table rows and artifacts do
+  not infer completion.
+
+The Study Explorer node and its Inspector consume these typed v2 resources
+through the generated transport, handwritten facade, and resource hooks. They
+do not construct endpoints or reinterpret torque units. HTTP v2 remains the
+snapshot source of truth; websocket events only invalidate the affected
+status, stage-execution, or solver-status resource.
 
 Transitional duplicate fields in meshing schemas are allowed only for current frontend adapters and
 must be documented as transitional in OpenAPI schema descriptions. New consumers should read from the
