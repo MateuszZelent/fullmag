@@ -3409,14 +3409,17 @@ export function useViewport3DSceneModel({
   const fieldRefresh = useMemo<Viewport3DFieldRefreshState>(
     () => ({
       enabled: computeRunning && fieldVectorEnabled,
+      payloadRevision: fieldVector.payloadRevision ?? null,
       quantityId: primaryFieldQuantityId,
       resourceKey: fieldVectorResourceKey,
       revision: fieldVector.revision,
+      requestedRevision: fieldVector.revision,
       status: fieldVector.status,
     }),
     [
       computeRunning,
       fieldVector.revision,
+      fieldVector.payloadRevision,
       fieldVector.status,
       fieldVectorEnabled,
       fieldVectorResourceKey,
@@ -3706,7 +3709,10 @@ export function useViewport3DSceneModel({
     cache: getCacheStats(),
     dataPlaneIssues,
     fieldDemandDiagnostics,
+    fieldPayloadRevision: fieldVector.payloadRevision ?? null,
     fieldRevision: fieldVector.payloadRevision ?? fieldVector.revision,
+    fieldRequestedRevision: fieldVector.revision,
+    fieldStatus: fieldVector.status,
     manifestCarrierDegradedCount:
       femDomain.renderCarrierDiagnostics?.degradedCarrierCount,
     manifestCarrierKind: femDomain.renderCarrierDiagnostics?.kind,

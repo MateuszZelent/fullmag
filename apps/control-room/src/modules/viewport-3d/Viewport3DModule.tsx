@@ -1847,6 +1847,8 @@ const Viewport3DFieldRefreshCountdown = memo(
     const display = resolveViewport3DRefreshCountdownDisplay({
       enabled: refresh.enabled,
       nowMs: countdown.nowMs,
+      payloadRevision: refresh.payloadRevision,
+      requestedRevision: refresh.requestedRevision,
       sample: countdown.sample,
       status: refresh.status,
     });
@@ -1890,7 +1892,9 @@ const Viewport3DFieldRefreshCountdown = memo(
         data-pulse-id={countdown.sample.pulseId}
         data-refresh-state={display.state}
         data-resource-key={refresh.resourceKey}
+        data-payload-revision={refresh.payloadRevision ?? "none"}
         data-revision={refresh.revision ?? "none"}
+        data-requested-revision={refresh.requestedRevision ?? "none"}
         style={style}
       >
         <span

@@ -60,7 +60,10 @@ export interface Viewport3DDiagnosticsInput {
   cache: ResourceCacheStats;
   dataPlaneIssues?: readonly string[];
   fieldDemandDiagnostics?: readonly Viewport3DFieldDemandDiagnosticSummary[];
+  fieldPayloadRevision?: string | number | null;
   fieldRevision: string | number | null;
+  fieldRequestedRevision?: string | number | null;
+  fieldStatus?: "loading" | "stale" | "ready" | "idle" | "error";
   objectCount: number;
   manifestCarrierDegradedCount?: number;
   manifestCarrierKind?: string | null;
@@ -391,7 +394,8 @@ export function buildViewport3DDiagnostics(
   return [
     `q:${input.quantityId}`,
     `top:${input.topologyRevision ?? "none"}`,
-    `field:${input.fieldRevision ?? "none"}`,
+    `field:${input.fieldPayloadRevision ?? input.fieldRevision ?? "none"}`,
+    ...formatFieldSyncDiagnostic(input),
     ...(input.surfaceColorStatus
       ? [`surface:${input.surfaceColorStatus}`]
       : []),
@@ -413,6 +417,24 @@ export function buildViewport3DDiagnostics(
     `worker-runtime:${input.tracker.workerRuntimeWorkers ?? 0}/${input.tracker.workerRuntimeTimers ?? 0}/${input.tracker.workerRuntimeJobs ?? 0}`,
     `frames:${input.tracker.frames}`,
   ].join(" ");
+}
+
+function formatFieldSyncDiagnostic(
+  input: Viewport3DDiagnosticsInput,
+): string[] {
+  if (
+    (input.fieldStatus !== "loading" && input.fieldStatus !== "stale") ||
+    input.fieldPayloadRevision === null ||
+    input.fieldPayloadRevision === undefined ||
+    input.fieldRequestedRevision === null ||
+    input.fieldRequestedRevision === undefined ||
+    Object.is(input.fieldPayloadRevision, input.fieldRequestedRevision)
+  ) {
+    return [];
+  }
+  return [
+    `field syncing r${input.fieldPayloadRevision} -> r${input.fieldRequestedRevision}`,
+  ];
 }
 
 function formatBuildFallbackDiagnostics(

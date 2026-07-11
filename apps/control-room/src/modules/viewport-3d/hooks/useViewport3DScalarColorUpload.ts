@@ -367,7 +367,6 @@ export function useViewport3DScalarShaderColorUpload({
       })) {
         return;
       }
-      deleteViewport3DScalarShaderAttributes(geometry);
       store.publish(null, geometry, null);
       tracker.recordDirtyFrame(dirtyReason);
       invalidate();
@@ -380,7 +379,6 @@ export function useViewport3DScalarShaderColorUpload({
       vertexCount,
     );
     if (!uploadPlan) {
-      deleteViewport3DScalarShaderAttributes(geometry);
       store.publish(null, geometry, null);
       tracker.recordDirtyFrame(dirtyReason);
       invalidate();
@@ -518,33 +516,12 @@ export function createViewport3DScalarShaderColorUploadPlan(
       0,
     ),
     onVisible: () => {
-      const visibleNames = new Set(attributes.map((entry) => entry.name));
       for (const entry of attributes) {
         if (!entry.wasAttached) {
           geometry.setAttribute(entry.name, entry.attribute);
         }
         entry.attribute.needsUpdate = true;
       }
-      deleteShaderAttributeIfAbsent(
-        geometry,
-        visibleNames,
-        VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE,
-      );
-      deleteShaderAttributeIfAbsent(
-        geometry,
-        visibleNames,
-        VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE,
-      );
-      deleteShaderAttributeIfAbsent(
-        geometry,
-        visibleNames,
-        VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE,
-      );
-      deleteShaderAttributeIfAbsent(
-        geometry,
-        visibleNames,
-        VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE,
-      );
     },
   };
 }
@@ -619,21 +596,4 @@ function createViewport3DScalarShaderUploadStore():
       };
     },
   };
-}
-
-function deleteViewport3DScalarShaderAttributes(geometry: BufferGeometry): void {
-  geometry.deleteAttribute(VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE);
-  geometry.deleteAttribute(VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE);
-  geometry.deleteAttribute(VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE);
-  geometry.deleteAttribute(VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE);
-}
-
-function deleteShaderAttributeIfAbsent(
-  geometry: BufferGeometry,
-  visibleNames: ReadonlySet<string>,
-  name: string,
-): void {
-  if (!visibleNames.has(name)) {
-    geometry.deleteAttribute(name);
-  }
 }

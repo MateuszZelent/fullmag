@@ -10,9 +10,11 @@ const VIEWPORT_3D_REFRESH_COUNTDOWN_MIN_TICK_MS = 250;
 
 export interface Viewport3DFieldRefreshState {
   enabled: boolean;
+  payloadRevision?: ResourceRevision | null;
   quantityId: string;
   resourceKey: string;
   revision: ResourceRevision | null;
+  requestedRevision?: ResourceRevision | null;
   status: ResourceStatus;
 }
 
@@ -104,6 +106,8 @@ export function updateViewport3DRefreshSample(
 export function resolveViewport3DRefreshCountdownDisplay(input: {
   enabled: boolean;
   nowMs: number;
+  payloadRevision?: ResourceRevision | null;
+  requestedRevision?: ResourceRevision | null;
   sample: Viewport3DRefreshSample;
   status: ResourceStatus;
 }): Viewport3DRefreshCountdownDisplay | null {
@@ -122,9 +126,15 @@ export function resolveViewport3DRefreshCountdownDisplay(input: {
   }
 
   if (input.status === "loading" || input.status === "stale") {
+    const syncRevisions = formatViewport3DFieldSyncRevisions({
+      payloadRevision: input.payloadRevision,
+      requestedRevision: input.requestedRevision,
+    });
     return {
-      ariaLabel: "Field refresh in progress",
-      detail: "syncing",
+      ariaLabel: syncRevisions
+        ? `Field refresh in progress, ${syncRevisions}`
+        : "Field refresh in progress",
+      detail: syncRevisions ?? "syncing",
       progress: 1,
       state: "syncing",
       title: "Field sync",
@@ -171,6 +181,25 @@ export function resolveViewport3DRefreshCountdownDisplay(input: {
     state: "counting",
     title: "Next field sync",
   };
+}
+
+function formatViewport3DFieldSyncRevisions({
+  payloadRevision,
+  requestedRevision,
+}: {
+  payloadRevision: ResourceRevision | null | undefined;
+  requestedRevision: ResourceRevision | null | undefined;
+}): string | null {
+  if (
+    payloadRevision === null ||
+    payloadRevision === undefined ||
+    requestedRevision === null ||
+    requestedRevision === undefined ||
+    Object.is(payloadRevision, requestedRevision)
+  ) {
+    return null;
+  }
+  return `r${payloadRevision} → r${requestedRevision}`;
 }
 
 function formatViewport3DRefreshRemaining(ms: number): string {

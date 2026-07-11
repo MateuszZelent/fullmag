@@ -40,6 +40,7 @@ import {
 import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
 import type { Viewport3DMagnetizationTexturePreview } from "../viewport3dPrimitiveModel";
 import { createViewport3DIndexedPointGeometry } from "../viewport3dPointGeometry";
+import { attachViewport3DSharedTopologyPosition } from "../viewport3dSharedTopologyPositions";
 import {
   canApplyScalarShaderColorBuffer,
   createScalarSurfaceShaderMaterial,
@@ -129,7 +130,7 @@ export function createMeshPartSurfaceGeometry({
   if (!surfaceIndices?.length) return null;
   const next = new BufferGeometry();
   if (!expandSurfaceFaces) {
-    next.setAttribute("position", new BufferAttribute(positions, 3));
+    attachViewport3DSharedTopologyPosition(next, positions);
     next.setIndex(new BufferAttribute(surfaceIndices, 1));
     return next;
   }
@@ -408,10 +409,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   const createEdgeGeometry = useCallback(() => {
     if (!topologyModel || !edgeIndices) return null;
     const next = new BufferGeometry();
-    next.setAttribute(
-      "position",
-      new BufferAttribute(topologyModel.positions, 3),
-    );
+    attachViewport3DSharedTopologyPosition(next, topologyModel.positions);
     next.setIndex(new BufferAttribute(edgeIndices, 1));
     return next;
   }, [edgeIndices, topologyModel]);
