@@ -31,16 +31,13 @@ export function RelaxStageInspector(props: StageInspectorFrameProps) {
           label="Max steps"
           value={stage?.maxSteps ?? draft?.maxSteps ?? "not set"}
         />
-        <FieldRow
-          label="Pseudo time"
-          value={draft?.maxPseudotime || "not set"}
-          unit={draft?.maxPseudotime ? "s" : undefined}
-        />
-        <FieldRow
-          label="Physical time cap"
-          value={draft?.maxPhysicalTime || "not set"}
-          unit={draft?.maxPhysicalTime ? "s" : undefined}
-        />
+        {draft?.algorithm === "llg_overdamped" ? (
+          <FieldRow
+            label="Max relaxation time"
+            value={draft.maxRelaxationTime || "not set"}
+            unit={draft.maxRelaxationTime ? "s" : undefined}
+          />
+        ) : null}
       </InspectorSection>
       <InspectorSection
         value="relax-numerics"
@@ -48,12 +45,17 @@ export function RelaxStageInspector(props: StageInspectorFrameProps) {
         badge={draft?.algorithm ?? "algorithm"}
       >
         <FieldRow label="Algorithm" value={draft?.algorithm ?? "not set"} />
-        <FieldRow label="Solver" value={draft?.solver || "default"} />
-        <FieldRow label="dt" value={draft?.dt || "auto"} />
-        <FieldRow label="dt min" value={draft?.dtMin || "not set"} />
-        <FieldRow label="Max error" value={draft?.maxError || "not set"} />
-        <FieldRow label="Relax alpha" value={draft?.relaxAlpha || "not set"} />
-        <FieldRow label="Field refresh" value={draft?.fieldEvery || "not set"} />
+        {draft?.algorithm === "llg_overdamped" ? (
+          <>
+            <FieldRow label="Integrator" value={draft.solver || "default"} />
+            <FieldRow label="Fixed dt" value={draft.dt || "auto"} />
+            <FieldRow label="Adaptive dt min" value={draft.dtMin || "not set"} />
+            <FieldRow label="Adaptive tolerance" value={draft.maxError || "not set"} />
+            <FieldRow label="Relax alpha" value={draft.relaxAlpha || "not set"} />
+            <FieldRow label="Demag interval" value={draft.demagInterval || "not set"} />
+            <FieldRow label="Field refresh" value={draft.fieldEvery || "not set"} />
+          </>
+        ) : null}
       </InspectorSection>
       <InspectorSection value="relax-results" title="Relax Results">
         <FieldRow
@@ -69,6 +71,16 @@ export function RelaxStageInspector(props: StageInspectorFrameProps) {
           value={stage?.runtimeMetric?.threshold ?? "not available"}
         />
         <FieldRow label="Stop reason" value={stage?.stopReason ?? "not available"} />
+        <FieldRow
+          label="Converged"
+          value={
+            stage?.converged === null || stage?.converged === undefined
+              ? "not reported"
+              : stage.converged
+                ? "yes"
+                : "no"
+          }
+        />
       </InspectorSection>
     </>
   );

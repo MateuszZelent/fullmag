@@ -9,6 +9,26 @@ import {
 const TORQUE_TOLERANCE_FOR_1E_4_T = 1e-4 / (4 * Math.PI * 1e-7);
 
 describe("StudyInspectorPanelModel", () => {
+  it("does not reconstruct canonical torque from the auxiliary Tesla field", () => {
+    const model = resolveStudyInspectorModel({
+      currentRun: null,
+      snapshot: studySnapshotFromScene(null),
+      solverStatus: {
+        can_accept_commands: true,
+        is_busy: false,
+        max_torque_T: 1e-5,
+        revision: 1,
+        runtime_state: "idle",
+        runtime_status_code: "idle",
+        runtime_status_kind: "idle",
+        session_status: "ready",
+        warnings: [],
+      } as never,
+      stageExecution: null,
+    });
+    expect(model.runtime.maxTorque).toBe("unavailable");
+    expect(model.runtime.torqueDiagnostic).toContain("max_torque_Apm");
+  });
   it("projects stage authoring, boundary policy, runtime progress, and max torque", () => {
     const snapshot = studySnapshotFromScene({
       study: {
@@ -128,7 +148,7 @@ describe("StudyInspectorPanelModel", () => {
       commandError: null,
       commandId: null,
       commandLabel: "Command queue pending",
-      maxTorque: "3.000000e-3 T",
+      maxTorque: "3.000000e-3 T / 2.387324e3 A/m",
       progressPercent: 25,
       relaxTorqueStop: {
         current: "3.000000e-3 T / 2.387324e3 A/m",
@@ -244,6 +264,8 @@ describe("StudyInspectorPanelModel", () => {
         converged: true,
         is_busy: false,
         max_torque_Apm: 75,
+        max_torque_T: 999,
+        max_rhs_norm_per_s: 2.5e8,
         revision: 12,
         runtime_state: "completed",
         runtime_status_code: "completed",
@@ -264,6 +286,7 @@ describe("StudyInspectorPanelModel", () => {
             checkpoint_ref: "cp-relaxed",
             command_id: "cmd-relax",
             completed_at_unix_ms: 1_700_000_010_000,
+            converged: true,
             index: 0,
             kind: "relax",
             metric_name: "max_torque_apm",
@@ -291,8 +314,14 @@ describe("StudyInspectorPanelModel", () => {
       },
       status: "completed",
       stopReason: "torque",
+      converged: true,
     });
     expect(model.runtime.state).toBe("completed");
+    expect(model.runtime.maxTorque).toBe(
+      "9.424778e-5 T / 7.500000e1 A/m",
+    );
+    expect(model.runtime.maxRhsNorm).toBe("2.500000e8 1/s");
+    expect(model.runtime.converged).toBe("yes");
     expect(model.runtime.relaxTorqueStop?.status).toBe("93.8% of threshold");
   });
 

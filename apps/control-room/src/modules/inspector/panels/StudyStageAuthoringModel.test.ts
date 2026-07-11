@@ -4,11 +4,187 @@ import {
   buildStudyStagesMergePatch,
   createDefaultStudyStageDraft,
   createStudyStageDraft,
+  relaxationAlgorithmAvailability,
   studyStageDraftToSceneStage,
   validateStudyStageDraft,
 } from "./StudyStageAuthoringModel";
 
 describe("StudyStageAuthoringModel", () => {
+  it("uses canonical relaxation defaults", () => {
+    expect(createDefaultStudyStageDraft("relax", 0)).toMatchObject({
+      algorithm: "llg_overdamped",
+      maxSteps: "50000",
+      torqueTolerance: "0.0001",
+    });
+  });
+
+  it("serializes algorithm-specific canonical relaxation fields", () => {
+    const llg = studyStageDraftToSceneStage({
+      ...createDefaultStudyStageDraft("relax", 0),
+      demagInterval: "2e-12",
+      dt: "1e-13",
+      energyTolerance: "1e-20",
+      maxRelaxationTime: "4e-9",
+      solver: "rk45",
+      timestepMode: "fixed",
+    });
+    expect(llg).toMatchObject({
+      algorithm: "llg_overdamped",
+      demag_interval_s: 2e-12,
+      energy_tolerance_j: 1e-20,
+      fixed_timestep: 1e-13,
+      integrator: "rk45",
+      max_relaxation_time_s: 4e-9,
+      max_steps: 50000,
+      torque_tolerance_apm: 1e-4,
+    });
+
+    const direct = studyStageDraftToSceneStage({
+      ...createDefaultStudyStageDraft("relax", 0),
+      algorithm: "projected_gradient_bb",
+      demagInterval: "2e-12",
+      dt: "1e-13",
+      maxRelaxationTime: "4e-9",
+      relaxAlpha: "1",
+      solver: "rk45",
+    });
+    expect(direct).toMatchObject({
+      algorithm: "projected_gradient_bb",
+      max_steps: 50000,
+      torque_tolerance_apm: 1e-4,
+    });
+    expect(direct).not.toHaveProperty("demag_interval_s");
+    expect(direct).not.toHaveProperty("fixed_timestep");
+    expect(direct).not.toHaveProperty("integrator");
+    expect(direct).not.toHaveProperty("max_relaxation_time_s");
+    expect(direct).not.toHaveProperty("relax_alpha");
+  });
+
+  it("round-trips canonical LLG relaxation controls", () => {
+    const draft = createStudyStageDraft(
+      {
+        algorithm: "llg_overdamped",
+        demag_interval_s: 2e-12,
+        energy_tolerance_j: 1e-20,
+        fixed_timestep: 1e-13,
+        integrator: "rk45",
+        kind: "relax",
+        max_relaxation_time_s: 4e-9,
+        max_steps: 50000,
+        stage_id: "relax-1",
+        torque_tolerance_apm: 1e-4,
+      },
+      0,
+    );
+    expect(draft).toMatchObject({
+      demagInterval: "2e-12",
+      dt: "1e-13",
+      energyTolerance: "1e-20",
+      maxRelaxationTime: "4e-9",
+      solver: "rk45",
+      torqueTolerance: "0.0001",
+    });
+  });
+
+  it("preserves adaptive timestep mode without converting dt_initial to fixed", () => {
+    const draft = createStudyStageDraft(
+      {
+        adaptive_timestep: { atol: 1e-6, dt_initial: 2e-15, dt_min: 1e-17 },
+        algorithm: "llg_overdamped",
+        kind: "relax",
+        max_steps: 50000,
+        stage_id: "adaptive",
+        torque_tolerance_apm: 1e-4,
+      },
+      0,
+    );
+    expect(draft).toMatchObject({
+      dt: "2e-15",
+      dtMin: "1e-17",
+      maxError: "0.000001",
+      timestepMode: "adaptive",
+    });
+    expect(studyStageDraftToSceneStage(draft)).toMatchObject({
+      adaptive_timestep: { atol: 1e-6, dt_initial: 2e-15, dt_min: 1e-17 },
+    });
+    expect(studyStageDraftToSceneStage(draft)).not.toHaveProperty("fixed_timestep");
+  });
+
+  it("rejects simultaneous fixed and adaptive timestep controls", () => {
+    const draft = createStudyStageDraft(
+      {
+        adaptive_timestep: { atol: 1e-6, dt_initial: 2e-15 },
+        algorithm: "llg_overdamped",
+        fixed_timestep: 1e-13,
+        kind: "relax",
+        max_steps: 50000,
+        stage_id: "conflict",
+        torque_tolerance_apm: 1e-4,
+      },
+      0,
+    );
+    expect(validateStudyStageDraft(draft)).toContainEqual({
+      message: "Fixed and adaptive timestep controls are mutually exclusive.",
+      severity: "error",
+    });
+  });
+
+  it("gates tangent-plane implicit to the development FEM CPU lane", () => {
+    const draft = {
+      ...createDefaultStudyStageDraft("relax", 0),
+      algorithm: "tangent_plane_implicit",
+    };
+    expect(
+      validateStudyStageDraft(draft, {
+        backend: "fem",
+        device: "gpu",
+        mode: "strict",
+      }),
+    ).toContainEqual({
+      message:
+        "Tangent-plane implicit is development-only and requires FEM CPU in extended mode.",
+      severity: "error",
+    });
+    expect(
+      validateStudyStageDraft(draft, {
+        backend: "fem",
+        device: "cpu",
+        mode: "extended",
+      }),
+    ).toEqual([]);
+  });
+
+  it("distinguishes unknown capabilities from an explicitly unavailable algorithm", () => {
+    const draft = createDefaultStudyStageDraft("relax", 0);
+    expect(validateStudyStageDraft(draft)).toEqual([]);
+    expect(
+      validateStudyStageDraft(draft, {
+        algorithmsAvailable: [],
+        backend: "fdm",
+        device: "cpu",
+        mode: "strict",
+      }),
+    ).toContainEqual({
+      message:
+        "llg_overdamped is not advertised by the active session capabilities.",
+      severity: "error",
+    });
+  });
+
+  it("requires both static and advertised capability for TPI", () => {
+    expect(
+      relaxationAlgorithmAvailability("tangent_plane_implicit", {
+        algorithmsAvailable: ["llg_overdamped"],
+        backend: "fem",
+        device: "cpu",
+        mode: "extended",
+      }),
+    ).toEqual({
+      reason:
+        "tangent_plane_implicit is not advertised by the active session capabilities.",
+      supported: false,
+    });
+  });
   it("creates an editable relax draft from a canonical scene stage", () => {
     expect(
       createStudyStageDraft(
@@ -38,8 +214,7 @@ describe("StudyStageAuthoringModel", () => {
       fieldEvery: "10",
       kind: "relax",
       maxError: "0.0001",
-      maxPhysicalTime: "5e-9",
-      maxPseudotime: "2e-9",
+      maxRelaxationTime: "5e-9",
       maxSteps: "1000",
       relaxAlpha: "0.7",
       solver: "rk45",
@@ -421,13 +596,13 @@ describe("StudyStageAuthoringModel", () => {
       energyTolerance: "1e-10",
       fieldEvery: "10",
       maxError: "1e-4",
-      maxPhysicalTime: "5e-9",
-      maxPseudotime: "2e-9",
+      maxRelaxationTime: "5e-9",
       maxSteps: "1000",
       relaxAlpha: "0.7",
       solver: "rk45",
       stageId: "relax-1",
       torqueTolerance: "1e-6",
+      timestepMode: "adaptive" as const,
     };
     const run = {
       ...createDefaultStudyStageDraft("run", 1),
@@ -442,23 +617,17 @@ describe("StudyStageAuthoringModel", () => {
           stages: [
             {
               algorithm: "llg_overdamped",
-              dt: "auto",
-              dt_min: 1e-18,
-              energy_tolerance: 1e-10,
+              adaptive_timestep: { atol: 1e-4, dt_min: 1e-18 },
+              energy_tolerance_j: 1e-10,
               entrypoint_kind: "flat_relax",
               field_refresh: { every_n: 10 },
-              fixed_timestep: "",
               integrator: "rk45",
               kind: "relax",
-              max_error: 1e-4,
-              max_physical_time_s: 5e-9,
-              max_pseudotime_s: 2e-9,
+              max_relaxation_time_s: 5e-9,
               max_steps: 1000,
-              relax_algorithm: "llg_overdamped",
               relax_alpha: 0.7,
-              solver: "rk45",
               stage_id: "relax-1",
-              torque_tolerance: 1e-6,
+              torque_tolerance_apm: 1e-6,
             },
             {
               entrypoint_kind: "flat_run",
@@ -477,9 +646,9 @@ describe("StudyStageAuthoringModel", () => {
       studyStageDraftToSceneStage({
         ...createDefaultStudyStageDraft("relax", 0),
         dt: "5e-15",
+        timestepMode: "fixed",
       }),
     ).toMatchObject({
-      dt: 5e-15,
       fixed_timestep: 5e-15,
     });
   });

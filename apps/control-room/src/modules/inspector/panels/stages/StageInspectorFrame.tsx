@@ -32,6 +32,7 @@ export type FrequencyDomainAuthoringView =
   | "diagnostics";
 
 export interface StageInspectorFrameProps {
+  algorithmsAvailable?: readonly string[];
   authoringView?: FrequencyDomainAuthoringView;
   authoringBusy: boolean;
   authoringFeedback: {
@@ -44,6 +45,9 @@ export interface StageInspectorFrameProps {
   kindLabel: string;
   onCommit: () => void;
   onUpdateDraft: (patch: Partial<StudyStageDraft>) => void;
+  requestedBackend?: string;
+  requestedDevice?: string;
+  requestedMode?: string;
   runRuntimeCommand?: (commandId: string, input?: unknown) => void;
   runtimeCommandDisabledReason?: (commandId: string) => string | null;
   stage: StudyStageModel | null;
@@ -52,6 +56,7 @@ export interface StageInspectorFrameProps {
 }
 
 export function StageInspectorFrame({
+  algorithmsAvailable,
   authoringView = "overview",
   authoringBusy,
   authoringFeedback,
@@ -61,6 +66,9 @@ export function StageInspectorFrame({
   kindLabel,
   onCommit,
   onUpdateDraft,
+  requestedBackend,
+  requestedDevice,
+  requestedMode,
   stage,
   stageExecutionRevision,
   validation,
@@ -133,8 +141,12 @@ export function StageInspectorFrame({
       <InspectorSection value="authoring" title="Authoring" badge={kindLabel}>
         {draft && isExpectedDraft ? (
           <StudyStageDraftEditor
+            algorithmsAvailable={algorithmsAvailable}
             draft={draft}
             index={draftIndex}
+            requestedBackend={requestedBackend}
+            requestedDevice={requestedDevice}
+            requestedMode={requestedMode}
             view={authoringView}
             validation={validation}
             onUpdate={onUpdateDraft}
@@ -251,6 +263,13 @@ export function StageInspectorFrame({
           value={stage?.runtimeMetric?.threshold ?? "not available"}
         />
         <FieldRow label="Stop reason" value={stage?.stopReason ?? "not available"} />
+        {stage?.transition ? (
+          <>
+            <FieldRow label="Fallback" value={stage.transition.label ?? "reported"} />
+            <FieldRow label="Fallback reason" value={stage.transition.reason ?? "not available"} />
+            <FieldRow label="Fallback presentation" value={stage.transition.uiPresentation ?? "not available"} />
+          </>
+        ) : null}
         <FieldRow
           label="Checkpoint"
           value={stage?.checkpointRef ?? "not available"}

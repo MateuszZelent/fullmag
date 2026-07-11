@@ -95,15 +95,10 @@ interface RuntimePreconditionRefreshApi {
 }
 
 const DEFAULT_RELAX_STAGE: JsonObject = {
+  algorithm: "llg_overdamped",
   entrypoint_kind: "relax",
-  energy_tolerance: "",
-  fixed_timestep: "",
-  integrator: "auto",
   kind: "relax",
-  max_physical_time_s: "",
-  max_pseudotime_s: "",
-  max_steps: "10000",
-  relax_algorithm: "llg_overdamped",
+  max_steps: "50000",
   torque_tolerance_apm: DEFAULT_RELAX_TORQUE_APM,
 };
 

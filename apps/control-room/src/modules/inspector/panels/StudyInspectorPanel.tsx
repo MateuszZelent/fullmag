@@ -398,7 +398,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 type StudyInspectorRuntimeStatus = {
   capabilities: Pick<
     LiveStatusResource["capabilities"],
-    "binary_fields" | "explicit_topology"
+    "algorithms_available" | "binary_fields" | "explicit_topology"
   >;
   domain: Pick<LiveStatusResource["domain"], "discretization">;
   resources: Pick<
@@ -419,6 +419,7 @@ function selectStudyInspectorRuntimeStatus(status: {
   if (!status.data) return null;
   return {
     capabilities: {
+      algorithms_available: status.data.capabilities.algorithms_available,
       binary_fields: status.data.capabilities.binary_fields,
       explicit_topology: status.data.capabilities.explicit_topology,
     },
@@ -747,6 +748,7 @@ export function useStudyInspectorPanelController(
     inspectImportFile,
     latestCheckpoint,
     model,
+    runtimeStatus,
     runCommand,
     scene,
     sceneHasPayload,
@@ -776,6 +778,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
     inspectImportFile,
     latestCheckpoint,
     model,
+    runtimeStatus,
     runCommand,
     scene,
     sceneHasPayload,
@@ -842,6 +845,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
 
         <StudyPipelineSection
           activeStageIndex={activeStageIndex}
+          algorithmsAvailable={runtimeStatus?.capabilities.algorithms_available}
           authoringBusy={state.authoringBusy}
           authoringFeedback={
             state.authoringFeedbackScope === "stages"
@@ -997,7 +1001,24 @@ function StudyRuntimeSection({
       {model.runtime.commandError ? (
         <FieldRow label="Command error" value={model.runtime.commandError} />
       ) : null}
+      {model.runtime.backendDiagnostic ? (
+        <FieldRow label="Backend failure" value={model.runtime.backendDiagnostic} />
+      ) : null}
+      {model.runtime.warnings?.map((warning, index) => (
+        <FieldRow key={`${index}:${warning}`} label="Runtime warning" value={warning} />
+      ))}
       <FieldRow label="Max torque" value={model.runtime.maxTorque} />
+      {model.runtime.torqueDiagnostic ? (
+        <FieldRow label="Torque diagnostic" value={model.runtime.torqueDiagnostic} />
+      ) : null}
+      <FieldRow
+        label="Max RHS norm"
+        value={model.runtime.maxRhsNorm ?? "unavailable"}
+      />
+      <FieldRow
+        label="Converged"
+        value={model.runtime.converged ?? "not reported"}
+      />
       {model.runtime.relaxTorqueStop ? (
         <>
           <FieldRow

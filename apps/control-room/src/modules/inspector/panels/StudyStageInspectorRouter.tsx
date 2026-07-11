@@ -22,6 +22,7 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
     commitStageDrafts,
     dispatch,
     model,
+    runtimeStatus,
     runCommand,
     scene,
     sceneHasPayload,
@@ -32,7 +33,14 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
   } = useStudyInspectorPanelController(selection);
   const selectedIndex = model.selectedStage?.index ?? state.selectedDraftIndex;
   const draft = state.stageDrafts[selectedIndex] ?? null;
-  const validation = draft ? validateStudyStageDraft(draft) : [];
+  const validation = draft
+    ? validateStudyStageDraft(draft, {
+        algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
+        backend: model.requested.backend,
+        device: model.requested.device,
+        mode: model.requested.mode,
+      })
+    : [];
   const selectedStageKind = model.selectedStage?.kind ?? draft?.kind ?? null;
   const inspectorKind = resolveStudyStageInspectorKind(selection.kind, selectedStageKind);
   const frequencyDomainAuthoringView =
@@ -43,6 +51,7 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
       : "overview";
   const commonProps = {
     authoringBusy: state.authoringBusy,
+    algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
     authoringFeedback:
       state.authoringFeedbackScope === "stages" ? state.authoringFeedback : null,
     draft,
@@ -50,6 +59,9 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
     onCommit: () => void commitStageDrafts(),
     onUpdateDraft: (patch: Partial<(typeof state.stageDrafts)[number]>) =>
       dispatch({ type: "updateStageDraft", index: selectedIndex, patch }),
+    requestedBackend: model.requested.backend,
+    requestedDevice: model.requested.device,
+    requestedMode: model.requested.mode,
     runRuntimeCommand: runCommand,
     runtimeCommandDisabledReason: commandDisabledReason,
     stage: model.selectedStage,

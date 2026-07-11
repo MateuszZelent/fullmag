@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_RELAX_TORQUE_APM,
   apmFromTesla,
   formatTorquePairFromApm,
   formatTorqueT,
@@ -8,6 +9,9 @@ import {
 } from "./torqueUnits";
 
 describe("torqueUnits", () => {
+  it("owns the canonical relaxation default in A/m", () => {
+    expect(DEFAULT_RELAX_TORQUE_APM).toBe(1e-4);
+  });
   it("converts torque residuals between mumax-compatible T and canonical A/m", () => {
     const apm = apmFromTesla(1e-5);
 

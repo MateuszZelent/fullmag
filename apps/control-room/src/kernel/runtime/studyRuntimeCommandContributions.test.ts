@@ -48,8 +48,6 @@ import {
 
 import { STUDY_RUNTIME_COMMANDS } from "./studyRuntimeCommandContributions";
 
-const DEFAULT_RELAX_TORQUE_T = 1e-5;
-const MU0_T_PER_APM = 4 * Math.PI * 1e-7;
 
 function registryWithStudyRuntimeCommands(): CommandRegistry {
   const registry = new CommandRegistry();
@@ -339,10 +337,15 @@ describe("study runtime command contributions", () => {
       torque_tolerance_apm: expect.any(Number),
     });
     expect(stage).not.toHaveProperty("torque_tolerance");
-    expect(stage?.torque_tolerance_apm).toBeCloseTo(
-      DEFAULT_RELAX_TORQUE_T / MU0_T_PER_APM,
-      12,
-    );
+    expect(stage).not.toHaveProperty("energy_tolerance_j");
+    expect(stage).not.toHaveProperty("fixed_timestep");
+    expect(stage).not.toHaveProperty("integrator");
+    expect(stage).not.toHaveProperty("max_relaxation_time_s");
+    expect(stage?.torque_tolerance_apm).toBeCloseTo(1e-4, 12);
+    expect(stage).toMatchObject({
+      algorithm: "llg_overdamped",
+      max_steps: "50000",
+    });
   });
 
   it("adds each authored study stage kind through command registry merge patches", async () => {

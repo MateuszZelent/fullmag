@@ -21,6 +21,7 @@ import { FormField } from "../primitives/FormField";
 import { InspectorSection } from "../primitives/InspectorSection";
 
 import {
+  relaxationAlgorithmAvailability,
   validateStudyStageDraft,
   type StudyStageDraft,
   type StudyStageDraftKind,
@@ -113,6 +114,7 @@ type StudyCommandDisabledReason = (commandId: string) => string | null;
 
 export function StudyPipelineSection({
   activeStageIndex,
+  algorithmsAvailable,
   authoringBusy,
   authoringFeedback,
   commandDisabledReason,
@@ -131,6 +133,7 @@ export function StudyPipelineSection({
   showDraftEditor = true,
 }: {
   activeStageIndex: number | null;
+  algorithmsAvailable?: readonly string[];
   authoringBusy: boolean;
   authoringFeedback: {
     kind: "error" | "success" | "warning";
@@ -151,7 +154,14 @@ export function StudyPipelineSection({
   runCommand: StudyCommandRunner;
   showDraftEditor?: boolean;
 }) {
-  const validation = draft ? validateStudyStageDraft(draft) : [];
+  const validation = draft
+    ? validateStudyStageDraft(draft, {
+        algorithmsAvailable,
+        backend: model.requested.backend,
+        device: model.requested.device,
+        mode: model.requested.mode,
+      })
+    : [];
   const hasDraftErrors = validation.some((issue) => issue.severity === "error");
   return (
     <InspectorSection
@@ -173,7 +183,11 @@ export function StudyPipelineSection({
       {showDraftEditor && draft ? (
         <StudyStageDraftEditor
           draft={draft}
+          algorithmsAvailable={algorithmsAvailable}
           index={draftIndex}
+          requestedBackend={model.requested.backend}
+          requestedDevice={model.requested.device}
+          requestedMode={model.requested.mode}
           validation={validation}
           onUpdate={(patch) => onUpdateDraft(draftIndex, patch)}
         />
@@ -398,15 +412,23 @@ function StageCard({
 }
 
 export function StudyStageDraftEditor({
+  algorithmsAvailable,
   draft,
   index,
   onUpdate,
+  requestedBackend = "auto",
+  requestedDevice = "auto",
+  requestedMode = "strict",
   validation,
   view = "overview",
 }: {
   draft: StudyStageDraft;
+  algorithmsAvailable?: readonly string[];
   index: number;
   onUpdate: (patch: Partial<StudyStageDraft>) => void;
+  requestedBackend?: string;
+  requestedDevice?: string;
+  requestedMode?: string;
   validation: readonly { message: string; severity: "error" | "warning" }[];
   view?: FrequencyDomainAuthoringView;
 }) {
@@ -476,7 +498,14 @@ export function StudyStageDraftEditor({
       ) : draft.kind === "change_device" ? (
         <ChangeDeviceStageDraftFields draft={draft} onUpdate={onUpdate} />
       ) : (
-        <RelaxStageDraftFields draft={draft} onUpdate={onUpdate} />
+        <RelaxStageDraftFields
+          algorithmsAvailable={algorithmsAvailable}
+          draft={draft}
+          onUpdate={onUpdate}
+          requestedBackend={requestedBackend}
+          requestedDevice={requestedDevice}
+          requestedMode={requestedMode}
+        />
       )}
     </div>
   );
@@ -726,6 +755,8 @@ function HysteresisStageDraftFields({
       />
       <FormField
         label="Torque tol"
+        unit="A/m"
+        hint="Canonical maximum |m × H_eff| threshold. Tesla is display-only via μ₀ conversion."
         value={draft.torqueTolerance}
         onChange={(event) => onUpdate({ torqueTolerance: event.target.value })}
       />
@@ -1851,27 +1882,84 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function RelaxStageDraftFields({
+  algorithmsAvailable,
   draft,
   onUpdate,
+  requestedBackend,
+  requestedDevice,
+  requestedMode,
 }: {
   draft: StudyStageDraft;
+  algorithmsAvailable?: readonly string[];
   onUpdate: (patch: Partial<StudyStageDraft>) => void;
+  requestedBackend: string;
+  requestedDevice: string;
+  requestedMode: string;
 }) {
+  const tpiEligible =
+    requestedMode === "extended" &&
+    requestedBackend === "fem" &&
+    requestedDevice === "cpu";
+  const availability = (value: string) =>
+    relaxationAlgorithmAvailability(value, {
+      algorithmsAvailable,
+      backend: requestedBackend,
+      device: requestedDevice,
+      mode: requestedMode,
+    });
+  const algorithmSupported = (value: string) => availability(value).supported;
   return (
     <>
       <FormField
         label="Algorithm"
         type="select"
         value={draft.algorithm}
-        onChange={(event) => onUpdate({ algorithm: event.target.value })}
+        onChange={(event) => {
+          const algorithm = event.target.value;
+          onUpdate(
+            algorithm === "llg_overdamped"
+              ? { algorithm }
+              : {
+                  algorithm,
+                  demagInterval: "",
+                  dt: "",
+                  dtMin: "",
+                  fieldEvery: "",
+                  maxError: "",
+                  maxRelaxationTime: "",
+                  relaxAlpha: "",
+                  solver: "",
+                },
+          );
+        }}
       >
-        <option value="llg_overdamped">LLG overdamped</option>
-        <option value="projected_gradient_bb">Projected gradient BB</option>
-        <option value="nonlinear_cg">Nonlinear CG</option>
-        <option value="tangent_plane_implicit">Tangent-plane implicit</option>
+        <option value="llg_overdamped" disabled={!algorithmSupported("llg_overdamped")}>
+          LLG overdamped{algorithmSupported("llg_overdamped") ? "" : " (not advertised by active session)"}
+        </option>
+        <option value="projected_gradient_bb" disabled={!algorithmSupported("projected_gradient_bb")}>
+          Projected gradient BB{algorithmSupported("projected_gradient_bb") ? "" : " (not advertised by active session)"}
+        </option>
+        <option value="nonlinear_cg" disabled={!algorithmSupported("nonlinear_cg")}>
+          Nonlinear CG{algorithmSupported("nonlinear_cg") ? "" : " (not advertised by active session)"}
+        </option>
+        {tpiEligible || draft.algorithm === "tangent_plane_implicit" ? (
+          <option
+            value="tangent_plane_implicit"
+            disabled={
+              !tpiEligible || !algorithmSupported("tangent_plane_implicit")
+            }
+          >
+            Tangent-plane implicit (development CPU only)
+            {algorithmSupported("tangent_plane_implicit")
+              ? ""
+              : ` — ${availability("tangent_plane_implicit").reason}`}
+          </option>
+        ) : null}
       </FormField>
       <FormField
         label="Torque tol"
+        unit="A/m"
+        hint="Canonical max |m × H_eff| threshold; tesla is a derived display conversion."
         value={draft.torqueTolerance}
         onChange={(event) => onUpdate({ torqueTolerance: event.target.value })}
       />
@@ -1886,57 +1974,107 @@ function RelaxStageDraftFields({
         value={draft.maxSteps}
         onChange={(event) => onUpdate({ maxSteps: event.target.value })}
       />
-      <FormField
-        label="Pseudo time"
-        unit="s"
-        value={draft.maxPseudotime}
-        onChange={(event) => onUpdate({ maxPseudotime: event.target.value })}
-      />
-      <FormField
-        label="Physical time"
-        unit="s"
-        value={draft.maxPhysicalTime}
-        onChange={(event) => onUpdate({ maxPhysicalTime: event.target.value })}
-      />
-      <FormField
-        label="Relax alpha"
-        value={draft.relaxAlpha}
-        onChange={(event) => onUpdate({ relaxAlpha: event.target.value })}
-      />
-      <FormField
-        label="Solver"
-        type="select"
-        value={draft.solver}
-        onChange={(event) => onUpdate({ solver: event.target.value })}
-      >
-        <option value="">Default</option>
-        <option value="rk23">RK23</option>
-        <option value="rk45">RK45</option>
-        <option value="heun">Heun</option>
-        <option value="euler">Euler</option>
-      </FormField>
-      <FormField
-        label="dt"
-        value={draft.dt}
-        onChange={(event) => onUpdate({ dt: event.target.value })}
-      />
-      <FormField
-        label="dt min"
-        unit="s"
-        value={draft.dtMin}
-        onChange={(event) => onUpdate({ dtMin: event.target.value })}
-      />
-      <FormField
-        label="Max error"
-        value={draft.maxError}
-        onChange={(event) => onUpdate({ maxError: event.target.value })}
-      />
-      <FormField
-        label="Field every"
-        hint="Push field samples every N solver steps."
-        value={draft.fieldEvery}
-        onChange={(event) => onUpdate({ fieldEvery: event.target.value })}
-      />
+      {draft.algorithm === "llg_overdamped" ? (
+        <>
+          <FormField
+            label="Max relaxation time"
+            unit="s"
+            value={draft.maxRelaxationTime}
+            onChange={(event) => onUpdate({ maxRelaxationTime: event.target.value })}
+          />
+          <FormField
+            label="Relax alpha"
+            value={draft.relaxAlpha}
+            onChange={(event) => onUpdate({ relaxAlpha: event.target.value })}
+          />
+          <FormField
+            label="Integrator"
+            hint="Per-integrator capability reasons are not published; the active-session planner validates this choice."
+            type="select"
+            value={draft.solver}
+            onChange={(event) => onUpdate({ solver: event.target.value })}
+          >
+            <option value="">Default</option>
+            <option value="rk23">RK23</option>
+            <option value="rk45">RK45</option>
+            <option value="heun">Heun</option>
+          </FormField>
+          <FormField
+            label="Timestep mode"
+            type="select"
+            value={draft.timestepMode}
+            onChange={(event) =>
+              onUpdate(
+                event.target.value === "fixed"
+                  ? {
+                      dt: "",
+                      dtMin: "",
+                      maxError: "",
+                      timestepConflict: false,
+                      timestepMode: "fixed",
+                    }
+                  : event.target.value === "adaptive"
+                    ? {
+                        dt: "",
+                        timestepConflict: false,
+                        timestepMode: "adaptive",
+                      }
+                    : {
+                        dt: "",
+                        dtMin: "",
+                        maxError: "",
+                        timestepConflict: false,
+                        timestepMode: "auto",
+                      },
+              )
+            }
+          >
+            <option value="auto">Auto</option>
+            <option value="fixed">Fixed</option>
+            <option value="adaptive">Adaptive</option>
+          </FormField>
+          {draft.timestepMode === "fixed" ? (
+            <FormField
+              label="Fixed dt"
+              unit="s"
+              value={draft.dt}
+              onChange={(event) => onUpdate({ dt: event.target.value })}
+            />
+          ) : draft.timestepMode === "adaptive" ? (
+            <>
+              <FormField
+                label="Initial dt"
+                unit="s"
+                value={draft.dt}
+                onChange={(event) => onUpdate({ dt: event.target.value })}
+              />
+              <FormField
+                label="Adaptive dt min"
+                unit="s"
+                value={draft.dtMin}
+                onChange={(event) => onUpdate({ dtMin: event.target.value })}
+              />
+              <FormField
+                label="Adaptive tolerance"
+                value={draft.maxError}
+                onChange={(event) => onUpdate({ maxError: event.target.value })}
+              />
+            </>
+          ) : null}
+          <FormField
+            label="Demag interval"
+            unit="s"
+            value={draft.demagInterval}
+            onChange={(event) => onUpdate({ demagInterval: event.target.value })}
+          />
+          <FormField
+            label="Field every"
+            hint="Push field samples every N solver steps."
+            value={draft.fieldEvery}
+            onChange={(event) => onUpdate({ fieldEvery: event.target.value })}
+          />
+        </>
+      ) : null}
     </>
   );
 }

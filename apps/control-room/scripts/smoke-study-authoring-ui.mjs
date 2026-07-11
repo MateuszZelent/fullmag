@@ -5,6 +5,8 @@ const timeoutMs = Number(
 );
 const frequencyOnly =
   process.env.CONTROL_ROOM_STUDY_AUTHORING_SMOKE_FREQUENCY_ONLY === "1";
+const relaxationOnly =
+  process.env.CONTROL_ROOM_STUDY_AUTHORING_SMOKE_RELAXATION_ONLY === "1";
 
 async function loadPlaywright() {
   try {
@@ -231,6 +233,42 @@ try {
     timeout: timeoutMs,
   });
 
+  const inspector = page.locator(".fm-inspector");
+  await page.locator('[data-node-id="model:study:stages:stage:relax-1"]').click();
+  const algorithm = inspector.getByLabel("Algorithm");
+  await inspector.getByLabel("Integrator").waitFor({ state: "visible" });
+  await inspector.getByLabel("Max relaxation time").waitFor({ state: "visible" });
+  const tpiOption = algorithm.locator('option[value="tangent_plane_implicit"]');
+  if ((await tpiOption.count()) > 0 && !(await tpiOption.isDisabled())) {
+    throw new Error("TPI must be unavailable for the strict-mode fixture.");
+  }
+  for (const directAlgorithm of ["projected_gradient_bb", "nonlinear_cg"]) {
+    await algorithm.selectOption(directAlgorithm);
+    if (await inspector.getByLabel("Integrator").isVisible()) {
+      throw new Error(`${directAlgorithm} exposed LLG-only integrator controls.`);
+    }
+    if (await inspector.getByLabel("Max relaxation time").isVisible()) {
+      throw new Error(`${directAlgorithm} exposed an LLG-only time budget.`);
+    }
+  }
+  await algorithm.selectOption("llg_overdamped");
+  await inspector.getByLabel("Integrator").selectOption("rk23");
+
+  await inspector.getByText("Relax Results").waitFor({ state: "visible" });
+  await inspector
+    .getByText("9.424778e-11 T / 7.500000e-5 A/m")
+    .first()
+    .waitFor({ state: "visible" });
+  await inspector
+    .getByText("torque", { exact: true })
+    .first()
+    .waitFor({ state: "visible" });
+  await inspector
+    .getByText("yes", { exact: true })
+    .first()
+    .waitFor({ state: "visible" });
+  await page.locator('[data-node-id="model:study"]').click();
+
   await page.getByLabel("CPU threads").fill("16");
   await page
     .getByRole("textbox", { name: "Solver" })
@@ -240,8 +278,20 @@ try {
     .fill('{"linear_solver":"gmres","tolerance":1e-9}');
   await page.getByRole("button", { name: /Save globals/i }).click();
   await waitForTransactionCount(1);
+  await page.locator('[data-node-id="model:study:stages:stage:relax-1"]').click();
+  await inspector.getByText("failed", { exact: true }).first().waitFor({
+    state: "visible",
+  });
+  await inspector
+    .getByText("numerical_stagnation", { exact: true })
+    .first()
+    .waitFor({ state: "visible" });
+  await inspector
+    .getByText("no", { exact: true })
+    .first()
+    .waitFor({ state: "visible" });
+  await page.locator('[data-node-id="model:study"]').click();
 
-  const inspector = page.locator(".fm-inspector");
   await inspector
     .getByTestId("study-stage-authoring-toolbar")
     .getByRole("button", { name: /^Run$/i })
@@ -279,7 +329,9 @@ try {
 
   assertGlobalTransaction(transactions[0]);
   assertStageTransaction(transactions[2]);
-  if (frequencyOnly) {
+  if (relaxationOnly) {
+    // The relaxation-only lane ends after canonical authoring and terminal-state checks.
+  } else if (frequencyOnly) {
     await addFrequencyResponseAndEditExcitation(3);
     await verifyFrequencyDomainModalResults();
     await verifyFrequencyDomainResponseResults();
@@ -1837,7 +1889,11 @@ function sessionStatus() {
   return {
     api_contract_version: "1.0.0",
     capabilities: {
-      algorithms_available: [],
+      algorithms_available: [
+        "llg_overdamped",
+        "projected_gradient_bb",
+        "nonlinear_cg",
+      ],
       binary_fields: true,
       cell_fields: true,
       eigen_modes: true,
@@ -1941,27 +1997,48 @@ function objectMetrics(objectId) {
 }
 
 function stageExecution() {
+  const relaxCompleted = sceneRevision === 1;
   return {
     active_stage_index: null,
     active_stage_kind: null,
-    completed_stage_indexes: [],
+    completed_stage_indexes: relaxCompleted ? [0] : [],
     revision: sceneRevision,
     runtime_state: "idle",
-    stage_statuses: scene.study.stages.map(() => "queued"),
+    stage_statuses: scene.study.stages.map((_, index) =>
+      index === 0 ? (relaxCompleted ? "completed" : "failed") : "queued",
+    ),
     stages: scene.study.stages.map((stage, index) => ({
+      converged: index === 0 ? relaxCompleted : false,
       index,
       kind: stage.kind,
+      metric_kind: index === 0 ? "max_torque_apm" : undefined,
+      metric_name: index === 0 ? "max_torque_apm" : undefined,
+      metric_unit: index === 0 ? "A/m" : undefined,
+      metric_value: index === 0 ? 7.5e-5 : undefined,
+      reason:
+        index === 0
+          ? relaxCompleted
+            ? "torque"
+            : "numerical_stagnation"
+          : undefined,
       stage_id: stage.stage_id ?? `stage-${index + 1}`,
-      status: "queued",
+      status:
+        index === 0 ? (relaxCompleted ? "completed" : "failed") : "queued",
+      threshold: index === 0 ? 1e-4 : undefined,
     })),
     total_stages: scene.study.stages.length,
   };
 }
 
 function solverStatus() {
+  const relaxCompleted = sceneRevision === 1;
   return {
     can_accept_commands: true,
     is_busy: false,
+    converged: relaxCompleted,
+    max_rhs_norm_per_s: 2.5e8,
+    max_torque_Apm: 7.5e-5,
+    max_torque_T: 999,
     revision: sceneRevision,
     runtime_state: "idle",
     runtime_status_code: "idle",
@@ -2268,10 +2345,14 @@ function assertStageTransaction(transaction) {
   const [relax, run] = stages;
   if (
     relax.entrypoint_kind !== "flat_relax" ||
+    relax.algorithm !== "llg_overdamped" ||
     relax.integrator !== "rk23" ||
-    relax.fixed_timestep !== ""
+    relax.fixed_timestep !== undefined ||
+    relax.torque_tolerance_apm !== 1e-6 ||
+    relax.relax_algorithm !== undefined ||
+    relax.torque_tolerance !== undefined
   ) {
-    throw new Error("Relax stage did not serialize script-builder aliases.");
+    throw new Error("Relax stage did not serialize the canonical payload.");
   }
   if (
     run.kind !== "run" ||

@@ -1,6 +1,5 @@
 const MU0_T_PER_APM = 4 * Math.PI * 1e-7;
-const DEFAULT_RELAX_TORQUE_T = 1e-5;
-export const DEFAULT_RELAX_TORQUE_APM = apmFromTesla(DEFAULT_RELAX_TORQUE_T);
+export const DEFAULT_RELAX_TORQUE_APM = 1e-4;
 
 export function apmFromTesla(valueT: number): number {
   return valueT / MU0_T_PER_APM;

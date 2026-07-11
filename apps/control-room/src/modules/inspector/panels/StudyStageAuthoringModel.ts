@@ -1,4 +1,5 @@
 import type { AuthoringTransactionRequest, JsonObject, JsonValue } from "@/kernel/api/apiTypes";
+import { DEFAULT_RELAX_TORQUE_APM } from "@/shared/domain/physics/torqueUnits";
 import {
   DEFAULT_HYSTERESIS_BRANCH_MODE,
   DEFAULT_HYSTERESIS_FIELD_MAX_MT,
@@ -125,6 +126,7 @@ export interface StudyStageDraft {
   count: string;
   dampingPolicy: string;
   dataset: string;
+  demagInterval: string;
   deviceTarget: string;
   dt: string;
   dtMin: string;
@@ -149,6 +151,7 @@ export interface StudyStageDraft {
   maxError: string;
   maxPhysicalTime: string;
   maxPseudotime: string;
+  maxRelaxationTime: string;
   maxSteps: string;
   normalization: string;
   observable: string;
@@ -161,6 +164,8 @@ export interface StudyStageDraft {
   stopField: string;
   target: string;
   targetFrequency: string;
+  timestepConflict: boolean;
+  timestepMode: "adaptive" | "auto" | "fixed";
   frequencyMin: string;
   frequencyMax: string;
   torqueTolerance: string;
@@ -194,6 +199,41 @@ export interface StudyStageDraftValidation {
   severity: "error" | "warning";
 }
 
+export function relaxationAlgorithmAvailability(
+  algorithm: string,
+  execution: {
+    algorithmsAvailable?: readonly string[];
+    backend: string;
+    device: string;
+    mode: string;
+  },
+): { reason: string | null; supported: boolean } {
+  if (
+    execution.algorithmsAvailable !== undefined &&
+    !execution.algorithmsAvailable.includes(algorithm)
+  ) {
+    return {
+      reason: `${algorithm} is not advertised by the active session capabilities.`,
+      supported: false,
+    };
+  }
+  if (
+    algorithm === "tangent_plane_implicit" &&
+    !(
+      execution.mode === "extended" &&
+      execution.backend === "fem" &&
+      execution.device === "cpu"
+    )
+  ) {
+    return {
+      reason:
+        "Tangent-plane implicit is development-only and requires FEM CPU in extended mode.",
+      supported: false,
+    };
+  }
+  return { reason: null, supported: true };
+}
+
 const DEFAULT_RELAX_STAGE_DRAFT: StudyStageDraft = {
   algorithm: "llg_overdamped",
   artifactName: "state_snapshot",
@@ -202,6 +242,7 @@ const DEFAULT_RELAX_STAGE_DRAFT: StudyStageDraft = {
   count: "10",
   dampingPolicy: "ignore",
   dataset: "",
+  demagInterval: "",
   deviceTarget: "cpu",
   dt: "auto",
   dtMin: "",
@@ -226,6 +267,7 @@ const DEFAULT_RELAX_STAGE_DRAFT: StudyStageDraft = {
   maxError: "",
   maxPhysicalTime: "",
   maxPseudotime: "",
+  maxRelaxationTime: "",
   maxSteps: "50000",
   normalization: "unit_l2",
   observable: "susceptibility_tensor",
@@ -238,9 +280,11 @@ const DEFAULT_RELAX_STAGE_DRAFT: StudyStageDraft = {
   stopField: "0, 0, 0.1",
   target: "lowest",
   targetFrequency: "",
+  timestepConflict: false,
+  timestepMode: "auto",
   frequencyMin: "",
   frequencyMax: "",
-  torqueTolerance: "1e-6",
+  torqueTolerance: String(DEFAULT_RELAX_TORQUE_APM),
   untilSeconds: "",
   protocolKind: "",
   initialStatePolicy: "",
@@ -273,6 +317,7 @@ const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
   count: "10",
   dampingPolicy: "ignore",
   dataset: "",
+  demagInterval: "",
   deviceTarget: "cpu",
   dt: "auto",
   dtMin: "",
@@ -297,6 +342,7 @@ const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
   maxError: "",
   maxPhysicalTime: "",
   maxPseudotime: "",
+  maxRelaxationTime: "",
   maxSteps: "",
   normalization: "unit_l2",
   observable: "susceptibility_tensor",
@@ -309,6 +355,8 @@ const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
   stopField: "0, 0, 0.1",
   target: "lowest",
   targetFrequency: "",
+  timestepConflict: false,
+  timestepMode: "auto",
   frequencyMin: "",
   frequencyMax: "",
   torqueTolerance: "",
@@ -613,31 +661,57 @@ export function createStudyStageDraft(
     };
   }
 
+  const hasFixedTimestep =
+    record?.fixed_timestep !== undefined &&
+    record?.fixed_timestep !== null &&
+    record?.fixed_timestep !== "";
+  const hasAdaptiveTimestep = record?.adaptive_timestep != null;
   return {
     ...DEFAULT_RELAX_STAGE_DRAFT,
     algorithm: scalarText(
       record?.algorithm ?? record?.relax_algorithm,
       DEFAULT_RELAX_STAGE_DRAFT.algorithm,
     ),
-    dt: scalarText(record?.dt, DEFAULT_RELAX_STAGE_DRAFT.dt),
-    dtMin: scalarText(record?.dt_min, ""),
-    energyTolerance: scalarText(record?.energy_tolerance, ""),
+    demagInterval: scalarText(
+      record?.demag_interval_s ?? asRecord(record?.field_refresh)?.demag_interval_s,
+      "",
+    ),
+    dt: scalarText(
+      record?.fixed_timestep ??
+        asRecord(record?.adaptive_timestep)?.dt_initial ??
+        record?.dt,
+      DEFAULT_RELAX_STAGE_DRAFT.dt,
+    ),
+    dtMin: scalarText(
+      asRecord(record?.adaptive_timestep)?.dt_min ?? record?.dt_min,
+      "",
+    ),
+    energyTolerance: scalarText(record?.energy_tolerance_j ?? record?.energy_tolerance, ""),
     fieldEvery: scalarText(
       asRecord(record?.field_refresh)?.every_n ??
         record?.field_every_n,
       "",
     ),
     kind: "relax",
-    maxError: scalarText(record?.max_error, ""),
+    maxError: scalarText(
+      asRecord(record?.adaptive_timestep)?.atol ?? record?.max_error,
+      "",
+    ),
     maxPhysicalTime: scalarText(record?.max_physical_time_s, ""),
     maxPseudotime: scalarText(record?.max_pseudotime_s, ""),
+    maxRelaxationTime: scalarText(
+      record?.max_relaxation_time_s ??
+        record?.max_physical_time_s ??
+        record?.max_pseudotime_s,
+      "",
+    ),
     maxSteps: scalarText(record?.max_steps, DEFAULT_RELAX_STAGE_DRAFT.maxSteps),
     relaxAlpha: scalarText(record?.relax_alpha, DEFAULT_RELAX_STAGE_DRAFT.relaxAlpha),
-    solver: scalarText(record?.solver, DEFAULT_RELAX_STAGE_DRAFT.solver),
+    solver: scalarText(record?.integrator ?? record?.solver, DEFAULT_RELAX_STAGE_DRAFT.solver),
     stageId: stringValue(record?.stage_id ?? record?.id, `stage-${index + 1}`),
     torqueTolerance: scalarText(
-      record?.torque_tolerance ??
-        record?.torque_tolerance_apm ??
+      record?.torque_tolerance_apm ??
+        record?.torque_tolerance ??
         record?.tol,
       DEFAULT_RELAX_STAGE_DRAFT.torqueTolerance,
     ),
@@ -647,6 +721,13 @@ export function createStudyStageDraft(
         record?.max_pseudotime_s,
       "",
     ),
+    timestepConflict: hasFixedTimestep && hasAdaptiveTimestep,
+    timestepMode:
+      hasAdaptiveTimestep
+        ? "adaptive"
+        : hasFixedTimestep
+          ? "fixed"
+          : "auto",
   };
 }
 
@@ -870,29 +951,38 @@ export function studyStageDraftToSceneStage(
     entrypoint_kind: "flat_relax",
     kind: "relax",
     max_steps: requiredInteger(draft.maxSteps, "max_steps"),
-    relax_algorithm: requiredText(draft.algorithm, "llg_overdamped"),
     stage_id: requiredText(draft.stageId, "relax"),
-    torque_tolerance: requiredNumber(draft.torqueTolerance, "torque_tolerance"),
+    torque_tolerance_apm: requiredNumber(
+      draft.torqueTolerance,
+      "torque_tolerance_apm",
+    ),
   };
 
-  setOptionalNumber(stage, "energy_tolerance", draft.energyTolerance);
-  setOptionalNumber(stage, "max_physical_time_s", draft.maxPhysicalTime);
-  setOptionalNumber(stage, "max_pseudotime_s", draft.maxPseudotime);
-  setOptionalNumber(stage, "max_error", draft.maxError);
-  setOptionalNumber(stage, "dt_min", draft.dtMin);
-  setOptionalNumber(stage, "relax_alpha", draft.relaxAlpha);
-  setOptionalText(stage, "solver", draft.solver);
-  setOptionalText(stage, "integrator", draft.solver);
-  if (draft.dt.trim() === "auto" || draft.dt.trim().length === 0) {
-    stage.dt = "auto";
-    stage.fixed_timestep = "";
-  } else {
-    stage.dt = requiredNumber(draft.dt, "dt");
-    stage.fixed_timestep = stage.dt;
-  }
-  const fieldEvery = optionalInteger(draft.fieldEvery);
-  if (fieldEvery !== null) {
-    stage.field_refresh = { every_n: fieldEvery };
+  setOptionalNumber(stage, "energy_tolerance_j", draft.energyTolerance);
+  if (draft.algorithm === "llg_overdamped") {
+    setOptionalNumber(
+      stage,
+      "max_relaxation_time_s",
+      draft.maxRelaxationTime,
+    );
+    setOptionalNumber(stage, "relax_alpha", draft.relaxAlpha);
+    setOptionalText(stage, "integrator", draft.solver);
+    if (draft.timestepMode === "fixed" && draft.dt.trim()) {
+      stage.fixed_timestep = requiredNumber(draft.dt, "fixed_timestep");
+    } else if (draft.timestepMode === "adaptive") {
+      const adaptive: JsonObject = {};
+      setOptionalNumber(adaptive, "atol", draft.maxError);
+      if (draft.dt.trim() !== "auto") {
+        setOptionalNumber(adaptive, "dt_initial", draft.dt);
+      }
+      setOptionalNumber(adaptive, "dt_min", draft.dtMin);
+      stage.adaptive_timestep = adaptive;
+    }
+    const fieldRefresh: JsonObject = {};
+    const fieldEvery = optionalInteger(draft.fieldEvery);
+    if (fieldEvery !== null) fieldRefresh.every_n = fieldEvery;
+    if (Object.keys(fieldRefresh).length > 0) stage.field_refresh = fieldRefresh;
+    setOptionalNumber(stage, "demag_interval_s", draft.demagInterval);
   }
 
   return stage;
@@ -900,6 +990,12 @@ export function studyStageDraftToSceneStage(
 
 export function validateStudyStageDraft(
   draft: StudyStageDraft,
+  execution?: {
+    algorithmsAvailable?: readonly string[];
+    backend: string;
+    device: string;
+    mode: string;
+  },
 ): StudyStageDraftValidation[] {
   const issues: StudyStageDraftValidation[] = [];
   if (!draft.stageId.trim()) {
@@ -1027,27 +1123,30 @@ export function validateStudyStageDraft(
   validatePositiveNumber(issues, draft.torqueTolerance, "Torque tolerance", true);
   validatePositiveInteger(issues, draft.maxSteps, "Max steps", true);
   validatePositiveNumber(issues, draft.energyTolerance, "Energy tolerance", false);
-  validatePositiveNumber(issues, draft.maxPhysicalTime, "Max physical time", false);
-  validatePositiveNumber(issues, draft.maxPseudotime, "Max pseudotime", false);
-  validatePositiveNumber(issues, draft.relaxAlpha, "Relax alpha", false);
-  validatePositiveNumber(issues, draft.maxError, "Max error", false);
-  validatePositiveNumber(issues, draft.dtMin, "dt_min", false);
-  validatePositiveInteger(issues, draft.fieldEvery, "Field refresh", false);
-  if (draft.dt.trim() && draft.dt.trim() !== "auto") {
-    validatePositiveNumber(issues, draft.dt, "dt", true);
+  const availability = execution
+    ? relaxationAlgorithmAvailability(draft.algorithm, execution)
+    : null;
+  if (availability && !availability.supported) {
+    issues.push({
+      message: availability.reason ?? "Relaxation algorithm is unavailable.",
+      severity: "error",
+    });
   }
-  if (draft.algorithm !== "llg_overdamped") {
-    const hasLlgOnly =
-      draft.solver.trim() ||
-      draft.dt.trim() ||
-      draft.dtMin.trim() ||
-      draft.maxError.trim();
-    if (hasLlgOnly) {
+  if (draft.algorithm === "llg_overdamped") {
+    if (draft.timestepConflict) {
       issues.push({
-        message:
-          "solver, dt, dt_min, and max_error apply only to llg_overdamped.",
-        severity: "warning",
+        message: "Fixed and adaptive timestep controls are mutually exclusive.",
+        severity: "error",
       });
+    }
+    validatePositiveNumber(issues, draft.maxRelaxationTime, "Max relaxation time", false);
+    validatePositiveNumber(issues, draft.relaxAlpha, "Relax alpha", false);
+    validatePositiveNumber(issues, draft.maxError, "Max error", false);
+    validatePositiveNumber(issues, draft.dtMin, "dt_min", false);
+    validatePositiveNumber(issues, draft.demagInterval, "Demag interval", false);
+    validatePositiveInteger(issues, draft.fieldEvery, "Field refresh", false);
+    if (draft.timestepMode !== "auto" && draft.dt.trim()) {
+      validatePositiveNumber(issues, draft.dt, "dt", true);
     }
   }
   return issues;

@@ -535,11 +535,17 @@ describe("StudyInspectorPanel", () => {
     expect(html).toContain("Frequency");
     expect(html).toContain("Save");
     expect(html).toContain("Torque tol");
+    expect(html).toContain("A/m");
+    expect(html).toContain("max |m × H_eff|");
     expect(html).toContain("Max steps");
     expect(html).toContain("Field every");
     expect(html).toContain("RK45");
+    expect(html).toContain("Timestep mode");
+    expect(html).not.toContain("Fixed dt");
+    expect(html).not.toContain("Initial dt");
+    expect(html).not.toContain("Adaptive dt min");
     expect(html).toContain("Nonlinear CG");
-    expect(html).toContain("Tangent-plane implicit");
+    expect(html).not.toContain("Tangent-plane implicit");
   });
 
   it("shows runtime progress labels on stage pipeline progress bars", () => {

@@ -58,6 +58,7 @@ export type StudyStageModel = StudyStageSnapshot & {
   commandId: string | null;
   completedAtIso: string | null;
   completedAtUnixMs: number | null;
+  converged?: boolean | null;
   label: string;
   lastProgressUnixMs?: number | null;
   startedAtUnixMs?: number | null;
@@ -109,7 +110,12 @@ export interface StudyInspectorModel {
     commandError: string | null;
     commandId: string | null;
     commandLabel: string;
+    backendDiagnostic?: string | null;
+    warnings?: readonly string[];
     maxTorque: string;
+    torqueDiagnostic?: string | null;
+    maxRhsNorm?: string;
+    converged?: string;
     progressPercent: number;
     relaxEnergyStop: StudyRelaxEnergyStopModel | null;
     relaxTimeStop: StudyRelaxTimeStopModel | null;
@@ -220,6 +226,10 @@ export function resolveStudyInspectorModel({
           ? new Date(runtimeRecord.completed_at_unix_ms).toISOString()
           : null,
       completedAtUnixMs: runtimeRecord?.completed_at_unix_ms ?? null,
+      converged:
+        typeof runtimeRecord?.converged === "boolean"
+          ? runtimeRecord.converged
+          : null,
       label: stageLabel(stage),
       lastProgressUnixMs: runtimeRecord?.last_progress_unix_ms ?? null,
       startedAtUnixMs: runtimeRecord?.started_at_unix_ms ?? null,
@@ -241,7 +251,9 @@ export function resolveStudyInspectorModel({
     stages[selectedStageIndex ?? activeStageIndex ?? -1] ?? null;
   const activeStage = stages[activeStageIndex ?? -1] ?? null;
   const commandSummary = resolveCommandSummary(commandQueue);
-  const maxTorqueT = solverMaxTorqueT(solverStatus);
+  const maxTorqueApm = solverMaxTorqueApm(solverStatus);
+  const maxTorqueT =
+    maxTorqueApm === null ? null : teslaFromApm(maxTorqueApm);
 
   const relaxReferenceStage =
     activeStage ??
@@ -274,7 +286,23 @@ export function resolveStudyInspectorModel({
       commandError: commandSummary.error,
       commandId: commandSummary.commandId,
       commandLabel: commandSummary.label,
-      maxTorque: formatTorque(maxTorqueT),
+      backendDiagnostic: solverStatus?.last_error ?? null,
+      warnings: solverStatus?.warnings ?? [],
+      maxTorque:
+        maxTorqueApm === null
+          ? "unavailable"
+          : formatTorquePairFromApm(maxTorqueApm),
+      torqueDiagnostic:
+        maxTorqueApm === null && finiteNumber(solverStatus?.max_torque_T) !== null
+          ? "Canonical max_torque_Apm is unavailable; max_torque_T is not used as a source."
+          : null,
+      maxRhsNorm: formatRate(solverStatus?.max_rhs_norm_per_s),
+      converged:
+        typeof solverStatus?.converged === "boolean"
+          ? solverStatus.converged
+            ? "yes"
+            : "no"
+          : "not reported",
       progressPercent,
       relaxEnergyStop,
       relaxTimeStop,
@@ -372,7 +400,9 @@ function stageSnapshot(value: unknown, index: number): StudyStageSnapshot {
 
   return {
     algorithm: optionalString(stage?.relax_algorithm ?? stage?.algorithm),
-    energyTolerance: optionalScalarText(stage?.energy_tolerance),
+    energyTolerance: optionalScalarText(
+      stage?.energy_tolerance_j ?? stage?.energy_tolerance,
+    ),
     index,
     kind,
     maxSteps: optionalScalarText(stage?.max_steps),
@@ -383,9 +413,10 @@ function stageSnapshot(value: unknown, index: number): StudyStageSnapshot {
     torqueToleranceShortFormatted,
     timeBudgetKind: hasPseudoTimeBudget ? "pseudo" : "physical",
     untilSeconds: optionalScalarText(
-      stage?.until_seconds ??
-      stage?.max_physical_time_s ??
-      stage?.max_pseudotime_s
+      stage?.max_relaxation_time_s ??
+        stage?.until_seconds ??
+        stage?.max_physical_time_s ??
+        stage?.max_pseudotime_s,
     ),
   };
 }
@@ -407,7 +438,7 @@ function stageTorqueToleranceApm(stage: JsonRecord | null): number | null {
   return explicitT === null ? null : apmFromTesla(explicitT);
 }
 
-function solverMaxTorqueT(
+function solverMaxTorqueApm(
   solverStatus: SolverStatusResource | null,
 ): number | null {
   const status = solverStatus as
@@ -416,10 +447,13 @@ function solverMaxTorqueT(
         max_torque_T?: number | null;
       })
     | null;
-  const explicitT = finiteNumber(status?.max_torque_T);
-  if (explicitT !== null) return explicitT;
   const canonicalApm = finiteNumber(status?.max_torque_Apm);
-  return canonicalApm === null ? null : teslaFromApm(canonicalApm);
+  return canonicalApm;
+}
+
+function formatRate(value: number | null | undefined): string {
+  const rate = finiteNumber(value);
+  return rate === null ? "unavailable" : `${formatScientific(rate)} 1/s`;
 }
 
 function stageLabel(stage: StudyStageSnapshot): string {
@@ -681,6 +715,9 @@ function metricValueText(name: string, value: number | null | undefined): string
   if (typeof value !== "number" || !Number.isFinite(value)) return "unavailable";
   if (name === "max_torque_apm") return formatTorquePairFromApm(value);
   if (name === "total_energy_plateau_range_J") return `${formatScientific(value)} J`;
+  if (name === "accepted_step_m_per_A") {
+    return `${formatScientific(value)} m/A`;
+  }
   if (
     name === "physical_time_s" ||
     name === "pseudotime_s" ||
@@ -700,12 +737,6 @@ function formatExternalField(value: unknown): string {
     return "0, 0, 0 T";
   }
   return `${vector.join(", ")} T`;
-}
-
-function formatTorque(value: number | null | undefined): string {
-  return typeof value === "number" && Number.isFinite(value)
-    ? formatTorqueT(value)
-    : "unavailable";
 }
 
 function formatTorqueStopStatus(
