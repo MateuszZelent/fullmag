@@ -1363,6 +1363,7 @@ function useObjectVisualizationPanelState(
   const childRegionOverrideCount = resolveChildRegionOverrideTargetIds({
     backendOverrides: visualizationState.data?.overrides ?? [],
     childTargets: childRegionTargets,
+    objectId: selection.objectId ?? "",
     snapshot,
   }).size;
   const panelSettings = settings;
@@ -1510,7 +1511,7 @@ function useObjectVisualizationPanelState(
   }
 
   async function resetChildRegionTargets(): Promise<void> {
-    if (childRegionTargets.length === 0) return;
+    if (childRegionOverrideCount === 0) return;
     if (!visualizationState.data) {
       for (const childTarget of childRegionTargets) {
         visualization.clearTarget(childTarget);
@@ -1867,7 +1868,7 @@ function ObjectVisualizationPanelView({
       <VisualizationOpacitySection patch={patch} settings={settings} />
       <VisualizationOverridesSection
         childRegionOverrideCount={childRegionOverrideCount}
-        childRegionTargets={childRegionTargets.length}
+        childRegionTargets={Math.max(childRegionTargets.length, childRegionOverrideCount)}
         feedback={feedback}
         onReset={() => void resetTarget()}
         onResetChildRegions={() => void resetChildRegionTargets()}

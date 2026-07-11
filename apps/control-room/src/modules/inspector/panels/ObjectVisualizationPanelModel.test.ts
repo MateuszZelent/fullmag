@@ -79,6 +79,7 @@ describe("ObjectVisualizationPanelModel", () => {
           },
         ],
         childTargets,
+        objectId: "object-a",
         snapshot: { overrides: {} },
       }),
     ).toEqual(new Set(["region:object-a:core"]));
@@ -97,6 +98,7 @@ describe("ObjectVisualizationPanelModel", () => {
           },
         ],
         childTargets,
+        objectId: "object-a",
         snapshot: {
           overrides: {},
           pendingOverrides: {
@@ -105,6 +107,25 @@ describe("ObjectVisualizationPanelModel", () => {
         },
       }),
     ).toEqual(new Set(["region:object-a:core"]));
+  });
+
+  it("counts and clears a backend-only owner region when no child targets are loaded", () => {
+    const overrides = [
+      { scope: "region", scope_id: "region:object-a:core" },
+      { scope: "region", scope_id: "region:object-b:core" },
+    ] as const;
+
+    expect(
+      resolveChildRegionOverrideTargetIds({
+        backendOverrides: overrides,
+        childTargets: [],
+        objectId: "object-a",
+        snapshot: { overrides: {} },
+      }),
+    ).toEqual(new Set(["region:object-a:core"]));
+    expect(
+      removeOwnerChildRegionVisualizationOverrides({ objectId: "object-a", overrides }),
+    ).toEqual([{ scope: "region", scope_id: "region:object-b:core" }]);
   });
 
   it("resets only region overrides owned by the current object", () => {

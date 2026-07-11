@@ -28,7 +28,6 @@ import {
 } from "@/shared/domain/physics/displayUnits";
 import {
   mergeVisualizationStateTargetOverride,
-  visualizationStateOverrideMatchesTarget,
   visualizationTargetKey,
   type ObjectVisualizationSnapshot,
   renderModePatch,
@@ -1058,25 +1057,44 @@ export function resolveObjectChildRegionVisualizationTargets({
 export function resolveChildRegionOverrideTargetIds({
   backendOverrides,
   childTargets,
+  objectId,
   snapshot,
 }: {
   backendOverrides: readonly VisualizationStateResource["overrides"][number][];
   childTargets: readonly VisualizationTargetRef[];
+  objectId: string;
   snapshot: Pick<ObjectVisualizationSnapshot, "overrides"> &
     Partial<Pick<ObjectVisualizationSnapshot, "pendingOverrides">>;
 }): Set<string> {
   const ids = new Set<string>();
+  const canonicalOwner = canonicalVisualizationSceneObjectId(objectId);
+  const isCurrentOwnerRegion = (targetId: string): boolean => {
+    const parsed = parseRegionVisualizationTargetId(targetId);
+    return Boolean(
+      parsed &&
+        canonicalVisualizationSceneObjectId(parsed.objectId) === canonicalOwner,
+    );
+  };
+
+  for (const entry of backendOverrides) {
+    if (entry.scope === "region" && isCurrentOwnerRegion(entry.scope_id)) {
+      ids.add(entry.scope_id);
+    }
+  }
   for (const target of childTargets) {
-    const key = target.id;
+    if (!isCurrentOwnerRegion(target.id)) continue;
     if (
-      backendOverrides.some((entry) =>
-        visualizationStateOverrideMatchesTarget(entry, target),
-      ) ||
       Boolean(snapshot.overrides[visualizationTargetKey(target)]) ||
       Boolean(snapshot.pendingOverrides?.[visualizationTargetKey(target)])
     ) {
-      ids.add(key);
+      ids.add(target.id);
     }
+  }
+  for (const key of [
+    ...Object.keys(snapshot.overrides),
+    ...Object.keys(snapshot.pendingOverrides ?? {}),
+  ]) {
+    if (isCurrentOwnerRegion(key)) ids.add(key);
   }
   return ids;
 }
