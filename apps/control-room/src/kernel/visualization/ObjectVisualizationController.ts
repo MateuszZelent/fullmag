@@ -454,7 +454,7 @@ export function renderModePatch(
 export function resolveVisualizationSettings(
   snapshot: ObjectVisualizationSnapshot,
   target: VisualizationTargetRef,
-  baseSettings?: VisualizationTargetSettings,
+  baseSettings?: VisualizationTargetPatch,
 ): VisualizationTargetSettings {
   return normalizeVisualizationSettings({
     ...resolveDefaultVisualizationSettings(snapshot, target.kind, baseSettings),
@@ -479,10 +479,32 @@ export function resolveEffectiveVisualizationSettings(
   };
 }
 
+/**
+ * Regions inherit the owner's quantity and color treatment, never its display
+ * activation. A region is an opt-in subdomain target, so visibility and every
+ * render pass stay on the region defaults until its own override enables them.
+ */
+export function resolveRegionInheritedBaseline(
+  ownerSettings: VisualizationTargetSettings,
+): VisualizationTargetPatch {
+  return {
+    activeQuantityId: ownerSettings.activeQuantityId,
+    pointColor: ownerSettings.pointColor,
+    scalarColorPalette: ownerSettings.scalarColorPalette,
+    shaderColorMode: ownerSettings.shaderColorMode,
+    shaderMonoColor: ownerSettings.shaderMonoColor,
+    surfaceColorSource: ownerSettings.surfaceColorSource,
+    surfaceProjectionMode: ownerSettings.surfaceProjectionMode,
+    vectorColorMode: ownerSettings.vectorColorMode,
+    vectorMonoColor: ownerSettings.vectorMonoColor,
+    wireframeColor: ownerSettings.wireframeColor,
+  };
+}
+
 export function resolveDefaultVisualizationSettings(
   snapshot: ObjectVisualizationSnapshot,
   kind: VisualizationTargetKind,
-  baseSettings?: VisualizationTargetSettings,
+  baseSettings?: VisualizationTargetPatch,
 ): VisualizationTargetSettings {
   if (kind === "region") {
     return normalizeVisualizationSettings({
@@ -532,7 +554,11 @@ export function resolveTargetVisualization({
     target,
   );
   const inheritedDefaultSettings =
-    target.kind === "region" ? inheritedSettings : inheritedSettings ?? baseSettings;
+    target.kind === "region"
+      ? inheritedSettings
+        ? resolveRegionInheritedBaseline(inheritedSettings)
+        : undefined
+      : inheritedSettings ?? baseSettings;
   const settings = normalizeVisualizationSettings({
     ...(registryEntry
       ? baseSettings

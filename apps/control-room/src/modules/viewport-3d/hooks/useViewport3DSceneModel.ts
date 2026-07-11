@@ -1202,9 +1202,6 @@ export function resolveViewport3DPartVisualizationSettings({
     target: regionTarget,
     visualizationState: renderingState,
   });
-  if (!regionVisualization.override) {
-    return { ...objectVisualization.effectiveSettings, target };
-  }
   return { ...regionVisualization.effectiveSettings, target };
 }
 

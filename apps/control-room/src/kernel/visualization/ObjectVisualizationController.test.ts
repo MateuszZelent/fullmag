@@ -88,7 +88,7 @@ describe("ObjectVisualizationController", () => {
       });
   });
 
-  it("inherits parent object display when a region only overrides quantity", () => {
+  it("inherits only quantity and color style when a region overrides quantity", () => {
     const controller = new ObjectVisualizationController();
     const objectTarget = {
       id: "object:film",
@@ -122,11 +122,11 @@ describe("ObjectVisualizationController", () => {
 
     expect(regionSettings).toMatchObject({
       activeQuantityId: "H_eff",
-      shaderVisible: true,
       surfaceColorSource: "component_x",
+      shaderVisible: false,
       vectorsVisible: false,
-      visible: true,
-      wireframeVisible: true,
+      visible: false,
+      wireframeVisible: false,
     });
   });
 
@@ -478,7 +478,7 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
-  it("inherits owner visualization settings before applying region overrides", () => {
+  it("keeps region display passes independent from owner visualization settings", () => {
     const controller = new ObjectVisualizationController();
     const objectTarget = { id: "film", kind: "object" as const };
     const regionTarget = {
@@ -505,9 +505,67 @@ describe("ObjectVisualizationController", () => {
 
     expect(region.settings).toMatchObject({
       shaderVisible: false,
-      vectorsVisible: true,
+      vectorsVisible: false,
       wireframeVisible: false,
+      visible: false,
+    });
+  });
+
+  it("does not activate a region display pass when visible alone is enabled", () => {
+    const controller = new ObjectVisualizationController();
+    const target = {
+      id: "region:film:film%3Acore",
+      kind: "region" as const,
+    };
+
+    controller.patchTarget(target, { visible: true });
+
+    expect(
+      resolveTargetVisualization({
+        snapshot: controller.getSnapshot(),
+        target,
+      }).effectiveSettings,
+    ).toMatchObject({
+      pointsVisible: false,
+      primitiveVisible: false,
+      shaderVisible: false,
+      vectorsVisible: false,
       visible: true,
+      wireframeVisible: false,
+    });
+  });
+
+  it("enables a region display pass independently when the owner is hidden", () => {
+    const controller = new ObjectVisualizationController();
+    const ownerTarget = { id: "object:film", kind: "object" as const };
+    const regionTarget = {
+      id: "region:film:film%3Acore",
+      kind: "region" as const,
+    };
+    controller.patchTarget(ownerTarget, {
+      shaderVisible: false,
+      visible: false,
+      wireframeVisible: false,
+    });
+    controller.patchTarget(regionTarget, {
+      shaderVisible: true,
+      visible: true,
+    });
+
+    const ownerSettings = resolveTargetVisualization({
+      snapshot: controller.getSnapshot(),
+      target: ownerTarget,
+    }).settings;
+    expect(
+      resolveTargetVisualization({
+        inheritedSettings: ownerSettings,
+        snapshot: controller.getSnapshot(),
+        target: regionTarget,
+      }).effectiveSettings,
+    ).toMatchObject({
+      shaderVisible: true,
+      visible: true,
+      wireframeVisible: false,
     });
   });
 

@@ -1186,8 +1186,9 @@ describe("ribbon structure", () => {
     );
 
     expect(wireframeNode).toMatchObject({
-      checked: true,
+      checked: false,
       commandId: "visualization.target.set-wireframe-visible",
+      disabled: false,
     });
     if (wireframeNode?.type !== "checkbox") {
       throw new Error("Expected selected region wireframe control");

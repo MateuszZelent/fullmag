@@ -2148,7 +2148,7 @@ describe("useViewport3DSceneModel", () => {
     ).toEqual(["film:core", "film:edge"]);
   });
 
-  it("keeps parent visualization active for mesh-backed region parts", () => {
+  it("keeps mesh-backed region parts hidden until the region is explicitly enabled", () => {
     const visualization = new ObjectVisualizationController();
     const part = {
       id: "part:film:core",
@@ -2177,7 +2177,8 @@ describe("useViewport3DSceneModel", () => {
       }),
     ).toMatchObject({
       shaderVisible: false,
-      vectorsVisible: true,
+      vectorsVisible: false,
+      visible: false,
       wireframeVisible: false,
     });
   });
@@ -2310,7 +2311,7 @@ describe("useViewport3DSceneModel", () => {
     });
   });
 
-  it("does not let implicit region defaults hide mesh-backed object parts", () => {
+  it("keeps an unconfigured mesh-backed region part hidden", () => {
     const visualization = new ObjectVisualizationController();
     const part = {
       id: "part:film:core",
@@ -2328,9 +2329,9 @@ describe("useViewport3DSceneModel", () => {
         },
       }),
     ).toMatchObject({
-      shaderVisible: true,
-      visible: true,
-      wireframeVisible: true,
+      shaderVisible: false,
+      visible: false,
+      wireframeVisible: false,
     });
   });
 
