@@ -96,6 +96,12 @@ export function useViewport3DGeometryUpload({
             const next = createGeometry();
             uploadedGeometry = next ? tracker.track("geometry", next) : null;
           },
+          rollback: () => {
+            if (store.getSnapshot().geometry === uploadedGeometry) {
+              store.publish(null);
+            }
+            releaseGeometry(uploadedGeometry);
+          },
         },
       ],
       estimatedBytes,

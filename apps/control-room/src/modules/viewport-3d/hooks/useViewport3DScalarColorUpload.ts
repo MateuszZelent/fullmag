@@ -279,6 +279,11 @@ export function createViewport3DScalarColorUploadPlan(
   const source = colorBuffer.colors;
   const safeBatchSize = Math.max(1, Math.floor(batchSize));
   const chunks: Viewport3DGpuUploadChunk[] = [];
+  const rollback = () => {
+    if (!existingAttribute && geometry.getAttribute("color") === attribute) {
+      geometry.deleteAttribute("color");
+    }
+  };
 
   attribute.clearUpdateRanges();
   for (let start = 0; start < vertexCount; start += safeBatchSize) {
@@ -290,6 +295,7 @@ export function createViewport3DScalarColorUploadPlan(
         target.set(source.subarray(start * 3, end * 3), start * 3);
         attribute.addUpdateRange(start * 3, (end - start) * 3);
       },
+      rollback,
     });
   }
 
@@ -471,6 +477,17 @@ export function createViewport3DScalarShaderColorUploadPlan(
 
   if (attributes.length === 0) return null;
 
+  const rollback = () => {
+    for (const entry of attributes) {
+      if (
+        !entry.wasAttached &&
+        geometry.getAttribute(entry.name) === entry.attribute
+      ) {
+        geometry.deleteAttribute(entry.name);
+      }
+    }
+  };
+
   for (const entry of attributes) {
     entry.attribute.clearUpdateRanges();
     for (let start = 0; start < vertexCount; start += safeBatchSize) {
@@ -489,6 +506,7 @@ export function createViewport3DScalarShaderColorUploadPlan(
           );
           entry.attribute.addUpdateRange(sourceStart, sourceEnd - sourceStart);
         },
+        rollback,
       });
     }
   }

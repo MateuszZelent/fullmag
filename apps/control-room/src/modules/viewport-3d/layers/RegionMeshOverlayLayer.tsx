@@ -275,6 +275,15 @@ function useRegionMeshOverlayGeometryUpload({
             createRegionMeshOverlayGeometry(model.positions, indices),
           );
         },
+        rollback: () => {
+          const visibleGeometry = store.getSnapshot().geometry;
+          if (visibleGeometry !== uploadedGeometry) {
+            releaseGeometry(uploadedGeometry);
+            return;
+          }
+          store.publish(null);
+          releaseGeometry(uploadedGeometry);
+        },
       },
     ];
 
