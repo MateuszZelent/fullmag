@@ -4,13 +4,14 @@
 
 **Goal:** Production-qualify FEM K0 dynamic-demag eigensolve on CPU and GPU and deliver the complete Python/UI authoring, Spectrum, mode-field artifact, and unified 3D viewport workflow.
 
-**Architecture:** One physics-first request flows through Python DSL, ProblemIR, legality-first planning, accepted equilibrium and periodic-mesh certificates, native MFEM assembly, certified Schur eigensolve, artifacts-v2, OpenAPI v2 resources, ControlRoom resource hooks, Analysis Plots, mode inspectors, and the unified 3D viewport. CPU and GPU share equations, units, block residuals, validation scope, and artifacts; they use independent MFEM/PETSc/SLEPc/hypre runtime realizations and never share hidden device state.
+**Architecture:** One physics-first request flows through Python DSL, ProblemIR, legality-first planning, accepted equilibrium and periodic-mesh certificates, native MFEM assembly, certified Schur eigensolve, artifacts-v2, OpenAPI v2 resources, ControlRoom resource hooks, Analysis Plots, mode inspectors, and the unified 3D viewport. CPU and GPU share the managed real-split `real_frequency_rotated` pencil, units, block residuals, validation scope, and artifacts; they use independent MFEM/PETSc/SLEPc/hypre runtime realizations and never share hidden device state.
 
 **Tech Stack:** Python 3, Rust, C++20, MFEM, PETSc/SLEPc, hypre, CUDA, Axum/OpenAPI v2, Next.js 16, React, TypeScript, Zustand, R3F/Three.js, Zarr/binary field codecs, Playwright, container-backed `just` recipes.
 
 ## Global Constraints
 
 - Canonical physics is `L q = lambda B_alpha q`, `lambda=i omega`, `delta_m=Tq`, and `delta_H_demag=-grad(delta_phi)`.
+- The managed PETSc/SLEPc runtime is real scalar: selected spectrum uses `R(L)y=omega R(i B_alpha)y` with `tau=omega_target`; real targeting on the original imaginary-axis pencil is forbidden.
 - The first qualified scope is P1, `alpha=0`, double precision, uniform material fields, `k=(0,0,0)`, x/y periodicity, and an open-z shared magnetic-plus-airbox domain.
 - Static `H_demag0` belongs to the accepted equilibrium and must never substitute for the dynamic Frechet action on `delta_m`.
 - Robin and Dirichlet use `gauge_policy=none`; pure Neumann uses `mean_zero_augmented`.
@@ -54,7 +55,7 @@
 
 - [ ] Add failing documentation assertions that require K0 CPU stages P1-P6, GPU stages G1-G4, DOD-01 through DOD-14, Spectrum, mode fields, and viewport proof.
 - [ ] Run `python3 scripts/build_fd_solver_masterplan_full_pack.py --check` and record the expected failure caused by changed normative inputs.
-- [ ] Update the physics note, backend masterplan, ADR-017, chapter 18, and manifest so they agree on either a dedicated complex-scalar runtime or the canonical real-split transformed pencil. Use one representation in every subsequent task.
+- [ ] Update the physics note, backend masterplan, ADR-017, chapter 18, and manifest so they agree on the managed real-split `real_frequency_rotated` pencil and `tau=omega_target`.
 - [ ] Regenerate with `python3 scripts/build_fd_solver_masterplan_full_pack.py --write`.
 - [ ] Run `python3 scripts/build_fd_solver_masterplan_full_pack.py --check`; expect zero drift.
 - [ ] Commit with `git commit -m "docs: freeze production K0 modal demag scope"`.

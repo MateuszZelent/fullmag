@@ -64,13 +64,16 @@ certificate.
 
 ## Device Semantics
 
-CPU uses the managed complex-scalar PETSc/SLEPc build so that selected-spectrum
-targeting is exactly `sigma=i*omega_target`. GPU uses the same scalar and
-spectral contract through PETSc CUDA vectors, a device-capable `MatShell` or
-`MatNest`, hypre device preconditioning, and SLEPc. Its vectors, Krylov basis,
-operator application, preconditioner state, and modal hot loop persist on the
-device. Scalar checkpoints are permitted only when transfer telemetry records
-them; per-iteration full-vector host/device copies are forbidden.
+The managed runtime uses `libpetsc-real-dev` and `libslepc-real-dev`. It
+therefore implements the ADR-017 real-split `real_frequency_rotated` pencil:
+`R(L)y = omega R(i B_alpha)y`, with the interior target
+`tau=omega_target`. A real `EPSSetTarget(omega_target)` on the original
+`lambda=i omega` pencil is forbidden. GPU uses the same real-split contract
+through PETSc CUDA vectors, a device-capable `MatShell` or `MatNest`, hypre
+device preconditioning, and SLEPc. Its vectors, Krylov basis, operator
+application, preconditioner state, and modal hot loop persist on the device.
+Scalar checkpoints are permitted only when transfer telemetry records them;
+per-iteration full-vector host/device copies are forbidden.
 
 An explicitly requested GPU path fails with a precise unavailable reason when
 the device stack or qualification certificates are absent. It never silently
