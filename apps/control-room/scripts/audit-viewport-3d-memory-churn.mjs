@@ -153,9 +153,19 @@ try {
 
   await page.locator('[data-action-id="ws-2d"]').click();
   await page.locator(".fm-viewport-3d canvas").waitFor({ state: "detached", timeout: 10_000 });
+  await page.waitForTimeout(1_000);
   const unmountedBaselineRuntime = await readViewportAuditRuntime(page);
-  await page.locator('[data-action-id="viewport-3d.open"]').click();
+  const viewport3DMenuItem = page.getByRole("menuitem", { name: "3D viewport" });
+  if (await viewport3DMenuItem.isVisible()) {
+    await viewport3DMenuItem.click();
+  } else {
+    await page.locator('[data-action-id="viewport-3d.open"]').click();
+  }
+  await page.evaluate(() => {
+    window.__FULLMAG_CONTROL_ROOM_AUDIT__?.setActiveViewportModule("viewport-3d");
+  });
   await canvas.waitFor({ state: "visible", timeout: 10_000 });
+  await page.keyboard.press("Escape");
   await waitForDiagnostics(viewport);
   if (injectListenerLeak) {
     await page.evaluate(() => window.__FULLMAG_CONTROL_ROOM_AUDIT__?.injectViewportAuditListenerLeak());
@@ -276,7 +286,7 @@ try {
 
   await page.locator('[data-action-id="ws-2d"]').click();
   await page.locator(".fm-viewport-3d canvas").waitFor({ state: "detached", timeout: 10_000 });
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(1_000);
   const afterUnmount = await readBrowserAuditCounters(page);
   const afterUnmountRuntime = await readViewportAuditRuntime(page);
   if (afterUnmount.buffersDeleted < gpuAfterStress.buffersDeleted) {
@@ -338,7 +348,24 @@ async function assertCanvasHasFidelity(page) {
   if (!box || box.width <= 0 || box.height <= 0) {
     throw new Error("Viewport fidelity gate could not measure the WebGL canvas.");
   }
-  const screenshot = await page.screenshot({ clip: box });
+  await canvas.evaluate(() => {
+    const style = document.createElement("style");
+    style.dataset.viewportAuditIsolation = "true";
+    style.textContent = `
+      .fm-viewport-3d *:not(canvas) { visibility: hidden !important; }
+      .fm-viewport-3d canvas { visibility: visible !important; }
+    `;
+    document.head.append(style);
+  });
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(undefined))));
+  let screenshot;
+  try {
+    screenshot = await page.screenshot({ clip: box });
+  } finally {
+    await canvas.evaluate(() => {
+      document.querySelector('[data-viewport-audit-isolation="true"]')?.remove();
+    });
+  }
   const sample = await page.evaluate(async (encodedPng) => {
     const response = await fetch(`data:image/png;base64,${encodedPng}`);
     const bitmap = await createImageBitmap(await response.blob());
@@ -400,6 +427,7 @@ async function clearViewportCanvas(page) {
   await page.evaluate(() => {
     const canvas = document.querySelector(".fm-viewport-3d canvas");
     if (!(canvas instanceof HTMLCanvasElement)) throw new Error("Viewport canvas is missing.");
+    canvas.style.opacity = "0";
     const gl = canvas.getContext("webgl2") ?? canvas.getContext("webgl");
     if (!gl) throw new Error("Viewport WebGL context is missing.");
     gl.clearColor(0, 0, 0, 0);
@@ -417,8 +445,12 @@ async function collectStableShaderSignatures(page, fixture, viewport) {
   const signatures = {};
   for (const mode of modes) {
     fixture.visualizationState = applyPatch(fixture.visualizationState, {
+      active_quantity_id: "m",
       field_component: mode.component,
-      quantity: { field_component: mode.component },
+      quantity: {
+        active_quantity_id: "m",
+        field_component: mode.component,
+      },
       vector_style: { color_mode: mode.colorMode },
     });
     fixture.visualizationState.revision += 1;
@@ -442,8 +474,23 @@ function assertViewportRuntimeReleased(afterUnmountRuntime, baselineRuntime) {
     throw new Error(`Viewport worker runtime survived unmount: ${JSON.stringify(workers)}.`);
   }
   if (resources.listenerCount !== baselineRuntime.resources.listenerCount) {
+    const changedListeners = Object.fromEntries(
+      new Set([
+        ...Object.keys(baselineRuntime.listenerCounts),
+        ...Object.keys(afterUnmountRuntime.listenerCounts),
+      ])
+        .values()
+        .map((resourceKey) => [
+          resourceKey,
+          {
+            after: afterUnmountRuntime.listenerCounts[resourceKey] ?? 0,
+            baseline: baselineRuntime.listenerCounts[resourceKey] ?? 0,
+          },
+        ])
+        .filter(([, counts]) => counts.after !== counts.baseline),
+    );
     throw new Error(
-      `Viewport resource subscriptions did not return to the pre-3D baseline: baseline=${baselineRuntime.resources.listenerCount}, after=${resources.listenerCount}.`,
+      `Viewport resource subscriptions did not return to the pre-3D baseline: baseline=${baselineRuntime.resources.listenerCount}, after=${resources.listenerCount}, changed=${JSON.stringify(changedListeners)}.`,
     );
   }
 }

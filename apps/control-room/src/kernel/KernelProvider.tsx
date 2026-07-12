@@ -361,6 +361,7 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
         patchVisualization: (patch: VisualizationStatePatch) => Promise<void>;
         publishVisualizationState: (state: VisualizationStateResource) => void;
         readViewportAuditRuntime: () => {
+          listenerCounts: ReturnType<typeof sharedResourceRuntimeStore.listenerCounts>;
           resources: ReturnType<typeof sharedResourceRuntimeStore.stats>;
           visualizationRevision: ResourceRevision | null;
           workers: ReturnType<typeof getViewport3DWorkerRuntimeSnapshot>;
@@ -459,6 +460,7 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
         );
       },
       readViewportAuditRuntime: () => ({
+        listenerCounts: sharedResourceRuntimeStore.listenerCounts(),
         resources: sharedResourceRuntimeStore.stats(),
         visualizationRevision: sharedResourceRuntimeStore.getSnapshot(
           VISUALIZATION_STATE_PATH,
