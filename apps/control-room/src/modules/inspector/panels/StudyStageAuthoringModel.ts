@@ -207,6 +207,10 @@ export function relaxationAlgorithmAvailability(
     demagEnabled?: boolean;
     device: string;
     mode: string;
+    sharedDomainMeshReady?: boolean;
+    periodicCertificateReady?: boolean;
+    acceptedEquilibriumReady?: boolean;
+    strictGpuReady?: boolean;
   },
 ): { reason: string | null; supported: boolean } {
   if (
@@ -999,6 +1003,10 @@ export function validateStudyStageDraft(
     demagEnabled?: boolean;
     device: string;
     mode: string;
+    sharedDomainMeshReady?: boolean;
+    periodicCertificateReady?: boolean;
+    acceptedEquilibriumReady?: boolean;
+    strictGpuReady?: boolean;
   },
 ): StudyStageDraftValidation[] {
   const issues: StudyStageDraftValidation[] = [];
@@ -1054,6 +1062,10 @@ export function validateStudyStageDraft(
       if (draft.bc !== "periodic") issues.push({ severity: "error", message: "periodic_airbox_k0 requires periodic spin-wave BC." });
       if (draft.kVector !== "0,0,0" && draft.kVector !== "0, 0, 0") issues.push({ severity: "error", message: "periodic_airbox_k0 requires k=(0,0,0)." });
       if (draft.dampingPolicy !== "ignore") issues.push({ severity: "error", message: "periodic_airbox_k0 requires zero damping." });
+      if (execution?.sharedDomainMeshReady === false) issues.push({ severity: "error", message: "periodic_airbox_k0 requires a shared-domain mesh." });
+      if (execution?.periodicCertificateReady === false) issues.push({ severity: "error", message: "periodic_airbox_k0 requires a periodic certificate." });
+      if (execution?.acceptedEquilibriumReady === false) issues.push({ severity: "error", message: "periodic_airbox_k0 requires an accepted equilibrium." });
+      if (draft.deviceTarget === "gpu" && execution?.strictGpuReady === false) issues.push({ severity: "error", message: "Strict GPU K0 modal demag prerequisites are unavailable." });
     }
     return issues;
   }
