@@ -23,6 +23,7 @@ import { InspectorSection } from "../primitives/InspectorSection";
 import {
   relaxationAlgorithmAvailability,
   validateStudyStageDraft,
+  type K0ModalExecutionReadiness,
   type StudyStageDraft,
   type StudyStageDraftKind,
 } from "./StudyStageAuthoringModel";
@@ -119,6 +120,7 @@ export function StudyPipelineSection({
   authoringFeedback,
   commandDisabledReason,
   demagEnabled = false,
+  k0ModalReadiness,
   draft,
   draftIndex,
   drafts,
@@ -142,6 +144,7 @@ export function StudyPipelineSection({
   } | null;
   commandDisabledReason: StudyCommandDisabledReason;
   demagEnabled?: boolean;
+  k0ModalReadiness?: K0ModalExecutionReadiness;
   draft: StudyStageDraft | null;
   draftIndex: number;
   drafts: StudyStageDraft[];
@@ -162,6 +165,7 @@ export function StudyPipelineSection({
         backend: model.requested.backend,
         demagEnabled,
         device: model.requested.device,
+        ...k0ModalReadiness,
         mode: model.requested.mode,
       })
     : [];
@@ -2557,7 +2561,7 @@ function SpectralStageDraftFields({
             value={draft.bc}
             onChange={(event) => onUpdate({ bc: event.target.value })}
           />
-          {draft.kind === "frequency_response" ? (
+          {draft.kind === "eigenmodes" || draft.kind === "frequency_response" ? (
             <FormField
               label="Magnetostatic BC"
               type="select"

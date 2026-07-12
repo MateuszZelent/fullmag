@@ -21,6 +21,7 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
     commandDisabledReason,
     commitStageDrafts,
     dispatch,
+    k0ModalReadiness,
     model,
     runtimeStatus,
     runCommand,
@@ -39,6 +40,7 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
         backend: model.requested.backend,
         demagEnabled: state.globalDraft.demagEnabled,
         device: model.requested.device,
+        ...k0ModalReadiness,
         mode: model.requested.mode,
       })
     : [];

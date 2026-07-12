@@ -230,6 +230,24 @@ function hysteresisFamilyVariantPointsRef(
 }
 
 describe("Study stage inspectors", () => {
+  it("exposes the periodic-airbox magnetostatic control for eigenmode authoring", () => {
+    const frameProps = props("eigenmodes");
+    const html = render(
+      <EigenmodesStageInspector
+        {...frameProps}
+        authoringView="boundary"
+        draft={{
+          ...frameProps.draft!,
+          bc: "periodic",
+          magnetostaticBc: "periodic_airbox_k0",
+        }}
+      />,
+      ["authoring", "eigenmodes-boundary-detail"],
+    );
+
+    expect(html).toContain("Magnetostatic BC");
+    expect(html).toContain("Periodic airbox k=0");
+  });
   it("renders a dedicated inspector for every supported study stage kind", () => {
     expect(render(<RelaxStageInspector {...props("relax")} />)).toContain(
       "Stop Criteria",

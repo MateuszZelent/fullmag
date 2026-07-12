@@ -190,6 +190,24 @@ describe("StudyStageAuthoringModel", () => {
     ]));
   });
 
+  it("serializes the canonical K0 periodic-airbox demag intent for eigenmodes", () => {
+    const stage = studyStageDraftToSceneStage({
+      ...createDefaultStudyStageDraft("eigenmodes", 0),
+      bc: "periodic",
+      dampingPolicy: "ignore",
+      includeDemag: true,
+      kVector: "0,0,0",
+      magnetostaticBc: "periodic_airbox_k0",
+      stageId: "k0-modal",
+    });
+
+    expect(stage).toMatchObject({
+      eigen_magnetostatic_bc: "periodic_airbox_k0",
+      include_demag: true,
+      magnetostatic_bc: "periodic_airbox_k0",
+    });
+  });
+
   it("requires both static and advertised capability for TPI", () => {
     expect(
       relaxationAlgorithmAvailability("tangent_plane_implicit", {

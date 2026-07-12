@@ -17,6 +17,7 @@ vi.mock("@radix-ui/react-dialog", async (importOriginal) => {
 
 import {
   CommandDetailDialog,
+  deriveK0ModalExecutionReadiness,
   ImportStateDialog,
   RestoreCheckpointDialog,
   StudyBoundarySection,
@@ -53,6 +54,94 @@ function testRequested(overrides: Record<string, string> = {}) {
 }
 
 describe("StudyInspectorPanel", () => {
+  it("derives K0 production readiness from revisioned resources and rejects contract-only GPU", () => {
+    expect(
+      deriveK0ModalExecutionReadiness({
+        frequencyManifest: {
+          capabilities: { modal: { production_gpu: { reason: "not qualified", status: "contract_only" } } },
+        } as never,
+        meshManifest: { mesh_id: "shared", revision: 42 } as never,
+        periodicPairs: {
+          pairs: [{ paired_node_count: 8, status: "certified", unpaired_destination_node_count: 0, unpaired_source_node_count: 0 }],
+          revision: 42,
+        } as never,
+        stageExecution: {
+          stages: [{ converged: true, kind: "relax", status: "completed" }],
+          revision: 8,
+        } as never,
+      }),
+    ).toEqual({
+      acceptedEquilibriumReady: true,
+      periodicCertificateReady: true,
+      sharedDomainMeshReady: true,
+      strictGpuReady: false,
+    });
+  });
+
+  it("renders unavailable K0 modal prerequisites in the study pipeline", () => {
+    const draft = {
+      ...createDefaultStudyStageDraft("eigenmodes", 0),
+      bc: "periodic",
+      dampingPolicy: "ignore",
+      deviceTarget: "gpu",
+      includeDemag: true,
+      kVector: "0,0,0",
+      magnetostaticBc: "periodic_airbox_k0",
+    };
+    const html = renderToStaticMarkup(
+      <Accordion type="multiple" defaultValue={["pipeline"]}>
+        <StudyPipelineSection
+          activeStageIndex={null}
+          authoringBusy={false}
+          authoringFeedback={null}
+          commandDisabledReason={() => null}
+          demagEnabled
+          draft={draft}
+          draftIndex={0}
+          drafts={[draft]}
+          k0ModalReadiness={{
+            acceptedEquilibriumReady: false,
+            periodicCertificateReady: false,
+            sharedDomainMeshReady: false,
+            strictGpuReady: false,
+          }}
+          model={{
+            boundary: testBoundary(),
+            requested: testRequested({ backend: "fem", device: "gpu" }),
+            runtime: {
+              activeStageLabel: "none",
+              commandBadge: "idle",
+              commandError: null,
+              commandId: null,
+              commandLabel: "No active command",
+              maxTorque: "unavailable",
+              progressPercent: 0,
+              relaxEnergyStop: null,
+              relaxTimeStop: null,
+              relaxTorqueStop: null,
+              runId: "none",
+              state: "idle",
+            },
+            selectedStage: null,
+            stages: [],
+          }}
+          onAddStage={() => undefined}
+          onCommit={() => undefined}
+          onDuplicateStage={() => undefined}
+          onMoveStage={() => undefined}
+          onRemoveStage={() => undefined}
+          onSelectDraft={() => undefined}
+          onUpdateDraft={() => undefined}
+          runCommand={() => undefined}
+        />
+      </Accordion>,
+    );
+    expect(html).toContain("periodic_airbox_k0 requires a shared-domain mesh.");
+    expect(html).toContain("periodic_airbox_k0 requires a periodic certificate.");
+    expect(html).toContain("periodic_airbox_k0 requires an accepted equilibrium.");
+    expect(html).toContain("Strict GPU K0 modal demag prerequisites are unavailable.");
+  });
+
   it("renders command detail provenance in the dialog", () => {
     const command: CommandDetailResource = {
       artifact_refs: ["artifact://stage-1"],

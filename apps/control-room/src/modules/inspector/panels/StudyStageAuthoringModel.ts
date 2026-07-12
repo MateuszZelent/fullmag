@@ -199,6 +199,14 @@ export interface StudyStageDraftValidation {
   severity: "error" | "warning";
 }
 
+/** Revisioned runtime prerequisites for the production K0 periodic-airbox lane. */
+export interface K0ModalExecutionReadiness {
+  acceptedEquilibriumReady?: boolean;
+  periodicCertificateReady?: boolean;
+  sharedDomainMeshReady?: boolean;
+  strictGpuReady?: boolean;
+}
+
 export function relaxationAlgorithmAvailability(
   algorithm: string,
   execution: {
@@ -997,16 +1005,12 @@ export function studyStageDraftToSceneStage(
 
 export function validateStudyStageDraft(
   draft: StudyStageDraft,
-  execution?: {
+  execution?: K0ModalExecutionReadiness & {
     algorithmsAvailable?: readonly string[];
     backend: string;
     demagEnabled?: boolean;
     device: string;
     mode: string;
-    sharedDomainMeshReady?: boolean;
-    periodicCertificateReady?: boolean;
-    acceptedEquilibriumReady?: boolean;
-    strictGpuReady?: boolean;
   },
 ): StudyStageDraftValidation[] {
   const issues: StudyStageDraftValidation[] = [];

@@ -18,6 +18,7 @@ import { createCommandContext } from "@/kernel/commands/commandContext";
 import {
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+  MESHING_PERIODIC_PAIRS_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MESHING_SUMMARY_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
@@ -31,8 +32,12 @@ import {
 } from "@/kernel/api/apiPaths";
 import type {
   CheckpointEntry,
+  FrequencyDomainManifestResource,
   LiveStatusResource,
+  MeshPeriodicPairsResource,
+  MeshSharedDomainManifestResource,
   SessionImportInspectResponse,
+  StageExecutionResource,
 } from "@/kernel/api/apiTypes";
 import {
   shouldLoadRuntimeCurrentRun,
@@ -50,6 +55,8 @@ import {
   useSolverEnergyHistoryResource,
   useSolverStatusResource,
   useStageExecutionResource,
+  useFrequencyDomainManifestResource,
+  useMeshPeriodicPairsResource,
 } from "@/kernel/resources/studyRuntimeResources";
 import {
   useGeometryValidationResource,
@@ -103,6 +110,7 @@ import {
   type StudyInspectorSnapshot,
 } from "./StudyInspectorPanelModel";
 import { StudyPipelineSection } from "./StudyPipelineSection";
+import type { K0ModalExecutionReadiness } from "./StudyStageAuthoringModel";
 import { StudyProgressBar } from "./StudyProgressBar";
 
 export { CommandDetailDialog } from "@/shared/runtime/CommandDetailDialog";
@@ -395,6 +403,61 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+const PRODUCTION_CAPABILITY_STATUSES = new Set([
+  "production",
+  "production_qualified",
+  "qualified",
+]);
+
+/**
+ * Keeps K0 authoring gates tied to revisioned HTTP resources instead of an
+ * optimistic local form flag. Unknown resources stay unavailable.
+ */
+export function deriveK0ModalExecutionReadiness({
+  frequencyManifest,
+  meshManifest,
+  periodicPairs,
+  stageExecution,
+}: {
+  frequencyManifest: FrequencyDomainManifestResource | null;
+  meshManifest: MeshSharedDomainManifestResource | null;
+  periodicPairs: MeshPeriodicPairsResource | null;
+  stageExecution: StageExecutionResource | null;
+}): K0ModalExecutionReadiness {
+  const sharedDomainMeshReady = Boolean(
+    meshManifest?.mesh_id && meshManifest.revision >= 0,
+  );
+  const periodicCertificateReady = Boolean(
+    periodicPairs &&
+      periodicPairs.pairs.length > 0 &&
+      periodicPairs.pairs.every(
+        (pair) =>
+          pair.paired_node_count > 0 &&
+          pair.unpaired_destination_node_count === 0 &&
+          pair.unpaired_source_node_count === 0 &&
+          ["certified", "matched", "valid"].includes(pair.status),
+      ),
+  );
+  const acceptedEquilibriumReady = Boolean(
+    stageExecution?.stages.some(
+      (stage) =>
+        stage.kind === "relax" &&
+        stage.converged &&
+        ["accepted", "completed"].includes(stage.status),
+    ),
+  );
+  const strictGpuReady = PRODUCTION_CAPABILITY_STATUSES.has(
+    frequencyManifest?.capabilities.modal.production_gpu.status ?? "",
+  );
+
+  return {
+    acceptedEquilibriumReady,
+    periodicCertificateReady,
+    sharedDomainMeshReady,
+    strictGpuReady,
+  };
+}
+
 type StudyInspectorRuntimeStatus = {
   capabilities: Pick<
     LiveStatusResource["capabilities"],
@@ -514,6 +577,12 @@ export function useStudyInspectorPanelController(
   const meshSummary = useMeshSummaryResource({
     enabled: shouldLoadRuntimeMeshSummary(true, runtimeStatus),
   });
+  const periodicPairs = useMeshPeriodicPairsResource({
+    enabled: shouldLoadRuntimeMeshManifest(true, runtimeStatus),
+  });
+  const frequencyDomainManifest = useFrequencyDomainManifestResource({
+    enabled: shouldLoadRuntimeStageExecution(true, runtimeStatus),
+  });
   const energyCurrent = useSolverEnergyCurrentResource({
     enabled: shouldLoadRuntimeScalars(true, runtimeStatus),
   });
@@ -553,6 +622,12 @@ export function useStudyInspectorPanelController(
     stageExecution: stageExecution.data,
   });
   const selectedStageIndex = model.selectedStage?.index ?? 0;
+  const k0ModalReadiness = deriveK0ModalExecutionReadiness({
+    frequencyManifest: frequencyDomainManifest.data,
+    meshManifest: meshManifest.data,
+    periodicPairs: periodicPairs.data,
+    stageExecution: stageExecution.data,
+  });
   const sceneRevision = sceneRevisionValue(scene.data);
   const sceneHasPayload = sceneHasAuthoringPayload(scene.data);
   const sceneStageCount = rawStudyStages(scene.data).length;
@@ -579,6 +654,7 @@ export function useStudyInspectorPanelController(
       [MESHING_BUILDS_CURRENT_PATH]: meshBuildCurrent.data,
       [MESHING_BUILDS_LATEST_SUCCESSFUL_PATH]: meshBuildLatest.data,
       [MESHING_SHARED_DOMAIN_MANIFEST_PATH]: meshManifest.data,
+      [MESHING_PERIODIC_PAIRS_PATH]: periodicPairs.data,
       [MESHING_SUMMARY_PATH]: meshSummary.data,
       [MODEL_GEOMETRY_VALIDATION_PATH]: geometryValidation.data,
       [MODEL_SCENE_PATH]: scene.data,
@@ -633,6 +709,7 @@ export function useStudyInspectorPanelController(
         backend: model.requested.backend,
         demagEnabled: state.globalDraft.demagEnabled,
         device: model.requested.device,
+        ...k0ModalReadiness,
         mode: model.requested.mode,
       }).map((issue) => ({
         ...issue,
@@ -753,6 +830,7 @@ export function useStudyInspectorPanelController(
     energyHistory,
     inspectImportFile,
     latestCheckpoint,
+    k0ModalReadiness,
     model,
     runtimeStatus,
     runCommand,
@@ -783,6 +861,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
     energyHistory,
     inspectImportFile,
     latestCheckpoint,
+    k0ModalReadiness,
     model,
     runtimeStatus,
     runCommand,
@@ -860,6 +939,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
           }
           commandDisabledReason={commandDisabledReason}
           demagEnabled={state.globalDraft.demagEnabled}
+          k0ModalReadiness={k0ModalReadiness}
           draft={state.stageDrafts[state.selectedDraftIndex] ?? null}
           draftIndex={state.selectedDraftIndex}
           drafts={state.stageDrafts}
