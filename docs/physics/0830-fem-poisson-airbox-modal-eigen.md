@@ -2,7 +2,7 @@
 
 - Status: implementation contract
 - Owners: Fullmag FEM frequency-domain backend
-- Last updated: 2026-07-09
+- Last updated: 2026-07-12
 - Related physics notes:
   - `0700-frequency-domain-linearized-llg.md`
   - `0800-fem-static-pbc-demag.md`
@@ -109,9 +109,19 @@ eps_gauge = |cT phi| / (||c|| ||phi|| + eps).
 The accepted full residual is `max(eps_q, eps_phi, eps_gauge)` and is not
 replaced by a smaller backend-reported residual.
 
-For a real PETSc build, a complex target `sigma=i omega_target` must be
-represented by an explicit real-split transformed pencil. A real scalar target
-`omega_target` on an imaginary-eigenvalue spectrum is invalid.
+The managed runtime is the real-scalar `libpetsc-real-dev` plus
+`libslepc-real-dev` lane. It represents the complex target
+`sigma=i omega_target` only with the ADR-017 real-split
+`real_frequency_rotated` pencil:
+
+```text
+R(L) y = omega R(i B_alpha) y
+tau = omega_target.
+```
+
+`EPSSetTarget(tau)` is legal only on that named rotated pencil. A real scalar
+target `omega_target` on the original `lambda=i omega` pencil is invalid and
+must reject rather than approximate the imaginary-axis target.
 
 ### 3.2 GPU
 
@@ -175,7 +185,8 @@ real assembly and validation matrix pass.
 
 - [ ] Real shared-domain FEM modal block assembly
 - [ ] BC-dependent gauge policy
-- [ ] Real-split selected-spectrum transform for real PETSc
+- [ ] ADR-017 `real_frequency_rotated` selected-spectrum transform with
+  `tau=omega_target` for the managed real PETSc/SLEPc runtime
 - [ ] Full residual block certification
 - [ ] K0-3 real assembly fixture and convergence suite
 - [ ] Persistent GPU modal solver

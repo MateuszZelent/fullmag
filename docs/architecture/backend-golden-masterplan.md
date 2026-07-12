@@ -279,11 +279,14 @@ count = maksymalna liczba modów do zwrócenia
 ```
 
 Kontrakt przechodzi przez Python DSL, ProblemIR, planner, runtime, artefakty,
-API i control room bez degradacji do `lowest`. Produkcyjna realizacja CPU używa
-MFEM z PETSc/SLEPc: pełny descriptor albo certyfikowany Schur `MatShell`,
-Krylov-Schur/Arnoldi oraz jawny transform spektralny z celem odpowiadającym
-`sigma=i*omega_target`. Shifted systems należą do PETSc/hypre. Produkcyjna
-realizacja GPU używa tych samych kontraktów przez PETSc CUDA vectors,
+API i control room bez degradacji do `lowest`. Managed runtime używa
+`libpetsc-real-dev` oraz `libslepc-real-dev`; CPU i GPU realizują więc ten sam
+ADR-017 `real_frequency_rotated` pencil `R(L)y=omega R(i B_alpha)y` z
+`tau=omega_target`, który dokładnie reprezentuje `sigma=i*omega_target`.
+Realny target na oryginalnym pencilu `lambda=i omega` jest zabroniony.
+Produkcyjna realizacja CPU używa MFEM z PETSc/SLEPc: pełny descriptor albo
+certyfikowany Schur `MatShell` i Krylov-Schur/Arnoldi. Shifted systems należą
+do PETSc/hypre. Produkcyjna realizacja GPU używa tych samych kontraktów przez PETSc CUDA vectors,
 device-capable `MatShell`/`MatNest`, hypre device i SLEPc na urządzeniu.
 
 Runner przekazuje deskryptor okna i pojedynczy wybrany engine, odbiera wyniki,

@@ -3,7 +3,7 @@
 - Status: canonical physics and numerical contract; implementation remains
   capability-gated
 - Owners: Fullmag FEM frequency-domain backend
-- Last updated: 2026-07-10
+- Last updated: 2026-07-12
 - Related architecture:
   - `docs/architecture/backend-golden-masterplan.md`
 - Related physics notes:
@@ -100,6 +100,19 @@ their `mu0` relation is validated. A target expressed as `frequency_hz` is
 converted once to `omega_rad_s`; for the canonical modal convention the complex
 target is `sigma = i omega_target`, represented by `sigma_real_per_s=0` and
 `sigma_imag_rad_per_s=omega_target`.
+
+The managed runtime is `libpetsc-real-dev` plus `libslepc-real-dev`. For the
+undamped qualified lane it therefore uses ADR-017's explicit real split,
+never a complex-runtime assumption:
+
+```text
+real_frequency_rotated: R(L)y = omega R(i B_alpha)y
+tau = omega_target
+```
+
+`EPSSetTarget(tau)` is valid only for `real_frequency_rotated`. Supplying
+`omega_target` as a real target to the original `lambda=i omega` pencil is a
+wrong-axis request and must fail closed.
 
 ### 2.3 Eigenvalue, damping, and alternate-phasor mapping
 
@@ -219,9 +232,10 @@ varying frames.
 Production numerical ownership remains under `backends/fem`. The CPU lane may
 realize the same pencil through dense validation, sparse direct diagnostics,
 SLEPc selected spectrum, full-coupled field split, certified Schur reduction,
-or reduced response. The native SLEPc adapter exists; real-scalar
-imaginary-axis targeting and real shared-domain Poisson weak-form assembly are
-still open and block production Poisson-airbox modal qualification.
+or reduced response. The managed real PETSc/SLEPc target representation is
+fixed as `real_frequency_rotated` with `tau=omega_target`; implementation and
+qualification of that target, and real shared-domain Poisson weak-form
+assembly, remain open and block production Poisson-airbox modal qualification.
 
 ### 3.6 FEM GPU ownership and truthful lane names
 
@@ -335,7 +349,8 @@ container-backed `just` recipes; host-only checks cannot promote capability.
 - [x] Python, ProblemIR, planner, runtime, artifact, and UI impact reviewed
 - [x] Validation matrix and status axes defined
 - [ ] Typed public/IR/native request implemented
-- [ ] Real-split imaginary-axis SLEPc target implemented and qualified
+- [ ] Managed real PETSc/SLEPc `real_frequency_rotated` target with
+  `tau=omega_target` implemented and qualified
 - [ ] Real shared-domain Poisson modal assembly implemented and qualified
 - [ ] Persistent device Krylov and GPU modal solver implemented and qualified
 - [ ] Nonzero-k dynamic demag and DMI implemented and qualified

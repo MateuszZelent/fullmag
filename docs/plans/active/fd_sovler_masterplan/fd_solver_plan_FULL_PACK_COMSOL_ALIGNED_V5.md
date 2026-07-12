@@ -2878,10 +2878,19 @@ frequency_hz = lambda_i/(2*pi)
 sigma = i*omega_target
 ```
 
-A real PETSc/SLEPc build must use the explicit real-split transformed pencil to
-represent `sigma`. A real `EPSSetTarget(omega_target)` on the original
-`lambda=i omega` spectrum is forbidden unless a separately named
-real-frequency pencil and its mapping are derived and documented.
+The managed runtime is `libpetsc-real-dev` plus `libslepc-real-dev`. It must
+use the explicit ADR-017 real-split `real_frequency_rotated` pencil:
+
+```text
+R(L)y = omega R(i B_alpha)y
+tau = omega_target
+```
+
+`EPSSetTarget(tau)` is legal only on `real_frequency_rotated`. A real
+`EPSSetTarget(omega_target)` on the original `lambda=i omega` spectrum is
+forbidden; it is not an approximation, fallback, or alternate production
+representation. The artifact records the complex intent
+`sigma=i*omega_target` and the real realization together.
 
 ## ADR-018 - Original-operator blockwise residual
 
@@ -4807,6 +4816,36 @@ are true:
 Until these conditions pass, current capability rows remain bounded by their
 existing exact evidence and the target stage remains unimplemented or
 unqualified as appropriate.
+
+### 12.1 Production-scope documentation assertions
+
+The following assertions are normative documentation gates. They deliberately
+do not claim that the feature is qualified today; they define the complete
+evidence set that the final production record must bind for each exact CPU or
+GPU scope:
+
+1. CPU stages `K0-P1` through `K0-P6` and GPU stages `K0-G1` through `K0-G4`
+   have passed with their required artifacts and exact rejection controls.
+2. The managed `libpetsc-real-dev`/`libslepc-real-dev` runtime records
+   `spectral_scalar_mode=real_split`,
+   `spectral_pencil_kind=real_frequency_rotated`, `sigma=i*omega_target`, and
+   `tau=omega_target`; a real target on the original `lambda=i omega` pencil
+   is a required wrong-axis negative control.
+3. `Spectrum` publishes bounded selected-window metadata, physical
+   J-equivalence classes, counts, branch completeness, residuals, stop reason,
+   requested/resolved execution, and the exact validation-scope identity.
+4. Native `q` and reconstructed `phi` are published as revisioned Cartesian
+   mode fields on the binary data plane, with mesh/topology identity, units,
+   representation, mode identity, and validation sidecars. Fabricated or
+   runner-synthesized mode vectors cannot satisfy this assertion.
+5. The unified viewport proves selected-mode real, imaginary, magnitude, and
+   phase-rotated rendering through a visible, non-lost WebGL canvas with a
+   nonzero drawing buffer, a selected-mode visual difference, a phase-change
+   visual difference, and bounded memory across repeated mode switches.
+6. `frequency_domain_production_dod.v1` binds immutable passing evidence for
+   `DOD-01` through `DOD-14` for the exact CPU or GPU scope. A partial,
+   stale, hidden-fallback, or scope-mismatched record cannot promote a
+   capability.
 <!-- END 18_poisson_airbox_eigensolve_cpu_gpu_implementation.md -->
 
 <!-- BEGIN 19_eigensolve_frequency_driven_physics_numerics_audit.md -->
@@ -6798,6 +6837,7 @@ validated_scope: bounded workload, signatures, k domain and evidence, or no vali
 | Complex Bloch `grad_k`/`div_k` production assembly | `contract_only` | `unvalidated` | Not separately classified. | No validated scope: the consumed current-status documents identify numerical FEM dynamic demag-k as a contract gap. |
 | Matched-mesh `C_m(k)`/`C_phi(k)` oracle and accepted-domain equivalence certificate | `contract_only` | `unvalidated` | Not separately classified. | No validated scope: pair metadata or phase-projection behavior is not the independent block/action oracle required here. |
 | CPU dense `dynamic_demag_k` operator-input bridge | `source_visible` | `unvalidated` | Unavailable. | The native ABI can add a caller-supplied finite block-real matrix to a dense Bloch/Floquet stiffness for a narrow regression oracle. It does not assemble `grad_k`/`div_k`, Poisson, or a physical demag-k operator, and does not promote any public capability. |
+| CPU scalar MFEM `P(k)`/`C_phi(k)` form probe | `source_visible` | `unvalidated` | Unavailable. | The native CPU module assembles a bounded `SesquilinearForm` with diffusion, `|k|^2` mass, antisymmetric imaginary Bloch terms, optional Robin mass, an independently assembled real-split scalar `C_phi(k)` from caller-supplied complete DOF classes, a bounded dense `C_phi(k)^H P(k) C_phi(k)` action oracle, and a P1 tangent-frame `C_phi_q(k)` source form with uniform `Ms`. It has no mesh-derived accepted equivalence certificate, manufactured-solution gate, magnetic-region/airbox binding, field recovery, `A_qphi(k)`, or public execution path. |
 | CPU `modal_eigen` with `floquet_airbox` dynamic demag | `absent` | `unvalidated` | Unavailable. | No validated scope. Existing no-demag Floquet or K0 Poisson-airbox slices do not satisfy this signature. |
 | CPU `driven_response` with `floquet_airbox` dynamic demag | `absent` | `unvalidated` | Unavailable. | No validated scope. Existing K0 provider/Schur response slices do not satisfy this signature. |
 | GPU `modal_eigen` with `floquet_airbox` dynamic demag | `absent` | `unvalidated` | Unavailable. | No validated scope. Dense probes and K0 macrospin evidence are not a general device modal engine. |

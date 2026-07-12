@@ -814,3 +814,33 @@ are true:
 Until these conditions pass, current capability rows remain bounded by their
 existing exact evidence and the target stage remains unimplemented or
 unqualified as appropriate.
+
+### 12.1 Production-scope documentation assertions
+
+The following assertions are normative documentation gates. They deliberately
+do not claim that the feature is qualified today; they define the complete
+evidence set that the final production record must bind for each exact CPU or
+GPU scope:
+
+1. CPU stages `K0-P1` through `K0-P6` and GPU stages `K0-G1` through `K0-G4`
+   have passed with their required artifacts and exact rejection controls.
+2. The managed `libpetsc-real-dev`/`libslepc-real-dev` runtime records
+   `spectral_scalar_mode=real_split`,
+   `spectral_pencil_kind=real_frequency_rotated`, `sigma=i*omega_target`, and
+   `tau=omega_target`; a real target on the original `lambda=i omega` pencil
+   is a required wrong-axis negative control.
+3. `Spectrum` publishes bounded selected-window metadata, physical
+   J-equivalence classes, counts, branch completeness, residuals, stop reason,
+   requested/resolved execution, and the exact validation-scope identity.
+4. Native `q` and reconstructed `phi` are published as revisioned Cartesian
+   mode fields on the binary data plane, with mesh/topology identity, units,
+   representation, mode identity, and validation sidecars. Fabricated or
+   runner-synthesized mode vectors cannot satisfy this assertion.
+5. The unified viewport proves selected-mode real, imaginary, magnitude, and
+   phase-rotated rendering through a visible, non-lost WebGL canvas with a
+   nonzero drawing buffer, a selected-mode visual difference, a phase-change
+   visual difference, and bounded memory across repeated mode switches.
+6. `frequency_domain_production_dod.v1` binds immutable passing evidence for
+   `DOD-01` through `DOD-14` for the exact CPU or GPU scope. A partial,
+   stale, hidden-fallback, or scope-mismatched record cannot promote a
+   capability.
