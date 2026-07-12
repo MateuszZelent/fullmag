@@ -9460,4 +9460,42 @@ mod tests {
             "native_fem_modal_eigen/slepc_multi_shift_invert_production_cpu_dense"
         );
     }
+
+    #[test]
+    fn equilibrium_artifact_loader_requires_complete_v6_contract() {
+        let path = std::env::temp_dir().join(format!(
+            "fullmag-eigen-equilibrium-v6-{}.json",
+            std::process::id()
+        ));
+        let artifact = serde_json::json!({
+            "schema_version": "equilibrium_artifact.v6",
+            "accepted_for_linearization": true,
+            "producer_run_id": "run:eq", "content_sha256": "sha256:eq",
+            "equilibrium_id": "eq:1", "mesh_snapshot_id": "mesh:1",
+            "material_snapshot_id": "material:1", "physics_snapshot_id": "physics:1",
+            "boundary_snapshot_id": "boundary:1", "m0": [[0.0, 0.0, 1.0]],
+            "phi0": [0.0],
+            "acceptance_tolerances": {"m0_norm": 1e-10, "equilibrium_torque_relative": 1e-6},
+            "periodic_mesh_certificate": {"schema_version": "periodic_mesh_certificate.v6", "certificate_id": "cert:1", "content_sha256": "sha256:cert"}
+        });
+        std::fs::write(&path, artifact.to_string()).unwrap();
+        assert_eq!(load_equilibrium_artifact(path.to_str().unwrap(), 1).unwrap(), vec![[0.0, 0.0, 1.0]]);
+        for invalid in [
+            serde_json::json!([[0.0, 0.0, 1.0]]),
+            serde_json::json!({"values": [[0.0, 0.0, 1.0]]}),
+            serde_json::json!({"schema_version": "equilibrium_artifact.v6"}),
+        ] {
+            std::fs::write(&path, invalid.to_string()).unwrap();
+            assert!(load_equilibrium_artifact(path.to_str().unwrap(), 1).is_err());
+        }
+        let mut missing_phi = artifact.clone();
+        missing_phi.as_object_mut().unwrap().remove("phi0");
+        std::fs::write(&path, missing_phi.to_string()).unwrap();
+        assert!(load_equilibrium_artifact(path.to_str().unwrap(), 1).is_err());
+        let mut missing_certificate = artifact;
+        missing_certificate["periodic_mesh_certificate"].as_object_mut().unwrap().remove("content_sha256");
+        std::fs::write(&path, missing_certificate.to_string()).unwrap();
+        assert!(load_equilibrium_artifact(path.to_str().unwrap(), 1).is_err());
+        std::fs::remove_file(path).unwrap();
+    }
 }
