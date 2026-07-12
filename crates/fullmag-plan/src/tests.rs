@@ -5800,6 +5800,7 @@ fn fem_eigen_backend_with_mesh_asset_plans_successfully() {
         normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
         damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
         spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+        magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
             outputs: vec![
@@ -5951,6 +5952,7 @@ fn fem_eigen_carries_k0_kittel_validation_from_runtime_metadata() {
         normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
         damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
         spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+        magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
@@ -6154,6 +6156,7 @@ fn fem_eigen_allows_k0_kittel_synthetic_demag_factor_floquet_path() {
                 surface_anisotropy_axis: None,
             },
         ),
+        magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
@@ -6303,6 +6306,7 @@ fn fem_eigen_allows_k0_kittel_periodic_airbox_shared_domain_path() {
                 surface_anisotropy_axis: None,
             },
         ),
+        magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
@@ -6431,6 +6435,7 @@ fn fem_eigen_shared_domain_region_samples_equilibrium_once_per_object() {
         normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
         damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
         spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+        magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
@@ -6528,6 +6533,7 @@ fn fem_eigen_backend_interfacial_dmi_defaults_interface_normal_to_z_in_strict_mo
         normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
         damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
         spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+        magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
@@ -6622,6 +6628,7 @@ fn fem_eigen_auto_demag_resolves_to_poisson_robin_on_shared_domain_mesh_with_air
         normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
         damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
         spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+        magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
@@ -6722,6 +6729,7 @@ fn fem_eigen_periodic_bc_requires_periodic_node_pairs() {
         spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::Legacy(
             fullmag_ir::SpinWaveBoundaryKindIR::Periodic,
         ),
+        magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
@@ -6816,6 +6824,7 @@ fn fem_eigen_periodic_bc_with_pairs_plans_successfully() {
                 surface_anisotropy_axis: None,
             },
         ),
+        magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
@@ -6907,6 +6916,7 @@ fn fem_eigen_floquet_bc_with_pairs_and_k_sampling_plans_successfully() {
                 surface_anisotropy_axis: None,
             },
         ),
+        magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
@@ -7013,6 +7023,7 @@ fn fem_eigen_floquet_dynamic_demag_is_rejected() {
                 surface_anisotropy_axis: None,
             },
         ),
+        magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
@@ -7151,6 +7162,7 @@ fn fem_eigen_surface_anisotropy_requires_positive_ks_and_axis() {
                 surface_anisotropy_axis: Some([0.0, 0.0, 0.0]),
             },
         ),
+        magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
@@ -7852,6 +7864,19 @@ fn fem_frequency_response_periodic_airbox_magnetostatic_bc_requires_periodic_gam
         "unexpected nonzero-k rejection reasons: {:?}",
         err.reasons
     );
+}
+
+#[test]
+fn fem_frequency_response_preserves_periodic_airbox_bc_through_eigen_proxy() {
+    let ir = fem_frequency_response_periodic_airbox_domain_problem();
+    let planned = plan(&ir).expect("periodic-airbox response must lower through its eigen proxy");
+    match planned.backend_plan {
+        BackendPlanIR::FemFrequencyResponse(fem) => assert_eq!(
+            fem.magnetostatic_bc,
+            fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0
+        ),
+        other => panic!("expected FemFrequencyResponse plan, got {other:?}"),
+    }
 }
 
 #[test]

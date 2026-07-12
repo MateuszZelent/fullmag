@@ -3370,6 +3370,7 @@ pub(crate) fn plan_fem_frequency_response(
         normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
         damping_policy: *damping_policy,
         spin_wave_bc: eigen_proxy_spin_wave_bc,
+        magnetostatic_bc: *magnetostatic_bc,
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
             outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
