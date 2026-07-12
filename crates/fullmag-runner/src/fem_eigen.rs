@@ -1024,7 +1024,9 @@ impl OwnedModalEigenPoissonAirboxBlockProblem {
             phi_mean_weights: &self.phi_mean_weights,
             target_frequency_hz: self.target_frequency_hz,
             expected_reference_frequency_hz: self.expected_reference_frequency_hz,
-            periodic_mesh_certificate_schema: "periodic_mesh_certificate.v5",
+            // Task 6 owns transport of the certificate ID through the C ABI.
+            // The existing ABI can nevertheless advertise only v6 material.
+            periodic_mesh_certificate_schema: "periodic_mesh_certificate.v6",
             magnetic_pair_count: self.magnetic_pair_count,
             airbox_pair_count: self.airbox_pair_count,
             outer_boundary_kind: self.outer_boundary_kind,
@@ -3927,18 +3929,60 @@ fn load_equilibrium_artifact(path: &str, expected_len: usize) -> Result<Vec<Vect
     let value: serde_json::Value = serde_json::from_str(&raw).map_err(|error| RunError {
         message: format!("failed to parse equilibrium artifact '{}': {}", path, error),
     })?;
-    let values = value
-        .get("values")
-        .cloned()
-        .unwrap_or(value)
-        .as_array()
-        .cloned()
-        .ok_or_else(|| RunError {
-            message: format!(
-                "equilibrium artifact '{}' must be a JSON array or a field artifact with 'values'",
-                path
-            ),
-        })?;
+    let object = value.as_object().ok_or_else(|| RunError {
+        message: format!(
+            "equilibrium artifact '{}' must be an equilibrium_artifact.v6 object; legacy vector payloads are rejected",
+            path
+        ),
+    })?;
+    let required_string = |name: &str| -> Result<&str, RunError> {
+        object.get(name).and_then(serde_json::Value::as_str).filter(|value| !value.is_empty())
+            .ok_or_else(|| RunError {
+                message: format!("equilibrium artifact '{}' is missing required v6 field '{}'", path, name),
+            })
+    };
+    if required_string("schema_version")? != "equilibrium_artifact.v6" {
+        return Err(RunError {
+            message: format!("equilibrium artifact '{}' must use schema equilibrium_artifact.v6", path),
+        });
+    }
+    if object.get("accepted_for_linearization").and_then(serde_json::Value::as_bool) != Some(true) {
+        return Err(RunError {
+            message: format!("equilibrium artifact '{}' is not accepted for linearization", path),
+        });
+    }
+    for name in [
+        "producer_run_id", "content_sha256", "equilibrium_id", "mesh_snapshot_id",
+        "material_snapshot_id", "physics_snapshot_id", "boundary_snapshot_id",
+    ] {
+        required_string(name)?;
+    }
+    let phi0 = object.get("phi0").and_then(serde_json::Value::as_array).ok_or_else(|| RunError {
+        message: format!("equilibrium artifact '{}' is missing required v6 phi0", path),
+    })?;
+    if phi0.iter().any(|value| value.as_f64().is_none_or(|value| !value.is_finite())) {
+        return Err(RunError { message: format!("equilibrium artifact '{}' has invalid phi0", path) });
+    }
+    let tolerances = object.get("acceptance_tolerances").and_then(serde_json::Value::as_object)
+        .ok_or_else(|| RunError { message: format!("equilibrium artifact '{}' is missing acceptance tolerances", path) })?;
+    for name in ["m0_norm", "equilibrium_torque_relative"] {
+        if tolerances.get(name).and_then(serde_json::Value::as_f64).is_none_or(|value| !value.is_finite() || value < 0.0) {
+            return Err(RunError { message: format!("equilibrium artifact '{}' has invalid acceptance tolerance '{}'", path, name) });
+        }
+    }
+    let certificate = object.get("periodic_mesh_certificate").and_then(serde_json::Value::as_object)
+        .ok_or_else(|| RunError { message: format!("equilibrium artifact '{}' is missing periodic mesh certificate", path) })?;
+    for name in ["certificate_id", "content_sha256"] {
+        if certificate.get(name).and_then(serde_json::Value::as_str).is_none_or(str::is_empty) {
+            return Err(RunError { message: format!("equilibrium artifact '{}' has incomplete periodic mesh certificate", path) });
+        }
+    }
+    if certificate.get("schema_version").and_then(serde_json::Value::as_str) != Some("periodic_mesh_certificate.v6") {
+        return Err(RunError { message: format!("equilibrium artifact '{}' requires periodic_mesh_certificate.v6", path) });
+    }
+    let values = object.get("m0").and_then(serde_json::Value::as_array).cloned().ok_or_else(|| RunError {
+        message: format!("equilibrium artifact '{}' is missing v6 m0 vectors", path),
+    })?;
     if values.len() != expected_len {
         return Err(RunError {
             message: format!(
@@ -3963,11 +4007,11 @@ fn load_equilibrium_artifact(path: &str, expected_len: usize) -> Result<Vec<Vect
                     message: format!("equilibrium artifact '{}' contains a non-3D vector", path),
                 });
             }
-            Ok([
-                array[0].as_f64().unwrap_or(0.0),
-                array[1].as_f64().unwrap_or(0.0),
-                array[2].as_f64().unwrap_or(0.0),
-            ])
+            let vector = [array[0].as_f64(), array[1].as_f64(), array[2].as_f64()];
+            if vector.iter().any(|value| value.is_none_or(|value| !value.is_finite())) {
+                return Err(RunError { message: format!("equilibrium artifact '{}' contains non-finite m0", path) });
+            }
+            Ok([vector[0].unwrap(), vector[1].unwrap(), vector[2].unwrap()])
         })
         .collect()
 }
@@ -8031,7 +8075,7 @@ mod tests {
         assert_eq!(borrowed.phi_dof_count, 2);
         assert_eq!(
             borrowed.periodic_mesh_certificate_schema,
-            "periodic_mesh_certificate.v5"
+            "periodic_mesh_certificate.v6"
         );
         assert_eq!(borrowed.magnetic_pair_count, 1);
         assert_eq!(borrowed.airbox_pair_count, 1);
