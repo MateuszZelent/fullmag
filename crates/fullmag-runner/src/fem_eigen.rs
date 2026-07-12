@@ -3980,6 +3980,15 @@ fn load_equilibrium_artifact(path: &str, expected_len: usize) -> Result<Vec<Vect
     if certificate.get("schema_version").and_then(serde_json::Value::as_str) != Some("periodic_mesh_certificate.v6") {
         return Err(RunError { message: format!("equilibrium artifact '{}' requires periodic_mesh_certificate.v6", path) });
     }
+    let certificate_id = certificate["certificate_id"].as_str().unwrap();
+    let certificate_hash = certificate["content_sha256"].as_str().unwrap();
+    let expected_certificate_id = format!(
+        "periodic_mesh_certificate.v6:{}",
+        certificate_hash.strip_prefix("sha256:").unwrap_or("")
+    );
+    if certificate_id != expected_certificate_id {
+        return Err(RunError { message: format!("equilibrium artifact '{}' has mismatched periodic mesh certificate identity", path) });
+    }
     let values = object.get("m0").and_then(serde_json::Value::as_array).cloned().ok_or_else(|| RunError {
         message: format!("equilibrium artifact '{}' is missing v6 m0 vectors", path),
     })?;
@@ -9476,7 +9485,7 @@ mod tests {
             "boundary_snapshot_id": "boundary:1", "m0": [[0.0, 0.0, 1.0]],
             "phi0": [0.0],
             "acceptance_tolerances": {"m0_norm": 1e-10, "equilibrium_torque_relative": 1e-6},
-            "periodic_mesh_certificate": {"schema_version": "periodic_mesh_certificate.v6", "certificate_id": "cert:1", "content_sha256": "sha256:cert"}
+            "periodic_mesh_certificate": {"schema_version": "periodic_mesh_certificate.v6", "certificate_id": "periodic_mesh_certificate.v6:cert", "content_sha256": "sha256:cert"}
         });
         std::fs::write(&path, artifact.to_string()).unwrap();
         assert_eq!(load_equilibrium_artifact(path.to_str().unwrap(), 1).unwrap(), vec![[0.0, 0.0, 1.0]]);
@@ -9495,6 +9504,16 @@ mod tests {
         let mut missing_certificate = artifact;
         missing_certificate["periodic_mesh_certificate"].as_object_mut().unwrap().remove("content_sha256");
         std::fs::write(&path, missing_certificate.to_string()).unwrap();
+        assert!(load_equilibrium_artifact(path.to_str().unwrap(), 1).is_err());
+        let mismatched_certificate = serde_json::json!({
+            "schema_version": "equilibrium_artifact.v6", "accepted_for_linearization": true,
+            "producer_run_id": "run:eq", "content_sha256": "sha256:eq", "equilibrium_id": "eq:1",
+            "mesh_snapshot_id": "mesh:1", "material_snapshot_id": "material:1", "physics_snapshot_id": "physics:1", "boundary_snapshot_id": "boundary:1",
+            "m0": [[0.0, 0.0, 1.0]], "phi0": [0.0],
+            "acceptance_tolerances": {"m0_norm": 1e-10, "equilibrium_torque_relative": 1e-6},
+            "periodic_mesh_certificate": {"schema_version": "periodic_mesh_certificate.v6", "certificate_id": "periodic_mesh_certificate.v6:other", "content_sha256": "sha256:cert"}
+        });
+        std::fs::write(&path, mismatched_certificate.to_string()).unwrap();
         assert!(load_equilibrium_artifact(path.to_str().unwrap(), 1).is_err());
         std::fs::remove_file(path).unwrap();
     }
