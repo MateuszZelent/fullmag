@@ -102,6 +102,7 @@ bool gpu_rk_accumulate_effective_field_for_magnetization(
     const FemGpuComponentField &m,
     cudaStream_t stream,
     int n,
+    double evaluation_time_s,
     const char *label,
     std::string &reason,
     bool fresh_demag_initial_guess = false)
@@ -136,7 +137,7 @@ bool gpu_rk_accumulate_effective_field_for_magnetization(
     if (!gpu_rk_compute_local_field_contributions(ctx, m, stream, n, reason)) {
         return false;
     }
-    return gpu_rk_accumulate_effective_field(ctx, stream, n, label, reason);
+    return gpu_rk_accumulate_effective_field(ctx, stream, n, evaluation_time_s, label, reason);
 }
 
 } // namespace
@@ -146,11 +147,12 @@ bool gpu_rk_compute_effective_field_for_magnetization(
     const FemGpuComponentField &m,
     cudaStream_t stream,
     int n,
+    double evaluation_time_s,
     const char *label,
     std::string &reason)
 {
     return gpu_rk_accumulate_effective_field_for_magnetization(
-        ctx, m, stream, n, label, reason);
+        ctx, m, stream, n, evaluation_time_s, label, reason);
 }
 
 bool gpu_rk_compute_effective_field_for_magnetization_fresh_demag(
@@ -158,11 +160,12 @@ bool gpu_rk_compute_effective_field_for_magnetization_fresh_demag(
     const FemGpuComponentField &m,
     cudaStream_t stream,
     int n,
+    double evaluation_time_s,
     const char *label,
     std::string &reason)
 {
     return gpu_rk_accumulate_effective_field_for_magnetization(
-        ctx, m, stream, n, label, reason, true);
+        ctx, m, stream, n, evaluation_time_s, label, reason, true);
 }
 
 bool gpu_rk_compute_rhs_for_magnetization(
@@ -171,11 +174,12 @@ bool gpu_rk_compute_rhs_for_magnetization(
     FemGpuComponentField &rhs,
     cudaStream_t stream,
     int n,
+    double evaluation_time_s,
     const char *label,
     std::string &reason)
 {
     if (!gpu_rk_accumulate_effective_field_for_magnetization(
-            ctx, m, stream, n, label, reason)) {
+            ctx, m, stream, n, evaluation_time_s, label, reason)) {
         return false;
     }
 

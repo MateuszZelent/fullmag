@@ -201,6 +201,7 @@ fn fem_quantity_is_active(engine: FemEngine, plan: &FemPlanIR, id: QuantityId) -
                 | QuantityId::HEff
                 | QuantityId::HDmi
                 | QuantityId::HDmiBulk
+                | QuantityId::HTherm
                 | QuantityId::EdenEx
                 | QuantityId::EdenDemag
                 | QuantityId::EdenExt

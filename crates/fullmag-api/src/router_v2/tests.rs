@@ -21251,11 +21251,13 @@ async fn topological_charge_reports_empty_support_when_m_field_exists_without_us
 
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
+    assert_eq!(json["schema_version"], "topological_charge.v2");
     assert_eq!(json["status"], "empty_support");
-    assert_eq!(json["field_revision"], 7);
-    assert_eq!(json["sample_count"], 4);
-    assert_eq!(json["valid_sample_count"], 4);
+    assert_eq!(json["provenance"]["field_revision"], "7");
+    assert_eq!(json["quality"]["total_vertex_count"], 4);
+    assert_eq!(json["quality"]["valid_vertex_count"], 4);
     assert_eq!(json["warnings"][0]["code"], "empty_support");
+    assert!(json.get("polarity").is_none());
 }
 
 #[tokio::test]
@@ -21316,13 +21318,15 @@ async fn topological_charge_computes_uniform_fdm_grid_without_fem_mesh() {
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
     assert_eq!(json["status"], "ready");
-    assert_eq!(json["field_revision"], 9);
-    assert_eq!(json["sample_grid"]["nx"], 3);
-    assert_eq!(json["sample_grid"]["ny"], 3);
-    assert_eq!(json["sample_grid"]["plane"], "xy");
-    assert_eq!(json["sample_count"], 9);
-    assert_eq!(json["valid_sample_count"], 9);
+    assert_eq!(json["provenance"]["field_revision"], "9");
+    assert_eq!(json["provenance"]["source_kind"], "current_live");
+    assert_eq!(json["resolved_support"]["plane"], "xy");
+    assert_eq!(json["quality"]["total_vertex_count"], 9);
+    assert_eq!(json["quality"]["valid_vertex_count"], 9);
     assert!(json["charge"].as_f64().unwrap().abs() < 1.0e-6);
+    assert_eq!(json["trust"], "qualified");
+    assert_eq!(json["nearest_integer"], 0);
+    assert_eq!(json["integer_error"], 0.0);
     assert!(json["warnings"].as_array().unwrap().is_empty());
 }
 
@@ -21385,7 +21389,7 @@ async fn topological_charge_cache_key_tracks_field_revision() {
             .unwrap(),
     )
     .await;
-    assert_eq!(first["valid_sample_count"], 9);
+    assert_eq!(first["quality"]["valid_vertex_count"], 9);
     assert!(first["warnings"].as_array().unwrap().is_empty());
 
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -21409,7 +21413,7 @@ async fn topological_charge_cache_key_tracks_field_revision() {
             .unwrap(),
     )
     .await;
-    assert_eq!(cached["valid_sample_count"], 9);
+    assert_eq!(cached["quality"]["valid_vertex_count"], 9);
     assert!(cached["warnings"].as_array().unwrap().is_empty());
 
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -21431,16 +21435,16 @@ async fn topological_charge_cache_key_tracks_field_revision() {
     )
     .await;
     assert_eq!(recomputed["status"], "invalid_magnetization");
-    assert_eq!(recomputed["valid_sample_count"], 0);
+    assert_eq!(recomputed["quality"]["valid_vertex_count"], 0);
     assert!(recomputed["charge"].is_null());
     assert!(recomputed["nearest_integer"].is_null());
     assert!(recomputed["integer_error"].is_null());
-    assert!(recomputed["polarity"].is_null());
+    assert!(recomputed.get("polarity").is_none());
     assert_eq!(recomputed["warnings"][0]["code"], "invalid_magnetization");
 }
 
 #[tokio::test]
-async fn topological_charge_auto_plane_uses_native_profile_of_thinnest_fdm_axis() {
+async fn topological_charge_default_fdm_support_uses_one_midplane_of_thinnest_axis() {
     let state = test_app_state_with_live_session().await;
     let scene = sample_scene_document();
     let object_id = scene.objects[0].id.clone();
@@ -21497,21 +21501,10 @@ async fn topological_charge_auto_plane_uses_native_profile_of_thinnest_fdm_axis(
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
     assert_eq!(json["status"], "ready");
-    assert_eq!(json["plane"], "xy");
-    assert_eq!(json["sample_grid"]["nx"], 5);
-    assert_eq!(json["sample_grid"]["ny"], 5);
-    assert_eq!(json["sample_grid"]["plane"], "xy");
-    assert_eq!(json["sample_topology"]["kind"], "fdm_layer_profile");
-    assert_eq!(json["sample_topology"]["point_count"], 75);
-    assert_eq!(json["sample_topology"]["triangle_count"], 96);
-    assert_eq!(json["sample_count"], 75);
-    assert_eq!(json["valid_sample_count"], 75);
-    assert_eq!(json["layer_samples"].as_array().unwrap().len(), 3);
-    for layer in json["layer_samples"].as_array().unwrap() {
-        assert_eq!(layer["sample_count"], 25);
-        assert_eq!(layer["valid_sample_count"], 25);
-        assert_eq!(layer["triangle_count"], 32);
-    }
+    assert_eq!(json["request"]["requested_support"], "midplane");
+    assert_eq!(json["resolved_support"]["plane"], "xy");
+    assert_eq!(json["quality"]["total_vertex_count"], 25);
+    assert_eq!(json["quality"]["valid_vertex_count"], 25);
     assert!(json["charge"].as_f64().unwrap().abs() < 1.0e-6);
 }
 
@@ -21524,6 +21517,7 @@ async fn topological_charge_computes_uniform_fem_object_from_native_layer_faces(
         let mut mesh = sample_scoped_fem_mesh_payload();
         mesh.mesh_parts[0].surface_faces.clear();
         snapshot.scene_document = Some(scene);
+        snapshot.session.plan_summary = serde_json::json!({ "fe_order": 1 });
         snapshot.mesh_revision = 17;
         snapshot.fem_mesh = Some(mesh);
         snapshot.latest_fields = serde_json::from_value(serde_json::json!({
@@ -21564,24 +21558,15 @@ async fn topological_charge_computes_uniform_fem_object_from_native_layer_faces(
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
     assert_eq!(json["status"], "ready");
-    assert_eq!(json["field_revision"], 13);
-    assert_eq!(json["mesh_revision"], 17);
-    assert_eq!(json["mesh_generation_id"], "42");
-    assert_eq!(json["plane"], "xy");
-    assert!(json["sample_grid"].is_null());
-    assert_eq!(json["sample_topology"]["kind"], "fem_layer_faces");
-    assert_eq!(json["sample_topology"]["point_count"], 3);
-    assert_eq!(json["sample_topology"]["triangle_count"], 1);
-    assert_eq!(json["sample_count"], json["sample_topology"]["point_count"]);
-    assert_eq!(json["valid_sample_count"], json["sample_count"]);
-    assert_eq!(json["layer_samples"].as_array().unwrap().len(), 1);
-    assert_eq!(json["layer_samples"][0]["sample_count"], 3);
-    assert_eq!(json["layer_samples"][0]["valid_sample_count"], 3);
-    assert_eq!(
-        json["layer_samples"][0]["triangle_count"],
-        json["sample_topology"]["triangle_count"]
-    );
-    assert_eq!(json["domain_generation_id"], "42");
+    assert_eq!(json["provenance"]["field_revision"], "13");
+    assert_eq!(json["provenance"]["mesh_revision"], "17");
+    assert_eq!(json["provenance"]["mesh_generation_id"], "42");
+    assert_eq!(json["provenance"]["fe_order"], 1);
+    assert_eq!(json["resolved_support"]["plane"], "xy");
+    assert_eq!(json["quality"]["total_vertex_count"], 3);
+    assert_eq!(json["quality"]["valid_vertex_count"], 3);
+    assert!(json["profile"].as_array().unwrap().is_empty());
+    assert_eq!(json["provenance"]["domain_generation_id"], "42");
     assert!(json["charge"].as_f64().unwrap().abs() < 1.0e-6);
     assert!(json["warnings"]
         .as_array()
@@ -21598,6 +21583,7 @@ async fn topological_charge_computes_analytic_neel_skyrmion_from_fem_layer_profi
     let (mesh, values) = sample_fem_neel_skyrmion_mesh_and_values(25, 1.0, 0.12);
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.scene_document = Some(scene);
+        snapshot.session.plan_summary = serde_json::json!({ "fe_order": 1 });
         snapshot.mesh_revision = 23;
         snapshot.fem_mesh = Some(mesh);
         snapshot.latest_fields = serde_json::from_value(serde_json::json!({
@@ -21618,7 +21604,7 @@ async fn topological_charge_computes_analytic_neel_skyrmion_from_fem_layer_profi
             Request::builder()
                 .method(Method::GET)
                 .uri(format!(
-                    "/v2/sessions/current/analysis/extensions/objects/{object_id}/topological-charge?plane=xy&resolution=65"
+                    "/v2/sessions/current/analysis/extensions/objects/{object_id}/topological-charge?plane=xy&support=layer_profile&profile_samples=3"
                 ))
                 .body(Body::empty())
                 .unwrap(),
@@ -21629,24 +21615,13 @@ async fn topological_charge_computes_analytic_neel_skyrmion_from_fem_layer_profi
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
     assert_eq!(json["status"], "ready");
-    assert_eq!(json["field_revision"], 29);
-    assert_eq!(json["mesh_revision"], 23);
-    assert_eq!(json["mesh_generation_id"], "9001");
-    assert_eq!(json["domain_generation_id"], "9001");
-    assert!(json["sample_grid"].is_null());
-    assert_eq!(json["sample_topology"]["kind"], "fem_layer_faces");
-    assert_eq!(json["sample_topology"]["point_count"], 1250);
-    assert_eq!(json["sample_topology"]["triangle_count"], 2304);
-    assert_eq!(json["sample_count"], json["sample_topology"]["point_count"]);
-    assert_eq!(json["valid_sample_count"], json["sample_count"]);
-    let layer_samples = json["layer_samples"].as_array().unwrap();
-    assert_eq!(layer_samples.len(), 2);
-    assert_eq!(layer_samples[0]["sample_count"], 625);
-    assert_eq!(layer_samples[0]["valid_sample_count"], 625);
-    assert_eq!(layer_samples[0]["triangle_count"], 1152);
-    assert_eq!(layer_samples[1]["sample_count"], 625);
-    assert_eq!(layer_samples[1]["valid_sample_count"], 625);
-    assert_eq!(layer_samples[1]["triangle_count"], 1152);
+    assert_eq!(json["provenance"]["field_revision"], "29");
+    assert_eq!(json["provenance"]["mesh_revision"], "23");
+    assert_eq!(json["provenance"]["mesh_generation_id"], "9001");
+    assert_eq!(json["provenance"]["domain_generation_id"], "9001");
+    assert_eq!(json["provenance"]["fe_order"], 1);
+    assert_eq!(json["resolved_support"]["support"], "layer_profile");
+    assert_eq!(json["profile"].as_array().unwrap().len(), 3);
     let charge = json["charge"]
         .as_f64()
         .expect("FEM skyrmion charge should be numeric");
@@ -21654,8 +21629,7 @@ async fn topological_charge_computes_analytic_neel_skyrmion_from_fem_layer_profi
         (charge + 1.0).abs() < 0.18,
         "expected FEM Neel skyrmion charge close to -1, got {charge}"
     );
-    assert_eq!(json["nearest_integer"], -1);
-    assert_eq!(json["polarity"], "negative");
+    assert!(json.get("polarity").is_none());
 }
 
 #[tokio::test]
@@ -21668,6 +21642,7 @@ async fn topological_charge_reports_degenerate_support_when_no_volume_sampler_is
         mesh.mesh_parts[0].element_count = 0;
         mesh.mesh_parts[0].surface_faces.clear();
         snapshot.scene_document = Some(scene);
+        snapshot.session.plan_summary = serde_json::json!({ "fe_order": 1 });
         snapshot.fem_mesh = Some(mesh);
         snapshot.latest_fields = serde_json::from_value(serde_json::json!({
             "m": {

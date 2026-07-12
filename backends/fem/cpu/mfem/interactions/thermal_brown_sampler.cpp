@@ -2,7 +2,7 @@
  * Brown thermal sampler source contract.
  *
  * This source owns H_therm buffer initialization, node-volume fallback,
- * deterministic per-time/dt RNG seeding, same-time/dt cache reuse, and
+ * deterministic accepted-interval RNG seeding, retry raw-draw reuse, and
  * nonmagnetic-node zeroing. It does not define the sigma formula or add H_therm to H_eff.
  */
 #include "cpu/mfem/interactions/thermal_brown_sampler.hpp"
@@ -14,7 +14,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <cstring>
 #include <random>
 
 namespace fullmag::fem {
@@ -79,14 +78,6 @@ double average_magnetic_node_volume(const Context &ctx)
     return total_magnetic_volume / static_cast<double>(magnetic_node_count);
 }
 
-uint64_t double_bits(double value)
-{
-    uint64_t bits = 0;
-    static_assert(sizeof(bits) == sizeof(value), "unexpected double width");
-    std::memcpy(&bits, &value, sizeof(bits));
-    return bits;
-}
-
 uint64_t splitmix64(uint64_t value)
 {
     value += 0x9e3779b97f4a7c15ull;
@@ -98,8 +89,7 @@ uint64_t splitmix64(uint64_t value)
 uint64_t deterministic_thermal_seed(const Context &ctx)
 {
     uint64_t seed = splitmix64(ctx.thermal_brown.seed);
-    seed ^= splitmix64(double_bits(ctx.state.current_time));
-    seed ^= splitmix64(double_bits(ctx.adaptive_dt.current_dt));
+    seed ^= splitmix64(ctx.state.step_count);
     return splitmix64(seed);
 }
 
@@ -109,6 +99,8 @@ void initialize_thermal_brown_field(Context &ctx)
 {
     if (ctx.thermal_brown.temperature > 0.0) {
         ctx.thermal_brown.h_xyz.assign(static_cast<size_t>(ctx.mesh.n_nodes) * 3u, 0.0);
+        ctx.thermal_brown.xi_xyz.assign(static_cast<size_t>(ctx.mesh.n_nodes) * 3u, 0.0);
+        ctx.thermal_brown.raw_draw_valid = false;
     }
 }
 
@@ -116,13 +108,16 @@ void refresh_thermal_brown_field(Context &ctx)
 {
     if (ctx.thermal_brown.h_xyz.size() != static_cast<size_t>(ctx.mesh.n_nodes) * 3u) {
         ctx.thermal_brown.h_xyz.assign(static_cast<size_t>(ctx.mesh.n_nodes) * 3u, 0.0);
+        ctx.thermal_brown.xi_xyz.assign(static_cast<size_t>(ctx.mesh.n_nodes) * 3u, 0.0);
+        ctx.thermal_brown.raw_draw_valid = false;
     }
     if (ctx.thermal_brown.temperature <= 0.0 || ctx.adaptive_dt.current_dt <= 0.0) {
         ctx.thermal_brown.sigma = 0.0;
         std::fill(ctx.thermal_brown.h_xyz.begin(), ctx.thermal_brown.h_xyz.end(), 0.0);
         return;
     }
-    if (ctx.thermal_brown.last_refresh_time == ctx.state.current_time &&
+    if (ctx.thermal_brown.raw_draw_valid &&
+        ctx.thermal_brown.accepted_interval_index == ctx.state.step_count &&
         ctx.thermal_brown.last_refresh_dt == ctx.adaptive_dt.current_dt) {
         return;
     }
@@ -138,24 +133,41 @@ void refresh_thermal_brown_field(Context &ctx)
         return;
     }
 
-    std::mt19937_64 deterministic_rng;
-    std::mt19937_64 *rng_ptr = nullptr;
-    if (ctx.thermal_brown.seed != 0) {
-        deterministic_rng.seed(deterministic_thermal_seed(ctx));
-        rng_ptr = &deterministic_rng;
-    } else {
-        static thread_local bool rng_initialized = false;
-        static thread_local std::mt19937_64 rng;
-        if (!rng_initialized) {
-            std::random_device rd;
-            rng.seed(rd());
-            rng_initialized = true;
+    if (!ctx.thermal_brown.raw_draw_valid ||
+        ctx.thermal_brown.accepted_interval_index != ctx.state.step_count) {
+        std::mt19937_64 deterministic_rng;
+        std::mt19937_64 *rng_ptr = nullptr;
+        if (ctx.thermal_brown.seed != 0) {
+            deterministic_rng.seed(deterministic_thermal_seed(ctx));
+            rng_ptr = &deterministic_rng;
+        } else {
+            static thread_local bool rng_initialized = false;
+            static thread_local std::mt19937_64 rng;
+            if (!rng_initialized) {
+                std::random_device rd;
+                rng.seed(rd());
+                rng_initialized = true;
+            }
+            rng_ptr = &rng;
         }
-        rng_ptr = &rng;
+        std::normal_distribution<double> unit_normal(0.0, 1.0);
+        for (size_t node = 0; node < static_cast<size_t>(ctx.mesh.n_nodes); ++node) {
+            const size_t base = node * 3u;
+            if (!ctx.mesh.magnetic_node_mask.empty() && ctx.mesh.magnetic_node_mask[node] == 0u) {
+                ctx.thermal_brown.xi_xyz[base + 0] = 0.0;
+                ctx.thermal_brown.xi_xyz[base + 1] = 0.0;
+                ctx.thermal_brown.xi_xyz[base + 2] = 0.0;
+                continue;
+            }
+            ctx.thermal_brown.xi_xyz[base + 0] = unit_normal(*rng_ptr);
+            ctx.thermal_brown.xi_xyz[base + 1] = unit_normal(*rng_ptr);
+            ctx.thermal_brown.xi_xyz[base + 2] = unit_normal(*rng_ptr);
+        }
+        ctx.thermal_brown.accepted_interval_index = ctx.state.step_count;
+        ctx.thermal_brown.raw_draw_valid = true;
     }
 
     double max_sigma = 0.0;
-    std::normal_distribution<double> unit_normal(0.0, 1.0);
     for (size_t node = 0; node < static_cast<size_t>(ctx.mesh.n_nodes); ++node) {
         const size_t base = node * 3u;
         if (!ctx.mesh.magnetic_node_mask.empty() && ctx.mesh.magnetic_node_mask[node] == 0u) {
@@ -191,9 +203,9 @@ void refresh_thermal_brown_field(Context &ctx)
             continue;
         }
 
-        ctx.thermal_brown.h_xyz[base + 0] = unit_normal(*rng_ptr) * sigma;
-        ctx.thermal_brown.h_xyz[base + 1] = unit_normal(*rng_ptr) * sigma;
-        ctx.thermal_brown.h_xyz[base + 2] = unit_normal(*rng_ptr) * sigma;
+        ctx.thermal_brown.h_xyz[base + 0] = ctx.thermal_brown.xi_xyz[base + 0] * sigma;
+        ctx.thermal_brown.h_xyz[base + 1] = ctx.thermal_brown.xi_xyz[base + 1] * sigma;
+        ctx.thermal_brown.h_xyz[base + 2] = ctx.thermal_brown.xi_xyz[base + 2] * sigma;
     }
 
     ctx.thermal_brown.sigma = max_sigma;

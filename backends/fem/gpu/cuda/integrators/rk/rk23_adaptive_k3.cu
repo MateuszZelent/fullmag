@@ -35,6 +35,7 @@ bool gpu_rk_compute_rk23_adaptive_k3(
             gpu.rk.k[3],
             stream,
             n,
+            ctx.state.current_time + ctx.adaptive_dt.current_dt,
             "launch GPU RK23 BS23 k3 for adaptive error estimate",
             reason)) {
         gpu.rk.fsal_valid = false;

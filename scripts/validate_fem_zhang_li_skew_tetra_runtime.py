@@ -113,20 +113,50 @@ def check_run(name: str, result: dict[str, object], expected_steps: int = EXPECT
         raise ValueError(f"{name}: non-finite final magnetization")
 
 
-def check_runtime_provenance(name: str, result: dict[str, object], expected_engine: str, expected_mesh: Path) -> dict[str, object]:
-    """Fail closed on the runner's resolved lane, precision, and executed mesh."""
+def check_runtime_provenance(name: str, result: dict[str, object], expected_engine: str, expected_mesh: Path, expected_device: str) -> dict[str, object]:
+    """Fail closed on runner-written requested intent and resolved FEM provenance."""
     final, metadata = artifact_metadata(result)
+    requested = result.get("requested_execution")
     provenance = final.get("provenance")
     layout = final.get("layout")
     plan = metadata.get("execution_plan", {}).get("backend_plan")
-    if not isinstance(provenance, dict) or not isinstance(layout, dict) or not isinstance(plan, dict):
+    execution_provenance = metadata.get("execution_provenance")
+    artifact_requested = metadata.get("requested_execution")
+    if not isinstance(requested, dict):
+        raise ValueError(f"{name}: runtime result lacks requested execution provenance")
+    if not isinstance(artifact_requested, dict):
+        raise ValueError(f"{name}: artifact lacks requested execution provenance")
+    if not isinstance(provenance, dict) or not isinstance(layout, dict) or not isinstance(plan, dict) or not isinstance(execution_provenance, dict):
         raise ValueError(f"{name}: final artifact lacks native FEM provenance/layout/plan")
+    if requested.get("backend") != "fem":
+        raise ValueError(f"{name}: requested backend is {requested.get('backend')!r}, expected 'fem'")
+    if requested.get("device") != expected_device:
+        raise ValueError(f"{name}: requested device is {requested.get('device')!r}, expected {expected_device!r}")
+    if requested.get("precision") != "double" or requested.get("mode") != "strict":
+        raise ValueError(f"{name}: requested execution must be strict double precision")
+    if requested.get("fallback_policy") != "forbidden":
+        raise ValueError(f"{name}: requested fallback policy is not forbidden")
+    for key in ("backend", "device", "precision", "mode", "fallback_policy"):
+        if artifact_requested.get(key) != requested.get(key):
+            raise ValueError(f"{name}: artifact requested execution disagrees with CLI summary for {key}")
+    if artifact_requested.get("backend") != "fem" or artifact_requested.get("device") != expected_device:
+        raise ValueError(f"{name}: artifact requested execution does not match the required FEM {expected_device} run")
+    if artifact_requested.get("precision") != "double" or artifact_requested.get("mode") != "strict":
+        raise ValueError(f"{name}: artifact requested execution must be strict double precision")
+    if artifact_requested.get("fallback_policy") != "forbidden":
+        raise ValueError(f"{name}: artifact requested fallback policy is not forbidden")
+    if result.get("backend") != "fem" or result.get("mode") != "strict" or result.get("precision") != "double":
+        raise ValueError(f"{name}: run summary resolved execution is not strict FEM double")
     if provenance.get("execution_engine") != expected_engine:
         raise ValueError(f"{name}: resolved engine is {provenance.get('execution_engine')!r}, expected {expected_engine!r}")
     if provenance.get("execution_mode") != "strict":
         raise ValueError(f"{name}: resolved execution mode is not strict")
     if provenance.get("precision") != "double" or plan.get("precision") != "double":
         raise ValueError(f"{name}: runtime did not resolve double precision")
+    if execution_provenance.get("execution_engine") != expected_engine or execution_provenance.get("precision") != "double":
+        raise ValueError(f"{name}: artifact execution provenance disagrees with resolved engine/precision")
+    if execution_provenance.get("lossy_fallback_used") is not False:
+        raise ValueError(f"{name}: artifact reports a lossy fallback")
     mesh_source = layout.get("mesh_source")
     if not isinstance(mesh_source, str) or Path(mesh_source).resolve() != expected_mesh.resolve():
         raise ValueError(f"{name}: resolved mesh source does not match requested fixture")
@@ -137,7 +167,7 @@ def check_runtime_provenance(name: str, result: dict[str, object], expected_engi
     material = plan.get("material")
     if not isinstance(material, dict) or material.get("saturation_magnetisation") != 800000.0 or material.get("damping") != 0.02:
         raise ValueError(f"{name}: resolved Py material parameters differ from fixture")
-    return {"provenance": provenance, "layout": layout, "plan": plan}
+    return {"requested": artifact_requested, "provenance": provenance, "layout": layout, "plan": plan}
 
 
 def main() -> None:
@@ -157,10 +187,10 @@ def main() -> None:
     for name, result in (("cpu", cpu), ("gpu", gpu), ("cpu_reversed", reversed_cpu), ("cpu_zero_current", zero_current_cpu)):
         check_run(name, result)
     fixture_mesh = Path("examples/assets/zhang_li_skew_tetra_r0.mesh.json")
-    cpu_runtime = check_runtime_provenance("cpu", cpu, "fem_cpu_native", fixture_mesh)
-    gpu_runtime = check_runtime_provenance("gpu", gpu, "fem_native_gpu", fixture_mesh)
-    check_runtime_provenance("cpu_reversed", reversed_cpu, "fem_cpu_native", fixture_mesh)
-    check_runtime_provenance("cpu_zero_current", zero_current_cpu, "fem_cpu_native", fixture_mesh)
+    cpu_runtime = check_runtime_provenance("cpu", cpu, "fem_cpu_native", fixture_mesh, "cpu")
+    gpu_runtime = check_runtime_provenance("gpu", gpu, "fem_native_gpu", fixture_mesh, "gpu")
+    check_runtime_provenance("cpu_reversed", reversed_cpu, "fem_cpu_native", fixture_mesh, "cpu")
+    check_runtime_provenance("cpu_zero_current", zero_current_cpu, "fem_cpu_native", fixture_mesh, "cpu")
     cpu_m, gpu_m, reversed_m = flat_m(cpu), flat_m(gpu), flat_m(reversed_cpu)
     if len(cpu_m) != len(gpu_m) or not close(cpu_m, gpu_m):
         raise ValueError("CPU/GPU 10-step trajectory exceeds frozen mixed tolerance")
@@ -190,7 +220,7 @@ def main() -> None:
     # all levels still end at the same requested physical time.
     for index, (result, expected_steps) in enumerate(zip(dt_runs, (33, 65, 129), strict=True)):
         check_run(f"dt[{index}]", result, expected_steps)
-        check_runtime_provenance(f"dt[{index}]", result, "fem_cpu_native", fixture_mesh)
+        check_runtime_provenance(f"dt[{index}]", result, "fem_cpu_native", fixture_mesh, "cpu")
     dt_order = observed_order(*(flat_m(result) for result in dt_runs))
     mesh_averages: list[list[float]] = []
     mesh_logs: list[str] = []
@@ -201,7 +231,7 @@ def main() -> None:
         result = result_from_log(Path(log_text))
         check_run(f"mesh[{index}]", result)
         mesh_path = Path(mesh_text)
-        check_runtime_provenance(f"mesh[{index}]", result, "fem_cpu_native", mesh_path)
+        check_runtime_provenance(f"mesh[{index}]", result, "fem_cpu_native", mesh_path, "cpu")
         mesh_averages.append(volume_weighted_average(result, mesh_path))
         mesh_logs.append(log_text)
     mesh_order = observed_order(*mesh_averages)
@@ -215,8 +245,8 @@ def main() -> None:
         "schema": "fem_zhang_li_skew_tetra_runtime.v1",
         "repository_head": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
         "requested": {
-            "cpu": {"lane": "cpu", "precision": "double", "fallback": "forbidden"},
-            "gpu": {"lane": "gpu", "precision": "double", "fallback": "forbidden"},
+            "cpu": cpu_runtime["requested"],
+            "gpu": gpu_runtime["requested"],
             "steps": EXPECTED_STEPS,
             "integrator": "heun",
             "mesh": str(fixture_mesh),
@@ -225,7 +255,6 @@ def main() -> None:
             "cpu": cpu_runtime,
             "gpu": gpu_runtime,
             "same_mesh_sha256": hashlib.sha256(fixture_mesh.read_bytes()).hexdigest(),
-            "requested_fallback": "forbidden by strict resolved-engine checks",
         },
         "acceptance": {"cpu_gpu_rtol": CPU_GPU_TRAJECTORY_RTOL, "cpu_gpu_atol": CPU_GPU_TRAJECTORY_ATOL},
         "convergence": {"observed_dt_order": dt_order, "observed_mesh_order": mesh_order, "minimum_dt_order": minimum_dt_order, "minimum_mesh_order": minimum_mesh_order, "mesh_volume_averages": mesh_averages},

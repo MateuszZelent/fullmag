@@ -2562,11 +2562,14 @@ function topologicalChargeQueryParams(
   query: TopologicalChargeQuery,
 ): QueryParams {
   return {
-    method: query.method,
     plane: query.plane,
-    quantity_id: query.quantity_id,
-    resolution: query.resolution,
+    support: query.support,
+    profile_samples:
+      typeof query.profile_samples === "number"
+        ? String(query.profile_samples)
+        : query.profile_samples,
     snapshot_id: query.snapshot_id ?? undefined,
+    stage_id: query.stage_id ?? undefined,
   };
 }
 

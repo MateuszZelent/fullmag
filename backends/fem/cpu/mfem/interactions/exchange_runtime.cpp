@@ -43,6 +43,7 @@ bool context_refresh_exchange_field_mfem(Context &ctx, std::string &error)
     if (!compute_effective_fields_for_magnetization(
             ctx,
             ctx.state.m_xyz,
+            ctx.state.current_time,
             ctx.exchange.h_xyz,
             ctx.demag.h_xyz,
             ctx.effective_field.h_xyz,

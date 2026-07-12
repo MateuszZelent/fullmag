@@ -5,6 +5,7 @@ use fullmag_ir::{
     FemFrequencyDomainEquilibriumProvenanceIR, FemFrequencyResponsePlanIR, FemMagnetoelasticPlanIR,
     FemMechanicalModeIR, FemMechanicalPlanIR, FemPlanIR, GeometryEntryIR, MagnetostrictionLawIR,
     MechanicalLoadIR, OutputPlanIR, ProblemIR, ProvenancePlanIR, TimeDependenceIR, IR_VERSION,
+    SeedPolicy, ThermalSeedConfig,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -1873,6 +1874,9 @@ pub(crate) fn plan_fem(
     let mut interfacial_dmi_normal: Option<[f64; 3]> = None;
     let mut bulk_dmi: Option<f64> = None;
     let mut has_magnetoelastic = false;
+    let mut has_thermal_noise = false;
+    let mut thermal_seed_config = None;
+    let mut thermal_temperature = problem.temperature;
     for term in &problem.energy_terms {
         match term {
             fullmag_ir::EnergyTermIR::Exchange => {
@@ -1880,6 +1884,31 @@ pub(crate) fn plan_fem(
                     errors.push("Exchange is declared more than once".to_string());
                 }
                 enable_exchange = true;
+            }
+            fullmag_ir::EnergyTermIR::ThermalNoise { temperature, seed } => {
+                if has_thermal_noise {
+                    errors.push("ThermalNoise is declared more than once".to_string());
+                }
+                has_thermal_noise = true;
+                if runtime_requests_cuda(problem) {
+                    errors.push(
+                        "strict FEM GPU ThermalNoise remains unsupported pending CAP-THERM-GPU-001"
+                            .to_string(),
+                    );
+                }
+                if let Some(problem_temperature) = thermal_temperature {
+                    if (problem_temperature - *temperature).abs() > 1.0e-6 {
+                        errors.push("ThermalNoise temperature disagrees with Problem temperature".to_string());
+                    }
+                }
+                thermal_temperature = Some(*temperature);
+                if *seed == Some(0) {
+                    errors.push("ThermalNoise seed must be positive; use system entropy for an unspecified seed".to_string());
+                }
+                thermal_seed_config = Some(ThermalSeedConfig {
+                    policy: if seed.is_some() { SeedPolicy::Fixed } else { SeedPolicy::SystemEntropy },
+                    seed: *seed,
+                });
             }
             fullmag_ir::EnergyTermIR::Demag { realization } => {
                 if enable_demag {
@@ -1975,6 +2004,7 @@ pub(crate) fn plan_fem(
         bulk_dmi.is_some() || has_material_bulk_dmi,
         true,
         has_magnetoelastic,
+        problem.energy_terms.iter().any(|term| matches!(term, fullmag_ir::EnergyTermIR::ThermalNoise { .. })),
         has_mqs_antenna_field_source(problem) || has_prescribed_zeeman_mask_source(problem),
         &mut errors,
     );
@@ -2392,7 +2422,7 @@ pub(crate) fn plan_fem(
         bulk_dmi,
         dind_field,
         dbulk_field,
-        temperature: problem.temperature,
+        temperature: thermal_temperature,
         current_density: spin_torque.current_density,
         stt_degree: spin_torque.stt_degree,
         stt_beta: spin_torque.stt_beta,
@@ -2416,7 +2446,7 @@ pub(crate) fn plan_fem(
         magnetoelastic,
         mechanics,
         demag_solver_policy,
-        thermal_seed_config: None,
+        thermal_seed_config,
         oersted_realization: None,
         gpu_device_index: None,
         mfem_device_string: None,

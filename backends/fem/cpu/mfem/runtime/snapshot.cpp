@@ -128,6 +128,7 @@ bool context_snapshot_stats_mfem(
     if (!compute_effective_fields_for_magnetization(
             ctx,
             ctx.state.m_xyz,
+            ctx.state.current_time,
             h_ex_current,
             h_demag_current,
             h_eff_current,

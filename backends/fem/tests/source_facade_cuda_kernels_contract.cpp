@@ -939,9 +939,9 @@ void gpu_rk_rhs_runtime_is_owned_by_cuda_rk_module() {
                 std::string::npos &&
             fsal_source.find("ctx.thermal_brown.temperature > 0.0") !=
                 std::string::npos &&
-            fsal_source.find("ctx.oersted.time_dep_kind != 0u") !=
+            fsal_source.find("ctx.oersted.time_dep_kind != 0u") ==
                 std::string::npos,
-        "GPU CUDA RK FSAL policy source must reject stochastic Brown thermal and time-dependent Oersted RHS");
+        "GPU CUDA RK FSAL policy must reject stochastic thermal RHS while permitting endpoint-safe deterministic Oersted reuse");
     check(
         rhs_source.find("#include \"gpu/cuda/integrators/rk/rk_rhs_runtime.hpp\"") !=
                 std::string::npos &&
@@ -1037,7 +1037,7 @@ void gpu_rk_rhs_runtime_is_owned_by_cuda_rk_module() {
                 std::string::npos &&
             rhs_source.find("#include \"gpu/cuda/integrators/rk/rk_effective_field.hpp\"") !=
                 std::string::npos &&
-            rhs_source.find("gpu_rk_accumulate_effective_field(ctx, stream, n, label, reason)") !=
+            rhs_source.find("gpu_rk_accumulate_effective_field(ctx, stream, n, evaluation_time_s, label, reason)") !=
                 std::string::npos &&
             rhs_source.find("#include \"gpu/cuda/integrators/rk/rk_direct_torques.hpp\"") !=
                 std::string::npos &&
@@ -1383,7 +1383,7 @@ void gpu_rk_effective_field_is_owned_by_cuda_rk_module() {
                 std::string::npos &&
             effective_source.find("fullmag_cuda_add_field_inplace(") !=
                 std::string::npos &&
-            effective_source.find("gpu_rk_accumulate_oersted_field(ctx, stream, n, reason)") !=
+            effective_source.find("gpu_rk_accumulate_oersted_field(ctx, stream, n, evaluation_time_s, reason)") !=
                 std::string::npos,
         "GPU CUDA RK effective-field source must own base/local H_eff accumulation and delegate Oersted contribution");
     check(

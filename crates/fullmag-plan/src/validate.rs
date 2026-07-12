@@ -531,6 +531,7 @@ pub(crate) fn validate_executable_outputs(
     enable_h_dmi_bulk: bool,
     allow_h_dmi_bulk: bool,
     enable_magnetoelastic: bool,
+    enable_thermal: bool,
     enable_antenna_field: bool,
     errors: &mut Vec<String>,
 ) {
@@ -544,6 +545,7 @@ pub(crate) fn validate_executable_outputs(
         "H_ani",
         "H_dmi",
         "H_mel",
+        "H_therm",
     ];
     let allowed_scalars = [
         "E_ex",
@@ -604,6 +606,8 @@ pub(crate) fn validate_executable_outputs(
                     );
                 } else if name == "H_mel" && !enable_magnetoelastic {
                     errors.push("field output 'H_mel' requires Magnetoelastic(...)".to_string());
+                } else if name == "H_therm" && !enable_thermal {
+                    errors.push("field output 'H_therm' requires ThermalNoise(...)".to_string());
                 } else if name == "H_ant" && !enable_antenna_field {
                     errors.push(
                         "field output 'H_ant' requires at least one antenna current module"
@@ -681,6 +685,8 @@ pub(crate) fn validate_executable_outputs(
                     );
                 } else if field == "H_mel" && !enable_magnetoelastic {
                     errors.push("snapshot field 'H_mel' requires Magnetoelastic(...)".to_string());
+                } else if field == "H_therm" && !enable_thermal {
+                    errors.push("snapshot field 'H_therm' requires ThermalNoise(...)".to_string());
                 } else if field == "H_ant" && !enable_antenna_field {
                     errors.push(
                         "snapshot field 'H_ant' requires at least one antenna current module"

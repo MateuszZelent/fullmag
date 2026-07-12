@@ -511,13 +511,22 @@ use utoipa::OpenApi;
         crate::schemas::hysteresis::HysteresisSaturationResource,
         crate::schemas::hysteresis::HysteresisReversalFieldsResource,
         crate::schemas::hysteresis::HysteresisAdaptiveRefinementResource,
-        crate::router_v2::handlers::analysis::extensions::TopologicalChargeQuery,
-        crate::router_v2::handlers::analysis::extensions::TopologicalChargeLayerSample,
-        crate::router_v2::handlers::analysis::extensions::TopologicalChargeResource,
-        crate::router_v2::handlers::analysis::extensions::TopologicalChargeSampleGrid,
-        crate::router_v2::handlers::analysis::extensions::TopologicalChargeSampleTopology,
-        crate::router_v2::handlers::analysis::extensions::TopologicalChargeStatus,
-        crate::router_v2::handlers::analysis::extensions::TopologicalChargeWarning,
+        crate::schemas::analysis_extensions::TopologicalChargePlane,
+        crate::schemas::analysis_extensions::TopologicalChargeSupportMode,
+        crate::schemas::analysis_extensions::TopologicalChargeProfileSamples,
+        crate::schemas::analysis_extensions::TopologicalChargeMethod,
+        crate::schemas::analysis_extensions::TopologicalChargeStatus,
+        crate::schemas::analysis_extensions::TopologicalChargeTrust,
+        crate::schemas::analysis_extensions::TopologicalChargeQueryV2,
+        crate::schemas::analysis_extensions::TopologicalChargeRequestEcho,
+        crate::schemas::analysis_extensions::TopologicalChargeResolvedSupport,
+        crate::schemas::analysis_extensions::TopologicalChargeSupportFrame,
+        crate::schemas::analysis_extensions::TopologicalChargeLayerSample,
+        crate::schemas::analysis_extensions::TopologicalChargeQuality,
+        crate::schemas::analysis_extensions::TopologicalChargeProvenance,
+        crate::schemas::analysis_extensions::TopologicalChargeMethodDescriptor,
+        crate::schemas::analysis_extensions::TopologicalChargeWarning,
+        crate::schemas::analysis_extensions::TopologicalChargeResourceV2,
     )),
     tags(
         (name = "platform", description = "Server-level health, capabilities, and API documents"),
@@ -681,7 +690,12 @@ mod tests {
             .expect("topological-charge plane parameter");
 
         assert_eq!(
-            plane["schema"]["enum"],
+            plane["schema"]["$ref"],
+            serde_json::json!("#/components/schemas/TopologicalChargePlane")
+        );
+        let plane_schema = &document["components"]["schemas"]["TopologicalChargePlane"];
+        assert_eq!(
+            plane_schema["enum"],
             serde_json::json!(["auto", "xy", "xz", "yz"])
         );
         assert!(

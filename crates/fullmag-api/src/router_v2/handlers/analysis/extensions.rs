@@ -4,11 +4,15 @@ use std::sync::Arc;
 use axum::extract::{Path, Query, State};
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use utoipa::{IntoParams, ToSchema};
 
 use crate::analysis::topological_charge::{
-    compute_topological_charge_grid, compute_topological_charge_triangles, TopologicalChargeInput,
-    TopologicalChargeTriangleInput, TopologicalChargeWarningCode,
+    compute_oriented_charge, compute_topological_charge_grid, compute_topological_charge_triangles,
+    fdm_weighted_mean, fem_midpoint_weights, qualify_boundary, qualify_support_topology,
+    BoundaryQualification, OrientedChargeInput, OrientedChargeQuality,
+    SupportTopologyQualification, TopologicalChargeInput, TopologicalChargeTriangleInput,
+    TopologicalChargeWarningCode,
 };
 use crate::error::ApiError;
 use crate::fem_slice::fem_tetra_linear_slice;
@@ -16,10 +20,24 @@ use crate::fem_slice_overlay::{
     collect_fem_slice_overlay, FemSliceOverlayInput, SliceOverlayPoint,
 };
 use crate::field_slice::{resolve_slice_query, FemField, FieldSliceQuery, SlicePlane};
-use crate::router_v2::handlers::data::field_resolution::{
-    flatten_json_field_values, json_field_grid, live_magnetization_values,
+use crate::router_v2::handlers::data::resolved_vector_field::{
+    expand_compact_fem_node_values, resolve_topological_charge_magnetization,
+    ResolvedFieldSourceKind, ResolvedObjectVectorField,
 };
 use crate::router_v2::handlers::sessions::status::{domain_generation_id, field_quantity_revision};
+use crate::schemas::analysis_extensions::{
+    TopologicalChargeLayerSample as TopologicalChargeLayerSampleV2,
+    TopologicalChargeMethod as TopologicalChargeMethodV2,
+    TopologicalChargeMethodDescriptor as TopologicalChargeMethodDescriptorV2,
+    TopologicalChargePlane as TopologicalChargePlaneV2,
+    TopologicalChargeProvenance as TopologicalChargeProvenanceV2,
+    TopologicalChargeQuality as TopologicalChargeQualityV2, TopologicalChargeQueryV2,
+    TopologicalChargeRequestEcho as TopologicalChargeRequestEchoV2,
+    TopologicalChargeResolvedSupport as TopologicalChargeResolvedSupportV2,
+    TopologicalChargeResourceV2, TopologicalChargeStatus as TopologicalChargeStatusV2,
+    TopologicalChargeSupportFrame as TopologicalChargeSupportFrameV2,
+    TopologicalChargeTrust as TopologicalChargeTrustV2,
+};
 use crate::types::AppState;
 
 #[derive(Debug, Clone, Deserialize, IntoParams, ToSchema)]
@@ -34,6 +52,10 @@ pub struct TopologicalChargeQuery {
     pub snapshot_id: Option<String>,
     #[serde(default = "default_method")]
     pub method: String,
+    #[serde(default = "default_support")]
+    pub support: String,
+    #[serde(default)]
+    pub profile_samples: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -121,23 +143,15 @@ fn default_method() -> String {
     "berg_luescher".to_string()
 }
 
-#[utoipa::path(
-    get,
-    path = "/v2/sessions/current/analysis/extensions/objects/{object_id}/topological-charge",
-    params(
-        ("object_id" = String, Path, description = "Canonical scene object id"),
-        TopologicalChargeQuery,
-    ),
-    responses(
-        (status = 200, description = "Object-scoped topological charge analysis resource", body = TopologicalChargeResource),
-        (status = 404, description = "Object or workspace not found"),
-    ),
-    tag = "analysis"
-)]
-pub async fn get_object_topological_charge(
+fn default_support() -> String {
+    "midplane".to_string()
+}
+
+async fn get_object_topological_charge_legacy(
     State(state): State<Arc<AppState>>,
     Path(object_id): Path<String>,
     Query(query): Query<TopologicalChargeQuery>,
+    resolved_field_summary: Option<FieldSampleSummary>,
 ) -> Result<Json<TopologicalChargeResource>, ApiError> {
     let guard = state.current_live_state.read().await;
     let snapshot = guard
@@ -155,10 +169,12 @@ pub async fn get_object_topological_charge(
     let requested_resolution = query.resolution;
     let requested_method = query.method;
     let requested_snapshot = query.snapshot_id.as_deref().unwrap_or("latest");
-    let field_summary = topological_charge_field_summary(snapshot, &query.quantity_id);
+    let field_summary = resolved_field_summary;
     let mesh = snapshot.fem_mesh.as_ref();
     let sampled_result = match (field_summary.as_ref(), mesh) {
-        (Some(summary), None) => compute_regular_fdm_topological_charge(summary, &query.plane),
+        (Some(summary), None) => {
+            compute_regular_fdm_topological_charge(summary, &query.plane, &query.support)
+        }
         (Some(summary), Some(mesh)) => compute_fem_topological_charge(
             summary,
             mesh,
@@ -166,6 +182,8 @@ pub async fn get_object_topological_charge(
             &query.plane,
             &requested_resolution,
             &requested_method,
+            &query.support,
+            query.profile_samples,
         ),
         _ => None,
     };
@@ -291,6 +309,405 @@ pub async fn get_object_topological_charge(
     Ok(Json(resource))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/analysis/extensions/objects/{object_id}/topological-charge",
+    params(("object_id" = String, Path, description = "Object id"), TopologicalChargeQueryV2),
+    responses((status = 200, description = "Versioned topological charge resource", body = TopologicalChargeResourceV2)),
+    tag = "analysis"
+)]
+pub async fn get_object_topological_charge(
+    State(state): State<Arc<AppState>>,
+    Path(object_id): Path<String>,
+    Query(query): Query<TopologicalChargeQueryV2>,
+) -> Result<Json<TopologicalChargeResourceV2>, ApiError> {
+    query
+        .validate()
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let snapshot = state
+        .current_live_state
+        .read()
+        .await
+        .clone()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    let resolved_field = resolve_topological_charge_magnetization(
+        &state,
+        &snapshot,
+        query.snapshot_id.as_deref(),
+        query.stage_id.as_deref(),
+    )
+    .await?;
+    let field_summary = resolved_field
+        .as_ref()
+        .map(|field| field_summary_from_resolved_field(field, snapshot.fem_mesh.as_ref()))
+        .transpose()?;
+    let fdm_qualification = (snapshot.fem_mesh.is_none()
+        && query.support
+            == crate::schemas::analysis_extensions::TopologicalChargeSupportMode::Midplane)
+        .then(|| {
+            field_summary
+                .as_ref()
+                .and_then(|summary| qualify_regular_fdm_midplane(summary, &query.plane.to_string()))
+        })
+        .flatten();
+    let fem_fe_order = fem_fe_order_from_session(&snapshot);
+    let legacy_query = TopologicalChargeQuery {
+        quantity_id: "m".to_string(),
+        plane: match query.plane {
+            TopologicalChargePlaneV2::Auto => "auto",
+            TopologicalChargePlaneV2::Xy => "xy",
+            TopologicalChargePlaneV2::Xz => "xz",
+            TopologicalChargePlaneV2::Yz => "yz",
+        }
+        .to_string(),
+        resolution: "auto".to_string(),
+        snapshot_id: query.snapshot_id.clone(),
+        method: "berg_luescher_oriented_triangles_v2".to_string(),
+        support: match query.support {
+            crate::schemas::analysis_extensions::TopologicalChargeSupportMode::Midplane => {
+                "midplane"
+            }
+            crate::schemas::analysis_extensions::TopologicalChargeSupportMode::LayerProfile => {
+                "layer_profile"
+            }
+        }
+        .to_string(),
+        profile_samples: query.resolved_profile_sample_count(),
+    };
+    let legacy = get_object_topological_charge_legacy(
+        State(state),
+        Path(object_id.clone()),
+        Query(legacy_query),
+        field_summary,
+    )
+    .await?
+    .0;
+    let unsupported_fem_order = snapshot.fem_mesh.is_some() && fem_fe_order != Some(1);
+    let unsupported_fdm_scope = snapshot.fem_mesh.is_none()
+        && fdm_requires_object_mask(
+            snapshot
+                .scene_document
+                .as_ref()
+                .map(|scene| scene.objects.len()),
+        );
+    let status = if unsupported_fem_order {
+        TopologicalChargeStatusV2::UnsupportedDiscretization
+    } else if unsupported_fdm_scope {
+        TopologicalChargeStatusV2::UnsupportedGeometry
+    } else {
+        match legacy.status {
+            TopologicalChargeStatus::Ready => TopologicalChargeStatusV2::Ready,
+            TopologicalChargeStatus::NoCurrentMagnetization => {
+                TopologicalChargeStatusV2::NoCurrentMagnetization
+            }
+            TopologicalChargeStatus::EmptySupport => TopologicalChargeStatusV2::EmptySupport,
+            TopologicalChargeStatus::InvalidMagnetization => {
+                TopologicalChargeStatusV2::InvalidMagnetization
+            }
+            TopologicalChargeStatus::DegenerateSupport => {
+                TopologicalChargeStatusV2::DegenerateSupport
+            }
+            TopologicalChargeStatus::UnderResolved => TopologicalChargeStatusV2::UnderResolved,
+            _ => TopologicalChargeStatusV2::UnsupportedGeometry,
+        }
+    };
+    let requested_plane = query.plane;
+    let resolved_plane = topological_charge_plane_from_legacy(&legacy.plane);
+    let cache_key = crate::quantity_data_plane::topological_charge_cache_key(
+        &object_id,
+        "m",
+        resolved_field.as_ref().map_or_else(
+            || legacy.field_revision.unwrap_or_default(),
+            |field| field.field_revision,
+        ),
+        legacy.mesh_revision.unwrap_or_default(),
+        legacy.mesh_generation_id.as_deref(),
+        legacy.revision,
+        &legacy.plane,
+        &format!(
+            "support={:?}:profile={:?}:snapshot={:?}:stage={:?}",
+            query.support, query.profile_samples, query.snapshot_id, query.stage_id
+        ),
+        "berg_luescher_oriented_triangles_v2",
+    );
+    let profile = if unsupported_fem_order || unsupported_fdm_scope {
+        Vec::new()
+    } else {
+        fem_profile_response(&legacy, snapshot.fem_mesh.is_some(), query.support)
+    };
+    let frame = match resolved_plane {
+        TopologicalChargePlaneV2::Xy | TopologicalChargePlaneV2::Auto => {
+            ([1, 0, 0], [0, 1, 0], [0, 0, 1])
+        }
+        TopologicalChargePlaneV2::Xz => ([1, 0, 0], [0, 0, 1], [0, -1, 0]),
+        TopologicalChargePlaneV2::Yz => ([0, 1, 0], [0, 0, 1], [1, 0, 0]),
+    };
+    let trust = if unsupported_fem_order || unsupported_fdm_scope {
+        TopologicalChargeTrustV2::Unavailable
+    } else if legacy.charge.is_none() {
+        TopologicalChargeTrustV2::Unavailable
+    } else if let Some(qualification) = &fdm_qualification {
+        qualification.trust()
+    } else if matches!(status, TopologicalChargeStatusV2::UnderResolved) {
+        TopologicalChargeTrustV2::DiagnosticResolution
+    } else {
+        // The legacy adapter has not yet propagated certified support topology
+        // and boundary diagnostics, so it cannot qualify integer semantics.
+        TopologicalChargeTrustV2::DiagnosticTopology
+    };
+    let integer_interpretation_is_qualified = matches!(trust, TopologicalChargeTrustV2::Qualified);
+    Ok(Json(TopologicalChargeResourceV2 {
+        schema_version: "topological_charge.v2".to_string(),
+        resource_revision: topological_charge_cache_digest(&cache_key),
+        object_id,
+        status,
+        trust,
+        charge: (!(unsupported_fem_order || unsupported_fdm_scope))
+            .then_some(legacy.charge)
+            .flatten(),
+        nearest_integer: integer_interpretation_is_qualified.then_some(legacy.nearest_integer).flatten(),
+        integer_error: integer_interpretation_is_qualified.then_some(legacy.integer_error).flatten(),
+        request: TopologicalChargeRequestEchoV2 {
+            requested_plane,
+            requested_support: query.support,
+            requested_profile_samples: query.profile_samples,
+            snapshot_id: query.snapshot_id.clone(),
+            stage_id: query.stage_id.clone(),
+        },
+        resolved_support: TopologicalChargeResolvedSupportV2 {
+            plane: resolved_plane,
+            support: query.support,
+            profile_sample_count: query.resolved_profile_sample_count(),
+            source_kind: resolved_field
+                .as_ref()
+                .map_or_else(|| "unavailable".to_string(), resolved_field_source_kind),
+            coordinate_m: None,
+        },
+        support_frame: TopologicalChargeSupportFrameV2 {
+            u_axis: frame.0,
+            v_axis: frame.1,
+            normal_axis: frame.2,
+        },
+        profile,
+        quality: fdm_qualification.as_ref().map_or_else(
+            || TopologicalChargeQualityV2 {
+                total_vertex_count: legacy.sample_count as u64,
+                valid_vertex_count: legacy.valid_sample_count as u64,
+                total_triangle_count: 0,
+                valid_triangle_count: 0,
+                invalid_triangle_count: 0,
+                exceptional_triangle_count: 0,
+                max_edge_angle_rad: None,
+                min_abs_solid_angle_denominator: None,
+                connected_component_count: 0,
+                boundary_edge_count: 0,
+                boundary_loop_count: 0,
+                euler_characteristic: None,
+                boundary_max_deviation_rad: None,
+            },
+            |qualification| TopologicalChargeQualityV2 {
+                total_vertex_count: qualification.quality.total_vertex_count as u64,
+                valid_vertex_count: qualification.quality.valid_vertex_count as u64,
+                total_triangle_count: qualification.quality.total_triangle_count as u64,
+                valid_triangle_count: qualification.quality.valid_triangle_count as u64,
+                invalid_triangle_count: qualification.quality.invalid_triangle_count as u64,
+                exceptional_triangle_count: qualification.quality.exceptional_triangle_count as u64,
+                max_edge_angle_rad: Some(qualification.quality.max_edge_angle_rad),
+                min_abs_solid_angle_denominator: Some(
+                    qualification.quality.min_abs_solid_angle_denominator,
+                ),
+                connected_component_count: qualification.topology.connected_component_count as u32,
+                boundary_edge_count: qualification.topology.boundary_edge_count as u64,
+                boundary_loop_count: qualification.topology.boundary_loop_count as u32,
+                euler_characteristic: Some(qualification.topology.euler_characteristic),
+                boundary_max_deviation_rad: qualification.boundary.max_deviation_rad,
+            },
+        ),
+        provenance: TopologicalChargeProvenanceV2 {
+            source_kind: resolved_field
+                .as_ref()
+                .map_or_else(|| "unavailable".to_string(), resolved_field_source_kind),
+            field_id: "m".to_string(),
+            field_revision: resolved_field.as_ref().map_or_else(
+                || legacy.field_revision.unwrap_or_default().to_string(),
+                |field| field.field_revision.to_string(),
+            ),
+            field_storage_domain: resolved_field.as_ref().map_or_else(
+                || "unknown".to_string(),
+                |field| field.field_storage_domain.clone(),
+            ),
+            field_node_mapping_id: resolved_field
+                .as_ref()
+                .and_then(|field| field.field_node_mapping_id.clone()),
+            scene_revision: legacy.revision.to_string(),
+            mesh_revision: legacy.mesh_revision.map(|value| value.to_string()),
+            mesh_generation_id: legacy.mesh_generation_id,
+            domain_generation_id: legacy.domain_generation_id.unwrap_or_default(),
+            snapshot_id: resolved_field
+                .as_ref()
+                .and_then(|field| field.snapshot_id.clone()),
+            stage_id: resolved_field
+                .as_ref()
+                .and_then(|field| field.stage_id.clone()),
+            discretization: if snapshot.fem_mesh.is_some() {
+                "fem".to_string()
+            } else {
+                "fdm".to_string()
+            },
+            fe_order: fem_fe_order,
+            cache_key_digest: topological_charge_cache_digest(&cache_key),
+        },
+        method: TopologicalChargeMethodDescriptorV2 {
+            id: TopologicalChargeMethodV2::BergLuescherOrientedTrianglesV2,
+            version: "2".to_string(),
+            quantity_id: "m".to_string(),
+        },
+        computed_at_unix_ms: legacy.computed_at_unix_ms,
+        warnings: unsupported_fem_order
+            .then(
+                || crate::schemas::analysis_extensions::TopologicalChargeWarning {
+                    code: "unsupported_discretization".to_string(),
+                    severity: "warning".to_string(),
+                    message: "FEM topological charge requires persisted fe_order=1 provenance."
+                        .to_string(),
+                },
+            )
+            .into_iter()
+            .chain(
+                unsupported_fdm_scope
+                    .then(|| crate::schemas::analysis_extensions::TopologicalChargeWarning {
+                        code: "unsupported_geometry".to_string(),
+                        severity: "warning".to_string(),
+                        message: "Object-scoped FDM charge requires a per-object cell mask for multi-object scenes."
+                            .to_string(),
+                    }),
+            )
+            .chain(legacy.warnings.into_iter().map(|warning| {
+                crate::schemas::analysis_extensions::TopologicalChargeWarning {
+                    code: warning.code,
+                    severity: "warning".to_string(),
+                    message: warning.message,
+                }
+            }))
+            .collect(),
+    }))
+}
+
+fn fem_fe_order_from_session(snapshot: &crate::types::SessionStateResponse) -> Option<u8> {
+    fem_fe_order_from_plan_summary(&snapshot.session.plan_summary)
+}
+
+fn fem_fe_order_from_plan_summary(plan_summary: &serde_json::Value) -> Option<u8> {
+    plan_summary
+        .get("fe_order")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|order| u8::try_from(order).ok())
+}
+
+fn topological_charge_cache_digest(cache_key: &str) -> String {
+    format!("{:x}", Sha256::digest(cache_key.as_bytes()))
+}
+
+fn fem_profile_response(
+    resource: &TopologicalChargeResource,
+    is_fem: bool,
+    support: crate::schemas::analysis_extensions::TopologicalChargeSupportMode,
+) -> Vec<TopologicalChargeLayerSampleV2> {
+    if !is_fem
+        || support
+            != crate::schemas::analysis_extensions::TopologicalChargeSupportMode::LayerProfile
+        || resource.layer_samples.is_empty()
+    {
+        return Vec::new();
+    }
+    let coordinates = resource
+        .layer_samples
+        .iter()
+        .map(|layer| layer.coordinate)
+        .collect::<Vec<_>>();
+    let weight_m = fem_profile_bin_weight_m(&coordinates);
+    resource
+        .layer_samples
+        .iter()
+        .map(|layer| TopologicalChargeLayerSampleV2 {
+            index: layer.index as u16,
+            coordinate_m: layer.coordinate,
+            integration_weight_m: weight_m,
+            status: if layer.charge.is_some() {
+                TopologicalChargeStatusV2::Ready
+            } else {
+                TopologicalChargeStatusV2::DegenerateSupport
+            },
+            trust: TopologicalChargeTrustV2::DiagnosticTopology,
+            charge: layer.charge,
+            valid_triangle_count: layer.triangle_count as u64,
+            total_triangle_count: layer.triangle_count as u64,
+        })
+        .collect()
+}
+
+fn fem_profile_bin_weight_m(coordinates_m: &[f64]) -> f64 {
+    coordinates_m
+        .windows(2)
+        .next()
+        .map(|pair| (pair[1] - pair[0]).abs())
+        .filter(|weight| weight.is_finite() && *weight > 0.0)
+        .unwrap_or(0.0)
+}
+
+fn fdm_requires_object_mask(object_count: Option<usize>) -> bool {
+    object_count.is_some_and(|count| count != 1)
+}
+
+fn topological_charge_plane_from_legacy(plane: &str) -> TopologicalChargePlaneV2 {
+    match plane {
+        "xy" => TopologicalChargePlaneV2::Xy,
+        "xz" => TopologicalChargePlaneV2::Xz,
+        "yz" => TopologicalChargePlaneV2::Yz,
+        _ => TopologicalChargePlaneV2::Auto,
+    }
+}
+
+fn resolved_field_source_kind(field: &ResolvedObjectVectorField) -> String {
+    match field.source_kind {
+        ResolvedFieldSourceKind::PersistedSnapshot => "persisted_snapshot",
+        ResolvedFieldSourceKind::CurrentLive => "current_live",
+        ResolvedFieldSourceKind::CurrentMaterialized => "current_materialized",
+    }
+    .to_string()
+}
+
+fn field_summary_from_resolved_field(
+    field: &ResolvedObjectVectorField,
+    mesh: Option<&fullmag_runner::FemMeshPayload>,
+) -> Result<FieldSampleSummary, ApiError> {
+    let values: Vec<f64> = match (mesh, field.global_node_ids.as_deref()) {
+        (Some(mesh), Some(global_node_ids)) => {
+            let expanded =
+                expand_compact_fem_node_values(&field.values, global_node_ids, mesh.nodes.len())
+                    .map_err(ApiError::conflict)?;
+            expanded.into_iter().flatten().collect()
+        }
+        _ => field.values.iter().flatten().copied().collect(),
+    };
+    let sample_count = values.len() / 3;
+    let valid_sample_count = field
+        .values
+        .iter()
+        .filter(|sample| {
+            let norm_squared =
+                sample[0] * sample[0] + sample[1] * sample[1] + sample[2] * sample[2];
+            norm_squared > 1.0e-24 && norm_squared.is_finite()
+        })
+        .count();
+    Ok(FieldSampleSummary {
+        values,
+        grid: field.grid,
+        sample_count,
+        valid_sample_count,
+    })
+}
+
 struct FieldSampleSummary {
     values: Vec<f64>,
     grid: Option<[u32; 3]>,
@@ -305,6 +722,91 @@ struct ComputedTopologicalCharge {
     sample_grid: Option<TopologicalChargeSampleGrid>,
     sample_topology: Option<TopologicalChargeSampleTopology>,
     layer_samples: Vec<TopologicalChargeLayerSample>,
+}
+
+struct FdmChargeQualification {
+    quality: OrientedChargeQuality,
+    topology: SupportTopologyQualification,
+    boundary: BoundaryQualification,
+}
+
+impl FdmChargeQualification {
+    fn trust(&self) -> TopologicalChargeTrustV2 {
+        if self.quality.under_resolved {
+            TopologicalChargeTrustV2::DiagnosticResolution
+        } else if !self.topology.is_manifold()
+            || self.topology.connected_component_count != 1
+            || self.topology.boundary_loop_count != 1
+            || self.topology.euler_characteristic != 1
+        {
+            TopologicalChargeTrustV2::DiagnosticTopology
+        } else if !self.boundary.is_uniform {
+            TopologicalChargeTrustV2::DiagnosticBoundary
+        } else {
+            TopologicalChargeTrustV2::Qualified
+        }
+    }
+}
+
+fn qualify_regular_fdm_midplane(
+    summary: &FieldSampleSummary,
+    requested_plane: &str,
+) -> Option<FdmChargeQualification> {
+    let profile = regular_fdm_layer_profile(&summary.values, summary.grid?, requested_plane)?;
+    let layer = profile.layers.get(profile.layers.len().checked_sub(1)? / 2)?;
+    if profile.nx < 2 || profile.ny < 2 {
+        return None;
+    }
+    let triangles = regular_grid_triangles(profile.nx, profile.ny);
+    let quality = compute_oriented_charge(OrientedChargeInput::new(&layer.samples, &triangles))
+        .ok()?
+        .quality;
+    let topology = qualify_support_topology(layer.samples.len(), &triangles);
+    let points_uv = (0..profile.ny)
+        .flat_map(|y| (0..profile.nx).map(move |x| [x as f64, y as f64]))
+        .collect::<Vec<_>>();
+    let boundary = qualify_boundary(
+        &points_uv,
+        &layer.samples,
+        &regular_grid_boundary_edges(profile.nx, profile.ny),
+    )
+    .ok()?;
+    Some(FdmChargeQualification {
+        quality,
+        topology,
+        boundary,
+    })
+}
+
+fn regular_grid_triangles(nx: usize, ny: usize) -> Vec<[usize; 3]> {
+    let mut triangles = Vec::with_capacity(2 * nx.saturating_sub(1) * ny.saturating_sub(1));
+    for y in 0..ny.saturating_sub(1) {
+        for x in 0..nx.saturating_sub(1) {
+            let p00 = y * nx + x;
+            let p10 = p00 + 1;
+            let p01 = p00 + nx;
+            let p11 = p01 + 1;
+            triangles.push([p00, p10, p11]);
+            triangles.push([p00, p11, p01]);
+        }
+    }
+    triangles
+}
+
+fn regular_grid_boundary_edges(nx: usize, ny: usize) -> Vec<[usize; 2]> {
+    if nx < 2 || ny < 2 {
+        return Vec::new();
+    }
+    let mut edges = Vec::with_capacity(2 * (nx + ny - 2));
+    for x in 0..(nx - 1) {
+        edges.push([x, x + 1]);
+        edges.push([(ny - 1) * nx + x + 1, (ny - 1) * nx + x]);
+    }
+    for y in 0..(ny - 1) {
+        edges.push([(y + 1) * nx, y * nx]);
+        edges.push([y * nx + nx - 1, (y + 1) * nx + nx - 1]);
+    }
+    edges
 }
 
 impl TopologicalChargeStatus {
@@ -340,58 +842,10 @@ impl TopologicalChargeStatus {
     }
 }
 
-fn topological_charge_field_summary(
-    snapshot: &crate::types::SessionStateResponse,
-    quantity_id: &str,
-) -> Option<FieldSampleSummary> {
-    let (values, grid) = if quantity_id == "m" {
-        live_magnetization_values(snapshot)
-            .map(|(values, grid)| (values, Some(grid)))
-            .or_else(|| latest_or_preview_field_values(snapshot, quantity_id))
-    } else {
-        latest_or_preview_field_values(snapshot, quantity_id)
-    }?;
-    if values.is_empty() || values.len() % 3 != 0 {
-        return None;
-    }
-    let sample_count = values.len() / 3;
-    let valid_sample_count = values
-        .chunks_exact(3)
-        .filter(|sample| {
-            let norm_squared =
-                sample[0] * sample[0] + sample[1] * sample[1] + sample[2] * sample[2];
-            norm_squared > 1.0e-24 && norm_squared.is_finite()
-        })
-        .count();
-    (sample_count > 0).then_some(FieldSampleSummary {
-        values,
-        grid,
-        sample_count,
-        valid_sample_count,
-    })
-}
-
-fn latest_or_preview_field_values(
-    snapshot: &crate::types::SessionStateResponse,
-    quantity_id: &str,
-) -> Option<(Vec<f64>, Option<[u32; 3]>)> {
-    snapshot
-        .latest_fields
-        .get(quantity_id)
-        .map(|raw| (flatten_json_field_values(raw), json_field_grid(raw)))
-        .filter(|(values, _grid)| !values.is_empty())
-        .or_else(|| {
-            snapshot
-                .preview_cache
-                .get(quantity_id)
-                .map(|field| (field.vector_field_values.clone(), Some(field.preview_grid)))
-                .filter(|(values, _grid)| !values.is_empty())
-        })
-}
-
 fn compute_regular_fdm_topological_charge(
     summary: &FieldSampleSummary,
     requested_plane: &str,
+    support: &str,
 ) -> Option<ComputedTopologicalCharge> {
     let grid = summary.grid?;
     let profile = regular_fdm_layer_profile(&summary.values, grid, requested_plane)?;
@@ -401,7 +855,13 @@ fn compute_regular_fdm_topological_charge(
     let mut valid_sample_count = 0usize;
     let mut warnings = Vec::new();
 
-    for (index, layer) in profile.layers.iter().enumerate() {
+    let layer_indices: Vec<usize> = if support == "midplane" {
+        vec![profile.layers.len().checked_sub(1)? / 2]
+    } else {
+        (0..profile.layers.len()).collect()
+    };
+    for index in layer_indices {
+        let layer = profile.layers.get(index)?;
         let layer_result = compute_topological_charge_grid(TopologicalChargeInput {
             samples: &layer.samples,
             nx: profile.nx,
@@ -465,9 +925,20 @@ fn compute_fem_topological_charge(
     requested_plane: &str,
     requested_resolution: &str,
     requested_method: &str,
+    support: &str,
+    profile_samples: Option<u16>,
 ) -> Option<ComputedTopologicalCharge> {
+    if support == "layer_profile" {
+        return compute_fem_plane_cut_profile(
+            summary,
+            mesh,
+            object_id,
+            requested_plane,
+            profile_samples.unwrap_or(33),
+        );
+    }
     if let Some(result) =
-        compute_fem_plane_cut_topological_charge(summary, mesh, object_id, requested_plane)
+        compute_fem_plane_cut_topological_charge(summary, mesh, object_id, requested_plane, 0.5)
     {
         return Some(result);
     }
@@ -565,6 +1036,7 @@ fn compute_fem_plane_cut_topological_charge(
     mesh: &fullmag_runner::FemMeshPayload,
     object_id: &str,
     requested_plane: &str,
+    cut_norm: f64,
 ) -> Option<ComputedTopologicalCharge> {
     let fem_field = object_scoped_fem_field(summary, mesh, object_id)?;
     let plane = resolve_fem_plane(&fem_field.nodes, requested_plane)?;
@@ -573,7 +1045,7 @@ fn compute_fem_plane_cut_topological_charge(
             plane,
             component: Some("full".to_string()),
             cut_world: None,
-            cut_norm: Some(0.5),
+            cut_norm: Some(cut_norm),
             x_size: Some(2),
             y_size: Some(2),
             max_points: Some(4),
@@ -668,10 +1140,78 @@ fn compute_fem_plane_cut_topological_charge(
     })
 }
 
+fn compute_fem_plane_cut_profile(
+    summary: &FieldSampleSummary,
+    mesh: &fullmag_runner::FemMeshPayload,
+    object_id: &str,
+    requested_plane: &str,
+    profile_samples: u16,
+) -> Option<ComputedTopologicalCharge> {
+    if profile_samples < 3 {
+        return None;
+    }
+    let mut cuts = Vec::with_capacity(profile_samples as usize);
+    for index in 0..profile_samples {
+        let cut_norm = (f64::from(index) + 0.5) / f64::from(profile_samples);
+        cuts.push(compute_fem_plane_cut_topological_charge(
+            summary,
+            mesh,
+            object_id,
+            requested_plane,
+            cut_norm,
+        )?);
+    }
+    let charges = cuts
+        .iter()
+        .map(|cut| (cut.result.valid_sample_count > 0).then_some(cut.result.charge))
+        .collect::<Vec<_>>();
+    let coordinates_m = cuts
+        .iter()
+        .filter_map(|cut| cut.layer_samples.first().map(|layer| layer.coordinate))
+        .collect::<Vec<_>>();
+    let thickness_m = match (coordinates_m.first(), coordinates_m.last(), cuts.len()) {
+        (Some(first), Some(last), count) if count > 1 => {
+            (last - first).abs() * count as f64 / (count - 1) as f64
+        }
+        _ => 0.0,
+    };
+    let weights = fem_midpoint_weights(cuts.len(), thickness_m);
+    let charge = fdm_weighted_mean(&charges, &weights)?;
+    let plane = cuts.first()?.plane.clone();
+    let sample_count = cuts.iter().map(|cut| cut.result.sample_count).sum();
+    let valid_sample_count = cuts.iter().map(|cut| cut.result.valid_sample_count).sum();
+    let warnings = collapse_topological_charge_warnings(
+        cuts.iter()
+            .flat_map(|cut| cut.result.warnings.iter().cloned())
+            .collect(),
+    );
+    let layer_samples = cuts
+        .into_iter()
+        .flat_map(|cut| cut.layer_samples)
+        .collect::<Vec<_>>();
+    Some(ComputedTopologicalCharge {
+        result: crate::analysis::topological_charge::TopologicalChargeResult {
+            charge,
+            sample_count,
+            valid_sample_count,
+            warnings,
+        },
+        method: "fem_p1_exact_plane_cut_profile".to_string(),
+        plane,
+        sample_grid: None,
+        sample_topology: Some(TopologicalChargeSampleTopology {
+            kind: "tetra_plane_cut_profile".to_string(),
+            point_count: sample_count,
+            triangle_count: layer_samples.iter().map(|layer| layer.triangle_count).sum(),
+        }),
+        layer_samples,
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum CutPointKey {
     MeshNode(u32),
-    Edge { a: u32, b: u32, t_quantized: i64 },
+    MeshEdge { low: u32, high: u32 },
 }
 
 fn cut_point_key(point: &SliceOverlayPoint) -> CutPointKey {
@@ -679,16 +1219,8 @@ fn cut_point_key(point: &SliceOverlayPoint) -> CutPointKey {
     if a == b {
         return CutPointKey::MeshNode(a);
     }
-    let (a, b, t) = if a <= b {
-        (a, b, point.edge_t)
-    } else {
-        (b, a, 1.0 - point.edge_t)
-    };
-    CutPointKey::Edge {
-        a,
-        b,
-        t_quantized: (t.clamp(0.0, 1.0) * 1.0e12).round() as i64,
-    }
+    let (low, high) = if a <= b { (a, b) } else { (b, a) };
+    CutPointKey::MeshEdge { low, high }
 }
 
 fn remap_cut_point(
@@ -1541,8 +2073,76 @@ mod tests {
         TopologicalChargeResult, TopologicalChargeWarning as CoreTopologicalChargeWarning,
         TopologicalChargeWarningCode,
     };
+    use crate::fem_slice_overlay::SliceOverlayPointKind;
 
-    use super::{fdm_result_warnings, ComputedTopologicalCharge};
+    use super::{
+        cut_point_key, fdm_requires_object_mask, fdm_result_warnings,
+        fem_fe_order_from_plan_summary, fem_profile_bin_weight_m, topological_charge_cache_digest,
+        ComputedTopologicalCharge, SliceOverlayPoint,
+    };
+
+    #[test]
+    fn fem_p1_cut_key_uses_global_edge_identity_not_interpolation_rounding() {
+        let forward = SliceOverlayPoint {
+            edge_node_ids: [4, 9],
+            edge_t: 0.499_999_999_999,
+            uv: [0.0, 0.0],
+            world: [0.0, 0.0, 0.0],
+            kind: SliceOverlayPointKind::EdgeIntersection,
+        };
+        let reversed = SliceOverlayPoint {
+            edge_node_ids: [9, 4],
+            edge_t: 0.500_000_000_001,
+            uv: [0.0, 0.0],
+            world: [0.0, 0.0, 0.0],
+            kind: SliceOverlayPointKind::EdgeIntersection,
+        };
+
+        assert_eq!(cut_point_key(&forward), cut_point_key(&reversed));
+    }
+
+    #[test]
+    fn fem_order_is_accepted_only_from_persisted_plan_provenance() {
+        assert_eq!(
+            fem_fe_order_from_plan_summary(&serde_json::json!({ "fe_order": 1 })),
+            Some(1)
+        );
+        assert_eq!(
+            fem_fe_order_from_plan_summary(&serde_json::json!({ "fe_order": 2 })),
+            Some(2)
+        );
+        assert_eq!(fem_fe_order_from_plan_summary(&serde_json::json!({})), None);
+    }
+
+    #[test]
+    fn fdm_multi_object_scope_requires_explicit_ownership_mask() {
+        assert!(!fdm_requires_object_mask(Some(1)));
+        assert!(fdm_requires_object_mask(Some(2)));
+        // Missing scene is rejected by the route before this scope predicate.
+        assert!(!fdm_requires_object_mask(None));
+    }
+
+    #[test]
+    fn fem_profile_bin_weight_is_the_spacing_between_bin_midpoints() {
+        let coordinates_m = [-1.0e-9, 0.0, 1.0e-9];
+        assert_eq!(fem_profile_bin_weight_m(&coordinates_m), 1.0e-9);
+        assert_eq!(fem_profile_bin_weight_m(&[0.0]), 0.0);
+    }
+
+    #[test]
+    fn cache_digest_is_stable_and_does_not_expose_cache_key_contents() {
+        let digest = topological_charge_cache_digest("analysis:topological-charge:object-a");
+        assert_eq!(digest.len(), 64);
+        assert_eq!(
+            digest,
+            topological_charge_cache_digest("analysis:topological-charge:object-a")
+        );
+        assert_ne!(
+            digest,
+            topological_charge_cache_digest("analysis:topological-charge:object-b")
+        );
+        assert!(!digest.contains("object-a"));
+    }
 
     #[test]
     fn public_topological_charge_warnings_do_not_expose_insufficient_samples() {

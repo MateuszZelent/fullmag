@@ -207,6 +207,14 @@ pub struct ExcitationAnalysisIR {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EnergyTermIR {
     Exchange,
+    /// Brown thermal field configuration. The temperature is also retained on
+    /// `ProblemIR` for the native plan; the optional fixed seed is scoped to
+    /// the current stochastic runtime realization.
+    ThermalNoise {
+        temperature: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seed: Option<u64>,
+    },
     Demag {
         #[serde(default)]
         realization: RequestedFemDemagIR,

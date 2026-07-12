@@ -1860,13 +1860,13 @@ fn runtime_selection(problem: &ProblemIR) -> Option<&serde_json::Map<String, Val
         .and_then(Value::as_object)
 }
 
-fn runtime_device(problem: &ProblemIR) -> Option<&str> {
+pub(crate) fn runtime_device(problem: &ProblemIR) -> Option<&str> {
     runtime_selection(problem)
         .and_then(|selection| selection.get("device"))
         .and_then(Value::as_str)
 }
 
-fn runtime_precision(problem: &ProblemIR) -> &str {
+pub(crate) fn runtime_precision(problem: &ProblemIR) -> &str {
     runtime_selection(problem)
         .and_then(|selection| selection.get("precision"))
         .and_then(Value::as_str)
@@ -1876,7 +1876,7 @@ fn runtime_precision(problem: &ProblemIR) -> &str {
         })
 }
 
-fn requested_registry_device_for_fdm(problem: &ProblemIR) -> String {
+pub(crate) fn requested_registry_device_for_fdm(problem: &ProblemIR) -> String {
     match std::env::var("FULLMAG_FDM_EXECUTION").ok().as_deref() {
         Some("cpu") => "cpu".to_string(),
         Some("cuda") => "gpu".to_string(),
@@ -1887,7 +1887,7 @@ fn requested_registry_device_for_fdm(problem: &ProblemIR) -> String {
     }
 }
 
-fn requested_registry_device_for_fem(problem: &ProblemIR) -> String {
+pub(crate) fn requested_registry_device_for_fem(problem: &ProblemIR) -> String {
     if all_in_gpu_fem_env_requested() {
         return "gpu".to_string();
     }

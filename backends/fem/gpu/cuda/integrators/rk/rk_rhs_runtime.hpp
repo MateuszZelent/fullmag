@@ -23,6 +23,7 @@ bool gpu_rk_compute_rhs_for_magnetization(
     FemGpuComponentField &rhs,
     cudaStream_t stream,
     int n,
+    double evaluation_time_s,
     const char *label,
     std::string &reason);
 
@@ -31,6 +32,7 @@ bool gpu_rk_compute_effective_field_for_magnetization(
     const FemGpuComponentField &m,
     cudaStream_t stream,
     int n,
+    double evaluation_time_s,
     const char *label,
     std::string &reason);
 
@@ -39,6 +41,7 @@ bool gpu_rk_compute_effective_field_for_magnetization_fresh_demag(
     const FemGpuComponentField &m,
     cudaStream_t stream,
     int n,
+    double evaluation_time_s,
     const char *label,
     std::string &reason);
 

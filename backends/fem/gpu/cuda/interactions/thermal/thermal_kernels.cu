@@ -69,10 +69,9 @@ __global__ void thermal_field_blocks_kernel(
         const double volume_i = node_volumes[i];
         if (temperature > 0.0 && dt_seconds > 0.0 && gamma_red > 0.0 &&
             ms_i > 0.0 && alpha_i > 0.0 && volume_i > 0.0 && seed != 0ull) {
-            const double gamma0_i = gamma_red * (1.0 + alpha_i * alpha_i);
             sigma = sqrt(
                 2.0 * alpha_i * kBoltzmann * temperature /
-                (gamma0_i * kMu0 * ms_i * volume_i * dt_seconds));
+                (gamma_red * kMu0 * ms_i * volume_i * dt_seconds));
             const uint64_t node = static_cast<uint64_t>(i);
             h_therm_x[i] = deterministic_normal(seed, node, 0ull, step_index) * sigma;
             h_therm_y[i] = deterministic_normal(seed, node, 1ull, step_index) * sigma;

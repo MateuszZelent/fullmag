@@ -64,6 +64,7 @@ bool refresh_initial_effective_field_from_plan(
 bool compute_effective_fields_for_magnetization(
     Context &ctx,
     const std::vector<double> &m_xyz,
+    double evaluation_time_s,
     std::vector<double> &h_ex_xyz,
     std::vector<double> &h_demag_xyz,
     std::vector<double> &h_eff_xyz,

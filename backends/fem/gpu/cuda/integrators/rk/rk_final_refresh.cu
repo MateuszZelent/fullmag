@@ -65,6 +65,7 @@ bool gpu_rk_finalize_accepted_step(
             gpu.rk.error,
             stream,
             n,
+            ctx.state.current_time + active_dt,
             "launch GPU RK final h_eff accumulation",
             reason)) {
         gpu.rk.fsal_valid = false;

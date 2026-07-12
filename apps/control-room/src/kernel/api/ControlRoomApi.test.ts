@@ -542,7 +542,7 @@ describe("ControlRoomApi", () => {
 
     const resource = await api.analysis.extensions.objects.topologicalCharge(
       "permalloy_layer",
-      { plane: "xy", quantity_id: "m", resolution: "auto" },
+      { plane: "xy", support: "layer_profile", profile_samples: 17 },
     );
 
     expect(resource.status).toBe("no_current_magnetization");
@@ -553,8 +553,8 @@ describe("ControlRoomApi", () => {
     );
     expect(Object.fromEntries(observed.searchParams.entries())).toEqual({
       plane: "xy",
-      quantity_id: "m",
-      resolution: "auto",
+      support: "layer_profile",
+      profile_samples: "17",
     });
     expect(observedInit?.method).toBe("GET");
     expect(new Headers(observedInit?.headers).get("x-request-id")).toBe(

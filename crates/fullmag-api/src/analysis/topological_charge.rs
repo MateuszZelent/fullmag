@@ -6,6 +6,59 @@ pub const EXCEPTION_EPSILON: f64 = 1.0e-14;
 pub const ANTIPODAL_ANGLE_EPSILON_RAD: f64 = 1.0e-8;
 pub const UNDER_RESOLVED_EDGE_ANGLE_RAD: f64 = FRAC_PI_2;
 
+/// Full-thickness average over cell-centred planar cuts.  Each weight is a
+/// physical thickness interval, so no endpoint trapezoid is introduced.
+/// A single invalid cut invalidates the aggregate rather than silently changing
+/// the represented thickness.
+pub fn fdm_weighted_mean(charges: &[Option<f64>], weights_m: &[f64]) -> Option<f64> {
+    if charges.is_empty() || charges.len() != weights_m.len() {
+        return None;
+    }
+    let mut weighted_sum = 0.0;
+    let mut total_weight = 0.0;
+    for (charge, weight) in charges.iter().zip(weights_m) {
+        let charge = charge.filter(|value| value.is_finite())?;
+        if !weight.is_finite() || *weight <= 0.0 {
+            return None;
+        }
+        weighted_sum += charge * weight;
+        total_weight += weight;
+    }
+    (total_weight.is_finite() && total_weight > 0.0)
+        .then_some(weighted_sum / total_weight)
+        .filter(|value| value.is_finite())
+}
+
+/// Uniform physical weights for `count` FEM cuts located at bin midpoints.
+pub fn fem_midpoint_weights(count: usize, thickness_m: f64) -> Vec<f64> {
+    if count == 0 || !thickness_m.is_finite() || thickness_m <= 0.0 {
+        return Vec::new();
+    }
+    vec![thickness_m / count as f64; count]
+}
+
+#[cfg(test)]
+mod profile_tests {
+    use super::{fdm_weighted_mean, fem_midpoint_weights};
+
+    #[test]
+    fn full_thickness_profile_uses_cell_weights_not_endpoint_trapezoids() {
+        assert_eq!(
+            fdm_weighted_mean(&[Some(0.0), Some(1.0), Some(0.0)], &[1.0, 1.0, 1.0]),
+            Some(1.0 / 3.0)
+        );
+        assert_eq!(fem_midpoint_weights(3, 3.0), vec![1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn invalid_profile_cut_makes_full_thickness_summary_unavailable() {
+        assert_eq!(
+            fdm_weighted_mean(&[Some(0.0), None, Some(0.0)], &[1.0, 1.0, 1.0]),
+            None
+        );
+    }
+}
+
 /// Backend-neutral, explicitly oriented triangle support.
 #[derive(Debug, Clone, Copy)]
 pub struct OrientedChargeInput<'a> {

@@ -1,7 +1,7 @@
 /*
  * GPU CUDA RK FSAL policy module header.
  *
- * Declares the autonomous-RHS policy used by GPU RK methods with FSAL stages.
+ * Declares the source-state policy used by GPU RK methods with FSAL stages.
  * The policy is host-side and does not own RHS assembly or CUDA kernel launch.
  */
 #pragma once

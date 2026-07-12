@@ -1,6 +1,10 @@
 //! Artifact writing: metadata, scalars CSV, field snapshots.
 
 use crate::artifact_pipeline::ArtifactPipelineSummary;
+use crate::dispatch::{
+    requested_registry_device_for_fdm, requested_registry_device_for_fem, runtime_device,
+    runtime_precision,
+};
 use fullmag_ir::BackendPlanIR;
 use sha2::{Digest, Sha256};
 
@@ -26,6 +30,34 @@ fn runtime_threading_summary(problem: &fullmag_ir::ProblemIR) -> serde_json::Val
         "resolved_cpu_threads": resolved_cpu_threads,
         "requested_fem_omp_threads": serde_json::Value::Null,
         "effective_fem_omp_threads": serde_json::Value::Null,
+    })
+}
+
+fn requested_execution_metadata(problem: &fullmag_ir::ProblemIR) -> serde_json::Value {
+    let backend = match problem.backend_policy.requested_backend {
+        fullmag_ir::BackendTarget::Auto => "auto",
+        fullmag_ir::BackendTarget::Fdm => "fdm",
+        fullmag_ir::BackendTarget::Fem => "fem",
+        fullmag_ir::BackendTarget::Hybrid => "hybrid",
+    };
+    let device = match backend {
+        "fem" => requested_registry_device_for_fem(problem),
+        "fdm" => requested_registry_device_for_fdm(problem),
+        _ => runtime_device(problem)
+            .unwrap_or("auto")
+            .replace("cuda", "gpu"),
+    };
+    let mode = match problem.validation_profile.execution_mode {
+        fullmag_ir::ExecutionMode::Strict => "strict",
+        fullmag_ir::ExecutionMode::Extended => "extended",
+        fullmag_ir::ExecutionMode::Hybrid => "hybrid",
+    };
+    serde_json::json!({
+        "backend": backend,
+        "device": device,
+        "precision": runtime_precision(problem),
+        "mode": mode,
+        "fallback_policy": if mode == "strict" { "forbidden" } else { "allowed" },
     })
 }
 
@@ -83,6 +115,19 @@ fn provenance_with_runtime_threading(
         }
     }
     enriched
+}
+
+fn thermal_execution_provenance(plan: &fullmag_ir::ExecutionPlanIR, steps: &[StepStats]) -> Option<serde_json::Value> {
+    let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
+        return None;
+    };
+    let seed = fem.thermal_seed_config.as_ref()?;
+    Some(serde_json::json!({
+        "requested_seed_policy": seed.policy,
+        "resolved_seed_policy": seed.policy,
+        "resolved_seed": seed.seed,
+        "accepted_interval_index": steps.len(),
+    }))
 }
 
 fn demag_amg_env_i64(name: &str, default_value: i64) -> i64 {
@@ -829,6 +874,7 @@ pub(crate) fn write_artifacts(
 ) -> std::io::Result<()> {
     fs::create_dir_all(output_dir)?;
     let field_context = build_field_context(problem, plan);
+    let requested_execution = requested_execution_metadata(problem);
     let runtime_threading = runtime_threading_summary(problem);
     let execution_provenance =
         provenance_with_runtime_threading(problem, &executed.provenance, &executed.result.steps);
@@ -849,6 +895,14 @@ pub(crate) fn write_artifacts(
         .unwrap_or(serde_json::Value::Null);
     let mesh_metadata = mesh_runtime_metadata(plan);
     let material_field_assets = write_material_field_artifacts(output_dir, plan)?;
+    let mut execution_provenance_json = serde_json::to_value(&execution_provenance)
+        .expect("ExecutionProvenance must serialize");
+    if let Some(thermal) = thermal_execution_provenance(plan, &executed.result.steps) {
+        execution_provenance_json
+            .as_object_mut()
+            .expect("ExecutionProvenance must serialize to an object")
+            .insert("thermal".to_string(), thermal);
+    }
 
     let metadata = serde_json::json!({
         "problem_name": problem.problem_meta.name,
@@ -857,10 +911,11 @@ pub(crate) fn write_artifacts(
         "problem_meta": problem.problem_meta,
         "pbc": problem.pbc,
         "execution_plan": plan,
+        "requested_execution": requested_execution,
         "artifact_layout": field_context.layout.clone(),
         "mesh": mesh_metadata,
         "periodic_antidot_relaxation": periodic_antidot_relaxation,
-        "execution_provenance": execution_provenance,
+        "execution_provenance": execution_provenance_json,
         "runtime_threading": runtime_threading,
         "demag_runtime": demag_runtime,
         "fem_cpu_relaxation_qualification": fem_cpu_relaxation_qualification,
@@ -2651,7 +2706,7 @@ pub(crate) fn field_unit(observable: &str) -> &'static str {
         .map_or(observable, |(base, _)| base);
     match base_observable {
         "m" => "dimensionless",
-        "H_ex" | "H_demag" | "H_ext" | "H_OE" | "H_eff" | "H_ani" | "H_dmi" | "H_dmi_bulk" => "A/m",
+        "H_ex" | "H_demag" | "H_ext" | "H_OE" | "H_eff" | "H_ani" | "H_dmi" | "H_dmi_bulk" | "H_therm" => "A/m",
         "demag_phi" => "A",
         "torque" => "T",
         other => panic!("unsupported observable '{}'", other),

@@ -19,6 +19,7 @@ struct FemGpuFieldBufferDeviceState {
     FemGpuComponentField h_cubic_ani;
     FemGpuComponentField h_dmi;
     FemGpuComponentField h_bulk_dmi;
+    FemGpuComponentField h_oe_basis_per_ampere;
     FemGpuComponentField h_oe;
     FemGpuComponentField h_therm;
     FemGpuComponentField h_mel;

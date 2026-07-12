@@ -21,8 +21,11 @@ bool normalize_oersted_cylinder_axis(Context &ctx, std::string &error);
 
 bool initialize_oersted_cylinder_field(Context &ctx, std::string &error);
 
-double oersted_current_scale(const Context &ctx);
+double oersted_current_scale(const Context &ctx, double evaluation_time_s);
 
-void add_oersted_cylinder_field(const Context &ctx, std::vector<double> &h_eff_xyz);
+void add_oersted_cylinder_field(
+    const Context &ctx,
+    double evaluation_time_s,
+    std::vector<double> &h_eff_xyz);
 
 } // namespace fullmag::fem

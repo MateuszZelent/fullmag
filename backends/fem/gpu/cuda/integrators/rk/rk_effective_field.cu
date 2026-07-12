@@ -43,6 +43,7 @@ bool gpu_rk_accumulate_effective_field(
     Context &ctx,
     cudaStream_t stream,
     int n,
+    double evaluation_time_s,
     const char *base_label,
     std::string &reason)
 {
@@ -85,7 +86,7 @@ bool gpu_rk_accumulate_effective_field(
             return false;
         }
     }
-    if (!gpu_rk_accumulate_oersted_field(ctx, stream, n, reason)) {
+    if (!gpu_rk_accumulate_oersted_field(ctx, stream, n, evaluation_time_s, reason)) {
         return false;
     }
     if (ctx.magnetoelastic.enabled) {

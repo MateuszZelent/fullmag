@@ -24,6 +24,7 @@ struct StepperWorkspace;
 bool evaluate_rk_stage_rhs(
     Context &ctx,
     const std::vector<double> &m_state,
+    double evaluation_time_s,
     StepperWorkspace &ws,
     std::vector<double> &out_k,
     double *out_max_rhs,

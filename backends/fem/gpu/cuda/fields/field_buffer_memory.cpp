@@ -24,6 +24,7 @@ bool gpu_field_buffers_allocate(
            gpu_device_allocate_component(fields.h_cubic_ani, node_count, device_bytes, error) &&
            gpu_device_allocate_component(fields.h_dmi, node_count, device_bytes, error) &&
            gpu_device_allocate_component(fields.h_bulk_dmi, node_count, device_bytes, error) &&
+           gpu_device_allocate_component(fields.h_oe_basis_per_ampere, node_count, device_bytes, error) &&
            gpu_device_allocate_component(fields.h_oe, node_count, device_bytes, error) &&
            gpu_device_allocate_component(fields.h_therm, node_count, device_bytes, error) &&
            gpu_device_allocate_component(fields.h_mel, node_count, device_bytes, error) &&
@@ -39,6 +40,7 @@ void gpu_field_buffers_free(FemGpuFieldBufferDeviceState &fields)
     gpu_device_free_component(fields.h_cubic_ani);
     gpu_device_free_component(fields.h_dmi);
     gpu_device_free_component(fields.h_bulk_dmi);
+    gpu_device_free_component(fields.h_oe_basis_per_ampere);
     gpu_device_free_component(fields.h_oe);
     gpu_device_free_component(fields.h_therm);
     gpu_device_free_component(fields.h_mel);

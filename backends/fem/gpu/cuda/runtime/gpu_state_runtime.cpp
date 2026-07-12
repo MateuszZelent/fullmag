@@ -149,6 +149,7 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
             ctx.anisotropy.h_cubic_xyz.data(),
             ctx.dmi.h_interfacial_xyz.data(),
             ctx.dmi.h_bulk_xyz.data(),
+            ctx.oersted.h_basis_per_ampere_xyz.data(),
             ctx.oersted.h_xyz.data(),
             ctx.thermal_brown.h_xyz.data(),
             ctx.magnetoelastic.h_xyz.data(),

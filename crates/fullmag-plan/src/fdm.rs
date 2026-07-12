@@ -442,6 +442,7 @@ pub(crate) fn plan_fdm(
         false,
         false,
         false,
+        problem.energy_terms.iter().any(|term| matches!(term, EnergyTermIR::ThermalNoise { .. })),
         has_prescribed_zeeman_mask_source(problem),
         &mut errors,
     );
@@ -1342,6 +1343,7 @@ pub(crate) fn plan_fdm_multilayer(
             )
         }),
         interfacial_dmi.is_some() || bulk_dmi.is_some(),
+        false,
         false,
         false,
         false,

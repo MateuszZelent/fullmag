@@ -1136,6 +1136,7 @@ dependencies = [
  "png 0.17.16",
  "serde",
  "serde_json",
+ "sha2",
  "tiny-skia",
  "tokio",
  "tower",

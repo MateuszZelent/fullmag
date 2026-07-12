@@ -306,6 +306,8 @@ int context_copy_field_f64(
             source = &ctx.dmi.h_bulk_xyz;
             break;
         case FULLMAG_FEM_OBSERVABLE_H_OE:
+            materialize_oersted_field(
+                const_cast<Context &>(ctx), ctx.state.current_time);
             source = &ctx.oersted.h_xyz;
             break;
         case FULLMAG_FEM_OBSERVABLE_H_THERM:
@@ -418,6 +420,7 @@ int context_upload_magnetization_f64(
         if (!compute_effective_fields_for_magnetization(
                 ctx,
                 ctx.state.m_xyz,
+                ctx.state.current_time,
                 ctx.exchange.h_xyz,
                 ctx.demag.h_xyz,
                 ctx.effective_field.h_xyz,
@@ -475,6 +478,7 @@ int context_upload_magnetization_f64(
                 ctx.anisotropy.h_cubic_xyz.data(),
                 ctx.dmi.h_interfacial_xyz.data(),
                 ctx.dmi.h_bulk_xyz.data(),
+                ctx.oersted.h_basis_per_ampere_xyz.data(),
                 ctx.oersted.h_xyz.data(),
                 ctx.thermal_brown.h_xyz.data(),
                 ctx.magnetoelastic.h_xyz.data(),

@@ -46,9 +46,6 @@ bool rk_rhs_allows_fsal_reuse(const fullmag::fem::Context &ctx)
     if (ctx.thermal_brown.temperature > 0.0) {
         return false;
     }
-    if (ctx.oersted.time_dep_kind != 0u) {
-        return false;
-    }
     return true;
 }
 #endif
@@ -122,6 +119,7 @@ bool context_step_explicit_rk_mfem(
     for (;;) {
         ctx.adaptive_dt.current_dt = dt;
         ws.m_backup = ctx.state.m_xyz;
+        fsal_used = false;
         final_stage_cache_valid = false;
 
         if (tab.fsal && fsal_reuse_allowed && ws.fsal_valid) {
@@ -132,6 +130,7 @@ bool context_step_explicit_rk_mfem(
             if (!evaluate_rk_stage_rhs(
                     ctx,
                     ctx.state.m_xyz,
+                    ctx.state.current_time,
                     ws,
                     ws.k[0],
                     nullptr,
@@ -171,7 +170,7 @@ bool context_step_explicit_rk_mfem(
                 stage_exchange_energy = &exchange_energy_final;
                 stage_demag_energy = &demag_energy_final;
             }
-            if (!evaluate_rk_stage_rhs(ctx, ws.m_stage, ws, ws.k[s],
+            if (!evaluate_rk_stage_rhs(ctx, ws.m_stage, ctx.state.current_time + tab.c[s] * dt, ws, ws.k[s],
                                        nullptr,
                                        stage_exchange_energy,
                                        stage_demag_energy,
@@ -269,6 +268,7 @@ bool context_step_explicit_rk_mfem(
         if (!compute_effective_fields_for_magnetization(
                 ctx,
                 ctx.state.m_xyz,
+                ctx.state.current_time + dt,
                 ws.h_ex_tmp,
                 ws.h_demag_tmp,
                 ws.h_eff_tmp,

@@ -111,13 +111,13 @@ export type MagneticResponseSweepResource = JsonObject & {
   schema_version: string;
 };
 export type TopologicalChargeResource =
-  components["schemas"]["TopologicalChargeResource"];
+  components["schemas"]["TopologicalChargeResourceV2"];
 export interface TopologicalChargeQuery {
-  method?: string;
   plane?: "auto" | "xy" | "xz" | "yz";
-  quantity_id?: string;
-  resolution?: "auto" | number | string;
+  support?: "midplane" | "layer_profile";
+  profile_samples?: "auto" | number;
   snapshot_id?: string | null;
+  stage_id?: string | null;
 }
 export type FrequencyDomainManifestResource =
   components["schemas"]["FrequencyDomainManifestResource"];

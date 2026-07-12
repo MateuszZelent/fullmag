@@ -51,6 +51,15 @@ pub(crate) struct RuntimeCommandPrecondition {
 }
 
 #[derive(Debug, Serialize)]
+pub(crate) struct RequestedExecutionProvenance {
+    pub backend: String,
+    pub device: String,
+    pub precision: String,
+    pub mode: String,
+    pub fallback_policy: String,
+}
+
+#[derive(Debug, Serialize)]
 pub(crate) struct ScriptRunSummary {
     pub session_id: String,
     pub run_id: String,
@@ -60,6 +69,7 @@ pub(crate) struct ScriptRunSummary {
     pub backend: String,
     pub mode: String,
     pub precision: String,
+    pub requested_execution: RequestedExecutionProvenance,
     pub total_steps: usize,
     pub final_time: Option<f64>,
     pub final_e_ex: Option<f64>,

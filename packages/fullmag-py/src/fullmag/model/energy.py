@@ -515,6 +515,8 @@ class ThermalNoise:
 
     def __post_init__(self) -> None:
         require_positive(self.temperature, "temperature")
+        if self.seed is not None and self.seed <= 0:
+            raise ValueError("seed must be a positive integer; use None for system entropy")
 
     def to_ir(self) -> dict[str, object]:
         ir: dict[str, object] = {

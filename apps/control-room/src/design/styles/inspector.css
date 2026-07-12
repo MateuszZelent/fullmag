@@ -312,6 +312,36 @@
   font-size: var(--fm-font-size-xs);
 }
 
+.fm-topological-charge-profile {
+  overflow-x: auto;
+  padding: var(--fm-space-2);
+}
+
+.fm-topological-charge-profile h4 {
+  margin: 0 0 var(--fm-space-1);
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-topological-charge-profile table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-topological-charge-profile th,
+.fm-topological-charge-profile td {
+  border-bottom: 1px solid var(--fm-border-subtle);
+  padding: 3px var(--fm-space-1);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.fm-topological-charge-profile th:last-child,
+.fm-topological-charge-profile td:last-child {
+  text-align: left;
+}
+
 .fm-study-command-link {
   display: inline-flex;
   min-width: 0;

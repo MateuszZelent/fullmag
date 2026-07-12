@@ -16698,48 +16698,154 @@
               "null"
             ]
           },
-          "coordinate": {
+          "coordinate_m": {
             "format": "double",
             "type": "number"
           },
           "index": {
+            "format": "int32",
             "minimum": 0,
             "type": "integer"
           },
-          "sample_count": {
+          "integration_weight_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TopologicalChargeStatus"
+          },
+          "total_triangle_count": {
+            "format": "int64",
             "minimum": 0,
             "type": "integer"
           },
-          "triangle_count": {
-            "minimum": 0,
-            "type": "integer"
+          "trust": {
+            "$ref": "#/components/schemas/TopologicalChargeTrust"
           },
-          "valid_sample_count": {
+          "valid_triangle_count": {
+            "format": "int64",
             "minimum": 0,
             "type": "integer"
           }
         },
         "required": [
           "index",
-          "coordinate",
-          "sample_count",
-          "valid_sample_count",
-          "triangle_count"
+          "coordinate_m",
+          "integration_weight_m",
+          "status",
+          "trust",
+          "valid_triangle_count",
+          "total_triangle_count"
         ],
         "type": "object"
       },
-      "TopologicalChargeQuery": {
+      "TopologicalChargeMethod": {
+        "description": "The single production discretization method for schema v2.",
+        "enum": [
+          "berg_luescher_oriented_triangles_v2"
+        ],
+        "type": "string"
+      },
+      "TopologicalChargeMethodDescriptor": {
         "properties": {
-          "method": {
-            "type": "string"
-          },
-          "plane": {
-            "type": "string"
+          "id": {
+            "$ref": "#/components/schemas/TopologicalChargeMethod"
           },
           "quantity_id": {
             "type": "string"
           },
-          "resolution": {
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "quantity_id"
+        ],
+        "type": "object"
+      },
+      "TopologicalChargePlane": {
+        "description": "The ordered support plane.  The canonical `(u, v, n)` frame is published in\nthe response because `xz` has normal `-y`, not `+y`.",
+        "enum": [
+          "auto",
+          "xy",
+          "xz",
+          "yz"
+        ],
+        "type": "string"
+      },
+      "TopologicalChargeProfileSamples": {
+        "description": "A bounded request for exact profile cuts.\n\nQuery parameters are strings, so deserialization accepts `auto` and decimal\nintegers only.  The numeric bounds are enforced at the public boundary.",
+        "oneOf": [
+          {
+            "enum": [
+              "auto"
+            ],
+            "type": "string"
+          },
+          {
+            "properties": {
+              "count": {
+                "format": "int32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "count"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "TopologicalChargeProvenance": {
+        "properties": {
+          "cache_key_digest": {
+            "type": "string"
+          },
+          "discretization": {
+            "type": "string"
+          },
+          "domain_generation_id": {
+            "type": "string"
+          },
+          "fe_order": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "field_id": {
+            "type": "string"
+          },
+          "field_node_mapping_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "field_revision": {
+            "type": "string"
+          },
+          "field_storage_domain": {
+            "type": "string"
+          },
+          "mesh_generation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mesh_revision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scene_revision": {
             "type": "string"
           },
           "snapshot_id": {
@@ -16747,11 +16853,222 @@
               "string",
               "null"
             ]
+          },
+          "source_kind": {
+            "type": "string"
+          },
+          "stage_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "source_kind",
+          "field_id",
+          "field_revision",
+          "field_storage_domain",
+          "scene_revision",
+          "domain_generation_id",
+          "discretization",
+          "cache_key_digest"
+        ],
+        "type": "object"
+      },
+      "TopologicalChargeQuality": {
+        "properties": {
+          "boundary_edge_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "boundary_loop_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "boundary_max_deviation_rad": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "connected_component_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "euler_characteristic": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "exceptional_triangle_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "invalid_triangle_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_edge_angle_rad": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "min_abs_solid_angle_denominator": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "total_triangle_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total_vertex_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "valid_triangle_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "valid_vertex_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total_vertex_count",
+          "valid_vertex_count",
+          "total_triangle_count",
+          "valid_triangle_count",
+          "invalid_triangle_count",
+          "exceptional_triangle_count",
+          "connected_component_count",
+          "boundary_edge_count",
+          "boundary_loop_count"
+        ],
+        "type": "object"
+      },
+      "TopologicalChargeQueryV2": {
+        "description": "Typed query for the v2 analysis resource.",
+        "properties": {
+          "method": {
+            "$ref": "#/components/schemas/TopologicalChargeMethod"
+          },
+          "plane": {
+            "$ref": "#/components/schemas/TopologicalChargePlane"
+          },
+          "profile_samples": {
+            "example": "auto",
+            "type": "string"
+          },
+          "snapshot_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stage_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "support": {
+            "$ref": "#/components/schemas/TopologicalChargeSupportMode"
           }
         },
         "type": "object"
       },
-      "TopologicalChargeResource": {
+      "TopologicalChargeRequestEcho": {
+        "properties": {
+          "requested_plane": {
+            "$ref": "#/components/schemas/TopologicalChargePlane"
+          },
+          "requested_profile_samples": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TopologicalChargeProfileSamples"
+              }
+            ]
+          },
+          "requested_support": {
+            "$ref": "#/components/schemas/TopologicalChargeSupportMode"
+          },
+          "snapshot_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stage_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "requested_plane",
+          "requested_support"
+        ],
+        "type": "object"
+      },
+      "TopologicalChargeResolvedSupport": {
+        "properties": {
+          "coordinate_m": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "plane": {
+            "$ref": "#/components/schemas/TopologicalChargePlane"
+          },
+          "profile_sample_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "source_kind": {
+            "type": "string"
+          },
+          "support": {
+            "$ref": "#/components/schemas/TopologicalChargeSupportMode"
+          }
+        },
+        "required": [
+          "plane",
+          "support",
+          "source_kind"
+        ],
+        "type": "object"
+      },
+      "TopologicalChargeResourceV2": {
+        "description": "Versioned resource published by the topological-charge endpoint.",
         "properties": {
           "charge": {
             "format": "double",
@@ -16765,20 +17082,6 @@
             "minimum": 0,
             "type": "integer"
           },
-          "domain_generation_id": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "field_revision": {
-            "format": "int64",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
           "integer_error": {
             "format": "double",
             "type": [
@@ -16786,28 +17089,8 @@
               "null"
             ]
           },
-          "layer_samples": {
-            "items": {
-              "$ref": "#/components/schemas/TopologicalChargeLayerSample"
-            },
-            "type": "array"
-          },
-          "mesh_generation_id": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "mesh_revision": {
-            "format": "int64",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
           "method": {
-            "type": "string"
+            "$ref": "#/components/schemas/TopologicalChargeMethodDescriptor"
           },
           "nearest_integer": {
             "format": "int64",
@@ -16819,53 +17102,39 @@
           "object_id": {
             "type": "string"
           },
-          "plane": {
+          "profile": {
+            "items": {
+              "$ref": "#/components/schemas/TopologicalChargeLayerSample"
+            },
+            "type": "array"
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/TopologicalChargeProvenance"
+          },
+          "quality": {
+            "$ref": "#/components/schemas/TopologicalChargeQuality"
+          },
+          "request": {
+            "$ref": "#/components/schemas/TopologicalChargeRequestEcho"
+          },
+          "resolved_support": {
+            "$ref": "#/components/schemas/TopologicalChargeResolvedSupport"
+          },
+          "resource_revision": {
             "type": "string"
           },
-          "polarity": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "quantity_id": {
+          "schema_version": {
+            "example": "topological_charge.v2",
             "type": "string"
-          },
-          "revision": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "sample_count": {
-            "minimum": 0,
-            "type": "integer"
-          },
-          "sample_grid": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/TopologicalChargeSampleGrid"
-              }
-            ]
-          },
-          "sample_topology": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/TopologicalChargeSampleTopology"
-              }
-            ]
           },
           "status": {
             "$ref": "#/components/schemas/TopologicalChargeStatus"
           },
-          "valid_sample_count": {
-            "minimum": 0,
-            "type": "integer"
+          "support_frame": {
+            "$ref": "#/components/schemas/TopologicalChargeSupportFrame"
+          },
+          "trust": {
+            "$ref": "#/components/schemas/TopologicalChargeTrust"
           },
           "warnings": {
             "items": {
@@ -16875,65 +17144,23 @@
           }
         },
         "required": [
+          "schema_version",
+          "resource_revision",
           "object_id",
-          "quantity_id",
-          "revision",
           "status",
+          "trust",
+          "request",
+          "resolved_support",
+          "support_frame",
+          "quality",
+          "provenance",
           "method",
-          "plane",
-          "layer_samples",
-          "sample_count",
-          "valid_sample_count",
-          "computed_at_unix_ms",
-          "warnings"
-        ],
-        "type": "object"
-      },
-      "TopologicalChargeSampleGrid": {
-        "properties": {
-          "nx": {
-            "format": "int32",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "ny": {
-            "format": "int32",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "plane": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "nx",
-          "ny",
-          "plane"
-        ],
-        "type": "object"
-      },
-      "TopologicalChargeSampleTopology": {
-        "properties": {
-          "kind": {
-            "type": "string"
-          },
-          "point_count": {
-            "minimum": 0,
-            "type": "integer"
-          },
-          "triangle_count": {
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "kind",
-          "point_count",
-          "triangle_count"
+          "computed_at_unix_ms"
         ],
         "type": "object"
       },
       "TopologicalChargeStatus": {
+        "description": "Expected scientific computation states.  Transport lifecycle is intentionally\nabsent: `idle`, `loading`, `stale`, and `error` belong to the resource hook.",
         "enum": [
           "ready",
           "no_current_magnetization",
@@ -16941,9 +17168,58 @@
           "invalid_magnetization",
           "degenerate_support",
           "under_resolved",
-          "stale",
           "unsupported_geometry",
-          "error"
+          "unsupported_discretization"
+        ],
+        "type": "string"
+      },
+      "TopologicalChargeSupportFrame": {
+        "properties": {
+          "normal_axis": {
+            "items": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "u_axis": {
+            "items": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "v_axis": {
+            "items": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "u_axis",
+          "v_axis",
+          "normal_axis"
+        ],
+        "type": "object"
+      },
+      "TopologicalChargeSupportMode": {
+        "description": "Whether the result represents one exact midplane or a thickness profile.",
+        "enum": [
+          "midplane",
+          "layer_profile"
+        ],
+        "type": "string"
+      },
+      "TopologicalChargeTrust": {
+        "description": "Scientific trust is intentionally distinct from whether computation produced\na finite diagnostic integral.",
+        "enum": [
+          "qualified",
+          "diagnostic_boundary",
+          "diagnostic_resolution",
+          "diagnostic_topology",
+          "unavailable"
         ],
         "type": "string"
       },
@@ -16954,10 +17230,14 @@
           },
           "message": {
             "type": "string"
+          },
+          "severity": {
+            "type": "string"
           }
         },
         "required": [
           "code",
+          "severity",
           "message"
         ],
         "type": "object"
@@ -19192,7 +19472,7 @@
         "operationId": "analysis_get_sessions_current_analysis_extensions_objects_object_id_topological_charge",
         "parameters": [
           {
-            "description": "Canonical scene object id",
+            "description": "Object id",
             "in": "path",
             "name": "object_id",
             "required": true,
@@ -19202,26 +19482,26 @@
           },
           {
             "in": "query",
-            "name": "quantity_id",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
             "name": "plane",
             "required": false,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/TopologicalChargePlane"
             }
           },
           {
             "in": "query",
-            "name": "resolution",
+            "name": "support",
             "required": false,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/TopologicalChargeSupportMode"
+            }
+          },
+          {
+            "in": "query",
+            "name": "profile_samples",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/TopologicalChargeProfileSamples"
             }
           },
           {
@@ -19229,10 +19509,15 @@
             "name": "snapshot_id",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "stage_id",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           },
           {
@@ -19240,7 +19525,7 @@
             "name": "method",
             "required": false,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/TopologicalChargeMethod"
             }
           }
         ],
@@ -19249,14 +19534,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TopologicalChargeResource"
+                  "$ref": "#/components/schemas/TopologicalChargeResourceV2"
                 }
               }
             },
-            "description": "Object-scoped topological charge analysis resource"
-          },
-          "404": {
-            "description": "Object or workspace not found"
+            "description": "Versioned topological charge resource"
           }
         },
         "tags": [

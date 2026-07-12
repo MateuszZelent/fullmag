@@ -121,7 +121,12 @@ def load_last_json_object(text: str) -> dict[str, Any]:
             value, _ = decoder.raw_decode(text[index:])
         except json.JSONDecodeError:
             continue
-        if isinstance(value, dict):
+        if (
+            isinstance(value, dict)
+            and "status" in value
+            and "artifact_dir" in value
+            and "total_steps" in value
+        ):
             last = value
     if last is None:
         raise ValueError("runtime log does not contain a JSON run summary")

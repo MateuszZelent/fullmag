@@ -20,6 +20,7 @@ bool gpu_rk_accumulate_oersted_field(
     Context &ctx,
     cudaStream_t stream,
     int n,
+    double evaluation_time_s,
     std::string &reason);
 
 } // namespace fullmag::fem

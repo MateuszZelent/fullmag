@@ -63,6 +63,7 @@ bool refresh_initial_effective_field_from_plan(
 bool compute_effective_fields_for_magnetization(
     Context &ctx,
     const std::vector<double> &m_xyz,
+    double evaluation_time_s,
     std::vector<double> &h_ex_xyz,
     std::vector<double> &h_demag_xyz,
     std::vector<double> &h_eff_xyz,
@@ -172,7 +173,7 @@ bool compute_effective_fields_for_magnetization(
             }
         }
 
-        add_oersted_field(ctx, h_eff_xyz);
+        add_oersted_field(ctx, evaluation_time_s, h_eff_xyz);
 
         if (ctx.thermal_brown.temperature > 0.0) {
             refresh_thermal_brown_field(ctx);

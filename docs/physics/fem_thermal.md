@@ -2,11 +2,11 @@
 
 - Status: native FEM CPU interaction documentation umbrella
 - Last updated: 2026-05-30
-- Implementation: `native/backends/fem/cpu/mfem/interactions/thermal_brown.hpp/.cpp`,
-  `native/backends/fem/cpu/mfem/interactions/thermal_brown_sigma.hpp/.cpp`,
-  `native/backends/fem/cpu/mfem/interactions/thermal_brown_sampler.hpp/.cpp`,
-  `native/backends/fem/cpu/mfem/interactions/thermal_brown_field.hpp/.cpp`
-- Test: `native/backends/fem/tests/thermal_brown_contract.cpp`
+- Implementation: `backends/fem/cpu/mfem/interactions/thermal_brown.hpp/.cpp`,
+  `backends/fem/cpu/mfem/interactions/thermal_brown_sigma.hpp/.cpp`,
+  `backends/fem/cpu/mfem/interactions/thermal_brown_sampler.hpp/.cpp`,
+  `backends/fem/cpu/mfem/interactions/thermal_brown_field.hpp/.cpp`
+- Test: `backends/fem/tests/thermal_brown_contract.cpp`
 
 ## Zakres
 
@@ -33,12 +33,12 @@ observable.
 The executable Brown-field contract is:
 
 ```text
-sigma_i = sqrt(2 alpha_i kB T / (gamma0_i mu0 Ms_i V_i dt))
-gamma0_i = gamma_red * (1 + alpha_i^2)
+sigma_i^2 = 2 alpha_i kB T / (gamma_mu0 mu0 Ms_i V_i dt)
 ```
 
-where `V_i` is the FEM nodal dual volume. Repeated RHS evaluations at the same
-accepted `(time, dt)` reuse the sampled thermal field.
+where `V_i` is the FEM nodal dual volume and `gamma_mu0` is the bare Gilbert
+input used directly by Brown sampling. One raw unit-normal draw belongs to an
+accepted interval; retries reuse it and rescale only through `dt^-1/2`.
 
 The executable Brown implementation is split into the sigma formula module,
 the sampler/cache/RNG module, and the additive field-composition module.
@@ -55,7 +55,7 @@ monitors should treat it as a non-conservative stochastic field contribution.
 |---|---:|---:|
 | temperature | `T` | `K` |
 | damping | `alpha` | `1` |
-| reduced gyromagnetic ratio | `gamma_red` | `m/(A s)` |
+| bare gyromagnetic ratio | `gamma_mu0` | `m/(A s)` |
 | saturation magnetization | `Ms` | `A/m` |
 | node dual volume | `V_i` | `m^3` |
 | timestep | `dt` | `s` |
@@ -79,17 +79,19 @@ AoS-3 field buffer. The field module then adds that sampled H field to `H_eff`.
 
 - The executable native FEM CPU thermal interaction is Brown thermal field
   sampling only.
-- The stochastic field is tied to accepted-step `(time, dt)` cache semantics.
-- GPU parity and production statistical qualification are not claimed by this
-  umbrella document.
+- The stochastic field is tied to accepted-interval raw-draw semantics; retry
+  `dt` changes rescale the field without drawing new noise.
+- This is `sampling_correct`, not `statistically_validated`. Strict public FEM
+  GPU thermal stays fail-closed pending public seed-carrier and parity gates.
 
 ## Testy
 
 Current local gate:
 
 - `fem_thermal_brown_contract` checks sigma, invalid-input zero behavior,
-  initialization, per-node diagnostics, nonmagnetic-node zeroing, same-time/dt
-  cache reuse, source-module ownership, and additive `H_eff` semantics.
+  initialization, per-node diagnostics, nonmagnetic-node zeroing,
+  accepted-interval raw-draw reuse across retry with `dt` rescaling,
+  source-module ownership, and additive `H_eff` semantics.
 - It also runs a deterministic sampler moment check showing Brown-field sample
   variance follows the documented `1/dt` scaling for accepted timesteps.
 

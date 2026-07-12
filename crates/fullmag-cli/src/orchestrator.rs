@@ -149,6 +149,14 @@ fn is_gpu_device_label(value: &str) -> bool {
     matches!(value.trim().to_ascii_lowercase().as_str(), "gpu" | "cuda")
 }
 
+fn requested_execution_device(runtime: &SessionRuntimeSelection) -> String {
+    match std::env::var("FULLMAG_FEM_EXECUTION") {
+        Ok(value) if matches!(value.as_str(), "gpu" | "cuda" | "all_in_gpu") => "gpu".to_string(),
+        Ok(value) if value == "cpu" => "cpu".to_string(),
+        _ => runtime.requested_device.replace("cuda", "gpu"),
+    }
+}
+
 fn fem_gpu_execution_requested(problem: &ProblemIR, runtime: &SessionRuntimeSelection) -> bool {
     if is_gpu_device_label(&runtime.requested_device) {
         return true;
@@ -8435,6 +8443,17 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         backend: backend_target_name(final_requested_backend).to_string(),
         mode: execution_mode_name(final_execution_mode).to_string(),
         precision: execution_precision_name(final_precision).to_string(),
+        requested_execution: RequestedExecutionProvenance {
+            backend: final_session_runtime.requested_backend.clone(),
+            device: requested_execution_device(&final_session_runtime),
+            precision: final_session_runtime.requested_precision.clone(),
+            mode: final_session_runtime.requested_mode.clone(),
+            fallback_policy: if final_session_runtime.requested_mode == "strict" {
+                "forbidden".to_string()
+            } else {
+                "allowed".to_string()
+            },
+        },
         total_steps: aggregated_steps
             .last()
             .map(|step| step.step as usize)

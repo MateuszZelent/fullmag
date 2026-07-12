@@ -119,9 +119,30 @@ fn resolve_global_node_ids(
     Ok(Some(magnetic_nodes))
 }
 
+/// Expand compact magnetic-node values into the global FEM node order used by
+/// the P1 slice adapter.  Unmapped (air) nodes are deliberately zero because
+/// object-scoped support construction never includes them.
+pub(crate) fn expand_compact_fem_node_values(
+    values: &[[f64; 3]],
+    global_node_ids: &[u32],
+    global_node_count: usize,
+) -> Result<Vec<[f64; 3]>, &'static str> {
+    if values.len() != global_node_ids.len() {
+        return Err("compact FEM value count does not match global-node mapping");
+    }
+    let mut expanded = vec![[0.0; 3]; global_node_count];
+    for (value, node_id) in values.iter().zip(global_node_ids) {
+        let target = expanded
+            .get_mut(*node_id as usize)
+            .ok_or("compact FEM node mapping contains an out-of-range node")?;
+        *target = *value;
+    }
+    Ok(expanded)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::ResolvedFieldSourceKind;
+    use super::{expand_compact_fem_node_values, ResolvedFieldSourceKind};
 
     #[test]
     fn preview_is_not_an_analysis_source() {
@@ -131,5 +152,17 @@ mod tests {
             ResolvedFieldSourceKind::CurrentMaterialized,
         ];
         assert_eq!(accepted.len(), 3);
+    }
+
+    #[test]
+    fn compact_fem_values_expand_by_global_node_identity() {
+        let values = vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+
+        let expanded = expand_compact_fem_node_values(&values, &[3, 1], 5)
+            .expect("compact values have one global node identity each");
+
+        assert_eq!(expanded[1], [0.0, 1.0, 0.0]);
+        assert_eq!(expanded[3], [1.0, 0.0, 0.0]);
+        assert_eq!(expanded[0], [0.0, 0.0, 0.0]);
     }
 }

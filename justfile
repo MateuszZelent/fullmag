@@ -89,7 +89,12 @@ verify-fem-relaxation-source-contract:
 
 verify-fem-time-domain-native-contract:
     docker compose --profile fem-gpu run --rm \
-      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_stt_contract fem_cuda_tetra_gradient_contract fem_relaxation_source_contract fem_relaxation_energy_derivative_contract fem_relaxation_operator_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_stt_contract && native/build/backends/fem/fem_cuda_tetra_gradient_contract && native/build/backends/fem/fem_relaxation_source_contract && native/build/backends/fem/fem_relaxation_energy_derivative_contract && native/build/backends/fem/fem_relaxation_operator_contract'
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_oersted_contract fem_rk_explicit_contract fem_stt_contract fem_cuda_tetra_gradient_contract fem_thermal_brown_contract fem_relaxation_source_contract fem_relaxation_energy_derivative_contract fem_relaxation_operator_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_oersted_contract && native/build/backends/fem/fem_rk_explicit_contract && native/build/backends/fem/fem_stt_contract && native/build/backends/fem/fem_cuda_tetra_gradient_contract && native/build/backends/fem/fem_thermal_brown_contract && native/build/backends/fem/fem_relaxation_source_contract && native/build/backends/fem/fem_relaxation_energy_derivative_contract && native/build/backends/fem/fem_relaxation_operator_contract'
+
+# FEM-TD-OBS-003 focused Oersted observable contract.
+verify-fem-oersted-observable-contract:
+    docker compose --profile fem-gpu run --rm \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_oersted_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_oersted_contract'
 
 # FEM-TD-PHY-MAT-001: native fail-closed elementwise-Ms legality contract.
 verify-fem-material-element-ms-contract:
@@ -137,6 +142,66 @@ verify-fem-zhang-li-skew-tetra-runtime:
       --mesh-run examples/assets/zhang_li_skew_tetra_r1.mesh.json=.fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/mesh_1.log \
       --mesh-run examples/assets/zhang_li_skew_tetra_r2.mesh.json=.fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/mesh_2.log \
       --output .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/summary.json
+
+# FEM-TD-PHY-THERM-001/002: source/algebra contract -> managed CPU runtime.
+verify-fem-thermal-cpu-runtime:
+    just verify-fem-time-domain-native-contract
+    just rebuild-fem-runtime
+    just ensure-managed-fem-runtime
+    mkdir -p .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_thermal_cpu_v1
+    set -o pipefail; FULLMAG_FEM_THERMAL_STEPS=8 FULLMAG_FEM_THERMAL_SEED=17 just fem-managed-headless cpu examples/fem_thermal_cpu_runtime.py \
+      | tee .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_thermal_cpu_v1/cpu.log
+    python3 scripts/validate_fem_thermal_cpu_runtime.py \
+      --log .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_thermal_cpu_v1/cpu.log \
+      --steps 9 --seed 17
+
+# FEM-TD-NUM-RK-001: fixed-final-time, time-dependent Oersted convergence for
+# every supported explicit tableau on both strict native FEM lanes.
+verify-fem-oersted-rk-time-convergence:
+    just verify-fem-time-domain-native-contract
+    just rebuild-fem-runtime
+    just ensure-managed-fem-runtime
+    set -euo pipefail; \
+      root=.fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_oersted_rk_time_convergence_v1; \
+      rm -rf "$root"; mkdir -p "$root"; \
+      for device in cpu gpu; do \
+        for integrator in heun rk4 rk23 rk45; do \
+          for level in 0 1 2; do \
+            case "$level" in \
+              0) steps=8; dt=2.842170943040401e-14 ;; \
+              1) steps=16; dt=1.4210854715202004e-14 ;; \
+              2) steps=32; dt=7.105427357601002e-15 ;; \
+            esac; \
+            set -o pipefail; FULLMAG_OERSTED_RK_INTEGRATOR="$integrator" FULLMAG_OERSTED_RK_STEPS="$steps" FULLMAG_OERSTED_RK_DT_S="$dt" just fem-managed-headless "$device" examples/fem_oersted_rk_time_convergence.py \
+              | tee "$root/${device}_${integrator}_dt${level}.log"; \
+          done; \
+        done; \
+      done; \
+      for device in cpu gpu; do \
+        peer=gpu; [ "$device" = gpu ] && peer=cpu; \
+        for integrator in heun rk4 rk23 rk45; do \
+          python3 scripts/validate_fem_oersted_rk_time_convergence.py \
+            --device "$device" --integrator "$integrator" \
+            --log "$root/${device}_${integrator}_dt0.log" \
+            --log "$root/${device}_${integrator}_dt1.log" \
+            --log "$root/${device}_${integrator}_dt2.log" \
+            --peer-log "$root/${peer}_${integrator}_dt0.log" \
+            --peer-log "$root/${peer}_${integrator}_dt1.log" \
+            --peer-log "$root/${peer}_${integrator}_dt2.log" \
+            --steps 8 --steps 16 --steps 32; \
+        done; \
+      done
+
+# FEM-TD-OBS-003: accepted-time public H_oe CPU/GPU artifact fixture.
+verify-fem-oersted-observable-runtime:
+    set -euo pipefail; \
+      root=.fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_obs_003_oersted_observable_v1; \
+      mkdir -p "$root"; \
+      for device in cpu gpu; do \
+        set -o pipefail; FULLMAG_OERSTED_RK_INTEGRATOR=heun FULLMAG_OERSTED_RK_STEPS=8 FULLMAG_OERSTED_RK_DT_S=2.842170943040401e-14 FULLMAG_OERSTED_CURRENT_A=8e-3 just fem-managed-headless "$device" examples/fem_oersted_rk_time_convergence.py | tee "$root/${device}_driven.log"; \
+        set -o pipefail; FULLMAG_OERSTED_RK_INTEGRATOR=heun FULLMAG_OERSTED_RK_STEPS=8 FULLMAG_OERSTED_RK_DT_S=2.842170943040401e-14 FULLMAG_OERSTED_CURRENT_A=0 just fem-managed-headless "$device" examples/fem_oersted_rk_time_convergence.py | tee "$root/${device}_zero.log"; \
+      done; \
+      sha256sum "$root"/*.log | tee "$root/SHA256SUMS.txt"
 
 verify-fem-exchange-runtime:
     just ensure-managed-fem-runtime

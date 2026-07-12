@@ -201,7 +201,7 @@ void thermal_brown_gamma_convention_is_documented() {
     const std::string sigma_header =
         read_text_file(root / "cpu" / "mfem" / "interactions" / "thermal_brown_sigma.hpp");
     const std::string physics =
-        read_text_file(root.parent_path().parent_path().parent_path() /
+        read_text_file(root.parent_path().parent_path() /
                        "docs" / "physics" / "fem_thermal_brown.md");
 
     for (const std::string *text : {&sigma, &sigma_header, &physics}) {
@@ -242,6 +242,12 @@ void thermal_brown_runtime_state_is_owned_by_sampler_module() {
         sampler_header.find("std::vector<double> h_xyz") != std::string::npos,
         "Brown thermal runtime state must own the sampled H field buffer");
     check(
+        sampler_header.find("std::vector<double> xi_xyz") != std::string::npos,
+        "Brown thermal runtime state must own the raw unit-normal draw");
+    check(
+        sampler_header.find("accepted_interval_index") != std::string::npos,
+        "Brown thermal runtime state must own the accepted interval index");
+    check(
         context_header.find("ThermalBrownRuntimeState thermal_brown") != std::string::npos,
         "Context must store Brown thermal runtime state through the sampler owner");
     check(
@@ -278,7 +284,7 @@ void check_near(double actual, double expected, double tol, const char *msg) {
 
 void sigma_formula_matches_brown_field_contract() {
     const double temperature = 300.0;
-    const double alpha = 0.1;
+    const double alpha = 1.0;
     const double gamma_red = 2.211e5;
     const double ms = 800e3;
     const double volume = 2.0e-27;
@@ -286,7 +292,7 @@ void sigma_formula_matches_brown_field_contract() {
 
     const double expected = std::sqrt(
         2.0 * alpha * kBTest * temperature /
-        (gamma_red * (1.0 + alpha * alpha) * kMu0Test * ms * volume * dt));
+        (gamma_red * kMu0Test * ms * volume * dt));
     check_near(
         fullmag::fem::thermal_brown_sigma(
             temperature,
@@ -382,27 +388,38 @@ void seeded_replay_is_deterministic_for_same_time_and_dt() {
         "fixed Brown seed replay keeps the same sigma diagnostic");
 }
 
-void changed_accepted_dt_resamples_thermal_field() {
+void retry_reuses_raw_normal_and_rescales_thermal_field() {
     auto ctx = make_thermal_context();
 
     fullmag::fem::refresh_thermal_brown_field(ctx);
     const auto first_refresh = ctx.thermal_brown.h_xyz;
+    const auto first_raw_draw = ctx.thermal_brown.xi_xyz;
     const double first_sigma = ctx.thermal_brown.sigma;
 
-    ctx.adaptive_dt.current_dt *= 2.0;
+    ctx.adaptive_dt.current_dt *= 0.25;
     fullmag::fem::refresh_thermal_brown_field(ctx);
 
+    const double retry_sigma = ctx.thermal_brown.sigma;
+    const double scale = retry_sigma / first_sigma;
+    check(scale > 0.0, "retry Brown scale must be positive");
     check(
-        ctx.thermal_brown.h_xyz != first_refresh,
-        "changed accepted dt must resample the Brown thermal field");
+        ctx.thermal_brown.xi_xyz == first_raw_draw,
+        "retry must reuse the same raw Brown unit-normal draw");
+    for (size_t component = 0; component < 3u; ++component) {
+        check_near(
+            ctx.thermal_brown.h_xyz[component],
+            scale * first_refresh[component],
+            1e-12 * retry_sigma,
+            "retry Brown field must rescale only with retry dt");
+    }
     check(
-        ctx.thermal_brown.sigma != first_sigma,
-        "changed accepted dt must update the Brown sigma diagnostic");
+        retry_sigma != first_sigma,
+        "retry dt must update the Brown sigma diagnostic");
     check_near(
         ctx.thermal_brown.last_refresh_dt,
         ctx.adaptive_dt.current_dt,
         0.0,
-        "changed accepted dt cache key");
+        "retry dt diagnostic");
 }
 
 std::vector<double> collect_thermal_samples(double dt, int sample_count) {
@@ -420,6 +437,7 @@ std::vector<double> collect_thermal_samples(double dt, int sample_count) {
     samples.reserve(static_cast<size_t>(sample_count) * 3u);
     for (int sample = 0; sample < sample_count; ++sample) {
         ctx.state.current_time = static_cast<double>(sample + 1) * dt;
+        ctx.state.step_count = sample + 1;
         fullmag::fem::refresh_thermal_brown_field(ctx);
         samples.push_back(ctx.thermal_brown.h_xyz[0]);
         samples.push_back(ctx.thermal_brown.h_xyz[1]);
@@ -549,7 +567,7 @@ int main() {
     sigma_formula_matches_brown_field_contract();
     refresh_uses_per_node_sigma_mask_and_cache();
     seeded_replay_is_deterministic_for_same_time_and_dt();
-    changed_accepted_dt_resamples_thermal_field();
+    retry_reuses_raw_normal_and_rescales_thermal_field();
     sampled_variance_scales_with_accepted_dt();
     disabled_or_invalid_state_clears_thermal_field();
     thermal_field_adds_to_effective_field();
