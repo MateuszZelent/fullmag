@@ -31,6 +31,10 @@ const injectDroppedPublication =
   process.env.CONTROL_ROOM_AUDIT_INJECT_DROPPED_PUBLICATION === "1";
 const injectBlankScene = process.env.CONTROL_ROOM_AUDIT_INJECT_BLANK_SCENE === "1";
 const injectListenerLeak = process.env.CONTROL_ROOM_AUDIT_INJECT_LISTENER_LEAK === "1";
+const injectIdleLoop = process.env.CONTROL_ROOM_AUDIT_INJECT_IDLE_LOOP === "1";
+const injectWorkerLeak = process.env.CONTROL_ROOM_AUDIT_INJECT_WORKER_LEAK === "1";
+const injectGpuBufferLeak =
+  process.env.CONTROL_ROOM_AUDIT_INJECT_GPU_BUFFER_LEAK === "1";
 
 async function loadPlaywright() {
   try {
@@ -170,6 +174,9 @@ try {
   if (injectListenerLeak) {
     await page.evaluate(() => window.__FULLMAG_CONTROL_ROOM_AUDIT__?.injectViewportAuditListenerLeak());
   }
+  if (injectWorkerLeak) {
+    await page.evaluate(() => window.__FULLMAG_CONTROL_ROOM_AUDIT__?.injectViewportAuditWorkerLeak());
+  }
 
   auditActive = true;
   for (const [index, quantity] of QUANTITY_SEQUENCE.entries()) {
@@ -258,6 +265,9 @@ try {
     throw new Error(`Browser console/network errors:\n${errors.join("\n")}`);
   }
 
+  if (injectIdleLoop) {
+    await injectViewportIdleLoop(page);
+  }
   const idle = await verifyViewportIdle(page, 5_000);
   const fidelity = await assertCanvasHasFidelity(page);
   if (injectBlankScene) {
@@ -266,6 +276,9 @@ try {
   }
   const shaderSignatures = await collectStableShaderSignatures(page, fixture, viewport);
   await page.screenshot({ path: path.join(auditArtifactsDirectory, "settled-3d.png") });
+  if (injectGpuBufferLeak) {
+    await injectViewportGpuBufferLeak(page);
+  }
   const gpuAfterStress = await readBrowserAuditCounters(page);
   const baselineLiveBuffers =
     baseline.gpu.buffersCreated - baseline.gpu.buffersDeleted;
@@ -283,7 +296,6 @@ try {
       `Live WebGL buffers did not return to a post-warmup plateau: baseline=${baselineLiveBuffers}, after=${stressLiveBuffers}.`,
     );
   }
-
   await page.locator('[data-action-id="ws-2d"]').click();
   await page.locator(".fm-viewport-3d canvas").waitFor({ state: "detached", timeout: 10_000 });
   await page.waitForTimeout(1_000);
@@ -436,6 +448,32 @@ async function clearViewportCanvas(page) {
   });
 }
 
+async function injectViewportIdleLoop(page) {
+  await page.evaluate(() => {
+    const canvas = document.querySelector(".fm-viewport-3d canvas");
+    if (!(canvas instanceof HTMLCanvasElement)) throw new Error("Viewport canvas is missing.");
+    const gl = canvas.getContext("webgl2") ?? canvas.getContext("webgl");
+    if (!gl) throw new Error("Viewport WebGL context is missing.");
+    const loop = () => {
+      gl.drawArrays(gl.POINTS, 0, 0);
+      requestAnimationFrame(loop);
+    };
+    requestAnimationFrame(loop);
+  });
+}
+
+async function injectViewportGpuBufferLeak(page) {
+  await page.evaluate(() => {
+    const canvas = document.querySelector(".fm-viewport-3d canvas");
+    if (!(canvas instanceof HTMLCanvasElement)) throw new Error("Viewport canvas is missing.");
+    const gl = canvas.getContext("webgl2") ?? canvas.getContext("webgl");
+    if (!gl) throw new Error("Viewport WebGL context is missing.");
+    for (let index = 0; index < 8; index += 1) {
+      gl.createBuffer();
+    }
+  });
+}
+
 async function collectStableShaderSignatures(page, fixture, viewport) {
   const modes = [
     { colorMode: "magnitude", component: "magnitude", id: "scalar" },
@@ -470,7 +508,12 @@ async function collectStableShaderSignatures(page, fixture, viewport) {
 
 function assertViewportRuntimeReleased(afterUnmountRuntime, baselineRuntime) {
   const { resources, workers } = afterUnmountRuntime;
-  if (workers.workers !== 0 || workers.timers !== 0 || workers.jobs !== 0) {
+  if (
+    workers.activeLeases !== 0 ||
+    workers.workers !== 0 ||
+    workers.timers !== 0 ||
+    workers.jobs !== 0
+  ) {
     throw new Error(`Viewport worker runtime survived unmount: ${JSON.stringify(workers)}.`);
   }
   if (resources.listenerCount !== baselineRuntime.resources.listenerCount) {

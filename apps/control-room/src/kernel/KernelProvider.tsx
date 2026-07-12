@@ -53,7 +53,10 @@ import { RealtimeInvalidationBridge } from "./realtime/RealtimeInvalidationBridg
 import { useSimulationStartupOverlayVisibility } from "./layout/SimulationStartupOverlay";
 import { ResourceInvalidationController } from "./resources/ResourceInvalidationController";
 import { sharedResourceRuntimeStore } from "./resources/ResourceRuntimeStore";
-import { getViewport3DWorkerRuntimeSnapshot } from "../modules/viewport-3d/viewport3dWorkerRuntime";
+import {
+  acquireViewport3DWorkerRuntime,
+  getViewport3DWorkerRuntimeSnapshot,
+} from "../modules/viewport-3d/viewport3dWorkerRuntime";
 import {
   createViewport3DInactiveResourcePauseController,
 } from "./resources/inactiveViewportResourcePolicy";
@@ -367,6 +370,7 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
           workers: ReturnType<typeof getViewport3DWorkerRuntimeSnapshot>;
         };
         injectViewportAuditListenerLeak: () => void;
+        injectViewportAuditWorkerLeak: () => void;
       };
     };
     const browserConfig = auditWindow.__FULLMAG_CONFIG__;
@@ -470,6 +474,10 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
       injectViewportAuditListenerLeak: () => {
         // Deliberately retained only when an audit asks for a negative control.
         sharedResourceRuntimeStore.subscribe(VISUALIZATION_STATE_PATH, () => {});
+      },
+      injectViewportAuditWorkerLeak: () => {
+        // Deliberately retained only when an audit asks for a negative control.
+        acquireViewport3DWorkerRuntime();
       },
     };
     auditWindow.__FULLMAG_CONTROL_ROOM_AUDIT__ = auditApi;

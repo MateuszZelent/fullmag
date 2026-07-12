@@ -413,6 +413,20 @@ describe("viewport smoke projection round-trip", () => {
     );
   });
 
+  it("keeps production lifecycle negative controls wired to their runtime guards", () => {
+    const memoryChurnScript = readFileSync(memoryChurnScriptUrl, "utf8");
+
+    expect(memoryChurnScript).toContain("CONTROL_ROOM_AUDIT_INJECT_IDLE_LOOP");
+    expect(memoryChurnScript).toContain("injectViewportIdleLoop(page)");
+    expect(memoryChurnScript).toContain("Viewport rendered during");
+    expect(memoryChurnScript).toContain("CONTROL_ROOM_AUDIT_INJECT_WORKER_LEAK");
+    expect(memoryChurnScript).toContain("injectViewportAuditWorkerLeak");
+    expect(memoryChurnScript).toContain("workers.activeLeases !== 0");
+    expect(memoryChurnScript).toContain("CONTROL_ROOM_AUDIT_INJECT_GPU_BUFFER_LEAK");
+    expect(memoryChurnScript).toContain("injectViewportGpuBufferLeak(page)");
+    expect(memoryChurnScript).toContain("Live WebGL buffers did not return");
+  });
+
   it("finds viewport diagnostics by content instead of a fixed HUD index", () => {
     const profileSwitchScript = readFileSync(profileSwitchScriptUrl, "utf8");
 
