@@ -1300,6 +1300,10 @@ fn materialize_pipeline_eigenmodes(
         .as_ref()
         .map(|current| current.7.clone())
         .unwrap_or_default();
+    let default_magnetostatic_bc = match &base_ir.study {
+        fullmag_ir::StudyIR::Eigenmodes { magnetostatic_bc, .. } => *magnetostatic_bc,
+        _ => fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
+    };
     let count = payload_u32(payload, "eigen_count")?.unwrap_or(default_count);
     let include_demag = payload_bool(payload, "eigen_include_demag")?.unwrap_or_else(|| {
         current_eigen
@@ -1325,6 +1329,7 @@ fn materialize_pipeline_eigenmodes(
         normalization: payload_eigen_normalization(payload)?.unwrap_or(default_normalization),
         damping_policy: payload_eigen_damping_policy(payload)?.unwrap_or(default_damping_policy),
         spin_wave_bc: payload_spin_wave_bc(payload)?.unwrap_or(default_spin_wave_bc),
+        magnetostatic_bc: default_magnetostatic_bc,
         sampling: eigen_sampling_from(&sampling, count),
         mode_tracking: None,
     };
@@ -3946,6 +3951,7 @@ mod tests {
             normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
             damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
             spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+            magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
             mode_tracking: None,
             sampling: sampling.clone(),
         };
@@ -5669,6 +5675,7 @@ mod tests {
             normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
             damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
             spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+            magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
             sampling,
             mode_tracking: None,
         };

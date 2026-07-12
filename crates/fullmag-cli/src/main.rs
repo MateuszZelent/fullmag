@@ -1317,6 +1317,7 @@ mod tests {
             normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
             damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
             spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+            magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
             mode_tracking: None,
             sampling: fullmag_ir::SamplingIR {
                 table_autosave: None,
