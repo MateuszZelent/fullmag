@@ -37,6 +37,7 @@ import type {
   MeshPeriodicPairsResource,
   MeshSharedDomainManifestResource,
   SessionImportInspectResponse,
+  SolverStatusResource,
   StageExecutionResource,
 } from "@/kernel/api/apiTypes";
 import {
@@ -420,6 +421,7 @@ export function deriveK0ModalExecutionReadiness({
   frequencyManifest,
   meshManifest,
   periodicPairs,
+  solverStatus,
   stageExecution,
 }: {
   checkpoints: readonly CheckpointEntry[];
@@ -428,6 +430,7 @@ export function deriveK0ModalExecutionReadiness({
   frequencyManifest: FrequencyDomainManifestResource | null;
   meshManifest: MeshSharedDomainManifestResource | null;
   periodicPairs: MeshPeriodicPairsResource | null;
+  solverStatus: SolverStatusResource | null;
   stageExecution: StageExecutionResource | null;
 }): K0ModalExecutionReadiness {
   const sharedDomainMeshReady = Boolean(
@@ -459,12 +462,20 @@ export function deriveK0ModalExecutionReadiness({
           checkpoint.mesh_revision === meshManifest?.revision,
       ),
   );
+  const acceptedProvidedStateReady = Boolean(
+    solverStatus &&
+      solverStatus.converged &&
+      !solverStatus.is_busy &&
+      solverStatus.revision >= 0,
+  );
   const acceptedEquilibriumReady =
     equilibriumSource === "relax"
       ? acceptedRelaxationReady
-      : equilibriumSource === "provided" || equilibriumSource === "artifact"
-        ? acceptedArtifactReady
-        : false;
+      : equilibriumSource === "provided"
+        ? acceptedProvidedStateReady
+        : equilibriumSource === "artifact"
+          ? acceptedArtifactReady
+          : false;
   const strictGpuReady = PRODUCTION_CAPABILITY_STATUSES.has(
     frequencyManifest?.capabilities.modal.production_gpu.status ?? "",
   );
@@ -649,6 +660,7 @@ export function useStudyInspectorPanelController(
       frequencyManifest: frequencyDomainManifest.data,
       meshManifest: meshManifest.data,
       periodicPairs: periodicPairs.data,
+      solverStatus: solverStatus.data,
       stageExecution: stageExecution.data,
     });
   const sceneRevision = sceneRevisionValue(scene.data);

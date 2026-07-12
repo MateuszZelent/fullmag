@@ -67,6 +67,11 @@ describe("StudyInspectorPanel", () => {
           pairs: [{ paired_node_count: 8, status: "certified", unpaired_destination_node_count: 0, unpaired_source_node_count: 0 }],
           revision: 42,
         } as never,
+        solverStatus: {
+          converged: true,
+          is_busy: false,
+          revision: 42,
+        } as never,
         stageExecution: {
           stages: [{ converged: true, kind: "relax", status: "completed" }],
           revision: 8,
@@ -84,7 +89,7 @@ describe("StudyInspectorPanel", () => {
     });
     expect(deriveK0ModalExecutionReadiness({
       ...resources,
-      equilibriumArtifact: "artifact://provided",
+      equilibriumArtifact: "",
       equilibriumSource: "provided",
     }).acceptedEquilibriumReady).toBe(true);
     expect(deriveK0ModalExecutionReadiness({
@@ -95,7 +100,7 @@ describe("StudyInspectorPanel", () => {
     expect(deriveK0ModalExecutionReadiness({
       ...resources,
       equilibriumArtifact: "artifact://missing",
-      equilibriumSource: "provided",
+      equilibriumSource: "artifact",
     }).acceptedEquilibriumReady).toBe(false);
   });
 
