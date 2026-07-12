@@ -65,7 +65,7 @@ std::uint64_t pair_map_fingerprint(
         });
 
     std::uint64_t hash = kFnv1a64OffsetBasis;
-    fnv1a_update_literal(hash, "periodic_mesh_certificate.v5");
+    fnv1a_update_literal(hash, "periodic_mesh_certificate.v6");
     fnv1a_update_literal(hash, tag);
     fnv1a_update_u64(hash, source_node_count);
     fnv1a_update_u64(hash, destination_node_count);
@@ -228,7 +228,7 @@ std::string canonical_pair_map_payload(
         });
 
     std::string payload = "periodic_mesh_certificate_pair_map.v1\n";
-    payload += "schema=periodic_mesh_certificate.v5\n";
+    payload += "schema=periodic_mesh_certificate.v6\n";
     payload += "tag=";
     payload += tag;
     payload += "\nsource_node_count=" + std::to_string(source_node_count);
@@ -392,6 +392,12 @@ FrequencyDomainStatus build_mesh_symmetry_certificate(
         request.poisson_gauge_policy != MeshSymmetryPoissonGaugePolicy::unspecified;
     out_certificate.tangent_frame_transfer_blocks_row_major_2x2.reserve(
         static_cast<std::size_t>(request.magnetic_pair_count * 4));
+
+    if (request.schema_version == nullptr ||
+        std::strcmp(request.schema_version, "periodic_mesh_certificate.v6") != 0) {
+        reject(out_certificate, "periodic_mesh_certificate_schema_not_v6");
+        return FrequencyDomainStatus::validation_error;
+    }
 
     if (!std::isfinite(request.translation_tolerance_m) ||
         request.translation_tolerance_m < 0.0 ||
@@ -599,6 +605,20 @@ FrequencyDomainStatus build_mesh_symmetry_certificate(
 
     out_certificate.accepted = true;
     out_certificate.tangent_frame_transfer_available = request.magnetic_pair_count > 0;
+    const std::string content = std::string("periodic_mesh_certificate.v6\nmagnetic=") +
+        out_certificate.magnetic_pair_map_sha256 + "\nairbox=" +
+        out_certificate.airbox_pair_map_sha256;
+    const std::string digest = sha256_hex(content);
+    std::snprintf(
+        out_certificate.content_sha256,
+        sizeof(out_certificate.content_sha256),
+        "sha256:%s",
+        digest.c_str());
+    std::snprintf(
+        out_certificate.certificate_id,
+        sizeof(out_certificate.certificate_id),
+        "periodic_mesh_certificate.v6:%s",
+        digest.c_str());
     return FrequencyDomainStatus::ok;
 }
 

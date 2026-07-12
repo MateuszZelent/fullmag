@@ -5966,6 +5966,7 @@ void accepted_equilibrium_builds_linearization_state_with_tangent_diagnostics()
     const double h_demag_x[] = {0.0, 0.25};
     const double h_demag_y[] = {0.0, 0.0};
     const double h_demag_z[] = {0.25, 0.0};
+    const double phi0[] = {0.0, 0.0};
 
     fd::EquilibriumArtifactDescriptor artifact{};
     artifact.equilibrium_id = "eq:accepted";
@@ -5975,9 +5976,12 @@ void accepted_equilibrium_builds_linearization_state_with_tangent_diagnostics()
     artifact.material_snapshot_id = "mat:v1";
     artifact.physics_snapshot_id = "physics:v1";
     artifact.boundary_snapshot_id = "bc:v1";
+    artifact.producer_run_id = "run:equilibrium";
+    artifact.content_sha256 = "sha256:equilibrium-v6";
     artifact.m0_unit = {m0_x, m0_y, m0_z, 2};
     artifact.h_eff0_a_per_m = {h_eff_x, h_eff_y, h_eff_z, 2};
     artifact.h_demag0_a_per_m = {h_demag_x, h_demag_y, h_demag_z, 2};
+    artifact.phi0 = phi0;
     artifact.magnetic_node_count = 2;
     artifact.airbox_node_count = 2;
     artifact.accepted_for_linearization = true;
@@ -5998,6 +6002,9 @@ void accepted_equilibrium_builds_linearization_state_with_tangent_diagnostics()
     check(state.m0_xyz.size() == 6, "linearization state packs m0 xyz");
     check(state.h_eff0_xyz.size() == 6, "linearization state packs h_eff0 xyz");
     check(state.h_demag0_xyz.size() == 6, "linearization state packs h_demag0 xyz");
+    check(state.phi0.size() == 2, "linearization state preserves airbox phi0");
+    check(state.schema_version == "LinearizationState.v6", "linearization state records v6 schema");
+    check(state.producer_run_id == "run:equilibrium", "linearization state preserves producer run id");
     check(state.equilibrium_id == "eq:accepted", "linearization state preserves equilibrium id");
     check(!state.linearization_signature_hash.empty(), "linearization state emits signature hash");
     check(diagnostics.static_demag_available, "linearization diagnostics report static demag availability");
@@ -6042,6 +6049,7 @@ void linearization_state_reports_v5_reject_reasons_and_signature_mismatches()
     const double h_demag_x[] = {0.0};
     const double h_demag_y[] = {0.0};
     const double h_demag_z[] = {0.25};
+    const double phi0[] = {0.0};
 
     fd::EquilibriumArtifactDescriptor artifact{};
     artifact.equilibrium_id = "eq:accepted";
@@ -6051,9 +6059,12 @@ void linearization_state_reports_v5_reject_reasons_and_signature_mismatches()
     artifact.material_snapshot_id = "mat:v1";
     artifact.physics_snapshot_id = "physics:v1";
     artifact.boundary_snapshot_id = "bc:v1";
+    artifact.producer_run_id = "run:equilibrium";
+    artifact.content_sha256 = "sha256:equilibrium-v6";
     artifact.m0_unit = {m0_x, m0_y, m0_z, 1};
     artifact.h_eff0_a_per_m = {h_parallel_x, h_parallel_y, h_parallel_z, 1};
     artifact.h_demag0_a_per_m = {h_demag_x, h_demag_y, h_demag_z, 1};
+    artifact.phi0 = phi0;
     artifact.magnetic_node_count = 1;
     artifact.airbox_node_count = 1;
     artifact.accepted_for_linearization = true;
@@ -6063,6 +6074,7 @@ void linearization_state_reports_v5_reject_reasons_and_signature_mismatches()
     options.expected_mesh_snapshot_id = "mesh:v1";
     options.expected_material_snapshot_id = "mat:v1";
     options.expected_physics_snapshot_id = "physics:v1";
+    options.expected_boundary_snapshot_id = "bc:v1";
 
     fd::LinearizationStateNative state{};
     fd::LinearizationDiagnostics diagnostics{};
@@ -6120,6 +6132,32 @@ void linearization_state_reports_v5_reject_reasons_and_signature_mismatches()
         std::strcmp(diagnostics.reject_reason, "equilibrium_physics_hash_mismatch") == 0,
         "linearization builder reports exact physics mismatch reject reason");
 
+    fd::LinearizationBuildOptions boundary_mismatch_options = options;
+    boundary_mismatch_options.expected_boundary_snapshot_id = "bc:v2";
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            artifact,
+            boundary_mismatch_options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "linearization builder rejects boundary signature mismatch");
+    check(
+        std::strcmp(diagnostics.reject_reason, "equilibrium_boundary_hash_mismatch") == 0,
+        "linearization builder reports exact boundary mismatch reject reason");
+
+    fd::LinearizationBuildOptions equilibrium_mismatch_options = options;
+    equilibrium_mismatch_options.expected_equilibrium_id = "eq:other";
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            artifact,
+            equilibrium_mismatch_options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "linearization builder rejects equilibrium signature mismatch");
+    check(
+        std::strcmp(diagnostics.reject_reason, "equilibrium_id_mismatch") == 0,
+        "linearization builder reports exact equilibrium mismatch reject reason");
+
     fd::EquilibriumArtifactDescriptor missing_static_demag_artifact = artifact;
     missing_static_demag_artifact.h_demag0_a_per_m = {};
     check(
@@ -6149,6 +6187,45 @@ void linearization_state_reports_v5_reject_reasons_and_signature_mismatches()
             diagnostics.reject_reason,
             "equilibrium_torque_residual_too_large") == 0,
         "linearization builder reports exact torque residual reject reason");
+
+    fd::EquilibriumArtifactDescriptor legacy_artifact = artifact;
+    legacy_artifact.schema_version = "equilibrium_artifact.v5";
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            legacy_artifact,
+            options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "linearization builder rejects legacy equilibrium artifact without fabricating v6 state");
+    check(
+        std::strcmp(diagnostics.reject_reason, "equilibrium_artifact_schema_not_v6") == 0,
+        "legacy equilibrium rejection names v6 contract");
+
+    fd::EquilibriumArtifactDescriptor missing_provenance = artifact;
+    missing_provenance.content_sha256 = nullptr;
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            missing_provenance,
+            options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "linearization builder rejects a v6 artifact without content provenance");
+    check(
+        std::strcmp(diagnostics.reject_reason, "equilibrium_artifact_provenance_missing") == 0,
+        "missing equilibrium provenance names the v6 requirement");
+
+    fd::EquilibriumArtifactDescriptor missing_phi = artifact;
+    missing_phi.phi0 = nullptr;
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            missing_phi,
+            options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "linearization builder rejects airbox demag artifact without phi0");
+    check(
+        std::strcmp(diagnostics.reject_reason, "equilibrium_phi0_required_but_missing") == 0,
+        "missing phi0 rejection names airbox requirement");
 }
 
 void symmetric_mesh_certificate_accepts_bijective_periodic_pairs_and_rejects_duplicates()
@@ -6548,8 +6625,14 @@ void symmetric_mesh_certificate_records_stable_pair_map_fingerprints_and_schema(
         fd::build_mesh_symmetry_certificate(request, first) == fd::FrequencyDomainStatus::ok,
         "mesh symmetry certificate accepts fingerprint fixture");
     check(
-        std::strcmp(first.schema_version, "periodic_mesh_certificate.v5") == 0,
-        "mesh symmetry certificate records v5 schema version");
+        std::strcmp(first.schema_version, "periodic_mesh_certificate.v6") == 0,
+        "mesh symmetry certificate records v6 schema version");
+    check(
+        std::strncmp(first.certificate_id, "periodic_mesh_certificate.v6:", 29) == 0,
+        "mesh symmetry certificate materializes a v6 certificate id");
+    check(
+        std::strncmp(first.content_sha256, "sha256:", 7) == 0,
+        "mesh symmetry certificate materializes a content hash");
     check(
         first.magnetic_pair_map_fingerprint_available,
         "mesh symmetry certificate records magnetic pair-map fingerprint availability");
@@ -6614,6 +6697,18 @@ void symmetric_mesh_certificate_records_stable_pair_map_fingerprints_and_schema(
     check(
         std::strcmp(first.magnetic_pair_map_sha256, swapped.magnetic_pair_map_sha256) != 0,
         "mesh symmetry magnetic pair-map sha256 changes when mapping changes");
+    check(
+        std::strcmp(first.certificate_id, swapped.certificate_id) != 0,
+        "mesh symmetry certificate id changes when mesh mapping changes");
+
+    request.schema_version = "periodic_mesh_certificate.v5";
+    fd::MeshSymmetryCertificate legacy{};
+    check(
+        fd::build_mesh_symmetry_certificate(request, legacy) == fd::FrequencyDomainStatus::validation_error,
+        "mesh symmetry builder rejects legacy certificates instead of fabricating v6 identity");
+    check(
+        std::strcmp(legacy.rejection_reason, "periodic_mesh_certificate_schema_not_v6") == 0,
+        "legacy mesh certificate rejection names v6 contract");
 }
 
 void full_coupled_field_split_prototype_improves_residual_and_reuses_poisson_setup()

@@ -17,6 +17,9 @@ struct CartesianVectorFieldView {
 };
 
 struct EquilibriumArtifactDescriptor {
+    // v6 is deliberately explicit: callers may not reinterpret a pre-v6
+    // equilibrium payload as a modal-linearization input.
+    const char *schema_version = "equilibrium_artifact.v6";
     const char *equilibrium_id = nullptr;
     const char *mesh_snapshot_id = nullptr;
     const char *magnetic_mesh_id = nullptr;
@@ -24,6 +27,8 @@ struct EquilibriumArtifactDescriptor {
     const char *material_snapshot_id = nullptr;
     const char *physics_snapshot_id = nullptr;
     const char *boundary_snapshot_id = nullptr;
+    const char *producer_run_id = nullptr;
+    const char *content_sha256 = nullptr;
 
     CartesianVectorFieldView m0_unit;
     CartesianVectorFieldView h_eff0_a_per_m;
@@ -37,9 +42,11 @@ struct EquilibriumArtifactDescriptor {
 };
 
 struct LinearizationBuildOptions {
+    const char *expected_equilibrium_id = nullptr;
     const char *expected_mesh_snapshot_id = nullptr;
     const char *expected_material_snapshot_id = nullptr;
     const char *expected_physics_snapshot_id = nullptr;
+    const char *expected_boundary_snapshot_id = nullptr;
     double m0_norm_tolerance = 1.0e-10;
     double equilibrium_torque_relative_tolerance = 1.0e-6;
     double periodic_seam_tolerance = 1.0e-8;
@@ -50,19 +57,25 @@ struct LinearizationBuildOptions {
 };
 
 struct LinearizationStateNative {
+    std::string schema_version = "LinearizationState.v6";
     std::uint64_t node_count = 0;
     std::vector<TangentFrameNode> tangent_frames;
     std::vector<double> m0_xyz;
     std::vector<double> h_eff0_xyz;
     std::vector<double> h_demag0_xyz;
+    std::vector<double> phi0;
     std::vector<double> tangent_lumped_mass;
     std::string equilibrium_id;
     std::string mesh_snapshot_id;
     std::string material_snapshot_id;
     std::string physics_snapshot_id;
     std::string boundary_snapshot_id;
+    std::string producer_run_id;
+    std::string equilibrium_content_sha256;
     std::string demag_model;
     std::string linearization_signature_hash;
+    double accepted_m0_norm_tolerance = 0.0;
+    double accepted_equilibrium_torque_relative_tolerance = 0.0;
 };
 
 struct LinearizationDiagnostics {

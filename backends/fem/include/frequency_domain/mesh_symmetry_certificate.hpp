@@ -22,6 +22,7 @@ enum class MeshSymmetryPoissonGaugePolicy : std::uint32_t {
 };
 
 struct MeshSymmetryCertificateRequest {
+    const char *schema_version = "periodic_mesh_certificate.v6";
     const double *magnetic_source_xyz = nullptr;
     const double *magnetic_destination_xyz = nullptr;
     const std::uint32_t *magnetic_source_material_ids = nullptr;
@@ -56,7 +57,9 @@ struct MeshSymmetryCertificateRequest {
 };
 
 struct MeshSymmetryCertificate {
-    char schema_version[64] = "periodic_mesh_certificate.v5";
+    char schema_version[64] = "periodic_mesh_certificate.v6";
+    char certificate_id[96] = "";
+    char content_sha256[96] = "";
     bool accepted = false;
     std::uint64_t source_node_count = 0;
     std::uint64_t destination_node_count = 0;
