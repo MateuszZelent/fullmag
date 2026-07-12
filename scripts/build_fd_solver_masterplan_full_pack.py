@@ -3,6 +3,29 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import unittest
+
+
+class ProductionScopeAssertionsTest(unittest.TestCase):
+    def test_rejects_missing_required_definition_of_done(self) -> None:
+        assertions = {
+            "status": "normative requirements; not current qualification evidence",
+            "managed_runtime": ["libpetsc-real-dev", "libslepc-real-dev"],
+            "spectral_target": {
+                "spectral_scalar_mode": "real_split",
+                "spectral_pencil_kind": "real_frequency_rotated",
+                "complex_target": "sigma=i*omega_target",
+                "real_target": "tau=omega_target",
+                "forbidden": "real EPSSetTarget(omega_target) on the original lambda=i omega pencil",
+            },
+            "required_cpu_stages": ["K0-P1", "K0-P2", "K0-P3", "K0-P4", "K0-P5", "K0-P6"],
+            "required_gpu_stages": ["K0-G1", "K0-G2", "K0-G3", "K0-G4"],
+            "required_product_surfaces": ["Spectrum", "native q/phi mode fields", "unified viewport proof"],
+            "required_definition_of_done": ["DOD-01"],
+        }
+
+        with self.assertRaisesRegex(ValueError, "required_definition_of_done"):
+            validate_production_scope_assertions({"production_scope_assertions.v1": assertions})
 
 
 def load_manifest(root: Path) -> dict[str, object]:
@@ -10,6 +33,38 @@ def load_manifest(root: Path) -> dict[str, object]:
     if not isinstance(value, dict):
         raise ValueError("documentation manifest must be a JSON object")
     return value
+
+
+def validate_production_scope_assertions(manifest: dict[str, object]) -> None:
+    raw = manifest.get("production_scope_assertions.v1")
+    if not isinstance(raw, dict):
+        raise ValueError("production_scope_assertions.v1 must be an object")
+
+    required_values: dict[str, object] = {
+        "status": "normative requirements; not current qualification evidence",
+        "managed_runtime": ["libpetsc-real-dev", "libslepc-real-dev"],
+        "required_cpu_stages": ["K0-P1", "K0-P2", "K0-P3", "K0-P4", "K0-P5", "K0-P6"],
+        "required_gpu_stages": ["K0-G1", "K0-G2", "K0-G3", "K0-G4"],
+        "required_product_surfaces": ["Spectrum", "native q/phi mode fields", "unified viewport proof"],
+        "required_definition_of_done": [
+            "DOD-01", "DOD-02", "DOD-03", "DOD-04", "DOD-05", "DOD-06", "DOD-07",
+            "DOD-08", "DOD-09", "DOD-10", "DOD-11", "DOD-12", "DOD-13", "DOD-14",
+        ],
+    }
+    for key, expected in required_values.items():
+        if raw.get(key) != expected:
+            raise ValueError(f"production_scope_assertions.v1.{key} must equal {expected!r}")
+
+    spectral_target = raw.get("spectral_target")
+    expected_spectral_target = {
+        "spectral_scalar_mode": "real_split",
+        "spectral_pencil_kind": "real_frequency_rotated",
+        "complex_target": "sigma=i*omega_target",
+        "real_target": "tau=omega_target",
+        "forbidden": "real EPSSetTarget(omega_target) on the original lambda=i omega pencil",
+    }
+    if spectral_target != expected_spectral_target:
+        raise ValueError("production_scope_assertions.v1.spectral_target has invalid real-split values")
 
 
 def ordered_full_pack_documents(root: Path, manifest: dict[str, object]) -> list[Path]:
@@ -80,8 +135,13 @@ def main(argv: list[str] | None = None) -> int:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--check", action="store_true")
     mode.add_argument("--write", action="store_true")
+    mode.add_argument("--self-test", action="store_true")
     args = parser.parse_args(argv)
+    if args.self_test:
+        suite = unittest.defaultTestLoader.loadTestsFromTestCase(ProductionScopeAssertionsTest)
+        return 0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1
     manifest = load_manifest(args.root)
+    validate_production_scope_assertions(manifest)
     output_name = manifest.get("full_pack")
     if not isinstance(output_name, str):
         raise ValueError("documentation manifest full_pack must be a string")

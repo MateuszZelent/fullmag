@@ -262,7 +262,7 @@ i dokumentacja muszą nadal mówić, że implementacja natywnego FEM żyje w
 
 ## 7.1 Architektura FEM Frequency-Domain I Eigenmodes
 
-Produkcyjne FEM frequency-domain obejmuje dwa różne produkty:
+Docelowe (planned) FEM frequency-domain obejmuje dwa różne produkty:
 `modal_eigen` i `driven_response`. Współdzielą kontrakt operatora z
 `docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md`, ale nie
 mogą wzajemnie promować swojej dostępności ani walidacji. W szczególności
@@ -284,10 +284,13 @@ API i control room bez degradacji do `lowest`. Managed runtime używa
 ADR-017 `real_frequency_rotated` pencil `R(L)y=omega R(i B_alpha)y` z
 `tau=omega_target`, który dokładnie reprezentuje `sigma=i*omega_target`.
 Realny target na oryginalnym pencilu `lambda=i omega` jest zabroniony.
-Produkcyjna realizacja CPU używa MFEM z PETSc/SLEPc: pełny descriptor albo
-certyfikowany Schur `MatShell` i Krylov-Schur/Arnoldi. Shifted systems należą
-do PETSc/hypre. Produkcyjna realizacja GPU używa tych samych kontraktów przez PETSc CUDA vectors,
-device-capable `MatShell`/`MatNest`, hypre device i SLEPc na urządzeniu.
+Wymagana docelowa realizacja CPU użyje MFEM z PETSc/SLEPc: pełny descriptor
+albo certyfikowany Schur `MatShell` i Krylov-Schur/Arnoldi. Shifted systems
+będą należeć do PETSc/hypre. Wymagana docelowa realizacja GPU użyje tych samych
+kontraktów przez PETSc CUDA vectors, device-capable `MatShell`/`MatNest`, hypre
+device i SLEPc na urządzeniu. Aktualna K0 Poisson-airbox modal path pozostaje
+`contract_only` i `unqualified`; powyższe zdania są wymaganiami architektury,
+nie opisem działającej produkcyjnej realizacji.
 
 Runner przekazuje deskryptor okna i pojedynczy wybrany engine, odbiera wyniki,
 mapuje progress oraz publikuje artefakty i proweniencję. Nie może wybierać

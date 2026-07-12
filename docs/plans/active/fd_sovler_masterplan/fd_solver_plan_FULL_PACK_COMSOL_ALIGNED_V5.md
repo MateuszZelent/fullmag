@@ -4072,7 +4072,7 @@ fallback for strict GPU are outside this contract and reject explicitly.
 | `poisson_airbox_schur_matshell.cpp` builds and certifies a Schur MatShell. | Algebra-validated against synthetic fixtures only. | Admit Schur only with an exact-signature certificate generated from real shared-domain blocks. |
 | Current driven periodic-airbox provider/Schur paths execute for bounded CPU/GPU slices. | They are not the target full coupled `MatNest/PCFIELDSPLIT` solve and do not qualify modal solving. | Cross-check full coupled and Schur driven results on the same P1 blocks and physical RHS. |
 | The CUDA frequency-domain source owns a persistent magnetic operator context and bounded dense/apply probes. | Operator residency or a one-shot dense solve is not device Krylov residency. `production_loop_available=false` remains current device-Krylov truth. | Only `gpu_device_krylov` and `gpu_modal_device_krylov` are scalable GPU solver claims. |
-| No dedicated frequency-domain shared-domain modal assembler exists. | Real K0 Poisson-airbox modal production is not implemented or qualified. | Stages K0-P1 through K0-P7 and K0-G1 through K0-G4 must pass before scoped promotion. |
+| No dedicated frequency-domain shared-domain modal assembler exists. | Real K0 Poisson-airbox modal production is not implemented or qualified. | Modal promotion requires K0-P1 through K0-P6 and K0-G1 through K0-G4. K0-P7 is a separate driven-response cross-check and does not gate modal promotion. |
 | `crates/fullmag-runner/src/fem_eigen.rs::build_pa_e4b_k0_kittel_poisson_airbox_payload` computes `expected_reference_frequency_hz` from the analytical Kittel expression and assigns it to both `target_frequency_hz` and `expected_reference_frequency_hz`. | The analytical answer currently contaminates the synthetic PA-E4b solve request; it is not postsolve-only validation. | K0-P3 removes analytical reference data from descriptor assembly/request construction; only a user-requested target or window may reach the eigensolver. |
 | `backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.cpp` converts that `target_frequency_hz` into the SLEPc target, selects the nearest accepted mode by distance to it, and uses `expected_reference_frequency_hz` for `reference_frequency_certified` pass/fail. | Kittel data currently influences targeting, nearest-mode selection and solver success. | K0-P4 removes analytical-reference selection and pass/fail from the solver. Analytical Kittel comparison is postsolve validation owned by K0-P6 and its independent verifier only. |
 
@@ -4557,9 +4557,11 @@ rejects when unavailable. A permitted non-strict fallback may select another
 full CPU engine for the identical physical problem only before execution and
 must publish requested/resolved engines and `fallback_reason`.
 
-K0-P7 compares full coupled response against direct/Schur response on identical
-blocks and against modal resonance only after the modal basis has its own
-completeness and full-residual certificate.
+K0-P7 is a separate driven-response scope. It compares full coupled response
+against direct/Schur response on identical blocks and against modal resonance
+only after the modal basis has its own completeness and full-residual
+certificate. It is not a predecessor for the K0 modal CPU/GPU promotion scope,
+which ends at K0-P6 and K0-G4.
 
 ## 8. Certified Schur algorithms
 
@@ -4764,7 +4766,7 @@ not promote until all predecessor gates for its claimed scope pass.
 | K0-P4 CPU sparse-direct and SLEPc parity | `backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.*`; `backends/fem/cpu/frequency_domain/slepc_modal_eigen.*`; `backends/fem/cpu/frequency_domain/engines/sparse_direct/` | K0-P3 descriptor, user-requested complex or rotated-real target/window, tiny admitted case; no expected frequency | direct baseline and selected finite physical mode classes | `validation/k0_poisson_airbox/interior_window.v1.json` | `k0_poisson_airbox_real_split_target_unavailable`; `k0_poisson_airbox_cpu_solver_parity_failed`; `k0_poisson_airbox_no_finite_modes` | Complex/real-split and direct/SLEPc frequency clusters, physical multiplicities and invariant subspaces agree; wrong-axis negative control fails; analytical Kittel data cannot affect selection or solver pass/fail. |
 | K0-P5 residual and finite-mode certification | `backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.*` | K0-P4 candidates, original unscaled blocks | accepted/rejected modes, reconstructed `phi/eta`, block errors | `eigen/diagnostics/solver.v1.json#residuals`; `eigen/spectrum.v2.json` | `k0_poisson_airbox_interior_window_incomplete`; `k0_poisson_airbox_full_residual_not_certified` | Every accepted mode passes finite classification, branch/window completeness and all original block tolerances. |
 | K0-P6 real-film Kittel convergence | `examples/`; `scripts/verify_fem_frequency_domain_eigen_artifacts.py`; managed `justfile` gate | accepted real equilibria, at least three mesh levels, independent airbox-padding levels, field sweep | solved spectra and independent Kittel comparison | `kittel_convergence.v1.csv` plus equilibrium/mesh/airbox provenance | `k0_poisson_airbox_kittel_convergence_failed` plus any exact predecessor token | Mesh and padding convergence, field sweep, demag sign and managed-runtime evidence pass without analytical data entering the solver. |
-| K0-P7 CPU driven full-coupled/modal cross-check | `backends/fem/cpu/frequency_domain/engines/field_split/`; `backends/fem/cpu/frequency_domain/production_cpu_driven_response.*`; `backends/fem/cpu/frequency_domain/modal_response.*` | same K0-P3 blocks, physical drive, frequency sweep, qualified modal basis when used | full coupled, Schur and qualified reduced responses | `response/diagnostics/solver.v1.json`; `response/frequency-points/{frequency_index}.json` | `k0_poisson_airbox_physical_drive_rhs_invalid`; `k0_poisson_airbox_schur_certificate_invalid`; `k0_poisson_airbox_full_residual_not_certified`; `k0_poisson_airbox_driven_crosscheck_failed` | Full/Schur responses agree on certified samples; resonance agrees with independently qualified modes; original driven residual passes at every point. |
+| K0-P7 separate driven full-coupled/modal cross-check | `backends/fem/cpu/frequency_domain/engines/field_split/`; `backends/fem/cpu/frequency_domain/production_cpu_driven_response.*`; `backends/fem/cpu/frequency_domain/modal_response.*` | same K0-P3 blocks, physical drive, frequency sweep, qualified modal basis when used | full coupled, Schur and qualified reduced responses | `response/diagnostics/solver.v1.json`; `response/frequency-points/{frequency_index}.json` | `k0_poisson_airbox_physical_drive_rhs_invalid`; `k0_poisson_airbox_schur_certificate_invalid`; `k0_poisson_airbox_full_residual_not_certified`; `k0_poisson_airbox_driven_crosscheck_failed` | This separate driven-response promotion is not a prerequisite for modal K0 CPU/GPU promotion; its own claim requires full/Schur agreement, modal resonance with independently qualified modes, and original driven residuals at every point. |
 
 The planned `operators/poisson_airbox_shared_domain.*` owner is a dedicated
 frequency-domain subsystem. It may reuse static demag mesh, boundary and MFEM
@@ -4782,8 +4784,8 @@ utilities, but it must not add frequency-domain assembly or solver ownership to
 
 ## 12. Definition of done
 
-This contract is implemented for an exact scope only when all of the following
-are true:
+The K0 modal production scope is implemented for an exact CPU or GPU scope
+only when all of the following modal requirements are true:
 
 1. A physical request consumes an accepted equilibrium, shared-domain P1 mesh,
    complete K0 magnetic/scalar certificate and valid BC/gauge tuple.
@@ -4793,9 +4795,10 @@ are true:
 3. Modal full and certified Schur paths represent `sigma=i*omega_target`
    correctly for the PETSc scalar build, detect the wrong-axis negative control,
    select finite positive-window modes and reconstruct the full descriptor.
-4. Driven full field-split and certified Schur paths consume the physical drive
-   conversion, reuse the same blocks and pass full/block residuals at every
-   accepted frequency.
+4. A driven-response claim, if made, separately completes K0-P7: its full
+   field-split and certified Schur paths consume the physical drive conversion,
+   reuse the same blocks, and pass full/block residuals at every accepted
+   frequency. K0-P7 is not required for modal promotion.
 5. `eps_full=max(eps_q,eps_phi,eps_gauge)` from the original unscaled operator
    is within tolerance; backend, transformed and preconditioned residuals remain
    separate diagnostics.
