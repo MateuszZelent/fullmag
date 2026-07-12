@@ -1926,6 +1926,7 @@ class EigenmodesStageSpec:
     k_vector: tuple[float, float, float] | None = None
     k_sampling: object | None = None
     bc: str | dict[str, object] = "free"
+    magnetostatic_bc: str = "open"
 
 
 @dataclass(frozen=True, slots=True)
@@ -2309,6 +2310,7 @@ def eigenmodes_stage(
     k_vector: tuple[float, float, float] | None = None,
     k_sampling: object | None = None,
     bc: str | dict[str, object] = "free",
+    magnetostatic_bc: str = "open",
 ) -> EigenmodesStageSpec:
     return EigenmodesStageSpec(
         count=count,
@@ -2325,6 +2327,7 @@ def eigenmodes_stage(
         k_vector=k_vector,
         k_sampling=k_sampling,
         bc=bc,
+        magnetostatic_bc=magnetostatic_bc,
     )
 
 
@@ -2501,6 +2504,7 @@ def _capture_stage(stage_spec: object) -> CapturedStage:
                 eigen_k_vector=stage_spec.k_vector,
                 eigen_k_sampling=stage_spec.k_sampling,
                 eigen_spin_wave_bc=stage_spec.bc,
+                eigen_magnetostatic_bc=stage_spec.magnetostatic_bc,
             ),
             entrypoint_kind="flat_eigenmodes",
             default_until_seconds=None,
@@ -3027,6 +3031,7 @@ class StudyStagesBuilder:
         k_vector: tuple[float, float, float] | None = None,
         k_sampling: object | None = None,
         bc: str | dict[str, object] = "free",
+        magnetostatic_bc: str = "open",
     ) -> "StudyStagesBuilder":
         return self.add_stage(
             eigenmodes_stage(
@@ -3044,6 +3049,7 @@ class StudyStagesBuilder:
                 k_vector=k_vector,
                 k_sampling=k_sampling,
                 bc=bc,
+                magnetostatic_bc=magnetostatic_bc,
             )
         )
 
@@ -4108,6 +4114,7 @@ class StudyBuilder:
         k_vector: tuple[float, float, float] | None = None,
         k_sampling: object | None = None,
         bc: str = "free",
+        magnetostatic_bc: str = "open",
     ) -> Any:
         return eigenmodes(
             count=count,
@@ -4123,6 +4130,7 @@ class StudyBuilder:
             k_vector=k_vector,
             k_sampling=k_sampling,
             bc=bc,
+            magnetostatic_bc=magnetostatic_bc,
         )
 
     def frequency_response(
@@ -6101,6 +6109,7 @@ def _build_problem(
     eigen_k_vector: tuple[float, float, float] | None = None,
     eigen_k_sampling: object | None = None,
     eigen_spin_wave_bc: str | dict[str, object] = "free",
+    eigen_magnetostatic_bc: str = "open",
     frequency_frequencies_hz: Sequence[float] = (1.0e9,),
     frequency_excitation_field_au_per_m: tuple[float, float, float] = (0.0, 0.0, 1.0),
     frequency_excitation_phase_rad: float = 0.0,
@@ -6278,6 +6287,7 @@ def _build_problem(
             normalization=eigen_normalization,
             damping_policy=eigen_damping_policy,
             spin_wave_bc=eigen_spin_wave_bc,
+            magnetostatic_bc=eigen_magnetostatic_bc,
             k_sampling=eigen_k_sampling,
             k_vector=eigen_k_vector,
             dynamics=dynamics,
@@ -6721,6 +6731,7 @@ def eigenmodes(
     k_vector: tuple[float, float, float] | None = None,
     k_sampling: object | None = None,
     bc: str | dict[str, object] = "free",
+    magnetostatic_bc: str = "open",
 ) -> Any:
     """Build the problem and queue/run an eigenmodes analysis.
 
@@ -6766,6 +6777,7 @@ def eigenmodes(
         eigen_k_sampling=k_sampling,
         eigen_k_vector=k_vector,
         eigen_spin_wave_bc=bc,
+        eigen_magnetostatic_bc=magnetostatic_bc,
     )
 
     if _capture_enabled:

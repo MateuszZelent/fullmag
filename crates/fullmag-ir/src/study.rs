@@ -859,6 +859,8 @@ pub enum StudyIR {
         /// Spin-wave boundary condition applied to the eigenvalue operator.
         #[serde(default)]
         spin_wave_bc: SpinWaveBoundaryConditionIR,
+        #[serde(default)]
+        magnetostatic_bc: MagnetostaticBoundaryConditionIR,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         mode_tracking: Option<ModeTrackingIR>,
         sampling: SamplingIR,

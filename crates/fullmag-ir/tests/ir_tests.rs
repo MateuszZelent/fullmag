@@ -2456,6 +2456,7 @@ fn eigenmodes_with_spectrum_and_mode_outputs_validate() {
         normalization: EigenNormalizationIR::UnitL2,
         damping_policy: EigenDampingPolicyIR::Ignore,
         spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
+        magnetostatic_bc: MagnetostaticBoundaryConditionIR::default(),
         sampling: SamplingIR {
             table_autosave: None,
             outputs: vec![
@@ -2524,6 +2525,7 @@ fn eigenmodes_k0_kittel_validation_runtime_metadata_deserializes_to_typed_ir() {
         normalization: EigenNormalizationIR::UnitL2,
         damping_policy: EigenDampingPolicyIR::Ignore,
         spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
+        magnetostatic_bc: MagnetostaticBoundaryConditionIR::default(),
         sampling: SamplingIR {
             table_autosave: None,
             outputs: vec![OutputIR::EigenSpectrum {
@@ -2614,6 +2616,7 @@ fn eigenmodes_closed_k_path_sample_count_and_segment_length_validate() {
         normalization: EigenNormalizationIR::UnitL2,
         damping_policy: EigenDampingPolicyIR::Ignore,
         spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
+        magnetostatic_bc: MagnetostaticBoundaryConditionIR::default(),
         sampling: SamplingIR {
             table_autosave: None,
             outputs: vec![
@@ -2666,6 +2669,7 @@ fn eigenmodes_rejects_closed_k_path_with_open_segment_count() {
         normalization: EigenNormalizationIR::UnitL2,
         damping_policy: EigenDampingPolicyIR::Ignore,
         spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
+        magnetostatic_bc: MagnetostaticBoundaryConditionIR::default(),
         sampling: SamplingIR {
             table_autosave: None,
             outputs: vec![OutputIR::EigenSpectrum {
@@ -3540,6 +3544,7 @@ fn eigenmodes_require_spectrum_or_mode_output() {
         normalization: EigenNormalizationIR::UnitL2,
         damping_policy: EigenDampingPolicyIR::Ignore,
         spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
+        magnetostatic_bc: MagnetostaticBoundaryConditionIR::default(),
         sampling: SamplingIR {
             table_autosave: None,
             outputs: vec![OutputIR::DispersionCurve {

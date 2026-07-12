@@ -514,6 +514,7 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
             "eigen_k_path": _text_k_path(study.k_sampling),
             "eigen_spin_wave_bc": _spin_wave_bc_kind(study.spin_wave_bc),
             "eigen_spin_wave_bc_config": _spin_wave_bc_config(study.spin_wave_bc),
+            "eigen_magnetostatic_bc": study.magnetostatic_bc,
         }
     if isinstance(study, FrequencyResponse):
         return {
@@ -2812,6 +2813,11 @@ def _render_stages(
                 )
             if spin_wave_bc != "free":
                 call_parts.append(f"bc={_render_spin_wave_bc_expr(spin_wave_bc)}")
+            magnetostatic_bc = _override_string(
+                stage_override, "eigen_magnetostatic_bc", study.magnetostatic_bc
+            ) or study.magnetostatic_bc
+            if magnetostatic_bc != "open":
+                call_parts.append(f"magnetostatic_bc={_py_repr(magnetostatic_bc)}")
             k_vector_raw = _override_string(stage_override, "eigen_k_vector", None)
             k_path_expr = _render_stage_k_path_expr(
                 _override_string(stage_override, "eigen_k_path", None)
