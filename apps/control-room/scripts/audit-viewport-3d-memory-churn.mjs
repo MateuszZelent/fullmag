@@ -72,6 +72,7 @@ const errors = [];
 const fixtureRequests = [];
 const fieldRequests = [];
 const topologyRequests = [];
+const auditedRequests = [];
 const fixture = createFdmFixture();
 let auditActive = false;
 
@@ -107,6 +108,7 @@ page.on("response", (response) => {
 page.on("request", (request) => {
   if (!auditActive) return;
   const requestUrl = request.url();
+  auditedRequests.push(`${request.method()} ${requestUrl}`);
   if (requestUrl.includes("/v2/sessions/current/data/fields/")) {
     fieldRequests.push(`${request.method()} ${requestUrl}`);
   }
@@ -218,7 +220,6 @@ try {
       beforePublicationGpu,
     );
   }
-  auditActive = false;
   await page.waitForTimeout(500);
 
   auditLog("reading final diagnostics");
@@ -268,7 +269,15 @@ try {
   if (injectIdleLoop) {
     await injectViewportIdleLoop(page);
   }
+  const idleRequestStart = auditedRequests.length;
   const idle = await verifyViewportIdle(page, 5_000);
+  const idleRequests = auditedRequests.slice(idleRequestStart);
+  if (idleRequests.length > 0) {
+    throw new Error(
+      `Viewport issued resource requests during the ${idle.observeMs}ms idle window:\n${idleRequests.join("\n")}`,
+    );
+  }
+  auditActive = false;
   const fidelity = await assertCanvasHasFidelity(page);
   if (injectBlankScene) {
     await clearViewportCanvas(page);
@@ -323,6 +332,7 @@ try {
     fixtureRequests,
     gpuAfterStress,
     idle,
+    idleRequests,
     fidelity,
     topologyRequests,
     url,

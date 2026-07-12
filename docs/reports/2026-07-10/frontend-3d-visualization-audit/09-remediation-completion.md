@@ -29,7 +29,7 @@ zapisano implementację oraz najmocniejszy dostępny dowód regresyjny.
 | F3D-019 | Production worker runtime jest lease-owned i kończy workery/timery po ostatnim unmount. | `a41b7a4d`–`63da0ae3`. |
 | F3D-020 | Glyph cache ma globalny budżet, LRU i telemetry. | `dece90d4`–`043ec685`. |
 | F3D-021 | Shader slots mają geometry-lifetime, a audit mierzy create/delete buffers i plateau. | `b1f5ee28`, `4c7015aa`–`7c4c644b`. |
-| F3D-022 | Raw surface, wireframe, points, fallback i airbox współdzielą topology positions; test 1/10/100 części utrwala stałe storage. | `b1f5ee28`, `ffe84048`. |
+| F3D-022 | Raw surface, wireframe, points, fallback i airbox współdzielą topology positions; production-like Chromium gate mierzy osobno `ARRAY_BUFFER` i `ELEMENT_ARRAY_BUFFER` dla 1/10/100 części FEM oraz czterech kombinacji passów. | `b1f5ee28`, `ffe84048`, `audit:viewport-3d-fem-topology-uploads`. |
 | F3D-023 | GPU upload queue izoluje błąd ticketu, rollbackuje partial state i nie zatruwa kolejek. | `6efdfa69`–`2d8b3ded`. |
 | F3D-024 | Pointer hold usuwa oba listenery i obsługuje multi-pointer. | `7f5fa0ca`, `8b1a7976`. |
 | F3D-025 | Region mapping używa memoized mapy O(R + M). | `7f5fa0ca`. |
@@ -41,10 +41,11 @@ zapisano implementację oraz najmocniejszy dostępny dowód regresyjny.
 
 - `pnpm --dir apps/control-room typecheck` — pass.
 - `pnpm --dir apps/control-room lint` — pass, zero warnings.
-- `pnpm --dir apps/control-room test` — pass: 314 plików, 2859 testów.
+- `pnpm --dir apps/control-room test` — pass: 314 plików, 2860 testów.
 - `pnpm --dir apps/control-room check:api-hygiene` — pass.
 - `./scripts/ci-resource-first-gates.sh --strict` — pass.
 - `pnpm --dir apps/control-room audit:viewport-3d-memory-churn` — pass: 120 renderowanych przełączeń, zero refetchy field/topology, idle 5 s bez nowych frames/draws, worker runtime zwolniony, GPU plateau i after-unmount release.
+- `pnpm --dir apps/control-room audit:viewport-3d-fem-topology-uploads` — pass: 12 scenariuszy Chromium/WebGL (1/10/100 części FEM × surface/wireframe/points/all); upload pozycji `ARRAY_BUFFER` osiąga plateau około 161 KB zamiast rosnąć z liczbą części.
 
 Negative controls świadomie kończą audit błędem: dropped publication, blank canvas,
 subscription leak, continuous idle draw loop, retained worker lease i GPU-buffer

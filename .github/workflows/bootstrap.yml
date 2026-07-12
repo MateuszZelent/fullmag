@@ -72,6 +72,22 @@ jobs:
       - name: Audit production viewport lifecycle and memory
         run: pnpm --dir apps/control-room audit:viewport-3d-memory-churn
 
+      - name: Audit FEM topology WebGL position uploads
+        run: pnpm --dir apps/control-room audit:viewport-3d-fem-topology-uploads
+
+      - name: Verify viewport lifecycle audit negative controls
+        run: |
+          set -euo pipefail
+          for control in \
+            CONTROL_ROOM_AUDIT_INJECT_IDLE_LOOP \
+            CONTROL_ROOM_AUDIT_INJECT_WORKER_LEAK \
+            CONTROL_ROOM_AUDIT_INJECT_GPU_BUFFER_LEAK; do
+            if env "$control=1" pnpm --dir apps/control-room audit:viewport-3d-memory-churn; then
+              echo "Expected $control to fail the lifecycle audit."
+              exit 1
+            fi
+          done
+
       - name: Upload viewport lifecycle audit artifacts
         if: always()
         uses: actions/upload-artifact@v4

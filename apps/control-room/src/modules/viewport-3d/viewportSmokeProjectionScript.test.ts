@@ -21,6 +21,10 @@ const memoryChurnScriptUrl = new URL(
   "../../../scripts/audit-viewport-3d-memory-churn.mjs",
   import.meta.url,
 );
+const femTopologyUploadAuditScriptUrl = new URL(
+  "../../../scripts/audit-viewport-3d-fem-topology-uploads.mjs",
+  import.meta.url,
+);
 const profileSwitchScriptUrl = new URL(
   "../../../scripts/audit-viewport-3d-profile-switch.mjs",
   import.meta.url,
@@ -425,6 +429,20 @@ describe("viewport smoke projection round-trip", () => {
     expect(memoryChurnScript).toContain("CONTROL_ROOM_AUDIT_INJECT_GPU_BUFFER_LEAK");
     expect(memoryChurnScript).toContain("injectViewportGpuBufferLeak(page)");
     expect(memoryChurnScript).toContain("Live WebGL buffers did not return");
+  });
+
+  it("measures shared FEM topology position uploads in a real WebGL viewport", () => {
+    const femTopologyAuditScript = readFileSync(femTopologyUploadAuditScriptUrl, "utf8");
+
+    expect(femTopologyAuditScript).toContain("FEM_PART_COUNTS = [1, 10, 100]");
+    expect(femTopologyAuditScript).toContain("surface-wireframe-points");
+    expect(femTopologyAuditScript).toContain("createFemTopologyFixture");
+    expect(femTopologyAuditScript).toContain("boundary_face_indices");
+    expect(femTopologyAuditScript).toContain("arrayBufferBytesUploaded");
+    expect(femTopologyAuditScript).toContain("elementArrayBufferBytesUploaded");
+    expect(femTopologyAuditScript).toContain("drawCalls <= 0");
+    expect(femTopologyAuditScript).toContain("Position upload grew with FEM part count");
+    expect(femTopologyAuditScript).toContain("fem-topology-upload-metrics.json");
   });
 
   it("finds viewport diagnostics by content instead of a fixed HUD index", () => {

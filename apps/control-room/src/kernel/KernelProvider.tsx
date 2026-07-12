@@ -369,6 +369,12 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
           visualizationRevision: ResourceRevision | null;
           workers: ReturnType<typeof getViewport3DWorkerRuntimeSnapshot>;
         };
+        readViewportAuditResource: (resourceKey: string) => {
+          data: unknown;
+          error: string | null;
+          revision: ResourceRevision | null;
+          status: string;
+        };
         injectViewportAuditListenerLeak: () => void;
         injectViewportAuditWorkerLeak: () => void;
       };
@@ -471,6 +477,15 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
         ).revision,
         workers: getViewport3DWorkerRuntimeSnapshot(),
       }),
+      readViewportAuditResource: (resourceKey: string) => {
+        const snapshot = sharedResourceRuntimeStore.getSnapshot(resourceKey);
+        return {
+          data: snapshot.data,
+          error: snapshot.error?.message ?? null,
+          revision: snapshot.revision,
+          status: snapshot.status,
+        };
+      },
       injectViewportAuditListenerLeak: () => {
         // Deliberately retained only when an audit asks for a negative control.
         sharedResourceRuntimeStore.subscribe(VISUALIZATION_STATE_PATH, () => {});
