@@ -1,5 +1,11 @@
 # FEM K0 Dynamic-Demag CPU/GPU Production Implementation Plan
 
+> **Superseded:** This plan is replaced by
+> `docs/superpowers/plans/2026-07-12-fem-k0-demag-final-production.md`.
+> Do not execute this file; it omits mandatory Python/UI round-trip,
+> Equilibrium/mesh v6 certificates, OpenAPI resources, Spectrum/Modes viewport
+> integration, and the complete DOD-01 through DOD-14 promotion record.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Deliver a real shared-domain FEM K0 dynamic-demagnetizing eigensolve on CPU and GPU, with certified residuals and managed runtime qualification.
