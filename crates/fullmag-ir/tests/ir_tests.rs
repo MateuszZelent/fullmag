@@ -83,6 +83,12 @@ fn periodic_airbox_k0_rejections_use_stable_reason_tokens() {
         let ir: ProblemIR = serde_json::from_value(candidate).unwrap();
         assert!(ir.validate().unwrap_err().iter().any(|error| error == token), "missing {token}");
     }
+    let mut without_demag = value;
+    without_demag["energy_terms"] = serde_json::json!([{"kind": "exchange"}]);
+    let ir: ProblemIR = serde_json::from_value(without_demag).unwrap();
+    assert!(ir.validate().unwrap_err().iter().any(|error| {
+        error == "eigenmodes.k0_periodic_airbox_requires_demag_energy"
+    }));
 }
 
 #[test]

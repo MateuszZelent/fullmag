@@ -57,7 +57,7 @@ study.stages.add_eigenmodes(target='frequency_window', frequency_min=1e9, freque
 
 
 def test_k0_requested_cpu_and_gpu_intent_survives_problem_ir(tmp_path: Path) -> None:
-    for device in ("cpu", "gpu"):
+    for device in ("cpu", "cuda"):
         source = tmp_path / f"k0_{device}.py"
         source.write_text(
             f"""import fullmag as fm
@@ -74,5 +74,7 @@ study.save('spectrum')
 study.stages.add_eigenmodes(target='frequency_window', frequency_min=1e9, frequency_max=2e9, include_demag=True, magnetostatic_bc='periodic_airbox_k0', k_vector=(0.0, 0.0, 0.0), bc=fm.PeriodicBC(['x_faces', 'y_faces']))
 """, encoding="utf-8")
         ir = fm.load_problem_from_script(source, lightweight_assets=True).stages[0].problem.to_ir(include_geometry_assets=False)
-        expected_device = "cuda" if device == "gpu" else device
-        assert ir["problem_meta"]["runtime_metadata"]["runtime_selection"]["device"] == expected_device
+        assert ir["backend_policy"]["requested_backend"] == "fem"
+        assert ir["backend_policy"]["execution_precision"] == "double"
+        assert ir["validation_profile"]["execution_mode"] == "strict"
+        assert ir["problem_meta"]["runtime_metadata"]["runtime_selection"]["device"] == device
