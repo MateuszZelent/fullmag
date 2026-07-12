@@ -71,6 +71,11 @@ class FdmPbc:
             )
         object.__setattr__(self, "demag", demag)
 
+        if demag == "periodic_airbox_k0" and axes != (True, True, False):
+            raise ValueError(
+                "FdmPbc.demag='periodic_airbox_k0' requires x/y periodic axes and open z"
+            )
+
         if demag != "truncated_images" and self.image_counts is not None:
             raise ValueError("FdmPbc.image_counts require demag='truncated_images'")
 

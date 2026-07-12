@@ -799,6 +799,14 @@ impl ProblemIR {
                     if !self.energy_terms.iter().any(|term| matches!(term, EnergyTermIR::Demag { .. })) {
                         errors.push("eigenmodes.k0_periodic_airbox_requires_demag_energy".to_string());
                     }
+                    match &self.pbc {
+                        Some(periodicity)
+                            if periodicity.axes == [AxisBoundary::Periodic, AxisBoundary::Periodic, AxisBoundary::Open] => {}
+                        Some(periodicity) if periodicity.axes[2] == AxisBoundary::Periodic => {
+                            errors.push("eigenmodes.k0_periodic_airbox_rejects_fully_periodic_3d".to_string());
+                        }
+                        _ => errors.push("eigenmodes.k0_periodic_airbox_requires_xy_periodic_open_z".to_string()),
+                    }
                 }
                 let has_mode_output = self
                     .study

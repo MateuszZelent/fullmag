@@ -47,3 +47,9 @@ def test_eigenmodes_periodic_airbox_k0_rejects_invalid_public_contract(kwargs, m
 
     with pytest.raises(ValueError, match=message):
         fm.Eigenmodes(**base)
+
+
+@pytest.mark.parametrize("axes", [(True, False, False), (True, True, True)])
+def test_periodic_airbox_k0_requires_xy_periodic_open_z(axes) -> None:
+    with pytest.raises(ValueError, match="x/y periodic axes and open z"):
+        fm.FdmPbc(axes=axes, demag="periodic_airbox_k0")
