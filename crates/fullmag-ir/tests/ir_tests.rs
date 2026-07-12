@@ -48,6 +48,44 @@ fn magnetostatic_bc_floquet_airbox_round_trips_as_snake_case_json() {
 }
 
 #[test]
+fn periodic_airbox_k0_rejections_use_stable_reason_tokens() {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    let dynamics = value["study"]["dynamics"].clone();
+    value["energy_terms"] = serde_json::json!([{"kind": "exchange"}, {"kind": "demag"}]);
+    value["pbc"] = serde_json::json!({"axes": ["periodic", "periodic", "open"], "demag": "periodic_airbox_k0"});
+    value["study"] = serde_json::json!({
+        "kind": "eigenmodes", "dynamics": dynamics,
+        "operator": {"kind": "linearized_llg", "include_demag": true},
+        "count": 1, "target": {"kind": "frequency_window", "frequency_min_hz": 1.0e9, "frequency_max_hz": 2.0e9},
+        "equilibrium": {"kind": "provided"}, "k_sampling": {"kind": "single", "k_vector": [0.0, 0.0, 0.0]},
+        "normalization": "unit_l2", "damping_policy": "ignore", "spin_wave_bc": "periodic",
+        "magnetostatic_bc": "periodic_airbox_k0", "sampling": {"outputs": [{"kind": "eigen_spectrum", "quantity": "frequency_hz"}]}
+    });
+    let cases = [
+        ("backend_policy.execution_precision", serde_json::json!("single"), "eigenmodes.k0_periodic_airbox_requires_double_precision"),
+        ("operator.include_demag", serde_json::json!(false), "eigenmodes.k0_periodic_airbox_requires_demag"),
+        ("k_sampling.k_vector", serde_json::json!([1.0, 0.0, 0.0]), "eigenmodes.k0_periodic_airbox_requires_exact_zero_k"),
+        ("spin_wave_bc", serde_json::json!("free"), "eigenmodes.k0_periodic_airbox_requires_periodic_spin_wave_bc"),
+        ("pbc.axes", serde_json::json!(["periodic", "periodic", "periodic"]), "eigenmodes.k0_periodic_airbox_rejects_fully_periodic_3d"),
+        ("damping_policy", serde_json::json!("include"), "eigenmodes.k0_periodic_airbox_requires_alpha_zero"),
+    ];
+    for (path, replacement, token) in cases {
+        let mut candidate = value.clone();
+        match path {
+            "backend_policy.execution_precision" => candidate["backend_policy"]["execution_precision"] = replacement,
+            "operator.include_demag" => candidate["study"]["operator"]["include_demag"] = replacement,
+            "k_sampling.k_vector" => candidate["study"]["k_sampling"]["k_vector"] = replacement,
+            "spin_wave_bc" => candidate["study"]["spin_wave_bc"] = replacement,
+            "pbc.axes" => candidate["pbc"]["axes"] = replacement,
+            "damping_policy" => candidate["study"]["damping_policy"] = replacement,
+            _ => unreachable!(),
+        }
+        let ir: ProblemIR = serde_json::from_value(candidate).unwrap();
+        assert!(ir.validate().unwrap_err().iter().any(|error| error == token), "missing {token}");
+    }
+}
+
+#[test]
 fn previous_public_ir_version_is_supported_for_read_and_requires_migration() {
     assert!(is_supported_ir_version_for_read(PREVIOUS_PUBLIC_IR_VERSION));
     assert!(requires_ir_migration(PREVIOUS_PUBLIC_IR_VERSION));

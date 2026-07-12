@@ -53,3 +53,11 @@ def test_eigenmodes_periodic_airbox_k0_rejects_invalid_public_contract(kwargs, m
 def test_periodic_airbox_k0_requires_xy_periodic_open_z(axes) -> None:
     with pytest.raises(ValueError, match="x/y periodic axes and open z"):
         fm.FdmPbc(axes=axes, demag="periodic_airbox_k0")
+
+
+def test_eigenmodes_rejects_conflicting_legacy_k_vector() -> None:
+    with pytest.raises(ValueError, match="either k_sampling or k_vector"):
+        fm.Eigenmodes(
+            outputs=[fm.SaveSpectrum()], k_vector=(0.0, 0.0, 0.0),
+            k_sampling=fm.KPoint("X", (1.0, 0.0, 0.0)),
+        )
