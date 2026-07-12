@@ -414,11 +414,17 @@ const PRODUCTION_CAPABILITY_STATUSES = new Set([
  * optimistic local form flag. Unknown resources stay unavailable.
  */
 export function deriveK0ModalExecutionReadiness({
+  checkpoints,
+  equilibriumArtifact,
+  equilibriumSource,
   frequencyManifest,
   meshManifest,
   periodicPairs,
   stageExecution,
 }: {
+  checkpoints: readonly CheckpointEntry[];
+  equilibriumArtifact: string;
+  equilibriumSource: string;
   frequencyManifest: FrequencyDomainManifestResource | null;
   meshManifest: MeshSharedDomainManifestResource | null;
   periodicPairs: MeshPeriodicPairsResource | null;
@@ -438,14 +444,27 @@ export function deriveK0ModalExecutionReadiness({
           ["certified", "matched", "valid"].includes(pair.status),
       ),
   );
-  const acceptedEquilibriumReady = Boolean(
-    stageExecution?.stages.some(
-      (stage) =>
-        stage.kind === "relax" &&
-        stage.converged &&
-        ["accepted", "completed"].includes(stage.status),
+  const acceptedRelaxationReady = Boolean(
+    stageExecution?.stages.some((stage) =>
+      stage.kind === "relax" &&
+      stage.converged &&
+      ["accepted", "completed"].includes(stage.status),
     ),
   );
+  const acceptedArtifactReady = Boolean(
+    equilibriumArtifact.trim() &&
+      checkpoints.some(
+        (checkpoint) =>
+          checkpoint.artifact_ref === equilibriumArtifact.trim() &&
+          checkpoint.mesh_revision === meshManifest?.revision,
+      ),
+  );
+  const acceptedEquilibriumReady =
+    equilibriumSource === "relax"
+      ? acceptedRelaxationReady
+      : equilibriumSource === "provided" || equilibriumSource === "artifact"
+        ? acceptedArtifactReady
+        : false;
   const strictGpuReady = PRODUCTION_CAPABILITY_STATUSES.has(
     frequencyManifest?.capabilities.modal.production_gpu.status ?? "",
   );
@@ -622,12 +641,16 @@ export function useStudyInspectorPanelController(
     stageExecution: stageExecution.data,
   });
   const selectedStageIndex = model.selectedStage?.index ?? 0;
-  const k0ModalReadiness = deriveK0ModalExecutionReadiness({
-    frequencyManifest: frequencyDomainManifest.data,
-    meshManifest: meshManifest.data,
-    periodicPairs: periodicPairs.data,
-    stageExecution: stageExecution.data,
-  });
+  const k0ModalReadinessFor = (draft: StudyStageDraft) =>
+    deriveK0ModalExecutionReadiness({
+      checkpoints,
+      equilibriumArtifact: draft.equilibriumArtifact,
+      equilibriumSource: draft.equilibriumSource,
+      frequencyManifest: frequencyDomainManifest.data,
+      meshManifest: meshManifest.data,
+      periodicPairs: periodicPairs.data,
+      stageExecution: stageExecution.data,
+    });
   const sceneRevision = sceneRevisionValue(scene.data);
   const sceneHasPayload = sceneHasAuthoringPayload(scene.data);
   const sceneStageCount = rawStudyStages(scene.data).length;
@@ -709,7 +732,7 @@ export function useStudyInspectorPanelController(
         backend: model.requested.backend,
         demagEnabled: state.globalDraft.demagEnabled,
         device: model.requested.device,
-        ...k0ModalReadiness,
+        ...k0ModalReadinessFor(draft),
         mode: model.requested.mode,
       }).map((issue) => ({
         ...issue,
@@ -830,7 +853,7 @@ export function useStudyInspectorPanelController(
     energyHistory,
     inspectImportFile,
     latestCheckpoint,
-    k0ModalReadiness,
+    k0ModalReadinessFor,
     model,
     runtimeStatus,
     runCommand,
@@ -861,7 +884,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
     energyHistory,
     inspectImportFile,
     latestCheckpoint,
-    k0ModalReadiness,
+    k0ModalReadinessFor,
     model,
     runtimeStatus,
     runCommand,
@@ -939,7 +962,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
           }
           commandDisabledReason={commandDisabledReason}
           demagEnabled={state.globalDraft.demagEnabled}
-          k0ModalReadiness={k0ModalReadiness}
+          k0ModalReadinessFor={k0ModalReadinessFor}
           draft={state.stageDrafts[state.selectedDraftIndex] ?? null}
           draftIndex={state.selectedDraftIndex}
           drafts={state.stageDrafts}

@@ -54,9 +54,11 @@ function testRequested(overrides: Record<string, string> = {}) {
 }
 
 describe("StudyInspectorPanel", () => {
-  it("derives K0 production readiness from revisioned resources and rejects contract-only GPU", () => {
-    expect(
-      deriveK0ModalExecutionReadiness({
+  it("derives K0 production readiness by selected equilibrium provenance", () => {
+    const resources = {
+        checkpoints: [
+          { artifact_ref: "artifact://provided", mesh_revision: 42 },
+        ] as never,
         frequencyManifest: {
           capabilities: { modal: { production_gpu: { reason: "not qualified", status: "contract_only" } } },
         } as never,
@@ -69,13 +71,32 @@ describe("StudyInspectorPanel", () => {
           stages: [{ converged: true, kind: "relax", status: "completed" }],
           revision: 8,
         } as never,
-      }),
-    ).toEqual({
+    };
+    expect(deriveK0ModalExecutionReadiness({
+      ...resources,
+      equilibriumArtifact: "",
+      equilibriumSource: "relax",
+    })).toEqual({
       acceptedEquilibriumReady: true,
       periodicCertificateReady: true,
       sharedDomainMeshReady: true,
       strictGpuReady: false,
     });
+    expect(deriveK0ModalExecutionReadiness({
+      ...resources,
+      equilibriumArtifact: "artifact://provided",
+      equilibriumSource: "provided",
+    }).acceptedEquilibriumReady).toBe(true);
+    expect(deriveK0ModalExecutionReadiness({
+      ...resources,
+      equilibriumArtifact: "artifact://provided",
+      equilibriumSource: "artifact",
+    }).acceptedEquilibriumReady).toBe(true);
+    expect(deriveK0ModalExecutionReadiness({
+      ...resources,
+      equilibriumArtifact: "artifact://missing",
+      equilibriumSource: "provided",
+    }).acceptedEquilibriumReady).toBe(false);
   });
 
   it("renders unavailable K0 modal prerequisites in the study pipeline", () => {
@@ -99,12 +120,12 @@ describe("StudyInspectorPanel", () => {
           draft={draft}
           draftIndex={0}
           drafts={[draft]}
-          k0ModalReadiness={{
+          k0ModalReadinessFor={() => ({
             acceptedEquilibriumReady: false,
             periodicCertificateReady: false,
             sharedDomainMeshReady: false,
             strictGpuReady: false,
-          }}
+          })}
           model={{
             boundary: testBoundary(),
             requested: testRequested({ backend: "fem", device: "gpu" }),

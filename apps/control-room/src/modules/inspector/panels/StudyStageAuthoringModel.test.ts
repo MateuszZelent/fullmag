@@ -190,6 +190,35 @@ describe("StudyStageAuthoringModel", () => {
     ]));
   });
 
+  it("uses the requested global GPU intent for K0 strict readiness", () => {
+    const draft = {
+      ...createDefaultStudyStageDraft("eigenmodes", 0),
+      bc: "periodic",
+      dampingPolicy: "ignore",
+      frequencyMax: "2e9",
+      frequencyMin: "1e9",
+      includeDemag: true,
+      kVector: "0,0,0",
+      magnetostaticBc: "periodic_airbox_k0",
+      target: "frequency_window",
+    };
+
+    expect(
+      validateStudyStageDraft(draft, {
+        acceptedEquilibriumReady: true,
+        backend: "fem",
+        device: "gpu",
+        mode: "strict",
+        periodicCertificateReady: true,
+        sharedDomainMeshReady: true,
+        strictGpuReady: false,
+      }),
+    ).toContainEqual({
+      message: "Strict GPU K0 modal demag prerequisites are unavailable.",
+      severity: "error",
+    });
+  });
+
   it("serializes the canonical K0 periodic-airbox demag intent for eigenmodes", () => {
     const stage = studyStageDraftToSceneStage({
       ...createDefaultStudyStageDraft("eigenmodes", 0),

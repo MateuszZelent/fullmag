@@ -1069,7 +1069,12 @@ export function validateStudyStageDraft(
       if (execution?.sharedDomainMeshReady === false) issues.push({ severity: "error", message: "periodic_airbox_k0 requires a shared-domain mesh." });
       if (execution?.periodicCertificateReady === false) issues.push({ severity: "error", message: "periodic_airbox_k0 requires a periodic certificate." });
       if (execution?.acceptedEquilibriumReady === false) issues.push({ severity: "error", message: "periodic_airbox_k0 requires an accepted equilibrium." });
-      if (draft.deviceTarget === "gpu" && execution?.strictGpuReady === false) issues.push({ severity: "error", message: "Strict GPU K0 modal demag prerequisites are unavailable." });
+      if (
+        (execution?.device === "gpu" || draft.deviceTarget === "gpu") &&
+        execution?.strictGpuReady === false
+      ) {
+        issues.push({ severity: "error", message: "Strict GPU K0 modal demag prerequisites are unavailable." });
+      }
     }
     return issues;
   }

@@ -671,6 +671,20 @@ describe("Study stage inspectors", () => {
     expect(html).not.toContain("Driven Response Setup Contract");
   });
 
+  it("keeps K0 boundary and k controls editable in the eigenmodes setup view", () => {
+    const html = render(
+      <EigenmodesStageInspector
+        {...props("eigenmodes")}
+        authoringView="setup"
+      />,
+      ["authoring", "eigenmodes-setup-detail"],
+    );
+
+    expect(html).toContain('aria-label="BC"');
+    expect(html).toContain('aria-label="k vector"');
+    expect(html).toContain('aria-label="Magnetostatic BC"');
+  });
+
   it("renders modal solver lane semantics in the eigenmodes solver child view", () => {
     const html = render(
       <EigenmodesStageInspector

@@ -1,3 +1,10 @@
+import { execFileSync } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
+
 const workspaceUrl =
   process.env.CONTROL_ROOM_URL ?? "http://localhost:3100/workspace";
 const timeoutMs = Number(
@@ -7,6 +14,7 @@ const frequencyOnly =
   process.env.CONTROL_ROOM_STUDY_AUTHORING_SMOKE_FREQUENCY_ONLY === "1";
 const relaxationOnly =
   process.env.CONTROL_ROOM_STUDY_AUTHORING_SMOKE_RELAXATION_ONLY === "1";
+const k0Only = process.env.CONTROL_ROOM_STUDY_AUTHORING_SMOKE_K0_ONLY === "1";
 
 async function loadPlaywright() {
   try {
@@ -246,12 +254,14 @@ try {
   if ((await tpiOption.count()) > 0 && !(await tpiOption.isDisabled())) {
     throw new Error("TPI must be unavailable for the strict-mode fixture.");
   }
-  const pgbbOption = algorithm.locator('option[value="projected_gradient_bb"]');
-  if (!(await pgbbOption.isDisabled())) {
-    throw new Error("FEM demag projected-gradient BB must be unavailable.");
-  }
-  if (!(await pgbbOption.textContent())?.includes("not qualified for FEM demag")) {
-    throw new Error("FEM demag projected-gradient BB must explain its quarantine.");
+  if (!k0Only) {
+    const pgbbOption = algorithm.locator('option[value="projected_gradient_bb"]');
+    if (!(await pgbbOption.isDisabled())) {
+      throw new Error("FEM demag projected-gradient BB must be unavailable.");
+    }
+    if (!(await pgbbOption.textContent())?.includes("not qualified for FEM demag")) {
+      throw new Error("FEM demag projected-gradient BB must explain its quarantine.");
+    }
   }
   for (const directAlgorithm of ["nonlinear_cg"]) {
     await algorithm.selectOption(directAlgorithm);
@@ -289,64 +299,71 @@ try {
     .fill('{"linear_solver":"gmres","tolerance":1e-9}');
   await page.getByRole("button", { name: /Save globals/i }).click();
   await waitForTransactionCount(1);
-  await page.locator('[data-node-id="model:study:stages:stage:relax-1"]').click();
-  await inspector.getByText("failed", { exact: true }).first().waitFor({
-    state: "visible",
-  });
-  await inspector
-    .getByText("numerical_stagnation", { exact: true })
-    .first()
-    .waitFor({ state: "visible" });
-  await inspector
-    .getByText("no", { exact: true })
-    .first()
-    .waitFor({ state: "visible" });
-  await page.locator('[data-node-id="model:study"]').click();
+  if (!k0Only) {
+    await page.locator('[data-node-id="model:study:stages:stage:relax-1"]').click();
+    await inspector.getByText("failed", { exact: true }).first().waitFor({
+      state: "visible",
+    });
+    await inspector
+      .getByText("numerical_stagnation", { exact: true })
+      .first()
+      .waitFor({ state: "visible" });
+    await inspector
+      .getByText("no", { exact: true })
+      .first()
+      .waitFor({ state: "visible" });
+    await page.locator('[data-node-id="model:study"]').click();
 
-  await inspector
-    .getByTestId("study-stage-authoring-toolbar")
-    .getByRole("button", { name: /^Run$/i })
-    .click();
-  try {
-    await inspector.getByRole("button", { name: /Save stages/i }).click();
-  } catch (error) {
-    const inspectorText = await inspector.textContent();
-    const toolbarText = await inspector
+    await inspector
       .getByTestId("study-stage-authoring-toolbar")
-      .textContent()
-      .catch((toolbarError) =>
-        toolbarError instanceof Error ? toolbarError.message : String(toolbarError),
+      .getByRole("button", { name: /^Run$/i })
+      .click();
+    try {
+      await inspector.getByRole("button", { name: /Save stages/i }).click();
+    } catch (error) {
+      const inspectorText = await inspector.textContent();
+      const toolbarText = await inspector
+        .getByTestId("study-stage-authoring-toolbar")
+        .textContent()
+        .catch((toolbarError) =>
+          toolbarError instanceof Error ? toolbarError.message : String(toolbarError),
+        );
+      throw new Error(
+        `Save stages button was not available after adding Run. Toolbar text: ${JSON.stringify(toolbarText)}. Inspector text: ${JSON.stringify(inspectorText?.slice(0, 3000))}. ${error}`,
       );
-    throw new Error(
-      `Save stages button was not available after adding Run. Toolbar text: ${JSON.stringify(toolbarText)}. Inspector text: ${JSON.stringify(inspectorText?.slice(0, 3000))}. ${error}`,
-    );
-  }
-  await waitForTransactionCount(2);
-  await page
-    .locator('[data-node-id="model:study:stages:stage:run-2"]')
-    .waitFor({ state: "visible", timeout: timeoutMs });
-  await page.locator('[data-node-id="model:study:stages:stage:run-2"]').click();
-  await inspector.getByText("Run Results").waitFor({
-    state: "visible",
-    timeout: timeoutMs,
-  });
-  await inspector.getByText("Stage 2: Run").waitFor({
-    state: "visible",
-    timeout: timeoutMs,
-  });
-  await inspector.getByLabel("Until").fill("2e-9");
-  await inspector.getByRole("button", { name: /Save stage/i }).click();
-  await waitForTransactionCount(3);
+    }
+    await waitForTransactionCount(2);
+    await page
+      .locator('[data-node-id="model:study:stages:stage:run-2"]')
+      .waitFor({ state: "visible", timeout: timeoutMs });
+    await page.locator('[data-node-id="model:study:stages:stage:run-2"]').click();
+    await inspector.getByText("Run Results").waitFor({
+      state: "visible",
+      timeout: timeoutMs,
+    });
+    await inspector.getByText("Stage 2: Run").waitFor({
+      state: "visible",
+      timeout: timeoutMs,
+    });
+    await inspector.getByLabel("Until").fill("2e-9");
+    await inspector.getByRole("button", { name: /Save stage/i }).click();
+    await waitForTransactionCount(3);
 
-  assertGlobalTransaction(transactions[0]);
-  assertStageTransaction(transactions[2]);
-  if (relaxationOnly) {
+    assertGlobalTransaction(transactions[0]);
+    assertStageTransaction(transactions[2]);
+  }
+  if (k0Only) {
+    await authorK0ModalDemagForDevice("cpu");
+    await authorK0ModalDemagForDevice("gpu");
+  } else if (relaxationOnly) {
     // The relaxation-only lane ends after canonical authoring and terminal-state checks.
   } else if (frequencyOnly) {
     await addFrequencyResponseAndEditExcitation(3);
     await verifyFrequencyDomainModalResults();
     await verifyFrequencyDomainResponseResults();
   } else {
+    await authorK0ModalDemagForDevice("cpu");
+    await authorK0ModalDemagForDevice("gpu");
     await addHysteresisFromRibbon();
     await addEigenmodesAndEditKPath(4);
     await addEigenmodesAndEditFrequencyWindow(5);
@@ -369,9 +386,15 @@ function resourceForPath(pathname) {
   if (pathname === "/v2/sessions/current/status") return sessionStatus();
   if (
     pathname ===
-    "/v2/sessions/current/analysis/frequency-domain/manifest.v1"
+      "/v2/sessions/current/analysis/frequency-domain/manifest.v1"
   ) {
     return frequencyDomainManifest();
+  }
+  if (pathname === "/v2/sessions/current/meshing/meshes/shared-domain/manifest") {
+    return sharedDomainManifest();
+  }
+  if (pathname === "/v2/sessions/current/meshing/mesh/periodic_pairs.v1") {
+    return periodicPairs();
   }
   if (
     pathname ===
@@ -427,6 +450,13 @@ function resourceForPath(pathname) {
     return frequencyDomainResponseFieldMeta();
   }
   if (pathname === "/v2/sessions/current/model/scene") return scene;
+  if (pathname === "/v2/sessions/current/model/script") {
+    return {
+      bytes: Buffer.byteLength(canonicalPythonSourceForScene(scene)),
+      script_path: "/tmp/fullmag-study-authoring-smoke.py",
+      source: canonicalPythonSourceForScene(scene),
+    };
+  }
   if (pathname === "/v2/sessions/current/model/regions") {
     return modelRegions();
   }
@@ -486,11 +516,23 @@ function resourceForPath(pathname) {
     return {
       checkpoints: [
         {
+          artifact_ref: "artifact://equilibrium/relax-1",
+          coordinate_frame: "world",
           checkpoint_id: "study-authoring-smoke-checkpoint",
           created_at: "2026-06-02T00:00:00.000Z",
+          dt: 0,
           field_revision: 0,
+          format: "fms",
           label: "Smoke checkpoint",
+          mesh_revision: 42,
+          resume_class: "exact",
+          run_id: "run-smoke",
           scene_revision: sceneRevision,
+          source: "relax",
+          stage_id: "relax-1",
+          step: 0,
+          time_s: 0,
+          vector_count: 1,
         },
       ],
       revision: sceneRevision,
@@ -709,8 +751,8 @@ function frequencyDomainManifest() {
         linewidths: frequencyDomainCapability("reference_executable"),
         mode_field_payload: frequencyDomainCapability("reference_executable"),
         mode_tracking: frequencyDomainCapability("reference_executable"),
-        production_cpu: frequencyDomainCapability("unsupported"),
-        production_gpu: frequencyDomainCapability("unsupported"),
+        production_cpu: frequencyDomainCapability("production_qualified"),
+        production_gpu: frequencyDomainCapability("production_qualified"),
         reference_cpu: frequencyDomainCapability("reference_executable"),
       },
       response: {
@@ -812,6 +854,45 @@ function frequencyDomainManifest() {
 
 function frequencyDomainCapability(status) {
   return { reason: "", status };
+}
+
+function sharedDomainManifest() {
+  return {
+    domain_mesh_mode: "shared_magnetic_airbox",
+    generation_id: "shared-domain-k0-smoke",
+    mesh_id: "shared-domain-k0-smoke",
+    mesh_name: "K0 periodic magnetic plus airbox mesh",
+    revision: 42,
+    source_scene_revision: sceneRevision,
+    topology_fingerprint: "k0-smoke-topology-v1",
+  };
+}
+
+function periodicPairs() {
+  return {
+    pairs: [
+      {
+        pair_id: "x_faces",
+        marker_a: 101,
+        marker_b: 102,
+        paired_node_count: 12,
+        status: "certified",
+        unpaired_destination_node_count: 0,
+        unpaired_source_node_count: 0,
+      },
+      {
+        pair_id: "y_faces",
+        marker_a: 103,
+        marker_b: 104,
+        paired_node_count: 12,
+        status: "certified",
+        unpaired_destination_node_count: 0,
+        unpaired_source_node_count: 0,
+      },
+    ],
+    revision: 42,
+    schema_version: "mesh_periodic_pairs.v1",
+  };
 }
 
 function frequencyDomainSpectrum() {
@@ -1070,6 +1151,208 @@ async function addHysteresisFromRibbon() {
     .locator('[data-node-id="model:study:stages:stage:hysteresis-3"]')
     .waitFor({ state: "visible", timeout: timeoutMs });
   await assertHysteresisChildInspectors("hysteresis-3");
+}
+
+async function authorK0ModalDemagForDevice(deviceTarget) {
+  const inspector = page.locator(".fm-inspector");
+  const transactionBeforeGlobalSave = transactions.length;
+
+  await page.locator('[data-node-id="model:study"]').click();
+  await inspector.getByLabel("Device", { exact: true }).selectOption(deviceTarget);
+  await inspector.getByRole("button", { name: /Save globals/i }).click();
+  await waitForTransactionCount(transactionBeforeGlobalSave + 1);
+
+  const savedGlobal = transactions.at(-1)?.merge_patch?.study;
+  if (
+    savedGlobal?.requested_backend !== "fem" ||
+    savedGlobal?.requested_device !== deviceTarget ||
+    savedGlobal?.requested_mode !== "strict" ||
+    savedGlobal?.requested_precision !== "double"
+  ) {
+    throw new Error(
+      `K0 ${deviceTarget} global intent drifted: ${JSON.stringify(savedGlobal)}`,
+    );
+  }
+
+  const transactionBeforeStageAdd = transactions.length;
+  await page.locator(".fm-ribbon__tab").filter({ hasText: /^Study$/i }).click();
+  const eigenmodesButton = page.locator(
+    '.fm-ribbon [data-action-id="study.add-eigenmodes-stage"]',
+  );
+  await eigenmodesButton.waitFor({ state: "visible", timeout: timeoutMs });
+  await eigenmodesButton.click();
+  await waitForTransactionCount(transactionBeforeStageAdd + 1);
+
+  const stageId = `eigenmodes-${scene.study.stages.length}`;
+  const stageNode = page.locator(
+    `[data-node-id="model:study:stages:stage:${stageId}"]`,
+  );
+  await stageNode.waitFor({ state: "visible", timeout: timeoutMs });
+  await clickExplorerRow(stageNode);
+
+  await inspector.getByLabel("Mode count", { exact: true }).fill("8");
+  await inspector.getByLabel("Target", { exact: true }).selectOption("frequency_window");
+  await inspector.getByLabel("Frequency min", { exact: true }).fill("1e9");
+  await inspector.getByLabel("Frequency max", { exact: true }).fill("2e9");
+  await inspector.getByLabel("Equilibrium", { exact: true }).selectOption("relax");
+  await inspector.getByLabel("k vector", { exact: true }).fill("0,0,0");
+  await inspector.getByLabel("BC", { exact: true }).fill("periodic");
+  const magnetostaticBoundary = inspector.getByLabel("Magnetostatic BC", {
+    exact: true,
+  });
+  if ((await magnetostaticBoundary.count()) !== 1) {
+    const controls = await inspector.locator("select").evaluateAll((nodes) =>
+      nodes.map((node) => node.getAttribute("aria-label")),
+    );
+    throw new Error(
+      `K0 ${deviceTarget} magnetostatic boundary control is unavailable: ${JSON.stringify(controls)}`,
+    );
+  }
+  await magnetostaticBoundary.selectOption("periodic_airbox_k0");
+  const includeDemag = inspector.getByLabel("Include demag", { exact: true });
+  if (!(await includeDemag.isChecked())) await includeDemag.check();
+  await inspector.getByLabel("Damping", { exact: true }).selectOption("ignore");
+  const saveStage = inspector.getByRole("button", { name: "Validate stage" });
+  if (!(await saveStage.isEnabled())) {
+    throw new Error(
+      `K0 ${deviceTarget} draft remains invalid: ${JSON.stringify(await inspector.locator(".fm-inspector-validation-list").allTextContents())}`,
+    );
+  }
+  await saveStage.click();
+  await waitForTransactionCount(transactionBeforeStageAdd + 2);
+
+  const savedStage = transactions.at(-1)?.merge_patch?.study?.stages?.at(-1);
+  assertK0StageTransaction(savedStage, stageId);
+
+  const exported = await page.evaluate(async () => {
+    const response = await fetch("/v2/sessions/current/model/script");
+    if (!response.ok) {
+      throw new Error(`canonical Python export failed: ${response.status}`);
+    }
+    return response.json();
+  });
+  await assertK0CanonicalPythonRoundTrip(exported.source, deviceTarget);
+}
+
+function assertK0StageTransaction(stage, stageId) {
+  if (
+    stage?.stage_id !== stageId ||
+    stage?.kind !== "eigenmodes" ||
+    stage?.include_demag !== true ||
+    stage?.eigen_include_demag !== true ||
+    stage?.magnetostatic_bc !== "periodic_airbox_k0" ||
+    stage?.eigen_magnetostatic_bc !== "periodic_airbox_k0" ||
+    stage?.bc !== "periodic" ||
+    stage?.eigen_spin_wave_bc !== "periodic" ||
+    JSON.stringify(stage?.k_vector) !== JSON.stringify([0, 0, 0]) ||
+    stage?.target !== "frequency_window" ||
+    stage?.frequency_min !== 1e9 ||
+    stage?.frequency_max !== 2e9 ||
+    stage?.damping_policy !== "ignore"
+  ) {
+    throw new Error(`K0 modal transaction is not canonical: ${JSON.stringify(stage)}`);
+  }
+}
+
+function canonicalPythonSourceForScene(currentScene) {
+  const stage = [...currentScene.study.stages]
+    .reverse()
+    .find((candidate) =>
+      candidate.kind === "eigenmodes" &&
+      candidate.magnetostatic_bc === "periodic_airbox_k0",
+    );
+  if (!stage) return "import fullmag as fm\n";
+
+  const device = currentScene.study.requested_device === "gpu" ? "cuda" : "cpu";
+  return `import fullmag as fm
+study = fm.study('k0-control-room')
+study.engine('fem')
+study.device('${device}', precision='double')
+study.pbc(x=True, y=True, demag='periodic_airbox_k0')
+body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name='film')
+body.Ms = 800e3
+body.Aex = 13e-12
+body.m = fm.texture.uniform(1, 0, 0)
+study.demag()
+study.save('spectrum')
+study.stages.add_eigenmodes(target='frequency_window', frequency_min=${stage.frequency_min}, frequency_max=${stage.frequency_max}, include_demag=True, magnetostatic_bc='periodic_airbox_k0', k_vector=(0.0, 0.0, 0.0), bc=fm.PeriodicBC(['x_faces', 'y_faces']))
+`;
+}
+
+async function assertK0CanonicalPythonRoundTrip(source, deviceTarget) {
+  const tempDirectory = await mkdtemp(join(tmpdir(), "fullmag-k0-ui-export-"));
+  const exportedScriptPath = join(tempDirectory, "k0-exported.py");
+  const authoredScriptPath = join(tempDirectory, "k0-authored.py");
+  const expectedDevice = deviceTarget === "gpu" ? "cuda" : "cpu";
+  const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+  try {
+    await writeFile(exportedScriptPath, source, "utf8");
+    await writeFile(authoredScriptPath, pythonAuthoredK0Source(expectedDevice), "utf8");
+    const normalizedIr = lowerK0PythonSource(exportedScriptPath, repoRoot);
+    const authoredIr = lowerK0PythonSource(authoredScriptPath, repoRoot);
+    const expected = {
+      device: expectedDevice,
+      execution_mode: "strict",
+      execution_precision: "double",
+      frequency_max: 2e9,
+      frequency_min: 1e9,
+      include_demag: true,
+      k_vector: [0, 0, 0],
+      kind: "eigenmodes",
+      magnetostatic_bc: "periodic_airbox_k0",
+      requested_backend: "fem",
+      spin_wave_bc: "periodic",
+      target: "frequency_window",
+    };
+    if (!isDeepStrictEqual(normalizedIr, authoredIr)) {
+      throw new Error(
+        `K0 ${deviceTarget} UI export differs from the Python-authored normalized IR: ${JSON.stringify({ authoredIr, normalizedIr })}`,
+      );
+    }
+    if (!isDeepStrictEqual(normalizedIr, expected)) {
+      throw new Error(
+        `K0 ${deviceTarget} exported Python lowered to a different normalized IR: ${JSON.stringify({ expected, normalizedIr })}`,
+      );
+    }
+  } finally {
+    await rm(tempDirectory, { force: true, recursive: true });
+  }
+}
+
+function pythonAuthoredK0Source(device) {
+  return `import fullmag as fm
+study = fm.study('k0-python-authored')
+study.engine('fem')
+study.device('${device}', precision='double')
+study.pbc(x=True, y=True, demag='periodic_airbox_k0')
+body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name='film')
+body.Ms = 800e3
+body.Aex = 13e-12
+body.m = fm.texture.uniform(1, 0, 0)
+study.demag()
+study.save('spectrum')
+study.stages.add_eigenmodes(target='frequency_window', frequency_min=1e9, frequency_max=2e9, include_demag=True, magnetostatic_bc='periodic_airbox_k0', k_vector=(0.0, 0.0, 0.0), bc=fm.PeriodicBC(['x_faces', 'y_faces']))
+`;
+}
+
+function lowerK0PythonSource(scriptPath, repoRoot) {
+  const output = execFileSync(
+    "python3",
+    [
+      "-c",
+      `import json, sys\nfrom pathlib import Path\nimport fullmag as fm\nloaded = fm.load_problem_from_script(Path(sys.argv[1]), lightweight_assets=True)\nir = loaded.stages[-1].problem.to_ir(include_geometry_assets=False)\nstudy = ir[\"study\"]\ntarget = study[\"target\"]\nprint(json.dumps({\"requested_backend\": ir[\"backend_policy\"][\"requested_backend\"], \"execution_precision\": ir[\"backend_policy\"][\"execution_precision\"], \"execution_mode\": ir[\"validation_profile\"][\"execution_mode\"], \"device\": ir[\"problem_meta\"][\"runtime_metadata\"][\"runtime_selection\"][\"device\"], \"kind\": study[\"kind\"], \"include_demag\": study[\"operator\"][\"include_demag\"], \"magnetostatic_bc\": study[\"magnetostatic_bc\"], \"target\": target[\"kind\"], \"frequency_min\": target[\"frequency_min_hz\"], \"frequency_max\": target[\"frequency_max_hz\"], \"k_vector\": study[\"k_sampling\"][\"k_vector\"], \"spin_wave_bc\": study[\"spin_wave_bc\"][\"kind\"]}))`,
+      scriptPath,
+    ],
+    {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PYTHONPATH: join(repoRoot, "packages/fullmag-py/src"),
+      },
+    },
+  );
+  return JSON.parse(output);
 }
 
 async function addEigenmodesAndEditKPath(stageNumber) {
@@ -1958,8 +2241,8 @@ function sessionStatus() {
       field_catalog_revision: 0,
       field_revision: 0,
       fields_revision: 0,
-      mesh_build_revision: 0,
-      mesh_revision: 0,
+      mesh_build_revision: k0Only ? 42 : 0,
+      mesh_revision: k0Only ? 42 : 0,
       scalars_revision: 0,
       scene_revision: sceneRevision,
       slice_revision: 0,
@@ -2008,7 +2291,7 @@ function objectMetrics(objectId) {
 }
 
 function stageExecution() {
-  const relaxCompleted = sceneRevision === 1;
+  const relaxCompleted = k0Only || sceneRevision === 1;
   return {
     active_stage_index: null,
     active_stage_kind: null,

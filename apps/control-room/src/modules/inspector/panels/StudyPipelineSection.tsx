@@ -120,7 +120,7 @@ export function StudyPipelineSection({
   authoringFeedback,
   commandDisabledReason,
   demagEnabled = false,
-  k0ModalReadiness,
+  k0ModalReadinessFor,
   draft,
   draftIndex,
   drafts,
@@ -144,7 +144,7 @@ export function StudyPipelineSection({
   } | null;
   commandDisabledReason: StudyCommandDisabledReason;
   demagEnabled?: boolean;
-  k0ModalReadiness?: K0ModalExecutionReadiness;
+  k0ModalReadinessFor?: (draft: StudyStageDraft) => K0ModalExecutionReadiness;
   draft: StudyStageDraft | null;
   draftIndex: number;
   drafts: StudyStageDraft[];
@@ -165,7 +165,7 @@ export function StudyPipelineSection({
         backend: model.requested.backend,
         demagEnabled,
         device: model.requested.device,
-        ...k0ModalReadiness,
+        ...k0ModalReadinessFor?.(draft),
         mode: model.requested.mode,
       })
     : [];
@@ -2166,7 +2166,7 @@ function EigenmodesStageDraftFields({
       </>
     );
   }
-  if (view !== "overview") {
+  if (view !== "overview" && view !== "setup") {
     return (
       <SpectralStageDraftFields
         draft={draft}
@@ -2423,13 +2423,21 @@ function SpectralStageDraftFields({
   onUpdate: (patch: Partial<StudyStageDraft>) => void;
   view: FrequencyDomainAuthoringView;
 }) {
-  const showEquilibrium = view === "overview" || view === "equilibrium";
+  const showEquilibrium =
+    view === "overview" || view === "setup" || view === "equilibrium";
   const showOperator =
-    view === "overview" || view === "operator" || view === "solver";
+    view === "overview" ||
+    view === "setup" ||
+    view === "operator" ||
+    view === "solver";
   const showBoundary =
-    view === "overview" || view === "boundary" || view === "periodic_pairs";
+    view === "overview" ||
+    view === "setup" ||
+    view === "boundary" ||
+    view === "periodic_pairs";
   const showKSampling =
     view === "overview" ||
+    view === "setup" ||
     view === "k_sampling" ||
     view === "k_path" ||
     view === "k_grid";
