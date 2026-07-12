@@ -73,6 +73,66 @@ run-topological-charge-skyrmion-smoke device="cpu":
     case "$mode" in cpu|CPU|0) ;; *) echo "unsupported topological-charge smoke device: $mode (expected cpu)" >&2; exit 2 ;; esac; \
     cargo test -p fullmag-api analysis::topological_charge::tests::analytic_neel_skyrmion_integrates_to_unit_charge_with_known_orientation -- --exact
 
+verify-topological-charge-fdm-runtime api_port="18187":
+    just ensure-python
+    just build fullmag
+    bash -euo pipefail -c '\
+      report_dir="{{repo_root}}/.fullmag/reports/topological-charge/fdm"; \
+      api_url="http://localhost:{{api_port}}"; \
+      mkdir -p "$report_dir"; \
+      sim_pid=""; \
+      cleanup() { if [ -n "$sim_pid" ] && kill -0 "$sim_pid" >/dev/null 2>&1; then kill "$sim_pid" >/dev/null 2>&1 || true; wait "$sim_pid" >/dev/null 2>&1 || true; fi; }; \
+      trap cleanup EXIT INT TERM; \
+      PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" FULLMAG_API_PORT="{{api_port}}" FULLMAG_TOPOLOGICAL_CHARGE_BACKEND=fdm fullmag --dev -i examples/topological_charge_runtime.py > "$report_dir/runtime.log" 2>&1 & \
+      sim_pid=$!; \
+      for _ in $(seq 1 120); do \
+        curl -fsS "$api_url/v2/sessions/current/status" >/dev/null 2>&1 && break; \
+        if ! kill -0 "$sim_pid" >/dev/null 2>&1; then tail -n 120 "$report_dir/runtime.log" >&2 || true; exit 1; fi; \
+        sleep 0.5; \
+      done; \
+      curl -fsS "$api_url/v2/sessions/current/status" >/dev/null; \
+      object_id="$(python3 -c "import json, urllib.request; value=json.load(urllib.request.urlopen(\"$api_url/v2/sessions/current/model/scene\")); print(value[\"objects\"][0][\"id\"])" )"; \
+      for _ in $(seq 1 120); do \
+        if python3 scripts/capture_topological_charge_runtime.py --api-base-url "$api_url" --object-id "$object_id" --scenario fdm --output "$report_dir/summary.json" >/dev/null 2>&1 && python3 scripts/validate_topological_charge_runtime.py "$report_dir/summary.json" >/dev/null 2>&1; then break; fi; \
+        if ! kill -0 "$sim_pid" >/dev/null 2>&1; then tail -n 120 "$report_dir/runtime.log" >&2 || true; exit 1; fi; \
+        sleep 0.5; \
+      done; \
+      python3 scripts/capture_topological_charge_runtime.py --api-base-url "$api_url" --object-id "$object_id" --scenario fdm --output "$report_dir/summary.json"; \
+      python3 scripts/validate_topological_charge_runtime.py "$report_dir/summary.json"'
+
+verify-topological-charge-fem-runtime api_port="18188":
+    just ensure-python
+    just ensure-managed-fem-runtime
+    bash -euo pipefail -c '\
+      report_dir="{{repo_root}}/.fullmag/reports/topological-charge/fem-p1"; \
+      api_url="http://localhost:{{api_port}}"; \
+      mkdir -p "$report_dir"; \
+      sim_pid=""; \
+      cleanup() { if [ -n "$sim_pid" ] && kill -0 "$sim_pid" >/dev/null 2>&1; then kill "$sim_pid" >/dev/null 2>&1 || true; wait "$sim_pid" >/dev/null 2>&1 || true; fi; }; \
+      trap cleanup EXIT INT TERM; \
+      FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FDM_EXECUTION=cpu FULLMAG_FEM_EXECUTION=cpu FULLMAG_API_PORT="{{api_port}}" FULLMAG_TOPOLOGICAL_CHARGE_BACKEND=fem "{{gpu_runtime_bin}}" --dev -i examples/topological_charge_runtime.py > "$report_dir/runtime.log" 2>&1 & \
+      sim_pid=$!; \
+      for _ in $(seq 1 240); do \
+        curl -fsS "$api_url/v2/sessions/current/status" >/dev/null 2>&1 && break; \
+        if ! kill -0 "$sim_pid" >/dev/null 2>&1; then tail -n 160 "$report_dir/runtime.log" >&2 || true; exit 1; fi; \
+        sleep 0.5; \
+      done; \
+      curl -fsS "$api_url/v2/sessions/current/status" >/dev/null; \
+      object_id="$(python3 -c "import json, urllib.request; value=json.load(urllib.request.urlopen(\"$api_url/v2/sessions/current/model/scene\")); print(value[\"objects\"][0][\"id\"])" )"; \
+      for _ in $(seq 1 240); do \
+        if python3 scripts/capture_topological_charge_runtime.py --api-base-url "$api_url" --object-id "$object_id" --scenario fem_p1 --output "$report_dir/summary.json" >/dev/null 2>&1 && python3 scripts/validate_topological_charge_runtime.py "$report_dir/summary.json" >/dev/null 2>&1; then break; fi; \
+        if ! kill -0 "$sim_pid" >/dev/null 2>&1; then tail -n 160 "$report_dir/runtime.log" >&2 || true; exit 1; fi; \
+        sleep 0.5; \
+      done; \
+      python3 scripts/capture_topological_charge_runtime.py --api-base-url "$api_url" --object-id "$object_id" --scenario fem_p1 --output "$report_dir/summary.json"; \
+      python3 scripts/validate_topological_charge_runtime.py "$report_dir/summary.json"'
+
+verify-topological-charge-cross-backend:
+    just verify-topological-charge-fdm-runtime
+    just verify-topological-charge-fem-runtime
+    python3 scripts/compare_topological_charge_runtime.py --fdm .fullmag/reports/topological-charge/fdm/summary.json --fem .fullmag/reports/topological-charge/fem-p1/summary.json --output .fullmag/reports/topological-charge/cross-backend/summary.json
+    python3 scripts/validate_topological_charge_runtime.py .fullmag/reports/topological-charge/cross-backend/summary.json
+
 test-desktop:
     just check-desktop-linux-deps
     cargo +nightly test -p fullmag-desktop
@@ -89,7 +149,7 @@ verify-fem-relaxation-source-contract:
 
 verify-fem-time-domain-native-contract:
     docker compose --profile fem-gpu run --rm \
-      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_oersted_contract fem_rk_explicit_contract fem_stt_contract fem_cuda_tetra_gradient_contract fem_thermal_brown_contract fem_relaxation_source_contract fem_relaxation_energy_derivative_contract fem_relaxation_operator_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_oersted_contract && native/build/backends/fem/fem_rk_explicit_contract && native/build/backends/fem/fem_stt_contract && native/build/backends/fem/fem_cuda_tetra_gradient_contract && native/build/backends/fem/fem_thermal_brown_contract && native/build/backends/fem/fem_relaxation_source_contract && native/build/backends/fem/fem_relaxation_energy_derivative_contract && native/build/backends/fem/fem_relaxation_operator_contract'
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_oersted_contract fem_state_io_contract fem_snapshot_contract fem_rk_explicit_contract fem_stt_contract fem_cuda_tetra_gradient_contract fem_thermal_brown_contract fem_relaxation_source_contract fem_relaxation_energy_derivative_contract fem_relaxation_operator_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_oersted_contract && native/build/backends/fem/fem_state_io_contract && native/build/backends/fem/fem_snapshot_contract && native/build/backends/fem/fem_rk_explicit_contract && native/build/backends/fem/fem_stt_contract && native/build/backends/fem/fem_cuda_tetra_gradient_contract && native/build/backends/fem/fem_thermal_brown_contract && native/build/backends/fem/fem_relaxation_source_contract && native/build/backends/fem/fem_relaxation_energy_derivative_contract && native/build/backends/fem/fem_relaxation_operator_contract'
 
 # FEM-TD-OBS-003 focused Oersted observable contract.
 verify-fem-oersted-observable-contract:
@@ -99,7 +159,7 @@ verify-fem-oersted-observable-contract:
 # FEM-TD-PHY-MAT-001: native fail-closed elementwise-Ms legality contract.
 verify-fem-material-element-ms-contract:
     docker compose --profile fem-gpu run --rm \
-      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_material_fields_contract fem_mfem_context_contract fem_element_quadrature_material_contract fem_zeeman_element_quadrature_contract fem_uniaxial_element_quadrature_contract fem_cubic_element_quadrature_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_material_fields_contract && native/build/backends/fem/fem_mfem_context_contract && native/build/backends/fem/fem_element_quadrature_material_contract && native/build/backends/fem/fem_zeeman_element_quadrature_contract && native/build/backends/fem/fem_uniaxial_element_quadrature_contract && native/build/backends/fem/fem_cubic_element_quadrature_contract'
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_material_fields_contract fem_mfem_context_contract fem_element_quadrature_material_contract fem_zeeman_contract fem_zeeman_element_quadrature_contract fem_material_runtime_zeeman_contract fem_uniaxial_element_quadrature_contract fem_cubic_element_quadrature_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_material_fields_contract && native/build/backends/fem/fem_mfem_context_contract && native/build/backends/fem/fem_element_quadrature_material_contract && native/build/backends/fem/fem_zeeman_contract && native/build/backends/fem/fem_zeeman_element_quadrature_contract && native/build/backends/fem/fem_material_runtime_zeeman_contract && native/build/backends/fem/fem_uniaxial_element_quadrature_contract && native/build/backends/fem/fem_cubic_element_quadrature_contract'
 
 # FEM-TD-PHY-STT-001: source/algebra contract -> managed rebuild -> freshness -> named CPU/GPU fixture.
 verify-fem-zhang-li-skew-tetra-runtime:
@@ -198,10 +258,14 @@ verify-fem-oersted-observable-runtime:
       root=.fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_obs_003_oersted_observable_v1; \
       mkdir -p "$root"; \
       for device in cpu gpu; do \
-        set -o pipefail; FULLMAG_OERSTED_RK_INTEGRATOR=heun FULLMAG_OERSTED_RK_STEPS=8 FULLMAG_OERSTED_RK_DT_S=2.842170943040401e-14 FULLMAG_OERSTED_CURRENT_A=8e-3 just fem-managed-headless "$device" examples/fem_oersted_rk_time_convergence.py | tee "$root/${device}_driven.log"; \
-        set -o pipefail; FULLMAG_OERSTED_RK_INTEGRATOR=heun FULLMAG_OERSTED_RK_STEPS=8 FULLMAG_OERSTED_RK_DT_S=2.842170943040401e-14 FULLMAG_OERSTED_CURRENT_A=0 just fem-managed-headless "$device" examples/fem_oersted_rk_time_convergence.py | tee "$root/${device}_zero.log"; \
+        set -o pipefail; FULLMAG_OERSTED_OBSERVABLE_PURE=1 FULLMAG_OERSTED_RK_INTEGRATOR=heun FULLMAG_OERSTED_RK_STEPS=8 FULLMAG_OERSTED_RK_DT_S=2.842170943040401e-14 FULLMAG_OERSTED_CURRENT_A=8e-3 just fem-managed-headless "$device" examples/fem_oersted_rk_time_convergence.py | tee "$root/${device}_driven.log"; \
+        set -o pipefail; FULLMAG_OERSTED_OBSERVABLE_PURE=1 FULLMAG_OERSTED_RK_INTEGRATOR=heun FULLMAG_OERSTED_RK_STEPS=8 FULLMAG_OERSTED_RK_DT_S=2.842170943040401e-14 FULLMAG_OERSTED_CURRENT_A=0 just fem-managed-headless "$device" examples/fem_oersted_rk_time_convergence.py | tee "$root/${device}_zero.log"; \
       done; \
-      sha256sum "$root"/*.log | tee "$root/SHA256SUMS.txt"
+      python3 scripts/validate_fem_oersted_observable_artifacts.py \
+        --cpu-driven "$root/cpu_driven.log" --cpu-zero "$root/cpu_zero.log" \
+        --gpu-driven "$root/gpu_driven.log" --gpu-zero "$root/gpu_zero.log" \
+        --output "$root/summary.json"; \
+      sha256sum "$root"/*.log "$root/summary.json" | tee "$root/SHA256SUMS.txt"
 
 verify-fem-exchange-runtime:
     just ensure-managed-fem-runtime

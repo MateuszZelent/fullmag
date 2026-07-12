@@ -1,11 +1,12 @@
 # FEM Oersted Field
 
-- Status: native FEM CPU module contract
-- Last updated: 2026-05-18
-- Implementation: `native/backends/fem/cpu/mfem/interactions/oersted.hpp/.cpp`,
-  `native/backends/fem/cpu/mfem/interactions/oersted_cylinder.hpp/.cpp`,
-  `native/backends/fem/cpu/mfem/interactions/oersted_explicit.hpp/.cpp`
-- Test: `native/backends/fem/tests/oersted_contract.cpp`
+- Status: native FEM CPU/GPU observable contract
+- Last updated: 2026-07-12
+- Implementation: `backends/fem/cpu/mfem/interactions/oersted.hpp/.cpp`,
+  `backends/fem/cpu/mfem/interactions/oersted_cylinder.hpp/.cpp`,
+  `backends/fem/cpu/mfem/interactions/oersted_explicit.hpp/.cpp`, and the
+  corresponding `backends/fem/gpu/cuda/interactions/oersted/` realization
+- Test: `backends/fem/tests/oersted_contract.cpp`
 
 ## Pole
 
@@ -66,7 +67,9 @@ unit-current basis.  CPU field copies materialize it at the accepted
 refresh the same accepted-time `H_oe`.  The GPU keeps a device basis separate
 from device `H_oe`, materializes device `H_oe(t)` before unscaled accumulation
 into device `H_eff`, and uses that same realized buffer for synchronous copies
-and asynchronous snapshots.  Thus every public snapshot corresponds to the
+and asynchronous snapshot source selection. The latter is covered by a native
+source contract; managed artifacts validate final public fields rather than an
+independent async-staging probe. Thus every public snapshot corresponds to the
 accepted final RHS time, rather than a previous current-time or RK-stage value.
 
 Requested and resolved CPU/GPU lanes retain the existing FEM provenance; the
@@ -119,19 +122,23 @@ LLG RHS converts the final effective field to `dm/dt`.
 - The analytical cylinder is an infinite straight-conductor approximation.
 - Arbitrary 3D cylinder axes are supported after finite non-zero normalization.
 - Explicit generalized current-solution Oersted fields are supported only as a
-  precomputed nodal field buffer in this native CPU module.
+  precomputed nodal field buffer.
 - Full generalized Biot-Savart/current-transport solving remains outside this
   module.
-- GPU parity is not claimed by this module.
+- Strict native CPU/GPU parity is claimed only for the accepted-time public
+  `H_oe` observable: managed artifacts prove the `H_oe = H_eff(driven) -
+  H_eff(zero)` identity at `1e-12` (CPU) and `1e-10` (GPU). It is not a claim
+  of generalized current-transport or Oersted-energy/minimizer parity.
 
 ## Validation and deferred work
 
 The regression contract samples inside/outside Ampere-law amplitudes, sign
 changes with current, a non-unit sinusoidal envelope at two times, explicit
 nodal no-scaling, and `H_oe = H_eff(with Oersted)-H_eff(without Oersted)` on
-both requested lanes.  Sync copy and asynchronous GPU snapshots must expose
-the same accepted-time materialization.  Managed CPU/GPU runtime artifacts
-record the requested and resolved lanes.
+both requested lanes. Sync copy and asynchronous GPU snapshot source selection
+must expose the same accepted-time materialization; a standalone async-staging
+behavioral probe remains out of this record. Managed CPU/GPU runtime artifacts
+record the requested and resolved lanes and final public fields.
 
 Oersted energy/minimizer legality is deliberately deferred.  This note only
 defines a prescribed effective-field observable and must not be read as an

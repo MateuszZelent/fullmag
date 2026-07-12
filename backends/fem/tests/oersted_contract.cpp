@@ -10,6 +10,7 @@
 #include "context.hpp"
 #include "cpu/mfem/integrators/rk_explicit.hpp"
 #include "cpu/mfem/interactions/oersted.hpp"
+#include "cpu/mfem/runtime/state_io.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -548,6 +549,42 @@ void public_oersted_field_materializes_cylinder_at_explicit_time() {
             h_eff_with[i] - h_eff_without[i], at_quarter[i], 1e-15,
             "CPU H_oe equals H_eff(with Oersted)-H_eff(without Oersted)");
     }
+
+    ctx.state.current_time = 0.25;
+    std::vector<double> copied(at_quarter.size(), 0.0);
+    check(
+        fullmag::fem::context_copy_field_f64(
+            ctx,
+            FULLMAG_FEM_OBSERVABLE_H_OE,
+            copied.data(),
+            static_cast<uint64_t>(copied.size()),
+            error) == FULLMAG_FEM_OK,
+        "CPU public H_oe copy must succeed at accepted time");
+    for (size_t i = 0; i < copied.size(); ++i) {
+        check_near(
+            copied[i], h_eff_with[i] - h_eff_without[i], 1e-15,
+            "CPU context_copy H_oe equals accepted H_eff Oersted contribution");
+    }
+}
+
+void gpu_public_oersted_sync_and_async_snapshot_select_realized_buffer() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string state_io =
+        read_text_file(root / "cpu" / "mfem" / "runtime" / "state_io.cpp");
+    const std::string api = read_text_file(root / "src" / "api.cpp");
+    const std::string gpu_oersted =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_oersted_field.cu");
+
+    check(
+        state_io.find("case FULLMAG_FEM_OBSERVABLE_H_OE:\n                gpu_field = &ctx.gpu_state.device.fields.h_oe;") != std::string::npos,
+        "GPU synchronous H_oe copy must download the realized device H_oe buffer");
+    check(
+        api.find("case FULLMAG_FEM_OBSERVABLE_H_OE:\n        return &context.gpu_state.device.fields.h_oe;") != std::string::npos,
+        "GPU asynchronous H_oe snapshot must stage the realized device H_oe buffer");
+    check(
+        gpu_oersted.find("h_oe_basis_per_ampere.x, gpu.fields.h_oe.x, scale") != std::string::npos &&
+            gpu_oersted.find("gpu.fields.h_oe.x, gpu.fields.h_eff.x, 1.0") != std::string::npos,
+        "GPU RHS must materialize the basis into H_oe then add that realized field once");
 }
 
 void public_oersted_field_leaves_explicit_nodal_input_unscaled() {
@@ -611,6 +648,7 @@ int main() {
     oersted_physics_note_freezes_half_open_pulse_convention();
     explicit_oersted_field_is_added_unscaled();
     public_oersted_field_materializes_cylinder_at_explicit_time();
+    gpu_public_oersted_sync_and_async_snapshot_select_realized_buffer();
     public_oersted_field_leaves_explicit_nodal_input_unscaled();
     oersted_plan_import_validates_exclusive_realizations_and_copies_field();
     return 0;

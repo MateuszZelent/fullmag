@@ -2706,7 +2706,7 @@ pub(crate) fn field_unit(observable: &str) -> &'static str {
         .map_or(observable, |(base, _)| base);
     match base_observable {
         "m" => "dimensionless",
-        "H_ex" | "H_demag" | "H_ext" | "H_OE" | "H_eff" | "H_ani" | "H_dmi" | "H_dmi_bulk" | "H_therm" => "A/m",
+        "H_ex" | "H_demag" | "H_ext" | "H_oe" | "H_OE" | "H_eff" | "H_ani" | "H_dmi" | "H_dmi_bulk" | "H_therm" => "A/m",
         "demag_phi" => "A",
         "torque" => "T",
         other => panic!("unsupported observable '{}'", other),
@@ -5068,7 +5068,7 @@ mod tests {
             },
             initial_magnetization: vec![[1.0, 0.0, 0.0]; 8],
             field_snapshots: vec![FieldSnapshot {
-                name: "H_OE".to_string(),
+                name: "H_oe".to_string(),
                 step: 1,
                 time: 1.0e-13,
                 solver_dt: 1.0e-13,
@@ -5089,14 +5089,14 @@ mod tests {
         };
 
         write_artifacts(&output_dir, &problem, &plan, &executed, None)
-            .expect("H_OE artifact write should succeed");
+            .expect("H_oe artifact write should succeed");
 
         let field_json: serde_json::Value = serde_json::from_str(
-            &fs::read_to_string(output_dir.join("fields/H_OE/step_000001.json"))
-                .expect("H_OE artifact should exist"),
+            &fs::read_to_string(output_dir.join("fields/H_oe/step_000001.json"))
+                .expect("H_oe artifact should exist"),
         )
         .expect("H_OE artifact should parse");
-        assert_eq!(field_json["observable"], "H_OE");
+        assert_eq!(field_json["observable"], "H_oe");
         assert_eq!(field_json["unit"], "A/m");
         assert_eq!(field_json["step"], 1);
         assert_eq!(field_json["layout"]["backend"], "fdm");

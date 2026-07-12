@@ -72,6 +72,19 @@ fn current_live_metadata(
     status: &str,
 ) -> serde_json::Value {
     let runtime_engine_info = fullmag_runner::resolve_planned_runtime_engine(problem, plan).ok();
+    let resolved_execution = fullmag_runner::resolve_session_runtime(problem)
+        .ok()
+        .map(|runtime| {
+            serde_json::json!({
+                "backend": runtime.resolved_backend,
+                "device": runtime.resolved_device,
+                "precision": runtime.resolved_precision,
+                "mode": runtime.resolved_mode,
+                "runtime_family": runtime.resolved_runtime_family,
+                "engine_id": runtime.resolved_engine_id,
+                "lossy_fallback_used": runtime.resolved_fallback.is_some(),
+            })
+        });
     let capabilities = fullmag_runner::resolve_planned_runtime_capabilities(problem, plan).ok();
     let live_preview_supported_quantities = capabilities
         .as_ref()
@@ -98,6 +111,7 @@ fn current_live_metadata(
         "problem_meta": &problem.problem_meta,
         "execution_plan": plan,
         "runtime_engine": runtime_engine,
+        "resolved_execution": resolved_execution,
         "capabilities": capabilities,
         "artifact_layout": current_artifact_layout(problem, plan),
         "meshing_capabilities": current_meshing_capabilities(plan),

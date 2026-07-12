@@ -16689,6 +16689,45 @@
         ],
         "type": "object"
       },
+      "TopologicalChargeExecutionProvenance": {
+        "properties": {
+          "backend": {
+            "type": "string"
+          },
+          "device": {
+            "type": "string"
+          },
+          "engine_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lossy_fallback_used": {
+            "type": "boolean"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "precision": {
+            "type": "string"
+          },
+          "runtime_family": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "backend",
+          "device",
+          "precision",
+          "mode",
+          "lossy_fallback_used"
+        ],
+        "type": "object"
+      },
       "TopologicalChargeLayerSample": {
         "properties": {
           "charge": {
@@ -16845,6 +16884,19 @@
               "null"
             ]
           },
+          "requested_execution": {
+            "$ref": "#/components/schemas/TopologicalChargeExecutionProvenance"
+          },
+          "resolved_execution": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TopologicalChargeExecutionProvenance"
+              }
+            ]
+          },
           "scene_revision": {
             "type": "string"
           },
@@ -16872,6 +16924,7 @@
           "scene_revision",
           "domain_generation_id",
           "discretization",
+          "requested_execution",
           "cache_key_digest"
         ],
         "type": "object"

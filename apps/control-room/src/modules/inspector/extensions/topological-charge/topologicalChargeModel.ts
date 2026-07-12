@@ -40,7 +40,7 @@ const DISCRETE_EQUATION_LATEX =
 const METHOD_TERMS: TopologicalChargeMethodTerm[] = [
   {
     symbol: "\\Sigma",
-    meaning: "selected oriented 2D support: grid layer, FEM layer, surface, or plane cut",
+    meaning: "selected oriented 2D support: FDM grid plane or exact FEM P1 plane cut",
   },
   {
     symbol: "\\hat{\\mathbf m}",
@@ -52,7 +52,7 @@ const METHOD_TERMS: TopologicalChargeMethodTerm[] = [
   },
   {
     symbol: "s_i",
-    meaning: "layer or cut coordinate along the selected support normal",
+    meaning: "physical FDM-plane or FEM-cut coordinate along the selected support normal",
   },
   {
     symbol: "a, b, c",
@@ -80,6 +80,16 @@ function formatMaybeText(value: string | number | null | undefined): string {
   return value !== null && value !== undefined && String(value).length > 0
     ? String(value)
     : "unavailable";
+}
+
+function formatExecution(
+  execution: TopologicalChargeResource["provenance"]["requested_execution"] | null | undefined,
+): string {
+  if (!execution) return "unavailable";
+  const identity = [execution.backend, execution.device, execution.precision, execution.mode]
+    .filter((value) => value.length > 0)
+    .join(" / ");
+  return execution.lossy_fallback_used ? `${identity} (fallback)` : identity || "unavailable";
 }
 
 function formatSampling(resource: TopologicalChargeResource | null): string {
@@ -193,6 +203,8 @@ export function resolveTopologicalChargePanelModel(
       { label: "Mesh revision", value: formatMaybeText(data?.provenance.mesh_revision) },
       { label: "Domain generation", value: formatMaybeText(data?.provenance.domain_generation_id) },
       { label: "Mesh generation", value: formatMaybeText(data?.provenance.mesh_generation_id) },
+      { label: "Requested execution", value: formatExecution(data?.provenance.requested_execution) },
+      { label: "Resolved execution", value: formatExecution(data?.provenance.resolved_execution) },
     ],
   };
 }

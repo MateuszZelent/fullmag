@@ -76,7 +76,7 @@ export function resolveObjectExtensionsSectionModel(
 export function resolveActiveObjectExtensionExplorerItems(
   objectId: string,
   activation: ObjectExtensionActivationState,
-): Array<{ id: ObjectExtensionId; label: string; status: "ready" }> {
+): Array<{ id: ObjectExtensionId; label: string; status: "stale" }> {
   return resolveRegisteredObjectExtensions({
     kind: "object.root",
     label: objectId,
@@ -97,6 +97,9 @@ export function resolveActiveObjectExtensionExplorerItems(
     .map((extension) => ({
       id: extension.id,
       label: extension.label,
-      status: "ready",
+      // Activation makes an on-demand resource available; it does not create
+      // a scientific result. The Explorer must not advertise `ready` before
+      // the resource has actually been computed.
+      status: "stale",
     }));
 }

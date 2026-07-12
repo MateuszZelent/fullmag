@@ -7001,6 +7001,15 @@ export interface components {
             /** Format: int64 */
             total_rows: number;
         };
+        TopologicalChargeExecutionProvenance: {
+            backend: string;
+            device: string;
+            engine_id?: string | null;
+            lossy_fallback_used: boolean;
+            mode: string;
+            precision: string;
+            runtime_family?: string | null;
+        };
         TopologicalChargeLayerSample: {
             /** Format: double */
             charge?: number | null;
@@ -7055,6 +7064,8 @@ export interface components {
             field_storage_domain: string;
             mesh_generation_id?: string | null;
             mesh_revision?: string | null;
+            requested_execution: components["schemas"]["TopologicalChargeExecutionProvenance"];
+            resolved_execution?: null | components["schemas"]["TopologicalChargeExecutionProvenance"];
             scene_revision: string;
             snapshot_id?: string | null;
             source_kind: string;

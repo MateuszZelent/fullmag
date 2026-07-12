@@ -9452,6 +9452,86 @@ fn fem_linear_ms_field_plans_coefficient_sampling() {
 }
 
 #[test]
+fn fem_cpu_exchange_preserves_nodal_ms_and_conformal_element_a_payloads() {
+    let mut ir = fem_minimal_test_ir();
+    ir.materials[0].exchange_stiffness = 8e-12;
+    ir.material_parameter_fields
+        .push(fullmag_ir::MaterialParameterAssignmentIR {
+            assignment_id: "linear_ms".to_string(),
+            owner_object: "strip".to_string(),
+            region_id: None,
+            parameter: fullmag_ir::MaterialParameterNameIR::Ms,
+            value: fullmag_ir::MaterialParameterFieldIR::Linear {
+                base: 800e3,
+                gradient: [1e9, 0.0, 0.0],
+                frame: fullmag_ir::RegionFrameIR::Object,
+                unit: Some("A/m".to_string()),
+            },
+            priority: 10,
+            conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+        });
+    ir.object_regions.push(fullmag_ir::ObjectRegionIR {
+        region_id: "strip:conformal_aex".to_string(),
+        owner_object: "strip".to_string(),
+        name: "conformal_aex".to_string(),
+        shape: fullmag_ir::RegionShapeIR::Box {
+            size: [0.2, 0.2, 0.2],
+            center: [0.0, 0.0, 0.0],
+        },
+        frame: fullmag_ir::RegionFrameIR::Object,
+        enabled: true,
+        priority: 20,
+        mesh_policy: None,
+        material_overrides: vec![fullmag_ir::RegionMaterialOverrideIR {
+            parameter: fullmag_ir::MaterialParameterNameIR::Aex,
+            value: fullmag_ir::MaterialParameterFieldIR::Constant {
+                value: serde_json::json!(13e-12),
+                unit: Some("J/m".to_string()),
+            },
+            priority: 20,
+            conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+        }],
+        texture_override: None,
+        material_transition: Some(fullmag_ir::MaterialTransitionSpecIR::Sharp),
+        realization_policy: fullmag_ir::RegionRealizationPolicyIR::Conformal,
+    });
+    if let Some(assets) = ir.geometry_assets.as_mut() {
+        if let Some(domain_asset) = assets.fem_domain_mesh_asset.as_mut() {
+            if let Some(mesh) = domain_asset.mesh.as_mut() {
+                mesh.nodes.push([0.0, 0.0, -1.0]);
+                mesh.elements = vec![[0, 2, 1, 4], [0, 1, 2, 3]];
+                mesh.element_markers = vec![1, 2];
+                mesh.boundary_faces = vec![[0, 1, 3], [0, 2, 4]];
+                mesh.boundary_markers = vec![1, 2];
+            }
+            domain_asset
+                .object_region_markers
+                .push(fullmag_ir::FemDomainRegionMarkerIR {
+                    geometry_name: "strip:conformal_aex".to_string(),
+                    marker: 2,
+                });
+        }
+    }
+
+    let planned = plan(&ir).expect(
+        "CPU exchange must accept distinct nodal Ms and conformal element A realizations",
+    );
+    let BackendPlanIR::Fem(fem_plan) = planned.backend_plan else {
+        panic!("expected FEM plan");
+    };
+    assert_eq!(
+        fem_plan.material.ms_field.as_deref(),
+        Some(&[800e3, 800e3 + 1e9, 800e3, 800e3, 800e3][..]),
+        "the nodal P1 Ms payload must survive planning"
+    );
+    assert_eq!(
+        fem_plan.a_element_field.as_deref(),
+        Some(&[8e-12, 13e-12][..]),
+        "the conformal DG0 A payload must survive planning"
+    );
+}
+
+#[test]
 fn fem_object_frame_material_field_uses_owner_translation() {
     let mut ir = fem_minimal_test_ir();
     ir.geometry.entries = vec![fullmag_ir::GeometryEntryIR::Translate {
@@ -9735,7 +9815,7 @@ fn fem_sharp_aex_region_requires_conformal_in_strict() {
 }
 
 #[test]
-fn fem_sharp_conformal_ms_is_rejected_before_gpu_backend_creation() {
+fn fem_sharp_conformal_ms_rejects_conflicting_nodal_and_element_realizations() {
     let mut ir = fem_minimal_test_ir();
     ir.materials[0].saturation_magnetisation = 0.7e6;
     ir.materials[0].exchange_stiffness = 8e-12;
@@ -9802,14 +9882,12 @@ fn fem_sharp_conformal_ms_is_rejected_before_gpu_backend_creation() {
     }
     ir.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Strict;
 
-    let err = plan(&ir).expect_err(
-        "sharp conformal Ms must be rejected before a reusable CPU native handle is created",
-    );
+    let err = plan(&ir).expect_err("conflicting sharp and nodal Ms realizations must fail");
     assert!(
         err.reasons.iter().any(|reason| {
-            reason.contains("Ms_element_field")
-                && reason.contains("native FEM handle lifecycle")
-                && reason.contains("resolved device 'cpu'")
+            reason.contains("Ms")
+                && reason.contains("material.ms_field")
+                && reason.contains("ms_element_field")
         }),
         "unexpected planner errors: {:?}",
         err.reasons
@@ -9820,12 +9898,12 @@ fn fem_sharp_conformal_ms_is_rejected_before_gpu_backend_creation() {
         serde_json::json!({"device": "gpu"}),
     );
     let err = plan(&ir)
-        .expect_err("sharp conformal Ms must be rejected before a reusable GPU native handle is created");
+        .expect_err("conflicting sharp and nodal Ms realizations must fail on GPU requests too");
     assert!(
         err.reasons.iter().any(|reason| {
-            reason.contains("Ms_element_field")
-                && reason.contains("GPU material-state upload")
-                && reason.contains("resolved device 'gpu'")
+            reason.contains("Ms")
+                && reason.contains("material.ms_field")
+                && reason.contains("ms_element_field")
         }),
         "unexpected planner errors: {:?}",
         err.reasons
@@ -9834,7 +9912,113 @@ fn fem_sharp_conformal_ms_is_rejected_before_gpu_backend_creation() {
 }
 
 #[test]
-fn fem_cpu_relaxation_rejects_heterogeneous_conformal_ms_before_native_create() {
+fn fem_planner_rejects_conflicting_nodal_and_element_coefficient_realizations() {
+    for (parameter, nodal_location, element_location, value, unit) in [
+        (
+            fullmag_ir::MaterialParameterNameIR::Ms,
+            "material.ms_field",
+            "ms_element_field",
+            serde_json::json!(1.1e6),
+            "A/m",
+        ),
+        (
+            fullmag_ir::MaterialParameterNameIR::Aex,
+            "material.a_field",
+            "a_element_field",
+            serde_json::json!(8e-12),
+            "J/m",
+        ),
+    ] {
+        let mut ir = fem_minimal_test_ir();
+        let parameter_name = match parameter {
+            fullmag_ir::MaterialParameterNameIR::Ms => "Ms",
+            fullmag_ir::MaterialParameterNameIR::Aex => "A",
+            _ => unreachable!("this test only covers Ms and Aex"),
+        };
+        let (nodal_base, nodal_gradient) = match parameter {
+            fullmag_ir::MaterialParameterNameIR::Ms => (800e3, 1e9),
+            fullmag_ir::MaterialParameterNameIR::Aex => (13e-12, 1e-12),
+            _ => unreachable!("this test only covers Ms and Aex"),
+        };
+        ir.material_parameter_fields
+            .push(fullmag_ir::MaterialParameterAssignmentIR {
+                assignment_id: format!("nodal_{parameter_name}"),
+                owner_object: "strip".to_string(),
+                region_id: None,
+                parameter,
+                value: fullmag_ir::MaterialParameterFieldIR::Linear {
+                    base: nodal_base,
+                    gradient: [nodal_gradient, 0.0, 0.0],
+                    frame: fullmag_ir::RegionFrameIR::Object,
+                    unit: Some(unit.to_string()),
+                },
+                priority: 10,
+                conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+            });
+        ir.object_regions.push(fullmag_ir::ObjectRegionIR {
+            region_id: format!("strip:sharp_{parameter_name}"),
+            owner_object: "strip".to_string(),
+            name: format!("sharp_{parameter_name}"),
+            shape: fullmag_ir::RegionShapeIR::Box {
+                size: [0.2, 0.2, 0.2],
+                center: [0.0, 0.0, 0.0],
+            },
+            frame: fullmag_ir::RegionFrameIR::Object,
+            enabled: true,
+            priority: 20,
+            mesh_policy: None,
+            material_overrides: vec![fullmag_ir::RegionMaterialOverrideIR {
+                parameter,
+                value: fullmag_ir::MaterialParameterFieldIR::Constant {
+                    value,
+                    unit: Some(unit.to_string()),
+                },
+                priority: 20,
+                conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+            }],
+            texture_override: None,
+            material_transition: Some(fullmag_ir::MaterialTransitionSpecIR::Sharp),
+            realization_policy: fullmag_ir::RegionRealizationPolicyIR::Conformal,
+        });
+        let domain_asset = ir
+            .geometry_assets
+            .as_mut()
+            .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+            .expect("conflicting-realization test needs an inline domain mesh");
+        let mesh = domain_asset
+            .mesh
+            .as_mut()
+            .expect("conflicting-realization test mesh is inline");
+        mesh.nodes.push([0.0, 0.0, -1.0]);
+        mesh.elements.push([0, 2, 1, 4]);
+        mesh.element_markers.push(2);
+        mesh.boundary_faces.push([0, 2, 4]);
+        mesh.boundary_markers.push(2);
+        domain_asset
+            .object_region_markers
+            .push(fullmag_ir::FemDomainRegionMarkerIR {
+                geometry_name: format!("strip:sharp_{parameter_name}"),
+                marker: 2,
+            });
+        ir.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Strict;
+
+        let error = plan(&ir).expect_err(
+            "a nodal P1 and element DG0 payload for one FEM coefficient must be rejected",
+        );
+        assert!(
+            error.reasons.iter().any(|reason| {
+                reason.contains(parameter_name)
+                    && reason.contains(nodal_location)
+                    && reason.contains(element_location)
+            }),
+            "{parameter_name} conflict must name the coefficient and both locations: {:?}",
+            error.reasons
+        );
+    }
+}
+
+#[test]
+fn fem_cpu_relaxation_rejects_conflicting_nodal_and_element_ms_before_native_create() {
     let mut ir = fem_minimal_test_ir();
     ir.materials.push(fullmag_ir::MaterialIR {
         name: "Co".to_string(),
@@ -9964,14 +10148,13 @@ fn fem_cpu_relaxation_rejects_heterogeneous_conformal_ms_before_native_create() 
         },
         sampling: ir.study.sampling().clone(),
     };
-    let error = plan(&ir).expect_err(
-        "public CPU relaxation payload must reject elementwise Ms before native create",
-    );
+    let error = plan(&ir)
+        .expect_err("public CPU relaxation payload must reject conflicting Ms realizations");
     assert!(
         error.reasons.iter().any(|reason| {
-            reason.contains("Ms_element_field")
-                && reason.contains("native FEM handle lifecycle")
-                && reason.contains("resolved device 'cpu'")
+            reason.contains("Ms")
+                && reason.contains("material.ms_field")
+                && reason.contains("ms_element_field")
         }),
         "unexpected planner errors: {:?}",
         error.reasons

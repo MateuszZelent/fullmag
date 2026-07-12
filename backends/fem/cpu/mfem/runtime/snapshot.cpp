@@ -38,9 +38,7 @@ void apply_phase_timings(
 
 bool strict_gpu_snapshot_path(const fullmag::fem::Context &ctx)
 {
-    return ctx.gpu_state.device.lifecycle.allocated &&
-        ctx.poisson_demag.gpu_demag_mode ==
-            FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON;
+    return ctx.gpu_state.device.lifecycle.allocated;
 }
 
 bool download_gpu_snapshot_fields(fullmag::fem::Context &ctx, std::string &error)

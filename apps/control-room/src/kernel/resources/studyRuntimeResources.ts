@@ -2306,8 +2306,7 @@ export function useObjectTopologicalChargeResource(
   } = {},
 ) {
   const { api } = useKernel();
-  const query = options.query ?? {};
-  const queryToken = JSON.stringify(query);
+  const queryToken = JSON.stringify(options.query ?? {});
   const resourceKey = objectId
     ? `${ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH.replace("{object_id}", objectId)}?${queryToken}`
     : `${ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH}:none`;
@@ -2315,7 +2314,7 @@ export function useObjectTopologicalChargeResource(
     ({ signal }: { signal: AbortSignal }) =>
       objectId
         ? api.analysis.extensions.objects
-            .topologicalCharge(objectId, query, { signal })
+            .topologicalCharge(objectId, JSON.parse(queryToken) as TopologicalChargeQuery, { signal })
             .catch(ignoreMissingResource<TopologicalChargeResource>)
         : Promise.resolve(null),
     [api, objectId, queryToken],

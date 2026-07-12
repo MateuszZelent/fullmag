@@ -45,6 +45,14 @@ const readyResource: TopologicalChargeResource = {
     scene_revision: "91", mesh_revision: "17", mesh_generation_id: "mesh-gen-9",
     domain_generation_id: "domain-7", snapshot_id: null, stage_id: null,
     discretization: "fem", fe_order: 1, cache_key_digest: "digest",
+    requested_execution: {
+      backend: "fem", device: "cpu", precision: "double", mode: "strict",
+      runtime_family: null, engine_id: null, lossy_fallback_used: false,
+    },
+    resolved_execution: {
+      backend: "fem", device: "cpu", precision: "double", mode: "strict",
+      runtime_family: "native", engine_id: "fem_cpu_native", lossy_fallback_used: false,
+    },
   },
   method: { id: "berg_luescher_oriented_triangles_v2", version: "2", quantity_id: "m" },
   computed_at_unix_ms: 1_772_000_000_000,
@@ -61,6 +69,8 @@ describe("topologicalChargeModel", () => {
     expect(model.rows).toContainEqual({ label: "Trust", value: "diagnostic_resolution" });
     expect(model.rows).toContainEqual({ label: "Plane", value: "xy" });
     expect(model.rows).toContainEqual({ label: "Support", value: "layer_profile" });
+    expect(model.rows).toContainEqual({ label: "Requested execution", value: "fem / cpu / double / strict" });
+    expect(model.rows).toContainEqual({ label: "Resolved execution", value: "fem / cpu / double / strict" });
     expect(model.rows).not.toContainEqual(expect.objectContaining({ label: "Polarity" }));
   });
 

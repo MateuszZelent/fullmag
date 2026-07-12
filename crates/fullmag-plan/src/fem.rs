@@ -161,6 +161,26 @@ pub(crate) fn elementwise_material_legality_error(
     None
 }
 
+fn exclusive_coefficient_realization_error(
+    material: &fullmag_ir::MaterialIR,
+    ms_element_field: &Option<Vec<f64>>,
+    a_element_field: &Option<Vec<f64>>,
+) -> Option<String> {
+    if material.ms_field.is_some() && ms_element_field.is_some() {
+        return Some(
+            "FEM material coefficient 'Ms' has conflicting nodal P1 'material.ms_field' and element DG0 'ms_element_field' realizations"
+                .to_string(),
+        );
+    }
+    if material.a_field.is_some() && a_element_field.is_some() {
+        return Some(
+            "FEM material coefficient 'A' has conflicting nodal P1 'material.a_field' and element DG0 'a_element_field' realizations"
+                .to_string(),
+        );
+    }
+    None
+}
+
 fn domain_mesh_workflow_mode(problem: &ProblemIR) -> Option<String> {
     mesh_workflow_metadata(problem)
         .and_then(|workflow| workflow.get("domain_mesh_mode"))
@@ -1270,6 +1290,11 @@ fn build_region_material_fields(
     let mut dind_values = vec![base_material.interfacial_dmi.unwrap_or(0.0); node_count];
     let mut dbulk_values = vec![base_material.bulk_dmi.unwrap_or(0.0); node_count];
 
+    let sharp_conformal_aex_regions = sharp_conformal_parameter_regions(
+        problem,
+        fullmag_ir::MaterialParameterNameIR::Aex,
+    )?;
+
     for segment in object_segments {
         if segment.object_id == AIR_OBJECT_SEGMENT_ID {
             continue;
@@ -1302,13 +1327,14 @@ fn build_region_material_fields(
         )
         .map_err(|e| PlanError { reasons: vec![e] })?;
 
-        let aex_resolved = crate::material::resolve_spatial_parameter(
+        let aex_resolved = crate::material::resolve_spatial_parameter_excluding_regions(
             problem,
             &segment.object_id,
             fullmag_ir::MaterialParameterNameIR::Aex,
             region_material.exchange_stiffness,
             &points,
             object_translation,
+            &sharp_conformal_aex_regions,
         )
         .map_err(|e| PlanError { reasons: vec![e] })?;
 
@@ -1372,6 +1398,22 @@ fn build_region_material_fields(
     let anisotropy_axis_field =
         axes_differ(&anisotropy_axis_values, base_axis).then_some(anisotropy_axis_values);
     Ok((material, anisotropy_axis_field))
+}
+
+fn sharp_conformal_parameter_regions(
+    problem: &ProblemIR,
+    parameter: fullmag_ir::MaterialParameterNameIR,
+) -> Result<BTreeSet<String>, PlanError> {
+    let mut region_ids = BTreeSet::new();
+    for region in problem.object_regions.iter().filter(|region| region.enabled) {
+        if region.realization_policy != fullmag_ir::RegionRealizationPolicyIR::Project
+            && crate::validate::region_is_conformal(problem, region)
+            && sharp_constant_region_parameter(problem, region, parameter)?.is_some()
+        {
+            region_ids.insert(region.region_id.clone());
+        }
+    }
+    Ok(region_ids)
 }
 
 fn material_field_constant_value(field: &fullmag_ir::MaterialParameterFieldIR) -> Option<f64> {
@@ -1531,21 +1573,27 @@ fn build_conformal_region_element_fields(
             .unwrap_or(base_material);
         ms_values[element_index] = owner_material.saturation_magnetisation;
         a_values[element_index] = owner_material.exchange_stiffness;
-        if let Some(value) = sharp_constant_region_parameter(
-            problem,
-            region,
-            fullmag_ir::MaterialParameterNameIR::Ms,
-        )? {
-            ms_values[element_index] = value;
-            ms_changed = true;
-        }
-        if let Some(value) = sharp_constant_region_parameter(
-            problem,
-            region,
-            fullmag_ir::MaterialParameterNameIR::Aex,
-        )? {
-            a_values[element_index] = value;
-            a_changed = true;
+        // Explicit Project remains a nodal approximation even if a conformal
+        // marker is available. DG0 is reserved for non-Project conformal
+        // realizations, otherwise one authored coefficient acquires both
+        // public realizations.
+        if region.realization_policy != fullmag_ir::RegionRealizationPolicyIR::Project {
+            if let Some(value) = sharp_constant_region_parameter(
+                problem,
+                region,
+                fullmag_ir::MaterialParameterNameIR::Ms,
+            )? {
+                ms_values[element_index] = value;
+                ms_changed = true;
+            }
+            if let Some(value) = sharp_constant_region_parameter(
+                problem,
+                region,
+                fullmag_ir::MaterialParameterNameIR::Aex,
+            )? {
+                a_values[element_index] = value;
+                a_changed = true;
+            }
         }
     }
 
@@ -2266,7 +2314,7 @@ pub(crate) fn plan_fem(
         Vec::new()
     };
 
-    let (mut material, anisotropy_axis_field) = build_region_material_fields(
+    let (material, anisotropy_axis_field) = build_region_material_fields(
         problem,
         &base_material,
         &mesh,
@@ -2281,11 +2329,14 @@ pub(crate) fn plan_fem(
         &object_segments,
         &magnet_materials,
     )?;
-    if ms_element_field.is_some() {
-        material.ms_field = None;
-    }
-    if a_element_field.is_some() {
-        material.a_field = None;
+    if let Some(reason) = exclusive_coefficient_realization_error(
+        &material,
+        &ms_element_field,
+        &a_element_field,
+    ) {
+        return Err(PlanError {
+            reasons: vec![reason],
+        });
     }
     let requires_consistent_mass_exchange = ms_element_field.is_some();
 

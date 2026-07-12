@@ -21323,6 +21323,13 @@ async fn topological_charge_computes_uniform_fdm_grid_without_fem_mesh() {
     assert_eq!(json["resolved_support"]["plane"], "xy");
     assert_eq!(json["quality"]["total_vertex_count"], 9);
     assert_eq!(json["quality"]["valid_vertex_count"], 9);
+    assert_eq!(json["quality"]["total_triangle_count"], 8);
+    assert_eq!(json["quality"]["valid_triangle_count"], 8);
+    assert_eq!(json["quality"]["connected_component_count"], 1);
+    assert_eq!(json["quality"]["boundary_edge_count"], 8);
+    assert_eq!(json["quality"]["boundary_loop_count"], 1);
+    assert_eq!(json["quality"]["euler_characteristic"], 1);
+    assert_eq!(json["quality"]["boundary_max_deviation_rad"], 0.0);
     assert!(json["charge"].as_f64().unwrap().abs() < 1.0e-6);
     assert_eq!(json["trust"], "qualified");
     assert_eq!(json["nearest_integer"], 0);
@@ -21565,6 +21572,13 @@ async fn topological_charge_computes_uniform_fem_object_from_native_layer_faces(
     assert_eq!(json["resolved_support"]["plane"], "xy");
     assert_eq!(json["quality"]["total_vertex_count"], 3);
     assert_eq!(json["quality"]["valid_vertex_count"], 3);
+    assert_eq!(json["quality"]["total_triangle_count"], 1);
+    assert_eq!(json["quality"]["connected_component_count"], 1);
+    assert_eq!(json["quality"]["boundary_loop_count"], 1);
+    assert_eq!(json["quality"]["euler_characteristic"], 1);
+    assert_eq!(json["trust"], "qualified");
+    assert_eq!(json["nearest_integer"], 0);
+    assert_eq!(json["integer_error"], 0.0);
     assert!(json["profile"].as_array().unwrap().is_empty());
     assert_eq!(json["provenance"]["domain_generation_id"], "42");
     assert!(json["charge"].as_f64().unwrap().abs() < 1.0e-6);

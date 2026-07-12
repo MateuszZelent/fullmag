@@ -18,6 +18,7 @@ set(FEM_SOURCES
     core/fem_context_builder.cpp
     core/fem_element_quadrature_material.cpp
     core/fem_material_fields.cpp
+    core/fem_material_runtime.cpp
     core/fem_mesh.cpp
     core/fem_plan_fields.cpp
     core/fem_state.cpp
@@ -776,6 +777,17 @@ target_include_directories(fem_zeeman_element_quadrature_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 add_test(NAME fem_zeeman_element_quadrature_contract COMMAND fem_zeeman_element_quadrature_contract)
+
+add_executable(
+    fem_material_runtime_zeeman_contract
+    tests/fem_material_runtime_zeeman_contract.cpp
+)
+target_link_libraries(fem_material_runtime_zeeman_contract PRIVATE fullmag_fem)
+target_include_directories(fem_material_runtime_zeeman_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_material_runtime_zeeman_contract COMMAND fem_material_runtime_zeeman_contract)
 
 add_executable(
     fem_uniaxial_element_quadrature_contract

@@ -84,6 +84,29 @@ double independent_mass_bilinear(
     return result;
 }
 
+double independent_active_ms_mass_bilinear(
+    const std::vector<fullmag::fem::P1TetrahedronMaterialTopology> &elements,
+    const std::vector<std::size_t> &active_elements,
+    const std::vector<double> &ms,
+    const std::vector<double> &left,
+    const std::vector<double> &right)
+{
+    double result = 0.0;
+    for (const std::size_t e : active_elements) {
+        double local = 0.0;
+        for (std::size_t i = 0; i < 4; ++i) {
+            for (std::size_t j = 0; j < 4; ++j) {
+                const double coefficient = i == j ? 2.0 : 1.0;
+                local += coefficient *
+                    left.at(static_cast<std::size_t>(elements.at(e).node_ids[i])) *
+                    right.at(static_cast<std::size_t>(elements.at(e).node_ids[j]));
+            }
+        }
+        result += ms.at(e) * elements.at(e).volume_m3 * local / 20.0;
+    }
+    return result;
+}
+
 void two_tetra_sharp_ms_is_integrated_by_element_not_shared_node() {
     const std::vector<fullmag::fem::P1TetrahedronMaterialTopology> elements = {
         {{{0, 1, 2, 3}}, 1.0 / 6.0},
@@ -193,11 +216,219 @@ void topology_and_digest_contract_is_canonical_and_complete() {
           "element-map digest must canonicalize DG0 A signed zero");
 }
 
+void independent_locations_preserve_dg0_ms_without_shared_node_smearing() {
+    const std::vector<fullmag::fem::P1TetrahedronMaterialTopology> elements = {
+        {{{0, 1, 2, 3}}, 1.0 / 6.0},
+        {{{0, 1, 2, 4}}, 1.0 / 3.0},
+    };
+    const std::vector<double> ms = {0.7e6, 1.1e6};
+    const std::vector<double> nodal_a = {8e-12, 9e-12, 10e-12, 11e-12, 12e-12};
+    const std::vector<double> left = {1.0, -2.0, 3.0, 4.0, -5.0};
+    const std::vector<double> right = {-1.0, 2.0, 0.5, 3.0, 6.0};
+
+    const fullmag::fem::P1TetrahedralMaterialRealization material(
+        5u,
+        elements,
+        {0u, 1u},
+        {fullmag::fem::MaterialCoefficientLocation::element_dg0, ms},
+        {fullmag::fem::MaterialCoefficientLocation::nodal_p1, nodal_a});
+
+    check(material.ms_location() == fullmag::fem::MaterialCoefficientLocation::element_dg0,
+          "independent core must retain the Ms DG0 location tag");
+    check(material.a_location() == fullmag::fem::MaterialCoefficientLocation::nodal_p1,
+          "independent core must retain the A P1 location tag");
+    check(material.ms_values() == ms && material.a_values() == nodal_a,
+          "independent coefficient values must survive without a shared-node average");
+    check(close_enough(
+              material.ms_weighted_mass_bilinear(left, right),
+              independent_mass_bilinear(elements, ms, left, right)),
+          "DG0 Ms mass primitive must retain exact per-element two-tetra weights");
+}
+
+void active_scope_integrates_only_its_explicit_tetrahedral_subset() {
+    const std::vector<fullmag::fem::P1TetrahedronMaterialTopology> elements = {
+        {{{0, 1, 2, 3}}, 1.0 / 6.0},
+        {{{0, 1, 2, 4}}, 1.0 / 3.0},
+    };
+    const std::vector<std::size_t> active = {1u};
+    const std::vector<double> ms = {0.7e6, 1.1e6};
+    const std::vector<double> a = {8e-12, 13e-12};
+    const std::vector<double> left = {1.0, -2.0, 3.0, 4.0, -5.0};
+    const std::vector<double> right = {-1.0, 2.0, 0.5, 3.0, 6.0};
+
+    const fullmag::fem::P1TetrahedralMaterialRealization material(
+        5u,
+        elements,
+        active,
+        {fullmag::fem::MaterialCoefficientLocation::element_dg0, ms},
+        {fullmag::fem::MaterialCoefficientLocation::element_dg0, a});
+
+    const double expected = independent_active_ms_mass_bilinear(
+        elements, active, ms, left, right);
+    const double all_topology = independent_mass_bilinear(elements, ms, left, right);
+    check(!close_enough(expected, all_topology),
+          "two-tetra active-scope oracle must distinguish subset {1} from all topology");
+    check(close_enough(material.ms_weighted_mass_bilinear(left, right), expected),
+          "active scope {1} must integrate only tetrahedron 1");
+}
+
+void reverse_independent_locations_and_digest_are_explicit() {
+    const std::vector<fullmag::fem::P1TetrahedronMaterialTopology> elements = {
+        {{{0, 1, 2, 3}}, 1.0 / 6.0},
+        {{{0, 1, 2, 4}}, 1.0 / 3.0},
+    };
+    const std::vector<double> nodal_ms = {0.7e6, 0.8e6, 0.9e6, 1.0e6, 1.1e6};
+    const std::vector<double> dg0_a = {8e-12, 13e-12};
+    const fullmag::fem::P1TetrahedralMaterialRealization baseline(
+        5u,
+        elements,
+        {0u, 1u},
+        {fullmag::fem::MaterialCoefficientLocation::nodal_p1, nodal_ms},
+        {fullmag::fem::MaterialCoefficientLocation::element_dg0, dg0_a});
+
+    check(baseline.ms_location() == fullmag::fem::MaterialCoefficientLocation::nodal_p1 &&
+              baseline.a_location() == fullmag::fem::MaterialCoefficientLocation::element_dg0,
+          "reverse legal Ms-P1/A-DG0 combination must preserve both location tags");
+    check(baseline.ms_values() == nodal_ms && baseline.a_values() == dg0_a,
+          "reverse legal coefficient values must remain in their native representations");
+
+    const fullmag::fem::P1TetrahedralMaterialRealization changed_scope(
+        5u,
+        elements,
+        {1u},
+        {fullmag::fem::MaterialCoefficientLocation::nodal_p1, nodal_ms},
+        {fullmag::fem::MaterialCoefficientLocation::element_dg0, dg0_a});
+    const fullmag::fem::P1TetrahedralMaterialRealization changed_location(
+        5u,
+        elements,
+        {0u, 1u},
+        {fullmag::fem::MaterialCoefficientLocation::uniform, {0.7e6}},
+        {fullmag::fem::MaterialCoefficientLocation::element_dg0, dg0_a});
+    std::vector<double> changed_ms = nodal_ms;
+    changed_ms[4] = 1.2e6;
+    const fullmag::fem::P1TetrahedralMaterialRealization changed_values(
+        5u,
+        elements,
+        {0u, 1u},
+        {fullmag::fem::MaterialCoefficientLocation::nodal_p1, changed_ms},
+        {fullmag::fem::MaterialCoefficientLocation::element_dg0, dg0_a});
+    std::vector<double> changed_a = dg0_a;
+    changed_a[1] = 14e-12;
+    const fullmag::fem::P1TetrahedralMaterialRealization changed_a_values(
+        5u,
+        elements,
+        {0u, 1u},
+        {fullmag::fem::MaterialCoefficientLocation::nodal_p1, nodal_ms},
+        {fullmag::fem::MaterialCoefficientLocation::element_dg0, changed_a});
+    std::vector<fullmag::fem::P1TetrahedronMaterialTopology> changed_topology = elements;
+    changed_topology[1].volume_m3 = 0.25;
+    const fullmag::fem::P1TetrahedralMaterialRealization changed_topology_digest(
+        5u,
+        changed_topology,
+        {0u, 1u},
+        {fullmag::fem::MaterialCoefficientLocation::nodal_p1, nodal_ms},
+        {fullmag::fem::MaterialCoefficientLocation::element_dg0, dg0_a});
+    check(baseline.material_realization_hash() != changed_scope.material_realization_hash(),
+          "material realization digest must bind ordered active-element scope");
+    check(baseline.material_realization_hash() != changed_location.material_realization_hash(),
+          "material realization digest must bind each coefficient location tag");
+    check(baseline.material_realization_hash() != changed_values.material_realization_hash(),
+          "material realization digest must bind each coefficient value");
+    check(baseline.material_realization_hash() != changed_a_values.material_realization_hash(),
+          "material realization digest must bind A values independently of Ms");
+    check(baseline.material_realization_hash() != changed_topology_digest.material_realization_hash(),
+          "material realization digest must bind positive physical topology volumes");
+}
+
+void p1_realization_canonicalizes_a_signed_zero_before_value_and_digest() {
+    const std::vector<fullmag::fem::P1TetrahedronMaterialTopology> elements = {
+        {{{0, 1, 2, 3}}, 1.0 / 6.0},
+        {{{0, 1, 2, 4}}, 1.0 / 3.0},
+    };
+    const std::vector<double> nodal_ms = {0.7e6, 0.8e6, 0.9e6, 1.0e6, 1.1e6};
+    const std::vector<double> negative_zero_a = {-0.0, 9e-12, 10e-12, 11e-12, 12e-12};
+    const std::vector<double> positive_zero_a = {0.0, 9e-12, 10e-12, 11e-12, 12e-12};
+    const fullmag::fem::P1TetrahedralMaterialRealization negative_zero(
+        5u,
+        elements,
+        {0u, 1u},
+        {fullmag::fem::MaterialCoefficientLocation::nodal_p1, nodal_ms},
+        {fullmag::fem::MaterialCoefficientLocation::nodal_p1, negative_zero_a});
+    const fullmag::fem::P1TetrahedralMaterialRealization positive_zero(
+        5u,
+        elements,
+        {0u, 1u},
+        {fullmag::fem::MaterialCoefficientLocation::nodal_p1, nodal_ms},
+        {fullmag::fem::MaterialCoefficientLocation::nodal_p1, positive_zero_a});
+
+    check(!std::signbit(negative_zero.a_values().at(0u)),
+          "P1 A signed zero must be normalized at the realization boundary");
+    check(negative_zero.a_values() == positive_zero.a_values(),
+          "P1 A signed-zero realization values must be canonicalized before storage");
+    check(negative_zero.material_realization_hash() == positive_zero.material_realization_hash(),
+          "P1 A signed-zero realization digest must be canonicalized before hashing");
+}
+
+void independent_realization_rejects_invalid_scope_and_location_extent() {
+    const std::vector<fullmag::fem::P1TetrahedronMaterialTopology> elements = {
+        {{{0, 1, 2, 3}}, 1.0 / 6.0},
+        {{{0, 1, 2, 4}}, 1.0 / 3.0},
+    };
+    const fullmag::fem::MaterialCoefficientValues ms = {
+        fullmag::fem::MaterialCoefficientLocation::element_dg0, {0.7e6, 1.1e6}};
+    const fullmag::fem::MaterialCoefficientValues a = {
+        fullmag::fem::MaterialCoefficientLocation::nodal_p1,
+        {8e-12, 9e-12, 10e-12, 11e-12, 12e-12}};
+    expect_invalid_argument(
+        [&] {
+            (void)fullmag::fem::P1TetrahedralMaterialRealization(
+                5u, elements, {0u, 2u}, ms, a);
+        },
+        "active-element scope must reject ordinals outside ordered topology");
+    expect_invalid_argument(
+        [&] {
+            (void)fullmag::fem::P1TetrahedralMaterialRealization(
+                5u, elements, {0u, 0u}, ms, a);
+        },
+        "active-element scope must reject duplicate ordinals");
+    expect_invalid_argument(
+        [&] {
+            (void)fullmag::fem::P1TetrahedralMaterialRealization(
+                5u,
+                elements,
+                {0u, 1u},
+                {fullmag::fem::MaterialCoefficientLocation::nodal_p1, {0.7e6}},
+                a);
+        },
+        "P1 coefficient values must match node count exactly");
+    std::vector<fullmag::fem::P1TetrahedronMaterialTopology> negative_volume = elements;
+    negative_volume[1].volume_m3 = -1.0;
+    expect_invalid_argument(
+        [&] {
+            (void)fullmag::fem::P1TetrahedralMaterialRealization(
+                5u, negative_volume, {0u, 1u}, ms, a);
+        },
+        "material realization must reject non-positive physical tetra volume");
+    std::vector<fullmag::fem::P1TetrahedronMaterialTopology> duplicate_node = elements;
+    duplicate_node[0].node_ids = {{0u, 0u, 2u, 3u}};
+    expect_invalid_argument(
+        [&] {
+            (void)fullmag::fem::P1TetrahedralMaterialRealization(
+                5u, duplicate_node, {0u, 1u}, ms, a);
+        },
+        "material realization must reject duplicate P1 tetra node IDs");
+}
+
 } // namespace
 
 int main() {
     two_tetra_sharp_ms_is_integrated_by_element_not_shared_node();
     topology_and_digest_contract_is_canonical_and_complete();
+    independent_locations_preserve_dg0_ms_without_shared_node_smearing();
+    active_scope_integrates_only_its_explicit_tetrahedral_subset();
+    reverse_independent_locations_and_digest_are_explicit();
+    p1_realization_canonicalizes_a_signed_zero_before_value_and_digest();
+    independent_realization_rejects_invalid_scope_and_location_extent();
     std::puts("PASS: FEM element-quadrature material contract");
     return 0;
 }

@@ -1,7 +1,9 @@
 #pragma once
 
 #include "fullmag_fem.h"
+#include "core/fem_material_runtime.hpp"
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -31,6 +33,7 @@ struct FemMaterialFieldsRuntimeState {
     std::vector<double> Kc3_field;
     std::vector<double> Ms_element_field;
     std::vector<double> A_element_field;
+    std::optional<FemMaterialRuntimeAdapter> runtime;
 };
 
 /*

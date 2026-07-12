@@ -178,6 +178,16 @@ bool validate_material_fields(const Context &ctx, std::string &error) {
             error)) {
         return false;
     }
+    if (!ctx.material_fields.Ms_field.empty() &&
+        !ctx.material_fields.Ms_element_field.empty()) {
+        error = "FEM material coefficient 'Ms' has conflicting nodal P1 'ms_field' and element DG0 'ms_element_field' realizations";
+        return false;
+    }
+    if (!ctx.material_fields.A_field.empty() &&
+        !ctx.material_fields.A_element_field.empty()) {
+        error = "FEM material coefficient 'A' has conflicting nodal P1 'a_field' and element DG0 'a_element_field' realizations";
+        return false;
+    }
     if (!validate_field_values(ctx.material_fields.Ms_field, "Ms_field", true, false, error) ||
         !validate_field_values(ctx.material_fields.A_field, "A_field", true, true, error) ||
         !validate_field_values(ctx.material_fields.alpha_field, "alpha_field", true, true, error) ||

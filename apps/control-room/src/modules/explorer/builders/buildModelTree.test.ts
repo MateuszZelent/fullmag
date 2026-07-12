@@ -441,7 +441,7 @@ describe("buildModelTree", () => {
       label: "Topological Charge",
       objectId: "permalloy_layer",
       parentId: "model:object:permalloy_layer",
-      status: "ready",
+      status: "stale",
     });
     expect(flattened.map((node) => node.id)).not.toContain(
       "model:object:cofeb_ring:extensions:topological_charge",

@@ -140,6 +140,7 @@ function TopologicalChargeProfileTable({
             <th scope="col">weight (m)</th>
             <th scope="col">Q(s)</th>
             <th scope="col">status</th>
+            <th scope="col">trust</th>
           </tr>
         </thead>
         <tbody>
@@ -150,6 +151,7 @@ function TopologicalChargeProfileTable({
               <td>{sample.integration_weight_m.toExponential(3)}</td>
               <td>{typeof sample.charge === "number" ? sample.charge.toFixed(6) : "unavailable"}</td>
               <td>{sample.status}</td>
+              <td>{sample.trust}</td>
             </tr>
           ))}
         </tbody>

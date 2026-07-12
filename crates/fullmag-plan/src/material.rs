@@ -2,6 +2,7 @@ use fullmag_ir::{
     GeometryEntryIR, MaterialFieldLocationIR, MaterialFieldPlan, MaterialFieldSourceKind,
     MaterialParameterFieldIR, MaterialParameterNameIR, ProblemIR, RegionFrameIR, RegionShapeIR,
 };
+use std::collections::BTreeSet;
 
 fn geometry_translation(entry: &GeometryEntryIR) -> [f64; 3] {
     match entry {
@@ -240,6 +241,26 @@ pub(crate) fn resolve_spatial_parameter(
     points: &[[f64; 3]],
     object_translation: [f64; 3],
 ) -> Result<Vec<f64>, String> {
+    resolve_spatial_parameter_excluding_regions(
+        problem,
+        owner_object_id,
+        parameter,
+        base_value,
+        points,
+        object_translation,
+        &BTreeSet::new(),
+    )
+}
+
+pub(crate) fn resolve_spatial_parameter_excluding_regions(
+    problem: &ProblemIR,
+    owner_object_id: &str,
+    parameter: MaterialParameterNameIR,
+    base_value: f64,
+    points: &[[f64; 3]],
+    object_translation: [f64; 3],
+    excluded_region_ids: &BTreeSet<String>,
+) -> Result<Vec<f64>, String> {
     // Gather active object regions for this owner
     let enabled_regions = problem
         .object_regions
@@ -249,6 +270,9 @@ pub(crate) fn resolve_spatial_parameter(
 
     let mut overrides = Vec::new();
     for region in &enabled_regions {
+        if excluded_region_ids.contains(&region.region_id) {
+            continue;
+        }
         for material_override in &region.material_overrides {
             if material_override.parameter == parameter {
                 overrides.push((
@@ -265,6 +289,13 @@ pub(crate) fn resolve_spatial_parameter(
     // Material parameter fields matching owner and parameter
     for field in &problem.material_parameter_fields {
         if field.owner_object == owner_object_id && field.parameter == parameter {
+            if field
+                .region_id
+                .as_ref()
+                .is_some_and(|region_id| excluded_region_ids.contains(region_id))
+            {
+                continue;
+            }
             let active = if let Some(region_id) = field.region_id.as_deref() {
                 enabled_regions.iter().any(|r| r.region_id == region_id)
             } else {

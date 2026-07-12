@@ -14,6 +14,7 @@
 #include "context.hpp"
 #include "core/fem_field_buffers.hpp"
 #include "core/fem_material_fields.hpp"
+#include "core/fem_material_runtime.hpp"
 #include "core/fem_mesh.hpp"
 #include "core/fem_plan_fields.hpp"
 #include "core/fem_state.hpp"
@@ -73,6 +74,10 @@ bool build_context_from_plan(
     initialize_mfem_device_plan_fields(ctx, plan);
 
     if (!validate_material_fields(ctx, error)) {
+        return false;
+    }
+
+    if (!initialize_material_runtime(ctx, error)) {
         return false;
     }
 
