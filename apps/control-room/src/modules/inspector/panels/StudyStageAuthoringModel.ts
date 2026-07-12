@@ -783,6 +783,8 @@ export function studyStageDraftToSceneStage(
     setOptionalNumber(stage, "eigen_frequency_min", draft.frequencyMin);
     setOptionalNumber(stage, "eigen_frequency_max", draft.frequencyMax);
     setOptionalText(stage, "eigen_k_path", draft.kPath);
+    stage.magnetostatic_bc = requiredText(draft.magnetostaticBc, "open");
+    stage.eigen_magnetostatic_bc = stage.magnetostatic_bc;
     return stage;
   }
   if (draft.kind === "frequency_response") {
@@ -1047,6 +1049,12 @@ export function validateStudyStageDraft(
       SUPPORTED_FREQUENCY_MAGNETOSTATIC_BCS,
       "Magnetostatic BC",
     );
+    if (draft.magnetostaticBc === "periodic_airbox_k0") {
+      if (!draft.includeDemag) issues.push({ severity: "error", message: "periodic_airbox_k0 requires demag." });
+      if (draft.bc !== "periodic") issues.push({ severity: "error", message: "periodic_airbox_k0 requires periodic spin-wave BC." });
+      if (draft.kVector !== "0,0,0" && draft.kVector !== "0, 0, 0") issues.push({ severity: "error", message: "periodic_airbox_k0 requires k=(0,0,0)." });
+      if (draft.dampingPolicy !== "ignore") issues.push({ severity: "error", message: "periodic_airbox_k0 requires zero damping." });
+    }
     return issues;
   }
   if (draft.kind === "frequency_response") {
