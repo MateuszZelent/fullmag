@@ -272,6 +272,61 @@ void active_scope_integrates_only_its_explicit_tetrahedral_subset() {
           "active scope {1} must integrate only tetrahedron 1");
 }
 
+void dg0_ms_allows_canonical_zero_only_on_inactive_air_elements() {
+    const std::vector<fullmag::fem::P1TetrahedronMaterialTopology> elements = {
+        {{{0u, 1u, 2u, 3u}}, 1.0 / 6.0},
+        {{{0u, 1u, 2u, 4u}}, 1.0 / 3.0},
+        {{{0u, 1u, 3u, 5u}}, 1.0 / 2.0},
+    };
+    const std::vector<std::size_t> active = {0u, 1u};
+    const std::vector<double> ms_with_air = {0.7e6, 1.1e6, -0.0};
+    const std::vector<double> a = {8e-12, 13e-12, 0.0};
+    const std::vector<double> left = {1.0, -2.0, 3.0, 4.0, -5.0, 6.0};
+    const std::vector<double> right = {-1.0, 2.0, 0.5, 3.0, 6.0, -4.0};
+
+    const fullmag::fem::P1TetrahedralMaterialRealization with_air(
+        6u,
+        elements,
+        active,
+        {fullmag::fem::MaterialCoefficientLocation::element_dg0, ms_with_air},
+        {fullmag::fem::MaterialCoefficientLocation::element_dg0, a});
+    const std::vector<fullmag::fem::P1TetrahedronMaterialTopology> active_elements = {
+        elements[0u], elements[1u]};
+    const fullmag::fem::P1TetrahedralMaterialRealization without_air(
+        6u,
+        active_elements,
+        active,
+        {fullmag::fem::MaterialCoefficientLocation::element_dg0, {0.7e6, 1.1e6}},
+        {fullmag::fem::MaterialCoefficientLocation::element_dg0, {8e-12, 13e-12}});
+
+    check(!std::signbit(with_air.ms_values().at(2u)),
+          "inactive DG0 Ms signed zero must canonicalize before storage");
+    check(close_enough(
+              with_air.ms_weighted_mass_bilinear(left, right),
+              without_air.ms_weighted_mass_bilinear(left, right)),
+          "inactive zero-Ms air must not alter the active exact M_Ms bilinear");
+    expect_invalid_argument(
+        [&] {
+            (void)fullmag::fem::P1TetrahedralMaterialRealization(
+                6u,
+                elements,
+                active,
+                {fullmag::fem::MaterialCoefficientLocation::element_dg0, {0.0, 1.1e6, 0.0}},
+                {fullmag::fem::MaterialCoefficientLocation::element_dg0, a});
+        },
+        "active DG0 Ms zero must reject");
+    expect_invalid_argument(
+        [&] {
+            (void)fullmag::fem::P1TetrahedralMaterialRealization(
+                6u,
+                elements,
+                active,
+                {fullmag::fem::MaterialCoefficientLocation::element_dg0, {0.7e6, 1.1e6, -1.0}},
+                {fullmag::fem::MaterialCoefficientLocation::element_dg0, a});
+        },
+        "inactive DG0 Ms negative value must reject");
+}
+
 void reverse_independent_locations_and_digest_are_explicit() {
     const std::vector<fullmag::fem::P1TetrahedronMaterialTopology> elements = {
         {{{0, 1, 2, 3}}, 1.0 / 6.0},
@@ -419,6 +474,32 @@ void independent_realization_rejects_invalid_scope_and_location_extent() {
         "material realization must reject duplicate P1 tetra node IDs");
 }
 
+void dg0_checked_accessors_reject_wrong_location_and_out_of_range_ordinal() {
+    const std::vector<fullmag::fem::P1TetrahedronMaterialTopology> elements = {
+        {{{0, 1, 2, 3}}, 1.0 / 6.0},
+        {{{0, 1, 2, 4}}, 1.0 / 3.0},
+    };
+    const fullmag::fem::P1TetrahedralMaterialRealization dg0_ms_nodal_a(
+        5u,
+        elements,
+        {0u, 1u},
+        {fullmag::fem::MaterialCoefficientLocation::element_dg0, {0.7e6, 1.1e6}},
+        {fullmag::fem::MaterialCoefficientLocation::nodal_p1,
+         {8e-12, 9e-12, 10e-12, 11e-12, 12e-12}});
+    check(dg0_ms_nodal_a.ms_a_per_m(1u) == 1.1e6,
+          "DG0 Ms accessor must return the ordered element value");
+    try {
+        (void)dg0_ms_nodal_a.a_j_per_m(0u);
+        check(false, "DG0 A accessor must reject a non-DG0 A realization");
+    } catch (const std::logic_error &) {
+    }
+    try {
+        (void)dg0_ms_nodal_a.ms_a_per_m(2u);
+        check(false, "DG0 Ms accessor must reject an out-of-range element ordinal");
+    } catch (const std::out_of_range &) {
+    }
+}
+
 } // namespace
 
 int main() {
@@ -426,9 +507,11 @@ int main() {
     topology_and_digest_contract_is_canonical_and_complete();
     independent_locations_preserve_dg0_ms_without_shared_node_smearing();
     active_scope_integrates_only_its_explicit_tetrahedral_subset();
+    dg0_ms_allows_canonical_zero_only_on_inactive_air_elements();
     reverse_independent_locations_and_digest_are_explicit();
     p1_realization_canonicalizes_a_signed_zero_before_value_and_digest();
     independent_realization_rejects_invalid_scope_and_location_extent();
+    dg0_checked_accessors_reject_wrong_location_and_out_of_range_ordinal();
     std::puts("PASS: FEM element-quadrature material contract");
     return 0;
 }

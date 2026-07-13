@@ -272,6 +272,32 @@ void material_plan_import_rejects_conflicting_nodal_and_element_realizations() {
     }
 }
 
+void native_dg0_ms_validation_uses_the_realized_magnetic_element_mask() {
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = 6u;
+    ctx.mesh.n_elements = 3u;
+    ctx.mesh.magnetic_element_mask = {1u, 1u, 0u};
+    ctx.material_fields.material.saturation_magnetisation = 0.8e6;
+    ctx.material_fields.material.exchange_stiffness = 13e-12;
+    ctx.material_fields.material.damping = 0.1;
+    ctx.material_fields.material.gyromagnetic_ratio = 2.211e5;
+    ctx.material_fields.Ms_element_field = {0.7e6, 1.1e6, 0.0};
+
+    std::string error;
+    check(
+        fullmag::fem::validate_material_fields(ctx, error),
+        "native material validation must accept canonical zero DG0 Ms in inactive air");
+
+    ctx.material_fields.Ms_element_field[0u] = 0.0;
+    check(
+        !fullmag::fem::validate_material_fields(ctx, error),
+        "native material validation must reject zero DG0 Ms in an active element");
+    ctx.material_fields.Ms_element_field = {0.7e6, 1.1e6, -1.0};
+    check(
+        !fullmag::fem::validate_material_fields(ctx, error),
+        "native material validation must reject a negative DG0 Ms in inactive air");
+}
+
 void elementwise_material_runtime_support_distinguishes_a_from_ms() {
     fullmag::fem::Context ctx;
     std::string error;
@@ -530,6 +556,7 @@ int main() {
     material_field_helpers_are_owned_by_core_module();
     material_plan_import_and_validation_contract();
     material_plan_import_rejects_conflicting_nodal_and_element_realizations();
+    native_dg0_ms_validation_uses_the_realized_magnetic_element_mask();
     elementwise_material_runtime_support_distinguishes_a_from_ms();
     elementwise_material_context_builder_fails_closed_before_backend_initialization();
     return 0;

@@ -1,0 +1,47 @@
+# MESH-REGION-011 — Region realization revisions Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use `subagent-driven-development` (recommended) or `executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** System rozróżnia identity grid/topology, region membership, coefficient realization i initial state, aby unieważniać dokładnie zależne zasoby.
+
+**Architecture:** Session publikuje jawne monotoniczne revisions/digests i dependency graph. Region mutation classifier z MESH-REGION-001 zwiększa odpowiedni węzeł; API resources i runtime plan zapisują wszystkie consumed revisions.
+
+**Tech Stack:** Rust session/runtime/API, OpenAPI resources, TypeScript cache keys
+
+## Global Constraints
+
+- Scene revision nie może udawać mesh revision.
+- Każdy wynik zapisuje exact consumed revision tuple.
+- Stara generacja może być wyświetlana jako stale, lecz nie może uruchomić nowego runu.
+
+---
+
+**Finding:** MESH-REGION-011, P1.
+**Dependencies:** MESH-REGION-001.
+
+### Task 1: RED dependency matrix
+
+- [ ] Dodać session tests dla metadata-only, texture-only, coefficient-only, membership-only i topology mutations; sprawdzić minimalny oczekiwany zestaw zmienionych revisions.
+- [ ] Dodać run precondition tests dla stale membership/coefficient/topology; obecny wspólny scene revision ma dać RED.
+
+### Task 2: canonical revision tuple
+
+```rust
+struct RegionRealizationRevisions {
+    topology: u64,
+    membership: u64,
+    coefficients: u64,
+    initial_state: u64,
+}
+```
+
+- [ ] Dodać tuple do session state, plans, artifacts i thin status summary; szczegóły są named resources.
+- [ ] Zdefiniować dependency graph: topology -> membership -> coefficients/initial state -> results; commit aktualizuje atomowo.
+- [ ] Zmienić cache keys/ETags tak, aby używały właściwego revision zamiast całej scene revision.
+
+### Task 3: verification
+
+- [ ] Uruchomić session/runner/API tests, OpenAPI hygiene oraz Control Room resource tests; udowodnić brak grid rebuild dla FDM material rename i wymagany block dla FEM conformal shape edit.
+- [ ] Commit: `git add crates/fullmag-session crates/fullmag-ir crates/fullmag-plan crates/fullmag-runner crates/fullmag-api apps/control-room && git commit -m "feat(runtime): version region realizations independently"`.
+
+**Exit:** każdy resource i run precondition może jednoznacznie stwierdzić, której realizacji regionów używa.

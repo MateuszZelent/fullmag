@@ -23,6 +23,12 @@ double demag_poisson_energy_from_field(
     const std::vector<double> &h_demag_xyz,
     int energy_threads)
 {
+    if (ctx.material_fields.runtime &&
+        ctx.material_fields.runtime->has_elementwise_ms()) {
+        return -0.5 * kMu0 *
+            ctx.material_fields.runtime->ms_weighted_aos3_mass_bilinear(
+                m_xyz, h_demag_xyz);
+    }
     if (ctx.integration_weights.mfem_lumped_mass.empty()) {
         return 0.0;
     }
@@ -85,6 +91,23 @@ relaxation::EnergyDifference demag_poisson_energy_difference_from_endpoint_field
         return result;
     }
     const size_t nodes = field_size / 3u;
+    if (ctx.material_fields.runtime &&
+        ctx.material_fields.runtime->has_elementwise_ms()) {
+        std::vector<double> dm(field_size);
+        std::vector<double> hs(field_size);
+        for (size_t i = 0; i < field_size; ++i) {
+            dm[i] = trial_m_xyz[i] - current_m_xyz[i];
+            hs[i] = trial_h_demag_xyz[i] + current_h_demag_xyz[i];
+        }
+        const auto termwise =
+            ctx.material_fields.runtime->ms_weighted_aos3_mass_bilinear_termwise(dm, hs);
+        result.delta_joules = -0.5 * kMu0 * termwise.value;
+        result.absolute_term_sum_joules = 0.5 * kMu0 * termwise.absolute_term_sum;
+        result.roundoff_bound_joules =
+            relaxation::reduction_roundoff_bound(termwise.scalar_term_count) *
+            result.absolute_term_sum_joules;
+        return result;
+    }
     if (ctx.integration_weights.mfem_lumped_mass.size() < nodes) {
         result.delta_joules = std::numeric_limits<double>::quiet_NaN();
         result.absolute_term_sum_joules = std::numeric_limits<double>::quiet_NaN();

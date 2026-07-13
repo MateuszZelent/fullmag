@@ -86,6 +86,7 @@ void require_coefficient(
     MaterialCoefficientValues &coefficient,
     std::size_t node_count,
     std::size_t element_count,
+    const std::vector<std::size_t> &active_element_ordinals,
     bool strictly_positive,
     const char *name)
 {
@@ -111,14 +112,25 @@ void require_coefficient(
     }
     for (std::size_t value = 0; value < coefficient.values.size(); ++value) {
         const double current = coefficient.values[value];
-        if (!std::isfinite(current) || (strictly_positive ? current <= 0.0 : current < 0.0)) {
+        bool require_positive_here = strictly_positive;
+        if (strictly_positive &&
+            coefficient.location == MaterialCoefficientLocation::element_dg0) {
+            require_positive_here = false;
+            for (const std::size_t active : active_element_ordinals) {
+                if (active == value) {
+                    require_positive_here = true;
+                    break;
+                }
+            }
+        }
+        if (!std::isfinite(current) || (require_positive_here ? current <= 0.0 : current < 0.0)) {
             throw std::invalid_argument(
                 std::string(name) + " must be finite and " +
-                (strictly_positive ? "> 0" : ">= 0") + " at " +
+                (require_positive_here ? "> 0" : ">= 0") + " at " +
                 coefficient_location_name(coefficient.location) + " value " +
                 std::to_string(value));
         }
-        if (!strictly_positive && current == 0.0) {
+        if (!require_positive_here && current == 0.0) {
             coefficient.values[value] = 0.0;
         }
     }
@@ -187,8 +199,10 @@ P1TetrahedralMaterialRealization::P1TetrahedralMaterialRealization(
         }
     }
 
-    require_coefficient(ms_, node_count_, elements_.size(), true, "Ms");
-    require_coefficient(a_, node_count_, elements_.size(), false, "A");
+    require_coefficient(
+        ms_, node_count_, elements_.size(), active_element_ordinals_, true, "Ms");
+    require_coefficient(
+        a_, node_count_, elements_.size(), active_element_ordinals_, false, "A");
 
     std::uint64_t digest = kFnvOffsetBasis;
     hash_u64(digest, kMaterialRealizationContractVersion);
@@ -249,6 +263,20 @@ const std::vector<double> &P1TetrahedralMaterialRealization::ms_values() const n
 
 const std::vector<double> &P1TetrahedralMaterialRealization::a_values() const noexcept {
     return a_.values;
+}
+
+double P1TetrahedralMaterialRealization::ms_a_per_m(std::size_t element_ordinal) const {
+    if (ms_.location != MaterialCoefficientLocation::element_dg0) {
+        throw std::logic_error("DG0 Ms accessor requires element_dg0 Ms");
+    }
+    return ms_.values.at(element_ordinal);
+}
+
+double P1TetrahedralMaterialRealization::a_j_per_m(std::size_t element_ordinal) const {
+    if (a_.location != MaterialCoefficientLocation::element_dg0) {
+        throw std::logic_error("DG0 A accessor requires element_dg0 A");
+    }
+    return a_.values.at(element_ordinal);
 }
 
 double P1TetrahedralMaterialRealization::ms_weighted_mass_bilinear(

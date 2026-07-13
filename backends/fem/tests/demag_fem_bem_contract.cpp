@@ -188,6 +188,10 @@ void fem_bem_energy_is_owned_by_energy_module() {
         energy.find("double demag_fem_bem_energy_from_field(") != std::string::npos,
         "FEM/BEM energy wrapper must be defined in demag_fem_bem_energy.cpp");
     check(
+        energy.find("return demag_poisson_energy_from_field(ctx, m_xyz, h_demag_xyz, energy_threads);") !=
+            std::string::npos,
+        "FEM/BEM energy wrapper must directly delegate to the shared Poisson energy owner");
+    check(
         energy_header.find("Compute demag energy for a FEM/BEM recovered field") !=
             std::string::npos,
         "FEM/BEM energy header must document its contract");

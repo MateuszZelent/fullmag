@@ -64,6 +64,10 @@ public:
     MaterialCoefficientLocation a_location() const noexcept;
     const std::vector<double> &ms_values() const noexcept;
     const std::vector<double> &a_values() const noexcept;
+    // Narrow DG0 reads for interaction adapters.  These intentionally do not
+    // offer scalar/nodal fallback or expose the coefficient storage.
+    double ms_a_per_m(std::size_t element_ordinal) const;
+    double a_j_per_m(std::size_t element_ordinal) const;
 
     // Exact only for DG0 Ms.  Other Ms locations remain queryable but do not
     // acquire an implicit quadrature rule in this core task.

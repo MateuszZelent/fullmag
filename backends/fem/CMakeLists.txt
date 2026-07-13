@@ -534,6 +534,9 @@ if(FULLMAG_USE_MFEM_STACK)
         target_link_libraries(fem_exchange_contract PRIVATE mfem)
     endif()
 endif()
+if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA)
+    target_link_libraries(fem_exchange_contract PRIVATE CUDA::cusparse)
+endif()
 target_include_directories(fem_exchange_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/include
