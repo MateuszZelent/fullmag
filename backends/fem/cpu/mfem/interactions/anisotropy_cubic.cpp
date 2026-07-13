@@ -277,4 +277,133 @@ double cubic_anisotropy_energy_from_element_quadrature_material(
     return energy_j;
 }
 
+double cubic_anisotropy_energy_from_material_realization(
+    const P1TetrahedralMaterialRealization &material,
+    const std::vector<double> &m_xyz,
+    const std::vector<double> &kc1_j_per_m3,
+    const std::vector<double> &kc2_j_per_m3,
+    const std::vector<double> &kc3_j_per_m3,
+    const std::array<double, 3> &axis1,
+    const std::array<double, 3> &axis2)
+{
+    const std::size_t nodes = material.node_count();
+    require_p1_aos3(m_xyz, nodes, "P1 magnetization");
+    require_p1_scalar(kc1_j_per_m3, nodes, "P1 Kc1");
+    require_p1_scalar(kc2_j_per_m3, nodes, "P1 Kc2");
+    require_p1_scalar(kc3_j_per_m3, nodes, "P1 Kc3");
+    require_orthonormal_crystal_axes(axis1, axis2);
+    if (material.ms_location() != MaterialCoefficientLocation::element_dg0) {
+        throw std::invalid_argument("sharp cubic material realization requires element_dg0 Ms");
+    }
+    const std::array<double, 3> axis3 = {
+        axis1[1] * axis2[2] - axis1[2] * axis2[1],
+        axis1[2] * axis2[0] - axis1[0] * axis2[2],
+        axis1[0] * axis2[1] - axis1[1] * axis2[0],
+    };
+
+    double energy_j = 0.0;
+    for (const std::size_t ordinal : material.active_element_ordinals()) {
+        const P1TetrahedronMaterialTopology &element = material.element_topology(ordinal);
+        for (std::size_t ir = 0; ir < kGl6Nodes.size(); ++ir) {
+            const double r = kGl6Nodes[ir];
+            for (std::size_t is = 0; is < kGl6Nodes.size(); ++is) {
+                const double s = kGl6Nodes[is];
+                for (std::size_t it = 0; it < kGl5Nodes.size(); ++it) {
+                    const double t = kGl5Nodes[it];
+                    const std::array<double, 4> shape = {
+                        (1.0 - r) * (1.0 - s) * (1.0 - t), r,
+                        (1.0 - r) * s, (1.0 - r) * (1.0 - s) * t,
+                    };
+                    const double weight = 6.0 * element.volume_m3 *
+                        kGl6Weights[ir] * kGl6Weights[is] * kGl5Weights[it] *
+                        (1.0 - r) * (1.0 - r) * (1.0 - s);
+                    const double m1 = interpolate_m_projection(m_xyz, axis1, element, shape);
+                    const double m2 = interpolate_m_projection(m_xyz, axis2, element, shape);
+                    const double m3 = interpolate_m_projection(m_xyz, axis3, element, shape);
+                    const double m1sq = m1 * m1;
+                    const double m2sq = m2 * m2;
+                    const double m3sq = m3 * m3;
+                    const double sigma = m1sq * m2sq + m2sq * m3sq + m1sq * m3sq;
+                    energy_j += weight * (
+                        interpolate_scalar(kc1_j_per_m3, element, shape) * sigma +
+                        interpolate_scalar(kc2_j_per_m3, element, shape) * m1sq * m2sq * m3sq +
+                        interpolate_scalar(kc3_j_per_m3, element, shape) * sigma * sigma);
+                }
+            }
+        }
+    }
+    return energy_j;
+}
+
+double cubic_anisotropy_directional_derivative_from_material_realization(
+    const P1TetrahedralMaterialRealization &material,
+    const std::vector<double> &m_xyz,
+    const std::vector<double> &p_xyz,
+    const std::vector<double> &kc1_j_per_m3,
+    const std::vector<double> &kc2_j_per_m3,
+    const std::vector<double> &kc3_j_per_m3,
+    const std::array<double, 3> &axis1,
+    const std::array<double, 3> &axis2)
+{
+    const std::size_t nodes = material.node_count();
+    require_p1_aos3(m_xyz, nodes, "P1 magnetization");
+    require_p1_aos3(p_xyz, nodes, "P1 probe");
+    require_p1_scalar(kc1_j_per_m3, nodes, "P1 Kc1");
+    require_p1_scalar(kc2_j_per_m3, nodes, "P1 Kc2");
+    require_p1_scalar(kc3_j_per_m3, nodes, "P1 Kc3");
+    require_orthonormal_crystal_axes(axis1, axis2);
+    if (material.ms_location() != MaterialCoefficientLocation::element_dg0) {
+        throw std::invalid_argument("sharp cubic material realization requires element_dg0 Ms");
+    }
+    const std::array<double, 3> axis3 = {
+        axis1[1] * axis2[2] - axis1[2] * axis2[1],
+        axis1[2] * axis2[0] - axis1[0] * axis2[2],
+        axis1[0] * axis2[1] - axis1[1] * axis2[0],
+    };
+
+    double derivative_j = 0.0;
+    for (const std::size_t ordinal : material.active_element_ordinals()) {
+        const P1TetrahedronMaterialTopology &element = material.element_topology(ordinal);
+        for (std::size_t ir = 0; ir < kGl6Nodes.size(); ++ir) {
+            const double r = kGl6Nodes[ir];
+            for (std::size_t is = 0; is < kGl6Nodes.size(); ++is) {
+                const double s = kGl6Nodes[is];
+                for (std::size_t it = 0; it < kGl5Nodes.size(); ++it) {
+                    const double t = kGl5Nodes[it];
+                    const std::array<double, 4> shape = {
+                        (1.0 - r) * (1.0 - s) * (1.0 - t), r,
+                        (1.0 - r) * s, (1.0 - r) * (1.0 - s) * t,
+                    };
+                    const double weight = 6.0 * element.volume_m3 *
+                        kGl6Weights[ir] * kGl6Weights[is] * kGl5Weights[it] *
+                        (1.0 - r) * (1.0 - r) * (1.0 - s);
+                    const double m1 = interpolate_m_projection(m_xyz, axis1, element, shape);
+                    const double m2 = interpolate_m_projection(m_xyz, axis2, element, shape);
+                    const double m3 = interpolate_m_projection(m_xyz, axis3, element, shape);
+                    const double p1 = interpolate_m_projection(p_xyz, axis1, element, shape);
+                    const double p2 = interpolate_m_projection(p_xyz, axis2, element, shape);
+                    const double p3 = interpolate_m_projection(p_xyz, axis3, element, shape);
+                    const double m1sq = m1 * m1;
+                    const double m2sq = m2 * m2;
+                    const double m3sq = m3 * m3;
+                    const double sigma = m1sq * m2sq + m2sq * m3sq + m1sq * m3sq;
+                    const double sigma_derivative = 2.0 * (
+                        m1 * p1 * (m2sq + m3sq) +
+                        m2 * p2 * (m1sq + m3sq) +
+                        m3 * p3 * (m1sq + m2sq));
+                    const double sixth_derivative = 2.0 * (
+                        p1 * m1 * m2sq * m3sq +
+                        p2 * m2 * m1sq * m3sq +
+                        p3 * m3 * m1sq * m2sq);
+                    derivative_j += weight * (
+                        interpolate_scalar(kc1_j_per_m3, element, shape) * sigma_derivative +
+                        interpolate_scalar(kc2_j_per_m3, element, shape) * sixth_derivative +
+                        2.0 * interpolate_scalar(kc3_j_per_m3, element, shape) * sigma * sigma_derivative);
+                }
+            }
+        }
+    }
+    return derivative_j;
+}
+
 } // namespace fullmag::fem
