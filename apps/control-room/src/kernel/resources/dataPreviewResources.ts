@@ -2,11 +2,14 @@
 
 import { useCallback, useMemo } from "react";
 
-import { DATA_FIELD_VECTOR_PATH } from "@/kernel/api/apiPaths";
 import type {
   BinaryResourceResult,
   FieldVectorQuery,
 } from "@/kernel/api/apiTypes";
+import {
+  canonicalFieldVectorQuery,
+  serializeCanonicalFieldVectorResourceKey,
+} from "@/kernel/api/fieldQueryIdentity";
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 import { normalizeQuantityIdOrDefault } from "@/kernel/api/quantityIds";
 import { useKernel } from "@/kernel/KernelContext";
@@ -34,18 +37,14 @@ export function resolveDataPreviewFieldVectorResourceKey({
   view,
 }: DataPreviewFieldVectorRequest): string {
   const resolvedQuantityId = normalizeQuantityIdOrDefault(quantityId);
-  const path = DATA_FIELD_VECTOR_PATH.replace(
-    "{quantity_id}",
-    encodeURIComponent(resolvedQuantityId),
+  return serializeCanonicalFieldVectorResourceKey(
+    canonicalFieldVectorQuery(resolvedQuantityId, {
+      component: component || "full",
+      max_samples: maxSamples,
+      phase_rad: phaseRad != null && Number.isFinite(phaseRad) ? phaseRad : undefined,
+      view: view ?? undefined,
+    }),
   );
-  const params = new URLSearchParams();
-  params.set("component", component || "full");
-  params.set("max_samples", String(maxSamples));
-  if (view) params.set("view", view);
-  if (phaseRad != null && Number.isFinite(phaseRad)) {
-    params.set("phase_rad", String(phaseRad));
-  }
-  return `${path}?${params.toString()}`;
 }
 
 export function useDataPreviewFieldVector({

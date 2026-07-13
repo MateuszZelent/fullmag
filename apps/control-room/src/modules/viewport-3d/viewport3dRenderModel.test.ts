@@ -1573,6 +1573,56 @@ describe("viewport3dRenderModel", () => {
     expect(model?.partVectorSegments.get("part-a")).toBeNull();
   });
 
+  it.each([
+    ["missing", undefined],
+    ["mismatched", "generation-8"],
+  ] as const)(
+    "rejects %s FMVP v3 part fields before scalar and vector rendering",
+    (_kind, domainGenerationId) => {
+      const topologyModel = buildViewport3DTopologyRenderModel(
+        topologyFixture(),
+        [
+          {
+            boundary_face_count: 1,
+            boundary_face_start: 0,
+            id: "part-a",
+            label: "Part A",
+            nodeCount: 4,
+            nodeStart: 0,
+          },
+        ],
+        [],
+        undefined,
+        {
+          meshGenerationId: "generation-7",
+          meshRevision: "mesh-1",
+          meshTopologyHash: "topology-hash",
+        },
+      );
+      const model = buildViewport3DFieldRenderModel(topologyModel, null, 0.5, {
+        partFieldVectors: new Map([
+          [
+            "part-a",
+            {
+              ...fieldVectorFixture(),
+              domainGenerationId,
+              formatVersion: 3,
+              indexing: "full_domain",
+              meshTopologyHash: "topology-hash",
+              meshTopologyRevision: "mesh-1",
+            },
+          ],
+        ]),
+        partScalarColorModes: new Map([["part-a", "x"]]),
+        partVectorBudgets: new Map([["part-a", 4]]),
+        scalarColorsVisible: true,
+      });
+
+      expect(model?.scalarColorsByPartAndMode.get("part-a")?.get("x")).toBeNull();
+      expect(model?.partVectorSegments.get("part-a")).toBeNull();
+    },
+  );
+
   it("builds per-part scalar colors from target-specific quantity vectors", () => {
     const topologyModel = buildViewport3DTopologyRenderModel(
       topologyFixture(),

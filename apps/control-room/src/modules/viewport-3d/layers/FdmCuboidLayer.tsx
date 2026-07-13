@@ -5,9 +5,18 @@ import { viewport3DVectorLayersEnabledFromBrowserConfig } from "@/kernel/browser
 import { memoryBudgetRegistry } from "@/kernel/performance/MemoryBudgetRegistry";
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 import { type ThreeEvent, useThree } from "@react-three/fiber";
-import { useEffect, useMemo, useRef, useSyncExternalStore, memo } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useSyncExternalStore,
+  memo,
+  type RefObject,
+} from "react";
 import {
   BoxGeometry,
+  BufferAttribute,
+  BufferGeometry,
   type Camera,
   Color,
   InstancedMesh,
@@ -22,6 +31,7 @@ import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
 import type { Viewport3DVectorAnchorMode } from "../viewport3dRenderModel";
 import {
   RENDER_POLICIES,
+  materialPolicyProps,
   resolveSurfacePolicy,
   surfaceMaterialPolicyProps,
 } from "./viewport3DRenderPolicy";
@@ -38,6 +48,7 @@ import {
 } from "../viewport3dInspect";
 import {
   opacityFromSettings,
+  pointColorFromSettings,
   surfaceMaterialColorFromSettings,
   vectorColorModeFromSettings,
   vectorStyleFromSettings,
@@ -59,20 +70,35 @@ import {
 import type { RegionOverlaySelection } from "./RegionOverlayLayer";
 import {
   buildFdmVectorSegmentsUncached,
+  buildFdmPointPositions,
   type FdmCuboidBuildRequest,
-  type FdmCuboidBuildResult,
   type FdmCuboidInstanceModel,
   type FdmVoxelTopographyOptions,
 } from "./fdmCuboidBuildModel";
 import { buildViewport3DFdmCuboidOffMainThread } from "./fdmCuboidBuildScheduler";
+import {
+  createFdmCuboidBuildStateController,
+  EMPTY_FDM_CUBOID_BUILD_SNAPSHOT,
+  resolveFdmCuboidBuildState,
+  type FdmCuboidBuildState,
+} from "./fdmCuboidBuildState";
+import { resolveFdmCuboidPassPlan } from "./fdmCuboidPasses";
 
 export {
   buildFdmCuboidInstanceModel,
+  buildFdmPointPositions,
   resolveFdmVectorGlyphScale,
   type FdmCuboidInstanceModel,
   type FdmCuboidInstanceModelOptions,
   type FdmVoxelTopographyOptions,
 } from "./fdmCuboidBuildModel";
+
+export { resolveFdmCuboidPassPlan } from "./fdmCuboidPasses";
+export function hasAnyEffectiveFdmPass(
+  settings: Parameters<typeof resolveFdmCuboidPassPlan>[0],
+): boolean {
+  return resolveFdmCuboidPassPlan(settings).hasAnyEffectivePass;
+}
 
 const FDM_INSPECT_PROJECTION_FALLBACK_LIMIT = 5000;
 const FDM_INSPECT_PROJECTION_HIT_RADIUS_PX = 36;
@@ -476,24 +502,6 @@ function useFdmCuboidColorUpload({
   ]);
 }
 
-interface FdmCuboidBuildStoreSnapshot {
-  readonly buildKey: string | null;
-  readonly request: FdmCuboidBuildRequest | null;
-  readonly result: FdmCuboidBuildResult | null;
-}
-
-interface FdmCuboidBuildStore {
-  readonly getSnapshot: () => FdmCuboidBuildStoreSnapshot;
-  readonly publish: (snapshot: FdmCuboidBuildStoreSnapshot) => void;
-  readonly subscribe: (listener: () => void) => () => void;
-}
-
-const EMPTY_FDM_CUBOID_BUILD_SNAPSHOT: FdmCuboidBuildStoreSnapshot = {
-  buildKey: null,
-  request: null,
-  result: null,
-};
-
 export interface FdmCuboidAsyncBuildInput {
   buildKey: string | null;
   domain: FdmGridRenderDomain | null;
@@ -524,8 +532,8 @@ export function useFdmCuboidBuildResult({
   voxelFillRatio,
   voxelMagnitudeThreshold,
   voxelTopography,
-}: FdmCuboidAsyncBuildInput): FdmCuboidBuildResult | undefined {
-  const store = useMemo(() => createFdmCuboidBuildStore(), []);
+}: FdmCuboidAsyncBuildInput): FdmCuboidBuildState | undefined {
+  const store = useMemo(() => createFdmCuboidBuildStateController(), []);
   const request = useMemo<FdmCuboidBuildRequest | null>(
     () =>
       enabled && domain
@@ -557,15 +565,15 @@ export function useFdmCuboidBuildResult({
   const snapshot = useSyncExternalStore(
     store.subscribe,
     store.getSnapshot,
-    store.getSnapshot,
+    () => EMPTY_FDM_CUBOID_BUILD_SNAPSHOT,
   );
 
   useEffect(() => {
     if (!request || !buildKey) {
-      store.publish(EMPTY_FDM_CUBOID_BUILD_SNAPSHOT);
       return;
     }
 
+    store.begin(buildKey);
     const abortController = new AbortController();
     void buildViewport3DFdmCuboidOffMainThread(request, {
       buildKey,
@@ -576,10 +584,11 @@ export function useFdmCuboidBuildResult({
     })
       .then((result) => {
         if (abortController.signal.aborted) return;
-        store.publish({ buildKey, request, result });
+        store.resolve(buildKey, result);
       })
       .catch((error: unknown) => {
-        if (isFdmCuboidBuildAbortError(error)) return;
+        if (abortController.signal.aborted) return;
+        store.reject(buildKey, error);
       });
 
     return () => {
@@ -588,101 +597,36 @@ export function useFdmCuboidBuildResult({
   }, [buildKey, groupKey, request, revisionSummary, store]);
 
   if (!request) return undefined;
-  return snapshot.result ?? undefined;
+  return resolveFdmCuboidBuildState({
+    currentBuildKey: buildKey,
+    snapshot,
+  });
 }
 
-function createFdmCuboidBuildStore(): FdmCuboidBuildStore {
-  let snapshot = EMPTY_FDM_CUBOID_BUILD_SNAPSHOT;
-  const listeners = new Set<() => void>();
-  return {
-    getSnapshot: () => snapshot,
-    publish: (nextSnapshot) => {
-      if (snapshot === nextSnapshot) return;
-      snapshot = nextSnapshot;
-      for (const listener of listeners) listener();
-    },
-    subscribe: (listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-  };
-}
-
-function isFdmCuboidBuildAbortError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    (error.name === "AbortError" || error.message === "FDM cuboid build aborted")
-  );
-}
-
-export const FdmCuboidLayer = memo(function FdmCuboidLayer({
+const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
   colors,
   materialProfile,
-  onSelectDomain,
-  onSelectRegion,
-  regionOverlays,
-  settings,
-  selectedObjectId,
-  selectedRegionId,
+  model,
+  onPointerMove,
+  onPointerOut,
+  renderSettings,
   surfaceColors,
+  surfaceRef,
   tracker,
-  vectorColorMode,
-  vectorStyle,
-  fieldVector,
-  instanceModel,
-  inspectEnabled,
-  inspectQuantityId,
-  onInspectClear,
-  onInspectSample,
-  vectorSegments,
+  wireframeRef,
 }: {
   colors: Viewport3DColors;
-  fieldVector: DecodedFieldVector | null | undefined;
-  instanceModel?: FdmCuboidInstanceModel | null;
-  inspectEnabled: boolean;
-  inspectQuantityId: string;
   materialProfile: Viewport3DMaterialProfile;
-  onInspectClear?: () => void;
-  onInspectSample?: (
-    sample: Viewport3DInspectSample,
-    screenPosition: Viewport3DInspectScreenPosition,
-  ) => void;
-  onSelectDomain: () => void;
-  onSelectRegion?: (selection: RegionOverlaySelection) => void;
-  regionOverlays?: readonly RegionOverlayInput[];
-  selectedObjectId?: string | null;
-  selectedRegionId?: string | null;
-  settings: VisualizationTargetSettings;
+  model: FdmCuboidInstanceModel;
+  onPointerMove: (event: ThreeEvent<PointerEvent>) => void;
+  onPointerOut: () => void;
+  renderSettings: VisualizationTargetSettings;
   surfaceColors: ScalarColorBuffer | null;
+  surfaceRef: RefObject<InstancedMesh | null>;
   tracker: Viewport3DResourceTracker;
-  vectorColorMode: string;
-  vectorSegments: Float32Array | null;
-  vectorStyle: VectorFieldLayerVectorStyle;
+  wireframeRef: RefObject<InstancedMesh | null>;
 }) {
   const invalidate = useBatchedInvalidate();
-  const surfaceRef = useRef<InstancedMesh>(null);
-  const wireframeRef = useRef<InstancedMesh>(null);
-  const { camera, gl } = useThree();
-  const inspectRaycastState = useMemo(
-    () => ({
-      pointer: new Vector2(),
-      projected: new Vector3(),
-      raycaster: new Raycaster(),
-    }),
-    [],
-  );
-  const inspectFrameRef = useRef(0);
-  const r3fInspectHitFrameRef = useRef(0);
-  const renderSettings = settings;
-  const regionPickModels = useMemo(
-    () =>
-      buildRegionOverlayModels(regionOverlays ?? [], {
-        selectedObjectId,
-        selectedRegionId,
-      }),
-    [regionOverlays, selectedObjectId, selectedRegionId],
-  );
-  const model = instanceModel ?? null;
   const geometry = useMemo(
     () => tracker.track("geometry", new BoxGeometry(1, 1, 1)),
     [tracker],
@@ -690,7 +634,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
   const surfaceOpacity = opacityFromSettings(renderSettings);
   const surfacePolicy = resolveSurfacePolicy(surfaceOpacity);
   const usesInstanceColors = Boolean(
-    surfaceColors && surfaceColors.colors.length === (model?.count ?? 0) * 3,
+    surfaceColors && surfaceColors.colors.length === model.count * 3,
   );
   const surfaceMaterialColor = surfaceMaterialColorFromSettings(
     renderSettings,
@@ -759,7 +703,6 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
     wireframeRef,
     wireframeVisible: renderSettings.wireframeVisible,
   });
-
   useFdmCuboidColorUpload({
     invalidate,
     model,
@@ -769,6 +712,145 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
     usesInstanceColors,
   });
 
+  return (
+    <>
+      {renderSettings.shaderVisible ? (
+        <instancedMesh
+          args={[geometry, surfaceMaterial, model.count]}
+          frustumCulled={false}
+          key={`fdm-cuboids-surface-${model.count}`}
+          onPointerMove={onPointerMove}
+          onPointerOut={onPointerOut}
+          ref={surfaceRef}
+          renderOrder={surfacePolicy.renderOrder}
+        />
+      ) : null}
+      {renderSettings.wireframeVisible ? (
+        <instancedMesh
+          args={[geometry, wireframeMaterial, model.count]}
+          frustumCulled={false}
+          key={`fdm-cuboids-wire-${model.count}`}
+          onPointerMove={onPointerMove}
+          onPointerOut={onPointerOut}
+          ref={wireframeRef}
+          renderOrder={wireframePolicy.renderOrder}
+        />
+      ) : null}
+    </>
+  );
+});
+
+const FdmCuboidPointsPass = memo(function FdmCuboidPointsPass({
+  colors,
+  model,
+  renderSettings,
+  tracker,
+}: {
+  colors: Viewport3DColors;
+  model: FdmCuboidInstanceModel;
+  renderSettings: VisualizationTargetSettings;
+  tracker: Viewport3DResourceTracker;
+}) {
+  const geometry = useMemo(() => {
+    const positions = buildFdmPointPositions(model, renderSettings.geometryScope);
+    if (!positions) return null;
+    return tracker.track(
+      "geometry",
+      new BufferGeometry().setAttribute(
+        "position",
+        new BufferAttribute(positions, 3),
+      ),
+    );
+  }, [model, renderSettings.geometryScope, tracker]);
+  useEffect(
+    () => () => tracker.release("geometry", geometry),
+    [geometry, tracker],
+  );
+  if (!geometry) return null;
+  return (
+    <points
+      geometry={geometry}
+      renderOrder={RENDER_POLICIES.points.renderOrder}
+    >
+      <pointsMaterial
+        color={pointColorFromSettings(renderSettings, colors.wire)}
+        opacity={opacityFromSettings(renderSettings)}
+        sizeAttenuation={false}
+        size={3}
+        {...materialPolicyProps("points")}
+      />
+    </points>
+  );
+});
+
+export const FdmCuboidLayer = memo(function FdmCuboidLayer({
+  colors,
+  materialProfile,
+  onSelectDomain,
+  onSelectRegion,
+  regionOverlays,
+  settings,
+  selectedObjectId,
+  selectedRegionId,
+  surfaceColors,
+  tracker,
+  vectorColorMode,
+  vectorStyle,
+  fieldVector,
+  instanceModel,
+  inspectEnabled,
+  inspectQuantityId,
+  onInspectClear,
+  onInspectSample,
+  vectorSegments,
+}: {
+  colors: Viewport3DColors;
+  fieldVector: DecodedFieldVector | null | undefined;
+  instanceModel?: FdmCuboidInstanceModel | null;
+  inspectEnabled: boolean;
+  inspectQuantityId: string;
+  materialProfile: Viewport3DMaterialProfile;
+  onInspectClear?: () => void;
+  onInspectSample?: (
+    sample: Viewport3DInspectSample,
+    screenPosition: Viewport3DInspectScreenPosition,
+  ) => void;
+  onSelectDomain: () => void;
+  onSelectRegion?: (selection: RegionOverlaySelection) => void;
+  regionOverlays?: readonly RegionOverlayInput[];
+  selectedObjectId?: string | null;
+  selectedRegionId?: string | null;
+  settings: VisualizationTargetSettings;
+  surfaceColors: ScalarColorBuffer | null;
+  tracker: Viewport3DResourceTracker;
+  vectorColorMode: string;
+  vectorSegments: Float32Array | null;
+  vectorStyle: VectorFieldLayerVectorStyle;
+}) {
+  const surfaceRef = useRef<InstancedMesh>(null);
+  const wireframeRef = useRef<InstancedMesh>(null);
+  const { camera, gl } = useThree();
+  const inspectRaycastState = useMemo(
+    () => ({
+      pointer: new Vector2(),
+      projected: new Vector3(),
+      raycaster: new Raycaster(),
+    }),
+    [],
+  );
+  const inspectFrameRef = useRef(0);
+  const r3fInspectHitFrameRef = useRef(0);
+  const renderSettings = settings;
+  const passPlan = resolveFdmCuboidPassPlan(renderSettings);
+  const regionPickModels = useMemo(
+    () =>
+      buildRegionOverlayModels(regionOverlays ?? [], {
+        selectedObjectId,
+        selectedRegionId,
+      }),
+    [regionOverlays, selectedObjectId, selectedRegionId],
+  );
+  const model = instanceModel ?? null;
   useEffect(() => {
     if (!inspectEnabled || !model) return undefined;
 
@@ -891,7 +973,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
   if (
     !model ||
     !renderSettings.visible ||
-    (!renderSettings.shaderVisible && !renderSettings.wireframeVisible)
+    !passPlan.needsCellModel
   ) {
     return null;
   }
@@ -931,30 +1013,30 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
 
   return (
     <group onPointerDown={handlePointerDown}>
-      {renderSettings.shaderVisible ? (
-        <instancedMesh
-          args={[geometry, surfaceMaterial, model.count]}
-          frustumCulled={false}
-          key={`fdm-cuboids-surface-${model.count}`}
+      {passPlan.needsSurfaceInstances ? (
+        <FdmCuboidSurfacePass
+          colors={colors}
+          materialProfile={materialProfile}
+          model={model}
           onPointerMove={handlePointerMove}
           onPointerOut={handlePointerOut}
-          ref={surfaceRef}
-          renderOrder={surfacePolicy.renderOrder}
+          renderSettings={renderSettings}
+          surfaceColors={surfaceColors}
+          surfaceRef={surfaceRef}
+          tracker={tracker}
+          wireframeRef={wireframeRef}
         />
       ) : null}
-      {renderSettings.wireframeVisible ? (
-        <instancedMesh
-          args={[geometry, wireframeMaterial, model.count]}
-          frustumCulled={false}
-          key={`fdm-cuboids-wire-${model.count}`}
-          onPointerMove={handlePointerMove}
-          onPointerOut={handlePointerOut}
-          ref={wireframeRef}
-          renderOrder={wireframePolicy.renderOrder}
+      {passPlan.needsPointGeometry ? (
+        <FdmCuboidPointsPass
+          colors={colors}
+          model={model}
+          renderSettings={renderSettings}
+          tracker={tracker}
         />
       ) : null}
       {viewport3DVectorLayersEnabledFromBrowserConfig() &&
-      renderSettings.vectorsVisible ? (
+      passPlan.needsVectors ? (
         <VectorFieldLayer
           colors={colors}
           colorMode={vectorColorModeFromSettings(renderSettings, vectorColorMode)}

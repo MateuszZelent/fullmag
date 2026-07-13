@@ -104,6 +104,7 @@ import {
   useViewport3DResourceCounts,
   useViewport3DResourceTracker,
 } from "./viewport3dDiagnostics";
+import { useViewport3DWorkerRuntime } from "./viewport3dWorkerRuntime";
 import { createViewport3DEventManager } from "./viewport3dEventManager";
 import {
   formatViewport3DInspectComponents,
@@ -171,6 +172,73 @@ const VIEWPORT_3D_CANVAS_GL_CAPTURE = {
   powerPreference: "high-performance" as const,
   preserveDrawingBuffer: true,
 };
+
+interface Viewport3DPointerHoldEventTarget {
+  addEventListener(
+    type: "pointerup" | "pointercancel",
+    listener: EventListener,
+    options?: boolean | AddEventListenerOptions,
+  ): void;
+  removeEventListener(
+    type: "pointerup" | "pointercancel",
+    listener: EventListener,
+    options?: boolean | EventListenerOptions,
+  ): void;
+}
+
+export interface Viewport3DPointerHoldLifecycle {
+  begin(pointerId: number): void;
+  dispose(): void;
+  end(pointerId: number): void;
+}
+
+export function createViewport3DPointerHoldLifecycle({
+  onBegin,
+  onEnd,
+  target,
+}: {
+  onBegin: () => void;
+  onEnd: () => void;
+  target: Viewport3DPointerHoldEventTarget;
+}): Viewport3DPointerHoldLifecycle {
+  const activePointerIds = new Set<number>();
+  let terminalListenersInstalled = false;
+  const removeTerminalListeners = () => {
+    if (!terminalListenersInstalled) return;
+    terminalListenersInstalled = false;
+    target.removeEventListener("pointerup", handleTerminalEvent, true);
+    target.removeEventListener("pointercancel", handleTerminalEvent, true);
+  };
+  const end = (pointerId: number) => {
+    if (!activePointerIds.delete(pointerId) || activePointerIds.size > 0) return;
+    removeTerminalListeners();
+    onEnd();
+  };
+  const handleTerminalEvent: EventListener = (event) => {
+    const pointerId = (event as PointerEvent).pointerId;
+    if (Number.isInteger(pointerId)) end(pointerId);
+  };
+
+  return {
+    begin(pointerId) {
+      if (activePointerIds.has(pointerId)) return;
+      const wasEmpty = activePointerIds.size === 0;
+      activePointerIds.add(pointerId);
+      if (!wasEmpty) return;
+      onBegin();
+      target.addEventListener("pointerup", handleTerminalEvent, true);
+      target.addEventListener("pointercancel", handleTerminalEvent, true);
+      terminalListenersInstalled = true;
+    },
+    dispose() {
+      if (activePointerIds.size === 0) return;
+      activePointerIds.clear();
+      removeTerminalListeners();
+      onEnd();
+    },
+    end,
+  };
+}
 
 installViewport3DThreeConsolePolicy();
 
@@ -981,6 +1049,12 @@ export default function Viewport3DModule({
   });
   const { select, clear } = useSelectionActions(moduleId);
   const tracker = useViewport3DResourceTracker();
+  const reportWorkerRuntimeCounts = useCallback(
+    (counts: Parameters<typeof tracker.setWorkerRuntimeCounts>[0]) =>
+      tracker.setWorkerRuntimeCounts(counts),
+    [tracker],
+  );
+  useViewport3DWorkerRuntime(reportWorkerRuntimeCounts);
   const resourceCounts = useViewport3DResourceCounts(tracker);
   const commandState = useViewport3DCommandState();
   const meshSizeHighlight = useMeshSizeHistogramHighlight(kernel.bus);
@@ -1209,36 +1283,32 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   const [orbitDebugCommitRevision, setOrbitDebugCommitRevision] = useState(0);
   const [dismissedResourceIssueKey, setDismissedResourceIssueKey] =
     useState<string | null>(null);
-  const fieldUpdatePointerHoldRef = useRef(false);
-  const releaseFieldUpdatePointerHold = useCallback(() => {
-    if (!fieldUpdatePointerHoldRef.current) return;
-    fieldUpdatePointerHoldRef.current = false;
-    endViewport3DFieldUpdateHold();
+  const fieldUpdatePointerHoldLifecycleRef =
+    useRef<Viewport3DPointerHoldLifecycle | null>(null);
+  const releaseFieldUpdatePointerHold = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    fieldUpdatePointerHoldLifecycleRef.current?.end(event.pointerId);
   }, []);
   const holdFieldUpdatesForPointerGesture = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
       if (event.button < 0 || event.button > 2) return;
-      if (!fieldUpdatePointerHoldRef.current) {
-        fieldUpdatePointerHoldRef.current = true;
-        beginViewport3DFieldUpdateHold();
+      fieldUpdatePointerHoldLifecycleRef.current?.begin(event.pointerId);
+    },
+    [],
+  );
+  useEffect(() => {
+    const lifecycle = createViewport3DPointerHoldLifecycle({
+      onBegin: beginViewport3DFieldUpdateHold,
+      onEnd: endViewport3DFieldUpdateHold,
+      target: window,
+    });
+    fieldUpdatePointerHoldLifecycleRef.current = lifecycle;
+    return () => {
+      lifecycle.dispose();
+      if (fieldUpdatePointerHoldLifecycleRef.current === lifecycle) {
+        fieldUpdatePointerHoldLifecycleRef.current = null;
       }
-      window.addEventListener("pointerup", releaseFieldUpdatePointerHold, {
-        capture: true,
-        once: true,
-      });
-      window.addEventListener("pointercancel", releaseFieldUpdatePointerHold, {
-        capture: true,
-        once: true,
-      });
-    },
-    [releaseFieldUpdatePointerHold],
-  );
-  useEffect(
-    () => () => {
-      releaseFieldUpdatePointerHold();
-    },
-    [releaseFieldUpdatePointerHold],
-  );
+    };
+  }, []);
   const [inspectHover, setInspectHover] =
     useState<Viewport3DInspectHover | null>(null);
   const lastRenderedMeshRevision = useRef<number | string | null>(null);
@@ -1840,6 +1910,8 @@ const Viewport3DFieldRefreshCountdown = memo(
     const display = resolveViewport3DRefreshCountdownDisplay({
       enabled: refresh.enabled,
       nowMs: countdown.nowMs,
+      payloadRevision: refresh.payloadRevision,
+      requestedRevision: refresh.requestedRevision,
       sample: countdown.sample,
       status: refresh.status,
     });
@@ -1883,7 +1955,9 @@ const Viewport3DFieldRefreshCountdown = memo(
         data-pulse-id={countdown.sample.pulseId}
         data-refresh-state={display.state}
         data-resource-key={refresh.resourceKey}
+        data-payload-revision={refresh.payloadRevision ?? "none"}
         data-revision={refresh.revision ?? "none"}
+        data-requested-revision={refresh.requestedRevision ?? "none"}
         style={style}
       >
         <span

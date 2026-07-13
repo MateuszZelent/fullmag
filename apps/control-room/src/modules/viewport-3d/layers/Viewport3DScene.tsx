@@ -109,6 +109,7 @@ import {
 import { PostProcessingLayer } from "./PostProcessingLayer";
 import { PrimitiveObjectLayer } from "./PrimitiveObjectLayer";
 import { FdmCuboidLayer, type FdmCuboidInstanceModel } from "./FdmCuboidLayer";
+import { VectorGlyphDerivedBufferCacheProvider } from "./vectorGlyphDerivedBufferRuntime";
 import { HysteresisReplayGlyphLayer } from "./HysteresisReplayGlyphLayer";
 import { Viewport3DLightingRig } from "./Viewport3DLightingRig";
 import { ClipPlaneFramePreviewLayer, ClipPlaneLayer } from "./ClipPlaneLayer";
@@ -1314,7 +1315,7 @@ export function Viewport3DScene({
   ]);
 
   return (
-    <>
+    <VectorGlyphDerivedBufferCacheProvider tracker={tracker}>
       <color attach="background" args={[colors.background]} />
       <Viewport3DLightingRig profileId={visualProfileId} />
       {viewport3DCanvasLifecycleProbeEnabledFromBrowserConfig() ? (
@@ -1416,6 +1417,6 @@ export function Viewport3DScene({
         tracker={tracker}
         viewCubeVisible={viewCubeVisible}
       />
-    </>
+    </VectorGlyphDerivedBufferCacheProvider>
   );
 }

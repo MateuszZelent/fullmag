@@ -15,7 +15,11 @@ export function recordViewport3DGpuUploadDiagnostic(
   record: Viewport3DGpuUploadDiagnosticRecord,
 ): void {
   for (const listener of listeners) {
-    listener(record);
+    try {
+      listener(record);
+    } catch {
+      // One diagnostics consumer must not suppress other upload diagnostics.
+    }
   }
 }
 
@@ -34,7 +38,7 @@ export function createDiagnosticRecordFromViewport3DGpuUploadDiagnostic(
   return {
     buildKey: record.key,
     buildLane: `${record.lane}-upload`,
-    buildState: record.aborted ? "aborted" : "ready",
+    buildState: record.status,
     byteLength: record.uploadBytes,
     displayedRevision: null,
     detail: buildDiagnosticDetail(record),
@@ -63,7 +67,7 @@ export function createDiagnosticRecordFromViewport3DGpuUploadDiagnostic(
     targetRevision: record.targetRevision,
     timestampMs: record.completedAtMs,
     transferMs: 0,
-    visibleState: record.aborted ? null : "ready-current",
+    visibleState: record.status === "ready" ? "ready-current" : null,
     workerComputeMs: 0,
   };
 }
@@ -77,11 +81,13 @@ function buildDiagnosticDetail(
     buildKey: record.key,
     buildLane: `${record.lane}-upload`,
     completedAtMs: record.completedAtMs,
+    error: record.error,
     mainUploadMs: record.maxFrameUploadMs,
     maxChunkMs: record.maxChunkMs,
     maxFrameUploadMs: record.maxFrameUploadMs,
     queuedAtMs: record.queuedAtMs,
-    state: record.aborted ? "aborted" : "ready",
+    state: record.status,
+    status: record.status,
     targetRevision: record.targetRevision,
     totalMainUploadMs: record.mainUploadMs,
     totalWallMs: record.totalWallMs,
@@ -94,6 +100,7 @@ function buildDiagnosticDetail(
 function buildDiagnosticSeverity(
   record: Viewport3DGpuUploadDiagnosticRecord,
 ): DiagnosticRecordSeverity {
+  if (record.status === "failed") return "critical";
   if (record.maxFrameUploadMs >= 50) return "critical";
   if (record.budgetExceeded || record.maxFrameUploadMs >= 16) return "warning";
   return "info";

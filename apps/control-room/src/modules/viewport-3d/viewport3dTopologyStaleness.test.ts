@@ -20,7 +20,7 @@ describe("viewport3dTopologyStaleness", () => {
     ).toBe("stale");
   });
 
-  it("keeps shared-domain topology current if no objects are dirty or building even if manifest provenance lags", () => {
+  it("marks shared-domain topology stale when explicit manifest provenance lags despite clean coverage", () => {
     expect(
       resolveViewport3DTopologyFreshness(
         {
@@ -31,10 +31,10 @@ describe("viewport3dTopologyStaleness", () => {
         },
         { source_scene_revision: 11 },
       ),
-    ).toBe("current");
+    ).toBe("stale");
   });
 
-  it("keeps shared-domain topology current after region authoring without mesh dirty tags", () => {
+  it("marks shared-domain topology stale after region authoring when provenance lags", () => {
     expect(
       resolveViewport3DTopologyFreshness(
         {
@@ -54,7 +54,7 @@ describe("viewport3dTopologyStaleness", () => {
         },
         { source_scene_revision: 12 },
       ),
-    ).toBe("current");
+    ).toBe("stale");
   });
 
   it("treats clean topology coverage as current while manifest provenance refresh is pending", () => {

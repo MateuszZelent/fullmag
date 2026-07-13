@@ -15,6 +15,7 @@ function baseKeyParts(): Viewport3DBuildJobKeyParts {
     component: "full",
     domainId: "shared-domain",
     fieldRevision: "field-1",
+    domainGenerationId: "generation-1",
     quantityId: "m",
     samplingRevision: "sampling-1",
     scopeId: "full",
@@ -107,6 +108,30 @@ describe("viewport3dBuildJobKeys", () => {
       buildViewport3DTopologyIndexJobKey(second),
     );
     expect(buildViewport3DRegionOverlayJobKey(first)).not.toBe(
+      buildViewport3DRegionOverlayJobKey(second),
+    );
+    expect(buildViewport3DFieldColorJobKey(first)).not.toBe(
+      buildViewport3DFieldColorJobKey(second),
+    );
+    expect(buildViewport3DFdmCuboidJobKey(first)).not.toBe(
+      buildViewport3DFdmCuboidJobKey(second),
+    );
+    expect(buildViewport3DVectorGlyphJobKey(first)).not.toBe(
+      buildViewport3DVectorGlyphJobKey(second),
+    );
+  });
+
+  it("invalidates every field-dependent lane when domain generation changes", () => {
+    const first = baseKeyParts();
+    const second: Viewport3DBuildJobKeyParts = {
+      ...first,
+      domainGenerationId: "generation-2",
+    };
+
+    expect(buildViewport3DTopologyIndexJobKey(first)).toBe(
+      buildViewport3DTopologyIndexJobKey(second),
+    );
+    expect(buildViewport3DRegionOverlayJobKey(first)).toBe(
       buildViewport3DRegionOverlayJobKey(second),
     );
     expect(buildViewport3DFieldColorJobKey(first)).not.toBe(

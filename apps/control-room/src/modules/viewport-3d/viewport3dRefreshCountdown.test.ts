@@ -69,6 +69,22 @@ describe("viewport3dRefreshCountdown", () => {
     });
   });
 
+  it("keeps both payload and requested revisions visible while syncing", () => {
+    expect(
+      resolveViewport3DRefreshCountdownDisplay({
+        enabled: true,
+        nowMs: 1_000,
+        payloadRevision: 41,
+        requestedRevision: 42,
+        sample: EMPTY_VIEWPORT_3D_REFRESH_SAMPLE,
+        status: "stale",
+      }),
+    ).toMatchObject({
+      detail: "r41 → r42",
+      state: "syncing",
+    });
+  });
+
   it("is hidden when field refresh telemetry is disabled", () => {
     expect(
       resolveViewport3DRefreshCountdownDisplay({

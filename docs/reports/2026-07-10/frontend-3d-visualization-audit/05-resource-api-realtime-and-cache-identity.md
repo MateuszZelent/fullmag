@@ -52,6 +52,17 @@ invalidation ma pierwszeństwo przed quantity-wide fallbackiem.
 5. Dodać telemetry counter exact/broad invalidations oraz liczbę refetches na
    event, aby wykrywać regresje.
 
+### Decyzja implementacyjna
+
+Aktualny backend nie publikuje dokładnego `recommended_fetch` dla zmian
+`fields/samples`; frontend nie rozszerza z tego powodu schematu ani AsyncAPI.
+Jeżeli przyszły publisher poda canonical URL zasobu
+`/data/fields/{quantity_id}/samples/vector`, bridge traktuje go jako
+forward-compatible exact hint i unieważnia wyłącznie zgodne zasoby oraz ich
+kolekcje. Każdy inny lub nieobecny hint zachowuje obecny quantity-wide fallback.
+Diagnostyka zlicza faktycznie unieważnione subskrybowane klucze po flushu, nie
+domniemane żądania HTTP.
+
 ### Test regresyjny i kryterium akceptacji
 
 - Obecny quantity event ma test, że odświeża wszystkie i tylko subskrybowane keys

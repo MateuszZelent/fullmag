@@ -13,6 +13,7 @@ export interface FdmCuboidInstanceModel {
   cellIndices: Uint32Array;
   centers: Float32Array;
   count: number;
+  gridShape: [number, number, number];
 }
 
 export interface FdmVoxelTopographyOptions {
@@ -132,7 +133,63 @@ export function buildFdmCuboidInstanceModel(
     cellIndices,
     centers,
     count,
+    gridShape: [nx, ny, nz],
   };
+}
+
+/**
+ * Returns sampled FDM cell centres for the requested display scope. The source
+ * model is already capped by the domain display-cell budget, so this never
+ * expands a point pass beyond the configured sampling budget.
+ */
+export function buildFdmPointPositions(
+  model: FdmCuboidInstanceModel | null | undefined,
+  geometryScope: "surface" | "full",
+): Float32Array | null {
+  if (!model || model.count <= 0) return null;
+  if (geometryScope === "full") return model.centers;
+
+  const [nx, ny, nz] = model.gridShape;
+  let count = 0;
+  for (let instance = 0; instance < model.count; instance += 1) {
+    if (isFdmSurfaceCell(model.cellIndices[instance] ?? 0, nx, ny, nz)) {
+      count += 1;
+    }
+  }
+  if (count <= 0) return null;
+
+  const positions = new Float32Array(count * 3);
+  let writeOffset = 0;
+  for (let instance = 0; instance < model.count; instance += 1) {
+    if (!isFdmSurfaceCell(model.cellIndices[instance] ?? 0, nx, ny, nz)) {
+      continue;
+    }
+    const sourceOffset = instance * 3;
+    positions[writeOffset] = model.centers[sourceOffset] ?? 0;
+    positions[writeOffset + 1] = model.centers[sourceOffset + 1] ?? 0;
+    positions[writeOffset + 2] = model.centers[sourceOffset + 2] ?? 0;
+    writeOffset += 3;
+  }
+  return positions;
+}
+
+function isFdmSurfaceCell(
+  cellIndex: number,
+  nx: number,
+  ny: number,
+  nz: number,
+): boolean {
+  const ix = cellIndex % nx;
+  const iy = Math.floor(cellIndex / nx) % ny;
+  const iz = Math.floor(cellIndex / (nx * ny)) % nz;
+  return (
+    ix === 0 ||
+    iy === 0 ||
+    iz === 0 ||
+    ix === nx - 1 ||
+    iy === ny - 1 ||
+    iz === nz - 1
+  );
 }
 
 export function buildFdmVectorSegmentsUncached(

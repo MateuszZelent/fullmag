@@ -15,6 +15,7 @@ import {
   resolveRetainedViewport3DScalarColorbarLegends,
   resolveViewport3DColorbarLegend,
   resolveViewport3DMeshQualityLegend,
+  createViewport3DPointerHoldLifecycle,
   resolveViewport3DScalarColorbarLegend,
   resolveViewport3DScalarColorbarLegends,
   shouldClearRetainedViewport3DScalarColorbarLegends,
@@ -129,6 +130,113 @@ describe("resolveViewport3DMeshQualityLegend", () => {
     expect(resolveViewport3DMeshQualityLegend(false, "gamma", { max: 1, min: 0 }))
       .toBeNull();
     expect(resolveViewport3DMeshQualityLegend(true, "gamma", null)).toBeNull();
+  });
+});
+
+describe("createViewport3DPointerHoldLifecycle", () => {
+  function createPointerEventTarget() {
+    const listeners = new Map<string, EventListener>();
+    return {
+      addEventListener: vi.fn(
+        (type: string, listener: EventListener) => listeners.set(type, listener),
+      ),
+      dispatch(type: "pointercancel" | "pointerup", pointerId: number) {
+        listeners.get(type)?.({ pointerId } as PointerEvent);
+      },
+      removeEventListener: vi.fn(
+        (type: string, listener: EventListener) => {
+          if (listeners.get(type) === listener) listeners.delete(type);
+        },
+      ),
+    };
+  }
+
+  it("removes both terminal listeners when pointerup ends the hold", () => {
+    const target = createPointerEventTarget();
+    const onBegin = vi.fn();
+    const onEnd = vi.fn();
+    const hold = createViewport3DPointerHoldLifecycle({
+      onBegin,
+      onEnd,
+      target,
+    });
+
+    hold.begin(1);
+    target.dispatch("pointerup", 1);
+    hold.dispose();
+
+    expect(onBegin).toHaveBeenCalledOnce();
+    expect(onEnd).toHaveBeenCalledOnce();
+    expect(target.removeEventListener).toHaveBeenCalledTimes(2);
+    expect(target.removeEventListener).toHaveBeenCalledWith(
+      "pointerup",
+      expect.any(Function),
+      true,
+    );
+    expect(target.removeEventListener).toHaveBeenCalledWith(
+      "pointercancel",
+      expect.any(Function),
+      true,
+    );
+  });
+
+  it("removes both terminal listeners when pointercancel ends the hold", () => {
+    const target = createPointerEventTarget();
+    const onEnd = vi.fn();
+    const hold = createViewport3DPointerHoldLifecycle({
+      onBegin: vi.fn(),
+      onEnd,
+      target,
+    });
+
+    hold.begin(1);
+    target.dispatch("pointercancel", 1);
+    hold.dispose();
+
+    expect(onEnd).toHaveBeenCalledOnce();
+    expect(target.removeEventListener).toHaveBeenCalledTimes(2);
+  });
+
+  it("removes both terminal listeners and ends an active hold on unmount", () => {
+    const target = createPointerEventTarget();
+    const onEnd = vi.fn();
+    const hold = createViewport3DPointerHoldLifecycle({
+      onBegin: vi.fn(),
+      onEnd,
+      target,
+    });
+
+    hold.begin(1);
+    hold.begin(1);
+    hold.dispose();
+
+    expect(onEnd).toHaveBeenCalledOnce();
+    expect(target.addEventListener).toHaveBeenCalledTimes(2);
+    expect(target.removeEventListener).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the hold until the last active pointer ends", () => {
+    const target = createPointerEventTarget();
+    const onBegin = vi.fn();
+    const onEnd = vi.fn();
+    const hold = createViewport3DPointerHoldLifecycle({
+      onBegin,
+      onEnd,
+      target,
+    });
+
+    hold.begin(11);
+    hold.begin(22);
+    target.dispatch("pointerup", 11);
+
+    expect(onBegin).toHaveBeenCalledOnce();
+    expect(onEnd).not.toHaveBeenCalled();
+    expect(target.removeEventListener).not.toHaveBeenCalled();
+
+    target.dispatch("pointercancel", 22);
+
+    expect(onEnd).toHaveBeenCalledOnce();
+    expect(target.removeEventListener).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -1389,8 +1497,9 @@ describe("Viewport3DModule scene wiring", () => {
       "utf8",
     );
 
-    expect(source).toContain("beginViewport3DFieldUpdateHold();");
-    expect(source).toContain("endViewport3DFieldUpdateHold();");
+    expect(source).toContain("onBegin: beginViewport3DFieldUpdateHold,");
+    expect(source).toContain("onEnd: endViewport3DFieldUpdateHold,");
+    expect(source).toContain("createViewport3DPointerHoldLifecycle");
     expect(source).not.toContain("scheduleFieldUpdatePointerHoldRelease");
     expect(source).not.toContain("fieldUpdatePointerHoldReleaseTimeoutRef");
     expect(source).not.toContain("}, 150);");

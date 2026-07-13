@@ -66,6 +66,36 @@ jobs:
       - name: Test control-room app
         run: pnpm --dir apps/control-room test
 
+      - name: Install Chromium for viewport lifecycle audit
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Audit production viewport lifecycle and memory
+        run: pnpm --dir apps/control-room audit:viewport-3d-memory-churn
+
+      - name: Audit FEM topology WebGL position uploads
+        run: pnpm --dir apps/control-room audit:viewport-3d-fem-topology-uploads
+
+      - name: Verify viewport lifecycle audit negative controls
+        run: |
+          set -euo pipefail
+          for control in \
+            CONTROL_ROOM_AUDIT_INJECT_IDLE_LOOP \
+            CONTROL_ROOM_AUDIT_INJECT_WORKER_LEAK \
+            CONTROL_ROOM_AUDIT_INJECT_GPU_BUFFER_LEAK; do
+            if env "$control=1" pnpm --dir apps/control-room audit:viewport-3d-memory-churn; then
+              echo "Expected $control to fail the lifecycle audit."
+              exit 1
+            fi
+          done
+
+      - name: Upload viewport lifecycle audit artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: viewport-3d-browser-audit
+          path: apps/control-room/.artifacts/viewport-3d-browser-audit
+          if-no-files-found: warn
+
       - name: Build control-room app
         run: pnpm --dir apps/control-room build
 

@@ -161,7 +161,7 @@ describe("createViewport3DScalarShaderColorUploadPlan", () => {
     expect(attribute.version).toBeGreaterThan(0);
   });
 
-  it("reuses compatible shader attributes and removes attributes from the previous shader mode", () => {
+  it("reuses compatible shader attributes while retaining inactive slots", () => {
     const geometry = new BufferGeometry();
     const scalarAttribute = new BufferAttribute(new Float32Array(2), 1);
     geometry.setAttribute(VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE, scalarAttribute);
@@ -193,6 +193,49 @@ describe("createViewport3DScalarShaderColorUploadPlan", () => {
       scalarAttribute,
     );
     expect(Array.from(scalarAttribute.array as Float32Array)).toEqual([7, 9]);
-    expect(geometry.hasAttribute(VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE)).toBe(false);
+    expect(geometry.hasAttribute(VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE)).toBe(true);
+  });
+
+  it("retains inactive shader slots so mode switches reuse their GPU attribute identities", () => {
+    const geometry = new BufferGeometry();
+    const scalarValues = new Float32Array([1, 2]);
+    const vectorValues = new Float32Array([1, 2, 3, 4, 5, 6]);
+
+    for (const buffer of [
+      {
+        colors: new Float32Array(),
+        colorMode: "scalar",
+        range: { max: 2, min: 1 },
+        scalarValues,
+      },
+      {
+        colors: new Float32Array(),
+        colorMode: "orientation",
+        range: { max: 1, min: 0 },
+        vectorValues,
+      },
+      {
+        colors: new Float32Array(),
+        colorMode: "scalar",
+        range: { max: 2, min: 1 },
+        scalarValues,
+      },
+    ] satisfies ScalarColorBuffer[]) {
+      const plan = createViewport3DScalarShaderColorUploadPlan(
+        geometry,
+        buffer,
+        2,
+        2,
+      );
+      for (const chunk of plan?.chunks ?? []) chunk.upload();
+      plan?.onVisible();
+    }
+
+    expect(geometry.getAttribute(VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE)).toBeInstanceOf(
+      BufferAttribute,
+    );
+    expect(geometry.getAttribute(VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE)).toBeInstanceOf(
+      BufferAttribute,
+    );
   });
 });

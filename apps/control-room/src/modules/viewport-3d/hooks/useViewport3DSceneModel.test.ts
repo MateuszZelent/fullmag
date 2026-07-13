@@ -42,6 +42,7 @@ import {
   resolveViewport3DRegionSelectionBounds,
   resolveViewport3DRegionSelectionScope,
   resolveViewport3DRegionTargetByPartId,
+  resolveViewport3DRegionTargetsForMembershipOwnerParts,
   resolveViewport3DResourceFrameState,
   resolveViewport3DSceneCameraView,
   resolveViewport3DAirboxFieldVectorDemandPlan,
@@ -159,6 +160,27 @@ describe("useViewport3DSceneModel", () => {
       "realizedRegionKeys: meshBackedRegionKeys",
     );
     expect(regionOverlayBlock).toContain("meshBackedRegionKeys");
+  });
+
+  it("keeps stale topology geometry separate from every field-dependent model path", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+
+    expect(source).toContain(
+      "const topologyRenderModelForGeometry = topologyRenderable ? topologyRenderModel : null;",
+    );
+    expect(source).toContain(
+      "const fieldCompatibleTopologyRenderModel = topologyCurrent\n    ? fieldTopologyRenderModel\n    : null;",
+    );
+    expect(source).toContain("femDomain.fieldCapableMagneticParts ?? femDomain.magneticParts");
+    expect(source).toContain(
+      "topologyRenderModel: fieldCompatibleTopologyRenderModel",
+    );
+    expect(source).toContain("topology: fieldCompatibleTopologyRenderModel");
+    expect(source).toContain("topologyModel: topologyRenderModelForGeometry");
+    expect(source).toContain("Boolean(fieldCompatibleTopologyRenderModel) &&");
+    expect(source).toContain(
+      "useViewport3DMeshQualityData(\n    Boolean(fieldCompatibleTopologyRenderModel && meshQualityOverlayVisible),\n  )",
+    );
   });
 
   it("wraps primary field payloads as target field buffers without mixing legacy maps", () => {
@@ -555,6 +577,8 @@ describe("useViewport3DSceneModel", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
 
     expect(source).toContain("const fdmFieldVector =");
+    expect(source).toContain("resolveViewport3DFieldVectorForDomain({");
+    expect(source).toContain("safeViewport3DDomainGenerationId(");
     expect(source).toContain(
       "resolveViewport3DTargetQuantityFieldVectorForTarget({",
     );
@@ -2096,6 +2120,69 @@ describe("useViewport3DSceneModel", () => {
     ]);
   });
 
+  it("indexes membership regions once while preserving carrier and target ordering", () => {
+    let regionIdReads = 0;
+    const regionCount = 240;
+    const ownerCount = 240;
+    const regions = Array.from({ length: regionCount }, (_, index) => {
+      const regionId = `film:r${index}`;
+      return {
+        get region_id() {
+          regionIdReads += 1;
+          return regionId;
+        },
+        name: `Region ${index}`,
+        owner_object_id: "film",
+      };
+    });
+    const ownerParts = Array.from({ length: ownerCount }, (_, index) => ({
+      id: `membership:${encodeURIComponent(`film:r${index}`)}`,
+      object_id: "film",
+    }));
+
+    const targets = resolveViewport3DRegionTargetsForMembershipOwnerParts({
+      manifestRegions: [
+        {
+          mesh_part_ids: ["mesh-backed-first"],
+          name: "Mesh-backed first",
+          source_object_ids: ["film"],
+          source_region_candidate_id: "film:mesh-backed-first",
+        },
+      ] as never,
+      ownerParts: ownerParts as never,
+      regions: regions as never,
+    });
+
+    expect(Array.from(targets.entries()).slice(0, 3)).toEqual([
+      [
+        "mesh-backed-first",
+        {
+          id: "region:film:film%3Amesh-backed-first",
+          kind: "region",
+          label: "Mesh-backed first",
+        },
+      ],
+      [
+        "membership:film%3Ar0",
+        {
+          id: "region:film:film%3Ar0",
+          kind: "region",
+          label: "Region 0",
+        },
+      ],
+      [
+        "membership:film%3Ar1",
+        {
+          id: "region:film:film%3Ar1",
+          kind: "region",
+          label: "Region 1",
+        },
+      ],
+    ]);
+    expect(targets.size).toBe(regionCount + 1);
+    expect(regionIdReads).toBeLessThanOrEqual(regionCount + 1);
+  });
+
   it("requests memberships for all non-mesh-backed authored region overlays", () => {
     expect(
       resolveViewport3DRegionMembershipIds({
@@ -2126,7 +2213,7 @@ describe("useViewport3DSceneModel", () => {
     ).toEqual(["film:core", "film:edge"]);
   });
 
-  it("keeps parent visualization active for mesh-backed region parts", () => {
+  it("keeps mesh-backed region parts hidden until the region is explicitly enabled", () => {
     const visualization = new ObjectVisualizationController();
     const part = {
       id: "part:film:core",
@@ -2155,9 +2242,34 @@ describe("useViewport3DSceneModel", () => {
       }),
     ).toMatchObject({
       shaderVisible: false,
-      vectorsVisible: true,
+      vectorsVisible: false,
+      visible: false,
       wireframeVisible: false,
     });
+  });
+
+  it("uses the canonical part target when geometry is not a current scene object", () => {
+    const visualization = new ObjectVisualizationController();
+    const renderingState = {
+      targets: {
+        airbox: {},
+        objects: [],
+        parts: [{ scope: "part", scope_id: "part-film" }],
+      },
+    } as never;
+
+    expect(
+      resolveViewport3DPartVisualizationSettings({
+        objectVisualizationSnapshot: visualization.getSnapshot(),
+        part: {
+          geometry_id: "projection-film",
+          id: "part-film",
+          object_id: null,
+        } as never,
+        renderingState,
+        sceneObjectIds: new Set(),
+      }).target,
+    ).toMatchObject({ id: "part-film", kind: "part" });
   });
 
   it("applies backend region overrides to mesh-backed region parts", () => {
@@ -2264,7 +2376,7 @@ describe("useViewport3DSceneModel", () => {
     });
   });
 
-  it("does not let implicit region defaults hide mesh-backed object parts", () => {
+  it("keeps an unconfigured mesh-backed region part hidden", () => {
     const visualization = new ObjectVisualizationController();
     const part = {
       id: "part:film:core",
@@ -2282,9 +2394,9 @@ describe("useViewport3DSceneModel", () => {
         },
       }),
     ).toMatchObject({
-      shaderVisible: true,
-      visible: true,
-      wireframeVisible: true,
+      shaderVisible: false,
+      visible: false,
+      wireframeVisible: false,
     });
   });
 

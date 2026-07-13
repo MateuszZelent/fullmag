@@ -7,7 +7,6 @@ import {
   DATA_DOMAIN_META_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
   DATA_FIELD_META_PATH,
-  DATA_FIELD_VECTOR_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH,
   MODEL_SCENE_PATH,
@@ -17,6 +16,10 @@ import {
   isMagneticOnlyQuantityId,
   resolveCanonicalQuantityId,
 } from "@/kernel/api/quantityIds";
+import {
+  canonicalFieldVectorQuery,
+  serializeCanonicalFieldVectorResourceKey,
+} from "@/kernel/api/fieldQueryIdentity";
 import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
 import type {
   BinaryResourceResult,
@@ -370,24 +373,9 @@ export function resolveViewport3DFieldVectorResourceKey(
   quantityId: string,
   query: FieldVectorQuery = {},
 ): string {
-  const canonicalQuantityId = resolveCanonicalQuantityId(quantityId);
-  const path = DATA_FIELD_VECTOR_PATH.replace(
-    "{quantity_id}",
-    encodeURIComponent(canonicalQuantityId),
+  return serializeCanonicalFieldVectorResourceKey(
+    canonicalFieldVectorQuery(quantityId, query),
   );
-  const params = new URLSearchParams();
-  if (query.component) params.set("component", query.component);
-  if (query.max_samples != null) {
-    params.set("max_samples", String(query.max_samples));
-  }
-  if (query.scope_id) params.set("scope_id", query.scope_id);
-  if (query.scope_kind) params.set("scope_kind", query.scope_kind);
-  if (query.snapshot_id) params.set("snapshot_id", query.snapshot_id);
-  if (query.stage_id) params.set("stage_id", query.stage_id);
-  if (query.view) params.set("view", query.view);
-  if (query.phase_rad != null) params.set("phase_rad", String(query.phase_rad));
-  const suffix = params.toString();
-  return suffix ? `${path}?${suffix}` : path;
 }
 
 export function resolveViewport3DFieldVectorRequestResourceKey(

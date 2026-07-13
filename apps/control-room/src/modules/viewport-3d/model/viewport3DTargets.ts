@@ -1,9 +1,9 @@
 import type { FieldVectorQuery } from "@/kernel/api/apiTypes";
 import {
   visualizationTargetIdForSceneObject,
-  visualizationObjectIdForMeshPartLike,
   type Selection,
 } from "@/kernel/selection/selectionTypes";
+import { resolveVisualizationTargetForMeshPart } from "@/kernel/selection/visualizationTargetResolver";
 import {
   type VisualizationTargetRef,
 } from "@/kernel/visualization/ObjectVisualizationController";
@@ -74,20 +74,11 @@ export function targetForFdmDomain(
 export function targetForMeshPart(
   part: Viewport3DMeshPart,
 ): VisualizationTargetRef {
-  const objectId = visualizationObjectIdForMeshPartLike(part);
-  if (objectId) {
-    return {
-      id: visualizationTargetIdForSceneObject(objectId),
-      kind: "object",
-      label: part.label,
-    };
-  }
-
-  return {
-    id: part.id,
-    kind: "part",
-    label: part.label,
-  };
+  return resolveVisualizationTargetForMeshPart({
+    part,
+    sceneObjectIds: new Set(),
+    targetRegistry: null,
+  });
 }
 
 export function resolveHysteresisStepViewportTarget(

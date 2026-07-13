@@ -8,6 +8,7 @@ import {
   resolveNodeSelectionIndex,
   type Viewport3DNodeSelection,
 } from "./viewport3dRenderModel";
+import { attachViewport3DSharedTopologyPosition } from "./viewport3dSharedTopologyPositions";
 
 export interface Viewport3DPointPositionSource {
   nodeCount: number;
@@ -61,9 +62,9 @@ export function createViewport3DIndexedPointGeometry(
   if (pointCount <= 0) return null;
 
   const geometry = new BufferGeometry();
-  geometry.setAttribute(
-    "position",
-    new BufferAttribute(ensureFloat32PositionArray(source.positions), 3),
+  attachViewport3DSharedTopologyPosition(
+    geometry,
+    ensureFloat32PositionArray(source.positions),
   );
 
   const explicitIndices = selection?.nodeIndices ?? selection?.node_indices;

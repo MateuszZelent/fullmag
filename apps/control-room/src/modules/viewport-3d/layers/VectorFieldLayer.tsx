@@ -23,7 +23,6 @@ import {
 
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
-import { createViewport3DDerivedBufferCache } from "../build-engine/cache/viewport3dDerivedBufferCache";
 import type { Viewport3DDerivedBufferRetainHandle } from "../build-engine/cache/viewport3dDerivedBufferCache";
 import { createViewport3DGpuUploadManager } from "../build-engine/gpu/viewport3dGpuUploadManager";
 import type { Viewport3DGpuUploadChunk } from "../build-engine/gpu/viewport3dGpuUploadTypes";
@@ -37,6 +36,7 @@ import {
 } from "./vectorGlyphBuildScheduler";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import { RENDER_POLICIES } from "./viewport3DRenderPolicy";
+import { useVectorGlyphDerivedBufferCache } from "./vectorGlyphDerivedBufferRuntime";
 
 const UNIT_Y = new Vector3(0, 1, 0);
 // V1-matched proportions for better visual quality.
@@ -117,6 +117,112 @@ function markVectorGlyphAttributeRange(
   if (safeCount <= 0) return;
   attribute.addUpdateRange(safeStart * itemSize, safeCount * itemSize);
   attribute.needsUpdate = true;
+}
+
+export function createVectorGlyphColorUploadRollback({
+  attribute,
+  count,
+  head,
+  material,
+  shaft,
+  start,
+}: {
+  attribute: InstancedBufferAttribute;
+  count: number;
+  head: InstancedMesh;
+  material: MeshBasicMaterial;
+  shaft: InstancedMesh;
+  start: number;
+}): () => void {
+  const colorStart = start * 3;
+  const priorColors = (attribute.array as Float32Array).slice(
+    colorStart,
+    colorStart + count * 3,
+  );
+  const priorRanges = attribute.updateRanges.map(({ count: rangeCount, start: rangeStart }) => ({
+    count: rangeCount,
+    start: rangeStart,
+  }));
+  const priorHeadCount = head.count;
+  const priorHeadInstanceColor = head.instanceColor;
+  const priorMaterialColor = material.color.clone();
+  const priorMaterialVertexColors = material.vertexColors;
+  const priorShaftCount = shaft.count;
+  const priorShaftInstanceColor = shaft.instanceColor;
+
+  return () => {
+    (attribute.array as Float32Array).set(priorColors, colorStart);
+    restoreVectorGlyphUpdateRanges(attribute, priorRanges);
+    shaft.count = priorShaftCount;
+    head.count = priorHeadCount;
+    shaft.instanceColor = priorShaftInstanceColor;
+    head.instanceColor = priorHeadInstanceColor;
+    material.color.copy(priorMaterialColor);
+    material.vertexColors = priorMaterialVertexColors;
+    material.needsUpdate = true;
+  };
+}
+
+export function createVectorGlyphMatrixUploadRollback({
+  count,
+  head,
+  shaft,
+  start,
+}: {
+  count: number;
+  head: InstancedMesh;
+  shaft: InstancedMesh;
+  start: number;
+}): () => void {
+  const matrixStart = start * 16;
+  const matrixLength = count * 16;
+  const priorHeadMatrices = (head.instanceMatrix.array as Float32Array).slice(
+    matrixStart,
+    matrixStart + matrixLength,
+  );
+  const priorHeadRanges = head.instanceMatrix.updateRanges.map(
+    ({ count: rangeCount, start: rangeStart }) => ({
+      count: rangeCount,
+      start: rangeStart,
+    }),
+  );
+  const priorHeadCount = head.count;
+  const priorShaftMatrices = (shaft.instanceMatrix.array as Float32Array).slice(
+    matrixStart,
+    matrixStart + matrixLength,
+  );
+  const priorShaftRanges = shaft.instanceMatrix.updateRanges.map(
+    ({ count: rangeCount, start: rangeStart }) => ({
+      count: rangeCount,
+      start: rangeStart,
+    }),
+  );
+  const priorShaftCount = shaft.count;
+
+  return () => {
+    (shaft.instanceMatrix.array as Float32Array).set(
+      priorShaftMatrices,
+      matrixStart,
+    );
+    (head.instanceMatrix.array as Float32Array).set(
+      priorHeadMatrices,
+      matrixStart,
+    );
+    restoreVectorGlyphUpdateRanges(shaft.instanceMatrix, priorShaftRanges);
+    restoreVectorGlyphUpdateRanges(head.instanceMatrix, priorHeadRanges);
+    shaft.count = priorShaftCount;
+    head.count = priorHeadCount;
+  };
+}
+
+function restoreVectorGlyphUpdateRanges(
+  attribute: InstancedBufferAttribute,
+  ranges: readonly { readonly count: number; readonly start: number }[],
+): void {
+  attribute.clearUpdateRanges();
+  for (const range of ranges) {
+    attribute.addUpdateRange(range.start, range.count);
+  }
 }
 
 function markVectorGlyphWork(name: string): string | null {
@@ -486,14 +592,12 @@ function useVectorGlyphBuild({
   tracker: Viewport3DResourceTracker;
 }): VectorGlyphBuildResult | null {
   const store = useMemo(() => createVectorGlyphBuildStore(), []);
-  const cache = useMemo(
-    () => createViewport3DDerivedBufferCache<VectorGlyphBuildResult>(),
-    [],
-  );
+  const cache = useVectorGlyphDerivedBufferCache();
   const retainedBuildRef =
     useRef<Viewport3DDerivedBufferRetainHandle<VectorGlyphBuildResult> | null>(
       null,
     );
+  const activeGroupKey = buildReference?.groupKey ?? null;
   const request = useMemo<VectorGlyphBuildRequest | null>(
     () =>
       segments
@@ -559,6 +663,14 @@ function useVectorGlyphBuild({
       }
     };
   }, [buildKey, buildReference, cache, invalidate, request, store, tracker]);
+
+  useEffect(() => {
+    if (!activeGroupKey) return;
+    cache.evictInactiveGroups({
+      activeGroupKey,
+      lane: "vector-glyph",
+    });
+  }, [activeGroupKey, cache]);
 
   let visibleCacheKey: string | null = null;
   let visibleResult: VectorGlyphBuildResult | null = null;
@@ -705,9 +817,19 @@ function useVectorGlyphUpload({
     const abortController = new AbortController();
     const startMark = markVectorGlyphWork(VECTOR_GLYPH_COLOR_UPLOAD_MEASURE);
     let measured = false;
+    const rollbacks = batches.map((batch) =>
+      createVectorGlyphColorUploadRollback({
+        attribute: instanceColorAttr,
+        count: batch.end - batch.start,
+        head,
+        material,
+        shaft,
+        start: batch.start,
+      }),
+    );
     instanceColorAttr.clearUpdateRanges();
 
-    const chunks: Viewport3DGpuUploadChunk[] = batches.map((batch) => ({
+    const chunks: Viewport3DGpuUploadChunk[] = batches.map((batch, index) => ({
       estimatedBytes:
         (batch.end - batch.start) * 3 * Float32Array.BYTES_PER_ELEMENT,
       itemCount: batch.end - batch.start,
@@ -717,6 +839,7 @@ function useVectorGlyphUpload({
           batch.start * 3,
         );
       },
+      rollback: rollbacks[index],
     }));
 
     uploadManager.enqueue({
@@ -785,6 +908,14 @@ function useVectorGlyphUpload({
     const startMark = markVectorGlyphWork(VECTOR_GLYPH_MATRIX_UPLOAD_MEASURE);
     let measured = false;
     const abortController = new AbortController();
+    const rollbacks = batches.map((batch) =>
+      createVectorGlyphMatrixUploadRollback({
+        count: batch.end - batch.start,
+        head: activeHead,
+        shaft: activeShaft,
+        start: batch.start,
+      }),
+    );
     activeShaft.instanceMatrix.clearUpdateRanges();
     activeHead.instanceMatrix.clearUpdateRanges();
     const transformByteLength = estimateVectorGlyphTransformBytes(activeGlyphs);
@@ -798,7 +929,7 @@ function useVectorGlyphUpload({
         })
       : null;
 
-    const chunks: Viewport3DGpuUploadChunk[] = batches.map((batch) => {
+    const chunks: Viewport3DGpuUploadChunk[] = batches.map((batch, index) => {
       const batchCount = batch.end - batch.start;
       return {
         estimatedBytes:
@@ -841,6 +972,7 @@ function useVectorGlyphUpload({
             activeHead.setMatrixAt(index, matrix);
           }
         },
+        rollback: rollbacks[index],
       };
     });
 

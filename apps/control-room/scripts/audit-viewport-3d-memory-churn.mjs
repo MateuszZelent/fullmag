@@ -1,4 +1,14 @@
-const url = process.env.CONTROL_ROOM_URL ?? "http://localhost:3100/workspace";
+import { mkdir, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { createServer } from "node:net";
+import path from "node:path";
+
+const configuredUrl = process.env.CONTROL_ROOM_URL ?? null;
+const requestedAuditPort = Number(process.env.CONTROL_ROOM_AUDIT_PORT ?? 0);
+const auditArtifactsDirectory = path.resolve(
+  process.env.CONTROL_ROOM_AUDIT_ARTIFACTS_DIR ??
+    ".artifacts/viewport-3d-browser-audit",
+);
 const apiBase =
   process.env.CONTROL_ROOM_API_BASE_URL ??
   process.env.NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL ??
@@ -6,36 +16,25 @@ const apiBase =
   process.env.NEXT_PUBLIC_API_URL ??
   "http://localhost:8081";
 
-const FIELD_GRID = [96, 64, 4];
-const QUANTITY_SEQUENCE = [
-  "m",
-  "H_eff",
-  "H_demag",
-  "H_ex",
-  "m",
-  "H_eff",
-  "H_demag",
-  "H_ex",
-  "m",
-  "H_eff",
-  "H_demag",
-  "H_ex",
-  "m",
-  "H_eff",
-  "H_demag",
-  "H_ex",
-  "m",
-  "H_eff",
-  "H_demag",
-  "H_ex",
-  "m",
-  "H_eff",
-  "H_demag",
-  "H_ex",
-];
+// The gate measures ownership/lifecycle across many real WebGL uploads, not
+// throughput at production field sizes. Keep the fixture dense enough to
+// exercise every pass while bounded enough for 120 rendered transitions in CI.
+const FIELD_GRID = [24, 16, 2];
+const QUANTITY_SEQUENCE = Array.from(
+  { length: 120 },
+  (_, index) => ["m", "H_eff", "H_demag", "H_ex"][index % 4],
+);
 const WARM_QUANTITIES = ["m", "H_eff", "H_demag", "H_ex"];
 const MAX_HEAP_GROWTH_BYTES = 25 * 1024 * 1024;
 const QUANTITY_SWITCH_TIMEOUT_MS = 20_000;
+const injectDroppedPublication =
+  process.env.CONTROL_ROOM_AUDIT_INJECT_DROPPED_PUBLICATION === "1";
+const injectBlankScene = process.env.CONTROL_ROOM_AUDIT_INJECT_BLANK_SCENE === "1";
+const injectListenerLeak = process.env.CONTROL_ROOM_AUDIT_INJECT_LISTENER_LEAK === "1";
+const injectIdleLoop = process.env.CONTROL_ROOM_AUDIT_INJECT_IDLE_LOOP === "1";
+const injectWorkerLeak = process.env.CONTROL_ROOM_AUDIT_INJECT_WORKER_LEAK === "1";
+const injectGpuBufferLeak =
+  process.env.CONTROL_ROOM_AUDIT_INJECT_GPU_BUFFER_LEAK === "1";
 
 async function loadPlaywright() {
   try {
@@ -57,6 +56,8 @@ if (!playwright?.chromium) {
   process.exit(2);
 }
 
+const managedRuntime = configuredUrl ? null : await startAuditRuntime();
+const url = configuredUrl ?? managedRuntime.url;
 const browser = await playwright.chromium.launch({
   args: ["--js-flags=--expose-gc"],
 });
@@ -71,10 +72,12 @@ const errors = [];
 const fixtureRequests = [];
 const fieldRequests = [];
 const topologyRequests = [];
+const auditedRequests = [];
 const fixture = createFdmFixture();
 let auditActive = false;
 
 await installFdmFixtureApi(page, fixture, fixtureRequests);
+await installBrowserAuditInstrumentation(page);
 await page.addInitScript(({ baseUrl }) => {
   window.__FULLMAG_CONFIG__ = {
     ...(window.__FULLMAG_CONFIG__ ?? {}),
@@ -105,6 +108,7 @@ page.on("response", (response) => {
 page.on("request", (request) => {
   if (!auditActive) return;
   const requestUrl = request.url();
+  auditedRequests.push(`${request.method()} ${requestUrl}`);
   if (requestUrl.includes("/v2/sessions/current/data/fields/")) {
     fieldRequests.push(`${request.method()} ${requestUrl}`);
   }
@@ -119,6 +123,7 @@ page.on("request", (request) => {
 });
 
 try {
+  await mkdir(auditArtifactsDirectory, { recursive: true });
   auditLog("goto", url);
   await page.goto(url, { waitUntil: "domcontentloaded" });
   const viewport = page.locator(".fm-viewport-3d");
@@ -134,7 +139,9 @@ try {
     await withTimeout(
       setGlobalQuantity(page, fixture, fixtureRequests, quantity, {
         allowExistingFieldRequest: true,
-        requireFieldRequest: true,
+        // The production-like no-session fixture may already have the selected
+        // field in its browser resource cache during bootstrap.
+        requireFieldRequest: false,
       }),
       QUANTITY_SWITCH_TIMEOUT_MS,
       `Timed out warming viewport quantity ${quantity}.`,
@@ -145,19 +152,74 @@ try {
   auditLog("reading baseline diagnostics");
   const baseline = {
     diagnostics: await readDiagnostics(viewport),
+    gpu: await readBrowserAuditCounters(page),
+    runtime: await readViewportAuditRuntime(page),
     heapBytes: await readJsHeapBytes(cdp),
   };
 
+  await page.locator('[data-action-id="ws-2d"]').click();
+  await page.locator(".fm-viewport-3d canvas").waitFor({ state: "detached", timeout: 10_000 });
+  await page.waitForTimeout(1_000);
+  const unmountedBaselineRuntime = await readViewportAuditRuntime(page);
+  const viewport3DMenuItem = page.getByRole("menuitem", { name: "3D viewport" });
+  if (await viewport3DMenuItem.isVisible()) {
+    await viewport3DMenuItem.click();
+  } else {
+    await page.locator('[data-action-id="viewport-3d.open"]').click();
+  }
+  await page.evaluate(() => {
+    window.__FULLMAG_CONTROL_ROOM_AUDIT__?.setActiveViewportModule("viewport-3d");
+  });
+  await canvas.waitFor({ state: "visible", timeout: 10_000 });
+  await page.keyboard.press("Escape");
+  await waitForDiagnostics(viewport);
+  if (injectListenerLeak) {
+    await page.evaluate(() => window.__FULLMAG_CONTROL_ROOM_AUDIT__?.injectViewportAuditListenerLeak());
+  }
+  if (injectWorkerLeak) {
+    await page.evaluate(() => window.__FULLMAG_CONTROL_ROOM_AUDIT__?.injectViewportAuditWorkerLeak());
+  }
+
   auditActive = true;
-  for (const quantity of QUANTITY_SEQUENCE) {
-    auditLog("switching cached quantity", quantity);
-    await withTimeout(
-      setGlobalQuantity(page, fixture, fixtureRequests, quantity),
-      QUANTITY_SWITCH_TIMEOUT_MS,
-      `Timed out switching viewport quantity ${quantity}.`,
+  for (const [index, quantity] of QUANTITY_SEQUENCE.entries()) {
+    if (index % 12 === 0) {
+      auditLog("switching cached quantity batch", `${index + 1}-${index + 12}`);
+    }
+    fixture.visualizationState = applyPatch(fixture.visualizationState, {
+      active_quantity_id: quantity,
+      field_component: index % 2 === 0 ? "x" : "magnitude",
+      layers: {
+        points: { visible: index % 3 === 0 },
+        vectors: { visible: index % 4 !== 0 },
+        wireframe: { visible: index % 5 !== 0 },
+      },
+      quantity: {
+        active_quantity_id: quantity,
+        field_component: index % 2 === 0 ? "x" : "magnitude",
+      },
+      vector_style: {
+        color_mode: index % 2 === 0 ? "magnitude" : "orientation",
+      },
+    });
+    fixture.visualizationState.revision += 1;
+    fixture.status.resources.visualization_state_revision =
+      fixture.visualizationState.revision;
+    const beforePublicationGpu = await readBrowserAuditCounters(page);
+    await page.evaluate(async ({ state, drop }) => {
+      const hook = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
+      if (!hook) throw new Error("Fullmag browser audit hook is not installed.");
+      if (!drop) hook.publishVisualizationState(state);
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
+    }, { drop: injectDroppedPublication && index === 0, state: fixture.visualizationState });
+    await assertPublicationRendered(
+      page,
+      viewport,
+      quantity,
+      fixture.visualizationState.revision,
+      beforePublicationGpu,
     );
   }
-  auditActive = false;
   await page.waitForTimeout(500);
 
   auditLog("reading final diagnostics");
@@ -204,6 +266,78 @@ try {
     throw new Error(`Browser console/network errors:\n${errors.join("\n")}`);
   }
 
+  if (injectIdleLoop) {
+    await injectViewportIdleLoop(page);
+  }
+  const idleRequestStart = auditedRequests.length;
+  const idle = await verifyViewportIdle(page, 5_000);
+  const idleRequests = auditedRequests.slice(idleRequestStart);
+  if (idleRequests.length > 0) {
+    throw new Error(
+      `Viewport issued resource requests during the ${idle.observeMs}ms idle window:\n${idleRequests.join("\n")}`,
+    );
+  }
+  auditActive = false;
+  const fidelity = await assertCanvasHasFidelity(page);
+  if (injectBlankScene) {
+    await clearViewportCanvas(page);
+    await assertCanvasHasFidelity(page);
+  }
+  const shaderSignatures = await collectStableShaderSignatures(page, fixture, viewport);
+  await page.screenshot({ path: path.join(auditArtifactsDirectory, "settled-3d.png") });
+  if (injectGpuBufferLeak) {
+    await injectViewportGpuBufferLeak(page);
+  }
+  const gpuAfterStress = await readBrowserAuditCounters(page);
+  const baselineLiveBuffers =
+    baseline.gpu.buffersCreated - baseline.gpu.buffersDeleted;
+  const stressLiveBuffers =
+    gpuAfterStress.buffersCreated - gpuAfterStress.buffersDeleted;
+  const createdDuringStress =
+    gpuAfterStress.buffersCreated - baseline.gpu.buffersCreated;
+  if (createdDuringStress < QUANTITY_SEQUENCE.length) {
+    throw new Error(
+      `GPU lifecycle gate did not observe every rendered transition: created ${createdDuringStress} buffers for ${QUANTITY_SEQUENCE.length} switches.`,
+    );
+  }
+  if (stressLiveBuffers > baselineLiveBuffers + 16) {
+    throw new Error(
+      `Live WebGL buffers did not return to a post-warmup plateau: baseline=${baselineLiveBuffers}, after=${stressLiveBuffers}.`,
+    );
+  }
+  await page.locator('[data-action-id="ws-2d"]').click();
+  await page.locator(".fm-viewport-3d canvas").waitFor({ state: "detached", timeout: 10_000 });
+  await page.waitForTimeout(1_000);
+  const afterUnmount = await readBrowserAuditCounters(page);
+  const afterUnmountRuntime = await readViewportAuditRuntime(page);
+  if (afterUnmount.buffersDeleted < gpuAfterStress.buffersDeleted) {
+    throw new Error("WebGL buffer delete counter regressed after viewport unmount.");
+  }
+  const unmountedLiveBuffers =
+    afterUnmount.buffersCreated - afterUnmount.buffersDeleted;
+  if (unmountedLiveBuffers > 4) {
+    throw new Error(
+      `Viewport unmount retained ${unmountedLiveBuffers} WebGL buffers; allowed 4 instrumentation/runtime buffers.`,
+    );
+  }
+  assertViewportRuntimeReleased(afterUnmountRuntime, unmountedBaselineRuntime);
+  await page.screenshot({ path: path.join(auditArtifactsDirectory, "after-unmount.png") });
+  await writeAuditArtifact({
+    after,
+    afterUnmount,
+    afterUnmountRuntime,
+    baseline,
+    unmountedBaselineRuntime,
+    shaderSignatures,
+    fixtureRequests,
+    gpuAfterStress,
+    idle,
+    idleRequests,
+    fidelity,
+    topologyRequests,
+    url,
+  });
+
   console.log(
     "Viewport 3D memory-churn audit passed:",
     `switches=${QUANTITY_SEQUENCE.length}`,
@@ -213,6 +347,8 @@ try {
     `frames=${baseline.diagnostics.frames}->${after.diagnostics.frames}`,
     `fieldRequests=${fieldRequests.length}`,
     `fixtureRequests=${fixtureRequests.length}`,
+    `gpuBuffers=${gpuAfterStress.buffersCreated}/${gpuAfterStress.buffersDeleted}`,
+    `gpuUploaded=${formatBytes(gpuAfterStress.bufferBytesUploaded)}`,
   );
 } catch (error) {
   await reportAuditFailure(page, fixture, {
@@ -225,6 +361,346 @@ try {
 } finally {
   auditActive = false;
   await browser.close();
+  await managedRuntime?.stop();
+}
+
+async function assertCanvasHasFidelity(page) {
+  const canvas = page.locator(".fm-viewport-3d canvas");
+  const box = await canvas.boundingBox();
+  if (!box || box.width <= 0 || box.height <= 0) {
+    throw new Error("Viewport fidelity gate could not measure the WebGL canvas.");
+  }
+  await canvas.evaluate(() => {
+    const style = document.createElement("style");
+    style.dataset.viewportAuditIsolation = "true";
+    style.textContent = `
+      .fm-viewport-3d *:not(canvas) { visibility: hidden !important; }
+      .fm-viewport-3d canvas { visibility: visible !important; }
+    `;
+    document.head.append(style);
+  });
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(undefined))));
+  let screenshot;
+  try {
+    screenshot = await page.screenshot({ clip: box });
+  } finally {
+    await canvas.evaluate(() => {
+      document.querySelector('[data-viewport-audit-isolation="true"]')?.remove();
+    });
+  }
+  const sample = await page.evaluate(async (encodedPng) => {
+    const response = await fetch(`data:image/png;base64,${encodedPng}`);
+    const bitmap = await createImageBitmap(await response.blob());
+    const target = new OffscreenCanvas(bitmap.width, bitmap.height);
+    const context = target.getContext("2d");
+    if (!context) return null;
+    context.drawImage(bitmap, 0, 0);
+    const pixels = context.getImageData(0, 0, bitmap.width, bitmap.height).data;
+    let varied = 0;
+    let signature = 2166136261;
+    const stride = Math.max(1, Math.floor(Math.min(bitmap.width, bitmap.height) / 64));
+    const reference = [pixels[0], pixels[1], pixels[2]];
+    for (let y = 0; y < bitmap.height; y += stride) {
+      for (let x = 0; x < bitmap.width; x += stride) {
+        const offset = (y * bitmap.width + x) * 4;
+        signature ^= pixels[offset] ^ pixels[offset + 1] ^ pixels[offset + 2] ^ pixels[offset + 3];
+        signature = Math.imul(signature, 16777619);
+        if (
+          Math.abs(pixels[offset] - reference[0]) > 8 ||
+          Math.abs(pixels[offset + 1] - reference[1]) > 8 ||
+          Math.abs(pixels[offset + 2] - reference[2]) > 8
+        ) varied += 1;
+      }
+    }
+    return { height: bitmap.height, signature: String(signature >>> 0), varied, width: bitmap.width };
+  }, screenshot.toString("base64"));
+  if (!sample || sample.varied === 0) {
+    throw new Error("Viewport fidelity gate detected a blank or uniform WebGL drawing buffer.");
+  }
+  return sample;
+}
+
+async function assertPublicationRendered(page, viewport, quantityId, revision, beforeGpu) {
+  await waitForCondition(
+    async () => {
+      const diagnostics = await readDiagnostics(viewport);
+      const runtime = await readViewportAuditRuntime(page);
+      const gpu = await readBrowserAuditCounters(page);
+      return (
+        diagnostics.raw.includes(`q:${quantityId}`) &&
+        String(runtime.visualizationRevision) === String(revision) &&
+        (gpu.frames > beforeGpu.frames || gpu.drawCalls > beforeGpu.drawCalls)
+      );
+    },
+    2_000,
+    `Audit publication r${revision} (${quantityId}) was not observed by the mounted viewport.`,
+  );
+}
+
+async function readViewportAuditRuntime(page) {
+  return page.evaluate(() => {
+    const hook = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
+    if (!hook) throw new Error("Fullmag browser audit hook is not installed.");
+    return hook.readViewportAuditRuntime();
+  });
+}
+
+async function clearViewportCanvas(page) {
+  await page.evaluate(() => {
+    const canvas = document.querySelector(".fm-viewport-3d canvas");
+    if (!(canvas instanceof HTMLCanvasElement)) throw new Error("Viewport canvas is missing.");
+    canvas.style.opacity = "0";
+    const gl = canvas.getContext("webgl2") ?? canvas.getContext("webgl");
+    if (!gl) throw new Error("Viewport WebGL context is missing.");
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.finish();
+  });
+}
+
+async function injectViewportIdleLoop(page) {
+  await page.evaluate(() => {
+    const canvas = document.querySelector(".fm-viewport-3d canvas");
+    if (!(canvas instanceof HTMLCanvasElement)) throw new Error("Viewport canvas is missing.");
+    const gl = canvas.getContext("webgl2") ?? canvas.getContext("webgl");
+    if (!gl) throw new Error("Viewport WebGL context is missing.");
+    const loop = () => {
+      gl.drawArrays(gl.POINTS, 0, 0);
+      requestAnimationFrame(loop);
+    };
+    requestAnimationFrame(loop);
+  });
+}
+
+async function injectViewportGpuBufferLeak(page) {
+  await page.evaluate(() => {
+    const canvas = document.querySelector(".fm-viewport-3d canvas");
+    if (!(canvas instanceof HTMLCanvasElement)) throw new Error("Viewport canvas is missing.");
+    const gl = canvas.getContext("webgl2") ?? canvas.getContext("webgl");
+    if (!gl) throw new Error("Viewport WebGL context is missing.");
+    for (let index = 0; index < 8; index += 1) {
+      gl.createBuffer();
+    }
+  });
+}
+
+async function collectStableShaderSignatures(page, fixture, viewport) {
+  const modes = [
+    { colorMode: "magnitude", component: "magnitude", id: "scalar" },
+    { colorMode: "orientation", component: "magnitude", id: "orientation" },
+    { colorMode: "magnitude", component: "x", id: "component" },
+  ];
+  const signatures = {};
+  for (const mode of modes) {
+    fixture.visualizationState = applyPatch(fixture.visualizationState, {
+      active_quantity_id: "m",
+      field_component: mode.component,
+      quantity: {
+        active_quantity_id: "m",
+        field_component: mode.component,
+      },
+      vector_style: { color_mode: mode.colorMode },
+    });
+    fixture.visualizationState.revision += 1;
+    fixture.status.resources.visualization_state_revision = fixture.visualizationState.revision;
+    const before = await readBrowserAuditCounters(page);
+    await page.evaluate((state) => window.__FULLMAG_CONTROL_ROOM_AUDIT__?.publishVisualizationState(state), fixture.visualizationState);
+    await assertPublicationRendered(page, viewport, "m", fixture.visualizationState.revision, before);
+    const first = await assertCanvasHasFidelity(page);
+    const second = await assertCanvasHasFidelity(page);
+    if (first.signature !== second.signature) {
+      throw new Error(`Shader visual signature for ${mode.id} was not repeatable.`);
+    }
+    signatures[mode.id] = first.signature;
+  }
+  return signatures;
+}
+
+function assertViewportRuntimeReleased(afterUnmountRuntime, baselineRuntime) {
+  const { resources, workers } = afterUnmountRuntime;
+  if (
+    workers.activeLeases !== 0 ||
+    workers.workers !== 0 ||
+    workers.timers !== 0 ||
+    workers.jobs !== 0
+  ) {
+    throw new Error(`Viewport worker runtime survived unmount: ${JSON.stringify(workers)}.`);
+  }
+  if (resources.listenerCount !== baselineRuntime.resources.listenerCount) {
+    const changedListeners = Object.fromEntries(
+      new Set([
+        ...Object.keys(baselineRuntime.listenerCounts),
+        ...Object.keys(afterUnmountRuntime.listenerCounts),
+      ])
+        .values()
+        .map((resourceKey) => [
+          resourceKey,
+          {
+            after: afterUnmountRuntime.listenerCounts[resourceKey] ?? 0,
+            baseline: baselineRuntime.listenerCounts[resourceKey] ?? 0,
+          },
+        ])
+        .filter(([, counts]) => counts.after !== counts.baseline),
+    );
+    throw new Error(
+      `Viewport resource subscriptions did not return to the pre-3D baseline: baseline=${baselineRuntime.resources.listenerCount}, after=${resources.listenerCount}, changed=${JSON.stringify(changedListeners)}.`,
+    );
+  }
+}
+
+async function readBrowserAuditCounters(page) {
+  return page.evaluate(() => ({ ...(window.__FM_VIEWPORT_BROWSER_AUDIT__ ?? {}) }));
+}
+
+async function verifyViewportIdle(page, observeMs) {
+  await page.waitForTimeout(500);
+  const before = await readBrowserAuditCounters(page);
+  await page.waitForTimeout(observeMs);
+  const after = await readBrowserAuditCounters(page);
+  const deltas = Object.fromEntries(
+    Object.keys(after).map((key) => [key, Number(after[key]) - Number(before[key])]),
+  );
+  for (const metric of ["frames", "drawCalls"]) {
+    if (deltas[metric] !== 0) {
+      throw new Error(`Viewport rendered during ${observeMs}ms idle window: ${metric} +${deltas[metric]}.`);
+    }
+  }
+  return { after, before, deltas, observeMs };
+}
+
+async function writeAuditArtifact(payload) {
+  await mkdir(auditArtifactsDirectory, { recursive: true });
+  await writeFile(
+    path.join(auditArtifactsDirectory, "metrics.json"),
+    `${JSON.stringify(payload, null, 2)}\n`,
+  );
+}
+
+async function startAuditRuntime() {
+  await runPnpm(["run", "build:audit:webpack"], {
+    NEXT_PUBLIC_AUDIT_BUILD: "1",
+  });
+  const port = await reserveAuditPort(requestedAuditPort);
+  const child = spawn("pnpm", ["exec", "next", "start", "--port", String(port)], {
+    cwd: process.cwd(),
+    env: { ...process.env, NEXT_PUBLIC_AUDIT_BUILD: "1" },
+    stdio: "pipe",
+  });
+  const output = [];
+  child.stdout.on("data", (chunk) => output.push(String(chunk)));
+  child.stderr.on("data", (chunk) => output.push(String(chunk)));
+  const serverUrl = `http://localhost:${port}/workspace`;
+  try {
+    await waitForHttp(serverUrl, 30_000, child);
+  } catch (error) {
+    child.kill("SIGTERM");
+    throw new Error(`Audit server did not become ready: ${error.message}\n${output.join("")}`);
+  }
+  return {
+    url: serverUrl,
+    async stop() {
+      if (child.exitCode === null) {
+        child.kill("SIGTERM");
+        await new Promise((resolve) => child.once("exit", resolve));
+      }
+    },
+  };
+}
+
+async function reserveAuditPort(requestedPort) {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(requestedPort, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : null;
+      server.close((error) => (error ? reject(error) : resolve(port)));
+    });
+  });
+}
+
+async function runPnpm(args, extraEnvironment) {
+  await new Promise((resolve, reject) => {
+    const child = spawn("pnpm", args, {
+      cwd: process.cwd(),
+      env: { ...process.env, ...extraEnvironment },
+      stdio: "inherit",
+    });
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      if (code === 0) resolve(undefined);
+      else reject(new Error(`pnpm ${args.join(" ")} exited with ${code ?? "signal"}.`));
+    });
+  });
+}
+
+async function waitForHttp(targetUrl, timeoutMs, child) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (child?.exitCode !== null && child?.exitCode !== undefined) {
+      throw new Error(`Audit server exited before readiness with code ${child.exitCode}.`);
+    }
+    try {
+      const response = await fetch(targetUrl, { redirect: "manual" });
+      if (response.status < 500) return;
+    } catch {
+      // The process is still binding its port.
+    }
+    await sleep(200);
+  }
+  throw new Error(`Timed out waiting for ${targetUrl}.`);
+}
+
+async function installBrowserAuditInstrumentation(page) {
+  await page.addInitScript(() => {
+    const counters = {
+      bufferBytesUploaded: 0,
+      buffersCreated: 0,
+      buffersDeleted: 0,
+      drawCalls: 0,
+      frames: 0,
+    };
+    window.__FM_VIEWPORT_BROWSER_AUDIT__ = counters;
+
+    const originalRaf = window.requestAnimationFrame.bind(window);
+    window.requestAnimationFrame = (callback) =>
+      originalRaf((timestamp) => {
+        counters.frames += 1;
+        callback(timestamp);
+      });
+
+    const originalGetContext = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function (...args) {
+      const context = originalGetContext.apply(this, args);
+      if (!context || !["webgl", "webgl2", "experimental-webgl"].includes(String(args[0]))) {
+        return context;
+      }
+      const gl = context;
+      if (gl.__fullmagAuditWrapped) return gl;
+      gl.__fullmagAuditWrapped = true;
+      for (const name of ["createBuffer", "deleteBuffer", "drawArrays", "drawElements", "drawArraysInstanced", "drawElementsInstanced"]) {
+        const original = gl[name];
+        if (typeof original !== "function") continue;
+        gl[name] = function (...methodArgs) {
+          if (name === "createBuffer") counters.buffersCreated += 1;
+          if (name === "deleteBuffer") counters.buffersDeleted += 1;
+          if (name.startsWith("draw")) counters.drawCalls += 1;
+          return original.apply(this, methodArgs);
+        };
+      }
+      for (const name of ["bufferData", "bufferSubData"]) {
+        const original = gl[name];
+        if (typeof original !== "function") continue;
+        gl[name] = function (...methodArgs) {
+          const data = methodArgs[1];
+          if (typeof data === "number") counters.bufferBytesUploaded += data;
+          else if (data && typeof data.byteLength === "number") counters.bufferBytesUploaded += data.byteLength;
+          return original.apply(this, methodArgs);
+        };
+      }
+      return gl;
+    };
+  });
 }
 
 async function installFdmFixtureApi(page, fixture, requests) {
@@ -445,7 +921,7 @@ async function setAuditStep(page, step) {
 async function waitForCondition(check, timeoutMs, message) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (check()) return;
+    if (await check()) return;
     await sleep(50);
   }
   throw new Error(message);

@@ -28,6 +28,27 @@ function invokeFrameCallback(
 }
 
 describe("Viewport3DScene scale helpers", () => {
+  it("places the shared glyph-cache provider above the model stack that mounts VectorFieldLayer consumers", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DScene.tsx", import.meta.url),
+      "utf8",
+    );
+    const sceneStart = source.indexOf("export function Viewport3DScene(");
+    const providerStart = source.indexOf(
+      "<VectorGlyphDerivedBufferCacheProvider",
+      sceneStart,
+    );
+    const modelStackStart = source.indexOf("<Viewport3DModelLayerStack", sceneStart);
+    const providerEnd = source.indexOf(
+      "</VectorGlyphDerivedBufferCacheProvider>",
+      providerStart,
+    );
+
+    expect(providerStart).toBeGreaterThan(sceneStart);
+    expect(providerStart).toBeLessThan(modelStackStart);
+    expect(providerEnd).toBeGreaterThan(modelStackStart);
+  });
+
   it("uses the demand-rendered dimension frame layer instead of Three helper grids", () => {
     const source = readFileSync(
       new URL("./Viewport3DScene.tsx", import.meta.url),

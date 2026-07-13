@@ -51,7 +51,7 @@ interface Viewport3DDerivedBufferResolveResult<TBuffer> {
   readonly targetRevision: string | null;
 }
 
-interface Viewport3DDerivedBufferCacheSnapshot<TBuffer> {
+export interface Viewport3DDerivedBufferCacheSnapshot<TBuffer> {
   readonly entries: readonly Viewport3DDerivedBufferCacheEntry<TBuffer>[];
   readonly entryCount: number;
   readonly estimatedBytes: number;
@@ -65,6 +65,11 @@ interface Viewport3DDerivedBufferEvictStaleRevisionsInput {
   readonly topologyRevision: string | number | null;
 }
 
+interface Viewport3DDerivedBufferEvictInactiveGroupsInput {
+  readonly activeGroupKey: string;
+  readonly lane: Viewport3DBuildLane;
+}
+
 export interface Viewport3DDerivedBufferRetainHandle<TBuffer> {
   readonly entry: Viewport3DDerivedBufferCacheEntry<TBuffer>;
   readonly release: () => void;
@@ -72,6 +77,10 @@ export interface Viewport3DDerivedBufferRetainHandle<TBuffer> {
 
 export interface Viewport3DDerivedBufferCache<TBuffer> {
   readonly delete: (key: Viewport3DBuildJobKey) => boolean;
+  readonly dispose: () => void;
+  readonly evictInactiveGroups: (
+    input: Viewport3DDerivedBufferEvictInactiveGroupsInput,
+  ) => Viewport3DBuildJobKey[];
   readonly evictStaleRevisions: (
     input: Viewport3DDerivedBufferEvictStaleRevisionsInput,
   ) => Viewport3DBuildJobKey[];
@@ -90,6 +99,7 @@ export interface Viewport3DDerivedBufferCache<TBuffer> {
   readonly tryRetain: (
     key: Viewport3DBuildJobKey,
   ) => Viewport3DDerivedBufferRetainHandle<TBuffer> | null;
+  readonly subscribe: (listener: () => void) => () => void;
 }
 
 interface MutableViewport3DDerivedBufferCacheEntry<TBuffer> {
@@ -107,14 +117,19 @@ interface MutableViewport3DDerivedBufferCacheEntry<TBuffer> {
 }
 
 export function createViewport3DDerivedBufferCache<TBuffer>({
+  maxBytes = Number.POSITIVE_INFINITY,
+  maxEntries = Number.POSITIVE_INFINITY,
   now = defaultNow,
 }: {
+  readonly maxBytes?: number;
+  readonly maxEntries?: number;
   readonly now?: () => number;
 } = {}): Viewport3DDerivedBufferCache<TBuffer> {
   const entries = new Map<
     Viewport3DBuildJobKey,
     MutableViewport3DDerivedBufferCacheEntry<TBuffer>
   >();
+  const listeners = new Set<() => void>();
 
   function putReady(input: Viewport3DDerivedBufferPutInput<TBuffer>): void {
     const previous = entries.get(input.key);
@@ -132,6 +147,8 @@ export function createViewport3DDerivedBufferCache<TBuffer>({
       targetRevision: normalizeRevision(input.targetRevision),
       topologyRevision: normalizeRevision(input.topologyRevision),
     });
+    evictToBudget();
+    notify();
   }
 
   function get(
@@ -140,6 +157,7 @@ export function createViewport3DDerivedBufferCache<TBuffer>({
     const entry = entries.get(key);
     if (!entry) return null;
     entry.lastUsedAtMs = now();
+    notify();
     return freezeEntry(entry);
   }
 
@@ -207,6 +225,8 @@ export function createViewport3DDerivedBufferCache<TBuffer>({
         released = true;
         entry.refCount = Math.max(0, entry.refCount - 1);
         entry.lastUsedAtMs = now();
+        evictToBudget();
+        notify();
       },
     };
   }
@@ -214,7 +234,9 @@ export function createViewport3DDerivedBufferCache<TBuffer>({
   function deleteEntry(key: Viewport3DBuildJobKey): boolean {
     const entry = entries.get(key);
     if (!entry || entry.refCount > 0) return false;
-    return entries.delete(key);
+    const deleted = entries.delete(key);
+    if (deleted) notify();
+    return deleted;
   }
 
   function evictToMaxBytes(maxBytes: number): Viewport3DBuildJobKey[] {
@@ -225,6 +247,46 @@ export function createViewport3DDerivedBufferCache<TBuffer>({
     const evicted: Viewport3DBuildJobKey[] = [];
     for (const key of keys) {
       if (deleteEntry(key)) evicted.push(key);
+    }
+    return evicted;
+  }
+
+  function evictToBudget(): Viewport3DBuildJobKey[] {
+    const safeMaxBytes = normalizeBudget(maxBytes);
+    const safeMaxEntries = normalizeBudget(maxEntries);
+    let totalBytes = Array.from(entries.values()).reduce(
+      (total, entry) => total + entry.estimatedBytes,
+      0,
+    );
+    let entryCount = entries.size;
+    if (totalBytes <= safeMaxBytes && entryCount <= safeMaxEntries) return [];
+
+    const candidates = Array.from(entries.values())
+      .filter((entry) => entry.refCount <= 0)
+      .toSorted(
+        (left, right) =>
+          left.lastUsedAtMs - right.lastUsedAtMs ||
+          left.key.localeCompare(right.key),
+      );
+    const evicted: Viewport3DBuildJobKey[] = [];
+    for (const entry of candidates) {
+      if (totalBytes <= safeMaxBytes && entryCount <= safeMaxEntries) break;
+      if (!entries.delete(entry.key)) continue;
+      evicted.push(entry.key);
+      totalBytes -= entry.estimatedBytes;
+      entryCount -= 1;
+    }
+    return evicted;
+  }
+
+  function evictInactiveGroups({
+    activeGroupKey,
+    lane,
+  }: Viewport3DDerivedBufferEvictInactiveGroupsInput): Viewport3DBuildJobKey[] {
+    const evicted: Viewport3DBuildJobKey[] = [];
+    for (const entry of entries.values()) {
+      if (entry.lane !== lane || entry.groupKey === activeGroupKey) continue;
+      if (deleteEntry(entry.key)) evicted.push(entry.key);
     }
     return evicted;
   }
@@ -272,6 +334,20 @@ export function createViewport3DDerivedBufferCache<TBuffer>({
     };
   }
 
+  function dispose(): void {
+    entries.clear();
+    notify();
+  }
+
+  function subscribe(listener: () => void): () => void {
+    listeners.add(listener);
+    return () => listeners.delete(listener);
+  }
+
+  function notify(): void {
+    for (const listener of listeners) listener();
+  }
+
   function latestMatchingEntry(
     lane: Viewport3DBuildLane,
     groupKey: string,
@@ -288,6 +364,8 @@ export function createViewport3DDerivedBufferCache<TBuffer>({
 
   return {
     delete: deleteEntry,
+    dispose,
+    evictInactiveGroups,
     evictStaleRevisions,
     evictToMaxBytes,
     get,
@@ -295,6 +373,7 @@ export function createViewport3DDerivedBufferCache<TBuffer>({
     putReady,
     resolveVisible,
     retain,
+    subscribe,
     tryRetain,
   };
 }
@@ -318,6 +397,10 @@ function invalidResult<TBuffer>(
 
 function normalizeByteLength(value: number): number {
   return Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
+}
+
+function normalizeBudget(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : Number.POSITIVE_INFINITY;
 }
 
 function normalizeRevision(value: string | number | null): string | null {

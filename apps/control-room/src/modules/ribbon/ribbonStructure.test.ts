@@ -4,14 +4,18 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import { ALL_TAB_CONTENT } from "./ribbonContributions";
-import { buildRibbonTabContent } from "./ribbonContributions";
+import {
+  ALL_TAB_CONTENT,
+  buildRibbonTabContent,
+  resolveRibbonVisualizationTarget,
+} from "./ribbonContributions";
 import {
   RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND,
   RIBBON_COMMANDS,
   RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
   RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
   RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND,
+  RIBBON_VISUALIZATION_RESET_AIRBOX_COMMAND,
   visualizationTargetCommandInput,
 } from "./ribbonCommands";
 import {
@@ -225,6 +229,99 @@ function clickableRibbonMenuCommandGaps(
 }
 
 describe("ribbon structure", () => {
+  it("routes selected mesh parts through the canonical visualization target resolver", () => {
+    const target = resolveRibbonVisualizationTarget({
+      sceneObjectIds: new Set(),
+      selectedMeshPart: {
+        geometry_id: "projection-film",
+        id: "part-film",
+        object_id: null,
+      },
+      selection: {
+        kind: "mesh-part",
+        label: "Film mesh",
+        moduleSource: "test",
+        nodeId: "part-film",
+        objectId: "projection-film",
+        ref: {
+          kind: "mesh-part",
+          nodeId: "part-film",
+          objectId: "projection-film",
+          type: "mesh-part",
+          visualizationTargetId: "mesh-part:part-film",
+        },
+      },
+      visualizationState: {
+        targets: {
+          airbox: {},
+          objects: [],
+          parts: [{ scope: "part", scope_id: "part-film" }],
+        },
+      } as never,
+    });
+
+    expect(target).toMatchObject({ id: "part-film", kind: "part" });
+    expect(target && `part:${target.id}`).toBe("part:part-film");
+  });
+
+  it("keeps a selected mesh part scoped to the part before its manifest arrives", () => {
+    expect(
+      resolveRibbonVisualizationTarget({
+        sceneObjectIds: new Set(),
+        selectedMeshPart: null,
+        selection: {
+          kind: "mesh-part",
+          label: "Film mesh",
+          moduleSource: "test",
+          nodeId: "part-film",
+          objectId: "projection-film",
+          ref: {
+            kind: "mesh-part",
+            nodeId: "part-film",
+            objectId: "projection-film",
+            type: "mesh-part",
+            visualizationTargetId: "mesh-part:part-film",
+          },
+        },
+        visualizationState: null,
+      }),
+    ).toMatchObject({ id: "part-film", kind: "part" });
+  });
+
+  it("preserves canonical object ownership and scene-validated geometry aliases for selected mesh parts", () => {
+    const selection = {
+      kind: "mesh-part",
+      label: "Film mesh",
+      moduleSource: "test",
+      nodeId: "part-film",
+      objectId: "projection-film",
+      ref: {
+        kind: "mesh-part" as const,
+        nodeId: "part-film",
+        objectId: "projection-film",
+        type: "mesh-part" as const,
+        visualizationTargetId: "mesh-part:part-film" as const,
+      },
+    };
+
+    expect(
+      resolveRibbonVisualizationTarget({
+        sceneObjectIds: new Set(["projection-film"]),
+        selectedMeshPart: { id: "part-film", object_id: "projection-film" },
+        selection,
+        visualizationState: { targets: { airbox: {}, objects: [], parts: [] } } as never,
+      }),
+    ).toMatchObject({ id: "object:projection-film", kind: "object" });
+    expect(
+      resolveRibbonVisualizationTarget({
+        sceneObjectIds: new Set(["projection-film"]),
+        selectedMeshPart: { geometry_id: "projection-film", id: "part-film", object_id: null },
+        selection,
+        visualizationState: { targets: { airbox: {}, objects: [], parts: [] } } as never,
+      }),
+    ).toMatchObject({ id: "object:projection-film", kind: "object" });
+  });
+
   it("defines visible content and dropdown structure for every ribbon tab", () => {
     for (const tab of RIBBON_TABS) {
       const content = ALL_TAB_CONTENT[tab.id];
@@ -721,6 +818,34 @@ describe("ribbon structure", () => {
       });
   });
 
+  it("disables selected pass controls but keeps Visible and Clear available for a hidden target", () => {
+    const visualization = new ObjectVisualizationController();
+    visualization.patchTarget(
+      { id: "object:free-layer", kind: "object" },
+      { visible: false, wireframeVisible: true },
+    );
+    const content = buildRibbonTabContent("view", {
+      selection: {
+        kind: "object.visualization",
+        label: "Free layer",
+        moduleSource: "test",
+        nodeId: "model:object:free-layer:visualization",
+        objectId: "free-layer",
+        ref: null,
+      },
+      visualization,
+      visualizationSnapshot: visualization.getSnapshot(),
+    });
+    const renderAction = content?.groups
+      .find((group) => group.id === "view-selected-display")
+      ?.actions.find((action) => action.id === "view-selected-render");
+    const node = (id: string) => renderAction?.menu?.find((entry) => entry.id === id);
+
+    expect(node("selected:visible")).toMatchObject({ disabled: false, checked: false });
+    expect(node("selected:wireframe")).toMatchObject({ disabled: true, checked: false });
+    expect(node("selected:clear")).toMatchObject({ disabled: false });
+  });
+
   it("lets the selected surface color picker switch the target to solid coloring", async () => {
     const visualization = new ObjectVisualizationController();
     const content = buildRibbonTabContent("view", {
@@ -1039,6 +1164,14 @@ describe("ribbon structure", () => {
         ),
       },
     };
+    context.visualization.patchTarget(
+      {
+        id: visualizationTargetIdForSceneObject("free-layer", "region:core"),
+        kind: "region",
+      },
+      { visible: true },
+    );
+    context.visualizationSnapshot = context.visualization.getSnapshot();
     const content = buildRibbonTabContent("view", {
       ...context,
       selection,
@@ -1054,8 +1187,9 @@ describe("ribbon structure", () => {
     );
 
     expect(wireframeNode).toMatchObject({
-      checked: true,
+      checked: false,
       commandId: "visualization.target.set-wireframe-visible",
+      disabled: false,
     });
     if (wireframeNode?.type !== "checkbox") {
       throw new Error("Expected selected region wireframe control");
@@ -1109,6 +1243,14 @@ describe("ribbon structure", () => {
         ),
       },
     };
+    context.visualization.patchTarget(
+      {
+        id: visualizationTargetIdForSceneObject("free-layer", "region:core"),
+        kind: "region",
+      },
+      { visible: true },
+    );
+    context.visualizationSnapshot = context.visualization.getSnapshot();
     const content = buildRibbonTabContent("view", {
       ...context,
       selection,
@@ -1515,52 +1657,47 @@ describe("ribbon structure", () => {
     await runRibbonNode(pointColorNode, "#66eeff", commandContext);
     await runRibbonNode(visibleNode, false, commandContext);
 
-    expect(context.visualization.getSettings(AIRBOX_VISUALIZATION_TARGET))
-      .toMatchObject({
-        shaderColorMode: "x",
-        surfaceColorSource: "component_x",
-        vectorThickness: 2.4,
-        pointColor: "#66eeff",
-        wireframeColor: "#ffffff",
-      });
-    expect(patches).toEqual([
-      {
-        overrides: [
-          {
-            scope: "airbox",
-            scope_id: "airbox",
-            style: {
-              surface_color_source: "component_x",
-            },
-          },
-        ],
-      },
-      {
-        overrides: [
-          {
-            scope: "airbox",
-            scope_id: "airbox",
-            style: {
-              vector_thickness: 2.4,
-            },
-          },
-        ],
-      },
-      {
-        layers: {
-          airbox: {
-            visible: false,
-          },
-        },
-      },
+    expect(patches).toHaveLength(5);
+    expect(patches).toMatchObject([
+      { overrides: [{ style: { surface_color_source: "component_x" } }] },
+      { overrides: [{ style: { vector_thickness: 2.4 } }] },
+      { overrides: [{ style: { wireframe_color: "#ffffff" } }] },
+      { overrides: [{ style: { point_color: "#66eeff" } }] },
+      { layers: { airbox: { visible: false } } },
     ]);
     await vi.waitFor(() =>
       expect(invalidations).toEqual([
         [VISUALIZATION_STATE_PATH, 41],
         [VISUALIZATION_STATE_PATH, 42],
         [VISUALIZATION_STATE_PATH, 43],
+        [VISUALIZATION_STATE_PATH, 44],
+        [VISUALIZATION_STATE_PATH, 45],
       ]),
     );
+  });
+
+  it("keeps mixed local airbox controls out of pending backend overlays", async () => {
+    const { context, patches } = createVisualizationRibbonContext({ revision: 7 });
+    const result = await context.commands.execute(
+      RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND,
+      context.commandContext,
+      visualizationTargetCommandInput(AIRBOX_VISUALIZATION_TARGET, {
+        vectorCenteringEnabled: false,
+        visible: false,
+      }),
+    );
+
+    expect(result).toMatchObject({ status: "completed" });
+    expect(context.visualization.getSnapshot()).toMatchObject({
+      pendingOverrides: {
+        airbox: { baseRevision: 7, patch: { visible: false } },
+      },
+      viewportPreferences: {
+        airbox: { vectorCenteringEnabled: false },
+      },
+    });
+    expect(patches).toMatchObject([{ layers: { airbox: { visible: false } } }]);
+    expect(JSON.stringify(patches)).not.toContain("vectorCenteringEnabled");
   });
 
   it("wires the global Airbox ribbon menu to the airbox visualization target", async () => {
@@ -1659,9 +1796,7 @@ describe("ribbon structure", () => {
     await runRibbonNode(visibleNode, false, context);
     await runRibbonNode(vectorsNode, true, context);
 
-    expect(context.visualization.getSettings(AIRBOX_VISUALIZATION_TARGET))
-      .toMatchObject({ geometryScope: "surface" });
-    expect(patches).toEqual([
+    expect(patches).toMatchObject([
       {
         overrides: [
           {
@@ -1698,6 +1833,64 @@ describe("ribbon structure", () => {
         [VISUALIZATION_STATE_PATH, 43],
       ]),
     );
+  });
+
+  it("resets airbox layers and removes its override through the ribbon command", async () => {
+    const { context, patches } = createVisualizationRibbonContext({
+      overrides: [
+        {
+          scope: "airbox",
+          scope_id: "airbox",
+          quantity: { active_quantity_id: "H_eff" },
+          style: { vector_alpha: 0.4 },
+        },
+        {
+          scope: "object",
+          scope_id: "film",
+          quantity: { active_quantity_id: "m" },
+        },
+      ],
+      revision: 7,
+    });
+    const content = buildRibbonTabContent("view", context);
+    const airboxAction = content?.groups
+      .find((group) => group.id === "view-global-display")
+      ?.actions.find((action) => action.id === "view-airbox");
+    const resetNode = airboxAction?.menu?.find(
+      (node) => node.type === "item" && node.id === "airbox:reset",
+    );
+
+    expect(resetNode).toMatchObject({
+      commandId: RIBBON_VISUALIZATION_RESET_AIRBOX_COMMAND,
+    });
+    if (resetNode?.type !== "item") {
+      throw new Error("Expected airbox reset control");
+    }
+
+    await runRibbonNode(resetNode, undefined, context.commandContext);
+
+    expect(patches).toEqual([
+      {
+        layers: {
+          airbox: {
+            bounds: { opacity: 1, visible: false },
+            opacity: 0.28,
+            points: { opacity: 1, visible: false },
+            surface: { opacity: 1, visible: true },
+            vectors: { density: 1200, domain: "airbox_only", visible: false },
+            visible: true,
+            wireframe: { opacity: 1, visible: false },
+          },
+        },
+        overrides: [
+          {
+            scope: "object",
+            scope_id: "film",
+            quantity: { active_quantity_id: "m" },
+          },
+        ],
+      },
+    ]);
   });
 
   it("patches airbox vector controls through canonical visualization state", async () => {
@@ -1782,8 +1975,6 @@ describe("ribbon structure", () => {
     await runRibbonNode(thicknessNode, 1.6, context);
     await runRibbonNode(coloringNode, "x", context);
 
-    expect(context.visualization.getSettings(AIRBOX_VISUALIZATION_TARGET))
-      .toMatchObject({ geometryScope: "surface" });
     expect(patches).toHaveLength(5);
     expect(patches[0]).toMatchObject({
       overrides: [
@@ -1796,7 +1987,7 @@ describe("ribbon structure", () => {
         },
       ],
     });
-    expect(patches[1]).toEqual({
+    expect(patches[1]).toMatchObject({
       layers: {
         airbox: {
           vectors: {
@@ -1832,8 +2023,14 @@ describe("ribbon structure", () => {
       ],
     });
     expect(patches[3]).not.toHaveProperty("vector_style");
-    expect(patches[4]).toEqual({
-      vector_style: { color_mode: "x" },
+    expect(patches[4]).toMatchObject({
+      overrides: [
+        {
+          scope: "airbox",
+          scope_id: "airbox",
+          style: { vector_color_mode: "x" },
+        },
+      ],
     });
   });
 
@@ -1897,9 +2094,9 @@ describe("ribbon structure", () => {
 
     const commandContext = { ...context, selection };
     await runRibbonNode(visibleNode, true, commandContext);
-    await runRibbonNode(frameNode, true, commandContext);
+    expect(frameNode).toMatchObject({ disabled: true });
 
-    expect(patches).toEqual([
+    expect(patches).toMatchObject([
       {
         layers: {
           airbox: {
@@ -1910,23 +2107,11 @@ describe("ribbon structure", () => {
           },
         },
       },
-      {
-        layers: {
-          airbox: {
-            bounds: {
-              visible: true,
-            },
-          },
-        },
-      },
     ]);
     expect(context.visualization.getSettings(AIRBOX_VISUALIZATION_TARGET))
       .toMatchObject({ boundsVisible: false });
     await vi.waitFor(() =>
-      expect(invalidations).toEqual([
-        [VISUALIZATION_STATE_PATH, 41],
-        [VISUALIZATION_STATE_PATH, 42],
-      ]),
+      expect(invalidations).toEqual([[VISUALIZATION_STATE_PATH, 41]]),
     );
   });
 
@@ -2549,6 +2734,16 @@ describe("ribbon structure", () => {
       geometryScope: "surface",
       vectorCenteringEnabled: false,
       vectorSurfaceOffsetEnabled: true,
+    });
+    expect(context.visualization.getSnapshot().viewportPreferenceDefaults).toEqual({
+      object: {
+        vectorCenteringEnabled: false,
+        vectorSurfaceOffsetEnabled: true,
+      },
+      part: {
+        vectorCenteringEnabled: false,
+        vectorSurfaceOffsetEnabled: true,
+      },
     });
   });
 

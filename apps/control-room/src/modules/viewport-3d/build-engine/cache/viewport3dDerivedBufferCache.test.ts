@@ -14,6 +14,69 @@ function key(patch: Partial<Parameters<typeof buildViewport3DDerivedBufferCacheK
 }
 
 describe("viewport3dDerivedBufferCache", () => {
+  it("enforces byte and entry budgets after every ready result and release", () => {
+    let time = 0;
+    const cache = createViewport3DDerivedBufferCache<Float32Array>({
+      maxBytes: 16,
+      maxEntries: 2,
+      now: () => ++time,
+    });
+
+    for (let index = 0; index < 200; index += 1) {
+      const cacheKey = key({
+        groupKey: `quantity-${index % 5}:style-${index % 7}`,
+        revisionSummary: `switch-${index}`,
+      });
+      cache.putReady({
+        buffer: new Float32Array(4),
+        estimatedBytes: 16,
+        fieldRevision: `f${index}`,
+        groupKey: `quantity-${index % 5}:style-${index % 7}`,
+        key: cacheKey,
+        lane: "vector-glyph",
+        targetRevision: `field=f${index}`,
+        topologyRevision: "t1",
+      });
+
+      expect(cache.getSnapshot()).toMatchObject({
+        entryCount: 1,
+        estimatedBytes: 16,
+        retainedBytes: 0,
+      });
+    }
+  });
+
+  it("keeps a retained buffer through automatic eviction then makes it LRU-evictable on release", () => {
+    const cache = createViewport3DDerivedBufferCache<Float32Array>({
+      maxBytes: 16,
+      maxEntries: 1,
+    });
+    const retainedKey = key({ groupKey: "retained", revisionSummary: "retained" });
+    const replacementKey = key({ groupKey: "replacement", revisionSummary: "replacement" });
+    cache.putReady({ buffer: new Float32Array(4), estimatedBytes: 16, fieldRevision: "f1", groupKey: "retained", key: retainedKey, lane: "vector-glyph", targetRevision: "f1", topologyRevision: "t1" });
+    const retained = cache.retain(retainedKey);
+    cache.putReady({ buffer: new Float32Array(4), estimatedBytes: 16, fieldRevision: "f2", groupKey: "replacement", key: replacementKey, lane: "vector-glyph", targetRevision: "f2", topologyRevision: "t1" });
+
+    expect(cache.get(retainedKey)).not.toBeNull();
+    expect(cache.get(replacementKey)).toBeNull();
+    retained.release();
+    cache.putReady({ buffer: new Float32Array(4), estimatedBytes: 16, fieldRevision: "f3", groupKey: "replacement", key: replacementKey, lane: "vector-glyph", targetRevision: "f3", topologyRevision: "t1" });
+    expect(cache.get(retainedKey)).toBeNull();
+  });
+
+  it("removes inactive groups and disposes all buffers", () => {
+    const cache = createViewport3DDerivedBufferCache<Float32Array>();
+    const activeKey = key({ groupKey: "quantity-a", revisionSummary: "active" });
+    const inactiveKey = key({ groupKey: "quantity-b", revisionSummary: "inactive" });
+    for (const [cacheKey, groupKey] of [[activeKey, "quantity-a"], [inactiveKey, "quantity-b"]] as const) {
+      cache.putReady({ buffer: new Float32Array(4), estimatedBytes: 16, fieldRevision: "f1", groupKey, key: cacheKey, lane: "vector-glyph", targetRevision: "f1", topologyRevision: "t1" });
+    }
+    expect(cache.evictInactiveGroups({ activeGroupKey: "quantity-a", lane: "vector-glyph" })).toEqual([inactiveKey]);
+    expect(cache.getSnapshot().entryCount).toBe(1);
+    cache.dispose();
+    expect(cache.getSnapshot()).toMatchObject({ entryCount: 0, estimatedBytes: 0, retainedBytes: 0 });
+  });
+
   it("returns ready-current for an exact key and tracks retained bytes", () => {
     const cache = createViewport3DDerivedBufferCache<Float32Array>();
     const cacheKey = key();

@@ -84,11 +84,33 @@ export type VisualizationStoredTargetPatch = Omit<
   VisualizationTargetPatch,
   "renderMode"
 >;
+/**
+ * Client-owned rendering choices. They deliberately live outside the canonical
+ * visualization target override contract: a second viewport must not receive
+ * them through HTTP/realtime or mistake them for a backend acknowledgement.
+ */
+export interface ViewportTargetRenderingPreferences {
+  airboxSyntheticVectorsEnabled?: boolean;
+  primitiveVisible?: boolean;
+  vectorCenteringEnabled?: boolean;
+  vectorSurfaceOffsetEnabled?: boolean;
+  vectorSurfaceOffsetScale?: number;
+}
 
 export interface ObjectVisualizationSnapshot {
   defaults: Partial<Record<VisualizationTargetKind, VisualizationStoredTargetPatch>>;
+  viewportPreferenceDefaults?: Partial<
+    Record<VisualizationTargetKind, ViewportTargetRenderingPreferences>
+  >;
+  viewportPreferences?: Record<string, ViewportTargetRenderingPreferences>;
   overrides: Record<string, VisualizationStoredTargetPatch>;
+  pendingOverrides?: Record<string, PendingVisualizationTargetPatch>;
   version: number;
+}
+
+export interface PendingVisualizationTargetPatch {
+  baseRevision: number;
+  patch: VisualizationStoredTargetPatch;
 }
 
 export interface ResolvedTargetVisualization {
@@ -115,6 +137,10 @@ type AirboxVisualizationStateLike = {
 type ResolvedTargetSettingsResource = NonNullable<
   NonNullable<VisualizationStateResource["targets"]>["airbox"]
 >["settings"];
+
+type EffectiveTargetRegistryEntry = NonNullable<
+  NonNullable<VisualizationStateResource["targets"]>["airbox"]
+>;
 
 type ObjectVisualizationListener = () => void;
 
@@ -216,7 +242,19 @@ export class ObjectVisualizationController {
     VisualizationStoredTargetPatch
   >();
   private readonly listeners = new Set<ObjectVisualizationListener>();
+  private readonly viewportPreferenceDefaults = new Map<
+    VisualizationTargetKind,
+    ViewportTargetRenderingPreferences
+  >();
+  private readonly viewportPreferences = new Map<
+    string,
+    ViewportTargetRenderingPreferences
+  >();
   private readonly overrides = new Map<string, VisualizationStoredTargetPatch>();
+  private readonly pendingOverrides = new Map<
+    string,
+    PendingVisualizationTargetPatch
+  >();
   private snapshot: ObjectVisualizationSnapshot = {
     defaults: {},
     overrides: {},
@@ -232,10 +270,45 @@ export class ObjectVisualizationController {
   }
 
   clearTarget(target: VisualizationTargetRef): void {
-    if (!this.overrides.delete(visualizationTargetKey(target))) {
+    const key = visualizationTargetKey(target);
+    const clearedViewportPreference = this.viewportPreferences.delete(key);
+    const clearedOverride = this.overrides.delete(key);
+    const clearedPendingOverride = this.pendingOverrides.delete(key);
+    if (!clearedViewportPreference && !clearedOverride && !clearedPendingOverride) {
       return;
     }
 
+    this.bump();
+  }
+
+  removeTargetOverrideField(
+    target: VisualizationTargetRef,
+    field: keyof VisualizationTargetPatch,
+  ): void {
+    const key = visualizationTargetKey(target);
+    const override = this.overrides.get(key);
+    const pending = this.pendingOverrides.get(key);
+    const nextOverride = override
+      ? removeStoredTargetPatchField(override, field)
+      : undefined;
+    const nextPendingPatch = pending
+      ? removeStoredTargetPatchField(pending.patch, field)
+      : undefined;
+    const changed =
+      (override !== undefined && !samePatch(override, nextOverride ?? {})) ||
+      (pending !== undefined && !samePatch(pending.patch, nextPendingPatch ?? {}));
+    if (!changed) return;
+
+    if (nextOverride && Object.keys(nextOverride).length > 0) {
+      this.overrides.set(key, nextOverride);
+    } else {
+      this.overrides.delete(key);
+    }
+    if (pending && nextPendingPatch && Object.keys(nextPendingPatch).length > 0) {
+      this.pendingOverrides.set(key, { ...pending, patch: nextPendingPatch });
+    } else if (pending) {
+      this.pendingOverrides.delete(key);
+    }
     this.bump();
   }
 
@@ -243,11 +316,10 @@ export class ObjectVisualizationController {
     kind: VisualizationTargetKind,
     baseSettings?: VisualizationTargetSettings,
   ): VisualizationTargetSettings {
-    return resolveDefaultVisualizationSettings(
-      this.snapshot,
-      kind,
-      baseSettings,
-    );
+    return normalizeVisualizationSettings({
+      ...resolveDefaultVisualizationSettings(this.snapshot, kind, baseSettings),
+      ...(this.snapshot.viewportPreferenceDefaults?.[kind] ?? {}),
+    });
   }
 
   getSettings(target: VisualizationTargetRef): VisualizationTargetSettings {
@@ -277,6 +349,75 @@ export class ObjectVisualizationController {
     this.bump();
   }
 
+  patchTargetPending(
+    target: VisualizationTargetRef,
+    patch: VisualizationTargetPatch,
+    baseRevision: number,
+  ): void {
+    const key = visualizationTargetKey(target);
+    const current = this.pendingOverrides.get(key);
+    const nextPatch = normalizePatch({
+      ...(current?.patch ?? {}),
+      ...patch,
+    });
+    const next: PendingVisualizationTargetPatch = {
+      baseRevision,
+      patch: nextPatch,
+    };
+
+    if (
+      current?.baseRevision === next.baseRevision &&
+      samePatch(current.patch, next.patch)
+    ) {
+      return;
+    }
+
+    this.pendingOverrides.set(key, next);
+    this.bump();
+  }
+
+  acknowledgePendingTargetPatches(revision: number): void {
+    let changed = false;
+    for (const [key, pending] of this.pendingOverrides) {
+      if (revision > pending.baseRevision) {
+        this.pendingOverrides.delete(key);
+        changed = true;
+      }
+    }
+    if (changed) this.bump();
+  }
+
+  patchViewportPreferences(
+    target: VisualizationTargetRef,
+    patch: ViewportTargetRenderingPreferences,
+  ): void {
+    const key = visualizationTargetKey(target);
+    const current = this.viewportPreferences.get(key) ?? {};
+    const next = normalizeViewportTargetRenderingPreferences({
+      ...current,
+      ...patch,
+    });
+    if (samePatch(current, next)) return;
+
+    this.viewportPreferences.set(key, next);
+    this.bump();
+  }
+
+  patchViewportPreferenceDefaults(
+    kind: VisualizationTargetKind,
+    patch: ViewportTargetRenderingPreferences,
+  ): void {
+    const current = this.viewportPreferenceDefaults.get(kind) ?? {};
+    const next = normalizeViewportTargetRenderingPreferences({
+      ...current,
+      ...patch,
+    });
+    if (samePatch(current, next)) return;
+
+    this.viewportPreferenceDefaults.set(kind, next);
+    this.bump();
+  }
+
   patchDefaults(
     kind: VisualizationTargetKind,
     patch: VisualizationTargetPatch,
@@ -303,7 +444,10 @@ export class ObjectVisualizationController {
   private bump(): void {
     this.snapshot = {
       defaults: Object.fromEntries(this.defaults),
+      viewportPreferenceDefaults: Object.fromEntries(this.viewportPreferenceDefaults),
+      viewportPreferences: Object.fromEntries(this.viewportPreferences),
       overrides: Object.fromEntries(this.overrides),
+      pendingOverrides: Object.fromEntries(this.pendingOverrides),
       version: this.snapshot.version + 1,
     };
     for (const listener of this.listeners) {
@@ -368,7 +512,7 @@ export function renderModePatch(
 export function resolveVisualizationSettings(
   snapshot: ObjectVisualizationSnapshot,
   target: VisualizationTargetRef,
-  baseSettings?: VisualizationTargetSettings,
+  baseSettings?: VisualizationTargetPatch,
 ): VisualizationTargetSettings {
   return normalizeVisualizationSettings({
     ...resolveDefaultVisualizationSettings(snapshot, target.kind, baseSettings),
@@ -393,10 +537,32 @@ export function resolveEffectiveVisualizationSettings(
   };
 }
 
+/**
+ * Regions inherit the owner's quantity and color treatment, never its display
+ * activation. A region is an opt-in subdomain target, so visibility and every
+ * render pass stay on the region defaults until its own override enables them.
+ */
+export function resolveRegionInheritedBaseline(
+  ownerSettings: VisualizationTargetSettings,
+): VisualizationTargetPatch {
+  return {
+    activeQuantityId: ownerSettings.activeQuantityId,
+    pointColor: ownerSettings.pointColor,
+    scalarColorPalette: ownerSettings.scalarColorPalette,
+    shaderColorMode: ownerSettings.shaderColorMode,
+    shaderMonoColor: ownerSettings.shaderMonoColor,
+    surfaceColorSource: ownerSettings.surfaceColorSource,
+    surfaceProjectionMode: ownerSettings.surfaceProjectionMode,
+    vectorColorMode: ownerSettings.vectorColorMode,
+    vectorMonoColor: ownerSettings.vectorMonoColor,
+    wireframeColor: ownerSettings.wireframeColor,
+  };
+}
+
 export function resolveDefaultVisualizationSettings(
   snapshot: ObjectVisualizationSnapshot,
   kind: VisualizationTargetKind,
-  baseSettings?: VisualizationTargetSettings,
+  baseSettings?: VisualizationTargetPatch,
 ): VisualizationTargetSettings {
   if (kind === "region") {
     return normalizeVisualizationSettings({
@@ -424,25 +590,47 @@ export function resolveTargetVisualization({
   target: VisualizationTargetRef;
   visualizationState?: VisualizationStateResource | null;
 }): ResolvedTargetVisualization {
-  const baseSettings = resolveVisualizationBaseSettings(
-    target.kind,
+  const registryEntry = resolveEffectiveTargetRegistryEntry(
     visualizationState,
+    target,
   );
-  const localOverride = snapshot.overrides[visualizationTargetKey(target)] ?? null;
+  const baseSettings =
+    (registryEntry
+      ? visualizationSettingsFromResolvedTarget(
+          registryEntry.settings,
+          defaultVisualizationSettings(target.kind),
+        )
+      : null) ?? resolveVisualizationBaseSettings(target.kind, visualizationState);
+  const localOverride = registryEntry
+    ? resolvePendingTargetPatch(snapshot, target, visualizationState?.revision)
+    : snapshot.overrides[visualizationTargetKey(target)] ?? null;
+  const viewportPreferences = snapshot.viewportPreferences?.[
+    visualizationTargetKey(target)
+  ] ?? null;
+  const viewportPreferenceDefaults =
+    snapshot.viewportPreferenceDefaults?.[target.kind] ?? null;
   const backendOverride = resolveVisualizationStateTargetOverride(
     visualizationState,
     target,
   );
   const inheritedDefaultSettings =
-    target.kind === "region" ? inheritedSettings : inheritedSettings ?? baseSettings;
+    target.kind === "region"
+      ? inheritedSettings
+        ? resolveRegionInheritedBaseline(inheritedSettings)
+        : undefined
+      : inheritedSettings ?? baseSettings;
   const settings = normalizeVisualizationSettings({
-    ...resolveDefaultVisualizationSettings(
-      snapshot,
-      target.kind,
-      inheritedDefaultSettings,
-    ),
-    ...(backendOverride ?? {}),
+    ...(registryEntry
+      ? baseSettings
+      : resolveDefaultVisualizationSettings(
+          snapshot,
+          target.kind,
+          inheritedDefaultSettings,
+        )),
+    ...(registryEntry ? {} : (backendOverride ?? {})),
     ...(localOverride ?? {}),
+    ...(viewportPreferenceDefaults ?? {}),
+    ...(viewportPreferences ?? {}),
   });
 
   return {
@@ -461,6 +649,40 @@ export function resolveTargetVisualization({
         : `${snapshot.version}:${visualizationState.revision}`,
     settings,
   };
+}
+
+function resolvePendingTargetPatch(
+  snapshot: ObjectVisualizationSnapshot,
+  target: VisualizationTargetRef,
+  revision: number | undefined,
+): VisualizationStoredTargetPatch | null {
+  const pending = snapshot.pendingOverrides?.[visualizationTargetKey(target)];
+  if (!pending || revision === undefined || revision > pending.baseRevision) {
+    return null;
+  }
+  return pending.patch;
+}
+
+export function resolveEffectiveTargetRegistryEntry(
+  state: VisualizationStateResource | null | undefined,
+  target: VisualizationTargetRef,
+): EffectiveTargetRegistryEntry | null {
+  const registry = state?.targets;
+  if (!registry || target.kind === "region") return null;
+
+  const entries: readonly EffectiveTargetRegistryEntry[] =
+    target.kind === "airbox"
+      ? [registry.airbox]
+      : target.kind === "object"
+        ? registry.objects
+        : registry.parts;
+  const scopeId = visualizationStateScopeIdForTarget(target);
+
+  return (
+    entries.find(
+      (entry) => entry.scope === target.kind && entry.scope_id === scopeId,
+    ) ?? null
+  );
 }
 
 function resolveVisualizationStateTargetOverride(
@@ -696,6 +918,144 @@ export function mergeVisualizationStateTargetOverride(
     (entry) => !visualizationStateOverrideMatchesTarget(entry, target),
   );
   return [...rest.map(normalizeVisualizationStateOverride), merged];
+}
+
+/**
+ * Remove one semantic target setting from the serialized override that owns it.
+ * `undefined` cannot express deletion in a PATCH record: it is stripped before
+ * serialization and an existing backend value would survive the merge.
+ */
+export function removeTargetOverrideField(
+  overrides: readonly VisualizationStateResource["overrides"][number][],
+  target: VisualizationTargetRef,
+  field: keyof VisualizationTargetPatch,
+): VisualizationStateResource["overrides"] {
+  return overrides.flatMap((entry) => {
+    if (!visualizationStateOverrideMatchesTarget(entry, target)) {
+      return [normalizeVisualizationStateOverride(entry)];
+    }
+    const next = removeSerializedOverrideField(entry, field);
+    return isVisualizationStateOverrideEmpty(next) ? [] : [next];
+  });
+}
+
+function removeSerializedOverrideField(
+  entry: VisualizationStateResource["overrides"][number],
+  field: keyof VisualizationTargetPatch,
+): VisualizationStateResource["overrides"][number] {
+  const display = { ...(entry.display ?? {}) };
+  const style = { ...(entry.style ?? {}) };
+  let quantity = entry.quantity;
+  let visible = entry.visible;
+
+  switch (field) {
+    case "activeQuantityId":
+      quantity = undefined;
+      break;
+    case "boundsVisible":
+      delete display.bounds;
+      break;
+    case "geometryScope":
+      delete display.geometry_scope;
+      break;
+    case "opacityPercent":
+      delete display.opacity;
+      break;
+    case "pointsVisible":
+      delete display.points;
+      break;
+    case "shaderVisible":
+      delete display.surface;
+      break;
+    case "vectorsVisible":
+      delete display.vectors;
+      break;
+    case "visible":
+      delete display.visible;
+      visible = undefined;
+      break;
+    case "wireframeOpacityPercent":
+      if (display.wireframe) {
+        const wireframe = { ...display.wireframe };
+        delete wireframe.opacity;
+        if (Object.keys(wireframe).length === 0) delete display.wireframe;
+        else display.wireframe = wireframe;
+      }
+      break;
+    case "wireframeVisible":
+      if (display.wireframe) {
+        const wireframe = { ...display.wireframe };
+        delete wireframe.visible;
+        if (Object.keys(wireframe).length === 0) delete display.wireframe;
+        else display.wireframe = wireframe;
+      }
+      break;
+    case "pointColor":
+      delete style.point_color;
+      break;
+    case "scalarColorPalette":
+      delete style.scalar_color_palette;
+      break;
+    case "shaderColorMode":
+    case "surfaceColorSource":
+      delete style.surface_color_source;
+      break;
+    case "shaderMonoColor":
+      delete style.surface_mono_color;
+      break;
+    case "surfaceProjectionMode":
+      delete style.surface_projection_mode;
+      break;
+    case "vectorAlphaPercent":
+      delete style.vector_alpha;
+      break;
+    case "vectorBudget":
+      delete style.vector_budget;
+      break;
+    case "vectorColorMode":
+      delete style.vector_color_mode;
+      break;
+    case "vectorLengthScale":
+      delete style.vector_length_scale;
+      break;
+    case "vectorMonoColor":
+      delete style.vector_mono_color;
+      break;
+    case "vectorThickness":
+      delete style.vector_thickness;
+      break;
+    case "viewportColorbarVisible":
+      delete style.viewport_colorbar_visible;
+      break;
+    // Local-only settings are never serialized in a target override.
+    case "airboxSyntheticVectorsEnabled":
+    case "primitiveVisible":
+    case "renderMode":
+    case "vectorCenteringEnabled":
+    case "vectorSurfaceOffsetEnabled":
+    case "vectorSurfaceOffsetScale":
+      break;
+  }
+
+  return {
+    scope: entry.scope,
+    scope_id: entry.scope_id,
+    ...(visible === undefined ? {} : { visible }),
+    ...(Object.keys(display).length === 0 ? {} : { display }),
+    ...(Object.keys(style).length === 0 ? {} : { style }),
+    ...(quantity?.active_quantity_id ? { quantity } : {}),
+  };
+}
+
+function isVisualizationStateOverrideEmpty(
+  entry: VisualizationStateResource["overrides"][number],
+): boolean {
+  return (
+    entry.visible === undefined &&
+    !entry.display &&
+    !entry.style &&
+    !entry.quantity
+  );
 }
 
 export function visualizationStateOverrideMatchesTarget(
@@ -997,48 +1357,47 @@ export function resolveAirboxVisualizationSettingsFromState(
 
 function visualizationSettingsFromResolvedTarget(
   settings: ResolvedTargetSettingsResource | null | undefined,
+  defaultSettings = DEFAULT_AIRBOX_VISUALIZATION,
 ): VisualizationTargetSettings | null {
   if (!settings) return null;
 
   return normalizeVisualizationSettings({
-    ...DEFAULT_AIRBOX_VISUALIZATION,
+    ...defaultSettings,
     activeQuantityId:
       normalizeQuantityIdOrDefault(
         settings.active_quantity_id,
-        DEFAULT_AIRBOX_VISUALIZATION.activeQuantityId,
+        defaultSettings.activeQuantityId,
       ),
     boundsVisible: settings.bounds_visible,
     geometryScope: settings.geometry_scope,
     opacityPercent: layerOpacityToPercent(settings.opacity),
     pointsVisible: settings.points_visible,
     pointColor:
-      settings.point_color ?? DEFAULT_AIRBOX_VISUALIZATION.pointColor,
+      settings.point_color ?? defaultSettings.pointColor,
     renderMode: settings.render_mode,
     shaderMonoColor:
-      settings.surface_mono_color ?? DEFAULT_AIRBOX_VISUALIZATION.shaderMonoColor,
+      settings.surface_mono_color ?? defaultSettings.shaderMonoColor,
     shaderVisible: settings.surface_visible,
     scalarColorPalette:
       settings.scalar_color_palette ??
-      DEFAULT_AIRBOX_VISUALIZATION.scalarColorPalette,
+      defaultSettings.scalarColorPalette,
     surfaceColorSource: settings.surface_color_source,
     surfaceProjectionMode: settings.surface_projection_mode ?? "raw_nodal",
     vectorAlphaPercent: layerOpacityToPercent(settings.vector_alpha),
     vectorBudget: Math.max(
       0,
-      Math.floor(
-        settings.vector_budget ?? DEFAULT_AIRBOX_VISUALIZATION.vectorBudget,
-      ),
+      Math.floor(settings.vector_budget ?? defaultSettings.vectorBudget),
     ),
     vectorColorMode: settings.vector_color_mode,
     vectorLengthScale:
-      settings.vector_length_scale ?? DEFAULT_AIRBOX_VISUALIZATION.vectorLengthScale,
+      settings.vector_length_scale ?? defaultSettings.vectorLengthScale,
     vectorMonoColor:
-      settings.vector_mono_color ?? DEFAULT_AIRBOX_VISUALIZATION.vectorMonoColor,
+      settings.vector_mono_color ?? defaultSettings.vectorMonoColor,
     vectorThickness: settings.vector_thickness,
     vectorsVisible: settings.vectors_visible,
     visible: settings.visible,
     wireframeColor:
-      settings.wireframe_color ?? DEFAULT_AIRBOX_VISUALIZATION.wireframeColor,
+      settings.wireframe_color ?? defaultSettings.wireframeColor,
     wireframeOpacityPercent: layerOpacityToPercent(settings.wireframe_opacity),
     wireframeVisible: settings.wireframe_visible,
   });
@@ -1048,180 +1407,145 @@ export function airboxVisualizationStatePatchFromTargetPatch(
   patch: VisualizationTargetPatch,
   currentOverrides?: VisualizationStateResource["overrides"],
 ): VisualizationStatePatch {
+  const normalized = normalizePatch(patch);
   const hasExplicitDrawablePass =
-    patch.boundsVisible !== undefined ||
-    patch.pointsVisible !== undefined ||
-    patch.shaderVisible !== undefined ||
-    patch.vectorsVisible !== undefined ||
-    patch.wireframeVisible !== undefined;
+    normalized.boundsVisible !== undefined ||
+    normalized.pointsVisible !== undefined ||
+    normalized.shaderVisible !== undefined ||
+    normalized.vectorsVisible !== undefined ||
+    normalized.wireframeVisible !== undefined;
   const shouldEnableDefaultSurface =
-    patch.visible === true && !hasExplicitDrawablePass;
+    normalized.visible === true && !hasExplicitDrawablePass;
   const vectors =
-    patch.vectorsVisible === undefined && patch.vectorBudget === undefined
+    normalized.vectorsVisible === undefined && normalized.vectorBudget === undefined
       ? {}
       : {
           vectors: {
             domain: "airbox_only" as const,
-            ...(patch.vectorBudget === undefined
+            ...(normalized.vectorBudget === undefined
               ? {}
-              : { density: Math.max(0, Math.floor(patch.vectorBudget)) }),
-            ...(patch.vectorsVisible === undefined
+              : { density: normalized.vectorBudget }),
+            ...(normalized.vectorsVisible === undefined
               ? {}
-              : { visible: patch.vectorsVisible }),
+              : { visible: normalized.vectorsVisible }),
           },
         };
   const airbox: NonNullable<
     NonNullable<VisualizationStatePatch["layers"]>["airbox"]
   > = {
-    ...(patch.boundsVisible === undefined
+    ...(normalized.boundsVisible === undefined
       ? {}
-      : { bounds: { visible: patch.boundsVisible } }),
-    ...(patch.opacityPercent === undefined
+      : { bounds: { visible: normalized.boundsVisible } }),
+    ...(normalized.opacityPercent === undefined
       ? {}
-      : { opacity: clampOpacity(patch.opacityPercent) / 100 }),
-    ...(patch.pointsVisible === undefined
+      : { opacity: normalized.opacityPercent / 100 }),
+    ...(normalized.pointsVisible === undefined
       ? {}
-      : { points: { visible: patch.pointsVisible } }),
-    ...(patch.shaderVisible === undefined
+      : { points: { visible: normalized.pointsVisible } }),
+    ...(normalized.shaderVisible === undefined
       ? shouldEnableDefaultSurface
         ? { surface: { visible: true } }
         : {}
-      : { surface: { visible: patch.shaderVisible } }),
+      : { surface: { visible: normalized.shaderVisible } }),
     ...vectors,
-    ...(patch.visible === undefined ? {} : { visible: patch.visible }),
-    ...(patch.wireframeVisible === undefined
+    ...(normalized.visible === undefined ? {} : { visible: normalized.visible }),
+    ...(normalized.wireframeOpacityPercent === undefined &&
+    normalized.wireframeVisible === undefined
       ? {}
-      : { wireframe: { visible: patch.wireframeVisible } }),
+      : {
+          wireframe: {
+            ...(normalized.wireframeOpacityPercent === undefined
+              ? {}
+              : { opacity: normalized.wireframeOpacityPercent / 100 }),
+            ...(normalized.wireframeVisible === undefined
+              ? {}
+              : { visible: normalized.wireframeVisible }),
+          },
+        }),
   };
   const statePatch: VisualizationStatePatch = {
     ...(Object.keys(airbox).length > 0 ? { layers: { airbox } } : {}),
   };
-  const hasAirboxOverride =
-    currentOverrides?.some(
-      (entry) => entry.scope === "airbox" && entry.scope_id === "airbox",
-    ) ?? false;
-  const displayOverridePatch: VisualizationTargetPatch = hasAirboxOverride
-    ? {
-        ...(patch.boundsVisible === undefined
-          ? {}
-          : { boundsVisible: patch.boundsVisible }),
-        ...(patch.opacityPercent === undefined
-          ? {}
-          : { opacityPercent: patch.opacityPercent }),
-        ...(patch.pointsVisible === undefined
-          ? {}
-          : { pointsVisible: patch.pointsVisible }),
-        ...(patch.shaderVisible === undefined
-          ? shouldEnableDefaultSurface
-            ? { shaderVisible: true }
-            : {}
-          : { shaderVisible: patch.shaderVisible }),
-        ...(patch.vectorsVisible === undefined
-          ? {}
-          : { vectorsVisible: patch.vectorsVisible }),
-        ...(patch.visible === undefined ? {} : { visible: patch.visible }),
-        ...(patch.wireframeVisible === undefined
-          ? {}
-          : { wireframeVisible: patch.wireframeVisible }),
-      }
-    : {};
-  const targetPatch: VisualizationTargetPatch = {
-    ...displayOverridePatch,
-    ...(patch.activeQuantityId === undefined
-      ? {}
-      : { activeQuantityId: patch.activeQuantityId }),
-    ...(patch.geometryScope === undefined
-      ? {}
-      : { geometryScope: patch.geometryScope }),
-    ...(patch.scalarColorPalette === undefined
-      ? {}
-      : { scalarColorPalette: patch.scalarColorPalette }),
-    ...(patch.surfaceColorSource === undefined
-      ? {}
-      : { surfaceColorSource: patch.surfaceColorSource }),
-    ...(patch.viewportColorbarVisible === undefined
-      ? {}
-      : { viewportColorbarVisible: patch.viewportColorbarVisible }),
-    ...(patch.vectorLengthScale === undefined
-      ? {}
-      : { vectorLengthScale: patch.vectorLengthScale }),
-    ...(patch.vectorThickness === undefined
-      ? {}
-      : { vectorThickness: patch.vectorThickness }),
-  };
-  return currentOverrides && Object.keys(targetPatch).length > 0
+  const remotePatch = shouldEnableDefaultSurface
+    ? { ...normalized, shaderVisible: true }
+    : normalized;
+  return Object.keys(remotePatch).length > 0
     ? {
         ...statePatch,
         overrides: mergeVisualizationStateTargetOverride(
-          currentOverrides,
+          currentOverrides ?? [],
           AIRBOX_VISUALIZATION_TARGET,
-          targetPatch,
+          remotePatch,
         ),
       }
     : statePatch;
 }
 
-export function airboxLocalVisualizationPatchFromTargetPatch(
+export function viewportRenderingPreferencesFromTargetPatch(
   patch: VisualizationTargetPatch,
-): VisualizationTargetPatch {
+): ViewportTargetRenderingPreferences {
   return {
-    ...(patch.activeQuantityId === undefined
-      ? {}
-      : { activeQuantityId: patch.activeQuantityId }),
     ...(patch.airboxSyntheticVectorsEnabled === undefined
       ? {}
       : { airboxSyntheticVectorsEnabled: patch.airboxSyntheticVectorsEnabled }),
-    ...(patch.geometryScope === undefined
+    ...(patch.primitiveVisible === undefined
       ? {}
-      : { geometryScope: patch.geometryScope }),
-    ...(patch.shaderColorMode === undefined
-      ? {}
-      : { shaderColorMode: patch.shaderColorMode }),
-    ...(patch.scalarColorPalette === undefined
-      ? {}
-      : { scalarColorPalette: patch.scalarColorPalette }),
-    ...(patch.pointColor === undefined
-      ? {}
-      : { pointColor: patch.pointColor }),
-    ...(patch.shaderMonoColor === undefined
-      ? {}
-      : { shaderMonoColor: patch.shaderMonoColor }),
-    ...(patch.surfaceColorSource === undefined
-      ? {}
-      : { surfaceColorSource: patch.surfaceColorSource }),
-    ...(patch.viewportColorbarVisible === undefined
-      ? {}
-      : { viewportColorbarVisible: patch.viewportColorbarVisible }),
-    ...(patch.vectorAlphaPercent === undefined
-      ? {}
-      : { vectorAlphaPercent: patch.vectorAlphaPercent }),
+      : { primitiveVisible: patch.primitiveVisible }),
     ...(patch.vectorCenteringEnabled === undefined
       ? {}
       : { vectorCenteringEnabled: patch.vectorCenteringEnabled }),
-    ...(patch.vectorColorMode === undefined
-      ? {}
-      : { vectorColorMode: patch.vectorColorMode }),
-    ...(patch.vectorMonoColor === undefined
-      ? {}
-      : { vectorMonoColor: patch.vectorMonoColor }),
-    ...(patch.vectorLengthScale === undefined
-      ? {}
-      : { vectorLengthScale: patch.vectorLengthScale }),
-    ...(patch.vectorThickness === undefined
-      ? {}
-      : { vectorThickness: patch.vectorThickness }),
     ...(patch.vectorSurfaceOffsetEnabled === undefined
       ? {}
       : { vectorSurfaceOffsetEnabled: patch.vectorSurfaceOffsetEnabled }),
     ...(patch.vectorSurfaceOffsetScale === undefined
       ? {}
       : { vectorSurfaceOffsetScale: patch.vectorSurfaceOffsetScale }),
-    ...(patch.wireframeColor === undefined
-      ? {}
-      : { wireframeColor: patch.wireframeColor }),
-    ...(patch.wireframeOpacityPercent === undefined
-      ? {}
-      : { wireframeOpacityPercent: patch.wireframeOpacityPercent }),
+  };
+}
+
+export function persistentVisualizationTargetPatch(
+  patch: VisualizationTargetPatch,
+): VisualizationTargetPatch {
+  const persistent = { ...patch };
+  delete persistent.airboxSyntheticVectorsEnabled;
+  delete persistent.primitiveVisible;
+  delete persistent.vectorCenteringEnabled;
+  delete persistent.vectorSurfaceOffsetEnabled;
+  delete persistent.vectorSurfaceOffsetScale;
+  return persistent;
+}
+
+export function airboxLocalVisualizationPatchFromTargetPatch(
+  patch: VisualizationTargetPatch,
+): ViewportTargetRenderingPreferences {
+  return viewportRenderingPreferencesFromTargetPatch(patch);
+}
+
+export function resetAirboxVisualizationState(
+  currentState: Pick<VisualizationStateResource, "overrides">,
+): VisualizationStatePatch {
+  return {
+    layers: {
+      airbox: {
+        bounds: { opacity: 1, visible: DEFAULT_AIRBOX_VISUALIZATION.boundsVisible },
+        opacity: DEFAULT_AIRBOX_VISUALIZATION.opacityPercent / 100,
+        points: { opacity: 1, visible: DEFAULT_AIRBOX_VISUALIZATION.pointsVisible },
+        surface: { opacity: 1, visible: DEFAULT_AIRBOX_VISUALIZATION.shaderVisible },
+        vectors: {
+          density: DEFAULT_AIRBOX_VISUALIZATION.vectorBudget,
+          domain: "airbox_only",
+          visible: DEFAULT_AIRBOX_VISUALIZATION.vectorsVisible,
+        },
+        visible: DEFAULT_AIRBOX_VISUALIZATION.visible,
+        wireframe: {
+          opacity: DEFAULT_AIRBOX_VISUALIZATION.wireframeOpacityPercent / 100,
+          visible: DEFAULT_AIRBOX_VISUALIZATION.wireframeVisible,
+        },
+      },
+    },
+    overrides: (currentState.overrides ?? []).filter(
+      (entry) => !visualizationStateOverrideMatchesTarget(entry, AIRBOX_VISUALIZATION_TARGET),
+    ),
   };
 }
 
@@ -1383,6 +1707,49 @@ function normalizePatch(
     }
   }
   return normalized;
+}
+
+function normalizeViewportTargetRenderingPreferences(
+  preferences: ViewportTargetRenderingPreferences,
+): ViewportTargetRenderingPreferences {
+  return {
+    ...(preferences.airboxSyntheticVectorsEnabled === undefined
+      ? {}
+      : {
+          airboxSyntheticVectorsEnabled:
+            preferences.airboxSyntheticVectorsEnabled,
+        }),
+    ...(preferences.primitiveVisible === undefined
+      ? {}
+      : { primitiveVisible: preferences.primitiveVisible }),
+    ...(preferences.vectorCenteringEnabled === undefined
+      ? {}
+      : { vectorCenteringEnabled: preferences.vectorCenteringEnabled }),
+    ...(preferences.vectorSurfaceOffsetEnabled === undefined
+      ? {}
+      : { vectorSurfaceOffsetEnabled: preferences.vectorSurfaceOffsetEnabled }),
+    ...(preferences.vectorSurfaceOffsetScale === undefined
+      ? {}
+      : {
+          vectorSurfaceOffsetScale: Math.max(
+            0,
+            Math.min(1, preferences.vectorSurfaceOffsetScale),
+          ),
+        }),
+  };
+}
+
+function removeStoredTargetPatchField(
+  patch: VisualizationStoredTargetPatch,
+  field: keyof VisualizationTargetPatch,
+): VisualizationStoredTargetPatch {
+  const next = { ...patch };
+  delete next[field as keyof VisualizationStoredTargetPatch];
+  if (field === "surfaceColorSource" || field === "shaderColorMode") {
+    delete next.surfaceColorSource;
+    delete next.shaderColorMode;
+  }
+  return next;
 }
 
 function normalizeVisualizationSettings(
