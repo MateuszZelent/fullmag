@@ -5,6 +5,7 @@ pub(crate) mod multilayer;
 pub(crate) mod schedules;
 
 use crate::types::RunError;
+use std::collections::BTreeSet;
 
 /// Re-check the planner's resolved single-grid budget immediately before any
 /// CPU/CUDA engine allocation.  The runner must reject forged or stale plans
@@ -116,8 +117,46 @@ pub(crate) fn validate_multilayer_grid_budget(
             });
         }
     }
+    let computed_unique_kernels = if let Some(first_layer) = plan.layers.first() {
+        let cell_z = first_layer.convolution_cell_size[2];
+        if !cell_z.is_finite() || cell_z <= 0.0 {
+            return Err(RunError {
+                message: "FDM multilayer convolution cell size must be finite and positive"
+                    .to_string(),
+            });
+        }
+        let mut shifts = BTreeSet::new();
+        for dst in &plan.layers {
+            for src in &plan.layers {
+                shifts.insert(
+                    ((dst.native_origin[2] - src.native_origin[2]) / cell_z).round() as i64,
+                );
+            }
+        }
+        shifts.len() as u64
+    } else {
+        0
+    };
+    let padded_cells = plan.common_cells.iter().try_fold(1u64, |acc, cells| {
+        acc.checked_mul((*cells as u64).checked_mul(2)?)
+    });
+    let computed_kernel_bytes = padded_cells
+        .and_then(|cells| cells.checked_mul(6))
+        .and_then(|bytes| bytes.checked_mul(16))
+        .and_then(|bytes| bytes.checked_mul(computed_unique_kernels));
+    let computed_kernel_bytes = computed_kernel_bytes.ok_or_else(|| RunError {
+        message: "FDM multilayer kernel memory overflow before allocation".to_string(),
+    })?;
+    if plan.planner_summary.estimated_kernel_bytes != computed_kernel_bytes {
+        return Err(RunError {
+            message: format!(
+                "FDM multilayer kernel estimate mismatch: summary={} recomputed={computed_kernel_bytes}",
+                plan.planner_summary.estimated_kernel_bytes
+            ),
+        });
+    }
     aggregate_bytes = aggregate_bytes
-        .checked_add(plan.planner_summary.estimated_kernel_bytes)
+        .checked_add(computed_kernel_bytes)
         .ok_or_else(|| RunError {
             message: "FDM multilayer aggregate kernel memory overflow before allocation"
                 .to_string(),

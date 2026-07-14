@@ -24,7 +24,12 @@ pub(super) fn build_multilayer_demag_runtime(
         .first()
         .map(|layer| layer.convolution_cell_size)
         .unwrap_or([1.0, 1.0, 1.0]);
-    let mut kernel_pairs = Vec::with_capacity(plan.layers.len() * plan.layers.len());
+    let pair_capacity = plan.layers.len().checked_mul(plan.layers.len()).ok_or_else(|| {
+        RunError {
+            message: "FDM multilayer kernel-pair count overflow before allocation".to_string(),
+        }
+    })?;
+    let mut kernel_pairs = Vec::with_capacity(pair_capacity);
     for (src_index, src_layer) in plan.layers.iter().enumerate() {
         for (dst_index, dst_layer) in plan.layers.iter().enumerate() {
             let z_shift = dst_layer.native_origin[2] - src_layer.native_origin[2];

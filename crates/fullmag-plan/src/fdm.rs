@@ -1196,10 +1196,22 @@ fn fdm_multilayer_cuda_native_single_grid_eligible(layers: &[FdmLayerPlanIR]) ->
         }
         global_grid[axis] = rounded as usize;
     }
-    let Some(total_cells) = global_grid
+    let global_grid_u32 = match global_grid
         .iter()
-        .try_fold(1usize, |acc, cells| acc.checked_mul(*cells))
-    else {
+        .copied()
+        .map(u32::try_from)
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(values) if values.len() == 3 => [values[0], values[1], values[2]],
+        _ => return false,
+    };
+    let Ok(global_cost) = checked_fdm_grid_cost(
+        global_grid_u32,
+        FDM_GRID_ESTIMATED_BYTES_PER_CELL,
+    ) else {
+        return false;
+    };
+    let Ok(total_cells) = usize::try_from(global_cost.cells) else {
         return false;
     };
     let mut active_mask = vec![false; total_cells];
