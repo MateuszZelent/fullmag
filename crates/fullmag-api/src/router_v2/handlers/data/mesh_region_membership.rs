@@ -174,6 +174,26 @@ pub(crate) fn build_mesh_region_membership(
         );
     }
 
+    let has_generation = mesh.generation_id.is_some();
+    let has_marker_certificate = mesh.build_report.as_ref().is_some_and(|report| {
+        !report.region_markers.is_empty() || !report.object_region_markers.is_empty()
+    });
+    let realized_current = projection.is_none() && has_generation && has_marker_certificate;
+    let mut realization_warnings = if projection.is_some() {
+        vec![
+            "geometry_projection uses node and centroid membership; it is not a conformal mesh part"
+                .to_string(),
+        ]
+    } else {
+        Vec::new()
+    };
+    if projection.is_none() && !realized_current {
+        realization_warnings.push(
+            "realized membership lacks a current mesh generation and marker certificate"
+                .to_string(),
+        );
+    }
+
     Some(MeshRegionMembershipResource {
         mesh_id: mesh.mesh_id.clone(),
         mesh_revision,
@@ -182,8 +202,10 @@ pub(crate) fn build_mesh_region_membership(
         region_membership_revision,
         freshness: if projection.is_some() {
             "preview".to_string()
-        } else {
+        } else if realized_current {
             "current".to_string()
+        } else {
+            "stale".to_string()
         },
         realization: if projection.is_some() {
             "analytic_preview".to_string()
@@ -202,14 +224,7 @@ pub(crate) fn build_mesh_region_membership(
         realization_method: projection
             .is_some()
             .then(|| "shape_centroid_geometry_projection_v1".to_string()),
-        realization_warnings: if projection.is_some() {
-            vec![
-                "geometry_projection uses node and centroid membership; it is not a conformal mesh part"
-                    .to_string(),
-            ]
-        } else {
-            Vec::new()
-        },
+        realization_warnings,
         mesh_part_ids,
         element_indices,
         node_indices,

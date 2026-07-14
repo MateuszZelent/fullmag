@@ -49,6 +49,7 @@ struct RegionMembershipIdentity {
 
 - `MeshRegionMembershipResource` now publishes topology fingerprint, mesh generation ID, independent `region_membership_revision`, freshness and realization semantics.
 - Analytic geometry projection is explicitly marked `preview`/`analytic_preview`; mesh-part and object-segment paths are `current`/`realized`.
+- Mesh-backed membership is now `current` only when a generation ID and marker certificate are present; otherwise it is explicitly `stale` with an actionable warning.
 - API membership focused suite: 7 passed.
 - OpenAPI v2 regenerated, TypeScript schema synchronized, and `./scripts/ci/contract_guard.sh --strict` passed.
 - Historical mesh selection, marker-certificate binding, stale 409 semantics, binary scoped membership and browser proof remain open; MESH-REGION-012 is not production-closed.
