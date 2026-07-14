@@ -168,9 +168,12 @@ def _remesh_cylinder(
         _configure_gmsh_threads(gmsh)
         gmsh.model.add("fullmag_cylinder_afem")
         emit_progress("AFEM: building OCC cylinder geometry")
+        axis = geometry.axis
+        base = tuple(-0.5 * geometry.height * component for component in axis)
+        direction = tuple(geometry.height * component for component in axis)
         gmsh.model.occ.addCylinder(
-            0.0, 0.0, -geometry.height / 2.0,
-            0.0, 0.0, geometry.height,
+            base[0], base[1], base[2],
+            direction[0], direction[1], direction[2],
             geometry.radius,
         )
         gmsh.model.occ.synchronize()
@@ -285,4 +288,3 @@ def _remesh_imported(
 # ---------------------------------------------------------------------------
 # Air-box mesh generation for Poisson demag (S01)
 # ---------------------------------------------------------------------------
-

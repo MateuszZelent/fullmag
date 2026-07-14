@@ -695,8 +695,12 @@ def _create_occ_geometry(gmsh: Any, geometry: Geometry) -> list[tuple[int, int]]
         tag = gmsh.model.occ.addBox(-sx / 2, -sy / 2, -sz / 2, sx, sy, sz)
         return [(3, tag)]
     if isinstance(geometry, Cylinder):
+        axis = geometry.axis
+        base = tuple(-0.5 * geometry.height * component for component in axis)
+        direction = tuple(geometry.height * component for component in axis)
         tag = gmsh.model.occ.addCylinder(
-            0, 0, -geometry.height / 2, 0, 0, geometry.height, geometry.radius
+            base[0], base[1], base[2],
+            direction[0], direction[1], direction[2], geometry.radius
         )
         return [(3, tag)]
     if isinstance(geometry, Ellipsoid):
