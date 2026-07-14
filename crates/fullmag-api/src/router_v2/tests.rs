@@ -6602,6 +6602,12 @@ async fn mesh_periodic_pairs_returns_v1_diagnostics() {
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.fem_mesh = Some(sample_periodic_fem_mesh_payload());
         snapshot.mesh_revision = 41;
+        let mut scene = sample_scene_document();
+        scene.revision = 41;
+        snapshot.scene_document = Some(scene);
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "last_build_summary": {"source_scene_revision": 41}
+        }));
     }
     let app = build_v2_router().with_state(state);
 
@@ -6623,6 +6629,11 @@ async fn mesh_periodic_pairs_returns_v1_diagnostics() {
     assert_eq!(json["pairs"][0]["source_marker"], "x_min");
     assert_eq!(json["pairs"][0]["destination_marker"], "x_max");
     assert_eq!(json["pairs"][0]["paired_node_count"], 3);
+    assert_eq!(
+        json["pairs"][0]["node_pairs"],
+        serde_json::json!([[0, 1], [2, 3], [4, 5]])
+    );
+    assert_eq!(json["pairs"][0]["mixed_domain_node_pair_count"], 0);
     assert_eq!(json["pairs"][0]["unpaired_source_node_count"], 0);
     assert_eq!(json["pairs"][0]["unpaired_destination_node_count"], 0);
     assert_eq!(json["pairs"][0]["unpaired_source_face_count"], 0);
@@ -6649,6 +6660,15 @@ async fn mesh_periodic_pairs_returns_v1_diagnostics() {
     assert_eq!(json["pairs"][0]["max_residual_m"], 0.0);
     assert_eq!(json["pairs"][0]["rms_residual_m"], 0.0);
     assert_eq!(json["pairs"][0]["status"], "valid");
+    assert_eq!(json["status"], "valid");
+    assert!(json["topology_fingerprint"]
+        .as_str()
+        .is_some_and(|value| value.starts_with("sha256:")));
+    assert!(json["certificate_fingerprint"]
+        .as_str()
+        .is_some_and(|value| value.starts_with("sha256:")));
+    assert_eq!(json["certificate_revision"], 41);
+    assert_eq!(json["source_scene_revision"], 41);
 }
 
 #[tokio::test]
@@ -6728,6 +6748,8 @@ async fn mesh_periodic_pairs_marks_unpaired_boundary_nodes_invalid() {
         json["pairs"][0]["status"],
         "unpaired_boundary_nodes"
     );
+    assert_eq!(json["status"], "invalid");
+    assert!(!json["status_reasons"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -6757,7 +6779,45 @@ async fn mesh_periodic_pairs_does_not_count_mixed_domain_nodes_as_magnetic() {
         json["pairs"][0]["domain_node_pair_counts"],
         serde_json::json!({"magnetic": 1, "airbox": 1})
     );
+    assert_eq!(json["pairs"][0]["mixed_domain_node_pair_count"], 1);
     assert_eq!(json["pairs"][0]["status"], "mixed_domain_pair");
+    assert_eq!(json["status"], "invalid");
+}
+
+#[tokio::test]
+async fn mesh_periodic_pairs_marks_accepted_certificate_stale_after_scene_edit() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_periodic_fem_mesh_payload());
+        snapshot.mesh_revision = 45;
+        let mut scene = sample_scene_document();
+        scene.revision = 46;
+        snapshot.scene_document = Some(scene);
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "last_build_summary": {"source_scene_revision": 45}
+        }));
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/mesh/periodic_pairs.v1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["status"], "stale");
+    assert_eq!(json["source_scene_revision"], 45);
+    assert!(json["status_reasons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|reason| reason.as_str().unwrap_or_default().contains("source scene revision")));
 }
 
 #[tokio::test]

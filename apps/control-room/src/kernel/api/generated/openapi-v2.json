@@ -9856,6 +9856,22 @@
               "null"
             ]
           },
+          "mixed_domain_node_pair_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "node_pairs": {
+            "items": {
+              "items": {
+                "format": "int32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "type": "array"
+          },
           "pair_id": {
             "type": "string"
           },
@@ -9914,6 +9930,26 @@
       },
       "MeshPeriodicPairsResource": {
         "properties": {
+          "certificate_fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "certificate_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "mesh_generation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "pairs": {
             "items": {
               "$ref": "#/components/schemas/MeshPeriodicPairResource"
@@ -9927,6 +9963,30 @@
           },
           "schema_version": {
             "type": "string"
+          },
+          "source_scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/PeriodicValidationStatus",
+            "description": "Aggregate certificate/resource status. `valid` is reserved for a\ncurrent accepted v6 certificate with complete pair diagnostics."
+          },
+          "status_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "topology_fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -11240,6 +11300,15 @@
           "region_ids"
         ],
         "type": "object"
+      },
+      "PeriodicValidationStatus": {
+        "enum": [
+          "valid",
+          "invalid",
+          "stale",
+          "unavailable"
+        ],
+        "type": "string"
       },
       "PrimitiveGeometryCapability": {
         "properties": {

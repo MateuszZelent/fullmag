@@ -20,17 +20,22 @@
 
 ### Task 1: schema diff tests
 
-- [ ] Dodać API snapshot z node pairs, face metrics, mixed domain, unpaired counts, topology hash i validation reasons; current response ma FAIL asercje kompletności.
+- [x] Dodać API snapshot z node pairs, face metrics, mixed domain, unpaired counts, topology hash i validation reasons.
 
 ### Task 2: schema propagation
 
-- [ ] Rozszerzyć `crates/fullmag-api/src/schemas/mesh.rs` i `openapi_v2.rs`; handler mapuje wszystkie fields bez default fabrication.
-- [ ] Uruchomić `pnpm --dir apps/control-room generate:api`; usunąć ręczne shadow types i użyć generated enum/interfaces w facade/hooks.
-- [ ] Uruchomić `cargo test -p fullmag-api periodic_pairs --no-fail-fast` oraz frontend typecheck/test/API hygiene; PASS.
+- [x] Rozszerzyć `crates/fullmag-api/src/schemas/mesh.rs` i `openapi_v2.rs`; handler mapuje node pairs, face metrics, mixed/unpaired counts, aggregate status i fingerprints bez syntetyzowania topology.
+- [ ] Uruchomić `pnpm --dir apps/control-room generate:api`; brak `node_modules` uniemożliwił uruchomienie generatora, więc wygenerowany JSON i typy zostały zsynchronizowane ręcznie z aktualnym OpenAPI.
+- [x] Uruchomić `cargo test -p fullmag-api mesh_periodic_pairs --no-fail-fast` oraz API hygiene; 7 testów i contract guard PASS. Frontend typecheck/test pozostają otwarte z powodu braku zależności.
 
 ### Task 3: commit
 
-- [ ] Commit: `git add crates/fullmag-api apps/control-room/src/kernel/api && git commit -m "feat(api): preserve periodic certificate fidelity"`.
+- [x] Commit: backend/schema/OpenAPI/generated types/testy zapisane w osobnym logicznym commicie.
 
 **Exit:** typed response nie traci żadnego field potrzebnego Inspectorowi/viewportowi do odróżnienia valid, invalid, stale i unavailable.
 
+### Evidence (2026-07-14)
+
+- `cargo test -p fullmag-api mesh_periodic_pairs --no-fail-fast -- --nocapture` — 7 passed.
+- `./scripts/ci/contract_guard.sh --strict` — passed.
+- `MeshPeriodicPairResource` publishes explicit node pairs, mixed-domain pair count, unpaired node/face counts and v6 face metrics; `MeshPeriodicPairsResource` publishes typed aggregate `PeriodicValidationStatus`, reasons, topology/certificate fingerprints and source identity.

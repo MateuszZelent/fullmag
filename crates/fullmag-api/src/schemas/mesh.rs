@@ -455,7 +455,38 @@ pub struct MeshQualityGatesResource {
 pub struct MeshPeriodicPairsResource {
     pub revision: u64,
     pub schema_version: String,
+    /// Aggregate certificate/resource status. `valid` is reserved for a
+    /// current accepted v6 certificate with complete pair diagnostics.
+    #[serde(default)]
+    pub status: PeriodicValidationStatus,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub status_reasons: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topology_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub certificate_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub certificate_revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh_generation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_scene_revision: Option<u64>,
     pub pairs: Vec<MeshPeriodicPairResource>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PeriodicValidationStatus {
+    Valid,
+    Invalid,
+    Stale,
+    Unavailable,
+}
+
+impl Default for PeriodicValidationStatus {
+    fn default() -> Self {
+        Self::Unavailable
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
@@ -470,8 +501,12 @@ pub struct MeshPeriodicPairResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expected_translation_m: Option<[f64; 3]>,
     pub paired_node_count: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub node_pairs: Vec<[u32; 2]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub domain_node_pair_counts: Option<MeshPeriodicDomainNodePairCountsResource>,
+    #[serde(default)]
+    pub mixed_domain_node_pair_count: u32,
     pub unpaired_source_node_count: u32,
     pub unpaired_destination_node_count: u32,
     #[serde(default)]

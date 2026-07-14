@@ -5321,6 +5321,9 @@ export interface components {
             marker_a: number;
             /** Format: int32 */
             marker_b: number;
+            /** Format: int32 */
+            mixed_domain_node_pair_count: number;
+            node_pairs?: number[][];
             /** Format: double */
             max_residual_m?: number | null;
             pair_id: string;
@@ -5340,10 +5343,20 @@ export interface components {
             unpaired_source_face_count?: number;
         };
         MeshPeriodicPairsResource: {
+            certificate_fingerprint?: string | null;
+            /** Format: int64 */
+            certificate_revision?: number | null;
+            mesh_generation_id?: string | null;
             pairs: components["schemas"]["MeshPeriodicPairResource"][];
             /** Format: int64 */
             revision: number;
             schema_version: string;
+            source_scene_revision?: number | null;
+            /** @description Aggregate certificate/resource status. `valid` is reserved for a
+             * current accepted v6 certificate with complete pair diagnostics. */
+            status?: components["schemas"]["PeriodicValidationStatus"];
+            status_reasons?: string[];
+            topology_fingerprint?: string | null;
         };
         MeshQualityGatesResource: {
             gates?: Record<string, never> | null;
@@ -5668,6 +5681,8 @@ export interface components {
             base_revision?: number | null;
             region_ids: string[];
         };
+        /** @enum {string} */
+        PeriodicValidationStatus: "valid" | "invalid" | "stale" | "unavailable";
         PrimitiveGeometryCapability: {
             boolean: boolean;
             category: string;
