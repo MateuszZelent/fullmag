@@ -41,3 +41,9 @@ just run-viewport-3d-mixed-target-smoke
 
 **Exit:** jeden top-level gate dowodzi source, native runtime i viewport na tej samej mesh generation; failure dowolnego etapu propaguje nonzero exit.
 
+### Evidence (2026-07-14, blocked environment)
+
+- `just verify-fem-meshing-production`: Python meshing and Python API mesh stages passed; the wrapper stopped at `arch_waveguide_materialization_budget` because `.fullmag/local/python/bin/python` is absent. The direct script also confirms this missing managed runtime.
+- `just ensure-managed-fem-runtime`: attempted the repository-managed rebuild, but Docker Buildx could not update `/home/kkingstoun/.docker/buildx/activity` (`read-only file system`). This is an environment blocker, not a passing native/browser proof.
+- The `just` shell also reports `/etc/bash.bashrc: PS1: unbound variable` under nounset; direct `bash --noprofile --norc scripts/verify_fem_meshing_production.sh` bypasses that wrapper issue but still stops at the missing managed runtime.
+- Native FEM contract and browser/WebGL stages remain open and the gate is not closed.
