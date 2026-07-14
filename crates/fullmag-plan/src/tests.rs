@@ -8884,6 +8884,50 @@ fn fdm_translated_difference_keeps_boundary_sdf_realization() {
 }
 
 #[test]
+fn fdm_translated_base_boundary_sdf_matches_active_mask_coordinates() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.geometry.entries = vec![GeometryEntryIR::Translate {
+        name: "shifted_pillar".to_string(),
+        base: Box::new(GeometryEntryIR::Cylinder {
+            name: "pillar".to_string(),
+            radius: 20e-9,
+            height: 4e-9,
+            axis: [0.0, 0.0, 1.0],
+        }),
+        by: [20e-9, 0.0, 0.0],
+    }];
+    ir.regions[0].geometry = "shifted_pillar".to_string();
+    ir.backend_policy.discretization_hints = Some(DiscretizationHintsIR {
+        fdm: Some(fullmag_ir::FdmHintsIR {
+            cell: [10e-9, 10e-9, 2e-9],
+            default_cell: None,
+            per_magnet: None,
+            demag: None,
+            boundary_correction: Some("full".to_string()),
+            boundary_phi_floor: None,
+            boundary_delta_min: None,
+        }),
+        fem: None,
+        hybrid: None,
+    });
+
+    let plan = plan(&ir).expect("translated base with boundary correction should plan");
+    let BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
+        panic!("expected FDM plan");
+    };
+    let boundary = fdm.boundary_geometry.expect("translated base must retain SDF");
+    let active_mask = fdm.active_mask.expect("cylinder should have an active mask");
+    let active_index = active_mask
+        .iter()
+        .position(|active| *active)
+        .expect("translated cylinder should contain active cells");
+    assert!(
+        boundary.volume_fraction[active_index] > 0.0,
+        "boundary volume fraction must be non-zero wherever translated active mask is set"
+    );
+}
+
+#[test]
 fn cylinder_axis_controls_oriented_bounds_and_containment() {
     let cylinder = GeometryEntryIR::Cylinder {
         name: "oriented".to_string(),

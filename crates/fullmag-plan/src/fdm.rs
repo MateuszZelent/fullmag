@@ -1007,30 +1007,13 @@ pub(crate) fn plan_fdm(
         // boundary_geometry remains `None`; the backend will run the
         // chosen correction level but without per-cell φ/δ data, which
         // means the correction has no geometric effect.
-        let sdf_opt: Option<Box<dyn Fn(f64, f64, f64) -> f64>> = match &shape {
-            GeometryShape::Cylinder {
-                radius,
-                height,
-                axis,
-            } => {
-                let center = [
-                    grid_cells[0] as f64 * cell_size[0] * 0.5,
-                    grid_cells[1] as f64 * cell_size[1] * 0.5,
-                    grid_cells[2] as f64 * cell_size[2] * 0.5,
-                ];
-                let sdf = crate::boundary_geometry::finite_cylinder_sdf(
-                    *radius, *height, center, *axis,
-                );
-                Some(Box::new(sdf))
+        let local_sdf: Option<Box<dyn Fn(f64, f64, f64) -> f64>> = match &shape {
+            GeometryShape::Cylinder { .. } | GeometryShape::Translate { .. } => {
+                finite_cylinder_sdf_for_shape(&shape, [0.0, 0.0, 0.0])
             }
             GeometryShape::Difference { base, tool } => {
-                let center = [
-                    grid_cells[0] as f64 * cell_size[0] * 0.5,
-                    grid_cells[1] as f64 * cell_size[1] * 0.5,
-                    grid_cells[2] as f64 * cell_size[2] * 0.5,
-                ];
-                let base_sdf = finite_cylinder_sdf_for_shape(base, center);
-                let tool_sdf = finite_cylinder_sdf_for_shape(tool, center);
+                let base_sdf = finite_cylinder_sdf_for_shape(base, [0.0, 0.0, 0.0]);
+                let tool_sdf = finite_cylinder_sdf_for_shape(tool, [0.0, 0.0, 0.0]);
                 match (base_sdf, tool_sdf) {
                     (Some(base_sdf), Some(tool_sdf)) => Some(Box::new(move |x, y, z| {
                         base_sdf(x, y, z).max(-tool_sdf(x, y, z))
@@ -1041,9 +1024,13 @@ pub(crate) fn plan_fdm(
             _ => None,
         };
 
-        if let Some(sdf) = sdf_opt {
+        if let Some(local_sdf) = local_sdf {
+            let origin = native_origin;
+            let sdf = move |x: f64, y: f64, z: f64| {
+                local_sdf(x + origin[0], y + origin[1], z + origin[2])
+            };
             fdm_plan.boundary_geometry = Some(crate::boundary_geometry::compute_boundary_geometry(
-                &*sdf,
+                &sdf,
                 grid_cells[0],
                 grid_cells[1],
                 grid_cells[2],
