@@ -383,6 +383,9 @@ pub struct MeshSharedDomainBuildReportResource {
     pub effective_per_object_targets: HashMap<String, MeshPerObjectTargetResource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub region_markers: Vec<MeshDomainRegionMarkerResource>,
+    #[schema(value_type = [Object])]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub object_region_markers: Vec<Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub used_size_field_kinds: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -391,6 +394,15 @@ pub struct MeshSharedDomainBuildReportResource {
     pub operation_statuses: Vec<MeshOperationStatusResource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub thin_film_diagnostics: Vec<MeshThinFilmDiagnosticResource>,
+    #[schema(value_type = [Object])]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selector_resolution: Vec<Value>,
+    #[schema(value_type = [Object])]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub orphan_entities: Vec<Value>,
+    #[schema(value_type = [Object])]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rejected_element_types: Vec<Value>,
     #[serde(default)]
     pub degraded: bool,
     #[serde(skip_serializing_if = "Option::is_none")]

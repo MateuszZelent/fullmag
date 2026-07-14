@@ -8742,6 +8742,7 @@ fn fem_domain_mesh_asset_accepts_optional_build_report() {
             effective_airbox_hmax: Some(100e-9),
             effective_per_object_targets: std::collections::HashMap::new(),
             region_markers: vec![],
+            object_region_markers: vec![],
             used_size_field_kinds: vec!["ComponentVolumeConstant".to_string()],
             size_fields_realized: vec![],
             operation_statuses: vec![],
@@ -8750,6 +8751,9 @@ fn fem_domain_mesh_asset_accepts_optional_build_report() {
             authored_regions_count: None,
             realized_regions_count: None,
             magnetic_submesh_signatures: Vec::new(),
+            selector_resolution: Vec::new(),
+            orphan_entities: Vec::new(),
+            rejected_element_types: Vec::new(),
         }),
     };
     assert!(asset.validate().is_ok());

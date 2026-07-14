@@ -1871,6 +1871,7 @@ mod tests {
             mesh,
             object_segments: Vec::new(),
             mesh_parts: Vec::new(),
+            mesh_build_report: None,
             domain_mesh_mode: fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir,
             domain_frame: None,
             fe_order: 1,

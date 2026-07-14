@@ -709,7 +709,7 @@ pub struct FemPlanIR {
     pub mesh_parts: Vec<FemMeshPartIR>,
     /// Immutable report describing the requested and realized mesh build.
     /// This is scoped to this plan's mesh generation and is not session status.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh_build_report: Option<FemSharedDomainBuildReportIR>,
     #[serde(default)]
     pub domain_mesh_mode: FemDomainMeshModeIR,

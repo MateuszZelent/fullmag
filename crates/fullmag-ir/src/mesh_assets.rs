@@ -367,6 +367,8 @@ pub struct FemSharedDomainBuildReportIR {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub region_markers: Vec<FemDomainRegionMarkerIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub object_region_markers: Vec<FemDomainRegionMarkerIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub used_size_field_kinds: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub size_fields_realized: Vec<Value>,
@@ -376,6 +378,12 @@ pub struct FemSharedDomainBuildReportIR {
     pub thin_film_diagnostics: Vec<FemThinFilmDiagnosticIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub magnetic_submesh_signatures: Vec<FemMagneticSubmeshSignatureIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selector_resolution: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub orphan_entities: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rejected_element_types: Vec<Value>,
     /// ``true`` when the mesh was built via a degraded path (fallback, simplified
     /// size fields, or lost component identity).
     #[serde(default)]

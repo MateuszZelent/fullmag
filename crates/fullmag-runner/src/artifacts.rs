@@ -4663,6 +4663,7 @@ mod tests {
             common,
             backend_plan: BackendPlanIR::FemFrequencyResponse(
                 fullmag_ir::FemFrequencyResponsePlanIR {
+                    mesh_build_report: None,
                     mesh_name: fem.mesh_name,
                     mesh_source: fem.mesh_source,
                     mesh: fem.mesh,
@@ -4816,6 +4817,7 @@ mod tests {
             common,
             backend_plan: BackendPlanIR::FemFrequencyResponse(
                 fullmag_ir::FemFrequencyResponsePlanIR {
+                    mesh_build_report: None,
                     mesh_name: fem.mesh_name,
                     mesh_source: fem.mesh_source,
                     mesh: fem.mesh,

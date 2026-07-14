@@ -5940,6 +5940,7 @@ mod tests {
 
     fn minimal_frequency_response_plan() -> fullmag_ir::FemFrequencyResponsePlanIR {
         fullmag_ir::FemFrequencyResponsePlanIR {
+            mesh_build_report: None,
             mesh_name: "unit".to_string(),
             mesh_source: None,
             mesh: fullmag_ir::MeshIR {
