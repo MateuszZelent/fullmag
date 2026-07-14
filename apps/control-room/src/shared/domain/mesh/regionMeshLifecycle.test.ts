@@ -93,4 +93,31 @@ describe("resolveRegionMeshLifecycle", () => {
       }),
     ).toMatchObject({ status: "failed", reason: "marker certificate rejected" });
   });
+
+  it("treats a malformed membership payload as stale instead of throwing", () => {
+    expect(() =>
+      resolveRegionMeshLifecycle({
+        build: null,
+        draftDirty: false,
+        membership: { revision: 1 } as never,
+        policyEnabled: true,
+        supported: true,
+      }),
+    ).not.toThrow();
+
+    expect(
+      resolveRegionMeshLifecycle({
+        build: null,
+        draftDirty: false,
+        membership: { revision: 1 } as never,
+        policyEnabled: true,
+        supported: true,
+      }),
+    ).toMatchObject({
+      generationId: null,
+      membershipRevision: null,
+      status: "stale",
+      topologyFingerprint: null,
+    });
+  });
 });

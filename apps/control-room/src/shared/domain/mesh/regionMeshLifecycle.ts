@@ -54,7 +54,9 @@ function hasCertifiedMembership(
 ): boolean {
   return Boolean(
     membership &&
+      typeof membership.freshness === "string" &&
       membership.freshness.toLowerCase() === "current" &&
+      typeof membership.realization === "string" &&
       membership.realization.toLowerCase() === "conformal" &&
       nonEmptyString(membership.mesh_generation_id) &&
       nonEmptyString(membership.topology_fingerprint),
