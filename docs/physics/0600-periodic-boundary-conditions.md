@@ -84,6 +84,14 @@ for periodic node pairs $(i,j)$.
 Zero-phase periodicity is the special case $\mathbf{k} = \mathbf{0}$,
 where $P_{ij} = 1$ for all periodic pairs.
 
+The public authoring contract names this quantity `k_vector_rad_per_m` and
+stores exactly three finite SI components.  Each nonzero component must lie on
+an axis present in the current accepted `periodic_mesh_certificate.v6`; a
+component on an open axis is rejected.  The zero vector is not an exemption:
+periodic/Floquet studies still require a current accepted v6 certificate so a
+remesh or stale seam cannot silently change the operator.  The backend remains
+the authority for these reasons; UI parsing is only an early shape check.
+
 ### 2.2 Symbols and SI units
 
 | Symbol | Meaning | SI unit |

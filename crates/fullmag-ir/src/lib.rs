@@ -11,6 +11,7 @@ pub mod mesh_hints;
 pub mod model;
 pub mod plan;
 pub mod quantities;
+pub mod spectral_validation;
 pub mod study;
 mod validation;
 pub use eigen_contract::*;
@@ -24,6 +25,7 @@ pub use plan::*;
 pub use quantities::{
     field_to_quantity_output, scalar_to_quantity_output, OutputSinkIR, QuantityOutputIR,
 };
+pub use spectral_validation::BlochWavevectorIR;
 pub use study::*;
 use validation::*;
 
