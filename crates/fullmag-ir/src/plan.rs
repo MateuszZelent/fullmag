@@ -76,6 +76,20 @@ pub struct FdmGridCertificateIR {
     pub estimated_bytes: u64,
     /// SHA-256 of the canonical resolved grid payload, lowercase hex.
     pub grid_fingerprint: String,
+    /// Deterministic legend for numeric region IDs in `FdmPlanIR.region_mask`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub region_legend: Vec<FdmRegionLegendEntryIR>,
+    /// SHA-256 of the canonical region legend, when a realized region mask exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region_legend_fingerprint: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FdmRegionLegendEntryIR {
+    pub numeric_id: u32,
+    pub object_id: String,
+    pub region_id: String,
+    pub priority: i32,
 }
 
 impl FdmGridCertificateIR {
@@ -161,9 +175,21 @@ impl FdmGridCertificateIR {
             active_cells,
             estimated_bytes,
             grid_fingerprint,
+            region_legend: Vec::new(),
+            region_legend_fingerprint: None,
         };
         certificate.validate()?;
         Ok(certificate)
+    }
+
+    /// Attach a canonical realized-region legend without changing the grid
+    /// topology fingerprint. The legend has its own identity so membership
+    /// edits cannot be mistaken for a geometry-only cache hit.
+    pub fn with_region_legend(mut self, legend: Vec<FdmRegionLegendEntryIR>) -> Self {
+        let payload = serde_json::to_vec(&legend).unwrap_or_default();
+        self.region_legend_fingerprint = Some(format!("sha256:{:x}", Sha256::digest(payload)));
+        self.region_legend = legend;
+        self
     }
 
     /// Validate intrinsic consistency before a runner consumes the certificate.
@@ -233,7 +259,58 @@ impl FdmGridCertificateIR {
         region_mask: &[u32],
     ) -> Result<(), String> {
         crate::validate_fdm_region_lut_indices(region_mask, &[])?;
+        self.validate_region_legend(region_mask)?;
         self.validate_against_payload(active_mask, region_mask)
+    }
+
+    /// Ensure realized numeric region IDs can be decoded without relying on
+    /// planner-local ordering or an implicit fallback.  ID zero is reserved
+    /// for the unassigned/background cell state; authored regions are
+    /// represented by contiguous IDs starting at one.
+    pub fn validate_region_legend(&self, region_mask: &[u32]) -> Result<(), String> {
+        let max_id = region_mask.iter().copied().max().unwrap_or(0);
+        if max_id == 0 && self.region_legend.is_empty() {
+            return Ok(());
+        }
+        if self.region_legend.is_empty() {
+            return Err(
+                "FDM region mask contains authored numeric IDs but region legend is missing"
+                    .to_string(),
+            );
+        }
+        for (index, entry) in self.region_legend.iter().enumerate() {
+            let expected_id = u32::try_from(index + 1)
+                .map_err(|_| "FDM region legend exceeds u32 numeric ID space".to_string())?;
+            if entry.numeric_id != expected_id {
+                return Err(format!(
+                    "FDM region legend numeric IDs must be contiguous starting at 1, expected {}, got {}",
+                    expected_id, entry.numeric_id
+                ));
+            }
+            if entry.object_id.is_empty() || entry.region_id.is_empty() {
+                return Err(format!(
+                    "FDM region legend entry {} must include object_id and region_id",
+                    entry.numeric_id
+                ));
+            }
+            if self.region_legend[..index]
+                .iter()
+                .any(|previous| previous.object_id == entry.object_id && previous.region_id == entry.region_id)
+            {
+                return Err(format!(
+                    "FDM region legend contains duplicate authored region {}:{}",
+                    entry.object_id, entry.region_id
+                ));
+            }
+        }
+        if max_id > self.region_legend.len() as u32 {
+            return Err(format!(
+                "FDM region mask numeric ID {} has no legend entry (legend_len={})",
+                max_id,
+                self.region_legend.len()
+            ));
+        }
+        Ok(())
     }
 
     /// Validate a certificate against multilayer topology tokens.
@@ -1290,7 +1367,9 @@ pub struct ProvenancePlanIR {
 
 #[cfg(test)]
 mod tests {
-    use super::{FdmGridCertificateIR, RequestedFemDemagIR, ResolvedFemDemagIR};
+    use super::{
+        FdmGridCertificateIR, FdmRegionLegendEntryIR, RequestedFemDemagIR, ResolvedFemDemagIR,
+    };
     use crate::{validate_fdm_region_lut_indices, MAX_FDM_REGION_IDS};
 
     #[test]
@@ -1367,11 +1446,102 @@ mod tests {
             Some(&[true, false, true, false]),
             &[1, 1, 2, 2],
         )
-        .expect("topology certificate should validate");
+        .expect("topology certificate should validate")
+        .with_region_legend(vec![
+            FdmRegionLegendEntryIR {
+                numeric_id: 1,
+                object_id: "magnet-a".to_string(),
+                region_id: "magnet-a:core".to_string(),
+                priority: 0,
+            },
+            FdmRegionLegendEntryIR {
+                numeric_id: 2,
+                object_id: "magnet-b".to_string(),
+                region_id: "magnet-b:core".to_string(),
+                priority: 0,
+            },
+        ]);
         assert!(topology_certificate
             .validate_against_masks(Some(&[false, true, true, false]), &[1, 1, 2, 2])
             .expect_err("active topology swap must reject")
             .contains("fingerprint mismatch"));
+    }
+
+    #[test]
+    fn fdm_grid_certificate_binds_deterministic_region_legend() {
+        let certificate = FdmGridCertificateIR::new(
+            [0.0; 3],
+            [2, 2, 1],
+            [1.0e-9; 3],
+            2,
+            1_024,
+        )
+        .expect("resolved grid certificate should validate")
+        .with_region_legend(vec![FdmRegionLegendEntryIR {
+            numeric_id: 1,
+            object_id: "magnet".to_string(),
+            region_id: "magnet:core".to_string(),
+            priority: 0,
+        }]);
+        assert_eq!(certificate.region_legend.len(), 1);
+        assert!(certificate
+            .region_legend_fingerprint
+            .as_deref()
+            .is_some_and(|value| value.starts_with("sha256:")));
+        let changed = certificate.clone().with_region_legend(vec![
+            FdmRegionLegendEntryIR {
+                numeric_id: 1,
+                object_id: "magnet".to_string(),
+                region_id: "magnet:shell".to_string(),
+                priority: 0,
+            },
+        ]);
+        assert_ne!(
+            certificate.region_legend_fingerprint,
+            changed.region_legend_fingerprint
+        );
+    }
+
+    #[test]
+    fn fdm_grid_certificate_rejects_unlisted_realized_region_id() {
+        let certificate = FdmGridCertificateIR::new_with_masks(
+            [0.0; 3],
+            [2, 1, 1],
+            [1.0e-9; 3],
+            2,
+            1_024,
+            None,
+            &[1, 2],
+        )
+        .expect("resolved grid certificate should validate")
+        .with_region_legend(vec![FdmRegionLegendEntryIR {
+            numeric_id: 1,
+            object_id: "magnet".to_string(),
+            region_id: "magnet:core".to_string(),
+            priority: 0,
+        }]);
+        let error = certificate
+            .validate_against_masks(None, &[1, 2])
+            .expect_err("unknown realized region ID must fail closed");
+        assert!(error.contains("has no legend entry"));
+    }
+
+    #[test]
+    fn fdm_grid_certificate_rejects_realized_region_mask_without_legend() {
+        let certificate = FdmGridCertificateIR::new_with_masks(
+            [0.0; 3],
+            [2, 1, 1],
+            [1.0e-9; 3],
+            2,
+            1_024,
+            None,
+            &[1, 1],
+        )
+        .expect("resolved grid certificate should validate");
+        let error = certificate
+            .validate_against_masks(None, &[1, 1])
+            .expect_err("realized region mask without legend must fail closed");
+        assert!(error.contains("region legend is missing"));
     }
 
     #[test]

@@ -1342,6 +1342,7 @@ fn fdm_object_region_material_overrides_materialize_to_cell_fields() {
         priority: 10,
         conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
     }];
+    let region_id = region.region_id.clone();
     ir.object_regions.push(region);
 
     let plan = plan(&ir).expect("FDM should materialize supported region material overrides");
@@ -1361,6 +1362,19 @@ fn fdm_object_region_material_overrides_materialize_to_cell_fields() {
     let fullmag_ir::BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
         panic!("expected FDM plan");
     };
+    let legend = &fdm
+        .grid_certificate
+        .as_ref()
+        .expect("FDM plan should carry a grid certificate")
+        .region_legend;
+    assert_eq!(legend.len(), 1);
+    assert_eq!(legend[0].numeric_id, 1);
+    assert_eq!(legend[0].region_id, region_id);
+    assert!(fdm
+        .grid_certificate
+        .as_ref()
+        .and_then(|certificate| certificate.region_legend_fingerprint.as_deref())
+        .is_some_and(|value| value.starts_with("sha256:")));
     let ms_field = fdm
         .material
         .ms_field

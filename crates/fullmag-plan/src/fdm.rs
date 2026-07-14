@@ -236,6 +236,35 @@ fn materialize_object_region_mask(
     (mask, region_ids)
 }
 
+fn build_fdm_region_legend(
+    problem: &ProblemIR,
+    owner_names: &[&str],
+    region_index_by_id: &BTreeMap<String, u32>,
+) -> Vec<fullmag_ir::FdmRegionLegendEntryIR> {
+    let mut regions = problem
+        .object_regions
+        .iter()
+        .filter(|region| {
+            region.enabled && owner_names.contains(&region.owner_object.as_str())
+        })
+        .collect::<Vec<_>>();
+    regions.sort_by_key(|region| (region.priority, region.region_id.as_str()));
+    regions
+        .into_iter()
+        .filter_map(|region| {
+            region_index_by_id
+                .get(&region.region_id)
+                .copied()
+                .map(|numeric_id| fullmag_ir::FdmRegionLegendEntryIR {
+                    numeric_id,
+                    object_id: region.owner_object.clone(),
+                    region_id: region.region_id.clone(),
+                    priority: region.priority,
+                })
+        })
+        .collect()
+}
+
 fn materialize_region_exchange_couplings(
     problem: &ProblemIR,
     material_exchange: f64,
@@ -943,6 +972,7 @@ pub(crate) fn plan_fdm(
         grid_cells[1] as f64 * cell_size[1],
         grid_cells[2] as f64 * cell_size[2],
     ];
+    let grid_legend = build_fdm_region_legend(problem, &owner_names, &region_index_by_id);
     let grid_certificate = FdmGridCertificateIR::new_with_masks(
         native_origin,
         grid_cells,
@@ -954,7 +984,8 @@ pub(crate) fn plan_fdm(
     )
     .map_err(|message| PlanError {
         reasons: vec![format!("invalid resolved FDM grid certificate: {message}")],
-    })?;
+    })?
+    .with_region_legend(grid_legend);
 
     let mut fdm_plan = FdmPlanIR {
         origin_m: native_origin,

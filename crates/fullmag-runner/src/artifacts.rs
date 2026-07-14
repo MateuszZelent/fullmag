@@ -86,6 +86,11 @@ fn mesh_runtime_metadata(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Valu
                 .as_ref()
                 .and_then(|pbc| pbc.resolve_periodic_images(fdm.grid.cells, fdm.precision).ok())
                 .flatten(),
+            "region_legend": fdm.grid_certificate.as_ref().map(|certificate| &certificate.region_legend),
+            "region_legend_fingerprint": fdm
+                .grid_certificate
+                .as_ref()
+                .and_then(|certificate| certificate.region_legend_fingerprint.as_deref()),
             "grid_cells": fdm.grid.cells,
         }),
         BackendPlanIR::FdmMultilayer(fdm) => serde_json::json!({
@@ -100,6 +105,11 @@ fn mesh_runtime_metadata(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Valu
                 .as_ref()
                 .and_then(|pbc| pbc.resolve_periodic_images(fdm.common_cells, fdm.precision).ok())
                 .flatten(),
+            "region_legend": fdm.grid_certificate.as_ref().map(|certificate| &certificate.region_legend),
+            "region_legend_fingerprint": fdm
+                .grid_certificate
+                .as_ref()
+                .and_then(|certificate| certificate.region_legend_fingerprint.as_deref()),
             "transfer_boundary_policy": fdm
                 .periodicity
                 .as_ref()
