@@ -1636,6 +1636,25 @@ fn resolved_shared_domain_object_region_markers(
     Ok(markers.to_vec())
 }
 
+fn adaptive_remesh_legality_reason(problem: &ProblemIR) -> Option<&'static str> {
+    if problem.object_regions.iter().any(|region| {
+        region.enabled
+            && matches!(
+                region.realization_policy,
+                fullmag_ir::RegionRealizationPolicyIR::Conformal
+            )
+    }) {
+        return Some("adaptive_region_remesh_not_certified");
+    }
+    let has_periodic_mesh = problem
+        .geometry_assets
+        .as_ref()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_ref())
+        .and_then(|asset| asset.mesh.as_ref())
+        .is_some_and(|mesh| !mesh.periodic_boundary_pairs.is_empty());
+    has_periodic_mesh.then_some("adaptive_periodic_remesh_not_certified")
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 struct SceneProblemPatch {
     #[serde(default)]
@@ -3538,6 +3557,11 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
     };
     if !settings.enabled || settings.policy != "auto" || settings.max_passes == 0 {
         return Ok(false);
+    }
+    if let Some(reason) = adaptive_remesh_legality_reason(&stage.ir) {
+        return Err(anyhow!(
+            "{reason}: adaptive FEM remesh requires a certified region/PBC candidate transaction"
+        ));
     }
     if !matches!(stage.ir.study, fullmag_ir::StudyIR::Relaxation { .. }) {
         live_workspace.push_log(
@@ -8839,11 +8863,11 @@ pub(crate) fn prepare_live_workspace_for_ui(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_current_fem_overrides, apply_initial_magnetization_state_override,
-        apply_live_step_update_to_workspace_state, apply_remeshed_problem_snapshot_to_stages,
-        apply_stage_heartbeat_progress, attach_initial_magnetization_state_override_metadata,
-        classify_wait_for_solve_command, cumulative_rhs_evals, default_domain_region_markers,
-        discard_active_paused_stage_execution,
+        adaptive_remesh_legality_reason, apply_current_fem_overrides,
+        apply_initial_magnetization_state_override, apply_live_step_update_to_workspace_state,
+        apply_remeshed_problem_snapshot_to_stages, apply_stage_heartbeat_progress,
+        attach_initial_magnetization_state_override_metadata, classify_wait_for_solve_command,
+        cumulative_rhs_evals, default_domain_region_markers, discard_active_paused_stage_execution,
         ensure_frequency_response_relaxed_continuation_is_qualified, execute_synthetic_stage,
         fem_gpu_memory_preflight_message, fem_interactive_dense_ram_estimate,
         fem_live_mesh_payload_and_initial_magnetization, fem_mesh_payload_from_backend_plan,
@@ -8954,6 +8978,32 @@ mod tests {
             marker: 2,
         }];
         assert!(resolved_shared_domain_object_region_markers(&problem, &stale).is_err());
+    }
+
+    #[test]
+    fn adaptive_remesh_fails_closed_for_uncertified_conformal_regions() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.object_regions = vec![ObjectRegionIR {
+            region_id: "owner:core".to_string(),
+            owner_object: "owner".to_string(),
+            name: "core".to_string(),
+            shape: RegionShapeIR::Box {
+                size: [1.0, 1.0, 1.0],
+                center: [0.0, 0.0, 0.0],
+            },
+            frame: RegionFrameIR::Object,
+            enabled: true,
+            priority: 0,
+            mesh_policy: None,
+            material_overrides: Vec::new(),
+            texture_override: None,
+            realization_policy: RegionRealizationPolicyIR::Conformal,
+            material_transition: None,
+        }];
+        assert_eq!(
+            adaptive_remesh_legality_reason(&problem),
+            Some("adaptive_region_remesh_not_certified")
+        );
     }
 
     use crate::args::ScriptCli;

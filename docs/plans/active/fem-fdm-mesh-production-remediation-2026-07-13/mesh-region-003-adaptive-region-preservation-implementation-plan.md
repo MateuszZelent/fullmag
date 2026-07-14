@@ -21,12 +21,12 @@
 
 ### Task 1: RED i tymczasowe fail-closed
 
-- [ ] Dodać testy adaptive follow-up i auto-coarsen dla conformal region bez PBC oraz z PBC; obecny przepływ ma zostać wykryty jako niebezpieczny.
-- [ ] Dodać planner reason `adaptive_region_remesh_not_certified` i `adaptive_periodic_remesh_not_certified`; sprawdzić, że stage nie startuje do czasu Task 2.
+- [x] Dodać fail-closed guard dla adaptive follow-up z enabled conformal region; zwraca stabilny reason `adaptive_region_remesh_not_certified` przed remeshem.
+- [ ] Dodać analogiczny test dla okresowego meshu oraz pełne testy wywołania stage; test compilation jest obecnie blokowane przez istniejące brakujące pola w `live_workspace.rs`/`step_utils.rs`.
 
 ### Task 2: wspólny candidate transaction
 
-- [ ] Zastąpić jednogeometryczny request wywołaniem region-aware shared remesh z MESH-REGION-002.
+- [ ] Zastąpić jednogeometryczny request wywołaniem region-aware shared remesh z MESH-REGION-002; obecny guard świadomie blokuje ścieżkę przed pełnym candidate transaction.
 - [ ] Kandydat musi zawierać nową mapę markerów, build report, material fields, PBC pairs/certificate i state-transfer audit; publikacja jest jednym commit eventem.
 - [ ] Walidować liczbę elementów i objętość każdego regionu przed/po transferze w opublikowanej tolerancji.
 
@@ -37,3 +37,12 @@
 - [ ] Commit: `git add crates/fullmag-cli crates/fullmag-plan packages/fullmag-py justfile && git commit -m "fix(fem): preserve regions through adaptive remesh"`.
 
 **Exit:** adaptive/auto-coarsen albo publikuje kompletną nową realizację region/PBC, albo nie zmienia żadnego current resource.
+
+### Evidence (2026-07-14, fail-closed interim)
+
+- `adaptive_remesh_legality_reason` blocks enabled conformal regions before the
+  adaptive remesh call, preventing publication of an uncertified candidate.
+- `rustfmt --edition 2021 --check crates/fullmag-cli/src/orchestrator.rs` — PASS.
+- `cargo check -p fullmag-cli --bin fullmag` — PASS (existing unrelated warning).
+- `cargo test -p fullmag-cli --bin fullmag adaptive_remesh_fails_closed_for_uncertified_conformal_regions` — not runnable because existing test-only initializers in `live_workspace.rs` and `step_utils.rs` lack unrelated required fields.
+- Managed adaptive FEM proof and the full candidate transaction remain open.
