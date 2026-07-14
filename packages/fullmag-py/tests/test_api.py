@@ -30,9 +30,52 @@ from fullmag.runtime.scene_document import build_builder_from_scene_document
 from fullmag.runtime.scene_document import builder_overrides_from_scene_document
 from fullmag.runtime.script_builder import export_builder_draft, rewrite_loaded_problem_script
 from fullmag.meshing.gmsh_bridge import MeshData
+from fullmag.model.problem import build_geometry_assets_for_request
 
 
 class ProblemApiTests(unittest.TestCase):
+    def test_fdm_grid_cache_ignores_region_only_changes(self) -> None:
+        geometry = fm.Cylinder(radius=10e-9, height=4e-9, name="film")
+        discretization = fm.DiscretizationHints(
+            fdm=fm.FDM(cell=(2e-9, 2e-9, 2e-9)),
+        )
+        voxels = VoxelMaskData(
+            mask=np.ones((2, 2, 5), dtype=np.bool_),
+            cell_size=(2e-9, 2e-9, 2e-9),
+            origin=(-2e-9, -2e-9, -5e-9),
+        )
+        cache: dict[str, dict[str, object] | None] = {}
+        region_a = [{"region_id": "film:core", "material_ref": "mat:a"}]
+        region_b = [{"region_id": "film:core", "material_ref": "mat:b"}]
+
+        with patch("fullmag.meshing.realize_fdm_grid_asset", return_value=voxels) as mocked:
+            first = build_geometry_assets_for_request(
+                requested_backend=fm.BackendTarget.FDM,
+                geometries=[geometry],
+                discretization=discretization,
+                object_regions=region_a,
+                asset_cache=cache,
+            )
+            second = build_geometry_assets_for_request(
+                requested_backend=fm.BackendTarget.FDM,
+                geometries=[geometry],
+                discretization=discretization,
+                object_regions=region_b,
+                asset_cache=cache,
+            )
+            third = build_geometry_assets_for_request(
+                requested_backend=fm.BackendTarget.FDM,
+                geometries=[geometry],
+                discretization=fm.DiscretizationHints(
+                    fdm=fm.FDM(cell=(1e-9, 2e-9, 2e-9)),
+                ),
+                object_regions=region_b,
+                asset_cache=cache,
+            )
+
+        self.assertEqual(mocked.call_count, 2)
+        self.assertEqual(first, second)
+        self.assertEqual(third, first)
     def test_script_builder_preserves_frozen_magnetic_submesh_source_in_global_mesh_config(self) -> None:
         from fullmag.runtime.script_builder import _study_global_mesh_config
 

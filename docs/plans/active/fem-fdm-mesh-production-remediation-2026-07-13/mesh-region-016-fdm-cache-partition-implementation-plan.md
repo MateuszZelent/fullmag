@@ -36,3 +36,9 @@
 - [ ] Commit: `git add packages/fullmag-py crates/fullmag-session && git commit -m "perf(fdm): partition region realization cache keys"`.
 
 **Exit:** cache eliminuje wyłącznie pracę, której wynik semantycznie się nie zmienił.
+
+## Evidence update (2026-07-14)
+
+- [x] FDM-only geometry asset cache identity now excludes `object_regions` and FEM-only `mesh_workflow`; geometry, cell size and study-universe inputs remain part of the key.
+- [x] RED/GREEN regression: the focused instrumented test exercises two region-only calls and one changed-cell call; it passes with exactly two voxelizer invocations (`1` cache hit for region-only edit, `1` rebuild for cell change).
+- [ ] Coefficient/membership artifact checksums, cache hit/miss provenance and repeated production benchmark remain open.
