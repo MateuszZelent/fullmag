@@ -78,6 +78,12 @@ The same semantic split must hold:
 - topology by region/domain markers,
 - coefficient variability by piecewise constants or coefficient fields.
 
+Adaptive FEM remeshing is an observable-driven workflow, not a generic
+heuristic. Relaxation stages currently support only named energy, torque, or
+solution-change estimators. An authored `eigenfrequency_delta` criterion is
+rejected until the stage exposes a real eigenfrequency estimator; it must never
+be silently replaced with an energy proxy.
+
 ### 3.3 Hybrid
 
 Hybrid execution needs explicit projection semantics between FEM mesh representation and auxiliary Cartesian grids used by selected operators.

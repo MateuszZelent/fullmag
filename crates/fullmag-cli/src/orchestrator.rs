@@ -2887,7 +2887,7 @@ fn adaptive_convergence_summary(
     tolerance: f64,
     previous: RelaxationSolveSummary,
     current: RelaxationSolveSummary,
-) -> AdaptiveConvergenceSummary {
+) -> Result<AdaptiveConvergenceSummary, &'static str> {
     let (resolved_metric, delta) = match metric {
         "energy_delta" => {
             let denom = previous.energy_total.abs().max(1e-30);
@@ -2910,27 +2910,22 @@ fn adaptive_convergence_summary(
                 (current.max_dm_dt - previous.max_dm_dt).abs() / denom,
             )
         }
-        "eigenfrequency_delta" => (
-            // FEM relaxation stages do not expose eigenfrequency deltas; use energy proxy.
-            "energy_delta".to_string(),
-            {
-                let denom = previous.energy_total.abs().max(1e-30);
-                (current.energy_total - previous.energy_total).abs() / denom
-            },
-        ),
-        _ => {
-            let denom = previous.energy_total.abs().max(1e-30);
-            (
-                "energy_delta".to_string(),
-                (current.energy_total - previous.energy_total).abs() / denom,
-            )
-        }
+        _ => return Err("unsupported_mesh_adaptivity_criterion"),
     };
-    AdaptiveConvergenceSummary {
+    Ok(AdaptiveConvergenceSummary {
         metric: resolved_metric,
         delta,
         tolerance,
         converged: delta <= tolerance,
+    })
+}
+
+fn resolve_adaptive_convergence_metric(metric: &str) -> Result<&'static str, &'static str> {
+    match metric {
+        "energy_delta" => Ok("energy_delta"),
+        "max_torque_delta" => Ok("max_torque_delta"),
+        "solution_change" => Ok("solution_change"),
+        _ => Err("unsupported_mesh_adaptivity_criterion"),
     }
 }
 
@@ -3679,6 +3674,15 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
         );
         return Ok(false);
     }
+    let resolved_convergence_metric = resolve_adaptive_convergence_metric(
+        &settings.convergence_metric,
+    )
+    .map_err(|reason| {
+        anyhow!(
+            "{reason}: no estimator is available for convergence metric '{}'",
+            settings.convergence_metric
+        )
+    })?;
 
     let geometry_entry = stage
         .ir
@@ -3725,12 +3729,14 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
                 .zip(current_solve_summary)
                 .map(|(previous, current)| {
                     adaptive_convergence_summary(
-                        &settings.convergence_metric,
+                        resolved_convergence_metric,
                         settings.error_tolerance,
                         previous,
                         current,
                     )
-                });
+                })
+                .transpose()
+                .map_err(|reason| anyhow!("{reason}"))?;
         if let Some(summary) = convergence_summary.as_ref() {
             if summary.converged {
                 let current_runtime_state = serde_json::json!({
@@ -8966,6 +8972,7 @@ mod tests {
         live_step_ingest_cached_m_preview_len, live_step_ingest_legacy_mag_len,
         live_step_ingest_preview_len, mesh_build_pipeline_status_json,
         mesh_source_scene_revision,
+        resolve_adaptive_convergence_metric,
         resolved_shared_domain_object_region_markers, scripted_stage_execution_state,
         shared_domain_object_region_mesh_specs, stage_allows_sampled_continuation_initial_state,
         validate_periodic_remesh_candidate,
@@ -8991,6 +8998,22 @@ mod tests {
             Some(47)
         );
         assert_eq!(mesh_source_scene_revision(&serde_json::json!({})), None);
+    }
+
+    #[test]
+    fn adaptive_mesh_rejects_eigenfrequency_without_an_eigen_estimator() {
+        assert_eq!(
+            resolve_adaptive_convergence_metric("energy_delta"),
+            Ok("energy_delta")
+        );
+        assert_eq!(
+            resolve_adaptive_convergence_metric("eigenfrequency_delta"),
+            Err("unsupported_mesh_adaptivity_criterion")
+        );
+        assert_eq!(
+            resolve_adaptive_convergence_metric("not-a-criterion"),
+            Err("unsupported_mesh_adaptivity_criterion")
+        );
     }
 
     #[test]

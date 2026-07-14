@@ -159,6 +159,16 @@ FEM production meshing must satisfy these contracts:
    - swept or topology-proxy quality metrics are labeled as proxy metrics,
    - per-domain quality and histograms use final shared-domain markers.
 
+6. **Adaptive criterion truthfulness**
+   - FEM relaxation adaptivity may use only an explicitly named estimator:
+     `energy_delta`, `max_torque_delta`, or `solution_change`.
+   - `eigenfrequency_delta` is unsupported until a real eigenfrequency
+     observable and estimator are available for the active stage. It must fail
+     closed; an energy change is not an eigenfrequency estimate.
+   - Every accepted adaptive pass records the requested criterion and the
+     resolved estimator in runtime provenance. A topology-changing pass also
+     requires the state-transfer and mesh-certificate gates described above.
+
 ### 3.3 Hybrid
 
 Hybrid execution is out of scope for this production gate. A future hybrid gate
