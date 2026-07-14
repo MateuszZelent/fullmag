@@ -1390,8 +1390,9 @@ fn write_periodic_pairs_artifact(
     }
 
     let mesh_topology_fingerprint = mesh.topology_fingerprint_v6();
+    let (ms_element_field, a_element_field) = periodic_material_fields(plan);
     let certificate = mesh
-        .periodic_mesh_certificate_v6()
+        .periodic_mesh_certificate_v6_with_material_fields(ms_element_field, a_element_field)
         .and_then(|certificate| validate_periodic_certificate_identity(mesh, certificate));
     let certificate_status = certificate
         .as_ref()
@@ -1860,6 +1861,21 @@ fn periodic_mesh(plan: &fullmag_ir::ExecutionPlanIR) -> Option<&fullmag_ir::Mesh
         BackendPlanIR::FemEigen(fem) => Some(&fem.mesh),
         BackendPlanIR::FemFrequencyResponse(fem) => Some(&fem.mesh),
         BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
+    }
+}
+
+fn periodic_material_fields(
+    plan: &fullmag_ir::ExecutionPlanIR,
+) -> (Option<&[f64]>, Option<&[f64]>) {
+    match &plan.backend_plan {
+        BackendPlanIR::Fem(fem) => (
+            fem.ms_element_field.as_deref(),
+            fem.a_element_field.as_deref(),
+        ),
+        BackendPlanIR::Fdm(_)
+        | BackendPlanIR::FdmMultilayer(_)
+        | BackendPlanIR::FemEigen(_)
+        | BackendPlanIR::FemFrequencyResponse(_) => (None, None),
     }
 }
 
@@ -4856,6 +4872,12 @@ mod tests {
         assert!(artifact["mesh_generation_id"].as_str().is_some());
         assert!(artifact["certificate_fingerprint"].as_str().is_some());
         assert_eq!(artifact["certificate_status"], "accepted");
+        assert!(artifact["certificate"]["marker_map_fingerprint"]
+            .as_str()
+            .is_some());
+        assert!(artifact["certificate"]["material_realization_fingerprint"]
+            .as_str()
+            .is_some());
         assert_eq!(artifact["pair_count"], 1);
         assert_eq!(artifact["paired_node_count"], 3);
         assert_eq!(artifact["pairs"][0]["pair_id"], "x_periodic");
@@ -4925,6 +4947,10 @@ mod tests {
             corner_edge_cycle_unique: true,
             m0_seam_mismatch_max: 0.0,
             h_demag0_seam_mismatch_max: 0.0,
+            marker_map_fingerprint: "sha256:empty".to_string(),
+            material_realization_fingerprint: "sha256:empty".to_string(),
+            region_class_count: 0,
+            max_material_residual: 0.0,
         };
         let errors = validate_periodic_certificate_identity(&mesh, certificate)
             .expect_err("stale certificate identity must fail closed");

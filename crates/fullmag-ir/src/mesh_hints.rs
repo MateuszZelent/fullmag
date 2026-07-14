@@ -247,6 +247,18 @@ pub struct PeriodicMeshCertificateV6IR {
     pub corner_edge_cycle_unique: bool,
     pub m0_seam_mismatch_max: f64,
     pub h_demag0_seam_mismatch_max: f64,
+    /// Stable identity of the marker/region assignment consumed by the seam.
+    #[serde(default)]
+    pub marker_map_fingerprint: String,
+    /// Stable identity of realized FEM material coefficient payloads.
+    #[serde(default)]
+    pub material_realization_fingerprint: String,
+    /// Number of non-trivial region/material equivalence classes.
+    #[serde(default)]
+    pub region_class_count: u64,
+    /// Maximum normalized residual across paired realized coefficient values.
+    #[serde(default)]
+    pub max_material_residual: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -312,6 +324,129 @@ fn mesh_face_element_markers(mesh: &MeshIR) -> BTreeMap<[u32; 3], BTreeSet<u32>>
         }
     }
     result
+}
+
+fn mesh_face_element_indices(mesh: &MeshIR) -> BTreeMap<[u32; 3], Vec<usize>> {
+    let mut result = BTreeMap::<[u32; 3], Vec<usize>>::new();
+    for (index, element) in mesh.elements.iter().enumerate() {
+        for face in [
+            [element[0], element[1], element[2]],
+            [element[0], element[1], element[3]],
+            [element[0], element[2], element[3]],
+            [element[1], element[2], element[3]],
+        ] {
+            result.entry(sorted_face(face)).or_default().push(index);
+        }
+    }
+    result
+}
+
+fn marker_map_fingerprint(mesh: &MeshIR) -> String {
+    let payload = serde_json::json!({
+        "element_markers": mesh.element_markers,
+        "boundary_markers": mesh.boundary_markers,
+        "periodic_boundary_pairs": mesh.periodic_boundary_pairs.iter().map(|pair| {
+            serde_json::json!({
+                "pair_id": pair.pair_id,
+                "marker_a": pair.marker_a,
+                "marker_b": pair.marker_b,
+                "axis": pair.axis_hint,
+            })
+        }).collect::<Vec<_>>(),
+    });
+    let encoded = serde_json::to_vec(&payload).unwrap_or_default();
+    format!("sha256:{:x}", Sha256::digest(encoded))
+}
+
+fn material_realization_fingerprint(
+    ms_element_field: Option<&[f64]>,
+    a_element_field: Option<&[f64]>,
+) -> String {
+    let payload = serde_json::json!({
+        "ms_element_field": ms_element_field,
+        "a_element_field": a_element_field,
+    });
+    let encoded = serde_json::to_vec(&payload).unwrap_or_default();
+    format!("sha256:{:x}", Sha256::digest(encoded))
+}
+
+fn normalized_material_residual(left: f64, right: f64) -> f64 {
+    if !left.is_finite() || !right.is_finite() {
+        return f64::INFINITY;
+    }
+    (left - right).abs() / (1.0 + left.abs().max(right.abs()))
+}
+
+fn seam_material_residual(
+    mesh: &MeshIR,
+    certificate: &PeriodicMeshCertificateV6IR,
+    ms_element_field: Option<&[f64]>,
+    a_element_field: Option<&[f64]>,
+) -> Result<f64, Vec<String>> {
+    let face_elements = mesh_face_element_indices(mesh);
+    let mut residual = 0.0_f64;
+    let mut errors = Vec::new();
+    for axis in &certificate.axis_pairs {
+        for face in &axis.face_pairs {
+            let source_face = mesh
+                .boundary_faces
+                .get(face.face_a as usize)
+                .copied()
+                .map(sorted_face);
+            let destination_face = mesh
+                .boundary_faces
+                .get(face.face_b as usize)
+                .copied()
+                .map(sorted_face);
+            let (Some(source_face), Some(destination_face)) = (source_face, destination_face) else {
+                errors.push(format!(
+                    "periodic material certificate '{}' references an invalid face pair",
+                    axis.pair_id
+                ));
+                continue;
+            };
+            let source_indices = face_elements.get(&source_face).cloned().unwrap_or_default();
+            let destination_indices = face_elements
+                .get(&destination_face)
+                .cloned()
+                .unwrap_or_default();
+            if source_indices.len() != destination_indices.len() {
+                errors.push(format!(
+                    "periodic material certificate '{}' has unequal adjacent element counts",
+                    axis.pair_id
+                ));
+                continue;
+            }
+            for source_index in source_indices {
+                let source_marker = mesh.element_markers.get(source_index).copied();
+                let destination_index = destination_indices.iter().copied().find(|index| {
+                    mesh.element_markers.get(*index).copied() == source_marker
+                });
+                let Some(destination_index) = destination_index else {
+                    errors.push(format!(
+                        "periodic material certificate '{}' has mismatched adjacent region markers",
+                        axis.pair_id
+                    ));
+                    continue;
+                };
+                for (label, field) in [
+                    ("Ms", ms_element_field),
+                    ("A", a_element_field),
+                ] {
+                    let Some(field) = field else { continue };
+                    let (Some(left), Some(right)) = (field.get(source_index), field.get(destination_index)) else {
+                        errors.push(format!(
+                            "periodic material certificate '{}' {} field length does not cover seam elements",
+                            axis.pair_id, label
+                        ));
+                        continue;
+                    };
+                    residual = residual.max(normalized_material_residual(*left, *right));
+                }
+            }
+        }
+    }
+    if errors.is_empty() { Ok(residual) } else { Err(errors) }
 }
 
 fn euclidean_residual(actual: [f64; 3], expected: [f64; 3]) -> f64 {
@@ -879,10 +1014,42 @@ impl MeshIR {
                 corner_edge_cycle_unique: edge_corner_cycle_unique,
                 m0_seam_mismatch_max: 0.0,
                 h_demag0_seam_mismatch_max: 0.0,
+                marker_map_fingerprint: marker_map_fingerprint(self),
+                material_realization_fingerprint: material_realization_fingerprint(None, None),
+                region_class_count: class_count,
+                max_material_residual: 0.0,
             })
         } else {
             Err(errors)
         }
+    }
+
+    /// Extend the structural v6 certificate with the realized element-DG0
+    /// material lane used by conformal FEM regions.  The base certificate is
+    /// still the sole PBC certificate; this method only adds its material
+    /// evidence and rejects a seam before solver allocation when coefficients
+    /// disagree across a paired face.
+    pub fn periodic_mesh_certificate_v6_with_material_fields(
+        &self,
+        ms_element_field: Option<&[f64]>,
+        a_element_field: Option<&[f64]>,
+    ) -> Result<PeriodicMeshCertificateV6IR, Vec<String>> {
+        let mut certificate = self.periodic_mesh_certificate_v6()?;
+        let residual = seam_material_residual(
+            self,
+            &certificate,
+            ms_element_field,
+            a_element_field,
+        )?;
+        if residual > 1.0e-12 {
+            return Err(vec![format!(
+                "periodic material certificate seam coefficient residual {residual:.3e} exceeds tolerance 1.000e-12"
+            )]);
+        }
+        certificate.material_realization_fingerprint =
+            material_realization_fingerprint(ms_element_field, a_element_field);
+        certificate.max_material_residual = residual;
+        Ok(certificate)
     }
 
     /// Certify semantic boundary roles from volume adjacency.
@@ -1490,6 +1657,36 @@ mod mesh_validation_tests {
         assert!(certificate.boundary_topology_match);
         assert!(certificate.corner_edge_cycle_unique);
         assert!(certificate.topology_fingerprint.starts_with("sha256:"));
+        assert!(certificate.marker_map_fingerprint.starts_with("sha256:"));
+        assert!(certificate.material_realization_fingerprint.starts_with("sha256:"));
+        assert_eq!(certificate.max_material_residual, 0.0);
+    }
+
+    #[test]
+    fn periodic_region_material_certificate_rejects_dg0_seam_mismatch() {
+        let mesh = mirrored_periodic_mesh();
+        let errors = mesh
+            .periodic_mesh_certificate_v6_with_material_fields(
+                Some(&[800_000.0, 801_000.0]),
+                Some(&[13.0e-12, 13.0e-12]),
+            )
+            .expect_err("DG0 Ms mismatch must fail mirrored seam certification");
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("coefficient residual")));
+    }
+
+    #[test]
+    fn periodic_region_material_certificate_records_realized_dg0_hashes() {
+        let mesh = mirrored_periodic_mesh();
+        let certificate = mesh
+            .periodic_mesh_certificate_v6_with_material_fields(
+                Some(&[800_000.0, 800_000.0]),
+                Some(&[13.0e-12, 13.0e-12]),
+            )
+            .expect("equal DG0 material values must certify");
+        assert!(certificate.material_realization_fingerprint.starts_with("sha256:"));
+        assert_eq!(certificate.max_material_residual, 0.0);
     }
 
     #[test]

@@ -2352,6 +2352,21 @@ pub(crate) fn plan_fem(
     }
     let requires_consistent_mass_exchange = ms_element_field.is_some();
 
+    if periodic_mesh_certificate_v6.is_some() {
+        periodic_mesh_certificate_v6 = Some(
+            mesh.periodic_mesh_certificate_v6_with_material_fields(
+                ms_element_field.as_deref(),
+                a_element_field.as_deref(),
+            )
+            .map_err(|certificate_errors| PlanError {
+                reasons: certificate_errors
+                    .into_iter()
+                    .map(|reason| format!("FEM periodic region/material certificate v6: {reason}"))
+                    .collect(),
+            })?,
+        );
+    }
+
     if interfacial_dmi.is_none() {
         interfacial_dmi = material.interfacial_dmi;
     }
@@ -2638,9 +2653,13 @@ pub(crate) fn plan_fem(
     ];
     if let Some(certificate) = periodic_mesh_certificate_v6.as_ref() {
         provenance_notes.push(format!(
-            "periodic mesh certificate: schema={} topology={} magnetic_classes={} scalar_classes={} translation_residual_max_m={:.6e} normal_mismatch_max={:.6e}",
+            "periodic mesh certificate: schema={} topology={} marker_map={} material_realization={} region_classes={} max_material_residual={:.6e} magnetic_classes={} scalar_classes={} translation_residual_max_m={:.6e} normal_mismatch_max={:.6e}",
             certificate.schema_version,
             certificate.topology_fingerprint,
+            certificate.marker_map_fingerprint,
+            certificate.material_realization_fingerprint,
+            certificate.region_class_count,
+            certificate.max_material_residual,
             certificate.magnetic_class_count,
             certificate.scalar_class_count,
             certificate.translation_residual_max_m,

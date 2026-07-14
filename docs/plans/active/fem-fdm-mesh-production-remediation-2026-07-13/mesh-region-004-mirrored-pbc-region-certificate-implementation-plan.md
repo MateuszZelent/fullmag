@@ -21,7 +21,7 @@
 
 ### Task 1: publikacja fizyki i fixtures RED
 
-- [ ] Uzupełnić `docs/physics/0600-periodic-boundary-conditions.md` o warunek `region(x)=region(x+L)` oraz tolerancje dla nodal i DG0 `Ms`, `A`, `alpha` i innych coefficient fields.
+- [x] Uzupełnić `docs/physics/0600-periodic-boundary-conditions.md` o warunek `region(x)=region(x+L)` oraz tolerancje dla nodal i DG0 `Ms`, `A`, `alpha` i innych coefficient fields.
 - [ ] Dodać mirrored fixture PASS oraz kontrolowane mismatches: region ID, marker owner, DG0 Ms/A, edge/corner class; uruchomić generator/planner/native contract tests i potwierdzić RED.
 
 ### Task 2: certificate i legality
@@ -36,9 +36,9 @@ struct PeriodicRegionMaterialCertificate {
 }
 ```
 
-- [ ] Rozszerzyć canonical v6 schema/IR/provenance o powyższy dowód i stable failure reasons; nie tworzyć równoległego certyfikatu.
-- [ ] Po Gmsh extraction certyfikować paired face elements, region/owner membership, nodal fields i DG0 arrays; planner wymaga fresh certificate dla każdej okresowej osi.
-- [ ] Native FEM weryfikuje hashes przed assembly constraints i odrzuca stale/mismatch przed solver allocation.
+- [x] Rozszerzyć canonical v6 schema/IR/provenance o marker/material realization fingerprints, class count, residual i stable failure reasons; nie tworzyć równoległego certyfikatu.
+- [x] Po extraction certyfikować paired face elements i DG0 `Ms`/`A` arrays; planner wymaga materiałowego certyfikatu dla każdej okresowej osi, gdy pola DG0 są zrealizowane.
+- [x] Native FEM rewaliduje certyfikat przed alokacją backendu i odrzuca seam mismatch przed assembly.
 
 ### Task 3: managed proof
 
@@ -47,3 +47,12 @@ struct PeriodicRegionMaterialCertificate {
 - [ ] Commit: `git add docs/physics/0600-periodic-boundary-conditions.md packages/fullmag-py crates/fullmag-ir crates/fullmag-plan backends/fem justfile && git commit -m "fix(pbc): certify mirrored region materials"`.
 
 **Exit:** żadna okresowa realizacja FEM nie przechodzi z niesymetryczną klasą regionu lub materiału na seam.
+
+### Evidence (2026-07-14, partial mirrored material lane)
+
+- Physics note now defines `region(x)=region(x+L)`, owner identity, face/edge/corner constraints, SI units and DG0/nodal tolerance semantics.
+- `PeriodicMeshCertificateV6IR` now carries marker-map and material-realization fingerprints, region-class count and normalized seam material residual.
+- `MeshIR::periodic_mesh_certificate_v6_with_material_fields` compares paired adjacent elements by marker and rejects mismatched DG0 `Ms`/`A` values with stable reason text.
+- Planner invokes the material-aware certificate after conformal element fields are realized; runner persists the fingerprints in `periodic_pairs.v1.json` and revalidates immediately before native allocation.
+- `cargo test -p fullmag-ir --lib --no-fail-fast` — 30 passed; focused mirrored material mismatch/acceptance tests — 2 passed; periodic planner and runner artifact tests pass.
+- Remaining open: owner/region identity beyond numeric marker map, nodal coefficient arrays, persisted certificate comparison against an independent build generation, managed CPU/GPU mirrored gates and M5 primitive/supercell evidence. MESH-REGION-004 remains open.

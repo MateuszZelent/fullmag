@@ -200,6 +200,42 @@ kernel precomputed on host and uploaded.
 
 ### 3.2 FEM
 
+#### 3.2.0 Mirrored seam region/material invariant
+
+For every certified periodic seam, the realized region class is invariant under
+the declared translation.  For a source point or element (x) and its paired
+destination (x+L_i), the certificate requires:
+
+\[
+  \operatorname{region}(x)=\operatorname{region}(x+L_i),\qquad
+  \operatorname{owner}(x)=\operatorname{owner}(x+L_i)
+\]
+
+where equality is over the canonical region/owner identity, not merely the
+numeric Gmsh marker.  Face elements must have an explicit vertex bijection,
+opposed outward normals and matching adjacent material classes.  The same
+condition is checked for multi-axis edge and corner equivalence classes.
+
+The v6 certificate carries a single material-realization evidence lane (it is
+not a second PBC certificate):
+
+| Field | Meaning | SI tolerance/identity |
+|---|---|---|
+| `topology_fingerprint` | mesh node/element/boundary topology | exact hash |
+| `marker_map_fingerprint` | owner/region/marker assignment | exact hash |
+| `material_realization_fingerprint` | nodal P1 and element DG0 material arrays | exact hash plus value residuals |
+| `max_ms_residual_Apm` | paired (M_s) residual | configured absolute/relative tolerance |
+| `max_aex_residual_Jpm` | paired (A) residual | configured absolute/relative tolerance |
+| `max_alpha_residual` | paired damping residual | configured absolute/relative tolerance |
+| `region_class_count` | closed seam equivalence classes | exact integer |
+
+Nodal fields are compared in A/m for (M_s), J/m for (A), and dimensionless
+for \(\alpha\); element DG0 values are compared element-by-element after the
+face bijection.  A missing field, marker-owner mismatch, stale generation, or
+residual above tolerance rejects the periodic plan before native solver
+allocation.  Any remesh or region mutation affecting topology/membership
+invalidates the certificate and all dependent PBC resources.
+
 #### 3.2.1 Static / time-domain (Line A — zero-phase)
 
 The native FEM CPU/MFEM static/time-domain lane has a limited k=0 periodic
