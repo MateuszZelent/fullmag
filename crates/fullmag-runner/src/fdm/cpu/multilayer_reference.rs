@@ -987,7 +987,7 @@ mod tests {
                 eligibility: "eligible".to_string(),
                 estimated_pair_kernels: 4,
                 estimated_unique_kernels: 3,
-                estimated_kernel_bytes: 0,
+                estimated_kernel_bytes: 36_864,
                 warnings: Vec::new(),
             },
         };
