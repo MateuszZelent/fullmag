@@ -68,6 +68,9 @@ pub struct FdmDemagHintsIR {
 pub struct FdmMultilayerPlanIR {
     pub mode: String,
     pub common_cells: [u32; 3],
+    /// Validated certificate for the resolved common convolution grid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid_certificate: Option<crate::plan::FdmGridCertificateIR>,
     pub layers: Vec<FdmLayerPlanIR>,
     pub enable_exchange: bool,
     pub enable_demag: bool,
