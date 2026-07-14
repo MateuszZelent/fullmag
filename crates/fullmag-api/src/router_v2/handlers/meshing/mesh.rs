@@ -3428,6 +3428,7 @@ fn periodic_boundary_face_pairs(
     let Some(translation) = boundary_pair.translation else {
         return Vec::new();
     };
+    let tolerance = boundary_pair.tolerance.unwrap_or(1e-9).max(0.0);
     let source_faces = boundary_face_indices_by_marker(mesh, boundary_pair.marker_a);
     let mut destination_faces = boundary_face_indices_by_marker(mesh, boundary_pair.marker_b);
     let mut pairs = Vec::new();
@@ -3449,6 +3450,9 @@ fn periodic_boundary_face_pairs(
             let residual_norm =
                 (residual[0] * residual[0] + residual[1] * residual[1] + residual[2] * residual[2])
                     .sqrt();
+            if !residual_norm.is_finite() || residual_norm > tolerance {
+                continue;
+            }
             if best_destination
                 .as_ref()
                 .is_none_or(|(_, _, best_norm)| residual_norm < *best_norm)

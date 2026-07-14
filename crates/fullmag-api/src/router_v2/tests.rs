@@ -6721,7 +6721,7 @@ async fn mesh_periodic_pairs_does_not_publish_nearest_face_with_excessive_residu
 
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
-    assert_eq!(json["pairs"][0]["boundary_face_pairs"], serde_json::json!([]));
+    assert!(json["pairs"][0]["boundary_face_pairs"].is_null());
 }
 
 #[tokio::test]

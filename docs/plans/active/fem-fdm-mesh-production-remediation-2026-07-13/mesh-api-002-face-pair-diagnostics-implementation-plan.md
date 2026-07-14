@@ -21,8 +21,8 @@
 
 ### Task 1: RED
 
-- [ ] Dodać handler fixtures dla bliskich centroidów z inną triangulacją, unmatched source/destination i excessive face residual.
-- [ ] Oczekiwać dokładnych v6 IDs/counts; uruchomić focused API tests i potwierdzić FAIL.
+- [x] Dodano fixture z inną triangulacją/odległym centroidem; przed zmianą handler publikował fałszywą nearest-centroid face pair z `normal_dot=0`.
+- [ ] Dodać pełne v6 IDs/counts oraz jawne unmatched-face resource; to wymaga certificate payload w `FemMeshPayload`.
 
 ### Task 2: resource mapping
 
@@ -30,7 +30,8 @@
 pub struct PeriodicFacePairResponse { pub source_face_id: u64, pub destination_face_id: u64, pub max_vertex_residual_m: f64, pub normal_dot: f64 }
 ```
 
-- [ ] Usunąć matching loop z handlera; mapować certified pairs i aggregate unpaired counts.
+- [x] Matching loop odrzuca kandydatów z niefinite/excessive centroid residual względem zadeklarowanej tolerancji, więc nie publikuje fałszywej pary.
+- [ ] Usunąć całkowicie nearest-centroid reconstruction i mapować certified pairs oraz aggregate unpaired counts.
 - [ ] Dla dużych payloadów dodać scoped binary link zgodny z resource-first spec, nie rozszerzać thin status.
 - [ ] Uruchomić API/OpenAPI tests; PASS.
 
@@ -40,3 +41,7 @@ pub struct PeriodicFacePairResponse { pub source_face_id: u64, pub destination_f
 
 **Exit:** API response jest deterministycznym widokiem certificate, bez centroid reconstruction i cichego dropu.
 
+### Evidence (2026-07-14, partial)
+
+- `cargo test -p fullmag-api router_v2::tests::mesh_periodic_pairs --no-fail-fast -- --nocapture` — 5 passed, 0 failed.
+- Current API still lacks upstream v6 certified face IDs/residuals; the present guard is fail-closed protection against false positives, not final certificate mapping.
