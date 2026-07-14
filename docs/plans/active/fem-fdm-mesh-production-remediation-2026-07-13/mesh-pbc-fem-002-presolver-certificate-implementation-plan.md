@@ -54,6 +54,7 @@ pub struct PeriodicMeshCertificateV6 {
 - [x] The certificate survives `MeshData.oriented_copy()`, JSON/NPZ serialization and `MeshData.to_ir`; remesh responses and spilled topology artifacts include the same certificate payload.
 - [x] RED/GREEN evidence: `test_certify_extracted_periodic_mesh_rejects_missing_mirrored_face` failed before the field existed and now passes; full Python meshing suite — 246 passed, 1 skipped.
 - [ ] Rust `MeshIR`/planner provenance, native contract and managed/browser evidence still need to consume and independently revalidate this retained evidence; MESH-PBC-FEM-002 remains open.
+- [x] JSON and NPZ mesh reload regression preserves the accepted certificate (`test_certify_extracted_periodic_mesh_rejects_missing_mirrored_face` remains GREEN after both round-trips).
 
 ### Task 3: commit
 
