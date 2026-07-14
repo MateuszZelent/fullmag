@@ -1,6 +1,34 @@
 //! Shared FDM artifact helpers.
 
-use crate::types::{RunError, StateObservables};
+use crate::types::{AuxiliaryArtifact, RunError, StateObservables};
+use fullmag_ir::{BackendPlanIR, ExecutionPlanIR};
+
+/// Serialize the planner-owned FDM grid certificate as a standalone artifact.
+///
+/// The runner never reconstructs certificate values from geometry; it only
+/// publishes the validated resolved certificate carried by the execution plan.
+pub(crate) fn grid_certificate_artifacts(
+    plan: &ExecutionPlanIR,
+) -> Vec<AuxiliaryArtifact> {
+    let certificate = match &plan.backend_plan {
+        BackendPlanIR::Fdm(fdm) => fdm.grid_certificate.as_ref(),
+        BackendPlanIR::FdmMultilayer(multilayer) => multilayer.grid_certificate.as_ref(),
+        _ => None,
+    };
+    let Some(certificate) = certificate else {
+        return Vec::new();
+    };
+    let Ok(bytes) = serde_json::to_vec_pretty(&serde_json::json!({
+        "schema_version": "fdm_grid_certificate.v1",
+        "certificate": certificate,
+    })) else {
+        return Vec::new();
+    };
+    vec![AuxiliaryArtifact {
+        relative_path: "mesh/fdm_grid_certificate.json".to_string(),
+        bytes,
+    }]
+}
 
 pub(crate) fn select_state_observable_field(
     observables: &StateObservables,

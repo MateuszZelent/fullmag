@@ -993,7 +993,9 @@ pub(crate) fn write_artifacts(
         }
     }
 
-    for artifact in &executed.auxiliary_artifacts {
+    let mut auxiliary_artifacts = executed.auxiliary_artifacts.clone();
+    auxiliary_artifacts.extend(crate::fdm::artifacts::grid_certificate_artifacts(plan));
+    for artifact in &auxiliary_artifacts {
         let artifact_path = output_dir.join(&artifact.relative_path);
         if let Some(parent) = artifact_path.parent() {
             fs::create_dir_all(parent)?;
@@ -2829,6 +2831,7 @@ mod tests {
             backend_plan: BackendPlanIR::FdmMultilayer(FdmMultilayerPlanIR {
                 mode: "multilayer_convolution".to_string(),
                 common_cells: [2, 1, 2],
+                grid_certificate: None,
                 layers: vec![
                     FdmLayerPlanIR {
                         magnet_name: "bottom".to_string(),

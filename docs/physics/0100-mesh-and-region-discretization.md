@@ -51,6 +51,24 @@ The intended Fullmag model is:
 This avoids an architecture where gradients of `Ms`, `A`, or `alpha` require artificial
 fragmentation into many regions.
 
+Every resolved FDM grid is accompanied by one `FdmGridCertificateIR`.  The certificate is
+resolved planner output, not a copy of the requested cell hint, and contains:
+
+| Field | Meaning | SI unit / constraint |
+|---|---|---|
+| `origin_m` | lower world-space grid corner | m; finite |
+| `counts` | cell counts `(N_x,N_y,N_z)` | dimensionless; strictly positive |
+| `cell_m` | cell edge lengths `(d_x,d_y,d_z)` | m; strictly positive |
+| `extent_m` | realized extent `(L_x,L_y,L_z)` | m; each `L_i = N_i d_i` |
+| `active_cells` | active magnetic cells in the resolved mask | count; `0 <= active_cells <= N_xN_yN_z` |
+| `estimated_bytes` | checked resident-memory estimate | bytes; positive and within the FDM budget |
+| `grid_fingerprint` | canonical SHA-256 of origin/count/cell/extent | lowercase hexadecimal |
+
+The planner validates all fields after voxelization (including precomputed grid assets).  The
+runner must validate the certificate and compare counts, origin, cell size, active count and budget
+before allocating state or kernels.  Any mismatch is a hard, fail-closed error.  A PBC policy does
+not create a second certificate; its identity is bound to this same resolved grid.
+
 ### 3.2 FEM
 
 Imported geometry is meshed, and regions become domain markers over elements or mesh attributes.
@@ -92,7 +110,7 @@ Hybrid execution needs explicit projection semantics between FEM mesh representa
 - [x] ProblemIR
 - [x] Planner-facing structure
 - [x] Capability matrix
-- [ ] FDM backend
+- [x] FDM backend grid realization certificate
 - [ ] FEM backend
 - [ ] Hybrid backend
 - [ ] Outputs / observables

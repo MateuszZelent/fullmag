@@ -918,6 +918,16 @@ mod tests {
         FdmMultilayerPlanIR {
             mode: "two_d_stack".to_string(),
             common_cells: [4, 4, 1],
+            grid_certificate: Some(
+                fullmag_ir::FdmGridCertificateIR::new(
+                    [-4e-9, -4e-9, 0.0],
+                    [4, 4, 1],
+                    [2e-9, 2e-9, 1e-9],
+                    16,
+                    16 * fullmag_plan::FDM_GRID_ESTIMATED_BYTES_PER_CELL,
+                )
+                .expect("test certificate should be valid"),
+            ),
             layers: vec![
                 FdmLayerPlanIR {
                     magnet_name: "free".to_string(),

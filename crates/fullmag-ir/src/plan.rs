@@ -12,6 +12,7 @@ use crate::{
     SpinWaveBoundaryConditionIR, ThermalSeedConfig, TimeDependenceIR,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExecutionPlanSummary {
@@ -54,6 +55,134 @@ pub struct GridDimensions {
     pub cells: [u32; 3],
 }
 
+/// Immutable description of one resolved FDM grid realization.
+///
+/// The certificate records resolved geometry-to-grid facts.  It is deliberately
+/// separate from the requested discretization hints and from any PBC policy;
+/// PBC, when present, is part of the identity of this same grid.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FdmGridCertificateIR {
+    /// Lower world-space corner of the grid [m].
+    pub origin_m: [f64; 3],
+    /// Number of cells in each axis.
+    pub counts: [u32; 3],
+    /// Cell edge lengths [m].
+    pub cell_m: [f64; 3],
+    /// Realized extent `L_i = N_i d_i` [m].
+    pub extent_m: [f64; 3],
+    /// Number of active magnetic cells in the realized mask.
+    pub active_cells: u64,
+    /// Planner memory estimate [bytes].
+    pub estimated_bytes: u64,
+    /// SHA-256 of the canonical resolved grid payload, lowercase hex.
+    pub grid_fingerprint: String,
+}
+
+impl FdmGridCertificateIR {
+    /// Build and validate a certificate from resolved planner facts.
+    pub fn new(
+        origin_m: [f64; 3],
+        counts: [u32; 3],
+        cell_m: [f64; 3],
+        active_cells: u64,
+        estimated_bytes: u64,
+    ) -> Result<Self, String> {
+        let extent_m = std::array::from_fn(|axis| counts[axis] as f64 * cell_m[axis]);
+        let grid_fingerprint = Self::fingerprint_for(origin_m, counts, cell_m, extent_m);
+        let certificate = Self {
+            origin_m,
+            counts,
+            cell_m,
+            extent_m,
+            active_cells,
+            estimated_bytes,
+            grid_fingerprint,
+        };
+        certificate.validate()?;
+        Ok(certificate)
+    }
+
+    /// Validate intrinsic consistency before a runner consumes the certificate.
+    pub fn validate(&self) -> Result<(), String> {
+        if self
+            .origin_m
+            .iter()
+            .chain(self.cell_m.iter())
+            .chain(self.extent_m.iter())
+            .any(|value| !value.is_finite())
+        {
+            return Err("FDM grid certificate contains a non-finite coordinate".to_string());
+        }
+        if self.counts.iter().any(|count| *count == 0) {
+            return Err(format!(
+                "FDM grid certificate counts must be positive, got {:?}",
+                self.counts
+            ));
+        }
+        if self.cell_m.iter().any(|cell| *cell <= 0.0) {
+            return Err(format!(
+                "FDM grid certificate cell sizes must be positive, got {:?}",
+                self.cell_m
+            ));
+        }
+        let total_cells = (self.counts[0] as u64)
+            .checked_mul(self.counts[1] as u64)
+            .and_then(|value| value.checked_mul(self.counts[2] as u64))
+            .ok_or_else(|| "FDM grid certificate cell count overflows u64".to_string())?;
+        if self.active_cells > total_cells {
+            return Err(format!(
+                "FDM grid certificate active_cells={} exceeds total_cells={total_cells}",
+                self.active_cells
+            ));
+        }
+        if self.estimated_bytes == 0 {
+            return Err("FDM grid certificate estimated_bytes must be positive".to_string());
+        }
+        for axis in 0..3 {
+            let expected = self.counts[axis] as f64 * self.cell_m[axis];
+            let tolerance = 1.0e-12 * expected.abs().max(1.0e-30);
+            if (self.extent_m[axis] - expected).abs() > tolerance {
+                return Err(format!(
+                    "FDM grid certificate extent_m[{axis}]={} disagrees with N*d={expected}",
+                    self.extent_m[axis]
+                ));
+            }
+        }
+        let expected_fingerprint = Self::fingerprint_for(
+            self.origin_m,
+            self.counts,
+            self.cell_m,
+            self.extent_m,
+        );
+        if self.grid_fingerprint != expected_fingerprint {
+            return Err(format!(
+                "FDM grid certificate fingerprint mismatch: expected {expected_fingerprint}, got {}",
+                self.grid_fingerprint
+            ));
+        }
+        Ok(())
+    }
+
+    fn fingerprint_for(
+        origin_m: [f64; 3],
+        counts: [u32; 3],
+        cell_m: [f64; 3],
+        extent_m: [f64; 3],
+    ) -> String {
+        let payload = serde_json::json!({
+            "origin_m": origin_m,
+            "counts": counts,
+            "cell_m": cell_m,
+            "extent_m": extent_m,
+        });
+        let encoded = serde_json::to_vec(&payload).expect("grid certificate payload serializes");
+        Sha256::digest(encoded)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResolvedAntennaZeemanMaskIR {
     pub source: String,
@@ -79,6 +208,9 @@ pub struct FdmPlanIR {
     pub origin_m: [f64; 3],
     pub grid: GridDimensions,
     pub cell_size: [f64; 3],
+    /// Validated certificate for this resolved geometry-to-grid realization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid_certificate: Option<FdmGridCertificateIR>,
     pub region_mask: Vec<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_mask: Option<Vec<bool>>,
@@ -1031,7 +1163,7 @@ pub struct ProvenancePlanIR {
 
 #[cfg(test)]
 mod tests {
-    use super::{RequestedFemDemagIR, ResolvedFemDemagIR};
+    use super::{FdmGridCertificateIR, RequestedFemDemagIR, ResolvedFemDemagIR};
 
     #[test]
     fn fredkin_koehler_demag_is_body_only_and_executable() {
@@ -1051,6 +1183,52 @@ mod tests {
         assert!(!RequestedFemDemagIR::Bem.is_implemented());
         assert!(!RequestedFemDemagIR::Fmm.requires_airbox());
         assert!(!RequestedFemDemagIR::Fmm.is_implemented());
+    }
+
+    #[test]
+    fn fdm_grid_certificate_round_trips_and_enforces_extent() {
+        let certificate = FdmGridCertificateIR::new(
+            [-2.0e-9, 0.0, 1.0e-9],
+            [4, 3, 2],
+            [1.0e-9, 2.0e-9, 3.0e-9],
+            17,
+            4_096,
+        )
+        .expect("resolved grid certificate should validate");
+        let encoded = serde_json::to_vec(&certificate).expect("certificate serializes");
+        let decoded: FdmGridCertificateIR =
+            serde_json::from_slice(&encoded).expect("certificate deserializes");
+        assert_eq!(decoded, certificate);
+
+        let mut invalid = certificate.clone();
+        invalid.extent_m[0] += 1.0e-12;
+        let error = invalid.validate().expect_err("N*d mismatch must reject");
+        assert!(error.contains("extent_m[0]"));
+    }
+
+    #[test]
+    fn fdm_grid_certificate_rejects_active_count_and_fingerprint_tampering() {
+        let certificate = FdmGridCertificateIR::new(
+            [0.0; 3],
+            [2, 2, 1],
+            [1.0e-9; 3],
+            3,
+            1_024,
+        )
+        .expect("resolved grid certificate should validate");
+        let mut active_invalid = certificate.clone();
+        active_invalid.active_cells = 5;
+        assert!(active_invalid
+            .validate()
+            .expect_err("active count beyond grid must reject")
+            .contains("active_cells"));
+
+        let mut hash_invalid = certificate;
+        hash_invalid.grid_fingerprint.replace_range(..2, "00");
+        assert!(hash_invalid
+            .validate()
+            .expect_err("fingerprint tampering must reject")
+            .contains("fingerprint mismatch"));
     }
 }
 

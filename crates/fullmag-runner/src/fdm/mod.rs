@@ -28,6 +28,23 @@ pub(crate) fn validate_single_grid_budget(
     .map_err(|error| RunError {
         message: format!("FDM grid budget rejected before allocation: {error}"),
     })?;
+    if let Some(certificate) = plan.grid_certificate.as_ref() {
+        certificate.validate().map_err(|message| RunError {
+            message: format!("FDM grid certificate rejected before allocation: {message}"),
+        })?;
+        if certificate.origin_m != plan.origin_m
+            || certificate.counts != plan.grid.cells
+            || certificate.cell_m != plan.cell_size
+            || certificate.estimated_bytes != cost.estimated_bytes
+        {
+            return Err(RunError {
+                message: format!(
+                    "FDM grid certificate does not match resolved plan: certificate_counts={:?} plan_counts={:?}",
+                    certificate.counts, plan.grid.cells
+                ),
+            });
+        }
+    }
     let cells = usize::try_from(cost.cells).map_err(|_| RunError {
         message: format!(
             "FDM grid cell count {} is not addressable on this runtime",
@@ -61,6 +78,21 @@ pub(crate) fn validate_single_grid_budget(
             ),
         });
     }
+    let active_cells = plan
+        .active_mask
+        .as_ref()
+        .map(|mask| mask.iter().filter(|active| **active).count() as u64)
+        .unwrap_or(cost.cells);
+    if let Some(certificate) = plan.grid_certificate.as_ref() {
+        if certificate.active_cells != active_cells {
+            return Err(RunError {
+                message: format!(
+                    "FDM grid certificate active count mismatch: certificate={} resolved={active_cells}",
+                    certificate.active_cells
+                ),
+            });
+        }
+    }
     Ok(cost.cells)
 }
 
@@ -74,6 +106,41 @@ pub(crate) fn validate_multilayer_grid_budget(
     .map_err(|error| RunError {
         message: format!("FDM common grid budget rejected before allocation: {error}"),
     })?;
+    let certificate = plan.grid_certificate.as_ref();
+    if let Some(certificate) = certificate {
+        certificate.validate().map_err(|message| RunError {
+            message: format!("FDM multilayer grid certificate rejected before allocation: {message}"),
+        })?;
+    }
+    let expected_origin = plan
+        .layers
+        .iter()
+        .fold([f64::INFINITY; 3], |mut origin, layer| {
+            for axis in 0..3 {
+                origin[axis] = origin[axis].min(layer.native_origin[axis]);
+            }
+            origin
+        });
+    let expected_cell = plan
+        .layers
+        .first()
+        .map(|layer| layer.convolution_cell_size)
+        .unwrap_or([0.0; 3]);
+    if let Some(certificate) = certificate {
+        if certificate.origin_m != expected_origin
+            || certificate.counts != plan.common_cells
+            || certificate.cell_m != expected_cell
+            || certificate.estimated_bytes != cost.estimated_bytes
+            || certificate.active_cells != cost.cells
+        {
+            return Err(RunError {
+                message: format!(
+                    "FDM multilayer grid certificate does not match resolved common grid: certificate_counts={:?} common_counts={:?}",
+                    certificate.counts, plan.common_cells
+                ),
+            });
+        }
+    }
     let mut aggregate_bytes = cost.estimated_bytes;
     for layer in &plan.layers {
         if layer.convolution_grid != plan.common_cells {
@@ -189,6 +256,17 @@ mod tests {
     fn forged_single_grid_payload_is_rejected_before_allocation() {
         let mut plan = FdmPlanIR::default();
         plan.grid.cells = [2, 2, 1];
+        plan.cell_size = [1.0, 1.0, 1.0];
+        plan.grid_certificate = Some(
+            fullmag_ir::FdmGridCertificateIR::new(
+                plan.origin_m,
+                plan.grid.cells,
+                plan.cell_size,
+                4,
+                4 * fullmag_plan::FDM_GRID_ESTIMATED_BYTES_PER_CELL,
+            )
+            .expect("test certificate should be valid"),
+        );
         plan.initial_magnetization = vec![[0.0, 0.0, 1.0]; 3];
 
         let error = validate_single_grid_budget(&plan).expect_err("payload length must be checked");

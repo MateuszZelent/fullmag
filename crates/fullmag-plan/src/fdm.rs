@@ -2,7 +2,8 @@ use fullmag_ir::{
     BackendPlanIR, BackendTarget, CommonPlanMeta, DiscretizationHintsIR, EnergyTermIR,
     ExchangeBoundaryCondition, ExchangeCouplingModeIR, ExecutionPlanIR, ExecutionPrecision,
     FdmDemagPeriodicityIR, FdmLayerPlanIR, FdmMaterialIR, FdmMultilayerPlanIR,
-    FdmMultilayerSummaryIR, FdmPlanIR, GeometryEntryIR, GridDimensions, InitialMagnetizationIR,
+    FdmGridCertificateIR, FdmMultilayerSummaryIR, FdmPlanIR, GeometryEntryIR, GridDimensions,
+    InitialMagnetizationIR,
     IntegratorChoice, OutputPlanIR, ProblemIR, ProvenancePlanIR, RegionFrameIR, RegionShapeIR,
     RelaxationAlgorithmIR, TimeDependenceIR, IR_VERSION,
 };
@@ -846,11 +847,22 @@ pub(crate) fn plan_fdm(
         grid_cells[1] as f64 * cell_size[1],
         grid_cells[2] as f64 * cell_size[2],
     ];
+    let grid_certificate = FdmGridCertificateIR::new(
+        native_origin,
+        grid_cells,
+        cell_size,
+        active_count as u64,
+        grid_cost.estimated_bytes,
+    )
+    .map_err(|message| PlanError {
+        reasons: vec![format!("invalid resolved FDM grid certificate: {message}")],
+    })?;
 
     let mut fdm_plan = FdmPlanIR {
         origin_m: native_origin,
         grid: GridDimensions { cells: grid_cells },
         cell_size,
+        grid_certificate: Some(grid_certificate),
         region_mask,
         active_mask: active_mask.clone(),
         initial_magnetization,
@@ -1800,6 +1812,7 @@ pub(crate) fn plan_fdm_multilayer(
             0
         }
     };
+    let common_grid_cost = checked_fdm_grid_cost(common_cells, FDM_GRID_ESTIMATED_BYTES_PER_CELL)?;
 
     let controls = planned_study_controls(problem, resolved_backend, &mut errors);
     let mut integrator = controls.integrator;
@@ -1822,6 +1835,14 @@ pub(crate) fn plan_fdm_multilayer(
         return Err(PlanError { reasons: errors });
     }
 
+    let common_origin = lowered_bodies
+        .iter()
+        .fold([f64::INFINITY; 3], |mut origin, body| {
+            for axis in 0..3 {
+                origin[axis] = origin[axis].min(body.native_origin[axis]);
+            }
+            origin
+        });
     let layers = lowered_bodies
         .into_iter()
         .map(|body| FdmLayerPlanIR {
@@ -1878,9 +1899,21 @@ pub(crate) fn plan_fdm_multilayer(
         return Err(PlanError { reasons: errors });
     }
 
+    let grid_certificate = FdmGridCertificateIR::new(
+        common_origin,
+        common_cells,
+        convolution_cell_size,
+        common_grid_cost.cells,
+        common_grid_cost.estimated_bytes,
+    )
+    .map_err(|message| PlanError {
+        reasons: vec![format!("invalid resolved multilayer FDM grid certificate: {message}")],
+    })?;
+
     let plan = FdmMultilayerPlanIR {
         mode: selected_mode.clone(),
         common_cells,
+        grid_certificate: Some(grid_certificate),
         layers,
         enable_exchange,
         enable_demag,

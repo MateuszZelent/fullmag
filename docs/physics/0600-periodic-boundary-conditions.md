@@ -117,6 +117,16 @@ where $P_{ij} = 1$ for all periodic pairs.
 
 ### 3.1 FDM
 
+#### 3.1.0 Grid identity and certificate
+
+PBC changes the operator realization but not the resolved Cartesian grid.  The planner therefore
+publishes exactly one `FdmGridCertificateIR` for the grid used by local operators and demagnetizing
+images.  Its `origin_m`, `counts`, `cell_m`, `extent_m`, active-cell count, memory estimate and
+`grid_fingerprint` are validated before execution.  In particular, the period used by image
+summation is the certified extent `L_i = N_i d_i`, never a value recomputed from a requested hint.
+Changing a periodic axis, image count, or any grid realization input invalidates the plan/runtime
+identity and requires a new certificate; no competing PBC certificate may be substituted.
+
 #### 3.1.1 Neighbor policy
 
 Replace all clamped-neighbor indexing with a helper function:
