@@ -48,3 +48,9 @@ pub struct ResolvedFemDomainMeshAsset { pub build_report: Option<MeshBuildReport
 - [x] `cargo test -p fullmag-api mesh_semantics_returns_three_level_projection` — 1 passed.
 - [x] `cargo test -p fullmag-runner --lib --no-fail-fast` — 506 passed (includes shared-domain report propagation fixture).
 - [ ] Python end-to-end fixture, managed OpenAPI hygiene and Control Room browser/UI test remain open; local UI focused test is blocked by absent `apps/control-room/node_modules` (`vitest: not found`).
+
+### Evidence update (2026-07-14, CLI consumer closure)
+
+- [x] Fixed the remaining CLI test-consumer omissions by initializing `FemMeshPayload.build_report` and `FemFrequencyResponsePlanIR.mesh_build_report` in live-workspace and frequency-response fixtures.
+- [x] RED/GREEN evidence: the targeted CLI test initially failed at those three missing fields; after the surgical additions `cargo test -p fullmag-cli orchestrator::tests::attach_region_realization_revisions --no-fail-fast -- --nocapture` passed 2/2 and `cargo test -p fullmag-runner artifacts::tests::metadata_execution_provenance_persists_resolved_fallback --no-fail-fast -- --nocapture` passed 1/1.
+- [ ] Python end-to-end, managed OpenAPI hygiene and browser/Inspector gates remain open.
