@@ -249,6 +249,15 @@ pub struct PeriodicMeshCertificateV6IR {
     pub fe_order_match: bool,
     pub material_region_match: bool,
     pub corner_edge_cycle_unique: bool,
+    /// Number of audited two-axis seam node classes.
+    #[serde(default)]
+    pub edge_class_count: u64,
+    /// Number of audited three-or-more-axis seam node classes.
+    #[serde(default)]
+    pub corner_class_count: u64,
+    /// Largest translation residual observed while checking commuting paths.
+    #[serde(default)]
+    pub max_commutation_residual_m: f64,
     pub m0_seam_mismatch_max: f64,
     pub h_demag0_seam_mismatch_max: f64,
     /// Stable identity of the marker/region assignment consumed by the seam.
@@ -544,13 +553,24 @@ fn normalized_dot(left: [f64; 3], right: [f64; 3]) -> f64 {
         / (left_norm * right_norm)
 }
 
-fn validate_edge_corner_closure(mesh: &MeshIR, errors: &mut Vec<String>) -> bool {
+#[derive(Debug, Clone, Copy, Default)]
+struct EdgeCornerClosureAudit {
+    valid: bool,
+    edge_class_count: u64,
+    corner_class_count: u64,
+    max_commutation_residual_m: f64,
+}
+
+fn audit_edge_corner_closure(mesh: &MeshIR, errors: &mut Vec<String>) -> EdgeCornerClosureAudit {
     type EdgeKey = (String, u32);
     type EdgeValue = (u32, [f64; 3]);
 
     let mut edges = BTreeMap::<EdgeKey, EdgeValue>::new();
     let mut tolerances = BTreeMap::<String, f64>::new();
-    let mut valid = true;
+    let mut audit = EdgeCornerClosureAudit {
+        valid: true,
+        ..EdgeCornerClosureAudit::default()
+    };
     for boundary in &mesh.periodic_boundary_pairs {
         let axis = boundary
             .axis_hint
@@ -586,7 +606,7 @@ fn validate_edge_corner_closure(mesh: &MeshIR, errors: &mut Vec<String>) -> bool
                             "periodic v6 edge/corner mapping is not unique for axis '{}' at node {}",
                             key.0, key.1
                         ));
-                        valid = false;
+                        audit.valid = false;
                     }
                 }
             }
@@ -596,6 +616,13 @@ fn validate_edge_corner_closure(mesh: &MeshIR, errors: &mut Vec<String>) -> bool
     let mut axes_by_node = BTreeMap::<u32, BTreeSet<String>>::new();
     for (axis, node) in edges.keys() {
         axes_by_node.entry(*node).or_default().insert(axis.clone());
+    }
+    for axes in axes_by_node.values() {
+        if axes.len() == 2 {
+            audit.edge_class_count += 1;
+        } else if axes.len() >= 3 {
+            audit.corner_class_count += 1;
+        }
     }
     for (node, axes) in axes_by_node.iter().filter(|(_, axes)| axes.len() > 1) {
         let axes = axes.iter().cloned().collect::<Vec<_>>();
@@ -609,7 +636,7 @@ fn validate_edge_corner_closure(mesh: &MeshIR, errors: &mut Vec<String>) -> bool
                         "periodic v6 edge/corner closure is incomplete at node {} for axes '{}'/'{}'",
                         node, axis_a, axis_b
                     ));
-                    valid = false;
+                    audit.valid = false;
                     continue;
                 };
                 let Some((mid_ba, translation_b)) = edges.get(&(axis_b.clone(), *node)) else {
@@ -622,7 +649,7 @@ fn validate_edge_corner_closure(mesh: &MeshIR, errors: &mut Vec<String>) -> bool
                         "periodic v6 edge/corner closure is incomplete at node {} for axes '{}'/'{}'",
                         node, axis_a, axis_b
                     ));
-                    valid = false;
+                    audit.valid = false;
                     continue;
                 };
                 let tolerance = tolerances
@@ -640,17 +667,21 @@ fn validate_edge_corner_closure(mesh: &MeshIR, errors: &mut Vec<String>) -> bool
                     translation_b[1] + translation_ab_again[1],
                     translation_b[2] + translation_ab_again[2],
                 ];
-                if end_ab != end_ba || euclidean_residual(composed_ab, composed_ba) > tolerance {
+                let commutation_residual = euclidean_residual(composed_ab, composed_ba);
+                audit.max_commutation_residual_m = audit
+                    .max_commutation_residual_m
+                    .max(commutation_residual);
+                if end_ab != end_ba || commutation_residual > tolerance {
                     errors.push(format!(
                         "periodic v6 edge/corner translations do not commute at node {} for axes '{}'/'{}'",
                         node, axis_a, axis_b
                     ));
-                    valid = false;
+                    audit.valid = false;
                 }
             }
         }
     }
-    valid
+    audit
 }
 
 fn periodic_equivalence_classes(
@@ -1045,7 +1076,7 @@ impl MeshIR {
 
         let (classes, class_errors) = periodic_equivalence_classes(self);
         errors.extend(class_errors);
-        let edge_corner_cycle_unique = validate_edge_corner_closure(self, &mut errors);
+        let edge_corner_audit = audit_edge_corner_closure(self, &mut errors);
         let class_count = classes.iter().filter(|class| class.len() > 1).count() as u64;
         let pair_count = classes
             .iter()
@@ -1071,7 +1102,10 @@ impl MeshIR {
                 boundary_topology_match,
                 fe_order_match: true,
                 material_region_match,
-                corner_edge_cycle_unique: edge_corner_cycle_unique,
+                corner_edge_cycle_unique: edge_corner_audit.valid,
+                edge_class_count: edge_corner_audit.edge_class_count,
+                corner_class_count: edge_corner_audit.corner_class_count,
+                max_commutation_residual_m: edge_corner_audit.max_commutation_residual_m,
                 m0_seam_mismatch_max: 0.0,
                 h_demag0_seam_mismatch_max: 0.0,
                 marker_map_fingerprint: marker_map_fingerprint(self),
@@ -1813,17 +1847,40 @@ mod mesh_validation_tests {
         }
     }
 
+    fn three_axis_periodic_nodes() -> MeshIR {
+        let mut mesh = two_axis_periodic_nodes();
+        mesh.periodic_boundary_pairs.push(MeshPeriodicBoundaryPairIR {
+            pair_id: "z_faces".to_string(),
+            source_marker: None,
+            destination_marker: None,
+            marker_a: 14,
+            marker_b: 15,
+            translation: Some([0.0, 0.0, 1.0]),
+            tolerance: Some(1.0e-12),
+            axis_hint: Some("z".to_string()),
+            orientation: None,
+            pairing_policy: None,
+        });
+        mesh.periodic_node_pairs.extend([
+            MeshPeriodicNodePairIR { pair_id: "z_faces".to_string(), node_a: 0, node_b: 2 },
+            MeshPeriodicNodePairIR { pair_id: "z_faces".to_string(), node_a: 1, node_b: 3 },
+            MeshPeriodicNodePairIR { pair_id: "z_faces".to_string(), node_a: 4, node_b: 6 },
+            MeshPeriodicNodePairIR { pair_id: "z_faces".to_string(), node_a: 5, node_b: 7 },
+        ]);
+        mesh
+    }
+
     #[test]
     fn periodic_edge_corner_closure_is_order_independent() {
         let mesh = two_axis_periodic_nodes();
         let mut first_errors = Vec::new();
-        assert!(validate_edge_corner_closure(&mesh, &mut first_errors));
+        assert!(audit_edge_corner_closure(&mesh, &mut first_errors).valid);
         assert!(first_errors.is_empty());
 
         let mut permuted = mesh.clone();
         permuted.periodic_node_pairs.reverse();
         let mut permuted_errors = Vec::new();
-        assert!(validate_edge_corner_closure(&permuted, &mut permuted_errors));
+        assert!(audit_edge_corner_closure(&permuted, &mut permuted_errors).valid);
         assert_eq!(permuted_errors, first_errors);
     }
 
@@ -1833,10 +1890,21 @@ mod mesh_validation_tests {
         mesh.periodic_node_pairs
             .retain(|pair| !(pair.pair_id == "y_faces" && pair.node_a == 4));
         let mut errors = Vec::new();
-        assert!(!validate_edge_corner_closure(&mesh, &mut errors));
+        assert!(!audit_edge_corner_closure(&mesh, &mut errors).valid);
         assert!(errors.iter().any(|error| {
             error.contains("edge/corner closure is incomplete")
         }));
+    }
+
+    #[test]
+    fn periodic_edge_corner_closure_reports_three_axis_corner_classes() {
+        let mesh = three_axis_periodic_nodes();
+        let mut errors = Vec::new();
+        let audit = audit_edge_corner_closure(&mesh, &mut errors);
+        assert!(audit.valid, "unexpected closure errors: {errors:?}");
+        assert_eq!(audit.edge_class_count, 0);
+        assert_eq!(audit.corner_class_count, 8);
+        assert_eq!(audit.max_commutation_residual_m, 0.0);
     }
 
     #[test]
@@ -1848,6 +1916,9 @@ mod mesh_validation_tests {
         assert_eq!(certificate.axis_pairs.len(), 1);
         assert_eq!(certificate.axis_pairs[0].node_pair_count, 3);
         assert_eq!(certificate.axis_pairs[0].face_pair_count, 1);
+        assert_eq!(certificate.edge_class_count, 0);
+        assert_eq!(certificate.corner_class_count, 0);
+        assert_eq!(certificate.max_commutation_residual_m, 0.0);
         assert!(certificate.boundary_topology_match);
         assert!(certificate.corner_edge_cycle_unique);
         assert!(certificate.topology_fingerprint.starts_with("sha256:"));

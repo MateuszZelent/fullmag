@@ -449,6 +449,13 @@ periodic pair metadata, region-marker map, and material-realization identity.
 Any topology, region membership, or coefficient realization change invalidates
 the certificate and requires a fresh post-extraction validation.
 
+The v6 payload also records `edge_class_count`, `corner_class_count`, and
+`max_commutation_residual_m`. These are measured seam-class evidence (not
+requested counts): a two-axis fixture must expose the audited edge classes and
+a three-axis fixture must expose the corner classes. A non-zero commutation
+residual is compared with the largest declared axis tolerance before the
+certificate can be accepted.
+
 - [x] Python API (`pbc()` function in world.py, Problem.pbc field)
 - [x] ProblemIR (`FdmPeriodicityIR`, `AxisBoundary`, `FdmDemagPeriodicityIR`)
 - [x] Planner (wires `problem.pbc` → `FdmPlanIR.periodicity`)
