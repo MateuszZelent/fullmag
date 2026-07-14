@@ -326,7 +326,8 @@ fn fdm_domain_generation_id(snapshot: &SessionStateResponse) -> u64 {
     if let Some(layout) = fdm_artifact_layout(snapshot) {
         revision = fnv1a_hash_bytes(revision, b"layout");
         if let Some(origin) = layout
-            .get("origin")
+            .get("origin_m")
+            .or_else(|| layout.get("origin"))
             .or_else(|| layout.get("grid_origin"))
             .or_else(|| layout.get("native_origin"))
             .and_then(value_array3_f64_any_finite)

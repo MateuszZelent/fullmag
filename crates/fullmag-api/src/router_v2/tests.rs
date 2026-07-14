@@ -2118,7 +2118,7 @@ async fn status_uses_fdm_artifact_layout_revision_before_first_live_step() {
             "artifact_layout": {
                 "backend": "fdm",
                 "grid_cells": [6, 4, 2],
-                "origin": [-3.0e-9, -2.0e-9, -1.0e-9],
+                "origin_m": [-3.0e-9, -2.0e-9, -1.0e-9],
                 "cell_size": [1.0e-9, 2.0e-9, 5.0e-9]
             }
         }));
