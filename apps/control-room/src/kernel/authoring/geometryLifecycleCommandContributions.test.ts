@@ -74,6 +74,15 @@ describe("geometry lifecycle command contributions", () => {
       command_id: "cmd-1",
       error: null,
     }));
+    const detail = vi.fn(async () => ({
+      command_id: "cmd-1",
+      status: "completed",
+      completion_status: "completed",
+      seq: 1,
+      resource_invalidations: [
+        { resource_key: "meshing/shared-domain/manifest", revision: 1 },
+      ],
+    }));
 
     expect(
       registry.isEnabled("mesh.build-selected", {
@@ -84,7 +93,7 @@ describe("geometry lifecycle command contributions", () => {
 
     const result = await registry.execute("mesh.build-selected", {
       api: {
-        commands: { submit },
+        commands: { submit, detail },
       } as never,
       bus,
       layout: layout as never,
@@ -142,10 +151,19 @@ describe("geometry lifecycle command contributions", () => {
       command_id: "cmd-shared",
       error: null,
     }));
+    const detail = vi.fn(async () => ({
+      command_id: "cmd-shared",
+      status: "completed",
+      completion_status: "completed",
+      seq: 2,
+      resource_invalidations: [
+        { resource_key: "meshing/shared-domain/manifest", revision: 2 },
+      ],
+    }));
 
     const result = await registry.execute("mesh.build-shared-domain", {
       api: {
-        commands: { submit },
+        commands: { submit, detail },
       } as never,
       bus,
       layout: layout as never,
@@ -251,12 +269,21 @@ describe("geometry lifecycle command contributions", () => {
       command_id: "cmd-refine",
       error: null,
     }));
+    const detail = vi.fn(async () => ({
+      command_id: "cmd-refine",
+      status: "completed",
+      completion_status: "completed",
+      seq: 3,
+      resource_invalidations: [
+        { resource_key: "meshing/shared-domain/manifest", revision: 3 },
+      ],
+    }));
 
     const result = await registry.execute(
       "mesh.refine-worst-quality-element",
       {
         api: {
-          commands: { submit },
+          commands: { submit, detail },
         } as never,
         resources,
         source: "test",

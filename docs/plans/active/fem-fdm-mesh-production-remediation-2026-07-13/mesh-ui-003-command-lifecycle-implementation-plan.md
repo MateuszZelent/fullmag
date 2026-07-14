@@ -39,3 +39,9 @@ type MeshCommandResult = { status: "accepted" | "completed" | "failed"; commandI
 
 **Exit:** brak ścieżki `accepted -> completed` bez terminalnego backend statusu i current mesh revision.
 
+### Bounded implementation evidence — 2026-07-14
+
+- [x] Added `awaitMeshCommandTerminal`, which polls the authoritative v2 command detail, uses `status` as lifecycle truth, preserves failed/cancelled outcomes, times out explicitly, and requires a new mesh topology/manifest revision before returning `completed`.
+- [x] Updated selected-object, shared-domain, and quality-refinement mesh contributions so HTTP acceptance emits `mesh:build-submitted` and focuses Mesh Jobs, while `command:completed` can only follow terminal command detail plus mesh revision evidence.
+- [x] Added unit coverage for running-to-completed, failed, cancelled, stale completion status, and completed-without-new-revision behavior. The worktree cannot execute Vitest or the Control Room typecheck because frontend dependencies (`vitest`, `next`) are not installed; browser and managed-runtime gates remain open.
+- [ ] Full closure still requires installed frontend gates, browser lifecycle smoke, API/managed-runtime command-resource evidence, and a long-running production mesh observation. This bounded slice does not close those gates.
