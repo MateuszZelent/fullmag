@@ -82,3 +82,10 @@ struct RegionRealizationRevisions {
 - [x] `resolveSessionStatusRevision` now includes all four region realization lanes (`region_topology_revision`, `region_membership_revision`, `region_coefficients_revision`, `region_initial_state_revision`) so status refreshes cannot miss an independent region mutation.
 - [x] RED/GREEN frontend evidence: `useSessionStatus.test.ts` failed before the change (region-only revisions resolved to `0`); after the change the focused suite passed 3/3, Control Room typecheck passed, and focused ESLint passed.
 - [ ] Resource DTO lane fields, exact coefficient/initial-state consumers, ETags, runtime artifact tuple and managed/browser gates remain open.
+
+### Evidence update (2026-07-14, runtime command preconditions)
+
+- [x] Study runtime command construction now copies all available region realization revisions from the authoritative session-status resource into `RuntimeCommandPrecondition`.
+- [x] Submission refreshes the same lanes through `api.sessions.current.status()` when the command already carries region preconditions, preventing a stale cached status from authorizing a new run.
+- [x] RED/GREEN frontend evidence: `studyRuntimeCommandContributions.test.ts` failed before the change because the four lane fields were omitted; after the change the focused suite passed 65/65, Control Room typecheck passed, and focused ESLint passed.
+- [ ] Backend resource DTOs, exact lane-specific consumers/ETags, initial-state resource identity, runtime artifact tuple and managed/browser gates remain open.

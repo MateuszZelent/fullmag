@@ -84,6 +84,11 @@ interface RuntimePreconditionRefreshApi {
   commands?: {
     list?: () => Promise<CommandQueueStatusResource>;
   };
+  sessions?: {
+    current?: {
+      status?: () => Promise<LiveStatusResource>;
+    };
+  };
   simulation?: {
     solver?: {
       status?: () => Promise<SolverStatusResource>;
@@ -731,6 +736,46 @@ function commandRevisionPrecondition(
   return queue ? queue.commands.length : undefined;
 }
 
+function regionRevisionPrecondition(
+  context: CommandContext,
+): Pick<
+  RuntimeCommandPrecondition,
+  | "region_coefficients_revision"
+  | "region_initial_state_revision"
+  | "region_membership_revision"
+  | "region_topology_revision"
+> {
+  const status = resourceData<LiveStatusResource>(
+    context,
+    SESSION_STATUS_RESOURCE_KEY,
+  );
+  if (!status) return {};
+
+  const resources = status.resources;
+  const precondition: Pick<
+    RuntimeCommandPrecondition,
+    | "region_coefficients_revision"
+    | "region_initial_state_revision"
+    | "region_membership_revision"
+    | "region_topology_revision"
+  > = {};
+  if (typeof resources.region_coefficients_revision === "number") {
+    precondition.region_coefficients_revision =
+      resources.region_coefficients_revision;
+  }
+  if (typeof resources.region_initial_state_revision === "number") {
+    precondition.region_initial_state_revision =
+      resources.region_initial_state_revision;
+  }
+  if (typeof resources.region_membership_revision === "number") {
+    precondition.region_membership_revision = resources.region_membership_revision;
+  }
+  if (typeof resources.region_topology_revision === "number") {
+    precondition.region_topology_revision = resources.region_topology_revision;
+  }
+  return precondition;
+}
+
 function activeStageTarget(
   context: CommandContext,
 ): RuntimeCommandTarget {
@@ -762,6 +807,7 @@ function runtimeCommandPrecondition(
   const state = runtimeState(context);
   const commandRevision = commandRevisionPrecondition(context);
   const precondition: RuntimeCommandPrecondition = {
+    ...regionRevisionPrecondition(context),
     ...(state ? { runtime_state: state } : {}),
     ...(stage && isStageControlCommandKind(kind)
       ? { stage_execution_revision: stage.revision }
@@ -1372,10 +1418,17 @@ async function refreshRuntimeCommandPrecondition(
   if (!original || !context.api) return command;
 
   const api = context.api as RuntimePreconditionRefreshApi;
-  const [solverResult, stageResult, queueResult] = await Promise.allSettled([
+  const [solverResult, stageResult, queueResult, sessionStatusResult] =
+    await Promise.allSettled([
     api.simulation?.solver?.status?.(),
     api.simulation?.stages?.execution?.(),
     api.commands?.list?.(),
+    original.region_topology_revision === undefined &&
+    original.region_membership_revision === undefined &&
+    original.region_coefficients_revision === undefined &&
+    original.region_initial_state_revision === undefined
+      ? undefined
+      : api.sessions?.current?.status?.(),
   ]);
   const precondition: RuntimeCommandPrecondition = { ...original };
 
@@ -1401,6 +1454,28 @@ async function refreshRuntimeCommandPrecondition(
       : null;
     if (commandRevision !== null && Number.isFinite(commandRevision)) {
       precondition.command_revision = commandRevision;
+    }
+  }
+  if (
+    sessionStatusResult.status === "fulfilled" &&
+    sessionStatusResult.value
+  ) {
+    const resources = sessionStatusResult.value.resources;
+    if (typeof resources.region_topology_revision === "number") {
+      precondition.region_topology_revision =
+        resources.region_topology_revision;
+    }
+    if (typeof resources.region_membership_revision === "number") {
+      precondition.region_membership_revision =
+        resources.region_membership_revision;
+    }
+    if (typeof resources.region_coefficients_revision === "number") {
+      precondition.region_coefficients_revision =
+        resources.region_coefficients_revision;
+    }
+    if (typeof resources.region_initial_state_revision === "number") {
+      precondition.region_initial_state_revision =
+        resources.region_initial_state_revision;
     }
   }
 
