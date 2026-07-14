@@ -1179,6 +1179,43 @@ class ProblemApiTests(unittest.TestCase):
         finally:
             fm.reset()
 
+    def test_canonical_script_round_trip_preserves_problem_pbc(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("canonical_pbc_round_trip")
+        study.engine("fem")
+        body = study.geometry(fm.Box(size=(20e-9, 20e-9, 5e-9), name="film"), name="film")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.texture.uniform(1, 0, 0)
+        study.pbc(x=True, y=True, demag="periodic_airbox_k0")
+        study.relax(max_steps=2)
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            source_path = Path(tmp_dir) / "canonical_pbc_source.py"
+            source_path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(source_path, lightweight_assets=True)
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            self.assertIn(
+                'study.pbc(x=True, y=True, demag="periodic_airbox_k0")',
+                rendered,
+            )
+
+            round_trip_path = Path(tmp_dir) / "canonical_pbc_round_trip.py"
+            round_trip_path.write_text(rendered, encoding="utf-8")
+            round_tripped = fm.load_problem_from_script(
+                round_trip_path,
+                lightweight_assets=True,
+            )
+
+        self.assertEqual(
+            loaded.problem.to_ir(include_geometry_assets=False)["pbc"],
+            round_tripped.problem.to_ir(include_geometry_assets=False)["pbc"],
+        )
+
     def test_eigenmodes_serializes_floquet_pair_ids(self) -> None:
         problem = replace(
             self._build_problem(),

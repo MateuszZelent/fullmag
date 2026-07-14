@@ -631,6 +631,29 @@ def _render_runtime(
         lines.append(f"{_surface_call(surface, 'device')}({_py_repr(device_spec)})")
     if cpu_threads is not None:
         lines.append(f"{_surface_call(surface, 'threads')}({cpu_threads})")
+
+    # PBC is part of the canonical physical problem, not an implicit backend
+    # mesh option. Keep the authored axes and demag realization explicit in the
+    # exported script so UI/Python round-trips cannot silently drop it.
+    pbc = problem.pbc
+    if pbc is not None:
+        raw_axes = getattr(pbc, "axes", pbc)
+        axes = tuple(bool(value) for value in raw_axes)
+        if len(axes) != 3:
+            raise ValueError("canonical rewrite requires exactly three PBC axes")
+        pbc_kwargs = [
+            f"{axis}=True"
+            for axis, enabled in zip(("x", "y", "z"), axes)
+            if enabled
+        ]
+        demag = str(getattr(pbc, "demag", "open") or "open")
+        if demag != "open":
+            pbc_kwargs.append(f"demag={_py_repr(demag)}")
+        image_counts = getattr(pbc, "image_counts", None)
+        if image_counts is not None:
+            pbc_kwargs.append(f"images={_py_tuple3(tuple(image_counts))}")
+        lines.append(f"{_surface_call(surface, 'pbc')}({', '.join(pbc_kwargs)})")
+
     fem = problem.discretization.fem if problem.discretization is not None else None
     if isinstance(fem, FEM) and fem.demag_solver_policy is not None:
         lines.append(
