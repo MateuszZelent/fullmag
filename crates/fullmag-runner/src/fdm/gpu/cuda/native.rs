@@ -22,6 +22,8 @@ use crate::quantities::normalized_quantity_name;
 #[cfg(feature = "cuda")]
 use crate::relaxation::llg_overdamped_uses_pure_damping;
 #[cfg(feature = "cuda")]
+use crate::fdm::{validate_multilayer_grid_budget, validate_single_grid_budget};
+#[cfg(feature = "cuda")]
 use crate::scalar_metrics::single_object_scalars;
 #[cfg(any(feature = "cuda", test))]
 use crate::types::RunError;
@@ -191,6 +193,7 @@ impl NativeFdmBackend {
     }
 
     pub fn create_multilayer_v2(plan: &fullmag_ir::FdmMultilayerPlanIR) -> Result<Self, RunError> {
+        validate_multilayer_grid_budget(plan)?;
         for layer in &plan.layers {
             if layer.material.ms_field.is_some()
                 || layer.material.a_field.is_some()
@@ -435,6 +438,7 @@ impl NativeFdmBackend {
     }
 
     pub fn create(plan: &fullmag_ir::FdmPlanIR) -> Result<Self, RunError> {
+        validate_single_grid_budget(plan)?;
         if plan.material.ms_field.is_some()
             || plan.material.a_field.is_some()
             || plan.material.alpha_field.is_some()
