@@ -223,6 +223,38 @@ async fn validate_runtime_command_contract(
             }
         }
 
+        let region_revisions = snapshot.region_realization_revisions;
+        for (name, expected, actual) in [
+            (
+                "region_topology_revision",
+                precondition.region_topology_revision,
+                region_revisions.topology,
+            ),
+            (
+                "region_membership_revision",
+                precondition.region_membership_revision,
+                region_revisions.membership,
+            ),
+            (
+                "region_coefficients_revision",
+                precondition.region_coefficients_revision,
+                region_revisions.coefficients,
+            ),
+            (
+                "region_initial_state_revision",
+                precondition.region_initial_state_revision,
+                region_revisions.initial_state,
+            ),
+        ] {
+            if let Some(expected) = expected {
+                if actual != expected {
+                    return Err(ApiError::conflict(format!(
+                        "{name} precondition failed: expected {expected}, got {actual}"
+                    )));
+                }
+            }
+        }
+
         if let Some(expected) = precondition.scene_revision {
             let actual = snapshot.scene_document.as_ref().map(|scene| scene.revision);
             if actual != Some(expected) {

@@ -5982,6 +5982,14 @@ export interface components {
             /** Format: int64 */
             command_revision?: number | null;
             /** Format: int64 */
+            region_coefficients_revision?: number | null;
+            /** Format: int64 */
+            region_initial_state_revision?: number | null;
+            /** Format: int64 */
+            region_membership_revision?: number | null;
+            /** Format: int64 */
+            region_topology_revision?: number | null;
+            /** Format: int64 */
             mesh_revision?: number | null;
             runtime_state?: string | null;
             /** Format: int64 */

@@ -12769,6 +12769,12 @@ async fn commands_endpoint_rejects_resource_revision_precondition_mismatches() {
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.scene_document = Some(sample_scene_document());
         snapshot.mesh_revision = 5;
+        snapshot.region_realization_revisions = fullmag_authoring::RegionRealizationRevisions {
+            topology: 2,
+            membership: 3,
+            coefficients: 4,
+            initial_state: 5,
+        };
     }
     {
         let mut ledger = state.current_command_ledger.lock().await;
@@ -12822,6 +12828,10 @@ async fn commands_endpoint_rejects_resource_revision_precondition_mismatches() {
         (
             serde_json::json!({ "mesh_revision": 6 }),
             "mesh_revision precondition failed: expected 6, got 5",
+        ),
+        (
+            serde_json::json!({ "region_membership_revision": 4 }),
+            "region_membership_revision precondition failed: expected 4, got 3",
         ),
         (
             serde_json::json!({ "command_revision": 2 }),

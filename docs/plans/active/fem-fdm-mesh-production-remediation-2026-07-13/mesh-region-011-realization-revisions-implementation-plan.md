@@ -62,4 +62,11 @@ struct RegionRealizationRevisions {
 - [x] `cargo test -p fullmag-api router_v2::tests::authoring_scene_put_commits_scene_document --no-fail-fast -- --nocapture` — 1 passed.
 - [x] `cargo test -p fullmag-api router_v2::tests::status_returns_200_with_live_session --no-fail-fast -- --nocapture` — 1 passed.
 - [x] `cargo check -p fullmag-api` — passed; only pre-existing `FrequencyResponseProgressMetadata` dead-code warning.
-- [ ] Cache keys/ETags, plans, runtime artifacts, stale-run preconditions and Control Room consumers do not yet consume the tuple; managed/API hygiene and browser gates remain open.
+- [ ] Cache keys/ETags, plans, runtime artifacts and Control Room consumers do not yet consume the tuple; managed/API hygiene and browser gates remain open.
+
+### Evidence update (2026-07-14, stale-run preconditions)
+
+- [x] `RuntimeCommandPrecondition` now accepts independent topology, membership, coefficients and initial-state revision expectations; command validation rejects mismatches with explicit conflict diagnostics.
+- [x] `commands_endpoint_rejects_resource_revision_precondition_mismatches` covers a membership mismatch; focused API test — 1 passed.
+- [x] OpenAPI v2 JSON and generated Control Room types include the four optional precondition fields.
+- [ ] Plan cache keys/ETags and runtime artifact consumers still need exact consumed tuple propagation; UI/browser and managed gates remain open.
