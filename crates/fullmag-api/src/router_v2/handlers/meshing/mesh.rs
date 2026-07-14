@@ -3253,6 +3253,23 @@ fn build_periodic_pairs_resource(
             let diagnostics = periodic_pair_residuals(mesh, boundary_pair, node_pairs);
             let domain_node_pair_counts = periodic_domain_node_pair_counts(mesh, node_pairs);
             let boundary_face_pairs = periodic_boundary_face_pairs(mesh, boundary_pair);
+            let unpaired_source_node_count =
+                source_nodes.difference(&paired_source_nodes).count() as u32;
+            let unpaired_destination_node_count = destination_nodes
+                .difference(&paired_destination_nodes)
+                .count() as u32;
+            let status = if diagnostics.status == "valid"
+                && (unpaired_source_node_count > 0 || unpaired_destination_node_count > 0)
+            {
+                "unpaired_boundary_nodes".to_string()
+            } else if diagnostics.status == "valid"
+                && domain_node_pair_counts.magnetic + domain_node_pair_counts.airbox
+                    < node_pairs.len() as u32
+            {
+                "mixed_domain_pair".to_string()
+            } else {
+                diagnostics.status
+            };
 
             MeshPeriodicPairResource {
                 pair_id: boundary_pair.pair_id.clone(),
@@ -3263,15 +3280,12 @@ fn build_periodic_pairs_resource(
                 expected_translation_m: boundary_pair.translation,
                 paired_node_count: node_pairs.len() as u32,
                 domain_node_pair_counts: Some(domain_node_pair_counts),
-                unpaired_source_node_count: source_nodes.difference(&paired_source_nodes).count()
-                    as u32,
-                unpaired_destination_node_count: destination_nodes
-                    .difference(&paired_destination_nodes)
-                    .count() as u32,
+                unpaired_source_node_count,
+                unpaired_destination_node_count,
                 boundary_face_pairs,
                 max_residual_m: diagnostics.max_residual_m,
                 rms_residual_m: diagnostics.rms_residual_m,
-                status: diagnostics.status,
+                status,
             }
         })
         .collect();
@@ -3379,10 +3393,10 @@ fn periodic_domain_node_pair_counts(
         let node_b_is_magnetic = magnetic_nodes.contains(&pair.node_b);
         let node_a_is_airbox = airbox_nodes.contains(&pair.node_a);
         let node_b_is_airbox = airbox_nodes.contains(&pair.node_b);
-        if !node_a_is_magnetic && !node_b_is_magnetic && (node_a_is_airbox || node_b_is_airbox) {
-            airbox += 1;
-        } else {
+        if node_a_is_magnetic && node_b_is_magnetic {
             magnetic += 1;
+        } else if node_a_is_airbox && node_b_is_airbox {
+            airbox += 1;
         }
     }
     MeshPeriodicDomainNodePairCountsResource { magnetic, airbox }

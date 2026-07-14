@@ -6638,6 +6638,67 @@ async fn mesh_periodic_pairs_returns_v1_diagnostics() {
 }
 
 #[tokio::test]
+async fn mesh_periodic_pairs_marks_unpaired_boundary_nodes_invalid() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_periodic_fem_mesh_payload();
+        mesh.periodic_node_pairs.pop();
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.mesh_revision = 42;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/mesh/periodic_pairs.v1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["pairs"][0]["unpaired_source_node_count"], 1);
+    assert_eq!(json["pairs"][0]["unpaired_destination_node_count"], 1);
+    assert_eq!(
+        json["pairs"][0]["status"],
+        "unpaired_boundary_nodes"
+    );
+}
+
+#[tokio::test]
+async fn mesh_periodic_pairs_does_not_count_mixed_domain_nodes_as_magnetic() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_periodic_fem_mesh_payload();
+        mesh.periodic_node_pairs[1].node_b = 5;
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.mesh_revision = 43;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/mesh/periodic_pairs.v1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(
+        json["pairs"][0]["domain_node_pair_counts"],
+        serde_json::json!({"magnetic": 1, "airbox": 1})
+    );
+    assert_eq!(json["pairs"][0]["status"], "residual_exceeds_tolerance");
+}
+
+#[tokio::test]
 async fn mesh_periodic_pairs_falls_back_to_artifact_file() {
     let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
     let mesh_dir = artifact_dir.join("mesh");

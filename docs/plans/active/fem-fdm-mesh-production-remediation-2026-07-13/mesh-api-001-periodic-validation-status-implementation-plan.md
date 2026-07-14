@@ -21,8 +21,8 @@
 
 ### Task 1: RED handler tests
 
-- [ ] W `crates/fullmag-api/src/router_v2/tests.rs` dodać cases: residual OK + unpaired node, mixed pair, invalid face, stale fingerprint; żaden nie może być `valid`.
-- [ ] Uruchomić `cargo test -p fullmag-api periodic_pairs -- --nocapture`; nowe tests mają FAIL.
+- [x] Dodano RED/GREEN cases dla residual OK + unpaired node oraz mixed magnetic/air pair; oba nie są już raportowane jako `valid`.
+- [ ] Dodać jeszcze invalid face i stale fingerprint cases; testy te pozostają otwarte do podpięcia v6 aggregate certificate.
 
 ### Task 2: canonical mapping
 
@@ -30,8 +30,8 @@
 pub enum PeriodicValidationStatus { Valid, Invalid, Stale, Unavailable }
 ```
 
-- [ ] W `handlers/meshing/mesh.rs` usunąć residual-only status i mapować v6 aggregate status; publikować counts per domain i reasons.
-- [ ] Uruchomić API tests i OpenAPI generation; PASS.
+- [x] Handler nie używa już residual-only statusu: unpaired boundary nodes są `unpaired_boundary_nodes`, a pary mixed-domain nie są liczone jako magnetic/airbox i kończą jako `mixed_domain_pair`.
+- [ ] Podpiąć pełny v6 aggregate status, reasons, certificate revision/fingerprint i OpenAPI enum.
 
 ### Task 3: generated consumers
 
@@ -40,3 +40,7 @@ pub enum PeriodicValidationStatus { Valid, Invalid, Stale, Unavailable }
 
 **Exit:** `valid` jest możliwe tylko dla kompletnego, current v6; mixed/unpaired/stale mają odrębne diagnostics.
 
+### Evidence (2026-07-14, partial)
+
+- `env CARGO_TARGET_DIR=/tmp/fullmag-api-periodic cargo test -p fullmag-api router_v2::tests::mesh_periodic_pairs --no-fail-fast -- --nocapture` — 4 passed, 0 failed.
+- `MeshPeriodicPairResource.status` odrzuca obecnie `valid` dla unpaired nodes i mixed-domain pairs; pełna certyfikacja v6 oraz stale/fingerprint status są nadal otwarte.
