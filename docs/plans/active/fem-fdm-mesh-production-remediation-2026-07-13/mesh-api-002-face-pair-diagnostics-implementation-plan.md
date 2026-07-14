@@ -56,4 +56,6 @@ pub struct PeriodicFacePairResponse { pub source_face_id: u64, pub destination_f
 - [x] Generated OpenAPI v2 JSON and Control Room TypeScript schema were updated.
 - [x] Runner `periodic_pairs.v1.json` now persists `mesh_generation_id` and `certificate_fingerprint` alongside the v6 certificate.
 - [x] API prefers the persisted certificate artifact when its topology fingerprint matches the live mesh; mismatched artifacts are rejected and never exposed as current diagnostics.
-- [ ] Source-scene revision and persisted certificate identity still need to be carried through the session artifact manifest for a full stale-after-scene-edit proof; MESH-API-002 remains open pending that provenance gate.
+- [x] Persisted `periodic_pairs.v1.json` artifacts carry `source_scene_revision`; the API rejects a stale artifact when a live mesh is present and falls back to the authoritative live resource builder, which reports `stale` rather than exposing the artifact as current. Commit `208d6bc1` carries the production check and direct artifact stale-scene test.
+- [x] Added a matching-topology live-mesh regression test covering the artifact-preferred branch and authoritative fallback (`36250846`). `cargo test -p fullmag-api mesh_periodic_pairs --no-fail-fast -- --nocapture` — 9 passed.
+- [ ] Scoped binary face/node payload link remains open; JSON remains the control-plane projection and managed runtime evidence is still pending.
