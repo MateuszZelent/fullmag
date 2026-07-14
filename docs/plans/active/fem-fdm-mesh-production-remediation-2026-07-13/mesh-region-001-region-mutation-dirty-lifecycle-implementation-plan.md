@@ -45,6 +45,7 @@ fn classify_region_mutation(before: Option<&SceneObjectRegion>, after: Option<&S
 ### Evidence (2026-07-14, partial)
 
 - Commit `bfe4b73f` marks object-region create/patch/delete/duplicate/reorder as `mesh:dirty` and includes the full region payload in `scene_mesh_signature`.
+- Follow-up working-tree change narrows `scene_mesh_signature` to stable region identity and FEM marker/membership inputs (`region_id`, owner, shape, frame, enabled, priority, mesh/realization policy); names and material/texture overrides are left for independent realization revisions.
 - `env CARGO_TARGET_DIR=/tmp/fullmag-region-lifecycle cargo test -p fullmag-api authoring_ -- --nocapture` — 44 passed.
 - The dedicated impact classifier and separate revision semantics remain open; current invalidation intentionally over-invalidates metadata-only mutations until REGION-011/013 land.
 

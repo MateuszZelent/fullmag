@@ -3483,10 +3483,23 @@ fn scene_mesh_signature(scene: &SceneDocument) -> Value {
             "transform": object.transform,
             "material_ref": object.material_ref,
             "region_name": object.region_name,
-            // Region shape/frame/enabled/priority/policy are consumed by the
-            // FEM shared-domain planner. Keep them in the mesh identity so a
-            // region edit cannot leave the previous topology current.
-            "regions": object.regions,
+            // Only region inputs consumed by FEM mesh marker/membership
+            // realization belong to mesh identity. Metadata and material
+            // overrides get their own realization revisions.
+            "regions": object
+                .regions
+                .iter()
+                .map(|region| json!({
+                    "region_id": region.region_id,
+                    "owner_object": region.owner_object,
+                    "shape": region.shape,
+                    "frame": region.frame,
+                    "enabled": region.enabled,
+                    "priority": region.priority,
+                    "mesh_policy": region.mesh_policy,
+                    "realization_policy": region.realization_policy,
+                }))
+                .collect::<Vec<_>>(),
             "object_mesh": object.object_mesh,
             "mesh_override": object.mesh_override,
         })).collect::<Vec<_>>(),
