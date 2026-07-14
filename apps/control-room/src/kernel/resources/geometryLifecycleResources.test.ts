@@ -5,6 +5,9 @@ import type { KernelEventMap } from "../events/eventTypes";
 import {
   DATA_MESH_REGION_MEMBERSHIP_PATH,
   DATA_MESH_REGION_MEMBERSHIPS_PATH,
+  DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH,
+  DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH,
+  DATA_FDM_REGION_MEMBERSHIPS_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_HISTOGRAM_BIN_ELEMENTS_PATH,
@@ -30,6 +33,8 @@ import {
   GEOMETRY_DIAGNOSTICS_RESOURCE_KEY,
   GEOMETRY_CAPABILITIES_RESOURCE_KEY,
   GEOMETRY_VALIDATION_RESOURCE_KEY,
+  FDM_REGION_MEMBERSHIPS_RESOURCE_KEY,
+  FDM_REGION_MEMBERSHIP_BINARY_RESOURCE_KEY,
   MESH_BUILD_CURRENT_RESOURCE_KEY,
   MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY,
   MESH_UNIVERSE_POLICY_RESOURCE_KEY,
@@ -39,6 +44,8 @@ import {
   SCENE_RESOURCE_KEY,
   VISUALIZATION_STATE_RESOURCE_KEY,
   resolveJsonResourceRevision,
+  resolveFdmRegionMembershipBinaryResourceKey,
+  resolveFdmRegionMembershipRevision,
   resolveMeshHistogramBinElementsResourceKey,
   resolveMeshRegionMembershipsRevision,
   resolveMeshRegionMembershipsResourceKey,
@@ -82,6 +89,18 @@ describe("geometry lifecycle resources", () => {
     );
     expect(MESH_REGION_MEMBERSHIPS_RESOURCE_KEY).toBe(
       DATA_MESH_REGION_MEMBERSHIPS_PATH,
+    );
+    expect(FDM_REGION_MEMBERSHIPS_RESOURCE_KEY).toBe(
+      DATA_FDM_REGION_MEMBERSHIPS_PATH,
+    );
+    expect(FDM_REGION_MEMBERSHIP_BINARY_RESOURCE_KEY).toBe(
+      DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH,
+    );
+    expect(resolveFdmRegionMembershipBinaryResourceKey("film:core")).toBe(
+      `${DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH}:film%3Acore`,
+    );
+    expect(resolveFdmRegionMembershipBinaryResourceKey("film:core", "r7")).toBe(
+      `${DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH}:film%3Acore#revision=r7`,
     );
     expect(VISUALIZATION_STATE_RESOURCE_KEY).toBe(VISUALIZATION_STATE_PATH);
     expect(resolveObjectTopologyResourceKey("box 1")).toBe(
@@ -144,6 +163,26 @@ describe("geometry lifecycle resources", () => {
         geometry_realization_revision: null,
       } as never),
     ).toBe("4:unknown:unknown");
+  });
+
+  it("keeps FDM membership revisions tied to grid and legend identity", () => {
+    expect(
+      resolveFdmRegionMembershipRevision({
+        binary_path: "mesh/fdm_region_membership.v1.bin",
+        cell_count: 8,
+        cell_m: [1, 1, 1],
+        counts: [2, 2, 2],
+        encoding: "u32le",
+        freshness: "current",
+        grid_fingerprint: "grid-1",
+        mesh_revision: 7,
+        origin_m: [0, 0, 0],
+        region_legend: [],
+        region_legend_fingerprint: "legend-1",
+        region_membership_revision: 9,
+        schema_version: "fdm_region_membership.v1",
+      }),
+    ).toBe("fdm_region_membership.v1:7:9:grid-1:legend-1");
   });
 
   it("uses a deterministic batch resource key and revision for mesh region memberships", () => {

@@ -3,6 +3,9 @@
 import { useCallback, useMemo } from "react";
 
 import {
+  DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH,
+  DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH,
+  DATA_FDM_REGION_MEMBERSHIPS_PATH,
   DATA_MESH_REGION_MEMBERSHIP_PATH,
   DATA_MESH_REGION_MEMBERSHIPS_PATH,
   MESHING_CAPABILITIES_PATH,
@@ -64,6 +67,7 @@ import type {
   MeshRealizedSizeFieldsResource,
   MeshRegionMembershipListResource,
   MeshRegionMembershipResource,
+  FdmRegionMembershipResource,
   MeshRegionQualityResource,
   MeshSemanticsResource,
   MeshSharedDomainConfigResource,
@@ -82,7 +86,12 @@ import type {
 import {
   isOptionalObjectInteractionKind,
 } from "../api/apiTypes";
-import type { DecodedMeshQualityData, DecodedTopology } from "../api/codecs";
+import {
+  decodeFdmRegionMembership,
+  type DecodedFdmRegionMembership,
+  type DecodedMeshQualityData,
+  type DecodedTopology,
+} from "../api/codecs";
 import { ControlRoomApiError } from "../api/ControlRoomApi";
 import { useKernel } from "../KernelContext";
 import type { ResourceInvalidationController } from "./ResourceInvalidationController";
@@ -90,6 +99,7 @@ import {
   sharedResourceRuntimeStore,
   type ResourceRuntimeStore,
 } from "./ResourceRuntimeStore";
+import { ResourceCache } from "./ResourceCache";
 export {
   VISUALIZATION_STATE_RESOURCE_KEY,
   resolveVisualizationStateRevision,
@@ -100,7 +110,12 @@ import { useResource } from "./useResource";
 
 interface ResourceHookOptions {
   enabled?: boolean;
+  revision?: ResourceRevision | null;
 }
+
+const fdmRegionMembershipBinaryCache = new ResourceCache<DecodedFdmRegionMembership>({
+  maxBytes: 128 * 1024 * 1024,
+});
 
 export const SCENE_RESOURCE_KEY = MODEL_SCENE_PATH;
 export const GEOMETRY_CAPABILITIES_RESOURCE_KEY =
@@ -137,6 +152,21 @@ export const MESH_SHARED_DOMAIN_QUALITY_GATES_RESOURCE_KEY =
   MESHING_SHARED_DOMAIN_QUALITY_GATES_PATH;
 export const MESH_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_RESOURCE_KEY =
   MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH;
+export const FDM_REGION_MEMBERSHIPS_RESOURCE_KEY =
+  DATA_FDM_REGION_MEMBERSHIPS_PATH;
+export const FDM_REGION_MEMBERSHIP_BINARY_RESOURCE_KEY =
+  DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH;
+export const resolveFdmRegionMembershipBinaryResourceKey = (
+  regionId?: string | null,
+  revision?: ResourceRevision | null,
+) => {
+  const baseKey = regionId
+    ? `${DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH}:${encodeURIComponent(regionId)}`
+    : DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH;
+  return revision == null
+    ? baseKey
+    : `${baseKey}#revision=${encodeURIComponent(String(revision))}`;
+};
 export const meshRegionMembershipResourceKey = (regionId: string) =>
   `${DATA_MESH_REGION_MEMBERSHIP_PATH}:${encodeURIComponent(regionId)}`;
 export const resolveMeshRegionMembershipsResourceKey = (
@@ -256,6 +286,19 @@ export function resolveMeshSharedDomainManifestRevision(
     revision,
     manifest?.source_scene_revision ?? "unknown",
     manifest?.geometry_realization_revision ?? "unknown",
+  ].join(":");
+}
+
+export function resolveFdmRegionMembershipRevision(
+  resource: FdmRegionMembershipResource | null | undefined,
+): ResourceRevision | null {
+  if (!resource) return null;
+  return [
+    resource.schema_version,
+    resource.mesh_revision,
+    resource.region_membership_revision,
+    resource.grid_fingerprint,
+    resource.region_legend_fingerprint ?? "unknown",
   ].join(":");
 }
 
@@ -807,6 +850,84 @@ export function useMeshRegionMembershipsResource(
     enabled,
     load,
     resolveRevision: resolveMeshRegionMembershipsRevision,
+    resourceKey,
+  });
+}
+
+export function useFdmRegionMembershipResource(
+  options: ResourceHookOptions = {},
+) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.data.fdmRegionMemberships({ signal }),
+    [api],
+  );
+
+  return useResource<FdmRegionMembershipResource | null>({
+    enabled: options.enabled,
+    load,
+    resolveRevision: resolveFdmRegionMembershipRevision,
+    resourceKey: FDM_REGION_MEMBERSHIPS_RESOURCE_KEY,
+  });
+}
+
+export function useFdmRegionMembershipBinaryResource(
+  regionId?: string | null,
+  options: ResourceHookOptions = {},
+) {
+  const { api } = useKernel();
+  const normalizedRegionId = regionId?.trim() || null;
+  const resourceKey = resolveFdmRegionMembershipBinaryResourceKey(
+    normalizedRegionId,
+    options.revision,
+  );
+  const load = useCallback(
+    async ({ signal }: { signal: AbortSignal }) => {
+      const cached = fdmRegionMembershipBinaryCache.peek(resourceKey);
+      const result = await (normalizedRegionId
+        ? api.data.fdmRegionMembershipRegionBytes(normalizedRegionId, {
+            etag: cached?.etag,
+            signal,
+          })
+        : api.data.fdmRegionMembershipBytes({
+            etag: cached?.etag,
+            signal,
+          }));
+
+      if (result.status === "not-applicable") {
+        fdmRegionMembershipBinaryCache.delete(resourceKey);
+        return null;
+      }
+      if (result.status === "not-modified") {
+        if (!cached) {
+          throw new Error(
+            `FDM region membership ${resourceKey} returned 304 without cache entry`,
+          );
+        }
+        return cached.data;
+      }
+
+      const decoded = decodeFdmRegionMembership(result.data);
+      fdmRegionMembershipBinaryCache.set(resourceKey, {
+        byteLength: result.byteLength,
+        data: decoded,
+        etag: result.etag,
+      });
+      return decoded;
+    },
+    [api, normalizedRegionId, resourceKey],
+  );
+  const resolveRevision = useCallback(
+    () => fdmRegionMembershipBinaryCache.peek(resourceKey)?.etag ?? null,
+    [resourceKey],
+  );
+
+  return useResource<DecodedFdmRegionMembership | null>({
+    abortStaleInflight: true,
+    enabled: options.enabled,
+    load,
+    resolveRevision,
     resourceKey,
   });
 }

@@ -37,6 +37,8 @@ import {
 } from "@/kernel/api/quantityIds";
 import { useCrossSectionResource } from "@/kernel/resources/crossSectionResources";
 import {
+  useFdmRegionMembershipBinaryResource,
+  useFdmRegionMembershipResource,
   useMeshRegionMembershipsResource,
   useModelRegionsResource,
 } from "@/kernel/resources/geometryLifecycleResources";
@@ -2296,6 +2298,13 @@ export function useViewport3DSceneModel({
     () => adaptFdmDomainMeta(domainMeta.data, 120_000),
     [domainMeta.data],
   );
+  const fdmRegionMembership = useFdmRegionMembershipResource({
+    enabled: Boolean(fdmDomain),
+  });
+  const fdmRegionMembershipBinary = useFdmRegionMembershipBinaryResource(null, {
+    enabled: Boolean(fdmDomain && fdmRegionMembership.data),
+    revision: fdmRegionMembership.revision,
+  });
   const femDomain = useMemo(
     () => adaptFemSharedDomainManifest(sharedDomainManifest.data),
     [sharedDomainManifest.data],
@@ -3829,6 +3838,19 @@ export function useViewport3DSceneModel({
       status: regionMemberships.status,
     },
     {
+      error:
+        fdmRegionMembership.error?.message ??
+        fdmRegionMembershipBinary.error?.message,
+      id: "fdm-region-membership",
+      revision:
+        fdmRegionMembershipBinary.revision ?? fdmRegionMembership.revision,
+      status:
+        fdmRegionMembershipBinary.status === "idle" &&
+        fdmRegionMembership.status !== "idle"
+          ? fdmRegionMembership.status
+          : fdmRegionMembershipBinary.status,
+    },
+    {
       error: scene.error?.message,
       id: "scene",
       revision: scene.revision,
@@ -3878,6 +3900,8 @@ export function useViewport3DSceneModel({
     domainSummary,
     fallbackSettings,
     fdmDomain,
+    fdmRegionMembership: fdmRegionMembership.data,
+    fdmRegionMembershipBinary: fdmRegionMembershipBinary.data,
     fdmInstanceModel: fdmInstanceModel,
     fdmSettings,
     fdmSurfaceColors,
