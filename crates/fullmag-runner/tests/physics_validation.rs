@@ -2090,6 +2090,7 @@ fn fem_eigen_floquet_exchange_only_is_reciprocal_for_plus_minus_k() {
             if kx >= 0.0 { "plus" } else { "minus" }
         );
         FemEigenPlanIR {
+            mesh_build_report: None,
             mesh_name: mesh.mesh_name.clone(),
             mesh_source: None,
             mesh,
@@ -2174,6 +2175,7 @@ fn fem_eigen_full_2x2_floquet_exchange_dispersion_matches_analytic() {
         let mut mesh = cube_mesh(20.0);
         mesh.mesh_name = format!("floquet_full2x2_exchange_k_{kx:.0}");
         FemEigenPlanIR {
+            mesh_build_report: None,
             mesh_name: mesh.mesh_name.clone(),
             mesh_source: None,
             mesh,
@@ -2271,6 +2273,7 @@ fn fem_eigen_floquet_bulk_dmi_is_nonreciprocal_for_plus_minus_k() {
             if kx >= 0.0 { "plus" } else { "minus" }
         );
         FemEigenPlanIR {
+            mesh_build_report: None,
             mesh_name: mesh.mesh_name.clone(),
             mesh_source: None,
             mesh,
@@ -2371,6 +2374,7 @@ fn fem_eigen_demag_lowers_frequency() {
         let mesh = cube_mesh(20.0);
         let m0 = vec![[1.0_f64, 0.0, 0.0]; mesh.nodes.len()];
         FemEigenPlanIR {
+            mesh_build_report: None,
             mesh_name: format!("cube_20nm_demag_{include_demag}"),
             mesh_source: None,
             mesh,
@@ -2648,6 +2652,7 @@ fn eigen_bc_pinned_higher_frequency() {
     let make_plan = |pinned: bool| {
         let mesh = cube_mesh(20.0);
         FemEigenPlanIR {
+            mesh_build_report: None,
             mesh_name: format!("bc_pinned_{pinned}"),
             mesh_source: None,
             mesh,
@@ -2844,6 +2849,7 @@ fn eigen_bc_periodic_k_zero_matches_free() {
     let make_plan = |periodic: bool| {
         let mesh = cube_mesh(20.0);
         FemEigenPlanIR {
+            mesh_build_report: None,
             mesh_name: format!("bc_periodic_k0_{periodic}"),
             mesh_source: None,
             mesh,
@@ -2945,6 +2951,7 @@ fn floquet_k0_equals_periodic() {
     let make_plan = |kind: fullmag_ir::SpinWaveBoundaryKindIR| {
         let mesh = cube_mesh(20.0);
         FemEigenPlanIR {
+            mesh_build_report: None,
             mesh_name: format!("bc_{kind:?}_k0").to_lowercase(),
             mesh_source: None,
             mesh,
@@ -4030,3 +4037,59 @@ fn spatial_material_fields_cpu_reference_reaches_oracle() {
     let result = fullmag_runner::run_reference_fdm(&plan, 1e-9, &[]).expect("run should succeed");
     assert_eq!(result.status, RunStatus::Completed);
 }
+        mesh_build_report: None,
+        mesh_build_report: None,
+        mesh_build_report: None,
+        mesh_build_report: None,
+        mesh_build_report: None,
+        mesh_build_report: None,
+            mesh_build_report: None,
+        mesh_build_report: None,
+        mesh_build_report: None,
+        mesh_build_report: None,
+        mesh_build_report: None,
+        mesh_build_report: None,
+        mesh_build_report: None,
+            mesh_build_report: None,
+            mesh_build_report: None,
+            mesh_build_report: None,
+            mesh_build_report: None,
+        mesh_build_report: None,
+        mesh_build_report: None,
+            mesh_build_report: None,
+        mesh_build_report: None,
+            mesh_build_report: None,
+            mesh_build_report: None,
+        mesh_build_report: None,
+        mesh_build_report: None,
+        mesh_build_report: None,
+        mesh_build_report: None,
+        mesh_build_report: None,
+        mesh_build_report: None,
+        mesh_build_report: None,
+        mesh_build_report: None,
+        mesh_build_report: None,
+        mesh_build_report: None,
+        mesh_build_report: None,
+            mesh_build_report: None,
+        mesh_build_report: None,
+        mesh_build_report: None,
+        mesh_build_report: None,
+        mesh_build_report: None,
+        mesh_build_report: None,
+        mesh_build_report: None,
+            mesh_build_report: None,
+            mesh_build_report: None,
+            mesh_build_report: None,
+            mesh_build_report: None,
+        mesh_build_report: None,
+        mesh_build_report: None,
+            mesh_build_report: None,
+        mesh_build_report: None,
+            mesh_build_report: None,
+            mesh_build_report: None,
+        mesh_build_report: None,
+        mesh_build_report: None,
+        mesh_build_report: None,
+        mesh_build_report: None,
+        mesh_build_report: None,

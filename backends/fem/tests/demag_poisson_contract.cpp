@@ -360,24 +360,34 @@ void demag_cache_refresh_policy_matches_bridge_contract() {
         "demag refresh for non-positive interval");
 }
 
-void cached_demag_energy_includes_frozen_robin_boundary_term() {
+void cached_demag_energy_matches_direct_without_legacy_robin_addition() {
     fullmag::fem::Context ctx;
     ctx.mesh.n_nodes = 1;
     ctx.material_fields.material.saturation_magnetisation = 800e3;
     ctx.integration_weights.mfem_lumped_mass = {2.0e-27};
+    // This legacy telemetry field must not alter the physical energy.  The
+    // Robin form is already represented by the solved H_demag endpoint.
     ctx.demag.cached_robin_boundary_energy = 7.0e-21;
 
     const std::vector<double> m = {1.0, 0.0, 0.0};
     const std::vector<double> h_demag = {-100.0, 0.0, 0.0};
-    const double expected =
-        fullmag::fem::demag_poisson_energy_from_field(ctx, m, h_demag) +
-        ctx.demag.cached_robin_boundary_energy;
+    // Independent one-node oracle: -mu0/2 * Ms * (m dot H_demag) * V.
+    const double expected_direct =
+        -0.5 * kMu0Test * 800e3 * (-100.0) * 2.0e-27;
+    const double direct =
+        fullmag::fem::demag_poisson_energy_from_field(ctx, m, h_demag);
+
+    check_near(
+        direct,
+        expected_direct,
+        std::fabs(expected_direct) * 1e-12,
+        "direct demag energy matches independent field oracle");
 
     check_near(
         fullmag::fem::demag_poisson_cached_energy_from_field(ctx, m, h_demag),
-        expected,
-        std::fabs(expected) * 1e-12,
-        "cached demag energy includes frozen Robin boundary term");
+        direct,
+        std::fabs(direct) * 1e-12,
+        "cached demag energy ignores legacy frozen Robin telemetry");
 }
 
 void demag_energy_is_owned_by_poisson_energy_module() {
@@ -1184,7 +1194,6 @@ void demag_recovery_is_owned_by_poisson_recovery_module() {
         "ctx.demag.h_visual_xyz = h_demag_xyz;",
         "finalize_demag_poisson_recovered_field(ctx, h_demag_xyz);",
         "ctx.demag.cached_robin_boundary_energy =",
-        "bdr_mass->SpMat().Mult(gf_u",
     };
     for (const char *symbol : symbols) {
         check(
@@ -1194,6 +1203,12 @@ void demag_recovery_is_owned_by_poisson_recovery_module() {
             recovery.find(symbol) != std::string::npos,
             "Poisson demag field recovery must be defined in demag_poisson_recovery.cpp");
     }
+    check(
+        recovery.find("demag_poisson_energy_from_field(") != std::string::npos,
+        "Poisson demag recovery must obtain energy from the recovered physical field");
+    check(
+        recovery.find("bdr_mass->SpMat().Mult(gf_u") == std::string::npos,
+        "Poisson demag recovery must not add a separate Robin boundary energy term");
 }
 
 void demag_recovery_parallel_path_avoids_full_per_thread_node_buffers() {
@@ -1554,7 +1569,7 @@ int main() {
     poisson_debug_env_gate_is_cached_on_hot_path();
     demag_energy_uses_half_factor_ms_mass_and_magnetic_mask();
     demag_cache_refresh_policy_matches_bridge_contract();
-    cached_demag_energy_includes_frozen_robin_boundary_term();
+    cached_demag_energy_matches_direct_without_legacy_robin_addition();
     demag_energy_is_owned_by_poisson_energy_module();
     demag_cache_store_and_reuse_are_owned_by_poisson_module();
     demag_telemetry_is_owned_by_poisson_telemetry_module();

@@ -1,8 +1,9 @@
 /*
  * Poisson demag energy source contract.
  *
- * This source owns Poisson demag energy integration and cached Robin correction
- * addition for frozen-field reuse. It does not assemble RHS, solve Poisson, recover fields, or manage cache validity.
+ * This source owns Poisson demag energy integration and the cached-field helper,
+ * which matches the direct physical field energy for frozen-field reuse. It does
+ * not add a separate Robin term. It does not assemble RHS, solve Poisson, recover fields, or manage cache validity.
  */
 
 #include "cpu/mfem/interactions/demag_poisson_energy.hpp"
