@@ -746,6 +746,7 @@ class MeshData:
                 boundary_markers=np.asarray(payload["boundary_markers"], dtype=np.int32),
                 periodic_boundary_pairs=[dict(pair) for pair in payload.get("periodic_boundary_pairs", [])],
                 periodic_node_pairs=[dict(pair) for pair in payload.get("periodic_node_pairs", [])],
+                periodic_mesh_certificate=payload.get("periodic_mesh_certificate"),
             )
 
         data = np.load(source)

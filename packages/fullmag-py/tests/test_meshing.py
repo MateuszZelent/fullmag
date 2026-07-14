@@ -4541,6 +4541,13 @@ class MeshScaffoldTests(unittest.TestCase):
         )
         self.assertEqual(mesh.periodic_mesh_certificate, certificate)
         self.assertEqual(mesh.to_ir("mirrored")["periodic_mesh_certificate"], certificate)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            json_path = Path(tmp_dir) / "mirrored.json"
+            npz_path = Path(tmp_dir) / "mirrored.npz"
+            mesh.save(json_path)
+            mesh.save(npz_path)
+            self.assertEqual(MeshData.load(json_path).periodic_mesh_certificate, certificate)
+            self.assertEqual(MeshData.load(npz_path).periodic_mesh_certificate, certificate)
 
     def test_create_occ_geometry_supports_csg_and_translate(self) -> None:
         class _FakeOccApi:
