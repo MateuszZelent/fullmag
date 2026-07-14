@@ -411,6 +411,14 @@ def _extract_mesh_data(
         if aligned_quality is not None
         else per_domain_quality
     )
+    if periodic_pair_specs:
+        _orient_periodic_boundary_faces(
+            nodes,
+            elements,
+            boundary_faces,
+            boundary_markers,
+            periodic_pair_specs,
+        )
     periodic_boundary_pairs, periodic_node_pairs = _extract_periodic_pairs(
         gmsh,
         node_index,
@@ -428,16 +436,62 @@ def _extract_mesh_data(
         quality=aligned_quality,
         per_domain_quality=aligned_per_domain_quality,
     )
-    if periodic_pair_specs:
-        certificate = certify_extracted_periodic_mesh(
-            mesh.nodes,
-            mesh.boundary_faces,
-            mesh.boundary_markers,
-            mesh.periodic_boundary_pairs,
-            mesh.periodic_node_pairs,
+
+
+def _orient_periodic_boundary_faces(
+    nodes: np.ndarray,
+    elements: np.ndarray,
+    boundary_faces: np.ndarray,
+    boundary_markers: np.ndarray,
+    periodic_pair_specs: list[dict[str, object]],
+) -> None:
+    """Orient periodic outer faces away from their owning tetrahedron.
+
+    Gmsh may return a periodic surface's triangle winding in the same local
+    direction on both translated copies.  The v6 certificate intentionally
+    checks opposed outward normals, so normalize only the explicitly periodic
+    boundary faces against the adjacent volume element before publishing the
+    mesh IR.
+    """
+    periodic_markers = {
+        int(spec["marker_a"])
+        for spec in periodic_pair_specs
+    } | {
+        int(spec["marker_b"])
+        for spec in periodic_pair_specs
+    }
+    if not periodic_markers or boundary_faces.size == 0 or elements.size == 0:
+        return
+    face_owner: dict[tuple[int, int, int], int] = {}
+    for element_index, element in enumerate(elements):
+        for opposite in range(4):
+            face = tuple(
+                int(element[index])
+                for index in range(4)
+                if index != opposite
+            )
+            face_owner.setdefault(tuple(sorted(face)), element_index)
+    for index, (face, marker) in enumerate(zip(boundary_faces, boundary_markers, strict=False)):
+        if int(marker) not in periodic_markers:
+            continue
+        owner_index = face_owner.get(tuple(sorted(int(node) for node in face)))
+        if owner_index is None:
+            continue
+        element = elements[owner_index]
+        opposite = next(
+            (int(node) for node in element if int(node) not in {int(value) for value in face}),
+            None,
         )
-        mesh = replace(mesh, periodic_mesh_certificate=certificate)
-    return mesh
+        if opposite is None:
+            continue
+        a, b, c = (nodes[int(node)] for node in face)
+        normal = np.cross(b - a, c - a)
+        if float(np.dot(normal, nodes[opposite] - a)) > 0.0:
+            boundary_faces[index, 1], boundary_faces[index, 2] = (
+                boundary_faces[index, 2],
+                boundary_faces[index, 1],
+            )
+    return None
 
 
 def certify_extracted_periodic_mesh(

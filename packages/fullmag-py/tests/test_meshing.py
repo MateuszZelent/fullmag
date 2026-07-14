@@ -60,6 +60,7 @@ from fullmag.meshing._mesh_targets import (
     resolve_shared_domain_targets,
 )
 from fullmag.meshing._gmsh_types import _infer_axis_aligned_periodic_pairs
+from fullmag.meshing._gmsh_extraction import _orient_periodic_boundary_faces
 from fullmag.model.discretization import PerObjectMeshRecipe, SharedMeshAssemblyPolicy
 from fullmag.meshing.gmsh_bridge import (
     ALGO_3D_DELAUNAY,
@@ -147,6 +148,35 @@ from fullmag.meshing.voxelization import VoxelMaskData, voxelize_geometry
 
 
 class MeshScaffoldTests(unittest.TestCase):
+    def test_periodic_boundary_faces_are_oriented_outward_from_owner_tetrahedron(self) -> None:
+        nodes = np.asarray(
+            [
+                [0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [1.0, 0.0, 0.0],
+            ],
+            dtype=np.float64,
+        )
+        elements = np.asarray([[0, 1, 2, 3]], dtype=np.int32)
+        boundary_faces = np.asarray([[0, 1, 2]], dtype=np.int32)
+        boundary_markers = np.asarray([10], dtype=np.int32)
+
+        _orient_periodic_boundary_faces(
+            nodes,
+            elements,
+            boundary_faces,
+            boundary_markers,
+            [
+                {
+                    "marker_a": 10,
+                    "marker_b": 11,
+                }
+            ],
+        )
+
+        np.testing.assert_array_equal(boundary_faces, [[0, 2, 1]])
+
     def test_multi_body_rotated_annular_csg_can_use_native_conformal_occ(self) -> None:
         layer = fm.Box(size=(300e-9, 1000e-9, 10e-9), name="layer")
         ring = fm.Difference(

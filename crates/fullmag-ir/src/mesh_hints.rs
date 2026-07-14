@@ -1241,6 +1241,11 @@ impl MeshIR {
             let marker = self.boundary_markers.get(index).copied().unwrap_or(0);
             physical.entry(key).or_default().push(marker);
         }
+        let periodic_markers = self
+            .periodic_boundary_pairs
+            .iter()
+            .flat_map(|pair| [pair.marker_a, pair.marker_b])
+            .collect::<BTreeSet<_>>();
 
         let mut errors = Vec::new();
         let mut expected_outer = BTreeSet::new();
@@ -1285,6 +1290,15 @@ impl MeshIR {
                 ));
             }
         }
+        // Periodic airbox seams are topological exterior faces, but they are
+        // not open Gamma_out boundaries. Their dedicated seam markers are
+        // certified by periodic_mesh_certificate_v6 instead of the single
+        // open-boundary Gamma_out role.
+        expected_outer.retain(|face| {
+            !physical
+                .get(face)
+                .is_some_and(|markers| markers.iter().all(|marker| periodic_markers.contains(marker)))
+        });
 
         let mut marker_roles: BTreeMap<(u32, BoundaryRole), u64> = BTreeMap::new();
         for (face, markers) in &physical {
@@ -1310,6 +1324,12 @@ impl MeshIR {
             let Some(first_marker) = markers.first().copied() else {
                 continue;
             };
+            if role == BoundaryRole::GammaOut
+                && !periodic_markers.is_empty()
+                && markers.iter().all(|marker| periodic_markers.contains(marker))
+            {
+                continue;
+            }
             if markers.len() != 1 {
                 errors.push(format!(
                     "boundary face {:?} is listed {} times in physical boundary groups",
