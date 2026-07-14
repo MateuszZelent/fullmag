@@ -845,6 +845,12 @@ impl NativeFemBackend {
         } else {
             plan
         };
+        fullmag_ir::validate_mesh_for_execution(&plan.mesh).map_err(|errors| RunError {
+            message: format!(
+                "native FEM mesh validation failed before ABI packaging: {}",
+                errors.join("; ")
+            ),
+        })?;
         if matches!(
             plan.domain_mesh_mode,
             fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh
@@ -2773,6 +2779,17 @@ mod tests {
             assert!(checked_native_nonnegative("max_torque_Apm", value).is_err());
         }
         assert_eq!(checked_native_nonnegative("max_torque_Apm", 0.0).unwrap(), 0.0);
+    }
+
+    #[test]
+    fn native_fem_rejects_corrupt_mesh_before_ffi_packaging() {
+        let mut plan = make_test_plan();
+        plan.mesh.elements = vec![[0, 1, 3, 2]];
+
+        let error = NativeFemBackend::create_with_initial_effective_field(&plan, false)
+            .expect_err("inverted mesh must fail before native ABI packaging");
+        assert!(error.message.contains("negative tetra orientation"));
+        assert!(error.message.contains("before ABI packaging"));
     }
 
     #[test]
