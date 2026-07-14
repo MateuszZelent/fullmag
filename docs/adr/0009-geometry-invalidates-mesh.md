@@ -25,6 +25,24 @@ When a geometry change is committed (Apply from the Geometry inspector), the dir
 
 The **RunGate** derives from the dirty graph that run/relax is blocked until mesh and initial state are rebuilt.
 
+Region edits use the same backend classifier as scene commits; the scene journal
+revision is not a substitute for realization identity:
+
+| Mutation | FDM grid/topology | FEM conformal mesh | Membership | Coefficients | Initial state |
+|---|---|---|---|---|---|
+| rename/label only | unchanged | unchanged | unchanged | unchanged | unchanged |
+| material override | unchanged | unchanged | unchanged | stale | unchanged |
+| texture/magnetization override | unchanged | unchanged | unchanged | unchanged | stale |
+| shape/frame/enabled/priority | stale when owner occupancy changes | stale/new generation | stale | stale when resolved fields change | stale when mask changes |
+| mesh/realization policy | stale | stale/new generation | stale | stale when materialization changes | stale when mask changes |
+| delete/duplicate/reorder | stale if object/region identity changes | stale/new generation | stale | stale | stale |
+
+The old mesh may remain visible for inspection, but it must be labelled
+`stale` and cannot satisfy a current run precondition. A current realized mesh
+requires matching topology/generation identity and the independent region
+membership/coefficient/initial-state revisions. Websocket events only invalidate
+resource keys; the HTTP v2 resource snapshot remains authoritative.
+
 ### Rules
 
 1. Geometry changes always invalidate mesh topology.
