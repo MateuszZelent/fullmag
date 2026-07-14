@@ -11695,6 +11695,69 @@ async fn authoring_region_patch_commits_name_without_mesh_dirty() {
 }
 
 #[tokio::test]
+async fn authoring_region_rename_does_not_change_mesh_identity() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 22;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+        snapshot.mesh_revision = 31;
+        snapshot.region_realization_revisions.membership = 41;
+        snapshot.region_realization_revisions.coefficients = 42;
+        snapshot.region_realization_revisions.initial_state = 43;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/model/regions/region:body")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({"name": "renamed_region"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let regions_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/model/regions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(regions_response.status(), StatusCode::OK);
+    let regions = body_json(regions_response).await;
+    assert_eq!(regions["region_membership_revision"], 41);
+    assert_eq!(regions["region_coefficients_revision"], 42);
+    assert_eq!(regions["region_initial_state_revision"], 43);
+
+    let status_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = body_json(status_response).await;
+    assert_eq!(status["resources"]["mesh_revision"], 31);
+}
+
+#[tokio::test]
 async fn authoring_region_patch_commits_magnetization_override_without_mesh_dirty() {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();
@@ -11712,8 +11775,26 @@ async fn authoring_region_patch_commits_magnetization_override_without_mesh_dirt
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.scene_document = Some(scene);
         snapshot.session.script_path.clear();
+        snapshot.mesh_revision = 31;
+        snapshot.region_realization_revisions.membership = 41;
+        snapshot.region_realization_revisions.coefficients = 42;
+        snapshot.region_realization_revisions.initial_state = 43;
     }
     let app = build_v2_router().with_state(state);
+
+    let before_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/model/regions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(before_response.status(), StatusCode::OK);
+    let before_regions = body_json(before_response).await;
 
     let response = app
         .clone()
@@ -11746,6 +11827,40 @@ async fn authoring_region_patch_commits_magnetization_override_without_mesh_dirt
         .map(|tags| tags.iter().any(|tag| tag == "mesh:dirty"))
         .unwrap_or(false);
     assert!(!mesh_dirty);
+
+    let after_status_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/model/regions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(after_status_response.status(), StatusCode::OK);
+    let after_regions = body_json(after_status_response).await;
+    assert_eq!(after_regions["region_initial_state_revision"], 44);
+    assert_eq!(after_regions["region_membership_revision"], 41);
+    assert_eq!(after_regions["region_coefficients_revision"], 42);
+    assert_eq!(before_regions["region_initial_state_revision"], 43);
+    assert_eq!(before_regions["region_membership_revision"], 41);
+    assert_eq!(before_regions["region_coefficients_revision"], 42);
+
+    let status_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = body_json(status_response).await;
+    assert_eq!(status["resources"]["mesh_revision"], 31);
 
     let regions_response = app
         .oneshot(

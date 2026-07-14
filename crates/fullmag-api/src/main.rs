@@ -3496,11 +3496,9 @@ fn scene_mesh_signature(scene: &SceneDocument) -> Value {
         "mesh_interfaces": scene.study.mesh_interfaces,
         "objects": scene.objects.iter().map(|object| json!({
             "id": object.id,
-            "name": object.name,
             "geometry": object.geometry,
             "transform": object.transform,
             "material_ref": object.material_ref,
-            "region_name": object.region_name,
             // Only region inputs consumed by FEM mesh marker/membership
             // realization belong to mesh identity. Metadata and material
             // overrides get their own realization revisions.

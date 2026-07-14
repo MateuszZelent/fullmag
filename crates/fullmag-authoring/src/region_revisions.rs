@@ -131,6 +131,12 @@ fn classify_object_transition(
     if before.magnetization_ref != after.magnetization_ref {
         impact.initial_state = true;
     }
+    if before.region_overrides != after.region_overrides {
+        // Region overrides are consumed by geometry realization when they
+        // select an initial magnetization/texture for an authored region.
+        // They do not alter FEM topology or FDM membership.
+        impact.initial_state = true;
+    }
 
     let before_regions = regions_by_id(&before.regions);
     let after_regions = regions_by_id(&after.regions);
@@ -185,8 +191,8 @@ fn classify_region_transition(
 mod tests {
     use super::*;
     use crate::{
-        SceneInitialMagnetization, SceneRegionFrame, SceneRegionRealizationPolicy, SceneRegionShape,
-        SceneTextureOverride,
+        SceneInitialMagnetization, SceneRegionFrame, SceneRegionOverride,
+        SceneRegionRealizationPolicy, SceneRegionShape, SceneTextureOverride,
     };
     use serde_json::json;
 
@@ -250,6 +256,21 @@ mod tests {
         initial_state.objects[0].magnetization_ref = Some("texture-2".to_string());
         assert_eq!(
             classify_region_realization_impact(&before, &initial_state),
+            RegionRealizationImpact {
+                initial_state: true,
+                ..Default::default()
+            }
+        );
+
+        let mut region_override = before.clone();
+        region_override.objects[0].region_overrides.insert(
+            "film:core".to_string(),
+            SceneRegionOverride {
+                magnetization_ref: Some("texture-region".to_string()),
+            },
+        );
+        assert_eq!(
+            classify_region_realization_impact(&before, &region_override),
             RegionRealizationImpact {
                 initial_state: true,
                 ..Default::default()

@@ -51,4 +51,12 @@ fn classify_region_mutation(before: Option<&SceneObjectRegion>, after: Option<&S
 - `commit_current_live_scene_document` advances independent region revisions atomically from the classifier result; command preconditions consume those revisions.
 - Full HTTP CRUD matrix assertions for every individual revision lane and ADR 0009 update remain open; current mesh dirty tags are retained as compatibility signalling until REGION-013 is complete.
 
+### Evidence update (2026-07-14, region override and metadata identity)
+
+- [x] `classify_region_realization_impact` now treats `SceneObject.region_overrides` magnetization changes as `initial_state` only; topology, membership, and coefficient revisions remain unchanged.
+- [x] Added RED→GREEN API coverage for legacy region magnetization override PATCH: `region_initial_state_revision` advances atomically while mesh identity and other realization lanes stay unchanged.
+- [x] Removed object/region labels from `scene_mesh_signature`; added API coverage proving a rename leaves mesh and independent realization revisions unchanged.
+- [x] `env CARGO_TARGET_DIR=/tmp/fullmag-region-lifecycle cargo test -p fullmag-authoring region_revisions --lib --no-fail-fast -- --nocapture` — 4 passed; `cargo test -p fullmag-api authoring_region_ --no-fail-fast -- --nocapture` — 6 passed.
+- [ ] Full CRUD/reorder/duplicate matrix, build-after-edit managed evidence, and authoritative UI stale/current lifecycle remain open.
+
 **Exit:** żadna zmiana regionu wpływająca na mesh lub materialization nie pozostawia zależnego zasobu jako current.

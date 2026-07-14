@@ -43,6 +43,11 @@ requires matching topology/generation identity and the independent region
 membership/coefficient/initial-state revisions. Websocket events only invalidate
 resource keys; the HTTP v2 resource snapshot remains authoritative.
 
+`SceneObject.region_overrides[*].magnetization_ref` is an initial-state
+realization input, not mesh topology identity. Changing it advances only the
+independent `region_initial_state_revision`; object/region labels (`name` and
+`region_name`) are metadata and must not advance `mesh_revision`.
+
 ### Rules
 
 1. Geometry changes always invalidate mesh topology.
