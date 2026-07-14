@@ -41,3 +41,10 @@ GeometryEntryIR::Cylinder { radius: f64, height: f64, axis: [f64; 3] }
 
 **Exit:** maska i bounds są poprawne dla co najmniej trzech niekolinearnych osi, a round-trip nie usuwa osi.
 
+## Evidence update (2026-07-14)
+
+- [x] Current `GeometryEntryIR::Cylinder` carries a canonical axis with finite/non-zero validation and an explicit legacy JSON migration to `[0,0,1]` only when the field is absent.
+- [x] FDM lowering normalizes the axis once, computes oriented-cylinder AABB extents and evaluates membership by axial/radial projection; focused X/Y/diagonal bounds and containment test passes.
+- [x] Python round-trip tests pass: `PYTHONPATH=packages/fullmag-py/src python3 -m pytest packages/fullmag-py/tests/test_meshing.py -k 'cylinder_axis or arbitrary_axis' -q` — 2 passed; API cylinder lowering — 3 passed.
+- [x] `cargo test -p fullmag-plan cylinder_axis_controls_oriented_bounds_and_containment --lib` — 1 passed; `cargo test -p fullmag-ir --lib` — 28 passed.
+- [ ] No separate test currently asserts non-finite/zero-axis rejection through the public Python constructor and no dedicated commit exists for this finding; add those RED/GREEN cases before closure.

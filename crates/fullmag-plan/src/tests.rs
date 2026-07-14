@@ -9289,6 +9289,20 @@ fn cylinder_axis_controls_oriented_bounds_and_containment() {
 }
 
 #[test]
+fn cylinder_axis_lowering_rejects_zero_and_nonfinite_axes() {
+    for axis in [[0.0, 0.0, 0.0], [f64::NAN, 0.0, 1.0]] {
+        let cylinder = GeometryEntryIR::Cylinder {
+            name: "invalid_axis".to_string(),
+            radius: 1.0,
+            height: 2.0,
+            axis,
+        };
+        let error = ir_to_shape(&cylinder).expect_err("invalid cylinder axis must fail closed");
+        assert!(error.contains("cylinder axis"));
+    }
+}
+
+#[test]
 fn fdm_boundary_params_none_when_not_set() {
     let ir = ProblemIR::bootstrap_example();
     let plan = plan(&ir).expect("bootstrap example should plan successfully");

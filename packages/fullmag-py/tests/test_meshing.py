@@ -3084,6 +3084,12 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertIsInstance(geometry, fm.Cylinder)
         self.assertEqual(geometry.to_ir()["axis"], [1.0 / (3.0**0.5)] * 3)
 
+    def test_cylinder_rejects_zero_and_nonfinite_axis(self) -> None:
+        with self.assertRaisesRegex(ValueError, "axis must be a non-zero finite vector"):
+            fm.Cylinder(radius=1.0, height=2.0, axis=(0.0, 0.0, 0.0))
+        with self.assertRaisesRegex(ValueError, "axis must be a non-zero finite vector"):
+            fm.Cylinder(radius=1.0, height=2.0, axis=(float("nan"), 0.0, 1.0))
+
     def test_geometry_from_ir_reconstructs_waveguide_kinds(self) -> None:
         sin_geometry = _geometry_from_ir(
             {
