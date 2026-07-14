@@ -32,6 +32,7 @@ fn grid_sample_points(
     grid_cells: [u32; 3],
     cell_size: [f64; 3],
     origin: [f64; 3],
+    owner_translation: [f64; 3],
     active_mask: Option<&Vec<bool>>,
 ) -> Vec<TextureSamplePoint> {
     let nx = grid_cells[0] as usize;
@@ -51,9 +52,14 @@ fn grid_sample_points(
                     origin[1] + (y as f64 + 0.5) * cell_size[1],
                     origin[2] + (z as f64 + 0.5) * cell_size[2],
                 ];
+                let object = [
+                    world[0] - owner_translation[0],
+                    world[1] - owner_translation[1],
+                    world[2] - owner_translation[2],
+                ];
                 points.push(TextureSamplePoint {
                     position_world: world,
-                    position_object: world,
+                    position_object: object,
                     active: active_mask.map(|mask| mask[idx]).unwrap_or(true),
                 });
             }
@@ -120,6 +126,7 @@ fn materialize_object_region_mask(
     grid_cells: [u32; 3],
     cell_size: [f64; 3],
     origin: [f64; 3],
+    owner_translation: [f64; 3],
     active_mask: Option<&Vec<bool>>,
     errors: &mut Vec<String>,
 ) -> (Vec<u32>, BTreeMap<String, u32>) {
@@ -156,7 +163,13 @@ fn materialize_object_region_mask(
         ));
         return (mask, region_ids);
     }
-    let points = grid_sample_points(grid_cells, cell_size, origin, active_mask);
+    let points = grid_sample_points(
+        grid_cells,
+        cell_size,
+        origin,
+        owner_translation,
+        active_mask,
+    );
     let mut assigned_counts = vec![0usize; regions.len()];
     for region in &regions {
         if region.frame != RegionFrameIR::Object {
@@ -295,6 +308,7 @@ fn apply_region_texture_overrides(
     grid_cells: [u32; 3],
     cell_size: [f64; 3],
     origin: [f64; 3],
+    owner_translation: [f64; 3],
     active_mask: Option<&Vec<bool>>,
     initial_magnetization: &mut [[f64; 3]],
     errors: &mut Vec<String>,
@@ -306,7 +320,13 @@ fn apply_region_texture_overrides(
         .collect::<Vec<_>>();
     regions.sort_by_key(|region| (region.priority, region.region_id.as_str()));
 
-    let points = grid_sample_points(grid_cells, cell_size, origin, active_mask);
+    let points = grid_sample_points(
+        grid_cells,
+        cell_size,
+        origin,
+        owner_translation,
+        active_mask,
+    );
     for region in regions {
         let Some(&region_index) = region_index_by_id.get(&region.region_id) else {
             errors.push(format!(
@@ -689,7 +709,13 @@ pub(crate) fn plan_fdm(
                 texture_transform.scale[2],
             );
             let points =
-                grid_sample_points(grid_cells, cell_size, native_origin, active_mask.as_ref());
+                grid_sample_points(
+                    grid_cells,
+                    cell_size,
+                    native_origin,
+                    top_level_translation,
+                    active_mask.as_ref(),
+                );
             match sample_preset_texture(
                 preset_kind,
                 &preset_params,
@@ -744,6 +770,7 @@ pub(crate) fn plan_fdm(
         grid_cells,
         cell_size,
         native_origin,
+        top_level_translation,
         active_mask.as_ref(),
         &mut errors,
     );
@@ -757,6 +784,7 @@ pub(crate) fn plan_fdm(
         grid_cells,
         cell_size,
         native_origin,
+        top_level_translation,
         active_mask.as_ref(),
         &mut initial_magnetization,
         &mut errors,
@@ -774,8 +802,13 @@ pub(crate) fn plan_fdm(
         return Err(PlanError { reasons: errors });
     }
 
-    let sample_points =
-        grid_sample_points(grid_cells, cell_size, native_origin, active_mask.as_ref());
+    let sample_points = grid_sample_points(
+        grid_cells,
+        cell_size,
+        native_origin,
+        [0.0; 3],
+        active_mask.as_ref(),
+    );
     let point_coords: Vec<[f64; 3]> = sample_points.iter().map(|p| p.position_world).collect();
     let antenna_zeeman_masks =
         resolve_prescribed_zeeman_masks(problem, &point_coords, active_mask.as_deref())?;
@@ -1243,6 +1276,7 @@ mod tests {
             [1, 1, 1],
             [1.0e-9; 3],
             [0.0; 3],
+            [0.0; 3],
             Some(&active_mask),
             &mut errors,
         );
@@ -1265,6 +1299,7 @@ mod tests {
             [1, 1, 1],
             [1.0e-9; 3],
             [0.0; 3],
+            [0.0; 3],
             Some(&active_mask),
             &mut errors,
         );
@@ -1274,6 +1309,31 @@ mod tests {
             error.contains("fdm_region_lut_capacity_exceeded")
                 && error.contains("requested_region_count=256")
         }));
+    }
+
+    #[test]
+    fn fdm_object_region_uses_inverse_owner_translation_for_membership() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        let mut translated_region = region(0);
+        translated_region.shape = fullmag_ir::RegionShapeIR::Box {
+            size: [2.0e-6; 3],
+            center: [0.0; 3],
+        };
+        problem.object_regions = vec![translated_region];
+        let mut errors = Vec::new();
+        let active_mask = vec![true];
+        let (mask, _) = materialize_object_region_mask(
+            &problem,
+            &["strip"],
+            [1, 1, 1],
+            [1.0e-6; 3],
+            [1.0e-6; 3],
+            [1.0e-6; 3],
+            Some(&active_mask),
+            &mut errors,
+        );
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        assert_eq!(mask, vec![1], "translated owner must be sampled in object coordinates");
     }
 }
 
@@ -1738,7 +1798,13 @@ pub(crate) fn plan_fdm_multilayer(
                 texture_transform,
             }) => {
                 let points =
-                    grid_sample_points(grid_cells, cell_size, native_origin, active_mask.as_ref());
+                    grid_sample_points(
+                        grid_cells,
+                        cell_size,
+                        native_origin,
+                        placed.translation,
+                        active_mask.as_ref(),
+                    );
                 match sample_preset_texture(
                     preset_kind,
                     &preset_params,
