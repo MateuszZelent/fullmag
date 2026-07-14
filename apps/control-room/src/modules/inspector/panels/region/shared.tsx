@@ -12,11 +12,15 @@ import type {
   RegionShapeDraft,
 } from "../ObjectRegionsPanelModel";
 import { resolveRegionInlineDiagnostics } from "./regionDiagnosticPresentation";
+import type { RegionMeshLifecycle } from "@/shared/domain/mesh/regionMeshLifecycle";
 
 export interface RegionSubPanelProps {
   model: ObjectRegionPanelModel;
   draft: ObjectRegionDraft;
   pending: boolean;
+  draftDirty: boolean;
+  buildRegion: () => Promise<void>;
+  regionMeshLifecycle: RegionMeshLifecycle;
   canWriteRegion: boolean;
   updateDraft: (patch: Partial<ObjectRegionDraft>) => void;
   updateShape: (patch: Partial<RegionShapeDraft>) => void;
@@ -30,7 +34,7 @@ export interface RegionSubPanelProps {
   removeMaterialOverride: (index: number) => void;
   materialFields: MaterialParameterFieldListResource | null;
   couplingDependencies: RegionCouplingDependency[];
-  applyRegion: () => Promise<void>;
+  applyRegion: () => Promise<boolean>;
   duplicateRegion: () => Promise<void>;
   deleteRegion: () => Promise<void>;
   revert: () => void;
@@ -87,6 +91,9 @@ export function ObjectRegionMetadataSection({ model }: { model: ObjectRegionPane
 
 export function ObjectRegionActionsSection({
   pending,
+  draftDirty,
+  buildRegion,
+  regionMeshLifecycle,
   canWriteRegion,
   applyRegion,
   revert,
@@ -96,8 +103,11 @@ export function ObjectRegionActionsSection({
   couplingDependencies,
 }: {
   pending: boolean;
+  draftDirty: boolean;
+  buildRegion: () => Promise<void>;
+  regionMeshLifecycle: RegionMeshLifecycle;
   canWriteRegion: boolean;
-  applyRegion: () => Promise<void>;
+  applyRegion: () => Promise<boolean>;
   revert: () => void;
   duplicateRegion: () => Promise<void>;
   deleteRegion: () => Promise<void>;
@@ -116,6 +126,16 @@ export function ObjectRegionActionsSection({
           .join("; ");
   return (
     <InspectorSection value="actions" title="Actions">
+      <FieldRow label="Mesh realization" value={regionMeshLifecycle.status} />
+      <FieldRow label="Mesh status" value={regionMeshLifecycle.reason} />
+      <FieldRow
+        label="Mesh generation"
+        value={regionMeshLifecycle.generationId ?? "not realized"}
+      />
+      <FieldRow
+        label="Topology fingerprint"
+        value={regionMeshLifecycle.topologyFingerprint ?? "not certified"}
+      />
       <div className="fm-inspector-toolbar">
         <Button
           disabled={pending || !canWriteRegion}
@@ -126,6 +146,20 @@ export function ObjectRegionActionsSection({
           onClick={() => void applyRegion()}
         >
           Apply Region
+        </Button>
+        <Button
+          disabled={
+            pending ||
+            !canWriteRegion ||
+            regionMeshLifecycle.status === "unsupported"
+          }
+          size="sm"
+          type="button"
+          variant="primary"
+          title={regionMeshLifecycle.reason}
+          onClick={() => void buildRegion()}
+        >
+          {draftDirty ? "Apply & Build Mesh" : "Build Mesh"}
         </Button>
         <Button
           size="sm"

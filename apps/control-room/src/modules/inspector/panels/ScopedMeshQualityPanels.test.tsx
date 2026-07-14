@@ -439,9 +439,11 @@ describe("scoped mesh quality panels", () => {
       <ObjectRegionMeshPanel
         addMaterialOverride={vi.fn()}
         applyRegion={vi.fn()}
+        buildRegion={vi.fn()}
         canWriteRegion
         couplingDependencies={[]}
         deleteRegion={vi.fn()}
+        draftDirty={false}
         draft={{
           enabled: true,
           frame: "object",
@@ -512,6 +514,13 @@ describe("scoped mesh quality panels", () => {
           warningCount: 0,
         }}
         pending={false}
+        regionMeshLifecycle={{
+          generationId: "generation-3",
+          membershipRevision: 4,
+          reason: "Certified conformal mesh membership is current.",
+          status: "current",
+          topologyFingerprint: "topology-3",
+        }}
         removeMaterialOverride={vi.fn()}
         revert={vi.fn()}
         updateDraft={vi.fn()}

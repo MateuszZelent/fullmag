@@ -9,6 +9,7 @@ import type { EventBus } from "@/kernel/events/EventBus";
 import {
   useMeshBuildCurrent,
   useMeshBuildLatestSuccessful,
+  useMeshRegionMembershipsResource,
   useMeshSharedDomainManifestResource,
   useMeshSharedDomainQualityGatesResource,
   useMeshSharedDomainRealizedSizeFieldsResource,
@@ -204,6 +205,13 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   );
   const modelResource = useSceneResource({ enabled: modelTabActive });
   const modelRegions = useModelRegionsResource({ enabled: modelTabActive });
+  const regionIds = useMemo(
+    () => (modelRegions.data?.regions ?? []).map((region) => region.region_id),
+    [modelRegions.data?.regions],
+  );
+  const regionMemberships = useMeshRegionMembershipsResource(regionIds, {
+    enabled: modelTabActive,
+  });
   const modelMaterialFields = useModelMaterialFieldsResource({
     enabled: modelTabActive,
   });
@@ -280,6 +288,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
           couplings: modelCouplings.data,
           materialFields: modelMaterialFields.data,
           regions: modelRegions.data,
+          regionMemberships: regionMemberships.data,
         }),
         stageExecution.data,
       ),
@@ -356,6 +365,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     modelCouplings.data,
     modelMaterialFields.data,
     modelRegions.data,
+    regionMemberships.data,
     stageExecution.data,
     hysteresisExecutionTree.data,
     textureLoadObjectIds,

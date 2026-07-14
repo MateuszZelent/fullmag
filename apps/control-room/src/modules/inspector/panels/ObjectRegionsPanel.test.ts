@@ -196,4 +196,27 @@ describe("ObjectRegionsPanel physical scalar inputs", () => {
       "syncAuthoringScriptBestEffort(api)",
     );
   });
+
+  it("keeps region mesh actions tied to realized lifecycle resources", () => {
+    const panel = readFileSync(
+      new URL("./region/ObjectRegionMeshPanel.tsx", import.meta.url),
+      "utf8",
+    );
+    const shared = readFileSync(
+      new URL("./region/shared.tsx", import.meta.url),
+      "utf8",
+    );
+    const parent = readFileSync(
+      new URL("./ObjectRegionsPanel.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(parent).toContain("useMeshRegionMembershipResource");
+    expect(parent).toContain("useMeshBuildCurrent");
+    expect(parent).toContain("resolveRegionMeshLifecycle");
+    expect(panel).toContain("regionMeshLifecycle={regionMeshLifecycle}");
+    expect(shared).toContain('label="Mesh realization"');
+    expect(shared).toContain("Apply & Build Mesh");
+    expect(shared).toContain('status === "unsupported"');
+  });
 });

@@ -535,11 +535,12 @@ function authoredRegionNode(
         kind: "object.region.mesh",
         label: "Mesh",
         parentId: nodeId,
-        badge: region.meshPolicyActive ? "policy" : "inherits object",
+        badge: region.meshLifecycleStatus ??
+          (region.meshPolicyActive ? "configured" : "inherits object"),
         icon: "mesh",
         objectId: object.id,
         regionId: region.id,
-        status: region.meshPolicyActive ? "ready" : "degraded",
+        status: explorerStatusFromRegionMeshLifecycle(region),
         contextCommands: ["mesh.open-region-report", "mesh.open-regions"],
       },
       {
@@ -588,6 +589,27 @@ function authoredRegionNode(
       },
     ],
   };
+}
+
+function explorerStatusFromRegionMeshLifecycle(
+  region: NonNullable<ModelTreeObjectSnapshot["regions"]>[number],
+): ExplorerNodeStatus {
+  switch (region.meshLifecycleStatus) {
+    case "current":
+      return "mesh-ready";
+    case "pending":
+      return "mesh-building";
+    case "failed":
+      return "mesh-failed";
+    case "stale":
+    case "draft":
+      return "mesh-stale";
+    case "unsupported":
+      return "validation-blocked";
+    case "configured":
+    default:
+      return region.meshPolicyActive ? "stale" : "degraded";
+  }
 }
 
 function regionMaterialBadge(
