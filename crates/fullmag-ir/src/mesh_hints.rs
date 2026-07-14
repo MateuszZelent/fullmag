@@ -5,6 +5,7 @@ use crate::{
     RelaxationControlIR,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -337,10 +338,14 @@ impl MeshIR {
         let mut errors = Vec::new();
         let mut expected_outer = BTreeSet::new();
         let mut expected_interface = BTreeSet::new();
+        let mut expected_magnetic = BTreeSet::new();
         for (face, adjacent) in &topology {
             match adjacent.as_slice() {
                 [is_air] if *is_air => {
                     expected_outer.insert(*face);
+                }
+                [is_air] if !*is_air => {
+                    expected_magnetic.insert(*face);
                 }
                 [first, second] if first != second => {
                     expected_interface.insert(*face);
@@ -361,6 +366,14 @@ impl MeshIR {
             if !physical.contains_key(face) {
                 errors.push(format!(
                     "magnetic-air interface is incomplete: interface face {:?} has no boundary marker",
+                    face
+                ));
+            }
+        }
+        for face in &expected_magnetic {
+            if !physical.contains_key(face) {
+                errors.push(format!(
+                    "magnetic boundary is incomplete: exterior magnetic face {:?} has no boundary marker",
                     face
                 ));
             }
@@ -439,6 +452,18 @@ impl MeshIR {
                 ));
             }
         }
+        let mut roles_by_marker: BTreeMap<u32, BTreeSet<BoundaryRole>> = BTreeMap::new();
+        for (marker, role) in marker_roles.keys() {
+            roles_by_marker.entry(*marker).or_default().insert(*role);
+        }
+        for (marker, roles) in roles_by_marker {
+            if roles.len() > 1 {
+                errors.push(format!(
+                    "boundary marker {} is shared across roles {:?}",
+                    marker, roles
+                ));
+            }
+        }
         if expected_outer.is_empty() {
             errors.push("airbox mesh must expose at least one Gamma_out face".to_string());
         }
@@ -455,6 +480,15 @@ impl MeshIR {
         } else {
             Err(errors)
         }
+    }
+
+    /// Return the stable SHA-256 identity of the certified boundary-role set.
+    pub fn airbox_boundary_certificate_sha256(&self) -> Result<String, Vec<String>> {
+        let roles = self.certify_airbox_boundary_roles()?;
+        let payload = serde_json::to_vec(&roles)
+            .map_err(|error| vec![format!("failed to serialize boundary-role certificate: {error}")])?;
+        let digest = Sha256::digest(payload);
+        Ok(format!("sha256:{digest:x}"))
     }
 
     pub fn validate(&self) -> Result<(), Vec<String>> {

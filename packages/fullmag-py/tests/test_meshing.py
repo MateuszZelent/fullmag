@@ -5902,8 +5902,13 @@ class MeshScaffoldTests(unittest.TestCase):
         np.testing.assert_array_equal(merged.elements[1], np.asarray([0, 1, 2, 4], dtype=np.int32))
         self.assertEqual(merged.n_nodes, 5)
         self.assertEqual(merged.n_elements, 2)
-        self.assertEqual(merged.n_boundary_faces, 3)
-        self.assertNotIn([0, 1, 2], [sorted(face.tolist()) for face in merged.boundary_faces])
+        self.assertEqual(merged.n_boundary_faces, 7)
+        merged_faces = [sorted(face.tolist()) for face in merged.boundary_faces]
+        self.assertIn([0, 1, 2], merged_faces)
+        self.assertEqual(
+            int(np.count_nonzero(merged.boundary_markers == 10)),
+            frozen_mesh.n_boundary_faces,
+        )
 
     def test_generate_air_mesh_for_frozen_submesh_drops_periodic_pairs_without_kept_elements(self) -> None:
         frozen_mesh = MeshData(

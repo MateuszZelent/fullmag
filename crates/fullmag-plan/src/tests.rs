@@ -2868,8 +2868,15 @@ fn fem_backend_with_air_elements_lowers_study_universe_to_air_box_config() {
         .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
         .and_then(|asset| asset.mesh.as_mut())
         .expect("airbox fixture mesh");
-    mesh.boundary_faces.extend([[4, 5, 7], [4, 6, 7], [5, 6, 7]]);
-    mesh.boundary_markers.extend([99, 99, 99]);
+    mesh.boundary_faces.extend([
+        [0, 1, 3],
+        [0, 2, 3],
+        [1, 2, 3],
+        [4, 5, 7],
+        [4, 6, 7],
+        [5, 6, 7],
+    ]);
+    mesh.boundary_markers.extend([1, 1, 1, 99, 99, 99]);
     let plan = plan(&ir).expect("FEM air-box mesh asset should produce an air-box config");
     match plan.backend_plan {
         BackendPlanIR::Fem(fem) => {
@@ -2973,8 +2980,15 @@ fn fem_backend_with_air_elements_accepts_marker_99_in_strict_mode() {
         .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
         .and_then(|asset| asset.mesh.as_mut())
         .expect("airbox fixture mesh");
-    mesh.boundary_faces.extend([[4, 5, 7], [4, 6, 7], [5, 6, 7]]);
-    mesh.boundary_markers.extend([99, 99, 99]);
+    mesh.boundary_faces.extend([
+        [0, 1, 3],
+        [0, 2, 3],
+        [1, 2, 3],
+        [4, 5, 7],
+        [4, 6, 7],
+        [5, 6, 7],
+    ]);
+    mesh.boundary_markers.extend([1, 1, 1, 99, 99, 99]);
     let result = plan(&ir).expect(
         "strict mode should accept marker 99 (well-known gmsh convention) without explicit air_box_policy",
     );

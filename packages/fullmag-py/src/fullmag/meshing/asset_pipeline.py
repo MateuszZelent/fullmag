@@ -373,6 +373,13 @@ def _merge_frozen_magnetic_submesh_with_air_mesh(
         boundary_faces.append(remapped_face.astype(np.int32, copy=False))
         boundary_markers.append(int(marker))
 
+    # Preserve the shared magnetic-air interface as an explicit certified
+    # boundary role.  It is not an exterior air face, but the planner needs
+    # the physical interface marker to prove role disjointness and coverage.
+    for face in np.asarray(frozen.interface_boundary_faces, dtype=np.int32):
+        boundary_faces.append(np.asarray(face, dtype=np.int32))
+        boundary_markers.append(10)
+
     periodic_boundary_pairs = [dict(pair) for pair in air_mesh.periodic_boundary_pairs]
     if not periodic_boundary_pairs:
         periodic_boundary_pairs = [

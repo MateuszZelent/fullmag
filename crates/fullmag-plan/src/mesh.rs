@@ -1328,24 +1328,29 @@ pub(crate) fn build_air_box_config(
 
 pub(crate) fn study_universe_planner_note(
     problem: &ProblemIR,
-    _mesh: &MeshIR,
+    mesh: &MeshIR,
     _resolved_demag_realization: Option<fullmag_ir::ResolvedFemDemagIR>,
     air_box_config: Option<&AirBoxConfigIR>,
 ) -> Option<String> {
     let study_universe = study_universe_metadata(problem)?;
     if let Some(config) = air_box_config {
+        let certificate = mesh
+            .airbox_boundary_certificate_sha256()
+            .map(|digest| format!(", boundary_role_certificate={digest}"))
+            .unwrap_or_else(|_| ", boundary_role_certificate=unavailable".to_string());
         let airbox_hmax_note = study_universe
             .airbox_hmax
             .map(|value| format!(", airbox_hmax={value:.3e}"))
             .unwrap_or_default();
         return Some(format!(
-            "study_universe lowered to FEM air-box configuration (mode={}, center=[{:.3e}, {:.3e}, {:.3e}], factor={:.3}, boundary_marker={}{})",
+            "study_universe lowered to FEM air-box configuration (mode={}, center=[{:.3e}, {:.3e}, {:.3e}], factor={:.3}, boundary_marker={}{}{})",
             study_universe.mode,
             study_universe.center[0],
             study_universe.center[1],
             study_universe.center[2],
             config.factor,
             config.boundary_marker,
+            certificate,
             airbox_hmax_note,
         ));
     }
