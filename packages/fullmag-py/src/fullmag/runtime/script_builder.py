@@ -20,7 +20,7 @@ from fullmag.model.antenna import (
     SpinWaveExcitationAnalysis,
 )
 from fullmag.model.current_transport import CurrentTransport
-from fullmag.model.discretization import FDM, FEM, FemLinearSolverPolicy
+from fullmag.model.discretization import FDM, FEM, FDMDemag, FemLinearSolverPolicy
 from fullmag.model.spin_torque import (
     DriftDiffusionSpinTorque,
     InterfaceCppSTT,
@@ -645,18 +645,46 @@ def _render_runtime(
 
     fdm = problem.discretization.fdm if problem.discretization is not None else None
     if isinstance(fdm, FDM):
-        if fdm.per_magnet:
+        has_extended_policy = (
+            fdm.demag is not None
+            or fdm.boundary_phi_floor is not None
+            or fdm.boundary_delta_min is not None
+        )
+        if fdm.per_magnet or has_extended_policy:
             fdm_kwargs: list[str] = []
             if fdm.default_cell is not None:
                 fdm_kwargs.append(f"default_cell={_py_tuple3(fdm.default_cell)}")
-            per_magnet = ", ".join(
-                f"{_py_repr(name)}: fm.FDMGrid(cell={_py_tuple3(grid.cell)})"
-                for name, grid in sorted(fdm.per_magnet.items())
-            )
-            fdm_kwargs.append(f"per_magnet={{{per_magnet}}}")
+            if fdm.per_magnet:
+                per_magnet = ", ".join(
+                    f"{_py_repr(name)}: fm.FDMGrid(cell={_py_tuple3(grid.cell)})"
+                    for name, grid in sorted(fdm.per_magnet.items())
+                )
+                fdm_kwargs.append(f"per_magnet={{{per_magnet}}}")
+            if isinstance(fdm.demag, FDMDemag):
+                demag_kwargs = [
+                    f"strategy={_py_repr(fdm.demag.strategy)}",
+                    f"mode={_py_repr(fdm.demag.mode)}",
+                    f"allow_single_grid_fallback={fdm.demag.allow_single_grid_fallback!r}",
+                    f"explain={fdm.demag.explain!r}",
+                ]
+                if fdm.demag.common_cells is not None:
+                    demag_kwargs.append(f"common_cells={fdm.demag.common_cells!r}")
+                if fdm.demag.common_cells_xy is not None:
+                    demag_kwargs.append(
+                        f"common_cells_xy={fdm.demag.common_cells_xy!r}"
+                    )
+                fdm_kwargs.append(f"demag=fm.FDMDemag({', '.join(demag_kwargs)})")
             if fdm.boundary_correction is not None:
                 fdm_kwargs.append(
                     f"boundary_correction={_py_repr(fdm.boundary_correction)}"
+                )
+            if fdm.boundary_phi_floor is not None:
+                fdm_kwargs.append(
+                    f"boundary_phi_floor={_py_number(fdm.boundary_phi_floor)}"
+                )
+            if fdm.boundary_delta_min is not None:
+                fdm_kwargs.append(
+                    f"boundary_delta_min={_py_number(fdm.boundary_delta_min)}"
                 )
             lines.append(f"{_surface_call(surface, 'fdm')}({', '.join(fdm_kwargs)})")
         elif fdm.default_cell is not None:

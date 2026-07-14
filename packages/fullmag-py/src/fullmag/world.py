@@ -3687,12 +3687,16 @@ class StudyBuilder:
         per_magnet: Mapping[str, FDMGrid] | None = None,
         demag: FDMDemag | None = None,
         boundary_correction: str | None = None,
+        boundary_phi_floor: float | None = None,
+        boundary_delta_min: float | None = None,
     ) -> "StudyBuilder":
         fdm(
             default_cell=default_cell,
             per_magnet=per_magnet,
             demag=demag,
             boundary_correction=boundary_correction,
+            boundary_phi_floor=boundary_phi_floor,
+            boundary_delta_min=boundary_delta_min,
         )
         return self
 
@@ -4366,6 +4370,7 @@ def fem_demag_solver(
 
 def cell(dx: float, dy: float, dz: float) -> None:
     """Set FDM cell size in meters."""
+    _state._fdm = None
     _state._cell = (dx, dy, dz)
 
 
@@ -4375,6 +4380,8 @@ def fdm(
     per_magnet: Mapping[str, FDMGrid] | None = None,
     demag: FDMDemag | None = None,
     boundary_correction: str | None = None,
+    boundary_phi_floor: float | None = None,
+    boundary_delta_min: float | None = None,
 ) -> FDM:
     """Set complete FDM hints, including native per-magnet grids."""
     policy = FDM(
@@ -4382,6 +4389,8 @@ def fdm(
         per_magnet=dict(per_magnet) if per_magnet is not None else None,
         demag=demag,
         boundary_correction=boundary_correction,
+        boundary_phi_floor=boundary_phi_floor,
+        boundary_delta_min=boundary_delta_min,
     )
     _state._fdm = policy
     if policy.default_cell is not None:

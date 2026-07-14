@@ -3592,7 +3592,15 @@ class ProblemApiTests(unittest.TestCase):
                         per_magnet={
                             "left": fm.FDMGrid(cell=(1e-9, 2e-9, 3e-9)),
                             "right": fm.FDMGrid(cell=(2e-9, 2e-9, 3e-9)),
-                        }
+                        },
+                        demag=fm.FDMDemag(
+                            strategy="multilayer_convolution",
+                            mode="two_d_stack",
+                            common_cells_xy=(32, 32),
+                            explain=False,
+                        ),
+                        boundary_phi_floor=0.1,
+                        boundary_delta_min=0.2e-9,
                     )
                     left = fm.geometry(fm.Box(size=(10e-9, 10e-9, 3e-9), name="left"), name="left")
                     right = fm.geometry(fm.Box(size=(10e-9, 10e-9, 3e-9), name="right"), name="right")
@@ -3607,6 +3615,7 @@ class ProblemApiTests(unittest.TestCase):
             loaded = load_problem_from_script(script_path, lightweight_assets=True)
             rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
             self.assertIn('fm.fdm(per_magnet={"left": fm.FDMGrid', rewritten)
+            self.assertIn('demag=fm.FDMDemag(strategy="multilayer_convolution"', rewritten)
 
             rewritten_path = Path(tmp_dir) / "per_magnet_export_rewritten.py"
             rewritten_path.write_text(rewritten, encoding="utf-8")
@@ -3617,6 +3626,11 @@ class ProblemApiTests(unittest.TestCase):
         self.assertIsNone(fdm.default_cell)
         self.assertEqual(fdm.per_magnet["left"].cell, (1e-9, 2e-9, 3e-9))
         self.assertEqual(fdm.per_magnet["right"].cell, (2e-9, 2e-9, 3e-9))
+        self.assertEqual(fdm.demag.strategy, "multilayer_convolution")
+        self.assertEqual(fdm.demag.common_cells_xy, (32, 32))
+        self.assertFalse(fdm.demag.explain)
+        self.assertEqual(fdm.boundary_phi_floor, 0.1)
+        self.assertEqual(fdm.boundary_delta_min, 0.2e-9)
 
     def test_simulation_overrides_backend_mode_and_precision(self) -> None:
         problem = self._build_problem()
