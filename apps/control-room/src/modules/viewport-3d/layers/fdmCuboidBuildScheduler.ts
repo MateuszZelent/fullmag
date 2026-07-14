@@ -301,6 +301,9 @@ function cloneFdmCuboidBuildRequestForWorker(
     ...input,
     id,
     modelFieldVector: cloneFieldVectorForWorker(input.modelFieldVector),
+    realizedRegionIds: input.realizedRegionIds
+      ? new Uint32Array(input.realizedRegionIds)
+      : input.realizedRegionIds,
     vectorField: cloneFieldVectorForWorker(input.vectorField),
   };
 }
@@ -327,6 +330,7 @@ function transferablesForFdmCuboidBuildRequest(
   if (request.vectorField?.values.buffer !== request.modelFieldVector?.values.buffer) {
     addArrayBufferTransferable(transferables, request.vectorField?.values.buffer);
   }
+  addArrayBufferTransferable(transferables, request.realizedRegionIds?.buffer);
   return transferables;
 }
 

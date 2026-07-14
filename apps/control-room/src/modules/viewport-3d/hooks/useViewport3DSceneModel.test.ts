@@ -3279,6 +3279,9 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("buildViewport3DFdmCuboidJobKey");
     expect(source).toContain("useFdmCuboidBuildResult");
     expect(source).toContain("modelFieldVector: fdmInstanceModelFieldVector");
+    expect(source).toContain("realizedRegionIds: fdmRealizedRegionIds");
+    expect(source).toContain("membership=${fdmRegionMembership.revision ?? \"none\"}");
+    expect(source).toContain("const fdmRealizedRegionIds = useMemo");
     expect(source).toContain("fdmBuildFieldRevision");
     expect(source).toContain("fdmInstanceModel: fdmInstanceModel");
     expect(source).toContain("fdmVectorSegments");

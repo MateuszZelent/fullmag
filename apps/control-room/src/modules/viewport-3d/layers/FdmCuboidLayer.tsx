@@ -509,6 +509,7 @@ export interface FdmCuboidAsyncBuildInput {
   groupKey: string | null;
   maxVectorGlyphs: number;
   modelFieldVector?: DecodedFieldVector | null;
+  realizedRegionIds?: Uint32Array | null;
   revisionSummary: string;
   vectorAnchorMode: Viewport3DVectorAnchorMode;
   vectorField?: DecodedFieldVector | null;
@@ -525,6 +526,7 @@ export function useFdmCuboidBuildResult({
   groupKey,
   maxVectorGlyphs,
   modelFieldVector,
+  realizedRegionIds,
   revisionSummary,
   vectorAnchorMode,
   vectorField,
@@ -541,6 +543,7 @@ export function useFdmCuboidBuildResult({
             domain,
             maxVectorGlyphs,
             modelFieldVector,
+            realizedRegionIds,
             vectorAnchorMode,
             vectorField,
             vectorScale,
@@ -554,6 +557,7 @@ export function useFdmCuboidBuildResult({
       enabled,
       maxVectorGlyphs,
       modelFieldVector,
+      realizedRegionIds,
       vectorAnchorMode,
       vectorField,
       vectorScale,

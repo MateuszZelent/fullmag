@@ -14,6 +14,8 @@ export interface FdmCuboidInstanceModel {
   centers: Float32Array;
   count: number;
   gridShape: [number, number, number];
+  /** Realized numeric region IDs for sampled cells; null means authored grid fallback. */
+  regionIds: Uint32Array | null;
 }
 
 export interface FdmVoxelTopographyOptions {
@@ -24,6 +26,7 @@ export interface FdmVoxelTopographyOptions {
 
 export interface FdmCuboidInstanceModelOptions {
   fieldVector?: DecodedFieldVector | null;
+  realizedRegionIds?: Uint32Array | null;
   voxelFillRatio?: number;
   voxelMagnitudeThreshold?: number;
   voxelTopography?: FdmVoxelTopographyOptions;
@@ -33,6 +36,7 @@ export interface FdmCuboidBuildRequest {
   domain: FdmGridRenderDomain | null;
   maxVectorGlyphs: number;
   modelFieldVector?: DecodedFieldVector | null;
+  realizedRegionIds?: Uint32Array | null;
   vectorAnchorMode: Viewport3DVectorAnchorMode;
   vectorField?: DecodedFieldVector | null;
   vectorScale: number;
@@ -51,6 +55,7 @@ export function buildViewport3DFdmCuboid(
 ): FdmCuboidBuildResult {
   const model = buildFdmCuboidInstanceModel(request.domain, {
     fieldVector: request.modelFieldVector,
+    realizedRegionIds: request.realizedRegionIds,
     voxelFillRatio: request.voxelFillRatio,
     voxelMagnitudeThreshold: request.voxelMagnitudeThreshold,
     voxelTopography: request.voxelTopography,
@@ -73,7 +78,6 @@ export function buildFdmCuboidInstanceModel(
     return null;
   }
 
-  const candidateCount = Math.min(domain.displayCellCount, domain.totalCells);
   const [nx, ny, nz] = domain.shape;
   const [dx, dy, dz] = domain.spacing;
   const [ox, oy, oz] = domain.origin;
@@ -82,14 +86,33 @@ export function buildFdmCuboidInstanceModel(
   const topography = normalizeVoxelTopography(options.voxelTopography);
   const gridCells = Math.max(nx * ny * nz, 1);
   const totalCells = Math.min(domain.totalCells, gridCells);
+  const realizedRegionIds = validRealizedRegionIds(
+    options.realizedRegionIds,
+    totalCells,
+  );
+  const realizedCellIndices = realizedRegionIds
+    ? collectRealizedCellIndices(realizedRegionIds)
+    : null;
+  const candidateCount = Math.min(
+    domain.displayCellCount,
+    realizedCellIndices?.length ?? totalCells,
+  );
+  if (candidateCount <= 0) return null;
   const sampledCellIndices = new Uint32Array(candidateCount);
   let sampledCellCount = 0;
 
   for (let instance = 0; instance < candidateCount; instance += 1) {
-    const cellIndex = Math.min(
-      totalCells - 1,
-      Math.floor((instance * totalCells) / candidateCount),
-    );
+    const cellIndex = realizedCellIndices
+      ? (realizedCellIndices[
+          Math.min(
+            realizedCellIndices.length - 1,
+            Math.floor((instance * realizedCellIndices.length) / candidateCount),
+          )
+        ] ?? 0)
+      : Math.min(
+          totalCells - 1,
+          Math.floor((instance * totalCells) / candidateCount),
+        );
     if (!cellPassesMagnitudeThreshold(options.fieldVector, cellIndex, threshold)) {
       continue;
     }
@@ -102,10 +125,14 @@ export function buildFdmCuboidInstanceModel(
 
   const centers = new Float32Array(count * 3);
   const cellIndices = new Uint32Array(count);
+  const sampledRegionIds = realizedRegionIds ? new Uint32Array(count) : null;
 
   for (let instance = 0; instance < count; instance += 1) {
     const cellIndex = sampledCellIndices[instance] ?? 0;
     cellIndices[instance] = cellIndex;
+    if (sampledRegionIds) {
+      sampledRegionIds[instance] = realizedRegionIds?.[cellIndex] ?? 0;
+    }
     const ix = cellIndex % nx;
     const iy = Math.floor(cellIndex / nx) % ny;
     const iz = Math.floor(cellIndex / (nx * ny)) % nz;
@@ -134,7 +161,28 @@ export function buildFdmCuboidInstanceModel(
     centers,
     count,
     gridShape: [nx, ny, nz],
+    regionIds: sampledRegionIds,
   };
+}
+
+function validRealizedRegionIds(
+  regionIds: Uint32Array | null | undefined,
+  cellCount: number,
+): Uint32Array | null {
+  return regionIds && regionIds.length === cellCount ? regionIds : null;
+}
+
+function collectRealizedCellIndices(regionIds: Uint32Array): Uint32Array {
+  const activeIndices = new Uint32Array(
+    regionIds.reduce((count, regionId) => count + (regionId > 0 ? 1 : 0), 0),
+  );
+  let writeOffset = 0;
+  for (let cellIndex = 0; cellIndex < regionIds.length; cellIndex += 1) {
+    if ((regionIds[cellIndex] ?? 0) === 0) continue;
+    activeIndices[writeOffset] = cellIndex;
+    writeOffset += 1;
+  }
+  return activeIndices;
 }
 
 /**
@@ -290,7 +338,8 @@ export function estimateFdmCuboidBuildInputBytes(
 ): number {
   return (
     estimateFieldVectorBytes(request.modelFieldVector) +
-    estimateFieldVectorBytes(request.vectorField)
+    estimateFieldVectorBytes(request.vectorField) +
+    (request.realizedRegionIds?.byteLength ?? 0)
   );
 }
 
@@ -316,6 +365,7 @@ export function transferablesForFdmCuboidBuildResult(
   const transferables: Transferable[] = [];
   addArrayBufferTransferable(transferables, result.model?.cellIndices.buffer);
   addArrayBufferTransferable(transferables, result.model?.centers.buffer);
+  addArrayBufferTransferable(transferables, result.model?.regionIds?.buffer);
   addArrayBufferTransferable(transferables, result.vectorSegments?.buffer);
   return transferables;
 }

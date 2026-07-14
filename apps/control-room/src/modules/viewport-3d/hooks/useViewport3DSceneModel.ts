@@ -2305,6 +2305,16 @@ export function useViewport3DSceneModel({
     enabled: Boolean(fdmDomain && fdmRegionMembership.data),
     revision: fdmRegionMembership.revision,
   });
+  const fdmRealizedRegionIds = useMemo(() => {
+    const binary = fdmRegionMembershipBinary.data;
+    if (!binary || !fdmDomain) return null;
+    const shapeMatches = binary.counts.every(
+      (count, axis) => count === fdmDomain.shape[axis],
+    );
+    return shapeMatches && binary.cellCount === fdmDomain.totalCells
+      ? binary.regionIds
+      : null;
+  }, [fdmDomain, fdmRegionMembershipBinary.data]);
   const femDomain = useMemo(
     () => adaptFemSharedDomainManifest(sharedDomainManifest.data),
     [sharedDomainManifest.data],
@@ -3543,7 +3553,7 @@ export function useViewport3DSceneModel({
   const fdmBuildTargetRevision =
     renderingState?.revision == null ? null : String(renderingState.revision);
   const fdmBuildSamplingRevision = fdmDomain
-    ? `shape=${fdmDomain.shape.join("x")}|display=${fdmDomain.displayCellCount}|total=${fdmDomain.totalCells}|stride=${fdmDomain.stride}`
+    ? `shape=${fdmDomain.shape.join("x")}|display=${fdmDomain.displayCellCount}|total=${fdmDomain.totalCells}|stride=${fdmDomain.stride}|membership=${fdmRegionMembership.revision ?? "none"}`
     : "none";
   const fdmBuildStyleRevision = [
     `fill=${visualProfile.voxelFillRatio}`,
@@ -3579,6 +3589,7 @@ export function useViewport3DSceneModel({
     groupKey: fdmBuildGroupKey,
     maxVectorGlyphs: fdmMaxVectorGlyphs,
     modelFieldVector: fdmInstanceModelFieldVector,
+    realizedRegionIds: fdmRealizedRegionIds,
     revisionSummary: `domain=${fdmBuildTopologyRevision ?? "none"} field=${fdmBuildFieldRevision ?? "none"} target=${fdmBuildTargetRevision ?? "none"}`,
     vectorAnchorMode: fdmVectorAnchorMode,
     vectorField: fdmVectorsVisible ? fdmFieldVector : null,
