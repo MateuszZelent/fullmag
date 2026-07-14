@@ -44,3 +44,9 @@ struct PeriodicEquivalenceAudit {
 
 **Exit:** v6 zawiera pełne edge/corner class evidence, a constraint assembly jest order-independent.
 
+## Evidence update (2026-07-14)
+
+- [x] v6 edge/corner closure validator checks two-axis diagonal mappings and translation commutation through deterministic `BTreeMap` representatives.
+- [x] RED/GREEN regression fixtures cover input-pair permutation invariance and a missing diagonal mapping; `cargo test -p fullmag-ir periodic_edge_corner_closure --lib --no-fail-fast -- --nocapture` — 2 passed.
+- [x] Existing fullmag-ir periodic certificate suite remains green (16 periodic tests, including face bijection, topology and material seam rejection).
+- [ ] Native MFEM constraint assembly and managed `fem_mesh_contract` evidence remain required before production closure.

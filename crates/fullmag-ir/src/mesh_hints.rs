@@ -1756,6 +1756,89 @@ mod mesh_validation_tests {
         }
     }
 
+    fn two_axis_periodic_nodes() -> MeshIR {
+        MeshIR {
+            mesh_name: "two-axis-periodic".to_string(),
+            nodes: vec![
+                [0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [0.0, 1.0, 1.0],
+                [1.0, 0.0, 0.0],
+                [1.0, 1.0, 0.0],
+                [1.0, 0.0, 1.0],
+                [1.0, 1.0, 1.0],
+            ],
+            elements: Vec::new(),
+            element_markers: Vec::new(),
+            boundary_faces: Vec::new(),
+            boundary_markers: Vec::new(),
+            periodic_boundary_pairs: vec![
+                MeshPeriodicBoundaryPairIR {
+                    pair_id: "x_faces".to_string(),
+                    source_marker: None,
+                    destination_marker: None,
+                    marker_a: 10,
+                    marker_b: 11,
+                    translation: Some([1.0, 0.0, 0.0]),
+                    tolerance: Some(1.0e-12),
+                    axis_hint: Some("x".to_string()),
+                    orientation: None,
+                    pairing_policy: None,
+                },
+                MeshPeriodicBoundaryPairIR {
+                    pair_id: "y_faces".to_string(),
+                    source_marker: None,
+                    destination_marker: None,
+                    marker_a: 12,
+                    marker_b: 13,
+                    translation: Some([0.0, 1.0, 0.0]),
+                    tolerance: Some(1.0e-12),
+                    axis_hint: Some("y".to_string()),
+                    orientation: None,
+                    pairing_policy: None,
+                },
+            ],
+            periodic_node_pairs: vec![
+                MeshPeriodicNodePairIR { pair_id: "x_faces".to_string(), node_a: 0, node_b: 4 },
+                MeshPeriodicNodePairIR { pair_id: "x_faces".to_string(), node_a: 1, node_b: 5 },
+                MeshPeriodicNodePairIR { pair_id: "x_faces".to_string(), node_a: 2, node_b: 6 },
+                MeshPeriodicNodePairIR { pair_id: "x_faces".to_string(), node_a: 3, node_b: 7 },
+                MeshPeriodicNodePairIR { pair_id: "y_faces".to_string(), node_a: 0, node_b: 1 },
+                MeshPeriodicNodePairIR { pair_id: "y_faces".to_string(), node_a: 2, node_b: 3 },
+                MeshPeriodicNodePairIR { pair_id: "y_faces".to_string(), node_a: 4, node_b: 5 },
+                MeshPeriodicNodePairIR { pair_id: "y_faces".to_string(), node_a: 6, node_b: 7 },
+            ],
+            per_domain_quality: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn periodic_edge_corner_closure_is_order_independent() {
+        let mesh = two_axis_periodic_nodes();
+        let mut first_errors = Vec::new();
+        assert!(validate_edge_corner_closure(&mesh, &mut first_errors));
+        assert!(first_errors.is_empty());
+
+        let mut permuted = mesh.clone();
+        permuted.periodic_node_pairs.reverse();
+        let mut permuted_errors = Vec::new();
+        assert!(validate_edge_corner_closure(&permuted, &mut permuted_errors));
+        assert_eq!(permuted_errors, first_errors);
+    }
+
+    #[test]
+    fn periodic_edge_corner_closure_rejects_missing_diagonal_mapping() {
+        let mut mesh = two_axis_periodic_nodes();
+        mesh.periodic_node_pairs
+            .retain(|pair| !(pair.pair_id == "y_faces" && pair.node_a == 4));
+        let mut errors = Vec::new();
+        assert!(!validate_edge_corner_closure(&mesh, &mut errors));
+        assert!(errors.iter().any(|error| {
+            error.contains("edge/corner closure is incomplete")
+        }));
+    }
+
     #[test]
     fn periodic_certificate_v6_accepts_mirrored_faces_and_hashes_topology() {
         let certificate = mirrored_periodic_mesh()
