@@ -21,8 +21,10 @@
 
 ### Task 1: RED artifact snapshots
 
-- [ ] Dodać fixture o normalnych innych niż osiowe oraz dwie ściany o bliskich centroidach, lecz innej triangulacji.
-- [ ] W `crates/fullmag-runner/src/artifacts.rs` tests oczekiwać realnego normal dot i certificate face ID; obecny writer ma FAIL.
+- [x] Dodać fixture o normalnych innych niż osiowe oraz odrzuceniu seam o tej samej orientacji; writer przed poprawką publikował `valid`.
+- [x] W `crates/fullmag-runner/src/artifacts.rs` tests oczekują realnego normal dot, certificate face ID i vertex correspondence.
+
+Uwaga: osobny fixture z bliskimi centroidami i inną triangulacją oraz API resource wiring pozostają otwarte.
 
 ### Task 2: serializer bez reconstruction
 
@@ -30,9 +32,9 @@
 fn periodic_pairs_artifact(cert: &PeriodicMeshCertificateV6) -> Result<PeriodicPairsArtifactV2, ArtifactError>;
 ```
 
-- [ ] Usunąć axis-derived `normal_dot=-1` i centroid matching; mapować wszystkie fields z certyfikatu.
-- [ ] Fail-closed, jeśli artifact topology fingerprint różni się od mesh fingerprint.
-- [ ] Uruchomić `cargo test -p fullmag-runner periodic_pairs --no-fail-fast`; PASS.
+- [x] Usunąć axis-derived `normal_dot=-1` z periodic-pairs artifactu; `normal_dot`, face IDs, vertex pairs, area residual i translation residual są mapowane z v6 certificate.
+- [ ] Fail-closed, jeśli artifact topology fingerprint różni się od mesh fingerprint (certificate fingerprint jest publikowany, ale osobna identity comparison pozostaje do spięcia z artifact metadata).
+- [x] Uruchomić `cargo test -p fullmag-runner periodic_pairs_artifact --lib --no-fail-fast -- --nocapture`; 3 passed.
 
 ### Task 3: API consistency
 
@@ -41,3 +43,9 @@ fn periodic_pairs_artifact(cert: &PeriodicMeshCertificateV6) -> Result<PeriodicP
 
 **Exit:** artifact nie zawiera pól wyprowadzonych z samej osi/centroidu; fingerprint i wszystkie residuals odpowiadają certyfikatowi.
 
+### Evidence (2026-07-14, partial)
+
+- `cargo test -p fullmag-runner periodic_pairs_artifact --lib --no-fail-fast -- --nocapture` — 3 passed.
+- `PeriodicAxisCertificateV6IR.face_pairs` publikuje globalne face IDs, explicit vertex pairs, rzeczywisty `normal_dot`, area residual, translation residual oraz seam marker/domain evidence.
+- Artifact ustawia `validation_status=failed`, `certificate_status=rejected` i nie publikuje face pairs, gdy v6 certificate jest odrzucony.
+- Otwarte: osobny topology-identity comparison na poziomie artifactu, API/data-plane resource oraz managed runtime evidence.

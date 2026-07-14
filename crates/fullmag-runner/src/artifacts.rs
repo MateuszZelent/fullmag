@@ -1345,6 +1345,16 @@ fn write_periodic_pairs_artifact(
         return Ok(());
     }
 
+    let mesh_topology_fingerprint = mesh.topology_fingerprint_v6();
+    let certificate = mesh
+        .periodic_mesh_certificate_v6()
+        .and_then(|certificate| validate_periodic_certificate_identity(mesh, certificate));
+    let certificate_status = certificate
+        .as_ref()
+        .map(|certificate| certificate.certificate_status.as_str())
+        .unwrap_or("rejected");
+    let certificate_errors = certificate.as_ref().err().cloned().unwrap_or_default();
+
     let boundary_nodes_by_marker = mesh_boundary_nodes_by_marker(mesh);
     let node_pairs_by_id = mesh.periodic_node_pairs.iter().fold(
         HashMap::<String, Vec<&fullmag_ir::MeshPeriodicNodePairIR>>::new(),
@@ -1380,7 +1390,16 @@ fn write_periodic_pairs_artifact(
             let diagnostics = mesh_periodic_pair_residuals(mesh, boundary_pair, node_pairs);
             let (magnetic_node_pair_count, airbox_node_pair_count) =
                 mesh_periodic_domain_node_pair_counts(mesh, node_pairs);
-            let boundary_face_pairs = mesh_periodic_boundary_face_pairs(mesh, boundary_pair);
+            let boundary_face_pairs = certificate
+                .as_ref()
+                .map(|certificate| {
+                    certified_mesh_periodic_boundary_face_pairs(
+                        certificate,
+                        &boundary_pair.pair_id,
+                        boundary_pair.translation,
+                    )
+                })
+                .unwrap_or_default();
             let node_pair_payload = node_pairs
                 .iter()
                 .map(|pair| {
@@ -1409,7 +1428,13 @@ fn write_periodic_pairs_artifact(
                 "node_pairs": node_pair_payload,
                 "max_residual_m": diagnostics.max_residual_m,
                 "rms_residual_m": diagnostics.rms_residual_m,
-                "status": diagnostics.status,
+                "status": if certificate.is_err() {
+                    "certificate_rejected"
+                } else if boundary_face_pairs.is_empty() {
+                    "face_pairs_missing"
+                } else {
+                    diagnostics.status.as_str()
+                },
             })
         })
         .collect::<Vec<_>>();
@@ -1430,7 +1455,8 @@ fn write_periodic_pairs_artifact(
         .fold(None, |acc: Option<f64>, value| {
             Some(acc.map_or(value, |current| current.max(value)))
         });
-    let validation_status = if pairs
+    let validation_status = if certificate.is_ok()
+        && pairs
         .iter()
         .all(|pair| pair.get("status").and_then(serde_json::Value::as_str) == Some("valid"))
     {
@@ -1442,6 +1468,13 @@ fn write_periodic_pairs_artifact(
     let payload = serde_json::json!({
         "schema_version": "periodic_pairs.v1",
         "artifact_path": "mesh/periodic_pairs.v1.json",
+        "topology_fingerprint": mesh_topology_fingerprint,
+        "certificate_status": certificate_status,
+        "certificate": certificate
+            .as_ref()
+            .ok()
+            .and_then(|certificate| serde_json::to_value(certificate).ok()),
+        "certificate_errors": certificate_errors,
         "validation_status": validation_status,
         "pair_count": pair_count,
         "paired_node_count": paired_node_count,
@@ -1458,6 +1491,21 @@ fn write_periodic_pairs_artifact(
     )?;
 
     Ok(())
+}
+
+fn validate_periodic_certificate_identity(
+    mesh: &fullmag_ir::MeshIR,
+    certificate: fullmag_ir::PeriodicMeshCertificateV6IR,
+) -> Result<fullmag_ir::PeriodicMeshCertificateV6IR, Vec<String>> {
+    let mesh_topology_fingerprint = mesh.topology_fingerprint_v6();
+    if certificate.topology_fingerprint == mesh_topology_fingerprint {
+        Ok(certificate)
+    } else {
+        Err(vec![format!(
+            "periodic v6 certificate topology fingerprint {} does not match mesh {}",
+            certificate.topology_fingerprint, mesh_topology_fingerprint
+        )])
+    }
 }
 
 fn static_pbc_demag_fem_plan<'a>(
@@ -1891,6 +1939,44 @@ fn mesh_periodic_domain_node_pair_counts(
     (magnetic_count, airbox_count)
 }
 
+fn certified_mesh_periodic_boundary_face_pairs(
+    certificate: &fullmag_ir::PeriodicMeshCertificateV6IR,
+    pair_id: &str,
+    translation: Option<[f64; 3]>,
+) -> Vec<serde_json::Value> {
+    certificate
+        .axis_pairs
+        .iter()
+        .find(|axis| axis.pair_id == pair_id)
+        .map(|axis| {
+            axis.face_pairs
+                .iter()
+                .map(|face| {
+                    serde_json::json!({
+                        "face_a": face.face_a,
+                        "face_b": face.face_b,
+                        "vertex_pairs": face.vertex_pairs,
+                        "translation_m": translation,
+                        "translation_residual_m": face.translation_residual_max_m,
+                        "area_residual_m2": face.area_residual_m2,
+                        "normal_dot": face.normal_dot,
+                        "source_marker": face.source_marker,
+                        "destination_marker": face.destination_marker,
+                        "source_element_markers": face.source_element_markers,
+                        "destination_element_markers": face.destination_element_markers,
+                        "orientation": if face.normal_dot <= -0.999 {
+                            "opposed_normals"
+                        } else {
+                            "invalid"
+                        },
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
 fn mesh_periodic_boundary_face_pairs(
     mesh: &fullmag_ir::MeshIR,
     boundary_pair: &fullmag_ir::MeshPeriodicBoundaryPairIR,
@@ -1899,7 +1985,9 @@ fn mesh_periodic_boundary_face_pairs(
     for (source_face_index, destination_face_index) in
         mesh_periodic_boundary_face_index_pairs(mesh, boundary_pair)
     {
-        let normal_dot = periodic_pair_unit_normal(boundary_pair).map(|_| -1.0);
+        let normal_dot = mesh_boundary_face_unit_normal(mesh, source_face_index)
+            .zip(mesh_boundary_face_unit_normal(mesh, destination_face_index))
+            .map(|(source, destination)| vector_dot(source, destination));
         pairs.push(serde_json::json!({
             "face_a": source_face_index,
             "face_b": destination_face_index,
@@ -1919,43 +2007,48 @@ fn mesh_periodic_boundary_face_index_pairs(
     mesh: &fullmag_ir::MeshIR,
     boundary_pair: &fullmag_ir::MeshPeriodicBoundaryPairIR,
 ) -> Vec<(usize, usize)> {
-    let Some(translation) = boundary_pair.translation else {
+    if boundary_pair.translation.is_none() {
         return Vec::new();
-    };
+    }
     let source_faces = mesh_boundary_face_indices_by_marker(mesh, boundary_pair.marker_a);
-    let mut destination_faces = mesh_boundary_face_indices_by_marker(mesh, boundary_pair.marker_b);
+    let destination_faces = mesh_boundary_face_indices_by_marker(mesh, boundary_pair.marker_b);
+    let node_map = mesh
+        .periodic_node_pairs
+        .iter()
+        .filter(|pair| pair.pair_id == boundary_pair.pair_id)
+        .map(|pair| (pair.node_a, pair.node_b))
+        .collect::<HashMap<_, _>>();
     let mut pairs = Vec::new();
+    let mut used_destinations = BTreeSet::new();
     for source_face_index in source_faces {
-        let Some(source_centroid) = mesh_boundary_face_centroid(mesh, source_face_index) else {
+        let Some(source_face) = mesh.boundary_faces.get(source_face_index) else {
             continue;
         };
-        let mut best_destination: Option<(usize, usize, f64)> = None;
-        for (candidate_position, destination_face_index) in destination_faces.iter().enumerate() {
-            let Some(destination_centroid) =
-                mesh_boundary_face_centroid(mesh, *destination_face_index)
-            else {
-                continue;
-            };
-            let residual = [
-                destination_centroid[0] - source_centroid[0] - translation[0],
-                destination_centroid[1] - source_centroid[1] - translation[1],
-                destination_centroid[2] - source_centroid[2] - translation[2],
-            ];
-            let residual_norm =
-                (residual[0] * residual[0] + residual[1] * residual[1] + residual[2] * residual[2])
-                    .sqrt();
-            if best_destination
-                .as_ref()
-                .is_none_or(|(_, _, best_norm)| residual_norm < *best_norm)
-            {
-                best_destination =
-                    Some((candidate_position, *destination_face_index, residual_norm));
-            }
-        }
-        let Some((destination_position, destination_face_index, _)) = best_destination else {
+        let Some(mapped_face) = source_face
+            .iter()
+            .map(|node| node_map.get(node).copied())
+            .collect::<Option<Vec<_>>>()
+            .and_then(|nodes| <[u32; 3]>::try_from(nodes).ok())
+        else {
             continue;
         };
-        destination_faces.remove(destination_position);
+        let mut expected = mapped_face;
+        expected.sort_unstable();
+        let Some(destination_face_index) = destination_faces.iter().copied().find(|index| {
+            !used_destinations.contains(index)
+                && mesh
+                    .boundary_faces
+                    .get(*index)
+                    .map(|face| {
+                        let mut actual = *face;
+                        actual.sort_unstable();
+                        actual == expected
+                    })
+                    .unwrap_or(false)
+        }) else {
+            continue;
+        };
+        used_destinations.insert(destination_face_index);
         pairs.push((source_face_index, destination_face_index));
     }
     pairs
@@ -1967,18 +2060,6 @@ fn mesh_boundary_face_indices_by_marker(mesh: &fullmag_ir::MeshIR, marker: u32) 
         .enumerate()
         .filter_map(|(index, face_marker)| (*face_marker == marker).then_some(index))
         .collect()
-}
-
-fn mesh_boundary_face_centroid(mesh: &fullmag_ir::MeshIR, face_index: usize) -> Option<[f64; 3]> {
-    let face = mesh.boundary_faces.get(face_index)?;
-    let a = mesh.nodes.get(face[0] as usize)?;
-    let b = mesh.nodes.get(face[1] as usize)?;
-    let c = mesh.nodes.get(face[2] as usize)?;
-    Some([
-        (a[0] + b[0] + c[0]) / 3.0,
-        (a[1] + b[1] + c[1]) / 3.0,
-        (a[2] + b[2] + c[2]) / 3.0,
-    ])
 }
 
 fn mesh_boundary_face_area(mesh: &fullmag_ir::MeshIR, face_index: usize) -> Option<f64> {
@@ -1994,6 +2075,23 @@ fn mesh_boundary_face_area(mesh: &fullmag_ir::MeshIR, face_index: usize) -> Opti
         ab[0] * ac[1] - ab[1] * ac[0],
     ];
     Some(0.5 * (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]).sqrt())
+}
+
+#[cfg(test)]
+fn mesh_boundary_face_unit_normal(mesh: &fullmag_ir::MeshIR, face_index: usize) -> Option<[f64; 3]> {
+    let face = mesh.boundary_faces.get(face_index)?;
+    let a = mesh.nodes.get(face[0] as usize)?;
+    let b = mesh.nodes.get(face[1] as usize)?;
+    let c = mesh.nodes.get(face[2] as usize)?;
+    let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    let cross = [
+        ab[1] * ac[2] - ab[2] * ac[1],
+        ab[2] * ac[0] - ab[0] * ac[2],
+        ab[0] * ac[1] - ab[1] * ac[0],
+    ];
+    let norm = vector_norm(cross);
+    (norm > f64::EPSILON).then_some([cross[0] / norm, cross[1] / norm, cross[2] / norm])
 }
 
 fn periodic_pair_unit_normal(
@@ -4612,7 +4710,7 @@ mod tests {
         ];
         fem.mesh.elements = vec![[0, 1, 2, 3], [0, 1, 4, 5], [1, 4, 5, 6]];
         fem.mesh.element_markers = vec![1, 0, 0];
-        fem.mesh.boundary_faces = vec![[0, 2, 4], [1, 6, 5]];
+        fem.mesh.boundary_faces = vec![[0, 2, 4], [1, 5, 3]];
         fem.mesh.boundary_markers = vec![10, 11];
         fem.mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
             pair_id: "x_periodic".to_string(),
@@ -4624,7 +4722,7 @@ mod tests {
             tolerance: Some(1.0e-12),
             axis_hint: Some("x".to_string()),
             orientation: Some("same".to_string()),
-            pairing_policy: Some("nearest".to_string()),
+            pairing_policy: Some("explicit_node_pairs".to_string()),
         }];
         fem.mesh.periodic_node_pairs = vec![
             fullmag_ir::MeshPeriodicNodePairIR {
@@ -4641,11 +4739,6 @@ mod tests {
                 pair_id: "x_periodic".to_string(),
                 node_a: 4,
                 node_b: 5,
-            },
-            fullmag_ir::MeshPeriodicNodePairIR {
-                pair_id: "x_periodic".to_string(),
-                node_a: 2,
-                node_b: 6,
             },
         ];
 
@@ -4671,40 +4764,211 @@ mod tests {
         assert_eq!(artifact["artifact_path"], "mesh/periodic_pairs.v1.json");
         assert_eq!(artifact["validation_status"], "ok");
         assert_eq!(artifact["pair_count"], 1);
-        assert_eq!(artifact["paired_node_count"], 4);
+        assert_eq!(artifact["paired_node_count"], 3);
         assert_eq!(artifact["pairs"][0]["pair_id"], "x_periodic");
-        assert_eq!(artifact["pairs"][0]["paired_node_count"], 4);
+        assert_eq!(artifact["pairs"][0]["paired_node_count"], 3);
         assert_eq!(artifact["pairs"][0]["unpaired_source_node_count"], 0);
         assert_eq!(artifact["pairs"][0]["unpaired_destination_node_count"], 0);
         assert_eq!(
             artifact["pairs"][0]["domain_node_pair_counts"],
             serde_json::json!({"magnetic": 2, "airbox": 1})
         );
+        let face_pair = &artifact["pairs"][0]["boundary_face_pairs"][0];
+        assert_eq!(face_pair["face_a"], 0);
+        assert_eq!(face_pair["face_b"], 1);
+        assert_eq!(face_pair["translation_m"], serde_json::json!([1.0e-6, 0.0, 0.0]));
+        assert_eq!(face_pair["normal_dot"], -1.0);
+        assert_eq!(face_pair["orientation"], "opposed_normals");
         assert_eq!(
-            artifact["pairs"][0]["boundary_face_pairs"],
-            serde_json::json!([
-                {
-                    "face_a": 0,
-                    "face_b": 1,
-                    "translation_m": [1.0e-6, 0.0, 0.0],
-                    "normal_dot": -1.0,
-                    "orientation": "opposed_normals",
-                }
-            ])
+            face_pair["vertex_pairs"],
+            serde_json::json!([[0, 1], [2, 3], [4, 5]])
         );
+        assert_eq!(face_pair["translation_residual_m"], 0.0);
+        assert_eq!(face_pair["area_residual_m2"], 0.0);
         assert_eq!(
             artifact["pairs"][0]["node_pairs"],
             serde_json::json!([
                 {"node_a": 0, "node_b": 1},
                 {"node_a": 2, "node_b": 3},
                 {"node_a": 4, "node_b": 5},
-                {"node_a": 2, "node_b": 6},
             ])
         );
         assert_eq!(artifact["pairs"][0]["max_residual_m"], 0.0);
         assert_eq!(artifact["pairs"][0]["status"], "valid");
 
         fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[test]
+    fn periodic_certificate_identity_rejects_stale_topology_fingerprint() {
+        let mesh = fullmag_ir::MeshIR {
+            mesh_name: "identity-test".to_string(),
+            nodes: Vec::new(),
+            elements: Vec::new(),
+            element_markers: Vec::new(),
+            boundary_faces: Vec::new(),
+            boundary_markers: Vec::new(),
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            per_domain_quality: std::collections::HashMap::new(),
+        };
+        let certificate = fullmag_ir::PeriodicMeshCertificateV6IR {
+            schema_version: "periodic_mesh_certificate.v6".to_string(),
+            certificate_status: "accepted".to_string(),
+            topology_fingerprint: "sha256:stale".to_string(),
+            axis_pairs: Vec::new(),
+            magnetic_class_count: 0,
+            magnetic_pair_count: 0,
+            scalar_class_count: 0,
+            scalar_pair_count: 0,
+            magnetic_equivalence_classes_sha256: "sha256:empty".to_string(),
+            scalar_equivalence_classes_sha256: "sha256:empty".to_string(),
+            translation_residual_max_m: 0.0,
+            orientation_residual_max: 0.0,
+            normal_mismatch_max: 0.0,
+            boundary_topology_match: true,
+            fe_order_match: true,
+            material_region_match: true,
+            corner_edge_cycle_unique: true,
+            m0_seam_mismatch_max: 0.0,
+            h_demag0_seam_mismatch_max: 0.0,
+        };
+        let errors = validate_periodic_certificate_identity(&mesh, certificate)
+            .expect_err("stale certificate identity must fail closed");
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("topology fingerprint")));
+    }
+
+    #[test]
+    fn periodic_pairs_artifact_rejects_uncertified_face_orientation() {
+        let mut plan = test_fem_execution_plan();
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            panic!("test plan must be FEM");
+        };
+        fem.mesh.nodes = vec![
+            [0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 0.0, 1.0],
+            [2.0, 0.0, 0.0],
+            [2.0, 1.0, 0.0],
+            [3.0, 0.0, 1.0],
+        ];
+        fem.mesh.elements.clear();
+        fem.mesh.boundary_faces = vec![[0, 1, 2], [3, 4, 5]];
+        fem.mesh.boundary_markers = vec![10, 11];
+        fem.mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
+            pair_id: "diagonal_faces".to_string(),
+            source_marker: Some("source".to_string()),
+            destination_marker: Some("destination".to_string()),
+            marker_a: 10,
+            marker_b: 11,
+            translation: Some([2.0, 0.0, 0.0]),
+            tolerance: Some(1.0e-12),
+            axis_hint: Some("x".to_string()),
+            orientation: Some("mirrored".to_string()),
+            pairing_policy: Some("explicit_node_pairs".to_string()),
+        }];
+        fem.mesh.periodic_node_pairs = vec![
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "diagonal_faces".to_string(),
+                node_a: 0,
+                node_b: 3,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "diagonal_faces".to_string(),
+                node_a: 1,
+                node_b: 4,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "diagonal_faces".to_string(),
+                node_a: 2,
+                node_b: 5,
+            },
+        ];
+
+        let boundary_pair = &fem.mesh.periodic_boundary_pairs[0];
+        let face_pairs = mesh_periodic_boundary_face_pairs(&fem.mesh, boundary_pair);
+        assert_eq!(face_pairs.len(), 1);
+        assert_eq!(face_pairs[0]["face_a"], 0);
+        assert_eq!(face_pairs[0]["face_b"], 1);
+        let normal_dot = face_pairs[0]["normal_dot"]
+            .as_f64()
+            .expect("face normal dot should be numeric");
+        assert!((normal_dot - 1.0).abs() < 1.0e-12);
+
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-artifacts-periodic-uncertified-{}",
+            std::process::id()
+        ));
+        write_periodic_pairs_artifact(&output_dir, &plan)
+            .expect("periodic pairs artifact should record failed certificate evidence");
+        let artifact: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("mesh/periodic_pairs.v1.json"))
+                .expect("periodic pairs artifact should exist"),
+        )
+        .expect("periodic pairs artifact should parse");
+        assert_eq!(artifact["validation_status"], "failed");
+        assert_eq!(artifact["certificate_status"], "rejected");
+        assert_ne!(artifact["pairs"][0]["status"], "valid");
+        assert!(artifact["pairs"][0]["boundary_face_pairs"].as_array().unwrap().is_empty());
+
+        fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[test]
+    fn periodic_face_pairs_use_explicit_node_bijection_not_centroid() {
+        let mut plan = test_fem_execution_plan();
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            panic!("test plan must be FEM");
+        };
+        fem.mesh.nodes = vec![
+            [0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 0.0, 1.0],
+            [2.0, 0.0, 0.0],
+            [2.0, 1.0, 0.0],
+            [3.0, 0.0, 1.0],
+            [2.2, 0.0, 0.0],
+            [2.3, 0.5, 0.5],
+            [2.5, 0.5, 0.5],
+        ];
+        fem.mesh.boundary_faces = vec![[0, 1, 2], [6, 7, 8], [3, 5, 4]];
+        fem.mesh.boundary_markers = vec![10, 11, 11];
+        let boundary_pair = fullmag_ir::MeshPeriodicBoundaryPairIR {
+            pair_id: "diagonal_faces".to_string(),
+            source_marker: None,
+            destination_marker: None,
+            marker_a: 10,
+            marker_b: 11,
+            translation: Some([2.0, 0.0, 0.0]),
+            tolerance: Some(1.0e-12),
+            axis_hint: Some("x".to_string()),
+            orientation: None,
+            pairing_policy: Some("explicit_node_pairs".to_string()),
+        };
+        fem.mesh.periodic_node_pairs = vec![
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "diagonal_faces".to_string(),
+                node_a: 0,
+                node_b: 3,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "diagonal_faces".to_string(),
+                node_a: 1,
+                node_b: 4,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "diagonal_faces".to_string(),
+                node_a: 2,
+                node_b: 5,
+            },
+        ];
+
+        assert_eq!(
+            mesh_periodic_boundary_face_index_pairs(&fem.mesh, &boundary_pair),
+            vec![(0, 2)]
+        );
     }
 
     #[test]
@@ -4723,7 +4987,7 @@ mod tests {
             [40.0e-9, 20.0e-9, 10.0e-9],
             [0.0, 20.0e-9, 10.0e-9],
         ];
-        fem.mesh.boundary_faces = vec![[0, 3, 7], [1, 5, 6]];
+        fem.mesh.boundary_faces = vec![[0, 3, 7], [1, 6, 2]];
         fem.mesh.boundary_markers = vec![10, 11];
         fem.mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
             pair_id: "x_faces".to_string(),
@@ -4747,11 +5011,6 @@ mod tests {
                 pair_id: "x_faces".to_string(),
                 node_a: 3,
                 node_b: 2,
-            },
-            fullmag_ir::MeshPeriodicNodePairIR {
-                pair_id: "x_faces".to_string(),
-                node_a: 4,
-                node_b: 5,
             },
             fullmag_ir::MeshPeriodicNodePairIR {
                 pair_id: "x_faces".to_string(),
@@ -4853,9 +5112,9 @@ mod tests {
         assert_eq!(artifact["artifact_path"], "mesh/periodic_pairs.v1.json");
         assert_eq!(artifact["validation_status"], "ok");
         assert_eq!(artifact["pair_count"], 1);
-        assert_eq!(artifact["paired_node_count"], 4);
+        assert_eq!(artifact["paired_node_count"], 3);
         assert_eq!(artifact["pairs"][0]["pair_id"], "x_faces");
-        assert_eq!(artifact["pairs"][0]["paired_node_count"], 4);
+        assert_eq!(artifact["pairs"][0]["paired_node_count"], 3);
         assert_eq!(artifact["pairs"][0]["status"], "valid");
 
         fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
@@ -4877,7 +5136,7 @@ mod tests {
             [40.0e-9, 20.0e-9, 10.0e-9],
             [0.0, 20.0e-9, 10.0e-9],
         ];
-        fem.mesh.boundary_faces = vec![[0, 3, 7], [1, 5, 6]];
+        fem.mesh.boundary_faces = vec![[0, 3, 7], [1, 6, 2]];
         fem.mesh.boundary_markers = vec![10, 11];
         fem.mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
             pair_id: "x_faces".to_string(),
@@ -4901,11 +5160,6 @@ mod tests {
                 pair_id: "x_faces".to_string(),
                 node_a: 3,
                 node_b: 2,
-            },
-            fullmag_ir::MeshPeriodicNodePairIR {
-                pair_id: "x_faces".to_string(),
-                node_a: 4,
-                node_b: 5,
             },
             fullmag_ir::MeshPeriodicNodePairIR {
                 pair_id: "x_faces".to_string(),
@@ -5022,7 +5276,7 @@ mod tests {
         .expect("periodic pairs artifact should parse");
         assert_eq!(artifact["schema_version"], "periodic_pairs.v1");
         assert_eq!(artifact["pairs"][0]["pair_id"], "x_faces");
-        assert_eq!(artifact["pairs"][0]["paired_node_count"], 4);
+        assert_eq!(artifact["pairs"][0]["paired_node_count"], 3);
         assert_eq!(artifact["pairs"][0]["status"], "valid");
 
         let native_output_dir = std::env::temp_dir().join(format!(
