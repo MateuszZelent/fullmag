@@ -76,3 +76,9 @@ struct RegionRealizationRevisions {
 - [x] `resolveMeshRegionMembershipRevision` now includes the authoritative `region_membership_revision` in addition to mesh generation identity, region ID and source.
 - [x] RED/GREEN frontend evidence: the focused resource test failed before the change because two membership revisions produced the same cache revision; after the change `geometryLifecycleResources.test.ts` passed 6/6, Control Room typecheck passed, and focused ESLint passed.
 - [ ] Coefficient/initial-state cache lanes, runtime artifact consumed tuple and managed/browser gates remain open.
+
+### Evidence update (2026-07-14, status revision selector)
+
+- [x] `resolveSessionStatusRevision` now includes all four region realization lanes (`region_topology_revision`, `region_membership_revision`, `region_coefficients_revision`, `region_initial_state_revision`) so status refreshes cannot miss an independent region mutation.
+- [x] RED/GREEN frontend evidence: `useSessionStatus.test.ts` failed before the change (region-only revisions resolved to `0`); after the change the focused suite passed 3/3, Control Room typecheck passed, and focused ESLint passed.
+- [ ] Resource DTO lane fields, exact coefficient/initial-state consumers, ETags, runtime artifact tuple and managed/browser gates remain open.

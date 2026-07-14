@@ -68,4 +68,18 @@ describe("resolveSessionStatusRevision", () => {
 
     expect(resolveSessionStatusRevision(status)).toBe(13);
   });
+
+  it("tracks independent region realization revisions", () => {
+    const status = {
+      resources: {
+        ...resources,
+        region_topology_revision: 21,
+        region_membership_revision: 22,
+        region_coefficients_revision: 23,
+        region_initial_state_revision: 24,
+      },
+    } as LiveStatusResource;
+
+    expect(resolveSessionStatusRevision(status)).toBe(24);
+  });
 });
