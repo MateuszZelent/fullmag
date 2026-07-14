@@ -547,7 +547,7 @@ pub(crate) fn build_snapshot_problem_and_state(
             fullmag_ir::AxisBoundary::Periodic => AxisBoundary::Periodic,
             fullmag_ir::AxisBoundary::Open => AxisBoundary::Open,
         };
-        problem.boundary_policy = FdmBoundaryPolicy {
+    problem.boundary_policy = FdmBoundaryPolicy {
             x: map_axis(&pbc.axes[0]),
             y: map_axis(&pbc.axes[1]),
             z: map_axis(&pbc.axes[2]),
@@ -556,6 +556,7 @@ pub(crate) fn build_snapshot_problem_and_state(
             problem.demag_image_counts = ic;
         }
     }
+    problem.set_demag_boundary(crate::fdm::resolve_fdm_demag_boundary(plan)?);
     // Set thermal noise parameters
     problem.temperature = plan.temperature.unwrap_or(0.0);
     if let Some(dt) = plan.fixed_timestep {
@@ -720,6 +721,7 @@ pub(crate) fn execute_reference_fdm(
             problem.demag_image_counts = ic;
         }
     }
+    problem.set_demag_boundary(crate::fdm::resolve_fdm_demag_boundary(plan)?);
 
     let mut state = problem
         .new_state(plan.initial_magnetization.clone())

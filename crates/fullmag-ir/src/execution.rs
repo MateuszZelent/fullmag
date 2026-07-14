@@ -112,6 +112,18 @@ pub struct FdmPeriodicityIR {
     pub image_counts: Option<[u32; 3]>,
 }
 
+/// Planner-resolved demagnetization boundary realization for FDM.
+///
+/// `FdmPeriodicityIR` remains the requested public policy.  Runtime lanes
+/// must consume this resolved value so that CPU and CUDA cannot reinterpret
+/// `open` differently when local operators are periodic.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ResolvedFdmDemagBoundaryIR {
+    Open,
+    PeriodicTruncatedImages { image_counts: [u32; 3] },
+}
+
 /// Demag periodicity semantics for FDM.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -136,6 +148,42 @@ impl FdmPeriodicityIR {
     /// Returns `true` if a specific axis index (0=x, 1=y, 2=z) is periodic.
     pub fn is_periodic(&self, axis: usize) -> bool {
         matches!(self.axes[axis], AxisBoundary::Periodic)
+    }
+
+    /// Resolve the requested demagnetization policy for one executable FDM
+    /// plan.  Periodic local operators plus an open demagnetization kernel are
+    /// not a legal physical realization and must fail before either runtime
+    /// lane is constructed.
+    pub fn resolve_demag_boundary(
+        &self,
+        demag_enabled: bool,
+    ) -> Result<ResolvedFdmDemagBoundaryIR, String> {
+        if self.demag == FdmDemagPeriodicityIR::PeriodicAirboxK0 {
+            return Err(
+                "FDM periodic demag does not support pbc.demag='periodic_airbox_k0'; use 'open' without periodic axes or 'truncated_images'".to_string(),
+            );
+        }
+        if !demag_enabled {
+            return Ok(ResolvedFdmDemagBoundaryIR::Open);
+        }
+        if self.has_any_periodic() && self.demag == FdmDemagPeriodicityIR::Open {
+            return Err(
+                "FDM periodic demag requires pbc.demag='truncated_images'; pbc.demag='open' is incompatible with periodic axes".to_string(),
+            );
+        }
+        if self.demag == FdmDemagPeriodicityIR::TruncatedImages && self.has_any_periodic() {
+            let requested = self.image_counts.unwrap_or([10, 10, 10]);
+            let mut image_counts = [0; 3];
+            for (axis, count) in image_counts.iter_mut().enumerate() {
+                if self.is_periodic(axis) {
+                    *count = requested[axis];
+                }
+            }
+            return Ok(ResolvedFdmDemagBoundaryIR::PeriodicTruncatedImages {
+                image_counts,
+            });
+        }
+        Ok(ResolvedFdmDemagBoundaryIR::Open)
     }
 }
 

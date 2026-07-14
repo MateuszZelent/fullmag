@@ -9089,6 +9089,59 @@ fn fdm_boundary_params_none_when_not_set() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[test]
+fn fdm_pbc_demag_resolution_matrix_is_lane_independent() {
+    let axes = [
+        [AxisBoundary::Open, AxisBoundary::Open, AxisBoundary::Open],
+        [AxisBoundary::Periodic, AxisBoundary::Open, AxisBoundary::Open],
+        [AxisBoundary::Periodic, AxisBoundary::Periodic, AxisBoundary::Open],
+        [AxisBoundary::Periodic, AxisBoundary::Periodic, AxisBoundary::Periodic],
+    ];
+    for device in [None, Some("cuda")] {
+        for axis_set in axes {
+            for demag in [
+                FdmDemagPeriodicityIR::Open,
+                FdmDemagPeriodicityIR::TruncatedImages,
+            ] {
+                let mut ir = ProblemIR::bootstrap_example();
+                ir.energy_terms.push(EnergyTermIR::Demag {
+                    realization: fullmag_ir::RequestedFemDemagIR::Auto,
+                });
+                if let Some(device) = device {
+                    ir.problem_meta.runtime_metadata.insert(
+                        "runtime_selection".to_string(),
+                        serde_json::json!({"device": device, "device_index": 0}),
+                    );
+                }
+                ir.pbc = Some(FdmPeriodicityIR {
+                    axes: axis_set,
+                    demag,
+                    image_counts: Some([4, 4, 4]),
+                });
+                let result = plan(&ir);
+                let has_periodic_axis = axis_set
+                    .iter()
+                    .any(|axis| *axis == AxisBoundary::Periodic);
+                if demag == FdmDemagPeriodicityIR::Open && has_periodic_axis {
+                    let error = result.expect_err("periodic + open demag must fail closed");
+                    assert!(
+                        error.reasons.iter().any(|reason| {
+                            reason.contains(
+                                "FDM periodic demag requires pbc.demag='truncated_images'",
+                            )
+                        }),
+                        "unexpected rejection for device={device:?}, axes={axis_set:?}: {:?}",
+                        error.reasons
+                    );
+                } else {
+                    let plan = result.expect("legal FDM PBC matrix case should plan");
+                    assert!(matches!(plan.backend_plan, BackendPlanIR::Fdm(_)));
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn fdm_pbc_with_exchange_plans() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.pbc = Some(FdmPeriodicityIR {

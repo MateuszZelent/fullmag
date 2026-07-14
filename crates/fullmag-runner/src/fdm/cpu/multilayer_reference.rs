@@ -445,6 +445,12 @@ fn build_contexts_and_states(
                 problem.demag_image_counts = ic;
             }
         }
+        problem.set_demag_boundary(
+            crate::fdm::resolve_fdm_demag_boundary_for_periodicity(
+                plan.periodicity.as_ref(),
+                plan.enable_demag,
+            )?,
+        );
         let state = problem
             .new_state(layer.initial_magnetization.clone())
             .map_err(|error| RunError {

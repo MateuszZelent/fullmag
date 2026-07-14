@@ -2,7 +2,7 @@
 
 use crate::{
     CellSize, EffectiveFieldObservables, EffectiveFieldTerms, EngineError, EvaluationRequest,
-    ExchangeLlgState, ExchangeLlgStateSoA, FdmBoundaryPolicy, FftWorkspace, GridShape,
+    ExchangeLlgState, ExchangeLlgStateSoA, FdmBoundaryPolicy, FdmDemagBoundary, FftWorkspace, GridShape,
     IntegratorBuffers, LlgConfig, MaterialParameters, Result, StepReport, TimeIntegrator, Vector3,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -17,6 +17,10 @@ pub struct ExchangeLlgProblem {
     pub active_mask: Option<Vec<bool>>,
     /// Per-axis periodic / open boundary policy for exchange and DMI stencils.
     pub boundary_policy: FdmBoundaryPolicy,
+    /// Resolved demagnetization boundary realization.  Runtime construction
+    /// must consume this value rather than infer demag semantics from local
+    /// periodic stencil flags.
+    pub demag_boundary: FdmDemagBoundary,
     /// Per-axis image counts for truncated-images periodic demag.
     /// Only used when `boundary_policy` has periodic axes.
     pub demag_image_counts: [u32; 3],
@@ -89,6 +93,7 @@ impl ExchangeLlgProblem {
             terms,
             active_mask,
             boundary_policy: FdmBoundaryPolicy::default(),
+            demag_boundary: FdmDemagBoundary::Open,
             demag_image_counts: [10, 10, 10],
             temperature: 0.0,
             thermal_dt: 1e-13,
@@ -118,7 +123,17 @@ impl ExchangeLlgProblem {
 
     /// Build a reusable FFT workspace matching this problem's grid.
     pub fn create_workspace(&self) -> FftWorkspace {
-        if self.boundary_policy.has_any_periodic() {
+        if self.boundary_policy.has_any_periodic()
+            && matches!(
+                self.demag_boundary,
+                FdmDemagBoundary::PeriodicTruncatedImages { .. }
+            )
+        {
+            let FdmDemagBoundary::PeriodicTruncatedImages { image_counts } =
+                self.demag_boundary
+            else {
+                unreachable!()
+            };
             FftWorkspace::new_with_boundary(
                 self.grid.nx,
                 self.grid.ny,
@@ -127,7 +142,7 @@ impl ExchangeLlgProblem {
                 self.cell_size.dy,
                 self.cell_size.dz,
                 &self.boundary_policy,
-                self.demag_image_counts,
+                image_counts,
             )
         } else {
             FftWorkspace::new(
@@ -490,6 +505,10 @@ impl ExchangeLlgProblem {
             .map(|values| values[i])
             .unwrap_or(self.material.damping)
     }
+
+    pub fn set_demag_boundary(&mut self, boundary: FdmDemagBoundary) {
+        self.demag_boundary = boundary;
+    }
 }
 
 fn zero_vectors(len: usize) -> Vec<Vector3> {
@@ -506,6 +525,7 @@ impl Clone for ExchangeLlgProblem {
             terms: self.terms.clone(),
             active_mask: self.active_mask.clone(),
             boundary_policy: self.boundary_policy,
+            demag_boundary: self.demag_boundary,
             demag_image_counts: self.demag_image_counts,
             temperature: self.temperature,
             thermal_dt: self.thermal_dt,
@@ -526,6 +546,8 @@ impl PartialEq for ExchangeLlgProblem {
             && self.dynamics == other.dynamics
             && self.terms == other.terms
             && self.active_mask == other.active_mask
+            && self.boundary_policy == other.boundary_policy
+            && self.demag_boundary == other.demag_boundary
             && self.temperature == other.temperature
             && self.thermal_dt == other.thermal_dt
             && self.thermal_seed == other.thermal_seed

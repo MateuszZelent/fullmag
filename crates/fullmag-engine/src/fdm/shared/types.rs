@@ -113,6 +113,17 @@ impl FdmBoundaryPolicy {
     }
 }
 
+/// Resolved demagnetization kernel boundary realization.
+///
+/// This is intentionally separate from the local exchange/DMI boundary
+/// policy: periodic local stencils with an open demag kernel are a different
+/// (and currently unsupported) physical request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FdmDemagBoundary {
+    Open,
+    PeriodicTruncatedImages { image_counts: [u32; 3] },
+}
+
 /// Compute neighbor index along one axis with clamp or wrap semantics.
 ///
 /// - `i`: current index along the axis

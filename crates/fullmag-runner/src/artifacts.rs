@@ -74,6 +74,24 @@ fn count_periodic_pairs_by_id<T>(
 
 fn mesh_runtime_metadata(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Value {
     match &plan.backend_plan {
+        BackendPlanIR::Fdm(fdm) => serde_json::json!({
+            "backend": "fdm",
+            "requested_periodicity": fdm.periodicity,
+            "resolved_demag_boundary": fdm
+                .periodicity
+                .as_ref()
+                .and_then(|pbc| pbc.resolve_demag_boundary(fdm.enable_demag).ok()),
+            "grid_cells": fdm.grid.cells,
+        }),
+        BackendPlanIR::FdmMultilayer(fdm) => serde_json::json!({
+            "backend": "fdm_multilayer",
+            "requested_periodicity": fdm.periodicity,
+            "resolved_demag_boundary": fdm
+                .periodicity
+                .as_ref()
+                .and_then(|pbc| pbc.resolve_demag_boundary(fdm.enable_demag).ok()),
+            "grid_cells": fdm.common_cells,
+        }),
         BackendPlanIR::Fem(fem) => serde_json::json!({
             "mesh_name": fem.mesh.mesh_name,
             "node_count": fem.mesh.nodes.len(),
@@ -2810,6 +2828,29 @@ mod tests {
             },
             provenance: ProvenancePlanIR { notes: Vec::new() },
         }
+    }
+
+    #[test]
+    fn fdm_mesh_metadata_preserves_requested_and_resolved_pbc_demag() {
+        let mut plan = test_execution_plan(None);
+        let BackendPlanIR::Fdm(fdm) = &mut plan.backend_plan else {
+            panic!("expected FDM plan");
+        };
+        fdm.periodicity = Some(fullmag_ir::FdmPeriodicityIR {
+            axes: [
+                fullmag_ir::AxisBoundary::Periodic,
+                fullmag_ir::AxisBoundary::Open,
+                fullmag_ir::AxisBoundary::Open,
+            ],
+            demag: fullmag_ir::FdmDemagPeriodicityIR::TruncatedImages,
+            image_counts: Some([4, 0, 0]),
+        });
+        let metadata = mesh_runtime_metadata(&plan);
+        assert_eq!(metadata["requested_periodicity"]["demag"], "truncated_images");
+        assert_eq!(
+            metadata["resolved_demag_boundary"]["periodic_truncated_images"]["image_counts"],
+            serde_json::json!([4, 0, 0])
+        );
     }
 
     fn test_multilayer_execution_plan() -> ExecutionPlanIR {

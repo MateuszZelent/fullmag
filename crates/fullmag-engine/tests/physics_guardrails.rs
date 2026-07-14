@@ -150,7 +150,9 @@ fn guardrail_fdm_periodic_demag_workspace_uses_periodic_padding() {
         },
     );
     p.boundary_policy = periodic_x_policy();
-    p.demag_image_counts = [3, 0, 0];
+    p.demag_boundary = FdmDemagBoundary::PeriodicTruncatedImages {
+        image_counts: [3, 0, 0],
+    };
 
     let ws = p.create_workspace();
     assert_eq!(
@@ -159,6 +161,28 @@ fn guardrail_fdm_periodic_demag_workspace_uses_periodic_padding() {
     );
     assert_eq!(ws.py, p.grid.ny * 2, "open y axis should keep 2N padding");
     assert_eq!(ws.pz, p.grid.nz * 2, "open z axis should keep 2N padding");
+}
+
+#[test]
+fn guardrail_fdm_periodic_local_policy_does_not_reinterpret_open_demag() {
+    let mut p = permalloy_problem(
+        5,
+        4,
+        3,
+        2.0,
+        TimeIntegrator::Heun,
+        EffectiveFieldTerms {
+            exchange: false,
+            demag: true,
+            ..Default::default()
+        },
+    );
+    p.boundary_policy = periodic_x_policy();
+
+    let ws = p.create_workspace();
+    assert_eq!(ws.px, p.grid.nx * 2);
+    assert_eq!(ws.py, p.grid.ny * 2);
+    assert_eq!(ws.pz, p.grid.nz * 2);
 }
 
 /// Uniform sphere/ellipsoid average demag field sanity.

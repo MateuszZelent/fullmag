@@ -310,6 +310,24 @@ pub enum FdmDemagPeriodicityIR {
 pub periodicity: Option<FdmPeriodicityIR>,
 ```
 
+The planner keeps this requested policy separate from the runtime resolution.
+Every executable FDM lane consumes the canonical resolved boundary enum:
+
+```rust
+enum ResolvedFdmDemagBoundaryIR {
+    Open,
+    PeriodicTruncatedImages { image_counts: [u32; 3] },
+}
+```
+
+When demagnetization is enabled, `axes` containing any periodic axis together
+with `demag = "open"` is rejected before allocation.  This request would make
+the local exchange/DMI stencils periodic while leaving the dipolar kernel open,
+and historically CPU and CUDA interpreted it differently.  `truncated_images`
+resolves image counts once (defaulting to 10 on periodic axes and zero on open
+axes); both CPU and CUDA consume that same value.  A no-demag plan may retain
+periodic local operators and resolves its unused demag boundary to `open`.
+
 `MeshPeriodicBoundaryPairIR` is enriched with:
 
 ```rust

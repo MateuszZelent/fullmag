@@ -7,6 +7,32 @@ pub(crate) mod schedules;
 use crate::types::RunError;
 use std::collections::BTreeSet;
 
+/// Resolve the planner's requested FDM PBC demagnetization policy once for
+/// every runtime lane.  CPU and CUDA must not infer kernel padding directly
+/// from local periodic stencil flags.
+pub(crate) fn resolve_fdm_demag_boundary(
+    plan: &fullmag_ir::FdmPlanIR,
+) -> Result<fullmag_engine::FdmDemagBoundary, RunError> {
+    resolve_fdm_demag_boundary_for_periodicity(plan.periodicity.as_ref(), plan.enable_demag)
+}
+
+pub(crate) fn resolve_fdm_demag_boundary_for_periodicity(
+    periodicity: Option<&fullmag_ir::FdmPeriodicityIR>,
+    demag_enabled: bool,
+) -> Result<fullmag_engine::FdmDemagBoundary, RunError> {
+    let resolved = periodicity
+        .map(|pbc| pbc.resolve_demag_boundary(demag_enabled))
+        .transpose()
+        .map_err(|reason| RunError { message: reason })?
+        .unwrap_or(fullmag_ir::ResolvedFdmDemagBoundaryIR::Open);
+    Ok(match resolved {
+        fullmag_ir::ResolvedFdmDemagBoundaryIR::Open => fullmag_engine::FdmDemagBoundary::Open,
+        fullmag_ir::ResolvedFdmDemagBoundaryIR::PeriodicTruncatedImages { image_counts } => {
+            fullmag_engine::FdmDemagBoundary::PeriodicTruncatedImages { image_counts }
+        }
+    })
+}
+
 /// Re-check the planner's resolved single-grid budget immediately before any
 /// CPU/CUDA engine allocation.  The runner must reject forged or stale plans
 /// whose payload lengths do not match the checked grid cell count.

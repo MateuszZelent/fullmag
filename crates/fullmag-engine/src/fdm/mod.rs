@@ -30,5 +30,6 @@ pub use shared::terms::{
 };
 pub use shared::types::{
     neighbor_index, AdaptiveStepConfig, AxisBoundary, CellSize, EngineError, EvaluationRequest,
-    FdmBoundaryPolicy, GridShape, LlgConfig, MaterialParameters, Result, TimeIntegrator,
+    FdmBoundaryPolicy, FdmDemagBoundary, GridShape, LlgConfig, MaterialParameters, Result,
+    TimeIntegrator,
 };
