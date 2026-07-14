@@ -48,6 +48,13 @@ pub struct PeriodicMeshCertificateV6 {
 - `cargo test -p fullmag-ir --lib --no-fail-fast` — 30 passed; focused mirrored DG0 mismatch/acceptance tests — 2 passed.
 - Native managed contract, Python generator, separate magnetic/scalar FE class hashes, owner/material realization hash and pełne explicit edge/corner fixtures remain open.
 
+### Evidence update (2026-07-14, Python certificate retention)
+
+- [x] Gmsh extraction now performs the strict post-extraction v6 check and retains the accepted certificate in `MeshData.periodic_mesh_certificate` rather than discarding the result.
+- [x] The certificate survives `MeshData.oriented_copy()`, JSON/NPZ serialization and `MeshData.to_ir`; remesh responses and spilled topology artifacts include the same certificate payload.
+- [x] RED/GREEN evidence: `test_certify_extracted_periodic_mesh_rejects_missing_mirrored_face` failed before the field existed and now passes; full Python meshing suite — 246 passed, 1 skipped.
+- [ ] Rust `MeshIR`/planner provenance, native contract and managed/browser evidence still need to consume and independently revalidate this retained evidence; MESH-PBC-FEM-002 remains open.
+
 ### Task 3: commit
 
 - [ ] Commit: `git add docs/physics docs/adr/0012-canonicalization-backbone.md packages/fullmag-py crates/fullmag-ir crates/fullmag-plan backends/fem && git commit -m "feat(mesh): enforce periodic mesh certificate v6"`.

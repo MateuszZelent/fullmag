@@ -429,13 +429,14 @@ def _extract_mesh_data(
         per_domain_quality=aligned_per_domain_quality,
     )
     if periodic_pair_specs:
-        certify_extracted_periodic_mesh(
+        certificate = certify_extracted_periodic_mesh(
             mesh.nodes,
             mesh.boundary_faces,
             mesh.boundary_markers,
             mesh.periodic_boundary_pairs,
             mesh.periodic_node_pairs,
         )
+        mesh = replace(mesh, periodic_mesh_certificate=certificate)
     return mesh
 
 

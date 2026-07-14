@@ -302,6 +302,7 @@ def _write_topology_artifact_if_needed(
         "boundary_markers": mesh_data.boundary_markers.tolist(),
         "periodic_boundary_pairs": list(mesh_data.periodic_boundary_pairs),
         "periodic_node_pairs": list(mesh_data.periodic_node_pairs),
+        "periodic_mesh_certificate": mesh_data.periodic_mesh_certificate,
     }
     with os.fdopen(handle, "w", encoding="utf-8") as fp:
         json.dump(payload, fp, separators=(",", ":"))
@@ -424,6 +425,7 @@ def _mesh_result_payload(
         "boundary_markers": mesh.boundary_markers.tolist() if inline_topology else [],
         "periodic_boundary_pairs": list(mesh.periodic_boundary_pairs) if inline_topology else [],
         "periodic_node_pairs": list(mesh.periodic_node_pairs) if inline_topology else [],
+        "periodic_mesh_certificate": mesh.periodic_mesh_certificate,
         "mesh_statistics": mesh_statistics,
         "generation_mode": generation_mode,
         "mesh_provenance": mesh_provenance,

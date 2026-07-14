@@ -4529,6 +4529,19 @@ class MeshScaffoldTests(unittest.TestCase):
                 node_pairs,
             )
 
+        mesh = MeshData(
+            nodes=nodes,
+            elements=elements,
+            element_markers=np.ones(elements.shape[0], dtype=np.int32),
+            boundary_faces=faces,
+            boundary_markers=markers,
+            periodic_boundary_pairs=pairs,
+            periodic_node_pairs=node_pairs,
+            periodic_mesh_certificate=certificate,
+        )
+        self.assertEqual(mesh.periodic_mesh_certificate, certificate)
+        self.assertEqual(mesh.to_ir("mirrored")["periodic_mesh_certificate"], certificate)
+
     def test_create_occ_geometry_supports_csg_and_translate(self) -> None:
         class _FakeOccApi:
             def __init__(self) -> None:
