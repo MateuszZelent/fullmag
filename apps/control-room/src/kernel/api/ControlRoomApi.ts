@@ -32,6 +32,9 @@ import {
   DATA_ARTIFACT_PATH,
   DATA_DOMAIN_META_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
+  DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH,
+  DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH,
+  DATA_FDM_REGION_MEMBERSHIPS_PATH,
   DATA_FIELD_META_PATH,
   DATA_FIELD_VECTOR_PATH,
   DATA_MESH_REGION_MEMBERSHIP_PATH,
@@ -229,6 +232,7 @@ import type {
   MeshRealizedSizeFieldsResource,
   MeshRegionMembershipListResource,
   MeshRegionMembershipResource,
+  FdmRegionMembershipResource,
   MeshRegionQualityResource,
   MeshSemanticsResource,
   MeshSharedDomainConfigReplaceRequest,
@@ -766,6 +770,22 @@ export class ControlRoomApi {
       this.requestJson<MeshRegionMembershipListResource>(
         DATA_MESH_REGION_MEMBERSHIPS_PATH,
         options,
+      ),
+    fdmRegionMemberships: (options?: RequestOptions) =>
+      this.requestJson<FdmRegionMembershipResource>(
+        DATA_FDM_REGION_MEMBERSHIPS_PATH,
+        options,
+      ),
+    fdmRegionMembershipBytes: (options?: BinaryRequestOptions) =>
+      this.requestBinaryBytes(DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH, options),
+    fdmRegionMembershipRegionBytes: (
+      regionId: string,
+      options?: BinaryRequestOptions,
+    ) =>
+      this.requestBinaryBytes(
+        DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH,
+        options,
+        { region_id: regionId },
       ),
     scalars: {
       window: (

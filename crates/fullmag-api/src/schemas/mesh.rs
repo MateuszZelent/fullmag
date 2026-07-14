@@ -674,6 +674,34 @@ pub struct MeshRegionMembershipListResource {
     pub unresolved_region_ids: Vec<String>,
 }
 
+/// Thin descriptor for realized FDM cell membership. The mask itself is kept
+/// on the binary data plane under the companion FMRM resource.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct FdmRegionLegendEntryResource {
+    pub numeric_id: u32,
+    pub object_id: String,
+    pub region_id: String,
+    pub priority: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct FdmRegionMembershipResource {
+    pub schema_version: String,
+    pub mesh_revision: u64,
+    pub region_membership_revision: u64,
+    pub freshness: String,
+    pub binary_path: String,
+    pub grid_fingerprint: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region_legend_fingerprint: Option<String>,
+    pub origin_m: [f64; 3],
+    pub counts: [u32; 3],
+    pub cell_m: [f64; 3],
+    pub cell_count: u64,
+    pub region_legend: Vec<FdmRegionLegendEntryResource>,
+    pub encoding: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct MeshRegionResource {
     pub region_id: String,

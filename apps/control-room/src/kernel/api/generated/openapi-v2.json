@@ -2941,6 +2941,116 @@
         ],
         "type": "object"
       },
+      "FdmRegionLegendEntryResource": {
+        "description": "Thin descriptor for realized FDM cell membership. The mask itself is kept\non the binary data plane under the companion FMRM resource.",
+        "properties": {
+          "numeric_id": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "object_id": {
+            "type": "string"
+          },
+          "priority": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "region_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "numeric_id",
+          "object_id",
+          "region_id",
+          "priority"
+        ],
+        "type": "object"
+      },
+      "FdmRegionMembershipResource": {
+        "properties": {
+          "binary_path": {
+            "type": "string"
+          },
+          "cell_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cell_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "counts": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "encoding": {
+            "type": "string"
+          },
+          "freshness": {
+            "type": "string"
+          },
+          "grid_fingerprint": {
+            "type": "string"
+          },
+          "mesh_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "origin_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "region_legend": {
+            "items": {
+              "$ref": "#/components/schemas/FdmRegionLegendEntryResource"
+            },
+            "type": "array"
+          },
+          "region_legend_fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "region_membership_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "mesh_revision",
+          "region_membership_revision",
+          "freshness",
+          "binary_path",
+          "grid_fingerprint",
+          "origin_m",
+          "counts",
+          "cell_m",
+          "cell_count",
+          "region_legend",
+          "encoding"
+        ],
+        "type": "object"
+      },
       "FdmVisualizationPatch": {
         "properties": {
           "x_chosen_size": {
@@ -20859,6 +20969,152 @@
           },
           "416": {
             "description": "Requested topology byte range is not satisfiable"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/fdm-region-membership": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_fdm_region_membership",
+        "parameters": [
+          {
+            "description": "Strong ETag from a previous FMRM response",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional single byte range for the FMRM payload",
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Binary realized FDM cell membership (FMRM)"
+          },
+          "206": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Partial FMRM payload"
+          },
+          "304": {
+            "description": "FMRM payload not modified for the supplied ETag"
+          },
+          "404": {
+            "description": "No realized FDM region membership artifact"
+          },
+          "416": {
+            "description": "Requested FMRM byte range is not satisfiable"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/fdm-region-membership/{region_id}": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_fdm_region_membership_region_id",
+        "parameters": [
+          {
+            "description": "Canonical authored region ID",
+            "in": "path",
+            "name": "region_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Strong ETag from a previous scoped FMRM response",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional single byte range for the FMRM payload",
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Scoped binary realized FDM cell membership (FMRM)"
+          },
+          "206": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Partial scoped FMRM payload"
+          },
+          "304": {
+            "description": "Scoped FMRM payload not modified for the supplied ETag"
+          },
+          "404": {
+            "description": "No realized FDM membership or unknown region ID"
+          },
+          "416": {
+            "description": "Requested FMRM byte range is not satisfiable"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/fdm-region-memberships": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_fdm_region_memberships",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FdmRegionMembershipResource"
+                }
+              }
+            },
+            "description": "Thin descriptor for realized FDM cell membership"
+          },
+          "404": {
+            "description": "No realized FDM region membership artifact"
           }
         },
         "tags": [

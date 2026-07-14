@@ -2,6 +2,11 @@ export { decodeCrossSection } from "./crossSectionCodec";
 export { decodeCrossSectionQuality } from "./crossSectionQualityCodec";
 export { asDecodedComplexFieldVector, decodeFieldVector } from "./fieldVectorCodec";
 export { decodeMeshQualityData } from "./meshQualityDataCodec";
+export {
+  decodeFdmRegionMembership,
+  FMRM_HEADER_LEN,
+  type DecodedFdmRegionMembership,
+} from "./fdmRegionMembershipCodec";
 export { decodeTableRows } from "./tableRowsCodec";
 export {
   decodeTopology,

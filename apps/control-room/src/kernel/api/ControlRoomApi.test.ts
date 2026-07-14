@@ -19,6 +19,10 @@ const resourceRevisions: LiveStatusResource["resources"] = {
   fields_revision: 0,
   mesh_build_revision: 0,
   mesh_revision: 0,
+  region_coefficients_revision: 0,
+  region_initial_state_revision: 0,
+  region_membership_revision: 0,
+  region_topology_revision: 0,
   scalars_revision: 0,
   scene_revision: null,
   slice_revision: 0,
@@ -3320,6 +3324,48 @@ describe("ControlRoomApi", () => {
         method: "GET",
         url: "http://127.0.0.1:8765/v2/sessions/current/data/mesh-region-memberships",
       },
+    ]);
+  });
+
+  it("loads realized FDM membership descriptor and scoped binary bytes", async () => {
+    const requests: string[] = [];
+    const binary = new Uint8Array(68);
+    binary.set([..."FMRM"].map((value) => value.charCodeAt(0)), 0);
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push(`${init?.method ?? "GET"} ${String(url)}`);
+        if (String(url).endsWith("fdm-region-memberships")) {
+          return jsonResponse({
+            binary_path: "mesh/fdm_region_membership.v1.bin",
+            cell_count: 1,
+            cell_m: [1e-9, 1e-9, 1e-9],
+            counts: [1, 1, 1],
+            encoding: "FMRM:u32_le",
+            freshness: "current",
+            grid_fingerprint: "0".repeat(64),
+            mesh_revision: 9,
+            origin_m: [0, 0, 0],
+            region_legend: [
+              { numeric_id: 1, object_id: "body", region_id: "body:core", priority: 0 },
+            ],
+            region_membership_revision: 4,
+            schema_version: "fdm_region_membership.v1",
+          });
+        }
+        return binaryResponse(binary.buffer, { headers: { etag: '"fdm-membership"' } });
+      },
+    });
+
+    const descriptor = await api.data.fdmRegionMemberships();
+    const membership = await api.data.fdmRegionMembershipRegionBytes("body:core");
+
+    expect(descriptor.region_legend[0]?.numeric_id).toBe(1);
+    expect(membership.status).toBe("ready");
+    expect(membership.status === "ready" ? membership.data.byteLength : 0).toBe(68);
+    expect(requests).toEqual([
+      "GET http://127.0.0.1:8765/v2/sessions/current/data/fdm-region-memberships",
+      "GET http://127.0.0.1:8765/v2/sessions/current/data/fdm-region-membership/body%3Acore",
     ]);
   });
 
