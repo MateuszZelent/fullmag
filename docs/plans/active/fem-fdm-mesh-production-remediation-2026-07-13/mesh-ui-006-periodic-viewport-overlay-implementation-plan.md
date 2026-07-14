@@ -41,3 +41,10 @@ export type PeriodicOverlayModel = { facePairs: FacePairGlyph[]; nodeLinks: Link
 
 **Exit:** użytkownik może zlokalizować pary i błędy seam w 3D; layer nie pokazuje stale certificate i nie redrawuje w idle.
 
+### Bounded implementation evidence — 2026-07-14
+
+- [x] Added a pure `buildPeriodicOverlayModel` adapter that consumes the resource-first periodic-pairs resource plus current FMMT topology, bounds pair/node/unpaired glyph counts, derives face centroids and node links, and marks mixed-domain seams explicitly.
+- [x] Added fail-closed stale/invalid handling keyed by mesh revision and topology/certificate fingerprints; no stale certificate produces renderable glyphs.
+- [x] Added a demand-compatible `PeriodicPairsOverlayLayer` in the unified viewport and Catppuccin token colors for source faces, node links, translations, and unpaired topology. Commit `28466c1c`.
+- [x] Added model fixtures for valid, unpaired, mixed-domain, stale-fingerprint, and invalid-certificate cases. Vitest, typecheck, and browser/WebGL smoke remain blocked in this worktree because frontend dependencies and managed browser runtime are unavailable.
+- [ ] Full closure still requires binary-data-plane consumption for large pair payloads, render/browser smoke with a real FMMT/FMPP fixture, and production evidence that the overlay remains bounded on large meshes.
