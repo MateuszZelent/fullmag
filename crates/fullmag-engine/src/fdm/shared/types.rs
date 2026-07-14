@@ -94,6 +94,17 @@ pub struct FdmBoundaryPolicy {
     pub z: AxisBoundary,
 }
 
+/// Planner-resolved periodic FFT workspace contract consumed by runtime
+/// allocators.  The runner carries this value across the plan boundary so an
+/// allocator cannot silently reinterpret image counts or padding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResolvedFdmPeriodicWorkspace {
+    pub image_counts: [u32; 3],
+    pub padded_counts: [u64; 3],
+    pub image_terms: u64,
+    pub estimated_bytes: u64,
+}
+
 impl Default for FdmBoundaryPolicy {
     fn default() -> Self {
         Self {

@@ -64,6 +64,12 @@ fn validate_single_grid_budget_with_policy(
     .map_err(|error| RunError {
         message: format!("FDM grid budget rejected before allocation: {error}"),
     })?;
+    validate_resolved_periodic_workspace(
+        plan.periodicity.as_ref(),
+        plan.resolved_periodic_images.as_ref(),
+        plan.grid.cells,
+        plan.precision,
+    )?;
     let _legacy_certificate: fullmag_ir::FdmGridCertificateIR;
     let certificate = match plan.grid_certificate.as_ref() {
         Some(certificate) => certificate,
@@ -177,6 +183,12 @@ pub(crate) fn validate_multilayer_grid_budget(
     .map_err(|error| RunError {
         message: format!("FDM common grid budget rejected before allocation: {error}"),
     })?;
+    validate_resolved_periodic_workspace(
+        plan.periodicity.as_ref(),
+        plan.resolved_periodic_images.as_ref(),
+        plan.common_cells,
+        plan.precision,
+    )?;
     let _legacy_certificate: fullmag_ir::FdmGridCertificateIR;
     let certificate = match plan.grid_certificate.as_ref() {
         Some(certificate) => certificate,
@@ -367,6 +379,34 @@ pub(crate) fn validate_multilayer_grid_budget(
     Ok(cost.cells)
 }
 
+fn validate_resolved_periodic_workspace(
+    periodicity: Option<&fullmag_ir::FdmPeriodicityIR>,
+    resolved: Option<&fullmag_ir::ResolvedPeriodicImagesIR>,
+    grid_counts: [u32; 3],
+    precision: fullmag_ir::ExecutionPrecision,
+) -> Result<(), RunError> {
+    let Some(periodicity) = periodicity else {
+        if resolved.is_some() {
+            return Err(RunError {
+                message: "resolved periodic workspace is present without requested periodicity"
+                    .to_string(),
+            });
+        }
+        return Ok(());
+    };
+    let expected = periodicity
+        .resolve_periodic_images(grid_counts, precision)
+        .map_err(|reason| RunError { message: reason })?;
+    if expected.as_ref() != resolved {
+        return Err(RunError {
+            message: format!(
+                "resolved periodic workspace contract mismatch: expected={expected:?} plan={resolved:?}"
+            ),
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::validate_single_grid_budget;
@@ -442,5 +482,33 @@ mod tests {
         let error = super::validate_single_grid_budget_with_policy(&plan, false)
             .expect_err("production policy must reject missing certificates");
         assert!(error.message.contains("certificate is required"));
+    }
+
+    #[test]
+    fn stale_resolved_periodic_workspace_is_rejected_before_lane_allocation() {
+        let mut plan = FdmPlanIR::default();
+        plan.grid.cells = [8, 8, 8];
+        plan.cell_size = [1.0, 1.0, 1.0];
+        plan.initial_magnetization = vec![[0.0, 0.0, 1.0]; 512];
+        plan.periodicity = Some(fullmag_ir::FdmPeriodicityIR {
+            axes: [
+                fullmag_ir::AxisBoundary::Periodic,
+                fullmag_ir::AxisBoundary::Open,
+                fullmag_ir::AxisBoundary::Open,
+            ],
+            demag: fullmag_ir::FdmDemagPeriodicityIR::TruncatedImages,
+            image_counts: Some([3, 0, 0]),
+        });
+        plan.resolved_periodic_images = Some(fullmag_ir::ResolvedPeriodicImagesIR {
+            requested_image_counts: [3, 0, 0],
+            resolved_image_counts: [3, 0, 0],
+            padded_counts: [7, 16, 16],
+            image_terms: 7,
+            estimated_bytes: 393_216,
+            kernel: "newell_truncated_images_fft".to_string(),
+        });
+        let error = validate_single_grid_budget(&plan)
+            .expect_err("stale resolved workspace must fail before allocation");
+        assert!(error.message.contains("resolved periodic workspace contract mismatch"));
     }
 }

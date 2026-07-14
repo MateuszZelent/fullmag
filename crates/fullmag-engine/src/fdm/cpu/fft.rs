@@ -4,7 +4,9 @@ use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftPlanner};
 use std::sync::Arc;
 
-use crate::fdm::shared::types::{AxisBoundary, FdmBoundaryPolicy};
+use crate::fdm::shared::types::{
+    AxisBoundary, FdmBoundaryPolicy, ResolvedFdmPeriodicWorkspace,
+};
 
 use crate::newell;
 use crate::Vector3;
@@ -69,6 +71,14 @@ fn checked_workspace_budget(
     periodic: [bool; 3],
     image_counts: [u32; 3],
 ) -> Result<(), String> {
+    checked_workspace_resolution(cells, periodic, image_counts).map(|_| ())
+}
+
+fn checked_workspace_resolution(
+    cells: [usize; 3],
+    periodic: [bool; 3],
+    image_counts: [u32; 3],
+) -> Result<ResolvedFdmPeriodicWorkspace, String> {
     let mut image_terms = 1_u64;
     let mut padded = [0_u64; 3];
     for axis in 0..3 {
@@ -115,7 +125,12 @@ fn checked_workspace_budget(
             "periodic FFT workspace budget exceeded: {estimated_bytes} bytes > {MAX_WORKSPACE_BYTES}"
         ));
     }
-    Ok(())
+    Ok(ResolvedFdmPeriodicWorkspace {
+        image_counts,
+        padded_counts: padded,
+        image_terms,
+        estimated_bytes,
+    })
 }
 
 impl FftWorkspace {
@@ -258,6 +273,65 @@ impl FftWorkspace {
             image_counts,
         )?;
 
+        Ok(Self::new_with_boundary_unchecked(
+            nx,
+            ny,
+            nz,
+            dx,
+            dy,
+            dz,
+            boundary,
+            image_counts,
+        ))
+    }
+
+    /// Construct a workspace only when the planner-resolved workspace
+    /// contract exactly matches the dimensions and image policy supplied by
+    /// the runner.  This keeps allocation fail-closed at the runtime boundary.
+    pub fn try_new_with_boundary_and_resolution(
+        nx: usize,
+        ny: usize,
+        nz: usize,
+        dx: f64,
+        dy: f64,
+        dz: f64,
+        boundary: &FdmBoundaryPolicy,
+        image_counts: [u32; 3],
+        resolved: &ResolvedFdmPeriodicWorkspace,
+    ) -> Result<Self, String> {
+        let expected = checked_workspace_resolution(
+            [nx, ny, nz],
+            [
+                matches!(boundary.x, AxisBoundary::Periodic),
+                matches!(boundary.y, AxisBoundary::Periodic),
+                matches!(boundary.z, AxisBoundary::Periodic),
+            ],
+            image_counts,
+        )?;
+        if expected.image_counts != resolved.image_counts {
+            return Err(format!(
+                "resolved periodic workspace image_counts mismatch: expected {:?}, got {:?}",
+                expected.image_counts, resolved.image_counts
+            ));
+        }
+        if expected.padded_counts != resolved.padded_counts {
+            return Err(format!(
+                "resolved periodic workspace padded_counts mismatch: expected {:?}, got {:?}",
+                expected.padded_counts, resolved.padded_counts
+            ));
+        }
+        if expected.image_terms != resolved.image_terms {
+            return Err(format!(
+                "resolved periodic workspace image_terms mismatch: expected {}, got {}",
+                expected.image_terms, resolved.image_terms
+            ));
+        }
+        if expected.estimated_bytes != resolved.estimated_bytes {
+            return Err(format!(
+                "resolved periodic workspace estimated_bytes mismatch: expected {}, got {}",
+                expected.estimated_bytes, resolved.estimated_bytes
+            ));
+        }
         Ok(Self::new_with_boundary_unchecked(
             nx,
             ny,

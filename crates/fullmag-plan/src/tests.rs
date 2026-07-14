@@ -9504,6 +9504,14 @@ fn fdm_cpu_pbc_truncated_images_demag_plans() {
                 fdm.periodicity.as_ref().and_then(|pbc| pbc.image_counts),
                 Some([4, 4, 0])
             );
+            let resolved = fdm
+                .resolved_periodic_images
+                .as_ref()
+                .expect("planner must persist resolved periodic workspace cost");
+            assert_eq!(resolved.resolved_image_counts, [4, 4, 0]);
+            assert_eq!(resolved.padded_counts[0], u64::from(fdm.grid.cells[0]));
+            assert_eq!(resolved.padded_counts[1], u64::from(fdm.grid.cells[1]));
+            assert_eq!(resolved.padded_counts[2], u64::from(fdm.grid.cells[2]) * 2);
         }
         _ => panic!("expected FDM plan"),
     }
@@ -9560,6 +9568,10 @@ fn fdm_cuda_pbc_truncated_images_demag_plans() {
             assert_eq!(
                 fdm.periodicity.as_ref().and_then(|pbc| pbc.image_counts),
                 Some([4, 4, 0])
+            );
+            assert!(
+                fdm.resolved_periodic_images.is_some(),
+                "CUDA plan must carry the same resolved workspace contract"
             );
         }
         _ => panic!("expected FDM plan"),

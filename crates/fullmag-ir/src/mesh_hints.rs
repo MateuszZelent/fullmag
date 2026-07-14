@@ -87,6 +87,10 @@ pub struct FdmMultilayerPlanIR {
     /// Periodic boundary conditions configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub periodicity: Option<FdmPeriodicityIR>,
+    /// Planner-resolved periodic image/padding budget consumed by runtime
+    /// allocators for the common convolution grid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_periodic_images: Option<crate::execution::ResolvedPeriodicImagesIR>,
     pub integrator: IntegratorChoice,
     pub fixed_timestep: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

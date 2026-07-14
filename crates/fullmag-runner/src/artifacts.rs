@@ -82,10 +82,7 @@ fn mesh_runtime_metadata(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Valu
                 .as_ref()
                 .and_then(|pbc| pbc.resolve_demag_boundary(fdm.enable_demag).ok()),
             "resolved_periodic_images": fdm
-                .periodicity
-                .as_ref()
-                .and_then(|pbc| pbc.resolve_periodic_images(fdm.grid.cells, fdm.precision).ok())
-                .flatten(),
+                .resolved_periodic_images,
             "region_legend": fdm.grid_certificate.as_ref().map(|certificate| &certificate.region_legend),
             "region_legend_fingerprint": fdm
                 .grid_certificate
@@ -101,10 +98,7 @@ fn mesh_runtime_metadata(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Valu
                 .as_ref()
                 .and_then(|pbc| pbc.resolve_demag_boundary(fdm.enable_demag).ok()),
             "resolved_periodic_images": fdm
-                .periodicity
-                .as_ref()
-                .and_then(|pbc| pbc.resolve_periodic_images(fdm.common_cells, fdm.precision).ok())
-                .flatten(),
+                .resolved_periodic_images,
             "region_legend": fdm.grid_certificate.as_ref().map(|certificate| &certificate.region_legend),
             "region_legend_fingerprint": fdm
                 .grid_certificate
@@ -3006,6 +3000,18 @@ mod tests {
             backend_plan: BackendPlanIR::Fdm(FdmPlanIR {
                 grid: GridDimensions { cells: [4, 2, 1] },
                 cell_size: [2e-9, 2e-9, 5e-9],
+                grid_certificate: Some(
+                    fullmag_ir::FdmGridCertificateIR::new_with_masks(
+                        [0.0, 0.0, 0.0],
+                        [4, 2, 1],
+                        [2e-9, 2e-9, 5e-9],
+                        8,
+                        8 * fullmag_plan::FDM_GRID_ESTIMATED_BYTES_PER_CELL,
+                        active_mask.as_deref(),
+                        &[0; 8],
+                    )
+                    .expect("artifact fixture grid certificate should be valid"),
+                ),
                 region_mask: vec![0; 8],
                 active_mask,
                 initial_magnetization: vec![[1.0, 0.0, 0.0]; 8],
@@ -3078,6 +3084,13 @@ mod tests {
             demag: fullmag_ir::FdmDemagPeriodicityIR::TruncatedImages,
             image_counts: Some([4, 0, 0]),
         });
+        fdm.resolved_periodic_images = fdm
+            .periodicity
+            .as_ref()
+            .and_then(|pbc| {
+                pbc.resolve_periodic_images(fdm.grid.cells, fdm.precision)
+                    .expect("test PBC workspace should resolve")
+            });
         let metadata = mesh_runtime_metadata(&plan);
         assert_eq!(metadata["requested_periodicity"]["demag"], "truncated_images");
         assert_eq!(
@@ -3119,6 +3132,13 @@ mod tests {
             )
             .expect("FDM grid certificate should be valid"),
         );
+        fdm.resolved_periodic_images = fdm
+            .periodicity
+            .as_ref()
+            .and_then(|pbc| {
+                pbc.resolve_periodic_images(fdm.grid.cells, fdm.precision)
+                    .expect("test PBC workspace should resolve")
+            });
         let provenance = ExecutionProvenance {
             demag_operator_kind: Some("tensor_fft_newell".to_string()),
             fft_backend: Some("rustfft".to_string()),
@@ -3244,6 +3264,7 @@ mod tests {
                 mode: "multilayer_convolution".to_string(),
                 common_cells: [2, 1, 2],
                 grid_certificate: None,
+                resolved_periodic_images: None,
                 layers: vec![
                     FdmLayerPlanIR {
                         magnet_name: "bottom".to_string(),

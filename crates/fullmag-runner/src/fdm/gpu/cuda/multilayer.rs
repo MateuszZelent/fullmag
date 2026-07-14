@@ -2961,6 +2961,7 @@ mod tests {
         FdmMultilayerPlanIR {
             mode: "two_d_stack".to_string(),
             common_cells: [4, 4, 1],
+            resolved_periodic_images: None,
             layers: vec![
                 FdmLayerPlanIR {
                     magnet_name: "free".to_string(),
@@ -3047,6 +3048,7 @@ mod tests {
         FdmMultilayerPlanIR {
             mode: "three_d".to_string(),
             common_cells: [2, 1, 1],
+            resolved_periodic_images: None,
             field_refresh: None,
             layers: vec![
                 FdmLayerPlanIR {

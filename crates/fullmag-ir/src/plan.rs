@@ -10,6 +10,7 @@ use crate::{
     MaterialParameterNameIR, MechanicalBoundaryConditionIR, MechanicalLoadIR, MeshIR,
     ModeTrackingIR, OerstedRealization, OutputIR, RelaxStopIR, RelaxationAlgorithmIR, SeedPolicy,
     SpinWaveBoundaryConditionIR, ThermalSeedConfig, TimeDependenceIR,
+    ResolvedPeriodicImagesIR,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -435,6 +436,10 @@ pub struct FdmPlanIR {
     /// See `docs/physics/0600-periodic-boundary-conditions.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub periodicity: Option<FdmPeriodicityIR>,
+    /// Planner-resolved periodic image/padding budget consumed by runtime
+    /// allocators; requested periodicity remains in `periodicity` above.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_periodic_images: Option<ResolvedPeriodicImagesIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub integrator: Option<IntegratorChoice>,
     pub fixed_timestep: Option<f64>,

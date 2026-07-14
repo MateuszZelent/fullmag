@@ -9,7 +9,8 @@ use fullmag_engine::{
     EngineError, EvaluationRequest, ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA,
     FdmBoundaryPolicy, FftWorkspace, GridShape, IntegratorBuffers, LlgConfig,
     MagnetoelasticTermConfig, MaterialParameters, OerstedCylinderConfig, SlonczewskiSttConfig,
-    SotConfig, StepReport, TimeIntegrator, UniaxialAnisotropyConfig, Vector3, ZhangLiSttConfig,
+    ResolvedFdmPeriodicWorkspace, SotConfig, StepReport, TimeIntegrator,
+    UniaxialAnisotropyConfig, Vector3, ZhangLiSttConfig,
 };
 use fullmag_ir::{
     ExecutionPrecision, FdmPlanIR, IntegratorChoice, OutputIR, RelaxationAlgorithmIR,
@@ -557,6 +558,16 @@ pub(crate) fn build_snapshot_problem_and_state(
         }
     }
     problem.set_demag_boundary(crate::fdm::resolve_fdm_demag_boundary(plan)?);
+    problem.set_resolved_periodic_workspace(
+        plan.resolved_periodic_images
+            .as_ref()
+            .map(|resolved| ResolvedFdmPeriodicWorkspace {
+                image_counts: resolved.resolved_image_counts,
+                padded_counts: resolved.padded_counts,
+                image_terms: resolved.image_terms,
+                estimated_bytes: resolved.estimated_bytes,
+            }),
+    );
     // Set thermal noise parameters
     problem.temperature = plan.temperature.unwrap_or(0.0);
     if let Some(dt) = plan.fixed_timestep {

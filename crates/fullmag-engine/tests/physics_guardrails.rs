@@ -206,6 +206,32 @@ fn guardrail_fdm_periodic_workspace_checks_padding_overflow() {
 }
 
 #[test]
+fn guardrail_fdm_periodic_workspace_rejects_stale_resolved_contract_before_allocation() {
+    let boundary = periodic_x_policy();
+    let stale = fullmag_engine::ResolvedFdmPeriodicWorkspace {
+        image_counts: [3, 0, 0],
+        padded_counts: [7, 16, 16],
+        image_terms: 7,
+        estimated_bytes: 393_216,
+    };
+    let error = match FftWorkspace::try_new_with_boundary_and_resolution(
+        8,
+        8,
+        8,
+        1.0e-9,
+        1.0e-9,
+        1.0e-9,
+        &boundary,
+        [3, 0, 0],
+        &stale,
+    ) {
+        Ok(_) => panic!("stale planner workspace contract must fail before allocation"),
+        Err(error) => error,
+    };
+    assert!(error.contains("resolved periodic workspace padded_counts mismatch"));
+}
+
+#[test]
 fn guardrail_fdm_periodic_local_policy_does_not_reinterpret_open_demag() {
     let mut p = permalloy_problem(
         5,

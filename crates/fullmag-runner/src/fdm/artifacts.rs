@@ -224,7 +224,7 @@ pub(crate) fn pbc_provenance_artifacts(
         cell_m,
         grid_fingerprint,
         enable_demag,
-        precision,
+        resolved_periodic_images,
     ) = match
         &plan.backend_plan
     {
@@ -237,7 +237,7 @@ pub(crate) fn pbc_provenance_artifacts(
                 .as_ref()
                 .map(|certificate| certificate.grid_fingerprint.clone()),
             fdm.enable_demag,
-            fdm.precision,
+            fdm.resolved_periodic_images.as_ref(),
         ),
         BackendPlanIR::FdmMultilayer(fdm) => {
             let Some(certificate) = fdm.grid_certificate.as_ref() else {
@@ -250,7 +250,7 @@ pub(crate) fn pbc_provenance_artifacts(
                 certificate.cell_m,
                 Some(certificate.grid_fingerprint.clone()),
                 fdm.enable_demag,
-                fdm.precision,
+                fdm.resolved_periodic_images.as_ref(),
             )
         }
         _ => return Vec::new(),
@@ -268,9 +268,7 @@ pub(crate) fn pbc_provenance_artifacts(
     ];
     let resolved_demag_boundary = requested_periodicity
         .and_then(|pbc| pbc.resolve_demag_boundary(enable_demag).ok());
-    let resolved_periodic_images = requested_periodicity
-        .and_then(|pbc| pbc.resolve_periodic_images(counts, precision).ok())
-        .flatten();
+    let resolved_periodic_images = resolved_periodic_images.cloned();
     let padded_counts = resolved_periodic_images
         .as_ref()
         .map(|images| images.padded_counts)

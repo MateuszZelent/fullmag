@@ -36,7 +36,7 @@ pub struct ResolvedPeriodicImages {
 - [x] Materializować checked plan w `FdmPeriodicityIR::resolve_periodic_images`, z checked image terms, paddingiem `N`/`2N` i limitem 8 GiB; planner odrzuca przed runtime dla single-grid i multilayer.
 - [x] Publikować requested/resolved counts, padded counts, bytes i kernel w `mesh_runtime_metadata`; focused artifact test 1/1.
 - [x] Dodać wspólny `FftWorkspace::try_new_with_boundary` z tym samym checked image/padding/8 GiB budgetem; legacy constructor failuje jawnie przed alokacją zamiast cichego fallbacku. Engine guard tests: 2/2.
-- [ ] Przekazać serializowany resolved workspace do lane-specific CPU/CUDA FFT allocatorów i dodać osobne allocation evidence dla obu lane'ów.
+- [x] Przekazać serializowany resolved workspace przez `FdmPlanIR`/`FdmMultilayerPlanIR`; CPU FFT allocator konsumuje kontrakt dokładnie, a CPU/CUDA runner validators odrzucają rozjazd przed lane allocation.
 
 ### Task 3: production gate
 
@@ -52,3 +52,22 @@ pub struct ResolvedPeriodicImages {
 - `cargo test -p fullmag-runner fdm_mesh_metadata_preserves_requested_and_resolved_pbc_demag --no-fail-fast -- --nocapture`: 1/1.
 - `cargo test -p fullmag-engine --test physics_guardrails guardrail_fdm_periodic_workspace --no-fail-fast`: 2/2.
 - Remaining gap: the engine/CPU/CUDA workspace allocator still needs to consume the serialized resolved cost, plus managed `just` production proof.
+
+### Evidence update (2026-07-14, resolved-contract propagation)
+
+- `FdmPlanIR` i `FdmMultilayerPlanIR` przechowują `resolved_periodic_images` z
+  checked `image_counts`, `padded_counts`, `image_terms`, `estimated_bytes` i
+  kernel identity; planner testy CPU/CUDA potwierdzają obecność tego samego
+  kontraktu.
+- `FftWorkspace::try_new_with_boundary_and_resolution` porównuje wszystkie pola
+  kontraktu przed alokacją; stale padded counts kończą się fail-closed testem.
+- CPU runner przekazuje kontrakt do `ExchangeLlgProblem`, a wspólny runner
+  validator dla CPU/CUDA single-grid i multilayer odrzuca forged/stale plan
+  przed dispatch.
+- `mesh_runtime_metadata` oraz `fdm_pbc_provenance.v1.json` publikują wartość
+  przeniesioną z planu, bez ponownego rozwiązywania żądania w artifact writerze.
+- PASS: planner FDM 43/43, runner FDM 84/84, engine periodic guard 3/3,
+  focused stale-contract runner 1/1 i PBC provenance 1/1.
+- Nadal otwarte: bezpośrednie managed CUDA allocation evidence oraz
+  `just verify-fdm-pbc-production`; nie jest to jeszcze produkcyjne zamknięcie
+  findingu.

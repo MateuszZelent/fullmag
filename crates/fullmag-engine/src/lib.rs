@@ -40,7 +40,7 @@ pub use fdm::{
     AdaptiveStepConfig, AxisBoundary, CellSize, CubicAnisotropyConfig, DemagKernelSpectra,
     EffectiveFieldObservables, EffectiveFieldTerms, EngineError, EvaluationRequest,
     ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA, FdmBoundaryPolicy,
-    FdmDemagBoundary, FftWorkspace,
+    FdmDemagBoundary, FftWorkspace, ResolvedFdmPeriodicWorkspace,
     GridShape, IntegratorBuffers, LlgConfig, MagnetoelasticTermConfig, MaterialParameters,
     OerstedCylinderConfig, ReferenceDemoReport, Result, RhsEvaluation, SlonczewskiSttConfig,
     SolverSession, SotConfig, StepReport, TimeIntegrator, UniaxialAnisotropyConfig, VectorFieldSoA,

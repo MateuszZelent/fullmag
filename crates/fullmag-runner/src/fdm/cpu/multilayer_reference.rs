@@ -977,6 +977,7 @@ mod tests {
             mode: "two_d_stack".to_string(),
             common_cells: [4, 4, 1],
             grid_certificate: None,
+            resolved_periodic_images: None,
             layers,
             enable_exchange: true,
             enable_demag,
