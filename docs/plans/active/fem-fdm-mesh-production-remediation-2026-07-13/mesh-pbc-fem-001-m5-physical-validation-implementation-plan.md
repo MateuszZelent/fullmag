@@ -45,3 +45,17 @@ just verify-fem-static-pbc-demag-equilibrium-runtime
 
 **Exit:** wszystkie pięć managed gates PASS bez relaxed thresholds; primitive/supercell errors są poniżej opublikowanych limitów CPU i GPU.
 
+## Evidence update (2026-07-14, fail-closed M5 bundle contract)
+
+- [x] RED: a new strict-bundle test initially failed because the verifier did
+  not exist; the three-case test matrix covers missing case, relaxed-threshold
+  rejection and complete strict bundle acceptance.
+- [x] Added `scripts/verify_fem_static_pbc_m5_evidence.py`, requiring current
+  mesh generation/topology/marker/material identities, five named M5 cases,
+  CPU/GPU engine ownership, SHA-256 artifact fingerprints and the published
+  `2e-2` strict relative-error ceiling. Missing or non-pass cases fail closed.
+- [x] `python3 -m pytest scripts/test_verify_fem_static_pbc_m5_evidence.py -q`
+  — 3 passed; this is an evidence-contract gate, not solver execution proof.
+- [ ] Current managed CPU/GPU runtimes, primitive-vs-supercell artifacts and
+  root-cause numerical repair remain open. The matching `just` recipe currently
+  stops before runtime because Docker Buildx cannot write its activity state.
