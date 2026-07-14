@@ -142,7 +142,24 @@ fn classify_object_transition(
     let after_regions = regions_by_id(&after.regions);
     if before_regions.len() != after_regions.len() || before_regions.keys().ne(after_regions.keys())
     {
+        // Region identity changes alter marker assignment and every realized
+        // field that depends on that assignment.  Keep the old products
+        // inspectable, but never present them as current.
+        impact.topology = true;
         impact.membership = true;
+        impact.coefficients = true;
+        impact.initial_state = true;
+    } else if before
+        .regions
+        .iter()
+        .map(|region| region.region_id.as_str())
+        .ne(after.regions.iter().map(|region| region.region_id.as_str()))
+    {
+        // Reorder is semantically relevant for priority/conflict resolution.
+        impact.topology = true;
+        impact.membership = true;
+        impact.coefficients = true;
+        impact.initial_state = true;
     }
 
     for region_id in before_regions.keys() {
@@ -171,6 +188,8 @@ fn classify_region_transition(
         || before.priority != after.priority
     {
         impact.membership = true;
+        impact.coefficients = true;
+        impact.initial_state = true;
     }
     if before.mesh_policy != after.mesh_policy
         || before.realization_policy != after.realization_policy
@@ -193,6 +212,7 @@ mod tests {
     use crate::{
         SceneInitialMagnetization, SceneRegionFrame, SceneRegionOverride,
         SceneRegionRealizationPolicy, SceneRegionShape, SceneTextureOverride,
+        SceneObjectRegion,
     };
     use serde_json::json;
 
@@ -238,6 +258,8 @@ mod tests {
             classify_region_realization_impact(&before, &membership),
             RegionRealizationImpact {
                 membership: true,
+                coefficients: true,
+                initial_state: true,
                 ..Default::default()
             }
         );
@@ -317,6 +339,8 @@ mod tests {
             classify_region_realization_impact(&before, &membership),
             RegionRealizationImpact {
                 membership: true,
+                coefficients: true,
+                initial_state: true,
                 ..Default::default()
             }
         );
@@ -329,6 +353,36 @@ mod tests {
             RegionRealizationImpact {
                 topology: true,
                 ..Default::default()
+            }
+        );
+
+        let mut reordered = before.clone();
+        reordered.objects[0].regions.push(SceneObjectRegion {
+            region_id: "film:aux".to_string(),
+            owner_object: "film".to_string(),
+            name: "Aux".to_string(),
+            shape: SceneRegionShape::Box {
+                center: [0.0, 0.0, 0.0],
+                size: [0.5, 0.5, 0.5],
+            },
+            frame: SceneRegionFrame::Object,
+            enabled: true,
+            priority: 2,
+            mesh_policy: None,
+            material_overrides: Vec::new(),
+            texture_override: None,
+            material_transition: None,
+            realization_policy: SceneRegionRealizationPolicy::Project,
+        });
+        let mut swapped = reordered.clone();
+        swapped.objects[0].regions.swap(0, 1);
+        assert_eq!(
+            classify_region_realization_impact(&reordered, &swapped),
+            RegionRealizationImpact {
+                topology: true,
+                membership: true,
+                coefficients: true,
+                initial_state: true,
             }
         );
     }

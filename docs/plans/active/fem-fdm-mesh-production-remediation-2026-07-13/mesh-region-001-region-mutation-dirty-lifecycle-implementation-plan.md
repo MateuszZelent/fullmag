@@ -54,6 +54,7 @@ fn classify_region_mutation(before: Option<&SceneObjectRegion>, after: Option<&S
 ### Evidence update (2026-07-14, region override and metadata identity)
 
 - [x] `classify_region_realization_impact` now treats `SceneObject.region_overrides` magnetization changes as `initial_state` only; topology, membership, and coefficient revisions remain unchanged.
+- [x] Region identity add/delete and reorder transitions now invalidate topology, membership, coefficients, and initial state together; occupancy/priority changes invalidate membership plus dependent coefficient and initial-state realizations.
 - [x] Added RED→GREEN API coverage for legacy region magnetization override PATCH: `region_initial_state_revision` advances atomically while mesh identity and other realization lanes stay unchanged.
 - [x] Removed object/region labels from `scene_mesh_signature`; added API coverage proving a rename leaves mesh and independent realization revisions unchanged.
 - [x] `env CARGO_TARGET_DIR=/tmp/fullmag-region-lifecycle cargo test -p fullmag-authoring region_revisions --lib --no-fail-fast -- --nocapture` — 4 passed; `cargo test -p fullmag-api authoring_region_ --no-fail-fast -- --nocapture` — 6 passed.
