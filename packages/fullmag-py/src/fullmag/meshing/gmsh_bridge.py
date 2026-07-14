@@ -20,6 +20,8 @@ from ._gmsh_types import (  # noqa: F401  — re-exports
     ALGO_3D_MMG3D,
     MESH_SIZE_CALIBRATIONS,
     MESH_SIZE_PRESETS,
+    SUPPORTED_BOUNDARY_ELEMENTS,
+    SUPPORTED_VOLUME_ELEMENTS,
     AirboxOptions,
     ComponentDescriptor,
     MeshData,
@@ -54,6 +56,7 @@ from ._gmsh_extraction import (  # noqa: F401
     _extract_quality_metrics,
     _first_cell_block,
     _read_mesh_file,
+    UnsupportedGmshElementError,
     extract_per_domain_quality,
 )
 

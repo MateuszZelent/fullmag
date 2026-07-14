@@ -2482,6 +2482,10 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                     "effective_per_object_targets": effective_per_object_targets,
                     "used_size_field_kinds": used_size_field_kinds,
                     "fallbacks_triggered": fallbacks_triggered,
+                    "rejected_element_types": [
+                        dict(element)
+                        for element in getattr(exc, "rejected_element_types", [])
+                    ],
                     "operation_statuses": [
                         status.to_dict()
                         for status in _build_mesh_operation_statuses(

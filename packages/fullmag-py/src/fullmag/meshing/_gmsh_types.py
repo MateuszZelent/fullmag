@@ -13,6 +13,12 @@ from numpy.typing import NDArray
 FEM_TOPOLOGY_DETERMINANT_EPS = 1.0e-30
 FEM_TOPOLOGY_VOLUME_EPS = FEM_TOPOLOGY_DETERMINANT_EPS / 6.0
 
+# The native FEM MeshData contract is linear tetrahedra with triangular
+# boundary faces.  Keep this dispatch table keyed by Gmsh's element type
+# instead of accepting a compatible-looking prefix of arbitrary connectivity.
+SUPPORTED_VOLUME_ELEMENTS: dict[int, tuple[str, int]] = {4: ("tet4", 4)}
+SUPPORTED_BOUNDARY_ELEMENTS: dict[int, tuple[str, int]] = {2: ("tri3", 3)}
+
 
 @dataclass(frozen=True, slots=True)
 class MeshQualityReport:

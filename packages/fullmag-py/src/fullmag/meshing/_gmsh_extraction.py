@@ -9,8 +9,98 @@ from numpy.typing import NDArray
 
 from fullmag._progress import emit_progress
 
-from ._gmsh_types import MeshData, MeshOptions, MeshQualityReport
+from ._gmsh_types import (
+    SUPPORTED_BOUNDARY_ELEMENTS,
+    SUPPORTED_VOLUME_ELEMENTS,
+    MeshData,
+    MeshOptions,
+    MeshQualityReport,
+)
 from ._gmsh_infra import _import_meshio
+
+
+class UnsupportedGmshElementError(ValueError):
+    """Raised when a Gmsh element cannot be represented by :class:`MeshData`."""
+
+    def __init__(
+        self,
+        *,
+        element_type: int | str,
+        name: str,
+        dimension: int,
+        order: int,
+        arity: int,
+        primary_arity: int,
+        context: str,
+    ) -> None:
+        self.element_type = element_type
+        self.element_name = name
+        self.dimension = int(dimension)
+        self.order = int(order)
+        self.arity = int(arity)
+        self.primary_arity = int(primary_arity)
+        self.context = context
+        self.rejected_element_types = [
+            {
+                "element_type": element_type,
+                "name": name,
+                "dimension": self.dimension,
+                "order": self.order,
+                "arity": self.arity,
+                "primary_arity": self.primary_arity,
+                "context": context,
+            }
+        ]
+        super().__init__(
+            f"unsupported Gmsh element type {element_type} ({name}) in {context}: "
+            f"dimension={self.dimension}, order={self.order}, arity={self.arity}, "
+            f"primary_arity={self.primary_arity}"
+        )
+
+
+def _gmsh_element_properties(
+    gmsh: Any,
+    element_type: int,
+    *,
+    dimension: int,
+    supported: dict[int, tuple[str, int]],
+    context: str,
+) -> tuple[int, str]:
+    """Resolve one exact supported Gmsh element type before reading connectivity."""
+    name, element_dimension, order, arity, _parametric, primary_arity = (
+        gmsh.model.mesh.getElementProperties(int(element_type))
+    )
+    expected = supported.get(int(element_type))
+    if (
+        expected is None
+        or int(element_dimension) != int(dimension)
+        or int(arity) != int(expected[1])
+        or int(primary_arity) != int(expected[1])
+    ):
+        raise UnsupportedGmshElementError(
+            element_type=int(element_type),
+            name=str(name),
+            dimension=int(element_dimension),
+            order=int(order),
+            arity=int(arity),
+            primary_arity=int(primary_arity),
+            context=context,
+        )
+    return int(arity), str(expected[0])
+
+
+def _validate_gmsh_element_blocks(gmsh: Any, *, dimension: int) -> None:
+    """Validate all elements in one dimension before selecting physical groups."""
+    supported = SUPPORTED_VOLUME_ELEMENTS if dimension == 3 else SUPPORTED_BOUNDARY_ELEMENTS
+    element_types, _tags, _node_tags = gmsh.model.mesh.getElements(dim=dimension)
+    for element_type in element_types:
+        _gmsh_element_properties(
+            gmsh,
+            int(element_type),
+            dimension=dimension,
+            supported=supported,
+            context=("volume extraction" if dimension == 3 else "boundary extraction"),
+        )
 
 
 def _cell_blocks(mesh: Any, allowed: set[str], allow_empty: bool = False) -> NDArray[np.int32]:
@@ -126,6 +216,7 @@ def _meshio_cell_markers(mesh: Any, *, cell_type: str, fallback: int = 1) -> NDA
 def _read_mesh_file(path: Path) -> MeshData:
     meshio = _import_meshio()
     mesh = meshio.read(path)
+    _reject_unsupported_meshio_elements(mesh)
     tetra = _cell_blocks(mesh, {"tetra"})
     triangles = _cell_blocks(mesh, {"triangle"}, allow_empty=True)
     nodes = np.asarray(mesh.points[:, :3], dtype=np.float64)
@@ -142,6 +233,36 @@ def _read_mesh_file(path: Path) -> MeshData:
     )
 
 
+_MESHIO_SUPPORTED_ELEMENTS: dict[str, tuple[int, int, int]] = {
+    "tetra": (3, 1, 4),
+    "triangle": (2, 1, 3),
+}
+
+
+def _reject_unsupported_meshio_elements(mesh: Any) -> None:
+    """Reject every non-empty cell block not representable by MeshData."""
+    for cell_block in getattr(mesh, "cells", []):
+        cell_type = str(getattr(cell_block, "type", "unknown"))
+        data = np.asarray(getattr(cell_block, "data", []))
+        if data.size == 0:
+            continue
+        metadata = _MESHIO_SUPPORTED_ELEMENTS.get(cell_type)
+        if metadata is not None:
+            continue
+        dimension = 3 if cell_type in {"hexahedron", "prism", "pyramid", "wedge", "tetra10"} else 2
+        order = 2 if any(token in cell_type for token in ("10", "6", "20", "27", "18", "15", "9")) else 1
+        arity = int(data.shape[1]) if data.ndim == 2 else int(data.size)
+        raise UnsupportedGmshElementError(
+            element_type=cell_type,
+            name=cell_type,
+            dimension=dimension,
+            order=order,
+            arity=arity,
+            primary_arity=arity,
+            context="mesh file import",
+        )
+
+
 def _extract_mesh_data(
     gmsh: Any,
     quality: MeshQualityReport | None = None,
@@ -156,6 +277,11 @@ def _extract_mesh_data(
 
     node_index = {int(tag): idx for idx, tag in enumerate(node_tags)}
     nodes = np.asarray(coords, dtype=np.float64).reshape(-1, 3)
+
+    # Validate the complete topology, including ungrouped entities, before
+    # region-aware extraction can silently skip an unsupported block.
+    _validate_gmsh_element_blocks(gmsh, dimension=3)
+    _validate_gmsh_element_blocks(gmsh, dimension=2)
 
     extracted_element_tags: list[int] = []
 
@@ -180,13 +306,17 @@ def _extract_mesh_data(
             for entity in entities:
                 elem_types, elem_tags, node_ids = gmsh.model.mesh.getElements(3, entity)
                 for etype, tags, nids in zip(elem_types, elem_tags, node_ids):
-                    _, _, _, num_nodes, _, npn = gmsh.model.mesh.getElementProperties(int(etype))
-                    if npn < 4:
-                        continue
+                    num_nodes, _kind = _gmsh_element_properties(
+                        gmsh,
+                        int(etype),
+                        dimension=3,
+                        supported=SUPPORTED_VOLUME_ELEMENTS,
+                        context="volume extraction",
+                    )
                     flat = [node_index[int(t)] for t in nids]
                     block_tags = [int(tag) for tag in tags]
                     for element_offset, start in enumerate(range(0, len(flat), num_nodes)):
-                        elements_list.append(flat[start : start + 4])
+                        elements_list.append(flat[start : start + num_nodes])
                         markers_list.append(semantic_marker)
                         if element_offset < len(block_tags):
                             extracted_element_tags.append(block_tags[element_offset])
@@ -202,12 +332,16 @@ def _extract_mesh_data(
             for entity in entities:
                 elem_types, _elem_tags, node_ids = gmsh.model.mesh.getElements(2, entity)
                 for etype, nids in zip(elem_types, node_ids):
-                    _, _, _, num_nodes, _, npn = gmsh.model.mesh.getElementProperties(int(etype))
-                    if npn < 3:
-                        continue
+                    num_nodes, _kind = _gmsh_element_properties(
+                        gmsh,
+                        int(etype),
+                        dimension=2,
+                        supported=SUPPORTED_BOUNDARY_ELEMENTS,
+                        context="boundary extraction",
+                    )
                     flat = [node_index[int(t)] for t in nids]
                     for start in range(0, len(flat), num_nodes):
-                        bfaces_list.append(flat[start : start + 3])
+                        bfaces_list.append(flat[start : start + num_nodes])
                         bmarkers_list.append(semantic_marker)
 
         elements = (
@@ -580,14 +714,17 @@ def _extract_gmsh_connectivity(
     element_types, _, node_tags_blocks = element_blocks
     rows: list[list[int]] = []
     for element_type, tags in zip(element_types, node_tags_blocks):
-        _, _, _, num_nodes, _, num_primary_nodes = gmsh.model.mesh.getElementProperties(
-            int(element_type)
+        num_nodes, _kind = _gmsh_element_properties(
+            gmsh,
+            int(element_type),
+            dimension=3 if nodes_per_element == 4 else 2,
+            supported=(
+                SUPPORTED_VOLUME_ELEMENTS
+                if nodes_per_element == 4
+                else SUPPORTED_BOUNDARY_ELEMENTS
+            ),
+            context=("volume extraction" if nodes_per_element == 4 else "boundary extraction"),
         )
-        if num_primary_nodes < nodes_per_element:
-            raise ValueError(
-                f"gmsh element type {element_type} exposes only {num_primary_nodes} "
-                f"primary nodes, expected at least {nodes_per_element}"
-            )
         flat = [node_index[int(tag)] for tag in tags]
         if len(flat) % num_nodes != 0:
             raise ValueError(
@@ -596,7 +733,7 @@ def _extract_gmsh_connectivity(
             )
         for start in range(0, len(flat), num_nodes):
             element_nodes = flat[start : start + num_nodes]
-            rows.append(element_nodes[:nodes_per_element])
+            rows.append(element_nodes)
     if not rows:
         return np.zeros((0, nodes_per_element), dtype=np.int32)
     return np.asarray(rows, dtype=np.int32)

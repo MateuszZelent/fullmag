@@ -117,6 +117,7 @@ from fullmag.meshing.remesh_cli import _describe_remesh_job
 from fullmag.meshing._gmsh_extraction import (
     _align_quality_report_to_element_tags,
     _extract_quality_metrics,
+    UnsupportedGmshElementError,
     _meshio_cell_markers,
     build_per_domain_quality_from_mesh_arrays,
 )
@@ -4337,14 +4338,21 @@ class MeshScaffoldTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 fm.meshing.add_air_box(fm.Box(1e-9, 1e-9, 1e-9), hmax=1e-9, factor=1.0)
 
-    def test_extract_gmsh_connectivity_uses_primary_nodes_for_higher_order_elements(self) -> None:
+    def test_extract_gmsh_connectivity_rejects_unsupported_element_types(self) -> None:
         class _FakeMeshApi:
             @staticmethod
             def getElementProperties(element_type: int) -> tuple[str, int, int, int, list[float], int]:
-                if element_type == 11:  # tetra10
-                    return ("Tetrahedron 10", 3, 2, 10, [], 4)
-                if element_type == 9:  # triangle6
-                    return ("Triangle 6", 2, 2, 6, [], 3)
+                properties = {
+                    3: ("Quadrilateral 4", 2, 1, 4, [], 4),
+                    4: ("Tetrahedron 4", 3, 1, 4, [], 4),
+                    5: ("Hexahedron 8", 3, 1, 8, [], 8),
+                    6: ("Prism 6", 3, 1, 6, [], 6),
+                    7: ("Pyramid 5", 3, 1, 5, [], 5),
+                    11: ("Tetrahedron 10", 3, 2, 10, [], 4),
+                    2: ("Triangle 3", 2, 1, 3, [], 3),
+                }
+                if element_type in properties:
+                    return properties[element_type]
                 raise AssertionError(f"unexpected element type {element_type}")
 
         class _FakeModel:
@@ -4354,14 +4362,45 @@ class MeshScaffoldTests(unittest.TestCase):
             model = _FakeModel()
 
         node_index = {tag: tag - 1 for tag in range(1, 17)}
-        tet_blocks = ([11], [np.asarray([1], dtype=np.int32)], [np.asarray([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], dtype=np.int32)])
-        tri_blocks = ([9], [np.asarray([1], dtype=np.int32)], [np.asarray([11, 12, 13, 14, 15, 16], dtype=np.int32)])
+        for element_type, arity in ((6, 6), (5, 8), (7, 5), (11, 10)):
+            blocks = (
+                [element_type],
+                [np.asarray([1], dtype=np.int32)],
+                [np.arange(1, arity + 1, dtype=np.int32)],
+            )
+            with self.assertRaisesRegex(
+                UnsupportedGmshElementError,
+                rf"type {element_type}.*dimension=3.*order=.*arity={arity}",
+            ):
+                _extract_gmsh_connectivity(
+                    _FakeGmsh(), blocks, node_index, nodes_per_element=4
+                )
 
-        elements = _extract_gmsh_connectivity(_FakeGmsh(), tet_blocks, node_index, nodes_per_element=4)
-        faces = _extract_gmsh_connectivity(_FakeGmsh(), tri_blocks, node_index, nodes_per_element=3)
+        with self.assertRaisesRegex(
+            UnsupportedGmshElementError,
+            r"type 3.*dimension=2.*order=1.*arity=4",
+        ):
+            _extract_gmsh_connectivity(
+                _FakeGmsh(),
+                ([3], [np.asarray([1], dtype=np.int32)], [np.arange(1, 5, dtype=np.int32)]),
+                node_index,
+                nodes_per_element=3,
+            )
 
-        np.testing.assert_array_equal(elements, np.asarray([[0, 1, 2, 3]], dtype=np.int32))
-        np.testing.assert_array_equal(faces, np.asarray([[10, 11, 12]], dtype=np.int32))
+        tet4 = _extract_gmsh_connectivity(
+            _FakeGmsh(),
+            ([4], [np.asarray([1], dtype=np.int32)], [np.arange(1, 5, dtype=np.int32)]),
+            node_index,
+            nodes_per_element=4,
+        )
+        tri3 = _extract_gmsh_connectivity(
+            _FakeGmsh(),
+            ([2], [np.asarray([1], dtype=np.int32)], [np.arange(1, 4, dtype=np.int32)]),
+            node_index,
+            nodes_per_element=3,
+        )
+        np.testing.assert_array_equal(tet4, np.asarray([[0, 1, 2, 3]], dtype=np.int32))
+        np.testing.assert_array_equal(tri3, np.asarray([[0, 1, 2]], dtype=np.int32))
 
     def test_create_occ_geometry_supports_csg_and_translate(self) -> None:
         class _FakeOccApi:
