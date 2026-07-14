@@ -93,6 +93,26 @@ fn previous_public_cylinder_without_axis_migrates_explicitly() {
 }
 
 #[test]
+fn legacy_migration_adds_axes_to_nested_geometry_and_region_csg() {
+    let mut value = serde_json::json!({
+        "ir_version": PREVIOUS_PUBLIC_IR_VERSION,
+        "geometry": {"entries": [{
+            "kind": "translate", "name": "translated", "by": [0.0, 0.0, 0.0],
+            "base": {"kind": "difference", "name": "difference",
+                "base": {"kind": "cylinder", "name": "base", "radius": 1.0, "height": 2.0},
+                "tool": {"kind": "cylinder", "name": "tool", "radius": 0.5, "height": 1.0}}
+        }]},
+        "object_regions": [{"shape": {"kind": "csg", "expression":
+            {"kind": "cylinder", "name": "region", "radius": 1.0, "height": 2.0}}}]
+    });
+
+    migrate_problem_ir_json_value(&mut value).expect("legacy payload should migrate");
+    assert_eq!(value["geometry"]["entries"][0]["base"]["base"]["axis"], serde_json::json!([0.0, 0.0, 1.0]));
+    assert_eq!(value["geometry"]["entries"][0]["base"]["tool"]["axis"], serde_json::json!([0.0, 0.0, 1.0]));
+    assert_eq!(value["object_regions"][0]["shape"]["expression"]["axis"], serde_json::json!([0.0, 0.0, 1.0]));
+}
+
+#[test]
 fn previous_public_ir_golden_fixture_migrates_to_current() {
     let fixture = include_str!("../../../tests/golden/problem_ir/bootstrap_v0_1_read_compat.json");
     let decoded: ProblemIR =
