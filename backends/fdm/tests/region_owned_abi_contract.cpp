@@ -74,6 +74,18 @@ void exchange_pair_descriptors_are_public_abi() {
           "fullmag_fdm_plan_desc must carry exchange_pair_count");
 }
 
+void region_lut_capacity_is_explicit_and_fail_closed() {
+    const std::string header = read_text_file(repo_root() / "include" / "fullmag_fdm.h");
+    const std::string source = read_text_file(repo_root() / "backends" / "fdm" / "api" / "c_api.cpp");
+
+    check(header.find("FULLMAG_FDM_MAX_REGION_ID") != std::string::npos,
+          "FDM ABI must expose the non-background region-id limit");
+    check(source.find("fdm_region_lut_capacity_exceeded") != std::string::npos,
+          "native FDM must reject region ids before LUT access");
+    check(source.find("plan->region_mask[index] > FULLMAG_FDM_MAX_REGION_ID") != std::string::npos,
+          "native FDM must validate every uploaded region-mask value");
+}
+
 void native_backend_fails_fast_for_unimplemented_cellwise_material_fields() {
     const std::string source = read_text_file(repo_root() / "backends" / "fdm" / "api" / "c_api.cpp");
 
@@ -92,6 +104,7 @@ void native_backend_fails_fast_for_unimplemented_cellwise_material_fields() {
 int main() {
     region_owned_material_fields_are_public_abi();
     exchange_pair_descriptors_are_public_abi();
+    region_lut_capacity_is_explicit_and_fail_closed();
     native_backend_fails_fast_for_unimplemented_cellwise_material_fields();
     std::printf("region-owned FDM ABI contract OK\n");
     return 0;

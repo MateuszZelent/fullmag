@@ -89,6 +89,36 @@ pub enum ExchangeBoundaryCondition {
 
 // ── Periodic Boundary Conditions (FDM) ───────────────────────────────────────
 
+/// Maximum non-background region id addressable by the fixed-size FDM
+/// exchange lookup table. Region id `0` is reserved for the background, while
+/// the native table has 256 rows/columns.
+pub const MAX_FDM_REGION_IDS: u32 = 255;
+
+/// Validate resolved FDM region ids before a runner or native lane can
+/// allocate/copy the exchange lookup table.
+pub fn validate_fdm_region_lut_indices(
+    region_mask: &[u32],
+    exchange_pairs: &[(u32, u32, f64)],
+) -> Result<(), String> {
+    if let Some(maximum) = region_mask.iter().copied().max() {
+        if maximum > MAX_FDM_REGION_IDS {
+            return Err(format!(
+                "fdm_region_lut_capacity_exceeded: requested_region_id={} supported_region_ids={}",
+                maximum, MAX_FDM_REGION_IDS
+            ));
+        }
+    }
+    for (index, &(region_i, region_j, _)) in exchange_pairs.iter().enumerate() {
+        if region_i > MAX_FDM_REGION_IDS || region_j > MAX_FDM_REGION_IDS {
+            return Err(format!(
+                "fdm_region_lut_capacity_exceeded: exchange_pair_index={} requested_region_ids=({}, {}) supported_region_ids={}",
+                index, region_i, region_j, MAX_FDM_REGION_IDS
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Per-axis boundary policy for FDM PBC.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]

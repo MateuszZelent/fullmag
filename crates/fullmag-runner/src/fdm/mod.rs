@@ -101,6 +101,11 @@ fn validate_single_grid_budget_with_policy(
         .map_err(|message| RunError {
             message: format!("FDM grid certificate rejected before allocation: {message}"),
         })?;
+    fullmag_ir::validate_fdm_region_lut_indices(
+        &plan.region_mask,
+        &plan.inter_region_exchange,
+    )
+    .map_err(|message| RunError { message })?;
     if certificate.origin_m != plan.origin_m
         || certificate.counts != plan.grid.cells
         || certificate.cell_m != plan.cell_size

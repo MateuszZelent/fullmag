@@ -100,6 +100,7 @@ impl FdmGridCertificateIR {
         active_mask: Option<&[bool]>,
         region_mask: &[u32],
     ) -> Result<Self, String> {
+        crate::validate_fdm_region_lut_indices(region_mask, &[])?;
         let extent_m: [f64; 3] =
             std::array::from_fn(|axis| counts[axis] as f64 * cell_m[axis]);
         let grid_fingerprint = Self::fingerprint_for(
@@ -189,6 +190,7 @@ impl FdmGridCertificateIR {
         active_mask: Option<&[bool]>,
         region_mask: &[u32],
     ) -> Result<(), String> {
+        crate::validate_fdm_region_lut_indices(region_mask, &[])?;
         self.validate()?;
         let expected_fingerprint = Self::fingerprint_for(
             self.origin_m,
@@ -1230,6 +1232,7 @@ pub struct ProvenancePlanIR {
 #[cfg(test)]
 mod tests {
     use super::{FdmGridCertificateIR, RequestedFemDemagIR, ResolvedFemDemagIR};
+    use crate::{validate_fdm_region_lut_indices, MAX_FDM_REGION_IDS};
 
     #[test]
     fn fredkin_koehler_demag_is_body_only_and_executable() {
@@ -1310,6 +1313,27 @@ mod tests {
             .validate_against_masks(Some(&[false, true, true, false]), &[1, 1, 2, 2])
             .expect_err("active topology swap must reject")
             .contains("fingerprint mismatch"));
+    }
+
+    #[test]
+    fn fdm_region_lut_accepts_boundary_id_and_rejects_256() {
+        validate_fdm_region_lut_indices(&[0, MAX_FDM_REGION_IDS], &[])
+            .expect("id 255 is the last addressable non-background region");
+        let error = validate_fdm_region_lut_indices(&[0, MAX_FDM_REGION_IDS + 1], &[])
+            .expect_err("id 256 would index past the 256-entry LUT");
+        assert!(error.contains("fdm_region_lut_capacity_exceeded"));
+        assert!(error.contains("requested_region_id=256"));
+    }
+
+    #[test]
+    fn fdm_region_lut_rejects_out_of_range_exchange_pair() {
+        let error = validate_fdm_region_lut_indices(
+            &[1, 2],
+            &[(1, MAX_FDM_REGION_IDS + 1, 1.0)],
+        )
+        .expect_err("exchange pair ids must use the same LUT bound");
+        assert!(error.contains("exchange_pair_index=0"));
+        assert!(error.contains("supported_region_ids=255"));
     }
 }
 

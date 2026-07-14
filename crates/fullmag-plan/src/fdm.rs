@@ -147,6 +147,14 @@ fn materialize_object_region_mask(
     regions.sort_by_key(|region| (region.priority, region.region_id.as_str()));
 
     let mut region_ids = BTreeMap::new();
+    if regions.len() > fullmag_ir::MAX_FDM_REGION_IDS as usize {
+        errors.push(format!(
+            "fdm_region_lut_capacity_exceeded: requested_region_count={} supported_region_ids={}",
+            regions.len(),
+            fullmag_ir::MAX_FDM_REGION_IDS
+        ));
+        return (mask, region_ids);
+    }
     for (index, region) in regions.iter().enumerate() {
         if region.frame != RegionFrameIR::Object {
             errors.push(format!(
@@ -156,6 +164,7 @@ fn materialize_object_region_mask(
             continue;
         }
         let region_index = (index + 1) as u32;
+        debug_assert!(region_index <= fullmag_ir::MAX_FDM_REGION_IDS);
         region_ids.insert(region.region_id.clone(), region_index);
         let mut assigned = 0usize;
         let points = grid_sample_points(grid_cells, cell_size, origin, active_mask);
@@ -1134,6 +1143,78 @@ pub(crate) fn plan_fdm(
             ],
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn region(index: usize) -> fullmag_ir::ObjectRegionIR {
+        fullmag_ir::ObjectRegionIR {
+            region_id: format!("strip:r{index}"),
+            owner_object: "strip".to_string(),
+            name: format!("r{index}"),
+            shape: fullmag_ir::RegionShapeIR::Box {
+                size: [1.0e-6; 3],
+                center: [0.0; 3],
+            },
+            frame: fullmag_ir::RegionFrameIR::Object,
+            enabled: true,
+            priority: index as i32,
+            mesh_policy: None,
+            material_overrides: Vec::new(),
+            texture_override: None,
+            realization_policy: fullmag_ir::RegionRealizationPolicyIR::Inherit,
+            material_transition: None,
+        }
+    }
+
+    #[test]
+    fn fdm_region_mask_accepts_255_active_regions() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.object_regions = (0..fullmag_ir::MAX_FDM_REGION_IDS as usize)
+            .map(region)
+            .collect();
+        let mut errors = Vec::new();
+        let active_mask = vec![true];
+        let (mask, ids) = materialize_object_region_mask(
+            &problem,
+            &["strip"],
+            [1, 1, 1],
+            [1.0e-9; 3],
+            [0.0; 3],
+            Some(&active_mask),
+            &mut errors,
+        );
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        assert_eq!(ids.len(), fullmag_ir::MAX_FDM_REGION_IDS as usize);
+        assert_eq!(mask, vec![fullmag_ir::MAX_FDM_REGION_IDS]);
+    }
+
+    #[test]
+    fn fdm_region_mask_rejects_256_active_regions_before_sampling() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.object_regions = (0..=fullmag_ir::MAX_FDM_REGION_IDS as usize)
+            .map(region)
+            .collect();
+        let mut errors = Vec::new();
+        let active_mask = vec![true];
+        let (mask, ids) = materialize_object_region_mask(
+            &problem,
+            &["strip"],
+            [1, 1, 1],
+            [1.0e-9; 3],
+            [0.0; 3],
+            Some(&active_mask),
+            &mut errors,
+        );
+        assert!(ids.is_empty());
+        assert_eq!(mask, vec![0]);
+        assert!(errors.iter().any(|error| {
+            error.contains("fdm_region_lut_capacity_exceeded")
+                && error.contains("requested_region_count=256")
+        }));
+    }
 }
 
 fn reject_fdm_spatial_material_fields(problem: &ProblemIR, lane: &str, errors: &mut Vec<String>) {
