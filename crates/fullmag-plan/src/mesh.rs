@@ -1096,6 +1096,75 @@ fn shared_domain_region_entries_for_problem(
     entries
 }
 
+fn validate_domain_object_region_identity(
+    mesh: &MeshIR,
+    problem: &ProblemIR,
+    asset: &FemDomainMeshAssetIR,
+) -> Result<(), String> {
+    let expected = problem
+        .object_regions
+        .iter()
+        .filter(|region| {
+            region.enabled
+                && matches!(
+                    region.realization_policy,
+                    fullmag_ir::RegionRealizationPolicyIR::Conformal
+                )
+        })
+        .map(|region| region.region_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let known_regions = problem
+        .object_regions
+        .iter()
+        .filter(|region| region.enabled)
+        .flat_map(|region| [region.region_id.as_str(), region.name.as_str()])
+        .collect::<BTreeSet<_>>();
+    let mut seen_ids = BTreeSet::new();
+    let mut seen_markers = BTreeSet::new();
+    for marker in &asset.object_region_markers {
+        if !known_regions.contains(marker.geometry_name.as_str()) {
+            return Err(format!(
+                "FEM object-region marker '{}' is not an enabled object region in the current ProblemIR",
+                marker.geometry_name
+            ));
+        }
+        if !seen_ids.insert(marker.geometry_name.as_str()) {
+            return Err(format!(
+                "FEM object-region marker '{}' is duplicated",
+                marker.geometry_name
+            ));
+        }
+        if !seen_markers.insert(marker.marker) {
+            return Err(format!(
+                "FEM object-region marker value {} is duplicated",
+                marker.marker
+            ));
+        }
+        if !mesh.element_markers.contains(&marker.marker) {
+            return Err(format!(
+                "FEM object-region marker '{}'={} is absent from the current mesh topology",
+                marker.geometry_name, marker.marker
+            ));
+        }
+    }
+    if !expected.is_empty() && seen_ids.len() != expected.len() {
+        return Err(format!(
+            "FEM object-region marker coverage is incomplete: realized={} expected={} enabled conformal regions",
+            seen_ids.len(),
+            expected.len()
+        ));
+    }
+    if let Some(report) = asset.build_report.as_ref() {
+        if report.object_region_markers != asset.object_region_markers {
+            return Err(
+                "FEM object-region marker map disagrees with the current shared-domain build report"
+                    .to_string(),
+            );
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn resolve_fem_domain_mesh_asset(
     problem: &ProblemIR,
     solver_supports_conformal: bool,
@@ -1108,6 +1177,7 @@ pub(crate) fn resolve_fem_domain_mesh_asset(
         return Ok(None);
     };
     let mesh = load_fem_domain_mesh_asset(asset)?;
+    validate_domain_object_region_identity(&mesh, problem, asset)?;
     let region_entries = shared_domain_region_entries_for_problem(&mesh, problem, asset);
     let analysis = analyze_shared_domain_mesh_with_entries(&mesh, region_entries)?;
     validate_packing_constraints(&analysis, &mesh.mesh_name, solver_supports_conformal)?;
@@ -1606,5 +1676,59 @@ mod tests {
         let once_key = format!("preset-texture-log-dedup-test-{}", std::process::id());
         assert!(should_log_preset_texture_sample_once(once_key.clone()));
         assert!(!should_log_preset_texture_sample_once(once_key));
+    }
+
+    #[test]
+    fn domain_object_region_identity_rejects_stale_marker_map() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.object_regions = vec![fullmag_ir::ObjectRegionIR {
+            region_id: "body:core".to_string(),
+            owner_object: "body".to_string(),
+            name: "core".to_string(),
+            shape: fullmag_ir::RegionShapeIR::Box {
+                size: [0.5, 0.5, 0.5],
+                center: [0.0, 0.0, 0.0],
+            },
+            frame: fullmag_ir::RegionFrameIR::Object,
+            enabled: true,
+            priority: 0,
+            mesh_policy: None,
+            material_overrides: Vec::new(),
+            texture_override: None,
+            realization_policy: fullmag_ir::RegionRealizationPolicyIR::Conformal,
+            material_transition: None,
+        }];
+        let mesh = MeshIR {
+            mesh_name: "current".to_string(),
+            nodes: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            elements: vec![[0, 1, 2, 3]],
+            element_markers: vec![2],
+            boundary_faces: Vec::new(),
+            boundary_markers: Vec::new(),
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            per_domain_quality: Default::default(),
+        };
+        let mut asset = FemDomainMeshAssetIR {
+            mesh_source: None,
+            mesh: Some(mesh.clone()),
+            region_markers: Vec::new(),
+            object_region_markers: vec![FemDomainRegionMarkerIR {
+                geometry_name: "body:core".to_string(),
+                marker: 7,
+            }],
+            build_report: None,
+        };
+        let error = validate_domain_object_region_identity(&mesh, &problem, &asset)
+            .expect_err("marker from the previous topology must be rejected");
+        assert!(error.contains("absent from the current mesh topology"));
+
+        asset.object_region_markers[0].marker = 2;
+        assert!(validate_domain_object_region_identity(&mesh, &problem, &asset).is_ok());
     }
 }

@@ -20,7 +20,7 @@
 
 ### Task 1: RED — stale i collision
 
-- [ ] Dodać IR/planner tests dla mapy z obcej generation, błędnego ownera, braku coverage i ponownego użycia numeru markera; wszystkie muszą być odrzucone.
+- [x] Dodać planner validation/test dla mapy z obcej topologii, błędnego region identity, braku coverage i ponownego użycia numeru markera; stale marker i incomplete conformal coverage są odrzucane przed packing/material realization.
 - [ ] Dodać round-trip Python report -> Rust IR -> artifact i potwierdzić, że obecny report traci identity.
 
 ### Task 2: canonical certificate
@@ -36,7 +36,7 @@ struct ObjectRegionMarkerCertificateIR {
 
 - [ ] Wprowadzić wpis zawierający `object_id`, `region_id`, marker, element count i volume; walidować uniqueness, enabled conformal coverage i digest.
 - [ ] Przenieść certificate przez Python response, `FemSharedDomainBuildReportIR`, mesh asset, planner, runtime provenance, artifacts i API resource.
-- [ ] Usunąć lookup po samym numerze markera na ścieżce material realization.
+- [ ] Usunąć lookup po samym numerze markera na ścieżce material realization; obecna walidacja blokuje obcą mapę, ale pełny typed certificate pozostaje do wdrożenia.
 
 ### Task 3: gates
 
@@ -44,3 +44,13 @@ struct ObjectRegionMarkerCertificateIR {
 - [ ] Commit: `git add packages/fullmag-py crates/fullmag-ir crates/fullmag-plan crates/fullmag-runner crates/fullmag-api && git commit -m "fix(fem): bind region markers to mesh generation"`.
 
 **Exit:** marker z innej topologii lub ownera nie może przejść validation ani material assignment.
+
+### Evidence (2026-07-14, planner identity guard)
+
+- `validate_domain_object_region_identity` now requires every realized marker to
+  name an enabled current object region, to be present in current mesh element
+  markers, and to be unique; enabled conformal regions require complete coverage.
+- If a build report is present, its object-region marker map must exactly equal
+  the asset map; mismatch fails closed before shared-domain packing.
+- `cargo test -p fullmag-plan --lib --no-fail-fast` — 215 passed, 0 failed.
+- Full generation/topology/owner certificate propagation and managed/API evidence remain open.
