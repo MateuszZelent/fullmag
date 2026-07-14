@@ -32,15 +32,22 @@ Physical bounding box: $[-s_x/2, s_x/2] \times [-s_y/2, s_y/2] \times [-s_z/2, s
 
 #### `Cylinder`
 
-Axis-aligned cylinder with the height axis along $z$, centered at the origin.
+Cylinder centered at the origin with an arbitrary finite, non-zero axis vector.
+The axis is normalized during canonical lowering; its sign does not change the
+physical geometry.
 
 | Parameter | Type | Unit | Constraints |
 |-----------|------|------|-------------|
 | `radius` | `f64` | m | > 0 |
 | `height` | `f64` | m | > 0 |
+| `axis` | `(f64, f64, f64)` | — | all components finite, non-zero norm |
 | `name` | `str` | — | non-empty, unique within problem |
 
-Physical bounding box: $[-r, r] \times [-r, r] \times [-h/2, h/2]$.
+For normalized axis $\hat a$, the oriented AABB half-extent along coordinate $i$ is
+\[
+e_i = \sqrt{r^2(1-\hat a_i^2) + (h/2)^2\hat a_i^2},
+\]
+so the physical bounds are $[-e_x,e_x] \times [-e_y,e_y] \times [-e_z,e_z]$.
 
 ### 2.2 Imported geometry
 
@@ -72,7 +79,7 @@ pub struct GeometryIR {
 pub enum GeometryEntryIR {
     ImportedGeometry(ImportedGeometryIR),
     Box { name: String, size: [f64; 3] },
-    Cylinder { name: String, radius: f64, height: f64 },
+    Cylinder { name: String, radius: f64, height: f64, axis: [f64; 3] },
 }
 ```
 
@@ -91,7 +98,7 @@ import fullmag as fm
 
 # Analytic
 strip = fm.Box(size=(200e-9, 20e-9, 5e-9), name="strip")
-dot = fm.Cylinder(radius=50e-9, height=5e-9, name="dot")
+dot = fm.Cylinder(radius=50e-9, height=5e-9, axis=(1.0, 1.0, 1.0), name="dot")
 
 # Imported
 mesh = fm.ImportedGeometry(source="sample.step", format="step", name="sample")
@@ -108,6 +115,7 @@ Geometry = ImportedGeometry | Box | Cylinder
 - All geometry names must be non-empty and unique within the problem.
 - `Box.size` components must all be positive.
 - `Cylinder.radius` and `Cylinder.height` must be positive.
+- `Cylinder.axis` must contain finite values and have non-zero norm.
 - `ImportedGeometry.source` and `ImportedGeometry.format` must be non-empty.
 - At least one geometry entry is required per problem.
 
@@ -116,7 +124,9 @@ Geometry = ImportedGeometry | Box | Cylinder
 ### 6.1 FDM
 
 - `Box`: grid dimensions computed as $n_i = \mathrm{round}(s_i / \Delta x_i)$, clamped to $\geq 1$.
-- `Cylinder`: voxelized into the FDM grid; cells whose center lies inside the cylinder are active.
+- `Cylinder`: voxelized into the oriented AABB; a cell is active when its center has
+  axial projection $|p\cdot\hat a| \le h/2$ and radial distance
+  $\|p-(p\cdot\hat a)\hat a\| \le r$.
 - `ImportedGeometry`: voxelized from the imported mesh/surface.
 
 ### 6.2 FEM
@@ -127,5 +137,8 @@ Geometry = ImportedGeometry | Box | Cylinder
 
 ### 6.3 Position and orientation
 
-For the exchange-only release, all analytic primitives are placed at the origin with axis-aligned
-orientation. Translation, rotation, and composition are deferred.
+Analytic primitives are placed at the origin. Cylinder orientation is represented by
+`axis`; translation and boolean composition remain deferred in this policy.
+
+Legacy v0.1.0 IR cylinder entries without `axis` are migrated explicitly to the
+canonical Z axis `[0.0, 0.0, 1.0]`; current IR payloads must carry `axis`.
