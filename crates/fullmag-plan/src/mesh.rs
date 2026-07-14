@@ -1,5 +1,6 @@
 use fullmag_ir::{
-    AirBoxConfigIR, ExecutionMode, FemDomainMeshAssetIR, FemDomainMeshModeIR,
+    validate_mesh_for_execution, AirBoxConfigIR, ExecutionMode, FemDomainMeshAssetIR,
+    FemDomainMeshModeIR,
     FemDomainRegionMarkerIR, FemMeshPartIR, FemMeshPartRole, FemMeshPartSelector,
     FemObjectSegmentIR, InitialMagnetizationIR, MeshIR, MeshQualityIR, ProblemIR,
 };
@@ -368,7 +369,16 @@ fn coordinate_key(point: [f64; 3]) -> [u64; 3] {
 
 pub(crate) fn load_fem_domain_mesh_asset(asset: &FemDomainMeshAssetIR) -> Result<MeshIR, String> {
     match (&asset.mesh, &asset.mesh_source) {
-        (Some(mesh), _) => Ok(mesh.clone()),
+        (Some(mesh), _) => {
+            validate_mesh_for_execution(mesh).map_err(|errors| {
+                format!(
+                    "inline FEM domain mesh '{}' is invalid: {}",
+                    mesh.mesh_name,
+                    errors.join("; ")
+                )
+            })?;
+            Ok(mesh.clone())
+        }
         (None, Some(source)) => load_mesh_from_source(source),
         (None, None) => {
             Err("fem_domain_mesh_asset requires an inline mesh or mesh_source".to_string())
@@ -836,7 +846,7 @@ pub(crate) fn pack_mesh_by_analysis(
         // Marker values are preserved during reorder — carry the quality map through.
         per_domain_quality: mesh.per_domain_quality.clone(),
     };
-    reordered_mesh.validate().map_err(|errors| {
+    validate_mesh_for_execution(&reordered_mesh).map_err(|errors| {
         format!(
             "shared-domain FEM mesh '{}' is invalid after segmentation: {}",
             mesh.mesh_name,
@@ -1381,7 +1391,7 @@ pub(crate) fn load_mesh_from_source(source: &str) -> Result<MeshIR, String> {
                 .map_err(|err| format!("failed to read FEM mesh_source '{}': {}", source, err))?;
             let mesh: MeshIR = serde_json::from_str(&payload)
                 .map_err(|err| format!("failed to parse FEM mesh_source '{}': {}", source, err))?;
-            mesh.validate().map_err(|errors| {
+            validate_mesh_for_execution(&mesh).map_err(|errors| {
                 format!(
                     "mesh_source '{}' is invalid: {}",
                     source,
@@ -1528,7 +1538,7 @@ pub(crate) fn merge_fem_meshes(
         periodic_node_pairs: Vec::new(),
         per_domain_quality: merged_quality,
     };
-    merged.validate().map_err(|errors| {
+    validate_mesh_for_execution(&merged).map_err(|errors| {
         format!(
             "merged multi-body FEM mesh is invalid: {}",
             errors.join("; ")
