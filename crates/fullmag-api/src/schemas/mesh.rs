@@ -643,6 +643,16 @@ pub struct MeshHistogramBinElementsResource {
 pub struct MeshRegionMembershipResource {
     pub mesh_id: String,
     pub mesh_revision: u64,
+    /// Stable identity of the mesh topology used for this membership.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topology_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh_generation_id: Option<String>,
+    /// Independent region-membership realization revision, not the scene journal revision.
+    pub region_membership_revision: u64,
+    /// `current` applies only to certified mesh membership; `preview` is analytic projection.
+    pub freshness: String,
+    pub realization: String,
     pub region_id: String,
     pub source: String,
     #[serde(skip_serializing_if = "Option::is_none")]

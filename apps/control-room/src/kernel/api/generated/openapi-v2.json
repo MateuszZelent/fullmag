@@ -10149,6 +10149,16 @@
             },
             "type": "array"
           },
+          "freshness": {
+            "description": "`current` applies only to certified mesh membership; `preview` is analytic projection.",
+            "type": "string"
+          },
+          "mesh_generation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "mesh_id": {
             "type": "string"
           },
@@ -10171,6 +10181,9 @@
             },
             "type": "array"
           },
+          "realization": {
+            "type": "string"
+          },
           "realization_method": {
             "type": [
               "string",
@@ -10186,13 +10199,29 @@
           "region_id": {
             "type": "string"
           },
+          "region_membership_revision": {
+            "description": "Independent region-membership realization revision, not the scene journal revision.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "source": {
             "type": "string"
+          },
+          "topology_fingerprint": {
+            "description": "Stable identity of the mesh topology used for this membership.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
           "mesh_id",
           "mesh_revision",
+          "region_membership_revision",
+          "freshness",
+          "realization",
           "region_id",
           "source",
           "mesh_part_ids",

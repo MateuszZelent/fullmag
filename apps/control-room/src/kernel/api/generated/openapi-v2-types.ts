@@ -5397,7 +5397,13 @@ export interface components {
             mesh_part_ids: string[];
             /** Format: int64 */
             mesh_revision: number;
+            mesh_generation_id?: string | null;
             node_indices: number[];
+            topology_fingerprint?: string | null;
+            /** Format: int64 */
+            region_membership_revision: number;
+            freshness: string;
+            realization: string;
             realization_method?: string | null;
             realization_warnings?: string[];
             region_id: string;

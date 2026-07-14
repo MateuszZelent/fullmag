@@ -36,13 +36,21 @@ struct RegionMembershipIdentity {
 }
 ```
 
-- [ ] Dodać identity do schema/OpenAPI i ETag; handler porównuje snapshot revisions przed projekcją.
-- [ ] Oddzielić certified realized membership od analytic preview i zastosować tę samą identity w region quality.
+- [x] Dodać identity do schema/OpenAPI i ETag; handler publikuje topology/generation oraz niezależną membership revision.
+- [x] Oddzielić certified realized membership od analytic preview: `realization=realized|analytic_preview`, `freshness=current|preview`.
 - [ ] Usunąć możliwość domyślnego pobrania dowolnego `snapshot.fem_mesh` dla current request.
 
 ### Task 3: API/data-plane proof
 
 - [ ] Regenerować transport, uruchomić API tests/hygiene i snapshot tests; sprawdzić 409/stale response oraz historical retrieval.
 - [ ] Commit: `git add crates/fullmag-api crates/fullmag-session apps/control-room/src/shared/api && git commit -m "fix(api): bind region membership to mesh identity"`.
+
+### Evidence (2026-07-14, identity publication slice)
+
+- `MeshRegionMembershipResource` now publishes topology fingerprint, mesh generation ID, independent `region_membership_revision`, freshness and realization semantics.
+- Analytic geometry projection is explicitly marked `preview`/`analytic_preview`; mesh-part and object-segment paths are `current`/`realized`.
+- API membership focused suite: 7 passed.
+- OpenAPI v2 regenerated, TypeScript schema synchronized, and `./scripts/ci/contract_guard.sh --strict` passed.
+- Historical mesh selection, marker-certificate binding, stale 409 semantics, binary scoped membership and browser proof remain open; MESH-REGION-012 is not production-closed.
 
 **Exit:** client zawsze wie, czy membership odpowiada bieżącemu regionowi i bieżącej topologii.

@@ -1708,6 +1708,7 @@ pub async fn get_mesh_region_quality(
             scene,
             mesh,
             snapshot.mesh_revision,
+            snapshot.region_realization_revisions.membership,
             &region_id,
         )
         .ok_or_else(|| {
