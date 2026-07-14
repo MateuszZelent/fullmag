@@ -44,3 +44,10 @@ pub struct FdmGridCertificateIR {
 
 **Exit:** każdy plan FDM zawiera zweryfikowany certificate, a artifacts pozwalają odtworzyć `origin`, `N`, `d`, `L`, active count, budget i fingerprint.
 
+## Evidence update (2026-07-14)
+
+- [x] Physics contract is documented in `docs/physics/0100-mesh-and-region-discretization.md` and `docs/physics/0600-periodic-boundary-conditions.md`, including SI units, `N*d` extent identity, active-cell count, memory estimate and fingerprint semantics.
+- [x] `FdmGridCertificateIR` is materialized by single-grid and multilayer planner paths, serialized as `mesh/fdm_grid_certificate.json`, and consumed by runner pre-allocation guards; the runner validates counts, extent, active mask, memory estimate and fingerprint before allocation.
+- [x] RED/GREEN certificate tests: `cargo test -p fullmag-ir fdm_grid_certificate --lib --no-fail-fast` — 5 passed; `cargo test -p fullmag-plan fdm --lib --no-fail-fast` — 43 passed; `cargo test -p fullmag-runner fdm::tests --lib --no-fail-fast` — 5 passed.
+- [x] Realized FDM region membership is published through the binary data-plane artifacts with a stable numeric legend and the same grid/legend fingerprints; no thin JSON payload carries the cell mask.
+- [ ] Managed CPU/CUDA runtime evidence and full cross-backend parity gates remain open and are tracked by MESH-GATE-001..004.
