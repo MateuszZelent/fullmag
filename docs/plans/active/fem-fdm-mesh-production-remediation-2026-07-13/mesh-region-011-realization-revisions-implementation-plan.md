@@ -45,3 +45,11 @@ struct RegionRealizationRevisions {
 - [ ] Commit: `git add crates/fullmag-session crates/fullmag-ir crates/fullmag-plan crates/fullmag-runner crates/fullmag-api apps/control-room && git commit -m "feat(runtime): version region realizations independently"`.
 
 **Exit:** każdy resource i run precondition może jednoznacznie stwierdzić, której realizacji regionów używa.
+
+## Evidence update (2026-07-14)
+
+- [x] Dodano backend-neutralny classifier `classify_region_realization_impact` oraz tuple `RegionRealizationRevisions` w `crates/fullmag-authoring/src/region_revisions.rs`.
+- [x] Classifier rozdziela metadata-only, membership, coefficients, initial-state/texture i topology; `advance` zwiększa wyłącznie wskazane monotoniczne rewizje.
+- [x] Testy jednostkowe: `cargo test -p fullmag-authoring region_revisions --lib` — 3 passed.
+- [ ] Session/API status, plans, artifacts, ETags/cache keys i run preconditions nie konsumują jeszcze tuple; pozostają do wdrożenia w Tasks 2–3.
+- [ ] Brak jeszcze atomicznego commit/classifiera używanego przez istniejące API mutacji regionów; obecny moduł jest kontraktem backend-neutralnym i nie zmienia dotychczasowego lifecycle.
