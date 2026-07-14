@@ -1056,8 +1056,10 @@ fn build_native_stacked_cuda_plan(
 
     Ok(Some(NativeStackedCudaPlan {
         combined_plan: FdmPlanIR {
+            origin_m: min_origin,
             grid: GridDimensions { cells: global_grid },
             cell_size: reference_cell_size,
+            grid_certificate: None,
             region_mask,
             active_mask: Some(active_mask),
             initial_magnetization,
@@ -1070,6 +1072,7 @@ fn build_native_stacked_cuda_plan(
             precision: plan.precision,
             exchange_bc: plan.exchange_bc,
             periodicity: plan.periodicity.clone(),
+            resolved_periodic_images: plan.resolved_periodic_images.clone(),
             integrator: Some(plan.integrator),
             fixed_timestep: plan.fixed_timestep,
             adaptive_timestep: None,
@@ -1398,10 +1401,12 @@ fn make_native_stacked_step_stats(
 
 fn single_layer_cuda_plan(plan: &FdmMultilayerPlanIR, layer: &FdmLayerPlanIR) -> FdmPlanIR {
     FdmPlanIR {
+        origin_m: layer.native_origin,
         grid: GridDimensions {
             cells: layer.native_grid,
         },
         cell_size: layer.native_cell_size,
+        grid_certificate: None,
         region_mask: vec![0; layer.initial_magnetization.len()],
         active_mask: layer.native_active_mask.clone(),
         initial_magnetization: layer.initial_magnetization.clone(),
@@ -1428,6 +1433,7 @@ fn single_layer_cuda_plan(plan: &FdmMultilayerPlanIR, layer: &FdmLayerPlanIR) ->
         precision: plan.precision,
         exchange_bc: ExchangeBoundaryCondition::Neumann,
         periodicity: None,
+        resolved_periodic_images: None,
         integrator: Some(plan.integrator),
         fixed_timestep: plan.fixed_timestep,
         adaptive_timestep: None,
