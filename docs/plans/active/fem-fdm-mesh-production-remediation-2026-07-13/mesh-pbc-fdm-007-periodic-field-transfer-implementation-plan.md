@@ -47,4 +47,5 @@ fn transfer_index(i: isize, n: usize, periodic: bool) -> usize {
 - [x] Commit `1c65c9ff` propaguje `TransferBoundaryPolicy` przez engine oraz CPU/CUDA multilayer runners i zawija wyłącznie aktywne osie periodic.
 - [x] Mixed-axis seam, f64/f32 push/pull i open-axis clamp tests: `cargo test -p fullmag-fdm-demag --lib` — 21 passed; focused transfer slice — 6 passed.
 - [x] Runner artifact metadata now publishes resolved `transfer_boundary_policy`, `periodic_axes`, target grid fingerprint and per-layer source/target fingerprints; focused fixture `fdm_multilayer_metadata_preserves_transfer_policy_and_grid_identity` — 1 passed.
-- [ ] Managed CUDA/runtime proof and persisted transfer-manifest assertions remain open; do not close the finding until the managed gate is green.
+- [x] Runner persists `mesh/fdm_transfer_provenance.v1.json` with source/target grid fingerprints, grid geometry and boundary policy; focused fixture `fdm_multilayer_persists_transfer_provenance_artifact` — 1 passed.
+- [ ] Managed CUDA/runtime proof remains open; do not close the finding until the managed gate is green.

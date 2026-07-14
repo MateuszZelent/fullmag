@@ -1107,6 +1107,7 @@ pub(crate) fn write_artifacts(
 
     let mut auxiliary_artifacts = executed.auxiliary_artifacts.clone();
     auxiliary_artifacts.extend(crate::fdm::artifacts::grid_certificate_artifacts(plan));
+    auxiliary_artifacts.extend(crate::fdm::artifacts::transfer_provenance_artifacts(plan));
     for artifact in &auxiliary_artifacts {
         let artifact_path = output_dir.join(&artifact.relative_path);
         if let Some(parent) = artifact_path.parent() {
@@ -3217,6 +3218,55 @@ mod tests {
         assert!(metadata["transfer_provenance"][0]["source_grid_fingerprint"]
             .as_str()
             .is_some());
+    }
+
+    #[test]
+    fn fdm_multilayer_persists_transfer_provenance_artifact() {
+        let mut plan = test_multilayer_execution_plan();
+        let BackendPlanIR::FdmMultilayer(multilayer) = &mut plan.backend_plan else {
+            panic!("expected multilayer FDM plan");
+        };
+        multilayer.periodicity = Some(fullmag_ir::FdmPeriodicityIR {
+            axes: [
+                fullmag_ir::AxisBoundary::Periodic,
+                fullmag_ir::AxisBoundary::Open,
+                fullmag_ir::AxisBoundary::Periodic,
+            ],
+            demag: fullmag_ir::FdmDemagPeriodicityIR::TruncatedImages,
+            image_counts: Some([2, 0, 2]),
+        });
+        multilayer.grid_certificate = Some(
+            fullmag_ir::FdmGridCertificateIR::new(
+                [0.0, 0.0, 0.0],
+                multilayer.common_cells,
+                [2e-9, 2e-9, 1e-9],
+                4,
+                1024,
+            )
+            .expect("multilayer target grid certificate should be valid"),
+        );
+
+        let artifacts = crate::fdm::artifacts::transfer_provenance_artifacts(&plan);
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(
+            artifacts[0].relative_path,
+            "mesh/fdm_transfer_provenance.v1.json"
+        );
+        let value: serde_json::Value = serde_json::from_slice(&artifacts[0].bytes)
+            .expect("transfer provenance artifact should be JSON");
+        assert_eq!(value["schema_version"], "fdm_transfer_provenance.v1");
+        assert_eq!(
+            value["boundary_policy"],
+            serde_json::json!(["periodic", "open", "periodic"])
+        );
+        assert_eq!(value["transfers"].as_array().unwrap().len(), 2);
+        assert!(value["transfers"][0]["source_grid_fingerprint"]
+            .as_str()
+            .is_some());
+        assert_eq!(
+            value["transfers"][0]["target_grid_fingerprint"],
+            value["target_grid_fingerprint"]
+        );
     }
 
     fn test_fem_execution_plan() -> ExecutionPlanIR {
