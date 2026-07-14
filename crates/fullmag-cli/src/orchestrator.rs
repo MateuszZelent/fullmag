@@ -1655,6 +1655,33 @@ fn adaptive_remesh_legality_reason(problem: &ProblemIR) -> Option<&'static str> 
     has_periodic_mesh.then_some("adaptive_periodic_remesh_not_certified")
 }
 
+fn validate_periodic_remesh_candidate(
+    previous: &fullmag_ir::MeshIR,
+    candidate: &fullmag_ir::MeshIR,
+) -> Result<()> {
+    if previous.periodic_boundary_pairs.is_empty() {
+        return Ok(());
+    }
+    if candidate.periodic_boundary_pairs.is_empty() || candidate.periodic_node_pairs.is_empty() {
+        bail!("periodic_remesh_requires_recertification");
+    }
+    let certificate = candidate
+        .periodic_mesh_certificate_v6()
+        .map_err(|errors| {
+            anyhow!(
+                "periodic_remesh_candidate_recertification_failed: {}",
+                errors.join("; ")
+            )
+        })?;
+    if certificate.certificate_status != "accepted" {
+        bail!(
+            "periodic_remesh_candidate_recertification_failed: status={}",
+            certificate.certificate_status
+        );
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 struct SceneProblemPatch {
     #[serde(default)]
@@ -3101,6 +3128,11 @@ fn execute_manual_interactive_remesh(
         BackendPlanIR::Fem(plan) => Some(plan),
         _ => None,
     };
+    let previous_periodic_mesh = remesh_problem_source
+        .geometry_assets
+        .as_ref()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_ref())
+        .and_then(|asset| asset.mesh.clone());
 
     if let Some(plan) = fem_plan {
         let shared_domain_remesh = matches!(
@@ -3319,6 +3351,9 @@ fn execute_manual_interactive_remesh(
             Ok(remesh_result) => {
                 let elapsed = mesh_start.elapsed();
                 let new_mesh = remesh_result.clone().into_mesh_ir();
+                if let Some(previous_mesh) = previous_periodic_mesh.as_ref() {
+                    validate_periodic_remesh_candidate(previous_mesh, &new_mesh)?;
+                }
                 let node_count = new_mesh.nodes.len();
                 let elem_count = new_mesh.elements.len();
                 let face_count = new_mesh.boundary_faces.len();
@@ -8933,6 +8968,7 @@ mod tests {
         mesh_source_scene_revision,
         resolved_shared_domain_object_region_markers, scripted_stage_execution_state,
         shared_domain_object_region_mesh_specs, stage_allows_sampled_continuation_initial_state,
+        validate_periodic_remesh_candidate,
         step_update_has_frequency_response_progress, user_cancelled_stage_completion,
         wait_for_solve_prompt, wait_for_solve_should_block, wait_for_solve_supported,
         ActiveSequenceState, LiveProgressCadence, LoadedInitialMagnetizationState,
@@ -9125,6 +9161,51 @@ mod tests {
             adaptive_remesh_legality_reason(&problem),
             Some("adaptive_region_remesh_not_certified")
         );
+    }
+
+    #[test]
+    fn periodic_remesh_rejects_candidate_without_fresh_pairs() {
+        let previous = MeshIR {
+            mesh_name: "previous".to_string(),
+            nodes: Vec::new(),
+            elements: Vec::new(),
+            element_markers: Vec::new(),
+            boundary_faces: Vec::new(),
+            boundary_markers: Vec::new(),
+            periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
+                pair_id: "x".to_string(),
+                source_marker: None,
+                destination_marker: None,
+                marker_a: 1,
+                marker_b: 2,
+                translation: Some([1.0, 0.0, 0.0]),
+                tolerance: Some(1.0e-9),
+                axis_hint: Some("x".to_string()),
+                orientation: None,
+                pairing_policy: None,
+            }],
+            periodic_node_pairs: vec![fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "x".to_string(),
+                node_a: 0,
+                node_b: 1,
+            }],
+            per_domain_quality: std::collections::HashMap::new(),
+        };
+        let candidate = MeshIR {
+            mesh_name: "candidate".to_string(),
+            nodes: Vec::new(),
+            elements: Vec::new(),
+            element_markers: Vec::new(),
+            boundary_faces: Vec::new(),
+            boundary_markers: Vec::new(),
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            per_domain_quality: std::collections::HashMap::new(),
+        };
+
+        let error = validate_periodic_remesh_candidate(&previous, &candidate)
+            .expect_err("periodic remesh must not publish a candidate without recertified pairs");
+        assert!(error.to_string().contains("periodic_remesh_requires_recertification"));
     }
 
     use crate::args::ScriptCli;

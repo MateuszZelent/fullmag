@@ -41,3 +41,9 @@ fn certify_remesh_candidate(candidate: &MeshIR, request: &PeriodicRequestIR) -> 
 
 **Exit:** żadna nowa topologia PBC nie używa starego certificate; asymmetric remesh nie zostaje opublikowany.
 
+### Evidence update (2026-07-14, fail-closed manual candidate gate)
+
+- [x] Added a RED test for a periodic previous mesh followed by a remesh candidate with no fresh pair data; the test failed before `validate_periodic_remesh_candidate` existed and now passes.
+- [x] Interactive FEM remesh now rejects a candidate without newly extracted periodic node/face pairs and runs `MeshIR::periodic_mesh_certificate_v6()` before publishing the candidate.
+- [x] `cargo test -p fullmag-cli periodic_remesh_rejects_candidate_without_fresh_pairs --no-fail-fast -- --nocapture` — 1 passed.
+- [ ] Full symmetric/asymmetric remesh fixtures, artifact old/new certificate provenance, managed meshing gates and browser proof remain open; MESH-PBC-FEM-006 is not production-closed.
