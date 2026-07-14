@@ -2289,7 +2289,10 @@ async fn domain_topology_returns_304_when_etag_matches() {
         .await
         .unwrap();
 
-    assert_eq!(first.status(), StatusCode::OK);
+    if first.status() != StatusCode::OK {
+        let error = body_json(first).await;
+        panic!("FDM binary failed: {error}");
+    }
     let etag = first
         .headers()
         .get("etag")
@@ -17320,6 +17323,113 @@ async fn artifact_download_accepts_encoded_relative_paths() {
     let body = body_bytes(response).await;
     assert_eq!(&body[..], b"h5-bytes");
 
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn fdm_region_membership_descriptor_and_scoped_binary_are_revisioned() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let mesh_dir = artifact_dir.join("mesh");
+    fs::create_dir_all(&mesh_dir).expect("failed to create mesh artifact dir");
+    let grid_fingerprint = "00".repeat(32);
+    fs::write(
+        mesh_dir.join("fdm_region_membership.v1.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "fdm_region_membership.v1",
+            "binary_path": "mesh/fdm_region_membership.v1.bin",
+            "grid_fingerprint": grid_fingerprint.clone(),
+            "region_legend_fingerprint": "sha256:test",
+            "origin_m": [0.0, 0.0, 0.0],
+            "counts": [2, 1, 1],
+            "cell_m": [1e-9, 1e-9, 1e-9],
+            "cell_count": 2,
+            "region_legend": [{
+                "numeric_id": 1,
+                "object_id": "body",
+                "region_id": "body:core",
+                "priority": 0
+            }, {
+                "numeric_id": 2,
+                "object_id": "body",
+                "region_id": "body:shell",
+                "priority": -1
+            }],
+            "encoding": "FMRM:u32_le"
+        }))
+        .unwrap(),
+    )
+    .expect("failed to write FDM membership descriptor");
+    let mut binary = vec![0u8; 64 + 2 * 4];
+    binary[..4].copy_from_slice(b"FMRM");
+    binary[4] = 1;
+    binary[5] = 1;
+    binary[8..12].copy_from_slice(&2u32.to_le_bytes());
+    binary[12..16].copy_from_slice(&1u32.to_le_bytes());
+    binary[16..20].copy_from_slice(&1u32.to_le_bytes());
+    binary[20..24].copy_from_slice(&2u32.to_le_bytes());
+    binary[24..28].copy_from_slice(&2u32.to_le_bytes());
+    for value in &mut binary[28..60] {
+        *value = 0;
+    }
+    binary[64..68].copy_from_slice(&1u32.to_le_bytes());
+    binary[68..72].copy_from_slice(&2u32.to_le_bytes());
+    fs::write(mesh_dir.join("fdm_region_membership.v1.bin"), &binary)
+        .expect("failed to write FDM membership binary");
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.region_realization_revisions.membership = 7;
+    }
+
+    let descriptor_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fdm-region-memberships")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    if descriptor_response.status() != StatusCode::OK {
+        let error = body_json(descriptor_response).await;
+        panic!("FDM descriptor failed: {error}");
+    }
+    let descriptor = body_json(descriptor_response).await;
+    assert_eq!(descriptor["freshness"], "current");
+    assert_eq!(descriptor["region_membership_revision"], 7);
+
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fdm-region-membership/body%3Ashell")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    if first.status() != StatusCode::OK {
+        let error = body_json(first).await;
+        panic!("FDM binary failed: {error}");
+    }
+    assert_eq!(first.headers()["x-fullmag-grid-fingerprint"], grid_fingerprint);
+    assert_eq!(first.headers()["x-fullmag-region-membership-revision"], "7");
+    let etag = first.headers()["etag"].to_str().unwrap().to_string();
+    let scoped = body_bytes(first).await;
+    assert_eq!(u32::from_le_bytes(scoped[64..68].try_into().unwrap()), 0);
+    assert_eq!(u32::from_le_bytes(scoped[68..72].try_into().unwrap()), 2);
+
+    let second = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fdm-region-membership/body%3Ashell")
+                .header("if-none-match", etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
+    assert!(body_bytes(second).await.is_empty());
     let _ = fs::remove_dir_all(&artifact_dir);
 }
 

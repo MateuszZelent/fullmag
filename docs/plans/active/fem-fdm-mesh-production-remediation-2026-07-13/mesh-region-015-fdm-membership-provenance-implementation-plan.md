@@ -41,7 +41,7 @@ struct FdmRegionLegendEntryIR { numeric_id: u32, object_id: String, region_id: S
 
 - [x] Uruchomić focused IR/planner/runner tests: legend digest, object-region materialization oraz runtime metadata (1/1 każdy).
 - [x] Runner artifact test potwierdza descriptor, legendę, `FMRM` header i mask length.
-- [x] API FMRM validator test PASS; Control Room codec/API tests 74/74 PASS; generated OpenAPI v2 paths/types updated; typecheck PASS; targeted ESLint PASS.
+- [x] API FMRM validator and router integration tests PASS; Control Room codec/API tests 74/74 PASS; generated OpenAPI v2 paths/types updated; typecheck PASS; targeted ESLint PASS.
 - [ ] Uruchomić pełny planner/runner/API binary codec suite, resource/viewport tests i browser smoke dla mask switching.
 - [ ] Commit: `git add crates/fullmag-ir crates/fullmag-plan crates/fullmag-runner crates/fullmag-api apps/control-room && git commit -m "feat(fdm): publish realized region membership"`.
 
