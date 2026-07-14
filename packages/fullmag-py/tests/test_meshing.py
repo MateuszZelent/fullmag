@@ -4471,6 +4471,51 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertGreater(voxels.active_cell_count, 0)
         self.assertLess(voxels.active_fraction, 1.0)
 
+    def test_difference_translation_and_finite_height_match_problem_ir_fingerprint(self) -> None:
+        base = fm.Box(size=(4.0, 4.0, 4.0), name="base")
+        translated_cylinder = fm.Translate(
+            fm.Cylinder(
+                radius=1.0,
+                height=2.0,
+                axis=(0.0, 0.0, 1.0),
+                name="tool_base",
+            ),
+            (1.0, 0.0, 0.0),
+            name="tool",
+        )
+        translated_box = fm.Translate(
+            fm.Box(size=(2.0, 2.0, 2.0), name="box_tool_base"),
+            (1.0, 0.0, 0.0),
+            name="box_tool",
+        )
+
+        cylinder_voxels = voxelize_geometry(
+            fm.Difference(base=base, tool=translated_cylinder, name="difference"),
+            (1.0, 1.0, 1.0),
+        )
+        box_voxels = voxelize_geometry(
+            fm.Difference(base=base, tool=translated_box, name="box_difference"),
+            (1.0, 1.0, 1.0),
+        )
+        expected_removed = [22, 23, 26, 27, 38, 39, 42, 43]
+        authored_ir = fm.Difference(
+            base=base, tool=translated_cylinder, name="difference"
+        ).to_ir()
+        self.assertEqual(authored_ir["kind"], "difference")
+        self.assertEqual(authored_ir["tool"]["kind"], "translate")
+        self.assertEqual(authored_ir["tool"]["by"], [1.0, 0.0, 0.0])
+        self.assertEqual(cylinder_voxels.origin, (-2.0, -2.0, -2.0))
+        self.assertEqual(cylinder_voxels.active_cell_count, 56)
+        self.assertEqual(
+            np.flatnonzero(~cylinder_voxels.mask).tolist(), expected_removed
+        )
+        self.assertEqual(
+            np.flatnonzero(~box_voxels.mask).tolist(), expected_removed,
+            "Python DSL and ProblemIR geometry fixtures must retain one 3D CSG fingerprint",
+        )
+        self.assertTrue(cylinder_voxels.mask[0, 1, 1])
+        self.assertTrue(cylinder_voxels.mask[3, 1, 1])
+
     def test_voxel_mask_to_ir_uses_canonical_grid_order(self) -> None:
         voxels = voxelize_geometry(fm.Cylinder(radius=3.0, height=4.0), (1.0, 1.0, 1.0))
 

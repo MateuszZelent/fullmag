@@ -100,6 +100,10 @@ pub(crate) enum GeometryShape {
         source: String,
         format: String,
     },
+    Translate {
+        child: std::boxed::Box<GeometryShape>,
+        by: [f64; 3],
+    },
     Difference {
         base: std::boxed::Box<GeometryShape>,
         tool: std::boxed::Box<GeometryShape>,
@@ -186,7 +190,10 @@ pub(crate) fn ir_to_shape(entry: &GeometryEntryIR) -> Result<GeometryShape, Stri
             "geometry '{}' (Intersection) is not yet supported by the FDM planner; use Box, Cylinder, or Difference",
             name
         )),
-        GeometryEntryIR::Translate { base, .. } => ir_to_shape(base),
+        GeometryEntryIR::Translate { base, by, .. } => Ok(GeometryShape::Translate {
+            child: std::boxed::Box::new(ir_to_shape(base)?),
+            by: *by,
+        }),
         GeometryEntryIR::Ellipsoid { name, .. } => Err(format!(
             "geometry '{}' (Ellipsoid) is not yet supported by the FDM planner; use Box or Cylinder",
             name
@@ -288,6 +295,21 @@ pub(crate) fn shape_local_bounds(shape: &GeometryShape) -> Option<([f64; 3], [f6
             ))
         }
         GeometryShape::Difference { base, .. } => shape_local_bounds(base),
+        GeometryShape::Translate { child, by } => {
+            let (bounds_min, bounds_max) = shape_local_bounds(child)?;
+            Some((
+                [
+                    bounds_min[0] + by[0],
+                    bounds_min[1] + by[1],
+                    bounds_min[2] + by[2],
+                ],
+                [
+                    bounds_max[0] + by[0],
+                    bounds_max[1] + by[1],
+                    bounds_max[2] + by[2],
+                ],
+            ))
+        }
         GeometryShape::Imported { .. } => None,
     }
 }
@@ -328,6 +350,47 @@ pub(crate) fn contains_cylinder(shape: &GeometryShape, point: [f64; 3]) -> bool 
             axis,
         } => contains_cylinder_point(*radius, *height, *axis, point),
         _ => false,
+    }
+}
+
+impl GeometryShape {
+    /// Evaluate authored geometry membership in world coordinates.
+    ///
+    /// CSG operands and transforms are evaluated recursively so a translated
+    /// operand retains both its lateral offset and finite extent along z.
+    pub(crate) fn contains(&self, point: [f64; 3]) -> bool {
+        match self {
+            Self::Box { size } => (0..3).all(|axis| point[axis].abs() <= size[axis] * 0.5),
+            Self::Cylinder { .. } => contains_cylinder(self, point),
+            Self::SinWaveguide {
+                length,
+                width,
+                height,
+                period,
+                amplitude,
+                phase,
+                z0,
+            } => contains_sin_waveguide(
+                point[0], point[1], point[2], *length, *width, *height, *period, *amplitude,
+                *phase, *z0,
+            ),
+            Self::ArchWaveguide {
+                length,
+                width,
+                height,
+                arch_height,
+                z0,
+            } => contains_arch_waveguide(
+                point[0], point[1], point[2], *length, *width, *height, *arch_height, *z0,
+            ),
+            Self::Translate { child, by } => child.contains([
+                point[0] - by[0],
+                point[1] - by[1],
+                point[2] - by[2],
+            ]),
+            Self::Difference { base, tool } => base.contains(point) && !tool.contains(point),
+            Self::Imported { .. } => false,
+        }
     }
 }
 
@@ -522,7 +585,43 @@ pub(crate) fn voxelize_shape(
         }
         GeometryShape::Difference { base, tool } => {
             let Some((bounds_min, bounds_max)) = shape_local_bounds(base) else {
-                errors.push("CSG Difference: base must be a Box or Cylinder".to_string());
+                errors.push("CSG Difference: base must be a bounded analytic shape".to_string());
+                return ([1.0, 1.0, 1.0], None, [1, 1, 1], [-0.5, -0.5, -0.5]);
+            };
+            if shape_local_bounds(tool).is_none() {
+                errors.push("CSG Difference: tool must be a bounded analytic shape".to_string());
+            }
+            let bbox = [
+                bounds_max[0] - bounds_min[0],
+                bounds_max[1] - bounds_min[1],
+                bounds_max[2] - bounds_min[2],
+            ];
+            let nx = (bbox[0] / cell_size[0]).round().max(1.0) as u32;
+            let ny = (bbox[1] / cell_size[1]).round().max(1.0) as u32;
+            let nz = (bbox[2] / cell_size[2]).round().max(1.0) as u32;
+            let Some(n) = checked_voxel_count([nx, ny, nz], errors) else {
+                return (bbox, None, [nx, ny, nz], bounds_min);
+            };
+            let mut mask = vec![false; n];
+            for z in 0..nz {
+                for y in 0..ny {
+                    for x in 0..nx {
+                        let point = [
+                            bounds_min[0] + (x as f64 + 0.5) * cell_size[0],
+                            bounds_min[1] + (y as f64 + 0.5) * cell_size[1],
+                            bounds_min[2] + (z as f64 + 0.5) * cell_size[2],
+                        ];
+                        let idx = (x + nx * (y + ny * z)) as usize;
+                        mask[idx] = base.contains(point) && !tool.contains(point);
+                    }
+                }
+            }
+
+            (bbox, Some(mask), [nx, ny, nz], bounds_min)
+        }
+        GeometryShape::Translate { .. } => {
+            let Some((bounds_min, bounds_max)) = shape_local_bounds(shape) else {
+                errors.push("translated geometry requires a bounded child shape".to_string());
                 return ([1.0, 1.0, 1.0], None, [1, 1, 1], [-0.5, -0.5, -0.5]);
             };
             let bbox = [
@@ -530,78 +629,26 @@ pub(crate) fn voxelize_shape(
                 bounds_max[1] - bounds_min[1],
                 bounds_max[2] - bounds_min[2],
             ];
-            if !matches!(
-                base.as_ref(),
-                GeometryShape::Box { .. } | GeometryShape::Cylinder { .. }
-            ) {
-                errors.push("CSG Difference: base must be a Box or Cylinder".to_string());
-            }
             let nx = (bbox[0] / cell_size[0]).round().max(1.0) as u32;
             let ny = (bbox[1] / cell_size[1]).round().max(1.0) as u32;
             let nz = (bbox[2] / cell_size[2]).round().max(1.0) as u32;
             let Some(n) = checked_voxel_count([nx, ny, nz], errors) else {
                 return (bbox, None, [nx, ny, nz], bounds_min);
             };
-            let mut mask = vec![true; n];
-            if let GeometryShape::Cylinder { .. } = base.as_ref() {
-                for z in 0..nz {
-                    for y in 0..ny {
-                        for x in 0..nx {
-                            let point = [
-                                bounds_min[0] + (x as f64 + 0.5) * cell_size[0],
-                                bounds_min[1] + (y as f64 + 0.5) * cell_size[1],
-                                bounds_min[2] + (z as f64 + 0.5) * cell_size[2],
-                            ];
-                            let idx = (x + nx * (y + ny * z)) as usize;
-                            mask[idx] = contains_cylinder(base, [
-                                point[0], point[1], point[2],
-                            ]);
-                        }
+            let mut mask = vec![false; n];
+            for z in 0..nz {
+                for y in 0..ny {
+                    for x in 0..nx {
+                        let point = [
+                            bounds_min[0] + (x as f64 + 0.5) * cell_size[0],
+                            bounds_min[1] + (y as f64 + 0.5) * cell_size[1],
+                            bounds_min[2] + (z as f64 + 0.5) * cell_size[2],
+                        ];
+                        let idx = (x + nx * (y + ny * z)) as usize;
+                        mask[idx] = shape.contains(point);
                     }
                 }
             }
-
-            match tool.as_ref() {
-                GeometryShape::Cylinder { .. } => {
-                    for z in 0..nz {
-                        for y in 0..ny {
-                            for x in 0..nx {
-                                let point = [
-                                    bounds_min[0] + (x as f64 + 0.5) * cell_size[0],
-                                    bounds_min[1] + (y as f64 + 0.5) * cell_size[1],
-                                    bounds_min[2] + (z as f64 + 0.5) * cell_size[2],
-                                ];
-                                let idx = (x + nx * (y + ny * z)) as usize;
-                                if contains_cylinder(tool, point) {
-                                    mask[idx] = false;
-                                }
-                            }
-                        }
-                    }
-                }
-                GeometryShape::Box { size: tool_size } => {
-                    let hx = tool_size[0] * 0.5;
-                    let hy = tool_size[1] * 0.5;
-                    let cx = bounds_min[0] + bbox[0] * 0.5;
-                    let cy = bounds_min[1] + bbox[1] * 0.5;
-                    for z in 0..nz {
-                        for y in 0..ny {
-                            for x in 0..nx {
-                                let px = bounds_min[0] + (x as f64 + 0.5) * cell_size[0] - cx;
-                                let py = bounds_min[1] + (y as f64 + 0.5) * cell_size[1] - cy;
-                                let idx = (x + nx * (y + ny * z)) as usize;
-                                if px.abs() <= hx && py.abs() <= hy {
-                                    mask[idx] = false;
-                                }
-                            }
-                        }
-                    }
-                }
-                _ => {
-                    errors.push("CSG Difference: tool must be a Box or Cylinder".to_string());
-                }
-            }
-
             (bbox, Some(mask), [nx, ny, nz], bounds_min)
         }
     }

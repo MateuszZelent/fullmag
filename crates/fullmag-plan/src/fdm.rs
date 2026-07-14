@@ -327,6 +327,26 @@ fn apply_region_texture_overrides(
     }
 }
 
+fn finite_cylinder_sdf_for_shape(
+    shape: &GeometryShape,
+    center: [f64; 3],
+) -> Option<Box<dyn Fn(f64, f64, f64) -> f64>> {
+    match shape {
+        GeometryShape::Cylinder {
+            radius,
+            height,
+            axis,
+        } => Some(Box::new(crate::boundary_geometry::finite_cylinder_sdf(
+            *radius, *height, center, *axis,
+        ))),
+        GeometryShape::Translate { child, by } => finite_cylinder_sdf_for_shape(
+            child,
+            [center[0] + by[0], center[1] + by[1], center[2] + by[2]],
+        ),
+        _ => None,
+    }
+}
+
 pub(crate) fn plan_fdm(
     problem: &ProblemIR,
     resolved_backend: BackendTarget,
@@ -794,6 +814,10 @@ pub(crate) fn plan_fdm(
             "CSG Difference voxelized to {}x{}x{} grid, {}/{} active cells",
             grid_cells[0], grid_cells[1], grid_cells[2], active_count, n_cells
         ),
+        GeometryShape::Translate { .. } => format!(
+            "Translated geometry voxelized to {}x{}x{} grid, {}/{} active cells",
+            grid_cells[0], grid_cells[1], grid_cells[2], active_count, n_cells
+        ),
     };
 
     let realized_size = [
@@ -1000,37 +1024,18 @@ pub(crate) fn plan_fdm(
                 Some(Box::new(sdf))
             }
             GeometryShape::Difference { base, tool } => {
-                if let (
-                    GeometryShape::Cylinder {
-                        radius: base_r,
-                        height: base_h,
-                        axis: base_axis,
-                    },
-                    GeometryShape::Cylinder {
-                        radius: tool_r,
-                        height: tool_h,
-                        axis: tool_axis,
-                    },
-                ) = (base.as_ref(), tool.as_ref())
-                {
-                    let center = [
-                        grid_cells[0] as f64 * cell_size[0] * 0.5,
-                        grid_cells[1] as f64 * cell_size[1] * 0.5,
-                        grid_cells[2] as f64 * cell_size[2] * 0.5,
-                    ];
-                    let base_sdf = crate::boundary_geometry::finite_cylinder_sdf(
-                        *base_r, *base_h, center, *base_axis,
-                    );
-                    let tool_sdf = crate::boundary_geometry::finite_cylinder_sdf(
-                        *tool_r, *tool_h, center, *tool_axis,
-                    );
-                    Some(Box::new(move |x, y, _z| {
-                        let base_value = base_sdf(x, y, _z);
-                        let tool_value = tool_sdf(x, y, _z);
-                        base_value.max(-tool_value)
-                    }))
-                } else {
-                    None
+                let center = [
+                    grid_cells[0] as f64 * cell_size[0] * 0.5,
+                    grid_cells[1] as f64 * cell_size[1] * 0.5,
+                    grid_cells[2] as f64 * cell_size[2] * 0.5,
+                ];
+                let base_sdf = finite_cylinder_sdf_for_shape(base, center);
+                let tool_sdf = finite_cylinder_sdf_for_shape(tool, center);
+                match (base_sdf, tool_sdf) {
+                    (Some(base_sdf), Some(tool_sdf)) => Some(Box::new(move |x, y, z| {
+                        base_sdf(x, y, z).max(-tool_sdf(x, y, z))
+                    })),
+                    _ => None,
                 }
             }
             _ => None,

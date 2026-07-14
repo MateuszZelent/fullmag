@@ -1,5 +1,5 @@
 use super::*;
-use crate::geometry::{contains_cylinder, ir_to_shape, shape_local_bounds};
+use crate::geometry::{contains_cylinder, ir_to_shape, shape_local_bounds, voxelize_shape};
 
 #[test]
 fn fem_top_surface_selector_resolves_bbox_faces() {
@@ -8837,6 +8837,53 @@ fn fdm_boundary_params_passthrough_phi_floor_and_delta_min() {
 }
 
 #[test]
+fn fdm_translated_difference_keeps_boundary_sdf_realization() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.geometry.entries = vec![GeometryEntryIR::Difference {
+        name: "ring".to_string(),
+        base: Box::new(GeometryEntryIR::Cylinder {
+            name: "outer".to_string(),
+            radius: 50e-9,
+            height: 6e-9,
+            axis: [0.0, 0.0, 1.0],
+        }),
+        tool: Box::new(GeometryEntryIR::Translate {
+            name: "offset_hole".to_string(),
+            base: Box::new(GeometryEntryIR::Cylinder {
+                name: "inner".to_string(),
+                radius: 15e-9,
+                height: 2e-9,
+                axis: [0.0, 0.0, 1.0],
+            }),
+            by: [20e-9, 0.0, 0.0],
+        }),
+    }];
+    ir.regions[0].geometry = "ring".to_string();
+    ir.backend_policy.discretization_hints = Some(DiscretizationHintsIR {
+        fdm: Some(fullmag_ir::FdmHintsIR {
+            cell: [2e-9, 2e-9, 2e-9],
+            default_cell: None,
+            per_magnet: None,
+            demag: None,
+            boundary_correction: Some("full".to_string()),
+            boundary_phi_floor: None,
+            boundary_delta_min: None,
+        }),
+        fem: None,
+        hybrid: None,
+    });
+
+    let plan = plan(&ir).expect("translated CSG with boundary correction should plan");
+    let BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
+        panic!("expected FDM plan");
+    };
+    assert!(
+        fdm.boundary_geometry.is_some(),
+        "translated finite-cylinder CSG must retain a boundary SDF"
+    );
+}
+
+#[test]
 fn cylinder_axis_controls_oriented_bounds_and_containment() {
     let cylinder = GeometryEntryIR::Cylinder {
         name: "oriented".to_string(),
@@ -10613,4 +10660,72 @@ fn fdm_grid_memory_budget_is_rejected() {
     assert!(error.reasons.iter().any(|reason| {
         reason.contains("1000") && reason.contains("requested_counts")
     }));
+}
+
+#[test]
+fn fdm_difference_preserves_translated_operand_and_finite_height() {
+    let base = fullmag_ir::GeometryEntryIR::Box {
+        name: "base".to_string(),
+        size: [4.0, 4.0, 4.0],
+    };
+    let tool = fullmag_ir::GeometryEntryIR::Translate {
+        name: "tool".to_string(),
+        base: Box::new(fullmag_ir::GeometryEntryIR::Cylinder {
+            name: "tool_base".to_string(),
+            radius: 1.0,
+            height: 2.0,
+            axis: [0.0, 0.0, 1.0],
+        }),
+        by: [1.0, 0.0, 0.0],
+    };
+    let shape = ir_to_shape(&fullmag_ir::GeometryEntryIR::Difference {
+        name: "difference".to_string(),
+        base: Box::new(base.clone()),
+        tool: Box::new(tool),
+    })
+    .expect("difference should lower");
+    let mut errors = Vec::new();
+    let (_size, mask, cells, origin) = voxelize_shape(&shape, [1.0; 3], &mut errors);
+    assert!(errors.is_empty(), "unexpected voxelization errors: {errors:?}");
+    assert_eq!(cells, [4, 4, 4]);
+    assert_eq!(origin, [-2.0, -2.0, -2.0]);
+    let mask = mask.expect("bounded CSG should produce a mask");
+    let removed: Vec<usize> = mask
+        .iter()
+        .enumerate()
+        .filter_map(|(index, active)| (!active).then_some(index))
+        .collect();
+    assert_eq!(
+        removed,
+        vec![22, 23, 26, 27, 38, 39, 42, 43],
+        "translated cylinder must only cut its x/y footprint and finite z span"
+    );
+
+    let box_tool = fullmag_ir::GeometryEntryIR::Translate {
+        name: "box_tool".to_string(),
+        base: Box::new(fullmag_ir::GeometryEntryIR::Box {
+            name: "box_tool_base".to_string(),
+            size: [2.0, 2.0, 2.0],
+        }),
+        by: [1.0, 0.0, 0.0],
+    };
+    let box_shape = ir_to_shape(&fullmag_ir::GeometryEntryIR::Difference {
+        name: "box_difference".to_string(),
+        base: Box::new(base),
+        tool: Box::new(box_tool),
+    })
+    .expect("box difference should lower");
+    let mut box_errors = Vec::new();
+    let (_, box_mask, _, _) = voxelize_shape(&box_shape, [1.0; 3], &mut box_errors);
+    assert!(box_errors.is_empty(), "unexpected box CSG errors: {box_errors:?}");
+    let box_removed: Vec<usize> = box_mask
+        .expect("bounded CSG should produce a mask")
+        .iter()
+        .enumerate()
+        .filter_map(|(index, active)| (!active).then_some(index))
+        .collect();
+    assert_eq!(
+        box_removed, removed,
+        "translated box and cylinder fixtures must share the canonical active-cell fingerprint"
+    );
 }
