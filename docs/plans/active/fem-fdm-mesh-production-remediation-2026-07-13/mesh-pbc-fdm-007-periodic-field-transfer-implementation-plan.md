@@ -21,8 +21,8 @@
 
 ### Task 1: RED seam interpolation
 
-- [ ] Dodać 1D/2D fixtures z impulse na ostatniej komórce, sample po drugiej stronie seam i mixed periodic/open axes; periodic ma pobrać pierwszy/ostatni neighbor, open ma clampować.
-- [ ] Uruchomić `cargo test -p fullmag-fdm-demag transfer -- --nocapture`; periodic cases mają FAIL.
+- [x] Dodać 1D/2D fixtures z impulse na ostatniej komórce, sample po drugiej stronie seam i mixed periodic/open axes; periodic ma pobrać pierwszy/ostatni neighbor, open ma clampować.
+- [x] Uruchomić `cargo test -p fullmag-fdm-demag transfer -- --nocapture`; focused transfer cases are green.
 
 ### Task 2: boundary-aware indices
 
@@ -32,13 +32,13 @@ fn transfer_index(i: isize, n: usize, periodic: bool) -> usize {
 }
 ```
 
-- [ ] Zastąpić sześć bezwarunkowych clamp calls helperem i przekazać axes policy przez oba transfer directions.
-- [ ] Dodać conservation/constant-field tests i uruchomić pełny crate test; PASS.
+- [x] Zastąpić sześć bezwarunkowych clamp calls helperem i przekazać axes policy przez oba transfer directions.
+- [x] Dodać conservation/constant-field tests i uruchomić pełny crate test; PASS.
 
 ### Task 3: integration/provenance
 
-- [ ] Dodać runner integration fixture z resolved PBC i artifact assertions source/target fingerprint.
-- [ ] Commit: `git add crates/fullmag-fdm-demag crates/fullmag-runner && git commit -m "fix(fdm): wrap periodic field transfers"`.
+- [x] Dodać runner integration fixture z resolved PBC i artifact assertions source/target fingerprint.
+- [x] Commit implementacyjny: `1c65c9ff`.
 
 **Exit:** interpolation zawija tylko aktywne periodic axes; seam fixtures i open regression są zielone.
 
