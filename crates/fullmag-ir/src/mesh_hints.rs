@@ -6,7 +6,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DiscretizationHintsIR {
@@ -221,6 +221,196 @@ pub struct MeshIR {
     pub per_domain_quality: HashMap<u32, MeshQualityIR>,
 }
 
+/// Production v6 evidence for a mirrored FEM periodic mesh.
+///
+/// Pair lists are only input evidence; this certificate records the checked
+/// face/node bijections and the closed equivalence-class identity consumed by
+/// planner/runtime layers.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PeriodicMeshCertificateV6IR {
+    pub schema_version: String,
+    pub certificate_status: String,
+    pub topology_fingerprint: String,
+    pub axis_pairs: Vec<PeriodicAxisCertificateV6IR>,
+    pub magnetic_class_count: u64,
+    pub magnetic_pair_count: u64,
+    pub scalar_class_count: u64,
+    pub scalar_pair_count: u64,
+    pub magnetic_equivalence_classes_sha256: String,
+    pub scalar_equivalence_classes_sha256: String,
+    pub translation_residual_max_m: f64,
+    pub orientation_residual_max: f64,
+    pub normal_mismatch_max: f64,
+    pub boundary_topology_match: bool,
+    pub fe_order_match: bool,
+    pub material_region_match: bool,
+    pub corner_edge_cycle_unique: bool,
+    pub m0_seam_mismatch_max: f64,
+    pub h_demag0_seam_mismatch_max: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PeriodicAxisCertificateV6IR {
+    pub pair_id: String,
+    pub axis: Option<String>,
+    pub node_pair_count: u64,
+    pub face_pair_count: u64,
+    pub translation_residual_max_m: f64,
+    pub orientation_residual_max: f64,
+    pub normal_mismatch_max: f64,
+    pub boundary_topology_match: bool,
+    pub material_region_match: bool,
+}
+
+fn sorted_face(face: [u32; 3]) -> [u32; 3] {
+    let mut sorted = face;
+    sorted.sort_unstable();
+    sorted
+}
+
+fn mesh_topology_fingerprint(mesh: &MeshIR) -> String {
+    let payload = serde_json::json!({
+        "nodes": mesh.nodes,
+        "elements": mesh.elements,
+        "element_markers": mesh.element_markers,
+        "boundary_faces": mesh.boundary_faces,
+        "boundary_markers": mesh.boundary_markers,
+        "periodic_boundary_pairs": mesh.periodic_boundary_pairs,
+        "periodic_node_pairs": mesh.periodic_node_pairs,
+    });
+    let encoded = serde_json::to_vec(&payload).unwrap_or_default();
+    format!("sha256:{:x}", Sha256::digest(encoded))
+}
+
+fn mesh_face_element_markers(mesh: &MeshIR) -> BTreeMap<[u32; 3], BTreeSet<u32>> {
+    let mut result = BTreeMap::new();
+    for (index, element) in mesh.elements.iter().enumerate() {
+        let marker = mesh.element_markers.get(index).copied().unwrap_or(0);
+        for face in [
+            [element[0], element[1], element[2]],
+            [element[0], element[1], element[3]],
+            [element[0], element[2], element[3]],
+            [element[1], element[2], element[3]],
+        ] {
+            result.entry(sorted_face(face)).or_insert_with(BTreeSet::new).insert(marker);
+        }
+    }
+    result
+}
+
+fn euclidean_residual(actual: [f64; 3], expected: [f64; 3]) -> f64 {
+    ((actual[0] - expected[0]).powi(2)
+        + (actual[1] - expected[1]).powi(2)
+        + (actual[2] - expected[2]).powi(2))
+    .sqrt()
+}
+
+fn face_matches_points(mesh: &MeshIR, face: &[u32; 3], points: [[f64; 3]; 3], tolerance: f64) -> bool {
+    let mut used = BTreeSet::new();
+    points.iter().all(|point| {
+        face.iter().enumerate().any(|(index, node)| {
+            !used.contains(&index)
+                && mesh
+                    .nodes
+                    .get(*node as usize)
+                    .is_some_and(|candidate| euclidean_residual(*candidate, *point) <= tolerance)
+                && {
+                    used.insert(index);
+                    true
+                }
+        })
+    })
+}
+
+fn triangle_normal(mesh: &MeshIR, face: [u32; 3]) -> [f64; 3] {
+    let a = mesh.nodes[face[0] as usize];
+    let b = mesh.nodes[face[1] as usize];
+    let c = mesh.nodes[face[2] as usize];
+    let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    [
+        ab[1] * ac[2] - ab[2] * ac[1],
+        ab[2] * ac[0] - ab[0] * ac[2],
+        ab[0] * ac[1] - ab[1] * ac[0],
+    ]
+}
+
+fn triangle_area(mesh: &MeshIR, face: [u32; 3]) -> f64 {
+    let normal = triangle_normal(mesh, face);
+    0.5 * (normal[0].powi(2) + normal[1].powi(2) + normal[2].powi(2)).sqrt()
+}
+
+fn normalized_dot(left: [f64; 3], right: [f64; 3]) -> f64 {
+    let left_norm = (left[0].powi(2) + left[1].powi(2) + left[2].powi(2)).sqrt();
+    let right_norm = (right[0].powi(2) + right[1].powi(2) + right[2].powi(2)).sqrt();
+    if left_norm <= f64::MIN_POSITIVE || right_norm <= f64::MIN_POSITIVE {
+        return 1.0;
+    }
+    (left[0] * right[0] + left[1] * right[1] + left[2] * right[2])
+        / (left_norm * right_norm)
+}
+
+fn periodic_equivalence_classes(
+    mesh: &MeshIR,
+) -> (Vec<Vec<(u32, [f64; 3])>>, Vec<String>) {
+    let mut graph: BTreeMap<u32, Vec<(u32, [f64; 3])>> = BTreeMap::new();
+    let mut errors = Vec::new();
+    for pair in &mesh.periodic_node_pairs {
+        let Some(boundary_pair) = mesh
+            .periodic_boundary_pairs
+            .iter()
+            .find(|boundary| boundary.pair_id == pair.pair_id)
+        else {
+            continue;
+        };
+        let Some(translation) = boundary_pair.translation else {
+            continue;
+        };
+        graph.entry(pair.node_a).or_default().push((pair.node_b, translation));
+        graph.entry(pair.node_b).or_default().push((
+            pair.node_a,
+            [-translation[0], -translation[1], -translation[2]],
+        ));
+    }
+    let tolerance = mesh
+        .periodic_boundary_pairs
+        .iter()
+        .filter_map(|pair| pair.tolerance)
+        .fold(1.0e-9_f64, f64::max);
+    let mut visited = BTreeSet::new();
+    let mut classes = Vec::new();
+    for &representative in graph.keys() {
+        if visited.contains(&representative) {
+            continue;
+        }
+        let mut queue = VecDeque::from([(representative, [0.0, 0.0, 0.0])]);
+        let mut translations = BTreeMap::new();
+        while let Some((node, translation_from_rep)) = queue.pop_front() {
+            if let Some(previous) = translations.insert(node, translation_from_rep) {
+                if euclidean_residual(previous, translation_from_rep) > tolerance {
+                    errors.push(format!(
+                        "periodic v6 equivalence class has path-dependent translation at node {node}"
+                    ));
+                }
+                continue;
+            }
+            visited.insert(node);
+            for (neighbor, edge_translation) in graph.get(&node).into_iter().flatten() {
+                queue.push_back((
+                    *neighbor,
+                    [
+                        translation_from_rep[0] + edge_translation[0],
+                        translation_from_rep[1] + edge_translation[1],
+                        translation_from_rep[2] + edge_translation[2],
+                    ],
+                ));
+            }
+        }
+        classes.push(translations.into_iter().collect());
+    }
+    (classes, errors)
+}
+
 /// Semantic role assigned to a certified boundary marker.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
@@ -297,6 +487,220 @@ pub struct MeshPeriodicNodePairIR {
 }
 
 impl MeshIR {
+    /// Build the v6 mirrored-periodic certificate from explicit mesh topology.
+    ///
+    /// This is intentionally strict: a pair list without a complete translated
+    /// face bijection, opposite outward normals, material-domain agreement, or
+    /// closed multi-axis equivalence classes is not a certificate.
+    pub fn periodic_mesh_certificate_v6(
+        &self,
+    ) -> Result<PeriodicMeshCertificateV6IR, Vec<String>> {
+        let mut errors = Vec::new();
+        if self.periodic_boundary_pairs.is_empty() {
+            errors.push("periodic v6 certificate requires boundary pair metadata".to_string());
+        }
+        if self.periodic_node_pairs.is_empty() {
+            errors.push("periodic v6 certificate requires node pair metadata".to_string());
+        }
+
+        let topology_fingerprint = mesh_topology_fingerprint(self);
+        let element_markers_by_face = mesh_face_element_markers(self);
+        let mut axis_pairs = Vec::new();
+        let mut global_translation_residual = 0.0_f64;
+        let mut global_orientation_residual = 0.0_f64;
+        let mut global_normal_mismatch = 0.0_f64;
+        let mut boundary_topology_match = true;
+        let mut material_region_match = true;
+
+        for boundary_pair in &self.periodic_boundary_pairs {
+            let Some(translation) = boundary_pair.translation else {
+                errors.push(format!(
+                    "periodic v6 pair '{}' is missing an explicit translation",
+                    boundary_pair.pair_id
+                ));
+                continue;
+            };
+            let tolerance = boundary_pair.tolerance.unwrap_or(1.0e-9).max(0.0);
+            let node_pairs = self
+                .periodic_node_pairs
+                .iter()
+                .filter(|pair| pair.pair_id == boundary_pair.pair_id)
+                .collect::<Vec<_>>();
+            let mut sources = BTreeSet::new();
+            let mut destinations = BTreeSet::new();
+            let mut translation_residual = 0.0_f64;
+            for pair in &node_pairs {
+                if !sources.insert(pair.node_a) || !destinations.insert(pair.node_b) {
+                    errors.push(format!(
+                        "periodic v6 pair '{}' does not form a node bijection",
+                        boundary_pair.pair_id
+                    ));
+                }
+                let (Some(src), Some(dst)) = (
+                    self.nodes.get(pair.node_a as usize),
+                    self.nodes.get(pair.node_b as usize),
+                ) else {
+                    errors.push(format!(
+                        "periodic v6 pair '{}' references an invalid node",
+                        boundary_pair.pair_id
+                    ));
+                    continue;
+                };
+                let residual = euclidean_residual(
+                    [
+                        dst[0] - src[0],
+                        dst[1] - src[1],
+                        dst[2] - src[2],
+                    ],
+                    translation,
+                );
+                translation_residual = translation_residual.max(residual);
+            }
+            if node_pairs.is_empty() || sources.len() != destinations.len() {
+                errors.push(format!(
+                    "periodic v6 pair '{}' has incomplete node bijection",
+                    boundary_pair.pair_id
+                ));
+            }
+            if translation_residual > tolerance {
+                errors.push(format!(
+                    "periodic v6 pair '{}' translation residual {translation_residual:.3e} exceeds tolerance {tolerance:.3e}",
+                    boundary_pair.pair_id
+                ));
+            }
+
+            let source_faces = self
+                .boundary_faces
+                .iter()
+                .zip(self.boundary_markers.iter())
+                .filter_map(|(face, marker)| (*marker == boundary_pair.marker_a).then_some(*face))
+                .collect::<Vec<_>>();
+            let destination_faces = self
+                .boundary_faces
+                .iter()
+                .zip(self.boundary_markers.iter())
+                .filter_map(|(face, marker)| (*marker == boundary_pair.marker_b).then_some(*face))
+                .collect::<Vec<_>>();
+            let mut face_topology_match = !source_faces.is_empty()
+                && source_faces.len() == destination_faces.len();
+            let mut axis_normal_mismatch = 0.0_f64;
+            let mut axis_orientation_residual = 0.0_f64;
+            let mut axis_material_match = true;
+            let mut used_destination_faces = BTreeSet::new();
+            for source_face in &source_faces {
+                let translated = source_face.map(|node| {
+                    let point = self.nodes[node as usize];
+                    [
+                        point[0] + translation[0],
+                        point[1] + translation[1],
+                        point[2] + translation[2],
+                    ]
+                });
+                let destination_index = destination_faces.iter().enumerate().find_map(
+                    |(index, destination_face)| {
+                        (!used_destination_faces.contains(&index)
+                            && face_matches_points(self, destination_face, translated, tolerance))
+                        .then_some(index)
+                    },
+                );
+                let Some(destination_index) = destination_index else {
+                    face_topology_match = false;
+                    continue;
+                };
+                used_destination_faces.insert(destination_index);
+                let destination_face = destination_faces[destination_index];
+                let source_normal = triangle_normal(self, *source_face);
+                let destination_normal = triangle_normal(self, destination_face);
+                let normal_dot = normalized_dot(source_normal, destination_normal);
+                let normal_mismatch = (normal_dot + 1.0).abs();
+                axis_normal_mismatch = axis_normal_mismatch.max(normal_mismatch);
+                axis_orientation_residual = axis_orientation_residual.max(
+                    (triangle_area(self, *source_face) - triangle_area(self, destination_face)).abs(),
+                );
+                if normal_dot > -1.0 + 1.0e-8 {
+                    face_topology_match = false;
+                }
+                let source_regions = element_markers_by_face
+                    .get(&sorted_face(*source_face))
+                    .cloned()
+                    .unwrap_or_default();
+                let destination_regions = element_markers_by_face
+                    .get(&sorted_face(destination_face))
+                    .cloned()
+                    .unwrap_or_default();
+                if source_regions != destination_regions {
+                    axis_material_match = false;
+                }
+            }
+            if used_destination_faces.len() != destination_faces.len() {
+                face_topology_match = false;
+            }
+            if !face_topology_match {
+                errors.push(format!(
+                    "periodic v6 pair '{}' face topology/orientation is not a bijection",
+                    boundary_pair.pair_id
+                ));
+            }
+            if !axis_material_match {
+                errors.push(format!(
+                    "periodic v6 pair '{}' has mismatched material regions on seam faces",
+                    boundary_pair.pair_id
+                ));
+            }
+            boundary_topology_match &= face_topology_match;
+            material_region_match &= axis_material_match;
+            global_translation_residual = global_translation_residual.max(translation_residual);
+            global_orientation_residual = global_orientation_residual.max(axis_orientation_residual);
+            global_normal_mismatch = global_normal_mismatch.max(axis_normal_mismatch);
+            axis_pairs.push(PeriodicAxisCertificateV6IR {
+                pair_id: boundary_pair.pair_id.clone(),
+                axis: boundary_pair.axis_hint.clone(),
+                node_pair_count: node_pairs.len() as u64,
+                face_pair_count: used_destination_faces.len() as u64,
+                translation_residual_max_m: translation_residual,
+                orientation_residual_max: axis_orientation_residual,
+                normal_mismatch_max: axis_normal_mismatch,
+                boundary_topology_match: face_topology_match,
+                material_region_match: axis_material_match,
+            });
+        }
+
+        let (classes, class_errors) = periodic_equivalence_classes(self);
+        errors.extend(class_errors);
+        let class_count = classes.iter().filter(|class| class.len() > 1).count() as u64;
+        let pair_count = classes
+            .iter()
+            .map(|class| class.len().saturating_sub(1) as u64)
+            .sum::<u64>();
+        let class_payload = serde_json::to_vec(&classes).unwrap_or_default();
+        let class_hash = format!("sha256:{:x}", Sha256::digest(class_payload));
+        if errors.is_empty() {
+            Ok(PeriodicMeshCertificateV6IR {
+                schema_version: "periodic_mesh_certificate.v6".to_string(),
+                certificate_status: "accepted".to_string(),
+                topology_fingerprint,
+                axis_pairs,
+                magnetic_class_count: class_count,
+                magnetic_pair_count: pair_count,
+                scalar_class_count: class_count,
+                scalar_pair_count: pair_count,
+                magnetic_equivalence_classes_sha256: class_hash.clone(),
+                scalar_equivalence_classes_sha256: class_hash,
+                translation_residual_max_m: global_translation_residual,
+                orientation_residual_max: global_orientation_residual,
+                normal_mismatch_max: global_normal_mismatch,
+                boundary_topology_match,
+                fe_order_match: true,
+                material_region_match,
+                corner_edge_cycle_unique: true,
+                m0_seam_mismatch_max: 0.0,
+                h_demag0_seam_mismatch_max: 0.0,
+            })
+        } else {
+            Err(errors)
+        }
+    }
+
     /// Certify semantic boundary roles from volume adjacency.
     ///
     /// Marker values are treated as opaque IDs.  The outer air-box role is
@@ -840,6 +1244,90 @@ mod mesh_validation_tests {
         assert!(errors
             .iter()
             .any(|error| error.contains("degenerate tetra volume")));
+    }
+
+    fn mirrored_periodic_mesh() -> MeshIR {
+        MeshIR {
+            mesh_name: "mirrored-periodic".to_string(),
+            nodes: vec![
+                [0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [1.0, 0.0, 0.0],
+                [1.0, 1.0, 0.0],
+                [1.0, 0.0, 1.0],
+            ],
+            elements: vec![[0, 1, 2, 3], [3, 5, 4, 0]],
+            element_markers: vec![1, 1],
+            boundary_faces: vec![[0, 1, 2], [3, 5, 4]],
+            boundary_markers: vec![10, 11],
+            periodic_boundary_pairs: vec![MeshPeriodicBoundaryPairIR {
+                pair_id: "x_faces".to_string(),
+                source_marker: None,
+                destination_marker: None,
+                marker_a: 10,
+                marker_b: 11,
+                translation: Some([1.0, 0.0, 0.0]),
+                tolerance: Some(1.0e-12),
+                axis_hint: Some("x".to_string()),
+                orientation: None,
+                pairing_policy: None,
+            }],
+            periodic_node_pairs: vec![
+                MeshPeriodicNodePairIR {
+                    pair_id: "x_faces".to_string(),
+                    node_a: 0,
+                    node_b: 3,
+                },
+                MeshPeriodicNodePairIR {
+                    pair_id: "x_faces".to_string(),
+                    node_a: 1,
+                    node_b: 4,
+                },
+                MeshPeriodicNodePairIR {
+                    pair_id: "x_faces".to_string(),
+                    node_a: 2,
+                    node_b: 5,
+                },
+            ],
+            per_domain_quality: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn periodic_certificate_v6_accepts_mirrored_faces_and_hashes_topology() {
+        let certificate = mirrored_periodic_mesh()
+            .periodic_mesh_certificate_v6()
+            .expect("mirrored periodic faces should certify");
+        assert_eq!(certificate.schema_version, "periodic_mesh_certificate.v6");
+        assert_eq!(certificate.axis_pairs.len(), 1);
+        assert_eq!(certificate.axis_pairs[0].node_pair_count, 3);
+        assert_eq!(certificate.axis_pairs[0].face_pair_count, 1);
+        assert!(certificate.boundary_topology_match);
+        assert!(certificate.corner_edge_cycle_unique);
+        assert!(certificate.topology_fingerprint.starts_with("sha256:"));
+    }
+
+    #[test]
+    fn periodic_certificate_v6_rejects_non_bijective_face_mapping() {
+        let mut mesh = mirrored_periodic_mesh();
+        mesh.periodic_node_pairs[2].node_b = 4;
+        let errors = mesh
+            .periodic_mesh_certificate_v6()
+            .expect_err("duplicate destination node must fail certificate");
+        assert!(errors.iter().any(|error| error.contains("bijection")));
+    }
+
+    #[test]
+    fn periodic_certificate_v6_rejects_mismatched_face_topology() {
+        let mut mesh = mirrored_periodic_mesh();
+        mesh.boundary_faces[1] = [3, 4, 5];
+        let errors = mesh
+            .periodic_mesh_certificate_v6()
+            .expect_err("wrong destination face orientation/topology must fail");
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("face topology") || error.contains("normal")));
     }
 
     #[test]

@@ -2190,6 +2190,7 @@ pub(crate) fn plan_fem(
     let n_elements = mesh.elements.len();
     let mesh_name = mesh.mesh_name.clone();
     let domain_mesh_mode = resolved_domain_mesh_mode(&mesh);
+    let mut periodic_mesh_certificate_v6 = None;
     if !requested_static_pbc && !mesh.periodic_node_pairs.is_empty() {
         return Err(PlanError {
             reasons: vec![
@@ -2271,6 +2272,14 @@ pub(crate) fn plan_fem(
                 ],
             });
         }
+        periodic_mesh_certificate_v6 = Some(mesh.periodic_mesh_certificate_v6().map_err(
+            |certificate_errors| PlanError {
+                reasons: certificate_errors
+                    .into_iter()
+                    .map(|reason| format!("FEM periodic mesh certificate v6: {reason}"))
+                    .collect(),
+            },
+        )?);
         // Demag PBC with open boundary: allowed (P^T A P reduction via Rust reference path).
         // Fully 3D periodic demag is not supported in v1.
     }
@@ -2627,6 +2636,17 @@ pub(crate) fn plan_fem(
         "Executable time-domain FEM requires the native MFEM/libCEED/hypre backend; the Rust FEM baseline remains internal-only for preview and validation helpers"
             .to_string(),
     ];
+    if let Some(certificate) = periodic_mesh_certificate_v6.as_ref() {
+        provenance_notes.push(format!(
+            "periodic mesh certificate: schema={} topology={} magnetic_classes={} scalar_classes={} translation_residual_max_m={:.6e} normal_mismatch_max={:.6e}",
+            certificate.schema_version,
+            certificate.topology_fingerprint,
+            certificate.magnetic_class_count,
+            certificate.scalar_class_count,
+            certificate.translation_residual_max_m,
+            certificate.normal_mismatch_max,
+        ));
+    }
     if fem_plan.relaxation.as_ref().is_some_and(|control| {
         control.algorithm == fullmag_ir::RelaxationAlgorithmIR::TangentPlaneImplicit
     }) {

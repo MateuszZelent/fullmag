@@ -33,13 +33,19 @@ pub struct PeriodicMeshCertificateV6 {
 }
 ```
 
-- [ ] Utworzyć/rozszerzyć typ w `crates/fullmag-ir/src/mesh_hints.rs`; generator w Python periodic meshing; planner validation w `crates/fullmag-plan/src/fem.rs` i `mesh.rs`.
+- [x] Utworzyć typ w `crates/fullmag-ir/src/mesh_hints.rs` oraz strict planner validation w `crates/fullmag-plan/src/fem.rs` (slice obejmuje node/face bijection, translated vertices, area/orientation, normals, marker coverage i topology fingerprint).
+- [ ] Dokończyć generator w Python periodic meshing oraz walidację domen/FE-space ownership w `mesh.rs`.
 - [ ] Native `mesh_symmetry_certificate` ma konsumować tę samą treść, nie tworzyć alternatywnej definicji.
 - [ ] Uruchomić periodic Python, IR i planner tests oraz managed native contract; corrupt fixtures FAIL-closed, valid fixtures PASS.
+
+### Evidence (2026-07-14, partial)
+
+- `cargo test -p fullmag-ir mesh_validation_tests::periodic_certificate_v6 --lib` — 3 passed.
+- `cargo test -p fullmag-plan --lib fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs` — passed; accepted certificate identity is copied into planner provenance.
+- Native managed contract, Python generator, separate magnetic/scalar FE class hashes, and explicit edge/corner closure evidence remain open.
 
 ### Task 3: commit
 
 - [ ] Commit: `git add docs/physics docs/adr/0012-canonicalization-backbone.md packages/fullmag-py crates/fullmag-ir crates/fullmag-plan backends/fem && git commit -m "feat(mesh): enforce periodic mesh certificate v6"`.
 
 **Exit:** solver nie uruchamia PBC bez v6 powiązanego z bieżącym topology hash; wszystkie corrupt fixtures są odrzucone z konkretnym reason.
-

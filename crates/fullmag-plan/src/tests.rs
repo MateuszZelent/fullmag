@@ -2350,15 +2350,20 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
                 mesh_name: "periodic_strip".to_string(),
                 nodes: vec![
                     [0.0, 0.0, 0.0],
-                    [1.0, 0.0, 0.0],
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
-                    [1.0, 1.0, 1.0],
+                    [1.0, 0.0, 0.0],
+                    [1.0, 1.0, 0.0],
+                    [1.0, 0.0, 1.0],
+                    [-2.0, -2.0, -2.0],
+                    [2.0, -2.0, -2.0],
+                    [-2.0, 2.0, -2.0],
+                    [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [1, 2, 3, 4]],
-                element_markers: vec![1, 0],
-                boundary_faces: vec![[0, 1, 2], [0, 1, 3], [1, 2, 4]],
-                boundary_markers: vec![10, 11, 99],
+                elements: vec![[0, 1, 2, 3], [3, 5, 4, 0], [6, 7, 8, 9]],
+                element_markers: vec![1, 1, 0],
+                boundary_faces: vec![[0, 1, 2], [3, 5, 4]],
+                boundary_markers: vec![10, 11],
                 periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
                     pair_id: "x_periodic".to_string(),
                     source_marker: None,
@@ -2374,7 +2379,17 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
                 periodic_node_pairs: vec![fullmag_ir::MeshPeriodicNodePairIR {
                     pair_id: "x_periodic".to_string(),
                     node_a: 0,
-                    node_b: 1,
+                    node_b: 3,
+                },
+                fullmag_ir::MeshPeriodicNodePairIR {
+                    pair_id: "x_periodic".to_string(),
+                    node_a: 1,
+                    node_b: 4,
+                },
+                fullmag_ir::MeshPeriodicNodePairIR {
+                    pair_id: "x_periodic".to_string(),
+                    node_a: 2,
+                    node_b: 5,
                 }],
                 per_domain_quality: std::collections::HashMap::new(),
             }),
@@ -2421,7 +2436,7 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
     match planned.backend_plan {
         BackendPlanIR::Fem(fem) => {
             assert_eq!(fem.mesh.mesh_name, "periodic_strip");
-            assert_eq!(fem.mesh.periodic_node_pairs.len(), 1);
+            assert_eq!(fem.mesh.periodic_node_pairs.len(), 3);
             assert!(fem.enable_exchange);
             assert!(!fem.enable_demag);
         }
@@ -2485,10 +2500,21 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
         .demag = fullmag_ir::FdmDemagPeriodicityIR::PeriodicAirboxK0;
     let demag_planned =
         plan(&demag_ir).expect("periodic FEM static demag with periodic-airbox PBC should plan");
-    match demag_planned.backend_plan {
+    assert!(demag_planned
+        .provenance
+        .notes
+        .iter()
+        .any(|note| note.contains("periodic mesh certificate: schema=periodic_mesh_certificate.v6")
+            && note.contains("topology=sha256:")
+            && note.contains("magnetic_classes=3")
+            && note.contains("scalar_classes=3")),
+        "periodic certificate identity was not preserved in planner provenance: {:?}",
+        demag_planned.provenance.notes
+    );
+    match &demag_planned.backend_plan {
         BackendPlanIR::Fem(fem) => {
             assert!(fem.enable_demag);
-            assert_eq!(fem.mesh.periodic_node_pairs.len(), 1);
+            assert_eq!(fem.mesh.periodic_node_pairs.len(), 3);
             assert!(fem.air_box_config.is_some());
         }
         other => panic!("expected FEM plan, got {:?}", other),
@@ -2510,6 +2536,12 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
         .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
         .and_then(|asset| asset.mesh.as_mut())
         .expect("test problem should carry an inline FEM domain mesh");
+    for point in &mut mesh.nodes {
+        *point = [point[2], point[1], point[0]];
+    }
+    for element in &mut mesh.elements {
+        element.swap(1, 2);
+    }
     mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
         pair_id: "z_periodic".to_string(),
         source_marker: None,
@@ -2522,11 +2554,23 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
         orientation: None,
         pairing_policy: None,
     }];
-    mesh.periodic_node_pairs = vec![fullmag_ir::MeshPeriodicNodePairIR {
-        pair_id: "z_periodic".to_string(),
-        node_a: 0,
-        node_b: 3,
-    }];
+    mesh.periodic_node_pairs = vec![
+        fullmag_ir::MeshPeriodicNodePairIR {
+            pair_id: "z_periodic".to_string(),
+            node_a: 0,
+            node_b: 3,
+        },
+        fullmag_ir::MeshPeriodicNodePairIR {
+            pair_id: "z_periodic".to_string(),
+            node_a: 1,
+            node_b: 4,
+        },
+        fullmag_ir::MeshPeriodicNodePairIR {
+            pair_id: "z_periodic".to_string(),
+            node_a: 2,
+            node_b: 5,
+        },
+    ];
     let z_demag_planned =
         plan(&z_demag_ir).expect("single-axis z FEM demag PBC with open x/y airbox should plan");
     match z_demag_planned.backend_plan {
