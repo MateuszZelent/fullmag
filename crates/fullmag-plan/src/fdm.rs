@@ -455,6 +455,16 @@ pub(crate) fn plan_fdm(
             return Err(PlanError { reasons: errors });
         }
     };
+    // Keep the asset-origin path aligned with multilayer lowering: an asset
+    // stores coordinates in the untransformed geometry frame, while a
+    // top-level Translate moves the realized grid in world space.
+    let top_level_translation = match extract_multilayer_geometry(geometry) {
+        Ok(placed) => placed.translation,
+        Err(e) => {
+            errors.push(e);
+            return Err(PlanError { reasons: errors });
+        }
+    };
 
     let cell_size = match &problem.backend_policy.discretization_hints {
         Some(DiscretizationHintsIR { fdm: Some(fdm), .. }) => {
@@ -513,6 +523,9 @@ pub(crate) fn plan_fdm(
     let (bounding_size, active_mask, grid_cells, native_origin, used_precomputed_asset) =
         if let Some(asset) = provided_grid_asset {
             validate_grid_asset_cell_size(asset, cell_size, &mut errors);
+            let origin = std::array::from_fn(|axis| {
+                asset.origin[axis] + top_level_translation[axis]
+            });
             (
                 [
                     asset.cells[0] as f64 * asset.cell_size[0],
@@ -521,7 +534,7 @@ pub(crate) fn plan_fdm(
                 ],
                 Some(asset.active_mask.clone()),
                 asset.cells,
-                asset.origin,
+                origin,
                 true,
             )
         } else {

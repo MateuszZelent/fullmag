@@ -1,7 +1,7 @@
 use super::*;
 use crate::geometry::{
-    cell_for_magnet, contains_cylinder, fdm_default_cell, ir_to_shape, shape_local_bounds,
-    voxelize_shape,
+    cell_for_magnet, contains_cylinder, extract_multilayer_geometry, fdm_default_cell, ir_to_shape,
+    shape_local_bounds, voxelize_shape,
 };
 use std::collections::BTreeMap;
 
@@ -8932,6 +8932,50 @@ fn fdm_translated_base_boundary_sdf_matches_active_mask_coordinates() {
         boundary.volume_fraction[active_index] > 0.0,
         "boundary volume fraction must be non-zero wherever translated active mask is set"
     );
+}
+
+#[test]
+fn fdm_translated_single_grid_asset_matches_multilayer_origin() {
+    let mut ir = ProblemIR::bootstrap_example();
+    let translation = [30e-9, -10e-9, 4e-9];
+    ir.geometry.entries = vec![GeometryEntryIR::Translate {
+        name: "shifted_asset".to_string(),
+        base: Box::new(GeometryEntryIR::Box {
+            name: "asset_base".to_string(),
+            size: [4e-9, 4e-9, 2e-9],
+        }),
+        by: translation,
+    }];
+    ir.regions[0].geometry = "shifted_asset".to_string();
+    let asset_origin = [-2e-9, -2e-9, -1e-9];
+    ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+        fdm_grid_assets: vec![fullmag_ir::FdmGridAssetIR {
+            geometry_name: "shifted_asset".to_string(),
+            cells: [2, 2, 1],
+            cell_size: [2e-9, 2e-9, 2e-9],
+            origin: asset_origin,
+            active_mask: vec![true, true, true, false],
+        }],
+        fem_mesh_assets: vec![],
+        fem_domain_mesh_asset: None,
+    });
+
+    let planned = plan(&ir).expect("translated single-grid asset should plan");
+    let BackendPlanIR::Fdm(single) = planned.backend_plan else {
+        panic!("expected single-grid FDM plan");
+    };
+    let placed = extract_multilayer_geometry(&ir.geometry.entries[0])
+        .expect("the same geometry must lower for multilayer");
+    let expected_origin = std::array::from_fn(|axis| asset_origin[axis] + placed.translation[axis]);
+    assert_eq!(single.origin_m, expected_origin);
+    let first_active_cell: [f64; 3] = std::array::from_fn(|axis| {
+        single.origin_m[axis] + 0.5 * single.cell_size[axis]
+    });
+    for (actual, expected) in first_active_cell.into_iter().zip([29e-9, -11e-9, 4e-9]) {
+        assert!((actual - expected).abs() < 1e-21);
+    }
+    assert!(single.active_mask.as_ref().expect("asset mask")[0]);
+    assert!(!single.active_mask.as_ref().expect("asset mask")[3]);
 }
 
 #[test]
