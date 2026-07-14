@@ -21,6 +21,7 @@ import {
   MODEL_GEOMETRY_CAPABILITIES_PATH,
   MODEL_GEOMETRY_DIAGNOSTICS_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
+  MODEL_MAGNETIZATION_ASSET_PATH,
   MODEL_REALIZED_REGIONS_PATH,
   MODEL_REGION_DIAGNOSTICS_PATH,
   MODEL_SCENE_PATH,
@@ -54,6 +55,8 @@ import {
   resolveMeshRegionMembershipListRevision,
   resolveMeshRegionQualityResourceKey,
   resolveMeshSharedDomainManifestRevision,
+  resolveMagnetizationAssetResourceKey,
+  resolveMagnetizationAssetResourceRevision,
   resolveObjectMeshQualityResourceKey,
   resolveObjectMeshPolicyResourceKey,
   resolveObjectMeshReportResourceKey,
@@ -78,6 +81,12 @@ describe("geometry lifecycle resources", () => {
     );
     expect(MODEL_REGION_DIAGNOSTICS_RESOURCE_KEY).toBe(
       MODEL_REGION_DIAGNOSTICS_PATH,
+    );
+    expect(resolveMagnetizationAssetResourceKey("mag:free layer")).toBe(
+      MODEL_MAGNETIZATION_ASSET_PATH.replace(
+        "{asset_id}",
+        "mag%3Afree%20layer",
+      ),
     );
     expect(MODEL_REALIZED_REGIONS_RESOURCE_KEY).toBe(
       MODEL_REALIZED_REGIONS_PATH,
@@ -166,6 +175,16 @@ describe("geometry lifecycle resources", () => {
       resolveRegionCoefficientsRevision({ region_coefficients_revision: 7 }),
     ).not.toBe(6);
     expect(resolveRegionCoefficientsRevision({ revision: 99 } as never)).toBeNull();
+  });
+
+  it("keys magnetization assets by the initial-state realization lane", () => {
+    expect(
+      resolveMagnetizationAssetResourceRevision({
+        scene_revision: 9,
+        region_initial_state_revision: 12,
+        asset: { id: "mag:free" },
+      } as never),
+    ).toBe("9:12");
   });
 
   it("includes mesh provenance in shared-domain manifest revision signatures", () => {

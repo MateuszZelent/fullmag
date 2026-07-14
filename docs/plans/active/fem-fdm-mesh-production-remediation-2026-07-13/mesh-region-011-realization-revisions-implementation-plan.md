@@ -104,3 +104,11 @@ struct RegionRealizationRevisions {
 - [x] RED/GREEN evidence: `authoring_magnetization_asset_patch_commits_transform_and_params` asserts the initial-state lane on the GET resource; focused API test passes 1/1.
 - [x] OpenAPI v2 JSON and generated Control Room types were regenerated with the optional initial-state lane field.
 - [ ] A dedicated initial-state resource hook/ETag, consumed tuple in run artifacts/plans, managed/browser gates and full Inspector propagation remain open.
+
+### Evidence update (2026-07-14, initial-state resource hook and invalidation)
+
+- [x] `resolveMagnetizationAssetResourceKey` and `useMagnetizationAssetResource` now provide the canonical v2 resource hook for magnetization assets.
+- [x] The hook revision is the explicit `scene_revision:region_initial_state_revision` tuple; it cannot reuse a scene-only revision when initial-state realization changes.
+- [x] Region authoring invalidation now invalidates the magnetization-asset resource family together with region diagnostics/material resources.
+- [x] RED/GREEN evidence: the new resource-key/revision and invalidation assertions initially failed on missing exports, then `geometryLifecycleResources.test.ts` plus `regionAuthoringInvalidation.test.ts` passed 12/12; Control Room typecheck and focused ESLint passed.
+- [ ] HTTP ETags, consumed tuple in run artifacts/plans, managed/browser gates and full Inspector propagation remain open.

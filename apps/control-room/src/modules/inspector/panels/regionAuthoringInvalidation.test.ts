@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { EventBus } from "@/kernel/events/EventBus";
-import { MODEL_MATERIAL_PATH } from "@/kernel/api/apiPaths";
+import {
+  MODEL_MAGNETIZATION_ASSET_PATH,
+  MODEL_MATERIAL_PATH,
+} from "@/kernel/api/apiPaths";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
 import { ResourceRuntimeStore } from "@/kernel/resources/ResourceRuntimeStore";
@@ -43,6 +46,7 @@ describe("region authoring invalidation", () => {
     expect(keys).toContain(MODEL_REGIONS_RESOURCE_KEY);
     expect(keys).toContain(MODEL_REGION_DIAGNOSTICS_RESOURCE_KEY);
     expect(keys).toContain(MODEL_MATERIAL_FIELDS_RESOURCE_KEY);
+    expect(keys).toContain(MODEL_MAGNETIZATION_ASSET_PATH);
     expect(keys).toContain(MODEL_MATERIAL_PATH);
     expect(keys).not.toContain(MESH_BUILD_CURRENT_RESOURCE_KEY);
     expect(keys).not.toContain(MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY);

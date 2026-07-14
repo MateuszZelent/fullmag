@@ -39,6 +39,7 @@ import {
   MODEL_GEOMETRY_CAPABILITIES_PATH,
   MODEL_GEOMETRY_DIAGNOSTICS_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
+  MODEL_MAGNETIZATION_ASSET_PATH,
   MODEL_REALIZED_REGIONS_PATH,
   MODEL_REGION_DIAGNOSTICS_PATH,
   MODEL_REGIONS_PATH,
@@ -51,6 +52,7 @@ import type {
   CouplingListResource,
   MaterialResource,
   MaterialParameterFieldListResource,
+  MagnetizationAssetResource,
   ObjectInteractionKind,
   ObjectInteractionResource,
   MeshActiveBuildResource,
@@ -261,6 +263,13 @@ export function resolveMaterialResourceKey(materialId: string): string {
   );
 }
 
+export function resolveMagnetizationAssetResourceKey(assetId: string): string {
+  return MODEL_MAGNETIZATION_ASSET_PATH.replace(
+    "{asset_id}",
+    encodeURIComponent(assetId),
+  );
+}
+
 export function resolveSceneResourceRevision(
   scene: SceneResource | null | undefined,
 ): ResourceRevision | null {
@@ -280,6 +289,22 @@ export function resolveRegionCoefficientsRevision(
   data: { region_coefficients_revision?: number | null } | null | undefined,
 ): ResourceRevision | null {
   return data?.region_coefficients_revision ?? null;
+}
+
+export function resolveMagnetizationAssetResourceRevision(
+  data:
+    | {
+        scene_revision?: number | null;
+        region_initial_state_revision?: number | null;
+      }
+    | null
+    | undefined,
+): ResourceRevision | null {
+  if (!data) return null;
+  const sceneRevision = data.scene_revision ?? null;
+  const initialStateRevision = data.region_initial_state_revision ?? null;
+  if (sceneRevision === null && initialStateRevision === null) return null;
+  return `${sceneRevision ?? "unknown"}:${initialStateRevision ?? "unknown"}`;
 }
 
 export function resolveRegionRealizationRevision(
@@ -468,6 +493,30 @@ export function useMaterialResource(materialId: string | null | undefined) {
   return useResource<MaterialResource | null>({
     load,
     resolveRevision: resolveRegionCoefficientsRevision,
+    resourceKey,
+  });
+}
+
+export function useMagnetizationAssetResource(
+  assetId: string | null | undefined,
+  options: ResourceHookOptions = {},
+) {
+  const { api } = useKernel();
+  const resourceKey = assetId
+    ? resolveMagnetizationAssetResourceKey(assetId)
+    : MODEL_MAGNETIZATION_ASSET_PATH;
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) => {
+      if (!assetId) return Promise.resolve(null);
+      return api.model.magnetizationAsset(assetId, { signal });
+    },
+    [api, assetId],
+  );
+
+  return useResource<MagnetizationAssetResource | null>({
+    enabled: options.enabled,
+    load,
+    resolveRevision: resolveMagnetizationAssetResourceRevision,
     resourceKey,
   });
 }
