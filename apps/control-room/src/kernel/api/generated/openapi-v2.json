@@ -24251,6 +24251,66 @@
         ]
       }
     },
+    "/v2/sessions/current/meshing/mesh/periodic_pairs.v1.bin": {
+      "get": {
+        "operationId": "meshing_get_sessions_current_meshing_mesh_periodic_pairs_v1_bin",
+        "parameters": [
+          {
+            "description": "Strong ETag from a previous periodic-pairs binary response",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional single byte range for chunked FMPP reads",
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/vnd.fullmag.periodic-pairs.v1": {}
+            },
+            "description": "Versioned binary FEM periodic node/face pairs"
+          },
+          "204": {
+            "description": "No FEM mesh available"
+          },
+          "206": {
+            "content": {
+              "application/vnd.fullmag.periodic-pairs.v1": {}
+            },
+            "description": "Partial binary FEM periodic node/face pairs"
+          },
+          "304": {
+            "description": "Periodic mesh-pair binary not modified for the supplied ETag"
+          },
+          "404": {
+            "description": "No active workspace"
+          },
+          "416": {
+            "description": "Requested byte range is not satisfiable"
+          }
+        },
+        "tags": [
+          "meshing"
+        ]
+      }
+    },
     "/v2/sessions/current/meshing/meshes/interfaces/{interface_id}/quality": {
       "get": {
         "operationId": "meshing_get_sessions_current_meshing_meshes_interfaces_interface_id_quality",

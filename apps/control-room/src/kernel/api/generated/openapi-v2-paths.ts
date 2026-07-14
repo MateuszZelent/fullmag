@@ -87,6 +87,7 @@ export const openApiV2PathLiterals = [
   "/v2/sessions/current/meshing/builds/latest-successful",
   "/v2/sessions/current/meshing/capabilities",
   "/v2/sessions/current/meshing/mesh/periodic_pairs.v1",
+  "/v2/sessions/current/meshing/mesh/periodic_pairs.v1.bin",
   "/v2/sessions/current/meshing/meshes/interfaces/{interface_id}/quality",
   "/v2/sessions/current/meshing/meshes/interfaces/{interface_id}/report",
   "/v2/sessions/current/meshing/meshes/objects/{object_id}/quality",

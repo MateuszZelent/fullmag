@@ -205,6 +205,47 @@ function makeTopologyBuffer(): ArrayBuffer {
   return buffer;
 }
 
+function makePeriodicPairsBuffer(): ArrayBuffer {
+  const pairId = new TextEncoder().encode("x-minus");
+  const byteLength = 20 + 4 + pairId.byteLength + 9 * 4 + 2 * 8;
+  const buffer = new ArrayBuffer(byteLength);
+  const bytes = new Uint8Array(buffer);
+  bytes.set([70, 77, 80, 80], 0);
+  const view = new DataView(buffer);
+  view.setUint8(4, 1);
+  view.setUint8(5, 1);
+  view.setBigUint64(8, BigInt(41), true);
+  view.setUint32(16, 1, true);
+
+  let offset = 20;
+  view.setUint32(offset, pairId.byteLength, true);
+  offset += 4;
+  bytes.set(pairId, offset);
+  offset += pairId.byteLength;
+  view.setUint32(offset, 10, true);
+  offset += 4;
+  view.setUint32(offset, 20, true);
+  offset += 4;
+  view.setUint32(offset, 1, true);
+  offset += 4;
+  view.setUint32(offset, 1, true);
+  offset += 4;
+  view.setUint32(offset, 7, true);
+  offset += 4;
+  view.setUint32(offset, 17, true);
+  offset += 4;
+  view.setBigUint64(offset, BigInt(101), true);
+  offset += 8;
+  view.setBigUint64(offset, BigInt(202), true);
+  offset += 8;
+  view.setUint32(offset, 1, true);
+  offset += 4;
+  view.setUint32(offset, 7, true);
+  offset += 4;
+  view.setUint32(offset, 17, true);
+  return buffer;
+}
+
 function makeLargeTopologyBuffer(): ArrayBuffer {
   const nodeCount = 700_000;
   const elementCount = 1;
@@ -2419,6 +2460,49 @@ describe("ControlRoomApi", () => {
     expect(result.data.elementCount).toBe(1);
     expect(Array.from(result.data.sicn ?? [])).toEqual([0.5]);
     expect(Array.from(result.data.gamma ?? [])).toEqual([0.25]);
+  });
+
+  it("loads periodic face and node pairs through the v2 binary facade", async () => {
+    let observedUrl = "";
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url) => {
+        observedUrl = String(url);
+        return binaryResponse(makePeriodicPairsBuffer(), {
+          headers: {
+            etag: '"periodic-pairs-41"',
+            "x-fullmag-periodic-pairs-format": "FMPP.v1",
+            ...contractHeaders,
+          },
+        });
+      },
+    });
+
+    const result = await api.meshing.periodicPairsBinary();
+
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") {
+      throw new Error(`Expected ready periodic pairs, received ${result.status}`);
+    }
+    expect(observedUrl).toBe(
+      "http://127.0.0.1:8765/v2/sessions/current/meshing/mesh/periodic_pairs.v1.bin",
+    );
+    expect(result.etag).toBe('"periodic-pairs-41"');
+    expect(result.data).toEqual({
+      pairs: [
+        {
+          facePairs: [
+            { faceA: 101, faceB: 202, vertexPairs: [[7, 17]] },
+          ],
+          markerA: 10,
+          markerB: 20,
+          nodePairs: [[7, 17]],
+          pairId: "x-minus",
+        },
+      ],
+      revision: 41,
+      status: "valid",
+    });
   });
 
   it("loads mesh histogram-bin element selections through the v2 facade", async () => {

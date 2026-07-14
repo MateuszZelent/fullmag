@@ -73,3 +73,19 @@ pub struct PeriodicFacePairResponse { pub source_face_id: u64, pub destination_f
 - [ ] The generated OpenAPI path/facade hook and runtime/browser smoke remain
   open because this worktree has no frontend dependencies (`vitest` and
   `next` are unavailable).
+
+### Evidence update (2026-07-14, generated path and facade)
+
+- [x] Regenerated `openapi-v2.json` and `openapi-v2-paths.ts`; the binary
+  `periodic_pairs.v1.bin` path is now consumed through the central
+  `MESHING_PERIODIC_PAIRS_BINARY_PATH` constant.
+- [x] Added `ControlRoomApi.meshing.periodicPairsBinary()` and wired it through
+  the shared binary decode scheduler with decoder kind `periodic-pairs`; no
+  component-level fetch path was added.
+- [x] Added a facade regression fixture asserting the generated URL, ETag and
+  decoded node/face mappings. The test is present but cannot execute in this
+  checkout because `vitest` is not installed; browser/runtime proof remains
+  open.
+- [ ] Regenerate `openapi-v2-types.ts` with `openapi-typescript` and run the
+  full Control Room typecheck/test/browser gates once frontend dependencies are
+  available.

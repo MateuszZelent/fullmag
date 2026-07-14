@@ -56,6 +56,7 @@ import {
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_HISTOGRAM_BIN_ELEMENTS_PATH,
   MESHING_PERIODIC_PAIRS_PATH,
+  MESHING_PERIODIC_PAIRS_BINARY_PATH,
   MESHING_SHARED_DOMAIN_CROSS_SECTION_IMAGE_PATH,
   MESHING_SHARED_DOMAIN_CROSS_SECTION_PATH,
   MESHING_SHARED_DOMAIN_CROSS_SECTION_QUALITY_PATH,
@@ -302,6 +303,7 @@ import {
   decodeCrossSectionQuality,
   decodeFieldVector,
   decodeMeshQualityData,
+  decodePeriodicPairs,
   decodeTableRows,
   decodeTopology,
   decodeTopologyHeader,
@@ -870,6 +872,13 @@ export class ControlRoomApi {
     periodicPairs: (options?: RequestOptions) =>
       this.requestJson<MeshPeriodicPairsResource>(
         MESHING_PERIODIC_PAIRS_PATH,
+        options,
+      ),
+    periodicPairsBinary: (options?: BinaryRequestOptions) =>
+      this.requestBinaryResource(
+        MESHING_PERIODIC_PAIRS_BINARY_PATH,
+        "periodic-pairs",
+        decodePeriodicPairs,
         options,
       ),
     builds: {

@@ -371,6 +371,10 @@ export const MESHING_PERIODIC_PAIRS_PATH = openApiV2Path(
   "/v2/sessions/current/meshing/mesh/periodic_pairs.v1",
 );
 
+export const MESHING_PERIODIC_PAIRS_BINARY_PATH = openApiV2Path(
+  "/v2/sessions/current/meshing/mesh/periodic_pairs.v1.bin",
+);
+
 export const MESHING_SEMANTICS_PATH = openApiV2Path(
   "/v2/sessions/current/meshing/semantics",
 );
