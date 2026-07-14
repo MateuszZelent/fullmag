@@ -6675,6 +6675,77 @@ async fn mesh_periodic_pairs_returns_v1_diagnostics() {
 }
 
 #[tokio::test]
+async fn mesh_periodic_pairs_binary_returns_deterministic_v1_payload() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_periodic_fem_mesh_payload());
+        snapshot.mesh_revision = 41;
+    }
+    let app = build_v2_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/mesh/periodic_pairs.v1.bin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("application/vnd.fullmag.periodic-pairs.v1"),
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-periodic-pairs-format")
+            .and_then(|value| value.to_str().ok()),
+        Some("FMPP.v1"),
+    );
+    let etag = response
+        .headers()
+        .get(header::ETAG)
+        .expect("binary periodic-pairs response should include ETag")
+        .clone();
+    let body = body_bytes(response).await;
+    assert_eq!(&body[..4], b"FMPP");
+    assert_eq!(body[4], 1);
+    assert!(body.len() > 32, "payload should include node/face pairs");
+
+    let app = build_v2_router().with_state(state.clone());
+    let repeat = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/mesh/periodic_pairs.v1.bin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(repeat.status(), StatusCode::OK);
+    assert_eq!(body, body_bytes(repeat).await);
+
+    let app = build_v2_router().with_state(state);
+    let unchanged = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/mesh/periodic_pairs.v1.bin")
+                .header(header::IF_NONE_MATCH, etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unchanged.status(), StatusCode::NOT_MODIFIED);
+}
+
+#[tokio::test]
 async fn mesh_periodic_pairs_etag_changes_when_residual_changes() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -24373,6 +24444,25 @@ fn openapi_contains_mesh_semantics_path() {
     assert!(
         paths.contains_key("/v2/sessions/current/meshing/semantics"),
         "OpenAPI missing /mesh/semantics path while router exposes it"
+    );
+}
+
+#[test]
+fn openapi_contains_binary_periodic_pairs_path() {
+    let value = crate::openapi_v2::openapi_json();
+    let paths = value
+        .get("paths")
+        .and_then(|paths| paths.as_object())
+        .expect("OpenAPI paths must be an object");
+    let path = paths
+        .get("/v2/sessions/current/meshing/mesh/periodic_pairs.v1.bin")
+        .expect("OpenAPI missing binary periodic-pairs path");
+    assert_eq!(
+        path["get"]["responses"]["200"]["content"]
+            .as_object()
+            .and_then(|content| content.keys().next())
+            .map(String::as_str),
+        Some("application/vnd.fullmag.periodic-pairs.v1")
     );
 }
 

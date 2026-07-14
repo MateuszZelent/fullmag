@@ -287,6 +287,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::meshing::get_mesh_periodic_pairs),
         )
         .route(
+            "/v2/sessions/current/meshing/mesh/periodic_pairs.v1.bin",
+            get(handlers::meshing::get_mesh_periodic_pairs_binary),
+        )
+        .route(
             "/v2/sessions/current/meshing/meshes/objects/:object_id/topology",
             get(handlers::meshing::get_mesh_object_topology),
         )

@@ -80,6 +80,7 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::meshing::mesh::get_mesh_realized_size_fields,
         crate::router_v2::handlers::meshing::mesh::get_mesh_quality_gates,
         crate::router_v2::handlers::meshing::mesh::get_mesh_periodic_pairs,
+        crate::router_v2::handlers::meshing::mesh::get_mesh_periodic_pairs_binary,
         crate::router_v2::handlers::meshing::mesh::get_mesh_shared_domain_manifest,
         crate::router_v2::handlers::meshing::mesh::get_mesh_shared_domain_topology,
         crate::router_v2::handlers::meshing::mesh::get_mesh_object_config,

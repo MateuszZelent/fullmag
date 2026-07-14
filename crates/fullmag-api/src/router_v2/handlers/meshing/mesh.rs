@@ -1292,32 +1292,108 @@ pub async fn get_mesh_periodic_pairs(
     headers: HeaderMap,
 ) -> Result<axum::response::Response, ApiError> {
     let snapshot = current_snapshot(&state).await?;
-    let (body, source_id) = if let Some(mesh) = snapshot.fem_mesh.as_ref() {
-        if let Some(artifact) = periodic_pairs_resource_from_artifact(&snapshot, Some(mesh))? {
-            (
-                artifact,
-                format!(
-                    "artifact:{}",
-                    mesh.generation_id.as_deref().unwrap_or("no-generation")
-                ),
-            )
-        } else {
-            (
-                build_periodic_pairs_resource(&snapshot, mesh),
-                mesh.generation_id
-                    .as_deref()
-                    .unwrap_or("no-generation")
-                    .to_string(),
-            )
-        }
-    } else if let Some(artifact) = periodic_pairs_resource_from_artifact(&snapshot, None)? {
-        (artifact, "artifact-file".to_string())
-    } else {
+    let Some((body, source_id)) = periodic_pairs_resource_for_snapshot(&snapshot)? else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
 
     let etag = periodic_pairs_etag(&source_id, &body)?;
     Ok(crate::router_v2::handlers::shared::conditional_json_response(&headers, &etag, &body))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/meshing/mesh/periodic_pairs.v1.bin",
+    params(
+        ("If-None-Match" = Option<String>, Header, description = "Strong ETag from a previous periodic-pairs binary response"),
+        ("Range" = Option<String>, Header, description = "Optional single byte range for chunked FMPP reads")
+    ),
+    responses(
+        (status = 200, description = "Versioned binary FEM periodic node/face pairs", content_type = "application/vnd.fullmag.periodic-pairs.v1"),
+        (status = 206, description = "Partial binary FEM periodic node/face pairs", content_type = "application/vnd.fullmag.periodic-pairs.v1"),
+        (status = 304, description = "Periodic mesh-pair binary not modified for the supplied ETag"),
+        (status = 204, description = "No FEM mesh available"),
+        (status = 404, description = "No active workspace"),
+        (status = 416, description = "Requested byte range is not satisfiable")
+    ),
+    tag = "meshing"
+)]
+pub async fn get_mesh_periodic_pairs_binary(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<axum::response::Response, ApiError> {
+    let snapshot = current_snapshot(&state).await?;
+    let Some((resource, source_id)) = periodic_pairs_resource_for_snapshot(&snapshot)? else {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    };
+    let body = crate::periodic_pairs_binary::encode_periodic_pairs_binary_v1(&resource)
+        .map_err(|error| ApiError::internal(format!("failed to encode periodic-pairs binary: {error}")))?;
+    let etag = periodic_pairs_binary_etag(&source_id, &body);
+    let content_type = HeaderValue::from_static("application/vnd.fullmag.periodic-pairs.v1");
+    let mut response = crate::router_v2::handlers::shared::conditional_binary_response_with_content_type(
+        &headers,
+        &etag,
+        body,
+        content_type,
+    );
+    response.headers_mut().insert(
+        "x-fullmag-periodic-pairs-format",
+        HeaderValue::from_static("FMPP.v1"),
+    );
+    response.headers_mut().insert(
+        "x-fullmag-periodic-pairs-revision",
+        HeaderValue::from_str(&resource.revision.to_string()).expect("u64 header is valid"),
+    );
+    for (header, value) in [
+        ("x-fullmag-mesh-generation-id", resource.mesh_generation_id.as_deref()),
+        ("x-fullmag-mesh-topology-fingerprint", resource.topology_fingerprint.as_deref()),
+        (
+            "x-fullmag-mesh-certificate-fingerprint",
+            resource.certificate_fingerprint.as_deref(),
+        ),
+    ] {
+        if let Some(value) = value.and_then(|value| HeaderValue::from_str(value).ok()) {
+            response.headers_mut().insert(header, value);
+        }
+    }
+    Ok(response)
+}
+
+fn periodic_pairs_resource_for_snapshot(
+    snapshot: &SessionStateResponse,
+) -> Result<Option<(MeshPeriodicPairsResource, String)>, ApiError> {
+    if let Some(mesh) = snapshot.fem_mesh.as_ref() {
+        if let Some(artifact) = periodic_pairs_resource_from_artifact(snapshot, Some(mesh))? {
+            return Ok(Some((
+                artifact,
+                format!(
+                    "artifact:{}",
+                    mesh.generation_id.as_deref().unwrap_or("no-generation")
+                ),
+            )));
+        }
+        return Ok(Some((
+            build_periodic_pairs_resource(snapshot, mesh),
+            mesh.generation_id
+                .as_deref()
+                .unwrap_or("no-generation")
+                .to_string(),
+        )));
+    }
+    Ok(periodic_pairs_resource_from_artifact(snapshot, None)?
+        .map(|artifact| (artifact, "artifact-file".to_string())))
+}
+
+fn periodic_pairs_binary_etag(source_id: &str, body: &[u8]) -> String {
+    let mut identity = Sha256::new();
+    identity.update(b"mesh-periodic-pairs-binary:v1\0");
+    identity.update((source_id.len() as u64).to_be_bytes());
+    identity.update(source_id.as_bytes());
+    identity.update((body.len() as u64).to_be_bytes());
+    identity.update(body);
+    crate::router_v2::handlers::shared::stable_strong_etag(&format!(
+        "mesh-periodic-pairs-binary:sha256:{:x}",
+        identity.finalize()
+    ))
 }
 
 /// Return the strong validator for the complete periodic-pairs snapshot.

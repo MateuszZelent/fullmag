@@ -48,6 +48,7 @@ mod field_slice;
 mod field_store;
 mod openapi_v2;
 mod orientation_color;
+mod periodic_pairs_binary;
 mod preview;
 mod quantities;
 mod quantity_data_plane;
