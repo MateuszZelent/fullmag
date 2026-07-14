@@ -200,18 +200,20 @@ describe("geometry lifecycle resources", () => {
         {
           mesh_id: "mesh:shared-domain",
           mesh_revision: 42,
+          region_membership_revision: 8,
           region_id: "film:edge",
           source: "geometry_projection",
         },
         {
           mesh_id: "mesh:shared-domain",
           mesh_revision: 41,
+          region_membership_revision: 7,
           region_id: "film:core",
           source: "geometry_projection",
         },
       ] as never),
     ).toBe(
-      "mesh:shared-domain:41:film:core:geometry_projection|mesh:shared-domain:42:film:edge:geometry_projection",
+      "mesh:shared-domain:41:7:film:core:geometry_projection|mesh:shared-domain:42:8:film:edge:geometry_projection",
     );
     expect(
       resolveMeshRegionMembershipListRevision({
@@ -219,6 +221,7 @@ describe("geometry lifecycle resources", () => {
           {
             mesh_id: "mesh:shared-domain",
             mesh_revision: 41,
+            region_membership_revision: 7,
             region_id: "film:core",
             source: "geometry_projection",
           },
@@ -228,7 +231,7 @@ describe("geometry lifecycle resources", () => {
         unresolved_region_ids: ["film:csg"],
       } as never),
     ).toBe(
-      "mesh:shared-domain:41:mesh:shared-domain:41:film:core:geometry_projection:film:csg",
+      "mesh:shared-domain:41:mesh:shared-domain:41:7:film:core:geometry_projection:film:csg",
     );
   });
 

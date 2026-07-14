@@ -309,6 +309,7 @@ export function resolveMeshRegionMembershipRevision(
   return [
     membership.mesh_id,
     membership.mesh_revision,
+    membership.region_membership_revision,
     membership.region_id,
     membership.source,
   ].join(":");

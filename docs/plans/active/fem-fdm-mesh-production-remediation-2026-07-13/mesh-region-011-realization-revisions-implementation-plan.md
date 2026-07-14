@@ -70,3 +70,9 @@ struct RegionRealizationRevisions {
 - [x] `commands_endpoint_rejects_resource_revision_precondition_mismatches` covers a membership mismatch; focused API test — 1 passed.
 - [x] OpenAPI v2 JSON and generated Control Room types include the four optional precondition fields.
 - [ ] Plan cache keys/ETags and runtime artifact consumers still need exact consumed tuple propagation; UI/browser and managed gates remain open.
+
+### Evidence update (2026-07-14, membership cache identity)
+
+- [x] `resolveMeshRegionMembershipRevision` now includes the authoritative `region_membership_revision` in addition to mesh generation identity, region ID and source.
+- [x] RED/GREEN frontend evidence: the focused resource test failed before the change because two membership revisions produced the same cache revision; after the change `geometryLifecycleResources.test.ts` passed 6/6, Control Room typecheck passed, and focused ESLint passed.
+- [ ] Coefficient/initial-state cache lanes, runtime artifact consumed tuple and managed/browser gates remain open.
