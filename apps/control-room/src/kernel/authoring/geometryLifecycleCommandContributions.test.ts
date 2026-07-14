@@ -12,6 +12,7 @@ import {
   MESHING_SHARED_DOMAIN_QUALITY_PATH,
   MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
   MESHING_SHARED_DOMAIN_REPORT_PATH,
+  MESHING_SEMANTICS_PATH,
   MESHING_SUMMARY_PATH,
   MODEL_GEOMETRY_CAPABILITIES_PATH,
   MODEL_GEOMETRY_DIAGNOSTICS_PATH,
@@ -273,6 +274,7 @@ describe("geometry lifecycle command contributions", () => {
     expect(resources.getRevision(MESHING_BUILDS_PATH)).toBe("cmd-refine");
     expect(resources.getRevision(MESHING_BUILDS_CURRENT_PATH)).toBe("cmd-refine");
     expect(resources.getRevision(MESHING_SUMMARY_PATH)).toBe("cmd-refine");
+    expect(resources.getRevision(MESHING_SEMANTICS_PATH)).toBe("cmd-refine");
     expect(resources.getRevision(MESHING_SHARED_DOMAIN_MANIFEST_PATH)).toBe(
       "cmd-refine",
     );

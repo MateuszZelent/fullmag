@@ -94,6 +94,7 @@ fn mesh_runtime_metadata(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Valu
         }),
         BackendPlanIR::Fem(fem) => serde_json::json!({
             "mesh_name": fem.mesh.mesh_name,
+            "mesh_generation_id": solver_mesh_signature(&fem.mesh),
             "node_count": fem.mesh.nodes.len(),
             "element_count": fem.mesh.elements.len(),
             "boundary_face_count": fem.mesh.boundary_faces.len(),
@@ -111,6 +112,7 @@ fn mesh_runtime_metadata(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Valu
         }),
         BackendPlanIR::FemEigen(fem) => serde_json::json!({
             "mesh_name": fem.mesh.mesh_name,
+            "mesh_generation_id": solver_mesh_signature(&fem.mesh),
             "node_count": fem.mesh.nodes.len(),
             "element_count": fem.mesh.elements.len(),
             "boundary_face_count": fem.mesh.boundary_faces.len(),
@@ -128,6 +130,7 @@ fn mesh_runtime_metadata(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Valu
         }),
         BackendPlanIR::FemFrequencyResponse(fem) => serde_json::json!({
             "mesh_name": fem.mesh.mesh_name,
+            "mesh_generation_id": solver_mesh_signature(&fem.mesh),
             "node_count": fem.mesh.nodes.len(),
             "element_count": fem.mesh.elements.len(),
             "boundary_face_count": fem.mesh.boundary_faces.len(),
@@ -2905,6 +2908,7 @@ mod tests {
         fem.mesh_build_report = Some(report.clone());
 
         let metadata = mesh_runtime_metadata(&plan);
+        assert_eq!(metadata["mesh_generation_id"].as_str().unwrap().len(), 64);
         assert_eq!(metadata["mesh_build_report"], serde_json::to_value(report).unwrap());
     }
 

@@ -28,6 +28,7 @@ import {
   ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+  MESHING_SEMANTICS_PATH,
   MESHING_OBJECT_QUALITY_PATH,
   MESHING_OBJECT_REPORT_PATH,
   MESHING_OBJECT_SIZE_FIELD_PATH,
@@ -1109,6 +1110,7 @@ describe("RealtimeInvalidationBridge", () => {
       "mesh-build-9",
     );
     expect(resources.getRevision(MESHING_SUMMARY_PATH)).toBe("mesh-build-9");
+    expect(resources.getRevision(MESHING_SEMANTICS_PATH)).toBe("mesh-build-9");
     expect(resources.getRevision(MESHING_SHARED_DOMAIN_MANIFEST_PATH)).toBe(
       "mesh-build-9",
     );

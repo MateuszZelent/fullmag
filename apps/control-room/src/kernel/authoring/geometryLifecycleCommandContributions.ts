@@ -11,6 +11,7 @@ import {
   MESHING_SHARED_DOMAIN_QUALITY_PATH,
   MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
   MESHING_SHARED_DOMAIN_REPORT_PATH,
+  MESHING_SEMANTICS_PATH,
   MESHING_SUMMARY_PATH,
   MODEL_GEOMETRY_CAPABILITIES_PATH,
   MODEL_GEOMETRY_DIAGNOSTICS_PATH,
@@ -283,6 +284,7 @@ function invalidateObjectMeshResources(
 ): void {
   context.resources?.invalidate(MESHING_BUILDS_CURRENT_PATH, revision);
   context.resources?.invalidate(MESHING_SUMMARY_PATH, revision);
+  context.resources?.invalidate(MESHING_SEMANTICS_PATH, revision);
   context.resources?.invalidate(MESHING_BUILDS_LATEST_SUCCESSFUL_PATH, revision);
   context.resources?.invalidate(MESHING_SHARED_DOMAIN_MANIFEST_PATH, revision);
   context.resources?.invalidate(
@@ -305,6 +307,7 @@ function invalidateSharedDomainMeshResources(
 ): void {
   context.resources?.invalidate(MESHING_BUILDS_PATH, revision);
   context.resources?.invalidate(MESHING_SUMMARY_PATH, revision);
+  context.resources?.invalidate(MESHING_SEMANTICS_PATH, revision);
   context.resources?.invalidate(MESHING_BUILDS_CURRENT_PATH, revision);
   context.resources?.invalidate(MESHING_BUILDS_LATEST_SUCCESSFUL_PATH, revision);
   context.resources?.invalidate(MESHING_SHARED_DOMAIN_MANIFEST_PATH, revision);
