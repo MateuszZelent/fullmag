@@ -184,6 +184,10 @@ fn classify_region_transition(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        SceneInitialMagnetization, SceneRegionFrame, SceneRegionRealizationPolicy, SceneRegionShape,
+        SceneTextureOverride,
+    };
     use serde_json::json;
 
     fn scene() -> SceneDocument {
@@ -268,6 +272,37 @@ mod tests {
 
         let mut topology = before.clone();
         topology.objects[0].geometry.geometry_kind = "cylinder".to_string();
+        assert_eq!(
+            classify_region_realization_impact(&before, &topology),
+            RegionRealizationImpact {
+                topology: true,
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn region_shape_frame_priority_and_realization_policy_have_explicit_lanes() {
+        let before = scene();
+
+        let mut membership = before.clone();
+        membership.objects[0].regions[0].shape = SceneRegionShape::Sphere {
+            radius: 0.25,
+            center: [0.0, 0.0, 0.0],
+        };
+        membership.objects[0].regions[0].frame = SceneRegionFrame::World;
+        membership.objects[0].regions[0].priority = 10;
+        assert_eq!(
+            classify_region_realization_impact(&before, &membership),
+            RegionRealizationImpact {
+                membership: true,
+                ..Default::default()
+            }
+        );
+
+        let mut topology = before.clone();
+        topology.objects[0].regions[0].realization_policy =
+            SceneRegionRealizationPolicy::Conformal;
         assert_eq!(
             classify_region_realization_impact(&before, &topology),
             RegionRealizationImpact {
