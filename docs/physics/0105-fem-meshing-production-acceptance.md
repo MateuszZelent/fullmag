@@ -95,6 +95,17 @@ or sampled as if airbox nodes belonged to magnetic objects.
 
 ## 3. Numerical interpretation
 
+### 3.0 Mirrored periodic seam acceptance
+
+When a shared-domain mesh declares FEM periodicity, acceptance requires an
+exact node-set bijection on each paired face marker. The extracted face pairs
+must preserve vertex topology, area, orientation, opposite normals, element
+domain and object-region ownership after translation. Multi-axis periodic meshes
+also require closed, order-independent edge/corner equivalence classes; a
+nearest-centroid match or a residual-only pair list is insufficient evidence.
+The v6 certificate must be bound to the current topology and region/material
+realization identities before solver assembly.
+
 ### 3.1 FDM
 
 No FDM discretization behavior is introduced by this acceptance note. FDM uses

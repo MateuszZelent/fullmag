@@ -395,6 +395,24 @@ pub tolerance: Option<f64>,
 
 ## 6. Completeness checklist
 
+### 6.1 Mirrored FEM seam certificate
+
+For every zero-phase FEM periodic axis, the accepted `periodic_mesh_certificate.v6`
+must prove more than coordinate residuals. The source and destination boundary
+face node sets must equal the node-pair domains exactly; duplicate, missing, or
+foreign nodes are a validation error. Every translated face must have one
+destination with matching vertex set, area, opposite outward normal, element
+domain, and resolved owner/region marker. For two or three periodic axes, the
+edge/corner equivalence graph must close: applying two axis transfers in either
+order reaches the same node and the same summed translation within the declared
+tolerance. A certificate must never report `corner_edge_cycle_unique=true`
+without this graph proof.
+
+The certificate identity includes the topology fingerprint, mesh generation,
+periodic pair metadata, region-marker map, and material-realization identity.
+Any topology, region membership, or coefficient realization change invalidates
+the certificate and requires a fresh post-extraction validation.
+
 - [x] Python API (`pbc()` function in world.py, Problem.pbc field)
 - [x] ProblemIR (`FdmPeriodicityIR`, `AxisBoundary`, `FdmDemagPeriodicityIR`)
 - [x] Planner (wires `problem.pbc` → `FdmPlanIR.periodicity`)

@@ -32,6 +32,9 @@ Adopt a Canonicalization Backbone Program with explicit frozen boundaries and CI
 4. Mesh round-trip semantics are first-class (universe/per-object/shared-domain).
 5. `status.capabilities` is the only frontend gating source.
 6. `Viewport3D` unification is downstream of stable contracts, not parallel ad hoc design.
+7. Mirrored FEM periodic meshes use the canonical v6 certificate as the single
+   source of node/face/domain/region ownership and edge/corner closure truth;
+   API and UI projections may not reconstruct pairs by centroid or residual.
 
 ## Consequences
 
