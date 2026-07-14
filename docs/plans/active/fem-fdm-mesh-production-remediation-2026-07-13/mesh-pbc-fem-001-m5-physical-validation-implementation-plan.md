@@ -56,6 +56,9 @@ just verify-fem-static-pbc-demag-equilibrium-runtime
   `2e-2` strict relative-error ceiling. Missing or non-pass cases fail closed.
 - [x] `python3 -m pytest scripts/test_verify_fem_static_pbc_m5_evidence.py -q`
   — 3 passed; this is an evidence-contract gate, not solver execution proof.
+- [x] The verifier now requires observable-level residuals for `H_demag`, `phi`,
+  demag energy and central-cell comparison in every case, each within the same
+  strict `2e-2` ceiling; a single aggregate metric cannot mask a failed field.
 - [ ] Current managed CPU/GPU runtimes, primitive-vs-supercell artifacts and
   root-cause numerical repair remain open. The matching `just` recipe currently
   stops before runtime because Docker Buildx cannot write its activity state.
