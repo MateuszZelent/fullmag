@@ -178,6 +178,8 @@ export type MeshObjectSizeFieldResource =
   components["schemas"]["MeshObjectSizeFieldResource"];
 export type MeshPeriodicPairsResource =
   components["schemas"]["MeshPeriodicPairsResource"];
+export type PeriodicValidationStatus =
+  components["schemas"]["PeriodicValidationStatus"];
 export type MeshQualityGatesResource =
   components["schemas"]["MeshQualityGatesResource"];
 export type MeshRealizedSizeFieldsResource =

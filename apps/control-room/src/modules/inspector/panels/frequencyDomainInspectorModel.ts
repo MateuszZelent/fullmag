@@ -1,3 +1,26 @@
+import type { PeriodicValidationStatus } from "@/kernel/api/apiTypes";
+
+export interface PeriodicStatusView {
+  tone: "success" | "danger" | "warning" | "neutral";
+  label: "valid" | "invalid" | "stale" | "unavailable";
+}
+
+export function periodicStatusView(
+  status: PeriodicValidationStatus | null | undefined,
+): PeriodicStatusView {
+  switch (status) {
+    case "valid":
+      return { tone: "success", label: "valid" };
+    case "invalid":
+      return { tone: "danger", label: "invalid" };
+    case "stale":
+      return { tone: "warning", label: "stale" };
+    case "unavailable":
+    default:
+      return { tone: "neutral", label: "unavailable" };
+  }
+}
+
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)

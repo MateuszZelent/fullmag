@@ -40,3 +40,9 @@ export function periodicStatusView(status: PeriodicValidationStatus): { tone: "s
 
 **Exit:** realny backend `valid` renderuje poprawny stan; invalid/stale/unavailable nie są mylone i mają testy.
 
+### Evidence update (2026-07-14, generated aggregate status mapping)
+
+- [x] Added the shared `periodicStatusView` model backed by generated `PeriodicValidationStatus`; `valid`, `invalid`, `stale` and `unavailable` map to distinct presentation tones and labels.
+- [x] Both the authoring/frequency inspector and the dedicated periodic-pairs resource inspector now render the aggregate backend status instead of inventing `ready` from resource presence.
+- [x] Added model coverage for all four backend statuses plus the missing-status fallback and updated the real-backend Inspector fixture to use `status: "valid"`.
+- [ ] Frontend dependencies are absent in this isolated worktree: `pnpm --dir apps/control-room typecheck` fails before compilation with `spawnSync next ENOENT`; Vitest/browser gates remain pending.

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildFrequencyDomainCalculationModeRows,
   frequencyDomainResourceGroupLabel,
+  periodicStatusView,
 } from "./frequencyDomainInspectorModel";
 
 describe("frequencyDomainInspectorModel", () => {
@@ -90,5 +91,21 @@ describe("frequencyDomainInspectorModel", () => {
         "resources.analysis.frequency_domain.response_map",
       ),
     ).toBe("Response-map resource group");
+  });
+
+  it.each([
+    ["valid", "success", "valid"],
+    ["invalid", "danger", "invalid"],
+    ["stale", "warning", "stale"],
+    ["unavailable", "neutral", "unavailable"],
+  ] as const)("maps backend periodic status %s without inventing ready", (status, tone, label) => {
+    expect(periodicStatusView(status)).toEqual({ tone, label });
+  });
+
+  it("treats a missing periodic status as unavailable", () => {
+    expect(periodicStatusView(null)).toEqual({
+      tone: "neutral",
+      label: "unavailable",
+    });
   });
 });

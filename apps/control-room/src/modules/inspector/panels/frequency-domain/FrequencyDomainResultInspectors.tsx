@@ -97,6 +97,7 @@ import {
 } from "../FrequencyDomainTables";
 import {
   buildFrequencyDomainCalculationModeRows,
+  periodicStatusView,
   type FrequencyDomainCalculationModeRow,
 } from "../frequencyDomainInspectorModel";
 
@@ -6609,7 +6610,9 @@ function useFrequencyDomainPeriodicPairsSummary() {
   }, null);
 
   return {
-    badge: periodicPairs.status,
+    badge: periodicPairs.data
+      ? periodicStatusView(periodicPairs.data.status).label
+      : periodicPairs.status,
     invalidPairs: String(invalidCount),
     maxResidual:
       maxResidual == null ? "not available" : `${formatNumber(maxResidual)} m`,

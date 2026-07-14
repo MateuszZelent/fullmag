@@ -77,6 +77,7 @@ import type {
 import {
   buildFrequencyDomainCalculationModeRows,
   frequencyDomainResourceGroupLabel,
+  periodicStatusView,
 } from "./frequencyDomainInspectorModel";
 import { FrequencyDomainModeDataPreviewDialog } from "./FrequencyDomainModeDataPreviewDialog";
 import { resolveFrequencyDomainNodeDetail } from "./frequencyDomainNodeDetails";
@@ -1452,7 +1453,11 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
       {showPeriodicSection ? (
       <InspectorSection
         title="Periodic / Floquet Boundary Conditions"
-        badge={periodicPairs.data?.schema_version ?? periodicPairs.status}
+        badge={
+          periodicPairs.data
+            ? periodicStatusView(periodicPairs.data.status).label
+            : periodicPairs.status
+        }
       >
         <FieldRow
           label="Periodic pairs resource"
@@ -1460,7 +1465,11 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
         />
         <FieldRow
           label="Periodic pairs status"
-          value={periodicPairs.data ? "ready" : periodicPairs.status}
+          value={
+            periodicPairs.data
+              ? periodicStatusView(periodicPairs.data.status).label
+              : periodicPairs.status
+          }
         />
         <FieldRow
           label="Pair count"
