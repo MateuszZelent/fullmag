@@ -44,6 +44,7 @@ import {
 } from "@/kernel/resources/geometryLifecycleResources";
 import {
   resolveFieldMetaResourceKey,
+  useMeshPeriodicPairsResource,
   useFieldMetaResource,
 } from "@/kernel/resources/studyRuntimeResources";
 import { useResource } from "@/kernel/resources/useResource";
@@ -97,6 +98,7 @@ import { startAnalysisFieldOverlayPhaseAnimation } from "@/kernel/visualization/
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import { resolveVisualizationEffectiveRenderMode } from "@/kernel/visualization/useVisualizationClientAck";
 import { resolveCrossSectionQueryFromVisualizationState } from "@/shared/domain/mesh/crossSectionQuery";
+import { buildPeriodicOverlayModel } from "@/shared/domain/mesh/periodicOverlayModel";
 
 import {
   mergeViewport3DFieldScalarColors,
@@ -2479,6 +2481,24 @@ export function useViewport3DSceneModel({
   }, [scene.data, sharedDomainManifest]);
   const topologyCurrent = isViewport3DTopologyCurrent(topologyFreshness);
   const topologyRenderable = isViewport3DTopologyRenderable(topologyFreshness);
+  const periodicPairs = useMeshPeriodicPairsResource({
+    enabled: topologyCurrent,
+  });
+  const periodicOverlayModel = useMemo(
+    () =>
+      buildPeriodicOverlayModel({
+        currentMeshRevision: sharedDomainManifest.data?.revision ?? null,
+        currentTopologyFingerprint: sharedDomainTopologyFingerprint,
+        resource: periodicPairs.data,
+        topology: topology.data,
+      }),
+    [
+      periodicPairs.data,
+      sharedDomainManifest.data?.revision,
+      sharedDomainTopologyFingerprint,
+      topology.data,
+    ],
+  );
   const regionMembershipIds = useMemo(
     () =>
       topologyCurrent
@@ -3937,6 +3957,7 @@ export function useViewport3DSceneModel({
     meshQualityMetric,
     meshQualityOverlayVisible,
     meshRegionOverlayParts,
+    periodicOverlayModel,
     meshSizeHighlightModel,
     meshQualityRange: meshQualityColors?.range ?? null,
     meshRegionOverlays,

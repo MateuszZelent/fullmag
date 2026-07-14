@@ -44,6 +44,10 @@
   --fm-region-overlay-5: #89b4fa;
   --fm-region-overlay-6: #cba6f7;
   --fm-region-overlay-7: #f5c2e7;
+  --fm-periodic-source: #89b4fa;
+  --fm-periodic-node-link: #a6e3a1;
+  --fm-periodic-translation: #f9e2af;
+  --fm-periodic-unpaired: #f38ba8;
 
   --fm-success: #a6e3a1;
   --fm-info: #89dceb;
@@ -104,6 +108,10 @@
   --fm-region-overlay-5: #1e66f5;
   --fm-region-overlay-6: #8839ef;
   --fm-region-overlay-7: #ea76cb;
+  --fm-periodic-source: #1e66f5;
+  --fm-periodic-node-link: #40a02b;
+  --fm-periodic-translation: #df8e1d;
+  --fm-periodic-unpaired: #d20f39;
 
   --fm-success: #40a02b;
   --fm-info: #04a5e5;
