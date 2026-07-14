@@ -13,6 +13,14 @@ use std::collections::BTreeSet;
 pub(crate) fn validate_single_grid_budget(
     plan: &fullmag_ir::FdmPlanIR,
 ) -> Result<u64, RunError> {
+    if plan.origin_m.iter().any(|component| !component.is_finite()) {
+        return Err(RunError {
+            message: format!(
+                "FDM grid origin must contain finite metre coordinates, got {:?}",
+                plan.origin_m
+            ),
+        });
+    }
     let cost = fullmag_plan::checked_fdm_grid_cost(
         plan.grid.cells,
         fullmag_plan::FDM_GRID_ESTIMATED_BYTES_PER_CELL,
@@ -186,5 +194,17 @@ mod tests {
         let error = validate_single_grid_budget(&plan).expect_err("payload length must be checked");
         assert!(error.message.contains("initial_magnetization_len=3"));
         assert!(error.message.contains("resolved_cells=4"));
+    }
+
+    #[test]
+    fn non_finite_grid_origin_is_rejected_before_allocation() {
+        let mut plan = FdmPlanIR::default();
+        plan.grid.cells = [1, 1, 1];
+        plan.initial_magnetization = vec![[0.0, 0.0, 1.0]];
+        plan.origin_m = [f64::NAN, 0.0, 0.0];
+
+        let error = validate_single_grid_budget(&plan)
+            .expect_err("non-finite origin must be rejected before allocation");
+        assert!(error.message.contains("origin must contain finite"));
     }
 }
