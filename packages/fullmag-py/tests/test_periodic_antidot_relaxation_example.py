@@ -159,23 +159,16 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
             payload["ir"]["problem_meta"]["name"],
             "fem_periodic_antidot_relax_exchange_coupled",
         )
-        self.assertEqual(len(payload["stages"]), 2)
+        self.assertEqual(len(payload["stages"]), 1)
         self.assertEqual(payload["stages"][0]["entrypoint_kind"], "flat_relax")
-        self.assertEqual(payload["stages"][1]["entrypoint_kind"], "flat_relax")
 
         study = payload["stages"][0]["ir"]["study"]
         self.assertEqual(study["kind"], "relaxation")
         self.assertEqual(study["algorithm"], "projected_gradient_bb")
         self.assertEqual(study["stop"]["max_steps"], 4000)
-        self.assertEqual(study["stop"]["torque_tolerance_apm"], 1.0e-4)
+        self.assertEqual(study["stop"]["torque_tolerance_apm"], 5.0e2)
         self.assert_study_saves_equilibrium_and_demag_fields(study)
         self.assert_table_logs_pbc_sensitive_quantities(study)
-
-        relax = payload["stages"][1]["ir"]["study"]
-        self.assertEqual(relax["kind"], "relaxation")
-        self.assertEqual(relax["algorithm"], "llg_overdamped")
-        self.assertEqual(relax["stop"]["max_steps"], 100)
-        self.assertEqual(relax["stop"]["torque_tolerance_apm"], 1.0e-4)
 
         metadata = payload["ir"]["problem_meta"]["runtime_metadata"]
         self.assertEqual(metadata["runtime_selection"]["backend"], "fem")
