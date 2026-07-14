@@ -40,3 +40,9 @@ type MeshInvalidation = { resource: "mesh" | "periodic_pairs" | "build_report"; 
 
 **Exit:** command identity nigdy nie udaje mesh revision; current/stale/pending przejścia są deterministyczne i testowane.
 
+## Evidence update (2026-07-14, periodic-pairs invalidation slice)
+
+- [x] Backend realtime mesh changes include the authoritative periodic-pairs resource path after a mesh is present.
+- [x] `RealtimeInvalidationBridge` invalidates `MESHING_PERIODIC_PAIRS_PATH` on a latest-successful mesh commit; no command ID or timestamp is used as the resource revision.
+- [x] RED/GREEN: the new bridge assertion failed before the change (`null` revision), then `TMPDIR=/tmp pnpm --dir apps/control-room exec vitest run src/kernel/realtime/RealtimeInvalidationBridge.test.ts` passed 31/31; Control Room typecheck and focused ESLint passed.
+- [ ] Accepted-command/pending transition, browser/WebGL smoke and full managed gates remain open.

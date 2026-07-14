@@ -26,6 +26,7 @@ import {
   MESHING_OBJECT_REPORT_PATH,
   MESHING_OBJECT_SIZE_FIELD_PATH,
   MESHING_OBJECT_TOPOLOGY_PATH,
+  MESHING_PERIODIC_PAIRS_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MESHING_SHARED_DOMAIN_QUALITY_PATH,
   MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH,
@@ -719,6 +720,7 @@ export class RealtimeInvalidationBridge {
     this.resources.invalidate(MESHING_SUMMARY_PATH, revision);
     this.resources.invalidate(MESHING_SEMANTICS_PATH, revision);
     this.resources.invalidate(MESHING_SHARED_DOMAIN_MANIFEST_PATH, revision);
+    this.resources.invalidate(MESHING_PERIODIC_PAIRS_PATH, revision);
     this.resources.invalidate(VISUALIZATION_STATE_PATH, revision);
     this.resources.invalidate(DATA_DOMAIN_META_PATH, revision);
     this.resources.invalidate(DATA_DOMAIN_TOPOLOGY_PATH, revision);

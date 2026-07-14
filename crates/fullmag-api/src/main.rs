@@ -168,6 +168,7 @@ fn current_live_mesh_resource_fetches(snapshot: &SessionStateResponse) -> Vec<St
         "/v2/sessions/current/meshing/meshes/shared-domain/topology".to_string(),
         "/v2/sessions/current/meshing/meshes/shared-domain/quality".to_string(),
         "/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields".to_string(),
+        "/v2/sessions/current/meshing/mesh/periodic_pairs.v1".to_string(),
     ];
     fetches.extend(mesh.object_segments.iter().map(|segment| {
         format!(
@@ -531,6 +532,7 @@ mod realtime_change_tests {
                 "/v2/sessions/current/meshing/meshes/shared-domain/quality".to_string(),
                 "/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields"
                     .to_string(),
+                "/v2/sessions/current/meshing/mesh/periodic_pairs.v1".to_string(),
             ],
         };
 
@@ -548,6 +550,9 @@ mod realtime_change_tests {
         assert!(fetches.contains("/v2/sessions/current/meshing/meshes/shared-domain/quality"));
         assert!(fetches
             .contains("/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields"));
+        assert!(fetches.contains(
+            "/v2/sessions/current/meshing/mesh/periodic_pairs.v1"
+        ));
         assert!(fetches.contains("/v2/sessions/current/model/scene"));
         assert!(fetches.contains("/v2/sessions/current/visualization/state"));
     }

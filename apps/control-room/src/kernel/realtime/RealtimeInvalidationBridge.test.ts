@@ -33,6 +33,7 @@ import {
   MESHING_OBJECT_REPORT_PATH,
   MESHING_OBJECT_SIZE_FIELD_PATH,
   MESHING_OBJECT_TOPOLOGY_PATH,
+  MESHING_PERIODIC_PAIRS_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MESHING_SHARED_DOMAIN_QUALITY_PATH,
   MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
@@ -1112,6 +1113,9 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision(MESHING_SUMMARY_PATH)).toBe("mesh-build-9");
     expect(resources.getRevision(MESHING_SEMANTICS_PATH)).toBe("mesh-build-9");
     expect(resources.getRevision(MESHING_SHARED_DOMAIN_MANIFEST_PATH)).toBe(
+      "mesh-build-9",
+    );
+    expect(resources.getRevision(MESHING_PERIODIC_PAIRS_PATH)).toBe(
       "mesh-build-9",
     );
     expect(resources.getRevision(MESHING_SHARED_DOMAIN_QUALITY_PATH)).toBe(
