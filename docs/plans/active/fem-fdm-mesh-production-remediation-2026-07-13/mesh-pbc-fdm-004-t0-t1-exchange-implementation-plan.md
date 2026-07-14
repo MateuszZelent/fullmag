@@ -20,8 +20,8 @@
 
 ### Task 1: RED dispatch/seam tests
 
-- [ ] Dodać matrix correction none/T0/T1 × periodic none/X/XY oraz analytic seam fixtures.
-- [ ] Najpierw dodać planner guard dla kombinacji bez implementacji; test ma oczekiwać stabilnego unsupported reason.
+- [x] Dodać matrix correction none/T0/T1 × periodic none/X/XY oraz guard fixtures dla T0/T1.
+- [x] Najpierw dodać planner guard dla kombinacji bez implementacji; test oczekuje stabilnego unsupported reason.
 
 ### Task 2: periodic-aware T0/T1
 
@@ -40,3 +40,8 @@ void exchange_t1_fp64(..., bool periodic_x, bool periodic_y, bool periodic_z);
 
 **Exit:** T0/T1 + PBC jest jawnie supported i parity-tested albo jednoznacznie odrzucone przed dispatch.
 
+### Evidence (2026-07-14)
+
+- Planner fail-closed: `cargo test -p fullmag-plan fdm_periodic_boundary_correction_fails_closed_until_seam_parity --lib --no-fail-fast -- --nocapture` — passed for both `boundary_correction='volume'` (T0) and `'full'` (T1).
+- The guard is applied before runtime dispatch and explicitly names the missing seam-aware T0/T1 exchange parity; no silent downgrade to standard exchange is possible.
+- CUDA seam-aware T0/T1 implementation and managed parity remain open.

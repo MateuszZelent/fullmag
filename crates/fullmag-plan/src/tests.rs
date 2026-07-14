@@ -9420,6 +9420,36 @@ fn fdm_multilayer_periodic_axes_fail_closed_until_kernel_parity() {
 }
 
 #[test]
+fn fdm_periodic_boundary_correction_fails_closed_until_seam_parity() {
+    for correction in ["volume", "full"] {
+        let mut ir = ProblemIR::bootstrap_example();
+        let fdm = ir
+            .backend_policy
+            .discretization_hints
+            .as_mut()
+            .and_then(|hints| hints.fdm.as_mut())
+            .expect("bootstrap must carry FDM hints");
+        fdm.boundary_correction = Some(correction.to_string());
+        ir.pbc = Some(FdmPeriodicityIR {
+            axes: [
+                AxisBoundary::Periodic,
+                AxisBoundary::Open,
+                AxisBoundary::Open,
+            ],
+            demag: FdmDemagPeriodicityIR::Open,
+            image_counts: None,
+        });
+
+        let error = plan(&ir).expect_err("periodic T0/T1 must fail closed");
+        assert!(error.reasons.iter().any(|reason| {
+            reason.contains("boundary_correction")
+                && reason.contains(correction)
+                && reason.contains("seam-aware T0/T1 exchange parity")
+        }));
+    }
+}
+
+#[test]
 fn fdm_pbc_with_exchange_plans() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.pbc = Some(FdmPeriodicityIR {

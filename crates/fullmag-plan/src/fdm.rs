@@ -453,6 +453,20 @@ pub(crate) fn plan_fdm(
                     .to_string(),
             );
         }
+        let boundary_correction = problem
+            .backend_policy
+            .discretization_hints
+            .as_ref()
+            .and_then(|hints| hints.fdm.as_ref())
+            .and_then(|fdm| fdm.boundary_correction.as_deref());
+        if pbc.has_any_periodic()
+            && boundary_correction.is_some_and(|value| value != "none")
+        {
+            errors.push(format!(
+                "FDM boundary_correction='{correction}' with periodic axes is capability-gated until seam-aware T0/T1 exchange parity is qualified; use boundary_correction='none'",
+                correction = boundary_correction.unwrap_or("?"),
+            ));
+        }
     }
 
     if problem.magnets.len() != 1 {
