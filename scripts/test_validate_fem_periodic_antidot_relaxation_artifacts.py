@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 SCRIPT = Path("scripts/validate_fem_periodic_antidot_relaxation_artifacts.py")
 
@@ -791,8 +793,8 @@ def write_static_equilibrium_supercell_report(
             "mapped_m_p99_l2_delta": 1.0e-6,
             "mapped_h_demag_p99_relative_error": 1.0e-3,
             "mapped_demag_phi_max_abs_delta_after_offset_A": 1.0e-8,
-            "mapped_max_nearest_field_node_distance_m": 1.0e-9,
-            "mapped_max_nearest_magnetic_node_distance_m": 1.0e-9,
+            "mapped_max_nearest_field_node_distance_m": 1.0e-13,
+            "mapped_max_nearest_magnetic_node_distance_m": 1.0e-13,
             "magnetic_node_count_relative_error": 1.0e-3,
             "field_cell_count_relative_error": 1.0e-3,
         },
@@ -800,13 +802,13 @@ def write_static_equilibrium_supercell_report(
             "schema_version": "fem_static_pbc_supercell_mapped_comparison.v1",
             "mapping": "supercell central-cell node -> modulo(x/y) nearest primitive-cell node",
             "same_local_discretization": True,
-            "same_local_discretization_limit_m": 1.0e-8,
+            "same_local_discretization_limit_m": 1.0e-12,
             "magnetic_pair_count": 2,
             "field_pair_count": 2,
-            "max_nearest_magnetic_node_distance_m": 1.0e-9,
-            "mean_nearest_magnetic_node_distance_m": 5.0e-10,
-            "max_nearest_field_node_distance_m": 1.0e-9,
-            "mean_nearest_field_node_distance_m": 5.0e-10,
+            "max_nearest_magnetic_node_distance_m": 1.0e-13,
+            "mean_nearest_magnetic_node_distance_m": 5.0e-14,
+            "max_nearest_field_node_distance_m": 1.0e-13,
+            "mean_nearest_field_node_distance_m": 5.0e-14,
             "m": {
                 "mean_l2_delta": 1.0e-7,
                 "p99_l2_delta": 1.0e-6,
@@ -891,6 +893,20 @@ def add_interpolated_supercell_comparison(payload: dict[str, object]) -> None:
             "max_abs_delta_after_offset_A": 1.0e-8,
         },
     }
+
+
+def add_interpolated_supercell_acceptance(payload: dict[str, object]) -> None:
+    payload["acceptance_basis"] = "interpolated_remesh"
+    payload["metrics"].update(
+        {
+            "interpolated_field_missed_count": 0,
+            "interpolated_magnetic_missed_count": 0,
+            "interpolated_m_p99_l2_delta": 1.0e-6,
+            "interpolated_h_demag_p99_relative_error": 1.0e-3,
+            "interpolated_demag_phi_max_abs_delta_after_offset_A": 1.0e-8,
+        }
+    )
+    add_interpolated_supercell_comparison(payload)
 
 
 def test_validator_accepts_exchange_coupled_relaxation_metadata(tmp_path: Path) -> None:
@@ -981,6 +997,115 @@ def test_validator_rejects_inconsistent_same_local_discretization_flag(tmp_path:
 
     assert result.returncode != 0
     assert "same_local_discretization" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_fragment"),
+    [
+        ("relaxed_same_local_limit", "same_local_discretization_limit_m"),
+        ("field_distance", "mapped_max_nearest_field_node_distance_m"),
+        ("magnetic_distance", "mapped_max_nearest_magnetic_node_distance_m"),
+        ("mapped_m", "mapped_m_p99_l2_delta"),
+        ("mapped_h", "mapped_h_demag_p99_relative_error"),
+        ("mapped_phi", "mapped_demag_phi_max_abs_delta_after_offset_A"),
+    ],
+)
+def test_validator_rejects_noncanonical_strict_mapped_supercell_report(
+    tmp_path: Path,
+    case: str,
+    expected_fragment: str,
+) -> None:
+    log_path = write_summary_fixture(tmp_path, scenario="exchange_coupled", coupled=True)
+    supercell_report = tmp_path / "reports" / "supercell_validation.v1.json"
+    write_static_equilibrium_supercell_report(supercell_report)
+    payload = json.loads(supercell_report.read_text(encoding="utf-8"))
+    mapped = payload["mapped_central_cell_comparability"]
+    metrics = payload["metrics"]
+    if case == "relaxed_same_local_limit":
+        mapped["same_local_discretization_limit_m"] = 1.0e-8
+    elif case == "field_distance":
+        mapped["same_local_discretization"] = False
+        mapped["max_nearest_field_node_distance_m"] = 2.0e-12
+        metrics["mapped_max_nearest_field_node_distance_m"] = 2.0e-12
+    elif case == "magnetic_distance":
+        mapped["same_local_discretization"] = False
+        mapped["max_nearest_magnetic_node_distance_m"] = 2.0e-12
+        metrics["mapped_max_nearest_magnetic_node_distance_m"] = 2.0e-12
+    elif case == "mapped_m":
+        mapped["m"]["p99_l2_delta"] = 2.1e-2
+        metrics["mapped_m_p99_l2_delta"] = 2.1e-2
+    elif case == "mapped_h":
+        mapped["H_demag"]["p99_relative_error"] = 2.1e-2
+        metrics["mapped_h_demag_p99_relative_error"] = 2.1e-2
+    elif case == "mapped_phi":
+        mapped["demag_phi"]["max_abs_delta_after_offset_A"] = 1.1e-6
+        metrics["mapped_demag_phi_max_abs_delta_after_offset_A"] = 1.1e-6
+    else:
+        raise AssertionError(f"unknown case {case}")
+    supercell_report.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = run_validator_with_args(
+        log_path,
+        "exchange_coupled",
+        ["--require-supercell-report", str(supercell_report)],
+    )
+
+    assert result.returncode != 0
+    assert expected_fragment in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_fragment"),
+    [
+        ("same_local_limit", "same_local_discretization_limit_m"),
+        ("field_distance", "max_nearest_field_node_distance_m"),
+        ("magnetic_distance", "max_nearest_magnetic_node_distance_m"),
+        ("mapped_m", "mapped_central_cell_comparability.m.p99_l2_delta"),
+        ("mapped_h", "mapped_central_cell_comparability.H_demag.p99_relative_error"),
+        ("mapped_phi", "mapped_central_cell_comparability.demag_phi.max_abs_delta_after_offset_A"),
+    ],
+)
+def test_validator_rejects_json_booleans_in_strict_mapped_numeric_evidence(
+    tmp_path: Path,
+    case: str,
+    expected_fragment: str,
+) -> None:
+    log_path = write_summary_fixture(tmp_path, scenario="exchange_coupled", coupled=True)
+    supercell_report = tmp_path / "reports" / "supercell_validation.v1.json"
+    write_static_equilibrium_supercell_report(supercell_report)
+    payload = json.loads(supercell_report.read_text(encoding="utf-8"))
+    mapped = payload["mapped_central_cell_comparability"]
+    metrics = payload["metrics"]
+    if case == "same_local_limit":
+        mapped["same_local_discretization_limit_m"] = False
+    elif case == "field_distance":
+        mapped["max_nearest_field_node_distance_m"] = False
+        metrics["mapped_max_nearest_field_node_distance_m"] = False
+    elif case == "magnetic_distance":
+        mapped["max_nearest_magnetic_node_distance_m"] = False
+        metrics["mapped_max_nearest_magnetic_node_distance_m"] = False
+    elif case == "mapped_m":
+        mapped["m"]["p99_l2_delta"] = False
+        metrics["mapped_m_p99_l2_delta"] = False
+    elif case == "mapped_h":
+        mapped["H_demag"]["p99_relative_error"] = False
+        metrics["mapped_h_demag_p99_relative_error"] = False
+    elif case == "mapped_phi":
+        mapped["demag_phi"]["max_abs_delta_after_offset_A"] = False
+        metrics["mapped_demag_phi_max_abs_delta_after_offset_A"] = False
+    else:
+        raise AssertionError(f"unknown case {case}")
+    supercell_report.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = run_validator_with_args(
+        log_path,
+        "exchange_coupled",
+        ["--require-supercell-report", str(supercell_report)],
+    )
+
+    assert result.returncode != 0
+    assert expected_fragment in result.stderr
+    assert "must be a finite number" in result.stderr
 
 
 def test_validator_accepts_supercell_report_with_interpolated_comparison(tmp_path: Path) -> None:
@@ -1076,6 +1201,9 @@ def test_validator_rejects_repeated_state_supercell_report_without_initial_overr
     log_path = write_summary_fixture(tmp_path, scenario="exchange_coupled", coupled=True)
     supercell_report = tmp_path / "reports" / "supercell_validation.v1.json"
     write_static_equilibrium_supercell_report(supercell_report)
+    payload = json.loads(supercell_report.read_text(encoding="utf-8"))
+    add_interpolated_supercell_acceptance(payload)
+    supercell_report.write_text(json.dumps(payload), encoding="utf-8")
 
     result = run_validator_with_args(
         log_path,
@@ -1093,6 +1221,9 @@ def test_validator_accepts_repeated_state_supercell_report_with_initial_override
     log_path = write_summary_fixture(tmp_path, scenario="exchange_coupled", coupled=True)
     supercell_report = tmp_path / "reports" / "supercell_validation.v1.json"
     write_static_equilibrium_supercell_report(supercell_report, initial_state_override=True)
+    payload = json.loads(supercell_report.read_text(encoding="utf-8"))
+    add_interpolated_supercell_acceptance(payload)
+    supercell_report.write_text(json.dumps(payload), encoding="utf-8")
 
     result = run_validator_with_args(
         log_path,
@@ -1101,6 +1232,195 @@ def test_validator_accepts_repeated_state_supercell_report_with_initial_override
     )
 
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_fragment"),
+    [
+        ("acceptance_basis", "acceptance_basis"),
+        ("field_miss", "interpolated_field_missed_count"),
+        ("magnetic_miss", "interpolated_magnetic_missed_count"),
+        ("field_inconsistent_zero_miss", "field_located_count"),
+        ("magnetic_inconsistent_zero_miss", "magnetic_located_count"),
+        ("field_inconsistent_ratio", "field_coverage_ratio"),
+        ("magnetic_inconsistent_ratio", "magnetic_coverage_ratio"),
+        ("interpolated_m", "interpolated_m_p99_l2_delta"),
+        ("interpolated_h", "interpolated_h_demag_p99_relative_error"),
+        ("interpolated_phi", "interpolated_demag_phi_max_abs_delta_after_offset_A"),
+        ("demag_energy", "e_demag_density_relative_error"),
+        ("torque", "central_cell_torque_residual_relative_error"),
+    ],
+)
+def test_validator_rejects_noncanonical_repeated_state_interpolated_report(
+    tmp_path: Path,
+    case: str,
+    expected_fragment: str,
+) -> None:
+    log_path = write_summary_fixture(tmp_path, scenario="exchange_coupled", coupled=True)
+    supercell_report = tmp_path / "reports" / "supercell_validation.v1.json"
+    write_static_equilibrium_supercell_report(supercell_report, initial_state_override=True)
+    payload = json.loads(supercell_report.read_text(encoding="utf-8"))
+    add_interpolated_supercell_acceptance(payload)
+    interpolated = payload["interpolated_central_cell_comparability"]
+    if case == "acceptance_basis":
+        payload["acceptance_basis"] = "same_local_mapped"
+    elif case == "field_miss":
+        interpolated["field_located_count"] = 1
+        interpolated["field_missed_count"] = 1
+        interpolated["field_coverage_ratio"] = 0.5
+        payload["metrics"]["interpolated_field_missed_count"] = 1
+    elif case == "magnetic_miss":
+        interpolated["magnetic_located_count"] = 1
+        interpolated["magnetic_missed_count"] = 1
+        interpolated["magnetic_coverage_ratio"] = 0.5
+        payload["metrics"]["interpolated_magnetic_missed_count"] = 1
+    elif case == "field_inconsistent_zero_miss":
+        interpolated["field_located_count"] = 1
+        interpolated["field_coverage_ratio"] = 0.5
+    elif case == "magnetic_inconsistent_zero_miss":
+        interpolated["magnetic_located_count"] = 1
+        interpolated["magnetic_coverage_ratio"] = 0.5
+    elif case == "field_inconsistent_ratio":
+        interpolated["field_coverage_ratio"] = 0.5
+    elif case == "magnetic_inconsistent_ratio":
+        interpolated["magnetic_coverage_ratio"] = 0.5
+    elif case == "interpolated_m":
+        interpolated["m"]["p99_l2_delta"] = 2.1e-2
+        payload["metrics"]["interpolated_m_p99_l2_delta"] = 2.1e-2
+    elif case == "interpolated_h":
+        interpolated["H_demag"]["p99_relative_error"] = 2.1e-2
+        payload["metrics"]["interpolated_h_demag_p99_relative_error"] = 2.1e-2
+    elif case == "interpolated_phi":
+        interpolated["demag_phi"]["max_abs_delta_after_offset_A"] = 1.1e-6
+        payload["metrics"]["interpolated_demag_phi_max_abs_delta_after_offset_A"] = 1.1e-6
+    elif case == "demag_energy":
+        payload["metrics"]["e_demag_density_relative_error"] = 2.1e-2
+    elif case == "torque":
+        payload["metrics"]["central_cell_torque_residual_relative_error"] = 2.1e-1
+    else:
+        raise AssertionError(f"unknown case {case}")
+    supercell_report.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = run_validator_with_args(
+        log_path,
+        "exchange_coupled",
+        ["--require-repeated-state-supercell-report", str(supercell_report)],
+    )
+
+    assert result.returncode != 0
+    assert expected_fragment in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_fragment"),
+    [
+        ("field_missed", "interpolated_field_missed_count"),
+        ("magnetic_missed", "interpolated_magnetic_missed_count"),
+        ("field_coverage", "field_coverage_ratio"),
+        ("magnetic_coverage", "magnetic_coverage_ratio"),
+        ("barycentric_tolerance", "barycentric_tolerance"),
+        ("min_barycentric_weight", "min_barycentric_weight"),
+        ("interpolated_m", "interpolated_central_cell_comparability.m.p99_l2_delta"),
+        ("interpolated_h", "interpolated_central_cell_comparability.H_demag.p99_relative_error"),
+        (
+            "interpolated_phi",
+            "interpolated_central_cell_comparability.demag_phi.max_abs_delta_after_offset_A",
+        ),
+        ("demag_energy", "e_demag_density_relative_error"),
+        ("torque", "central_cell_torque_residual_relative_error"),
+    ],
+)
+def test_validator_rejects_json_booleans_in_repeated_state_interpolated_numeric_evidence(
+    tmp_path: Path,
+    case: str,
+    expected_fragment: str,
+) -> None:
+    log_path = write_summary_fixture(tmp_path, scenario="exchange_coupled", coupled=True)
+    supercell_report = tmp_path / "reports" / "supercell_validation.v1.json"
+    write_static_equilibrium_supercell_report(supercell_report, initial_state_override=True)
+    payload = json.loads(supercell_report.read_text(encoding="utf-8"))
+    add_interpolated_supercell_acceptance(payload)
+    interpolated = payload["interpolated_central_cell_comparability"]
+    if case == "field_missed":
+        payload["metrics"]["interpolated_field_missed_count"] = False
+    elif case == "magnetic_missed":
+        payload["metrics"]["interpolated_magnetic_missed_count"] = False
+    elif case == "field_coverage":
+        interpolated["field_coverage_ratio"] = False
+    elif case == "magnetic_coverage":
+        interpolated["magnetic_coverage_ratio"] = False
+    elif case == "barycentric_tolerance":
+        interpolated["barycentric_tolerance"] = False
+    elif case == "min_barycentric_weight":
+        interpolated["min_barycentric_weight"] = False
+    elif case == "interpolated_m":
+        interpolated["m"]["p99_l2_delta"] = False
+        payload["metrics"]["interpolated_m_p99_l2_delta"] = False
+    elif case == "interpolated_h":
+        interpolated["H_demag"]["p99_relative_error"] = False
+        payload["metrics"]["interpolated_h_demag_p99_relative_error"] = False
+    elif case == "interpolated_phi":
+        interpolated["demag_phi"]["max_abs_delta_after_offset_A"] = False
+        payload["metrics"]["interpolated_demag_phi_max_abs_delta_after_offset_A"] = False
+    elif case == "demag_energy":
+        payload["metrics"]["e_demag_density_relative_error"] = False
+    elif case == "torque":
+        payload["metrics"]["central_cell_torque_residual_relative_error"] = False
+    else:
+        raise AssertionError(f"unknown case {case}")
+    supercell_report.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = run_validator_with_args(
+        log_path,
+        "exchange_coupled",
+        ["--require-repeated-state-supercell-report", str(supercell_report)],
+    )
+
+    assert result.returncode != 0
+    assert expected_fragment in result.stderr
+    assert "must be a finite number" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "count_field",
+    [
+        "field_sample_count",
+        "field_located_count",
+        "field_missed_count",
+        "magnetic_sample_count",
+        "magnetic_located_count",
+        "magnetic_missed_count",
+    ],
+)
+def test_validator_rejects_nested_json_booleans_in_interpolated_count_evidence(
+    tmp_path: Path,
+    count_field: str,
+) -> None:
+    log_path = write_summary_fixture(tmp_path, scenario="exchange_coupled", coupled=True)
+    supercell_report = tmp_path / "reports" / "supercell_validation.v1.json"
+    write_static_equilibrium_supercell_report(supercell_report, initial_state_override=True)
+    payload = json.loads(supercell_report.read_text(encoding="utf-8"))
+    add_interpolated_supercell_acceptance(payload)
+    interpolated = payload["interpolated_central_cell_comparability"]
+    prefix = "field" if count_field.startswith("field_") else "magnetic"
+    if count_field.endswith("sample_count"):
+        interpolated[count_field] = True
+        interpolated[f"{prefix}_located_count"] = 1
+    elif count_field.endswith("located_count"):
+        interpolated[f"{prefix}_sample_count"] = 1
+        interpolated[count_field] = True
+    else:
+        interpolated[count_field] = False
+    supercell_report.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = run_validator_with_args(
+        log_path,
+        "exchange_coupled",
+        ["--require-repeated-state-supercell-report", str(supercell_report)],
+    )
+
+    assert result.returncode != 0
+    assert count_field in result.stderr
 
 
 def test_validator_rejects_air_gap_without_lateral_air_gap(tmp_path: Path) -> None:
