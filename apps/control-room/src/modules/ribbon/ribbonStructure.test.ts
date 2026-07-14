@@ -3285,6 +3285,44 @@ describe("ribbon structure", () => {
     });
   });
 
+  it("shows the server capability reason on mesh build actions", () => {
+    const commands = createControlRoomCommandRegistry();
+    const visualization = new ObjectVisualizationController();
+    const content = buildRibbonTabContent("mesh", {
+      commands,
+      commandContext: { source: "test" },
+      meshCapabilities: {
+        revision: 3,
+        mesh_capabilities: {
+          fem: {
+            status: "unsupported",
+            reason: "FEM mesh authoring is unavailable for this session.",
+          },
+        },
+      },
+      resources: { invalidate: vi.fn() },
+      selection: {
+        kind: null,
+        label: null,
+        moduleSource: null,
+        nodeId: null,
+        objectId: null,
+        ref: null,
+      },
+      visualization,
+      visualizationSnapshot: visualization.getSnapshot(),
+    });
+
+    const buildAction = content?.groups
+      .find((group) => group.id === "build")
+      ?.actions.find((action) => action.id === "mesh.build-selected");
+
+    expect(buildAction).toMatchObject({
+      disabled: true,
+      tooltip: "FEM mesh authoring is unavailable for this session.",
+    });
+  });
+
   it("keeps Study script sync disabled until a command contract exists", () => {
     const content = buildRibbonTabContent("study", {
       commands: createControlRoomCommandRegistry(),

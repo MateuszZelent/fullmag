@@ -6,6 +6,7 @@ import type { LiveStatusResource } from "@/kernel/api/apiTypes";
 import {
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+  MESHING_CAPABILITIES_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MESHING_SUMMARY_PATH,
   MODEL_GEOMETRY_CAPABILITIES_PATH,
@@ -25,6 +26,7 @@ import {
   useGeometryValidationResource,
   useMeshBuildCurrent,
   useMeshBuildLatestSuccessful,
+  useMeshCapabilitiesResource,
   useMeshSemanticsResource,
   useMeshSharedDomainManifestResource,
   useMeshSummaryResource,
@@ -205,6 +207,9 @@ export default function RibbonModule({ kernel }: ModuleProps) {
   const meshBuildLatest = useMeshBuildLatestSuccessful({
     enabled: shouldLoadRuntimeMeshBuild(needsMeshResources, sessionStatusData),
   });
+  const meshCapabilities = useMeshCapabilitiesResource({
+    enabled: needsMeshResources,
+  });
   const meshManifest = useMeshSharedDomainManifestResource({
     enabled: shouldLoadRuntimeMeshManifest(
       needsMeshResources,
@@ -279,6 +284,7 @@ export default function RibbonModule({ kernel }: ModuleProps) {
           [MESHING_BUILDS_CURRENT_PATH]: meshBuildCurrent.data,
           [MESHING_BUILDS_LATEST_SUCCESSFUL_PATH]: meshBuildLatest.data,
           [MESHING_SHARED_DOMAIN_MANIFEST_PATH]: meshManifest.data,
+          [MESHING_CAPABILITIES_PATH]: meshCapabilities.data,
           [MESHING_SUMMARY_PATH]: meshSummary.data,
           [MODEL_GEOMETRY_CAPABILITIES_PATH]: geometryCapabilities.data,
           [MODEL_GEOMETRY_VALIDATION_PATH]: geometryValidation.data,
@@ -312,6 +318,7 @@ export default function RibbonModule({ kernel }: ModuleProps) {
       meshBuildCurrent.data,
       needsRuntimeResources,
       meshBuildLatest.data,
+      meshCapabilities.data,
       meshManifest.data,
       meshSummary.data,
       sessionStatusData,
@@ -331,6 +338,7 @@ export default function RibbonModule({ kernel }: ModuleProps) {
         commands: kernel.commands,
         meshBuildCurrent: meshBuildCurrent.data,
         meshBuildLatest: meshBuildLatest.data,
+        meshCapabilities: meshCapabilities.data,
         meshSemantics: meshSemantics.data,
         meshSummary: meshSummary.data,
         resources: kernel.resources,
@@ -352,6 +360,7 @@ export default function RibbonModule({ kernel }: ModuleProps) {
       kernel.resources,
       meshBuildCurrent.data,
       meshBuildLatest.data,
+      meshCapabilities.data,
       meshSemantics.data,
       meshSummary.data,
       selection,

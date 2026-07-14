@@ -2,6 +2,7 @@ import {
   MESHING_BUILDS_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+  MESHING_CAPABILITIES_PATH,
   MESHING_OBJECT_QUALITY_PATH,
   MESHING_OBJECT_REPORT_PATH,
   MESHING_OBJECT_TOPOLOGY_PATH,
@@ -22,6 +23,10 @@ import type { JsonObject, JsonValue } from "../api/apiTypes";
 import type { CommandDetailResource } from "../api/apiTypes";
 import type { CommandContext, CommandContribution } from "../commands/commandTypes";
 import type { Selection } from "../selection/selectionTypes";
+import {
+  meshEditorCapabilityBlocks,
+  resolveMeshEditorCapabilities,
+} from "@/shared/domain/mesh/meshEditorCapabilityModel";
 import {
   renderModePatch,
   type VisualizationTargetRef,
@@ -243,7 +248,23 @@ function selectedObjectMeshDisabledReason(context: CommandContext): string | nul
   if (isObjectMeshBuildRunning(context, objectId)) {
     return "A mesh build is already running for this object.";
   }
-  return null;
+  return meshCapabilityDisabledReason(context, "fem");
+}
+
+function meshCapabilityDisabledReason(
+  context: CommandContext,
+  capability: "fem",
+): string | null {
+  if (!context.resourceData || !(MESHING_CAPABILITIES_PATH in context.resourceData)) {
+    return null;
+  }
+  const option = resolveMeshEditorCapabilities(
+    context.resourceData[MESHING_CAPABILITIES_PATH] as {
+      mesh_capabilities?: unknown;
+      mesh_adaptivity_state?: unknown;
+    } | null,
+  ).option(capability);
+  return meshEditorCapabilityBlocks(option) ? option.reason : null;
 }
 
 function selectedObjectTarget(
@@ -792,6 +813,8 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
     category: "Mesh",
     group: "mesh",
     scope: "workspace",
+    isEnabled: (context) => meshCapabilityDisabledReason(context, "fem") === null,
+    disabledReason: (context) => meshCapabilityDisabledReason(context, "fem"),
     run: async (context) => {
       if (!context.api) {
         return { message: "Control-room API is unavailable.", status: "failed" };

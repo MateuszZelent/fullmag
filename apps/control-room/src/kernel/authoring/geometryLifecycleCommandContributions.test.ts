@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_PATH,
+  MESHING_CAPABILITIES_PATH,
   MESHING_OBJECT_QUALITY_PATH,
   MESHING_OBJECT_REPORT_PATH,
   MESHING_OBJECT_TOPOLOGY_PATH,
@@ -205,6 +206,50 @@ describe("geometry lifecycle command contributions", () => {
         source: "test",
       }),
     ).toBe(false);
+  });
+
+  it("uses the mesh capability resource reason for build commands", () => {
+    const registry = registryWithLifecycleCommands();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    selectBox(selection);
+    const context = {
+      selection,
+      source: "test" as const,
+      resourceData: {
+        [MESHING_CAPABILITIES_PATH]: {
+          mesh_capabilities: {
+            fem: {
+              status: "unsupported",
+              reason: "FEM shared-domain meshing is disabled for this session.",
+            },
+          },
+        },
+      },
+    };
+
+    expect(registry.isEnabled("mesh.build-selected", context)).toBe(false);
+    expect(registry.get("mesh.build-selected")?.disabledReason?.(context)).toBe(
+      "FEM shared-domain meshing is disabled for this session.",
+    );
+    expect(registry.isEnabled("mesh.build-shared-domain", context)).toBe(false);
+  });
+
+  it("does not block builds when a legacy mesh resource omits lane keys", () => {
+    const registry = registryWithLifecycleCommands();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    selectBox(selection);
+
+    expect(
+      registry.isEnabled("mesh.build-selected", {
+        selection,
+        source: "test",
+        resourceData: {
+          [MESHING_CAPABILITIES_PATH]: {
+            mesh_capabilities: { has_volume_mesh: true },
+          },
+        },
+      }),
+    ).toBe(true);
   });
 
   it("focuses primitive display explicitly for the selected object", async () => {
