@@ -1635,6 +1635,37 @@ fn fdm_region_region_explicit_exchange_blocks_on_cpu_reference() {
 }
 
 #[test]
+fn fdm_equal_priority_overlapping_regions_fail_closed_without_hidden_region_id_tie_break() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.object_regions.push(test_box_region(
+        "strip:overlap_a",
+        "overlap_a",
+        [-50e-9, 0.0, 0.0],
+        10,
+    ));
+    ir.object_regions.push(test_box_region(
+        "strip:overlap_b",
+        "overlap_b",
+        [-50e-9, 0.0, 0.0],
+        10,
+    ));
+
+    let err = plan(&ir).expect_err(
+        "equal-priority overlapping regions must not be resolved by lexicographic region id",
+    );
+    assert!(
+        err.reasons.iter().any(|reason| {
+            reason.contains("overlapping object regions")
+                && reason.contains("strip:overlap_a")
+                && reason.contains("strip:overlap_b")
+                && reason.contains("equal priority")
+        }),
+        "unexpected planner errors: {:?}",
+        err.reasons
+    );
+}
+
+#[test]
 fn intra_object_region_exchange_defaults_harmonic_mean() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.object_regions

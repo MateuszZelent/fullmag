@@ -4,6 +4,8 @@ use fullmag_ir::{
 };
 use std::collections::BTreeSet;
 
+use crate::region_conflict::{resolve_region_conflict, RegionConflictCandidate};
+
 fn geometry_translation(entry: &GeometryEntryIR) -> [f64; 3] {
     match entry {
         GeometryEntryIR::Translate { base, by, .. } => {
@@ -281,6 +283,8 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
                     &material_override.value,
                     Some(*region),
                     region.frame,
+                    material_override.conflict_policy,
+                    format!("region:{}", region.region_id),
                 ));
             }
         }
@@ -312,6 +316,8 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
                     &field.value,
                     region.copied(),
                     region.map(|r| r.frame).unwrap_or(RegionFrameIR::Object),
+                    field.conflict_policy,
+                    format!("assignment:{}", field.assignment_id),
                 ));
             }
         }
@@ -328,7 +334,7 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
     let mut resolved_values = Vec::with_capacity(points.len());
     for &point in points {
         let mut active_at_point = Vec::new();
-        for &(region_id, priority, value, region_opt, frame) in &overrides {
+        for &(region_id, priority, value, region_opt, frame, policy, ref source_id) in &overrides {
             let weight = if let Some(region) = region_opt {
                 let coords = match frame {
                     RegionFrameIR::World => point,
@@ -346,43 +352,47 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
                 1.0
             };
             if weight > 0.0 {
-                active_at_point.push((region_id, priority, value, weight));
+                active_at_point.push((
+                    region_id,
+                    priority,
+                    value,
+                    weight,
+                    policy,
+                    source_id.to_string(),
+                ));
             }
         }
 
         if active_at_point.is_empty() {
             resolved_values.push(base_value);
         } else {
-            let max_priority = active_at_point[0].1;
-            let highest_priority_entries = active_at_point
+            let candidates = active_at_point
                 .iter()
-                .filter(|entry| entry.1 == max_priority)
+                .map(|entry| RegionConflictCandidate {
+                    region_id: entry.5.clone(),
+                    priority: entry.1,
+                    policy: entry.4,
+                })
                 .collect::<Vec<_>>();
-
-            let mut evaluated_values = Vec::new();
-            for entry in &highest_priority_entries {
-                let val = evaluate_parameter_field(entry.2, point, object_translation)?;
-                evaluated_values.push((entry.0, val, entry.3));
+            let resolution = resolve_region_conflict(&candidates).map_err(|reason| {
+                format!(
+                    "region-owned material parameter conflict: overlapping regions assign different values for {:?}; {reason}",
+                    parameter,
+                )
+            })?;
+            if resolution.policy == fullmag_ir::RegionConflictPolicyIR::MinMeshSizeWins {
+                return Err(format!(
+                    "region-owned material parameter conflict: overlapping regions assign different values for {:?}; min_mesh_size_wins is only valid for mesh-size ownership",
+                    parameter
+                ));
             }
-
-            let first_val = evaluated_values[0].1;
-            let first_weight = evaluated_values[0].2;
-            for &(_, val, weight) in &evaluated_values[1..] {
-                if (val - first_val).abs() > 1e-12 {
-                    return Err(format!(
-                        "region-owned material parameter conflict: overlapping regions assign different values for {:?} at priority {} (values: {} vs {})",
-                        parameter, max_priority, first_val, val
-                    ));
-                }
-                if (weight - first_weight).abs() > 1e-12 {
-                    return Err(format!(
-                        "region-owned material parameter conflict: overlapping regions assign different transition weights for {:?} at priority {}",
-                        parameter, max_priority
-                    ));
-                }
-            }
-            validate_resolved_parameter_value(parameter, first_val)?;
-            resolved_values.push(base_value + first_weight * (first_val - base_value));
+            let selected = active_at_point
+                .iter()
+                .find(|entry| entry.5.as_str() == resolution.winner_region_id.as_str())
+                .expect("resolver winner must be one of the active candidates");
+            let value = evaluate_parameter_field(selected.2, point, object_translation)?;
+            validate_resolved_parameter_value(parameter, value)?;
+            resolved_values.push(base_value + selected.3 * (value - base_value));
         }
     }
 

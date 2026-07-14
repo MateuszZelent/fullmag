@@ -23,6 +23,7 @@ mod material_transition;
 mod mesh;
 mod oersted;
 pub mod quantities;
+mod region_conflict;
 mod spin_torque;
 mod surface_selectors;
 mod util;

@@ -220,7 +220,7 @@ pub(crate) fn validate_multilayer_grid_budget(
     };
     let topology_tokens = fullmag_ir::fdm_multilayer_topology_tokens(&plan.layers);
     certificate
-        .validate_against_masks(None, &topology_tokens)
+        .validate_against_topology_tokens(None, &topology_tokens)
         .map_err(|message| RunError {
         message: format!("FDM multilayer grid certificate rejected before allocation: {message}"),
         })?;

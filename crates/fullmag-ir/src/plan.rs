@@ -101,6 +101,48 @@ impl FdmGridCertificateIR {
         region_mask: &[u32],
     ) -> Result<Self, String> {
         crate::validate_fdm_region_lut_indices(region_mask, &[])?;
+        Self::new_with_payload(
+            origin_m,
+            counts,
+            cell_m,
+            active_cells,
+            estimated_bytes,
+            active_mask,
+            region_mask,
+        )
+    }
+
+    /// Build a certificate fingerprinting multilayer topology tokens rather than
+    /// the bounded native FDM region LUT payload.
+    pub fn new_with_topology_tokens(
+        origin_m: [f64; 3],
+        counts: [u32; 3],
+        cell_m: [f64; 3],
+        active_cells: u64,
+        estimated_bytes: u64,
+        active_mask: Option<&[bool]>,
+        topology_tokens: &[u32],
+    ) -> Result<Self, String> {
+        Self::new_with_payload(
+            origin_m,
+            counts,
+            cell_m,
+            active_cells,
+            estimated_bytes,
+            active_mask,
+            topology_tokens,
+        )
+    }
+
+    fn new_with_payload(
+        origin_m: [f64; 3],
+        counts: [u32; 3],
+        cell_m: [f64; 3],
+        active_cells: u64,
+        estimated_bytes: u64,
+        active_mask: Option<&[bool]>,
+        payload: &[u32],
+    ) -> Result<Self, String> {
         let extent_m: [f64; 3] =
             std::array::from_fn(|axis| counts[axis] as f64 * cell_m[axis]);
         let grid_fingerprint = Self::fingerprint_for(
@@ -109,7 +151,7 @@ impl FdmGridCertificateIR {
             cell_m,
             extent_m,
             active_mask.unwrap_or(&[]),
-            region_mask,
+            payload,
         )?;
         let certificate = Self {
             origin_m,
@@ -191,6 +233,23 @@ impl FdmGridCertificateIR {
         region_mask: &[u32],
     ) -> Result<(), String> {
         crate::validate_fdm_region_lut_indices(region_mask, &[])?;
+        self.validate_against_payload(active_mask, region_mask)
+    }
+
+    /// Validate a certificate against multilayer topology tokens.
+    pub fn validate_against_topology_tokens(
+        &self,
+        active_mask: Option<&[bool]>,
+        topology_tokens: &[u32],
+    ) -> Result<(), String> {
+        self.validate_against_payload(active_mask, topology_tokens)
+    }
+
+    fn validate_against_payload(
+        &self,
+        active_mask: Option<&[bool]>,
+        payload: &[u32],
+    ) -> Result<(), String> {
         self.validate()?;
         let expected_fingerprint = Self::fingerprint_for(
             self.origin_m,
@@ -198,7 +257,7 @@ impl FdmGridCertificateIR {
             self.cell_m,
             self.extent_m,
             active_mask.unwrap_or(&[]),
-            region_mask,
+            payload,
         )?;
         if self.grid_fingerprint != expected_fingerprint {
             return Err(format!(

@@ -999,7 +999,7 @@ mod tests {
         };
         let topology_tokens = fullmag_ir::fdm_multilayer_topology_tokens(&plan.layers);
         plan.grid_certificate = Some(
-            fullmag_ir::FdmGridCertificateIR::new_with_masks(
+            fullmag_ir::FdmGridCertificateIR::new_with_topology_tokens(
                 [-4e-9, -4e-9, 0.0],
                 [4, 4, 1],
                 [2e-9, 2e-9, 1e-9],

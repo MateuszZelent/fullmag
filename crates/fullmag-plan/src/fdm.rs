@@ -19,6 +19,7 @@ use crate::geometry::{
 };
 use crate::magnetization_textures::{sample_preset_texture, TextureSamplePoint};
 use crate::oersted::{resolve_fdm_oersted_term, ResolvedOerstedTerm};
+use crate::region_conflict::{resolve_region_conflict, RegionConflictCandidate};
 use crate::spin_torque::{
     resolve_legacy_spin_torque, resolve_sot_fields, SpinTorqueExecutableLane,
 };
@@ -155,36 +156,63 @@ fn materialize_object_region_mask(
         ));
         return (mask, region_ids);
     }
-    for (index, region) in regions.iter().enumerate() {
+    let points = grid_sample_points(grid_cells, cell_size, origin, active_mask);
+    let mut assigned_counts = vec![0usize; regions.len()];
+    for region in &regions {
         if region.frame != RegionFrameIR::Object {
             errors.push(format!(
                 "object_region '{}' uses frame={:?}; FDM region mask materialization currently supports object frame only",
                 region.region_id, region.frame
             ));
-            continue;
         }
+    }
+    for (index, region) in regions.iter().enumerate() {
         let region_index = (index + 1) as u32;
         debug_assert!(region_index <= fullmag_ir::MAX_FDM_REGION_IDS);
         region_ids.insert(region.region_id.clone(), region_index);
-        let mut assigned = 0usize;
-        let points = grid_sample_points(grid_cells, cell_size, origin, active_mask);
-        for (flat_index, point) in points.iter().enumerate() {
-            if !point.active {
-                continue;
-            }
+    }
+    for (flat_index, point) in points.iter().enumerate() {
+        if !point.active {
+            continue;
+        }
+        let mut matches = Vec::new();
+        for (index, region) in regions.iter().enumerate() {
             match point_in_region_shape(point.position_object, &region.shape) {
-                Ok(true) => {
-                    mask[flat_index] = region_index;
-                    assigned += 1;
-                }
+                Ok(true) => matches.push(index),
                 Ok(false) => {}
-                Err(message) => {
-                    errors.push(format!("object_region '{}': {message}", region.region_id));
-                    break;
-                }
+                Err(message) => errors.push(format!("object_region '{}': {message}", region.region_id)),
             }
         }
-        if assigned == 0 {
+        if matches.is_empty() {
+            continue;
+        }
+        let candidates = matches
+            .iter()
+            .map(|index| RegionConflictCandidate {
+                region_id: regions[*index].region_id.clone(),
+                priority: regions[*index].priority,
+                policy: fullmag_ir::RegionConflictPolicyIR::Error,
+            })
+            .collect::<Vec<_>>();
+        let resolution = match resolve_region_conflict(&candidates) {
+            Ok(resolution) => resolution,
+            Err(message) => {
+                errors.push(message);
+                continue;
+            }
+        };
+        let winner = matches
+            .iter()
+            .copied()
+            .find(|index| regions[*index].region_id == resolution.winner_region_id)
+            .expect("resolver winner must be one of the candidates");
+        mask[flat_index] = (winner + 1) as u32;
+        for index in matches {
+            assigned_counts[index] += 1;
+        }
+    }
+    for (index, region) in regions.iter().enumerate() {
+        if assigned_counts[index] == 0 {
             errors.push(format!(
                 "object_region '{}' did not cover any active FDM cells",
                 region.region_id
@@ -1972,7 +2000,7 @@ pub(crate) fn plan_fdm_multilayer(
         return Err(PlanError { reasons: errors });
     }
 
-    let grid_certificate = FdmGridCertificateIR::new_with_masks(
+    let grid_certificate = FdmGridCertificateIR::new_with_topology_tokens(
         common_origin,
         common_cells,
         convolution_cell_size,

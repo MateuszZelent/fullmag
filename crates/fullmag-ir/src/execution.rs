@@ -100,7 +100,12 @@ pub fn validate_fdm_region_lut_indices(
     region_mask: &[u32],
     exchange_pairs: &[(u32, u32, f64)],
 ) -> Result<(), String> {
-    if let Some(maximum) = region_mask.iter().copied().max() {
+    if let Some(maximum) = region_mask
+        .iter()
+        .copied()
+        .filter(|region_id| *region_id != u32::MAX)
+        .max()
+    {
         if maximum > MAX_FDM_REGION_IDS {
             return Err(format!(
                 "fdm_region_lut_capacity_exceeded: requested_region_id={} supported_region_ids={}",
