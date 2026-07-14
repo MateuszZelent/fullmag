@@ -847,12 +847,14 @@ pub(crate) fn plan_fdm(
         grid_cells[1] as f64 * cell_size[1],
         grid_cells[2] as f64 * cell_size[2],
     ];
-    let grid_certificate = FdmGridCertificateIR::new(
+    let grid_certificate = FdmGridCertificateIR::new_with_masks(
         native_origin,
         grid_cells,
         cell_size,
         active_count as u64,
         grid_cost.estimated_bytes,
+        active_mask.as_deref(),
+        &region_mask,
     )
     .map_err(|message| PlanError {
         reasons: vec![format!("invalid resolved FDM grid certificate: {message}")],

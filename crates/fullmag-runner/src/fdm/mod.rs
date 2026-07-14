@@ -28,23 +28,26 @@ pub(crate) fn validate_single_grid_budget(
     .map_err(|error| RunError {
         message: format!("FDM grid budget rejected before allocation: {error}"),
     })?;
-    if let Some(certificate) = plan.grid_certificate.as_ref() {
-        certificate.validate().map_err(|message| RunError {
+    let certificate = plan.grid_certificate.as_ref().ok_or_else(|| RunError {
+        message: "FDM grid certificate is required before runner allocation".to_string(),
+    })?;
+    certificate
+        .validate_against_masks(plan.active_mask.as_deref(), &plan.region_mask)
+        .map_err(|message| RunError {
             message: format!("FDM grid certificate rejected before allocation: {message}"),
         })?;
-        if certificate.origin_m != plan.origin_m
-            || certificate.counts != plan.grid.cells
-            || certificate.cell_m != plan.cell_size
-            || certificate.estimated_bytes != cost.estimated_bytes
-        {
-            return Err(RunError {
-                message: format!(
-                    "FDM grid certificate does not match resolved plan: certificate_counts={:?} plan_counts={:?}",
-                    certificate.counts, plan.grid.cells
-                ),
-            });
+    if certificate.origin_m != plan.origin_m
+        || certificate.counts != plan.grid.cells
+        || certificate.cell_m != plan.cell_size
+        || certificate.estimated_bytes != cost.estimated_bytes
+    {
+        return Err(RunError {
+            message: format!(
+                "FDM grid certificate does not match resolved plan: certificate_counts={:?} plan_counts={:?}",
+                certificate.counts, plan.grid.cells
+            ),
+        });
         }
-    }
     let cells = usize::try_from(cost.cells).map_err(|_| RunError {
         message: format!(
             "FDM grid cell count {} is not addressable on this runtime",
@@ -83,15 +86,13 @@ pub(crate) fn validate_single_grid_budget(
         .as_ref()
         .map(|mask| mask.iter().filter(|active| **active).count() as u64)
         .unwrap_or(cost.cells);
-    if let Some(certificate) = plan.grid_certificate.as_ref() {
-        if certificate.active_cells != active_cells {
-            return Err(RunError {
-                message: format!(
-                    "FDM grid certificate active count mismatch: certificate={} resolved={active_cells}",
-                    certificate.active_cells
-                ),
-            });
-        }
+    if certificate.active_cells != active_cells {
+        return Err(RunError {
+            message: format!(
+                "FDM grid certificate active count mismatch: certificate={} resolved={active_cells}",
+                certificate.active_cells
+            ),
+        });
     }
     Ok(cost.cells)
 }
@@ -106,12 +107,12 @@ pub(crate) fn validate_multilayer_grid_budget(
     .map_err(|error| RunError {
         message: format!("FDM common grid budget rejected before allocation: {error}"),
     })?;
-    let certificate = plan.grid_certificate.as_ref();
-    if let Some(certificate) = certificate {
-        certificate.validate().map_err(|message| RunError {
-            message: format!("FDM multilayer grid certificate rejected before allocation: {message}"),
-        })?;
-    }
+    let certificate = plan.grid_certificate.as_ref().ok_or_else(|| RunError {
+        message: "FDM multilayer grid certificate is required before runner allocation".to_string(),
+    })?;
+    certificate.validate().map_err(|message| RunError {
+        message: format!("FDM multilayer grid certificate rejected before allocation: {message}"),
+    })?;
     let expected_origin = plan
         .layers
         .iter()
@@ -126,20 +127,28 @@ pub(crate) fn validate_multilayer_grid_budget(
         .first()
         .map(|layer| layer.convolution_cell_size)
         .unwrap_or([0.0; 3]);
-    if let Some(certificate) = certificate {
-        if certificate.origin_m != expected_origin
-            || certificate.counts != plan.common_cells
-            || certificate.cell_m != expected_cell
-            || certificate.estimated_bytes != cost.estimated_bytes
-            || certificate.active_cells != cost.cells
-        {
-            return Err(RunError {
-                message: format!(
-                    "FDM multilayer grid certificate does not match resolved common grid: certificate_counts={:?} common_counts={:?}",
-                    certificate.counts, plan.common_cells
-                ),
-            });
-        }
+    if plan
+        .layers
+        .iter()
+        .any(|layer| layer.convolution_cell_size != expected_cell)
+    {
+        return Err(RunError {
+            message: "FDM multilayer layer convolution cell sizes disagree with the certified common grid"
+                .to_string(),
+        });
+    }
+    if certificate.origin_m != expected_origin
+        || certificate.counts != plan.common_cells
+        || certificate.cell_m != expected_cell
+        || certificate.estimated_bytes != cost.estimated_bytes
+        || certificate.active_cells != cost.cells
+    {
+        return Err(RunError {
+            message: format!(
+                "FDM multilayer grid certificate does not match resolved common grid: certificate_counts={:?} common_counts={:?}",
+                certificate.counts, plan.common_cells
+            ),
+        });
     }
     let mut aggregate_bytes = cost.estimated_bytes;
     for layer in &plan.layers {
@@ -284,5 +293,43 @@ mod tests {
         let error = validate_single_grid_budget(&plan)
             .expect_err("non-finite origin must be rejected before allocation");
         assert!(error.message.contains("origin must contain finite"));
+    }
+
+    #[test]
+    fn missing_grid_certificate_is_rejected_before_allocation() {
+        let mut plan = FdmPlanIR::default();
+        plan.grid.cells = [1, 1, 1];
+        plan.cell_size = [1.0, 1.0, 1.0];
+        plan.initial_magnetization = vec![[0.0, 0.0, 1.0]];
+
+        let error = validate_single_grid_budget(&plan)
+            .expect_err("runner must not allocate a plan without a certificate");
+        assert!(error.message.contains("certificate is required"));
+    }
+
+    #[test]
+    fn grid_certificate_rejects_active_mask_swap() {
+        let mut plan = FdmPlanIR::default();
+        plan.grid.cells = [2, 1, 1];
+        plan.cell_size = [1.0, 1.0, 1.0];
+        plan.initial_magnetization = vec![[0.0, 0.0, 1.0]; 2];
+        plan.active_mask = Some(vec![true, false]);
+        plan.grid_certificate = Some(
+            fullmag_ir::FdmGridCertificateIR::new_with_masks(
+                plan.origin_m,
+                plan.grid.cells,
+                plan.cell_size,
+                1,
+                2 * fullmag_plan::FDM_GRID_ESTIMATED_BYTES_PER_CELL,
+                plan.active_mask.as_deref(),
+                &plan.region_mask,
+            )
+            .expect("test certificate should be valid"),
+        );
+        plan.active_mask = Some(vec![false, true]);
+
+        let error = validate_single_grid_budget(&plan)
+            .expect_err("topology changes must invalidate the grid certificate");
+        assert!(error.message.contains("fingerprint mismatch"));
     }
 }

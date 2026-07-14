@@ -87,8 +87,29 @@ impl FdmGridCertificateIR {
         active_cells: u64,
         estimated_bytes: u64,
     ) -> Result<Self, String> {
-        let extent_m = std::array::from_fn(|axis| counts[axis] as f64 * cell_m[axis]);
-        let grid_fingerprint = Self::fingerprint_for(origin_m, counts, cell_m, extent_m);
+        Self::new_with_masks(origin_m, counts, cell_m, active_cells, estimated_bytes, None, &[])
+    }
+
+    /// Build a certificate including the resolved active/region topology.
+    pub fn new_with_masks(
+        origin_m: [f64; 3],
+        counts: [u32; 3],
+        cell_m: [f64; 3],
+        active_cells: u64,
+        estimated_bytes: u64,
+        active_mask: Option<&[bool]>,
+        region_mask: &[u32],
+    ) -> Result<Self, String> {
+        let extent_m: [f64; 3] =
+            std::array::from_fn(|axis| counts[axis] as f64 * cell_m[axis]);
+        let grid_fingerprint = Self::fingerprint_for(
+            origin_m,
+            counts,
+            cell_m,
+            extent_m,
+            active_mask.unwrap_or(&[]),
+            region_mask,
+        );
         let certificate = Self {
             origin_m,
             counts,
@@ -148,17 +169,46 @@ impl FdmGridCertificateIR {
                 ));
             }
         }
+        if self.grid_fingerprint.len() != 64
+            || !self.grid_fingerprint.chars().all(|character| character.is_ascii_hexdigit())
+        {
+            return Err(format!(
+                "FDM grid certificate fingerprint must be 64 lowercase hexadecimal characters, got {}",
+                self.grid_fingerprint
+            ));
+        }
+        Ok(())
+    }
+
+    /// Validate the certificate against the exact resolved topology payload.
+    pub fn validate_against_masks(
+        &self,
+        active_mask: Option<&[bool]>,
+        region_mask: &[u32],
+    ) -> Result<(), String> {
+        self.validate()?;
         let expected_fingerprint = Self::fingerprint_for(
             self.origin_m,
             self.counts,
             self.cell_m,
             self.extent_m,
+            active_mask.unwrap_or(&[]),
+            region_mask,
         );
         if self.grid_fingerprint != expected_fingerprint {
             return Err(format!(
                 "FDM grid certificate fingerprint mismatch: expected {expected_fingerprint}, got {}",
                 self.grid_fingerprint
             ));
+        }
+        if let Some(mask) = active_mask {
+            let active_cells = mask.iter().filter(|active| **active).count() as u64;
+            if self.active_cells != active_cells {
+                return Err(format!(
+                    "FDM grid certificate active count mismatch: certificate={} resolved={active_cells}",
+                    self.active_cells
+                ));
+            }
         }
         Ok(())
     }
@@ -168,12 +218,16 @@ impl FdmGridCertificateIR {
         counts: [u32; 3],
         cell_m: [f64; 3],
         extent_m: [f64; 3],
+        active_mask: &[bool],
+        region_mask: &[u32],
     ) -> String {
         let payload = serde_json::json!({
             "origin_m": origin_m,
             "counts": counts,
             "cell_m": cell_m,
             "extent_m": extent_m,
+            "active_mask": active_mask,
+            "region_mask": region_mask,
         });
         let encoded = serde_json::to_vec(&payload).expect("grid certificate payload serializes");
         Sha256::digest(encoded)
@@ -1226,8 +1280,23 @@ mod tests {
         let mut hash_invalid = certificate;
         hash_invalid.grid_fingerprint.replace_range(..2, "00");
         assert!(hash_invalid
-            .validate()
+            .validate_against_masks(None, &[])
             .expect_err("fingerprint tampering must reject")
+            .contains("fingerprint mismatch"));
+
+        let topology_certificate = FdmGridCertificateIR::new_with_masks(
+            [0.0; 3],
+            [2, 2, 1],
+            [1.0e-9; 3],
+            2,
+            1_024,
+            Some(&[true, false, true, false]),
+            &[1, 1, 2, 2],
+        )
+        .expect("topology certificate should validate");
+        assert!(topology_certificate
+            .validate_against_masks(Some(&[false, true, true, false]), &[1, 1, 2, 2])
+            .expect_err("active topology swap must reject")
             .contains("fingerprint mismatch"));
     }
 }
