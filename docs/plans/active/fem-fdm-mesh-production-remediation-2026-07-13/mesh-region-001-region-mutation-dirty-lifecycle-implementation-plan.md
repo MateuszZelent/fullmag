@@ -32,7 +32,8 @@ fn classify_region_mutation(before: Option<&SceneObjectRegion>, after: Option<&S
 ```
 
 - [ ] Zaimplementować classifier przy modelu authoring i użyć go we wszystkich pięciu operacjach CRUD/reorder; usunąć zależność od ręcznych, rozproszonych tagów.
-- [ ] Włączyć region topology inputs do mesh signature i publikować dirty/stale przed możliwością startu stage; failure mutacji pozostawia wszystkie rewizje bez zmian.
+- [x] Włączyć region topology inputs do `scene_mesh_signature` i publikować dirty/stale po region CRUD/duplicate/reorder; failure mutacji pozostawia rewizje bez zmian w istniejących transakcjach.
+- [ ] Zastąpić obecne szerokie invalidation jednym classifierem impactów oraz dopiąć osobne membership/coefficient/initial-state revisions.
 - [ ] Uruchomić focused API/session tests; oczekiwany PASS całej macierzy.
 
 ### Task 3: kontrakt i evidence
@@ -40,5 +41,11 @@ fn classify_region_mutation(before: Option<&SceneObjectRegion>, after: Option<&S
 - [ ] Uaktualnić ADR 0009 o tabelę klasyfikacji FDM/FEM oraz invariant „stary mesh może być visible, ale nie current”.
 - [ ] Uruchomić API hygiene i test scenariusza build-after-region-edit; zapisać before/after scene revision, mesh generation i stale reasons.
 - [ ] Commit: `git add docs/adr/0009-geometry-invalidates-mesh.md crates/fullmag-api crates/fullmag-session && git commit -m "fix(mesh): classify region mutation invalidation"`.
+
+### Evidence (2026-07-14, partial)
+
+- Commit `bfe4b73f` marks object-region create/patch/delete/duplicate/reorder as `mesh:dirty` and includes the full region payload in `scene_mesh_signature`.
+- `env CARGO_TARGET_DIR=/tmp/fullmag-region-lifecycle cargo test -p fullmag-api authoring_ -- --nocapture` — 44 passed.
+- The dedicated impact classifier and separate revision semantics remain open; current invalidation intentionally over-invalidates metadata-only mutations until REGION-011/013 land.
 
 **Exit:** żadna zmiana regionu wpływająca na mesh lub materialization nie pozostawia zależnego zasobu jako current.
