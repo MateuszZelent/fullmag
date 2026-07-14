@@ -76,3 +76,82 @@ pub(crate) fn resolve_region_conflict(
         candidates: candidate_ids,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn candidate(
+        region_id: &str,
+        priority: i32,
+        policy: RegionConflictPolicyIR,
+    ) -> RegionConflictCandidate {
+        RegionConflictCandidate {
+            region_id: region_id.to_string(),
+            priority,
+            policy,
+        }
+    }
+
+    #[test]
+    fn unique_highest_priority_wins_independently_of_input_order() {
+        let result = resolve_region_conflict(&[
+            candidate("region:z", 1, RegionConflictPolicyIR::Error),
+            candidate("region:a", 3, RegionConflictPolicyIR::Error),
+            candidate("region:m", 2, RegionConflictPolicyIR::Error),
+        ])
+        .expect("unique maximum priority must resolve");
+
+        assert_eq!(result.winner_region_id, "region:a");
+        assert_eq!(
+            result.candidates,
+            vec!["region:a", "region:m", "region:z"]
+        );
+    }
+
+    #[test]
+    fn equal_priority_error_policy_fails_closed() {
+        let error = resolve_region_conflict(&[
+            candidate("region:b", 4, RegionConflictPolicyIR::Error),
+            candidate("region:a", 4, RegionConflictPolicyIR::Error),
+        ])
+        .expect_err("equal priority must not choose a hidden winner");
+
+        assert!(error.contains("region:a, region:b"));
+        assert!(error.contains("equal priority 4"));
+        assert!(error.contains("policy=error"));
+    }
+
+    #[test]
+    fn equal_priority_higher_priority_policy_does_not_recurse_into_id_order() {
+        let error = resolve_region_conflict(&[
+            candidate("region:b", 4, RegionConflictPolicyIR::HigherPriorityWins),
+            candidate("region:a", 4, RegionConflictPolicyIR::HigherPriorityWins),
+        ])
+        .expect_err("higher_priority_wins cannot resolve an equal-priority tie");
+
+        assert!(error.contains("higher_priority_wins cannot resolve equal priority"));
+    }
+
+    #[test]
+    fn equal_priority_min_mesh_policy_requires_mesh_metric_owner() {
+        let error = resolve_region_conflict(&[
+            candidate("region:b", 4, RegionConflictPolicyIR::MinMeshSizeWins),
+            candidate("region:a", 4, RegionConflictPolicyIR::MinMeshSizeWins),
+        ])
+        .expect_err("mesh-size policy needs a mesh-specific resolver");
+
+        assert!(error.contains("min_mesh_size_wins requires a mesh-size resolver"));
+    }
+
+    #[test]
+    fn equal_priority_conflicting_policies_fail_closed() {
+        let error = resolve_region_conflict(&[
+            candidate("region:b", 4, RegionConflictPolicyIR::Error),
+            candidate("region:a", 4, RegionConflictPolicyIR::HigherPriorityWins),
+        ])
+        .expect_err("conflicting policies must not select a winner");
+
+        assert!(error.contains("conflicting policies"));
+    }
+}
