@@ -8919,6 +8919,9 @@ fn fdm_translated_base_boundary_sdf_matches_active_mask_coordinates() {
     let BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
         panic!("expected FDM plan");
     };
+    assert_eq!(fdm.origin_m, [0.0, -20e-9, -2e-9]);
+    let serialized = serde_json::to_value(&fdm).expect("FDM plan should serialize");
+    assert_eq!(serialized["origin_m"], serde_json::json!([0.0, -20e-9, -2e-9]));
     let boundary = fdm.boundary_geometry.expect("translated base must retain SDF");
     let active_mask = fdm.active_mask.expect("cylinder should have an active mask");
     let active_index = active_mask

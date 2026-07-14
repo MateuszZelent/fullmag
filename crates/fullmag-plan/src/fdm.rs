@@ -835,6 +835,7 @@ pub(crate) fn plan_fdm(
     ];
 
     let mut fdm_plan = FdmPlanIR {
+        origin_m: native_origin,
         grid: GridDimensions { cells: grid_cells },
         cell_size,
         region_mask,

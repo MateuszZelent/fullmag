@@ -2612,6 +2612,7 @@ pub(crate) fn field_layout(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Va
             let inactive_cell_count = total_cells.saturating_sub(active_cell_count);
             serde_json::json!({
                 "backend": "fdm",
+                "origin_m": fdm.origin_m,
                 "grid_cells": fdm.grid.cells,
                 "cell_size": fdm.cell_size,
                 "total_cell_count": total_cells,
@@ -4262,6 +4263,7 @@ mod tests {
             true, true, false, false, true, false, true, false,
         ])));
         assert_eq!(layout["backend"], "fdm");
+        assert_eq!(layout["origin_m"], serde_json::json!([0.0, 0.0, 0.0]));
         assert_eq!(layout["total_cell_count"], 8);
         assert_eq!(layout["active_mask_present"], true);
         assert_eq!(layout["active_cell_count"], 4);

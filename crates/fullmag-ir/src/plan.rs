@@ -71,6 +71,12 @@ pub struct ResolvedAntennaZeemanMaskIR {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct FdmPlanIR {
+    /// Physical world-space origin of the resolved FDM grid (lower corner), in metres.
+    ///
+    /// The planner owns this value; runners and artifacts must consume it rather
+    /// than reconstructing an origin from the grid extent.
+    #[serde(default)]
+    pub origin_m: [f64; 3],
     pub grid: GridDimensions,
     pub cell_size: [f64; 3],
     pub region_mask: Vec<u32>,
