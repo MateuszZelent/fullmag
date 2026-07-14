@@ -160,6 +160,9 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision(MODEL_MATERIAL_FIELDS_PATH)).toBe(
       dependentRevision(MODEL_SCENE_PATH, 12),
     );
+    expect(resources.getRevision("session:status")).toBe(
+      dependentRevision(MODEL_SCENE_PATH, 12),
+    );
     expect(resources.getRevision(MESHING_BUILDS_CURRENT_PATH)).toBeNull();
     expect(
       resources.getRevision(MESHING_BUILDS_LATEST_SUCCESSFUL_PATH),

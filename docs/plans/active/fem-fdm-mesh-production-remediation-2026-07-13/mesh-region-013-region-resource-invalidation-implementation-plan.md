@@ -45,4 +45,10 @@ type RegionInvalidationHint = { objectId: string; regionId: string; resource: "m
 - [x] Lokalny authoring path publikuje authoritative scene revision i unieważnia tylko zasoby bieżącej realizacji oznaczonej `mesh:dirty`.
 - [ ] Backend realtime hints, material-only classifier oraz browser proof pozostają otwarte; MESH-REGION-013 nie jest jeszcze produkcyjnie zamknięty.
 
+### Evidence update (2026-07-14, scene status invalidation)
+
+- [x] Realtime bridge treats `MODEL_SCENE_PATH` as status-affecting and schedules a fresh `session:status` HTTP snapshot alongside scene-derived region resource invalidation.
+- [x] RED/GREEN frontend evidence: the scene-change test failed before because `session:status` stayed unchanged; after the change `RealtimeInvalidationBridge.test.ts` passed 31/31.
+- [ ] Dedicated lane-specific realtime hints, exact coefficient/initial-state mapping, full browser smoke and managed runtime evidence remain open.
+
 **Exit:** UI nie może utrzymać cached membership/quality z innej definicji regionu lub mesh generation jako current.

@@ -310,6 +310,7 @@ function escapeResourcePathTemplate(pathTemplate: string): string {
 }
 
 const SESSION_STATUS_RECOMMENDED_FETCHES = new Set<string>([
+  MODEL_SCENE_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
   SIMULATION_STAGES_EXECUTION_PATH,
 ]);
