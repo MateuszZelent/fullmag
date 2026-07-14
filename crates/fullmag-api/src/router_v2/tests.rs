@@ -9050,7 +9050,7 @@ async fn authoring_transactions_mutate_object_regions_and_couplings() {
     let core_region_id = format!("{object_id}:r1");
     assert_eq!(created_object["regions"][0]["region_id"], core_region_id);
     assert_eq!(created_object["allocated_region_ids"][0], core_region_id);
-    assert!(!created_object["tags"]
+    assert!(created_object["tags"]
         .as_array()
         .is_some_and(|tags| tags.iter().any(|tag| tag == "mesh:dirty")));
 
@@ -9490,8 +9490,8 @@ async fn authoring_coupling_transactions_reject_active_disabled_region_endpoint(
 
 #[tokio::test]
 async fn authoring_object_region_resource_crud_allocates_stable_region_id() {
-    fn assert_object_region_authoring_keeps_mesh_current(object: &serde_json::Value) {
-        assert!(!object["tags"]
+    fn assert_object_region_authoring_marks_mesh_dirty(object: &serde_json::Value) {
+        assert!(object["tags"]
             .as_array()
             .is_some_and(|tags| tags.iter().any(|tag| tag == "mesh:dirty")));
     }
@@ -9565,7 +9565,7 @@ async fn authoring_object_region_resource_crud_allocates_stable_region_id() {
         create_json["objects"][0]["regions"][0]["shape"]["radius"],
         0.5
     );
-    assert_object_region_authoring_keeps_mesh_current(&create_json["objects"][0]);
+    assert_object_region_authoring_marks_mesh_dirty(&create_json["objects"][0]);
 
     let duplicate_response = app
         .clone()
@@ -9605,7 +9605,7 @@ async fn authoring_object_region_resource_crud_allocates_stable_region_id() {
         duplicate_json["objects"][0]["allocated_region_ids"][1],
         shell_region_id
     );
-    assert_object_region_authoring_keeps_mesh_current(&duplicate_json["objects"][0]);
+    assert_object_region_authoring_marks_mesh_dirty(&duplicate_json["objects"][0]);
 
     let reorder_response = app
         .clone()
@@ -9638,7 +9638,7 @@ async fn authoring_object_region_resource_crud_allocates_stable_region_id() {
         reorder_json["objects"][0]["regions"][1]["region_id"],
         region_id
     );
-    assert_object_region_authoring_keeps_mesh_current(&reorder_json["objects"][0]);
+    assert_object_region_authoring_marks_mesh_dirty(&reorder_json["objects"][0]);
 
     let identity_patch_response = app
         .clone()
@@ -9744,7 +9744,7 @@ async fn authoring_object_region_resource_crud_allocates_stable_region_id() {
         patch_json["objects"][0]["regions"][1]["shape"]["size"],
         serde_json::json!([1.0, 1.0, 1.0])
     );
-    assert_object_region_authoring_keeps_mesh_current(&patch_json["objects"][0]);
+    assert_object_region_authoring_marks_mesh_dirty(&patch_json["objects"][0]);
 
     let sphere_patch_response = app
         .clone()
@@ -9782,7 +9782,7 @@ async fn authoring_object_region_resource_crud_allocates_stable_region_id() {
         sphere_patch_json["objects"][0]["regions"][1]["shape"]["radius"],
         0.5
     );
-    assert_object_region_authoring_keeps_mesh_current(&sphere_patch_json["objects"][0]);
+    assert_object_region_authoring_marks_mesh_dirty(&sphere_patch_json["objects"][0]);
 
     let oblique_patch_response = app
         .clone()
@@ -9818,7 +9818,7 @@ async fn authoring_object_region_resource_crud_allocates_stable_region_id() {
         .as_f64()
         .expect("oblique cylinder radius");
     assert!((oblique_radius - (2.0_f64.sqrt() - 1.0) * 0.5).abs() < 1e-12);
-    assert_object_region_authoring_keeps_mesh_current(&oblique_patch_json["objects"][0]);
+    assert_object_region_authoring_marks_mesh_dirty(&oblique_patch_json["objects"][0]);
 
     let delete_response = app
         .oneshot(
@@ -9847,7 +9847,61 @@ async fn authoring_object_region_resource_crud_allocates_stable_region_id() {
         delete_json["objects"][0]["allocated_region_ids"][1],
         shell_region_id
     );
-    assert_object_region_authoring_keeps_mesh_current(&delete_json["objects"][0]);
+    assert_object_region_authoring_marks_mesh_dirty(&delete_json["objects"][0]);
+}
+
+#[tokio::test]
+async fn authoring_region_creation_marks_mesh_dirty_and_changes_mesh_signature() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 50;
+    scene.objects[0].tags.clear();
+    let object_id = scene.objects[0].id.clone();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.mesh_revision = 17;
+        snapshot.mesh_build_revision = 19;
+    }
+    let app = build_v2_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/transactions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "create_object_region",
+                        "base_revision": 50,
+                        "object_id": object_id,
+                        "region": {
+                            "name": "core",
+                            "shape": {
+                                "kind": "box",
+                                "size": [1.0, 1.0, 1.0],
+                                "center": [0.0, 0.0, 0.0]
+                            }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let current = state.current_live_state.read().await;
+    let snapshot = current.as_ref().expect("live snapshot");
+    let object = snapshot
+        .scene_document
+        .as_ref()
+        .and_then(|scene| scene.objects.first())
+        .expect("object after region creation");
+    assert!(object.tags.iter().any(|tag| tag == "mesh:dirty"));
+    assert!(snapshot.mesh_revision > 17);
+    assert!(snapshot.mesh_build_revision > 19);
 }
 
 #[tokio::test]

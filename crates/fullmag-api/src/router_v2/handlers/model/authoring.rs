@@ -2817,6 +2817,7 @@ fn apply_create_object_region_transaction(
     region.owner_object = object.id.clone();
     clamp_object_region_shape_to_owner(object, &mut region);
     object.regions.push(region);
+    mark_object_mesh_dirty(object);
     Ok(())
 }
 
@@ -2889,6 +2890,7 @@ fn apply_patch_object_region_transaction(
     }
 
     clamp_object_region_shape_to_owner_bounds(owner_bounds, region);
+    mark_object_mesh_dirty(object);
     Ok(())
 }
 
@@ -2931,17 +2933,20 @@ fn apply_delete_object_region_transaction(
     region_id: &str,
 ) -> Result<(), ApiError> {
     check_base_scene_revision(scene, base_revision)?;
-    let object = find_scene_object_mut(scene, object_id)?;
-    let before = object.regions.len();
-    object.regions.retain(|entry| entry.region_id != region_id);
-    if object.regions.len() == before {
-        return Err(ApiError::not_found(format!(
-            "object region not found: {region_id}"
-        )));
+    {
+        let object = find_scene_object_mut(scene, object_id)?;
+        let before = object.regions.len();
+        object.regions.retain(|entry| entry.region_id != region_id);
+        if object.regions.len() == before {
+            return Err(ApiError::not_found(format!(
+                "object region not found: {region_id}"
+            )));
+        }
+        object
+            .material_parameter_fields
+            .retain(|field| field.region_id.as_deref() != Some(region_id));
+        mark_object_mesh_dirty(object);
     }
-    object
-        .material_parameter_fields
-        .retain(|field| field.region_id.as_deref() != Some(region_id));
     scene
         .couplings
         .retain(|coupling| !coupling_references_region(coupling, object_id, region_id));
@@ -2987,6 +2992,7 @@ fn apply_duplicate_object_region_transaction(
     duplicate.owner_object = object.id.clone();
     clamp_object_region_shape_to_owner(object, &mut duplicate);
     object.regions.push(duplicate);
+    mark_object_mesh_dirty(object);
     Ok(())
 }
 
@@ -3018,6 +3024,7 @@ fn apply_reorder_object_regions_transaction(
         ));
     }
     object.regions = reordered;
+    mark_object_mesh_dirty(object);
     Ok(())
 }
 
