@@ -52,5 +52,8 @@ pnpm --dir apps/control-room check:architecture-hygiene
   reports four actionable violations: two `KernelProvider.tsx` imports of
   viewport internals, one Inspector import of a sibling viewport module, and
   two raw hex colors in `FrequencyDomainResultInspectors.tsx`.
+- [x] RED/GREEN surgical repair removed the raw colors into Catppuccin token
+  classes and introduced the explicit `viewport-3d/public` module surface for
+  kernel and sibling-module integration; the architecture check now exits 0.
 - [ ] Typecheck, full test, API hygiene, surgical repairs and browser proof remain
   open; these reproduction failures are not a production closure.

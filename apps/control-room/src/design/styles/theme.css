@@ -126,3 +126,19 @@
   --fm-shadow-panel: 0 14px 40px rgb(76 79 105 / 10%);
   --fm-shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 5%);
 }
+
+.fm-inspector-alert {
+  padding: 12px;
+  border-radius: 4px;
+  margin: 8px 0;
+}
+
+.fm-inspector-alert.fm-alert-danger {
+  border-left: 4px solid var(--fm-danger);
+  background: color-mix(in srgb, var(--fm-danger) 10%, transparent);
+}
+
+.fm-inspector-alert.fm-alert-warning {
+  border-left: 4px solid var(--fm-warning);
+  background: color-mix(in srgb, var(--fm-warning) 10%, transparent);
+}

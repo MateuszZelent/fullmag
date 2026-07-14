@@ -56,7 +56,7 @@ import { sharedResourceRuntimeStore } from "./resources/ResourceRuntimeStore";
 import {
   acquireViewport3DWorkerRuntime,
   getViewport3DWorkerRuntimeSnapshot,
-} from "../modules/viewport-3d/viewport3dWorkerRuntime";
+} from "@/modules/viewport-3d/public";
 import {
   createViewport3DInactiveResourcePauseController,
 } from "./resources/inactiveViewportResourcePolicy";
