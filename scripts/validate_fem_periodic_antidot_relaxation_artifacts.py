@@ -212,7 +212,10 @@ def load_last_json_object(text: str) -> dict[str, Any]:
             value, _ = decoder.raw_decode(text[index:])
         except json.JSONDecodeError:
             continue
-        if isinstance(value, dict):
+        # The summary is a pretty-printed top-level object containing nested
+        # execution metadata. Prefer the object carrying the run identity
+        # instead of letting the last nested `{...}` win.
+        if isinstance(value, dict) and "status" in value and "artifact_dir" in value:
             last = value
     if last is None:
         fail("runtime log does not contain a JSON run summary")

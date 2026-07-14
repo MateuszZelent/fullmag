@@ -312,7 +312,7 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
         study = payload["stages"][0]["ir"]["study"]
         self.assertEqual(study["algorithm"], "projected_gradient_bb")
         self.assertEqual(study["stop"]["max_steps"], 4000)
-        self.assertEqual(study["stop"]["torque_tolerance_apm"], 5.0e3)
+        self.assertEqual(study["stop"]["torque_tolerance_apm"], 5.0e2)
         self.assert_study_saves_equilibrium_and_demag_fields(study)
         self.assert_table_logs_pbc_sensitive_quantities(study)
 
@@ -348,7 +348,7 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
         study = payload["stages"][0]["ir"]["study"]
         self.assertEqual(study["algorithm"], "projected_gradient_bb")
         self.assertEqual(study["stop"]["max_steps"], 120)
-        self.assertEqual(study["stop"]["torque_tolerance_apm"], 5.0e3)
+        self.assertEqual(study["stop"]["torque_tolerance_apm"], 5.0e2)
         self.assert_study_saves_equilibrium_and_demag_fields(study)
         self.assert_table_logs_pbc_sensitive_quantities(study)
 
