@@ -6837,6 +6837,90 @@ async fn mesh_periodic_pairs_marks_accepted_certificate_stale_after_scene_edit()
 }
 
 #[tokio::test]
+async fn mesh_periodic_pairs_marks_matching_topology_artifact_stale_after_scene_edit() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let mut mesh = sample_periodic_fem_mesh_payload();
+    mesh.generation_id = Some("periodic-generation-45".to_string());
+    let topology_fingerprint = fullmag_ir::MeshIR {
+        mesh_name: mesh.mesh_name.clone(),
+        nodes: mesh.nodes.clone(),
+        elements: mesh.elements.clone(),
+        element_markers: mesh.element_markers.clone(),
+        boundary_faces: mesh.boundary_faces.clone(),
+        boundary_markers: mesh.boundary_markers.clone(),
+        periodic_boundary_pairs: mesh.periodic_boundary_pairs.clone(),
+        periodic_node_pairs: mesh.periodic_node_pairs.clone(),
+        per_domain_quality: HashMap::new(),
+    }
+    .topology_fingerprint_v6();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(mesh.clone());
+        snapshot.mesh_revision = 45;
+        let mut scene = sample_scene_document();
+        scene.revision = 46;
+        snapshot.scene_document = Some(scene);
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "last_build_summary": {"source_scene_revision": 45}
+        }));
+    }
+    let mesh_dir = artifact_dir.join("mesh");
+    fs::create_dir_all(&mesh_dir).expect("mesh artifact dir should be created");
+    fs::write(
+        mesh_dir.join("periodic_pairs.v1.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "periodic_pairs.v1",
+            "topology_fingerprint": topology_fingerprint,
+            "mesh_generation_id": "periodic-generation-45",
+            "source_scene_revision": 45,
+            "certificate_status": "accepted",
+            "validation_status": "ok",
+            "status": "valid",
+            "pairs": [{
+                "pair_id": "x_periodic",
+                "source_marker": "x_min",
+                "destination_marker": "x_max",
+                "marker_a": 10,
+                "marker_b": 11,
+                "expected_translation_m": [1.0e-6, 0.0, 0.0],
+                "paired_node_count": 3,
+                "node_pairs": [[0, 1], [2, 3], [4, 5]],
+                "unpaired_source_node_count": 0,
+                "unpaired_destination_node_count": 0,
+                "unpaired_source_face_count": 0,
+                "unpaired_destination_face_count": 0,
+                "max_residual_m": 0.0,
+                "rms_residual_m": 0.0,
+                "status": "valid"
+            }]
+        }))
+        .expect("periodic pairs artifact should serialize"),
+    )
+    .expect("periodic pairs artifact should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/mesh/periodic_pairs.v1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["status"], "stale");
+    assert_eq!(json["source_scene_revision"], 45);
+    assert!(json["status_reasons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|reason| reason.as_str().unwrap_or_default().contains("source scene revision")));
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
 async fn mesh_periodic_pairs_does_not_publish_nearest_face_with_excessive_residual() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
