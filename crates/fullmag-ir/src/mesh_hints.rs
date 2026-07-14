@@ -860,10 +860,43 @@ impl MeshIR {
                 continue;
             };
             let tolerance = boundary_pair.tolerance.unwrap_or(1.0e-9).max(0.0);
+            let source_faces = self
+                .boundary_faces
+                .iter()
+                .zip(self.boundary_markers.iter())
+                .enumerate()
+                .filter_map(|(index, (face, marker))| {
+                    (*marker == boundary_pair.marker_a).then_some((index, *face))
+                })
+                .collect::<Vec<_>>();
+            let destination_faces = self
+                .boundary_faces
+                .iter()
+                .zip(self.boundary_markers.iter())
+                .enumerate()
+                .filter_map(|(index, (face, marker))| {
+                    (*marker == boundary_pair.marker_b).then_some((index, *face))
+                })
+                .collect::<Vec<_>>();
+            let source_face_nodes = source_faces
+                .iter()
+                .flat_map(|(_, face)| face.iter().copied())
+                .collect::<BTreeSet<_>>();
+            let destination_face_nodes = destination_faces
+                .iter()
+                .flat_map(|(_, face)| face.iter().copied())
+                .collect::<BTreeSet<_>>();
+            // A single axis may be represented by several disjoint surface
+            // pairs after OCC fragmentation. Scope the shared pair-id node
+            // list to this marker pair before checking its bijection.
             let node_pairs = self
                 .periodic_node_pairs
                 .iter()
-                .filter(|pair| pair.pair_id == boundary_pair.pair_id)
+                .filter(|pair| {
+                    pair.pair_id == boundary_pair.pair_id
+                        && source_face_nodes.contains(&pair.node_a)
+                        && destination_face_nodes.contains(&pair.node_b)
+                })
                 .collect::<Vec<_>>();
             let mut sources = BTreeSet::new();
             let mut destinations = BTreeSet::new();
@@ -908,32 +941,6 @@ impl MeshIR {
                 ));
             }
 
-            let source_faces = self
-                .boundary_faces
-                .iter()
-                .zip(self.boundary_markers.iter())
-                .enumerate()
-                .filter_map(|(index, (face, marker))| {
-                    (*marker == boundary_pair.marker_a).then_some((index, *face))
-                })
-                .collect::<Vec<_>>();
-            let destination_faces = self
-                .boundary_faces
-                .iter()
-                .zip(self.boundary_markers.iter())
-                .enumerate()
-                .filter_map(|(index, (face, marker))| {
-                    (*marker == boundary_pair.marker_b).then_some((index, *face))
-                })
-                .collect::<Vec<_>>();
-            let source_face_nodes = source_faces
-                .iter()
-                .flat_map(|(_, face)| face.iter().copied())
-                .collect::<BTreeSet<_>>();
-            let destination_face_nodes = destination_faces
-                .iter()
-                .flat_map(|(_, face)| face.iter().copied())
-                .collect::<BTreeSet<_>>();
             if sources != source_face_nodes || destinations != destination_face_nodes {
                 errors.push(format!(
                     "periodic v6 pair '{}' node bijection does not cover exactly the paired boundary faces",
@@ -1925,6 +1932,45 @@ mod mesh_validation_tests {
         assert!(certificate.marker_map_fingerprint.starts_with("sha256:"));
         assert!(certificate.material_realization_fingerprint.starts_with("sha256:"));
         assert_eq!(certificate.max_material_residual, 0.0);
+    }
+
+    #[test]
+    fn periodic_certificate_v6_scopes_fragmented_faces_with_shared_axis_pair_id() {
+        let mut mesh = mirrored_periodic_mesh();
+        mesh.nodes.extend([
+            [0.0, 2.0, 0.0],
+            [0.0, 2.0, 1.0],
+            [0.0, 3.0, 0.0],
+            [1.0, 2.0, 0.0],
+            [1.0, 2.0, 1.0],
+            [1.0, 3.0, 0.0],
+        ]);
+        mesh.boundary_faces.extend([[6, 8, 7], [9, 10, 11]]);
+        mesh.boundary_markers.extend([12, 13]);
+        mesh.periodic_boundary_pairs.push(MeshPeriodicBoundaryPairIR {
+            pair_id: "x_faces".to_string(),
+            source_marker: None,
+            destination_marker: None,
+            marker_a: 12,
+            marker_b: 13,
+            translation: Some([1.0, 0.0, 0.0]),
+            tolerance: Some(1.0e-12),
+            axis_hint: Some("x".to_string()),
+            orientation: None,
+            pairing_policy: None,
+        });
+        mesh.periodic_node_pairs.extend([
+            MeshPeriodicNodePairIR { pair_id: "x_faces".to_string(), node_a: 6, node_b: 9 },
+            MeshPeriodicNodePairIR { pair_id: "x_faces".to_string(), node_a: 7, node_b: 10 },
+            MeshPeriodicNodePairIR { pair_id: "x_faces".to_string(), node_a: 8, node_b: 11 },
+        ]);
+
+        let certificate = mesh
+            .periodic_mesh_certificate_v6()
+            .expect("fragmented faces sharing an axis pair id should certify independently");
+        assert_eq!(certificate.axis_pairs.len(), 2);
+        assert_eq!(certificate.axis_pairs[0].node_pair_count, 3);
+        assert_eq!(certificate.axis_pairs[1].node_pair_count, 3);
     }
 
     #[test]

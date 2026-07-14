@@ -97,7 +97,7 @@ study.demag(realization="poisson_robin")
 study.fem_demag_solver(
     solver="CG",
     preconditioner="AMG",
-    rtol=1e-4,
+    rtol=1e-12,
     max_iterations=500,
 )
 study.objects.mesh.defaults(
