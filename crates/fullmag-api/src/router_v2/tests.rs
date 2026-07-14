@@ -10493,6 +10493,12 @@ async fn authoring_region_owned_resources_expose_authored_payloads() {
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.scene_document = Some(scene);
         snapshot.session.script_path.clear();
+        snapshot.region_realization_revisions = fullmag_authoring::RegionRealizationRevisions {
+            topology: 41,
+            membership: 42,
+            coefficients: 43,
+            initial_state: 44,
+        };
     }
     let app = build_v2_router().with_state(state.clone());
 
@@ -10546,6 +10552,10 @@ async fn authoring_region_owned_resources_expose_authored_payloads() {
         authored_region["realization_status"],
         "authored_pending_realization"
     );
+    assert_eq!(regions["region_topology_revision"], 41);
+    assert_eq!(regions["region_membership_revision"], 42);
+    assert_eq!(regions["region_coefficients_revision"], 43);
+    assert_eq!(regions["region_initial_state_revision"], 44);
 
     let realized_regions_response = app
         .clone()
@@ -10610,6 +10620,10 @@ async fn authoring_region_owned_resources_expose_authored_payloads() {
         .iter()
         .all(|diagnostic| diagnostic["region_id"] == "body:core"
             && diagnostic["owner_object_id"] == "body"));
+    assert_eq!(diagnostics["region_topology_revision"], 41);
+    assert_eq!(diagnostics["region_membership_revision"], 42);
+    assert_eq!(diagnostics["region_coefficients_revision"], 43);
+    assert_eq!(diagnostics["region_initial_state_revision"], 44);
 
     let fields_response = app
         .clone()
@@ -10634,6 +10648,23 @@ async fn authoring_region_owned_resources_expose_authored_payloads() {
     assert_eq!(fields["fields"][0]["parameter"], "ms");
     assert_eq!(fields["fields"][0]["unit"], "A/m");
     assert_eq!(fields["fields"][0]["frame"], "object");
+    assert_eq!(fields["region_coefficients_revision"], 43);
+
+    let material_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/model/materials/mat:body")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = material_response.status();
+    let material = body_json(material_response).await;
+    assert_eq!(status, StatusCode::OK, "{material:#}");
+    assert_eq!(material["region_coefficients_revision"], 43);
 
     let couplings_response = app
         .oneshot(

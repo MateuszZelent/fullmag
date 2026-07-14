@@ -475,9 +475,14 @@ pub async fn get_authoring_regions(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<RegionListResource>, ApiError> {
     let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let revisions = current_region_realization_revisions(&state).await;
     Ok(Json(RegionListResource {
         scene_revision: scene.revision,
         geometry_realization_revision: scene.revision,
+        region_topology_revision: Some(revisions.topology),
+        region_membership_revision: Some(revisions.membership),
+        region_coefficients_revision: Some(revisions.coefficients),
+        region_initial_state_revision: Some(revisions.initial_state),
         regions: authored_region_resources(&scene),
     }))
 }
@@ -496,9 +501,14 @@ pub async fn get_authoring_realized_regions(
 ) -> Result<Json<RegionListResource>, ApiError> {
     let scene = crate::get_or_load_current_live_scene_document(&state).await?;
     let realization = realize_geometry_scene(&scene, GeometryBackendTarget::from_scene(&scene));
+    let revisions = current_region_realization_revisions(&state).await;
     Ok(Json(RegionListResource {
         scene_revision: scene.revision,
         geometry_realization_revision: realization.realization_revision,
+        region_topology_revision: Some(revisions.topology),
+        region_membership_revision: Some(revisions.membership),
+        region_coefficients_revision: Some(revisions.coefficients),
+        region_initial_state_revision: Some(revisions.initial_state),
         regions: realized_region_resources(&scene, realization.region_candidates),
     }))
 }
@@ -516,8 +526,13 @@ pub async fn get_authoring_region_diagnostics(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<RegionDiagnosticsResource>, ApiError> {
     let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let revisions = current_region_realization_revisions(&state).await;
     Ok(Json(RegionDiagnosticsResource {
         scene_revision: scene.revision,
+        region_topology_revision: Some(revisions.topology),
+        region_membership_revision: Some(revisions.membership),
+        region_coefficients_revision: Some(revisions.coefficients),
+        region_initial_state_revision: Some(revisions.initial_state),
         diagnostics: authored_region_diagnostics(&scene),
     }))
 }
@@ -537,8 +552,13 @@ pub async fn get_authoring_material_fields(
     let scene = crate::get_or_load_current_live_scene_document(&state).await?;
     let guard = state.current_live_state.read().await;
     let latest_fields = guard.as_ref().map(|snapshot| &snapshot.latest_fields);
+    let region_coefficients_revision = guard
+        .as_ref()
+        .map(|snapshot| snapshot.region_realization_revisions.coefficients)
+        .unwrap_or_default();
     Ok(Json(MaterialParameterFieldListResource {
         scene_revision: scene.revision,
+        region_coefficients_revision: Some(region_coefficients_revision),
         fields: authored_material_field_resources(&scene, latest_fields),
     }))
 }
@@ -1668,7 +1688,13 @@ pub async fn get_authoring_material(
         .iter()
         .find(|entry| entry.id == material_id)
         .ok_or_else(|| ApiError::not_found(format!("material not found: {material_id}")))?;
-    Ok(Json(build_material_resource(material)))
+    let region_coefficients_revision = current_region_realization_revisions(&state)
+        .await
+        .coefficients;
+    Ok(Json(build_material_resource(
+        material,
+        region_coefficients_revision,
+    )))
 }
 
 #[utoipa::path(
@@ -1707,7 +1733,13 @@ pub async fn patch_authoring_material(
         .iter()
         .find(|entry| entry.id == material_id)
         .ok_or_else(|| ApiError::internal(format!("committed material missing: {material_id}")))?;
-    Ok(Json(build_material_resource(material)))
+    let region_coefficients_revision = current_region_realization_revisions(&state)
+        .await
+        .coefficients;
+    Ok(Json(build_material_resource(
+        material,
+        region_coefficients_revision,
+    )))
 }
 
 #[utoipa::path(
@@ -3575,8 +3607,24 @@ fn magnetic_interaction_kind_id(kind: ScriptBuilderMagneticInteractionKind) -> &
     }
 }
 
-fn build_material_resource(material: &fullmag_authoring::SceneMaterialAsset) -> MaterialResource {
+async fn current_region_realization_revisions(
+    state: &Arc<AppState>,
+) -> fullmag_authoring::RegionRealizationRevisions {
+    state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .map(|snapshot| snapshot.region_realization_revisions)
+        .unwrap_or_default()
+}
+
+fn build_material_resource(
+    material: &fullmag_authoring::SceneMaterialAsset,
+    region_coefficients_revision: u64,
+) -> MaterialResource {
     MaterialResource {
+        region_coefficients_revision: Some(region_coefficients_revision),
         id: material.id.clone(),
         name: material.name.clone(),
         properties: MaterialPropertiesResource {

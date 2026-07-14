@@ -276,6 +276,35 @@ export function resolveJsonResourceRevision(
   return resolveRevisionProperty(data, "revision");
 }
 
+export function resolveRegionCoefficientsRevision(
+  data: { region_coefficients_revision?: number | null } | null | undefined,
+): ResourceRevision | null {
+  return data?.region_coefficients_revision ?? null;
+}
+
+export function resolveRegionRealizationRevision(
+  data:
+    | {
+        region_topology_revision?: number | null;
+        region_membership_revision?: number | null;
+        region_coefficients_revision?: number | null;
+        region_initial_state_revision?: number | null;
+      }
+    | null
+    | undefined,
+): ResourceRevision | null {
+  if (!data) return null;
+  const revisions = [
+    data.region_topology_revision,
+    data.region_membership_revision,
+    data.region_coefficients_revision,
+    data.region_initial_state_revision,
+  ];
+  return revisions.some((revision) => revision !== null && revision !== undefined)
+    ? revisions.map((revision) => revision ?? "unknown").join(":")
+    : null;
+}
+
 export function resolveMeshSharedDomainManifestRevision(
   manifest: MeshSharedDomainManifestResource | null | undefined,
 ): ResourceRevision | null {
@@ -438,7 +467,7 @@ export function useMaterialResource(materialId: string | null | undefined) {
 
   return useResource<MaterialResource | null>({
     load,
-    resolveRevision: resolveJsonResourceRevision,
+    resolveRevision: resolveRegionCoefficientsRevision,
     resourceKey,
   });
 }
@@ -453,8 +482,7 @@ export function useModelRegionsResource(options: ResourceHookOptions = {}) {
   return useResource<RegionListResource>({
     enabled: options.enabled,
     load,
-    resolveRevision: (data) =>
-      data?.scene_revision ?? data?.geometry_realization_revision ?? null,
+    resolveRevision: resolveRegionRealizationRevision,
     resourceKey: MODEL_REGIONS_RESOURCE_KEY,
   });
 }
@@ -472,7 +500,7 @@ export function useModelRealizedRegionsResource(
   return useResource<RegionListResource>({
     enabled: options.enabled,
     load,
-    resolveRevision: (data) => data?.geometry_realization_revision ?? null,
+    resolveRevision: resolveRegionRealizationRevision,
     resourceKey: MODEL_REALIZED_REGIONS_RESOURCE_KEY,
   });
 }
@@ -490,7 +518,7 @@ export function useModelRegionDiagnosticsResource(
   return useResource<RegionDiagnosticsResource>({
     enabled: options.enabled,
     load,
-    resolveRevision: (data) => data?.scene_revision ?? null,
+    resolveRevision: resolveRegionRealizationRevision,
     resourceKey: MODEL_REGION_DIAGNOSTICS_RESOURCE_KEY,
   });
 }
@@ -508,7 +536,7 @@ export function useModelMaterialFieldsResource(
   return useResource<MaterialParameterFieldListResource>({
     enabled: options.enabled,
     load,
-    resolveRevision: (data) => data?.scene_revision ?? null,
+    resolveRevision: resolveRegionCoefficientsRevision,
     resourceKey: MODEL_MATERIAL_FIELDS_RESOURCE_KEY,
   });
 }

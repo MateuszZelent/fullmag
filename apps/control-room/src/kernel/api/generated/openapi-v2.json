@@ -8134,6 +8134,14 @@
             },
             "type": "array"
           },
+          "region_coefficients_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "scene_revision": {
             "format": "int64",
             "minimum": 0,
@@ -8246,6 +8254,14 @@
           },
           "realization_status": {
             "type": "string"
+          },
+          "region_coefficients_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "sample_count": {
             "format": "int64",
@@ -8364,6 +8380,14 @@
               "$ref": "#/components/schemas/MaterialParameterFieldResource"
             },
             "type": "array"
+          },
+          "region_coefficients_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "scene_revision": {
             "format": "int64",
@@ -8642,6 +8666,14 @@
               "$ref": "#/components/schemas/MaterialReferenceResource"
             },
             "type": "array"
+          },
+          "region_coefficients_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
@@ -12081,6 +12113,38 @@
             },
             "type": "array"
           },
+          "region_coefficients_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "region_initial_state_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "region_membership_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "region_topology_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "scene_revision": {
             "format": "int64",
             "minimum": 0,
@@ -12099,6 +12163,38 @@
             "format": "int64",
             "minimum": 0,
             "type": "integer"
+          },
+          "region_coefficients_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "region_initial_state_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "region_membership_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "region_topology_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "regions": {
             "items": {

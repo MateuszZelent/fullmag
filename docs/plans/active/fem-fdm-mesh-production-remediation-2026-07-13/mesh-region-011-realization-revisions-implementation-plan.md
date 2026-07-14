@@ -89,3 +89,11 @@ struct RegionRealizationRevisions {
 - [x] Submission refreshes the same lanes through `api.sessions.current.status()` when the command already carries region preconditions, preventing a stale cached status from authorizing a new run.
 - [x] RED/GREEN frontend evidence: `studyRuntimeCommandContributions.test.ts` failed before the change because the four lane fields were omitted; after the change the focused suite passed 65/65, Control Room typecheck passed, and focused ESLint passed.
 - [ ] Backend resource DTOs, exact lane-specific consumers/ETags, initial-state resource identity, runtime artifact tuple and managed/browser gates remain open.
+
+### Evidence update (2026-07-14, resource DTO and UI cache slice)
+
+- [x] API authoring resources expose the independent tuple on `model/regions`, `model/realized-regions`, `model/region-diagnostics`; material resources and model/data material-field resources expose the coefficient lane.
+- [x] `authoring_region_owned_resources_expose_authored_payloads` asserts topology/membership/coefficient/initial-state values and material coefficient identity; focused API test passes 1/1.
+- [x] OpenAPI v2 was regenerated through `pnpm --dir apps/control-room generate:api`; generated types keep the new lane fields optional for backward-compatible fixtures while active responses publish numeric values.
+- [x] Control Room resource resolvers now key region-owned resources by the independent tuple/coefficient revision; focused Vitest passes 7/7, typecheck passes, and focused ESLint passes.
+- [ ] Exact ETags, initial-state resource identity, consumed tuple in all runtime artifacts/plans, managed/native/browser gates and full inspector propagation remain open.

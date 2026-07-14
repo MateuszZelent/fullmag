@@ -4955,6 +4955,8 @@ export interface components {
         MaterialParameterFieldDataListResource: {
             fields: components["schemas"]["MaterialParameterFieldDataSummaryResource"][];
             /** Format: int64 */
+            region_coefficients_revision?: number | null;
+            /** Format: int64 */
             scene_revision: number;
         };
         MaterialParameterFieldDataResource: {
@@ -4982,6 +4984,8 @@ export interface components {
             priority?: number | null;
             realization_status: string;
             /** Format: int64 */
+            region_coefficients_revision?: number | null;
+            /** Format: int64 */
             sample_count: number;
             /** Format: int64 */
             scene_revision: number;
@@ -5007,6 +5011,8 @@ export interface components {
         };
         MaterialParameterFieldListResource: {
             fields: components["schemas"]["MaterialParameterFieldResource"][];
+            /** Format: int64 */
+            region_coefficients_revision?: number | null;
             /** Format: int64 */
             scene_revision: number;
         };
@@ -5068,6 +5074,8 @@ export interface components {
             name: string;
             properties: components["schemas"]["MaterialPropertiesResource"];
             references?: components["schemas"]["MaterialReferenceResource"][];
+            /** Format: int64 */
+            region_coefficients_revision?: number | null;
         };
         MeshActiveBuildResource: {
             /** @description Current active build descriptor and progress metadata. */
@@ -5932,11 +5940,27 @@ export interface components {
         RegionDiagnosticsResource: {
             diagnostics: components["schemas"]["RegionDiagnosticResource"][];
             /** Format: int64 */
+            region_coefficients_revision?: number | null;
+            /** Format: int64 */
+            region_initial_state_revision?: number | null;
+            /** Format: int64 */
+            region_membership_revision?: number | null;
+            /** Format: int64 */
+            region_topology_revision?: number | null;
+            /** Format: int64 */
             scene_revision: number;
         };
         RegionListResource: {
             /** Format: int64 */
             geometry_realization_revision: number;
+            /** Format: int64 */
+            region_coefficients_revision?: number | null;
+            /** Format: int64 */
+            region_initial_state_revision?: number | null;
+            /** Format: int64 */
+            region_membership_revision?: number | null;
+            /** Format: int64 */
+            region_topology_revision?: number | null;
             regions: components["schemas"]["RegionResource"][];
             /** Format: int64 */
             scene_revision: number;

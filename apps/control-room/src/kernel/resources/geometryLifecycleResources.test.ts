@@ -44,6 +44,8 @@ import {
   SCENE_RESOURCE_KEY,
   VISUALIZATION_STATE_RESOURCE_KEY,
   resolveJsonResourceRevision,
+  resolveRegionCoefficientsRevision,
+  resolveRegionRealizationRevision,
   resolveFdmRegionMembershipBinaryResourceKey,
   resolveFdmRegionMembershipRevision,
   resolveMeshHistogramBinElementsResourceKey,
@@ -146,6 +148,24 @@ describe("geometry lifecycle resources", () => {
     expect(resolveJsonResourceRevision({ revision: "mesh-7" })).toBe("mesh-7");
     expect(resolveJsonResourceRevision(null)).toBeNull();
     expect(resolveVisualizationStateRevision({ revision: 15 } as never)).toBe(15);
+  });
+
+  it("keys region-owned resources by independent realization revisions", () => {
+    expect(
+      resolveRegionRealizationRevision({
+        region_topology_revision: 4,
+        region_membership_revision: 5,
+        region_coefficients_revision: 6,
+        region_initial_state_revision: 7,
+      }),
+    ).toBe("4:5:6:7");
+    expect(
+      resolveRegionCoefficientsRevision({ region_coefficients_revision: 6 }),
+    ).toBe(6);
+    expect(
+      resolveRegionCoefficientsRevision({ region_coefficients_revision: 7 }),
+    ).not.toBe(6);
+    expect(resolveRegionCoefficientsRevision({ revision: 99 } as never)).toBeNull();
   });
 
   it("includes mesh provenance in shared-domain manifest revision signatures", () => {
