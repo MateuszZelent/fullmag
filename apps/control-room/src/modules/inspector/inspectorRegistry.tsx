@@ -129,6 +129,14 @@ import {
 } from "./panels/StudyStageInspectorRouter";
 import { resolveFrequencyDomainNodeDetail } from "./panels/frequencyDomainNodeDetails";
 import type { InspectorPanelContribution } from "./inspectorTypes";
+export {
+  PBC_INSPECTOR_CONTEXT_IDS,
+  resolvePbcInspectorContext,
+} from "./panels/pbcInspectorModel";
+export type {
+  PbcInspectorContext,
+  PbcInspectorContextModel,
+} from "./panels/pbcInspectorModel";
 
 const FREQUENCY_DOMAIN_STAGE_SELECTION_KINDS = [
   "study.stage.eigenmodes",
