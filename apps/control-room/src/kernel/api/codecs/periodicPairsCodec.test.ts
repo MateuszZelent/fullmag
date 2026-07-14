@@ -13,7 +13,7 @@ function makeBuffer(): ArrayBuffer {
   bytes.set([..."FMPP"].map((value) => value.charCodeAt(0)), 0);
   view.setUint8(4, 1);
   view.setUint8(5, 1);
-  view.setBigUint64(8, 41n, true);
+  view.setBigUint64(8, BigInt(41), true);
   view.setUint32(16, 1, true);
   let offset = 20;
   view.setUint32(offset, pairId.byteLength, true);
@@ -32,9 +32,9 @@ function makeBuffer(): ArrayBuffer {
   offset += 4;
   view.setUint32(offset, 1, true);
   offset += 4;
-  view.setBigUint64(offset, 0n, true);
+  view.setBigUint64(offset, BigInt(0), true);
   offset += 8;
-  view.setBigUint64(offset, 1n, true);
+  view.setBigUint64(offset, BigInt(1), true);
   offset += 8;
   view.setUint32(offset, 1, true);
   offset += 4;
