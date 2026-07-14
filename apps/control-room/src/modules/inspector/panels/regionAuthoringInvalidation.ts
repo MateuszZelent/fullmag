@@ -1,6 +1,7 @@
 import {
   MODEL_GEOMETRY_DIAGNOSTICS_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
+  MODEL_MATERIAL_PATH,
 } from "@/kernel/api/apiPaths";
 import type { SceneResource } from "@/kernel/api/apiTypes";
 import type { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
@@ -29,6 +30,7 @@ export function regionAuthoringInvalidationKeys(): string[] {
     MODEL_REGIONS_RESOURCE_KEY,
     MODEL_REGION_DIAGNOSTICS_RESOURCE_KEY,
     MODEL_MATERIAL_FIELDS_RESOURCE_KEY,
+    MODEL_MATERIAL_PATH,
     MODEL_GEOMETRY_VALIDATION_PATH,
     MODEL_GEOMETRY_DIAGNOSTICS_PATH,
   ];

@@ -51,4 +51,10 @@ type RegionInvalidationHint = { objectId: string; regionId: string; resource: "m
 - [x] RED/GREEN frontend evidence: the scene-change test failed before because `session:status` stayed unchanged; after the change `RealtimeInvalidationBridge.test.ts` passed 31/31.
 - [ ] Dedicated lane-specific realtime hints, exact coefficient/initial-state mapping, full browser smoke and managed runtime evidence remain open.
 
+### Evidence update (2026-07-14, material resource invalidation)
+
+- [x] Central `regionAuthoringInvalidationKeys` now includes the canonical `MODEL_MATERIAL_PATH`, so coefficient edits invalidate material Inspector resources together with scene/region summaries.
+- [x] RED/GREEN frontend evidence: the invalidation test failed before because the material resource key was absent; after the change `regionAuthoringInvalidation.test.ts` passed 4/4.
+- [ ] Material resource still lacks an independent coefficient revision/ETag, and lane-specific backend hints plus browser/managed gates remain open.
+
 **Exit:** UI nie może utrzymać cached membership/quality z innej definicji regionu lub mesh generation jako current.
