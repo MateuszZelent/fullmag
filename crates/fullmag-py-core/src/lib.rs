@@ -1,6 +1,6 @@
 use fullmag_engine::fem::MeshTopology;
 use fullmag_engine::fem_solution_transfer::{normalize_unit_vectors, transfer_fem_field_to_grid};
-use fullmag_ir::{BackendPlanIR, MeshIR, ProblemIR};
+use fullmag_ir::{validate_mesh_for_execution, BackendPlanIR, MeshIR, ProblemIR};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::path::PathBuf;
@@ -18,7 +18,7 @@ fn validate_ir_json(ir_json: &str) -> PyResult<bool> {
 fn validate_mesh_ir_json(mesh_ir_json: &str) -> PyResult<bool> {
     let mesh: MeshIR =
         serde_json::from_str(mesh_ir_json).map_err(|err| PyValueError::new_err(err.to_string()))?;
-    mesh.validate()
+    validate_mesh_for_execution(&mesh)
         .map_err(|errors| PyValueError::new_err(errors.join("; ")))?;
     Ok(true)
 }
@@ -142,4 +142,49 @@ fn fullmag_py_core(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()
     module.add_function(wrap_pyfunction!(resample_fem_to_fdm_grid_json, module)?)?;
     module.add_function(wrap_pyfunction!(extract_fem_mesh_ir_json, module)?)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mesh_json(element: [u32; 4], fourth_node: [f64; 3]) -> String {
+        serde_json::to_string(&MeshIR {
+            mesh_name: "fixture".to_string(),
+            nodes: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                fourth_node,
+            ],
+            elements: vec![element],
+            element_markers: vec![1],
+            boundary_faces: Vec::new(),
+            boundary_markers: Vec::new(),
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            per_domain_quality: std::collections::HashMap::new(),
+        })
+        .expect("mesh fixture should serialize")
+    }
+
+    #[test]
+    fn validate_mesh_json_rejects_corrupt_tetrahedra() {
+        pyo3::prepare_freethreaded_python();
+        let cases = [
+            (
+                mesh_json([0, 1, 3, 2], [0.0, 0.0, 1.0]),
+                "negative tetra orientation",
+            ),
+            (
+                mesh_json([0, 1, 2, 3], [2.0, 2.0, 0.0]),
+                "degenerate tetra volume",
+            ),
+        ];
+
+        for (payload, expected) in cases {
+            let error = validate_mesh_ir_json(&payload).expect_err("corrupt mesh must fail");
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+    }
 }
