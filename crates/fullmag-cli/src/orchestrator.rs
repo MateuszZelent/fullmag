@@ -1807,6 +1807,55 @@ fn refresh_materialized_stage_execution_plans(
     Ok(())
 }
 
+#[derive(Debug, Clone)]
+struct PreparedRemeshStageTransaction {
+    stages: Vec<ResolvedScriptStage>,
+    stage_execution_plans: Vec<ExecutionPlanIR>,
+}
+
+/// Prepare every stage and its execution plan on private candidate snapshots.
+///
+/// Callers must publish the returned snapshots only after this function succeeds. This
+/// keeps a failure in marker validation, IR validation, or replanning from exposing a
+/// partially updated mesh generation.
+#[allow(clippy::too_many_arguments)]
+fn prepare_remesh_stage_transaction(
+    stages: &[ResolvedScriptStage],
+    stage_execution_plans: &[ExecutionPlanIR],
+    scene_problem_patch: Option<&SceneProblemPatch>,
+    mesh: &fullmag_ir::MeshIR,
+    hmax: f64,
+    shared_domain_remesh: bool,
+    region_markers: &[fullmag_ir::FemDomainRegionMarkerIR],
+    object_region_markers: &[fullmag_ir::FemDomainRegionMarkerIR],
+    adaptive_runtime_state: Option<&serde_json::Value>,
+    first_stage_plan: Option<ExecutionPlanIR>,
+) -> Result<PreparedRemeshStageTransaction> {
+    let mut candidate_stages = stages.to_vec();
+    apply_remeshed_problem_snapshot_to_stages(
+        &mut candidate_stages,
+        scene_problem_patch,
+        mesh,
+        hmax,
+        shared_domain_remesh,
+        region_markers,
+        object_region_markers,
+        adaptive_runtime_state,
+    )?;
+
+    let mut candidate_stage_execution_plans = stage_execution_plans.to_vec();
+    refresh_materialized_stage_execution_plans(
+        &candidate_stages,
+        &mut candidate_stage_execution_plans,
+        first_stage_plan,
+    )?;
+
+    Ok(PreparedRemeshStageTransaction {
+        stages: candidate_stages,
+        stage_execution_plans: candidate_stage_execution_plans,
+    })
+}
+
 fn current_fem_mesh_workspace(
     problem: &ProblemIR,
     mesh: &fullmag_ir::MeshIR,
@@ -3398,6 +3447,18 @@ fn execute_manual_interactive_remesh(
                             })?;
                     (mesh_payload, magnetization, remeshed_plan)
                 };
+                let prepared_remesh = prepare_remesh_stage_transaction(
+                    stages,
+                    stage_execution_plans,
+                    scene_problem_patch.as_ref(),
+                    &new_mesh,
+                    hmax,
+                    shared_domain_remesh,
+                    &remesh_result.region_markers,
+                    &remesh_result.object_region_markers,
+                    current_adaptive_runtime_state.as_ref(),
+                    Some(remeshed_plan.clone()),
+                )?;
                 live_workspace.push_log(
                     "success",
                     format!(
@@ -3441,6 +3502,8 @@ fn execute_manual_interactive_remesh(
                 *current_mesh_quality = remesh_result.quality.clone();
                 *current_fem_mesh_override = Some(new_mesh.clone());
                 *current_fem_hmax_override = Some(hmax);
+                stages.clone_from_slice(&prepared_remesh.stages);
+                stage_execution_plans.clone_from_slice(&prepared_remesh.stage_execution_plans);
                 current_mesh_history.push(serde_json::json!({
                     "mesh_name": new_mesh.mesh_name,
                     "generation_mode": remesh_result.generation_mode,
@@ -3459,22 +3522,6 @@ fn execute_manual_interactive_remesh(
                     "size_field_stats": remesh_result.size_field_stats.clone(),
                     "quality_data_artifact": remesh_result.quality_data_artifact.clone(),
                 }));
-                apply_remeshed_problem_snapshot_to_stages(
-                    stages,
-                    scene_problem_patch.as_ref(),
-                    &new_mesh,
-                    hmax,
-                    shared_domain_remesh,
-                    &remesh_result.region_markers,
-                    &remesh_result.object_region_markers,
-                    current_adaptive_runtime_state.as_ref(),
-                )?;
-                refresh_materialized_stage_execution_plans(
-                    stages,
-                    stage_execution_plans,
-                    Some(remeshed_plan),
-                )?;
-
                 live_workspace.update(|state| {
                     state.live_state.latest_step.fem_mesh = Some(live_mesh_payload);
                     state.live_state.latest_step.magnetization =
@@ -3954,24 +4001,6 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
         renormalize_magnetization(&mut transferred_magnetization);
 
         remesh_pass_count += 1;
-        mutated = true;
-        *current_mesh_quality = remesh_result.quality.clone();
-        current_mesh_history.push(serde_json::json!({
-            "mesh_name": new_mesh.mesh_name,
-            "generation_mode": remesh_result.generation_mode,
-            "node_count": new_mesh.nodes.len(),
-            "element_count": new_mesh.elements.len(),
-            "boundary_face_count": new_mesh.boundary_faces.len(),
-            "kind": "adaptive_pass",
-            "adaptive_pass": remesh_pass_count,
-            "quality": remesh_result.quality.as_ref().map(|quality| serde_json::json!({
-                "sicn_p5": quality.sicn_p5,
-                "gamma_min": quality.gamma_min,
-                "avg_quality": quality.avg_quality,
-            })),
-            "mesh_provenance": remesh_result.mesh_provenance,
-            "size_field_stats": remesh_result.size_field_stats,
-        }));
         let remeshed_runtime_state = serde_json::json!({
             "pass_count": remesh_pass_count,
             "max_passes": settings.max_passes,
@@ -4007,21 +4036,46 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
                 "converged": summary.converged,
             })),
         });
+        let mut candidate_stage = stage.clone();
+        apply_current_fem_overrides(
+            &mut candidate_stage.ir,
+            Some(&new_mesh),
+            Some(remesh_hmax),
+            Some(&remeshed_runtime_state),
+        );
+        apply_continuation_initial_state(&mut candidate_stage.ir, &transferred_magnetization)?;
+
+        let candidate_execution_plan =
+            fullmag_plan::plan(&candidate_stage.ir).map_err(|error| anyhow!(error.to_string()))?;
+        let mesh_payload = fem_mesh_payload_from_backend_plan(
+            &candidate_execution_plan.backend_plan,
+        )
+        .ok_or_else(|| anyhow!("adaptive FEM replan did not produce an exact FEM mesh payload"))?;
+
+        // Commit only after transfer, marker propagation, IR validation and replanning succeed.
+        *stage = candidate_stage;
+        *execution_plan = candidate_execution_plan;
+        mutated = true;
+        *current_mesh_quality = remesh_result.quality.clone();
         *current_fem_mesh_override = Some(new_mesh.clone());
         *current_fem_hmax_override = Some(remesh_hmax);
         *current_adaptive_runtime_state = Some(remeshed_runtime_state.clone());
-        apply_current_fem_overrides(
-            &mut stage.ir,
-            current_fem_mesh_override.as_ref(),
-            *current_fem_hmax_override,
-            current_adaptive_runtime_state.as_ref(),
-        );
-        apply_continuation_initial_state(&mut stage.ir, &transferred_magnetization)?;
-
-        *execution_plan =
-            fullmag_plan::plan(&stage.ir).map_err(|error| anyhow!(error.to_string()))?;
-        let mesh_payload = fem_mesh_payload_from_backend_plan(&execution_plan.backend_plan)
-            .expect("adaptive FEM replan should yield an exact FEM mesh payload");
+        current_mesh_history.push(serde_json::json!({
+            "mesh_name": new_mesh.mesh_name,
+            "generation_mode": remesh_result.generation_mode,
+            "node_count": new_mesh.nodes.len(),
+            "element_count": new_mesh.elements.len(),
+            "boundary_face_count": new_mesh.boundary_faces.len(),
+            "kind": "adaptive_pass",
+            "adaptive_pass": remesh_pass_count,
+            "quality": remesh_result.quality.as_ref().map(|quality| serde_json::json!({
+                "sicn_p5": quality.sicn_p5,
+                "gamma_min": quality.gamma_min,
+                "avg_quality": quality.avg_quality,
+            })),
+            "mesh_provenance": remesh_result.mesh_provenance,
+            "size_field_stats": remesh_result.size_field_stats,
+        }));
         live_workspace.update(|state| {
             state.metadata = Some(current_live_metadata(&stage.ir, execution_plan, "running"));
             state.live_state.latest_step.fem_mesh = Some(mesh_payload);
@@ -6015,6 +6069,15 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         match remesh_attempt {
                             Ok(remesh_result) => {
                                 let new_mesh = remesh_result.clone().into_mesh_ir();
+                                if let Some(previous_mesh) = stages[0]
+                                    .ir
+                                    .geometry_assets
+                                    .as_ref()
+                                    .and_then(|assets| assets.fem_domain_mesh_asset.as_ref())
+                                    .and_then(|asset| asset.mesh.as_ref())
+                                {
+                                    validate_periodic_remesh_candidate(previous_mesh, &new_mesh)?;
+                                }
                                 let new_nodes = new_mesh.nodes.len();
                                 let new_ram = estimate_fem_dense_ram(new_nodes);
                                 eprintln!(
@@ -6022,22 +6085,6 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                     new_nodes,
                                     new_ram as f64 / 1e9
                                 );
-
-                                current_mesh_quality = remesh_result.quality.clone();
-                                current_fem_mesh_override = Some(new_mesh.clone());
-                                current_fem_hmax_override = Some(current_hmax);
-                                current_mesh_history.push(serde_json::json!({
-                                    "mesh_name": new_mesh.mesh_name,
-                                    "generation_mode": remesh_result.generation_mode,
-                                    "node_count": new_nodes,
-                                    "element_count": new_mesh.elements.len(),
-                                    "boundary_face_count": new_mesh.boundary_faces.len(),
-                                    "kind": "auto_coarsen",
-                                    "mesh_target": "study_domain",
-                                    "mesh_reason": "auto_coarsen",
-                                    "mesh_provenance": remesh_result.mesh_provenance.clone(),
-                                    "quality_data_artifact": remesh_result.quality_data_artifact.clone(),
-                                }));
 
                                 let (live_mesh_payload, remeshed_magnetization, remeshed_plan) = {
                                     let mut remeshed_problem = stages[0].ir.clone();
@@ -6097,8 +6144,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                         )?;
                                     (mesh_payload, magnetization, remeshed_plan)
                                 };
-                                apply_remeshed_problem_snapshot_to_stages(
-                                    &mut stages,
+                                let prepared_remesh = prepare_remesh_stage_transaction(
+                                    &stages,
+                                    &stage_execution_plans,
                                     None,
                                     &new_mesh,
                                     current_hmax,
@@ -6106,14 +6154,27 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                     &remesh_result.region_markers,
                                     &remesh_result.object_region_markers,
                                     current_adaptive_runtime_state.as_ref(),
-                                )?;
-                                refresh_materialized_stage_execution_plans(
-                                    &stages,
-                                    &mut stage_execution_plans,
-                                    Some(remeshed_plan),
+                                    Some(remeshed_plan.clone()),
                                 )?;
 
                                 if new_ram <= ram_budget {
+                                    current_mesh_quality = remesh_result.quality.clone();
+                                    current_fem_mesh_override = Some(new_mesh.clone());
+                                    current_fem_hmax_override = Some(current_hmax);
+                                    stages = prepared_remesh.stages;
+                                    stage_execution_plans = prepared_remesh.stage_execution_plans;
+                                    current_mesh_history.push(serde_json::json!({
+                                        "mesh_name": new_mesh.mesh_name,
+                                        "generation_mode": remesh_result.generation_mode,
+                                        "node_count": new_nodes,
+                                        "element_count": new_mesh.elements.len(),
+                                        "boundary_face_count": new_mesh.boundary_faces.len(),
+                                        "kind": "auto_coarsen",
+                                        "mesh_target": "study_domain",
+                                        "mesh_reason": "auto_coarsen",
+                                        "mesh_provenance": remesh_result.mesh_provenance.clone(),
+                                        "quality_data_artifact": remesh_result.quality_data_artifact.clone(),
+                                    }));
                                     live_workspace.update(|state| {
                                         state.live_state.latest_step.fem_mesh =
                                             Some(live_mesh_payload);
@@ -8972,6 +9033,7 @@ mod tests {
         live_step_ingest_cached_m_preview_len, live_step_ingest_legacy_mag_len,
         live_step_ingest_preview_len, mesh_build_pipeline_status_json,
         mesh_source_scene_revision,
+        prepare_remesh_stage_transaction,
         resolve_adaptive_convergence_metric,
         resolved_shared_domain_object_region_markers, scripted_stage_execution_state,
         shared_domain_object_region_mesh_specs, stage_allows_sampled_continuation_initial_state,
@@ -9229,6 +9291,54 @@ mod tests {
         let error = validate_periodic_remesh_candidate(&previous, &candidate)
             .expect_err("periodic remesh must not publish a candidate without recertified pairs");
         assert!(error.to_string().contains("periodic_remesh_requires_recertification"));
+    }
+
+    #[test]
+    fn remesh_transaction_keeps_sources_unchanged_when_candidate_validation_fails() {
+        let stages = vec![ResolvedScriptStage::solver(
+            ProblemIR::bootstrap_example(),
+            0.0,
+            "test",
+        )];
+        let plans = Vec::new();
+        let stages_before = stages.clone();
+        let plans_before = plans.clone();
+        let candidate = MeshIR {
+            mesh_name: "candidate".to_string(),
+            nodes: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            elements: vec![[0, 1, 2, 3]],
+            element_markers: vec![1],
+            boundary_faces: vec![[0, 1, 2]],
+            boundary_markers: vec![1],
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            per_domain_quality: Default::default(),
+        };
+
+        let error = prepare_remesh_stage_transaction(
+            &stages,
+            &plans,
+            None,
+            &candidate,
+            1.0,
+            true,
+            &[],
+            &[],
+            None,
+            None,
+        )
+        .expect_err("a shared-domain candidate without a domain asset must fail before commit");
+
+        assert!(error
+            .to_string()
+            .contains("shared-domain remesh produced no fem_domain_mesh_asset"));
+        assert_eq!(stages[0].ir, stages_before[0].ir);
+        assert_eq!(plans, plans_before);
     }
 
     use crate::args::ScriptCli;
