@@ -33,12 +33,17 @@ pub struct ResolvedFdmPbcProvenance {
 }
 ```
 
-- [ ] Dodać record do planu/artifacts CPU i CUDA; połączyć z grid fingerprint, nie duplikować geometry truth.
-- [ ] Dodać schema validation i exact round-trip tests; uruchomić IR/plan/runner tests, PASS.
+- [x] Dodać resolved PBC record do runner artifact writera; połączyć origin/counts/cell/period z grid contract i nie duplikować runtime geometry.
+- [x] Dodać wersjonowany schema payload `fdm_pbc_provenance.v1` i exact round-trip test; focused runner test PASS.
 
 ### Task 3: commit
 
-- [ ] Commit: `git add crates/fullmag-ir/src/plan.rs crates/fullmag-plan/src/fdm.rs crates/fullmag-runner/src/fdm && git commit -m "feat(fdm): record complete resolved PBC provenance"`.
+- [x] Commit: `575e0e98` poprzedniego transfer provenance oraz bieżący commit PBC provenance zostaną zapisane osobno.
 
 **Exit:** sam artifact wystarcza do odtworzenia okresu i wybranego algorytmu; requested intent pozostaje widoczne obok resolved reality.
 
+## Evidence update (2026-07-14)
+
+- [x] `mesh/fdm_pbc_provenance.v1.json` zawiera requested periodicity oraz resolved origin, counts, cell size, period, axes, demag, periodic image counts, FFT kernel/backend, padding i fallback.
+- [x] Focused tests: `fdm_mesh_metadata_preserves_requested_and_resolved_pbc_demag` oraz `fdm_pbc_provenance_artifact_round_trips_requested_and_resolved_contract` — oba PASS.
+- [ ] Pełna macierz CPU/CUDA single/double oraz managed runtime proof pozostają otwarte.

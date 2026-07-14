@@ -1107,6 +1107,10 @@ pub(crate) fn write_artifacts(
 
     let mut auxiliary_artifacts = executed.auxiliary_artifacts.clone();
     auxiliary_artifacts.extend(crate::fdm::artifacts::grid_certificate_artifacts(plan));
+    auxiliary_artifacts.extend(crate::fdm::artifacts::pbc_provenance_artifacts(
+        plan,
+        &execution_provenance,
+    ));
     auxiliary_artifacts.extend(crate::fdm::artifacts::transfer_provenance_artifacts(plan));
     for artifact in &auxiliary_artifacts {
         let artifact_path = output_dir.join(&artifact.relative_path);
@@ -3075,6 +3079,50 @@ mod tests {
             metadata["resolved_periodic_images"]["padded_counts"],
             serde_json::json!([4, 4, 2])
         );
+    }
+
+    #[test]
+    fn fdm_pbc_provenance_artifact_round_trips_requested_and_resolved_contract() {
+        let mut plan = test_execution_plan(None);
+        let BackendPlanIR::Fdm(fdm) = &mut plan.backend_plan else {
+            panic!("expected FDM plan");
+        };
+        fdm.periodicity = Some(fullmag_ir::FdmPeriodicityIR {
+            axes: [
+                fullmag_ir::AxisBoundary::Periodic,
+                fullmag_ir::AxisBoundary::Open,
+                fullmag_ir::AxisBoundary::Open,
+            ],
+            demag: fullmag_ir::FdmDemagPeriodicityIR::TruncatedImages,
+            image_counts: Some([4, 0, 0]),
+        });
+        let provenance = ExecutionProvenance {
+            demag_operator_kind: Some("tensor_fft_newell".to_string()),
+            fft_backend: Some("rustfft".to_string()),
+            ..ExecutionProvenance::default()
+        };
+        let artifacts = crate::fdm::artifacts::pbc_provenance_artifacts(&plan, &provenance);
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(
+            artifacts[0].relative_path,
+            "mesh/fdm_pbc_provenance.v1.json"
+        );
+        let value: serde_json::Value = serde_json::from_slice(&artifacts[0].bytes)
+            .expect("PBC provenance artifact should be JSON");
+        assert_eq!(value["schema_version"], "fdm_pbc_provenance.v1");
+        assert_eq!(
+            value["requested_periodicity"]["axes"],
+            serde_json::json!(["periodic", "open", "open"])
+        );
+        assert_eq!(value["resolved"]["origin_m"], serde_json::json!([0.0, 0.0, 0.0]));
+        assert_eq!(value["resolved"]["counts"], serde_json::json!([4, 2, 1]));
+        assert_eq!(
+            value["resolved"]["period_m"],
+            serde_json::json!([8e-9, 4e-9, 5e-9])
+        );
+        assert_eq!(value["resolved"]["padded_counts"], serde_json::json!([4, 4, 2]));
+        assert_eq!(value["resolved"]["fft_backend"], "rustfft");
+        assert_eq!(value["resolved"]["periodic_images"]["kernel"], "newell_truncated_images_fft");
     }
 
     #[test]

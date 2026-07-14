@@ -1,6 +1,6 @@
 //! Shared FDM artifact helpers.
 
-use crate::types::{AuxiliaryArtifact, RunError, StateObservables};
+use crate::types::{AuxiliaryArtifact, ExecutionProvenance, RunError, StateObservables};
 use fullmag_ir::{BackendPlanIR, ExecutionPlanIR};
 
 /// Serialize the planner-owned FDM grid certificate as a standalone artifact.
@@ -113,6 +113,87 @@ pub(crate) fn transfer_provenance_artifacts(
     };
     vec![AuxiliaryArtifact {
         relative_path: "mesh/fdm_transfer_provenance.v1.json".to_string(),
+        bytes,
+    }]
+}
+
+/// Persist the complete requested/resolved FDM PBC execution contract.
+pub(crate) fn pbc_provenance_artifacts(
+    plan: &ExecutionPlanIR,
+    provenance: &ExecutionProvenance,
+) -> Vec<AuxiliaryArtifact> {
+    let (requested_periodicity, origin_m, counts, cell_m, enable_demag, precision) = match
+        &plan.backend_plan
+    {
+        BackendPlanIR::Fdm(fdm) => (
+            fdm.periodicity.as_ref(),
+            fdm.origin_m,
+            fdm.grid.cells,
+            fdm.cell_size,
+            fdm.enable_demag,
+            fdm.precision,
+        ),
+        BackendPlanIR::FdmMultilayer(fdm) => {
+            let Some(certificate) = fdm.grid_certificate.as_ref() else {
+                return Vec::new();
+            };
+            (
+                fdm.periodicity.as_ref(),
+                certificate.origin_m,
+                certificate.counts,
+                certificate.cell_m,
+                fdm.enable_demag,
+                fdm.precision,
+            )
+        }
+        _ => return Vec::new(),
+    };
+    let axes = requested_periodicity
+        .map(|pbc| {
+            pbc.axes
+                .map(|axis| matches!(axis, fullmag_ir::AxisBoundary::Periodic))
+        })
+        .unwrap_or([false; 3]);
+    let period_m = [
+        f64::from(counts[0]) * cell_m[0],
+        f64::from(counts[1]) * cell_m[1],
+        f64::from(counts[2]) * cell_m[2],
+    ];
+    let resolved_demag_boundary = requested_periodicity
+        .and_then(|pbc| pbc.resolve_demag_boundary(enable_demag).ok());
+    let resolved_periodic_images = requested_periodicity
+        .and_then(|pbc| pbc.resolve_periodic_images(counts, precision).ok())
+        .flatten();
+    let padded_counts = resolved_periodic_images
+        .as_ref()
+        .map(|images| images.padded_counts)
+        .or_else(|| enable_demag.then_some(counts.map(|value| u64::from(value) * 2)));
+    let fft_kernel = resolved_periodic_images
+        .as_ref()
+        .map(|images| images.kernel.clone())
+        .or_else(|| provenance.demag_operator_kind.clone());
+    let value = serde_json::json!({
+        "schema_version": "fdm_pbc_provenance.v1",
+        "requested_periodicity": requested_periodicity,
+        "resolved": {
+            "origin_m": origin_m,
+            "counts": counts,
+            "cell_m": cell_m,
+            "period_m": period_m,
+            "axes": axes,
+            "demag": resolved_demag_boundary,
+            "periodic_images": resolved_periodic_images,
+            "fft_kernel": fft_kernel,
+            "fft_backend": provenance.fft_backend,
+            "padded_counts": padded_counts,
+        },
+        "fallback": provenance.resolved_fallback,
+    });
+    let Ok(bytes) = serde_json::to_vec_pretty(&value) else {
+        return Vec::new();
+    };
+    vec![AuxiliaryArtifact {
+        relative_path: "mesh/fdm_pbc_provenance.v1.json".to_string(),
         bytes,
     }]
 }
