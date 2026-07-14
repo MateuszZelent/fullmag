@@ -20,7 +20,7 @@
 
 ### Task 1: capability guard i RED kernel test
 
-- [ ] Najpierw zablokować unsupported lane w capability matrix/planner z actionable reason.
+- [x] Najpierw zablokować unsupported lane w capability matrix/planner z actionable reason.
 - [ ] Dodać FP32 periodic seam fixture w `backends/fdm/tests/`, porównując uniform, linear i seam-localized magnetization z CPU double/FP64.
 - [x] Dodać source-level contract dla FP32 periodic neighbor helper i przekazania wszystkich osi; runtime parity fixture pozostaje do managed CUDA.
 - [ ] Uruchomić managed test; obecny FP32 ma FAIL na seam.
@@ -44,6 +44,7 @@ struct FdmPeriodicAxes { bool x; bool y; bool z; };
 
 - `exchange_fp32.cu` now uses `pbc_neighbor_fp32` with `ctx.periodic_x/y/z`; open axes retain clamped neighbors.
 - `fdm_periodic_exchange_fp32_contract` source-level gate was added to the native FDM CMake test set.
+- Planner now rejects CUDA `execution_precision='single'` with any periodic axis using an actionable capability reason until the managed parity gate is green; `cargo test -p fullmag-plan fdm_cuda_fp32_periodic_exchange_is_capability_gated_until_parity --lib` passes.
 - Managed CUDA FP32/FP64 seam parity and promotion artifact remain open; no CUDA runtime was claimed from this environment.
 
 **Exit:** FP32 seam matches double oracle w tolerancji; unsupported guard usunięty wyłącznie po managed proof.

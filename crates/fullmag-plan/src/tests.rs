@@ -9374,6 +9374,32 @@ fn fdm_pbc_demag_resolution_matrix_is_lane_independent() {
 }
 
 #[test]
+fn fdm_cuda_fp32_periodic_exchange_is_capability_gated_until_parity() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.execution_precision = ExecutionPrecision::Single;
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cuda", "device_index": 0}),
+    );
+    ir.pbc = Some(FdmPeriodicityIR {
+        axes: [
+            AxisBoundary::Periodic,
+            AxisBoundary::Open,
+            AxisBoundary::Open,
+        ],
+        demag: FdmDemagPeriodicityIR::Open,
+        image_counts: None,
+    });
+
+    let error = plan(&ir).expect_err("unqualified CUDA FP32 periodic exchange must fail closed");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("single")
+            && reason.contains("periodic axes")
+            && reason.contains("FP32 seam exchange parity")
+    }));
+}
+
+#[test]
 fn fdm_pbc_with_exchange_plans() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.pbc = Some(FdmPeriodicityIR {

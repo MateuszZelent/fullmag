@@ -444,6 +444,15 @@ pub(crate) fn plan_fdm(
         if let Err(reason) = pbc.resolve_demag_boundary(enable_demag) {
             errors.push(reason);
         }
+        if problem.backend_policy.execution_precision == ExecutionPrecision::Single
+            && runtime_requests_cuda(problem)
+            && pbc.has_any_periodic()
+        {
+            errors.push(
+                "FDM execution_precision='single' with CUDA and periodic axes is capability-gated until FP32 seam exchange parity is qualified; use execution_precision='double'"
+                    .to_string(),
+            );
+        }
     }
 
     if problem.magnets.len() != 1 {
@@ -1505,6 +1514,15 @@ pub(crate) fn plan_fdm_multilayer(
     if let Some(pbc) = problem.pbc.as_ref() {
         if let Err(reason) = pbc.resolve_demag_boundary(enable_demag) {
             errors.push(reason);
+        }
+        if problem.backend_policy.execution_precision == ExecutionPrecision::Single
+            && runtime_requests_cuda(problem)
+            && pbc.has_any_periodic()
+        {
+            errors.push(
+                "FDM multilayer execution_precision='single' with CUDA and periodic axes is capability-gated until FP32 seam exchange parity is qualified; use execution_precision='double'"
+                    .to_string(),
+            );
         }
     }
     if !(enable_exchange || enable_demag || external_field.is_some()) {
