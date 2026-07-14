@@ -3045,6 +3045,20 @@ class MeshScaffoldTests(unittest.TestCase):
 
         self.assertEqual(geometry.geometry_name, "nanoflower_left_geom")
 
+    def test_geometry_from_ir_preserves_cylinder_axis_round_trip(self) -> None:
+        geometry = _geometry_from_ir(
+            {
+                "kind": "cylinder",
+                "name": "tilted",
+                "radius": 2.0,
+                "height": 5.0,
+                "axis": [1.0, 1.0, 1.0],
+            }
+        )
+
+        self.assertIsInstance(geometry, fm.Cylinder)
+        self.assertEqual(geometry.to_ir()["axis"], [1.0 / (3.0**0.5)] * 3)
+
     def test_geometry_from_ir_reconstructs_waveguide_kinds(self) -> None:
         sin_geometry = _geometry_from_ir(
             {

@@ -1,4 +1,5 @@
 use super::*;
+use crate::geometry::{contains_cylinder, ir_to_shape, shape_local_bounds};
 
 #[test]
 fn fem_top_surface_selector_resolves_bbox_faces() {
@@ -8792,6 +8793,7 @@ fn fdm_boundary_params_passthrough_phi_floor_and_delta_min() {
         name: "disk".to_string(),
         radius: 50e-9,
         height: 6e-9,
+        axis: [0.0, 0.0, 1.0],
     }];
     ir.regions[0].geometry = "disk".to_string();
     ir.backend_policy.discretization_hints = Some(DiscretizationHintsIR {
@@ -8832,6 +8834,53 @@ fn fdm_boundary_params_passthrough_phi_floor_and_delta_min() {
         }
         _ => panic!("expected FDM plan"),
     }
+}
+
+#[test]
+fn cylinder_axis_controls_oriented_bounds_and_containment() {
+    let cylinder = GeometryEntryIR::Cylinder {
+        name: "oriented".to_string(),
+        radius: 1.0,
+        height: 4.0,
+        axis: [1.0, 0.0, 0.0],
+    };
+    let shape = ir_to_shape(&cylinder).expect("cylinder should lower");
+    let (min, max) = shape_local_bounds(&shape).expect("cylinder bounds should be analytic");
+    assert_eq!(min, [-2.0, -1.0, -1.0]);
+    assert_eq!(max, [2.0, 1.0, 1.0]);
+    assert!(contains_cylinder(&shape, [1.5, 0.0, 0.0]));
+    assert!(!contains_cylinder(&shape, [0.0, 1.1, 0.0]));
+
+    let y_axis = GeometryEntryIR::Cylinder {
+        name: "y_axis".to_string(),
+        radius: 1.0,
+        height: 4.0,
+        axis: [0.0, 1.0, 0.0],
+    };
+    let y_shape = ir_to_shape(&y_axis).expect("y-axis cylinder should lower");
+    let (y_min, y_max) = shape_local_bounds(&y_shape).expect("y-axis bounds should be analytic");
+    assert_eq!(y_min, [-1.0, -2.0, -1.0]);
+    assert_eq!(y_max, [1.0, 2.0, 1.0]);
+    assert!(contains_cylinder(&y_shape, [0.0, 1.5, 0.0]));
+    assert!(!contains_cylinder(&y_shape, [1.1, 0.0, 0.0]));
+
+    let diagonal = GeometryEntryIR::Cylinder {
+        name: "diagonal".to_string(),
+        radius: 1.0,
+        height: 4.0,
+        axis: [1.0, 1.0, 1.0],
+    };
+    let diagonal_shape = ir_to_shape(&diagonal).expect("diagonal cylinder should lower");
+    let (diagonal_min, diagonal_max) =
+        shape_local_bounds(&diagonal_shape).expect("diagonal bounds should be analytic");
+    let extent = (1.0_f64 * (1.0_f64 - 1.0_f64 / 3.0_f64)
+        + 4.0_f64 * 4.0_f64 / 4.0_f64 * (1.0_f64 / 3.0_f64))
+        .sqrt();
+    for component in diagonal_min.iter().chain(diagonal_max.iter()) {
+        assert!((component.abs() - extent).abs() < 1e-12);
+    }
+    assert!(contains_cylinder(&diagonal_shape, [1.0, 1.0, 1.0]));
+    assert!(!contains_cylinder(&diagonal_shape, [2.0, -2.0, 0.0]));
 }
 
 #[test]

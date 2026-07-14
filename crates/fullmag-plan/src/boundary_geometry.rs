@@ -280,6 +280,35 @@ pub fn cylinder_sdf(radius: f64, cx: f64, cy: f64) -> impl Fn(f64, f64, f64) -> 
     }
 }
 
+/// Signed distance for a finite cylinder centered at `center` with an
+/// arbitrary (not necessarily unit) axis. Negative values are inside.
+pub fn finite_cylinder_sdf(
+    radius: f64,
+    height: f64,
+    center: [f64; 3],
+    axis: [f64; 3],
+) -> impl Fn(f64, f64, f64) -> f64 {
+    let norm = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
+    let unit = [axis[0] / norm, axis[1] / norm, axis[2] / norm];
+    move |x, y, z| {
+        let point = [x - center[0], y - center[1], z - center[2]];
+        let axial = point[0] * unit[0] + point[1] * unit[1] + point[2] * unit[2];
+        let radial = (point[0] * point[0]
+            + point[1] * point[1]
+            + point[2] * point[2]
+            - axial * axial)
+            .max(0.0)
+            .sqrt();
+        let radial_distance = radial - radius;
+        let axial_distance = axial.abs() - 0.5 * height;
+        let outside = (radial_distance.max(0.0).powi(2)
+            + axial_distance.max(0.0).powi(2))
+        .sqrt();
+        let inside = radial_distance.max(axial_distance).min(0.0);
+        outside + inside
+    }
+}
+
 /// Build SDF for a Cylinder-minus-Cylinder (hole) CSG difference.
 ///
 /// `base_radius` is the outer cylinder, `hole_radius` is the subtracted cylinder.

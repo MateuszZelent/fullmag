@@ -984,31 +984,50 @@ pub(crate) fn plan_fdm(
         // chosen correction level but without per-cell φ/δ data, which
         // means the correction has no geometric effect.
         let sdf_opt: Option<Box<dyn Fn(f64, f64, f64) -> f64>> = match &shape {
-            GeometryShape::Cylinder { radius, .. } => {
-                let cx = grid_cells[0] as f64 * cell_size[0] * 0.5;
-                let cy = grid_cells[1] as f64 * cell_size[1] * 0.5;
-                let r = *radius;
-                Some(Box::new(move |x, y, _z| {
-                    let dx = x - cx;
-                    let dy = y - cy;
-                    (dx * dx + dy * dy).sqrt() - r
-                }))
+            GeometryShape::Cylinder {
+                radius,
+                height,
+                axis,
+            } => {
+                let center = [
+                    grid_cells[0] as f64 * cell_size[0] * 0.5,
+                    grid_cells[1] as f64 * cell_size[1] * 0.5,
+                    grid_cells[2] as f64 * cell_size[2] * 0.5,
+                ];
+                let sdf = crate::boundary_geometry::finite_cylinder_sdf(
+                    *radius, *height, center, *axis,
+                );
+                Some(Box::new(sdf))
             }
             GeometryShape::Difference { base, tool } => {
-                let cx = grid_cells[0] as f64 * cell_size[0] * 0.5;
-                let cy = grid_cells[1] as f64 * cell_size[1] * 0.5;
                 if let (
-                    GeometryShape::Cylinder { radius: base_r, .. },
-                    GeometryShape::Cylinder { radius: tool_r, .. },
+                    GeometryShape::Cylinder {
+                        radius: base_r,
+                        height: base_h,
+                        axis: base_axis,
+                    },
+                    GeometryShape::Cylinder {
+                        radius: tool_r,
+                        height: tool_h,
+                        axis: tool_axis,
+                    },
                 ) = (base.as_ref(), tool.as_ref())
                 {
-                    let br = *base_r;
-                    let tr = *tool_r;
+                    let center = [
+                        grid_cells[0] as f64 * cell_size[0] * 0.5,
+                        grid_cells[1] as f64 * cell_size[1] * 0.5,
+                        grid_cells[2] as f64 * cell_size[2] * 0.5,
+                    ];
+                    let base_sdf = crate::boundary_geometry::finite_cylinder_sdf(
+                        *base_r, *base_h, center, *base_axis,
+                    );
+                    let tool_sdf = crate::boundary_geometry::finite_cylinder_sdf(
+                        *tool_r, *tool_h, center, *tool_axis,
+                    );
                     Some(Box::new(move |x, y, _z| {
-                        let dx = x - cx;
-                        let dy = y - cy;
-                        let d = (dx * dx + dy * dy).sqrt();
-                        (d - br).max(-(d - tr))
+                        let base_value = base_sdf(x, y, _z);
+                        let tool_value = tool_sdf(x, y, _z);
+                        base_value.max(-tool_value)
                     }))
                 } else {
                     None

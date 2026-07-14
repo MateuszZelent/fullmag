@@ -78,6 +78,7 @@ pub(crate) enum GeometryShape {
     Cylinder {
         radius: f64,
         height: f64,
+        axis: [f64; 3],
     },
     SinWaveguide {
         length: f64,
@@ -127,9 +128,15 @@ pub(crate) struct LoweredBody {
 pub(crate) fn ir_to_shape(entry: &GeometryEntryIR) -> Result<GeometryShape, String> {
     match entry {
         GeometryEntryIR::Box { size, .. } => Ok(GeometryShape::Box { size: *size }),
-        GeometryEntryIR::Cylinder { radius, height, .. } => Ok(GeometryShape::Cylinder {
+        GeometryEntryIR::Cylinder {
+            radius,
+            height,
+            axis,
+            ..
+        } => Ok(GeometryShape::Cylinder {
             radius: *radius,
             height: *height,
+            axis: normalize_axis(*axis)?,
         }),
         GeometryEntryIR::SinWaveguide {
             length,
@@ -230,16 +237,26 @@ pub(crate) fn extract_multilayer_geometry(
     }
 }
 
-fn shape_local_bounds(shape: &GeometryShape) -> Option<([f64; 3], [f64; 3])> {
+pub(crate) fn shape_local_bounds(shape: &GeometryShape) -> Option<([f64; 3], [f64; 3])> {
     match shape {
         GeometryShape::Box { size } => Some((
             [-size[0] * 0.5, -size[1] * 0.5, -size[2] * 0.5],
             [size[0] * 0.5, size[1] * 0.5, size[2] * 0.5],
         )),
-        GeometryShape::Cylinder { radius, height } => Some((
-            [-radius, -radius, -height * 0.5],
-            [*radius, *radius, height * 0.5],
-        )),
+        GeometryShape::Cylinder {
+            radius,
+            height,
+            axis,
+        } => {
+            let half_height = *height * 0.5;
+            let extents = [0, 1, 2].map(|index| {
+                let axial = axis[index];
+                ((*radius * *radius * (1.0 - axial * axial))
+                    + (half_height * half_height * axial * axial))
+                    .sqrt()
+            });
+            Some(([-extents[0], -extents[1], -extents[2]], extents))
+        }
         GeometryShape::SinWaveguide {
             length,
             width,
@@ -272,6 +289,45 @@ fn shape_local_bounds(shape: &GeometryShape) -> Option<([f64; 3], [f64; 3])> {
         }
         GeometryShape::Difference { base, .. } => shape_local_bounds(base),
         GeometryShape::Imported { .. } => None,
+    }
+}
+
+fn normalize_axis(axis: [f64; 3]) -> Result<[f64; 3], String> {
+    if axis.iter().any(|component| !component.is_finite()) {
+        return Err("cylinder axis must contain finite values".to_string());
+    }
+    let norm = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
+    if norm <= 1e-15 {
+        return Err("cylinder axis must be non-zero".to_string());
+    }
+    Ok([axis[0] / norm, axis[1] / norm, axis[2] / norm])
+}
+
+fn contains_cylinder_point(
+    radius: f64,
+    height: f64,
+    axis: [f64; 3],
+    point: [f64; 3],
+) -> bool {
+    let axial = point[0] * axis[0] + point[1] * axis[1] + point[2] * axis[2];
+    if axial.abs() > height * 0.5 {
+        return false;
+    }
+    let radial_sq = point[0] * point[0]
+        + point[1] * point[1]
+        + point[2] * point[2]
+        - axial * axial;
+    radial_sq <= radius * radius
+}
+
+pub(crate) fn contains_cylinder(shape: &GeometryShape, point: [f64; 3]) -> bool {
+    match shape {
+        GeometryShape::Cylinder {
+            radius,
+            height,
+            axis,
+        } => contains_cylinder_point(*radius, *height, *axis, point),
+        _ => false,
     }
 }
 
@@ -337,26 +393,37 @@ pub(crate) fn voxelize_shape(
                 [-size[0] * 0.5, -size[1] * 0.5, -size[2] * 0.5],
             )
         }
-        GeometryShape::Cylinder { radius, height } => {
-            let diameter = 2.0 * radius;
-            let bbox = [diameter, diameter, *height];
+        GeometryShape::Cylinder {
+            radius,
+            height,
+            axis,
+        } => {
+            let half_height = *height * 0.5;
+            let extents = [0, 1, 2].map(|index| {
+                let axial = axis[index];
+                ((*radius * *radius * (1.0 - axial * axial))
+                    + (half_height * half_height * axial * axial))
+                    .sqrt()
+            });
+            let bbox = [2.0 * extents[0], 2.0 * extents[1], 2.0 * extents[2]];
             let nx = (bbox[0] / cell_size[0]).round().max(1.0) as u32;
             let ny = (bbox[1] / cell_size[1]).round().max(1.0) as u32;
             let nz = (bbox[2] / cell_size[2]).round().max(1.0) as u32;
             let Some(n) = checked_voxel_count([nx, ny, nz], errors) else {
-                return (bbox, None, [nx, ny, nz], [-diameter * 0.5, -diameter * 0.5, -height * 0.5]);
+                return (bbox, None, [nx, ny, nz], [-bbox[0] * 0.5, -bbox[1] * 0.5, -bbox[2] * 0.5]);
             };
-            let cx = nx as f64 * cell_size[0] * 0.5;
-            let cy = ny as f64 * cell_size[1] * 0.5;
-            let r2 = radius * radius;
+            let bounds_min = [-bbox[0] * 0.5, -bbox[1] * 0.5, -bbox[2] * 0.5];
             let mut mask = vec![false; n];
             for z in 0..nz {
                 for y in 0..ny {
                     for x in 0..nx {
-                        let px = (x as f64 + 0.5) * cell_size[0] - cx;
-                        let py = (y as f64 + 0.5) * cell_size[1] - cy;
+                        let point = [
+                            bounds_min[0] + (x as f64 + 0.5) * cell_size[0],
+                            bounds_min[1] + (y as f64 + 0.5) * cell_size[1],
+                            bounds_min[2] + (z as f64 + 0.5) * cell_size[2],
+                        ];
                         let idx = (x + nx * (y + ny * z)) as usize;
-                        mask[idx] = (px * px + py * py) <= r2;
+                        mask[idx] = contains_cylinder_point(*radius, *height, *axis, point);
                     }
                 }
             }
@@ -364,7 +431,7 @@ pub(crate) fn voxelize_shape(
                 bbox,
                 Some(mask),
                 [nx, ny, nz],
-                [-diameter * 0.5, -diameter * 0.5, -height * 0.5],
+                bounds_min,
             )
         }
         GeometryShape::SinWaveguide {
@@ -476,34 +543,36 @@ pub(crate) fn voxelize_shape(
                 return (bbox, None, [nx, ny, nz], bounds_min);
             };
             let mut mask = vec![true; n];
-            if let GeometryShape::Cylinder { radius, .. } = base.as_ref() {
-                let cx = bounds_min[0] + bbox[0] * 0.5;
-                let cy = bounds_min[1] + bbox[1] * 0.5;
-                let r2 = radius * radius;
+            if let GeometryShape::Cylinder { .. } = base.as_ref() {
                 for z in 0..nz {
                     for y in 0..ny {
                         for x in 0..nx {
-                            let px = bounds_min[0] + (x as f64 + 0.5) * cell_size[0] - cx;
-                            let py = bounds_min[1] + (y as f64 + 0.5) * cell_size[1] - cy;
+                            let point = [
+                                bounds_min[0] + (x as f64 + 0.5) * cell_size[0],
+                                bounds_min[1] + (y as f64 + 0.5) * cell_size[1],
+                                bounds_min[2] + (z as f64 + 0.5) * cell_size[2],
+                            ];
                             let idx = (x + nx * (y + ny * z)) as usize;
-                            mask[idx] = (px * px + py * py) <= r2;
+                            mask[idx] = contains_cylinder(base, [
+                                point[0], point[1], point[2],
+                            ]);
                         }
                     }
                 }
             }
 
             match tool.as_ref() {
-                GeometryShape::Cylinder { radius, .. } => {
-                    let cx = bounds_min[0] + bbox[0] * 0.5;
-                    let cy = bounds_min[1] + bbox[1] * 0.5;
-                    let r2 = radius * radius;
+                GeometryShape::Cylinder { .. } => {
                     for z in 0..nz {
                         for y in 0..ny {
                             for x in 0..nx {
-                                let px = bounds_min[0] + (x as f64 + 0.5) * cell_size[0] - cx;
-                                let py = bounds_min[1] + (y as f64 + 0.5) * cell_size[1] - cy;
+                                let point = [
+                                    bounds_min[0] + (x as f64 + 0.5) * cell_size[0],
+                                    bounds_min[1] + (y as f64 + 0.5) * cell_size[1],
+                                    bounds_min[2] + (z as f64 + 0.5) * cell_size[2],
+                                ];
                                 let idx = (x + nx * (y + ny * z)) as usize;
-                                if (px * px + py * py) <= r2 {
+                                if contains_cylinder(tool, point) {
                                     mask[idx] = false;
                                 }
                             }

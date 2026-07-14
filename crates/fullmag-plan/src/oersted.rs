@@ -379,7 +379,7 @@ fn cylindrical_geometry_parameters(
 ) -> Option<(f64, [f64; 3], [f64; 3])> {
     fn recurse(geometry: &GeometryEntryIR, offset: [f64; 3]) -> Option<(f64, [f64; 3], [f64; 3])> {
         match geometry {
-            GeometryEntryIR::Cylinder { radius, .. } => Some((*radius, offset, [0.0, 0.0, 1.0])),
+            GeometryEntryIR::Cylinder { radius, axis, .. } => Some((*radius, offset, *axis)),
             GeometryEntryIR::Translate { base, by, .. } => recurse(
                 base,
                 [offset[0] + by[0], offset[1] + by[1], offset[2] + by[2]],
@@ -690,6 +690,7 @@ mod tests {
                 name: "pillar_base".to_string(),
                 radius: 25e-9,
                 height: 10e-9,
+                axis: [0.0, 0.0, 1.0],
             }),
             by: [1e-9, -2e-9, 0.0],
         };
@@ -729,6 +730,7 @@ mod tests {
             name: "pillar".to_string(),
             radius: 25e-9,
             height: 10e-9,
+            axis: [0.0, 0.0, 1.0],
         };
         problem.energy_terms = vec![EnergyTermIR::OerstedField {
             model: OerstedFieldModelIR::FromCurrentSolution,

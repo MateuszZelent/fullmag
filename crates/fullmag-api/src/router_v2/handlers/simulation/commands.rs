@@ -690,6 +690,7 @@ fn scene_geometry_entry(
             height: number_param(params, "height", object_id)?,
             name: geometry_name.to_string(),
             radius: number_param(params, "radius", object_id)?,
+            axis: [0.0, 0.0, 1.0],
         }),
         "SinWaveguide" => Ok(GeometryEntryIR::SinWaveguide {
             amplitude: number_param(params, "amplitude", object_id)?,

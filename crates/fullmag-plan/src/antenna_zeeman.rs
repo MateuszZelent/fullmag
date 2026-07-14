@@ -146,9 +146,23 @@ fn geometry_contains_point(entry: &GeometryEntryIR, point: [f64; 3]) -> Result<b
         GeometryEntryIR::Box { size, .. } => Ok((0..3).all(|axis| {
             point[axis] >= -0.5 * size[axis] && point[axis] <= 0.5 * size[axis]
         })),
-        GeometryEntryIR::Cylinder { radius, height, .. } => {
-            let r2 = point[0] * point[0] + point[1] * point[1];
-            Ok(r2 <= radius * radius && point[2].abs() <= 0.5 * height)
+        GeometryEntryIR::Cylinder {
+            radius,
+            height,
+            axis,
+            ..
+        } => {
+            let norm = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
+            if !norm.is_finite() || norm <= 1e-15 {
+                return Err("cylinder axis must be finite and non-zero".to_string());
+            }
+            let unit = [axis[0] / norm, axis[1] / norm, axis[2] / norm];
+            let axial = point[0] * unit[0] + point[1] * unit[1] + point[2] * unit[2];
+            let radial_sq = point[0] * point[0]
+                + point[1] * point[1]
+                + point[2] * point[2]
+                - axial * axial;
+            Ok(radial_sq <= radius * radius && axial.abs() <= 0.5 * height)
         }
         GeometryEntryIR::Translate { base, by, .. } => geometry_contains_point(
             base,

@@ -2242,6 +2242,7 @@ fn analytic_geometry_must_have_positive_dimensions() {
         name: "strip".to_string(),
         radius: -1.0,
         height: 5e-9,
+        axis: [0.0, 0.0, 1.0],
     };
 
     let errors = ir
@@ -2250,6 +2251,26 @@ fn analytic_geometry_must_have_positive_dimensions() {
     assert!(errors
         .iter()
         .any(|error| error.contains("cylinder geometry 'strip' radius must be positive")));
+}
+
+#[test]
+fn cylinder_axis_is_serialized_and_validated() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.geometry.entries[0] = GeometryEntryIR::Cylinder {
+        name: "tilted".to_string(),
+        radius: 5e-9,
+        height: 10e-9,
+        axis: [1.0, 1.0, 1.0],
+    };
+    let value = serde_json::to_value(&ir).expect("cylinder should serialize");
+    assert_eq!(value["geometry"]["entries"][0]["axis"], serde_json::json!([1.0, 1.0, 1.0]));
+
+    let mut invalid = ir.clone();
+    if let GeometryEntryIR::Cylinder { axis, .. } = &mut invalid.geometry.entries[0] {
+        *axis = [0.0, 0.0, 0.0];
+    }
+    let errors = invalid.validate().expect_err("zero cylinder axis must fail validation");
+    assert!(errors.iter().any(|error| error.contains("cylinder geometry 'tilted' axis must be non-zero")));
 }
 
 #[test]

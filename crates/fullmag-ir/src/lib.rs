@@ -1267,6 +1267,7 @@ impl ProblemIR {
                     name,
                     radius,
                     height,
+                    axis,
                 } => {
                     if name.trim().is_empty() {
                         errors.push("cylinder geometry name must not be empty".to_string());
@@ -1282,6 +1283,22 @@ impl ProblemIR {
                             "cylinder geometry '{}' height must be positive",
                             name
                         ));
+                    }
+                    if axis.iter().any(|component| !component.is_finite()) {
+                        errors.push(format!(
+                            "cylinder geometry '{}' axis must contain finite values",
+                            name
+                        ));
+                    } else {
+                        let norm_sq = axis[0] * axis[0]
+                            + axis[1] * axis[1]
+                            + axis[2] * axis[2];
+                        if norm_sq <= 1e-30 {
+                            errors.push(format!(
+                                "cylinder geometry '{}' axis must be non-zero",
+                                name
+                            ));
+                        }
                     }
                 }
                 GeometryEntryIR::SinWaveguide {
