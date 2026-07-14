@@ -174,10 +174,29 @@ impl FdmPeriodicityIR {
         if self.demag == FdmDemagPeriodicityIR::TruncatedImages && self.has_any_periodic() {
             let requested = self.image_counts.unwrap_or([10, 10, 10]);
             let mut image_counts = [0; 3];
+            let mut image_terms = 1_u64;
             for (axis, count) in image_counts.iter_mut().enumerate() {
                 if self.is_periodic(axis) {
                     *count = requested[axis];
+                    let span = u64::from(*count)
+                        .checked_mul(2)
+                        .and_then(|value| value.checked_add(1))
+                        .ok_or_else(|| {
+                            format!(
+                                "FDM periodic image count overflow on axis {axis}: {}",
+                                requested[axis]
+                            )
+                        })?;
+                    image_terms = image_terms.checked_mul(span).ok_or_else(|| {
+                        "FDM periodic image term count overflow".to_string()
+                    })?;
                 }
+            }
+            const MAX_PERIODIC_IMAGE_TERMS: u64 = 1_000_000;
+            if image_terms > MAX_PERIODIC_IMAGE_TERMS {
+                return Err(format!(
+                    "FDM periodic image budget exceeded: {image_terms} image terms > {MAX_PERIODIC_IMAGE_TERMS}"
+                ));
             }
             return Ok(ResolvedFdmDemagBoundaryIR::PeriodicTruncatedImages {
                 image_counts,
@@ -357,5 +376,51 @@ impl RelaxationAlgorithmIR {
             Self::LlgOverdamped => Some(IntegratorChoice::Rk23),
             Self::ProjectedGradientBb | Self::NonlinearCg | Self::TangentPlaneImplicit => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn truncated(counts: [u32; 3]) -> FdmPeriodicityIR {
+        FdmPeriodicityIR {
+            axes: [
+                AxisBoundary::Periodic,
+                AxisBoundary::Periodic,
+                AxisBoundary::Periodic,
+            ],
+            demag: FdmDemagPeriodicityIR::TruncatedImages,
+            image_counts: Some(counts),
+        }
+    }
+
+    #[test]
+    fn periodic_image_budget_accepts_boundary_case() {
+        let resolved = truncated([49, 49, 49])
+            .resolve_demag_boundary(true)
+            .expect("49^3 image spans should fit the production budget");
+        assert_eq!(
+            resolved,
+            ResolvedFdmDemagBoundaryIR::PeriodicTruncatedImages {
+                image_counts: [49, 49, 49]
+            }
+        );
+    }
+
+    #[test]
+    fn periodic_image_budget_rejects_excessive_work() {
+        let error = truncated([100, 100, 100])
+            .resolve_demag_boundary(true)
+            .expect_err("excessive periodic image work must fail before runtime");
+        assert!(error.contains("periodic image budget exceeded"));
+    }
+
+    #[test]
+    fn periodic_image_budget_checks_u32_arithmetic() {
+        let error = truncated([u32::MAX, 0, 0])
+            .resolve_demag_boundary(true)
+            .expect_err("u32 image span must be checked");
+        assert!(error.contains("periodic image budget exceeded"));
     }
 }
