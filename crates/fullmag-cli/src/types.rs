@@ -47,6 +47,14 @@ pub(crate) struct RuntimeCommandPrecondition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesh_revision: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region_topology_revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region_membership_revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region_coefficients_revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region_initial_state_revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command_revision: Option<u64>,
 }
 

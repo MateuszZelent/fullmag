@@ -112,3 +112,10 @@ struct RegionRealizationRevisions {
 - [x] Region authoring invalidation now invalidates the magnetization-asset resource family together with region diagnostics/material resources.
 - [x] RED/GREEN evidence: the new resource-key/revision and invalidation assertions initially failed on missing exports, then `geometryLifecycleResources.test.ts` plus `regionAuthoringInvalidation.test.ts` passed 12/12; Control Room typecheck and focused ESLint passed.
 - [ ] HTTP ETags, consumed tuple in run artifacts/plans, managed/browser gates and full Inspector propagation remain open.
+
+### Evidence update (2026-07-14, command-to-artifact tuple propagation)
+
+- [x] CLI now deserializes the four region realization precondition lanes, copies them into the stage `ProblemIR.runtime_metadata`, and marks partial tuples explicitly `complete=false`.
+- [x] Runner `metadata.json` persists the same `region_realization_revisions` object, preserving the exact consumed tuple instead of collapsing it to scene revision.
+- [x] RED/GREEN evidence: `attach_region_realization_revisions_persists_complete_consumed_tuple` and `attach_region_realization_revisions_marks_partial_tuple_incomplete` pass 2/2; artifact metadata regression passes 1/1.
+- [ ] Run-plan readback, HTTP ETags, managed/browser gates and full Inspector propagation remain open.

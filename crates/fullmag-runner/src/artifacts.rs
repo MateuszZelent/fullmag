@@ -33,6 +33,15 @@ fn runtime_threading_summary(problem: &fullmag_ir::ProblemIR) -> serde_json::Val
     })
 }
 
+fn region_realization_revisions_metadata(problem: &fullmag_ir::ProblemIR) -> serde_json::Value {
+    problem
+        .problem_meta
+        .runtime_metadata
+        .get("region_realization_revisions")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null)
+}
+
 fn requested_execution_metadata(problem: &fullmag_ir::ProblemIR) -> serde_json::Value {
     let backend = match problem.backend_policy.requested_backend {
         fullmag_ir::BackendTarget::Auto => "auto",
@@ -1010,6 +1019,7 @@ pub(crate) fn write_artifacts(
         .cloned()
         .unwrap_or(serde_json::Value::Null);
     let mesh_metadata = mesh_runtime_metadata(plan);
+    let region_realization_revisions = region_realization_revisions_metadata(problem);
     let material_field_assets = write_material_field_artifacts(output_dir, plan)?;
     let mut execution_provenance_json = serde_json::to_value(&execution_provenance)
         .expect("ExecutionProvenance must serialize");
@@ -1030,6 +1040,7 @@ pub(crate) fn write_artifacts(
         "requested_execution": requested_execution,
         "artifact_layout": field_context.layout.clone(),
         "mesh": mesh_metadata,
+        "region_realization_revisions": region_realization_revisions,
         "periodic_antidot_relaxation": periodic_antidot_relaxation,
         "execution_provenance": execution_provenance_json,
         "runtime_threading": runtime_threading,
@@ -3624,7 +3635,17 @@ mod tests {
 
     #[test]
     fn metadata_execution_provenance_persists_resolved_fallback() {
-        let problem = fullmag_ir::ProblemIR::bootstrap_example();
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.problem_meta.runtime_metadata.insert(
+            "region_realization_revisions".to_string(),
+            serde_json::json!({
+                "complete": true,
+                "topology": 11,
+                "membership": 12,
+                "coefficients": 13,
+                "initial_state": 14,
+            }),
+        );
         let plan = test_fem_execution_plan();
         let unique_suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -3673,6 +3694,16 @@ mod tests {
         assert_eq!(fallback["original_engine"], "fem_native_gpu");
         assert_eq!(fallback["fallback_engine"], "fem_cpu_native");
         assert_eq!(fallback["reason"], "native_fem_gpu_unavailable");
+        assert_eq!(
+            metadata["region_realization_revisions"],
+            serde_json::json!({
+                "complete": true,
+                "topology": 11,
+                "membership": 12,
+                "coefficients": 13,
+                "initial_state": 14,
+            })
+        );
 
         fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
     }

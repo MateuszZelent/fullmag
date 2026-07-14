@@ -2968,6 +2968,37 @@ fn apply_current_fem_overrides(
     }
 }
 
+fn attach_region_realization_revisions(
+    problem: &mut ProblemIR,
+    precondition: Option<&RuntimeCommandPrecondition>,
+) {
+    let Some(precondition) = precondition else {
+        return;
+    };
+    let revisions = [
+        ("topology", precondition.region_topology_revision),
+        ("membership", precondition.region_membership_revision),
+        ("coefficients", precondition.region_coefficients_revision),
+        ("initial_state", precondition.region_initial_state_revision),
+    ];
+    if revisions.iter().all(|(_, revision)| revision.is_none()) {
+        return;
+    }
+    let complete = revisions.iter().all(|(_, revision)| revision.is_some());
+    let mut tuple = serde_json::Map::new();
+    tuple.insert("complete".to_string(), serde_json::Value::Bool(complete));
+    for (lane, revision) in revisions {
+        tuple.insert(
+            lane.to_string(),
+            revision.map_or(serde_json::Value::Null, serde_json::Value::from),
+        );
+    }
+    problem.problem_meta.runtime_metadata.insert(
+        "region_realization_revisions".to_string(),
+        serde_json::Value::Object(tuple),
+    );
+}
+
 fn renormalize_magnetization(values: &mut [[f64; 3]]) {
     for value in values {
         let norm = (value[0] * value[0] + value[1] * value[1] + value[2] * value[2]).sqrt();
@@ -7672,6 +7703,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 current_fem_hmax_override,
                 current_adaptive_runtime_state.as_ref(),
             );
+            attach_region_realization_revisions(&mut stage.ir, command.precondition.as_ref());
             if let Some(previous_final_magnetization) = continuation_magnetization.as_deref() {
                 ensure_frequency_response_relaxed_continuation_is_qualified(
                     &stage,
@@ -8888,6 +8920,7 @@ mod tests {
         apply_initial_magnetization_state_override, apply_live_step_update_to_workspace_state,
         apply_remeshed_problem_snapshot_to_stages, apply_stage_heartbeat_progress,
         attach_initial_magnetization_state_override_metadata, classify_wait_for_solve_command,
+        attach_region_realization_revisions,
         cumulative_rhs_evals, default_domain_region_markers, discard_active_paused_stage_execution,
         ensure_frequency_response_relaxed_continuation_is_qualified, execute_synthetic_stage,
         fem_gpu_memory_preflight_message, fem_interactive_dense_ram_estimate,
@@ -8904,7 +8937,7 @@ mod tests {
         wait_for_solve_prompt, wait_for_solve_should_block, wait_for_solve_supported,
         ActiveSequenceState, LiveProgressCadence, LoadedInitialMagnetizationState,
         SceneProblemPatch, WaitForSolveCommandAction, FEM_FREQUENCY_RESPONSE_PROGRESS_KEY,
-        LIVE_PROGRESS_PUBLISH_INTERVAL,
+        LIVE_PROGRESS_PUBLISH_INTERVAL, RuntimeCommandPrecondition,
     };
 
     #[test]
@@ -8922,6 +8955,55 @@ mod tests {
             Some(47)
         );
         assert_eq!(mesh_source_scene_revision(&serde_json::json!({})), None);
+    }
+
+    #[test]
+    fn attach_region_realization_revisions_persists_complete_consumed_tuple() {
+        let mut problem = ProblemIR::bootstrap_example();
+        attach_region_realization_revisions(
+            &mut problem,
+            Some(&RuntimeCommandPrecondition {
+                region_topology_revision: Some(11),
+                region_membership_revision: Some(12),
+                region_coefficients_revision: Some(13),
+                region_initial_state_revision: Some(14),
+                ..RuntimeCommandPrecondition::default()
+            }),
+        );
+
+        assert_eq!(
+            problem.problem_meta.runtime_metadata["region_realization_revisions"],
+            serde_json::json!({
+                "complete": true,
+                "topology": 11,
+                "membership": 12,
+                "coefficients": 13,
+                "initial_state": 14,
+            })
+        );
+    }
+
+    #[test]
+    fn attach_region_realization_revisions_marks_partial_tuple_incomplete() {
+        let mut problem = ProblemIR::bootstrap_example();
+        attach_region_realization_revisions(
+            &mut problem,
+            Some(&RuntimeCommandPrecondition {
+                region_membership_revision: Some(12),
+                ..RuntimeCommandPrecondition::default()
+            }),
+        );
+
+        assert_eq!(
+            problem.problem_meta.runtime_metadata["region_realization_revisions"],
+            serde_json::json!({
+                "complete": false,
+                "topology": null,
+                "membership": 12,
+                "coefficients": null,
+                "initial_state": null,
+            })
+        );
     }
 
     #[test]
