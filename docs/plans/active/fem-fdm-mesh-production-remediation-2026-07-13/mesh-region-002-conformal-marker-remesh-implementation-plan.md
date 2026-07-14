@@ -22,7 +22,7 @@
 ### Task 1: RED — marker reuse i coverage
 
 - [ ] Dodać fixture dwóch obiektów z regionem conformal, wymusić zmianę numeracji physical groups po remeshu i sprawdzić owner, element coverage oraz material assignment.
-- [ ] Uruchomić focused Python remesh i Rust orchestrator tests; oczekiwany RED: response nie niesie `object_region_markers` albo candidate zachowuje stare wartości.
+- [x] Dodać RED/GREEN coverage dla odpowiedzi CLI: świeże `object_region_markers` są emitowane przez Python i parsowane przez Rust; focused Python test przechodzi (`1 passed`). Rust test compilation pozostaje zablokowane przez istniejące brakujące pola w `live_workspace.rs`/`step_utils.rs`.
 
 ### Task 2: rozszerzyć typed bridge
 
@@ -35,14 +35,14 @@ struct SharedRemeshResponse {
 }
 ```
 
-- [ ] Dodać `object_regions` do requestu w `crates/fullmag-cli/src/python_bridge.rs` i przekazać je przez `remesh_cli.py` do shared-domain OCC pipeline.
-- [ ] Zbudować mapę markerów wyłącznie z nowego wyniku; zweryfikować unikalność, owner coverage i obecność każdego enabled conformal region przed commit.
-- [ ] Usunąć preservation starej mapy w orchestratorze; failure pozostawia całą poprzednią generation current.
+- [x] Dodać `object_regions` do requestu w `crates/fullmag-cli/src/python_bridge.rs` i przekazać je przez `remesh_cli.py` do shared-domain OCC pipeline.
+- [x] Zbudować mapę markerów wyłącznie z nowego wyniku; zweryfikować unikalność, owner coverage i obecność każdego enabled conformal region przed commit.
+- [x] Usunąć preservation starej mapy w orchestratorze; failure pozostawia całą poprzednią generation current.
 
 ### Task 3: planner i managed evidence
 
 - [ ] Powiązać lookup markera z topology hash oraz odrzucić marker z innej generation przed DG0 realization.
-- [ ] Uruchomić Python meshing/remesh tests, Rust planner/orchestrator tests i właściwy container-backed `just` gate FEM; zapisać before/after marker map i material element counts.
+- [ ] Uruchomić Python meshing/remesh tests, Rust planner/orchestrator tests i właściwy container-backed `just` gate FEM; zapisać before/after marker map i material element counts. Python focused test i `cargo check -p fullmag-cli --bin fullmag` przechodzą; test compilation i managed gate są nadal otwarte.
 - [ ] Commit: `git add packages/fullmag-py crates/fullmag-cli crates/fullmag-ir crates/fullmag-plan && git commit -m "fix(fem): rebuild conformal region markers on remesh"`.
 
 **Exit:** remesh nie może opublikować topologii bez kompletnej, świeżej i owner-aware mapy conformal markers.

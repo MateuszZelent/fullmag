@@ -2228,6 +2228,19 @@ class MeshScaffoldTests(unittest.TestCase):
             "geometries": [
                 {"kind": "box", "size": [1.0, 1.0, 1.0], "name": "left"},
             ],
+            "object_regions": [
+                {
+                    "region_id": "left:core",
+                    "owner_geometry_name": "left",
+                    "enabled": True,
+                    "realization_policy": "conformal",
+                    "shape": {
+                        "kind": "box",
+                        "center": [0.0, 0.0, 0.0],
+                        "size": [0.5, 0.5, 0.5],
+                    },
+                }
+            ],
         }
         stdout = io.StringIO()
 
@@ -2274,6 +2287,9 @@ class MeshScaffoldTests(unittest.TestCase):
                         )
                     },
                     used_size_field_kinds=[],
+                    object_region_markers=[
+                        {"geometry_name": "left:core", "marker": 2}
+                    ],
                     magnetic_submesh_signatures=[
                         {
                             "geometry_name": "left",
@@ -2291,9 +2307,17 @@ class MeshScaffoldTests(unittest.TestCase):
             remesh_cli_module.main()
 
         component_call.assert_called_once()
+        self.assertEqual(
+            component_call.call_args.kwargs["object_regions"][0]["region_id"],
+            "left:core",
+        )
         payload = json.loads(stdout.getvalue())
         self.assertEqual(payload["generation_mode"], "shared_domain_manual_remesh")
         self.assertEqual(payload["region_markers"][0]["geometry_name"], "left")
+        self.assertEqual(
+            payload["object_region_markers"],
+            [{"geometry_name": "left:core", "marker": 2}],
+        )
         self.assertEqual(
             payload["mesh_provenance"]["magnetic_submesh_signatures"][0]["digest"],
             "abc123",

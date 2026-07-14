@@ -1527,6 +1527,115 @@ fn default_domain_region_markers(
         .collect()
 }
 
+fn shared_domain_object_region_mesh_specs(problem: &ProblemIR) -> Result<Vec<serde_json::Value>> {
+    let mut owner_geometry_by_object = std::collections::BTreeMap::<&str, &str>::new();
+    for magnet in &problem.magnets {
+        let geometry_name = problem
+            .regions
+            .iter()
+            .find(|region| region.name == magnet.region)
+            .map(|region| region.geometry.as_str())
+            .ok_or_else(|| {
+                anyhow!(
+                    "object-region remesh cannot resolve magnet '{}' region '{}'",
+                    magnet.name,
+                    magnet.region
+                )
+            })?;
+        if let Some(previous) = owner_geometry_by_object.insert(&magnet.name, geometry_name) {
+            if previous != geometry_name {
+                bail!(
+                    "object '{}' resolves to multiple owner geometries ('{}' and '{}')",
+                    magnet.name,
+                    previous,
+                    geometry_name
+                );
+            }
+        }
+    }
+
+    problem
+        .object_regions
+        .iter()
+        .map(|region| {
+            let owner_geometry_name = owner_geometry_by_object
+                .get(region.owner_object.as_str())
+                .copied()
+                .ok_or_else(|| {
+                    anyhow!(
+                        "object-region '{}' references owner object '{}' without a current geometry",
+                        region.region_id,
+                        region.owner_object
+                    )
+                })?;
+            let mut payload = serde_json::to_value(region)
+                .context("failed to serialize object-region remesh payload")?;
+            let object = payload.as_object_mut().ok_or_else(|| {
+                anyhow!("serialized object-region '{}' is not a JSON object", region.region_id)
+            })?;
+            object.insert(
+                "owner_geometry_name".to_string(),
+                serde_json::Value::String(owner_geometry_name.to_string()),
+            );
+            Ok(payload)
+        })
+        .collect()
+}
+
+fn resolved_shared_domain_object_region_markers(
+    problem: &ProblemIR,
+    markers: &[fullmag_ir::FemDomainRegionMarkerIR],
+) -> Result<Vec<fullmag_ir::FemDomainRegionMarkerIR>> {
+    let expected = problem
+        .object_regions
+        .iter()
+        .filter(|region| {
+            region.enabled
+                && matches!(
+                    region.realization_policy,
+                    fullmag_ir::RegionRealizationPolicyIR::Conformal
+                )
+        })
+        .map(|region| region.region_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    if markers.len() != expected.len() {
+        bail!(
+            "shared-domain remesh returned {} object-region markers, expected {} conformal enabled regions",
+            markers.len(),
+            expected.len()
+        );
+    }
+    let mut seen_ids = std::collections::BTreeSet::new();
+    let mut seen_markers = std::collections::BTreeSet::new();
+    for marker in markers {
+        if marker.geometry_name.trim().is_empty() || marker.marker == 0 {
+            bail!(
+                "shared-domain remesh returned an invalid object-region marker {:?}",
+                marker
+            );
+        }
+        if !expected.contains(marker.geometry_name.as_str()) {
+            bail!(
+                "shared-domain remesh returned unexpected object-region marker '{}'",
+                marker.geometry_name
+            );
+        }
+        if !seen_ids.insert(marker.geometry_name.as_str()) {
+            bail!(
+                "shared-domain remesh returned duplicate object-region marker '{}'",
+                marker.geometry_name
+            );
+        }
+        if !seen_markers.insert(marker.marker) {
+            bail!(
+                "shared-domain remesh returned duplicate object-region marker value {}",
+                marker.marker
+            );
+        }
+    }
+    Ok(markers.to_vec())
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 struct SceneProblemPatch {
     #[serde(default)]
@@ -1583,6 +1692,7 @@ fn apply_remeshed_problem_snapshot_to_stages(
     hmax: f64,
     shared_domain_remesh: bool,
     region_markers: &[fullmag_ir::FemDomainRegionMarkerIR],
+    object_region_markers: &[fullmag_ir::FemDomainRegionMarkerIR],
     adaptive_runtime_state: Option<&serde_json::Value>,
 ) -> Result<()> {
     for stage in stages {
@@ -1601,6 +1711,8 @@ fn apply_remeshed_problem_snapshot_to_stages(
             } else {
                 region_markers.to_vec()
             };
+            let resolved_object_region_markers =
+                resolved_shared_domain_object_region_markers(&stage.ir, object_region_markers)?;
             let domain_asset = stage
                 .ir
                 .geometry_assets
@@ -1612,6 +1724,7 @@ fn apply_remeshed_problem_snapshot_to_stages(
                     )
                 })?;
             domain_asset.region_markers = resolved_region_markers;
+            domain_asset.object_region_markers = resolved_object_region_markers;
         }
     }
     Ok(())
@@ -3113,8 +3226,11 @@ fn execute_manual_interactive_remesh(
             })?;
             let declared_universe_value = serde_json::to_value(&declared_universe)
                 .context("failed to serialize declared universe for shared-domain remesh")?;
+            let object_region_mesh_specs =
+                shared_domain_object_region_mesh_specs(&remesh_problem_source)?;
             invoke_shared_domain_remesh_full(
                 &remesh_problem_source.geometry.entries,
+                &object_region_mesh_specs,
                 &declared_universe_value,
                 hmax,
                 plan.fe_order,
@@ -3154,7 +3270,11 @@ fn execute_manual_interactive_remesh(
                         } else {
                             remesh_result.region_markers.clone()
                         };
-                        remeshed_problem
+                        let object_region_markers = resolved_shared_domain_object_region_markers(
+                            &remeshed_problem,
+                            &remesh_result.object_region_markers,
+                        )?;
+                        let domain_asset = remeshed_problem
                             .geometry_assets
                             .as_mut()
                             .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
@@ -3162,8 +3282,9 @@ fn execute_manual_interactive_remesh(
                                 anyhow!(
                                     "shared-domain remesh produced a domain mesh but no fem_domain_mesh_asset is attached"
                                 )
-                            })?
-                            .region_markers = region_markers;
+                            })?;
+                        domain_asset.region_markers = region_markers;
+                        domain_asset.object_region_markers = object_region_markers;
                     }
                     let remeshed_plan = fullmag_plan::plan(&remeshed_problem)
                         .map_err(|error| anyhow!(error.to_string()))?;
@@ -3244,6 +3365,7 @@ fn execute_manual_interactive_remesh(
                     hmax,
                     shared_domain_remesh,
                     &remesh_result.region_markers,
+                    &remesh_result.object_region_markers,
                     current_adaptive_runtime_state.as_ref(),
                 )?;
                 refresh_materialized_stage_execution_plans(
@@ -5752,8 +5874,11 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 serde_json::to_value(&declared_universe).context(
                                     "failed to serialize declared universe for shared-domain auto-coarsen",
                                 )?;
+                            let object_region_mesh_specs =
+                                shared_domain_object_region_mesh_specs(&stages[0].ir)?;
                             invoke_shared_domain_remesh_full(
                                 &stages[0].ir.geometry.entries,
+                                &object_region_mesh_specs,
                                 &declared_universe_value,
                                 current_hmax,
                                 fe_order,
@@ -5826,6 +5951,23 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                                 )
                                             })?
                                             .region_markers = region_markers;
+                                        let object_region_markers =
+                                            resolved_shared_domain_object_region_markers(
+                                                &remeshed_problem,
+                                                &remesh_result.object_region_markers,
+                                            )?;
+                                        let domain_asset = remeshed_problem
+                                            .geometry_assets
+                                            .as_mut()
+                                            .and_then(|assets| {
+                                                assets.fem_domain_mesh_asset.as_mut()
+                                            })
+                                            .ok_or_else(|| {
+                                                anyhow!(
+                                                    "shared-domain auto-coarsen produced no attached fem_domain_mesh_asset"
+                                                )
+                                            })?;
+                                        domain_asset.object_region_markers = object_region_markers;
                                     }
                                     let remeshed_plan = fullmag_plan::plan(&remeshed_problem)
                                         .map_err(|error| anyhow!(error.to_string()))?;
@@ -5845,6 +5987,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                     current_hmax,
                                     shared_domain_remesh,
                                     &remesh_result.region_markers,
+                                    &remesh_result.object_region_markers,
                                     current_adaptive_runtime_state.as_ref(),
                                 )?;
                                 refresh_materialized_stage_execution_plans(
@@ -8709,7 +8852,8 @@ mod tests {
         initial_step_update, interactive_session_should_stay_alive,
         live_step_ingest_cached_m_preview_len, live_step_ingest_legacy_mag_len,
         live_step_ingest_preview_len, mesh_build_pipeline_status_json,
-        scripted_stage_execution_state, stage_allows_sampled_continuation_initial_state,
+        resolved_shared_domain_object_region_markers, scripted_stage_execution_state,
+        shared_domain_object_region_mesh_specs, stage_allows_sampled_continuation_initial_state,
         step_update_has_frequency_response_progress, user_cancelled_stage_completion,
         wait_for_solve_prompt, wait_for_solve_should_block, wait_for_solve_supported,
         ActiveSequenceState, LiveProgressCadence, LoadedInitialMagnetizationState,
@@ -8732,6 +8876,86 @@ mod tests {
 
         assert_eq!(cumulative_rhs_evals(&steps), 12);
     }
+
+    #[test]
+    fn shared_domain_remesh_specs_bind_regions_to_current_owner_geometry() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.geometry.entries = vec![GeometryEntryIR::Box {
+            name: "film_geometry".to_string(),
+            size: [1.0, 1.0, 1.0],
+        }];
+        problem.regions = vec![RegionIR {
+            name: "film_region".to_string(),
+            geometry: "film_geometry".to_string(),
+        }];
+        problem.magnets = vec![MagnetIR {
+            name: "film".to_string(),
+            region: "film_region".to_string(),
+            material: "mat".to_string(),
+            initial_magnetization: Some(InitialMagnetizationIR::Uniform {
+                value: [1.0, 0.0, 0.0],
+            }),
+        }];
+        problem.object_regions = vec![ObjectRegionIR {
+            region_id: "film:core".to_string(),
+            owner_object: "film".to_string(),
+            name: "core".to_string(),
+            shape: RegionShapeIR::Box {
+                size: [0.5, 0.5, 0.5],
+                center: [0.0, 0.0, 0.0],
+            },
+            frame: RegionFrameIR::Object,
+            enabled: true,
+            priority: 0,
+            mesh_policy: None,
+            material_overrides: Vec::new(),
+            texture_override: None,
+            realization_policy: RegionRealizationPolicyIR::Conformal,
+            material_transition: None,
+        }];
+
+        let specs = shared_domain_object_region_mesh_specs(&problem)
+            .expect("remesh specs should resolve owner geometry");
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0]["region_id"], "film:core");
+        assert_eq!(specs[0]["owner_geometry_name"], "film_geometry");
+    }
+
+    #[test]
+    fn shared_domain_remesh_markers_require_exact_current_conformal_coverage() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.object_regions = vec![ObjectRegionIR {
+            region_id: "film:core".to_string(),
+            owner_object: "film".to_string(),
+            name: "core".to_string(),
+            shape: RegionShapeIR::Box {
+                size: [1.0, 1.0, 1.0],
+                center: [0.0, 0.0, 0.0],
+            },
+            frame: RegionFrameIR::Object,
+            enabled: true,
+            priority: 0,
+            mesh_policy: None,
+            material_overrides: Vec::new(),
+            texture_override: None,
+            realization_policy: RegionRealizationPolicyIR::Conformal,
+            material_transition: None,
+        }];
+        let valid = vec![fullmag_ir::FemDomainRegionMarkerIR {
+            geometry_name: "film:core".to_string(),
+            marker: 2,
+        }];
+        assert_eq!(
+            resolved_shared_domain_object_region_markers(&problem, &valid).unwrap(),
+            valid
+        );
+        let stale = vec![fullmag_ir::FemDomainRegionMarkerIR {
+            geometry_name: "old:core".to_string(),
+            marker: 2,
+        }];
+        assert!(resolved_shared_domain_object_region_markers(&problem, &stale).is_err());
+    }
+
     use crate::args::ScriptCli;
     use crate::live_workspace::bootstrap_live_state;
     use crate::types::{
@@ -8748,8 +8972,8 @@ mod tests {
         FrequencyExcitationIR, FrequencyResponseNormalizationIR, FrequencySweepIR,
         GeometryAssetsIR, GeometryEntryIR, GeometryIR, GridDimensions, InitialMagnetizationIR,
         IntegratorChoice, MagnetIR, MagnetostaticBoundaryConditionIR, MaterialIR, MeshIR,
-        ProblemIR, ProblemMeta, RegionIR, SamplingIR, SpinWaveBoundaryConditionIR, StudyIR,
-        ValidationProfileIR,
+        ObjectRegionIR, ProblemIR, ProblemMeta, RegionFrameIR, RegionIR, RegionRealizationPolicyIR,
+        RegionShapeIR, SamplingIR, SpinWaveBoundaryConditionIR, StudyIR, ValidationProfileIR,
     };
     use fullmag_runner::{LivePreviewField, SequenceStage, StepStats, StepUpdate};
     use std::collections::BTreeMap;
@@ -10800,6 +11024,7 @@ mod tests {
             &new_mesh,
             3.5,
             true,
+            &[],
             &[],
             None,
         )

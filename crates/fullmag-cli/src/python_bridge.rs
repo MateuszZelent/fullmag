@@ -107,6 +107,8 @@ pub(crate) struct RemeshCliResponse {
     pub size_field_stats: Option<serde_json::Value>,
     #[serde(default)]
     pub region_markers: Vec<fullmag_ir::FemDomainRegionMarkerIR>,
+    #[serde(default)]
+    pub object_region_markers: Vec<fullmag_ir::FemDomainRegionMarkerIR>,
     /// Per-domain element quality, keyed by domain marker string (from Python).
     #[serde(default)]
     pub per_domain_quality: HashMap<String, RemeshPerDomainQuality>,
@@ -959,6 +961,7 @@ pub(crate) fn invoke_remesh_full(
 
 pub(crate) fn invoke_shared_domain_remesh_full(
     geometry_entries: &[fullmag_ir::GeometryEntryIR],
+    object_regions: &[serde_json::Value],
     declared_universe: &serde_json::Value,
     hmax: f64,
     fe_order: u32,
@@ -968,6 +971,7 @@ pub(crate) fn invoke_shared_domain_remesh_full(
     let payload = serde_json::json!({
         "mode": "shared_domain_manual_remesh",
         "geometries": geometry_entries,
+        "object_regions": object_regions,
         "declared_universe": declared_universe,
         "hmax": hmax,
         "order": fe_order,
@@ -1239,5 +1243,29 @@ mod tests {
         assert_eq!(artifact.kind, "fmmq.v1");
         assert_eq!(artifact.element_count, 1);
         assert_eq!(artifact.metrics, vec!["sicn", "gamma", "volume"]);
+    }
+
+    #[test]
+    fn parse_remesh_cli_response_preserves_fresh_object_region_markers() {
+        let stdout = serde_json::json!({
+            "mesh_name": "shared_mesh",
+            "nodes": [],
+            "elements": [],
+            "element_markers": [],
+            "boundary_faces": [],
+            "boundary_markers": [],
+            "quality": null,
+            "object_region_markers": [{"geometry_name": "film:core", "marker": 2}]
+        })
+        .to_string();
+
+        let parsed = parse_remesh_cli_response(stdout.as_bytes(), "test remesh output").unwrap();
+        assert_eq!(
+            parsed.object_region_markers,
+            vec![fullmag_ir::FemDomainRegionMarkerIR {
+                geometry_name: "film:core".to_string(),
+                marker: 2,
+            }]
+        );
     }
 }
