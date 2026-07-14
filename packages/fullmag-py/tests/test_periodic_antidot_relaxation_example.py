@@ -101,6 +101,10 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
         supercell_repeat: list[int] | None = None,
     ) -> None:
         scenario_metadata = metadata["periodic_antidot_relaxation"]
+        self.assertEqual(
+            metadata["study_universe"]["size"],
+            scenario_metadata["universe_size_m"],
+        )
         self.assertEqual(scenario_metadata["scenario"], scenario)
         self.assertEqual(
             scenario_metadata["exchange_coupled_across_periods"],

@@ -22,7 +22,7 @@ study.engine("fem")
 study.device("gpu", precision="double")
 study.universe(
     mode="manual",
-    size=(200e-9, 200e-9, 400e-9),
+    size=(200e-9, 200e-9, 90e-9),
     center=(0.0, 0.0, 0.0),
     padding=(0.0, 0.0, 0.0),
 )
