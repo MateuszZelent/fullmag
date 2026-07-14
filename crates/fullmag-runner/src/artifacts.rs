@@ -90,6 +90,50 @@ fn mesh_runtime_metadata(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Valu
                 .periodicity
                 .as_ref()
                 .and_then(|pbc| pbc.resolve_demag_boundary(fdm.enable_demag).ok()),
+            "transfer_boundary_policy": fdm
+                .periodicity
+                .as_ref()
+                .map(|pbc| {
+                    pbc.axes.map(|axis| match axis {
+                        fullmag_ir::AxisBoundary::Periodic => "periodic",
+                        fullmag_ir::AxisBoundary::Open => "open",
+                    })
+                })
+                .unwrap_or(["open"; 3]),
+            "periodic_axes": fdm
+                .periodicity
+                .as_ref()
+                .map(|pbc| {
+                    pbc.axes.map(|axis| matches!(axis, fullmag_ir::AxisBoundary::Periodic))
+                })
+                .unwrap_or([false; 3]),
+            "target_grid_fingerprint": fdm.grid_certificate.as_ref().map(|certificate| &certificate.grid_fingerprint),
+            "transfer_provenance": fdm.layers.iter().filter_map(|layer| {
+                let active_cells = layer
+                    .native_active_mask
+                    .as_ref()
+                    .map(|mask| mask.iter().filter(|is_active| **is_active).count() as u64)
+                    .unwrap_or_else(|| {
+                        u64::from(layer.native_grid[0])
+                            * u64::from(layer.native_grid[1])
+                            * u64::from(layer.native_grid[2])
+                    });
+                let certificate = fullmag_ir::FdmGridCertificateIR::new(
+                    layer.native_origin,
+                    layer.native_grid,
+                    layer.native_cell_size,
+                    active_cells,
+                    1,
+                )
+                .ok()?;
+                Some(serde_json::json!({
+                    "magnet_name": layer.magnet_name,
+                    "transfer_kind": layer.transfer_kind,
+                    "source_grid_fingerprint": certificate.grid_fingerprint,
+                    "target_grid_fingerprint": fdm.grid_certificate.as_ref().map(|value| value.grid_fingerprint.clone()),
+                    "periodic_axes": fdm.periodicity.as_ref().map(|pbc| pbc.axes.map(|axis| matches!(axis, fullmag_ir::AxisBoundary::Periodic))).unwrap_or([false; 3]),
+                }))
+            }).collect::<Vec<_>>(),
             "grid_cells": fdm.common_cells,
         }),
         BackendPlanIR::Fem(fem) => serde_json::json!({
@@ -3093,6 +3137,45 @@ mod tests {
             },
             provenance: ProvenancePlanIR { notes: Vec::new() },
         }
+    }
+
+    #[test]
+    fn fdm_multilayer_metadata_preserves_transfer_policy_and_grid_identity() {
+        let mut plan = test_multilayer_execution_plan();
+        let BackendPlanIR::FdmMultilayer(multilayer) = &mut plan.backend_plan else {
+            panic!("expected multilayer FDM plan");
+        };
+        multilayer.periodicity = Some(fullmag_ir::FdmPeriodicityIR {
+            axes: [
+                fullmag_ir::AxisBoundary::Periodic,
+                fullmag_ir::AxisBoundary::Open,
+                fullmag_ir::AxisBoundary::Periodic,
+            ],
+            demag: fullmag_ir::FdmDemagPeriodicityIR::TruncatedImages,
+            image_counts: Some([2, 0, 2]),
+        });
+        multilayer.grid_certificate = Some(
+            fullmag_ir::FdmGridCertificateIR::new(
+                [0.0, 0.0, 0.0],
+                multilayer.common_cells,
+                [2e-9, 2e-9, 1e-9],
+                4,
+                1024,
+            )
+            .expect("multilayer target grid certificate should be valid"),
+        );
+
+        let metadata = mesh_runtime_metadata(&plan);
+        assert_eq!(
+            metadata["transfer_boundary_policy"],
+            serde_json::json!(["periodic", "open", "periodic"])
+        );
+        assert_eq!(metadata["periodic_axes"], serde_json::json!([true, false, true]));
+        assert!(metadata["target_grid_fingerprint"].as_str().is_some());
+        assert_eq!(metadata["transfer_provenance"].as_array().unwrap().len(), 2);
+        assert!(metadata["transfer_provenance"][0]["source_grid_fingerprint"]
+            .as_str()
+            .is_some());
     }
 
     fn test_fem_execution_plan() -> ExecutionPlanIR {
