@@ -29,7 +29,11 @@ pub use self_kernel::{
     compute_exact_self_kernel_f32,
 };
 pub use shifted_kernel::{compute_shifted_kernel, compute_shifted_kernel_f32};
-pub use transfer::{pull_h, pull_h_f32, push_m, push_m_f32};
+pub use transfer::{
+    pull_h, pull_h_f32, pull_h_f32_with_boundary_policy, pull_h_with_boundary_policy, push_m,
+    push_m_f32, push_m_f32_with_boundary_policy, push_m_with_boundary_policy,
+    TransferBoundaryPolicy,
+};
 pub use types::{
     KernelReuseKey, TensorDemagKernel, TensorDemagKernelF32, TransferKind, VectorFieldFft,
     VectorFieldFftF32,

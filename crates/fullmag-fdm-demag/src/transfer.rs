@@ -6,6 +6,36 @@
 //!
 //! V1 design: simple axis-aligned box grids only.
 
+/// Resolved boundary policy consumed by native/convolution-grid transfer.
+///
+/// This is deliberately backend-neutral: the planner/runner converts the
+/// canonical FDM periodicity axes into this compact policy before invoking
+/// either transfer direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TransferBoundaryPolicy {
+    pub periodic_axes: [bool; 3],
+}
+
+impl TransferBoundaryPolicy {
+    pub const OPEN: Self = Self {
+        periodic_axes: [false; 3],
+    };
+
+    pub const fn from_periodic_axes(periodic_axes: [bool; 3]) -> Self {
+        Self { periodic_axes }
+    }
+
+    pub const fn is_periodic(self, axis: usize) -> bool {
+        self.periodic_axes[axis]
+    }
+}
+
+impl Default for TransferBoundaryPolicy {
+    fn default() -> Self {
+        Self::OPEN
+    }
+}
+
 /// Push magnetization from native grid to convolution grid.
 ///
 /// For coarsening (convolution cells larger than native cells):
@@ -21,6 +51,25 @@ pub fn push_m(
     native_cell_size: [f64; 3],
     conv_cells: [usize; 3],
     conv_cell_size: [f64; 3],
+) -> Vec<[f64; 3]> {
+    push_m_with_boundary_policy(
+        native_m,
+        native_cells,
+        native_cell_size,
+        conv_cells,
+        conv_cell_size,
+        TransferBoundaryPolicy::OPEN,
+    )
+}
+
+/// Push magnetization with an explicit resolved boundary policy.
+pub fn push_m_with_boundary_policy(
+    native_m: &[[f64; 3]],
+    native_cells: [usize; 3],
+    native_cell_size: [f64; 3],
+    conv_cells: [usize; 3],
+    conv_cell_size: [f64; 3],
+    boundary_policy: TransferBoundaryPolicy,
 ) -> Vec<[f64; 3]> {
     let conv_total = conv_cells[0] * conv_cells[1] * conv_cells[2];
 
@@ -59,10 +108,25 @@ pub fn push_m(
                 let ny_hi = (c_hi[1] / native_cell_size[1]).ceil() as isize;
                 let nz_lo = (c_lo[2] / native_cell_size[2]).floor() as isize;
                 let nz_hi = (c_hi[2] / native_cell_size[2]).ceil() as isize;
+                let nx_range = if boundary_policy.is_periodic(0) {
+                    0..native_cells[0] as isize
+                } else {
+                    nx_lo.max(0)..nx_hi.min(native_cells[0] as isize)
+                };
+                let ny_range = if boundary_policy.is_periodic(1) {
+                    0..native_cells[1] as isize
+                } else {
+                    ny_lo.max(0)..ny_hi.min(native_cells[1] as isize)
+                };
+                let nz_range = if boundary_policy.is_periodic(2) {
+                    0..native_cells[2] as isize
+                } else {
+                    nz_lo.max(0)..nz_hi.min(native_cells[2] as isize)
+                };
 
-                for nz in nz_lo..nz_hi {
-                    for ny in ny_lo..ny_hi {
-                        for nx in nx_lo..nx_hi {
+                for nz in nz_range {
+                    for ny in ny_range.clone() {
+                        for nx in nx_range.clone() {
                             if nx < 0
                                 || ny < 0
                                 || nz < 0
@@ -88,10 +152,28 @@ pub fn push_m(
                                 n_lo[2] + native_cell_size[2],
                             ];
 
-                            let overlap_vol = (c_hi[0].min(n_hi[0]) - c_lo[0].max(n_lo[0]))
-                                .max(0.0)
-                                * (c_hi[1].min(n_hi[1]) - c_lo[1].max(n_lo[1])).max(0.0)
-                                * (c_hi[2].min(n_hi[2]) - c_lo[2].max(n_lo[2])).max(0.0);
+                            let overlap_vol = overlap_length(
+                                c_lo[0],
+                                c_hi[0],
+                                n_lo[0],
+                                n_hi[0],
+                                native_cells[0] as f64 * native_cell_size[0],
+                                boundary_policy.is_periodic(0),
+                            ) * overlap_length(
+                                c_lo[1],
+                                c_hi[1],
+                                n_lo[1],
+                                n_hi[1],
+                                native_cells[1] as f64 * native_cell_size[1],
+                                boundary_policy.is_periodic(1),
+                            ) * overlap_length(
+                                c_lo[2],
+                                c_hi[2],
+                                n_lo[2],
+                                n_hi[2],
+                                native_cells[2] as f64 * native_cell_size[2],
+                                boundary_policy.is_periodic(2),
+                            );
 
                             if overlap_vol > 0.0 {
                                 let n_idx = nz * native_cells[1] * native_cells[0]
@@ -128,6 +210,25 @@ pub fn pull_h(
     native_cells: [usize; 3],
     native_cell_size: [f64; 3],
 ) -> Vec<[f64; 3]> {
+    pull_h_with_boundary_policy(
+        conv_h,
+        conv_cells,
+        conv_cell_size,
+        native_cells,
+        native_cell_size,
+        TransferBoundaryPolicy::OPEN,
+    )
+}
+
+/// Pull demagnetization field with an explicit resolved boundary policy.
+pub fn pull_h_with_boundary_policy(
+    conv_h: &[[f64; 3]],
+    conv_cells: [usize; 3],
+    conv_cell_size: [f64; 3],
+    native_cells: [usize; 3],
+    native_cell_size: [f64; 3],
+    boundary_policy: TransferBoundaryPolicy,
+) -> Vec<[f64; 3]> {
     let native_total = native_cells[0] * native_cells[1] * native_cells[2];
 
     // Identity fast path
@@ -154,7 +255,14 @@ pub fn pull_h(
                 let fy = center[1] / conv_cell_size[1] - 0.5;
                 let fz = center[2] / conv_cell_size[2] - 0.5;
 
-                native_h[n_idx] = trilinear_sample(conv_h, conv_cells, fx, fy, fz);
+                native_h[n_idx] = trilinear_sample_with_boundary_policy(
+                    conv_h,
+                    conv_cells,
+                    fx,
+                    fy,
+                    fz,
+                    boundary_policy,
+                );
             }
         }
     }
@@ -162,8 +270,14 @@ pub fn pull_h(
     native_h
 }
 
-/// Trilinear interpolation on a 3D grid.
-fn trilinear_sample(data: &[[f64; 3]], cells: [usize; 3], fx: f64, fy: f64, fz: f64) -> [f64; 3] {
+fn trilinear_sample_with_boundary_policy(
+    data: &[[f64; 3]],
+    cells: [usize; 3],
+    fx: f64,
+    fy: f64,
+    fz: f64,
+    boundary_policy: TransferBoundaryPolicy,
+) -> [f64; 3] {
     let x0 = fx.floor() as isize;
     let y0 = fy.floor() as isize;
     let z0 = fz.floor() as isize;
@@ -177,9 +291,9 @@ fn trilinear_sample(data: &[[f64; 3]], cells: [usize; 3], fx: f64, fy: f64, fz: 
     for dz in 0..2 {
         for dy in 0..2 {
             for dx in 0..2 {
-                let ix = (x0 + dx as isize).clamp(0, cells[0] as isize - 1) as usize;
-                let iy = (y0 + dy as isize).clamp(0, cells[1] as isize - 1) as usize;
-                let iz = (z0 + dz as isize).clamp(0, cells[2] as isize - 1) as usize;
+                let ix = transfer_index(x0 + dx as isize, cells[0], boundary_policy.is_periodic(0));
+                let iy = transfer_index(y0 + dy as isize, cells[1], boundary_policy.is_periodic(1));
+                let iz = transfer_index(z0 + dz as isize, cells[2], boundary_policy.is_periodic(2));
 
                 let w = if dx == 0 { 1.0 - wx } else { wx }
                     * if dy == 0 { 1.0 - wy } else { wy }
@@ -197,6 +311,31 @@ fn trilinear_sample(data: &[[f64; 3]], cells: [usize; 3], fx: f64, fy: f64, fz: 
     result
 }
 
+fn transfer_index(i: isize, n: usize, periodic: bool) -> usize {
+    if n == 0 {
+        return 0;
+    }
+    if periodic {
+        i.rem_euclid(n as isize) as usize
+    } else {
+        i.clamp(0, n as isize - 1) as usize
+    }
+}
+
+fn overlap_length(c_lo: f64, c_hi: f64, n_lo: f64, n_hi: f64, period: f64, periodic: bool) -> f64 {
+    if !periodic {
+        return (c_hi.min(n_hi) - c_lo.max(n_lo)).max(0.0);
+    }
+    let first = (c_lo / period).floor() as isize - 1;
+    let last = (c_hi / period).ceil() as isize + 1;
+    (first..=last)
+        .map(|image| {
+            let shift = image as f64 * period;
+            (c_hi.min(n_hi + shift) - c_lo.max(n_lo + shift)).max(0.0)
+        })
+        .sum()
+}
+
 /// `f32` variant of [`push_m`].
 pub fn push_m_f32(
     native_m: &[[f32; 3]],
@@ -204,6 +343,25 @@ pub fn push_m_f32(
     native_cell_size: [f64; 3],
     conv_cells: [usize; 3],
     conv_cell_size: [f64; 3],
+) -> Vec<[f32; 3]> {
+    push_m_f32_with_boundary_policy(
+        native_m,
+        native_cells,
+        native_cell_size,
+        conv_cells,
+        conv_cell_size,
+        TransferBoundaryPolicy::OPEN,
+    )
+}
+
+/// `f32` variant of [`push_m_with_boundary_policy`].
+pub fn push_m_f32_with_boundary_policy(
+    native_m: &[[f32; 3]],
+    native_cells: [usize; 3],
+    native_cell_size: [f64; 3],
+    conv_cells: [usize; 3],
+    conv_cell_size: [f64; 3],
+    boundary_policy: TransferBoundaryPolicy,
 ) -> Vec<[f32; 3]> {
     let conv_total = conv_cells[0] * conv_cells[1] * conv_cells[2];
 
@@ -237,10 +395,25 @@ pub fn push_m_f32(
                 let ny_hi = (c_hi[1] / native_cell_size[1]).ceil() as isize;
                 let nz_lo = (c_lo[2] / native_cell_size[2]).floor() as isize;
                 let nz_hi = (c_hi[2] / native_cell_size[2]).ceil() as isize;
+                let nx_range = if boundary_policy.is_periodic(0) {
+                    0..native_cells[0] as isize
+                } else {
+                    nx_lo.max(0)..nx_hi.min(native_cells[0] as isize)
+                };
+                let ny_range = if boundary_policy.is_periodic(1) {
+                    0..native_cells[1] as isize
+                } else {
+                    ny_lo.max(0)..ny_hi.min(native_cells[1] as isize)
+                };
+                let nz_range = if boundary_policy.is_periodic(2) {
+                    0..native_cells[2] as isize
+                } else {
+                    nz_lo.max(0)..nz_hi.min(native_cells[2] as isize)
+                };
 
-                for nz in nz_lo..nz_hi {
-                    for ny in ny_lo..ny_hi {
-                        for nx in nx_lo..nx_hi {
+                for nz in nz_range {
+                    for ny in ny_range.clone() {
+                        for nx in nx_range.clone() {
                             if nx < 0
                                 || ny < 0
                                 || nz < 0
@@ -265,10 +438,28 @@ pub fn push_m_f32(
                                 n_lo[2] + native_cell_size[2],
                             ];
 
-                            let overlap_vol = (c_hi[0].min(n_hi[0]) - c_lo[0].max(n_lo[0]))
-                                .max(0.0)
-                                * (c_hi[1].min(n_hi[1]) - c_lo[1].max(n_lo[1])).max(0.0)
-                                * (c_hi[2].min(n_hi[2]) - c_lo[2].max(n_lo[2])).max(0.0);
+                            let overlap_vol = overlap_length(
+                                c_lo[0],
+                                c_hi[0],
+                                n_lo[0],
+                                n_hi[0],
+                                native_cells[0] as f64 * native_cell_size[0],
+                                boundary_policy.is_periodic(0),
+                            ) * overlap_length(
+                                c_lo[1],
+                                c_hi[1],
+                                n_lo[1],
+                                n_hi[1],
+                                native_cells[1] as f64 * native_cell_size[1],
+                                boundary_policy.is_periodic(1),
+                            ) * overlap_length(
+                                c_lo[2],
+                                c_hi[2],
+                                n_lo[2],
+                                n_hi[2],
+                                native_cells[2] as f64 * native_cell_size[2],
+                                boundary_policy.is_periodic(2),
+                            );
 
                             if overlap_vol > 0.0 {
                                 let n_idx = nz * native_cells[1] * native_cells[0]
@@ -306,6 +497,25 @@ pub fn pull_h_f32(
     native_cells: [usize; 3],
     native_cell_size: [f64; 3],
 ) -> Vec<[f32; 3]> {
+    pull_h_f32_with_boundary_policy(
+        conv_h,
+        conv_cells,
+        conv_cell_size,
+        native_cells,
+        native_cell_size,
+        TransferBoundaryPolicy::OPEN,
+    )
+}
+
+/// `f32` variant of [`pull_h_with_boundary_policy`].
+pub fn pull_h_f32_with_boundary_policy(
+    conv_h: &[[f32; 3]],
+    conv_cells: [usize; 3],
+    conv_cell_size: [f64; 3],
+    native_cells: [usize; 3],
+    native_cell_size: [f64; 3],
+    boundary_policy: TransferBoundaryPolicy,
+) -> Vec<[f32; 3]> {
     let native_total = native_cells[0] * native_cells[1] * native_cells[2];
 
     if native_cells == conv_cells {
@@ -327,7 +537,14 @@ pub fn pull_h_f32(
                 let fy = center[1] / conv_cell_size[1] - 0.5;
                 let fz = center[2] / conv_cell_size[2] - 0.5;
 
-                native_h[n_idx] = trilinear_sample_f32(conv_h, conv_cells, fx, fy, fz);
+                native_h[n_idx] = trilinear_sample_f32_with_boundary_policy(
+                    conv_h,
+                    conv_cells,
+                    fx,
+                    fy,
+                    fz,
+                    boundary_policy,
+                );
             }
         }
     }
@@ -335,12 +552,13 @@ pub fn pull_h_f32(
     native_h
 }
 
-fn trilinear_sample_f32(
+fn trilinear_sample_f32_with_boundary_policy(
     data: &[[f32; 3]],
     cells: [usize; 3],
     fx: f64,
     fy: f64,
     fz: f64,
+    boundary_policy: TransferBoundaryPolicy,
 ) -> [f32; 3] {
     let x0 = fx.floor() as isize;
     let y0 = fy.floor() as isize;
@@ -355,9 +573,9 @@ fn trilinear_sample_f32(
     for dz in 0..2 {
         for dy in 0..2 {
             for dx in 0..2 {
-                let ix = (x0 + dx as isize).clamp(0, cells[0] as isize - 1) as usize;
-                let iy = (y0 + dy as isize).clamp(0, cells[1] as isize - 1) as usize;
-                let iz = (z0 + dz as isize).clamp(0, cells[2] as isize - 1) as usize;
+                let ix = transfer_index(x0 + dx as isize, cells[0], boundary_policy.is_periodic(0));
+                let iy = transfer_index(y0 + dy as isize, cells[1], boundary_policy.is_periodic(1));
+                let iz = transfer_index(z0 + dz as isize, cells[2], boundary_policy.is_periodic(2));
 
                 let w = if dx == 0 { 1.0 - wx } else { wx }
                     * if dy == 0 { 1.0 - wy } else { wy }
@@ -418,5 +636,96 @@ mod tests {
         assert!((pushed[0][0] - 2.0).abs() < 1e-12);
         // Top-right conv cell should stay [1, 0, 0]
         assert!((pushed[3][0] - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn pull_h_mixed_boundary_policy_wraps_only_periodic_axis() {
+        let conv_cells = [2, 2, 1];
+        let native_cells = [1, 1, 1];
+        let conv_size = [1.0, 1.0, 1.0];
+        let native_size = [0.5, 0.5, 0.5];
+        let conv_h = vec![
+            [10.0, 0.0, 0.0],
+            [20.0, 0.0, 0.0],
+            [100.0, 0.0, 0.0],
+            [100.0, 0.0, 0.0],
+        ];
+
+        let periodic_x = pull_h_with_boundary_policy(
+            &conv_h,
+            conv_cells,
+            conv_size,
+            native_cells,
+            native_size,
+            TransferBoundaryPolicy::from_periodic_axes([true, false, false]),
+        );
+        assert!((periodic_x[0][0] - 12.5).abs() < 1e-12);
+
+        let periodic_y = pull_h_with_boundary_policy(
+            &conv_h,
+            conv_cells,
+            conv_size,
+            native_cells,
+            native_size,
+            TransferBoundaryPolicy::from_periodic_axes([false, true, false]),
+        );
+        assert!((periodic_y[0][0] - 32.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn pull_h_f32_mixed_boundary_policy_wraps_periodic_axis() {
+        let conv_h = vec![
+            [10.0f32, 0.0, 0.0],
+            [20.0f32, 0.0, 0.0],
+            [100.0f32, 0.0, 0.0],
+            [100.0f32, 0.0, 0.0],
+        ];
+        let result = pull_h_f32_with_boundary_policy(
+            &conv_h,
+            [2, 2, 1],
+            [1.0, 1.0, 1.0],
+            [1, 1, 1],
+            [0.5, 0.5, 0.5],
+            TransferBoundaryPolicy::from_periodic_axes([true, false, false]),
+        );
+        assert!((result[0][0] - 12.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn push_m_wraps_periodic_source_into_extended_target() {
+        let native_m = vec![[7.0, 0.0, 0.0]];
+        let open = push_m_with_boundary_policy(
+            &native_m,
+            [1, 1, 1],
+            [1.0, 1.0, 1.0],
+            [3, 1, 1],
+            [0.5, 1.0, 1.0],
+            TransferBoundaryPolicy::OPEN,
+        );
+        assert_eq!(open[2][0], 0.0);
+
+        let periodic = push_m_with_boundary_policy(
+            &native_m,
+            [1, 1, 1],
+            [1.0, 1.0, 1.0],
+            [3, 1, 1],
+            [0.5, 1.0, 1.0],
+            TransferBoundaryPolicy::from_periodic_axes([true, false, false]),
+        );
+        assert!((periodic[2][0] - 7.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn push_m_f32_wraps_periodic_source_into_extended_target() {
+        let native_m = vec![[7.0f32, 0.0, 0.0]];
+        let periodic = push_m_f32_with_boundary_policy(
+            &native_m,
+            [1, 1, 1],
+            [1.0, 1.0, 1.0],
+            [3, 1, 1],
+            [0.5, 1.0, 1.0],
+            TransferBoundaryPolicy::from_periodic_axes([true, false, false]),
+        );
+        assert!((periodic[2][0] - 7.0).abs() < 1e-5);
     }
 }

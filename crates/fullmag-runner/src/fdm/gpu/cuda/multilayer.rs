@@ -15,7 +15,7 @@ use fullmag_engine::{
     ExchangeLlgProblem, ExchangeLlgState, GridShape, LlgConfig, MaterialParameters,
     UniaxialAnisotropyConfig, MU0,
 };
-use fullmag_fdm_demag::{compute_exact_self_kernel, compute_shifted_kernel};
+use fullmag_fdm_demag::{compute_exact_self_kernel, compute_shifted_kernel, TransferBoundaryPolicy};
 use fullmag_ir::{
     ExchangeBoundaryCondition, ExecutionPrecision, FdmLayerPlanIR, FdmMaterialIR,
     FdmMultilayerPlanIR, FdmPlanIR, GridDimensions, IntegratorChoice, OutputIR,
@@ -48,6 +48,7 @@ struct LayerContext {
     convolution_grid: [usize; 3],
     convolution_cell_size: [f64; 3],
     needs_transfer: bool,
+    transfer_boundary_policy: TransferBoundaryPolicy,
     problem: ExchangeLlgProblem,
 }
 
@@ -313,6 +314,16 @@ fn build_contexts_and_states(
             ],
             convolution_cell_size: layer.convolution_cell_size,
             needs_transfer: layer.transfer_kind != "identity",
+            transfer_boundary_policy: TransferBoundaryPolicy::from_periodic_axes(
+                plan.periodicity
+                    .as_ref()
+                    .map(|periodicity| {
+                        periodicity.axes.map(|axis| {
+                            matches!(axis, fullmag_ir::AxisBoundary::Periodic)
+                        })
+                    })
+                    .unwrap_or([false; 3]),
+            ),
             problem,
         });
     }
@@ -1872,6 +1883,7 @@ fn compute_demag_fields(
             conv_grid: context.convolution_grid,
             conv_cell_size: context.convolution_cell_size,
             needs_transfer: context.needs_transfer,
+            transfer_boundary_policy: context.transfer_boundary_policy,
         })
         .collect::<Vec<_>>();
     runtime.compute_demag_fields(&mut layers);
@@ -2265,6 +2277,7 @@ fn compute_demag_fields_single_from_m(
             conv_grid: context.convolution_grid,
             conv_cell_size: context.convolution_cell_size,
             needs_transfer: context.needs_transfer,
+            transfer_boundary_policy: context.transfer_boundary_policy,
         })
         .collect::<Vec<_>>();
     runtime.compute_demag_fields(&mut layers);
