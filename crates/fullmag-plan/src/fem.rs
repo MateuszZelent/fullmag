@@ -2354,9 +2354,11 @@ pub(crate) fn plan_fem(
 
     if periodic_mesh_certificate_v6.is_some() {
         periodic_mesh_certificate_v6 = Some(
-            mesh.periodic_mesh_certificate_v6_with_material_fields(
+            mesh.periodic_mesh_certificate_v6_with_material_and_nodal_fields(
                 ms_element_field.as_deref(),
                 a_element_field.as_deref(),
+                material.ms_field.as_deref(),
+                material.a_field.as_deref(),
             )
             .map(|certificate| {
                 fullmag_ir::MeshIR::periodic_certificate_with_region_identity(

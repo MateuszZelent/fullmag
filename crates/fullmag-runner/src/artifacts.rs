@@ -1412,9 +1412,15 @@ fn write_periodic_pairs_artifact(
     }
 
     let mesh_topology_fingerprint = mesh.topology_fingerprint_v6();
-    let (ms_element_field, a_element_field) = periodic_material_fields(plan);
+    let (ms_element_field, a_element_field, ms_nodal_field, a_nodal_field) =
+        periodic_material_fields(plan);
     let certificate = mesh
-        .periodic_mesh_certificate_v6_with_material_fields(ms_element_field, a_element_field)
+        .periodic_mesh_certificate_v6_with_material_and_nodal_fields(
+            ms_element_field,
+            a_element_field,
+            ms_nodal_field,
+            a_nodal_field,
+        )
         .and_then(|certificate| validate_periodic_certificate_identity(mesh, certificate));
     let certificate_status = certificate
         .as_ref()
@@ -1888,16 +1894,23 @@ fn periodic_mesh(plan: &fullmag_ir::ExecutionPlanIR) -> Option<&fullmag_ir::Mesh
 
 fn periodic_material_fields(
     plan: &fullmag_ir::ExecutionPlanIR,
-) -> (Option<&[f64]>, Option<&[f64]>) {
+) -> (
+    Option<&[f64]>,
+    Option<&[f64]>,
+    Option<&[f64]>,
+    Option<&[f64]>,
+) {
     match &plan.backend_plan {
         BackendPlanIR::Fem(fem) => (
             fem.ms_element_field.as_deref(),
             fem.a_element_field.as_deref(),
+            fem.material.ms_field.as_deref(),
+            fem.material.a_field.as_deref(),
         ),
         BackendPlanIR::Fdm(_)
         | BackendPlanIR::FdmMultilayer(_)
         | BackendPlanIR::FemEigen(_)
-        | BackendPlanIR::FemFrequencyResponse(_) => (None, None),
+        | BackendPlanIR::FemFrequencyResponse(_) => (None, None, None, None),
     }
 }
 

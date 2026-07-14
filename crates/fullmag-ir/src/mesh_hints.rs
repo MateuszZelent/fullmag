@@ -363,12 +363,28 @@ fn marker_map_fingerprint(mesh: &MeshIR) -> String {
 }
 
 fn material_realization_fingerprint(
+  ms_element_field: Option<&[f64]>,
+  a_element_field: Option<&[f64]>,
+) -> String {
+    material_realization_fingerprint_with_nodal(
+        ms_element_field,
+        a_element_field,
+        None,
+        None,
+    )
+}
+
+fn material_realization_fingerprint_with_nodal(
     ms_element_field: Option<&[f64]>,
     a_element_field: Option<&[f64]>,
+    ms_nodal_field: Option<&[f64]>,
+    a_nodal_field: Option<&[f64]>,
 ) -> String {
     let payload = serde_json::json!({
-        "ms_element_field": ms_element_field,
-        "a_element_field": a_element_field,
+      "ms_element_field": ms_element_field,
+      "a_element_field": a_element_field,
+      "ms_nodal_field": ms_nodal_field,
+      "a_nodal_field": a_nodal_field,
     });
     let encoded = serde_json::to_vec(&payload).unwrap_or_default();
     format!("sha256:{:x}", Sha256::digest(encoded))
@@ -451,6 +467,46 @@ fn seam_material_residual(
         }
     }
     if errors.is_empty() { Ok(residual) } else { Err(errors) }
+}
+
+fn seam_nodal_material_residual(
+    mesh: &MeshIR,
+    certificate: &PeriodicMeshCertificateV6IR,
+    ms_nodal_field: Option<&[f64]>,
+    a_nodal_field: Option<&[f64]>,
+) -> Result<f64, Vec<String>> {
+    let mut residual = 0.0_f64;
+    let mut errors = Vec::new();
+    for axis in &certificate.axis_pairs {
+        for pair in mesh
+            .periodic_node_pairs
+            .iter()
+            .filter(|pair| pair.pair_id == axis.pair_id)
+        {
+            for (label, field) in [
+                ("Ms", ms_nodal_field),
+                ("A", a_nodal_field),
+            ] {
+                let Some(field) = field else { continue };
+                let (Some(left), Some(right)) = (
+                    field.get(pair.node_a as usize),
+                    field.get(pair.node_b as usize),
+                ) else {
+                    errors.push(format!(
+                        "periodic material certificate '{}' {} nodal field length does not cover paired nodes",
+                        axis.pair_id, label
+                    ));
+                    continue;
+                };
+                residual = residual.max(normalized_material_residual(*left, *right));
+            }
+        }
+    }
+    if errors.is_empty() {
+        Ok(residual)
+    } else {
+        Err(errors)
+    }
 }
 
 fn euclidean_residual(actual: [f64; 3], expected: [f64; 3]) -> f64 {
@@ -1038,20 +1094,50 @@ impl MeshIR {
         ms_element_field: Option<&[f64]>,
         a_element_field: Option<&[f64]>,
     ) -> Result<PeriodicMeshCertificateV6IR, Vec<String>> {
+        self.periodic_mesh_certificate_v6_with_material_and_nodal_fields(
+            ms_element_field,
+            a_element_field,
+            None,
+            None,
+        )
+    }
+
+    /// Extend the v6 certificate with both element-DG0 and nodal-P1 material
+    /// realizations. Every published nodal coefficient must agree across the
+    /// explicit periodic node bijection before a seam can be accepted.
+    pub fn periodic_mesh_certificate_v6_with_material_and_nodal_fields(
+        &self,
+        ms_element_field: Option<&[f64]>,
+        a_element_field: Option<&[f64]>,
+        ms_nodal_field: Option<&[f64]>,
+        a_nodal_field: Option<&[f64]>,
+    ) -> Result<PeriodicMeshCertificateV6IR, Vec<String>> {
         let mut certificate = self.periodic_mesh_certificate_v6()?;
-        let residual = seam_material_residual(
+        let element_residual = seam_material_residual(
             self,
             &certificate,
             ms_element_field,
             a_element_field,
         )?;
+        let nodal_residual = seam_nodal_material_residual(
+            self,
+            &certificate,
+            ms_nodal_field,
+            a_nodal_field,
+        )?;
+        let residual = element_residual.max(nodal_residual);
         if residual > 1.0e-12 {
             return Err(vec![format!(
                 "periodic material certificate seam coefficient residual {residual:.3e} exceeds tolerance 1.000e-12"
             )]);
         }
         certificate.material_realization_fingerprint =
-            material_realization_fingerprint(ms_element_field, a_element_field);
+            material_realization_fingerprint_with_nodal(
+                ms_element_field,
+                a_element_field,
+                ms_nodal_field,
+                a_nodal_field,
+            );
         certificate.max_material_residual = residual;
         Ok(certificate)
     }
@@ -1710,6 +1796,37 @@ mod mesh_validation_tests {
                 Some(&[13.0e-12, 13.0e-12]),
             )
             .expect("equal DG0 material values must certify");
+        assert!(certificate.material_realization_fingerprint.starts_with("sha256:"));
+        assert_eq!(certificate.max_material_residual, 0.0);
+    }
+
+    #[test]
+    fn periodic_region_material_certificate_rejects_nodal_seam_mismatch() {
+        let mesh = mirrored_periodic_mesh();
+        let errors = mesh
+            .periodic_mesh_certificate_v6_with_material_and_nodal_fields(
+                None,
+                None,
+                Some(&[800_000.0, 800_000.0, 800_000.0, 801_000.0, 800_000.0, 800_000.0]),
+                None,
+            )
+            .expect_err("nodal Ms mismatch must fail mirrored seam certification");
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("coefficient residual")));
+    }
+
+    #[test]
+    fn periodic_region_material_certificate_records_nodal_material_hashes() {
+        let mesh = mirrored_periodic_mesh();
+        let certificate = mesh
+            .periodic_mesh_certificate_v6_with_material_and_nodal_fields(
+                None,
+                None,
+                Some(&[800_000.0; 6]),
+                Some(&[13.0e-12; 6]),
+            )
+            .expect("equal nodal material values must certify");
         assert!(certificate.material_realization_fingerprint.starts_with("sha256:"));
         assert_eq!(certificate.max_material_residual, 0.0);
     }

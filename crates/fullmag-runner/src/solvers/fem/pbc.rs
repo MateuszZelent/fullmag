@@ -169,9 +169,11 @@ pub(crate) fn validate_periodic_region_material_certificate(
         return Ok(None);
     }
     plan.mesh
-        .periodic_mesh_certificate_v6_with_material_fields(
+        .periodic_mesh_certificate_v6_with_material_and_nodal_fields(
             plan.ms_element_field.as_deref(),
             plan.a_element_field.as_deref(),
+            plan.material.ms_field.as_deref(),
+            plan.material.a_field.as_deref(),
         )
         .map(Some)
         .map_err(|errors| errors.join("; "))
