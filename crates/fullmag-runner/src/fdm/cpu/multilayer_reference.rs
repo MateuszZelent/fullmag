@@ -51,6 +51,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
     mut live: Option<(&[u32; 3], &mut dyn FnMut(StepUpdate) -> StepAction)>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    crate::fdm::validate_multilayer_grid_budget(plan)?;
     if until_seconds <= 0.0 {
         return Err(RunError {
             message: "until_seconds must be positive".to_string(),

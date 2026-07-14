@@ -5,6 +5,8 @@ use super::{ffi, NativeFdmBackend};
 #[cfg(feature = "cuda")]
 use crate::relaxation::llg_overdamped_uses_pure_damping;
 #[cfg(feature = "cuda")]
+use crate::fdm::{validate_multilayer_grid_budget, validate_single_grid_budget};
+#[cfg(feature = "cuda")]
 use crate::types::RunError;
 #[cfg(feature = "cuda")]
 use std::ffi::CStr;
@@ -41,6 +43,7 @@ struct NativeMultilayerTensorKernelHost {
 #[cfg(feature = "cuda")]
 impl NativeFdmBackend {
     pub fn create_multilayer_v2(plan: &fullmag_ir::FdmMultilayerPlanIR) -> Result<Self, RunError> {
+        validate_multilayer_grid_budget(plan)?;
         let precision = match plan.precision {
             fullmag_ir::ExecutionPrecision::Single => {
                 ffi::fullmag_fdm_precision::FULLMAG_FDM_PRECISION_SINGLE
@@ -277,6 +280,7 @@ impl NativeFdmBackend {
 
     /// Create a new backend from an FDM execution plan.
     pub fn create(plan: &fullmag_ir::FdmPlanIR) -> Result<Self, RunError> {
+        validate_single_grid_budget(plan)?;
         let grid = ffi::fullmag_fdm_grid_desc {
             nx: plan.grid.cells[0],
             ny: plan.grid.cells[1],

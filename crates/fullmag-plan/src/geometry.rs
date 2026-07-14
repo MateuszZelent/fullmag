@@ -3,6 +3,72 @@ use fullmag_ir::{FdmHintsIR, FdmMaterialIR, GeometryEntryIR};
 const TAU: f64 = std::f64::consts::PI * 2.0;
 
 use crate::util::GRID_TOLERANCE;
+use crate::PlanError;
+
+/// Conservative per-cell planning estimate used before any FDM backing vector
+/// or geometry mask is allocated.  The estimate covers the state, material,
+/// region and scratch vectors shared by the CPU and CUDA lanes.
+pub const FDM_GRID_ESTIMATED_BYTES_PER_CELL: u64 = 256;
+/// Hard cell-count guard shared by all FDM execution lanes.
+pub const FDM_GRID_MAX_CELLS: u64 = 1_000_000_000;
+/// Hard resident-memory guard shared by all FDM execution lanes.
+pub const FDM_GRID_MAX_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FdmGridCost {
+    pub cells: u64,
+    pub estimated_bytes: u64,
+}
+
+/// Calculate the resolved FDM grid cost without allowing intermediate
+/// arithmetic to wrap or permitting an allocation above the lane budget.
+pub fn checked_fdm_grid_cost(
+    counts: [u32; 3],
+    bytes_per_cell: u64,
+) -> Result<FdmGridCost, PlanError> {
+    let requested_counts = format!("[{},{},{}]", counts[0], counts[1], counts[2]);
+    let cells = (counts[0] as u64)
+        .checked_mul(counts[1] as u64)
+        .and_then(|value| value.checked_mul(counts[2] as u64))
+        .ok_or_else(|| PlanError {
+            reasons: vec![format!(
+                "fdm_grid_count_overflow: requested_counts={requested_counts}"
+            )],
+        })?;
+    if cells > FDM_GRID_MAX_CELLS {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "fdm_grid_cell_budget_exceeded: requested_counts={requested_counts} cells={cells} max_cells={FDM_GRID_MAX_CELLS}"
+            )],
+        });
+    }
+    let estimated_bytes = cells.checked_mul(bytes_per_cell).ok_or_else(|| PlanError {
+        reasons: vec![format!(
+            "fdm_grid_memory_overflow: requested_counts={requested_counts} cells={cells} bytes_per_cell={bytes_per_cell}"
+        )],
+    })?;
+    if estimated_bytes > FDM_GRID_MAX_BYTES {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "fdm_grid_memory_budget_exceeded: requested_counts={requested_counts} estimated_bytes={estimated_bytes} max_bytes={FDM_GRID_MAX_BYTES}"
+            )],
+        });
+    }
+    Ok(FdmGridCost {
+        cells,
+        estimated_bytes,
+    })
+}
+
+fn checked_voxel_count(grid_cells: [u32; 3], errors: &mut Vec<String>) -> Option<usize> {
+    match checked_fdm_grid_cost(grid_cells, FDM_GRID_ESTIMATED_BYTES_PER_CELL) {
+        Ok(cost) => usize::try_from(cost.cells).ok(),
+        Err(error) => {
+            errors.extend(error.reasons);
+            None
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(crate) enum GeometryShape {
@@ -277,7 +343,9 @@ pub(crate) fn voxelize_shape(
             let nx = (bbox[0] / cell_size[0]).round().max(1.0) as u32;
             let ny = (bbox[1] / cell_size[1]).round().max(1.0) as u32;
             let nz = (bbox[2] / cell_size[2]).round().max(1.0) as u32;
-            let n = (nx * ny * nz) as usize;
+            let Some(n) = checked_voxel_count([nx, ny, nz], errors) else {
+                return (bbox, None, [nx, ny, nz], [-diameter * 0.5, -diameter * 0.5, -height * 0.5]);
+            };
             let cx = nx as f64 * cell_size[0] * 0.5;
             let cy = ny as f64 * cell_size[1] * 0.5;
             let r2 = radius * radius;
@@ -317,7 +385,9 @@ pub(crate) fn voxelize_shape(
             let nx = (bbox[0] / cell_size[0]).round().max(1.0) as u32;
             let ny = (bbox[1] / cell_size[1]).round().max(1.0) as u32;
             let nz = (bbox[2] / cell_size[2]).round().max(1.0) as u32;
-            let n = (nx * ny * nz) as usize;
+            let Some(n) = checked_voxel_count([nx, ny, nz], errors) else {
+                return (bbox, None, [nx, ny, nz], bounds_min);
+            };
             let mut mask = vec![false; n];
             for iz in 0..nz {
                 for iy in 0..ny {
@@ -350,7 +420,9 @@ pub(crate) fn voxelize_shape(
             let nx = (bbox[0] / cell_size[0]).round().max(1.0) as u32;
             let ny = (bbox[1] / cell_size[1]).round().max(1.0) as u32;
             let nz = (bbox[2] / cell_size[2]).round().max(1.0) as u32;
-            let n = (nx * ny * nz) as usize;
+            let Some(n) = checked_voxel_count([nx, ny, nz], errors) else {
+                return (bbox, None, [nx, ny, nz], bounds_min);
+            };
             let mut mask = vec![false; n];
             for iz in 0..nz {
                 for iy in 0..ny {
@@ -400,7 +472,9 @@ pub(crate) fn voxelize_shape(
             let nx = (bbox[0] / cell_size[0]).round().max(1.0) as u32;
             let ny = (bbox[1] / cell_size[1]).round().max(1.0) as u32;
             let nz = (bbox[2] / cell_size[2]).round().max(1.0) as u32;
-            let n = (nx * ny * nz) as usize;
+            let Some(n) = checked_voxel_count([nx, ny, nz], errors) else {
+                return (bbox, None, [nx, ny, nz], bounds_min);
+            };
             let mut mask = vec![true; n];
             if let GeometryShape::Cylinder { radius, .. } = base.as_ref() {
                 let cx = bounds_min[0] + bbox[0] * 0.5;

@@ -12,8 +12,9 @@ use crate::antenna_zeeman::{has_prescribed_zeeman_mask_source, resolve_prescribe
 use crate::current_transport::{resolve_current_transports, CurrentTransportExecutableLane};
 use crate::error::PlanError;
 use crate::geometry::{
-    cell_for_magnet, extract_multilayer_geometry, fdm_default_cell, ir_to_shape,
-    validate_realized_grid, voxelize_shape, GeometryShape, LoweredBody,
+    cell_for_magnet, checked_fdm_grid_cost, extract_multilayer_geometry, fdm_default_cell,
+    ir_to_shape, validate_realized_grid, voxelize_shape, GeometryShape, LoweredBody,
+    FDM_GRID_ESTIMATED_BYTES_PER_CELL,
 };
 use crate::magnetization_textures::{sample_preset_texture, TextureSamplePoint};
 use crate::oersted::{resolve_fdm_oersted_term, ResolvedOerstedTerm};
@@ -34,7 +35,11 @@ fn grid_sample_points(
     let nx = grid_cells[0] as usize;
     let ny = grid_cells[1] as usize;
     let nz = grid_cells[2] as usize;
-    let mut points = Vec::with_capacity(nx * ny * nz);
+    let capacity = checked_fdm_grid_cost(grid_cells, FDM_GRID_ESTIMATED_BYTES_PER_CELL)
+        .ok()
+        .and_then(|cost| usize::try_from(cost.cells).ok())
+        .unwrap_or(0);
+    let mut points = Vec::with_capacity(capacity);
     for z in 0..nz {
         for y in 0..ny {
             for x in 0..nx {
@@ -116,7 +121,22 @@ fn materialize_object_region_mask(
     active_mask: Option<&Vec<bool>>,
     errors: &mut Vec<String>,
 ) -> (Vec<u32>, BTreeMap<String, u32>) {
-    let n_cells = (grid_cells[0] * grid_cells[1] * grid_cells[2]) as usize;
+    let n_cells = match checked_fdm_grid_cost(grid_cells, FDM_GRID_ESTIMATED_BYTES_PER_CELL) {
+        Ok(cost) => match usize::try_from(cost.cells) {
+            Ok(cells) => cells,
+            Err(_) => {
+                errors.push(format!(
+                    "fdm_grid_cell_count_not_addressable: cells={} requested_counts={:?}",
+                    cost.cells, grid_cells
+                ));
+                return (Vec::new(), BTreeMap::new());
+            }
+        },
+        Err(error) => {
+            errors.extend(error.reasons);
+            return (Vec::new(), BTreeMap::new());
+        }
+    };
     let mut mask = vec![0u32; n_cells];
     let mut regions = problem
         .object_regions
@@ -509,7 +529,13 @@ pub(crate) fn plan_fdm(
         .find(|m| m.name == magnet.material)
         .expect("validation should have caught missing material");
 
-    let n_cells = (grid_cells[0] * grid_cells[1] * grid_cells[2]) as usize;
+    let grid_cost = checked_fdm_grid_cost(grid_cells, FDM_GRID_ESTIMATED_BYTES_PER_CELL)?;
+    let n_cells = usize::try_from(grid_cost.cells).map_err(|_| PlanError {
+        reasons: vec![format!(
+            "fdm_grid_cell_count_not_addressable: cells={} requested_counts={:?}",
+            grid_cost.cells, grid_cells
+        )],
+    })?;
     let mut initial_magnetization = match &magnet.initial_magnetization {
         Some(InitialMagnetizationIR::Uniform { value }) => {
             if let Some(ref mask) = active_mask {
@@ -1447,7 +1473,23 @@ pub(crate) fn plan_fdm_multilayer(
             continue;
         };
 
-        let n_cells = (grid_cells[0] * grid_cells[1] * grid_cells[2]) as usize;
+        let grid_cost = match checked_fdm_grid_cost(grid_cells, FDM_GRID_ESTIMATED_BYTES_PER_CELL) {
+            Ok(cost) => cost,
+            Err(error) => {
+                errors.extend(error.reasons);
+                continue;
+            }
+        };
+        let n_cells = match usize::try_from(grid_cost.cells) {
+            Ok(cells) => cells,
+            Err(_) => {
+                errors.push(format!(
+                    "fdm_grid_cell_count_not_addressable: cells={} requested_counts={:?}",
+                    grid_cost.cells, grid_cells
+                ));
+                continue;
+            }
+        };
         let initial_magnetization = match &magnet.initial_magnetization {
             Some(InitialMagnetizationIR::Uniform { value }) => {
                 if let Some(ref mask) = active_mask {
@@ -1677,9 +1719,25 @@ pub(crate) fn plan_fdm_multilayer(
 
     let estimated_unique_kernels = unique_shifts.len() as u32;
     let estimated_pair_kernels = (lowered_bodies.len() * lowered_bodies.len()) as u32;
-    let padded_len =
-        (common_cells[0] * 2) as u64 * (common_cells[1] * 2) as u64 * (common_cells[2] * 2) as u64;
-    let estimated_kernel_bytes = padded_len * 6 * 16 * estimated_unique_kernels as u64;
+    let padded_len = common_cells
+        .iter()
+        .try_fold(1u64, |acc, cells| {
+            acc.checked_mul((*cells as u64).checked_mul(2)?)
+        });
+    let estimated_kernel_bytes = padded_len
+        .and_then(|cells| cells.checked_mul(6))
+        .and_then(|bytes| bytes.checked_mul(16))
+        .and_then(|bytes| bytes.checked_mul(estimated_unique_kernels as u64));
+    let estimated_kernel_bytes = match (padded_len, estimated_kernel_bytes) {
+        (Some(_padded_len), Some(estimated_kernel_bytes)) => estimated_kernel_bytes,
+        _ => {
+            errors.push(
+                "multilayer_convolution kernel size overflow: resolved common_cells or kernel count exceeds u64"
+                    .to_string(),
+            );
+            0
+        }
+    };
 
     let controls = planned_study_controls(problem, resolved_backend, &mut errors);
     let mut integrator = controls.integrator;

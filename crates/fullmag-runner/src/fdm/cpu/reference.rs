@@ -18,7 +18,10 @@ use fullmag_ir::{
 
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
 use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
-use crate::fdm::artifacts::select_state_observable_field;
+use crate::fdm::{
+    artifacts::select_state_observable_field,
+    validate_single_grid_budget,
+};
 use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 use crate::preview::{
     build_grid_preview_field, build_grid_scalar_preview_field, flatten_vectors, select_observables,
@@ -443,6 +446,7 @@ fn select_direct_preview_values(
 pub(crate) fn build_snapshot_problem_and_state(
     plan: &FdmPlanIR,
 ) -> Result<(ExchangeLlgProblem, ExchangeLlgState), RunError> {
+    validate_single_grid_budget(plan)?;
     let grid = GridShape::new(
         plan.grid.cells[0] as usize,
         plan.grid.cells[1] as usize,
@@ -585,6 +589,7 @@ pub(crate) fn execute_reference_fdm(
     mut live: Option<LiveStepConsumer<'_>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    validate_single_grid_budget(plan)?;
     if until_seconds <= 0.0 {
         return Err(RunError {
             message: "until_seconds must be positive".to_string(),

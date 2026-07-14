@@ -10535,3 +10535,33 @@ fn hysteresis_planner_reports_ir_validation_errors() {
         error.reasons
     );
 }
+
+#[test]
+fn fdm_grid_count_overflow_is_rejected() {
+    let counts = [u32::MAX, u32::MAX, 2];
+    let error = crate::geometry::checked_fdm_grid_cost(counts, 1)
+        .expect_err("grid cell-count multiplication must reject u64 overflow");
+
+    assert!(error
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("fdm_grid_count_overflow")));
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("4294967295") && reason.contains("requested_counts")
+    }));
+}
+
+#[test]
+fn fdm_grid_memory_budget_is_rejected() {
+    let counts = [1_000, 1_000, 1_000];
+    let error = crate::geometry::checked_fdm_grid_cost(counts, 16)
+        .expect_err("grid allocation must reject a cost above the lane budget");
+
+    assert!(error
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("fdm_grid_memory_budget_exceeded")));
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("1000") && reason.contains("requested_counts")
+    }));
+}

@@ -31,6 +31,10 @@ mod validate;
 pub mod boundary_geometry;
 
 pub use error::PlanError;
+pub use geometry::{
+    checked_fdm_grid_cost, FdmGridCost, FDM_GRID_ESTIMATED_BYTES_PER_CELL,
+    FDM_GRID_MAX_BYTES, FDM_GRID_MAX_CELLS,
+};
 pub use magnetization_textures::{sample_preset_texture, TextureSamplePoint};
 pub use quantities::{
     default_capability_matrix, validate_quantity_requests, BackendFamily, CapabilityMatrix,
