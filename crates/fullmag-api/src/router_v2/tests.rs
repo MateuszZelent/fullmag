@@ -1991,7 +1991,7 @@ async fn domain_meta_uses_fdm_physical_cell_size_for_grid_and_bounds() {
             "artifact_layout": {
                 "backend": "fdm",
                 "grid_cells": [4, 3, 2],
-                "origin": [1.0e-9, -2.0e-9, 3.0e-9],
+                "origin_m": [1.0e-9, -2.0e-9, 3.0e-9],
                 "cell_size": [2.0e-9, 3.0e-9, 4.0e-9]
             }
         }));

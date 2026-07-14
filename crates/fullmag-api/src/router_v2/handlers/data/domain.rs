@@ -155,7 +155,8 @@ fn fdm_grid_descriptor(snapshot: &SessionStateResponse) -> FdmGridLayout {
     let origin = layout
         .and_then(|layout| {
             layout
-                .get("origin")
+                .get("origin_m")
+                .or_else(|| layout.get("origin"))
                 .or_else(|| layout.get("grid_origin"))
                 .or_else(|| layout.get("native_origin"))
         })
