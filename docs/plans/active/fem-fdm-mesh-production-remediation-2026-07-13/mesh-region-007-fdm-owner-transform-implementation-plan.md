@@ -43,6 +43,8 @@ fn sample_point(world: [f64; 3], owner_from_object: AffineTransform3) -> Result<
 ### Evidence (2026-07-14)
 
 - Translation-aware membership implementation is in the planner; full `fdm_` focused suite: 39 tests, 38 passed before the dedicated regression was fixed, then dedicated regression 1/1.
-- Remaining gap: rotation/scale owner transforms, spatial material/texture parity fixtures, Python round-trip, and managed CPU/GPU proof.
+- Non-identity owner rotation/scale is now rejected at the canonical scene-to-script lowering boundary with stable reason `owner_transform_rotation_scale_unsupported`; this prevents silent world/object-frame reinterpretation until the full affine transform is represented in ProblemIR.
+- RED/GREEN evidence: the new authoring regression failed before the guard because the transform was silently dropped; after the guard `cargo test -p fullmag-authoring scene_document_validation_rejects_owner_rotation_and_scale_until_fdm_support_exists --lib --no-fail-fast` passed, and the existing canonical round-trip test passed.
+- Remaining gap: full affine rotation/scale realization, spatial material/texture parity fixtures, Python round-trip for transformed FDM scenes, and managed CPU/GPU proof.
 
 **Exit:** transform ownera nie zmienia relatywnego położenia regionu, texture ani pola w układzie obiektowym.
