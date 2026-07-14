@@ -59,3 +59,19 @@ struct PeriodicRegionMaterialCertificate {
 - Nodal-P1 `Ms`/`A` seam comparison is now part of the same v6 certificate path; controlled nodal mismatch and equal-value fixtures pass in `fullmag-ir` (40/40 total library tests).
 - Planner and runner artifact/native revalidation pass nodal `material.ms_field`/`material.a_field` through the certificate instead of checking only DG0 coefficients; `cargo test -p fullmag-plan --lib --no-fail-fast` — 215 passed; `cargo check -p fullmag-runner` — pass with one pre-existing dead-code warning.
 - Remaining open: persisted certificate comparison against an independent build generation, managed CPU/GPU mirrored gates and M5 primitive/supercell evidence. MESH-REGION-004 remains open.
+
+### Evidence update (2026-07-14, API persisted marker identity guard)
+
+- [x] The API now rejects an accepted `periodic_pairs.v1.json` artifact when
+  its persisted v6 schema/status/topology/marker-map identity does not match
+  the current live mesh. It falls back to the authoritative live resource
+  instead of exposing a same-topology artifact with a forged marker map.
+- [x] RED/GREEN regression:
+  `cargo test -p fullmag-api mesh_periodic_pairs_rejects_artifact_with_mismatched_marker_certificate`
+  — RED before the guard, then 1 passed; adjacent
+  `cargo test -p fullmag-api mesh_periodic_pairs --no-fail-fast -- --nocapture`
+  — 11 passed.
+- [ ] Full material-value comparison still belongs to planner/runner because
+  the thin live `FemMeshPayload` does not carry realized coefficient arrays;
+  managed CPU/GPU mirrored gates and M5 primitive/supercell evidence remain
+  open.

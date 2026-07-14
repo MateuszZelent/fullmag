@@ -1486,6 +1486,9 @@ fn periodic_pairs_resource_from_artifact(
         if actual_topology != Some(expected_topology.as_str()) {
             return Ok(None);
         }
+        if !persisted_periodic_certificate_matches_live_mesh(&value, mesh) {
+            return Ok(None);
+        }
     }
     let artifact_source_scene_revision = value
         .get("source_scene_revision")
@@ -1563,6 +1566,47 @@ fn periodic_pairs_resource_from_artifact(
         ))
     })?;
     Ok(Some(resource))
+}
+
+/// An artifact certificate is only current when its independently persisted
+/// identity agrees with the live mesh.  Topology alone is insufficient: a
+/// remesh can preserve node/face layout while changing the marker ownership
+/// used to realize mirrored regions.  Material coefficient arrays are not
+/// part of the thin live-mesh payload, so their full value comparison remains
+/// owned by planner/runner revalidation; this check fail-closes the marker and
+/// topology identity that the API can independently recompute.
+fn persisted_periodic_certificate_matches_live_mesh(
+    artifact: &Value,
+    live_mesh: &FemMeshPayload,
+) -> bool {
+    let accepted = artifact
+        .get("certificate_status")
+        .and_then(Value::as_str)
+        .is_some_and(|status| status == "accepted");
+    if !accepted {
+        return true;
+    }
+    let Some(certificate) = artifact.get("certificate").and_then(Value::as_object) else {
+        return false;
+    };
+    let Ok(expected) = periodic_mesh_ir(live_mesh).periodic_mesh_certificate_v6() else {
+        return false;
+    };
+    let expected_fields = [
+        ("schema_version", expected.schema_version.as_str()),
+        ("certificate_status", expected.certificate_status.as_str()),
+        ("topology_fingerprint", expected.topology_fingerprint.as_str()),
+        (
+            "marker_map_fingerprint",
+            expected.marker_map_fingerprint.as_str(),
+        ),
+    ];
+    expected_fields.iter().all(|(field, expected_value)| {
+        certificate
+            .get(*field)
+            .and_then(Value::as_str)
+            .is_some_and(|actual| actual == *expected_value)
+    })
 }
 
 #[utoipa::path(
