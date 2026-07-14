@@ -3258,15 +3258,15 @@ fn build_periodic_pairs_resource(
             let unpaired_destination_node_count = destination_nodes
                 .difference(&paired_destination_nodes)
                 .count() as u32;
-            let status = if diagnostics.status == "valid"
+            let mixed_domain_pair = domain_node_pair_counts.magnetic
+                + domain_node_pair_counts.airbox
+                < node_pairs.len() as u32;
+            let status = if mixed_domain_pair {
+                "mixed_domain_pair".to_string()
+            } else if diagnostics.status == "valid"
                 && (unpaired_source_node_count > 0 || unpaired_destination_node_count > 0)
             {
                 "unpaired_boundary_nodes".to_string()
-            } else if diagnostics.status == "valid"
-                && domain_node_pair_counts.magnetic + domain_node_pair_counts.airbox
-                    < node_pairs.len() as u32
-            {
-                "mixed_domain_pair".to_string()
             } else {
                 diagnostics.status
             };

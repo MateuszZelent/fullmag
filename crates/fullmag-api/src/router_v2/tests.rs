@@ -6695,7 +6695,33 @@ async fn mesh_periodic_pairs_does_not_count_mixed_domain_nodes_as_magnetic() {
         json["pairs"][0]["domain_node_pair_counts"],
         serde_json::json!({"magnetic": 1, "airbox": 1})
     );
-    assert_eq!(json["pairs"][0]["status"], "residual_exceeds_tolerance");
+    assert_eq!(json["pairs"][0]["status"], "mixed_domain_pair");
+}
+
+#[tokio::test]
+async fn mesh_periodic_pairs_does_not_publish_nearest_face_with_excessive_residual() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_periodic_fem_mesh_payload();
+        mesh.boundary_faces[1] = [1, 5, 4];
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.mesh_revision = 44;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/mesh/periodic_pairs.v1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["pairs"][0]["boundary_face_pairs"], serde_json::json!([]));
 }
 
 #[tokio::test]
