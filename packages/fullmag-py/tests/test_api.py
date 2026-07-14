@@ -3579,6 +3579,45 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(payload["per_magnet"]["left"]["cell"], [1e-9, 2e-9, 3e-9])
         self.assertEqual(payload["per_magnet"]["right"]["cell"], [2e-9, 2e-9, 3e-9])
 
+    def test_script_export_preserves_per_magnet_fdm_grids(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            script_path = Path(tmp_dir) / "per_magnet_export.py"
+            script_path.write_text(
+                textwrap.dedent(
+                    """
+                    import fullmag as fm
+
+                    fm.engine("fdm")
+                    fm.fdm(
+                        per_magnet={
+                            "left": fm.FDMGrid(cell=(1e-9, 2e-9, 3e-9)),
+                            "right": fm.FDMGrid(cell=(2e-9, 2e-9, 3e-9)),
+                        }
+                    )
+                    left = fm.geometry(fm.Box(size=(10e-9, 10e-9, 3e-9), name="left"), name="left")
+                    right = fm.geometry(fm.Box(size=(10e-9, 10e-9, 3e-9), name="right"), name="right")
+                    left.Ms = right.Ms = 800e3
+                    left.Aex = right.Aex = 13e-12
+                    fm.run(1e-12)
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            loaded = load_problem_from_script(script_path, lightweight_assets=True)
+            rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            self.assertIn('fm.fdm(per_magnet={"left": fm.FDMGrid', rewritten)
+
+            rewritten_path = Path(tmp_dir) / "per_magnet_export_rewritten.py"
+            rewritten_path.write_text(rewritten, encoding="utf-8")
+            round_tripped = load_problem_from_script(rewritten_path, lightweight_assets=True)
+
+        fdm = round_tripped.problem.discretization.fdm
+        self.assertIsNotNone(fdm)
+        self.assertIsNone(fdm.default_cell)
+        self.assertEqual(fdm.per_magnet["left"].cell, (1e-9, 2e-9, 3e-9))
+        self.assertEqual(fdm.per_magnet["right"].cell, (2e-9, 2e-9, 3e-9))
+
     def test_simulation_overrides_backend_mode_and_precision(self) -> None:
         problem = self._build_problem()
         simulation = fm.Simulation(

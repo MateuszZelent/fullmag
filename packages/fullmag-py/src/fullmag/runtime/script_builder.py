@@ -644,14 +644,29 @@ def _render_runtime(
         )
 
     fdm = problem.discretization.fdm if problem.discretization is not None else None
-    if isinstance(fdm, FDM) and fdm.default_cell is not None:
-        lines.append(
-            f"{_surface_call(surface, 'cell')}({_py_number(fdm.default_cell[0])}, {_py_number(fdm.default_cell[1])}, {_py_number(fdm.default_cell[2])})"
-        )
-        if fdm.boundary_correction is not None:
-            lines.append(
-                f"{_surface_call(surface, 'boundary_correction')}({_py_repr(fdm.boundary_correction)})"
+    if isinstance(fdm, FDM):
+        if fdm.per_magnet:
+            fdm_kwargs: list[str] = []
+            if fdm.default_cell is not None:
+                fdm_kwargs.append(f"default_cell={_py_tuple3(fdm.default_cell)}")
+            per_magnet = ", ".join(
+                f"{_py_repr(name)}: fm.FDMGrid(cell={_py_tuple3(grid.cell)})"
+                for name, grid in sorted(fdm.per_magnet.items())
             )
+            fdm_kwargs.append(f"per_magnet={{{per_magnet}}}")
+            if fdm.boundary_correction is not None:
+                fdm_kwargs.append(
+                    f"boundary_correction={_py_repr(fdm.boundary_correction)}"
+                )
+            lines.append(f"{_surface_call(surface, 'fdm')}({', '.join(fdm_kwargs)})")
+        elif fdm.default_cell is not None:
+            lines.append(
+                f"{_surface_call(surface, 'cell')}({_py_number(fdm.default_cell[0])}, {_py_number(fdm.default_cell[1])}, {_py_number(fdm.default_cell[2])})"
+            )
+            if fdm.boundary_correction is not None:
+                lines.append(
+                    f"{_surface_call(surface, 'boundary_correction')}({_py_repr(fdm.boundary_correction)})"
+                )
 
     runtime_metadata = _normalize_mapping(problem.runtime_metadata)
     if surface == "study":
