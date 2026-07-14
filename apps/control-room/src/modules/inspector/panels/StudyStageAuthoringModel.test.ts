@@ -187,10 +187,6 @@ describe("StudyStageAuthoringModel", () => {
   });
 
   it("rejects FEM projected-gradient BB when demag is enabled", () => {
-    const draft = {
-      ...createDefaultStudyStageDraft("relax", 0),
-      algorithm: "projected_gradient_bb",
-    };
     const execution = {
       algorithmsAvailable: [
         "llg_overdamped",
