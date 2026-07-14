@@ -1316,13 +1316,67 @@ pub async fn get_mesh_periodic_pairs(
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
 
-    let body_identity = serde_json::to_string(&body).map_err(|error| {
-        ApiError::internal(format!("failed to canonicalize periodic-pairs resource: {error}"))
-    })?;
-    let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
-        "mesh-periodic-pairs:{source_id}:{body_identity}"
-    ));
+    let etag = periodic_pairs_etag(&source_id, &body)?;
     Ok(crate::router_v2::handlers::shared::conditional_json_response(&headers, &etag, &body))
+}
+
+/// Return the strong validator for the complete periodic-pairs snapshot.
+///
+/// The generation and persisted certificate fingerprint are explicit identity
+/// inputs.  The canonical payload digest also covers pair ids, node/face
+/// bijections, residuals, status, and stale reasons, so equal cardinality does
+/// not accidentally preserve a validator after a semantic change.
+fn periodic_pairs_etag(
+    mesh_generation: &str,
+    resource: &MeshPeriodicPairsResource,
+) -> Result<String, ApiError> {
+    let payload = serde_json::to_value(resource).map_err(|error| {
+        ApiError::internal(format!(
+            "failed to serialize periodic-pairs resource for ETag: {error}"
+        ))
+    })?;
+    let canonical_payload = canonical_json(&payload);
+    let certificate_fingerprint = resource.certificate_fingerprint.as_deref().unwrap_or("none");
+    let mut identity = Sha256::new();
+    identity.update(b"mesh-periodic-pairs:v1\0");
+    for part in [mesh_generation, certificate_fingerprint, &canonical_payload] {
+        identity.update((part.len() as u64).to_be_bytes());
+        identity.update(part.as_bytes());
+    }
+    Ok(crate::router_v2::handlers::shared::stable_strong_etag(
+        &format!("mesh-periodic-pairs:sha256:{:x}", identity.finalize()),
+    ))
+}
+
+/// Serialize a JSON value with object keys sorted recursively.
+///
+/// `MeshPeriodicPairsResource` contains `serde_json::Value` fields sourced
+/// from persisted artifacts.  Canonicalizing those maps here keeps validators
+/// independent of artifact serialization/insertion order.
+fn canonical_json(value: &Value) -> String {
+    match value {
+        Value::Null => "null".to_string(),
+        Value::Bool(value) => value.to_string(),
+        Value::Number(value) => value.to_string(),
+        Value::String(value) => serde_json::to_string(value).unwrap_or_else(|_| "\"\"".into()),
+        Value::Array(values) => {
+            let values = values.iter().map(canonical_json).collect::<Vec<_>>();
+            format!("[{}]", values.join(","))
+        }
+        Value::Object(values) => {
+            let mut keys = values.keys().collect::<Vec<_>>();
+            keys.sort_unstable();
+            let fields = keys
+                .into_iter()
+                .map(|key| {
+                    let encoded_key =
+                        serde_json::to_string(key).unwrap_or_else(|_| "\"\"".into());
+                    format!("{encoded_key}:{}", canonical_json(&values[key]))
+                })
+                .collect::<Vec<_>>();
+            format!("{{{}}}", fields.join(","))
+        }
+    }
 }
 
 fn periodic_pairs_resource_from_artifact(
@@ -4162,6 +4216,97 @@ fn collect_part_source_node_indices(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn periodic_pairs_etag_binds_generation_certificate_and_status() {
+        let resource = MeshPeriodicPairsResource {
+            revision: 7,
+            schema_version: "periodic_pairs.v1".to_string(),
+            status: PeriodicValidationStatus::Valid,
+            status_reasons: Vec::new(),
+            topology_fingerprint: Some("sha256:topology".to_string()),
+            certificate_fingerprint: Some("sha256:certificate-a".to_string()),
+            certificate_revision: Some(7),
+            mesh_generation_id: Some("generation-a".to_string()),
+            source_scene_revision: Some(7),
+            pairs: vec![MeshPeriodicPairResource {
+                pair_id: "x_periodic".to_string(),
+                source_marker: Some("x_min".to_string()),
+                destination_marker: Some("x_max".to_string()),
+                marker_a: 10,
+                marker_b: 11,
+                expected_translation_m: Some([1.0, 0.0, 0.0]),
+                paired_node_count: 1,
+                node_pairs: vec![[0, 1]],
+                domain_node_pair_counts: Some(MeshPeriodicDomainNodePairCountsResource {
+                    magnetic: 1,
+                    airbox: 0,
+                }),
+                mixed_domain_node_pair_count: 0,
+                unpaired_source_node_count: 0,
+                unpaired_destination_node_count: 0,
+                unpaired_source_face_count: 0,
+                unpaired_destination_face_count: 0,
+                boundary_face_pairs: Vec::new(),
+                max_residual_m: Some(0.0),
+                rms_residual_m: Some(0.0),
+                status: "valid".to_string(),
+            }],
+        };
+        let original = periodic_pairs_etag("generation-a", &resource)
+            .expect("periodic-pairs ETag should serialize");
+
+        let mut changed_certificate = resource.clone();
+        changed_certificate.certificate_fingerprint = Some("sha256:certificate-b".to_string());
+        assert_ne!(
+            original,
+            periodic_pairs_etag("generation-a", &changed_certificate)
+                .expect("changed certificate should change ETag")
+        );
+
+        let mut changed_status = resource.clone();
+        changed_status.status = PeriodicValidationStatus::Stale;
+        changed_status
+            .status_reasons
+            .push("scene revision changed".to_string());
+        assert_ne!(
+            original,
+            periodic_pairs_etag("generation-a", &changed_status)
+                .expect("changed status should change ETag")
+        );
+        assert_ne!(
+            original,
+            periodic_pairs_etag("generation-b", &resource)
+                .expect("changed generation should change ETag")
+        );
+
+        let mut changed_pair = resource.clone();
+        changed_pair.pairs[0].pair_id = "y_periodic".to_string();
+        assert_ne!(
+            original,
+            periodic_pairs_etag("generation-a", &changed_pair)
+                .expect("changed pair id should change ETag")
+        );
+
+        let mut changed_residual = resource;
+        changed_residual.pairs[0].max_residual_m = Some(1.0e-12);
+        assert_ne!(
+            original,
+            periodic_pairs_etag("generation-a", &changed_residual)
+                .expect("changed residual should change ETag")
+        );
+    }
+
+    #[test]
+    fn canonical_json_is_independent_of_object_insertion_order() {
+        let mut first = serde_json::Map::new();
+        first.insert("z".to_string(), json!(1));
+        first.insert("a".to_string(), json!({"y": 2, "b": 3}));
+        let mut second = serde_json::Map::new();
+        second.insert("a".to_string(), json!({"b": 3, "y": 2}));
+        second.insert("z".to_string(), json!(1));
+        assert_eq!(canonical_json(&Value::Object(first)), canonical_json(&Value::Object(second)));
+    }
 
     #[test]
     fn subset_part_mesh_uses_explicit_node_indices_for_shared_airbox_nodes() {

@@ -42,7 +42,8 @@ fn periodic_pairs_etag(mesh_generation: &str, certificate_fingerprint: &str) -> 
 
 ## Evidence update (2026-07-14)
 
-- [x] Periodic-pairs ETag is now derived from canonical serialized resource content plus source identity; pair count alone is no longer an identity input.
-- [x] `mesh_periodic_pairs_etag_changes_when_residual_changes` proves a same-cardinality residual change rejects the old conditional request and returns a fresh 200 snapshot.
-- [x] Focused API test — 1 passed.
-- [ ] Certificate fingerprint should be carried as persisted upstream provenance rather than recomputed in the API; UI invalidation/browser and managed resource gates remain open.
+- [x] Periodic-pairs ETag is now a SHA-256 strong validator over mesh generation, persisted certificate fingerprint, and a recursively canonicalized complete resource payload; pair count alone is no longer an identity input.
+- [x] `mesh_periodic_pairs_etag_changes_when_residual_changes` proves a same-cardinality residual change rejects the old conditional request and returns a fresh 200 snapshot; the unchanged snapshot returns 304.
+- [x] Unit tests prove certificate, generation, status/reason, and map insertion-order changes are handled deterministically.
+- [x] The API consumes `certificate_fingerprint` from `mesh/periodic_pairs.v1.json` when the authoritative persisted artifact matches the live topology; live reconstruction remains an explicit compatibility path when no artifact is available.
+- [ ] UI invalidation/browser and managed resource gates remain open; those gates are tracked by MESH-UI-005 and MESH-GATE-001.

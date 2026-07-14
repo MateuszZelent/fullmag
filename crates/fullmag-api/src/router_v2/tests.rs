@@ -6696,6 +6696,19 @@ async fn mesh_periodic_pairs_etag_changes_when_residual_changes() {
         .clone();
     let _ = body_json(first).await;
 
+    let app = build_v2_router().with_state(state.clone());
+    let unchanged = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/mesh/periodic_pairs.v1")
+                .header("if-none-match", &first_etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unchanged.status(), StatusCode::NOT_MODIFIED);
+
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot
             .fem_mesh
