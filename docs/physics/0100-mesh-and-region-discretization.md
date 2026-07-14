@@ -62,7 +62,7 @@ resolved planner output, not a copy of the requested cell hint, and contains:
 | `extent_m` | realized extent `(L_x,L_y,L_z)` | m; each `L_i = N_i d_i` |
 | `active_cells` | active magnetic cells in the resolved mask | count; `0 <= active_cells <= N_xN_yN_z` |
 | `estimated_bytes` | checked resident-memory estimate | bytes; positive and within the FDM budget |
-| `grid_fingerprint` | canonical SHA-256 of origin/count/cell/extent | lowercase hexadecimal |
+| `grid_fingerprint` | canonical SHA-256 of origin/count/cell/extent plus active-mask and region-topology payload | lowercase hexadecimal |
 
 The planner validates all fields after voxelization (including precomputed grid assets).  The
 runner must validate the certificate and compare counts, origin, cell size, active count and budget

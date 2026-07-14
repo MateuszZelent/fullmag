@@ -915,20 +915,7 @@ mod tests {
     };
 
     fn make_plan(enable_demag: bool) -> FdmMultilayerPlanIR {
-        FdmMultilayerPlanIR {
-            mode: "two_d_stack".to_string(),
-            common_cells: [4, 4, 1],
-            grid_certificate: Some(
-                fullmag_ir::FdmGridCertificateIR::new(
-                    [-4e-9, -4e-9, 0.0],
-                    [4, 4, 1],
-                    [2e-9, 2e-9, 1e-9],
-                    16,
-                    16 * fullmag_plan::FDM_GRID_ESTIMATED_BYTES_PER_CELL,
-                )
-                .expect("test certificate should be valid"),
-            ),
-            layers: vec![
+        let layers = vec![
                 FdmLayerPlanIR {
                     magnet_name: "free".to_string(),
                     native_grid: [4, 4, 1],
@@ -967,7 +954,12 @@ mod tests {
                     convolution_origin: [-4e-9, -4e-9, 3e-9],
                     transfer_kind: "identity".to_string(),
                 },
-            ],
+            ];
+        let mut plan = FdmMultilayerPlanIR {
+            mode: "two_d_stack".to_string(),
+            common_cells: [4, 4, 1],
+            grid_certificate: None,
+            layers,
             enable_exchange: true,
             enable_demag,
             external_field: None,
@@ -998,7 +990,21 @@ mod tests {
                 estimated_kernel_bytes: 0,
                 warnings: Vec::new(),
             },
-        }
+        };
+        let topology_tokens = fullmag_ir::fdm_multilayer_topology_tokens(&plan.layers);
+        plan.grid_certificate = Some(
+            fullmag_ir::FdmGridCertificateIR::new_with_masks(
+                [-4e-9, -4e-9, 0.0],
+                [4, 4, 1],
+                [2e-9, 2e-9, 1e-9],
+                16,
+                16 * fullmag_plan::FDM_GRID_ESTIMATED_BYTES_PER_CELL,
+                None,
+                &topology_tokens,
+            )
+            .expect("test certificate should be valid"),
+        );
+        plan
     }
 
     #[test]

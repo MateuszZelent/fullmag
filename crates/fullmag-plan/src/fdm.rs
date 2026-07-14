@@ -1867,6 +1867,8 @@ pub(crate) fn plan_fdm_multilayer(
             },
         })
         .collect::<Vec<_>>();
+    let multilayer_topology_tokens =
+        fullmag_ir::fdm_multilayer_topology_tokens(&layers);
     let native_cuda_lane =
         runtime_requests_cuda(problem) && fdm_multilayer_cuda_native_single_grid_eligible(&layers);
     let requested_auto_integrator = problem.study.optional_dynamics().is_some_and(|dynamics| {
@@ -1901,12 +1903,14 @@ pub(crate) fn plan_fdm_multilayer(
         return Err(PlanError { reasons: errors });
     }
 
-    let grid_certificate = FdmGridCertificateIR::new(
+    let grid_certificate = FdmGridCertificateIR::new_with_masks(
         common_origin,
         common_cells,
         convolution_cell_size,
         common_grid_cost.cells,
         common_grid_cost.estimated_bytes,
+        None,
+        &multilayer_topology_tokens,
     )
     .map_err(|message| PlanError {
         reasons: vec![format!("invalid resolved multilayer FDM grid certificate: {message}")],

@@ -111,6 +111,56 @@ pub struct FdmLayerPlanIR {
     pub transfer_kind: String,
 }
 
+/// Canonical topology payload for a multilayer FDM certificate.
+///
+/// The payload is intentionally integer-encoded so the planner and runner can
+/// hash identical layer geometry/mask facts without floating-point formatting.
+pub fn fdm_multilayer_topology_tokens(layers: &[FdmLayerPlanIR]) -> Vec<u32> {
+    fn push_f64(tokens: &mut Vec<u32>, value: f64) {
+        let bits = value.to_bits();
+        tokens.push((bits >> 32) as u32);
+        tokens.push(bits as u32);
+    }
+    fn push_text(tokens: &mut Vec<u32>, value: &str) {
+        tokens.push(value.len() as u32);
+        tokens.extend(value.as_bytes().chunks(4).map(|chunk| {
+            chunk
+                .iter()
+                .enumerate()
+                .fold(0u32, |packed, (index, byte)| packed | (*byte as u32) << (index * 8))
+        }));
+    }
+
+    let mut tokens = Vec::new();
+    tokens.push(layers.len() as u32);
+    for layer in layers {
+        push_text(&mut tokens, &layer.magnet_name);
+        tokens.extend(layer.native_grid);
+        for value in layer.native_cell_size {
+            push_f64(&mut tokens, value);
+        }
+        for value in layer.native_origin {
+            push_f64(&mut tokens, value);
+        }
+        match layer.native_active_mask.as_deref() {
+            Some(mask) => {
+                tokens.push(mask.len() as u32);
+                tokens.extend(mask.iter().map(|active| u32::from(*active)));
+            }
+            None => tokens.push(u32::MAX),
+        }
+        tokens.extend(layer.convolution_grid);
+        for value in layer.convolution_cell_size {
+            push_f64(&mut tokens, value);
+        }
+        for value in layer.convolution_origin {
+            push_f64(&mut tokens, value);
+        }
+        push_text(&mut tokens, &layer.transfer_kind);
+    }
+    tokens
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FdmMultilayerSummaryIR {
     pub requested_strategy: String,

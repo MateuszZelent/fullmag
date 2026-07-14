@@ -109,7 +109,7 @@ impl FdmGridCertificateIR {
             extent_m,
             active_mask.unwrap_or(&[]),
             region_mask,
-        );
+        )?;
         let certificate = Self {
             origin_m,
             counts,
@@ -170,7 +170,10 @@ impl FdmGridCertificateIR {
             }
         }
         if self.grid_fingerprint.len() != 64
-            || !self.grid_fingerprint.chars().all(|character| character.is_ascii_hexdigit())
+            || !self
+                .grid_fingerprint
+                .chars()
+                .all(|character| character.is_ascii_digit() || ('a'..='f').contains(&character))
         {
             return Err(format!(
                 "FDM grid certificate fingerprint must be 64 lowercase hexadecimal characters, got {}",
@@ -194,7 +197,7 @@ impl FdmGridCertificateIR {
             self.extent_m,
             active_mask.unwrap_or(&[]),
             region_mask,
-        );
+        )?;
         if self.grid_fingerprint != expected_fingerprint {
             return Err(format!(
                 "FDM grid certificate fingerprint mismatch: expected {expected_fingerprint}, got {}",
@@ -220,7 +223,7 @@ impl FdmGridCertificateIR {
         extent_m: [f64; 3],
         active_mask: &[bool],
         region_mask: &[u32],
-    ) -> String {
+    ) -> Result<String, String> {
         let payload = serde_json::json!({
             "origin_m": origin_m,
             "counts": counts,
@@ -229,11 +232,12 @@ impl FdmGridCertificateIR {
             "active_mask": active_mask,
             "region_mask": region_mask,
         });
-        let encoded = serde_json::to_vec(&payload).expect("grid certificate payload serializes");
-        Sha256::digest(encoded)
+        let encoded = serde_json::to_vec(&payload)
+            .map_err(|error| format!("FDM grid certificate fingerprint serialization failed: {error}"))?;
+        Ok(Sha256::digest(encoded)
             .iter()
             .map(|byte| format!("{byte:02x}"))
-            .collect()
+            .collect())
     }
 }
 

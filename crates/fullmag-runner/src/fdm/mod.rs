@@ -110,9 +110,12 @@ pub(crate) fn validate_multilayer_grid_budget(
     let certificate = plan.grid_certificate.as_ref().ok_or_else(|| RunError {
         message: "FDM multilayer grid certificate is required before runner allocation".to_string(),
     })?;
-    certificate.validate().map_err(|message| RunError {
+    let topology_tokens = fullmag_ir::fdm_multilayer_topology_tokens(&plan.layers);
+    certificate
+        .validate_against_masks(None, &topology_tokens)
+        .map_err(|message| RunError {
         message: format!("FDM multilayer grid certificate rejected before allocation: {message}"),
-    })?;
+        })?;
     let expected_origin = plan
         .layers
         .iter()
