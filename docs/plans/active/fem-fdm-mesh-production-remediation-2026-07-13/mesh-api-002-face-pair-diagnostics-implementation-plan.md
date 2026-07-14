@@ -62,3 +62,14 @@ pub struct PeriodicFacePairResponse { pub source_face_id: u64, pub destination_f
 - [x] Binary responses use `application/vnd.fullmag.periodic-pairs.v1`, strong representation-specific ETags with `304`, optional single-range `206/416`, and mesh/certificate identity headers.
 - [x] Backend route and utoipa OpenAPI path registration are present; focused API coverage proves 200 payload magic/version, deterministic repeated bytes, conditional `304`, and the generated OpenAPI content type (`mesh_periodic_pairs` — 10 passed; `openapi_contains_binary_periodic_pairs_path` — 1 passed).
 - [ ] Control Room generated path/types and managed runtime evidence remain pending for the bounded backend-only slice.
+
+### Evidence update (2026-07-14, strict FMPP UI decoder)
+
+- [x] Added a strict Control Room `FMPP.v1` decoder for the binary periodic
+  node/face data plane, including status/revision, UTF-8 pair IDs, stable node
+  pairs and explicit face vertex bijections. Malformed headers, unsafe 64-bit
+  values, duplicate IDs, truncation and trailing bytes fail closed.
+- [x] Added focused codec coverage for valid mappings and malformed payloads.
+- [ ] The generated OpenAPI path/facade hook and runtime/browser smoke remain
+  open because this worktree has no frontend dependencies (`vitest` and
+  `next` are unavailable).
