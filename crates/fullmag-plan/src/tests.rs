@@ -9400,6 +9400,26 @@ fn fdm_cuda_fp32_periodic_exchange_is_capability_gated_until_parity() {
 }
 
 #[test]
+fn fdm_multilayer_periodic_axes_fail_closed_until_kernel_parity() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    ir.pbc = Some(FdmPeriodicityIR {
+        axes: [
+            AxisBoundary::Periodic,
+            AxisBoundary::Open,
+            AxisBoundary::Open,
+        ],
+        demag: FdmDemagPeriodicityIR::TruncatedImages,
+        image_counts: Some([2, 0, 0]),
+    });
+
+    let error = plan(&ir).expect_err("multilayer periodic kernels must fail closed");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("multilayer periodic axes")
+            && reason.contains("self/shifted demag kernels")
+    }));
+}
+
+#[test]
 fn fdm_pbc_with_exchange_plans() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.pbc = Some(FdmPeriodicityIR {

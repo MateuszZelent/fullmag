@@ -1515,6 +1515,12 @@ pub(crate) fn plan_fdm_multilayer(
         if let Err(reason) = pbc.resolve_demag_boundary(enable_demag) {
             errors.push(reason);
         }
+        if pbc.has_any_periodic() {
+            errors.push(
+                "FDM multilayer periodic axes are capability-gated until exchange seams and self/shifted demag kernels are qualified across every layer; use open boundaries or a qualified single-grid plan"
+                    .to_string(),
+            );
+        }
         if problem.backend_policy.execution_precision == ExecutionPrecision::Single
             && runtime_requests_cuda(problem)
             && pbc.has_any_periodic()
