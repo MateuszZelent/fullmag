@@ -2770,7 +2770,7 @@ fn certified_airbox_test_mesh(outer_marker: u32) -> fullmag_ir::MeshIR {
             [0.0, 0.0, 1.0],
             [1.0, 0.0, 1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [1, 3, 2, 4]],
+        elements: vec![[0, 1, 2, 3], [1, 2, 3, 4]],
         element_markers: vec![1, 0],
         boundary_faces: vec![
             [0, 1, 2],
