@@ -2183,10 +2183,14 @@ pub(crate) fn plan_fem(
             )
         };
     let object_segments = remap_segment_object_ids(&raw_object_segments, &geometry_to_object_id)?;
+    let mesh_build_report = resolved_domain_mesh_asset
+        .as_ref()
+        .and_then(|asset| asset.build_report.clone());
     let n_nodes = mesh.nodes.len();
     let n_elements = mesh.elements.len();
     let mesh_name = mesh.mesh_name.clone();
     let domain_mesh_mode = resolved_domain_mesh_mode(&mesh);
+    let mut periodic_mesh_certificate_v6 = None;
     if !requested_static_pbc && !mesh.periodic_node_pairs.is_empty() {
         return Err(PlanError {
             reasons: vec![
@@ -2268,6 +2272,14 @@ pub(crate) fn plan_fem(
                 ],
             });
         }
+        periodic_mesh_certificate_v6 = Some(mesh.periodic_mesh_certificate_v6().map_err(
+            |certificate_errors| PlanError {
+                reasons: certificate_errors
+                    .into_iter()
+                    .map(|reason| format!("FEM periodic mesh certificate v6: {reason}"))
+                    .collect(),
+            },
+        )?);
         // Demag PBC with open boundary: allowed (P^T A P reduction via Rust reference path).
         // Fully 3D periodic demag is not supported in v1.
     }
@@ -2339,6 +2351,29 @@ pub(crate) fn plan_fem(
         });
     }
     let requires_consistent_mass_exchange = ms_element_field.is_some();
+
+    if periodic_mesh_certificate_v6.is_some() {
+        periodic_mesh_certificate_v6 = Some(
+            mesh.periodic_mesh_certificate_v6_with_material_and_nodal_fields(
+                ms_element_field.as_deref(),
+                a_element_field.as_deref(),
+                material.ms_field.as_deref(),
+                material.a_field.as_deref(),
+            )
+            .map(|certificate| {
+                fullmag_ir::MeshIR::periodic_certificate_with_region_identity(
+                    certificate,
+                    &problem.object_regions,
+                )
+            })
+            .map_err(|certificate_errors| PlanError {
+                reasons: certificate_errors
+                    .into_iter()
+                    .map(|reason| format!("FEM periodic region/material certificate v6: {reason}"))
+                    .collect(),
+            })?,
+        );
+    }
 
     if interfacial_dmi.is_none() {
         interfacial_dmi = material.interfacial_dmi;
@@ -2443,6 +2478,7 @@ pub(crate) fn plan_fem(
         mesh,
         object_segments,
         mesh_parts: resolved_mesh_parts,
+        mesh_build_report,
         domain_mesh_mode,
         domain_frame,
         fe_order: fem_hints.order,
@@ -2623,6 +2659,21 @@ pub(crate) fn plan_fem(
         "Executable time-domain FEM requires the native MFEM/libCEED/hypre backend; the Rust FEM baseline remains internal-only for preview and validation helpers"
             .to_string(),
     ];
+    if let Some(certificate) = periodic_mesh_certificate_v6.as_ref() {
+        provenance_notes.push(format!(
+            "periodic mesh certificate: schema={} topology={} marker_map={} material_realization={} region_classes={} max_material_residual={:.6e} magnetic_classes={} scalar_classes={} translation_residual_max_m={:.6e} normal_mismatch_max={:.6e}",
+            certificate.schema_version,
+            certificate.topology_fingerprint,
+            certificate.marker_map_fingerprint,
+            certificate.material_realization_fingerprint,
+            certificate.region_class_count,
+            certificate.max_material_residual,
+            certificate.magnetic_class_count,
+            certificate.scalar_class_count,
+            certificate.translation_residual_max_m,
+            certificate.normal_mismatch_max,
+        ));
+    }
     if fem_plan.relaxation.as_ref().is_some_and(|control| {
         control.algorithm == fullmag_ir::RelaxationAlgorithmIR::TangentPlaneImplicit
     }) {
@@ -3153,6 +3204,9 @@ pub(crate) fn plan_fem_eigen(
             (mesh, object_segments, mesh_source, merged_equilibrium)
         };
     let object_segments = remap_segment_object_ids(&raw_object_segments, &geometry_to_object_id)?;
+    let mesh_build_report = resolved_domain_mesh_asset
+        .as_ref()
+        .and_then(|asset| asset.build_report.clone());
     let mesh_name = mesh.mesh_name.clone();
     let n_nodes = mesh.nodes.len();
     let n_elements = mesh.elements.len();
@@ -3253,6 +3307,7 @@ pub(crate) fn plan_fem_eigen(
         mesh,
         object_segments,
         mesh_parts: resolved_mesh_parts,
+        mesh_build_report,
         domain_mesh_mode,
         domain_frame,
         fe_order: fem_hints.order,
@@ -3473,6 +3528,7 @@ pub(crate) fn plan_fem_frequency_response(
         mesh: eigen.mesh,
         object_segments: eigen.object_segments,
         mesh_parts: eigen.mesh_parts,
+        mesh_build_report: eigen.mesh_build_report,
         domain_mesh_mode: eigen.domain_mesh_mode,
         domain_mesh_workflow_mode: domain_mesh_workflow_mode(problem),
         domain_frame: eigen.domain_frame,

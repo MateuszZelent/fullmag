@@ -2941,6 +2941,116 @@
         ],
         "type": "object"
       },
+      "FdmRegionLegendEntryResource": {
+        "description": "Thin descriptor for realized FDM cell membership. The mask itself is kept\non the binary data plane under the companion FMRM resource.",
+        "properties": {
+          "numeric_id": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "object_id": {
+            "type": "string"
+          },
+          "priority": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "region_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "numeric_id",
+          "object_id",
+          "region_id",
+          "priority"
+        ],
+        "type": "object"
+      },
+      "FdmRegionMembershipResource": {
+        "properties": {
+          "binary_path": {
+            "type": "string"
+          },
+          "cell_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cell_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "counts": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "encoding": {
+            "type": "string"
+          },
+          "freshness": {
+            "type": "string"
+          },
+          "grid_fingerprint": {
+            "type": "string"
+          },
+          "mesh_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "origin_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "region_legend": {
+            "items": {
+              "$ref": "#/components/schemas/FdmRegionLegendEntryResource"
+            },
+            "type": "array"
+          },
+          "region_legend_fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "region_membership_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "mesh_revision",
+          "region_membership_revision",
+          "freshness",
+          "binary_path",
+          "grid_fingerprint",
+          "origin_m",
+          "counts",
+          "cell_m",
+          "cell_count",
+          "region_legend",
+          "encoding"
+        ],
+        "type": "object"
+      },
       "FdmVisualizationPatch": {
         "properties": {
           "x_chosen_size": {
@@ -8004,6 +8114,14 @@
             "additionalProperties": true,
             "type": "object"
           },
+          "region_initial_state_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "scene_revision": {
             "format": "int64",
             "minimum": 0,
@@ -8023,6 +8141,14 @@
               "$ref": "#/components/schemas/MaterialParameterFieldDataSummaryResource"
             },
             "type": "array"
+          },
+          "region_coefficients_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "scene_revision": {
             "format": "int64",
@@ -8136,6 +8262,14 @@
           },
           "realization_status": {
             "type": "string"
+          },
+          "region_coefficients_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "sample_count": {
             "format": "int64",
@@ -8254,6 +8388,14 @@
               "$ref": "#/components/schemas/MaterialParameterFieldResource"
             },
             "type": "array"
+          },
+          "region_coefficients_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "scene_revision": {
             "format": "int64",
@@ -8532,6 +8674,14 @@
               "$ref": "#/components/schemas/MaterialReferenceResource"
             },
             "type": "array"
+          },
+          "region_coefficients_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
@@ -9721,6 +9871,15 @@
       },
       "MeshPeriodicBoundaryFacePairResource": {
         "properties": {
+          "area_residual_m2": {
+            "format": "double",
+            "type": "number"
+          },
+          "destination_marker": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
           "face_a": {
             "format": "int32",
             "minimum": 0,
@@ -9741,10 +9900,30 @@
           "orientation": {
             "type": "string"
           },
+          "source_marker": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
           "translation_m": {
             "items": {
               "format": "double",
               "type": "number"
+            },
+            "type": "array"
+          },
+          "translation_residual_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "vertex_pairs": {
+            "items": {
+              "items": {
+                "format": "int32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": "array"
             },
             "type": "array"
           }
@@ -9827,6 +10006,22 @@
               "null"
             ]
           },
+          "mixed_domain_node_pair_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "node_pairs": {
+            "items": {
+              "items": {
+                "format": "int32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "type": "array"
+          },
           "pair_id": {
             "type": "string"
           },
@@ -9851,7 +10046,17 @@
           "status": {
             "type": "string"
           },
+          "unpaired_destination_face_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
           "unpaired_destination_node_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unpaired_source_face_count": {
             "format": "int32",
             "minimum": 0,
             "type": "integer"
@@ -9875,6 +10080,26 @@
       },
       "MeshPeriodicPairsResource": {
         "properties": {
+          "certificate_fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "certificate_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "mesh_generation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "pairs": {
             "items": {
               "$ref": "#/components/schemas/MeshPeriodicPairResource"
@@ -9888,6 +10113,30 @@
           },
           "schema_version": {
             "type": "string"
+          },
+          "source_scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/PeriodicValidationStatus",
+            "description": "Aggregate certificate/resource status. `valid` is reserved for a\ncurrent accepted v6 certificate with complete pair diagnostics."
+          },
+          "status_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "topology_fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -10050,6 +10299,16 @@
             },
             "type": "array"
           },
+          "freshness": {
+            "description": "`current` applies only to certified mesh membership; `preview` is analytic projection.",
+            "type": "string"
+          },
+          "mesh_generation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "mesh_id": {
             "type": "string"
           },
@@ -10072,6 +10331,9 @@
             },
             "type": "array"
           },
+          "realization": {
+            "type": "string"
+          },
           "realization_method": {
             "type": [
               "string",
@@ -10087,13 +10349,29 @@
           "region_id": {
             "type": "string"
           },
+          "region_membership_revision": {
+            "description": "Independent region-membership realization revision, not the scene journal revision.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "source": {
             "type": "string"
+          },
+          "topology_fingerprint": {
+            "description": "Stable identity of the mesh topology used for this membership.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
           "mesh_id",
           "mesh_revision",
+          "region_membership_revision",
+          "freshness",
+          "realization",
           "region_id",
           "source",
           "mesh_part_ids",
@@ -10309,9 +10587,21 @@
             },
             "type": "array"
           },
+          "object_region_markers": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
           "operation_statuses": {
             "items": {
               "$ref": "#/components/schemas/MeshOperationStatusResource"
+            },
+            "type": "array"
+          },
+          "orphan_entities": {
+            "items": {
+              "type": "object"
             },
             "type": "array"
           },
@@ -10326,6 +10616,18 @@
           "region_markers": {
             "items": {
               "$ref": "#/components/schemas/MeshDomainRegionMarkerResource"
+            },
+            "type": "array"
+          },
+          "rejected_element_types": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "selector_resolution": {
+            "items": {
+              "type": "object"
             },
             "type": "array"
           },
@@ -10485,6 +10787,17 @@
       },
       "MeshSolverMeshResource": {
         "properties": {
+          "build_report": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MeshSharedDomainBuildReportResource",
+                "description": "Immutable requested-vs-realized report for this mesh build revision."
+              }
+            ]
+          },
           "domain_mesh_mode": {
             "type": [
               "string",
@@ -11167,6 +11480,15 @@
         ],
         "type": "object"
       },
+      "PeriodicValidationStatus": {
+        "enum": [
+          "valid",
+          "invalid",
+          "stale",
+          "unavailable"
+        ],
+        "type": "string"
+      },
       "PrimitiveGeometryCapability": {
         "properties": {
           "boolean": {
@@ -11799,6 +12121,38 @@
             },
             "type": "array"
           },
+          "region_coefficients_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "region_initial_state_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "region_membership_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "region_topology_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "scene_revision": {
             "format": "int64",
             "minimum": 0,
@@ -11817,6 +12171,38 @@
             "format": "int64",
             "minimum": 0,
             "type": "integer"
+          },
+          "region_coefficients_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "region_initial_state_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "region_membership_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "region_topology_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "regions": {
             "items": {
@@ -11864,6 +12250,26 @@
             "minimum": 0,
             "type": "integer"
           },
+          "region_coefficients_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "region_initial_state_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "region_membership_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "region_topology_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "scene_revision": {
             "format": "int64",
             "minimum": 0,
@@ -11872,6 +12278,10 @@
         },
         "required": [
           "scene_revision",
+          "region_topology_revision",
+          "region_membership_revision",
+          "region_coefficients_revision",
+          "region_initial_state_revision",
           "authored_region_count",
           "material_parameter_field_count",
           "coupling_count",
@@ -12167,6 +12577,26 @@
             "minimum": 0,
             "type": "integer"
           },
+          "region_coefficients_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "region_initial_state_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "region_membership_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "region_topology_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "scalars_revision": {
             "format": "int64",
             "minimum": 0,
@@ -12230,7 +12660,11 @@
           "mesh_build_revision",
           "commands_revision",
           "stages_revision",
-          "visualization_state_revision"
+          "visualization_state_revision",
+          "region_topology_revision",
+          "region_membership_revision",
+          "region_coefficients_revision",
+          "region_initial_state_revision"
         ],
         "type": "object"
       },
@@ -12360,6 +12794,38 @@
             ]
           },
           "mesh_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "region_coefficients_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "region_initial_state_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "region_membership_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "region_topology_revision": {
             "format": "int64",
             "minimum": 0,
             "type": [
@@ -20614,6 +21080,152 @@
         ]
       }
     },
+    "/v2/sessions/current/data/fdm-region-membership": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_fdm_region_membership",
+        "parameters": [
+          {
+            "description": "Strong ETag from a previous FMRM response",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional single byte range for the FMRM payload",
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Binary realized FDM cell membership (FMRM)"
+          },
+          "206": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Partial FMRM payload"
+          },
+          "304": {
+            "description": "FMRM payload not modified for the supplied ETag"
+          },
+          "404": {
+            "description": "No realized FDM region membership artifact"
+          },
+          "416": {
+            "description": "Requested FMRM byte range is not satisfiable"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/fdm-region-membership/{region_id}": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_fdm_region_membership_region_id",
+        "parameters": [
+          {
+            "description": "Canonical authored region ID",
+            "in": "path",
+            "name": "region_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Strong ETag from a previous scoped FMRM response",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional single byte range for the FMRM payload",
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Scoped binary realized FDM cell membership (FMRM)"
+          },
+          "206": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Partial scoped FMRM payload"
+          },
+          "304": {
+            "description": "Scoped FMRM payload not modified for the supplied ETag"
+          },
+          "404": {
+            "description": "No realized FDM membership or unknown region ID"
+          },
+          "416": {
+            "description": "Requested FMRM byte range is not satisfiable"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/fdm-region-memberships": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_fdm_region_memberships",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FdmRegionMembershipResource"
+                }
+              }
+            },
+            "description": "Thin descriptor for realized FDM cell membership"
+          },
+          "404": {
+            "description": "No realized FDM region membership artifact"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
     "/v2/sessions/current/data/fields": {
       "get": {
         "operationId": "data_get_sessions_current_data_fields",
@@ -23632,6 +24244,66 @@
           },
           "404": {
             "description": "No active workspace"
+          }
+        },
+        "tags": [
+          "meshing"
+        ]
+      }
+    },
+    "/v2/sessions/current/meshing/mesh/periodic_pairs.v1.bin": {
+      "get": {
+        "operationId": "meshing_get_sessions_current_meshing_mesh_periodic_pairs_v1_bin",
+        "parameters": [
+          {
+            "description": "Strong ETag from a previous periodic-pairs binary response",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional single byte range for chunked FMPP reads",
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/vnd.fullmag.periodic-pairs.v1": {}
+            },
+            "description": "Versioned binary FEM periodic node/face pairs"
+          },
+          "204": {
+            "description": "No FEM mesh available"
+          },
+          "206": {
+            "content": {
+              "application/vnd.fullmag.periodic-pairs.v1": {}
+            },
+            "description": "Partial binary FEM periodic node/face pairs"
+          },
+          "304": {
+            "description": "Periodic mesh-pair binary not modified for the supplied ETag"
+          },
+          "404": {
+            "description": "No active workspace"
+          },
+          "416": {
+            "description": "Requested byte range is not satisfiable"
           }
         },
         "tags": [

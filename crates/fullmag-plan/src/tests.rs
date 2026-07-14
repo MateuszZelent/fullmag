@@ -1,4 +1,9 @@
 use super::*;
+use crate::geometry::{
+    cell_for_magnet, contains_cylinder, extract_multilayer_geometry, fdm_default_cell, ir_to_shape,
+    shape_local_bounds, voxelize_shape,
+};
+use std::collections::BTreeMap;
 
 #[test]
 fn fem_top_surface_selector_resolves_bbox_faces() {
@@ -88,7 +93,7 @@ fn shared_domain_segmentation_remaps_periodic_node_pairs() {
             [0.0, 1.0, 0.0],
             [10.0, 1.0, 0.0],
             [10.0, 0.0, 1.0],
-            [10.0, 1.0, 1.0],
+            [11.0, 1.0, 1.0],
             [0.0, 0.0, 1.0],
         ],
         elements: vec![[0, 4, 5, 6], [1, 2, 3, 7]],
@@ -370,7 +375,7 @@ fn mesh_part_node_indices_cover_air_elements_with_shared_interface_nodes() {
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+        elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
         element_markers: vec![1, 0],
         boundary_faces: vec![[0, 1, 3], [0, 1, 4]],
         boundary_markers: vec![10, 99],
@@ -508,7 +513,7 @@ fn analyze_detects_interface_between_touching_markers() {
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+        elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
         element_markers: vec![1, 2],
         boundary_faces: vec![[0, 1, 3], [0, 1, 4]],
         boundary_markers: vec![10, 20],
@@ -564,7 +569,7 @@ fn reorder_shared_domain_mesh_materializes_interface_and_outer_boundary_parts() 
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+        elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
         element_markers: vec![1, 0],
         boundary_faces: vec![
             [0, 1, 3],
@@ -573,8 +578,9 @@ fn reorder_shared_domain_mesh_materializes_interface_and_outer_boundary_parts() 
             [0, 1, 4],
             [0, 2, 4],
             [1, 2, 4],
+            [0, 1, 2],
         ],
-        boundary_markers: vec![10, 10, 10, 99, 99, 99],
+        boundary_markers: vec![10, 10, 10, 99, 99, 99, 77],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
         per_domain_quality: std::collections::HashMap::new(),
@@ -658,7 +664,7 @@ fn validate_rejects_shared_nodes_for_now() {
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+        elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
         element_markers: vec![1, 2],
         boundary_faces: vec![[0, 1, 3], [0, 1, 4]],
         boundary_markers: vec![10, 20],
@@ -697,7 +703,7 @@ fn validate_accepts_shared_nodes_when_solver_supports_conformal() {
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+        elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
         element_markers: vec![1, 2],
         boundary_faces: vec![[0, 1, 3], [0, 1, 4]],
         boundary_markers: vec![10, 20],
@@ -735,7 +741,7 @@ fn pack_duplicates_shared_interface_nodes_per_region() {
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+        elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
         element_markers: vec![1, 2],
         boundary_faces: vec![[0, 1, 3], [0, 1, 4]],
         boundary_markers: vec![10, 20],
@@ -760,7 +766,7 @@ fn pack_duplicates_shared_interface_nodes_per_region() {
         .expect("packing should duplicate shared interface nodes");
 
     assert_eq!(packed.nodes.len(), 8);
-    assert_eq!(packed.elements, vec![[0, 1, 2, 3], [4, 5, 6, 7]]);
+    assert_eq!(packed.elements, vec![[0, 1, 2, 3], [4, 6, 5, 7]]);
     assert_eq!(segments.len(), 2);
     assert_eq!(segments[0].object_id, "left");
     assert_eq!(segments[0].node_count, 4);
@@ -785,7 +791,7 @@ fn pack_preserves_shared_interface_nodes_within_one_object() {
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+        elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
         element_markers: vec![1, 2],
         boundary_faces: Vec::new(),
         boundary_markers: Vec::new(),
@@ -819,7 +825,7 @@ fn pack_preserves_shared_interface_nodes_within_one_object() {
         .expect("packing should preserve one H1 field within an object");
 
     assert_eq!(packed.nodes.len(), 5);
-    assert_eq!(packed.elements, vec![[0, 1, 2, 3], [0, 1, 2, 4]]);
+    assert_eq!(packed.elements, vec![[0, 1, 2, 3], [0, 2, 1, 4]]);
     assert_eq!(segments.len(), 2);
     assert_eq!(segments[0].object_id, "body");
     assert_eq!(segments[1].object_id, "body");
@@ -911,7 +917,7 @@ fn pack_merges_coincident_interface_nodes_within_one_object() {
             [0.0, 1.0, 0.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+        elements: vec![[0, 1, 2, 3], [4, 6, 5, 7]],
         element_markers: vec![1, 2],
         boundary_faces: Vec::new(),
         boundary_markers: Vec::new(),
@@ -942,7 +948,7 @@ fn pack_merges_coincident_interface_nodes_within_one_object() {
         .expect("same-object coincident region nodes should merge");
 
     assert_eq!(packed.nodes.len(), 5);
-    assert_eq!(packed.elements, vec![[0, 1, 2, 3], [0, 1, 2, 4]]);
+    assert_eq!(packed.elements, vec![[0, 1, 2, 3], [0, 2, 1, 4]]);
     assert_eq!(segments.len(), 2);
     assert_eq!(segments[0].object_id, "body");
     assert_eq!(segments[1].object_id, "body");
@@ -992,7 +998,7 @@ fn fem_plan_maps_geometry_and_object_region_to_one_continuous_object() {
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+        elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
         element_markers: vec![1, 2],
         boundary_faces: Vec::new(),
         boundary_markers: Vec::new(),
@@ -1014,7 +1020,7 @@ fn fem_plan_maps_geometry_and_object_region_to_one_continuous_object() {
     };
 
     assert_eq!(fem.mesh.nodes.len(), 5);
-    assert_eq!(fem.mesh.elements, vec![[0, 1, 2, 3], [0, 1, 2, 4]]);
+    assert_eq!(fem.mesh.elements, vec![[0, 1, 2, 3], [0, 2, 1, 4]]);
     assert_eq!(fem.initial_magnetization.len(), 5);
     assert_eq!(fem.object_segments.len(), 2);
     assert!(fem
@@ -1336,6 +1342,7 @@ fn fdm_object_region_material_overrides_materialize_to_cell_fields() {
         priority: 10,
         conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
     }];
+    let region_id = region.region_id.clone();
     ir.object_regions.push(region);
 
     let plan = plan(&ir).expect("FDM should materialize supported region material overrides");
@@ -1355,6 +1362,19 @@ fn fdm_object_region_material_overrides_materialize_to_cell_fields() {
     let fullmag_ir::BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
         panic!("expected FDM plan");
     };
+    let legend = &fdm
+        .grid_certificate
+        .as_ref()
+        .expect("FDM plan should carry a grid certificate")
+        .region_legend;
+    assert_eq!(legend.len(), 1);
+    assert_eq!(legend[0].numeric_id, 1);
+    assert_eq!(legend[0].region_id, region_id);
+    assert!(fdm
+        .grid_certificate
+        .as_ref()
+        .and_then(|certificate| certificate.region_legend_fingerprint.as_deref())
+        .is_some_and(|value| value.starts_with("sha256:")));
     let ms_field = fdm
         .material
         .ms_field
@@ -1366,6 +1386,36 @@ fn fdm_object_region_material_overrides_materialize_to_cell_fields() {
     assert!(
         ms_field.iter().any(|value| (*value - 800e3).abs() <= 1e-12),
         "parent cells should keep the base material value"
+    );
+}
+
+#[test]
+fn fdm_cuda_region_material_fields_fail_in_planner_before_native_start() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cuda", "device_index": 0}),
+    );
+    let mut region = default_test_object_region();
+    region.material_overrides = vec![fullmag_ir::RegionMaterialOverrideIR {
+        parameter: fullmag_ir::MaterialParameterNameIR::Ms,
+        value: fullmag_ir::MaterialParameterFieldIR::Constant {
+            value: serde_json::json!(750e3),
+            unit: Some("A/m".to_string()),
+        },
+        priority: 10,
+        conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+    }];
+    ir.object_regions.push(region);
+
+    let error = plan(&ir).expect_err("CUDA region material fields must fail before native start");
+    assert!(
+        error.reasons.iter().any(|reason| {
+            reason.contains("fdm_cuda_region_material_fields_unsupported")
+                && reason.contains("cellwise material fields")
+        }),
+        "unexpected planner errors: {:?}",
+        error.reasons
     );
 }
 
@@ -1622,6 +1672,37 @@ fn fdm_region_region_explicit_exchange_blocks_on_cpu_reference() {
             reason.contains("left_right_exchange")
                 && reason.contains("requires runtime support")
                 && reason.contains("must not silently drop authored coupling intent")
+        }),
+        "unexpected planner errors: {:?}",
+        err.reasons
+    );
+}
+
+#[test]
+fn fdm_equal_priority_overlapping_regions_fail_closed_without_hidden_region_id_tie_break() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.object_regions.push(test_box_region(
+        "strip:overlap_a",
+        "overlap_a",
+        [-50e-9, 0.0, 0.0],
+        10,
+    ));
+    ir.object_regions.push(test_box_region(
+        "strip:overlap_b",
+        "overlap_b",
+        [-50e-9, 0.0, 0.0],
+        10,
+    ));
+
+    let err = plan(&ir).expect_err(
+        "equal-priority overlapping regions must not be resolved by lexicographic region id",
+    );
+    assert!(
+        err.reasons.iter().any(|reason| {
+            reason.contains("overlapping object regions")
+                && reason.contains("strip:overlap_a")
+                && reason.contains("strip:overlap_b")
+                && reason.contains("equal priority")
         }),
         "unexpected planner errors: {:?}",
         err.reasons
@@ -2344,15 +2425,20 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
                 mesh_name: "periodic_strip".to_string(),
                 nodes: vec![
                     [0.0, 0.0, 0.0],
-                    [1.0, 0.0, 0.0],
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
-                    [1.0, 1.0, 1.0],
+                    [1.0, 0.0, 0.0],
+                    [1.0, 1.0, 0.0],
+                    [1.0, 0.0, 1.0],
+                    [-2.0, -2.0, -2.0],
+                    [2.0, -2.0, -2.0],
+                    [-2.0, 2.0, -2.0],
+                    [-2.0, -2.0, 2.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [1, 2, 3, 4]],
-                element_markers: vec![1, 0],
-                boundary_faces: vec![[0, 1, 2], [0, 1, 3], [1, 2, 4]],
-                boundary_markers: vec![10, 11, 99],
+                elements: vec![[0, 1, 2, 3], [3, 5, 4, 0], [6, 7, 8, 9]],
+                element_markers: vec![1, 1, 0],
+                boundary_faces: vec![[0, 1, 2], [3, 5, 4]],
+                boundary_markers: vec![10, 11],
                 periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
                     pair_id: "x_periodic".to_string(),
                     source_marker: None,
@@ -2368,7 +2454,17 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
                 periodic_node_pairs: vec![fullmag_ir::MeshPeriodicNodePairIR {
                     pair_id: "x_periodic".to_string(),
                     node_a: 0,
-                    node_b: 1,
+                    node_b: 3,
+                },
+                fullmag_ir::MeshPeriodicNodePairIR {
+                    pair_id: "x_periodic".to_string(),
+                    node_a: 1,
+                    node_b: 4,
+                },
+                fullmag_ir::MeshPeriodicNodePairIR {
+                    pair_id: "x_periodic".to_string(),
+                    node_a: 2,
+                    node_b: 5,
                 }],
                 per_domain_quality: std::collections::HashMap::new(),
             }),
@@ -2380,6 +2476,14 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
             build_report: None,
         }),
     });
+    if let Some(mesh) = ir
+        .geometry_assets
+        .as_mut()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+        .and_then(|asset| asset.mesh.as_mut())
+    {
+        complete_test_airbox_boundaries(mesh);
+    }
     ir.energy_terms = vec![fullmag_ir::EnergyTermIR::Exchange];
 
     let err = plan(&ir)
@@ -2407,7 +2511,7 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
     match planned.backend_plan {
         BackendPlanIR::Fem(fem) => {
             assert_eq!(fem.mesh.mesh_name, "periodic_strip");
-            assert_eq!(fem.mesh.periodic_node_pairs.len(), 1);
+            assert_eq!(fem.mesh.periodic_node_pairs.len(), 3);
             assert!(fem.enable_exchange);
             assert!(!fem.enable_demag);
         }
@@ -2471,10 +2575,21 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
         .demag = fullmag_ir::FdmDemagPeriodicityIR::PeriodicAirboxK0;
     let demag_planned =
         plan(&demag_ir).expect("periodic FEM static demag with periodic-airbox PBC should plan");
-    match demag_planned.backend_plan {
+    assert!(demag_planned
+        .provenance
+        .notes
+        .iter()
+        .any(|note| note.contains("periodic mesh certificate: schema=periodic_mesh_certificate.v6")
+            && note.contains("topology=sha256:")
+            && note.contains("magnetic_classes=3")
+            && note.contains("scalar_classes=3")),
+        "periodic certificate identity was not preserved in planner provenance: {:?}",
+        demag_planned.provenance.notes
+    );
+    match &demag_planned.backend_plan {
         BackendPlanIR::Fem(fem) => {
             assert!(fem.enable_demag);
-            assert_eq!(fem.mesh.periodic_node_pairs.len(), 1);
+            assert_eq!(fem.mesh.periodic_node_pairs.len(), 3);
             assert!(fem.air_box_config.is_some());
         }
         other => panic!("expected FEM plan, got {:?}", other),
@@ -2496,6 +2611,12 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
         .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
         .and_then(|asset| asset.mesh.as_mut())
         .expect("test problem should carry an inline FEM domain mesh");
+    for point in &mut mesh.nodes {
+        *point = [point[2], point[1], point[0]];
+    }
+    for element in &mut mesh.elements {
+        element.swap(1, 2);
+    }
     mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
         pair_id: "z_periodic".to_string(),
         source_marker: None,
@@ -2508,11 +2629,23 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
         orientation: None,
         pairing_policy: None,
     }];
-    mesh.periodic_node_pairs = vec![fullmag_ir::MeshPeriodicNodePairIR {
-        pair_id: "z_periodic".to_string(),
-        node_a: 0,
-        node_b: 3,
-    }];
+    mesh.periodic_node_pairs = vec![
+        fullmag_ir::MeshPeriodicNodePairIR {
+            pair_id: "z_periodic".to_string(),
+            node_a: 0,
+            node_b: 3,
+        },
+        fullmag_ir::MeshPeriodicNodePairIR {
+            pair_id: "z_periodic".to_string(),
+            node_a: 1,
+            node_b: 4,
+        },
+        fullmag_ir::MeshPeriodicNodePairIR {
+            pair_id: "z_periodic".to_string(),
+            node_a: 2,
+            node_b: 5,
+        },
+    ];
     let z_demag_planned =
         plan(&z_demag_ir).expect("single-axis z FEM demag PBC with open x/y airbox should plan");
     match z_demag_planned.backend_plan {
@@ -2755,6 +2888,91 @@ fn fem_plan_serializes_mesh_parts() {
     assert!(!mesh_parts.is_empty());
 }
 
+fn certified_airbox_test_mesh(outer_marker: u32) -> fullmag_ir::MeshIR {
+    fullmag_ir::MeshIR {
+        mesh_name: "strip".to_string(),
+        nodes: vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 1.0],
+        ],
+        elements: vec![[0, 1, 2, 3], [1, 2, 3, 4]],
+        element_markers: vec![1, 0],
+        boundary_faces: vec![
+            [0, 1, 2],
+            [0, 1, 3],
+            [0, 2, 3],
+            [1, 2, 4],
+            [1, 3, 4],
+            [2, 3, 4],
+            [1, 2, 3],
+        ],
+        boundary_markers: vec![1, 1, 1, outer_marker, outer_marker, outer_marker, 10],
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
+        per_domain_quality: std::collections::HashMap::new(),
+    }
+}
+
+fn complete_test_airbox_boundaries(mesh: &mut fullmag_ir::MeshIR) {
+    use std::collections::BTreeMap;
+
+    let mut topology: BTreeMap<[u32; 3], Vec<bool>> = BTreeMap::new();
+    for (index, element) in mesh.elements.iter().enumerate() {
+        let is_air = mesh.element_markers.get(index).copied().unwrap_or(1) == 0;
+        for mut face in [
+            [element[0], element[1], element[2]],
+            [element[0], element[1], element[3]],
+            [element[0], element[2], element[3]],
+            [element[1], element[2], element[3]],
+        ] {
+            face.sort_unstable();
+            topology.entry(face).or_default().push(is_air);
+        }
+    }
+    let existing = mesh
+        .boundary_faces
+        .iter()
+        .map(|face| {
+            let mut key = *face;
+            key.sort_unstable();
+            key
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut next_marker = mesh
+        .boundary_markers
+        .iter()
+        .copied()
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1);
+    let outer_marker = if mesh.boundary_markers.contains(&99) {
+        99
+    } else {
+        let marker = next_marker;
+        next_marker = next_marker.saturating_add(1);
+        marker
+    };
+    let magnetic_marker = next_marker;
+    next_marker = next_marker.saturating_add(1);
+    let interface_marker = next_marker;
+    for (face, adjacent) in topology {
+        if existing.contains(&face) {
+            continue;
+        }
+        let marker = match adjacent.as_slice() {
+            [is_air] if *is_air => outer_marker,
+            [is_air] if !*is_air => magnetic_marker,
+            [first, second] if first != second => interface_marker,
+            _ => continue,
+        };
+        mesh.boundary_faces.push(face);
+        mesh.boundary_markers.push(marker);
+    }
+}
+
 #[test]
 fn fem_backend_with_air_elements_lowers_study_universe_to_air_box_config() {
     let mut ir = ProblemIR::bootstrap_example();
@@ -2829,6 +3047,21 @@ fn fem_backend_with_air_elements_lowers_study_universe_to_air_box_config() {
         }),
     });
 
+    let mesh = ir
+        .geometry_assets
+        .as_mut()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+        .and_then(|asset| asset.mesh.as_mut())
+        .expect("airbox fixture mesh");
+    mesh.boundary_faces.extend([
+        [0, 1, 3],
+        [0, 2, 3],
+        [1, 2, 3],
+        [4, 5, 7],
+        [4, 6, 7],
+        [5, 6, 7],
+    ]);
+    mesh.boundary_markers.extend([1, 1, 1, 99, 99, 99]);
     let plan = plan(&ir).expect("FEM air-box mesh asset should produce an air-box config");
     match plan.backend_plan {
         BackendPlanIR::Fem(fem) => {
@@ -2855,8 +3088,7 @@ fn fem_backend_with_air_elements_lowers_study_universe_to_air_box_config() {
         .any(|note| note.contains("FEM air-box configuration")));
 }
 
-/// When marker 99 (the well-known gmsh convention) is present in boundary_markers,
-/// strict mode should auto-detect it and succeed — it is not a guess.
+/// A complete airbox certifies the outer marker independently of its numeric ID.
 #[test]
 fn fem_backend_with_air_elements_accepts_marker_99_in_strict_mode() {
     let mut ir = ProblemIR::bootstrap_example();
@@ -2927,6 +3159,21 @@ fn fem_backend_with_air_elements_accepts_marker_99_in_strict_mode() {
         }),
     });
 
+    let mesh = ir
+        .geometry_assets
+        .as_mut()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+        .and_then(|asset| asset.mesh.as_mut())
+        .expect("airbox fixture mesh");
+    mesh.boundary_faces.extend([
+        [0, 1, 3],
+        [0, 2, 3],
+        [1, 2, 3],
+        [4, 5, 7],
+        [4, 6, 7],
+        [5, 6, 7],
+    ]);
+    mesh.boundary_markers.extend([1, 1, 1, 99, 99, 99]);
     let result = plan(&ir).expect(
         "strict mode should accept marker 99 (well-known gmsh convention) without explicit air_box_policy",
     );
@@ -2941,16 +3188,19 @@ fn fem_backend_with_air_elements_accepts_marker_99_in_strict_mode() {
     assert_eq!(air_box.boundary_marker, 99);
     assert_eq!(
         air_box.boundary_marker_source.as_deref(),
-        Some("mesh_marker_99")
+        Some("certified_gamma_out")
     );
 }
 
-/// When marker 99 is NOT present and no explicit boundary_marker is set,
-/// strict mode should still reject the plan.
+/// An un-certified marker must be rejected even when the mesh contains air.
 #[test]
 fn fem_backend_with_air_elements_rejects_unknown_boundary_marker_in_strict_mode() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.backend_policy.requested_backend = BackendTarget::Fem;
+    ir.air_box_policy = Some(fullmag_ir::AirBoxPolicyIR {
+        boundary_marker: Some(99),
+        ..Default::default()
+    });
     ir.problem_meta.runtime_metadata.insert(
         "study_universe".to_string(),
         serde_json::json!({
@@ -2988,26 +3238,7 @@ fn fem_backend_with_air_elements_rejects_unknown_boundary_marker_in_strict_mode(
         fem_mesh_assets: vec![],
         fem_domain_mesh_asset: Some(fullmag_ir::FemDomainMeshAssetIR {
             mesh_source: None,
-            mesh: Some(fullmag_ir::MeshIR {
-                mesh_name: "strip".to_string(),
-                nodes: vec![
-                    [0.0, 0.0, 0.0],
-                    [1.0, 0.0, 0.0],
-                    [0.0, 1.0, 0.0],
-                    [0.0, 0.0, 1.0],
-                    [-2.0, -2.0, -2.0],
-                    [2.0, -2.0, -2.0],
-                    [-2.0, 2.0, -2.0],
-                    [-2.0, -2.0, 2.0],
-                ],
-                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
-                element_markers: vec![1, 0],
-                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
-                boundary_markers: vec![1, 42],
-                periodic_boundary_pairs: Vec::new(),
-                periodic_node_pairs: Vec::new(),
-                per_domain_quality: std::collections::HashMap::new(),
-            }),
+            mesh: Some(certified_airbox_test_mesh(42)),
             region_markers: vec![fullmag_ir::FemDomainRegionMarkerIR {
                 geometry_name: "strip".to_string(),
                 marker: 1,
@@ -3020,10 +3251,10 @@ fn fem_backend_with_air_elements_rejects_unknown_boundary_marker_in_strict_mode(
     let error = plan(&ir).expect_err(
         "strict FEM air-box planning should reject when marker 99 is absent and no explicit boundary_marker",
     );
-    assert!(error.reasons.iter().any(|reason| {
-        reason.contains("air_box_policy.boundary_marker")
-            && reason.contains("strict execution mode")
-    }));
+    assert!(error
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("Gamma_out") || reason.contains("certified")));
 }
 
 #[test]
@@ -4095,7 +4326,7 @@ fn fem_plan_conformal_shared_domain_duplicates_interface_nodes_for_cuda() {
                     [0.0, 0.0, 1.0],
                     [0.0, 0.0, -1.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+                elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
                 element_markers: vec![1, 2],
                 boundary_faces: vec![[0, 1, 3], [0, 1, 4]],
                 boundary_markers: vec![10, 20],
@@ -4196,7 +4427,7 @@ fn fem_plan_four_body_shared_domain_populates_region_materials_on_cuda() {
         [0, 4, 2, 3],
         [0, 1, 5, 3],
         [0, 1, 2, 6],
-        [0, 7, 2, 8],
+        [0, 7, 8, 2],
     ];
     let element_markers = vec![1, 2, 3, 4, 0];
 
@@ -6088,6 +6319,14 @@ fn fem_eigen_allows_k0_kittel_synthetic_demag_factor_floquet_path() {
             build_report: None,
         }),
     });
+    if let Some(mesh) = ir
+        .geometry_assets
+        .as_mut()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+        .and_then(|asset| asset.mesh.as_mut())
+    {
+        complete_test_airbox_boundaries(mesh);
+    }
     ir.energy_terms = vec![
         fullmag_ir::EnergyTermIR::Exchange,
         fullmag_ir::EnergyTermIR::Demag {
@@ -6237,6 +6476,14 @@ fn fem_eigen_allows_k0_kittel_periodic_airbox_shared_domain_path() {
             build_report: None,
         }),
     });
+    if let Some(mesh) = ir
+        .geometry_assets
+        .as_mut()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+        .and_then(|asset| asset.mesh.as_mut())
+    {
+        complete_test_airbox_boundaries(mesh);
+    }
     ir.energy_terms = vec![
         fullmag_ir::EnergyTermIR::Exchange,
         fullmag_ir::EnergyTermIR::Demag {
@@ -6603,6 +6850,14 @@ fn fem_eigen_auto_demag_resolves_to_poisson_robin_on_shared_domain_mesh_with_air
             build_report: None,
         }),
     });
+    if let Some(mesh) = ir
+        .geometry_assets
+        .as_mut()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+        .and_then(|asset| asset.mesh.as_mut())
+    {
+        complete_test_airbox_boundaries(mesh);
+    }
     ir.energy_terms = vec![
         fullmag_ir::EnergyTermIR::Exchange,
         fullmag_ir::EnergyTermIR::Demag {
@@ -6983,6 +7238,14 @@ fn fem_eigen_floquet_dynamic_demag_is_rejected() {
             build_report: None,
         }),
     });
+    if let Some(mesh) = ir
+        .geometry_assets
+        .as_mut()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+        .and_then(|asset| asset.mesh.as_mut())
+    {
+        complete_test_airbox_boundaries(mesh);
+    }
     ir.energy_terms = vec![
         fullmag_ir::EnergyTermIR::Exchange,
         fullmag_ir::EnergyTermIR::Demag {
@@ -7393,7 +7656,7 @@ fn fem_frequency_response_rejects_unsupported_production_slice_cases() {
     let err = plan(&nonzero_k).expect_err("nonzero-k response should be gated");
     assert!(err.reasons.iter().any(|reason| {
         reason.contains("supported frequency-domain slices")
-            && reason.contains("nonzero-k driven response requires spin_wave_bc=floquet")
+            && reason.contains("nonzero-k Floquet/Bloch driven response requires spin_wave_bc=floquet")
     }));
 
     let mut periodic_without_pairs = fem_frequency_response_mesh_asset_problem();
@@ -8086,6 +8349,13 @@ fn fem_frequency_response_periodic_airbox_domain_problem() -> ProblemIR {
         object_region_markers: Vec::new(),
         build_report: None,
     });
+    if let Some(mesh) = geometry_assets
+        .fem_domain_mesh_asset
+        .as_mut()
+        .and_then(|asset| asset.mesh.as_mut())
+    {
+        complete_test_airbox_boundaries(mesh);
+    }
     ir.energy_terms = vec![
         fullmag_ir::EnergyTermIR::Exchange,
         fullmag_ir::EnergyTermIR::Demag {
@@ -8459,6 +8729,14 @@ fn fem_plan_succeeds_when_shared_domain_has_domain_mesh_asset() {
             build_report: None,
         }),
     });
+    if let Some(mesh) = ir
+        .geometry_assets
+        .as_mut()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+        .and_then(|asset| asset.mesh.as_mut())
+    {
+        complete_test_airbox_boundaries(mesh);
+    }
 
     let result = plan(&ir);
     assert!(
@@ -8737,6 +9015,7 @@ fn fem_domain_mesh_asset_accepts_optional_build_report() {
             effective_airbox_hmax: Some(100e-9),
             effective_per_object_targets: std::collections::HashMap::new(),
             region_markers: vec![],
+            object_region_markers: vec![],
             used_size_field_kinds: vec!["ComponentVolumeConstant".to_string()],
             size_fields_realized: vec![],
             operation_statuses: vec![],
@@ -8745,6 +9024,9 @@ fn fem_domain_mesh_asset_accepts_optional_build_report() {
             authored_regions_count: None,
             realized_regions_count: None,
             magnetic_submesh_signatures: Vec::new(),
+            selector_resolution: Vec::new(),
+            orphan_entities: Vec::new(),
+            rejected_element_types: Vec::new(),
         }),
     };
     assert!(asset.validate().is_ok());
@@ -8792,6 +9074,7 @@ fn fdm_boundary_params_passthrough_phi_floor_and_delta_min() {
         name: "disk".to_string(),
         radius: 50e-9,
         height: 6e-9,
+        axis: [0.0, 0.0, 1.0],
     }];
     ir.regions[0].geometry = "disk".to_string();
     ir.backend_policy.discretization_hints = Some(DiscretizationHintsIR {
@@ -8835,6 +9118,205 @@ fn fdm_boundary_params_passthrough_phi_floor_and_delta_min() {
 }
 
 #[test]
+fn fdm_translated_difference_keeps_boundary_sdf_realization() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.geometry.entries = vec![GeometryEntryIR::Difference {
+        name: "ring".to_string(),
+        base: Box::new(GeometryEntryIR::Cylinder {
+            name: "outer".to_string(),
+            radius: 50e-9,
+            height: 6e-9,
+            axis: [0.0, 0.0, 1.0],
+        }),
+        tool: Box::new(GeometryEntryIR::Translate {
+            name: "offset_hole".to_string(),
+            base: Box::new(GeometryEntryIR::Cylinder {
+                name: "inner".to_string(),
+                radius: 15e-9,
+                height: 2e-9,
+                axis: [0.0, 0.0, 1.0],
+            }),
+            by: [20e-9, 0.0, 0.0],
+        }),
+    }];
+    ir.regions[0].geometry = "ring".to_string();
+    ir.backend_policy.discretization_hints = Some(DiscretizationHintsIR {
+        fdm: Some(fullmag_ir::FdmHintsIR {
+            cell: [2e-9, 2e-9, 2e-9],
+            default_cell: None,
+            per_magnet: None,
+            demag: None,
+            boundary_correction: Some("full".to_string()),
+            boundary_phi_floor: None,
+            boundary_delta_min: None,
+        }),
+        fem: None,
+        hybrid: None,
+    });
+
+    let plan = plan(&ir).expect("translated CSG with boundary correction should plan");
+    let BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
+        panic!("expected FDM plan");
+    };
+    assert!(
+        fdm.boundary_geometry.is_some(),
+        "translated finite-cylinder CSG must retain a boundary SDF"
+    );
+}
+
+#[test]
+fn fdm_translated_base_boundary_sdf_matches_active_mask_coordinates() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.geometry.entries = vec![GeometryEntryIR::Translate {
+        name: "shifted_pillar".to_string(),
+        base: Box::new(GeometryEntryIR::Cylinder {
+            name: "pillar".to_string(),
+            radius: 20e-9,
+            height: 4e-9,
+            axis: [0.0, 0.0, 1.0],
+        }),
+        by: [20e-9, 0.0, 0.0],
+    }];
+    ir.regions[0].geometry = "shifted_pillar".to_string();
+    ir.backend_policy.discretization_hints = Some(DiscretizationHintsIR {
+        fdm: Some(fullmag_ir::FdmHintsIR {
+            cell: [10e-9, 10e-9, 2e-9],
+            default_cell: None,
+            per_magnet: None,
+            demag: None,
+            boundary_correction: Some("full".to_string()),
+            boundary_phi_floor: None,
+            boundary_delta_min: None,
+        }),
+        fem: None,
+        hybrid: None,
+    });
+
+    let plan = plan(&ir).expect("translated base with boundary correction should plan");
+    let BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
+        panic!("expected FDM plan");
+    };
+    assert_eq!(fdm.origin_m, [0.0, -20e-9, -2e-9]);
+    let serialized = serde_json::to_value(&fdm).expect("FDM plan should serialize");
+    assert_eq!(serialized["origin_m"], serde_json::json!([0.0, -20e-9, -2e-9]));
+    let boundary = fdm.boundary_geometry.expect("translated base must retain SDF");
+    let active_mask = fdm.active_mask.expect("cylinder should have an active mask");
+    let active_index = active_mask
+        .iter()
+        .position(|active| *active)
+        .expect("translated cylinder should contain active cells");
+    assert!(
+        boundary.volume_fraction[active_index] > 0.0,
+        "boundary volume fraction must be non-zero wherever translated active mask is set"
+    );
+}
+
+#[test]
+fn fdm_translated_single_grid_asset_matches_multilayer_origin() {
+    let mut ir = ProblemIR::bootstrap_example();
+    let translation = [30e-9, -10e-9, 4e-9];
+    ir.geometry.entries = vec![GeometryEntryIR::Translate {
+        name: "shifted_asset".to_string(),
+        base: Box::new(GeometryEntryIR::Box {
+            name: "asset_base".to_string(),
+            size: [4e-9, 4e-9, 2e-9],
+        }),
+        by: translation,
+    }];
+    ir.regions[0].geometry = "shifted_asset".to_string();
+    let asset_origin = [-2e-9, -2e-9, -1e-9];
+    ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+        fdm_grid_assets: vec![fullmag_ir::FdmGridAssetIR {
+            geometry_name: "shifted_asset".to_string(),
+            cells: [2, 2, 1],
+            cell_size: [2e-9, 2e-9, 2e-9],
+            origin: asset_origin,
+            active_mask: vec![true, true, true, false],
+        }],
+        fem_mesh_assets: vec![],
+        fem_domain_mesh_asset: None,
+    });
+
+    let planned = plan(&ir).expect("translated single-grid asset should plan");
+    let BackendPlanIR::Fdm(single) = planned.backend_plan else {
+        panic!("expected single-grid FDM plan");
+    };
+    let placed = extract_multilayer_geometry(&ir.geometry.entries[0])
+        .expect("the same geometry must lower for multilayer");
+    let expected_origin = std::array::from_fn(|axis| asset_origin[axis] + placed.translation[axis]);
+    assert_eq!(single.origin_m, expected_origin);
+    let first_active_cell: [f64; 3] = std::array::from_fn(|axis| {
+        single.origin_m[axis] + 0.5 * single.cell_size[axis]
+    });
+    for (actual, expected) in first_active_cell.into_iter().zip([29e-9, -11e-9, 4e-9]) {
+        assert!((actual - expected).abs() < 1e-21);
+    }
+    assert!(single.active_mask.as_ref().expect("asset mask")[0]);
+    assert!(!single.active_mask.as_ref().expect("asset mask")[3]);
+}
+
+#[test]
+fn cylinder_axis_controls_oriented_bounds_and_containment() {
+    let cylinder = GeometryEntryIR::Cylinder {
+        name: "oriented".to_string(),
+        radius: 1.0,
+        height: 4.0,
+        axis: [1.0, 0.0, 0.0],
+    };
+    let shape = ir_to_shape(&cylinder).expect("cylinder should lower");
+    let (min, max) = shape_local_bounds(&shape).expect("cylinder bounds should be analytic");
+    assert_eq!(min, [-2.0, -1.0, -1.0]);
+    assert_eq!(max, [2.0, 1.0, 1.0]);
+    assert!(contains_cylinder(&shape, [1.5, 0.0, 0.0]));
+    assert!(!contains_cylinder(&shape, [0.0, 1.1, 0.0]));
+
+    let y_axis = GeometryEntryIR::Cylinder {
+        name: "y_axis".to_string(),
+        radius: 1.0,
+        height: 4.0,
+        axis: [0.0, 1.0, 0.0],
+    };
+    let y_shape = ir_to_shape(&y_axis).expect("y-axis cylinder should lower");
+    let (y_min, y_max) = shape_local_bounds(&y_shape).expect("y-axis bounds should be analytic");
+    assert_eq!(y_min, [-1.0, -2.0, -1.0]);
+    assert_eq!(y_max, [1.0, 2.0, 1.0]);
+    assert!(contains_cylinder(&y_shape, [0.0, 1.5, 0.0]));
+    assert!(!contains_cylinder(&y_shape, [1.1, 0.0, 0.0]));
+
+    let diagonal = GeometryEntryIR::Cylinder {
+        name: "diagonal".to_string(),
+        radius: 1.0,
+        height: 4.0,
+        axis: [1.0, 1.0, 1.0],
+    };
+    let diagonal_shape = ir_to_shape(&diagonal).expect("diagonal cylinder should lower");
+    let (diagonal_min, diagonal_max) =
+        shape_local_bounds(&diagonal_shape).expect("diagonal bounds should be analytic");
+    let extent = (1.0_f64 * (1.0_f64 - 1.0_f64 / 3.0_f64)
+        + 4.0_f64 * 4.0_f64 / 4.0_f64 * (1.0_f64 / 3.0_f64))
+        .sqrt();
+    for component in diagonal_min.iter().chain(diagonal_max.iter()) {
+        assert!((component.abs() - extent).abs() < 1e-12);
+    }
+    assert!(contains_cylinder(&diagonal_shape, [1.0, 1.0, 1.0]));
+    assert!(!contains_cylinder(&diagonal_shape, [2.0, -2.0, 0.0]));
+}
+
+#[test]
+fn cylinder_axis_lowering_rejects_zero_and_nonfinite_axes() {
+    for axis in [[0.0, 0.0, 0.0], [f64::NAN, 0.0, 1.0]] {
+        let cylinder = GeometryEntryIR::Cylinder {
+            name: "invalid_axis".to_string(),
+            radius: 1.0,
+            height: 2.0,
+            axis,
+        };
+        let error = ir_to_shape(&cylinder).expect_err("invalid cylinder axis must fail closed");
+        assert!(error.contains("cylinder axis"));
+    }
+}
+
+#[test]
 fn fdm_boundary_params_none_when_not_set() {
     let ir = ProblemIR::bootstrap_example();
     let plan = plan(&ir).expect("bootstrap example should plan successfully");
@@ -8851,6 +9333,135 @@ fn fdm_boundary_params_none_when_not_set() {
 // ═══════════════════════════════════════════════════════════════════════════
 // FDM PBC planner regression tests
 // ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn fdm_pbc_demag_resolution_matrix_is_lane_independent() {
+    let axes = [
+        [AxisBoundary::Open, AxisBoundary::Open, AxisBoundary::Open],
+        [AxisBoundary::Periodic, AxisBoundary::Open, AxisBoundary::Open],
+        [AxisBoundary::Periodic, AxisBoundary::Periodic, AxisBoundary::Open],
+        [AxisBoundary::Periodic, AxisBoundary::Periodic, AxisBoundary::Periodic],
+    ];
+    for device in [None, Some("cuda")] {
+        for axis_set in axes {
+            for demag in [
+                FdmDemagPeriodicityIR::Open,
+                FdmDemagPeriodicityIR::TruncatedImages,
+            ] {
+                let mut ir = ProblemIR::bootstrap_example();
+                ir.energy_terms.push(EnergyTermIR::Demag {
+                    realization: fullmag_ir::RequestedFemDemagIR::Auto,
+                });
+                if let Some(device) = device {
+                    ir.problem_meta.runtime_metadata.insert(
+                        "runtime_selection".to_string(),
+                        serde_json::json!({"device": device, "device_index": 0}),
+                    );
+                }
+                ir.pbc = Some(FdmPeriodicityIR {
+                    axes: axis_set,
+                    demag,
+                    image_counts: Some([4, 4, 4]),
+                });
+                let result = plan(&ir);
+                let has_periodic_axis = axis_set
+                    .iter()
+                    .any(|axis| *axis == AxisBoundary::Periodic);
+                if demag == FdmDemagPeriodicityIR::Open && has_periodic_axis {
+                    let error = result.expect_err("periodic + open demag must fail closed");
+                    assert!(
+                        error.reasons.iter().any(|reason| {
+                            reason.contains(
+                                "FDM periodic demag requires pbc.demag='truncated_images'",
+                            )
+                        }),
+                        "unexpected rejection for device={device:?}, axes={axis_set:?}: {:?}",
+                        error.reasons
+                    );
+                } else {
+                    let plan = result.expect("legal FDM PBC matrix case should plan");
+                    assert!(matches!(plan.backend_plan, BackendPlanIR::Fdm(_)));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn fdm_cuda_fp32_periodic_exchange_is_capability_gated_until_parity() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.execution_precision = ExecutionPrecision::Single;
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cuda", "device_index": 0}),
+    );
+    ir.pbc = Some(FdmPeriodicityIR {
+        axes: [
+            AxisBoundary::Periodic,
+            AxisBoundary::Open,
+            AxisBoundary::Open,
+        ],
+        demag: FdmDemagPeriodicityIR::Open,
+        image_counts: None,
+    });
+
+    let error = plan(&ir).expect_err("unqualified CUDA FP32 periodic exchange must fail closed");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("single")
+            && reason.contains("periodic axes")
+            && reason.contains("FP32 seam exchange parity")
+    }));
+}
+
+#[test]
+fn fdm_multilayer_periodic_axes_fail_closed_until_kernel_parity() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    ir.pbc = Some(FdmPeriodicityIR {
+        axes: [
+            AxisBoundary::Periodic,
+            AxisBoundary::Open,
+            AxisBoundary::Open,
+        ],
+        demag: FdmDemagPeriodicityIR::TruncatedImages,
+        image_counts: Some([2, 0, 0]),
+    });
+
+    let error = plan(&ir).expect_err("multilayer periodic kernels must fail closed");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("multilayer periodic axes")
+            && reason.contains("self/shifted demag kernels")
+    }));
+}
+
+#[test]
+fn fdm_periodic_boundary_correction_fails_closed_until_seam_parity() {
+    for correction in ["volume", "full"] {
+        let mut ir = ProblemIR::bootstrap_example();
+        let fdm = ir
+            .backend_policy
+            .discretization_hints
+            .as_mut()
+            .and_then(|hints| hints.fdm.as_mut())
+            .expect("bootstrap must carry FDM hints");
+        fdm.boundary_correction = Some(correction.to_string());
+        ir.pbc = Some(FdmPeriodicityIR {
+            axes: [
+                AxisBoundary::Periodic,
+                AxisBoundary::Open,
+                AxisBoundary::Open,
+            ],
+            demag: FdmDemagPeriodicityIR::Open,
+            image_counts: None,
+        });
+
+        let error = plan(&ir).expect_err("periodic T0/T1 must fail closed");
+        assert!(error.reasons.iter().any(|reason| {
+            reason.contains("boundary_correction")
+                && reason.contains(correction)
+                && reason.contains("seam-aware T0/T1 exchange parity")
+        }));
+    }
+}
 
 #[test]
 fn fdm_pbc_with_exchange_plans() {
@@ -8893,6 +9504,14 @@ fn fdm_cpu_pbc_truncated_images_demag_plans() {
                 fdm.periodicity.as_ref().and_then(|pbc| pbc.image_counts),
                 Some([4, 4, 0])
             );
+            let resolved = fdm
+                .resolved_periodic_images
+                .as_ref()
+                .expect("planner must persist resolved periodic workspace cost");
+            assert_eq!(resolved.resolved_image_counts, [4, 4, 0]);
+            assert_eq!(resolved.padded_counts[0], u64::from(fdm.grid.cells[0]));
+            assert_eq!(resolved.padded_counts[1], u64::from(fdm.grid.cells[1]));
+            assert_eq!(resolved.padded_counts[2], u64::from(fdm.grid.cells[2]) * 2);
         }
         _ => panic!("expected FDM plan"),
     }
@@ -8949,6 +9568,10 @@ fn fdm_cuda_pbc_truncated_images_demag_plans() {
             assert_eq!(
                 fdm.periodicity.as_ref().and_then(|pbc| pbc.image_counts),
                 Some([4, 4, 0])
+            );
+            assert!(
+                fdm.resolved_periodic_images.is_some(),
+                "CUDA plan must carry the same resolved workspace contract"
             );
         }
         _ => panic!("expected FDM plan"),
@@ -10533,5 +11156,251 @@ fn hysteresis_planner_reports_ir_validation_errors() {
             .any(|reason| reason.contains("field_step_mT must not be zero")),
         "planner must surface hysteresis IR validation errors, got {:?}",
         error.reasons
+    );
+}
+
+#[test]
+fn fdm_grid_count_overflow_is_rejected() {
+    let counts = [u32::MAX, u32::MAX, 2];
+    let error = crate::geometry::checked_fdm_grid_cost(counts, 1)
+        .expect_err("grid cell-count multiplication must reject u64 overflow");
+
+    assert!(error
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("fdm_grid_count_overflow")));
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("4294967295") && reason.contains("requested_counts")
+    }));
+}
+
+#[test]
+fn fdm_grid_memory_budget_is_rejected() {
+    let counts = [1_000, 1_000, 1_000];
+    let error = crate::geometry::checked_fdm_grid_cost(counts, 16)
+        .expect_err("grid allocation must reject a cost above the lane budget");
+
+    assert!(error
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("fdm_grid_memory_budget_exceeded")));
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("1000") && reason.contains("requested_counts")
+    }));
+}
+
+#[test]
+fn fdm_per_magnet_cells_resolve_without_hidden_fallback() {
+    let mut per_magnet = BTreeMap::new();
+    per_magnet.insert(
+        "left".to_string(),
+        fullmag_ir::FdmGridHintsIR {
+            cell: [1e-9, 2e-9, 3e-9],
+        },
+    );
+    per_magnet.insert(
+        "right".to_string(),
+        fullmag_ir::FdmGridHintsIR {
+            cell: [2e-9, 2e-9, 3e-9],
+        },
+    );
+    let hints = fullmag_ir::FdmHintsIR {
+        cell: [0.0; 3],
+        default_cell: None,
+        per_magnet: Some(per_magnet),
+        demag: None,
+        boundary_correction: None,
+        boundary_phi_floor: None,
+        boundary_delta_min: None,
+    };
+
+    assert_eq!(cell_for_magnet(&hints, "left").unwrap(), [1e-9, 2e-9, 3e-9]);
+    assert!(cell_for_magnet(&hints, "missing").unwrap_err().contains("missing"));
+    assert!(fdm_default_cell(&hints).is_err());
+}
+
+#[test]
+fn fdm_single_grid_plan_uses_per_magnet_cell_without_default() {
+    let mut ir = ProblemIR::bootstrap_example();
+    let magnet_name = ir.magnets[0].name.clone();
+    let mut per_magnet = BTreeMap::new();
+    per_magnet.insert(
+        magnet_name,
+        fullmag_ir::FdmGridHintsIR {
+            cell: [1e-9, 2e-9, 3e-9],
+        },
+    );
+    let fdm = ir
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .expect("bootstrap must carry FDM hints");
+    fdm.cell = [0.0; 3];
+    fdm.default_cell = None;
+    fdm.per_magnet = Some(per_magnet);
+
+    let planned = plan(&ir).expect("single-grid per-magnet cell should plan");
+    match planned.backend_plan {
+        BackendPlanIR::Fdm(single) => {
+            assert_eq!(single.cell_size, [1e-9, 2e-9, 3e-9]);
+        }
+        other => panic!("expected FDM single-grid plan, got {other:?}"),
+    }
+}
+
+#[test]
+fn fdm_multilayer_plan_resolves_complete_per_magnet_map_without_default() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    let mut per_magnet = BTreeMap::new();
+    for magnet in &ir.magnets {
+        per_magnet.insert(
+            magnet.name.clone(),
+            fullmag_ir::FdmGridHintsIR {
+                cell: [2e-9, 2e-9, 2e-9],
+            },
+        );
+    }
+    let fdm = ir
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .expect("stacked fixture must carry FDM hints");
+    fdm.cell = [0.0; 3];
+    fdm.default_cell = None;
+    fdm.per_magnet = Some(per_magnet);
+
+    let planned = plan(&ir).expect("complete per-magnet map should plan");
+    match planned.backend_plan {
+        BackendPlanIR::FdmMultilayer(multilayer) => {
+            assert_eq!(multilayer.layers.len(), 2);
+            assert!(multilayer
+                .layers
+                .iter()
+                .all(|layer| layer.native_cell_size == [2e-9, 2e-9, 2e-9]));
+        }
+        other => panic!("expected FDM multilayer plan, got {other:?}"),
+    }
+}
+
+#[test]
+fn fdm_multilayer_plan_rejects_missing_or_conflicting_per_magnet_cells() {
+    let mut missing = stacked_two_body_multilayer_problem();
+    let mut only_free = BTreeMap::new();
+    only_free.insert(
+        "free".to_string(),
+        fullmag_ir::FdmGridHintsIR {
+            cell: [2e-9, 2e-9, 2e-9],
+        },
+    );
+    let fdm = missing
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .expect("stacked fixture must carry FDM hints");
+    fdm.cell = [0.0; 3];
+    fdm.default_cell = None;
+    fdm.per_magnet = Some(only_free);
+    let error = plan(&missing).expect_err("missing layer override must fail closed");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("ref") && reason.contains("missing cell override")
+    }), "unexpected reasons: {:?}", error.reasons);
+
+    let mut conflicting = stacked_two_body_multilayer_problem();
+    let mut per_magnet = BTreeMap::new();
+    per_magnet.insert(
+        "free".to_string(),
+        fullmag_ir::FdmGridHintsIR {
+            cell: [1e-9, 2e-9, 2e-9],
+        },
+    );
+    per_magnet.insert(
+        "ref".to_string(),
+        fullmag_ir::FdmGridHintsIR {
+            cell: [2e-9, 2e-9, 2e-9],
+        },
+    );
+    let fdm = conflicting
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .expect("stacked fixture must carry FDM hints");
+    fdm.cell = [0.0; 3];
+    fdm.default_cell = None;
+    fdm.per_magnet = Some(per_magnet);
+    let error = plan(&conflicting).expect_err("conflicting native cells must fail closed");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("requires default_cell when per_magnet cell overrides differ")
+    }));
+}
+
+#[test]
+fn fdm_difference_preserves_translated_operand_and_finite_height() {
+    let base = fullmag_ir::GeometryEntryIR::Box {
+        name: "base".to_string(),
+        size: [4.0, 4.0, 4.0],
+    };
+    let tool = fullmag_ir::GeometryEntryIR::Translate {
+        name: "tool".to_string(),
+        base: Box::new(fullmag_ir::GeometryEntryIR::Cylinder {
+            name: "tool_base".to_string(),
+            radius: 1.0,
+            height: 2.0,
+            axis: [0.0, 0.0, 1.0],
+        }),
+        by: [1.0, 0.0, 0.0],
+    };
+    let shape = ir_to_shape(&fullmag_ir::GeometryEntryIR::Difference {
+        name: "difference".to_string(),
+        base: Box::new(base.clone()),
+        tool: Box::new(tool),
+    })
+    .expect("difference should lower");
+    let mut errors = Vec::new();
+    let (_size, mask, cells, origin) = voxelize_shape(&shape, [1.0; 3], &mut errors);
+    assert!(errors.is_empty(), "unexpected voxelization errors: {errors:?}");
+    assert_eq!(cells, [4, 4, 4]);
+    assert_eq!(origin, [-2.0, -2.0, -2.0]);
+    let mask = mask.expect("bounded CSG should produce a mask");
+    let removed: Vec<usize> = mask
+        .iter()
+        .enumerate()
+        .filter_map(|(index, active)| (!active).then_some(index))
+        .collect();
+    assert_eq!(
+        removed,
+        vec![22, 23, 26, 27, 38, 39, 42, 43],
+        "translated cylinder must only cut its x/y footprint and finite z span"
+    );
+
+    let box_tool = fullmag_ir::GeometryEntryIR::Translate {
+        name: "box_tool".to_string(),
+        base: Box::new(fullmag_ir::GeometryEntryIR::Box {
+            name: "box_tool_base".to_string(),
+            size: [2.0, 2.0, 2.0],
+        }),
+        by: [1.0, 0.0, 0.0],
+    };
+    let box_shape = ir_to_shape(&fullmag_ir::GeometryEntryIR::Difference {
+        name: "box_difference".to_string(),
+        base: Box::new(base),
+        tool: Box::new(box_tool),
+    })
+    .expect("box difference should lower");
+    let mut box_errors = Vec::new();
+    let (_, box_mask, _, _) = voxelize_shape(&box_shape, [1.0; 3], &mut box_errors);
+    assert!(box_errors.is_empty(), "unexpected box CSG errors: {box_errors:?}");
+    let box_removed: Vec<usize> = box_mask
+        .expect("bounded CSG should produce a mask")
+        .iter()
+        .enumerate()
+        .filter_map(|(index, active)| (!active).then_some(index))
+        .collect();
+    assert_eq!(
+        box_removed, removed,
+        "translated box and cylinder fixtures must share the canonical active-cell fingerprint"
     );
 }

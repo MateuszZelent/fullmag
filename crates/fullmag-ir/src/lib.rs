@@ -11,6 +11,7 @@ pub mod mesh_hints;
 pub mod model;
 pub mod plan;
 pub mod quantities;
+pub mod spectral_validation;
 pub mod study;
 mod validation;
 pub use eigen_contract::*;
@@ -24,6 +25,7 @@ pub use plan::*;
 pub use quantities::{
     field_to_quantity_output, scalar_to_quantity_output, OutputSinkIR, QuantityOutputIR,
 };
+pub use spectral_validation::BlochWavevectorIR;
 pub use study::*;
 use validation::*;
 
@@ -41,6 +43,27 @@ pub fn is_supported_ir_version_for_read(version: &str) -> bool {
 pub fn requires_ir_migration(version: &str) -> bool {
     let normalized = version.trim();
     is_supported_ir_version_for_read(normalized) && normalized != CURRENT_IR_VERSION
+}
+
+fn migrate_legacy_cylinder_axes(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            if object.get("kind").and_then(Value::as_str) == Some("cylinder")
+                && !object.contains_key("axis")
+            {
+                object.insert("axis".to_string(), serde_json::json!([0.0, 0.0, 1.0]));
+            }
+            for child in object.values_mut() {
+                migrate_legacy_cylinder_axes(child);
+            }
+        }
+        Value::Array(values) => {
+            for child in values {
+                migrate_legacy_cylinder_axes(child);
+            }
+        }
+        _ => {}
+    }
 }
 
 pub fn migrate_problem_ir_json_value(value: &mut Value) -> Result<bool, String> {
@@ -81,6 +104,10 @@ pub fn migrate_problem_ir_json_value(value: &mut Value) -> Result<bool, String> 
                 );
             }
         }
+    }
+
+    for value in object.values_mut() {
+        migrate_legacy_cylinder_axes(value);
     }
 
     Ok(true)
@@ -1267,6 +1294,7 @@ impl ProblemIR {
                     name,
                     radius,
                     height,
+                    axis,
                 } => {
                     if name.trim().is_empty() {
                         errors.push("cylinder geometry name must not be empty".to_string());
@@ -1282,6 +1310,22 @@ impl ProblemIR {
                             "cylinder geometry '{}' height must be positive",
                             name
                         ));
+                    }
+                    if axis.iter().any(|component| !component.is_finite()) {
+                        errors.push(format!(
+                            "cylinder geometry '{}' axis must contain finite values",
+                            name
+                        ));
+                    } else {
+                        let norm_sq = axis[0] * axis[0]
+                            + axis[1] * axis[1]
+                            + axis[2] * axis[2];
+                        if norm_sq <= 1e-30 {
+                            errors.push(format!(
+                                "cylinder geometry '{}' axis must be non-zero",
+                                name
+                            ));
+                        }
                     }
                 }
                 GeometryEntryIR::SinWaveguide {
@@ -1463,8 +1507,59 @@ impl ProblemIR {
 
         if let Some(hints) = &self.backend_policy.discretization_hints {
             if let Some(fdm) = &hints.fdm {
-                if fdm.cell.iter().any(|component| *component <= 0.0) {
-                    errors.push("fdm.cell components must be positive".to_string());
+                let legacy_cell = (!fdm.cell.iter().all(|component| *component == 0.0))
+                    .then_some(fdm.cell);
+                let default_cell = fdm.default_cell.or(legacy_cell);
+                if let Some(cell) = default_cell {
+                    if cell
+                        .iter()
+                        .any(|component| !component.is_finite() || *component <= 0.0)
+                    {
+                        errors.push("fdm.default_cell components must be finite and positive".to_string());
+                    }
+                }
+                if let Some(per_magnet) = &fdm.per_magnet {
+                    for (magnet_name, grid) in per_magnet {
+                        if magnet_name.trim().is_empty() {
+                            errors.push("fdm.per_magnet keys must not be empty".to_string());
+                        }
+                        if grid
+                            .cell
+                            .iter()
+                            .any(|component| !component.is_finite() || *component <= 0.0)
+                        {
+                            errors.push(format!(
+                                "fdm.per_magnet['{}'].cell components must be finite and positive",
+                                magnet_name
+                            ));
+                        }
+                    }
+                    let magnet_names: std::collections::BTreeSet<&str> = self
+                        .magnets
+                        .iter()
+                        .map(|magnet| magnet.name.as_str())
+                        .collect();
+                    for magnet in &self.magnets {
+                        if default_cell.is_none() && !per_magnet.contains_key(&magnet.name) {
+                            errors.push(format!(
+                                "fdm.per_magnet missing cell override for magnet '{}' and no default_cell is set",
+                                magnet.name
+                            ));
+                        }
+                    }
+                    for override_name in per_magnet.keys() {
+                        if !magnet_names.contains(override_name.as_str()) {
+                            errors.push(format!(
+                                "fdm.per_magnet contains override for unknown magnet '{}'",
+                                override_name
+                            ));
+                        }
+                    }
+                } else if default_cell.is_none() {
+                    errors.push(
+                        "fdm requires default_cell (or legacy cell) when per_magnet is absent"
+                            .to_string(),
+                    );
                 }
             }
             if let Some(fem) = &hints.fem {

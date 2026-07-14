@@ -41,3 +41,17 @@ fn resolve_estimator(c: AdaptiveCriterion, stage: StageKind) -> Result<Estimator
 - [ ] Commit: `git add docs/physics packages/fullmag-py crates/fullmag-cli && git commit -m "fix(fem): make adaptive criteria semantically honest"`.
 
 **Exit:** każdy accepted criterion używa nazwanego estimatora zgodnego z authored observable; żadna ścieżka nie zamienia eigenfrequency na energy.
+
+### Evidence update (2026-07-14, criterion fail-closed)
+
+- [x] Published the estimator contract in physics notes 0100 and 0105:
+  relaxation supports only `energy_delta`, `max_torque_delta` and
+  `solution_change`; `eigenfrequency_delta` has no relaxation estimator.
+- [x] Added `resolve_adaptive_convergence_metric` and removed the former
+  `eigenfrequency_delta -> energy_delta` substitution. Unsupported or unknown
+  criteria now return stable reason `unsupported_mesh_adaptivity_criterion`
+  before adaptive follow-up remeshing.
+- [x] RED/GREEN evidence:
+  `CARGO_TARGET_DIR=/tmp/fullmag-cli-adaptive-check cargo test -p fullmag-cli orchestrator::tests::adaptive_mesh_rejects_eigenfrequency_without_an_eigen_estimator --no-fail-fast -- --nocapture` — 1 passed.
+- [ ] A real eigenfrequency observable/estimator and managed adaptive remesh
+  convergence/transfer evidence remain required before enabling that criterion.

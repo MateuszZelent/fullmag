@@ -815,10 +815,11 @@ def test_periodic_antidot_frequency_driven_example_uses_gpu_transition() -> None
     assert "frequency_response_dynamic_demag" in example
     assert "study.interactive(False)" in example
     assert "study.clear_outputs()" in example
-    assert "FULLMAG_PERIODIC_ANTIDOT_FREQUENCY_STAGE" in example
-    assert "FULLMAG_PERIODIC_ANTIDOT_RELAXED_MAGNETIC_STATE" in example
-    assert "fm.load_magnetization(relaxed_state_path, format=\"json\")" in example
-    assert '"combined", "relax", "response"' in example
+    assert "PeriodicAntidotFixtureConfig" not in example
+    assert "load_periodic_antidot_fixture_config" in example
+    assert "os.environ" not in example
+    assert "fm.load_magnetization(fixture_config.relaxed_state_path, format=\"json\")" in example
+    assert "run_stage = fixture_config.run_stage" in example
     assert "study.stages.add_minimize(" in example
     assert "method=\"bb\"" in example
     assert "algorithm=\"llg_overdamped\"" not in example
@@ -833,11 +834,11 @@ def test_periodic_antidot_frequency_driven_example_uses_gpu_transition() -> None
     assert "include_demag=True" in example
     assert 'magnetostatic_bc="periodic_airbox_k0"' in example
     assert 'solver_method="gpu_operator_host_krylov"' in example
-    assert 'solver_preconditioner="auto"' in example
+    assert 'solver_preconditioner=fixture_config.preconditioner' in example
     assert "response_solver_max_iterations = 8192" in example
     assert "solver_max_iterations=response_solver_max_iterations" in example
     assert "solver_restart_iterations=response_solver_restart_iterations" in example
-    assert "response_solver_restart_iterations = response_solver_max_iterations" in example
+    assert "response_solver_restart_iterations = fixture_config.restart_iterations" in example
     assert 'equilibrium_source="relax" if run_stage == "combined" else "provided"' in example
     assert "solver_rtol=" not in example
     assert 'study.stages.change_device("gpu")' in example

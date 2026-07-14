@@ -21,8 +21,8 @@
 
 ### Task 1: RED — translated finite-height cutters
 
-- [ ] Dodać testy różnicy box-minus-translated-cylinder i box-minus-translated-box z punktami powyżej/poniżej wysokości narzędzia.
-- [ ] Uruchomić `cargo test -p fullmag-plan difference -- --nocapture`; testy mają wykazać obecne błędne odejmowanie.
+- [x] Dodać testy różnicy box-minus-translated-cylinder i box-minus-translated-box z punktami powyżej/poniżej wysokości narzędzia.
+- [x] Uruchomić `cargo test -p fullmag-plan difference -- --nocapture`; 2 testy przechodzą po wdrożeniu.
 
 ### Task 2: GREEN — wspólny evaluator
 
@@ -32,14 +32,19 @@ impl GeometryShape {
 }
 ```
 
-- [ ] Reprezentować `Translate` jako węzeł zawierający child i inverse-transformować punkt przed delegacją.
-- [ ] Implementować `Difference(a,b)` wyłącznie jako `a.contains(p) && !b.contains(p)`; usunąć wyjątki XY i zachować finite Z.
-- [ ] Uruchomić `cargo test -p fullmag-plan geometry --no-fail-fast`; wynik PASS.
+- [x] Reprezentować `Translate` jako węzeł zawierający child i inverse-transformować punkt przed delegacją.
+- [x] Implementować `Difference(a,b)` wyłącznie jako `a.contains(p) && !b.contains(p)`; usunąć wyjątki XY i zachować finite Z.
+- [x] `cargo test -p fullmag-plan difference --lib --no-fail-fast` — 2 passed.
 
 ### Task 3: cross-surface regression
 
-- [ ] Dodać Python/ProblemIR fixture tej samej bryły i porównać active-cell fingerprint z oczekiwanym snapshotem.
-- [ ] Commit: `git add crates/fullmag-plan crates/fullmag-ir/src/model.rs packages/fullmag-py/tests && git commit -m "fix(fdm): preserve transforms in 3D CSG difference"`.
+- [x] Python/ProblemIR fixture tej samej różnicy zachowuje translated operand; API lowering test — 1 passed; Rust fixture zapisuje expected removed-cell fingerprint.
+- [x] Implementacja i regression tests są obecne w historii branch; kod findingu pochodzi z wcześniejszego slice'u, a dowody zapisano teraz indywidualnie.
 
 **Exit:** translacja i wysokość każdego operandu wpływają na membership; brak XY-only path.
 
+## Evidence update (2026-07-14)
+
+- [x] Recursive `GeometryShape::contains` is the sole CSG evaluator for primitives, inverse transforms and finite 3D Difference.
+- [x] Rust active-mask fingerprint and translated finite-height regression pass; Python ProblemIR shape lowering passes.
+- [ ] No managed FDM runtime artifact currently records this specific CSG fixture; retain as an open evidence improvement if the final gate requires a persisted production artifact.

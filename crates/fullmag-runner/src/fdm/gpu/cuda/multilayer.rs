@@ -15,7 +15,7 @@ use fullmag_engine::{
     ExchangeLlgProblem, ExchangeLlgState, GridShape, LlgConfig, MaterialParameters,
     UniaxialAnisotropyConfig, MU0,
 };
-use fullmag_fdm_demag::{compute_exact_self_kernel, compute_shifted_kernel};
+use fullmag_fdm_demag::{compute_exact_self_kernel, compute_shifted_kernel, TransferBoundaryPolicy};
 use fullmag_ir::{
     ExchangeBoundaryCondition, ExecutionPrecision, FdmLayerPlanIR, FdmMaterialIR,
     FdmMultilayerPlanIR, FdmPlanIR, GridDimensions, IntegratorChoice, OutputIR,
@@ -24,6 +24,7 @@ use fullmag_ir::{
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
 use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
 use crate::fdm::artifacts::select_state_observable_field;
+use crate::fdm::validate_multilayer_grid_budget;
 use crate::fdm::gpu::cuda::native::{is_cuda_available, DeviceInfo, NativeFdmBackend};
 use crate::fdm::multilayer::make_multilayer_step_stats as make_step_stats;
 use crate::fdm::schedules::record_due_fields;
@@ -47,6 +48,7 @@ struct LayerContext {
     convolution_grid: [usize; 3],
     convolution_cell_size: [f64; 3],
     needs_transfer: bool,
+    transfer_boundary_policy: TransferBoundaryPolicy,
     problem: ExchangeLlgProblem,
 }
 
@@ -106,6 +108,7 @@ pub(crate) fn execute_cuda_fdm_multilayer_with_live(
     live: Option<(&[u32; 3], &mut dyn FnMut(StepUpdate) -> StepAction)>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    validate_multilayer_grid_budget(plan)?;
     if !is_cuda_available() {
         return Err(RunError {
             message: "FULLMAG_FDM_EXECUTION=cuda requested for multilayer FDM, but CUDA backend is not available".to_string(),
@@ -311,6 +314,16 @@ fn build_contexts_and_states(
             ],
             convolution_cell_size: layer.convolution_cell_size,
             needs_transfer: layer.transfer_kind != "identity",
+            transfer_boundary_policy: TransferBoundaryPolicy::from_periodic_axes(
+                plan.periodicity
+                    .as_ref()
+                    .map(|periodicity| {
+                        periodicity.axes.map(|axis| {
+                            matches!(axis, fullmag_ir::AxisBoundary::Periodic)
+                        })
+                    })
+                    .unwrap_or([false; 3]),
+            ),
             problem,
         });
     }
@@ -958,7 +971,21 @@ fn build_native_stacked_cuda_plan(
         global_grid[1] as usize,
         global_grid[2] as usize,
     ];
-    let total_cells = global_grid_usize[0] * global_grid_usize[1] * global_grid_usize[2];
+    let total_cells = fullmag_plan::checked_fdm_grid_cost(
+        global_grid,
+        fullmag_plan::FDM_GRID_ESTIMATED_BYTES_PER_CELL,
+    )
+    .map_err(|error| RunError {
+        message: format!("native stacked global grid budget rejected before allocation: {error}"),
+    })
+    .and_then(|cost| {
+        usize::try_from(cost.cells).map_err(|_| RunError {
+            message: format!(
+                "native stacked global grid cell count {} is not addressable",
+                cost.cells
+            ),
+        })
+    })?;
     let mut active_mask = vec![false; total_cells];
     let mut region_mask = vec![0u32; total_cells];
     let mut initial_magnetization = vec![[0.0, 0.0, 0.0]; total_cells];
@@ -1029,8 +1056,10 @@ fn build_native_stacked_cuda_plan(
 
     Ok(Some(NativeStackedCudaPlan {
         combined_plan: FdmPlanIR {
+            origin_m: min_origin,
             grid: GridDimensions { cells: global_grid },
             cell_size: reference_cell_size,
+            grid_certificate: None,
             region_mask,
             active_mask: Some(active_mask),
             initial_magnetization,
@@ -1043,6 +1072,7 @@ fn build_native_stacked_cuda_plan(
             precision: plan.precision,
             exchange_bc: plan.exchange_bc,
             periodicity: plan.periodicity.clone(),
+            resolved_periodic_images: plan.resolved_periodic_images.clone(),
             integrator: Some(plan.integrator),
             fixed_timestep: plan.fixed_timestep,
             adaptive_timestep: None,
@@ -1371,10 +1401,12 @@ fn make_native_stacked_step_stats(
 
 fn single_layer_cuda_plan(plan: &FdmMultilayerPlanIR, layer: &FdmLayerPlanIR) -> FdmPlanIR {
     FdmPlanIR {
+        origin_m: layer.native_origin,
         grid: GridDimensions {
             cells: layer.native_grid,
         },
         cell_size: layer.native_cell_size,
+        grid_certificate: None,
         region_mask: vec![0; layer.initial_magnetization.len()],
         active_mask: layer.native_active_mask.clone(),
         initial_magnetization: layer.initial_magnetization.clone(),
@@ -1401,6 +1433,7 @@ fn single_layer_cuda_plan(plan: &FdmMultilayerPlanIR, layer: &FdmLayerPlanIR) ->
         precision: plan.precision,
         exchange_bc: ExchangeBoundaryCondition::Neumann,
         periodicity: None,
+        resolved_periodic_images: None,
         integrator: Some(plan.integrator),
         fixed_timestep: plan.fixed_timestep,
         adaptive_timestep: None,
@@ -1461,7 +1494,12 @@ fn build_multilayer_demag_runtime(
         .first()
         .map(|layer| layer.convolution_cell_size)
         .unwrap_or([1.0, 1.0, 1.0]);
-    let mut kernel_pairs = Vec::with_capacity(plan.layers.len() * plan.layers.len());
+    let pair_capacity = plan.layers.len().checked_mul(plan.layers.len()).ok_or_else(|| {
+        RunError {
+            message: "FDM multilayer kernel-pair count overflow before allocation".to_string(),
+        }
+    })?;
+    let mut kernel_pairs = Vec::with_capacity(pair_capacity);
     for (src_index, src_layer) in plan.layers.iter().enumerate() {
         for (dst_index, dst_layer) in plan.layers.iter().enumerate() {
             let z_shift = dst_layer.native_origin[2] - src_layer.native_origin[2];
@@ -1504,7 +1542,12 @@ fn build_multilayer_demag_runtime_f32(
         .first()
         .map(|layer| layer.convolution_cell_size)
         .unwrap_or([1.0, 1.0, 1.0]);
-    let mut kernel_pairs = Vec::with_capacity(plan.layers.len() * plan.layers.len());
+    let pair_capacity = plan.layers.len().checked_mul(plan.layers.len()).ok_or_else(|| {
+        RunError {
+            message: "FDM multilayer f32 kernel-pair count overflow before allocation".to_string(),
+        }
+    })?;
+    let mut kernel_pairs = Vec::with_capacity(pair_capacity);
     for (src_index, src_layer) in plan.layers.iter().enumerate() {
         for (dst_index, dst_layer) in plan.layers.iter().enumerate() {
             let z_shift = dst_layer.native_origin[2] - src_layer.native_origin[2];
@@ -1846,6 +1889,7 @@ fn compute_demag_fields(
             conv_grid: context.convolution_grid,
             conv_cell_size: context.convolution_cell_size,
             needs_transfer: context.needs_transfer,
+            transfer_boundary_policy: context.transfer_boundary_policy,
         })
         .collect::<Vec<_>>();
     runtime.compute_demag_fields(&mut layers);
@@ -2239,6 +2283,7 @@ fn compute_demag_fields_single_from_m(
             conv_grid: context.convolution_grid,
             conv_cell_size: context.convolution_cell_size,
             needs_transfer: context.needs_transfer,
+            transfer_boundary_policy: context.transfer_boundary_policy,
         })
         .collect::<Vec<_>>();
     runtime.compute_demag_fields(&mut layers);
@@ -2922,6 +2967,7 @@ mod tests {
         FdmMultilayerPlanIR {
             mode: "two_d_stack".to_string(),
             common_cells: [4, 4, 1],
+            resolved_periodic_images: None,
             layers: vec![
                 FdmLayerPlanIR {
                     magnet_name: "free".to_string(),
@@ -3008,6 +3054,7 @@ mod tests {
         FdmMultilayerPlanIR {
             mode: "three_d".to_string(),
             common_cells: [2, 1, 1],
+            resolved_periodic_images: None,
             field_refresh: None,
             layers: vec![
                 FdmLayerPlanIR {

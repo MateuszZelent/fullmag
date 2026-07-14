@@ -25,6 +25,7 @@ import {
 } from "./RibbonGroupsRow";
 import { RIBBON_TABS, type RibbonMenuNode } from "./ribbonTypes";
 import {
+  MESHING_CAPABILITIES_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
   SIMULATION_COMMANDS_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
@@ -88,6 +89,23 @@ function createControlRoomCommandRegistry(): CommandRegistry {
     }
   }
   return registry;
+}
+
+function selectedMeshObject() {
+  return {
+    kind: "object.mesh" as const,
+    label: "Box mesh",
+    moduleSource: "test",
+    nodeId: "model:object:box:mesh",
+    objectId: "box",
+    ref: {
+      kind: "object.mesh" as const,
+      nodeId: "model:object:box:mesh",
+      objectId: "box",
+      type: "scene-object" as const,
+      visualizationTargetId: visualizationTargetIdForSceneObject("box"),
+    },
+  };
 }
 
 type RibbonNodeTestContext = Omit<
@@ -3282,6 +3300,122 @@ describe("ribbon structure", () => {
       commandId: "viewport-3d.open",
       disabled: false,
       label: "3D View",
+    });
+  });
+
+  it("shows the server capability reason on mesh build actions", () => {
+    const commands = createControlRoomCommandRegistry();
+    const visualization = new ObjectVisualizationController();
+    const content = buildRibbonTabContent("mesh", {
+      commands,
+      commandContext: { source: "test" },
+      meshCapabilities: {
+        revision: 3,
+        mesh_capabilities: {
+          fem: {
+            status: "unsupported",
+            reason: "FEM mesh authoring is unavailable for this session.",
+          },
+        },
+      },
+      resources: { invalidate: vi.fn() },
+      selection: {
+        kind: null,
+        label: null,
+        moduleSource: null,
+        nodeId: null,
+        objectId: null,
+        ref: null,
+      },
+      visualization,
+      visualizationSnapshot: visualization.getSnapshot(),
+    });
+
+    const buildAction = content?.groups
+      .find((group) => group.id === "build")
+      ?.actions.find((action) => action.id === "mesh.build-selected");
+
+    expect(buildAction).toMatchObject({
+      disabled: true,
+      tooltip: "FEM mesh authoring is unavailable for this session.",
+    });
+  });
+
+  it("prefers explicit supported mesh capability data over an unsupported top-level fallback", () => {
+    const commands = createControlRoomCommandRegistry();
+    const visualization = new ObjectVisualizationController();
+    const content = buildRibbonTabContent("mesh", {
+      commands,
+      commandContext: {
+        resourceData: {
+          [MESHING_CAPABILITIES_PATH]: {
+            revision: 4,
+            mesh_capabilities: { fem: { status: "supported" } },
+          },
+        },
+        source: "test",
+      },
+      meshCapabilities: {
+        revision: 3,
+        mesh_capabilities: {
+          fem: {
+            status: "unsupported",
+            reason: "Top-level fallback must not override explicit support.",
+          },
+        },
+      },
+      resources: { invalidate: vi.fn() },
+      selection: selectedMeshObject(),
+      visualization,
+      visualizationSnapshot: visualization.getSnapshot(),
+    });
+
+    const buildAction = content?.groups
+      .find((group) => group.id === "build")
+      ?.actions.find((action) => action.id === "mesh.build-selected");
+
+    expect(buildAction).toMatchObject({ disabled: false });
+    expect(buildAction?.tooltip).not.toBe(
+      "Top-level fallback must not override explicit support.",
+    );
+  });
+
+  it("prefers explicit unsupported mesh capability data over a supported top-level fallback", () => {
+    const commands = createControlRoomCommandRegistry();
+    const visualization = new ObjectVisualizationController();
+    const content = buildRibbonTabContent("mesh", {
+      commands,
+      commandContext: {
+        resourceData: {
+          [MESHING_CAPABILITIES_PATH]: {
+            revision: 4,
+            mesh_capabilities: {
+              fem: {
+                status: "unsupported",
+                reason: "Explicit session capability blocks FEM meshing.",
+              },
+            },
+          },
+        },
+        source: "test",
+      },
+      meshCapabilities: {
+        revision: 3,
+        mesh_capabilities: { fem: { status: "supported" } },
+      },
+      resources: { invalidate: vi.fn() },
+      selection: selectedMeshObject(),
+      visualization,
+      visualizationSnapshot: visualization.getSnapshot(),
+    });
+
+    const buildAction = content?.groups
+      .find((group) => group.id === "build")
+      ?.actions.find((action) => action.id === "mesh.build-selected");
+
+    expect(buildAction).toMatchObject({
+      disabled: true,
+      tooltip: "Explicit session capability blocks FEM meshing.",
     });
   });
 

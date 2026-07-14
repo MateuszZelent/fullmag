@@ -19,6 +19,10 @@ const resourceRevisions: LiveStatusResource["resources"] = {
   fields_revision: 0,
   mesh_build_revision: 0,
   mesh_revision: 0,
+  region_coefficients_revision: 0,
+  region_initial_state_revision: 0,
+  region_membership_revision: 0,
+  region_topology_revision: 0,
   scalars_revision: 0,
   scene_revision: null,
   slice_revision: 0,
@@ -198,6 +202,47 @@ function makeTopologyBuffer(): ArrayBuffer {
   new Uint32Array(buffer, offset, 1).set([10]);
   offset += Uint32Array.BYTES_PER_ELEMENT;
   new Uint32Array(buffer, offset, 1).set([20]);
+  return buffer;
+}
+
+function makePeriodicPairsBuffer(): ArrayBuffer {
+  const pairId = new TextEncoder().encode("x-minus");
+  const byteLength = 20 + 4 + pairId.byteLength + 9 * 4 + 2 * 8;
+  const buffer = new ArrayBuffer(byteLength);
+  const bytes = new Uint8Array(buffer);
+  bytes.set([70, 77, 80, 80], 0);
+  const view = new DataView(buffer);
+  view.setUint8(4, 1);
+  view.setUint8(5, 1);
+  view.setBigUint64(8, BigInt(41), true);
+  view.setUint32(16, 1, true);
+
+  let offset = 20;
+  view.setUint32(offset, pairId.byteLength, true);
+  offset += 4;
+  bytes.set(pairId, offset);
+  offset += pairId.byteLength;
+  view.setUint32(offset, 10, true);
+  offset += 4;
+  view.setUint32(offset, 20, true);
+  offset += 4;
+  view.setUint32(offset, 1, true);
+  offset += 4;
+  view.setUint32(offset, 1, true);
+  offset += 4;
+  view.setUint32(offset, 7, true);
+  offset += 4;
+  view.setUint32(offset, 17, true);
+  offset += 4;
+  view.setBigUint64(offset, BigInt(101), true);
+  offset += 8;
+  view.setBigUint64(offset, BigInt(202), true);
+  offset += 8;
+  view.setUint32(offset, 1, true);
+  offset += 4;
+  view.setUint32(offset, 7, true);
+  offset += 4;
+  view.setUint32(offset, 17, true);
   return buffer;
 }
 
@@ -2417,6 +2462,49 @@ describe("ControlRoomApi", () => {
     expect(Array.from(result.data.gamma ?? [])).toEqual([0.25]);
   });
 
+  it("loads periodic face and node pairs through the v2 binary facade", async () => {
+    let observedUrl = "";
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url) => {
+        observedUrl = String(url);
+        return binaryResponse(makePeriodicPairsBuffer(), {
+          headers: {
+            etag: '"periodic-pairs-41"',
+            "x-fullmag-periodic-pairs-format": "FMPP.v1",
+            ...contractHeaders,
+          },
+        });
+      },
+    });
+
+    const result = await api.meshing.periodicPairsBinary();
+
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") {
+      throw new Error(`Expected ready periodic pairs, received ${result.status}`);
+    }
+    expect(observedUrl).toBe(
+      "http://127.0.0.1:8765/v2/sessions/current/meshing/mesh/periodic_pairs.v1.bin",
+    );
+    expect(result.etag).toBe('"periodic-pairs-41"');
+    expect(result.data).toEqual({
+      pairs: [
+        {
+          facePairs: [
+            { faceA: 101, faceB: 202, vertexPairs: [[7, 17]] },
+          ],
+          markerA: 10,
+          markerB: 20,
+          nodePairs: [[7, 17]],
+          pairId: "x-minus",
+        },
+      ],
+      revision: 41,
+      status: "valid",
+    });
+  });
+
   it("loads mesh histogram-bin element selections through the v2 facade", async () => {
     let observedUrl = "";
     const api = new ControlRoomApi({
@@ -3320,6 +3408,48 @@ describe("ControlRoomApi", () => {
         method: "GET",
         url: "http://127.0.0.1:8765/v2/sessions/current/data/mesh-region-memberships",
       },
+    ]);
+  });
+
+  it("loads realized FDM membership descriptor and scoped binary bytes", async () => {
+    const requests: string[] = [];
+    const binary = new Uint8Array(68);
+    binary.set([..."FMRM"].map((value) => value.charCodeAt(0)), 0);
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push(`${init?.method ?? "GET"} ${String(url)}`);
+        if (String(url).endsWith("fdm-region-memberships")) {
+          return jsonResponse({
+            binary_path: "mesh/fdm_region_membership.v1.bin",
+            cell_count: 1,
+            cell_m: [1e-9, 1e-9, 1e-9],
+            counts: [1, 1, 1],
+            encoding: "FMRM:u32_le",
+            freshness: "current",
+            grid_fingerprint: "0".repeat(64),
+            mesh_revision: 9,
+            origin_m: [0, 0, 0],
+            region_legend: [
+              { numeric_id: 1, object_id: "body", region_id: "body:core", priority: 0 },
+            ],
+            region_membership_revision: 4,
+            schema_version: "fdm_region_membership.v1",
+          });
+        }
+        return binaryResponse(binary.buffer, { headers: { etag: '"fdm-membership"' } });
+      },
+    });
+
+    const descriptor = await api.data.fdmRegionMemberships();
+    const membership = await api.data.fdmRegionMembershipRegionBytes("body:core");
+
+    expect(descriptor.region_legend[0]?.numeric_id).toBe(1);
+    expect(membership.status).toBe("ready");
+    expect(membership.status === "ready" ? membership.data.byteLength : 0).toBe(68);
+    expect(requests).toEqual([
+      "GET http://127.0.0.1:8765/v2/sessions/current/data/fdm-region-memberships",
+      "GET http://127.0.0.1:8765/v2/sessions/current/data/fdm-region-membership/body%3Acore",
     ]);
   });
 

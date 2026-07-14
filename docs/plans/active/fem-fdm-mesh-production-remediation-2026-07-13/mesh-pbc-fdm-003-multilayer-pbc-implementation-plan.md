@@ -20,8 +20,8 @@
 
 ### Task 1: fail-closed guard i RED matrix
 
-- [ ] Natychmiast oznaczyć multilayer PBC unsupported w planner/capability do czasu naprawy.
-- [ ] Dodać 2-layer/3-layer fixtures dla periodic X/XY, exchange seam i demag shifted kernels; obecne implementations mają FAIL lub guard.
+- [x] Natychmiast oznaczyć multilayer PBC unsupported w planner/capability do czasu naprawy.
+- [x] Dodać 2-layer fixture dla periodic X i asertywny fail-closed guard; 3-layer runtime parity pozostaje otwarta.
 
 ### Task 2: runtime implementation
 
@@ -40,3 +40,7 @@ pub struct ResolvedMultilayerPbc { pub axes: [bool; 3], pub images: [u32; 3] }
 
 **Exit:** każdy accepted multilayer PBC request używa periodic exchange i demag na wszystkich warstwach; brak otwartego fallbacku.
 
+### Evidence (2026-07-14)
+
+- Planner guard: `cargo test -p fullmag-plan fdm_multilayer_periodic_axes_fail_closed_until_kernel_parity --lib --no-fail-fast -- --nocapture` — passed; periodic multilayer requests are rejected before runtime allocation.
+- Existing transfer boundary policy and provenance are retained for future qualification, but no multilayer PBC lane is promoted without exchange seam and self/shifted demag parity evidence.

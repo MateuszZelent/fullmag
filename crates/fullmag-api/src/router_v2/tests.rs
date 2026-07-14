@@ -187,6 +187,7 @@ fn sample_fem_mesh_payload() -> FemMeshPayload {
         domain_frame: None,
         generation_id: Some("42".to_string()),
         per_domain_quality: Default::default(),
+        build_report: None,
     }
 }
 
@@ -222,6 +223,7 @@ fn regular_tetra_fem_mesh_payload() -> FemMeshPayload {
         domain_frame: None,
         generation_id: Some("regular-tetra-gen".to_string()),
         per_domain_quality: Default::default(),
+        build_report: None,
     }
 }
 
@@ -402,6 +404,7 @@ fn sample_scoped_fem_mesh_payload() -> FemMeshPayload {
         domain_frame: None,
         generation_id: Some("42".to_string()),
         per_domain_quality: Default::default(),
+        build_report: None,
     }
 }
 
@@ -500,6 +503,7 @@ fn sample_fem_neel_skyrmion_mesh_and_values(
         domain_frame: None,
         generation_id: Some("9001".to_string()),
         per_domain_quality: HashMap::new(),
+        build_report: None,
     };
     (mesh, values)
 }
@@ -556,6 +560,7 @@ fn sample_shared_node_airbox_mesh_payload() -> FemMeshPayload {
         domain_frame: None,
         generation_id: Some("shared-node-generation".to_string()),
         per_domain_quality: Default::default(),
+        build_report: None,
     }
 }
 
@@ -718,6 +723,7 @@ async fn test_app_state_with_live_session() -> Arc<AppState> {
         field_samples_revision: 0,
         field_quantity_revisions: BTreeMap::new(),
         stage_execution_revision: 0,
+        region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),
     };
 
     *state.current_live_state.write().await = Some(snapshot);
@@ -1302,6 +1308,7 @@ async fn test_router_with_session_state_and_artifact_dir() -> (axum::Router, Arc
         field_samples_revision: 0,
         field_quantity_revisions: BTreeMap::new(),
         stage_execution_revision: 0,
+        region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),
     };
 
     *state.current_live_state.write().await = Some(snapshot);
@@ -1453,6 +1460,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         field_samples_revision: 0,
         field_quantity_revisions: BTreeMap::new(),
         stage_execution_revision: 0,
+        region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),
     };
 
     *state.current_live_state.write().await = Some(snapshot);
@@ -1886,6 +1894,10 @@ async fn status_returns_200_with_live_session() {
     assert_eq!(json["resources"]["workspace_revision"], 0);
     assert_eq!(json["resources"]["mesh_revision"], 0);
     assert_eq!(json["resources"]["mesh_build_revision"], 0);
+    assert_eq!(json["resources"]["region_topology_revision"], 0);
+    assert_eq!(json["resources"]["region_membership_revision"], 0);
+    assert_eq!(json["resources"]["region_coefficients_revision"], 0);
+    assert_eq!(json["resources"]["region_initial_state_revision"], 0);
     assert_eq!(json["resources"]["commands_revision"], 0);
     assert_eq!(json["resources"]["stages_revision"], 0);
     assert!(json["resources"]["scene_revision"].is_null());
@@ -1991,7 +2003,7 @@ async fn domain_meta_uses_fdm_physical_cell_size_for_grid_and_bounds() {
             "artifact_layout": {
                 "backend": "fdm",
                 "grid_cells": [4, 3, 2],
-                "origin": [1.0e-9, -2.0e-9, 3.0e-9],
+                "origin_m": [1.0e-9, -2.0e-9, 3.0e-9],
                 "cell_size": [2.0e-9, 3.0e-9, 4.0e-9]
             }
         }));
@@ -2118,7 +2130,7 @@ async fn status_uses_fdm_artifact_layout_revision_before_first_live_step() {
             "artifact_layout": {
                 "backend": "fdm",
                 "grid_cells": [6, 4, 2],
-                "origin": [-3.0e-9, -2.0e-9, -1.0e-9],
+                "origin_m": [-3.0e-9, -2.0e-9, -1.0e-9],
                 "cell_size": [1.0e-9, 2.0e-9, 5.0e-9]
             }
         }));
@@ -2277,7 +2289,10 @@ async fn domain_topology_returns_304_when_etag_matches() {
         .await
         .unwrap();
 
-    assert_eq!(first.status(), StatusCode::OK);
+    if first.status() != StatusCode::OK {
+        let error = body_json(first).await;
+        panic!("FDM binary failed: {error}");
+    }
     let etag = first
         .headers()
         .get("etag")
@@ -5058,7 +5073,16 @@ async fn mesh_semantics_returns_three_level_projection() {
             "mesh_pipeline_status": [{ "id": "meshing", "status": "active" }],
             "last_build_error": "quality threshold not met"
         }));
-        snapshot.fem_mesh = Some(sample_fem_mesh_payload_with_manifest());
+        let mut fem_mesh = sample_fem_mesh_payload_with_manifest();
+        fem_mesh.build_report = serde_json::from_value(serde_json::json!({
+            "build_mode": "component_aware",
+            "object_region_markers": [{"geometry_name": "body", "marker": 17}],
+            "selector_resolution": [{"selector": "body", "resolved": true}],
+            "orphan_entities": [],
+            "rejected_element_types": []
+        }))
+        .expect("mesh build report fixture should deserialize");
+        snapshot.fem_mesh = Some(fem_mesh);
         snapshot.mesh_revision = 73;
     }
     let app = build_v2_router().with_state(state);
@@ -5082,6 +5106,18 @@ async fn mesh_semantics_returns_three_level_projection() {
     assert_eq!(json["object_configs"][0]["config"]["mode"], "override");
     assert_eq!(json["solver_mesh"]["mesh_name"], "test-mesh");
     assert_eq!(json["solver_mesh"]["object_segment_count"], 1);
+    assert_eq!(
+        json["solver_mesh"]["build_report"]["build_mode"],
+        "component_aware"
+    );
+    assert_eq!(
+        json["solver_mesh"]["build_report"]["object_region_markers"][0]["marker"],
+        17
+    );
+    assert_eq!(
+        json["solver_mesh"]["build_report"]["selector_resolution"][0]["resolved"],
+        true
+    );
     assert_eq!(
         json["mesh_build_diagnostics"]["last_build_error"],
         "quality threshold not met"
@@ -6569,6 +6605,12 @@ async fn mesh_periodic_pairs_returns_v1_diagnostics() {
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.fem_mesh = Some(sample_periodic_fem_mesh_payload());
         snapshot.mesh_revision = 41;
+        let mut scene = sample_scene_document();
+        scene.revision = 41;
+        snapshot.scene_document = Some(scene);
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "last_build_summary": {"source_scene_revision": 41}
+        }));
     }
     let app = build_v2_router().with_state(state);
 
@@ -6590,8 +6632,15 @@ async fn mesh_periodic_pairs_returns_v1_diagnostics() {
     assert_eq!(json["pairs"][0]["source_marker"], "x_min");
     assert_eq!(json["pairs"][0]["destination_marker"], "x_max");
     assert_eq!(json["pairs"][0]["paired_node_count"], 3);
+    assert_eq!(
+        json["pairs"][0]["node_pairs"],
+        serde_json::json!([[0, 1], [2, 3], [4, 5]])
+    );
+    assert_eq!(json["pairs"][0]["mixed_domain_node_pair_count"], 0);
     assert_eq!(json["pairs"][0]["unpaired_source_node_count"], 0);
     assert_eq!(json["pairs"][0]["unpaired_destination_node_count"], 0);
+    assert_eq!(json["pairs"][0]["unpaired_source_face_count"], 0);
+    assert_eq!(json["pairs"][0]["unpaired_destination_face_count"], 0);
     assert_eq!(
         json["pairs"][0]["domain_node_pair_counts"],
         serde_json::json!({"magnetic": 2, "airbox": 1})
@@ -6601,7 +6650,12 @@ async fn mesh_periodic_pairs_returns_v1_diagnostics() {
         serde_json::json!([{
             "face_a": 0,
             "face_b": 1,
+            "vertex_pairs": [[0, 1], [2, 3], [4, 5]],
             "translation_m": [1.0e-6, 0.0, 0.0],
+            "translation_residual_m": 0.0,
+            "area_residual_m2": 0.0,
+            "source_marker": 10,
+            "destination_marker": 11,
             "normal_dot": -1.0,
             "orientation": "opposed_normals"
         }])
@@ -6609,6 +6663,437 @@ async fn mesh_periodic_pairs_returns_v1_diagnostics() {
     assert_eq!(json["pairs"][0]["max_residual_m"], 0.0);
     assert_eq!(json["pairs"][0]["rms_residual_m"], 0.0);
     assert_eq!(json["pairs"][0]["status"], "valid");
+    assert_eq!(json["status"], "valid");
+    assert!(json["topology_fingerprint"]
+        .as_str()
+        .is_some_and(|value| value.starts_with("sha256:")));
+    assert!(json["certificate_fingerprint"]
+        .as_str()
+        .is_some_and(|value| value.starts_with("sha256:")));
+    assert_eq!(json["certificate_revision"], 41);
+    assert_eq!(json["source_scene_revision"], 41);
+}
+
+#[tokio::test]
+async fn mesh_periodic_pairs_binary_returns_deterministic_v1_payload() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_periodic_fem_mesh_payload());
+        snapshot.mesh_revision = 41;
+    }
+    let app = build_v2_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/mesh/periodic_pairs.v1.bin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("application/vnd.fullmag.periodic-pairs.v1"),
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-periodic-pairs-format")
+            .and_then(|value| value.to_str().ok()),
+        Some("FMPP.v1"),
+    );
+    let etag = response
+        .headers()
+        .get(header::ETAG)
+        .expect("binary periodic-pairs response should include ETag")
+        .clone();
+    let body = body_bytes(response).await;
+    assert_eq!(&body[..4], b"FMPP");
+    assert_eq!(body[4], 1);
+    assert!(body.len() > 32, "payload should include node/face pairs");
+
+    let app = build_v2_router().with_state(state.clone());
+    let repeat = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/mesh/periodic_pairs.v1.bin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(repeat.status(), StatusCode::OK);
+    assert_eq!(body, body_bytes(repeat).await);
+
+    let app = build_v2_router().with_state(state);
+    let unchanged = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/mesh/periodic_pairs.v1.bin")
+                .header(header::IF_NONE_MATCH, etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unchanged.status(), StatusCode::NOT_MODIFIED);
+}
+
+#[tokio::test]
+async fn mesh_periodic_pairs_etag_changes_when_residual_changes() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_periodic_fem_mesh_payload());
+        snapshot.mesh_revision = 41;
+    }
+    let app = build_v2_router().with_state(state.clone());
+    let first = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/mesh/periodic_pairs.v1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let first_etag = first
+        .headers()
+        .get("etag")
+        .expect("periodic-pairs response should include etag")
+        .clone();
+    let _ = body_json(first).await;
+
+    let app = build_v2_router().with_state(state.clone());
+    let unchanged = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/mesh/periodic_pairs.v1")
+                .header("if-none-match", &first_etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unchanged.status(), StatusCode::NOT_MODIFIED);
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot
+            .fem_mesh
+            .as_mut()
+            .expect("periodic mesh should remain present")
+            .nodes[1][0] += 1.0e-15;
+    }
+    let app = build_v2_router().with_state(state);
+    let second = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/mesh/periodic_pairs.v1")
+                .header("if-none-match", first_etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn mesh_periodic_pairs_marks_unpaired_boundary_nodes_invalid() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_periodic_fem_mesh_payload();
+        mesh.periodic_node_pairs.pop();
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.mesh_revision = 42;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/mesh/periodic_pairs.v1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["pairs"][0]["unpaired_source_node_count"], 1);
+    assert_eq!(json["pairs"][0]["unpaired_destination_node_count"], 1);
+    assert_eq!(json["pairs"][0]["unpaired_source_face_count"], 1);
+    assert_eq!(json["pairs"][0]["unpaired_destination_face_count"], 1);
+    assert_eq!(
+        json["pairs"][0]["status"],
+        "unpaired_boundary_nodes"
+    );
+    assert_eq!(json["status"], "invalid");
+    assert!(!json["status_reasons"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn mesh_periodic_pairs_does_not_count_mixed_domain_nodes_as_magnetic() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_periodic_fem_mesh_payload();
+        mesh.periodic_node_pairs[1].node_b = 5;
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.mesh_revision = 43;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/mesh/periodic_pairs.v1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(
+        json["pairs"][0]["domain_node_pair_counts"],
+        serde_json::json!({"magnetic": 1, "airbox": 1})
+    );
+    assert_eq!(json["pairs"][0]["mixed_domain_node_pair_count"], 1);
+    assert_eq!(json["pairs"][0]["status"], "mixed_domain_pair");
+    assert_eq!(json["status"], "invalid");
+}
+
+#[tokio::test]
+async fn mesh_periodic_pairs_marks_accepted_certificate_stale_after_scene_edit() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_periodic_fem_mesh_payload());
+        snapshot.mesh_revision = 45;
+        let mut scene = sample_scene_document();
+        scene.revision = 46;
+        snapshot.scene_document = Some(scene);
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "last_build_summary": {"source_scene_revision": 45}
+        }));
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/mesh/periodic_pairs.v1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["status"], "stale");
+    assert_eq!(json["source_scene_revision"], 45);
+    assert!(json["status_reasons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|reason| reason.as_str().unwrap_or_default().contains("source scene revision")));
+}
+
+#[tokio::test]
+async fn mesh_periodic_pairs_marks_matching_topology_artifact_stale_after_scene_edit() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let mut mesh = sample_periodic_fem_mesh_payload();
+    mesh.generation_id = Some("periodic-generation-45".to_string());
+    let topology_fingerprint = fullmag_ir::MeshIR {
+        mesh_name: mesh.mesh_name.clone(),
+        nodes: mesh.nodes.clone(),
+        elements: mesh.elements.clone(),
+        element_markers: mesh.element_markers.clone(),
+        boundary_faces: mesh.boundary_faces.clone(),
+        boundary_markers: mesh.boundary_markers.clone(),
+        periodic_boundary_pairs: mesh.periodic_boundary_pairs.clone(),
+        periodic_node_pairs: mesh.periodic_node_pairs.clone(),
+        per_domain_quality: HashMap::new(),
+    }
+    .topology_fingerprint_v6();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(mesh.clone());
+        snapshot.mesh_revision = 45;
+        let mut scene = sample_scene_document();
+        scene.revision = 46;
+        snapshot.scene_document = Some(scene);
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "last_build_summary": {"source_scene_revision": 45}
+        }));
+    }
+    let mesh_dir = artifact_dir.join("mesh");
+    fs::create_dir_all(&mesh_dir).expect("mesh artifact dir should be created");
+    fs::write(
+        mesh_dir.join("periodic_pairs.v1.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "periodic_pairs.v1",
+            "topology_fingerprint": topology_fingerprint,
+            "mesh_generation_id": "periodic-generation-45",
+            "source_scene_revision": 45,
+            "certificate_status": "accepted",
+            "validation_status": "ok",
+            "status": "valid",
+            "pairs": [{
+                "pair_id": "x_periodic",
+                "source_marker": "x_min",
+                "destination_marker": "x_max",
+                "marker_a": 10,
+                "marker_b": 11,
+                "expected_translation_m": [1.0e-6, 0.0, 0.0],
+                "paired_node_count": 3,
+                "node_pairs": [[0, 1], [2, 3], [4, 5]],
+                "unpaired_source_node_count": 0,
+                "unpaired_destination_node_count": 0,
+                "unpaired_source_face_count": 0,
+                "unpaired_destination_face_count": 0,
+                "max_residual_m": 0.0,
+                "rms_residual_m": 0.0,
+                "status": "valid"
+            }]
+        }))
+        .expect("periodic pairs artifact should serialize"),
+    )
+    .expect("periodic pairs artifact should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/mesh/periodic_pairs.v1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["status"], "stale");
+    assert_eq!(json["source_scene_revision"], 45);
+    assert!(json["status_reasons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|reason| reason.as_str().unwrap_or_default().contains("source scene revision")));
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn mesh_periodic_pairs_rejects_artifact_with_mismatched_marker_certificate() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let mut mesh = sample_periodic_fem_mesh_payload();
+    mesh.generation_id = Some("periodic-generation-45".to_string());
+    let mesh_ir = fullmag_ir::MeshIR {
+        mesh_name: mesh.mesh_name.clone(),
+        nodes: mesh.nodes.clone(),
+        elements: mesh.elements.clone(),
+        element_markers: mesh.element_markers.clone(),
+        boundary_faces: mesh.boundary_faces.clone(),
+        boundary_markers: mesh.boundary_markers.clone(),
+        periodic_boundary_pairs: mesh.periodic_boundary_pairs.clone(),
+        periodic_node_pairs: mesh.periodic_node_pairs.clone(),
+        per_domain_quality: HashMap::new(),
+    };
+    let topology_fingerprint = mesh_ir.topology_fingerprint_v6();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.mesh_revision = 45;
+        let mut scene = sample_scene_document();
+        scene.revision = 45;
+        snapshot.scene_document = Some(scene);
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "last_build_summary": {"source_scene_revision": 45}
+        }));
+    }
+    let mesh_dir = artifact_dir.join("mesh");
+    fs::create_dir_all(&mesh_dir).expect("mesh artifact dir should be created");
+    fs::write(
+        mesh_dir.join("periodic_pairs.v1.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "periodic_pairs.v1",
+            "topology_fingerprint": topology_fingerprint,
+            "mesh_generation_id": "periodic-generation-45",
+            "source_scene_revision": 45,
+            "certificate_status": "accepted",
+            "validation_status": "ok",
+            "status": "valid",
+            "certificate": {
+                "schema_version": "periodic_mesh_certificate.v6",
+                "certificate_status": "accepted",
+                "topology_fingerprint": topology_fingerprint,
+                "marker_map_fingerprint": "sha256:forged-marker-map",
+                "material_realization_fingerprint": "sha256:forged-materials"
+            },
+            "pairs": []
+        }))
+        .expect("forged periodic pairs artifact should serialize"),
+    )
+    .expect("forged periodic pairs artifact should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/mesh/periodic_pairs.v1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["status"], "valid");
+    assert!(json["certificate_fingerprint"]
+        .as_str()
+        .is_some_and(|value| value.starts_with("sha256:")));
+    assert_ne!(
+        json["certificate_fingerprint"],
+        serde_json::json!("sha256:forged-materials")
+    );
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn mesh_periodic_pairs_does_not_publish_nearest_face_with_excessive_residual() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_periodic_fem_mesh_payload();
+        mesh.boundary_faces[1] = [1, 5, 4];
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.mesh_revision = 44;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/mesh/periodic_pairs.v1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert!(json["pairs"][0]["boundary_face_pairs"].is_null());
+    assert_eq!(json["pairs"][0]["unpaired_source_face_count"], 1);
+    assert_eq!(json["pairs"][0]["unpaired_destination_face_count"], 1);
+    assert_eq!(json["pairs"][0]["status"], "unpaired_boundary_nodes");
 }
 
 #[tokio::test]
@@ -6673,6 +7158,55 @@ async fn mesh_periodic_pairs_falls_back_to_artifact_file() {
         json["pairs"][0]["boundary_face_pairs"][0]["orientation"],
         "opposed_normals"
     );
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn mesh_periodic_pairs_rejects_artifact_from_stale_scene_revision() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut scene = sample_scene_document();
+        scene.revision = 46;
+        snapshot.scene_document = Some(scene);
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "last_build_summary": {"source_scene_revision": 45}
+        }));
+    }
+    let mesh_dir = artifact_dir.join("mesh");
+    fs::create_dir_all(&mesh_dir).expect("mesh artifact dir should be created");
+    fs::write(
+        mesh_dir.join("periodic_pairs.v1.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "periodic_pairs.v1",
+            "source_scene_revision": 45,
+            "validation_status": "ok",
+            "certificate_status": "accepted",
+            "pairs": []
+        }))
+        .expect("stale periodic pairs fixture should serialize"),
+    )
+    .expect("stale periodic pairs artifact should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/mesh/periodic_pairs.v1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["status"], "stale");
+    assert_eq!(json["source_scene_revision"], 45);
+    assert!(json["status_reasons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|reason| reason.as_str().unwrap_or_default().contains("source scene revision")));
 
     let _ = fs::remove_dir_all(&artifact_dir);
 }
@@ -8043,10 +8577,11 @@ async fn mesh_universe_config_put_commits_scene_projection() {
     assert_eq!(json["config"]["airbox_grading"], "linear");
 
     let guard = state.current_live_state.read().await;
-    let committed = guard
+    let committed_ref = guard
         .as_ref()
         .and_then(|snapshot| snapshot.scene_document.as_ref())
         .expect("scene document committed");
+    let committed = (*committed_ref).clone();
     let universe = committed
         .study
         .universe_mesh
@@ -8134,7 +8669,8 @@ async fn mesh_shared_domain_config_put_commits_scene_projection() {
     let committed = guard
         .as_ref()
         .and_then(|snapshot| snapshot.scene_document.as_ref())
-        .expect("scene document committed");
+        .expect("scene document committed")
+        .clone();
     assert_eq!(committed.study.shared_domain_mesh.algorithm_3d, 10);
     assert_eq!(committed.study.shared_domain_mesh.hmax, "3e-9");
     assert_eq!(
@@ -8196,7 +8732,8 @@ async fn mesh_object_config_put_commits_scene_projection() {
     let committed = guard
         .as_ref()
         .and_then(|snapshot| snapshot.scene_document.as_ref())
-        .expect("scene document committed");
+        .expect("scene document committed")
+        .clone();
     let object = committed
         .objects
         .iter()
@@ -8348,6 +8885,9 @@ async fn authoring_scene_put_commits_scene_document() {
     let mut updated = sample_scene_document();
     updated.revision = 5;
     updated.scene.name = "Authoring Scene".to_string();
+    updated.objects[0].geometry.geometry_params = serde_json::json!({
+        "size": [2.0, 1.0, 1.0]
+    });
 
     let response = app
         .oneshot(
@@ -8371,8 +8911,42 @@ async fn authoring_scene_put_commits_scene_document() {
     let committed = guard
         .as_ref()
         .and_then(|snapshot| snapshot.scene_document.as_ref())
-        .expect("scene document committed");
+        .expect("scene document committed")
+        .clone();
     assert_eq!(committed.scene.name, "Authoring Scene");
+    let revisions_after_topology = guard
+        .as_ref()
+        .map(|snapshot| snapshot.region_realization_revisions)
+        .expect("region revisions should be present");
+    assert!(revisions_after_topology.topology > 0);
+    assert_eq!(revisions_after_topology.membership, 0);
+    assert_eq!(revisions_after_topology.coefficients, 0);
+    assert_eq!(revisions_after_topology.initial_state, 0);
+    drop(guard);
+
+    let mut metadata_only = committed;
+    metadata_only.scene.name = "Metadata Only".to_string();
+    let app = build_v2_router().with_state(state.clone());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/v2/sessions/current/model/scene")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&metadata_only).expect("serialize metadata-only scene"),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let guard = state.current_live_state.read().await;
+    let revisions_after_metadata = guard
+        .as_ref()
+        .map(|snapshot| snapshot.region_realization_revisions)
+        .expect("region revisions should remain present");
+    assert_eq!(revisions_after_metadata, revisions_after_topology);
 }
 
 #[tokio::test]
@@ -9024,7 +9598,7 @@ async fn authoring_transactions_mutate_object_regions_and_couplings() {
     let core_region_id = format!("{object_id}:r1");
     assert_eq!(created_object["regions"][0]["region_id"], core_region_id);
     assert_eq!(created_object["allocated_region_ids"][0], core_region_id);
-    assert!(!created_object["tags"]
+    assert!(created_object["tags"]
         .as_array()
         .is_some_and(|tags| tags.iter().any(|tag| tag == "mesh:dirty")));
 
@@ -9464,8 +10038,8 @@ async fn authoring_coupling_transactions_reject_active_disabled_region_endpoint(
 
 #[tokio::test]
 async fn authoring_object_region_resource_crud_allocates_stable_region_id() {
-    fn assert_object_region_authoring_keeps_mesh_current(object: &serde_json::Value) {
-        assert!(!object["tags"]
+    fn assert_object_region_authoring_marks_mesh_dirty(object: &serde_json::Value) {
+        assert!(object["tags"]
             .as_array()
             .is_some_and(|tags| tags.iter().any(|tag| tag == "mesh:dirty")));
     }
@@ -9539,7 +10113,7 @@ async fn authoring_object_region_resource_crud_allocates_stable_region_id() {
         create_json["objects"][0]["regions"][0]["shape"]["radius"],
         0.5
     );
-    assert_object_region_authoring_keeps_mesh_current(&create_json["objects"][0]);
+    assert_object_region_authoring_marks_mesh_dirty(&create_json["objects"][0]);
 
     let duplicate_response = app
         .clone()
@@ -9579,7 +10153,7 @@ async fn authoring_object_region_resource_crud_allocates_stable_region_id() {
         duplicate_json["objects"][0]["allocated_region_ids"][1],
         shell_region_id
     );
-    assert_object_region_authoring_keeps_mesh_current(&duplicate_json["objects"][0]);
+    assert_object_region_authoring_marks_mesh_dirty(&duplicate_json["objects"][0]);
 
     let reorder_response = app
         .clone()
@@ -9612,7 +10186,7 @@ async fn authoring_object_region_resource_crud_allocates_stable_region_id() {
         reorder_json["objects"][0]["regions"][1]["region_id"],
         region_id
     );
-    assert_object_region_authoring_keeps_mesh_current(&reorder_json["objects"][0]);
+    assert_object_region_authoring_marks_mesh_dirty(&reorder_json["objects"][0]);
 
     let identity_patch_response = app
         .clone()
@@ -9718,7 +10292,7 @@ async fn authoring_object_region_resource_crud_allocates_stable_region_id() {
         patch_json["objects"][0]["regions"][1]["shape"]["size"],
         serde_json::json!([1.0, 1.0, 1.0])
     );
-    assert_object_region_authoring_keeps_mesh_current(&patch_json["objects"][0]);
+    assert_object_region_authoring_marks_mesh_dirty(&patch_json["objects"][0]);
 
     let sphere_patch_response = app
         .clone()
@@ -9756,7 +10330,7 @@ async fn authoring_object_region_resource_crud_allocates_stable_region_id() {
         sphere_patch_json["objects"][0]["regions"][1]["shape"]["radius"],
         0.5
     );
-    assert_object_region_authoring_keeps_mesh_current(&sphere_patch_json["objects"][0]);
+    assert_object_region_authoring_marks_mesh_dirty(&sphere_patch_json["objects"][0]);
 
     let oblique_patch_response = app
         .clone()
@@ -9792,7 +10366,7 @@ async fn authoring_object_region_resource_crud_allocates_stable_region_id() {
         .as_f64()
         .expect("oblique cylinder radius");
     assert!((oblique_radius - (2.0_f64.sqrt() - 1.0) * 0.5).abs() < 1e-12);
-    assert_object_region_authoring_keeps_mesh_current(&oblique_patch_json["objects"][0]);
+    assert_object_region_authoring_marks_mesh_dirty(&oblique_patch_json["objects"][0]);
 
     let delete_response = app
         .oneshot(
@@ -9821,7 +10395,61 @@ async fn authoring_object_region_resource_crud_allocates_stable_region_id() {
         delete_json["objects"][0]["allocated_region_ids"][1],
         shell_region_id
     );
-    assert_object_region_authoring_keeps_mesh_current(&delete_json["objects"][0]);
+    assert_object_region_authoring_marks_mesh_dirty(&delete_json["objects"][0]);
+}
+
+#[tokio::test]
+async fn authoring_region_creation_marks_mesh_dirty_and_changes_mesh_signature() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 50;
+    scene.objects[0].tags.clear();
+    let object_id = scene.objects[0].id.clone();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.mesh_revision = 17;
+        snapshot.mesh_build_revision = 19;
+    }
+    let app = build_v2_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/transactions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "create_object_region",
+                        "base_revision": 50,
+                        "object_id": object_id,
+                        "region": {
+                            "name": "core",
+                            "shape": {
+                                "kind": "box",
+                                "size": [1.0, 1.0, 1.0],
+                                "center": [0.0, 0.0, 0.0]
+                            }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let current = state.current_live_state.read().await;
+    let snapshot = current.as_ref().expect("live snapshot");
+    let object = snapshot
+        .scene_document
+        .as_ref()
+        .and_then(|scene| scene.objects.first())
+        .expect("object after region creation");
+    assert!(object.tags.iter().any(|tag| tag == "mesh:dirty"));
+    assert!(snapshot.mesh_revision > 17);
+    assert!(snapshot.mesh_build_revision > 19);
 }
 
 #[tokio::test]
@@ -10096,6 +10724,12 @@ async fn authoring_region_owned_resources_expose_authored_payloads() {
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.scene_document = Some(scene);
         snapshot.session.script_path.clear();
+        snapshot.region_realization_revisions = fullmag_authoring::RegionRealizationRevisions {
+            topology: 41,
+            membership: 42,
+            coefficients: 43,
+            initial_state: 44,
+        };
     }
     let app = build_v2_router().with_state(state.clone());
 
@@ -10149,6 +10783,10 @@ async fn authoring_region_owned_resources_expose_authored_payloads() {
         authored_region["realization_status"],
         "authored_pending_realization"
     );
+    assert_eq!(regions["region_topology_revision"], 41);
+    assert_eq!(regions["region_membership_revision"], 42);
+    assert_eq!(regions["region_coefficients_revision"], 43);
+    assert_eq!(regions["region_initial_state_revision"], 44);
 
     let realized_regions_response = app
         .clone()
@@ -10213,6 +10851,10 @@ async fn authoring_region_owned_resources_expose_authored_payloads() {
         .iter()
         .all(|diagnostic| diagnostic["region_id"] == "body:core"
             && diagnostic["owner_object_id"] == "body"));
+    assert_eq!(diagnostics["region_topology_revision"], 41);
+    assert_eq!(diagnostics["region_membership_revision"], 42);
+    assert_eq!(diagnostics["region_coefficients_revision"], 43);
+    assert_eq!(diagnostics["region_initial_state_revision"], 44);
 
     let fields_response = app
         .clone()
@@ -10237,6 +10879,23 @@ async fn authoring_region_owned_resources_expose_authored_payloads() {
     assert_eq!(fields["fields"][0]["parameter"], "ms");
     assert_eq!(fields["fields"][0]["unit"], "A/m");
     assert_eq!(fields["fields"][0]["frame"], "object");
+    assert_eq!(fields["region_coefficients_revision"], 43);
+
+    let material_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/model/materials/mat:body")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = material_response.status();
+    let material = body_json(material_response).await;
+    assert_eq!(status, StatusCode::OK, "{material:#}");
+    assert_eq!(material["region_coefficients_revision"], 43);
 
     let couplings_response = app
         .oneshot(
@@ -11036,6 +11695,69 @@ async fn authoring_region_patch_commits_name_without_mesh_dirty() {
 }
 
 #[tokio::test]
+async fn authoring_region_rename_does_not_change_mesh_identity() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 22;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+        snapshot.mesh_revision = 31;
+        snapshot.region_realization_revisions.membership = 41;
+        snapshot.region_realization_revisions.coefficients = 42;
+        snapshot.region_realization_revisions.initial_state = 43;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/model/regions/region:body")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({"name": "renamed_region"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let regions_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/model/regions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(regions_response.status(), StatusCode::OK);
+    let regions = body_json(regions_response).await;
+    assert_eq!(regions["region_membership_revision"], 41);
+    assert_eq!(regions["region_coefficients_revision"], 42);
+    assert_eq!(regions["region_initial_state_revision"], 43);
+
+    let status_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = body_json(status_response).await;
+    assert_eq!(status["resources"]["mesh_revision"], 31);
+}
+
+#[tokio::test]
 async fn authoring_region_patch_commits_magnetization_override_without_mesh_dirty() {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();
@@ -11053,8 +11775,26 @@ async fn authoring_region_patch_commits_magnetization_override_without_mesh_dirt
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.scene_document = Some(scene);
         snapshot.session.script_path.clear();
+        snapshot.mesh_revision = 31;
+        snapshot.region_realization_revisions.membership = 41;
+        snapshot.region_realization_revisions.coefficients = 42;
+        snapshot.region_realization_revisions.initial_state = 43;
     }
     let app = build_v2_router().with_state(state);
+
+    let before_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/model/regions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(before_response.status(), StatusCode::OK);
+    let before_regions = body_json(before_response).await;
 
     let response = app
         .clone()
@@ -11087,6 +11827,40 @@ async fn authoring_region_patch_commits_magnetization_override_without_mesh_dirt
         .map(|tags| tags.iter().any(|tag| tag == "mesh:dirty"))
         .unwrap_or(false);
     assert!(!mesh_dirty);
+
+    let after_status_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/model/regions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(after_status_response.status(), StatusCode::OK);
+    let after_regions = body_json(after_status_response).await;
+    assert_eq!(after_regions["region_initial_state_revision"], 44);
+    assert_eq!(after_regions["region_membership_revision"], 41);
+    assert_eq!(after_regions["region_coefficients_revision"], 42);
+    assert_eq!(before_regions["region_initial_state_revision"], 43);
+    assert_eq!(before_regions["region_membership_revision"], 41);
+    assert_eq!(before_regions["region_coefficients_revision"], 42);
+
+    let status_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = body_json(status_response).await;
+    assert_eq!(status["resources"]["mesh_revision"], 31);
 
     let regions_response = app
         .oneshot(
@@ -11194,6 +11968,7 @@ async fn authoring_magnetization_asset_patch_commits_transform_and_params() {
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.scene_document = Some(scene);
         snapshot.session.script_path.clear();
+        snapshot.region_realization_revisions.initial_state = 44;
     }
     let app = build_v2_router().with_state(state);
     let asset_path_id = asset_id.replace(':', "%3A");
@@ -11214,6 +11989,7 @@ async fn authoring_magnetization_asset_patch_commits_transform_and_params() {
     assert_eq!(get_response.status(), StatusCode::OK);
     let get_json = body_json(get_response).await;
     assert_eq!(get_json["asset"]["id"], asset_id);
+    assert_eq!(get_json["region_initial_state_revision"], 44);
 
     let patch_response = app
         .clone()
@@ -12543,6 +13319,12 @@ async fn commands_endpoint_rejects_resource_revision_precondition_mismatches() {
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.scene_document = Some(sample_scene_document());
         snapshot.mesh_revision = 5;
+        snapshot.region_realization_revisions = fullmag_authoring::RegionRealizationRevisions {
+            topology: 2,
+            membership: 3,
+            coefficients: 4,
+            initial_state: 5,
+        };
     }
     {
         let mut ledger = state.current_command_ledger.lock().await;
@@ -12596,6 +13378,10 @@ async fn commands_endpoint_rejects_resource_revision_precondition_mismatches() {
         (
             serde_json::json!({ "mesh_revision": 6 }),
             "mesh_revision precondition failed: expected 6, got 5",
+        ),
+        (
+            serde_json::json!({ "region_membership_revision": 4 }),
+            "region_membership_revision precondition failed: expected 4, got 3",
         ),
         (
             serde_json::json!({ "command_revision": 2 }),
@@ -15631,6 +16417,7 @@ async fn object_metrics_endpoint_uses_mesh_part_node_indices_for_shared_fem_node
                     domain_frame: None,
                     generation_id: Some("shared-node-test".to_string()),
                     per_domain_quality: Default::default(),
+                    build_report: None,
                 }),
                 magnetization: Some(vec![
                     10.0, 0.0, 0.0, 1.0, 0.0, 0.0, 20.0, 0.0, 0.0, 3.0, 0.0, 0.0, 30.0, 0.0, 0.0,
@@ -16968,6 +17755,113 @@ async fn artifact_download_accepts_encoded_relative_paths() {
 }
 
 #[tokio::test]
+async fn fdm_region_membership_descriptor_and_scoped_binary_are_revisioned() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let mesh_dir = artifact_dir.join("mesh");
+    fs::create_dir_all(&mesh_dir).expect("failed to create mesh artifact dir");
+    let grid_fingerprint = "00".repeat(32);
+    fs::write(
+        mesh_dir.join("fdm_region_membership.v1.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "fdm_region_membership.v1",
+            "binary_path": "mesh/fdm_region_membership.v1.bin",
+            "grid_fingerprint": grid_fingerprint.clone(),
+            "region_legend_fingerprint": "sha256:test",
+            "origin_m": [0.0, 0.0, 0.0],
+            "counts": [2, 1, 1],
+            "cell_m": [1e-9, 1e-9, 1e-9],
+            "cell_count": 2,
+            "region_legend": [{
+                "numeric_id": 1,
+                "object_id": "body",
+                "region_id": "body:core",
+                "priority": 0
+            }, {
+                "numeric_id": 2,
+                "object_id": "body",
+                "region_id": "body:shell",
+                "priority": -1
+            }],
+            "encoding": "FMRM:u32_le"
+        }))
+        .unwrap(),
+    )
+    .expect("failed to write FDM membership descriptor");
+    let mut binary = vec![0u8; 64 + 2 * 4];
+    binary[..4].copy_from_slice(b"FMRM");
+    binary[4] = 1;
+    binary[5] = 1;
+    binary[8..12].copy_from_slice(&2u32.to_le_bytes());
+    binary[12..16].copy_from_slice(&1u32.to_le_bytes());
+    binary[16..20].copy_from_slice(&1u32.to_le_bytes());
+    binary[20..24].copy_from_slice(&2u32.to_le_bytes());
+    binary[24..28].copy_from_slice(&2u32.to_le_bytes());
+    for value in &mut binary[28..60] {
+        *value = 0;
+    }
+    binary[64..68].copy_from_slice(&1u32.to_le_bytes());
+    binary[68..72].copy_from_slice(&2u32.to_le_bytes());
+    fs::write(mesh_dir.join("fdm_region_membership.v1.bin"), &binary)
+        .expect("failed to write FDM membership binary");
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.region_realization_revisions.membership = 7;
+    }
+
+    let descriptor_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fdm-region-memberships")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    if descriptor_response.status() != StatusCode::OK {
+        let error = body_json(descriptor_response).await;
+        panic!("FDM descriptor failed: {error}");
+    }
+    let descriptor = body_json(descriptor_response).await;
+    assert_eq!(descriptor["freshness"], "current");
+    assert_eq!(descriptor["region_membership_revision"], 7);
+
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fdm-region-membership/body%3Ashell")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    if first.status() != StatusCode::OK {
+        let error = body_json(first).await;
+        panic!("FDM binary failed: {error}");
+    }
+    assert_eq!(first.headers()["x-fullmag-grid-fingerprint"], grid_fingerprint);
+    assert_eq!(first.headers()["x-fullmag-region-membership-revision"], "7");
+    let etag = first.headers()["etag"].to_str().unwrap().to_string();
+    let scoped = body_bytes(first).await;
+    assert_eq!(u32::from_le_bytes(scoped[64..68].try_into().unwrap()), 0);
+    assert_eq!(u32::from_le_bytes(scoped[68..72].try_into().unwrap()), 2);
+
+    let second = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fdm-region-membership/body%3Ashell")
+                .header("if-none-match", etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
+    assert!(body_bytes(second).await.is_empty());
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
 async fn asyncapi_document_returns_200() {
     let app = test_router();
     let response = app
@@ -17572,6 +18466,7 @@ async fn test_router_with_mock_field_fem_without_topology() -> axum::Router {
             domain_frame: None,
             generation_id: Some("101".to_string()),
             per_domain_quality: Default::default(),
+            build_report: None,
         });
     }
     build_v2_router().with_state(state)
@@ -23740,6 +24635,25 @@ fn openapi_contains_mesh_semantics_path() {
     assert!(
         paths.contains_key("/v2/sessions/current/meshing/semantics"),
         "OpenAPI missing /mesh/semantics path while router exposes it"
+    );
+}
+
+#[test]
+fn openapi_contains_binary_periodic_pairs_path() {
+    let value = crate::openapi_v2::openapi_json();
+    let paths = value
+        .get("paths")
+        .and_then(|paths| paths.as_object())
+        .expect("OpenAPI paths must be an object");
+    let path = paths
+        .get("/v2/sessions/current/meshing/mesh/periodic_pairs.v1.bin")
+        .expect("OpenAPI missing binary periodic-pairs path");
+    assert_eq!(
+        path["get"]["responses"]["200"]["content"]
+            .as_object()
+            .and_then(|content| content.keys().next())
+            .map(String::as_str),
+        Some("application/vnd.fullmag.periodic-pairs.v1")
     );
 }
 

@@ -16,6 +16,17 @@ namespace fdm {
 
 extern double reduce_exchange_energy_fp32(Context &ctx);
 
+__device__ __forceinline__ int pbc_neighbor_fp32(
+    int coord, int dim, int stride, int idx, int delta, bool periodic) {
+    int nc = coord + delta;
+    if (periodic && dim > 1) {
+        nc = ((nc % dim) + dim) % dim;
+        return idx + (nc - coord) * stride;
+    }
+    if (nc < 0 || nc >= dim) return idx;
+    return idx + delta * stride;
+}
+
 /* ── Exchange field kernel (fp32) ── */
 
 __global__ void exchange_field_fp32_kernel(
@@ -34,7 +45,8 @@ __global__ void exchange_field_fp32_kernel(
     int max_regions,
     float inv_dx2, float inv_dy2, float inv_dz2,
     float prefactor,
-    float inv_mu0_ms)
+    float inv_mu0_ms,
+    bool periodic_x, bool periodic_y, bool periodic_z)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int total = nx * ny * nz;
@@ -54,12 +66,12 @@ __global__ void exchange_field_fp32_kernel(
 
     uint32_t center_region = has_region_mask ? region_mask[idx] : 0u;
 
-    int xm = (x > 0)      ? idx - 1        : idx;
-    int xp = (x < nx - 1) ? idx + 1        : idx;
-    int ym = (y > 0)      ? idx - nx       : idx;
-    int yp = (y < ny - 1) ? idx + nx       : idx;
-    int zm = (z > 0)      ? idx - nx * ny  : idx;
-    int zp = (z < nz - 1) ? idx + nx * ny  : idx;
+    int xm = pbc_neighbor_fp32(x, nx, 1, idx, -1, periodic_x);
+    int xp = pbc_neighbor_fp32(x, nx, 1, idx, +1, periodic_x);
+    int ym = pbc_neighbor_fp32(y, ny, nx, idx, -1, periodic_y);
+    int yp = pbc_neighbor_fp32(y, ny, nx, idx, +1, periodic_y);
+    int zm = pbc_neighbor_fp32(z, nz, nx * ny, idx, -1, periodic_z);
+    int zp = pbc_neighbor_fp32(z, nz, nx * ny, idx, +1, periodic_z);
 
     if (has_active_mask) {
         if (active_mask[xm] == 0) xm = idx;
@@ -152,7 +164,8 @@ void launch_exchange_field_fp32(Context &ctx) {
         FULLMAG_FDM_MAX_EXCHANGE_REGIONS,
         inv_dx2, inv_dy2, inv_dz2,
         prefactor,
-        inv_mu0_ms);
+        inv_mu0_ms,
+        ctx.periodic_x, ctx.periodic_y, ctx.periodic_z);
 }
 
 double launch_exchange_energy_fp32(Context &ctx) {

@@ -21,8 +21,8 @@
 
 ### Task 1: registry/model RED
 
-- [ ] Dodać fixtures Explorer selection dla authored PBC, mesh certificate, static stage, time stage, eigen stage i response stage; oczekiwać własnych detail IDs i wspólnego status model.
-- [ ] Uruchomić inspector registry tests; static/time cases mają ujawnić brak coverage.
+- [x] Dodać pure-model fixtures dla authored PBC, mesh certificate, static stage, time stage, eigen stage i response stage; każdy otrzymuje własny detail ID i wspólnego ownera statusu.
+- [ ] Uruchomić inspector registry tests; obecne checkout nie ma zainstalowanego `vitest`/`node_modules`, więc wykonanie testu jest blockerem środowiskowym.
 
 ### Task 2: semantic inspectors
 
@@ -31,6 +31,7 @@ type PbcInspectorContext = "authoring" | "mesh-certificate" | "static" | "time-d
 ```
 
 - [ ] Dodać registry entries i focused panels używające wspólnego PBC resource hook; stage-specific sections tylko rozszerzają view.
+- [x] Zarejestrować typed context resolver/IDs w `inspectorRegistry`; model nie duplikuje statusu i wskazuje `meshing.mesh.periodic_pairs` jako jedynego ownera.
 - [ ] Explorer tree buduje nodes z resources/capabilities, nie hardcoded frequency assumptions.
 - [ ] Uruchomić registry/panel tests, typecheck i lint; PASS.
 
@@ -41,3 +42,15 @@ type PbcInspectorContext = "authoring" | "mesh-certificate" | "static" | "time-d
 
 **Exit:** każde wspierane workflow ma resource-backed PBC Inspector; brak statycznych placeholderów i frequency-only drift.
 
+### Bounded slice evidence (2026-07-14)
+
+- Dodano `pbcInspectorModel.ts` oraz `pbcInspectorModel.test.ts` z sześcioma
+  kontekstami: `authoring`, `mesh-certificate`, `static`, `time-domain`,
+  `eigenmodes`, `frequency-response`.
+- Registry eksportuje stabilne context IDs i resolver; wszystkie konteksty
+  wskazują wspólny owner `meshing.mesh.periodic_pairs`, a stage-specific view
+  jest oznaczony osobnym polem.
+- Próba `pnpm --dir apps/control-room exec vitest run
+  src/modules/inspector/panels/pbcInspectorModel.test.ts` zakończyła się
+  `vitest not found`; brak zależności lokalnych. Browser smoke, realny
+  resource-hook panel i nowe Explorer nodes pozostają otwartymi gate'ami.

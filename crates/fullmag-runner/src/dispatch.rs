@@ -5989,6 +5989,7 @@ mod tests {
             },
             object_segments: Vec::new(),
             mesh_parts: Vec::new(),
+            mesh_build_report: None,
             domain_mesh_mode: fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh,
             domain_frame: None,
             fe_order: 1,
@@ -6079,6 +6080,7 @@ mod tests {
     fn tiny_fem_eigen_plan(k_sampling: Option<fullmag_ir::KSamplingIR>) -> FemEigenPlanIR {
         let plan = tiny_fem_plan();
         FemEigenPlanIR {
+            mesh_build_report: None,
             mesh_name: plan.mesh_name,
             mesh_source: plan.mesh_source,
             mesh: plan.mesh,

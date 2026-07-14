@@ -12,7 +12,8 @@ use rustfft::num_complex::Complex;
 use rustfft::FftPlanner;
 
 use fullmag_fdm_demag::{
-    self, pull_h, pull_h_f32, push_m, push_m_f32,
+    self, pull_h_with_boundary_policy, pull_h_f32_with_boundary_policy,
+    push_m_with_boundary_policy, push_m_f32_with_boundary_policy, TransferBoundaryPolicy,
     types::{TensorDemagKernel, TensorDemagKernelF32, VectorFieldFft, VectorFieldFftF32},
 };
 
@@ -39,6 +40,7 @@ pub struct FdmLayerRuntime {
     pub conv_grid: [usize; 3],
     pub conv_cell_size: [f64; 3],
     pub needs_transfer: bool,
+    pub transfer_boundary_policy: TransferBoundaryPolicy,
 }
 
 impl FdmLayerRuntime {
@@ -69,6 +71,7 @@ pub struct FdmLayerRuntimeF32 {
     pub conv_grid: [usize; 3],
     pub conv_cell_size: [f64; 3],
     pub needs_transfer: bool,
+    pub transfer_boundary_policy: TransferBoundaryPolicy,
 }
 
 impl FdmLayerRuntimeF32 {
@@ -173,12 +176,13 @@ impl MultilayerDemagRuntime {
         for layer in layers.iter() {
             // Transfer M to convolution grid
             let conv_m = if layer.needs_transfer {
-                push_m(
+                push_m_with_boundary_policy(
                     &layer.m,
                     layer.grid,
                     layer.cell_size,
                     layer.conv_grid,
                     layer.conv_cell_size,
+                    layer.transfer_boundary_policy,
                 )
             } else {
                 layer.m.clone()
@@ -243,12 +247,13 @@ impl MultilayerDemagRuntime {
 
             // Transfer H back to native grid
             if layer.needs_transfer {
-                layer.h_demag = pull_h(
+                layer.h_demag = pull_h_with_boundary_policy(
                     &conv_h,
                     layer.conv_grid,
                     layer.conv_cell_size,
                     layer.grid,
                     layer.cell_size,
+                    layer.transfer_boundary_policy,
                 );
             } else {
                 layer.h_demag = conv_h;
@@ -352,12 +357,13 @@ impl MultilayerDemagRuntimeF32 {
         let mut m_fft: Vec<VectorFieldFftF32> = Vec::with_capacity(n_layers);
         for layer in layers.iter() {
             let conv_m = if layer.needs_transfer {
-                push_m_f32(
+                push_m_f32_with_boundary_policy(
                     &layer.m,
                     layer.grid,
                     layer.cell_size,
                     layer.conv_grid,
                     layer.conv_cell_size,
+                    layer.transfer_boundary_policy,
                 )
             } else {
                 layer.m.clone()
@@ -418,12 +424,13 @@ impl MultilayerDemagRuntimeF32 {
             }
 
             if layer.needs_transfer {
-                layer.h_demag = pull_h_f32(
+                layer.h_demag = pull_h_f32_with_boundary_policy(
                     &conv_h,
                     layer.conv_grid,
                     layer.conv_cell_size,
                     layer.grid,
                     layer.cell_size,
+                    layer.transfer_boundary_policy,
                 );
             } else {
                 layer.h_demag = conv_h;
@@ -526,6 +533,7 @@ mod tests {
             conv_grid: grid,
             conv_cell_size: cell_size,
             needs_transfer: false,
+            transfer_boundary_policy: TransferBoundaryPolicy::OPEN,
         };
 
         let demag = MultilayerDemagRuntime::new(
@@ -599,6 +607,7 @@ mod tests {
             conv_grid: grid,
             conv_cell_size: cell_size,
             needs_transfer: false,
+            transfer_boundary_policy: TransferBoundaryPolicy::OPEN,
         };
         let mut layer_f32 = FdmLayerRuntimeF32 {
             magnet_name: "test".into(),
@@ -620,6 +629,7 @@ mod tests {
             conv_grid: grid,
             conv_cell_size: cell_size,
             needs_transfer: false,
+            transfer_boundary_policy: TransferBoundaryPolicy::OPEN,
         };
 
         let runtime_f64 = MultilayerDemagRuntime::new(

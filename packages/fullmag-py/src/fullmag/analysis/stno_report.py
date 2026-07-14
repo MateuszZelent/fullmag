@@ -441,8 +441,9 @@ def _snapshot_coordinates(payload: dict[str, Any]) -> tuple[ArrayF64, ArrayF64, 
 
     nx, ny, nz = (int(cells[0]), int(cells[1]), int(cells[2]))
     dx, dy, dz = (float(cell_size[0]), float(cell_size[1]), float(cell_size[2]))
-    if "origin" in layout and isinstance(layout["origin"], list) and len(layout["origin"]) == 3:
-        origin = [float(layout["origin"][0]), float(layout["origin"][1]), float(layout["origin"][2])]
+    resolved_origin = layout.get("origin_m", layout.get("origin"))
+    if isinstance(resolved_origin, list) and len(resolved_origin) == 3:
+        origin = [float(resolved_origin[0]), float(resolved_origin[1]), float(resolved_origin[2])]
     else:
         origin = [
             -0.5 * nx * dx,

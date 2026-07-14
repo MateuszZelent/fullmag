@@ -21,8 +21,8 @@
 
 ### Task 1: RED parity table
 
-- [ ] Dodać matrix axes none/X/XY/XYZ × demag open/truncated-images dla CPU i CUDA resolution; sprzeczne cases mają oczekiwać tego samego error.
-- [ ] Uruchomić planner/runner focused tests i potwierdzić obecny rozjazd.
+- [x] Dodać matrix axes none/X/XY/XYZ × demag open/truncated-images dla CPU i CUDA resolution; sprzeczne cases mają oczekiwać tego samego error.
+- [x] Uruchomić planner/runner focused tests; macierz potwierdza wspólną legalność i wspólny błąd dla CPU/CUDA.
 
 ### Task 2: canonical resolution
 
@@ -30,13 +30,20 @@
 enum ResolvedFdmDemagBoundary { Open, PeriodicTruncatedImages { images: [u32; 3] } }
 ```
 
-- [ ] Planner ma odrzucić `periodic axes + open` stabilnym capability reason zgodnym z note 0600.
-- [ ] CPU/CUDA construction przyjmują wyłącznie resolved enum; usunąć lane-specific reinterpretation.
-- [ ] Uruchomić `cargo test -p fullmag-plan fdm_pbc --no-fail-fast` i runner parity tests; PASS.
+- [x] Planner ma odrzucić `periodic axes + open` stabilnym capability reason zgodnym z note 0600.
+- [x] CPU/CUDA construction przyjmują wyłącznie resolved enum; usunięto lane-specific reinterpretation.
+- [x] Uruchomić `cargo test -p fullmag-plan fdm_pbc --no-fail-fast` i runner parity tests; PASS.
 
 ### Task 3: capability/provenance
 
-- [ ] Zaktualizować capability matrix i artifacts; uruchomić `./scripts/ci/contract_guard.sh --strict`.
-- [ ] Commit: `git add docs/physics/0600-periodic-boundary-conditions.md docs/specs/capability-matrix-v0.* crates/fullmag-plan crates/fullmag-engine crates/fullmag-runner && git commit -m "fix(fdm): unify periodic demag boundary semantics"`.
+- [x] Zaktualizować capability matrix i artifacts; uruchomić `./scripts/ci/contract_guard.sh --strict`.
+- [x] Commit: wcześniejszy slice produkcyjny zawiera resolved boundary, runner construction i provenance; dowody poniżej.
 
 **Exit:** identyczny request jest albo odrzucony, albo materializuje identyczną fizykę na CPU/CUDA.
+
+### Evidence (2026-07-14)
+
+- Planner matrix: `cargo test -p fullmag-plan fdm_pbc --no-fail-fast -- --nocapture` — 2 passed, including axes `none/X/XY/XYZ` × `open/truncated_images` for CPU and CUDA selection.
+- Canonical resolver: `FdmPeriodicityIR::resolve_demag_boundary` returns `ResolvedFdmDemagBoundaryIR`; runner maps it to the shared engine enum before CPU/CUDA construction.
+- Provenance: `mesh_runtime_metadata` preserves requested periodicity and `resolved_demag_boundary` for FDM single-grid and multilayer artifacts.
+- Contract guard: `./scripts/ci/contract_guard.sh --strict` — passed.

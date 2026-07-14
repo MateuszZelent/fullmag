@@ -303,6 +303,14 @@ export interface ModelTreeObjectRegionSnapshot {
   materialFieldCount: number;
   materialOverrideCount: number;
   meshPolicyActive: boolean;
+  meshLifecycleStatus?:
+    | "configured"
+    | "draft"
+    | "pending"
+    | "current"
+    | "stale"
+    | "failed"
+    | "unsupported";
   priority?: number | null;
   realizationPolicy?: string | null;
   realizationStatus?: string | null;

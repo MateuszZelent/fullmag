@@ -84,6 +84,23 @@ Component-level field requests must stay component-aware and must not trigger
 hidden full-vector fallback fetches.
 Slice resources are first-class read paths and remain in the binary data lane.
 
+#### 3b. Certificate-aware validators for periodic mesh diagnostics
+
+The periodic mesh diagnostics resource
+(`GET /v2/sessions/current/meshing/mesh/periodic_pairs.v1`) emits a strong
+`ETag` derived from three explicit identity inputs:
+
+1. the resolved mesh generation id,
+2. the persisted periodic-certificate fingerprint (when present), and
+3. a canonical digest of the complete JSON read-model.
+
+The canonical digest covers pair ids, node/face bijections, residuals,
+validation status, and stale reasons. Object keys are sorted recursively before
+hashing, so artifact insertion order cannot change the validator. A matching
+`If-None-Match` returns `304`; any semantic snapshot change returns a fresh
+`200` even when pair cardinality and mesh revision remain unchanged. Realtime
+events only invalidate this resource; the next HTTP GET remains authoritative.
+
 ### 4. Workspace and authoring are first-class resource families
 
 The resource-first split applies not only to runtime data, but also to control-room authoring.

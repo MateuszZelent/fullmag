@@ -20,7 +20,7 @@
 
 ### Task 1: RED gate audit
 
-- [ ] W `scripts/verify_fem_meshing_production.py` dodać manifest requirements dla native contract result, managed runtime artifact i browser screenshot/metrics; istniejący gate ma FAIL z brakującymi stages.
+- [x] W `scripts/verify_fem_meshing_production.py` dodać fail-closed manifest requirements dla native contract result, managed runtime artifact i browser screenshot/metrics; istniejący gate ma FAIL z brakującymi stages.
 
 ### Task 2: orchestrated stages
 
@@ -41,3 +41,24 @@ just run-viewport-3d-mixed-target-smoke
 
 **Exit:** jeden top-level gate dowodzi source, native runtime i viewport na tej samej mesh generation; failure dowolnego etapu propaguje nonzero exit.
 
+### Evidence (2026-07-14, blocked environment)
+
+- `just verify-fem-meshing-production`: Python meshing and Python API mesh stages passed; the wrapper stopped at `arch_waveguide_materialization_budget` because `.fullmag/local/python/bin/python` is absent. The direct script also confirms this missing managed runtime.
+- `just ensure-managed-fem-runtime`: attempted the repository-managed rebuild, but Docker Buildx could not update `/home/kkingstoun/.docker/buildx/activity` (`read-only file system`). This is an environment blocker, not a passing native/browser proof.
+- The `just` shell also reports `/etc/bash.bashrc: PS1: unbound variable` under nounset; direct `bash --noprofile --norc scripts/verify_fem_meshing_production.sh` bypasses that wrapper issue but still stops at the missing managed runtime.
+- Native FEM contract and browser/WebGL stages remain open and the gate is not closed.
+
+### Task 1 evidence (2026-07-14)
+
+- RED: przed implementacją `scripts/test_verify_fem_meshing_production_manifest.py`
+  nie mogły zaimportować `validate_evidence_manifest`.
+- GREEN: `python3 -m pytest scripts/test_verify_fem_meshing_production_manifest.py -q`
+  — 3 passed.
+- `python3 -m py_compile scripts/verify_fem_meshing_production.py ...` — PASS.
+- `python3 scripts/verify_fem_meshing_production.py --manifest /tmp/nonexistent-fem-meshing-evidence.json --json`
+  wygenerował manifest stage `production_evidence_manifest: failed` oraz łącznie
+  4 check results; brak manifestu jest jawnie czerwony. Nie uruchamiano kontenera.
+- Wymagany manifest `fem_meshing_production_gate.v1` wymusza trzy stage: `native_fem_contract`,
+  `managed_native_runtime`, `browser_mesh_smoke`; wszystkie muszą mieć `passed`,
+  wspólny `sha256` mesh fingerprint, istniejący artifact/screenshot, a browser
+  metrics muszą potwierdzać visible canvas, `context_lost=false` i dodatni drawing buffer.

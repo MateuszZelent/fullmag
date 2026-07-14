@@ -259,6 +259,18 @@ export const DATA_MESH_REGION_MEMBERSHIPS_PATH = openApiV2Path(
   "/v2/sessions/current/data/mesh-region-memberships",
 );
 
+export const DATA_FDM_REGION_MEMBERSHIPS_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fdm-region-memberships",
+);
+
+export const DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fdm-region-membership",
+);
+
+export const DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fdm-region-membership/{region_id}",
+);
+
 export const DATA_FIELD_META_PATH = openApiV2Path(
   "/v2/sessions/current/data/fields/{quantity_id}/meta",
 );
@@ -357,6 +369,10 @@ export const MESHING_CAPABILITIES_PATH = openApiV2Path(
 
 export const MESHING_PERIODIC_PAIRS_PATH = openApiV2Path(
   "/v2/sessions/current/meshing/mesh/periodic_pairs.v1",
+);
+
+export const MESHING_PERIODIC_PAIRS_BINARY_PATH = openApiV2Path(
+  "/v2/sessions/current/meshing/mesh/periodic_pairs.v1.bin",
 );
 
 export const MESHING_SEMANTICS_PATH = openApiV2Path(

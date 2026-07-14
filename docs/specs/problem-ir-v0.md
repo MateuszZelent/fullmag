@@ -98,7 +98,7 @@ Canonical shape:
     "entries": [
       {"kind": "imported_geometry", "name": "track", "source": "track.step", "format": "step"},
       {"kind": "box", "name": "strip", "size": [2.0e-7, 2.0e-8, 5.0e-9]},
-      {"kind": "cylinder", "name": "pillar", "radius": 5.0e-8, "height": 1.0e-8}
+      {"kind": "cylinder", "name": "pillar", "radius": 5.0e-8, "height": 1.0e-8, "axis": [0.0, 0.0, 1.0]}
     ]
   }
 }
@@ -109,7 +109,14 @@ Validation rules:
 - at least one geometry entry is required,
 - geometry names must be unique across all entry kinds,
 - `Box.size` components must be positive,
-- `Cylinder.radius` and `Cylinder.height` must be positive.
+- `Cylinder.radius` and `Cylinder.height` must be positive,
+- `Cylinder.axis` must contain three finite values and have non-zero norm; the planner
+  normalizes it once before bounds and voxel-mask evaluation.
+
+ProblemIR migration from the previous public version adds the explicit legacy axis
+`[0.0, 0.0, 1.0]` to cylinder entries that do not contain `axis`. Current-version
+payloads must provide the canonical field and are not silently defaulted during
+deserialization.
 
 ## `GeometryAssetsIR`
 

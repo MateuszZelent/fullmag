@@ -109,7 +109,7 @@ study.demag(realization="poisson_robin")
 study.fem_demag_solver(
     solver="CG",
     preconditioner="AMG",
-    rtol=1e-4,
+    rtol=1e-12,
     max_iterations=500,
 )
 study.objects.mesh.defaults(
@@ -145,15 +145,5 @@ study.save("demag_phi", every=10e-12)
 study.stages.add_minimize(
     method="bb",
     max_steps=4000,
-    tol=1e-4,
-)
-
-study.stages.add_relax(
-    algorithm="llg_overdamped",
-    solver="rk23",
-    max_error=1e-6,
-    dt_min=1e-17,
-    dt_max=1e-13,
-    max_steps=100,
-    tol=1e-4,
+    tol=5.0e2,  # A/m
 )

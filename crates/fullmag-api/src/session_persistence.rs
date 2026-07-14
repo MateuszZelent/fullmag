@@ -50,6 +50,8 @@ struct PersistedCurrentLiveSnapshot {
     builder_adapter: Option<fullmag_authoring::ScriptBuilderState>,
     mesh_revision: u64,
     mesh_build_revision: u64,
+    #[serde(default)]
+    region_realization_revisions: fullmag_authoring::RegionRealizationRevisions,
 }
 
 impl From<&SessionStateResponse> for PersistedCurrentLiveSnapshot {
@@ -78,6 +80,7 @@ impl From<&SessionStateResponse> for PersistedCurrentLiveSnapshot {
             builder_adapter: value.builder_adapter.clone(),
             mesh_revision: value.mesh_revision,
             mesh_build_revision: value.mesh_build_revision,
+            region_realization_revisions: value.region_realization_revisions,
             display_presentation: DisplayPresentationState::default(),
         }
     }
@@ -118,6 +121,7 @@ impl From<PersistedCurrentLiveSnapshot> for SessionStateResponse {
             field_samples_revision: 0,
             field_quantity_revisions: BTreeMap::new(),
             stage_execution_revision: 0,
+            region_realization_revisions: value.region_realization_revisions,
         }
     }
 }

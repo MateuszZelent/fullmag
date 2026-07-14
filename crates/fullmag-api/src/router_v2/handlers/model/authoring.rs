@@ -475,9 +475,14 @@ pub async fn get_authoring_regions(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<RegionListResource>, ApiError> {
     let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let revisions = current_region_realization_revisions(&state).await;
     Ok(Json(RegionListResource {
         scene_revision: scene.revision,
         geometry_realization_revision: scene.revision,
+        region_topology_revision: Some(revisions.topology),
+        region_membership_revision: Some(revisions.membership),
+        region_coefficients_revision: Some(revisions.coefficients),
+        region_initial_state_revision: Some(revisions.initial_state),
         regions: authored_region_resources(&scene),
     }))
 }
@@ -496,9 +501,14 @@ pub async fn get_authoring_realized_regions(
 ) -> Result<Json<RegionListResource>, ApiError> {
     let scene = crate::get_or_load_current_live_scene_document(&state).await?;
     let realization = realize_geometry_scene(&scene, GeometryBackendTarget::from_scene(&scene));
+    let revisions = current_region_realization_revisions(&state).await;
     Ok(Json(RegionListResource {
         scene_revision: scene.revision,
         geometry_realization_revision: realization.realization_revision,
+        region_topology_revision: Some(revisions.topology),
+        region_membership_revision: Some(revisions.membership),
+        region_coefficients_revision: Some(revisions.coefficients),
+        region_initial_state_revision: Some(revisions.initial_state),
         regions: realized_region_resources(&scene, realization.region_candidates),
     }))
 }
@@ -516,8 +526,13 @@ pub async fn get_authoring_region_diagnostics(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<RegionDiagnosticsResource>, ApiError> {
     let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let revisions = current_region_realization_revisions(&state).await;
     Ok(Json(RegionDiagnosticsResource {
         scene_revision: scene.revision,
+        region_topology_revision: Some(revisions.topology),
+        region_membership_revision: Some(revisions.membership),
+        region_coefficients_revision: Some(revisions.coefficients),
+        region_initial_state_revision: Some(revisions.initial_state),
         diagnostics: authored_region_diagnostics(&scene),
     }))
 }
@@ -537,8 +552,13 @@ pub async fn get_authoring_material_fields(
     let scene = crate::get_or_load_current_live_scene_document(&state).await?;
     let guard = state.current_live_state.read().await;
     let latest_fields = guard.as_ref().map(|snapshot| &snapshot.latest_fields);
+    let region_coefficients_revision = guard
+        .as_ref()
+        .map(|snapshot| snapshot.region_realization_revisions.coefficients)
+        .unwrap_or_default();
     Ok(Json(MaterialParameterFieldListResource {
         scene_revision: scene.revision,
+        region_coefficients_revision: Some(region_coefficients_revision),
         fields: authored_material_field_resources(&scene, latest_fields),
     }))
 }
@@ -1668,7 +1688,13 @@ pub async fn get_authoring_material(
         .iter()
         .find(|entry| entry.id == material_id)
         .ok_or_else(|| ApiError::not_found(format!("material not found: {material_id}")))?;
-    Ok(Json(build_material_resource(material)))
+    let region_coefficients_revision = current_region_realization_revisions(&state)
+        .await
+        .coefficients;
+    Ok(Json(build_material_resource(
+        material,
+        region_coefficients_revision,
+    )))
 }
 
 #[utoipa::path(
@@ -1707,7 +1733,13 @@ pub async fn patch_authoring_material(
         .iter()
         .find(|entry| entry.id == material_id)
         .ok_or_else(|| ApiError::internal(format!("committed material missing: {material_id}")))?;
-    Ok(Json(build_material_resource(material)))
+    let region_coefficients_revision = current_region_realization_revisions(&state)
+        .await
+        .coefficients;
+    Ok(Json(build_material_resource(
+        material,
+        region_coefficients_revision,
+    )))
 }
 
 #[utoipa::path(
@@ -1732,7 +1764,10 @@ pub async fn get_authoring_magnetization_asset(
         .iter()
         .find(|entry| entry.id == asset_id)
         .ok_or_else(|| ApiError::not_found(format!("magnetization asset not found: {asset_id}")))?;
-    build_magnetization_asset_resource(&scene, asset).map(Json)
+    let initial_state_revision = current_region_realization_revisions(&state)
+        .await
+        .initial_state;
+    build_magnetization_asset_resource(&scene, asset, initial_state_revision).map(Json)
 }
 
 #[utoipa::path(
@@ -1776,7 +1811,10 @@ pub async fn patch_authoring_magnetization_asset(
         .ok_or_else(|| {
             ApiError::internal(format!("committed magnetization asset missing: {asset_id}"))
         })?;
-    build_magnetization_asset_resource(&committed, asset).map(Json)
+    let initial_state_revision = current_region_realization_revisions(&state)
+        .await
+        .initial_state;
+    build_magnetization_asset_resource(&committed, asset, initial_state_revision).map(Json)
 }
 
 #[utoipa::path(
@@ -2817,6 +2855,7 @@ fn apply_create_object_region_transaction(
     region.owner_object = object.id.clone();
     clamp_object_region_shape_to_owner(object, &mut region);
     object.regions.push(region);
+    mark_object_mesh_dirty(object);
     Ok(())
 }
 
@@ -2889,6 +2928,7 @@ fn apply_patch_object_region_transaction(
     }
 
     clamp_object_region_shape_to_owner_bounds(owner_bounds, region);
+    mark_object_mesh_dirty(object);
     Ok(())
 }
 
@@ -2931,17 +2971,20 @@ fn apply_delete_object_region_transaction(
     region_id: &str,
 ) -> Result<(), ApiError> {
     check_base_scene_revision(scene, base_revision)?;
-    let object = find_scene_object_mut(scene, object_id)?;
-    let before = object.regions.len();
-    object.regions.retain(|entry| entry.region_id != region_id);
-    if object.regions.len() == before {
-        return Err(ApiError::not_found(format!(
-            "object region not found: {region_id}"
-        )));
+    {
+        let object = find_scene_object_mut(scene, object_id)?;
+        let before = object.regions.len();
+        object.regions.retain(|entry| entry.region_id != region_id);
+        if object.regions.len() == before {
+            return Err(ApiError::not_found(format!(
+                "object region not found: {region_id}"
+            )));
+        }
+        object
+            .material_parameter_fields
+            .retain(|field| field.region_id.as_deref() != Some(region_id));
+        mark_object_mesh_dirty(object);
     }
-    object
-        .material_parameter_fields
-        .retain(|field| field.region_id.as_deref() != Some(region_id));
     scene
         .couplings
         .retain(|coupling| !coupling_references_region(coupling, object_id, region_id));
@@ -2987,6 +3030,7 @@ fn apply_duplicate_object_region_transaction(
     duplicate.owner_object = object.id.clone();
     clamp_object_region_shape_to_owner(object, &mut duplicate);
     object.regions.push(duplicate);
+    mark_object_mesh_dirty(object);
     Ok(())
 }
 
@@ -3018,6 +3062,7 @@ fn apply_reorder_object_regions_transaction(
         ));
     }
     object.regions = reordered;
+    mark_object_mesh_dirty(object);
     Ok(())
 }
 
@@ -3568,8 +3613,24 @@ fn magnetic_interaction_kind_id(kind: ScriptBuilderMagneticInteractionKind) -> &
     }
 }
 
-fn build_material_resource(material: &fullmag_authoring::SceneMaterialAsset) -> MaterialResource {
+async fn current_region_realization_revisions(
+    state: &Arc<AppState>,
+) -> fullmag_authoring::RegionRealizationRevisions {
+    state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .map(|snapshot| snapshot.region_realization_revisions)
+        .unwrap_or_default()
+}
+
+fn build_material_resource(
+    material: &fullmag_authoring::SceneMaterialAsset,
+    region_coefficients_revision: u64,
+) -> MaterialResource {
     MaterialResource {
+        region_coefficients_revision: Some(region_coefficients_revision),
         id: material.id.clone(),
         name: material.name.clone(),
         properties: MaterialPropertiesResource {
@@ -3594,6 +3655,7 @@ fn build_material_resource(material: &fullmag_authoring::SceneMaterialAsset) -> 
 fn build_magnetization_asset_resource(
     scene: &SceneDocument,
     asset: &MagnetizationAsset,
+    region_initial_state_revision: u64,
 ) -> Result<MagnetizationAssetResource, ApiError> {
     let asset = serde_json::to_value(asset).map_err(|error| {
         ApiError::internal(format!("failed to serialize magnetization asset: {error}"))
@@ -3603,6 +3665,7 @@ fn build_magnetization_asset_resource(
     })?;
     Ok(MagnetizationAssetResource {
         scene_revision: scene.revision,
+        region_initial_state_revision: Some(region_initial_state_revision),
         asset: asset.into_iter().collect(),
     })
 }

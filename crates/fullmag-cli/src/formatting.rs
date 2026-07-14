@@ -7,6 +7,42 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::types::{EngineLogEntry, ResolvedScriptStage};
 
+#[cfg(test)]
+mod origin_tests {
+    use super::current_artifact_layout;
+    use fullmag_ir::{
+        BackendPlanIR, BackendTarget, CommonPlanMeta, ExecutionMode, ExecutionPlanIR,
+        FdmPlanIR, OutputPlanIR, ProvenancePlanIR, ProblemIR,
+    };
+
+    #[test]
+    fn fdm_artifact_layout_uses_resolved_plan_origin() {
+        let mut fdm = FdmPlanIR::default();
+        fdm.origin_m = [17.0e-9, -11.0e-9, 3.0e-9];
+        fdm.grid.cells = [4, 2, 1];
+        fdm.cell_size = [2.0e-9, 3.0e-9, 4.0e-9];
+        fdm.initial_magnetization = vec![[1.0, 0.0, 0.0]; 8];
+        let plan = ExecutionPlanIR {
+            common: CommonPlanMeta {
+                ir_version: "v0".to_string(),
+                requested_backend: BackendTarget::Fdm,
+                resolved_backend: BackendTarget::Fdm,
+                execution_mode: ExecutionMode::Strict,
+                material_field_plans: Vec::new(),
+            },
+            backend_plan: BackendPlanIR::Fdm(fdm),
+            output_plan: OutputPlanIR { outputs: Vec::new() },
+            provenance: ProvenancePlanIR { notes: Vec::new() },
+        };
+
+        let layout = current_artifact_layout(&ProblemIR::bootstrap_example(), &plan);
+        assert_eq!(
+            layout["origin_m"],
+            serde_json::json!([17.0e-9, -11.0e-9, 3.0e-9])
+        );
+    }
+}
+
 pub(crate) fn unix_time_millis() -> Result<u128> {
     Ok(SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -277,7 +313,6 @@ pub(crate) fn current_artifact_layout(
             let total_cells = fdm.grid.cells[0] as usize
                 * fdm.grid.cells[1] as usize
                 * fdm.grid.cells[2] as usize;
-            let origin = fdm_grid_origin(fdm.grid.cells, fdm.cell_size);
             let active_cell_count = fdm
                 .active_mask
                 .as_ref()
@@ -287,7 +322,7 @@ pub(crate) fn current_artifact_layout(
                 "backend": "fdm",
                 "grid_cells": fdm.grid.cells,
                 "cell_size": fdm.cell_size,
-                "origin": origin,
+                "origin_m": fdm.origin_m,
                 "total_cell_count": total_cells,
                 "active_mask_present": fdm.active_mask.is_some(),
                 "active_cell_count": active_cell_count,
@@ -466,27 +501,6 @@ pub(crate) fn current_artifact_layout(
                 "domain_mesh_mode": fem.domain_mesh_mode,
                 "frequency_count": fem.frequencies_hz.values_hz.len(),
             })
-        }
-    }
-}
-
-fn fdm_grid_origin(grid_cells: [u32; 3], cell_size: [f64; 3]) -> [f64; 3] {
-    [
-        -(grid_cells[0] as f64 * cell_size[0]) * 0.5,
-        -(grid_cells[1] as f64 * cell_size[1]) * 0.5,
-        -(grid_cells[2] as f64 * cell_size[2]) * 0.5,
-    ]
-}
-
-#[cfg(test)]
-mod tests {
-    use super::fdm_grid_origin;
-
-    #[test]
-    fn fdm_grid_origin_centers_single_grid_domain() {
-        let origin = fdm_grid_origin([6, 4, 2], [1.0e-9, 2.0e-9, 5.0e-9]);
-        for (index, expected) in [-3.0e-9, -4.0e-9, -5.0e-9].iter().enumerate() {
-            assert!((origin[index] - expected).abs() < 1e-18, "origin[{index}]");
         }
     }
 }

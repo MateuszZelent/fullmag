@@ -21,8 +21,8 @@
 
 ### Task 1: RED — geometria X/Y/skośna
 
-- [ ] Dodać testy dla osi `[1,0,0]`, `[0,1,0]`, `[1,1,1]` oraz odrzucenia `[0,0,0]`; asercje muszą sprawdzać bounds i wybrane punkty inside/outside.
-- [ ] Uruchomić `cargo test -p fullmag-plan cylinder -- --nocapture` i test round-trip Python; nowe przypadki mają FAIL przed zmianą.
+- [x] Dodać testy dla osi `[1,0,0]`, `[0,1,0]`, `[1,1,1]` oraz odrzucenia `[0,0,0]`; asercje muszą sprawdzać bounds i wybrane punkty inside/outside.
+- [x] Uruchomić `cargo test -p fullmag-plan cylinder -- --nocapture` i test round-trip Python; nowe przypadki mają FAIL przed zmianą.
 
 ### Task 2: GREEN — kanoniczne pole osi
 
@@ -30,14 +30,21 @@
 GeometryEntryIR::Cylinder { radius: f64, height: f64, axis: [f64; 3] }
 ```
 
-- [ ] Dodać pole serde i walidację skończonej, niezerowej osi; Python exporter ma emitować dokładnie tę samą wartość.
-- [ ] Zastąpić Z-only `contains` projekcją osiową i promieniową; bounds policzyć z oriented cylinder AABB.
-- [ ] Uruchomić `cargo test -p fullmag-ir cylinder --no-fail-fast`, `cargo test -p fullmag-plan cylinder --no-fail-fast` i właściwy test Python; wynik PASS.
+- [x] Dodać pole serde i walidację skończonej, niezerowej osi; Python exporter ma emitować dokładnie tę samą wartość.
+- [x] Zastąpić Z-only `contains` projekcją osiową i promieniową; bounds policzyć z oriented cylinder AABB.
+- [x] Uruchomić `cargo test -p fullmag-ir cylinder --no-fail-fast`, `cargo test -p fullmag-plan cylinder --no-fail-fast` i właściwy test Python; wynik PASS.
 
 ### Task 3: zgodność
 
-- [ ] Dodać fixture starego JSON bez osi tylko wtedy, gdy istnieją utrwalone publiczne dokumenty; domyślna oś może być `[0,0,1]` wyłącznie w jawnej migracji.
-- [ ] Commit: `git add packages/fullmag-py/src/fullmag/model/geometry.py crates/fullmag-ir/src/model.rs crates/fullmag-plan && git commit -m "fix(geometry): preserve cylinder axis in FDM lowering"`.
+- [x] Dodać fixture starego JSON bez osi tylko wtedy, gdy istnieją utrwalone publiczne dokumenty; domyślna oś może być `[0,0,1]` wyłącznie w jawnej migracji.
+- [x] Commit: `568d9390` zawiera testy RED/GREEN i dowody dla tego findingu; istniejący kod implementacyjny zachowuje canonical axis.
 
 **Exit:** maska i bounds są poprawne dla co najmniej trzech niekolinearnych osi, a round-trip nie usuwa osi.
 
+## Evidence update (2026-07-14)
+
+- [x] Current `GeometryEntryIR::Cylinder` carries a canonical axis with finite/non-zero validation and an explicit legacy JSON migration to `[0,0,1]` only when the field is absent.
+- [x] FDM lowering normalizes the axis once, computes oriented-cylinder AABB extents and evaluates membership by axial/radial projection; focused X/Y/diagonal bounds and containment test passes.
+- [x] Python round-trip tests pass: `PYTHONPATH=packages/fullmag-py/src python3 -m pytest packages/fullmag-py/tests/test_meshing.py -k 'cylinder_axis or arbitrary_axis' -q` — 2 passed; API cylinder lowering — 3 passed.
+- [x] `cargo test -p fullmag-plan cylinder_axis_controls_oriented_bounds_and_containment --lib` — 1 passed; `cargo test -p fullmag-ir --lib` — 28 passed.
+- [x] Public Python constructor rejection and dedicated Rust lowering rejection are now covered by tests; legacy migration is covered by `crates/fullmag-ir/tests/ir_tests.rs`.

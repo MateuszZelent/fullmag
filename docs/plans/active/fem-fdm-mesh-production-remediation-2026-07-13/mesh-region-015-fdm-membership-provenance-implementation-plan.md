@@ -30,13 +30,27 @@
 struct FdmRegionLegendEntryIR { numeric_id: u32, object_id: String, region_id: String, priority: i32 }
 ```
 
-- [ ] Dodać posortowaną legendę i digest do `FdmPlanIR`; walidować każdy mask ID i coverage.
-- [ ] Zapisać mask/legend/grid-certificate identity w artefakcie i udostępnić scoped binary endpoint z ETag membership revision.
+- [x] Dodać posortowaną legendę i digest do `FdmGridCertificateIR`; planner single-grid materializuje ją deterministycznie z canonical region IDs.
+- [x] Walidować każdy mask ID względem legendy; brak legendy lub nieznany numeric ID kończy się stabilnym fail-closed błędem w certyfikacie.
+- [x] Opublikować legendę i digest w `mesh_runtime_metadata` jako mały, inspekcyjny kontrakt.
+- [x] Zapisać mask/legend/grid-certificate identity w artefaktach `mesh/fdm_region_membership.v1.{json,bin}`; binary payload używa wersjonowanego formatu `FMRM:u32_le`.
+- [x] Udostępnić v2 descriptor `data/fdm-region-memberships` oraz scoped binary endpoints `data/fdm-region-membership[/{region_id}]` z ETag, revision headers i fingerprint validation.
 - [ ] Viewport i Inspector używają realized mask dla aktywnego gridu; preview jest jawnie oznaczony.
 
 ### Task 3: proof
 
-- [ ] Uruchomić planner/runner/API binary codec tests, OpenAPI hygiene, focused viewport tests i browser smoke dla mask switching.
+- [x] Uruchomić focused IR/planner/runner tests: legend digest, object-region materialization oraz runtime metadata (1/1 każdy).
+- [x] Runner artifact test potwierdza descriptor, legendę, `FMRM` header i mask length.
+- [x] API FMRM validator and router integration tests PASS; Control Room codec/API tests 74/74 PASS; generated OpenAPI v2 paths/types updated; typecheck PASS; targeted ESLint PASS.
+- [ ] Uruchomić pełny planner/runner/API binary codec suite, resource/viewport tests i browser smoke dla mask switching.
 - [ ] Commit: `git add crates/fullmag-ir crates/fullmag-plan crates/fullmag-runner crates/fullmag-api apps/control-room && git commit -m "feat(fdm): publish realized region membership"`.
+
+## Evidence update (2026-07-14, viewport realized-mask consumer)
+
+- [x] FDM cuboid build requests now carry the validated FMRM `regionIds` mask; the worker clones/transfers it and the model filters inactive cells deterministically.
+- [x] `FdmCuboidInstanceModel` preserves sampled numeric region IDs, keeping realized membership distinguishable from authored-grid fallback (`regionIds: null`).
+- [x] The viewport build key includes the authoritative membership revision, preventing a previous mask from surviving a membership update.
+- [x] Focused frontend evidence: `fdmCuboidBuildModel.test.ts` + `useViewport3DSceneModel.test.ts` — 98 tests passed; Control Room typecheck and targeted ESLint passed.
+- [ ] Inspector legend/selection display, real browser/WebGL smoke, full frontend suite and managed FDM runtime parity remain open.
 
 **Exit:** każdą wartość cell mask można jednoznacznie przypisać do canonical regionu i grid generation.

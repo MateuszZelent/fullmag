@@ -39,4 +39,17 @@ def certify_periodic_mesh(mesh: MeshIR, axes: tuple[str, ...], tolerance_m: floa
 
 - [ ] Commit: `git add packages/fullmag-py/src/fullmag/meshing packages/fullmag-py/tests/test_periodic_meshing.py && git commit -m "fix(mesh): certify extracted Gmsh periodic topology"`.
 
+### Evidence update (2026-07-14, extracted topology preflight)
+
+- [x] Added `certify_extracted_periodic_mesh` and invoked it after Gmsh extraction whenever periodic pair specs are present.
+- [x] The verifier checks translated node bijections, complete mirrored face vertex sets, opposite normals, duplicate destinations, and multi-axis edge/corner commutation before Rust builds the canonical v6 certificate.
+- [x] RED/GREEN evidence: `test_certify_extracted_periodic_mesh_rejects_missing_mirrored_face` passes 1/1, including a deliberately truncated face fixture that fails closed.
+- [ ] Full face-domain/material certificate propagation, managed Gmsh runtime and browser gates remain open.
+
+### Evidence update (2026-07-14, remesh response retention)
+
+- [x] `MeshData.periodic_mesh_certificate` is included in inline remesh responses and spilled topology artifacts; the CLI parser hydrates it and records it under `mesh_provenance.periodic_mesh_certificate`.
+- [x] `cargo test -p fullmag-cli python_bridge::tests::parse_remesh_cli_response_loads_topology_artifact --no-fail-fast -- --nocapture` — 1 passed.
+- [ ] Rust `MeshIR` canonical identity comparison and managed/browser proof remain open.
+
 **Exit:** każde periodic Gmsh build ma post-extraction v6; celowo uszkodzona topologia nigdy nie przechodzi.

@@ -150,7 +150,9 @@ fn guardrail_fdm_periodic_demag_workspace_uses_periodic_padding() {
         },
     );
     p.boundary_policy = periodic_x_policy();
-    p.demag_image_counts = [3, 0, 0];
+    p.demag_boundary = FdmDemagBoundary::PeriodicTruncatedImages {
+        image_counts: [3, 0, 0],
+    };
 
     let ws = p.create_workspace();
     assert_eq!(
@@ -159,6 +161,96 @@ fn guardrail_fdm_periodic_demag_workspace_uses_periodic_padding() {
     );
     assert_eq!(ws.py, p.grid.ny * 2, "open y axis should keep 2N padding");
     assert_eq!(ws.pz, p.grid.nz * 2, "open z axis should keep 2N padding");
+}
+
+#[test]
+fn guardrail_fdm_periodic_workspace_budget_is_checked_before_allocation() {
+    let boundary = periodic_x_policy();
+    let error = match FftWorkspace::try_new_with_boundary(
+        8,
+        8,
+        8,
+        1.0e-9,
+        1.0e-9,
+        1.0e-9,
+        &boundary,
+        [500_000, 0, 0],
+    ) {
+        Ok(_) => panic!("periodic image work must be rejected before FFT allocation"),
+        Err(error) => error,
+    };
+    assert!(error.contains("periodic image budget exceeded"));
+}
+
+#[test]
+fn guardrail_fdm_periodic_workspace_checks_padding_overflow() {
+    let boundary = FdmBoundaryPolicy {
+        x: AxisBoundary::Periodic,
+        y: AxisBoundary::Open,
+        z: AxisBoundary::Open,
+    };
+    let error = match FftWorkspace::try_new_with_boundary(
+        1,
+        usize::MAX,
+        1,
+        1.0e-9,
+        1.0e-9,
+        1.0e-9,
+        &boundary,
+        [0, 0, 0],
+    ) {
+        Ok(_) => panic!("padded dimension multiplication must be checked"),
+        Err(error) => error,
+    };
+    assert!(error.contains("padded grid count overflow"));
+}
+
+#[test]
+fn guardrail_fdm_periodic_workspace_rejects_stale_resolved_contract_before_allocation() {
+    let boundary = periodic_x_policy();
+    let stale = fullmag_engine::ResolvedFdmPeriodicWorkspace {
+        image_counts: [3, 0, 0],
+        padded_counts: [7, 16, 16],
+        image_terms: 7,
+        estimated_bytes: 393_216,
+    };
+    let error = match FftWorkspace::try_new_with_boundary_and_resolution(
+        8,
+        8,
+        8,
+        1.0e-9,
+        1.0e-9,
+        1.0e-9,
+        &boundary,
+        [3, 0, 0],
+        &stale,
+    ) {
+        Ok(_) => panic!("stale planner workspace contract must fail before allocation"),
+        Err(error) => error,
+    };
+    assert!(error.contains("resolved periodic workspace padded_counts mismatch"));
+}
+
+#[test]
+fn guardrail_fdm_periodic_local_policy_does_not_reinterpret_open_demag() {
+    let mut p = permalloy_problem(
+        5,
+        4,
+        3,
+        2.0,
+        TimeIntegrator::Heun,
+        EffectiveFieldTerms {
+            exchange: false,
+            demag: true,
+            ..Default::default()
+        },
+    );
+    p.boundary_policy = periodic_x_policy();
+
+    let ws = p.create_workspace();
+    assert_eq!(ws.px, p.grid.nx * 2);
+    assert_eq!(ws.py, p.grid.ny * 2);
+    assert_eq!(ws.pz, p.grid.nz * 2);
 }
 
 /// Uniform sphere/ellipsoid average demag field sanity.

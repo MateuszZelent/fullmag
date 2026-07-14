@@ -302,6 +302,7 @@ def _write_topology_artifact_if_needed(
         "boundary_markers": mesh_data.boundary_markers.tolist(),
         "periodic_boundary_pairs": list(mesh_data.periodic_boundary_pairs),
         "periodic_node_pairs": list(mesh_data.periodic_node_pairs),
+        "periodic_mesh_certificate": mesh_data.periodic_mesh_certificate,
     }
     with os.fdopen(handle, "w", encoding="utf-8") as fp:
         json.dump(payload, fp, separators=(",", ":"))
@@ -394,6 +395,7 @@ def _mesh_result_payload(
     mesh_provenance: dict[str, Any],
     size_field_stats: dict[str, Any] | None = None,
     region_markers: list[dict[str, Any]] | None = None,
+    object_region_markers: list[dict[str, Any]] | None = None,
     topology_artifact_dir: str | Path | None = None,
     inline_topology_max_bytes: int | None = None,
 ) -> dict[str, Any]:
@@ -423,6 +425,7 @@ def _mesh_result_payload(
         "boundary_markers": mesh.boundary_markers.tolist() if inline_topology else [],
         "periodic_boundary_pairs": list(mesh.periodic_boundary_pairs) if inline_topology else [],
         "periodic_node_pairs": list(mesh.periodic_node_pairs) if inline_topology else [],
+        "periodic_mesh_certificate": mesh.periodic_mesh_certificate,
         "mesh_statistics": mesh_statistics,
         "generation_mode": generation_mode,
         "mesh_provenance": mesh_provenance,
@@ -439,6 +442,9 @@ def _mesh_result_payload(
 
     if region_markers is not None:
         result["region_markers"] = region_markers
+
+    if object_region_markers is not None:
+        result["object_region_markers"] = object_region_markers
 
     if mesh_data.quality is not None:
         q = mesh_data.quality
@@ -538,6 +544,11 @@ def main() -> None:
             )
         )
         region_markers = None
+        object_regions = (
+            config.get("object_regions")
+            if isinstance(config.get("object_regions"), list)
+            else None
+        )
         shared_domain_report: SharedDomainBuildReport | None = None
 
         # Redirect the real stdout fd to /dev/null during mesh generation —
@@ -586,10 +597,11 @@ def main() -> None:
                 }
                 mesh_data, region_markers, shared_domain_report = (
                     realize_fem_domain_mesh_asset_from_components_with_report(
-                    geometries,
-                    FEM(order=int(order), maximum_element_size=float(hmax)),
-                    study_universe=declared_universe,
-                    mesh_workflow=mesh_workflow,
+                        geometries,
+                        FEM(order=int(order), maximum_element_size=float(hmax)),
+                        study_universe=declared_universe,
+                        mesh_workflow=mesh_workflow,
+                        object_regions=object_regions,
                     )
                 )
             elif mode == "manual_remesh":
@@ -683,6 +695,11 @@ def main() -> None:
             },
             size_field_stats=size_field_stats,
             region_markers=region_markers,
+            object_region_markers=(
+                shared_domain_report.object_region_markers
+                if shared_domain_report is not None
+                else None
+            ),
         )
 
         json.dump(result, sys.stdout, separators=(",", ":"))

@@ -103,6 +103,16 @@ high-order FEM
 general FEM GPU parity
 ```
 
+### FDM periodic demagnetization boundary semantics
+
+The FDM CPU reference and CUDA production lanes share one resolved boundary
+realization.  A demagnetization request with any periodic local axis and
+`pbc.demag = "open"` is unsupported and fails in planning; it must not be
+silently interpreted as truncated images by one lane.  Legal periodic demag
+resolves to `PeriodicTruncatedImages { image_counts }` with the same image
+counts on CPU and CUDA.  Requested policy and resolved realization are both
+published in artifact metadata.
+
 Capability changes for those features must update both the capability row and
 the relevant physics note with units, field/torque interpretation, validation
 coverage, and known limits.

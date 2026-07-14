@@ -229,6 +229,39 @@ describe("ObjectRegionsPanelModel", () => {
     });
   });
 
+  it("omits non-box shape parameters from the canonical Box patch", () => {
+    const patch = buildObjectRegionPatch({
+      enabled: true,
+      frame: "object",
+      materialOverrides: [],
+      meshPolicy: {
+        enabled: false,
+        maximumElementSize: 10e-9,
+        minimumElementSize: 1e-9,
+        order: 1,
+        transitionDistance: 50e-9,
+      },
+      name: "box-region",
+      ownerBounds: null,
+      priority: 0,
+      realizationPolicy: "inherit",
+      shape: {
+        axis: [0, 0, 1],
+        center: [0, 0, 0],
+        height: 5e-9,
+        kind: "box",
+        radius: 99e-9,
+        size: [10e-9, 20e-9, 5e-9],
+      },
+    });
+
+    expect(patch.shape).toEqual({
+      center: [0, 0, 0],
+      kind: "box",
+      size: [10e-9, 20e-9, 5e-9],
+    });
+  });
+
   it("clamps edited region shapes to the parent object bounds", () => {
     expect(
       clampObjectRegionDraftShapeToOwnerBounds(

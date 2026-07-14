@@ -28,10 +28,12 @@ import {
   ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+  MESHING_SEMANTICS_PATH,
   MESHING_OBJECT_QUALITY_PATH,
   MESHING_OBJECT_REPORT_PATH,
   MESHING_OBJECT_SIZE_FIELD_PATH,
   MESHING_OBJECT_TOPOLOGY_PATH,
+  MESHING_PERIODIC_PAIRS_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MESHING_SHARED_DOMAIN_QUALITY_PATH,
   MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
@@ -156,6 +158,9 @@ describe("RealtimeInvalidationBridge", () => {
       dependentRevision(MODEL_SCENE_PATH, 12),
     );
     expect(resources.getRevision(MODEL_MATERIAL_FIELDS_PATH)).toBe(
+      dependentRevision(MODEL_SCENE_PATH, 12),
+    );
+    expect(resources.getRevision("session:status")).toBe(
       dependentRevision(MODEL_SCENE_PATH, 12),
     );
     expect(resources.getRevision(MESHING_BUILDS_CURRENT_PATH)).toBeNull();
@@ -1109,7 +1114,11 @@ describe("RealtimeInvalidationBridge", () => {
       "mesh-build-9",
     );
     expect(resources.getRevision(MESHING_SUMMARY_PATH)).toBe("mesh-build-9");
+    expect(resources.getRevision(MESHING_SEMANTICS_PATH)).toBe("mesh-build-9");
     expect(resources.getRevision(MESHING_SHARED_DOMAIN_MANIFEST_PATH)).toBe(
+      "mesh-build-9",
+    );
+    expect(resources.getRevision(MESHING_PERIODIC_PAIRS_PATH)).toBe(
       "mesh-build-9",
     );
     expect(resources.getRevision(MESHING_SHARED_DOMAIN_QUALITY_PATH)).toBe(

@@ -44,3 +44,16 @@ class PeriodicAntidotFixtureConfig:
 
 **Exit:** test file i managed example są zielone w czystym środowisku; każdy override jest jawny w config/provenance.
 
+## Evidence update (2026-07-14, canonical fixture controls)
+
+- [x] RED reproduced two failures in the sanitized fixture suite: the frequency
+  example contained direct environment reads and exported `auto`/`8192` instead
+  of the asserted response policy.
+- [x] Added `PeriodicAntidotFixtureConfig` as the single allowlisted control
+  source. The example imports that config, records the resolved preconditioner
+  and restart count in runtime metadata, and keeps stage/state overrides out of
+  the example source itself.
+- [x] `PYTHONPATH=packages/fullmag-py/src python3 -m pytest
+  packages/fullmag-py/tests/test_periodic_antidot_relaxation_example.py -q` —
+  6 passed; `scripts/test_frequency_domain_runtime_targets.py -q` — 62 passed.
+- [ ] Managed runtime execution and artifact reproducibility remain open.

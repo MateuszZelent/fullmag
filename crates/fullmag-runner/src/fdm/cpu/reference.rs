@@ -9,7 +9,8 @@ use fullmag_engine::{
     EngineError, EvaluationRequest, ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA,
     FdmBoundaryPolicy, FftWorkspace, GridShape, IntegratorBuffers, LlgConfig,
     MagnetoelasticTermConfig, MaterialParameters, OerstedCylinderConfig, SlonczewskiSttConfig,
-    SotConfig, StepReport, TimeIntegrator, UniaxialAnisotropyConfig, Vector3, ZhangLiSttConfig,
+    ResolvedFdmPeriodicWorkspace, SotConfig, StepReport, TimeIntegrator,
+    UniaxialAnisotropyConfig, Vector3, ZhangLiSttConfig,
 };
 use fullmag_ir::{
     ExecutionPrecision, FdmPlanIR, IntegratorChoice, OutputIR, RelaxationAlgorithmIR,
@@ -18,7 +19,10 @@ use fullmag_ir::{
 
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
 use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
-use crate::fdm::artifacts::select_state_observable_field;
+use crate::fdm::{
+    artifacts::select_state_observable_field,
+    validate_single_grid_budget,
+};
 use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 use crate::preview::{
     build_grid_preview_field, build_grid_scalar_preview_field, flatten_vectors, select_observables,
@@ -443,6 +447,7 @@ fn select_direct_preview_values(
 pub(crate) fn build_snapshot_problem_and_state(
     plan: &FdmPlanIR,
 ) -> Result<(ExchangeLlgProblem, ExchangeLlgState), RunError> {
+    validate_single_grid_budget(plan)?;
     let grid = GridShape::new(
         plan.grid.cells[0] as usize,
         plan.grid.cells[1] as usize,
@@ -543,7 +548,7 @@ pub(crate) fn build_snapshot_problem_and_state(
             fullmag_ir::AxisBoundary::Periodic => AxisBoundary::Periodic,
             fullmag_ir::AxisBoundary::Open => AxisBoundary::Open,
         };
-        problem.boundary_policy = FdmBoundaryPolicy {
+    problem.boundary_policy = FdmBoundaryPolicy {
             x: map_axis(&pbc.axes[0]),
             y: map_axis(&pbc.axes[1]),
             z: map_axis(&pbc.axes[2]),
@@ -552,6 +557,17 @@ pub(crate) fn build_snapshot_problem_and_state(
             problem.demag_image_counts = ic;
         }
     }
+    problem.set_demag_boundary(crate::fdm::resolve_fdm_demag_boundary(plan)?);
+    problem.set_resolved_periodic_workspace(
+        plan.resolved_periodic_images
+            .as_ref()
+            .map(|resolved| ResolvedFdmPeriodicWorkspace {
+                image_counts: resolved.resolved_image_counts,
+                padded_counts: resolved.padded_counts,
+                image_terms: resolved.image_terms,
+                estimated_bytes: resolved.estimated_bytes,
+            }),
+    );
     // Set thermal noise parameters
     problem.temperature = plan.temperature.unwrap_or(0.0);
     if let Some(dt) = plan.fixed_timestep {
@@ -585,6 +601,7 @@ pub(crate) fn execute_reference_fdm(
     mut live: Option<LiveStepConsumer<'_>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    validate_single_grid_budget(plan)?;
     if until_seconds <= 0.0 {
         return Err(RunError {
             message: "until_seconds must be positive".to_string(),
@@ -715,6 +732,7 @@ pub(crate) fn execute_reference_fdm(
             problem.demag_image_counts = ic;
         }
     }
+    problem.set_demag_boundary(crate::fdm::resolve_fdm_demag_boundary(plan)?);
 
     let mut state = problem
         .new_state(plan.initial_magnetization.clone())

@@ -48,6 +48,7 @@ mod field_slice;
 mod field_store;
 mod openapi_v2;
 mod orientation_color;
+mod periodic_pairs_binary;
 mod preview;
 mod quantities;
 mod quantity_data_plane;
@@ -168,6 +169,7 @@ fn current_live_mesh_resource_fetches(snapshot: &SessionStateResponse) -> Vec<St
         "/v2/sessions/current/meshing/meshes/shared-domain/topology".to_string(),
         "/v2/sessions/current/meshing/meshes/shared-domain/quality".to_string(),
         "/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields".to_string(),
+        "/v2/sessions/current/meshing/mesh/periodic_pairs.v1".to_string(),
     ];
     fetches.extend(mesh.object_segments.iter().map(|segment| {
         format!(
@@ -531,6 +533,7 @@ mod realtime_change_tests {
                 "/v2/sessions/current/meshing/meshes/shared-domain/quality".to_string(),
                 "/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields"
                     .to_string(),
+                "/v2/sessions/current/meshing/mesh/periodic_pairs.v1".to_string(),
             ],
         };
 
@@ -548,6 +551,9 @@ mod realtime_change_tests {
         assert!(fetches.contains("/v2/sessions/current/meshing/meshes/shared-domain/quality"));
         assert!(fetches
             .contains("/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields"));
+        assert!(fetches.contains(
+            "/v2/sessions/current/meshing/mesh/periodic_pairs.v1"
+        ));
         assert!(fetches.contains("/v2/sessions/current/model/scene"));
         assert!(fetches.contains("/v2/sessions/current/visualization/state"));
     }
@@ -2726,6 +2732,15 @@ pub(crate) async fn commit_current_live_scene_document(
             snapshot.scene_document = Some(current_scene);
         }
         let previous_scene = snapshot.scene_document.clone();
+        let region_impact = previous_scene
+            .as_ref()
+            .map(|before| fullmag_authoring::classify_region_realization_impact(before, &scene_document))
+            .unwrap_or(fullmag_authoring::RegionRealizationImpact {
+                topology: true,
+                membership: true,
+                coefficients: true,
+                initial_state: true,
+            });
         let previous_mesh_signature = previous_scene.as_ref().map(scene_mesh_signature);
         let next_revision = snapshot
             .scene_document
@@ -2751,6 +2766,9 @@ pub(crate) async fn commit_current_live_scene_document(
         snapshot.builder_adapter = Some(builder_state);
         let next_mesh_signature = scene_mesh_signature(&scene_document);
         snapshot.scene_document = Some(scene_document.clone());
+        snapshot.region_realization_revisions = snapshot
+            .region_realization_revisions
+            .advance(region_impact);
         let allow_live_magnetization_rebuild = snapshot
             .live_state
             .as_ref()
@@ -3478,11 +3496,26 @@ fn scene_mesh_signature(scene: &SceneDocument) -> Value {
         "mesh_interfaces": scene.study.mesh_interfaces,
         "objects": scene.objects.iter().map(|object| json!({
             "id": object.id,
-            "name": object.name,
             "geometry": object.geometry,
             "transform": object.transform,
             "material_ref": object.material_ref,
-            "region_name": object.region_name,
+            // Only region inputs consumed by FEM mesh marker/membership
+            // realization belong to mesh identity. Metadata and material
+            // overrides get their own realization revisions.
+            "regions": object
+                .regions
+                .iter()
+                .map(|region| json!({
+                    "region_id": region.region_id,
+                    "owner_object": region.owner_object,
+                    "shape": region.shape,
+                    "frame": region.frame,
+                    "enabled": region.enabled,
+                    "priority": region.priority,
+                    "mesh_policy": region.mesh_policy,
+                    "realization_policy": region.realization_policy,
+                }))
+                .collect::<Vec<_>>(),
             "object_mesh": object.object_mesh,
             "mesh_override": object.mesh_override,
         })).collect::<Vec<_>>(),

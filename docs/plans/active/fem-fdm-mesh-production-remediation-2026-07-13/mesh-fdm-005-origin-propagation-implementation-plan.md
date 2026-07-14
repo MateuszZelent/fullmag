@@ -44,3 +44,16 @@ pub struct FdmPlanIR {
 
 **Exit:** ten sam origin występuje w planie, konstrukcji CPU/CUDA, artifact i publicznym resource; translated fixture daje identyczne world coordinates.
 
+### Evidence update (2026-07-14, existing implementation re-verified)
+
+- [x] `FdmPlanIR.origin_m` is a required resolved field and is populated from
+  the planner's single `native_origin` computation for both direct and
+  precomputed translated assets; downstream code consumes the field instead
+  of reconstructing it from extents.
+- [x] CPU/CUDA runtime validation and FDM artifacts include the same origin in
+  grid-certificate identity and reject non-finite or mismatched values.
+- [x] Translated planner fixtures assert serialized `origin_m` and equality
+  between single-grid and multilayer world coordinates.
+- [x] Evidence: `CARGO_TARGET_DIR=/tmp/fullmag-fdm-origin-check cargo test -p fullmag-plan fdm_translated_ --lib --no-fail-fast -- --nocapture` — 3 passed; adjacent runner FDM suite — 84 passed.
+- [ ] Public browser resource exposure and managed CPU/CUDA parity evidence
+  still need a full end-to-end gate; host-side crate tests are not that proof.

@@ -55,10 +55,14 @@ import {
 } from "lucide-react";
 import { createElement } from "react";
 
-import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
+import {
+  MESHING_CAPABILITIES_PATH,
+  VISUALIZATION_STATE_PATH,
+} from "@/kernel/api/apiPaths";
 import type {
   LiveStatusResource,
   MeshActiveBuildResource,
+  MeshCapabilitiesResource,
   MeshLastSuccessfulBuildResource,
   MeshSemanticsResource,
   MeshSummaryResource,
@@ -1607,6 +1611,7 @@ export interface RibbonBuildContext {
   commands?: CommandRegistry;
   meshBuildCurrent?: MeshActiveBuildResource | null;
   meshBuildLatest?: MeshLastSuccessfulBuildResource | null;
+  meshCapabilities?: MeshCapabilitiesResource | null;
   meshSemantics?: MeshSemanticsResource | null;
   meshSummary?: MeshSummaryResource | null;
   resources?: RibbonResourceInvalidator;
@@ -2109,9 +2114,15 @@ function shouldDisableMissingCommand(
 
 function ribbonCommandContext(context: RibbonBuildContext): CommandContext {
   const base = context.commandContext ?? { source: "ribbon" as const };
-  const resourceData = context.visualizationState
+  const resourceData =
+    context.visualizationState || context.meshCapabilities !== undefined
     ? {
-        [VISUALIZATION_STATE_PATH]: context.visualizationState,
+        ...(context.visualizationState
+          ? { [VISUALIZATION_STATE_PATH]: context.visualizationState }
+          : {}),
+        ...(context.meshCapabilities !== undefined
+          ? { [MESHING_CAPABILITIES_PATH]: context.meshCapabilities }
+          : {}),
         ...base.resourceData,
       }
     : base.resourceData;

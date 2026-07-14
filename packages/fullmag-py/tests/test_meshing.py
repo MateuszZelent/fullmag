@@ -60,6 +60,7 @@ from fullmag.meshing._mesh_targets import (
     resolve_shared_domain_targets,
 )
 from fullmag.meshing._gmsh_types import _infer_axis_aligned_periodic_pairs
+from fullmag.meshing._gmsh_extraction import _orient_periodic_boundary_faces
 from fullmag.model.discretization import PerObjectMeshRecipe, SharedMeshAssemblyPolicy
 from fullmag.meshing.gmsh_bridge import (
     ALGO_3D_DELAUNAY,
@@ -116,7 +117,10 @@ from fullmag.meshing.remesh_cli import (
 from fullmag.meshing.remesh_cli import _describe_remesh_job
 from fullmag.meshing._gmsh_extraction import (
     _align_quality_report_to_element_tags,
+    certify_extracted_periodic_mesh,
     _extract_quality_metrics,
+    _read_mesh_file,
+    UnsupportedGmshElementError,
     _meshio_cell_markers,
     build_per_domain_quality_from_mesh_arrays,
 )
@@ -144,6 +148,35 @@ from fullmag.meshing.voxelization import VoxelMaskData, voxelize_geometry
 
 
 class MeshScaffoldTests(unittest.TestCase):
+    def test_periodic_boundary_faces_are_oriented_outward_from_owner_tetrahedron(self) -> None:
+        nodes = np.asarray(
+            [
+                [0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [1.0, 0.0, 0.0],
+            ],
+            dtype=np.float64,
+        )
+        elements = np.asarray([[0, 1, 2, 3]], dtype=np.int32)
+        boundary_faces = np.asarray([[0, 1, 2]], dtype=np.int32)
+        boundary_markers = np.asarray([10], dtype=np.int32)
+
+        _orient_periodic_boundary_faces(
+            nodes,
+            elements,
+            boundary_faces,
+            boundary_markers,
+            [
+                {
+                    "marker_a": 10,
+                    "marker_b": 11,
+                }
+            ],
+        )
+
+        np.testing.assert_array_equal(boundary_faces, [[0, 2, 1]])
+
     def test_multi_body_rotated_annular_csg_can_use_native_conformal_occ(self) -> None:
         layer = fm.Box(size=(300e-9, 1000e-9, 10e-9), name="layer")
         ring = fm.Difference(
@@ -235,6 +268,29 @@ class MeshScaffoldTests(unittest.TestCase):
             _meshio_cell_markers(mesh, cell_type="tetra"),
             np.asarray([1, 2, 3], dtype=np.int32),
         )
+
+    def test_meshio_import_ignores_standard_lower_dimensional_blocks(self) -> None:
+        mesh = SimpleNamespace(
+            points=np.zeros((4, 3), dtype=np.float64),
+            cells=[
+                SimpleNamespace(type="vertex", data=np.asarray([[0]], dtype=np.int32)),
+                SimpleNamespace(type="line", data=np.asarray([[0, 1]], dtype=np.int32)),
+                SimpleNamespace(type="triangle", data=np.asarray([[0, 1, 2]], dtype=np.int32)),
+                SimpleNamespace(type="tetra", data=np.asarray([[0, 1, 2, 3]], dtype=np.int32)),
+            ],
+            cell_data={},
+            field_data={},
+            cell_sets={},
+        )
+        fake_meshio = SimpleNamespace(read=lambda _path: mesh)
+        with patch(
+            "fullmag.meshing._gmsh_extraction._import_meshio",
+            return_value=fake_meshio,
+        ):
+            imported = _read_mesh_file(Path("ordinary.msh"))
+
+        self.assertEqual(imported.n_elements, 1)
+        self.assertEqual(imported.n_boundary_faces, 1)
 
     def test_extract_quality_metrics_empty_returns_tuple(self) -> None:
         gmsh = SimpleNamespace(
@@ -2203,6 +2259,19 @@ class MeshScaffoldTests(unittest.TestCase):
             "geometries": [
                 {"kind": "box", "size": [1.0, 1.0, 1.0], "name": "left"},
             ],
+            "object_regions": [
+                {
+                    "region_id": "left:core",
+                    "owner_geometry_name": "left",
+                    "enabled": True,
+                    "realization_policy": "conformal",
+                    "shape": {
+                        "kind": "box",
+                        "center": [0.0, 0.0, 0.0],
+                        "size": [0.5, 0.5, 0.5],
+                    },
+                }
+            ],
         }
         stdout = io.StringIO()
 
@@ -2249,6 +2318,9 @@ class MeshScaffoldTests(unittest.TestCase):
                         )
                     },
                     used_size_field_kinds=[],
+                    object_region_markers=[
+                        {"geometry_name": "left:core", "marker": 2}
+                    ],
                     magnetic_submesh_signatures=[
                         {
                             "geometry_name": "left",
@@ -2266,9 +2338,17 @@ class MeshScaffoldTests(unittest.TestCase):
             remesh_cli_module.main()
 
         component_call.assert_called_once()
+        self.assertEqual(
+            component_call.call_args.kwargs["object_regions"][0]["region_id"],
+            "left:core",
+        )
         payload = json.loads(stdout.getvalue())
         self.assertEqual(payload["generation_mode"], "shared_domain_manual_remesh")
         self.assertEqual(payload["region_markers"][0]["geometry_name"], "left")
+        self.assertEqual(
+            payload["object_region_markers"],
+            [{"geometry_name": "left:core", "marker": 2}],
+        )
         self.assertEqual(
             payload["mesh_provenance"]["magnetic_submesh_signatures"][0]["digest"],
             "abc123",
@@ -3044,6 +3124,26 @@ class MeshScaffoldTests(unittest.TestCase):
         )
 
         self.assertEqual(geometry.geometry_name, "nanoflower_left_geom")
+
+    def test_geometry_from_ir_preserves_cylinder_axis_round_trip(self) -> None:
+        geometry = _geometry_from_ir(
+            {
+                "kind": "cylinder",
+                "name": "tilted",
+                "radius": 2.0,
+                "height": 5.0,
+                "axis": [1.0, 1.0, 1.0],
+            }
+        )
+
+        self.assertIsInstance(geometry, fm.Cylinder)
+        self.assertEqual(geometry.to_ir()["axis"], [1.0 / (3.0**0.5)] * 3)
+
+    def test_cylinder_rejects_zero_and_nonfinite_axis(self) -> None:
+        with self.assertRaisesRegex(ValueError, "axis must be a non-zero finite vector"):
+            fm.Cylinder(radius=1.0, height=2.0, axis=(0.0, 0.0, 0.0))
+        with self.assertRaisesRegex(ValueError, "axis must be a non-zero finite vector"):
+            fm.Cylinder(radius=1.0, height=2.0, axis=(float("nan"), 0.0, 1.0))
 
     def test_geometry_from_ir_reconstructs_waveguide_kinds(self) -> None:
         sin_geometry = _geometry_from_ir(
@@ -4062,6 +4162,14 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(result.thin_axis, 2)
         self.assertAlmostEqual(result.thickness, 2e-9)
 
+    def test_arbitrary_axis_cylinder_is_not_classified_as_z_sweep(self) -> None:
+        result = classify_sweepability(
+            fm.Cylinder(radius=20e-9, height=2e-9, axis=(1.0, 1.0, 0.0))
+        )
+
+        self.assertFalse(result.sweepable)
+        self.assertIn("OCC free-tetrahedral", result.reason)
+
     def test_arch_waveguide_shared_domain_uses_component_surface_prep(self) -> None:
         if not _has_trimesh:
             self.skipTest("trimesh not available")
@@ -4315,14 +4423,21 @@ class MeshScaffoldTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 fm.meshing.add_air_box(fm.Box(1e-9, 1e-9, 1e-9), hmax=1e-9, factor=1.0)
 
-    def test_extract_gmsh_connectivity_uses_primary_nodes_for_higher_order_elements(self) -> None:
+    def test_extract_gmsh_connectivity_rejects_unsupported_element_types(self) -> None:
         class _FakeMeshApi:
             @staticmethod
             def getElementProperties(element_type: int) -> tuple[str, int, int, int, list[float], int]:
-                if element_type == 11:  # tetra10
-                    return ("Tetrahedron 10", 3, 2, 10, [], 4)
-                if element_type == 9:  # triangle6
-                    return ("Triangle 6", 2, 2, 6, [], 3)
+                properties = {
+                    3: ("Quadrilateral 4", 2, 1, 4, [], 4),
+                    4: ("Tetrahedron 4", 3, 1, 4, [], 4),
+                    5: ("Hexahedron 8", 3, 1, 8, [], 8),
+                    6: ("Prism 6", 3, 1, 6, [], 6),
+                    7: ("Pyramid 5", 3, 1, 5, [], 5),
+                    11: ("Tetrahedron 10", 3, 2, 10, [], 4),
+                    2: ("Triangle 3", 2, 1, 3, [], 3),
+                }
+                if element_type in properties:
+                    return properties[element_type]
                 raise AssertionError(f"unexpected element type {element_type}")
 
         class _FakeModel:
@@ -4332,14 +4447,137 @@ class MeshScaffoldTests(unittest.TestCase):
             model = _FakeModel()
 
         node_index = {tag: tag - 1 for tag in range(1, 17)}
-        tet_blocks = ([11], [np.asarray([1], dtype=np.int32)], [np.asarray([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], dtype=np.int32)])
-        tri_blocks = ([9], [np.asarray([1], dtype=np.int32)], [np.asarray([11, 12, 13, 14, 15, 16], dtype=np.int32)])
+        for element_type, arity in ((6, 6), (5, 8), (7, 5), (11, 10)):
+            blocks = (
+                [element_type],
+                [np.asarray([1], dtype=np.int32)],
+                [np.arange(1, arity + 1, dtype=np.int32)],
+            )
+            with self.assertRaisesRegex(
+                UnsupportedGmshElementError,
+                rf"type {element_type}.*dimension=3.*order=.*arity={arity}",
+            ):
+                _extract_gmsh_connectivity(
+                    _FakeGmsh(), blocks, node_index, nodes_per_element=4
+                )
 
-        elements = _extract_gmsh_connectivity(_FakeGmsh(), tet_blocks, node_index, nodes_per_element=4)
-        faces = _extract_gmsh_connectivity(_FakeGmsh(), tri_blocks, node_index, nodes_per_element=3)
+        with self.assertRaisesRegex(
+            UnsupportedGmshElementError,
+            r"type 3.*dimension=2.*order=1.*arity=4",
+        ):
+            _extract_gmsh_connectivity(
+                _FakeGmsh(),
+                ([3], [np.asarray([1], dtype=np.int32)], [np.arange(1, 5, dtype=np.int32)]),
+                node_index,
+                nodes_per_element=3,
+            )
 
-        np.testing.assert_array_equal(elements, np.asarray([[0, 1, 2, 3]], dtype=np.int32))
-        np.testing.assert_array_equal(faces, np.asarray([[10, 11, 12]], dtype=np.int32))
+        tet4 = _extract_gmsh_connectivity(
+            _FakeGmsh(),
+            ([4], [np.asarray([1], dtype=np.int32)], [np.arange(1, 5, dtype=np.int32)]),
+            node_index,
+            nodes_per_element=4,
+        )
+        tri3 = _extract_gmsh_connectivity(
+            _FakeGmsh(),
+            ([2], [np.asarray([1], dtype=np.int32)], [np.arange(1, 4, dtype=np.int32)]),
+            node_index,
+            nodes_per_element=3,
+        )
+        np.testing.assert_array_equal(tet4, np.asarray([[0, 1, 2, 3]], dtype=np.int32))
+        np.testing.assert_array_equal(tri3, np.asarray([[0, 1, 2]], dtype=np.int32))
+
+    def test_certify_extracted_periodic_mesh_rejects_missing_mirrored_face(self) -> None:
+        nodes = np.asarray(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [1.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [1.0, 0.0, 1.0],
+                [0.0, 1.0, 1.0],
+                [1.0, 1.0, 1.0],
+            ],
+            dtype=np.float64,
+        )
+        elements = np.asarray([[0, 1, 2, 4]], dtype=np.int32)
+        faces = np.asarray(
+            [
+                [0, 2, 4],
+                [1, 5, 3],
+                [0, 1, 4],
+                [2, 6, 3],
+            ],
+            dtype=np.int32,
+        )
+        markers = np.asarray([101, 102, 201, 202], dtype=np.int32)
+        pairs = [
+            {
+                "pair_id": "x_faces",
+                "marker_a": 101,
+                "marker_b": 102,
+                "translation": [1.0, 0.0, 0.0],
+                "tolerance_m": 1.0e-12,
+            },
+            {
+                "pair_id": "y_faces",
+                "marker_a": 201,
+                "marker_b": 202,
+                "translation": [0.0, 1.0, 0.0],
+                "tolerance_m": 1.0e-12,
+            },
+        ]
+        node_pairs = [
+            {"pair_id": "x_faces", "node_a": 0, "node_b": 1},
+            {"pair_id": "x_faces", "node_a": 2, "node_b": 3},
+            {"pair_id": "x_faces", "node_a": 4, "node_b": 5},
+            {"pair_id": "x_faces", "node_a": 6, "node_b": 7},
+            {"pair_id": "y_faces", "node_a": 0, "node_b": 2},
+            {"pair_id": "y_faces", "node_a": 1, "node_b": 3},
+            {"pair_id": "y_faces", "node_a": 4, "node_b": 6},
+            {"pair_id": "y_faces", "node_a": 5, "node_b": 7},
+        ]
+
+        certificate = certify_extracted_periodic_mesh(
+            nodes,
+            faces,
+            markers,
+            pairs,
+            node_pairs,
+        )
+        self.assertEqual(certificate["schema_version"], "periodic_mesh_certificate.v6")
+        self.assertEqual(certificate["axis_pair_count"], 2)
+        self.assertTrue(certificate["corner_edge_cycle_unique"])
+
+        with self.assertRaisesRegex(ValueError, "face bijection"):
+            certify_extracted_periodic_mesh(
+                nodes,
+                faces[:-1],
+                markers[:-1],
+                pairs,
+                node_pairs,
+            )
+
+        mesh = MeshData(
+            nodes=nodes,
+            elements=elements,
+            element_markers=np.ones(elements.shape[0], dtype=np.int32),
+            boundary_faces=faces,
+            boundary_markers=markers,
+            periodic_boundary_pairs=pairs,
+            periodic_node_pairs=node_pairs,
+            periodic_mesh_certificate=certificate,
+        )
+        self.assertEqual(mesh.periodic_mesh_certificate, certificate)
+        self.assertEqual(mesh.to_ir("mirrored")["periodic_mesh_certificate"], certificate)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            json_path = Path(tmp_dir) / "mirrored.json"
+            npz_path = Path(tmp_dir) / "mirrored.npz"
+            mesh.save(json_path)
+            mesh.save(npz_path)
+            self.assertEqual(MeshData.load(json_path).periodic_mesh_certificate, certificate)
+            self.assertEqual(MeshData.load(npz_path).periodic_mesh_certificate, certificate)
 
     def test_create_occ_geometry_supports_csg_and_translate(self) -> None:
         class _FakeOccApi:
@@ -4448,6 +4686,51 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(voxels.shape[0], 6)
         self.assertGreater(voxels.active_cell_count, 0)
         self.assertLess(voxels.active_fraction, 1.0)
+
+    def test_difference_translation_and_finite_height_match_problem_ir_fingerprint(self) -> None:
+        base = fm.Box(size=(4.0, 4.0, 4.0), name="base")
+        translated_cylinder = fm.Translate(
+            fm.Cylinder(
+                radius=1.0,
+                height=2.0,
+                axis=(0.0, 0.0, 1.0),
+                name="tool_base",
+            ),
+            (1.0, 0.0, 0.0),
+            name="tool",
+        )
+        translated_box = fm.Translate(
+            fm.Box(size=(2.0, 2.0, 2.0), name="box_tool_base"),
+            (1.0, 0.0, 0.0),
+            name="box_tool",
+        )
+
+        cylinder_voxels = voxelize_geometry(
+            fm.Difference(base=base, tool=translated_cylinder, name="difference"),
+            (1.0, 1.0, 1.0),
+        )
+        box_voxels = voxelize_geometry(
+            fm.Difference(base=base, tool=translated_box, name="box_difference"),
+            (1.0, 1.0, 1.0),
+        )
+        expected_removed = [22, 23, 26, 27, 38, 39, 42, 43]
+        authored_ir = fm.Difference(
+            base=base, tool=translated_cylinder, name="difference"
+        ).to_ir()
+        self.assertEqual(authored_ir["kind"], "difference")
+        self.assertEqual(authored_ir["tool"]["kind"], "translate")
+        self.assertEqual(authored_ir["tool"]["by"], [1.0, 0.0, 0.0])
+        self.assertEqual(cylinder_voxels.origin, (-2.0, -2.0, -2.0))
+        self.assertEqual(cylinder_voxels.active_cell_count, 56)
+        self.assertEqual(
+            np.flatnonzero(~cylinder_voxels.mask).tolist(), expected_removed
+        )
+        self.assertEqual(
+            np.flatnonzero(~box_voxels.mask).tolist(), expected_removed,
+            "Python DSL and ProblemIR geometry fixtures must retain one 3D CSG fingerprint",
+        )
+        self.assertTrue(cylinder_voxels.mask[0, 1, 1])
+        self.assertTrue(cylinder_voxels.mask[3, 1, 1])
 
     def test_voxel_mask_to_ir_uses_canonical_grid_order(self) -> None:
         voxels = voxelize_geometry(fm.Cylinder(radius=3.0, height=4.0), (1.0, 1.0, 1.0))
@@ -5287,6 +5570,23 @@ class MeshScaffoldTests(unittest.TestCase):
                 },
             )
 
+    def test_authored_mesh_operation_without_executor_fails_closed(self) -> None:
+        film = fm.Box(size=(200e-9, 200e-9, 10e-9), name="film")
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "mesh operation executor unavailable: kind='refine' scope='film'",
+        ):
+            realize_fem_domain_mesh_asset_from_components_with_report(
+                [film],
+                fm.FEM(order=1, hmax=20e-9),
+                mesh_workflow={
+                    "operations": [
+                        {"geometry": "film", "kind": "refine", "params": {"steps": 1}}
+                    ],
+                },
+            )
+
     def test_frozen_magnetic_submesh_source_loads_mesh_markers_and_interface_faces(self) -> None:
         frozen_mesh = MeshData(
             nodes=np.asarray(
@@ -5772,8 +6072,13 @@ class MeshScaffoldTests(unittest.TestCase):
         np.testing.assert_array_equal(merged.elements[1], np.asarray([0, 1, 2, 4], dtype=np.int32))
         self.assertEqual(merged.n_nodes, 5)
         self.assertEqual(merged.n_elements, 2)
-        self.assertEqual(merged.n_boundary_faces, 3)
-        self.assertNotIn([0, 1, 2], [sorted(face.tolist()) for face in merged.boundary_faces])
+        self.assertEqual(merged.n_boundary_faces, 7)
+        merged_faces = [sorted(face.tolist()) for face in merged.boundary_faces]
+        self.assertIn([0, 1, 2], merged_faces)
+        self.assertEqual(
+            int(np.count_nonzero(merged.boundary_markers == 10)),
+            frozen_mesh.n_boundary_faces,
+        )
 
     def test_generate_air_mesh_for_frozen_submesh_drops_periodic_pairs_without_kept_elements(self) -> None:
         frozen_mesh = MeshData(
@@ -9255,6 +9560,61 @@ class RegionMeshPolicyTests(unittest.TestCase):
         self.assertEqual(region_fields[0]["params"]["GeometryName"], "waveguide_geom")
         self.assertEqual(region_fields[0]["params"]["VOut"], 10e-9)
 
+    def test_region_minimum_element_size_does_not_become_global_hmin(self) -> None:
+        geometry = fm.Box(100e-9, 100e-9, 20e-9, name="owner")
+        mesh_options = _mesh_options_from_runtime_metadata(
+            {"mesh_options": {}},
+            geometries=[geometry],
+            default_hmax=30e-9,
+            component_aware=True,
+            object_regions=[
+                {
+                    "region_id": "owner:core",
+                    "owner_object": "owner",
+                    "enabled": True,
+                    "shape": {
+                        "kind": "box",
+                        "size": [20e-9, 20e-9, 10e-9],
+                        "center": [0.0, 0.0, 0.0],
+                    },
+                    "mesh_policy": {
+                        "minimum_element_size": 2e-9,
+                        "maximum_element_size": 8e-9,
+                        "order": 1,
+                    },
+                }
+            ],
+        )
+        self.assertIsNone(mesh_options.hmin)
+
+    def test_region_mesh_policy_rejects_unsupported_local_order(self) -> None:
+        geometry = fm.Box(100e-9, 100e-9, 20e-9, name="owner")
+        with self.assertRaisesRegex(
+            ValueError,
+            "region_mesh_policy_order_unsupported.*requested_order=2",
+        ):
+            _build_field_stack(
+                [geometry],
+                default_hmax=30e-9,
+                per_geometry=[],
+                object_regions=[
+                    {
+                        "region_id": "owner:quadratic",
+                        "owner_object": "owner",
+                        "enabled": True,
+                        "shape": {
+                            "kind": "box",
+                            "size": [20e-9, 20e-9, 10e-9],
+                            "center": [0.0, 0.0, 0.0],
+                        },
+                        "mesh_policy": {
+                            "maximum_element_size": 8e-9,
+                            "order": 2,
+                        },
+                    }
+                ],
+            )
+
     def test_difference_hole_region_mesh_policy_builds_local_refinement_field(self) -> None:
         hole_radius = 50e-9
         geometry = fm.Difference(
@@ -9349,7 +9709,7 @@ class RegionMeshPolicyTests(unittest.TestCase):
         self.assertEqual(region_fields[0]["params"]["Radius"], hole_radius + 30e-9)
         self.assertEqual(region_fields[0]["params"]["VIn"], 5e-9)
 
-    def test_region_local_refinement_lowers_global_hmin_clamp(self) -> None:
+    def test_region_local_refinement_stays_local_to_size_field(self) -> None:
         hole_radius = 25e-9
         geometry = fm.Difference(
             base=fm.Box(200e-9, 200e-9, 10e-9),
@@ -9392,7 +9752,14 @@ class RegionMeshPolicyTests(unittest.TestCase):
             object_regions=object_regions,
         )
 
-        self.assertEqual(mesh_options.hmin, 0.15e-9)
+        self.assertEqual(mesh_options.hmin, 3e-9)
+        region_fields = [
+            field
+            for field in mesh_options.size_fields
+            if field.get("params", {}).get("Source") == "region_mesh_policy"
+        ]
+        self.assertEqual(len(region_fields), 1)
+        self.assertEqual(region_fields[0]["params"]["MinimumElementSize"], 0.15e-9)
 
     def test_region_mesh_policy_fields_and_axes(self) -> None:
         # Create waveguide geometry
@@ -9441,7 +9808,7 @@ class RegionMeshPolicyTests(unittest.TestCase):
                     "maximum_element_size": 3e-9,
                     "minimum_element_size": 1.5e-9,
                     "transition_distance": 8e-9,
-                    "order": 2,
+                    "order": 1,
                 }
             },
             {
@@ -9502,7 +9869,7 @@ class RegionMeshPolicyTests(unittest.TestCase):
 
         graded_x = [f for f in region_fields if f["kind"] == "ComponentRestrictedGradedCylinder" and f["params"]["Axis"] == [1.0, 0.0, 0.0]][0]
         self.assertEqual(graded_x["params"]["MinimumElementSize"], 1.5e-9)
-        self.assertEqual(graded_x["params"]["Order"], 2)
+        self.assertEqual(graded_x["params"]["Order"], 1)
 
         non_graded_y = [f for f in region_fields if f["kind"] == "ComponentRestrictedCylinder"][0]
         self.assertEqual(non_graded_y["params"]["Axis"], [0.0, 1.0, 0.0])

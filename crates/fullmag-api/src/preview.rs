@@ -182,6 +182,7 @@ mod tests {
             domain_frame: None,
             generation_id: Some("gen0".to_string()),
             per_domain_quality: Default::default(),
+            build_report: None,
         }
     }
 

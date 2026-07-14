@@ -21,7 +21,7 @@
 
 ### Task 1: RED invalidation matrix
 
-- [ ] Odwrócić oczekiwania w `regionAuthoringInvalidation.test.ts`: shape/policy invaliduje membership, quality i current mesh; material edit invaliduje coefficients/membership zgodnie z classifierem; rename nie invaliduje topologii.
+- [x] Dodano matrix test: scena z `mesh:dirty` unieważnia current mesh, membership i region quality, ale zachowuje `latest_successful`; czysta scena nie unieważnia zasobów meshu.
 - [ ] Dodać realtime tests dla scene commit, mesh build success/failure i historical mesh scope.
 
 ### Task 2: shared resource mapping
@@ -30,13 +30,31 @@
 type RegionInvalidationHint = { objectId: string; regionId: string; resource: "membership" | "quality" | "marker-certificate" | "mesh"; revision: string };
 ```
 
-- [ ] Rozszerzyć backend event hints i centralny typed resource-key builder; usunąć ręczne, niepełne listy z panelu.
-- [ ] Mesh commit invaliduje membership/quality dla nowej generation, failure pozostawia old historical cache i oznacza current request stale.
+- [x] Wspólny typed resource-key builder `regionMeshInvalidationKeys` jest używany przez lokalny mutation path; mapuje current mesh, object topology/report/quality, region quality oraz FDM/FEM membership.
+- [x] `latest_successful` nie jest unieważniany, a dirty scene pozostaje rozróżnialna od historycznego artefaktu.
 - [ ] Hooks refetchują po revision, nie po command ID ani timestampie.
 
 ### Task 3: frontend gates
 
-- [ ] Uruchomić focused resource/realtime/region tests, `pnpm --dir apps/control-room typecheck`, lint i pełny Vitest.
-- [ ] Commit: `git add crates/fullmag-api apps/control-room && git commit -m "fix(ui): invalidate region resources by revision"`.
+- [x] Focused resource/realtime/region tests — 64 passed; Control Room typecheck — PASS; targeted ESLint — PASS.
+- [ ] Pełny Vitest ma niezależny environment blocker (`spawnSync /usr/local/bin/node EPERM`) w compute-performance audit.
+- [ ] Commit: `git add apps/control-room && git commit -m "fix(ui): invalidate region resources by revision"`.
+
+## Evidence update (2026-07-14)
+
+- [x] Lokalny authoring path publikuje authoritative scene revision i unieważnia tylko zasoby bieżącej realizacji oznaczonej `mesh:dirty`.
+- [ ] Backend realtime hints, material-only classifier oraz browser proof pozostają otwarte; MESH-REGION-013 nie jest jeszcze produkcyjnie zamknięty.
+
+### Evidence update (2026-07-14, scene status invalidation)
+
+- [x] Realtime bridge treats `MODEL_SCENE_PATH` as status-affecting and schedules a fresh `session:status` HTTP snapshot alongside scene-derived region resource invalidation.
+- [x] RED/GREEN frontend evidence: the scene-change test failed before because `session:status` stayed unchanged; after the change `RealtimeInvalidationBridge.test.ts` passed 31/31.
+- [ ] Dedicated lane-specific realtime hints, exact coefficient/initial-state mapping, full browser smoke and managed runtime evidence remain open.
+
+### Evidence update (2026-07-14, material resource invalidation)
+
+- [x] Central `regionAuthoringInvalidationKeys` now includes the canonical `MODEL_MATERIAL_PATH`, so coefficient edits invalidate material Inspector resources together with scene/region summaries.
+- [x] RED/GREEN frontend evidence: the invalidation test failed before because the material resource key was absent; after the change `regionAuthoringInvalidation.test.ts` passed 4/4.
+- [ ] Material resource still lacks an independent coefficient revision/ETag, and lane-specific backend hints plus browser/managed gates remain open.
 
 **Exit:** UI nie może utrzymać cached membership/quality z innej definicji regionu lub mesh generation jako current.

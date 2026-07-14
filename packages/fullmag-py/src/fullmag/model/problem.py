@@ -359,16 +359,19 @@ def build_geometry_assets_for_request(
     if discretization is None:
         return None
 
-    asset_cache_key = json.dumps(
-        {
-            "requested_backend": requested_backend.value,
-            "geometries": [geometry.to_ir() for geometry in geometries],
-            "discretization": discretization.to_ir(),
-            "study_universe": study_universe,
-            "mesh_workflow": mesh_workflow,
-            "object_regions": list(object_regions or []),
-        },
-        sort_keys=True,
+    fdm_only = requested_backend == BackendTarget.FDM or (
+        requested_backend == BackendTarget.AUTO
+        and discretization.fdm is not None
+        and discretization.fem is None
+    )
+    asset_cache_key = _geometry_asset_cache_key(
+        requested_backend=requested_backend,
+        geometries=geometries,
+        discretization=discretization,
+        study_universe=study_universe,
+        mesh_workflow=mesh_workflow,
+        object_regions=object_regions,
+        fdm_only=fdm_only,
     )
     if asset_cache is not None and asset_cache_key in asset_cache:
         cached = asset_cache[asset_cache_key]
@@ -468,7 +471,6 @@ def build_geometry_assets_for_request(
         from fullmag._core import validate_mesh_ir
         from fullmag.model.geometry import ImportedGeometry
         from fullmag.meshing import (
-            realize_fem_domain_mesh_asset_from_components,
             realize_fem_mesh_asset,
         )
         from fullmag.meshing.asset_pipeline import (
@@ -586,26 +588,15 @@ def build_geometry_assets_for_request(
             }
         elif study_universe is not None:
             authored_regions = list(object_regions or [])
-            if authored_regions:
-                domain_mesh, region_markers, build_report = (
-                    realize_fem_domain_mesh_asset_from_components_with_report(
-                        list(geometries),
-                        discretization.fem,
-                        study_universe=study_universe,
-                        mesh_workflow=mesh_workflow,
-                        object_regions=authored_regions,
-                    )
+            domain_mesh, region_markers, build_report = (
+                realize_fem_domain_mesh_asset_from_components_with_report(
+                    list(geometries),
+                    discretization.fem,
+                    study_universe=study_universe,
+                    mesh_workflow=mesh_workflow,
+                    object_regions=authored_regions,
                 )
-            else:
-                domain_mesh, region_markers = (
-                    realize_fem_domain_mesh_asset_from_components(
-                        list(geometries),
-                        discretization.fem,
-                        study_universe=study_universe,
-                        mesh_workflow=mesh_workflow,
-                    )
-                )
-                build_report = None
+            )
             domain_mesh_ir = domain_mesh.to_ir("study_domain")
             is_valid = validate_mesh_ir(domain_mesh_ir)
             if is_valid is False:
@@ -639,6 +630,34 @@ def build_geometry_assets_for_request(
         asset_cache[asset_cache_key] = copy.deepcopy(result)
 
     return result
+
+
+def _geometry_asset_cache_key(
+    *,
+    requested_backend: "BackendTarget",
+    geometries: Sequence[object],
+    discretization: DiscretizationHints,
+    study_universe: dict[str, object] | None,
+    mesh_workflow: dict[str, object] | None,
+    object_regions: Sequence[dict[str, object]] | None,
+    fdm_only: bool,
+) -> str:
+    """Build a cache identity for the products actually realized.
+
+    FDM grid voxelization consumes geometry, cell size and study-universe
+    bounds.  Region coefficients, textures and FEM mesh policy are separate
+    realization products and must not evict an identical grid asset.
+    """
+    payload: dict[str, object] = {
+        "requested_backend": requested_backend.value,
+        "geometries": [geometry.to_ir() for geometry in geometries],
+        "discretization": discretization.to_ir(),
+        "study_universe": study_universe,
+    }
+    if not fdm_only:
+        payload["mesh_workflow"] = mesh_workflow
+        payload["object_regions"] = list(object_regions or [])
+    return json.dumps(payload, sort_keys=True)
 
 
 class ExecutionMode(str, Enum):

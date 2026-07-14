@@ -71,6 +71,48 @@ fn problem_ir_deserialize_migrates_previous_public_version() {
 }
 
 #[test]
+fn previous_public_cylinder_without_axis_migrates_explicitly() {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example())
+        .expect("bootstrap ProblemIR should serialize");
+    value["ir_version"] = serde_json::json!(PREVIOUS_PUBLIC_IR_VERSION);
+    value["problem_meta"]["script_api_version"] = serde_json::json!(PREVIOUS_PUBLIC_IR_VERSION);
+    value["problem_meta"]["serializer_version"] = serde_json::json!(PREVIOUS_PUBLIC_IR_VERSION);
+    value["geometry"]["entries"] = serde_json::json!([{
+        "kind": "cylinder",
+        "name": "legacy",
+        "radius": 1.0,
+        "height": 2.0
+    }]);
+
+    let decoded: ProblemIR = serde_json::from_value(value)
+        .expect("legacy cylinder should migrate its axis explicitly");
+    match &decoded.geometry.entries[0] {
+        GeometryEntryIR::Cylinder { axis, .. } => assert_eq!(*axis, [0.0, 0.0, 1.0]),
+        other => panic!("expected migrated cylinder, got {other:?}"),
+    }
+}
+
+#[test]
+fn legacy_migration_adds_axes_to_nested_geometry_and_region_csg() {
+    let mut value = serde_json::json!({
+        "ir_version": PREVIOUS_PUBLIC_IR_VERSION,
+        "geometry": {"entries": [{
+            "kind": "translate", "name": "translated", "by": [0.0, 0.0, 0.0],
+            "base": {"kind": "difference", "name": "difference",
+                "base": {"kind": "cylinder", "name": "base", "radius": 1.0, "height": 2.0},
+                "tool": {"kind": "cylinder", "name": "tool", "radius": 0.5, "height": 1.0}}
+        }]},
+        "object_regions": [{"shape": {"kind": "csg", "expression":
+            {"kind": "cylinder", "name": "region", "radius": 1.0, "height": 2.0}}}]
+    });
+
+    migrate_problem_ir_json_value(&mut value).expect("legacy payload should migrate");
+    assert_eq!(value["geometry"]["entries"][0]["base"]["base"]["axis"], serde_json::json!([0.0, 0.0, 1.0]));
+    assert_eq!(value["geometry"]["entries"][0]["base"]["tool"]["axis"], serde_json::json!([0.0, 0.0, 1.0]));
+    assert_eq!(value["object_regions"][0]["shape"]["expression"]["axis"], serde_json::json!([0.0, 0.0, 1.0]));
+}
+
+#[test]
 fn previous_public_ir_golden_fixture_migrates_to_current() {
     let fixture = include_str!("../../../tests/golden/problem_ir/bootstrap_v0_1_read_compat.json");
     let decoded: ProblemIR =
@@ -2242,6 +2284,7 @@ fn analytic_geometry_must_have_positive_dimensions() {
         name: "strip".to_string(),
         radius: -1.0,
         height: 5e-9,
+        axis: [0.0, 0.0, 1.0],
     };
 
     let errors = ir
@@ -2250,6 +2293,26 @@ fn analytic_geometry_must_have_positive_dimensions() {
     assert!(errors
         .iter()
         .any(|error| error.contains("cylinder geometry 'strip' radius must be positive")));
+}
+
+#[test]
+fn cylinder_axis_is_serialized_and_validated() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.geometry.entries[0] = GeometryEntryIR::Cylinder {
+        name: "tilted".to_string(),
+        radius: 5e-9,
+        height: 10e-9,
+        axis: [1.0, 1.0, 1.0],
+    };
+    let value = serde_json::to_value(&ir).expect("cylinder should serialize");
+    assert_eq!(value["geometry"]["entries"][0]["axis"], serde_json::json!([1.0, 1.0, 1.0]));
+
+    let mut invalid = ir.clone();
+    if let GeometryEntryIR::Cylinder { axis, .. } = &mut invalid.geometry.entries[0] {
+        *axis = [0.0, 0.0, 0.0];
+    }
+    let errors = invalid.validate().expect_err("zero cylinder axis must fail validation");
+    assert!(errors.iter().any(|error| error.contains("cylinder geometry 'tilted' axis must be non-zero")));
 }
 
 #[test]
@@ -3345,11 +3408,15 @@ fn problem_ir_validation_accepts_valid_mesh_semantics() {
                 effective_airbox_hmax: Some(8e-9),
                 effective_per_object_targets: HashMap::new(),
                 region_markers: Vec::new(),
+                object_region_markers: Vec::new(),
                 used_size_field_kinds: vec!["curvature".to_string()],
                 size_fields_realized: Vec::new(),
                 operation_statuses: Vec::new(),
                 thin_film_diagnostics: Vec::new(),
                 magnetic_submesh_signatures: Vec::new(),
+                selector_resolution: Vec::new(),
+                orphan_entities: Vec::new(),
+                rejected_element_types: Vec::new(),
                 degraded: false,
                 authored_regions_count: None,
                 realized_regions_count: None,

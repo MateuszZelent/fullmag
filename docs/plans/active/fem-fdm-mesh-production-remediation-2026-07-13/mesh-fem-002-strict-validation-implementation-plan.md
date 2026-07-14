@@ -33,9 +33,17 @@ pub fn validate_mesh_for_execution(mesh: &MeshIR) -> Result<(), MeshValidationEr
 }
 ```
 
-- [ ] Wywołać tę funkcję po deserializacji, po generacji/remeshu i bezpośrednio przed pakowaniem native mesh.
-- [ ] Usunąć produkcyjne wywołania samego `validate()`; pozostawić je tylko w testach warstwy podstawowej.
-- [ ] Uruchomić `cargo test -p fullmag-ir mesh --no-fail-fast` i `cargo test -p fullmag-plan mesh --no-fail-fast`; PASS.
+- [x] Wywołać tę funkcję po deserializacji, po generacji/remeshu i bezpośrednio przed pakowaniem native mesh.
+- [x] Usunąć produkcyjne wywołania samego `validate()`; pozostawić je tylko w testach warstwy podstawowej.
+- [x] Uruchomić strict IR i planner mesh suites; PASS.
+
+### Evidence (2026-07-14, implementation slice)
+
+- `validate_mesh_for_execution` is used by mesh asset validation and every planner mesh materialization/reorder path before native planning.
+- Strict tests reject duplicate nodes, zero-volume tetrahedra and inverted tetrahedra; planner mesh suite remains green.
+- `cargo test -p fullmag-ir validate_strict --no-fail-fast -- --nocapture` — 3 passed.
+- `cargo test -p fullmag-plan mesh --no-fail-fast -- --nocapture` — 29 passed.
+- Managed corrupt-fixture gate and complete inline/file/remesh matrix remain open; MESH-FEM-002 is not production-closed.
 
 ### Task 3: managed proof
 

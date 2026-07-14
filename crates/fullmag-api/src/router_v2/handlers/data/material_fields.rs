@@ -43,7 +43,13 @@ pub async fn get_material_field_data_catalog(
 
     Ok(Json(MaterialParameterFieldDataListResource {
         scene_revision: scene.revision,
-        fields: material_field_data_resources(scene, &snapshot.latest_fields, &assets)
+        region_coefficients_revision: Some(snapshot.region_realization_revisions.coefficients),
+        fields: material_field_data_resources(
+            scene,
+            snapshot.region_realization_revisions.coefficients,
+            &snapshot.latest_fields,
+            &assets,
+        )
             .into_iter()
             .map(|resource| MaterialParameterFieldDataSummaryResource {
                 field_id: resource.field_id.clone(),
@@ -91,7 +97,12 @@ pub async fn get_material_field_data(
     let artifact_dir = current_artifact_dir(snapshot);
     let assets = material_field_assets(snapshot.metadata.as_ref(), artifact_dir.as_deref());
 
-    material_field_data_resources(scene, &snapshot.latest_fields, &assets)
+    material_field_data_resources(
+        scene,
+        snapshot.region_realization_revisions.coefficients,
+        &snapshot.latest_fields,
+        &assets,
+    )
         .into_iter()
         .find(|resource| resource.field_id == field_id || resource.assignment_id == field_id)
         .map(Json)
@@ -100,6 +111,7 @@ pub async fn get_material_field_data(
 
 fn material_field_data_resources(
     scene: &SceneDocument,
+    region_coefficients_revision: u64,
     latest_fields: &LatestFields,
     assets: &[fullmag_ir::MaterialFieldAssetIR],
 ) -> Vec<MaterialParameterFieldDataResource> {
@@ -108,7 +120,14 @@ fn material_field_data_resources(
         .iter()
         .flat_map(|object| {
             object.material_parameter_fields.iter().map(|field| {
-                material_field_data_resource(scene.revision, object, field, latest_fields, assets)
+                material_field_data_resource(
+                    scene.revision,
+                    region_coefficients_revision,
+                    object,
+                    field,
+                    latest_fields,
+                    assets,
+                )
             })
         })
         .collect()
@@ -116,6 +135,7 @@ fn material_field_data_resources(
 
 fn material_field_data_resource(
     scene_revision: u64,
+    region_coefficients_revision: u64,
     _object: &SceneObject,
     field: &SceneMaterialParameterAssignment,
     latest_fields: &LatestFields,
@@ -144,6 +164,7 @@ fn material_field_data_resource(
         asset_id: asset.map(|asset| asset.asset_id.clone()),
         artifact_path: asset.and_then(|asset| asset.artifact_path.clone()),
         scene_revision,
+        region_coefficients_revision: Some(region_coefficients_revision),
         owner_object_id: field.owner_object.clone(),
         owner_path: Some(field.owner_object.clone()),
         parameter,

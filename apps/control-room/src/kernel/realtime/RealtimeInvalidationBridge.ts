@@ -21,10 +21,12 @@ import {
   DATA_FIELDS_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+  MESHING_SEMANTICS_PATH,
   MESHING_OBJECT_QUALITY_PATH,
   MESHING_OBJECT_REPORT_PATH,
   MESHING_OBJECT_SIZE_FIELD_PATH,
   MESHING_OBJECT_TOPOLOGY_PATH,
+  MESHING_PERIODIC_PAIRS_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MESHING_SHARED_DOMAIN_QUALITY_PATH,
   MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH,
@@ -308,6 +310,7 @@ function escapeResourcePathTemplate(pathTemplate: string): string {
 }
 
 const SESSION_STATUS_RECOMMENDED_FETCHES = new Set<string>([
+  MODEL_SCENE_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
   SIMULATION_STAGES_EXECUTION_PATH,
 ]);
@@ -716,7 +719,9 @@ export class RealtimeInvalidationBridge {
     this.resources.invalidate(MODEL_SCENE_PATH, revision);
     this.resources.invalidate(MESHING_BUILDS_CURRENT_PATH, revision);
     this.resources.invalidate(MESHING_SUMMARY_PATH, revision);
+    this.resources.invalidate(MESHING_SEMANTICS_PATH, revision);
     this.resources.invalidate(MESHING_SHARED_DOMAIN_MANIFEST_PATH, revision);
+    this.resources.invalidate(MESHING_PERIODIC_PAIRS_PATH, revision);
     this.resources.invalidate(VISUALIZATION_STATE_PATH, revision);
     this.resources.invalidate(DATA_DOMAIN_META_PATH, revision);
     this.resources.invalidate(DATA_DOMAIN_TOPOLOGY_PATH, revision);

@@ -721,6 +721,23 @@ describe("buildModelTree", () => {
           ],
           scene_revision: 3,
         } as never,
+        regionMemberships: [
+          {
+            boundary_face_indices: [1],
+            element_indices: [2],
+            freshness: "current",
+            mesh_generation_id: "generation-3",
+            mesh_id: "shared-domain",
+            mesh_part_ids: ["part:core"],
+            mesh_revision: 3,
+            node_indices: [3],
+            realization: "conformal",
+            region_id: "reg-core",
+            region_membership_revision: 4,
+            source: "fem_shared_domain",
+            topology_fingerprint: "topology-3",
+          },
+        ],
       },
     );
 
@@ -761,6 +778,11 @@ describe("buildModelTree", () => {
         (node) => node.id === "model:object:film:regions:reg-core:geometry",
       ),
     ).toMatchObject({ badge: "cylinder", kind: "object.region.geometry" });
+    expect(
+      flattened.find(
+        (node) => node.id === "model:object:film:regions:reg-core:mesh",
+      ),
+    ).toMatchObject({ badge: "current", status: "mesh-ready" });
     expect(
       flattened.find(
         (node) =>

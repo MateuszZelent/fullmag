@@ -1,0 +1,148 @@
+{
+  "schema_version": "pbc_production_matrix.v1",
+  "matrix_id": "fullmag-cross-backend-pbc-production",
+  "capability_matrix": "docs/specs/capability-matrix-v0.json",
+  "result_policy": "Every case must finish as pass or expected_unsupported with a sha256 artifact fingerprint.",
+  "cases": [
+    {
+      "case_id": "fem-corrupt-face-topology",
+      "backend": "fem",
+      "device": "cpu",
+      "precision": "double",
+      "lane": "certificate",
+      "capability_id": "fem_periodic_mesh_certificate",
+      "capability_status": "partial_production_executable",
+      "result": {"status": "not_run", "artifact_fingerprint": null}
+    },
+    {
+      "case_id": "fem-corner-closure",
+      "backend": "fem",
+      "device": "cpu",
+      "precision": "double",
+      "lane": "certificate",
+      "capability_id": "fem_periodic_mesh_certificate",
+      "capability_status": "partial_production_executable",
+      "result": {"status": "not_run", "artifact_fingerprint": null}
+    },
+    {
+      "case_id": "fem-edge-closure",
+      "backend": "fem",
+      "device": "cpu",
+      "precision": "double",
+      "lane": "certificate",
+      "capability_id": "fem_periodic_mesh_certificate",
+      "capability_status": "partial_production_executable",
+      "result": {"status": "not_run", "artifact_fingerprint": null}
+    },
+    {
+      "case_id": "fem-remesh-recertification",
+      "backend": "fem",
+      "device": "cpu",
+      "precision": "double",
+      "lane": "certificate",
+      "capability_id": "fem_periodic_mesh_certificate",
+      "capability_status": "partial_production_executable",
+      "result": {"status": "not_run", "artifact_fingerprint": null}
+    },
+    {
+      "case_id": "fem-m5-primitive-vs-supercell",
+      "backend": "fem",
+      "device": "cpu",
+      "precision": "double",
+      "lane": "strict-m5",
+      "capability_id": "fem_periodic_airbox_k0_m5",
+      "capability_status": "development_executable",
+      "result": {"status": "not_run", "artifact_fingerprint": null}
+    },
+    {
+      "case_id": "fdm-cpu-double-standard-single-grid",
+      "backend": "fdm",
+      "device": "cpu",
+      "precision": "double",
+      "lane": "standard-single-grid",
+      "capability_id": "fdm_periodic_demag_boundary_semantics",
+      "capability_status": "reference_executable",
+      "result": {"status": "not_run", "artifact_fingerprint": null}
+    },
+    {
+      "case_id": "fdm-cpu-double-t0-t1-single-grid",
+      "backend": "fdm",
+      "device": "cpu",
+      "precision": "double",
+      "lane": "t0-t1-single-grid",
+      "capability_id": "fdm_periodic_demag_boundary_semantics",
+      "capability_status": "reference_executable",
+      "result": {"status": "not_run", "artifact_fingerprint": null}
+    },
+    {
+      "case_id": "fdm-cuda-double-standard-single-grid",
+      "backend": "fdm",
+      "device": "cuda",
+      "precision": "double",
+      "lane": "standard-single-grid",
+      "capability_id": "fdm_periodic_demag_boundary_semantics",
+      "capability_status": "production_executable",
+      "result": {"status": "not_run", "artifact_fingerprint": null}
+    },
+    {
+      "case_id": "fdm-cuda-single-fp32-seam",
+      "backend": "fdm",
+      "device": "cuda",
+      "precision": "single",
+      "lane": "fp32-seam-single-grid",
+      "capability_id": "fdm_periodic_demag_boundary_semantics",
+      "capability_status": "production_executable",
+      "result": {"status": "not_run", "artifact_fingerprint": null}
+    },
+    {
+      "case_id": "fdm-cuda-double-t0-t1-seam",
+      "backend": "fdm",
+      "device": "cuda",
+      "precision": "double",
+      "lane": "t0-t1-single-grid",
+      "capability_id": "fdm_periodic_demag_boundary_semantics",
+      "capability_status": "production_executable",
+      "result": {"status": "not_run", "artifact_fingerprint": null}
+    },
+    {
+      "case_id": "fdm-cpu-double-multilayer",
+      "backend": "fdm",
+      "device": "cpu",
+      "precision": "double",
+      "lane": "multilayer",
+      "capability_id": "fdm_multilayer_fixed_explicit_rk",
+      "capability_status": "reference_executable",
+      "result": {"status": "not_run", "artifact_fingerprint": null}
+    },
+    {
+      "case_id": "fdm-cuda-double-multilayer",
+      "backend": "fdm",
+      "device": "cuda",
+      "precision": "double",
+      "lane": "multilayer",
+      "capability_id": "fdm_multilayer_fixed_explicit_rk",
+      "capability_status": "production_executable",
+      "result": {"status": "not_run", "artifact_fingerprint": null}
+    },
+    {
+      "case_id": "fdm-cuda-single-multilayer",
+      "backend": "fdm",
+      "device": "cuda",
+      "precision": "single",
+      "lane": "multilayer",
+      "capability_id": "fdm_multilayer_fixed_explicit_rk",
+      "capability_status": "production_executable",
+      "result": {"status": "not_run", "artifact_fingerprint": null}
+    },
+    {
+      "case_id": "fdm-image-budget-overflow",
+      "backend": "fdm",
+      "device": "cpu",
+      "precision": "double",
+      "lane": "image-budget-guardrail",
+      "capability_id": "fdm_periodic_demag_boundary_semantics",
+      "capability_status": "reference_executable",
+      "result": {"status": "not_run", "artifact_fingerprint": null}
+    }
+  ]
+}

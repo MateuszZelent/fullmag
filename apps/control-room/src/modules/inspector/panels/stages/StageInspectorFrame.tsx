@@ -167,7 +167,7 @@ export function StageInspectorFrame({
         ) : null}
         <div className="fm-inspector-toolbar">
           <Button
-            disabled={authoringBusy || hasDraftErrors || !draft || !isExpectedDraft || draft.kind === "eigenmodes" || draft.kind === "frequency_response"}
+            disabled={authoringBusy || hasDraftErrors || !draft || !isExpectedDraft}
             size="sm"
             type="button"
             variant="primary"

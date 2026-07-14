@@ -2,11 +2,13 @@ import type {
   CouplingListResource,
   HysteresisExecutionTreeResource,
   MaterialParameterFieldListResource,
+  MeshRegionMembershipResource,
   RegionListResource,
   SceneResource,
   StageExecutionResource,
 } from "@/kernel/api/apiTypes";
 import { apmFromTesla } from "@/shared/domain/physics/torqueUnits";
+import { resolveRegionMeshLifecycle } from "@/shared/domain/mesh/regionMeshLifecycle";
 
 import type {
   ExplorerNodeStatus,
@@ -39,6 +41,7 @@ interface ModelTreeResourceInputs {
   couplings?: CouplingListResource | null;
   materialFields?: MaterialParameterFieldListResource | null;
   regions?: RegionListResource | null;
+  regionMemberships?: readonly MeshRegionMembershipResource[] | null;
 }
 
 export function modelTreeSnapshotFromScene(
@@ -63,6 +66,7 @@ export function modelTreeSnapshotFromScene(
     resources.regions,
     scene?.objects,
     materialFieldsByObject,
+    resources.regionMemberships,
   );
   return {
     couplings: couplingSnapshots(resources.couplings, scene),
@@ -374,8 +378,12 @@ function authoredRegionsByOwner(
   resource: RegionListResource | null | undefined,
   sceneObjects: unknown,
   materialFieldsByObject: ReadonlyMap<string, ModelTreeMaterialFieldSnapshot[]>,
+  memberships: readonly MeshRegionMembershipResource[] | null | undefined,
 ): Map<string, ModelTreeObjectRegionSnapshot[]> {
   const byObject = new Map<string, ModelTreeObjectRegionSnapshot[]>();
+  const membershipByRegionId = new Map(
+    (memberships ?? []).map((membership) => [membership.region_id, membership]),
+  );
   if (resource?.regions?.length) {
     for (const region of resource.regions) {
       if (region.source !== "authored_object_region") continue;
@@ -395,6 +403,13 @@ function authoredRegionsByOwner(
           ),
           materialOverrideCount: region.material_overrides?.length ?? 0,
           meshPolicyActive: Boolean(region.mesh_policy),
+          meshLifecycleStatus: resolveRegionMeshLifecycle({
+            build: null,
+            draftDirty: false,
+            membership: membershipByRegionId.get(region.region_id),
+            policyEnabled: Boolean(region.mesh_policy),
+            supported: true,
+          }).status,
           priority: region.priority ?? null,
           realizationPolicy: region.realization_policy ?? null,
           realizationStatus: region.realization_status ?? null,
@@ -424,6 +439,13 @@ function authoredRegionsByOwner(
         materialFieldCount: fields.filter((field) => field.regionId === id).length,
         materialOverrideCount: arrayLength(region?.material_overrides),
         meshPolicyActive: Boolean(region?.mesh_policy),
+        meshLifecycleStatus: resolveRegionMeshLifecycle({
+          build: null,
+          draftDirty: false,
+          membership: membershipByRegionId.get(id),
+          policyEnabled: Boolean(region?.mesh_policy),
+          supported: true,
+        }).status,
         priority: numberValue(region?.priority),
         realizationPolicy: stringValue(region?.realization_policy),
         realizationStatus: null,

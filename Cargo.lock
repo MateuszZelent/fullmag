@@ -1235,6 +1235,7 @@ dependencies = [
  "fullmag-quantities",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

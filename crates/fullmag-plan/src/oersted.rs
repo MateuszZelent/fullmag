@@ -8,6 +8,7 @@ use fullmag_ir::{
 
 use crate::current_transport::ResolvedCurrentTransport;
 use crate::error::PlanError;
+use crate::geometry::{checked_fdm_grid_cost, FDM_GRID_ESTIMATED_BYTES_PER_CELL};
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ResolvedOerstedCylinder {
@@ -379,7 +380,7 @@ fn cylindrical_geometry_parameters(
 ) -> Option<(f64, [f64; 3], [f64; 3])> {
     fn recurse(geometry: &GeometryEntryIR, offset: [f64; 3]) -> Option<(f64, [f64; 3], [f64; 3])> {
         match geometry {
-            GeometryEntryIR::Cylinder { radius, .. } => Some((*radius, offset, [0.0, 0.0, 1.0])),
+            GeometryEntryIR::Cylinder { radius, axis, .. } => Some((*radius, offset, *axis)),
             GeometryEntryIR::Translate { base, by, .. } => recurse(
                 base,
                 [offset[0] + by[0], offset[1] + by[1], offset[2] + by[2]],
@@ -571,7 +572,13 @@ fn midpoint_biot_savart_grid_field(
     let nx = grid_cells[0] as usize;
     let ny = grid_cells[1] as usize;
     let nz = grid_cells[2] as usize;
-    let cell_count = nx * ny * nz;
+    let cell_cost = checked_fdm_grid_cost(grid_cells, FDM_GRID_ESTIMATED_BYTES_PER_CELL)?;
+    let cell_count = usize::try_from(cell_cost.cells).map_err(|_| PlanError {
+        reasons: vec![format!(
+            "energy_terms[{term_index}] oersted_field source '{}' FDM cell count {} is not addressable",
+            source, cell_cost.cells
+        )],
+    })?;
     if let Some(mask) = active_mask {
         if mask.len() != cell_count {
             return Err(PlanError {
@@ -590,7 +597,21 @@ fn midpoint_biot_savart_grid_field(
     let regularization_sq = regularization_radius * regularization_radius;
     let prefactor = cell_volume / (4.0 * PI);
 
-    let mut source_points = Vec::new();
+    let active_source_count = active_mask
+        .map(|mask| mask.iter().filter(|active| **active).count())
+        .unwrap_or(cell_count);
+    if active_source_count > MAX_GENERAL_FDM_SOURCE_CELLS {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "energy_terms[{term_index}] oersted_field source '{}' requires midpoint Biot-Savart on {} active FDM cells, which exceeds the current public planner limit of {}; refine the source analytically (cylindrical path) or use the native FEM midpoint path instead",
+                source,
+                active_source_count,
+                MAX_GENERAL_FDM_SOURCE_CELLS
+            )],
+        });
+    }
+
+    let mut source_points = Vec::with_capacity(active_source_count);
     for z in 0..nz {
         for y in 0..ny {
             for x in 0..nx {
@@ -605,17 +626,6 @@ fn midpoint_biot_savart_grid_field(
                 ]);
             }
         }
-    }
-
-    if source_points.len() > MAX_GENERAL_FDM_SOURCE_CELLS {
-        return Err(PlanError {
-            reasons: vec![format!(
-                "energy_terms[{term_index}] oersted_field source '{}' requires midpoint Biot-Savart on {} active FDM cells, which exceeds the current public planner limit of {}; refine the source analytically (cylindrical path) or use the native FEM midpoint path instead",
-                source,
-                source_points.len(),
-                MAX_GENERAL_FDM_SOURCE_CELLS
-            )],
-        });
     }
 
     let mut field_xyz = vec![[0.0, 0.0, 0.0]; cell_count];
@@ -690,6 +700,7 @@ mod tests {
                 name: "pillar_base".to_string(),
                 radius: 25e-9,
                 height: 10e-9,
+                axis: [0.0, 0.0, 1.0],
             }),
             by: [1e-9, -2e-9, 0.0],
         };
@@ -729,6 +740,7 @@ mod tests {
             name: "pillar".to_string(),
             radius: 25e-9,
             height: 10e-9,
+            axis: [0.0, 0.0, 1.0],
         };
         problem.energy_terms = vec![EnergyTermIR::OerstedField {
             model: OerstedFieldModelIR::FromCurrentSolution,

@@ -41,3 +41,19 @@ MESH_OPERATION_EXECUTORS: dict[str, Callable[[MeshState, MeshOperation], MeshSta
 - [ ] Commit: `git add docs/physics docs/specs packages/fullmag-py crates/fullmag-cli apps/control-room && git commit -m "fix(mesh): make operation support executable and explicit"`.
 
 **Exit:** nie istnieje publiczny operation kind, który kończy się sukcesem bez zmiany lub jawnego validated no-op result.
+
+### Evidence update (2026-07-14, fail-closed operation boundary)
+
+- [x] Shared-domain FEM realization now inspects global, default-mesh and
+  per-geometry authored operation records before any Gmsh/frozen-mesh work.
+- [x] An operation without a validated executor is rejected with a stable
+  `mesh operation executor unavailable` reason that includes kind and scope;
+  malformed operation lists/entries fail closed as well.
+- [x] RED/GREEN evidence: the new `refine` fixture failed its expected contract
+  before the scope correction and now passes with
+  `PYTHONPATH=packages/fullmag-py/src python3 -m pytest packages/fullmag-py/tests/test_meshing.py -k "authored_mesh_operation_without_executor" -q` — 1 passed.
+- [x] Adjacent Python meshing suite: `PYTHONPATH=packages/fullmag-py/src
+  python3 -m pytest packages/fullmag-py/tests/test_meshing.py -q` — 247 passed,
+  1 skipped.
+- [ ] A measured executor registry for refine/smooth/optimize and the Rust/UI
+  capability projection remain open; this slice removes the silent no-op.

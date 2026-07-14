@@ -273,6 +273,7 @@ pub struct MaterialReferenceResource {
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct MaterialResource {
+    pub region_coefficients_revision: Option<u64>,
     pub id: String,
     pub name: String,
     pub properties: MaterialPropertiesResource,
@@ -283,6 +284,7 @@ pub struct MaterialResource {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct MagnetizationAssetResource {
     pub scene_revision: u64,
+    pub region_initial_state_revision: Option<u64>,
     #[schema(additional_properties)]
     pub asset: BTreeMap<String, Value>,
 }
@@ -495,6 +497,10 @@ pub struct RegionResource {
 pub struct RegionListResource {
     pub scene_revision: u64,
     pub geometry_realization_revision: u64,
+    pub region_topology_revision: Option<u64>,
+    pub region_membership_revision: Option<u64>,
+    pub region_coefficients_revision: Option<u64>,
+    pub region_initial_state_revision: Option<u64>,
     pub regions: Vec<RegionResource>,
 }
 
@@ -515,6 +521,10 @@ pub struct RegionDiagnosticResource {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct RegionDiagnosticsResource {
     pub scene_revision: u64,
+    pub region_topology_revision: Option<u64>,
+    pub region_membership_revision: Option<u64>,
+    pub region_coefficients_revision: Option<u64>,
+    pub region_initial_state_revision: Option<u64>,
     pub diagnostics: Vec<RegionDiagnosticResource>,
 }
 
@@ -553,6 +563,7 @@ pub struct MaterialParameterFieldResource {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct MaterialParameterFieldListResource {
     pub scene_revision: u64,
+    pub region_coefficients_revision: Option<u64>,
     pub fields: Vec<MaterialParameterFieldResource>,
 }
 
@@ -576,6 +587,7 @@ pub struct MaterialParameterFieldDataSummaryResource {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct MaterialParameterFieldDataListResource {
     pub scene_revision: u64,
+    pub region_coefficients_revision: Option<u64>,
     pub fields: Vec<MaterialParameterFieldDataSummaryResource>,
 }
 
@@ -588,6 +600,7 @@ pub struct MaterialParameterFieldDataResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact_path: Option<String>,
     pub scene_revision: u64,
+    pub region_coefficients_revision: Option<u64>,
     pub owner_object_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_path: Option<String>,

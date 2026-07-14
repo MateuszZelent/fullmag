@@ -714,7 +714,8 @@ fn fdm_profile_geometry(
         (values.len() == 3 && values.iter().all(|value| value.is_finite()))
             .then_some([values[0], values[1], values[2]])
     };
-    let origin_m = parse("origin")
+    let origin_m = parse("origin_m")
+        .or_else(|| parse("origin"))
         .or_else(|| parse("grid_origin"))
         .or_else(|| parse("native_origin"))?;
     let cell_size_m = parse("cell_size")?;

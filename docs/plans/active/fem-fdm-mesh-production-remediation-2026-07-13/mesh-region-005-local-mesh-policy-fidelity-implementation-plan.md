@@ -20,13 +20,13 @@
 
 ### Task 1: RED — spatial fidelity
 
-- [ ] Dodać dwa rozłączne regiony z różnymi min/max i zmierzyć element-size distribution inside/outside; dodać local order request i asercję fail-closed.
+- [x] Dodać regression dla scoped minimum oraz local order; minimum regionu nie trafia już do globalnego `Mesh.CharacteristicLengthMin`, a `order != 1` kończy się stabilnym błędem `region_mesh_policy_order_unsupported`.
 - [ ] Uruchomić `PYTHONPATH=packages/fullmag-py/src python3 -m pytest packages/fullmag-py/tests/test_meshing.py -k 'region_mesh_policy' -q`; oczekiwany RED dla scoped minimum/order status.
 
 ### Task 2: field compiler i report
 
 - [ ] Przypisać region physical-volume tags do Gmsh fields oraz złożyć `Min`/distance/threshold bez globalnego nadpisania `Mesh.MeshSizeMin`.
-- [ ] Dodać capability validation odrzucającą local `order != 1` ze stabilnym reason code; raport ma `requested`, `resolved`, `scope_marker`, `status` i measured min/max.
+- [x] Dodać capability validation odrzucającą local `order != 1` ze stabilnym reason code; raport nie może już udawać zastosowania lokalnego rzędu P2.
 - [ ] Zweryfikować, że region bez policy dziedziczy obiekt i nie tworzy redundantnego field.
 
 ### Task 3: evidence
@@ -35,3 +35,18 @@
 - [ ] Commit: `git add packages/fullmag-py crates/fullmag-authoring crates/fullmag-plan docs/physics/0100-mesh-and-region-discretization.md && git commit -m "fix(mesh): realize scoped region mesh policies"`.
 
 **Exit:** build report nigdy nie twierdzi, że zastosował lokalny parametr, którego Gmsh nie zrealizował w zadanym regionie.
+
+### Evidence (2026-07-14, fail-closed local order and scoped minimum)
+
+- Region `minimum_element_size` is retained in scoped field metadata but is no
+  longer folded into the global hmin option.
+- Local mesh order other than P1 is rejected before field construction with
+  `region_mesh_policy_order_unsupported`.
+- `PYTHONPATH=packages/fullmag-py/src python3 -m pytest packages/fullmag-py/tests/test_meshing.py -k 'region_mesh_policy' -q` — 4 passed, 0 failed.
+- Physical measured size histograms, full operation certificate and managed FEM proof remain open.
+
+### Evidence update (2026-07-14, stale regression corrected)
+
+- [x] The production meshing gate exposed a stale assertion that expected a region minimum to lower global `hmin`; the regression now asserts global `hmin=3e-9` and local scoped field `MinimumElementSize=0.15e-9`.
+- [x] Full Python meshing suite after correction: `245 passed, 1 skipped`.
+- [ ] Physical measured size histograms, full operation certificate and managed FEM proof remain open.

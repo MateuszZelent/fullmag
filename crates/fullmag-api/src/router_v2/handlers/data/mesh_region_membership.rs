@@ -43,7 +43,13 @@ pub async fn get_mesh_region_membership(
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active scene document"))?;
 
-    build_mesh_region_membership(scene, mesh, snapshot.mesh_revision, &region_id)
+    build_mesh_region_membership(
+        scene,
+        mesh,
+        snapshot.mesh_revision,
+        snapshot.region_realization_revisions.membership,
+        &region_id,
+    )
         .map(Json)
         .ok_or_else(|| {
             ApiError::not_found(format!("mesh region membership '{region_id}' not found"))
@@ -79,7 +85,13 @@ pub async fn get_mesh_region_memberships(
     let mut unresolved_region_ids = Vec::new();
     for region_id in enabled_authored_region_ids(scene) {
         if let Some(membership) =
-            build_mesh_region_membership(scene, mesh, snapshot.mesh_revision, &region_id)
+            build_mesh_region_membership(
+                scene,
+                mesh,
+                snapshot.mesh_revision,
+                snapshot.region_realization_revisions.membership,
+                &region_id,
+            )
         {
             memberships.push(membership);
         } else {
@@ -99,6 +111,7 @@ pub(crate) fn build_mesh_region_membership(
     scene: &SceneDocument,
     mesh: &FemMeshPayload,
     mesh_revision: u64,
+    region_membership_revision: u64,
     region_id: &str,
 ) -> Option<MeshRegionMembershipResource> {
     let parts = mesh_region_membership_parts(scene, mesh, region_id);
@@ -161,9 +174,44 @@ pub(crate) fn build_mesh_region_membership(
         );
     }
 
+    let has_generation = mesh.generation_id.is_some();
+    let has_marker_certificate = mesh.build_report.as_ref().is_some_and(|report| {
+        !report.region_markers.is_empty() || !report.object_region_markers.is_empty()
+    });
+    let realized_current = projection.is_none() && has_generation && has_marker_certificate;
+    let mut realization_warnings = if projection.is_some() {
+        vec![
+            "geometry_projection uses node and centroid membership; it is not a conformal mesh part"
+                .to_string(),
+        ]
+    } else {
+        Vec::new()
+    };
+    if projection.is_none() && !realized_current {
+        realization_warnings.push(
+            "realized membership lacks a current mesh generation and marker certificate"
+                .to_string(),
+        );
+    }
+
     Some(MeshRegionMembershipResource {
         mesh_id: mesh.mesh_id.clone(),
         mesh_revision,
+        topology_fingerprint: Some(fullmag_runner::fem_mesh_topology_fingerprint(mesh)),
+        mesh_generation_id: mesh.generation_id.clone(),
+        region_membership_revision,
+        freshness: if projection.is_some() {
+            "preview".to_string()
+        } else if realized_current {
+            "current".to_string()
+        } else {
+            "stale".to_string()
+        },
+        realization: if projection.is_some() {
+            "analytic_preview".to_string()
+        } else {
+            "realized".to_string()
+        },
         region_id: region_id.to_string(),
         source: if projection.is_some() {
             "geometry_projection"
@@ -176,14 +224,7 @@ pub(crate) fn build_mesh_region_membership(
         realization_method: projection
             .is_some()
             .then(|| "shape_centroid_geometry_projection_v1".to_string()),
-        realization_warnings: if projection.is_some() {
-            vec![
-                "geometry_projection uses node and centroid membership; it is not a conformal mesh part"
-                    .to_string(),
-            ]
-        } else {
-            Vec::new()
-        },
+        realization_warnings,
         mesh_part_ids,
         element_indices,
         node_indices,

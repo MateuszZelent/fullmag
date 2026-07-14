@@ -43,6 +43,7 @@ import {
 } from "three";
 
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
+import type { PeriodicOverlayModel } from "@/shared/domain/mesh/periodicOverlayModel";
 
 import type {
   FdmGridRenderDomain,
@@ -102,6 +103,7 @@ import {
   type RegionOverlaySelection,
 } from "./RegionOverlayLayer";
 import { RegionMeshOverlayLayer } from "./RegionMeshOverlayLayer";
+import { PeriodicPairsOverlayLayer } from "./PeriodicPairsOverlayLayer";
 import {
   useViewport3DRegionOverlayModels,
   type Viewport3DRegionOverlayBuildStatus,
@@ -170,6 +172,7 @@ interface Viewport3DSceneProps {
   meshQualityOverlayVisible: boolean;
   meshRegionOverlayParts: readonly RegionMeshOverlayOwnerPart[];
   meshRegionOverlays: readonly RegionOverlayInput[];
+  periodicOverlayModel: PeriodicOverlayModel | null;
   meshSizeHighlightModel: Viewport3DMeshSizeHighlightModel | null;
   onCameraChange: (camera: Viewport3DCameraChange) => Promise<void> | void;
   onCameraInteractionEnd?: () => void;
@@ -770,6 +773,7 @@ function Viewport3DModelLayerStack({
   meshQualityOverlayVisible,
   meshRegionOverlayParts,
   meshRegionOverlays,
+  periodicOverlayModel,
   meshSizeHighlightModel,
   onInspectClear,
   onInspectSample,
@@ -812,6 +816,7 @@ function Viewport3DModelLayerStack({
   | "meshQualityOverlayVisible"
   | "meshRegionOverlayParts"
   | "meshRegionOverlays"
+  | "periodicOverlayModel"
   | "meshSizeHighlightModel"
   | "inspectEnabled"
   | "inspectQuantityId"
@@ -1003,6 +1008,7 @@ function Viewport3DModelLayerStack({
           tracker={tracker}
         />
       ) : null}
+      <PeriodicPairsOverlayLayer model={periodicOverlayModel} tracker={tracker} />
       {authoredRegionOverlaysVisible ? (
         <RegionOverlayLayer
           getRegionSettings={getRegionSettings}
@@ -1212,6 +1218,7 @@ export function Viewport3DScene({
   meshQualityOverlayVisible,
   meshRegionOverlayParts,
   meshRegionOverlays,
+  periodicOverlayModel,
   meshSizeHighlightModel,
   onCameraChange,
   onCameraInteractionEnd,
@@ -1378,6 +1385,7 @@ export function Viewport3DScene({
         meshQualityOverlayVisible={meshQualityOverlayVisible}
         meshRegionOverlayParts={meshRegionOverlayParts}
         meshRegionOverlays={meshRegionOverlays}
+        periodicOverlayModel={periodicOverlayModel}
         meshSizeHighlightModel={meshSizeHighlightModel}
         onInspectClear={onInspectClear}
         onInspectSample={onInspectSample}

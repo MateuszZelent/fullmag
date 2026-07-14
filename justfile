@@ -143,6 +143,14 @@ repo-check:
 verify-fem-meshing-production:
     bash scripts/verify_fem_meshing_production.sh
 
+# MESH-GATE-002: cross-backend PBC matrix contract. Managed runtime evidence
+# is deliberately supplied by the case artifacts, not inferred by this recipe.
+verify-fdm-pbc-production:
+    cargo test -p fullmag-engine --lib periodic --no-fail-fast
+    cargo test -p fullmag-plan --lib fdm_pbc --no-fail-fast
+    cargo test -p fullmag-runner --lib stale_resolved_periodic_workspace --no-fail-fast
+    python3 scripts/verify_pbc_production_matrix.py --manifest scripts/pbc_production_matrix.v1.json
+
 verify-fem-relaxation-source-contract:
     docker compose --profile fem-gpu run --rm \
       fem-gpu bash -lc 'cd /workspace && cmake --build native/build --target fem_relaxation_source_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_relaxation_source_contract'

@@ -71,7 +71,7 @@ import {
 import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
 import { visualizationSceneObjectIds } from "@/kernel/selection/visualizationTargetResolver";
 import { useLayoutSelector } from "@/kernel/layout/useLayout";
-import { manifestRenderableCarriers } from "@/modules/viewport-3d/viewport3dDomainAdapter";
+import { manifestRenderableCarriers } from "@/modules/viewport-3d/public";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";

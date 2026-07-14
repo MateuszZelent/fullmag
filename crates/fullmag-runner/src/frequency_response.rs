@@ -2523,6 +2523,7 @@ fn frequency_response_demag_backend_plan(
         mesh: plan.mesh.clone(),
         object_segments: plan.object_segments.clone(),
         mesh_parts: plan.mesh_parts.clone(),
+        mesh_build_report: plan.mesh_build_report.clone(),
         domain_mesh_mode: plan.domain_mesh_mode,
         domain_frame: plan.domain_frame.clone(),
         fe_order: plan.fe_order,
@@ -5939,6 +5940,7 @@ mod tests {
 
     fn minimal_frequency_response_plan() -> fullmag_ir::FemFrequencyResponsePlanIR {
         fullmag_ir::FemFrequencyResponsePlanIR {
+            mesh_build_report: None,
             mesh_name: "unit".to_string(),
             mesh_source: None,
             mesh: fullmag_ir::MeshIR {

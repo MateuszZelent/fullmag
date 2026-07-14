@@ -27,6 +27,9 @@ export function ObjectRegionMeshPanel({
   model,
   draft,
   pending,
+  draftDirty,
+  buildRegion,
+  regionMeshLifecycle,
   canWriteRegion,
   couplingDependencies,
   updateMeshPolicy,
@@ -134,6 +137,9 @@ export function ObjectRegionMeshPanel({
 
       <ObjectRegionActionsSection
         pending={pending}
+        draftDirty={draftDirty}
+        buildRegion={buildRegion}
+        regionMeshLifecycle={regionMeshLifecycle}
         canWriteRegion={canWriteRegion}
         couplingDependencies={couplingDependencies}
         applyRegion={applyRegion}

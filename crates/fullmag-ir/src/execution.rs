@@ -89,6 +89,41 @@ pub enum ExchangeBoundaryCondition {
 
 // ── Periodic Boundary Conditions (FDM) ───────────────────────────────────────
 
+/// Maximum non-background region id addressable by the fixed-size FDM
+/// exchange lookup table. Region id `0` is reserved for the background, while
+/// the native table has 256 rows/columns.
+pub const MAX_FDM_REGION_IDS: u32 = 255;
+
+/// Validate resolved FDM region ids before a runner or native lane can
+/// allocate/copy the exchange lookup table.
+pub fn validate_fdm_region_lut_indices(
+    region_mask: &[u32],
+    exchange_pairs: &[(u32, u32, f64)],
+) -> Result<(), String> {
+    if let Some(maximum) = region_mask
+        .iter()
+        .copied()
+        .filter(|region_id| *region_id != u32::MAX)
+        .max()
+    {
+        if maximum > MAX_FDM_REGION_IDS {
+            return Err(format!(
+                "fdm_region_lut_capacity_exceeded: requested_region_id={} supported_region_ids={}",
+                maximum, MAX_FDM_REGION_IDS
+            ));
+        }
+    }
+    for (index, &(region_i, region_j, _)) in exchange_pairs.iter().enumerate() {
+        if region_i > MAX_FDM_REGION_IDS || region_j > MAX_FDM_REGION_IDS {
+            return Err(format!(
+                "fdm_region_lut_capacity_exceeded: exchange_pair_index={} requested_region_ids=({}, {}) supported_region_ids={}",
+                index, region_i, region_j, MAX_FDM_REGION_IDS
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Per-axis boundary policy for FDM PBC.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -110,6 +145,30 @@ pub struct FdmPeriodicityIR {
     /// Per-axis image count for `TruncatedImages` demag.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_counts: Option<[u32; 3]>,
+}
+
+/// Checked, lane-neutral cost of the resolved truncated-image workspace.
+/// This is published as provenance and is computed before FFT allocation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResolvedPeriodicImagesIR {
+    pub requested_image_counts: [u32; 3],
+    pub resolved_image_counts: [u32; 3],
+    pub padded_counts: [u64; 3],
+    pub image_terms: u64,
+    pub estimated_bytes: u64,
+    pub kernel: String,
+}
+
+/// Planner-resolved demagnetization boundary realization for FDM.
+///
+/// `FdmPeriodicityIR` remains the requested public policy.  Runtime lanes
+/// must consume this resolved value so that CPU and CUDA cannot reinterpret
+/// `open` differently when local operators are periodic.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ResolvedFdmDemagBoundaryIR {
+    Open,
+    PeriodicTruncatedImages { image_counts: [u32; 3] },
 }
 
 /// Demag periodicity semantics for FDM.
@@ -136,6 +195,139 @@ impl FdmPeriodicityIR {
     /// Returns `true` if a specific axis index (0=x, 1=y, 2=z) is periodic.
     pub fn is_periodic(&self, axis: usize) -> bool {
         matches!(self.axes[axis], AxisBoundary::Periodic)
+    }
+
+    /// Resolve the requested demagnetization policy for one executable FDM
+    /// plan.  Periodic local operators plus an open demagnetization kernel are
+    /// not a legal physical realization and must fail before either runtime
+    /// lane is constructed.
+    pub fn resolve_demag_boundary(
+        &self,
+        demag_enabled: bool,
+    ) -> Result<ResolvedFdmDemagBoundaryIR, String> {
+        if self.demag == FdmDemagPeriodicityIR::PeriodicAirboxK0 {
+            return Err(
+                "FDM periodic demag does not support pbc.demag='periodic_airbox_k0'; use 'open' without periodic axes or 'truncated_images'".to_string(),
+            );
+        }
+        if !demag_enabled {
+            return Ok(ResolvedFdmDemagBoundaryIR::Open);
+        }
+        if self.has_any_periodic() && self.demag == FdmDemagPeriodicityIR::Open {
+            return Err(
+                "FDM periodic demag requires pbc.demag='truncated_images'; pbc.demag='open' is incompatible with periodic axes".to_string(),
+            );
+        }
+        if self.demag == FdmDemagPeriodicityIR::TruncatedImages && self.has_any_periodic() {
+            let requested = self.image_counts.unwrap_or([10, 10, 10]);
+            let mut image_counts = [0; 3];
+            let mut image_terms = 1_u64;
+            for (axis, count) in image_counts.iter_mut().enumerate() {
+                if self.is_periodic(axis) {
+                    *count = requested[axis];
+                    let span = u64::from(*count)
+                        .checked_mul(2)
+                        .and_then(|value| value.checked_add(1))
+                        .ok_or_else(|| {
+                            format!(
+                                "FDM periodic image count overflow on axis {axis}: {}",
+                                requested[axis]
+                            )
+                        })?;
+                    image_terms = image_terms.checked_mul(span).ok_or_else(|| {
+                        "FDM periodic image term count overflow".to_string()
+                    })?;
+                }
+            }
+            const MAX_PERIODIC_IMAGE_TERMS: u64 = 1_000_000;
+            if image_terms > MAX_PERIODIC_IMAGE_TERMS {
+                return Err(format!(
+                    "FDM periodic image budget exceeded: {image_terms} image terms > {MAX_PERIODIC_IMAGE_TERMS}"
+                ));
+            }
+            return Ok(ResolvedFdmDemagBoundaryIR::PeriodicTruncatedImages {
+                image_counts,
+            });
+        }
+        Ok(ResolvedFdmDemagBoundaryIR::Open)
+    }
+
+    /// Resolve image work and padded FFT dimensions with checked arithmetic.
+    /// `grid_counts` are the resolved cells, not a requested hint. Open axes
+    /// use the conventional `2N` padding while periodic axes use `N`.
+    pub fn resolve_periodic_images(
+        &self,
+        grid_counts: [u32; 3],
+        precision: ExecutionPrecision,
+    ) -> Result<Option<ResolvedPeriodicImagesIR>, String> {
+        if !self.has_any_periodic() || self.demag != FdmDemagPeriodicityIR::TruncatedImages {
+            return Ok(None);
+        }
+        let requested = self.image_counts.unwrap_or([10, 10, 10]);
+        let mut resolved = [0_u32; 3];
+        let mut image_terms = 1_u64;
+        let mut padded_counts = [0_u64; 3];
+        for axis in 0..3 {
+            let cells = u64::from(grid_counts[axis]);
+            if cells == 0 {
+                return Err(format!("FDM periodic image budget requires positive grid count on axis {axis}"));
+            }
+            let periodic = self.is_periodic(axis);
+            let padded = if periodic {
+                cells
+            } else {
+                cells.checked_mul(2).ok_or_else(|| {
+                    format!("FDM padded grid count overflow on axis {axis}: {cells}")
+                })?
+            };
+            padded_counts[axis] = padded;
+            if periodic {
+                resolved[axis] = requested[axis];
+                let span = u64::from(resolved[axis])
+                    .checked_mul(2)
+                    .and_then(|value| value.checked_add(1))
+                    .ok_or_else(|| {
+                        format!("FDM periodic image count overflow on axis {axis}: {}", requested[axis])
+                    })?;
+                image_terms = image_terms.checked_mul(span).ok_or_else(|| {
+                    "FDM periodic image term count overflow".to_string()
+                })?;
+            }
+        }
+        const MAX_PERIODIC_IMAGE_TERMS: u64 = 1_000_000;
+        if image_terms > MAX_PERIODIC_IMAGE_TERMS {
+            return Err(format!(
+                "FDM periodic image budget exceeded: {image_terms} image terms > {MAX_PERIODIC_IMAGE_TERMS}"
+            ));
+        }
+        let padded_cells = padded_counts.iter().try_fold(1_u64, |acc, count| {
+            acc.checked_mul(*count)
+                .ok_or_else(|| "FDM padded grid cell count overflow".to_string())
+        })?;
+        let bytes_per_value = match precision {
+            ExecutionPrecision::Single => 4_u64,
+            ExecutionPrecision::Double => 8_u64,
+        };
+        // Six complex kernel spectra plus six complex work buffers.
+        let estimated_bytes = padded_cells
+            .checked_mul(12)
+            .and_then(|value| value.checked_mul(2))
+            .and_then(|value| value.checked_mul(bytes_per_value))
+            .ok_or_else(|| "FDM periodic workspace byte estimate overflow".to_string())?;
+        const MAX_PERIODIC_WORKSPACE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+        if estimated_bytes > MAX_PERIODIC_WORKSPACE_BYTES {
+            return Err(format!(
+                "FDM periodic workspace budget exceeded: {estimated_bytes} bytes > {MAX_PERIODIC_WORKSPACE_BYTES}"
+            ));
+        }
+        Ok(Some(ResolvedPeriodicImagesIR {
+            requested_image_counts: requested,
+            resolved_image_counts: resolved,
+            padded_counts,
+            image_terms,
+            estimated_bytes,
+            kernel: "newell_truncated_images_fft".to_string(),
+        }))
     }
 }
 
@@ -309,5 +501,102 @@ impl RelaxationAlgorithmIR {
             Self::LlgOverdamped => Some(IntegratorChoice::Rk23),
             Self::ProjectedGradientBb | Self::NonlinearCg | Self::TangentPlaneImplicit => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn truncated(counts: [u32; 3]) -> FdmPeriodicityIR {
+        FdmPeriodicityIR {
+            axes: [
+                AxisBoundary::Periodic,
+                AxisBoundary::Periodic,
+                AxisBoundary::Periodic,
+            ],
+            demag: FdmDemagPeriodicityIR::TruncatedImages,
+            image_counts: Some(counts),
+        }
+    }
+
+    #[test]
+    fn periodic_image_budget_accepts_boundary_case() {
+        let resolved = truncated([49, 49, 49])
+            .resolve_demag_boundary(true)
+            .expect("49^3 image spans should fit the production budget");
+        assert_eq!(
+            resolved,
+            ResolvedFdmDemagBoundaryIR::PeriodicTruncatedImages {
+                image_counts: [49, 49, 49]
+            }
+        );
+    }
+
+    #[test]
+    fn periodic_image_budget_rejects_excessive_work() {
+        let error = truncated([100, 100, 100])
+            .resolve_demag_boundary(true)
+            .expect_err("excessive periodic image work must fail before runtime");
+        assert!(error.contains("periodic image budget exceeded"));
+    }
+
+    #[test]
+    fn periodic_image_budget_checks_u32_arithmetic() {
+        let error = truncated([u32::MAX, 0, 0])
+            .resolve_demag_boundary(true)
+            .expect_err("u32 image span must be checked");
+        assert!(error.contains("periodic image budget exceeded"));
+    }
+
+    #[test]
+    fn periodic_workspace_resolves_checked_padding_and_provenance() {
+        let resolved = truncated([0, 0, 0])
+            .resolve_periodic_images([64, 32, 8], ExecutionPrecision::Double)
+            .expect("checked workspace should resolve")
+            .expect("periodic truncated-images policy should resolve");
+        assert_eq!(resolved.requested_image_counts, [0, 0, 0]);
+        assert_eq!(resolved.resolved_image_counts, [0, 0, 0]);
+        assert_eq!(resolved.padded_counts, [64, 32, 8]);
+        assert_eq!(resolved.image_terms, 1);
+        assert_eq!(resolved.estimated_bytes, 64 * 32 * 8 * 12 * 2 * 8);
+        assert_eq!(resolved.kernel, "newell_truncated_images_fft");
+    }
+
+    #[test]
+    fn periodic_workspace_uses_two_n_padding_on_open_axes() {
+        let mut policy = truncated([1, 0, 0]);
+        policy.axes[1] = AxisBoundary::Open;
+        policy.axes[2] = AxisBoundary::Open;
+        let resolved = policy
+            .resolve_periodic_images([4, 3, 2], ExecutionPrecision::Single)
+            .expect("checked workspace should resolve")
+            .expect("periodic truncated-images policy should resolve");
+        assert_eq!(resolved.padded_counts, [4, 6, 4]);
+        assert_eq!(resolved.image_terms, 3);
+        assert_eq!(resolved.estimated_bytes, 4 * 6 * 4 * 12 * 2 * 4);
+    }
+
+    #[test]
+    fn periodic_workspace_rejects_first_image_budget_overflow() {
+        let error = truncated([50, 50, 50])
+            .resolve_periodic_images([8, 8, 8], ExecutionPrecision::Double)
+            .expect_err("the first image count above the budget must fail");
+        assert!(error.contains("periodic image budget exceeded"));
+    }
+
+    #[test]
+    fn periodic_workspace_rejects_non_positive_grid_and_checked_padding_overflow() {
+        let zero = truncated([0, 0, 0])
+            .resolve_periodic_images([0, 1, 1], ExecutionPrecision::Double)
+            .expect_err("zero grid counts are not executable");
+        assert!(zero.contains("positive grid count"));
+
+        let mut open_policy = truncated([0, 0, 0]);
+        open_policy.axes = [AxisBoundary::Periodic, AxisBoundary::Open, AxisBoundary::Open];
+        let overflow = open_policy
+            .resolve_periodic_images([u32::MAX, u32::MAX, u32::MAX], ExecutionPrecision::Double)
+            .expect_err("padded cell multiplication must be checked");
+        assert!(overflow.contains("overflow"));
     }
 }

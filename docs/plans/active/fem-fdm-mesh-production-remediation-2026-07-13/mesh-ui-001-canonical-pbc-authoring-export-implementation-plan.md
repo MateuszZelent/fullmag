@@ -40,3 +40,17 @@ pub struct ScenePbc { pub axes: [bool; 3], pub demag: String, pub image_counts: 
 
 **Exit:** wszystkie trzy fixtures wracają do semantycznie identycznego ProblemIR; UI export nie traci PBC ani mesh pairing intent.
 
+### Evidence update (2026-07-14, Python canonical export slice)
+
+- [x] Canonical script rendering now emits the authored problem-level PBC via
+  `study.pbc(...)` or `fm.pbc(...)`, including active axes, demag realization
+  and truncated-image counts; PBC is no longer represented only as a mesh
+  `periodic_pair_ids` option.
+- [x] Added a UI-adjacent authoring round-trip fixture: load a FEM study with
+  `x/y` periodic airbox demag, render canonical Python, reload it, and compare
+  `ProblemIR.pbc` — focused test passed 1/1.
+- [ ] Rust SceneDocument/API adapters, browser export command gating and the
+  full UI/OpenAPI gates remain open.
+- [ ] The broader `test_api.py -k "pbc or script_rewrite"` selection still has
+  one pre-existing dispersion-k-path expectation failure unrelated to PBC
+  rendering; it is not counted as a pass for the full suite.

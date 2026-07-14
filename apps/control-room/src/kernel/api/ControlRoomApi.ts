@@ -32,6 +32,9 @@ import {
   DATA_ARTIFACT_PATH,
   DATA_DOMAIN_META_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
+  DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH,
+  DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH,
+  DATA_FDM_REGION_MEMBERSHIPS_PATH,
   DATA_FIELD_META_PATH,
   DATA_FIELD_VECTOR_PATH,
   DATA_MESH_REGION_MEMBERSHIP_PATH,
@@ -53,6 +56,7 @@ import {
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_HISTOGRAM_BIN_ELEMENTS_PATH,
   MESHING_PERIODIC_PAIRS_PATH,
+  MESHING_PERIODIC_PAIRS_BINARY_PATH,
   MESHING_SHARED_DOMAIN_CROSS_SECTION_IMAGE_PATH,
   MESHING_SHARED_DOMAIN_CROSS_SECTION_PATH,
   MESHING_SHARED_DOMAIN_CROSS_SECTION_QUALITY_PATH,
@@ -229,6 +233,7 @@ import type {
   MeshRealizedSizeFieldsResource,
   MeshRegionMembershipListResource,
   MeshRegionMembershipResource,
+  FdmRegionMembershipResource,
   MeshRegionQualityResource,
   MeshSemanticsResource,
   MeshSharedDomainConfigReplaceRequest,
@@ -298,6 +303,7 @@ import {
   decodeCrossSectionQuality,
   decodeFieldVector,
   decodeMeshQualityData,
+  decodePeriodicPairs,
   decodeTableRows,
   decodeTopology,
   decodeTopologyHeader,
@@ -767,6 +773,22 @@ export class ControlRoomApi {
         DATA_MESH_REGION_MEMBERSHIPS_PATH,
         options,
       ),
+    fdmRegionMemberships: (options?: RequestOptions) =>
+      this.requestJson<FdmRegionMembershipResource>(
+        DATA_FDM_REGION_MEMBERSHIPS_PATH,
+        options,
+      ),
+    fdmRegionMembershipBytes: (options?: BinaryRequestOptions) =>
+      this.requestBinaryBytes(DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH, options),
+    fdmRegionMembershipRegionBytes: (
+      regionId: string,
+      options?: BinaryRequestOptions,
+    ) =>
+      this.requestBinaryBytes(
+        DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH,
+        options,
+        { region_id: regionId },
+      ),
     scalars: {
       window: (
         query: ScalarWindowQuery = {},
@@ -850,6 +872,13 @@ export class ControlRoomApi {
     periodicPairs: (options?: RequestOptions) =>
       this.requestJson<MeshPeriodicPairsResource>(
         MESHING_PERIODIC_PAIRS_PATH,
+        options,
+      ),
+    periodicPairsBinary: (options?: BinaryRequestOptions) =>
+      this.requestBinaryResource(
+        MESHING_PERIODIC_PAIRS_BINARY_PATH,
+        "periodic-pairs",
+        decodePeriodicPairs,
         options,
       ),
     builds: {

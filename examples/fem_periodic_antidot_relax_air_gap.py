@@ -95,7 +95,7 @@ study.demag(realization="poisson_robin")
 study.fem_demag_solver(
     solver="CG",
     preconditioner="AMG",
-    rtol=1e-4,
+    rtol=1e-12,
     max_iterations=500,
 )
 study.objects.mesh.defaults(
@@ -130,5 +130,5 @@ study.save("demag_phi", every=10e-12)
 study.stages.add_relax(
     algorithm="projected_gradient_bb",
     max_steps=4000,
-    tol=5.0e3,  # A/m
+    tol=5.0e2,  # A/m
 )

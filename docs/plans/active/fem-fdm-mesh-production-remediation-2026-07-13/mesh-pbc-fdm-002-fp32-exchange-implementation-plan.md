@@ -20,8 +20,9 @@
 
 ### Task 1: capability guard i RED kernel test
 
-- [ ] Najpierw zablokować unsupported lane w capability matrix/planner z actionable reason.
+- [x] Najpierw zablokować unsupported lane w capability matrix/planner z actionable reason.
 - [ ] Dodać FP32 periodic seam fixture w `backends/fdm/tests/`, porównując uniform, linear i seam-localized magnetization z CPU double/FP64.
+- [x] Dodać source-level contract dla FP32 periodic neighbor helper i przekazania wszystkich osi; runtime parity fixture pozostaje do managed CUDA.
 - [ ] Uruchomić managed test; obecny FP32 ma FAIL na seam.
 
 ### Task 2: ABI i kernel
@@ -30,8 +31,8 @@
 struct FdmPeriodicAxes { bool x; bool y; bool z; };
 ```
 
-- [ ] Przekazać axes przez `native/include/fullmag_fdm.h`, runtime context, `fullmag-fdm-sys` i CUDA construction do FP32 kernel.
-- [ ] Zastosować modulo neighbor indices tylko na aktywnych osiach; zachować open behavior na pozostałych.
+- [x] Osie są już częścią ABI/context/sys/CUDA construction i zostały przekazane do FP64; FP32 kernel teraz konsumuje ten sam kontrakt.
+- [x] Zastosować modulo neighbor indices tylko na aktywnych osiach; zachować open behavior na pozostałych.
 - [ ] Uruchomić managed FP32/FP64 parity test; PASS w opublikowanej single tolerance.
 
 ### Task 3: promotion
@@ -39,5 +40,11 @@ struct FdmPeriodicAxes { bool x; bool y; bool z; };
 - [ ] Odblokować capability dopiero po artifact z parity error, device/runtime versions i grid fingerprint.
 - [ ] Commit: `git add docs/specs/capability-matrix-v0.* native/include backends/fdm crates/fullmag-fdm-sys crates/fullmag-runner && git commit -m "fix(cuda): implement FP32 periodic exchange"`.
 
-**Exit:** FP32 seam matches double oracle w tolerancji; unsupported guard usunięty wyłącznie po managed proof.
+### Evidence (2026-07-14, partial)
 
+- `exchange_fp32.cu` now uses `pbc_neighbor_fp32` with `ctx.periodic_x/y/z`; open axes retain clamped neighbors.
+- `fdm_periodic_exchange_fp32_contract` source-level gate was added to the native FDM CMake test set.
+- Planner now rejects CUDA `execution_precision='single'` with any periodic axis using an actionable capability reason until the managed parity gate is green; `cargo test -p fullmag-plan fdm_cuda_fp32_periodic_exchange_is_capability_gated_until_parity --lib` passes.
+- Managed CUDA FP32/FP64 seam parity and promotion artifact remain open; no CUDA runtime was claimed from this environment.
+
+**Exit:** FP32 seam matches double oracle w tolerancji; unsupported guard usunięty wyłącznie po managed proof.

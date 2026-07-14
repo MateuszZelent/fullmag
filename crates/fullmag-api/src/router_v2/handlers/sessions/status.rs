@@ -193,6 +193,10 @@ pub(crate) fn build_live_status(
         commands_revision,
         stages_revision: snapshot.stage_execution_revision,
         scene_revision: snapshot.scene_document.as_ref().map(|scene| scene.revision),
+        region_topology_revision: snapshot.region_realization_revisions.topology,
+        region_membership_revision: snapshot.region_realization_revisions.membership,
+        region_coefficients_revision: snapshot.region_realization_revisions.coefficients,
+        region_initial_state_revision: snapshot.region_realization_revisions.initial_state,
     };
 
     let capabilities = CapabilityMap {
@@ -326,7 +330,8 @@ fn fdm_domain_generation_id(snapshot: &SessionStateResponse) -> u64 {
     if let Some(layout) = fdm_artifact_layout(snapshot) {
         revision = fnv1a_hash_bytes(revision, b"layout");
         if let Some(origin) = layout
-            .get("origin")
+            .get("origin_m")
+            .or_else(|| layout.get("origin"))
             .or_else(|| layout.get("grid_origin"))
             .or_else(|| layout.get("native_origin"))
             .and_then(value_array3_f64_any_finite)

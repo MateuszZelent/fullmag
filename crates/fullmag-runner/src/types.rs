@@ -1275,6 +1275,9 @@ pub struct FemMeshPayload {
     pub generation_id: Option<String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub per_domain_quality: HashMap<u32, MeshQualityPayload>,
+    /// Immutable report for the mesh build that produced this solver mesh.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_report: Option<fullmag_ir::FemSharedDomainBuildReportIR>,
 }
 
 pub fn fem_mesh_topology_fingerprint(mesh: &FemMeshPayload) -> String {
@@ -1507,6 +1510,7 @@ impl From<&fullmag_ir::FemPlanIR> for FemMeshPayload {
                 .iter()
                 .map(|(k, v)| (*k, MeshQualityPayload::from(v)))
                 .collect(),
+            build_report: plan.mesh_build_report.clone(),
         }
     }
 }
@@ -1560,6 +1564,7 @@ impl From<&fullmag_ir::FemEigenPlanIR> for FemMeshPayload {
                 .iter()
                 .map(|(k, v)| (*k, MeshQualityPayload::from(v)))
                 .collect(),
+            build_report: plan.mesh_build_report.clone(),
         }
     }
 }
@@ -1613,6 +1618,7 @@ impl From<&fullmag_ir::FemFrequencyResponsePlanIR> for FemMeshPayload {
                 .iter()
                 .map(|(k, v)| (*k, MeshQualityPayload::from(v)))
                 .collect(),
+            build_report: plan.mesh_build_report.clone(),
         }
     }
 }
@@ -2035,6 +2041,7 @@ mod tests {
             },
             object_segments: Vec::new(),
             mesh_parts: Vec::new(),
+            mesh_build_report: None,
             domain_mesh_mode: FemDomainMeshModeIR::MergedMagneticMesh,
             domain_frame: None,
             fe_order: 1,

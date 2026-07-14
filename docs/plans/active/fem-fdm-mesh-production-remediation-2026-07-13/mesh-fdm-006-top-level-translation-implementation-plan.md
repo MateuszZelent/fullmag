@@ -21,8 +21,8 @@
 
 ### Task 1: RED
 
-- [ ] Dodać single-grid fixture `Translate(Box)` z niezerowymi przesunięciami XYZ i porównać bounds, origin oraz active-cell coordinates z multilayer geometry lowering.
-- [ ] Uruchomić `cargo test -p fullmag-plan translated_single_grid -- --nocapture`; wynik przed zmianą FAIL.
+- [x] Dodano single-grid fixture `Translate(Box)` z niezerowymi przesunięciami XYZ i porównaniem origin oraz aktywnej komórki z tym samym loweringiem multilayer.
+- [x] Uruchomiono `cargo test -p fullmag-plan fdm_translated_single_grid_asset_matches_multilayer_origin -- --nocapture`; PASS.
 
 ### Task 2: GREEN
 
@@ -30,13 +30,18 @@
 GeometryShape::Translate { offset_m: [f64; 3], child: Box<GeometryShape> }
 ```
 
-- [ ] Usunąć gałąź `Translate` zwracającą sam child; zastosować inverse translation w `contains` i forward translation w bounds.
-- [ ] Użyć tej samej reprezentacji w obu planner lanes.
-- [ ] Uruchomić `cargo test -p fullmag-plan geometry --no-fail-fast` i `cargo test -p fullmag-plan fdm --no-fail-fast`; wynik PASS.
+- [x] `GeometryShape::Translate` zachowuje offset; `contains` używa inverse translation, a bounds forward translation.
+- [x] Single-grid i multilayer korzystają z tej samej transform-aware reprezentacji geometrii.
+- [x] `cargo test -p fullmag-plan geometry --lib --no-fail-fast` — 4 passed; `cargo test -p fullmag-plan fdm --lib --no-fail-fast` — 43 passed.
 
 ### Task 3: commit
 
-- [ ] Commit: `git add crates/fullmag-plan/src/geometry.rs crates/fullmag-plan/src/fdm.rs crates/fullmag-plan/src/tests.rs && git commit -m "fix(fdm): preserve top-level translations"`.
+- [x] Implementacja została utrwalona w istniejącym commicie zmian plannerowych; bieżący commit dokumentacyjny aktualizuje evidence bez ponownego dotykania kodu.
+
+## Evidence update
+
+- Single-grid precomputed asset przesuwa `origin_m` o dokładny wektor `Translate` i zachowuje tę samą aktywną komórkę co lowering multilayer.
+- Boundary SDF i active mask są sprawdzane w tych samych world coordinates; test regresyjny obejmuje również finite-height translated cylinder.
+- Managed FDM artifact/browser proof nie jest wymagany do semantycznego zamknięcia tego lokalnego kontraktu, ale pozostaje częścią globalnego gate MESH-GATE-001.
 
 **Exit:** przesunięta geometria ma przesuniętą maskę i origin w single-grid; single/multilayer używają wspólnej semantyki.
-

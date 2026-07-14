@@ -40,4 +40,13 @@ fn commit_remesh(candidate: RemeshCandidate, transfer: StateTransferAudit) -> Re
 - [ ] Zarejestrować before/after revisions, topology hashes i transfer norms w artifact.
 - [ ] Commit: `git add crates/fullmag-cli crates/fullmag-plan packages/fullmag-py crates/fullmag-api && git commit -m "fix(fem): make remesh publication atomic"`.
 
+### Bounded implementation evidence — 2026-07-14
+
+- [x] Added `prepare_remesh_stage_transaction` in `crates/fullmag-cli/src/orchestrator.rs`; stage IR and execution plans are prepared on private candidate snapshots and copied into the live slices only after marker validation and replanning succeed.
+- [x] Applied the candidate/commit boundary to manual interactive remesh, adaptive FEM follow-up, and FEM auto-coarsen. Auto-coarsen no longer publishes an over-budget candidate before trying the next hmax.
+- [x] Periodic candidates in auto-coarsen are now recertified through `validate_periodic_remesh_candidate` before any commit.
+- [x] Added `remesh_transaction_keeps_sources_unchanged_when_candidate_validation_fails`; focused run and the full orchestrator module pass (`67 passed, 0 failed`).
+
+Remaining for full closure: generation/material-remap/state-transfer fault injection, explicit mesh-generation/revision artifact transaction in the API/resource layer, native managed remesh runtime, and browser lifecycle evidence. This bounded slice does not close those gates.
+
 **Exit:** każda porażka pozostawia spójny stary mesh; sukces publikuje kompletną nową generation jednym revision eventem.

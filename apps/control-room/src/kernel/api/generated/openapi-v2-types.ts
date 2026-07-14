@@ -772,6 +772,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/data/fdm-region-membership": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_fdm_region_membership"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/fdm-region-membership/{region_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_fdm_region_membership_region_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/fdm-region-memberships": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_fdm_region_memberships"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/data/fields": {
         parameters: {
             query?: never;
@@ -3518,6 +3566,36 @@ export interface components {
             revision: number;
             total: number;
         };
+        /**
+         * @description Thin descriptor for realized FDM cell membership. The mask itself is kept
+         *     on the binary data plane under the companion FMRM resource.
+         */
+        FdmRegionLegendEntryResource: {
+            /** Format: int32 */
+            numeric_id: number;
+            object_id: string;
+            /** Format: int32 */
+            priority: number;
+            region_id: string;
+        };
+        FdmRegionMembershipResource: {
+            binary_path: string;
+            /** Format: int64 */
+            cell_count: number;
+            cell_m: number[];
+            counts: number[];
+            encoding: string;
+            freshness: string;
+            grid_fingerprint: string;
+            /** Format: int64 */
+            mesh_revision: number;
+            origin_m: number[];
+            region_legend: components["schemas"]["FdmRegionLegendEntryResource"][];
+            region_legend_fingerprint?: string | null;
+            /** Format: int64 */
+            region_membership_revision: number;
+            schema_version: string;
+        };
         FdmVisualizationPatch: {
             /** Format: int32 */
             x_chosen_size?: number | null;
@@ -4872,10 +4950,14 @@ export interface components {
                 [key: string]: unknown;
             };
             /** Format: int64 */
+            region_initial_state_revision?: number | null;
+            /** Format: int64 */
             scene_revision: number;
         };
         MaterialParameterFieldDataListResource: {
             fields: components["schemas"]["MaterialParameterFieldDataSummaryResource"][];
+            /** Format: int64 */
+            region_coefficients_revision?: number | null;
             /** Format: int64 */
             scene_revision: number;
         };
@@ -4904,6 +4986,8 @@ export interface components {
             priority?: number | null;
             realization_status: string;
             /** Format: int64 */
+            region_coefficients_revision?: number | null;
+            /** Format: int64 */
             sample_count: number;
             /** Format: int64 */
             scene_revision: number;
@@ -4929,6 +5013,8 @@ export interface components {
         };
         MaterialParameterFieldListResource: {
             fields: components["schemas"]["MaterialParameterFieldResource"][];
+            /** Format: int64 */
+            region_coefficients_revision?: number | null;
             /** Format: int64 */
             scene_revision: number;
         };
@@ -4990,6 +5076,8 @@ export interface components {
             name: string;
             properties: components["schemas"]["MaterialPropertiesResource"];
             references?: components["schemas"]["MaterialReferenceResource"][];
+            /** Format: int64 */
+            region_coefficients_revision?: number | null;
         };
         MeshActiveBuildResource: {
             /** @description Current active build descriptor and progress metadata. */
@@ -5288,6 +5376,10 @@ export interface components {
             transition_realization?: string | null;
         };
         MeshPeriodicBoundaryFacePairResource: {
+            /** Format: double */
+            area_residual_m2?: number;
+            /** Format: int32 */
+            destination_marker?: number;
             /** Format: int32 */
             face_a: number;
             /** Format: int32 */
@@ -5295,7 +5387,12 @@ export interface components {
             /** Format: double */
             normal_dot?: number | null;
             orientation: string;
+            /** Format: int32 */
+            source_marker?: number;
             translation_m: number[];
+            /** Format: double */
+            translation_residual_m?: number;
+            vertex_pairs?: number[][];
         };
         MeshPeriodicDomainNodePairCountsResource: {
             /** Format: int32 */
@@ -5314,6 +5411,9 @@ export interface components {
             marker_b: number;
             /** Format: double */
             max_residual_m?: number | null;
+            /** Format: int32 */
+            mixed_domain_node_pair_count?: number;
+            node_pairs?: number[][];
             pair_id: string;
             /** Format: int32 */
             paired_node_count: number;
@@ -5322,15 +5422,32 @@ export interface components {
             source_marker?: string | null;
             status: string;
             /** Format: int32 */
+            unpaired_destination_face_count?: number;
+            /** Format: int32 */
             unpaired_destination_node_count: number;
+            /** Format: int32 */
+            unpaired_source_face_count?: number;
             /** Format: int32 */
             unpaired_source_node_count: number;
         };
         MeshPeriodicPairsResource: {
+            certificate_fingerprint?: string | null;
+            /** Format: int64 */
+            certificate_revision?: number | null;
+            mesh_generation_id?: string | null;
             pairs: components["schemas"]["MeshPeriodicPairResource"][];
             /** Format: int64 */
             revision: number;
             schema_version: string;
+            /** Format: int64 */
+            source_scene_revision?: number | null;
+            /**
+             * @description Aggregate certificate/resource status. `valid` is reserved for a
+             *     current accepted v6 certificate with complete pair diagnostics.
+             */
+            status?: components["schemas"]["PeriodicValidationStatus"];
+            status_reasons?: string[];
+            topology_fingerprint?: string | null;
         };
         MeshQualityGatesResource: {
             gates?: Record<string, never> | null;
@@ -5367,15 +5484,26 @@ export interface components {
         MeshRegionMembershipResource: {
             boundary_face_indices: number[];
             element_indices: number[];
+            /** @description `current` applies only to certified mesh membership; `preview` is analytic projection. */
+            freshness: string;
+            mesh_generation_id?: string | null;
             mesh_id: string;
             mesh_part_ids: string[];
             /** Format: int64 */
             mesh_revision: number;
             node_indices: number[];
+            realization: string;
             realization_method?: string | null;
             realization_warnings?: string[];
             region_id: string;
+            /**
+             * Format: int64
+             * @description Independent region-membership realization revision, not the scene journal revision.
+             */
+            region_membership_revision: number;
             source: string;
+            /** @description Stable identity of the mesh topology used for this membership. */
+            topology_fingerprint?: string | null;
         };
         MeshRegionQualityResource: {
             quality?: Record<string, never> | null;
@@ -5422,10 +5550,14 @@ export interface components {
                 [key: string]: components["schemas"]["MeshPerObjectTargetResource"];
             };
             fallbacks_triggered?: string[];
+            object_region_markers?: Record<string, never>[];
             operation_statuses?: components["schemas"]["MeshOperationStatusResource"][];
+            orphan_entities?: Record<string, never>[];
             /** Format: int32 */
             realized_regions_count?: number | null;
             region_markers?: components["schemas"]["MeshDomainRegionMarkerResource"][];
+            rejected_element_types?: Record<string, never>[];
+            selector_resolution?: Record<string, never>[];
             size_fields_realized?: components["schemas"]["MeshRealizedSizeFieldResource"][];
             thin_film_diagnostics?: components["schemas"]["MeshThinFilmDiagnosticResource"][];
             used_size_field_kinds?: string[];
@@ -5469,6 +5601,7 @@ export interface components {
             revision: number;
         };
         MeshSolverMeshResource: {
+            build_report?: null | components["schemas"]["MeshSharedDomainBuildReportResource"];
             domain_mesh_mode?: string | null;
             generation_id?: string | null;
             mesh_id: string;
@@ -5649,6 +5782,8 @@ export interface components {
             base_revision?: number | null;
             region_ids: string[];
         };
+        /** @enum {string} */
+        PeriodicValidationStatus: "valid" | "invalid" | "stale" | "unavailable";
         PrimitiveGeometryCapability: {
             boolean: boolean;
             category: string;
@@ -5807,11 +5942,27 @@ export interface components {
         RegionDiagnosticsResource: {
             diagnostics: components["schemas"]["RegionDiagnosticResource"][];
             /** Format: int64 */
+            region_coefficients_revision?: number | null;
+            /** Format: int64 */
+            region_initial_state_revision?: number | null;
+            /** Format: int64 */
+            region_membership_revision?: number | null;
+            /** Format: int64 */
+            region_topology_revision?: number | null;
+            /** Format: int64 */
             scene_revision: number;
         };
         RegionListResource: {
             /** Format: int64 */
             geometry_realization_revision: number;
+            /** Format: int64 */
+            region_coefficients_revision?: number | null;
+            /** Format: int64 */
+            region_initial_state_revision?: number | null;
+            /** Format: int64 */
+            region_membership_revision?: number | null;
+            /** Format: int64 */
+            region_topology_revision?: number | null;
             regions: components["schemas"]["RegionResource"][];
             /** Format: int64 */
             scene_revision: number;
@@ -5827,6 +5978,14 @@ export interface components {
             deferred_diagnostic_count: number;
             /** Format: int64 */
             material_parameter_field_count: number;
+            /** Format: int64 */
+            region_coefficients_revision: number;
+            /** Format: int64 */
+            region_initial_state_revision: number;
+            /** Format: int64 */
+            region_membership_revision: number;
+            /** Format: int64 */
+            region_topology_revision: number;
             /** Format: int64 */
             scene_revision: number;
         };
@@ -5897,6 +6056,14 @@ export interface components {
             /** Format: int64 */
             mesh_revision: number;
             /** Format: int64 */
+            region_coefficients_revision: number;
+            /** Format: int64 */
+            region_initial_state_revision: number;
+            /** Format: int64 */
+            region_membership_revision: number;
+            /** Format: int64 */
+            region_topology_revision: number;
+            /** Format: int64 */
             scalars_revision: number;
             /** Format: int64 */
             scene_revision?: number | null;
@@ -5948,6 +6115,14 @@ export interface components {
             command_revision?: number | null;
             /** Format: int64 */
             mesh_revision?: number | null;
+            /** Format: int64 */
+            region_coefficients_revision?: number | null;
+            /** Format: int64 */
+            region_initial_state_revision?: number | null;
+            /** Format: int64 */
+            region_membership_revision?: number | null;
+            /** Format: int64 */
+            region_topology_revision?: number | null;
             runtime_state?: string | null;
             /** Format: int64 */
             scene_revision?: number | null;
@@ -8949,6 +9124,146 @@ export interface operations {
             };
             /** @description Requested topology byte range is not satisfiable */
             416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_fdm_region_membership: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Strong ETag from a previous FMRM response */
+                "If-None-Match"?: string | null;
+                /** @description Optional single byte range for the FMRM payload */
+                Range?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Binary realized FDM cell membership (FMRM) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Partial FMRM payload */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description FMRM payload not modified for the supplied ETag */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No realized FDM region membership artifact */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Requested FMRM byte range is not satisfiable */
+            416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_fdm_region_membership_region_id: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Strong ETag from a previous scoped FMRM response */
+                "If-None-Match"?: string | null;
+                /** @description Optional single byte range for the FMRM payload */
+                Range?: string | null;
+            };
+            path: {
+                /** @description Canonical authored region ID */
+                region_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Scoped binary realized FDM cell membership (FMRM) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Partial scoped FMRM payload */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Scoped FMRM payload not modified for the supplied ETag */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No realized FDM membership or unknown region ID */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Requested FMRM byte range is not satisfiable */
+            416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_fdm_region_memberships: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Thin descriptor for realized FDM cell membership */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FdmRegionMembershipResource"];
+                };
+            };
+            /** @description No realized FDM region membership artifact */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

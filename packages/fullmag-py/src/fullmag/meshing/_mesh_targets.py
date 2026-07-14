@@ -459,6 +459,7 @@ class SharedDomainBuildReport:
     magnetic_submesh_signatures: list[dict[str, object]] = field(default_factory=list)
     selector_resolution: list[dict[str, object]] = field(default_factory=list)
     orphan_entities: list[dict[str, object]] = field(default_factory=list)
+    rejected_element_types: list[dict[str, object]] = field(default_factory=list)
     degraded: bool = False
     authored_regions_count: int = 0
     realized_regions_count: int = 0
@@ -511,6 +512,9 @@ class SharedDomainBuildReport:
                 dict(resolution) for resolution in self.selector_resolution
             ],
             "orphan_entities": [dict(entity) for entity in self.orphan_entities],
+            "rejected_element_types": [
+                dict(element) for element in self.rejected_element_types
+            ],
             "degraded": self.degraded,
             "authored_regions_count": self.authored_regions_count,
             "realized_regions_count": self.realized_regions_count,

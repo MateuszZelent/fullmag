@@ -37,11 +37,14 @@ import {
 } from "@/kernel/api/quantityIds";
 import { useCrossSectionResource } from "@/kernel/resources/crossSectionResources";
 import {
+  useFdmRegionMembershipBinaryResource,
+  useFdmRegionMembershipResource,
   useMeshRegionMembershipsResource,
   useModelRegionsResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import {
   resolveFieldMetaResourceKey,
+  useMeshPeriodicPairsResource,
   useFieldMetaResource,
 } from "@/kernel/resources/studyRuntimeResources";
 import { useResource } from "@/kernel/resources/useResource";
@@ -95,6 +98,7 @@ import { startAnalysisFieldOverlayPhaseAnimation } from "@/kernel/visualization/
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import { resolveVisualizationEffectiveRenderMode } from "@/kernel/visualization/useVisualizationClientAck";
 import { resolveCrossSectionQueryFromVisualizationState } from "@/shared/domain/mesh/crossSectionQuery";
+import { buildPeriodicOverlayModel } from "@/shared/domain/mesh/periodicOverlayModel";
 
 import {
   mergeViewport3DFieldScalarColors,
@@ -2296,6 +2300,23 @@ export function useViewport3DSceneModel({
     () => adaptFdmDomainMeta(domainMeta.data, 120_000),
     [domainMeta.data],
   );
+  const fdmRegionMembership = useFdmRegionMembershipResource({
+    enabled: Boolean(fdmDomain),
+  });
+  const fdmRegionMembershipBinary = useFdmRegionMembershipBinaryResource(null, {
+    enabled: Boolean(fdmDomain && fdmRegionMembership.data),
+    revision: fdmRegionMembership.revision,
+  });
+  const fdmRealizedRegionIds = useMemo(() => {
+    const binary = fdmRegionMembershipBinary.data;
+    if (!binary || !fdmDomain) return null;
+    const shapeMatches = binary.counts.every(
+      (count, axis) => count === fdmDomain.shape[axis],
+    );
+    return shapeMatches && binary.cellCount === fdmDomain.totalCells
+      ? binary.regionIds
+      : null;
+  }, [fdmDomain, fdmRegionMembershipBinary.data]);
   const femDomain = useMemo(
     () => adaptFemSharedDomainManifest(sharedDomainManifest.data),
     [sharedDomainManifest.data],
@@ -2460,6 +2481,24 @@ export function useViewport3DSceneModel({
   }, [scene.data, sharedDomainManifest]);
   const topologyCurrent = isViewport3DTopologyCurrent(topologyFreshness);
   const topologyRenderable = isViewport3DTopologyRenderable(topologyFreshness);
+  const periodicPairs = useMeshPeriodicPairsResource({
+    enabled: topologyCurrent,
+  });
+  const periodicOverlayModel = useMemo(
+    () =>
+      buildPeriodicOverlayModel({
+        currentMeshRevision: sharedDomainManifest.data?.revision ?? null,
+        currentTopologyFingerprint: sharedDomainTopologyFingerprint,
+        resource: periodicPairs.data,
+        topology: topology.data,
+      }),
+    [
+      periodicPairs.data,
+      sharedDomainManifest.data?.revision,
+      sharedDomainTopologyFingerprint,
+      topology.data,
+    ],
+  );
   const regionMembershipIds = useMemo(
     () =>
       topologyCurrent
@@ -3534,7 +3573,7 @@ export function useViewport3DSceneModel({
   const fdmBuildTargetRevision =
     renderingState?.revision == null ? null : String(renderingState.revision);
   const fdmBuildSamplingRevision = fdmDomain
-    ? `shape=${fdmDomain.shape.join("x")}|display=${fdmDomain.displayCellCount}|total=${fdmDomain.totalCells}|stride=${fdmDomain.stride}`
+    ? `shape=${fdmDomain.shape.join("x")}|display=${fdmDomain.displayCellCount}|total=${fdmDomain.totalCells}|stride=${fdmDomain.stride}|membership=${fdmRegionMembership.revision ?? "none"}`
     : "none";
   const fdmBuildStyleRevision = [
     `fill=${visualProfile.voxelFillRatio}`,
@@ -3570,6 +3609,7 @@ export function useViewport3DSceneModel({
     groupKey: fdmBuildGroupKey,
     maxVectorGlyphs: fdmMaxVectorGlyphs,
     modelFieldVector: fdmInstanceModelFieldVector,
+    realizedRegionIds: fdmRealizedRegionIds,
     revisionSummary: `domain=${fdmBuildTopologyRevision ?? "none"} field=${fdmBuildFieldRevision ?? "none"} target=${fdmBuildTargetRevision ?? "none"}`,
     vectorAnchorMode: fdmVectorAnchorMode,
     vectorField: fdmVectorsVisible ? fdmFieldVector : null,
@@ -3829,6 +3869,19 @@ export function useViewport3DSceneModel({
       status: regionMemberships.status,
     },
     {
+      error:
+        fdmRegionMembership.error?.message ??
+        fdmRegionMembershipBinary.error?.message,
+      id: "fdm-region-membership",
+      revision:
+        fdmRegionMembershipBinary.revision ?? fdmRegionMembership.revision,
+      status:
+        fdmRegionMembershipBinary.status === "idle" &&
+        fdmRegionMembership.status !== "idle"
+          ? fdmRegionMembership.status
+          : fdmRegionMembershipBinary.status,
+    },
+    {
       error: scene.error?.message,
       id: "scene",
       revision: scene.revision,
@@ -3878,6 +3931,8 @@ export function useViewport3DSceneModel({
     domainSummary,
     fallbackSettings,
     fdmDomain,
+    fdmRegionMembership: fdmRegionMembership.data,
+    fdmRegionMembershipBinary: fdmRegionMembershipBinary.data,
     fdmInstanceModel: fdmInstanceModel,
     fdmSettings,
     fdmSurfaceColors,
@@ -3902,6 +3957,7 @@ export function useViewport3DSceneModel({
     meshQualityMetric,
     meshQualityOverlayVisible,
     meshRegionOverlayParts,
+    periodicOverlayModel,
     meshSizeHighlightModel,
     meshQualityRange: meshQualityColors?.range ?? null,
     meshRegionOverlays,

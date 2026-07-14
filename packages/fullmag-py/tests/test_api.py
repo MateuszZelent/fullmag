@@ -30,9 +30,52 @@ from fullmag.runtime.scene_document import build_builder_from_scene_document
 from fullmag.runtime.scene_document import builder_overrides_from_scene_document
 from fullmag.runtime.script_builder import export_builder_draft, rewrite_loaded_problem_script
 from fullmag.meshing.gmsh_bridge import MeshData
+from fullmag.model.problem import build_geometry_assets_for_request
 
 
 class ProblemApiTests(unittest.TestCase):
+    def test_fdm_grid_cache_ignores_region_only_changes(self) -> None:
+        geometry = fm.Cylinder(radius=10e-9, height=4e-9, name="film")
+        discretization = fm.DiscretizationHints(
+            fdm=fm.FDM(cell=(2e-9, 2e-9, 2e-9)),
+        )
+        voxels = VoxelMaskData(
+            mask=np.ones((2, 2, 5), dtype=np.bool_),
+            cell_size=(2e-9, 2e-9, 2e-9),
+            origin=(-2e-9, -2e-9, -5e-9),
+        )
+        cache: dict[str, dict[str, object] | None] = {}
+        region_a = [{"region_id": "film:core", "material_ref": "mat:a"}]
+        region_b = [{"region_id": "film:core", "material_ref": "mat:b"}]
+
+        with patch("fullmag.meshing.realize_fdm_grid_asset", return_value=voxels) as mocked:
+            first = build_geometry_assets_for_request(
+                requested_backend=fm.BackendTarget.FDM,
+                geometries=[geometry],
+                discretization=discretization,
+                object_regions=region_a,
+                asset_cache=cache,
+            )
+            second = build_geometry_assets_for_request(
+                requested_backend=fm.BackendTarget.FDM,
+                geometries=[geometry],
+                discretization=discretization,
+                object_regions=region_b,
+                asset_cache=cache,
+            )
+            third = build_geometry_assets_for_request(
+                requested_backend=fm.BackendTarget.FDM,
+                geometries=[geometry],
+                discretization=fm.DiscretizationHints(
+                    fdm=fm.FDM(cell=(1e-9, 2e-9, 2e-9)),
+                ),
+                object_regions=region_b,
+                asset_cache=cache,
+            )
+
+        self.assertEqual(mocked.call_count, 2)
+        self.assertEqual(first, second)
+        self.assertEqual(third, first)
     def test_script_builder_preserves_frozen_magnetic_submesh_source_in_global_mesh_config(self) -> None:
         from fullmag.runtime.script_builder import _study_global_mesh_config
 
@@ -1135,6 +1178,43 @@ class ProblemApiTests(unittest.TestCase):
             )
         finally:
             fm.reset()
+
+    def test_canonical_script_round_trip_preserves_problem_pbc(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("canonical_pbc_round_trip")
+        study.engine("fem")
+        body = study.geometry(fm.Box(size=(20e-9, 20e-9, 5e-9), name="film"), name="film")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.texture.uniform(1, 0, 0)
+        study.pbc(x=True, y=True, demag="periodic_airbox_k0")
+        study.relax(max_steps=2)
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            source_path = Path(tmp_dir) / "canonical_pbc_source.py"
+            source_path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(source_path, lightweight_assets=True)
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            self.assertIn(
+                'study.pbc(x=True, y=True, demag="periodic_airbox_k0")',
+                rendered,
+            )
+
+            round_trip_path = Path(tmp_dir) / "canonical_pbc_round_trip.py"
+            round_trip_path.write_text(rendered, encoding="utf-8")
+            round_tripped = fm.load_problem_from_script(
+                round_trip_path,
+                lightweight_assets=True,
+            )
+
+        self.assertEqual(
+            loaded.problem.to_ir(include_geometry_assets=False)["pbc"],
+            round_tripped.problem.to_ir(include_geometry_assets=False)["pbc"],
+        )
 
     def test_eigenmodes_serializes_floquet_pair_ids(self) -> None:
         problem = replace(
@@ -3563,6 +3643,74 @@ class ProblemApiTests(unittest.TestCase):
     def test_from_function_is_deferred_stub(self) -> None:
         with self.assertRaises(NotImplementedError):
             fm.init.from_function(lambda point: point)
+
+    def test_fdm_per_magnet_round_trip_preserves_missing_default(self) -> None:
+        hints = fm.FDM(
+            default_cell=None,
+            per_magnet={
+                "left": fm.FDMGrid(cell=(1e-9, 2e-9, 3e-9)),
+                "right": fm.FDMGrid(cell=(2e-9, 2e-9, 3e-9)),
+            },
+        )
+
+        payload = hints.to_ir()
+
+        self.assertNotIn("default_cell", payload)
+        self.assertEqual(payload["per_magnet"]["left"]["cell"], [1e-9, 2e-9, 3e-9])
+        self.assertEqual(payload["per_magnet"]["right"]["cell"], [2e-9, 2e-9, 3e-9])
+
+    def test_script_export_preserves_per_magnet_fdm_grids(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            script_path = Path(tmp_dir) / "per_magnet_export.py"
+            script_path.write_text(
+                textwrap.dedent(
+                    """
+                    import fullmag as fm
+
+                    fm.engine("fdm")
+                    fm.fdm(
+                        per_magnet={
+                            "left": fm.FDMGrid(cell=(1e-9, 2e-9, 3e-9)),
+                            "right": fm.FDMGrid(cell=(2e-9, 2e-9, 3e-9)),
+                        },
+                        demag=fm.FDMDemag(
+                            strategy="multilayer_convolution",
+                            mode="two_d_stack",
+                            common_cells_xy=(32, 32),
+                            explain=False,
+                        ),
+                        boundary_phi_floor=0.1,
+                        boundary_delta_min=0.2e-9,
+                    )
+                    left = fm.geometry(fm.Box(size=(10e-9, 10e-9, 3e-9), name="left"), name="left")
+                    right = fm.geometry(fm.Box(size=(10e-9, 10e-9, 3e-9), name="right"), name="right")
+                    left.Ms = right.Ms = 800e3
+                    left.Aex = right.Aex = 13e-12
+                    fm.run(1e-12)
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            loaded = load_problem_from_script(script_path, lightweight_assets=True)
+            rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            self.assertIn('fm.fdm(per_magnet={"left": fm.FDMGrid', rewritten)
+            self.assertIn('demag=fm.FDMDemag(strategy="multilayer_convolution"', rewritten)
+
+            rewritten_path = Path(tmp_dir) / "per_magnet_export_rewritten.py"
+            rewritten_path.write_text(rewritten, encoding="utf-8")
+            round_tripped = load_problem_from_script(rewritten_path, lightweight_assets=True)
+
+        fdm = round_tripped.problem.discretization.fdm
+        self.assertIsNotNone(fdm)
+        self.assertIsNone(fdm.default_cell)
+        self.assertEqual(fdm.per_magnet["left"].cell, (1e-9, 2e-9, 3e-9))
+        self.assertEqual(fdm.per_magnet["right"].cell, (2e-9, 2e-9, 3e-9))
+        self.assertEqual(fdm.demag.strategy, "multilayer_convolution")
+        self.assertEqual(fdm.demag.common_cells_xy, (32, 32))
+        self.assertFalse(fdm.demag.explain)
+        self.assertEqual(fdm.boundary_phi_floor, 0.1)
+        self.assertEqual(fdm.boundary_delta_min, 0.2e-9)
 
     def test_simulation_overrides_backend_mode_and_precision(self) -> None:
         problem = self._build_problem()

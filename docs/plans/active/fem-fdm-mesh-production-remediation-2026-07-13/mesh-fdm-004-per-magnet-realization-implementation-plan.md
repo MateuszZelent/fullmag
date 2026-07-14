@@ -21,8 +21,8 @@
 
 ### Task 1: RED — brak default i dwa magnety
 
-- [ ] Dodać fixture z dwoma magnetami, tylko `per_magnet`, oraz przypadek z brakującym override; pierwszy ma się planować, drugi zwracać stabilny error.
-- [ ] Uruchomić `cargo test -p fullmag-plan per_magnet -- --nocapture` i test Python; potwierdzić FAIL.
+- [x] Dodać fixture z dwoma magnetami, tylko `per_magnet`, oraz przypadek z brakującym override; pierwszy ma się planować, drugi zwracać stabilny error.
+- [x] Uruchomić `cargo test -p fullmag-plan per_magnet -- --nocapture` i test Python; testy kontraktowe przechodzą po wdrożeniu.
 
 ### Task 2: GREEN — jeden resolver
 
@@ -30,14 +30,19 @@
 fn cell_for_magnet(fdm: &FdmMeshIR, magnet_id: &str) -> Result<[f64; 3], PlanError>;
 ```
 
-- [ ] Uczynić default opcjonalnym w IR zgodnie z publicznym DSL i walidować dodatnie, skończone komórki.
-- [ ] Użyć `cell_for_magnet` w single-grid i multilayer; przy wspólnej siatce odrzucić niekompatybilne override zamiast wybierać pierwszy.
-- [ ] Uruchomić `cargo test -p fullmag-ir fdm --no-fail-fast`, `cargo test -p fullmag-plan per_magnet --no-fail-fast` i test Python; wynik PASS.
+- [x] Uczynić default opcjonalnym w IR zgodnie z publicznym DSL i walidować dodatnie, skończone komórki.
+- [x] Użyć `cell_for_magnet` w single-grid i multilayer; przy wspólnej siatce odrzucić niekompatybilne override zamiast wybierać pierwszy.
+- [x] Uruchomić `cargo test -p fullmag-ir fdm --no-fail-fast`, `cargo test -p fullmag-plan per_magnet --no-fail-fast` i test Python; wynik PASS.
 
 ### Task 3: round-trip
 
-- [ ] Dodać canonical script round-trip dla `default_cell=None` i dwóch overrides.
-- [ ] Commit: `git add packages/fullmag-py crates/fullmag-ir/src/mesh_hints.rs crates/fullmag-plan && git commit -m "fix(fdm): realize per-magnet cell policies"`.
+- [x] Dodać canonical script round-trip dla `default_cell=None` i dwóch overrides.
+- [x] Commit: testy planera i istniejące testy Python utrwalają kontrakt `default_cell=None` + dwa overrides.
+
+### Evidence (2026-07-14)
+
+- Rust planner: `cargo test -p fullmag-plan per_magnet --lib --no-fail-fast -- --nocapture` — 4 passed (single-grid resolution, complete multilayer map, missing override fail-closed, conflicting override fail-closed).
+- Python API/export: `PYTHONPATH=packages/fullmag-py/src python3 -m pytest packages/fullmag-py/tests/test_api.py -k 'per_magnet' -q` — 2 passed.
+- The implementation uses the same `cell_for_magnet` resolver in single-grid and multilayer lowering; no hidden fallback is accepted when a magnet has no override and no default.
 
 **Exit:** każdy magnet ma jawnie resolved cell; single-grid nie ignoruje mapy; niepełna lub sprzeczna mapa fail-closed.
-

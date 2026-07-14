@@ -38,6 +38,10 @@ MAX_STATIC_SUPERCELL_H_DEMAG_STATS_RELERR = 2.0e-2
 MAX_STATIC_SUPERCELL_DEMAG_PHI_DELTA_A = 1.0e-6
 MAX_STATIC_SUPERCELL_TORQUE_RELERR = 2.0e-1
 MAX_STATIC_SUPERCELL_RELAXATION_STATE_MEAN_DEVIATION_RELERR = 2.0e-1
+MAX_STATIC_SUPERCELL_MAPPED_M_P99_L2_DELTA = 2.0e-2
+MAX_STATIC_SUPERCELL_MAPPED_H_DEMAG_P99_RELERR = 2.0e-2
+MAX_STATIC_SUPERCELL_MAPPED_DEMAG_PHI_DELTA_A = 1.0e-6
+MAX_STATIC_SUPERCELL_MAPPED_NEAREST_DISTANCE_M = 1.0e-12
 MAX_STATIC_SUPERCELL_INTERPOLATED_M_P99_L2_DELTA = 2.0e-2
 MAX_STATIC_SUPERCELL_INTERPOLATED_H_DEMAG_P99_RELERR = 2.0e-2
 MAX_STATIC_SUPERCELL_INTERPOLATED_DEMAG_PHI_DELTA_A = 1.0e-6
@@ -196,7 +200,10 @@ def require_list(value: Any, name: str) -> list[Any]:
 
 
 def require_finite_number(value: Any, name: str) -> float:
-    require(isinstance(value, (int, float)), f"{name} must be a finite number")
+    require(
+        isinstance(value, (int, float)) and not isinstance(value, bool),
+        f"{name} must be a finite number",
+    )
     number = float(value)
     require(math.isfinite(number), f"{name} must be finite")
     return number
@@ -212,7 +219,10 @@ def load_last_json_object(text: str) -> dict[str, Any]:
             value, _ = decoder.raw_decode(text[index:])
         except json.JSONDecodeError:
             continue
-        if isinstance(value, dict):
+        # The summary is a pretty-printed top-level object containing nested
+        # execution metadata. Prefer the object carrying the run identity
+        # instead of letting the last nested `{...}` win.
+        if isinstance(value, dict) and "status" in value and "artifact_dir" in value:
             last = value
     if last is None:
         fail("runtime log does not contain a JSON run summary")
@@ -1944,13 +1954,13 @@ def validate_supercell_interpolated_comparability(report: dict[str, Any]) -> dic
     for key in ("field_sample_count", "field_located_count", "magnetic_sample_count", "magnetic_located_count"):
         value = interpolated.get(key)
         require(
-            isinstance(value, int) and value > 0,
+            isinstance(value, int) and not isinstance(value, bool) and value > 0,
             f"supercell comparison report interpolated_central_cell_comparability.{key} must be positive",
         )
     for key in ("field_missed_count", "magnetic_missed_count"):
         value = interpolated.get(key)
         require(
-            isinstance(value, int) and value >= 0,
+            isinstance(value, int) and not isinstance(value, bool) and value >= 0,
             f"supercell comparison report interpolated_central_cell_comparability.{key} must be non-negative",
         )
     for key in ("field_coverage_ratio", "magnetic_coverage_ratio"):
@@ -1961,6 +1971,27 @@ def validate_supercell_interpolated_comparability(report: dict[str, Any]) -> dic
         require(
             0.0 <= value <= 1.0,
             f"supercell comparison report interpolated_central_cell_comparability.{key} must be in [0, 1]",
+        )
+    for prefix in ("field", "magnetic"):
+        sample_count = interpolated[f"{prefix}_sample_count"]
+        located_count = interpolated[f"{prefix}_located_count"]
+        missed_count = interpolated[f"{prefix}_missed_count"]
+        coverage_ratio = interpolated[f"{prefix}_coverage_ratio"]
+        require(
+            located_count + missed_count == sample_count,
+            (
+                "supercell comparison report interpolated_central_cell_comparability."
+                f"{prefix}_located_count + {prefix}_missed_count must equal "
+                f"{prefix}_sample_count"
+            ),
+        )
+        require(
+            coverage_ratio == located_count / sample_count,
+            (
+                "supercell comparison report interpolated_central_cell_comparability."
+                f"{prefix}_coverage_ratio must equal {prefix}_located_count / "
+                f"{prefix}_sample_count"
+            ),
         )
     barycentric_tolerance = require_finite_number(
         interpolated.get("barycentric_tolerance"),
@@ -2086,6 +2117,21 @@ def validate_static_supercell_report(report: dict[str, Any], *, expected_workloa
                 "mapped_central_cell_comparability"
             ),
         )
+    same_local_limit_m = require_finite_number(
+        mapped.get("same_local_discretization_limit_m"),
+        (
+            "supercell comparison report mapped_central_cell_comparability."
+            "same_local_discretization_limit_m"
+        ),
+    )
+    require(
+        same_local_limit_m <= MAX_STATIC_SUPERCELL_MAPPED_NEAREST_DISTANCE_M,
+        (
+            "supercell comparison report mapped_central_cell_comparability."
+            "same_local_discretization_limit_m must be <= "
+            f"{MAX_STATIC_SUPERCELL_MAPPED_NEAREST_DISTANCE_M}"
+        ),
+    )
     validate_static_comparison_metric_limits(
         metrics,
         report_name="supercell",
@@ -2098,7 +2144,25 @@ def validate_static_supercell_report(report: dict[str, Any], *, expected_workloa
             "relaxation_state_mean_deviation_relative_error": (
                 MAX_STATIC_SUPERCELL_RELAXATION_STATE_MEAN_DEVIATION_RELERR
             ),
+            "mapped_m_p99_l2_delta": MAX_STATIC_SUPERCELL_MAPPED_M_P99_L2_DELTA,
+            "mapped_h_demag_p99_relative_error": MAX_STATIC_SUPERCELL_MAPPED_H_DEMAG_P99_RELERR,
+            "mapped_demag_phi_max_abs_delta_after_offset_A": (
+                MAX_STATIC_SUPERCELL_MAPPED_DEMAG_PHI_DELTA_A
+            ),
+            "mapped_max_nearest_field_node_distance_m": (
+                MAX_STATIC_SUPERCELL_MAPPED_NEAREST_DISTANCE_M
+            ),
+            "mapped_max_nearest_magnetic_node_distance_m": (
+                MAX_STATIC_SUPERCELL_MAPPED_NEAREST_DISTANCE_M
+            ),
         },
+    )
+    require(
+        mapped.get("same_local_discretization") is True,
+        (
+            "supercell comparison report mapped_central_cell_comparability."
+            "same_local_discretization must be true"
+        ),
     )
 
 
@@ -2160,7 +2224,7 @@ def validate_repeated_state_supercell_report(
     *,
     expected_workload: dict[str, Any],
 ) -> None:
-    validate_static_supercell_report(report, expected_workload=expected_workload)
+    validate_interpolated_supercell_report(report, expected_workload=expected_workload)
     override = require_object(
         report.get("supercell_initial_magnetization_state_override"),
         "supercell comparison report supercell_initial_magnetization_state_override",

@@ -1213,6 +1213,12 @@ def _build_field_stack(
             r_order = mesh_policy.get("order")
             if r_order is not None:
                 r_order = int(r_order)
+                if r_order != 1:
+                    raise ValueError(
+                        "region_mesh_policy_order_unsupported: "
+                        f"region='{region.get('region_id') or region.get('name')}' "
+                        f"requested_order={r_order}; only first-order mesh extraction is supported"
+                    )
             r_trans = mesh_policy.get("transition_distance")
             if r_trans is not None:
                 r_trans = float(r_trans)
@@ -1566,36 +1572,9 @@ def _mesh_options_from_runtime_metadata(
     patch_object_regions = patch.get("object_regions") if isinstance(patch, Mapping) else None
     effective_object_regions = patch_object_regions or object_regions
 
-    def _object_region_hmin() -> float | None:
-        if not include_size_fields or not isinstance(effective_object_regions, list):
-            return None
-        values: list[float] = []
-        for region in effective_object_regions:
-            if not isinstance(region, Mapping) or region.get("enabled", True) is False:
-                continue
-            mesh_policy = region.get("mesh_policy")
-            if not isinstance(mesh_policy, Mapping):
-                continue
-            maximum_element_size = _coerce_positive_float(
-                mesh_policy.get("maximum_element_size")
-            )
-            if maximum_element_size is None:
-                continue
-            values.append(maximum_element_size)
-            minimum_element_size = _coerce_positive_float(
-                mesh_policy.get("minimum_element_size")
-            )
-            if minimum_element_size is not None:
-                values.append(minimum_element_size)
-        return min(values) if values else None
-
     def _mesh_hmin_value() -> object | None:
         values = [
-            value
-            for value in (
-                _mesh_option_value("hmin", "minimum_element_size", reducer="min"),
-                _object_region_hmin(),
-            )
+            value for value in (_mesh_option_value("hmin", "minimum_element_size", reducer="min"),)
             if isinstance(value, (int, float))
         ]
         return min(values) if values else None

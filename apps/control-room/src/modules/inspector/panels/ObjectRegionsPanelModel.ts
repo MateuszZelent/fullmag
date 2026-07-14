@@ -774,6 +774,13 @@ export function objectRegionDraftIdentityKey(
   return [model.mode, model.objectId, model.regionId ?? "unassigned"].join(":");
 }
 
+export function objectRegionDraftDirty(
+  draft: ObjectRegionDraft,
+  baseDraft: ObjectRegionDraft,
+): boolean {
+  return JSON.stringify(draft) !== JSON.stringify(baseDraft);
+}
+
 export function validateObjectRegionDraft(draft: ObjectRegionDraft): string[] {
   const errors: string[] = [];
   if (draft.name.trim().length === 0) {

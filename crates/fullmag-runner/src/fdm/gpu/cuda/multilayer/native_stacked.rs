@@ -62,7 +62,21 @@ pub(super) fn build_native_stacked_cuda_plan(
         global_grid[1] as usize,
         global_grid[2] as usize,
     ];
-    let total_cells = global_grid_usize[0] * global_grid_usize[1] * global_grid_usize[2];
+    let total_cells = fullmag_plan::checked_fdm_grid_cost(
+        global_grid,
+        fullmag_plan::FDM_GRID_ESTIMATED_BYTES_PER_CELL,
+    )
+    .map_err(|error| RunError {
+        message: format!("native stacked global grid budget rejected before allocation: {error}"),
+    })
+    .and_then(|cost| {
+        usize::try_from(cost.cells).map_err(|_| RunError {
+            message: format!(
+                "native stacked global grid cell count {} is not addressable",
+                cost.cells
+            ),
+        })
+    })?;
     let mut active_mask = vec![false; total_cells];
     let mut region_mask = vec![0u32; total_cells];
     let mut initial_magnetization = vec![[0.0, 0.0, 0.0]; total_cells];

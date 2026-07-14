@@ -21,18 +21,26 @@
 
 ### Task 1: RED panel/status tests
 
-- [ ] Dodać model/render tests dla inherited, draft changed, rebuild required, build pending, current realized, stale marker, unsupported FDM i failed build.
+- [x] Dodać model/render tests dla inherited, draft changed, rebuild required, build pending, current realized, stale marker, unsupported FDM i failed build.
 - [ ] Zmienić browser smoke, który obecnie oczekuje `mesh=preserved`, aby po conformal/policy edit oczekiwał stale i zablokowanego runu.
 
 ### Task 2: Apply & Build i realized badge
 
-- [ ] Podłączyć `ObjectRegionMeshPanel` do shared draft registration i command registry; `Apply` zapisuje draft, `Apply & Build` uruchamia canonical mesh command.
-- [ ] Renderować requested/resolved policy, generation ID, marker status i actionable stale reason z named resources.
-- [ ] Explorer badge liczyć z realized resource; declaration-only ma status `configured`, nie `ready`.
+- [x] Podłączyć `ObjectRegionMeshPanel` do shared draft registration i command registry; `Apply` zapisuje draft, `Apply & Build` uruchamia canonical mesh command.
+- [x] Renderować requested/resolved policy, generation ID, marker status i actionable stale reason z named resources.
+- [x] Explorer badge liczyć z realized resource; declaration-only ma status `configured`, nie `ready`.
 
 ### Task 3: UI/browser proof
 
 - [ ] Uruchomić focused Inspector/Explorer tests, typecheck, zero-warning lint, pełny Vitest i real browser/WebGL smoke z visible current/stale transition.
 - [ ] Commit: `git add apps/control-room docs/specs/frontend-v2/24-geometry-object-authoring-lifecycle.md && git commit -m "fix(ui): complete region mesh build lifecycle"`.
+
+### Partial evidence (2026-07-14)
+
+- `regionMeshLifecycle.ts` centralizuje statusy `configured`, `draft`, `pending`, `current`, `stale`, `failed` i `unsupported`; `current` wymaga świeżego conformal membership, generation ID i topology fingerprint.
+- `ObjectRegionsPanel` pobiera wyłącznie named resources (`useMeshRegionMembershipResource`, `useMeshBuildCurrent`) i uruchamia `mesh.build-shared-domain` przez command registry; build zatrzymuje się po nieudanym Apply.
+- Explorer pobiera revision-aware membership list i nie pokazuje `ready` dla samej authored policy; bieżący membership daje `mesh-ready`, a stale/pending/failed odpowiednio `mesh-stale`/`mesh-building`/`mesh-failed`.
+- Evidence: `TMPDIR=/tmp pnpm --dir apps/control-room exec vitest run src/shared/domain/mesh/regionMeshLifecycle.test.ts src/modules/inspector/panels/ObjectRegionsPanel.test.ts src/modules/explorer/builders/buildModelTree.test.ts src/modules/inspector/panels/ScopedMeshQualityPanels.test.tsx` — 56 passed; `pnpm --dir apps/control-room typecheck` — pass; focused ESLint changed files — pass.
+- Nadal otwarte: browser smoke z rzeczywistą zmianą current/stale, pełny Vitest/lint (istnieje niezależne ostrzeżenie `StudyStageAuthoringModel.test.ts`), backend marker certificate oraz managed runtime gates.
 
 **Exit:** użytkownik nie może pomylić zapisanej polityki regionu z jej realizacją w bieżącej siatce.

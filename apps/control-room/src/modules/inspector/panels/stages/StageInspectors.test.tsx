@@ -687,6 +687,9 @@ describe("Study stage inspectors", () => {
     expect(html).toContain("Excitation");
     expect(html).toContain("Excitation phase");
     expect(html).toContain("Save stage");
+    expect(html).not.toMatch(
+      /<button[^>]*disabled=""[^>]*>.*Save stage.*<\/button>/,
+    );
     expect(html).not.toContain("Frequencies");
     expect(html).not.toContain("k sampling");
   });

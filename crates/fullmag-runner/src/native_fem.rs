@@ -845,6 +845,12 @@ impl NativeFemBackend {
         } else {
             plan
         };
+        fullmag_ir::validate_mesh_for_execution(&plan.mesh).map_err(|errors| RunError {
+            message: format!(
+                "native FEM mesh validation failed before ABI packaging: {}",
+                errors.join("; ")
+            ),
+        })?;
         if matches!(
             plan.domain_mesh_mode,
             fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh
@@ -2776,6 +2782,17 @@ mod tests {
     }
 
     #[test]
+    fn native_fem_rejects_corrupt_mesh_before_ffi_packaging() {
+        let mut plan = make_test_plan();
+        plan.mesh.elements = vec![[0, 1, 3, 2]];
+
+        let error = NativeFemBackend::create_with_initial_effective_field(&plan, false)
+            .expect_err("inverted mesh must fail before native ABI packaging");
+        assert!(error.message.contains("negative tetra orientation"));
+        assert!(error.message.contains("before ABI packaging"));
+    }
+
+    #[test]
     fn native_fem_completion_uses_canonical_metric_ids() {
         let source = include_str!("../../../backends/fem/cpu/mfem/runtime/stage_completion.cpp");
         assert!(!source.contains("\"max_torque_Apm\""));
@@ -2857,6 +2874,7 @@ mod tests {
             },
             object_segments: Vec::new(),
             mesh_parts: Vec::new(),
+            mesh_build_report: None,
             domain_mesh_mode: fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh,
             domain_frame: None,
             fe_order: 1,
@@ -4188,6 +4206,7 @@ mod tests {
             },
             object_segments: Vec::new(),
             mesh_parts: Vec::new(),
+            mesh_build_report: None,
             domain_mesh_mode: fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh,
             domain_frame: None,
             fe_order: 1,

@@ -6,6 +6,7 @@ fn make_plan(enable_demag: bool, precision: ExecutionPrecision) -> FdmMultilayer
     FdmMultilayerPlanIR {
         mode: "two_d_stack".to_string(),
         common_cells: [4, 4, 1],
+        resolved_periodic_images: None,
         layers: vec![
             FdmLayerPlanIR {
                 magnet_name: "free".to_string(),
@@ -88,6 +89,7 @@ fn make_touching_plan(precision: ExecutionPrecision) -> FdmMultilayerPlanIR {
     FdmMultilayerPlanIR {
         mode: "three_d".to_string(),
         common_cells: [2, 1, 1],
+        resolved_periodic_images: None,
         field_refresh: None,
         layers: vec![
             FdmLayerPlanIR {

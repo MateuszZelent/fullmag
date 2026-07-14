@@ -287,6 +287,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::meshing::get_mesh_periodic_pairs),
         )
         .route(
+            "/v2/sessions/current/meshing/mesh/periodic_pairs.v1.bin",
+            get(handlers::meshing::get_mesh_periodic_pairs_binary),
+        )
+        .route(
             "/v2/sessions/current/meshing/meshes/objects/:object_id/topology",
             get(handlers::meshing::get_mesh_object_topology),
         )
@@ -431,6 +435,18 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         .route(
             "/v2/sessions/current/data/mesh-region-memberships",
             get(handlers::data::get_mesh_region_memberships),
+        )
+        .route(
+            "/v2/sessions/current/data/fdm-region-memberships",
+            get(handlers::data::get_fdm_region_memberships),
+        )
+        .route(
+            "/v2/sessions/current/data/fdm-region-membership",
+            get(handlers::data::get_fdm_region_membership_binary),
+        )
+        .route(
+            "/v2/sessions/current/data/fdm-region-membership/:region_id",
+            get(handlers::data::get_fdm_region_membership_binary_scoped),
         )
         .route(
             "/v2/sessions/current/data/fields/:quantity_id/meta",

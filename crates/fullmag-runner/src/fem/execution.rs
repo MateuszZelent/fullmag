@@ -6,7 +6,10 @@ use crate::artifact_pipeline::ArtifactPipelineSender;
 #[cfg(feature = "fem-gpu")]
 use crate::artifact_pipeline::ArtifactRecorder;
 use crate::fem::eigen_path::execute_fem_eigen_path;
-use crate::fem::pbc::{fem_static_periodic_decision, FemStaticPbcLane};
+use crate::fem::pbc::{
+    fem_static_periodic_decision, validate_periodic_region_material_certificate,
+    FemStaticPbcLane,
+};
 use crate::fem::plan::normalized_fem_plan_for_runtime;
 use crate::fem::preview::{fem_plan_for_cpu_native, fem_plan_for_native_gpu};
 #[cfg(feature = "fem-gpu")]
@@ -48,6 +51,13 @@ pub(crate) fn execute_fem<'a>(
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
     let normalized_plan = normalized_fem_plan_for_runtime(plan)?;
+    if let Err(reason) = validate_periodic_region_material_certificate(&normalized_plan) {
+        return Err(RunError {
+            message: format!(
+                "FEM periodic region/material certificate rejected before native allocation: {reason}"
+            ),
+        });
+    }
     let pbc_decision = fem_static_periodic_decision(&normalized_plan);
     match pbc_decision.lane {
         FemStaticPbcLane::Unsupported => {

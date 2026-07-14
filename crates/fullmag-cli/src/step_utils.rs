@@ -2898,12 +2898,7 @@ pub(crate) fn resample_continuation_if_cross_backend(
                 grid_cells[2] as usize,
             ];
 
-            // For single-body FDM, the grid is centered at the origin.
-            let grid_origin = [
-                -(grid_cells[0] as f64 * cell_size[0]) * 0.5,
-                -(grid_cells[1] as f64 * cell_size[1]) * 0.5,
-                -(grid_cells[2] as f64 * cell_size[2]) * 0.5,
-            ];
+            let grid_origin = fdm_plan.origin_m;
 
             // Build MeshTopology from the FEM plan's MeshIR.
             let topo = MeshTopology::from_ir(fem_mesh_ir).map_err(|e| {
@@ -3388,6 +3383,7 @@ mod tests {
                 periodic_node_pairs: Vec::new(),
                 per_domain_quality: std::collections::HashMap::new(),
             },
+            mesh_build_report: None,
             object_segments: Vec::new(),
             mesh_parts: Vec::new(),
             domain_mesh_mode: fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh,

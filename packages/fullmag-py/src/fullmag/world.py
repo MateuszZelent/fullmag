@@ -100,7 +100,7 @@ from fullmag.model.problem import (
     resolve_geometry_sources,
     RuntimeSelection,
 )
-from fullmag.model.discretization import FDM, FEM, FemLinearSolverPolicy
+from fullmag.model.discretization import FDM, FDMGrid, FEM, FDMDemag, FemLinearSolverPolicy
 from fullmag.model.geometry import Box, Translate
 from fullmag.model.eigen import serialize_dispersion_validation, serialize_k0_kittel_validation
 
@@ -1800,6 +1800,7 @@ class _WorldState:
 
     # Grid
     _cell: tuple[float, float, float] | None = None
+    _fdm: FDM | None = None
     _hmax: float | str | None = None
     _fem_order: int = 1
     _mesh_source: str | None = None
@@ -3679,6 +3680,26 @@ class StudyBuilder:
         cell(dx, dy, dz)
         return self
 
+    def fdm(
+        self,
+        *,
+        default_cell: Sequence[float] | None = None,
+        per_magnet: Mapping[str, FDMGrid] | None = None,
+        demag: FDMDemag | None = None,
+        boundary_correction: str | None = None,
+        boundary_phi_floor: float | None = None,
+        boundary_delta_min: float | None = None,
+    ) -> "StudyBuilder":
+        fdm(
+            default_cell=default_cell,
+            per_magnet=per_magnet,
+            demag=demag,
+            boundary_correction=boundary_correction,
+            boundary_phi_floor=boundary_phi_floor,
+            boundary_delta_min=boundary_delta_min,
+        )
+        return self
+
     def boundary_correction(self, mode: str) -> "StudyBuilder":
         boundary_correction(mode)
         return self
@@ -4349,7 +4370,34 @@ def fem_demag_solver(
 
 def cell(dx: float, dy: float, dz: float) -> None:
     """Set FDM cell size in meters."""
+    _state._fdm = None
     _state._cell = (dx, dy, dz)
+
+
+def fdm(
+    *,
+    default_cell: Sequence[float] | None = None,
+    per_magnet: Mapping[str, FDMGrid] | None = None,
+    demag: FDMDemag | None = None,
+    boundary_correction: str | None = None,
+    boundary_phi_floor: float | None = None,
+    boundary_delta_min: float | None = None,
+) -> FDM:
+    """Set complete FDM hints, including native per-magnet grids."""
+    policy = FDM(
+        default_cell=default_cell,
+        per_magnet=dict(per_magnet) if per_magnet is not None else None,
+        demag=demag,
+        boundary_correction=boundary_correction,
+        boundary_phi_floor=boundary_phi_floor,
+        boundary_delta_min=boundary_delta_min,
+    )
+    _state._fdm = policy
+    if policy.default_cell is not None:
+        _state._cell = policy.default_cell
+    if policy.boundary_correction is not None:
+        _state._boundary_correction = policy.boundary_correction
+    return policy
 
 
 def boundary_correction(mode: str) -> None:
@@ -6177,7 +6225,9 @@ def _build_problem(
 
     # Discretization
     disc_kwargs: dict[str, Any] = {}
-    if s._cell is not None:
+    if s._fdm is not None:
+        disc_kwargs["fdm"] = s._fdm
+    elif s._cell is not None:
         fdm_kwargs: dict[str, Any] = {"cell": s._cell}
         if s._boundary_correction is not None:
             fdm_kwargs["boundary_correction"] = s._boundary_correction

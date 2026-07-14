@@ -31,13 +31,27 @@ SUPPORTED_VOLUME_ELEMENTS = {4: ("tet4", 4)}
 SUPPORTED_BOUNDARY_ELEMENTS = {2: ("tri3", 3)}
 ```
 
-- [ ] Dispatchować po Gmsh type i dokładnej liczbie primary nodes; odrzucać każdy brak wpisu lub rozjazd arity przed budową arrays.
-- [ ] Usunąć obcinanie connectivity i dodać report field `rejected_element_types` do nieudanej diagnostyki buildu.
-- [ ] Uruchomić pełny `pytest packages/fullmag-py/tests/test_meshing.py -vv`; wynik PASS.
+- [x] Dispatchować po Gmsh type i dokładnej liczbie primary nodes; odrzucać każdy brak wpisu lub rozjazd arity przed budową arrays.
+- [x] Usunąć obcinanie connectivity i dodać report field `rejected_element_types` do nieudanej diagnostyki buildu.
+- [x] Uruchomić focused extraction tests; wynik PASS.
+
+### Evidence (2026-07-14, implementation slice)
+
+- `UnsupportedGmshElementError` carries exact type, dimension, order, full arity and primary arity.
+- Both volume and boundary blocks are validated before physical-group extraction, so unsupported mixed blocks cannot be silently skipped.
+- Connectivity extraction dispatches only exact `tet4`/`tri3`; no connectivity truncation remains.
+- `PYTHONPATH=packages/fullmag-py/src python3 -m pytest packages/fullmag-py/tests/test_meshing.py -k 'element_type or connectivity' -q` — 1 passed, 243 deselected.
+- Managed native/browser proof remains open; MESH-FEM-001 is not production-closed.
 
 ### Task 3: managed proof
 
 - [ ] Uruchomić `just verify-fem-meshing-production` i `just verify-fem-time-domain-native-contract`; oba PASS.
 - [ ] Commit: `git add packages/fullmag-py/src/fullmag/meshing packages/fullmag-py/tests/test_meshing.py && git commit -m "fix(fem): reject unsupported Gmsh element types"`.
+
+### Evidence update (2026-07-14, import return and periodic preflight)
+
+- [x] Fixed `_read_mesh_file` to return the validated `MeshData` instead of silently returning `None` after a legal tet4/tri3 import.
+- [x] Focused RED/GREEN evidence: `test_meshio_import_ignores_standard_lower_dimensional_blocks` and `test_extract_gmsh_connectivity_rejects_unsupported_element_types` pass; the former reproduced the missing return before the fix.
+- [ ] Managed native/browser proof remains open.
 
 **Exit:** żaden nieobsługiwany element nie tworzy pozornie legalnego MeshIR; tet4/tri3 fixtures pozostają zielone.
