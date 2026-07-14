@@ -13,6 +13,16 @@ use std::collections::BTreeSet;
 pub(crate) fn validate_single_grid_budget(
     plan: &fullmag_ir::FdmPlanIR,
 ) -> Result<u64, RunError> {
+    // Production callers always use strict certificate enforcement.  The
+    // cfg(test) opt-in below exists only for legacy hand-built unit fixtures;
+    // planner-produced plans never take this compatibility path.
+    validate_single_grid_budget_with_policy(plan, cfg!(test))
+}
+
+fn validate_single_grid_budget_with_policy(
+    plan: &fullmag_ir::FdmPlanIR,
+    allow_legacy_fixture: bool,
+) -> Result<u64, RunError> {
     if plan.origin_m.iter().any(|component| !component.is_finite()) {
         return Err(RunError {
             message: format!(
@@ -32,8 +42,7 @@ pub(crate) fn validate_single_grid_budget(
     let certificate = match plan.grid_certificate.as_ref() {
         Some(certificate) => certificate,
         None => {
-            #[cfg(test)]
-            {
+            if allow_legacy_fixture {
                 _legacy_certificate = fullmag_ir::FdmGridCertificateIR::new_with_masks(
                     plan.origin_m,
                     plan.grid.cells,
@@ -54,9 +63,7 @@ pub(crate) fn validate_single_grid_budget(
                     message: format!("legacy test FDM grid certificate failed: {message}"),
                 })?;
                 &_legacy_certificate
-            }
-            #[cfg(not(test))]
-            {
+            } else {
                 return Err(RunError {
                     message: "FDM grid certificate is required before runner allocation".to_string(),
                 });
@@ -79,7 +86,7 @@ pub(crate) fn validate_single_grid_budget(
                 certificate.counts, plan.grid.cells
             ),
         });
-        }
+    }
     let cells = usize::try_from(cost.cells).map_err(|_| RunError {
         message: format!(
             "FDM grid cell count {} is not addressable on this runtime",
@@ -392,5 +399,17 @@ mod tests {
         let error = validate_single_grid_budget(&plan)
             .expect_err("topology changes must invalidate the grid certificate");
         assert!(error.message.contains("fingerprint mismatch"));
+    }
+
+    #[test]
+    fn production_policy_rejects_missing_grid_certificate() {
+        let mut plan = FdmPlanIR::default();
+        plan.grid.cells = [1, 1, 1];
+        plan.cell_size = [1.0, 1.0, 1.0];
+        plan.initial_magnetization = vec![[0.0, 0.0, 1.0]];
+
+        let error = super::validate_single_grid_budget_with_policy(&plan, false)
+            .expect_err("production policy must reject missing certificates");
+        assert!(error.message.contains("certificate is required"));
     }
 }
