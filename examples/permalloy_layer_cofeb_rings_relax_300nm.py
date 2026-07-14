@@ -127,16 +127,16 @@ study.tableautosave(1e-16, quantities=["t", "step", "mx", "my", "mz", "E_total"]
 
 study.stages.add_minimize(
     method="bb",
-    max_steps=2000,
+    max_steps=10,
     tol=1e-4,
 )
 
-study.stages.add_relax(
-    algorithm="llg_overdamped",
-    solver="rk23",
-    max_error=1e-6,
-    dt_min=1e-17,
-    dt_max=1e-13,
-    max_steps=100,
-    tol=1e-4,
-)
+# study.stages.add_relax(
+#     algorithm="llg_overdamped",
+#     solver="rk23",
+#     max_error=1e-6,
+#     dt_min=1e-17,
+#     dt_max=1e-13,
+#     max_steps=100,
+#     tol=1e-4,
+# )
