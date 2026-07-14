@@ -9420,6 +9420,61 @@ class RegionMeshPolicyTests(unittest.TestCase):
         self.assertEqual(region_fields[0]["params"]["GeometryName"], "waveguide_geom")
         self.assertEqual(region_fields[0]["params"]["VOut"], 10e-9)
 
+    def test_region_minimum_element_size_does_not_become_global_hmin(self) -> None:
+        geometry = fm.Box(100e-9, 100e-9, 20e-9, name="owner")
+        mesh_options = _mesh_options_from_runtime_metadata(
+            {"mesh_options": {}},
+            geometries=[geometry],
+            default_hmax=30e-9,
+            component_aware=True,
+            object_regions=[
+                {
+                    "region_id": "owner:core",
+                    "owner_object": "owner",
+                    "enabled": True,
+                    "shape": {
+                        "kind": "box",
+                        "size": [20e-9, 20e-9, 10e-9],
+                        "center": [0.0, 0.0, 0.0],
+                    },
+                    "mesh_policy": {
+                        "minimum_element_size": 2e-9,
+                        "maximum_element_size": 8e-9,
+                        "order": 1,
+                    },
+                }
+            ],
+        )
+        self.assertIsNone(mesh_options.hmin)
+
+    def test_region_mesh_policy_rejects_unsupported_local_order(self) -> None:
+        geometry = fm.Box(100e-9, 100e-9, 20e-9, name="owner")
+        with self.assertRaisesRegex(
+            ValueError,
+            "region_mesh_policy_order_unsupported.*requested_order=2",
+        ):
+            _build_field_stack(
+                [geometry],
+                default_hmax=30e-9,
+                per_geometry=[],
+                object_regions=[
+                    {
+                        "region_id": "owner:quadratic",
+                        "owner_object": "owner",
+                        "enabled": True,
+                        "shape": {
+                            "kind": "box",
+                            "size": [20e-9, 20e-9, 10e-9],
+                            "center": [0.0, 0.0, 0.0],
+                        },
+                        "mesh_policy": {
+                            "maximum_element_size": 8e-9,
+                            "order": 2,
+                        },
+                    }
+                ],
+            )
+
     def test_difference_hole_region_mesh_policy_builds_local_refinement_field(self) -> None:
         hole_radius = 50e-9
         geometry = fm.Difference(
@@ -9606,7 +9661,7 @@ class RegionMeshPolicyTests(unittest.TestCase):
                     "maximum_element_size": 3e-9,
                     "minimum_element_size": 1.5e-9,
                     "transition_distance": 8e-9,
-                    "order": 2,
+                    "order": 1,
                 }
             },
             {
@@ -9667,7 +9722,7 @@ class RegionMeshPolicyTests(unittest.TestCase):
 
         graded_x = [f for f in region_fields if f["kind"] == "ComponentRestrictedGradedCylinder" and f["params"]["Axis"] == [1.0, 0.0, 0.0]][0]
         self.assertEqual(graded_x["params"]["MinimumElementSize"], 1.5e-9)
-        self.assertEqual(graded_x["params"]["Order"], 2)
+        self.assertEqual(graded_x["params"]["Order"], 1)
 
         non_graded_y = [f for f in region_fields if f["kind"] == "ComponentRestrictedCylinder"][0]
         self.assertEqual(non_graded_y["params"]["Axis"], [0.0, 1.0, 0.0])
