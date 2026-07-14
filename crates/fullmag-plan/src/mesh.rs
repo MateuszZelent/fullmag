@@ -1,5 +1,5 @@
 use fullmag_ir::{
-    validate_mesh_for_execution, AirBoxConfigIR, ExecutionMode, FemDomainMeshAssetIR,
+    validate_mesh_for_execution, AirBoxConfigIR, FemDomainMeshAssetIR,
     FemDomainMeshModeIR,
     FemDomainRegionMarkerIR, FemMeshPartIR, FemMeshPartRole, FemMeshPartSelector,
     FemObjectSegmentIR, InitialMagnetizationIR, MeshIR, MeshQualityIR, ProblemIR,
@@ -15,8 +15,6 @@ use crate::util::{generate_random_unit_vectors, study_universe_metadata, StudyUn
 
 pub(crate) const AIR_OBJECT_SEGMENT_ID: &str = "__air__";
 pub(crate) const AIR_REGION_MARKER: u32 = 0;
-pub(crate) const OUTER_BOUNDARY_MARKER: u32 = 99;
-pub(crate) const MAG_AIR_INTERFACE_MARKER: u32 = 10;
 
 // FEM-014 fix: centralised air-box heuristic defaults.
 // All magic numbers for the air-box are gathered in one place so they can be
@@ -24,7 +22,6 @@ pub(crate) const MAG_AIR_INTERFACE_MARKER: u32 = 10;
 /// Default mesh grading factor for air-box elements.
 const AIRBOX_DEFAULT_GRADING: f64 = 1.4;
 /// Preferred boundary marker value for the air-box outer surface.
-const AIRBOX_DEFAULT_BOUNDARY_MARKER: u32 = OUTER_BOUNDARY_MARKER;
 /// Default air-box shape.
 const AIRBOX_DEFAULT_SHAPE: &str = "bbox";
 /// Default Robin beta mode (dipole approximation).
@@ -874,7 +871,7 @@ pub(crate) fn pack_mesh_by_analysis(
         part.node_indices = node_indices;
     }
 
-    let (outer_boundary_marker, _marker_source) = select_airbox_boundary_marker(&reordered_mesh);
+    let (outer_boundary_marker, _marker_source) = certified_airbox_boundary_marker(&reordered_mesh)?;
     let outer_boundary_face_indices = reordered_mesh
         .boundary_markers
         .iter()
@@ -1177,25 +1174,26 @@ fn extent_from_bounds(bounds: ([f64; 3], [f64; 3])) -> [f64; 3] {
     ]
 }
 
-fn select_airbox_boundary_marker(mesh: &MeshIR) -> (u32, &'static str) {
-    if mesh
-        .boundary_markers
+fn certified_airbox_boundary_marker(mesh: &MeshIR) -> Result<(u32, &'static str), String> {
+    let roles = mesh
+        .certify_airbox_boundary_roles()
+        .map_err(|errors| errors.join("; "))?;
+    let outer = roles
         .iter()
-        .any(|&marker| marker == AIRBOX_DEFAULT_BOUNDARY_MARKER)
-    {
-        (AIRBOX_DEFAULT_BOUNDARY_MARKER, "mesh_marker_99")
-    } else {
-        let max = mesh
-            .boundary_markers
-            .iter()
-            .copied()
-            .filter(|&marker| marker > 0 && marker != MAG_AIR_INTERFACE_MARKER)
-            .max();
-        match max {
-            Some(m) => (m, "mesh_max_marker"),
-            None => (AIRBOX_DEFAULT_BOUNDARY_MARKER, "fallback_99"),
-        }
-    }
+        .find(|entry| entry.role == fullmag_ir::BoundaryRole::GammaOut)
+        .ok_or_else(|| {
+            format!(
+                "FEM airbox mesh '{}' has no certified Gamma_out boundary marker",
+                mesh.mesh_name
+            )
+        })?;
+    let marker = u32::try_from(outer.marker).map_err(|_| {
+        format!(
+            "FEM airbox mesh '{}' has invalid certified Gamma_out marker {}",
+            mesh.mesh_name, outer.marker
+        )
+    })?;
+    Ok((marker, "certified_gamma_out"))
 }
 
 fn derive_air_box_factor(mesh: &MeshIR, study_universe: Option<&StudyUniverseMetadata>) -> f64 {
@@ -1274,34 +1272,20 @@ pub(crate) fn build_air_box_config(
         "mesh_auto"
     };
 
+    let (certified_marker, _certified_source) = certified_airbox_boundary_marker(mesh)?;
     let explicit_policy_marker = policy.and_then(|p| p.boundary_marker);
-    let (boundary_marker, boundary_marker_source): (u32, &'static str) = if let Some(marker) =
-        explicit_policy_marker
-    {
-        if !mesh.boundary_markers.iter().any(|&value| value == marker) {
-            return Err(format!(
-                    "air_box_policy.boundary_marker={} is not present in mesh '{}' boundary markers; provide a marker that exists on outer air-box faces",
-                    marker,
-                    mesh.mesh_name
+    let (boundary_marker, boundary_marker_source): (u32, &'static str) =
+        if let Some(marker) = explicit_policy_marker {
+            if marker != certified_marker {
+                return Err(format!(
+                    "air_box_policy.boundary_marker={} does not match certified Gamma_out marker {} in mesh '{}'",
+                    marker, certified_marker, mesh.mesh_name
                 ));
-        }
-        (marker, "user_policy")
-    } else if problem.validation_profile.execution_mode == ExecutionMode::Strict {
-        // In strict mode, allow auto-detection only when the well-known
-        // boundary marker 99 is explicitly present (set by the mesh
-        // generator for the outer air-box surface). Any other heuristic
-        // is rejected — the user must provide an explicit policy marker.
-        let (detected_marker, detected_source) = select_airbox_boundary_marker(mesh);
-        if detected_source == "mesh_marker_99" {
-            (detected_marker, detected_source)
+            }
+            (marker, "user_policy")
         } else {
-            return Err(
-                "strict execution mode requires an explicit air_box_policy.boundary_marker for FEM air-box demag; planner no longer guesses boundary markers".to_string()
-            );
-        }
-    } else {
-        select_airbox_boundary_marker(mesh)
-    };
+            (certified_marker, "certified_gamma_out")
+        };
 
     let grading = policy
         .and_then(|p| p.grading)

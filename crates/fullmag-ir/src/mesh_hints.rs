@@ -220,6 +220,23 @@ pub struct MeshIR {
     pub per_domain_quality: HashMap<u32, MeshQualityIR>,
 }
 
+/// Semantic role assigned to a certified boundary marker.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum BoundaryRole {
+    MagneticBoundary,
+    MagneticAirInterface,
+    GammaOut,
+}
+
+/// Topology-backed proof that a marker has one boundary role.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BoundaryRoleIR {
+    pub marker: i32,
+    pub role: BoundaryRole,
+    pub face_count: u64,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct MeshValidationPolicy {
     #[serde(default = "default_require_positive_orientation")]
@@ -279,6 +296,167 @@ pub struct MeshPeriodicNodePairIR {
 }
 
 impl MeshIR {
+    /// Certify semantic boundary roles from volume adjacency.
+    ///
+    /// Marker values are treated as opaque IDs.  The outer air-box role is
+    /// assigned only to faces that are topological exterior faces of an air
+    /// element; an air/magnetic two-sided face is an interface.  This makes a
+    /// marker usable for a boundary condition only after completeness and
+    /// disjointness have been proven.
+    pub fn certify_airbox_boundary_roles(&self) -> Result<Vec<BoundaryRoleIR>, Vec<String>> {
+        let has_air = self.element_markers.iter().any(|marker| *marker == 0);
+        if !has_air {
+            return Ok(Vec::new());
+        }
+
+        type FaceKey = [u32; 3];
+        let mut topology: BTreeMap<FaceKey, Vec<bool>> = BTreeMap::new();
+        for (index, element) in self.elements.iter().enumerate() {
+            let marker = self.element_markers.get(index).copied().unwrap_or(1);
+            let is_air = marker == 0;
+            let faces = [
+                [element[0], element[1], element[2]],
+                [element[0], element[1], element[3]],
+                [element[0], element[2], element[3]],
+                [element[1], element[2], element[3]],
+            ];
+            for mut face in faces {
+                face.sort_unstable();
+                topology.entry(face).or_default().push(is_air);
+            }
+        }
+
+        let mut physical: BTreeMap<FaceKey, Vec<u32>> = BTreeMap::new();
+        for (index, face) in self.boundary_faces.iter().enumerate() {
+            let mut key = *face;
+            key.sort_unstable();
+            let marker = self.boundary_markers.get(index).copied().unwrap_or(0);
+            physical.entry(key).or_default().push(marker);
+        }
+
+        let mut errors = Vec::new();
+        let mut expected_outer = BTreeSet::new();
+        let mut expected_interface = BTreeSet::new();
+        for (face, adjacent) in &topology {
+            match adjacent.as_slice() {
+                [is_air] if *is_air => {
+                    expected_outer.insert(*face);
+                }
+                [first, second] if first != second => {
+                    expected_interface.insert(*face);
+                }
+                _ => {}
+            }
+        }
+
+        for face in &expected_outer {
+            if !physical.contains_key(face) {
+                errors.push(format!(
+                    "airbox Gamma_out is incomplete: outer air face {:?} has no boundary marker",
+                    face
+                ));
+            }
+        }
+        for face in &expected_interface {
+            if !physical.contains_key(face) {
+                errors.push(format!(
+                    "magnetic-air interface is incomplete: interface face {:?} has no boundary marker",
+                    face
+                ));
+            }
+        }
+
+        let mut marker_roles: BTreeMap<(u32, BoundaryRole), u64> = BTreeMap::new();
+        for (face, markers) in &physical {
+            let Some(adjacent) = topology.get(face) else {
+                errors.push(format!(
+                    "boundary face {:?} is not present in tetrahedral topology",
+                    face
+                ));
+                continue;
+            };
+            let role = match adjacent.as_slice() {
+                [is_air] if *is_air => BoundaryRole::GammaOut,
+                [is_air] if !*is_air => BoundaryRole::MagneticBoundary,
+                [first, second] if first != second => BoundaryRole::MagneticAirInterface,
+                _ => {
+                    errors.push(format!(
+                        "boundary face {:?} has ambiguous tetrahedral adjacency",
+                        face
+                    ));
+                    continue;
+                }
+            };
+            let Some(first_marker) = markers.first().copied() else {
+                continue;
+            };
+            if markers.len() != 1 {
+                errors.push(format!(
+                    "boundary face {:?} is listed {} times in physical boundary groups",
+                    face,
+                    markers.len()
+                ));
+            }
+            if markers.iter().any(|marker| *marker != first_marker) {
+                errors.push(format!(
+                    "boundary face {:?} has conflicting physical markers {:?}",
+                    face, markers
+                ));
+            }
+            if first_marker == 0 {
+                errors.push(format!(
+                    "boundary face {:?} uses reserved marker 0 for {:?}",
+                    face, role
+                ));
+            }
+            if first_marker > i32::MAX as u32 {
+                errors.push(format!(
+                    "boundary face {:?} marker {} does not fit certified i32 marker range",
+                    face, first_marker
+                ));
+            }
+            *marker_roles.entry((first_marker, role)).or_default() += 1;
+        }
+
+        let outer_markers = marker_roles
+            .keys()
+            .filter_map(|(marker, role)| (*role == BoundaryRole::GammaOut).then_some(*marker))
+            .collect::<BTreeSet<_>>();
+        if outer_markers.len() != 1 {
+            errors.push(format!(
+                "airbox Gamma_out must have exactly one certified marker, found {:?}",
+                outer_markers
+            ));
+        }
+        for marker in &outer_markers {
+            if marker_roles
+                .keys()
+                .any(|(other, role)| other == marker && *role != BoundaryRole::GammaOut)
+            {
+                errors.push(format!(
+                    "airbox Gamma_out marker {} is shared with another boundary role",
+                    marker
+                ));
+            }
+        }
+        if expected_outer.is_empty() {
+            errors.push("airbox mesh must expose at least one Gamma_out face".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(marker_roles
+                .into_iter()
+                .map(|((marker, role), face_count)| BoundaryRoleIR {
+                    marker: marker as i32,
+                    role,
+                    face_count,
+                })
+                .collect())
+        } else {
+            Err(errors)
+        }
+    }
+
     pub fn validate(&self) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
 
@@ -522,6 +700,67 @@ fn tet_signed_volume(a: [f64; 3], b: [f64; 3], c: [f64; 3], d: [f64; 3]) -> f64 
 #[cfg(test)]
 mod mesh_validation_tests {
     use super::*;
+
+    fn certified_airbox_mesh() -> MeshIR {
+        MeshIR {
+            mesh_name: "certified-airbox".to_string(),
+            nodes: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [0.0, 0.0, 2.0],
+            ],
+            elements: vec![[0, 1, 2, 3], [1, 3, 2, 4]],
+            element_markers: vec![1, 0],
+            boundary_faces: vec![
+                [0, 1, 2],
+                [0, 1, 3],
+                [0, 2, 3],
+                [1, 2, 4],
+                [1, 3, 4],
+                [2, 3, 4],
+                [1, 2, 3],
+            ],
+            boundary_markers: vec![99, 98, 97, 7, 7, 7, 10],
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            per_domain_quality: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn airbox_roles_are_topology_derived_not_max_marker() {
+        let roles = certified_airbox_mesh()
+            .certify_airbox_boundary_roles()
+            .expect("complete airbox should certify");
+        assert!(roles.iter().any(|entry| {
+            entry.role == BoundaryRole::GammaOut && entry.marker == 7 && entry.face_count == 3
+        }));
+    }
+
+    #[test]
+    fn airbox_roles_reject_incomplete_outer_boundary() {
+        let mut mesh = certified_airbox_mesh();
+        mesh.boundary_faces.remove(5);
+        mesh.boundary_markers.remove(5);
+        let errors = mesh
+            .certify_airbox_boundary_roles()
+            .expect_err("missing outer face must fail certification");
+        assert!(errors.iter().any(|error| error.contains("Gamma_out is incomplete")));
+    }
+
+    #[test]
+    fn airbox_roles_reject_marker_shared_with_interface() {
+        let mut mesh = certified_airbox_mesh();
+        mesh.boundary_markers[6] = 7;
+        let errors = mesh
+            .certify_airbox_boundary_roles()
+            .expect_err("shared Gamma_out/interface marker must fail certification");
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("shared with another boundary role")));
+    }
 
     fn base_mesh(elements: Vec<[u32; 4]>) -> MeshIR {
         MeshIR {
