@@ -35,7 +35,8 @@ pub struct ResolvedPeriodicImages {
 
 - [x] Materializować checked plan w `FdmPeriodicityIR::resolve_periodic_images`, z checked image terms, paddingiem `N`/`2N` i limitem 8 GiB; planner odrzuca przed runtime dla single-grid i multilayer.
 - [x] Publikować requested/resolved counts, padded counts, bytes i kernel w `mesh_runtime_metadata`; focused artifact test 1/1.
-- [ ] Przekazać resolved workspace do rzeczywistego CPU/CUDA FFT allocatora i dodać lane-specific allocation guards.
+- [x] Dodać wspólny `FftWorkspace::try_new_with_boundary` z tym samym checked image/padding/8 GiB budgetem; legacy constructor failuje jawnie przed alokacją zamiast cichego fallbacku. Engine guard tests: 2/2.
+- [ ] Przekazać serializowany resolved workspace do lane-specific CPU/CUDA FFT allocatorów i dodać osobne allocation evidence dla obu lane'ów.
 
 ### Task 3: production gate
 
@@ -49,4 +50,5 @@ pub struct ResolvedPeriodicImages {
 - `cargo test -p fullmag-ir periodic_workspace --lib --no-fail-fast`: 4/4.
 - `cargo test -p fullmag-plan --lib fdm --no-fail-fast`: 42/42.
 - `cargo test -p fullmag-runner fdm_mesh_metadata_preserves_requested_and_resolved_pbc_demag --no-fail-fast -- --nocapture`: 1/1.
+- `cargo test -p fullmag-engine --test physics_guardrails guardrail_fdm_periodic_workspace --no-fail-fast`: 2/2.
 - Remaining gap: the engine/CPU/CUDA workspace allocator still needs to consume the serialized resolved cost, plus managed `just` production proof.

@@ -64,8 +64,79 @@ pub struct DemagKernelSpectra {
     pub n_yz: Vec<f64>,
 }
 
+fn checked_workspace_budget(
+    cells: [usize; 3],
+    periodic: [bool; 3],
+    image_counts: [u32; 3],
+) -> Result<(), String> {
+    let mut image_terms = 1_u64;
+    let mut padded = [0_u64; 3];
+    for axis in 0..3 {
+        if cells[axis] == 0 {
+            return Err(format!("grid count on axis {axis} must be positive"));
+        }
+        let cells_u64 = u64::try_from(cells[axis])
+            .map_err(|_| format!("grid count on axis {axis} is not representable as u64"))?;
+        padded[axis] = if periodic[axis] {
+            cells_u64
+        } else {
+            cells_u64
+                .checked_mul(2)
+                .ok_or_else(|| format!("padded grid count overflow on axis {axis}"))?
+        };
+        if periodic[axis] {
+            let span = u64::from(image_counts[axis])
+                .checked_mul(2)
+                .and_then(|value| value.checked_add(1))
+                .ok_or_else(|| format!("periodic image count overflow on axis {axis}"))?;
+            image_terms = image_terms
+                .checked_mul(span)
+                .ok_or_else(|| "periodic image term count overflow".to_string())?;
+        }
+    }
+    const MAX_PERIODIC_IMAGE_TERMS: u64 = 1_000_000;
+    if image_terms > MAX_PERIODIC_IMAGE_TERMS {
+        return Err(format!(
+            "periodic image budget exceeded: {image_terms} image terms > {MAX_PERIODIC_IMAGE_TERMS}"
+        ));
+    }
+    let padded_cells = padded.iter().try_fold(1_u64, |acc, count| {
+        acc.checked_mul(*count)
+            .ok_or_else(|| "padded grid cell count overflow".to_string())
+    })?;
+    const MAX_WORKSPACE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+    let estimated_bytes = padded_cells
+        .checked_mul(12)
+        .and_then(|value| value.checked_mul(2))
+        .and_then(|value| value.checked_mul(8))
+        .ok_or_else(|| "periodic FFT workspace byte estimate overflow".to_string())?;
+    if estimated_bytes > MAX_WORKSPACE_BYTES {
+        return Err(format!(
+            "periodic FFT workspace budget exceeded: {estimated_bytes} bytes > {MAX_WORKSPACE_BYTES}"
+        ));
+    }
+    Ok(())
+}
+
 impl FftWorkspace {
+    pub fn try_new(
+        nx: usize,
+        ny: usize,
+        nz: usize,
+        dx: f64,
+        dy: f64,
+        dz: f64,
+    ) -> Result<Self, String> {
+        checked_workspace_budget([nx, ny, nz], [false; 3], [0, 0, 0])?;
+        Ok(Self::new_unchecked(nx, ny, nz, dx, dy, dz))
+    }
+
     pub fn new(nx: usize, ny: usize, nz: usize, dx: f64, dy: f64, dz: f64) -> Self {
+        Self::try_new(nx, ny, nz, dx, dy, dz)
+            .unwrap_or_else(|reason| panic!("FDM FFT workspace rejected: {reason}"))
+    }
+
+    fn new_unchecked(nx: usize, ny: usize, nz: usize, dx: f64, dy: f64, dz: f64) -> Self {
         let px = nx * 2;
         let py = ny * 2;
         let pz = nz * 2;
@@ -145,6 +216,61 @@ impl FftWorkspace {
     /// `image_counts` specifies how many image repetitions to include in
     /// each periodic axis for the truncated-images demag kernel.
     pub fn new_with_boundary(
+        nx: usize,
+        ny: usize,
+        nz: usize,
+        dx: f64,
+        dy: f64,
+        dz: f64,
+        boundary: &FdmBoundaryPolicy,
+        image_counts: [u32; 3],
+    ) -> Self {
+        Self::try_new_with_boundary(
+            nx,
+            ny,
+            nz,
+            dx,
+            dy,
+            dz,
+            boundary,
+            image_counts,
+        )
+        .unwrap_or_else(|reason| panic!("FDM periodic FFT workspace rejected: {reason}"))
+    }
+
+    pub fn try_new_with_boundary(
+        nx: usize,
+        ny: usize,
+        nz: usize,
+        dx: f64,
+        dy: f64,
+        dz: f64,
+        boundary: &FdmBoundaryPolicy,
+        image_counts: [u32; 3],
+    ) -> Result<Self, String> {
+        let pbc_x = matches!(boundary.x, AxisBoundary::Periodic);
+        let pbc_y = matches!(boundary.y, AxisBoundary::Periodic);
+        let pbc_z = matches!(boundary.z, AxisBoundary::Periodic);
+
+        checked_workspace_budget(
+            [nx, ny, nz],
+            [pbc_x, pbc_y, pbc_z],
+            image_counts,
+        )?;
+
+        Ok(Self::new_with_boundary_unchecked(
+            nx,
+            ny,
+            nz,
+            dx,
+            dy,
+            dz,
+            boundary,
+            image_counts,
+        ))
+    }
+
+    fn new_with_boundary_unchecked(
         nx: usize,
         ny: usize,
         nz: usize,

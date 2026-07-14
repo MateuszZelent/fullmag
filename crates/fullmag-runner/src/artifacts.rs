@@ -3096,6 +3096,16 @@ mod tests {
             demag: fullmag_ir::FdmDemagPeriodicityIR::TruncatedImages,
             image_counts: Some([4, 0, 0]),
         });
+        fdm.grid_certificate = Some(
+            fullmag_ir::FdmGridCertificateIR::new(
+                fdm.origin_m,
+                fdm.grid.cells,
+                fdm.cell_size,
+                8,
+                1024,
+            )
+            .expect("FDM grid certificate should be valid"),
+        );
         let provenance = ExecutionProvenance {
             demag_operator_kind: Some("tensor_fft_newell".to_string()),
             fft_backend: Some("rustfft".to_string()),
@@ -3116,6 +3126,7 @@ mod tests {
         );
         assert_eq!(value["resolved"]["origin_m"], serde_json::json!([0.0, 0.0, 0.0]));
         assert_eq!(value["resolved"]["counts"], serde_json::json!([4, 2, 1]));
+        assert!(value["resolved"]["grid_fingerprint"].as_str().is_some());
         assert_eq!(
             value["resolved"]["period_m"],
             serde_json::json!([8e-9, 4e-9, 5e-9])

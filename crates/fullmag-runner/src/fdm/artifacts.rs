@@ -122,7 +122,15 @@ pub(crate) fn pbc_provenance_artifacts(
     plan: &ExecutionPlanIR,
     provenance: &ExecutionProvenance,
 ) -> Vec<AuxiliaryArtifact> {
-    let (requested_periodicity, origin_m, counts, cell_m, enable_demag, precision) = match
+    let (
+        requested_periodicity,
+        origin_m,
+        counts,
+        cell_m,
+        grid_fingerprint,
+        enable_demag,
+        precision,
+    ) = match
         &plan.backend_plan
     {
         BackendPlanIR::Fdm(fdm) => (
@@ -130,6 +138,9 @@ pub(crate) fn pbc_provenance_artifacts(
             fdm.origin_m,
             fdm.grid.cells,
             fdm.cell_size,
+            fdm.grid_certificate
+                .as_ref()
+                .map(|certificate| certificate.grid_fingerprint.clone()),
             fdm.enable_demag,
             fdm.precision,
         ),
@@ -142,6 +153,7 @@ pub(crate) fn pbc_provenance_artifacts(
                 certificate.origin_m,
                 certificate.counts,
                 certificate.cell_m,
+                Some(certificate.grid_fingerprint.clone()),
                 fdm.enable_demag,
                 fdm.precision,
             )
@@ -180,6 +192,7 @@ pub(crate) fn pbc_provenance_artifacts(
             "counts": counts,
             "cell_m": cell_m,
             "period_m": period_m,
+            "grid_fingerprint": grid_fingerprint,
             "axes": axes,
             "demag": resolved_demag_boundary,
             "periodic_images": resolved_periodic_images,

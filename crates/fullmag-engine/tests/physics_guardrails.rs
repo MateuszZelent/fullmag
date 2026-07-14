@@ -164,6 +164,48 @@ fn guardrail_fdm_periodic_demag_workspace_uses_periodic_padding() {
 }
 
 #[test]
+fn guardrail_fdm_periodic_workspace_budget_is_checked_before_allocation() {
+    let boundary = periodic_x_policy();
+    let error = match FftWorkspace::try_new_with_boundary(
+        8,
+        8,
+        8,
+        1.0e-9,
+        1.0e-9,
+        1.0e-9,
+        &boundary,
+        [500_000, 0, 0],
+    ) {
+        Ok(_) => panic!("periodic image work must be rejected before FFT allocation"),
+        Err(error) => error,
+    };
+    assert!(error.contains("periodic image budget exceeded"));
+}
+
+#[test]
+fn guardrail_fdm_periodic_workspace_checks_padding_overflow() {
+    let boundary = FdmBoundaryPolicy {
+        x: AxisBoundary::Periodic,
+        y: AxisBoundary::Open,
+        z: AxisBoundary::Open,
+    };
+    let error = match FftWorkspace::try_new_with_boundary(
+        1,
+        usize::MAX,
+        1,
+        1.0e-9,
+        1.0e-9,
+        1.0e-9,
+        &boundary,
+        [0, 0, 0],
+    ) {
+        Ok(_) => panic!("padded dimension multiplication must be checked"),
+        Err(error) => error,
+    };
+    assert!(error.contains("padded grid count overflow"));
+}
+
+#[test]
 fn guardrail_fdm_periodic_local_policy_does_not_reinterpret_open_demag() {
     let mut p = permalloy_problem(
         5,
