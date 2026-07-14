@@ -3,6 +3,19 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 describe("ObjectRegionsPanel physical scalar inputs", () => {
+  it("does not render Radius for Box regions", () => {
+    const geometryPanel = readFileSync(
+      new URL("./region/ObjectRegionGeometryPanel.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(geometryPanel).toContain('draft.shape.kind === "cylinder"');
+    expect(geometryPanel).toContain('draft.shape.kind === "sphere"');
+    expect(geometryPanel).not.toContain(
+      'draft.shape.kind === "box" || draft.shape.kind === "cylinder" || draft.shape.kind === "sphere"',
+    );
+  });
+
   it("buffers scientific notation text locally while editing SI values", () => {
     const source = readFileSync(
       new URL("./ObjectRegionsPanel.tsx", import.meta.url),

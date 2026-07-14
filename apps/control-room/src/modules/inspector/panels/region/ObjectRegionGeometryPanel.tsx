@@ -89,7 +89,9 @@ export function ObjectRegionGeometryPanel({
             />
           </>
         ) : null}
-        {draft.shape.kind === "box" || draft.shape.kind === "cylinder" || draft.shape.kind === "sphere" ? (
+        {(
+          draft.shape.kind === "cylinder" || draft.shape.kind === "sphere"
+        ) ? (
           <PhysicalScalarField
             label="Radius"
             unit="m"

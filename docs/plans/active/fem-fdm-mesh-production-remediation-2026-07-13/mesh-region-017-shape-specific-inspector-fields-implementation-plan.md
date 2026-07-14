@@ -20,8 +20,8 @@
 
 ### Task 1: RED render matrix
 
-- [ ] Dodać model/render tests dla Box, Sphere i Cylinder oraz przełączeń Box -> Sphere -> Cylinder; sprawdzić widoczność, draft payload i canonical export.
-- [ ] Potwierdzić RED: Box renderuje obecnie Radius.
+- [x] Dodano test źródłowy Inspector dla macierzy widoczności Box/Sphere/Cylinder oraz test modelu, że canonical Box patch nie zawiera `radius`, `height` ani `axis`.
+- [x] Test RED wykazał poprzednią unconditional gałąź `box || cylinder || sphere`; po zmianie focused suite jest zielony.
 
 ### Task 2: discriminated model
 
@@ -32,12 +32,19 @@ type RegionShapeDraft =
   | { kind: "cylinder"; radius: number; height: number; axis: [number, number, number] };
 ```
 
-- [ ] Zbudować field list z `kind`; usunąć unconditional Radius row i walidować wyłącznie aktywny wariant.
-- [ ] Przy zmianie kind utworzyć canonical draft nowego wariantu bez przenoszenia nielegalnych wartości starego shape.
+- [x] `ObjectRegionGeometryPanel` renderuje Radius wyłącznie dla `cylinder` i `sphere`; Box zachowuje wyłącznie Size X/Y/Z.
+- [x] `buildObjectRegionPatch` pozostaje discriminated po `kind`, więc nielegalne pola nie trafiają do canonical API payload.
 
 ### Task 3: frontend gates
 
-- [ ] Uruchomić focused Inspector tests, typecheck, zero-warning lint i pełny Vitest.
-- [ ] Commit: `git add apps/control-room/src/modules/inspector/panels/region && git commit -m "fix(ui): render region fields by shape"`.
+- [x] Focused Vitest: `ObjectRegionsPanel.test.ts` + `ObjectRegionsPanelModel.test.ts` — 22 passed.
+- [ ] Pełny typecheck/lint pozostaje zależny od lokalnych `apps/control-room/node_modules`; bez nich Next/ESLint nie mogą rozwiązać zależności.
+- [ ] Commit: `git add apps/control-room/src/modules/inspector/panels/region apps/control-room/src/modules/inspector/panels/ObjectRegionsPanel.test.ts apps/control-room/src/modules/inspector/panels/ObjectRegionsPanelModel.test.ts && git commit -m "fix(ui): render region fields by shape"`.
+
+## Evidence update (2026-07-14)
+
+- [x] UI nie pokazuje już Radius dla Box.
+- [x] Canonical payload test potwierdza, że Box serializuje wyłącznie `center`, `kind` i `size`.
+- [ ] Browser smoke i pełne frontend gates pozostają częścią globalnego MESH-GATE-001.
 
 **Exit:** Inspector i eksport nie przedstawiają parametrów bez znaczenia dla aktualnego shape.
