@@ -4076,6 +4076,14 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(result.thin_axis, 2)
         self.assertAlmostEqual(result.thickness, 2e-9)
 
+    def test_arbitrary_axis_cylinder_is_not_classified_as_z_sweep(self) -> None:
+        result = classify_sweepability(
+            fm.Cylinder(radius=20e-9, height=2e-9, axis=(1.0, 1.0, 0.0))
+        )
+
+        self.assertFalse(result.sweepable)
+        self.assertIn("OCC free-tetrahedral", result.reason)
+
     def test_arch_waveguide_shared_domain_uses_component_surface_prep(self) -> None:
         if not _has_trimesh:
             self.skipTest("trimesh not available")
