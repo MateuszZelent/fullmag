@@ -468,7 +468,6 @@ def build_geometry_assets_for_request(
         from fullmag._core import validate_mesh_ir
         from fullmag.model.geometry import ImportedGeometry
         from fullmag.meshing import (
-            realize_fem_domain_mesh_asset_from_components,
             realize_fem_mesh_asset,
         )
         from fullmag.meshing.asset_pipeline import (
@@ -586,26 +585,15 @@ def build_geometry_assets_for_request(
             }
         elif study_universe is not None:
             authored_regions = list(object_regions or [])
-            if authored_regions:
-                domain_mesh, region_markers, build_report = (
-                    realize_fem_domain_mesh_asset_from_components_with_report(
-                        list(geometries),
-                        discretization.fem,
-                        study_universe=study_universe,
-                        mesh_workflow=mesh_workflow,
-                        object_regions=authored_regions,
-                    )
+            domain_mesh, region_markers, build_report = (
+                realize_fem_domain_mesh_asset_from_components_with_report(
+                    list(geometries),
+                    discretization.fem,
+                    study_universe=study_universe,
+                    mesh_workflow=mesh_workflow,
+                    object_regions=authored_regions,
                 )
-            else:
-                domain_mesh, region_markers = (
-                    realize_fem_domain_mesh_asset_from_components(
-                        list(geometries),
-                        discretization.fem,
-                        study_universe=study_universe,
-                        mesh_workflow=mesh_workflow,
-                    )
-                )
-                build_report = None
+            )
             domain_mesh_ir = domain_mesh.to_ir("study_domain")
             is_valid = validate_mesh_ir(domain_mesh_ir)
             if is_valid is False:

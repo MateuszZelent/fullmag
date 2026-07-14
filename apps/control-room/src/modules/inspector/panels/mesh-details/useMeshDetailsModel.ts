@@ -74,6 +74,7 @@ export interface MeshDetailsModel {
   fallbacks: readonly string[] | null | undefined;
   gateRows: Array<{ id: string; status: string; value: string }>;
   latestBuildJson: unknown;
+  meshBuildReport: unknown;
   latestSuccessAvailable: boolean;
   lastBuildError: unknown;
   manifest: {
@@ -440,6 +441,7 @@ export function useMeshDetailsModel(
     fallbacks: activeBuild.data?.shared_domain_build_report?.fallbacks_triggered,
     gateRows: qualityGateRows(gates),
     latestBuildJson: lastBuildSummary,
+    meshBuildReport: semantics.data?.solver_mesh?.build_report,
     latestSuccessAvailable: Boolean(latestBuild.data?.last_success),
     lastBuildError:
       activeBuild.data?.last_build_error ?? latestBuild.data?.last_build_error,

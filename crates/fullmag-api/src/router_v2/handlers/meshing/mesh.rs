@@ -190,6 +190,10 @@ pub async fn get_mesh_semantics(
             domain_mesh_mode: mesh.domain_mesh_mode.clone(),
             object_segment_count: mesh.object_segments.len() as u32,
             mesh_part_count: mesh.mesh_parts.len() as u32,
+            build_report: mesh
+                .build_report
+                .as_ref()
+                .and_then(|report| serde_json::to_value(report).ok()),
         });
     let mesh_build_diagnostics =
         snapshot
@@ -4000,6 +4004,7 @@ fn subset_part_payload(
         domain_frame: mesh.domain_frame.clone(),
         generation_id: mesh.generation_id.clone(),
         per_domain_quality,
+        build_report: mesh.build_report.clone(),
     })
 }
 

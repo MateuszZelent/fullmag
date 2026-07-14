@@ -10485,6 +10485,13 @@
       },
       "MeshSolverMeshResource": {
         "properties": {
+          "build_report": {
+            "description": "Immutable requested-vs-realized report for this mesh build revision.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "domain_mesh_mode": {
             "type": [
               "string",

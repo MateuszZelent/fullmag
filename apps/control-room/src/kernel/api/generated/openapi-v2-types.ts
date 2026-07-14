@@ -5469,6 +5469,8 @@ export interface components {
             revision: number;
         };
         MeshSolverMeshResource: {
+            /** Immutable requested-vs-realized report for this mesh build revision. */
+            build_report?: unknown;
             domain_mesh_mode?: string | null;
             generation_id?: string | null;
             mesh_id: string;

@@ -221,6 +221,7 @@ pub(crate) struct ResolvedFemDomainMeshAsset {
     pub mesh_source: Option<String>,
     pub object_segments: Vec<FemObjectSegmentIR>,
     pub mesh_parts: Vec<FemMeshPartIR>,
+    pub build_report: Option<fullmag_ir::FemSharedDomainBuildReportIR>,
 }
 
 #[derive(Debug, Clone)]
@@ -1100,6 +1101,7 @@ pub(crate) fn resolve_fem_domain_mesh_asset(
         mesh_source: asset.mesh_source.clone(),
         object_segments,
         mesh_parts,
+        build_report: asset.build_report.clone(),
     }))
 }
 

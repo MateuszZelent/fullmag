@@ -323,6 +323,7 @@ fn parse_fem_surface_preview_mesh(
         domain_mesh_mode: None,
         domain_frame: None,
         generation_id: None,
+        build_report: None,
         per_domain_quality: HashMap::new(),
     })
 }

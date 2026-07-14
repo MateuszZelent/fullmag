@@ -357,6 +357,7 @@ mod tests {
             },
             object_segments: Vec::new(),
             mesh_parts: Vec::new(),
+            mesh_build_report: None,
             domain_mesh_mode: FemDomainMeshModeIR::MergedMagneticMesh,
             domain_frame: None,
             fe_order: 1,

@@ -35,6 +35,7 @@ function meshDetailsInspectorSections(selectionKind: string | null): string[] {
         "viewport-delivery",
         "json-capabilities",
         "json-semantics",
+        "json-mesh-build-report",
       ];
     case "mesh.shared-domain":
       return [
@@ -44,6 +45,7 @@ function meshDetailsInspectorSections(selectionKind: string | null): string[] {
         "viewport-delivery",
         "json-universe-report",
         "json-shared-report",
+        "json-mesh-build-report",
       ];
     case "mesh.builds":
       return [
@@ -90,6 +92,7 @@ function meshDetailsInspectorSections(selectionKind: string | null): string[] {
         "thin-film",
         "json-capabilities",
         "json-semantics",
+        "json-mesh-build-report",
         "json-universe-report",
         "json-universe-quality",
         "json-shared-report",
@@ -207,6 +210,13 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
           sectionValue="json-semantics"
           title="Mesh Semantics JSON"
           value={model.semanticsData}
+        />
+      ) : null}
+      {showSection("json-mesh-build-report") ? (
+        <JsonResourceSection
+          sectionValue="json-mesh-build-report"
+          title="Mesh Build Report JSON"
+          value={model.meshBuildReport}
         />
       ) : null}
       {showSection("json-universe-report") ? (

@@ -2183,6 +2183,9 @@ pub(crate) fn plan_fem(
             )
         };
     let object_segments = remap_segment_object_ids(&raw_object_segments, &geometry_to_object_id)?;
+    let mesh_build_report = resolved_domain_mesh_asset
+        .as_ref()
+        .and_then(|asset| asset.build_report.clone());
     let n_nodes = mesh.nodes.len();
     let n_elements = mesh.elements.len();
     let mesh_name = mesh.mesh_name.clone();
@@ -2443,6 +2446,7 @@ pub(crate) fn plan_fem(
         mesh,
         object_segments,
         mesh_parts: resolved_mesh_parts,
+        mesh_build_report,
         domain_mesh_mode,
         domain_frame,
         fe_order: fem_hints.order,

@@ -2929,6 +2929,7 @@ mod tests {
                     boundary_face_count: 1,
                 }],
                 mesh_parts: Vec::new(),
+                mesh_build_report: None,
                 domain_mesh_mode: FemDomainMeshModeIR::MergedMagneticMesh,
                 domain_frame: None,
                 fe_order: 1,
