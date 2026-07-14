@@ -1513,7 +1513,14 @@ fn write_periodic_pairs_artifact(
         "schema_version": "periodic_pairs.v1",
         "artifact_path": "mesh/periodic_pairs.v1.json",
         "topology_fingerprint": mesh_topology_fingerprint,
+        "mesh_generation_id": solver_mesh_signature(mesh),
         "certificate_status": certificate_status,
+        "certificate_fingerprint": certificate.as_ref().ok().and_then(|certificate| {
+            serde_json::to_vec(certificate).ok().map(|payload| {
+                let digest = sha2::Sha256::digest(payload);
+                format!("sha256:{digest:x}")
+            })
+        }),
         "certificate": certificate
             .as_ref()
             .ok()
@@ -4846,6 +4853,9 @@ mod tests {
         assert_eq!(artifact["schema_version"], "periodic_pairs.v1");
         assert_eq!(artifact["artifact_path"], "mesh/periodic_pairs.v1.json");
         assert_eq!(artifact["validation_status"], "ok");
+        assert!(artifact["mesh_generation_id"].as_str().is_some());
+        assert!(artifact["certificate_fingerprint"].as_str().is_some());
+        assert_eq!(artifact["certificate_status"], "accepted");
         assert_eq!(artifact["pair_count"], 1);
         assert_eq!(artifact["paired_node_count"], 3);
         assert_eq!(artifact["pairs"][0]["pair_id"], "x_periodic");

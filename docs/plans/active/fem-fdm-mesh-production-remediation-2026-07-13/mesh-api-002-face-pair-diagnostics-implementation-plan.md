@@ -31,9 +31,9 @@ pub struct PeriodicFacePairResponse { pub source_face_id: u64, pub destination_f
 ```
 
 - [x] Matching loop odrzuca kandydatów z niefinite/excessive centroid residual względem zadeklarowanej tolerancji, więc nie publikuje fałszywej pary.
-- [ ] Usunąć całkowicie nearest-centroid reconstruction i mapować certified pairs oraz aggregate unpaired counts.
+- [x] Usunąć całkowicie nearest-centroid reconstruction i mapować certified pairs oraz aggregate unpaired counts.
 - [ ] Dla dużych payloadów dodać scoped binary link zgodny z resource-first spec, nie rozszerzać thin status.
-- [ ] Uruchomić API/OpenAPI tests; PASS.
+- [x] Uruchomić API/OpenAPI tests; PASS.
 
 ### Task 3: commit
 
@@ -52,6 +52,8 @@ pub struct PeriodicFacePairResponse { pub source_face_id: u64, pub destination_f
 - [x] Face resources expose stable global IDs, explicit vertex bijections, translation/area residuals, normal orientation and marker identity.
 - [x] Pair resources expose source/destination unpaired-face counts and explicit `unpaired_boundary_faces` status while preserving node diagnostics.
 - [x] Legacy artifact fallback remains deserializable via serde defaults for the new diagnostics fields.
-- [x] `cargo test -p fullmag-api mesh_periodic_pairs --no-fail-fast -- --nocapture` — 5 passed.
+- [x] `cargo test -p fullmag-api mesh_periodic_pairs --no-fail-fast -- --nocapture` — 7 passed.
 - [x] Generated OpenAPI v2 JSON and Control Room TypeScript schema were updated.
-- [ ] Upstream `FemMeshPayload` does not yet carry the persisted certificate object/identity; current API certificate recomputation must be replaced with artifact/session certificate provenance before MESH-API-002 can be closed.
+- [x] Runner `periodic_pairs.v1.json` now persists `mesh_generation_id` and `certificate_fingerprint` alongside the v6 certificate.
+- [x] API prefers the persisted certificate artifact when its topology fingerprint matches the live mesh; mismatched artifacts are rejected and never exposed as current diagnostics.
+- [ ] Source-scene revision and persisted certificate identity still need to be carried through the session artifact manifest for a full stale-after-scene-edit proof; MESH-API-002 remains open pending that provenance gate.

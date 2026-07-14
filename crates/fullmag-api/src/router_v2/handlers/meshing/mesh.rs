@@ -1293,14 +1293,24 @@ pub async fn get_mesh_periodic_pairs(
 ) -> Result<axum::response::Response, ApiError> {
     let snapshot = current_snapshot(&state).await?;
     let (body, source_id) = if let Some(mesh) = snapshot.fem_mesh.as_ref() {
-        (
-            build_periodic_pairs_resource(&snapshot, mesh),
-            mesh.generation_id
-                .as_deref()
-                .unwrap_or("no-generation")
-                .to_string(),
-        )
-    } else if let Some(artifact) = periodic_pairs_resource_from_artifact(&snapshot)? {
+        if let Some(artifact) = periodic_pairs_resource_from_artifact(&snapshot, Some(mesh))? {
+            (
+                artifact,
+                format!(
+                    "artifact:{}",
+                    mesh.generation_id.as_deref().unwrap_or("no-generation")
+                ),
+            )
+        } else {
+            (
+                build_periodic_pairs_resource(&snapshot, mesh),
+                mesh.generation_id
+                    .as_deref()
+                    .unwrap_or("no-generation")
+                    .to_string(),
+            )
+        }
+    } else if let Some(artifact) = periodic_pairs_resource_from_artifact(&snapshot, None)? {
         (artifact, "artifact-file".to_string())
     } else {
         return Ok(StatusCode::NO_CONTENT.into_response());
@@ -1317,6 +1327,7 @@ pub async fn get_mesh_periodic_pairs(
 
 fn periodic_pairs_resource_from_artifact(
     snapshot: &SessionStateResponse,
+    live_mesh: Option<&FemMeshPayload>,
 ) -> Result<Option<MeshPeriodicPairsResource>, ApiError> {
     let Some(artifact_dir) = current_artifact_dir(snapshot) else {
         return Ok(None);
@@ -1337,10 +1348,48 @@ fn periodic_pairs_resource_from_artifact(
             artifact_path.display()
         ))
     })?;
+    if let Some(mesh) = live_mesh {
+        let expected_topology = periodic_mesh_ir(mesh).topology_fingerprint_v6();
+        let actual_topology = value
+            .get("topology_fingerprint")
+            .and_then(Value::as_str);
+        if actual_topology != Some(expected_topology.as_str()) {
+            return Ok(None);
+        }
+    }
     if let Some(object) = value.as_object_mut() {
         object
             .entry("revision".to_string())
             .or_insert_with(|| json!(snapshot.mesh_revision));
+        if object.get("status").is_none() {
+            let status = match (
+                object
+                    .get("validation_status")
+                    .and_then(Value::as_str),
+                object
+                    .get("certificate_status")
+                    .and_then(Value::as_str),
+            ) {
+                (Some("ok"), Some("accepted")) => "valid",
+                (Some("failed"), _) | (_, Some("rejected")) => "invalid",
+                _ => "unavailable",
+            };
+            object.insert("status".to_string(), json!(status));
+        }
+        if object.get("status_reasons").is_none() {
+            let reasons = object
+                .get("certificate_errors")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            object.insert("status_reasons".to_string(), Value::Array(reasons));
+        }
+        if object.get("certificate_revision").is_none() {
+            object.insert(
+                "certificate_revision".to_string(),
+                json!(snapshot.mesh_revision),
+            );
+        }
     }
     let resource = serde_json::from_value::<MeshPeriodicPairsResource>(value).map_err(|error| {
         ApiError::internal(format!(
