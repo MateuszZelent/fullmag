@@ -117,6 +117,7 @@ from fullmag.meshing.remesh_cli import _describe_remesh_job
 from fullmag.meshing._gmsh_extraction import (
     _align_quality_report_to_element_tags,
     _extract_quality_metrics,
+    _read_mesh_file,
     UnsupportedGmshElementError,
     _meshio_cell_markers,
     build_per_domain_quality_from_mesh_arrays,
@@ -236,6 +237,29 @@ class MeshScaffoldTests(unittest.TestCase):
             _meshio_cell_markers(mesh, cell_type="tetra"),
             np.asarray([1, 2, 3], dtype=np.int32),
         )
+
+    def test_meshio_import_ignores_standard_lower_dimensional_blocks(self) -> None:
+        mesh = SimpleNamespace(
+            points=np.zeros((4, 3), dtype=np.float64),
+            cells=[
+                SimpleNamespace(type="vertex", data=np.asarray([[0]], dtype=np.int32)),
+                SimpleNamespace(type="line", data=np.asarray([[0, 1]], dtype=np.int32)),
+                SimpleNamespace(type="triangle", data=np.asarray([[0, 1, 2]], dtype=np.int32)),
+                SimpleNamespace(type="tetra", data=np.asarray([[0, 1, 2, 3]], dtype=np.int32)),
+            ],
+            cell_data={},
+            field_data={},
+            cell_sets={},
+        )
+        fake_meshio = SimpleNamespace(read=lambda _path: mesh)
+        with patch(
+            "fullmag.meshing._gmsh_extraction._import_meshio",
+            return_value=fake_meshio,
+        ):
+            imported = _read_mesh_file(Path("ordinary.msh"))
+
+        self.assertEqual(imported.n_elements, 1)
+        self.assertEqual(imported.n_boundary_faces, 1)
 
     def test_extract_quality_metrics_empty_returns_tuple(self) -> None:
         gmsh = SimpleNamespace(

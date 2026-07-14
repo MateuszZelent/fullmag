@@ -237,6 +237,11 @@ _MESHIO_SUPPORTED_ELEMENTS: dict[str, tuple[int, int, int]] = {
     "tetra": (3, 1, 4),
     "triangle": (2, 1, 3),
 }
+_MESHIO_IGNORED_LOWER_DIM_ELEMENTS: dict[str, tuple[int, int, int]] = {
+    "vertex": (0, 1, 1),
+    "line": (1, 1, 2),
+    "line3": (1, 2, 3),
+}
 
 
 def _reject_unsupported_meshio_elements(mesh: Any) -> None:
@@ -248,6 +253,8 @@ def _reject_unsupported_meshio_elements(mesh: Any) -> None:
             continue
         metadata = _MESHIO_SUPPORTED_ELEMENTS.get(cell_type)
         if metadata is not None:
+            continue
+        if cell_type in _MESHIO_IGNORED_LOWER_DIM_ELEMENTS:
             continue
         dimension = 3 if cell_type in {"hexahedron", "prism", "pyramid", "wedge", "tetra10"} else 2
         order = 2 if any(token in cell_type for token in ("10", "6", "20", "27", "18", "15", "9")) else 1
