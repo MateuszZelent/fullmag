@@ -224,13 +224,14 @@ def _read_mesh_file(path: Path) -> MeshData:
     boundary_faces = np.asarray(triangles, dtype=np.int32)
     element_markers = _meshio_cell_markers(mesh, cell_type="tetra")
     boundary_markers = _meshio_cell_markers(mesh, cell_type="triangle")
-    return MeshData(
+    mesh = MeshData(
         nodes=nodes,
         elements=elements,
         element_markers=element_markers,
         boundary_faces=boundary_faces,
         boundary_markers=boundary_markers,
     )
+    return mesh
 
 
 _MESHIO_SUPPORTED_ELEMENTS: dict[str, tuple[int, int, int]] = {

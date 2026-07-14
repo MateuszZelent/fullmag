@@ -48,4 +48,10 @@ SUPPORTED_BOUNDARY_ELEMENTS = {2: ("tri3", 3)}
 - [ ] Uruchomić `just verify-fem-meshing-production` i `just verify-fem-time-domain-native-contract`; oba PASS.
 - [ ] Commit: `git add packages/fullmag-py/src/fullmag/meshing packages/fullmag-py/tests/test_meshing.py && git commit -m "fix(fem): reject unsupported Gmsh element types"`.
 
+### Evidence update (2026-07-14, import return and periodic preflight)
+
+- [x] Fixed `_read_mesh_file` to return the validated `MeshData` instead of silently returning `None` after a legal tet4/tri3 import.
+- [x] Focused RED/GREEN evidence: `test_meshio_import_ignores_standard_lower_dimensional_blocks` and `test_extract_gmsh_connectivity_rejects_unsupported_element_types` pass; the former reproduced the missing return before the fix.
+- [ ] Managed native/browser proof remains open.
+
 **Exit:** żaden nieobsługiwany element nie tworzy pozornie legalnego MeshIR; tet4/tri3 fixtures pozostają zielone.
