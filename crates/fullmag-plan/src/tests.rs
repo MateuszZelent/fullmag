@@ -11118,6 +11118,124 @@ fn fdm_per_magnet_cells_resolve_without_hidden_fallback() {
 }
 
 #[test]
+fn fdm_single_grid_plan_uses_per_magnet_cell_without_default() {
+    let mut ir = ProblemIR::bootstrap_example();
+    let magnet_name = ir.magnets[0].name.clone();
+    let mut per_magnet = BTreeMap::new();
+    per_magnet.insert(
+        magnet_name,
+        fullmag_ir::FdmGridHintsIR {
+            cell: [1e-9, 2e-9, 3e-9],
+        },
+    );
+    let fdm = ir
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .expect("bootstrap must carry FDM hints");
+    fdm.cell = [0.0; 3];
+    fdm.default_cell = None;
+    fdm.per_magnet = Some(per_magnet);
+
+    let planned = plan(&ir).expect("single-grid per-magnet cell should plan");
+    match planned.backend_plan {
+        BackendPlanIR::Fdm(single) => {
+            assert_eq!(single.cell_size, [1e-9, 2e-9, 3e-9]);
+        }
+        other => panic!("expected FDM single-grid plan, got {other:?}"),
+    }
+}
+
+#[test]
+fn fdm_multilayer_plan_resolves_complete_per_magnet_map_without_default() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    let mut per_magnet = BTreeMap::new();
+    for magnet in &ir.magnets {
+        per_magnet.insert(
+            magnet.name.clone(),
+            fullmag_ir::FdmGridHintsIR {
+                cell: [2e-9, 2e-9, 2e-9],
+            },
+        );
+    }
+    let fdm = ir
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .expect("stacked fixture must carry FDM hints");
+    fdm.cell = [0.0; 3];
+    fdm.default_cell = None;
+    fdm.per_magnet = Some(per_magnet);
+
+    let planned = plan(&ir).expect("complete per-magnet map should plan");
+    match planned.backend_plan {
+        BackendPlanIR::FdmMultilayer(multilayer) => {
+            assert_eq!(multilayer.layers.len(), 2);
+            assert!(multilayer
+                .layers
+                .iter()
+                .all(|layer| layer.native_cell_size == [2e-9, 2e-9, 2e-9]));
+        }
+        other => panic!("expected FDM multilayer plan, got {other:?}"),
+    }
+}
+
+#[test]
+fn fdm_multilayer_plan_rejects_missing_or_conflicting_per_magnet_cells() {
+    let mut missing = stacked_two_body_multilayer_problem();
+    let mut only_free = BTreeMap::new();
+    only_free.insert(
+        "free".to_string(),
+        fullmag_ir::FdmGridHintsIR {
+            cell: [2e-9, 2e-9, 2e-9],
+        },
+    );
+    let fdm = missing
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .expect("stacked fixture must carry FDM hints");
+    fdm.cell = [0.0; 3];
+    fdm.default_cell = None;
+    fdm.per_magnet = Some(only_free);
+    let error = plan(&missing).expect_err("missing layer override must fail closed");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("ref") && reason.contains("missing cell override")
+    }), "unexpected reasons: {:?}", error.reasons);
+
+    let mut conflicting = stacked_two_body_multilayer_problem();
+    let mut per_magnet = BTreeMap::new();
+    per_magnet.insert(
+        "free".to_string(),
+        fullmag_ir::FdmGridHintsIR {
+            cell: [1e-9, 2e-9, 2e-9],
+        },
+    );
+    per_magnet.insert(
+        "ref".to_string(),
+        fullmag_ir::FdmGridHintsIR {
+            cell: [2e-9, 2e-9, 2e-9],
+        },
+    );
+    let fdm = conflicting
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .expect("stacked fixture must carry FDM hints");
+    fdm.cell = [0.0; 3];
+    fdm.default_cell = None;
+    fdm.per_magnet = Some(per_magnet);
+    let error = plan(&conflicting).expect_err("conflicting native cells must fail closed");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("requires default_cell when per_magnet cell overrides differ")
+    }));
+}
+
+#[test]
 fn fdm_difference_preserves_translated_operand_and_finite_height() {
     let base = fullmag_ir::GeometryEntryIR::Box {
         name: "base".to_string(),
