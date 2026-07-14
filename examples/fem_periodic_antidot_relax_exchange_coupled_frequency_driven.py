@@ -13,20 +13,15 @@ Run with:
 """
 
 import math
-import os
 
 import fullmag as fm
+from fullmag.runtime.periodic_antidot_fixture_config import (
+    load_periodic_antidot_fixture_config,
+)
 
 
-run_stage = os.environ.get(
-    "FULLMAG_PERIODIC_ANTIDOT_FREQUENCY_STAGE",
-    "combined",
-).strip().lower()
-if run_stage not in {"combined", "relax", "response"}:
-    raise ValueError(
-        "FULLMAG_PERIODIC_ANTIDOT_FREQUENCY_STAGE must be one of: "
-        "combined, relax, response"
-    )
+fixture_config = load_periodic_antidot_fixture_config()
+run_stage = fixture_config.run_stage
 
 mu0_t_m_per_a = 4.0e-7 * math.pi
 equilibrium_torque_tolerance_t = 5.0e-3
@@ -34,7 +29,7 @@ equilibrium_torque_tolerance_a_per_m = (
     equilibrium_torque_tolerance_t / mu0_t_m_per_a
 )
 response_solver_max_iterations = 8192
-response_solver_restart_iterations = response_solver_max_iterations
+response_solver_restart_iterations = fixture_config.restart_iterations
 study = fm.study("fem_periodic_antidot_relax_exchange_coupled_frequency_driven")
 
 # Engine and universe
@@ -64,16 +59,7 @@ body.Ms = 800e3
 body.Aex = 13e-12
 body.alpha = 0.02
 if run_stage == "response":
-    relaxed_state_path = os.environ.get(
-        "FULLMAG_PERIODIC_ANTIDOT_RELAXED_MAGNETIC_STATE",
-        "",
-    ).strip()
-    if not relaxed_state_path:
-        raise ValueError(
-            "FULLMAG_PERIODIC_ANTIDOT_RELAXED_MAGNETIC_STATE is required "
-            "when FULLMAG_PERIODIC_ANTIDOT_FREQUENCY_STAGE=response"
-        )
-    body.m = fm.load_magnetization(relaxed_state_path, format="json")
+    body.m = fm.load_magnetization(fixture_config.relaxed_state_path, format="json")
 else:
     body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 body.mesh.thin_film(
@@ -131,7 +117,8 @@ study.runtime_metadata(
         "frequency_response_device": "gpu",
         "frequency_response_dynamic_demag": True,
         "frequency_response_magnetostatic_bc": "periodic_airbox_k0",
-        "frequency_response_preconditioner": "auto",
+        "frequency_response_preconditioner": fixture_config.preconditioner,
+        "frequency_response_restart_iterations": fixture_config.restart_iterations,
         "periodic_pair_ids": ["x_faces", "y_faces"],
         "film_size_m": [200e-9, 200e-9, 10e-9],
         "universe_size_m": [200e-9, 200e-9, 400e-9],
@@ -199,7 +186,7 @@ if run_stage in {"combined", "response"}:
         bc=fm.PeriodicBC(["x_faces", "y_faces"]),
         magnetostatic_bc="periodic_airbox_k0",
         solver_method="gpu_operator_host_krylov",
-        solver_preconditioner="auto",
+        solver_preconditioner=fixture_config.preconditioner,
         solver_max_iterations=response_solver_max_iterations,
         solver_restart_iterations=response_solver_restart_iterations,
     )
