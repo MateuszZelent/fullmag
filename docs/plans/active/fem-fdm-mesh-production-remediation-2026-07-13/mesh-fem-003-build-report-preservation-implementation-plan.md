@@ -40,3 +40,11 @@ pub struct ResolvedFemDomainMeshAsset { pub build_report: Option<MeshBuildReport
 - [ ] Commit: `git add packages/fullmag-py crates/fullmag-ir crates/fullmag-plan crates/fullmag-api apps/control-room && git commit -m "feat(mesh): preserve build reports across runtime resources"`.
 
 **Exit:** report z jednego build revision jest identyczny semantycznie w planie, artifact, API i Inspector; rebuild unieważnia stary resource.
+
+## Evidence update (2026-07-14)
+
+- [x] Existing IR/planner/runner/API/Inspector path preserves `FemSharedDomainBuildReportIR`; generated OpenAPI already exposes the report and the Inspector model reads it as a named mesh detail.
+- [x] `cargo test -p fullmag-plan mesh --lib --no-fail-fast` — 29 passed.
+- [x] `cargo test -p fullmag-api mesh_semantics_returns_three_level_projection` — 1 passed.
+- [x] `cargo test -p fullmag-runner --lib --no-fail-fast` — 506 passed (includes shared-domain report propagation fixture).
+- [ ] Python end-to-end fixture, managed OpenAPI hygiene and Control Room browser/UI test remain open; local UI focused test is blocked by absent `apps/control-room/node_modules` (`vitest: not found`).
