@@ -443,6 +443,17 @@ impl MeshIR {
     }
 }
 
+/// Validate a mesh at the boundary of an executable pipeline.
+///
+/// Production callers must use this entry point instead of the structural
+/// [`MeshIR::validate`] check.  Strict validation rejects non-finite nodes,
+/// duplicate element nodes, degenerate tetrahedra, and (by default) inverted
+/// tetrahedra before the mesh can reach a planner or native ABI.
+pub fn validate_mesh_for_execution(mesh: &MeshIR) -> Result<(), Vec<String>> {
+    mesh.validate()?;
+    mesh.validate_strict(&MeshValidationPolicy::default())
+}
+
 fn tet_signed_volume(a: [f64; 3], b: [f64; 3], c: [f64; 3], d: [f64; 3]) -> f64 {
     let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
     let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
