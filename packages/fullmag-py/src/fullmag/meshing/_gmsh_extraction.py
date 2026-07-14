@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -388,6 +389,13 @@ def _extract_mesh_data(
 
         element_markers = np.ones(elements.shape[0], dtype=np.int32)
         boundary_markers = np.ones(boundary_faces.shape[0], dtype=np.int32)
+        if periodic_pair_specs:
+            boundary_markers = _extract_periodic_surface_markers(
+                gmsh,
+                node_index,
+                boundary_faces,
+                periodic_pair_specs,
+            )
 
     aligned_quality = _align_quality_report_to_element_tags(
         quality,
@@ -420,6 +428,188 @@ def _extract_mesh_data(
         quality=aligned_quality,
         per_domain_quality=aligned_per_domain_quality,
     )
+    if periodic_pair_specs:
+        certify_extracted_periodic_mesh(
+            mesh.nodes,
+            mesh.boundary_faces,
+            mesh.boundary_markers,
+            mesh.periodic_boundary_pairs,
+            mesh.periodic_node_pairs,
+        )
+    return mesh
+
+
+def certify_extracted_periodic_mesh(
+    nodes: NDArray[np.float64],
+    boundary_faces: NDArray[np.int32],
+    boundary_markers: NDArray[np.int32],
+    periodic_boundary_pairs: list[dict[str, object]],
+    periodic_node_pairs: list[dict[str, object]],
+) -> dict[str, object]:
+    """Certify periodic topology after Gmsh extraction.
+
+    Gmsh's ``setPeriodic`` relation is only input evidence.  This verifier
+    checks the extracted node bijection, translated face vertex sets,
+    opposite face orientation, and multi-axis corner/edge commutation before
+    the mesh is handed to the Rust v6 certificate builder.
+    """
+    coordinates = np.asarray(nodes, dtype=np.float64)
+    faces = np.asarray(boundary_faces, dtype=np.int32)
+    markers = np.asarray(boundary_markers, dtype=np.int32)
+    if faces.ndim != 2 or faces.shape[1] != 3 or markers.shape != (faces.shape[0],):
+        raise ValueError("periodic certificate requires triangular boundary faces and markers")
+    if not periodic_boundary_pairs:
+        raise ValueError("periodic certificate requires boundary pair metadata")
+
+    maps: dict[str, dict[int, int]] = {}
+    for raw_pair in periodic_node_pairs:
+        pair_id = str(raw_pair.get("pair_id", "")).strip()
+        if not pair_id:
+            raise ValueError("periodic node pair has an empty pair_id")
+        node_a = int(raw_pair.get("node_a", -1))
+        node_b = int(raw_pair.get("node_b", -1))
+        if node_a < 0 or node_b < 0 or node_a >= len(coordinates) or node_b >= len(coordinates):
+            raise ValueError(f"periodic node pair '{pair_id}' references an invalid node")
+        mapping = maps.setdefault(pair_id, {})
+        previous = mapping.get(node_a)
+        if previous is not None and previous != node_b:
+            raise ValueError(f"periodic node bijection for '{pair_id}' has conflicting source mapping")
+        if node_b in mapping.values() and previous != node_b:
+            raise ValueError(f"periodic node bijection for '{pair_id}' has duplicate destination mapping")
+        mapping[node_a] = node_b
+
+    marker_faces: dict[int, list[int]] = {}
+    for index, marker in enumerate(markers.tolist()):
+        marker_faces.setdefault(int(marker), []).append(index)
+
+    pair_ids: set[str] = set()
+    for raw_pair in periodic_boundary_pairs:
+        pair_id = str(raw_pair.get("pair_id", "")).strip()
+        marker_a = int(raw_pair.get("marker_a", -1))
+        marker_b = int(raw_pair.get("marker_b", -1))
+        mapping = maps.get(pair_id)
+        if mapping is None:
+            raise ValueError(f"periodic face pair '{pair_id}' has no extracted node bijection")
+        source_faces = marker_faces.get(marker_a, [])
+        destination_faces = marker_faces.get(marker_b, [])
+        if not source_faces or len(source_faces) != len(destination_faces):
+            raise ValueError(
+                f"periodic face bijection for '{pair_id}' is incomplete: "
+                f"{len(source_faces)} source faces vs {len(destination_faces)} destination faces"
+            )
+        destination_by_vertices = {
+            frozenset(int(node) for node in faces[index]): index
+            for index in destination_faces
+        }
+        if len(destination_by_vertices) != len(destination_faces):
+            raise ValueError(f"periodic face bijection for '{pair_id}' has duplicate destination faces")
+        translation = np.asarray(raw_pair.get("translation", [0.0, 0.0, 0.0]), dtype=np.float64)
+        if translation.shape != (3,) or not np.all(np.isfinite(translation)):
+            raise ValueError(f"periodic face pair '{pair_id}' has an invalid translation")
+        tolerance = float(raw_pair.get("tolerance_m", 0.0))
+        if not np.isfinite(tolerance) or tolerance < 0.0:
+            raise ValueError(f"periodic face pair '{pair_id}' has an invalid tolerance")
+        tolerance = max(tolerance, np.finfo(np.float64).eps * max(1.0, float(np.ptp(coordinates))))
+        for node_a, node_b in mapping.items():
+            residual = float(np.max(np.abs(coordinates[node_a] + translation - coordinates[node_b])))
+            if residual > tolerance:
+                raise ValueError(
+                    f"periodic node translation residual for '{pair_id}' is {residual:.3e}, "
+                    f"above tolerance {tolerance:.3e}"
+                )
+        for source_index in source_faces:
+            source_face = faces[source_index]
+            mapped_vertices = frozenset(mapping.get(int(node), -1) for node in source_face)
+            if -1 in mapped_vertices or mapped_vertices not in destination_by_vertices:
+                raise ValueError(f"periodic face bijection for '{pair_id}' is incomplete")
+            destination_index = destination_by_vertices[mapped_vertices]
+            source_normal = np.cross(
+                coordinates[source_face[1]] - coordinates[source_face[0]],
+                coordinates[source_face[2]] - coordinates[source_face[0]],
+            )
+            destination_face = faces[destination_index]
+            destination_normal = np.cross(
+                coordinates[destination_face[1]] - coordinates[destination_face[0]],
+                coordinates[destination_face[2]] - coordinates[destination_face[0]],
+            )
+            source_norm = float(np.linalg.norm(source_normal))
+            destination_norm = float(np.linalg.norm(destination_normal))
+            if source_norm == 0.0 or destination_norm == 0.0 or float(np.dot(source_normal, destination_normal)) >= 0.0:
+                raise ValueError(f"periodic face normals for '{pair_id}' are not mirrored")
+        pair_ids.add(pair_id)
+
+    ordered_pair_ids = sorted(pair_ids)
+    for left_index, left_id in enumerate(ordered_pair_ids):
+        for right_id in ordered_pair_ids[left_index + 1 :]:
+            left_map = maps[left_id]
+            right_map = maps[right_id]
+            shared_sources = set(left_map).intersection(right_map)
+            for source in shared_sources:
+                left_then_right = right_map.get(left_map[source])
+                right_then_left = left_map.get(right_map[source])
+                if left_then_right is None or right_then_left is None or left_then_right != right_then_left:
+                    raise ValueError(
+                        f"periodic edge/corner closure does not commute for '{left_id}' and '{right_id}'"
+                    )
+
+    topology_digest = hashlib.sha256(
+        np.ascontiguousarray(coordinates).tobytes()
+        + np.ascontiguousarray(faces).tobytes()
+        + np.ascontiguousarray(markers).tobytes()
+    ).hexdigest()
+    return {
+        "schema_version": "periodic_mesh_certificate.v6",
+        "certificate_status": "accepted",
+        "axis_pair_count": len(pair_ids),
+        "node_pair_count": len(periodic_node_pairs),
+        "face_pair_count": len(periodic_boundary_pairs),
+        "corner_edge_cycle_unique": True,
+        "topology_fingerprint": f"sha256:{topology_digest}",
+    }
+
+
+def _extract_periodic_surface_markers(
+    gmsh: Any,
+    node_index: dict[int, int],
+    boundary_faces: NDArray[np.int32],
+    periodic_pair_specs: list[dict[str, object]],
+) -> NDArray[np.int32]:
+    """Recover periodic surface markers for legacy non-physical extraction."""
+    surface_markers: dict[int, int] = {}
+    for spec in periodic_pair_specs:
+        for surface_key, marker_key in (("master_tag", "marker_a"), ("slave_tag", "marker_b")):
+            surface_tag = int(spec[surface_key])
+            marker = int(spec.get(marker_key, surface_tag))
+            previous = surface_markers.get(surface_tag)
+            if previous is not None and previous != marker:
+                raise ValueError(f"periodic surface {surface_tag} has conflicting extracted markers")
+            surface_markers[surface_tag] = marker
+
+    marker_by_face: dict[tuple[int, int, int], int] = {}
+    for surface_tag, marker in surface_markers.items():
+        element_blocks = gmsh.model.mesh.getElements(2, surface_tag)
+        for element_type, node_blocks in zip(element_blocks[0], element_blocks[2], strict=False):
+            arity, _ = _gmsh_element_properties(
+                gmsh,
+                int(element_type),
+                dimension=2,
+                supported=SUPPORTED_BOUNDARY_ELEMENTS,
+                context="periodic surface extraction",
+            )
+            flat = [node_index[int(tag)] for tag in node_blocks]
+            for start in range(0, len(flat), arity):
+                face = tuple(sorted(flat[start : start + arity]))
+                if len(face) != 3:
+                    raise ValueError(f"periodic surface {surface_tag} produced a non-triangular face")
+                previous = marker_by_face.get(face)
+                if previous is not None and previous != marker:
+                    raise ValueError(f"periodic face {face} belongs to conflicting surfaces")
+                marker_by_face[face] = marker
+
+    markers = np.ones(boundary_faces.shape[0], dtype=np.int32)
+    for index, face in enumerate(boundary_faces):
+        markers[index] = marker_by_face.get(tuple(sorted(int(node) for node in face)), 1)
+    return markers
 
 
 def _extract_periodic_pairs(

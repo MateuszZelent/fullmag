@@ -116,6 +116,7 @@ from fullmag.meshing.remesh_cli import (
 from fullmag.meshing.remesh_cli import _describe_remesh_job
 from fullmag.meshing._gmsh_extraction import (
     _align_quality_report_to_element_tags,
+    certify_extracted_periodic_mesh,
     _extract_quality_metrics,
     _read_mesh_file,
     UnsupportedGmshElementError,
@@ -4455,6 +4456,78 @@ class MeshScaffoldTests(unittest.TestCase):
         )
         np.testing.assert_array_equal(tet4, np.asarray([[0, 1, 2, 3]], dtype=np.int32))
         np.testing.assert_array_equal(tri3, np.asarray([[0, 1, 2]], dtype=np.int32))
+
+    def test_certify_extracted_periodic_mesh_rejects_missing_mirrored_face(self) -> None:
+        nodes = np.asarray(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [1.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [1.0, 0.0, 1.0],
+                [0.0, 1.0, 1.0],
+                [1.0, 1.0, 1.0],
+            ],
+            dtype=np.float64,
+        )
+        elements = np.asarray([[0, 1, 2, 4]], dtype=np.int32)
+        faces = np.asarray(
+            [
+                [0, 2, 4],
+                [1, 5, 3],
+                [0, 1, 4],
+                [2, 6, 3],
+            ],
+            dtype=np.int32,
+        )
+        markers = np.asarray([101, 102, 201, 202], dtype=np.int32)
+        pairs = [
+            {
+                "pair_id": "x_faces",
+                "marker_a": 101,
+                "marker_b": 102,
+                "translation": [1.0, 0.0, 0.0],
+                "tolerance_m": 1.0e-12,
+            },
+            {
+                "pair_id": "y_faces",
+                "marker_a": 201,
+                "marker_b": 202,
+                "translation": [0.0, 1.0, 0.0],
+                "tolerance_m": 1.0e-12,
+            },
+        ]
+        node_pairs = [
+            {"pair_id": "x_faces", "node_a": 0, "node_b": 1},
+            {"pair_id": "x_faces", "node_a": 2, "node_b": 3},
+            {"pair_id": "x_faces", "node_a": 4, "node_b": 5},
+            {"pair_id": "x_faces", "node_a": 6, "node_b": 7},
+            {"pair_id": "y_faces", "node_a": 0, "node_b": 2},
+            {"pair_id": "y_faces", "node_a": 1, "node_b": 3},
+            {"pair_id": "y_faces", "node_a": 4, "node_b": 6},
+            {"pair_id": "y_faces", "node_a": 5, "node_b": 7},
+        ]
+
+        certificate = certify_extracted_periodic_mesh(
+            nodes,
+            faces,
+            markers,
+            pairs,
+            node_pairs,
+        )
+        self.assertEqual(certificate["schema_version"], "periodic_mesh_certificate.v6")
+        self.assertEqual(certificate["axis_pair_count"], 2)
+        self.assertTrue(certificate["corner_edge_cycle_unique"])
+
+        with self.assertRaisesRegex(ValueError, "face bijection"):
+            certify_extracted_periodic_mesh(
+                nodes,
+                faces[:-1],
+                markers[:-1],
+                pairs,
+                node_pairs,
+            )
 
     def test_create_occ_geometry_supports_csg_and_translate(self) -> None:
         class _FakeOccApi:
