@@ -39,3 +39,10 @@ pub struct BoundaryRoleIR { pub marker: i32, pub role: BoundaryRole, pub face_co
 - [ ] Commit: `git add packages/fullmag-py crates/fullmag-ir crates/fullmag-plan backends/fem && git commit -m "fix(fem): certify airbox boundary roles"`.
 
 **Exit:** solver nie wybiera markeru po numerze; wszystkie airbox fixtures mają dowód kompletności i rozłączności.
+
+## Evidence update (2026-07-14)
+
+- [x] `MeshIR::certify_airbox_boundary_roles` derives `Gamma_out`, magnetic boundary and magnetic-air interface from tetrahedral adjacency; marker values are opaque and no max/`99` heuristic is used by the planner path.
+- [x] The planner consumes the certified `Gamma_out` marker, records `boundary_marker_source` and `airbox_boundary_certificate_sha256`, and fails closed on missing, ambiguous or role-shared markers.
+- [x] Corrupt-fixture evidence: `cargo test -p fullmag-ir airbox_roles --lib --no-fail-fast` — 3 passed (non-max marker, incomplete outer faces, marker shared with interface); `cargo test -p fullmag-plan airbox --lib --no-fail-fast` — 7 passed.
+- [ ] Python/Gmsh fixture extraction, managed `fem_mesh_contract` and `just verify-fem-meshing-production` remain open because the managed gate is currently blocked by the repository `/etc/bash.bashrc` `PS1` failure.
