@@ -109,22 +109,22 @@ describe("geometry lifecycle command contributions", () => {
       mesh_reason: "selected-object",
       mesh_target: { kind: "object_mesh", object_id: "box" },
     });
-    expect(resources.getRevision(MESHING_BUILDS_CURRENT_PATH)).toBe("cmd-1");
+    expect(resources.getRevision(MESHING_BUILDS_CURRENT_PATH)).toBe(1);
     expect(
       resources.getRevision(
         MESHING_OBJECT_TOPOLOGY_PATH.replace("{object_id}", "box"),
       ),
-    ).toBe("cmd-1");
+    ).toBe(1);
     expect(
       resources.getRevision(
         MESHING_OBJECT_REPORT_PATH.replace("{object_id}", "box"),
       ),
-    ).toBe("cmd-1");
+    ).toBe(1);
     expect(
       resources.getRevision(
         MESHING_OBJECT_QUALITY_PATH.replace("{object_id}", "box"),
       ),
-    ).toBe("cmd-1");
+    ).toBe(1);
     expect(meshEvents).toEqual([
       {
         commandId: "cmd-1",
@@ -178,7 +178,7 @@ describe("geometry lifecycle command contributions", () => {
       mesh_reason: "shared-domain",
       mesh_target: { kind: "study_domain" },
     });
-    expect(resources.getRevision(MESHING_BUILDS_CURRENT_PATH)).toBe("cmd-shared");
+    expect(resources.getRevision(MESHING_BUILDS_CURRENT_PATH)).toBe(2);
     expect(meshEvents).toEqual([
       {
         commandId: "cmd-shared",
@@ -343,28 +343,18 @@ describe("geometry lifecycle command contributions", () => {
       mesh_reason: "quality_threshold_refinement",
       mesh_target: { kind: "study_domain" },
     });
-    expect(resources.getRevision(MESHING_BUILDS_PATH)).toBe("cmd-refine");
-    expect(resources.getRevision(MESHING_BUILDS_CURRENT_PATH)).toBe("cmd-refine");
-    expect(resources.getRevision(MESHING_SUMMARY_PATH)).toBe("cmd-refine");
-    expect(resources.getRevision(MESHING_SEMANTICS_PATH)).toBe("cmd-refine");
-    expect(resources.getRevision(MESHING_SHARED_DOMAIN_MANIFEST_PATH)).toBe(
-      "cmd-refine",
-    );
-    expect(resources.getRevision(MESHING_SHARED_DOMAIN_REPORT_PATH)).toBe(
-      "cmd-refine",
-    );
-    expect(resources.getRevision(MESHING_SHARED_DOMAIN_QUALITY_PATH)).toBe(
-      "cmd-refine",
-    );
-    expect(resources.getRevision(MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH)).toBe(
-      "cmd-refine",
-    );
-    expect(resources.getRevision(MESHING_SHARED_DOMAIN_QUALITY_GATES_PATH)).toBe(
-      "cmd-refine",
-    );
+    expect(resources.getRevision(MESHING_BUILDS_PATH)).toBe(3);
+    expect(resources.getRevision(MESHING_BUILDS_CURRENT_PATH)).toBe(3);
+    expect(resources.getRevision(MESHING_SUMMARY_PATH)).toBe(3);
+    expect(resources.getRevision(MESHING_SEMANTICS_PATH)).toBe(3);
+    expect(resources.getRevision(MESHING_SHARED_DOMAIN_MANIFEST_PATH)).toBe(3);
+    expect(resources.getRevision(MESHING_SHARED_DOMAIN_REPORT_PATH)).toBe(3);
+    expect(resources.getRevision(MESHING_SHARED_DOMAIN_QUALITY_PATH)).toBe(3);
+    expect(resources.getRevision(MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH)).toBe(3);
+    expect(resources.getRevision(MESHING_SHARED_DOMAIN_QUALITY_GATES_PATH)).toBe(3);
     expect(
       resources.getRevision(MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH),
-    ).toBe("cmd-refine");
+    ).toBe(3);
   });
 
   it("disables primitive commands when geometry capabilities reject them", () => {

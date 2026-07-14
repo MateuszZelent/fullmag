@@ -240,6 +240,8 @@ function isSharedDomainMeshBuildRunning(context: CommandContext): boolean {
 }
 
 function selectedObjectMeshDisabledReason(context: CommandContext): string | null {
+  const capabilityReason = meshCapabilityDisabledReason(context, "fem");
+  if (capabilityReason) return capabilityReason;
   const objectId = selectedObjectId(context);
   if (!objectId) return "Select a scene object to use this command.";
   if (hasObjectValidationBlocker(context, objectId)) {
@@ -248,7 +250,7 @@ function selectedObjectMeshDisabledReason(context: CommandContext): string | nul
   if (isObjectMeshBuildRunning(context, objectId)) {
     return "A mesh build is already running for this object.";
   }
-  return meshCapabilityDisabledReason(context, "fem");
+  return null;
 }
 
 function meshCapabilityDisabledReason(

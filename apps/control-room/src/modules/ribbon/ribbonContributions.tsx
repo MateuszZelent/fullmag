@@ -55,7 +55,10 @@ import {
 } from "lucide-react";
 import { createElement } from "react";
 
-import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
+import {
+  MESHING_CAPABILITIES_PATH,
+  VISUALIZATION_STATE_PATH,
+} from "@/kernel/api/apiPaths";
 import type {
   LiveStatusResource,
   MeshActiveBuildResource,
@@ -104,10 +107,6 @@ import {
   normalizeMeshPipelineStatus,
   resolveMeshBuildStatusLabel,
 } from "@/shared/domain/mesh/buildPipeline";
-import {
-  meshEditorCapabilityBlocks,
-  resolveMeshEditorCapabilities,
-} from "@/shared/domain/mesh/meshEditorCapabilityModel";
 import { allInteractionSpecs } from "@/shared/domain/physics/interactions";
 
 import type { RibbonMenuNode, RibbonTabContent } from "./ribbonTypes";
@@ -1846,13 +1845,6 @@ function buildMeshTabContent(
   context: RibbonBuildContext,
 ): RibbonTabContent {
   const status = meshBuildStatus(context);
-  const editorCapabilities =
-    context.meshCapabilities === undefined
-      ? null
-      : resolveMeshEditorCapabilities(context.meshCapabilities);
-  const femCapability = editorCapabilities?.option("fem");
-  const femCapabilityBlocked =
-    femCapability !== undefined && meshEditorCapabilityBlocks(femCapability);
   const summary = asRecord(context.meshSummary?.mesh_summary);
   const solverMesh = context.meshSemantics?.solver_mesh;
   const nodeCount = summary?.node_count;
@@ -1870,10 +1862,6 @@ function buildMeshTabContent(
             if (action.id === "mesh.build-selected") {
               return {
                 ...action,
-                disabled: femCapabilityBlocked || action.disabled,
-                tooltip: femCapabilityBlocked
-                  ? femCapability?.reason ?? action.tooltip
-                  : action.tooltip,
                 active: status.label === "building" || status.label === "running",
                 menu: [
                   {
@@ -1923,15 +1911,6 @@ function buildMeshTabContent(
                     commandId: "mesh.open-builds",
                   },
                 ],
-              };
-            }
-            if (action.id === "mesh.build-shared-domain") {
-              return {
-                ...action,
-                disabled: femCapabilityBlocked || action.disabled,
-                tooltip: femCapabilityBlocked
-                  ? femCapability?.reason ?? action.tooltip
-                  : action.tooltip,
               };
             }
             if (action.id === "mesh-stats") {
@@ -2135,9 +2114,15 @@ function shouldDisableMissingCommand(
 
 function ribbonCommandContext(context: RibbonBuildContext): CommandContext {
   const base = context.commandContext ?? { source: "ribbon" as const };
-  const resourceData = context.visualizationState
+  const resourceData =
+    context.visualizationState || context.meshCapabilities !== undefined
     ? {
-        [VISUALIZATION_STATE_PATH]: context.visualizationState,
+        ...(context.visualizationState
+          ? { [VISUALIZATION_STATE_PATH]: context.visualizationState }
+          : {}),
+        ...(context.meshCapabilities !== undefined
+          ? { [MESHING_CAPABILITIES_PATH]: context.meshCapabilities }
+          : {}),
         ...base.resourceData,
       }
     : base.resourceData;

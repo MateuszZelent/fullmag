@@ -1078,7 +1078,9 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Periodic/Floquet");
     expect(html).toContain("periodic pair table and Floquet capability gates");
     expect(html).toContain("Periodic / Floquet Boundary Conditions");
-    expect(html).toMatch(/Periodic pairs status<\/dt><dd>valid<\/dd>/);
+    expect(html).toContain(
+      '<span class="fm-inspector-field-row__label">Periodic pairs status</span><span class="fm-inspector-field-row__value">valid</span>',
+    );
     expect(html).toContain(MESHING_PERIODIC_PAIRS_PATH);
     expect(html).toContain("Pair count");
     expect(html).toContain("x-periodic");

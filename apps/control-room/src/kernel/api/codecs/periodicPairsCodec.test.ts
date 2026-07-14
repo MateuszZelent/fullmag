@@ -40,8 +40,6 @@ function makeBuffer(): ArrayBuffer {
   offset += 4;
   view.setUint32(offset, 0, true);
   offset += 4;
-  view.setUint32(offset, 0, true);
-  offset += 4;
   view.setUint32(offset, 1, true);
   return buffer;
 }
