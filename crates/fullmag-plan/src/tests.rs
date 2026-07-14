@@ -2760,6 +2760,34 @@ fn fem_plan_serializes_mesh_parts() {
     assert!(!mesh_parts.is_empty());
 }
 
+fn certified_airbox_test_mesh(outer_marker: u32) -> fullmag_ir::MeshIR {
+    fullmag_ir::MeshIR {
+        mesh_name: "strip".to_string(),
+        nodes: vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 1.0],
+        ],
+        elements: vec![[0, 1, 2, 3], [1, 3, 2, 4]],
+        element_markers: vec![1, 0],
+        boundary_faces: vec![
+            [0, 1, 2],
+            [0, 1, 3],
+            [0, 2, 3],
+            [1, 2, 4],
+            [1, 3, 4],
+            [2, 3, 4],
+            [1, 2, 3],
+        ],
+        boundary_markers: vec![1, 1, 1, outer_marker, outer_marker, outer_marker, 10],
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
+        per_domain_quality: std::collections::HashMap::new(),
+    }
+}
+
 #[test]
 fn fem_backend_with_air_elements_lowers_study_universe_to_air_box_config() {
     let mut ir = ProblemIR::bootstrap_example();
@@ -2834,6 +2862,14 @@ fn fem_backend_with_air_elements_lowers_study_universe_to_air_box_config() {
         }),
     });
 
+    let mesh = ir
+        .geometry_assets
+        .as_mut()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+        .and_then(|asset| asset.mesh.as_mut())
+        .expect("airbox fixture mesh");
+    mesh.boundary_faces.extend([[4, 5, 7], [4, 6, 7], [5, 6, 7]]);
+    mesh.boundary_markers.extend([99, 99, 99]);
     let plan = plan(&ir).expect("FEM air-box mesh asset should produce an air-box config");
     match plan.backend_plan {
         BackendPlanIR::Fem(fem) => {
@@ -2860,8 +2896,7 @@ fn fem_backend_with_air_elements_lowers_study_universe_to_air_box_config() {
         .any(|note| note.contains("FEM air-box configuration")));
 }
 
-/// When marker 99 (the well-known gmsh convention) is present in boundary_markers,
-/// strict mode should auto-detect it and succeed — it is not a guess.
+/// A complete airbox certifies the outer marker independently of its numeric ID.
 #[test]
 fn fem_backend_with_air_elements_accepts_marker_99_in_strict_mode() {
     let mut ir = ProblemIR::bootstrap_example();
@@ -2932,6 +2967,14 @@ fn fem_backend_with_air_elements_accepts_marker_99_in_strict_mode() {
         }),
     });
 
+    let mesh = ir
+        .geometry_assets
+        .as_mut()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+        .and_then(|asset| asset.mesh.as_mut())
+        .expect("airbox fixture mesh");
+    mesh.boundary_faces.extend([[4, 5, 7], [4, 6, 7], [5, 6, 7]]);
+    mesh.boundary_markers.extend([99, 99, 99]);
     let result = plan(&ir).expect(
         "strict mode should accept marker 99 (well-known gmsh convention) without explicit air_box_policy",
     );
@@ -2946,16 +2989,19 @@ fn fem_backend_with_air_elements_accepts_marker_99_in_strict_mode() {
     assert_eq!(air_box.boundary_marker, 99);
     assert_eq!(
         air_box.boundary_marker_source.as_deref(),
-        Some("mesh_marker_99")
+        Some("certified_gamma_out")
     );
 }
 
-/// When marker 99 is NOT present and no explicit boundary_marker is set,
-/// strict mode should still reject the plan.
+/// An un-certified marker must be rejected even when the mesh contains air.
 #[test]
 fn fem_backend_with_air_elements_rejects_unknown_boundary_marker_in_strict_mode() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.backend_policy.requested_backend = BackendTarget::Fem;
+    ir.air_box_policy = Some(fullmag_ir::AirBoxPolicyIR {
+        boundary_marker: Some(99),
+        ..Default::default()
+    });
     ir.problem_meta.runtime_metadata.insert(
         "study_universe".to_string(),
         serde_json::json!({
@@ -2993,26 +3039,7 @@ fn fem_backend_with_air_elements_rejects_unknown_boundary_marker_in_strict_mode(
         fem_mesh_assets: vec![],
         fem_domain_mesh_asset: Some(fullmag_ir::FemDomainMeshAssetIR {
             mesh_source: None,
-            mesh: Some(fullmag_ir::MeshIR {
-                mesh_name: "strip".to_string(),
-                nodes: vec![
-                    [0.0, 0.0, 0.0],
-                    [1.0, 0.0, 0.0],
-                    [0.0, 1.0, 0.0],
-                    [0.0, 0.0, 1.0],
-                    [-2.0, -2.0, -2.0],
-                    [2.0, -2.0, -2.0],
-                    [-2.0, 2.0, -2.0],
-                    [-2.0, -2.0, 2.0],
-                ],
-                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
-                element_markers: vec![1, 0],
-                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
-                boundary_markers: vec![1, 42],
-                periodic_boundary_pairs: Vec::new(),
-                periodic_node_pairs: Vec::new(),
-                per_domain_quality: std::collections::HashMap::new(),
-            }),
+            mesh: Some(certified_airbox_test_mesh(42)),
             region_markers: vec![fullmag_ir::FemDomainRegionMarkerIR {
                 geometry_name: "strip".to_string(),
                 marker: 1,
@@ -3025,10 +3052,10 @@ fn fem_backend_with_air_elements_rejects_unknown_boundary_marker_in_strict_mode(
     let error = plan(&ir).expect_err(
         "strict FEM air-box planning should reject when marker 99 is absent and no explicit boundary_marker",
     );
-    assert!(error.reasons.iter().any(|reason| {
-        reason.contains("air_box_policy.boundary_marker")
-            && reason.contains("strict execution mode")
-    }));
+    assert!(error
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("Gamma_out") || reason.contains("certified")));
 }
 
 #[test]
