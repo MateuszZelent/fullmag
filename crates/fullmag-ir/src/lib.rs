@@ -1505,8 +1505,59 @@ impl ProblemIR {
 
         if let Some(hints) = &self.backend_policy.discretization_hints {
             if let Some(fdm) = &hints.fdm {
-                if fdm.cell.iter().any(|component| *component <= 0.0) {
-                    errors.push("fdm.cell components must be positive".to_string());
+                let legacy_cell = (!fdm.cell.iter().all(|component| *component == 0.0))
+                    .then_some(fdm.cell);
+                let default_cell = fdm.default_cell.or(legacy_cell);
+                if let Some(cell) = default_cell {
+                    if cell
+                        .iter()
+                        .any(|component| !component.is_finite() || *component <= 0.0)
+                    {
+                        errors.push("fdm.default_cell components must be finite and positive".to_string());
+                    }
+                }
+                if let Some(per_magnet) = &fdm.per_magnet {
+                    for (magnet_name, grid) in per_magnet {
+                        if magnet_name.trim().is_empty() {
+                            errors.push("fdm.per_magnet keys must not be empty".to_string());
+                        }
+                        if grid
+                            .cell
+                            .iter()
+                            .any(|component| !component.is_finite() || *component <= 0.0)
+                        {
+                            errors.push(format!(
+                                "fdm.per_magnet['{}'].cell components must be finite and positive",
+                                magnet_name
+                            ));
+                        }
+                    }
+                    let magnet_names: std::collections::BTreeSet<&str> = self
+                        .magnets
+                        .iter()
+                        .map(|magnet| magnet.name.as_str())
+                        .collect();
+                    for magnet in &self.magnets {
+                        if default_cell.is_none() && !per_magnet.contains_key(&magnet.name) {
+                            errors.push(format!(
+                                "fdm.per_magnet missing cell override for magnet '{}' and no default_cell is set",
+                                magnet.name
+                            ));
+                        }
+                    }
+                    for override_name in per_magnet.keys() {
+                        if !magnet_names.contains(override_name.as_str()) {
+                            errors.push(format!(
+                                "fdm.per_magnet contains override for unknown magnet '{}'",
+                                override_name
+                            ));
+                        }
+                    }
+                } else if default_cell.is_none() {
+                    errors.push(
+                        "fdm requires default_cell (or legacy cell) when per_magnet is absent"
+                            .to_string(),
+                    );
                 }
             }
             if let Some(fem) = &hints.fem {

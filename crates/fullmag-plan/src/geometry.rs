@@ -686,15 +686,61 @@ pub(crate) fn validate_realized_grid(
     }
 }
 
-pub(crate) fn fdm_default_cell(hints: &FdmHintsIR) -> [f64; 3] {
-    hints.default_cell.unwrap_or(hints.cell)
+pub(crate) fn fdm_default_cell(hints: &FdmHintsIR) -> Result<[f64; 3], String> {
+    if let Some(cell) = hints.default_cell {
+        return Ok(cell);
+    }
+    if hints.cell.iter().all(|component| *component > 0.0 && component.is_finite()) {
+        return Ok(hints.cell);
+    }
+
+    let Some(per_magnet) = hints.per_magnet.as_ref() else {
+        return Err(
+            "FDM discretization requires default_cell (or legacy cell) when per_magnet is absent"
+                .to_string(),
+        );
+    };
+    let mut cells = per_magnet.values().map(|grid| grid.cell);
+    let Some(first) = cells.next() else {
+        return Err("FDM discretization per_magnet must not be empty".to_string());
+    };
+    if cells.all(|cell| cell == first) {
+        Ok(first)
+    } else {
+        Err(
+            "FDM discretization requires default_cell when per_magnet cell overrides differ"
+                .to_string(),
+        )
+    }
 }
 
-pub(crate) fn cell_for_magnet(hints: &FdmHintsIR, magnet_name: &str) -> [f64; 3] {
-    hints
+pub(crate) fn cell_for_magnet(
+    hints: &FdmHintsIR,
+    magnet_name: &str,
+) -> Result<[f64; 3], String> {
+    if let Some(cell) = hints
         .per_magnet
         .as_ref()
         .and_then(|per_magnet| per_magnet.get(magnet_name))
         .map(|grid| grid.cell)
-        .unwrap_or_else(|| fdm_default_cell(hints))
+    {
+        return Ok(cell);
+    }
+    if hints
+        .default_cell
+        .is_none()
+        && hints.cell.iter().all(|component| *component == 0.0)
+        && hints.per_magnet.is_some()
+    {
+        return Err(format!(
+            "FDM magnet '{}' has no per_magnet cell override and no default_cell is set",
+            magnet_name
+        ));
+    }
+    fdm_default_cell(hints).map_err(|reason| {
+        format!(
+            "FDM magnet '{}' has no resolved cell: {}",
+            magnet_name, reason
+        )
+    })
 }

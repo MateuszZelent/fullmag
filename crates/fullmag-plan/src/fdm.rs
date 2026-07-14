@@ -457,7 +457,15 @@ pub(crate) fn plan_fdm(
     };
 
     let cell_size = match &problem.backend_policy.discretization_hints {
-        Some(DiscretizationHintsIR { fdm: Some(fdm), .. }) => fdm.cell,
+        Some(DiscretizationHintsIR { fdm: Some(fdm), .. }) => {
+            match cell_for_magnet(fdm, magnet.name.as_str()) {
+                Ok(cell) => cell,
+                Err(reason) => {
+                    errors.push(reason);
+                    [1e-9, 1e-9, 1e-9]
+                }
+            }
+        }
         _ => {
             errors.push(
                 "FDM discretization hints (cell size) are required for Phase 1 execution"
@@ -1445,7 +1453,13 @@ pub(crate) fn plan_fdm_multilayer(
             }
         };
 
-        let cell_size = cell_for_magnet(fdm_hints, magnet.name.as_str());
+        let cell_size = match cell_for_magnet(fdm_hints, magnet.name.as_str()) {
+            Ok(cell) => cell,
+            Err(reason) => {
+                errors.push(reason);
+                continue;
+            }
+        };
         let provided_grid_asset = problem.geometry_assets.as_ref().and_then(|assets| {
             assets
                 .fdm_grid_assets
@@ -1704,25 +1718,36 @@ pub(crate) fn plan_fdm_multilayer(
         .iter()
         .map(|body| body.bounding_size[2])
         .fold(0.0_f64, f64::max);
-    let base_cell = fdm_default_cell(fdm_hints);
     let common_cells = if let Some(policy) = demag_hints {
         if let Some(cells) = policy.common_cells {
             cells
         } else if let Some(cells_xy) = policy.common_cells_xy {
             [cells_xy[0], cells_xy[1], max_native_z_cells.max(1)]
         } else {
-            [
+            match fdm_default_cell(fdm_hints) {
+                Ok(base_cell) => [
+                    (reference_xy[0] / base_cell[0]).round().max(1.0) as u32,
+                    (reference_xy[1] / base_cell[1]).round().max(1.0) as u32,
+                    (max_native_z_size / base_cell[2]).round().max(1.0) as u32,
+                ],
+                Err(reason) => {
+                    errors.push(reason);
+                    [1, 1, max_native_z_cells.max(1)]
+                }
+            }
+        }
+    } else {
+        match fdm_default_cell(fdm_hints) {
+            Ok(base_cell) => [
                 (reference_xy[0] / base_cell[0]).round().max(1.0) as u32,
                 (reference_xy[1] / base_cell[1]).round().max(1.0) as u32,
                 (max_native_z_size / base_cell[2]).round().max(1.0) as u32,
-            ]
+            ],
+            Err(reason) => {
+                errors.push(reason);
+                [1, 1, max_native_z_cells.max(1)]
+            }
         }
-    } else {
-        [
-            (reference_xy[0] / base_cell[0]).round().max(1.0) as u32,
-            (reference_xy[1] / base_cell[1]).round().max(1.0) as u32,
-            (max_native_z_size / base_cell[2]).round().max(1.0) as u32,
-        ]
     };
     let convolution_cell_size = [
         reference_xy[0] / common_cells[0] as f64,

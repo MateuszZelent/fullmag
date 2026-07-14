@@ -1,5 +1,9 @@
 use super::*;
-use crate::geometry::{contains_cylinder, ir_to_shape, shape_local_bounds, voxelize_shape};
+use crate::geometry::{
+    cell_for_magnet, contains_cylinder, fdm_default_cell, ir_to_shape, shape_local_bounds,
+    voxelize_shape,
+};
+use std::collections::BTreeMap;
 
 #[test]
 fn fem_top_surface_selector_resolves_bbox_faces() {
@@ -10704,6 +10708,36 @@ fn fdm_grid_memory_budget_is_rejected() {
     assert!(error.reasons.iter().any(|reason| {
         reason.contains("1000") && reason.contains("requested_counts")
     }));
+}
+
+#[test]
+fn fdm_per_magnet_cells_resolve_without_hidden_fallback() {
+    let mut per_magnet = BTreeMap::new();
+    per_magnet.insert(
+        "left".to_string(),
+        fullmag_ir::FdmGridHintsIR {
+            cell: [1e-9, 2e-9, 3e-9],
+        },
+    );
+    per_magnet.insert(
+        "right".to_string(),
+        fullmag_ir::FdmGridHintsIR {
+            cell: [2e-9, 2e-9, 3e-9],
+        },
+    );
+    let hints = fullmag_ir::FdmHintsIR {
+        cell: [0.0; 3],
+        default_cell: None,
+        per_magnet: Some(per_magnet),
+        demag: None,
+        boundary_correction: None,
+        boundary_phi_floor: None,
+        boundary_delta_min: None,
+    };
+
+    assert_eq!(cell_for_magnet(&hints, "left").unwrap(), [1e-9, 2e-9, 3e-9]);
+    assert!(cell_for_magnet(&hints, "missing").unwrap_err().contains("missing"));
+    assert!(fdm_default_cell(&hints).is_err());
 }
 
 #[test]

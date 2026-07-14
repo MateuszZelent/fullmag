@@ -17,6 +17,7 @@ pub struct DiscretizationHintsIR {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FdmHintsIR {
     /// Legacy single-cell hint (backward compatible).
+    #[serde(default, skip_serializing_if = "is_zero_cell")]
     pub cell: [f64; 3],
     /// New: explicit default cell (may differ from `cell` in future).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -37,6 +38,10 @@ pub struct FdmHintsIR {
     /// Backend default: 0.1 × min(dx, dy, dz).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub boundary_delta_min: Option<f64>,
+}
+
+fn is_zero_cell(cell: &[f64; 3]) -> bool {
+    cell.iter().all(|component| *component == 0.0)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -3564,6 +3564,21 @@ class ProblemApiTests(unittest.TestCase):
         with self.assertRaises(NotImplementedError):
             fm.init.from_function(lambda point: point)
 
+    def test_fdm_per_magnet_round_trip_preserves_missing_default(self) -> None:
+        hints = fm.FDM(
+            default_cell=None,
+            per_magnet={
+                "left": fm.FDMGrid(cell=(1e-9, 2e-9, 3e-9)),
+                "right": fm.FDMGrid(cell=(2e-9, 2e-9, 3e-9)),
+            },
+        )
+
+        payload = hints.to_ir()
+
+        self.assertNotIn("default_cell", payload)
+        self.assertEqual(payload["per_magnet"]["left"]["cell"], [1e-9, 2e-9, 3e-9])
+        self.assertEqual(payload["per_magnet"]["right"]["cell"], [2e-9, 2e-9, 3e-9])
+
     def test_simulation_overrides_backend_mode_and_precision(self) -> None:
         problem = self._build_problem()
         simulation = fm.Simulation(
