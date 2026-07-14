@@ -15,6 +15,15 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 ARCH_WAVEGUIDE_NODE_BUDGET = 75_000
 ARCH_WAVEGUIDE_TETRA_BUDGET = 450_000
 DEFAULT_INTERACTIVE_DENSE_RAM_BUDGET_BYTES = 12 * 1024 * 1024 * 1024
+EVIDENCE_MANIFEST_SCHEMA_VERSION = "fem_meshing_production_gate.v1"
+DEFAULT_EVIDENCE_MANIFEST = (
+    REPO_ROOT / ".fullmag" / "reports" / "fem-meshing-production" / "evidence.v1.json"
+)
+REQUIRED_EVIDENCE_STAGES = (
+    "native_fem_contract",
+    "managed_native_runtime",
+    "browser_mesh_smoke",
+)
 
 
 @dataclass
@@ -60,6 +69,93 @@ def run_check(name: str, command: list[str]) -> CheckResult:
         stdout_tail=completed.stdout[-4000:],
         stderr_tail=completed.stderr[-4000:],
     )
+
+
+def _resolve_manifest_artifact(manifest_path: Path, raw_path: object) -> Path | None:
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        return None
+    path = Path(raw_path)
+    return path if path.is_absolute() else manifest_path.parent / path
+
+
+def _require_artifact(
+    errors: list[str],
+    manifest_path: Path,
+    stage_name: str,
+    field_name: str,
+    stage: dict[str, object],
+) -> None:
+    artifact = _resolve_manifest_artifact(manifest_path, stage.get(field_name))
+    if artifact is None:
+        errors.append(f"{stage_name}.{field_name} is required")
+    elif not artifact.is_file():
+        errors.append(f"{stage_name}.{field_name} does not exist: {artifact}")
+
+
+def validate_evidence_manifest(manifest_path: Path) -> list[str]:
+    """Validate fail-closed proof for native, managed, and browser stages."""
+
+    errors: list[str] = []
+    if not manifest_path.is_file():
+        return [f"evidence manifest is missing: {manifest_path}"]
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return [f"evidence manifest cannot be read: {exc}"]
+    if not isinstance(payload, dict):
+        return ["evidence manifest must be a JSON object"]
+    if payload.get("schema_version") != EVIDENCE_MANIFEST_SCHEMA_VERSION:
+        errors.append(
+            "evidence manifest schema_version must be "
+            f"{EVIDENCE_MANIFEST_SCHEMA_VERSION!r}"
+        )
+    if payload.get("status") != "passed":
+        errors.append("evidence manifest status must be 'passed'")
+    fingerprint = payload.get("mesh_fingerprint")
+    if not isinstance(fingerprint, str) or not fingerprint.startswith("sha256:"):
+        errors.append("evidence manifest mesh_fingerprint must be a sha256 token")
+
+    stages = payload.get("stages")
+    if not isinstance(stages, dict):
+        errors.append("evidence manifest stages must be an object")
+        errors.extend(
+            f"required evidence stage is missing: {stage_name}"
+            for stage_name in REQUIRED_EVIDENCE_STAGES
+        )
+        return errors
+    for stage_name in REQUIRED_EVIDENCE_STAGES:
+        stage = stages.get(stage_name)
+        if not isinstance(stage, dict):
+            errors.append(f"required evidence stage is missing: {stage_name}")
+            continue
+        if stage.get("status") != "passed":
+            errors.append(f"{stage_name}.status must be 'passed'")
+        stage_fingerprint = stage.get("mesh_fingerprint")
+        if stage_fingerprint != fingerprint:
+            errors.append(
+                f"{stage_name}.mesh_fingerprint must match evidence manifest mesh_fingerprint"
+            )
+        if stage_name == "native_fem_contract":
+            _require_artifact(errors, manifest_path, stage_name, "result_path", stage)
+        elif stage_name == "managed_native_runtime":
+            _require_artifact(errors, manifest_path, stage_name, "artifact_path", stage)
+        else:
+            _require_artifact(errors, manifest_path, stage_name, "screenshot_path", stage)
+            metrics = stage.get("metrics")
+            if not isinstance(metrics, dict):
+                errors.append("browser_mesh_smoke.metrics must be an object")
+                continue
+            if metrics.get("canvas_visible") is not True:
+                errors.append("browser_mesh_smoke.metrics.canvas_visible must be true")
+            if metrics.get("context_lost") is not False:
+                errors.append("browser_mesh_smoke.metrics.context_lost must be false")
+            for field_name in ("drawing_buffer_width", "drawing_buffer_height"):
+                value = metrics.get(field_name)
+                if not isinstance(value, (int, float)) or value <= 0:
+                    errors.append(
+                        f"browser_mesh_smoke.metrics.{field_name} must be > 0"
+                    )
+    return errors
 
 
 def _estimate_dense_fem_ram_bytes(node_count: int) -> int:
@@ -218,9 +314,21 @@ def run_arch_waveguide_budget_check() -> CheckResult:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--manifest", type=Path, default=DEFAULT_EVIDENCE_MANIFEST)
     args = parser.parse_args()
 
+    manifest_errors = validate_evidence_manifest(args.manifest)
     checks = [
+        CheckResult(
+            name="production_evidence_manifest",
+            status="passed" if not manifest_errors else "failed",
+            command=[sys.executable, str(Path(__file__)), "--manifest", str(args.manifest)],
+            stdout_tail=json.dumps(
+                {"manifest": str(args.manifest), "errors": manifest_errors},
+                indent=2,
+            ),
+            stderr_tail="",
+        ),
         run_check(
             "python_meshing_tests",
             [
